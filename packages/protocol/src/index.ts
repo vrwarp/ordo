@@ -30,6 +30,12 @@ export const OutputHealth = z.object({
   error: z.string().optional(),
   appVersion: z.string().optional(),
   bus: z.enum(['hub', 'fallback']).optional(),
+  /** Recent log lines of this window (newest last), for the operator's diagnostics panel. */
+  recentLog: z.array(z.string().max(300)).max(50).optional(),
+  /** Which compositor is drawing: webgpu or 2d. */
+  compositor: z.enum(['webgpu', '2d']).optional(),
+  /** Ms since the main thread last ran the watchdog tick, as measured by the render worker. */
+  mainThreadStallMs: z.number().optional(),
 });
 export type OutputHealth = z.infer<typeof OutputHealth>;
 export type OutputHealthEntry = OutputHealth & {
@@ -78,6 +84,20 @@ export const AdoptMsg = z.object({
   v: z.literal(PROTOCOL_VERSION),
   state: z.any(),
   force: z.boolean().optional(),
+});
+
+/**
+ * Operator asks one idle output to show a slide (prd/03 "Send to preview"). Relayed by the hub to that
+ * output like rtc.signal. The output honours it only while no playlist is live, and renders with its own look.
+ */
+export const PreviewMsg = z.object({
+  t: z.literal('preview'),
+  v: z.literal(PROTOCOL_VERSION),
+  to: z.string(),
+  from: z.string().optional(),
+  presentation: z.any().optional(),
+  slideId: z.string().optional(),
+  clear: z.boolean().optional(),
 });
 
 export const ClientMessage = z.discriminatedUnion('t', [
@@ -130,7 +150,8 @@ export type ServerMessage =
   | LibraryDelta
   | HealthSummary
   | Bye
-  | (z.infer<typeof RtcSignal> & { from: string });
+  | (z.infer<typeof RtcSignal> & { from: string })
+  | (z.infer<typeof PreviewMsg> & { from: string });
 
 // ---- fallback bus (operator <-> outputs via postMessage) ----
 export type FallbackHello = { t: 'fallback.hello'; v: 1; seq: number; operatorMs: number };
