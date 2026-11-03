@@ -3,6 +3,9 @@ import { LiveCommand, LiveEvent, type LiveState, type ResolvedPlaylist, Id } fro
 
 export const PROTOCOL_VERSION = 1;
 
+/** Version of the hub and the browser apps, deployed together from one image. A mismatch on hello means a stale tab. */
+export const APP_VERSION = '0.1.0';
+
 export const Role = z.enum(['operate', 'edit', 'output', 'stage']);
 export type Role = z.infer<typeof Role>;
 

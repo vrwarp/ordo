@@ -1,0 +1,334 @@
+import {
+  type LiveState,
+  type Look,
+  type Media,
+  type MediaOnEnd,
+  type Presentation,
+  type Rgba,
+  type Slide,
+  type Transition,
+  playableFile,
+} from '@ordo/domain';
+import { lyricTextFor } from './text2d.ts';
+
+/**
+ * What each layer of an output shows for a live state under a look. Pure: the output's main thread runs
+ * it for the live state and for the state that a GO to the armed cue would produce, and arms the keys.
+ * A key identifies prepared content; '' means the layer is empty.
+ */
+
+export type BackgroundDesc = {
+  layer: 'background';
+  key: string;
+  mediaId: string;
+  hash: string;
+  mime: string;
+  kind: 'image' | 'video';
+  holding: boolean;
+};
+
+export type SlideDesc = {
+  layer: 'slide';
+  key: string;
+  cueIndex: number;
+  presentationId: string;
+  slideId: string;
+  slide: Slide;
+  nextSlide?: Slide;
+  isSong: boolean;
+};
+
+export type LowerThirdDesc = { layer: 'lowerThird'; key: string; text: string };
+
+export type MediaDesc = {
+  layer: 'media';
+  key: string;
+  cueIndex: number;
+  mediaId: string;
+  hash: string;
+  mime: string;
+  kind: 'image' | 'video';
+  loop: boolean;
+  onEnd: MediaOnEnd;
+  state: 'playing' | 'paused' | 'ended';
+  startedAt: number;
+  positionMs: number;
+  durationMs?: number;
+  audio: { pairId?: string; gainDb?: number; loudnessLufs?: number };
+};
+
+export type AudioDesc = {
+  key: string;
+  cueIndex: number;
+  mediaId: string;
+  hash: string;
+  mime: string;
+  loop: boolean;
+  state: 'playing' | 'paused' | 'ended';
+  startedAt: number;
+  positionMs: number;
+  audio: { pairId?: string; gainDb?: number; loudnessLufs?: number };
+};
+
+export type LayerPlan<D> = {
+  /** Render key ('' when the layer draws nothing on this output). */
+  key: string;
+  /** The content, kept even when invisible (the audio master still plays a hidden media video). */
+  desc: D | null;
+  /** Hub ms at which the content takes effect. */
+  at: number;
+  /** Crossfade duration, 0 for a cut. */
+  fadeMs: number;
+};
+
+export type FramePlan = {
+  idle: boolean;
+  black: boolean;
+  clearColor: Rgba;
+  background: LayerPlan<BackgroundDesc>;
+  slide: LayerPlan<SlideDesc>;
+  lowerThird: LayerPlan<LowerThirdDesc>;
+  media: LayerPlan<MediaDesc>;
+  audio: LayerPlan<AudioDesc>;
+  /** Cue index of the slide on the slide layer (even if this look hides it), -1 if none. */
+  slideCue: number;
+};
+
+export type PlanOptions = {
+  /** Changes whenever the look's content changes, so keys (and cached rasters) follow look edits. */
+  lookSig?: string;
+  /** Extra media not in the resolved playlist (e.g. the logo or a holding slide from the output config). */
+  media?: (id: string) => Media | undefined;
+};
+
+/** The crossfade duration a look uses for a layer change; looks with a cut transition always cut. */
+export function fadeMsFor(look: Look, transition?: Transition): number {
+  if (look.transition.kind === 'cut') return 0;
+  const t = transition ?? look.transition;
+  return t.kind === 'crossfade' ? t.ms : 0;
+}
+
+export function findSlide(
+  presentations: Record<string, Presentation> | undefined,
+  presentationId: string,
+  slideId: string,
+): { slide: Slide; presentation: Presentation } | undefined {
+  const p = presentations?.[presentationId];
+  if (!p) return undefined;
+  for (const sec of p.sections)
+    for (const slide of sec.slides) if (slide.id === slideId) return { slide, presentation: p };
+  return undefined;
+}
+
+/** A stable signature of a look's rendering-relevant content. */
+export function lookSignature(look: Look, width = 0, height = 0): string {
+  const s = JSON.stringify(look);
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `${look.id}.${(h >>> 0).toString(36)}.${width}x${height}`;
+}
+
+/** Whether the look draws anything on the slide layer for this slide. */
+export function slideVisible(look: Look, slide: Slide, isSong: boolean, nextSlide?: Slide): boolean {
+  const rule = look.layers.slide;
+  if (rule.mode === 'hidden') return false;
+  if (rule.mode === 'authored') return slide.objects.length > 0 || !!slide.imported;
+  if (lyricTextFor(slide, look, isSong) !== null) return true;
+  return !!(rule.nextSlide && nextSlide && lyricTextFor(nextSlide, look, isSong) !== null);
+}
+
+const EMPTY = <D>(at = 0): LayerPlan<D> => ({ key: '', desc: null, at, fadeMs: 0 });
+
+export function planFrame(state: LiveState, look: Look, opts: PlanOptions = {}): FramePlan {
+  const sig = opts.lookSig ?? look.id;
+  const resolved = state.resolved;
+  const mediaById = (id: string | undefined): Media | undefined =>
+    id ? (resolved?.media[id] ?? opts.media?.(id)) : undefined;
+  const plan: FramePlan = {
+    idle: state.mode !== 'live',
+    black: state.black,
+    clearColor: look.clearColor,
+    background: EMPTY(state.layers.background.at),
+    slide: EMPTY(state.layers.slide.at),
+    lowerThird: EMPTY(state.layers.lowerThird.at),
+    media: EMPTY(state.layers.media.at),
+    audio: EMPTY(state.audio.at),
+    slideCue: -1,
+  };
+  if (plan.idle) return plan;
+
+  // Background: the cue's background when the look shows backgrounds, else the look's holding slide.
+  {
+    const ls = state.layers.background;
+    const fadeMs = fadeMsFor(look, ls.transition);
+    let mediaId: string | undefined;
+    let holding = false;
+    if (look.layers.background.visible) mediaId = ls.content?.mediaId;
+    else if (look.holdingMediaId && !state.black) {
+      mediaId = look.holdingMediaId;
+      holding = true;
+    }
+    const m = mediaById(mediaId);
+    const f = m ? playableFile(m) : undefined;
+    if (m && f && (m.kind === 'image' || m.kind === 'video')) {
+      plan.background = {
+        key: `bg|${m.id}|${f.hash}`,
+        desc: {
+          layer: 'background',
+          key: `bg|${m.id}|${f.hash}`,
+          mediaId: m.id,
+          hash: f.hash,
+          mime: f.mime,
+          kind: m.kind,
+          holding,
+        },
+        at: holding ? 0 : ls.at,
+        fadeMs,
+      };
+    } else plan.background = { key: '', desc: null, at: ls.at, fadeMs };
+  }
+
+  // Slide
+  {
+    const ls = state.layers.slide;
+    const fadeMs = fadeMsFor(look, ls.transition);
+    plan.slide = { key: '', desc: null, at: ls.at, fadeMs };
+    const c = ls.content;
+    const found = c ? findSlide(resolved?.presentations, c.presentationId, c.slideId) : undefined;
+    if (c && found) {
+      plan.slideCue = c.cueIndex;
+      const isSong = found.presentation.kind === 'song';
+      let nextSlide: Slide | undefined;
+      if (look.layers.slide.mode === 'lyricOnly' && look.layers.slide.nextSlide) {
+        const nc = state.cues[c.cueIndex + 1];
+        if (nc?.kind === 'slide' && nc.presentationId && nc.slideId)
+          nextSlide = findSlide(resolved?.presentations, nc.presentationId, nc.slideId)?.slide;
+      }
+      if (slideVisible(look, found.slide, isSong, nextSlide)) {
+        const key = `sl|${resolved?.manifestId ?? ''}|${sig}|${c.cueIndex}|${c.slideId}|${nextSlide?.id ?? ''}`;
+        plan.slide = {
+          key,
+          desc: {
+            layer: 'slide',
+            key,
+            cueIndex: c.cueIndex,
+            presentationId: c.presentationId,
+            slideId: c.slideId,
+            slide: found.slide,
+            nextSlide,
+            isSong,
+          },
+          at: ls.at,
+          fadeMs,
+        };
+      }
+    }
+  }
+
+  // Lower third
+  {
+    const ls = state.layers.lowerThird;
+    const fadeMs = fadeMsFor(look, ls.transition);
+    const text = ls.content?.text ?? '';
+    if (look.layers.lowerThird.visible && text.trim()) {
+      const key = `lt|${sig}|${text}`;
+      plan.lowerThird = { key, desc: { layer: 'lowerThird', key, text }, at: ls.at, fadeMs };
+    } else plan.lowerThird = { key: '', desc: null, at: ls.at, fadeMs };
+  }
+
+  // Media (kept for audio even when the look hides it)
+  {
+    const ls = state.layers.media;
+    const fadeMs = fadeMsFor(look, ls.transition);
+    const c = ls.content;
+    const m = mediaById(c?.mediaId);
+    const f = m ? playableFile(m) : undefined;
+    plan.media = { key: '', desc: null, at: ls.at, fadeMs };
+    if (c && m && f) {
+      const cue = state.cues[c.cueIndex];
+      const key = `md|${c.cueIndex}|${m.id}|${f.hash}`;
+      plan.media = {
+        key: look.layers.media.visible ? key : '',
+        desc: {
+          layer: 'media',
+          key,
+          cueIndex: c.cueIndex,
+          mediaId: m.id,
+          hash: f.hash,
+          mime: f.mime,
+          kind: c.mediaKind,
+          loop: c.loop,
+          onEnd: c.onEnd,
+          state: c.state,
+          startedAt: c.startedAt,
+          positionMs: c.positionMs,
+          durationMs: m.durationMs,
+          audio: {
+            pairId: cue?.audio?.pairId ?? m.audio?.pairId,
+            gainDb: cue?.audio?.gainDb ?? m.audio?.gainDb,
+            loudnessLufs: m.audio?.loudnessLufs,
+          },
+        },
+        at: ls.at,
+        fadeMs,
+      };
+    }
+  }
+
+  // Audio cue (rendered by nothing; the audio master plays it)
+  {
+    const a = state.audio.content;
+    const m = mediaById(a?.mediaId);
+    const f = m ? playableFile(m) : undefined;
+    if (a && m && f) {
+      const key = `au|${a.cueIndex}|${m.id}|${f.hash}`;
+      plan.audio = {
+        key,
+        desc: {
+          key,
+          cueIndex: a.cueIndex,
+          mediaId: m.id,
+          hash: f.hash,
+          mime: f.mime,
+          loop: a.loop,
+          state: a.state,
+          startedAt: a.startedAt,
+          positionMs: a.positionMs,
+          audio: {
+            pairId: a.pairId ?? m.audio?.pairId,
+            gainDb: a.gainDb ?? m.audio?.gainDb,
+            loudnessLufs: m.audio?.loudnessLufs,
+          },
+        },
+        at: state.audio.at,
+        fadeMs: 0,
+      };
+    }
+  }
+  return plan;
+}
+
+/** The look an output uses: by id from the config looks, then the resolved playlist's looks, then a fallback. */
+export function resolveLook(
+  lookId: string | undefined,
+  looks: Look[][],
+  fallback: Look,
+): Look {
+  for (const list of looks) {
+    const l = lookId ? list.find((x) => x.id === lookId) : undefined;
+    if (l) return l;
+  }
+  return fallback;
+}
+
+/** Hash of every file a plan needs (for arm prerequisites). */
+export function planFiles(p: FramePlan): string[] {
+  const out: string[] = [];
+  if (p.background.desc) out.push(p.background.desc.hash);
+  if (p.media.desc) out.push(p.media.desc.hash);
+  if (p.audio.desc) out.push(p.audio.desc.hash);
+  return out;
+}
