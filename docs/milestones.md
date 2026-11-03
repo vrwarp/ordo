@@ -92,3 +92,18 @@ login page and lockout behaviour; first live service scheduled.
 Candidates, not commitments: WebCodecs decode path if telemetry warrants; Planning
 Center; Bible provider; phone remote; outputs on separate machines; auto-shrink and RTL
 text; per-object builds; cloud sync and user accounts.
+
+## Implementation status
+
+All tasks in M1, M2 and M3 are implemented in this repository, with these exceptions and open items:
+
+| Item                                                     | Status                                                                                                                 |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 1.1 Verify hostnames and wildcard certificate on the NAS | Venue task; deploy/README.md describes it                                                                              |
+| 1.25, 2.13, 3.12 Rehearsals and venue soak runs          | Venue tasks; the soak tool is ready                                                                                    |
+| WebGPU compositor on real hardware                       | Implemented; the build container has no GPU, so only the Canvas 2D path was observed rendering                         |
+| Docker image                                             | Dockerfile written and its runtime layout verified with `pnpm deploy`; not built here (no Docker daemon). CI builds it |
+| Editor "send to preview" to an idle output               | Not implemented (no hub path yet)                                                                                      |
+| Per-window log lines in the operator diagnostics         | Health counters only; windows do not ship logs over the protocol                                                       |
+| Golden-image tests of the text rasterizer                | Not written; the e2e tests check rendered pixels and text instead                                                      |
+| Memory caps on ffmpeg, LibreOffice and pdftoppm          | Timeouts only; set a container memory limit (deploy/compose.yaml)                                                      |
