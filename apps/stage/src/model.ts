@@ -330,7 +330,7 @@ export type ShownMessage = { id: string; text: string; phase: 'in' | 'out'; sinc
  */
 export function reconcileMessages(
   shown: ShownMessage[],
-  active: StageMessage[],
+  active: Pick<StageMessage, 'id' | 'text'>[],
   now: number,
 ): ShownMessage[] {
   const activeIds = new Set(active.map((m) => m.id));

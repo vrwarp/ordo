@@ -118,6 +118,8 @@ export class MidiDriver {
   private learning: Learning | null = null;
   /** Called when the input list changes. */
   onInputs?: (inputs: MidiInputInfo[]) => void;
+  /** Called on access errors (error budgets). */
+  onError?: (detail: string) => void;
 
   constructor(private dispatch: Dispatch) {}
 
@@ -132,6 +134,7 @@ export class MidiDriver {
       this.access = await navigator.requestMIDIAccess({ sysex: false });
     } catch (e) {
       console.warn('[midi] access denied', e);
+      this.onError?.(`access denied: ${String(e)}`);
       return false;
     }
     this.access.onstatechange = () => this.bindInputs();

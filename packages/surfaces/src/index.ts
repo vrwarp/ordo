@@ -21,7 +21,8 @@ export {
   lcdText,
   pageTarget,
   resolvePageTarget,
+  sanitizeDeckPages,
 } from './deck-model.ts';
-export { StreamDeckDriver, dialActions, type DeckInfo } from './streamdeck.ts';
+export { StreamDeckDriver, dialActions, type DeckInfo, type DeckRenderer } from './streamdeck.ts';
 export { MidiDriver, matchMidi, learnFrom, parseMidi, type MidiInputInfo, type MidiMessage } from './midi.ts';
-export { wrapText } from './deck-render.ts';
+export { wrapText, renderKeyPixels, renderStripPixels } from './deck-render.ts';

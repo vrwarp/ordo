@@ -81,8 +81,13 @@ export function peakOf(samples: Float32Array): number {
  * by 20 dB per `releaseMs` (default 300 ms, a PPM-like decay).
  */
 export function meterBallistics(previous: number, peak: number, dtMs: number, releaseMs = 300): number {
-  if (peak >= previous) return peak;
-  const fall = dbToGain(-20 * (Math.max(0, dtMs) / releaseMs));
-  const decayed = previous * fall;
-  return Math.max(decayed, peak);
+  // Bad inputs (NaN from a glitching device or clock) never leave the meter stuck at NaN.
+  const pk = peak > 0 ? Math.min(peak, 1) : 0;
+  const prev = previous > 0 ? Math.min(previous, 1) : 0;
+  if (pk >= prev) return pk;
+  if (!(releaseMs > 0)) return pk;
+  const dt = dtMs > 0 && dtMs < Number.POSITIVE_INFINITY ? dtMs : dtMs === Number.POSITIVE_INFINITY ? 1e9 : 0;
+  const fall = dbToGain(-20 * (dt / releaseMs));
+  const decayed = prev * fall;
+  return Math.max(decayed, pk);
 }

@@ -22,6 +22,37 @@ export interface RtfResult {
 
 type Dest = 'text' | 'fonttbl' | 'colortbl' | 'skip';
 
+/** Font names longer than this are cut (a real PostScript or family name is far shorter). */
+export const RTF_FONT_NAME_MAX = 200;
+/** RTF numeric parameters are 16/32-bit; anything larger is clamped. */
+const NUM_LIMIT = 2 ** 31;
+
+/**
+ * Trailing spaces and tabs removed from every line, leading and trailing blank lines removed. Written as
+ * loops because the equivalent regexes backtrack quadratically on long whitespace runs.
+ */
+export function tidyLines(text: string): string {
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]!;
+    let end = l.length;
+    while (end > 0 && (l.charCodeAt(end - 1) === 32 || l.charCodeAt(end - 1) === 9)) end--;
+    if (end !== l.length) lines[i] = l.slice(0, end);
+  }
+  let a = 0;
+  let b = lines.length;
+  while (a < b && lines[a] === '') a++;
+  while (b > a && lines[b - 1] === '') b--;
+  return lines.slice(a, b).join('\n');
+}
+
+/** Replace lone UTF-16 surrogates (from `\uN` with half a pair) with U+FFFD. */
+function wellFormed(s: string): string {
+  return s.replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '\ufffd');
+}
+
+const clampInt = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.trunc(v)));
+
 interface GroupState {
   dest: Dest;
   font: number;
@@ -126,13 +157,13 @@ function plainTextResult(input: string | Uint8Array): RtfResult {
       text = rtfBytesToString(input);
     }
   }
-  text = text
-    .replace(/^\uFEFF/, '')
-    .replace(/\r\n?/g, '\n')
-    .replace(/[\u2028\u2029]/g, '\n')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/^\n+/, '')
-    .replace(/\n+$/, '');
+  text = tidyLines(
+    text
+      .replace(/^\uFEFF/, '')
+      .replace(/\r\n?/g, '\n')
+      .replace(/[\u2028\u2029]/g, '\n'),
+  );
+  text = wellFormed(text);
   return { text, plain: true, bold: false, italic: false, styleRuns: 0 };
 }
 
@@ -187,7 +218,7 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
         if (ch === ';') {
           if (curFontIdx >= 0 && !fonts.has(curFontIdx)) fonts.set(curFontIdx, fontName.trim());
           fontName = '';
-        } else fontName += ch;
+        } else if (fontName.length < RTF_FONT_NAME_MAX) fontName += ch;
       }
       return;
     }
@@ -258,7 +289,14 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
         }
         if (src[q] === ' ') q++;
         p = q;
-        const num = numStr ? Number(numStr) : undefined;
+        const parsedNum = numStr ? Number(numStr) : Number.NaN;
+        const num = Number.isFinite(parsedNum)
+          ? clampInt(parsedNum, -NUM_LIMIT, NUM_LIMIT)
+          : /^-?\d+$/.test(numStr)
+            ? numStr.startsWith('-')
+              ? -NUM_LIMIT
+              : NUM_LIMIT
+            : undefined;
         const wasGroupStart = groupStart;
         groupStart = false;
         if (wasGroupStart || starPending) {
@@ -354,7 +392,8 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
         return;
       }
       case 'uc':
-        st.uc = num ?? 1;
+        // Fallback characters after \uN: 0..8 (a negative or huge value would eat or misplace text).
+        st.uc = clampInt(num ?? 1, 0, 8);
         return;
       case 'f':
         if (st.dest === 'fonttbl') {
@@ -363,7 +402,7 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
         } else st.font = num ?? 0;
         return;
       case 'fs':
-        st.fs = num ?? 24;
+        st.fs = num !== undefined && num > 0 ? Math.min(num, 2000) : 24;
         return;
       case 'cf':
         st.cf = num ?? 0;
@@ -399,35 +438,31 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
         st.align = 'justify';
         return;
       case 'strokewidth':
-        st.strokeWidth = num ?? 0;
+        st.strokeWidth = clampInt(num ?? 0, -2000, 2000);
         return;
       case 'strokec':
         st.strokeColor = num ?? 0;
         return;
       case 'red':
-        if (st.dest === 'colortbl') colorDraft.r = num ?? 0;
+        if (st.dest === 'colortbl') colorDraft.r = clampInt(num ?? 0, 0, 255);
         return;
       case 'green':
-        if (st.dest === 'colortbl') colorDraft.g = num ?? 0;
+        if (st.dest === 'colortbl') colorDraft.g = clampInt(num ?? 0, 0, 255);
         return;
       case 'blue':
-        if (st.dest === 'colortbl') colorDraft.b = num ?? 0;
+        if (st.dest === 'colortbl') colorDraft.b = clampInt(num ?? 0, 0, 255);
         return;
       default:
         return;
     }
   }
 
-  const text = out
-    .replace(/ /g, ' ')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n+$/, '')
-    .replace(/^\n+/, '');
+  const text = wellFormed(tidyLines(out.replace(/ /g, ' ')));
   const f = first as GroupState | null;
   const res: RtfResult = { text, bold: false, italic: false, styleRuns: styleKeys.size };
   if (f) {
     const name = fonts.get(f.font);
-    if (name) res.fontName = name;
+    if (name) res.fontName = name.slice(0, RTF_FONT_NAME_MAX);
     res.fontSizePt = f.fs / 2;
     const col = colors[f.cf];
     if (col) res.color = col;

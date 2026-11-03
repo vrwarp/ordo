@@ -133,3 +133,37 @@ export function drawStrip(s: Surface, title: string, sub: string): void {
 export function pixels(s: Surface): Uint8ClampedArray {
   return s.ctx.getImageData(0, 0, s.width, s.height).data;
 }
+
+const shared = new Map<string, Surface>();
+function sharedSurface(w: number, h: number): Surface | null {
+  const k = `${w}x${h}`;
+  let s = shared.get(k);
+  if (!s) {
+    const c = createSurface(w, h);
+    if (!c) return null;
+    s = c;
+    shared.set(k, s);
+  }
+  return s;
+}
+
+/** Render one key face to RGBA pixels (worker-safe with OffscreenCanvas). Null when no 2D canvas exists. */
+export function renderKeyPixels(face: KeyFace, width: number, height: number): Uint8ClampedArray | null {
+  const s = sharedSurface(width, height);
+  if (!s) return null;
+  drawKey(s, face);
+  return pixels(s);
+}
+
+/** Render the Plus touch strip to RGBA pixels. Null when no 2D canvas exists. */
+export function renderStripPixels(
+  title: string,
+  sub: string,
+  width: number,
+  height: number,
+): Uint8ClampedArray | null {
+  const s = sharedSurface(width, height);
+  if (!s) return null;
+  drawStrip(s, title, sub);
+  return pixels(s);
+}

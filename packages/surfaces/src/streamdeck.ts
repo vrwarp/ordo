@@ -8,7 +8,9 @@ import {
 import {
   BLANK_FACE,
   type DeckView,
+  type KeyFace,
   defaultDeckPages,
+  sanitizeDeckPages,
   faceKey,
   keyFace,
   lcdText,
@@ -59,6 +61,15 @@ export function dialActions(dial: number, gesture: 'press' | number): Action[] |
   return 'pageNext';
 }
 
+/**
+ * Renders key images somewhere else (the operator's core worker, design/25), so a busy main thread does not
+ * draw them. Null means "draw locally".
+ */
+export type DeckRenderer = {
+  key(face: KeyFace, width: number, height: number): Promise<Uint8ClampedArray | null>;
+  strip(title: string, sub: string, width: number, height: number): Promise<Uint8ClampedArray | null>;
+};
+
 export class StreamDeckDriver {
   private deck: StreamDeckWeb | null = null;
   private _info: DeckInfo | null = null;
@@ -81,6 +92,10 @@ export class StreamDeckDriver {
   onChange?: (info: DeckInfo | null) => void;
   /** Called when the page changes from the deck. */
   onPage?: (index: number, name: string) => void;
+  /** Called on device and drawing errors (error budgets). */
+  onError?: (detail: string) => void;
+  /** Optional off-thread key image renderer; local drawing is the fallback. */
+  renderer?: DeckRenderer;
 
   constructor(private dispatch: Dispatch) {}
 
@@ -100,6 +115,7 @@ export class StreamDeckDriver {
       await this.open(deck);
     } catch (e) {
       console.warn('[streamdeck] connect failed', e);
+      this.onError?.(`connect failed: ${String(e)}`);
     }
     return this._info;
   }
@@ -119,6 +135,7 @@ export class StreamDeckDriver {
         else if (deck) void deck.close().catch(() => {});
       } catch (e) {
         console.warn('[streamdeck] reopen failed', e);
+        this.onError?.(`reopen failed: ${String(e)}`);
       } finally {
         this.connecting = null;
       }
@@ -137,7 +154,7 @@ export class StreamDeckDriver {
 
   /** Pages from settings; an empty list means the built-in defaults for the connected model. */
   setPages(pages: StreamDeckPage[]): void {
-    this.customPages = pages;
+    this.customPages = sanitizeDeckPages(pages);
     this.resolvePages();
     this.redrawAll();
   }
@@ -245,6 +262,7 @@ export class StreamDeckDriver {
     });
     deck.on('error', (err) => {
       console.warn('[streamdeck] device error', err);
+      this.onError?.(`device error: ${String(err)}`);
       this.lost(deck);
     });
     this.resolvePages();
@@ -339,6 +357,7 @@ export class StreamDeckDriver {
         await this.draw();
       } catch (e) {
         console.warn('[streamdeck] draw failed', e);
+        this.onError?.(`draw failed: ${String(e)}`);
       }
     });
   }
@@ -373,6 +392,11 @@ export class StreamDeckDriver {
         await deck.clearKey(b.index);
         continue;
       }
+      const remote = await this.renderer?.key(face, b.pixelSize.width, b.pixelSize.height).catch(() => null);
+      if (remote) {
+        await deck.fillKeyBuffer(b.index, remote, { format: 'rgba' });
+        continue;
+      }
       const s = this.surface(b.pixelSize.width, b.pixelSize.height);
       if (!s) {
         await deck.fillKeyColor(b.index, ...hexRgb(face.bg));
@@ -386,8 +410,11 @@ export class StreamDeckDriver {
       const k = `${title}|${sub}`;
       if (k !== this.stripDrawn) {
         this.stripDrawn = k;
-        const s = this.surface(this.lcd.pixelSize.width, this.lcd.pixelSize.height);
-        if (s) {
+        const { width, height } = this.lcd.pixelSize;
+        const remote = await this.renderer?.strip(title, sub, width, height).catch(() => null);
+        const s = remote ? null : this.surface(width, height);
+        if (remote) await deck.fillLcd(this.lcd.id, remote, { format: 'rgba' });
+        else if (s) {
           drawStrip(s, title, sub);
           await deck.fillLcd(this.lcd.id, pixels(s), { format: 'rgba' });
         }

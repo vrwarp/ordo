@@ -32,6 +32,8 @@ export default defineConfig({
   base: './',
   plugins: [react(), serviceWorker()],
   build: { target: 'es2022', sourcemap: true, chunkSizeWarningLimit: 2000 },
+  // The link worker (design/25) is an ES module worker.
+  worker: { format: 'es' },
   server: {
     proxy: {
       '/api': { target: 'http://localhost:8080', changeOrigin: false },

@@ -12,9 +12,12 @@ export function normalizeCombo(e: ComboEvent): string {
   if (e.ctrlKey || e.metaKey) parts.push('Ctrl');
   if (e.altKey) parts.push('Alt');
   if (e.shiftKey) parts.push('Shift');
-  let key = e.code || e.key;
+  // Synthetic or exotic events can lack both fields; bound the length so a map key stays sane.
+  let key = String(e.code || e.key || 'Unidentified').slice(0, 32);
   if (/^Key[A-Z]$/.test(key)) key = key.slice(3);
   else if (key === ' ' || key === 'Spacebar') key = 'Space';
+  // `+` separates combo parts, so it never appears inside a key name.
+  if (key.includes('+')) key = key === '+' ? 'Plus' : key.replace(/\+/g, 'Plus');
   else if (key.length === 1 && /[a-z]/.test(key)) key = key.toUpperCase();
   parts.push(key);
   return parts.join('+');
@@ -22,7 +25,7 @@ export function normalizeCombo(e: ComboEvent): string {
 
 /** True for a bare modifier press (no combo should fire). */
 export function isModifierOnly(e: Pick<KeyboardEvent, 'code' | 'key'>): boolean {
-  return MODIFIER_CODES.test(e.code || e.key);
+  return MODIFIER_CODES.test(String(e.code || e.key || ''));
 }
 
 /**

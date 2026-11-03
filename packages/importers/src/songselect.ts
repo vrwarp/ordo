@@ -8,7 +8,8 @@ export function parseSongFile(
   text: string,
   opts: { linesPerSlide?: number; title?: string } = {},
 ): Presentation {
-  const clean = text.replace(/^﻿/, '');
+  // A UTF-8 BOM, or a UTF-16 BOM read as Latin-1 (the NULs between characters are dropped by the parser).
+  const clean = text.replace(/^(?:\uFEFF|\u00ff\u00fe|\u00fe\u00ff)/, '');
   const parsed = parseLyrics(clean);
   return songFromParsed(parsed, {
     title: opts.title,

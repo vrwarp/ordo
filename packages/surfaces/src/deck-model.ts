@@ -1,4 +1,4 @@
-import type { ActionId, StreamDeckKey, StreamDeckPage } from '@ordo/domain';
+import { ActionId, type StreamDeckKey, type StreamDeckPage } from '@ordo/domain';
 
 /** What the Stream Deck shows; derived from live state by the operator app. */
 export type DeckView = {
@@ -28,6 +28,8 @@ export function pageTarget(key: StreamDeckKey | undefined): string | undefined {
 /** Index of the page a page key leads to. */
 export function resolvePageTarget(pages: StreamDeckPage[], current: number, target: string): number {
   if (pages.length === 0) return 0;
+  // A stale index (pages replaced by a shorter stored list) must not point past the end.
+  current = Number.isInteger(current) ? Math.max(0, Math.min(pages.length - 1, current)) : 0;
   if (target === 'next') return (current + 1) % pages.length;
   if (target === 'prev') return (current - 1 + pages.length) % pages.length;
   const i = pages.findIndex((p) => p.name.toLowerCase() === target.toLowerCase());
@@ -370,4 +372,49 @@ export function lcdText(view: DeckView, pageName?: string): { title: string; sub
   if (view.nextItems[0]) parts.push(`Next: ${view.nextItems[0]}`);
   if (!view.connected) parts.push('offline');
   return { title, sub: parts.join('  ·  ') };
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+function sanitizeKey(raw: unknown): StreamDeckKey | undefined {
+  if (!isObj(raw)) return undefined;
+  const k: StreamDeckKey = {};
+  const a = raw.action;
+  if (isObj(a) && ActionId.safeParse(a.id).success) {
+    const arg = a.arg;
+    k.action =
+      (typeof arg === 'number' && Number.isFinite(arg)) || (typeof arg === 'string' && arg.length <= 200)
+        ? { id: a.id as ActionId, arg }
+        : { id: a.id as ActionId };
+  }
+  if (raw.dynamic === 'section' || raw.dynamic === 'nextItem') k.dynamic = raw.dynamic;
+  const di = raw.dynamicIndex;
+  if (typeof di === 'number' && Number.isInteger(di) && di >= 0 && di <= 10_000) k.dynamicIndex = di;
+  if (typeof raw.label === 'string') k.label = raw.label.slice(0, 200);
+  if (typeof raw.color === 'string' && raw.color.length <= 100) k.color = raw.color;
+  return k.action || k.dynamic || k.label ? k : undefined;
+}
+
+/**
+ * Stream Deck pages as stored in settings are untrusted JSON (older versions, hand edits, a failed write):
+ * keep what is well-formed, drop the rest. Pages without a name are named by position; slots must be key
+ * indices; a key keeps only its valid fields and is dropped when nothing usable is left.
+ */
+export function sanitizeDeckPages(raw: unknown): StreamDeckPage[] {
+  if (!Array.isArray(raw)) return [];
+  const out: StreamDeckPage[] = [];
+  raw.slice(0, 100).forEach((p, i) => {
+    if (!isObj(p)) return;
+    const name = typeof p.name === 'string' && p.name.trim() ? p.name.slice(0, 200) : `Page ${i + 1}`;
+    const keys: Record<string, StreamDeckKey> = {};
+    if (isObj(p.keys)) {
+      for (const [slot, v] of Object.entries(p.keys).slice(0, 200)) {
+        if (!/^\d{1,3}$/.test(slot)) continue;
+        const k = sanitizeKey(v);
+        if (k) keys[String(Number(slot))] = k;
+      }
+    }
+    out.push({ name, keys });
+  });
+  return out;
 }

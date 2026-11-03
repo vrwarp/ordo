@@ -19,6 +19,12 @@ import {
 } from '@ordo/domain';
 import { decodeAs, type Msg, PRO7_PROTO_VERSION } from './proto.ts';
 import { parseRtf, splitFontName } from './rtf.ts';
+import { clipText, IMPORT_LIMITS, sanitizePresentation } from './sanitize.ts';
+
+/** Playlist folders nest at most this deep (deeper nodes are logged and skipped). */
+const PLAYLIST_MAX_DEPTH = 32;
+/** Path suffixes tried when locating a media file (the longest real library paths are far shorter). */
+const MEDIA_SUFFIX_SEGMENTS = 12;
 
 export type ImportLogLevel = 'info' | 'warn' | 'error';
 export type ImportLogEntry = { level: ImportLogLevel; item?: string; message: string };
@@ -96,7 +102,7 @@ class MediaResolver {
     if (!hit) {
       // Longest relative suffix that matches an entry ("Media/Assets/x.mp4" inside "Library/Media/Assets/x.mp4").
       const segs = lower.split('/');
-      for (let i = 1; i < segs.length - 1 && !hit; i++) {
+      for (let i = Math.max(1, segs.length - MEDIA_SUFFIX_SEGMENTS); i < segs.length - 1 && !hit; i++) {
         const suffix = segs.slice(i).join('/');
         for (const [k, v] of this.byLower) {
           if (k === suffix || k.endsWith('/' + suffix)) {
@@ -620,6 +626,7 @@ export function mapPresentation(
     archived: false,
   };
   if (backgroundMediaId) presentation.backgroundMediaId = backgroundMediaId;
+  sanitizePresentation(presentation);
   note(
     ctx,
     slideCount === 0 ? 'warn' : 'info',
@@ -719,7 +726,11 @@ export function importPro7(files: Map<string, Uint8Array>): Pro7ImportResult {
       continue;
     }
     const before = playlists.length;
-    collectPlaylists(doc.rootNode as Msg, [], { item, log, media, refs, out: playlists });
+    try {
+      collectPlaylists(doc.rootNode as Msg, [], { item, log, media, refs, out: playlists });
+    } catch (e) {
+      log.push({ level: 'error', item, message: `playlist could not be read: ${(e as Error).message}` });
+    }
     log.push({ level: 'info', item, message: `imported ${playlists.length - before} playlist(s)` });
   }
 
@@ -763,7 +774,11 @@ function findPresentation(item: Msg, refs: PresRef[]): PresRef | undefined {
 }
 
 function collectPlaylists(node: Msg, trail: string[], ctx: PlCtx, depth = 0): void {
-  const name = (typeof node.name === 'string' && node.name) || 'Playlist';
+  const name = clipText((typeof node.name === 'string' && node.name) || 'Playlist', IMPORT_LIMITS.name);
+  if (depth > PLAYLIST_MAX_DEPTH) {
+    ctx.log.push({ level: 'warn', item: ctx.item, message: `skipped playlist "${name}": nested too deep` });
+    return;
+  }
   const children: Msg[] = [
     ...(((node.playlists as Msg | undefined)?.playlists ?? []) as Msg[]),
     ...((node.children ?? []) as Msg[]),
@@ -780,7 +795,7 @@ function collectPlaylists(node: Msg, trail: string[], ctx: PlCtx, depth = 0): vo
   const items = ((node.items as Msg | undefined)?.items ?? []) as Msg[];
   if (isRoot || (node.type === 'TYPE_GROUP' && items.length === 0)) return;
   if (!node.items && children.length > 0) return;
-  const plName = [...trail, name].join(' / ');
+  const plName = clipText([...trail, name].join(' / '), IMPORT_LIMITS.name);
   const out: PlaylistItem[] = [];
   const skipped = new Map<string, number>();
   const bump = (k: string) => skipped.set(k, (skipped.get(k) ?? 0) + 1);

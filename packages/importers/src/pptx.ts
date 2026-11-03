@@ -1,6 +1,14 @@
 import { type ExtractedText, LOGICAL_HEIGHT, LOGICAL_WIDTH } from '@ordo/domain';
 import { XMLParser } from 'fast-xml-parser';
 import JSZip from 'jszip';
+import { sanitizeExtracted } from './sanitize.ts';
+
+/** Slides read from one file at most (a sldIdLst can list anything). */
+export const PPTX_MAX_SLIDES = 2000;
+/** XML element nesting kept; deeper content is dropped (real slides nest a few dozen levels). */
+const XML_MAX_DEPTH = 256;
+/** Largest slide side OOXML allows (51,206,400 EMU = 56 in). */
+const MAX_SLIDE_EMU = 51_206_400;
 
 /** A namespaced XML element as a small tree (order preserved). */
 interface XNode {
@@ -23,9 +31,11 @@ const parser = new XMLParser({
 // biome-ignore lint/suspicious/noExplicitAny: fast-xml-parser preserveOrder output is untyped
 type Raw = any;
 
-function toNodes(raw: Raw[]): XNode[] {
+function toNodes(raw: Raw[], depth = 0): XNode[] {
   const out: XNode[] = [];
-  for (const entry of raw ?? []) {
+  if (depth > XML_MAX_DEPTH || !Array.isArray(raw)) return out;
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
     let name = '';
     for (const k of Object.keys(entry)) if (k !== ':@') name = k;
     if (!name || name === '?xml') continue;
@@ -34,13 +44,19 @@ function toNodes(raw: Raw[]): XNode[] {
       continue;
     }
     const attrs = (entry[':@'] ?? {}) as Record<string, string>;
-    out.push({ name, attrs, children: toNodes(entry[name] as Raw[]), text: '' });
+    out.push({ name, attrs, children: toNodes(entry[name] as Raw[], depth + 1), text: '' });
   }
   return out;
 }
 
 function parseXml(xml: string): XNode[] {
-  return toNodes(parser.parse(xml) as Raw[]);
+  try {
+    return toNodes(parser.parse(xml) as Raw[]);
+  } catch (e) {
+    // A stack overflow in the parser on absurd nesting is reported as a bad file, not a crash.
+    if (e instanceof RangeError) throw new Error('PowerPoint XML is nested too deeply');
+    throw e;
+  }
 }
 
 function child(n: XNode | undefined, name: string): XNode | undefined {
@@ -177,7 +193,7 @@ function firstSize(body: XNode): number | undefined {
 
 function bodyText(body: XNode): string {
   const paras = [...children(body, 'a:p')].map(paragraphText);
-  return paras.join('\n').replace(/\s+$/, '');
+  return paras.join('\n').trimEnd();
 }
 
 type Rels = Map<string, string>;
@@ -236,7 +252,9 @@ export async function extractPptxText(buf: Uint8Array): Promise<PptxText> {
   if (!presXml) throw new Error('not a PowerPoint file: ppt/presentation.xml is missing');
   const pres = parseXml(presXml).find((n) => n.name === 'p:presentation');
   const sz = child(pres, 'p:sldSz');
-  const slideSize = { cx: num(sz?.attrs.cx) ?? 12192000, cy: num(sz?.attrs.cy) ?? 6858000 };
+  const side = (v: number | undefined, def: number) =>
+    v !== undefined && v > 0 && v <= MAX_SLIDE_EMU ? v : def;
+  const slideSize = { cx: side(num(sz?.attrs.cx), 12192000), cy: side(num(sz?.attrs.cy), 6858000) };
   const { rels } = await readRels(zip, presPart);
 
   let slideParts: string[] = [];
@@ -251,6 +269,7 @@ export async function extractPptxText(buf: Uint8Array): Promise<PptxText> {
       .sort((a, b) => Number(/(\d+)\.xml$/.exec(a)![1]) - Number(/(\d+)\.xml$/.exec(b)![1]));
   }
 
+  slideParts = slideParts.slice(0, PPTX_MAX_SLIDES);
   const sx = LOGICAL_WIDTH / slideSize.cx;
   const sy = LOGICAL_HEIGHT / slideSize.cy;
   // Font sizes are in hundredths of a point; 1 pt = 12700 EMU; scaled with the slide's height ratio.
@@ -340,7 +359,7 @@ export async function extractPptxText(buf: Uint8Array): Promise<PptxText> {
           box: { x: r2(g.x * sx), y: r2(g.y * sy), w: r2(g.cx * sx), h: r2(g.cy * sy), rotation: g.rot },
         };
         if (szHundredths !== undefined) et.fontSizePx = r2((szHundredths / 100) * ptToPx);
-        boxes.push(et);
+        boxes.push(sanitizeExtracted(et));
         return;
       }
       for (const c of n.children) visit(c, tx);

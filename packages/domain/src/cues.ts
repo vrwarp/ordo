@@ -37,9 +37,10 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
             itemId: item.id,
             itemIndex,
             kind: 'slide',
-            label: text
-              ? truncate(text.replace(/\n/g, ' / '), 60)
-              : `${section.label} ${slideIndexInSection + 1}`,
+            label: truncate(
+              text ? text.replace(/\n/g, ' / ') : `${section.label} ${slideIndexInSection + 1}`,
+              60,
+            ),
             presentationId: p.id,
             sectionId: section.id,
             sectionLabel: section.label,
@@ -50,7 +51,7 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
             backgroundMediaId: slide.backgroundMediaId ?? item.backgroundMediaId ?? p.backgroundMediaId,
             transition: item.transition ?? p.transition,
             autoAdvanceMs:
-              p.kind === 'loop' ? (slide.durationMs ?? p.loop?.defaultSlideMs ?? 8000) : undefined,
+              p.kind === 'loop' ? loopDelay(slide.durationMs, p.loop?.defaultSlideMs) : undefined,
           });
         });
       });
@@ -62,7 +63,7 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
         itemId: item.id,
         itemIndex,
         kind: 'media',
-        label: m.name,
+        label: truncate(m.name ?? '', 80),
         mediaId: m.id,
         mediaKind: m.kind,
         loop: item.loop ?? m.loop,
@@ -75,9 +76,11 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
         itemId: item.id,
         itemIndex,
         kind: 'timer',
-        label:
+        label: truncate(
           item.timer.label ??
-          (item.timer.kind === 'elapsed' ? 'Elapsed timer' : `Countdown to ${item.timer.timeOfDay}`),
+            (item.timer.kind === 'elapsed' ? 'Elapsed timer' : `Countdown to ${item.timer.timeOfDay}`),
+          80,
+        ),
         timerId: item.id,
         timer: item.timer,
       });
@@ -87,7 +90,7 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
         itemId: item.id,
         itemIndex,
         kind: 'action',
-        label: item.action,
+        label: truncate(item.action, 80),
         action: item.action,
       });
     }
@@ -107,8 +110,29 @@ export function firstText(slide: {
   return t?.text ?? '';
 }
 
-function truncate(s: string, n: number): string {
-  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+/** Auto-advance delay of a loop slide, bounded to [0.5 s, 1 h] whatever the stored values. */
+export const LOOP_SLIDE_MIN_MS = 500;
+export const LOOP_SLIDE_MAX_MS = 3_600_000;
+function loopDelay(slideMs: number | undefined, defaultMs: number | undefined): number {
+  const pick = (v: number | undefined) =>
+    typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined;
+  const ms = pick(slideMs) ?? pick(defaultMs) ?? 8000;
+  return Math.round(Math.max(LOOP_SLIDE_MIN_MS, Math.min(LOOP_SLIDE_MAX_MS, ms)));
+}
+
+/** Replace lone surrogates (from mis-decoded imports) with U+FFFD so labels are valid text everywhere. */
+function wellFormed(s: string): string {
+  return s.replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '\ufffd');
+}
+
+/** Shorten to `n` code units with an ellipsis, never splitting a surrogate pair. */
+function truncate(raw: string, n: number): string {
+  const s = wellFormed(raw);
+  if (s.length <= n) return s;
+  let end = n - 1;
+  const c = s.charCodeAt(end - 1);
+  if (c >= 0xd800 && c <= 0xdbff) end--;
+  return s.slice(0, end) + '…';
 }
 
 /** First cue index of each playlist item. */

@@ -1,47 +1,22 @@
 import { hubNow } from '@ordo/client';
-import { formatClock, type PropBox, rgbaCss, type TextStyle } from '@ordo/domain';
+import { type PropBox, rgbaCss, type TextStyle } from '@ordo/domain';
 import {
   type CSSProperties,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
-import type { StageController } from './controller.ts';
+import type { StageHost } from './host.ts';
 import {
-  activeMessages,
   boxCss,
-  countdownDisplay,
-  currentText,
-  elapsedDisplay,
-  mediaRemainingDisplay,
   MESSAGE_FADE_MS,
-  nextExpiry,
-  nextText,
   reconcileMessages,
   type ShownMessage,
   type StageText,
   textCss,
 } from './model.ts';
-
-/** Hub time, re-rendered on every quarter second (clock, timers, message expiry). */
-function useHubNow(stepMs = 250): number {
-  const [now, setNow] = useState(() => hubNow());
-  useEffect(() => {
-    let t: ReturnType<typeof setTimeout>;
-    const tick = () => {
-      const n = hubNow();
-      setNow(n);
-      // Align to the next quarter second so the clock flips on the second.
-      t = setTimeout(tick, stepMs - (n % stepMs) + 2);
-    };
-    tick();
-    return () => clearTimeout(t);
-  }, [stepMs]);
-  return now;
-}
 
 /** Scale the 1920x1080 logical stage to fit the window, letterboxed. */
 function useStageScale(): number {
@@ -172,44 +147,42 @@ function MessageCard(props: { m: ShownMessage; style: CSSProperties }) {
   );
 }
 
-export function App(props: { controller: StageController }) {
-  const c = props.controller;
-  const snap = useSyncExternalStore(c.subscribe, c.getSnapshot);
-  const now = useHubNow();
+/**
+ * The stage, drawn from the view model the link worker posts (design/16, design/25). Nothing here reads
+ * the live state: text, timers and the clock arrive computed; only layout fitting and message fades run
+ * on this thread.
+ */
+export function App(props: { host: StageHost }) {
+  const h = props.host;
+  const snap = useSyncExternalStore(h.subscribe, h.getSnapshot);
   const scale = useStageScale();
-  const { state, layout, general, shown } = snap;
+  const v = snap.view;
+  const { layout } = v;
 
-  const current = useMemo(() => currentText(state, shown, layout), [state, shown, layout]);
-  const next = useMemo(() => nextText(state, shown, layout), [state, shown, layout]);
-  const countdown = layout.countdown ? countdownDisplay(state, now, general.timeZone) : null;
-  const elapsed = layout.elapsed ? elapsedDisplay(state, now) : null;
-  const remaining = layout.mediaRemaining ? mediaRemainingDisplay(state, now) : null;
-
-  // Messages: reconcile on every tick so TTL expiry and fade-outs progress.
+  // Messages: reconcile with the active list so new ones fade in and removed ones fade out.
   const [shownMsgs, setShownMsgs] = useState<ShownMessage[]>([]);
-  const active = activeMessages(state.messages, now);
-  const activeSig = active.map((m) => `${m.id}:${m.text}`).join('|');
+  const activeSig = v.messages.map((m) => `${m.id}:${m.text}`).join('|');
+  const [fadeTick, setFadeTick] = useState(0);
   // biome-ignore lint/correctness/useExhaustiveDependencies: activeSig captures the active list
   useEffect(() => {
     setShownMsgs((prev) => {
-      const nextList = reconcileMessages(prev, active, hubNow());
+      const nextList = reconcileMessages(prev, v.messages, hubNow());
       const same = nextList.length === prev.length && nextList.every((m, i) => m === prev[i]);
       return same ? prev : nextList;
     });
-  }, [activeSig, now]);
-  // Wake exactly at the next expiry instead of waiting for the tick.
-  const expiry = nextExpiry(state.messages, now);
-  const [, force] = useState(0);
+  }, [activeSig, fadeTick]);
+  // Drop faded-out messages once their fade has run.
   useEffect(() => {
-    if (expiry === undefined) return;
-    const t = setTimeout(() => force((x) => x + 1), Math.max(0, expiry - hubNow()) + 5);
+    if (!shownMsgs.some((m) => m.phase === 'out')) return;
+    const t = setTimeout(() => setFadeTick((x) => x + 1), MESSAGE_FADE_MS + 20);
     return () => clearTimeout(t);
-  }, [expiry]);
+  }, [shownMsgs]);
 
   const stageStyle: CSSProperties = {
     transform: `translate(-50%, -50%) scale(${scale})`,
     background: rgbaCss(layout.clearColor),
   };
+  const { countdown, elapsed, remaining } = v;
 
   return (
     <div className="viewport" style={{ background: rgbaCss(layout.clearColor) }}>
@@ -219,24 +192,24 @@ export function App(props: { controller: StageController }) {
             className="current"
             box={layout.current.box}
             style={layout.current.style}
-            text={current}
+            text={v.current}
             section={layout.section}
             fontsVersion={snap.fontsVersion}
           />
         ) : null}
-        {layout.next && next ? (
+        {layout.next && v.next ? (
           <TextRegion
             className="next"
             box={layout.next.box}
             style={layout.next.style}
-            text={next}
+            text={v.next}
             section={layout.section}
             fontsVersion={snap.fontsVersion}
           />
         ) : null}
         {layout.clock ? (
           <PropText prop={layout.clock} className="clock">
-            {formatClock(now, general.timeZone, general.clock24h)}
+            {v.clock}
           </PropText>
         ) : null}
         {layout.countdown && countdown ? (
@@ -259,7 +232,12 @@ export function App(props: { controller: StageController }) {
           </PropText>
         ) : null}
         {layout.messages ? <Messages prop={layout.messages} shown={shownMsgs} /> : null}
-        {snap.bus === 'none' ? <div className="offline-dot" title="Not connected to the hub" /> : null}
+        {v.bus === 'none' || snap.linkDown ? (
+          <div
+            className="offline-dot"
+            title={snap.linkDown ? 'Stage link restarting' : 'Not connected to the hub'}
+          />
+        ) : null}
       </div>
     </div>
   );

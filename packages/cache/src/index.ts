@@ -156,47 +156,60 @@ export type FillProgress = {
 
 /**
  * Fill `store` with every manifest file, `concurrency` downloads at a time. Already-present files cost
- * one lookup. Reports progress after every file. Failed files are retried up to `retries` times.
+ * one lookup. Reports progress after every file. Failed files are retried up to `retries` times, waiting
+ * `retryDelayMs × attempt` between tries (default 500 ms).
+ *
+ * Never rejects: a store that throws on lookup counts the file as absent, one that throws on write counts
+ * the attempt as failed, a fetcher that throws or returns something other than a Blob likewise. Every
+ * unique file ends up in exactly one of `ready` or `failed`.
  */
 export async function fillCache(
   store: FileStore,
   files: ManifestFile[],
   fetchFile: (hash: string) => Promise<Blob>,
   onProgress?: (p: FillProgress) => void,
-  opts: { concurrency?: number; retries?: number; signal?: AbortSignal } = {},
+  opts: { concurrency?: number; retries?: number; signal?: AbortSignal; retryDelayMs?: number } = {},
 ): Promise<FillProgress> {
   const unique = [...new Map(files.map((f) => [f.hash, f])).values()];
+  const size = (f: ManifestFile) => (Number.isFinite(f.bytes) && f.bytes > 0 ? f.bytes : 0);
   const p: FillProgress = {
     ready: 0,
     total: unique.length,
     bytesReady: 0,
-    bytesTotal: unique.reduce((a, f) => a + f.bytes, 0),
+    bytesTotal: unique.reduce((a, f) => a + size(f), 0),
     failed: [],
   };
+  const whole = (v: number | undefined, def: number, min: number) =>
+    v !== undefined && Number.isFinite(v) ? Math.max(min, Math.floor(v)) : def;
+  const concurrency = whole(opts.concurrency, 3, 1);
+  const retries = whole(opts.retries, 2, 0);
+  const delayMs = whole(opts.retryDelayMs, 500, 0);
   const queue = [...unique];
   const worker = async () => {
     for (;;) {
       if (opts.signal?.aborted) return;
       const f = queue.shift();
       if (!f) return;
-      let ok = await store.has(f.hash);
-      for (let attempt = 0; !ok && attempt <= (opts.retries ?? 2); attempt++) {
+      let ok = await store.has(f.hash).catch(() => false);
+      for (let attempt = 0; !ok && attempt <= retries; attempt++) {
+        if (opts.signal?.aborted) break;
         try {
           const blob = await fetchFile(f.hash);
+          if (!(blob instanceof Blob)) throw new Error('fetch did not return a file');
           await store.put(f.hash, blob);
           ok = true;
         } catch {
-          await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+          if (attempt < retries) await new Promise((r) => setTimeout(r, delayMs * (attempt + 1)));
         }
       }
       if (ok) {
         p.ready++;
-        p.bytesReady += f.bytes;
+        p.bytesReady += size(f);
       } else p.failed.push(f.hash);
       onProgress?.({ ...p, failed: [...p.failed] });
     }
   };
-  await Promise.all(Array.from({ length: opts.concurrency ?? 3 }, worker));
+  await Promise.all(Array.from({ length: concurrency }, worker));
   return p;
 }
 

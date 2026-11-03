@@ -50,6 +50,11 @@ const SIG_EOCD64 = 0x06064b50;
 const SIG_CENTRAL = 0x02014b50;
 const SIG_LOCAL = 0x04034b50;
 const MAX_COMMENT = 65_535;
+/**
+ * A central directory larger than this is refused before it is read: 20,000 entries with long names and
+ * extras fit in a few MB, so anything near this size is corrupt or hostile.
+ */
+export const ZIP_MAX_CENTRAL_DIR_BYTES = 64 * 1024 * 1024;
 
 function isJunk(path: string): boolean {
   return (
@@ -107,6 +112,8 @@ async function centralDirectory(
     offset = u64(rec, 48);
   } else if (needs64) throw new Error('zip64 archive without a zip64 locator');
   if (offset + length > size) throw new Error('zip central directory is out of range');
+  if (length > ZIP_MAX_CENTRAL_DIR_BYTES) throw new Error('zip central directory is too large');
+  if (entries > ZIP_MAX_ENTRIES) throw new Error(`zip has more than ${ZIP_MAX_ENTRIES} entries`);
   return { offset, length, entries };
 }
 
@@ -123,6 +130,7 @@ function parseCentral(cd: Buffer, expected: number): Entry[] {
     const extraLen = cd.readUInt16LE(p + 30);
     const commentLen = cd.readUInt16LE(p + 32);
     let localHeaderOffset: number = cd.readUInt32LE(p + 42);
+    if (p + 46 + nameLen + extraLen > cd.length) throw new Error('zip central directory entry is truncated');
     const name = cd.subarray(p + 46, p + 46 + nameLen).toString('utf8');
     // Zip64 extra field (0x0001): the saturated 32-bit fields are replaced in this order.
     let e = p + 46 + nameLen;
@@ -130,8 +138,15 @@ function parseCentral(cd: Buffer, expected: number): Entry[] {
     while (e + 4 <= extraEnd) {
       const id = cd.readUInt16LE(e);
       const len = cd.readUInt16LE(e + 2);
+      if (e + 4 + len > extraEnd) throw new Error('zip extra field is truncated');
       if (id === 0x0001) {
         let q = e + 4;
+        const need =
+          8 *
+          ((uncompressedSize === 0xffffffff ? 1 : 0) +
+            (compressedSize === 0xffffffff ? 1 : 0) +
+            (localHeaderOffset === 0xffffffff ? 1 : 0));
+        if (need > len) throw new Error('zip64 extra field is too short');
         if (uncompressedSize === 0xffffffff) {
           uncompressedSize = u64(cd, q);
           q += 8;

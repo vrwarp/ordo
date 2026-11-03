@@ -1,13 +1,28 @@
+import { requestPersistence } from '@ordo/cache';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.tsx';
-import { StageController } from './controller.ts';
+import { StageHost } from './host.ts';
 import './styles.css';
 
-const controller = new StageController();
-(globalThis as unknown as { ordoStage: StageController }).ordoStage = controller;
-void controller.start();
+/**
+ * Stage window entry (design/16). The main thread hosts: React renders the view model the supervised link
+ * worker posts. `ordoStage.telemetry()` in the console for diagnostics; with `?test=1`,
+ * `window.__ordo` exposes telemetry, the view and chaos hooks for the end-to-end suite.
+ */
+const host = new StageHost();
+(globalThis as unknown as { ordoStage: StageHost }).ordoStage = host;
+host.start();
+void requestPersistence();
 
-createRoot(document.getElementById('root')!).render(<App controller={controller} />);
+if (host.testMode) {
+  (window as unknown as { __ordo: unknown }).__ordo = {
+    telemetry: () => host.telemetry(),
+    view: () => host.view(),
+    chaos: host.chaos(),
+  };
+}
+
+createRoot(document.getElementById('root')!).render(<App host={host} />);
 
 // Wake Lock: keep the stage screen on; re-acquire when the page becomes visible again.
 type WakeLockSentinelLike = { released: boolean; release(): Promise<void> };

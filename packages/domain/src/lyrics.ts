@@ -18,7 +18,22 @@ const SECTION_PATTERNS: { full: string; abbr: string; label: string; short: stri
   { full: 'misc', abbr: 'M', label: 'Misc', short: 'M' },
 ].map((p) => p);
 /** A number with an optional letter suffix (`1`, `1a`), as SongSelect and CCLI exports use. */
-const NUM = '(\\d+[a-zA-Z]?)?';
+const NUM = '(\\d{1,4}[a-zA-Z]?)?';
+
+/** Bounds on parser output (design/25: output within bounds whatever the input). */
+export const LYRIC_LABEL_MAX = 40;
+/** A lyric line longer than this is cut (no projected line is that long; a pasted blob would be). */
+export const LYRIC_LINE_MAX = 500;
+/** Title, author, CCLI number, copyright and key. */
+export const LYRIC_META_MAX = 300;
+/** `Chorus x99` repeats at most this many times. */
+export const LYRIC_REPEAT_MAX = 16;
+/** Lines longer than this are never section labels (also keeps the label regexes linear). */
+const LABEL_INPUT_MAX = 80;
+
+function clip(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max).trimEnd() : s;
+}
 const FULL_RES = SECTION_PATTERNS.map((p) => ({ p, re: new RegExp(`^(?:${p.full})\\s*${NUM}$`, 'i') }));
 /** Abbreviations are case-sensitive so a lyric line like "c" or "be" is never taken for a label. */
 const ABBR_RES = SECTION_PATTERNS.map((p) => ({ p, re: new RegExp(`^${p.abbr}${NUM}$`) }));
@@ -44,7 +59,7 @@ export type SectionLabel = { label: string; short: string; repeat?: number };
  */
 export function parseSectionLabel(line: string): SectionLabel | null {
   let t = line.trim();
-  if (!t) return null;
+  if (!t || t.length > LABEL_INPUT_MAX) return null;
   const bracket =
     /^\[(.+)\]$/.exec(t) ?? /^\((.+)\)$/.exec(t) ?? /^\{(?:c|comment|start_of_\w+)\s*:\s*(.+)\}$/i.exec(t);
   if (bracket) t = bracket[1]!.trim();
@@ -53,7 +68,7 @@ export function parseSectionLabel(line: string): SectionLabel | null {
   const rep = REPEAT_RE.exec(t);
   if (rep && rep.index > 0) {
     const n = Number(rep[1] ?? rep[2] ?? rep[3] ?? 2);
-    repeat = Number.isFinite(n) && n > 1 ? n : 2;
+    repeat = Number.isFinite(n) && n > 1 ? Math.min(Math.floor(n), LYRIC_REPEAT_MAX) : 2;
     t = t.slice(0, rep.index).trim();
   }
   // Parentheses around the label after the marker was removed: `(Chorus) x2`.
@@ -142,7 +157,7 @@ export function isChordLine(line: string, chordChart = false): boolean {
  * occurrence it becomes the next free numbered section (`Chorus 2`) instead.
  */
 export function parseLyrics(input: string): ParsedSong {
-  const lines = input.replace(/\r\n?/g, '\n').split('\n');
+  const lines = normalizeInput(input).split('\n');
   const song: ParsedSong = { sections: [], order: [] };
   const chordChart = BRACKET_CHORD.test(input);
   /** The section being collected; `_repeatOf` is set while re-reading an existing label. */
@@ -239,22 +254,23 @@ export function parseLyrics(input: string): ParsedSong {
     }
   }
   const authorLine = songLine >= 0 ? footer[1] : undefined;
-  if (authorLine && !/©|copyright|^for use|^ccli/i.test(authorLine)) song.author = authorLine;
+  if (authorLine && !/©|copyright|^for use|^ccli/i.test(authorLine))
+    song.author = clip(authorLine, LYRIC_META_MAX);
   for (const f of footer) {
     const m = /ccli\s*(?:song)?\s*#?\s*(\d{3,})/i.exec(f);
-    if (m && !/license/i.test(f)) song.ccli = m[1];
-    if (/©|copyright/i.test(f)) song.copyright = f.replace(/^©\s*/, '');
+    if (m && !/license/i.test(f)) song.ccli = clip(m[1]!, LYRIC_META_MAX);
+    if (/©|copyright/i.test(f)) song.copyright = clip(f.replace(/^©\s*/, ''), LYRIC_META_MAX);
   }
 
   let lineIndex = 0;
   for (const raw of lines) {
     lineIndex++;
-    const line = raw.replace(/\s+$/, '');
-    const dir = /^\{\s*([a-z_]+)\s*(?::\s*(.*?))?\s*\}$/i.exec(line.trim());
+    const line = raw.trimEnd();
+    const dir = parseDirective(line.trim());
     if (dir) {
-      const short = CHORDPRO_SECTION_DIRECTIVES[dir[1]!.toLowerCase()];
-      const key = short ?? dir[1]!.toLowerCase();
-      const val = (dir[2] ?? '').trim();
+      const short = CHORDPRO_SECTION_DIRECTIVES[dir.name];
+      const key = short ?? dir.name;
+      const val = clip(dir.val, LYRIC_META_MAX);
       if (key === 'title' || key === 't') {
         song.title = val;
         sawDirectiveTitle = true;
@@ -269,8 +285,10 @@ export function parseLyrics(input: string): ParsedSong {
       } else if (key === 'ccli') song.ccli = val;
       else if (key === 'copyright') song.copyright = val;
       else if (key === 'key') song.key = val;
-      else if (key === 'tempo') song.tempo = Number(val) || undefined;
-      else if (key === 'c' || key === 'comment' || key === 'ci' || key === 'comment_italic') {
+      else if (key === 'tempo') {
+        const bpm = Number(val);
+        song.tempo = Number.isFinite(bpm) && bpm > 0 && bpm <= 1000 ? bpm : undefined;
+      } else if (key === 'c' || key === 'comment' || key === 'ci' || key === 'comment_italic') {
         const lbl = parseSectionLabel(val);
         if (lbl) startSection(lbl.label, lbl.short, lbl.repeat);
       } else if (key.startsWith('start_of_')) {
@@ -291,7 +309,7 @@ export function parseLyrics(input: string): ParsedSong {
     }
     // Title heuristic: first non-empty line of a plain/SongSelect file before any section.
     if (!ctx.current && !sawDirectiveTitle && !song.title && song.sections.length === 0 && lineIndex <= 3) {
-      song.title = line.trim();
+      song.title = clip(line.trim(), LYRIC_META_MAX);
       continue;
     }
     if (!ctx.current) startSection('Verse 1', 'V1');
@@ -306,7 +324,7 @@ export function parseLyrics(input: string): ParsedSong {
       return '';
     });
     if (chords.length) cur.chords = [...(cur.chords ?? []), chords.join(' ')];
-    const clean = lyric.replace(/\s{2,}/g, ' ').trim();
+    const clean = clip(lyric.replace(/\s{2,}/g, ' ').trim(), LYRIC_LINE_MAX);
     if (!clean) continue;
     stanza.push(clean);
   }
@@ -321,6 +339,29 @@ export function parseLyrics(input: string): ParsedSong {
     delete c._repeatOf;
   }
   return song;
+}
+
+/**
+ * Line breaks unified to `\n`; the Unicode line and paragraph separators become line breaks; byte-order marks
+ * and control characters other than tab are removed (they come from mis-decoded files, never from lyrics).
+ */
+function normalizeInput(input: string): string {
+  return (
+    input
+      .replace(/\r\n?|[\u2028\u2029\u0085]/g, '\n')
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point
+      .replace(/[\u0000-\u0008\u000b-\u001f\u007f\ufeff\ufff9-\ufffb]/g, '')
+  );
+}
+
+/** A ChordPro directive line `{name}` / `{name: value}` (parsed without backtracking regexes). */
+function parseDirective(t: string): { name: string; val: string } | null {
+  if (t.length < 3 || t[0] !== '{' || t[t.length - 1] !== '}') return null;
+  const inner = t.slice(1, -1);
+  const colon = inner.indexOf(':');
+  const name = (colon >= 0 ? inner.slice(0, colon) : inner).trim();
+  if (!name || name.length > 40 || !/^[a-z_]+$/i.test(name)) return null;
+  return { name: name.toLowerCase(), val: colon >= 0 ? inner.slice(colon + 1).trim() : '' };
 }
 
 /** Split a section's stanzas into slide texts. Stanzas longer than linesPerSlide are chunked. */
