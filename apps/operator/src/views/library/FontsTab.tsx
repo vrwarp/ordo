@@ -33,7 +33,14 @@ export function FontsTab() {
     setBusy(0);
   };
   const del = async (f: Font) => {
-    if (!(await confirmDialog('Delete font', `Delete ${f.family} ${f.weight} ${f.style}? Text using it falls back to another font.`, 'Delete', true)))
+    if (
+      !(await confirmDialog(
+        'Delete font',
+        `Delete ${f.family} ${f.weight} ${f.style}? Text using it falls back to another font.`,
+        'Delete',
+        true,
+      ))
+    )
       return;
     try {
       await api(`/fonts/${f.id}`, { method: 'DELETE' });
@@ -46,7 +53,11 @@ export function FontsTab() {
     <div className="page-pad col" style={{ maxWidth: 900, overflow: 'auto', height: '100%' }}>
       <div className="row">
         <div className="grow">
-          <DropZone accept=".ttf,.otf,.woff,.woff2" label="Drop TTF, OTF, WOFF or WOFF2 files (or click)" onFiles={(f) => void onFiles(f)} />
+          <DropZone
+            accept=".ttf,.otf,.woff,.woff2"
+            label="Drop TTF, OTF, WOFF or WOFF2 files (or click)"
+            onFiles={(f) => void onFiles(f)}
+          />
         </div>
         <button type="button" className="primary big" onClick={() => setGoogle(true)}>
           Add from Google Fonts
@@ -57,7 +68,10 @@ export function FontsTab() {
           <i style={{ width: `${busy * 100}%` }} />
         </div>
       )}
-      <p className="muted small">Every output loads these files from the hub or the service cache, so text matches on every screen even offline.</p>
+      <p className="muted small">
+        Every output loads these files from the hub or the service cache, so text matches on every screen even
+        offline.
+      </p>
       <table className="list">
         <thead>
           <tr>
@@ -76,9 +90,18 @@ export function FontsTab() {
                   {list
                     .sort((a, b) => a.weight - b.weight)
                     .map((f) => (
-                      <span key={f.id} className="tag" style={{ fontFamily: family, fontWeight: f.weight, fontStyle: f.style }}>
+                      <span
+                        key={f.id}
+                        className="tag"
+                        style={{ fontFamily: family, fontWeight: f.weight, fontStyle: f.style }}
+                      >
                         {f.weight} {f.style}{' '}
-                        <button type="button" className="ghost small" style={{ minHeight: 18, padding: 0 }} onClick={() => void del(f)}>
+                        <button
+                          type="button"
+                          className="ghost small"
+                          style={{ minHeight: 18, padding: 0 }}
+                          onClick={() => void del(f)}
+                        >
                           ✕
                         </button>
                       </span>
@@ -91,7 +114,11 @@ export function FontsTab() {
           ))}
         </tbody>
       </table>
-      {!fonts.length && <span className="muted">No fonts uploaded yet. Inter and system fonts are used until you add some.</span>}
+      {!fonts.length && (
+        <span className="muted">
+          No fonts uploaded yet. Inter and system fonts are used until you add some.
+        </span>
+      )}
       {google && <GoogleFontsDialog onClose={() => setGoogle(false)} />}
     </div>
   );

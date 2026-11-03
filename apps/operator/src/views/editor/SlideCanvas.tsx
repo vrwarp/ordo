@@ -119,7 +119,11 @@ function ObjectNode(props: {
       onTap={props.onSelect}
       onDragMove={(e) => {
         const n = e.target;
-        const snapped = snapBox({ x: n.x() - b.w / 2, y: n.y() - b.h / 2, w: b.w, h: b.h, rotation: 0 }, props.others, 10);
+        const snapped = snapBox(
+          { x: n.x() - b.w / 2, y: n.y() - b.h / 2, w: b.w, h: b.h, rotation: 0 },
+          props.others,
+          10,
+        );
         n.position({ x: snapped.x + b.w / 2, y: snapped.y + b.h / 2 });
         useEditor.setState({ guides: snapped.guides });
       }}
@@ -177,6 +181,7 @@ export function SlideCanvas(props: {
   }, []);
   const scale = size.w / LOGICAL_WIDTH;
   const { slide } = props;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-attach the transformer when the slide re-renders
   useEffect(() => {
     const t = tr.current;
     if (!t) return;
@@ -232,10 +237,22 @@ export function SlideCanvas(props: {
             />
           ))}
           {guides.x.map((x) => (
-            <Line key={`gx${x}`} points={[x, 0, x, LOGICAL_HEIGHT]} stroke="#f0f" strokeWidth={2 / scale} listening={false} />
+            <Line
+              key={`gx${x}`}
+              points={[x, 0, x, LOGICAL_HEIGHT]}
+              stroke="#f0f"
+              strokeWidth={2 / scale}
+              listening={false}
+            />
           ))}
           {guides.y.map((y) => (
-            <Line key={`gy${y}`} points={[0, y, LOGICAL_WIDTH, y]} stroke="#f0f" strokeWidth={2 / scale} listening={false} />
+            <Line
+              key={`gy${y}`}
+              points={[0, y, LOGICAL_WIDTH, y]}
+              stroke="#f0f"
+              strokeWidth={2 / scale}
+              listening={false}
+            />
           ))}
           <Transformer
             ref={tr}

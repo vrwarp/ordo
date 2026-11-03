@@ -59,7 +59,12 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem: nu
     if (liveHere && ctl) ctl.go(c.index);
   };
 
-  if (!item) return <div className="muted" style={{ padding: 20 }}>Select a playlist item.</div>;
+  if (!item)
+    return (
+      <div className="muted" style={{ padding: 20 }}>
+        Select a playlist item.
+      </div>
+    );
   const slideOf = (c: Cue) => {
     if (!c.presentationId || !c.slideId) return undefined;
     const p = op.presentation(c.presentationId);
@@ -71,11 +76,19 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem: nu
       <div className="pane-head">
         <b className="grow ellipsis">{itemTitle(item, op)}</b>
         <label className="check small" title="Single click goes live instead of arming">
-          <input type="checkbox" checked={clickToGo} onChange={(e) => setUi({ clickToGo: e.target.checked })} />
+          <input
+            type="checkbox"
+            checked={clickToGo}
+            onChange={(e) => setUi({ clickToGo: e.target.checked })}
+          />
           Click = GO
         </label>
         <label className="check small">
-          <input type="checkbox" checked={useUi.getState().followLive} onChange={(e) => setUi({ followLive: e.target.checked })} />
+          <input
+            type="checkbox"
+            checked={useUi.getState().followLive}
+            onChange={(e) => setUi({ followLive: e.target.checked })}
+          />
           Follow live
         </label>
         <input
@@ -119,7 +132,10 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem: nu
                 <span className="muted">{g.label}</span>
               </div>
             )}
-            <div className="slide-grid" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${thumbSize}px, 1fr))` }}>
+            <div
+              className="slide-grid"
+              style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${thumbSize}px, 1fr))` }}
+            >
               {g.cues.map((c) => {
                 const marks = marksFor(c);
                 if (c.kind === 'slide')

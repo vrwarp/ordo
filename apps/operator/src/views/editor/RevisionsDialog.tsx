@@ -8,14 +8,29 @@ import { errorText, toast } from '../../state/toasts.ts';
 import { replaceBase } from './editorStore.ts';
 
 /** Revision history with one-click restore (creates a new revision) (prd/05). */
-export function RevisionsDialog({ id, onClose, readOnly }: { id: string; onClose: () => void; readOnly: boolean }) {
+export function RevisionsDialog({
+  id,
+  onClose,
+  readOnly,
+}: {
+  id: string;
+  onClose: () => void;
+  readOnly: boolean;
+}) {
   const [list, setList] = useState<RevisionInfo[]>();
   const [err, setErr] = useState<string>();
   useEffect(() => {
     api<RevisionInfo[]>(`/presentations/${id}/revisions`).then(setList, (e) => setErr(errorText(e)));
   }, [id]);
   const restore = async (rev: number) => {
-    if (!(await confirmDialog('Restore revision', `Restore revision ${rev}? This creates a new revision; nothing is lost.`, 'Restore'))) return;
+    if (
+      !(await confirmDialog(
+        'Restore revision',
+        `Restore revision ${rev}? This creates a new revision; nothing is lost.`,
+        'Restore',
+      ))
+    )
+      return;
     try {
       const p = await api<Presentation>(`/presentations/${id}/restore/${rev}`, { method: 'POST' });
       replaceBase(p);
@@ -43,7 +58,12 @@ export function RevisionsDialog({ id, onClose, readOnly }: { id: string; onClose
               </td>
               <td>
                 {i > 0 && (
-                  <button type="button" className="small" disabled={readOnly} onClick={() => void restore(r.rev)}>
+                  <button
+                    type="button"
+                    className="small"
+                    disabled={readOnly}
+                    onClick={() => void restore(r.rev)}
+                  >
                     Restore
                   </button>
                 )}

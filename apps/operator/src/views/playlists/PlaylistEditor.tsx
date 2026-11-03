@@ -56,9 +56,14 @@ export function PlaylistEditor(props: {
       setSaving(dirty.current ? 'pending' : 'idle');
     } catch (e) {
       setSaving('error');
-      if (e instanceof ApiFailure && e.status === 423) toast('This playlist is live and locked until End service.', 'warn');
+      if (e instanceof ApiFailure && e.status === 423)
+        toast('This playlist is live and locked until End service.', 'warn');
       else if (e instanceof ApiFailure && e.status === 409) {
-        toast('The playlist was changed elsewhere. Reloaded the latest version; redo your last change.', 'warn', 8000);
+        toast(
+          'The playlist was changed elsewhere. Reloaded the latest version; redo your last change.',
+          'warn',
+          8000,
+        );
         try {
           const fresh = await api<Playlist>(`/playlists/${latest.current.id}`);
           rev.current = fresh.rev;
@@ -72,6 +77,7 @@ export function PlaylistEditor(props: {
       } else toast(`Could not save the playlist: ${errorText(e)}`, 'error');
     }
   };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional dependency list
   useEffect(() => () => void flush(), []);
 
   const update = (fn: (p: Playlist) => Playlist) => {
@@ -101,7 +107,10 @@ export function PlaylistEditor(props: {
     const i = p.arrangements.findIndex((x) => x.id === a.id);
     const arrangements = i >= 0 ? p.arrangements.map((x) => (x.id === a.id ? a : x)) : [...p.arrangements, a];
     try {
-      const saved = await api<typeof p>(`/presentations/${p.id}`, { method: 'PUT', json: { ...p, arrangements } });
+      const saved = await api<typeof p>(`/presentations/${p.id}`, {
+        method: 'PUT',
+        json: { ...p, arrangements },
+      });
       upsertLocal('presentations', saved);
       return true;
     } catch (e) {
@@ -116,7 +125,14 @@ export function PlaylistEditor(props: {
   };
   const selected = draft.items.find((it) => it.id === sel);
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(360px, 1fr) 380px', height: '100%', minHeight: 0 }}>
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(360px, 1fr) 380px',
+        height: '100%',
+        minHeight: 0,
+      }}
+    >
       <div className="col" style={{ minHeight: 0, overflow: 'auto', padding: 14, gap: 10 }}>
         {props.locked && (
           <div className="banner">
@@ -130,9 +146,20 @@ export function PlaylistEditor(props: {
             disabled={props.locked}
             onChange={(e) => update((p) => ({ ...p, name: e.target.value }))}
           />
-          <input type="date" value={draft.serviceDate ?? ''} disabled={props.locked} onChange={(e) => update((p) => ({ ...p, serviceDate: e.target.value || undefined }))} />
+          <input
+            type="date"
+            value={draft.serviceDate ?? ''}
+            disabled={props.locked}
+            onChange={(e) => update((p) => ({ ...p, serviceDate: e.target.value || undefined }))}
+          />
           <span className="muted small" style={{ width: 70 }}>
-            {saving === 'pending' ? 'Unsaved' : saving === 'saving' ? 'Saving…' : saving === 'error' ? 'Not saved' : 'Saved'}
+            {saving === 'pending'
+              ? 'Unsaved'
+              : saving === 'saving'
+                ? 'Saving…'
+                : saving === 'error'
+                  ? 'Not saved'
+                  : 'Saved'}
           </span>
         </div>
         <div className="row wrap">
@@ -182,21 +209,38 @@ export function PlaylistEditor(props: {
               <span className="muted small" style={{ width: 22 }}>
                 {i + 1}
               </span>
-              <span className="kind">{it.kind === 'presentation' ? '♪' : it.kind === 'media' ? '▶' : it.kind === 'timer' ? '⏱' : '⚡'}</span>
+              <span className="kind">
+                {it.kind === 'presentation'
+                  ? '♪'
+                  : it.kind === 'media'
+                    ? '▶'
+                    : it.kind === 'timer'
+                      ? '⏱'
+                      : '⚡'}
+              </span>
               <span className="col grow" style={{ gap: 0 }}>
                 <span className="ellipsis">{itemTitle(it, op)}</span>
                 <span className="muted small ellipsis">{itemSubtitle(it, op)}</span>
               </span>
               {!props.locked && (
                 <>
-                  <button type="button" className="ghost small" disabled={i === 0} onClick={(e) => (e.stopPropagation(), update((p) => ({ ...p, items: moveItem(p.items, i, i - 1) })))}>
+                  <button
+                    type="button"
+                    className="ghost small"
+                    disabled={i === 0}
+                    onClick={(e) => (
+                      e.stopPropagation(), update((p) => ({ ...p, items: moveItem(p.items, i, i - 1) }))
+                    )}
+                  >
                     ↑
                   </button>
                   <button
                     type="button"
                     className="ghost small"
                     disabled={i === draft.items.length - 1}
-                    onClick={(e) => (e.stopPropagation(), update((p) => ({ ...p, items: moveItem(p.items, i, i + 1) })))}
+                    onClick={(e) => (
+                      e.stopPropagation(), update((p) => ({ ...p, items: moveItem(p.items, i, i + 1) }))
+                    )}
                   >
                     ↓
                   </button>
@@ -215,7 +259,11 @@ export function PlaylistEditor(props: {
               )}
             </div>
           ))}
-          {draft.items.length === 0 && <div className="muted" style={{ padding: 16 }}>Add songs, media, timers and actions from the panel on the right.</div>}
+          {draft.items.length === 0 && (
+            <div className="muted" style={{ padding: 16 }}>
+              Add songs, media, timers and actions from the panel on the right.
+            </div>
+          )}
         </div>
         {selected && (
           <div className="card">

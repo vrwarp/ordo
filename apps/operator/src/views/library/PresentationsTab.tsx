@@ -12,8 +12,10 @@ import { navigate } from '../../useRoute.ts';
 import { NewSongDialog } from './NewSongDialog.tsx';
 
 export function explainSaveError(e: unknown): string {
-  if (e instanceof ApiFailure && e.status === 423) return 'It is used by the live playlist and locked until End service.';
-  if (e instanceof ApiFailure && e.status === 409) return 'Someone else changed it meanwhile. Reload and try again.';
+  if (e instanceof ApiFailure && e.status === 423)
+    return 'It is used by the live playlist and locked until End service.';
+  if (e instanceof ApiFailure && e.status === 409)
+    return 'Someone else changed it meanwhile. Reload and try again.';
   return errorText(e);
 }
 
@@ -36,7 +38,14 @@ export async function createPresentation(kind: PresentationKind, folderId?: stri
     kind,
     meta: { tags: [] },
     folderId,
-    sections: [{ id: newId(), label: kind === 'loop' ? 'Announcements' : 'Slides', short: 'S', slides: [{ id: newId(), objects: [] }] }],
+    sections: [
+      {
+        id: newId(),
+        label: kind === 'loop' ? 'Announcements' : 'Slides',
+        short: 'S',
+        slides: [{ id: newId(), objects: [] }],
+      },
+    ],
     arrangements: [],
     loop: kind === 'loop' ? { defaultSlideMs: 8000 } : undefined,
     themeId: DEFAULT_THEME.id,
@@ -52,7 +61,12 @@ export async function createPresentation(kind: PresentationKind, folderId?: stri
   }
 }
 
-function FolderSide(props: { folders: Folder[]; tags: string[]; tag?: string; setTag: (t?: string) => void }) {
+function FolderSide(props: {
+  folders: Folder[];
+  tags: string[];
+  tag?: string;
+  setTag: (t?: string) => void;
+}) {
   const folderId = useUi((s) => s.libraryFolderId);
   const [name, setName] = useState('');
   const addFolder = async () => {
@@ -69,13 +83,24 @@ function FolderSide(props: { folders: Folder[]; tags: string[]; tag?: string; se
     const n = prompt('Folder name', f.name);
     if (!n?.trim()) return;
     try {
-      upsertLocal('folders', await api<Folder>(`/folders/${f.id}`, { method: 'PUT', json: { ...f, name: n.trim() } }));
+      upsertLocal(
+        'folders',
+        await api<Folder>(`/folders/${f.id}`, { method: 'PUT', json: { ...f, name: n.trim() } }),
+      );
     } catch (e) {
       toast(errorText(e), 'error');
     }
   };
   const del = async (f: Folder) => {
-    if (!(await confirmDialog('Delete folder', `Delete “${f.name}”? Presentations in it stay in the library.`, 'Delete', true))) return;
+    if (
+      !(await confirmDialog(
+        'Delete folder',
+        `Delete “${f.name}”? Presentations in it stay in the library.`,
+        'Delete',
+        true,
+      ))
+    )
+      return;
     try {
       await api(`/folders/${f.id}`, { method: 'DELETE' });
       removeLocal('folders', f.id);
@@ -87,32 +112,67 @@ function FolderSide(props: { folders: Folder[]; tags: string[]; tag?: string; se
   return (
     <div className="side col" style={{ gap: 2 }}>
       <h4>Folders</h4>
-      <span className={`link ${folderId === undefined ? 'active' : ''}`} onClick={() => setUi({ libraryFolderId: undefined })}>
+      <span
+        className={`link ${folderId === undefined ? 'active' : ''}`}
+        onClick={() => setUi({ libraryFolderId: undefined })}
+      >
         All presentations
       </span>
-      <span className={`link ${folderId === null ? 'active' : ''}`} onClick={() => setUi({ libraryFolderId: null })}>
+      <span
+        className={`link ${folderId === null ? 'active' : ''}`}
+        onClick={() => setUi({ libraryFolderId: null })}
+      >
         Archived
       </span>
       {props.folders.map((f) => (
-        <span key={f.id} className={`link ${folderId === f.id ? 'active' : ''}`} onClick={() => setUi({ libraryFolderId: f.id })}>
+        <span
+          key={f.id}
+          className={`link ${folderId === f.id ? 'active' : ''}`}
+          onClick={() => setUi({ libraryFolderId: f.id })}
+        >
           <span className="grow ellipsis">📁 {f.name}</span>
-          <button type="button" className="ghost small" onClick={(e) => (e.stopPropagation(), void rename(f))}>
+          <button
+            type="button"
+            className="ghost small"
+            onClick={(e) => {
+              e.stopPropagation();
+              void rename(f);
+            }}
+          >
             ✎
           </button>
-          <button type="button" className="ghost small" onClick={(e) => (e.stopPropagation(), void del(f))}>
+          <button
+            type="button"
+            className="ghost small"
+            onClick={(e) => {
+              e.stopPropagation();
+              void del(f);
+            }}
+          >
             ✕
           </button>
         </span>
       ))}
       <div className="row" style={{ marginTop: 6 }}>
-        <input className="grow" placeholder="New folder" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void addFolder()} />
+        <input
+          className="grow"
+          placeholder="New folder"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && void addFolder()}
+        />
       </div>
       {props.tags.length > 0 && (
         <>
           <h4 style={{ marginTop: 14 }}>Tags</h4>
           <div className="row wrap" style={{ gap: 4 }}>
             {props.tags.map((t) => (
-              <button key={t} type="button" className={`small ${props.tag === t ? 'on' : ''}`} onClick={() => props.setTag(props.tag === t ? undefined : t)}>
+              <button
+                key={t}
+                type="button"
+                className={`small ${props.tag === t ? 'on' : ''}`}
+                onClick={() => props.setTag(props.tag === t ? undefined : t)}
+              >
                 {t}
               </button>
             ))}
@@ -132,7 +192,11 @@ export function PresentationsTab() {
   const [newSong, setNewSong] = useState(false);
   searchIndex.update(lib.presentations, lib.media);
   const byId = useMemo(() => new Map(lib.presentations.map((p) => [p.id, p])), [lib.presentations]);
-  const tags = useMemo(() => [...new Set(lib.presentations.flatMap((p) => p.meta.tags ?? []))].sort(), [lib.presentations]);
+  const tags = useMemo(
+    () => [...new Set(lib.presentations.flatMap((p) => p.meta.tags ?? []))].sort(),
+    [lib.presentations],
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional dependency list
   const results = useMemo(() => {
     const docs = searchIndex.search(q, {
       kind: 'presentation',
@@ -148,7 +212,15 @@ export function PresentationsTab() {
   const setArchived = (p: Presentation, archived: boolean) => void savePresentation({ ...p, archived });
   const move = (p: Presentation, fid: string) => void savePresentation({ ...p, folderId: fid || undefined });
   const del = async (p: Presentation) => {
-    if (!(await confirmDialog('Delete presentation', `Delete “${p.title}” and its history? Archive keeps it instead.`, 'Delete', true))) return;
+    if (
+      !(await confirmDialog(
+        'Delete presentation',
+        `Delete “${p.title}” and its history? Archive keeps it instead.`,
+        'Delete',
+        true,
+      ))
+    )
+      return;
     try {
       await api(`/presentations/${p.id}`, { method: 'DELETE' });
       removeLocal('presentations', p.id);
@@ -199,13 +271,20 @@ export function PresentationsTab() {
                     p.meta.ccli && `CCLI ${p.meta.ccli}`,
                     `${p.sections.length} sections`,
                     p.meta.tags?.length ? p.meta.tags.join(', ') : '',
-                    p.source?.kind && p.source.kind !== 'manual' && p.source.kind !== 'paste' ? `from ${p.source.kind}` : '',
+                    p.source?.kind && p.source.kind !== 'manual' && p.source.kind !== 'paste'
+                      ? `from ${p.source.kind}`
+                      : '',
                   ]
                     .filter(Boolean)
                     .join(' · ')}
                 </span>
               </span>
-              <select value={p.folderId ?? ''} onChange={(e) => move(p, e.target.value)} title="Folder" style={{ maxWidth: 140 }}>
+              <select
+                value={p.folderId ?? ''}
+                onChange={(e) => move(p, e.target.value)}
+                title="Folder"
+                style={{ maxWidth: 140 }}
+              >
                 <option value="">No folder</option>
                 {folders.map((f) => (
                   <option key={f.id} value={f.id}>

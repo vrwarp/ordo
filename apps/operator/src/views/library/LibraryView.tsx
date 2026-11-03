@@ -15,7 +15,11 @@ export function LibraryView({ tab }: { tab: 'presentations' | 'media' | 'fonts' 
     <div style={{ display: 'grid', gridTemplateRows: 'auto 1fr', height: '100%' }}>
       <div className="row" style={{ padding: '8px 12px', borderBottom: '1px solid var(--line)', gap: 4 }}>
         {TABS.map(([k, label]) => (
-          <a key={k} className={`btn ${tab === k ? 'on' : 'ghost'}`} href={k === 'presentations' ? '#/library' : `#/library/${k}`}>
+          <a
+            key={k}
+            className={`btn ${tab === k ? 'on' : 'ghost'}`}
+            href={k === 'presentations' ? '#/library' : `#/library/${k}`}
+          >
             {label}
           </a>
         ))}

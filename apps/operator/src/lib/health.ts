@@ -5,7 +5,7 @@ export type Dot = 'green' | 'amber' | 'red' | 'grey';
 
 /** Overall health dot for an output in the top bar. */
 export function outputDot(h: OutputHealthEntry | undefined, now = Date.now()): Dot {
-  if (!h || !h.connected) return 'red';
+  if (!h?.connected) return 'red';
   if (now - h.lastSeen > 5000) return 'red';
   if (h.error || h.audio === 'lost' || h.armedOk === false) return 'red';
   if (h.cache.total > 0 && h.cache.ready < h.cache.total) return 'amber';
@@ -15,7 +15,7 @@ export function outputDot(h: OutputHealthEntry | undefined, now = Date.now()): D
 
 /** Per-output arm marker for a cue: grey (not armed), amber (arming), green (armed), red (failed). */
 export function armDot(h: OutputHealthEntry | undefined, cueIndex: number, state: LiveState): Dot {
-  if (!h || !h.connected) return 'grey';
+  if (!h?.connected) return 'grey';
   if (h.armed === cueIndex) {
     if (h.armedOk === false) return 'red';
     if (h.armedOk === true) return 'green';

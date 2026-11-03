@@ -36,7 +36,7 @@ export class Surfaces {
   private attached = false;
   private lastView = '';
 
-  constructor(private ctl: Controller) {
+  constructor(ctl: Controller) {
     const s = useLibrary.getState().data.settings;
     this.keyboard = new KeyboardDriver(s.keymap, ctl.dispatch);
     this.deck = new StreamDeckDriver(ctl.dispatch);

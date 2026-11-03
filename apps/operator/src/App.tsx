@@ -82,7 +82,8 @@ function Shell({ role }: { role: 'operate' | 'edit' }) {
   useEffect(() => syncFonts(fonts), [fonts]);
   // Live keys act on operator screens only; the editor uses arrows, Delete and Ctrl+Z itself.
   useEffect(() => {
-    const keysOn = role === 'operate' && (route.name === 'live' || route.name === 'playlists' || route.name === 'library');
+    const keysOn =
+      role === 'operate' && (route.name === 'live' || route.name === 'playlists' || route.name === 'library');
     surfaces()?.setKeyboard(keysOn);
   }, [role, route.name]);
   useEffect(() => {

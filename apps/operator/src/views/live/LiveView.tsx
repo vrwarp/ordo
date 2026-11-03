@@ -21,7 +21,8 @@ export function LiveView() {
   });
   const viewItem = followLive && op.live && liveItem !== undefined ? liveItem : (viewItemIndex ?? 0);
   useEffect(() => {
-    if (followLive && op.live && liveItem !== undefined && liveItem !== viewItemIndex) setUi({ viewItemIndex: liveItem });
+    if (followLive && op.live && liveItem !== undefined && liveItem !== viewItemIndex)
+      setUi({ viewItemIndex: liveItem });
   }, [followLive, op.live, liveItem, viewItemIndex]);
   return (
     <div className="op">

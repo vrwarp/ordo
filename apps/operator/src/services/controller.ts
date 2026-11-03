@@ -2,7 +2,7 @@ import { CacheApiStore, fillCache } from '@ordo/cache';
 import { clock, FallbackHost, fileUrl, HubConnection, hubNow, type RtcSignalIn } from '@ordo/client';
 import { type LiveCommand, type LiveEvent, type LiveState, newId, type TimerSpec } from '@ordo/domain';
 import { actionToEvent } from '@ordo/live-state';
-import type { ClientMessage, OutputHealthEntry } from '@ordo/protocol';
+import { APP_VERSION, type ClientMessage, type OutputHealthEntry } from '@ordo/protocol';
 import type { Action } from '@ordo/surfaces';
 import { DoublePressGuard } from '../lib/confirm.ts';
 import { LiveCore, type LiveNotice } from '../lib/liveCore.ts';
@@ -13,7 +13,7 @@ import { toast } from '../state/toasts.ts';
 import { rememberMessage, useUi } from '../state/ui.ts';
 import { log } from './log.ts';
 
-export const APP_VERSION = '0.1.0';
+export { APP_VERSION };
 /** GO lead: two frames at 60 Hz. */
 export const GO_LEAD_MS = 33;
 export const MUTE_DB = -96;
@@ -63,7 +63,10 @@ export class Controller {
       };
       useLive.setState((s) => ({ health: { ...s.health, [outputId]: entry } }));
     });
-    this.fallback.on('ready', ({ outputId, appliedSeq }) => log('info', `fallback ready ${outputId} @${appliedSeq}`));
+    this.fallback.on('event', ({ event }) => this.core.externalEvent(event));
+    this.fallback.on('ready', ({ outputId, appliedSeq }) =>
+      log('info', `fallback ready ${outputId} @${appliedSeq}`),
+    );
   }
 
   async start(): Promise<void> {
@@ -109,7 +112,10 @@ export class Controller {
     h.on('delta', (m) => this.core.onDelta(m));
     h.on('ack', (m) => {
       if (m.id === 'adopt') {
-        log(m.rejected ? 'warn' : 'info', m.rejected ? `hub refused adoption: ${m.rejected}` : `hub adopted state @${m.seq}`);
+        log(
+          m.rejected ? 'warn' : 'info',
+          m.rejected ? `hub refused adoption: ${m.rejected}` : `hub adopted state @${m.seq}`,
+        );
         return;
       }
       const cmd = this.commands.get(m.id);
@@ -182,7 +188,7 @@ export class Controller {
       messagePresets: settings().surfaces.messagePresets,
       newId,
     });
-    if (ev) this.submit(ev);
+    if (ev && ev.k !== 'goLive') this.submit(ev);
   };
 
   submit(cmd: LiveCommand): string {
@@ -224,7 +230,13 @@ export class Controller {
     const t = text.trim();
     if (!t) return;
     rememberMessage(t);
-    this.submit({ k: 'message.send', id: newId(), text: t.slice(0, 500), ttlMs: ttlMs || undefined, at: hubNow() });
+    this.submit({
+      k: 'message.send',
+      id: newId(),
+      text: t.slice(0, 500),
+      ttlMs: ttlMs || undefined,
+      at: hubNow(),
+    });
   }
   dismissMessage(id: string): void {
     this.submit({ k: 'message.dismiss', id });
@@ -316,7 +328,9 @@ export class Controller {
         },
         (pr) => {
           if (!ac.signal.aborted)
-            useLive.setState({ ownCache: { ready: pr.ready, total: pr.total, failed: pr.failed.length, manifestId } });
+            useLive.setState({
+              ownCache: { ready: pr.ready, total: pr.total, failed: pr.failed.length, manifestId },
+            });
         },
         { concurrency: 3, signal: ac.signal },
       );
@@ -375,4 +389,3 @@ export function startController(role: 'operate' | 'edit'): Controller {
 export function dispatch(a: Action, source: Source = 'ui'): void {
   current?.dispatch(a, source);
 }
-

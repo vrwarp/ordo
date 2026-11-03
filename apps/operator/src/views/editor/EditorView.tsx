@@ -51,9 +51,9 @@ export function EditorView({ id }: { id: string }) {
   const [imagePick, setImagePick] = useState(false);
   const [dismissedRev, setDismissedRev] = useState(0);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional dependency list
   useEffect(() => {
     void loadPresentation(id, libP);
-    // biome-ignore lint/correctness/useExhaustiveDependencies: load once per id
   }, [id]);
   useEffect(() => {
     if (ed.objectId) setTab('object');
@@ -104,11 +104,17 @@ export function EditorView({ id }: { id: string }) {
         return;
       }
       const step = e.shiftKey ? 10 : 1;
-      const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+      const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[
+        e.key
+      ];
       if (d) {
         e.preventDefault();
         change(
-          (q) => updateObject(q, st.slideId!, o.id, (x) => ({ ...x, box: { ...x.box, x: x.box.x + d[0]!, y: x.box.y + d[1]! } })),
+          (q) =>
+            updateObject(q, st.slideId!, o.id, (x) => ({
+              ...x,
+              box: { ...x.box, x: x.box.x + d[0]!, y: x.box.y + d[1]! },
+            })),
           `nudge:${o.id}`,
         );
         return;
@@ -116,7 +122,10 @@ export function EditorView({ id }: { id: string }) {
       if (e.key === 'Enter' && o.type === 'text') {
         e.preventDefault();
         setTab('object');
-        setTimeout(() => (document.getElementById('ordo-text-editor') as HTMLTextAreaElement | null)?.focus(), 0);
+        setTimeout(
+          () => (document.getElementById('ordo-text-editor') as HTMLTextAreaElement | null)?.focus(),
+          0,
+        );
       }
       if (e.key === 'Escape') selectObject(undefined);
     };
@@ -140,7 +149,8 @@ export function EditorView({ id }: { id: string }) {
     );
   if (!p) return <div className="center muted">Loading…</div>;
   const theme = themeOf(p, themes);
-  const changedElsewhere = !!libP && !!ed.base && libP.rev > ed.base.rev && !ed.saving && libP.rev !== dismissedRev;
+  const changedElsewhere =
+    !!libP && !!ed.base && libP.rev > ed.base.rev && !ed.saving && libP.rev !== dismissedRev;
   const z = (zz: ZOrder) => obj && slide && change((q) => reorderObject(q, slide.id, obj.id, zz));
   const add = (o: Parameters<typeof addObject>[2]) => {
     if (!slide || readOnly) return;
@@ -159,7 +169,13 @@ export function EditorView({ id }: { id: string }) {
           {p.title}
         </b>
         <span className="muted small">rev {ed.base?.rev}</span>
-        <button type="button" className="primary" disabled={readOnly || !ed.dirty || ed.saving} onClick={() => void save()} title="Ctrl+S">
+        <button
+          type="button"
+          className="primary"
+          disabled={readOnly || !ed.dirty || ed.saving}
+          onClick={() => void save()}
+          title="Ctrl+S"
+        >
           {ed.saving ? 'Saving…' : ed.dirty ? 'Save' : 'Saved'}
         </button>
         <button type="button" disabled={readOnly || !ed.canUndo} onClick={undo} title="Ctrl+Z">
@@ -185,16 +201,40 @@ export function EditorView({ id }: { id: string }) {
           + Line
         </button>
         <span style={{ width: 10 }} />
-        <button type="button" className="small" disabled={readOnly || !obj} onClick={() => z('front')} title="Bring to front">
+        <button
+          type="button"
+          className="small"
+          disabled={readOnly || !obj}
+          onClick={() => z('front')}
+          title="Bring to front"
+        >
           ⤒
         </button>
-        <button type="button" className="small" disabled={readOnly || !obj} onClick={() => z('forward')} title="Bring forward">
+        <button
+          type="button"
+          className="small"
+          disabled={readOnly || !obj}
+          onClick={() => z('forward')}
+          title="Bring forward"
+        >
           ↑
         </button>
-        <button type="button" className="small" disabled={readOnly || !obj} onClick={() => z('backward')} title="Send backward">
+        <button
+          type="button"
+          className="small"
+          disabled={readOnly || !obj}
+          onClick={() => z('backward')}
+          title="Send backward"
+        >
           ↓
         </button>
-        <button type="button" className="small" disabled={readOnly || !obj} onClick={() => z('back')} title="Send to back">
+        <button
+          type="button"
+          className="small"
+          disabled={readOnly || !obj}
+          onClick={() => z('back')}
+          title="Send to back"
+        >
           ⤓
         </button>
         <button
@@ -242,7 +282,9 @@ export function EditorView({ id }: { id: string }) {
         )}
         {changedElsewhere && (
           <div className="banner blue row" style={{ margin: 8 }}>
-            <span className="grow">Someone else saved this presentation (rev {libP.rev}) since you opened it.</span>
+            <span className="grow">
+              Someone else saved this presentation (rev {libP.rev}) since you opened it.
+            </span>
             <button type="button" className="small" onClick={() => void reloadLatest()}>
               Reload theirs
             </button>
@@ -259,13 +301,27 @@ export function EditorView({ id }: { id: string }) {
       </div>
       <div className="props">
         <div className="row" style={{ marginBottom: 8, gap: 4 }}>
-          <button type="button" className={`small ${tab === 'object' ? 'on' : ''}`} disabled={!obj} onClick={() => setTab('object')}>
+          <button
+            type="button"
+            className={`small ${tab === 'object' ? 'on' : ''}`}
+            disabled={!obj}
+            onClick={() => setTab('object')}
+          >
             Object
           </button>
-          <button type="button" className={`small ${tab === 'slide' ? 'on' : ''}`} disabled={!slide} onClick={() => setTab('slide')}>
+          <button
+            type="button"
+            className={`small ${tab === 'slide' ? 'on' : ''}`}
+            disabled={!slide}
+            onClick={() => setTab('slide')}
+          >
             Slide
           </button>
-          <button type="button" className={`small ${tab === 'presentation' ? 'on' : ''}`} onClick={() => setTab('presentation')}>
+          <button
+            type="button"
+            className={`small ${tab === 'presentation' ? 'on' : ''}`}
+            onClick={() => setTab('presentation')}
+          >
             Presentation
           </button>
         </div>
@@ -283,7 +339,15 @@ export function EditorView({ id }: { id: string }) {
           onPick={(m) => {
             const w = m.width && m.height ? Math.min(1920, m.width) : 960;
             const h = m.width && m.height ? (w * m.height) / m.width : 540;
-            add(newImage(m.id, { x: (1920 - w) / 2, y: Math.max(0, (1080 - h) / 2), w, h: Math.min(1080, h), rotation: 0 }));
+            add(
+              newImage(m.id, {
+                x: (1920 - w) / 2,
+                y: Math.max(0, (1080 - h) / 2),
+                w,
+                h: Math.min(1080, h),
+                rotation: 0,
+              }),
+            );
             setImagePick(false);
           }}
         />
@@ -307,8 +371,8 @@ export function EditorView({ id }: { id: string }) {
           }
         >
           <p style={{ marginTop: 0 }}>
-            This presentation was saved by someone else after you opened it. Saving yours replaces theirs (their version stays in the
-            history), or reload to see their changes.
+            This presentation was saved by someone else after you opened it. Saving yours replaces theirs
+            (their version stays in the history), or reload to see their changes.
           </p>
         </Dialog>
       )}

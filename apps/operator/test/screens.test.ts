@@ -1,26 +1,53 @@
 import { describe, expect, it } from 'vitest';
 import type { Output } from '@ordo/domain';
-import { matchScreen, placementUpdates, planLaunch, type ScreenInfo, windowFeatures } from '../src/lib/screens.ts';
+import {
+  matchScreen,
+  placementUpdates,
+  planLaunch,
+  type ScreenInfo,
+  windowFeatures,
+} from '../src/lib/screens.ts';
 
-const primary: ScreenInfo = { label: 'Dell U2720', left: 0, top: 0, width: 2560, height: 1440, isPrimary: true };
+const primary: ScreenInfo = {
+  label: 'Dell U2720',
+  left: 0,
+  top: 0,
+  width: 2560,
+  height: 1440,
+  isPrimary: true,
+};
 const proj: ScreenInfo = { label: 'EPSON PJ', left: 2560, top: 0, width: 1920, height: 1080 };
 const tv: ScreenInfo = { label: 'SAMSUNG', left: 4480, top: 0, width: 1920, height: 1080 };
 const tv2: ScreenInfo = { label: 'SAMSUNG', left: 6400, top: 0, width: 1920, height: 1080 };
 
 function out(id: string, screen?: Output['screen'], enabled = true): Output {
-  return { id, name: id, kind: 'output', hostIndex: 1, lookId: 'look-main', enabled, audioMaster: false, screen };
+  return {
+    id,
+    name: id,
+    kind: 'output',
+    hostIndex: 1,
+    lookId: 'look-main',
+    enabled,
+    audioMaster: false,
+    screen,
+  };
 }
 
 describe('screen matching', () => {
   it('matches by label first', () => {
-    expect(matchScreen({ label: 'EPSON PJ', left: 0, top: 0, width: 1, height: 1 }, [primary, proj])?.by).toBe('label');
+    expect(
+      matchScreen({ label: 'EPSON PJ', left: 0, top: 0, width: 1, height: 1 }, [primary, proj])?.by,
+    ).toBe('label');
   });
   it('disambiguates duplicate labels by position', () => {
     const m = matchScreen({ label: 'SAMSUNG', left: 6400, top: 0, width: 1920, height: 1080 }, [tv, tv2]);
     expect(m?.screen).toBe(tv2);
   });
   it('falls back to position when the label changed', () => {
-    const m = matchScreen({ label: 'old name', left: 2560, top: 0, width: 1920, height: 1080 }, [primary, proj]);
+    const m = matchScreen({ label: 'old name', left: 2560, top: 0, width: 1920, height: 1080 }, [
+      primary,
+      proj,
+    ]);
     expect(m).toEqual({ screen: proj, by: 'position' });
   });
   it('returns null when nothing matches', () => {

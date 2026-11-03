@@ -1,4 +1,11 @@
-import { DEFAULT_AUDIO, DEFAULT_GENERAL, DEFAULT_KEYMAP, DEFAULT_LOOKS, DEFAULT_SURFACES, type Playlist } from '@ordo/domain';
+import {
+  DEFAULT_AUDIO,
+  DEFAULT_GENERAL,
+  DEFAULT_KEYMAP,
+  DEFAULT_LOOKS,
+  DEFAULT_SURFACES,
+  type Playlist,
+} from '@ordo/domain';
 import { api } from '@ordo/client';
 import { JsonStore } from '@ordo/cache';
 import { type LibraryDelta, type LibrarySnapshot, ROUTES, type Settings } from '@ordo/protocol';
@@ -121,10 +128,9 @@ export function patchLibrary(fn: (d: LibraryData) => LibraryData): void {
   persist();
 }
 
-export function upsertLocal<K extends 'presentations' | 'playlists' | 'media' | 'fonts' | 'themes' | 'folders'>(
-  key: K,
-  entity: LibraryData[K][number],
-): void {
+export function upsertLocal<
+  K extends 'presentations' | 'playlists' | 'media' | 'fonts' | 'themes' | 'folders',
+>(key: K, entity: LibraryData[K][number]): void {
   patchLibrary((d) => {
     const list = d[key] as { id: string }[];
     const i = list.findIndex((x) => x.id === entity.id);
@@ -133,7 +139,10 @@ export function upsertLocal<K extends 'presentations' | 'playlists' | 'media' | 
   });
 }
 
-export function removeLocal(key: 'presentations' | 'playlists' | 'media' | 'fonts' | 'themes' | 'folders', id: string): void {
+export function removeLocal(
+  key: 'presentations' | 'playlists' | 'media' | 'fonts' | 'themes' | 'folders',
+  id: string,
+): void {
   patchLibrary((d) => ({ ...d, [key]: (d[key] as { id: string }[]).filter((x) => x.id !== id) }));
 }
 

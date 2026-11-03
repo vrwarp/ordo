@@ -34,6 +34,8 @@ export interface FallbackPort {
 }
 
 export type Timer = unknown;
+/** A live event the operator may apply locally (everything except the hub-resolved goLive). */
+export type LocalEvent = Exclude<LiveEvent, { k: 'goLive' }>;
 
 export type LiveCoreDeps = {
   sendHub(m: HubOut): boolean;
@@ -64,9 +66,9 @@ export class LiveCore {
   private autoTimer?: Timer;
   private awaitingResync = false;
   /** Commands proposed while the socket was down (not yet delivered). Resent after the next full state. */
-  private unsent: { id: string; event: LiveEvent }[] = [];
+  private unsent: { id: string; event: LocalEvent }[] = [];
   /** Commands applied locally while reconciling; replayed to the hub after adoption. */
-  private replay: LiveEvent[] = [];
+  private replay: LocalEvent[] = [];
 
   constructor(
     private deps: LiveCoreDeps,
@@ -217,7 +219,8 @@ export class LiveCore {
     this.clearGrace();
     this.graceTimer = this.deps.setTimer(() => {
       this.graceTimer = undefined;
-      if (!this.hubConnected && this.authority === 'hub' && this.view.mode === 'live') this.activateFallback();
+      if (!this.hubConnected && this.authority === 'hub' && this.view.mode === 'live')
+        this.activateFallback();
     }, this.deps.graceMs ?? 5000);
   }
 

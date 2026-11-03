@@ -13,7 +13,9 @@ export function PlaylistsView({ id }: { id?: string }) {
   const playlists = useLibrary((s) => s.data.playlists);
   const liveId = useLivePlaylistId();
   const [name, setName] = useState('');
-  const sorted = [...playlists].sort((a, b) => (b.serviceDate ?? '').localeCompare(a.serviceDate ?? '') || a.name.localeCompare(b.name));
+  const sorted = [...playlists].sort(
+    (a, b) => (b.serviceDate ?? '').localeCompare(a.serviceDate ?? '') || a.name.localeCompare(b.name),
+  );
   const current = playlists.find((p) => p.id === id) ?? (id ? undefined : sorted[0]);
   const create = async () => {
     const n = name.trim() || `Service ${new Date().toISOString().slice(0, 10)}`;
@@ -33,7 +35,13 @@ export function PlaylistsView({ id }: { id?: string }) {
     try {
       const copy = await api<Playlist>('/playlists', {
         method: 'POST',
-        json: { ...p, id: newId(), rev: 1, name: `${p.name} (copy)`, items: p.items.map((it) => ({ ...it, id: newId() })) },
+        json: {
+          ...p,
+          id: newId(),
+          rev: 1,
+          name: `${p.name} (copy)`,
+          items: p.items.map((it) => ({ ...it, id: newId() })),
+        },
       });
       upsertLocal('playlists', copy);
       navigate({ name: 'playlists', id: copy.id });
@@ -56,7 +64,13 @@ export function PlaylistsView({ id }: { id?: string }) {
       <div className="side col" style={{ gap: 2 }}>
         <h4>Playlists</h4>
         <div className="row" style={{ marginBottom: 8 }}>
-          <input className="grow" placeholder="New playlist name" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void create()} />
+          <input
+            className="grow"
+            placeholder="New playlist name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && void create()}
+          />
           <button type="button" className="primary" onClick={() => void create()}>
             +
           </button>

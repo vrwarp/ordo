@@ -1,5 +1,6 @@
 import { API_PREFIX } from '@ordo/protocol';
 import { useEffect, useState } from 'react';
+import { keyed } from '../../lib/keys.ts';
 import { Dialog } from '../../components/Dialog.tsx';
 import { outputDot } from '../../lib/health.ts';
 import { APP_VERSION, controller } from '../../services/controller.ts';
@@ -97,8 +98,11 @@ export function OperatorLog({ limit = 50 }: { limit?: number }) {
   return (
     <div className="logbox">
       {lines.length === 0 && <span className="muted">No log lines yet.</span>}
-      {lines.map((l, i) => (
-        <div key={i} style={{ color: l.level === 'error' ? '#fca5a5' : l.level === 'warn' ? '#fcd34d' : undefined }}>
+      {keyed(lines, (l) => `${l.at}`).map(({ key, value: l }) => (
+        <div
+          key={key}
+          style={{ color: l.level === 'error' ? '#fca5a5' : l.level === 'warn' ? '#fcd34d' : undefined }}
+        >
           {new Date(l.at).toLocaleTimeString()} {l.text}
         </div>
       ))}
@@ -118,7 +122,9 @@ export function DiagnosticsPanel() {
           <span className="tag">seq {live.state.seq}</span>
           <span className="tag">authority {live.authority}</span>
           <span className="tag">hub {live.hubConnected ? 'connected' : 'disconnected'}</span>
-          <span className="tag">clock offset {live.clock.offset.toFixed(0)} ms, rtt {live.clock.rtt.toFixed(0)} ms</span>
+          <span className="tag">
+            clock offset {live.clock.offset.toFixed(0)} ms, rtt {live.clock.rtt.toFixed(0)} ms
+          </span>
           <span className="tag">
             operator cache {live.ownCache.ready}/{live.ownCache.total}
             {live.ownCache.failed ? `, ${live.ownCache.failed} failed` : ''}

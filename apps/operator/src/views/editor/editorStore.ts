@@ -83,7 +83,8 @@ export function undo(): void {
   const s = useEditor.getState();
   if (!s.draft) return;
   const prev = history.undo(s.draft);
-  if (prev) useEditor.setState({ draft: prev, dirty: true, canUndo: history.canUndo, canRedo: history.canRedo });
+  if (prev)
+    useEditor.setState({ draft: prev, dirty: true, canUndo: history.canUndo, canRedo: history.canRedo });
   fixSelection();
 }
 
@@ -91,7 +92,8 @@ export function redo(): void {
   const s = useEditor.getState();
   if (!s.draft) return;
   const next = history.redo(s.draft);
-  if (next) useEditor.setState({ draft: next, dirty: true, canUndo: history.canUndo, canRedo: history.canRedo });
+  if (next)
+    useEditor.setState({ draft: next, dirty: true, canUndo: history.canUndo, canRedo: history.canRedo });
   fixSelection();
 }
 
@@ -100,7 +102,8 @@ function fixSelection(): void {
   if (!s.draft) return;
   const slide = getSlide(s.draft, s.slideId);
   if (!slide) useEditor.setState({ slideId: firstSlideId(s.draft), objectId: undefined });
-  else if (s.objectId && !slide.objects.some((o) => o.id === s.objectId)) useEditor.setState({ objectId: undefined });
+  else if (s.objectId && !slide.objects.some((o) => o.id === s.objectId))
+    useEditor.setState({ objectId: undefined });
 }
 
 export function selectSlide(slideId: string | undefined): void {

@@ -1,6 +1,7 @@
 import { api } from '@ordo/client';
 import { parseLyrics, type Presentation, sectionSlideTexts, songFromParsed } from '@ordo/domain';
 import { useMemo, useState } from 'react';
+import { keyed } from '../../lib/keys.ts';
 import { Dialog } from '../../components/Dialog.tsx';
 import { NumberField } from '../../components/fields.tsx';
 import { upsertLocal, useLibrary } from '../../state/library.ts';
@@ -56,7 +57,12 @@ export function NewSongDialog({ onClose, folderId }: { onClose: () => void; fold
           <button type="button" disabled={busy || !parsed.sections.length} onClick={() => save(false)}>
             Save
           </button>
-          <button type="button" className="primary" disabled={busy || !parsed.sections.length} onClick={() => save(true)}>
+          <button
+            type="button"
+            className="primary"
+            disabled={busy || !parsed.sections.length}
+            onClick={() => save(true)}
+          >
             Save and edit
           </button>
         </>
@@ -64,11 +70,17 @@ export function NewSongDialog({ onClose, folderId }: { onClose: () => void; fold
     >
       <div className="grid2" style={{ gap: 16 }}>
         <div className="col">
-          <input placeholder={parsed.title ? `Title (${parsed.title})` : 'Title'} value={title} onChange={(e) => setTitle(e.target.value)} />
+          <input
+            placeholder={parsed.title ? `Title (${parsed.title})` : 'Title'}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
           <textarea
             rows={22}
             autoFocus
-            placeholder={'Paste lyrics. Label sections with Verse 1, Chorus, Bridge (or V1, C, B).\nBlank lines split slides.'}
+            placeholder={
+              'Paste lyrics. Label sections with Verse 1, Chorus, Bridge (or V1, C, B).\nBlank lines split slides.'
+            }
             value={text}
             onChange={(e) => setText(e.target.value)}
             style={{ fontFamily: 'inherit' }}
@@ -77,13 +89,19 @@ export function NewSongDialog({ onClose, folderId }: { onClose: () => void; fold
         </div>
         <div className="col" style={{ maxHeight: 560, overflow: 'auto' }}>
           <h4>Preview</h4>
-          {parsed.order.length > 0 && <span className="muted small">Arrangement: {parsed.order.join(' · ')}</span>}
+          {parsed.order.length > 0 && (
+            <span className="muted small">Arrangement: {parsed.order.join(' · ')}</span>
+          )}
           {parsed.sections.map((s) => (
             <div key={s.label} className="card" style={{ padding: 10 }}>
               <b>{s.label}</b> <span className="tag">{s.short}</span>
               <div className="grid2" style={{ marginTop: 6 }}>
-                {sectionSlideTexts(s, lps).map((t, i) => (
-                  <div key={i} className="fallback-text" style={{ background: '#000', borderRadius: 4, fontSize: 12 }}>
+                {keyed(sectionSlideTexts(s, lps), (t) => t).map(({ key, value: t }) => (
+                  <div
+                    key={key}
+                    className="fallback-text"
+                    style={{ background: '#000', borderRadius: 4, fontSize: 12 }}
+                  >
                     {t}
                   </div>
                 ))}

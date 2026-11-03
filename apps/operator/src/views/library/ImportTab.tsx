@@ -17,7 +17,9 @@ export function JobCard({ id, title }: { id: string; title: string }) {
     <div className="card col" style={{ gap: 6 }}>
       <div className="row">
         <b className="grow ellipsis">{title}</b>
-        <span className={`tag ${state === 'done' ? 'green' : state === 'failed' ? 'red' : 'amber'}`}>{state}</span>
+        <span className={`tag ${state === 'done' ? 'green' : state === 'failed' ? 'red' : 'amber'}`}>
+          {state}
+        </span>
       </div>
       <div className="progress">
         <i style={{ width: `${Math.round((job?.progress ?? 0) * 100)}%` }} />
@@ -50,9 +52,16 @@ export function ImportTab() {
   const [pasted, setPasted] = useState('');
   const [progress, setProgress] = useState<number>();
   const jobMap = useLibrary((s) => s.data.jobs);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional dependency list
   useEffect(() => {
     void api<Job[] | { jobs: Job[] }>('/jobs')
-      .then((r) => setRecent((Array.isArray(r) ? r : r.jobs).filter((j) => /pro7|document|pdf|pptx|import/.test(j.kind)).slice(0, 10)))
+      .then((r) =>
+        setRecent(
+          (Array.isArray(r) ? r : r.jobs)
+            .filter((j) => /pro7|document|pdf|pptx|import/.test(j.kind))
+            .slice(0, 10),
+        ),
+      )
       .catch(() => undefined);
   }, [jobMap]);
   const started = (job: Job, title: string) => setJobs((j) => [{ id: job.id, title }, ...j]);
@@ -73,7 +82,10 @@ export function ImportTab() {
   };
   const pro7Path = async () => {
     try {
-      started(await api<Job>('/import/pro7', { method: 'POST', json: { path: nasPath.trim() } }), `ProPresenter: ${nasPath}`);
+      started(
+        await api<Job>('/import/pro7', { method: 'POST', json: { path: nasPath.trim() } }),
+        `ProPresenter: ${nasPath}`,
+      );
     } catch (e) {
       toast(`ProPresenter import: ${errorText(e)}`, 'error');
     }
@@ -124,12 +136,22 @@ export function ImportTab() {
           <div className="card col">
             <h3>ProPresenter 7</h3>
             <span className="muted small">
-              Zip the ProPresenter library folder (or exported .pro files and playlists) and drop it here. Media found
-              alongside is uploaded. Builds, macros, timers, looks and stage layouts are skipped and listed in the log.
+              Zip the ProPresenter library folder (or exported .pro files and playlists) and drop it here.
+              Media found alongside is uploaded. Builds, macros, timers, looks and stage layouts are skipped
+              and listed in the log.
             </span>
-            <DropZone accept=".zip" label="Drop a .zip of the ProPresenter library" onFiles={(f) => void pro7Zip(f)} />
+            <DropZone
+              accept=".zip"
+              label="Drop a .zip of the ProPresenter library"
+              onFiles={(f) => void pro7Zip(f)}
+            />
             <div className="row">
-              <input className="grow" placeholder="…or a folder path on the NAS, e.g. /import/ProPresenter" value={nasPath} onChange={(e) => setNasPath(e.target.value)} />
+              <input
+                className="grow"
+                placeholder="…or a folder path on the NAS, e.g. /import/ProPresenter"
+                value={nasPath}
+                onChange={(e) => setNasPath(e.target.value)}
+              />
               <button type="button" disabled={!nasPath.trim()} onClick={() => void pro7Path()}>
                 Import folder
               </button>
@@ -137,9 +159,21 @@ export function ImportTab() {
           </div>
           <div className="card col">
             <h3>SongSelect</h3>
-            <span className="muted small">ChordPro (.chordpro, .cho) or lyrics text (.txt) downloaded from CCLI SongSelect. Chords are kept but not shown.</span>
-            <DropZone accept=".txt,.chordpro,.cho,.chopro,.pro,.crd" label="Drop SongSelect files" onFiles={(f) => void songselectFiles(f)} />
-            <textarea rows={6} placeholder="…or paste the SongSelect lyrics or ChordPro text" value={pasted} onChange={(e) => setPasted(e.target.value)} />
+            <span className="muted small">
+              ChordPro (.chordpro, .cho) or lyrics text (.txt) downloaded from CCLI SongSelect. Chords are
+              kept but not shown.
+            </span>
+            <DropZone
+              accept=".txt,.chordpro,.cho,.chopro,.pro,.crd"
+              label="Drop SongSelect files"
+              onFiles={(f) => void songselectFiles(f)}
+            />
+            <textarea
+              rows={6}
+              placeholder="…or paste the SongSelect lyrics or ChordPro text"
+              value={pasted}
+              onChange={(e) => setPasted(e.target.value)}
+            />
             <button type="button" disabled={!pasted.trim()} onClick={() => void songselectPaste()}>
               Import pasted text
             </button>
@@ -147,10 +181,14 @@ export function ImportTab() {
           <div className="card col">
             <h3>PowerPoint and PDF</h3>
             <span className="muted small">
-              Each page becomes an image slide at 1920×1080. PowerPoint slides can later be made editable in the editor
-              (text boxes are approximate; fonts may differ).
+              Each page becomes an image slide at 1920×1080. PowerPoint slides can later be made editable in
+              the editor (text boxes are approximate; fonts may differ).
             </span>
-            <DropZone accept=".pptx,.pdf" label="Drop .pptx or .pdf files" onFiles={(f) => void documents(f)} />
+            <DropZone
+              accept=".pptx,.pdf"
+              label="Drop .pptx or .pdf files"
+              onFiles={(f) => void documents(f)}
+            />
           </div>
           {progress !== undefined && (
             <div className="progress">

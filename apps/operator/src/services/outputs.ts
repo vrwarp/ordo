@@ -76,7 +76,16 @@ export class OutputWindows {
       }
     } else useLaunch.setState({ permission: 'unsupported' });
     const s = window.screen as Screen & { availLeft?: number; availTop?: number };
-    return [{ label: 'This screen', left: s.availLeft ?? 0, top: s.availTop ?? 0, width: s.width, height: s.height, isPrimary: true }];
+    return [
+      {
+        label: 'This screen',
+        left: s.availLeft ?? 0,
+        top: s.availTop ?? 0,
+        width: s.width,
+        height: s.height,
+        isPrimary: true,
+      },
+    ];
   }
 
   /** Launch every enabled output on its remembered screen. Must run inside a user gesture. */
@@ -218,7 +227,8 @@ export class OutputWindows {
     for (const [id, w] of this.windows) open[id] = !w.closed;
     const prev = useLaunch.getState().open;
     const same =
-      Object.keys(open).length === Object.keys(prev).length && Object.entries(open).every(([k, v]) => prev[k] === v);
+      Object.keys(open).length === Object.keys(prev).length &&
+      Object.entries(open).every(([k, v]) => prev[k] === v);
     if (!same) useLaunch.setState({ open });
   }
 }

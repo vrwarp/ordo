@@ -20,8 +20,8 @@ export function PlacementDialog() {
       }
     >
       <p className="muted" style={{ marginTop: 0 }}>
-        These outputs opened on the main screen because their screen was not found. Choose where each one belongs;
-        ordo remembers it.
+        These outputs opened on the main screen because their screen was not found. Choose where each one
+        belongs; ordo remembers it.
       </p>
       <table className="list">
         <tbody>
@@ -71,8 +71,8 @@ export function ConflictDialog() {
   return (
     <Dialog title="The hub is back with a different service">
       <p style={{ marginTop: 0 }}>
-        While the hub was unreachable this PC ran <b>{conflict.localPlaylist ?? 'the service'}</b>. The hub now has{' '}
-        <b>{conflict.hubPlaylist ?? 'another playlist'}</b> live (someone went live elsewhere).
+        While the hub was unreachable this PC ran <b>{conflict.localPlaylist ?? 'the service'}</b>. The hub
+        now has <b>{conflict.hubPlaylist ?? 'another playlist'}</b> live (someone went live elsewhere).
       </p>
       <p>Which one should the outputs show?</p>
       <div className="row">
@@ -92,11 +92,21 @@ export function GoLiveErrorDialog() {
   if (!err) return null;
   const close = () => useLive.setState({ goLiveError: undefined });
   return (
-    <Dialog title="Could not go live" onClose={close} footer={<button type="button" onClick={close}>OK</button>}>
+    <Dialog
+      title="Could not go live"
+      onClose={close}
+      footer={
+        <button type="button" onClick={close}>
+          OK
+        </button>
+      }
+    >
       <div className="banner red" style={{ whiteSpace: 'pre-line' }}>
         {err}
       </div>
-      <p className="muted">Fix the items above (for example wait for media to finish processing) and try again.</p>
+      <p className="muted">
+        Fix the items above (for example wait for media to finish processing) and try again.
+      </p>
     </Dialog>
   );
 }

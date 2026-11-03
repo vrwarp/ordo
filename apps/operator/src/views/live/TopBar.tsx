@@ -82,10 +82,22 @@ export function TopBar() {
       {live.pending > 0 && !fallback && <span className="tag amber">{live.pending} pending</span>}
       <span className="spacer" />
       <span className="clock">{formatClock(now, general.timeZone, general.clock24h)}</span>
-      <button type="button" className="big" disabled={launch.busy} onClick={() => dispatch({ id: 'launchOutputs' })} title="Ctrl+Shift+L">
+      <button
+        type="button"
+        className="big"
+        disabled={launch.busy}
+        onClick={() => dispatch({ id: 'launchOutputs' })}
+        title="Ctrl+Shift+L"
+      >
         Launch outputs
       </button>
-      <button type="button" className="big" disabled={launch.busy} onClick={() => dispatch({ id: 'relaunchOutputs' })} title="Ctrl+Shift+R">
+      <button
+        type="button"
+        className="big"
+        disabled={launch.busy}
+        onClick={() => dispatch({ id: 'relaunchOutputs' })}
+        title="Ctrl+Shift+R"
+      >
         Relaunch
       </button>
       {isLive && (
@@ -93,14 +105,26 @@ export function TopBar() {
           type="button"
           className="danger big"
           onClick={async () => {
-            if (await confirmDialog('End service', 'Clear every output and unlock the playlist for editing?', 'End service', true))
+            if (
+              await confirmDialog(
+                'End service',
+                'Clear every output and unlock the playlist for editing?',
+                'End service',
+                true,
+              )
+            )
               controller()?.endService();
           }}
         >
           End service
         </button>
       )}
-      <button type="button" className="ghost" onClick={() => setUi({ showDiagnostics: true })} title="Diagnostics">
+      <button
+        type="button"
+        className="ghost"
+        onClick={() => setUi({ showDiagnostics: true })}
+        title="Diagnostics"
+      >
         ⚙
       </button>
     </div>

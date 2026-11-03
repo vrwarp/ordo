@@ -1,4 +1,10 @@
-import { formatDuration, MANUAL_ELAPSED_TIMER_ID, nextTimeOfDay, SERVICE_COUNTDOWN_TIMER_ID, type Timer } from '@ordo/domain';
+import {
+  formatDuration,
+  MANUAL_ELAPSED_TIMER_ID,
+  nextTimeOfDay,
+  SERVICE_COUNTDOWN_TIMER_ID,
+  type Timer,
+} from '@ordo/domain';
 import { useState } from 'react';
 import { Select } from '../../components/fields.tsx';
 import { useHubNow } from '../../hooks.ts';
@@ -54,14 +60,24 @@ export function StageTools() {
           send(text);
         }}
       >
-        <input className="grow" placeholder="Message to the stage screen" maxLength={500} value={text} onChange={(e) => setText(e.target.value)} />
+        <input
+          className="grow"
+          placeholder="Message to the stage screen"
+          maxLength={500}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+        />
         <button type="submit" className="primary" disabled={!text.trim()}>
           Send
         </button>
       </form>
       <div className="row">
         <span className="muted small">Show</span>
-        <Select value={String(messageTtlMs)} options={TTLS} onChange={(v) => setUi({ messageTtlMs: Number(v) })} />
+        <Select
+          value={String(messageTtlMs)}
+          options={TTLS}
+          onChange={(v) => setUi({ messageTtlMs: Number(v) })}
+        />
       </div>
       {active.map((m) => (
         <div key={m.id} className="row card" style={{ padding: 8 }}>
@@ -86,7 +102,12 @@ export function StageTools() {
       <div className="row">
         <span className="grow">
           Countdown to{' '}
-          <input type="time" value={countTo} onChange={(e) => setCountTo(e.target.value)} style={{ width: 110 }} />
+          <input
+            type="time"
+            value={countTo}
+            onChange={(e) => setCountTo(e.target.value)}
+            style={{ width: 110 }}
+          />
         </span>
         <b className="mono">{countdown ? timerText(countdown, now, general.timeZone) : '--:--'}</b>
       </div>
@@ -95,12 +116,21 @@ export function StageTools() {
           type="button"
           className="small"
           onClick={() =>
-            ctl?.timerStart(SERVICE_COUNTDOWN_TIMER_ID, { kind: 'countdownTo', timeOfDay: countTo, label: 'Service starts in' })
+            ctl?.timerStart(SERVICE_COUNTDOWN_TIMER_ID, {
+              kind: 'countdownTo',
+              timeOfDay: countTo,
+              label: 'Service starts in',
+            })
           }
         >
           Start countdown
         </button>
-        <button type="button" className="small" disabled={!countdown?.running} onClick={() => ctl?.timerStop(SERVICE_COUNTDOWN_TIMER_ID)}>
+        <button
+          type="button"
+          className="small"
+          disabled={!countdown?.running}
+          onClick={() => ctl?.timerStop(SERVICE_COUNTDOWN_TIMER_ID)}
+        >
           Stop
         </button>
       </div>
@@ -128,7 +158,9 @@ export function StageTools() {
       </div>
       {others.map((t) => (
         <div key={t.id} className="row">
-          <span className="grow ellipsis">{t.spec.label ?? (t.spec.kind === 'elapsed' ? 'Elapsed' : `Countdown ${t.spec.timeOfDay}`)}</span>
+          <span className="grow ellipsis">
+            {t.spec.label ?? (t.spec.kind === 'elapsed' ? 'Elapsed' : `Countdown ${t.spec.timeOfDay}`)}
+          </span>
           <b className="mono">{timerText(t, now, general.timeZone)}</b>
           {t.running ? (
             <button type="button" className="small" onClick={() => ctl?.timerStop(t.id)}>
@@ -150,13 +182,23 @@ export function StageTools() {
           ctl?.lowerThird(lower);
         }}
       >
-        <input className="grow" placeholder="Name, title or announcement" value={lower} onChange={(e) => setLower(e.target.value)} />
+        <input
+          className="grow"
+          placeholder="Name, title or announcement"
+          value={lower}
+          onChange={(e) => setLower(e.target.value)}
+        />
         <button type="submit" disabled={!lower.trim()}>
           Show
         </button>
       </form>
       <div className="row">
-        <button type="button" className={state.props.logo ? 'on' : ''} onClick={() => ctl?.dispatch({ id: 'logo' })} title="F5">
+        <button
+          type="button"
+          className={state.props.logo ? 'on' : ''}
+          onClick={() => ctl?.dispatch({ id: 'logo' })}
+          title="F5"
+        >
           Logo {state.props.logo ? 'on' : 'off'}
         </button>
       </div>

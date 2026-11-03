@@ -25,7 +25,9 @@ describe('snapping', () => {
     expect(r.x).toBe(460);
     expect(r.guides.x).toEqual([960]);
     expect(r.y).toBe(10);
-    const r2 = snapBox({ x: 1203, y: 503, w: 100, h: 100, rotation: 0 }, [{ x: 1000, y: 600, w: 200, h: 50, rotation: 0 }]);
+    const r2 = snapBox({ x: 1203, y: 503, w: 100, h: 100, rotation: 0 }, [
+      { x: 1000, y: 600, w: 200, h: 50, rotation: 0 },
+    ]);
     expect(r2.x).toBe(1200);
     expect(r2.y).toBe(500);
   });
@@ -71,9 +73,21 @@ describe('slide ops', () => {
     const p = song();
     const s0 = p.sections[0]!.slides[0]!;
     const lyr = lyricObject(s0)!;
-    let q = updateObject(p, s0.id, lyr.id, (o) => (o.type === 'text' ? { ...o, style: { ...o.style, fontSizePx: 120 } } : o));
-    q = { ...q, sections: q.sections.map((sec) => ({ ...sec, slides: sec.slides.map((s) => (s.id === s0.id ? markOverride(s, 'style.fontSizePx') : s)) })) };
-    const theme: Theme = { ...DEFAULT_THEME, id: 't2', text: { ...DEFAULT_THEME.text, fontSizePx: 50, fontFamily: 'Lato' } };
+    let q = updateObject(p, s0.id, lyr.id, (o) =>
+      o.type === 'text' ? { ...o, style: { ...o.style, fontSizePx: 120 } } : o,
+    );
+    q = {
+      ...q,
+      sections: q.sections.map((sec) => ({
+        ...sec,
+        slides: sec.slides.map((s) => (s.id === s0.id ? markOverride(s, 'style.fontSizePx') : s)),
+      })),
+    };
+    const theme: Theme = {
+      ...DEFAULT_THEME,
+      id: 't2',
+      text: { ...DEFAULT_THEME.text, fontSizePx: 50, fontFamily: 'Lato' },
+    };
     const themed = applyTheme(q, theme);
     const a = lyricObject(themed.sections[0]!.slides[0]!)!;
     const b = lyricObject(themed.sections[1]!.slides[0]!)!;

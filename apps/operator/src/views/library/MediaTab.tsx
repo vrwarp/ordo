@@ -23,7 +23,9 @@ export async function uploadFiles(files: File[], opts: { isBackground?: boolean 
     const id = ++uploadSeq;
     const set = (patch: Partial<UploadRow>) =>
       useUploads.setState((s) => ({ list: s.list.map((r) => (r.id === id ? { ...r, ...patch } : r)) }));
-    useUploads.setState((s) => ({ list: [...s.list.filter((r) => !r.done).slice(-20), { id, name: f.name, frac: 0 }] }));
+    useUploads.setState((s) => ({
+      list: [...s.list.filter((r) => !r.done).slice(-20), { id, name: f.name, frac: 0 }],
+    }));
     try {
       const m = await uploadMedia(f, opts, (frac) => set({ frac }));
       upsertLocal('media', m);
@@ -48,7 +50,12 @@ export function UploadProgress() {
             {r.name}
           </span>
           <div className="progress grow">
-            <i style={{ width: `${Math.round(r.frac * 100)}%`, background: r.error ? 'var(--red)' : undefined }} />
+            <i
+              style={{
+                width: `${Math.round(r.frac * 100)}%`,
+                background: r.error ? 'var(--red)' : undefined,
+              }}
+            />
           </div>
           <span className="muted" style={{ width: 120 }}>
             {r.error ? 'failed' : r.done ? 'uploaded' : `${Math.round(r.frac * 100)}%`}
@@ -123,7 +130,13 @@ function MediaPreview({ m, onClose }: { m: Media; onClose: () => void }) {
       {m.kind === 'image' && <img src={fileUrl(f.hash)} alt={m.name} style={{ width: '100%' }} />}
       {m.kind === 'video' && (
         // Muted: the operator auditions audio only on the preview device (prd/06).
-        <video src={fileUrl(f.hash)} poster={m.poster ? fileUrl(m.poster.hash) : undefined} controls muted style={{ width: '100%' }} />
+        <video
+          src={fileUrl(f.hash)}
+          poster={m.poster ? fileUrl(m.poster.hash) : undefined}
+          controls
+          muted
+          style={{ width: '100%' }}
+        />
       )}
       {m.kind === 'audio' && <span className="muted">Audio plays on the preview device.</span>}
       <div className="muted small" style={{ marginTop: 8 }}>
@@ -147,6 +160,7 @@ export function MediaTab() {
   const [playing, setPlaying] = useState<string>();
   searchIndex.update(lib.presentations, lib.media);
   const byId = useMemo(() => new Map(lib.media.map((m) => [m.id, m])), [lib.media]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional dependency list
   const list = useMemo(
     () =>
       searchIndex
@@ -190,7 +204,12 @@ export function MediaTab() {
     <div style={{ display: 'grid', gridTemplateRows: 'auto 1fr', height: '100%' }}>
       <div className="col" style={{ padding: 10, borderBottom: '1px solid var(--line)' }}>
         <div className="row wrap">
-          <input className="grow" placeholder="Search media" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input
+            className="grow"
+            placeholder="Search media"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
           <select value={kind} onChange={(e) => setKind(e.target.value as '' | Media['kind'])}>
             <option value="">All kinds</option>
             <option value="video">Video</option>
@@ -198,15 +217,25 @@ export function MediaTab() {
             <option value="audio">Audio</option>
           </select>
           <label className="check">
-            <input type="checkbox" checked={bgOnly} onChange={(e) => setBgOnly(e.target.checked)} /> Backgrounds only
+            <input type="checkbox" checked={bgOnly} onChange={(e) => setBgOnly(e.target.checked)} />{' '}
+            Backgrounds only
           </label>
         </div>
         <div className="row">
           <div className="grow">
-            <DropZone accept={MEDIA_ACCEPT} label="Drop video, images or audio here (or click). Large files resume if interrupted." onFiles={(f) => void uploadFiles(f, { isBackground: asBackground })} />
+            <DropZone
+              accept={MEDIA_ACCEPT}
+              label="Drop video, images or audio here (or click). Large files resume if interrupted."
+              onFiles={(f) => void uploadFiles(f, { isBackground: asBackground })}
+            />
           </div>
           <label className="check">
-            <input type="checkbox" checked={asBackground} onChange={(e) => setAsBackground(e.target.checked)} /> Upload as backgrounds
+            <input
+              type="checkbox"
+              checked={asBackground}
+              onChange={(e) => setAsBackground(e.target.checked)}
+            />{' '}
+            Upload as backgrounds
           </label>
         </div>
         <UploadProgress />
@@ -248,12 +277,22 @@ export function MediaTab() {
               </span>
               {m.kind !== 'audio' && (
                 <label className="check small" title="Show in the background picker">
-                  <input type="checkbox" checked={m.isBackground} onChange={(e) => void patch(m, { isBackground: e.target.checked })} /> Background
+                  <input
+                    type="checkbox"
+                    checked={m.isBackground}
+                    onChange={(e) => void patch(m, { isBackground: e.target.checked })}
+                  />{' '}
+                  Background
                 </label>
               )}
               {m.kind !== 'image' && (
                 <label className="check small">
-                  <input type="checkbox" checked={m.loop} onChange={(e) => void patch(m, { loop: e.target.checked })} /> Loop
+                  <input
+                    type="checkbox"
+                    checked={m.loop}
+                    onChange={(e) => void patch(m, { loop: e.target.checked })}
+                  />{' '}
+                  Loop
                 </label>
               )}
               {m.kind !== 'image' && (
@@ -261,7 +300,11 @@ export function MediaTab() {
                   <select
                     value={m.audio?.pairId ?? ''}
                     title="Audio output pair"
-                    onChange={(e) => void patch(m, { audio: { pairId: e.target.value || undefined, gainDb: m.audio?.gainDb ?? 0 } })}
+                    onChange={(e) =>
+                      void patch(m, {
+                        audio: { pairId: e.target.value || undefined, gainDb: m.audio?.gainDb ?? 0 },
+                      })
+                    }
                   >
                     <option value="">Default pair</option>
                     {pairs.map((p) => (
@@ -278,10 +321,17 @@ export function MediaTab() {
                     step={1}
                     onBlur={(e) => {
                       const v = Number(e.target.value);
-                      if (Number.isFinite(v) && v !== (m.audio?.gainDb ?? 0)) void patch(m, { audio: { pairId: m.audio?.pairId, gainDb: v } });
+                      if (Number.isFinite(v) && v !== (m.audio?.gainDb ?? 0))
+                        void patch(m, { audio: { pairId: m.audio?.pairId, gainDb: v } });
                     }}
                   />
-                  <button type="button" className="small" disabled={m.state !== 'ready' && m.kind !== 'audio'} onClick={() => void audition(m)} title="Audition on the preview device">
+                  <button
+                    type="button"
+                    className="small"
+                    disabled={m.state !== 'ready' && m.kind !== 'audio'}
+                    onClick={() => void audition(m)}
+                    title="Audition on the preview device"
+                  >
                     {playing === m.id ? '■' : '🎧'}
                   </button>
                 </>
@@ -297,7 +347,15 @@ export function MediaTab() {
                 ✎
               </button>
               {m.state === 'failed' && (
-                <button type="button" className="small" onClick={() => void api(`/media/${m.id}/retry`, { method: 'POST' }).catch((e) => toast(errorText(e), 'error'))}>
+                <button
+                  type="button"
+                  className="small"
+                  onClick={() =>
+                    void api(`/media/${m.id}/retry`, { method: 'POST' }).catch((e) =>
+                      toast(errorText(e), 'error'),
+                    )
+                  }
+                >
                   Retry
                 </button>
               )}

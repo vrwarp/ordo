@@ -47,7 +47,10 @@ describe('search index', () => {
     const words = ['grace', 'love', 'light', 'king', 'holy', 'praise', 'glory', 'faith', 'hope', 'mercy'];
     const list: Presentation[] = [];
     for (let i = 0; i < 5000; i++) {
-      const lyr = Array.from({ length: 12 }, (_, j) => `${words[(i + j) % 10]} ${words[(i * 7 + j) % 10]} line ${j}`).join('\n');
+      const lyr = Array.from(
+        { length: 12 },
+        (_, j) => `${words[(i + j) % 10]} ${words[(i * 7 + j) % 10]} line ${j}`,
+      ).join('\n');
       list.push(song(`Song ${i} ${words[i % 10]}`, lyr));
     }
     const idx = new SearchIndex();

@@ -17,7 +17,7 @@
   --radius: 8px;
   --hit: 40px;
   color-scheme: dark;
-  font-family: Inter, 'Segoe UI', system-ui, -apple-system, Arial, sans-serif;
+  font-family: Inter, "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
   font-size: 14px;
   color: var(--fg);
   background: var(--bg);
@@ -129,12 +129,12 @@ textarea {
   padding: 8px;
   resize: vertical;
 }
-input[type='checkbox'] {
+input[type="checkbox"] {
   min-height: 0;
   width: 18px;
   height: 18px;
 }
-input[type='color'] {
+input[type="color"] {
   padding: 2px;
   width: 44px;
 }
@@ -824,7 +824,7 @@ table.list th {
 .ed-slide img,
 .ed-slide .ph {
   width: 120px;
-  aspect-ratio: 16/9;
+  aspect-ratio: 16 / 9;
   background: #000;
   border-radius: 4px;
   object-fit: cover;

@@ -26,9 +26,11 @@ export function ArrangementEditor(props: {
       <div className="row wrap" style={{ gap: 4 }}>
         {a.sectionIds.map((id, i) => {
           const s = byId.get(id);
+          const occurrence = a.sectionIds.slice(0, i).filter((x) => x === id).length;
+          const chipKey = `${id}#${occurrence}`;
           return (
             <span
-              key={`${id}-${i}`}
+              key={chipKey}
               className="tag"
               draggable={!props.disabled}
               onDragStart={() => setDrag(i)}
@@ -43,10 +45,22 @@ export function ArrangementEditor(props: {
               {s?.short || s?.label || '?'}
               {!props.disabled && (
                 <>
-                  <button type="button" className="ghost small" style={{ minHeight: 16, padding: '0 2px' }} onClick={() => props.onChange(duplicateAt(a, i))} title="Repeat">
+                  <button
+                    type="button"
+                    className="ghost small"
+                    style={{ minHeight: 16, padding: '0 2px' }}
+                    onClick={() => props.onChange(duplicateAt(a, i))}
+                    title="Repeat"
+                  >
                     +
                   </button>
-                  <button type="button" className="ghost small" style={{ minHeight: 16, padding: '0 2px' }} onClick={() => props.onChange(removeAt(a, i))} title="Remove">
+                  <button
+                    type="button"
+                    className="ghost small"
+                    style={{ minHeight: 16, padding: '0 2px' }}
+                    onClick={() => props.onChange(removeAt(a, i))}
+                    title="Remove"
+                  >
                     ×
                   </button>
                 </>
@@ -61,7 +75,13 @@ export function ArrangementEditor(props: {
           <div className="row wrap" style={{ gap: 4 }}>
             <span className="muted small">Add:</span>
             {p.sections.map((s) => (
-              <button key={s.id} type="button" className="small" onClick={() => props.onChange(insertSection(a, s.id))} title={s.label}>
+              <button
+                key={s.id}
+                type="button"
+                className="small"
+                onClick={() => props.onChange(insertSection(a, s.id))}
+                title={s.label}
+              >
                 {s.short || s.label}
               </button>
             ))}
@@ -82,7 +102,11 @@ export function ArrangementEditor(props: {
               }}
             />
           </div>
-          {typed && typed.unknown.length > 0 && <span className="small" style={{ color: 'var(--amber)' }}>Unknown: {typed.unknown.join(', ')}</span>}
+          {typed && typed.unknown.length > 0 && (
+            <span className="small" style={{ color: 'var(--amber)' }}>
+              Unknown: {typed.unknown.join(', ')}
+            </span>
+          )}
         </>
       )}
     </div>

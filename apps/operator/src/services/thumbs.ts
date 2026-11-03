@@ -67,11 +67,19 @@ class Thumbs {
   }
 
   setFonts(fonts: Font[]): void {
-    const list = fonts.map((f) => ({ family: f.family, weight: f.weight, style: f.style, url: fileUrl(f.file.hash) }));
+    const list = fonts.map((f) => ({
+      family: f.family,
+      weight: f.weight,
+      style: f.style,
+      url: fileUrl(f.file.hash),
+    }));
     const key = JSON.stringify(list);
     if (key === this.fontKey) return;
     this.fontKey = key;
-    const msg: ThumbIn = { t: 'fonts', fonts: list.map((f) => ({ ...f, url: new URL(f.url, location.href).href })) };
+    const msg: ThumbIn = {
+      t: 'fonts',
+      fonts: list.map((f) => ({ ...f, url: new URL(f.url, location.href).href })),
+    };
     this.ensure()?.postMessage(msg);
     // Fonts changed: drop cached thumbnails so text re-renders with the right faces.
     for (const url of this.cache.values()) URL.revokeObjectURL(url);
@@ -154,7 +162,13 @@ export function slideImages(slide: Slide, media: (id: string) => Media | undefin
 /** React hook: a thumbnail URL for a slide once `visible` is true. */
 export function useThumb(
   slide: Slide | undefined,
-  opts: { look?: Look; isSong: boolean; bg?: string; media: (id: string) => Media | undefined; width?: number },
+  opts: {
+    look?: Look;
+    isSong: boolean;
+    bg?: string;
+    media: (id: string) => Media | undefined;
+    width?: number;
+  },
   visible: boolean,
 ): string | undefined {
   const width = opts.width ?? 320;
@@ -171,6 +185,7 @@ export function useThumb(
     : undefined;
   const key = job ? thumbs.keyOf(job) : '';
   const [url, setUrl] = useState<string | undefined>(() => (key ? thumbs.peek(key) : undefined));
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional dependency list
   useEffect(() => {
     if (!job || !visible) return;
     const hit = thumbs.peek(key);
@@ -185,7 +200,6 @@ export function useThumb(
     return () => {
       alive = false;
     };
-    // biome-ignore lint/correctness/useExhaustiveDependencies: key captures the job
   }, [key, visible]);
   return url;
 }

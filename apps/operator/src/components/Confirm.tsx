@@ -31,7 +31,12 @@ export function ConfirmHost() {
           <button type="button" onClick={() => done(false)}>
             Cancel
           </button>
-          <button type="button" className={ask.danger ? 'danger' : 'primary'} onClick={() => done(true)} autoFocus>
+          <button
+            type="button"
+            className={ask.danger ? 'danger' : 'primary'}
+            onClick={() => done(true)}
+            autoFocus
+          >
             {ask.ok}
           </button>
         </>

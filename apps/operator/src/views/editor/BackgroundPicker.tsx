@@ -31,10 +31,17 @@ export function MediaPickerDialog(props: {
     <Dialog title={props.title} onClose={props.onClose} width={900}>
       <div className="col">
         <div className="row">
-          <input className="grow" placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
+          <input
+            className="grow"
+            placeholder="Search"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            autoFocus
+          />
           {props.backgroundsFirst && (
             <label className="check">
-              <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> Show all media
+              <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> Show all
+              media
             </label>
           )}
         </div>
@@ -44,7 +51,15 @@ export function MediaPickerDialog(props: {
           onFiles={(f) => void uploadFiles(f, { isBackground: !!props.backgroundsFirst })}
         />
         <UploadProgress />
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 8, maxHeight: 460, overflow: 'auto' }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+            gap: 8,
+            maxHeight: 460,
+            overflow: 'auto',
+          }}
+        >
           {list.map((m) => {
             const h = stillHash(m);
             return (
@@ -64,7 +79,11 @@ export function MediaPickerDialog(props: {
   );
 }
 
-export function BackgroundPicker(props: { value?: string; onChange: (id: string | undefined) => void; disabled?: boolean }) {
+export function BackgroundPicker(props: {
+  value?: string;
+  onChange: (id: string | undefined) => void;
+  disabled?: boolean;
+}) {
   const media = useLibrary((s) => s.data.media);
   const [open, setOpen] = useState(false);
   const m = props.value ? media.find((x) => x.id === props.value) : undefined;
@@ -85,7 +104,12 @@ export function BackgroundPicker(props: { value?: string; onChange: (id: string 
         Choose
       </button>
       {props.value && (
-        <button type="button" className="small" disabled={props.disabled} onClick={() => props.onChange(undefined)}>
+        <button
+          type="button"
+          className="small"
+          disabled={props.disabled}
+          onClick={() => props.onChange(undefined)}
+        >
           None
         </button>
       )}

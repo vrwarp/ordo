@@ -20,11 +20,22 @@ import {
 } from './ops.ts';
 import type { Slide } from '@ordo/domain';
 
-function SlideItem(props: { slide: Slide; p: Presentation; index: number; selected: boolean; onDragStart: () => void; onDrop: () => void }) {
+function SlideItem(props: {
+  slide: Slide;
+  p: Presentation;
+  index: number;
+  selected: boolean;
+  onDragStart: () => void;
+  onDrop: () => void;
+}) {
   const media = useMediaLookup();
   const [ref, visible] = useVisible<HTMLDivElement>();
   const bgId = props.slide.backgroundMediaId ?? props.p.backgroundMediaId;
-  const url = useThumb(props.slide, { isSong: props.p.kind === 'song', media, bg: bgId ? stillHash(media(bgId)) : undefined, width: 320 }, visible);
+  const url = useThumb(
+    props.slide,
+    { isSong: props.p.kind === 'song', media, bg: bgId ? stillHash(media(bgId)) : undefined, width: 320 },
+    visible,
+  );
   return (
     <div
       ref={ref}
@@ -42,7 +53,11 @@ function SlideItem(props: { slide: Slide; p: Presentation; index: number; select
         {props.index + 1}
       </span>
       {url ? <img src={url} alt="" /> : <div className="ph" />}
-      {props.slide.overrides?.length ? <span className="override-mark" title="Overrides the theme">●</span> : null}
+      {props.slide.overrides?.length ? (
+        <span className="override-mark" title="Overrides the theme">
+          ●
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -63,7 +78,10 @@ export function SlidesPanel({ p, readOnly }: { p: Presentation; readOnly: boolea
     setNewSection('');
   };
   return (
-    <div className="col" style={{ gap: 6, padding: 8, overflow: 'auto', borderRight: '1px solid var(--line)', minHeight: 0 }}>
+    <div
+      className="col"
+      style={{ gap: 6, padding: 8, overflow: 'auto', borderRight: '1px solid var(--line)', minHeight: 0 }}
+    >
       {p.sections.map((sec, si) => (
         <div
           key={sec.id}
@@ -76,14 +94,28 @@ export function SlidesPanel({ p, readOnly }: { p: Presentation; readOnly: boolea
             setDrag(null);
           }}
         >
-          <div className="row" draggable={!readOnly} onDragStart={() => setDrag({ section: si })} style={{ cursor: readOnly ? undefined : 'grab' }}>
+          <div
+            className="row"
+            draggable={!readOnly}
+            onDragStart={() => setDrag({ section: si })}
+            style={{ cursor: readOnly ? undefined : 'grab' }}
+          >
             <span className="tag">{sec.short}</span>
             <input
               value={sec.label}
               disabled={readOnly}
               className="grow"
               style={{ minHeight: 28, padding: '2px 6px' }}
-              onChange={(e) => edit((q) => renameSection(q, sec.id, e.target.value, parseSectionLabel(e.target.value)?.short ?? sec.short))}
+              onChange={(e) =>
+                edit((q) =>
+                  renameSection(
+                    q,
+                    sec.id,
+                    e.target.value,
+                    parseSectionLabel(e.target.value)?.short ?? sec.short,
+                  ),
+                )
+              }
             />
             {!readOnly && (
               <button
@@ -91,7 +123,14 @@ export function SlidesPanel({ p, readOnly }: { p: Presentation; readOnly: boolea
                 className="ghost small"
                 title="Delete section"
                 onClick={async () => {
-                  if (await confirmDialog('Delete section', `Delete “${sec.label}” and its ${sec.slides.length} slides? It is removed from every arrangement.`, 'Delete', true))
+                  if (
+                    await confirmDialog(
+                      'Delete section',
+                      `Delete “${sec.label}” and its ${sec.slides.length} slides? It is removed from every arrangement.`,
+                      'Delete',
+                      true,
+                    )
+                  )
                     edit((q) => deleteSection(q, sec.id));
                 }}
               >
@@ -108,13 +147,18 @@ export function SlidesPanel({ p, readOnly }: { p: Presentation; readOnly: boolea
               selected={sl.id === slideId}
               onDragStart={() => setDrag({ slideId: sl.id })}
               onDrop={() => {
-                if (drag?.slideId && drag.slideId !== sl.id) edit((q) => moveSlide(q, drag.slideId!, sec.id, i));
+                if (drag?.slideId && drag.slideId !== sl.id)
+                  edit((q) => moveSlide(q, drag.slideId!, sec.id, i));
                 setDrag(null);
               }}
             />
           ))}
           {!readOnly && (
-            <button type="button" className="small ghost" onClick={() => edit((q) => addSlide(q, sec.id, theme))}>
+            <button
+              type="button"
+              className="small ghost"
+              onClick={() => edit((q) => addSlide(q, sec.id, theme))}
+            >
               + slide
             </button>
           )}
@@ -122,7 +166,13 @@ export function SlidesPanel({ p, readOnly }: { p: Presentation; readOnly: boolea
       ))}
       {!readOnly && (
         <div className="row" style={{ marginTop: 8 }}>
-          <input className="grow" placeholder="New section (Verse 2, C, Bridge…)" value={newSection} onChange={(e) => setNewSection(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addNamedSection()} />
+          <input
+            className="grow"
+            placeholder="New section (Verse 2, C, Bridge…)"
+            value={newSection}
+            onChange={(e) => setNewSection(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && addNamedSection()}
+          />
           <button type="button" className="small" onClick={addNamedSection}>
             Add
           </button>
@@ -135,10 +185,20 @@ export function SlidesPanel({ p, readOnly }: { p: Presentation; readOnly: boolea
             <button type="button" className="small" onClick={() => edit((q) => duplicateSlide(q, slideId))}>
               Duplicate
             </button>
-            <button type="button" className="small" onClick={() => edit((q) => splitSlide(q, slideId))} title="Split the lyric text into two slides">
+            <button
+              type="button"
+              className="small"
+              onClick={() => edit((q) => splitSlide(q, slideId))}
+              title="Split the lyric text into two slides"
+            >
               Split
             </button>
-            <button type="button" className="small" onClick={() => edit((q) => mergeWithNext(q, slideId))} title="Merge with the next slide">
+            <button
+              type="button"
+              className="small"
+              onClick={() => edit((q) => mergeWithNext(q, slideId))}
+              title="Merge with the next slide"
+            >
               Merge next
             </button>
             <button

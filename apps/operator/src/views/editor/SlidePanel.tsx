@@ -14,7 +14,8 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
   const themes = useLibrary((s) => s.data.themes);
   const dirty = useEditor((s) => s.dirty);
   const [busy, setBusy] = useState(false);
-  const set = (fn: (s: Slide) => Slide, key?: string) => !readOnly && change((q) => updateSlide(q, slide.id, fn), key);
+  const set = (fn: (s: Slide) => Slide, key?: string) =>
+    !readOnly && change((q) => updateSlide(q, slide.id, fn), key);
   const texts = slide.objects.filter((o) => o.type === 'text');
   const makeEditable = async () => {
     const ok = await confirmDialog(
@@ -26,7 +27,9 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
     if (dirty && !(await save())) return;
     setBusy(true);
     try {
-      const res = await api<Presentation>(`/presentations/${p.id}/slides/${slide.id}/make-editable`, { method: 'POST' });
+      const res = await api<Presentation>(`/presentations/${p.id}/slides/${slide.id}/make-editable`, {
+        method: 'POST',
+      });
       replaceBase(res);
       toast('Slide converted. Check fonts and positions: they are approximate.', 'warn', 8000);
     } catch (e) {
@@ -57,7 +60,11 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
       )}
       <label className="field">
         <span>Background for this slide only</span>
-        <BackgroundPicker value={slide.backgroundMediaId} disabled={readOnly} onChange={(backgroundMediaId) => set((s) => ({ ...s, backgroundMediaId }))} />
+        <BackgroundPicker
+          value={slide.backgroundMediaId}
+          disabled={readOnly}
+          onChange={(backgroundMediaId) => set((s) => ({ ...s, backgroundMediaId }))}
+        />
       </label>
       {p.kind === 'loop' && (
         <NumberField
@@ -69,11 +76,25 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
           onChange={(v) => set((s) => ({ ...s, durationMs: Math.round(v * 1000) }))}
         />
       )}
-      <TextField label="Notes" multiline rows={3} value={slide.notes ?? ''} disabled={readOnly} onChange={(notes) => set((s) => ({ ...s, notes: notes || undefined }), `notes:${slide.id}`)} />
+      <TextField
+        label="Notes"
+        multiline
+        rows={3}
+        value={slide.notes ?? ''}
+        disabled={readOnly}
+        onChange={(notes) => set((s) => ({ ...s, notes: notes || undefined }), `notes:${slide.id}`)}
+      />
       {slide.overrides && slide.overrides.length > 0 && (
         <div className="col">
-          <span className="override-mark">● This slide overrides the theme: {slide.overrides.join(', ')}</span>
-          <button type="button" className="small" disabled={readOnly} onClick={() => set((s) => resetSlideToTheme(s, themeOf(p, themes)))}>
+          <span className="override-mark">
+            ● This slide overrides the theme: {slide.overrides.join(', ')}
+          </span>
+          <button
+            type="button"
+            className="small"
+            disabled={readOnly}
+            onClick={() => set((s) => resetSlideToTheme(s, themeOf(p, themes)))}
+          >
             Reset to theme
           </button>
         </div>
@@ -85,14 +106,24 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
             {slide.imported.textBoxes?.length ? ` · ${slide.imported.textBoxes.length} text runs found` : ''}
           </span>
           {slide.imported.textBoxes?.length ? (
-            <button type="button" className="small" disabled={readOnly || busy} onClick={() => void makeEditable()}>
+            <button
+              type="button"
+              className="small"
+              disabled={readOnly || busy}
+              onClick={() => void makeEditable()}
+            >
               Make editable
             </button>
           ) : (
             <span className="muted">No extractable text (PDF pages stay images).</span>
           )}
           {slide.objects.length > 0 && (
-            <button type="button" className="small" disabled={readOnly} onClick={() => set((s) => ({ ...s, imported: undefined }))}>
+            <button
+              type="button"
+              className="small"
+              disabled={readOnly}
+              onClick={() => set((s) => ({ ...s, imported: undefined }))}
+            >
               Remove the original page image
             </button>
           )}

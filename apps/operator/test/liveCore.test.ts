@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { type LiveEvent, type LiveState, parseLyrics, type ResolvedPlaylist, songFromParsed } from '@ordo/domain';
+import {
+  type LiveEvent,
+  type LiveState,
+  parseLyrics,
+  type ResolvedPlaylist,
+  songFromParsed,
+} from '@ordo/domain';
 import { initialState, reduce } from '@ordo/live-state';
 import type { LiveDeltaMsg } from '@ordo/protocol';
 import { type HubOut, LiveCore, type LiveNotice } from '../src/lib/liveCore.ts';
@@ -68,10 +74,11 @@ function harness(seed?: LiveState) {
     seed,
   );
   const fire = (ms: number) => {
-    for (const t of timers) if (!t.cleared && t.ms === ms) {
-      t.cleared = true;
-      t.fn();
-    }
+    for (const t of timers)
+      if (!t.cleared && t.ms === ms) {
+        t.cleared = true;
+        t.fn();
+      }
   };
   return {
     core,

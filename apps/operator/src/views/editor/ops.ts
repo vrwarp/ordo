@@ -75,7 +75,12 @@ export function newSlideFor(p: Presentation, theme: Theme, text = ''): Slide {
   return { id: newId(), objects: text ? [newText(theme, text)] : [] };
 }
 
-export function addSlide(p: Presentation, sectionId: string, theme: Theme, afterSlideId?: string): Presentation {
+export function addSlide(
+  p: Presentation,
+  sectionId: string,
+  theme: Theme,
+  afterSlideId?: string,
+): Presentation {
   const si = p.sections.findIndex((s) => s.id === sectionId);
   if (si < 0) return p;
   const slide = newSlideFor(p, theme);
@@ -119,12 +124,18 @@ export function deleteSlide(p: Presentation, slideId: string): Presentation {
   return mapSection(p, pos.si, (sec) => ({ ...sec, slides: sec.slides.filter((s) => s.id !== slideId) }));
 }
 
-export function moveSlide(p: Presentation, slideId: string, toSectionId: string, toIndex: number): Presentation {
+export function moveSlide(
+  p: Presentation,
+  slideId: string,
+  toSectionId: string,
+  toIndex: number,
+): Presentation {
   const pos = findSlide(p, slideId);
   const ti = p.sections.findIndex((s) => s.id === toSectionId);
   if (!pos || ti < 0) return p;
   const slide = p.sections[pos.si]!.slides[pos.i]!;
-  if (pos.si === ti) return mapSection(p, ti, (sec) => ({ ...sec, slides: moveItem(sec.slides, pos.i, toIndex) }));
+  if (pos.si === ti)
+    return mapSection(p, ti, (sec) => ({ ...sec, slides: moveItem(sec.slides, pos.i, toIndex) }));
   let out = deleteSlide(p, slideId);
   out = mapSection(out, ti, (sec) => {
     const slides = [...sec.slides];
@@ -201,7 +212,12 @@ export function addSection(p: Presentation, label: string, short: string, theme:
   return { ...p, sections: [...p.sections, section], arrangements };
 }
 
-export function renameSection(p: Presentation, sectionId: string, label: string, short: string): Presentation {
+export function renameSection(
+  p: Presentation,
+  sectionId: string,
+  label: string,
+  short: string,
+): Presentation {
   return { ...p, sections: p.sections.map((s) => (s.id === sectionId ? { ...s, label, short } : s)) };
 }
 
@@ -273,7 +289,11 @@ export function deleteObject(p: Presentation, slideId: string, objectId: string)
   }));
 }
 
-export function duplicateObject(p: Presentation, slideId: string, objectId: string): { p: Presentation; id?: string } {
+export function duplicateObject(
+  p: Presentation,
+  slideId: string,
+  objectId: string,
+): { p: Presentation; id?: string } {
   const s = getSlide(p, slideId);
   const o = s?.objects.find((x) => x.id === objectId);
   if (!s || !o) return { p };
@@ -297,7 +317,8 @@ export function reorderObject(p: Presentation, slideId: string, objectId: string
     const i = s.objects.findIndex((o) => o.id === objectId);
     if (i < 0) return s;
     const last = s.objects.length - 1;
-    const to = z === 'front' ? last : z === 'back' ? 0 : z === 'forward' ? Math.min(last, i + 1) : Math.max(0, i - 1);
+    const to =
+      z === 'front' ? last : z === 'back' ? 0 : z === 'forward' ? Math.min(last, i + 1) : Math.max(0, i - 1);
     return { ...s, objects: moveItem(s.objects, i, to) };
   });
 }
@@ -358,6 +379,9 @@ export function themeChangeCount(p: Presentation, theme: Theme): number {
 
 export function allSlides(p: Presentation): { slide: Slide; section: Section; index: number }[] {
   const out: { slide: Slide; section: Section; index: number }[] = [];
-  for (const section of p.sections) section.slides.forEach((slide, index) => out.push({ slide, section, index }));
+  for (const section of p.sections)
+    section.slides.forEach((slide, index) => {
+      out.push({ slide, section, index });
+    });
   return out;
 }

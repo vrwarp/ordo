@@ -27,7 +27,12 @@ export function fromSnapshot(s: LibrarySnapshot): LibraryData {
   };
 }
 
-function upsert<T extends { id: string }>(list: T[], id: string, entity: T | undefined, deleted?: boolean): T[] {
+function upsert<T extends { id: string }>(
+  list: T[],
+  id: string,
+  entity: T | undefined,
+  deleted?: boolean,
+): T[] {
   const i = list.findIndex((x) => x.id === id);
   if (deleted) return i < 0 ? list : [...list.slice(0, i), ...list.slice(i + 1)];
   if (!entity) return list;

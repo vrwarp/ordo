@@ -21,7 +21,10 @@ export function itemTitle(it: PlaylistItem, op: Pick<OperatorPlaylist, 'presenta
     case 'media':
       return op.media(it.mediaId)?.name ?? 'Missing media';
     case 'timer':
-      return it.timer.label ?? (it.timer.kind === 'elapsed' ? 'Elapsed timer' : `Countdown to ${it.timer.timeOfDay}`);
+      return (
+        it.timer.label ??
+        (it.timer.kind === 'elapsed' ? 'Elapsed timer' : `Countdown to ${it.timer.timeOfDay}`)
+      );
     case 'action':
       return `Action: ${it.action}`;
   }
@@ -37,7 +40,7 @@ export function itemSubtitle(it: PlaylistItem, op: Pick<OperatorPlaylist, 'prese
     const m = op.media(it.mediaId);
     if (!m) return '';
     const st = m.state !== 'ready' ? ` · ${m.state}` : '';
-    return `${m.kind}${it.loop ?? m.loop ? ' · loop' : ''}${st}`;
+    return `${m.kind}${(it.loop ?? m.loop) ? ' · loop' : ''}${st}`;
   }
   return '';
 }
@@ -59,7 +62,9 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
           <select
             className="grow"
             value={op.playlist?.id ?? ''}
-            onChange={(e) => setUi({ selectedPlaylistId: e.target.value, viewItemIndex: 0, followLive: true })}
+            onChange={(e) =>
+              setUi({ selectedPlaylistId: e.target.value, viewItemIndex: 0, followLive: true })
+            }
           >
             {playlists.length === 0 && <option value="">No playlists</option>}
             {playlists.map((p) => (
@@ -70,17 +75,30 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
           </select>
         )}
         {op.playlist && (
-          <button type="button" className="small" onClick={() => navigate({ name: 'playlists', id: op.playlist!.id })}>
+          <button
+            type="button"
+            className="small"
+            onClick={() => navigate({ name: 'playlists', id: op.playlist!.id })}
+          >
             {op.live ? 'View' : 'Edit'}
           </button>
         )}
       </div>
       {!op.live && op.playlist && (
         <div style={{ padding: 10, borderBottom: '1px solid var(--line)' }}>
-          <button type="button" className="primary big" style={{ width: '100%' }} onClick={() => controller()?.goLive(op.playlist!.id)}>
+          <button
+            type="button"
+            className="primary big"
+            style={{ width: '100%' }}
+            onClick={() => controller()?.goLive(op.playlist!.id)}
+          >
             Go live with this playlist
           </button>
-          {selectedId === undefined && <div className="muted small" style={{ marginTop: 6 }}>Pick the service playlist above.</div>}
+          {selectedId === undefined && (
+            <div className="muted small" style={{ marginTop: 6 }}>
+              Pick the service playlist above.
+            </div>
+          )}
         </div>
       )}
       <VirtualList
@@ -89,7 +107,9 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
         style={{ flex: 1 }}
         keyOf={(it) => it.id}
         scrollToIndex={liveItem}
-        rowClass={(_it, i) => `pl-item ${i === viewItem ? 'sel' : ''} ${op.live && i === liveItem ? 'live' : ''}`}
+        rowClass={(_it, i) =>
+          `pl-item ${i === viewItem ? 'sel' : ''} ${op.live && i === liveItem ? 'live' : ''}`
+        }
         onRowClick={(_it, i) => setUi({ viewItemIndex: i, followLive: false })}
         onRowDoubleClick={(_it, i) => {
           const c = firstCueOf(i);
@@ -105,7 +125,11 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
           </>
         )}
       />
-      {items.length === 0 && <div className="muted" style={{ padding: 16 }}>This playlist is empty.</div>}
+      {items.length === 0 && (
+        <div className="muted" style={{ padding: 16 }}>
+          This playlist is empty.
+        </div>
+      )}
     </div>
   );
 }

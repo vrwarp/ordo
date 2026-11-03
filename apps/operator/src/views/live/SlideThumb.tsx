@@ -37,11 +37,19 @@ export const SlideThumb = memo(function SlideThumb(props: {
   );
   const cls = `thumb ${props.marks.live ? 'live' : ''} ${props.marks.armed && !props.marks.live ? 'armed' : ''}`;
   return (
-    <div ref={ref} className={cls} onClick={props.onClick} onDoubleClick={props.onDoubleClick} title={props.label}>
+    <div
+      ref={ref}
+      className={cls}
+      onClick={props.onClick}
+      onDoubleClick={props.onDoubleClick}
+      title={props.label}
+    >
       {url || (!props.slide && bg && visible) ? (
         <div className="img" style={{ backgroundImage: `url(${url ?? fileUrl(bg!)})` }} />
       ) : (
-        <div className="fallback-text">{props.slide ? firstText(props.slide) || props.label : props.label}</div>
+        <div className="fallback-text">
+          {props.slide ? firstText(props.slide) || props.label : props.label}
+        </div>
       )}
       {props.number !== undefined && <span className="num">{props.number}</span>}
       {props.marks.dots && props.marks.dots.length > 0 && (

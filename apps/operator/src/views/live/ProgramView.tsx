@@ -34,7 +34,11 @@ export function ProgramView() {
             <PvVideo stream={p?.stream} />
             {!p?.stream && (
               <div className="center muted small" style={{ position: 'absolute', inset: 0 }}>
-                {h?.connected ? (p?.state === 'failed' ? 'No picture (retrying)' : 'Connecting…') : 'Output not open'}
+                {h?.connected
+                  ? p?.state === 'failed'
+                    ? 'No picture (retrying)'
+                    : 'Connecting…'
+                  : 'Output not open'}
               </div>
             )}
             <div className="ov">

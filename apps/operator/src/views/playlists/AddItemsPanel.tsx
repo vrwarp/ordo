@@ -26,20 +26,36 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
   searchIndex.update(lib.presentations, lib.media);
   const pres = useMemo(() => new Map(lib.presentations.map((p) => [p.id, p])), [lib.presentations]);
   const media = useMemo(() => new Map(lib.media.map((m) => [m.id, m])), [lib.media]);
-  const results = useMemo(() => searchIndex.search(q, { kind, limit: 500 }), [q, kind, lib.presentations, lib.media]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional dependency list
+  const results = useMemo(
+    () => searchIndex.search(q, { kind, limit: 500 }),
+    [q, kind, lib.presentations, lib.media],
+  );
   return (
     <div style={{ display: 'grid', gridTemplateRows: 'auto 1fr auto', height: '100%' }}>
       <div className="col" style={{ padding: 10, borderBottom: '1px solid var(--line)' }}>
         <h4>Add to playlist</h4>
         <div className="row">
-          <button type="button" className={`small ${kind === 'presentation' ? 'on' : ''}`} onClick={() => setKind('presentation')}>
+          <button
+            type="button"
+            className={`small ${kind === 'presentation' ? 'on' : ''}`}
+            onClick={() => setKind('presentation')}
+          >
             Songs and slides
           </button>
-          <button type="button" className={`small ${kind === 'media' ? 'on' : ''}`} onClick={() => setKind('media')}>
+          <button
+            type="button"
+            className={`small ${kind === 'media' ? 'on' : ''}`}
+            onClick={() => setKind('media')}
+          >
             Media
           </button>
         </div>
-        <input placeholder="Search title, lyrics, CCLI, tag" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input
+          placeholder="Search title, lyrics, CCLI, tag"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
       </div>
       <VirtualList
         items={results}
@@ -60,7 +76,14 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
                   title="Arrangement"
                   style={{ maxWidth: 110 }}
                   onChange={(e) => {
-                    onAdd([{ id: newId(), kind: 'presentation', presentationId: p.id, arrangementId: e.target.value || undefined }]);
+                    onAdd([
+                      {
+                        id: newId(),
+                        kind: 'presentation',
+                        presentationId: p.id,
+                        arrangementId: e.target.value || undefined,
+                      },
+                    ]);
                     e.target.value = '';
                   }}
                 >
@@ -73,7 +96,20 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
                     </option>
                   ))}
                 </select>
-                <button type="button" className="small primary" onClick={() => onAdd([{ id: newId(), kind: 'presentation', presentationId: p.id, arrangementId: p.arrangements[0]?.id }])}>
+                <button
+                  type="button"
+                  className="small primary"
+                  onClick={() =>
+                    onAdd([
+                      {
+                        id: newId(),
+                        kind: 'presentation',
+                        presentationId: p.id,
+                        arrangementId: p.arrangements[0]?.id,
+                      },
+                    ])
+                  }
+                >
                   Add
                 </button>
               </>
@@ -95,7 +131,9 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
                 className="small primary"
                 disabled={!ready}
                 title={ready ? undefined : 'Available when processing has finished'}
-                onClick={() => onAdd([{ id: newId(), kind: 'media', mediaId: m.id, loop: m.loop, onEnd: 'hold' }])}
+                onClick={() =>
+                  onAdd([{ id: newId(), kind: 'media', mediaId: m.id, loop: m.loop, onEnd: 'hold' }])
+                }
               >
                 Add
               </button>
@@ -106,25 +144,50 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
       <div className="col" style={{ padding: 10, borderTop: '1px solid var(--line)' }}>
         <h4>Timer</h4>
         <div className="row wrap">
-          <input placeholder="Label (optional)" value={label} onChange={(e) => setLabel(e.target.value)} className="grow" />
+          <input
+            placeholder="Label (optional)"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            className="grow"
+          />
         </div>
         <div className="row wrap">
           <input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
           <button
             type="button"
             className="small"
-            onClick={() => onAdd([{ id: newId(), kind: 'timer', timer: { kind: 'countdownTo', timeOfDay: time, label: label.trim() || undefined } }])}
+            onClick={() =>
+              onAdd([
+                {
+                  id: newId(),
+                  kind: 'timer',
+                  timer: { kind: 'countdownTo', timeOfDay: time, label: label.trim() || undefined },
+                },
+              ])
+            }
           >
             Add countdown
           </button>
-          <button type="button" className="small" onClick={() => onAdd([{ id: newId(), kind: 'timer', timer: { kind: 'elapsed', label: label.trim() || undefined } }])}>
+          <button
+            type="button"
+            className="small"
+            onClick={() =>
+              onAdd([
+                { id: newId(), kind: 'timer', timer: { kind: 'elapsed', label: label.trim() || undefined } },
+              ])
+            }
+          >
             Add elapsed timer
           </button>
         </div>
         <h4 style={{ marginTop: 6 }}>Action</h4>
         <div className="row">
           <Select value={action} options={ACTIONS} onChange={setAction} style={{ flex: 1 }} />
-          <button type="button" className="small" onClick={() => onAdd([{ id: newId(), kind: 'action', action }])}>
+          <button
+            type="button"
+            className="small"
+            onClick={() => onAdd([{ id: newId(), kind: 'action', action }])}
+          >
             Add
           </button>
         </div>

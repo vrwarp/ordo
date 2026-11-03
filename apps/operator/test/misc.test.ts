@@ -72,7 +72,12 @@ describe('deck view', () => {
     let s = reduce(initialState(), {
       k: 'goLive',
       resolved: {
-        playlist: { id: 'pl', rev: 1, name: 'x', items: [{ id: 'i', kind: 'presentation', presentationId: p.id }] },
+        playlist: {
+          id: 'pl',
+          rev: 1,
+          name: 'x',
+          items: [{ id: 'i', kind: 'presentation', presentationId: p.id }],
+        },
         presentations: { [p.id]: p },
         media: {},
         fonts: [],

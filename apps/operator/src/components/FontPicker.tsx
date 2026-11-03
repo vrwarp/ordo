@@ -88,7 +88,12 @@ export function GoogleFontsDialog(props: { onClose: () => void; onAdded?: (famil
   return (
     <Dialog title="Add a Google font" onClose={props.onClose} width={520}>
       <div className="col">
-        <input autoFocus placeholder="Search Google Fonts (e.g. Montserrat)" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input
+          autoFocus
+          placeholder="Search Google Fonts (e.g. Montserrat)"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
         <span className="muted small">
           The hub downloads the font once and serves it locally; services never depend on Google.
         </span>
@@ -100,7 +105,12 @@ export function GoogleFontsDialog(props: { onClose: () => void; onAdded?: (famil
               <span className="grow">
                 {r.family} <span className="muted small">{r.category}</span>
               </span>
-              <button type="button" className="small" disabled={adding !== null} onClick={() => add(r.family)}>
+              <button
+                type="button"
+                className="small"
+                disabled={adding !== null}
+                onClick={() => add(r.family)}
+              >
                 {adding === r.family ? 'Adding…' : 'Add'}
               </button>
             </div>

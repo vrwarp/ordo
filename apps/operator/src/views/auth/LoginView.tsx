@@ -17,7 +17,8 @@ export function LoginView() {
       await api<AuthPinRes>(ROUTES.pin, { method: 'POST', json: { pin, remember } });
       await refreshSession();
     } catch (e) {
-      if (e instanceof ApiFailure && e.status === 429) setErr(e.message || 'Too many attempts. Try again in 15 minutes.');
+      if (e instanceof ApiFailure && e.status === 429)
+        setErr(e.message || 'Too many attempts. Try again in 15 minutes.');
       else if (e instanceof ApiFailure && e.status === 401) setErr('Wrong PIN.');
       else setErr(e instanceof Error ? e.message : String(e));
       setPin('');

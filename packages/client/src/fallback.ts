@@ -1,4 +1,4 @@
-import type { LiveState } from '@ordo/domain';
+import type { LiveEvent, LiveState } from '@ordo/domain';
 import {
   type FallbackMessage,
   type LiveDeltaMsg,
@@ -16,6 +16,8 @@ type Win = { win: Window; origin: string; ready: boolean };
  */
 export class FallbackHost extends Emitter<{
   health: { outputId: string; health: OutputHealth };
+  /** media.ended / audio.ended reported by the audio-master output while the operator is the authority. */
+  event: { outputId: string; event: LiveEvent };
   ready: { outputId: string; appliedSeq: number };
 }> {
   private windows = new Map<string, Win>();
@@ -104,6 +106,10 @@ export class FallbackHost extends Emitter<{
       this.emit('ready', { outputId, appliedSeq: m.appliedSeq });
     } else if (m.t === 'health') {
       this.emit('health', { outputId, health: m.health });
+    } else if ((m as { t: string }).t === 'live.event') {
+      const ev = (m as unknown as { event?: LiveEvent }).event;
+      if (ev && (ev.k === 'media.ended' || ev.k === 'audio.ended'))
+        this.emit('event', { outputId, event: ev });
     } else if (m.t === 'fallback.file') {
       void (async () => {
         const blob = await this.getFile?.(m.hash).catch(() => undefined);
@@ -150,6 +156,20 @@ export class FallbackClient extends Emitter<{
 
   ready(appliedSeq: number): void {
     this.post({ t: 'fallback.ready', v: 1, outputId: this.outputId, appliedSeq });
+  }
+
+  /** Report media.ended / audio.ended to the operator while it is the authority (fallback bus). */
+  sendEvent(event: LiveEvent): void {
+    const op = window.opener as Window | null;
+    if (!op || op.closed) return;
+    try {
+      op.postMessage(
+        { t: 'live.event', v: 1, id: Math.random().toString(36).slice(2), event },
+        this.operatorOrigin,
+      );
+    } catch {
+      /* opener gone */
+    }
   }
 
   sendHealth(health: OutputHealth): void {

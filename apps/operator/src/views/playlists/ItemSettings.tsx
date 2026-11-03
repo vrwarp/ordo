@@ -20,7 +20,8 @@ export function ItemSettings(props: {
   if (it.kind === 'presentation') {
     const p = lib.presentations.find((x) => x.id === it.presentationId);
     if (!p) return <div className="banner red">This presentation no longer exists.</div>;
-    const current = p.arrangements.find((a) => a.id === it.arrangementId) ?? p.arrangements[0] ?? authoringArrangement(p);
+    const current =
+      p.arrangements.find((a) => a.id === it.arrangementId) ?? p.arrangements[0] ?? authoringArrangement(p);
     return (
       <div className="col">
         <h3>{p.title}</h3>
@@ -31,7 +32,9 @@ export function ItemSettings(props: {
               disabled={props.disabled}
               onChange={(e) => props.onChange({ ...it, arrangementId: e.target.value || undefined })}
             >
-              <option value="">{p.arrangements[0] ? `${p.arrangements[0].name} (default)` : 'Authoring order'}</option>
+              <option value="">
+                {p.arrangements[0] ? `${p.arrangements[0].name} (default)` : 'Authoring order'}
+              </option>
               {p.arrangements.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.name}
@@ -47,7 +50,11 @@ export function ItemSettings(props: {
                   type="button"
                   className="small"
                   onClick={() =>
-                    setEditing({ ...current, id: newId(), name: `${lib.playlists.find((x) => x.items.some((y) => y.id === it.id))?.name ?? 'This service'}` })
+                    setEditing({
+                      ...current,
+                      id: newId(),
+                      name: `${lib.playlists.find((x) => x.items.some((y) => y.id === it.id))?.name ?? 'This service'}`,
+                    })
                   }
                   title="A new arrangement for this service only"
                 >
@@ -59,7 +66,11 @@ export function ItemSettings(props: {
         </Field>
         {editing && (
           <div className="card col">
-            <TextField label="Arrangement name" value={editing.name} onChange={(name) => setEditing({ ...editing, name })} />
+            <TextField
+              label="Arrangement name"
+              value={editing.name}
+              onChange={(name) => setEditing({ ...editing, name })}
+            />
             <ArrangementEditor presentation={p} value={editing} onChange={setEditing} />
             <div className="row">
               <button
@@ -78,14 +89,25 @@ export function ItemSettings(props: {
                 Cancel
               </button>
             </div>
-            <span className="muted small">Arrangements are stored on the presentation; editing a section changes every arrangement using it.</span>
+            <span className="muted small">
+              Arrangements are stored on the presentation; editing a section changes every arrangement using
+              it.
+            </span>
           </div>
         )}
         <Field label="Transition for this item">
-          <TransitionEditor value={it.transition} allowInherit onChange={(transition) => props.onChange({ ...it, transition })} />
+          <TransitionEditor
+            value={it.transition}
+            allowInherit
+            onChange={(transition) => props.onChange({ ...it, transition })}
+          />
         </Field>
         <Field label="Background override">
-          <BackgroundPicker value={it.backgroundMediaId} onChange={(backgroundMediaId) => props.onChange({ ...it, backgroundMediaId })} disabled={props.disabled} />
+          <BackgroundPicker
+            value={it.backgroundMediaId}
+            onChange={(backgroundMediaId) => props.onChange({ ...it, backgroundMediaId })}
+            disabled={props.disabled}
+          />
         </Field>
       </div>
     );
@@ -97,7 +119,12 @@ export function ItemSettings(props: {
       <div className="col">
         <h3>{m?.name ?? 'Missing media'}</h3>
         {m && m.kind !== 'image' && (
-          <Check label="Loop" value={it.loop ?? m.loop} disabled={props.disabled} onChange={(loop) => props.onChange({ ...it, loop })} />
+          <Check
+            label="Loop"
+            value={it.loop ?? m.loop}
+            disabled={props.disabled}
+            onChange={(loop) => props.onChange({ ...it, loop })}
+          />
         )}
         {m?.kind === 'video' && (
           <Select
@@ -118,8 +145,13 @@ export function ItemSettings(props: {
               label="Audio pair"
               value={it.audio?.pairId ?? ''}
               disabled={props.disabled}
-              options={[{ value: '', label: 'Media default' }, ...pairs.map((p) => ({ value: p.id, label: p.name }))]}
-              onChange={(pairId) => props.onChange({ ...it, audio: { ...it.audio, pairId: pairId || undefined } })}
+              options={[
+                { value: '', label: 'Media default' },
+                ...pairs.map((p) => ({ value: p.id, label: p.name })),
+              ]}
+              onChange={(pairId) =>
+                props.onChange({ ...it, audio: { ...it.audio, pairId: pairId || undefined } })
+              }
             />
             <NumberField
               label="Gain (dB)"
@@ -150,23 +182,42 @@ export function ItemSettings(props: {
           onChange={(k) =>
             props.onChange({
               ...it,
-              timer: k === 'elapsed' ? { kind: 'elapsed', label: t.label } : { kind: 'countdownTo', timeOfDay: '10:00', label: t.label },
+              timer:
+                k === 'elapsed'
+                  ? { kind: 'elapsed', label: t.label }
+                  : { kind: 'countdownTo', timeOfDay: '10:00', label: t.label },
             })
           }
         />
         {t.kind === 'countdownTo' && (
           <Field label="Time (venue time zone)">
-            <input type="time" value={t.timeOfDay} disabled={props.disabled} onChange={(e) => props.onChange({ ...it, timer: { ...t, timeOfDay: e.target.value } })} />
+            <input
+              type="time"
+              value={t.timeOfDay}
+              disabled={props.disabled}
+              onChange={(e) => props.onChange({ ...it, timer: { ...t, timeOfDay: e.target.value } })}
+            />
           </Field>
         )}
-        <TextField label="Label" value={t.label ?? ''} disabled={props.disabled} onChange={(label) => props.onChange({ ...it, timer: { ...t, label: label || undefined } })} />
+        <TextField
+          label="Label"
+          value={t.label ?? ''}
+          disabled={props.disabled}
+          onChange={(label) => props.onChange({ ...it, timer: { ...t, label: label || undefined } })}
+        />
       </div>
     );
   }
   return (
     <div className="col">
       <h3>Action</h3>
-      <Select label="Action" value={it.action} disabled={props.disabled} options={ACTIONS} onChange={(action: ActionId) => props.onChange({ ...it, action })} />
+      <Select
+        label="Action"
+        value={it.action}
+        disabled={props.disabled}
+        options={ACTIONS}
+        onChange={(action: ActionId) => props.onChange({ ...it, action })}
+      />
     </div>
   );
 }

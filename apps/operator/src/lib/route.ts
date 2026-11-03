@@ -43,7 +43,10 @@ export function parseRoute(hash: string): Route | null {
     case 'playlists':
       return { name: 'playlists', id: a };
     case 'settings':
-      return { name: 'settings', page: a && (SETTINGS_PAGES as readonly string[]).includes(a) ? a : 'outputs' };
+      return {
+        name: 'settings',
+        page: a && (SETTINGS_PAGES as readonly string[]).includes(a) ? a : 'outputs',
+      };
     case 'checklist':
       return { name: 'checklist' };
     default:

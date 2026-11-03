@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "smoke": "vite build && tsx test-smoke/smoke.ts"
   },
   "dependencies": {
     "@ordo/domain": "workspace:*",

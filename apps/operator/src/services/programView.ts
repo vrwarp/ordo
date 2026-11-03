@@ -92,7 +92,8 @@ export class ProgramViews {
     }
     const ice = m.ice as RTCIceCandidateInit | undefined;
     if (ice) {
-      if (peer.haveAnswer && peer.pc.remoteDescription) void peer.pc.addIceCandidate(ice).catch(() => undefined);
+      if (peer.haveAnswer && peer.pc.remoteDescription)
+        void peer.pc.addIceCandidate(ice).catch(() => undefined);
       else peer.pendingIce.push(ice);
     }
   }

@@ -28,7 +28,9 @@ export function SetupView() {
     setBusy(true);
     try {
       await api(ROUTES.setup, { method: 'POST', json: { operatePin, editPin } });
-      await api(ROUTES.pin, { method: 'POST', json: { pin: operatePin, remember: true } }).catch(() => undefined);
+      await api(ROUTES.pin, { method: 'POST', json: { pin: operatePin, remember: true } }).catch(
+        () => undefined,
+      );
       await refreshSession();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -59,8 +61,8 @@ export function SetupView() {
       >
         <h2>Welcome to ordo</h2>
         <p className="muted" style={{ margin: 0 }}>
-          Set two PINs. The <b>operate</b> PIN runs services and changes settings. The <b>edit</b> PIN prepares
-          songs and playlists, including from home, but cannot control the live service.
+          Set two PINs. The <b>operate</b> PIN runs services and changes settings. The <b>edit</b> PIN
+          prepares songs and playlists, including from home, but cannot control the live service.
         </p>
         <div className="grid2">
           {pinInput(operatePin, setOperate, 'Operate PIN')}

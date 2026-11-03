@@ -1,7 +1,12 @@
 import { type Box, hexToRgba, type Rgba, rgbaHex, type Transition } from '@ordo/domain';
 import { type ReactNode, useEffect, useState } from 'react';
 
-export function Field(props: { label: ReactNode; children: ReactNode; hint?: ReactNode; style?: React.CSSProperties }) {
+export function Field(props: {
+  label: ReactNode;
+  children: ReactNode;
+  hint?: ReactNode;
+  style?: React.CSSProperties;
+}) {
   return (
     <label className="field" style={props.style}>
       <span>{props.label}</span>
@@ -108,7 +113,12 @@ export function TextField(props: {
   return props.label ? <Field label={props.label}>{el}</Field> : el;
 }
 
-export function ColorField(props: { label?: ReactNode; value: Rgba; onChange: (c: Rgba) => void; alpha?: boolean }) {
+export function ColorField(props: {
+  label?: ReactNode;
+  value: Rgba;
+  onChange: (c: Rgba) => void;
+  alpha?: boolean;
+}) {
   const { value } = props;
   const el = (
     <span className="row" style={{ gap: 4 }}>
@@ -163,7 +173,12 @@ export function Select<T extends string>(props: {
   return props.label ? <Field label={props.label}>{el}</Field> : el;
 }
 
-export function Check(props: { label: ReactNode; value: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+export function Check(props: {
+  label: ReactNode;
+  value: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+}) {
   return (
     <label className="check">
       <input
@@ -187,7 +202,13 @@ export function BoxEditor(props: { value: Box; onChange: (b: Box) => void; rotat
       <NumberField label="W" value={b.w} min={1} onChange={(w) => set({ w })} width={70} />
       <NumberField label="H" value={b.h} min={1} onChange={(h) => set({ h })} width={70} />
       {props.rotation !== false && (
-        <NumberField label="Rotation" value={b.rotation ?? 0} onChange={(rotation) => set({ rotation })} width={70} suffix="°" />
+        <NumberField
+          label="Rotation"
+          value={b.rotation ?? 0}
+          onChange={(rotation) => set({ rotation })}
+          width={70}
+          suffix="°"
+        />
       )}
     </div>
   );
@@ -211,12 +232,23 @@ export function TransitionEditor(props: {
         ]}
         onChange={(v) =>
           props.onChange(
-            v === 'inherit' ? undefined : v === 'cut' ? { kind: 'cut' } : { kind: 'crossfade', ms: t?.kind === 'crossfade' ? t.ms : 300 },
+            v === 'inherit'
+              ? undefined
+              : v === 'cut'
+                ? { kind: 'cut' }
+                : { kind: 'crossfade', ms: t?.kind === 'crossfade' ? t.ms : 300 },
           )
         }
       />
       {t?.kind === 'crossfade' && (
-        <NumberField value={t.ms} min={0} max={10000} step={50} onChange={(ms) => props.onChange({ kind: 'crossfade', ms })} suffix="ms" />
+        <NumberField
+          value={t.ms}
+          min={0}
+          max={10000}
+          step={50}
+          onChange={(ms) => props.onChange({ kind: 'crossfade', ms })}
+          suffix="ms"
+        />
       )}
     </div>
   );
