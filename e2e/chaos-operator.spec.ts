@@ -89,7 +89,9 @@ test('the core worker dies mid-service: the UI shows recovering, GO works within
     await expect(page.locator('[data-recovering]')).toBeHidden({ timeout: 5000 });
     const after = await opLive(page);
     expect(after.generation).toBe((before.generation ?? 0) + 1);
-    expect(after.unacknowledged).toBe(0);
+    // The worker acknowledges an action only after persisting it, so the outbox empties just after the hub
+    // has applied the GO: wait for it rather than reading it at one instant.
+    await expect.poll(async () => (await opLive(page)).unacknowledged, { timeout: 3000 }).toBe(0);
 
     // Exactly once: the hub is at cue 1, not 2 (the re-sent action kept its id).
     await page.waitForTimeout(1000);
@@ -200,7 +202,20 @@ test('the fallback bus runs over MessagePorts: with the hub dead GO reaches the 
     // The operator's core holds a direct port to every output and uses it.
     const eps = (await opLive(page)).endpoints;
     expect(Object.keys(eps)).toHaveLength(2);
-    for (const e of Object.values(eps)) expect(e).toMatchObject({ active: 'port', port: true, ready: true });
+    // A port is proven once the window answers on it; poll rather than read it at one instant.
+    await expect
+      .poll(
+        async () =>
+          Object.values((await opLive(page)).endpoints).every(
+            (e) =>
+              (e as { active?: string; ready?: boolean }).active === 'port' &&
+              (e as { ready?: boolean }).ready,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(true);
+    for (const e of Object.values((await opLive(page)).endpoints))
+      expect(e).toMatchObject({ active: 'port', port: true, ready: true });
     // The output side agrees, when it reports its carrier.
     for (const p of outs) {
       const t = await outputTransport(p);

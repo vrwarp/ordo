@@ -188,9 +188,13 @@ export class OutputHost {
     void requestPersistence();
 
     // Main-thread watchdog tick: the link worker measures the gaps (health.mainThreadStallMs).
-    setInterval(() => this.toLink({ t: 'tick' }), 250);
+    // The same tick checks the opener: a closed operator tab is noticed within a tick, which keeps the
+    // output's exit from the fallback bus prompt even when the window's timers are throttled.
+    setInterval(() => {
+      this.toLink({ t: 'tick' });
+      this.watchOpener();
+    }, 250);
     setInterval(() => this.sendStatus(), 500);
-    setInterval(() => this.watchOpener(), 1000);
     setInterval(() => this.checkHold(), 500);
     const raf = () => {
       this.rafTicks++;
