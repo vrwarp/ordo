@@ -3,7 +3,28 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "dev": "vite", "build": "vite build", "typecheck": "tsc -p tsconfig.json" },
-  "dependencies": { "@ordo/domain": "workspace:*", "@ordo/protocol": "workspace:*", "@ordo/live-state": "workspace:*", "@ordo/cache": "workspace:*", "@ordo/renderer": "workspace:*", "@ordo/ui": "workspace:*", "react": "^19.3.1", "react-dom": "^19.3.1" },
-  "devDependencies": { "vite": "^7.3.7", "@vitejs/plugin-react": "^5.2.0", "@types/react": "^19.3.0", "@types/react-dom": "^19.3.0", "@webgpu/types": "^0.1.74", "@types/w3c-web-hid": "^1.0.7", "@types/webmidi": "^3.0.1" }
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@ordo/domain": "workspace:*",
+    "@ordo/protocol": "workspace:*",
+    "@ordo/live-state": "workspace:*",
+    "@ordo/cache": "workspace:*",
+    "@ordo/renderer": "workspace:*",
+    "@ordo/ui": "workspace:*",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "@ordo/client": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "^7.3.7",
+    "@vitejs/plugin-react": "^5.2.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@webgpu/types": "^0.1.74",
+    "@types/w3c-web-hid": "^1.0.7"
+  }
 }

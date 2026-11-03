@@ -6,3 +6,4 @@ export * from './lyrics.ts';
 export * from './defaults.ts';
 export * from './time.ts';
 export * from './color.ts';
+export * from './resolve.ts';

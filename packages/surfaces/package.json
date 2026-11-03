@@ -17,7 +17,6 @@
     "@elgato-stream-deck/webhid": "^7.8.0"
   },
   "devDependencies": {
-    "@types/w3c-web-hid": "^1.0.7",
-    "@types/webmidi": "^3.0.1"
+    "@types/w3c-web-hid": "^1.0.7"
   }
 }

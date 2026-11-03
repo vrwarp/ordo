@@ -1,1 +1,1 @@
-{ "extends": "../../tsconfig.base.json", "compilerOptions": { "types": ["vite/client", "@webgpu/types", "w3c-web-hid", "webmidi"] }, "include": ["src", "vite.config.ts"] }
+{ "extends": "../../tsconfig.base.json", "compilerOptions": { "types": ["vite/client", "@webgpu/types", "w3c-web-hid"] }, "include": ["src", "vite.config.ts"] }

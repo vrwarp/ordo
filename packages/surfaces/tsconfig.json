@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "types": ["w3c-web-hid", "webmidi", "node"] },
+  "compilerOptions": { "types": ["w3c-web-hid", "node"] },
   "include": ["src"]
 }
