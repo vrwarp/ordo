@@ -57,6 +57,22 @@ describe('FallbackHost', () => {
     expect(out.posted).toEqual([]);
   });
 
+  it('reintroduces a window whose endpoint now reaches a new page (a reload or a re-offered port)', () => {
+    host.register('o1', out as unknown as Window, OUT);
+    host.activate(state(3));
+    op.deliver(out, { t: 'fallback.ready', v: 1, outputId: 'o1', appliedSeq: 3 });
+    expect(host.isReady('o1')).toBe(true);
+    out.posted = [];
+    host.reintroduce('o1');
+    expect(host.isReady('o1')).toBe(false);
+    expect(out.posted.map((p) => p.m.t)).toEqual(['fallback.hello']);
+    host.deactivate();
+    out.posted = [];
+    host.reintroduce('o1');
+    expect(out.posted.map((p) => p.m)).toEqual([{ t: 'fallback.hub', v: 1, hubUp: true }]);
+    host.reintroduce('missing'); // no-op
+  });
+
   it('tells a window still talking to it in hub mode that the hub is up, and de-duplicates events', () => {
     host.register('o1', out as unknown as Window, OUT);
     out.posted = [];

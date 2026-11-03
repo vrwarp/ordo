@@ -31,6 +31,11 @@ type JobRow = {
 };
 
 const MAX_LOG = 500;
+/**
+ * A job that was running when its process died is re-queued; after this many starts it fails for good
+ * (design/25: a file that crashes the decoder is marked and never retried in a loop).
+ */
+export const MAX_JOB_ATTEMPTS = 3;
 
 function toJob(r: JobRow): Job {
   return {
@@ -52,6 +57,7 @@ function toJob(r: JobRow): Job {
  */
 export class JobQueue {
   private handlers = new Map<string, JobHandler<never>>();
+  private giveUps = new Map<string, (payload: never, error: string) => void>();
   private running = new Map<string, { cls: JobClass; ctrl: AbortController; done: Promise<void> }>();
   private stopped = true;
   private lastNotify = new Map<string, number>();
@@ -64,8 +70,17 @@ export class JobQueue {
     private notify: (job: Job) => void,
   ) {}
 
-  register<P>(kind: string, handler: JobHandler<P>): void {
+  /** `giveUp` runs when a job of this kind is abandoned without its handler (too many crashed attempts). */
+  register<P>(kind: string, handler: JobHandler<P>, giveUp?: (payload: P, error: string) => void): void {
     this.handlers.set(kind, handler as JobHandler<never>);
+    if (giveUp) this.giveUps.set(kind, giveUp as (payload: never, error: string) => void);
+  }
+
+  attempts(id: string): number {
+    const r = this.db.prepare(`SELECT attempts FROM job_attempts WHERE job_id = ?`).get(id) as
+      | { attempts: number }
+      | undefined;
+    return r?.attempts ?? 0;
   }
 
   enqueue(kind: string, payload: unknown, cls: JobClass = 'light'): Job {
@@ -96,7 +111,29 @@ export class JobQueue {
 
   start(): void {
     this.stopped = false;
-    this.db.prepare(`UPDATE jobs SET state = 'queued' WHERE state = 'running'`).run();
+    // Jobs left running were interrupted: by a shutdown (normally re-queued already) or by the process
+    // dying under them. One that has already been started MAX_JOB_ATTEMPTS times is not tried again.
+    for (const r of this.db.prepare(`SELECT * FROM jobs WHERE state = 'running'`).all() as JobRow[]) {
+      const n = this.attempts(r.id);
+      if (n < MAX_JOB_ATTEMPTS) {
+        this.db.prepare(`UPDATE jobs SET state = 'queued' WHERE id = ?`).run(r.id);
+        continue;
+      }
+      const error = `Stopped ${n} times while this job was running (the process crashed or was killed); not retried`;
+      this.log.error({ job: r.id, kind: r.kind, attempts: n }, 'job abandoned after repeated crashes');
+      const lines = [...(JSON.parse(r.log) as string[]), `error: ${error}`];
+      this.update(r.id, { state: 'failed', error, log: JSON.stringify(lines) });
+      try {
+        this.giveUps.get(r.kind)?.(JSON.parse(r.payload) as never, error);
+      } catch (e) {
+        this.log.warn({ job: r.id, err: errorMessage(e) }, 'job give-up handler failed');
+      }
+    }
+    this.db
+      .prepare(
+        `DELETE FROM job_attempts WHERE job_id NOT IN (SELECT id FROM jobs WHERE state IN ('queued','running'))`,
+      )
+      .run();
     // Old finished jobs are pruned after 30 days.
     this.db
       .prepare(`DELETE FROM jobs WHERE state IN ('done','failed') AND updated_at < ?`)
@@ -159,6 +196,12 @@ export class JobQueue {
     const handler = this.handlers.get(row.kind);
     const logLines = JSON.parse(row.log) as string[];
     let payload = JSON.parse(row.payload) as unknown;
+    // Counted before the handler runs, so a crash inside it still counts.
+    this.db
+      .prepare(
+        `INSERT INTO job_attempts (job_id, attempts) VALUES (?, 1) ON CONFLICT(job_id) DO UPDATE SET attempts = attempts + 1`,
+      )
+      .run(row.id);
     this.update(row.id, { state: 'running' });
     const ctx: JobCtx<unknown> = {
       id: row.id,
@@ -189,7 +232,10 @@ export class JobQueue {
         });
       } catch (e) {
         if (ctrl.signal.aborted && this.stopped) {
-          // Shutdown: leave it queued so the next start resumes it.
+          // Shutdown: leave it queued so the next start resumes it. A clean stop is not a crashed attempt.
+          this.db
+            .prepare(`UPDATE job_attempts SET attempts = MAX(0, attempts - 1) WHERE job_id = ?`)
+            .run(row.id);
           this.update(row.id, { state: 'queued', log: JSON.stringify(logLines) });
         } else {
           logLines.push(`error: ${errorMessage(e)}`);

@@ -72,6 +72,33 @@ describe('Supervisor', () => {
     expect(sup.stats()[0]).toMatchObject({ name: 'link', restarts: 1, generation: 1 });
   });
 
+  it('does not restart a healthy worker because the host thread itself stalled', () => {
+    FakeWorker.all = [];
+    let now = 0;
+    const fns: (() => void)[] = [];
+    const sup = new Supervisor({
+      now: () => now,
+      setInterval: (fn) => fns.push(fn),
+      clearInterval: () => undefined,
+    });
+    sup.add({ name: 'core', create: () => new FakeWorker(), start: () => undefined });
+    const w0 = FakeWorker.all[0]!;
+    // A 3 s long task on the host: the next check runs before the queued heartbeats are delivered.
+    now += 3000;
+    for (const f of fns) f();
+    expect(w0.terminated).toBe(false);
+    w0.beat(); // the queue drains
+    now += 250;
+    for (const f of fns) f();
+    expect(w0.terminated).toBe(false);
+    // A worker that really is silent is still restarted afterwards.
+    for (let i = 0; i < 10; i++) {
+      now += 250;
+      for (const f of fns) f();
+    }
+    expect(w0.terminated).toBe(true);
+  });
+
   it('restarts on error and on fatal, ignoring a stale generation', async () => {
     FakeWorker.all = [];
     const c = fakeClock();

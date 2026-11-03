@@ -4,12 +4,9 @@
  * presented frame to the render worker as a VideoFrame via requestVideoFrameCallback.
  */
 
-export type Transport = {
-  state: 'playing' | 'paused' | 'ended';
-  startedAt: number;
-  positionMs: number;
-  loop: boolean;
-};
+import type { Transport } from './host-protocol.ts';
+
+export type { Transport };
 
 export type MediaHost = {
   hubNow: () => number;
@@ -200,6 +197,11 @@ export class MediaSlot {
     });
   }
 
+  /** Post the current frame again (a restarted render worker has none for a paused video). */
+  resendFrame(): void {
+    if (this.ready && this.isVideo) this.sendFrame();
+  }
+
   private sendFrame(): void {
     const v = this.el as HTMLVideoElement;
     if (!this.host.onFrame || v.readyState < 2 || !v.videoWidth) return;
@@ -277,16 +279,17 @@ function waitFor(
 
 /**
  * Two slots per layer. Picks the slot for a key: the one already holding it, else one that holds neither
- * the live nor the armed key and is not busy fading out.
+ * the live nor the armed key and is not busy fading out. Generic so the link worker can run the same
+ * rules on its mirror of the host's media slots.
  */
-export class SlotPair {
-  constructor(readonly slots: [MediaSlot, MediaSlot]) {}
+export class SlotPair<S extends { key: string; busyUntil: number } = MediaSlot> {
+  constructor(readonly slots: [S, S]) {}
 
-  find(key: string): MediaSlot | undefined {
+  find(key: string): S | undefined {
     return key ? this.slots.find((s) => s.key === key) : undefined;
   }
 
-  pick(key: string, protect: string[], now: number): MediaSlot | undefined {
+  pick(key: string, protect: string[], now: number): S | undefined {
     const have = this.find(key);
     if (have) return have;
     const free = this.slots.filter((s) => !protect.includes(s.key) || !s.key);

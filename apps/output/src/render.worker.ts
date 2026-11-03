@@ -1,31 +1,48 @@
+import { isControl, startHeartbeat } from '@ordo/client';
 import type { AssetToRender, FromRender, ToRender } from '@ordo/renderer/messages.ts';
 import { RenderEngine } from '@ordo/renderer/engine.ts';
-import { SRC_BITMAP } from '@ordo/renderer/stacks.ts';
+import { SRC_BITMAP, type StackContent } from '@ordo/renderer/stacks.ts';
 
 /**
- * Render worker: owns the OffscreenCanvas and the RenderEngine. Bitmaps arrive from the asset worker on
- * a MessagePort; video frames, flips and clock updates from the main thread.
+ * Render worker: owns the OffscreenCanvas and the RenderEngine. From the main thread it receives only its
+ * canvas, video frames and the snapshot period; flips, content and clock updates arrive from the link
+ * worker on a port, bitmaps from the asset worker on another port (both handed over with `ports`, again
+ * after any worker restart). Supervised: heartbeat every 250 ms; a restarted render worker gets a fresh
+ * canvas and is re-armed by the link worker while the host's hold canvas shows the last frame.
  */
 
 const scope = self as unknown as {
-  postMessage(m: FromRender, transfer?: Transferable[]): void;
+  postMessage(m: unknown, transfer?: Transferable[]): void;
   onmessage: ((ev: MessageEvent<ToRender>) => void) | null;
   requestAnimationFrame?: (cb: (ts: number) => void) => number;
 };
 
+startHeartbeat(scope);
+
 let engine: RenderEngine | null = null;
 let canvasWaiter: ((c: OffscreenCanvas) => void) | null = null;
 let early: ToRender[] = [];
-// Main-thread watchdog: time of the last 'tick' from the main thread and the longest gap seen since the
-// last telemetry report (a stalled main thread cannot post ticks, so the gap grows while it is stuck).
-let lastTick = performance.now();
-let maxStall = 0;
-function sampleStall(): void {
-  maxStall = Math.max(maxStall, performance.now() - lastTick);
+let earlyOffers: { layer: number; c: StackContent<ImageBitmap> }[] = [];
+let linkPort: MessagePort | null = null;
+let assetPort: MessagePort | null = null;
+
+/** To the main thread (canvas, snapshots, lifecycle). */
+function postMain(m: FromRender, transfer: Transferable[] = []): void {
+  scope.postMessage(m, transfer);
 }
 
-function post(m: FromRender, transfer: Transferable[] = []): void {
-  scope.postMessage(m, transfer);
+/** To the link worker (held keys, telemetry, lifecycle). */
+function postLink(m: FromRender): void {
+  try {
+    linkPort?.postMessage(m);
+  } catch {
+    /* port closed: a new one arrives with the next `ports` */
+  }
+}
+
+function lifecycle(m: FromRender): void {
+  postMain(m);
+  postLink(m);
 }
 
 const raf =
@@ -34,6 +51,8 @@ const raf =
     : (cb: (ts: number) => void) => setTimeout(() => cb(performance.now()), 16) as unknown as number;
 
 const wallNow = () => performance.timeOrigin + performance.now();
+
+let readyMsg: FromRender | null = null;
 
 async function init(m: Extract<ToRender, { t: 'init' }>): Promise<void> {
   const e = new RenderEngine(
@@ -49,42 +68,64 @@ async function init(m: Extract<ToRender, { t: 'init' }>): Promise<void> {
     {
       raf,
       wallNow,
-      onHeld: (layers) => post({ t: 'held', layers }),
-      onSnapshot: (bitmap) => post({ t: 'snapshot', bitmap }, [bitmap]),
-      onLost: (reason) => post({ t: 'lost', reason }),
-      onRestored: (compositor) => post({ t: 'restored', compositor }),
+      onHeld: (layers) => postLink({ t: 'held', layers }),
+      onSnapshot: (bitmap) => postMain({ t: 'snapshot', bitmap }, [bitmap]),
+      onLost: (reason) => lifecycle({ t: 'lost', reason }),
+      onRestored: (compositor) => lifecycle({ t: 'restored', compositor }),
       requestCanvas: () =>
         new Promise<OffscreenCanvas>((resolve) => {
           canvasWaiter = resolve;
-          post({ t: 'needCanvas' });
+          postMain({ t: 'needCanvas' });
         }),
-      canvasUnused: () => post({ t: 'canvasUnused' }),
+      canvasUnused: () => postMain({ t: 'canvasUnused' }),
     },
   );
-  m.assetPort.onmessage = (ev: MessageEvent<AssetToRender>) => {
-    const a = ev.data;
-    if (a.t === 'content')
-      e.offer(a.layer, { key: a.key, kind: SRC_BITMAP, bitmap: a.bitmap, cueIndex: a.cueIndex });
-  };
+  if (m.assetPort) attachAsset(m.assetPort);
   try {
     const r = await e.start();
     engine = e;
-    post({ t: 'ready', compositor: r.kind, note: r.note });
+    readyMsg = { t: 'ready', compositor: r.kind, note: r.note };
+    lifecycle(readyMsg);
   } catch (err) {
-    post({ t: 'fatal', error: (err as Error).message });
+    lifecycle({ t: 'fatal', error: (err as Error).message });
     return;
   }
+  for (const o of earlyOffers) e.offer(o.layer, o.c);
+  earlyOffers = [];
   for (const x of early) handle(x);
   early = [];
   setInterval(() => e.flushHeld(), 40);
   // Long tasks are not observable in workers (no PerformanceObserver 'longtask' entries): the engine's
   // FrameClock reports rAF stalls of 50 ms or more as the worker's long-task count instead.
-  setInterval(() => {
-    sampleStall();
-    post({ t: 'telemetry', tel: e.telemetry(), mainThreadStallMs: Math.round(maxStall) });
-    maxStall = 0;
-  }, 250);
-  setInterval(sampleStall, 50);
+  setInterval(() => postLink({ t: 'telemetry', tel: e.telemetry() }), 250);
+}
+
+function attachAsset(port: MessagePort): void {
+  try {
+    assetPort?.close();
+  } catch {
+    /* closed */
+  }
+  assetPort = port;
+  port.onmessage = (ev: MessageEvent<AssetToRender>) => {
+    const a = ev.data;
+    if (a.t !== 'content') return;
+    const c = { key: a.key, kind: SRC_BITMAP, bitmap: a.bitmap, cueIndex: a.cueIndex };
+    if (engine) engine.offer(a.layer, c);
+    else earlyOffers.push({ layer: a.layer, c });
+  };
+}
+
+function attachLink(port: MessagePort): void {
+  try {
+    linkPort?.close();
+  } catch {
+    /* closed */
+  }
+  linkPort = port;
+  port.onmessage = (ev: MessageEvent<ToRender>) => handle(ev.data);
+  // A restarted link worker that connects after the engine started still needs to know it is ready.
+  if (readyMsg && engine) postLink({ t: 'telemetry', tel: engine.telemetry() });
 }
 
 function handle(m: ToRender): void {
@@ -123,27 +164,32 @@ function handle(m: ToRender): void {
       e.setSnapshot(m.everyMs, m.width, m.height);
       return;
     case 'frames':
-      post({ t: 'frames', frames: e.clock.frames() });
+      postLink({ t: 'frames', frames: e.clock.frames() });
       return;
     case 'tick':
     case 'init':
     case 'canvas':
+    case 'ports':
       return;
   }
 }
 
 scope.onmessage = (ev) => {
   const m = ev.data;
-  if (m.t === 'tick') {
-    sampleStall();
-    lastTick = performance.now();
-    return;
+  if (isControl(m)) return;
+  switch (m.t) {
+    case 'canvas':
+      canvasWaiter?.(m.canvas);
+      canvasWaiter = null;
+      return;
+    case 'ports':
+      attachAsset(m.asset);
+      attachLink(m.link);
+      return;
+    case 'init':
+      void init(m);
+      return;
+    default:
+      handle(m);
   }
-  if (m.t === 'canvas') {
-    canvasWaiter?.(m.canvas);
-    canvasWaiter = null;
-    return;
-  }
-  if (m.t === 'init') void init(m);
-  else handle(m);
 };

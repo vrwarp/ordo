@@ -8,6 +8,8 @@ import {
   type Slide,
   type TextStyle,
 } from '@ordo/domain';
+import { clampLook, clampSlide } from './clamp.ts';
+import type { AssetJob } from './messages.ts';
 import type { PropsModel } from './props.ts';
 import { type Ctx2D, type ImageLookup, drawImageFit, drawSlide2D, drawText, fillColor } from './text2d.ts';
 
@@ -131,4 +133,37 @@ export function renderSlideThumbnail(
   if (!ctx) throw new Error('2D context unavailable');
   drawSlideThumbnail(ctx, slide, look, images, width, height, nextSlide, opts);
   return canvas.transferToImageBitmap();
+}
+
+/** Families every output can draw without a loaded font file (the rasterizer's fallback chain). */
+export const FALLBACK_FAMILIES: ReadonlySet<string> = new Set([
+  'inter',
+  'segoe ui',
+  'arial',
+  'helvetica',
+  'sans-serif',
+  'serif',
+  'monospace',
+  'system-ui',
+]);
+
+/** Every font family a raster job draws text with (clamped, deduplicated, lower-cased). */
+export function jobFontFamilies(job: AssetJob): string[] {
+  const out = new Set<string>();
+  const add = (s: { fontFamily?: unknown } | undefined) => {
+    if (s && typeof s.fontFamily === 'string' && s.fontFamily.trim())
+      out.add(s.fontFamily.trim().toLowerCase().slice(0, 200));
+  };
+  const look = clampLook(job.kind === 'image' ? undefined : job.look);
+  const rule = look.layers.slide;
+  if (job.kind === 'slide') {
+    if (rule.mode === 'authored')
+      for (const o of clampSlide(job.slide).objects) if (o.type === 'text' && o.text.trim()) add(o.style);
+    if (rule.mode === 'lyricOnly') {
+      add(rule.style);
+      if (rule.nextSlide && job.nextSlide) add(rule.nextSlide.style);
+    }
+  } else if (job.kind === 'lowerThird') add(lowerThirdStyle(look).style);
+  else if (job.kind === 'props') for (const it of job.model.items ?? []) add(it.style);
+  return [...out];
 }

@@ -1,51 +1,33 @@
 import { mkdirSync } from 'node:fs';
-import type { IncomingMessage } from 'node:http';
 import { join } from 'node:path';
-import cookie from '@fastify/cookie';
-import multipart from '@fastify/multipart';
-import { API_PREFIX, COOKIE_SESSION, HEADER_TOKEN } from '@ordo/protocol';
-import Fastify, { type FastifyInstance, LogController } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import type { Logger } from 'pino';
-import { type Access, Auth, allowed, type Principal } from './auth.ts';
+import { Auth } from './auth.ts';
 import { Backups } from './backup.ts';
 import { type HubConfig, loadConfig } from './config.ts';
 import { type DB, openDb } from './db.ts';
-import { errorMessage, forbidden, HttpError, unauthorized } from './errors.ts';
+import { errorMessage } from './errors.ts';
 import { FontService } from './fonts/service.ts';
+import { createHttpApp, type RouteInfo, withTimeout } from './http.ts';
 import { ImportService } from './imports.ts';
 import { JobQueue } from './jobs.ts';
 import { Library } from './library.ts';
-import { LiveService } from './live.ts';
-import { createLogger, LogRing, redactUrl } from './log.ts';
+import { LiveService, librarySource } from './live.ts';
+import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
-import { hostAllowed, hostnameOf, ipInAny, normaliseIp } from './net.ts';
-import { cleanupStaleUploads, registerApi } from './routes.ts';
-import { appFor, securityHeaders, StaticApps } from './static.ts';
-import { MAX_UPLOAD_BYTES, Store } from './store.ts';
+import {
+  cleanupStaleUploads,
+  type LibraryApiCtx,
+  type LiveDiag,
+  registerApiNotFound,
+  registerLibraryApi,
+  registerLiveApi,
+} from './routes.ts';
+import { StaticApps } from './static.ts';
+import { Store } from './store.ts';
 import { SocketHub } from './ws.ts';
 
-declare module 'fastify' {
-  interface FastifyContextConfig {
-    access?: Access;
-  }
-  interface FastifyRequest {
-    principal: Principal | null;
-  }
-}
-
-export type RouteInfo = { method: string; url: string; access: Access };
-
-/** Throws when a route does not declare its access role. */
-export function checkRouteAccess(opts: {
-  method: string | string[];
-  url: string;
-  config?: unknown;
-}): RouteInfo {
-  const access = (opts.config as { access?: Access } | undefined)?.access;
-  const method = String(opts.method);
-  if (!access) throw new Error(`Route ${method} ${opts.url} does not declare an access role`);
-  return { method, url: opts.url, access };
-}
+export { checkRouteAccess, type RouteInfo } from './http.ts';
 
 export type Hub = {
   app: FastifyInstance;
@@ -85,27 +67,28 @@ export function venueTimeZone(fromSettings: string | undefined, fallback: string
   return 'UTC';
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number, onTimeout?: () => void): Promise<T | undefined> {
-  return new Promise((resolve) => {
-    const t = setTimeout(() => {
-      onTimeout?.();
-      resolve(undefined);
-    }, ms);
-    t.unref();
-    p.then(
-      (v) => {
-        clearTimeout(t);
-        resolve(v);
-      },
-      () => {
-        clearTimeout(t);
-        resolve(undefined);
-      },
-    );
-  });
+/** The live side's diagnostics, read in-process. */
+export function liveDiagOf(live: LiveService, sockets: SocketHub): LiveDiag {
+  return {
+    journal: live.journalTail(500),
+    health: sockets.healthTable(),
+    sockets: sockets.size,
+    seq: live.state.seq,
+    mode: live.state.mode,
+    playlist: live.state.resolved?.playlist.name,
+    extra: {
+      restoreWarnings: live.restoreWarnings,
+      degraded: live.state.resolved?.degraded,
+      socketLimitClosures: sockets.limitClosures,
+    },
+  };
 }
 
-/** Build the hub in-process (tests) or for main.ts. Nothing listens until `listen()`. */
+/**
+ * The whole hub in one process: tests, `--single`, and ORDO_SINGLE_PROCESS=1. Production runs the same
+ * parts split over two supervised processes (supervisor.ts, liveproc.ts, libproc.ts). Nothing listens
+ * until `listen()`.
+ */
 export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub> {
   const cfg: HubConfig = { ...loadConfig(process.env), ...overrides };
   mkdirSync(cfg.dataDir, { recursive: true });
@@ -122,132 +105,23 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   const media = new MediaService(lib, store, jobs, cfg, log);
   const fonts = new FontService(lib, store, jobs, cfg, log);
   const imports = new ImportService(lib, store, jobs, media, cfg, log);
-  const live = new LiveService(db, lib, log, { snapshotIntervalMs: cfg.snapshotIntervalMs });
+  const live = new LiveService(db, librarySource(lib), log, { snapshotIntervalMs: cfg.snapshotIntervalMs });
   const timeZone = () => venueTimeZone(lib.getSetting('general').timeZone, cfg.timeZone);
   const backups = new Backups(db, lib, { dataDir: cfg.dataDir, timeZone }, log);
   const statics = new StaticApps(cfg.appsDir, cfg.domain);
 
-  const trusted = (addr: string) => cfg.trustedProxies.length > 0 && ipInAny(addr, cfg.trustedProxies);
-  /**
-   * The host the browser addressed: X-Forwarded-Host from the trusted reverse proxy (DSM sets it), else the
-   * Host header. Used for the Host allow-list, app routing and the CSP connect-src. Same rule as Fastify's
-   * `request.host` (last forwarded entry), which the static server uses.
-   */
-  const effectiveHost = (req: IncomingMessage): string => {
-    const peer = normaliseIp(req.socket.remoteAddress ?? '');
-    const xfh = req.headers['x-forwarded-host'];
-    const entries = (Array.isArray(xfh) ? xfh.join(',') : (xfh ?? '')).split(',').map((s) => s.trim());
-    const forwarded = entries[entries.length - 1];
-    return (forwarded && trusted(peer) ? forwarded : (req.headers.host ?? '')).toLowerCase();
-  };
-  const hostOk = (host: string) => hostAllowed(hostnameOf(host), cfg.domain, cfg.allowedHosts);
-  /** Client IP for raw requests (WebSocket upgrade): the right-most untrusted X-Forwarded-For hop. */
-  const clientIp = (req: IncomingMessage): string => {
-    const peer = normaliseIp(req.socket.remoteAddress ?? '');
-    if (!trusted(peer)) return peer;
-    const xff = String(req.headers['x-forwarded-for'] ?? '')
-      .split(',')
-      .map((s) => normaliseIp(s.trim()))
-      .filter(Boolean);
-    for (let i = xff.length - 1; i >= 0; i--) if (!trusted(xff[i]!)) return xff[i]!;
-    return xff[0] ?? peer;
-  };
-
-  const app = Fastify({
-    loggerInstance: log,
-    logController: new LogController({ disableRequestLogging: true }),
-    trustProxy: (addr: string) => trusted(normaliseIp(addr)),
-    bodyLimit: 32 * 1024 * 1024,
-    routerOptions: { maxParamLength: 300 },
-    return503OnClosing: true,
-    forceCloseConnections: true,
+  const http = await createHttpApp({ cfg, log, auth: () => auth });
+  const app = http.app;
+  const sockets = new SocketHub(auth, live, () => lib.getSetting('outputs'), log, {
+    domain: cfg.domain,
+    healthIntervalMs: cfg.healthIntervalMs,
+    clientIp: http.clientIp,
   });
-  await app.register(cookie);
-  await app.register(multipart, {
-    limits: { fileSize: MAX_UPLOAD_BYTES, files: 50, fields: 30, fieldSize: 1024 * 1024, parts: 100 },
-  });
-  // Raw chunk bodies for resumable uploads stream straight to disk.
-  app.addContentTypeParser('application/offset+octet-stream', (_req, payload, done) => done(null, payload));
+  lib.onChange((changes) => sockets.broadcastLibrary(changes));
 
-  // Every route must declare who may call it (design/21): fail at startup otherwise.
-  const routes: RouteInfo[] = [];
-  app.addHook('onRoute', (opts) => {
-    routes.push(checkRouteAccess(opts));
-  });
-  app.decorateRequest('principal', null);
-
-  app.addHook('onRequest', async (req, reply) => {
-    const isApi = req.url.startsWith(`${API_PREFIX}/`) || req.url === API_PREFIX;
-    const peer = normaliseIp(req.socket.remoteAddress ?? '');
-    const host = effectiveHost(req.raw);
-    // Host allow-list (design/21): the venue domain and its role hosts, localhost and loopback only, so a
-    // stray DNS name or an IP scan never gets an app page or a session cookie scoped to it.
-    if (!hostOk(host)) {
-      log.warn({ host, ip: req.ip }, 'request for an unknown host refused');
-      throw new HttpError(421, 'misdirected', `This hub does not serve ${host || 'an empty Host'}`);
-    }
-    const xfp = String(req.headers['x-forwarded-proto'] ?? '')
-      .split(',')[0]
-      ?.trim()
-      .toLowerCase();
-    // Forwarded plain-HTTP requests from the public proxy are upgraded (design/21).
-    if (xfp === 'http' && trusted(peer) && cfg.domain !== 'localhost') {
-      if (req.method === 'GET' || req.method === 'HEAD')
-        return reply.redirect(`https://${host || cfg.domain}${req.url}`, 308);
-      throw forbidden('HTTPS required');
-    }
-    const sec = securityHeaders(isApi ? 'api' : appFor(host, req.url.split('?')[0]!, cfg.domain).app, {
-      https: req.protocol === 'https',
-      host,
-    });
-    for (const [k, v] of Object.entries(sec)) reply.header(k, v);
-    const tokenHeader = req.headers[HEADER_TOKEN];
-    const q = req.query as Record<string, unknown> | undefined;
-    const token =
-      typeof tokenHeader === 'string' ? tokenHeader : typeof q?.token === 'string' ? q.token : undefined;
-    req.principal = auth.principal({ cookie: req.cookies?.[COOKIE_SESSION], token });
-    const access = (req.routeOptions.config as { access?: Access } | undefined)?.access ?? 'public';
-    if (!allowed(access, req.principal)) {
-      if (token && !req.principal) log.warn({ url: redactUrl(req.url), ip: req.ip }, 'invalid output token');
-      throw req.principal ? forbidden(`This needs the ${access} role`) : unauthorized();
-    }
-  });
-
-  app.addHook('onResponse', async (req, reply) => {
-    if (!req.url.startsWith(API_PREFIX)) return;
-    const level = req.method === 'GET' || req.method === 'HEAD' ? 'debug' : 'info';
-    log[level](
-      {
-        method: req.method,
-        url: redactUrl(req.url),
-        status: reply.statusCode,
-        ms: Math.round(reply.elapsedTime),
-        ip: req.ip,
-      },
-      'request',
-    );
-  });
-
-  app.setErrorHandler((err, req, reply) => {
-    if (err instanceof HttpError) {
-      if (err.status === 429) reply.header('Retry-After', String(err.extra?.retryAfterS ?? 900));
-      return reply.code(err.status).send({ error: { code: err.code, message: err.message, ...err.extra } });
-    }
-    const e = err as { statusCode?: number; code?: string; message: string };
-    const status = e.statusCode && e.statusCode >= 400 && e.statusCode < 600 ? e.statusCode : 500;
-    if (status >= 500) log.error({ err: errorMessage(err), url: redactUrl(req.url) }, 'request failed');
-    return reply.code(status).send({
-      error: {
-        code: e.code ?? (status >= 500 ? 'internal' : 'bad_request'),
-        message: status >= 500 ? 'Internal error' : e.message,
-      },
-    });
-  });
-
-  let sockets!: SocketHub;
   const hub: Hub = {
-    app: app as unknown as FastifyInstance,
-    routes,
+    app,
+    routes: http.routes,
     cfg,
     db,
     lib,
@@ -258,9 +132,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     fonts,
     imports,
     live,
-    get sockets() {
-      return sockets;
-    },
+    sockets,
     backups,
     log,
     ring,
@@ -287,13 +159,46 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
       db.close();
     },
   };
-  sockets = new SocketHub(auth, live, lib, log, {
-    domain: cfg.domain,
-    healthIntervalMs: cfg.healthIntervalMs,
-    clientIp,
-  });
 
-  registerApi(hub.app, hub);
+  const libCtx: LibraryApiCtx = {
+    cfg,
+    lib,
+    auth,
+    store,
+    jobs,
+    media,
+    fonts,
+    imports,
+    backups,
+    log,
+    ring,
+    live: { locks: () => live.locks(), mode: () => live.state.mode },
+    disconnectOutput: (id, reason) => sockets.disconnectOutput(id, reason),
+    liveDiag: async () => liveDiagOf(live, sockets),
+  };
+  registerLiveApi(app, {
+    cfg,
+    auth,
+    live,
+    log,
+    outputConfig: (outputId) => {
+      const s = lib.getSettings();
+      const output = s.outputs.find((o) => o.id === outputId);
+      if (!output) return undefined;
+      const { token: _t, ...out } = output;
+      const logo = s.general.logoMediaId ? lib.media.get(s.general.logoMediaId) : undefined;
+      return {
+        output: out,
+        looks: s.looks,
+        audio: s.audio,
+        general: s.general,
+        logo,
+        fonts: lib.listFonts(),
+      };
+    },
+  });
+  registerLibraryApi(app, libCtx);
+  registerApiNotFound(app);
   app.route({
     method: ['GET', 'HEAD'],
     url: '/*',
@@ -301,8 +206,8 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     handler: (req, reply) => statics.serve(req, reply),
   });
   app.server.on('upgrade', (req, socket, head) => {
-    const host = effectiveHost(req);
-    if (!hostOk(host)) {
+    const host = http.effectiveHost(req);
+    if (!http.hostOk(host)) {
       log.warn({ host }, 'websocket for an unknown host refused');
       socket.write('HTTP/1.1 421 Misdirected Request\r\nConnection: close\r\n\r\n');
       socket.destroy();

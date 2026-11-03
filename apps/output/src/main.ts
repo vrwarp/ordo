@@ -1,11 +1,13 @@
-import { OutputApp } from './app.ts';
+import { OutputHost } from './host.ts';
+import type { ChaosHooks } from './host-protocol.ts';
 import './style.css';
 import { type WakeSentinel, WakeLockKeeper } from './wakelock.ts';
 
 /**
- * Output window entry. URL: `?output=<id>&token=<token>` (plus `&out=K` in path mode). Test hooks:
- * `?test=1` writes the live slide cue index into the top-left pixel; `?renderer=2d` forces the Canvas 2D
- * compositor; `?res=1280x720` overrides the render resolution.
+ * Output window entry: the thin main thread (design/25). URL: `?output=<id>&token=<token>` (plus `&out=K`
+ * in path mode). Test hooks: `?test=1` writes the live slide cue index into the top-left pixel and exposes
+ * `__ordo.chaos`; `?renderer=2d` forces the Canvas 2D compositor; `?res=1280x720` overrides the render
+ * resolution. Everything that is not DOM runs in the link worker (link.worker.ts).
  */
 
 const q = new URLSearchParams(location.search);
@@ -34,7 +36,7 @@ const mediaBox = document.getElementById('media') as HTMLElement;
 canvas.width = width;
 canvas.height = height;
 
-const app = new OutputApp({
+const host = new OutputHost({
   canvas,
   hold,
   mediaBox,
@@ -46,12 +48,27 @@ const app = new OutputApp({
 
 declare global {
   interface Window {
-    __ordo: { telemetry(): Record<string, unknown>; state(): Record<string, unknown>; app: OutputApp };
+    __ordo: {
+      /** Synchronous: the last snapshot the link worker published. */
+      telemetry(): Record<string, unknown>;
+      state(): Record<string, unknown>;
+      host: OutputHost;
+      chaos?: ChaosHooks;
+    };
   }
 }
-window.__ordo = { telemetry: () => app.telemetry(), state: () => app.introspect(), app };
+window.__ordo = {
+  telemetry: () => host.telemetry(),
+  state: () => host.state(),
+  host,
+  chaos: testMode ? host.chaos() : undefined,
+};
 
-void app.start().catch((err: Error) => app.diag.showFatal('The output failed to start.', err.message));
+try {
+  host.start();
+} catch (err) {
+  host.diag.showFatal('The output failed to start.', (err as Error).message);
+}
 
 // ---- window behaviour: fullscreen, wake lock, keys, cursor ----
 
@@ -72,7 +89,7 @@ const wake = new WakeLockKeeper({
   request: wakeApi ? () => wakeApi.request('screen') : undefined,
   visible: () => document.visibilityState === 'visible',
   setInterval: (fn, ms) => setInterval(fn, ms),
-  log: (m) => app.diag.log(m),
+  log: (m) => host.log(m),
 });
 const keepAwake = (): Promise<void> => wake.acquire();
 
@@ -90,19 +107,19 @@ window.addEventListener(
     }
     if (e.ctrlKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
       e.preventDefault();
-      app.diag.toggle();
+      host.diag.toggle();
       return;
     }
     // Every other key is ignored, but counts as a gesture for fullscreen and audio.
     e.preventDefault();
     void goFullscreen();
-    app.onGesture();
+    host.onGesture();
   },
   true,
 );
 window.addEventListener('pointerdown', () => {
   void goFullscreen();
-  app.onGesture();
+  host.onGesture();
 });
 window.addEventListener('contextmenu', (e) => e.preventDefault());
 

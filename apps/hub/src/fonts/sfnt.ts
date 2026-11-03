@@ -68,6 +68,28 @@ const WOFF2_TAGS = [
   'Sill',
 ];
 
+/**
+ * Decode-time limits for font files (design/25): a table directory with more entries than any real font,
+ * or a name/OS/2/head table larger than this, is refused instead of being inflated or walked.
+ */
+export const FONT_LIMITS = {
+  maxTables: 256,
+  /** Bytes of one table we read (name tables of large CJK fonts stay well under 1 MiB). */
+  maxTableBytes: 4 * 1024 * 1024,
+  /** Decompressed WOFF2 table data. */
+  maxWoff2Bytes: 64 * 1024 * 1024,
+  maxNameRecords: 10_000,
+} as const;
+
+function checkCount(num: number): void {
+  if (num > FONT_LIMITS.maxTables)
+    throw new Error(`font has ${num} tables; the limit is ${FONT_LIMITS.maxTables}`);
+}
+function checkTable(t: string, len: number): void {
+  if (len > FONT_LIMITS.maxTableBytes)
+    throw new Error(`font table ${t.trim()} is ${len} bytes; the limit is ${FONT_LIMITS.maxTableBytes}`);
+}
+
 function tag(b: Buffer, o: number): string {
   return b.toString('latin1', o, o + 4);
 }
@@ -80,6 +102,7 @@ export function fontTables(buf: Uint8Array): Map<string, Buffer> {
   const sig = tag(b, 0);
   if (sig === 'wOFF') {
     const num = b.readUInt16BE(12);
+    checkCount(num);
     for (let i = 0; i < num; i++) {
       const e = 44 + i * 20;
       const t = tag(b, e);
@@ -87,8 +110,9 @@ export function fontTables(buf: Uint8Array): Map<string, Buffer> {
       const off = b.readUInt32BE(e + 4);
       const comp = b.readUInt32BE(e + 8);
       const orig = b.readUInt32BE(e + 12);
+      checkTable(t, Math.max(orig, comp));
       const data = b.subarray(off, off + comp);
-      out.set(t, comp < orig ? inflateSync(data) : Buffer.from(data));
+      out.set(t, comp < orig ? inflateSync(data, { maxOutputLength: orig }) : Buffer.from(data));
     }
     return out;
   }
@@ -96,6 +120,7 @@ export function fontTables(buf: Uint8Array): Map<string, Buffer> {
     // Collection directories are not supported (single fonts only).
     if (b.readUInt32BE(4) === 0x74746366) throw new Error('font collections are not supported');
     const num = b.readUInt16BE(12);
+    checkCount(num);
     const totalCompressed = b.readUInt32BE(20);
     let p = 48;
     const readBase128 = (): number => {
@@ -122,7 +147,13 @@ export function fontTables(buf: Uint8Array): Map<string, Buffer> {
       const length = transformed ? readBase128() : origLength;
       entries.push({ tag: t, length });
     }
-    const data = brotliDecompressSync(b.subarray(p, p + totalCompressed));
+    const total = entries.reduce((n, e) => n + e.length, 0);
+    if (total > FONT_LIMITS.maxWoff2Bytes)
+      throw new Error(`font tables total ${total} bytes; the limit is ${FONT_LIMITS.maxWoff2Bytes}`);
+    for (const e of entries) if (want.has(e.tag)) checkTable(e.tag, e.length);
+    const data = brotliDecompressSync(b.subarray(p, p + totalCompressed), {
+      maxOutputLength: Math.max(1, total),
+    });
     let off = 0;
     for (const e of entries) {
       if (want.has(e.tag)) out.set(e.tag, data.subarray(off, off + e.length));
@@ -132,12 +163,14 @@ export function fontTables(buf: Uint8Array): Map<string, Buffer> {
   }
   if (sig === 'ttcf') throw new Error('font collections (.ttc) are not supported');
   const num = b.readUInt16BE(4);
+  checkCount(num);
   for (let i = 0; i < num; i++) {
     const e = 12 + i * 16;
     const t = tag(b, e);
     if (!want.has(t)) continue;
     const off = b.readUInt32BE(e + 8);
     const len = b.readUInt32BE(e + 12);
+    checkTable(t, len);
     out.set(t, b.subarray(off, off + len));
   }
   return out;
@@ -155,6 +188,7 @@ function decodeName(raw: Buffer, platform: number): string {
 /** name table: id → best string (Windows English first, then Unicode, then Mac). */
 export function readNames(name: Buffer): Map<number, string> {
   const count = name.readUInt16BE(2);
+  if (count > FONT_LIMITS.maxNameRecords) throw new Error(`font name table has ${count} records`);
   const strOff = name.readUInt16BE(4);
   const best = new Map<number, { score: number; value: string }>();
   for (let i = 0; i < count; i++) {

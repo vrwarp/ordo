@@ -34,8 +34,29 @@ export const OutputHealth = z.object({
   recentLog: z.array(z.string().max(300)).max(50).optional(),
   /** Which compositor is drawing: webgpu or 2d. */
   compositor: z.enum(['webgpu', '2d']).optional(),
-  /** Ms since the main thread last ran the watchdog tick, as measured by the render worker. */
+  /** Ms since the main thread last ran the watchdog tick, as measured by the output's link worker. */
   mainThreadStallMs: z.number().optional(),
+  /** Supervised workers of the window (design/25): restarts and give-ups per worker. */
+  workers: z
+    .array(
+      z.object({
+        name: z.string().max(40),
+        generation: z.number(),
+        restarts: z.number(),
+        lastReason: z.string().max(300).optional(),
+        gaveUp: z.boolean(),
+      }),
+    )
+    .max(8)
+    .optional(),
+  /** Slides and media that failed to rasterize or decode and are skipped for the rest of the service. */
+  quarantined: z.object({ count: z.number(), items: z.array(z.string().max(300)).max(20) }).optional(),
+  /** Font families requested by drawn text that are not loaded (drawn in the fallback font). */
+  fontFallbacks: z.array(z.string().max(200)).max(20).optional(),
+  /** Service-cache files found corrupt or truncated and fetched again. */
+  cacheRepairs: z.number().optional(),
+  /** What carries the window's fallback bus: a handed-over MessagePort, or the window.postMessage relay. */
+  busTransport: z.enum(['port', 'window']).optional(),
 });
 export type OutputHealth = z.infer<typeof OutputHealth>;
 export type OutputHealthEntry = OutputHealth & {

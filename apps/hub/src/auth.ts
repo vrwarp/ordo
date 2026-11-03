@@ -4,7 +4,13 @@ import type { Output } from '@ordo/domain';
 import type { Logger } from 'pino';
 import type { DB } from './db.ts';
 import { badRequest, HttpError } from './errors.ts';
-import type { Library } from './library.ts';
+
+/** What Auth reads besides the sessions table: the PIN hashes and the output tokens. The Library fits. */
+export type AuthStore = {
+  getInternal<T>(key: string): T | undefined;
+  putInternal(key: string, value: unknown): void;
+  getSetting(key: 'outputs'): Output[];
+};
 
 export type SessionRole = 'operate' | 'edit';
 export type Principal =
@@ -39,9 +45,28 @@ export function validPin(pin: unknown): pin is string {
 export class Auth {
   constructor(
     private db: DB,
-    private lib: Library,
+    private lib: AuthStore,
     private log: Logger,
+    /**
+     * `shared`: the live process's connection to the library's ordo.db. Session reads work as usual;
+     * the sliding writes are best effort (skipped when the library process holds the write lock), so a
+     * busy library can never stall or fail a request in the live process.
+     */
+    private opts: { shared?: boolean } = {},
   ) {}
+
+  /** Run a session-table write; in shared mode a failure (SQLITE_BUSY) is logged and skipped. */
+  private write(fn: () => void): void {
+    if (!this.opts.shared) {
+      fn();
+      return;
+    }
+    try {
+      fn();
+    } catch (e) {
+      this.log.debug({ err: (e as Error).message }, 'session write skipped');
+    }
+  }
 
   pins(): PinHashes | undefined {
     return this.lib.getInternal<PinHashes>('_auth.pins');
@@ -141,14 +166,16 @@ export class Auth {
     const row = this.db.prepare(`SELECT * FROM sessions WHERE id = ?`).get(id) as SessionRow | undefined;
     if (!row) return null;
     if (row.expires_at < now) {
-      this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
+      this.write(() => this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id));
       return null;
     }
     if (now - row.last_seen > 30_000) {
       const ttl = row.remembered ? REMEMBERED_SESSION_MS : SESSION_MS;
-      this.db
-        .prepare(`UPDATE sessions SET last_seen = ?, expires_at = ? WHERE id = ?`)
-        .run(now, now + ttl, id);
+      this.write(() =>
+        this.db
+          .prepare(`UPDATE sessions SET last_seen = ?, expires_at = ? WHERE id = ?`)
+          .run(now, now + ttl, id),
+      );
     }
     return { id, role: row.role };
   }
@@ -159,14 +186,25 @@ export class Auth {
    * the session no longer exists or has expired, so the socket can be closed.
    */
   touchSession(id: string, now = Date.now()): boolean {
-    const row = this.db.prepare(`SELECT * FROM sessions WHERE id = ?`).get(id) as SessionRow | undefined;
+    let row: SessionRow | undefined;
+    try {
+      row = this.db.prepare(`SELECT * FROM sessions WHERE id = ?`).get(id) as SessionRow | undefined;
+    } catch (e) {
+      // Shared mode with ordo.db unreadable for a moment: keep the socket rather than guess.
+      if (this.opts.shared) return true;
+      throw e;
+    }
     if (!row) return false;
     if (row.expires_at < now) {
-      this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
+      this.write(() => this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id));
       return false;
     }
     const ttl = row.remembered ? REMEMBERED_SESSION_MS : SESSION_MS;
-    this.db.prepare(`UPDATE sessions SET last_seen = ?, expires_at = ? WHERE id = ?`).run(now, now + ttl, id);
+    this.write(() =>
+      this.db
+        .prepare(`UPDATE sessions SET last_seen = ?, expires_at = ? WHERE id = ?`)
+        .run(now, now + ttl, id),
+    );
     return true;
   }
 
@@ -211,7 +249,13 @@ export class Auth {
       if (o)
         return { kind: 'token', role: o.kind === 'stage' ? 'stage' : 'output', outputId: o.id, output: o };
     }
-    const s = this.session(opts.cookie);
+    let s: { id: string; role: SessionRole } | null = null;
+    try {
+      s = this.session(opts.cookie);
+    } catch (e) {
+      if (!this.opts.shared) throw e;
+      this.log.warn({ err: (e as Error).message }, 'sessions unreadable');
+    }
     if (s) return { kind: 'session', role: s.role, sessionId: s.id };
     return null;
   }

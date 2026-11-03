@@ -1,6 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
-import type { LiveState } from '@ordo/domain';
+import type { LiveState, Output } from '@ordo/domain';
 import {
   APP_VERSION,
   COOKIE_SESSION,
@@ -17,7 +17,7 @@ import type { Logger } from 'pino';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { Auth, Principal } from './auth.ts';
 import { errorMessage, HttpError } from './errors.ts';
-import type { Change, Library } from './library.ts';
+import type { Change } from './library.ts';
 import { LiveRejection, type LiveService } from './live.ts';
 
 export const QUEUE_LIMIT = 100;
@@ -26,6 +26,19 @@ const HEALTH_STALE_MS = 3500;
 export const SESSION_TOUCH_MS = 30_000;
 /** Recently acknowledged command ids kept for de-duplication of re-submissions after a reconnect. */
 export const RECENT_CMD_IDS = 1000;
+
+/**
+ * Per-socket limits (design/25 "WebSocket from clients"). A socket that breaks one is closed with
+ * `bye` + 1008; it reconnects like after any blip, and no other socket is affected.
+ * - MAX_MESSAGE_BYTES: every message, except the two that carry a whole state or presentation from the
+ *   operator (`live.adopt`, `preview`), which may use MAX_LARGE_MESSAGE_BYTES.
+ * - Rate: a token bucket of RATE_BURST messages refilled at RATE_PER_S (a held key auto-repeats at about
+ *   30 per second; health and clock pings add a few).
+ */
+export const MAX_MESSAGE_BYTES = 64 * 1024;
+export const MAX_LARGE_MESSAGE_BYTES = 16 * 1024 * 1024;
+export const RATE_BURST = 50;
+export const RATE_PER_S = 50;
 
 type Client = {
   ws: WebSocket;
@@ -38,6 +51,9 @@ type Client = {
   ip: string;
   /** Last time this socket slid its session (session principals only). */
   touched: number;
+  /** Token bucket for the message rate limit. */
+  tokens: number;
+  refilled: number;
 };
 
 export function parseCookies(header: string | undefined): Record<string, string> {
@@ -77,22 +93,28 @@ export class SocketHub {
   private pingTimer?: NodeJS.Timeout;
   /** Command id -> journal seq for the last RECENT_CMD_IDS accepted commands (insertion ordered). */
   private recentCmds = new Map<string, number>();
+  /** Commands accepted for submission but not yet applied (queued behind a goLive). */
+  private pendingCmds = new Map<string, Promise<number>>();
+
+  /** Sockets closed for breaking a limit, by reason (diagnostics). */
+  readonly limitClosures: Record<string, number> = {};
 
   constructor(
     private auth: Auth,
     private live: LiveService,
-    private lib: Library,
+    /** The configured outputs (for the health table); the Library's or the live process's cached copy. */
+    private outputs: () => Output[],
     private log: Logger,
     private opts: { domain: string; healthIntervalMs: number; clientIp: (req: IncomingMessage) => string },
   ) {
     this.wss = new WebSocketServer({
       noServer: true,
-      maxPayload: 64 * 1024 * 1024,
+      // The hard cap; per-message limits by type are enforced in attach().
+      maxPayload: MAX_LARGE_MESSAGE_BYTES,
       perMessageDeflate: false,
     });
     live.onDelta((d) => this.broadcastDelta(d));
     live.onState((s) => this.broadcastState(s));
-    lib.onChange((changes) => this.broadcastLibrary(changes));
   }
 
   start(): void {
@@ -173,7 +195,18 @@ export class SocketHub {
   }
 
   private attach(ws: WebSocket, principal: Principal | null, ip: string, hadToken: boolean): void {
-    const c: Client = { ws, principal, inflight: 0, needsState: false, alive: true, ip, touched: Date.now() };
+    const now = Date.now();
+    const c: Client = {
+      ws,
+      principal,
+      inflight: 0,
+      needsState: false,
+      alive: true,
+      ip,
+      touched: now,
+      tokens: RATE_BURST,
+      refilled: now,
+    };
     this.clients.add(c);
     ws.on('pong', () => {
       c.alive = true;
@@ -181,8 +214,15 @@ export class SocketHub {
     ws.on('message', (data, isBinary) => {
       if (isBinary) return;
       try {
+        const bytes = Array.isArray(data)
+          ? data.reduce((n, b) => n + b.length, 0)
+          : (data as Buffer | ArrayBuffer).byteLength;
+        if (!this.withinRate(c)) return this.closeForLimit(c, 'rate-limited');
+        const raw = data.toString();
+        if (bytes > MAX_MESSAGE_BYTES && !this.largeAllowed(c, raw))
+          return this.closeForLimit(c, 'too-large');
         if (!this.touchSession(c)) return;
-        this.onMessage(c, data.toString());
+        this.onMessage(c, raw);
       } catch (e) {
         this.log.error({ err: errorMessage(e) }, 'ws message handler failed');
       }
@@ -201,6 +241,38 @@ export class SocketHub {
         this.bye(c, 'unauthorized');
       });
     }
+  }
+
+  /** Token bucket: RATE_BURST messages, refilled at RATE_PER_S. */
+  private withinRate(c: Client, now = Date.now()): boolean {
+    c.tokens = Math.min(RATE_BURST, c.tokens + ((now - c.refilled) / 1000) * RATE_PER_S);
+    c.refilled = now;
+    if (c.tokens < 1) return false;
+    c.tokens -= 1;
+    return true;
+  }
+
+  /** Only an operator's `live.adopt` and `preview` may exceed MAX_MESSAGE_BYTES. */
+  private largeAllowed(c: Client, raw: string): boolean {
+    if (c.role !== 'operate') return false;
+    // Look for the type without parsing megabytes first; the full parse below validates it properly.
+    const m =
+      /"t"\s*:\s*"(live\.adopt|preview)"/.exec(raw.slice(0, 4096)) ??
+      /"t"\s*:\s*"(live\.adopt|preview)"/.exec(raw.slice(-4096));
+    return !!m;
+  }
+
+  private closeForLimit(c: Client, reason: string): void {
+    if (c.ws.readyState !== WebSocket.OPEN) return;
+    this.limitClosures[reason] = (this.limitClosures[reason] ?? 0) + 1;
+    this.log.warn(
+      { ip: c.ip, role: c.role, outputId: c.outputId, reason },
+      'websocket closed for breaking a limit',
+    );
+    this.send(c, { t: 'bye', v: 1, reason });
+    c.ws.close(1008, reason);
+    // A flooding client may ignore the close handshake.
+    setTimeout(() => c.ws.terminate(), 1000).unref();
   }
 
   /**
@@ -329,18 +401,36 @@ export class SocketHub {
           this.log.debug({ id: m.id, seq: dup }, 'duplicate command id acknowledged');
           return this.send(c, { t: 'live.ack', v: 1, id: m.id, seq: dup });
         }
+        const id = m.id;
+        const ack = (seq: number) => this.send(c, { t: 'live.ack', v: 1, id, seq });
+        const nack = (e: unknown) => this.send(c, { t: 'live.ack', v: 1, id, rejected: errorMessage(e) });
+        // A re-submission of a command still waiting in the queue (behind a goLive) gets the same answer.
+        const pending = this.pendingCmds.get(id);
+        if (pending) {
+          pending.then(ack, nack);
+          return;
+        }
         try {
           const origin =
             c.role === 'operate'
-              ? { role: 'operate' as const, id: m.id }
-              : { role: c.role as 'output' | 'stage', outputId: c.outputId!, id: m.id };
-          const seq = this.live.submit(m.event, origin);
-          this.rememberCmd(m.id, seq);
-          this.send(c, { t: 'live.ack', v: 1, id: m.id, seq });
+              ? { role: 'operate' as const, id }
+              : { role: c.role as 'output' | 'stage', outputId: c.outputId!, id };
+          const p = this.live.submitQueued(m.event, origin);
+          this.pendingCmds.set(id, p);
+          p.finally(() => this.pendingCmds.delete(id)).catch(() => undefined);
+          p.then(
+            (seq) => {
+              this.rememberCmd(id, seq);
+              ack(seq);
+            },
+            (e: unknown) => {
+              if (!(e instanceof LiveRejection) && !(e instanceof HttpError))
+                this.log.error({ err: errorMessage(e) }, 'live event failed');
+              nack(e);
+            },
+          );
         } catch (e) {
-          if (!(e instanceof LiveRejection) && !(e instanceof HttpError))
-            this.log.error({ err: errorMessage(e) }, 'live event failed');
-          this.send(c, { t: 'live.ack', v: 1, id: m.id, rejected: errorMessage(e) });
+          nack(e);
         }
         return;
       }
@@ -428,7 +518,7 @@ export class SocketHub {
     const connected = new Set<string>();
     for (const c of this.clients) if (c.outputId && c.role) connected.add(c.outputId);
     const out: Record<string, OutputHealthEntry> = {};
-    for (const o of this.lib.getSetting('outputs')) {
+    for (const o of this.outputs()) {
       const h = this.health.get(o.id);
       out[o.id] = {
         ...(h?.health ?? EMPTY_HEALTH),

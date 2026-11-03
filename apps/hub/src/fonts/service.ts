@@ -5,6 +5,7 @@ import type { HubConfig } from '../config.ts';
 import { badRequest, HttpError } from '../errors.ts';
 import type { JobCtx, JobQueue } from '../jobs.ts';
 import type { Library } from '../library.ts';
+import { cpuPool, WorkerStartError } from '../pool.ts';
 import { extOf, readHead, sniff, type Store } from '../store.ts';
 import { fetchFamilyCss, parseFontCss } from './google.ts';
 import { type FontFace, faceFromFilename, readFontFace } from './sfnt.ts';
@@ -16,6 +17,16 @@ const FONT_MIME: Record<string, string> = {
   woff2: 'font/woff2',
 };
 const MAX_FONT_BYTES = 50 * 1024 * 1024;
+
+/** Parse the font's tables on the CPU pool; inline only when no worker can be started. */
+async function parseFontFace(buf: Uint8Array): Promise<FontFace> {
+  try {
+    return await cpuPool().run('font', { buf });
+  } catch (e) {
+    if (e instanceof WorkerStartError) return readFontFace(buf);
+    throw e;
+  }
+}
 
 export class FontService {
   constructor(
@@ -46,7 +57,7 @@ export class FontService {
       throw new HttpError(415, 'extension_mismatch', `${filename}: unexpected extension`);
     let face: FontFace;
     try {
-      face = readFontFace(await readFile(file.path));
+      face = await parseFontFace(await readFile(file.path));
     } catch (e) {
       this.log.info({ file: filename, err: (e as Error).message }, 'font tables unreadable; using filename');
       face = faceFromFilename(filename);

@@ -29,6 +29,22 @@ export const ResolvedPlaylist = z.object({
   logoMediaId: Id.optional(),
   files: z.array(ManifestFile),
   manifestId: z.string(),
+  /**
+   * Content that failed validation at goLive and was quarantined (design/25): a bad slide is replaced by an
+   * empty slide, a damaged presentation is reset. One entry per affected cue; `cueIndex` is -1 when the bad
+   * content produced no cue (a skipped playlist item, an unreadable presentation). Absent when all is well.
+   */
+  degraded: z
+    .array(
+      z.object({
+        cueIndex: z.number().int().min(-1),
+        reason: z.string().max(500),
+        presentationId: Id.optional(),
+        slideId: Id.optional(),
+      }),
+    )
+    .max(1000)
+    .optional(),
 });
 export type ResolvedPlaylist = z.infer<typeof ResolvedPlaylist>;
 

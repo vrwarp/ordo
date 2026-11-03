@@ -92,7 +92,63 @@ CREATE TABLE IF NOT EXISTS library_changes (
 CREATE INDEX IF NOT EXISTS library_changes_seq ON library_changes(seq);
 `,
   },
+  {
+    version: 6,
+    name: 'live-snapshot-history',
+    // The two snapshots before the current one (design/25): a snapshot that fails validation on restore
+    // falls back to the newest good one of these.
+    sql: `
+CREATE TABLE IF NOT EXISTS live_snapshot_prev (
+  rowid INTEGER PRIMARY KEY AUTOINCREMENT, seq INTEGER NOT NULL, json TEXT NOT NULL, saved_at INTEGER NOT NULL);
+`,
+  },
+  {
+    version: 7,
+    name: 'job-attempts',
+    // How many times a job was started. A job that was running when its process died is re-queued with
+    // the count kept, and fails for good after MAX_JOB_ATTEMPTS instead of crashing the process in a loop.
+    // (A side table rather than a column, so every migration stays idempotent.)
+    sql: `
+CREATE TABLE IF NOT EXISTS job_attempts (job_id TEXT PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0);
+`,
+  },
 ];
+
+/**
+ * The live process's own database (design/25): journal, snapshots and the cached copies of library data it
+ * needs to run a service while the library process is down. Separate from ordo.db so a library failure (a
+ * long write lock, a corrupt page) cannot stall or break the live service.
+ */
+export const LIVE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS live_journal (
+  seq INTEGER PRIMARY KEY, at INTEGER NOT NULL, cmd_id TEXT, kind TEXT NOT NULL DEFAULT 'event', event_json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS live_snapshot (
+  id INTEGER PRIMARY KEY CHECK (id = 1), seq INTEGER NOT NULL, json TEXT NOT NULL, saved_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS live_snapshot_prev (
+  rowid INTEGER PRIMARY KEY AUTOINCREMENT, seq INTEGER NOT NULL, json TEXT NOT NULL, saved_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS live_kv (key TEXT PRIMARY KEY, json TEXT NOT NULL, saved_at INTEGER NOT NULL);
+`;
+
+export function openLiveDb(file: string): DB {
+  const db = new Database(file);
+  db.pragma('journal_mode = WAL');
+  db.pragma('synchronous = NORMAL');
+  db.pragma('busy_timeout = 1000');
+  db.exec(LIVE_SCHEMA);
+  return db;
+}
+
+/**
+ * The live process's connection to ordo.db, for sessions and the PIN-setup flag only. No migrations, a
+ * short busy timeout (a write waits at most 50 ms for the library process's lock, and callers treat a busy
+ * error as "skip this time"), and no automatic checkpoints: the library process owns the WAL.
+ */
+export function openSharedDb(file: string): DB {
+  const db = new Database(file, { fileMustExist: true });
+  db.pragma('busy_timeout = 50');
+  db.pragma('wal_autocheckpoint = 0');
+  return db;
+}
 
 export function migrate(db: DB): number {
   const current = db.pragma('user_version', { simple: true }) as number;

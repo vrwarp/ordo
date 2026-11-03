@@ -26,13 +26,19 @@ export function redactUrl(url: string): string {
   return url.replace(/([?&](?:token|pin)=)[^&#]*/gi, '$1[redacted]');
 }
 
-export function createLogger(opts: { level: string; stdout: boolean; ring: LogRing }): Logger {
+export function createLogger(opts: {
+  level: string;
+  stdout: boolean;
+  ring: LogRing;
+  /** Which hub process logs (two-process mode): `live` or `library`; `supervisor` for the parent. */
+  proc?: string;
+}): Logger {
   const streams: pino.StreamEntry[] = [{ level: 'trace', stream: opts.ring }];
   if (opts.stdout) streams.push({ level: 'trace', stream: process.stdout });
   return pino(
     {
       level: opts.level,
-      base: { svc: 'ordo-hub' },
+      base: { svc: 'ordo-hub', ...(opts.proc ? { proc: opts.proc } : {}) },
       redact: {
         paths: [
           'req.headers.cookie',

@@ -1,9 +1,6 @@
 import { createHash } from 'node:crypto';
 import { copyFile, readdir, readFile, realpath, rm, stat } from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import { dirname, join, relative, resolve, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { Worker } from 'node:worker_threads';
+import { join, relative, resolve, sep } from 'node:path';
 import {
   DEFAULT_THEME,
   type ExtractedText,
@@ -26,6 +23,7 @@ import type { JobCtx, JobQueue } from './jobs.ts';
 import type { Library } from './library.ts';
 import { fitPage, pdfToPngs, pptxToPdf } from './media/ffmpeg.ts';
 import { baseName, type MediaService } from './media/service.ts';
+import { cpuPool, transferables, WorkerStartError } from './pool.ts';
 import type { Store } from './store.ts';
 
 export type Pro7Result = {
@@ -343,6 +341,19 @@ export class ImportService {
     return m.id;
   }
 
+  /** The real extractor runs on the CPU pool; an injected one (tests) runs inline. */
+  private async extractPptx(buf: Uint8Array, signal: AbortSignal): Promise<PptxText> {
+    const extract = this.imp.extractPptxText!;
+    if (extract !== (realImporters as unknown as Importers).extractPptxText) return extract(buf);
+    try {
+      return await extractPptxTextInWorker(buf, signal);
+    } catch (e) {
+      if (!(e instanceof WorkerStartError)) throw e;
+      this.log.warn({ err: e.message }, 'cpu worker unavailable; extracting PPTX text on the main thread');
+      return extract(buf);
+    }
+  }
+
   // ---- PPTX / PDF ----
   queueDocument(hash: string, name: string, ext: 'pdf' | 'pptx') {
     return this.jobs.enqueue('document', { hash, name, ext } satisfies DocPayload, 'heavy');
@@ -365,7 +376,7 @@ export class ImportService {
         await copyFile(pdf, input);
         if (this.imp.extractPptxText) {
           try {
-            text = await this.imp.extractPptxText(await readFile(input));
+            text = await this.extractPptx(await readFile(input), ctx.signal);
             ctx.log(`extracted text from ${text.slides.length} slide(s)`);
           } catch (e) {
             ctx.log(`[warn] text extraction failed: ${errorMessage(e)}`);
@@ -477,68 +488,17 @@ export class ImportService {
   }
 }
 
-/** The worker could not be started (no worker file, unsupported flags): the caller decodes inline. */
-export class WorkerStartError extends Error {}
+export { WorkerStartError };
 
-/** Where the worker entry lives: next to this module, `.ts` from source (tsx) or `.js` in the bundle. */
-export function importWorkerUrl(): URL {
-  const here = import.meta.url;
-  return new URL(here.endsWith('.ts') ? './import.worker.ts' : './import.worker.js', here);
-}
-
-/** The tsx ESM loader as a file URL, for running the worker from TypeScript source (dev and tests). */
-function tsxLoaderUrl(): string {
-  const pkg = createRequire(import.meta.url).resolve('tsx/package.json');
-  return pathToFileURL(join(dirname(pkg), 'dist', 'loader.mjs')).href;
-}
-
-/** Run `importPro7` in a worker thread; buffers that own their ArrayBuffer are transferred, not copied. */
+/** Run `importPro7` on the CPU pool; buffers that own their ArrayBuffer are transferred, not copied. */
 export function importPro7InWorker(
   files: Map<string, Uint8Array>,
   signal?: AbortSignal,
 ): Promise<Pro7Result> {
-  return new Promise((resolve, reject) => {
-    const url = importWorkerUrl();
-    const transfer: ArrayBuffer[] = [];
-    for (const b of files.values())
-      if (b.byteOffset === 0 && b.byteLength === b.buffer.byteLength && b.buffer instanceof ArrayBuffer)
-        transfer.push(b.buffer);
-    const fromSource = url.pathname.endsWith('.ts');
-    let worker: Worker;
-    try {
-      worker = new Worker(url, {
-        workerData: { files },
-        transferList: transfer,
-        // From source the worker needs the TypeScript loader; the bundle inherits the process flags.
-        ...(fromSource ? { execArgv: ['--import', tsxLoaderUrl()] } : {}),
-      });
-    } catch (e) {
-      reject(new WorkerStartError(errorMessage(e)));
-      return;
-    }
-    let started = false;
-    let settled = false;
-    const finish = (fn: () => void) => {
-      if (settled) return;
-      settled = true;
-      signal?.removeEventListener('abort', onAbort);
-      fn();
-      void worker.terminate();
-    };
-    const onAbort = () => finish(() => reject(new Error('cancelled')));
-    signal?.addEventListener('abort', onAbort, { once: true });
-    if (signal?.aborted) onAbort();
-    worker.on('online', () => {
-      started = true;
-    });
-    worker.on('message', (m: { ok: true; result: Pro7Result } | { ok: false; error: string }) => {
-      finish(() => (m.ok ? resolve(m.result) : reject(new Error(m.error))));
-    });
-    worker.on('error', (e) => {
-      finish(() => reject(started ? e : new WorkerStartError(errorMessage(e))));
-    });
-    worker.on('exit', (code) => {
-      finish(() => reject(new WorkerStartError(`import worker exited with code ${code}`)));
-    });
-  });
+  return cpuPool().run('pro7', { files }, { signal, transfer: transferables(files.values()) });
+}
+
+/** Extract PPTX text on the CPU pool (the XML parse of a large deck takes seconds). */
+export function extractPptxTextInWorker(buf: Uint8Array, signal?: AbortSignal): Promise<PptxText> {
+  return cpuPool().run('pptx', { buf }, { signal });
 }

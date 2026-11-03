@@ -9,6 +9,7 @@ import {
   type Transition,
   playableFile,
 } from '@ordo/domain';
+import { clampLook, clampSlide, clampText } from './clamp.ts';
 import { lyricTextFor } from './text2d.ts';
 
 /**
@@ -114,9 +115,11 @@ export function findSlide(
   slideId: string,
 ): { slide: Slide; presentation: Presentation } | undefined {
   const p = presentations?.[presentationId];
-  if (!p) return undefined;
-  for (const sec of p.sections)
-    for (const slide of sec.slides) if (slide.id === slideId) return { slide, presentation: p };
+  if (!p || !Array.isArray(p.sections)) return undefined;
+  for (const sec of p.sections) {
+    if (!sec || !Array.isArray(sec.slides)) continue;
+    for (const slide of sec.slides) if (slide && slide.id === slideId) return { slide, presentation: p };
+  }
   return undefined;
 }
 
@@ -142,7 +145,12 @@ export function slideVisible(look: Look, slide: Slide, isSong: boolean, nextSlid
 
 const EMPTY = <D>(at = 0): LayerPlan<D> => ({ key: '', desc: null, at, fadeMs: 0 });
 
-export function planFrame(state: LiveState, look: Look, opts: PlanOptions = {}): FramePlan {
+/**
+ * Plan every layer of `state` under `look`. Slides and looks are clamped on the way in (design/25): the
+ * descriptors carry clamped copies, so nothing unbounded reaches the rasterizer. Never throws.
+ */
+export function planFrame(state: LiveState, rawLook: Look, opts: PlanOptions = {}): FramePlan {
+  const look = clampLook(rawLook);
   const sig = opts.lookSig ?? look.id;
   const resolved = state.resolved;
   const mediaById = (id: string | undefined): Media | undefined =>
@@ -197,15 +205,18 @@ export function planFrame(state: LiveState, look: Look, opts: PlanOptions = {}):
     const fadeMs = fadeMsFor(look, ls.transition);
     plan.slide = { key: '', desc: null, at: ls.at, fadeMs };
     const c = ls.content;
-    const found = c ? findSlide(resolved?.presentations, c.presentationId, c.slideId) : undefined;
+    const raw = c ? findSlide(resolved?.presentations, c.presentationId, c.slideId) : undefined;
+    const found = raw ? { slide: clampSlide(raw.slide), presentation: raw.presentation } : undefined;
     if (c && found) {
       plan.slideCue = c.cueIndex;
       const isSong = found.presentation.kind === 'song';
       let nextSlide: Slide | undefined;
       if (look.layers.slide.mode === 'lyricOnly' && look.layers.slide.nextSlide) {
         const nc = state.cues[c.cueIndex + 1];
-        if (nc?.kind === 'slide' && nc.presentationId && nc.slideId)
-          nextSlide = findSlide(resolved?.presentations, nc.presentationId, nc.slideId)?.slide;
+        if (nc?.kind === 'slide' && nc.presentationId && nc.slideId) {
+          const ns = findSlide(resolved?.presentations, nc.presentationId, nc.slideId)?.slide;
+          nextSlide = ns ? clampSlide(ns) : undefined;
+        }
       }
       if (slideVisible(look, found.slide, isSong, nextSlide)) {
         const key = `sl|${resolved?.manifestId ?? ''}|${sig}|${c.cueIndex}|${c.slideId}|${nextSlide?.id ?? ''}`;
@@ -232,7 +243,7 @@ export function planFrame(state: LiveState, look: Look, opts: PlanOptions = {}):
   {
     const ls = state.layers.lowerThird;
     const fadeMs = fadeMsFor(look, ls.transition);
-    const text = ls.content?.text ?? '';
+    const text = clampText(ls.content?.text);
     if (look.layers.lowerThird.visible && text.trim()) {
       const key = `lt|${sig}|${text}`;
       plan.lowerThird = { key, desc: { layer: 'lowerThird', key, text }, at: ls.at, fadeMs };
@@ -319,14 +330,18 @@ export function planFrame(state: LiveState, look: Look, opts: PlanOptions = {}):
 export function planPreview(
   presentation: Presentation,
   slideId: string | undefined,
-  look: Look,
+  rawLook: Look,
   opts: PlanOptions = {},
 ): FramePlan {
+  const look = clampLook(rawLook);
   const sig = opts.lookSig ?? look.id;
   const slides: Slide[] = [];
-  for (const sec of presentation.sections) slides.push(...sec.slides);
+  const sections = Array.isArray(presentation?.sections) ? presentation.sections : [];
+  for (const sec of sections)
+    if (Array.isArray(sec?.slides)) for (const s of sec.slides) if (s) slides.push(s);
   const idx = slideId ? slides.findIndex((s) => s.id === slideId) : 0;
-  const slide = idx >= 0 ? slides[idx] : undefined;
+  const rawSlide = idx >= 0 ? slides[idx] : undefined;
+  const slide = rawSlide ? clampSlide(rawSlide) : undefined;
   const fadeMs = fadeMsFor(look);
   const plan: FramePlan = {
     idle: false,
@@ -341,8 +356,9 @@ export function planPreview(
   };
   if (!slide) return { ...plan, idle: true };
   const isSong = presentation.kind === 'song';
-  const nextSlide =
+  const rawNext =
     look.layers.slide.mode === 'lyricOnly' && look.layers.slide.nextSlide ? slides[idx + 1] : undefined;
+  const nextSlide = rawNext ? clampSlide(rawNext) : undefined;
   if (slideVisible(look, slide, isSong, nextSlide)) {
     const key = `pv|${presentation.id}|${presentation.rev}|${sig}|${slide.id}|${nextSlide?.id ?? ''}`;
     plan.slide = {
@@ -363,7 +379,8 @@ export function planPreview(
   }
   // The slide's own background wins over the presentation's, as expandCues does for live cues.
   const bgId = look.layers.background.visible
-    ? (slide.backgroundMediaId ?? presentation.backgroundMediaId)
+    ? (slide.backgroundMediaId ??
+      (typeof presentation.backgroundMediaId === 'string' ? presentation.backgroundMediaId : undefined))
     : look.holdingMediaId;
   const m = bgId ? opts.media?.(bgId) : undefined;
   const f = m ? playableFile(m) : undefined;

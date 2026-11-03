@@ -102,12 +102,16 @@ export class Supervisor extends Emitter<{
 }> {
   private entries = new Map<string, Entry>();
   private timer: unknown;
+  private lastCheck: number;
+  private checkEveryMs: number;
 
   constructor(
     private clock: SupervisorClock = realClock,
     checkEveryMs = HEARTBEAT_MS,
   ) {
     super();
+    this.checkEveryMs = checkEveryMs;
+    this.lastCheck = clock.now();
     this.timer = clock.setInterval(() => this.check(), checkEveryMs);
   }
 
@@ -242,6 +246,14 @@ export class Supervisor extends Emitter<{
 
   private check(): void {
     const now = this.clock.now();
+    const gap = now - this.lastCheck;
+    this.lastCheck = now;
+    // The host's own thread stalled (a long task): heartbeats are still queued behind this check, so
+    // their absence says nothing about the workers. Judge again once the queue has drained.
+    if (gap > this.checkEveryMs * 4) {
+      for (const e of this.entries.values()) e.lastBeat = Math.max(e.lastBeat, now - this.checkEveryMs);
+      return;
+    }
     for (const e of this.entries.values()) {
       if (e.gaveUp) continue;
       const dead = e.spec.deadAfterMs ?? DEAD_AFTER_MS;

@@ -3,13 +3,18 @@ import type { RenderTelemetry } from './health.ts';
 import type { PropsModel } from './props.ts';
 
 /**
- * Typed messages between the output's main thread, render worker and asset worker. They carry
- * transferables (OffscreenCanvas, ImageBitmap, VideoFrame, MessagePort), which is why they are plain
+ * Typed messages between the output's main thread, link worker, render worker and asset worker. They
+ * carry transferables (OffscreenCanvas, ImageBitmap, VideoFrame, MessagePort), which is why they are plain
  * TypeScript unions rather than Zod schemas: every sender and receiver is in this repository and built
  * together.
+ *
+ * Topology (design/14, design/25): the main thread creates the three workers and three MessageChannels
+ * (asset↔render, link↔render, link↔asset) and hands the ends over with a `ports` message, again after any
+ * worker restart. Arming (jobs, content, flips) runs link → asset → render without the main thread; the
+ * main thread sends the render worker only its canvas, video frames and the snapshot period.
  */
 
-// ---- main -> render ----
+// ---- main/link -> render ----
 export type RenderInit = {
   t: 'init';
   canvas: OffscreenCanvas;
@@ -19,8 +24,8 @@ export type RenderInit = {
   testPixel: boolean;
   /** Skip WebGPU (tests, diagnostics). */
   forceCanvas2d?: boolean;
-  /** Port from the asset worker (bitmaps arrive here). */
-  assetPort: MessagePort;
+  /** Port from the asset worker (bitmaps arrive here). Deprecated: ports now arrive with `ports`. */
+  assetPort?: MessagePort;
   clear: Rgba;
   clockOffset: number;
 };
@@ -48,7 +53,9 @@ export type ToRender =
   /** Main-thread watchdog tick (every 250 ms); the worker reports the longest gap as mainThreadStallMs. */
   | { t: 'tick' }
   /** A fresh canvas, sent in answer to `needCanvas`. */
-  | { t: 'canvas'; canvas: OffscreenCanvas };
+  | { t: 'canvas'; canvas: OffscreenCanvas }
+  /** (main → render) New channel ends after a (re)start: bitmaps from the asset worker, commands from the link. */
+  | { t: 'ports'; asset: MessagePort; link: MessagePort };
 
 // ---- asset -> render (via MessagePort) ----
 export type AssetToRender = {
@@ -60,7 +67,7 @@ export type AssetToRender = {
   cueIndex?: number;
 };
 
-// ---- render -> main ----
+// ---- render -> main and render -> link (port) ----
 export type HeldKeys = { live: string; armed: string; queued: string };
 export type FromRender =
   | { t: 'ready'; compositor: 'webgpu' | '2d'; note?: string }
@@ -106,17 +113,36 @@ export type AssetJob =
     };
 
 export type ToAsset =
-  | { t: 'init'; port: MessagePort; width: number; height: number; token: string; apiPrefix: string }
+  | { t: 'init'; port?: MessagePort; width: number; height: number; token: string; apiPrefix: string }
+  /** (main → asset) New channel ends after a (re)start: bitmaps go to `render`, jobs arrive on `link`. */
+  | { t: 'ports'; render: MessagePort; link: MessagePort }
   | { t: 'fonts'; fonts: FontLoad[] }
   | { t: 'job'; job: AssetJob }
   | { t: 'resize'; width: number; height: number }
   /** Drop cached image bitmaps not in `keep` (manifest changed). */
   | { t: 'prune'; keep: string[] };
 
-// ---- asset -> main ----
+// ---- asset -> link (port) ----
 export type FromAsset =
-  | { t: 'done'; layer: number; key: string; ms: number }
-  | { t: 'error'; layer: number; key: string; error: string }
+  | {
+      t: 'done';
+      layer: number;
+      key: string;
+      ms: number;
+      /** Font families the job asked for that are not loaded; drawn in the fallback font. */
+      fontFallbacks?: string[];
+      /** Images left out because the cue's decoded-bitmap budget was exhausted. */
+      skippedImages?: number;
+    }
+  | {
+      t: 'error';
+      layer: number;
+      key: string;
+      error: string;
+      /** The file that failed to decode and where it was read from (an OPFS copy may be corrupt). */
+      hash?: string;
+      source?: 'opfs' | 'network';
+    }
   | { t: 'fonts'; loaded: number; failed: string[] };
 
 export function fontLoads(fonts: Font[]): FontLoad[] {

@@ -1,39 +1,61 @@
 import { z } from 'zod';
 
+/**
+ * Bounds (design/25 "validate at entry"): every string, array, record and number has a limit far above any
+ * real use, so a damaged or hostile record is refused at the boundary instead of reaching a renderer. The
+ * render plan clamps further at the point of use.
+ */
+const MAX = {
+  id: 200,
+  name: 500,
+  text: 20_000,
+  long: 200_000,
+  coord: 100_000,
+  ms: 86_400_000,
+} as const;
+const name = () => z.string().max(MAX.name);
+/** A record with at most `n` keys. */
+function bounded<T extends z.ZodType>(schema: T, n: number): T {
+  return schema.refine((o) => Object.keys(o as object).length <= n, { message: `at most ${n} entries` }) as T;
+}
+
 /** ULID string identifiers for every stored entity. */
-export const Id = z.string().min(1);
+export const Id = z.string().min(1).max(MAX.id);
 export type Id = z.infer<typeof Id>;
 
 /** Logical canvas is 1920x1080; outputs scale. */
 export const LOGICAL_WIDTH = 1920;
 export const LOGICAL_HEIGHT = 1080;
 
-export const Rgba = z.object({ r: z.number(), g: z.number(), b: z.number(), a: z.number() });
+const channel = z.number().min(0).max(255);
+export const Rgba = z.object({ r: channel, g: channel, b: channel, a: z.number().min(0).max(1) });
 export type Rgba = z.infer<typeof Rgba>;
 
+const coord = z.number().min(-MAX.coord).max(MAX.coord);
+const length = z.number().min(0).max(MAX.coord);
 export const Box = z.object({
-  x: z.number(),
-  y: z.number(),
-  w: z.number(),
-  h: z.number(),
-  rotation: z.number().default(0),
+  x: coord,
+  y: coord,
+  w: coord,
+  h: coord,
+  rotation: z.number().min(-36_000).max(36_000).default(0),
 });
 export type Box = z.infer<typeof Box>;
 
 export const TextStyle = z.object({
-  fontFamily: z.string(),
-  fontWeight: z.number().default(400),
+  fontFamily: z.string().max(300),
+  fontWeight: z.number().min(0).max(1000).default(400),
   fontStyle: z.enum(['normal', 'italic']).default('normal'),
-  fontSizePx: z.number(),
+  fontSizePx: z.number().min(0).max(5000),
   color: Rgba,
   align: z.enum(['left', 'center', 'right']).default('center'),
   valign: z.enum(['top', 'middle', 'bottom']).default('middle'),
-  lineHeight: z.number().default(1.2),
-  letterSpacing: z.number().default(0),
-  padding: z.number().default(0),
-  outline: z.object({ width: z.number(), color: Rgba }).optional(),
-  shadow: z.object({ dx: z.number(), dy: z.number(), blur: z.number(), color: Rgba }).optional(),
-  fill: z.object({ color: Rgba, radius: z.number().default(0) }).optional(),
+  lineHeight: z.number().min(0).max(100).default(1.2),
+  letterSpacing: z.number().min(-1000).max(1000).default(0),
+  padding: coord.default(0),
+  outline: z.object({ width: length, color: Rgba }).optional(),
+  shadow: z.object({ dx: coord, dy: coord, blur: length, color: Rgba }).optional(),
+  fill: z.object({ color: Rgba, radius: length.default(0) }).optional(),
 });
 export type TextStyle = z.infer<typeof TextStyle>;
 
@@ -41,9 +63,9 @@ export const TextObject = z.object({
   id: Id,
   type: z.literal('text'),
   box: Box,
-  text: z.string(),
+  text: z.string().max(MAX.text),
   style: TextStyle,
-  opacity: z.number().default(1),
+  opacity: z.number().min(0).max(1).default(1),
 });
 export type TextObject = z.infer<typeof TextObject>;
 
@@ -53,8 +75,8 @@ export const ImageObject = z.object({
   box: Box,
   mediaId: Id,
   fit: z.enum(['contain', 'cover', 'stretch']).default('contain'),
-  opacity: z.number().default(1),
-  radius: z.number().default(0),
+  opacity: z.number().min(0).max(1).default(1),
+  radius: length.default(0),
 });
 export type ImageObject = z.infer<typeof ImageObject>;
 
@@ -64,49 +86,53 @@ export const ShapeObject = z.object({
   box: Box,
   shape: z.enum(['rect', 'ellipse', 'line']),
   fill: Rgba.optional(),
-  stroke: z.object({ width: z.number(), color: Rgba }).optional(),
-  opacity: z.number().default(1),
-  radius: z.number().default(0),
+  stroke: z.object({ width: length, color: Rgba }).optional(),
+  opacity: z.number().min(0).max(1).default(1),
+  radius: length.default(0),
 });
 export type ShapeObject = z.infer<typeof ShapeObject>;
 
 export const SlideObject = z.discriminatedUnion('type', [TextObject, ImageObject, ShapeObject]);
 export type SlideObject = z.infer<typeof SlideObject>;
 
-export const ExtractedText = z.object({ text: z.string(), box: Box, fontSizePx: z.number().optional() });
+export const ExtractedText = z.object({
+  text: z.string().max(MAX.text),
+  box: Box,
+  fontSizePx: z.number().min(0).max(5000).optional(),
+});
 export type ExtractedText = z.infer<typeof ExtractedText>;
 
 export const ScriptureRef = z.object({
-  translation: z.string(),
-  book: z.string(),
-  chapter: z.number().int(),
-  verseFrom: z.number().int(),
-  verseTo: z.number().int().optional(),
+  translation: z.string().max(200),
+  book: z.string().max(200),
+  chapter: z.number().int().min(0).max(10_000),
+  verseFrom: z.number().int().min(0).max(10_000),
+  verseTo: z.number().int().min(0).max(10_000).optional(),
 });
 export type ScriptureRef = z.infer<typeof ScriptureRef>;
 
 export const ScriptureSlideSource = z.object({
   ref: ScriptureRef,
-  text: z.string(),
-  fetchedAt: z.string(),
-  provider: z.string(),
+  text: z.string().max(MAX.text),
+  fetchedAt: z.string().max(100),
+  provider: z.string().max(200),
 });
 export type ScriptureSlideSource = z.infer<typeof ScriptureSlideSource>;
 
 export const Slide = z.object({
   id: Id,
-  objects: z.array(SlideObject).default([]),
+  objects: z.array(SlideObject).max(1000).default([]),
   lyricObjectId: Id.optional(),
   backgroundMediaId: Id.optional(),
-  durationMs: z.number().optional(),
-  notes: z.string().optional(),
-  overrides: z.array(z.string()).optional(),
+  durationMs: z.number().min(0).max(MAX.ms).optional(),
+  notes: z.string().max(MAX.long).optional(),
+  overrides: z.array(z.string().max(200)).max(1000).optional(),
   imported: z
     .object({
       fileId: Id,
-      page: z.number().int(),
+      page: z.number().int().min(0).max(100_000),
       imageMediaId: Id,
-      textBoxes: z.array(ExtractedText).optional(),
+      textBoxes: z.array(ExtractedText).max(1000).optional(),
     })
     .optional(),
   scripture: ScriptureSlideSource.optional(),
@@ -115,15 +141,15 @@ export type Slide = z.infer<typeof Slide>;
 
 export const Section = z.object({
   id: Id,
-  label: z.string(),
-  short: z.string(),
-  slides: z.array(Slide).default([]),
+  label: z.string().max(MAX.name),
+  short: z.string().max(100),
+  slides: z.array(Slide).max(5000).default([]),
   /** Chords per lyric line, kept from ChordPro imports for a future chord view. */
-  chords: z.array(z.string()).optional(),
+  chords: z.array(z.string().max(2000)).max(20_000).optional(),
 });
 export type Section = z.infer<typeof Section>;
 
-export const Arrangement = z.object({ id: Id, name: z.string(), sectionIds: z.array(Id) });
+export const Arrangement = z.object({ id: Id, name: name(), sectionIds: z.array(Id).max(10_000) });
 export type Arrangement = z.infer<typeof Arrangement>;
 
 export const Transition = z.discriminatedUnion('kind', [
@@ -137,43 +163,43 @@ export type PresentationKind = z.infer<typeof PresentationKind>;
 
 export const Presentation = z.object({
   id: Id,
-  rev: z.number().int().default(1),
-  title: z.string(),
+  rev: z.number().int().min(0).default(1),
+  title: z.string().max(1000),
   kind: PresentationKind,
   meta: z
     .object({
-      author: z.string().optional(),
-      ccli: z.string().optional(),
-      copyright: z.string().optional(),
-      key: z.string().optional(),
-      tempo: z.number().optional(),
-      tags: z.array(z.string()).default([]),
+      author: z.string().max(2000).optional(),
+      ccli: z.string().max(200).optional(),
+      copyright: z.string().max(5000).optional(),
+      key: z.string().max(50).optional(),
+      tempo: z.number().min(0).max(10_000).optional(),
+      tags: z.array(z.string().max(200)).max(200).default([]),
     })
     .default({ tags: [] }),
   folderId: Id.optional(),
   themeId: Id.optional(),
   backgroundMediaId: Id.optional(),
   transition: Transition.optional(),
-  sections: z.array(Section).default([]),
-  arrangements: z.array(Arrangement).default([]),
-  loop: z.object({ defaultSlideMs: z.number() }).optional(),
+  sections: z.array(Section).max(2000).default([]),
+  arrangements: z.array(Arrangement).max(500).default([]),
+  loop: z.object({ defaultSlideMs: z.number().min(0).max(MAX.ms) }).optional(),
   linesPerSlide: z.number().int().min(1).max(12).optional(),
   source: z
     .object({
       kind: z.enum(['pro7', 'songselect', 'pptx', 'pdf', 'manual', 'paste']),
       fileId: Id.optional(),
-      log: z.string().optional(),
+      log: z.string().max(MAX.long).optional(),
     })
     .optional(),
   archived: z.boolean().default(false),
-  createdAt: z.string().optional(),
-  updatedAt: z.string().optional(),
+  createdAt: z.string().max(100).optional(),
+  updatedAt: z.string().max(100).optional(),
 });
 export type Presentation = z.infer<typeof Presentation>;
 
 export const Theme = z.object({
   id: Id,
-  name: z.string(),
+  name: name(),
   lyricBox: Box,
   text: TextStyle,
   textBoxDefaults: TextStyle,
@@ -181,10 +207,10 @@ export const Theme = z.object({
 export type Theme = z.infer<typeof Theme>;
 
 export const FileRef = z.object({
-  hash: z.string(),
-  bytes: z.number().int(),
-  mime: z.string(),
-  path: z.string(),
+  hash: z.string().max(128),
+  bytes: z.number().int().min(0),
+  mime: z.string().max(200),
+  path: z.string().max(1000),
 });
 export type FileRef = z.infer<typeof FileRef>;
 
@@ -193,33 +219,41 @@ export type MediaKind = z.infer<typeof MediaKind>;
 
 export const Media = z.object({
   id: Id,
-  rev: z.number().int().default(1),
-  name: z.string(),
-  tags: z.array(z.string()).default([]),
+  rev: z.number().int().min(0).default(1),
+  name: name(),
+  tags: z.array(z.string().max(200)).max(200).default([]),
   kind: MediaKind,
   original: FileRef,
   delivery: FileRef.optional(),
   poster: FileRef.optional(),
   state: z.enum(['uploaded', 'processing', 'ready', 'failed']),
-  error: z.string().optional(),
-  durationMs: z.number().optional(),
-  width: z.number().optional(),
-  height: z.number().optional(),
+  error: z.string().max(5000).optional(),
+  durationMs: z
+    .number()
+    .min(0)
+    .max(10 * MAX.ms)
+    .optional(),
+  width: z.number().min(0).max(MAX.coord).optional(),
+  height: z.number().min(0).max(MAX.coord).optional(),
   hasAlpha: z.boolean().optional(),
   loop: z.boolean().default(false),
   isBackground: z.boolean().default(false),
   audio: z
-    .object({ pairId: Id.optional(), gainDb: z.number().default(0), loudnessLufs: z.number().optional() })
+    .object({
+      pairId: Id.optional(),
+      gainDb: z.number().min(-100).max(100).default(0),
+      loudnessLufs: z.number().min(-200).max(100).optional(),
+    })
     .optional(),
-  createdAt: z.string().optional(),
-  updatedAt: z.string().optional(),
+  createdAt: z.string().max(100).optional(),
+  updatedAt: z.string().max(100).optional(),
 });
 export type Media = z.infer<typeof Media>;
 
 export const Font = z.object({
   id: Id,
-  family: z.string(),
-  weight: z.number(),
+  family: z.string().max(300),
+  weight: z.number().min(0).max(1000),
   style: z.enum(['normal', 'italic']),
   file: FileRef,
   source: z.enum(['upload', 'google', 'bundled']),
@@ -231,9 +265,9 @@ export const TimerSpec = z.discriminatedUnion('kind', [
     kind: z.literal('countdownTo'),
     /** HH:MM in the venue's time zone. */
     timeOfDay: z.string().regex(/^\d{2}:\d{2}$/),
-    label: z.string().optional(),
+    label: z.string().max(200).optional(),
   }),
-  z.object({ kind: z.literal('elapsed'), label: z.string().optional() }),
+  z.object({ kind: z.literal('elapsed'), label: z.string().max(200).optional() }),
 ]);
 export type TimerSpec = z.infer<typeof TimerSpec>;
 
@@ -286,7 +320,7 @@ export const PlaylistItem = z.discriminatedUnion('kind', [
     mediaId: Id,
     loop: z.boolean().optional(),
     onEnd: MediaOnEnd.optional(),
-    audio: z.object({ pairId: Id.optional(), gainDb: z.number().optional() }).optional(),
+    audio: z.object({ pairId: Id.optional(), gainDb: z.number().min(-100).max(100).optional() }).optional(),
   }),
   z.object({ id: Id, kind: z.literal('timer'), timer: TimerSpec }),
   z.object({ id: Id, kind: z.literal('action'), action: ActionId }),
@@ -295,12 +329,12 @@ export type PlaylistItem = z.infer<typeof PlaylistItem>;
 
 export const Playlist = z.object({
   id: Id,
-  rev: z.number().int().default(1),
-  name: z.string(),
-  serviceDate: z.string().optional(),
-  items: z.array(PlaylistItem).default([]),
-  createdAt: z.string().optional(),
-  updatedAt: z.string().optional(),
+  rev: z.number().int().min(0).default(1),
+  name: name(),
+  serviceDate: z.string().max(100).optional(),
+  items: z.array(PlaylistItem).max(5000).default([]),
+  createdAt: z.string().max(100).optional(),
+  updatedAt: z.string().max(100).optional(),
 });
 export type Playlist = z.infer<typeof Playlist>;
 
@@ -338,13 +372,13 @@ export const PropsRule = z.object({
    * absent means "follow `elapsed`".
    */
   mediaRemaining: z.boolean().optional(),
-  style: z.record(z.string(), PropBox).default({}),
+  style: bounded(z.record(z.string().max(100), PropBox), 100).default({}),
 });
 export type PropsRule = z.infer<typeof PropsRule>;
 
 export const Look = z.object({
   id: Id,
-  name: z.string(),
+  name: name(),
   kind: z.enum(['main', 'stage', 'lowerThird', 'stream', 'custom']).default('custom'),
   layers: z.object({
     background: LayerRule,
@@ -362,18 +396,18 @@ export const Look = z.object({
 export type Look = z.infer<typeof Look>;
 
 export const ScreenRef = z.object({
-  label: z.string(),
-  left: z.number(),
-  top: z.number(),
-  width: z.number(),
-  height: z.number(),
+  label: z.string().max(500),
+  left: coord,
+  top: coord,
+  width: length,
+  height: length,
 });
 export type ScreenRef = z.infer<typeof ScreenRef>;
 
 export const OutputKind = z.enum(['output', 'stage']);
 export const Output = z.object({
   id: Id,
-  name: z.string(),
+  name: name(),
   kind: OutputKind.default('output'),
   /** out<k> hostname index; 0 for stage. */
   hostIndex: z.number().int().min(0).max(6),
@@ -382,73 +416,78 @@ export const Output = z.object({
   enabled: z.boolean().default(true),
   audioMaster: z.boolean().default(false),
   /** Plain token is only returned to the operate role; stored hashed at rest is not required for the prototype. */
-  token: z.string().optional(),
+  token: z.string().max(200).optional(),
 });
 export type Output = z.infer<typeof Output>;
 
 export const AudioPair = z.object({
   id: Id,
-  name: z.string(),
-  left: z.number().int(),
-  right: z.number().int(),
+  name: name(),
+  left: z.number().int().min(0).max(1024),
+  right: z.number().int().min(0).max(1024),
 });
 export type AudioPair = z.infer<typeof AudioPair>;
 
 export const AudioSettings = z.object({
-  houseDeviceId: z.string().optional(),
-  houseDeviceLabel: z.string().optional(),
-  previewDeviceId: z.string().optional(),
-  previewDeviceLabel: z.string().optional(),
-  pairs: z.array(AudioPair).default([]),
+  houseDeviceId: z.string().max(1000).optional(),
+  houseDeviceLabel: z.string().max(1000).optional(),
+  previewDeviceId: z.string().max(1000).optional(),
+  previewDeviceLabel: z.string().max(1000).optional(),
+  pairs: z.array(AudioPair).max(256).default([]),
   defaultPairId: Id.optional(),
-  masterDb: z.number().default(0),
+  masterDb: z.number().min(-100).max(100).default(0),
 });
 export type AudioSettings = z.infer<typeof AudioSettings>;
 
-export const KeyMap = z.record(
-  z.string(),
-  z.object({ id: ActionId, arg: z.union([z.number(), z.string()]).optional() }),
+/** A surface action's argument: a cue/section number or a short string (a message preset). */
+const ActionArg = z.union([z.number().min(-1_000_000).max(1_000_000), z.string().max(500)]);
+export const KeyMap = bounded(
+  z.record(z.string().max(100), z.object({ id: ActionId, arg: ActionArg.optional() })),
+  1000,
 );
 export type KeyMap = z.infer<typeof KeyMap>;
 
 export const StreamDeckKey = z.object({
-  action: z.object({ id: ActionId, arg: z.union([z.number(), z.string()]).optional() }).optional(),
+  action: z.object({ id: ActionId, arg: ActionArg.optional() }).optional(),
   /** Dynamic keys bind to live state instead of a fixed action. */
   dynamic: z.enum(['section', 'nextItem']).optional(),
-  dynamicIndex: z.number().int().optional(),
-  label: z.string().optional(),
-  color: z.string().optional(),
+  dynamicIndex: z.number().int().min(0).max(10_000).optional(),
+  label: z.string().max(200).optional(),
+  color: z.string().max(100).optional(),
 });
 export type StreamDeckKey = z.infer<typeof StreamDeckKey>;
 
-export const StreamDeckPage = z.object({ name: z.string(), keys: z.record(z.string(), StreamDeckKey) });
+export const StreamDeckPage = z.object({
+  name: z.string().max(200),
+  keys: bounded(z.record(z.string().max(20), StreamDeckKey), 200),
+});
 export type StreamDeckPage = z.infer<typeof StreamDeckPage>;
 
 export const MidiMapping = z.object({
   id: Id,
-  deviceName: z.string().optional(),
+  deviceName: z.string().max(500).optional(),
   kind: z.enum(['note', 'cc']),
   number: z.number().int().min(0).max(127),
   channel: z.number().int().min(1).max(16).optional(),
   threshold: z.number().int().min(0).max(127).default(64),
-  action: z.object({ id: ActionId, arg: z.union([z.number(), z.string()]).optional() }),
+  action: z.object({ id: ActionId, arg: ActionArg.optional() }),
 });
 export type MidiMapping = z.infer<typeof MidiMapping>;
 
 export const SurfaceSettings = z.object({
-  streamDeckPages: z.array(StreamDeckPage).default([]),
-  midi: z.array(MidiMapping).default([]),
-  messagePresets: z.array(z.string()).default([]),
+  streamDeckPages: z.array(StreamDeckPage).max(100).default([]),
+  midi: z.array(MidiMapping).max(1000).default([]),
+  messagePresets: z.array(z.string().max(500)).max(200).default([]),
 });
 export type SurfaceSettings = z.infer<typeof SurfaceSettings>;
 
 export const GeneralSettings = z.object({
-  venueName: z.string().default('ordo'),
-  timeZone: z.string().default('UTC'),
+  venueName: z.string().max(200).default('ordo'),
+  timeZone: z.string().max(100).default('UTC'),
   clock24h: z.boolean().default(false),
   logoMediaId: Id.optional(),
   defaultThemeId: Id.optional(),
-  defaultLinesPerSlide: z.number().int().default(2),
-  defaultPreRollMs: z.number().int().default(33),
+  defaultLinesPerSlide: z.number().int().min(0).max(100).default(2),
+  defaultPreRollMs: z.number().int().min(0).max(60_000).default(33),
 });
 export type GeneralSettings = z.infer<typeof GeneralSettings>;

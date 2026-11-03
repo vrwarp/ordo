@@ -6,13 +6,18 @@ import { pipeline } from 'node:stream/promises';
 import type { MultipartFile } from '@fastify/multipart';
 import {
   ActionId,
+  AudioSettings,
   DEFAULT_THEME,
+  GeneralSettings,
+  KeyMap,
   LiveCommand,
+  Look,
   type Media,
   newId,
-  type Output,
+  Output,
   Playlist,
   Presentation,
+  SurfaceSettings,
   Theme,
 } from '@ordo/domain';
 import { actionToEvent } from '@ordo/live-state';
@@ -23,17 +28,26 @@ import {
   COOKIE_SESSION,
   type ManifestRes,
   type OutputConfigRes,
+  type OutputHealthEntry,
   type Settings,
   type SettingsKey,
 } from '@ordo/protocol';
 import type { FastifyInstance, FastifyReply, FastifyRequest, HTTPMethods, RouteHandlerMethod } from 'fastify';
 import JSZip from 'jszip';
 import { z } from 'zod';
-import type { Access, Principal } from './auth.ts';
-import type { Hub } from './hub.ts';
+import type { Logger } from 'pino';
+import type { Access, Auth, Principal } from './auth.ts';
+import type { Backups } from './backup.ts';
+import type { HubConfig } from './config.ts';
 import { badRequest, conflict, HttpError, locked, notFound, unauthorized } from './errors.ts';
-import { FolderSchema, newToken, SETTINGS_KEYS, stripTokens } from './library.ts';
-import { LiveRejection } from './live.ts';
+import type { FontService } from './fonts/service.ts';
+import type { ImportService } from './imports.ts';
+import type { JobQueue } from './jobs.ts';
+import { FolderSchema, type Library, newToken, SETTINGS_KEYS, stripTokens } from './library.ts';
+import { LiveRejection, type LiveService } from './live.ts';
+import type { LogRing } from './log.ts';
+import type { MediaService } from './media/service.ts';
+import type { Store } from './store.ts';
 import { searchGoogleFonts } from './fonts/google.ts';
 import { PPTX_MIME } from './imports.ts';
 import { sendFile } from './send.ts';
@@ -42,32 +56,117 @@ import { validate } from './validate.ts';
 
 export const DEVICE_COOKIE = 'ordo_device';
 
+// ---- request bodies (design/25): strict at the top level (unknown keys are refused) and bounded ----
 const PinBody = z.object({ pin: z.string().max(64), remember: z.boolean().optional() }).strict();
-const SetupBody = z.object({ operatePin: z.string(), editPin: z.string() }).strict();
-const PinsBody = z.object({ operatePin: z.string().optional(), editPin: z.string().optional() }).strict();
-const ActionBody = z.object({ id: ActionId, arg: z.union([z.number(), z.string()]).optional() }).strict();
+const SetupBody = z.object({ operatePin: z.string().max(64), editPin: z.string().max(64) }).strict();
+const PinsBody = z
+  .object({ operatePin: z.string().max(64).optional(), editPin: z.string().max(64).optional() })
+  .strict();
+const ActionBody = z
+  .object({
+    id: ActionId,
+    arg: z.union([z.number().int().min(-1_000_000).max(1_000_000), z.string().max(500)]).optional(),
+  })
+  .strict();
 const MediaPatch = z
   .object({
-    rev: z.number().int().optional(),
+    rev: z.number().int().min(0).optional(),
     name: z.string().min(1).max(200).optional(),
     tags: z.array(z.string().max(50)).max(50).optional(),
     loop: z.boolean().optional(),
     isBackground: z.boolean().optional(),
     audio: z
-      .object({ pairId: z.string().optional(), gainDb: z.number().min(-60).max(24).optional() })
+      .object({ pairId: z.string().max(200).optional(), gainDb: z.number().min(-60).max(24).optional() })
+      .strict()
       .optional(),
   })
-  .passthrough();
+  .strict();
 const UploadCreate = z
   .object({
     name: z.string().min(1).max(300),
     size: z.number().int().min(1).max(MAX_UPLOAD_BYTES),
     isBackground: z.boolean().optional(),
-    tags: z.array(z.string()).optional(),
+    tags: z.array(z.string().max(50)).max(50).optional(),
   })
   .strict();
+/** Server-managed fields a client may echo back with an entity it read; their values are ignored. */
+const Meta = {
+  rev: z.number().int().min(0).optional(),
+  createdAt: z.string().max(100).optional(),
+  updatedAt: z.string().max(100).optional(),
+};
+const PresentationBody = Presentation.strict();
+const PlaylistBody = Playlist.strict();
+const ThemeBody = Theme.extend(Meta).strict();
+const FolderBody = FolderSchema.extend(Meta).strict();
+const SongselectBody = z
+  .object({ text: z.string().max(1_000_000), title: z.string().max(300).optional() })
+  .strict();
+const LiveEventsBody = z.object({ id: z.string().max(200).optional(), event: z.unknown() }).strict();
+/** Settings documents are strict at the top level; list settings are strict per element. */
+const SETTINGS_BODY: Record<SettingsKey, z.ZodType> = {
+  general: GeneralSettings.strict(),
+  looks: z.array(Look.strict()).max(100),
+  // A new output arrives with an empty id; the hub assigns one.
+  outputs: z.array(Output.extend({ id: z.string().max(200) }).strict()).max(32),
+  audio: AudioSettings.strict(),
+  keymap: KeyMap,
+  surfaces: SurfaceSettings.strict(),
+};
 
-type Ctx = Hub;
+/** The live service as the library side sees it: edit locks and the mode (from IPC in the library process). */
+export type LiveView = {
+  locks(): { playlistId?: string; presentations: Set<string>; media: Set<string> };
+  mode(): 'idle' | 'live';
+};
+
+/** What the diagnostics export collects from the live side. */
+export type LiveDiag = {
+  journal: unknown[];
+  health: Record<string, OutputHealthEntry>;
+  sockets: number;
+  seq: number;
+  mode: string;
+  playlist?: string;
+  /** The live process's log lines (two-process mode only). */
+  log?: string[];
+  extra?: Record<string, unknown>;
+};
+
+/** Everything the library API needs. In one process it is the Hub; in the library process, libproc.ts. */
+export type LibraryApiCtx = {
+  cfg: HubConfig;
+  lib: Library;
+  auth: Auth;
+  store: Store;
+  jobs: JobQueue;
+  media: MediaService;
+  fonts: FontService;
+  imports: ImportService;
+  backups: Backups;
+  log: Logger;
+  ring: LogRing;
+  live: LiveView;
+  /** Close the sockets of an output whose token changed (the live process also notices on its own). */
+  disconnectOutput(outputId: string, reason: string): void;
+  /** The live side's journal and health for the diagnostics export; undefined when unreachable. */
+  liveDiag(): Promise<LiveDiag | undefined>;
+  /** Extra fields for hub.json in the diagnostics export (process supervision state). */
+  diagExtra?(): Record<string, unknown>;
+};
+
+/** Everything the live API needs. */
+export type LiveApiCtx = {
+  cfg: HubConfig;
+  auth: Auth;
+  live: LiveService;
+  log: Logger;
+  outputConfig(outputId: string): OutputConfigRes | undefined;
+  /** Extra fields for GET /health (process supervision state). */
+  healthExtra?(): Record<string, unknown>;
+};
+
+type Ctx = LibraryApiCtx;
 
 type Received = { path: string; hash: string; bytes: number; filename: string };
 
@@ -108,14 +207,86 @@ function sessionRole(p: Principal | null): 'operate' | 'edit' | undefined {
   return p?.kind === 'session' ? p.role : undefined;
 }
 
-export function registerApi(app: FastifyInstance, hub: Ctx): void {
+function routeFn(app: FastifyInstance) {
+  return (method: HTTPMethods | HTTPMethods[], url: string, access: Access, handler: RouteHandlerMethod) =>
+    app.route({ method, url: API_PREFIX + url, config: { access }, handler });
+}
+
+/**
+ * The routes the service depends on at 10:00 on Sunday (design/25): served by the live process, so a
+ * library-process failure cannot stop a GO, an output reconnect or a manifest fetch.
+ */
+export function registerLiveApi(app: FastifyInstance, ctx: LiveApiCtx): void {
+  const { auth, live, cfg } = ctx;
+  const route = routeFn(app);
+  route('GET', '/auth/me', 'public', async (req): Promise<AuthMeRes> => {
+    const p = req.principal;
+    return {
+      role: p?.role ?? null,
+      setupRequired: auth.setupRequired(),
+      version: APP_VERSION,
+      domain: cfg.domain,
+    };
+  });
+  route('GET', '/output/config', 'token', async (req): Promise<OutputConfigRes> => {
+    const p = req.principal;
+    if (p?.kind !== 'token') throw unauthorized();
+    const res = ctx.outputConfig(p.outputId);
+    if (!res) throw unauthorized();
+    return res;
+  });
+  route('GET', '/live', 'live', async () => ({ seq: live.state.seq, state: live.state }));
+  route('GET', '/cache/manifest', 'live', async (): Promise<ManifestRes> => {
+    const r = live.state.mode === 'live' ? live.state.resolved : undefined;
+    return r ? { manifestId: r.manifestId, files: r.files, resolved: r } : null;
+  });
+  const submit = async (cmd: unknown, id: string | undefined) => {
+    const c = validate(LiveCommand, cmd, 'event');
+    try {
+      return { seq: await live.submitQueued(c as never, { role: 'operate', id }) };
+    } catch (e) {
+      if (e instanceof LiveRejection) throw new HttpError(409, 'rejected', e.message);
+      throw e;
+    }
+  };
+  route('POST', '/live/events', 'operate', async (req) => {
+    const body = (req.body ?? {}) as { event?: unknown };
+    if (body && typeof body === 'object' && 'event' in body) {
+      const b = validate(LiveEventsBody, body);
+      return submit(b.event, b.id);
+    }
+    return submit(body, undefined);
+  });
+  route('POST', '/actions', 'operate', async (req) => {
+    const a = validate(ActionBody, req.body);
+    const ev = actionToEvent(live.state, a, live.now() + 33, {
+      messagePresets: live.messagePresets(),
+      newId,
+    });
+    if (!ev) return { seq: live.state.seq, ignored: true };
+    return submit(ev, `action:${a.id}`);
+  });
+  route('GET', '/health', 'public', async () => ({
+    ok: true,
+    version: APP_VERSION,
+    uptimeS: Math.round(process.uptime()),
+    seq: live.state.seq,
+    mode: live.state.mode,
+    ...ctx.healthExtra?.(),
+  }));
+}
+
+/** Unknown API paths are JSON 404s, never the SPA. Registered once, by whichever process owns the API. */
+export function registerApiNotFound(app: FastifyInstance): void {
+  routeFn(app)(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], '/*', 'public', async () => {
+    throw notFound('Unknown API route');
+  });
+}
+
+/** The library API: everything except the live routes. Served by the library process. */
+export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   const { lib, auth, live, cfg } = hub;
-  const route = (
-    method: HTTPMethods | HTTPMethods[],
-    url: string,
-    access: Access,
-    handler: RouteHandlerMethod,
-  ) => app.route({ method, url: API_PREFIX + url, config: { access }, handler });
+  const route = routeFn(app);
 
   const by = (req: FastifyRequest) => `${sessionRole(req.principal) ?? 'system'}@${req.ip}`;
   const cookieOpts = (req: FastifyRequest, maxAgeS: number) => ({
@@ -150,21 +321,11 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
   const params = (req: FastifyRequest) => req.params as Record<string, string>;
   /** Heavy imports (zip inflate, LibreOffice, ffmpeg) are refused while a playlist is live. */
   const assertNotLive = () => {
-    if (live.state.mode === 'live')
+    if (live.mode() === 'live')
       throw locked('Imports are disabled while a playlist is live; end the service first');
   };
 
   // ---------------- auth ----------------
-  route('GET', '/auth/me', 'public', async (req): Promise<AuthMeRes> => {
-    const p = req.principal;
-    return {
-      role: p?.role ?? null,
-      setupRequired: auth.setupRequired(),
-      version: APP_VERSION,
-      domain: cfg.domain,
-    };
-  });
-
   route('POST', '/auth/setup', 'public', async (req, reply) => {
     if (!auth.setupRequired()) throw new HttpError(409, 'already_setup', 'PINs are already set');
     auth.checkRate(req.ip);
@@ -219,7 +380,7 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
   route('GET', '/presentations/:id', 'edit', async (req) => lib.presentations.must(params(req).id!));
   route('POST', '/presentations', 'edit', async (req, reply) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const p = validate(Presentation, { ...body, id: body.id || newId(), rev: 1 });
+    const p = validate(PresentationBody, { ...body, id: body.id || newId(), rev: 1 });
     if (lib.presentations.get(p.id)) throw conflict(`Presentation ${p.id} already exists`);
     const saved = lib.savePresentation(p, { create: true, by: by(req) });
     lib.emit([{ kind: 'presentation', id: saved.id, rev: saved.rev, entity: saved }]);
@@ -230,7 +391,7 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
     const body = (req.body ?? {}) as Record<string, unknown>;
     if (typeof body.rev !== 'number') throw badRequest('rev is required');
     assertPresentationUnlocked(id);
-    const p = validate(Presentation, { ...body, id });
+    const p = validate(PresentationBody, { ...body, id });
     const saved = lib.savePresentation(p, { expectedRev: body.rev, by: by(req) });
     lib.emit([{ kind: 'presentation', id, rev: saved.rev, entity: saved }]);
     return saved;
@@ -268,7 +429,7 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
   route('GET', '/playlists/:id', 'edit', async (req) => lib.playlists.must(params(req).id!));
   route('POST', '/playlists', 'edit', async (req, reply) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const p = validate(Playlist, { ...body, id: body.id || newId(), rev: 1 });
+    const p = validate(PlaylistBody, { ...body, id: body.id || newId(), rev: 1 });
     if (lib.playlists.get(p.id)) throw conflict(`Playlist ${p.id} already exists`);
     const saved = lib.playlists.insert(p);
     lib.emit([{ kind: 'playlist', id: saved.id, rev: saved.rev, entity: saved }]);
@@ -279,7 +440,7 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
     const body = (req.body ?? {}) as Record<string, unknown>;
     if (typeof body.rev !== 'number') throw badRequest('rev is required');
     assertPlaylistUnlocked(id);
-    const saved = lib.playlists.update(id, validate(Playlist, { ...body, id }), body.rev);
+    const saved = lib.playlists.update(id, validate(PlaylistBody, { ...body, id }), body.rev);
     lib.emit([{ kind: 'playlist', id, rev: saved.rev, entity: saved }]);
     return saved;
   });
@@ -296,7 +457,7 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
   route('GET', '/themes/:id', 'edit', async (req) => lib.themes.must(params(req).id!));
   route('POST', '/themes', 'edit', async (req, reply) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const t = validate(Theme, { ...body, id: body.id || newId() });
+    const t = validate(ThemeBody, { ...body, id: body.id || newId() });
     if (lib.themes.get(t.id)) throw conflict(`Theme ${t.id} already exists`);
     const saved = lib.themes.insert(t);
     lib.emit([{ kind: 'theme', id: saved.id, rev: saved.rev, entity: saved }]);
@@ -307,7 +468,7 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const saved = lib.themes.update(
       id,
-      validate(Theme, { ...body, id }),
+      validate(ThemeBody, { ...body, id }),
       typeof body.rev === 'number' ? body.rev : undefined,
     );
     lib.emit([{ kind: 'theme', id, rev: saved.rev, entity: saved }]);
@@ -325,7 +486,7 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
   route('GET', '/folders', 'edit', async () => lib.folders.list());
   route('POST', '/folders', 'edit', async (req, reply) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const saved = lib.folders.insert(validate(FolderSchema, { ...body, id: body.id || newId() }));
+    const saved = lib.folders.insert(validate(FolderBody, { ...body, id: body.id || newId() }));
     lib.emit([{ kind: 'folder', id: saved.id, rev: saved.rev, entity: saved }]);
     return reply.code(201).send(saved);
   });
@@ -334,7 +495,7 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const saved = lib.folders.update(
       id,
-      validate(FolderSchema, { ...body, id }),
+      validate(FolderBody, { ...body, id }),
       typeof body.rev === 'number' ? body.rev : undefined,
     );
     lib.emit([{ kind: 'folder', id, rev: saved.rev, entity: saved }]);
@@ -512,7 +673,7 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
     return reply.code(204).send();
   });
   route('GET', '/fonts/google/search', 'edit', async (req) =>
-    searchGoogleFonts(String((req.query as Record<string, unknown>).q ?? '')),
+    searchGoogleFonts(String((req.query as Record<string, unknown>).q ?? '').slice(0, 100)),
   );
   route('POST', '/fonts/google', 'edit', async (req, reply) => {
     const b = validate(z.object({ family: z.string().min(1).max(100) }).strict(), req.body);
@@ -538,7 +699,7 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
             : buf.toString('utf8');
       title = fields.title;
     } else {
-      const b = validate(z.object({ text: z.string(), title: z.string().optional() }).strict(), req.body);
+      const b = validate(SongselectBody, req.body);
       text = b.text;
       title = b.title;
     }
@@ -603,7 +764,7 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
   route('PUT', '/settings/:key', 'operate', async (req) => {
     const key = params(req).key as SettingsKey;
     if (!SETTINGS_KEYS.includes(key)) throw notFound(`Unknown setting ${key}`);
-    let value = req.body as Settings[SettingsKey];
+    let value = validate(SETTINGS_BODY[key], req.body, key) as Settings[SettingsKey];
     if (key === 'outputs') {
       if (!Array.isArray(value)) throw badRequest('outputs must be an array');
       const cur = new Map(lib.getSetting('outputs').map((o) => [o.id, o]));
@@ -632,52 +793,10 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
       'outputs',
       outputs.map((x) => (x.id === id ? next : x)),
     );
-    hub.sockets.disconnectOutput(id, 'token-rotated');
+    hub.disconnectOutput(id, 'token-rotated');
     hub.log.info({ output: id }, 'output token rotated');
     return next;
   });
-  route('GET', '/output/config', 'token', async (req): Promise<OutputConfigRes> => {
-    const p = req.principal;
-    if (p?.kind !== 'token') throw unauthorized();
-    const s = lib.getSettings();
-    const output = s.outputs.find((o) => o.id === p.outputId);
-    if (!output) throw unauthorized();
-    const { token: _t, ...out } = output;
-    const logo = s.general.logoMediaId ? lib.media.get(s.general.logoMediaId) : undefined;
-    return { output: out, looks: s.looks, audio: s.audio, general: s.general, logo, fonts: lib.listFonts() };
-  });
-
-  // ---------------- live ----------------
-  route('GET', '/live', 'live', async () => ({ seq: live.state.seq, state: live.state }));
-  route('GET', '/cache/manifest', 'live', async (): Promise<ManifestRes> => {
-    const r = live.state.mode === 'live' ? live.state.resolved : undefined;
-    return r ? { manifestId: r.manifestId, files: r.files, resolved: r } : null;
-  });
-  const submit = (cmd: unknown, id: string | undefined) => {
-    const c = validate(LiveCommand, cmd, 'event');
-    try {
-      return { seq: live.submit(c as never, { role: 'operate', id }) };
-    } catch (e) {
-      if (e instanceof LiveRejection) throw new HttpError(409, 'rejected', e.message);
-      throw e;
-    }
-  };
-  route('POST', '/live/events', 'operate', async (req) => {
-    const body = (req.body ?? {}) as { id?: unknown; event?: unknown; k?: unknown };
-    if (body.event !== undefined)
-      return submit(body.event, typeof body.id === 'string' ? body.id : undefined);
-    return submit(body, undefined);
-  });
-  route('POST', '/actions', 'operate', async (req) => {
-    const a = validate(ActionBody, req.body);
-    const ev = actionToEvent(live.state, a, live.now() + 33, {
-      messagePresets: lib.getSetting('surfaces').messagePresets,
-      newId,
-    });
-    if (!ev) return { seq: live.state.seq, ignored: true };
-    return submit(ev, `action:${a.id}`);
-  });
-
   // ---------------- files ----------------
   route('GET', '/files/:hash', 'any', async (req, reply) => {
     const hash = params(req).hash!;
@@ -691,21 +810,16 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
     });
   });
 
-  // ---------------- health, diagnostics, backups ----------------
-  route('GET', '/health', 'public', async () => ({
-    ok: true,
-    version: APP_VERSION,
-    uptimeS: Math.round(process.uptime()),
-    seq: live.state.seq,
-    mode: live.state.mode,
-  }));
+  // ---------------- diagnostics, backups ----------------
   route('GET', '/diagnostics/export', 'operate', async (_req, reply) => {
     const zip = new JSZip();
     const s = stripTokens(lib.getSettings());
+    const d = await hub.liveDiag();
     zip.file('logs.ndjson', hub.ring.snapshot().join('\n'));
-    zip.file('journal.json', JSON.stringify(live.journalTail(500), null, 1));
+    if (d?.log) zip.file('logs-live.ndjson', d.log.join('\n'));
+    zip.file('journal.json', JSON.stringify(d?.journal ?? 'the live process did not answer', null, 1));
     zip.file('settings.json', JSON.stringify(s, null, 1));
-    zip.file('health.json', JSON.stringify(hub.sockets.healthTable(), null, 1));
+    zip.file('health.json', JSON.stringify(d?.health ?? {}, null, 1));
     zip.file(
       'hub.json',
       JSON.stringify(
@@ -714,10 +828,12 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
           node: process.version,
           uptimeS: Math.round(process.uptime()),
           domain: cfg.domain,
-          seq: live.state.seq,
-          mode: live.state.mode,
-          playlist: live.state.resolved?.playlist.name,
-          sockets: hub.sockets.size,
+          seq: d?.seq,
+          mode: d?.mode ?? live.mode(),
+          playlist: d?.playlist,
+          sockets: d?.sockets,
+          live: d?.extra,
+          processes: hub.diagExtra?.(),
           jobs: hub.jobs
             .list(50)
             .map((j) => ({ id: j.id, kind: j.kind, state: j.state, error: j.error, updatedAt: j.updatedAt })),
@@ -738,11 +854,6 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
   });
   route('POST', '/backup/run', 'operate', async () => hub.backups.run());
   route('GET', '/backup/list', 'operate', async () => hub.backups.list());
-
-  // Unknown API paths are JSON 404s, never the SPA.
-  route(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], '/*', 'public', async () => {
-    throw notFound('Unknown API route');
-  });
 }
 
 /**
@@ -769,7 +880,7 @@ export function assertOneAudioMaster(
     );
 }
 
-export async function cleanupStaleUploads(hub: Ctx): Promise<void> {
+export async function cleanupStaleUploads(hub: Pick<Ctx, 'lib' | 'store' | 'cfg'>): Promise<void> {
   const cutoff = Date.now() - 7 * 86400_000;
   const rows = hub.lib.db.prepare(`SELECT id FROM uploads WHERE updated_at < ?`).all(cutoff) as {
     id: string;

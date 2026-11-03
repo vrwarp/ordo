@@ -21,6 +21,43 @@ import {
 
 export const MAX_IMAGE_WIDTH = 3840;
 
+/**
+ * Decode-time limits (design/25 "Files"). A file beyond them fails its media job with a clear reason and
+ * is never retried automatically; the operator can still press Retry after replacing it.
+ */
+export const DECODE_LIMITS = {
+  /** Largest accepted image, either side, in pixels. */
+  imageSide: 16384,
+  /** Longest accepted video or audio. */
+  durationMs: 4 * 3600_000,
+  /** Largest accepted video frame (8K UHD), compared as long and short side. */
+  videoLong: 7680,
+  videoShort: 4320,
+  /** GIFs are decoded frame by frame: bound the frame count. */
+  gifFrames: 20_000,
+} as const;
+
+/** Throws when a probed file exceeds DECODE_LIMITS. Pure, for tests. */
+export function checkDecodeLimits(
+  kind: 'video' | 'image' | 'audio',
+  info: { durationMs?: number; video?: { width?: number; height?: number } },
+): void {
+  const L = DECODE_LIMITS;
+  const w = info.video?.width ?? 0;
+  const h = info.video?.height ?? 0;
+  if (kind === 'image') {
+    if (w > L.imageSide || h > L.imageSide)
+      throw new Error(`Image is ${w}x${h}; the limit is ${L.imageSide}x${L.imageSide}`);
+    return;
+  }
+  if (info.durationMs !== undefined && info.durationMs > L.durationMs)
+    throw new Error(
+      `${kind === 'video' ? 'Video' : 'Audio'} is ${Math.round(info.durationMs / 60_000)} min long; the limit is ${L.durationMs / 3600_000} h`,
+    );
+  if (kind === 'video' && (Math.max(w, h) > L.videoLong || Math.min(w, h) > L.videoShort))
+    throw new Error(`Video is ${w}x${h}; the limit is ${L.videoLong}x${L.videoShort} (8K)`);
+}
+
 export type IngestOpts = {
   isBackground?: boolean;
   tags?: string[];
@@ -42,7 +79,15 @@ export class MediaService {
     private cfg: HubConfig,
     private log: Logger,
   ) {
-    jobs.register<{ mediaId: string }>('media', (ctx) => this.process(ctx));
+    jobs.register<{ mediaId: string }>(
+      'media',
+      (ctx) => this.process(ctx),
+      // Abandoned after repeated crashes: mark the item failed so nothing waits on it.
+      ({ mediaId }, error) => {
+        const cur = this.lib.media.get(mediaId);
+        if (cur && cur.state !== 'ready') this.save({ ...cur, state: 'failed', error: error.slice(0, 500) });
+      },
+    );
   }
 
   /** Identify a received file and check that its name agrees with its content. */
@@ -185,6 +230,7 @@ export class MediaService {
     const t = this.cfg.timeouts;
     const input = this.store.abs(m.original.path);
     const info = await probe(input, t.probe);
+    checkDecodeLimits(m.kind, info);
     const opts = {
       signal: ctx.signal,
       durationMs: info.durationMs,
@@ -193,6 +239,12 @@ export class MediaService {
 
     if (m.original.mime === 'image/gif') {
       const gi = gifInfo(await readFile(input));
+      if (gi.width > DECODE_LIMITS.imageSide || gi.height > DECODE_LIMITS.imageSide)
+        throw new Error(
+          `GIF is ${gi.width}x${gi.height}; the limit is ${DECODE_LIMITS.imageSide}x${DECODE_LIMITS.imageSide}`,
+        );
+      if (gi.frames > DECODE_LIMITS.gifFrames)
+        throw new Error(`GIF has ${gi.frames} frames; the limit is ${DECODE_LIMITS.gifFrames}`);
       ctx.log(`GIF ${gi.width}x${gi.height}, ${gi.frames} frame(s)${gi.transparent ? ', transparent' : ''}`);
       if (gi.frames > 1) {
         const ginfo = { ...info, audio: undefined };

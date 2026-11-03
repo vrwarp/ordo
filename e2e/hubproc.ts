@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 
 /** A hub process owned by a test, so the test can kill and restart it (hub-loss scenarios). */
 export class HubProcess {
@@ -49,5 +50,21 @@ export class HubProcess {
   kill(): void {
     this.proc?.kill('SIGKILL');
     this.proc = undefined;
+  }
+
+  /** The supervisor's children (two-process hub): pids from <data>/supervisor.json. */
+  children(): Record<'live' | 'library', { pid?: number; state: string; restarts: number }> {
+    const s = JSON.parse(readFileSync(join(this.dataDir, 'supervisor.json'), 'utf8')) as {
+      processes: { name: 'live' | 'library'; pid?: number; state: string; restarts: number }[];
+    };
+    return Object.fromEntries(s.processes.map((p) => [p.name, p])) as never;
+  }
+
+  /** Kill one child process as if it crashed; the supervisor restarts it. */
+  killChild(name: 'live' | 'library'): number {
+    const pid = this.children()[name].pid;
+    if (!pid) throw new Error(`${name} process is not running`);
+    process.kill(pid, 'SIGKILL');
+    return pid;
   }
 }

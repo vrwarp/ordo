@@ -1,5 +1,6 @@
 import {
   type Box,
+  LOGICAL_HEIGHT,
   type Look,
   type Rgba,
   type Slide,
@@ -8,6 +9,8 @@ import {
   firstText,
   rgbaCss,
 } from '@ordo/domain';
+
+import { CLAMP, clampBox, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
 
 export type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 export type ImageLookup = (mediaId: string) => CanvasImageSource | undefined;
@@ -71,6 +74,12 @@ export function layoutText(
   fit = false,
   minScale = 0.5,
 ): TextLayout {
+  // Last line of the render-plan clamps (design/25): bounded text, font size and box whatever the caller.
+  text = clampText(text);
+  style = clampStyle(style);
+  box = clampBox(box);
+  scale = num(scale, 0.01, 8, 1);
+  minScale = num(minScale, 0.05, 1, 0.5);
   const pad = style.padding * scale;
   const bx = box.x * scale;
   const by = box.y * scale;
@@ -86,29 +95,40 @@ export function layoutText(
     setLetterSpacing(ctx, style.letterSpacing * scale);
     lines = wrapLines(ctx, text, innerW);
     lh = size * scale * style.lineHeight;
-    if (!fit || lines.length * lh <= innerH || size <= style.fontSizePx * minScale) break;
-    size = Math.max(style.fontSizePx * minScale, size * 0.92);
+    if (!fit || lines.length * lh <= innerH || size <= Math.max(CLAMP.minFontPx, style.fontSizePx * minScale))
+      break;
+    size = Math.max(CLAMP.minFontPx, style.fontSizePx * minScale, size * 0.92);
   }
   const blockH = lines.length * lh;
   let y0 = by + pad;
   if (style.valign === 'middle') y0 = by + pad + (innerH - blockH) / 2;
   else if (style.valign === 'bottom') y0 = by + pad + innerH - blockH;
-  const laid = lines.map((t, i) => {
+  // Lines that overflow far past the clamp region (±2× the canvas) are never visible: cull them, so an
+  // overlong text costs measuring, not drawing thousands of off-screen lines.
+  const lo = -CLAMP.boxFactor * LOGICAL_HEIGHT * scale;
+  const hi = CLAMP.boxFactor * LOGICAL_HEIGHT * scale;
+  const laid: TextLayout['lines'] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const y = y0 + i * lh;
+    if (y < lo || y > hi) continue;
+    const t = lines[i]!;
     const width = ctx.measureText(t).width;
     let x = bx + pad;
     if (style.align === 'center') x = bx + pad + (innerW - width) / 2;
     else if (style.align === 'right') x = bx + pad + innerW - width;
-    return { text: t, x, y: y0 + i * lh, width };
-  });
+    laid.push({ text: t, x, y, width });
+  }
   const maxW = laid.reduce((m, l) => Math.max(m, l.width), 0);
   let blockX = bx + pad;
   if (style.align === 'center') blockX = bx + pad + (innerW - maxW) / 2;
   else if (style.align === 'right') blockX = bx + pad + innerW - maxW;
+  const top = Math.max(lo, y0 - pad);
+  const bottom = Math.min(hi, y0 + blockH + pad);
   return {
     lines: laid,
     fontSize: size,
     lineHeightPx: lh,
-    block: { x: blockX - pad, y: y0 - pad, w: maxW + 2 * pad, h: blockH + 2 * pad },
+    block: { x: blockX - pad, y: top, w: maxW + 2 * pad, h: Math.max(0, bottom - top) },
   };
 }
 
@@ -147,8 +167,11 @@ export function drawText(
   scale: number,
   opts: { opacity?: number; fit?: boolean } = {},
 ): TextLayout {
+  style = clampStyle(style);
+  box = clampBox(box);
+  text = clampText(text);
   ctx.save();
-  ctx.globalAlpha = opts.opacity ?? 1;
+  ctx.globalAlpha = num(opts.opacity, 0, 1, 1);
   const layout = layoutText(ctx, text, style, box, scale, opts.fit ?? false);
   withRotation(ctx, box, scale, () => {
     ctx.textBaseline = 'alphabetic';
@@ -199,6 +222,9 @@ export function drawImageFit(
   opacity = 1,
   radius = 0,
 ): void {
+  box = clampBox(box);
+  opacity = num(opacity, 0, 1, 1);
+  radius = num(radius, 0, CLAMP.maxRadius, 0);
   const iw = (img as { width: number }).width || (img as HTMLVideoElement).videoWidth || 1;
   const ih = (img as { height: number }).height || (img as HTMLVideoElement).videoHeight || 1;
   const bx = box.x * scale;
@@ -223,9 +249,9 @@ export function drawImageFit(
 }
 
 export function drawShape(ctx: Ctx2D, o: Extract<SlideObject, { type: 'shape' }>, scale: number): void {
-  const { box } = o;
+  const box = clampBox(o.box);
   ctx.save();
-  ctx.globalAlpha = o.opacity;
+  ctx.globalAlpha = num(o.opacity, 0, 1, 1);
   withRotation(ctx, box, scale, () => {
     const x = box.x * scale;
     const y = box.y * scale;
@@ -242,7 +268,7 @@ export function drawShape(ctx: Ctx2D, o: Extract<SlideObject, { type: 'shape' }>
       ctx.fill();
     }
     if (o.stroke) {
-      ctx.lineWidth = o.stroke.width * scale;
+      ctx.lineWidth = num(o.stroke.width, 0, CLAMP.maxEffectPx, 1) * scale;
       ctx.strokeStyle = rgbaCss(o.stroke.color);
       ctx.stroke();
     }
@@ -284,22 +310,26 @@ export function lyricTextFor(slide: Slide, look: Look | undefined, isSong: boole
  * Draw the Slide layer of a slide as a look renders it, on a transparent canvas. Backgrounds are not
  * drawn here (they are their own layer).
  */
-export function drawSlide2D(ctx: Ctx2D, slide: Slide, opts: SlideDrawOptions): void {
-  const rule = opts.look?.layers.slide ?? { mode: 'authored' as const };
+export function drawSlide2D(ctx: Ctx2D, rawSlide: Slide, opts: SlideDrawOptions): void {
+  const slide = clampSlide(rawSlide);
+  const look = opts.look ? clampLook(opts.look) : undefined;
+  const next = opts.nextSlide ? clampSlide(opts.nextSlide) : undefined;
+  const scale = num(opts.scale, 0.01, 8, 1);
+  const rule = look?.layers.slide ?? { mode: 'authored' as const };
   if (rule.mode === 'hidden') return;
   if (rule.mode === 'authored') {
     if (slide.imported && !opts.skipImported) {
       const img = opts.images?.(slide.imported.imageMediaId);
-      if (img) drawImageFit(ctx, img, { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 }, opts.scale, 'contain');
+      if (img) drawImageFit(ctx, img, { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 }, scale, 'contain');
     }
-    for (const o of slide.objects) drawObject(ctx, o, opts.scale, opts.images);
+    for (const o of slide.objects) drawObject(ctx, o, scale, opts.images);
     return;
   }
-  const text = lyricTextFor(slide, opts.look, opts.isSong ?? true);
-  if (text) drawText(ctx, text, rule.style, rule.band, opts.scale, { fit: true });
-  if (rule.nextSlide && opts.nextSlide) {
-    const nt = lyricTextFor(opts.nextSlide, opts.look, opts.isSong ?? true);
-    if (nt) drawText(ctx, nt, rule.nextSlide.style, rule.nextSlide.band, opts.scale, { fit: true });
+  const text = lyricTextFor(slide, look, opts.isSong ?? true);
+  if (text) drawText(ctx, text, rule.style, rule.band, scale, { fit: true });
+  if (rule.nextSlide && next) {
+    const nt = lyricTextFor(next, look, opts.isSong ?? true);
+    if (nt) drawText(ctx, nt, rule.nextSlide.style, rule.nextSlide.band, scale, { fit: true });
   }
 }
 

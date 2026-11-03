@@ -169,6 +169,25 @@ export class FallbackHost extends Emitter<{
       this.postTo(w, { t: 'fallback.hello', v: 1, seq: this.lastState.seq, operatorMs: Date.now() });
   }
 
+  /**
+   * The endpoint of one window now reaches a new page (a fresh port after a reload or re-offer): forget
+   * that it was ready and introduce the bus again, exactly as a new registration would, without closing
+   * the endpoint.
+   */
+  reintroduce(outputId: string): void {
+    const w = this.windows.get(outputId);
+    if (!w) return;
+    w.ready = false;
+    if (!this.active) this.postTo(w, { t: 'fallback.hub', v: 1, hubUp: true });
+    else if (this.lastState)
+      this.postTo(w, { t: 'fallback.hello', v: 1, seq: this.lastState.seq, operatorMs: Date.now() });
+  }
+
+  /** Whether a window has answered the current introduction with fallback.ready. */
+  isReady(outputId: string): boolean {
+    return this.windows.get(outputId)?.ready ?? false;
+  }
+
   unregister(outputId: string): void {
     const w = this.windows.get(outputId);
     if (!w) return;
@@ -419,4 +438,30 @@ export function acceptPorts(operatorOrigin: string, onPort: (port: MessagePort) 
   };
   window.addEventListener('message', listener);
   return () => window.removeEventListener('message', listener);
+}
+
+/**
+ * Role-window → opener: "my bus port is gone, offer a new one". A role window sends it when its link
+ * worker restarted (the port it held died with the worker). The operator answers with `offerPort` for
+ * that window; until it does, the window's legacy window.postMessage relay keeps the bus working.
+ */
+export const PORT_REQUEST = 'ordo.port.request';
+export type PortRequest = { t: typeof PORT_REQUEST; v: 1; outputId: string };
+
+/** Role-window main thread: ask window.opener for a fresh bus port. False when there is no opener. */
+export function requestPort(operatorOrigin: string, outputId: string): boolean {
+  try {
+    const op = window.opener as Window | null;
+    if (!op || op.closed) return false;
+    op.postMessage({ t: PORT_REQUEST, v: PROTOCOL_VERSION, outputId } satisfies PortRequest, operatorOrigin);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Operator side: whether `data` is a port request (check the event's source and origin as well). */
+export function isPortRequest(data: unknown): data is PortRequest {
+  const d = data as Partial<PortRequest> | undefined;
+  return !!d && d.t === PORT_REQUEST && d.v === PROTOCOL_VERSION && typeof d.outputId === 'string';
 }

@@ -1,9 +1,10 @@
-import type { OutputLink, RtcSignalIn } from '@ordo/client';
+import type { ClientMessageBody, RtcSignalIn } from '@ordo/client';
 
 /**
  * Program view sender: answers the operator's offer with a 320x180, 10 fps track captured from a small
  * canvas that the main thread paints from the render worker's periodic frame copies. Host candidates
- * only (one PC, no STUN/TURN).
+ * only (one PC, no STUN/TURN). WebRTC is not available in workers, so this stays on the main thread;
+ * signalling arrives from the link worker and answers go back through it (`send`).
  */
 export class ProgramSender {
   readonly canvas: HTMLCanvasElement;
@@ -13,7 +14,7 @@ export class ProgramSender {
   private pendingIce: RTCIceCandidateInit[] = [];
   onActiveChange?: (active: boolean) => void;
 
-  constructor(private link: OutputLink) {
+  constructor(private sendToHub: (m: ClientMessageBody) => void) {
     this.canvas = document.createElement('canvas');
     this.canvas.width = 320;
     this.canvas.height = 180;
@@ -24,7 +25,6 @@ export class ProgramSender {
       this.ctx.fillRect(0, 0, 320, 180);
     }
     document.body.appendChild(this.canvas);
-    link.on('rtc', (m) => void this.onSignal(m));
   }
 
   get active(): boolean {
@@ -38,7 +38,7 @@ export class ProgramSender {
   }
 
   private send(body: { sdp?: unknown; ice?: unknown }): void {
-    this.link.hub.send({ t: 'rtc.signal', to: 'operator', ...body });
+    this.sendToHub({ t: 'rtc.signal', to: 'operator', ...body } as ClientMessageBody);
   }
 
   private close(): void {
@@ -51,7 +51,7 @@ export class ProgramSender {
     this.onActiveChange?.(false);
   }
 
-  private async onSignal(m: RtcSignalIn): Promise<void> {
+  async onSignal(m: RtcSignalIn): Promise<void> {
     if (m.from !== 'operator') return;
     try {
       const sdp = m.sdp as RTCSessionDescriptionInit | undefined;

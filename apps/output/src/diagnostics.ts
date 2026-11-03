@@ -9,7 +9,11 @@ export class Diagnostics {
   private lines: string[] = [];
   visible = false;
 
-  constructor(private snapshot: () => Record<string, unknown>) {
+  constructor(
+    private snapshot: () => Record<string, unknown>,
+    /** Log lines kept elsewhere (the link worker's ring), shown after this thread's own. */
+    private external: () => string[] = () => [],
+  ) {
     this.el = document.createElement('div');
     this.el.className = 'diag';
     this.el.hidden = true;
@@ -42,7 +46,7 @@ export class Diagnostics {
   showFatal(title: string, detail: string): void {
     this.el.hidden = false;
     this.el.classList.add('fatal');
-    this.pre.textContent = `${title}\n\n${detail}\n\n${this.lines.slice(-20).join('\n')}`;
+    this.pre.textContent = `${title}\n\n${detail}\n\n${this.merged().slice(-20).join('\n')}`;
   }
 
   private render(): void {
@@ -50,6 +54,12 @@ export class Diagnostics {
     const rows = Object.entries(s).map(
       ([k, v]) => `${k.padEnd(18)} ${typeof v === 'string' ? v : JSON.stringify(v)}`,
     );
-    this.pre.textContent = `ordo output — Ctrl+Shift+D to hide, Ctrl+Shift+Q to close\n\n${rows.join('\n')}\n\nlog:\n${this.lines.slice(-15).join('\n')}`;
+    this.pre.textContent = `ordo output — Ctrl+Shift+D to hide, Ctrl+Shift+Q to close\n\n${rows.join('\n')}\n\nlog:\n${this.merged().slice(-15).join('\n')}`;
+  }
+
+  /** The link worker's ring (it includes this thread's lines, forwarded); this thread's own before that. */
+  private merged(): string[] {
+    const ext = this.external();
+    return ext.length ? ext : this.lines;
   }
 }

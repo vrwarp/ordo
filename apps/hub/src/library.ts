@@ -30,7 +30,7 @@ import type {
 } from '@ordo/protocol';
 import { z } from 'zod';
 import { type DB, nowIso } from './db.ts';
-import { conflict, notFound } from './errors.ts';
+import { badRequest, conflict, notFound } from './errors.ts';
 import { validate } from './validate.ts';
 
 export type Change = { kind: LibraryKind; id: string; rev?: number; entity?: unknown; deleted?: boolean };
@@ -39,9 +39,9 @@ export type Change = { kind: LibraryKind; id: string; rev?: number; entity?: unk
 export const LIBRARY_CHANGES_KEEP = 20_000;
 
 export const FolderSchema = z.object({
-  id: z.string().min(1),
-  name: z.string(),
-  parentId: z.string().optional(),
+  id: z.string().min(1).max(200),
+  name: z.string().max(500),
+  parentId: z.string().max(200).optional(),
 });
 
 export const SETTINGS_SCHEMAS: Record<SettingsKey, z.ZodType> = {
@@ -53,6 +53,42 @@ export const SETTINGS_SCHEMAS: Record<SettingsKey, z.ZodType> = {
   surfaces: SurfaceSettings,
 };
 export const SETTINGS_KEYS = Object.keys(SETTINGS_SCHEMAS) as SettingsKey[];
+
+/**
+ * Settings invariants (design/25), checked on every write of `key`. Returns the problems, empty when sound.
+ * Exactly-one-audio-master is checked by the API (routes.ts) with its own messages.
+ */
+export function settingsProblems(
+  key: SettingsKey,
+  next: Settings[SettingsKey],
+  current: Pick<Settings, 'looks' | 'outputs'>,
+): string[] {
+  const out: string[] = [];
+  const outputs = key === 'outputs' ? (next as Output[]) : current.outputs;
+  const looks = key === 'looks' ? (next as Look[]) : current.looks;
+  if (key === 'outputs') {
+    const hosts = new Map<number, string>();
+    for (const o of outputs) {
+      if (o.kind === 'stage') continue;
+      const other = hosts.get(o.hostIndex);
+      if (other !== undefined) out.push(`"${o.name}" and "${other}" both use out${o.hostIndex}`);
+      hosts.set(o.hostIndex, o.name);
+    }
+  }
+  if (key === 'looks') {
+    const ids = new Set<string>();
+    for (const l of looks) {
+      if (ids.has(l.id)) out.push(`look id ${l.id} is used twice`);
+      ids.add(l.id);
+    }
+  }
+  if (key === 'outputs' || key === 'looks') {
+    const ids = new Set(looks.map((l) => l.id));
+    for (const o of outputs)
+      if (!ids.has(o.lookId)) out.push(`"${o.name}" uses look ${o.lookId}, which does not exist`);
+  }
+  return out;
+}
 
 export function newToken(): string {
   return randomBytes(32).toString('base64url');
@@ -158,10 +194,13 @@ export class Library {
   readonly folders: EntityTable<Folder & { rev?: number }>;
   private listeners: ((changes: Change[], seq: number) => void)[] = [];
 
+  private timeZone: string;
+
   constructor(
     readonly db: DB,
     opts: { timeZone: string },
   ) {
+    this.timeZone = opts.timeZone;
     this.presentations = new EntityTable(db, 'presentations', Presentation, (p) => ({
       title: p.title,
       kind: p.kind,
@@ -228,24 +267,83 @@ export class Library {
   }
 
   // ---- settings ----
+  /**
+   * A stored settings value, read through its schema (design/25 "defaults for missing keys on read"):
+   * missing fields get their defaults; a value that no longer validates degrades element by element for
+   * lists (an invalid look or output is dropped) and to the defaults for documents. A missing row reads
+   * as the default (outputs excepted: they hold tokens and are always seeded).
+   */
+  private readSetting<K extends SettingsKey>(key: K, json: string | undefined): Settings[K] {
+    const schema = SETTINGS_SCHEMAS[key];
+    let raw: unknown;
+    try {
+      raw = json === undefined ? undefined : JSON.parse(json);
+    } catch {
+      raw = undefined;
+    }
+    if (raw !== undefined) {
+      const r = schema.safeParse(raw);
+      if (r.success) return r.data as Settings[K];
+      if (Array.isArray(raw)) {
+        const el = key === 'looks' ? Look : Output;
+        const items = raw.flatMap((x) => {
+          const e = el.safeParse(x);
+          return e.success ? [e.data] : [];
+        });
+        if (items.length || key === 'outputs') return items as Settings[K];
+      } else if (raw && typeof raw === 'object' && 'shape' in schema) {
+        // A document with a bad field: keep every field that still validates, default the rest.
+        const shape = (schema as unknown as { shape: Record<string, z.ZodType> }).shape;
+        const kept = Object.fromEntries(
+          Object.entries(raw as Record<string, unknown>).filter(([k, v]) => shape[k]?.safeParse(v).success),
+        );
+        const merged = schema.safeParse({
+          ...((this.defaults() as Record<string, unknown>)[key] as object),
+          ...kept,
+        });
+        if (merged.success) return merged.data as Settings[K];
+      }
+    }
+    if (key === 'outputs') return [] as unknown as Settings[K];
+    return schema.parse(this.defaults()[key]) as Settings[K];
+  }
+
+  private defaults(): Omit<Settings, 'outputs'> {
+    return {
+      general: { ...DEFAULT_GENERAL, timeZone: this.timeZone, defaultThemeId: DEFAULT_THEME.id },
+      looks: DEFAULT_LOOKS,
+      audio: DEFAULT_AUDIO,
+      keymap: DEFAULT_KEYMAP,
+      surfaces: DEFAULT_SURFACES,
+    };
+  }
+
   getSettings(): Settings {
+    const rows = new Map(
+      (this.db.prepare(`SELECT key, json FROM settings`).all() as { key: string; json: string }[]).map(
+        (r) => [r.key, r.json],
+      ),
+    );
     const out = {} as Record<string, unknown>;
-    for (const r of this.db.prepare(`SELECT key, json FROM settings`).all() as {
-      key: string;
-      json: string;
-    }[])
-      if ((SETTINGS_KEYS as string[]).includes(r.key)) out[r.key] = JSON.parse(r.json);
+    for (const k of SETTINGS_KEYS) out[k] = this.readSetting(k, rows.get(k));
     return out as Settings;
   }
   getSetting<K extends SettingsKey>(key: K): Settings[K] {
+    if (!SETTINGS_KEYS.includes(key)) throw notFound(`setting ${key}`);
     const r = this.db.prepare(`SELECT json FROM settings WHERE key = ?`).get(key) as
       | { json: string }
       | undefined;
-    if (!r) throw notFound(`setting ${key}`);
-    return JSON.parse(r.json) as Settings[K];
+    return this.readSetting(key, r?.json);
   }
   putSetting<K extends SettingsKey>(key: K, value: Settings[K]): Settings[K] {
     const v = validate(SETTINGS_SCHEMAS[key], value, key) as Settings[K];
+    if (key === 'outputs' || key === 'looks') {
+      const problems = settingsProblems(key, v, {
+        looks: this.getSetting('looks'),
+        outputs: this.getSetting('outputs'),
+      });
+      if (problems.length) throw badRequest(problems.slice(0, 3).join('; '), 'settings_invariant');
+    }
     this.db
       .prepare(
         `INSERT INTO settings (key, rev, json, updated_at) VALUES (?, 1, ?, ?)
