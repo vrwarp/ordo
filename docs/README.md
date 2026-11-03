@@ -65,6 +65,7 @@ an ADR.
 | ------------------------------ | -------------------------------------------------- |
 | [adr/](adr/)                   | Architecture decision records                      |
 | [milestones.md](milestones.md) | M1, M2, M3 with rehearsal gates and task breakdown |
+| [review-2026-11-03.md](review-2026-11-03.md) | Independent review of the implementation: what to fix before the first service, what to investigate on real hardware |
 
 ## Glossary
 
