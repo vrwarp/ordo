@@ -19,7 +19,11 @@ afterAll(async () => {
   await hub.cleanup();
 });
 
-async function upload(path: string, fields: Record<string, string> = {}, name = basename(path)): Promise<Response> {
+async function upload(
+  path: string,
+  fields: Record<string, string> = {},
+  name = basename(path),
+): Promise<Response> {
   const fd = new FormData();
   for (const [k, v] of Object.entries(fields)) fd.append(k, v);
   fd.append('file', new Blob([readFileSync(path)]), name);
@@ -125,8 +129,12 @@ describe('media pipeline', () => {
     expect(Buffer.from(await part.arrayBuffer()).equals(bytes.subarray(10, 20))).toBe(true);
     const tail = await ed.fetch(`/files/${hash}`, { headers: { range: 'bytes=-5' } });
     expect(Buffer.from(await tail.arrayBuffer()).equals(bytes.subarray(-5))).toBe(true);
-    expect((await ed.fetch(`/files/${hash}`, { headers: { range: `bytes=${bytes.length + 5}-` } })).status).toBe(416);
-    expect((await ed.fetch(`/files/${hash}`, { headers: { 'if-none-match': `"${hash}"` } })).status).toBe(304);
+    expect(
+      (await ed.fetch(`/files/${hash}`, { headers: { range: `bytes=${bytes.length + 5}-` } })).status,
+    ).toBe(416);
+    expect((await ed.fetch(`/files/${hash}`, { headers: { 'if-none-match': `"${hash}"` } })).status).toBe(
+      304,
+    );
     // Tokens work via ?token=; anonymous requests do not.
     const tok = hub.lib.getSetting('outputs')[0]!.token!;
     expect((await client(hub.url).fetch(`/files/${hash}?token=${tok}`)).status).toBe(200);
@@ -160,7 +168,10 @@ describe('media pipeline', () => {
 
   it('updates metadata and deletes media', async () => {
     const m = hub.lib.media.list().find((x) => x.kind === 'audio')!;
-    const u = await ed.json<Media>(`/media/${m.id}`, { method: 'PUT', json: { name: 'Tone', audio: { gainDb: -3 } } });
+    const u = await ed.json<Media>(`/media/${m.id}`, {
+      method: 'PUT',
+      json: { name: 'Tone', audio: { gainDb: -3 } },
+    });
     expect(u.name).toBe('Tone');
     expect(u.audio?.gainDb).toBe(-3);
     expect(u.audio?.loudnessLufs).toBe(m.audio?.loudnessLufs);
@@ -177,9 +188,37 @@ describe('media pipeline', () => {
     expect(s.frames).toBe(1);
     // Header, logical screen, GCE with the transparency flag, one image descriptor, trailer.
     const t = Buffer.from([
-      ...Buffer.from('GIF89a'), 1, 0, 1, 0, 0, 0, 0,
-      0x21, 0xf9, 4, 1, 0, 0, 0, 0,
-      0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0,
+      ...Buffer.from('GIF89a'),
+      1,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0x21,
+      0xf9,
+      4,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0x2c,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      1,
+      0,
+      0,
+      2,
+      2,
+      0x44,
+      0x01,
+      0,
       0x3b,
     ]);
     expect(gifInfo(t)).toMatchObject({ frames: 1, transparent: true, width: 1, height: 1 });

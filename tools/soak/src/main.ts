@@ -70,8 +70,8 @@ async function main(): Promise<void> {
   if (!pl) throw new Error(`playlist ${a.playlist} not found`);
 
   const live = await api<{ state: { mode: string } }>('GET', '/live');
-  if (live.state.mode === 'live') await api('POST', '/live/events', { event: { k: 'endService', at: Date.now() } });
-  await api('POST', '/live/events', { event: { k: 'goLive', playlistId: pl.id } });
+  if (live.state.mode === 'live') await api('POST', '/live/events', { id: 'soak-end', event: { k: 'endService', at: Date.now() } });
+  await api('POST', '/live/events', { id: 'soak-golive', event: { k: 'goLive', playlistId: pl.id } });
 
   const hubUrl = new URL(a.hub);
   const outputs = snapshot.settings.outputs.filter((o) => o.enabled && o.kind !== 'stage' && o.token);
@@ -110,7 +110,7 @@ async function main(): Promise<void> {
     if (Date.now() >= nextGo) {
       const st = await api<{ state: { live?: number; cues: unknown[] } }>('GET', '/live');
       if (st.state.live !== undefined && st.state.live >= st.state.cues.length - 1)
-        await api('POST', '/live/events', { event: { k: 'go', cueIndex: 0, at: Date.now() + 50 } });
+        await api('POST', '/live/events', { id: `soak-wrap-${gos}`, event: { k: 'go', cueIndex: 0, at: Date.now() + 50 } });
       else await api('POST', '/actions', { id: 'next' });
       gos++;
       nextGo += a.interval * 1000;
@@ -143,7 +143,7 @@ async function main(): Promise<void> {
   writeFileSync(`${a.out}/soak-${stamp}.json`, JSON.stringify({ report, samples }, null, 2));
   writeFileSync(`${a.out}/soak-${stamp}.md`, toMarkdown(report));
   console.log(toMarkdown(report));
-  await api('POST', '/live/events', { event: { k: 'endService', at: Date.now() } }).catch(() => undefined);
+  await api('POST', '/live/events', { id: 'soak-end', event: { k: 'endService', at: Date.now() } }).catch(() => undefined);
   await browser.close();
   process.exit(report.pass ? 0 : 1);
 }

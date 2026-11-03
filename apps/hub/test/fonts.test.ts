@@ -82,10 +82,15 @@ describe('sfnt parsing', () => {
     expect(readFontFace(bold)).toMatchObject({ family: 'DejaVu Sans', weight: 700 });
     expect(readFontFace(toWoff(bold))).toMatchObject({ family: 'DejaVu Sans', weight: 700 });
     expect(readFontFace(toWoff2Meta(bold))).toMatchObject({ family: 'DejaVu Sans', weight: 700 });
-    if (existsSync(INTER_OTF)) expect(readFontFace(readFileSync(INTER_OTF))).toMatchObject({ family: 'Inter', weight: 100 });
+    if (existsSync(INTER_OTF))
+      expect(readFontFace(readFileSync(INTER_OTF))).toMatchObject({ family: 'Inter', weight: 100 });
   });
   it('derives a face from a filename', () => {
-    expect(faceFromFilename('OpenSans-SemiBoldItalic.woff2')).toEqual({ family: 'Open Sans', weight: 600, style: 'italic' });
+    expect(faceFromFilename('OpenSans-SemiBoldItalic.woff2')).toEqual({
+      family: 'Open Sans',
+      weight: 600,
+      style: 'italic',
+    });
     expect(faceFromFilename('Lato-Black.ttf')).toEqual({ family: 'Lato', weight: 900, style: 'normal' });
   });
 });
@@ -163,7 +168,7 @@ describe('fonts API', () => {
     const fd2 = new FormData();
     fd2.append('family', 'Venue Sans');
     fd2.append('weight', '800');
-    fd2.append('file', new Blob([toWoff(readFileSync(DEJAVU_BOLD))]), 'whatever.woff');
+    fd2.append('file', new Blob([new Uint8Array(toWoff(readFileSync(DEJAVU_BOLD)))]), 'whatever.woff');
     const [g] = await ed.json<Font[]>('/fonts/upload', { method: 'POST', body: fd2 });
     expect(g).toMatchObject({ family: 'Venue Sans', weight: 800, style: 'normal' });
     expect(g!.file.mime).toBe('font/woff');
@@ -200,7 +205,12 @@ describe('fonts API', () => {
     expect(css?.ua).toMatch(/Chrome\/\d+/);
     expect(requested.filter((r) => r.url.includes('gstatic')).length).toBe(2);
     const fonts = (await ed.json<Font[]>('/fonts')).filter((f) => f.family === 'Test Sans');
-    expect(fonts.map((f) => `${f.style}${f.weight}`).sort()).toEqual(['italic300', 'italic400', 'italic500', 'normal400']);
+    expect(fonts.map((f) => `${f.style}${f.weight}`).sort()).toEqual([
+      'italic300',
+      'italic400',
+      'italic500',
+      'normal400',
+    ]);
     expect(fonts.every((f) => f.source === 'google' && f.file.mime === 'font/woff2')).toBe(true);
     // Unknown family → failed job with a readable error.
     const j2 = await ed.json<Job>('/fonts/google', { method: 'POST', json: { family: 'Nope Font' } });

@@ -1,0 +1,16 @@
+**/node_modules
+**/dist
+**/.data
+.e2e-data
+.git
+.github
+test-results
+playwright-report
+tools/fixtures/out
+soak-*.json
+soak-*.md
+*.db
+*.db-wal
+*.db-shm
+.env
+docs

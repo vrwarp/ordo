@@ -59,7 +59,10 @@ export function parseCidrList(v: string | undefined): string[] {
     .filter(Boolean);
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Partial<HubConfig> = {}): HubConfig {
+export function loadConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  overrides: Partial<HubConfig> = {},
+): HubConfig {
   const dataDir = resolve(env.ORDO_DATA ?? './.data');
   return {
     domain: (env.ORDO_DOMAIN ?? 'localhost').toLowerCase(),
@@ -70,9 +73,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
     timeZone: env.ORDO_TZ ?? env.TZ ?? 'UTC',
     appsDir: resolve(env.ORDO_APPS_DIR ?? defaultAppsDir()),
     devPin: env.ORDO_DEV_PIN || undefined,
-    importRoots: (env.ORDO_IMPORT_ROOTS ? env.ORDO_IMPORT_ROOTS.split(':') : [resolve(dataDir, 'import')]).map(
-      (p) => resolve(p),
-    ),
+    importRoots: (env.ORDO_IMPORT_ROOTS
+      ? env.ORDO_IMPORT_ROOTS.split(':')
+      : [resolve(dataDir, 'import')]
+    ).map((p) => resolve(p)),
     logLevel: env.ORDO_LOG_LEVEL ?? 'info',
     logToStdout: true,
     fetch: globalThis.fetch as unknown as FetchLike,

@@ -8,7 +8,7 @@ import {
   ActionId,
   DEFAULT_THEME,
   LiveCommand,
-  Media,
+  type Media,
   newId,
   type Output,
   Playlist,
@@ -53,7 +53,9 @@ const MediaPatch = z
     tags: z.array(z.string().max(50)).max(50).optional(),
     loop: z.boolean().optional(),
     isBackground: z.boolean().optional(),
-    audio: z.object({ pairId: z.string().optional(), gainDb: z.number().min(-60).max(24).optional() }).optional(),
+    audio: z
+      .object({ pairId: z.string().optional(), gainDb: z.number().min(-60).max(24).optional() })
+      .optional(),
   })
   .passthrough();
 const UploadCreate = z
@@ -95,7 +97,8 @@ async function readMultipart(
   } catch (e) {
     await Promise.all(files.map((f) => rm(f.path, { force: true })));
     const err = e as { code?: string; statusCode?: number };
-    if (err.code === 'FST_REQ_FILE_TOO_LARGE') throw new HttpError(413, 'too_large', 'File exceeds the 4 GB upload limit');
+    if (err.code === 'FST_REQ_FILE_TOO_LARGE')
+      throw new HttpError(413, 'too_large', 'File exceeds the 4 GB upload limit');
     throw e;
   }
   return { files, fields };
@@ -107,8 +110,12 @@ function sessionRole(p: Principal | null): 'operate' | 'edit' | undefined {
 
 export function registerApi(app: FastifyInstance, hub: Ctx): void {
   const { lib, auth, live, cfg } = hub;
-  const route = (method: HTTPMethods | HTTPMethods[], url: string, access: Access, handler: RouteHandlerMethod) =>
-    app.route({ method, url: API_PREFIX + url, config: { access }, handler });
+  const route = (
+    method: HTTPMethods | HTTPMethods[],
+    url: string,
+    access: Access,
+    handler: RouteHandlerMethod,
+  ) => app.route({ method, url: API_PREFIX + url, config: { access }, handler });
 
   const by = (req: FastifyRequest) => `${sessionRole(req.principal) ?? 'system'}@${req.ip}`;
   const cookieOpts = (req: FastifyRequest, maxAgeS: number) => ({
@@ -118,10 +125,16 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
     secure: req.protocol === 'https',
     maxAge: maxAgeS,
   });
-  const startSession = (req: FastifyRequest, reply: FastifyReply, role: 'operate' | 'edit', remember: boolean) => {
+  const startSession = (
+    req: FastifyRequest,
+    reply: FastifyReply,
+    role: 'operate' | 'edit',
+    remember: boolean,
+  ) => {
     const ua = req.headers['user-agent'] ?? '';
     const deviceOk = auth.deviceValid(req.cookies[DEVICE_COOKIE], ua);
-    if (remember && !deviceOk) reply.setCookie(DEVICE_COOKIE, auth.createDevice(ua), cookieOpts(req, 365 * 86400));
+    if (remember && !deviceOk)
+      reply.setCookie(DEVICE_COOKIE, auth.createDevice(ua), cookieOpts(req, 365 * 86400));
     const remembered = remember || deviceOk;
     const token = auth.createSession(role, ua, remembered);
     reply.setCookie(COOKIE_SESSION, token, cookieOpts(req, (remembered ? 12 : 1) * 3600));
@@ -131,14 +144,20 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
       throw locked('This presentation is in the live playlist and is locked until the service ends');
   };
   const assertPlaylistUnlocked = (id: string) => {
-    if (live.locks().playlistId === id) throw locked('This playlist is live and is locked until the service ends');
+    if (live.locks().playlistId === id)
+      throw locked('This playlist is live and is locked until the service ends');
   };
   const params = (req: FastifyRequest) => req.params as Record<string, string>;
 
   // ---------------- auth ----------------
   route('GET', '/auth/me', 'public', async (req): Promise<AuthMeRes> => {
     const p = req.principal;
-    return { role: p?.role ?? null, setupRequired: auth.setupRequired(), version: APP_VERSION, domain: cfg.domain };
+    return {
+      role: p?.role ?? null,
+      setupRequired: auth.setupRequired(),
+      version: APP_VERSION,
+      domain: cfg.domain,
+    };
   });
 
   route('POST', '/auth/setup', 'public', async (req, reply) => {
@@ -272,7 +291,11 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
   route('PUT', '/themes/:id', 'edit', async (req) => {
     const id = params(req).id!;
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const saved = lib.themes.update(id, validate(Theme, { ...body, id }), typeof body.rev === 'number' ? body.rev : undefined);
+    const saved = lib.themes.update(
+      id,
+      validate(Theme, { ...body, id }),
+      typeof body.rev === 'number' ? body.rev : undefined,
+    );
     lib.emit([{ kind: 'theme', id, rev: saved.rev, entity: saved }]);
     return saved;
   });
@@ -295,7 +318,11 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
   route('PUT', '/folders/:id', 'edit', async (req) => {
     const id = params(req).id!;
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const saved = lib.folders.update(id, validate(FolderSchema, { ...body, id }), typeof body.rev === 'number' ? body.rev : undefined);
+    const saved = lib.folders.update(
+      id,
+      validate(FolderSchema, { ...body, id }),
+      typeof body.rev === 'number' ? body.rev : undefined,
+    );
     lib.emit([{ kind: 'folder', id, rev: saved.rev, entity: saved }]);
     return saved;
   });
@@ -320,7 +347,12 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
         out.push(
           await hub.media.ingest(f, name, {
             isBackground: fields.isBackground === 'true' || fields.isBackground === '1',
-            tags: fields.tags ? fields.tags.split(',').map((t) => t.trim()).filter(Boolean) : [],
+            tags: fields.tags
+              ? fields.tags
+                  .split(',')
+                  .map((t) => t.trim())
+                  .filter(Boolean)
+              : [],
           }),
         );
         files[i] = { ...f, path: '' };
@@ -341,7 +373,13 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
       ...(patch.loop !== undefined ? { loop: patch.loop } : {}),
       ...(patch.isBackground !== undefined ? { isBackground: patch.isBackground } : {}),
       ...(patch.audio !== undefined
-        ? { audio: { ...cur.audio, gainDb: patch.audio.gainDb ?? cur.audio?.gainDb ?? 0, pairId: patch.audio.pairId } }
+        ? {
+            audio: {
+              ...cur.audio,
+              gainDb: patch.audio.gainDb ?? cur.audio?.gainDb ?? 0,
+              pairId: patch.audio.pairId,
+            },
+          }
         : {}),
     };
     const saved = lib.media.update(id, next, patch.rev);
@@ -365,7 +403,9 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
     const id = newId();
     const now = Date.now();
     lib.db
-      .prepare(`INSERT INTO uploads (id, name, size, offset, fields, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?, ?)`)
+      .prepare(
+        `INSERT INTO uploads (id, name, size, offset, fields, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?, ?)`,
+      )
       .run(id, b.name, b.size, JSON.stringify({ isBackground: b.isBackground, tags: b.tags }), now, now);
     await appendFile(join(hub.store.uploads, `${id}.part`), '');
     reply.header('Upload-Offset', '0');
@@ -388,7 +428,9 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
     const offset = Number(req.headers['upload-offset']);
     if (!Number.isInteger(offset) || offset !== row.offset) {
       reply.header('Upload-Offset', String(row.offset));
-      throw new HttpError(409, 'offset_mismatch', `Upload-Offset must be ${row.offset}`, { offset: row.offset });
+      throw new HttpError(409, 'offset_mismatch', `Upload-Offset must be ${row.offset}`, {
+        offset: row.offset,
+      });
     }
     const path = join(hub.store.uploads, `${row.id}.part`);
     const body = req.body as Readable | Buffer | undefined;
@@ -420,12 +462,17 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
       throw e;
     }
     const newOffset = row.offset + added;
-    lib.db.prepare(`UPDATE uploads SET offset = ?, updated_at = ? WHERE id = ?`).run(newOffset, Date.now(), row.id);
+    lib.db
+      .prepare(`UPDATE uploads SET offset = ?, updated_at = ? WHERE id = ?`)
+      .run(newOffset, Date.now(), row.id);
     reply.header('Upload-Offset', String(newOffset));
     if (newOffset < row.size) return reply.code(204).send();
     lib.db.prepare(`DELETE FROM uploads WHERE id = ?`).run(row.id);
     const fields = JSON.parse(row.fields) as { isBackground?: boolean; tags?: string[] };
-    const m = await hub.media.ingest({ path }, row.name, { isBackground: fields.isBackground, tags: fields.tags });
+    const m = await hub.media.ingest({ path }, row.name, {
+      isBackground: fields.isBackground,
+      tags: fields.tags,
+    });
     return reply.code(201).send(m);
   });
 
@@ -438,9 +485,7 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
     try {
       for (let i = 0; i < files.length; i++) {
         const f = files[i]!;
-        out.push(
-          await hub.fonts.addUpload(f, f.filename, files.length === 1 ? fields : {}),
-        );
+        out.push(await hub.fonts.addUpload(f, f.filename, files.length === 1 ? fields : {}));
         files[i] = { ...f, path: '' };
       }
     } finally {
@@ -547,7 +592,11 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
       if (!Array.isArray(value)) throw badRequest('outputs must be an array');
       const cur = new Map(lib.getSetting('outputs').map((o) => [o.id, o]));
       // Tokens are only changed by rotation; new outputs get a fresh one.
-      value = (value as Output[]).map((o) => ({ ...o, id: o.id || newId(), token: cur.get(o.id)?.token ?? newToken() }));
+      value = (value as Output[]).map((o) => ({
+        ...o,
+        id: o.id || newId(),
+        token: cur.get(o.id)?.token ?? newToken(),
+      }));
       const ids = new Set<string>();
       for (const o of value as Output[]) {
         if (ids.has(o.id)) throw badRequest(`Duplicate output id ${o.id}`);
@@ -598,7 +647,8 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
   };
   route('POST', '/live/events', 'operate', async (req) => {
     const body = (req.body ?? {}) as { id?: unknown; event?: unknown; k?: unknown };
-    if (body.event !== undefined) return submit(body.event, typeof body.id === 'string' ? body.id : undefined);
+    if (body.event !== undefined)
+      return submit(body.event, typeof body.id === 'string' ? body.id : undefined);
     return submit(body, undefined);
   });
   route('POST', '/actions', 'operate', async (req) => {
@@ -651,7 +701,9 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
           mode: live.state.mode,
           playlist: live.state.resolved?.playlist.name,
           sockets: hub.sockets.size,
-          jobs: hub.jobs.list(50).map((j) => ({ id: j.id, kind: j.kind, state: j.state, error: j.error, updatedAt: j.updatedAt })),
+          jobs: hub.jobs
+            .list(50)
+            .map((j) => ({ id: j.id, kind: j.kind, state: j.state, error: j.error, updatedAt: j.updatedAt })),
           backups: (await hub.backups.list()).files.slice(0, 10),
           exportedAt: new Date().toISOString(),
         },
@@ -660,7 +712,10 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
       ),
     );
     const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-    reply.header('Content-Disposition', `attachment; filename="ordo-diagnostics-${new Date().toISOString().slice(0, 19).replace(/:/g, '')}.zip"`);
+    reply.header(
+      'Content-Disposition',
+      `attachment; filename="ordo-diagnostics-${new Date().toISOString().slice(0, 19).replace(/:/g, '')}.zip"`,
+    );
     reply.header('Cache-Control', 'no-store');
     return reply.type('application/zip').send(buf);
   });
@@ -675,7 +730,9 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
 
 export async function cleanupStaleUploads(hub: Ctx): Promise<void> {
   const cutoff = Date.now() - 7 * 86400_000;
-  const rows = hub.lib.db.prepare(`SELECT id FROM uploads WHERE updated_at < ?`).all(cutoff) as { id: string }[];
+  const rows = hub.lib.db.prepare(`SELECT id FROM uploads WHERE updated_at < ?`).all(cutoff) as {
+    id: string;
+  }[];
   for (const r of rows) {
     await rm(join(hub.store.uploads, `${r.id}.part`), { force: true });
     hub.lib.db.prepare(`DELETE FROM uploads WHERE id = ?`).run(r.id);

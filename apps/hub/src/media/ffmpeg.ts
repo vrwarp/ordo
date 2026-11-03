@@ -80,7 +80,12 @@ function progressParser(durationMs: number | undefined, onProgress?: (f: number)
   };
 }
 
-type TOpts = { timeoutMs: number; signal?: AbortSignal; durationMs?: number; onProgress?: (f: number) => void };
+type TOpts = {
+  timeoutMs: number;
+  signal?: AbortSignal;
+  durationMs?: number;
+  onProgress?: (f: number) => void;
+};
 const BASE = ['-hide_banner', '-nostdin', '-y', '-loglevel', 'error'];
 const IN_SAFE = ['-protocol_whitelist', 'file,pipe'];
 
@@ -129,7 +134,12 @@ export async function transcodeH264(
       '-nostats',
       output,
     ],
-    { timeoutMs: o.timeoutMs, signal: o.signal, onStdout: progressParser(o.durationMs, o.onProgress), keepStdout: false },
+    {
+      timeoutMs: o.timeoutMs,
+      signal: o.signal,
+      onStdout: progressParser(o.durationMs, o.onProgress),
+      keepStdout: false,
+    },
   );
 }
 
@@ -185,7 +195,12 @@ export async function transcodeVp9Alpha(
       '-nostats',
       output,
     ],
-    { timeoutMs: o.timeoutMs, signal: o.signal, onStdout: progressParser(o.durationMs, o.onProgress), keepStdout: false },
+    {
+      timeoutMs: o.timeoutMs,
+      signal: o.signal,
+      onStdout: progressParser(o.durationMs, o.onProgress),
+      keepStdout: false,
+    },
   );
 }
 
@@ -221,8 +236,22 @@ export async function firstFramePng(input: string, output: string, o: TOpts): Pr
 }
 
 /** Downscale an image to `maxWidth` wide (PNG keeps alpha, JPEG otherwise). */
-export async function downscaleImage(input: string, output: string, maxWidth: number, o: TOpts): Promise<void> {
-  const args = [...BASE, ...IN_SAFE, '-i', input, '-frames:v', '1', '-vf', `scale=${maxWidth}:-2:flags=lanczos`];
+export async function downscaleImage(
+  input: string,
+  output: string,
+  maxWidth: number,
+  o: TOpts,
+): Promise<void> {
+  const args = [
+    ...BASE,
+    ...IN_SAFE,
+    '-i',
+    input,
+    '-frames:v',
+    '1',
+    '-vf',
+    `scale=${maxWidth}:-2:flags=lanczos`,
+  ];
   if (output.endsWith('.jpg')) args.push('-q:v', '2');
   await run('ffmpeg', [...args, output], o);
 }
@@ -231,7 +260,19 @@ export async function downscaleImage(input: string, output: string, maxWidth: nu
 export async function measureLoudness(input: string, o: TOpts): Promise<number | undefined> {
   const r = await run(
     'ffmpeg',
-    ['-hide_banner', '-nostdin', ...IN_SAFE, '-i', input, '-vn', '-af', 'loudnorm=print_format=json', '-f', 'null', '-'],
+    [
+      '-hide_banner',
+      '-nostdin',
+      ...IN_SAFE,
+      '-i',
+      input,
+      '-vn',
+      '-af',
+      'loudnorm=print_format=json',
+      '-f',
+      'null',
+      '-',
+    ],
     { ...o, keepStdout: false },
   );
   const m = /\{[^{}]*"input_i"[^{}]*\}/s.exec(r.stderr);
@@ -267,7 +308,12 @@ export async function transcodeAudio(input: string, output: string, o: TOpts): P
       '-nostats',
       output,
     ],
-    { timeoutMs: o.timeoutMs, signal: o.signal, onStdout: progressParser(o.durationMs, o.onProgress), keepStdout: false },
+    {
+      timeoutMs: o.timeoutMs,
+      signal: o.signal,
+      onStdout: progressParser(o.durationMs, o.onProgress),
+      keepStdout: false,
+    },
   );
 }
 
@@ -327,7 +373,12 @@ export async function pptxToPdf(pptx: string, outDir: string, o: TOpts): Promise
  * Parse a GIF's frame count and whether the first frame uses a transparent colour. Later frames are
  * ignored: encoders (ffmpeg included) use transparency there for inter-frame delta compression.
  */
-export function gifInfo(b: Uint8Array): { frames: number; transparent: boolean; width: number; height: number } {
+export function gifInfo(b: Uint8Array): {
+  frames: number;
+  transparent: boolean;
+  width: number;
+  height: number;
+} {
   let frames = 0;
   let transparent = false;
   if (b.length < 13) return { frames: 0, transparent: false, width: 0, height: 0 };

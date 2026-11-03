@@ -19,7 +19,14 @@ import {
   SurfaceSettings,
   Theme,
 } from '@ordo/domain';
-import type { Folder, LibraryKind, LibrarySnapshot, RevisionInfo, Settings, SettingsKey } from '@ordo/protocol';
+import type {
+  Folder,
+  LibraryKind,
+  LibrarySnapshot,
+  RevisionInfo,
+  Settings,
+  SettingsKey,
+} from '@ordo/protocol';
 import { z } from 'zod';
 import { type DB, nowIso } from './db.ts';
 import { conflict, notFound } from './errors.ts';
@@ -27,7 +34,11 @@ import { validate } from './validate.ts';
 
 export type Change = { kind: LibraryKind; id: string; rev?: number; entity?: unknown; deleted?: boolean };
 
-export const FolderSchema = z.object({ id: z.string().min(1), name: z.string(), parentId: z.string().optional() });
+export const FolderSchema = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+  parentId: z.string().optional(),
+});
 
 export const SETTINGS_SCHEMAS: Record<SettingsKey, z.ZodType> = {
   general: GeneralSettings,
@@ -199,12 +210,17 @@ export class Library {
   // ---- settings ----
   getSettings(): Settings {
     const out = {} as Record<string, unknown>;
-    for (const r of this.db.prepare(`SELECT key, json FROM settings`).all() as { key: string; json: string }[])
+    for (const r of this.db.prepare(`SELECT key, json FROM settings`).all() as {
+      key: string;
+      json: string;
+    }[])
       if ((SETTINGS_KEYS as string[]).includes(r.key)) out[r.key] = JSON.parse(r.json);
     return out as Settings;
   }
   getSetting<K extends SettingsKey>(key: K): Settings[K] {
-    const r = this.db.prepare(`SELECT json FROM settings WHERE key = ?`).get(key) as { json: string } | undefined;
+    const r = this.db.prepare(`SELECT json FROM settings WHERE key = ?`).get(key) as
+      | { json: string }
+      | undefined;
     if (!r) throw notFound(`setting ${key}`);
     return JSON.parse(r.json) as Settings[K];
   }
@@ -221,7 +237,9 @@ export class Library {
   }
   /** Internal (non-API) settings rows such as PIN hashes. */
   getInternal<T>(key: string): T | undefined {
-    const r = this.db.prepare(`SELECT json FROM settings WHERE key = ?`).get(key) as { json: string } | undefined;
+    const r = this.db.prepare(`SELECT json FROM settings WHERE key = ?`).get(key) as
+      | { json: string }
+      | undefined;
     return r ? (JSON.parse(r.json) as T) : undefined;
   }
   putInternal(key: string, value: unknown): void {
@@ -234,7 +252,10 @@ export class Library {
   }
 
   // ---- presentations with revisions ----
-  savePresentation(p: Presentation, opts: { expectedRev?: number; by?: string; create?: boolean }): Presentation {
+  savePresentation(
+    p: Presentation,
+    opts: { expectedRev?: number; by?: string; create?: boolean },
+  ): Presentation {
     return this.db.transaction(() => {
       const saved =
         opts.create || !this.presentations.get(p.id)
@@ -317,9 +338,9 @@ export class Library {
 
   // ---- fonts ----
   listFonts(): Font[] {
-    return (this.db.prepare(`SELECT json FROM fonts ORDER BY family, weight, style`).all() as { json: string }[]).map(
-      (r) => JSON.parse(r.json) as Font,
-    );
+    return (
+      this.db.prepare(`SELECT json FROM fonts ORDER BY family, weight, style`).all() as { json: string }[]
+    ).map((r) => JSON.parse(r.json) as Font);
   }
   getFont(id: string): Font | undefined {
     const r = this.db.prepare(`SELECT json FROM fonts WHERE id = ?`).get(id) as { json: string } | undefined;

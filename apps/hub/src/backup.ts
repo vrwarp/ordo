@@ -14,10 +14,21 @@ const BACKUP_RE = /^ordo-(\d{4}-\d{2}-\d{2}(?:-\d{6})?)\.db$/;
 export type MediaManifest = { createdAt: string; db: string; files: FileRow[] };
 
 function zonedDate(ms: number, timeZone: string): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(ms);
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(ms);
 }
 function zonedTime(ms: number, timeZone: string): string {
-  return new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' })
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  })
     .format(ms)
     .replace(/:/g, '');
 }
@@ -70,13 +81,22 @@ export class Backups {
     const date = zonedDate(now, this.opts.timeZone);
     let stamp = opts.nightly ? date : `${date}-${zonedTime(now, this.opts.timeZone)}`;
     let file = join(this.dir, `ordo-${stamp}.db`);
-    if (await stat(file).then(() => true, () => false)) {
+    if (
+      await stat(file).then(
+        () => true,
+        () => false,
+      )
+    ) {
       stamp = `${date}-${zonedTime(now, this.opts.timeZone)}`;
       file = join(this.dir, `ordo-${stamp}.db`);
       await rm(file, { force: true });
     }
     this.db.prepare('VACUUM INTO ?').run(file);
-    const manifest: MediaManifest = { createdAt: new Date(now).toISOString(), db: basename(file), files: this.lib.allFiles() };
+    const manifest: MediaManifest = {
+      createdAt: new Date(now).toISOString(),
+      db: basename(file),
+      files: this.lib.allFiles(),
+    };
     await writeFile(join(this.dir, `media-manifest-${stamp}.json`), JSON.stringify(manifest, null, 1));
     this.log.info({ file: basename(file), files: manifest.files.length }, 'backup written');
     await this.prune(now);
@@ -111,13 +131,27 @@ export async function findBackup(dataDir: string, ref: string): Promise<{ db: st
   if (isAbsolute(ref) || ref.includes('/')) db = resolve(ref);
   else if (BACKUP_RE.test(ref)) db = join(dir, ref);
   else {
-    const all = (await readdir(dir).catch(() => [] as string[])).filter((f) => BACKUP_RE.test(f) && f.includes(ref)).sort();
+    const all = (await readdir(dir).catch(() => [] as string[]))
+      .filter((f) => BACKUP_RE.test(f) && f.includes(ref))
+      .sort();
     if (all.length) db = join(dir, all[all.length - 1]!);
   }
-  if (!db || !(await stat(db).then((s) => s.isFile(), () => false))) throw notFound(`No backup matches "${ref}"`);
+  if (
+    !db ||
+    !(await stat(db).then(
+      (s) => s.isFile(),
+      () => false,
+    ))
+  )
+    throw notFound(`No backup matches "${ref}"`);
   const stamp = BACKUP_RE.exec(basename(db))?.[1];
   const manifest = stamp ? join(dir, `media-manifest-${stamp}.json`) : undefined;
-  const hasManifest = manifest ? await stat(manifest).then(() => true, () => false) : false;
+  const hasManifest = manifest
+    ? await stat(manifest).then(
+        () => true,
+        () => false,
+      )
+    : false;
   return { db, manifest: hasManifest ? manifest : undefined };
 }
 
@@ -148,7 +182,10 @@ export async function restoreBackup(
     print(`verifying ${m.files.length} media file(s)`);
     for (const f of m.files) {
       const abs = resolve(dataDir, f.path);
-      const exists = await stat(abs).then((s) => s.isFile(), () => false);
+      const exists = await stat(abs).then(
+        (s) => s.isFile(),
+        () => false,
+      );
       if (!exists) {
         missing.push(f.path);
         continue;
@@ -164,8 +201,17 @@ export async function restoreBackup(
       `media verification failed (${missing.length} missing, ${mismatched.length} mismatched); rerun with --force to restore anyway`,
     );
   const target = join(dataDir, 'ordo.db');
-  if (await stat(target).then(() => true, () => false)) {
-    const keep = join(dataDir, 'backups', `ordo-pre-restore-${new Date().toISOString().replace(/[:.]/g, '-')}.db`);
+  if (
+    await stat(target).then(
+      () => true,
+      () => false,
+    )
+  ) {
+    const keep = join(
+      dataDir,
+      'backups',
+      `ordo-pre-restore-${new Date().toISOString().replace(/[:.]/g, '-')}.db`,
+    );
     const cur = new Database(target);
     try {
       cur.pragma('wal_checkpoint(TRUNCATE)');

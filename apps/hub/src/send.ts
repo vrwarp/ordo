@@ -39,7 +39,10 @@ export function mimeFor(path: string): string {
 }
 
 /** Parse a single `bytes=` range. Returns null for unsatisfiable, undefined for none/multi. */
-export function parseRange(header: string | undefined, size: number): { start: number; end: number } | null | undefined {
+export function parseRange(
+  header: string | undefined,
+  size: number,
+): { start: number; end: number } | null | undefined {
   if (!header) return undefined;
   const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
   if (!m) return undefined;
@@ -76,7 +79,7 @@ export async function sendFile(
   reply.header('Last-Modified', st.mtime.toUTCString());
   reply.type(opts.mime ?? mimeFor(path));
   const inm = req.headers['if-none-match'];
-  if (inm && inm.split(',').some((t) => t.trim() === etag)) return reply.code(304).send();
+  if (inm?.split(',').some((t) => t.trim() === etag)) return reply.code(304).send();
   const ifRange = req.headers['if-range'];
   const range = ifRange && ifRange !== etag ? undefined : parseRange(req.headers.range, st.size);
   if (range === null) {

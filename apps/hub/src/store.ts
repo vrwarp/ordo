@@ -11,13 +11,18 @@ import type { Library } from './library.ts';
 
 export const MAX_UPLOAD_BYTES = 4 * 1024 ** 3;
 
-export type Sniffed = { ext: string; mime: string; kind: 'video' | 'image' | 'audio' | 'font' | 'pdf' | 'zip' };
+export type Sniffed = {
+  ext: string;
+  mime: string;
+  kind: 'video' | 'image' | 'audio' | 'font' | 'pdf' | 'zip';
+};
 
 /** Identify a file from its first bytes. Returns undefined for anything ordo does not accept. */
 export function sniff(b: Uint8Array): Sniffed | undefined {
   const at = (o: number, s: string) => [...s].every((c, i) => b[o + i] === c.charCodeAt(0));
   const u = (o: number) => b[o] ?? -1;
-  if (u(0) === 0xff && u(1) === 0xd8 && u(2) === 0xff) return { ext: 'jpg', mime: 'image/jpeg', kind: 'image' };
+  if (u(0) === 0xff && u(1) === 0xd8 && u(2) === 0xff)
+    return { ext: 'jpg', mime: 'image/jpeg', kind: 'image' };
   if (u(0) === 0x89 && at(1, 'PNG')) return { ext: 'png', mime: 'image/png', kind: 'image' };
   if (at(0, 'GIF8')) return { ext: 'gif', mime: 'image/gif', kind: 'image' };
   if (at(0, 'RIFF') && at(8, 'WEBP')) return { ext: 'webp', mime: 'image/webp', kind: 'image' };
@@ -26,7 +31,8 @@ export function sniff(b: Uint8Array): Sniffed | undefined {
   if (at(4, 'ftyp')) {
     const brand = String.fromCharCode(u(8), u(9), u(10), u(11));
     if (brand === 'qt  ') return { ext: 'mov', mime: 'video/quicktime', kind: 'video' };
-    if (brand.startsWith('M4A') || brand.startsWith('M4B')) return { ext: 'm4a', mime: 'audio/mp4', kind: 'audio' };
+    if (brand.startsWith('M4A') || brand.startsWith('M4B'))
+      return { ext: 'm4a', mime: 'audio/mp4', kind: 'audio' };
     if (brand === 'avif' || brand === 'avis') return { ext: 'avif', mime: 'image/avif', kind: 'image' };
     if (brand === 'heic' || brand === 'mif1') return undefined;
     return { ext: 'mp4', mime: 'video/mp4', kind: 'video' };
@@ -54,11 +60,34 @@ export function sniff(b: Uint8Array): Sniffed | undefined {
 }
 
 const EXT_KIND: Record<string, Sniffed['kind']> = {
-  mp4: 'video', m4v: 'video', mov: 'video', webm: 'video', mkv: 'video', avi: 'video',
-  jpg: 'image', jpeg: 'image', png: 'image', gif: 'image', webp: 'image', avif: 'image',
-  wav: 'audio', mp3: 'audio', m4a: 'audio', aac: 'audio', flac: 'audio', ogg: 'audio', oga: 'audio', opus: 'audio',
-  ttf: 'font', otf: 'font', woff: 'font', woff2: 'font',
-  pdf: 'pdf', pptx: 'zip', zip: 'zip', pro: 'zip',
+  mp4: 'video',
+  m4v: 'video',
+  mov: 'video',
+  webm: 'video',
+  mkv: 'video',
+  avi: 'video',
+  jpg: 'image',
+  jpeg: 'image',
+  png: 'image',
+  gif: 'image',
+  webp: 'image',
+  avif: 'image',
+  wav: 'audio',
+  mp3: 'audio',
+  m4a: 'audio',
+  aac: 'audio',
+  flac: 'audio',
+  ogg: 'audio',
+  oga: 'audio',
+  opus: 'audio',
+  ttf: 'font',
+  otf: 'font',
+  woff: 'font',
+  woff2: 'font',
+  pdf: 'pdf',
+  pptx: 'zip',
+  zip: 'zip',
+  pro: 'zip',
 };
 
 export function extOf(name: string): string {
@@ -114,7 +143,8 @@ export class Store {
   }
 
   async init(): Promise<void> {
-    for (const d of ['media', 'fonts', 'uploads', 'backups', 'tmp']) await mkdir(join(this.dataDir, d), { recursive: true });
+    for (const d of ['media', 'fonts', 'uploads', 'backups', 'tmp'])
+      await mkdir(join(this.dataDir, d), { recursive: true });
   }
 
   abs(rel: string): string {
@@ -169,11 +199,20 @@ export class Store {
    */
   async put(
     src: string,
-    opts: { ext: string; mime: string; dir?: 'media' | 'fonts'; hash?: string; bytes?: number; copy?: boolean },
+    opts: {
+      ext: string;
+      mime: string;
+      dir?: 'media' | 'fonts';
+      hash?: string;
+      bytes?: number;
+      copy?: boolean;
+    },
   ): Promise<FileRef> {
-    const { hash, bytes } = opts.hash && opts.bytes !== undefined ? { hash: opts.hash, bytes: opts.bytes } : await hashFile(src);
+    const { hash, bytes } =
+      opts.hash && opts.bytes !== undefined ? { hash: opts.hash, bytes: opts.bytes } : await hashFile(src);
     const dir = opts.dir ?? 'media';
-    const rel = dir === 'media' ? `media/${hash.slice(0, 2)}/${hash}.${opts.ext}` : `fonts/${hash}.${opts.ext}`;
+    const rel =
+      dir === 'media' ? `media/${hash.slice(0, 2)}/${hash}.${opts.ext}` : `fonts/${hash}.${opts.ext}`;
     const dest = this.abs(rel);
     const existing = this.lib.getFile(hash);
     const exists = await stat(existing ? this.abs(existing.path) : dest).then(
@@ -197,7 +236,10 @@ export class Store {
   }
 
   /** Store bytes held in memory. */
-  async putBytes(buf: Uint8Array, opts: { ext: string; mime: string; dir?: 'media' | 'fonts' }): Promise<FileRef> {
+  async putBytes(
+    buf: Uint8Array,
+    opts: { ext: string; mime: string; dir?: 'media' | 'fonts' },
+  ): Promise<FileRef> {
     const tmp = this.tmpPath(opts.ext);
     await mkdir(dirname(tmp), { recursive: true });
     const { writeFile } = await import('node:fs/promises');

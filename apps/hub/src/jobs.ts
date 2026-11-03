@@ -89,7 +89,9 @@ export class JobQueue {
   }
 
   list(limit = 100): Job[] {
-    return (this.db.prepare(`SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?`).all(limit) as JobRow[]).map(toJob);
+    return (
+      this.db.prepare(`SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?`).all(limit) as JobRow[]
+    ).map(toJob);
   }
 
   start(): void {
@@ -110,7 +112,8 @@ export class JobQueue {
 
   /** Resolves when nothing is queued or running (tests). */
   idle(): Promise<void> {
-    if (!this.running.size && !this.nextQueued('heavy') && !this.nextQueued('light')) return Promise.resolve();
+    if (!this.running.size && !this.nextQueued('heavy') && !this.nextQueued('light'))
+      return Promise.resolve();
     return new Promise((r) => this.idleWaiters.push(r));
   }
 

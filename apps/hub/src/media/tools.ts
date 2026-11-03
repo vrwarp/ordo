@@ -43,7 +43,10 @@ export function run(
       killedFor = why;
       child.kill('SIGKILL');
     };
-    const timer = setTimeout(() => kill(`timed out after ${Math.round(opts.timeoutMs / 1000)} s`), opts.timeoutMs);
+    const timer = setTimeout(
+      () => kill(`timed out after ${Math.round(opts.timeoutMs / 1000)} s`),
+      opts.timeoutMs,
+    );
     const onAbort = () => kill('cancelled');
     opts.signal?.addEventListener('abort', onAbort, { once: true });
     child.stdout.setEncoding('utf8');

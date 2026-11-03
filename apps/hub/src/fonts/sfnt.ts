@@ -3,11 +3,69 @@ import { brotliDecompressSync, inflateSync } from 'node:zlib';
 export type FontFace = { family: string; weight: number; style: 'normal' | 'italic'; fullName?: string };
 
 const WOFF2_TAGS = [
-  'cmap', 'head', 'hhea', 'hmtx', 'maxp', 'name', 'OS/2', 'post', 'cvt ', 'fpgm', 'glyf', 'loca', 'prep', 'CFF ',
-  'VORG', 'EBDT', 'EBLC', 'gasp', 'hdmx', 'kern', 'LTSH', 'PCLT', 'VDMX', 'vhea', 'vmtx', 'BASE', 'GDEF', 'GPOS',
-  'GSUB', 'EBSC', 'JSTF', 'MATH', 'CBDT', 'CBLC', 'COLR', 'CPAL', 'SVG ', 'sbix', 'acnt', 'avar', 'bdat', 'bloc',
-  'bsln', 'cvar', 'fdsc', 'feat', 'fmtx', 'fvar', 'gvar', 'hsty', 'just', 'lcar', 'mort', 'morx', 'opbd', 'prop',
-  'trak', 'Zapf', 'Silf', 'Glat', 'Gloc', 'Feat', 'Sill',
+  'cmap',
+  'head',
+  'hhea',
+  'hmtx',
+  'maxp',
+  'name',
+  'OS/2',
+  'post',
+  'cvt ',
+  'fpgm',
+  'glyf',
+  'loca',
+  'prep',
+  'CFF ',
+  'VORG',
+  'EBDT',
+  'EBLC',
+  'gasp',
+  'hdmx',
+  'kern',
+  'LTSH',
+  'PCLT',
+  'VDMX',
+  'vhea',
+  'vmtx',
+  'BASE',
+  'GDEF',
+  'GPOS',
+  'GSUB',
+  'EBSC',
+  'JSTF',
+  'MATH',
+  'CBDT',
+  'CBLC',
+  'COLR',
+  'CPAL',
+  'SVG ',
+  'sbix',
+  'acnt',
+  'avar',
+  'bdat',
+  'bloc',
+  'bsln',
+  'cvar',
+  'fdsc',
+  'feat',
+  'fmtx',
+  'fvar',
+  'gvar',
+  'hsty',
+  'just',
+  'lcar',
+  'mort',
+  'morx',
+  'opbd',
+  'prop',
+  'trak',
+  'Zapf',
+  'Silf',
+  'Glat',
+  'Gloc',
+  'Feat',
+  'Sill',
 ];
 
 function tag(b: Buffer, o: number): string {
@@ -107,7 +165,15 @@ export function readNames(name: Buffer): Map<number, string> {
     const len = name.readUInt16BE(r + 8);
     const off = name.readUInt16BE(r + 10);
     const score =
-      platform === 3 && lang === 0x409 ? 4 : platform === 3 ? 3 : platform === 0 ? 2 : platform === 1 && lang === 0 ? 1 : 0;
+      platform === 3 && lang === 0x409
+        ? 4
+        : platform === 3
+          ? 3
+          : platform === 0
+            ? 2
+            : platform === 1 && lang === 0
+              ? 1
+              : 0;
     const cur = best.get(id);
     if (cur && cur.score >= score) continue;
     const raw = name.subarray(strOff + off, strOff + off + len);
@@ -158,7 +224,12 @@ export function readFontFace(buf: Uint8Array): FontFace {
       if (mac & 2) italic = true;
     }
   }
-  return { family, weight: Math.round(weight / 100) * 100 || 400, style: italic ? 'italic' : 'normal', fullName: names.get(4) };
+  return {
+    family,
+    weight: Math.round(weight / 100) * 100 || 400,
+    style: italic ? 'italic' : 'normal',
+    fullName: names.get(4),
+  };
 }
 
 /** Best-effort family/weight/style from a filename such as `OpenSans-SemiBoldItalic.woff2`. */

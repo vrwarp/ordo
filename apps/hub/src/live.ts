@@ -120,7 +120,9 @@ export class LiveService {
     const settings = this.lib.getSettings();
     const looks = settings.looks;
     const logoId = settings.general.logoMediaId;
-    const optional = new Set<string>([...looks.map((l) => l.holdingMediaId ?? ''), logoId ?? ''].filter(Boolean));
+    const optional = new Set<string>(
+      [...looks.map((l) => l.holdingMediaId ?? ''), logoId ?? ''].filter(Boolean),
+    );
     const media: Record<string, Media> = {};
     const problems: string[] = [];
     for (const id of referencedMediaIds(playlist, presentations, looks, logoId)) {
@@ -191,7 +193,9 @@ export class LiveService {
     this.state = reduce(this.state, event);
     const seq = this.state.seq;
     this.db
-      .prepare(`INSERT OR REPLACE INTO live_journal (seq, at, cmd_id, kind, event_json) VALUES (?, ?, ?, 'event', ?)`)
+      .prepare(
+        `INSERT OR REPLACE INTO live_journal (seq, at, cmd_id, kind, event_json) VALUES (?, ?, ?, 'event', ?)`,
+      )
       .run(seq, this.now(), id ?? null, JSON.stringify(event));
     if (seq % 500 === 0) this.db.prepare(`DELETE FROM live_journal WHERE seq < ?`).run(seq - JOURNAL_KEEP);
     this.dirty = true;
@@ -228,7 +232,9 @@ export class LiveService {
     const seq = Math.max(st.seq, hub.seq + 1);
     this.state = { ...st, seq };
     this.db
-      .prepare(`INSERT OR REPLACE INTO live_journal (seq, at, cmd_id, kind, event_json) VALUES (?, ?, ?, 'adopt', ?)`)
+      .prepare(
+        `INSERT OR REPLACE INTO live_journal (seq, at, cmd_id, kind, event_json) VALUES (?, ?, ?, 'adopt', ?)`,
+      )
       .run(seq, this.now(), null, JSON.stringify({ k: 'adopt', fromSeq: hub.seq, force }));
     this.snapshot(true);
     this.log.info({ fromSeq: hub.seq, seq, force }, 'adopted operator state');
@@ -248,7 +254,10 @@ export class LiveService {
         const ev = JSON.parse(r.event_json) as Record<string, unknown>;
         // The goLive payload is large; keep only its identity in exports.
         if (ev.k === 'goLive' && ev.resolved)
-          ev.resolved = { manifestId: (ev.resolved as ResolvedPlaylist).manifestId, playlistId: (ev.resolved as ResolvedPlaylist).playlist.id };
+          ev.resolved = {
+            manifestId: (ev.resolved as ResolvedPlaylist).manifestId,
+            playlistId: (ev.resolved as ResolvedPlaylist).playlist.id,
+          };
         return { seq: r.seq, at: r.at, id: r.cmd_id ?? undefined, kind: r.kind, event: ev };
       });
   }
@@ -266,7 +275,10 @@ export class LiveService {
       this.advanceKey = '';
       const again = autoAdvance(this.state);
       if (!again || again.dueAt !== next.dueAt || again.target !== next.target) return this.scheduleAdvance();
-      this.apply({ k: 'go', cueIndex: next.target, at: Math.max(next.dueAt, this.now() + 33) }, 'auto-advance');
+      this.apply(
+        { k: 'go', cueIndex: next.target, at: Math.max(next.dueAt, this.now() + 33) },
+        'auto-advance',
+      );
     }, delay);
     this.advanceTimer.unref();
   }

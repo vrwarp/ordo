@@ -45,6 +45,12 @@ export function createLogger(opts: { level: string; stdout: boolean; ring: LogRi
         ],
         censor: '[redacted]',
       },
+      formatters: {
+        log(obj: Record<string, unknown>) {
+          if (typeof obj.url === 'string') obj.url = redactUrl(obj.url);
+          return obj;
+        },
+      },
       serializers: {
         req: (req: { method?: string; url?: string; ip?: string; hostname?: string }) => ({
           method: req.method,

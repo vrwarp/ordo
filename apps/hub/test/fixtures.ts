@@ -6,28 +6,62 @@ import { join } from 'node:path';
 export function ffmpeg(dir: string, name: string, args: string[]): string {
   const out = join(dir, name);
   if (!existsSync(out))
-    execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', ...args, out], { stdio: 'pipe', timeout: 60_000 });
+    execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', ...args, out], {
+      stdio: 'pipe',
+      timeout: 60_000,
+    });
   return out;
 }
 
 export const fixtures = {
   video: (d: string) =>
     ffmpeg(d, 'clip.mov', [
-      '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=30:duration=1',
-      '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1',
-      '-c:v', 'mpeg4', '-c:a', 'aac', '-shortest',
+      '-f',
+      'lavfi',
+      '-i',
+      'testsrc=size=320x240:rate=30:duration=1',
+      '-f',
+      'lavfi',
+      '-i',
+      'sine=frequency=440:duration=1',
+      '-c:v',
+      'mpeg4',
+      '-c:a',
+      'aac',
+      '-shortest',
     ]),
   fastVideo: (d: string) =>
-    ffmpeg(d, 'fast.mp4', ['-f', 'lavfi', '-i', 'testsrc=size=2560x1440:rate=120:duration=0.5', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p']),
+    ffmpeg(d, 'fast.mp4', [
+      '-f',
+      'lavfi',
+      '-i',
+      'testsrc=size=2560x1440:rate=120:duration=0.5',
+      '-c:v',
+      'libx264',
+      '-preset',
+      'ultrafast',
+      '-pix_fmt',
+      'yuv420p',
+    ]),
   alpha: (d: string) =>
     ffmpeg(d, 'alpha.webm', [
-      '-f', 'lavfi', '-i', 'color=c=red@0.5:s=64x64:d=0.5,format=yuva420p',
-      '-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p', '-auto-alt-ref', '0',
+      '-f',
+      'lavfi',
+      '-i',
+      'color=c=red@0.5:s=64x64:d=0.5,format=yuva420p',
+      '-c:v',
+      'libvpx-vp9',
+      '-pix_fmt',
+      'yuva420p',
+      '-auto-alt-ref',
+      '0',
     ]),
   png: (d: string) => ffmpeg(d, 'still.png', ['-f', 'lavfi', '-i', 'color=c=blue:s=64x48', '-frames:v', '1']),
-  wide: (d: string) => ffmpeg(d, 'wide.jpg', ['-f', 'lavfi', '-i', 'color=c=green:s=4000x200', '-frames:v', '1']),
+  wide: (d: string) =>
+    ffmpeg(d, 'wide.jpg', ['-f', 'lavfi', '-i', 'color=c=green:s=4000x200', '-frames:v', '1']),
   gif: (d: string) => ffmpeg(d, 'anim.gif', ['-f', 'lavfi', '-i', 'testsrc=size=64x48:rate=10:duration=0.5']),
-  stillGif: (d: string) => ffmpeg(d, 'one.gif', ['-f', 'lavfi', '-i', 'color=c=red:s=32x32', '-frames:v', '1']),
+  stillGif: (d: string) =>
+    ffmpeg(d, 'one.gif', ['-f', 'lavfi', '-i', 'color=c=red:s=32x32', '-frames:v', '1']),
   wav: (d: string) => ffmpeg(d, 'tone.wav', ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=1']),
   pdf: (d: string, pages = 2) => {
     const out = join(d, `doc${pages}.pdf`);
@@ -64,7 +98,8 @@ export function minimalPdf(pages: number): Buffer {
   for (let i = 0; i < pages; i++) {
     const pageNo = 3 + i * 2;
     const content = `${0.2 + i * 0.3} 0.4 0.8 rg 100 100 ${200 + i * 100} 200 re f`;
-    objs[pageNo] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 960 540] /Contents ${pageNo + 1} 0 R /Resources << >> >>`;
+    objs[pageNo] =
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 960 540] /Contents ${pageNo + 1} 0 R /Resources << >> >>`;
     objs[pageNo + 1] = `<< /Length ${content.length} >>\nstream\n${content}\nendstream`;
     kids.push(`${pageNo} 0 R`);
   }

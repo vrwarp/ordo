@@ -43,7 +43,8 @@ export type Importers = {
   extractPptxText?: (buf: Uint8Array) => Promise<PptxText>;
 };
 
-const MEDIA_EXT = /\.(mp4|m4v|mov|webm|mkv|avi|mpg|mpeg|jpe?g|png|gif|bmp|tiff?|heic|webp|wav|mp3|aac|m4a|flac|ogg|aiff?)$/i;
+const MEDIA_EXT =
+  /\.(mp4|m4v|mov|webm|mkv|avi|mpg|mpeg|jpe?g|png|gif|bmp|tiff?|heic|webp|wav|mp3|aac|m4a|flac|ogg|aiff?)$/i;
 const MAX_DIR_FILES = 20_000;
 const MAX_INLINE_BYTES = 64 * 1024 * 1024;
 
@@ -116,7 +117,8 @@ export class ImportService {
     const onDisk = new Set<string>();
     const walk = async (dir: string) => {
       for (const ent of await readdir(dir, { withFileTypes: true })) {
-        if (files.size >= MAX_DIR_FILES) throw new Error(`More than ${MAX_DIR_FILES} files in the import folder`);
+        if (files.size >= MAX_DIR_FILES)
+          throw new Error(`More than ${MAX_DIR_FILES} files in the import folder`);
         if (ent.name.startsWith('.')) continue;
         const p = join(dir, ent.name);
         if (ent.isDirectory()) await walk(p);
@@ -137,7 +139,8 @@ export class ImportService {
 
   private async pro7Job(ctx: JobCtx<Pro7Payload>) {
     const { importPro7, remapMediaIds, readZip } = this.imp;
-    if (!importPro7 || !remapMediaIds || !readZip) throw new Error('The ProPresenter importer is not available');
+    if (!importPro7 || !remapMediaIds || !readZip)
+      throw new Error('The ProPresenter importer is not available');
     const pl = ctx.payload;
     let files: Map<string, Uint8Array>;
     let onDisk = new Set<string>();
@@ -202,9 +205,15 @@ export class ImportService {
       try {
         const p = remapMediaIds(pl0, map);
         const items = p.items.map((it) =>
-          it.kind === 'presentation' ? { ...it, presentationId: presIds.get(it.presentationId) ?? it.presentationId } : it,
+          it.kind === 'presentation'
+            ? { ...it, presentationId: presIds.get(it.presentationId) ?? it.presentationId }
+            : it,
         );
-        const saved = this.lib.playlists.insert({ ...p, id: this.lib.playlists.get(p.id) ? newId() : p.id, items });
+        const saved = this.lib.playlists.insert({
+          ...p,
+          id: this.lib.playlists.get(p.id) ? newId() : p.id,
+          items,
+        });
         this.lib.emit([{ kind: 'playlist', id: saved.id, rev: saved.rev, entity: saved }]);
         plCount++;
       } catch (e) {
@@ -286,7 +295,12 @@ export class ImportService {
         slides.push({
           id: newId(),
           objects: [],
-          imported: { fileId: hash, page: i + 1, imageMediaId: m.id, ...(boxes?.length ? { textBoxes: boxes } : {}) },
+          imported: {
+            fileId: hash,
+            page: i + 1,
+            imageMediaId: m.id,
+            ...(boxes?.length ? { textBoxes: boxes } : {}),
+          },
         });
         ctx.progress(0.3 + (0.65 * (i + 1)) / pages.length);
       }

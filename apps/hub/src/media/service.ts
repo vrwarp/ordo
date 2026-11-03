@@ -21,7 +21,12 @@ import {
 
 export const MAX_IMAGE_WIDTH = 3840;
 
-export type IngestOpts = { isBackground?: boolean; tags?: string[]; loop?: boolean; checkExtension?: boolean };
+export type IngestOpts = {
+  isBackground?: boolean;
+  tags?: string[];
+  loop?: boolean;
+  checkExtension?: boolean;
+};
 
 export function baseName(name: string): string {
   const b = name.split(/[\\/]/).pop() ?? name;
@@ -46,12 +51,20 @@ export class MediaService {
     if (!s || !['video', 'image', 'audio'].includes(s.kind))
       throw new HttpError(415, 'unsupported_media', `${name}: not a supported video, image or audio file`);
     if (checkExtension && extOf(name) && !extensionAgrees(name, s))
-      throw new HttpError(415, 'extension_mismatch', `${name}: the file extension does not match its content`);
+      throw new HttpError(
+        415,
+        'extension_mismatch',
+        `${name}: the file extension does not match its content`,
+      );
     return s;
   }
 
   /** Register an uploaded file (already hashed in uploads/) as a new media item and queue processing. */
-  async ingest(file: { path: string; hash?: string; bytes?: number }, name: string, opts: IngestOpts = {}): Promise<Media> {
+  async ingest(
+    file: { path: string; hash?: string; bytes?: number },
+    name: string,
+    opts: IngestOpts = {},
+  ): Promise<Media> {
     let s: Sniffed;
     try {
       s = await this.identify(file.path, name, opts.checkExtension !== false);
@@ -59,7 +72,12 @@ export class MediaService {
       await rm(file.path, { force: true });
       throw e;
     }
-    const original = await this.store.put(file.path, { ext: s.ext, mime: s.mime, hash: file.hash, bytes: file.bytes });
+    const original = await this.store.put(file.path, {
+      ext: s.ext,
+      mime: s.mime,
+      hash: file.hash,
+      bytes: file.bytes,
+    });
     const kind = s.kind as Media['kind'];
     const media = this.lib.media.insert({
       id: newId(),
@@ -86,7 +104,11 @@ export class MediaService {
   }
 
   /** A ready image media item from a file we produced ourselves (document pages). */
-  async addReadyImage(path: string, name: string, opts: { width: number; height: number; tags?: string[] }): Promise<Media> {
+  async addReadyImage(
+    path: string,
+    name: string,
+    opts: { width: number; height: number; tags?: string[] },
+  ): Promise<Media> {
     const original = await this.store.put(path, { ext: 'png', mime: 'image/png' });
     const media = this.lib.media.insert({
       id: newId(),
@@ -110,7 +132,11 @@ export class MediaService {
   retry(id: string): Media {
     const m = this.lib.media.must(id);
     const next = this.save({ ...m, state: 'uploaded', error: undefined });
-    this.jobs.enqueue('media', { mediaId: id, name: m.name }, m.kind === 'video' || m.original.mime === 'image/gif' ? 'heavy' : 'light');
+    this.jobs.enqueue(
+      'media',
+      { mediaId: id, name: m.name },
+      m.kind === 'video' || m.original.mime === 'image/gif' ? 'heavy' : 'light',
+    );
     return next;
   }
 
@@ -139,7 +165,9 @@ export class MediaService {
         tags: latest.tags,
         isBackground: latest.isBackground,
         loop: m.kind === 'video' && m.original.mime === 'image/gif' ? true : latest.loop,
-        audio: m.audio ? { ...m.audio, gainDb: latest.audio?.gainDb ?? m.audio.gainDb, pairId: latest.audio?.pairId } : undefined,
+        audio: m.audio
+          ? { ...m.audio, gainDb: latest.audio?.gainDb ?? m.audio.gainDb, pairId: latest.audio?.pairId }
+          : undefined,
         state: 'ready',
         error: undefined,
       });
@@ -157,7 +185,11 @@ export class MediaService {
     const t = this.cfg.timeouts;
     const input = this.store.abs(m.original.path);
     const info = await probe(input, t.probe);
-    const opts = { signal: ctx.signal, durationMs: info.durationMs, onProgress: (f: number) => ctx.progress(f * 0.9) };
+    const opts = {
+      signal: ctx.signal,
+      durationMs: info.durationMs,
+      onProgress: (f: number) => ctx.progress(f * 0.9),
+    };
 
     if (m.original.mime === 'image/gif') {
       const gi = gifInfo(await readFile(input));
@@ -175,7 +207,7 @@ export class MediaService {
     if (m.kind === 'image') {
       const v = info.video;
       if (!v?.width || !v.height) throw new Error('Could not read image dimensions');
-      const hasAlpha = v.hasAlpha || v.pix_fmt === 'pal8' && m.original.mime === 'image/png';
+      const hasAlpha = v.hasAlpha || (v.pix_fmt === 'pal8' && m.original.mime === 'image/png');
       if (v.width > MAX_IMAGE_WIDTH) {
         const ext = hasAlpha ? 'png' : 'jpg';
         const out = this.store.tmpPath(ext);
@@ -244,7 +276,10 @@ export class MediaService {
     const posterOut = this.store.tmpPath('jpg');
     let posterRef: Media['poster'];
     try {
-      await poster(this.store.abs(delivery.path), posterOut, outInfo, { timeoutMs: t.light, signal: ctx.signal });
+      await poster(this.store.abs(delivery.path), posterOut, outInfo, {
+        timeoutMs: t.light,
+        signal: ctx.signal,
+      });
       posterRef = await this.store.put(posterOut, { ext: 'jpg', mime: 'image/jpeg' });
     } catch (e) {
       if (ctx.signal.aborted) throw e;

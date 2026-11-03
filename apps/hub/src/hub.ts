@@ -36,7 +36,11 @@ declare module 'fastify' {
 export type RouteInfo = { method: string; url: string; access: Access };
 
 /** Throws when a route does not declare its access role. */
-export function checkRouteAccess(opts: { method: string | string[]; url: string; config?: unknown }): RouteInfo {
+export function checkRouteAccess(opts: {
+  method: string | string[];
+  url: string;
+  config?: unknown;
+}): RouteInfo {
   const access = (opts.config as { access?: Access } | undefined)?.access;
   const method = String(opts.method);
   if (!access) throw new Error(`Route ${method} ${opts.url} does not declare an access role`);
@@ -143,7 +147,8 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     for (const [k, v] of Object.entries(sec)) reply.header(k, v);
     const tokenHeader = req.headers[HEADER_TOKEN];
     const q = req.query as Record<string, unknown> | undefined;
-    const token = typeof tokenHeader === 'string' ? tokenHeader : typeof q?.token === 'string' ? q.token : undefined;
+    const token =
+      typeof tokenHeader === 'string' ? tokenHeader : typeof q?.token === 'string' ? q.token : undefined;
     req.principal = auth.principal({ cookie: req.cookies?.[COOKIE_SESSION], token });
     const access = (req.routeOptions.config as { access?: Access } | undefined)?.access ?? 'public';
     if (!allowed(access, req.principal)) {
@@ -156,7 +161,13 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     if (!req.url.startsWith(API_PREFIX)) return;
     const level = req.method === 'GET' || req.method === 'HEAD' ? 'debug' : 'info';
     log[level](
-      { method: req.method, url: redactUrl(req.url), status: reply.statusCode, ms: Math.round(reply.elapsedTime), ip: req.ip },
+      {
+        method: req.method,
+        url: redactUrl(req.url),
+        status: reply.statusCode,
+        ms: Math.round(reply.elapsedTime),
+        ip: req.ip,
+      },
       'request',
     );
   });
@@ -170,7 +181,10 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     const status = e.statusCode && e.statusCode >= 400 && e.statusCode < 600 ? e.statusCode : 500;
     if (status >= 500) log.error({ err: errorMessage(err), url: redactUrl(req.url) }, 'request failed');
     return reply.code(status).send({
-      error: { code: e.code ?? (status >= 500 ? 'internal' : 'bad_request'), message: status >= 500 ? 'Internal error' : e.message },
+      error: {
+        code: e.code ?? (status >= 500 ? 'internal' : 'bad_request'),
+        message: status >= 500 ? 'Internal error' : e.message,
+      },
     });
   });
 
@@ -210,7 +224,11 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
       db.close();
     },
   };
-  sockets = new SocketHub(auth, live, lib, log, { domain: cfg.domain, healthIntervalMs: cfg.healthIntervalMs, clientIp });
+  sockets = new SocketHub(auth, live, lib, log, {
+    domain: cfg.domain,
+    healthIntervalMs: cfg.healthIntervalMs,
+    clientIp,
+  });
 
   registerApi(hub.app, hub);
   app.route({

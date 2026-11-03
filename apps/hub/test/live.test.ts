@@ -1,6 +1,24 @@
-import { type Font, type LiveState, type Media, newId, type Playlist, type Presentation, type ResolvedPlaylist } from '@ordo/domain';
+import {
+  type Font,
+  type LiveState,
+  type Media,
+  newId,
+  type Playlist,
+  type Presentation,
+  type ResolvedPlaylist,
+} from '@ordo/domain';
 import { afterEach, describe, expect, it } from 'vitest';
-import { byType, client, connectWs, login, OPERATE_PIN, sleep, song, startHub, type TestHub } from './helpers.ts';
+import {
+  byType,
+  client,
+  connectWs,
+  login,
+  OPERATE_PIN,
+  sleep,
+  song,
+  startHub,
+  type TestHub,
+} from './helpers.ts';
 
 let hub: TestHub | undefined;
 afterEach(async () => {
@@ -28,7 +46,13 @@ function fakeMedia(h: TestHub, state: Media['state'] = 'ready', name = 'bg'): Me
 
 function fakeFont(h: TestHub, family: string, weight: number): Font {
   const hash = `f${weight}`.padEnd(64, 'a');
-  return h.lib.upsertFont({ family, weight, style: 'normal', file: { hash, bytes: 3, mime: 'font/woff2', path: `fonts/${hash}.woff2` }, source: 'upload' });
+  return h.lib.upsertFont({
+    family,
+    weight,
+    style: 'normal',
+    file: { hash, bytes: 3, mime: 'font/woff2', path: `fonts/${hash}.woff2` },
+    source: 'upload',
+  });
 }
 
 async function setup(h: TestHub) {
@@ -60,7 +84,10 @@ describe('goLive resolution and manifest', () => {
     fakeFont(hub, 'Inter', 700);
     fakeFont(hub, 'Unused', 400);
     const op = await login(hub.url, OPERATE_PIN);
-    const r = await op.json<{ seq: number }>('/live/events', { method: 'POST', json: { id: 'c1', event: { k: 'goLive', playlistId: pl.id } } });
+    const r = await op.json<{ seq: number }>('/live/events', {
+      method: 'POST',
+      json: { id: 'c1', event: { k: 'goLive', playlistId: pl.id } },
+    });
     expect(r.seq).toBe(1);
     const live = await op.json<{ state: LiveState }>('/live');
     const res = live.state.resolved!;
@@ -72,14 +99,17 @@ describe('goLive resolution and manifest', () => {
     expect(res.files.map((f) => f.hash).sort()).toEqual(
       [bg.delivery!.hash, bg.poster!.hash, ...res.fonts.map((f) => f.file.hash)].sort(),
     );
-    const manifest = await op.json<{ manifestId: string; files: unknown[]; resolved: ResolvedPlaylist }>('/cache/manifest');
+    const manifest = await op.json<{ manifestId: string; files: unknown[]; resolved: ResolvedPlaylist }>(
+      '/cache/manifest',
+    );
     expect(manifest.manifestId).toBe(res.manifestId);
     expect(manifest.files.length).toBe(4);
     // A token reads the same manifest.
     const tok = hub.lib.getSetting('outputs')[0]!.token!;
-    expect((await client(hub.url, '', { 'x-ordo-token': tok }).json<{ manifestId: string }>('/cache/manifest')).manifestId).toBe(
-      res.manifestId,
-    );
+    expect(
+      (await client(hub.url, '', { 'x-ordo-token': tok }).json<{ manifestId: string }>('/cache/manifest'))
+        .manifestId,
+    ).toBe(res.manifestId);
   });
 
   it('refuses to go live while referenced media is not ready', async () => {
@@ -93,7 +123,9 @@ describe('goLive resolution and manifest', () => {
     const op = await login(hub.url, OPERATE_PIN);
     const res = await op.fetch('/live/events', { method: 'POST', json: { k: 'goLive', playlistId: p2.id } });
     expect(res.status).toBe(409);
-    expect(((await res.json()) as { error: { message: string } }).error.message).toMatch(/"Countdown" is still processing/);
+    expect(((await res.json()) as { error: { message: string } }).error.message).toMatch(
+      /"Countdown" is still processing/,
+    );
     // A client-resolved goLive is never accepted.
     const forged = await op.fetch('/live/events', { method: 'POST', json: { k: 'goLive', resolved: {} } });
     expect(forged.status).toBeGreaterThanOrEqual(400);
@@ -111,7 +143,9 @@ describe('goLive resolution and manifest', () => {
     const at = hub.live.state.layers.slide.at;
     expect(at).toBeGreaterThanOrEqual(before + 33);
     expect(at).toBeLessThan(Date.now() + 100);
-    expect(await op.json('/actions', { method: 'POST', json: { id: 'launchOutputs' } })).toMatchObject({ ignored: true });
+    expect(await op.json('/actions', { method: 'POST', json: { id: 'launchOutputs' } })).toMatchObject({
+      ignored: true,
+    });
     expect((await op.fetch('/actions', { method: 'POST', json: { id: 'bogus' } })).status).toBe(400);
   });
 
@@ -183,11 +217,16 @@ describe('WebSocket live flow', () => {
   it('rejects stale app versions, bad origins and tokenless sockets', async () => {
     hub = await startHub();
     const op = await login(hub.url, OPERATE_PIN);
-    const v = await connectWs(hub.url, { cookie: op.cookie, hello: { role: 'operate', appVersion: '0.0.1' } });
+    const v = await connectWs(hub.url, {
+      cookie: op.cookie,
+      hello: { role: 'operate', appVersion: '0.0.1' },
+    });
     expect((await v.next(byType('bye'))).reason).toBe('version');
     const anon = await connectWs(hub.url, { hello: { role: 'operate' } });
     expect((await anon.next(byType('bye'))).reason).toBe('unauthorized');
-    await expect(connectWs(hub.url, { cookie: op.cookie, origin: 'https://evil.example' })).rejects.toThrow(/403/);
+    await expect(connectWs(hub.url, { cookie: op.cookie, origin: 'https://evil.example' })).rejects.toThrow(
+      /403/,
+    );
     const ok = await connectWs(hub.url, { cookie: op.cookie, origin: 'http://op.localhost:8080' });
     await ok.next(byType('welcome'));
     ok.close();
@@ -202,7 +241,10 @@ describe('WebSocket live flow', () => {
     await a.next(byType('welcome'));
     const o = await connectWs(hub.url, { token: out.token, hello: { role: 'output', outputId: out.id } });
     await o.next(byType('welcome'));
-    o.send({ t: 'health', health: { presented: 60, missed: 0, longTasks: 0, cache: { ready: 3, total: 4 } } });
+    o.send({
+      t: 'health',
+      health: { presented: 60, missed: 0, longTasks: 0, cache: { ready: 3, total: 4 } },
+    });
     const hs = await a.next((m) => {
       if (m.t !== 'health.summary') return false;
       const e = (m.outputs as Record<string, { presented: number; connected: boolean }>)[out.id];
@@ -218,7 +260,10 @@ describe('WebSocket live flow', () => {
     expect(await a.next(byType('rtc.signal'))).toMatchObject({ from: out.id, to: 'operator' });
 
     o.close();
-    await a.next((m) => m.t === 'health.summary' && !(m.outputs as Record<string, { connected: boolean }>)[out.id]!.connected);
+    await a.next(
+      (m) =>
+        m.t === 'health.summary' && !(m.outputs as Record<string, { connected: boolean }>)[out.id]!.connected,
+    );
     a.close();
   });
 

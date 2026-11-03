@@ -51,9 +51,13 @@ export class Auth {
   }
 
   async setPins(operatePin: string, editPin: string): Promise<void> {
-    if (!validPin(operatePin) || !validPin(editPin)) throw badRequest('PINs must be 6 to 12 digits', 'weak_pin');
+    if (!validPin(operatePin) || !validPin(editPin))
+      throw badRequest('PINs must be 6 to 12 digits', 'weak_pin');
     if (operatePin === editPin) throw badRequest('Operate and edit PINs must differ', 'same_pin');
-    this.lib.putInternal('_auth.pins', { operate: await argonHash(operatePin), edit: await argonHash(editPin) });
+    this.lib.putInternal('_auth.pins', {
+      operate: await argonHash(operatePin),
+      edit: await argonHash(editPin),
+    });
   }
 
   async changePin(role: SessionRole, pin: string, keepSessionId?: string): Promise<void> {
@@ -88,9 +92,9 @@ export class Auth {
       const until = ipFails[0]!.at + RATE_WINDOW_MS;
       throw lockout(until, now);
     }
-    const global = this.db.prepare(`SELECT COUNT(*) n, MAX(at) last FROM auth_attempts WHERE ok = 0 AND at > ?`).get(
-      since,
-    ) as { n: number; last: number | null };
+    const global = this.db
+      .prepare(`SELECT COUNT(*) n, MAX(at) last FROM auth_attempts WHERE ok = 0 AND at > ?`)
+      .get(since) as { n: number; last: number | null };
     if (global.n >= RATE_GLOBAL) throw lockout((global.last ?? now) + RATE_WINDOW_MS, now);
   }
 
@@ -142,7 +146,9 @@ export class Auth {
     }
     if (now - row.last_seen > 30_000) {
       const ttl = row.remembered ? REMEMBERED_SESSION_MS : SESSION_MS;
-      this.db.prepare(`UPDATE sessions SET last_seen = ?, expires_at = ? WHERE id = ?`).run(now, now + ttl, id);
+      this.db
+        .prepare(`UPDATE sessions SET last_seen = ?, expires_at = ? WHERE id = ?`)
+        .run(now, now + ttl, id);
     }
     return { id, role: row.role };
   }
@@ -185,7 +191,8 @@ export class Auth {
   principal(opts: { cookie?: string; token?: string }): Principal | null {
     if (opts.token) {
       const o = this.outputForToken(opts.token);
-      if (o) return { kind: 'token', role: o.kind === 'stage' ? 'stage' : 'output', outputId: o.id, output: o };
+      if (o)
+        return { kind: 'token', role: o.kind === 'stage' ? 'stage' : 'output', outputId: o.id, output: o };
     }
     const s = this.session(opts.cookie);
     if (s) return { kind: 'session', role: s.role, sessionId: s.id };

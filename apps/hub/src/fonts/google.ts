@@ -43,7 +43,13 @@ export function cssUrls(family: string): string[] {
   return urls;
 }
 
-export type ParsedFace = { family: string; style: 'normal' | 'italic'; weights: number[]; url: string; subset?: string };
+export type ParsedFace = {
+  family: string;
+  style: 'normal' | 'italic';
+  weights: number[];
+  url: string;
+  subset?: string;
+};
 
 /** Parse @font-face blocks; keep one block (the latin subset) per style and weight. */
 export function parseFontCss(css: string): ParsedFace[] {
@@ -78,10 +84,16 @@ export function parseFontCss(css: string): ParsedFace[] {
   return [...chosen.values()];
 }
 
-export async function fetchFamilyCss(fetcher: FetchLike, family: string, log: (m: string) => void): Promise<string> {
+export async function fetchFamilyCss(
+  fetcher: FetchLike,
+  family: string,
+  log: (m: string) => void,
+): Promise<string> {
   let lastErr = '';
   for (const url of cssUrls(family)) {
-    const res = await fetcher(url, { headers: { 'User-Agent': DESKTOP_CHROME_UA, Accept: 'text/css,*/*;q=0.1' } });
+    const res = await fetcher(url, {
+      headers: { 'User-Agent': DESKTOP_CHROME_UA, Accept: 'text/css,*/*;q=0.1' },
+    });
     if (res.ok) {
       const css = await res.text();
       if (css.includes('@font-face')) return css;

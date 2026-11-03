@@ -10,7 +10,9 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@ordo/domain": "workspace:*", "@ordo/protocol": "workspace:*", "@ordo/live-state": "workspace:*",
+    "@ordo/domain": "workspace:*",
+    "@ordo/protocol": "workspace:*",
+    "@ordo/live-state": "workspace:*",
     "@ordo/importers": "workspace:*",
     "@fastify/cookie": "^11.1.5",
     "@fastify/multipart": "^10.1.7",

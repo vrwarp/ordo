@@ -9,7 +9,12 @@ import { extOf, readHead, sniff, type Store } from '../store.ts';
 import { fetchFamilyCss, parseFontCss } from './google.ts';
 import { type FontFace, faceFromFilename, readFontFace } from './sfnt.ts';
 
-const FONT_MIME: Record<string, string> = { ttf: 'font/ttf', otf: 'font/otf', woff: 'font/woff', woff2: 'font/woff2' };
+const FONT_MIME: Record<string, string> = {
+  ttf: 'font/ttf',
+  otf: 'font/otf',
+  woff: 'font/woff',
+  woff2: 'font/woff2',
+};
 const MAX_FONT_BYTES = 50 * 1024 * 1024;
 
 export class FontService {
@@ -34,9 +39,11 @@ export class FontService {
   ): Promise<Font> {
     if (file.bytes > MAX_FONT_BYTES) throw new HttpError(413, 'too_large', 'Font files are limited to 50 MB');
     const s = sniff(await readHead(file.path));
-    if (!s || s.kind !== 'font') throw new HttpError(415, 'unsupported_font', `${filename}: not a TTF, OTF, WOFF or WOFF2 font`);
+    if (s?.kind !== 'font')
+      throw new HttpError(415, 'unsupported_font', `${filename}: not a TTF, OTF, WOFF or WOFF2 font`);
     const ext = extOf(filename);
-    if (ext && !(ext in FONT_MIME)) throw new HttpError(415, 'extension_mismatch', `${filename}: unexpected extension`);
+    if (ext && !(ext in FONT_MIME))
+      throw new HttpError(415, 'extension_mismatch', `${filename}: unexpected extension`);
     let face: FontFace;
     try {
       face = readFontFace(await readFile(file.path));
@@ -58,7 +65,13 @@ export class FontService {
       hash: file.hash,
       bytes: file.bytes,
     });
-    const font = this.lib.upsertFont({ family: face.family, weight: face.weight, style: face.style, file: ref, source: 'upload' });
+    const font = this.lib.upsertFont({
+      family: face.family,
+      weight: face.weight,
+      style: face.style,
+      file: ref,
+      source: 'upload',
+    });
     this.lib.emit([{ kind: 'font', id: font.id, entity: font }]);
     return font;
   }
@@ -89,18 +102,25 @@ export class FontService {
     for (const f of faces) {
       if (ctx.signal.aborted) throw new Error('cancelled');
       const u = new URL(f.url);
-      if (u.protocol !== 'https:' || u.hostname !== 'fonts.gstatic.com') throw new Error(`Refusing font URL ${u.hostname}`);
+      if (u.protocol !== 'https:' || u.hostname !== 'fonts.gstatic.com')
+        throw new Error(`Refusing font URL ${u.hostname}`);
       let ref = byUrl.get(f.url);
       if (!ref) {
         const res = await fetcher(f.url, { signal: ctx.signal });
         if (!res.ok) throw new Error(`Download failed (HTTP ${res.status}) for ${f.family} ${f.weights[0]}`);
         const buf = new Uint8Array(await res.arrayBuffer());
         const s = sniff(buf);
-        if (!s || s.kind !== 'font') throw new Error('Downloaded file is not a font');
+        if (s?.kind !== 'font') throw new Error('Downloaded file is not a font');
         ref = await this.store.putBytes(buf, { ext: s.ext, mime: FONT_MIME[s.ext] ?? s.mime, dir: 'fonts' });
         byUrl.set(f.url, ref);
       }
-      const font = this.lib.upsertFont({ family: f.family, weight: f.weights[0]!, style: f.style, file: ref, source: 'google' });
+      const font = this.lib.upsertFont({
+        family: f.family,
+        weight: f.weights[0]!,
+        style: f.style,
+        file: ref,
+        source: 'google',
+      });
       this.lib.emit([{ kind: 'font', id: font.id, entity: font }]);
       out.push(font.id);
       ctx.progress(++i / faces.length);

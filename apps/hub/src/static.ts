@@ -7,20 +7,30 @@ import { sendFile } from './send.ts';
 export type AppName = 'operator' | 'output' | 'stage';
 
 /** Which app a request is for: by host label under the venue domain, else by path prefix. */
-export function appFor(hostHeader: string | undefined, path: string, domain: string): { app: AppName; prefix: string; hostMode: boolean } {
-  const hostname = (hostHeader ?? '').toLowerCase().replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+export function appFor(
+  hostHeader: string | undefined,
+  path: string,
+  domain: string,
+): { app: AppName; prefix: string; hostMode: boolean } {
+  const hostname = (hostHeader ?? '')
+    .toLowerCase()
+    .replace(/:\d+$/, '')
+    .replace(/^\[|\]$/g, '');
   if (domain && hostname.endsWith(`.${domain}`)) {
     const label = hostname.slice(0, -domain.length - 1);
     if (label === 'op' || label === 'hub') return { app: 'operator', prefix: '', hostMode: true };
     if (/^out\d+$/.test(label)) return { app: 'output', prefix: '', hostMode: true };
     if (label === 'stage') return { app: 'stage', prefix: '', hostMode: true };
   }
-  if (path === '/output' || path.startsWith('/output/')) return { app: 'output', prefix: '/output', hostMode: false };
-  if (path === '/stage' || path.startsWith('/stage/')) return { app: 'stage', prefix: '/stage', hostMode: false };
+  if (path === '/output' || path.startsWith('/output/'))
+    return { app: 'output', prefix: '/output', hostMode: false };
+  if (path === '/stage' || path.startsWith('/stage/'))
+    return { app: 'stage', prefix: '/stage', hostMode: false };
   return { app: 'operator', prefix: '', hostMode: false };
 }
 
-const HASHED = /[-.][A-Za-z0-9_-]{8,}\.(?:js|mjs|css|woff2?|ttf|otf|png|jpe?g|svg|webp|wasm|gif|avif|json|map)$/;
+const HASHED =
+  /[-.][A-Za-z0-9_-]{8,}\.(?:js|mjs|css|woff2?|ttf|otf|png|jpe?g|svg|webp|wasm|gif|avif|json|map)$/;
 const NO_CACHE = /(?:^|\/)(?:index\.html|sw\.js|service-worker\.js|manifest\.webmanifest|registerSW\.js)$/;
 
 export function cacheControlFor(rel: string): string {
@@ -30,7 +40,10 @@ export function cacheControlFor(rel: string): string {
 }
 
 /** Security headers per design/21, by the app being served. */
-export function securityHeaders(app: AppName | 'api', opts: { https: boolean; host: string }): Record<string, string> {
+export function securityHeaders(
+  app: AppName | 'api',
+  opts: { https: boolean; host: string },
+): Record<string, string> {
   const h: Record<string, string> = {
     'Origin-Agent-Cluster': '?1',
     'X-Content-Type-Options': 'nosniff',
@@ -115,13 +128,19 @@ export class StaticApps {
     if (st?.isFile()) return sendFile(req, reply, candidate, { cacheControl: cacheControlFor(norm) });
     if (st?.isDirectory()) {
       const idx = join(candidate, 'index.html');
-      if (await stat(idx).then((s) => s.isFile(), () => false))
+      if (
+        await stat(idx).then(
+          (s) => s.isFile(),
+          () => false,
+        )
+      )
         return sendFile(req, reply, idx, { cacheControl: 'no-cache' });
     }
     // SPA fallback for navigations; real 404s for missing assets.
     const hasExt = /\.[a-z0-9]{1,8}$/i.test(norm);
     const wantsHtml = (req.headers.accept ?? '').includes('text/html');
-    if (!hasExt || wantsHtml) return sendFile(req, reply, join(dist, 'index.html'), { cacheControl: 'no-cache' });
+    if (!hasExt || wantsHtml)
+      return sendFile(req, reply, join(dist, 'index.html'), { cacheControl: 'no-cache' });
     throw notFound();
   }
 }

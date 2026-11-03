@@ -53,7 +53,12 @@ beforeAll(async () => {
   const dir = tempDir();
   hub = await startHub({
     dataDir: dir,
-    importers: { importPro7: fakePro7, remapMediaIds, readZip, extractPptxText: (await import('@ordo/importers')).extractPptxText },
+    importers: {
+      importPro7: fakePro7,
+      remapMediaIds,
+      readZip,
+      extractPptxText: (await import('@ordo/importers')).extractPptxText,
+    },
   });
   ed = await login(hub.url, EDIT_PIN);
 });
@@ -75,13 +80,19 @@ describe('SongSelect import', () => {
   it('imports an uploaded file', async () => {
     const fd = new FormData();
     fd.append('title', 'Custom Title');
-    fd.append('file', new Blob(['{title: Test}\n{c: Chorus}\n[G]Hallelujah [D]praise\nSing it out\n']), 'song.cho');
+    fd.append(
+      'file',
+      new Blob(['{title: Test}\n{c: Chorus}\n[G]Hallelujah [D]praise\nSing it out\n']),
+      'song.cho',
+    );
     const p = await ed.json<Presentation>('/import/songselect', { method: 'POST', body: fd });
     expect(p.title).toBe('Custom Title');
     expect(p.sections.length).toBeGreaterThan(0);
   });
   it('rejects empty text', async () => {
-    expect((await ed.fetch('/import/songselect', { method: 'POST', json: { text: '   ' } })).status).toBe(400);
+    expect((await ed.fetch('/import/songselect', { method: 'POST', json: { text: '   ' } })).status).toBe(
+      400,
+    );
   });
 });
 
@@ -92,7 +103,7 @@ describe('ProPresenter 7 import', () => {
     zip.file('Media/bg.png', readFileSync(fixtures.png(fx)));
     const buf = await zip.generateAsync({ type: 'uint8array' });
     const fd = new FormData();
-    fd.append('file', new Blob([buf]), 'library.zip');
+    fd.append('file', new Blob([buf as Uint8Array<ArrayBuffer>]), 'library.zip');
     const res = await ed.fetch('/import/pro7', { method: 'POST', body: fd });
     expect(res.status).toBe(202);
     const job = (await res.json()) as Job;
@@ -173,7 +184,9 @@ describe('documents', () => {
                   fileId: 'f',
                   page: 1,
                   imageMediaId: img.id,
-                  textBoxes: [{ text: 'Welcome', box: { x: 100, y: 80, w: 800, h: 120, rotation: 0 }, fontSizePx: 72 }],
+                  textBoxes: [
+                    { text: 'Welcome', box: { x: 100, y: 80, w: 800, h: 120, rotation: 0 }, fontSizePx: 72 },
+                  ],
                 },
               },
             ],
@@ -183,37 +196,43 @@ describe('documents', () => {
       },
       { create: true },
     );
-    const out = await ed.json<Presentation>(`/presentations/${p.id}/slides/${slideId}/make-editable`, { method: 'POST' });
+    const out = await ed.json<Presentation>(`/presentations/${p.id}/slides/${slideId}/make-editable`, {
+      method: 'POST',
+    });
     const sl = out.sections[0]!.slides[0]!;
     expect(out.rev).toBe(2);
     expect(sl.imported).toBeUndefined();
-    expect(sl.objects[0]).toMatchObject({ type: 'image', mediaId: img.id, box: { x: 0, y: 0, w: 1920, h: 1080 } });
+    expect(sl.objects[0]).toMatchObject({
+      type: 'image',
+      mediaId: img.id,
+      box: { x: 0, y: 0, w: 1920, h: 1080 },
+    });
     const t = sl.objects[1] as TextObject;
     expect(t).toMatchObject({ type: 'text', text: 'Welcome', box: { x: 100, y: 80, w: 800, h: 120 } });
     expect(t.style.fontSizePx).toBe(72);
     expect(t.style.fontFamily).toBe(hub.lib.themes.get('theme-default')!.textBoxDefaults.fontFamily);
     // A second call has nothing to convert.
-    expect((await ed.fetch(`/presentations/${p.id}/slides/${slideId}/make-editable`, { method: 'POST' })).status).toBe(400);
+    expect(
+      (await ed.fetch(`/presentations/${p.id}/slides/${slideId}/make-editable`, { method: 'POST' })).status,
+    ).toBe(400);
   });
 
-  it(
-    'converts a PPTX through LibreOffice and attaches extracted text',
-    async () => {
-      const pptx = fixtures.pptx(fx);
-      if (!pptx) return; // python-pptx unavailable: nothing to generate a deck with
-      const fd = new FormData();
-      fd.append('file', new Blob([readFileSync(pptx)]), 'Deck.pptx');
-      const job = await ed.json<Job>('/import/document', { method: 'POST', body: fd });
-      await hub.jobs.idle();
-      const done = await ed.json<Job>(`/jobs/${job.id}`);
-      expect(done.error).toBeUndefined();
-      expect(done.state).toBe('done');
-      const p = await ed.json<Presentation>(`/presentations/${(done.result as { presentationId: string }).presentationId}`);
-      expect(p.source?.kind).toBe('pptx');
-      const slides = p.sections[0]!.slides;
-      expect(slides.length).toBe(2);
-      expect(slides[0]!.imported?.textBoxes?.[0]?.text).toBe('Welcome to church');
-    },
-    120_000,
-  );
+  it('converts a PPTX through LibreOffice and attaches extracted text', async () => {
+    const pptx = fixtures.pptx(fx);
+    if (!pptx) return; // python-pptx unavailable: nothing to generate a deck with
+    const fd = new FormData();
+    fd.append('file', new Blob([readFileSync(pptx)]), 'Deck.pptx');
+    const job = await ed.json<Job>('/import/document', { method: 'POST', body: fd });
+    await hub.jobs.idle();
+    const done = await ed.json<Job>(`/jobs/${job.id}`);
+    expect(done.error).toBeUndefined();
+    expect(done.state).toBe('done');
+    const p = await ed.json<Presentation>(
+      `/presentations/${(done.result as { presentationId: string }).presentationId}`,
+    );
+    expect(p.source?.kind).toBe('pptx');
+    const slides = p.sections[0]!.slides;
+    expect(slides.length).toBe(2);
+    expect(slides[0]!.imported?.textBoxes?.[0]?.text).toBe('Welcome to church');
+  }, 120_000);
 });

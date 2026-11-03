@@ -109,7 +109,10 @@ export async function connectWs(
   if (opts.origin) headers.origin = opts.origin;
   const ws = new WebSocket(url, { headers });
   const messages: Record<string, unknown>[] = [];
-  const waiters: { pred: (m: Record<string, unknown>) => boolean; resolve: (m: Record<string, unknown>) => void }[] = [];
+  const waiters: {
+    pred: (m: Record<string, unknown>) => boolean;
+    resolve: (m: Record<string, unknown>) => void;
+  }[] = [];
   const consumed = new Set<number>();
   ws.on('message', (d) => {
     const m = JSON.parse(d.toString()) as Record<string, unknown>;
@@ -141,7 +144,15 @@ export async function connectWs(
         }
       }
       return new Promise((resolve, reject) => {
-        const t = setTimeout(() => reject(new Error(`timeout waiting for message; got ${JSON.stringify(messages.slice(-5)).slice(0, 800)}`)), timeoutMs);
+        const t = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `timeout waiting for message; got ${JSON.stringify(messages.slice(-5)).slice(0, 800)}`,
+              ),
+            ),
+          timeoutMs,
+        );
         waiters.push({
           pred,
           resolve: (m) => {
@@ -172,7 +183,14 @@ export function song(title = 'Amazing Grace'): Presentation {
     title,
     kind: 'song',
     meta: { tags: [] },
-    sections: [{ id: sid, label: 'Verse 1', short: 'V1', slides: [lyricSlide('Amazing grace'), lyricSlide('how sweet')] }],
+    sections: [
+      {
+        id: sid,
+        label: 'Verse 1',
+        short: 'V1',
+        slides: [lyricSlide('Amazing grace'), lyricSlide('how sweet')],
+      },
+    ],
     arrangements: [{ id: newId(), name: 'Default', sectionIds: [sid] }],
     archived: false,
   };

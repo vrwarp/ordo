@@ -77,7 +77,11 @@ export class SocketHub {
     private log: Logger,
     private opts: { domain: string; healthIntervalMs: number; clientIp: (req: IncomingMessage) => string },
   ) {
-    this.wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024, perMessageDeflate: false });
+    this.wss = new WebSocketServer({
+      noServer: true,
+      maxPayload: 64 * 1024 * 1024,
+      perMessageDeflate: false,
+    });
     live.onDelta((d) => this.broadcastDelta(d));
     live.onState((s) => this.broadcastState(s));
     lib.onChange((changes) => this.broadcastLibrary(changes));
@@ -150,8 +154,12 @@ export class SocketHub {
       return;
     }
     const tokenHeader = req.headers[HEADER_TOKEN];
-    const token = url.searchParams.get('token') ?? (typeof tokenHeader === 'string' ? tokenHeader : undefined);
-    const principal = this.auth.principal({ cookie: parseCookies(req.headers.cookie)[COOKIE_SESSION], token });
+    const token =
+      url.searchParams.get('token') ?? (typeof tokenHeader === 'string' ? tokenHeader : undefined);
+    const principal = this.auth.principal({
+      cookie: parseCookies(req.headers.cookie)[COOKIE_SESSION],
+      token,
+    });
     const ip = this.opts.clientIp(req);
     this.wss.handleUpgrade(req, socket, head, (ws) => this.attach(ws, principal, ip, !!token));
   }
@@ -211,7 +219,7 @@ export class SocketHub {
     return !!c.role && c.role !== 'edit';
   }
 
-  private onMessage(c: Client, raw: string): void {
+  private onMessage(c: Client, raw: string) {
     if (!c.principal) return;
     const m = parseClientMessage(raw);
     if ('error' in m) {
@@ -262,7 +270,8 @@ export class SocketHub {
         if (this.receivesLive(c)) this.sendState(c);
         return;
       case 'live.event': {
-        if (c.role === 'edit') return this.send(c, { t: 'live.ack', v: 1, id: m.id, rejected: 'forbidden: edit role' });
+        if (c.role === 'edit')
+          return this.send(c, { t: 'live.ack', v: 1, id: m.id, rejected: 'forbidden: edit role' });
         try {
           const origin =
             c.role === 'operate'
@@ -271,13 +280,15 @@ export class SocketHub {
           const seq = this.live.submit(m.event, origin);
           this.send(c, { t: 'live.ack', v: 1, id: m.id, seq });
         } catch (e) {
-          if (!(e instanceof LiveRejection) && !(e instanceof HttpError)) this.log.error({ err: errorMessage(e) }, 'live event failed');
+          if (!(e instanceof LiveRejection) && !(e instanceof HttpError))
+            this.log.error({ err: errorMessage(e) }, 'live event failed');
           this.send(c, { t: 'live.ack', v: 1, id: m.id, rejected: errorMessage(e) });
         }
         return;
       }
       case 'live.adopt': {
-        if (c.role !== 'operate') return this.send(c, { t: 'live.ack', v: 1, id: 'adopt', rejected: 'forbidden' });
+        if (c.role !== 'operate')
+          return this.send(c, { t: 'live.ack', v: 1, id: 'adopt', rejected: 'forbidden' });
         const r = this.live.adopt(m.state, m.force);
         if (r.ok) this.send(c, { t: 'live.ack', v: 1, id: 'adopt', seq: r.seq });
         else {
