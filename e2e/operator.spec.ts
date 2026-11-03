@@ -31,7 +31,13 @@ test('a volunteer builds a service in the UI, goes live, launches outputs and ru
     await page.getByRole('link', { name: 'Playlists' }).click();
     await page.getByPlaceholder('New playlist name').fill('Sunday');
     await page.getByPlaceholder('New playlist name').press('Enter');
-    await page.getByRole('button', { name: 'Add', exact: true }).first().click();
+    // Add the song by its own row: search runs in the core worker, so the song's row can appear after the
+    // action rows, and "the first Add button" would add an action instead.
+    const songRow = page.locator('.row').filter({ hasText: 'Amazing Test Song' }).filter({
+      has: page.getByRole('button', { name: 'Add', exact: true }),
+    });
+    await expect(songRow.first()).toBeVisible({ timeout: 15_000 });
+    await songRow.first().getByRole('button', { name: 'Add', exact: true }).click();
     await page.getByRole('button', { name: 'Go live' }).click();
     await expect(page.getByRole('button', { name: 'End service' })).toBeVisible({ timeout: 15_000 });
 
