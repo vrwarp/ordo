@@ -1,6 +1,8 @@
 # Design 25: Isolation and hardening against bad data and unknown bugs
 
-Status: proposed, with a phased plan. Companion ADR: [0014](../adr/0014-supervised-isolation.md).
+Status: implemented (phases A to E, 2026-11-03). Companion ADR: [0014](../adr/0014-supervised-isolation.md). The
+implementation details live in design/12 (hub processes), design/14 (output threads), design/15 (operator core
+worker), design/16 (stage worker) and design/23 (fuzzing and chaos tests).
 
 ## Why
 
@@ -170,13 +172,17 @@ visible indicator for the operator, and the system continues. Nothing retries wi
 
 ## Phased plan
 
+All phases are implemented. Each has chaos end-to-end tests (`e2e/chaos-*.spec.ts`) that kill the
+worker or process it introduced mid-service and assert the audience path holds.
+
+
 | Phase                     | Work                                                                                                                                                                                                                    | Value                                                                                                                 |
 | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| A (fix pass, in progress) | Liveness by time, outputs leave fallback autonomously, heartbeats on the fallback bus, pending re-submission, `mainThreadStallMs`, reducer guards in the mirror, `at` clamp, import in a worker thread, bounded schemas | Removes the known failure modes; starts the boundary validation                                                       |
-| B                         | Output **link worker** and **supervisor**; fallback bus over **MessagePorts**; crash-only restart; render-plan clamps; goLive deep validation with quarantine                                                           | The audience path no longer shares a thread with networking, storage or state; bad slides cannot reach the frame loop |
-| C                         | Operator **core worker** with a view model; keyboard forwarding; error budgets and the diagnostics panel; chaos tests                                                                                                   | The operator UI cannot delay the live service; failures are visible and bounded                                       |
-| D                         | Hub **two-process split** with a supervisor; worker-thread pool; validated restore                                                                                                                                      | A library or media failure cannot stop the live service                                                               |
-| E                         | Stage link worker; fuzzing of every parser; invariant assertions                                                                                                                                                        | Completes the pattern                                                                                                 |
+| A (done)                  | Liveness by time, outputs leave fallback autonomously, heartbeats on the fallback bus, pending re-submission, `mainThreadStallMs`, reducer guards in the mirror, `at` clamp, import in a worker thread, bounded schemas | Removes the known failure modes; starts the boundary validation                                                       |
+| B (done)                  | Output **link worker** and **supervisor**; fallback bus over **MessagePorts**; crash-only restart; render-plan clamps; goLive deep validation with quarantine                                                           | The audience path no longer shares a thread with networking, storage or state; bad slides cannot reach the frame loop |
+| C (done)                  | Operator **core worker** with a view model; keyboard forwarding; error budgets and the diagnostics panel; chaos tests                                                                                                   | The operator UI cannot delay the live service; failures are visible and bounded                                       |
+| D (done)                  | Hub **two-process split** with a supervisor; worker-thread pool; validated restore                                                                                                                                      | A library or media failure cannot stop the live service                                                               |
+| E (done)                  | Stage link worker; fuzzing of every parser; invariant assertions                                                                                                                                                        | Completes the pattern                                                                                                 |
 
 Phase B is the one that matters for Sunday; it should land before the first live service. Phases C to E
 can follow rehearsals.

@@ -1,6 +1,6 @@
 # ADR 0014: Supervised isolation of subsystems
 
-Status: Accepted for phases A and B; proposed for C to E ([design/25](../design/25-isolation-and-hardening.md)).
+Status: Accepted and implemented, phases A to E ([design/25](../design/25-isolation-and-hardening.md)).
 
 ## Context
 
@@ -30,5 +30,6 @@ travel from an upload to the frame loop with checks only at the first hop.
 - The operator gains a core worker; React renders a posted view model.
 - `packages/protocol` grows the worker-to-worker message types; `packages/client` becomes worker-safe
   (no `window` or `document` references outside the host layer).
-- Deployment adds a second Node process in the container and two reverse-proxy path rules.
+- Deployment adds a supervisor and two Node processes in the container. The live process is the front door
+  and proxies library paths over loopback, so the DSM reverse proxy needs no extra rules (design/12, Processes).
 - Testing adds chaos scenarios and parser fuzzing to the suites.
