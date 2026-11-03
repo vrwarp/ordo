@@ -104,7 +104,8 @@ export class StaticApps {
   async serve(req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {
     const url = new URL(req.url, 'http://x');
     const path = url.pathname;
-    const { app, prefix } = appFor(req.headers.host, path, this.domain);
+    // req.host honours X-Forwarded-Host from a trusted proxy (hub.ts verifies it against the allow-list).
+    const { app, prefix } = appFor(req.host, path, this.domain);
     if (prefix && path === prefix) return reply.redirect(`${prefix}/${url.search}`, 301);
     let rel: string;
     try {

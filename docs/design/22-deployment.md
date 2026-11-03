@@ -41,10 +41,11 @@ services:
       - /volume1/docker/ordo/data:/data
     ports:
       - "127.0.0.1:8080:8080"
-    deploy:
-      resources:
-        limits: { memory: 4g }
+    mem_limit: 4g # honoured by `docker compose up`; deploy.resources.limits is swarm-only
 ```
+
+`ORDO_TZ` seeds the venue time zone on first run; afterwards Settings → General → Time zone
+is the single source for countdowns and the nightly backup.
 
 Backups land in `/volume1/docker/ordo/data/backups`, which the venue's Hyper Backup task
 includes.
@@ -70,7 +71,9 @@ Image size target under 1.5 GB (LibreOffice dominates).
 
 ## CI and release
 
-- Every push: lint, typecheck, unit tests, Playwright, Docker build (no push).
+- Every push: lint, typecheck, unit tests, Playwright, Docker build (no push). `pnpm audit`
+  runs too but never fails the build (`continue-on-error`); a weekly scheduled workflow
+  (`audit.yml`, Mondays) reports advisories on its own.
 - `main`: push `edge`.
 - Tag `vX.Y.Z`: push `vX.Y.Z` and `latest`; create a GitHub release with the changelog.
 - Upgrades at the venue: change the tag in Compose and redeploy, never on a Saturday
@@ -91,6 +94,16 @@ Image size target under 1.5 GB (LibreOffice dominates).
    `UpdatesSuppressed` for Saturday 18:00 to Sunday 14:00, `DefaultPopupsSetting` allow
    for `op.<venue>.synology.me`, `WindowManagementAllowedForUrls` and
    `WebHidAllowedForUrls` where supported.
+   Autoplay with sound: the output windows start video and audio without a click, which
+   Chrome's autoplay policy only allows on origins with enough "media engagement" or on
+   an allow-list. Set the `AutoplayAllowlist` policy to the output origins
+   (`https://out1.<venue>.synology.me` … `out6`, and `stage.<venue>.synology.me`), or
+   `AutoplayAllowed` for the whole profile. Without it an output falls back to muted
+   playback and reports `audio blocked by autoplay policy: click the output window` in
+   its health error (the operator's diagnostics show it); a click on the window unmutes.
+   For a development PC the command-line flag `--autoplay-policy=no-user-gesture-required`
+   does the same. Confirm at `chrome://policy` that the policy is applied before the
+   first service.
 5. Install the operator origin as a PWA (Chrome menu, Install) so it launches as its own
    window; pin it to the taskbar; set it to launch at login.
 6. Grant and remember permissions once: Window Management, HID (Stream Deck), MIDI,

@@ -35,11 +35,23 @@ every 10 s through the HTTP bridge, collects health each second, and writes
 tasks, late flips, GPU losses, video dropped frames; pass or fail. The rehearsal gate in
 [milestones.md](../milestones.md) requires a passing report from the venue PC.
 
+## Golden images
+
+`pnpm --filter @ordo/renderer golden` bundles `packages/renderer/golden/page.ts` with
+esbuild, runs it in headless Chromium through Playwright, renders known slides (authored
+main slide, lyric slides on every look, lower third, stream key, props, image fits) through
+the output rasterizer on an `OffscreenCanvas`, and compares each to
+`golden/expected/<case>.png`: a pixel differs when any channel is more than 40 apart, and a
+case fails when more than 0.4 % of its pixels differ. Text uses DejaVu Sans injected from
+the system (recorded in `expected/meta.json`) so the result does not depend on installed
+fonts; on a machine without it the run is skipped. `--update` rewrites the expected images;
+a failing case writes `<case>.actual.png` next to the expected one.
+
 ## CI
 
 GitHub Actions on every push and PR: `pnpm lint`, `pnpm typecheck`, `pnpm test`,
-`pnpm e2e` (SwiftShader; timing assertions relaxed to 100 ms in CI and marked), Docker
-build. Tags build and push the image. Playwright traces are uploaded on failure.
+`pnpm e2e` (SwiftShader; timing assertions relaxed to 100 ms in CI and marked), the golden
+images, Docker build. Tags build and push the image. Playwright traces are uploaded on failure.
 
 ## Test content
 

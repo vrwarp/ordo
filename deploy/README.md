@@ -37,7 +37,8 @@ Container Manager, Project, Create, with `deploy/compose.yaml` from this repo. S
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `ORDO_DOMAIN`        | `<venue>.synology.me`                                                                                                                      |
 | `ORDO_TRUSTED_PROXY` | `172.16.0.0/12` (requests from DSM's reverse proxy arrive from the Docker bridge). Only these addresses may set `X-Forwarded-For`/`-Proto` |
-| `ORDO_TZ`            | The venue's IANA time zone, e.g. `America/Los_Angeles`                                                                                     |
+| `ORDO_TZ`            | The venue's IANA time zone, e.g. `America/Los_Angeles`. Seeds Settings → General → Time zone on first run; that setting is the one source afterwards (countdowns and the nightly backup) |
+| `ORDO_ALLOWED_HOSTS` | Optional, comma separated. Extra host names the hub answers for besides `ORDO_DOMAIN` and its labels, `localhost` and loopback; any other `Host` gets 421 |
 | `ORDO_PORT`          | `8080`                                                                                                                                     |
 | `ORDO_IMPORT_ROOTS`  | Optional, colon separated. Folders `POST /import/pro7 {path}` may read from (default `/data/import:/import`)                               |
 
@@ -62,8 +63,10 @@ Control Panel, Login Portal, Advanced, Reverse Proxy. Create one rule per hostna
 Assign the wildcard certificate to every rule (Security, Certificate, Settings).
 
 The hub picks the app by the `Host` label: `op`/`hub` serve the operator, `out<k>` serve the output app,
-`stage` serves the stage display. Every host serves `/api/v1/*` and `/ws`. A plain-HTTP request that comes
-through the trusted proxy is redirected to HTTPS.
+`stage` serves the stage display. Behind the proxy the browser's host arrives in `X-Forwarded-Host`, which
+the hub honours only from `ORDO_TRUSTED_PROXY` addresses. Every host serves `/api/v1/*` and `/ws`. A
+plain-HTTP request that comes through the trusted proxy is redirected to HTTPS. Requests for any other
+host name are refused with 421.
 
 ## 5. First run
 
@@ -90,8 +93,10 @@ Chrome policies, the PWA install and the rest of the PC setup are in design/22, 
 
 ## 7. Backups and restore
 
-- Nightly at 03:00 `ORDO_TZ`, the hub runs `VACUUM INTO /data/backups/ordo-YYYY-MM-DD.db` and writes
-  `media-manifest-YYYY-MM-DD.json`, which lists every content hash. Backups are kept for 30 days.
+- Nightly at 03:00 venue time (Settings → General → Time zone), the hub runs
+  `VACUUM INTO /data/backups/ordo-YYYY-MM-DD.db` and writes `media-manifest-YYYY-MM-DD.json`, which lists
+  every content hash. A restart after 03:00 does not repeat the day's backup. Backups are kept for 30 days;
+  the `ordo-pre-restore-*.db` copies made by `restore` are capped at the newest three.
 - Operate role: `POST /api/v1/backup/run` makes an on-demand backup and `GET /api/v1/backup/list` lists
   them.
 - Restore (never during a service):
@@ -109,8 +114,11 @@ Chrome policies, the PWA install and the rest of the PC setup are in design/22, 
 ## 8. Upgrades
 
 Change the image tag in the project and redeploy. Never upgrade on a Saturday evening or a Sunday. Jobs
-that were running (transcodes, imports) resume after the restart. The live state is restored from its
-snapshot and journal.
+that were running (transcodes, imports) resume after the restart; imports continue from the last item they
+wrote. The live state is restored from its snapshot and journal. On `SIGTERM` the hub stops within about
+2 s even if an output window is frozen. Imports are refused (423) while a playlist is live; large
+ProPresenter libraries with videos are best imported from a mounted folder (`/import`), zip uploads hold
+at most 256 MB of documents in memory and stream media to disk.
 
 ## 9. Diagnostics
 

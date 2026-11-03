@@ -1,0 +1,6 @@
+{
+  "fonts": "DejaVuSans-Bold.ttf,DejaVuSans.ttf",
+  "chromium": "153.0.8010.12",
+  "tolerance": 40,
+  "maxDifferingFraction": 0.004
+}

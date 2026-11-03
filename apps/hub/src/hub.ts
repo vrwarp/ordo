@@ -130,12 +130,14 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   const trusted = (addr: string) => cfg.trustedProxies.length > 0 && ipInAny(addr, cfg.trustedProxies);
   /**
    * The host the browser addressed: X-Forwarded-Host from the trusted reverse proxy (DSM sets it), else the
-   * Host header. Used for the Host allow-list, app routing and the CSP connect-src.
+   * Host header. Used for the Host allow-list, app routing and the CSP connect-src. Same rule as Fastify's
+   * `request.host` (last forwarded entry), which the static server uses.
    */
   const effectiveHost = (req: IncomingMessage): string => {
     const peer = normaliseIp(req.socket.remoteAddress ?? '');
     const xfh = req.headers['x-forwarded-host'];
-    const forwarded = (Array.isArray(xfh) ? xfh[0] : xfh)?.split(',')[0]?.trim();
+    const entries = (Array.isArray(xfh) ? xfh.join(',') : (xfh ?? '')).split(',').map((s) => s.trim());
+    const forwarded = entries[entries.length - 1];
     return (forwarded && trusted(peer) ? forwarded : (req.headers.host ?? '')).toLowerCase();
   };
   const hostOk = (host: string) => hostAllowed(hostnameOf(host), cfg.domain, cfg.allowedHosts);

@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { copyFile, readdir, readFile, realpath, rm, stat } from 'node:fs/promises';
-import { join, relative, resolve, sep } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, join, relative, resolve, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import {
   DEFAULT_THEME,
@@ -484,6 +486,12 @@ export function importWorkerUrl(): URL {
   return new URL(here.endsWith('.ts') ? './import.worker.ts' : './import.worker.js', here);
 }
 
+/** The tsx ESM loader as a file URL, for running the worker from TypeScript source (dev and tests). */
+function tsxLoaderUrl(): string {
+  const pkg = createRequire(import.meta.url).resolve('tsx/package.json');
+  return pathToFileURL(join(dirname(pkg), 'dist', 'loader.mjs')).href;
+}
+
 /** Run `importPro7` in a worker thread; buffers that own their ArrayBuffer are transferred, not copied. */
 export function importPro7InWorker(
   files: Map<string, Uint8Array>,
@@ -502,7 +510,7 @@ export function importPro7InWorker(
         workerData: { files },
         transferList: transfer,
         // From source the worker needs the TypeScript loader; the bundle inherits the process flags.
-        ...(fromSource ? { execArgv: ['--import', 'tsx'] } : {}),
+        ...(fromSource ? { execArgv: ['--import', tsxLoaderUrl()] } : {}),
       });
     } catch (e) {
       reject(new WorkerStartError(errorMessage(e)));

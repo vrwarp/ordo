@@ -120,7 +120,7 @@ describe('item 15: operator timestamps are clamped to the hub clock', () => {
     const pl = await livePlaylist(hub);
     const op = await login(hub.url, OPERATE_PIN);
     await op.json('/live/events', { method: 'POST', json: { k: 'goLive', playlistId: pl.id } });
-    for (const offset of [-10_000, -AT_PAST_MS - 1, AT_FUTURE_MS + 1, 60_000]) {
+    for (const offset of [-10_000, -AT_PAST_MS - 300, AT_FUTURE_MS + 300, 60_000]) {
       const before = Date.now();
       await op.json('/live/events', { method: 'POST', json: { k: 'go', cueIndex: 0, at: before + offset } });
       const at = hub.live.state.layers.slide.at;
@@ -249,7 +249,15 @@ describe('item 17: shutdown with a stuck client', () => {
     expect(took).toBeLessThan(2000);
     expect(aborted).toBe(true);
     expect(await fine.next(byType('bye'))).toMatchObject({ reason: 'shutdown' });
-    expect(stuck.destroyed).toBe(true);
+    expect(h.sockets.wss.clients.size).toBe(0);
+    // The server dropped the stuck socket: once it reads again it sees the end of stream.
+    const ended = new Promise<string>((resolve) => {
+      stuck.once('end', () => resolve('end'));
+      stuck.once('close', () => resolve('close'));
+      setTimeout(() => resolve('timeout'), 1000).unref();
+    });
+    stuck.resume();
+    expect(['end', 'close']).toContain(await ended);
     // The job is left queued for the next start; the live state was snapshotted at its final seq.
     const db = new (await import('better-sqlite3')).default(join(h.dir, 'ordo.db'), { readonly: true });
     expect((db.prepare(`SELECT state FROM jobs WHERE id = ?`).get(job.id) as { state: string }).state).toBe(

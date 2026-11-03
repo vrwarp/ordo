@@ -171,3 +171,24 @@ describe('OutputLink ended events', () => {
     expect(ws3.sent.filter((m) => m.t === 'live.event')).toEqual([]);
   });
 });
+
+describe('LiveMirror on malformed input', () => {
+  it('keeps the previous state and reports a gap', () => {
+    const { link, ws } = (() => {
+      vi.useFakeTimers();
+      installFakeWebSocket();
+      return setup();
+    })();
+    const gaps: unknown[] = [];
+    link.mirror.on('gap', (g) => gaps.push(g));
+    ws.sent = [];
+    ws.receive({ t: 'live.delta', v: 1, seq: 3, fromSeq: 2, event: { k: 'nonsense' } });
+    expect(link.state.seq).toBe(2);
+    expect(gaps).toHaveLength(1);
+    expect(ws.sent).toEqual([{ t: 'live.resync', v: 1 }]);
+    ws.receive({ t: 'live.state', v: 1, seq: 9, state: { seq: 9 } });
+    expect(link.state.seq).toBe(2);
+    expect(gaps).toHaveLength(2);
+    vi.useRealTimers();
+  });
+});

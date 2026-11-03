@@ -103,7 +103,7 @@ All tasks in M1, M2 and M3 are implemented in this repository, with these except
 | 1.25, 2.13, 3.12 Rehearsals and venue soak runs          | Venue tasks; the soak tool is ready                                                                                    |
 | WebGPU compositor on real hardware                       | Implemented; the build container has no GPU, so only the Canvas 2D path was observed rendering                         |
 | Docker image                                             | Dockerfile written and its runtime layout verified with `pnpm deploy`; not built here (no Docker daemon). CI builds it |
-| Editor "send to preview" to an idle output               | Not implemented (no hub path yet)                                                                                      |
+| Editor "send to preview" to an idle output               | Output side done (`preview` message renders a slide with the output's look while idle); editor UI pending              |
 | Per-window log lines in the operator diagnostics         | Health counters only; windows do not ship logs over the protocol                                                       |
-| Golden-image tests of the text rasterizer                | Not written; the e2e tests check rendered pixels and text instead                                                      |
+| Golden-image tests of the text rasterizer                | `pnpm --filter @ordo/renderer golden` (Playwright + OffscreenCanvas, design/23); runs in CI                            |
 | Memory caps on ffmpeg, LibreOffice and pdftoppm          | Timeouts only; set a container memory limit (deploy/compose.yaml)                                                      |
