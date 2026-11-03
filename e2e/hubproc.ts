@@ -30,7 +30,8 @@ export class HubProcess {
         ORDO_DEV_PIN: '246810',
         ORDO_TZ: 'UTC',
       },
-      stdio: ['ignore', 'ignore', 'inherit'],
+      // ORDO_E2E_HUB_STDOUT=1 shows the hub's log lines (pino on stdout) while debugging a spec.
+      stdio: ['ignore', process.env.ORDO_E2E_HUB_STDOUT ? 'inherit' : 'ignore', 'inherit'],
     });
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline) {

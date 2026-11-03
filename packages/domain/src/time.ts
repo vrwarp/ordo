@@ -3,7 +3,15 @@
  * the zone database, never by adding minutes to a UTC timestamp.
  */
 
-export type ZonedParts = { year: number; month: number; day: number; hour: number; minute: number; second: number; ms: number };
+export type ZonedParts = {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+  ms: number;
+};
 
 const fmtCache = new Map<string, Intl.DateTimeFormat>();
 
@@ -105,7 +113,12 @@ export function formatDuration(ms: number): string {
 
 export function formatClock(ms: number, timeZone: string, h24: boolean): string {
   try {
-    return new Intl.DateTimeFormat('en-US', { timeZone, hour: 'numeric', minute: '2-digit', hour12: !h24 }).format(new Date(ms));
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: !h24,
+    }).format(new Date(ms));
   } catch {
     return new Date(ms).toISOString().slice(11, 16);
   }

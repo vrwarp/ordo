@@ -258,6 +258,11 @@ export class OutputApp {
       if (bus === 'hub' && !this.config) void this.loadConfig();
     });
     this.link.hub.on('welcome', () => void this.loadConfig());
+    this.link.hub.on('bye', (m) => {
+      this.diag.log(`hub bye: ${m.reason}`);
+      // A newer window for this output connected (Relaunch from another operator tab): leave the screen to it.
+      if (m.reason === 'superseded') setTimeout(() => window.close(), 200);
+    });
     this.link.hub.on('preview', (m) => this.onPreview(m));
     this.link.start();
     void this.loadConfig();

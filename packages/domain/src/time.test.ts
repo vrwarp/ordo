@@ -21,7 +21,9 @@ describe('time helpers', () => {
     const now = Date.UTC(2026, 10, 1, 3, 0, 30); // 03:00:30 UTC
     expect(nextTimeOfDay('03:00', 'UTC', now, { strictlyAfter: true }) - now).toBe(24 * 3600_000 - 30_000);
     const nearly = Date.UTC(2026, 10, 1, 2, 59, 50);
-    expect(nextTimeOfDay('03:00', 'UTC', nearly, { strictlyAfter: true }) - nearly).toBe(24 * 3600_000 + 10_000);
+    expect(nextTimeOfDay('03:00', 'UTC', nearly, { strictlyAfter: true }) - nearly).toBe(
+      24 * 3600_000 + 10_000,
+    );
   });
 
   it('is correct across DST changes', () => {
@@ -36,7 +38,9 @@ describe('time helpers', () => {
     expect(nextTimeOfDay('09:00', 'America/New_York', ny) - ny).toBe(11 * 3600_000);
     // Backup scheduling: from 22:00 PDT on 2026-10-31, the next 03:00 PST is 6 h away.
     const la = zonedToMs('America/Los_Angeles', 2026, 10, 31, 22, 0);
-    expect(nextTimeOfDay('03:00', 'America/Los_Angeles', la, { strictlyAfter: true }) - la).toBe(6 * 3600_000);
+    expect(nextTimeOfDay('03:00', 'America/Los_Angeles', la, { strictlyAfter: true }) - la).toBe(
+      6 * 3600_000,
+    );
   });
 
   it('handles month boundaries', () => {

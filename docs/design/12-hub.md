@@ -92,19 +92,19 @@ A single in-process job queue (one video job at a time, two light jobs concurren
 the NAS CPU is shared with other services). Jobs are persisted in `jobs` so a restart
 resumes them.
 
-| Job               | Tool                                                                                                                                                  | Output                                      |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| `probe`           | `ffprobe`                                                                                                                                             | duration, dimensions, alpha, audio channels |
-| `transcode-video` | `ffmpeg -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -g 60 -movflags +faststart -c:a aac -b:a 256k` scaled to fit 1920x1080, fps capped at 60 | delivery MP4                                |
-| `transcode-alpha` | `ffmpeg -c:v libvpx-vp9 -pix_fmt yuva420p`                                                                                                            | delivery WebM with alpha                    |
-| `gif`             | ffmpeg: animated GIF to H.264 loop (opaque) or VP9 alpha (transparent); still GIF to PNG                                                              | delivery file                               |
-| `poster`          | ffmpeg frame at 1 s, 640x360 JPEG                                                                                                                     | poster                                      |
-| `audio`           | ffmpeg loudnorm measurement, AAC 256k delivery                                                                                                        | delivery and LUFS                           |
-| `pdf-render`      | `pdftoppm -r 144 -png` then scale to 1920x1080                                                                                                        | one PNG media per page                      |
-| `pptx-render`     | `soffice --headless --convert-to pdf` then `pdf-render`                                                                                               | PNGs                                        |
-| `pptx-text`       | unzip `ppt/slides/slideN.xml`, read `<a:t>` runs and `<a:off>/<a:ext>` in EMU, convert to logical px                                                  | ExtractedText[] per slide                   |
+| Job               | Tool                                                                                                                                                                           | Output                                      |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------- |
+| `probe`           | `ffprobe`                                                                                                                                                                      | duration, dimensions, alpha, audio channels |
+| `transcode-video` | `ffmpeg -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -g 60 -movflags +faststart -c:a aac -b:a 256k` scaled to fit 1920x1080, fps capped at 60                          | delivery MP4                                |
+| `transcode-alpha` | `ffmpeg -c:v libvpx-vp9 -pix_fmt yuva420p`                                                                                                                                     | delivery WebM with alpha                    |
+| `gif`             | ffmpeg: animated GIF to H.264 loop (opaque) or VP9 alpha (transparent); still GIF to PNG                                                                                       | delivery file                               |
+| `poster`          | ffmpeg frame at 1 s, 640x360 JPEG                                                                                                                                              | poster                                      |
+| `audio`           | ffmpeg loudnorm measurement, AAC 256k delivery                                                                                                                                 | delivery and LUFS                           |
+| `pdf-render`      | `pdftoppm -r 144 -png` then scale to 1920x1080                                                                                                                                 | one PNG media per page                      |
+| `pptx-render`     | `soffice --headless --convert-to pdf` then `pdf-render`                                                                                                                        | PNGs                                        |
+| `pptx-text`       | unzip `ppt/slides/slideN.xml`, read `<a:t>` runs and `<a:off>/<a:ext>` in EMU, convert to logical px                                                                           | ExtractedText[] per slide                   |
 | `pro7-import`     | `packages/importers` (protobuf decode) in a `worker_threads` worker; zip uploads are streamed from disk, media entries spilled to `tmp/`, documents capped at 256 MB in memory | presentations, playlists, media uploads     |
-| `font-google`     | fetch the family's CSS from Google Fonts with a desktop UA, download referenced woff2 files, store as `Font` rows                                     | fonts                                       |
+| `font-google`     | fetch the family's CSS from Google Fonts with a desktop UA, download referenced woff2 files, store as `Font` rows                                                              | fonts                                       |
 
 The Docker image includes `ffmpeg`, `poppler-utils` and LibreOffice (`libreoffice-impress`
 with a minimal font set plus the venue's uploaded fonts mounted so PPTX renders use them).
