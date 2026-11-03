@@ -19,6 +19,7 @@ import type {
   Theme,
   ResolvedPlaylist,
   LiveState,
+  GeneralSettings as General,
 } from '@ordo/domain';
 import type { Role } from './index.ts';
 
@@ -96,7 +97,22 @@ export type GoogleFontFamily = { family: string; category?: string; variants?: s
 /** GET /diagnostics/export -> application/zip */
 /** GET /health -> { ok: true, version, uptimeS, seq, mode } */
 
+/**
+ * GET /output/config (output or stage token): what a role window needs that is not live state.
+ * The token's Output record (without its token), all looks, audio and general settings, and the logo media.
+ * Hub broadcasts `library.delta` with kind 'settings' when any of these change; windows refetch.
+ */
+export type OutputConfigRes = {
+  output: Output;
+  looks: Look[];
+  audio: AudioSettings;
+  general: General;
+  logo?: Media;
+  fonts: Font[];
+};
+
 export const ROUTES = {
+  outputConfig: '/output/config',
   me: '/auth/me',
   pin: '/auth/pin',
   logout: '/auth/logout',
