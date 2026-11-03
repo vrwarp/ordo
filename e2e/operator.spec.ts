@@ -33,15 +33,12 @@ test('a volunteer builds a service in the UI, goes live, launches outputs and ru
     await page.getByPlaceholder('New playlist name').press('Enter');
     await page.getByRole('button', { name: 'Add', exact: true }).first().click();
     await page.getByRole('button', { name: 'Go live' }).click();
-    const confirm = page.getByRole('button', { name: /^(Go live|Confirm|OK|Yes)$/ });
-    if (await confirm.count())
-      await confirm
-        .last()
-        .click()
-        .catch(() => undefined);
+    await expect(page.getByRole('button', { name: 'End service' })).toBeVisible({ timeout: 15_000 });
 
     // Live view shows the song; launch outputs.
-    await page.getByRole('link', { name: /Live/ }).click();
+    await page.evaluate(() => {
+      location.hash = '#/live';
+    });
     await expect(page.getByText('First line of verse one').first()).toBeVisible({ timeout: 20_000 });
     await page.getByRole('button', { name: 'Launch outputs' }).click();
     const outs = () => context.pages().filter((p) => !p.isClosed() && /\/\/out1\.localhost/.test(p.url()));

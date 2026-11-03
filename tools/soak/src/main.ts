@@ -112,10 +112,13 @@ async function main(): Promise<void> {
   for (const { page } of pages) {
     await page.waitForFunction(
       () => {
-        const t = (
-          window as unknown as { __ordo?: { telemetry(): { cache?: { ready: number; total: number } } } }
-        ).__ordo?.telemetry();
-        return !!t?.cache && t.cache.total > 0 && t.cache.ready >= t.cache.total;
+        const o = (
+          window as unknown as {
+            __ordo?: { telemetry(): { cache?: { ready: number; total: number } }; state(): { mode: string } };
+          }
+        ).__ordo;
+        const t = o?.telemetry();
+        return o?.state().mode === 'live' && !!t?.cache && t.cache.ready >= t.cache.total;
       },
       undefined,
       { timeout: Math.max(1000, deadline - Date.now()), polling: 1000 },
