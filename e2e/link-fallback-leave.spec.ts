@@ -50,7 +50,8 @@ test('outputs leave the fallback bus when the operator tab closes, and a new tab
     await login(page2, op);
     await expect(page2.locator('[data-fallback-link]')).toHaveText('fallback link 0/2', { timeout: 10_000 });
     const outs2 = await launchOutputs(page2, context, 2, 'Relaunch');
-    await expect.poll(() => outs.filter((p) => !p.isClosed()).length, { timeout: 5000 }).toBe(0);
+    // The old windows cannot be reached by name from another tab; the hub tells them they are superseded.
+    await expect.poll(() => outs.filter((p) => !p.isClosed()).length, { timeout: 15_000 }).toBe(0);
     await expect(page2.locator('[data-fallback-link]')).toHaveCount(0);
     await go(page2);
     await expectCue(outs2, 2);

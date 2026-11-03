@@ -142,7 +142,7 @@ export class OutputWindows {
       log('info', `relaunch: re-acquired ${n} of ${before.length} windows without a handle`);
       if (still.length)
         toast(
-          `Relaunch: ${still.length} output window${still.length === 1 ? ' was' : 's were'} not opened by this tab and cannot be closed (${still.map((o) => o.name).join(', ')}). Reopening by name; close any extra window by hand (Ctrl+Shift+Q).`,
+          `Relaunch: ${still.length} output window${still.length === 1 ? ' was' : 's were'} opened by another operator tab and cannot be closed from here (${still.map((o) => o.name).join(', ')}). Opening new windows; the old ones close themselves once the new ones connect to the hub.`,
           'warn',
           12_000,
         );

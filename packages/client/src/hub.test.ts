@@ -140,6 +140,20 @@ describe('HubConnection liveness', () => {
     expect(FakeWebSocket.instances.length).toBe(3);
   });
 
+  it('never reconnects after bye: superseded', () => {
+    const { hub, statuses } = connect();
+    const ws = lastSocket();
+    welcome(ws);
+    const byes: string[] = [];
+    hub.on('bye', (m) => byes.push(m.reason));
+    ws.receive({ t: 'bye', v: 1, reason: 'superseded' });
+    expect(byes).toEqual(['superseded']);
+    expect(hub.connected).toBe(false);
+    vi.advanceTimersByTime(30_000);
+    expect(FakeWebSocket.instances.length).toBe(1);
+    expect(statuses).toEqual([true, false]);
+  });
+
   it('send fails while disconnected and the hello carries the last seq', () => {
     const { hub } = connect();
     expect(hub.send({ t: 'live.resync' })).toBe(false);

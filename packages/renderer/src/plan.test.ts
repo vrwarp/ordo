@@ -134,6 +134,16 @@ describe('send to preview (prd/03)', () => {
     expect(p.slideCue).toBe(-1);
     expect(p.background.key).toBe('bg|bgv|d1');
     expect(p.media.key).toBe('');
+    // A slide-level background wins over the presentation's.
+    const withSlideBg = {
+      ...song,
+      sections: [
+        { ...song.sections[0]!, slides: [{ ...song.sections[0]!.slides[0]!, backgroundMediaId: 'bgi' }] },
+      ],
+    };
+    expect(planPreview(withSlideBg, 's1', LOOK_MAIN, { media: mediaLookup }).background.key).toBe(
+      'bg|bgi|i1',
+    );
   });
 
   it('defaults to the first slide and carries the next slide on stage looks', () => {

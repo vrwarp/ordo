@@ -332,6 +332,8 @@ export class HubConnection extends Emitter<HubEvents> {
         this.emit('bye', m);
         if (m.reason === 'version' && typeof location !== 'undefined')
           setTimeout(() => location.reload(), 500);
+        // A newer window took this output's place: never reconnect (the window closes itself).
+        if (m.reason === 'superseded') this.stop();
         return;
     }
   }

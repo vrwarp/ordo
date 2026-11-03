@@ -361,7 +361,10 @@ export function planPreview(
       fadeMs,
     };
   }
-  const bgId = look.layers.background.visible ? presentation.backgroundMediaId : look.holdingMediaId;
+  // The slide's own background wins over the presentation's, as expandCues does for live cues.
+  const bgId = look.layers.background.visible
+    ? (slide.backgroundMediaId ?? presentation.backgroundMediaId)
+    : look.holdingMediaId;
   const m = bgId ? opts.media?.(bgId) : undefined;
   const f = m ? playableFile(m) : undefined;
   if (m && f && (m.kind === 'image' || m.kind === 'video')) {
