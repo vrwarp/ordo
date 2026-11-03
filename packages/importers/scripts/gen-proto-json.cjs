@@ -1,4 +1,4 @@
-// Regenerates src/pro7-descriptor.json from the vendored ProPresenter 7 .proto files.
+// Regenerates proto/descriptor.json from the vendored ProPresenter 7 .proto files.
 // Usage: node packages/importers/scripts/gen-proto-json.cjs
 const path = require('node:path');
 const fs = require('node:fs');
@@ -14,5 +14,5 @@ root.loadSync(path.join(protoDir, 'propresenter.proto'), { keepCase: false });
 root.resolveAll();
 const version = fs.readFileSync(path.join(protoDir, 'VERSION'), 'utf8').trim();
 const out = { version: `greyshirtguy/ProPresenter7-Proto@${version.slice(0, 12)}`, root: root.toJSON() };
-fs.writeFileSync(path.join(__dirname, '..', 'src', 'pro7-descriptor.json'), JSON.stringify(out));
+fs.writeFileSync(path.join(protoDir, 'descriptor.json'), JSON.stringify(out));
 console.log('wrote descriptor', out.version);
