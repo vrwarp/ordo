@@ -33,14 +33,14 @@ Include `/volume1/docker/ordo/data` in the venue's Hyper Backup task. The nightl
 
 Container Manager, Project, Create, with `deploy/compose.yaml` from this repo. Set:
 
-| Variable             | Value                                                                                                                                      |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ORDO_DOMAIN`        | `<venue>.synology.me`                                                                                                                      |
-| `ORDO_TRUSTED_PROXY` | `172.16.0.0/12` (requests from DSM's reverse proxy arrive from the Docker bridge). Only these addresses may set `X-Forwarded-For`/`-Proto` |
+| Variable             | Value                                                                                                                                                                                    |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ORDO_DOMAIN`        | `<venue>.synology.me`                                                                                                                                                                    |
+| `ORDO_TRUSTED_PROXY` | `172.16.0.0/12` (requests from DSM's reverse proxy arrive from the Docker bridge). Only these addresses may set `X-Forwarded-For`/`-Proto`                                               |
 | `ORDO_TZ`            | The venue's IANA time zone, e.g. `America/Los_Angeles`. Seeds Settings → General → Time zone on first run; that setting is the one source afterwards (countdowns and the nightly backup) |
-| `ORDO_ALLOWED_HOSTS` | Optional, comma separated. Extra host names the hub answers for besides `ORDO_DOMAIN` and its labels, `localhost` and loopback; any other `Host` gets 421 |
-| `ORDO_PORT`          | `8080`                                                                                                                                     |
-| `ORDO_IMPORT_ROOTS`  | Optional, colon separated. Folders `POST /import/pro7 {path}` may read from (default `/data/import:/import`)                               |
+| `ORDO_ALLOWED_HOSTS` | Optional, comma separated. Extra host names the hub answers for besides `ORDO_DOMAIN` and its labels, `localhost` and loopback; any other `Host` gets 421                                |
+| `ORDO_PORT`          | `8080`                                                                                                                                                                                   |
+| `ORDO_IMPORT_ROOTS`  | Optional, colon separated. Folders `POST /import/pro7 {path}` may read from (default `/data/import:/import`)                                                                             |
 
 The container publishes only `127.0.0.1:8080`, so the hub is reachable only through the reverse proxy.
 Never set `ORDO_DEV_PIN` in production.

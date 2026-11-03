@@ -210,7 +210,7 @@ export class SocketHub {
    */
   private touchSession(c: Client, now = Date.now()): boolean {
     const p = c.principal;
-    if (!p || p.kind !== 'session') return true;
+    if (p?.kind !== 'session') return true;
     if (now - c.touched < SESSION_TOUCH_MS) return true;
     c.touched = now;
     if (this.auth.touchSession(p.sessionId, now)) return true;
@@ -290,6 +290,15 @@ export class SocketHub {
           else return this.bye(c, 'forbidden');
         }
         c.role = role;
+        if (c.outputId) {
+          // A newer window for this output (a Relaunch from another operator tab, which cannot reach the
+          // old window by name) supersedes any older one, which closes itself on this bye (item 1).
+          for (const o of this.clients) {
+            if (o === c || !o.role || o.outputId !== c.outputId) continue;
+            this.log.info({ outputId: c.outputId }, 'output window superseded by a newer one');
+            this.bye(o, 'superseded');
+          }
+        }
         this.send(c, {
           t: 'welcome',
           v: 1,

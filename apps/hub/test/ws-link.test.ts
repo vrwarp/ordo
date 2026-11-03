@@ -50,6 +50,19 @@ describe('WebSocket link under failure', () => {
     b.close();
   });
 
+  it('tells an older window of the same output it is superseded when a newer one connects', async () => {
+    hub = await startHub();
+    const out = hub.lib.getSetting('outputs')[0]!;
+    const old = await connectWs(hub.url, { token: out.token, hello: { role: 'output', outputId: out.id } });
+    await old.next(byType('welcome'));
+    const fresh = await connectWs(hub.url, { token: out.token, hello: { role: 'output', outputId: out.id } });
+    await fresh.next(byType('welcome'));
+    expect((await old.next(byType('bye'))).reason).toBe('superseded');
+    expect(fresh.messages.some((m) => m.t === 'bye')).toBe(false);
+    old.close();
+    fresh.close();
+  });
+
   it('slides a session on socket activity and closes the socket once the session is gone', async () => {
     hub = await startHub();
     const op = await login(hub.url, OPERATE_PIN, { remember: false });

@@ -1,5 +1,5 @@
 import { createWriteStream } from 'node:fs';
-import { appendFile, rm, stat } from 'node:fs/promises';
+import { appendFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
