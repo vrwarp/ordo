@@ -49,4 +49,6 @@ VOLUME ["/data"]
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.ORDO_PORT||8080)+'/api/v1/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+# tini reaps and forwards SIGTERM to the supervisor (main.js), which runs the live and library processes
+# (design/12 "Processes", design/22 "Processes in the container").
 ENTRYPOINT ["/usr/bin/tini", "--", "node", "/app/apps/hub/dist/main.js"]

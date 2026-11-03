@@ -17,7 +17,7 @@
  */
 import { type ChildProcess, fork } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Logger } from 'pino';
 import type { ChildName, ChildState, FromChild, LocksMsg, ProcessStatus, ToChild } from './ipc.ts';
@@ -63,6 +63,7 @@ export class Supervisor {
   private watchdog?: NodeJS.Timeout;
 
   constructor(private opts: SupervisorOpts) {
+    mkdirSync(opts.dataDir, { recursive: true });
     const mk = (name: ChildName): Child => ({
       name,
       status: { name, state: 'stopped', restarts: 0, recentCrashes: 0 },

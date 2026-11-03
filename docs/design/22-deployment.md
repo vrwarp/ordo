@@ -61,12 +61,32 @@ plus `X-Forwarded-Proto https` and `X-Forwarded-Host $host`. Set the proxy timeo
 The hub routes by `Host`: `op` serves `apps/operator`, `out<k>` serves `apps/output`
 with the output index, `stage` serves `apps/stage`, `hub` serves the API and files.
 
+Two hub processes do not change these rules: the live process owns port 8080 and passes library requests
+to the library process inside the container (design/12 "Processes"), so DSM keeps one rule per hostname
+to `localhost 8080`. During a library-process restart (about half a second) library calls answer
+`503 library_unavailable` with `Retry-After: 1`; `/ws`, the live API and output file fills are not
+affected.
+
+## Processes in the container
+
+`ENTRYPOINT ["/usr/bin/tini", "--", "node", "/app/apps/hub/dist/main.js"]`. `main.js` is the supervisor,
+which starts `main.js __child library` and `main.js __child live` (one bundle; `cpu.worker.js` beside it
+is the worker-thread entry). tini reaps zombies and forwards `SIGTERM` to the supervisor, which stops both
+children (SIGKILL after 5 s); `docker stop` therefore finishes in under 10 s (compose sets
+`stop_grace_period: 15s` for margin). A child that crashes is restarted within a second, at most five
+times a minute; a live process past that budget ends the container (exit 1) and `restart: unless-stopped`
+brings it back. `docker exec ordo-hub cat /data/supervisor.json` shows pids, states and restart counts.
+`ORDO_SINGLE_PROCESS=1` runs the hub as one process (debugging only). `ORDO_CPU_WORKERS` (default 1) sizes
+the parsing worker pool. The memory cap (`mem_limit`) covers both processes; the library process is the
+one that can grow (imports, LibreOffice), and if the kernel kills it the live service is untouched.
+
 ## Image
 
 Multi-stage Dockerfile: `node:22-bookworm-slim` build stage running `pnpm install
 --frozen-lockfile` and `pnpm build`; runtime stage adds `ffmpeg`, `poppler-utils`,
 `libreoffice-impress` (no GUI packages), `fonts-dejavu`, and copies `apps/hub/dist` and
-the built browser apps. Runs as a non-root user. Health check `GET /api/v1/health`.
+the built browser apps. Runs as a non-root user under tini, entrypoint the supervisor. Health check
+`GET /api/v1/health` (answered by the live process; it reports the library process state too).
 Image size target under 1.5 GB (LibreOffice dominates).
 
 ## CI and release

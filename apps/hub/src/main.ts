@@ -94,8 +94,10 @@ async function runChild(name: string): Promise<void> {
     return;
   }
   const { createLiveProcess } = await import('./liveproc.ts');
-  const p = await createLiveProcess({}, { secret, onLocks: (m) => sendToParent(m) });
-  if (process.env.ORDO_LIBRARY_URL) p.setLibrary(process.env.ORDO_LIBRARY_URL, 'up');
+  const p = await createLiveProcess(
+    {},
+    { secret, onLocks: (m) => sendToParent(m), libraryUrl: process.env.ORDO_LIBRARY_URL || undefined },
+  );
   process.on('message', (m) => {
     if (!isToChild(m)) return;
     if (m.t === 'library') p.setLibrary(m.url, m.state);

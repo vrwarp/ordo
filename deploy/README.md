@@ -115,16 +115,33 @@ Chrome policies, the PWA install and the rest of the PC setup are in design/22, 
 
 Change the image tag in the project and redeploy. Never upgrade on a Saturday evening or a Sunday. Jobs
 that were running (transcodes, imports) resume after the restart; imports continue from the last item they
-wrote. The live state is restored from its snapshot and journal. On `SIGTERM` the hub stops within about
-2 s even if an output window is frozen. Imports are refused (423) while a playlist is live; large
+wrote; a job that was running when its process died three times is failed instead of retried. The live
+state is restored from its snapshot and journal (a damaged snapshot falls back to one of the two before
+it). On `SIGTERM` the hub stops within about 2 s even if an output window is frozen. The first start after
+upgrading to the two-process hub copies the live state from `ordo.db` into the new `live.db`. Imports are refused (423) while a playlist is live; large
 ProPresenter libraries with videos are best imported from a mounted folder (`/import`), zip uploads hold
 at most 256 MB of documents in memory and stream media to disk.
 
 ## 9. Diagnostics
 
-`GET /api/v1/diagnostics/export` (Operate role) downloads a zip containing the last 2,000 log lines, the
-last 500 live journal events, the settings with tokens stripped, and the output health table. Container
-logs are JSON lines (`docker logs ordo-hub`). Output tokens are redacted from logged URLs.
+`GET /api/v1/diagnostics/export` (Operate role) downloads a zip containing the last 2,000 log lines of
+each hub process, the last 500 live journal events, the settings with tokens stripped, the output health
+table, and the process states. Container logs are JSON lines (`docker logs ordo-hub`); the `proc` field
+says which process wrote them. Output tokens are redacted from logged URLs.
+
+### The two hub processes
+
+The container runs a small supervisor with two children: the **live** process (everything a running
+service needs: WebSocket, GO, output config, the live playlist's files, the apps) and the **library**
+process (editing, media processing, imports, backups). If one crashes it is restarted within a second.
+
+- `docker exec ordo-hub cat /data/supervisor.json` shows each process's pid, state and restart count.
+- `GET /api/v1/health` shows `library: up|down|failed`. `failed` means it crashed more than five times
+  in a minute and was left down: the service keeps running, but editing and uploads answer 503. Restart
+  the container after the service.
+- If the live process crashes more than five times in a minute the container exits and Docker restarts it.
+
+No DSM change is needed for this: port 8080 is still the only entry.
 
 ## Building the image
 

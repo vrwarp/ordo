@@ -1,7 +1,8 @@
 # Design 12: Hub
 
 `apps/hub`: Node 22, TypeScript, Fastify for HTTP, `ws` for WebSocket, better-sqlite3 in
-WAL mode, a job queue for media work, all in one container behind DSM's reverse proxy.
+WAL mode, a job queue for media work, all in one container behind DSM's reverse proxy. Inside the
+container the hub runs as two supervised processes (see Processes, and design/25 "Hub").
 
 ## Responsibilities
 
@@ -13,6 +14,70 @@ WAL mode, a job queue for media work, all in one container behind DSM's reverse 
 6. Auth: PIN sessions, output tokens, rate limiting.
 7. Backups and restore.
 8. Health, logs, diagnostics export.
+
+## Processes
+
+```
+tini
+ └── supervisor (main.js)                  no network, no SQLite; restarts children, relays IPC
+      ├── library process (main.js __child library)   127.0.0.1:<ephemeral>, secret-gated
+      │     HTTP API (library, media, imports, settings, auth PIN flows, backups, diagnostics)
+      │     ordo.db, job queue, ffmpeg/pdftoppm/soffice children, CPU worker-thread pool
+      └── live process (main.js __child live)         ORDO_PORT: the front door
+            /ws, live API, output config, manifest, files of the live playlist, the built apps,
+            live.db (journal, snapshots, cached library copies), proxy to the library process
+```
+
+**Why**: the live service is the only part the service depends on at 10:00 on Sunday. A runaway import,
+an out-of-memory transcode or a native crash in the library process cannot take it down; a crash of the
+live process costs about a second (restart from its snapshot) while outputs hold their last frame and the
+operator rides it out on the fallback bus.
+
+**Supervisor** (`src/supervisor.ts`): starts the library process, then the live process. Each child sends
+a heartbeat every 500 ms; a child that exits, or is silent for 5 s (live) or 60 s (library, which may run a
+long synchronous `VACUUM INTO`), is killed and restarted after 100, 200, 400, 800, 1000 ms, at most five
+times a minute. Past the budget a failed library process stays down (`/health` reports `library: failed`,
+the service keeps running, library calls answer 503), and a failed live process ends the supervisor with
+exit code 1 so the container's restart policy takes over. The supervisor relays three things and replays
+the last of each to a restarted child: the library's address (to the live process), the live process's
+edit locks and mode (to the library), and library changes (to the live process, which broadcasts them).
+`<data>/supervisor.json` holds pids, states and restart counts. SIGTERM: both children get SIGTERM,
+SIGKILL after 5 s. If the supervisor itself is killed, the live process writes its snapshot and exits at
+once (like a crash: no goodbyes), the library process stops its jobs (re-queued on the next start).
+
+**Routing** (`src/liveproc.ts`, `src/proxy.ts`): the live process listens on `ORDO_PORT` and answers
+itself `/ws`, `/api/v1/{live, live/events, actions, cache/manifest, output/config, auth/me, health}`,
+`/api/v1/files/<hash>` for files it knows (the live playlist's media and fonts, every font, the logo) and
+every non-API path (the built apps). Everything else under `/api/v1` is streamed to the library process
+over loopback. We chose the live process as the front door rather than the supervisor so the supervisor
+stays free of network input, and rather than two DSM rules so the deployment is unchanged. The proxy is
+deliberately small (one request in, one out, bodies streamed both ways, no retries) and has its own tests.
+Its failure modes: library down or restarting → `503 library_unavailable` with `Retry-After: 1` before
+any body byte is consumed; library dies mid-response → the client connection is reset; library silent for
+120 s on an open request → 504. The proxy rebuilds `X-Forwarded-For/Host/Proto` from what the live
+process trusted and adds the per-boot internal secret; the library process trusts forwarding headers
+from loopback only together with that secret and refuses any request without it, so nothing else on the
+host can talk to it.
+
+**Data between them**: the live process keeps its journal and snapshots in its own `live.db`. It reads
+the library only through `GET /internal/context` (all settings with tokens, fonts, logo; refetched after
+a settings, font or media change) and `GET /internal/golive/<playlist>` (fetched when the operator goes
+live), and keeps the last copy of each in `live.db`, so a library outage blocks neither a reconnect nor
+a GO, and a goLive of a playlist fetched before still works. A goLive of a playlist never fetched while
+the library is down is refused with "The library is restarting; try GO live again in a moment".
+Sessions live in ordo.db, which the live process opens directly (WAL readers never wait for the library;
+its sliding-expiry writes use a 50 ms busy timeout and are skipped when busy; it never checkpoints).
+Output tokens come from the context copy; a rotated or removed token closes that output's sockets.
+
+**One process** for tests and debugging: `createHub()` (in-process, the hub tests use it) and
+`node main.js --single` / `ORDO_SINGLE_PROCESS=1` run the same modules in one process with ordo.db
+holding the live tables.
+
+**CPU work** (`src/pool.ts`, `src/cpu.worker.ts`): ProPresenter decode (including its RTF), PPTX text
+extraction and font table parsing run on a worker-thread pool in the library process (`ORDO_CPU_WORKERS`,
+default 1). Each task has a timeout (pro7 15 min, pptx 2 min, font 15 s); a stuck or aborted task
+terminates its worker and the next task gets a fresh one. Only a worker that cannot start at all falls
+back to inline parsing; a worker that dies while working fails that task.
 
 ## HTTP API
 
@@ -79,9 +144,27 @@ bounded, so the process exits within about 2 s even with a frozen client; `main.
 
 SQLite file at `/data/ordo.db`, WAL mode, `synchronous=NORMAL`. Tables: `presentations`,
 `presentation_revisions`, `playlists`, `media`, `files`, `fonts`, `themes`, `looks`,
-`outputs`, `settings`, `sessions`, `auth_attempts`, `jobs`, `live_journal (seq, at,
-event_json)`, `live_snapshot (singleton)`. Migrations with a simple numbered-SQL runner;
-every migration is idempotent and tested.
+`outputs`, `settings`, `sessions`, `auth_attempts`, `jobs`, `job_attempts`, `library_changes`,
+`uploads`. Migrations with a simple numbered-SQL runner; every migration is idempotent and tested.
+
+`/data/live.db` (live process only): `live_journal (seq, at, cmd_id, kind, event_json)`,
+`live_snapshot (singleton)`, `live_snapshot_prev` (the two snapshots before it) and `live_kv` (the cached
+library context and goLive bundles). On its first start the live process copies the journal and snapshot
+over from ordo.db, where the one-process hub kept them. In one-process mode the same tables live in
+ordo.db.
+
+**Validated restore**: on start the live service takes the newest snapshot that parses, passes
+`isLiveStateShape` and has no `checkInvariants` violation, trying the current one and then the two
+previous ones; it then replays the journal after it and stops (with a logged warning, never an exception)
+at the first row that does not parse, is not a live event, does not apply, or leads to an unsound state.
+With nothing usable it starts idle. Warnings are in the diagnostics export (`hub.json`, `live.restoreWarnings`),
+and a restore that skipped something writes a fresh snapshot right away. A snapshot is only written from
+a state that passes the same checks; an operator state offered by `live.adopt` must pass them too.
+
+**Jobs that crash their process**: every start of a job is counted in `job_attempts`. A job found
+`running` at startup (its process died under it) is re-queued, unless it has been started three times
+already: then it fails for good with "Stopped 3 times while this job was running", and a media item it
+was processing is marked failed. A clean shutdown does not count as an attempt.
 
 Files under `/data/media/<hh>/<hash>.<ext>`, `/data/fonts/`, `/data/uploads/` (temporary),
 `/data/backups/`.
@@ -149,9 +232,37 @@ database, and verifies every manifest hash exists.
 
 ## Logging and diagnostics
 
-Pino JSON logs to stdout (Docker captures). A ring buffer of the last 2,000 lines is
-exported by `/diagnostics/export` together with the last 500 journal events, settings
-without secrets, and the health table.
+Pino JSON logs to stdout (Docker captures); each line carries `proc` (`supervisor`, `live`, `library`).
+A ring buffer of the last 2,000 lines per process is exported by `/diagnostics/export` (`logs.ndjson`
+from the library process, `logs-live.ndjson` from the live process) together with the last 500 journal
+events, settings without secrets, the health table, the process states and restart counts, restore
+warnings, the goLive quarantine list, socket limit closures and the CPU pool counters. `GET /health`
+adds `library` (the library process state as the live process sees it) and `processes`.
+
+## Bad data at the boundary
+
+Design/25's table, as implemented in the hub:
+
+- **HTTP bodies**: every body schema is `.strict()` at the top level (unknown keys are 400) and bounded
+  (string lengths, array sizes, numeric ranges). Entities may echo the server's `rev`, `createdAt` and
+  `updatedAt`. The domain schemas carry generous bounds (ids 200 chars, text 20,000, 1,000 objects per
+  slide, 5,000 slides per section, coordinates ±100,000, colours 0..255 and alpha 0..1, durations a day).
+- **WebSocket from clients**: 64 KiB per message (an operator's `live.adopt` and `preview` up to 16 MiB),
+  a token bucket of 50 messages refilled at 50/s per socket. A socket that breaks a limit gets
+  `bye too-large` or `bye rate-limited` and close 1008; others are unaffected.
+- **goLive**: every presentation is validated against the schema. A slide that fails is replaced by an
+  empty slide with the same id, a presentation whose own fields are broken keeps its valid sections, one
+  that cannot be read becomes empty, an invalid playlist item is skipped. The service still goes live and
+  `resolved.degraded: { cueIndex, reason, presentationId?, slideId? }[]` lists what was quarantined (one
+  entry per affected cue, `cueIndex` -1 when nothing shows it); the operator displays it. Missing
+  presentations and media that is not ready still refuse the goLive.
+- **Files**: images up to 16384×16384, video and audio up to 4 h, video up to 8K (7680×4320), GIFs up to
+  20,000 frames, font files up to 256 tables, 4 MiB per table read, 64 MiB of WOFF2 table data. A file
+  beyond a limit fails its media job with the reason and is not retried automatically.
+- **Settings**: read through their schema with defaults for missing fields (a document with a bad field
+  keeps its valid fields; an invalid look or output is dropped from the list); writes check exactly one
+  enabled audio master, unique `out<k>` host indices, unique look ids, and that every output's look exists.
+- **Journal and snapshots**: validated restore (Storage).
 
 ## Configuration
 

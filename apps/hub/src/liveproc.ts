@@ -161,7 +161,7 @@ export type LiveProcess = {
 
 export async function createLiveProcess(
   overrides: Partial<HubConfig>,
-  opts: { secret: string; onLocks?: (m: LocksMsg) => void },
+  opts: { secret: string; onLocks?: (m: LocksMsg) => void; libraryUrl?: string },
 ): Promise<LiveProcess> {
   const cfg: HubConfig = { ...loadConfig(process.env), ...overrides };
   mkdirSync(cfg.dataDir, { recursive: true });
@@ -340,6 +340,11 @@ export async function createLiveProcess(
   await app.ready();
   live.start();
   sockets.start();
+  // Know the output tokens and settings before taking connections: a fresh live.db has no copy yet.
+  if (opts.libraryUrl) {
+    link.setLibrary(opts.libraryUrl, 'up');
+    await withTimeout(link.refreshContext(), 2000);
+  }
   // A previous live process may still be letting go of the port (it was just killed): wait briefly
   // rather than crash and burn a restart from the budget.
   await waitForPort(cfg.port, cfg.host, 5000);
