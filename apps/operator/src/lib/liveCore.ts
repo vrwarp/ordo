@@ -152,7 +152,12 @@ export class LiveCore {
       return;
     }
     this.awaitingResync = false;
-    this.opt.replace(state);
+    if (!this.opt.replace(state)) {
+      // Malformed hub state: keep what we have and ask again.
+      this.awaitingResync = true;
+      this.deps.sendHub({ t: 'live.resync' });
+      return;
+    }
     const now = this.deps.now?.() ?? Date.now();
     this.pending = this.pending.filter((p) => now - p.at < PENDING_TTL_MS);
     for (const p of this.pending) {

@@ -35,7 +35,7 @@ export function runCacheCheck(now = () => Date.now()): Promise<void> {
       } else {
         const total = rows.reduce((m, r) => Math.max(m, r.total), 0);
         log('info', `cache check: complete on ${rows.length} window(s), ${total} files`);
-        toast(`Service cache complete on every output (${total} files).`, 'ok');
+        toast(`Service cache complete on every output${total ? ` (${total} files)` : ''}.`, 'ok');
       }
       resolve();
     };
