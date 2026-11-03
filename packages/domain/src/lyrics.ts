@@ -15,26 +15,89 @@ const SECTION_PATTERNS: { full: string; abbr: string; label: string; short: stri
   { full: 'instrumental', abbr: 'IN', label: 'Instrumental', short: 'IN' },
   { full: 'refrain', abbr: 'R', label: 'Refrain', short: 'R' },
   { full: 'vamp', abbr: 'VA', label: 'Vamp', short: 'VA' },
+  { full: 'misc', abbr: 'M', label: 'Misc', short: 'M' },
 ].map((p) => p);
-const FULL_RES = SECTION_PATTERNS.map((p) => ({ p, re: new RegExp(`^(?:${p.full})\\s*(\\d*)$`, 'i') }));
+/** A number with an optional letter suffix (`1`, `1a`), as SongSelect and CCLI exports use. */
+const NUM = '(\\d+[a-zA-Z]?)?';
+const FULL_RES = SECTION_PATTERNS.map((p) => ({ p, re: new RegExp(`^(?:${p.full})\\s*${NUM}$`, 'i') }));
 /** Abbreviations are case-sensitive so a lyric line like "c" or "be" is never taken for a label. */
-const ABBR_RES = SECTION_PATTERNS.map((p) => ({ p, re: new RegExp(`^${p.abbr}(\\d*)$`) }));
+const ABBR_RES = SECTION_PATTERNS.map((p) => ({ p, re: new RegExp(`^${p.abbr}${NUM}$`) }));
+/** Trailing repeat markers on a label: `x2`, `×2`, `2x`, `(x2)`, `(repeat)`, `repeat 3 times`. */
+const REPEAT_RE = /\s*\(?\s*(?:[x×]\s*(\d+)|(\d+)\s*[x×]|repeat(?:\s*(\d+)\s*(?:times|x))?)\s*\)?\s*:?$/i;
+/** ChordPro short section directives (`{soc}` … `{eob}`) and their long forms. */
+export const CHORDPRO_SECTION_DIRECTIVES: Record<string, string> = {
+  soc: 'start_of_chorus',
+  eoc: 'end_of_chorus',
+  sov: 'start_of_verse',
+  eov: 'end_of_verse',
+  sob: 'start_of_bridge',
+  eob: 'end_of_bridge',
+  sot: 'start_of_tab',
+  eot: 'end_of_tab',
+};
 
-/** If `line` is a section label (`Verse 1`, `[Chorus]`, `C2:`), return the normalized label and short form. */
-export function parseSectionLabel(line: string): { label: string; short: string } | null {
+export type SectionLabel = { label: string; short: string; repeat?: number };
+
+/**
+ * If `line` is a section label (`Verse 1`, `[Chorus]`, `C2:`, `(Chorus)`, `Verse 1a`, `Chorus x2`), return the
+ * normalized label and short form. A repeat marker (`x2`) is stripped and reported as `repeat`.
+ */
+export function parseSectionLabel(line: string): SectionLabel | null {
   let t = line.trim();
   if (!t) return null;
-  const bracket = /^\[(.+)\]$/.exec(t) ?? /^\{(?:c|comment|start_of_\w+)\s*:\s*(.+)\}$/i.exec(t);
+  const bracket =
+    /^\[(.+)\]$/.exec(t) ?? /^\((.+)\)$/.exec(t) ?? /^\{(?:c|comment|start_of_\w+)\s*:\s*(.+)\}$/i.exec(t);
   if (bracket) t = bracket[1]!.trim();
+  t = t.replace(/:$/, '').trim();
+  let repeat: number | undefined;
+  const rep = REPEAT_RE.exec(t);
+  if (rep && rep.index > 0) {
+    const n = Number(rep[1] ?? rep[2] ?? rep[3] ?? 2);
+    repeat = Number.isFinite(n) && n > 1 ? n : 2;
+    t = t.slice(0, rep.index).trim();
+  }
+  // Parentheses around the label after the marker was removed: `(Chorus) x2`.
+  const paren = /^\((.+)\)$/.exec(t);
+  if (paren) t = paren[1]!.trim();
   t = t.replace(/:$/, '').trim();
   for (const { p, re } of [...FULL_RES, ...ABBR_RES]) {
     const m = re.exec(t);
     if (m) {
-      const n = m[1] ?? '';
-      return { label: `${p.label}${n ? ' ' + n : ''}`, short: `${p.short}${n}` };
+      const n = (m[1] ?? '').toLowerCase();
+      const out: SectionLabel = { label: `${p.label}${n ? ' ' + n : ''}`, short: `${p.short}${n}` };
+      if (repeat) out.repeat = repeat;
+      return out;
     }
   }
   return null;
+}
+
+/** Split a label into its base (`Chorus`) and numeric part (`2` of `Chorus 2`, `1a` → 1). */
+function splitLabel(label: string): { base: string; n: number } {
+  const m = /^(.*?)\s*(\d+)[a-z]?$/i.exec(label);
+  return m ? { base: m[1]!, n: Number(m[2]) } : { base: label, n: 0 };
+}
+
+/** The next free numbered label for `base` among `labels` (`Chorus` + `Chorus 2` → `Chorus 3`). */
+export function nextFreeLabel(base: string, labels: readonly string[]): string {
+  let max = 0;
+  for (const l of labels) {
+    const s = splitLabel(l);
+    if (s.base.toLowerCase() !== base.toLowerCase()) continue;
+    max = Math.max(max, s.n || 1);
+  }
+  return `${base} ${max + 1}`;
+}
+
+function normLine(l: string): string {
+  return l.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/** True when two stanza lists carry the same lyrics (case and spacing ignored). */
+export function sameStanzas(a: readonly string[][], b: readonly string[][]): boolean {
+  const fa = a.flat().map(normLine);
+  const fb = b.flat().map(normLine);
+  return fa.length === fb.length && fa.every((l, i) => l === fb[i]);
 }
 
 export type ParsedSection = {
@@ -56,38 +119,101 @@ export type ParsedSong = {
 };
 
 const CHORD_TOKEN = /^[A-G](?:#|b)?(?:m|maj|min|dim|aug|sus|add)?\d*(?:\/[A-G](?:#|b)?)?$/;
-function isChordLine(line: string): boolean {
+/** Bracketed chords (`[G]`, `[Am7]`) anywhere in the file mark it as a chord chart. */
+const BRACKET_CHORD = /\[[A-G](?:#|b)?(?:m|maj|min|dim|aug|sus|add)?\d*(?:\/[A-G](?:#|b)?)?\]/;
+
+/**
+ * A line made of chord symbols only. A single token (`A`, `Am`) is a lyric unless the file has bracketed
+ * chords elsewhere: lines such as "A" or "Be" occur in lyrics far more often than one-chord lines.
+ */
+export function isChordLine(line: string, chordChart = false): boolean {
   const toks = line.trim().split(/\s+/).filter(Boolean);
-  return toks.length > 0 && toks.every((t) => CHORD_TOKEN.test(t) || t === '|' || t === '-');
+  if (toks.length === 0) return false;
+  if (!toks.every((t) => CHORD_TOKEN.test(t) || t === '|' || t === '-')) return false;
+  const chords = toks.filter((t) => CHORD_TOKEN.test(t)).length;
+  return chords >= 2 || chordChart;
 }
 
 /**
  * Parse plain lyrics, SongSelect's lyrics text export, or ChordPro.
  * Chord brackets `[G]` are stripped from lyrics and kept per line in `chords`.
+ *
+ * A repeated label (`Chorus` again) repeats the section in `order`; when its lyrics differ from the first
+ * occurrence it becomes the next free numbered section (`Chorus 2`) instead.
  */
 export function parseLyrics(input: string): ParsedSong {
   const lines = input.replace(/\r\n?/g, '\n').split('\n');
   const song: ParsedSong = { sections: [], order: [] };
-  type Cur = ParsedSection & { _repeatOf?: ParsedSection };
+  const chordChart = BRACKET_CHORD.test(input);
+  /** The section being collected; `_repeatOf` is set while re-reading an existing label. */
+  type Cur = ParsedSection & { _repeatOf?: ParsedSection; _orderIndex: number; _repeat: number };
   const ctx: { current: Cur | null } = { current: null };
   let stanza: string[] = [];
   let sawDirectiveTitle = false;
   const flush = () => {
-    if (ctx.current && !ctx.current._repeatOf && stanza.length) ctx.current.stanzas.push(stanza);
+    if (ctx.current && stanza.length) ctx.current.stanzas.push(stanza);
     stanza = [];
   };
-  const startSection = (label: string, short: string) => {
+  /** A repeated label has been fully read: keep it as a repeat, or promote differing lyrics to a new section. */
+  const settle = () => {
+    const cur = ctx.current;
+    if (!cur?._repeatOf) return;
+    const existing = cur._repeatOf;
+    if (cur.stanzas.length === 0 || sameStanzas(cur.stanzas, existing.stanzas)) return;
+    const { base } = splitLabel(existing.label);
+    const twin = song.sections.find(
+      (sec) =>
+        sec !== existing && splitLabel(sec.label).base === base && sameStanzas(sec.stanzas, cur.stanzas),
+    );
+    let label: string;
+    if (twin) label = twin.label;
+    else {
+      label = nextFreeLabel(
+        base,
+        song.sections.map((sec) => sec.label),
+      );
+      const short = parseSectionLabel(label)?.short ?? label;
+      const next: ParsedSection = { label, short, stanzas: cur.stanzas };
+      if (cur.chords?.length) next.chords = cur.chords;
+      song.sections.push(next);
+    }
+    for (let i = 0; i < cur._repeat; i++) song.order[cur._orderIndex + i] = label;
+  };
+  const startSection = (label: string, short: string, repeat = 1) => {
     flush();
+    settle();
     const existing = song.sections.find((s) => s.label === label);
-    song.order.push(label);
+    const orderIndex = song.order.length;
+    for (let i = 0; i < repeat; i++) song.order.push(label);
     if (existing && existing.stanzas.length > 0) {
-      // Repeated label with content again: a repeat; ignore the content if identical, else create numbered variant.
-      ctx.current = { label, short, stanzas: [], _repeatOf: existing };
+      ctx.current = {
+        label,
+        short,
+        stanzas: [],
+        _repeatOf: existing,
+        _orderIndex: orderIndex,
+        _repeat: repeat,
+      };
       return;
     }
-    const next: Cur = existing ?? { label, short, stanzas: [] };
+    const next: Cur = existing
+      ? Object.assign(existing, { _orderIndex: orderIndex, _repeat: repeat })
+      : { label, short, stanzas: [], _orderIndex: orderIndex, _repeat: repeat };
     ctx.current = next;
     if (!existing) song.sections.push(next);
+  };
+  /** `{sov}` / `{start_of_verse}` without a name: the next free verse number. */
+  const startDirectiveSection = (kind: string, val: string) => {
+    let lbl = parseSectionLabel(val || kind);
+    if (!lbl) return;
+    if (!val && /^verse$/i.test(kind)) {
+      const label = nextFreeLabel(
+        'Verse',
+        song.sections.map((s) => s.label),
+      );
+      lbl = parseSectionLabel(label) ?? lbl;
+    }
+    startSection(lbl.label, lbl.short, lbl.repeat);
   };
 
   // Footer detection for SongSelect text exports: everything from "CCLI Song #" on, else trailing licence lines.
@@ -126,7 +252,8 @@ export function parseLyrics(input: string): ParsedSong {
     const line = raw.replace(/\s+$/, '');
     const dir = /^\{\s*([a-z_]+)\s*(?::\s*(.*?))?\s*\}$/i.exec(line.trim());
     if (dir) {
-      const key = dir[1]!.toLowerCase();
+      const short = CHORDPRO_SECTION_DIRECTIVES[dir[1]!.toLowerCase()];
+      const key = short ?? dir[1]!.toLowerCase();
       const val = (dir[2] ?? '').trim();
       if (key === 'title' || key === 't') {
         song.title = val;
@@ -143,15 +270,11 @@ export function parseLyrics(input: string): ParsedSong {
       else if (key === 'copyright') song.copyright = val;
       else if (key === 'key') song.key = val;
       else if (key === 'tempo') song.tempo = Number(val) || undefined;
-      else if (
-        key === 'c' ||
-        key === 'comment' ||
-        key === 'ci' ||
-        key === 'comment_italic' ||
-        key.startsWith('start_of_')
-      ) {
-        const lbl = parseSectionLabel(val || key.replace('start_of_', ''));
-        if (lbl) startSection(lbl.label, lbl.short);
+      else if (key === 'c' || key === 'comment' || key === 'ci' || key === 'comment_italic') {
+        const lbl = parseSectionLabel(val);
+        if (lbl) startSection(lbl.label, lbl.short, lbl.repeat);
+      } else if (key.startsWith('start_of_')) {
+        startDirectiveSection(key.replace('start_of_', ''), val);
       } else if (key.startsWith('end_of_')) {
         flush();
       }
@@ -159,7 +282,7 @@ export function parseLyrics(input: string): ParsedSong {
     }
     const label = parseSectionLabel(line);
     if (label) {
-      startSection(label.label, label.short);
+      startSection(label.label, label.short, label.repeat);
       continue;
     }
     if (!line.trim()) {
@@ -173,9 +296,8 @@ export function parseLyrics(input: string): ParsedSong {
     }
     if (!ctx.current) startSection('Verse 1', 'V1');
     const cur = ctx.current as unknown as Cur;
-    const target = cur._repeatOf ?? cur;
-    if (isChordLine(line)) {
-      if (!cur._repeatOf) target.chords = [...(target.chords ?? []), line.trim()];
+    if (isChordLine(line, chordChart)) {
+      cur.chords = [...(cur.chords ?? []), line.trim()];
       continue;
     }
     const chords: string[] = [];
@@ -183,15 +305,21 @@ export function parseLyrics(input: string): ParsedSong {
       chords.push(c);
       return '';
     });
-    if (chords.length && !cur._repeatOf) target.chords = [...(target.chords ?? []), chords.join(' ')];
+    if (chords.length) cur.chords = [...(cur.chords ?? []), chords.join(' ')];
     const clean = lyric.replace(/\s{2,}/g, ' ').trim();
     if (!clean) continue;
-    if (cur._repeatOf) continue; // content of a repeated section is ignored; the arrangement repeats it
     stanza.push(clean);
   }
   flush();
+  settle();
   song.sections = song.sections.filter((s) => s.stanzas.length > 0);
   song.order = song.order.filter((l) => song.sections.some((s) => s.label === l));
+  for (const sec of song.sections) {
+    const c = sec as Partial<Cur>;
+    delete c._orderIndex;
+    delete c._repeat;
+    delete c._repeatOf;
+  }
   return song;
 }
 

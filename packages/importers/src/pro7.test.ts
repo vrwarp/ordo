@@ -429,6 +429,87 @@ describe('importPro7', () => {
     expect(res.presentations).toHaveLength(1);
     expect(res.log.some((l) => /imported once/.test(l.message))).toBe(true);
   });
+
+  it('keeps a copied document that shares a UUID but differs in name or slides (item 37)', () => {
+    const renamed = encodePresentation({
+      uuid: uuid('P-ANN'),
+      name: 'Announcements (Easter)',
+      cues: [textCue('X-1', 'Easter')],
+    });
+    const extraSlide = encodePresentation({
+      uuid: uuid('P-ANN'),
+      name: 'Announcements',
+      cues: [textCue('X-1', 'one'), textCue('X-2', 'two')],
+    });
+    const files = new Map([
+      ['Library/Announcements.pro', announcements()],
+      ['Library/Announcements (Easter).pro', renamed],
+      ['Old/Announcements.pro', extraSlide],
+    ]);
+    const res = importPro7(files);
+    expect(res.presentations.map((p) => p.title).sort()).toEqual([
+      'Announcements',
+      'Announcements',
+      'Announcements (Easter)',
+    ]);
+    const warns = res.log.filter((l) => /same ProPresenter UUID/.test(l.message));
+    expect(warns.map((l) => l.level)).toEqual(['warn', 'warn']);
+    expect(warns.some((l) => /different name/.test(l.message))).toBe(true);
+    expect(warns.some((l) => /different slide count/.test(l.message))).toBe(true);
+    expect(res.log.some((l) => /imported once/.test(l.message))).toBe(false);
+  });
+
+  it('applies ALL CAPS, logs other transforms and empty text boxes, keeps plain-text line breaks (item 37)', () => {
+    const cue = textCue('T-1', 'Shout it');
+    const base = (cue.actions[0] as { slide: { presentation: { baseSlide: { elements: unknown[] } } } }).slide
+      .presentation.baseSlide;
+    const el = (base.elements[0] as { element: Record<string, unknown> }).element;
+    el.text = {
+      rtfData: rtf('Shout it'),
+      attributes: {
+        capitalization: 'CAPITALIZATION_ALL_CAPS',
+        customAttributes: [{ range: { start: 0, end: 2 }, capitalization: 'CAPITALIZATION_TITLE_CASE' }],
+      },
+      transform: 'TRANSFORM_ONE_WORD_PER_LINE',
+    };
+    base.elements.push(
+      {
+        element: {
+          uuid: uuid('E-EMPTY'),
+          name: 'Empty',
+          bounds: { origin: { x: 0, y: 0 }, size: { width: 100, height: 100 } },
+          text: { rtfData: new Uint8Array(0) },
+        },
+      },
+      {
+        element: {
+          uuid: uuid('E-PLAIN'),
+          name: 'Plain',
+          bounds: { origin: { x: 0, y: 500 }, size: { width: 1920, height: 300 } },
+          text: {
+            rtfData: enc.encode('first line\r\nsecond line\nthird line'),
+            attributes: { capitalization: 'CAPITALIZATION_SMALL_CAPS' },
+          },
+        },
+      },
+    );
+    const doc = encodePresentation({ uuid: uuid('P-T'), name: 'Transforms', cues: [cue] });
+    const res = importPro7(new Map([['Library/Transforms.pro', doc]]));
+    const slide = res.presentations[0]!.sections[0]!.slides[0]!;
+    const texts = slide.objects.filter((o) => o.type === 'text').map((o) => (o as { text: string }).text);
+    expect(texts).toEqual(['SHOUT IT', 'first line\nsecond line\nthird line']);
+    const messages = res.log.filter((l) => l.item === 'Transforms.pro').map((l) => l.message);
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        'ALL CAPS applied to the text itself (1)',
+        'skipped capitalization of part of a text (1)',
+        'skipped text transform one word per line (1)',
+        'skipped empty text elements (1)',
+        'skipped small caps capitalization (1)',
+        'plain-text (non-RTF) elements imported with the attribute style only (1)',
+      ]),
+    );
+  });
 });
 
 describe('readZip', () => {

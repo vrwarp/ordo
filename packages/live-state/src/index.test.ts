@@ -2,12 +2,23 @@ import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import {
   type LiveEvent,
+  type LiveState,
   type Presentation,
   type ResolvedPlaylist,
   parseLyrics,
   songFromParsed,
 } from '@ordo/domain';
-import { OptimisticState, autoAdvance, initialState, reduce, reduceAll } from './index.ts';
+import {
+  OptimisticState,
+  autoAdvance,
+  initialState,
+  isLiveEventShape,
+  isLiveStateShape,
+  reduce,
+  reduceAll,
+  safeReduce,
+} from './index.ts';
+import { expandCues } from '@ordo/domain';
 
 function song(text: string): Presentation {
   return songFromParsed(parseLyrics(text), { linesPerSlide: 2 });
@@ -238,5 +249,109 @@ describe('reducer properties', () => {
         expect(op.pendingCount).toBe(0);
       }),
     );
+  });
+});
+
+describe('expandCues tolerates incomplete resolved playlists', () => {
+  it('skips items whose presentation or media is missing and sections an arrangement cannot find', () => {
+    const r = fixture();
+    const item0 = r.playlist.items[0] as { presentationId: string; arrangementId?: string };
+    const item2 = r.playlist.items[2] as { presentationId: string };
+    const a = r.presentations[item0.presentationId]!;
+    delete r.presentations[item2.presentationId];
+    delete r.media['aud'];
+    a.arrangements = [{ id: 'arr', name: 'x', sectionIds: ['missing', a.sections[1]!.id] }];
+    item0.arrangementId = 'arr';
+    const cues = expandCues(r);
+    expect(cues.map((c) => c.kind)).toEqual(['slide', 'media', 'timer', 'slide', 'slide']);
+    expect(cues[0]!.sectionLabel).toBe('Chorus');
+    expect(cues.every((c, i) => c.index === i)).toBe(true);
+    // Unknown arrangement id, no arrangements at all, and a slide without text still produce cues.
+    a.arrangements = [];
+    item0.arrangementId = 'nope';
+    a.sections[0]!.slides.push({ id: 'blank', objects: [] });
+    const c2 = expandCues(r);
+    expect(c2.filter((c) => c.presentationId === a.id)).toHaveLength(4);
+    expect(c2.find((c) => c.slideId === 'blank')!.label).toBe('Verse 1 3');
+    expect(
+      expandCues({ playlist: { id: 'p', rev: 1, name: '', items: [] }, presentations: {}, media: {} }),
+    ).toEqual([]);
+  });
+});
+
+describe('guards', () => {
+  const bad: unknown[] = [
+    null,
+    42,
+    'go',
+    {},
+    { k: 'go' },
+    { k: 'go', cueIndex: 'x', at: 1 },
+    { k: 'goLive' },
+    { k: 'goLive', resolved: { playlist: {} } },
+    { k: 'clear', at: 1 },
+    { k: 'message.send', id: 'm', at: 1 },
+    { k: 'nope', at: 1 },
+    { k: 'next', at: Number.NaN },
+  ];
+
+  it('rejects malformed events and accepts every real one', () => {
+    for (const b of bad) expect(isLiveEventShape(b), JSON.stringify(b)).toBe(false);
+    fc.assert(fc.property(arbEvent, (e) => isLiveEventShape(e)));
+    expect(isLiveEventShape({ k: 'goLive', resolved: fixture() })).toBe(true);
+    expect(isLiveEventShape({ k: 'select', cueIndex: 1 })).toBe(true);
+    expect(isLiveEventShape({ k: 'message.dismiss', id: 'm' })).toBe(true);
+    expect(isLiveEventShape({ k: 'message.clear' })).toBe(true);
+  });
+
+  it('checks the live state shape', () => {
+    expect(isLiveStateShape(initialState())).toBe(true);
+    expect(isLiveStateShape(reduce(initialState(), { k: 'goLive', resolved: fixture() }))).toBe(true);
+    expect(isLiveStateShape(null)).toBe(false);
+    expect(isLiveStateShape({})).toBe(false);
+    expect(isLiveStateShape({ ...initialState(), layers: { slide: null } })).toBe(false);
+    expect(isLiveStateShape({ ...initialState(), cues: 'x' })).toBe(false);
+    expect(isLiveStateShape({ ...initialState(), live: -1 })).toBe(false);
+    expect(isLiveStateShape({ ...initialState(), live: 1.5 })).toBe(false);
+    expect(isLiveStateShape({ ...initialState(), mode: 'x' })).toBe(false);
+    expect(isLiveStateShape({ ...initialState(), resolved: { playlist: {} } })).toBe(false);
+    expect(isLiveStateShape({ ...initialState(), props: { logo: 'yes', at: 0, seq: 0 } })).toBe(false);
+    expect(isLiveStateShape({ ...initialState(), messages: {} })).toBe(false);
+  });
+
+  it('safeReduce never throws and keeps the previous state on bad input', () => {
+    const s = reduce(initialState(), { k: 'goLive', resolved: fixture() });
+    const errors: unknown[] = [];
+    for (const b of bad) expect(safeReduce(s, b, (e) => errors.push(e))).toBe(s);
+    expect(errors).toHaveLength(bad.length);
+    // An event that passes the shape check but makes the reducer throw (a presentation without arrangements).
+    const broken = fixture();
+    const first = broken.playlist.items[0] as { presentationId: string };
+    (broken.presentations[first.presentationId] as { arrangements?: unknown }).arrangements = undefined;
+    expect(safeReduce(s, { k: 'goLive', resolved: broken }, (e) => errors.push(e))).toBe(s);
+    expect(errors).toHaveLength(bad.length + 1);
+    expect(safeReduce(s, { k: 'next', at: 5 })).toEqual(reduce(s, { k: 'next', at: 5 }));
+    // Without a handler it still does not throw.
+    expect(() => safeReduce(s, { k: 'goLive', resolved: broken })).not.toThrow();
+  });
+
+  it('OptimisticState survives malformed deltas, proposals and states', () => {
+    const op = new OptimisticState(reduce(initialState(), { k: 'goLive', resolved: fixture() }));
+    const errors: unknown[] = [];
+    op.onError = (e) => errors.push(e);
+    const seq = op.confirmed.seq;
+    expect(op.applyDelta(seq, { k: 'go' } as unknown as LiveEvent)).toBe(false);
+    expect(op.confirmed.seq).toBe(seq);
+    expect(op.applyDelta(seq, { k: 'next', at: 1 })).toBe(true);
+    op.propose('p1', { k: 'clear', layer: 'all' } as unknown as LiveEvent);
+    op.propose('p2', { k: 'next', at: 2 });
+    const view = op.view;
+    expect(view.live).toBe(1);
+    expect(view.black).toBe(false);
+    expect(op.replace({ seq: 1 } as unknown as LiveState)).toBe(false);
+    expect(op.pendingCount).toBe(2);
+    expect(op.replace(initialState())).toBe(true);
+    expect(op.pendingCount).toBe(0);
+    expect(errors).toHaveLength(3);
   });
 });

@@ -92,7 +92,7 @@ describe('KeyboardDriver', () => {
 
   it('ignores repeats except for navigation, and text fields', () => {
     const got: Action[] = [];
-    const d = new KeyboardDriver(DEFAULT_KEYMAP, (a) => got.push(a));
+    const d = new KeyboardDriver(DEFAULT_KEYMAP, (a) => got.push(a), { now: () => 0 });
     const t = new FakeTarget();
     d.attach(t as unknown as Window);
     keydown(t, 'F2', { repeat: true });
@@ -103,6 +103,42 @@ describe('KeyboardDriver', () => {
     d.setMap({ KeyB: { id: 'clearAll' }, B: { id: 'logo' } });
     keydown(t, 'KeyB');
     expect(got.at(-1)).toEqual({ id: 'logo' });
+  });
+
+  it('never auto-repeats Space, PageUp or PageDown (item 31)', () => {
+    const got: Action[] = [];
+    const d = new KeyboardDriver(DEFAULT_KEYMAP, (a) => got.push(a), { now: () => 0 });
+    const t = new FakeTarget();
+    d.attach(t as unknown as Window);
+    keydown(t, 'Space');
+    for (const code of ['Space', 'PageDown', 'PageUp']) {
+      for (let i = 0; i < 30; i++) {
+        const e = keydown(t, code, { repeat: true });
+        expect(e.defaultPrevented).toBe(true); // a held Space must not scroll the page either
+      }
+    }
+    expect(got).toEqual([{ id: 'next' }]);
+    keydown(t, 'PageDown');
+    expect(got).toHaveLength(2);
+  });
+
+  it('rate-limits held arrow keys to about four steps a second (item 31)', () => {
+    const got: Action[] = [];
+    let now = 1000;
+    const d = new KeyboardDriver(DEFAULT_KEYMAP, (a) => got.push(a), { now: () => now });
+    const t = new FakeTarget();
+    d.attach(t as unknown as Window);
+    keydown(t, 'ArrowRight');
+    // Chrome repeats at ~30 Hz: a second of held key should step about four times, not thirty.
+    for (let i = 0; i < 30; i++) {
+      now += 33;
+      keydown(t, 'ArrowRight', { repeat: true });
+    }
+    expect(got.filter((a) => a.id === 'next')).toHaveLength(4);
+    // The first press after a release is never delayed.
+    now += 10;
+    keydown(t, 'ArrowLeft');
+    expect(got.at(-1)!.id).toBe('prev');
   });
 });
 

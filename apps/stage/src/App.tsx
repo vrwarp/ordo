@@ -16,6 +16,7 @@ import {
   countdownDisplay,
   currentText,
   elapsedDisplay,
+  mediaRemainingDisplay,
   MESSAGE_FADE_MS,
   nextExpiry,
   nextText,
@@ -182,6 +183,7 @@ export function App(props: { controller: StageController }) {
   const next = useMemo(() => nextText(state, shown, layout), [state, shown, layout]);
   const countdown = layout.countdown ? countdownDisplay(state, now, general.timeZone) : null;
   const elapsed = layout.elapsed ? elapsedDisplay(state, now) : null;
+  const remaining = layout.mediaRemaining ? mediaRemainingDisplay(state, now) : null;
 
   // Messages: reconcile on every tick so TTL expiry and fade-outs progress.
   const [shownMsgs, setShownMsgs] = useState<ShownMessage[]>([]);
@@ -245,6 +247,15 @@ export function App(props: { controller: StageController }) {
         {layout.elapsed && elapsed ? (
           <PropText prop={layout.elapsed} className="elapsed" dim={!elapsed.running}>
             <span className="timer-label">{elapsed.label}</span> {elapsed.value}
+          </PropText>
+        ) : null}
+        {layout.mediaRemaining && remaining ? (
+          <PropText
+            prop={layout.mediaRemaining}
+            className={`media-remaining${remaining.overdue ? ' overdue' : ''}`}
+            dim={!remaining.running}
+          >
+            <span className="timer-label">{remaining.label}</span> {remaining.value}
           </PropText>
         ) : null}
         {layout.messages ? <Messages prop={layout.messages} shown={shownMsgs} /> : null}

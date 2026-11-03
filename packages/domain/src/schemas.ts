@@ -333,6 +333,11 @@ export const PropsRule = z.object({
   clock: z.boolean().default(false),
   messages: z.boolean().default(false),
   elapsed: z.boolean().default(false),
+  /**
+   * Stage look: show the remaining time of the live video. Optional so stored looks need no migration;
+   * absent means "follow `elapsed`".
+   */
+  mediaRemaining: z.boolean().optional(),
   style: z.record(z.string(), PropBox).default({}),
 });
 export type PropsRule = z.infer<typeof PropsRule>;

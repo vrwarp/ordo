@@ -218,34 +218,105 @@ export async function requestPersistence(): Promise<boolean> {
 
 /**
  * Small IndexedDB key-value store for JSON documents (library snapshot, resolved playlist, UI state).
+ *
+ * The open promise is cached only while it is good: a failed open is forgotten so the next call retries,
+ * `onblocked` is reported (the open stays pending until the other tab closes), and a `versionchange` or
+ * `close` on the connection drops it so later calls reopen instead of failing forever.
  */
 export class JsonStore {
   private db?: Promise<IDBDatabase>;
-  constructor(private name = 'ordo-json') {}
+  /** Diagnostics (blocked opens, reopened connections). */
+  onLog?: (msg: string) => void;
+  constructor(
+    private name = 'ordo-json',
+    private factory?: Pick<IDBFactory, 'open'>,
+  ) {}
+
+  private log(msg: string) {
+    this.onLog?.(`JsonStore ${this.name}: ${msg}`);
+  }
+
   private open(): Promise<IDBDatabase> {
-    this.db ??= new Promise((resolve, reject) => {
-      const req = indexedDB.open(this.name, 1);
-      req.onupgradeneeded = () => req.result.createObjectStore('kv');
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+    if (this.db) return this.db;
+    const factory = this.factory ?? (typeof indexedDB !== 'undefined' ? indexedDB : undefined);
+    if (!factory) return Promise.reject(new Error('IndexedDB is not available'));
+    const p = new Promise<IDBDatabase>((resolve, reject) => {
+      let req: IDBOpenDBRequest;
+      try {
+        req = factory.open(this.name, 1);
+      } catch (e) {
+        reject(e);
+        return;
+      }
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+      };
+      req.onblocked = () => this.log('open blocked by another tab holding the database');
+      req.onsuccess = () => {
+        const db = req.result;
+        const drop = (why: string) => {
+          if (this.db === p) this.db = undefined;
+          this.log(`connection dropped (${why}); it reopens on the next call`);
+        };
+        db.onversionchange = () => {
+          // Another tab wants to upgrade or delete the database: let it, and reopen lazily.
+          drop('version change');
+          try {
+            db.close();
+          } catch {
+            // already closed
+          }
+        };
+        db.onclose = () => drop('closed');
+        resolve(db);
+      };
+      req.onerror = () => reject(req.error ?? new Error('IndexedDB open failed'));
     });
-    return this.db;
+    this.db = p;
+    p.catch(() => {
+      if (this.db === p) this.db = undefined;
+    });
+    return p;
   }
+
+  /** Run `fn` on the open database; a connection that turns out closed is reopened once. */
+  private async withDb<T>(fn: (db: IDBDatabase) => Promise<T>): Promise<T> {
+    const first = await this.open();
+    try {
+      return await fn(first);
+    } catch (e) {
+      if ((e as { name?: string } | null)?.name !== 'InvalidStateError') throw e;
+      if (this.db) {
+        const current = await this.db.catch(() => undefined);
+        if (current === first) this.db = undefined;
+      }
+      this.log('transaction on a closed connection; reopening');
+      return fn(await this.open());
+    }
+  }
+
   async get<T>(key: string): Promise<T | undefined> {
-    const db = await this.open();
-    return new Promise((resolve, reject) => {
-      const r = db.transaction('kv').objectStore('kv').get(key);
-      r.onsuccess = () => resolve(r.result as T | undefined);
-      r.onerror = () => reject(r.error);
-    });
+    return this.withDb(
+      (db) =>
+        new Promise((resolve, reject) => {
+          const r = db.transaction('kv').objectStore('kv').get(key);
+          r.onsuccess = () => resolve(r.result as T | undefined);
+          r.onerror = () => reject(r.error);
+        }),
+    );
   }
+
   async set(key: string, value: unknown): Promise<void> {
-    const db = await this.open();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction('kv', 'readwrite');
-      tx.objectStore('kv').put(value, key);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
+    return this.withDb(
+      (db) =>
+        new Promise((resolve, reject) => {
+          const tx = db.transaction('kv', 'readwrite');
+          tx.objectStore('kv').put(value, key);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+          tx.onabort = () => reject(tx.error ?? new Error('transaction aborted'));
+        }),
+    );
   }
 }

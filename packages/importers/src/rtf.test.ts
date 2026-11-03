@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseRtf, splitFontName } from './rtf.ts';
+import { isRtf, parseRtf, splitFontName } from './rtf.ts';
 
 const COCOA = String.raw`{\rtf1\ansi\ansicpg1252\cocoartf2639
 \cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fnil\fcharset0 HelveticaNeue-Bold;\f1\fswiss\fcharset0 Helvetica;}
@@ -50,6 +50,19 @@ describe('parseRtf', () => {
   it('turns U+2028 line separators into newlines', () => {
     const r = parseRtf('{\\rtf1\\uc0\\u8232 one\\uc0\\u8232 two}');
     expect(r.text).toBe('one\ntwo');
+  });
+
+  it('takes non-RTF input as plain text and keeps its line breaks', () => {
+    expect(isRtf(COCOA)).toBe(true);
+    expect(isRtf('hello')).toBe(false);
+    expect(parseRtf('one\r\ntwo\nthree\u2028four\n')).toEqual({
+      text: 'one\ntwo\nthree\nfour',
+      plain: true,
+      bold: false,
+      italic: false,
+      styleRuns: 0,
+    });
+    expect(parseRtf(new TextEncoder().encode('\uFEFFCafé\nnoir')).text).toBe('Café\nnoir');
   });
 
   it('accepts bytes', () => {

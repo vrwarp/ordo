@@ -381,15 +381,139 @@ export function slideFor(s: LiveState, presentationId: string, slideId: string) 
   return undefined;
 }
 
+// ---- Guards against malformed input (hub journal corruption, a stale client, a hostile peer) ----
+
+function isObj(x: unknown): x is Record<string, unknown> {
+  return typeof x === 'object' && x !== null && !Array.isArray(x);
+}
+function isNum(x: unknown): x is number {
+  return typeof x === 'number' && Number.isFinite(x);
+}
+function isLayer(x: unknown): boolean {
+  return (
+    isObj(x) && 'content' in x && isNum(x.at) && isNum(x.seq) && (x.content === null || isObj(x.content))
+  );
+}
+function isIndex(x: unknown): boolean {
+  return x === undefined || (isNum(x) && Number.isInteger(x) && x >= 0);
+}
+
+/**
+ * Cheap structural check of a LiveState (every field the reducer and renderers dereference without a guard).
+ * Not a full schema validation: cue and content internals are not inspected.
+ */
+export function isLiveStateShape(x: unknown): x is LiveState {
+  if (!isObj(x)) return false;
+  if (!isNum(x.seq) || (x.mode !== 'idle' && x.mode !== 'live')) return false;
+  if (!Array.isArray(x.cues) || !isIndex(x.live) || !isIndex(x.armed)) return false;
+  const layers = x.layers;
+  if (!isObj(layers)) return false;
+  for (const k of ['background', 'slide', 'lowerThird', 'media'] as const)
+    if (!isLayer(layers[k])) return false;
+  const props = x.props;
+  if (!isObj(props) || typeof props.logo !== 'boolean' || !isNum(props.at) || !isNum(props.seq)) return false;
+  if (!isLayer(x.audio)) return false;
+  if (!isObj(x.timers) || !Array.isArray(x.messages) || typeof x.black !== 'boolean') return false;
+  if (x.resolved !== undefined) {
+    const r = x.resolved;
+    if (!isObj(r) || !isObj(r.playlist) || !Array.isArray(r.playlist.items)) return false;
+    if (!isObj(r.presentations) || !isObj(r.media)) return false;
+  }
+  return true;
+}
+
+/** Cheap structural check of a LiveEvent: a known kind and the fields the reducer dereferences. */
+export function isLiveEventShape(x: unknown): x is LiveEvent {
+  if (!isObj(x) || typeof x.k !== 'string') return false;
+  const needsAt =
+    x.k !== 'goLive' && x.k !== 'select' && x.k !== 'message.dismiss' && x.k !== 'message.clear';
+  if (needsAt && !isNum(x.at)) return false;
+  switch (x.k) {
+    case 'goLive': {
+      const r = x.resolved;
+      return (
+        isObj(r) &&
+        isObj(r.playlist) &&
+        Array.isArray(r.playlist.items) &&
+        isObj(r.presentations) &&
+        isObj(r.media)
+      );
+    }
+    case 'select':
+    case 'go':
+    case 'media.ended':
+    case 'audio.ended':
+      return isNum(x.cueIndex);
+    case 'goToSection':
+      return isNum(x.sectionIndex);
+    case 'clear':
+      return typeof x.layer === 'string';
+    case 'lowerThird':
+      return typeof x.text === 'string';
+    case 'timer.start':
+    case 'timer.stop':
+    case 'timer.reset':
+      return typeof x.timerId === 'string';
+    case 'message.send':
+      return typeof x.id === 'string' && typeof x.text === 'string';
+    case 'message.dismiss':
+      return typeof x.id === 'string';
+    case 'endService':
+    case 'next':
+    case 'prev':
+    case 'nextItem':
+    case 'prevItem':
+    case 'logo':
+    case 'media.play':
+    case 'media.pause':
+    case 'media.restart':
+    case 'audio.stop':
+    case 'message.clear':
+      return true;
+    default:
+      return false;
+  }
+}
+
+export type ReduceErrorHandler = (error: unknown, event: unknown) => void;
+
+/**
+ * `reduce` that never throws: a malformed event, or one the reducer cannot apply, is reported through
+ * `onError` and the previous state is returned unchanged. Hub, outputs and the operator use this on every
+ * message that arrives over the wire; the pure `reduce` stays for code that owns its inputs.
+ */
+export function safeReduce(prev: LiveState, event: unknown, onError?: ReduceErrorHandler): LiveState {
+  try {
+    if (!isLiveEventShape(event)) throw new TypeError(`malformed live event: ${describe(event)}`);
+    const next = reduce(prev, event);
+    if (!isLiveStateShape(next)) throw new TypeError('reducer produced a malformed state');
+    return next;
+  } catch (e) {
+    onError?.(e, event);
+    return prev;
+  }
+}
+
+function describe(x: unknown): string {
+  try {
+    const s = JSON.stringify(x);
+    return s === undefined ? String(x) : s.length > 120 ? `${s.slice(0, 119)}…` : s;
+  } catch {
+    return String(x);
+  }
+}
+
 /** Pending-event rebasing for optimistic clients. */
 export class OptimisticState {
   confirmed: LiveState;
+  /** Called when a message could not be applied (malformed event or state); the state is left unchanged. */
+  onError?: ReduceErrorHandler;
   private pending: { id: string; event: LiveEvent }[] = [];
   constructor(initial: LiveState = initialState()) {
     this.confirmed = initial;
   }
   get view(): LiveState {
-    return this.pending.reduce((st, p) => reduce(st, p.event), this.confirmed);
+    return this.pending.reduce((st, p) => safeReduce(st, p.event, this.onError), this.confirmed);
   }
   get pendingCount(): number {
     return this.pending.length;
@@ -397,10 +521,19 @@ export class OptimisticState {
   propose(id: string, event: LiveEvent): void {
     this.pending.push({ id, event });
   }
-  /** A hub delta arrived. Returns false on a sequence gap (caller must resync). */
+  /**
+   * A hub delta arrived. Returns false on a sequence gap or an event this client could not apply (the hub
+   * did, so the states diverged): the caller must resync either way.
+   */
   applyDelta(fromSeq: number, event: LiveEvent, ackId?: string): boolean {
     if (fromSeq !== this.confirmed.seq) return false;
-    this.confirmed = reduce(this.confirmed, event);
+    let failed = false;
+    const next = safeReduce(this.confirmed, event, (e, ev) => {
+      failed = true;
+      this.onError?.(e, ev);
+    });
+    if (failed) return false;
+    this.confirmed = next;
     if (ackId) this.pending = this.pending.filter((p) => p.id !== ackId);
     return true;
   }
@@ -410,9 +543,15 @@ export class OptimisticState {
   reject(id: string): void {
     this.pending = this.pending.filter((p) => p.id !== id);
   }
-  replace(state: LiveState): void {
+  /** Replace the confirmed state (full state from the hub). A malformed state is reported and ignored. */
+  replace(state: LiveState): boolean {
+    if (!isLiveStateShape(state)) {
+      this.onError?.(new TypeError('malformed live state'), state);
+      return false;
+    }
     this.confirmed = state;
     this.pending = [];
+    return true;
   }
 }
 export * from './actions.ts';

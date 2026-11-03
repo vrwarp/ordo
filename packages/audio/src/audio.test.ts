@@ -152,11 +152,17 @@ class FakeContext {
   onsinkchange: (() => void) | null = null;
   onstatechange: (() => void) | null = null;
   nodes: FakeNode[] = [];
+  listeners = new Map<string, (() => void)[]>();
+  resumes = 0;
+  /** Device ids the fake refuses to route to (the context silently stays where it was). */
+  deadSinks = new Set<string>();
   constructor(
     opts: { sinkId?: string },
     public channelsFor: (id: string) => number,
+    dead: string[] = [],
   ) {
-    this.sinkId = opts.sinkId ?? '';
+    for (const d of dead) this.deadSinks.add(d);
+    this.sinkId = opts.sinkId && !this.deadSinks.has(opts.sinkId) ? opts.sinkId : '';
     this.destination = Object.assign(new FakeNode('destination', this), {
       maxChannelCount: channelsFor(this.sinkId),
     });
@@ -183,10 +189,18 @@ class FakeContext {
   }
   async setSinkId(id: string) {
     this.sinkCalls.push(id);
+    if (this.deadSinks.has(id)) return;
     this.sinkId = id;
     this.destination.maxChannelCount = this.channelsFor(id);
   }
+  addEventListener(type: string, fn: () => void) {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
+  }
+  emit(type: string) {
+    for (const fn of this.listeners.get(type) ?? []) fn();
+  }
   async resume() {
+    this.resumes++;
     this.state = 'running';
   }
   async close() {
@@ -194,13 +208,18 @@ class FakeContext {
   }
 }
 
-function harness(settings: AudioSettings, devices: { deviceId: string; label: string }[]) {
+function harness(
+  settings: AudioSettings,
+  devices: { deviceId: string; label: string }[],
+  opts: { deadSinks?: string[] } = {},
+) {
   const timers: (() => void)[] = [];
   const contexts: FakeContext[] = [];
   const devs = { list: devices };
+  const clock = { now: 0 };
   const deps: Partial<AudioDeps> = {
     createContext: (o) => {
-      const c = new FakeContext(o, (id) => (id === 'usb' ? 8 : 2));
+      const c = new FakeContext(o, (id) => (id === 'usb' ? 8 : 2), opts.deadSinks);
       contexts.push(c);
       return c as unknown as SinkAudioContext;
     },
@@ -221,11 +240,17 @@ function harness(settings: AudioSettings, devices: { deviceId: string; label: st
     },
     setInterval: () => 1,
     clearInterval: () => {},
-    now: () => 0,
+    now: () => clock.now,
   };
   const engine = new AudioEngine(settings, deps);
-  return { engine, contexts, timers, devs };
+  return { engine, contexts, timers, devs, clock };
 }
+
+/** The master gain of the current bus: the last gain node wired to the destination. */
+const masterOf = (ctx: FakeContext) =>
+  ctx.nodes.filter((n) => n.kind === 'gain' && n.conns.some((c) => c.to === ctx.destination)).at(-1)!;
+const checkDevice = (engine: AudioEngine, force = false) =>
+  (engine as unknown as { checkDevice: (f?: boolean) => Promise<void> }).checkDevice(force);
 
 const settings: AudioSettings = {
   houseDeviceId: 'usb',
@@ -301,6 +326,133 @@ describe('AudioEngine graph', () => {
     await done;
     expect(master.gain.events.at(-1)).toBe(`ramp ${dbToGain(-3).toFixed(3)} @1.100`);
     engine.dispose();
+  });
+
+  it('restores the master on a bus rebuilt during a fade (item 21)', async () => {
+    const { engine, contexts, timers } = harness(settings, [{ deviceId: 'usb', label: 'USB Interface' }]);
+    await engine.start();
+    const ctx = contexts[0]!;
+    const oldMaster = masterOf(ctx);
+    const done = engine.fadeOut(500);
+    expect(oldMaster.gain.events.at(-1)).toBe('ramp 0.000 @1.500');
+    // A pair-settings change mid-fade rebuilds the bus; the new master starts silent.
+    engine.setSettings({ ...settings, pairs: [pairs[0]!] });
+    const newMaster = ctx.nodes.filter((n) => n.kind === 'gain').at(-1)!;
+    expect(newMaster).not.toBe(oldMaster);
+    expect(newMaster.gain.value).toBe(0);
+    timers.shift()!();
+    await done;
+    expect(newMaster.gain.events.at(-1)).toBe('ramp 1.000 @1.100');
+    expect(newMaster.gain.value).toBe(1);
+    engine.dispose();
+  });
+
+  it('shares one fade between overlapping calls and restores after the longest (item 21)', async () => {
+    const { engine, contexts, timers, clock } = harness(settings, [
+      { deviceId: 'usb', label: 'USB Interface' },
+    ]);
+    await engine.start();
+    const master = masterOf(contexts[0]!);
+    const a = engine.fadeOut(500);
+    clock.now = 100;
+    const b = engine.fadeOut(1000);
+    expect(b).toBe(a);
+    expect(master.gain.events.filter((e) => e.startsWith('ramp 0.000'))).toHaveLength(1);
+    expect(timers).toHaveLength(2);
+    // The short fade's timer fires first: the gain must stay at zero.
+    timers.shift()!();
+    await Promise.resolve();
+    expect(master.gain.value).toBe(0);
+    timers.shift()!();
+    await a;
+    expect(master.gain.value).toBe(1);
+    // A shorter overlapping fade does not schedule anything new.
+    const c = engine.fadeOut(400);
+    engine.fadeOut(100);
+    expect(timers).toHaveLength(1);
+    timers.shift()!();
+    await c;
+    engine.dispose();
+  });
+
+  it('verifies the sink after opening and treats an unusable device as lost (item 32)', async () => {
+    const h = harness(settings, [{ deviceId: 'usb', label: 'USB Interface' }], { deadSinks: ['usb'] });
+    const log: string[] = [];
+    h.engine.onLog = (m) => log.push(m);
+    await h.engine.start();
+    const ctx = h.contexts[0]!;
+    expect(ctx.sinkId).toBe('');
+    expect(ctx.sinkCalls).toEqual(['usb']);
+    expect(h.engine.status).toBe('lost');
+    expect(masterOf(ctx).gain.value).toBe(0);
+    expect(log.some((m) => /instead of "usb"/.test(m))).toBe(true);
+    expect(log.some((m) => /muted/.test(m))).toBe(true);
+    // The device starts working: the poll recovers it and unmutes.
+    ctx.deadSinks.clear();
+    await checkDevice(h.engine);
+    expect(ctx.sinkId).toBe('usb');
+    expect(h.engine.status).toBe('ok');
+    expect(masterOf(ctx).gain.value).toBe(1);
+    h.engine.dispose();
+  });
+
+  it('re-checks the device on a context error event and throttles resume (item 32)', async () => {
+    const h = harness(settings, [{ deviceId: 'usb', label: 'USB Interface' }]);
+    await h.engine.start();
+    const ctx = h.contexts[0]!;
+    expect(ctx.listeners.get('error')).toHaveLength(1);
+    h.devs.list = [];
+    ctx.emit('error');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.engine.status).toBe('lost');
+    // A context that keeps reporting 'suspended' is resumed at most once a second.
+    const before = ctx.resumes;
+    for (let i = 0; i < 20; i++) {
+      ctx.state = 'suspended';
+      ctx.onstatechange?.();
+    }
+    expect(ctx.resumes - before).toBe(1);
+    h.clock.now = 1500;
+    ctx.state = 'suspended';
+    ctx.onstatechange?.();
+    expect(ctx.resumes - before).toBe(2);
+    h.engine.dispose();
+  });
+
+  it('mutes while the house device is lost instead of playing on the default device (item 33)', async () => {
+    const h = harness(settings, [{ deviceId: 'default', label: 'Default' }]);
+    await h.engine.start();
+    const ctx = h.contexts[0]!;
+    expect(h.engine.status).toBe('lost');
+    expect(masterOf(ctx).gain.value).toBe(0);
+    // Master changes while lost do not unmute.
+    h.engine.setMasterDb(-6);
+    expect(masterOf(ctx).gain.value).toBe(0);
+    h.devs.list = [
+      { deviceId: 'default', label: 'Default' },
+      { deviceId: 'usb', label: 'USB Interface' },
+    ];
+    await checkDevice(h.engine);
+    expect(h.engine.status).toBe('ok');
+    expect(masterOf(ctx).gain.value).toBeCloseTo(dbToGain(-6));
+    // Unplugged mid-service: silent again, and back when it returns.
+    h.devs.list = [{ deviceId: 'default', label: 'Default' }];
+    await checkDevice(h.engine);
+    expect(h.engine.status).toBe('lost');
+    expect(masterOf(ctx).gain.value).toBe(0);
+    h.devs.list = [
+      { deviceId: 'default', label: 'Default' },
+      { deviceId: 'usb', label: 'USB Interface' },
+    ];
+    await checkDevice(h.engine);
+    expect(masterOf(ctx).gain.value).toBeCloseTo(dbToGain(-6));
+    // No house device configured: never muted by status.
+    const open = harness({ ...settings, houseDeviceId: undefined, houseDeviceLabel: undefined }, []);
+    await open.engine.start();
+    expect(open.engine.status).toBe('ok');
+    expect(masterOf(open.contexts[0]!).gain.value).toBe(1);
+    open.engine.dispose();
+    h.engine.dispose();
   });
 
   it('reports peak meters per pair', async () => {

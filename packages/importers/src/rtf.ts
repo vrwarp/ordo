@@ -3,6 +3,8 @@ import type { Rgba } from '@ordo/domain';
 /** Plain text and the first run's character style extracted from an RTF document. */
 export interface RtfResult {
   text: string;
+  /** True when the input was not RTF at all and was taken as plain text (line breaks kept). */
+  plain?: boolean;
   /** Font name from the font table for the first run (often a PostScript name such as `HelveticaNeue-Bold`). */
   fontName?: string;
   /** Font size of the first run in points (`\fsN` is half-points). */
@@ -107,6 +109,33 @@ function cp1252(byte: number): string {
   return String.fromCharCode(CP1252[byte] ?? byte);
 }
 
+/** RTF starts with `{\rtf`; anything else (ProPresenter occasionally stores bare text) is plain text. */
+export function isRtf(input: string | Uint8Array): boolean {
+  const head = typeof input === 'string' ? input.slice(0, 16) : rtfBytesToString(input.subarray(0, 16));
+  return /^\s*\{\\rtf/.test(head);
+}
+
+/** Plain (non-RTF) text: UTF-8, every line-break convention kept as `\n`, no style information. */
+function plainTextResult(input: string | Uint8Array): RtfResult {
+  let text: string;
+  if (typeof input === 'string') text = input;
+  else {
+    try {
+      text = new TextDecoder('utf-8', { fatal: true }).decode(input);
+    } catch {
+      text = rtfBytesToString(input);
+    }
+  }
+  text = text
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u2028\u2029]/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/^\n+/, '')
+    .replace(/\n+$/, '');
+  return { text, plain: true, bold: false, italic: false, styleRuns: 0 };
+}
+
 /** Decode RTF bytes (ASCII with escapes) into a string without a TextDecoder dependency on encoding. */
 export function rtfBytesToString(bytes: Uint8Array): string {
   let s = '';
@@ -121,6 +150,7 @@ export function rtfBytesToString(bytes: Uint8Array): string {
  * destinations) and the first run's font, size, colour, weight, alignment and stroke.
  */
 export function parseRtf(input: string | Uint8Array): RtfResult {
+  if (!isRtf(input)) return plainTextResult(input);
   const src = typeof input === 'string' ? input : rtfBytesToString(input);
   const fonts = new Map<number, string>();
   const colors: (Rgba | null)[] = [];

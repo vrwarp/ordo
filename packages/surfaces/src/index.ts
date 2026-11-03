@@ -3,7 +3,13 @@
  * MIDI over Web MIDI), all in the operator window.
  */
 export type { Action, Dispatch } from './types.ts';
-export { normalizeCombo, isModifierOnly, KeyboardDriver } from './keyboard.ts';
+export {
+  normalizeCombo,
+  isModifierOnly,
+  KeyboardDriver,
+  KEY_REPEAT_INTERVAL_MS,
+  type KeyboardOptions,
+} from './keyboard.ts';
 export {
   type DeckView,
   type KeyFace,

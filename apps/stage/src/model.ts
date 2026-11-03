@@ -28,6 +28,8 @@ export type StageLayout = {
   clock: PropBox | null;
   countdown: PropBox | null;
   elapsed: PropBox | null;
+  /** Remaining time of the live video (prd/04: the stage shows nothing of the media layer but this). */
+  mediaRemaining: PropBox | null;
   messages: PropBox | null;
   /** Section label shown as a kicker above the current lyrics. */
   section: TextStyle | null;
@@ -54,9 +56,9 @@ function base(style: Partial<TextStyle>): TextStyle {
 }
 
 /** Defaults for prop boxes the look does not style. The top band (y < 140) holds clock and timers. */
-export function defaultPropBoxes(
-  fontFamily: string,
-): Record<'clock' | 'countdown' | 'elapsed' | 'messages', PropBox> {
+export type PropKey = 'clock' | 'countdown' | 'elapsed' | 'mediaRemaining' | 'messages';
+
+export function defaultPropBoxes(fontFamily: string): Record<PropKey, PropBox> {
   return {
     clock: {
       ...base({ fontFamily, fontSizePx: 84, fontWeight: 700 }),
@@ -69,6 +71,10 @@ export function defaultPropBoxes(
     elapsed: {
       ...base({ fontFamily, fontSizePx: 64, align: 'right', color: { r: 120, g: 220, b: 255, a: 1 } }),
       box: { x: 1060, y: 16, w: 800, h: 110, rotation: 0 },
+    },
+    mediaRemaining: {
+      ...base({ fontFamily, fontSizePx: 56, align: 'center', color: { r: 255, g: 140, b: 120, a: 1 } }),
+      box: { x: 770, y: 16, w: 280, h: 110, rotation: 0 },
     },
     messages: {
       ...base({
@@ -106,8 +112,7 @@ export function stageLayout(look: Look | undefined): StageLayout {
   }
   const family = current?.style.fontFamily ?? 'Inter';
   const d = defaultPropBoxes(family);
-  const pick = (k: 'clock' | 'countdown' | 'elapsed' | 'messages', on: boolean) =>
-    on ? (props.style[k] ?? d[k]) : null;
+  const pick = (k: PropKey, on: boolean) => (on ? (props.style[k] ?? d[k]) : null);
   let countdown = pick('countdown', props.countdown);
   let elapsed = pick('elapsed', props.elapsed);
   // Both timers top right on default boxes: stack them in two half-height rows.
@@ -132,6 +137,8 @@ export function stageLayout(look: Look | undefined): StageLayout {
     clock: pick('clock', props.clock),
     countdown,
     elapsed,
+    // Looks saved before the flag existed follow `elapsed`.
+    mediaRemaining: pick('mediaRemaining', props.mediaRemaining ?? props.elapsed),
     messages: pick('messages', props.messages),
     section: props.style.section ?? section,
     clearColor: l.clearColor,
@@ -275,6 +282,30 @@ export function elapsedDisplay(s: LiveState, now: number): TimerDisplay | null {
   return { label: best.spec.label ?? 'Elapsed', value: formatDuration(ms), running: best.running };
 }
 
+/**
+ * Remaining time of the live video on the media layer, from the reducer's transport state and the media's
+ * duration. Null when nothing is playing, the layer holds an image, or the duration is unknown (a video
+ * still transcoding). Looping videos count down each pass.
+ */
+export function mediaRemainingDisplay(s: LiveState, now: number): TimerDisplay | null {
+  const m = s.layers.media.content;
+  if (!m || m.mediaKind !== 'video') return null;
+  const media = s.resolved?.media[m.mediaId];
+  const duration = media?.durationMs;
+  if (!duration || !Number.isFinite(duration) || duration <= 0) return null;
+  let position = m.state === 'playing' ? now - m.startedAt : m.positionMs;
+  if (!Number.isFinite(position) || position < 0) position = 0;
+  if (m.loop && position >= duration) position %= duration;
+  const remaining = Math.max(0, duration - position);
+  return {
+    label: media?.name ?? 'Video',
+    // Round up so the last second reads 00:01, not 00:00 while frames still play.
+    value: formatDuration(Math.ceil(remaining / 1000) * 1000),
+    running: m.state === 'playing',
+    overdue: m.state === 'ended' || (remaining <= 0 && !m.loop),
+  };
+}
+
 /** Messages to show now, newest first, without expired ones. */
 export function activeMessages(messages: StageMessage[], now: number): StageMessage[] {
   return messages.filter((m) => m.expiresAt === undefined || m.expiresAt > now);
@@ -410,7 +441,7 @@ export function boxCss(b: Box): Record<string, string> {
 export function stageFontFamilies(layout: StageLayout): Set<string> {
   const fams = new Set<string>();
   for (const r of [layout.current, layout.next]) if (r) fams.add(r.style.fontFamily);
-  for (const p of [layout.clock, layout.countdown, layout.elapsed, layout.messages])
+  for (const p of [layout.clock, layout.countdown, layout.elapsed, layout.mediaRemaining, layout.messages])
     if (p) fams.add(p.fontFamily);
   if (layout.section) fams.add(layout.section.fontFamily);
   return fams;

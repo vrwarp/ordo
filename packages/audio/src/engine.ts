@@ -43,6 +43,8 @@ export function browserDeps(): AudioDeps {
 /** Ramp used for gain changes and re-routing so nothing clicks. */
 export const RAMP_S = 0.02;
 export const DEVICE_POLL_MS = 2000;
+/** Minimum gap between automatic `resume()` attempts. */
+export const RESUME_MIN_INTERVAL_MS = 1000;
 const MAX_CHANNELS = 32;
 
 /**
@@ -91,6 +93,8 @@ type PairMeter = {
   level: number;
 };
 
+type Fade = { promise: Promise<void>; endsAt: number; gen: number; finish: (gen: number) => void };
+
 type Bus = {
   gen: number;
   channels: number;
@@ -123,12 +127,18 @@ export class AudioEngine {
   private nextId = 1;
   private masterDb: number;
   private muted = false;
-  private fading = false;
+  /** The fade-out in progress, shared by overlapping `fadeOut` calls. */
+  private fade: Fade | null = null;
   private pollId: unknown = null;
+  /** Last `resume()` attempt from a state change (ms), so a context that will not run does not spin. */
+  private lastResumeAt = Number.NEGATIVE_INFINITY;
+  private resumeFailures = 0;
   private deviceListener = () => void this.checkDevice();
   private checking = false;
   /** The device id currently in use (resolved for this origin), '' for the default device. */
   private activeSink = '';
+  /** Set by `openContext` when the configured device existed but could not be opened. */
+  private openFailed = false;
   private lastMeterAt = 0;
   private disposed = false;
 
@@ -163,17 +173,42 @@ export class AudioEngine {
       void this.checkDevice();
     };
     ctx.onstatechange = () => {
-      if ((ctx.state as string) === 'suspended' || (ctx.state as string) === 'interrupted') {
-        void ctx.resume().catch(() => {});
-      }
+      if ((ctx.state as string) === 'suspended' || (ctx.state as string) === 'interrupted')
+        this.tryResume(ctx);
     };
+    // The context reports rendering errors (a sink that vanished or refuses to open) here, not as a state.
+    if (typeof ctx.addEventListener === 'function') {
+      ctx.addEventListener('error', () => {
+        this.log('AudioContext error event; re-checking the house device');
+        void this.checkDevice(true);
+      });
+    }
+    const configured = !!(this.settings.houseDeviceId || this.settings.houseDeviceLabel);
+    // Status first: a lost house device builds the bus muted (item 33) rather than playing on the default device.
+    this.setStatus(configured && (wanted === undefined || this.openFailed) ? 'lost' : 'ok');
+    this.openFailed = false;
     this.buildBus();
     for (const s of this.sources.values()) this.wire(s);
-    if (ctx.state !== 'running') void ctx.resume().catch(() => {});
+    if (ctx.state !== 'running') this.tryResume(ctx);
     this.deps.mediaDevices?.addEventListener('devicechange', this.deviceListener);
     this.pollId = this.deps.setInterval(() => void this.checkDevice(), DEVICE_POLL_MS);
-    const configured = !!(this.settings.houseDeviceId || this.settings.houseDeviceLabel);
-    this.setStatus(configured && wanted === undefined ? 'lost' : 'ok');
+  }
+
+  /** `resume()` at most once a second and give up logging after a few failures (an invalid sink never runs). */
+  private tryResume(ctx: SinkAudioContext): void {
+    const now = this.deps.now();
+    if (now - this.lastResumeAt < RESUME_MIN_INTERVAL_MS) return;
+    this.lastResumeAt = now;
+    ctx
+      .resume()
+      .then(() => {
+        this.resumeFailures = 0;
+      })
+      .catch((e: Error) => {
+        this.resumeFailures++;
+        if (this.resumeFailures <= 3) this.log(`resume failed: ${e?.message ?? e}`);
+        if (this.resumeFailures === 3) void this.checkDevice(true);
+      });
   }
 
   setSettings(settings: AudioSettings): void {
@@ -246,26 +281,63 @@ export class AudioEngine {
     this.applyMaster();
   }
 
-  /** Ramp master to silence over `ms`, then restore gain (sources keep playing unless stopped by caller). */
-  async fadeOut(ms = 500): Promise<void> {
+  /**
+   * Ramp master to silence over `ms`, then restore gain (sources keep playing unless stopped by caller).
+   * Overlapping calls share one fade: the ramp is not restarted and the gain comes back only after the
+   * longest requested fade. The restore targets whichever bus is current, so a bus rebuilt mid-fade (a
+   * pair-settings change) is not left muted.
+   */
+  fadeOut(ms = 500): Promise<void> {
     const ctx = this.ctx;
     const bus = this.bus;
-    if (!ctx || !bus) return;
-    this.fading = true;
+    if (!ctx || !bus) return Promise.resolve();
+    const endsAt = this.deps.now() + ms;
+    if (this.fade) {
+      const fade = this.fade;
+      if (endsAt > fade.endsAt) {
+        // Extend: the ramp to zero is already scheduled; only the restore moves later.
+        fade.endsAt = endsAt;
+        const gen = ++fade.gen;
+        this.deps.setTimeout(() => fade.finish(gen), ms + 10);
+      }
+      return fade.promise;
+    }
     const p = bus.master.gain;
     const t = ctx.currentTime;
     p.cancelScheduledValues(t);
     p.setValueAtTime(p.value, t);
     p.linearRampToValueAtTime(0, t + ms / 1000);
-    await new Promise<void>((r) => this.deps.setTimeout(r, ms + 10));
-    this.fading = false;
-    if (this.bus !== bus || !this.ctx) return;
-    // Restore after a short hold so the caller can pause/stop sources right after the await.
-    const now = this.ctx.currentTime;
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => {
+      resolve = r;
+    });
+    const fade: Fade = {
+      endsAt,
+      gen: 0,
+      promise,
+      finish: (gen) => {
+        if (fade.gen !== gen) return; // a longer overlapping fade superseded this timer
+        if (this.fade === fade) this.fade = null;
+        this.restoreAfterFade();
+        resolve();
+      },
+    };
+    this.fade = fade;
+    this.deps.setTimeout(() => fade.finish(0), ms + 10);
+    return promise;
+  }
+
+  /** After a fade: hold silence briefly so the caller can stop sources, then ramp the current bus back up. */
+  private restoreAfterFade(): void {
+    const ctx = this.ctx;
+    const bus = this.bus;
+    if (!ctx || !bus) return;
+    const p = bus.master.gain;
+    const now = ctx.currentTime;
     p.cancelScheduledValues(now);
     p.setValueAtTime(0, now);
     p.setValueAtTime(0, now + 0.08);
-    p.linearRampToValueAtTime(masterGain(this.masterDb, this.muted), now + 0.08 + RAMP_S);
+    p.linearRampToValueAtTime(this.effectiveMaster(), now + 0.08 + RAMP_S);
   }
 
   /** Peak level per configured pair (settings order), 0..1, with meter ballistics. */
@@ -303,6 +375,7 @@ export class AudioEngine {
     const ctx = this.ctx;
     this.ctx = null;
     this.bus = null;
+    this.fade = null;
     if (ctx) {
       ctx.onsinkchange = null;
       ctx.onstatechange = null;
@@ -320,7 +393,16 @@ export class AudioEngine {
   private setStatus(s: AudioStatus) {
     if (this.status === s) return;
     this.status = s;
+    this.applyMaster();
     this.onStatus?.(s);
+  }
+
+  /**
+   * Master gain to apply now: muted while the house device is lost (item 33). Audio never falls back to the
+   * system default device on its own; the operator sees `lost` and can change the device setting.
+   */
+  private effectiveMaster(): number {
+    return this.status === 'lost' ? 0 : masterGain(this.masterDb, this.muted);
   }
 
   private async enumerate(): Promise<MediaDeviceInfo[] | null> {
@@ -341,29 +423,44 @@ export class AudioEngine {
     return resolveDevice(devices, houseDeviceId, houseDeviceLabel);
   }
 
-  /** Open a context on `sinkId` with the constructor option, then setSinkId, then the default device. */
+  /** Open a context on `sinkId` with the constructor option, then setSinkId, then the default device (muted). */
   private async openContext(sinkId: string | undefined): Promise<SinkAudioContext> {
     const { createContext } = this.deps;
+    let ctx: SinkAudioContext | undefined;
     if (sinkId) {
       try {
-        const ctx = createContext({ sinkId, latencyHint: 'playback' });
-        this.activeSink = sinkId;
-        return ctx;
+        ctx = createContext({ sinkId, latencyHint: 'playback' });
+        // The constructor does not reject an unknown or unusable sink: it opens suspended on no device.
+        if (String(ctx.sinkId ?? '') === sinkId) {
+          this.activeSink = sinkId;
+          return ctx;
+        }
+        this.log(`AudioContext({ sinkId }) opened on "${String(ctx.sinkId ?? '')}" instead of "${sinkId}"`);
       } catch (e) {
         this.log(`AudioContext({ sinkId }) failed: ${(e as Error).message}`);
+        ctx = undefined;
       }
     }
-    const ctx = createContext({ latencyHint: 'playback' });
+    ctx ??= createContext({ latencyHint: 'playback' });
     this.activeSink = '';
     if (sinkId && ctx.setSinkId) {
       try {
         await ctx.setSinkId(sinkId);
-        this.activeSink = sinkId;
+        if (String(ctx.sinkId ?? '') === sinkId || ctx.sinkId === undefined) {
+          this.activeSink = sinkId;
+          return ctx;
+        }
+        this.log(`setSinkId("${sinkId}") left the context on "${String(ctx.sinkId)}"`);
       } catch (e) {
-        this.log(`setSinkId failed, using the default device: ${(e as Error).message}`);
+        this.log(`setSinkId failed: ${(e as Error).message}`);
       }
     }
-    if (sinkId === undefined) this.log('house device not found; using the default device until it returns');
+    if (sinkId !== undefined && sinkId !== '') {
+      // Configured device present but unusable: treat it as lost (muted) rather than play on the default.
+      this.log('house device could not be opened; output muted until it can');
+      this.openFailed = true;
+    }
+    if (sinkId === undefined) this.log('house device not found; output muted until it returns');
     return ctx;
   }
 
@@ -413,6 +510,9 @@ export class AudioEngine {
             // Re-selecting the same id can be a no-op after a device returns; bounce via the default device.
             if (wasLost && target && String(ctx.sinkId ?? '') === target) await ctx.setSinkId('');
             await ctx.setSinkId(target);
+            if (ctx.sinkId !== undefined && String(ctx.sinkId ?? '') !== target) {
+              throw new Error(`context stayed on "${String(ctx.sinkId)}"`);
+            }
             this.activeSink = target;
           } catch (e) {
             this.log(`setSinkId failed: ${(e as Error).message}`);
@@ -436,8 +536,8 @@ export class AudioEngine {
   }
 
   private applyMaster() {
-    if (!this.ctx || !this.bus || this.fading) return;
-    setParam(this.ctx, this.bus.master.gain, masterGain(this.masterDb, this.muted));
+    if (!this.ctx || !this.bus || this.fade) return;
+    setParam(this.ctx, this.bus.master.gain, this.effectiveMaster());
   }
 
   private buildBus() {
@@ -466,7 +566,7 @@ export class AudioEngine {
     master.channelCount = channels;
     master.channelCountMode = 'explicit';
     master.channelInterpretation = 'discrete';
-    master.gain.value = this.fading ? 0 : masterGain(this.masterDb, this.muted);
+    master.gain.value = this.fade ? 0 : this.effectiveMaster();
     merger.connect(master);
     master.connect(dest);
     const meterSplit = ctx.createChannelSplitter(channels);

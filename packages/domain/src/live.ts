@@ -127,44 +127,58 @@ export type LiveState = {
   black: boolean;
 };
 
-const at = z.number();
+/** Hub ms; clients derive it from a clock-offset estimate, so it need not be an integer. */
+const at = z.number().finite().min(0).max(Number.MAX_SAFE_INTEGER);
+/** Cue positions are small; the hub also rejects indices beyond the live cue list. */
+const cueIndex = z.number().int().min(0).max(1_000_000);
+const sectionIndex = z.number().int().min(0).max(100_000);
+/** Stage message lifetime: at most a day. */
+const ttlMs = z.number().int().min(0).max(86_400_000);
 
-/** Events applied by the reducer. All times are hub ms carried in the event (the reducer never reads a clock). */
+/**
+ * Events applied by the reducer. All times are hub ms carried in the event (the reducer never reads a
+ * clock). Every variant is strict: unknown keys are rejected rather than silently stripped, so a client
+ * on a newer protocol cannot smuggle fields the hub does not validate.
+ */
 export const LiveEvent = z.discriminatedUnion('k', [
-  z.object({ k: z.literal('goLive'), resolved: ResolvedPlaylist }),
-  z.object({ k: z.literal('endService'), at }),
-  z.object({ k: z.literal('select'), cueIndex: z.number().int() }),
-  z.object({ k: z.literal('go'), cueIndex: z.number().int(), at }),
-  z.object({ k: z.literal('next'), at }),
-  z.object({ k: z.literal('prev'), at }),
-  z.object({ k: z.literal('nextItem'), at }),
-  z.object({ k: z.literal('prevItem'), at }),
-  z.object({ k: z.literal('goToSection'), sectionIndex: z.number().int(), at }),
-  z.object({
-    k: z.literal('clear'),
-    layer: z.enum(['slide', 'lowerThird', 'props', 'media', 'background', 'audio', 'all']),
-    at,
-  }),
-  z.object({ k: z.literal('logo'), at }),
-  z.object({ k: z.literal('lowerThird'), text: z.string(), at }),
-  z.object({ k: z.literal('media.play'), at }),
-  z.object({ k: z.literal('media.pause'), at }),
-  z.object({ k: z.literal('media.restart'), at }),
-  z.object({ k: z.literal('media.ended'), cueIndex: z.number().int(), at }),
-  z.object({ k: z.literal('audio.stop'), at }),
-  z.object({ k: z.literal('audio.ended'), cueIndex: z.number().int(), at }),
-  z.object({ k: z.literal('timer.start'), timerId: Id, spec: TimerSpec.optional(), at }),
-  z.object({ k: z.literal('timer.stop'), timerId: Id, at }),
-  z.object({ k: z.literal('timer.reset'), timerId: Id, at }),
-  z.object({
-    k: z.literal('message.send'),
-    id: Id,
-    text: z.string().max(500),
-    ttlMs: z.number().optional(),
-    at,
-  }),
-  z.object({ k: z.literal('message.dismiss'), id: Id }),
-  z.object({ k: z.literal('message.clear') }),
+  z.object({ k: z.literal('goLive'), resolved: ResolvedPlaylist }).strict(),
+  z.object({ k: z.literal('endService'), at }).strict(),
+  z.object({ k: z.literal('select'), cueIndex }).strict(),
+  z.object({ k: z.literal('go'), cueIndex, at }).strict(),
+  z.object({ k: z.literal('next'), at }).strict(),
+  z.object({ k: z.literal('prev'), at }).strict(),
+  z.object({ k: z.literal('nextItem'), at }).strict(),
+  z.object({ k: z.literal('prevItem'), at }).strict(),
+  z.object({ k: z.literal('goToSection'), sectionIndex, at }).strict(),
+  z
+    .object({
+      k: z.literal('clear'),
+      layer: z.enum(['slide', 'lowerThird', 'props', 'media', 'background', 'audio', 'all']),
+      at,
+    })
+    .strict(),
+  z.object({ k: z.literal('logo'), at }).strict(),
+  z.object({ k: z.literal('lowerThird'), text: z.string().max(2000), at }).strict(),
+  z.object({ k: z.literal('media.play'), at }).strict(),
+  z.object({ k: z.literal('media.pause'), at }).strict(),
+  z.object({ k: z.literal('media.restart'), at }).strict(),
+  z.object({ k: z.literal('media.ended'), cueIndex, at }).strict(),
+  z.object({ k: z.literal('audio.stop'), at }).strict(),
+  z.object({ k: z.literal('audio.ended'), cueIndex, at }).strict(),
+  z.object({ k: z.literal('timer.start'), timerId: Id, spec: TimerSpec.optional(), at }).strict(),
+  z.object({ k: z.literal('timer.stop'), timerId: Id, at }).strict(),
+  z.object({ k: z.literal('timer.reset'), timerId: Id, at }).strict(),
+  z
+    .object({
+      k: z.literal('message.send'),
+      id: Id,
+      text: z.string().max(500),
+      ttlMs: ttlMs.optional(),
+      at,
+    })
+    .strict(),
+  z.object({ k: z.literal('message.dismiss'), id: Id }).strict(),
+  z.object({ k: z.literal('message.clear') }).strict(),
 ]);
 export type LiveEvent = z.infer<typeof LiveEvent>;
 
@@ -172,7 +186,7 @@ export type LiveEvent = z.infer<typeof LiveEvent>;
  * Commands the operator submits. Identical to events except goLive, which carries only the playlist id;
  * the hub resolves it into a goLive event. A client-sent goLive with `resolved` is rejected by the hub.
  */
-export const GoLiveCommand = z.object({ k: z.literal('goLive'), playlistId: Id });
+export const GoLiveCommand = z.object({ k: z.literal('goLive'), playlistId: Id }).strict();
 export const LiveCommand = z.union([GoLiveCommand, LiveEvent]);
 export type LiveCommand = Exclude<LiveEvent, { k: 'goLive' }> | z.infer<typeof GoLiveCommand>;
 

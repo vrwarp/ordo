@@ -18,6 +18,7 @@ import {
   currentText,
   elapsedDisplay,
   FrameStats,
+  mediaRemainingDisplay,
   flipDelay,
   nextExpiry,
   nextText,
@@ -109,6 +110,23 @@ describe('stageLayout', () => {
     expect(l.clock?.box).toEqual({ x: 1, y: 2, w: 3, h: 4, rotation: 0 });
     expect(l.elapsed).toBeNull();
     expect(l.countdown?.box.h).toBe(110);
+  });
+  it('shows video remaining time with elapsed unless the look says otherwise', () => {
+    expect(stageLayout(LOOK_STAGE).mediaRemaining).not.toBeNull();
+    const props = LOOK_STAGE.layers.props;
+    const withFlag = (p: Partial<typeof props>): Look => ({
+      ...LOOK_STAGE,
+      layers: { ...LOOK_STAGE.layers, props: { ...props, ...p } },
+    });
+    expect(stageLayout(withFlag({ elapsed: false })).mediaRemaining).toBeNull();
+    expect(stageLayout(withFlag({ elapsed: false, mediaRemaining: true })).mediaRemaining).not.toBeNull();
+    expect(stageLayout(withFlag({ elapsed: true, mediaRemaining: false })).mediaRemaining).toBeNull();
+    const box = { x: 5, y: 6, w: 7, h: 8, rotation: 0 };
+    const styled = withFlag({
+      mediaRemaining: true,
+      style: { mediaRemaining: { ...stageLayout(LOOK_STAGE).mediaRemaining!, box } },
+    });
+    expect(stageLayout(styled).mediaRemaining?.box).toEqual(box);
   });
   it('still shows lyrics for an authored look', () => {
     expect(stageLayout(LOOK_MAIN).current).not.toBeNull();
@@ -214,6 +232,84 @@ describe('timers', () => {
     expect(elapsedDisplay(t, 99_000)).toEqual({ label: 'Elapsed', value: '01:00', running: false });
     t = reduce(t, { k: 'timer.reset', timerId: 'e', at: 99_000 });
     expect(elapsedDisplay(t, 99_000)).toBeNull();
+  });
+});
+
+describe('video remaining time', () => {
+  function withVideo(durationMs?: number): LiveState {
+    const resolved: ResolvedPlaylist = {
+      playlist: {
+        id: 'pl',
+        rev: 1,
+        name: 'x',
+        items: [{ id: 'v', kind: 'media', mediaId: 'vid', loop: false }],
+      },
+      presentations: {},
+      media: {
+        vid: {
+          id: 'vid',
+          rev: 1,
+          name: 'Welcome video',
+          tags: [],
+          kind: 'video',
+          original: { hash: 'h', bytes: 1, mime: 'video/mp4', path: 'p' },
+          state: 'ready',
+          loop: false,
+          isBackground: false,
+          ...(durationMs !== undefined ? { durationMs } : {}),
+        },
+      },
+      fonts: [],
+      looks: DEFAULT_LOOKS,
+      files: [],
+      manifestId: 'm',
+    };
+    let s = reduce(initialState(), { k: 'goLive', resolved });
+    s = reduce(s, { k: 'go', cueIndex: 0, at: 10_000 });
+    return s;
+  }
+
+  it('counts down from the reducer position and the media duration', () => {
+    const s = withVideo(90_000);
+    expect(mediaRemainingDisplay(s, 10_000)).toEqual({
+      label: 'Welcome video',
+      value: '01:30',
+      running: true,
+      overdue: false,
+    });
+    expect(mediaRemainingDisplay(s, 40_500)?.value).toBe('01:00');
+    expect(mediaRemainingDisplay(s, 99_200)?.value).toBe('00:01');
+    expect(mediaRemainingDisplay(s, 120_000)).toMatchObject({ value: '00:00', overdue: true });
+    // Paused: frozen at the pause position, dimmed.
+    const paused = reduce(s, { k: 'media.pause', at: 30_000 });
+    expect(mediaRemainingDisplay(paused, 80_000)).toMatchObject({ value: '01:10', running: false });
+    const ended = reduce(s, { k: 'media.ended', cueIndex: 0, at: 100_000 });
+    expect(mediaRemainingDisplay(ended, 100_000)).toMatchObject({ value: '00:00', overdue: true });
+  });
+
+  it('wraps for looping videos and hides when there is nothing to show', () => {
+    const s = withVideo(10_000);
+    const looping = {
+      ...s,
+      layers: {
+        ...s.layers,
+        media: { ...s.layers.media, content: { ...s.layers.media.content!, loop: true } },
+      },
+    };
+    expect(mediaRemainingDisplay(looping, 23_000)?.value).toBe('00:07');
+    expect(mediaRemainingDisplay(withVideo(undefined), 11_000)).toBeNull();
+    expect(mediaRemainingDisplay(initialState(), 0)).toBeNull();
+    expect(mediaRemainingDisplay(reduce(s, { k: 'clear', layer: 'media', at: 11_000 }), 12_000)).toBeNull();
+    const image = {
+      ...s,
+      layers: {
+        ...s.layers,
+        media: { ...s.layers.media, content: { ...s.layers.media.content!, mediaKind: 'image' as const } },
+      },
+    };
+    expect(mediaRemainingDisplay(image, 11_000)).toBeNull();
+    // A clock behind the hub (now before startedAt) shows the full length rather than more than it.
+    expect(mediaRemainingDisplay(s, 9_000)?.value).toBe('00:10');
   });
 });
 

@@ -25,16 +25,34 @@ export function isModifierOnly(e: Pick<KeyboardEvent, 'code' | 'key'>): boolean 
   return MODIFIER_CODES.test(e.code || e.key);
 }
 
-/** Keys that keep firing while held (stepping through slides); everything else fires once per press. */
-const REPEATABLE = /^(Arrow(Left|Right|Up|Down)|Space|PageUp|PageDown)$/;
+/**
+ * Keys that keep firing while held (stepping through slides), rate-limited to `repeatIntervalMs`. Space,
+ * PageUp and PageDown fire once per press: a held GO key must not race through the service.
+ */
+const REPEATABLE = /^Arrow(Left|Right|Up|Down)$/;
+/** About 4 steps per second while an arrow key is held. */
+export const KEY_REPEAT_INTERVAL_MS = 250;
+
+export type KeyboardOptions = {
+  /** Clock for the repeat rate limit (ms). Defaults to `performance.now`. */
+  now?: () => number;
+  repeatIntervalMs?: number;
+};
 
 /** Keyboard driver: keydown on window, no debounce; ignores events from text inputs. */
 export class KeyboardDriver {
   private handler = (e: Event) => this.onKey(e as KeyboardEvent);
+  private now: () => number;
+  private repeatIntervalMs: number;
+  private lastRepeatAt = Number.NEGATIVE_INFINITY;
   constructor(
     private map: KeyMap,
     private dispatch: Dispatch,
-  ) {}
+    opts: KeyboardOptions = {},
+  ) {
+    this.now = opts.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
+    this.repeatIntervalMs = opts.repeatIntervalMs ?? KEY_REPEAT_INTERVAL_MS;
+  }
   setMap(map: KeyMap): void {
     this.map = map;
   }
@@ -56,10 +74,23 @@ export class KeyboardDriver {
       return;
     }
     if (isModifierOnly(e)) return;
-    if (e.repeat && !REPEATABLE.test(e.code)) return;
     const combo = normalizeCombo(e);
     const a = this.map[combo];
     if (!a) return;
+    if (e.repeat) {
+      if (!REPEATABLE.test(e.code)) {
+        e.preventDefault(); // still ours: keep the page from scrolling on a held Space
+        return;
+      }
+      const now = this.now();
+      if (now - this.lastRepeatAt < this.repeatIntervalMs) {
+        e.preventDefault();
+        return;
+      }
+      this.lastRepeatAt = now;
+    } else {
+      this.lastRepeatAt = this.now();
+    }
     e.preventDefault();
     this.dispatch(a.arg === undefined ? { id: a.id } : { id: a.id, arg: a.arg }, 'keyboard');
   }

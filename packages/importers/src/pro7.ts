@@ -198,6 +198,8 @@ interface Ctx {
   log: ImportLogEntry[];
   media: MediaResolver;
   skipped: Map<string, number>;
+  /** Things that were handled approximately (counted, logged once per document). */
+  approximated: Map<string, number>;
   rtfMixed: number;
 }
 
@@ -209,6 +211,29 @@ function skip(ctx: Ctx, what: string) {
   ctx.skipped.set(what, (ctx.skipped.get(what) ?? 0) + 1);
 }
 
+function approx(ctx: Ctx, what: string) {
+  ctx.approximated.set(what, (ctx.approximated.get(what) ?? 0) + 1);
+}
+
+/** Text attributes ProPresenter applies at render time that the slide text cannot carry as styling. */
+function noteTextTransforms(t: Msg, attrs: Msg, ctx: Ctx): { allCaps: boolean } {
+  const cap = attrs.capitalization as string | undefined;
+  let allCaps = false;
+  if (cap && cap !== 'CAPITALIZATION_NONE') {
+    if (cap === 'CAPITALIZATION_ALL_CAPS') {
+      allCaps = true;
+      approx(ctx, 'ALL CAPS applied to the text itself');
+    } else skip(ctx, `${cap.replace('CAPITALIZATION_', '').toLowerCase().replace(/_/g, ' ')} capitalization`);
+  }
+  const custom = (attrs.customAttributes ?? []) as Msg[];
+  if (custom.some((c) => c.capitalization && c.capitalization !== 'CAPITALIZATION_NONE'))
+    skip(ctx, 'capitalization of part of a text');
+  const tr = t.transform as string | undefined;
+  if (tr && tr !== 'TRANSFORM_NONE')
+    skip(ctx, `text transform ${tr.replace('TRANSFORM_', '').toLowerCase().replace(/_/g, ' ')}`);
+  return { allCaps };
+}
+
 function textObjectFrom(el: Msg, size: SlideSize, ctx: Ctx): TextObject | null {
   const t = el.text as Msg;
   const rtf = t.rtfData as Uint8Array | undefined;
@@ -218,6 +243,9 @@ function textObjectFrom(el: Msg, size: SlideSize, ctx: Ctx): TextObject | null {
   const attrs = (t.attributes ?? {}) as Msg;
   const font = (attrs.font ?? {}) as Msg;
   if (parsed.styleRuns > 1) ctx.rtfMixed++;
+  if (parsed.plain) approx(ctx, 'plain-text (non-RTF) elements imported with the attribute style only');
+  const { allCaps } = noteTextTransforms(t, attrs, ctx);
+  const text = allCaps ? parsed.text.toUpperCase() : parsed.text;
 
   const base = DEFAULT_THEME.textBoxDefaults;
   const nameFromRtf = parsed.fontName ? splitFontName(parsed.fontName) : undefined;
@@ -276,7 +304,7 @@ function textObjectFrom(el: Msg, size: SlideSize, ctx: Ctx): TextObject | null {
     id: newId(),
     type: 'text',
     box: scaleBox(el.bounds, size, el.rotation ?? 0),
-    text: parsed.text,
+    text,
     style,
     opacity: typeof el.opacity === 'number' ? el.opacity : 1,
   };
@@ -417,6 +445,11 @@ function slideFromCue(cue: Msg, ctx: Ctx): Slide | null {
       }
       continue;
     }
+    if (el.text && !(el.fill as Msg | undefined)?.media) {
+      // A text box with no RTF at all (an emptied placeholder or a template box): nothing to show.
+      skip(ctx, 'empty text elements');
+      continue;
+    }
     if ((el.fill as Msg | undefined)?.media) {
       const io = imageObjectFrom(el, size, ctx);
       if (io) objects.push(io);
@@ -443,6 +476,9 @@ export type Pro7PresentationResult = {
   presentation: Presentation;
   /** ProPresenter UUID of the document (for playlists). */
   pro7Uuid?: string;
+  /** Document name and cue count as stored, for telling a copy from a second reference to one document. */
+  name: string;
+  cueCount: number;
   /** ProPresenter arrangement UUID to ordo arrangement id. */
   arrangementIds: Map<string, string>;
 };
@@ -452,7 +488,14 @@ export function mapPresentation(
   doc: Msg,
   opts: { item: string; log: ImportLogEntry[]; media: MediaResolver; fileName?: string },
 ): Pro7PresentationResult {
-  const ctx: Ctx = { item: opts.item, log: opts.log, media: opts.media, skipped: new Map(), rtfMixed: 0 };
+  const ctx: Ctx = {
+    item: opts.item,
+    log: opts.log,
+    media: opts.media,
+    skipped: new Map(),
+    approximated: new Map(),
+    rtfMixed: 0,
+  };
   const cuesById = new Map<string, Msg>();
   for (const c of (doc.cues ?? []) as Msg[]) {
     const id = uuidOf(c.uuid);
@@ -561,6 +604,7 @@ export function mapPresentation(
   if (ctx.rtfMixed > 0) {
     note(ctx, 'info', `${ctx.rtfMixed} text element(s) had mixed styles; the first run's style was used`);
   }
+  for (const [what, count] of ctx.approximated) note(ctx, 'info', `${what} (${count})`);
   for (const [what, count] of ctx.skipped) note(ctx, 'info', `skipped ${what} (${count})`);
 
   const slideCount = allSlides.length;
@@ -581,7 +625,13 @@ export function mapPresentation(
     slideCount === 0 ? 'warn' : 'info',
     `imported "${title}": ${sections.length} section(s), ${slideCount} slide(s), ${arrangements.length} arrangement(s)`,
   );
-  return { presentation, pro7Uuid: uuidOf(doc.uuid), arrangementIds };
+  return {
+    presentation,
+    pro7Uuid: uuidOf(doc.uuid),
+    name: typeof doc.name === 'string' ? doc.name.trim() : '',
+    cueCount: Array.isArray(doc.cues) ? doc.cues.length : 0,
+    arrangementIds,
+  };
 }
 
 function looksLikePresentation(doc: Msg): boolean {
@@ -620,12 +670,26 @@ export function importPro7(files: Map<string, Uint8Array>): Pro7ImportResult {
         continue;
       }
       // The same document can appear twice (library folder and a .proPlaylist bundle): import it once.
+      // A copied document keeps its UUID in ProPresenter, so the name and cue count must match too.
       const docUuid = uuidOf(doc.uuid as Msg | undefined);
-      const dup = docUuid ? refs.find((r) => r.result.pro7Uuid === docUuid) : undefined;
+      const sameUuid = docUuid ? refs.filter((r) => r.result.pro7Uuid === docUuid) : [];
+      const cueCount = Array.isArray(doc.cues) ? doc.cues.length : 0;
+      const name = typeof doc.name === 'string' ? doc.name.trim() : '';
+      const dup = sameUuid.find((r) => r.result.name === name && r.result.cueCount === cueCount);
       if (dup) {
         log.push({ level: 'info', item, message: `same document as ${basename(dup.path)}; imported once` });
         refs.push({ result: dup.result, path });
         continue;
+      }
+      if (sameUuid.length > 0) {
+        const other = sameUuid.find((r) => r.result.name === name) ?? sameUuid[0]!;
+        log.push({
+          level: 'warn',
+          item,
+          message:
+            `same ProPresenter UUID as ${basename(other.path)} but a different ` +
+            `${other.result.name !== name ? 'name' : 'slide count'}; imported both`,
+        });
       }
       const result = mapPresentation(doc, { item, log, media, fileName: path });
       presentations.push(result.presentation);
