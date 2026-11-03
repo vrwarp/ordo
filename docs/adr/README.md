@@ -18,3 +18,4 @@ earlier one supersedes it and says so.
 | [0011](0011-looks-not-per-output-slides.md)      | Looks map one cue to many renderings; no per-output authoring                                                                                                              |
 | [0012](0012-import-strategy.md)                  | ProPresenter 7 via vendored proto; SongSelect via files; PPTX via LibreOffice render plus XML text extraction                                                              |
 | [0013](0013-implementation-adjustments.md)       | Adjustments made while implementing: API on every host, health outside the reducer, *.localhost origins, fullscreen popups, full-frame slide bitmaps, Canvas 2D safety net |
+| [0014](0014-supervised-isolation.md) | Supervised isolation: main threads host only, workers with supervisors and heartbeats, MessagePort fallback bus, strict validation and quarantine, two hub processes |
