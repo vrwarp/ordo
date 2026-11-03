@@ -228,9 +228,10 @@ export function PlaylistEditor(props: {
                     type="button"
                     className="ghost small"
                     disabled={i === 0}
-                    onClick={(e) => (
-                      e.stopPropagation(), update((p) => ({ ...p, items: moveItem(p.items, i, i - 1) }))
-                    )}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      update((p) => ({ ...p, items: moveItem(p.items, i, i - 1) }));
+                    }}
                   >
                     ↑
                   </button>
@@ -238,9 +239,10 @@ export function PlaylistEditor(props: {
                     type="button"
                     className="ghost small"
                     disabled={i === draft.items.length - 1}
-                    onClick={(e) => (
-                      e.stopPropagation(), update((p) => ({ ...p, items: moveItem(p.items, i, i + 1) }))
-                    )}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      update((p) => ({ ...p, items: moveItem(p.items, i, i + 1) }));
+                    }}
                   >
                     ↓
                   </button>

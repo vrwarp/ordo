@@ -5,13 +5,13 @@ operator's monitor; the outputs are separate windows on the other displays.
 
 ## Layout
 
-| Region | Content |
-| --- | --- |
-| Top bar | Live playlist name, hub connection state, WAN state, service cache state, per-output health dots, clock, Launch outputs button |
-| Left column | The live playlist: presentations and media in order, the live item highlighted |
-| Centre | Slides of the selected presentation, grouped by section, following the active arrangement; the live slide outlined, the armed slide marked |
-| Right column | Program view: a live thumbnail of each output; below it stage tools: messages and timers |
-| Bottom bar | Layer state chips (Background, Slide, Lower third, Props, Media) each showing live content and a clear button; audio meters and the playing media's remaining time |
+| Region       | Content                                                                                                                                                            |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Top bar      | Live playlist name, hub connection state, WAN state, service cache state, per-output health dots, clock, Launch outputs button                                     |
+| Left column  | The live playlist: presentations and media in order, the live item highlighted                                                                                     |
+| Centre       | Slides of the selected presentation, grouped by section, following the active arrangement; the live slide outlined, the armed slide marked                         |
+| Right column | Program view: a live thumbnail of each output; below it stage tools: messages and timers                                                                           |
+| Bottom bar   | Layer state chips (Background, Slide, Lower third, Props, Media) each showing live content and a clear button; audio meters and the playing media's remaining time |
 
 The operator view never renders with WebGPU. Slide thumbnails are CSS renders of slide
 data at small sizes. Program thumbnails are video streamed from the outputs
@@ -31,22 +31,22 @@ data at small sizes. Program thumbnails are video streamed from the outputs
 
 ## Navigation and GO
 
-| Action | Default keys | Behaviour |
-| --- | --- | --- |
-| Next slide | Space, Right, Down | Arms and goes to the next slide in arrangement order; at the end of a presentation, moves to the next playlist item |
-| Previous slide | Left, Up | Previous slide in arrangement order |
-| Go to slide | Click, or 1 to 9 for the Nth slide of the current section | Jumps anywhere; if the target is not armed, holds the current slide until armed |
-| Next presentation | Page Down | First slide of the next item |
-| Previous presentation | Page Up | First slide of the previous item |
-| Section jump | Click a section label | First slide of that section |
-| Clear slide | F1 | Clears the Slide layer; background keeps playing |
-| Clear all to black | F2 (press twice within 2 s, or hold) | Every layer black on every output. Confirmed by the double press to avoid accidents |
-| Clear lower third | F3 | Clears the Lower third layer only |
-| Clear props | F4 | Clears Props |
-| Logo | F5 | Shows the venue logo look on audience outputs |
-| Play or pause media | F8 | For the live media item |
-| Restart media | Shift+F8 | |
-| Launch outputs | Ctrl+Shift+L | See Outputs |
+| Action                | Default keys                                              | Behaviour                                                                                                           |
+| --------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Next slide            | Space, Right, Down                                        | Arms and goes to the next slide in arrangement order; at the end of a presentation, moves to the next playlist item |
+| Previous slide        | Left, Up                                                  | Previous slide in arrangement order                                                                                 |
+| Go to slide           | Click, or 1 to 9 for the Nth slide of the current section | Jumps anywhere; if the target is not armed, holds the current slide until armed                                     |
+| Next presentation     | Page Down                                                 | First slide of the next item                                                                                        |
+| Previous presentation | Page Up                                                   | First slide of the previous item                                                                                    |
+| Section jump          | Click a section label                                     | First slide of that section                                                                                         |
+| Clear slide           | F1                                                        | Clears the Slide layer; background keeps playing                                                                    |
+| Clear all to black    | F2 (press twice within 2 s, or hold)                      | Every layer black on every output. Confirmed by the double press to avoid accidents                                 |
+| Clear lower third     | F3                                                        | Clears the Lower third layer only                                                                                   |
+| Clear props           | F4                                                        | Clears Props                                                                                                        |
+| Logo                  | F5                                                        | Shows the venue logo look on audience outputs                                                                       |
+| Play or pause media   | F8                                                        | For the live media item                                                                                             |
+| Restart media         | Shift+F8                                                  |                                                                                                                     |
+| Launch outputs        | Ctrl+Shift+L                                              | See Outputs                                                                                                         |
 
 Keys are handled on keydown with no debounce. Keys act only when the operator window is
 focused; Stream Deck and MIDI act regardless of focus ([prd/07](07-control-surfaces.md)).

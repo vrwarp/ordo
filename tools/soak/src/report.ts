@@ -54,7 +54,14 @@ export function summarize(samples: Sample[], names: Record<string, string>): Out
       prev = s;
     }
     const pass = acc.missed === 0 && acc.longTasks === 0 && acc.gpuLost === 0 && acc.presented > 0;
-    out.push({ outputId, name: names[outputId] ?? outputId, ...acc, samples: list.length, errors: [...errors], pass });
+    out.push({
+      outputId,
+      name: names[outputId] ?? outputId,
+      ...acc,
+      samples: list.length,
+      errors: [...errors],
+      pass,
+    });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }

@@ -1,4 +1,10 @@
-import { type ActionId, type LiveEvent, type LiveState, MANUAL_ELAPSED_TIMER_ID, sectionsOfItem } from '@ordo/domain';
+import {
+  type ActionId,
+  type LiveEvent,
+  type LiveState,
+  MANUAL_ELAPSED_TIMER_ID,
+  sectionsOfItem,
+} from '@ordo/domain';
 
 export type ActionContext = {
   messagePresets?: string[];
@@ -38,7 +44,9 @@ export function actionToEvent(
       if (ref === undefined) return null;
       const cur = s.cues[ref];
       if (!cur) return null;
-      const sameSection = s.cues.filter((c) => c.itemIndex === cur.itemIndex && c.arrangementPos === cur.arrangementPos);
+      const sameSection = s.cues.filter(
+        (c) => c.itemIndex === cur.itemIndex && c.arrangementPos === cur.arrangementPos,
+      );
       const target = sameSection[n - 1];
       if (!target) {
         // Not a slide presentation: fall back to the Nth section.
@@ -68,7 +76,12 @@ export function actionToEvent(
       return { k: 'media.restart', at };
     case 'timerStart': {
       const id = String(action.arg ?? MANUAL_ELAPSED_TIMER_ID);
-      return { k: 'timer.start', timerId: id, spec: s.timers[id]?.spec ?? { kind: 'elapsed', label: 'Elapsed' }, at };
+      return {
+        k: 'timer.start',
+        timerId: id,
+        spec: s.timers[id]?.spec ?? { kind: 'elapsed', label: 'Elapsed' },
+        at,
+      };
     }
     case 'timerStop':
       return { k: 'timer.stop', timerId: String(action.arg ?? MANUAL_ELAPSED_TIMER_ID), at };

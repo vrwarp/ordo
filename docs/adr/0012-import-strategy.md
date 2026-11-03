@@ -1,6 +1,7 @@
 # ADR 0012: Import strategy
 
 ## Decision
+
 - ProPresenter 7: decode `.pro` and playlist files with vendored community `.proto`
   definitions; import text with geometry and the first run's style; log everything
   skipped.
@@ -12,10 +13,12 @@
 - Google Fonts: the hub downloads families once and serves them locally.
 
 ## Reasons
+
 - Fidelity where it matters (lyrics, sections, arrangements), honesty where it cannot be
   achieved (PowerPoint fonts, builds), no fragile scraping.
 
 ## Consequences
+
 - The Docker image includes LibreOffice (size and cold start).
 - The proto definitions must be kept in step with ProPresenter releases; the import log
   records the version used.

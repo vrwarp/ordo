@@ -86,6 +86,7 @@ export function TopBar() {
         type="button"
         className="big"
         disabled={launch.busy}
+        data-launch
         onClick={() => dispatch({ id: 'launchOutputs' })}
         title="Ctrl+Shift+L"
       >
@@ -95,6 +96,7 @@ export function TopBar() {
         type="button"
         className="big"
         disabled={launch.busy}
+        data-launch
         onClick={() => dispatch({ id: 'relaunchOutputs' })}
         title="Ctrl+Shift+R"
       >

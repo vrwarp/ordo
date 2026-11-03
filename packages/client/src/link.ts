@@ -95,8 +95,15 @@ export class OutputLink extends Emitter<{
     if (this.bus === 'fallback') this.fallback?.sendHealth(health);
   }
 
-  /** Send a live event (outputs only send media.ended / audio.ended). Via hub, else via fallback is not possible: the operator observes health. */
+  /**
+   * Send a live event (outputs only send media.ended / audio.ended). While the operator is the authority
+   * (fallback bus) it goes to the operator, otherwise to the hub.
+   */
   sendEvent(event: { k: 'media.ended' | 'audio.ended'; cueIndex: number; at: number }): void {
+    if (this.bus === 'fallback' && this.fallback) {
+      this.fallback.sendEvent(event);
+      return;
+    }
     this.hub.send({
       t: 'live.event',
       id: `${this.outputId}-${event.k}-${event.cueIndex}-${event.at}`,

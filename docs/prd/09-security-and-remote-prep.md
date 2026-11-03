@@ -6,11 +6,11 @@ must hold on a public address from M1.
 
 ## Roles and credentials
 
-| Role | Grants | Credential |
-| --- | --- | --- |
-| Operate | Operator view, live control, launching outputs, stage tools, settings | Operate PIN |
-| Edit | Library, editor, playlists, imports, media upload; no live control | Edit PIN |
-| Output | An output or stage window: receives live state and media only | Per-output token in the URL, issued by the hub, rotatable |
+| Role    | Grants                                                                | Credential                                                |
+| ------- | --------------------------------------------------------------------- | --------------------------------------------------------- |
+| Operate | Operator view, live control, launching outputs, stage tools, settings | Operate PIN                                               |
+| Edit    | Library, editor, playlists, imports, media upload; no live control    | Edit PIN                                                  |
+| Output  | An output or stage window: receives live state and media only         | Per-output token in the URL, issued by the hub, rotatable |
 
 - PINs are at least 6 digits, stored hashed on the hub, set during first-run setup and
   changeable by the Operate role.

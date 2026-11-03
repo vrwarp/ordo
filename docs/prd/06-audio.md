@@ -6,11 +6,11 @@ multichannel output.
 
 ## Sources
 
-| Source | Routing |
-| --- | --- |
-| Video cue audio (stereo) | Stereo pair chosen per media item, default pair from settings |
-| Audio cue (music bed, sound effect) | Stereo pair per item, loop and gain per item |
-| Operator preview | Any source can be auditioned on a separate device chosen in settings, never on the house pairs |
+| Source                              | Routing                                                                                        |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Video cue audio (stereo)            | Stereo pair chosen per media item, default pair from settings                                  |
+| Audio cue (music bed, sound effect) | Stereo pair per item, loop and gain per item                                                   |
+| Operator preview                    | Any source can be auditioned on a separate device chosen in settings, never on the house pairs |
 
 Click tracks and stems are out of scope; the channel matrix does not preclude them.
 

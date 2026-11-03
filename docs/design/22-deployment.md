@@ -2,13 +2,13 @@
 
 ## Overview
 
-| Piece | Where | How |
-| --- | --- | --- |
-| Hub image | Docker Hub `vrwarp/ordo-hub` | Built and pushed by GitHub Actions on tags `v*` and on `main` as `edge` |
-| Hub container | Synology NAS, Container Manager, Compose project | Pulled by tag; manual upgrade |
-| TLS and routing | DSM reverse proxy | One rule per hostname to `ordo-hub:8080`, WebSocket headers enabled |
-| Certificate | DSM certificate store | Let's Encrypt wildcard for `*.<venue>.synology.me` issued by DSM, assigned to the reverse proxy rules |
-| Presentation PC | Windows 11, Chrome stable | Hosts entries, Chrome policies, PWA install, auto-login |
+| Piece           | Where                                            | How                                                                                                   |
+| --------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| Hub image       | Docker Hub `vrwarp/ordo-hub`                     | Built and pushed by GitHub Actions on tags `v*` and on `main` as `edge`                               |
+| Hub container   | Synology NAS, Container Manager, Compose project | Pulled by tag; manual upgrade                                                                         |
+| TLS and routing | DSM reverse proxy                                | One rule per hostname to `ordo-hub:8080`, WebSocket headers enabled                                   |
+| Certificate     | DSM certificate store                            | Let's Encrypt wildcard for `*.<venue>.synology.me` issued by DSM, assigned to the reverse proxy rules |
+| Presentation PC | Windows 11, Chrome stable                        | Hosts entries, Chrome policies, PWA install, auto-login                                               |
 
 ## Hostnames to verify first (M1 task 1)
 
@@ -34,7 +34,7 @@ services:
     restart: unless-stopped
     environment:
       ORDO_DOMAIN: <venue>.synology.me
-      ORDO_TRUSTED_PROXY: 172.16.0.0/12   # DSM reverse proxy source on the bridge network
+      ORDO_TRUSTED_PROXY: 172.16.0.0/12 # DSM reverse proxy source on the bridge network
       ORDO_TZ: America/Los_Angeles
       ORDO_PORT: "8080"
     volumes:

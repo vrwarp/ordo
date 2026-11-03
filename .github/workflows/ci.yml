@@ -33,7 +33,7 @@ jobs:
       - name: End-to-end tests
         run: pnpm e2e
         env:
-          ORDO_CI: '1'
+          ORDO_CI: "1"
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

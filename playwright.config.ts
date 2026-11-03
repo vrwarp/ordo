@@ -19,7 +19,7 @@ export default defineConfig({
   reporter: process.env.ORDO_CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: {
     ...devices['Desktop Chrome'],
-    viewport: { width: 1280, height: 800 },
+    viewport: { width: 1280, height: 720 },
     trace: 'retain-on-failure',
     launchOptions: {
       args: [
@@ -30,6 +30,7 @@ export default defineConfig({
         '--disable-renderer-backgrounding',
         '--disable-backgrounding-occluded-windows',
         '--use-fake-ui-for-media-stream',
+        '--disable-popup-blocking',
       ],
     },
   },

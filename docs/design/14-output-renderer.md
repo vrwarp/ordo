@@ -5,11 +5,11 @@ present one composited frame per vsync with nothing on the critical path that ca
 
 ## Threads
 
-| Thread | Owns | Never does |
-| --- | --- | --- |
-| Main | The `<canvas>` (control transferred), the `<video>` elements for the live and armed media, the WebSocket and fallback-bus receive, the health timer, Wake Lock, fullscreen | Layout beyond the canvas, decoding images, text, shader compilation |
-| Render worker | WebGPU device, `OffscreenCanvas`, the frame loop, layer stacks, transitions, uniform buffers | Fetching, decoding, allocation inside the loop |
-| Asset worker | OPFS reads, `createImageBitmap`, font loading (`self.fonts`), text rasterization to `OffscreenCanvas` 2D, manifest and cache management | Touching the GPU device except to upload prepared bitmaps via the render worker |
+| Thread        | Owns                                                                                                                                                                       | Never does                                                                      |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Main          | The `<canvas>` (control transferred), the `<video>` elements for the live and armed media, the WebSocket and fallback-bus receive, the health timer, Wake Lock, fullscreen | Layout beyond the canvas, decoding images, text, shader compilation             |
+| Render worker | WebGPU device, `OffscreenCanvas`, the frame loop, layer stacks, transitions, uniform buffers                                                                               | Fetching, decoding, allocation inside the loop                                  |
+| Asset worker  | OPFS reads, `createImageBitmap`, font loading (`self.fonts`), text rasterization to `OffscreenCanvas` 2D, manifest and cache management                                    | Touching the GPU device except to upload prepared bitmaps via the render worker |
 
 The main thread is otherwise idle, which is what makes `<video>` plus
 `requestVideoFrameCallback` on it acceptable for the prototype (ADR 0005).

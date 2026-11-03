@@ -6,12 +6,12 @@ what each output renders.
 
 ## Outputs at the venue
 
-| Output | Display | Look | Notes |
-| --- | --- | --- | --- |
-| Audience 1 and 2 (and more) | Projectors or TVs, 1080p60 | Main | Identical content |
-| Stage | TV facing the platform | Stage | Lyrics, clock, timers, messages |
-| Lobby, Overflow | TVs in other rooms | Lower third | Lower-third lyrics over a holding slide or announcement loop |
-| Stream | Captured by OBS (window capture) | Stream | Lower-third lyrics on a solid key colour, everything else transparent to OBS |
+| Output                      | Display                          | Look        | Notes                                                                        |
+| --------------------------- | -------------------------------- | ----------- | ---------------------------------------------------------------------------- |
+| Audience 1 and 2 (and more) | Projectors or TVs, 1080p60       | Main        | Identical content                                                            |
+| Stage                       | TV facing the platform           | Stage       | Lyrics, clock, timers, messages                                              |
+| Lobby, Overflow             | TVs in other rooms               | Lower third | Lower-third lyrics over a holding slide or announcement loop                 |
+| Stream                      | Captured by OBS (window capture) | Stream      | Lower-third lyrics on a solid key colour, everything else transparent to OBS |
 
 The stream output can be a window on a display OBS captures, or a window on the
 operator's monitor that OBS captures by title. Window capture at 1080p60 is the supported
@@ -21,15 +21,15 @@ method; WebRTC push is out of scope.
 
 A look is a per-output configuration:
 
-| Setting | Main | Stage | Lower third | Stream |
-| --- | --- | --- | --- | --- |
-| Background layer | Shown | Hidden | Hidden; a holding slide or the announcement loop instead | Hidden; key colour fill |
-| Slide layer | Full slide as authored | Lyric text only, restyled: current slide large, next slide smaller below | Lyric text only, restyled into a band at the bottom | Same as lower third |
-| Lower third layer | Shown if the operator sends one | Hidden | Shown | Shown |
-| Media layer | Shown | Hidden, except video remaining time | Hidden by default, per-item option | Hidden |
-| Props layer | Shown (logo, countdown to service) | Clock, timers, messages | Countdown to service | Hidden |
-| Clear to black | Black | Black | Black | Key colour |
-| Transition | Crossfade, duration per look (default 300 ms) | Cut | Crossfade | Crossfade |
+| Setting           | Main                                          | Stage                                                                    | Lower third                                              | Stream                  |
+| ----------------- | --------------------------------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------- | ----------------------- |
+| Background layer  | Shown                                         | Hidden                                                                   | Hidden; a holding slide or the announcement loop instead | Hidden; key colour fill |
+| Slide layer       | Full slide as authored                        | Lyric text only, restyled: current slide large, next slide smaller below | Lyric text only, restyled into a band at the bottom      | Same as lower third     |
+| Lower third layer | Shown if the operator sends one               | Hidden                                                                   | Shown                                                    | Shown                   |
+| Media layer       | Shown                                         | Hidden, except video remaining time                                      | Hidden by default, per-item option                       | Hidden                  |
+| Props layer       | Shown (logo, countdown to service)            | Clock, timers, messages                                                  | Countdown to service                                     | Hidden                  |
+| Clear to black    | Black                                         | Black                                                                    | Black                                                    | Key colour              |
+| Transition        | Crossfade, duration per look (default 300 ms) | Cut                                                                      | Crossfade                                                | Crossfade               |
 
 - The Main look renders the slide as authored, every object.
 - Lyric-only looks read the slide's lyric box text and typeset it with the look's own

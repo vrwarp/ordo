@@ -6,14 +6,33 @@
 
 ```ts
 type ActionId =
-  | 'go' | 'next' | 'prev' | 'nextItem' | 'prevItem'
-  | 'goToSection' /* arg: sectionIndex */ | 'goToSlide' /* arg: n */
-  | 'clearSlide' | 'clearAll' | 'clearLowerThird' | 'clearProps' | 'clearMedia' | 'clearBackground'
-  | 'logo' | 'mediaPlayPause' | 'mediaRestart'
-  | 'timerStart' | 'timerStop' | 'timerReset' /* arg: timerId */
-  | 'messagePreset' /* arg: index */ | 'messageDismiss'
-  | 'audioMute' | 'audioMasterUp' | 'audioMasterDown' | 'audioFadeOut'
-  | 'launchOutputs' | 'relaunchOutputs';
+  | 'go'
+  | 'next'
+  | 'prev'
+  | 'nextItem'
+  | 'prevItem'
+  | 'goToSection' /* arg: sectionIndex */
+  | 'goToSlide' /* arg: n */
+  | 'clearSlide'
+  | 'clearAll'
+  | 'clearLowerThird'
+  | 'clearProps'
+  | 'clearMedia'
+  | 'clearBackground'
+  | 'logo'
+  | 'mediaPlayPause'
+  | 'mediaRestart'
+  | 'timerStart'
+  | 'timerStop'
+  | 'timerReset' /* arg: timerId */
+  | 'messagePreset' /* arg: index */
+  | 'messageDismiss'
+  | 'audioMute'
+  | 'audioMasterUp'
+  | 'audioMasterDown'
+  | 'audioFadeOut'
+  | 'launchOutputs'
+  | 'relaunchOutputs';
 type Action = { id: ActionId; arg?: number | string };
 ```
 

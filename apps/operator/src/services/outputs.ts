@@ -14,6 +14,7 @@ import { saveSettings, settings } from '../state/library.ts';
 import { toast } from '../state/toasts.ts';
 import type { Controller } from './controller.ts';
 import { log } from './log.ts';
+import { markLaunched } from './reacquire.ts';
 
 type ScreenDetailed = ScreenInfo & { availLeft?: number; availTop?: number };
 type WindowWithScreens = Window & {
@@ -60,7 +61,15 @@ export class OutputWindows {
     const w = window as WindowWithScreens;
     if (typeof w.getScreenDetails === 'function') {
       try {
-        const d = await w.getScreenDetails();
+        // A pending permission prompt never resolves on its own. Give up after 4 s (still inside the
+        // click's transient activation, so window.open keeps working) and place on this screen;
+        // once the prompt is answered, the next Launch uses every screen.
+        const d = await Promise.race([
+          w.getScreenDetails(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('permission prompt pending')), 4000),
+          ),
+        ]);
         useLaunch.setState({ permission: 'granted' });
         return d.screens.map((s) => ({
           label: s.label,
@@ -112,6 +121,7 @@ export class OutputWindows {
       const unmatched = plan.filter((p) => !p.matched);
       useLaunch.setState({ unmatched, screens });
       log('info', `launched ${plan.length} windows (${unmatched.length} need placement)`);
+      if (plan.length) markLaunched(true);
     } finally {
       useLaunch.setState({ busy: false });
       this.refreshOpen();
@@ -178,6 +188,7 @@ export class OutputWindows {
 
   closeAll(): void {
     for (const id of [...this.windows.keys()]) this.closeOne(id);
+    markLaunched(false);
     // Windows opened by a previous operator page are reachable by name only through window.open.
     this.refreshOpen();
   }

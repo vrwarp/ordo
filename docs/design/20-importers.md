@@ -12,16 +12,16 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
   the import log.
 - Mapping:
 
-| ProPresenter 7 | ordo |
-| --- | --- |
-| `Presentation.name`, `ccli`, `copyright`, `author` | `title`, `meta` |
-| `cue_groups` (group name) → cues | `Section` with the group label; each cue's slide → `Slide` |
-| `Slide.elements` of type text: `rect` and `text` (RTF) | `TextObject`: box from `rect`; text, font family, size, colour, outline, shadow parsed from the RTF and from `attributes` where present. Unparsed RTF attributes are logged |
-| `Slide.elements` of type image or video | `ImageObject` or slide background; the media file is located by path relative to the import root and uploaded |
-| `Presentation.background` | `backgroundMediaId` |
-| `arrangements` | `Arrangement[]` |
-| Playlists referencing `.pro` by UUID | `Playlist` items referencing imported presentations |
-| Builds, transitions per slide, macros, timers, looks, stage layouts, audio routing | Skipped, logged |
+| ProPresenter 7                                                                     | ordo                                                                                                                                                                        |
+| ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Presentation.name`, `ccli`, `copyright`, `author`                                 | `title`, `meta`                                                                                                                                                             |
+| `cue_groups` (group name) → cues                                                   | `Section` with the group label; each cue's slide → `Slide`                                                                                                                  |
+| `Slide.elements` of type text: `rect` and `text` (RTF)                             | `TextObject`: box from `rect`; text, font family, size, colour, outline, shadow parsed from the RTF and from `attributes` where present. Unparsed RTF attributes are logged |
+| `Slide.elements` of type image or video                                            | `ImageObject` or slide background; the media file is located by path relative to the import root and uploaded                                                               |
+| `Presentation.background`                                                          | `backgroundMediaId`                                                                                                                                                         |
+| `arrangements`                                                                     | `Arrangement[]`                                                                                                                                                             |
+| Playlists referencing `.pro` by UUID                                               | `Playlist` items referencing imported presentations                                                                                                                         |
+| Builds, transitions per slide, macros, timers, looks, stage layouts, audio routing | Skipped, logged                                                                                                                                                             |
 
 - RTF: a small RTF reader extracts plain text and the first run's font, size and colour;
   mixed runs collapse to the first run's style with a log line.

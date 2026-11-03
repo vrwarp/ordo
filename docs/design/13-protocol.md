@@ -6,31 +6,31 @@ and on the fallback bus (`postMessage`), so outputs have one receive path.
 
 ## Client to hub
 
-| `t` | From | Payload | Notes |
-| --- | --- | --- | --- |
-| `hello` | all | `{ role, outputId?, appVersion, lastSeq? }` | First message. Hub replies `welcome` |
-| `time.ping` | all | `{ c: clientSentMs }` | Hub replies `time.pong { c, s: hubMs }` |
-| `live.event` | operator | `{ id, event: LiveEvent, clientSeq }` | A reducer event. Hub applies, journals, broadcasts |
-| `live.resync` | any | `{}` | Ask for a full state |
-| `health` | output, stage | `OutputHealth` minus `lastSeenHub` | Once per second |
-| `cache.progress` | output, operator | `{ ready, total }` | During service cache fill |
-| `rtc.signal` | operator, output | `{ to: outputId | 'operator', sdp?, ice? }` | Program-view signalling |
-| `surface.event` | operator | `{ device, control, value }` | Optional telemetry of surface presses |
+| `t`              | From             | Payload                                     | Notes                                              |
+| ---------------- | ---------------- | ------------------------------------------- | -------------------------------------------------- |
+| `hello`          | all              | `{ role, outputId?, appVersion, lastSeq? }` | First message. Hub replies `welcome`               |
+| `time.ping`      | all              | `{ c: clientSentMs }`                       | Hub replies `time.pong { c, s: hubMs }`            |
+| `live.event`     | operator         | `{ id, event: LiveEvent, clientSeq }`       | A reducer event. Hub applies, journals, broadcasts |
+| `live.resync`    | any              | `{}`                                        | Ask for a full state                               |
+| `health`         | output, stage    | `OutputHealth` minus `lastSeenHub`          | Once per second                                    |
+| `cache.progress` | output, operator | `{ ready, total }`                          | During service cache fill                          |
+| `rtc.signal`     | operator, output | `{ to: outputId                             | 'operator', sdp?, ice? }`                          | Program-view signalling |
+| `surface.event`  | operator         | `{ device, control, value }`                | Optional telemetry of surface presses              |
 
 ## Hub to client
 
-| `t` | Payload | Notes |
-| --- | --- | --- |
-| `welcome` | `{ hubMs, seq, role, outputs: OutputRegistry }` | Followed by `live.state` |
-| `live.state` | `{ seq, state: LiveState }` | Full state; sent on connect, resync, overflow |
-| `live.delta` | `{ seq, fromSeq, event: LiveEvent, at: hubMs }` | One applied event. Clients apply via the shared reducer; a gap in `fromSeq` triggers `live.resync` |
-| `live.ack` | `{ id, seq | rejected: reason }` | Reply to the operator's `live.event` |
-| `library.delta` | `{ seq, changes: [{ kind, id, rev, entity | deleted }] }` | Library changes for cache maintenance |
-| `cache.manifest` | `ManifestRef` | New live manifest |
-| `health.summary` | `{ outputs: Record<Id, OutputHealth> }` | To the operator, once per second |
-| `rtc.signal` | as above | Relayed |
-| `time.pong` | `{ c, s }` | |
-| `bye` | `{ reason }` | Before the hub closes a socket |
+| `t`              | Payload                                         | Notes                                                                                              |
+| ---------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `welcome`        | `{ hubMs, seq, role, outputs: OutputRegistry }` | Followed by `live.state`                                                                           |
+| `live.state`     | `{ seq, state: LiveState }`                     | Full state; sent on connect, resync, overflow                                                      |
+| `live.delta`     | `{ seq, fromSeq, event: LiveEvent, at: hubMs }` | One applied event. Clients apply via the shared reducer; a gap in `fromSeq` triggers `live.resync` |
+| `live.ack`       | `{ id, seq                                      | rejected: reason }`                                                                                | Reply to the operator's `live.event`  |
+| `library.delta`  | `{ seq, changes: [{ kind, id, rev, entity       | deleted }] }`                                                                                      | Library changes for cache maintenance |
+| `cache.manifest` | `ManifestRef`                                   | New live manifest                                                                                  |
+| `health.summary` | `{ outputs: Record<Id, OutputHealth> }`         | To the operator, once per second                                                                   |
+| `rtc.signal`     | as above                                        | Relayed                                                                                            |
+| `time.pong`      | `{ c, s }`                                      |                                                                                                    |
+| `bye`            | `{ reason }`                                    | Before the hub closes a socket                                                                     |
 
 ## Live events (reducer input)
 
@@ -38,17 +38,22 @@ and on the fallback bus (`postMessage`), so outputs have one receive path.
 type LiveEvent =
   | { k: 'goLive'; playlistId: Id; resolved: ResolvedPlaylist; manifest: ManifestRef }
   | { k: 'endService' }
-  | { k: 'select'; cueIndex: number }                 // arms
-  | { k: 'go'; cueIndex: number; at: number }         // at = hub ms, ~2 frames ahead
-  | { k: 'next' } | { k: 'prev' } | { k: 'nextItem' } | { k: 'prevItem' }
+  | { k: 'select'; cueIndex: number } // arms
+  | { k: 'go'; cueIndex: number; at: number } // at = hub ms, ~2 frames ahead
+  | { k: 'next' }
+  | { k: 'prev' }
+  | { k: 'nextItem' }
+  | { k: 'prevItem' }
   | { k: 'clear'; layer: 'slide' | 'lowerThird' | 'props' | 'media' | 'background' | 'all'; at: number }
   | { k: 'logo'; at: number }
   | { k: 'lowerThird'; text?: string; presentationId?: Id; at: number }
   | { k: 'media.play' | 'media.pause' | 'media.restart'; at: number }
-  | { k: 'media.ended'; cueIndex: number }            // from the audio master output
+  | { k: 'media.ended'; cueIndex: number } // from the audio master output
   | { k: 'timer.start' | 'timer.stop' | 'timer.reset'; timerId: Id; at: number }
-  | { k: 'message.send'; id: Id; text: string; ttlMs?: number } | { k: 'message.dismiss'; id: Id }
-  | { k: 'output.register'; output: Output } | { k: 'output.health'; outputId: Id; health: OutputHealth }
+  | { k: 'message.send'; id: Id; text: string; ttlMs?: number }
+  | { k: 'message.dismiss'; id: Id }
+  | { k: 'output.register'; output: Output }
+  | { k: 'output.health'; outputId: Id; health: OutputHealth }
   | { k: 'output.armed'; outputId: Id; cueIndex: number; ok: boolean; error?: string };
 ```
 

@@ -14,7 +14,6 @@
     "@ordo/live-state": "workspace:*",
     "@ordo/cache": "workspace:*",
     "@ordo/renderer": "workspace:*",
-    "@ordo/ui": "workspace:*",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "@ordo/client": "workspace:*"

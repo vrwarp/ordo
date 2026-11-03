@@ -5,9 +5,9 @@ services:
     container_name: ordo-hub
     restart: unless-stopped
     environment:
-      ORDO_DOMAIN: venue.synology.me        # your DDNS name; role hosts are op., hub., stage., out1..6.
-      ORDO_TRUSTED_PROXY: 172.16.0.0/12     # DSM reverse proxy source on the Docker bridge
-      ORDO_TZ: America/Los_Angeles          # venue time zone (nightly backup at 03:00)
+      ORDO_DOMAIN: venue.synology.me # your DDNS name; role hosts are op., hub., stage., out1..6.
+      ORDO_TRUSTED_PROXY: 172.16.0.0/12 # DSM reverse proxy source on the Docker bridge
+      ORDO_TZ: America/Los_Angeles # venue time zone (nightly backup at 03:00)
       ORDO_PORT: "8080"
     volumes:
       - /volume1/docker/ordo/data:/data

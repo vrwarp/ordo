@@ -15,16 +15,16 @@ hot fallback. Reliability requirements are therefore measurable, not aspirationa
 
 ## Continuity
 
-| Fault | Required behaviour |
-| --- | --- |
-| WAN drops | Nothing changes. The hub is on the LAN. Public hostnames already resolved stay usable; reconnects work because the operator PC holds a hosts-file entry for the hub names (install step) in addition to the browser-side fallback |
+| Fault                                                          | Required behaviour                                                                                                                                                                                                                                                                            |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| WAN drops                                                      | Nothing changes. The hub is on the LAN. Public hostnames already resolved stay usable; reconnects work because the operator PC holds a hosts-file entry for the hub names (install step) in addition to the browser-side fallback                                                             |
 | Hub unreachable (NAS down, DSM restart, reverse proxy failure) | Operator and outputs continue from the service cache. The operator becomes the bus through the fallback channel ([design/17](../design/17-offline-and-degraded.md)). All cues, clears, timers and messages keep working on this PC. Stage tablets elsewhere would be lost; the venue has none |
-| Hub returns | Operator reconciles: hub adopts the operator's live state. No visible change on outputs |
-| An output crashes or its GPU device is lost | Other outputs are unaffected (separate processes). The output rebuilds and re-arms; the operator sees a red dot then green. Relaunch outputs fixes anything the output cannot |
-| Operator tab crashes or is reloaded | Outputs keep showing the live cue. Operator reloads from the hub (or from local cache if the hub is down), restores selection, and re-acquires the output windows through relaunch if needed |
-| Chrome quits | Reopening Chrome and clicking Launch outputs restores the service in under 15 s |
-| Audio device unplugged | Picture continues, audio resumes on reconnect |
-| Disk full on the NAS | Live state continues (in memory); uploads fail with a clear error |
+| Hub returns                                                    | Operator reconciles: hub adopts the operator's live state. No visible change on outputs                                                                                                                                                                                                       |
+| An output crashes or its GPU device is lost                    | Other outputs are unaffected (separate processes). The output rebuilds and re-arms; the operator sees a red dot then green. Relaunch outputs fixes anything the output cannot                                                                                                                 |
+| Operator tab crashes or is reloaded                            | Outputs keep showing the live cue. Operator reloads from the hub (or from local cache if the hub is down), restores selection, and re-acquires the output windows through relaunch if needed                                                                                                  |
+| Chrome quits                                                   | Reopening Chrome and clicking Launch outputs restores the service in under 15 s                                                                                                                                                                                                               |
+| Audio device unplugged                                         | Picture continues, audio resumes on reconnect                                                                                                                                                                                                                                                 |
+| Disk full on the NAS                                           | Live state continues (in memory); uploads fail with a clear error                                                                                                                                                                                                                             |
 
 ## Service cache
 

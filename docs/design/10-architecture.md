@@ -34,12 +34,12 @@ the fallback bus added for hub loss.
 
 Each role gets its own origin so Chrome can put it in its own renderer process:
 
-| Role | Hostname | Process isolation reason |
-| --- | --- | --- |
-| Operator and editor | `op.<venue>.synology.me` | Heavy UI, search index, editor; must never share a heap with an output |
-| Output k (k = 1..6) | `out<k>.<venue>.synology.me` | Each output isolated from the others and from the operator |
-| Stage | `stage.<venue>.synology.me` | Separate, lightweight |
-| Hub API | `hub.<venue>.synology.me` | Cookie scope for sessions; WebSocket endpoint |
+| Role                | Hostname                     | Process isolation reason                                               |
+| ------------------- | ---------------------------- | ---------------------------------------------------------------------- |
+| Operator and editor | `op.<venue>.synology.me`     | Heavy UI, search index, editor; must never share a heap with an output |
+| Output k (k = 1..6) | `out<k>.<venue>.synology.me` | Each output isolated from the others and from the operator             |
+| Stage               | `stage.<venue>.synology.me`  | Separate, lightweight                                                  |
+| Hub API             | `hub.<venue>.synology.me`    | Cookie scope for sessions; WebSocket endpoint                          |
 
 Every page is served with `Origin-Agent-Cluster: ?1` so each origin is an origin-keyed
 agent cluster and Chrome isolates them by process. Outputs are opened by the operator
@@ -56,22 +56,22 @@ cover the venue with headroom.
 
 pnpm workspace, TypeScript everywhere, Vite for the browser apps.
 
-| Path | What | Runtime |
-| --- | --- | --- |
-| `apps/hub` | Hub service: Fastify HTTP, `ws` WebSocket, better-sqlite3, media jobs | Node 22 in Docker |
-| `apps/operator` | Operator view and editor, React 19 | Chrome |
-| `apps/output` | Output window: a thin main thread, render worker, asset worker | Chrome |
-| `apps/stage` | Stage display, React, DOM/CSS only | Chrome |
-| `packages/domain` | Entity types and Zod schemas, arrangement expansion, lyric parser, slide layout maths | Shared |
-| `packages/protocol` | WebSocket and fallback-bus message schemas, versioning | Shared |
-| `packages/live-state` | The live-state reducer: pure function of (state, event) used identically by hub, operator and outputs | Shared |
-| `packages/renderer` | WebGPU compositor, layer stacks, transitions, text rasterizer, video sources | Chrome (worker) |
-| `packages/cache` | Service cache: manifest handling, OPFS and Cache API storage, integrity | Chrome |
-| `packages/audio` | Web Audio engine: device selection, channel matrix, sources, meters | Chrome |
-| `packages/surfaces` | Action vocabulary, keyboard map, Stream Deck (WebHID), Web MIDI with learn | Chrome |
-| `packages/importers` | ProPresenter 7 (protobuf), SongSelect text and ChordPro, PPTX text extraction | Node and Chrome |
-| `packages/ui` | Shared React components and theme | Chrome |
-| `tools/soak` | Soak test runner and telemetry report | Node + Playwright |
+| Path                  | What                                                                                                  | Runtime           |
+| --------------------- | ----------------------------------------------------------------------------------------------------- | ----------------- |
+| `apps/hub`            | Hub service: Fastify HTTP, `ws` WebSocket, better-sqlite3, media jobs                                 | Node 22 in Docker |
+| `apps/operator`       | Operator view and editor, React 19                                                                    | Chrome            |
+| `apps/output`         | Output window: a thin main thread, render worker, asset worker                                        | Chrome            |
+| `apps/stage`          | Stage display, React, DOM/CSS only                                                                    | Chrome            |
+| `packages/domain`     | Entity types and Zod schemas, arrangement expansion, lyric parser, slide layout maths                 | Shared            |
+| `packages/protocol`   | WebSocket and fallback-bus message schemas, versioning                                                | Shared            |
+| `packages/live-state` | The live-state reducer: pure function of (state, event) used identically by hub, operator and outputs | Shared            |
+| `packages/renderer`   | WebGPU compositor, layer stacks, transitions, text rasterizer, video sources                          | Chrome (worker)   |
+| `packages/cache`      | Service cache: manifest handling, OPFS and Cache API storage, integrity                               | Chrome            |
+| `packages/audio`      | Web Audio engine: device selection, channel matrix, sources, meters                                   | Chrome            |
+| `packages/surfaces`   | Action vocabulary, keyboard map, Stream Deck (WebHID), Web MIDI with learn                            | Chrome            |
+| `packages/importers`  | ProPresenter 7 (protobuf), SongSelect text and ChordPro, PPTX text extraction                         | Node and Chrome   |
+| `packages/ui`         | Shared React components and theme                                                                     | Chrome            |
+| `tools/soak`          | Soak test runner and telemetry report                                                                 | Node + Playwright |
 
 ## Data flow
 
@@ -101,20 +101,20 @@ directly.
 
 ## State ownership
 
-| State | Owner | Persisted |
-| --- | --- | --- |
-| Library | Hub (SQLite) | Yes, with revisions |
+| State                                                                                            | Owner                      | Persisted                     |
+| ------------------------------------------------------------------------------------------------ | -------------------------- | ----------------------------- |
+| Library                                                                                          | Hub (SQLite)               | Yes, with revisions           |
 | Live state (live playlist, live and armed cues, layer states, timers, messages, output registry) | Hub, by the shared reducer | Journal in SQLite; replayable |
-| Operator UI state (selection, panels) | Operator | IndexedDB |
-| Output local state (cached assets, device) | Output | OPFS |
-| Settings (looks, outputs, audio, key maps, PINs) | Hub | Yes |
+| Operator UI state (selection, panels)                                                            | Operator                   | IndexedDB                     |
+| Output local state (cached assets, device)                                                       | Output                     | OPFS                          |
+| Settings (looks, outputs, audio, key maps, PINs)                                                 | Hub                        | Yes                           |
 
 ## What the founding document said, and what changed
 
-| Topic | Founding doc | This design | ADR |
-| --- | --- | --- | --- |
-| Opening outputs | `noopener` | Keep opener for the fallback bus; isolation via origin-keyed agent clusters | 0003 |
-| Text rendering | DOM/CSS layer on the output main thread | Rasterized at arm time into textures and composited in WebGPU; DOM layer only for diagnostics | 0004 |
-| Video decode | WebCodecs in a decode worker | `<video>` element plus `requestVideoFrameCallback` on the otherwise idle output main thread for the prototype; WebCodecs ring buffer is the M2 upgrade if telemetry shows jitter | 0005 |
-| TLS | Caddy with DNS-01 | DSM reverse proxy with the DSM-issued wildcard certificate | 0002 |
-| Degraded mode | BroadcastChannel | postMessage over opener handles (BroadcastChannel cannot cross origins) | 0003 |
+| Topic           | Founding doc                            | This design                                                                                                                                                                      | ADR  |
+| --------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| Opening outputs | `noopener`                              | Keep opener for the fallback bus; isolation via origin-keyed agent clusters                                                                                                      | 0003 |
+| Text rendering  | DOM/CSS layer on the output main thread | Rasterized at arm time into textures and composited in WebGPU; DOM layer only for diagnostics                                                                                    | 0004 |
+| Video decode    | WebCodecs in a decode worker            | `<video>` element plus `requestVideoFrameCallback` on the otherwise idle output main thread for the prototype; WebCodecs ring buffer is the M2 upgrade if telemetry shows jitter | 0005 |
+| TLS             | Caddy with DNS-01                       | DSM reverse proxy with the DSM-issued wildcard certificate                                                                                                                       | 0002 |
+| Degraded mode   | BroadcastChannel                        | postMessage over opener handles (BroadcastChannel cannot cross origins)                                                                                                          | 0003 |

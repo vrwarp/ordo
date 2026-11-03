@@ -120,9 +120,6 @@ importers:
       '@ordo/surfaces':
         specifier: workspace:*
         version: link:../../packages/surfaces
-      '@ordo/ui':
-        specifier: workspace:*
-        version: link:../../packages/ui
       dexie:
         specifier: ^4.4.7
         version: 4.4.7
@@ -224,9 +221,6 @@ importers:
       '@ordo/renderer':
         specifier: workspace:*
         version: link:../../packages/renderer
-      '@ordo/ui':
-        specifier: workspace:*
-        version: link:../../packages/ui
       react:
         specifier: ^19.3.1
         version: 19.3.1
@@ -344,19 +338,6 @@ importers:
       '@types/w3c-web-hid':
         specifier: ^1.0.7
         version: 1.0.7
-
-  packages/ui:
-    dependencies:
-      '@ordo/domain':
-        specifier: workspace:*
-        version: link:../domain
-      react:
-        specifier: ^19.3.1
-        version: 19.3.1
-    devDependencies:
-      '@types/react':
-        specifier: ^19.3.0
-        version: 19.3.0
 
   tools/soak:
     dependencies:

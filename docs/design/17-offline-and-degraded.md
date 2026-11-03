@@ -7,11 +7,11 @@ presentation PC if the WAN drops and if the hub becomes unreachable.
 
 Filled on `goLive` from the manifest ([design/12](12-hub.md)).
 
-| Window | Store | Contents |
-| --- | --- | --- |
-| Outputs | OPFS, keyed by hash | Every file in the manifest; fonts loaded into `FontFaceSet` |
+| Window   | Store                                                                           | Contents                                                                    |
+| -------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Outputs  | OPFS, keyed by hash                                                             | Every file in the manifest; fonts loaded into `FontFaceSet`                 |
 | Operator | IndexedDB (library snapshot, resolved playlist, manifest) and Cache API (files) | Everything needed to re-render thumbnails and to serve the outputs if asked |
-| Stage | Cache API | Fonts and look |
+| Stage    | Cache API                                                                       | Fonts and look                                                              |
 
 Each window reports `cache.progress`. The top bar shows the minimum across windows.
 The apps themselves are served by a Service Worker per origin that precaches the app

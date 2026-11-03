@@ -11,7 +11,15 @@ import { writeFileSync } from 'node:fs';
 import { chromium, type Page } from 'playwright';
 import { type Sample, type SoakReport, summarize, toMarkdown } from './report.ts';
 
-type Args = { hub: string; pin: string; playlist: string; minutes: number; interval: number; headless: boolean; out: string };
+type Args = {
+  hub: string;
+  pin: string;
+  playlist: string;
+  minutes: number;
+  interval: number;
+  headless: boolean;
+  out: string;
+};
 
 function parseArgs(argv: string[]): Args {
   const get = (k: string, d?: string) => {
@@ -33,7 +41,9 @@ function parseArgs(argv: string[]): Args {
 async function main(): Promise<void> {
   const a = parseArgs(process.argv.slice(2));
   if (!a.pin || !a.playlist) {
-    console.error('usage: soak --hub <origin> --pin <operate pin> --playlist <id or name> [--minutes 60] [--interval 10] [--headless]');
+    console.error(
+      'usage: soak --hub <origin> --pin <operate pin> --playlist <id or name> [--minutes 60] [--interval 10] [--headless]',
+    );
     process.exit(2);
   }
   const browser = await chromium.launch({
@@ -64,13 +74,23 @@ async function main(): Promise<void> {
   const me = await api<{ domain: string }>('GET', '/auth/me');
   const snapshot = await api<{
     playlists: { id: string; name: string }[];
-    settings: { outputs: { id: string; name: string; kind: string; hostIndex: number; enabled: boolean; token?: string }[] };
+    settings: {
+      outputs: {
+        id: string;
+        name: string;
+        kind: string;
+        hostIndex: number;
+        enabled: boolean;
+        token?: string;
+      }[];
+    };
   }>('GET', '/library/snapshot');
   const pl = snapshot.playlists.find((p) => p.id === a.playlist || p.name === a.playlist);
   if (!pl) throw new Error(`playlist ${a.playlist} not found`);
 
   const live = await api<{ state: { mode: string } }>('GET', '/live');
-  if (live.state.mode === 'live') await api('POST', '/live/events', { id: 'soak-end', event: { k: 'endService', at: Date.now() } });
+  if (live.state.mode === 'live')
+    await api('POST', '/live/events', { id: 'soak-end', event: { k: 'endService', at: Date.now() } });
   await api('POST', '/live/events', { id: 'soak-golive', event: { k: 'goLive', playlistId: pl.id } });
 
   const hubUrl = new URL(a.hub);
@@ -92,7 +112,9 @@ async function main(): Promise<void> {
   for (const { page } of pages) {
     await page.waitForFunction(
       () => {
-        const t = (window as unknown as { __ordo?: { telemetry(): { cache?: { ready: number; total: number } } } }).__ordo?.telemetry();
+        const t = (
+          window as unknown as { __ordo?: { telemetry(): { cache?: { ready: number; total: number } } } }
+        ).__ordo?.telemetry();
         return !!t?.cache && t.cache.total > 0 && t.cache.ready >= t.cache.total;
       },
       undefined,
@@ -110,14 +132,19 @@ async function main(): Promise<void> {
     if (Date.now() >= nextGo) {
       const st = await api<{ state: { live?: number; cues: unknown[] } }>('GET', '/live');
       if (st.state.live !== undefined && st.state.live >= st.state.cues.length - 1)
-        await api('POST', '/live/events', { id: `soak-wrap-${gos}`, event: { k: 'go', cueIndex: 0, at: Date.now() + 50 } });
+        await api('POST', '/live/events', {
+          id: `soak-wrap-${gos}`,
+          event: { k: 'go', cueIndex: 0, at: Date.now() + 50 },
+        });
       else await api('POST', '/actions', { id: 'next' });
       gos++;
       nextGo += a.interval * 1000;
     }
     for (const { id, page } of pages) {
       const t = await page
-        .evaluate(() => (window as unknown as { __ordo?: { telemetry(): Record<string, unknown> } }).__ordo?.telemetry())
+        .evaluate(() =>
+          (window as unknown as { __ordo?: { telemetry(): Record<string, unknown> } }).__ordo?.telemetry(),
+        )
         .catch(() => undefined);
       if (!t) continue;
       const n = (k: string) => Number(t[k] ?? 0);
@@ -138,12 +165,20 @@ async function main(): Promise<void> {
   }
   console.log('');
   const summary = summarize(samples, names);
-  const report: SoakReport = { startedAt, minutes: a.minutes, gos, outputs: summary, pass: summary.length > 0 && summary.every((o) => o.pass) };
+  const report: SoakReport = {
+    startedAt,
+    minutes: a.minutes,
+    gos,
+    outputs: summary,
+    pass: summary.length > 0 && summary.every((o) => o.pass),
+  };
   const stamp = startedAt.replace(/[:.]/g, '-');
   writeFileSync(`${a.out}/soak-${stamp}.json`, JSON.stringify({ report, samples }, null, 2));
   writeFileSync(`${a.out}/soak-${stamp}.md`, toMarkdown(report));
   console.log(toMarkdown(report));
-  await api('POST', '/live/events', { id: 'soak-end', event: { k: 'endService', at: Date.now() } }).catch(() => undefined);
+  await api('POST', '/live/events', { id: 'soak-end', event: { k: 'endService', at: Date.now() } }).catch(
+    () => undefined,
+  );
   await browser.close();
   process.exit(report.pass ? 0 : 1);
 }

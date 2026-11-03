@@ -33,11 +33,11 @@ coordinates in the data model), with the slide's background shown behind.
 
 Objects, in z-order, each selectable, movable, resizable, rotatable:
 
-| Object | Properties |
-| --- | --- |
+| Object   | Properties                                                                                                                                                                                                                                |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Text box | Position, size, text, font family, size, weight, style, colour, alignment (horizontal and vertical), line height, letter spacing, outline (width, colour), shadow (offset, blur, colour), padding, fill colour and opacity, corner radius |
-| Image | Position, size, media reference, fit (contain, cover, stretch), opacity, corner radius |
-| Shape | Rectangle, ellipse, line; fill, stroke, opacity, corner radius |
+| Image    | Position, size, media reference, fit (contain, cover, stretch), opacity, corner radius                                                                                                                                                    |
+| Shape    | Rectangle, ellipse, line; fill, stroke, opacity, corner radius                                                                                                                                                                            |
 
 - Multiple text boxes per slide. The first text box of a song slide is the lyric box and
   is what the lower-third and stage looks read.

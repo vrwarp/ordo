@@ -8,11 +8,11 @@ and `docs/design/21-security.md`.
 
 The apps run on separate origins under your DDNS name, written `<venue>.synology.me` below:
 
-| Host | Serves |
-| --- | --- |
-| `op.<venue>.synology.me` | Operator app (also `hub.`) |
-| `out1.` … `out6.<venue>.synology.me` | Output windows |
-| `stage.<venue>.synology.me` | Stage display |
+| Host                                 | Serves                     |
+| ------------------------------------ | -------------------------- |
+| `op.<venue>.synology.me`             | Operator app (also `hub.`) |
+| `out1.` … `out6.<venue>.synology.me` | Output windows             |
+| `stage.<venue>.synology.me`          | Stage display              |
 
 1. DSM, Control Panel, External Access, DDNS: confirm the name and that `op.<venue>.synology.me` resolves
    from outside the LAN.
@@ -33,13 +33,13 @@ Include `/volume1/docker/ordo/data` in the venue's Hyper Backup task. The nightl
 
 Container Manager, Project, Create, with `deploy/compose.yaml` from this repo. Set:
 
-| Variable | Value |
-| --- | --- |
-| `ORDO_DOMAIN` | `<venue>.synology.me` |
+| Variable             | Value                                                                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ORDO_DOMAIN`        | `<venue>.synology.me`                                                                                                                      |
 | `ORDO_TRUSTED_PROXY` | `172.16.0.0/12` (requests from DSM's reverse proxy arrive from the Docker bridge). Only these addresses may set `X-Forwarded-For`/`-Proto` |
-| `ORDO_TZ` | The venue's IANA time zone, e.g. `America/Los_Angeles` |
-| `ORDO_PORT` | `8080` |
-| `ORDO_IMPORT_ROOTS` | Optional, colon separated. Folders `POST /import/pro7 {path}` may read from (default `/data/import:/import`) |
+| `ORDO_TZ`            | The venue's IANA time zone, e.g. `America/Los_Angeles`                                                                                     |
+| `ORDO_PORT`          | `8080`                                                                                                                                     |
+| `ORDO_IMPORT_ROOTS`  | Optional, colon separated. Folders `POST /import/pro7 {path}` may read from (default `/data/import:/import`)                               |
 
 The container publishes only `127.0.0.1:8080`, so the hub is reachable only through the reverse proxy.
 Never set `ORDO_DEV_PIN` in production.
@@ -49,15 +49,15 @@ Never set `ORDO_DEV_PIN` in production.
 Control Panel, Login Portal, Advanced, Reverse Proxy. Create one rule per hostname: `op`, `hub`,
 `stage`, `out1` … `out6`.
 
-| Field | Value |
-| --- | --- |
-| Source protocol / hostname / port | HTTPS / `<name>.<venue>.synology.me` / 443, enable HSTS |
-| Destination protocol / hostname / port | HTTP / `localhost` / 8080 |
-| Custom header (Create, WebSocket) | adds `Upgrade: $http_upgrade` and `Connection: $connection_upgrade` |
-| Custom header | `X-Forwarded-Proto: https` |
-| Custom header | `X-Forwarded-Host: $host` |
-| Advanced Settings, proxy timeouts | 3600 s (connect, send and read), so WebSockets are not cut |
-| Advanced Settings, max body size | large enough for video uploads, or use the resumable upload API |
+| Field                                  | Value                                                               |
+| -------------------------------------- | ------------------------------------------------------------------- |
+| Source protocol / hostname / port      | HTTPS / `<name>.<venue>.synology.me` / 443, enable HSTS             |
+| Destination protocol / hostname / port | HTTP / `localhost` / 8080                                           |
+| Custom header (Create, WebSocket)      | adds `Upgrade: $http_upgrade` and `Connection: $connection_upgrade` |
+| Custom header                          | `X-Forwarded-Proto: https`                                          |
+| Custom header                          | `X-Forwarded-Host: $host`                                           |
+| Advanced Settings, proxy timeouts      | 3600 s (connect, send and read), so WebSockets are not cut          |
+| Advanced Settings, max body size       | large enough for video uploads, or use the resumable upload API     |
 
 Assign the wildcard certificate to every rule (Security, Certificate, Settings).
 

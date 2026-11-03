@@ -2,13 +2,13 @@
 
 ## Layers
 
-| Layer | Tool | Scope |
-| --- | --- | --- |
-| Unit | Vitest | `packages/domain` (parsers, arrangement expansion, layout maths), `packages/live-state` (reducer determinism, property tests with fast-check), `packages/protocol` (schema round-trips), `packages/importers` (fixtures), hub services with an in-memory SQLite |
-| Integration | Vitest + a real hub process | HTTP API with auth and roles, WebSocket sequencing, media jobs with tiny fixture files |
-| End to end | Playwright, headless Chromium with `--enable-unsafe-webgpu --use-angle=swiftshader` in CI, real GPU locally | Operator + 2 outputs + stage in one browser context with separate origins served by the hub under test; GO timing, clears, looks, degraded mode, relaunch |
-| Soak | `tools/soak` (Playwright, real GPU on the venue PC or a dev machine) | 60+ minutes of the live playlist with motion backgrounds, GO every 10 s; asserts zero missed frames and zero long tasks from telemetry |
-| Visual | Playwright screenshots of outputs vs golden PNGs | Text rasterizer and looks; per-pixel tolerance for anti-aliasing |
+| Layer       | Tool                                                                                                        | Scope                                                                                                                                                                                                                                                           |
+| ----------- | ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit        | Vitest                                                                                                      | `packages/domain` (parsers, arrangement expansion, layout maths), `packages/live-state` (reducer determinism, property tests with fast-check), `packages/protocol` (schema round-trips), `packages/importers` (fixtures), hub services with an in-memory SQLite |
+| Integration | Vitest + a real hub process                                                                                 | HTTP API with auth and roles, WebSocket sequencing, media jobs with tiny fixture files                                                                                                                                                                          |
+| End to end  | Playwright, headless Chromium with `--enable-unsafe-webgpu --use-angle=swiftshader` in CI, real GPU locally | Operator + 2 outputs + stage in one browser context with separate origins served by the hub under test; GO timing, clears, looks, degraded mode, relaunch                                                                                                       |
+| Soak        | `tools/soak` (Playwright, real GPU on the venue PC or a dev machine)                                        | 60+ minutes of the live playlist with motion backgrounds, GO every 10 s; asserts zero missed frames and zero long tasks from telemetry                                                                                                                          |
+| Visual      | Playwright screenshots of outputs vs golden PNGs                                                            | Text rasterizer and looks; per-pixel tolerance for anti-aliasing                                                                                                                                                                                                |
 
 ## Multi-origin in tests
 

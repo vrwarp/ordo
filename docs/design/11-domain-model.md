@@ -10,15 +10,17 @@ columns. Identifiers are ULIDs. Every stored entity carries `id`, `createdAt`,
 ```ts
 // Presentation
 type Presentation = {
-  id: Id; rev: number; title: string;
+  id: Id;
+  rev: number;
+  title: string;
   kind: 'song' | 'slides' | 'loop';
   meta: { author?: string; ccli?: string; copyright?: string; key?: string; tempo?: number; tags: string[] };
   folderId?: Id;
   themeId?: Id;
-  backgroundMediaId?: Id;          // default Background layer content
-  transition?: Transition;          // override of the look default
+  backgroundMediaId?: Id; // default Background layer content
+  transition?: Transition; // override of the look default
   sections: Section[];
-  arrangements: Arrangement[];      // arrangements[0] is the default (authoring order)
+  arrangements: Arrangement[]; // arrangements[0] is the default (authoring order)
   loop?: { defaultSlideMs: number };
   source?: { kind: 'pro7' | 'songselect' | 'pptx' | 'pdf' | 'manual'; fileId?: Id; log?: string };
   archived: boolean;
@@ -28,12 +30,12 @@ type Section = { id: Id; label: string; short: string; slides: Slide[] };
 
 type Slide = {
   id: Id;
-  objects: SlideObject[];           // z-order, first = back
-  lyricObjectId?: Id;               // which text box lyric-only looks read
-  backgroundMediaId?: Id;           // per-slide override, rare
-  durationMs?: number;              // for loop presentations
+  objects: SlideObject[]; // z-order, first = back
+  lyricObjectId?: Id; // which text box lyric-only looks read
+  backgroundMediaId?: Id; // per-slide override, rare
+  durationMs?: number; // for loop presentations
   notes?: string;
-  overrides?: string[];             // paths of theme properties overridden
+  overrides?: string[]; // paths of theme properties overridden
   imported?: { fileId: Id; page: number; imageMediaId: Id; textBoxes?: ExtractedText[] };
 };
 
@@ -41,40 +43,94 @@ type SlideObject = TextObject | ImageObject | ShapeObject;
 type Box = { x: number; y: number; w: number; h: number; rotation: number }; // 0..1920 x 0..1080 logical
 type TextObject = { id: Id; type: 'text'; box: Box; text: string; style: TextStyle; opacity: number };
 type TextStyle = {
-  fontFamily: string; fontWeight: number; fontStyle: 'normal' | 'italic'; fontSizePx: number;
-  color: Rgba; align: 'left' | 'center' | 'right'; valign: 'top' | 'middle' | 'bottom';
-  lineHeight: number; letterSpacing: number; padding: number;
-  outline?: { width: number; color: Rgba }; shadow?: { dx: number; dy: number; blur: number; color: Rgba };
+  fontFamily: string;
+  fontWeight: number;
+  fontStyle: 'normal' | 'italic';
+  fontSizePx: number;
+  color: Rgba;
+  align: 'left' | 'center' | 'right';
+  valign: 'top' | 'middle' | 'bottom';
+  lineHeight: number;
+  letterSpacing: number;
+  padding: number;
+  outline?: { width: number; color: Rgba };
+  shadow?: { dx: number; dy: number; blur: number; color: Rgba };
   fill?: { color: Rgba; radius: number };
 };
-type ImageObject = { id: Id; type: 'image'; box: Box; mediaId: Id; fit: 'contain' | 'cover' | 'stretch'; opacity: number; radius: number };
-type ShapeObject = { id: Id; type: 'shape'; box: Box; shape: 'rect' | 'ellipse' | 'line'; fill?: Rgba; stroke?: { width: number; color: Rgba }; opacity: number; radius: number };
+type ImageObject = {
+  id: Id;
+  type: 'image';
+  box: Box;
+  mediaId: Id;
+  fit: 'contain' | 'cover' | 'stretch';
+  opacity: number;
+  radius: number;
+};
+type ShapeObject = {
+  id: Id;
+  type: 'shape';
+  box: Box;
+  shape: 'rect' | 'ellipse' | 'line';
+  fill?: Rgba;
+  stroke?: { width: number; color: Rgba };
+  opacity: number;
+  radius: number;
+};
 
 type Arrangement = { id: Id; name: string; sectionIds: Id[] };
 
-type Theme = { id: Id; name: string; lyricBox: Box; text: TextStyle; textBoxDefaults: TextStyle; };
+type Theme = { id: Id; name: string; lyricBox: Box; text: TextStyle; textBoxDefaults: TextStyle };
 
 // Media
 type Media = {
-  id: Id; rev: number; name: string; tags: string[];
+  id: Id;
+  rev: number;
+  name: string;
+  tags: string[];
   kind: 'video' | 'image' | 'audio';
-  original: FileRef;                       // as uploaded
-  delivery?: FileRef;                      // transcoded, present when state = 'ready'
-  poster?: FileRef;                        // for video
-  state: 'uploaded' | 'processing' | 'ready' | 'failed'; error?: string;
-  durationMs?: number; width?: number; height?: number; hasAlpha?: boolean; loop: boolean;
+  original: FileRef; // as uploaded
+  delivery?: FileRef; // transcoded, present when state = 'ready'
+  poster?: FileRef; // for video
+  state: 'uploaded' | 'processing' | 'ready' | 'failed';
+  error?: string;
+  durationMs?: number;
+  width?: number;
+  height?: number;
+  hasAlpha?: boolean;
+  loop: boolean;
   isBackground: boolean;
   audio?: { pairId?: Id; gainDb: number; loudnessLufs?: number };
 };
-type FileRef = { hash: string; bytes: number; mime: string; path: string };   // hash = sha256, content addressed
+type FileRef = { hash: string; bytes: number; mime: string; path: string }; // hash = sha256, content addressed
 
-type Font = { id: Id; family: string; weight: number; style: 'normal' | 'italic'; file: FileRef; source: 'upload' | 'google' };
+type Font = {
+  id: Id;
+  family: string;
+  weight: number;
+  style: 'normal' | 'italic';
+  file: FileRef;
+  source: 'upload' | 'google';
+};
 
 // Playlists
-type Playlist = { id: Id; rev: number; name: string; serviceDate?: string; items: PlaylistItem[]; };
+type Playlist = { id: Id; rev: number; name: string; serviceDate?: string; items: PlaylistItem[] };
 type PlaylistItem =
-  | { id: Id; kind: 'presentation'; presentationId: Id; arrangementId?: Id; transition?: Transition; backgroundMediaId?: Id }
-  | { id: Id; kind: 'media'; mediaId: Id; loop?: boolean; onEnd?: 'hold' | 'black' | 'advance'; audio?: { pairId?: Id; gainDb?: number } }
+  | {
+      id: Id;
+      kind: 'presentation';
+      presentationId: Id;
+      arrangementId?: Id;
+      transition?: Transition;
+      backgroundMediaId?: Id;
+    }
+  | {
+      id: Id;
+      kind: 'media';
+      mediaId: Id;
+      loop?: boolean;
+      onEnd?: 'hold' | 'black' | 'advance';
+      audio?: { pairId?: Id; gainDb?: number };
+    }
   | { id: Id; kind: 'timer'; timer: TimerSpec }
   | { id: Id; kind: 'action'; action: ActionId };
 
@@ -84,26 +140,67 @@ type TimerSpec =
 
 // Outputs and looks
 type Look = {
-  id: Id; name: string;
-  layers: { background: LayerRule; slide: SlideRule; lowerThird: LayerRule; media: LayerRule; props: PropsRule };
-  clearColor: Rgba;                 // black, or the key colour
+  id: Id;
+  name: string;
+  layers: {
+    background: LayerRule;
+    slide: SlideRule;
+    lowerThird: LayerRule;
+    media: LayerRule;
+    props: PropsRule;
+  };
+  clearColor: Rgba; // black, or the key colour
   transition: Transition;
 };
 type LayerRule = { visible: boolean };
 type SlideRule =
   | { mode: 'authored' }
-  | { mode: 'lyricOnly'; style: TextStyle; band: Box; nextSlide?: { style: TextStyle; band: Box }; nonSong: 'text' | 'none' };
-type PropsRule = { logo: boolean; countdown: boolean; clock: boolean; messages: boolean; elapsed: boolean; style: Record<string, TextStyle & { box: Box }> };
+  | {
+      mode: 'lyricOnly';
+      style: TextStyle;
+      band: Box;
+      nextSlide?: { style: TextStyle; band: Box };
+      nonSong: 'text' | 'none';
+    };
+type PropsRule = {
+  logo: boolean;
+  countdown: boolean;
+  clock: boolean;
+  messages: boolean;
+  elapsed: boolean;
+  style: Record<string, TextStyle & { box: Box }>;
+};
 type Transition = { kind: 'cut' } | { kind: 'crossfade'; ms: number };
 
-type Output = { id: Id; name: string; hostIndex: number /* out<k> */; lookId: Id; screen?: ScreenRef; enabled: boolean; audioMaster: boolean; token: string };
+type Output = {
+  id: Id;
+  name: string;
+  hostIndex: number /* out<k> */;
+  lookId: Id;
+  screen?: ScreenRef;
+  enabled: boolean;
+  audioMaster: boolean;
+  token: string;
+};
 type ScreenRef = { label: string; left: number; top: number; width: number; height: number };
 
 // Audio
-type AudioSettings = { houseDeviceId?: string; previewDeviceId?: string; pairs: { id: Id; name: string; left: number; right: number }[]; defaultPairId?: Id; masterDb: number };
+type AudioSettings = {
+  houseDeviceId?: string;
+  previewDeviceId?: string;
+  pairs: { id: Id; name: string; left: number; right: number }[];
+  defaultPairId?: Id;
+  masterDb: number;
+};
 
 // Scripture (data model only in the prototype)
-type ScriptureRef = { translation: string; book: string; chapter: number; verseFrom: number; verseTo?: number };
+type ScriptureRef = {
+  translation: string;
+  book: string;
+  chapter: number;
+  verseFrom: number;
+  verseTo?: number;
+};
 type ScriptureSlideSource = { ref: ScriptureRef; text: string; fetchedAt: string; provider: string };
 // A slides presentation may carry `scripture?: ScriptureSlideSource` on each slide; a later
 // milestone adds a provider interface (API.Bible, ESV) in the hub that creates such presentations.
@@ -116,23 +213,54 @@ Owned by the hub (or the operator in fallback), produced by the pure reducer in
 
 ```ts
 type LiveState = {
-  seq: number;                       // increments on every applied event
-  playlist?: { id: Id; rev: number; items: ResolvedItem[] };   // frozen copy with presentations and arrangements expanded into cues
-  cues: Cue[];                       // flat, ordered; index is the operator's position
-  live?: CueRef; armed?: CueRef;     // CueRef = { cueIndex: number }
-  layers: { background?: LayerContent; slide?: LayerContent; lowerThird?: LayerContent; media?: LayerContent; props: PropsState };
-  media?: { cueIndex: number; state: 'playing' | 'paused' | 'ended'; startedAtHub: number; positionMs: number; loop: boolean };
+  seq: number; // increments on every applied event
+  playlist?: { id: Id; rev: number; items: ResolvedItem[] }; // frozen copy with presentations and arrangements expanded into cues
+  cues: Cue[]; // flat, ordered; index is the operator's position
+  live?: CueRef;
+  armed?: CueRef; // CueRef = { cueIndex: number }
+  layers: {
+    background?: LayerContent;
+    slide?: LayerContent;
+    lowerThird?: LayerContent;
+    media?: LayerContent;
+    props: PropsState;
+  };
+  media?: {
+    cueIndex: number;
+    state: 'playing' | 'paused' | 'ended';
+    startedAtHub: number;
+    positionMs: number;
+    loop: boolean;
+  };
   timers: Timer[];
   messages: StageMessage[];
   outputs: Record<Id, OutputHealth>;
   mode: 'idle' | 'live';
   cacheManifest?: ManifestRef;
 };
-type Cue = { index: number; itemId: Id; kind: 'slide' | 'media' | 'timer' | 'action'; presentationId?: Id; sectionId?: Id; slideId?: Id; label: string };
+type Cue = {
+  index: number;
+  itemId: Id;
+  kind: 'slide' | 'media' | 'timer' | 'action';
+  presentationId?: Id;
+  sectionId?: Id;
+  slideId?: Id;
+  label: string;
+};
 type LayerContent = { kind: 'slide' | 'media' | 'logo' | 'lowerThird'; ref: Id; sinceSeq: number };
 type Timer = { id: Id; spec: TimerSpec; startedAtHub?: number; endsAtHub?: number; running: boolean };
 type StageMessage = { id: Id; text: string; sentAtHub: number; expiresAtHub?: number };
-type OutputHealth = { connected: boolean; armed?: CueRef; live?: CueRef; presented: number; missed: number; longTasks: number; cache: { ready: number; total: number }; gpuLost: number; lastSeenHub: number };
+type OutputHealth = {
+  connected: boolean;
+  armed?: CueRef;
+  live?: CueRef;
+  presented: number;
+  missed: number;
+  longTasks: number;
+  cache: { ready: number; total: number };
+  gpuLost: number;
+  lastSeenHub: number;
+};
 ```
 
 The reducer handles events: `goLive(playlistId)`, `endService`, `select(cueIndex)`
