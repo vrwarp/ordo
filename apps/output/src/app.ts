@@ -1,5 +1,12 @@
 import { AudioEngine, type SourceHandle } from '@ordo/audio';
-import { type FillProgress, type FileStore, JsonStore, OpfsStore, fillCache, requestPersistence } from '@ordo/cache';
+import {
+  type FillProgress,
+  type FileStore,
+  JsonStore,
+  OpfsStore,
+  fillCache,
+  requestPersistence,
+} from '@ordo/cache';
 import { OutputLink, api, clock, fileUrl } from '@ordo/client';
 import {
   type Font,
@@ -157,8 +164,14 @@ export class OutputApp {
     this.mdPair = new SlotPair([this.slots[2]!, this.slots[3]!]);
     this.auPair = new SlotPair([this.slots[4]!, this.slots[5]!]);
 
-    this.render = new Worker(new URL('./render.worker.ts', import.meta.url), { type: 'module', name: 'ordo-render' });
-    this.asset = new Worker(new URL('./asset.worker.ts', import.meta.url), { type: 'module', name: 'ordo-asset' });
+    this.render = new Worker(new URL('./render.worker.ts', import.meta.url), {
+      type: 'module',
+      name: 'ordo-render',
+    });
+    this.asset = new Worker(new URL('./asset.worker.ts', import.meta.url), {
+      type: 'module',
+      name: 'ordo-asset',
+    });
     this.render.onmessage = (ev: MessageEvent<FromRender>) => this.onRender(ev.data);
     this.asset.onmessage = (ev: MessageEvent<FromAsset>) => this.onAsset(ev.data);
     this.render.onerror = (ev) => this.onFatal(`render worker: ${ev.message}`);
@@ -193,7 +206,9 @@ export class OutputApp {
     // Paint the cached live cue first (design/17: a relaunch shows the last content before anything else).
     const [cfg, saved] = await Promise.all([
       this.json.get<OutputConfigRes>(`config:${this.link.outputId}`).catch(() => undefined),
-      this.json.get<{ state: LiveState; savedAt: number }>(`state:${this.link.outputId}`).catch(() => undefined),
+      this.json
+        .get<{ state: LiveState; savedAt: number }>(`state:${this.link.outputId}`)
+        .catch(() => undefined),
     ]);
     if (cfg && !this.config) this.applyConfig(cfg);
     if (saved && Date.now() - saved.savedAt < STATE_CACHE_MAX_AGE_MS && !this.link.mirror.ready) {
@@ -227,7 +242,10 @@ export class OutputApp {
     this.scheduleProps();
     setTimeout(() => {
       if (this.tel.presented === 0)
-        this.diag.showFatal('This output has not presented a frame.', this.fatal ?? this.renderNote ?? 'Waiting for the renderer…');
+        this.diag.showFatal(
+          'This output has not presented a frame.',
+          this.fatal ?? this.renderNote ?? 'Waiting for the renderer…',
+        );
     }, 10_000);
   }
 
@@ -244,7 +262,11 @@ export class OutputApp {
   private applyConfig(cfg: OutputConfigRes): void {
     this.config = cfg;
     const state = this.state();
-    this.look = resolveLook(cfg.output.lookId, [cfg.looks, state.resolved?.looks ?? [], DEFAULT_LOOKS], LOOK_MAIN);
+    this.look = resolveLook(
+      cfg.output.lookId,
+      [cfg.looks, state.resolved?.looks ?? [], DEFAULT_LOOKS],
+      LOOK_MAIN,
+    );
     this.lookSig = lookSignature(this.look, this.opts.width, this.opts.height);
     document.title = `ordo — ${cfg.output.name}`;
     if (cfg.output.audioMaster) {
@@ -367,7 +389,12 @@ export class OutputApp {
     return !!e && Date.now() - e.at < ERROR_RETRY_MS;
   }
 
-  private ensureContent(name: PlanLayer, lp: LayerPlan<{ key: string }>, plan: FramePlan, state: LiveState): void {
+  private ensureContent(
+    name: PlanLayer,
+    lp: LayerPlan<{ key: string }>,
+    plan: FramePlan,
+    state: LiveState,
+  ): void {
     const key = lp.key;
     if (!key || this.errorBlocks(key)) return;
     const layer = LAYER_INDEX[name];
@@ -402,7 +429,8 @@ export class OutputApp {
       this.job({ kind: 'lowerThird', layer, key, text: plan.lowerThird.desc.text, look: this.look });
     } else if (name === 'media' && plan.media.desc) {
       const d = plan.media.desc;
-      if (d.kind === 'image') this.job({ kind: 'image', layer, key, hash: d.hash, fit: 'contain', cueIndex: d.cueIndex });
+      if (d.kind === 'image')
+        this.job({ kind: 'image', layer, key, hash: d.hash, fit: 'contain', cueIndex: d.cueIndex });
       else this.armVideo(this.mdPair, layer, key, d.hash, d.loop, FIT_CONTAIN, d.cueIndex);
     }
   }
@@ -461,7 +489,10 @@ export class OutputApp {
         this.delivered.set(key, Date.now());
         this.errors.delete(key);
         // A media video hidden by this look still plays (for audio) but is not offered to the renderer.
-        const visible = layer !== LAYER_INDEX.media || this.livePlan?.media.key === key || this.armedPlan?.media.key === key;
+        const visible =
+          layer !== LAYER_INDEX.media ||
+          this.livePlan?.media.key === key ||
+          this.armedPlan?.media.key === key;
         if (visible)
           this.postRender({ t: 'content', layer, key, kind: SRC_VIDEO, videoSlot: slot.id, fit, cueIndex });
         this.syncVideos(this.livePlan, this.armedPlan);
@@ -639,7 +670,12 @@ export class OutputApp {
       this.propsSeq = state.props.seq;
       return;
     }
-    const fade = stateChange && !fromTick ? (this.look.transition.kind === 'crossfade' ? this.look.transition.ms : 0) : 0;
+    const fade =
+      stateChange && !fromTick
+        ? this.look.transition.kind === 'crossfade'
+          ? this.look.transition.ms
+          : 0
+        : 0;
     const at = fromTick ? now : Math.max(state.props.at, 0);
     this.propsSeq = state.props.seq;
     this.propsKey = model.key;
@@ -675,9 +711,14 @@ export class OutputApp {
     const files = new Map<string, ManifestFile>();
     for (const f of state.resolved?.files ?? []) files.set(f.hash, f);
     const fonts = new Map<string, Font>();
-    for (const f of [...(this.config?.fonts ?? []), ...(state.resolved?.fonts ?? [])]) fonts.set(f.file.hash, f);
-    for (const f of fonts.values()) files.set(f.file.hash, { hash: f.file.hash, bytes: f.file.bytes, mime: f.file.mime });
-    const extra = [this.config?.logo, this.look.holdingMediaId ? state.resolved?.media[this.look.holdingMediaId] : undefined];
+    for (const f of [...(this.config?.fonts ?? []), ...(state.resolved?.fonts ?? [])])
+      fonts.set(f.file.hash, f);
+    for (const f of fonts.values())
+      files.set(f.file.hash, { hash: f.file.hash, bytes: f.file.bytes, mime: f.file.mime });
+    const extra = [
+      this.config?.logo,
+      this.look.holdingMediaId ? state.resolved?.media[this.look.holdingMediaId] : undefined,
+    ];
     for (const m of extra) {
       const f = m ? playableFile(m) : undefined;
       if (f) files.set(f.hash, { hash: f.hash, bytes: f.bytes, mime: f.mime });
@@ -793,6 +834,10 @@ export class OutputApp {
           if (h.armed) this.heldSet.add(h.armed);
           if (h.queued) this.heldSet.add(h.queued);
         }
+        // Content delivered a while ago that the renderer no longer holds was evicted: arm it again.
+        const now = Date.now();
+        for (const [k, t] of this.delivered)
+          if (now - t > 250 && !this.heldSet.has(k)) this.delivered.delete(k);
         this.requestSync();
         return;
       }
@@ -870,7 +915,9 @@ export class OutputApp {
         setTimeout(() => this.requestSync(), ERROR_RETRY_MS + 50);
         return;
       case 'fonts':
-        this.diag.log(`fonts loaded: ${m.loaded}${m.failed.length ? `, failed: ${m.failed.join(', ')}` : ''}`);
+        this.diag.log(
+          `fonts loaded: ${m.loaded}${m.failed.length ? `, failed: ${m.failed.join(', ')}` : ''}`,
+        );
         return;
     }
   }
@@ -1010,7 +1057,10 @@ export class OutputApp {
       live: s.live,
       armed: `${s.armed ?? '-'} ${h.armedOk ? 'ok' : h.armError ? `error: ${h.armError}` : 'pending'}`,
       audio: h.audio ?? (this.config?.output.audioMaster ? 'none' : 'not master'),
-      media: h.mediaPositionMs !== undefined ? `${Math.round(h.mediaPositionMs / 1000)}s / ${Math.round((h.mediaDurationMs ?? 0) / 1000)}s` : '-',
+      media:
+        h.mediaPositionMs !== undefined
+          ? `${Math.round(h.mediaPositionMs / 1000)}s / ${Math.round((h.mediaDurationMs ?? 0) / 1000)}s`
+          : '-',
       clockOffset: `${Math.round(clock.offset)} ms (rtt ${Math.round(clock.rtt)} ms)`,
       error: h.error ?? '-',
     };

@@ -109,6 +109,17 @@ describe('LayerStack', () => {
     expect(ls.armedStack.key).toBe('B');
   });
 
+  it('does not let the next arm evict the content of a scheduled flip', () => {
+    const { ls, offer } = setup();
+    ls.requestFlip('A', 1000, 0, 900);
+    offer('A');
+    offer('B'); // next cue armed before A's flip time
+    expect(ls.heldKeys()).toEqual({ live: '', armed: 'A', queued: 'B' });
+    expect(ls.tick(1000, F)).toBe(true);
+    // A cut: the queued arm is promoted right after the swap.
+    expect(ls.heldKeys()).toEqual({ live: 'A', armed: 'B', queued: '' });
+  });
+
   it('marks itself dirty when held keys change', () => {
     const { ls, offer } = setup();
     ls.dirty = false;

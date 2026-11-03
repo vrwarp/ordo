@@ -80,7 +80,10 @@ describe('look visibility rules', () => {
 
   it('lower thirds follow the look rule', () => {
     const s = { ...slideLive(0) };
-    s.layers = { ...s.layers, lowerThird: { content: { kind: 'lowerThird', text: 'Pastor Sam' }, at: 5, seq: 3 } };
+    s.layers = {
+      ...s.layers,
+      lowerThird: { content: { kind: 'lowerThird', text: 'Pastor Sam' }, at: 5, seq: 3 },
+    };
     expect(planFrame(s, LOOK_MAIN).lowerThird.key).toContain('Pastor Sam');
     expect(planFrame(s, LOOK_STAGE).lowerThird.key).toBe('');
   });

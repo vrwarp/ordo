@@ -60,8 +60,22 @@ export function defaultPropBox(id: PropId | 'logo', look: Look): PropBox {
         : { ...base, fontSizePx: 180, align: 'center', valign: 'middle', box: box(410, 330, 1100, 260) };
     case 'countdownLabel':
       return stage
-        ? { ...base, fontSizePx: 30, fontWeight: 400, align: 'center', valign: 'top', box: box(660, 116, 600, 50) }
-        : { ...base, fontSizePx: 56, fontWeight: 400, align: 'center', valign: 'top', box: box(260, 600, 1400, 120) };
+        ? {
+            ...base,
+            fontSizePx: 30,
+            fontWeight: 400,
+            align: 'center',
+            valign: 'top',
+            box: box(660, 116, 600, 50),
+          }
+        : {
+            ...base,
+            fontSizePx: 56,
+            fontWeight: 400,
+            align: 'center',
+            valign: 'top',
+            box: box(260, 600, 1400, 120),
+          };
     case 'message':
       return {
         ...base,
@@ -94,7 +108,7 @@ export function elapsedTimer(state: LiveState): Timer | undefined {
   for (const t of Object.values(state.timers)) {
     if (t.spec.kind !== 'elapsed') continue;
     if (t.running) {
-      if (!best || !best.running || (t.startedAt ?? 0) > (best.startedAt ?? 0)) best = t;
+      if (!best?.running || (t.startedAt ?? 0) > (best.startedAt ?? 0)) best = t;
     } else if (!best && (t.elapsedMs ?? 0) > 0) best = t;
   }
   return best ?? state.timers[MANUAL_ELAPSED_TIMER_ID];
@@ -112,7 +126,7 @@ export function countdownText(
 ): { text: string; label?: string; remainingMs: number } | null {
   const id = state.props.countdownTimerId;
   const t = id ? state.timers[id] : undefined;
-  if (!t || !t.running || t.spec.kind !== 'countdownTo') return null;
+  if (!t?.running || t.spec.kind !== 'countdownTo') return null;
   const target = nextTimeOfDay(t.spec.timeOfDay, ctx.timeZone, t.startedAt ?? ctx.now);
   const remainingMs = Math.max(0, target - ctx.now);
   // Round up so the display reaches 00:00 exactly at the target second.
@@ -136,13 +150,18 @@ export function propsModel(state: LiveState, look: Look, ctx: PropsContext): Pro
       const cd = countdownText(state, ctx);
       if (cd) {
         items.push({ id: 'countdown', text: cd.text, ...split(propBox('countdown', look)) });
-        if (cd.label) items.push({ id: 'countdownLabel', text: cd.label, ...split(propBox('countdownLabel', look)) });
+        if (cd.label)
+          items.push({ id: 'countdownLabel', text: cd.label, ...split(propBox('countdownLabel', look)) });
       }
     }
     if (rule.elapsed) {
       const t = elapsedTimer(state);
       if (t && (t.running || (t.elapsedMs ?? 0) > 0))
-        items.push({ id: 'elapsed', text: formatDuration(elapsedMsOf(t, ctx.now)), ...split(propBox('elapsed', look)) });
+        items.push({
+          id: 'elapsed',
+          text: formatDuration(elapsedMsOf(t, ctx.now)),
+          ...split(propBox('elapsed', look)),
+        });
     }
     if (rule.messages) {
       const m = topMessage(state, ctx.now);

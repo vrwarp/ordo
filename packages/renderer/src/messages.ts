@@ -30,7 +30,15 @@ export type ToRender =
   | { t: 'clock'; offset: number }
   | { t: 'clear'; color: Rgba }
   /** Video or empty content for a layer stack (bitmaps come from the asset worker). */
-  | { t: 'content'; layer: number; key: string; kind: number; videoSlot?: number; fit?: number; cueIndex?: number }
+  | {
+      t: 'content';
+      layer: number;
+      key: string;
+      kind: number;
+      videoSlot?: number;
+      fit?: number;
+      cueIndex?: number;
+    }
   | { t: 'flip'; layer: number; key: string; at: number; fadeMs: number; cueIndex?: number }
   | { t: 'vframe'; slot: number; frame: VideoFrame }
   | { t: 'vclear'; slot: number }

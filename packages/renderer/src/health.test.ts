@@ -17,7 +17,15 @@ describe('arm status', () => {
 describe('health aggregation', () => {
   it('sums long tasks of both threads and merges errors', () => {
     const h = buildHealth({
-      render: { ...EMPTY_TELEMETRY, presented: 600, missed: 2, longTasks: 1, lateFlips: 1, fps: 59.94, error: 'WebGPU unavailable' },
+      render: {
+        ...EMPTY_TELEMETRY,
+        presented: 600,
+        missed: 2,
+        longTasks: 1,
+        lateFlips: 1,
+        fps: 59.94,
+        error: 'WebGPU unavailable',
+      },
       mainLongTasks: 3,
       live: 4,
       armed: 5,

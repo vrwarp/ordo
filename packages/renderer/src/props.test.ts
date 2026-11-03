@@ -12,7 +12,12 @@ function withCountdown(label?: string) {
   return {
     ...s,
     timers: {
-      cd: { id: 'cd', spec: { kind: 'countdownTo' as const, timeOfDay: '10:30', label }, running: true, startedAt: NOW - 60_000 },
+      cd: {
+        id: 'cd',
+        spec: { kind: 'countdownTo' as const, timeOfDay: '10:30', label },
+        running: true,
+        startedAt: NOW - 60_000,
+      },
     },
     props: { ...s.props, countdownTimerId: 'cd' },
   };
@@ -94,7 +99,10 @@ describe('props text', () => {
       ...LOOK_MAIN,
       layers: {
         ...LOOK_MAIN.layers,
-        props: { ...LOOK_MAIN.layers.props, style: { clock: { ...propBox('clock', LOOK_MAIN), fontSizePx: 99 } } },
+        props: {
+          ...LOOK_MAIN.layers.props,
+          style: { clock: { ...propBox('clock', LOOK_MAIN), fontSizePx: 99 } },
+        },
       },
     };
     expect(propBox('clock', look).fontSizePx).toBe(99);

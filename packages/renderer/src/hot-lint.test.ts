@@ -64,7 +64,12 @@ describe('frame-path allocation lint', () => {
 
   it('flags allocations in a sample', () => {
     const sample = `function f() {\n  ${MARK}\n  const a = [1];\n  const o = { x: 1 };\n  g(() => 1);\n  const s = \`x\`;\n}`;
-    expect(lint('sample', sample).map((x) => x.rule)).toEqual(['array literal', 'object literal', 'closure', 'template string']);
+    expect(lint('sample', sample).map((x) => x.rule)).toEqual([
+      'array literal',
+      'object literal',
+      'closure',
+      'template string',
+    ]);
   });
 
   it('has no allocations in hot code', () => {

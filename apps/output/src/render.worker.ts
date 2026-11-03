@@ -66,7 +66,8 @@ async function init(m: Extract<ToRender, { t: 'init' }>): Promise<void> {
   );
   m.assetPort.onmessage = (ev: MessageEvent<AssetToRender>) => {
     const a = ev.data;
-    if (a.t === 'content') e.offer(a.layer, { key: a.key, kind: SRC_BITMAP, bitmap: a.bitmap, cueIndex: a.cueIndex });
+    if (a.t === 'content')
+      e.offer(a.layer, { key: a.key, kind: SRC_BITMAP, bitmap: a.bitmap, cueIndex: a.cueIndex });
   };
   try {
     const r = await e.start();
@@ -98,7 +99,13 @@ function handle(m: ToRender): void {
       e.setClear(m.color);
       return;
     case 'content':
-      e.offer(m.layer, { key: m.key, kind: m.kind, videoSlot: m.videoSlot, fit: m.fit, cueIndex: m.cueIndex });
+      e.offer(m.layer, {
+        key: m.key,
+        kind: m.kind,
+        videoSlot: m.videoSlot,
+        fit: m.fit,
+        cueIndex: m.cueIndex,
+      });
       return;
     case 'flip':
       e.flip(m.layer, m.key, m.at, m.fadeMs, m.cueIndex);

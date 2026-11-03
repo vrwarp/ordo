@@ -13,7 +13,14 @@ import {
 const text = (id: string, t: string): Slide => ({
   id,
   objects: [
-    { id: `${id}-t`, type: 'text', box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 }, text: t, style: DEFAULT_LYRIC_STYLE, opacity: 1 },
+    {
+      id: `${id}-t`,
+      type: 'text',
+      box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+      text: t,
+      style: DEFAULT_LYRIC_STYLE,
+      opacity: 1,
+    },
   ],
   lyricObjectId: `${id}-t`,
 });
@@ -77,7 +84,14 @@ const song: Presentation = {
   title: 'Song',
   kind: 'song',
   meta: { tags: [] },
-  sections: [{ id: 'v1', label: 'Verse 1', short: 'V1', slides: [text('s1', 'Line one\nLine two'), text('s2', 'Line three')] }],
+  sections: [
+    {
+      id: 'v1',
+      label: 'Verse 1',
+      short: 'V1',
+      slides: [text('s1', 'Line one\nLine two'), text('s2', 'Line three')],
+    },
+  ],
   arrangements: [],
   archived: false,
   backgroundMediaId: 'bgv',
@@ -89,7 +103,9 @@ const talk: Presentation = {
   title: 'Talk',
   kind: 'slides',
   meta: { tags: [] },
-  sections: [{ id: 'm', label: 'Main', short: 'M', slides: [text('t1', 'Welcome'), { id: 't2', objects: [] }] }],
+  sections: [
+    { id: 'm', label: 'Main', short: 'M', slides: [text('t1', 'Welcome'), { id: 't2', objects: [] }] },
+  ],
   arrangements: [],
   archived: false,
 };

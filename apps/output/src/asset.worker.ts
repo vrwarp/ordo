@@ -153,7 +153,14 @@ async function run(job: AssetJob): Promise<void> {
     }
     const bitmap = canvas!.transferToImageBitmap();
     const cueIndex = job.kind === 'slide' ? job.cueIndex : job.kind === 'image' ? job.cueIndex : undefined;
-    const msg: AssetToRender = { t: 'content', layer: job.layer, key: job.key, kind: SRC_BITMAP, bitmap, cueIndex };
+    const msg: AssetToRender = {
+      t: 'content',
+      layer: job.layer,
+      key: job.key,
+      kind: SRC_BITMAP,
+      bitmap,
+      cueIndex,
+    };
     if (!port) throw new Error('render port not connected');
     port.postMessage(msg, [bitmap]);
     post({ t: 'done', layer: job.layer, key: job.key, ms: performance.now() - t0 });

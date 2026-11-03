@@ -13,7 +13,13 @@ const SHELL = new URL('index.html', SCOPE).href;
 const MANIFEST = new URL('precache.json', SCOPE).href;
 
 function bypass(url) {
-  return url.origin !== self.location.origin || url.pathname.startsWith('/api/') || url.pathname === '/ws' || url.pathname.startsWith('/ws/') || !url.href.startsWith(SCOPE.href);
+  return (
+    url.origin !== self.location.origin ||
+    url.pathname.startsWith('/api/') ||
+    url.pathname === '/ws' ||
+    url.pathname.startsWith('/ws/') ||
+    !url.href.startsWith(SCOPE.href)
+  );
 }
 
 async function readManifest() {
@@ -28,8 +34,12 @@ async function precache(manifest) {
   await cache.addAll(urls.map((u) => new Request(u, { cache: 'reload' })));
   // Drop shell files of older builds.
   const keep = new Set(urls);
-  for (const req of await cache.keys()) if (!keep.has(req.url) && req.url !== MANIFEST) await cache.delete(req);
-  await cache.put(MANIFEST, new Response(JSON.stringify(manifest), { headers: { 'content-type': 'application/json' } }));
+  for (const req of await cache.keys())
+    if (!keep.has(req.url) && req.url !== MANIFEST) await cache.delete(req);
+  await cache.put(
+    MANIFEST,
+    new Response(JSON.stringify(manifest), { headers: { 'content-type': 'application/json' } }),
+  );
 }
 
 async function refresh() {
@@ -62,7 +72,8 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
-      for (const name of await caches.keys()) if (name.startsWith(PREFIX) && name !== CACHE) await caches.delete(name);
+      for (const name of await caches.keys())
+        if (name.startsWith(PREFIX) && name !== CACHE) await caches.delete(name);
       await self.clients.claim();
     })(),
   );

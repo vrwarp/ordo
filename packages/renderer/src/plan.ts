@@ -312,11 +312,7 @@ export function planFrame(state: LiveState, look: Look, opts: PlanOptions = {}):
 }
 
 /** The look an output uses: by id from the config looks, then the resolved playlist's looks, then a fallback. */
-export function resolveLook(
-  lookId: string | undefined,
-  looks: Look[][],
-  fallback: Look,
-): Look {
+export function resolveLook(lookId: string | undefined, looks: Look[][], fallback: Look): Look {
   for (const list of looks) {
     const l = lookId ? list.find((x) => x.id === lookId) : undefined;
     if (l) return l;

@@ -118,7 +118,12 @@ export async function createGpuCompositor(init: GpuInit): Promise<GpuCompositor>
   if (!context) throw new Error('WebGPU canvas context unavailable');
   init.onContext?.();
   const format = gpu.getPreferredCanvasFormat();
-  context.configure({ device, format, alphaMode: 'opaque', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+  context.configure({
+    device,
+    format,
+    alphaMode: 'opaque',
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+  });
   const c = new GpuCompositor(device, context, format, init.width, init.height, init.layerCount);
   // Keep the adapter reachable: if it is garbage collected some implementations drop the instance and
   // lose the device ("A valid external Instance reference no longer exists").
@@ -318,7 +323,12 @@ export class GpuCompositor implements Compositor {
     d.queue.submit(this.cmd);
   }
 
-  private drawLayer(pass: GPURenderPassEncoder, ls: LayerStack<ImageBitmap>, l: number, f: FrameInputs): void {
+  private drawLayer(
+    pass: GPURenderPassEncoder,
+    ls: LayerStack<ImageBitmap>,
+    l: number,
+    f: FrameInputs,
+  ): void {
     /* @hot */
     const liveIdx = ls.live;
     const outIdx = 1 - liveIdx;

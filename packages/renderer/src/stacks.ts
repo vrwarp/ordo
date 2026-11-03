@@ -97,7 +97,11 @@ export class LayerStack<B> {
       if (c.bitmap) this.release(c.bitmap);
       return;
     }
-    if (this.fading) {
+    // The armed stack is busy when it is the outgoing side of a fade, or when it holds the content of a
+    // scheduled flip that has not happened yet (the next cue's arm must not evict the GO target).
+    const armedBusy =
+      this.fading || (this.flipPending && this.armedStack.key === this.flipKey && c.key !== this.flipKey);
+    if (armedBusy) {
       this.assign(this.queued, c);
       this.hasQueued = true;
     } else {
@@ -149,7 +153,7 @@ export class LayerStack<B> {
       this.fadeMs = this.flipFadeMs;
       // A held flip (late) fades from now so the transition is still visible; on time it fades from `at`.
       this.fadeStart = now - this.flipAt > frameMs ? now : this.flipAt;
-    }
+    } else if (this.hasQueued) this.promoteQueued();
     this.dirty = true;
     return true;
   }

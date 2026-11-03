@@ -69,7 +69,12 @@ canvas.screen[hidden] {
   border: 1px solid #555;
   border-radius: 8px;
   padding: 12px 16px;
-  font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font:
+    13px / 1.45 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
   cursor: default;
 }
 .diag pre {

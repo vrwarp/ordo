@@ -1,1 +1,5 @@
-{ "extends": "../../tsconfig.base.json", "compilerOptions": { "types": ["vite/client", "@webgpu/types"] }, "include": ["src", "vite.config.ts"] }
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "types": ["vite/client", "@webgpu/types"] },
+  "include": ["src", "vite.config.ts"]
+}

@@ -36,7 +36,9 @@ export type EngineOptions = {
 };
 
 export class RenderEngine {
-  readonly layers: LayerStack<ImageBitmap>[] = LAYERS.map(() => new LayerStack<ImageBitmap>((b) => b.close()));
+  readonly layers: LayerStack<ImageBitmap>[] = LAYERS.map(
+    () => new LayerStack<ImageBitmap>((b) => b.close()),
+  );
   readonly video: VideoFrames = {
     frames: Array.from({ length: MAX_VIDEO_SLOTS }, () => null),
     version: new Int32Array(MAX_VIDEO_SLOTS),

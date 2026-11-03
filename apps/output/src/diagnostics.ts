@@ -47,7 +47,9 @@ export class Diagnostics {
 
   private render(): void {
     const s = this.snapshot();
-    const rows = Object.entries(s).map(([k, v]) => `${k.padEnd(18)} ${typeof v === 'string' ? v : JSON.stringify(v)}`);
+    const rows = Object.entries(s).map(
+      ([k, v]) => `${k.padEnd(18)} ${typeof v === 'string' ? v : JSON.stringify(v)}`,
+    );
     this.pre.textContent = `ordo output — Ctrl+Shift+D to hide, Ctrl+Shift+Q to close\n\n${rows.join('\n')}\n\nlog:\n${this.lines.slice(-15).join('\n')}`;
   }
 }

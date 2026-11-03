@@ -101,7 +101,8 @@ export function drawSlideThumbnail(
   ctx.save();
   ctx.clearRect(0, 0, width, height);
   const clear = opts.clear ?? true;
-  if (clear) fillColor(ctx, clear === true ? (look?.clearColor ?? { r: 0, g: 0, b: 0, a: 1 }) : clear, width, height);
+  if (clear)
+    fillColor(ctx, clear === true ? (look?.clearColor ?? { r: 0, g: 0, b: 0, a: 1 }) : clear, width, height);
   // Centre a 16:9 frame in non-16:9 canvases.
   ctx.translate((width - LOGICAL_WIDTH * scale) / 2, (height - LOGICAL_HEIGHT * scale) / 2);
   if (opts.background && (look?.layers.background.visible ?? true))

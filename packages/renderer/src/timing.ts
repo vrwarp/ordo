@@ -8,7 +8,7 @@ export const DEFAULT_FRAME_MS = 1000 / 60;
 /** Cubic smoothstep on [0, 1]; inputs outside are clamped. */
 export function smoothstep(x: number): number {
   /* @hot */
-  const t = x <= 0 ? 0 : x >= 1 ? 1 : x;
+  const t = Math.min(1, Math.max(0, x));
   return t * t * (3 - 2 * t);
 }
 

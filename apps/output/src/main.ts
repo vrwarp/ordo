@@ -66,8 +66,9 @@ async function goFullscreen(): Promise<void> {
 let wakeLock: { release(): Promise<void> } | null = null;
 async function keepAwake(): Promise<void> {
   try {
-    const wl = (navigator as Navigator & { wakeLock?: { request(t: 'screen'): Promise<{ release(): Promise<void> }> } })
-      .wakeLock;
+    const wl = (
+      navigator as Navigator & { wakeLock?: { request(t: 'screen'): Promise<{ release(): Promise<void> }> } }
+    ).wakeLock;
     if (wl && document.visibilityState === 'visible') wakeLock = await wl.request('screen');
   } catch {
     wakeLock = null;
