@@ -101,9 +101,9 @@ test('the output survives killed workers, a corrupt cache file and a malformed d
     const bg = await uploadMedia(a, fx.png, 'image/png', true);
     const song = await (await a.post('import/songselect', { data: { text: SONG } })).json();
     const full = await (await a.get(`presentations/${song.id}`)).json();
-    expect((await a.put(`presentations/${song.id}`, { data: { ...full, backgroundMediaId: bg.id } })).ok()).toBe(
-      true,
-    );
+    expect(
+      (await a.put(`presentations/${song.id}`, { data: { ...full, backgroundMediaId: bg.id } })).ok(),
+    ).toBe(true);
     const outs = (await (await a.get('settings/outputs')).json()) as { hostIndex: number; kind: string }[];
     const settings = outs.map((o) => ({ ...o, enabled: o.kind !== 'stage' && o.hostIndex <= 1 }));
     expect((await a.put('settings/outputs', { data: settings })).ok()).toBe(true);
@@ -125,7 +125,9 @@ test('the output survives killed workers, a corrupt cache file and a malformed d
     await waitCacheReady(o);
     await go(page);
     await expectCue([o], 0);
-    await expect.poll(async () => (await st(o)).keys.live.background ?? '', { timeout: 15_000 }).toMatch(/^bg\|/);
+    await expect
+      .poll(async () => (await st(o)).keys.live.background ?? '', { timeout: 15_000 })
+      .toMatch(/^bg\|/);
     const bgHash = (await st(o)).keys.live.background!.split('|')[2]!;
     const bgBytes = await opfsSize(o, bgHash);
     expect(bgBytes).toBeGreaterThan(0);
@@ -197,7 +199,13 @@ test('the output survives killed workers, a corrupt cache file and a malformed d
       const r0 = (await o.evaluate(() => (window as unknown as Ordo).__ordo.telemetry())).resyncs;
       await o.evaluate((seq) => {
         const c = (window as unknown as Ordo).__ordo.chaos;
-        c.injectDelta({ t: 'live.delta', v: 1, seq: seq + 1, fromSeq: seq, event: { k: 'go', cueIndex: 'x' } });
+        c.injectDelta({
+          t: 'live.delta',
+          v: 1,
+          seq: seq + 1,
+          fromSeq: seq,
+          event: { k: 'go', cueIndex: 'x' },
+        });
         c.injectDelta({ t: 'live.delta', v: 1, seq: seq + 1, fromSeq: seq, event: null });
         c.injectDelta({ nonsense: true });
       }, s0.seq);

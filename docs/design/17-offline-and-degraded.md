@@ -75,6 +75,17 @@ restart wait in the host's outbox and are applied once.
 When the operator page itself goes away the host posts `fallback.hub { hubUp: true }` to every window
 over the relay on `pagehide`, so the outputs leave the bus at once instead of after the 5 s silence.
 
+### Output link restart during degraded mode
+
+The output's bus client lives in its link worker. If that worker dies, the screen keeps its frame (the
+render worker is untouched); the host restarts it within about 4 s, the new worker restores the live
+state from IndexedDB (written on every applied state, coalesced) and the files from OPFS, and asks the
+opener for a fresh port (`ordo.port.request`); until one arrives, the host relays `window.postMessage`
+from the opener to the new worker. A newly accepted port is answered at once with `fallback.ready`, so
+the operator proves it even while the hub is the authority. The host detects a closed operator tab
+(`window.opener` closed or nulled by Chrome) every second and tells the link worker, which leaves the
+bus at once.
+
 ### Operator reload during degraded mode
 
 The opener handles are lost. Relaunch outputs reopens windows by stable name; Chrome

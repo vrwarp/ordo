@@ -5,14 +5,50 @@ present one composited frame per vsync with nothing on the critical path that ca
 
 ## Threads
 
-| Thread        | Owns                                                                                                                                                                       | Never does                                                                      |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Main          | The `<canvas>` (control transferred), the `<video>` elements for the live and armed media, the WebSocket and fallback-bus receive, the health timer, Wake Lock, fullscreen | Layout beyond the canvas, decoding images, text, shader compilation             |
-| Render worker | WebGPU device, `OffscreenCanvas`, the frame loop, layer stacks, transitions, uniform buffers                                                                               | Fetching, decoding, allocation inside the loop                                  |
-| Asset worker  | OPFS reads, `createImageBitmap`, font loading (`self.fonts`), text rasterization to `OffscreenCanvas` 2D, manifest and cache management                                    | Touching the GPU device except to upload prepared bitmaps via the render worker |
+The window follows design/25: a main thread that hosts and three supervised workers that compute.
 
-The main thread is otherwise idle, which is what makes `<video>` plus
-`requestVideoFrameCallback` on it acceptable for the prototype (ADR 0005).
+| Thread        | Owns                                                                                                                                                                                                                                                                  | Never does                                                                      |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Main (host)   | The `<canvas>` (control transferred) and the 2D hold canvas, the `<video>`/`<audio>` elements and `requestVideoFrameCallback` → `VideoFrame` transfer, the audio engine, fullscreen, Wake Lock, keys, the diagnostics overlay, the program-view `RTCPeerConnection`, the opener's port offers, the supervisor | Networking, state, storage, planning, decoding, text, anything a worker can do |
+| Link worker   | WebSocket and clock sync, the live mirror and reducer, the fallback-bus client, OPFS service-cache fill (streamed) and pruning, IndexedDB persistence, cue planning and arm orchestration, props scheduling, health assembly, preview, ended-event queueing             | Touching the DOM; it drives the host's media elements with commands             |
+| Render worker | WebGPU device, `OffscreenCanvas`, the frame loop, layer stacks, transitions, uniform buffers                                                                                                                                                                          | Fetching, decoding, allocation inside the loop                                  |
+| Asset worker  | OPFS reads, `createImageBitmap`, font loading (`self.fonts`), text rasterization to a software-backed `OffscreenCanvas` 2D                                                                                                                                             | Touching the GPU device except to upload prepared bitmaps via the render worker |
+
+Topology. The host creates the three workers and three `MessageChannel`s (asset↔render, link↔render,
+link↔asset) and hands the ends over with a `ports` message (`packages/renderer/src/messages.ts`), again
+after any worker restart. Arming runs link → asset → render (jobs, bitmaps, flips) without the main
+thread. The host ⇄ link protocol is `apps/output/src/host-protocol.ts`: the link sends media commands
+(`load {slot, key, blob|url}`, `apply {transport}`, `pauseAt`, `holdPaused`, `route`, `unload`), audio
+commands (`config`, `fadeOut`), `clock`, `title`, `rtc` signalling, `fatal`, `close`, `reload`,
+`restartWorker`, `portRequest`, and a `view` (telemetry, introspection, diagnostics, log) that the host
+caches so `window.__ordo.telemetry()`/`state()` stay synchronous. The host sends `tick` (250 ms),
+`host` status (500 ms: media slots, audio meters, long tasks, worker stats, painting), media events
+(`loaded`, `loadError`, `ended`, `error`), opener-closed, bus ports and program-view answers. The link
+keeps a mirror of the six media slots (2 background, 2 media, 2 audio), so slot choice, `busyUntil`,
+retries and master-only ended reporting run exactly as before; the elements stay on the main thread
+because the platform requires it (ADR 0005), and the autoplay-muted fallback lives with them.
+
+Supervision. `Supervisor` (`@ordo/client`) watches a 250 ms heartbeat from each worker (dead after 4 s
+for the link, 3 s for the renderer, 5 s for the asset worker; a stall-tolerant clock so a frozen main
+thread does not condemn healthy workers) and restarts a dead or `fatal` worker, at most 5 times a
+minute, then gives up and says so. Restarts per worker are in `health.workers`.
+
+- Link restart: the new link worker paints from IndexedDB (state, config, recent manifests) and OPFS,
+  re-arms the live and armed cues (the renderer still holds them, so nothing changes on screen),
+  reconnects, and the host asks the opener for a fresh bus port (`ordo.port.request`; the
+  window.postMessage relay carries the bus meanwhile).
+- Render restart: the old worker took its canvas with it. The host raises the hold canvas (painted
+  from the last snapshot), gives the new worker a fresh canvas, and lowers the hold when the link
+  reports the live content is held again (or after 8 s). This is the device-loss path with a new worker.
+- Asset restart: fonts are reloaded and the cache is checked against the manifest. Raster surfaces are
+  software-backed because bitmaps from an accelerated worker canvas turn black on screen when that
+  worker dies (found by `e2e/chaos-output.spec.ts`).
+
+Crash-only restart. The link worker checks `checkInvariants` after every applied state; a violation
+asks for a full state, and a full state that still violates reloads the window. While live, no frame
+presented for 3 s while the page is painting restarts the render worker; a second time within two
+minutes reloads the window. Repeated non-quota OPFS failures reload the window. The host allows 3
+reloads in 10 minutes (sessionStorage), so a deterministic failure cannot become a reload loop.
 
 ## Frame loop
 
@@ -38,8 +74,8 @@ every rAF (render worker, via requestAnimationFrame on the OffscreenCanvas's wor
 - Long tasks: `PerformanceObserver('longtask')` works on the main thread only; Chrome does
   not deliver long-task entries in workers. The render worker therefore counts rAF gaps of
   50 ms or more (the Long Tasks threshold) that are not a pause as its long tasks
-  (`FrameClock.stalls`, with `maxStallMs`). The main thread posts a `tick` to the worker
-  every 250 ms and the worker reports the longest gap between ticks as
+  (`FrameClock.stalls`, with `maxStallMs`). The main thread posts a `tick` to the link worker
+  every 250 ms and the link worker reports the longest gap between ticks as
   `health.mainThreadStallMs`. All of it goes in `health`.
 
 ## Layer stacks and arming
@@ -170,10 +206,30 @@ cues, and reports `gpuLost++`. A `<canvas>` 2D copy of the last presented frame 
 once per second, off the critical path, from the render worker's own copy) is shown by
 the main thread during the rebuild so the screen never goes black.
 
+## Render-plan clamps and quarantine
+
+`packages/renderer/src/clamp.ts` clamps everything the planner hands on (design/25): box edges within
+±2× the logical canvas, text to 10,000 characters, font sizes to [4, 1000] px, 200 objects and 16
+distinct images per slide, finite numbers everywhere, unknown objects dropped; looks are completed from
+the main look. `planFrame`/`planPreview` carry clamped copies (memoised by identity) and the rasterizer
+re-applies the cheap clamps and culls lines far outside the canvas. The asset worker bounds the decoded
+image bytes per cue (192 MiB) and reports text in a font family that is not loaded
+(`health.fontFallbacks`). Property tests (`plan.fuzz.test.ts`) feed random slides and looks within and
+far beyond the clamps: never throws, output within bounds.
+
+A slide, image or media key whose arm fails three times within a minute (`ErrorBudget`) is
+quarantined for the rest of the service: never flipped to (the layer shows nothing), never retried,
+listed in `health.quarantined`; a new service (or End service) lifts it. A cached file that fails to
+decode is removed from OPFS and fetched again; the link also compares cached sizes with the manifest
+every 30 s while live and after an asset-worker restart (`health.cacheRepairs`). Fills stream response
+bodies into the OPFS writable (`apps/output/src/opfs.ts`) instead of buffering blobs.
+
 ## Health message
 
 ```ts
 { t: 'health', presented, missed, longTasks, lateFlips, armed, live, cache: { ready, total }, gpuLost, videoDropped }
 ```
 
-`videoDropped` comes from `video.getVideoPlaybackQuality().droppedVideoFrames`.
+`videoDropped` comes from `video.getVideoPlaybackQuality().droppedVideoFrames`. Additive fields:
+`mainThreadStallMs`, `workers [{name, generation, restarts, lastReason, gaveUp}]`, `quarantined
+{count, items}`, `fontFallbacks`, `cacheRepairs`, `busTransport` ('port' | 'window').
