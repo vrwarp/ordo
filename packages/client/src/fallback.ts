@@ -8,7 +8,114 @@ import {
 } from '@ordo/protocol';
 import { Emitter } from './emitter.ts';
 
-type Win = { win: Window; origin: string; ready: boolean };
+/**
+ * One side of a fallback-bus link to one peer. The bus protocol (FallbackMessage) is the same whatever
+ * carries it: a MessagePort handed over when the operator opened the window (preferred: worker-safe, so
+ * neither main thread is on the path), or the legacy window.postMessage with origin checks.
+ */
+export interface BusEndpoint {
+  readonly kind: 'port' | 'window';
+  post(m: FallbackMessage): void;
+  /** Subscribe to messages from the peer; returns an unsubscribe function. */
+  onMessage(fn: (m: FallbackMessage) => void): () => void;
+  /** False once the peer is known to be gone (closed window, closed port). */
+  alive(): boolean;
+  close(): void;
+}
+
+function validBusMessage(d: unknown): d is FallbackMessage {
+  return (
+    !!d &&
+    typeof d === 'object' &&
+    (d as { v?: unknown }).v === PROTOCOL_VERSION &&
+    typeof (d as { t?: unknown }).t === 'string'
+  );
+}
+
+/** A bus endpoint over a MessagePort. Trust was established when the port was handed over. */
+export function portEndpoint(port: MessagePort): BusEndpoint {
+  let open = true;
+  const subs = new Set<(m: FallbackMessage) => void>();
+  port.onmessage = (ev) => {
+    if (!validBusMessage(ev.data)) return;
+    for (const fn of subs) fn(ev.data);
+  };
+  (port as MessagePort & { onclose?: (() => void) | null }).onclose = () => {
+    open = false;
+  };
+  port.start?.();
+  return {
+    kind: 'port',
+    post(m) {
+      if (!open) return;
+      try {
+        port.postMessage(m);
+      } catch {
+        open = false;
+      }
+    },
+    onMessage(fn) {
+      subs.add(fn);
+      return () => subs.delete(fn);
+    },
+    alive: () => open,
+    close() {
+      open = false;
+      subs.clear();
+      try {
+        port.close();
+      } catch {
+        /* already closed */
+      }
+    },
+  };
+}
+
+/**
+ * A bus endpoint over window.postMessage (main thread only). Messages are accepted only from `peer` at
+ * `origin`. `peer` may be a getter so the output side can follow window.opener.
+ */
+export function windowEndpoint(peer: Window | (() => Window | null), origin: string): BusEndpoint {
+  const get = typeof peer === 'function' ? (peer as () => Window | null) : () => peer as Window;
+  const subs = new Set<(m: FallbackMessage) => void>();
+  const listener = (ev: MessageEvent) => {
+    const w = get();
+    if (!w || ev.source !== w || ev.origin !== origin) return;
+    if (!validBusMessage(ev.data)) return;
+    for (const fn of subs) fn(ev.data);
+  };
+  if (typeof window !== 'undefined') window.addEventListener('message', listener);
+  const alive = () => {
+    try {
+      const w = get();
+      return !!w && !w.closed;
+    } catch {
+      return false;
+    }
+  };
+  return {
+    kind: 'window',
+    post(m) {
+      try {
+        const w = get();
+        if (w && !w.closed) w.postMessage(m, origin);
+      } catch {
+        /* window gone */
+      }
+    },
+    onMessage(fn) {
+      subs.add(fn);
+      return () => subs.delete(fn);
+    },
+    alive,
+    close() {
+      subs.clear();
+      if (typeof window !== 'undefined') window.removeEventListener('message', listener);
+    },
+  };
+}
+
+type Win = { ep: BusEndpoint; ready: boolean; unsub: () => void };
 
 /** Period of the host's announcements (hello to windows not yet ready, heartbeat to ready ones). */
 export const FALLBACK_HEARTBEAT_MS = 2000;
@@ -36,29 +143,37 @@ export class FallbackHost extends Emitter<{
   active = false;
   private lastState?: LiveStateMsg;
   private timer?: ReturnType<typeof setInterval>;
-  private listener = (ev: MessageEvent) => this.onMessage(ev);
   private seenEvents: string[] = [];
   private seenEventSet = new Set<string>();
   getFile?: (hash: string) => Promise<Blob | undefined>;
 
-  constructor() {
-    super();
-    if (typeof window !== 'undefined') window.addEventListener('message', this.listener);
-  }
-
   dispose(): void {
-    if (typeof window !== 'undefined') window.removeEventListener('message', this.listener);
     clearInterval(this.timer);
+    for (const id of [...this.windows.keys()]) this.unregister(id);
   }
 
+  /** Legacy registration over window.postMessage (main thread). Prefer registerEndpoint with a port. */
   register(outputId: string, win: Window, origin: string): void {
-    const w: Win = { win, origin, ready: false };
+    this.registerEndpoint(outputId, windowEndpoint(win, origin));
+  }
+
+  /** Register (or replace) the bus endpoint of one output or stage window. */
+  registerEndpoint(outputId: string, ep: BusEndpoint): void {
+    this.unregister(outputId);
+    const w: Win = { ep, ready: false, unsub: () => undefined };
+    w.unsub = ep.onMessage((m) => this.onMessage(outputId, w, m));
     this.windows.set(outputId, w);
     // A window acquired while the hub is the authority may still be on an older tab's fallback bus.
     if (!this.active) this.postTo(w, { t: 'fallback.hub', v: 1, hubUp: true });
+    else if (this.lastState)
+      this.postTo(w, { t: 'fallback.hello', v: 1, seq: this.lastState.seq, operatorMs: Date.now() });
   }
 
   unregister(outputId: string): void {
+    const w = this.windows.get(outputId);
+    if (!w) return;
+    w.unsub();
+    w.ep.close();
     this.windows.delete(outputId);
   }
 
@@ -94,7 +209,7 @@ export class FallbackHost extends Emitter<{
   private announce(): void {
     if (!this.lastState || !this.active) return;
     for (const w of this.windows.values()) {
-      if (w.win.closed) continue;
+      if (!w.ep.alive()) continue;
       if (w.ready) this.postTo(w, { t: 'fallback.hub', v: 1, hubUp: false });
       else this.postTo(w, { t: 'fallback.hello', v: 1, seq: this.lastState.seq, operatorMs: Date.now() });
     }
@@ -105,11 +220,7 @@ export class FallbackHost extends Emitter<{
   }
 
   private postTo(w: Win, m: FallbackMessage): void {
-    try {
-      if (!w.win.closed) w.win.postMessage(m, w.origin);
-    } catch {
-      /* window gone */
-    }
+    w.ep.post(m);
   }
 
   private seenEvent(id: string | undefined): boolean {
@@ -121,13 +232,8 @@ export class FallbackHost extends Emitter<{
     return false;
   }
 
-  private onMessage(ev: MessageEvent): void {
-    let entry: [string, Win] | undefined;
-    for (const e of this.windows) if (e[1].win === ev.source) entry = e;
-    if (!entry || ev.origin !== entry[1].origin) return;
-    const [outputId, w] = entry;
-    const m = ev.data as FallbackMessage;
-    if (!m || typeof m !== 'object' || m.v !== PROTOCOL_VERSION) return;
+  private onMessage(outputId: string, w: Win, m: FallbackMessage): void {
+    if (this.windows.get(outputId) !== w) return;
     if (m.t === 'fallback.ready') {
       w.ready = true;
       if (this.active && this.lastState) this.postTo(w, this.lastState);
@@ -173,28 +279,53 @@ export class FallbackClient extends Emitter<{
   hub: { hubUp: boolean };
 }> {
   private pendingFiles = new Map<string, (b: Blob | undefined) => void>();
-  private listener = (ev: MessageEvent) => this.onMessage(ev);
+  private ep: BusEndpoint;
+  private unsub: () => void;
+  private outputId: string;
+  /** Set by the host layer when it learns the opener is gone (a worker cannot see window.opener). */
+  openerClosed = false;
   /** Time of the last accepted message from the operator (0 before the first). */
   lastTraffic = 0;
 
-  constructor(
-    private operatorOrigin: string,
-    private outputId: string,
-  ) {
+  /**
+   * `new FallbackClient(operatorOrigin, outputId)` listens to window.opener (main thread, legacy);
+   * `new FallbackClient({ endpoint, outputId })` uses a handed-over port (works in a worker).
+   */
+  constructor(a: string | { endpoint: BusEndpoint; outputId: string }, outputId?: string) {
     super();
-    window.addEventListener('message', this.listener);
+    if (typeof a === 'string') {
+      this.ep = windowEndpoint(
+        () => (typeof window !== 'undefined' ? (window.opener as Window | null) : null),
+        a,
+      );
+      this.outputId = outputId ?? 'unknown';
+    } else {
+      this.ep = a.endpoint;
+      this.outputId = a.outputId;
+    }
+    this.unsub = this.ep.onMessage((m) => this.onMessage(m));
+  }
+
+  get transport(): BusEndpoint['kind'] {
+    return this.ep.kind;
   }
 
   get available(): boolean {
-    try {
-      return !!window.opener && !(window.opener as Window).closed;
-    } catch {
-      return false;
-    }
+    return !this.openerClosed && this.ep.alive();
+  }
+
+  /** Swap to a new endpoint (a new port from a relaunch or a new operator tab). */
+  replaceEndpoint(ep: BusEndpoint): void {
+    this.unsub();
+    this.ep.close();
+    this.ep = ep;
+    this.openerClosed = false;
+    this.unsub = ep.onMessage((m) => this.onMessage(m));
   }
 
   dispose(): void {
-    window.removeEventListener('message', this.listener);
+    this.unsub();
+    this.ep.close();
   }
 
   ready(appliedSeq: number): void {
@@ -207,12 +338,8 @@ export class FallbackClient extends Emitter<{
    */
   sendEvent(event: LiveEvent, id: string = Math.random().toString(36).slice(2)): boolean {
     if (!this.available) return false;
-    try {
-      (window.opener as Window).postMessage({ t: 'live.event', v: 1, id, event }, this.operatorOrigin);
-      return true;
-    } catch {
-      return false;
-    }
+    this.ep.post({ t: 'live.event', v: 1, id, event } as unknown as FallbackMessage);
+    return true;
   }
 
   sendHealth(health: OutputHealth): void {
@@ -232,17 +359,10 @@ export class FallbackClient extends Emitter<{
 
   private post(m: FallbackMessage): void {
     if (!this.available) return;
-    try {
-      (window.opener as Window).postMessage(m, this.operatorOrigin);
-    } catch {
-      /* opener navigated away */
-    }
+    this.ep.post(m);
   }
 
-  private onMessage(ev: MessageEvent): void {
-    if (ev.source !== window.opener || ev.origin !== this.operatorOrigin) return;
-    const m = ev.data as FallbackMessage;
-    if (!m || typeof m !== 'object' || m.v !== PROTOCOL_VERSION) return;
+  private onMessage(m: FallbackMessage): void {
     this.lastTraffic = Date.now();
     switch (m.t) {
       case 'fallback.hello':
@@ -267,4 +387,36 @@ export class FallbackClient extends Emitter<{
       }
     }
   }
+}
+
+/** Message a role window receives from the operator carrying its bus port (transferred). */
+export const PORT_OFFER = 'ordo.port';
+export type PortOffer = { t: typeof PORT_OFFER; v: 1; outputId: string };
+
+/**
+ * Operator main thread: create a channel for one opened window, post one end to it, return the other end
+ * (to be transferred into the operator's core worker or wrapped with portEndpoint).
+ * Re-offer after the window navigates (load) or when re-acquired; the window keeps the newest port.
+ */
+export function offerPort(win: Window, origin: string, outputId: string): MessagePort {
+  const ch = new MessageChannel();
+  const offer: PortOffer = { t: PORT_OFFER, v: 1, outputId };
+  win.postMessage(offer, origin, [ch.port2]);
+  return ch.port1;
+}
+
+/**
+ * Role-window main thread: accept bus ports from window.opener at the operator origin. Calls `onPort`
+ * with each new port (newest wins). Returns an unsubscribe function.
+ */
+export function acceptPorts(operatorOrigin: string, onPort: (port: MessagePort) => void): () => void {
+  const listener = (ev: MessageEvent) => {
+    if (ev.source !== window.opener || ev.origin !== operatorOrigin) return;
+    const d = ev.data as Partial<PortOffer> | undefined;
+    if (!d || d.t !== PORT_OFFER || d.v !== PROTOCOL_VERSION) return;
+    const port = ev.ports[0];
+    if (port) onPort(port);
+  };
+  window.addEventListener('message', listener);
+  return () => window.removeEventListener('message', listener);
 }

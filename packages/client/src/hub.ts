@@ -330,7 +330,8 @@ export class HubConnection extends Emitter<HubEvents> {
         return;
       case 'bye':
         this.emit('bye', m);
-        if (m.reason === 'version' && typeof location !== 'undefined')
+        // On the main thread a stale app reloads itself; inside a worker the host decides (it sees 'bye').
+        if (m.reason === 'version' && typeof document !== 'undefined' && typeof location !== 'undefined')
           setTimeout(() => location.reload(), 500);
         // A newer window took this output's place: never reconnect (the window closes itself).
         if (m.reason === 'superseded') this.stop();
