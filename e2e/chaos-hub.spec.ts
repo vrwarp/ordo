@@ -14,6 +14,16 @@ const PORT = 8600;
 const op = `http://op.localhost:${PORT}`;
 // Native modules and ws are dependencies of the hub; resolve them from there.
 const hubRequire = createRequire(resolve('apps/hub/package.json'));
+type Socket = {
+  on(ev: 'open', fn: () => void): void;
+  on(ev: 'close', fn: (code: number) => void): void;
+  on(ev: 'error', fn: (e: Error) => void): void;
+  send(data: string): void;
+};
+type Db = {
+  prepare(sql: string): { get(...a: unknown[]): unknown; run(...a: unknown[]): unknown };
+  close(): void;
+};
 
 test('the service survives library and live process crashes, a corrupt snapshot and a flooding socket', async ({
   context,
@@ -63,14 +73,14 @@ test('the service survives library and live process crashes, a corrupt snapshot 
     await expect.poll(() => hubLive(a), { timeout: 20_000 }).toBe(2);
 
     // (d) A socket that sends an oversize message, and one that floods, are closed; the rest carry on.
-    const WS = hubRequire('ws') as typeof import('ws').default;
+    const WS = hubRequire('ws') as new (url: string) => Socket;
     const outs = (await (await a.get('settings/outputs')).json()) as {
       token: string;
       kind: string;
       hostIndex: number;
     }[];
     const tok = outs.find((o) => o.kind === 'output' && o.hostIndex === 3)!.token;
-    const closeCode = (send: (ws: import('ws').default) => void) =>
+    const closeCode = (send: (ws: Socket) => void) =>
       new Promise<number>((done, fail) => {
         const ws = new WS(`ws://localhost:${PORT}/ws?token=${encodeURIComponent(tok)}`);
         ws.on('open', () => {
@@ -105,7 +115,7 @@ test('the service survives library and live process crashes, a corrupt snapshot 
     const before = await (await a.get('live')).json();
     hub.kill(); // the live process writes its final snapshot (seq 5) as the supervisor vanishes
     await page.waitForTimeout(3000);
-    const Database = hubRequire('better-sqlite3') as typeof import('better-sqlite3');
+    const Database = hubRequire('better-sqlite3') as new (file: string) => Db;
     const db = new Database(join(hub.dataDir, 'live.db'));
     const cur = db.prepare(`SELECT seq FROM live_snapshot WHERE id = 1`).get() as { seq: number };
     expect(cur.seq).toBe(before.seq);
