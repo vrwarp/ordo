@@ -6,6 +6,7 @@ import { useHubNow } from '../../hooks.ts';
 import { controller, dispatch } from '../../services/controller.ts';
 import { useLaunch } from '../../services/outputs.ts';
 import { missingHandles, reacquireMissing } from '../../services/reacquire.ts';
+import { currentRedState, runRedAction } from '../../services/redState.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
 import { toast } from '../../state/toasts.ts';
@@ -58,6 +59,9 @@ export function TopBar() {
   const held = enabled.filter((o) => launch.open[o.id]).length;
   const known = enabled.filter((o) => launch.open[o.id] || live.health[o.id]?.connected).length;
   const linkMissing = isLive && held < known;
+  const red = currentRedState(live);
+  // Peak main-thread stall of the last minute as the core worker saw it (250 ms watchdog tick; design/25).
+  const stall = live.core?.mainThreadStallMaxMs ?? 0;
   const onFallbackLink = () => {
     reacquireMissing(true);
     if (missingHandles().ids.length)
@@ -99,6 +103,34 @@ export function TopBar() {
           })}
       </span>
       {live.pending > 0 && !fallback && <span className="tag amber">{live.pending} pending</span>}
+      {live.recovering && (
+        <span
+          className="tag amber"
+          data-recovering
+          title="The operator core is restarting. Keys and Stream Deck presses are kept and sent when it is back (about a second)."
+        >
+          Recovering…
+        </span>
+      )}
+      {red && (
+        <button
+          type="button"
+          className="tag red"
+          data-red-state={red.kind ?? 'core'}
+          onClick={() => runRedAction(red)}
+          title={red.detail ? `Last: ${red.detail}` : red.info.label}
+        >
+          {red.info.label} — {red.info.actionLabel}
+        </button>
+      )}
+      {stall >= 1000 && (
+        <span
+          className="tag amber"
+          title="The operator page was busy (peak in the last minute); the hub link, the fallback bus and the outputs were not affected. Use the Stream Deck if keys feel late."
+        >
+          UI stalled {(stall / 1000).toFixed(1)} s
+        </span>
+      )}
       {linkMissing && (
         <button
           type="button"

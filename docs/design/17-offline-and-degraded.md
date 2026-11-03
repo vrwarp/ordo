@@ -38,11 +38,20 @@ their own socket closes and they receive a `fallback.hello` from the operator.
 
 ### Fallback bus
 
-- The operator holds the `WindowProxy` handles from `window.open` (ADR 0003). It posts
-  `fallback.hello { seq }` to each handle with the output's origin as `targetOrigin`.
-- Outputs verify `event.origin === operatorOrigin` and `event.source === window.opener`
-  before accepting any message, then reply `fallback.ready { appliedSeq }` via
-  `event.source.postMessage`.
+- Transport (design/25): the authority is the operator's **core worker**. When the operator opens or
+  re-acquires a window it hands it a `MessagePort` (`offerPort`; the window accepts it only from
+  `window.opener` at the operator origin) and transfers its own end into the core worker. From then on
+  the core worker and the output's link worker talk directly; neither main thread is on the path, so
+  a long task in either page delays neither the heartbeat nor a delta. Ports are offered again after
+  a reload, on request, and while a window's bus is silent; the window keeps the newest.
+- Legacy path: the operator's main thread also relays `window.postMessage` to the core for each window.
+  Until a window has spoken on its current port, the core posts to both channels (duplicates are
+  harmless: the mirror drops a delta it already applied; hellos and heartbeats are idempotent). Once
+  the window answers on the port, the port alone is used, unless it falls silent for 5 s while the
+  relay hears the window. Diagnostics shows the channel per window ("direct port" / "window relay").
+- The operator posts `fallback.hello { seq }` to each window. Over the relay the output verifies
+  `event.origin === operatorOrigin` and `event.source === window.opener` before accepting any message;
+  over a port, trust was established at the handoff. It replies `fallback.ready { appliedSeq }`.
 - From then on the operator emits the same `live.delta` messages it would have received
   from the hub, with `seq` continuing from the last hub seq, computed by its own reducer
   (no longer optimistic: it is the authority).
@@ -53,6 +62,18 @@ their own socket closes and they receive a `fallback.hello` from the operator.
 - Assets: outputs already hold the manifest in OPFS. If an output needs a file it lacks
   (a relaunch after an incomplete fill), it asks the operator via
   `fallback.file { hash }` and receives the blob from the operator's Cache API.
+
+### Operator core restart during degraded mode
+
+If the core worker dies while it is the authority, the supervisor restarts it within about 1.5 s. The
+new core restores the operator's own state from IndexedDB and resumes the authority at once (no
+second 5 s grace) when it held it less than two minutes ago; the host hands it fresh ports to every
+window, which are re-introduced with `fallback.hello`. Outputs that went 5 s without a heartbeat in the
+meantime left the bus and hold their frame; the hello brings them back. Key presses made during the
+restart wait in the host's outbox and are applied once.
+
+When the operator page itself goes away the host posts `fallback.hub { hubUp: true }` to every window
+over the relay on `pagehide`, so the outputs leave the bus at once instead of after the 5 s silence.
 
 ### Operator reload during degraded mode
 
@@ -90,3 +111,8 @@ would freeze on its last cue until the hub returns. Documented limit.
 - Playwright: start a service, block the hub's WebSocket route, verify GO still flips
   every output within one frame, unblock, verify adoption with no visible change.
 - Playwright: reload the operator while degraded, Relaunch, verify continuity.
+- Playwright (`e2e/chaos-operator.spec.ts`): kill the operator's core worker mid-service (GO pressed
+  meanwhile reaches the hub exactly once); block the operator's main thread for 2.5 s while a GO is
+  dispatched inside the core (it reaches the hub in about 100 ms) and for 7 s while degraded (the
+  outputs stay on the fallback bus); with the hub dead, GO reaches the outputs and every window's bus
+  runs over its direct port.

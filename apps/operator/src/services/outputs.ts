@@ -169,7 +169,7 @@ export class OutputWindows {
       return null;
     }
     this.windows.set(o.id, w);
-    this.ctl.fallback.register(o.id, w, originOf(url));
+    this.ctl.core.attachWindow(o.id, w, originOf(url));
     return w;
   }
 
@@ -215,7 +215,7 @@ export class OutputWindows {
       /* gone */
     }
     this.windows.delete(id);
-    this.ctl.fallback.unregister(id);
+    this.ctl.core.detachWindow(id);
   }
 
   closeAll(): void {
@@ -253,7 +253,7 @@ export class OutputWindows {
         continue;
       }
       this.windows.set(o.id, w);
-      this.ctl.fallback.register(o.id, w, originOf(url));
+      this.ctl.core.attachWindow(o.id, w, originOf(url));
       n++;
     }
     this.refreshOpen();

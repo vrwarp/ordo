@@ -1,149 +1,100 @@
-import {
-  DEFAULT_AUDIO,
-  DEFAULT_GENERAL,
-  DEFAULT_KEYMAP,
-  DEFAULT_LOOKS,
-  DEFAULT_SURFACES,
-  type Playlist,
-} from '@ordo/domain';
+import type { Playlist } from '@ordo/domain';
 import { api } from '@ordo/client';
-import { JsonStore } from '@ordo/cache';
-import { type LibraryDelta, type LibrarySnapshot, ROUTES, type Settings } from '@ordo/protocol';
+import { ROUTES, type Settings } from '@ordo/protocol';
 import { create } from 'zustand';
-import { applyLibraryDelta, fromSnapshot, type LibraryData } from '../lib/libraryData.ts';
-import { SearchIndex } from '../lib/search.ts';
+import type { CoreToMain, LibKey, LibOp } from '../core/protocol.ts';
+import {
+  applyLibOp,
+  applyLibPatch,
+  EMPTY_SETTINGS,
+  emptyLibrary,
+  withDefaults,
+} from '../core/libraryStore.ts';
+import type { LibraryData } from '../lib/libraryData.ts';
 
-export const jsonStore = new JsonStore('ordo-operator');
-const KEY = 'library';
+export { EMPTY_SETTINGS };
 
-export const EMPTY_SETTINGS: Settings = {
-  general: DEFAULT_GENERAL,
-  looks: DEFAULT_LOOKS,
-  outputs: [],
-  audio: DEFAULT_AUDIO,
-  keymap: DEFAULT_KEYMAP,
-  surfaces: DEFAULT_SURFACES,
-};
-
+/**
+ * The main thread's read model of the library (design/25). The core worker owns the library: the hub
+ * snapshot, `library.delta` updates, the IndexedDB copy and the search index. It posts the whole library
+ * once and then only changed entities; local writes after a successful API call are applied here at once
+ * and forwarded to the core.
+ */
 type LibraryState = {
   data: LibraryData;
+  /** Something to show: the cache or the hub answered. */
   loaded: boolean;
+  /** The core tried (cache and hub), whatever the outcome: the UI can stop waiting. */
+  attempted: boolean;
   source: 'none' | 'cache' | 'hub';
   error?: string;
+  /** Revision of the core's library this read model reflects. */
+  rev: number;
 };
 
-const empty: LibraryData = {
-  seq: 0,
-  presentations: [],
-  playlists: [],
-  media: [],
-  fonts: [],
-  themes: [],
-  folders: [],
-  settings: EMPTY_SETTINGS,
-  jobs: {},
-};
+export const useLibrary = create<LibraryState>(() => ({
+  data: emptyLibrary(),
+  loaded: false,
+  attempted: false,
+  source: 'none',
+  rev: -1,
+}));
 
-export const useLibrary = create<LibraryState>(() => ({ data: empty, loaded: false, source: 'none' }));
+let sink: ((op: LibOp) => void) | undefined;
+let reload: (() => void) | undefined;
 
-export const searchIndex = new SearchIndex();
-
-/** Fill missing settings keys with defaults so the UI never sees undefined documents. */
-function withDefaults(s: Partial<Settings> | undefined): Settings {
-  return {
-    general: { ...DEFAULT_GENERAL, ...(s?.general ?? {}) },
-    looks: s?.looks?.length ? s.looks : DEFAULT_LOOKS,
-    outputs: s?.outputs ?? [],
-    audio: { ...DEFAULT_AUDIO, ...(s?.audio ?? {}) },
-    keymap: s?.keymap && Object.keys(s.keymap).length ? s.keymap : DEFAULT_KEYMAP,
-    surfaces: { ...DEFAULT_SURFACES, ...(s?.surfaces ?? {}) },
-  };
+/** Wire local writes and reloads to the core (set by the controller). */
+export function connectLibrary(opts: { op: (op: LibOp) => void; reload: () => void } | undefined): void {
+  sink = opts?.op;
+  reload = opts?.reload;
 }
 
-let persistTimer: ReturnType<typeof setTimeout> | undefined;
-function persist(): void {
-  clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => {
-    const { data, source } = useLibrary.getState();
-    if (source !== 'hub') return;
-    void jsonStore.set(KEY, { ...data, jobs: {} }).catch(() => undefined);
-  }, 1000);
-}
-
-export async function loadCachedLibrary(): Promise<boolean> {
-  try {
-    const cached = await jsonStore.get<LibraryData>(KEY);
-    if (cached && useLibrary.getState().source === 'none') {
-      useLibrary.setState({
-        data: { ...cached, settings: withDefaults(cached.settings), jobs: {} },
-        loaded: true,
-        source: 'cache',
-      });
-      return true;
-    }
-  } catch {
-    /* IndexedDB unavailable */
+/** Apply a library message from the core worker. */
+export function applyCoreLibrary(m: Extract<CoreToMain, { t: 'lib' }>): void {
+  if (m.full) {
+    const { data, source } = m.full;
+    useLibrary.setState({
+      data: { ...data, settings: withDefaults(data.settings) },
+      loaded: source !== 'none' || useLibrary.getState().loaded,
+      attempted: true,
+      source,
+      error: m.error,
+      rev: m.rev,
+    });
+    return;
   }
-  return false;
-}
-
-export async function loadLibrary(): Promise<void> {
-  try {
-    const snap = await api<LibrarySnapshot>(ROUTES.snapshot);
-    const data = fromSnapshot(snap);
-    data.settings = withDefaults(snap.settings);
-    data.jobs = useLibrary.getState().data.jobs;
-    useLibrary.setState({ data, loaded: true, source: 'hub', error: undefined });
-    persist();
-  } catch (e) {
-    useLibrary.setState({ error: e instanceof Error ? e.message : String(e) });
-    if (!useLibrary.getState().loaded) await loadCachedLibrary();
+  if (m.patch) {
+    const st = useLibrary.getState();
+    const data = applyLibPatch(st.data, m.patch);
+    useLibrary.setState({
+      data,
+      rev: m.rev,
+      error: m.error,
+      loaded: true,
+      attempted: true,
+      source: st.source === 'none' ? 'hub' : st.source,
+    });
+    return;
   }
+  useLibrary.setState({ error: m.error, attempted: true, rev: m.rev });
 }
 
-export async function refetchSettings(): Promise<void> {
-  try {
-    const s = await api<Settings>(ROUTES.settings);
-    useLibrary.setState((st) => ({ data: { ...st.data, settings: withDefaults(s) } }));
-    persist();
-  } catch {
-    /* edit role cannot read settings; snapshot has them */
-  }
+/** Ask the core to fetch the hub snapshot again. */
+export function loadLibrary(): void {
+  reload?.();
 }
 
-export function applyDelta(d: LibraryDelta): void {
-  const st = useLibrary.getState();
-  const r = applyLibraryDelta(st.data, d.changes);
-  if (r.data !== st.data) {
-    r.data.settings = withDefaults(r.data.settings);
-    useLibrary.setState({ data: r.data });
-    persist();
-  }
-  if (r.refetchSettings) void refetchSettings();
+function local(op: LibOp): void {
+  useLibrary.setState((s) => ({ data: applyLibOp(s.data, op) }));
+  sink?.(op);
 }
 
-/** Local patch after a successful API write (the delta will confirm). */
-export function patchLibrary(fn: (d: LibraryData) => LibraryData): void {
-  useLibrary.setState((s) => ({ data: fn(s.data) }));
-  persist();
+export function upsertLocal<K extends LibKey>(key: K, entity: LibraryData[K][number]): void {
+  local({ k: 'upsert', key, entity });
 }
 
-export function upsertLocal<
-  K extends 'presentations' | 'playlists' | 'media' | 'fonts' | 'themes' | 'folders',
->(key: K, entity: LibraryData[K][number]): void {
-  patchLibrary((d) => {
-    const list = d[key] as { id: string }[];
-    const i = list.findIndex((x) => x.id === entity.id);
-    const out = i < 0 ? [...list, entity] : list.map((x, k) => (k === i ? entity : x));
-    return { ...d, [key]: out };
-  });
-}
-
-export function removeLocal(
-  key: 'presentations' | 'playlists' | 'media' | 'fonts' | 'themes' | 'folders',
-  id: string,
-): void {
-  patchLibrary((d) => ({ ...d, [key]: (d[key] as { id: string }[]).filter((x) => x.id !== id) }));
+export function removeLocal(key: LibKey, id: string): void {
+  local({ k: 'remove', key, id });
 }
 
 export function settings(): Settings {
@@ -154,12 +105,10 @@ export function playlistById(id: string | undefined): Playlist | undefined {
   return id ? useLibrary.getState().data.playlists.find((p) => p.id === id) : undefined;
 }
 
-/** PUT one settings document and update the local copy. */
+/** PUT one settings document and update the local copy (and the core's). */
 export async function saveSettings<K extends keyof Settings>(key: K, value: Settings[K]): Promise<void> {
   const res = await api<Settings[K] | undefined>(`${ROUTES.settings}/${key}`, { method: 'PUT', json: value });
-  const v = settingsResult(key, value, res);
-  useLibrary.setState((s) => ({ data: { ...s.data, settings: { ...s.data.settings, [key]: v } } }));
-  persist();
+  local({ k: 'settings', key, value: settingsResult(key, value, res) });
 }
 
 /** The hub may answer a settings PUT with the document, the whole settings, or nothing. */

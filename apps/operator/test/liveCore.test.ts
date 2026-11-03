@@ -356,3 +356,42 @@ describe('LiveCore fallback authority', () => {
     expect(h.core.authority).toBe('fallback');
   });
 });
+
+describe('LiveCore pending persistence (core restart, design/25)', () => {
+  it('exports unconfirmed commands and a restarted core re-sends them with the same ids once', () => {
+    const a = harness();
+    a.core.onStatus(true);
+    const hub = liveHub();
+    a.core.onState(hub);
+    a.setHub(false);
+    const id = a.core.submit({ k: 'next', at: 5 }, 'aid-1');
+    expect(id).toBe('aid-1');
+    // A second submit with the same id (a re-sent action) is ignored.
+    expect(a.core.submit({ k: 'next', at: 5 }, 'aid-1')).toBe('aid-1');
+    expect(a.core.pendingCount).toBe(1);
+    const saved = a.core.pendingCommands();
+    expect(saved.map((p) => p.id)).toEqual(['aid-1']);
+
+    // The core dies; a new one is seeded with the confirmed hub state and the saved commands.
+    const b = harness(hub);
+    b.core.restorePending(saved);
+    expect(b.core.view.live).toBe(0); // proposed at once
+    expect(b.sent).toEqual([]); // not connected yet
+    b.core.onStatus(true);
+    b.core.onState(hub);
+    const sent = b.sent.filter((m) => m.t === 'live.event') as { id: string }[];
+    expect(sent.map((m) => m.id)).toEqual(['aid-1']);
+    expect(b.core.view.live).toBe(0); // applied once, not twice
+  });
+
+  it('drops expired, malformed and goLive commands on restore', () => {
+    const b = harness(liveHub());
+    b.core.restorePending([
+      { id: 'old', event: { k: 'next', at: 1 }, at: Date.now() - 120_000 },
+      { id: 'gl', event: { k: 'goLive', playlistId: 'x' } as never, at: Date.now() },
+      null as never,
+      { id: 'ok', event: { k: 'next', at: 1 }, at: Date.now() },
+    ]);
+    expect(b.core.pendingCommands().map((p) => p.id)).toEqual(['ok']);
+  });
+});

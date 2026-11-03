@@ -5,7 +5,8 @@ import { useMemo, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
 import { useLockedIds } from '../../hooks.ts';
-import { removeLocal, searchIndex, upsertLocal, useLibrary } from '../../state/library.ts';
+import { removeLocal, upsertLocal, useLibrary } from '../../state/library.ts';
+import { useSearch } from '../../services/search.ts';
 import { errorText, toast } from '../../state/toasts.ts';
 import { setUi, useUi } from '../../state/ui.ts';
 import { navigate } from '../../useRoute.ts';
@@ -190,23 +191,21 @@ export function PresentationsTab() {
   const [q, setQ] = useState('');
   const [tag, setTag] = useState<string>();
   const [newSong, setNewSong] = useState(false);
-  searchIndex.update(lib.presentations, lib.media);
   const byId = useMemo(() => new Map(lib.presentations.map((p) => [p.id, p])), [lib.presentations]);
   const tags = useMemo(
     () => [...new Set(lib.presentations.flatMap((p) => p.meta.tags ?? []))].sort(),
     [lib.presentations],
   );
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional dependency list
+  const docs = useSearch(q, {
+    kind: 'presentation',
+    includeArchived: folderId === null,
+    folderId: folderId ?? undefined,
+    tag,
+  });
   const results = useMemo(() => {
-    const docs = searchIndex.search(q, {
-      kind: 'presentation',
-      includeArchived: folderId === null,
-      folderId: folderId ?? undefined,
-      tag,
-    });
     const list = docs.map((d) => byId.get(d.id)!).filter(Boolean);
     return folderId === null ? list.filter((p) => p.archived) : list;
-  }, [q, folderId, tag, byId, lib.presentations]);
+  }, [docs, folderId, byId]);
   const folders = lib.folders;
 
   const setArchived = (p: Presentation, archived: boolean) => void savePresentation({ ...p, archived });

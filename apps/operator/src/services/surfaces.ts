@@ -72,6 +72,10 @@ export class Surfaces {
     this.deck = new StreamDeckDriver(ctl.dispatch);
     this.midi = new MidiDriver(ctl.dispatch);
     this.midi.setMappings(s.surfaces.midi);
+    // Key images are drawn in the core worker; HID writes stay here (WebHID needs the window).
+    this.deck.renderer = ctl.core.deckRenderer;
+    this.deck.onError = (d) => this.fault(`stream deck: ${d}`);
+    this.midi.onError = (d) => this.fault(`midi: ${d}`);
     this.unsub.push(
       useLibrary.subscribe((st, prev) => {
         const a = st.data.settings;
@@ -92,14 +96,21 @@ export class Surfaces {
       const info = await this.deck.autoConnect();
       if (info) this.onDeck(info);
     } catch (e) {
-      log('warn', `stream deck: ${String(e)}`);
+      this.fault(`stream deck: ${String(e)}`);
     }
     try {
       const ok = await this.midi.start();
       useSurfaces.setState({ midiReady: ok, midiInputs: ok ? this.midi.inputs() : [] });
     } catch (e) {
-      log('warn', `midi: ${String(e)}`);
+      this.fault(`midi: ${String(e)}`);
     }
+  }
+
+  /** A Stream Deck or MIDI error: logged and counted against the surfaces budget (design/25). */
+  private fault(detail: string): void {
+    log('warn', detail);
+    const r = this.ctl.core.budgets.record('surface', detail);
+    if (r.exceeded) log('error', `error budget exceeded: surface (${r.count} in the window)`);
   }
 
   /** Keys act only on operator screens; the editor and key recorder turn them off. */

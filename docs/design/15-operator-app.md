@@ -4,15 +4,88 @@
 contains the operator view, the editor, settings and imports. It never creates a WebGPU
 device.
 
+## Structure: a host and a core worker (design/25, phase C)
+
+```
+main thread (host)                                core worker (src/core/core.worker.ts)
+──────────────────                                ─────────────────────────────────────
+React UI rendering the view model,                HubConnection (socket + clock), LiveCore (optimistic
+Zustand read models (useLive, useLibrary),        state, pending re-submission, fallback authority with
+keydown → post action (and the clear-all hold),   its 5 s grace, loop auto-advance), FallbackHost fed with
+Stream Deck HID I/O, MIDI, window.open and        MessagePorts, actionToEvent with the GO lead, health
+window handles, the MessagePort handoff,          aggregation, library store (snapshot + library.delta +
+WebRTC program views, the supervisor of the       IndexedDB copy) and search index, service-cache fill and
+core and thumbnail workers, the outbox            fallback file serving, Stream Deck key images
+                                                  (OffscreenCanvas), error budgets, state persistence
+```
+
+- `src/core/protocol.ts` is the only contract between the two. The core posts a **view model in
+  slices** and only the slices that changed: `live` (the live state without `resolved`, authority,
+  reconcile, pending count, hub connection, own cache, clock), `resolved` (posted once per new
+  resolved playlist and referenced by revision), `health`, `budgets`, `stats` (main-thread stall,
+  bus endpoints). The library is posted once in full, then as patches of changed entities (by
+  reference identity in the worker). The main thread re-assembles `state.resolved` from its cached
+  copy, so React memoization by identity keeps working.
+- `src/services/controller.ts` is the main-thread facade with the API the views always used
+  (`go`, `select`, `clear`, `goLive`, `dispatch`, `hub.send` …). It turns calls into posted
+  actions and applies the view model to `useLive`. Window, audio-gain and launch actions stay on
+  the main thread (they need a gesture, a window handle or a settings PUT); everything else goes to
+  the core.
+- Local library writes after a successful API call (`upsertLocal`, `removeLocal`, `saveSettings`)
+  update the read model at once and are forwarded to the core, which does not echo them back.
+- Library search runs in the core (`useSearch`); while the core restarts the same index runs on the
+  read model.
+
+### GO latency
+
+The `keydown` handler maps the key and posts `{ t: 'action', aid, action }`; the core computes the
+event (`actionToEvent` with the GO lead), applies it optimistically and writes it to the socket in
+the same task. Nothing on the path waits for React. Every action carries an id (`aid`) that becomes
+the command id, so a re-sent action is de-duplicated by the hub.
+
+### Supervision and recovery
+
+`CoreClient` (`src/core/client.ts`) runs the core under the `Supervisor` from `@ordo/client`
+(heartbeat 250 ms, dead after 1.5 s, at most five restarts a minute) and the thumbnail worker under
+the same supervisor (dead after 5 s). On a core restart:
+
+1. The new core restores from IndexedDB (`core` key, validated with `isLiveStateShape` and
+   `checkInvariants`): the confirmed hub state, the unconfirmed commands (re-proposed and re-sent
+   with their ids on the next full state), the ids of actions already applied, and the authority.
+   A core that was the fallback authority less than two minutes ago resumes it at once.
+2. The host re-offers a fresh port (and relay) to every known window.
+3. The host re-sends every action the old core did not acknowledge. The core acknowledges an action
+   only after the snapshot that contains it is written, so a crash between a keypress and the hub
+   send loses nothing and applies nothing twice.
+4. The top bar shows "Recovering…" while the core misses heartbeats or restarts.
+
+The supervisor ignores missing heartbeats after a stall of its own thread (the heartbeats are
+queued behind the late check), so a long React commit never restarts a healthy core.
+
+### Main-thread watchdog
+
+The host posts a tick every 250 ms; the core measures the gap (`mainThreadStallMs`, peak over the
+last minute) and logs stalls over 1 s. A stall delays keys (they are handled on the main thread by
+necessity) but neither the hub socket, the fallback heartbeat, nor a GO from a path that does not
+touch the main thread. The top bar shows "UI stalled" with the peak, and the checklist tells the
+volunteer to use the Stream Deck as the second route.
+
+### Error budgets
+
+Counted per subsystem (`src/lib/budgets.ts`): socket drops, command rejections, fallback
+activations and cache-fill failures in the core; core restarts and Stream Deck/MIDI errors on the
+host. An exceeded budget turns the top bar red with exactly one action (Reconnect, Resync, Reload
+operator, Diagnostics, Retry download, Reconnect Stream Deck); a cache fill whose budget is spent
+stops retrying until the operator asks. The printed checklist lists each red state with its action.
+
 ## State
 
-- `live`: the `LiveState` from `packages/live-state`, held in a store (Zustand) with an
-  optimistic layer: local events apply immediately and are rebased on hub deltas.
-- `library`: entities in IndexedDB (Dexie) with an in-memory index; updated by
-  `library.delta` and by a snapshot on connect.
+- `live` (`useLive`): read model of the core's live slice plus host-side isolation state
+  (recovering, workers, budgets, core stats).
+- `library` (`useLibrary`): read model of the core's library store; the core keeps the IndexedDB
+  copy and applies `library.delta`.
 - `ui`: selection, panels, dialogs. Persisted to `localStorage` per device.
-- `bus`: the connection abstraction with two implementations, `HubBus` (WebSocket) and
-  `FallbackBus` (postMessage), selected by connection state ([design/17](17-offline-and-degraded.md)).
+- The hub bus and the fallback bus both live in the core ([design/17](17-offline-and-degraded.md)).
 
 Every action in the UI dispatches an `Action` from `packages/surfaces`; actions map to
 reducer events. Keyboard, Stream Deck and MIDI dispatch the same actions.
@@ -28,14 +101,16 @@ reducer events. Keyboard, Stream Deck and MIDI dispatch the same actions.
 | `StageTools`   | Message box, recent messages, timers                                                                                                                   |
 | `LayerBar`     | Five chips with clear buttons; media transport and remaining time; audio meters                                                                        |
 
-Thumbnails: a worker runs the shared text rasterizer and a 2D compositor at 320x180,
-cached by (slide rev, look). The main thread never rasterizes.
+Thumbnails: a supervised worker runs the shared text rasterizer and a 2D compositor at 320x180,
+cached by (slide rev, look). The main thread never rasterizes; a restarted thumbnail worker gets the
+fonts again and re-renders the jobs that were in flight. Stream Deck key images are drawn in the core
+worker on an OffscreenCanvas; only the HID writes stay on the main thread.
 
 ## Keyboard
 
 A single `keydown` listener on `window` with the key map from settings. Handled keys call
-`preventDefault`. Text inputs opt out by focus. GO-class actions are dispatched
-synchronously inside the event handler so the local state updates before the next paint.
+`preventDefault`. Text inputs opt out by focus. The handler only maps the key and posts the action
+to the core worker (plus the clear-all hold timer); the core applies it optimistically and sends it.
 
 ## Launching outputs
 
@@ -45,7 +120,12 @@ synchronously inside the event handler so the local state updates before the nex
    `ScreenRef` by label, then by position; unmatched outputs open on the primary screen
    and show a placement dialog.
 3. `window.open(outputUrl + '?token=…', 'ordo-out-' + k, 'popup,left=…,top=…,width=…,height=…')`
-   with the screen's bounds. The handle is kept in the `FallbackBus`.
+   with the screen's bounds. The handle stays on the main thread (open, close, focus only).
+   The host calls `offerPort(win, origin, outputId)` and transfers its end into the core, which
+   registers it with the fallback host; it offers again 1.5, 4 and 8 s later (the first offer may
+   reach `about:blank`), whenever the window asks (`ordo.port.request`), when the hub reports the
+   window reconnected, and every 10 s while the window's bus is silent. A legacy relay over
+   `window.postMessage` is handed to the core alongside, for a window that never takes a port.
 4. The output, on load, calls `requestFullscreen({ screen })` for its screen. Chrome
    allows this on a window opened by a gesture.
 5. Relaunch closes every handle, waits 500 ms, and repeats.

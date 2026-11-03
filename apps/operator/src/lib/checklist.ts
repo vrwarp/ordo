@@ -1,5 +1,6 @@
 import type { KeyMap } from '@ordo/domain';
 import type { Settings } from '@ordo/protocol';
+import { BUDGET_INFO, CORE_GAVE_UP } from './budgets.ts';
 
 export type ChecklistSection = { title: string; items: string[]; ordered?: boolean };
 
@@ -50,6 +51,15 @@ export function buildChecklist(s: Settings, opUrl: string): ChecklistSection[] {
         'Green: working. Amber: waiting (caching, arming, or the hub is unreachable and this PC is running the service). Red: an output is not connected or has an error.',
         'Amber top bar "Hub lost": keep going. Everything works from this PC; it reconnects by itself.',
         'A red output dot: press Relaunch. If it stays red, see below.',
+      ],
+    },
+    {
+      title: 'Red states in the top bar (one button each)',
+      items: [
+        'Amber "Recovering…": the operator core is restarting by itself. Wait a second; key presses made meanwhile are sent when it is back.',
+        'Amber "UI stalled": the operator page was busy. The outputs were not affected; use the Stream Deck if keys feel late.',
+        ...Object.values(BUDGET_INFO).map((b) => b.checklist),
+        CORE_GAVE_UP.checklist,
       ],
     },
     {

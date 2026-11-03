@@ -1,4 +1,4 @@
-import { fileUrl } from '@ordo/client';
+import { fileUrl, isControl, type Supervisor } from '@ordo/client';
 import type { Font, Look, Media, Slide } from '@ordo/domain';
 import { useEffect, useState } from 'react';
 import type { ThumbIn, ThumbJob, ThumbOut } from '../workers/thumb.worker.ts';
@@ -48,18 +48,71 @@ class Thumbs {
   private nextId = 1;
   private fontKey = '';
 
+  private sup?: Supervisor;
+  private fontMsg?: ThumbIn;
+  private inWorker = new Map<number, { job: ThumbJob; key: string }>();
+
+  /** Run the thumbnail worker under the operator's supervisor (restart on crash or missed heartbeats). */
+  supervise(sup: Supervisor): void {
+    if (this.sup === sup) return;
+    this.sup = sup;
+    if (this.worker) {
+      this.worker.terminate();
+      this.worker = undefined;
+      this.requeueInFlight();
+    }
+  }
+
+  private create(): Worker {
+    return new Worker(new URL('../workers/thumb.worker.ts', import.meta.url), {
+      type: 'module',
+      name: 'ordo-thumbs',
+    });
+  }
+
+  private wire(w: Worker): void {
+    this.worker = w;
+    w.onmessage = (ev: MessageEvent<ThumbOut>) => {
+      if (isControl(ev.data) || this.worker !== w) return;
+      const p = this.waiting.get(ev.data.id);
+      if (!p) return;
+      this.waiting.delete(ev.data.id);
+      this.inWorker.delete(ev.data.id);
+      this.busy = Math.max(0, this.busy - 1);
+      p.resolve(ev.data.blob ? URL.createObjectURL(ev.data.blob) : undefined);
+      this.pump();
+    };
+    if (this.fontMsg) w.postMessage(this.fontMsg);
+  }
+
+  /** A restarted worker lost its jobs: render them again (newest first, like any other request). */
+  private requeueInFlight(): void {
+    for (const [id, j] of this.inWorker) this.queue.push({ id, job: j.job, key: j.key });
+    this.inWorker.clear();
+    this.busy = 0;
+  }
+
   private ensure(): Worker | undefined {
     if (this.worker) return this.worker;
     if (typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined') return undefined;
     try {
-      this.worker = new Worker(new URL('../workers/thumb.worker.ts', import.meta.url), { type: 'module' });
-      this.worker.onmessage = (ev: MessageEvent<ThumbOut>) => {
-        const p = this.waiting.get(ev.data.id);
-        this.waiting.delete(ev.data.id);
-        this.busy--;
-        p?.resolve(ev.data.blob ? URL.createObjectURL(ev.data.blob) : undefined);
-        this.pump();
-      };
+      if (this.sup) {
+        if (!this.sup.worker('thumbs'))
+          this.sup.add<Worker>({
+            name: 'thumbs',
+            create: () => this.create(),
+            start: (w, gen) => {
+              if (gen > 0) this.requeueInFlight();
+              this.wire(w);
+              this.pump();
+            },
+            stop: () => {
+              this.worker = undefined;
+            },
+            // A large image decode can hold the worker for a while; it is not on the live path.
+            deadAfterMs: 5000,
+          });
+      } else this.wire(this.create());
     } catch {
       this.worker = undefined;
     }
@@ -80,6 +133,7 @@ class Thumbs {
       t: 'fonts',
       fonts: list.map((f) => ({ ...f, url: new URL(f.url, location.href).href })),
     };
+    this.fontMsg = msg;
     this.ensure()?.postMessage(msg);
     // Fonts changed: drop cached thumbnails so text re-renders with the right faces.
     for (const url of this.cache.values()) URL.revokeObjectURL(url);
@@ -134,10 +188,13 @@ class Thumbs {
   }
 
   private pump(): void {
+    const w = this.worker;
+    if (!w) return;
     while (this.busy < 2 && this.queue.length) {
       const next = this.queue.pop()!;
       this.busy++;
-      this.worker!.postMessage({ t: 'render', id: next.id, job: next.job } satisfies ThumbIn);
+      this.inWorker.set(next.id, { job: next.job, key: next.key });
+      w.postMessage({ t: 'render', id: next.id, job: next.job } satisfies ThumbIn);
     }
   }
 }

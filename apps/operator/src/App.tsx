@@ -10,7 +10,7 @@ import { installOutputWindows } from './services/outputs.ts';
 import { installProgramViews } from './services/programView.ts';
 import { installSurfaces, surfaces } from './services/surfaces.ts';
 import { installUpdateGuard, useUpdate } from './services/update.ts';
-import { loadCachedLibrary, loadLibrary, useLibrary } from './state/library.ts';
+import { useLibrary } from './state/library.ts';
 import { refreshSession, useSession } from './state/session.ts';
 import { navigate, useRoute } from './useRoute.ts';
 import { LoginView } from './views/auth/LoginView.tsx';
@@ -64,16 +64,16 @@ export function App() {
 
 function Shell({ role }: { role: 'operate' | 'edit' }) {
   const route = useRoute();
-  const [ready, setReady] = useState(false);
+  // The core worker posts the library once it has tried its IndexedDB copy (and the hub snapshot).
+  const attempted = useLibrary((s) => s.attempted);
+  const [timedOut, setTimedOut] = useState(false);
+  const ready = attempted || timedOut;
   const fonts = useLibrary((s) => s.data.fonts);
   useEffect(() => {
-    let alive = true;
-    void (async () => {
-      await loadCachedLibrary();
-      if (alive) setReady(true);
-      await loadLibrary();
-      if (alive) setReady(true);
-    })();
+    const t = setTimeout(() => setTimedOut(true), 3000);
+    return () => clearTimeout(t);
+  }, []);
+  useEffect(() => {
     const ctl = startController(role);
     const offUpdate = installUpdateGuard(ctl.hub);
     let offCacheCheck: (() => void) | undefined;
@@ -85,7 +85,6 @@ function Shell({ role }: { role: 'operate' | 'edit' }) {
       reacquireOnFirstGesture();
     }
     return () => {
-      alive = false;
       offUpdate();
       offCacheCheck?.();
     };

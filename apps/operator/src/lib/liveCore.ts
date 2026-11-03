@@ -57,6 +57,7 @@ export const PENDING_TTL_MS = 60_000;
 const PENDING_MAX = 100;
 
 export type Authority = 'hub' | 'fallback';
+export type PendingCommand = { id: string; event: LocalEvent; at: number };
 export type Reconcile = null | 'awaitState' | 'adopting' | 'conflict';
 
 export class LiveCore {
@@ -98,9 +99,13 @@ export class LiveCore {
     return this.authority === 'fallback' ? 0 : this.opt.pendingCount;
   }
 
-  /** Submit a command. Returns its id. */
-  submit(command: LiveCommand): string {
-    const id = this.deps.newId();
+  /**
+   * Submit a command. Returns its id. `id` may be given by the caller (an action re-sent after a core
+   * restart keeps its id, so the hub de-duplicates it).
+   */
+  submit(command: LiveCommand, givenId?: string): string {
+    if (givenId && this.pending.some((p) => p.id === givenId)) return givenId;
+    const id = givenId ?? this.deps.newId();
     if (this.authority === 'fallback') {
       if (command.k === 'goLive') {
         this.deps.onNotice({ kind: 'unavailable', reason: 'The hub is unreachable', command });
@@ -122,6 +127,29 @@ export class LiveCore {
     if (this.pending.length > PENDING_MAX) this.pending.shift();
     this.deps.onChange();
     return id;
+  }
+
+  /** Unconfirmed commands, persisted so a core restart does not lose them (design/25). */
+  pendingCommands(): PendingCommand[] {
+    return this.pending.map((p) => ({ id: p.id, event: p.event, at: p.at }));
+  }
+
+  /**
+   * Restore unconfirmed commands after a core restart: proposed at once (the operator sees them) and
+   * re-sent with their original ids on the next full state, so the hub applies each exactly once.
+   */
+  restorePending(list: PendingCommand[]): void {
+    if (this.authority === 'fallback') return;
+    const now = this.deps.now?.() ?? Date.now();
+    for (const p of list) {
+      if (!p || typeof p.id !== 'string' || !p.event || typeof p.event !== 'object') continue;
+      if (now - p.at >= PENDING_TTL_MS || this.pending.some((x) => x.id === p.id)) continue;
+      if ((p.event as LiveCommand).k === 'goLive') continue;
+      this.opt.propose(p.id, p.event);
+      this.pending.push({ id: p.id, event: p.event, sent: false, at: p.at });
+    }
+    if (this.pending.length > PENDING_MAX) this.pending.splice(0, this.pending.length - PENDING_MAX);
+    this.deps.onChange();
   }
 
   /** An event reported by an output over the fallback bus (media.ended / audio.ended). */

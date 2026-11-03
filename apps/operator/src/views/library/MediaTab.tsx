@@ -8,7 +8,8 @@ import { VirtualList } from '../../components/VirtualList.tsx';
 import { useLockedIds } from '../../hooks.ts';
 import { stillHash } from '../../services/thumbs.ts';
 import { uploadMedia } from '../../services/upload.ts';
-import { removeLocal, searchIndex, upsertLocal, useLibrary } from '../../state/library.ts';
+import { removeLocal, upsertLocal, useLibrary } from '../../state/library.ts';
+import { useSearch } from '../../services/search.ts';
 import { errorText, toast } from '../../state/toasts.ts';
 import { create } from 'zustand';
 
@@ -158,16 +159,14 @@ export function MediaTab() {
   const [asBackground, setAsBackground] = useState(false);
   const [previewing, setPreviewing] = useState<Media>();
   const [playing, setPlaying] = useState<string>();
-  searchIndex.update(lib.presentations, lib.media);
   const byId = useMemo(() => new Map(lib.media.map((m) => [m.id, m])), [lib.media]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional dependency list
+  const docs = useSearch(q, { kind: 'media' });
   const list = useMemo(
     () =>
-      searchIndex
-        .search(q, { kind: 'media' })
+      docs
         .map((d) => byId.get(d.id)!)
         .filter((m) => m && (!kind || m.kind === kind) && (!bgOnly || m.isBackground)),
-    [q, kind, bgOnly, byId, lib.media],
+    [docs, kind, bgOnly, byId],
   );
   const patch = async (m: Media, p: Record<string, unknown>) => {
     try {

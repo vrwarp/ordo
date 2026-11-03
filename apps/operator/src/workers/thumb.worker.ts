@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 import type { Look, Slide } from '@ordo/domain';
+import { isControl, startHeartbeat } from '@ordo/client';
 import { drawImageFit, drawSlide2D } from '@ordo/renderer';
 
 /** Thumbnail worker (design/15): the shared 2D rasterizer on an OffscreenCanvas; the main thread never rasterizes. */
@@ -92,8 +93,11 @@ async function render(job: ThumbJob): Promise<Blob> {
   return canvas.convertToBlob({ type: 'image/jpeg', quality: 0.82 });
 }
 
+startHeartbeat(scope);
+
 scope.onmessage = (ev: MessageEvent<ThumbIn>) => {
   const m = ev.data;
+  if (!m || isControl(m)) return;
   if (m.t === 'fonts') {
     const loads: Promise<unknown>[] = [];
     for (const f of m.fonts) {

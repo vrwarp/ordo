@@ -2,7 +2,8 @@ import { type ActionId, newId, type PlaylistItem } from '@ordo/domain';
 import { useMemo, useState } from 'react';
 import { Select } from '../../components/fields.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
-import { searchIndex, useLibrary } from '../../state/library.ts';
+import { useLibrary } from '../../state/library.ts';
+import { useSearch } from '../../services/search.ts';
 import { stateTag } from '../library/MediaTab.tsx';
 
 const ACTIONS: { value: ActionId; label: string }[] = [
@@ -23,14 +24,9 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
   const [time, setTime] = useState('10:00');
   const [label, setLabel] = useState('');
   const [action, setAction] = useState<ActionId>('clearAll');
-  searchIndex.update(lib.presentations, lib.media);
   const pres = useMemo(() => new Map(lib.presentations.map((p) => [p.id, p])), [lib.presentations]);
   const media = useMemo(() => new Map(lib.media.map((m) => [m.id, m])), [lib.media]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional dependency list
-  const results = useMemo(
-    () => searchIndex.search(q, { kind, limit: 500 }),
-    [q, kind, lib.presentations, lib.media],
-  );
+  const results = useSearch(q, { kind, limit: 500 });
   return (
     <div style={{ display: 'grid', gridTemplateRows: 'auto 1fr auto', height: '100%' }}>
       <div className="col" style={{ padding: 10, borderBottom: '1px solid var(--line)' }}>

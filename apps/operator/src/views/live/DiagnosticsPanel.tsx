@@ -2,10 +2,12 @@ import { API_PREFIX } from '@ordo/protocol';
 import { useEffect, useState } from 'react';
 import { keyed } from '../../lib/keys.ts';
 import { Dialog } from '../../components/Dialog.tsx';
+import { BUDGET_INFO, type BudgetKind } from '../../lib/budgets.ts';
 import { outputDot } from '../../lib/health.ts';
 import { APP_VERSION, controller } from '../../services/controller.ts';
 import { logLines, onLog } from '../../services/log.ts';
 import { outputWindows, useLaunch } from '../../services/outputs.ts';
+import { runRedAction } from '../../services/redState.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
 import { toast } from '../../state/toasts.ts';
@@ -23,6 +25,10 @@ export function downloadOperatorLog(): void {
     mode: live.state.mode,
     health: live.health,
     ownCache: live.ownCache,
+    workers: live.workers,
+    budgets: [...live.mainBudgets, ...live.coreBudgets],
+    core: live.core,
+    unacknowledged: live.unacknowledged,
     cacheCheck: live.cacheCheck,
     log: logLines(),
     /** Last log lines of every output and stage window, as reported in health (prd/08). */
@@ -151,6 +157,148 @@ export function OutputLogs() {
   );
 }
 
+/**
+ * Isolation and supervision (design/25): the operator's own workers, the core's view of the main thread,
+ * the fallback-bus channel per window, and every window's supervised workers and quarantined items.
+ */
+export function IsolationPanel() {
+  const live = useLive();
+  const outputs = useLibrary((s) => s.data.settings.outputs);
+  const core = live.core;
+  const budgets = [...live.mainBudgets, ...live.coreBudgets];
+  return (
+    <div className="col" style={{ gap: 10 }}>
+      <div className="row wrap">
+        <span className={`tag ${live.recovering ? 'amber' : ''}`}>
+          core {live.coreGaveUp ? 'stopped' : live.recovering ? 'recovering' : 'running'}
+          {core ? `, generation ${core.generation}` : ''}
+        </span>
+        <span className={`tag ${(core?.mainThreadStallMaxMs ?? 0) >= 1000 ? 'amber' : ''}`}>
+          main thread stall {Math.round(core?.mainThreadStallMs ?? 0)} ms, peak{' '}
+          {Math.round(core?.mainThreadStallMaxMs ?? 0)} ms (last minute)
+        </span>
+        <span className={`tag ${live.unacknowledged ? 'amber' : ''}`}>
+          {live.unacknowledged} action{live.unacknowledged === 1 ? '' : 's'} awaiting the core
+        </span>
+        {!!core?.persistFailures && (
+          <span className="tag red">{core.persistFailures} state saves failed</span>
+        )}
+      </div>
+      <table className="list">
+        <thead>
+          <tr>
+            <th>Window</th>
+            <th>Worker</th>
+            <th>Generation</th>
+            <th>Restarts</th>
+            <th>Heartbeat</th>
+            <th>Last restart reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          {live.workers.map((w) => (
+            <tr key={`op-${w.name}`}>
+              <td>Operator</td>
+              <td>{w.name}</td>
+              <td>{w.generation}</td>
+              <td>{w.restarts}</td>
+              <td style={{ color: w.gaveUp ? 'var(--red)' : undefined }}>
+                {w.gaveUp ? 'stopped' : `${Math.round(w.sinceHeartbeatMs)} ms ago`}
+              </td>
+              <td className="small">{w.lastReason ?? ''}</td>
+            </tr>
+          ))}
+          {outputs.flatMap((o) =>
+            (live.health[o.id]?.workers ?? []).map((w) => (
+              <tr key={`${o.id}-${w.name}`}>
+                <td>{o.name}</td>
+                <td>{w.name}</td>
+                <td>{w.generation}</td>
+                <td>{w.restarts}</td>
+                <td style={{ color: w.gaveUp ? 'var(--red)' : undefined }}>{w.gaveUp ? 'stopped' : 'ok'}</td>
+                <td className="small">{w.lastReason ?? ''}</td>
+              </tr>
+            )),
+          )}
+        </tbody>
+      </table>
+      <table className="list">
+        <thead>
+          <tr>
+            <th>Window</th>
+            <th>Fallback bus</th>
+            <th>Last heard</th>
+            <th>Main thread stall</th>
+            <th>Quarantined</th>
+          </tr>
+        </thead>
+        <tbody>
+          {outputs.map((o) => {
+            const ep = core?.endpoints[o.id];
+            const h = live.health[o.id];
+            return (
+              <tr key={o.id}>
+                <td>{o.name}</td>
+                <td>
+                  {ep
+                    ? `${ep.active === 'port' ? 'direct port' : ep.active === 'window' ? 'window relay' : ep.active}${ep.ready ? ', on bus' : ''}`
+                    : 'no window'}
+                </td>
+                <td>
+                  {ep ? (ep.sinceRxMs < 0 ? 'never' : `${Math.round(ep.sinceRxMs / 1000)} s ago`) : '—'}
+                </td>
+                <td>{h?.mainThreadStallMs !== undefined ? `${Math.round(h.mainThreadStallMs)} ms` : '—'}</td>
+                <td className="small" title={h?.quarantined?.items.join('\n')}>
+                  {h?.quarantined?.count
+                    ? `${h.quarantined.count}: ${h.quarantined.items.slice(0, 3).join(', ')}`
+                    : '—'}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <table className="list">
+        <thead>
+          <tr>
+            <th>Error budget</th>
+            <th>Count</th>
+            <th>Limit</th>
+            <th>Last</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {budgets.map((b) => {
+            const info = BUDGET_INFO[b.kind as BudgetKind];
+            return (
+              <tr key={b.kind} style={{ color: b.exceeded ? 'var(--red)' : undefined }}>
+                <td>{info?.label ?? b.kind}</td>
+                <td>{b.count}</td>
+                <td>
+                  {b.max} per {Math.round(b.windowMs / 60_000)} min
+                </td>
+                <td className="small">{b.last ?? ''}</td>
+                <td>
+                  {b.exceeded && info && (
+                    <button
+                      type="button"
+                      className="small"
+                      onClick={() => runRedAction({ kind: b.kind as BudgetKind, info })}
+                    >
+                      {info.actionLabel}
+                    </button>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function DiagnosticsPanel() {
   const show = useUi((s) => s.showDiagnostics);
   const live = useLive();
@@ -178,6 +326,8 @@ export function DiagnosticsPanel() {
             {new Date(live.cacheCheck.at).toLocaleTimeString()})
           </div>
         )}
+        <h4>Isolation and supervision</h4>
+        <IsolationPanel />
         <h4>Output window logs</h4>
         <OutputLogs />
         <h4>Operator log (last 50 lines)</h4>
@@ -198,7 +348,7 @@ export function DiagnosticsPanel() {
           >
             Re-acquire output windows
           </button>
-          <button type="button" onClick={() => ctl?.hub.send({ t: 'live.resync' })}>
+          <button type="button" onClick={() => ctl?.resync()}>
             Resync live state
           </button>
         </div>

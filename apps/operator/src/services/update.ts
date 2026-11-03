@@ -1,4 +1,4 @@
-import type { HubConnection } from '@ordo/client';
+import type { Emitter } from '@ordo/client';
 import { create } from 'zustand';
 import {
   nextUpdateAttempt,
@@ -40,13 +40,17 @@ export const useUpdate = create<UpdateStore>(() => {
  * Watch the hub connection: a `bye: version` means this tab is stale and the client reloads in 500 ms.
  * Show "Updating…" meanwhile and count the attempt; a welcome (versions agree) clears the count.
  */
-export function installUpdateGuard(hub: HubConnection): () => void {
+export type UpdateSource = Pick<Emitter<{ bye: { reason: string }; welcome: { appVersion: string } }>, 'on'>;
+
+export function installUpdateGuard(hub: UpdateSource): () => void {
   const offBye = hub.on('bye', (m) => {
     if (m.reason !== 'version') return;
     const { attempt, exhausted } = nextUpdateAttempt(useUpdate.getState().attempt);
     writeAttempts(attempt);
     useUpdate.setState({ phase: exhausted ? 'failed' : 'updating', attempt });
     log('warn', `app version differs from the hub: reloading (attempt ${attempt} of ${UPDATE_RETRY_CAP})`);
+    // The socket lives in the core worker, which cannot reload the page: the host does it.
+    setTimeout(() => location.reload(), 500);
   });
   const offWelcome = hub.on('welcome', (w) => {
     if (useUpdate.getState().attempt) log('info', `updated to ${w.appVersion}`);
