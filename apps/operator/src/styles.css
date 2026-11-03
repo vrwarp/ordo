@@ -6,7 +6,8 @@
   --line: #2d333d;
   --fg: #e7eaee;
   --fg2: #a8b0bc;
-  --fg3: #6f7886;
+  /* 4.5:1 or better on --bg, --bg2, --bg3 and --bg4 (checked by apps/operator/test/styles.test.ts). */
+  --fg3: #8a93a1;
   --accent: #3b82f6;
   --accent2: #2563eb;
   --live: #ef4444;
@@ -407,6 +408,25 @@ table.list th {
   height: 100%;
   min-height: 0;
 }
+/* Everything pressed during a service is at least 36 px high (prd/02 usability), small buttons included. */
+.op button,
+.op .btn,
+.op select,
+.op input[type="text"],
+.op input[type="range"] {
+  min-height: 36px;
+}
+.op button.small,
+.op .btn.small {
+  padding: 0 10px;
+}
+.op label.check {
+  min-height: 36px;
+}
+.op input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+}
 .topbar {
   display: flex;
   align-items: center;
@@ -503,7 +523,7 @@ table.list th {
   margin: 12px 0 6px;
 }
 .section-head button {
-  min-height: 30px;
+  min-height: 36px;
 }
 .slide-grid {
   display: grid;

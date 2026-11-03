@@ -6,5 +6,7 @@ export * from './props.ts';
 export * from './health.ts';
 export * from './raster.ts';
 export * from './messages.ts';
+export * from './cache-policy.ts';
+export * from './bitmap-cache.ts';
 export type { Compositor, FrameInputs, VideoFrames } from './compositor.ts';
 export { MAX_VIDEO_SLOTS } from './compositor.ts';

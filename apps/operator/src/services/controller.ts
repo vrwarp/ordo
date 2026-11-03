@@ -102,6 +102,9 @@ export class Controller {
       this.core.onStatus(connected);
       useLive.setState((s) => ({ hubConnected: connected, everConnected: s.everConnected || connected }));
     });
+    h.on('lost', ({ sincePongMs }) =>
+      log('warn', `hub liveness failed: no pong for ${Math.round(sincePongMs / 100) / 10} s; socket dropped`),
+    );
     h.on('welcome', () => {
       this.core.onWelcome();
       // Deltas may have been missed while away.
@@ -168,7 +171,7 @@ export class Controller {
         void this.adjustMaster(-3);
         return;
       case 'audioFadeOut':
-        this.submit({ k: 'audio.stop', at: hubNow() + GO_LEAD_MS });
+        this.submit({ k: 'audio.stop', at: this.at() });
         return;
       case 'clearAll': {
         const now = Date.now();
@@ -184,7 +187,7 @@ export class Controller {
         break;
       }
     }
-    const ev = actionToEvent(this.core.view, a, hubNow() + GO_LEAD_MS, {
+    const ev = actionToEvent(this.core.view, a, this.at(), {
       messagePresets: settings().surfaces.messagePresets,
       newId,
     });
@@ -203,8 +206,10 @@ export class Controller {
 
   // ---- convenience commands for the UI ----
 
+  /** Hub time for the next GO: now plus the GO lead time from Settings → General (default GO_LEAD_MS). */
   at(): number {
-    return hubNow() + GO_LEAD_MS;
+    const lead = settings().general.defaultPreRollMs;
+    return hubNow() + (Number.isFinite(lead) && lead >= 0 ? lead : GO_LEAD_MS);
   }
   go(cueIndex: number): void {
     this.submit({ k: 'go', cueIndex, at: this.at() });

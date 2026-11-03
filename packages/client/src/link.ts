@@ -2,43 +2,73 @@ import type { OutputHealth } from '@ordo/protocol';
 import type { LiveState } from '@ordo/domain';
 import { Emitter } from './emitter.ts';
 import { HubConnection, type RtcSignalIn } from './hub.ts';
-import { FallbackClient } from './fallback.ts';
+import { FALLBACK_SILENCE_MS, FallbackClient } from './fallback.ts';
 import { LiveMirror } from './mirror.ts';
 import { clock } from './clock.ts';
 import { appEnv, operatorOrigin as defaultOperatorOrigin } from './env.ts';
 import { setApiToken } from './api.ts';
 import type { LibraryDelta } from '@ordo/protocol';
 
+export type Bus = 'hub' | 'fallback' | 'none';
+export type OutputEvent = { k: 'media.ended' | 'audio.ended'; cueIndex: number; at: number };
+
+/** Ended events are kept for resending on a bus change for this long. */
+const EVENT_KEEP_MS = 30_000;
+const EVENT_KEEP_MAX = 20;
+/** How often the fallback bus is checked for silence or a closed opener. */
+const WATCH_MS = 1000;
+
 /**
  * The live link an output or stage window uses: hub WebSocket normally, the operator's postMessage bus
  * when the operator says the hub is gone. Exposes one mirror of the live state either way.
+ *
+ * The window leaves the fallback bus on its own (design/17) when any of these holds:
+ * - the hub socket is up and the hub's state sequence is at or above the applied one (the hub only
+ *   reaches that after adopting the operator's state, or when nothing changed while it was away);
+ * - no message has arrived from the operator for 5 s (the host heartbeats every 2 s);
+ * - the opener window is closed.
+ * It also leaves when the operator posts `fallback.hub { hubUp: true }`.
  */
 export class OutputLink extends Emitter<{
-  bus: { bus: 'hub' | 'fallback' | 'none' };
+  bus: { bus: Bus; reason?: string };
   library: LibraryDelta;
   rtc: RtcSignalIn;
 }> {
   readonly mirror = new LiveMirror();
   readonly hub: HubConnection;
   readonly fallback?: FallbackClient;
-  bus: 'hub' | 'fallback' | 'none' = 'none';
+  bus: Bus = 'none';
   readonly outputId: string;
   readonly token: string;
+  private watch?: ReturnType<typeof setInterval>;
+  private recentEvents: { id: string; event: OutputEvent; at: number; sent: boolean }[] = [];
 
-  constructor(opts: { role: 'output' | 'stage'; appVersion: string; operatorOrigin?: string }) {
+  constructor(opts: {
+    role: 'output' | 'stage';
+    appVersion: string;
+    operatorOrigin?: string;
+    /** Test seams. */
+    hub?: HubConnection;
+    fallback?: FallbackClient | null;
+    outputId?: string;
+    token?: string;
+  }) {
     super();
-    const env = appEnv();
-    this.outputId = env.outputId ?? 'unknown';
-    this.token = env.token ?? '';
+    const env = typeof location !== 'undefined' ? appEnv() : { domain: '' };
+    this.outputId = opts.outputId ?? env.outputId ?? 'unknown';
+    this.token = opts.token ?? env.token ?? '';
     setApiToken(this.token);
-    this.hub = new HubConnection({
-      role: opts.role,
-      appVersion: opts.appVersion,
-      outputId: this.outputId,
-      token: this.token,
-    });
-    const operatorOrigin = opts.operatorOrigin ?? defaultOperatorOrigin(env);
-    if (typeof window !== 'undefined' && window.opener) {
+    this.hub =
+      opts.hub ??
+      new HubConnection({
+        role: opts.role,
+        appVersion: opts.appVersion,
+        outputId: this.outputId,
+        token: this.token,
+      });
+    if (opts.fallback !== undefined) this.fallback = opts.fallback ?? undefined;
+    else if (typeof window !== 'undefined' && window.opener) {
+      const operatorOrigin = opts.operatorOrigin ?? defaultOperatorOrigin(env);
       try {
         this.fallback = new FallbackClient(operatorOrigin, this.outputId);
       } catch {
@@ -47,22 +77,28 @@ export class OutputLink extends Emitter<{
     }
 
     this.hub.on('status', ({ connected }) => {
-      if (connected && this.bus !== 'fallback') this.setBus('hub');
-      if (!connected && this.bus === 'hub') this.setBus('none');
+      if (connected && this.bus !== 'fallback') this.setBus('hub', 'hub connected');
+      if (!connected && this.bus === 'hub') this.setBus('none', 'hub disconnected');
     });
     this.hub.on('state', (m) => {
-      if (this.bus === 'fallback') return;
+      if (this.bus === 'fallback') {
+        if (m.seq < this.mirror.state.seq) return; // the hub has not caught up (adopted) yet
+        this.leaveFallback('hub caught up');
+      }
       this.mirror.applyState(m.state);
     });
     this.hub.on('delta', (m) => {
-      if (this.bus === 'fallback') return;
+      if (this.bus === 'fallback') {
+        if (m.fromSeq < this.mirror.state.seq) return;
+        this.leaveFallback('hub caught up');
+      }
       if (!this.mirror.applyDelta(m)) this.hub.send({ t: 'live.resync' });
     });
     this.hub.on('library', (m) => this.emit('library', m));
     this.hub.on('rtc', (m) => this.emit('rtc', m));
 
     this.fallback?.on('hello', () => {
-      this.setBus('fallback');
+      this.setBus('fallback', 'operator hello');
       clock.fallback = true;
       this.fallback!.ready(this.mirror.state.seq);
     });
@@ -74,10 +110,8 @@ export class OutputLink extends Emitter<{
       if (!this.mirror.applyDelta(m)) this.fallback!.ready(this.mirror.state.seq); // ask for a full state
     });
     this.fallback?.on('hub', ({ hubUp }) => {
-      if (!hubUp) return;
-      clock.fallback = false;
-      this.setBus(this.hub.connected ? 'hub' : 'none');
-      this.hub.send({ t: 'live.resync' });
+      if (hubUp && this.bus === 'fallback') this.leaveFallback('operator says hub up');
+      else if (hubUp) clock.fallback = false;
     });
   }
 
@@ -87,6 +121,20 @@ export class OutputLink extends Emitter<{
 
   start(): void {
     this.hub.start();
+    if (this.fallback && !this.watch) this.watch = setInterval(() => this.watchFallback(), WATCH_MS);
+  }
+
+  stop(): void {
+    clearInterval(this.watch);
+    this.watch = undefined;
+    this.hub.stop();
+  }
+
+  /** Silence or a closed opener ends the fallback bus (tests call this directly). */
+  watchFallback(now = Date.now()): void {
+    if (this.bus !== 'fallback' || !this.fallback) return;
+    if (!this.fallback.available) this.leaveFallback('opener closed');
+    else if (now - this.fallback.lastTraffic >= FALLBACK_SILENCE_MS) this.leaveFallback('operator silent');
   }
 
   sendHealth(h: OutputHealth): void {
@@ -97,23 +145,48 @@ export class OutputLink extends Emitter<{
 
   /**
    * Send a live event (outputs only send media.ended / audio.ended). While the operator is the authority
-   * (fallback bus) it goes to the operator, otherwise to the hub.
+   * (fallback bus) it goes to the operator, otherwise to the hub. With no bus up it is queued and sent
+   * when one comes up; recent events are resent on a bus change (both sides de-duplicate by id).
    */
-  sendEvent(event: { k: 'media.ended' | 'audio.ended'; cueIndex: number; at: number }): void {
-    if (this.bus === 'fallback' && this.fallback) {
-      this.fallback.sendEvent(event);
-      return;
-    }
-    this.hub.send({
-      t: 'live.event',
-      id: `${this.outputId}-${event.k}-${event.cueIndex}-${event.at}`,
-      event,
-    });
+  sendEvent(event: OutputEvent): void {
+    const id = `${this.outputId}-${event.k}-${event.cueIndex}-${event.at}`;
+    const now = Date.now();
+    this.recentEvents = this.recentEvents.filter((e) => now - e.at < EVENT_KEEP_MS && e.id !== id);
+    const rec = { id, event, at: now, sent: false };
+    this.recentEvents.push(rec);
+    if (this.recentEvents.length > EVENT_KEEP_MAX) this.recentEvents.shift();
+    this.deliver(rec);
   }
 
-  private setBus(b: 'hub' | 'fallback' | 'none'): void {
+  /** Events not yet delivered to any bus (for tests and diagnostics). */
+  get queuedEvents(): number {
+    return this.recentEvents.filter((e) => !e.sent).length;
+  }
+
+  private deliver(rec: { id: string; event: OutputEvent; sent: boolean }): boolean {
+    let ok = false;
+    if (this.bus === 'fallback' && this.fallback) ok = this.fallback.sendEvent(rec.event, rec.id);
+    else if (this.bus === 'hub') ok = this.hub.send({ t: 'live.event', id: rec.id, event: rec.event });
+    if (ok) rec.sent = true;
+    return ok;
+  }
+
+  private flushEvents(): void {
+    const now = Date.now();
+    this.recentEvents = this.recentEvents.filter((e) => now - e.at < EVENT_KEEP_MS);
+    for (const rec of this.recentEvents) this.deliver(rec);
+  }
+
+  private leaveFallback(reason: string): void {
+    clock.fallback = false;
+    this.setBus(this.hub.connected ? 'hub' : 'none', reason);
+    this.hub.send({ t: 'live.resync' });
+  }
+
+  private setBus(b: Bus, reason?: string): void {
     if (this.bus === b) return;
     this.bus = b;
-    this.emit('bus', { bus: b });
+    this.emit('bus', { bus: b, reason });
+    if (b !== 'none') this.flushEvents();
   }
 }

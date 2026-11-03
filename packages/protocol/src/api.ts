@@ -57,6 +57,24 @@ export type LibrarySnapshot = {
   settings: Settings;
 };
 
+/**
+ * GET /library/snapshot?since=<seq>: the changes after `since`, when the hub still has them. Entities are
+ * carried in full (deleted ones have `deleted: true`); `job` changes are not library content and are left
+ * out. When `since` is absent, ahead of the hub or older than the retained change log, the hub answers with
+ * a full LibrarySnapshot instead (distinguish by the `changes` key).
+ */
+export type LibrarySnapshotDelta = {
+  seq: number;
+  since: number;
+  changes: {
+    kind: 'presentation' | 'playlist' | 'media' | 'font' | 'theme' | 'settings' | 'folder';
+    id: string;
+    rev?: number;
+    entity?: unknown;
+    deleted?: boolean;
+  }[];
+};
+
 /** All settings documents. GET /settings returns this; PUT /settings/:key replaces one key. */
 export type Settings = {
   general: GeneralSettings;

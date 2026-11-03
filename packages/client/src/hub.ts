@@ -23,6 +23,16 @@ export type ClientMessageBody = ClientMessage extends infer T
   : never;
 
 export type RtcSignalIn = { t: 'rtc.signal'; v: 1; to: string; from: string; sdp?: unknown; ice?: unknown };
+/** "Send to preview" relayed by the hub to one idle output (protocol PreviewMsg). */
+export type PreviewIn = {
+  t: 'preview';
+  v: 1;
+  to: string;
+  from: string;
+  presentation?: unknown;
+  slideId?: string;
+  clear?: boolean;
+};
 
 export type HubEvents = {
   status: { connected: boolean };
@@ -33,7 +43,10 @@ export type HubEvents = {
   library: LibraryDelta;
   health: HealthSummary;
   rtc: RtcSignalIn;
+  preview: PreviewIn;
   bye: Bye;
+  /** Liveness failed: the socket was discarded without waiting for a close handshake. */
+  lost: { sincePongMs: number };
 };
 
 export type HubConnectionOptions = {
@@ -44,21 +57,40 @@ export type HubConnectionOptions = {
   clock?: HubClock;
   /** Override for tests. Default: ws(s)://<current host>/ws */
   url?: string;
+  /** Ping period while no playlist is live (default 10 s). */
   pingIntervalMs?: number;
+  /** Ping period while a playlist is live (default 3 s). */
+  livePingIntervalMs?: number;
+  /** Declare the connection lost after this long without a pong (default 9 s live, 3 × idle period idle). */
+  lostAfterMs?: number;
 };
+
+export const IDLE_PING_MS = 10_000;
+export const LIVE_PING_MS = 3000;
+export const LIVE_LOST_MS = 9000;
+/** How often liveness is judged (independent of the ping period, so loss is noticed within a second). */
+const CHECK_MS = 1000;
 
 /**
  * One WebSocket to the hub with hello, clock sync, liveness and automatic reconnect.
- * The connection is considered lost on close or after three unanswered pings.
+ *
+ * Liveness is judged by the time since the last pong (or welcome), never by counting sent pings: the
+ * clock-seeding burst after welcome does not count, and a slow pong only delays the estimate. While a
+ * playlist is live the hub is pinged every 3 s and the connection is declared lost after 9 s without a
+ * pong; idle, every 10 s and 30 s. On loss the socket is discarded at once (no close handshake, which
+ * never completes on a dead peer), `status { connected: false }` fires and a reconnect is scheduled.
  */
 export class HubConnection extends Emitter<HubEvents> {
   private ws?: WebSocket;
   private stopped = false;
   private backoff = 500;
   private pingTimer?: ReturnType<typeof setInterval>;
+  private checkTimer?: ReturnType<typeof setInterval>;
+  private burstTimers: ReturnType<typeof setTimeout>[] = [];
   private reconnectTimer?: ReturnType<typeof setTimeout>;
-  private unanswered = 0;
+  private lastPong = 0;
   private lastSeq?: number;
+  private live = false;
   readonly clock: HubClock;
   connected = false;
 
@@ -74,24 +106,67 @@ export class HubConnection extends Emitter<HubEvents> {
 
   stop(): void {
     this.stopped = true;
-    clearInterval(this.pingTimer);
+    this.clearTimers();
     clearTimeout(this.reconnectTimer);
-    this.ws?.close();
+    const ws = this.ws;
+    this.ws = undefined;
+    if (ws) {
+      this.detach(ws);
+      try {
+        ws.close();
+      } catch {
+        /* already closed */
+      }
+    }
     this.setConnected(false);
   }
 
-  /** Force a reconnect (used when liveness fails). */
+  /** Force a reconnect: drop the socket now and reconnect after the backoff. */
   kick(): void {
-    this.ws?.close();
+    this.lose('kicked');
   }
 
   noteSeq(seq: number): void {
     this.lastSeq = seq;
   }
 
+  /**
+   * Whether a playlist is live, which selects the ping period. Learned from the hub's own state
+   * messages; callers that know better (the operator in fallback) may set it too.
+   */
+  setLive(on: boolean): void {
+    if (this.live === on) return;
+    this.live = on;
+    if (this.connected) this.startPinging();
+  }
+
+  get isLive(): boolean {
+    return this.live;
+  }
+
+  /** Milliseconds since the last pong or welcome (Infinity before the first connection). */
+  get sincePongMs(): number {
+    return this.lastPong ? Date.now() - this.lastPong : Number.POSITIVE_INFINITY;
+  }
+
+  get pingIntervalMs(): number {
+    return this.live
+      ? (this.opts.livePingIntervalMs ?? LIVE_PING_MS)
+      : (this.opts.pingIntervalMs ?? IDLE_PING_MS);
+  }
+
+  get lostAfterMs(): number {
+    if (this.opts.lostAfterMs) return this.opts.lostAfterMs;
+    return this.live ? LIVE_LOST_MS : 3 * (this.opts.pingIntervalMs ?? IDLE_PING_MS);
+  }
+
   send(m: ClientMessageBody): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.connected) return false;
-    this.ws.send(JSON.stringify({ ...m, v: PROTOCOL_VERSION }));
+    try {
+      this.ws.send(JSON.stringify({ ...m, v: PROTOCOL_VERSION }));
+    } catch {
+      return false;
+    }
     return true;
   }
 
@@ -113,6 +188,7 @@ export class HubConnection extends Emitter<HubEvents> {
     }
     this.ws = ws;
     ws.onopen = () => {
+      if (this.ws !== ws) return;
       ws.send(
         JSON.stringify({
           t: 'hello',
@@ -124,16 +200,44 @@ export class HubConnection extends Emitter<HubEvents> {
         }),
       );
     };
-    ws.onmessage = (ev) => this.onMessage(ev.data as string);
+    ws.onmessage = (ev) => {
+      if (this.ws === ws) this.onMessage(ev.data as string);
+    };
     ws.onclose = () => {
       if (this.ws !== ws) return;
-      clearInterval(this.pingTimer);
+      this.ws = undefined;
+      this.clearTimers();
       this.setConnected(false);
       this.scheduleReconnect();
     };
     ws.onerror = () => {
       /* close follows */
     };
+  }
+
+  private detach(ws: WebSocket): void {
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onclose = null;
+    ws.onerror = null;
+  }
+
+  /** Liveness failed (or a kick): discard the socket without a handshake and reconnect. */
+  private lose(reason: string): void {
+    const ws = this.ws;
+    if (!ws) return;
+    const since = this.sincePongMs;
+    this.ws = undefined;
+    this.clearTimers();
+    this.detach(ws);
+    try {
+      ws.close();
+    } catch {
+      /* ignore */
+    }
+    this.setConnected(false);
+    if (reason === 'liveness') this.emit('lost', { sincePongMs: since });
+    this.scheduleReconnect();
   }
 
   private scheduleReconnect(): void {
@@ -143,14 +247,33 @@ export class HubConnection extends Emitter<HubEvents> {
     this.backoff = Math.min(5000, this.backoff * 2);
   }
 
+  private clearTimers(): void {
+    clearInterval(this.pingTimer);
+    clearInterval(this.checkTimer);
+    this.pingTimer = undefined;
+    this.checkTimer = undefined;
+    for (const t of this.burstTimers) clearTimeout(t);
+    this.burstTimers = [];
+  }
+
+  private startPinging(): void {
+    clearInterval(this.pingTimer);
+    this.pingTimer = setInterval(() => this.ping(), this.pingIntervalMs);
+    if (!this.checkTimer) this.checkTimer = setInterval(() => this.check(), CHECK_MS);
+  }
+
+  private check(): void {
+    if (!this.ws || !this.connected) return;
+    if (this.sincePongMs >= this.lostAfterMs) this.lose('liveness');
+  }
+
   private ping(): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.unanswered++;
-    if (this.unanswered > 3) {
-      this.ws.close();
-      return;
+    try {
+      this.ws.send(JSON.stringify({ t: 'time.ping', v: PROTOCOL_VERSION, c: Date.now() }));
+    } catch {
+      /* the close event follows */
     }
-    this.ws.send(JSON.stringify({ t: 'time.ping', v: PROTOCOL_VERSION, c: Date.now() }));
   }
 
   private onMessage(raw: string): void {
@@ -163,28 +286,31 @@ export class HubConnection extends Emitter<HubEvents> {
     switch (m.t) {
       case 'welcome': {
         this.backoff = 500;
-        this.unanswered = 0;
+        this.lastPong = Date.now();
         this.clock.addSample(Date.now(), m.hubMs, Date.now());
         this.setConnected(true);
-        // A burst of pings for a good initial offset, then one every interval.
-        for (let i = 0; i < 4; i++) setTimeout(() => this.ping(), 30 * i);
-        clearInterval(this.pingTimer);
-        this.pingTimer = setInterval(() => this.ping(), this.opts.pingIntervalMs ?? 10_000);
+        // A burst of pings for a good initial offset (min-RTT selection); they do not count for liveness.
+        this.clearTimers();
+        for (let i = 0; i < 4; i++) this.burstTimers.push(setTimeout(() => this.ping(), 30 * i));
+        this.startPinging();
         this.emit('welcome', m);
         return;
       }
       case 'time.pong': {
         const p = m as TimePong;
-        this.unanswered = 0;
+        this.lastPong = Date.now();
         this.clock.addSample(p.c, p.s, Date.now());
         return;
       }
       case 'live.state':
         this.lastSeq = m.seq;
+        this.setLive(m.state.mode === 'live');
         this.emit('state', m);
         return;
       case 'live.delta':
         this.lastSeq = m.seq;
+        if (m.event.k === 'goLive') this.setLive(true);
+        else if (m.event.k === 'endService') this.setLive(false);
         this.emit('delta', m);
         return;
       case 'live.ack':
@@ -198,6 +324,9 @@ export class HubConnection extends Emitter<HubEvents> {
         return;
       case 'rtc.signal':
         this.emit('rtc', m as RtcSignalIn);
+        return;
+      case 'preview':
+        this.emit('preview', m as PreviewIn);
         return;
       case 'bye':
         this.emit('bye', m);

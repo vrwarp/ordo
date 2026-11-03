@@ -153,6 +153,23 @@ export class Auth {
     return { id, role: row.role };
   }
 
+  /**
+   * Slide a session on WebSocket activity (item 24: an operator who only uses the keyboard never makes
+   * an HTTP call). Takes the session id (the cookie's hash, as in the principal). Returns false when
+   * the session no longer exists or has expired, so the socket can be closed.
+   */
+  touchSession(id: string, now = Date.now()): boolean {
+    const row = this.db.prepare(`SELECT * FROM sessions WHERE id = ?`).get(id) as SessionRow | undefined;
+    if (!row) return false;
+    if (row.expires_at < now) {
+      this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
+      return false;
+    }
+    const ttl = row.remembered ? REMEMBERED_SESSION_MS : SESSION_MS;
+    this.db.prepare(`UPDATE sessions SET last_seen = ?, expires_at = ? WHERE id = ?`).run(now, now + ttl, id);
+    return true;
+  }
+
   endSession(token: string | undefined): void {
     if (token) this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(sha256(token));
   }

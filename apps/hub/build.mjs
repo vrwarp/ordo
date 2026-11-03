@@ -8,9 +8,12 @@ import { build } from 'esbuild';
 const here = dirname(fileURLToPath(import.meta.url));
 mkdirSync(join(here, 'dist'), { recursive: true });
 
+// Two entries: the hub, and the ProPresenter import worker thread it spawns (imports.ts resolves
+// `./import.worker.js` next to itself).
 await build({
-  entryPoints: [join(here, 'src/main.ts')],
-  outfile: join(here, 'dist/main.js'),
+  entryPoints: [join(here, 'src/main.ts'), join(here, 'src/import.worker.ts')],
+  outdir: join(here, 'dist'),
+  entryNames: '[name]',
   bundle: true,
   platform: 'node',
   format: 'esm',

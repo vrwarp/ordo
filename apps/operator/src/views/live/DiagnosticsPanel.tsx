@@ -23,7 +23,12 @@ export function downloadOperatorLog(): void {
     mode: live.state.mode,
     health: live.health,
     ownCache: live.ownCache,
+    cacheCheck: live.cacheCheck,
     log: logLines(),
+    /** Last log lines of every output and stage window, as reported in health (prd/08). */
+    outputLogs: Object.fromEntries(
+      Object.values(live.health).map((h) => [h.name ?? h.outputId, h.recentLog ?? []]),
+    ),
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
@@ -110,6 +115,42 @@ export function OperatorLog({ limit = 50 }: { limit?: number }) {
   );
 }
 
+/** The last log lines of each output and stage window, from their health reports (prd/08). */
+export function OutputLogs() {
+  const health = useLive((s) => s.health);
+  const outputs = useLibrary((s) => s.data.settings.outputs);
+  return (
+    <div className="col" style={{ gap: 8 }}>
+      {outputs.map((o) => {
+        const h = health[o.id];
+        const lines = h?.recentLog ?? [];
+        return (
+          <div key={o.id} className="col" style={{ gap: 4 }}>
+            <span className="small">
+              <b>{o.name}</b>{' '}
+              <span className="muted">
+                {h?.connected ? `${lines.length} lines` : 'not connected'}
+                {h?.compositor ? `, ${h.compositor} compositor` : ''}
+                {h?.mainThreadStallMs !== undefined && h.mainThreadStallMs > 250
+                  ? `, main thread stalled ${Math.round(h.mainThreadStallMs)} ms`
+                  : ''}
+              </span>
+            </span>
+            {lines.length > 0 && (
+              <div className="logbox" style={{ maxHeight: 140 }}>
+                {keyed(lines, (l) => l).map(({ key, value }) => (
+                  <div key={key}>{value}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {outputs.length === 0 && <span className="muted">No outputs configured.</span>}
+    </div>
+  );
+}
+
 export function DiagnosticsPanel() {
   const show = useUi((s) => s.showDiagnostics);
   const live = useLive();
@@ -131,6 +172,14 @@ export function DiagnosticsPanel() {
           </span>
         </div>
         <HealthTable />
+        {live.cacheCheck && (
+          <div className={`banner ${live.cacheCheck.message ? '' : 'blue'}`}>
+            {live.cacheCheck.message ?? 'Service cache complete on every output'} (checked{' '}
+            {new Date(live.cacheCheck.at).toLocaleTimeString()})
+          </div>
+        )}
+        <h4>Output window logs</h4>
+        <OutputLogs />
         <h4>Operator log (last 50 lines)</h4>
         <OperatorLog />
         <div className="row wrap">

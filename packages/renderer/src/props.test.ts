@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LOOK_MAIN, LOOK_STAGE, LOOK_STREAM } from '@ordo/domain';
-import { countdownText, elapsedTimer, propBox, propsModel, topMessage } from './props.ts';
+import { countdownText, elapsedTimer, propBox, propsModel, topMessage, videoRemainingText } from './props.ts';
 import { liveState } from './fixtures.test-util.ts';
 
 // 2026-11-01 09:59:30 UTC
@@ -107,5 +107,51 @@ describe('props text', () => {
     };
     expect(propBox('clock', look).fontSizePx).toBe(99);
     expect(propBox('elapsed', look).fontSizePx).toBe(64);
+  });
+});
+
+describe('video remaining time on the stage look (prd/04)', () => {
+  const playing = (state: 'playing' | 'paused' | 'ended', loop = false) => {
+    const s = liveState();
+    return {
+      ...s,
+      layers: {
+        ...s.layers,
+        media: {
+          content: {
+            kind: 'media' as const,
+            cueIndex: 4,
+            mediaId: 'vid',
+            mediaKind: 'video' as const,
+            loop,
+            onEnd: 'hold' as const,
+            state,
+            startedAt: NOW - 12_500,
+            positionMs: 30_000,
+          },
+          at: NOW - 12_500,
+          seq: 2,
+        },
+      },
+    };
+  };
+
+  it('counts down from the media duration while playing, holds while paused, nothing when ended or looping', () => {
+    expect(videoRemainingText(playing('playing'), NOW)).toBe('00:48'); // 60 s - 12.5 s, rounded up
+    expect(videoRemainingText(playing('playing'), NOW + 500)).toBe('00:47');
+    expect(videoRemainingText(playing('paused'), NOW)).toBe('00:30');
+    expect(videoRemainingText(playing('ended'), NOW)).toBeUndefined();
+    expect(videoRemainingText(playing('playing', true), NOW)).toBeUndefined();
+    expect(videoRemainingText(playing('playing'), NOW + 10 * 60_000)).toBe('00:00');
+  });
+
+  it('is a prop of the stage look only and re-keys each second', () => {
+    const s = playing('playing');
+    const stage = propsModel(s, LOOK_STAGE, ctx);
+    expect(stage.items.find((i) => i.id === 'videoRemaining')?.text).toBe('00:48');
+    expect(stage.key).toContain('videoRemaining=00:48');
+    expect(propsModel(s, LOOK_STAGE, { ...ctx, now: NOW + 1000 }).key).toContain('videoRemaining=00:47');
+    expect(propsModel(s, LOOK_MAIN, ctx).items.some((i) => i.id === 'videoRemaining')).toBe(false);
+    expect(propBox('videoRemaining', LOOK_STAGE).box.y).toBeGreaterThan(900);
   });
 });

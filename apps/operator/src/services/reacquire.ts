@@ -1,33 +1,76 @@
 import { useLive } from '../state/live.ts';
+import { settings } from '../state/library.ts';
 import { log } from './log.ts';
 import { outputWindows } from './outputs.ts';
 
 /**
- * After an operator reload during a live service the output WindowProxy handles are lost. On the first
- * user gesture (window.open needs one) re-acquire the windows by their stable names so the fallback bus
- * can reach them.
+ * After an operator reload (or in a new tab) during a live service the output WindowProxy handles are
+ * lost: the fallback bus cannot reach the windows and Relaunch cannot close them. `window.open` needs a
+ * user gesture, so on gestures we re-acquire the windows by their stable names whenever handles are
+ * missing: when this browser session launched them earlier (sessionStorage flag) or when the hub reports
+ * an output connected that this page holds no handle for (a window exists somewhere). Each output is
+ * tried at most once per RETRY_MS so a window on another machine does not open blank pop-ups on every
+ * click.
  */
-export function reacquireOnFirstGesture(): void {
+export const RETRY_MS = 60_000;
+
+const attempted = new Map<string, number>();
+
+/** Enabled outputs that need a handle: known to exist (connected or launched earlier) and not held. */
+export function missingHandles(now = Date.now()): { ids: string[]; due: string[] } {
+  const ow = outputWindows();
+  if (!ow) return { ids: [], due: [] };
+  const launched = launchedEarlier();
+  const health = useLive.getState().health;
+  const ids = ow
+    .missing()
+    .filter((o) => launched || !!health[o.id]?.connected)
+    .map((o) => o.id);
+  const due = ids.filter((id) => now - (attempted.get(id) ?? 0) >= RETRY_MS);
+  return { ids, due };
+}
+
+/** Try to re-acquire missing windows by name now (must run inside a user gesture). `force` ignores the throttle. */
+export function reacquireMissing(force = false, now = Date.now()): number {
+  const m = missingHandles(now);
+  const due = force ? m.ids : m.due;
+  if (!due.length) return 0;
+  for (const id of due) attempted.set(id, now);
+  const n = outputWindows()?.reacquire() ?? 0;
+  if (n) log('info', `re-acquired ${n} output windows`);
+  else log('warn', `could not re-acquire ${due.length} output windows by name`);
+  return n;
+}
+
+/** Forget the retry throttle (after Launch/Relaunch, which open the windows themselves). */
+export function resetReacquire(): void {
+  attempted.clear();
+}
+
+export function reacquireOnGesture(): () => void {
   const handler = (e: Event) => {
     // Launch and Relaunch open the windows by the same names themselves. Re-acquiring in the same gesture
     // would open and close blank windows under those names and race the launch, losing the outputs.
     const t = e.target as HTMLElement | null;
     if (t?.closest?.('[data-launch]')) {
-      detach();
+      resetReacquire();
       return;
     }
-    detach();
-    if (!launchedEarlier()) return;
     if (useLive.getState().state.mode !== 'live') return;
-    const n = outputWindows()?.reacquire() ?? 0;
-    if (n) log('info', `re-acquired ${n} output windows`);
-  };
-  const detach = () => {
-    window.removeEventListener('pointerdown', handler, true);
-    window.removeEventListener('keydown', handler, true);
+    if (!settings().outputs.some((o) => o.enabled)) return;
+    reacquireMissing();
   };
   window.addEventListener('pointerdown', handler, true);
   window.addEventListener('keydown', handler, true);
+  return () => {
+    window.removeEventListener('pointerdown', handler, true);
+    window.removeEventListener('keydown', handler, true);
+  };
+}
+
+/** Kept for callers from before gestures were watched continuously. */
+export function reacquireOnFirstGesture(): void {
+  reacquireOnGesture();
 }
 
 const LAUNCHED_KEY = 'ordo.outputsLaunched';
@@ -42,7 +85,7 @@ export function markLaunched(on: boolean): void {
   }
 }
 
-function launchedEarlier(): boolean {
+export function launchedEarlier(): boolean {
   try {
     return sessionStorage.getItem(LAUNCHED_KEY) === '1';
   } catch {

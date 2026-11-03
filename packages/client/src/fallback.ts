@@ -10,9 +10,21 @@ import { Emitter } from './emitter.ts';
 
 type Win = { win: Window; origin: string; ready: boolean };
 
+/** Period of the host's announcements (hello to windows not yet ready, heartbeat to ready ones). */
+export const FALLBACK_HEARTBEAT_MS = 2000;
+/** An output leaves the fallback bus on its own after this long without a message from the host. */
+export const FALLBACK_SILENCE_MS = 5000;
+const RECENT_EVENT_IDS = 200;
+
 /**
  * Operator side of the fallback bus. Holds the WindowProxy of every output and stage window it opened,
  * and, while the hub is unreachable, acts as the hub for them over postMessage.
+ *
+ * While active it posts a heartbeat (`fallback.hub { hubUp: false }`) to every ready window every 2 s;
+ * outputs that stop hearing it for 5 s leave the bus by themselves (design/17), so a closed or crashed
+ * operator tab cannot leave them stuck. While inactive (hub mode) every window it registers or hears
+ * from is told `fallback.hub { hubUp: true }`, so a window left in fallback by an earlier tab follows
+ * the hub again as soon as this tab acquires it.
  */
 export class FallbackHost extends Emitter<{
   health: { outputId: string; health: OutputHealth };
@@ -25,6 +37,8 @@ export class FallbackHost extends Emitter<{
   private lastState?: LiveStateMsg;
   private timer?: ReturnType<typeof setInterval>;
   private listener = (ev: MessageEvent) => this.onMessage(ev);
+  private seenEvents: string[] = [];
+  private seenEventSet = new Set<string>();
   getFile?: (hash: string) => Promise<Blob | undefined>;
 
   constructor() {
@@ -38,7 +52,10 @@ export class FallbackHost extends Emitter<{
   }
 
   register(outputId: string, win: Window, origin: string): void {
-    this.windows.set(outputId, { win, origin, ready: false });
+    const w: Win = { win, origin, ready: false };
+    this.windows.set(outputId, w);
+    // A window acquired while the hub is the authority may still be on an older tab's fallback bus.
+    if (!this.active) this.postTo(w, { t: 'fallback.hub', v: 1, hubUp: true });
   }
 
   unregister(outputId: string): void {
@@ -56,13 +73,14 @@ export class FallbackHost extends Emitter<{
     for (const w of this.windows.values()) w.ready = false;
     this.announce();
     clearInterval(this.timer);
-    this.timer = setInterval(() => this.announce(), 2000);
+    this.timer = setInterval(() => this.announce(), FALLBACK_HEARTBEAT_MS);
   }
 
   /** Hub is back: tell windows to return to their hub connection. */
   deactivate(): void {
     this.active = false;
     clearInterval(this.timer);
+    this.timer = undefined;
     this.post({ t: 'fallback.hub', v: 1, hubUp: true });
   }
 
@@ -72,12 +90,13 @@ export class FallbackHost extends Emitter<{
     for (const w of this.windows.values()) if (w.ready) this.postTo(w, d);
   }
 
+  /** Hello to windows not yet on the bus; heartbeat to those that are. */
   private announce(): void {
-    if (!this.lastState) return;
+    if (!this.lastState || !this.active) return;
     for (const w of this.windows.values()) {
-      if (w.ready) continue;
       if (w.win.closed) continue;
-      this.postTo(w, { t: 'fallback.hello', v: 1, seq: this.lastState.seq, operatorMs: Date.now() });
+      if (w.ready) this.postTo(w, { t: 'fallback.hub', v: 1, hubUp: false });
+      else this.postTo(w, { t: 'fallback.hello', v: 1, seq: this.lastState.seq, operatorMs: Date.now() });
     }
   }
 
@@ -93,6 +112,15 @@ export class FallbackHost extends Emitter<{
     }
   }
 
+  private seenEvent(id: string | undefined): boolean {
+    if (!id) return false;
+    if (this.seenEventSet.has(id)) return true;
+    this.seenEventSet.add(id);
+    this.seenEvents.push(id);
+    if (this.seenEvents.length > RECENT_EVENT_IDS) this.seenEventSet.delete(this.seenEvents.shift()!);
+    return false;
+  }
+
   private onMessage(ev: MessageEvent): void {
     let entry: [string, Win] | undefined;
     for (const e of this.windows) if (e[1].win === ev.source) entry = e;
@@ -103,13 +131,22 @@ export class FallbackHost extends Emitter<{
     if (m.t === 'fallback.ready') {
       w.ready = true;
       if (this.active && this.lastState) this.postTo(w, this.lastState);
+      else if (!this.active) this.postTo(w, { t: 'fallback.hub', v: 1, hubUp: true });
       this.emit('ready', { outputId, appliedSeq: m.appliedSeq });
     } else if (m.t === 'health') {
+      // A window still talking to us over the bus while the hub is the authority belongs on the hub.
+      if (!this.active) this.postTo(w, { t: 'fallback.hub', v: 1, hubUp: true });
       this.emit('health', { outputId, health: m.health });
     } else if ((m as { t: string }).t === 'live.event') {
-      const ev = (m as unknown as { event?: LiveEvent }).event;
-      if (ev && (ev.k === 'media.ended' || ev.k === 'audio.ended'))
-        this.emit('event', { outputId, event: ev });
+      const le = m as unknown as { id?: string; event?: LiveEvent };
+      const e = le.event;
+      if (!e || (e.k !== 'media.ended' && e.k !== 'audio.ended')) return;
+      if (this.seenEvent(le.id)) return;
+      if (!this.active) {
+        this.postTo(w, { t: 'fallback.hub', v: 1, hubUp: true });
+        return;
+      }
+      this.emit('event', { outputId, event: e });
     } else if (m.t === 'fallback.file') {
       void (async () => {
         const blob = await this.getFile?.(m.hash).catch(() => undefined);
@@ -137,6 +174,8 @@ export class FallbackClient extends Emitter<{
 }> {
   private pendingFiles = new Map<string, (b: Blob | undefined) => void>();
   private listener = (ev: MessageEvent) => this.onMessage(ev);
+  /** Time of the last accepted message from the operator (0 before the first). */
+  lastTraffic = 0;
 
   constructor(
     private operatorOrigin: string,
@@ -147,7 +186,11 @@ export class FallbackClient extends Emitter<{
   }
 
   get available(): boolean {
-    return !!window.opener && !(window.opener as Window).closed;
+    try {
+      return !!window.opener && !(window.opener as Window).closed;
+    } catch {
+      return false;
+    }
   }
 
   dispose(): void {
@@ -158,17 +201,17 @@ export class FallbackClient extends Emitter<{
     this.post({ t: 'fallback.ready', v: 1, outputId: this.outputId, appliedSeq });
   }
 
-  /** Report media.ended / audio.ended to the operator while it is the authority (fallback bus). */
-  sendEvent(event: LiveEvent): void {
-    const op = window.opener as Window | null;
-    if (!op || op.closed) return;
+  /**
+   * Report media.ended / audio.ended to the operator while it is the authority (fallback bus). The id
+   * lets the host de-duplicate a resend after a bus change.
+   */
+  sendEvent(event: LiveEvent, id: string = Math.random().toString(36).slice(2)): boolean {
+    if (!this.available) return false;
     try {
-      op.postMessage(
-        { t: 'live.event', v: 1, id: Math.random().toString(36).slice(2), event },
-        this.operatorOrigin,
-      );
+      (window.opener as Window).postMessage({ t: 'live.event', v: 1, id, event }, this.operatorOrigin);
+      return true;
     } catch {
-      /* opener gone */
+      return false;
     }
   }
 
@@ -188,10 +231,9 @@ export class FallbackClient extends Emitter<{
   }
 
   private post(m: FallbackMessage): void {
-    const op = window.opener as Window | null;
-    if (!op || op.closed) return;
+    if (!this.available) return;
     try {
-      op.postMessage(m, this.operatorOrigin);
+      (window.opener as Window).postMessage(m, this.operatorOrigin);
     } catch {
       /* opener navigated away */
     }
@@ -201,6 +243,7 @@ export class FallbackClient extends Emitter<{
     if (ev.source !== window.opener || ev.origin !== this.operatorOrigin) return;
     const m = ev.data as FallbackMessage;
     if (!m || typeof m !== 'object' || m.v !== PROTOCOL_VERSION) return;
+    this.lastTraffic = Date.now();
     switch (m.t) {
       case 'fallback.hello':
         this.emit('hello', { seq: m.seq });

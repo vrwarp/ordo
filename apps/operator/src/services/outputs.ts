@@ -11,10 +11,11 @@ import {
   windowName,
 } from '../lib/screens.ts';
 import { saveSettings, settings } from '../state/library.ts';
+import { useLive } from '../state/live.ts';
 import { toast } from '../state/toasts.ts';
 import type { Controller } from './controller.ts';
 import { log } from './log.ts';
-import { markLaunched } from './reacquire.ts';
+import { launchedEarlier, markLaunched } from './reacquire.ts';
 
 type ScreenDetailed = ScreenInfo & { availLeft?: number; availTop?: number };
 type WindowWithScreens = Window & {
@@ -128,11 +129,32 @@ export class OutputWindows {
     }
   }
 
-  /** Close every window, wait 500 ms, reopen (prd/02 Relaunch outputs). */
+  /**
+   * Close every window, wait 500 ms, reopen (prd/02 Relaunch outputs). Windows this page did not open
+   * (an earlier tab's) are first re-acquired by name so they can be closed; when that fails the user is
+   * told, and opening by name still navigates the existing window of that name.
+   */
   async relaunch(): Promise<void> {
+    const before = this.missing();
+    if (before.length) {
+      const n = this.reacquire();
+      const still = this.missing();
+      log('info', `relaunch: re-acquired ${n} of ${before.length} windows without a handle`);
+      if (still.length)
+        toast(
+          `Relaunch: ${still.length} output window${still.length === 1 ? ' was' : 's were'} not opened by this tab and cannot be closed (${still.map((o) => o.name).join(', ')}). Reopening by name; close any extra window by hand (Ctrl+Shift+Q).`,
+          'warn',
+          12_000,
+        );
+    }
     this.closeAll();
     await sleep(500);
     await this.launch();
+  }
+
+  /** Enabled outputs this page holds no WindowProxy for. */
+  missing(): Output[] {
+    return settings().outputs.filter((o) => o.enabled && !!o.token && !this.windows.has(o.id));
   }
 
   openOne(o: Output, screen: ScreenInfo): Window | null {
@@ -165,9 +187,19 @@ export class OutputWindows {
     this.refreshOpen();
   }
 
-  /** Reopen one output (after a token rotation). */
+  /**
+   * Reopen one output after a token rotation. Without a handle (the page was reloaded since Launch) it
+   * still opens by name when a window of that output is known to exist, so the old window does not
+   * keep the revoked token and freeze (item 29).
+   */
   async reopen(o: Output): Promise<void> {
-    if (!this.windows.has(o.id)) return;
+    const had = this.windows.has(o.id);
+    if (!had) {
+      const h = useLive.getState().health[o.id];
+      const exists = !!h?.connected || launchedEarlier() || this.reacquire() > 0;
+      if (!exists) return;
+      if (!this.windows.has(o.id)) log('warn', `reopen ${o.name}: no window handle; opening by name`);
+    }
     const screens = await this.screens();
     const plan = planLaunch([{ ...o, enabled: true }], screens)[0];
     this.closeOne(o.id);

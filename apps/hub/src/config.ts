@@ -20,8 +20,10 @@ export type HubConfig = {
   host: string;
   /** CIDR list of reverse proxies whose X-Forwarded-* headers are trusted. */
   trustedProxies: string[];
-  /** Venue time zone (IANA). */
+  /** Fallback venue time zone (IANA): seeds settings.general.timeZone on first run and stands in when that is unusable. */
   timeZone: string;
+  /** Extra Host names the hub answers for, besides the domain, its role hosts, localhost and loopback. */
+  allowedHosts: string[];
   /** Directory holding apps/<name>/dist. */
   appsDir: string;
   /** Optional `operate[:edit]` PINs for unattended dev/test setup. */
@@ -71,6 +73,7 @@ export function loadConfig(
     host: env.ORDO_HOST ?? '0.0.0.0',
     trustedProxies: parseCidrList(env.ORDO_TRUSTED_PROXY),
     timeZone: env.ORDO_TZ ?? env.TZ ?? 'UTC',
+    allowedHosts: parseCidrList(env.ORDO_ALLOWED_HOSTS).map((h) => h.toLowerCase()),
     appsDir: resolve(env.ORDO_APPS_DIR ?? defaultAppsDir()),
     devPin: env.ORDO_DEV_PIN || undefined,
     importRoots: (env.ORDO_IMPORT_ROOTS

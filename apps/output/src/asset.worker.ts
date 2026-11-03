@@ -2,10 +2,13 @@ import { OpfsStore } from '@ordo/cache';
 import {
   type AssetJob,
   type AssetToRender,
+  BitmapCache,
+  DEFAULT_BITMAP_BUDGET,
   type FontLoad,
   type FromAsset,
   SRC_BITMAP,
   type ToAsset,
+  downscaleFor,
   rasterImage,
   rasterLowerThird,
   rasterProps,
@@ -33,9 +36,9 @@ let canvas: OffscreenCanvas | null = null;
 let ctx: OffscreenCanvasRenderingContext2D | null = null;
 const store = new OpfsStore();
 
-// Decoded images by hash (LRU by insertion order).
-const MAX_IMAGES = 48;
-const images = new Map<string, ImageBitmap>();
+// Decoded images by hash: LRU bounded by bytes (256 MiB) rather than count, so a photo-heavy service
+// cannot pin a gigabyte of bitmaps (review item 26). Each image is reduced to the output size on decode.
+const images = new BitmapCache<ImageBitmap>(DEFAULT_BITMAP_BUDGET, 64);
 const loadedFonts = new Set<string>();
 
 let chain: Promise<void> = Promise.resolve();
@@ -58,30 +61,21 @@ async function readFile(hash: string): Promise<Blob> {
 
 async function image(hash: string): Promise<ImageBitmap> {
   const hit = images.get(hash);
-  if (hit) {
-    images.delete(hash);
-    images.set(hash, hit);
-    return hit;
-  }
+  if (hit) return hit;
   const blob = await readFile(hash);
   let bmp = await createImageBitmap(blob);
-  // Very large images are reduced to twice the output size: plenty for cover/contain, far less memory.
-  const maxW = width * 2;
-  if (bmp.width > maxW) {
+  // Large images are reduced so that they still cover the output without upscaling (1x, not 2x).
+  const down = downscaleFor(bmp.width, bmp.height, width, height);
+  if (down) {
     const scaled = await createImageBitmap(bmp, {
-      resizeWidth: maxW,
-      resizeHeight: Math.round((bmp.height * maxW) / bmp.width),
+      resizeWidth: down.width,
+      resizeHeight: down.height,
       resizeQuality: 'high',
     });
     bmp.close();
     bmp = scaled;
   }
   images.set(hash, bmp);
-  while (images.size > MAX_IMAGES) {
-    const first = images.keys().next().value as string;
-    images.get(first)?.close();
-    images.delete(first);
-  }
   return bmp;
 }
 
@@ -190,14 +184,8 @@ scope.onmessage = (ev) => {
       // Props jobs (once per second) are cheap; everything runs in order so fonts precede text.
       enqueue(() => run(m.job));
       return;
-    case 'prune': {
-      const keep = new Set(m.keep);
-      for (const [h, b] of images)
-        if (!keep.has(h)) {
-          b.close();
-          images.delete(h);
-        }
+    case 'prune':
+      images.prune(new Set(m.keep));
       return;
-    }
   }
 };

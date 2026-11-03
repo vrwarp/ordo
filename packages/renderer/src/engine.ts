@@ -1,7 +1,7 @@
 import type { Rgba } from '@ordo/domain';
 import { Canvas2DCompositor } from './canvas2d.ts';
 import { type Compositor, type FrameInputs, MAX_VIDEO_SLOTS, type VideoFrames } from './compositor.ts';
-import { createGpuCompositor } from './gpu.ts';
+import { type GpuInit, createGpuCompositor } from './gpu.ts';
 import type { RenderTelemetry } from './health.ts';
 import type { HeldKeys } from './messages.ts';
 import { LAYERS, LAYER_INDEX, LayerStack, type StackContent } from './stacks.ts';
@@ -21,8 +21,16 @@ export type EngineHost = {
   onSnapshot?: (bitmap: ImageBitmap) => void;
   onLost?: (reason: string) => void;
   onRestored?: (kind: 'webgpu' | '2d') => void;
-  /** A fresh canvas from the main thread (needed to switch from WebGPU to Canvas 2D). */
+  /**
+   * A fresh canvas from the main thread (needed to switch between WebGPU and Canvas 2D, since a canvas
+   * keeps its first context kind). The main thread shows it only once `onRestored` (or the ready result)
+   * says the engine draws on it; `canvasUnused` tells it the canvas was not adopted.
+   */
   requestCanvas?: () => Promise<OffscreenCanvas>;
+  canvasUnused?: () => void;
+  /** Override of the WebGPU compositor factory (tests). */
+  createGpu?: (init: GpuInit) => Promise<Compositor>;
+  setTimeout?: (fn: () => void, ms: number) => unknown;
 };
 
 export type EngineOptions = {
@@ -33,7 +41,14 @@ export type EngineOptions = {
   forceCanvas2d?: boolean;
   clear: Rgba;
   clockOffset: number;
+  /**
+   * After a fallback to Canvas 2D, try WebGPU again after this long (doubling up to GPU_RETRY_MAX_MS);
+   * 0 disables the retry. Default 60 s.
+   */
+  gpuRetryMs?: number;
 };
+
+export const GPU_RETRY_MAX_MS = 15 * 60_000;
 
 export class RenderEngine {
   readonly layers: LayerStack<ImageBitmap>[] = LAYERS.map(
@@ -52,7 +67,11 @@ export class RenderEngine {
   private gpuContextUsed = false;
   private gpuDisabled?: string;
   private lossTimes: number[] = [];
+  private gpuRetryDelay = 0;
+  private gpuRetrying = false;
   gpuLost = 0;
+  /** WebGPU retries after a Canvas 2D fallback (attempted / succeeded), for diagnostics. */
+  gpuRetries = 0;
   longTasks = 0;
   error?: string;
   kind: 'webgpu' | '2d' | 'none' = 'none';
@@ -104,14 +123,92 @@ export class RenderEngine {
     const r = await this.createCompositor();
     this.running = true;
     this.host.raf(this.frame);
+    this.scheduleGpuRetry();
     return r;
+  }
+
+  /** Whether WebGPU is worth trying again: fell back to 2D without being told to stay there. */
+  private gpuRetryWanted(): boolean {
+    return (
+      this.running &&
+      this.kind === '2d' &&
+      !this.opts.forceCanvas2d &&
+      !this.gpuDisabled &&
+      !this.rebuilding &&
+      !this.gpuRetrying &&
+      (this.opts.gpuRetryMs ?? 60_000) > 0 &&
+      !!this.host.requestCanvas
+    );
+  }
+
+  private scheduleGpuRetry(): void {
+    if (!this.gpuRetryWanted()) return;
+    const base = this.opts.gpuRetryMs ?? 60_000;
+    this.gpuRetryDelay = this.gpuRetryDelay ? Math.min(GPU_RETRY_MAX_MS, this.gpuRetryDelay * 2) : base;
+    (this.host.setTimeout ?? setTimeout)(() => void this.retryGpu(), this.gpuRetryDelay);
+  }
+
+  /**
+   * Try WebGPU again on a fresh canvas while Canvas 2D keeps drawing (review item 27). The first frame
+   * is drawn into the new compositor before the swap, so the main thread can show the new canvas
+   * without a blank frame; on failure the 2D compositor is untouched and the canvas is given back.
+   */
+  private async retryGpu(): Promise<void> {
+    if (!this.gpuRetryWanted()) return;
+    this.gpuRetrying = true;
+    this.gpuRetries++;
+    let canvas: OffscreenCanvas | undefined;
+    try {
+      canvas = await this.host.requestCanvas!();
+      const gpu = await (this.host.createGpu ?? createGpuCompositor)({
+        canvas,
+        width: this.opts.width,
+        height: this.opts.height,
+        layerCount: LAYERS.length,
+        onLost: (reason) => void this.deviceLost(reason),
+        onError: (message) => {
+          this.error = `GPU: ${message}`;
+        },
+      });
+      if (!this.running || this.rebuilding) {
+        gpu.destroy();
+        this.host.canvasUnused?.();
+        return;
+      }
+      for (const ls of this.layers) {
+        ls.stacks[0].version++;
+        ls.stacks[1].version++;
+      }
+      gpu.draw(this.inputs);
+      const old = this.compositor;
+      this.compositor = gpu;
+      this.opts.canvas = canvas;
+      this.gpuContextUsed = true;
+      this.kind = 'webgpu';
+      this.error = undefined;
+      this.gpuRetryDelay = 0;
+      try {
+        old?.destroy();
+      } catch {
+        /* gone */
+      }
+      this.host.onRestored?.('webgpu');
+    } catch (err) {
+      if (canvas) this.host.canvasUnused?.();
+      this.error = `WebGPU still unavailable, using Canvas 2D: ${(err as Error).message}`;
+      this.gpuRetrying = false;
+      this.scheduleGpuRetry();
+      return;
+    } finally {
+      this.gpuRetrying = false;
+    }
   }
 
   private async createCompositor(): Promise<{ kind: 'webgpu' | '2d'; note?: string }> {
     let note: string | undefined;
     if (!this.opts.forceCanvas2d && !this.gpuDisabled) {
       try {
-        this.compositor = await createGpuCompositor({
+        this.compositor = await (this.host.createGpu ?? createGpuCompositor)({
           canvas: this.opts.canvas,
           width: this.opts.width,
           height: this.opts.height,
@@ -177,6 +274,7 @@ export class RenderEngine {
         this.snapEvery = this.snapEvery || 1000;
         this.rebuilding = false;
         this.host.onRestored?.(r.kind);
+        this.scheduleGpuRetry();
         return;
       } catch (err) {
         this.error = `GPU rebuild failed: ${(err as Error).message}`;
@@ -259,7 +357,8 @@ export class RenderEngine {
       presented: this.clock.presented,
       missed: this.clock.missed,
       lateFlips: late,
-      longTasks: this.longTasks,
+      // Long tasks in a worker are not observable; rAF stalls (gaps of 50 ms or more) are the measure.
+      longTasks: this.longTasks + this.clock.stalls,
       gpuLost: this.gpuLost,
       fps: this.clock.fps(),
       frameMs: this.clock.frameMs,

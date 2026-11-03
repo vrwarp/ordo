@@ -22,6 +22,10 @@ import { LiveRejection, type LiveService } from './live.ts';
 
 export const QUEUE_LIMIT = 100;
 const HEALTH_STALE_MS = 3500;
+/** Sessions slide on socket activity at most this often (one DB write per session per interval). */
+export const SESSION_TOUCH_MS = 30_000;
+/** Recently acknowledged command ids kept for de-duplication of re-submissions after a reconnect. */
+export const RECENT_CMD_IDS = 1000;
 
 type Client = {
   ws: WebSocket;
@@ -32,6 +36,8 @@ type Client = {
   needsState: boolean;
   alive: boolean;
   ip: string;
+  /** Last time this socket slid its session (session principals only). */
+  touched: number;
 };
 
 export function parseCookies(header: string | undefined): Record<string, string> {
@@ -69,6 +75,8 @@ export class SocketHub {
   private health = new Map<string, { health: OutputHealth; lastSeen: number }>();
   private healthTimer?: NodeJS.Timeout;
   private pingTimer?: NodeJS.Timeout;
+  /** Command id -> journal seq for the last RECENT_CMD_IDS accepted commands (insertion ordered). */
+  private recentCmds = new Map<string, number>();
 
   constructor(
     private auth: Auth,
@@ -165,7 +173,7 @@ export class SocketHub {
   }
 
   private attach(ws: WebSocket, principal: Principal | null, ip: string, hadToken: boolean): void {
-    const c: Client = { ws, principal, inflight: 0, needsState: false, alive: true, ip };
+    const c: Client = { ws, principal, inflight: 0, needsState: false, alive: true, ip, touched: Date.now() };
     this.clients.add(c);
     ws.on('pong', () => {
       c.alive = true;
@@ -173,6 +181,7 @@ export class SocketHub {
     ws.on('message', (data, isBinary) => {
       if (isBinary) return;
       try {
+        if (!this.touchSession(c)) return;
         this.onMessage(c, data.toString());
       } catch (e) {
         this.log.error({ err: errorMessage(e) }, 'ws message handler failed');
@@ -192,6 +201,38 @@ export class SocketHub {
         this.bye(c, 'unauthorized');
       });
     }
+  }
+
+  /**
+   * Every message (pings included) counts as activity for a session principal: the session slides at
+   * most every SESSION_TOUCH_MS, and a session that was ended meanwhile (PIN change, logout, expiry)
+   * closes the socket. Returns false when the socket was closed.
+   */
+  private touchSession(c: Client, now = Date.now()): boolean {
+    const p = c.principal;
+    if (!p || p.kind !== 'session') return true;
+    if (now - c.touched < SESSION_TOUCH_MS) return true;
+    c.touched = now;
+    if (this.auth.touchSession(p.sessionId, now)) return true;
+    this.log.info({ role: p.role }, 'websocket session ended; closing socket');
+    c.principal = null;
+    this.bye(c, 'unauthorized');
+    return false;
+  }
+
+  /** Remember an accepted command id so a re-submission after a reconnect is acknowledged, not re-applied. */
+  private rememberCmd(id: string, seq: number): void {
+    if (this.recentCmds.has(id)) this.recentCmds.delete(id);
+    this.recentCmds.set(id, seq);
+    if (this.recentCmds.size > RECENT_CMD_IDS) {
+      const oldest = this.recentCmds.keys().next().value;
+      if (oldest !== undefined) this.recentCmds.delete(oldest);
+    }
+  }
+
+  /** Seq of a recently accepted command id (tests and diagnostics). */
+  recentCommandSeq(id: string): number | undefined {
+    return this.recentCmds.get(id);
   }
 
   private bye(c: Client, reason: string): void {
@@ -272,12 +313,20 @@ export class SocketHub {
       case 'live.event': {
         if (c.role === 'edit')
           return this.send(c, { t: 'live.ack', v: 1, id: m.id, rejected: 'forbidden: edit role' });
+        // A command re-submitted after a reconnect (its ack or delta was lost in the blip) is already
+        // journalled: acknowledge it with the seq it got, without applying it twice.
+        const dup = this.recentCmds.get(m.id);
+        if (dup !== undefined) {
+          this.log.debug({ id: m.id, seq: dup }, 'duplicate command id acknowledged');
+          return this.send(c, { t: 'live.ack', v: 1, id: m.id, seq: dup });
+        }
         try {
           const origin =
             c.role === 'operate'
               ? { role: 'operate' as const, id: m.id }
               : { role: c.role as 'output' | 'stage', outputId: c.outputId!, id: m.id };
           const seq = this.live.submit(m.event, origin);
+          this.rememberCmd(m.id, seq);
           this.send(c, { t: 'live.ack', v: 1, id: m.id, seq });
         } catch (e) {
           if (!(e instanceof LiveRejection) && !(e instanceof HttpError))
@@ -312,6 +361,14 @@ export class SocketHub {
         }
         return;
       }
+      // ---- preview relay (prd/03 "Send to preview"): operator -> one output, like rtc.signal ----
+      case 'preview': {
+        if (c.role !== 'operate') return;
+        const out = JSON.stringify({ ...m, from: 'operator' });
+        for (const o of this.clients) if (o !== c && o.role && o.outputId === m.to) this.send(o, out);
+        return;
+      }
+      // ---- end preview relay ----
     }
   }
 

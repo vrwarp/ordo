@@ -44,7 +44,8 @@ async function main(argv: string[]): Promise<void> {
     if (closing) return;
     closing = true;
     hub.log.info({ sig }, 'shutting down');
-    const force = setTimeout(() => process.exit(1), 10_000);
+    // hub.close() bounds every step itself (about 3 s worst case); this is the backstop.
+    const force = setTimeout(() => process.exit(1), 5000);
     force.unref();
     hub
       .close()

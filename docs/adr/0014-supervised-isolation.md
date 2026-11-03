@@ -3,12 +3,14 @@
 Status: Accepted for phases A and B; proposed for C to E ([design/25](../design/25-isolation-and-hardening.md)).
 
 ## Context
+
 The 2026-11-03 review showed that the prototype's failures came from subsystems sharing a thread or a
 lifetime: the output's networking, storage, state and video all ran on its main thread; the operator's live
 state ran under React; the hub ran imports on the same event loop as the live service; and bad data could
 travel from an upload to the frame loop with checks only at the first hop.
 
 ## Decision
+
 1. Every window's main thread hosts only what the platform requires (DOM, media elements, window handles,
    gestures). All other work runs in workers with their own heaps, connected by `MessageChannel` ports.
 2. Every worker and child process has a supervisor that watches a heartbeat and restarts it from persisted
@@ -22,6 +24,7 @@ travel from an upload to the frame loop with checks only at the first hop.
 5. The hub runs the live service and the library in separate processes under a supervisor.
 
 ## Consequences
+
 - The output window gains a link worker and a tiny supervisor; `apps/output/src/app.ts` is split along
   the host/worker line.
 - The operator gains a core worker; React renders a posted view model.

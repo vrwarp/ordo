@@ -1,7 +1,11 @@
-import { formatDuration, type LiveState } from '@ordo/domain';
+import { formatDuration } from '@ordo/domain';
 import type { OutputHealthEntry } from '@ordo/protocol';
+import { useMemo } from 'react';
 import { useHubNow } from '../../hooks.ts';
+import { HoldGuard } from '../../lib/confirm.ts';
+import { mediaTimes } from '../../lib/mediaTimes.ts';
 import { controller, dispatch, MUTE_DB } from '../../services/controller.ts';
+import { CLEAR_HOLD_MS } from '../../services/surfaces.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
 import type { OperatorPlaylist } from './useOperatorPlaylist.ts';
@@ -32,21 +36,6 @@ function masterHealth(
   return Object.values(h).find((x) => x.meters?.length || x.mediaDurationMs !== undefined);
 }
 
-/** Media position and remaining time: from the audio master's health when it reports, else from state. */
-export function mediaTimes(
-  s: LiveState,
-  now: number,
-  durationMs: number | undefined,
-  h?: OutputHealthEntry,
-): { pos: number; dur?: number } | null {
-  const m = s.layers.media.content ?? s.audio.content;
-  if (!m) return null;
-  if (h?.mediaPositionMs !== undefined && h.mediaDurationMs)
-    return { pos: h.mediaPositionMs, dur: h.mediaDurationMs };
-  const pos = m.state === 'playing' ? now - m.startedAt : m.positionMs;
-  return { pos: Math.max(0, pos), dur: durationMs };
-}
-
 export function LayerBar({ op }: { op: OperatorPlaylist }) {
   const now = useHubNow(250);
   const s = useLive((x) => x.state);
@@ -69,6 +58,15 @@ export function LayerBar({ op }: { op: OperatorPlaylist }) {
   if (s.props.logo) props.push('Logo');
   if (s.props.countdownTimerId) props.push('Countdown');
   const pending = clearUntil !== undefined && clearUntil > Date.now();
+  // Clear all (prd/02): press twice within 2 s, or hold for 1 s. The press arms the confirm; the hold
+  // sends the confirming press itself.
+  const hold = useMemo(() => new HoldGuard(CLEAR_HOLD_MS), []);
+  const clearDown = () => {
+    dispatch({ id: 'clearAll' });
+    hold.down(() => {
+      if (useLive.getState().clearAllUntil !== undefined) dispatch({ id: 'clearAll' });
+    });
+  };
   return (
     <div className="layerbar">
       <Chip
@@ -176,10 +174,19 @@ export function LayerBar({ op }: { op: OperatorPlaylist }) {
         type="button"
         className={`big danger clear-all ${pending ? 'pending' : ''}`}
         style={{ minWidth: 150, alignSelf: 'center', minHeight: 56 }}
-        onClick={() => dispatch({ id: 'clearAll' })}
-        title="F2 twice within 2 seconds"
+        onPointerDown={(e) => {
+          if (e.button === 0) clearDown();
+        }}
+        onPointerUp={() => hold.up()}
+        onPointerLeave={() => hold.up()}
+        onPointerCancel={() => hold.up()}
+        onClick={(e) => {
+          // Keyboard activation (Enter/Space on the focused button) has no pointer events.
+          if (e.detail === 0) dispatch({ id: 'clearAll' });
+        }}
+        title="F2 twice within 2 seconds, or hold for 1 second"
       >
-        {pending ? 'Press again to clear' : s.black ? 'All cleared' : 'Clear all (F2 ×2)'}
+        {pending ? 'Press again or hold' : s.black ? 'All cleared' : 'Clear all (F2 ×2 or hold)'}
       </button>
     </div>
   );

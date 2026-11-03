@@ -23,6 +23,7 @@ import type {
   Folder,
   LibraryKind,
   LibrarySnapshot,
+  LibrarySnapshotDelta,
   RevisionInfo,
   Settings,
   SettingsKey,
@@ -33,6 +34,9 @@ import { conflict, notFound } from './errors.ts';
 import { validate } from './validate.ts';
 
 export type Change = { kind: LibraryKind; id: string; rev?: number; entity?: unknown; deleted?: boolean };
+
+/** How many library seqs of change history are kept for `snapshot({ since })`. */
+export const LIBRARY_CHANGES_KEEP = 20_000;
 
 export const FolderSchema = z.object({
   id: z.string().min(1),
@@ -178,9 +182,25 @@ export class Library {
   /** Bump the library sequence and notify listeners (WebSocket broadcast). */
   emit(changes: Change[]): number {
     const seq = this.seq() + 1;
-    this.db.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('library_seq', ?)`).run(String(seq));
+    this.db.transaction(() => {
+      this.db.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('library_seq', ?)`).run(String(seq));
+      const ins = this.db.prepare(`INSERT INTO library_changes (seq, kind, id, deleted) VALUES (?, ?, ?, ?)`);
+      for (const c of changes) if (c.kind !== 'job') ins.run(seq, c.kind, c.id, c.deleted ? 1 : 0);
+      if (seq % 1000 === 0)
+        this.db.prepare(`DELETE FROM library_changes WHERE seq < ?`).run(seq - LIBRARY_CHANGES_KEEP);
+    })();
     for (const l of this.listeners) l(changes, seq);
     return seq;
+  }
+
+  /** The oldest seq the change log still covers (0 when it covers everything since the database was made). */
+  private oldestChangeSeq(): number {
+    const r = this.db.prepare(`SELECT MIN(seq) AS s FROM library_changes`).get() as { s: number | null };
+    const seq = this.seq();
+    if (seq === 0) return 0;
+    // Rows older than the retention window were pruned: anything before (seq - KEEP) is unknowable.
+    const floor = Math.max(0, seq - LIBRARY_CHANGES_KEEP);
+    return r.s === null ? seq : Math.max(floor, r.s - 1);
   }
 
   seq(): number {
@@ -364,6 +384,62 @@ export class Library {
     const f = this.getFont(id);
     if (f) this.db.prepare(`DELETE FROM fonts WHERE id = ?`).run(id);
     return f;
+  }
+
+  /**
+   * The library since `since` as deltas, or undefined when the hub cannot answer with deltas (unknown or
+   * pruned seq, or a seq ahead of the hub): callers then fall back to the full snapshot.
+   */
+  changesSince(since: number, opts: { withTokens: boolean }): LibrarySnapshotDelta | undefined {
+    const seq = this.seq();
+    if (!Number.isInteger(since) || since < 0 || since > seq) return undefined;
+    if (since === seq) return { seq, since, changes: [] };
+    if (since < this.oldestChangeSeq()) return undefined;
+    const rows = this.db
+      .prepare(`SELECT seq, kind, id, deleted FROM library_changes WHERE seq > ? ORDER BY seq, rowid`)
+      .all(since) as { seq: number; kind: LibraryKind; id: string; deleted: number }[];
+    // Only the latest change of each entity matters; the entity itself is read fresh.
+    const latest = new Map<string, { kind: LibraryKind; id: string }>();
+    for (const r of rows) {
+      const key = `${r.kind}:${r.id}`;
+      latest.delete(key);
+      latest.set(key, { kind: r.kind, id: r.id });
+    }
+    const changes: LibrarySnapshotDelta['changes'] = [];
+    for (const { kind, id } of latest.values()) {
+      const entity = this.entity(kind, id, opts.withTokens);
+      if (entity === undefined) {
+        if (kind !== 'settings' && kind !== 'job') changes.push({ kind, id, deleted: true });
+        continue;
+      }
+      const rev = (entity as { rev?: number }).rev;
+      changes.push({ kind: kind as LibrarySnapshotDelta['changes'][number]['kind'], id, rev, entity });
+    }
+    return { seq, since, changes };
+  }
+
+  private entity(kind: LibraryKind, id: string, withTokens: boolean): unknown {
+    switch (kind) {
+      case 'presentation':
+        return this.presentations.get(id);
+      case 'playlist':
+        return this.playlists.get(id);
+      case 'media':
+        return this.media.get(id);
+      case 'theme':
+        return this.themes.get(id);
+      case 'folder':
+        return this.folders.get(id);
+      case 'font':
+        return this.getFont(id);
+      case 'settings': {
+        if (!(SETTINGS_KEYS as string[]).includes(id)) return undefined;
+        const v = this.getSetting(id as SettingsKey);
+        return id === 'outputs' && !withTokens ? (v as Output[]).map(({ token: _t, ...o }) => o) : v;
+      }
+      default:
+        return undefined;
+    }
   }
 
   snapshot(opts: { withTokens: boolean }): LibrarySnapshot {

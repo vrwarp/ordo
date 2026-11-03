@@ -13,8 +13,12 @@ export type ScreenInfo = {
 export type Placement = {
   output: Output;
   screen: ScreenInfo;
-  /** How the saved ScreenRef matched; null means unmatched (placed on the primary screen). */
-  matched: 'label' | 'position' | null;
+  /**
+   * How the saved ScreenRef matched: by label, by position, or `only` when there is a single screen
+   * (nothing to choose, so the output is placed there and that screen is saved). null means unmatched
+   * on a multi-screen PC: placed on the primary screen and the operator is asked (review item 9).
+   */
+  matched: 'label' | 'position' | 'only' | null;
 };
 
 export function toScreenRef(s: ScreenInfo): ScreenRef {
@@ -49,11 +53,16 @@ export function primaryScreen(screens: ScreenInfo[]): ScreenInfo | undefined {
   return screens.find((s) => s.isPrimary) ?? screens[0];
 }
 
-/** Plan where every enabled output opens. Outputs whose saved screen is gone open on the primary screen. */
+/**
+ * Plan where every enabled output opens. Outputs whose saved screen is gone open on the primary screen;
+ * with a single screen that is the only possible answer, so they count as matched (`only`) and the
+ * placement dialog never appears.
+ */
 export function planLaunch(outputs: Output[], screens: ScreenInfo[]): Placement[] {
   const taken = new Set<ScreenInfo>();
   const out: Placement[] = [];
   const primary = primaryScreen(screens);
+  const single = screens.length === 1;
   for (const o of outputs) {
     if (!o.enabled) continue;
     const m = matchScreen(o.screen, screens, taken);
@@ -61,13 +70,16 @@ export function planLaunch(outputs: Output[], screens: ScreenInfo[]): Placement[
       taken.add(m.screen);
       out.push({ output: o, screen: m.screen, matched: m.by });
     } else if (primary) {
-      out.push({ output: o, screen: primary, matched: null });
+      out.push({ output: o, screen: primary, matched: single ? 'only' : null });
     }
   }
   return out;
 }
 
-/** Outputs whose saved ScreenRef should be refreshed (matched by position with a new label, or new size). */
+/**
+ * Outputs whose saved ScreenRef should be refreshed: matched by position with a new label, a new size,
+ * or placed on the only screen. Unmatched outputs on a multi-screen PC are left for the dialog.
+ */
 export function placementUpdates(plan: Placement[]): Output[] {
   const changed: Output[] = [];
   for (const p of plan) {

@@ -1,5 +1,6 @@
 import { OutputApp } from './app.ts';
 import './style.css';
+import { type WakeSentinel, WakeLockKeeper } from './wakelock.ts';
 
 /**
  * Output window entry. URL: `?output=<id>&token=<token>` (plus `&out=K` in path mode). Test hooks:
@@ -63,22 +64,21 @@ async function goFullscreen(): Promise<void> {
   }
 }
 
-let wakeLock: { release(): Promise<void> } | null = null;
-async function keepAwake(): Promise<void> {
-  try {
-    const wl = (
-      navigator as Navigator & { wakeLock?: { request(t: 'screen'): Promise<{ release(): Promise<void> }> } }
-    ).wakeLock;
-    if (wl && document.visibilityState === 'visible') wakeLock = await wl.request('screen');
-  } catch {
-    wakeLock = null;
-  }
-}
-
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && !wakeLock) void keepAwake();
+// Chrome releases the sentinel whenever the window is hidden or covered; the keeper watches the
+// sentinel's `release` event and requests the lock again on every chance (review item 11).
+const wakeApi = (navigator as Navigator & { wakeLock?: { request(t: 'screen'): Promise<WakeSentinel> } })
+  .wakeLock;
+const wake = new WakeLockKeeper({
+  request: wakeApi ? () => wakeApi.request('screen') : undefined,
+  visible: () => document.visibilityState === 'visible',
+  setInterval: (fn, ms) => setInterval(fn, ms),
+  log: (m) => app.diag.log(m),
 });
+const keepAwake = (): Promise<void> => wake.acquire();
+
+document.addEventListener('visibilitychange', () => void keepAwake());
 document.addEventListener('fullscreenchange', () => void keepAwake());
+window.addEventListener('focus', () => void keepAwake());
 
 window.addEventListener(
   'keydown',

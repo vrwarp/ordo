@@ -9,7 +9,14 @@ import type { FileRow, Library } from './library.ts';
 import { hashFile } from './store.ts';
 
 export const RETENTION_DAYS = 30;
+/** Pre-restore copies are kept at most this many (and never beyond RETENTION_DAYS). */
+export const PRE_RESTORE_KEEP = 3;
+/** The scheduler never arms a timer shorter than this, whatever the clock says. */
+export const MIN_SCHEDULE_DELAY_MS = 60_000;
+/** A 03:00 less than this far ahead counts as passed (the run that just fired must arm tomorrow's). */
+const SCHEDULE_LEAD_MS = 5_000;
 const BACKUP_RE = /^ordo-(\d{4}-\d{2}-\d{2}(?:-\d{6})?)\.db$/;
+const PRE_RESTORE_RE = /^ordo-pre-restore-.*\.db$/;
 
 export type MediaManifest = { createdAt: string; db: string; files: FileRow[] };
 
@@ -33,7 +40,10 @@ function zonedTime(ms: number, timeZone: string): string {
     .replace(/:/g, '');
 }
 
-/** Nightly `VACUUM INTO` snapshot plus a media manifest; 30-day retention. */
+/**
+ * Nightly `VACUUM INTO` snapshot plus a media manifest; 30-day retention. `timeZone` is a function so the
+ * venue time zone from settings (the same one countdowns use) is read each time the timer is armed.
+ */
 export class Backups {
   readonly dir: string;
   private timer?: NodeJS.Timeout;
@@ -42,26 +52,53 @@ export class Backups {
   constructor(
     private db: DB,
     private lib: Library,
-    private opts: { dataDir: string; timeZone: string },
+    private opts: { dataDir: string; timeZone: () => string },
     private log: Logger,
   ) {
     this.dir = join(opts.dataDir, 'backups');
   }
 
-  /** Arm the timer for the next 03:00 in the venue time zone. */
+  timeZone(): string {
+    return this.opts.timeZone();
+  }
+
+  /**
+   * Arm the timer for the next 03:00 in the venue time zone, strictly after `now` (so the run that just
+   * fired arms tomorrow's, never a 1 s retry); the timer itself is never shorter than a minute. Returns the
+   * instant the timer targets.
+   */
   schedule(now = Date.now()): number {
     clearTimeout(this.timer);
-    const at = nextTimeOfDay('03:00', this.opts.timeZone, now);
+    const at = nextTimeOfDay('03:00', this.timeZone(), now, {
+      strictlyAfter: true,
+      minLeadMs: SCHEDULE_LEAD_MS,
+    });
     this.timer = setTimeout(
       () => {
-        this.run({ nightly: true })
+        this.nightly()
           .catch((e) => this.log.error({ err: (e as Error).message }, 'nightly backup failed'))
           .finally(() => this.schedule());
       },
-      Math.max(1000, at - now),
+      Math.max(MIN_SCHEDULE_DELAY_MS, at - now),
     );
     this.timer.unref();
     return at;
+  }
+
+  /** Today's nightly file name (venue date). */
+  nightlyFile(now = Date.now()): string {
+    return join(this.dir, `ordo-${zonedDate(now, this.timeZone())}.db`);
+  }
+
+  /** The timer's work: skipped when today's nightly backup already exists (a restart after 03:00). */
+  async nightly(now = Date.now()): Promise<{ file: string; skipped: boolean }> {
+    const file = this.nightlyFile(now);
+    if (await exists(file)) {
+      this.log.info({ file: basename(file) }, 'nightly backup already exists; skipped');
+      return { file: basename(file), skipped: true };
+    }
+    const r = await this.run({ nightly: true, now });
+    return { ...r, skipped: false };
   }
 
   stop(): void {
@@ -78,16 +115,12 @@ export class Backups {
 
   private async doRun(opts: { nightly?: boolean; now?: number }): Promise<{ file: string }> {
     const now = opts.now ?? Date.now();
-    const date = zonedDate(now, this.opts.timeZone);
-    let stamp = opts.nightly ? date : `${date}-${zonedTime(now, this.opts.timeZone)}`;
+    const tz = this.timeZone();
+    const date = zonedDate(now, tz);
+    let stamp = opts.nightly ? date : `${date}-${zonedTime(now, tz)}`;
     let file = join(this.dir, `ordo-${stamp}.db`);
-    if (
-      await stat(file).then(
-        () => true,
-        () => false,
-      )
-    ) {
-      stamp = `${date}-${zonedTime(now, this.opts.timeZone)}`;
+    if (await exists(file)) {
+      stamp = `${date}-${zonedTime(now, tz)}`;
       file = join(this.dir, `ordo-${stamp}.db`);
       await rm(file, { force: true });
     }
@@ -103,16 +136,29 @@ export class Backups {
     return { file: basename(file) };
   }
 
+  /**
+   * Retention: backups and manifests older than 30 days go; pre-restore copies (`restore` keeps the
+   * replaced database) are capped at the newest PRE_RESTORE_KEEP and the same 30 days.
+   */
   async prune(now = Date.now()): Promise<string[]> {
     const removed: string[] = [];
     const cutoff = now - RETENTION_DAYS * 86400_000;
+    const preRestore: { f: string; mtime: number }[] = [];
     for (const f of await readdir(this.dir)) {
-      if (!BACKUP_RE.test(f) && !/^media-manifest-.*\.json$/.test(f)) continue;
+      const pre = PRE_RESTORE_RE.test(f);
+      if (!pre && !BACKUP_RE.test(f) && !/^media-manifest-.*\.json$/.test(f)) continue;
       const st = await stat(join(this.dir, f));
+      if (pre) preRestore.push({ f, mtime: st.mtimeMs });
       if (st.mtimeMs < cutoff) {
         await rm(join(this.dir, f), { force: true });
         removed.push(f);
       }
+    }
+    preRestore.sort((a, b) => b.mtime - a.mtime);
+    for (const { f } of preRestore.slice(PRE_RESTORE_KEEP)) {
+      if (removed.includes(f)) continue;
+      await rm(join(this.dir, f), { force: true });
+      removed.push(f);
     }
     return removed;
   }
@@ -122,6 +168,13 @@ export class Backups {
     files.sort().reverse();
     return { files };
   }
+}
+
+function exists(file: string): Promise<boolean> {
+  return stat(file).then(
+    () => true,
+    () => false,
+  );
 }
 
 /** Find a backup by file name, path or date (YYYY-MM-DD → the latest that day). */

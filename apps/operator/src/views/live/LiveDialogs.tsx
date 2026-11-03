@@ -1,27 +1,51 @@
 import { useState } from 'react';
 import { Dialog } from '../../components/Dialog.tsx';
+import { primaryScreen, type ScreenInfo, toScreenRef } from '../../lib/screens.ts';
 import { controller } from '../../services/controller.ts';
+import { log } from '../../services/log.ts';
 import { outputWindows, useLaunch } from '../../services/outputs.ts';
+import { saveSettings, settings } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
 
-/** Outputs whose remembered screen was not found: pick a screen for each. */
+/** "Leave on the main screen": remember the primary screen for the unmatched outputs so Launch stops asking. */
+async function keepOnMainScreen(ids: string[], screens: ScreenInfo[]): Promise<void> {
+  useLaunch.setState({ unmatched: [] });
+  const primary = primaryScreen(screens);
+  if (!primary || !ids.length) return;
+  const ref = toScreenRef(primary);
+  const set = new Set(ids);
+  await saveSettings(
+    'outputs',
+    settings().outputs.map((o) => (set.has(o.id) ? { ...o, screen: ref } : o)),
+  ).catch((e) => log('warn', `saving placements: ${String(e)}`));
+}
+
+/**
+ * Outputs whose remembered screen was not found on a multi-screen PC: pick a screen for each. With one
+ * screen there is nothing to choose and the launch plan already saved it (review item 9).
+ */
 export function PlacementDialog() {
   const { unmatched, screens } = useLaunch();
   const [choice, setChoice] = useState<Record<string, number>>({});
-  if (!unmatched.length) return null;
+  if (!unmatched.length || screens.length <= 1) return null;
+  const leave = () =>
+    void keepOnMainScreen(
+      unmatched.map((p) => p.output.id),
+      screens,
+    );
   return (
     <Dialog
       title="Place outputs on screens"
-      onClose={() => useLaunch.setState({ unmatched: [] })}
+      onClose={leave}
       footer={
-        <button type="button" onClick={() => useLaunch.setState({ unmatched: [] })}>
+        <button type="button" onClick={leave}>
           Leave on the main screen
         </button>
       }
     >
       <p className="muted" style={{ marginTop: 0 }}>
         These outputs opened on the main screen because their screen was not found. Choose where each one
-        belongs; ordo remembers it.
+        belongs; ordo remembers it. "Leave on the main screen" remembers that instead.
       </p>
       <table className="list">
         <tbody>

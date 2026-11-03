@@ -151,6 +151,55 @@ describe('LiveCore hub mode', () => {
     expect(h.sent[0]).toMatchObject({ t: 'live.event', event: { k: 'goLive' } });
   });
 
+  it('re-submits a command whose ack was lost in a socket blip with its original id (item 13)', () => {
+    const h = harness();
+    h.core.onStatus(true);
+    const hub = liveHub();
+    h.core.onState(hub);
+    const id = h.core.submit({ k: 'next', at: 5 });
+    expect(h.sent.at(-1)).toMatchObject({ t: 'live.event', id });
+    expect(h.core.view.live).toBe(0);
+    // The socket drops before any ack or delta arrives; the hub may or may not have applied it.
+    h.core.onStatus(false);
+    h.core.onStatus(true);
+    h.sent.length = 0;
+    h.core.onState(hub); // the hub's state on reconnect does not show the command
+    expect(h.sent).toEqual([{ t: 'live.event', id, event: { k: 'next', at: 5 } }]);
+    expect(h.core.view.live).toBe(0); // no snap back
+    expect(h.core.pendingCount).toBe(1);
+    // The hub had journalled it: it acks the id with the seq it got, and the delta (or state) confirms it.
+    const applied = reduce(hub, { k: 'next', at: 5 });
+    h.core.onDelta({ seq: applied.seq, fromSeq: hub.seq, event: { k: 'next', at: 5 }, id });
+    h.core.onAck({ id, seq: applied.seq });
+    expect(h.core.pendingCount).toBe(0);
+    expect(h.core.view.live).toBe(0);
+    // Confirmed commands are not re-sent on the next full state.
+    h.sent.length = 0;
+    h.core.onState(applied);
+    expect(h.sent).toEqual([]);
+  });
+
+  it('does not re-submit commands the hub rejected or confirmed, and drops stale ones', () => {
+    let now = 1000;
+    const h = harness();
+    (h.core as unknown as { deps: { now: () => number } }).deps.now = () => now;
+    h.core.onStatus(true);
+    const hub = liveHub();
+    h.core.onState(hub);
+    const a = h.core.submit({ k: 'next', at: 1 });
+    const b = h.core.submit({ k: 'next', at: 2 });
+    const c = h.core.submit({ k: 'next', at: 3 });
+    h.core.onAck({ id: a, rejected: 'no' });
+    h.core.onAck({ id: b, seq: hub.seq + 1 });
+    h.sent.length = 0;
+    h.core.onState(hub);
+    expect(h.sent.map((m) => (m as { id?: string }).id)).toEqual([c]);
+    now += 61_000;
+    h.sent.length = 0;
+    h.core.onState(hub);
+    expect(h.sent).toEqual([]);
+  });
+
   it('re-sends commands made during a short disconnect', () => {
     const h = harness();
     h.core.onStatus(true);
@@ -255,6 +304,16 @@ describe('LiveCore fallback authority', () => {
     h.core.onState(newer);
     expect(h.core.authority).toBe('hub');
     expect(h.notices.some((n) => n.kind === 'hub-newer')).toBe(true);
+  });
+
+  it('hands back silently when the hub state has the same seq (nothing changed, item 43)', () => {
+    const { h, hub } = inFallback();
+    const local = h.core.view;
+    h.core.onWelcome();
+    h.core.onState({ ...local, seq: local.seq });
+    expect(h.core.authority).toBe('hub');
+    expect(h.notices.some((n) => n.kind === 'hub-newer')).toBe(false);
+    expect(hub.seq).toBeLessThan(local.seq);
   });
 
   it('asks the operator on a playlist conflict, and keep-local adopts with force', () => {

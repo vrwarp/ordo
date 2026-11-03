@@ -87,8 +87,14 @@ export async function sendFile(
     return reply.code(416).send();
   }
   if (req.method === 'HEAD') {
+    // Fastify replaces Content-Length with the (empty) body's length on HEAD; write the real headers on
+    // the raw response so clients can size a download before fetching it.
+    if (range) reply.header('Content-Range', `bytes ${range.start}-${range.end}/${st.size}`);
     reply.header('Content-Length', String(range ? range.end - range.start + 1 : st.size));
-    return reply.code(range ? 206 : 200).send();
+    reply.hijack();
+    reply.raw.writeHead(range ? 206 : 200, reply.getHeaders() as Record<string, string>);
+    reply.raw.end();
+    return reply;
   }
   if (range) {
     reply.header('Content-Range', `bytes ${range.start}-${range.end}/${st.size}`);

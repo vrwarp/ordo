@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { LOOK_LOWER_THIRD, LOOK_MAIN, LOOK_STAGE, LOOK_STREAM, type Look } from '@ordo/domain';
-import { fadeMsFor, lookSignature, planFrame, resolveLook } from './plan.ts';
-import { liveState, slideLive } from './fixtures.test-util.ts';
+import { fadeMsFor, lookSignature, planFrame, planPreview, resolveLook } from './plan.ts';
+import { liveState, resolved, slideLive } from './fixtures.test-util.ts';
 
 describe('look visibility rules', () => {
   it('main look: background video, authored slide, crossfade', () => {
@@ -117,5 +117,41 @@ describe('resolveLook', () => {
     expect(resolveLook('look-main', [[custom], [LOOK_MAIN]], LOOK_STAGE).name).toBe('Custom main');
     expect(resolveLook('look-stage', [[custom], [LOOK_STAGE]], LOOK_MAIN).id).toBe('look-stage');
     expect(resolveLook('nope', [[custom]], LOOK_STAGE).id).toBe('look-stage');
+  });
+});
+
+describe('send to preview (prd/03)', () => {
+  const song = resolved.presentations.song!;
+  const mediaLookup = (id: string) => resolved.media[id];
+
+  it('shows the named slide under the look at once, with the background when the look shows it', () => {
+    const p = planPreview(song, 's2', LOOK_MAIN, { media: mediaLookup });
+    expect(p.idle).toBe(false);
+    expect(p.slide.desc?.slideId).toBe('s2');
+    expect(p.slide.key).toMatch(/^pv\|song\|1\|look-main\|s2\|$/);
+    expect(p.slide.at).toBe(0);
+    expect(p.slide.fadeMs).toBe(300);
+    expect(p.slideCue).toBe(-1);
+    expect(p.background.key).toBe('bg|bgv|d1');
+    expect(p.media.key).toBe('');
+  });
+
+  it('defaults to the first slide and carries the next slide on stage looks', () => {
+    const p = planPreview(song, undefined, LOOK_STAGE, { media: mediaLookup });
+    expect(p.slide.desc?.slideId).toBe('s1');
+    expect(p.slide.desc?.nextSlide?.id).toBe('s2');
+    expect(p.slide.fadeMs).toBe(0);
+    // Stage hides backgrounds and has no holding slide.
+    expect(p.background.key).toBe('');
+  });
+
+  it('uses the holding slide where the look hides backgrounds, and is idle for an unknown slide', () => {
+    const lobby: Look = { ...LOOK_LOWER_THIRD, holdingMediaId: 'hold' };
+    const p = planPreview(song, 's1', lobby, { media: mediaLookup });
+    expect(p.background.key).toBe('bg|hold|h1');
+    expect(p.background.desc?.holding).toBe(true);
+    expect(planPreview(song, 'nope', LOOK_MAIN).idle).toBe(true);
+    // Without a media lookup the slide still renders, just without its background.
+    expect(planPreview(song, 's1', LOOK_MAIN).background.key).toBe('');
   });
 });

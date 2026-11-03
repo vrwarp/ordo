@@ -60,3 +60,24 @@ export const PRIVATE_NETS = [
   'fc00::/7',
   'fe80::/10',
 ];
+
+/** Hostname of a Host header value: lower-cased, port and IPv6 brackets removed. */
+export function hostnameOf(host: string): string {
+  const h = host.trim().toLowerCase();
+  const v6 = /^\[([^\]]+)\](?::\d+)?$/.exec(h);
+  if (v6) return v6[1]!;
+  return h.replace(/:\d+$/, '');
+}
+
+/**
+ * Host allow-list: the venue domain and any label under it (`op.`, `out3.`, `stage.`), localhost and its
+ * labels, loopback addresses, plus configured extras. An empty hostname is refused.
+ */
+export function hostAllowed(hostname: string, domain: string, extra: string[] = []): boolean {
+  if (!hostname) return false;
+  const d = domain.toLowerCase();
+  if (hostname === d || hostname.endsWith(`.${d}`)) return true;
+  if (hostname === 'localhost' || hostname.endsWith('.localhost')) return true;
+  if (hostname === '127.0.0.1' || hostname === '::1' || hostname === '0:0:0:0:0:0:0:1') return true;
+  return extra.includes(hostname);
+}

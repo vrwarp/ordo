@@ -24,12 +24,12 @@ boundary instead of flowing to the frame loop. Two principles, applied everywher
 
 ## Where the main threads stand today
 
-| Window | On the main thread today | Should remain on the main thread |
-| --- | --- | --- |
-| Output | WebSocket and clock sync, live-state mirror and reducer, OPFS service-cache fill (3 parallel downloads buffered as blobs), IndexedDB save of the full live state, props scheduling and Intl formatting, video elements and `requestVideoFrameCallback`, health assembly, program-view canvas, diagnostics overlay | Video and audio elements, the transferred canvas, fullscreen, wake lock, keyboard, receiving `postMessage` from the opener |
-| Operator | React UI, WebSocket, optimistic reducer, fallback-bus host (window handles), service-cache fill into the Cache API, library IndexedDB, keyboard, Stream Deck and MIDI drivers, WebRTC receivers | React rendering, keyboard, HID and MIDI (require the window), `window.open` and window handles, WebRTC receivers |
-| Stage | React, WebSocket, mirror, fonts, timers | React rendering |
-| Hub | HTTP, WebSocket, live service, SQLite, job orchestration, ProPresenter import (synchronous, CPU-bound), font parsing, PPTX XML parsing | HTTP and WebSocket endpoints, the live service |
+| Window   | On the main thread today                                                                                                                                                                                                                                                                                          | Should remain on the main thread                                                                                           |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Output   | WebSocket and clock sync, live-state mirror and reducer, OPFS service-cache fill (3 parallel downloads buffered as blobs), IndexedDB save of the full live state, props scheduling and Intl formatting, video elements and `requestVideoFrameCallback`, health assembly, program-view canvas, diagnostics overlay | Video and audio elements, the transferred canvas, fullscreen, wake lock, keyboard, receiving `postMessage` from the opener |
+| Operator | React UI, WebSocket, optimistic reducer, fallback-bus host (window handles), service-cache fill into the Cache API, library IndexedDB, keyboard, Stream Deck and MIDI drivers, WebRTC receivers                                                                                                                   | React rendering, keyboard, HID and MIDI (require the window), `window.open` and window handles, WebRTC receivers           |
+| Stage    | React, WebSocket, mirror, fonts, timers                                                                                                                                                                                                                                                                           | React rendering                                                                                                            |
+| Hub      | HTTP, WebSocket, live service, SQLite, job orchestration, ProPresenter import (synchronous, CPU-bound), font parsing, PPTX XML parsing                                                                                                                                                                            | HTTP and WebSocket endpoints, the live service                                                                             |
 
 The output's render and asset workers already follow principle 1. The rest does not.
 
@@ -117,17 +117,17 @@ supervisor (tini + a small Node parent)
 
 ## Bad data: validate at entry, clamp at use, quarantine on failure
 
-| Boundary | Today | Target |
-| --- | --- | --- |
-| HTTP bodies | Zod, strict on most routes | Zod `.strict()` everywhere with bounds (string lengths, array sizes, numeric ranges); unknown keys rejected |
-| WebSocket from clients | Zod on every message | Plus per-socket rate limits and payload size caps; `at` clamped (fix pass) |
-| WebSocket to clients | Trusted, cast | Structural check of `live.state` on receipt; a reducer exception on a delta triggers resync, never a crash (fix pass) |
-| goLive resolution | Checks media readiness | Deep-validates every presentation against the schema; a slide that fails is replaced by an empty slide and logged, the cue is marked `degraded` in health, the service still goes live |
-| Files | Hash and MIME sniff on upload | Plus decode-time limits: image dimensions, video duration and resolution, font table sizes; a file that fails to decode is marked and never retried in a loop |
-| Render plan | Draws what it is given | Clamps: boxes to ±2× the canvas, text to 10,000 characters, font size to [4, 1000] px, objects per slide to 200, bitmap bytes per cue; a text object with an unknown font renders in the fallback font and reports it |
-| Journal and snapshots on disk | Parsed and trusted | Validated on restore; a corrupt snapshot falls back to the last good one, a corrupt journal row ends replay with a warning instead of an exception |
-| Imports | Logged gaps | Every imported entity passes the same schema as the API; the importer cannot write anything the editor could not |
-| Settings | Validated on PUT | Plus invariants (exactly one audio master, unique host indices, looks referenced by outputs exist) and defaults for missing keys on read |
+| Boundary                      | Today                         | Target                                                                                                                                                                                                                |
+| ----------------------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| HTTP bodies                   | Zod, strict on most routes    | Zod `.strict()` everywhere with bounds (string lengths, array sizes, numeric ranges); unknown keys rejected                                                                                                           |
+| WebSocket from clients        | Zod on every message          | Plus per-socket rate limits and payload size caps; `at` clamped (fix pass)                                                                                                                                            |
+| WebSocket to clients          | Trusted, cast                 | Structural check of `live.state` on receipt; a reducer exception on a delta triggers resync, never a crash (fix pass)                                                                                                 |
+| goLive resolution             | Checks media readiness        | Deep-validates every presentation against the schema; a slide that fails is replaced by an empty slide and logged, the cue is marked `degraded` in health, the service still goes live                                |
+| Files                         | Hash and MIME sniff on upload | Plus decode-time limits: image dimensions, video duration and resolution, font table sizes; a file that fails to decode is marked and never retried in a loop                                                         |
+| Render plan                   | Draws what it is given        | Clamps: boxes to ±2× the canvas, text to 10,000 characters, font size to [4, 1000] px, objects per slide to 200, bitmap bytes per cue; a text object with an unknown font renders in the fallback font and reports it |
+| Journal and snapshots on disk | Parsed and trusted            | Validated on restore; a corrupt snapshot falls back to the last good one, a corrupt journal row ends replay with a warning instead of an exception                                                                    |
+| Imports                       | Logged gaps                   | Every imported entity passes the same schema as the API; the importer cannot write anything the editor could not                                                                                                      |
+| Settings                      | Validated on PUT              | Plus invariants (exactly one audio master, unique host indices, looks referenced by outputs exist) and defaults for missing keys on read                                                                              |
 
 Quarantine is the key behaviour: a cue, file or slide that fails is marked bad and skipped, with a
 visible indicator for the operator, and the system continues. Nothing retries without a budget.
@@ -169,13 +169,13 @@ visible indicator for the operator, and the system continues. Nothing retries wi
 
 ## Phased plan
 
-| Phase | Work | Value |
-| --- | --- | --- |
-| A (fix pass, in progress) | Liveness by time, outputs leave fallback autonomously, heartbeats on the fallback bus, pending re-submission, `mainThreadStallMs`, reducer guards in the mirror, `at` clamp, import in a worker thread, bounded schemas | Removes the known failure modes; starts the boundary validation |
-| B | Output **link worker** and **supervisor**; fallback bus over **MessagePorts**; crash-only restart; render-plan clamps; goLive deep validation with quarantine | The audience path no longer shares a thread with networking, storage or state; bad slides cannot reach the frame loop |
-| C | Operator **core worker** with a view model; keyboard forwarding; error budgets and the diagnostics panel; chaos tests | The operator UI cannot delay the live service; failures are visible and bounded |
-| D | Hub **two-process split** with a supervisor; worker-thread pool; validated restore | A library or media failure cannot stop the live service |
-| E | Stage link worker; fuzzing of every parser; invariant assertions | Completes the pattern |
+| Phase                     | Work                                                                                                                                                                                                                    | Value                                                                                                                 |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| A (fix pass, in progress) | Liveness by time, outputs leave fallback autonomously, heartbeats on the fallback bus, pending re-submission, `mainThreadStallMs`, reducer guards in the mirror, `at` clamp, import in a worker thread, bounded schemas | Removes the known failure modes; starts the boundary validation                                                       |
+| B                         | Output **link worker** and **supervisor**; fallback bus over **MessagePorts**; crash-only restart; render-plan clamps; goLive deep validation with quarantine                                                           | The audience path no longer shares a thread with networking, storage or state; bad slides cannot reach the frame loop |
+| C                         | Operator **core worker** with a view model; keyboard forwarding; error budgets and the diagnostics panel; chaos tests                                                                                                   | The operator UI cannot delay the live service; failures are visible and bounded                                       |
+| D                         | Hub **two-process split** with a supervisor; worker-thread pool; validated restore                                                                                                                                      | A library or media failure cannot stop the live service                                                               |
+| E                         | Stage link worker; fuzzing of every parser; invariant assertions                                                                                                                                                        | Completes the pattern                                                                                                 |
 
 Phase B is the one that matters for Sunday; it should land before the first live service. Phases C to E
 can follow rehearsals.

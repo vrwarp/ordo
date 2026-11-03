@@ -108,6 +108,7 @@ export const ClientMessage = z.discriminatedUnion('t', [
   HealthMsg,
   RtcSignal,
   AdoptMsg,
+  PreviewMsg,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 

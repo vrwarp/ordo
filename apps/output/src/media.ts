@@ -48,9 +48,10 @@ export class MediaSlot {
   ) {
     el.preload = 'auto';
     el.crossOrigin = 'anonymous';
-    if (el instanceof HTMLVideoElement) {
-      el.playsInline = true;
-      el.disablePictureInPicture = true;
+    if (this.isVideo) {
+      const v = el as HTMLVideoElement;
+      v.playsInline = true;
+      v.disablePictureInPicture = true;
     }
     el.addEventListener('ended', () => {
       if (!this.el.loop) this.host.onEnded?.(this);
@@ -63,10 +64,19 @@ export class MediaSlot {
   }
 
   get isVideo(): boolean {
-    return this.el instanceof HTMLVideoElement;
+    return typeof HTMLVideoElement !== 'undefined'
+      ? this.el instanceof HTMLVideoElement
+      : (this.el as { tagName?: string }).tagName?.toLowerCase() === 'video';
   }
 
-  /** Load `hash` under `key` and preload to the first frame. Resolves when the first frame is available. */
+  /** Loads of this slot that failed, for diagnostics; reset when a load succeeds. */
+  failedLoads = 0;
+
+  /**
+   * Load `hash` under `key` and preload to the first frame. Resolves when the first frame is available.
+   * A load in progress or complete for the same key is shared; a failed one is forgotten, so the next
+   * arm of that key tries again (review item 10: a slow NAS read must not poison the cue for the service).
+   */
   load(key: string, hash: string, loop: boolean, muted: boolean): Promise<void> {
     if (this.key === key && this.loading) return this.loading;
     this.clearTimers();
@@ -100,12 +110,23 @@ export class MediaSlot {
         this.startFrameLoop(gen);
       }
     })();
-    this.loading.catch((err: Error) => {
-      if (gen !== this.gen) return;
-      this.error = err.message;
-      this.host.onError?.(this, err.message);
-    });
-    return this.loading;
+    const loading = this.loading;
+    loading.then(
+      () => {
+        if (gen === this.gen) this.failedLoads = 0;
+      },
+      (err: Error) => {
+        if (gen !== this.gen) return;
+        this.failedLoads++;
+        this.error = err.message;
+        // Forget the rejected promise: the slot keeps the key (so arm bookkeeping still finds it) but the
+        // next load() starts over instead of returning the same rejection.
+        this.loading = undefined;
+        this.ready = false;
+        this.host.onError?.(this, err.message);
+      },
+    );
+    return loading;
   }
 
   /** Stop and forget the current source. */

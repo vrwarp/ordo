@@ -52,8 +52,10 @@ Objects, in z-order, each selectable, movable, resizable, rotatable:
 - Keyboard: arrow nudges, Shift for 10 px, Ctrl+D duplicate, Delete, Ctrl+Z, Ctrl+Y,
   Ctrl+S.
 - Alignment guides and snapping to the canvas centre, edges and other objects.
-- Preview: a "Send to preview" renders the selected slide on a chosen output that is not
-  live, when no playlist is live. Thumbnails elsewhere are CSS approximations.
+- Preview: a "Send to preview" renders the selected slide (as currently drafted, saved or
+  not) on a chosen audience output, when no playlist is live; "Clear preview" returns the
+  output to idle, as does the next Go live. The control is disabled while a playlist is live.
+  Thumbnails elsewhere are CSS approximations.
 
 ## Slide imports into the editor
 

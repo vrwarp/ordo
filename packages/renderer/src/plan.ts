@@ -311,6 +311,79 @@ export function planFrame(state: LiveState, look: Look, opts: PlanOptions = {}):
   return plan;
 }
 
+/**
+ * The frame an idle output shows for "Send to preview" (prd/03): the presentation's slide (the first one
+ * when `slideId` is not given) under this output's look, with the presentation's background when the
+ * look shows backgrounds and the media is known, else the look's holding slide. Takes effect at once.
+ */
+export function planPreview(
+  presentation: Presentation,
+  slideId: string | undefined,
+  look: Look,
+  opts: PlanOptions = {},
+): FramePlan {
+  const sig = opts.lookSig ?? look.id;
+  const slides: Slide[] = [];
+  for (const sec of presentation.sections) slides.push(...sec.slides);
+  const idx = slideId ? slides.findIndex((s) => s.id === slideId) : 0;
+  const slide = idx >= 0 ? slides[idx] : undefined;
+  const fadeMs = fadeMsFor(look);
+  const plan: FramePlan = {
+    idle: false,
+    black: false,
+    clearColor: look.clearColor,
+    background: EMPTY(0),
+    slide: EMPTY(0),
+    lowerThird: EMPTY(0),
+    media: EMPTY(0),
+    audio: EMPTY(0),
+    slideCue: -1,
+  };
+  if (!slide) return { ...plan, idle: true };
+  const isSong = presentation.kind === 'song';
+  const nextSlide =
+    look.layers.slide.mode === 'lyricOnly' && look.layers.slide.nextSlide ? slides[idx + 1] : undefined;
+  if (slideVisible(look, slide, isSong, nextSlide)) {
+    const key = `pv|${presentation.id}|${presentation.rev}|${sig}|${slide.id}|${nextSlide?.id ?? ''}`;
+    plan.slide = {
+      key,
+      desc: {
+        layer: 'slide',
+        key,
+        cueIndex: -1,
+        presentationId: presentation.id,
+        slideId: slide.id,
+        slide,
+        nextSlide,
+        isSong,
+      },
+      at: 0,
+      fadeMs,
+    };
+  }
+  const bgId = look.layers.background.visible ? presentation.backgroundMediaId : look.holdingMediaId;
+  const m = bgId ? opts.media?.(bgId) : undefined;
+  const f = m ? playableFile(m) : undefined;
+  if (m && f && (m.kind === 'image' || m.kind === 'video')) {
+    const key = `bg|${m.id}|${f.hash}`;
+    plan.background = {
+      key,
+      desc: {
+        layer: 'background',
+        key,
+        mediaId: m.id,
+        hash: f.hash,
+        mime: f.mime,
+        kind: m.kind,
+        holding: !look.layers.background.visible,
+      },
+      at: 0,
+      fadeMs,
+    };
+  }
+  return plan;
+}
+
 /** The look an output uses: by id from the config looks, then the resolved playlist's looks, then a fallback. */
 export function resolveLook(lookId: string | undefined, looks: Look[][], fallback: Look): Look {
   for (const list of looks) {

@@ -9,14 +9,18 @@ export class HubProcess {
     readonly dataDir: string,
   ) {}
 
+  /** Data under ORDO_E2E_DATA_ROOT when set (a scratch dir), else `.e2e-data-<port>` in the repo. */
   static fresh(port: number): HubProcess {
-    const dir = `.e2e-data-${port}`;
+    const root = process.env.ORDO_E2E_DATA_ROOT;
+    const dir = root ? `${root}/.e2e-data-${port}` : `.e2e-data-${port}`;
     rmSync(dir, { recursive: true, force: true });
     return new HubProcess(port, dir);
   }
 
   async start(): Promise<void> {
-    this.proc = spawn('node', ['apps/hub/dist/main.js'], {
+    // ORDO_E2E_HUB_CMD lets a run use the sources (e.g. "npx tsx apps/hub/src/main.ts") instead of the build.
+    const [cmd, ...args] = (process.env.ORDO_E2E_HUB_CMD ?? 'node apps/hub/dist/main.js').split(/\s+/);
+    this.proc = spawn(cmd!, args, {
       env: {
         ...process.env,
         ORDO_DATA: this.dataDir,

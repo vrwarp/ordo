@@ -27,6 +27,10 @@ export type DeltaListener = (d: { seq: number; fromSeq: number; event: LiveEvent
 export type StateListener = (state: LiveState) => void;
 
 const JOURNAL_KEEP = 5000;
+/** Operator `at` values outside [now - AT_PAST_MS, now + AT_FUTURE_MS] are replaced by now + AT_REPLACE_MS. */
+export const AT_PAST_MS = 500;
+export const AT_FUTURE_MS = 2000;
+export const AT_REPLACE_MS = 33;
 
 /** Hub-authoritative live state: resolve, reduce, journal, snapshot, broadcast. */
 export class LiveService {
@@ -159,11 +163,23 @@ export class LiveService {
     };
   }
 
+  /**
+   * The output whose reports of media.ended/audio.ended count: the audio master (design/18). Undefined when
+   * no master is configured, in which case any output window is believed.
+   */
+  audioMasterId(): string | undefined {
+    return this.lib.getSetting('outputs').find((o) => o.audioMaster && o.kind !== 'stage')?.id;
+  }
+
   /** Validate a command against its origin and turn it into a reducer event. */
   toEvent(cmd: LiveCommand | LiveEvent, origin: Origin): LiveEvent {
     if (origin.role === 'output' || origin.role === 'stage') {
       if (cmd.k !== 'media.ended' && cmd.k !== 'audio.ended')
         throw new LiveRejection('Output windows may only report media.ended and audio.ended');
+      if (origin.role === 'stage') throw new LiveRejection('The stage display does not play media');
+      const master = this.audioMasterId();
+      if (master && origin.outputId !== master)
+        throw new LiveRejection(`Only the audio master output reports ${cmd.k}`);
       const s = this.state;
       if (cmd.k === 'media.ended') {
         const m = s.layers.media.content;
@@ -180,7 +196,23 @@ export class LiveService {
         throw new LiveRejection('goLive must carry only playlistId; the hub resolves it');
       return { k: 'goLive', resolved: this.resolve(cmd.playlistId) };
     }
+    if (origin.role === 'operate') return this.clampAt(cmd as LiveEvent);
     return cmd as LiveEvent;
+  }
+
+  /**
+   * An operator clock that is off (a bad offset estimate, a laptop that slept) must not seek videos or skew
+   * timers: `at` outside a short window around the hub clock is replaced by now + 33 ms.
+   */
+  clampAt(ev: LiveEvent): LiveEvent {
+    if (!('at' in ev) || typeof ev.at !== 'number') return ev;
+    const now = this.now();
+    if (ev.at >= now - AT_PAST_MS && ev.at <= now + AT_FUTURE_MS) return ev;
+    this.log.warn(
+      { k: ev.k, at: ev.at, offsetMs: Math.round(ev.at - now) },
+      'operator at out of range; replaced',
+    );
+    return { ...ev, at: now + AT_REPLACE_MS };
   }
 
   /** Submit a command: validate, reduce, journal, broadcast. Returns the new seq. */

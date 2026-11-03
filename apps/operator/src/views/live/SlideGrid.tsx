@@ -1,6 +1,7 @@
-import { type Cue, sectionsOfItem } from '@ordo/domain';
+import type { Cue } from '@ordo/domain';
 import { useMemo } from 'react';
 import { armDot, waitingForLive } from '../../lib/health.ts';
+import { groupCues, sectionGoTarget } from '../../lib/sections.ts';
 import { controller } from '../../services/controller.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
@@ -9,8 +10,6 @@ import { itemTitle } from './PlaylistPane.tsx';
 import { SlideThumb, type ThumbMarks } from './SlideThumb.tsx';
 import type { OperatorPlaylist } from './useOperatorPlaylist.ts';
 
-type Group = { pos: number; label: string; short: string; cues: Cue[] };
-
 export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem: number }) {
   const state = useLive((s) => s.state);
   const health = useLive((s) => s.health);
@@ -18,26 +17,12 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem: nu
   const { thumbSize, clickToGo } = useUi();
   const item = op.playlist?.items[viewItem];
   const cues = useMemo(() => op.cues.filter((c) => c.itemIndex === viewItem), [op.cues, viewItem]);
-  const groups = useMemo(() => {
-    const out: Group[] = [];
-    for (const c of cues) {
-      const pos = c.arrangementPos ?? -1;
-      let g = out.find((x) => x.pos === pos);
-      if (!g) {
-        g = { pos, label: c.sectionLabel ?? c.label, short: c.sectionShort ?? '', cues: [] };
-        out.push(g);
-      }
-      g.cues.push(c);
-    }
-    return out;
-  }, [cues]);
+  const groups = useMemo(() => groupCues(cues), [cues]);
   const audienceOutputs = outputs.filter((o) => o.enabled);
   const presentation = item?.kind === 'presentation' ? op.presentation(item.presentationId) : undefined;
   const isSong = presentation?.kind === 'song';
   const ctl = controller();
   const liveHere = op.live;
-  const secIndex = (cue: Cue) =>
-    liveHere ? sectionsOfItem(state.cues, cue.index).findIndex((s) => s.pos === cue.arrangementPos) : -1;
 
   const marksFor = (c: Cue): ThumbMarks => {
     if (!liveHere) return { live: false, armed: false };
@@ -122,8 +107,9 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem: nu
                   className="small"
                   disabled={!liveHere}
                   onClick={() => {
-                    const i = secIndex(g.cues[0]!);
-                    if (i >= 0) ctl?.goToSection(i);
+                    // GO by cue index: the section shown may belong to an item that is not live.
+                    const i = sectionGoTarget(g);
+                    if (liveHere && i !== undefined) ctl?.go(i);
                   }}
                   title="Go to the first slide of this section"
                 >

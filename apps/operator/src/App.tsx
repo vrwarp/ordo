@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react';
 import { ConfirmHost } from './components/Confirm.tsx';
 import { Toasts } from './components/Toasts.tsx';
+import { UpdateFailedScreen, UpdatingOverlay } from './components/UpdatingScreen.tsx';
 import { allowedForRole } from './lib/route.ts';
+import { installCacheCheck } from './services/cacheCheck.ts';
 import { startController } from './services/controller.ts';
 import { syncFonts } from './services/fonts.ts';
 import { installOutputWindows } from './services/outputs.ts';
 import { installProgramViews } from './services/programView.ts';
 import { installSurfaces, surfaces } from './services/surfaces.ts';
+import { installUpdateGuard, useUpdate } from './services/update.ts';
 import { loadCachedLibrary, loadLibrary, useLibrary } from './state/library.ts';
 import { refreshSession, useSession } from './state/session.ts';
 import { navigate, useRoute } from './useRoute.ts';
@@ -23,15 +26,18 @@ import { reacquireOnFirstGesture } from './services/reacquire.ts';
 
 export function App() {
   const session = useSession();
+  const updateFailed = useUpdate((u) => u.phase === 'failed');
   useEffect(() => {
-    void refreshSession();
-  }, []);
+    if (!updateFailed) void refreshSession();
+  }, [updateFailed]);
   useEffect(() => {
     if (session.status !== 'error') return;
     const t = setInterval(() => void refreshSession(), 5000);
     return () => clearInterval(t);
   }, [session.status]);
 
+  // A stale tab that could not update: no hub connection is started, so the reload loop stops here.
+  if (updateFailed) return <UpdateFailedScreen />;
   if (session.status === 'loading')
     return (
       <div className="center">
@@ -69,14 +75,19 @@ function Shell({ role }: { role: 'operate' | 'edit' }) {
       if (alive) setReady(true);
     })();
     const ctl = startController(role);
+    const offUpdate = installUpdateGuard(ctl.hub);
+    let offCacheCheck: (() => void) | undefined;
     if (role === 'operate') {
       installOutputWindows(ctl);
       installProgramViews(ctl);
       installSurfaces(ctl);
+      offCacheCheck = installCacheCheck();
       reacquireOnFirstGesture();
     }
     return () => {
       alive = false;
+      offUpdate();
+      offCacheCheck?.();
     };
   }, [role]);
   useEffect(() => syncFonts(fonts), [fonts]);
@@ -119,6 +130,7 @@ function Shell({ role }: { role: 'operate' | 'edit' }) {
       <div className="page">{body}</div>
       <Toasts />
       <ConfirmHost />
+      <UpdatingOverlay />
     </div>
   );
 }

@@ -16,6 +16,13 @@ const scope = self as unknown as {
 let engine: RenderEngine | null = null;
 let canvasWaiter: ((c: OffscreenCanvas) => void) | null = null;
 let early: ToRender[] = [];
+// Main-thread watchdog: time of the last 'tick' from the main thread and the longest gap seen since the
+// last telemetry report (a stalled main thread cannot post ticks, so the gap grows while it is stuck).
+let lastTick = performance.now();
+let maxStall = 0;
+function sampleStall(): void {
+  maxStall = Math.max(maxStall, performance.now() - lastTick);
+}
 
 function post(m: FromRender, transfer: Transferable[] = []): void {
   scope.postMessage(m, transfer);
@@ -27,17 +34,6 @@ const raf =
     : (cb: (ts: number) => void) => setTimeout(() => cb(performance.now()), 16) as unknown as number;
 
 const wallNow = () => performance.timeOrigin + performance.now();
-
-function observeLongTasks(): void {
-  try {
-    const po = new PerformanceObserver((list) => {
-      if (engine) engine.longTasks += list.getEntries().length;
-    });
-    po.observe({ type: 'longtask', buffered: false });
-  } catch {
-    /* long task timing is not available in workers on every platform */
-  }
-}
 
 async function init(m: Extract<ToRender, { t: 'init' }>): Promise<void> {
   const e = new RenderEngine(
@@ -62,6 +58,7 @@ async function init(m: Extract<ToRender, { t: 'init' }>): Promise<void> {
           canvasWaiter = resolve;
           post({ t: 'needCanvas' });
         }),
+      canvasUnused: () => post({ t: 'canvasUnused' }),
     },
   );
   m.assetPort.onmessage = (ev: MessageEvent<AssetToRender>) => {
@@ -80,8 +77,14 @@ async function init(m: Extract<ToRender, { t: 'init' }>): Promise<void> {
   for (const x of early) handle(x);
   early = [];
   setInterval(() => e.flushHeld(), 40);
-  setInterval(() => post({ t: 'telemetry', tel: e.telemetry() }), 250);
-  observeLongTasks();
+  // Long tasks are not observable in workers (no PerformanceObserver 'longtask' entries): the engine's
+  // FrameClock reports rAF stalls of 50 ms or more as the worker's long-task count instead.
+  setInterval(() => {
+    sampleStall();
+    post({ t: 'telemetry', tel: e.telemetry(), mainThreadStallMs: Math.round(maxStall) });
+    maxStall = 0;
+  }, 250);
+  setInterval(sampleStall, 50);
 }
 
 function handle(m: ToRender): void {
@@ -122,6 +125,7 @@ function handle(m: ToRender): void {
     case 'frames':
       post({ t: 'frames', frames: e.clock.frames() });
       return;
+    case 'tick':
     case 'init':
     case 'canvas':
       return;
@@ -130,6 +134,11 @@ function handle(m: ToRender): void {
 
 scope.onmessage = (ev) => {
   const m = ev.data;
+  if (m.t === 'tick') {
+    sampleStall();
+    lastTick = performance.now();
+    return;
+  }
   if (m.t === 'canvas') {
     canvasWaiter?.(m.canvas);
     canvasWaiter = null;

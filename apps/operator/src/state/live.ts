@@ -2,6 +2,7 @@ import type { LiveState } from '@ordo/domain';
 import { initialState } from '@ordo/live-state';
 import type { OutputHealthEntry } from '@ordo/protocol';
 import { create } from 'zustand';
+import type { CacheIntegrity } from '../lib/health.ts';
 import type { Authority, Reconcile } from '../lib/liveCore.ts';
 
 export type LiveStore = {
@@ -21,6 +22,8 @@ export type LiveStore = {
   goLiveError?: string;
   /** Wall-clock offset/rtt for diagnostics. */
   clock: { offset: number; rtt: number };
+  /** Result of the last cache integrity check after Launch outputs (prd/08). */
+  cacheCheck?: { at: number; message: string | null; rows: CacheIntegrity[] };
 };
 
 export const useLive = create<LiveStore>(() => ({

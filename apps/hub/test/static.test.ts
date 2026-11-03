@@ -32,7 +32,7 @@ beforeAll(async () => {
     writeFileSync(join(apps, name, 'dist', 'assets', 'main-AbCd1234.js'), `console.log('${name}')`);
     writeFileSync(join(apps, name, 'dist', 'sw.js'), '//sw');
   }
-  hub = await startHub({ appsDir: apps, domain: 'venue.example' });
+  hub = await startHub({ appsDir: apps, domain: 'venue.example', allowedHosts: ['10.0.0.2'] });
 });
 afterAll(async () => {
   await hub.cleanup();
@@ -84,7 +84,8 @@ describe('host routing and static apps', () => {
     const stage = await get('/', 'stage.venue.example');
     expect(stage.body).toMatch(/has not been built/);
 
-    // Path mode on other hosts.
+    // Path mode on other allowed hosts (loopback, or an extra from ORDO_ALLOWED_HOSTS).
+    expect((await get('/output', '127.0.0.1:8080')).status).toBe(301);
     expect((await get('/output', '10.0.0.2:8080')).status).toBe(301);
     expect((await get('/output/', '10.0.0.2:8080')).body).toContain('<title>output');
     expect((await get('/output/sw.js', '10.0.0.2:8080')).headers['cache-control']).toBe('no-cache');

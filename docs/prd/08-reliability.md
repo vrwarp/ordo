@@ -34,13 +34,17 @@ hot fallback. Reliability requirements are therefore measurable, not aspirationa
   presentations in IndexedDB and media in the Cache API. The operator's top bar shows
   progress and blocks nothing; the operator may start before 100 % but sees amber.
 - Cached assets are addressed by content hash so re-caching is incremental.
-- A cache integrity check runs at Launch outputs and reports missing items.
+- A cache integrity check runs at Launch outputs (and Relaunch): once every launched window has
+  reported and its fill has stopped moving, the operator sees "Service cache: n missing on <output>"
+  with the counts, or a confirmation that every window holds the whole manifest. The result also
+  appears in the Diagnostics panel. Nothing is checked while no playlist is live.
 
 ## Recovery UX
 
 - Relaunch outputs: one action, under 10 s, keeps last frame where possible.
 - Health dots and a Diagnostics panel with per-output counters and the last 50 log
-  lines from each window, exportable as a file for bug reports.
+  lines from each window (carried in the window's health report), exportable as a file for
+  bug reports together with the operator's own log.
 - A printed one-page runbook, generated from the docs, with: start of service steps, what
   each health colour means, Relaunch, and the ProPresenter switch procedure (close the
   ordo output windows with Ctrl+Shift+Q or Relaunch, open ProPresenter, which already has

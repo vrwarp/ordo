@@ -29,6 +29,7 @@ import {
   type ZOrder,
 } from './ops.ts';
 import { PresentationPanel } from './PresentationPanel.tsx';
+import { PreviewControl } from './PreviewControl.tsx';
 import { RevisionsDialog } from './RevisionsDialog.tsx';
 import { SlideCanvas } from './SlideCanvas.tsx';
 import { SlidePanel } from './SlidePanel.tsx';
@@ -269,6 +270,7 @@ export function EditorView({ id }: { id: string }) {
           🗑
         </button>
         <span className="spacer" />
+        <PreviewControl p={p} slideId={slide?.id} />
         <button type="button" onClick={() => setRevisions(true)}>
           History
         </button>

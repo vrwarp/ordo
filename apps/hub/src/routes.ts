@@ -148,6 +148,11 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
       throw locked('This playlist is live and is locked until the service ends');
   };
   const params = (req: FastifyRequest) => req.params as Record<string, string>;
+  /** Heavy imports (zip inflate, LibreOffice, ffmpeg) are refused while a playlist is live. */
+  const assertNotLive = () => {
+    if (live.state.mode === 'live')
+      throw locked('Imports are disabled while a playlist is live; end the service first');
+  };
 
   // ---------------- auth ----------------
   route('GET', '/auth/me', 'public', async (req): Promise<AuthMeRes> => {
@@ -196,9 +201,18 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
   });
 
   // ---------------- library ----------------
-  route('GET', '/library/snapshot', 'edit', async (req) =>
-    lib.snapshot({ withTokens: sessionRole(req.principal) === 'operate' }),
-  );
+  // `?since=<seq>` answers with deltas when the change log still covers that seq, else the full snapshot.
+  route('GET', '/library/snapshot', 'edit', async (req) => {
+    const withTokens = sessionRole(req.principal) === 'operate';
+    const since = (req.query as Record<string, unknown>).since;
+    if (typeof since === 'string' && since !== '') {
+      const n = Number(since);
+      if (!Number.isInteger(n) || n < 0) throw badRequest('since must be a non-negative integer');
+      const delta = lib.changesSince(n, { withTokens });
+      if (delta) return delta;
+    }
+    return lib.snapshot({ withTokens });
+  });
 
   // presentations
   route('GET', '/presentations', 'edit', async () => lib.presentations.list());
@@ -531,6 +545,7 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
     return reply.code(201).send(hub.imports.songselect(text, { title, by: by(req) }));
   });
   route('POST', '/import/pro7', 'edit', async (req, reply) => {
+    assertNotLive();
     if (req.isMultipart()) {
       const { files } = await readMultipart(hub, req, { maxFiles: 1 });
       const f = files[0];
@@ -546,6 +561,7 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
     return reply.code(202).send(await hub.imports.queuePro7FromPath(b.path));
   });
   route('POST', '/import/document', 'edit', async (req, reply) => {
+    assertNotLive();
     const { files } = await readMultipart(hub, req, { maxFiles: 1, limit: 1024 ** 3 });
     const f = files[0];
     if (!f) throw badRequest('No document');
@@ -602,6 +618,7 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
         if (ids.has(o.id)) throw badRequest(`Duplicate output id ${o.id}`);
         ids.add(o.id);
       }
+      assertOneAudioMaster(value as Output[]);
     }
     return lib.putSetting(key, value);
   });
@@ -728,6 +745,30 @@ export function registerApi(app: FastifyInstance, hub: Ctx): void {
   });
 }
 
+/**
+ * Exactly one output window plays audio (design/18): the hub accepts `media.ended` only from it, so the
+ * outputs list must name exactly one audio master, and it must be an output (not the stage) that is enabled.
+ */
+export function assertOneAudioMaster(
+  outputs: Pick<Output, 'kind' | 'audioMaster' | 'enabled' | 'name'>[],
+): void {
+  const masters = outputs.filter((o) => o.audioMaster);
+  if (masters.length !== 1)
+    throw badRequest(
+      masters.length === 0
+        ? 'Exactly one output must be the audio master; none is set'
+        : `Exactly one output must be the audio master; ${masters.length} are set (${masters.map((m) => m.name).join(', ')})`,
+      'audio_master',
+    );
+  const m = masters[0]!;
+  if (m.kind === 'stage') throw badRequest('The stage display cannot be the audio master', 'audio_master');
+  if (m.enabled === false)
+    throw badRequest(
+      `The audio master "${m.name}" is disabled; enable it or pick another output`,
+      'audio_master',
+    );
+}
+
 export async function cleanupStaleUploads(hub: Ctx): Promise<void> {
   const cutoff = Date.now() - 7 * 86400_000;
   const rows = hub.lib.db.prepare(`SELECT id FROM uploads WHERE updated_at < ?`).all(cutoff) as {
@@ -737,12 +778,10 @@ export async function cleanupStaleUploads(hub: Ctx): Promise<void> {
     await rm(join(hub.store.uploads, `${r.id}.part`), { force: true });
     hub.lib.db.prepare(`DELETE FROM uploads WHERE id = ?`).run(r.id);
   }
+  // tmp/ only ever holds scratch files of jobs in flight (partial transcodes, inflated imports). Every job
+  // that was running is re-queued on start and begins again, so everything in it is garbage now.
   const { readdir } = await import('node:fs/promises');
-  for (const dir of ['tmp']) {
-    const p = join(hub.cfg.dataDir, dir);
-    for (const f of await readdir(p).catch(() => [] as string[])) {
-      const st = await stat(join(p, f)).catch(() => undefined);
-      if (st && st.mtimeMs < Date.now() - 86400_000) await rm(join(p, f), { recursive: true, force: true });
-    }
-  }
+  const tmp = join(hub.cfg.dataDir, 'tmp');
+  for (const f of await readdir(tmp).catch(() => [] as string[]))
+    await rm(join(tmp, f), { recursive: true, force: true });
 }

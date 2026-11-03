@@ -2,12 +2,15 @@ import type { LiveState } from '@ordo/domain';
 import {
   type DeckInfo,
   defaultDeckPages,
+  isModifierOnly,
   KeyboardDriver,
   MidiDriver,
   type MidiInputInfo,
+  normalizeCombo,
   StreamDeckDriver,
 } from '@ordo/surfaces';
 import { create } from 'zustand';
+import { HoldGuard } from '../lib/confirm.ts';
 import { deckView } from '../lib/deckView.ts';
 import { useLibrary } from '../state/library.ts';
 import { useLive } from '../state/live.ts';
@@ -27,6 +30,19 @@ export const useSurfaces = create<SurfacesStore>(() => ({
   keyboardActive: false,
 }));
 
+/** Hold the clear-all key this long to clear without the second press (prd/02). */
+export const CLEAR_HOLD_MS = 1000;
+
+function inTextField(e: KeyboardEvent): boolean {
+  const t = e.target as HTMLElement | null;
+  return (
+    !!t &&
+    (t.isContentEditable ||
+      /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName ?? '') ||
+      (typeof t.closest === 'function' && !!t.closest('[data-keys="off"]')))
+  );
+}
+
 /** Wires the keyboard, Stream Deck and MIDI drivers to the controller's single dispatch. */
 export class Surfaces {
   readonly keyboard: KeyboardDriver;
@@ -35,8 +51,22 @@ export class Surfaces {
   private unsub: (() => void)[] = [];
   private attached = false;
   private lastView = '';
+  private hold = new HoldGuard(CLEAR_HOLD_MS);
+  /**
+   * Clear all "or hold": the keydown (handled by the KeyboardDriver) arms the double-press confirm; holding
+   * the key for CLEAR_HOLD_MS sends the confirming press. Auto-repeat keydowns are ignored by the driver.
+   */
+  private onHoldDown = (e: KeyboardEvent) => {
+    if (e.repeat || e.isComposing || isModifierOnly(e) || inTextField(e)) return;
+    const a = useLibrary.getState().data.settings.keymap[normalizeCombo(e)];
+    if (a?.id !== 'clearAll') return;
+    this.hold.down(() => {
+      if (useLive.getState().clearAllUntil !== undefined) this.ctl.dispatch({ id: 'clearAll' }, 'keyboard');
+    });
+  };
+  private onHoldUp = () => this.hold.up();
 
-  constructor(ctl: Controller) {
+  constructor(private ctl: Controller) {
     const s = useLibrary.getState().data.settings;
     this.keyboard = new KeyboardDriver(s.keymap, ctl.dispatch);
     this.deck = new StreamDeckDriver(ctl.dispatch);
@@ -76,8 +106,18 @@ export class Surfaces {
   setKeyboard(on: boolean): void {
     if (on === this.attached) return;
     this.attached = on;
-    if (on) this.keyboard.attach(window);
-    else this.keyboard.detach(window);
+    if (on) {
+      this.keyboard.attach(window);
+      window.addEventListener('keydown', this.onHoldDown);
+      window.addEventListener('keyup', this.onHoldUp);
+      window.addEventListener('blur', this.onHoldUp);
+    } else {
+      this.keyboard.detach(window);
+      window.removeEventListener('keydown', this.onHoldDown);
+      window.removeEventListener('keyup', this.onHoldUp);
+      window.removeEventListener('blur', this.onHoldUp);
+      this.hold.cancel();
+    }
     useSurfaces.setState({ keyboardActive: on });
   }
 

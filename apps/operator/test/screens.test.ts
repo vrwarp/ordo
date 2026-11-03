@@ -68,6 +68,29 @@ describe('screen matching', () => {
       ['c', 0, null],
     ]);
   });
+  it('places unmatched outputs on the only screen as matched, so no dialog and the screen is saved (item 9)', () => {
+    const outputs = [out('a'), out('b', { label: 'gone', left: 9999, top: 0, width: 1, height: 1 })];
+    const plan = planLaunch(outputs, [primary]);
+    expect(plan.map((p) => [p.output.id, p.matched])).toEqual([
+      ['a', 'only'],
+      ['b', 'only'],
+    ]);
+    expect(plan.filter((p) => !p.matched)).toHaveLength(0);
+    const upd = placementUpdates(plan);
+    expect(upd.map((o) => [o.id, o.screen?.label])).toEqual([
+      ['a', 'Dell U2720'],
+      ['b', 'Dell U2720'],
+    ]);
+    // Next launch: the first matches by label, the second shares the only screen; nothing to save.
+    const again = planLaunch(upd, [primary]);
+    expect(again.map((p) => p.matched)).toEqual(['label', 'only']);
+    expect(placementUpdates(again)).toEqual([]);
+  });
+  it('still asks on a multi-screen PC and does not save a guess', () => {
+    const plan = planLaunch([out('a')], [primary, proj]);
+    expect(plan[0]?.matched).toBeNull();
+    expect(placementUpdates(plan)).toEqual([]);
+  });
   it('reports placements to save back', () => {
     const outputs = [out('a', { label: 'old', left: 2560, top: 0, width: 1920, height: 1080 })];
     const upd = placementUpdates(planLaunch(outputs, [primary, proj]));

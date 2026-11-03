@@ -19,7 +19,7 @@ import {
  */
 
 export type PropTextItem = { id: PropId; text: string; style: TextStyle; box: Box };
-export type PropId = 'countdown' | 'countdownLabel' | 'clock' | 'elapsed' | 'message';
+export type PropId = 'countdown' | 'countdownLabel' | 'clock' | 'elapsed' | 'message' | 'videoRemaining';
 export type PropsModel = {
   key: string;
   items: PropTextItem[];
@@ -88,6 +88,8 @@ export function defaultPropBox(id: PropId | 'logo', look: Look): PropBox {
         valign: 'middle',
         box: box(60, 960, 1800, 110),
       };
+    case 'videoRemaining':
+      return { ...base, fontSizePx: 64, align: 'right', valign: 'middle', box: box(1400, 954, 500, 110) };
     case 'logo':
       return { ...base, fontSizePx: 10, box: box(360, 190, 1200, 700) };
   }
@@ -139,6 +141,24 @@ export function topMessage(state: LiveState, now: number): string | undefined {
   return undefined;
 }
 
+/**
+ * Remaining time of the live media video, `mm:ss` rounded up (prd/04: the stage look shows it instead of
+ * the video). Nothing for images, loops, ended videos or media without a known duration.
+ */
+export function videoRemainingText(state: LiveState, now: number): string | undefined {
+  const c = state.layers.media.content;
+  if (!c || c.mediaKind !== 'video' || c.loop || c.state === 'ended') return undefined;
+  const dur = state.resolved?.media[c.mediaId]?.durationMs;
+  if (!dur) return undefined;
+  const pos = c.state === 'playing' ? Math.max(0, now - c.startedAt) : c.positionMs;
+  return formatDuration(Math.ceil(Math.max(0, dur - pos) / 1000) * 1000);
+}
+
+/** Whether a look shows the video remaining time: stage looks do (prd/04). */
+export function showsVideoRemaining(look: Look): boolean {
+  return look.kind === 'stage';
+}
+
 export function propsModel(state: LiveState, look: Look, ctx: PropsContext): PropsModel {
   const rule = look.layers.props;
   const items: PropTextItem[] = [];
@@ -166,6 +186,10 @@ export function propsModel(state: LiveState, look: Look, ctx: PropsContext): Pro
     if (rule.messages) {
       const m = topMessage(state, ctx.now);
       if (m) items.push({ id: 'message', text: m, ...split(propBox('message', look)) });
+    }
+    if (showsVideoRemaining(look)) {
+      const v = videoRemainingText(state, ctx.now);
+      if (v) items.push({ id: 'videoRemaining', text: v, ...split(propBox('videoRemaining', look)) });
     }
   }
   if (rule.clock && state.mode === 'live' && !state.black)

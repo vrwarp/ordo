@@ -45,6 +45,8 @@ export type ToRender =
   /** Period of the small frame copies sent back to the main thread (0 disables). */
   | { t: 'snapshot'; everyMs: number; width: number; height: number }
   | { t: 'frames' }
+  /** Main-thread watchdog tick (every 250 ms); the worker reports the longest gap as mainThreadStallMs. */
+  | { t: 'tick' }
   /** A fresh canvas, sent in answer to `needCanvas`. */
   | { t: 'canvas'; canvas: OffscreenCanvas };
 
@@ -62,15 +64,19 @@ export type AssetToRender = {
 export type HeldKeys = { live: string; armed: string; queued: string };
 export type FromRender =
   | { t: 'ready'; compositor: 'webgpu' | '2d'; note?: string }
-  | { t: 'telemetry'; tel: RenderTelemetry }
+  | { t: 'telemetry'; tel: RenderTelemetry; mainThreadStallMs?: number }
   | { t: 'frames'; frames: number[] }
   | { t: 'held'; layers: HeldKeys[] }
   | { t: 'snapshot'; bitmap: ImageBitmap }
   | { t: 'lost'; reason: string }
   | { t: 'restored'; compositor: 'webgpu' | '2d' }
   | { t: 'fatal'; error: string }
-  /** Switching from WebGPU to Canvas 2D needs a canvas never bound to WebGPU. */
-  | { t: 'needCanvas' };
+  /**
+   * Switching between WebGPU and Canvas 2D needs a canvas never bound to the other context. The main
+   * thread shows the new canvas on the next `ready` or `restored`, and drops it on `canvasUnused`.
+   */
+  | { t: 'needCanvas' }
+  | { t: 'canvasUnused' };
 
 // ---- main -> asset ----
 export type FontLoad = { family: string; weight: number; style: 'normal' | 'italic'; hash: string };

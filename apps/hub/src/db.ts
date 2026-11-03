@@ -80,6 +80,18 @@ CREATE TABLE IF NOT EXISTS uploads (
   fields TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 `,
   },
+  {
+    version: 5,
+    name: 'library-changes',
+    // One row per library change at the library seq it was emitted with, so GET /library/snapshot?since=
+    // can answer with deltas. Pruned to the last LIBRARY_CHANGES_KEEP seqs.
+    sql: `
+CREATE TABLE IF NOT EXISTS library_changes (
+  rowid INTEGER PRIMARY KEY AUTOINCREMENT, seq INTEGER NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL,
+  deleted INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS library_changes_seq ON library_changes(seq);
+`,
+  },
 ];
 
 export function migrate(db: DB): number {

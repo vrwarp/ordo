@@ -5,8 +5,10 @@ import { cacheSummary, dotTitle, outputDot } from '../../lib/health.ts';
 import { useHubNow } from '../../hooks.ts';
 import { controller, dispatch } from '../../services/controller.ts';
 import { useLaunch } from '../../services/outputs.ts';
+import { missingHandles, reacquireMissing } from '../../services/reacquire.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
+import { toast } from '../../state/toasts.ts';
 import { setUi } from '../../state/ui.ts';
 
 function useOnline(): boolean {
@@ -36,9 +38,11 @@ export function TopBar() {
   const fallback = live.authority === 'fallback';
   const hubDot = fallback ? 'amber' : live.hubConnected ? 'green' : 'red';
   const hubText = fallback
-    ? live.reconcile === 'adopting'
-      ? 'Hub back: handing over…'
-      : 'Hub lost: running from this PC'
+    ? live.reconcile === 'conflict'
+      ? 'Hub back: choose which service to keep'
+      : live.reconcile === 'adopting' || live.reconcile === 'awaitState' || live.hubConnected
+        ? 'Hub back: handing over…'
+        : 'Hub lost: running from this PC'
     : live.hubConnected
       ? 'Hub'
       : live.everConnected
@@ -48,6 +52,21 @@ export function TopBar() {
   const cache = cacheSummary(entries, live.ownCache.total ? live.ownCache : undefined);
   const cacheDot = !isLive ? 'grey' : cache.frac >= 1 ? 'green' : 'amber';
   const tone = fallback || (isLive && !live.hubConnected) ? 'amber' : '';
+  // Fallback link: windows this tab holds a handle for, out of the output windows known to exist
+  // (held, or reported connected by the hub). Without a handle the fallback bus cannot reach a window.
+  const enabled = outputs.filter((o) => o.enabled);
+  const held = enabled.filter((o) => launch.open[o.id]).length;
+  const known = enabled.filter((o) => launch.open[o.id] || live.health[o.id]?.connected).length;
+  const linkMissing = isLive && held < known;
+  const onFallbackLink = () => {
+    reacquireMissing(true);
+    if (missingHandles().ids.length)
+      toast(
+        'Some output windows were opened by another operator tab and cannot be reached from this one. Use Relaunch to take them over.',
+        'warn',
+        10_000,
+      );
+  };
   return (
     <div className={`topbar ${tone}`}>
       <div className="col" style={{ gap: 0, minWidth: 160 }}>
@@ -80,6 +99,17 @@ export function TopBar() {
           })}
       </span>
       {live.pending > 0 && !fallback && <span className="tag amber">{live.pending} pending</span>}
+      {linkMissing && (
+        <button
+          type="button"
+          className="tag amber"
+          data-fallback-link
+          onClick={onFallbackLink}
+          title="This tab holds no handle for some output windows, so it could not drive them if the hub were lost. Click to re-acquire them, or use Relaunch."
+        >
+          fallback link {held}/{known}
+        </button>
+      )}
       <span className="spacer" />
       <span className="clock">{formatClock(now, general.timeZone, general.clock24h)}</span>
       <button

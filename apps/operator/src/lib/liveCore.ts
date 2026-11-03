@@ -48,7 +48,13 @@ export type LiveCoreDeps = {
   onNotice(n: LiveNotice): void;
   graceMs?: number;
   adoptTimeoutMs?: number;
+  /** Clock for pending-command ageing (default Date.now). */
+  now?: () => number;
 };
+
+/** Unconfirmed commands older than this are not re-submitted after a reconnect. */
+export const PENDING_TTL_MS = 60_000;
+const PENDING_MAX = 100;
 
 export type Authority = 'hub' | 'fallback';
 export type Reconcile = null | 'awaitState' | 'adopting' | 'conflict';
@@ -65,8 +71,13 @@ export class LiveCore {
   private adoptTimer?: Timer;
   private autoTimer?: Timer;
   private awaitingResync = false;
-  /** Commands proposed while the socket was down (not yet delivered). Resent after the next full state. */
-  private unsent: { id: string; event: LocalEvent }[] = [];
+  /**
+   * Commands proposed and not yet confirmed by the hub (no delta carrying the id, no ack), whether or
+   * not they could be written to the socket. After a reconnect (every full state) they are proposed
+   * again and re-sent with their original ids; the hub acknowledges ids it already journalled without
+   * applying them twice, so a command caught in a short blip is neither lost nor duplicated (item 13).
+   */
+  private pending: { id: string; event: LocalEvent; sent: boolean; at: number }[] = [];
   /** Commands applied locally while reconciling; replayed to the hub after adoption. */
   private replay: LocalEvent[] = [];
 
@@ -107,7 +118,8 @@ export class LiveCore {
     }
     this.opt.propose(id, command);
     const sent = this.hubConnected && this.deps.sendHub({ t: 'live.event', id, event: command });
-    if (!sent) this.unsent.push({ id, event: command });
+    this.pending.push({ id, event: command, sent, at: this.deps.now?.() ?? Date.now() });
+    if (this.pending.length > PENDING_MAX) this.pending.shift();
     this.deps.onChange();
     return id;
   }
@@ -141,11 +153,11 @@ export class LiveCore {
     }
     this.awaitingResync = false;
     this.opt.replace(state);
-    const unsent = this.unsent;
-    this.unsent = [];
-    for (const u of unsent) {
-      this.opt.propose(u.id, u.event);
-      if (!this.deps.sendHub({ t: 'live.event', id: u.id, event: u.event })) this.unsent.push(u);
+    const now = this.deps.now?.() ?? Date.now();
+    this.pending = this.pending.filter((p) => now - p.at < PENDING_TTL_MS);
+    for (const p of this.pending) {
+      this.opt.propose(p.id, p.event);
+      p.sent = this.deps.sendHub({ t: 'live.event', id: p.id, event: p.event });
     }
     this.deps.onChange();
   }
@@ -158,11 +170,12 @@ export class LiveCore {
       this.deps.sendHub({ t: 'live.resync' });
       return;
     }
-    this.unsent = this.unsent.filter((u) => u.id !== m.id);
+    if (m.id) this.pending = this.pending.filter((p) => p.id !== m.id);
     this.deps.onChange();
   }
 
   onAck(m: Pick<LiveAck, 'id' | 'seq' | 'rejected'>, command?: LiveCommand): void {
+    this.pending = this.pending.filter((p) => p.id !== m.id);
     if (m.rejected) {
       this.opt.reject(m.id);
       this.deps.onNotice({
@@ -197,7 +210,7 @@ export class LiveCore {
     if (this.authority === 'fallback') return;
     this.clearGrace();
     this.local = this.opt.view;
-    this.unsent = [];
+    this.pending = [];
     this.authority = 'fallback';
     this.reconcile = null;
     this.deps.setClockFallback(true);
@@ -279,7 +292,8 @@ export class LiveCore {
     } else if (this.samePlaylist(hub, local)) {
       if (hub.seq < local.seq) this.adopt(false);
       else {
-        this.deps.onNotice({ kind: 'hub-newer' });
+        // Equal seq: nothing changed on either side, so nothing to tell the operator (review item 43).
+        if (hub.seq > local.seq) this.deps.onNotice({ kind: 'hub-newer' });
         this.leaveFallback(hub);
       }
     } else {

@@ -16,6 +16,7 @@ import {
   type Look,
   type ManifestFile,
   type Media,
+  type Presentation,
   type Slide,
   playableFile,
 } from '@ordo/domain';
@@ -33,6 +34,7 @@ import {
   type HeldKeys,
   LAYER_INDEX,
   type LayerPlan,
+  type RecentManifest,
   type RenderTelemetry,
   SRC_VIDEO,
   type ToAsset,
@@ -40,10 +42,15 @@ import {
   armStatus,
   buildHealth,
   fontLoads,
+  keepSet,
   lookSignature,
-  msToNextSecond,
+  mayPrune,
   planFrame,
+  planPreview,
+  propsEvalTime,
   propsModel,
+  propsTickDelay,
+  rememberManifest,
   resolveLook,
 } from '@ordo/renderer';
 import { Diagnostics } from './diagnostics.ts';
@@ -53,6 +60,16 @@ import { ProgramSender } from './program.ts';
 const DELIVERED_GRACE_MS = 1500;
 const ERROR_RETRY_MS = 3000;
 const STATE_CACHE_MAX_AGE_MS = 12 * 3600_000;
+/** The props tick wakes this long before each whole second to rasterize that second's text. */
+const PROPS_LEAD_MS = 150;
+
+/** What "Send to preview" asked an idle output to show (prd/03). */
+export type PreviewRequest = {
+  presentation: Presentation;
+  slideId?: string;
+  /** Media the slide references (background, images), when the sender included them. */
+  media?: Media[];
+};
 
 export type OutputOptions = {
   canvas: HTMLCanvasElement;
@@ -120,16 +137,27 @@ export class OutputApp {
   private propsSeq = -1;
   private propsTimer?: ReturnType<typeof setTimeout>;
 
+  // Preview (shown only while no playlist is live)
+  private preview?: PreviewRequest;
+
   // Cache
   private manifestSig = '';
   private fillAbort?: AbortController;
   private cacheProgress: { ready: number; total: number } = { ready: 0, total: 0 };
   private fontsSig = '';
+  /** Manifests filled while live, newest first; their files survive prunes (review item 8). */
+  private recentManifests: RecentManifest[] = [];
+  private recentLoaded = false;
+
+  // A canvas handed to the render worker that is not on screen yet (see FromRender needCanvas).
+  private pendingCanvas?: HTMLCanvasElement;
 
   // Telemetry
   private tel: RenderTelemetry = { ...EMPTY_TELEMETRY };
   private frames: number[] = [];
   private mainLongTasks = 0;
+  /** Worst main-thread stall the render worker saw since the last health report. */
+  private mainStallMs = 0;
   private lastHealth?: OutputHealth;
   private lastSnapshot?: ImageBitmap;
   private lost = false;
@@ -224,18 +252,22 @@ export class OutputApp {
       if (m.changes.some((c) => c.kind === 'settings' || c.kind === 'font' || c.kind === 'media'))
         void this.loadConfig();
     });
-    this.link.on('bus', ({ bus }) => {
-      this.diag.log(`bus: ${bus}`);
+    this.link.on('bus', ({ bus, reason }) => {
+      this.diag.log(`bus: ${bus}${reason ? ` (${reason})` : ''}`);
       this.sendClock();
       if (bus === 'hub' && !this.config) void this.loadConfig();
     });
     this.link.hub.on('welcome', () => void this.loadConfig());
+    this.link.hub.on('preview', (m) => this.onPreview(m));
     this.link.start();
     void this.loadConfig();
     void requestPersistence();
+    void this.loadRecentManifests();
 
     setInterval(() => this.sendClock(), 500);
     setInterval(() => this.sendHealth(), 1000);
+    // Main-thread watchdog: the render worker measures the gap between these ticks (health.mainThreadStallMs).
+    setInterval(() => this.postRender({ t: 'tick' }), 250);
     setInterval(() => this.postRender({ t: 'frames' }), 1000);
     setInterval(() => this.sync(), 2000); // retries (errors, busy slots) and media transport upkeep
     this.observeLongTasks();
@@ -340,12 +372,51 @@ export class OutputApp {
   private configMedia = (id: string): Media | undefined =>
     this.config?.logo?.id === id ? this.config.logo : undefined;
 
+  /** Media by id from the live state, the output config and the preview request, in that order. */
+  private mediaById = (id: string): Media | undefined =>
+    this.state().resolved?.media[id] ?? this.configMedia(id) ?? this.preview?.media?.find((m) => m.id === id);
+
+  // ---------------------------------------------------------------- preview
+
+  /**
+   * "Send to preview" (prd/03): while no playlist is live, show the given presentation's slide with this
+   * output's look; `clear` returns to idle. Ignored while live (the live playlist owns the screen).
+   */
+  onPreview(m: { presentation?: unknown; slideId?: string; clear?: boolean }): void {
+    if (this.state().mode === 'live') {
+      this.diag.log('preview ignored: a playlist is live');
+      return;
+    }
+    if (m.clear || !m.presentation) {
+      if (this.preview) this.diag.log('preview cleared');
+      this.preview = undefined;
+      this.requestSync();
+      return;
+    }
+    const p = m.presentation as Presentation & { media?: Media[] };
+    if (!p || typeof p !== 'object' || !Array.isArray(p.sections)) {
+      this.diag.log('preview ignored: no presentation');
+      return;
+    }
+    this.preview = {
+      presentation: p,
+      slideId: m.slideId,
+      media: Array.isArray(p.media) ? p.media : undefined,
+    };
+    this.diag.log(`preview: ${p.title ?? p.id} ${m.slideId ?? '(first slide)'}`);
+    this.ensureFiles();
+    this.requestSync();
+  }
+
   /** Plan live and armed frames, prepare content, schedule flips, drive media. */
   sync(): void {
     const state = this.state();
     const look = this.look;
-    const planOpts = { lookSig: this.lookSig, media: this.configMedia };
-    const live = planFrame(state, look, planOpts);
+    const planOpts = { lookSig: this.lookSig, media: this.mediaById };
+    if (state.mode === 'live' && this.preview) this.preview = undefined;
+    const live = this.preview
+      ? planPreview(this.preview.presentation, this.preview.slideId, look, planOpts)
+      : planFrame(state, look, planOpts);
     let armed: FramePlan | undefined;
     if (state.mode === 'live' && state.armed !== undefined && state.armed !== state.live) {
       try {
@@ -423,7 +494,7 @@ export class OutputApp {
         nextSlide: d.nextSlide,
         isSong: d.isSong,
         look: this.look,
-        images: this.slideImages(state, d.slide, d.nextSlide),
+        images: this.slideImages(d.slide, d.nextSlide),
       });
     } else if (name === 'lowerThird' && plan.lowerThird.desc) {
       this.job({ kind: 'lowerThird', layer, key, text: plan.lowerThird.desc.text, look: this.look });
@@ -435,11 +506,11 @@ export class OutputApp {
     }
   }
 
-  private slideImages(state: LiveState, ...slides: (Slide | undefined)[]): Record<string, string> {
+  private slideImages(...slides: (Slide | undefined)[]): Record<string, string> {
     const out: Record<string, string> = {};
     const add = (id?: string) => {
       if (!id) return;
-      const m = state.resolved?.media[id];
+      const m = this.mediaById(id);
       const f = m ? playableFile(m) : undefined;
       if (f) out[id] = f.hash;
     };
@@ -650,10 +721,14 @@ export class OutputApp {
 
   // ---------------------------------------------------------------- props
 
-  /** Re-rasterize the props layer when its text changes; runs on state changes and each second. */
-  private syncProps(fromTick: boolean, boundary?: number): void {
+  /**
+   * Re-rasterize the props layer when its text changes; runs on state changes and each second. Every
+   * caller evaluates the model at `propsEvalTime` (the coming second boundary inside the lead), so a
+   * state-driven sync agrees with the scheduled tick instead of cancelling its flip (review item 23).
+   */
+  private syncProps(fromTick: boolean): void {
     const state = this.state();
-    const now = boundary ?? clock.now();
+    const now = propsEvalTime(clock.now(), PROPS_LEAD_MS);
     const general = this.config?.general;
     const logoMediaId = general?.logoMediaId ?? state.resolved?.logoMediaId;
     const model = propsModel(state, this.look, {
@@ -676,7 +751,9 @@ export class OutputApp {
           ? this.look.transition.ms
           : 0
         : 0;
-    const at = fromTick ? now : Math.max(state.props.at, 0);
+    // A text change driven by time (clock, countdown) flips on the second boundary it was evaluated
+    // for, whichever caller noticed it first; a state change flips when the state says.
+    const at = stateChange && !fromTick ? Math.max(state.props.at, 0) : now;
     this.propsSeq = state.props.seq;
     this.propsKey = model.key;
     if (model.key && !this.has(model.key)) {
@@ -694,14 +771,15 @@ export class OutputApp {
 
   private scheduleProps(): void {
     clearTimeout(this.propsTimer);
-    // Wake 150 ms before each second, rasterize the text for that second, flip exactly on it.
-    const now = clock.now();
-    const wait = msToNextSecond(now, 150);
-    this.propsTimer = setTimeout(() => {
-      const boundary = Math.round((clock.now() + 150) / 1000) * 1000;
-      this.syncProps(true, boundary);
-      this.scheduleProps();
-    }, wait + 1);
+    // Wake PROPS_LEAD_MS before each second, rasterize the text for that second, flip exactly on it.
+    // The delay is never 0 (inside the lead the next boundary is targeted), so there is no busy loop.
+    this.propsTimer = setTimeout(
+      () => {
+        this.syncProps(true);
+        this.scheduleProps();
+      },
+      propsTickDelay(clock.now(), PROPS_LEAD_MS),
+    );
   }
 
   // ---------------------------------------------------------------- cache
@@ -710,6 +788,10 @@ export class OutputApp {
     const state = this.state();
     const files = new Map<string, ManifestFile>();
     for (const f of state.resolved?.files ?? []) files.set(f.hash, f);
+    for (const m of this.preview?.media ?? []) {
+      const f = playableFile(m);
+      if (f) files.set(f.hash, { hash: f.hash, bytes: f.bytes, mime: f.mime });
+    }
     const fonts = new Map<string, Font>();
     for (const f of [...(this.config?.fonts ?? []), ...(state.resolved?.fonts ?? [])])
       fonts.set(f.file.hash, f);
@@ -729,10 +811,20 @@ export class OutputApp {
       this.fontsSig = fsig;
       this.postAsset({ t: 'fonts', fonts: fontLoads([...fonts.values()]) });
     }
+    // Before the first state (hub or cached) the manifest is fonts and logo only: filling it would race
+    // the real one and, worse, prune the service files. Wait for a state (review item 8).
+    if (!this.link.mirror.ready && !this.cachedState) return;
     const sig = [...files.keys()].sort().join(',');
     if (sig === this.manifestSig) return;
     this.manifestSig = sig;
-    void this.fill([...files.values()], new Set(fonts.keys()));
+    void this.fill([...files.values()], new Set(fonts.keys()), sig, state.mode === 'live');
+  }
+
+  private async loadRecentManifests(): Promise<void> {
+    if (this.recentLoaded) return;
+    const r = await this.json.get<RecentManifest[]>(`manifests:${this.link.outputId}`).catch(() => undefined);
+    if (Array.isArray(r) && !this.recentLoaded) this.recentManifests = r;
+    this.recentLoaded = true;
   }
 
   private async fetchFile(hash: string): Promise<Blob> {
@@ -754,7 +846,12 @@ export class OutputApp {
     }
   }
 
-  private async fill(files: ManifestFile[], fontHashes: Set<string>): Promise<void> {
+  private async fill(
+    files: ManifestFile[],
+    fontHashes: Set<string>,
+    sig: string,
+    live: boolean,
+  ): Promise<void> {
     this.fillAbort?.abort();
     const ac = new AbortController();
     this.fillAbort = ac;
@@ -792,9 +889,18 @@ export class OutputApp {
           this.ensureFiles();
         }
       }, 10_000);
-    } else {
-      this.postAsset({ t: 'prune', keep: files.map((f) => f.hash) });
-      void this.store.prune?.(new Set(files.map((f) => f.hash))).catch(() => undefined);
+    } else if (mayPrune(live, p.failed.length)) {
+      // Only a complete live fill prunes, and only what no recent service used: End service (an idle
+      // manifest of fonts and logo) leaves the cache intact, so the next Go live downloads nothing.
+      await this.loadRecentManifests();
+      if (ac.signal.aborted) return;
+      this.recentManifests = rememberManifest(this.recentManifests, sig, files, Date.now());
+      void this.json.set(`manifests:${this.link.outputId}`, this.recentManifests).catch(() => undefined);
+      const keep = keepSet(files, this.recentManifests);
+      this.postAsset({ t: 'prune', keep: [...keep] });
+      const n = await this.store.prune?.(keep).catch(() => 0);
+      if (n)
+        this.diag.log(`cache: pruned ${n} files unused by the last ${this.recentManifests.length} services`);
     }
     this.errors.clear();
     this.requestSync();
@@ -816,12 +922,15 @@ export class OutputApp {
         this.compositor = m.compositor;
         this.renderNote = m.note;
         this.diag.log(`renderer ready: ${m.compositor}${m.note ? ` (${m.note})` : ''}`);
+        this.adoptCanvas();
         this.updateSnapshotRate();
         this.requestSync();
         return;
       case 'telemetry':
         this.tel = m.tel;
         this.compositor = m.tel.compositor;
+        if (m.mainThreadStallMs !== undefined)
+          this.mainStallMs = Math.max(this.mainStallMs, m.mainThreadStallMs);
         return;
       case 'frames':
         this.frames = m.frames;
@@ -855,7 +964,10 @@ export class OutputApp {
         return;
       case 'restored':
         this.lost = false;
+        this.compositor = m.compositor;
+        if (m.compositor === 'webgpu') this.renderNote = undefined;
         this.diag.log(`renderer restored (${m.compositor})`);
+        this.adoptCanvas();
         // Give the rebuilt device a couple of frames before uncovering it.
         setTimeout(() => {
           if (!this.lost) this.opts.hold.hidden = true;
@@ -867,6 +979,9 @@ export class OutputApp {
       case 'needCanvas':
         this.replaceCanvas();
         return;
+      case 'canvasUnused':
+        this.pendingCanvas = undefined;
+        return;
     }
   }
 
@@ -876,18 +991,30 @@ export class OutputApp {
     if (this.tel.presented === 0) this.diag.showFatal('The output renderer failed to start.', error);
   }
 
-  /** Give the render worker a fresh canvas (its old one is bound to a WebGPU context it gave up on). */
+  /**
+   * Give the render worker a fresh canvas (a canvas keeps its first context kind, so switching between
+   * WebGPU and Canvas 2D needs a new one). It goes on screen only when the worker reports it draws there
+   * (`ready` or `restored`); a WebGPU retry that fails hands it back with `canvasUnused`.
+   */
   private replaceCanvas(): void {
     const old = this.opts.canvas;
     const c = document.createElement('canvas');
     c.className = old.className;
     c.width = this.opts.width;
     c.height = this.opts.height;
-    old.replaceWith(c);
-    this.opts.canvas = c;
+    this.pendingCanvas = c;
     const off = c.transferControlToOffscreen();
     this.postRender({ t: 'canvas', canvas: off }, [off]);
-    this.diag.log('renderer switched to a fresh canvas');
+    this.diag.log('renderer asked for a fresh canvas');
+  }
+
+  private adoptCanvas(): void {
+    const c = this.pendingCanvas;
+    if (!c) return;
+    this.pendingCanvas = undefined;
+    this.opts.canvas.replaceWith(c);
+    this.opts.canvas = c;
+    this.diag.log('renderer switched to the fresh canvas');
   }
 
   private paintHold(): void {
@@ -990,11 +1117,18 @@ export class OutputApp {
       errors,
       appVersion: APP_VERSION,
     });
-    return h as OutputHealth;
+    const out: OutputHealth = {
+      ...(h as OutputHealth),
+      compositor: this.compositor === 'none' ? undefined : this.compositor,
+      mainThreadStallMs: Math.round(this.mainStallMs),
+      recentLog: this.diag.recent.slice(-20).map((l) => l.slice(0, 300)),
+    };
+    return out;
   }
 
   private sendHealth(): void {
     const h = this.buildHealth();
+    this.mainStallMs = 0;
     this.lastHealth = h;
     this.link.sendHealth(h);
   }
@@ -1030,6 +1164,10 @@ export class OutputApp {
       inflight: [...this.inflight],
       errors: Object.fromEntries([...this.errors].map(([k, v]) => [k, v.error])),
       cache: this.cacheProgress,
+      recentManifests: this.recentManifests.map((r) => ({ at: r.at, files: r.files.length })),
+      preview: this.preview
+        ? { presentation: this.preview.presentation.id, slideId: this.preview.slideId }
+        : null,
       compositor: this.compositor,
       bus: this.link.bus,
       size: `${this.opts.width}x${this.opts.height}`,

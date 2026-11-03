@@ -67,3 +67,93 @@ export function dotTitle(h: OutputHealthEntry | undefined, name: string): string
     .filter(Boolean)
     .join('\n');
 }
+
+export type CacheIntegrity = {
+  outputId: string;
+  name: string;
+  ready: number;
+  total: number;
+  /** Files of the live manifest this window does not hold yet (or failed to fetch). */
+  missing: number;
+  /** Not connected or not reporting: nothing can be said about its cache. */
+  unknown: boolean;
+};
+
+/**
+ * Cache integrity per output window (prd/08 "A cache integrity check runs at Launch outputs"): compares
+ * what each window reports against the manifest size the hub gave it. Only outputs in `outputs` (the
+ * enabled ones) are checked; the stage window has no media to cache but reports fonts the same way.
+ */
+export function cacheIntegrity(
+  outputs: { id: string; name: string }[],
+  health: Record<string, OutputHealthEntry | undefined>,
+): CacheIntegrity[] {
+  return outputs.map((o) => {
+    const h = health[o.id];
+    if (!h?.connected) return { outputId: o.id, name: o.name, ready: 0, total: 0, missing: 0, unknown: true };
+    const missing = Math.max(0, h.cache.total - h.cache.ready);
+    return {
+      outputId: o.id,
+      name: o.name,
+      ready: h.cache.ready,
+      total: h.cache.total,
+      missing,
+      unknown: false,
+    };
+  });
+}
+
+/** True once every window has reported and none is still filling (ready = total). */
+export function cacheSettled(rows: CacheIntegrity[]): boolean {
+  return rows.every((r) => !r.unknown && r.missing === 0);
+}
+
+/**
+ * Operator-facing summary of a cache check, or null when every window holds the whole manifest:
+ * "Service cache: 3 missing on Audience 1 (41/44), Lobby not reporting".
+ */
+export function cacheIntegrityMessage(rows: CacheIntegrity[]): string | null {
+  const parts: string[] = [];
+  for (const r of rows) {
+    if (r.unknown) parts.push(`${r.name} not reporting`);
+    else if (r.missing > 0) parts.push(`${r.missing} missing on ${r.name} (${r.ready}/${r.total})`);
+  }
+  return parts.length ? `Service cache: ${parts.join(', ')}` : null;
+}
+
+/**
+ * Decides when a cache check after Launch is over: every window holds the whole manifest, or no window's
+ * numbers have moved for `settleMs` (`unknownMs` for a window that has not reported yet, since launching
+ * and connecting takes a few seconds), or `timeoutMs` has passed since the launch.
+ */
+export class CacheCheckTracker {
+  private last = new Map<string, { key: string; at: number }>();
+  constructor(
+    private readonly started: number,
+    private readonly opts: { settleMs: number; unknownMs: number; timeoutMs: number } = {
+      settleMs: 5000,
+      unknownMs: 15_000,
+      timeoutMs: 60_000,
+    },
+  ) {}
+
+  /** Feed the latest rows; true when the check should report now. */
+  update(rows: CacheIntegrity[], now: number): boolean {
+    if (cacheSettled(rows)) return true;
+    if (now - this.started >= this.opts.timeoutMs) return true;
+    let moving = false;
+    for (const r of rows) {
+      const key = r.unknown ? 'unknown' : `${r.ready}/${r.total}`;
+      let prev = this.last.get(r.outputId);
+      if (!prev || prev.key !== key) {
+        prev = { key, at: now };
+        this.last.set(r.outputId, prev);
+      }
+      if (r.unknown || r.missing > 0) {
+        const limit = r.unknown ? this.opts.unknownMs : this.opts.settleMs;
+        if (now - prev.at < limit) moving = true;
+      }
+    }
+    return !moving;
+  }
+}
