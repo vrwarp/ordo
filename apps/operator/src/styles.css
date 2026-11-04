@@ -910,6 +910,20 @@ table.list th {
 .signin-overlay > .center {
   height: auto;
 }
+/* Signed out while this PC runs the outputs: a card in the corner, the live view and its keys stay usable. */
+.signin-overlay.nonmodal {
+  inset: auto 16px 16px auto;
+  width: 360px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid #a16207;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  gap: 8px;
+}
+.signin-overlay.nonmodal .card {
+  padding: 16px !important;
+  gap: 10px !important;
+}
 .pin {
   font-size: 28px;
   letter-spacing: 0.3em;

@@ -2,6 +2,7 @@ import { formatClock } from '@ordo/domain';
 import { useEffect, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
 import { cacheSummary, dotTitle, outputDot } from '../../lib/health.ts';
+import { hubStatus } from '../../lib/hubStatus.ts';
 import { useHubNow } from '../../hooks.ts';
 import { controller, dispatch } from '../../services/controller.ts';
 import { useLaunch } from '../../services/outputs.ts';
@@ -36,22 +37,7 @@ export function TopBar() {
   const online = useOnline();
   const s = live.state;
   const isLive = s.mode === 'live';
-  const fallback = live.authority === 'fallback';
-  const refused = !!live.hubRefused && !live.hubConnected;
-  const hubDot = fallback || refused ? 'amber' : live.hubConnected ? 'green' : 'red';
-  const hubText = refused
-    ? 'Session ended: sign in again (outputs stay on the hub)'
-    : fallback
-      ? live.reconcile === 'conflict'
-        ? 'Hub back: choose which service to keep'
-        : live.reconcile === 'adopting' || live.reconcile === 'awaitState' || live.hubConnected
-          ? 'Hub back: handing over…'
-          : 'Hub lost: running from this PC'
-      : live.hubConnected
-        ? 'Hub'
-        : live.everConnected
-          ? 'Hub reconnecting…'
-          : 'Connecting…';
+  const { fallback, dot: hubDot, text: hubText } = hubStatus(live);
   const entries = Object.values(live.health);
   const cache = cacheSummary(entries, live.ownCache.total ? live.ownCache : undefined);
   const cacheDot = !isLive ? 'grey' : cache.frac >= 1 ? 'green' : 'amber';

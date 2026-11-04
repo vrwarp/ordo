@@ -36,6 +36,41 @@ export type Pro7ImportResult = {
   media: { key: string; path: string }[];
   log: ImportLogEntry[];
   protoVersion: string;
+  /**
+   * Every `.pro` document seen so far (`opts.refs` plus this call's): what a later batch needs to skip a
+   * copy of a document already imported and what the playlist pass needs to resolve its items.
+   */
+  refs: Pro7PresRef[];
+};
+
+/**
+ * A decoded document as later batches and the playlist pass see it: structured-cloneable (a worker
+ * message), without the presentation itself.
+ */
+export type Pro7PresRef = {
+  /** File path inside the import (playlists reference documents by path or name). */
+  path: string;
+  /** The ordo presentation id (its ProPresenter UUID when it had one). */
+  id: string;
+  title: string;
+  pro7Uuid?: string;
+  /** Document name and cue count as stored, for telling a copy from a second reference to one document. */
+  name: string;
+  cueCount: number;
+  /** ProPresenter arrangement UUID to ordo arrangement id. */
+  arrangementIds: Map<string, string>;
+};
+
+/**
+ * A large library is decoded in batches of `.pro` documents, each a separate call (the hub runs each on a
+ * worker with a bounded heap): `phase: 'documents'` decodes the `.pro` files in `files` against the
+ * documents of earlier batches (`refs`), `phase: 'playlists'` reads only the playlist documents against
+ * every document decoded before. The media placeholders of all batches are keyed by path, so their union
+ * is the library's media list. Without options one call does everything.
+ */
+export type Pro7ImportOptions = {
+  refs?: Pro7PresRef[];
+  phase?: 'all' | 'documents' | 'playlists';
 };
 
 /** Prefix of placeholder media ids inside imported entities; see `remapMediaIds`. */
@@ -645,7 +680,8 @@ function looksLikePresentation(doc: Msg): boolean {
   return Array.isArray(doc.cues) || Array.isArray(doc.cueGroups) || typeof doc.name === 'string';
 }
 
-function isPlaylistCandidate(path: string): boolean {
+/** Is this file (by path) a playlist document candidate, as `importPro7` decides it? */
+export function isPlaylistCandidate(path: string): boolean {
   const lower = path.toLowerCase();
   const base = basename(lower);
   if (lower.endsWith('.pro') || MEDIA_EXT.test(lower)) return false;
@@ -654,21 +690,23 @@ function isPlaylistCandidate(path: string): boolean {
   return /(^|\/)playlists\/[^/]+$/.test(lower) && !base.includes('.');
 }
 
-type PresRef = { result: Pro7PresentationResult; path: string };
+type PresRef = Pro7PresRef;
 
 /**
  * Import a ProPresenter 7 library or export from its files: `.pro` documents, playlist documents (library
  * `Playlists/*` files or the `data` file inside a `.proPlaylist` bundle) and the media they reference.
+ * With `opts` one batch of a larger import (see `Pro7ImportOptions`).
  */
-export function importPro7(files: Map<string, Uint8Array>): Pro7ImportResult {
+export function importPro7(files: Map<string, Uint8Array>, opts: Pro7ImportOptions = {}): Pro7ImportResult {
+  const phase = opts.phase ?? 'all';
   const log: ImportLogEntry[] = [{ level: 'info', message: `ProPresenter 7 proto ${PRO7_PROTO_VERSION}` }];
   const media = new MediaResolver(files);
   const presentations: Presentation[] = [];
-  const refs: PresRef[] = [];
+  const refs: PresRef[] = [...(opts.refs ?? [])];
   const paths = [...files.keys()].sort();
 
   for (const path of paths) {
-    if (!/\.pro$/i.test(path)) continue;
+    if (phase === 'playlists' || !/\.pro$/i.test(path)) continue;
     const item = basename(path);
     try {
       const doc = decodeAs('rv.data.Presentation', files.get(path)!);
@@ -679,28 +717,36 @@ export function importPro7(files: Map<string, Uint8Array>): Pro7ImportResult {
       // The same document can appear twice (library folder and a .proPlaylist bundle): import it once.
       // A copied document keeps its UUID in ProPresenter, so the name and cue count must match too.
       const docUuid = uuidOf(doc.uuid as Msg | undefined);
-      const sameUuid = docUuid ? refs.filter((r) => r.result.pro7Uuid === docUuid) : [];
+      const sameUuid = docUuid ? refs.filter((r) => r.pro7Uuid === docUuid) : [];
       const cueCount = Array.isArray(doc.cues) ? doc.cues.length : 0;
       const name = typeof doc.name === 'string' ? doc.name.trim() : '';
-      const dup = sameUuid.find((r) => r.result.name === name && r.result.cueCount === cueCount);
+      const dup = sameUuid.find((r) => r.name === name && r.cueCount === cueCount);
       if (dup) {
         log.push({ level: 'info', item, message: `same document as ${basename(dup.path)}; imported once` });
-        refs.push({ result: dup.result, path });
+        refs.push({ ...dup, path });
         continue;
       }
       if (sameUuid.length > 0) {
-        const other = sameUuid.find((r) => r.result.name === name) ?? sameUuid[0]!;
+        const other = sameUuid.find((r) => r.name === name) ?? sameUuid[0]!;
         log.push({
           level: 'warn',
           item,
           message:
             `same ProPresenter UUID as ${basename(other.path)} but a different ` +
-            `${other.result.name !== name ? 'name' : 'slide count'}; imported both`,
+            `${other.name !== name ? 'name' : 'slide count'}; imported both`,
         });
       }
       const result = mapPresentation(doc, { item, log, media, fileName: path });
       presentations.push(result.presentation);
-      refs.push({ result, path });
+      refs.push({
+        path,
+        id: result.presentation.id,
+        title: result.presentation.title,
+        pro7Uuid: result.pro7Uuid,
+        name: result.name,
+        cueCount: result.cueCount,
+        arrangementIds: result.arrangementIds,
+      });
     } catch (e) {
       log.push({ level: 'error', item, message: `could not decode: ${(e as Error).message}` });
     }
@@ -708,7 +754,7 @@ export function importPro7(files: Map<string, Uint8Array>): Pro7ImportResult {
 
   const playlists: Playlist[] = [];
   for (const path of paths) {
-    if (!isPlaylistCandidate(path)) continue;
+    if (phase === 'documents' || !isPlaylistCandidate(path)) continue;
     const item = basename(path) === 'data' ? basename(path.replace(/\/data$/, '')) : basename(path);
     let doc: Msg;
     try {
@@ -741,6 +787,7 @@ export function importPro7(files: Map<string, Uint8Array>): Pro7ImportResult {
     media: [...usedMedia].map(([key, path]) => ({ key, path })),
     log,
     protoVersion: PRO7_PROTO_VERSION,
+    refs,
   };
 }
 
@@ -769,7 +816,7 @@ function findPresentation(item: Msg, refs: PresRef[]): PresRef | undefined {
     if (byPath) return byPath;
   }
   const name = (typeof item.name === 'string' ? item.name : '').trim().toLowerCase();
-  if (name) return refs.find((r) => r.result.presentation.title.trim().toLowerCase() === name);
+  if (name) return refs.find((r) => r.title.trim().toLowerCase() === name);
   return undefined;
 }
 
@@ -811,11 +858,11 @@ function collectPlaylists(node: Msg, trail: string[], ctx: PlCtx, depth = 0): vo
         continue;
       }
       const arrUuid = uuidOf((it.presentation as Msg).arrangement);
-      const arrangementId = arrUuid ? ref.result.arrangementIds.get(arrUuid) : undefined;
+      const arrangementId = arrUuid ? ref.arrangementIds.get(arrUuid) : undefined;
       const pi: PlaylistItem = {
         id: newId(),
         kind: 'presentation',
-        presentationId: ref.result.presentation.id,
+        presentationId: ref.id,
       };
       if (arrangementId) pi.arrangementId = arrangementId;
       out.push(pi);

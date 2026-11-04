@@ -15,6 +15,7 @@ import {
   type Theme,
 } from '@ordo/domain';
 import * as realImporters from '@ordo/importers';
+import type { Pro7ImportOptions, Pro7PresRef } from '@ordo/importers';
 import { extractZip, ZIP_MAX_IN_MEMORY_BYTES } from '@ordo/importers/zip-stream.ts';
 import type { Logger } from 'pino';
 import type { HubConfig } from './config.ts';
@@ -32,14 +33,17 @@ export type Pro7Result = {
   media: { key: string; path: string }[];
   log: { level: 'info' | 'warn' | 'error'; item?: string; message: string }[];
   protoVersion: string;
+  /** The documents decoded so far (batched imports; see `importPro7Batched`). */
+  refs?: Pro7PresRef[];
 };
+export type { Pro7ImportOptions, Pro7PresRef };
 export type PptxText = {
   slideSize: { cx: number; cy: number };
   slides: { index: number; boxes: ExtractedText[] }[];
 };
 /** The parts of @ordo/importers the hub uses (injectable for tests). */
 export type Importers = {
-  importPro7?: (files: Map<string, Uint8Array>) => Pro7Result | Promise<Pro7Result>;
+  importPro7?: (files: Map<string, Uint8Array>, opts?: Pro7ImportOptions) => Pro7Result | Promise<Pro7Result>;
   remapMediaIds?: <T>(obj: T, map: Map<string, string>) => T;
   readZip?: (buf: Uint8Array) => Promise<Map<string, Uint8Array>>;
   extractPptxText?: (buf: Uint8Array) => Promise<PptxText>;
@@ -51,6 +55,12 @@ const MAX_DIR_FILES = 20_000;
 const MAX_INLINE_BYTES = 64 * 1024 * 1024;
 /** Documents held in memory for one import (zip or folder); media never counts, it stays on disk. */
 export const MAX_IMPORT_MEMORY_BYTES = ZIP_MAX_IN_MEMORY_BYTES;
+/**
+ * `.pro` documents decoded per CPU-pool task. A whole library in one task (12,000 documents, 139 MB of
+ * `.pro` files) exhausts the worker's 512 MB heap (pool.ts WORKER_LIMITS); 500 documents decode in a few
+ * seconds and a few tens of MB, so the heap limit keeps catching bombs without failing real libraries.
+ */
+export const PRO7_BATCH_DOCS = 500;
 
 export const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 
@@ -176,20 +186,36 @@ export class ImportService {
   }
 
   /**
-   * Decode the library off the event loop. The injected importer (tests) runs inline; the real one runs in
-   * a worker thread, falling back to inline decoding (with a warning) if the worker cannot start.
+   * Decode the library off the event loop, in batches of PRO7_BATCH_DOCS documents. The injected importer
+   * (tests) runs inline; the real one runs each batch on a worker thread, falling back to inline decoding
+   * (with a warning) if the worker cannot start.
    */
   private async decodePro7(files: Map<string, Uint8Array>, ctx: JobCtx<Pro7Payload>): Promise<Pro7Result> {
     const importPro7 = this.imp.importPro7!;
-    if (importPro7 !== (realImporters as unknown as Importers).importPro7) return importPro7(files);
-    try {
-      return await importPro7InWorker(files, ctx.signal);
-    } catch (e) {
-      if (!(e instanceof WorkerStartError)) throw e;
-      this.log.warn({ err: e.message }, 'import worker unavailable; decoding on the main thread');
-      ctx.log(`[warn] import worker unavailable (${e.message}); decoding on the main thread`);
-      return importPro7(files);
-    }
+    const progress = (done: number, total: number) => {
+      ctx.log(`decoded ${done} of ${total} document(s)`);
+      ctx.progress(0.1 + (0.2 * done) / Math.max(1, total));
+    };
+    const inline = (f: Map<string, Uint8Array>, o: Pro7ImportOptions) => Promise.resolve(importPro7(f, o));
+    if (importPro7 !== (realImporters as unknown as Importers).importPro7)
+      return importPro7Batched(files, { run: inline, signal: ctx.signal, progress });
+    let fellBack = false;
+    return importPro7Batched(files, {
+      signal: ctx.signal,
+      progress,
+      run: async (f, o) => {
+        if (fellBack) return inline(f, o);
+        try {
+          return await importPro7InWorker(f, o, ctx.signal);
+        } catch (e) {
+          if (!(e instanceof WorkerStartError)) throw e;
+          fellBack = true;
+          this.log.warn({ err: e.message }, 'import worker unavailable; decoding on the main thread');
+          ctx.log(`[warn] import worker unavailable (${e.message}); decoding on the main thread`);
+          return inline(f, o);
+        }
+      },
+    });
   }
 
   private async pro7Job(ctx: JobCtx<Pro7Payload>) {
@@ -224,7 +250,7 @@ export class ImportService {
       for (const m of result.media) {
         if (ctx.signal.aborted) throw new Error('cancelled');
         i++;
-        ctx.progress(0.1 + (0.6 * i) / Math.max(1, result.media.length));
+        ctx.progress(0.3 + (0.4 * i) / Math.max(1, result.media.length));
         if (map.has(m.key)) continue;
         try {
           const disk = onDisk.get(m.path);
@@ -490,12 +516,78 @@ export class ImportService {
 
 export { WorkerStartError };
 
-/** Run `importPro7` on the CPU pool; buffers that own their ArrayBuffer are transferred, not copied. */
+/**
+ * Run `importPro7` on the CPU pool for one batch; the `.pro` buffers that own their ArrayBuffer are
+ * transferred, not copied (they are not needed again), the other files are copied.
+ */
 export function importPro7InWorker(
   files: Map<string, Uint8Array>,
+  opts: Pro7ImportOptions = {},
   signal?: AbortSignal,
 ): Promise<Pro7Result> {
-  return cpuPool().run('pro7', { files }, { signal, transfer: transferables(files.values()) });
+  const docs = [...files].filter(([k]) => isDoc(k)).map(([, v]) => v);
+  return cpuPool().run('pro7', { files, opts }, { signal, transfer: transferables(docs) });
+}
+
+const isDoc = (path: string) => /\.pro$/i.test(path);
+const EMPTY = new Uint8Array(0);
+
+/**
+ * Decode a library in batches of `batch` `.pro` documents, each its own `run` call (a CPU-pool task with a
+ * bounded heap), then the playlists in a last call against every document decoded: logs, media
+ * references (keyed by path, so a union) and playlists are merged, and the copy-of-a-document check runs
+ * across batches through the `refs` each batch returns and the next receives. Only the batch's documents
+ * and the playlist documents carry bytes into a task; every other file goes as an empty placeholder (the
+ * media resolver needs its path only). A library of at most `batch` documents is one call, as before.
+ * Entries are removed from `files` as they are sent, so the caller's copy shrinks as the import proceeds.
+ */
+export async function importPro7Batched(
+  files: Map<string, Uint8Array>,
+  opts: {
+    run: (files: Map<string, Uint8Array>, opts: Pro7ImportOptions) => Promise<Pro7Result>;
+    signal?: AbortSignal;
+    batch?: number;
+    progress?: (done: number, total: number) => void;
+  },
+): Promise<Pro7Result> {
+  const batch = opts.batch ?? PRO7_BATCH_DOCS;
+  const docs = [...files.keys()].filter(isDoc).sort();
+  if (docs.length <= batch) return opts.run(files, {});
+  const isPlaylist = realImporters.isPlaylistCandidate;
+  const others = new Map<string, Uint8Array>();
+  for (const [k, v] of files) if (!isDoc(k)) others.set(k, isPlaylist(k) ? EMPTY : v);
+  const placeholders = new Map<string, Uint8Array>();
+  for (const k of others.keys()) placeholders.set(k, EMPTY);
+  const merged: Pro7Result = { presentations: [], playlists: [], media: [], log: [], protoVersion: '' };
+  const media = new Map<string, string>();
+  const take = (r: Pro7Result, first: boolean) => {
+    merged.presentations.push(...r.presentations);
+    merged.playlists.push(...r.playlists);
+    for (const m of r.media) media.set(m.key, m.path);
+    // Every call logs the proto version first; keep it once.
+    merged.log.push(...(first ? r.log : r.log.slice(1)));
+    merged.protoVersion = r.protoVersion;
+    merged.refs = r.refs;
+  };
+  let refs: Pro7PresRef[] = [];
+  for (let i = 0; i < docs.length; i += batch) {
+    if (opts.signal?.aborted) throw new Error('cancelled');
+    const task = new Map(placeholders);
+    for (const k of docs.slice(i, i + batch)) {
+      task.set(k, files.get(k)!);
+      files.delete(k);
+    }
+    const r = await opts.run(task, { refs, phase: 'documents' });
+    task.clear();
+    refs = r.refs ?? refs;
+    take(r, i === 0);
+    opts.progress?.(Math.min(docs.length, i + batch), docs.length);
+  }
+  const playlistFiles = new Map<string, Uint8Array>();
+  for (const [k, v] of others) playlistFiles.set(k, isPlaylist(k) ? files.get(k)! : EMPTY);
+  take(await opts.run(playlistFiles, { refs, phase: 'playlists' }), false);
+  merged.media = [...media].map(([key, path]) => ({ key, path }));
+  return merged;
 }
 
 /** Extract PPTX text on the CPU pool (the XML parse of a large deck takes seconds). */

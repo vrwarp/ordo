@@ -17,14 +17,14 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import type { Pro7Result, PptxText } from './imports.ts';
+import type { Pro7ImportOptions, Pro7Result, PptxText } from './imports.ts';
 import type { FontFace } from './fonts/sfnt.ts';
 
 /** The worker could not be started (no worker file, unsupported flags): the caller may run inline. */
 export class WorkerStartError extends Error {}
 
 export type CpuTasks = {
-  pro7: { input: { files: Map<string, Uint8Array> }; output: Pro7Result };
+  pro7: { input: { files: Map<string, Uint8Array>; opts?: Pro7ImportOptions }; output: Pro7Result };
   pptx: { input: { buf: Uint8Array }; output: PptxText };
   font: { input: { buf: Uint8Array }; output: FontFace };
 };
@@ -36,7 +36,10 @@ export const TASK_TIMEOUT_MS: Record<CpuTaskKind, number> = {
   font: 15_000,
 };
 const IDLE_MS = 30_000;
-/** Heap limits per worker: generous for any real import, small enough to fail fast on a bomb. */
+/**
+ * Heap limits per worker: generous for any one task (a ProPresenter import is batched, imports.ts
+ * PRO7_BATCH_DOCS, so a library of any size fits), small enough to fail fast on a bomb.
+ */
 export const WORKER_LIMITS = { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 64 };
 
 /** The message for a task whose worker ran out of its heap. */

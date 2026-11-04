@@ -18,12 +18,19 @@ import { PNG } from './png.ts';
  * the session expires. The audience screens must not notice; no command may be lost.
  *
  * Every fault that the audience could see is watched on the output for the whole fault window (review
- * 2026-11-04 item 7): the test pixel (the cue on screen), a pixel of the picture, the cue the window says it
- * holds and its bus are sampled about every 100 ms from the fault until recovery plus 500 ms.
+ * 2026-11-04 item 7): the cue the window says it holds and its bus are sampled every 100 ms by a timer
+ * inside the output page (so the cadence does not depend on the test runner: a max gap of 600 ms is
+ * asserted, with the first sample at the fault), and the test pixel (the cue on screen) plus a pixel of the
+ * picture are a second, lower-rate series from CDP captures (as fast as the machine allows, 100 ms to
+ * seconds each under load), from the fault until recovery plus 500 ms.
  *
- * Ports BASE+1..BASE+6 (default 8540; ORDO_CHAOS_OPERATOR_PORT moves them so concurrent runs do not collide).
+ * Each test owns a hub on its own port and the specs share the machine's CPU with CDP captures, so the file
+ * is serial: not safe to run in parallel with itself or with the other chaos specs on the same ports.
+ *
+ * Ports BASE+1..BASE+7 (default 8540; ORDO_CHAOS_OPERATOR_PORT moves them so concurrent runs do not collide).
  */
 const BASE = Number(process.env.ORDO_CHAOS_OPERATOR_PORT ?? 8540);
+test.describe.configure({ mode: 'serial' });
 
 type Hooks = {
   __ordo: {
@@ -79,7 +86,11 @@ async function outputTransport(p: Page): Promise<string | undefined> {
 // ---------------------------------------------------------------- the audience screen, sampled
 
 type Rgb = { r: number; g: number; b: number };
-type Sample = { t: number; cue: number | null; shown: number | null; px: Rgb; bus: string };
+/** A sample taken inside the output page: the cue it holds and its bus, `t` ms after the watch began. */
+type CueSample = { t: number; shown: number | null; bus: string };
+/** A CDP capture: the test pixel (decoded to a cue) and the picture pixel. */
+type PixelSample = { t: number; cue: number | null; px: Rgb };
+type ChaosWindow = Window & { __chaos?: CueSample[]; __chaosTimer?: number; __chaosT0?: number };
 
 async function pixel(p: Page, x: number, y: number): Promise<Rgb> {
   return PNG.firstPixel(await p.screenshot({ clip: { x, y, width: 1, height: 1 } }));
@@ -185,12 +196,17 @@ async function outState(p: Page): Promise<{ shown: number | null; bus: string }>
 }
 
 /**
- * Samples one output about every 100 ms until stopped: the test pixel, a picture pixel, the cue the window
- * holds and its bus. The output is brought to the front (headless Chromium pauses rAF in hidden pages);
- * key presses still reach the operator page.
+ * Watches one output until stopped. Two series:
+ * - cues: a 100 ms timer in the output page records the cue the window holds (the renderer's held live
+ *   slide, what `shownSlideCue` reads) and its bus into `window.__chaos`, read out at the end; its first
+ *   sample is taken synchronously when the watch starts;
+ * - pixels: CDP captures of the test pixel and a picture pixel from Node, as fast as they return.
+ * The output is brought to the front (headless Chromium pauses rAF in hidden pages); key presses still
+ * reach the operator page.
  */
 class ScreenWatch {
-  readonly samples: Sample[] = [];
+  readonly pixels: PixelSample[] = [];
+  cues: CueSample[] = [];
   readonly pre: { cue: number; px: Rgb };
   private running = true;
   private loop?: Promise<void>;
@@ -215,6 +231,27 @@ class ScreenWatch {
     expect(cue, 'the test pixel shows a cue before the fault').not.toBeNull();
     expect(px.r + px.g + px.b, 'the picture is not black before the fault').toBeGreaterThan(30);
     const w = new ScreenWatch(o, xy, { cue: cue!, px });
+    // The in-page sampler: `t` is the page's own clock relative to the first sample (same machine, so it
+    // lines up with Node's within a few ms).
+    await o.evaluate(() => {
+      const w = window as unknown as ChaosWindow & {
+        __ordo: { state(): { held: { live: string }[]; bus: string } };
+      };
+      clearInterval(w.__chaosTimer);
+      w.__chaos = [];
+      w.__chaosT0 = Date.now();
+      const read = () => {
+        try {
+          const st = w.__ordo.state();
+          const m = /^sl\|[^|]*\|[^|]*\|(\d+)\|/.exec(st.held[1]?.live ?? '');
+          w.__chaos!.push({ t: Date.now() - w.__chaosT0!, shown: m ? Number(m[1]) : null, bus: st.bus });
+        } catch (e) {
+          w.__chaos!.push({ t: Date.now() - w.__chaosT0!, shown: null, bus: `error ${e}` });
+        }
+      };
+      read();
+      w.__chaosTimer = window.setInterval(read, 100);
+    });
     w.t0 = Date.now();
     w.loop = w.run();
     return w;
@@ -224,60 +261,82 @@ class ScreenWatch {
     while (this.running) {
       const t = Date.now() - this.t0;
       try {
-        const [[mark, px], s] = await Promise.all([twoPixels(this.o, ...this.xy), outState(this.o)]);
-        this.samples.push({ t, cue: markerCue(mark), shown: s.shown, px, bus: s.bus });
+        const [mark, px] = await twoPixels(this.o, ...this.xy);
+        this.pixels.push({ t, cue: markerCue(mark), px });
       } catch (e) {
-        this.samples.push({ t, cue: null, shown: null, px: { r: 0, g: 0, b: 0 }, bus: `error ${e}` });
+        this.pixels.push({ t, cue: null, px: { r: 0, g: 0, b: 0 } });
+        console.log(`pixel capture failed at ${t} ms: ${e}`);
       }
       const wait = 100 - (Date.now() - this.t0 - t);
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
     }
   }
 
-  /** Stop once a sample taken at or after `endAt` (epoch ms; default now) is in. */
-  async stop(endAt = Date.now()): Promise<Sample[]> {
-    while (this.t0 + (this.samples.at(-1)?.t ?? -1) < endAt) await new Promise((r) => setTimeout(r, 20));
+  /** Stop once the in-page series reaches `endAt` (epoch ms; default now) and read it out. */
+  async stop(endAt = Date.now()): Promise<void> {
+    const left = endAt + 150 - Date.now();
+    if (left > 0) await new Promise((r) => setTimeout(r, left));
     this.running = false;
     await this.loop;
-    return this.samples;
+    this.cues = await this.o.evaluate(() => {
+      const w = window as unknown as ChaosWindow;
+      clearInterval(w.__chaosTimer);
+      return w.__chaos ?? [];
+    });
   }
 
   timeline(): string {
-    return this.samples
-      .map((x) => `${x.t}ms cue=${x.cue} shown=${x.shown} px=${x.px.r},${x.px.g},${x.px.b} bus=${x.bus}`)
-      .join('\n');
+    const rows = [
+      ...this.cues.map((x) => ({ t: x.t, s: `${x.t}ms held cue=${x.shown} bus=${x.bus}` })),
+      ...this.pixels.map((x) => ({
+        t: x.t,
+        s: `${x.t}ms pixel cue=${x.cue} px=${x.px.r},${x.px.g},${x.px.b}`,
+      })),
+    ].sort((a, b) => a.t - b.t);
+    return rows.map((r) => r.s).join('\n');
   }
 
   /**
-   * Every sample shows a cue from `cues` (in order: the screen may only move forward through the list, as
-   * a GO pressed during the fault lands), on the test pixel and in the window's own account, the pre-fault
-   * picture pixel (never black, never a fade), and a bus from `buses`.
+   * Every cue sample (in-page, every 100 ms with no gap over 600 ms, from the fault to the end) holds a
+   * cue from `cues` (in order: the screen may only move forward through the list, as a GO pressed during
+   * the fault lands) on a bus from `buses`; every pixel capture shows a cue from the list on the test
+   * pixel and the pre-fault picture pixel (never black, never a fade).
    */
   assertHeld(label: string, cues: number[], buses: string[]): void {
     const tl = this.timeline();
-    expect(this.samples.length, `${label}: too few samples\n${tl}`).toBeGreaterThan(3);
+    const gap = (ts: number[]) => ts.reduce((g, t, i) => (i ? Math.max(g, t - ts[i - 1]!) : g), 0);
+    const spanMs = Date.now() - this.t0;
+    const cueGap = gap(this.cues.map((c) => c.t));
+    const pxGap = gap([0, ...this.pixels.map((p) => p.t)]);
+    console.log(
+      `${label}: ${this.cues.length} cue samples (max gap ${cueGap} ms) and ${this.pixels.length} pixel captures ` +
+        `(max gap ${pxGap} ms) over ${this.cues.at(-1)?.t ?? 0} ms, cues ${cues.join('→')}`,
+    );
+    expect(this.cues.length, `${label}: too few cue samples\n${tl}`).toBeGreaterThan(3);
+    expect(this.cues[0]!.t, `${label}: cue sampling started late`).toBeLessThanOrEqual(0);
+    expect(cueGap, `${label}: cue sampling gap\n${tl}`).toBeLessThan(600);
+    expect(this.cues.at(-1)!.t, `${label}: cue sampling ended early`).toBeGreaterThan(spanMs - 2000);
+    expect(this.pixels.length, `${label}: no pixel capture\n${tl}`).toBeGreaterThan(0);
     const bad: string[] = [];
-    let ci = 0;
     let si = 0;
-    for (const x of this.samples) {
-      const c = x.cue === null ? -1 : cues.indexOf(x.cue, ci);
+    for (const x of this.cues) {
       const s = x.shown === null ? -1 : cues.indexOf(x.shown, si);
-      if (c < 0) bad.push(`${x.t}ms test pixel cue ${x.cue}`);
-      else ci = c;
       if (s < 0) bad.push(`${x.t}ms held cue ${x.shown}`);
       else si = s;
+      if (!buses.includes(x.bus)) bad.push(`${x.t}ms bus ${x.bus}`);
+    }
+    let ci = 0;
+    for (const x of this.pixels) {
+      const c = x.cue === null ? -1 : cues.indexOf(x.cue, ci);
+      if (c < 0) bad.push(`${x.t}ms test pixel cue ${x.cue}`);
+      else ci = c;
       if (dist(x.px, this.pre.px) > 30 || x.px.r + x.px.g + x.px.b < 30)
         bad.push(`${x.t}ms picture ${x.px.r},${x.px.g},${x.px.b}`);
-      if (!buses.includes(x.bus)) bad.push(`${x.t}ms bus ${x.bus}`);
     }
     expect(
       bad,
       `${label}: the screen must hold cues ${cues.join('→')} on bus ${buses.join('/')}:\n${tl}`,
     ).toEqual([]);
-    const last = this.samples.at(-1)!.t;
-    console.log(
-      `${label}: ${this.samples.length} samples over ${last} ms (mean ${Math.round(last / Math.max(1, this.samples.length - 1))} ms), cues ${cues.join('→')}`,
-    );
   }
 }
 
@@ -747,6 +806,103 @@ test('an expired session is not a hub loss: the outputs stay on the hub and the 
     await go(page);
     await expect.poll(() => hubLive(a2)).toBe(1);
     await expectCue([o], 1);
+  } finally {
+    hub.kill();
+  }
+});
+
+test('a session refusal while the operator is the fallback authority: the keys keep driving the outputs; signing in hands back', async ({
+  context,
+  page,
+}) => {
+  test.setTimeout(150_000);
+  const PORT = BASE + 7;
+  const hub = HubProcess.fresh(PORT);
+  await hub.start();
+  try {
+    const a = await hubApi(PORT);
+    await pictureService(a, 1);
+    await testMode(page);
+    await login(page, opUrl(PORT));
+    const o = await launchWatchedOutput(page, context);
+    await go(page);
+    await expectCue([o], 0);
+    await expect.poll(() => hubLive(a)).toBe(0);
+
+    // The hub dies and this PC takes over.
+    hub.kill();
+    await page.bringToFront();
+    await expect(page.locator('body')).toContainText('running from this PC', { timeout: 25_000 });
+    await expect.poll(() => busOf(o), { timeout: 15_000 }).toBe('fallback');
+    expect((await opLive(page)).authority).toBe('fallback');
+
+    // The hub comes back, but this operator's session is gone meanwhile: the socket is refused. The
+    // operator stays the authority (the hub's state is older) and the outputs stay on the fallback bus.
+    await context.clearCookies();
+    const watch = await ScreenWatch.start(o);
+    await hub.start();
+    const upAt = Date.now();
+    await page.evaluate(() => (window as unknown as Hooks).__ordo.chaos.kickHub());
+    await expect.poll(async () => (await opLive(page)).hubRefused, { timeout: 15_000 }).toBe('unauthorized');
+    const overlay = page.locator('[data-session-expired]');
+    await expect(overlay).toBeVisible({ timeout: 10_000 });
+    console.log(`refused while fallback: sign-in card shown ${Date.now() - upAt} ms after the hub came back`);
+    // The UI says where the service runs, not "outputs stay on the hub" (review 3, O1).
+    await expect(overlay).toHaveAttribute('data-session-expired-mode', 'fallback');
+    await expect(page.locator('.topbar')).toContainText(
+      'Running from this PC — session ended; sign in to hand back to the hub',
+    );
+    await expect(overlay).toContainText('running from this PC');
+    await expect(page.locator('body')).not.toContainText('stay on the hub');
+    await expect(page.locator('body')).not.toContainText('from the hub.');
+
+    // GO from the keyboard, before signing in, reaches the outputs over the fallback bus; the hub stays
+    // at its older state and the operator never drops the authority.
+    await page.bringToFront();
+    await page.keyboard.press('Space');
+    await expect.poll(async () => (await outState(o)).shown, { timeout: 5000 }).toBe(1);
+    expect(await busOf(o)).toBe('fallback');
+    const authorities = new Set<string>();
+    const until2 = Date.now() + 3000;
+    while (Date.now() < until2) {
+      const l = await opLive(page);
+      authorities.add(l.authority);
+      expect(l.hubRefused).toBe('unauthorized');
+      await page.waitForTimeout(250);
+    }
+    expect([...authorities]).toEqual(['fallback']);
+    expect(await hubLive(a)).toBe(0);
+    await expect(page.locator('.toast', { hasText: 'Hub closed the connection' })).toHaveCount(0);
+
+    // Sign in between songs: the hub accepts the socket, the operator hands its state over and the outputs
+    // go back to the hub bus; the screen never moved back to the hub's older cue.
+    await overlay.locator('input.pin').fill('246810');
+    await overlay.getByRole('button', { name: 'OK' }).click();
+    await expect(overlay).toBeHidden({ timeout: 10_000 });
+    const a2 = await hubApi(PORT);
+    const doneAt = await until(
+      async () => {
+        const l = await opLive(page);
+        return (
+          l.authority === 'hub' &&
+          l.hubConnected &&
+          !l.hubRefused &&
+          (await hubLive(a2)) === 1 &&
+          (await outState(o)).bus === 'hub'
+        );
+      },
+      30_000,
+      'the hand-back after signing in',
+    );
+    await watch.stop(doneAt + 500);
+    watch.assertHeld('session refusal while fallback', [0, 1], ['fallback', 'hub']);
+    await expect(page.locator('.topbar')).not.toContainText('session ended');
+
+    // Exactly once on the hub, and GO goes through the hub again.
+    expect(await hubLive(a2)).toBe(1);
+    await go(page);
+    await expect.poll(() => hubLive(a2)).toBe(2);
+    await expectCue([o], 2);
   } finally {
     hub.kill();
   }

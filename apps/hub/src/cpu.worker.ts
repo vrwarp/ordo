@@ -4,7 +4,7 @@
  * Messages: { id, kind, input } in, { id, ok, result | error } out. Messages tagged `__ordo` are ignored.
  */
 import { parentPort } from 'node:worker_threads';
-import { extractPptxText, importPro7 } from '@ordo/importers';
+import { extractPptxText, importPro7, type Pro7ImportOptions } from '@ordo/importers';
 import { readFontFace } from './fonts/sfnt.ts';
 
 type Req = { id: number; kind: string; input: Record<string, unknown>; __ordo?: unknown };
@@ -12,7 +12,10 @@ type Req = { id: number; kind: string; input: Record<string, unknown>; __ordo?: 
 async function handle(m: Req): Promise<unknown> {
   switch (m.kind) {
     case 'pro7':
-      return importPro7(m.input.files as Map<string, Uint8Array>);
+      return importPro7(
+        m.input.files as Map<string, Uint8Array>,
+        (m.input.opts as Pro7ImportOptions | undefined) ?? {},
+      );
     case 'pptx':
       return extractPptxText(m.input.buf as Uint8Array);
     case 'font':

@@ -3,8 +3,11 @@ import { type AuthPinRes, ROUTES } from '@ordo/protocol';
 import { useState } from 'react';
 import { refreshSession } from '../../state/session.ts';
 
-/** PIN login with a large keypad and "remember this device" (prd/09). */
-export function LoginView() {
+/**
+ * PIN login with a large keypad and "remember this device" (prd/09). `autoFocus` is off when the card sits
+ * beside a running service (design/15 "Session expiry"): a focused PIN field would take the GO key.
+ */
+export function LoginView({ autoFocus = true }: { autoFocus?: boolean } = {}) {
   const [pin, setPin] = useState('');
   const [remember, setRemember] = useState(true);
   const [err, setErr] = useState<string>();
@@ -44,7 +47,7 @@ export function LoginView() {
           type="password"
           inputMode="numeric"
           autoComplete="current-password"
-          autoFocus
+          autoFocus={autoFocus}
           value={pin}
           onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 12))}
         />

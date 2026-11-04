@@ -77,12 +77,24 @@ A `bye` with reason `unauthorized` or `forbidden` (an expired or revoked session
 elsewhere) is not a hub loss: the hub is up and the outputs, which authenticate with their own
 tokens, stay on it. `HubConnection` emits `auth` once and backs its reconnects off to 30 s, doubling
 to 2 minutes; the core neither arms nor runs the fallback grace while refused, posts `hub` `auth` to
-the host and sets `hubRefused` in the live slice (the top bar says "Session ended: sign in again").
-The host calls `refreshSession()`; with no role left, the app keeps the shell, the output windows and
-the core mounted and shows the sign-in view over them, with one persistent banner (no toast per
-attempt; operator keys are off meanwhile). After a successful sign-in the host posts `hub.resume`
-and the core reconnects at once and rejoins as the hub's client. A refusal while the operator is
-already the fallback authority keeps it the authority until the hand-back after sign-in.
+the host and sets `hubRefused` in the live slice (the top bar says "Session ended: sign in again
+(outputs stay on the hub)"; `src/lib/hubStatus.ts` picks the line). The host calls
+`refreshSession()`; with no role left, the app keeps the shell, the output windows and the core
+mounted and shows the sign-in view over them, with one persistent banner (no toast per attempt;
+operator keys are off meanwhile). After a successful sign-in the host posts `hub.resume` and the
+core reconnects at once and rejoins as the hub's client.
+
+A refusal while the operator is already the fallback authority (the hub came back after the
+fallback took over, and this operator's session had expired meanwhile) keeps it the authority until
+the hand-back after sign-in: the outputs stay on the fallback bus and never jump back to the hub's
+older state. In that state the UI must not block the service: the top bar reads "Running from this
+PC — session ended; sign in to hand back to the hub", the sign-in is a non-modal card in the corner
+of the live view (`.signin-overlay.nonmodal`) whose banner says the same, the PIN field is not
+auto-focused (a focused text field would take the GO key), and the keyboard, Stream Deck and MIDI
+keep working (`keysOn` stays true while `authority === 'fallback'`), so a volunteer advances slides
+during worship and signs in between songs. Once signed in, the hub accepts the socket, the core
+adopts the operator's state at the hub (the "Hub back: handing over…" line wins over the refusal
+text) and the outputs return to the hub bus. Covered end to end by `e2e/chaos-operator.spec.ts`.
 
 ### Main-thread watchdog
 

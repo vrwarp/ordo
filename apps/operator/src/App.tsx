@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ConfirmHost } from './components/Confirm.tsx';
 import { Toasts } from './components/Toasts.tsx';
 import { UpdateFailedScreen, UpdatingOverlay } from './components/UpdatingScreen.tsx';
+import { sessionEndedMessage } from './lib/hubStatus.ts';
 import { allowedForRole } from './lib/route.ts';
 import { installCacheCheck } from './services/cacheCheck.ts';
 import { controller, startController } from './services/controller.ts';
@@ -11,6 +12,7 @@ import { installProgramViews } from './services/programView.ts';
 import { installSurfaces, surfaces } from './services/surfaces.ts';
 import { installUpdateGuard, useUpdate } from './services/update.ts';
 import { useLibrary } from './state/library.ts';
+import { useLive } from './state/live.ts';
 import { refreshSession, useSession } from './state/session.ts';
 import { navigate, useRoute } from './useRoute.ts';
 import { LoginView } from './views/auth/LoginView.tsx';
@@ -75,6 +77,9 @@ function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOu
   const [timedOut, setTimedOut] = useState(false);
   const ready = attempted || timedOut;
   const fonts = useLibrary((s) => s.data.fonts);
+  // Signed out while this PC runs the outputs (the hub refused the session after the fallback took over):
+  // the service must stay operable from the keys and surfaces, so the sign-in is a card, not a wall.
+  const fallback = useLive((s) => s.authority === 'fallback');
   useEffect(() => {
     const t = setTimeout(() => setTimedOut(true), 3000);
     return () => clearTimeout(t);
@@ -96,14 +101,15 @@ function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOu
     };
   }, [role]);
   useEffect(() => syncFonts(fonts), [fonts]);
-  // Live keys act on operator screens only; the editor uses arrows, Delete and Ctrl+Z itself.
+  // Live keys act on operator screens only; the editor uses arrows, Delete and Ctrl+Z itself. A signed-out
+  // operator keeps its keys only while it is the fallback authority (the outputs would otherwise be stuck).
   useEffect(() => {
     const keysOn =
-      !signedOut &&
+      (!signedOut || fallback) &&
       role === 'operate' &&
       (route.name === 'live' || route.name === 'playlists' || route.name === 'library');
     surfaces()?.setKeyboard(keysOn);
-  }, [role, route.name, signedOut]);
+  }, [role, route.name, signedOut, fallback]);
   useEffect(() => {
     if (!allowedForRole(route, role)) navigate({ name: 'library', tab: 'presentations' });
   }, [route, role]);
@@ -139,12 +145,14 @@ function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOu
       <ConfirmHost />
       <UpdatingOverlay />
       {signedOut && (
-        <div className="signin-overlay" data-session-expired>
-          <div className="banner">
-            Your session ended. Sign in again to keep operating. The outputs keep showing the service from the
-            hub.
-          </div>
-          <LoginView />
+        <div
+          className={fallback ? 'signin-overlay nonmodal' : 'signin-overlay'}
+          data-session-expired
+          data-session-expired-mode={fallback ? 'fallback' : 'hub'}
+        >
+          <div className="banner">{sessionEndedMessage(fallback)}</div>
+          {/* No autofocus on the PIN while the keys run the service: a focused text field eats Space. */}
+          <LoginView autoFocus={!fallback} />
         </div>
       )}
     </div>

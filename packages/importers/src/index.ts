@@ -5,12 +5,15 @@
 export { readZip, safeEntryPath, ZIP_MAX_ENTRIES, ZIP_MAX_TOTAL_BYTES } from './zip.ts';
 export {
   importPro7,
+  isPlaylistCandidate,
   pro7UrlPath,
   sectionLabelFor,
   PRO7_MEDIA_PREFIX,
   type ImportLogEntry,
   type ImportLogLevel,
+  type Pro7ImportOptions,
   type Pro7ImportResult,
+  type Pro7PresRef,
 } from './pro7.ts';
 export { PRO7_PROTO_VERSION, pro7Root, pro7Type, decodeAs } from './proto.ts';
 export { remapMediaIds } from './remap.ts';
