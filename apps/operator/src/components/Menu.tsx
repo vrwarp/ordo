@@ -26,13 +26,23 @@ export function Menu({
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLSpanElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  // Closing from the keyboard or by picking an item unmounts the focused item: focus goes back to the
+  // trigger, as the menu pattern expects, and Escape stops here so the editor does not also deselect.
+  const closeToTrigger = () => {
+    setOpen(false);
+    trigger.current?.focus();
+  };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: closeToTrigger only touches refs and the setter
   useEffect(() => {
     if (!open) return;
     const outside = (e: Event) => {
       if (!root.current?.contains(e.target as Node)) setOpen(false);
     };
     const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      closeToTrigger();
     };
     document.addEventListener('pointerdown', outside, true);
     document.addEventListener('keydown', key);
@@ -47,6 +57,7 @@ export function Menu({
   return (
     <span className="menu" ref={root}>
       <button
+        ref={trigger}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -68,7 +79,7 @@ export function Menu({
               className={it.danger ? 'danger-text' : undefined}
               disabled={it.disabled}
               onClick={() => {
-                setOpen(false);
+                closeToTrigger();
                 it.onSelect();
               }}
             >

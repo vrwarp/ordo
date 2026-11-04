@@ -109,7 +109,9 @@ export function EditorView({ id }: { id: string }) {
   const profile = useProfile(role);
   const [looksOpen, setLooksOpen] = useState<boolean | null>(storedLooksOpen);
   const root = useRef<HTMLDivElement>(null);
-  const hasRoot = !!ed.draft;
+  // The root renders only once *this* presentation's draft is in the store (the store keeps the previous
+  // one's draft while the next loads, so `ed.draft` alone would be true before the root exists).
+  const hasRoot = ed.id === id && !!ed.draft;
   // biome-ignore lint/correctness/useExhaustiveDependencies: install once the editor root has rendered
   useEffect(() => {
     const el = root.current;

@@ -12,8 +12,9 @@ import {
 
 /**
  * Touch-safe reordering on pointer events (HTML5 drag and drop does not work under a finger). A drag
- * starts from an item's visible handle: on touch after a 300 ms hold (a quick swipe still scrolls the
- * list), with a mouse after a few pixels. While dragging, the item follows the pointer, a line marks the
+ * starts from an item's visible handle: on touch after a 300 ms hold (a quick swipe that starts on the
+ * handle does nothing, since the handle opts out of panning; a swipe anywhere else scrolls the list),
+ * with a mouse after a few pixels. While dragging, the item follows the pointer, a line marks the
  * drop slot, the list auto-scrolls near its edges, and Escape (or a cancelled touch) puts it back.
  * With `mouseFromItem`, a mouse drag may also start anywhere on the item (desktop parity with the old
  * draggable rows). Keyboard users and anyone who prefers buttons use the move up/down buttons every

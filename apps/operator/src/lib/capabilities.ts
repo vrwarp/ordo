@@ -75,8 +75,11 @@ export function detectCapabilities(env: CapabilityEnv): Capabilities {
 }
 
 /**
- * The device's profile: `edit` when it lacks every way to run outputs (no Window Management, no
- * fullscreen popups, no WebHID), when the session role is `edit`, or when forced for testing.
+ * The device's profile: `full` only where outputs can be placed on screens (Window Management) or a
+ * Stream Deck can be plugged in (WebHID), both Chromium-only; `edit` otherwise, when the session role is
+ * `edit`, or when forced for testing. The Fullscreen API is deliberately not enough: iPadOS Safari has it,
+ * and reports a fine pointer with hover as soon as a trackpad or mouse is attached (a Magic Keyboard), so
+ * a rule built on it would turn the worship lead's iPad into an operator.
  */
 export function profileFor(
   caps: Capabilities,
@@ -85,7 +88,7 @@ export function profileFor(
 ): Profile {
   if (role === 'edit') return 'edit';
   if (forced === 'edit' || forced === 'full') return forced;
-  return caps.windowManagement || caps.fullscreenPopups || caps.hid ? 'full' : 'edit';
+  return caps.windowManagement || caps.hid ? 'full' : 'edit';
 }
 
 /** `?profile=edit|full` in the URL, or localStorage `ordo.profile` (tests and support only). */
@@ -171,14 +174,23 @@ export async function requestPersistentStorage(
   if (typeof persist !== 'function') return undefined;
   try {
     if (store?.getItem(PERSIST_KEY)) return undefined;
-    store?.setItem(PERSIST_KEY, String(Date.now()));
   } catch {
     /* storage unavailable: ask anyway */
   }
+  let granted = false;
   try {
-    if (await nav.storage?.persisted?.()) return true;
-    return await persist.call(nav.storage);
+    granted = (await nav.storage?.persisted?.()) || (await persist.call(nav.storage));
   } catch {
-    return false;
+    granted = false;
   }
+  // Remember a grant only: a refusal (a Safari tab refuses without asking) is cheap to retry on the
+  // next load, and the same origin may qualify later (installed, or used more).
+  if (granted) {
+    try {
+      store?.setItem(PERSIST_KEY, String(Date.now()));
+    } catch {
+      /* storage unavailable */
+    }
+  }
+  return granted;
 }

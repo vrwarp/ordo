@@ -58,6 +58,9 @@ function bitmap(hash: string): Promise<ImageBitmap | undefined> {
       try {
         return await createImageBitmap(b, { resizeWidth: 640, resizeQuality: 'medium' });
       } catch {
+        // A decode can fail transiently (memory pressure after a resume): try again on the next job
+        // rather than leaving the image out of every thumbnail until the worker restarts.
+        bitmaps.delete(hash);
         return undefined;
       }
     });

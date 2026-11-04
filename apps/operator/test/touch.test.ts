@@ -174,6 +174,12 @@ describe('the rotate handle stays on the slide under a finger', () => {
     expect(rotaterAngle(box(0, 1080, 800, 1120), 0.5, 64)).toBe(270);
     expect(rotaterAngle(box(0, 1080, 0, 1920), 0.5, 64)).toBe(0);
   });
+  it('follows the box rotation: a wide box turned 90° near the right edge puts the handle on its left', () => {
+    // Unrotated it has room above, but its "up" now points right, off the slide.
+    expect(rotaterAngle({ ...box(440, 200, 1000), rotation: 90 }, 0.5, 64)).toBe(180);
+    // Turned 180° near the top, "up" points down, which is fine.
+    expect(rotaterAngle({ ...box(40, 200), rotation: 180 }, 0.5, 64)).toBe(0);
+  });
 });
 
 describe('editor: floating object tools', () => {

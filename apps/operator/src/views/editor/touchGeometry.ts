@@ -6,11 +6,23 @@ import type { Box } from '@ordo/domain';
  * above a box near the top edge could not be touched: it moves below the box, else to its right, else left.
  */
 export function rotaterAngle(box: Box, scale: number, offset: number, slideW = 1920, slideH = 1080): number {
-  const need = offset + 16;
-  if (box.y * scale >= need) return 0;
-  if ((slideH - (box.y + box.h)) * scale >= need) return 180;
-  if ((slideW - (box.x + box.w)) * scale >= need) return 90;
-  if (box.x * scale >= need) return 270;
+  // Konva puts the handle `offset` px past the box edge along the chosen direction, in the box's own
+  // (rotated) frame: work out where each candidate lands on screen and take the first one on the slide.
+  const margin = 16;
+  const cx = (box.x + box.w / 2) * scale;
+  const cy = (box.y + box.h / 2) * scale;
+  const rot = ((box.rotation ?? 0) * Math.PI) / 180;
+  for (const a of [0, 180, 90, 270]) {
+    const rad = (a * Math.PI) / 180;
+    const edge = (a % 180 === 0 ? box.h / 2 : box.w / 2) * scale;
+    const lx = Math.sin(rad) * (edge + offset);
+    const ly = -Math.cos(rad) * (edge + offset);
+    const sx = cx + lx * Math.cos(rot) - ly * Math.sin(rot);
+    const sy = cy + lx * Math.sin(rot) + ly * Math.cos(rot);
+    if (sx >= margin && sx <= slideW * scale - margin && sy >= margin && sy <= slideH * scale - margin) {
+      return a;
+    }
+  }
   return 0;
 }
 

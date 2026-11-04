@@ -1,6 +1,11 @@
-import { defineConfig, devices } from '@playwright/test';
+import { existsSync } from 'node:fs';
+import { defineConfig, devices, webkit } from '@playwright/test';
 
 const PORT = Number(process.env.ORDO_E2E_PORT ?? 8090);
+// The iPad projects need WebKit (`npx playwright install webkit`, which CI does). Without it they are left
+// out so a plain `pnpm e2e` after `playwright install chromium` still runs; ORDO_E2E_WEBKIT=1 insists.
+const haveWebKit = process.env.ORDO_E2E_WEBKIT === '1' || existsSync(webkit.executablePath());
+if (!haveWebKit) console.warn('playwright: WebKit is not installed; the iPad projects are skipped');
 export const E2E = {
   port: PORT,
   pin: '246810',
@@ -41,16 +46,20 @@ export default defineConfig({
     { name: 'chromium', testIgnore: /e2e\/ipad\// },
     // iPad editing (design/15): WebKit with the iPad Pro 11 descriptor (touch, coarse pointer), both
     // orientations. Each spec starts its own hub; the shared webServer below is not used by them.
-    {
-      name: 'webkit-ipad',
-      testMatch: /e2e\/ipad\/.*\.spec\.ts/,
-      use: { ...devices['iPad Pro 11 landscape'], launchOptions: {} },
-    },
-    {
-      name: 'webkit-ipad-portrait',
-      testMatch: /e2e\/ipad\/.*\.spec\.ts/,
-      use: { ...devices['iPad Pro 11'], launchOptions: {} },
-    },
+    ...(haveWebKit
+      ? [
+          {
+            name: 'webkit-ipad',
+            testMatch: /e2e\/ipad\/.*\.spec\.ts/,
+            use: { ...devices['iPad Pro 11 landscape'], launchOptions: {} },
+          },
+          {
+            name: 'webkit-ipad-portrait',
+            testMatch: /e2e\/ipad\/.*\.spec\.ts/,
+            use: { ...devices['iPad Pro 11'], launchOptions: {} },
+          },
+        ]
+      : []),
   ],
   webServer: {
     // Per-port data so concurrent runs on different ports never wipe each other's hub (not under test-results,

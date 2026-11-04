@@ -248,9 +248,12 @@ the user agent, so Chrome on the venue PC behaves exactly as before.
 `src/lib/capabilities.ts` detects once: `hid`, `midi`, `windowManagement` (`getScreenDetails`),
 `fullscreenPopups` (the Fullscreen API on a device whose primary pointer is not a finger), `sinkId`,
 `opfs`, `webgpu`, `coarsePointer` (`pointer: coarse` and `hover: none`) and `standalone`
-(`display-mode: standalone` or `navigator.standalone`). The **profile** is `edit` when the device has
-none of Window Management, fullscreen popups and WebHID (iPadOS Safari, a phone), or when the session
-role is `edit`; otherwise `full`. `?profile=edit|full` or localStorage `ordo.profile` forces it for
+(`display-mode: standalone` or `navigator.standalone`). The **profile** is `full` only where the
+device has Window Management or WebHID (both Chromium-only: the venue PC); it is `edit` otherwise
+(iPadOS Safari, a phone, Firefox, desktop Safari) or when the session role is `edit`. The Fullscreen
+API is deliberately not a qualifier: iPadOS has it, and reports a fine pointer with hover as soon as a
+trackpad or mouse is attached (a Magic Keyboard), which must not turn the worship lead's iPad into an
+operator. `?profile=edit|full` or localStorage `ordo.profile` forces it for
 support and tests (never over the edit role). The result is on `window.__ordo.capabilities` (with
 `deviceProfile`) for tests.
 
@@ -279,7 +282,9 @@ support and tests (never over the edit role). The result is on `window.__ordo.ca
 
 `LookPreviews` (`src/views/editor/LookPreviews.tsx`) draws the selected slide under every look in
 settings, main first, then the lobby lower third, the livestream key (on its key colour) and the stage
-look with the next slide, in the thumbnail worker with the shared rasterizer (480 px wide in the
+look with the next slide (following the presentation's first arrangement, as the stage display does
+when the song is played through it; a playlist naming another arrangement is not known here), in the
+thumbnail worker with the shared rasterizer (480 px wide in the
 editor's compact form, 960 px on the Previews page), ~150 ms after the last edit. A preview job carries
 the look's clear colour and the next slide (`ThumbJob.clear`, `ThumbJob.nextSlide`; both absent for
 ordinary thumbnails, which render as before); the background shows only when the look's background
@@ -309,5 +314,7 @@ and changes the measured width in an `OffscreenCanvas`).
 
 The Playwright projects `webkit-ipad` (iPad Pro 11 landscape) and `webkit-ipad-portrait` run
 `e2e/ipad/*.spec.ts` in WebKit with touch, each test on its own hub (`ORDO_E2E_IPAD_PORT`, default
-8700 + n, path mode `http://localhost:<port>/`); the Chromium project ignores `e2e/ipad/`.
+8700 + n, path mode `http://localhost:<port>/`); the Chromium project ignores `e2e/ipad/`. The two
+projects exist only when WebKit is installed (`npx playwright install webkit`; CI does), so a plain
+`pnpm e2e` after `playwright install chromium` still runs; `ORDO_E2E_WEBKIT=1` insists on them.
 `ORDO_E2E_SHOTS=<dir>` keeps a screenshot of each screen per orientation.

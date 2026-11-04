@@ -89,14 +89,25 @@ describe('capability detection (design/15 iPad editing)', () => {
     expect(profileFor(c, 'operate')).toBe('full');
   });
 
-  it('a desktop browser without WebHID or Window Management but with fullscreen windows stays full', () => {
+  it('an iPad with a trackpad (fine pointer, hover, fullscreen API) is still an editor', () => {
+    const c = detectCapabilities({
+      ...ipadSafari,
+      matchMedia: mq({ '(pointer: fine)': true, '(hover: hover)': true }),
+    });
+    expect(c.coarsePointer).toBe(false);
+    expect(c.fullscreenPopups).toBe(true);
+    expect(profileFor(c, 'operate')).toBe('edit');
+  });
+
+  it('a desktop browser without WebHID or Window Management (Firefox, Safari) edits only', () => {
     const c = detectCapabilities({
       ...ipadSafari,
       matchMedia: mq({ '(pointer: fine)': true }),
       navigator: {},
     });
-    expect(c.fullscreenPopups).toBe(true);
-    expect(profileFor(c, 'operate')).toBe('full');
+    expect(profileFor(c, 'operate')).toBe('edit');
+    expect(profileFor({ ...c, hid: true }, 'operate')).toBe('full');
+    expect(profileFor({ ...c, windowManagement: true }, 'operate')).toBe('full');
   });
 
   it('standalone from display-mode, and empty or throwing environments detect nothing', () => {
@@ -182,6 +193,18 @@ describe('look previews', () => {
     expect(slideAndNext(song, all[0]!.id)).toMatchObject({ slide: all[0], next: all[1], index: 0 });
     expect(slideAndNext(song, all[1]!.id)).toMatchObject({ slide: all[1], next: undefined, index: 1 });
     expect(slideAndNext(song, 'gone')).toMatchObject({ slide: all[0], index: 0 });
+  });
+
+  it('the next slide follows the first arrangement, as the stage display does', () => {
+    const [a, b] = song.sections;
+    const arranged = {
+      ...song,
+      arrangements: [{ id: 'arr', name: 'Sunday', sectionIds: [b!.id, a!.id, b!.id] }],
+    };
+    const all = flatSlides(song);
+    // Authoring order says nothing follows the last slide; the arrangement plays section A after B.
+    expect(slideAndNext(arranged, all[1]!.id)).toMatchObject({ slide: all[1], next: all[0] });
+    expect(slideAndNext(arranged, all[0]!.id)).toMatchObject({ slide: all[0], next: all[1] });
   });
 
   it('a look shows the slide background only when its background layer is visible', () => {

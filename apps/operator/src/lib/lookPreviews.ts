@@ -1,4 +1,4 @@
-import type { Look, Presentation, Slide } from '@ordo/domain';
+import { arrangedSections, type Look, type Presentation, type Slide } from '@ordo/domain';
 
 const KIND_ORDER: Record<Look['kind'], number> = { main: 0, lowerThird: 1, stream: 2, stage: 3, custom: 4 };
 
@@ -24,12 +24,17 @@ export function flatSlides(p: Presentation): Slide[] {
   return p.sections.flatMap((s) => s.slides);
 }
 
-/** The slide to preview (the given one, else the first) and the one after it (for the stage look). */
+/**
+ * The slide to preview (the given one, else the first) and the one after it for the stage look. "Next"
+ * follows the presentation's first arrangement (Verse 1, Chorus, Verse 2, Chorus…), as the stage display
+ * does when the song is played through it; a slide that repeats is taken at its first appearance. A
+ * playlist may name another arrangement, which the preview cannot know.
+ */
 export function slideAndNext(
   p: Presentation,
   slideId?: string,
 ): { slide?: Slide; next?: Slide; index: number } {
-  const all = flatSlides(p);
+  const all = arrangedSections(p).flatMap((s) => s.slides);
   let index = slideId ? all.findIndex((s) => s.id === slideId) : 0;
   if (index < 0) index = 0;
   return { slide: all[index], next: all[index + 1], index };

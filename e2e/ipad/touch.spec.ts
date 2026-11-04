@@ -186,7 +186,7 @@ test('reorder a playlist and an arrangement by long-press drag and by the button
     await expect(rows).toHaveCount(3);
     await shot(page, 'playlist');
 
-    // A quick swipe on the grip is a scroll, not a drag: nothing moves.
+    // A quick swipe on the grip (no hold) is not a drag: nothing moves.
     const grip = (i: number) => rows.nth(i).locator('.sort-handle');
     const g0 = await center(grip(0));
     const last = await rows.nth(2).boundingBox();
