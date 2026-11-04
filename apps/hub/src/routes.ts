@@ -11,6 +11,7 @@ import {
   GeneralSettings,
   KeyMap,
   LiveCommand,
+  type LiveState,
   Look,
   type Media,
   newId,
@@ -26,6 +27,7 @@ import {
   APP_VERSION,
   type AuthMeRes,
   COOKIE_SESSION,
+  LiveSummaryRes,
   type ManifestRes,
   type OutputConfigRes,
   type OutputHealthEntry,
@@ -207,6 +209,23 @@ function sessionRole(p: Principal | null): 'operate' | 'edit' | undefined {
   return p?.kind === 'session' ? p.role : undefined;
 }
 
+/**
+ * GET /live/summary: the venue's service as an edit-profile device needs it (design/15 "iPad editing"): no
+ * tokens, no full state. `locked` is what the hub refuses saves to with 423 (LiveService.locks). The output is
+ * validated so a change to the live state can never leak more than the contract says.
+ */
+export function liveSummary(state: LiveState, locked: Iterable<string>): LiveSummaryRes {
+  const r = state.mode === 'live' ? state.resolved : undefined;
+  const cue = r && state.live !== undefined ? state.cues[state.live] : undefined;
+  return LiveSummaryRes.parse({
+    seq: state.seq,
+    mode: r ? 'live' : 'idle',
+    ...(r ? { playlistId: r.playlist.id, playlistName: r.playlist.name } : {}),
+    ...(cue?.label ? { liveLabel: cue.label.slice(0, 1000) } : {}),
+    lockedPresentationIds: r ? [...locked] : [],
+  });
+}
+
 function routeFn(app: FastifyInstance) {
   return (method: HTTPMethods | HTTPMethods[], url: string, access: Access, handler: RouteHandlerMethod) =>
     app.route({ method, url: API_PREFIX + url, config: { access }, handler });
@@ -236,6 +255,13 @@ export function registerLiveApi(app: FastifyInstance, ctx: LiveApiCtx): void {
     return res;
   });
   route('GET', '/live', 'live', async () => ({ seq: live.state.seq, state: live.state }));
+  // `edit` admits both session roles (an operate session satisfies it too); never output tokens.
+  route(
+    'GET',
+    '/live/summary',
+    'edit',
+    async (): Promise<LiveSummaryRes> => liveSummary(live.state, live.locks().presentations),
+  );
   route('GET', '/cache/manifest', 'live', async (): Promise<ManifestRes> => {
     const r = live.state.mode === 'live' ? live.state.resolved : undefined;
     return r ? { manifestId: r.manifestId, files: r.files, resolved: r } : null;

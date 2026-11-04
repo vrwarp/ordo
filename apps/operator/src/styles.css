@@ -1052,6 +1052,40 @@ button.arr-chip-label {
   font-size: inherit;
   color: inherit;
 }
+/* A drop-down menu (components/Menu.tsx): 44 px items, closed by a tap outside; no hover needed. */
+.menu {
+  position: relative;
+  display: inline-flex;
+}
+.menu-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+.menu-list.right {
+  left: auto;
+  right: 0;
+}
+.menu-list > button {
+  min-height: 44px;
+  justify-content: flex-start;
+  text-align: left;
+  background: transparent;
+  border-color: transparent;
+  font-size: 15px;
+}
+.menu-list > button.danger-text {
+  color: #fca5a5;
+}
 /* Labels and tools only a touch device shows (a mouse has the keyboard and title tooltips). */
 .touch-label,
 .touch-only {
@@ -1204,17 +1238,51 @@ button.arr-chip-label {
   .editor > .toolbar button {
     padding: 0 10px;
   }
-  .ed-touchbar {
-    order: 10;
-    flex-basis: 100%;
-    flex-wrap: wrap;
-    gap: 6px;
+  /* One row: the rarely used tools live in the Add and Arrange menus (EditorView). */
+  .editor > .toolbar.ed-toolbar-touch {
+    flex-wrap: nowrap;
+    min-width: 0;
+  }
+  .ed-toolbar-touch > * {
+    flex-shrink: 0;
+  }
+  .ed-toolbar-touch > .ed-title {
+    flex: 0 1 auto;
+    min-width: 40px;
+    max-width: 260px;
+  }
+  .ed-toolbar-touch > .spacer {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  /* The selected object's tools float by it over the canvas pane (touchGeometry objectToolsSpot). */
+  .editor .canvasbox {
+    position: relative;
+  }
+  .ed-objtools {
+    position: absolute;
+    z-index: 5;
+    display: flex;
+    gap: 4px;
     align-items: center;
+    padding: 4px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: rgba(21, 24, 29, 0.94);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    white-space: nowrap;
+  }
+  .canvasbox .ed-objtools button {
+    min-width: 44px;
+    padding: 0 10px;
   }
   .ed-nudge {
     display: inline-flex;
     gap: 4px;
     align-items: center;
+  }
+  .ed-nudge select {
+    width: auto;
   }
   /* Room below the last field so any field can scroll above the software keyboard (keepVisible.ts). */
   .editor .props {

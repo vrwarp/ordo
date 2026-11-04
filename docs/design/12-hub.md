@@ -55,7 +55,7 @@ SIGKILL after 5 s. If the supervisor itself is killed, the live process writes i
 once (like a crash: no goodbyes), the library process stops its jobs (re-queued on the next start).
 
 **Routing** (`src/liveproc.ts`, `src/proxy.ts`): the live process listens on `ORDO_PORT` and answers
-itself `/ws`, `/api/v1/{live, live/events, actions, cache/manifest, output/config, auth/me, health}`,
+itself `/ws`, `/api/v1/{live, live/summary, live/events, actions, cache/manifest, output/config, auth/me, health}`,
 `/api/v1/files/<hash>` for files it knows (the live playlist's media and fonts, every font, the logo) and
 every non-API path (the built apps). Everything else under `/api/v1` is streamed to the library process
 over loopback. We chose the live process as the front door rather than the supervisor so the supervisor
@@ -139,6 +139,7 @@ All under `https://hub.<venue>.synology.me/api/v1`. JSON bodies validated with t
 | `GET                                                                                                                   | PUT /settings/{looks,outputs,audio,keymap,surfaces}` | operate                                                                                              | Settings                     |
 | `POST /outputs/:id/token/rotate`                                                                                       | operate                                              | New output token                                                                                     |
 | `GET /live`                                                                                                            | operate, output                                      | Current live state (full)                                                                            |
+| `GET /live/summary`                                                                                                    | edit, operate                                        | What an edit-profile device needs: `{ seq, mode, playlistId?, playlistName?, liveLabel?, lockedPresentationIds }` (no tokens, no full state; answered by the live process) |
 | `POST /live/events`                                                                                                    | operate                                              | Submit live events over HTTP (used by surfaces' HTTP bridge and tests); WebSocket is the normal path |
 | `GET /cache/manifest`                                                                                                  | operate, output                                      | The live service cache manifest                                                                      |
 | `GET /health`, `GET /diagnostics/export`                                                                               | operate                                              | Hub health; zip of logs, journal tail, settings                                                      |

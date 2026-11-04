@@ -10,14 +10,14 @@ import {
 } from '@ordo/domain';
 import { drawImageFit, drawObject, drawText } from '@ordo/renderer';
 import type Konva from 'konva';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Layer, Line, Rect, Shape, Stage, Transformer } from 'react-konva';
 import { useCoarsePointer } from '../../components/pointer.ts';
 import { stillHash } from '../../services/thumbs.ts';
 import { change, selectObject, useEditor } from './editorStore.ts';
 import { updateObject } from './ops.ts';
 import { snapBox } from './snapping.ts';
-import { rotaterAngle } from './touchGeometry.ts';
+import { objectToolsSpot, rotaterAngle } from './touchGeometry.ts';
 
 // ---- image cache (HTMLImageElement per file hash) ----
 const images = new Map<string, HTMLImageElement>();
@@ -175,10 +175,15 @@ export function SlideCanvas(props: {
   readOnly: boolean;
   /** Double-tap on a text box (touch): edit its text. */
   onEditText?: (objectId: string) => void;
+  /** Touch: tools for the selected object, floated just above or below it (objectToolsSpot). */
+  objectTools?: ReactNode;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const coarse = useCoarsePointer();
   const [size, setSize] = useState({ w: 960, h: 540 });
+  const [pane, setPane] = useState({ w: 984, h: 564 });
+  const bar = useRef<HTMLDivElement>(null);
+  const [barSize, setBarSize] = useState({ w: 480, h: 52 });
   const objectId = useEditor((s) => s.objectId);
   const guides = useEditor((s) => s.guides);
   const tick = useImageTick();
@@ -190,6 +195,7 @@ export function SlideCanvas(props: {
     const ro = new ResizeObserver(() => {
       const r = el.getBoundingClientRect();
       const s = Math.min((r.width - 24) / LOGICAL_WIDTH, (r.height - 24) / LOGICAL_HEIGHT);
+      setPane({ w: r.width, h: r.height });
       setSize({ w: Math.max(160, LOGICAL_WIDTH * s), h: Math.max(90, LOGICAL_HEIGHT * s) });
     });
     ro.observe(el);
@@ -224,6 +230,25 @@ export function SlideCanvas(props: {
   }, [objectId, slide, props.readOnly]);
   const selBox = objectId ? slide.objects.find((o) => o.id === objectId)?.box : undefined;
   const rotAngle = coarse && selBox ? rotaterAngle(selBox, scale, TOUCH_ROTATE_OFFSET) : 0;
+  const showTools = !!props.objectTools && !!selBox;
+  useLayoutEffect(() => {
+    const el = bar.current;
+    if (!el) return;
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    if (w !== barSize.w || h !== barSize.h) setBarSize({ w, h });
+  });
+  const toolsAt =
+    showTools && selBox
+      ? objectToolsSpot(
+          selBox,
+          scale,
+          { x: (pane.w - size.w) / 2, y: (pane.h - size.h) / 2 },
+          pane,
+          barSize,
+          { angle: rotAngle, reach: TOUCH_ROTATE_OFFSET + TOUCH_ANCHOR / 2 },
+        )
+      : undefined;
   const bg = imageFor(stillHash(props.backgroundMediaId ? props.media(props.backgroundMediaId) : undefined));
   const imported = slide.imported ? imageFor(stillHash(props.media(slide.imported.imageMediaId))) : undefined;
   const othersFor = useMemo(
@@ -313,6 +338,17 @@ export function SlideCanvas(props: {
           />
         </Layer>
       </Stage>
+      {toolsAt && (
+        <div
+          ref={bar}
+          className="ed-objtools"
+          role="toolbar"
+          aria-label="Object tools"
+          style={{ left: toolsAt.x, top: toolsAt.y }}
+        >
+          {props.objectTools}
+        </div>
+      )}
     </div>
   );
 }

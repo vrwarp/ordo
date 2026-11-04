@@ -111,9 +111,9 @@ function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOu
   useEffect(() => {
     if (profile === 'edit' && !signedOut) void requestPersistentStorage();
   }, [profile, signedOut]);
-  // What the venue runs, for the "Live now" chip and the editor lock (GET /live needs the operate role).
+  // What the venue runs, for the "Live now" chip and the editor lock (GET /live/summary, either PIN).
   useEffect(
-    () => (profile === 'edit' && role === 'operate' && !signedOut ? watchVenueLive() : undefined),
+    () => (profile === 'edit' && role && !signedOut ? watchVenueLive(role) : undefined),
     [profile, role, signedOut],
   );
   useEffect(() => syncFonts(fonts), [fonts]);

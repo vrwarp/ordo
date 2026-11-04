@@ -10,7 +10,7 @@ import {
 } from '../src/lib/capabilities.ts';
 import { flatSlides, lookBackgroundId, previewLooks, slideAndNext } from '../src/lib/lookPreviews.ts';
 import { allowedForRole, parseRoute, routeHash } from '../src/lib/route.ts';
-import { summarize } from '../src/lib/venueLive.ts';
+import { fetchVenueLive, fromSummary, summarize } from '../src/lib/venueLive.ts';
 
 const mq =
   (matches: Record<string, boolean>) =>
@@ -198,5 +198,36 @@ describe('look previews', () => {
 describe('venue live summary', () => {
   it('is undefined when idle', () => {
     expect(summarize(initialState())).toBeUndefined();
+    expect(fromSummary({ seq: 1, mode: 'idle', lockedPresentationIds: [] })).toBeUndefined();
+  });
+
+  it('keeps what the chip and the editor lock need from GET /live/summary', () => {
+    expect(
+      fromSummary({
+        seq: 4,
+        mode: 'live',
+        playlistId: 'pl',
+        playlistName: 'Sunday',
+        liveLabel: 'Verse 1',
+        lockedPresentationIds: ['b', 'a'],
+      }),
+    ).toEqual({ playlistId: 'pl', playlistName: 'Sunday', cueLabel: 'Verse 1', presentationIds: ['a', 'b'] });
+  });
+
+  it('reads the summary with either PIN and falls back to GET /live only for operate on an older hub', async () => {
+    const seen: string[] = [];
+    const summary = async <T>(path: string): Promise<T> => {
+      seen.push(path);
+      return { seq: 2, mode: 'live', playlistId: 'pl', playlistName: 'S', lockedPresentationIds: ['a'] } as T;
+    };
+    expect(await fetchVenueLive('edit', summary)).toMatchObject({ seq: 2, live: { presentationIds: ['a'] } });
+    expect(seen).toEqual(['/live/summary']);
+    const old = async <T>(path: string): Promise<T> => {
+      seen.push(path);
+      if (path === '/live/summary') throw Object.assign(new Error('not found'), { status: 404 });
+      return { seq: 7, state: initialState() } as T;
+    };
+    expect(await fetchVenueLive('operate', old)).toEqual({ seq: 7, live: undefined });
+    await expect(fetchVenueLive('edit', old)).rejects.toThrow('not found');
   });
 });

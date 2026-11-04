@@ -8,6 +8,8 @@ import { HubProcess } from '../hubproc.ts';
  */
 export const BASE = Number(process.env.ORDO_E2E_IPAD_PORT ?? 8700);
 export const PIN = '246810';
+/** The edit PIN the hub derives from ORDO_DEV_PIN=246810: the operate PIN reversed (auth.ts). */
+export const EDIT_PIN = '018642';
 
 export async function startHub(
   port: number,
@@ -27,9 +29,9 @@ export async function json<T>(p: Promise<import('@playwright/test').APIResponse>
 }
 
 /** Sign in by tapping the keypad, as on the iPad. */
-export async function signInByTapping(page: Page, url: string): Promise<void> {
+export async function signInByTapping(page: Page, url: string, pin = PIN): Promise<void> {
   await page.goto(url);
-  for (const d of PIN) await page.getByRole('button', { name: d, exact: true }).tap();
+  for (const d of pin) await page.getByRole('button', { name: d, exact: true }).tap();
   await page.getByRole('button', { name: 'OK' }).tap();
   await expect(page.getByRole('link', { name: 'Previews' })).toBeVisible({ timeout: 20_000 });
 }
@@ -40,6 +42,12 @@ export async function shot(page: Page, name: string): Promise<void> {
   if (!dir) return;
   mkdirSync(dir, { recursive: true });
   await page.screenshot({ path: `${dir}/${test.info().project.name}-${name}.png` });
+}
+
+/** Wait until every slide in the editor's slide list shows its thumbnail (rendered by the worker). */
+export async function thumbsRendered(page: Page, count: number): Promise<void> {
+  await expect(page.locator('.ed-slide')).toHaveCount(count);
+  await expect(page.locator('.ed-slide img')).toHaveCount(count, { timeout: 20_000 });
 }
 
 /** The object URLs of the look previews' images, by look kind. */

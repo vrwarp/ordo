@@ -1,6 +1,7 @@
 import { devices, expect, request, test } from '@playwright/test';
 import {
   BASE,
+  EDIT_PIN,
   SONG,
   json,
   previewImages,
@@ -8,6 +9,7 @@ import {
   shot,
   signInByTapping,
   startHub,
+  thumbsRendered,
 } from './ipadhelpers.ts';
 
 /**
@@ -210,7 +212,9 @@ test('the previews page shows a slide in four looks and follows text changes', a
   }
 });
 
-test('with a service live, the live chip shows and the live presentation is locked', async ({ page }) => {
+test('with a service live, an iPad signed in with the EDIT PIN sees the live chip and the lock', async ({
+  page,
+}) => {
   const { hub, api, url } = await startHub(BASE + 3);
   try {
     const song = await json<{ id: string }>(api.post('import/songselect', { data: { text: SONG } }));
@@ -227,22 +231,36 @@ test('with a service live, the live chip shows and the live presentation is lock
         data: { id: `golive-${Date.now()}`, event: { k: 'goLive', playlistId: pl.id } },
       }),
     );
-    await signInByTapping(page, url);
+    // The edit PIN: GET /live is refused, the live summary (GET /live/summary) is not.
+    await signInByTapping(page, url, EDIT_PIN);
+    await expect(page.getByRole('link', { name: 'Settings' })).toHaveCount(0);
     await expect(page.locator('[data-live-chip]')).toContainText('Live now: Sunday at the venue', {
       timeout: 15_000,
     });
     await shot(page, 'live-chip');
 
-    // The editor is locked for the live presentation.
+    // The editor is locked for the live presentation, before any save is attempted, in the edit wording.
     await page.evaluate((id) => {
       location.hash = `#/edit/${id}`;
     }, song.id);
-    await expect(page.getByText(/in the live playlist/)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-locked-banner]')).toHaveText(
+      'This presentation is in the playlist that is live at the venue. It can be edited again after the service.',
+      { timeout: 15_000 },
+    );
+    await expect(page.getByRole('button', { name: 'Saved', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: /^Add/ })).toBeDisabled();
+    // The slide thumbnails render in the worker ~100-200 ms after the editor opens (whether or not it is
+    // read-only): wait for all of them before the screenshot.
+    await thumbsRendered(page, 3);
     await shot(page, 'editor-locked');
 
     // The live playlist: no Go live and no operator view on this device.
     await page.getByRole('link', { name: 'Playlists' }).tap();
-    await expect(page.locator('[data-go-live-note]')).toBeVisible();
+    await page.getByRole('link', { name: /Sunday at the venue/ }).tap();
+    await expect(
+      page.getByText(/It and its presentations can be edited again after the service/),
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Go live' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Open operator view' })).toHaveCount(0);
 
     // The hub still refuses an edit to the live presentation (423), whatever the device.

@@ -7,11 +7,14 @@ import {
   type Presentation,
   type ResolvedPlaylist,
 } from '@ordo/domain';
+import { LiveSummaryRes } from '@ordo/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
+import { liveSummary } from '../src/routes.ts';
 import {
   byType,
   client,
   connectWs,
+  EDIT_PIN,
   login,
   OPERATE_PIN,
   sleep,
@@ -75,6 +78,63 @@ async function setup(h: TestHub) {
   });
   return { bg, p, lp, pl };
 }
+
+describe('GET /live/summary', () => {
+  it('tells an edit session what is live and what is locked, without the full state or tokens', async () => {
+    hub = await startHub();
+    const { p, lp, pl } = await setup(hub);
+    const ed = await login(hub.url, EDIT_PIN);
+    const op = await login(hub.url, OPERATE_PIN);
+    expect(await ed.json('/live/summary')).toEqual({ seq: 0, mode: 'idle', lockedPresentationIds: [] });
+    // The full state stays operate-only; an output token gets no summary.
+    expect((await ed.fetch('/live')).status).toBe(403);
+    const tok = hub.lib.getSetting('outputs')[0]!.token!;
+    expect((await client(hub.url, '', { 'x-ordo-token': tok }).fetch('/live/summary')).status).toBe(403);
+    expect((await client(hub.url).fetch('/live/summary')).status).toBe(401);
+
+    await op.json('/live/events', { method: 'POST', json: { k: 'goLive', playlistId: pl.id } });
+    await op.json('/live/events', { method: 'POST', json: { k: 'next', at: Date.now() } });
+    const sum = await ed.json<LiveSummaryRes>('/live/summary');
+    expect(LiveSummaryRes.parse(sum)).toEqual(sum);
+    expect(sum.mode).toBe('live');
+    expect(sum.playlistId).toBe(pl.id);
+    expect(sum.playlistName).toBe('Sunday');
+    expect(sum.liveLabel).toBeTruthy();
+    expect(sum.lockedPresentationIds.sort()).toEqual([p.id, lp.id].sort());
+    expect(Object.keys(sum).sort()).toEqual(
+      ['seq', 'mode', 'playlistId', 'playlistName', 'liveLabel', 'lockedPresentationIds'].sort(),
+    );
+    // The same answer for an operate session; and the locks are the ones the hub enforces.
+    expect(await op.json('/live/summary')).toEqual(sum);
+    expect((await ed.fetch(`/presentations/${p.id}`, { method: 'PUT', json: { ...p } })).status).toBe(423);
+
+    await op.json('/live/events', { method: 'POST', json: { k: 'endService', at: Date.now() } });
+    expect(await ed.json('/live/summary')).toMatchObject({ mode: 'idle', lockedPresentationIds: [] });
+  });
+
+  it('summarises a live state and drops anything outside the contract', () => {
+    const state = {
+      seq: 3,
+      mode: 'live',
+      live: 0,
+      cues: [{ index: 0, itemId: 'i', itemIndex: 0, kind: 'slide', label: 'Verse 1' }],
+      resolved: { playlist: { id: 'pl', name: 'Sunday', items: [] } },
+    } as unknown as LiveState;
+    expect(liveSummary(state, new Set(['a', 'b']))).toEqual({
+      seq: 3,
+      mode: 'live',
+      playlistId: 'pl',
+      playlistName: 'Sunday',
+      liveLabel: 'Verse 1',
+      lockedPresentationIds: ['a', 'b'],
+    });
+    expect(liveSummary({ ...state, mode: 'idle', resolved: undefined } as LiveState, ['a'])).toEqual({
+      seq: 3,
+      mode: 'idle',
+      lockedPresentationIds: [],
+    });
+  });
+});
 
 describe('goLive resolution and manifest', () => {
   it('resolves presentations, media, fonts (all weights of used families), looks and files', async () => {

@@ -261,11 +261,31 @@ test('edit a text box by touch: move, resize, rotate, double-tap, nudge, undo, s
       page.locator('.props label.field', { hasText: new RegExp(`^${name}`) }).locator('input');
     const val = async (name: string) => Number(await field(name).first().inputValue());
 
+    // One toolbar row on a touch screen; the object tools appear only with a selection.
+    const toolbar = page.locator('.editor > .toolbar');
+    expect((await toolbar.boundingBox())!.height).toBeLessThan(64);
+    await expect(page.locator('.ed-objtools')).toHaveCount(0);
+    await shot(page, 'editor-unselected');
+
     // Tap selects the box; the Object tab shows its geometry.
     const b0 = obj0.box;
     await stage.tap({ position: { x: (b0.x + b0.w / 2) * scale, y: (b0.y + b0.h / 2) * scale } });
     await expect(page.locator('#ordo-text-editor')).toBeVisible();
+    await expect(page.locator('.ed-objtools')).toBeVisible();
+    expect((await toolbar.boundingBox())!.height).toBeLessThan(64);
+    // The stage did not move or resize when the tools appeared.
+    expect(await stage.boundingBox()).toEqual(sb);
     await shot(page, 'editor-selected');
+
+    // The Arrange menu: 44 px items, closed by a tap outside.
+    await page.getByRole('button', { name: /^Arrange/ }).tap();
+    const items = page.getByRole('menuitem');
+    await expect(items).toHaveCount(6);
+    for (const h of await items.evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height)))
+      expect(h).toBeGreaterThanOrEqual(44);
+    await shot(page, 'editor-arrange-menu');
+    await page.locator('.ed-title').tap();
+    await expect(items).toHaveCount(0);
 
     // Move: drag the body 200 x 100 slide px.
     await fingerDrag(

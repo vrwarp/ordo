@@ -1,7 +1,9 @@
 import { api, ApiFailure } from '@ordo/client';
 import type { Presentation, SlideObject } from '@ordo/domain';
 import { create } from 'zustand';
+import { deviceProfile } from '../../lib/capabilities.ts';
 import { upsertLocal } from '../../state/library.ts';
+import { currentRole } from '../../state/session.ts';
 import { errorText, toast } from '../../state/toasts.ts';
 import { History } from './history.ts';
 import { getSlide } from './ops.ts';
@@ -154,7 +156,12 @@ export async function save(force = false): Promise<boolean> {
       return false;
     }
     if (e instanceof ApiFailure && e.status === 423)
-      toast('This presentation is in the live playlist and locked until End service.', 'warn');
+      toast(
+        deviceProfile(currentRole()) === 'edit'
+          ? 'This presentation is in the playlist that is live at the venue. It can be edited again after the service.'
+          : 'This presentation is in the live playlist and locked until End service.',
+        'warn',
+      );
     else toast(`Could not save: ${errorText(e)}`, 'error');
     return false;
   }

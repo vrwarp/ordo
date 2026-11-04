@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Dialog } from '../../components/Dialog.tsx';
 import { installKeepVisible } from '../../components/keepVisible.ts';
-import { useMedia } from '../../components/pointer.ts';
+import { Menu } from '../../components/Menu.tsx';
+import { useCoarsePointer, useMedia } from '../../components/pointer.ts';
 import { useLockedIds, useMediaLookup } from '../../hooks.ts';
+import { useProfile } from '../../lib/capabilities.ts';
 import { useLibrary } from '../../state/library.ts';
+import { useSession } from '../../state/session.ts';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { LookPreviews } from './LookPreviews.tsx';
 import {
@@ -96,6 +99,14 @@ export function EditorView({ id }: { id: string }) {
   // Look previews: open by default on a touch device in landscape, collapsed in narrow portrait and on
   // the desktop (where the slide canvas keeps its full height until someone opens them).
   const touchLandscape = useMedia('(pointer: coarse) and (orientation: landscape)');
+  // A finger gets one compact toolbar row with menus and the object tools floating by the selection; a
+  // mouse keeps the full toolbar (design/15 "Touch").
+  const coarse = useCoarsePointer();
+  const role = useSession((s) => {
+    const r = s.me?.role ?? s.offlineRole;
+    return r === 'operate' || r === 'edit' ? r : null;
+  });
+  const profile = useProfile(role);
   const [looksOpen, setLooksOpen] = useState<boolean | null>(storedLooksOpen);
   const root = useRef<HTMLDivElement>(null);
   const hasRoot = !!ed.draft;
@@ -221,162 +232,206 @@ export function EditorView({ id }: { id: string }) {
     });
     if (nid) selectObject(nid);
   };
+  const remove = () => {
+    if (!obj || !slide) return;
+    change((q) => deleteObject(q, slide.id, obj.id));
+    selectObject(undefined);
+  };
   const looksShown = looksOpen ?? touchLandscape;
-  const noObj = readOnly || !obj;
+  // Touch: the keyboard-only actions as buttons, floating by the selected object (SlideCanvas places them).
+  const objectTools =
+    coarse && obj && !readOnly ? (
+      <>
+        <span className="ed-nudge">
+          <button type="button" aria-label="Left" onClick={() => nudge(-step, 0)}>
+            ←
+          </button>
+          <button type="button" aria-label="Up" onClick={() => nudge(0, -step)}>
+            ↑
+          </button>
+          <button type="button" aria-label="Down" onClick={() => nudge(0, step)}>
+            ↓
+          </button>
+          <button type="button" aria-label="Right" onClick={() => nudge(step, 0)}>
+            →
+          </button>
+          <select
+            aria-label="Nudge step"
+            value={step}
+            onChange={(e) => setStep(Number(e.target.value) as (typeof STEPS)[number])}
+          >
+            {STEPS.map((n) => (
+              <option key={n} value={n}>
+                {n} px
+              </option>
+            ))}
+          </select>
+        </span>
+        {obj.type === 'text' && (
+          <button type="button" onClick={() => editText()}>
+            Edit text
+          </button>
+        )}
+        <button type="button" onClick={() => selectObject(undefined)}>
+          Deselect
+        </button>
+      </>
+    ) : undefined;
 
   return (
     <div className="editor" ref={root}>
-      <div className="toolbar">
-        <a className="btn small ghost" href="#/library">
-          ← Library
-        </a>
-        <b className="ellipsis" style={{ maxWidth: 260 }}>
-          {p.title}
-        </b>
-        <span className="muted small">rev {ed.base?.rev}</span>
-        <button
-          type="button"
-          className="primary"
-          disabled={readOnly || !ed.dirty || ed.saving}
-          onClick={() => void save()}
-          title="Ctrl+S"
-        >
-          {ed.saving ? 'Saving…' : ed.dirty ? 'Save' : 'Saved'}
-        </button>
-        <button type="button" disabled={readOnly || !ed.canUndo} onClick={undo} title="Ctrl+Z">
-          ↶<span className="touch-label">Undo</span>
-        </button>
-        <button type="button" disabled={readOnly || !ed.canRedo} onClick={redo} title="Ctrl+Y">
-          ↷<span className="touch-label">Redo</span>
-        </button>
-        <span style={{ width: 10 }} />
-        <button type="button" disabled={readOnly || !slide} onClick={() => add(newText(theme))}>
-          + Text
-        </button>
-        <button type="button" disabled={readOnly || !slide} onClick={() => setImagePick(true)}>
-          + Image
-        </button>
-        <button type="button" disabled={readOnly || !slide} onClick={() => add(newShape('rect'))}>
-          + Rect
-        </button>
-        <button type="button" disabled={readOnly || !slide} onClick={() => add(newShape('ellipse'))}>
-          + Ellipse
-        </button>
-        <button type="button" disabled={readOnly || !slide} onClick={() => add(newShape('line'))}>
-          + Line
-        </button>
-        <span style={{ width: 10 }} />
-        <button
-          type="button"
-          className="small"
-          disabled={readOnly || !obj}
-          onClick={() => z('front')}
-          title="Bring to front"
-        >
-          ⤒<span className="touch-label">Front</span>
-        </button>
-        <button
-          type="button"
-          className="small"
-          disabled={readOnly || !obj}
-          onClick={() => z('forward')}
-          title="Bring forward"
-        >
-          ↑<span className="touch-label">Forward</span>
-        </button>
-        <button
-          type="button"
-          className="small"
-          disabled={readOnly || !obj}
-          onClick={() => z('backward')}
-          title="Send backward"
-        >
-          ↓<span className="touch-label">Backward</span>
-        </button>
-        <button
-          type="button"
-          className="small"
-          disabled={readOnly || !obj}
-          onClick={() => z('back')}
-          title="Send to back"
-        >
-          ⤓<span className="touch-label">Back</span>
-        </button>
-        <button
-          type="button"
-          className="small"
-          disabled={readOnly || !obj}
-          title="Duplicate (Ctrl+D)"
-          onClick={duplicate}
-        >
-          ⧉<span className="touch-label">Duplicate</span>
-        </button>
-        <button
-          type="button"
-          className="small"
-          disabled={readOnly || !obj}
-          title="Delete"
-          onClick={() => {
-            if (!obj || !slide) return;
-            change((q) => deleteObject(q, slide.id, obj.id));
-            selectObject(undefined);
-          }}
-        >
-          🗑<span className="touch-label">Delete</span>
-        </button>
-        {/* Touch: every keyboard-only action as a labelled button (hidden for a mouse, design/15). */}
-        <span className="touch-only ed-touchbar" role="group" aria-label="Object tools">
-          <span className="ed-nudge">
-            <button type="button" className="small" disabled={noObj} onClick={() => nudge(-step, 0)}>
-              ←<span className="touch-label">Left</span>
-            </button>
-            <button type="button" className="small" disabled={noObj} onClick={() => nudge(0, -step)}>
-              ↑<span className="touch-label">Up</span>
-            </button>
-            <button type="button" className="small" disabled={noObj} onClick={() => nudge(0, step)}>
-              ↓<span className="touch-label">Down</span>
-            </button>
-            <button type="button" className="small" disabled={noObj} onClick={() => nudge(step, 0)}>
-              →<span className="touch-label">Right</span>
-            </button>
-            <label className="row small" style={{ gap: 4 }}>
-              Step
-              <select
-                aria-label="Nudge step"
-                value={step}
-                onChange={(e) => setStep(Number(e.target.value) as (typeof STEPS)[number])}
-              >
-                {STEPS.map((n) => (
-                  <option key={n} value={n}>
-                    {n} px
-                  </option>
-                ))}
-              </select>
-            </label>
-          </span>
+      {coarse ? (
+        <div className="toolbar ed-toolbar-touch">
+          <a className="btn small ghost" href="#/library">
+            ← Library
+          </a>
+          <b className="ellipsis ed-title">{p.title}</b>
+          <button
+            type="button"
+            className="primary"
+            disabled={readOnly || !ed.dirty || ed.saving}
+            onClick={() => void save()}
+          >
+            {ed.saving ? 'Saving…' : ed.dirty ? 'Save' : 'Saved'}
+          </button>
+          <button type="button" disabled={readOnly || !ed.canUndo} onClick={undo}>
+            ↶<span className="touch-label">Undo</span>
+          </button>
+          <button type="button" disabled={readOnly || !ed.canRedo} onClick={redo}>
+            ↷<span className="touch-label">Redo</span>
+          </button>
+          <Menu
+            label="Add"
+            disabled={readOnly || !slide}
+            items={[
+              { label: 'Text', onSelect: () => add(newText(theme)) },
+              { label: 'Image…', name: 'Image', onSelect: () => setImagePick(true) },
+              { label: 'Rectangle', name: 'Rect', onSelect: () => add(newShape('rect')) },
+              { label: 'Ellipse', onSelect: () => add(newShape('ellipse')) },
+              { label: 'Line', onSelect: () => add(newShape('line')) },
+            ]}
+          />
+          <Menu
+            label="Arrange"
+            disabled={readOnly || !obj}
+            items={[
+              { label: '⤒ Bring to front', name: 'Front', onSelect: () => z('front') },
+              { label: '↑ Bring forward', name: 'Forward', onSelect: () => z('forward') },
+              { label: '↓ Send backward', name: 'Backward', onSelect: () => z('backward') },
+              { label: '⤓ Send to back', name: 'Back', onSelect: () => z('back') },
+              { label: '⧉ Duplicate', name: 'Duplicate', onSelect: duplicate },
+              { label: '🗑 Delete', name: 'Delete', danger: true, onSelect: remove },
+            ]}
+          />
+          <span className="spacer" />
+          <PreviewControl p={p} slideId={slide?.id} />
+          <button type="button" onClick={() => setRevisions(true)}>
+            History
+          </button>
+        </div>
+      ) : (
+        <div className="toolbar">
+          <a className="btn small ghost" href="#/library">
+            ← Library
+          </a>
+          <b className="ellipsis" style={{ maxWidth: 260 }}>
+            {p.title}
+          </b>
+          <span className="muted small">rev {ed.base?.rev}</span>
+          <button
+            type="button"
+            className="primary"
+            disabled={readOnly || !ed.dirty || ed.saving}
+            onClick={() => void save()}
+            title="Ctrl+S"
+          >
+            {ed.saving ? 'Saving…' : ed.dirty ? 'Save' : 'Saved'}
+          </button>
+          <button type="button" disabled={readOnly || !ed.canUndo} onClick={undo} title="Ctrl+Z">
+            ↶<span className="touch-label">Undo</span>
+          </button>
+          <button type="button" disabled={readOnly || !ed.canRedo} onClick={redo} title="Ctrl+Y">
+            ↷<span className="touch-label">Redo</span>
+          </button>
+          <span style={{ width: 10 }} />
+          <button type="button" disabled={readOnly || !slide} onClick={() => add(newText(theme))}>
+            + Text
+          </button>
+          <button type="button" disabled={readOnly || !slide} onClick={() => setImagePick(true)}>
+            + Image
+          </button>
+          <button type="button" disabled={readOnly || !slide} onClick={() => add(newShape('rect'))}>
+            + Rect
+          </button>
+          <button type="button" disabled={readOnly || !slide} onClick={() => add(newShape('ellipse'))}>
+            + Ellipse
+          </button>
+          <button type="button" disabled={readOnly || !slide} onClick={() => add(newShape('line'))}>
+            + Line
+          </button>
+          <span style={{ width: 10 }} />
           <button
             type="button"
             className="small"
-            disabled={noObj || obj?.type !== 'text'}
-            onClick={() => editText()}
+            disabled={readOnly || !obj}
+            onClick={() => z('front')}
+            title="Bring to front"
           >
-            Edit text
+            ⤒<span className="touch-label">Front</span>
           </button>
-          <button type="button" className="small" disabled={!obj} onClick={() => selectObject(undefined)}>
-            Deselect
+          <button
+            type="button"
+            className="small"
+            disabled={readOnly || !obj}
+            onClick={() => z('forward')}
+            title="Bring forward"
+          >
+            ↑<span className="touch-label">Forward</span>
           </button>
-        </span>
-        <span className="spacer" />
-        <PreviewControl p={p} slideId={slide?.id} />
-        <button type="button" onClick={() => setRevisions(true)}>
-          History
-        </button>
-      </div>
+          <button
+            type="button"
+            className="small"
+            disabled={readOnly || !obj}
+            onClick={() => z('backward')}
+            title="Send backward"
+          >
+            ↓<span className="touch-label">Backward</span>
+          </button>
+          <button
+            type="button"
+            className="small"
+            disabled={readOnly || !obj}
+            onClick={() => z('back')}
+            title="Send to back"
+          >
+            ⤓<span className="touch-label">Back</span>
+          </button>
+          <button
+            type="button"
+            className="small"
+            disabled={readOnly || !obj}
+            title="Duplicate (Ctrl+D)"
+            onClick={duplicate}
+          >
+            ⧉<span className="touch-label">Duplicate</span>
+          </button>
+          <button type="button" className="small" disabled={readOnly || !obj} title="Delete" onClick={remove}>
+            🗑<span className="touch-label">Delete</span>
+          </button>
+          <span className="spacer" />
+          <PreviewControl p={p} slideId={slide?.id} />
+          <button type="button" onClick={() => setRevisions(true)}>
+            History
+          </button>
+        </div>
+      )}
       <SlidesPanel p={p} readOnly={readOnly} />
       <div className="stagewrap">
         {readOnly && (
-          <div className="banner" style={{ margin: 8 }}>
-            This presentation is in the live playlist. Editing is locked until End service.
+          <div className="banner" style={{ margin: 8 }} data-locked-banner>
+            {profile === 'edit'
+              ? 'This presentation is in the playlist that is live at the venue. It can be edited again after the service.'
+              : 'This presentation is in the live playlist. Editing is locked until End service.'}
           </div>
         )}
         {changedElsewhere && (
@@ -399,6 +454,7 @@ export function EditorView({ id }: { id: string }) {
             media={media}
             readOnly={readOnly}
             onEditText={editText}
+            objectTools={objectTools}
           />
         ) : (
           <div className="center muted">Add a slide to start.</div>

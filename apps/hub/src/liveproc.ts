@@ -41,6 +41,7 @@ export const LIVE_API_PATHS = new Set([
   '/auth/me',
   '/output/config',
   '/live',
+  '/live/summary',
   '/live/events',
   '/cache/manifest',
   '/actions',

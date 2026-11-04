@@ -3,9 +3,11 @@ import { type Arrangement, newId, type Playlist, type PlaylistItem } from '@ordo
 import { useEffect, useRef, useState } from 'react';
 import { DragHandle, useSortable } from '../../components/Sortable.tsx';
 import { moveItem } from '../../lib/arrangement.ts';
+import { deviceProfile } from '../../lib/capabilities.ts';
 import { controller } from '../../services/controller.ts';
 import { upsertLocal, useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
+import { currentRole } from '../../state/session.ts';
 import { errorText, toast } from '../../state/toasts.ts';
 import { itemSubtitle, itemTitle } from '../live/PlaylistPane.tsx';
 import { AddItemsPanel } from './AddItemsPanel.tsx';
@@ -57,7 +59,12 @@ export function PlaylistEditor(props: {
     } catch (e) {
       setSaving('error');
       if (e instanceof ApiFailure && e.status === 423)
-        toast('This playlist is live and locked until End service.', 'warn');
+        toast(
+          deviceProfile(currentRole()) === 'edit'
+            ? 'This playlist is live at the venue. It can be edited again after the service.'
+            : 'This playlist is live and locked until End service.',
+          'warn',
+        );
       else if (e instanceof ApiFailure && e.status === 409) {
         toast(
           'The playlist was changed elsewhere. Reloaded the latest version; redo your last change.',
@@ -142,7 +149,17 @@ export function PlaylistEditor(props: {
       <div className="col" style={{ minHeight: 0, overflow: 'auto', padding: 14, gap: 10 }}>
         {props.locked && (
           <div className="banner">
-            This playlist is <b>live</b>. It is locked until End service; its presentations are locked too.
+            {deviceProfile(currentRole()) === 'edit' ? (
+              <>
+                This playlist is <b>live</b> at the venue. It and its presentations can be edited again after
+                the service.
+              </>
+            ) : (
+              <>
+                This playlist is <b>live</b>. It is locked until End service; its presentations are locked
+                too.
+              </>
+            )}
           </div>
         )}
         <div className="row wrap">

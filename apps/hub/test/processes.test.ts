@@ -130,6 +130,7 @@ describe('proxy and routing between the processes', () => {
   it('routes the live API, known files and everything else', () => {
     const known = (h: string) => h === 'a'.repeat(64);
     expect(proxied('GET', '/api/v1/live', known)).toBe(false);
+    expect(proxied('GET', '/api/v1/live/summary', known)).toBe(false);
     expect(proxied('POST', '/api/v1/live/events', known)).toBe(false);
     expect(proxied('GET', '/api/v1/health?x=1', known)).toBe(false);
     expect(proxied('GET', '/api/v1/output/config', known)).toBe(false);
@@ -332,6 +333,12 @@ describe('two-process hub', () => {
     ).toBe(1);
     const settings = await op.json<{ outputs: { token: string }[] }>('/settings');
     const out = client(base, '', { 'x-ordo-token': settings.outputs[0]!.token });
+    // The live process answers the edit role's summary itself.
+    const ed = await login(base, '222222');
+    const sum = await ed.json<{ mode: string; playlistId?: string; lockedPresentationIds: string[] }>(
+      '/live/summary',
+    );
+    expect(sum).toMatchObject({ mode: 'live', playlistId: pl.id, lockedPresentationIds: [p.id] });
 
     // Kill the library: the live API, output config and manifest keep answering; the library returns.
     process.kill(pids().library, 'SIGKILL');

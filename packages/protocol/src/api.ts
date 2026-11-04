@@ -22,6 +22,7 @@ import type {
   GeneralSettings as General,
 } from '@ordo/domain';
 import type { Role } from './index.ts';
+import { z } from 'zod';
 
 export const API_PREFIX = '/api/v1';
 
@@ -91,6 +92,23 @@ export type RevisionInfo = { rev: number; savedAt: string; savedBy?: string; tit
 /** GET /live returns the full state; outputs use it on start. */
 export type LiveRes = { seq: number; state: LiveState };
 
+/**
+ * GET /live/summary (edit or operate session): what an edit-profile device (an iPad) needs to know about
+ * the service running at the venue, without the full live state or any token: the live playlist, the
+ * label of the live cue and the presentations the hub locks (it refuses saves to them with 423).
+ */
+export const LiveSummaryRes = z
+  .object({
+    seq: z.number().int(),
+    mode: z.enum(['idle', 'live']),
+    playlistId: z.string().max(200).optional(),
+    playlistName: z.string().max(1000).optional(),
+    liveLabel: z.string().max(1000).optional(),
+    lockedPresentationIds: z.array(z.string().max(200)).max(10_000),
+  })
+  .strict();
+export type LiveSummaryRes = z.infer<typeof LiveSummaryRes>;
+
 /** GET /cache/manifest */
 export type ManifestRes = {
   manifestId: string;
@@ -144,6 +162,7 @@ export const ROUTES = {
   folders: '/folders',
   settings: '/settings',
   live: '/live',
+  liveSummary: '/live/summary',
   manifest: '/cache/manifest',
   jobs: '/jobs',
   actions: '/actions',

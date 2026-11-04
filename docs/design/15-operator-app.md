@@ -211,8 +211,14 @@ with a wider hit area, the rotate handle 64 px out (flipped below or beside the 
 off the slide), `touch-action: none` on the stage, and pinch suppressed rather than zooming: the slide is
 already fitted to its pane, numeric fields and the nudge toolbar cover fine work, and a two-finger
 gesture must not also move an object. A double-tap on a text box focuses its text field (inside the
-gesture, so the keyboard opens), and a labelled toolbar carries every keyboard-only action (nudge with
-a 1/10/50 px step, edit text, deselect, plus labels on undo/redo, z-order, duplicate, delete). A focused
+gesture, so the keyboard opens). On a coarse pointer the editor toolbar is one row: Library, title,
+Save, Undo, Redo, an Add menu (Text, Image, Rectangle, Ellipse, Line), an Arrange menu (front, forward,
+backward, back, duplicate, delete) and History (`components/Menu.tsx`: 44 px items, closed by a tap
+outside or Escape, nothing on hover). While an object is selected its keyboard-only actions (nudge with a
+1/10/50 px step, edit text, deselect) float in a bar just above or below it, clear of its anchors and
+rotate handle, or at the pane edge away from a box that fills the slide (`objectToolsSpot` in
+`touchGeometry.ts`); the bar overlays the pane, so the stage never moves when a selection starts. A mouse
+keeps the full toolbar. A focused
 field scrolls back into the visual viewport when the software keyboard shrinks it (`keepVisible.ts`).
 Controls are 44 px with 16 px inputs (no focus zoom); in portrait the editor's property panel and the
 playlist's add panel move under the main pane. File pickers are a plain button to the native picker
@@ -259,11 +265,15 @@ support and tests (never over the edit role). The result is on `window.__ordo.ca
   MIDI, backups and diagnostics pages redirect to the library (`allowedForRole(route, role, profile)`).
 - A playlist shows "Go live from the venue PC." instead of Go live; the nav says "This device edits;
   run services from the venue PC" (operate PIN, wide screens).
-- **Live now.** The hub sends live state only to operators and outputs, so an iPad signed in with the
-  operate PIN polls `GET /live` (8 s, and at once when the page becomes visible; `src/lib/venueLive.ts`)
-  for the nav chip "Live now: <playlist>, <cue>" and for `useLockedIds`/`useLivePlaylistId`, which lock
-  the live playlist's presentations in the editor before the hub would refuse a save with 423. With the
-  edit PIN `GET /live` is refused, so the chip does not show and the hub's 423 is the only lock.
+- **Live now.** The hub sends live state only to operators and outputs, so an iPad (edit or operate PIN)
+  polls `GET /live/summary` (8 s, and at once when the page becomes visible; `src/lib/venueLive.ts`):
+  `{ seq, mode, playlistId?, playlistName?, liveLabel?, lockedPresentationIds }`, no tokens and no full
+  state. It feeds the nav chip "Live now: <playlist>, <cue>" and `useLockedIds`/`useLivePlaylistId`,
+  which lock the live playlist's presentations in the editor before the hub would refuse a save with 423
+  (the hub's 423 stays the real guard). A hub without the summary answers 404: an operate session then
+  falls back to `GET /live`. On this profile the locked banners and the 423 toasts say "This presentation
+  is in the playlist that is live at the venue. It can be edited again after the service." (the venue
+  PC keeps "locked until End service").
 
 ### Look previews
 

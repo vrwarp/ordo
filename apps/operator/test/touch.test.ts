@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { revealDelta } from '../src/components/keepVisible.ts';
-import { rotaterAngle } from '../src/views/editor/touchGeometry.ts';
+import { objectToolsSpot, rotaterAngle } from '../src/views/editor/touchGeometry.ts';
 import {
   autoScrollSpeed,
   type FlatEntry,
@@ -173,5 +173,85 @@ describe('the rotate handle stays on the slide under a finger', () => {
     expect(rotaterAngle(box(0, 1080, 100, 1000), 0.5, 64)).toBe(90);
     expect(rotaterAngle(box(0, 1080, 800, 1120), 0.5, 64)).toBe(270);
     expect(rotaterAngle(box(0, 1080, 0, 1920), 0.5, 64)).toBe(0);
+  });
+});
+
+describe('editor: floating object tools', () => {
+  // A 640 x 360 slide centred in a 664 x 500 pane (stage at 12, 70); scale 1/3.
+  const scale = 1 / 3;
+  const stage = { x: 12, y: 70 };
+  const pane = { w: 664, h: 500 };
+  const bar = { w: 400, h: 52 };
+  const none = { angle: 90, reach: 79 };
+
+  it('sits above a box low on the slide, centred on it and inside the pane', () => {
+    const at = objectToolsSpot(
+      { x: 660, y: 700, w: 600, h: 200, rotation: 0 },
+      scale,
+      stage,
+      pane,
+      bar,
+      none,
+    );
+    expect(at.y + bar.h).toBeLessThanOrEqual(70 + 700 / 3 - 24);
+    expect(at.x).toBe(Math.round(12 + 960 / 3 - 200));
+  });
+
+  it('goes below a box near the top, and clear of a rotate handle above it', () => {
+    const top = objectToolsSpot(
+      { x: 660, y: 20, w: 600, h: 200, rotation: 0 },
+      scale,
+      stage,
+      pane,
+      bar,
+      none,
+    );
+    expect(top.y).toBeGreaterThanOrEqual(70 + 220 / 3 + 24);
+    const box = { x: 660, y: 250, w: 600, h: 100, rotation: 0 };
+    expect(objectToolsSpot(box, scale, stage, pane, bar, none).y).toBeLessThan(70 + 250 / 3);
+    // With the rotate handle above, 79 px more are needed there: the tools go below instead.
+    const handle = objectToolsSpot(box, scale, stage, pane, bar, { angle: 0, reach: 79 });
+    expect(handle.y).toBeGreaterThan(70 + 350 / 3);
+  });
+
+  it('falls back to the pane edge away from a box that fills the slide, and clamps to the pane', () => {
+    const full = objectToolsSpot(
+      { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+      scale,
+      stage,
+      pane,
+      bar,
+      none,
+    );
+    expect(full.y).toBe(pane.h - bar.h - 4);
+    const left = objectToolsSpot(
+      { x: 0, y: 700, w: 100, h: 100, rotation: 0 },
+      scale,
+      stage,
+      pane,
+      bar,
+      none,
+    );
+    expect(left.x).toBe(4);
+  });
+
+  it('uses the rotated bounds', () => {
+    const flat = objectToolsSpot(
+      { x: 860, y: 600, w: 200, h: 20, rotation: 0 },
+      scale,
+      stage,
+      pane,
+      bar,
+      none,
+    );
+    const upright = objectToolsSpot(
+      { x: 860, y: 600, w: 200, h: 20, rotation: 90 },
+      scale,
+      stage,
+      pane,
+      bar,
+      none,
+    );
+    expect(upright.y).toBeLessThan(flat.y);
   });
 });
