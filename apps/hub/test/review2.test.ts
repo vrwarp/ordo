@@ -219,7 +219,13 @@ describe('items 4 and 21: the live process applies settings before outputs hear 
     });
     livep = await createLiveProcess(cfg, { secret, libraryUrl: libp.url });
     relay = (changes, seq) => livep?.onLibraryChanges(changes, seq);
-    return { base: livep.url, lib: libp, live: livep };
+    /** A new live process on the same data (a restart): it has seen no relayed change. */
+    const restartLive = async () => {
+      await livep?.close();
+      livep = await createLiveProcess(cfg, { secret, libraryUrl: libp!.url });
+      return livep;
+    };
+    return { base: livep.url, lib: libp, live: livep, restartLive };
   }
 
   it('PUT /settings/looks then at once GET /output/config returns the new look', async () => {
@@ -235,6 +241,20 @@ describe('items 4 and 21: the live process applies settings before outputs hear 
       const cfg = await out.json<{ looks: { id: string; name: string }[] }>('/output/config');
       expect(cfg.looks.find((l) => l.id === outs[0]!.lookId)?.name).toBe(`Look ${i}`);
     }
+  });
+
+  it('does not hold answers for changes made before this live process started', async () => {
+    const { lib, restartLive } = await twoProcesses(0);
+    lib.lib.putSetting('general', { ...lib.lib.getSetting('general'), venueName: 'Before the restart' });
+    const live = await restartLive();
+    const base = live.url;
+    expect(lib.lib.seq()).toBeGreaterThan(0);
+    // A fresh live process (as after a restart) knows the library sequence from its context copy.
+    expect(live.link.context?.seq).toBe(lib.lib.seq());
+    const t0 = Date.now();
+    const op = await login(base, OPERATE_PIN);
+    expect((await op.fetch('/auth/logout', { method: 'POST' })).status).toBeLessThan(300);
+    expect(Date.now() - t0).toBeLessThan(1000);
   });
 
   it('an output that refetches on the settings delta gets the new config', async () => {

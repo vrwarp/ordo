@@ -149,7 +149,13 @@ export async function createLibraryProcess(
   route('/internal/context', async () => {
     const settings = lib.getSettings();
     const logoId = settings.general.logoMediaId;
-    return { settings, fonts: lib.listFonts(), logo: logoId ? lib.media.get(logoId) : undefined };
+    return {
+      settings,
+      fonts: lib.listFonts(),
+      logo: logoId ? lib.media.get(logoId) : undefined,
+      // Everything up to this library sequence is in this copy (the live proxy's read-your-writes barrier).
+      seq: lib.seq(),
+    };
   });
   route('/internal/golive/:playlistId', async (req) => {
     const id = (req.params as { playlistId: string }).playlistId;

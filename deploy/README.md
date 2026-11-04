@@ -24,10 +24,21 @@ The apps run on separate origins under your DDNS name, written `<venue>.synology
 
 Create `/volume1/docker/ordo/data`. The container runs as uid 1000 (`node`), so give that uid write
 access (File Station, Properties, Permission, or `sudo chown -R 1000:1000 /volume1/docker/ordo/data`
-over SSH). Inside it the hub creates `ordo.db`, `media/`, `fonts/`, `uploads/`, `tmp/` and `backups/`.
+over SSH). Inside it the hub creates:
+
+| Path               | What                                                                                                                                                       |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ordo.db`          | The library: presentations, playlists, media records, settings, PINs and sessions (with `-wal` and `-shm` beside it)                                       |
+| `live.db`          | The live process's own database: the live journal and snapshots, and its copies of the library's settings and recently live playlists (with `-wal`/`-shm`) |
+| `supervisor.json`  | Pids, states and restart counts of the two hub processes, rewritten on every change (informative only)                                                     |
+| `media/`, `fonts/` | Content-addressed files                                                                                                                                    |
+| `uploads/`         | Uploads in progress (resumable uploads keep theirs for 7 days; temp files of interrupted ones are removed at start)                                        |
+| `tmp/`             | Scratch files of running jobs (emptied at start)                                                                                                           |
+| `backups/`         | Nightly and on-demand database backups with their media manifests                                                                                          |
 
 Include `/volume1/docker/ordo/data` in the venue's Hyper Backup task. The nightly backups in
-`backups/` plus the content-addressed `media/` and `fonts/` folders make up a complete backup.
+`backups/` plus the content-addressed `media/` and `fonts/` folders make up a complete backup. `live.db` is
+not part of a backup: it holds the state of a service in progress, which a restore does not bring back.
 
 ## 3. Compose project
 
@@ -109,7 +120,11 @@ Chrome policies, the PWA install and the rest of the PC setup are in design/22, 
 
   `restore` checks the backup's integrity and verifies every media hash in the manifest, then keeps the
   current database as `backups/ordo-pre-restore-<time>.db` before swapping. If any media file is missing
-  or its content differs, it refuses to restore. Add `--force` to restore anyway.
+  or its content differs, it refuses to restore. Add `--force` to restore anyway. It also clears the live
+  process's copies of the old library in `live.db` (settings, output tokens, recently live playlists), so
+  the restarted hub serves the restored settings; the live journal and snapshot stay.
+- A backup is written under a temporary `.partial` name and renamed when complete; a day's backup that
+  fails an integrity check (an interrupted run of an older version) is taken again.
 
 ## 8. Upgrades
 

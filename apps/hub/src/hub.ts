@@ -13,6 +13,7 @@ import { ImportService } from './imports.ts';
 import { JobQueue } from './jobs.ts';
 import { Library } from './library.ts';
 import { LiveService, librarySource } from './live.ts';
+import { affectsContext } from './librarylink.ts';
 import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
 import {
@@ -117,7 +118,10 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
     healthIntervalMs: cfg.healthIntervalMs,
     clientIp: http.clientIp,
   });
-  lib.onChange((changes) => sockets.broadcastLibrary(changes));
+  // Outputs hear of what their config holds: settings, fonts and the logo media.
+  lib.onChange((changes) =>
+    sockets.broadcastLibrary(changes, (ch) => affectsContext(ch, lib.getSetting('general').logoMediaId)),
+  );
 
   const hub: Hub = {
     app,

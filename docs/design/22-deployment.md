@@ -48,7 +48,10 @@ services:
 is the single source for countdowns and the nightly backup.
 
 Backups land in `/volume1/docker/ordo/data/backups`, which the venue's Hyper Backup task
-includes.
+includes. The data folder also holds `ordo.db` (the library), `live.db` (the live journal and snapshots and
+the live process's copies of the library; not part of a backup, and its library copies are cleared by a
+restore), `supervisor.json` (process states), `media/`, `fonts/`, `uploads/` and `tmp/`; deploy/README
+lists them.
 
 ## DSM reverse proxy rules
 

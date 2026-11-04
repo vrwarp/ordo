@@ -315,6 +315,12 @@ export async function createLiveProcess(
   // refetch their config. The first successful refresh after start always does.
   let firstContext = true;
   link.onContext((prev, next) => {
+    // Everything up to the copy's sequence is in it: answers to writes up to there need not wait (after a
+    // restart of this process nothing would ever be relayed for them).
+    if (next.seq !== undefined && next.seq > appliedSeq) {
+      appliedSeq = next.seq;
+      releaseWaiters();
+    }
     if (changeRefresh) {
       firstContext = false;
       return;

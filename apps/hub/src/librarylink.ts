@@ -33,7 +33,14 @@ import type { ChildState } from './ipc.ts';
 import type { Change } from './library.ts';
 import { type GoLiveInputs, LiveRejection, type LiveSettings, type LiveSource } from './live.ts';
 
-export type LiveContext = { settings: Settings; fonts: Font[]; logo?: Media; takenAt: number };
+export type LiveContext = {
+  settings: Settings;
+  fonts: Font[];
+  logo?: Media;
+  takenAt: number;
+  /** The library sequence the copy reflects (absent from copies saved by older versions). */
+  seq?: number;
+};
 export type GoLiveBundle = {
   playlist: unknown;
   presentations: Record<string, unknown>;

@@ -115,7 +115,10 @@ supervisor (tini + a small Node parent)
 - **Worker threads for CPU work** (new, partly in the current fix pass): no request handler decodes a
   library or parses a PPTX on the event loop.
 - **Restart budget**: the supervisor restarts a crashed child within a second, at most five times a minute,
-  then stays down and reports. Live clients fall back to the operator as designed, so a live-process restart
+  then stays down and reports. A library process past its budget stays down (`/health` says `library:
+  failed`, library calls answer 503) while the service runs on; a live process past its budget is not left
+  down: the supervisor exits with code 1 so the container's restart policy (`restart: unless-stopped`)
+  starts the whole hub again with its own backoff. Live clients fall back to the operator as designed, so a live-process restart
   is a sub-second blip with no visible change.
 
 ## Bad data: validate at entry, clamp at use, quarantine on failure

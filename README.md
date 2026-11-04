@@ -79,20 +79,20 @@ the operator carrying the outputs until the restarted hub adopts the state.
 
 ### Hub configuration
 
-| Variable                  | Default                | Meaning                                                                 |
-| ------------------------- | ---------------------- | ----------------------------------------------------------------------- |
-| `ORDO_DOMAIN`             | `localhost`            | Domain under which `op`, `out1`..`out6`, `stage` and `hub` live         |
-| `ORDO_DATA`               | `./.data`              | SQLite database, media, fonts, backups                                  |
-| `ORDO_PORT` / `ORDO_HOST` | `8080` / `0.0.0.0`     | Listen address                                                          |
-| `ORDO_TRUSTED_PROXY`      | none                   | CIDRs whose `X-Forwarded-*` headers are trusted (the DSM reverse proxy) |
-| `ORDO_TZ`                 | `UTC`                  | Venue time zone for backups and countdowns                              |
-| `ORDO_APPS_DIR`           | repo `apps/`           | Where the built apps are                                                |
-| `ORDO_IMPORT_ROOTS`       | `/data/import:/import` | NAS folders the ProPresenter import may read                            |
-| `ORDO_DEV_PIN`            | none                   | Sets the PINs automatically (development and tests only)                |
-| `ORDO_LOG_LEVEL`          | `info`                 | Log level                                                               |
-| `ORDO_ALLOWED_HOSTS`      | none                   | Extra host names the hub answers besides the domain, `localhost` and loopback (comma or space separated, e.g. the NAS's LAN IP); others get 421 |
+| Variable                  | Default                | Meaning                                                                                                                                                  |
+| ------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ORDO_DOMAIN`             | `localhost`            | Domain under which `op`, `out1`..`out6`, `stage` and `hub` live                                                                                          |
+| `ORDO_DATA`               | `./.data`              | SQLite database, media, fonts, backups                                                                                                                   |
+| `ORDO_PORT` / `ORDO_HOST` | `8080` / `0.0.0.0`     | Listen address                                                                                                                                           |
+| `ORDO_TRUSTED_PROXY`      | none                   | CIDRs whose `X-Forwarded-*` headers are trusted (the DSM reverse proxy)                                                                                  |
+| `ORDO_TZ`                 | `UTC`                  | Venue time zone for backups and countdowns                                                                                                               |
+| `ORDO_APPS_DIR`           | repo `apps/`           | Where the built apps are                                                                                                                                 |
+| `ORDO_IMPORT_ROOTS`       | `/data/import:/import` | NAS folders the ProPresenter import may read                                                                                                             |
+| `ORDO_DEV_PIN`            | none                   | Sets the PINs automatically (development and tests only)                                                                                                 |
+| `ORDO_LOG_LEVEL`          | `info`                 | Log level                                                                                                                                                |
+| `ORDO_ALLOWED_HOSTS`      | none                   | Extra host names the hub answers besides the domain, `localhost` and loopback (comma or space separated, e.g. the NAS's LAN IP); others get 421          |
 | `ORDO_SINGLE_PROCESS`     | unset                  | `1` runs the hub as one process instead of the supervisor with a live and a library process (same as `node main.js --single`; development and diagnosis) |
-| `ORDO_CPU_WORKERS`        | `1`                    | Worker threads (1 to 8) in the library process for CPU-heavy parsing (ProPresenter, PowerPoint, fonts); each has a 512 MB heap |
+| `ORDO_CPU_WORKERS`        | `1`                    | Worker threads (1 to 8) in the library process for CPU-heavy parsing (ProPresenter, PowerPoint, fonts); each has a 512 MB heap                           |
 
 ## Release
 
