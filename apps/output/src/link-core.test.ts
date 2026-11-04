@@ -378,4 +378,39 @@ describe('link worker core', () => {
     expect(t.core.buildHealth().error).toMatch(/storage full: 1 file\(s\) not cached \(gave up\)/);
     t.close();
   });
+
+  it('a restarted link worker flips nothing until it has a live state (the renderer keeps the picture)', async () => {
+    const t = setup({ restarted: true });
+    // Ports arrive before the persisted state is read, and there is none: nothing is flipped.
+    t.core.sync();
+    await t.core.start();
+    await tick();
+    expect(t.toRender.some((m) => m.t === 'flip')).toBe(false);
+    t.hub.emit('state', stateMsg(slideLive(0)));
+    await tick();
+    expect(t.toRender.some((m) => m.t === 'flip' && m.layer === 1 && m.key !== '')).toBe(true);
+    t.close();
+  });
+
+  it('refetches its config on id-only font, media and settings changes (no rev)', async () => {
+    let fetches = 0;
+    const t = setup({
+      fetchConfig: async () => {
+        fetches++;
+        return config(true);
+      },
+    });
+    await t.core.start();
+    const n0 = fetches;
+    for (const change of [
+      { kind: 'font', id: 'f1' },
+      { kind: 'media', id: 'logo' },
+      { kind: 'settings', id: 'general' },
+    ])
+      t.link.emit('library', { changes: [change] } as never);
+    t.link.emit('library', { changes: [{ kind: 'presentation', id: 'p1', rev: 2 }] } as never);
+    await tick();
+    expect(fetches - n0).toBe(3);
+    t.close();
+  });
 });

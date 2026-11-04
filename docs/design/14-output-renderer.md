@@ -44,7 +44,9 @@ and becoming visible restores full-rate ticks, so nothing on the audience path d
 hidden; message-driven liveness (a worker's death raising an event) is not offered by the platform for
 `terminate`d or crashed dedicated workers, which is why heartbeats are used (review 2026-11-04 item 28).
 
-- Link restart: the new link worker paints from IndexedDB (state, config, recent manifests) and OPFS,
+- Link restart: the new link worker changes nothing on screen until it has a live state (persisted or
+  from a bus): planning waits for the IndexedDB read, and a restarted worker without a state flips no
+  layer (an empty plan would turn the picture the renderer still holds to black). It paints from IndexedDB (state, config, recent manifests) and OPFS,
   re-arms the live and armed cues (the renderer still holds them and tells the new link at once, so
   nothing changes on screen), reconnects, and the host asks the opener for a fresh bus port
   (`ordo.port.request`; the window.postMessage relay carries the bus meanwhile). What the media elements
@@ -58,9 +60,13 @@ hidden; message-driven liveness (a worker's death raising an event) is not offer
   snapshot the render worker posts (every 500 ms, every 150 ms while the program view is watched, and
   as soon as a flip has settled; never more than about 7 a second, 640x360) is drawn onto the hidden
   hold canvas at once, because a bitmap from the render worker is backed by that worker's context and
-  draws nothing once it dies (review 2026-11-04 item 1). The host shows the hold before it terminates the
-  worker (the supervisor's `stop` hook), and also as soon as the renderer misses heartbeats for 1 s (a
-  crash), then gives the new worker a fresh canvas, and lowers the hold 200 ms after the link reports the
+  draws nothing once it dies (review 2026-11-04 item 1). A new or rebuilt compositor is not copied until
+  it has drawn for 1 s (a failing GPU presents garbage, white, before it reports the device lost). The
+  host shows the hold before it terminates the worker (the supervisor's `stop` hook), and also as soon as
+  the renderer misses its heartbeat (50 ms for this worker) for 200 ms: Chrome may composite a dead
+  worker's canvas white at once, so an abrupt crash can show for up to about 250 ms before the hold
+  covers it. While the hold shows, the canvas underneath is hidden (a dead or device-lost canvas can be
+  composited above the hold). The host then gives the new worker a fresh canvas, and lowers the hold 200 ms after the link reports the
   live content is held again (or after 8 s), so the new canvas is never seen fading in from black. While
   the renderer is silent, video frames are closed on the main thread instead of being posted to a worker
   that may be dead. This is the device-loss path with a new worker. In test mode the hold also carries
@@ -234,7 +240,11 @@ not a renderer-only change and is left for the domain model.
 
 `device.lost` rebuilds the device and pipelines from scratch, re-arms the live and armed
 cues, and reports `gpuLost++`. The hold canvas (a main-thread 2D copy of the latest
-snapshot, see Render restart) is shown during the rebuild so the screen never goes black.
+snapshot, see Render restart; opaque black when the device is lost before any copy, e.g.
+right after a reload) is shown during the rebuild and the lost canvas is hidden (Chrome
+composites it white). Snapshots taken around the loss are dropped; the hold comes down on
+the first copy the rebuilt compositor makes after drawing for 750 ms without another loss
+(or 2 s later), also across the 3-strikes switch to Canvas 2D on a fresh canvas.
 
 ## Render-plan clamps and quarantine
 

@@ -17,7 +17,9 @@ const scope = self as unknown as {
   requestAnimationFrame?: (cb: (ts: number) => void) => number;
 };
 
-startHeartbeat(scope);
+// A fast heartbeat: the host covers the screen within about 250 ms of this worker dying (a dead
+// worker's canvas can turn white).
+startHeartbeat(scope, 50);
 
 let engine: RenderEngine | null = null;
 let canvasWaiter: ((c: OffscreenCanvas) => void) | null = null;

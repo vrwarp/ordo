@@ -55,6 +55,8 @@ export type EngineOptions = {
 export const GPU_RETRY_MAX_MS = 15 * 60_000;
 /** Snapshots (the hold image and the program view) are never taken more often than this. */
 export const SNAP_MIN_MS = 140;
+/** A new or rebuilt compositor is not copied before it has drawn this long. */
+export const SNAP_SETTLE_MS = 1000;
 
 export class RenderEngine {
   readonly layers: LayerStack<ImageBitmap>[] = LAYERS.map(
@@ -94,11 +96,21 @@ export class RenderEngine {
   private snapBusy = false;
   /** The slide cue shown in the frame being copied. */
   private snapCue = -1;
+  /**
+   * No snapshot before this (hub ms): a compositor just created or rebuilt is not copied for its first
+   * SNAP_SETTLE_MS (a failing GPU presents garbage, white, before it reports the device lost).
+   */
+  private snapNotBefore = 0;
   /** Flips counted at the last snapshot: a settled flip takes a fresh one at once (the hold stays current). */
   private snapFlips = 0;
   private snapOpts: ImageBitmapOptions = { resizeWidth: 640, resizeHeight: 360, resizeQuality: 'low' };
   private readonly onSnapDone = (b: ImageBitmap) => {
     this.snapBusy = false;
+    if (this.rebuilding || !this.compositor) {
+      // Copied from a canvas whose device was lost meanwhile: its pixels are not the picture (white).
+      b.close();
+      return;
+    }
     if (this.host.onSnapshot) this.host.onSnapshot(b, this.snapCue);
     else b.close();
   };
@@ -284,6 +296,10 @@ export class RenderEngine {
           ls.stacks[1].version++;
         }
         this.snapEvery = this.snapEvery || 1000;
+        // The rebuilt compositor is copied once it has drawn for SNAP_SETTLE_MS: the main thread
+        // uncovers the screen on that copy.
+        this.snapLast = 0;
+        this.snapNotBefore = 0;
         this.rebuilding = false;
         this.host.onRestored?.(r.kind);
         this.scheduleGpuRetry();
@@ -412,7 +428,8 @@ export class RenderEngine {
       return;
     }
     this.clock.tick(ts);
-    if (this.snapEvery > 0 && !this.snapBusy) {
+    if (this.snapNotBefore === 0) this.snapNotBefore = now + SNAP_SETTLE_MS;
+    if (this.snapEvery > 0 && !this.snapBusy && now >= this.snapNotBefore) {
       // A flip that has settled (no layer fading) is copied at once, else every snapEvery ms; never more
       // often than SNAP_MIN_MS. Rare path: an async GPU copy, not per-frame work.
       let flips = 0;

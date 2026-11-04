@@ -46,12 +46,14 @@ const RELOAD_REASON_KEY = 'ordo.output.reloadReason';
 /** A hold raised for a render rebuild comes down after this long even if the link never says so. */
 const HOLD_MAX_MS = 12_000;
 /** No heartbeat from the render worker for this long: cover the screen with the hold until it beats again. */
-const RENDER_SILENT_MS = 1000;
+const RENDER_SILENT_MS = 200;
 /** Video frames are not posted to a render worker that has been silent this long (it may be dead). */
 const VFRAME_SILENT_MS = 600;
 /** Snapshot periods: idle (the hold image) and while the program view is watched. */
 const SNAP_IDLE_MS = 500;
 const SNAP_PROGRAM_MS = 150;
+/** A rebuilt device must draw this long without another loss before the hold comes down. */
+const RESTORE_PROBATION_MS = 750;
 /** Media events kept for replay to a restarted link worker (unacknowledged by the current one). */
 const MEDIA_REPLAY_MAX = 64;
 const MEDIA_REPLAY_MS = 120_000;
@@ -111,6 +113,9 @@ export class OutputHost {
   /** The slide cue of the frame on the hold canvas (-1 none). */
   private holdCue = -1;
   private holdCtx?: CanvasRenderingContext2D | null;
+  private restoredAt = 0;
+  /** A device rebuild finished: the hold comes down on the rebuilt compositor's first frame copy. */
+  private restoredSnapPending = false;
   private lowerTimer?: ReturnType<typeof setTimeout>;
   private renderBeat = performance.now();
   private lastHoldCheck = performance.now();
@@ -217,7 +222,7 @@ export class OutputHost {
       this.watchOpener();
     }, 250);
     setInterval(() => this.sendStatus(), 500);
-    setInterval(() => this.checkHold(), 250);
+    setInterval(() => this.checkHold(), 50);
     const raf = () => {
       this.rafTicks++;
       requestAnimationFrame(raf);
@@ -643,6 +648,15 @@ export class OutputHost {
         for (const s of this.slots) s.resendFrame();
         return;
       case 'snapshot':
+        if (
+          this.holdReasons.has('lost') &&
+          (!this.restoredSnapPending || performance.now() - this.restoredAt < RESTORE_PROBATION_MS)
+        ) {
+          // Taken around a device loss, or from a rebuilt device on probation (a failing GPU presents
+          // garbage, white, until it reports the loss again). Keep the copy made before the loss.
+          m.bitmap.close();
+          return;
+        }
         this.program.paint(m.bitmap);
         // Copied onto the (hidden) hold canvas on the main thread at once: a bitmap from the render
         // worker is backed by that worker's context and draws nothing once it dies (review item 1). A
@@ -650,17 +664,34 @@ export class OutputHost {
         if (!this.holdReasons.has('restart') && !this.holdReasons.has('silent'))
           this.paintHold(m.bitmap, m.cue ?? -1);
         m.bitmap.close();
+        if (this.restoredSnapPending) {
+          // The rebuilt compositor drew a frame: uncover it a moment later.
+          this.restoredSnapPending = false;
+          this.lowerHold('lost', 100);
+        }
         return;
       case 'lost':
-        // The link worker logs render lifecycle events (it hears them on its port too).
+        // The link worker logs render lifecycle events (it hears them on its port too). The hold shows
+        // the last copy; with none yet (a loss right after start) it shows black, never the lost
+        // canvas (which reads white), until the rebuilt compositor has drawn a frame.
+        this.restoredSnapPending = false;
+        if (!this.holdPainted) this.paintHoldBlack();
         this.raiseHold('lost');
         return;
       case 'restored':
         this.compositor = m.compositor;
         if (m.compositor === 'webgpu') this.renderNote = undefined;
         this.adoptCanvas();
-        // Give the rebuilt device a couple of frames before uncovering it.
-        setTimeout(() => this.lowerHold('lost'), 100);
+        // Uncovered on a frame copy the rebuilt compositor makes after RESTORE_PROBATION_MS without
+        // another loss (or 2 s after that).
+        this.restoredSnapPending = true;
+        this.restoredAt = performance.now();
+        setTimeout(() => {
+          if (this.restoredSnapPending && performance.now() - this.restoredAt >= RESTORE_PROBATION_MS) {
+            this.restoredSnapPending = false;
+            this.lowerHold('lost');
+          }
+        }, RESTORE_PROBATION_MS + 2000);
         return;
       case 'fatal':
         this.fatal = m.error;
@@ -697,6 +728,7 @@ export class OutputHost {
     const c = this.pendingCanvas;
     if (!c) return;
     this.pendingCanvas = undefined;
+    if (!this.opts.hold.hidden) c.style.visibility = 'hidden';
     this.opts.canvas.replaceWith(c);
     this.opts.canvas = c;
     this.log('renderer switched to the fresh canvas');
@@ -708,7 +740,16 @@ export class OutputHost {
     this.lowerTimer = undefined;
     if (!this.holdReasons.size) this.holdSince = Date.now();
     this.holdReasons.add(reason);
-    if (this.holdPainted) this.opts.hold.hidden = false;
+    if (this.holdPainted) this.showHold(true);
+  }
+
+  /**
+   * Show or hide the hold. While it shows, the canvas underneath is taken off screen: a canvas whose
+   * worker died or whose WebGPU device was lost can be composited white, above the hold.
+   */
+  private showHold(on: boolean): void {
+    this.opts.hold.hidden = !on;
+    this.opts.canvas.style.visibility = on ? 'hidden' : '';
   }
 
   private lowerHold(reason: HoldReason, delayMs = 0): void {
@@ -721,7 +762,7 @@ export class OutputHost {
     clearTimeout(this.lowerTimer);
     this.lowerTimer = undefined;
     this.holdReasons.delete(reason);
-    if (!this.holdReasons.size) this.opts.hold.hidden = true;
+    if (!this.holdReasons.size) this.showHold(false);
   }
 
   private checkHold(): void {
@@ -740,8 +781,24 @@ export class OutputHost {
     if (this.holdReasons.size && Date.now() - this.holdSince > HOLD_MAX_MS) {
       this.log('hold canvas removed after its time limit');
       this.holdReasons.clear();
-      this.opts.hold.hidden = true;
+      this.showHold(false);
     }
+  }
+
+  /** An opaque black hold (a device lost before any frame was copied). */
+  private paintHoldBlack(): void {
+    const c = this.opts.hold;
+    if (c.width !== this.opts.width || c.height !== this.opts.height) {
+      c.width = this.opts.width;
+      c.height = this.opts.height;
+      this.holdCtx = undefined;
+    }
+    this.holdCtx ??= c.getContext('2d', { alpha: false });
+    if (!this.holdCtx) return;
+    this.holdCtx.fillStyle = '#000';
+    this.holdCtx.fillRect(0, 0, c.width, c.height);
+    this.holdCue = -1;
+    this.holdPainted = true;
   }
 
   /** Copy a frame onto the hold canvas (main thread; at most a few times a second, 640x360 scaled). */
@@ -768,7 +825,7 @@ export class OutputHost {
     this.holdCue = cue;
     if (!this.holdPainted) {
       this.holdPainted = true;
-      if (this.holdReasons.size) this.opts.hold.hidden = false;
+      if (this.holdReasons.size) this.showHold(true);
     }
   }
 
@@ -851,6 +908,7 @@ export class OutputHost {
       workers: this.workerStats(),
       hold: !this.opts.hold.hidden,
       holdCue: this.holdPainted ? this.holdCue : undefined,
+      holdReasons: [...this.holdReasons],
     };
   }
 

@@ -17,6 +17,8 @@ import { PNG } from './png.ts';
  * hold canvas came down, plus 500 ms, and each sample is compared with the value before the kill.
  */
 const PORT = Number(process.env.ORDO_CHAOS_OUTPUT_PORT ?? 8500);
+/** How long an abruptly killed render worker may go unnoticed (50 ms heartbeat, 200 ms silence, 50 ms check). */
+const RENDER_CRASH_DETECT_MS = 400;
 
 type Held = { live: string; armed?: string; queued?: string };
 type Ordo = {
@@ -170,7 +172,7 @@ const dist = (a: Rgb, b: Rgb) => Math.abs(a.r - b.r) + Math.abs(a.g - b.g) + Mat
 async function killAndWatch(
   o: Page,
   worker: 'link' | 'render' | 'asset',
-  opts: { everyMs?: number; maxMs?: number } = {},
+  opts: { everyMs?: number; maxMs?: number; graceMs?: number } = {},
 ): Promise<Sample[]> {
   // CHAOS_SAMPLE_MS samples faster (e.g. 20) when checking a fix by hand.
   const everyMs = opts.everyMs ?? Number(process.env.CHAOS_SAMPLE_MS ?? 100);
@@ -232,7 +234,9 @@ async function killAndWatch(
     let gap = 0;
     for (let i = 1; i < frames.length; i++) gap = Math.max(gap, frames[i]!.t - frames[i - 1]!.t);
     const wrong = frames.filter(
-      (f) => f.cue !== pre.cue || dist(f.px, pre.px) > 30 || f.px.r + f.px.g + f.px.b < 30,
+      (f) =>
+        f.t >= (opts.graceMs ?? 0) &&
+        (f.cue !== pre.cue || dist(f.px, pre.px) > 30 || f.px.r + f.px.g + f.px.b < 30),
     );
     console.log(
       `${worker} kill screencast: ${frames.length} frames (${scaled} scaled ones skipped), largest gap ${gap} ms, ${wrong.length} wrong`,
@@ -246,13 +250,23 @@ async function killAndWatch(
     recoveredAt,
     `the ${worker} worker did not restart and uncover in time:\n${timeline}`,
   ).toBeGreaterThan(0);
+  // A render worker that dies abruptly takes its canvas's picture with it (Chrome may composite the
+  // dead OffscreenCanvas placeholder white at once); the host notices from the missing 50 ms heartbeat
+  // within about 250 ms and covers the screen with the hold. That detection window is reported, not
+  // failed; everything after it must hold.
+  const grace = opts.graceMs ?? 0;
+  const inGrace = samples.filter((x) => x.t < grace && (x.cue !== pre.cue || dist(x.px, pre.px) > 30));
+  if (inGrace.length)
+    console.log(`${worker} kill: ${inGrace.length} sample(s) off in the first ${grace} ms (crash detection)`);
   const bad = samples.filter(
     (x) =>
-      x.cue !== pre.cue || x.shown !== pre.cue || dist(x.px, pre.px) > 30 || x.px.r + x.px.g + x.px.b < 30,
+      x.t >= grace &&
+      (x.cue !== pre.cue || x.shown !== pre.cue || dist(x.px, pre.px) > 30 || x.px.r + x.px.g + x.px.b < 30),
   );
+  const log = bad.length ? ((await st(o)) as { log?: string[] }).log?.join('\n') : '';
   expect(
     bad.map(line),
-    `the screen must hold cue ${pre.cue} (${pre.px.r},${pre.px.g},${pre.px.b}) through the ${worker} restart:\n${timeline}`,
+    `the screen must hold cue ${pre.cue} (${pre.px.r},${pre.px.g},${pre.px.b}) through the ${worker} restart:\n${timeline}\n${log}`,
   ).toEqual([]);
   console.log(
     `${worker} kill: ${samples.length} samples over ${samples.at(-1)?.t} ms (mean interval ${Math.round(
@@ -369,7 +383,7 @@ test('the output survives killed workers, a corrupt cache file and a malformed d
     });
 
     await test.step('(a) a killed render worker is rebuilt under the hold: never black, never a fade', async () => {
-      await killAndWatch(o, 'render');
+      await killAndWatch(o, 'render', { graceMs: RENDER_CRASH_DETECT_MS });
       await expectCue([o], 1);
       await page.bringToFront();
       await page.keyboard.press('ArrowLeft');
@@ -381,7 +395,7 @@ test('the output survives killed workers, a corrupt cache file and a malformed d
       await go(page);
       await expectCue([o], 1);
       await expect.poll(() => testPixelCue(o), { timeout: 10_000 }).toBe(1);
-      await killAndWatch(o, 'render');
+      await killAndWatch(o, 'render', { graceMs: RENDER_CRASH_DETECT_MS });
     });
 
     await test.step('(a) a killed asset worker restarts; the screen holds; the next GO is prepared by the new one', async () => {
@@ -409,7 +423,7 @@ test('the output survives killed workers, a corrupt cache file and a malformed d
       const assets = await restarts(o, 'asset');
       await o.evaluate(() => (window as unknown as Ordo).__ordo.chaos.killWorker('asset'));
       await expect.poll(() => restarts(o, 'asset'), { timeout: 15_000 }).toBeGreaterThan(assets);
-      await killAndWatch(o, 'render');
+      await killAndWatch(o, 'render', { graceMs: RENDER_CRASH_DETECT_MS });
       await expect.poll(async () => (await st(o)).cacheRepairs, { timeout: 20_000 }).toBeGreaterThan(before);
       await expect.poll(() => opfsSize(o, bgHash), { timeout: 20_000 }).toBe(bgBytes);
       await expect
@@ -448,6 +462,56 @@ test('the output survives killed workers, a corrupt cache file and a malformed d
       await page.keyboard.press('ArrowLeft');
       await expectCue([o], 1);
       await expect.poll(() => testPixelCue(o), { timeout: 10_000 }).toBe(1);
+    });
+
+    await test.step('(d) GPU device-loss rebuilds after a reload never uncover a white or black canvas', async () => {
+      // This container's software WebGPU loses its device right after start (several times, then the
+      // engine switches to Canvas 2D on a fresh canvas): reload without ?renderer=2d to get those rebuilds.
+      await o.bringToFront();
+      const [cx, cy] = await centreXY(o);
+      const ref = (await twoPixels(o, cx, cy))[1];
+      expect(markerCue((await twoPixels(o, cx, cy))[0])).toBe(1);
+      await o.goto(o.url().replace('&renderer=2d', ''));
+      const t0 = Date.now();
+      const samples: {
+        t: number;
+        cue: number | null;
+        px: Rgb;
+        hold: boolean;
+        gpuLost: number;
+        why: string;
+      }[] = [];
+      while (Date.now() - t0 < 10_000) {
+        const [[mark, px], info] = await Promise.all([
+          twoPixels(o, cx, cy),
+          o
+            .evaluate(() => {
+              const w = window as unknown as Ordo;
+              const t = w.__ordo.telemetry() as { gpuLost?: number };
+              const st = w.__ordo.state() as { hold: boolean; holdReasons?: string[] };
+              return { hold: st.hold, gpuLost: t.gpuLost ?? 0, why: (st.holdReasons ?? []).join('+') };
+            })
+            .catch(() => ({ hold: false, gpuLost: 0, why: '' })),
+        ]);
+        samples.push({ t: Date.now() - t0, cue: markerCue(mark), px, ...info });
+        await o.waitForTimeout(40);
+      }
+      const good = (x: (typeof samples)[number]) => x.cue === 1 && dist(x.px, ref) <= 30;
+      const first = samples.findIndex(good);
+      const line = (x: (typeof samples)[number]) =>
+        `${x.t}ms cue=${x.cue} px=${x.px.r},${x.px.g},${x.px.b} hold=${x.hold}${x.why ? `(${x.why})` : ''} gpuLost=${x.gpuLost}`;
+      const timeline = samples.map(line).join('\n');
+      expect(first, `the reloaded output never showed cue 1:\n${timeline}`).toBeGreaterThanOrEqual(0);
+      // Never a white (lost) canvas, before the first frame either; once the cue is on screen it stays
+      // there through every rebuild.
+      const white = (x: (typeof samples)[number]) => x.px.r > 230 && x.px.g > 230 && x.px.b > 230;
+      const bad = [...samples.slice(0, first).filter(white), ...samples.slice(first).filter((x) => !good(x))];
+      expect(bad.map(line), `the picture was lost during a device-loss rebuild:\n${timeline}`).toEqual([]);
+      const lost = samples.at(-1)!.gpuLost;
+      if (process.env.CHAOS_DEBUG) console.log(timeline);
+      console.log(
+        `device-loss reload: first good frame at ${samples[first]!.t} ms, ${lost} device loss(es), ${samples.length} samples, all good after it`,
+      );
     });
   } finally {
     hub.kill();

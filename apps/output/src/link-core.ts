@@ -123,6 +123,11 @@ export type LinkCoreDeps = {
   testMode: boolean;
   /** Output config (default: GET /output/config through the hub). */
   fetchConfig?: () => Promise<OutputConfigRes>;
+  /**
+   * A restarted link worker (generation > 0): until it has a live state (persisted or from a bus) it
+   * changes nothing on screen; the renderer still shows the right picture.
+   */
+  restarted?: boolean;
   /** A service-cache file body from the hub (default: fetch fileUrl). */
   fetchNetwork?: (hash: string, signal?: AbortSignal) => Promise<FileBody>;
 };
@@ -264,6 +269,8 @@ export class LinkCore {
   private saveAgain = false;
   private viewQueued = false;
   private started = false;
+  /** The persisted state has been read (or timed out): planning may start. */
+  private persistedRead = false;
 
   constructor(private deps: LinkCoreDeps) {
     this.link = deps.link;
@@ -331,6 +338,7 @@ export class LinkCore {
       this.recentManifests = recent;
       this.recentLoaded = true;
     }
+    this.persistedRead = true;
     if (cfg && !this.config) this.applyConfig(cfg);
     if (saved && Date.now() - saved.savedAt < STATE_CACHE_MAX_AGE_MS && !this.link.mirror.ready) {
       const bad = checkInvariants(saved.state);
@@ -338,6 +346,7 @@ export class LinkCore {
       this.cachedState = saved.state;
       this.onState();
     }
+    this.requestSync();
 
     this.link.mirror.on('change', ({ event }) => {
       this.cachedState = undefined;
@@ -759,6 +768,10 @@ export class LinkCore {
 
   /** Plan live and armed frames, prepare content, schedule flips, drive media. */
   sync(): void {
+    // Nothing is planned before the persisted state is read: an empty state would flip every layer to
+    // nothing (black) under a picture the renderer still holds, e.g. right after a link-worker restart.
+    if (!this.persistedRead) return;
+    if (this.deps.restarted && !this.link.mirror.ready && !this.cachedState && !this.preview) return;
     const state = this.state();
     const look = this.look;
     const planOpts = { lookSig: this.lookSig, media: this.mediaById };

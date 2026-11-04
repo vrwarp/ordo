@@ -61,7 +61,16 @@ function init(m: Extract<MainToLink, { t: 'init' }>): void {
     store = new MemoryStreamStore(true);
   }
   const json = new JsonStore('ordo-output');
-  core = new LinkCore({ link, store, json, post, width: m.width, height: m.height, testMode: m.testMode });
+  core = new LinkCore({
+    link,
+    store,
+    json,
+    post,
+    width: m.width,
+    height: m.height,
+    testMode: m.testMode,
+    restarted: m.generation > 0,
+  });
   json.onLog = (l) => core?.diagLog(l);
   if (m.generation > 0) core.diagLog(`link worker restarted (generation ${m.generation})`);
   for (const x of early.splice(0)) handle(x);
