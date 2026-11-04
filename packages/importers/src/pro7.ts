@@ -50,7 +50,7 @@ export type Pro7ImportResult = {
 export type Pro7PresRef = {
   /** File path inside the import (playlists reference documents by path or name). */
   path: string;
-  /** The ordo presentation id (its ProPresenter UUID when it had one). */
+  /** The ordo presentation id. */
   id: string;
   title: string;
   pro7Uuid?: string;

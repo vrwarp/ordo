@@ -172,10 +172,11 @@ function surface(): OffscreenCanvasRenderingContext2D {
  */
 async function preload(
   map: Record<string, string>,
-): Promise<{ lookup: (id: string) => ImageBitmap | undefined; skipped: number }> {
+): Promise<{ lookup: (id: string) => ImageBitmap | undefined; skipped: number; missing: string[] }> {
   const out = new Map<string, ImageBitmap>();
   let bytes = 0;
   let skipped = 0;
+  const missing: string[] = [];
   for (const [mediaId, hash] of Object.entries(map)) {
     if (out.size >= CLAMP.maxImagesPerSlide) {
       skipped++;
@@ -190,11 +191,13 @@ async function preload(
       }
       bytes += b;
       out.set(mediaId, bmp);
-    } catch {
-      /* drawn without the image */
+    } catch (err) {
+      // Drawn without the image. One whose file is not there yet is reported so the link re-draws the
+      // slide once the file arrives; a corrupt one is not (it would be missing again every time).
+      if (err instanceof UnavailableError && !missing.includes(hash)) missing.push(hash);
     }
   }
-  return { lookup: (id) => out.get(id), skipped };
+  return { lookup: (id) => out.get(id), skipped, missing };
 }
 
 function fontFallbacks(job: AssetJob): string[] | undefined {
@@ -206,10 +209,12 @@ async function run(job: AssetJob): Promise<void> {
   const t0 = performance.now();
   const scale = width / LOGICAL_WIDTH;
   let skipped = 0;
+  let missing: string[] = [];
   try {
     if (job.kind === 'slide') {
       const pre = await preload(job.images);
       skipped = pre.skipped;
+      missing = pre.missing;
       const c = surface();
       rasterSlide(c, job.slide, job.look, scale, pre.lookup, {
         nextSlide: job.nextSlide,
@@ -236,6 +241,7 @@ async function run(job: AssetJob): Promise<void> {
       kind: SRC_BITMAP,
       bitmap,
       cueIndex,
+      refresh: job.kind === 'slide' ? job.refresh : undefined,
     };
     if (!port) {
       bitmap.close();
@@ -249,6 +255,7 @@ async function run(job: AssetJob): Promise<void> {
       ms: performance.now() - t0,
       fontFallbacks: fontFallbacks(job),
       skippedImages: skipped || undefined,
+      missingImages: missing.length ? missing : undefined,
     });
   } catch (err) {
     const d = err instanceof DecodeError ? err : undefined;

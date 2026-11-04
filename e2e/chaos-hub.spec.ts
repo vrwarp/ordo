@@ -107,7 +107,9 @@ async function rendererSettled(out: Page): Promise<void> {
  *   tens to hundreds of ms each on a loaded machine) and compared with `ref`, the value before the fault.
  * - Both run until `recovered()` has been true for 500 ms. Every cue sample must be one of `allowed`, moving
  *   only forward (a GO sent during the outage); every pixel must be close to `ref`, never black; neither
- *   sampler may leave a gap.
+ *   sampler may leave a gap. A bad pixel does not stop the sampling: every sample is recorded, the first
+ *   bad one is diagnosed (screenshot, output log), and the summary reports the longest run of bad samples
+ *   before the per-sample assertions fail.
  */
 async function watchScreen(out: Page, label: string, ref: Px, allowed: number[]) {
   await out.bringToFront();
@@ -134,12 +136,19 @@ async function watchScreen(out: Page, label: string, ref: Px, allowed: number[])
   });
   const pixels: { t: number; px: Px }[] = [];
   let stopPixels = false;
+  let diagnosed = false;
   const pixelLoop = (async () => {
     while (!stopPixels) {
       const at = Date.now();
-      const px = await backgroundPixel(out);
+      const px = await backgroundPixel(out).catch(() => undefined);
+      if (!px) {
+        // A screenshot can fail while the page is busy; the gap check below bounds how often.
+        await new Promise((r) => setTimeout(r, 50));
+        continue;
+      }
       pixels.push({ t: Date.now(), px });
-      if (dist(px, ref) >= 40) {
+      if (dist(px, ref) >= 40 && !diagnosed) {
+        diagnosed = true;
         const file = test.info().outputPath(`${label.replace(/\W+/g, '-')}-bad-pixel.png`);
         await out
           .screenshot({ path: file, clip: { x: 0, y: 0, width: 1280, height: 200 } })
@@ -152,7 +161,6 @@ async function watchScreen(out: Page, label: string, ref: Px, allowed: number[])
           .catch(() => undefined);
         console.log(`${label}: output log at the bad sample:\n  ${(st ?? []).slice(-12).join('\n  ')}`);
         console.log(`${label} at +${at - t0} ms: bad pixel ${JSON.stringify(px)}; screen saved to ${file}`);
-        return;
       }
       const spent = Date.now() - at;
       if (spent < 100) await new Promise((r) => setTimeout(r, 100 - spent));
@@ -183,9 +191,24 @@ async function watchScreen(out: Page, label: string, ref: Px, allowed: number[])
       });
       const end = recoveredAt + 500;
       const gap = (ts: number[]) => ts.reduce((g, t, i) => (i ? Math.max(g, t - ts[i - 1]!) : g), 0);
+      // The longest run of consecutive bad pixel samples (off the picture or black), as a duration from
+      // the sample before the run to its last sample: how long the audience would have seen it.
+      const isBad = (p: Px) => dist(p, ref) >= 40 || p.r + p.g + p.b <= 30;
+      let badSamples = 0;
+      let longestBadMs = 0;
+      let runStart: number | undefined;
+      for (let i = 0; i < pixels.length; i++) {
+        const p = pixels[i]!;
+        if (isBad(p.px)) {
+          badSamples++;
+          runStart ??= i ? pixels[i - 1]!.t : t0;
+          longestBadMs = Math.max(longestBadMs, p.t - runStart);
+        } else runStart = undefined;
+      }
       console.log(
         `${label}: recovered after ${recoveredAt - t0} ms; ${cues.length} cue samples (max gap ${gap(cues.map((c) => c.t))} ms), ` +
-          `${pixels.length} pixel samples (max gap ${gap(pixels.map((p) => p.t))} ms)`,
+          `${pixels.length} pixel samples (max gap ${gap(pixels.map((p) => p.t))} ms); ` +
+          (badSamples ? `${badSamples} bad pixel sample(s), longest bad run ${longestBadMs} ms` : 'no bad pixel sample'),
       );
       // Cues: through the whole window, every ~100 ms.
       expect(cues[0]!.t, `${label}: cue sampling started late`).toBeLessThanOrEqual(t0);
@@ -387,11 +410,14 @@ test('the screen holds through library and live process crashes, a stall, a corr
     expect(await hubLive(a)).toBe(0);
 
     // (e) Corrupt the newest live snapshot on disk and remove the journal before it: the restarted hub
-    // falls back to the previous good snapshot and replays the journal from there.
+    // falls back to the previous good snapshot and replays the journal from there. The screen is watched
+    // from the moment the whole hub is killed until the output is back on the restarted hub in live mode.
     await page.waitForTimeout(6000); // a periodic snapshot of this state; the previous ones stay
     await goTo(1);
     await expectCue([out!], 1);
     const before = await (await a.get('live')).json();
+    const snapshotWatch = await watchScreen(out!, 'hub killed, snapshot corrupt', ref, [1]);
+    const hubKilledAt = Date.now();
     hub.kill(); // the live process writes its final snapshot as the supervisor vanishes
     await page.waitForTimeout(3000);
     const Database = hubRequire('better-sqlite3') as new (file: string) => Db;
@@ -405,6 +431,11 @@ test('the screen holds through library and live process crashes, a stall, a corr
     db.prepare(`DELETE FROM live_journal WHERE seq <= ?`).run(prev);
     db.close();
     await hub.start();
+    await snapshotWatch.until(
+      async () => (await health())?.mode === 'live' && (await outputOnHub(WS, PORT, cookie)),
+      60_000,
+    );
+    console.log(`hub killed and restarted on a corrupt snapshot; output back on it after ${Date.now() - hubKilledAt} ms`);
     a = await hubApi(PORT);
     const after = await (await a.get('live')).json();
     expect(after.seq).toBe(before.seq);

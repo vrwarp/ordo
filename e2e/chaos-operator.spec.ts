@@ -211,6 +211,8 @@ class ScreenWatch {
   private running = true;
   private loop?: Promise<void>;
   private t0 = 0;
+  /** Epoch of the in-page series' origin (before the test injects the fault). */
+  private pageT0 = 0;
 
   private constructor(
     private o: Page,
@@ -232,8 +234,8 @@ class ScreenWatch {
     expect(px.r + px.g + px.b, 'the picture is not black before the fault').toBeGreaterThan(30);
     const w = new ScreenWatch(o, xy, { cue: cue!, px });
     // The in-page sampler: `t` is the page's own clock relative to the first sample (same machine, so it
-    // lines up with Node's within a few ms).
-    await o.evaluate(() => {
+    // lines up with Node's within a few ms). It returns that epoch, taken before the first sample.
+    w.pageT0 = await o.evaluate(() => {
       const w = window as unknown as ChaosWindow & {
         __ordo: { state(): { held: { live: string }[]; bus: string } };
       };
@@ -251,6 +253,7 @@ class ScreenWatch {
       };
       read();
       w.__chaosTimer = window.setInterval(read, 100);
+      return w.__chaosT0;
     });
     w.t0 = Date.now();
     w.loop = w.run();
@@ -313,7 +316,8 @@ class ScreenWatch {
         `(max gap ${pxGap} ms) over ${this.cues.at(-1)?.t ?? 0} ms, cues ${cues.join('→')}`,
     );
     expect(this.cues.length, `${label}: too few cue samples\n${tl}`).toBeGreaterThan(3);
-    expect(this.cues[0]!.t, `${label}: cue sampling started late`).toBeLessThanOrEqual(0);
+    // The first sample was taken before `start()` returned, that is before the fault was injected.
+    expect(this.pageT0 + this.cues[0]!.t, `${label}: cue sampling started late`).toBeLessThanOrEqual(this.t0);
     expect(cueGap, `${label}: cue sampling gap\n${tl}`).toBeLessThan(600);
     expect(this.cues.at(-1)!.t, `${label}: cue sampling ended early`).toBeGreaterThan(spanMs - 2000);
     expect(this.pixels.length, `${label}: no pixel capture\n${tl}`).toBeGreaterThan(0);

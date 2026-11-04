@@ -105,7 +105,17 @@ export class SocketHub {
     /** The configured outputs (for the health table); the Library's or the live process's cached copy. */
     private outputs: () => Output[],
     private log: Logger,
-    private opts: { domain: string; healthIntervalMs: number; clientIp: (req: IncomingMessage) => string },
+    private opts: {
+      domain: string;
+      healthIntervalMs: number;
+      clientIp: (req: IncomingMessage) => string;
+      /**
+       * Are the output tokens known yet? The live process starts without its library context (live
+       * started before the library, or a restore cleared the copies) and cannot tell a valid token from
+       * a revoked one until it has it. Default: always.
+       */
+      contextReady?: () => boolean;
+    },
   ) {
     this.wss = new WebSocketServer({
       noServer: true,
@@ -236,6 +246,14 @@ export class SocketHub {
     });
     ws.on('error', () => ws.terminate());
     if (!principal) {
+      if (hadToken && !(this.opts.contextReady?.() ?? true)) {
+        // The token may well be valid: without the library context there is no list to check it against.
+        // `retry` is a plain reconnect for the client (back in 0.5 to 5 s), not an auth refusal (which
+        // backs off for minutes and tells the operator the output was revoked).
+        this.log.info({ ip }, 'websocket with an output token before the library context; asking to retry');
+        this.bye(c, 'retry');
+        return;
+      }
       // PRD 09: unauthenticated sockets are closed after the first message (or a short grace period).
       if (hadToken) this.log.warn({ ip }, 'websocket with an invalid output token');
       const t = setTimeout(() => this.bye(c, 'unauthorized'), 5000);

@@ -204,6 +204,29 @@ describe('HubConnection liveness', () => {
     hub.stop();
   });
 
+  it('bye retry (the hub has no output list yet) is a plain reconnect: no auth event, the normal backoff', () => {
+    const { hub, statuses } = connect();
+    const auths: string[] = [];
+    const byes: string[] = [];
+    hub.on('auth', (a) => auths.push(a.reason));
+    hub.on('bye', (m) => byes.push(m.reason));
+    lastSocket().open();
+    lastSocket().receive({ t: 'bye', v: 1, reason: 'retry' });
+    lastSocket().finishClose();
+    expect(byes).toEqual(['retry']);
+    expect(auths).toEqual([]);
+    expect(hub.authBlocked).toBe(false);
+    // Back in 500 ms, not AUTH_RETRY_MS.
+    vi.advanceTimersByTime(499);
+    expect(FakeWebSocket.instances.length).toBe(1);
+    vi.advanceTimersByTime(1);
+    expect(FakeWebSocket.instances.length).toBe(2);
+    welcome(lastSocket());
+    expect(hub.connected).toBe(true);
+    expect(statuses).toEqual([true]);
+    hub.stop();
+  });
+
   it('send fails while disconnected and the hello carries the last seq', () => {
     const { hub } = connect();
     expect(hub.send({ t: 'live.resync' })).toBe(false);

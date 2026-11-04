@@ -65,6 +65,8 @@ export type AssetToRender = {
   kind: number;
   bitmap: ImageBitmap;
   cueIndex?: number;
+  /** A fresh copy of content the renderer may already show (a slide re-drawn with an image that arrived). */
+  refresh?: boolean;
 };
 
 // ---- render -> main and render -> link (port) ----
@@ -101,6 +103,8 @@ export type AssetJob =
       look: Look;
       /** mediaId -> file hash for every image the slide draws. */
       images: Record<string, string>;
+      /** Re-draw of a key the renderer holds: it replaces the held copy in place (no flip). */
+      refresh?: boolean;
     }
   | { kind: 'image'; layer: number; key: string; hash: string; fit: 'contain' | 'cover'; cueIndex?: number }
   | { kind: 'lowerThird'; layer: number; key: string; text: string; look: Look }
@@ -134,6 +138,11 @@ export type FromAsset =
       fontFallbacks?: string[];
       /** Images left out because the cue's decoded-bitmap budget was exhausted. */
       skippedImages?: number;
+      /**
+       * Hashes of the slide's images whose file could not be read (not cached, hub did not serve it): the
+       * slide was drawn without them. The link re-plans the key once such a file arrives.
+       */
+      missingImages?: string[];
     }
   | {
       t: 'error';

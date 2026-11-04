@@ -6,11 +6,17 @@
  * - **library** process first (it creates and migrates ordo.db), then **live** (the front door on
  *   ORDO_PORT). The live process starts anyway if the library is not ready within START_WAIT_MS.
  * - A child that exits, or whose heartbeat stops (stuck event loop: STALL_MS; until it is ready, a
- *   longer START_GRACE_MS so a slow cold boot is not taken for a stall), is restarted within a
+ *   longer start grace so a slow cold boot is not taken for a stall), is restarted within a
  *   second (RESTART_DELAYS_MS), at most BUDGET.max times in BUDGET.windowMs. Past the budget it stays
  *   down and is reported: a failed library leaves the live service running (and /health says
  *   `library: failed`); a failed live process ends the supervisor with exit code 1, so the container
  *   restart policy takes over with its own backoff.
+ * - Silent starts have their own, shorter budget: a child that never reports ready is killed at the end
+ *   of its start grace, and a second silent start in a row (no ready in between) marks it failed. The
+ *   crash budget alone would never fail it (two kills per minute at the 30 s grace) while a hung child
+ *   held the port for most of every cycle. Once a child has come up in this supervisor's lifetime its
+ *   boot time is known, and later starts get 3× that (at least MIN_START_GRACE_MS) instead of the full
+ *   START_GRACE_MS, so a hung restart is noticed in seconds.
  * - IPC relay with memory: the live process's locks go to the library, library changes go to the live
  *   process, each child learns the other's address; the last value of each is replayed to a restarted child.
  * - Shutdown (SIGTERM/SIGINT): both children get SIGTERM, then SIGKILL after SHUTDOWN_MS.
@@ -36,6 +42,11 @@ export const STALL_MS: Record<ChildName, number> = { live: 5000, library: 60_000
  * stalled would only burn the restart budget.
  */
 export const START_GRACE_MS = 30_000;
+/** Start grace once a boot time is known: BOOT_GRACE_FACTOR × the measured boot, at least this. */
+export const MIN_START_GRACE_MS = 5000;
+export const BOOT_GRACE_FACTOR = 3;
+/** Consecutive starts without a ready that mark the child failed. */
+export const MAX_SILENT_STARTS = 2;
 
 type Child = {
   name: ChildName;
@@ -46,6 +57,14 @@ type Child = {
   lastBeat: number;
   restartTimer?: NodeJS.Timeout;
   ready?: () => void;
+  /** When the current process was forked (its boot time is measured from here). */
+  spawnedAt: number;
+  /** Fork-to-ready of the last start that reported ready; undefined until one did. */
+  bootMs?: number;
+  /** Starts killed for silence since the last ready. */
+  silentStarts: number;
+  /** The current process is being killed for a silent start (its exit is not an ordinary crash). */
+  silentKill?: boolean;
 };
 
 export type SupervisorOpts = {
@@ -60,6 +79,8 @@ export type SupervisorOpts = {
   stallMs?: Partial<Record<ChildName, number>>;
   /** Silence allowed before a child is ready (default START_GRACE_MS, never below its stall timeout). */
   startGraceMs?: number;
+  /** Least start grace once a child's boot time is known (default MIN_START_GRACE_MS). */
+  minStartGraceMs?: number;
   /** Called when a child exhausted its budget. Default: exit 1 for live, nothing for library. */
   onGiveUp?(name: ChildName): void;
 };
@@ -78,6 +99,8 @@ export class Supervisor {
       status: { name, state: 'stopped', restarts: 0, recentCrashes: 0 },
       crashes: [],
       lastBeat: 0,
+      spawnedAt: 0,
+      silentStarts: 0,
     });
     this.children = { library: mk('library'), live: mk('live') };
   }
@@ -127,6 +150,8 @@ export class Supervisor {
     c.proc = proc;
     c.url = undefined;
     c.lastBeat = Date.now();
+    c.spawnedAt = c.lastBeat;
+    c.silentKill = false;
     c.status = { ...c.status, state: 'starting', pid: proc.pid };
     this.opts.log.info({ child: name, pid: proc.pid }, 'child process started');
     proc.on('message', (m: FromChild) => this.onMessage(c, proc, m));
@@ -154,7 +179,12 @@ export class Supervisor {
       case 'ready': {
         c.url = m.url;
         c.status = { ...c.status, state: 'up' };
-        this.opts.log.info({ child: c.name, pid: proc.pid, url: m.url }, 'child process ready');
+        c.bootMs = Date.now() - c.spawnedAt;
+        c.silentStarts = 0;
+        this.opts.log.info(
+          { child: c.name, pid: proc.pid, url: m.url, bootMs: c.bootMs },
+          'child process ready',
+        );
         c.ready?.();
         c.ready = undefined;
         const lib = this.children.library;
@@ -207,16 +237,24 @@ export class Supervisor {
     c.crashes.push(now);
     c.status.recentCrashes = c.crashes.length;
     const other: ChildName = c.name === 'live' ? 'library' : 'live';
+    const silent = c.silentKill === true;
+    c.silentKill = false;
+    if (silent && c.silentStarts >= MAX_SILENT_STARTS) {
+      this.giveUp(
+        c,
+        other,
+        { code, signal, silentStarts: c.silentStarts },
+        'child process never reports ready; leaving it down',
+      );
+      return;
+    }
     if (c.crashes.length > budget.max) {
-      c.status.state = 'failed';
-      this.opts.log.error(
-        { child: c.name, code, signal, crashes: c.crashes.length, windowS: budget.windowMs / 1000 },
+      this.giveUp(
+        c,
+        other,
+        { code, signal, crashes: c.crashes.length, windowS: budget.windowMs / 1000 },
         'child process keeps crashing; restart budget exhausted, leaving it down',
       );
-      this.send(other, { t: c.name, state: 'failed' });
-      this.publish();
-      if (this.opts.onGiveUp) this.opts.onGiveUp(c.name);
-      else if (c.name === 'live') void this.shutdown('live process failed').then(() => process.exit(1));
       return;
     }
     c.status.state = 'down';
@@ -234,16 +272,48 @@ export class Supervisor {
     }, delay);
   }
 
+  /** Leave a child down for good (and, for the live process by default, end the supervisor). */
+  private giveUp(c: Child, other: ChildName, fields: Record<string, unknown>, msg: string): void {
+    c.status.state = 'failed';
+    this.opts.log.error({ child: c.name, ...fields }, msg);
+    this.send(other, { t: c.name, state: 'failed' });
+    this.publish();
+    if (this.opts.onGiveUp) this.opts.onGiveUp(c.name);
+    else if (c.name === 'live') void this.shutdown('live process failed').then(() => process.exit(1));
+  }
+
+  /** Silence allowed before ready: the full grace until a boot time is known, then 3× that boot. */
+  startGrace(name: ChildName): number {
+    const c = this.children[name];
+    const stall = this.opts.stallMs?.[name] ?? STALL_MS[name];
+    const full = this.opts.startGraceMs ?? START_GRACE_MS;
+    const grace =
+      c.bootMs === undefined
+        ? full
+        : Math.min(full, Math.max(this.opts.minStartGraceMs ?? MIN_START_GRACE_MS, BOOT_GRACE_FACTOR * c.bootMs));
+    return Math.max(stall, grace);
+  }
+
   private checkHeartbeats(): void {
     const now = Date.now();
     for (const c of Object.values(this.children)) {
       if (!c.proc || this.stopping) continue;
       const stall = this.opts.stallMs?.[c.name] ?? STALL_MS[c.name];
       const starting = c.status.state === 'starting';
-      const limit = starting ? Math.max(stall, this.opts.startGraceMs ?? START_GRACE_MS) : stall;
+      const limit = starting ? this.startGrace(c.name) : stall;
       if (now - c.lastBeat > limit) {
+        if (starting) {
+          c.silentStarts++;
+          c.silentKill = true;
+        }
         this.opts.log.error(
-          { child: c.name, pid: c.proc.pid, silentMs: now - c.lastBeat, starting },
+          {
+            child: c.name,
+            pid: c.proc.pid,
+            silentMs: now - c.lastBeat,
+            starting,
+            ...(starting ? { graceMs: limit, silentStarts: c.silentStarts } : {}),
+          },
           starting ? 'child process silent while starting; killing it' : 'child process stalled; killing it',
         );
         c.lastBeat = now;

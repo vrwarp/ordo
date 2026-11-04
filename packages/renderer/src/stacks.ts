@@ -28,6 +28,8 @@ export type StackContent<B> = {
   videoSlot?: number;
   fit?: number;
   cueIndex?: number;
+  /** Replace the held copy of this key in place (a re-draw with content that arrived late). */
+  refresh?: boolean;
 };
 
 /** One fully prepared stack. Objects are pre-allocated and mutated in place. */
@@ -92,10 +94,19 @@ export class LayerStack<B> {
   }
 
   offer(c: StackContent<B>): void {
-    if (c.key === this.liveStack.key && c.key !== '' && !this.fading) {
-      // Already live (a duplicate arm): refresh nothing, drop the copy.
-      if (c.bitmap) this.release(c.bitmap);
-      return;
+    if (c.key === this.liveStack.key && c.key !== '') {
+      if (c.refresh) {
+        // The live content drawn again (an image that arrived after the slide was armed): swap the copy
+        // in place, no flip; a running fade keeps fading into the new copy.
+        this.assign(this.liveStack, c);
+        this.dirty = true;
+        return;
+      }
+      if (!this.fading) {
+        // Already live (a duplicate arm): refresh nothing, drop the copy.
+        if (c.bitmap) this.release(c.bitmap);
+        return;
+      }
     }
     // The armed stack is busy when it is the outgoing side of a fade, or when it holds the content of a
     // scheduled flip that has not happened yet (the next cue's arm must not evict the GO target).

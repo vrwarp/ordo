@@ -92,6 +92,8 @@ const FILE_RETRY_BASE_MS = 10_000;
 const FILE_RETRY_MAX_MS = 5 * 60_000;
 const NETWORK_RETRY_BASE_MS = 4000;
 const NETWORK_RETRY_MAX_MS = 30_000;
+/** A slide drawn without an image is drawn again for a file that arrived at most this often. */
+const REFRESH_MIN_MS = 2000;
 /** A file that cannot be stored (full disk, storage error) is given up on after this many fills. */
 const FILE_ATTEMPTS = 4;
 /** A media event replayed by the host is acted on only while this fresh. */
@@ -183,6 +185,15 @@ export class LinkCore {
   private errors = new Map<string, { error: string; at: number; until: number }>();
   /** Consecutive "file unavailable" failures per key (backoff; never quarantined). */
   private unavailable = new Map<string, number>();
+  /**
+   * Slide keys drawn without some of their images (the hashes whose file was not cached and the hub did
+   * not serve): planned again once such a file arrives (design/14 "Slide images that arrive late").
+   */
+  private missingImages = new Map<string, string[]>();
+  /** Keys to draw again although the renderer holds them (a missing image's file arrived). */
+  private refreshKeys = new Set<string>();
+  private refreshedAt = new Map<string, number>();
+  private rearmTimer?: ReturnType<typeof setTimeout>;
   private flips: { key: string; at: number; fadeMs: number; cue: number }[] = [];
   private livePlan?: FramePlan;
   private armedPlan?: FramePlan;
@@ -690,6 +701,9 @@ export class LinkCore {
       this.quarantine.clear();
       this.fontFallbacks.clear();
       this.unavailable.clear();
+      this.missingImages.clear();
+      this.refreshKeys.clear();
+      this.refreshedAt.clear();
       // A file given up on (full disk) gets a fresh budget with the new service.
       for (const [h, f] of this.fileFail) if (f.gaveUp) this.fileFail.delete(h);
     }
@@ -885,13 +899,17 @@ export class LinkCore {
       const slot = pair.find(key);
       if (this.inflight.has(key)) return;
       if (slot?.ready && this.has(key)) return;
-    } else if (this.has(key)) return;
+    } else if (this.has(key) && !this.refreshKeys.has(key)) return;
+    if (this.inflight.has(key)) return;
     if (name === 'background' && plan.background.desc) {
       const d = plan.background.desc;
       if (d.kind === 'image') this.job({ kind: 'image', layer, key, hash: d.hash, fit: 'cover' });
       else this.armVideo(this.bgPair, layer, key, d.hash, true, FIT_COVER);
     } else if (name === 'slide' && plan.slide.desc) {
       const d = plan.slide.desc;
+      // A re-draw for an image that arrived late replaces the renderer's copy in place.
+      const refresh = this.refreshKeys.delete(key);
+      if (refresh) this.refreshedAt.set(key, Date.now());
       this.job({
         kind: 'slide',
         layer,
@@ -902,6 +920,7 @@ export class LinkCore {
         isSong: d.isSong,
         look: this.look,
         images: this.slideImages(d.slide, d.nextSlide),
+        refresh: refresh || undefined,
       });
     } else if (name === 'lowerThird' && plan.lowerThird.desc) {
       this.job({ kind: 'lowerThird', layer, key, text: plan.lowerThird.desc.text, look: this.look });
@@ -1395,7 +1414,43 @@ export class LinkCore {
           this.unavailable.delete(k);
         }
     }
+    await this.rearmMissing();
     this.requestSync();
+  }
+
+  /**
+   * Slides drawn without an image: once a missing image's file is in the cache, the key is planned again
+   * (`refresh`) and the renderer swaps its held copy in place, without a flip (design/14). Checked after
+   * every fill (a hub fill or a fallback-bus file lands in the same store) and when the asset worker
+   * reports the gap, since the file may have arrived while the job ran. A key is re-drawn at most once per
+   * REFRESH_MIN_MS, so a cached file the asset worker still cannot read never becomes a tight loop.
+   */
+  private async rearmMissing(): Promise<void> {
+    let changed = false;
+    let later = false;
+    const now = Date.now();
+    for (const [key, hashes] of [...this.missingImages]) {
+      if (this.refreshKeys.has(key)) continue;
+      if (now - (this.refreshedAt.get(key) ?? 0) < REFRESH_MIN_MS) {
+        later = true;
+        continue;
+      }
+      let arrived = false;
+      for (const h of hashes) {
+        const size = await this.store.size(h).catch(() => undefined);
+        if (size !== undefined && size > 0) arrived = true;
+      }
+      if (arrived && this.missingImages.has(key)) {
+        this.refreshKeys.add(key);
+        changed = true;
+      }
+    }
+    if (later && !this.rearmTimer)
+      this.rearmTimer = setTimeout(() => {
+        this.rearmTimer = undefined;
+        void this.rearmMissing();
+      }, REFRESH_MIN_MS);
+    if (changed) this.requestSync();
   }
 
   /**
@@ -1554,6 +1609,9 @@ export class LinkCore {
         const now = Date.now();
         for (const [k, t] of this.delivered)
           if (now - t > 250 && !this.heldSet.has(k)) this.delivered.delete(k);
+        // A slide the renderer no longer holds needs no re-draw for its late images.
+        for (const k of this.missingImages.keys()) if (!this.has(k)) this.missingImages.delete(k);
+        for (const k of this.refreshKeys) if (!this.has(k)) this.refreshKeys.delete(k);
         this.requestSync();
         this.queueView();
         return;
@@ -1595,6 +1653,16 @@ export class LinkCore {
         }
         if (m.skippedImages)
           this.diagLog(`${m.key.slice(0, 60)}: ${m.skippedImages} image(s) over the cue budget`);
+        if (m.missingImages?.length) {
+          if (!this.missingImages.has(m.key))
+            this.diagLog(
+              `${m.key.slice(0, 60)}: drawn without ${m.missingImages.length} image(s) not cached yet`,
+            );
+          this.missingImages.set(m.key, m.missingImages.slice(0, 20));
+          // The file may have arrived while the job ran: check now, not only after the next fill.
+          void this.rearmMissing();
+        } else if (this.missingImages.delete(m.key))
+          this.diagLog(`${m.key.slice(0, 60)}: drawn again with its images`);
         return;
       case 'error': {
         this.inflight.delete(m.key);
@@ -1689,6 +1757,8 @@ export class LinkCore {
     if (this.fatal) errors.push(this.fatal);
     for (const s of host?.slots ?? []) if (s.key && s.error) errors.push(s.error);
     if (this.quarantine.size) errors.push(`${this.quarantine.size} quarantined`);
+    if (this.missingImages.size)
+      errors.push(`${this.missingImages.size} slide(s) drawn without image(s) not cached yet`);
     errors.push(...this.cacheErrors());
     if (host?.reloadRefused) errors.push(host.reloadRefused);
     const master = !!this.config?.output.audioMaster;
@@ -1822,6 +1892,7 @@ export class LinkCore {
       inflight: [...this.inflight],
       errors: Object.fromEntries([...this.errors].map(([k, v]) => [k, v.error])),
       quarantined: [...this.quarantine.keys()],
+      missingImages: Object.fromEntries(this.missingImages),
       cache: this.cacheProgress,
       cacheRepairs: this.cacheRepairs,
       recentManifests: this.recentManifests.map((r) => ({ at: r.at, files: r.files.length })),

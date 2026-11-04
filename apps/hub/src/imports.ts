@@ -206,7 +206,7 @@ export class ImportService {
       run: async (f, o) => {
         if (fellBack) return inline(f, o);
         try {
-          return await importPro7InWorker(f, o, ctx.signal);
+          return await importPro7InWorker(f, ctx.signal, o);
         } catch (e) {
           if (!(e instanceof WorkerStartError)) throw e;
           fellBack = true;
@@ -522,8 +522,8 @@ export { WorkerStartError };
  */
 export function importPro7InWorker(
   files: Map<string, Uint8Array>,
-  opts: Pro7ImportOptions = {},
   signal?: AbortSignal,
+  opts: Pro7ImportOptions = {},
 ): Promise<Pro7Result> {
   const docs = [...files].filter(([k]) => isDoc(k)).map(([, v]) => v);
   return cpuPool().run('pro7', { files, opts }, { signal, transfer: transferables(docs) });
@@ -554,10 +554,8 @@ export async function importPro7Batched(
   const docs = [...files.keys()].filter(isDoc).sort();
   if (docs.length <= batch) return opts.run(files, {});
   const isPlaylist = realImporters.isPlaylistCandidate;
-  const others = new Map<string, Uint8Array>();
-  for (const [k, v] of files) if (!isDoc(k)) others.set(k, isPlaylist(k) ? EMPTY : v);
-  const placeholders = new Map<string, Uint8Array>();
-  for (const k of others.keys()) placeholders.set(k, EMPTY);
+  const others = [...files.keys()].filter((k) => !isDoc(k));
+  const placeholders = new Map<string, Uint8Array>(others.map((k) => [k, EMPTY]));
   const merged: Pro7Result = { presentations: [], playlists: [], media: [], log: [], protoVersion: '' };
   const media = new Map<string, string>();
   const take = (r: Pro7Result, first: boolean) => {
@@ -583,8 +581,10 @@ export async function importPro7Batched(
     take(r, i === 0);
     opts.progress?.(Math.min(docs.length, i + batch), docs.length);
   }
-  const playlistFiles = new Map<string, Uint8Array>();
-  for (const [k, v] of others) playlistFiles.set(k, isPlaylist(k) ? files.get(k)! : EMPTY);
+  if (opts.signal?.aborted) throw new Error('cancelled');
+  const playlistFiles = new Map<string, Uint8Array>(
+    others.map((k) => [k, isPlaylist(k) ? files.get(k)! : EMPTY]),
+  );
   take(await opts.run(playlistFiles, { refs, phase: 'playlists' }), false);
   merged.media = [...media].map(([key, path]) => ({ key, path }));
   return merged;

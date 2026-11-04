@@ -146,6 +146,10 @@ export class Backups {
       await rm(partial, { force: true });
       throw e;
     }
+    // The database and its manifest are two files, each written atomically but not as a pair: a crash
+    // between the rename above and the manifest's leaves a database with no manifest. That backup is still
+    // restorable (findBackup and restoreBackup take a missing manifest as "media not verified", with a
+    // warning), so the pair is not retried or rolled back here.
     const manifest: MediaManifest = {
       createdAt: new Date(now).toISOString(),
       db: basename(file),
@@ -221,7 +225,11 @@ function exists(file: string): Promise<boolean> {
   );
 }
 
-/** Find a backup by file name, path or date (YYYY-MM-DD → the latest that day). */
+/**
+ * Find a backup by file name, path or date (YYYY-MM-DD → the latest that day). The manifest is optional: a
+ * run interrupted between the database's rename and the manifest's (or a backup copied in by hand) has
+ * none, and the restore then warns that media was not verified instead of refusing.
+ */
 export async function findBackup(dataDir: string, ref: string): Promise<{ db: string; manifest?: string }> {
   const dir = join(dataDir, 'backups');
   let db: string | undefined;

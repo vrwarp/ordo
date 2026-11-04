@@ -37,7 +37,13 @@ operator rides it out on the fallback bus.
 a heartbeat every 500 ms; a child that exits, or is silent for 5 s (live) or 60 s (library, which may run a
 long synchronous `VACUUM INTO`), is killed and restarted after 100, 200, 400, 800, 1000 ms, at most five
 times a minute. Until a child reports ready it may be silent for up to 30 s (a cold boot on a slow NAS
-loads the bundle and opens SQLite before its first heartbeat); only then does the stall timeout apply. A
+loads the bundle and opens SQLite before its first heartbeat); only then does the stall timeout apply.
+Silent starts have their own budget, since the crash budget alone would never catch them (two kills a
+minute at a 30 s grace, with a hung child holding the port between them): a child killed at the end of
+its start grace that is silent again on the next start, with no ready in between, is failed at that
+second kill. Once a child has come up in this supervisor's lifetime its boot time is known, and a later
+start gets three times that boot (at least 5 s, never below the stall timeout) instead of the full 30 s,
+so a restart that hangs is noticed in seconds. A
 child whose supervisor vanishes while it is still starting exits at once rather than linger holding the
 port. Past the budget a failed library process stays down (`/health` reports `library: failed`,
 the service keeps running, library calls answer 503), and a failed live process ends the supervisor with
@@ -213,7 +219,7 @@ resumes them.
 | `pdf-render`      | `pdftoppm -r 144 -png` then scale to 1920x1080                                                                                                                                 | one PNG media per page                      |
 | `pptx-render`     | `soffice --headless --convert-to pdf` then `pdf-render`                                                                                                                        | PNGs                                        |
 | `pptx-text`       | unzip `ppt/slides/slideN.xml`, read `<a:t>` runs and `<a:off>/<a:ext>` in EMU, convert to logical px                                                                           | ExtractedText[] per slide                   |
-| `pro7-import`     | `packages/importers` (protobuf decode) in a `worker_threads` worker; zip uploads are streamed from disk, media entries spilled to `tmp/`, documents capped at 256 MB in memory | presentations, playlists, media uploads     |
+| `pro7-import`     | `packages/importers` (protobuf decode) in a `worker_threads` worker, 500 documents per task so the worker's 512 MB heap bounds a task, not the library (the playlists are a last task against the index of every document decoded); zip uploads are streamed from disk, media entries spilled to `tmp/`, documents capped at 256 MB in memory | presentations, playlists, media uploads     |
 | `font-google`     | fetch the family's CSS from Google Fonts with a desktop UA, download referenced woff2 files, store as `Font` rows                                                              | fonts                                       |
 
 The Docker image includes `ffmpeg`, `poppler-utils` and LibreOffice (`libreoffice-impress`

@@ -112,7 +112,7 @@ function attachAsset(port: MessagePort): void {
   port.onmessage = (ev: MessageEvent<AssetToRender>) => {
     const a = ev.data;
     if (a.t !== 'content') return;
-    const c = { key: a.key, kind: SRC_BITMAP, bitmap: a.bitmap, cueIndex: a.cueIndex };
+    const c = { key: a.key, kind: SRC_BITMAP, bitmap: a.bitmap, cueIndex: a.cueIndex, refresh: a.refresh };
     if (engine) engine.offer(a.layer, c);
     else earlyOffers.push({ layer: a.layer, c });
   };
