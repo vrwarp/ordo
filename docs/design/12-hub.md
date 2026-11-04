@@ -98,6 +98,11 @@ naming that. A playlist the library says does not exist is "not found".
 Sessions live in ordo.db, which the live process opens directly (WAL readers never wait for the library;
 its sliding-expiry writes use a 50 ms busy timeout and are skipped when busy; it never checkpoints).
 Output tokens come from the context copy; a rotated or removed token closes that output's sockets.
+Until the live process has a context copy at all (it started before the library and has never fetched
+one, or a restore cleared the copies) it cannot tell a valid token from a revoked one, so a socket
+arriving with a token then gets `bye retry`, which the client treats as an ordinary reconnect (back in
+0.5 to 5 s), not `bye unauthorized`, which it treats as revoked credentials (minutes of back-off and an
+"output revoked" notice to the operator).
 
 **One process** for tests and debugging: `createHub()` (in-process, the hub tests use it) and
 `node main.js --single` / `ORDO_SINGLE_PROCESS=1` run the same modules in one process with ordo.db

@@ -208,7 +208,9 @@ async function watchScreen(out: Page, label: string, ref: Px, allowed: number[])
       console.log(
         `${label}: recovered after ${recoveredAt - t0} ms; ${cues.length} cue samples (max gap ${gap(cues.map((c) => c.t))} ms), ` +
           `${pixels.length} pixel samples (max gap ${gap(pixels.map((p) => p.t))} ms); ` +
-          (badSamples ? `${badSamples} bad pixel sample(s), longest bad run ${longestBadMs} ms` : 'no bad pixel sample'),
+          (badSamples
+            ? `${badSamples} bad pixel sample(s), longest bad run ${longestBadMs} ms`
+            : 'no bad pixel sample'),
       );
       // Cues: through the whole window, every ~100 ms.
       expect(cues[0]!.t, `${label}: cue sampling started late`).toBeLessThanOrEqual(t0);
@@ -435,7 +437,9 @@ test('the screen holds through library and live process crashes, a stall, a corr
       async () => (await health())?.mode === 'live' && (await outputOnHub(WS, PORT, cookie)),
       60_000,
     );
-    console.log(`hub killed and restarted on a corrupt snapshot; output back on it after ${Date.now() - hubKilledAt} ms`);
+    console.log(
+      `hub killed and restarted on a corrupt snapshot; output back on it after ${Date.now() - hubKilledAt} ms`,
+    );
     a = await hubApi(PORT);
     const after = await (await a.get('live')).json();
     expect(after.seq).toBe(before.seq);

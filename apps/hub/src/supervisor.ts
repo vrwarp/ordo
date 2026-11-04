@@ -290,7 +290,10 @@ export class Supervisor {
     const grace =
       c.bootMs === undefined
         ? full
-        : Math.min(full, Math.max(this.opts.minStartGraceMs ?? MIN_START_GRACE_MS, BOOT_GRACE_FACTOR * c.bootMs));
+        : Math.min(
+            full,
+            Math.max(this.opts.minStartGraceMs ?? MIN_START_GRACE_MS, BOOT_GRACE_FACTOR * c.bootMs),
+          );
     return Math.max(stall, grace);
   }
 
