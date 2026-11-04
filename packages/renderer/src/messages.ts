@@ -156,7 +156,8 @@ export type FromAsset =
        * `unavailable`: a file could not be read (not cached yet and the hub did not serve it): retried
        * with backoff, never quarantined. `invalid` (default): the content itself failed (decode, raster).
        */
-      cause?: 'unavailable' | 'invalid';
+      /** `missing`: the hub answered 404/410 for the file (retried slowly, logged once). */
+      cause?: 'unavailable' | 'invalid' | 'missing';
     }
   | { t: 'fonts'; loaded: number; failed: string[] };
 

@@ -87,7 +87,13 @@ core reconnects at once and rejoins as the hub's client.
 A refusal while the operator is already the fallback authority (the hub came back after the
 fallback took over, and this operator's session had expired meanwhile) keeps it the authority until
 the hand-back after sign-in: the outputs stay on the fallback bus and never jump back to the hub's
-older state. In that state the UI must not block the service: the top bar reads "Running from this
+older state. One window can still slip away: a hub that restarts with a state equal to the window's
+makes the window follow the hub (design/17, "hub caught up"), and with the session refused no
+hand-back ever catches it up, so it would show the hub's older state from then on. The core
+therefore re-introduces the bus (`fallback.hello`) to every window the moment the refusal arrives,
+and, while refused and the authority, to any proven window that has said nothing on the bus for
+`RECALL_MS` (3 s; a window on the bus reports health every second), at most once per 3 s per window.
+In that state the UI must not block the service: the top bar reads "Running from this
 PC — session ended; sign in to hand back to the hub", the sign-in is a non-modal card in the corner
 of the live view (`.signin-overlay.nonmodal`) whose banner says the same, the PIN field is not
 auto-focused (a focused text field would take the GO key), and the keyboard, Stream Deck and MIDI
@@ -112,6 +118,14 @@ host. An exceeded budget turns the top bar red with exactly one action (Reconnec
 operator, Diagnostics, Retry download, Reconnect Stream Deck); a cache fill whose budget is spent
 stops retrying until the operator asks, and the operator's own cache numbers then describe the new
 manifest (nothing filled), not the previous service's finished fill. The printed checklist lists each red state with its action.
+
+### Own service cache
+
+The core fills its Cache API store from the live manifest (`fillOwnCache`) so it can serve files to
+the outputs in fallback. Its downloads in flight are shared across fills (`src/lib/downloads.ts`, the
+rule the output got in review 2026-11-04 item 11): a manifest change (goLive, an edit during the
+service) stops the previous fill's queue and cancels only the downloads whose hash left the manifest;
+a file still wanted keeps downloading and the new fill joins it instead of starting the clip over.
 
 ## State
 

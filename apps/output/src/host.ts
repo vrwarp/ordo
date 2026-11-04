@@ -43,8 +43,14 @@ export type HostOptions = {
 
 const RELOAD_KEY = 'ordo.output.reloads';
 const RELOAD_REASON_KEY = 'ordo.output.reloadReason';
-/** A hold raised for a render rebuild comes down after this long even if the link never says so. */
-const HOLD_MAX_MS = 12_000;
+/**
+ * A hold comes down after this long even if nobody lowered it. Longer than the link's REBUILD_MAX_MS
+ * (15 s, after which a stuck rebuild restarts the renderer): a 'lost' hold must outlive a slow WebGPU
+ * rebuild, or the lost canvas (white) would show between the two limits (review F5). While a loss has
+ * not been restored at all the hold stays up to HOLD_LOST_MAX_MS.
+ */
+const HOLD_MAX_MS = 20_000;
+const HOLD_LOST_MAX_MS = 30_000;
 /** No heartbeat from the render worker for this long: cover the screen with the hold until it beats again. */
 const RENDER_SILENT_MS = 200;
 /** Video frames are not posted to a render worker that has been silent this long (it may be dead). */
@@ -52,6 +58,15 @@ const VFRAME_SILENT_MS = 600;
 /** Snapshot periods: idle (the hold image) and while the program view is watched. */
 const SNAP_IDLE_MS = 500;
 const SNAP_PROGRAM_MS = 150;
+/**
+ * The hold image is a copy at half the output's resolution, never below 640x360 (a 640x360 copy upscaled
+ * 6x at 4K is a visible blur, review F6); the worker's createImageBitmap copy costs about the same.
+ */
+export function snapshotSize(width: number, height: number): { width: number; height: number } {
+  const w = Math.max(640, Math.round(width / 2) & ~1);
+  const h = Math.max(360, Math.round((w * height) / Math.max(1, width)) & ~1);
+  return { width: w, height: h };
+}
 /** A rebuilt device must draw this long without another loss before the hold comes down. */
 const RESTORE_PROBATION_MS = 750;
 /** Media events kept for replay to a restarted link worker (unacknowledged by the current one). */
@@ -116,7 +131,10 @@ export class OutputHost {
   private restoredAt = 0;
   /** A device rebuild finished: the hold comes down on the rebuilt compositor's first frame copy. */
   private restoredSnapPending = false;
-  private lowerTimer?: ReturnType<typeof setTimeout>;
+  /** A device loss the renderer has not reported restored yet. */
+  private lostPending = false;
+  /** One pending lower per reason: lowering 'lost' is never cancelled by raising 'silent' (review F3). */
+  private lowerTimers = new Map<HoldReason, ReturnType<typeof setTimeout>>();
   private renderBeat = performance.now();
   private lastHoldCheck = performance.now();
   private mediaSeq = 0;
@@ -470,7 +488,7 @@ export class OutputHost {
           this.holdReasons.has('restart') &&
           !this.pendingCanvas &&
           (m.view.state.gens as Record<WorkerName, number> | undefined)?.render === this.gens.render &&
-          !this.lowerTimer
+          !this.lowerTimers.has('restart')
         )
           this.lowerHold('restart', 200);
         return;
@@ -675,17 +693,20 @@ export class OutputHost {
         // the last copy; with none yet (a loss right after start) it shows black, never the lost
         // canvas (which reads white), until the rebuilt compositor has drawn a frame.
         this.restoredSnapPending = false;
+        this.lostPending = true;
         if (!this.holdPainted) this.paintHoldBlack();
         this.raiseHold('lost');
         return;
       case 'restored':
         this.compositor = m.compositor;
+        this.lostPending = false;
         if (m.compositor === 'webgpu') this.renderNote = undefined;
         this.adoptCanvas();
         // Uncovered on a frame copy the rebuilt compositor makes after RESTORE_PROBATION_MS without
-        // another loss (or 2 s after that).
+        // another loss (or 2 s after that). Canvas 2D never presents garbage: no probation, the first
+        // copy uncovers it (review F2).
         this.restoredSnapPending = true;
-        this.restoredAt = performance.now();
+        this.restoredAt = m.compositor === '2d' ? performance.now() - RESTORE_PROBATION_MS : performance.now();
         setTimeout(() => {
           if (this.restoredSnapPending && performance.now() - this.restoredAt >= RESTORE_PROBATION_MS) {
             this.restoredSnapPending = false;
@@ -736,8 +757,8 @@ export class OutputHost {
 
   /** Show the hold canvas: it already holds the main thread's copy of the last frame. */
   private raiseHold(reason: HoldReason): void {
-    clearTimeout(this.lowerTimer);
-    this.lowerTimer = undefined;
+    clearTimeout(this.lowerTimers.get(reason));
+    this.lowerTimers.delete(reason);
     if (!this.holdReasons.size) this.holdSince = Date.now();
     this.holdReasons.add(reason);
     if (this.holdPainted) this.showHold(true);
@@ -753,14 +774,16 @@ export class OutputHost {
   }
 
   private lowerHold(reason: HoldReason, delayMs = 0): void {
+    clearTimeout(this.lowerTimers.get(reason));
+    this.lowerTimers.delete(reason);
     if (delayMs > 0) {
       // Give the canvas underneath a few frames before uncovering it (never a fade from black).
-      clearTimeout(this.lowerTimer);
-      this.lowerTimer = setTimeout(() => this.lowerHold(reason), delayMs);
+      this.lowerTimers.set(
+        reason,
+        setTimeout(() => this.lowerHold(reason), delayMs),
+      );
       return;
     }
-    clearTimeout(this.lowerTimer);
-    this.lowerTimer = undefined;
     this.holdReasons.delete(reason);
     if (!this.holdReasons.size) this.showHold(false);
   }
@@ -778,9 +801,15 @@ export class OutputHost {
         this.raiseHold('silent');
       } else if (!silent && this.holdReasons.has('silent')) this.lowerHold('silent');
     }
-    if (this.holdReasons.size && Date.now() - this.holdSince > HOLD_MAX_MS) {
+    // The time limit never uncovers a canvas whose device is still lost (it reads white): that hold
+    // waits for `restored`, up to HOLD_LOST_MAX_MS (the link restarts a stuck rebuild before then).
+    const held = Date.now() - this.holdSince;
+    const limit = this.lostPending && this.holdReasons.has('lost') ? HOLD_LOST_MAX_MS : HOLD_MAX_MS;
+    if (this.holdReasons.size && held > limit) {
       this.log('hold canvas removed after its time limit');
       this.holdReasons.clear();
+      for (const t of this.lowerTimers.values()) clearTimeout(t);
+      this.lowerTimers.clear();
       this.showHold(false);
     }
   }
@@ -831,7 +860,8 @@ export class OutputHost {
 
   private updateSnapshotRate(): void {
     const everyMs = this.program.active ? SNAP_PROGRAM_MS : SNAP_IDLE_MS;
-    this.toRender({ t: 'snapshot', everyMs, width: 640, height: 360 });
+    const size = snapshotSize(this.opts.width, this.opts.height);
+    this.toRender({ t: 'snapshot', everyMs, width: size.width, height: size.height });
   }
 
   // ---------------------------------------------------------------- status

@@ -64,6 +64,10 @@ function makeEngine(gpuResults: (FakeGpu | Error)[], gpuRetryMs = 1000) {
       raf: () => 0,
       wallNow: () => Date.now(),
       onRestored: (k) => events.push(`restored:${k}`),
+      onSnapshot: (b) => {
+        events.push('snapshot');
+        b.close();
+      },
       requestCanvas: async () => {
         const c = new FakeCanvas();
         canvases.push(c);
@@ -147,6 +151,25 @@ describe('RenderEngine compositor selection', () => {
     const a = makeEngine([new Error('x')], 0);
     expect((await a.engine.start()).kind).toBe('2d');
     expect(a.timers).toHaveLength(0);
+  });
+
+  it('copies the first Canvas 2D frame at once; a WebGPU frame only once it has settled (review F2)', async () => {
+    vi.stubGlobal('createImageBitmap', async () => ({ close() {} }));
+    const frame = (e: RenderEngine) => (e as unknown as { onFrame(ts: number): void }).onFrame(16);
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+    const twoD = makeEngine([new Error('no gpu')]);
+    expect((await twoD.engine.start()).kind).toBe('2d');
+    twoD.engine.setSnapshot(100, 640, 360);
+    frame(twoD.engine);
+    await flush();
+    expect(twoD.events).toContain('snapshot');
+    const gpu = makeEngine([new FakeGpu()]);
+    expect((await gpu.engine.start()).kind).toBe('webgpu');
+    gpu.engine.setSnapshot(100, 640, 360);
+    frame(gpu.engine);
+    frame(gpu.engine);
+    await flush();
+    expect(gpu.events).not.toContain('snapshot');
   });
 
   it('counts rAF stalls as the worker long-task measure', async () => {

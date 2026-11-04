@@ -83,6 +83,8 @@ class DecodeError extends Error {
  * retries it with backoff and never quarantines the cue for it (review 2026-11-04 item 3).
  */
 class UnavailableError extends Error {}
+/** The hub does not have the file (HTTP 404/410): retried slowly by the link, never a flood of errors. */
+class MissingError extends UnavailableError {}
 
 async function readFile(hash: string): Promise<{ blob: Blob; source: 'opfs' | 'network' }> {
   const b = await store.get(hash).catch(() => undefined);
@@ -92,9 +94,12 @@ async function readFile(hash: string): Promise<{ blob: Blob; source: 'opfs' | 'n
     const res = await fetch(
       `${apiPrefix}/files/${hash}${token ? `?token=${encodeURIComponent(token)}` : ''}`,
     );
+    if (res.status === 404 || res.status === 410)
+      throw new MissingError(`file ${hash.slice(0, 8)} missing on the hub (HTTP ${res.status})`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return { blob: await res.blob(), source: 'network' };
   } catch (err) {
+    if (err instanceof MissingError) throw err;
     throw new UnavailableError(`file ${hash.slice(0, 8)} unavailable (${(err as Error).message})`);
   }
 }
@@ -266,7 +271,7 @@ async function run(job: AssetJob): Promise<void> {
       error: (err as Error).message || String(err),
       hash: d?.hash,
       source: d?.source,
-      cause: err instanceof UnavailableError ? 'unavailable' : 'invalid',
+      cause: err instanceof MissingError ? 'missing' : err instanceof UnavailableError ? 'unavailable' : 'invalid',
     });
   }
 }

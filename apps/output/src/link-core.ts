@@ -92,6 +92,8 @@ const FILE_RETRY_BASE_MS = 10_000;
 const FILE_RETRY_MAX_MS = 5 * 60_000;
 const NETWORK_RETRY_BASE_MS = 4000;
 const NETWORK_RETRY_MAX_MS = 30_000;
+/** A file the hub does not have (404/410) is tried again after 60 s, doubling to FILE_RETRY_MAX_MS. */
+const MISSING_RETRY_BASE_MS = 60_000;
 /** A slide drawn without an image is drawn again for a file that arrived at most this often. */
 const REFRESH_MIN_MS = 2000;
 /** A file that cannot be stored (full disk, storage error) is given up on after this many fills. */
@@ -572,7 +574,11 @@ export class LinkCore {
     if (!this.host || !this.livePlan || !this.link.mirror.ready) return;
     const now = clock.now();
     for (const s of this.host.slots) {
-      if (!s.ended || !s.key) continue;
+      // `ended` outlives a src change until the new file loads: only a loaded element's end counts, and
+      // only when the element holds the file the key names (review F4).
+      if (!s.ended || !s.key || !s.ready) continue;
+      const mirror = this.slotById(s.id);
+      if (mirror?.hash && s.hash && s.hash !== mirror.hash) continue;
       const md = this.livePlan.media.desc;
       const au = this.livePlan.audio.desc;
       const d =
@@ -583,10 +589,19 @@ export class LinkCore {
             : undefined;
       if (!d) continue;
       // An element still ended from an earlier play of the same file is not this play's end.
-      const dur = s.durationMs ?? (d as { durationMs?: number }).durationMs ?? 0;
+      const dur =
+        (s.hash && mirror?.hash === s.hash ? s.durationMs : undefined) ??
+        (d as { durationMs?: number }).durationMs ??
+        s.durationMs ??
+        0;
       if (now - d.startedAt < dur - 750) continue;
       this.onMediaEnded(s.key);
     }
+  }
+
+  private slotById(id: number): SlotMirror | undefined {
+    for (const p of [this.bgPair, this.mdPair, this.auPair]) for (const s of p.slots) if (s.id === id) return s;
+    return undefined;
   }
 
   onMediaEvent(ev: MediaEvent, replay = false): void {
@@ -862,12 +877,19 @@ export class LinkCore {
    * raster, invalid data): within the budget it is retried after ERROR_RETRY_MS; past it the key is
    * quarantined for the rest of the service and reported in health (never retried in a loop).
    */
-  private armFailed(key: string, error: string, unavailable = false): void {
+  private armFailed(key: string, error: string, cause: boolean | 'unavailable' | 'missing' | 'invalid' = false): void {
     const now = Date.now();
+    const unavailable = cause === true || cause === 'unavailable' || cause === 'missing';
     if (unavailable) {
       const n = (this.unavailable.get(key) ?? 0) + 1;
       this.unavailable.set(key, n);
-      const wait = UNAVAILABLE_BACKOFF_MS[Math.min(n, UNAVAILABLE_BACKOFF_MS.length) - 1]!;
+      // A file the hub does not have (404/410) is tried again slowly, and said once (review F1).
+      const wait =
+        cause === 'missing'
+          ? Math.min(FILE_RETRY_MAX_MS, MISSING_RETRY_BASE_MS * 2 ** (n - 1))
+          : UNAVAILABLE_BACKOFF_MS[Math.min(n, UNAVAILABLE_BACKOFF_MS.length) - 1]!;
+      if (cause === 'missing' && this.errors.get(key)?.error !== error)
+        this.diagLog(`arm ${key.slice(0, 60)}: ${error}`);
       this.errors.set(key, { error, at: now, until: now + wait });
       setTimeout(() => this.requestSync(), wait + 20);
       return;
@@ -1007,6 +1029,12 @@ export class LinkCore {
       return;
     }
     const muted = !(pair === this.mdPair && this.config?.output.audioMaster);
+    // A file the fill found missing on the hub (404/410) is not streamed into an element: the element
+    // would report a format error every few seconds (review F1). Tried again on the slow backoff.
+    if (this.fileFail.get(hash)?.reason === 'missing' && !(slot.key === key && slot.ready)) {
+      this.armFailed(key, `file ${hash.slice(0, 8)} missing on the hub (HTTP 404)`, 'missing');
+      return;
+    }
     this.inflight.add(key);
     // Whatever the render worker held for this slot's previous video is no longer valid.
     if (slot.key && slot.key !== key) {
@@ -1035,7 +1063,8 @@ export class LinkCore {
         // Streaming a file the cache does not hold yet fails during an outage (a network error, or an
         // HTTP error the element reports as "not supported"): unavailable, not invalid.
         const unavailable = slot.streamed || /timed out/.test(err.message);
-        this.armFailed(key, err.message, unavailable);
+        const missing = unavailable && this.fileFail.get(hash)?.reason === 'missing';
+        this.armFailed(key, err.message, missing ? 'missing' : unavailable);
         // A cached copy that does not play may be corrupt: drop it so the next arm streams a fresh one.
         if (!unavailable) void this.dropCached(hash, `video ${hash.slice(0, 8)} failed to load`);
       });
@@ -1316,7 +1345,7 @@ export class LinkCore {
     try {
       if (this.deps.fetchNetwork) return await this.deps.fetchNetwork(hash, signal);
       const res = await fetch(fileUrl(hash), { signal });
-      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok || !res.body) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
       return res.body;
     } catch (err) {
       if (fb?.available) {
@@ -1473,17 +1502,26 @@ export class LinkCore {
       }
       const prev = this.fileFail.get(f.hash);
       const n = (prev?.n ?? 0) + 1;
-      const storage = reason === 'quota' || reason === 'store';
+      // A download that arrives empty every time is treated like a storage failure: counted, and given
+      // up on after FILE_ATTEMPTS fills instead of being retried every 30 s for ever (review F10).
+      const storage = reason === 'quota' || reason === 'store' || reason === 'size';
       let gaveUp = false;
       if (storage) {
         const b = this.budget.record('cache', `${reason}: ${f.hash.slice(0, 8)}`);
         gaveUp = n >= FILE_ATTEMPTS || b.exceeded;
         if (gaveUp) this.diagLog(`cache: giving up on ${f.hash.slice(0, 8)} (${reason}, ${n} attempts)`);
+      } else if (reason === 'missing') {
+        // Not on the hub (404/410): logged once, counted, tried again slowly; a fill after a manifest
+        // change or the backoff fetches it again (review F1).
+        this.budget.record('cache', `missing: ${f.hash.slice(0, 8)}`);
+        if (prev?.reason !== 'missing') this.diagLog(`cache: ${f.hash.slice(0, 8)} missing on the hub (HTTP 404)`);
       }
       // A network failure (outage, slow NAS) is retried sooner than a storage one.
       const wait = storage
         ? Math.min(FILE_RETRY_MAX_MS, FILE_RETRY_BASE_MS * 2 ** (n - 1))
-        : Math.min(NETWORK_RETRY_MAX_MS, NETWORK_RETRY_BASE_MS * 2 ** (n - 1));
+        : reason === 'missing'
+          ? Math.min(FILE_RETRY_MAX_MS, MISSING_RETRY_BASE_MS * 2 ** (n - 1))
+          : Math.min(NETWORK_RETRY_MAX_MS, NETWORK_RETRY_BASE_MS * 2 ** (n - 1));
       this.fileFail.set(f.hash, { n, next: now + wait, reason, gaveUp });
     }
     let accepted = false;
@@ -1527,15 +1565,21 @@ export class LinkCore {
     let quota = 0;
     let store = 0;
     let gaveUp = 0;
+    let missing = 0;
+    let empty = 0;
     for (const [h, f] of this.fileFail) {
       if (!want.has(h)) continue;
       if (f.reason === 'quota') quota++;
       else if (f.reason === 'store') store++;
+      else if (f.reason === 'missing') missing++;
+      else if (f.reason === 'size') empty++;
       if (f.gaveUp) gaveUp++;
     }
     if (quota) out.push(`storage full: ${quota} file(s) not cached${gaveUp ? ' (gave up)' : ''}`);
     else if (store)
       out.push(`cache storage failing: ${store} file(s) not cached${gaveUp ? ' (gave up)' : ''}`);
+    if (missing) out.push(`${missing} file(s) missing on the hub (HTTP 404)`);
+    if (empty) out.push(`${empty} file(s) arrive empty from the hub`);
     let sized = 0;
     for (const f of this.manifestFiles) {
       const a = this.acceptedSizes.get(f.hash);
@@ -1666,9 +1710,9 @@ export class LinkCore {
         return;
       case 'error': {
         this.inflight.delete(m.key);
-        this.diagLog(`arm ${m.key.slice(0, 60)}: ${m.error}`);
-        const unavailable = m.cause === 'unavailable';
-        this.armFailed(m.key, m.error, unavailable);
+        if (m.cause !== 'missing') this.diagLog(`arm ${m.key.slice(0, 60)}: ${m.error}`);
+        const unavailable = m.cause === 'unavailable' || m.cause === 'missing';
+        this.armFailed(m.key, m.error, m.cause === 'missing' ? 'missing' : unavailable);
         if (m.hash && m.source === 'opfs')
           void this.dropCached(m.hash, `cached ${m.hash.slice(0, 8)} failed to decode`);
         if (!unavailable) setTimeout(() => this.requestSync(), ERROR_RETRY_MS + 50);

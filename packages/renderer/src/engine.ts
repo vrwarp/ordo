@@ -428,7 +428,8 @@ export class RenderEngine {
       return;
     }
     this.clock.tick(ts);
-    if (this.snapNotBefore === 0) this.snapNotBefore = now + SNAP_SETTLE_MS;
+    // Canvas 2D never presents garbage: its first frame can be copied at once (review F2).
+    if (this.snapNotBefore === 0) this.snapNotBefore = this.kind === '2d' ? now : now + SNAP_SETTLE_MS;
     if (this.snapEvery > 0 && !this.snapBusy && now >= this.snapNotBefore) {
       // A flip that has settled (no layer fading) is copied at once, else every snapEvery ms; never more
       // often than SNAP_MIN_MS. Rare path: an async GPU copy, not per-frame work.

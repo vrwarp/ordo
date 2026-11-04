@@ -170,7 +170,8 @@ export class MemoryStreamStore implements StreamStore {
 }
 
 /** Why a file did not get into the cache. */
-export type FillFailure = 'network' | 'quota' | 'store' | 'size';
+/** `missing`: the hub answered 404/410 (the file is not on the hub); `size`: every download stored 0 bytes. */
+export type FillFailure = 'network' | 'quota' | 'store' | 'size' | 'missing';
 
 export type StreamFillProgress = {
   ready: number;
@@ -245,6 +246,13 @@ export class Downloads {
  * `signal` stops the fill. With `downloads`, it stops only the queue: downloads in flight belong to the
  * shared set, which the caller trims with `retain` when the manifest changes.
  */
+/** Whether a fetch failure says the hub does not have the file (HTTP 404 or 410). */
+export function isMissing(err: unknown): boolean {
+  const e = err as { status?: number; message?: string } | null;
+  const status = e?.status ?? Number(/HTTP (\d+)/.exec(e?.message ?? '')?.[1]);
+  return status === 404 || status === 410;
+}
+
 export async function fillStreaming(
   store: StreamStore,
   files: ManifestFile[],
@@ -281,8 +289,10 @@ export async function fillStreaming(
       let body: FileBody | undefined;
       try {
         body = await fetchBody(f.hash, signal);
-      } catch {
+      } catch (err) {
         if (signal?.aborted) return { ok: false };
+        // A file the hub does not have (404/410) is not fetched again within this fill.
+        if (isMissing(err)) return { ok: false, reason: 'missing' };
         reason = 'network';
       }
       if (body) {

@@ -14,6 +14,7 @@ import { type LibrarySnapshot, type OutputHealthEntry, ROUTES, type Settings } f
 import { type Action, renderKeyPixels, renderStripPixels } from '@ordo/surfaces';
 import { CORE_BUDGETS } from '../lib/budgets.ts';
 import { DoublePressGuard } from '../lib/confirm.ts';
+import { SharedDownloads } from '../lib/downloads.ts';
 import type { LibraryData } from '../lib/libraryData.ts';
 import { type Authority, LiveCore, type LiveNotice, type PendingCommand } from '../lib/liveCore.ts';
 import { SearchIndex } from '../lib/search.ts';
@@ -38,6 +39,13 @@ const LEGACY_LIVE_KEY = 'live';
 const LIB_KEY = 'library';
 /** A window whose bus has been silent this long is offered a fresh port. */
 export const REOFFER_MS = 10_000;
+/**
+ * While the hub refuses the session and this core is the authority, a proven window that has said nothing
+ * on the bus for this long has left it for the hub (a restarted hub whose state equalled the window's, so
+ * the window followed it; design/17) and shows the hub's older state: it is re-introduced to the bus. A
+ * window on the bus reports health every second.
+ */
+export const RECALL_MS = 3000;
 const STALL_WINDOW_MS = 60_000;
 const PROCESSED_MAX = 300;
 /** A restarted core resumes the fallback authority at once only if it held it this recently. */
@@ -79,6 +87,10 @@ export class CoreEngine {
   private ownCache: LiveSlice['ownCache'] = { ready: 0, total: 0, failed: 0 };
   private fillingManifest?: string;
   private fillAbort?: AbortController;
+  /** The own-cache downloads in flight, shared across fills (a manifest change does not restart them). */
+  private readonly downloads = new SharedDownloads<Blob>();
+  /** When each window was last re-introduced to the bus by the stale-hub recall (throttle). */
+  private readonly recalled = new Map<string, number>();
   private processed: string[] = [];
   private processedSet = new Set<string>();
   private started = false;
@@ -212,6 +224,8 @@ export class CoreEngine {
 
   dispose(): void {
     for (const t of this.timers) clearInterval(t);
+    this.fillAbort?.abort();
+    this.downloads.abortAll();
     this.hub?.stop();
     this.core?.dispose();
     this.fallback.dispose();
@@ -303,11 +317,20 @@ export class CoreEngine {
     // routes to the sign-in view and posts `hub.resume` once signed in.
     h.on('auth', ({ reason }) => {
       this.hubRefused = reason;
+      const authority = this.core.authority === 'fallback';
       this.log(
         'warn',
-        `hub refused the operator's session (${reason}): sign in again; the outputs stay on the hub`,
+        `hub refused the operator's session (${reason}): sign in again; ${
+          authority
+            ? 'this PC keeps running the outputs until the hand-back after sign-in'
+            : 'the outputs stay on the hub'
+        }`,
       );
       this.core.setHubRefused(true);
+      // Refused while the authority: a window that followed the restarted hub (its state equalled the
+      // window's) would show the hub's older state from now on, since no hand-back can happen until the
+      // sign-in. Re-introduce the bus to every window now, and keep recalling quiet ones (watchBus).
+      if (authority) for (const id of this.endpoints.keys()) this.recall(id, this.now());
       this.post({ t: 'hub', e: 'auth', reason });
       this.scheduleVm();
     });
@@ -574,6 +597,12 @@ export class CoreEngine {
     this.scheduleVm();
   }
 
+  /** Introduce the fallback bus to a window again (a hello; it answers ready and gets the full state). */
+  private recall(outputId: string, now: number): void {
+    this.recalled.set(outputId, now);
+    this.fallback.reintroduce(outputId);
+  }
+
   private needPort(outputId: string): void {
     const d = this.endpoints.get(outputId);
     if (!d) return;
@@ -591,6 +620,16 @@ export class CoreEngine {
   private watchBus(): void {
     const now = this.now();
     for (const [id, d] of this.endpoints) {
+      if (
+        this.fallback.active &&
+        this.hubRefused &&
+        d.portSpoke() &&
+        now - d.lastRx() >= RECALL_MS &&
+        now - (this.recalled.get(id) ?? 0) >= RECALL_MS
+      ) {
+        this.log('warn', `output ${id} went quiet on the bus while the session is refused: re-introduced`);
+        this.recall(id, now);
+      }
       if (now - d.lastOffer < REOFFER_MS) continue;
       const unproven = !d.portSpoke();
       const closed = !d.portAlive();
@@ -749,10 +788,18 @@ export class CoreEngine {
     void this.fillOwnCache(resolved.files, resolved.manifestId);
   }
 
-  /** Fill the operator's Cache API store from the manifest so it can serve files in fallback. */
+  /**
+   * Fill the operator's Cache API store from the manifest so it can serve files in fallback. The previous
+   * fill's queue stops; of its downloads only those whose file left the manifest are cancelled, the rest
+   * keep going and this fill joins them (the output's rule, review 2026-11-04 item 11).
+   */
   private async fillOwnCache(files: { hash: string; bytes: number; mime: string }[], manifestId: string) {
     this.fillAbort?.abort();
+    const cancelled = this.downloads.retain(new Set(files.map((f) => f.hash)));
+    if (cancelled)
+      this.log('info', `operator cache: ${cancelled} download(s) cancelled (no longer in the manifest)`);
     if (this.budgets.exceeded('cacheFill')) {
+      this.downloads.abortAll();
       this.log('warn', 'operator cache: fill budget exceeded; not retrying until the operator asks');
       // The numbers describe this manifest, not the previous service's finished fill (review item 27).
       this.ownCache = { ready: 0, total: files.length, failed: files.length, manifestId };
@@ -767,11 +814,12 @@ export class CoreEngine {
       const p = await fillCache(
         this.files,
         files,
-        async (hash) => {
-          const r = await fetch(fileUrl(hash), { credentials: 'same-origin', signal: ac.signal });
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          return r.blob();
-        },
+        (hash) =>
+          this.downloads.run(hash, async (signal) => {
+            const r = await fetch(fileUrl(hash), { credentials: 'same-origin', signal });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.blob();
+          }),
         (pr) => {
           if (ac.signal.aborted) return;
           this.ownCache = { ready: pr.ready, total: pr.total, failed: pr.failed.length, manifestId };

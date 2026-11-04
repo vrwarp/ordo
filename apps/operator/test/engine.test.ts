@@ -1,4 +1,4 @@
-import type { JsonStore } from '@ordo/cache';
+import { type FileStore, type JsonStore, MemoryStore } from '@ordo/cache';
 import { type LiveState, parseLyrics, type ResolvedPlaylist, songFromParsed } from '@ordo/domain';
 import { initialState, reduce } from '@ordo/live-state';
 import { checkInvariants } from '@ordo/live-state';
@@ -284,6 +284,121 @@ describe('CoreEngine (operator core worker)', () => {
     );
     await flush();
     expect(lastLiveOf(posts).ownCache).toEqual({ ready: 0, total: 2, failed: 2, manifestId: 'm2' });
+  });
+
+  it('a manifest change cancels only the own-cache downloads whose file left; the rest continue and the new fill joins them', async () => {
+    const { posts, e } = await start();
+    const eng = e as unknown as {
+      files: FileStore;
+      fillOwnCache(files: { hash: string; bytes: number; mime: string }[], id: string): Promise<void>;
+    };
+    eng.files = new MemoryStore();
+    // A fetch that completes only when the test says so, recording the signal it was given.
+    const inflight = new Map<string, { signal: AbortSignal; resolve(): void; calls: number }>();
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = ((url: string, init?: RequestInit) => {
+      const hash = url.split('/').pop()!;
+      const signal = init?.signal as AbortSignal;
+      const have = inflight.get(hash);
+      if (have) have.calls++;
+      return new Promise<Response>((resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        inflight.set(hash, {
+          signal,
+          calls: (have?.calls ?? 0) + 1,
+          resolve: () => resolve(new Response(new Blob(['x']), { status: 200 })),
+        });
+      });
+    }) as unknown as typeof fetch;
+    try {
+      const f = (h: string) => ({ hash: h, bytes: 1, mime: 'video/mp4' });
+      const first = eng.fillOwnCache([f('h1'), f('h2')], 'm1');
+      await flush();
+      expect([...inflight.keys()].sort()).toEqual(['h1', 'h2']);
+      // The manifest grows (goLive adds a file) and loses one: h2's download is cancelled, h1's goes on
+      // and is not restarted, h3 starts.
+      const second = eng.fillOwnCache([f('h1'), f('h3')], 'm2');
+      await flush();
+      expect(inflight.get('h2')!.signal.aborted).toBe(true);
+      expect(inflight.get('h1')!.signal.aborted).toBe(false);
+      expect(inflight.get('h1')!.calls).toBe(1);
+      expect(inflight.has('h3')).toBe(true);
+      expect(posts.some((p) => p.t === 'log' && /1 download\(s\) cancelled/.test(p.text))).toBe(true);
+      inflight.get('h1')!.resolve();
+      inflight.get('h3')!.resolve();
+      await second;
+      await first;
+      await flush();
+      expect(inflight.get('h1')!.calls).toBe(1);
+      expect(await eng.files.has('h1')).toBe(true);
+      expect(await eng.files.has('h3')).toBe(true);
+      expect(lastLiveOf(posts).ownCache).toEqual({ ready: 2, total: 2, failed: 0, manifestId: 'm2' });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('refused while the fallback authority: windows are re-introduced to the bus at once and when they go quiet', async () => {
+    let now = 1_000_000;
+    const posts: CoreToMain[] = [];
+    const { store } = memStore({
+      [CORE_KEY]: { state: live(), authority: 'fallback', pending: [], aids: [], at: Date.now() },
+    });
+    engine = new CoreEngine(
+      (m) => posts.push(m),
+      store,
+      () => now,
+    );
+    const e = engine;
+    await e.init({ t: 'init', role: 'operate', appVersion: 't', generation: 1, test: true });
+    expect(e.core.authority).toBe('fallback');
+    const ch = new MessageChannel();
+    const hellos: number[] = [];
+    ch.port2.onmessage = (ev) => {
+      if (ev.data?.t === 'fallback.hello') hellos.push(now);
+    };
+    e.handle({ t: 'bus.port', outputId: 'o1', port: ch.port1 });
+    const answer = async () => {
+      ch.port2.postMessage({ t: 'fallback.ready', v: 1, outputId: 'o1', appliedSeq: 0 });
+      for (let i = 0; i < 100 && !e.fallback.isReady('o1'); i++) await new Promise((r) => setTimeout(r, 5));
+    };
+    await answer();
+    const settle = () => new Promise((r) => setTimeout(r, 20));
+    await settle();
+    const before = hellos.length;
+    const watchBus = () => (e as unknown as { watchBus(): void }).watchBus();
+    // Quiet windows are left alone while the hub merely has not answered yet (no refusal).
+    now += 4000;
+    watchBus();
+    await settle();
+    expect(hellos.length).toBe(before);
+    // The hub is back and refuses the session: every window is re-introduced at once.
+    e.hub.emit('status', { connected: true });
+    e.core.onStatus(true);
+    fromHub(e, { t: 'bye', v: 1, reason: 'unauthorized' });
+    e.hub.emit('status', { connected: false });
+    await settle();
+    expect(e.core.authority).toBe('fallback');
+    expect(hellos.length).toBe(before + 1);
+    expect(e.fallback.isReady('o1')).toBe(false);
+    await answer();
+    // A window that answers and keeps reporting health is not recalled; one quiet for RECALL_MS is.
+    now += 2000;
+    watchBus();
+    await settle();
+    expect(hellos.length).toBe(before + 1);
+    now += 2000;
+    watchBus();
+    await settle();
+    expect(hellos.length).toBe(before + 2);
+    expect(
+      posts.some((p) => p.t === 'log' && /went quiet on the bus while the session is refused/.test(p.text)),
+    ).toBe(true);
+    // Throttled: not again within RECALL_MS of the last recall.
+    now += 1000;
+    watchBus();
+    await settle();
+    expect(hellos.length).toBe(before + 2);
   });
 
   it('in hub mode a quiet proven port is never re-offered; an unproven one is, once per 10 s (item 16)', async () => {
