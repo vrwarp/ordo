@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { type IncomingMessage, type Server, createServer, request as httpRequest } from 'node:http';
 import { type Socket, connect } from 'node:net';
 import { inflateSync } from 'node:zlib';
@@ -8,7 +9,7 @@ import { expectCue, go, hubApi, hubLive, launchOutputs, login } from './linkhelp
 import { PNG } from './png.ts';
 
 /**
- * Design/25 chaos for the output window. Ports PORT..PORT+3 (default 8500; ORDO_CHAOS_OUTPUT_PORT moves
+ * Design/25 chaos for the output window. Ports PORT..PORT+5 (default 8500; ORDO_CHAOS_OUTPUT_PORT moves
  * them so concurrent runs do not collide).
  *
  * Every worker kill is watched on the audience screen for the whole fault window (review 2026-11-04
@@ -33,6 +34,7 @@ type Ordo = {
       armed?: number;
       bus: string;
       quarantined: string[];
+      missingImages?: Record<string, string[]>;
       cacheRepairs: number;
       held: Held[];
       errors?: Record<string, string>;
@@ -187,12 +189,13 @@ async function killAndWatch(
   expect(pre.shown).toBe(pre.cue);
   expect(pre.px.r + pre.px.g + pre.px.b).toBeGreaterThan(30);
 
-  // CHAOS_SCREENCAST=1 also records every composited frame (CDP screencast) through the restart.
+  // Every composited frame is also recorded (CDP screencast) through the restart, so a one-frame glitch
+  // between two samples is caught too (review F7); CHAOS_SCREENCAST=0 turns it off.
   const frames: { t: number; cue: number | null; px: Rgb }[] = [];
   let cast: Cdp | undefined;
   let scaled = 0;
   const vw = await o.evaluate(() => window.innerWidth);
-  if (process.env.CHAOS_SCREENCAST) {
+  if (process.env.CHAOS_SCREENCAST !== '0') {
     cast = (await o.context().newCDPSession(o)) as unknown as Cdp;
     cast.on('Page.screencastFrame', (e: { data: string; sessionId: number }) => {
       const px = decodePng(Buffer.from(e.data, 'base64'));
@@ -482,8 +485,9 @@ test('the output survives killed workers, a corrupt cache file and a malformed d
         why: string;
       }[] = [];
       while (Date.now() - t0 < 10_000) {
-        const [[mark, px], info] = await Promise.all([
-          twoPixels(o, cx, cy),
+        const [shot, info] = await Promise.all([
+          // The window is reloading: a screenshot taken between documents fails; that is not a sample.
+          twoPixels(o, cx, cy).catch(() => null),
           o
             .evaluate(() => {
               const w = window as unknown as Ordo;
@@ -493,7 +497,7 @@ test('the output survives killed workers, a corrupt cache file and a malformed d
             })
             .catch(() => ({ hold: false, gpuLost: 0, why: '' })),
         ]);
-        samples.push({ t: Date.now() - t0, cue: markerCue(mark), px, ...info });
+        if (shot) samples.push({ t: Date.now() - t0, cue: markerCue(shot[0]), px: shot[1], ...info });
         await o.waitForTimeout(40);
       }
       const good = (x: (typeof samples)[number]) => x.cue === 1 && dist(x.px, ref) <= 30;
@@ -569,6 +573,8 @@ test('a clip that ends while the link worker is dead still advances the service'
  */
 class FileOutageProxy {
   outage = false;
+  /** File hashes answered 503 while the rest of the route works (a file the hub cannot serve yet). */
+  withhold = new Set<string>();
   refused = 0;
   private server?: Server;
   private sockets = new Set<Socket>();
@@ -579,7 +585,10 @@ class FileOutageProxy {
 
   start(): Promise<void> {
     const server = createServer((req, res) => {
-      if (this.outage && req.url?.startsWith('/api/v1/files/')) {
+      const withheld =
+        req.url?.startsWith('/api/v1/files/') &&
+        [...this.withhold].some((h) => req.url?.startsWith(`/api/v1/files/${h}`));
+      if ((this.outage && req.url?.startsWith('/api/v1/files/')) || withheld) {
         this.refused++;
         res.writeHead(503, { 'content-type': 'text/plain', 'retry-after': '1' });
         res.end('outage');
@@ -737,6 +746,125 @@ test('a 14 s file-route outage on a fresh output quarantines nothing', async ({ 
     }
     expect(quarantinedDuring).toEqual([]);
     expect(lies).toEqual([]);
+  } finally {
+    await proxy.stop();
+    hub.kill();
+  }
+});
+
+/**
+ * Design/14 "Slide images that arrive late": a slide whose image file the hub cannot serve yet is drawn
+ * without the image (the cue still arms and goes live), and drawn again, in place, once the file arrives
+ * with a later fill: no flip, no hold, never black, the cue unchanged.
+ */
+test('a slide image withheld until after GO is drawn in once its file arrives', async ({ context, page }) => {
+  test.setTimeout(240_000);
+  const port = PORT + 4;
+  const hub = HubProcess.fresh(port);
+  const proxy = new FileOutageProxy(PORT + 5, port);
+  await hub.start();
+  await proxy.start();
+  try {
+    const a = await hubApi(port);
+    const fx = fixtures();
+    const orange = 'test-results/fixtures/orange.png';
+    execFileSync('ffmpeg', [
+      '-y',
+      '-loglevel',
+      'error',
+      '-f',
+      'lavfi',
+      '-i',
+      'color=c=orange:s=400x400',
+      '-frames:v',
+      '1',
+      orange,
+    ]);
+    const bg = await uploadMedia(a, fx.png, 'image/png', true);
+    const img = await uploadMedia(a, orange, 'image/png');
+    const rec = (await (await a.get(`media/${img.id}`)).json()) as {
+      original: { hash: string };
+      delivery?: { hash: string };
+    };
+    const imgHash = (rec.delivery ?? rec.original).hash;
+    const pres = await (
+      await a.post('presentations', {
+        data: {
+          title: 'Picture',
+          kind: 'slides',
+          backgroundMediaId: bg.id,
+          sections: [
+            {
+              id: 's1',
+              label: 'A',
+              short: 'A',
+              slides: [
+                {
+                  id: 'sl1',
+                  objects: [
+                    { id: 'o1', type: 'image', box: { x: 760, y: 340, w: 400, h: 400 }, mediaId: img.id },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      })
+    ).json();
+    await oneOutput(a);
+    await goLiveWith(a, [{ id: 'i1', kind: 'presentation', presentationId: pres.id }]);
+    // The image's file is withheld from before the window opens: neither the fill nor the asset worker
+    // can get it, the slide arms without it.
+    proxy.withhold.add(imgHash);
+    await login(page, `http://op.localhost:${proxy.port}`);
+    const before = new Set(context.pages());
+    await page.getByRole('button', { name: 'Launch outputs' }).click();
+    await expect
+      .poll(() => context.pages().filter((p) => !before.has(p)).length, { timeout: 20_000 })
+      .toBe(1);
+    const o = context.pages().find((p) => !before.has(p))!;
+    await o.goto(`${o.url()}&test=1&renderer=2d`);
+    await go(page);
+    await expectCue([o], 0);
+    await expect.poll(() => testPixelCue(o), { timeout: 10_000 }).toBe(0);
+    await expect
+      .poll(async () => Object.keys((await st(o)).missingImages ?? {}).length, { timeout: 15_000 })
+      .toBe(1);
+    await o.bringToFront();
+    const [cx, cy] = await centreXY(o);
+    // The image sits in the middle of the picture (logical box 760,340 400x400).
+    const [mx, my] = await o.evaluate(
+      () => [Math.floor(window.innerWidth / 2), Math.floor(window.innerHeight / 2)] as [number, number],
+    );
+    const centre0 = await pixel(o, mx, my);
+    console.log(`slide drawn without its image: centre ${centre0.r},${centre0.g},${centre0.b}`);
+    expect(centre0.r, 'the image (orange) is not on screen yet').toBeLessThan(150);
+    expect(proxy.refused).toBeGreaterThan(0);
+    // The file arrives: a later fill caches it and the slide is drawn again with it, in place.
+    proxy.withhold.clear();
+    const t0 = Date.now();
+    const samples: string[] = [];
+    let drawnAt = 0;
+    while (Date.now() - t0 < 90_000) {
+      const [[mark, px], s] = await Promise.all([twoPixels(o, cx, cy), st(o)]);
+      const centre = await pixel(o, mx, my);
+      const line = `${Date.now() - t0}ms cue=${markerCue(mark)} px=${px.r},${px.g},${px.b} centre=${centre.r},${centre.g},${centre.b} hold=${s.hold} missing=${Object.keys(s.missingImages ?? {}).length}`;
+      samples.push(line);
+      expect(markerCue(mark), `the cue changed:\n${samples.join('\n')}`).toBe(0);
+      expect(s.hold, `the hold came up:\n${samples.join('\n')}`).toBe(false);
+      expect(px.r + px.g + px.b, `the screen went black:\n${samples.join('\n')}`).toBeGreaterThan(30);
+      if (centre.r > 200 && centre.g > 100 && centre.b < 60 && !Object.keys(s.missingImages ?? {}).length) {
+        drawnAt = Date.now() - t0;
+        break;
+      }
+      await o.waitForTimeout(200);
+    }
+    expect(drawnAt, `the image never appeared:\n${samples.join('\n')}`).toBeGreaterThan(0);
+    console.log(
+      `slide image drawn in ${drawnAt} ms after its file became available (${samples.length} samples, cue 0 throughout)`,
+    );
+    expect((await st(o)).quarantined).toEqual([]);
+    await neverBlack(o, 500);
   } finally {
     await proxy.stop();
     hub.kill();

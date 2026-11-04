@@ -838,7 +838,11 @@ export class LinkCore {
       this.ensureContent(name, lp, live, state);
       const ap = armed?.[name] as LayerPlan<{ key: string }> | undefined;
       if (ap && ap.key !== lp.key) this.ensureContent(name, ap, armed!, state);
-      this.sendFlip(name, this.shown(lp.key), lp.at, lp.fadeMs, name === 'slide' ? live.slideCue : -1);
+      // Re-arming a restarted render worker: the hold covers it, and it comes down 200 ms after the live
+      // keys are held, so a crossfade into the re-armed content (a late flip fades from its arrival)
+      // would be seen half-done. Cuts, until the screen is covered by the renderer again.
+      const fade = this.awaitingCover ? 0 : lp.fadeMs;
+      this.sendFlip(name, this.shown(lp.key), lp.at, fade, name === 'slide' ? live.slideCue : -1);
     }
     this.syncVideos(live, armed);
     this.syncAudio(live, armed, state);

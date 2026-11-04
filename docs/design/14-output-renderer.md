@@ -58,16 +58,26 @@ hidden; message-driven liveness (a worker's death raising an event) is not offer
   item 2: with `onEnd: advance`, a clip that ends while the link is down still advances the service).
 - Render restart: the old worker took its canvas with it. The hold canvas is a main-thread copy: every
   snapshot the render worker posts (every 500 ms, every 150 ms while the program view is watched, and
-  as soon as a flip has settled; never more than about 7 a second, 640x360) is drawn onto the hidden
-  hold canvas at once, because a bitmap from the render worker is backed by that worker's context and
-  draws nothing once it dies (review 2026-11-04 item 1). A new or rebuilt compositor is not copied until
-  it has drawn for 1 s (a failing GPU presents garbage, white, before it reports the device lost). The
-  host shows the hold before it terminates the worker (the supervisor's `stop` hook), and also as soon as
-  the renderer misses its heartbeat (50 ms for this worker) for 200 ms: Chrome may composite a dead
-  worker's canvas white at once, so an abrupt crash can show for up to about 250 ms before the hold
-  covers it. While the hold shows, the canvas underneath is hidden (a dead or device-lost canvas can be
-  composited above the hold). The host then gives the new worker a fresh canvas, and lowers the hold 200 ms after the link reports the
-  live content is held again (or after 8 s), so the new canvas is never seen fading in from black. While
+  as soon as a flip has settled; never more than about 7 a second; half the output's resolution and never
+  below 640x360, `snapshotSize`, so a 4K output is not covered by a 6x upscale; the worker's
+  `createImageBitmap` copy returns in under 1 ms at every size measured, 1080p and 4K, 2D and WebGPU) is
+  drawn onto the hidden hold canvas at once, because a bitmap from the render worker is backed by that
+  worker's context and draws nothing once it dies (review 2026-11-04 item 1). A new or rebuilt WebGPU
+  compositor is not copied until it has drawn for 1 s (a failing GPU presents garbage, white, before it
+  reports the device lost); Canvas 2D never presents garbage, so its first frame is copied at once. The
+  host shows the hold before it terminates the worker (the supervisor's `stop` hook, also on the worker's
+  `error` event), and also as soon as the renderer misses its heartbeat (50 ms for this worker) for
+  200 ms; see "Abrupt worker death" below for what each death mode shows. While the hold shows, the
+  canvas underneath is hidden (a dead or device-lost canvas can be composited above the hold). The host
+  then gives the new worker a fresh canvas, and lowers the hold 200 ms after the link reports the
+  live content is held again (or after 8 s), so the new canvas is never seen fading in from black. The flips that
+  re-arm the new worker are cuts (a late flip would otherwise crossfade from its arrival and be seen
+  half-done when the hold drops; caught by the chaos spec's screencast), and a device-loss reason the old
+  worker never recovered from dies with it. Each
+  hold reason has its own pending lower, so raising one reason never cancels another's lowering; a hold
+  nobody lowered comes down after 20 s, except a device-loss hold still waiting for `restored`, which
+  stays up to 30 s (longer than the link's 15 s stuck-rebuild limit, so the lost canvas, white, is never
+  uncovered between the two). While
   the renderer is silent, video frames are closed on the main thread instead of being posted to a worker
   that may be dead. This is the device-loss path with a new worker. In test mode the hold also carries
   the test pixel of the frame it copied, and `__ordo.state().holdCue` names that cue.
@@ -83,6 +93,61 @@ the check waits until `restored` (at most 15 s). Repeated non-quota OPFS failure
 The host allows 3 reloads in 10 minutes (sessionStorage, `reload.ts`), so a deterministic failure cannot
 become a reload loop; a refused reload for a stuck renderer restarts the render worker instead, and the
 refusal is in `health.error` for the rest of the window (review 2026-11-04 item 9).
+
+## Abrupt worker death
+
+What the audience sees when the render worker dies without a supervised restart was measured in headless
+Chromium (review 2026-11-04, "two things to know"; experiment pages under `/tmp/claude-0/limits`, headless
+Chromium 1243 with SwiftShader; WebGPU works there with `--use-vulkan=swiftshader
+--enable-features=Vulkan`, while the default ANGLE SwiftShader loses its device at start).
+
+Death modes of a dedicated worker, and their signal:
+
+| Mode                                   | Signal                                                   | Screen                                                                                                                                                      |
+| -------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Supervisor restart (stall, `fatal`)    | none needed: the `stop` hook raises the hold first       | no gap                                                                                                                                                      |
+| Uncaught exception in the worker       | `error` event, 2 to 3 ms after the throw                 | the worker is not killed by it (its rAF loop keeps drawing); the supervisor restarts it under the hold in the same task                                     |
+| Worker out of memory                   | none from the worker                                     | a 2D worker allocating for 9 s never died and its canvas kept its frame; with WebGPU the whole renderer process died (the page is gone, nothing can help it) |
+| Hang (busy loop, GC)                   | missed heartbeats                                        | the canvas keeps its last frame (the worker is alive); hold after 200 ms of silence, restart after 3 s                                                      |
+| Bare `terminate()` without `stop`      | none: Chrome raises no event for a terminated worker     | only the chaos hook does this; the placeholder canvas can go white at once (below)                                                                          |
+
+So no death mode that leaves the page alive is unsignalled except a bare `terminate()`, which only the
+chaos hook performs. For it, the host notices the missing 50 ms heartbeat after 200 ms and the hold is up
+within about 250 ms; the chaos spec reports, not fails, that window and records every composited frame
+(CDP screencast) through each kill.
+
+What a dead worker's canvas shows (6 trials each, sampled by CDP screenshots about every 30 ms): an idle
+worker's last frame stays; with a running frame loop the placeholder is racy: software 2D white in 1 of 6
+at 29 ms, accelerated 2D white in 0 to 6 of 6 depending on the run, WebGPU white in 4 of 6 at 32 to 69 ms.
+The white is opaque (a canvas with `alpha: true` still composites white, not the page background), so a
+hold placed behind the canvas cannot cover it.
+
+The zero-copy alternative (the worker renders into its own `OffscreenCanvas`, posts
+`transferToImageBitmap()` per frame, the main thread commits it to a `bitmaprenderer` canvas) does not
+remove the class: the committed `ImageBitmap` stays backed by the worker's context, and the visible canvas
+went white in 6 of 6 trials (2D, at 26 to 49 ms) and 4 of 6 (WebGPU) when the worker was terminated, the
+same failure as the placeholder. Only a main-thread copy (`drawImage` of each frame into a 2D canvas the
+main thread owns) survives: held in 6 of 6 trials in every configuration. Its commit is cheap on the main
+thread (`drawImage` or `transferFromImageBitmap` 0.05 to 0.2 ms mean, p95 at most 1.3 ms, no long tasks,
+1080p and 4K), but it puts the main thread on the frame path: with back-pressure (one bitmap in flight,
+frames skipped meanwhile) this container's software pipeline committed 136 of 288 2D frames and 26 of 142
+WebGPU frames at 1080p (54 of 580 at 4K), draw-to-commit p95 4 to 727 ms; without back-pressure the worker
+queued 1,300 bitmaps and the page died. It also adds at least a frame to every GO and freezes the picture
+during a main-thread stall. It is not adopted: the audience picture would depend on the host thread
+(design/25) to close a gap that only the chaos hook can open. The placeholder path stays, with the hold.
+
+## Slide images that arrive late
+
+A slide whose image file cannot be read when it is prepared (not cached yet, the hub did not serve it) is
+drawn without the image and still arms. The asset worker reports the hashes it could not read
+(`done.missingImages`); the link keeps them per key, reports `N slide(s) drawn without image(s)` in
+`health.error` and `missingImages` in `__ordo.state()`, and after every fill (a hub fill or a fallback-bus
+file lands in the same store) and on the report itself (the file may have arrived while the job ran)
+checks the store: once a missing image's file is there, the key is planned again as a `refresh` job, and
+the render worker swaps the held copy in place, no flip, no hold (`LayerStack.offer` with `refresh`). A
+key is drawn again at most every 2 s, so a cached file the worker still cannot read never loops. A cached
+image that fails to decode is not reported as missing (it would be missing every time); it is drawn
+without, like before. Covered by `link-core.test.ts` and the chaos spec's withheld-image test.
 
 ## Frame loop
 
@@ -266,8 +331,13 @@ cue is not armed (`armedOk` false, `armError` "quarantined: …"). Unavailabilit
 yet and the hub did not serve it; a video streamed during an incomplete fill that fails, which the element
 reports as a network or format error; a load timeout) is never quarantined: the key is retried after 1,
 2, 4, 8 s, then every 15 s, and the backoff is lifted when a cache fill completes (for the keys whose file
-it cached, or all of them when it completed). A slide's own images that cannot be read are drawn without
-the image (the slide still arms). A cached file that fails to decode is removed from OPFS and fetched
+it cached, or all of them when it completed). A file the hub answers 404 or 410 for is `missing`, not
+unavailable (review F1): the fill and the arm try it again after 60 s, doubling to 5 min, the fill counts
+it in the cache error budget, says once `cache: <hash> missing on the hub (HTTP 404)`, and `health.error`
+lists `N file(s) missing on the hub`; a video known missing is not streamed into a media element at all
+(the element would report a format error every few seconds). A slide's own images that cannot be read are
+drawn without the image (the slide still arms) and drawn in once the file arrives ("Slide images that
+arrive late"). A cached file that fails to decode is removed from OPFS and fetched
 again; the link also compares cached sizes with the manifest every 30 s while live and after an
 asset-worker restart (`health.cacheRepairs`).
 
@@ -277,7 +347,9 @@ verify) cancels only those whose file left the manifest; the others continue and
 them (review item 11). Each file that fails backs off between fills (network: 4 s doubling to 30 s;
 storage: 10 s doubling to 5 min). A full disk (`QuotaExceededError`) fails the file at once, counts in
 the `cache` error budget, and after 4 fills (or once the budget is spent) the file is given up on for
-the service; `health.error` says "storage full: N file(s) not cached" while it lasts. A file whose every
+the service; `health.error` says "storage full: N file(s) not cached" while it lasts. A download that
+stores 0 bytes on every attempt (`size`) is treated the same way: counted, given up on after 4 fills, and
+shown as "N file(s) arrive empty from the hub" (review F10). A file whose every
 download disagrees with the manifest's size is kept once and its size remembered (IndexedDB
 `accepted:<outputId>`), so neither the fill nor the 30 s check fetches it again; it is reported in
 `health.error` (review item 10).

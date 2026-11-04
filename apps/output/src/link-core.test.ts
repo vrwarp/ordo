@@ -578,4 +578,32 @@ describe('link worker core', () => {
     expect(t.core.buildHealth().error).toMatch(/arrive empty/);
     t.close();
   });
+  it('re-arms a restarted render worker with cuts, never a crossfade seen half-done under the hold', async () => {
+    const t = setup();
+    await t.core.start();
+    const live = slideLive(0);
+    live.layers.slide.transition = { kind: 'crossfade', ms: 500 };
+    t.hub.emit('state', stateMsg(live));
+    await tick();
+    const first = t.toRender.find((m) => m.t === 'flip' && m.layer === 1 && m.key !== '');
+    expect(first && first.t === 'flip' ? first.fadeMs : -1).toBeGreaterThan(0);
+    // A new render worker generation: the same flips go out as cuts while the hold covers the screen.
+    t.toRender.length = 0;
+    const render = new MessageChannel();
+    const asset = new MessageChannel();
+    const flips: { key: string; fadeMs: number }[] = [];
+    render.port2.onmessage = (e) => {
+      if (e.data.t === 'flip') flips.push({ key: e.data.key, fadeMs: e.data.fadeMs });
+    };
+    t.core.onPorts(render.port1, asset.port1, { link: 0, render: 1, asset: 0 });
+    await tick(20);
+    const slide = flips.find((f) => f.key.startsWith('sl|'));
+    expect(slide).toBeDefined();
+    expect(slide!.fadeMs).toBe(0);
+    render.port1.close();
+    render.port2.close();
+    asset.port1.close();
+    asset.port2.close();
+    t.close();
+  });
 });

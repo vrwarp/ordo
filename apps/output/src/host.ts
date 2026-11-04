@@ -322,6 +322,12 @@ export class OutputHost {
       // worker a fresh canvas, show it once the link worker has re-armed the live content.
       this.raiseHold('restart');
       this.holdReasons.delete('silent');
+      // A device loss the old worker never recovered from died with it: the new worker has a fresh
+      // device, so that reason must not keep the hold up past the re-arm (it is lowered on `covered`).
+      this.holdReasons.delete('lost');
+      this.lowerTimers.delete('lost');
+      this.lostPending = false;
+      this.restoredSnapPending = false;
       const c = document.createElement('canvas');
       c.className = this.opts.canvas.className;
       c.width = this.opts.width;
