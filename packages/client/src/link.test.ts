@@ -268,3 +268,31 @@ describe('OutputLink resync budget (review 2026-11-04 finding 25)', () => {
     expect(link.resyncError).toBeDefined();
   });
 });
+
+describe('resync budget counts only unanswered resyncs', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(100_000);
+    installFakeWebSocket();
+    clock.fallback = false;
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('serves every genuine sequence gap that the hub answers with a valid state', () => {
+    const { link, ws } = setup();
+    const resyncs = () => ws.sent.filter((m) => m.t === 'live.resync').length;
+    ws.sent = [];
+    for (let i = 0; i < RESYNC_BUDGET + 5; i++) {
+      vi.advanceTimersByTime(2000);
+      const keep = ws.sent.filter((m) => m.t !== 'time.ping');
+      ws.pongAll();
+      ws.sent.push(...keep);
+      // A delta from the future (a real gap), then the hub's valid answer.
+      ws.receive({ t: 'live.delta', v: 1, seq: 100 + i, fromSeq: 99 + i, event: { k: 'endService', at: 1 } });
+      ws.receive({ t: 'live.state', v: 1, seq: 3 + i, state: st(3 + i) });
+    }
+    expect(resyncs()).toBe(RESYNC_BUDGET + 5);
+    expect(link.resyncError).toBeUndefined();
+    expect(link.state.seq).toBe(3 + RESYNC_BUDGET + 4);
+  });
+});

@@ -105,12 +105,12 @@ export class OutputLink extends Emitter<{
       }
       if (!this.mirror.applyDelta(m)) this.requestResync();
     });
-    // A state or delta that applies ends a spent resync budget.
-    this.mirror.on('change', () => {
-      if (this.resyncSpent) {
-        this.resyncSpent = undefined;
-        this.resyncTimes = [];
-      }
+    // A full state that applies answers every outstanding resync: the budget only counts resyncs that the
+    // bus failed to answer, so a run of genuine sequence gaps on a flappy bus never starves a later one.
+    this.mirror.on('change', ({ event }) => {
+      if (event !== undefined) return; // a delta, not a full state
+      this.resyncSpent = undefined;
+      this.resyncTimes = [];
     });
     this.hub.on('library', (m) => this.emit('library', m));
     this.hub.on('rtc', (m) => this.emit('rtc', m));
