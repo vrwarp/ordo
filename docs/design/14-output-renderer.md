@@ -103,13 +103,13 @@ Chromium 1243 with SwiftShader; WebGPU works there with `--use-vulkan=swiftshade
 
 Death modes of a dedicated worker, and their signal:
 
-| Mode                                   | Signal                                                   | Screen                                                                                                                                                      |
-| -------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Supervisor restart (stall, `fatal`)    | none needed: the `stop` hook raises the hold first       | no gap                                                                                                                                                      |
-| Uncaught exception in the worker       | `error` event, 2 to 3 ms after the throw                 | the worker is not killed by it (its rAF loop keeps drawing); the supervisor restarts it under the hold in the same task                                     |
-| Worker out of memory                   | none from the worker                                     | a 2D worker allocating for 9 s never died and its canvas kept its frame; with WebGPU the whole renderer process died (the page is gone, nothing can help it) |
-| Hang (busy loop, GC)                   | missed heartbeats                                        | the canvas keeps its last frame (the worker is alive); hold after 200 ms of silence, restart after 3 s                                                      |
-| Bare `terminate()` without `stop`      | none: Chrome raises no event for a terminated worker     | only the chaos hook does this; the placeholder canvas can go white at once (below)                                                                          |
+| Mode                                | Signal                                               | Screen                                                                                                                                                       |
+| ----------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Supervisor restart (stall, `fatal`) | none needed: the `stop` hook raises the hold first   | no gap                                                                                                                                                       |
+| Uncaught exception in the worker    | `error` event, 2 to 3 ms after the throw             | the worker is not killed by it (its rAF loop keeps drawing); the supervisor restarts it under the hold in the same task                                      |
+| Worker out of memory                | none from the worker                                 | a 2D worker allocating for 9 s never died and its canvas kept its frame; with WebGPU the whole renderer process died (the page is gone, nothing can help it) |
+| Hang (busy loop, GC)                | missed heartbeats                                    | the canvas keeps its last frame (the worker is alive); hold after 200 ms of silence, restart after 3 s                                                       |
+| Bare `terminate()` without `stop`   | none: Chrome raises no event for a terminated worker | only the chaos hook does this; the placeholder canvas can go white at once (below)                                                                           |
 
 So no death mode that leaves the page alive is unsignalled except a bare `terminate()`, which only the
 chaos hook performs. For it, the host notices the missing 50 ms heartbeat after 200 ms and the hold is up

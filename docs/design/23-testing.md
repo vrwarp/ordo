@@ -10,6 +10,15 @@
 | Soak        | `tools/soak` (Playwright, real GPU on the venue PC or a dev machine)                              | 60+ minutes of the live playlist with motion backgrounds, GO every 10 s; asserts zero missed frames and zero long tasks from telemetry                                                                                                                                                                             |
 | Visual      | Playwright screenshots of outputs vs golden PNGs                                                  | Text rasterizer and looks; per-pixel tolerance for anti-aliasing                                                                                                                                                                                                                                                   |
 
+## The compositor under test
+
+Chromium is launched with `--enable-unsafe-webgpu --use-angle=swiftshader --use-vulkan=swiftshader
+--enable-features=Vulkan`. With Vulkan SwiftShader the WebGPU device survives in headless Chromium, so the
+outputs run the real WebGPU compositor (health reports `compositor: 'webgpu'`, no device loss) rather than
+the Canvas 2D fallback. Frame timing under software Vulkan is not meaningful (missed frames are expected);
+correctness of flips, looks, holds and chaos recovery is. Lateness bounds are asserted only with
+`ORDO_E2E_REAL_GPU=1`.
+
 ## Multi-origin in tests
 
 Each app runs on its own origin, as in production, but over plain HTTP on `*.localhost`: the hub under
