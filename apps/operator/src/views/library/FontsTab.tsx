@@ -55,7 +55,9 @@ export function FontsTab() {
         <div className="grow">
           <DropZone
             accept=".ttf,.otf,.woff,.woff2"
+            touchAccept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2,application/font-sfnt,application/x-font-ttf,application/x-font-otf"
             label="Drop TTF, OTF, WOFF or WOFF2 files (or click)"
+            touchLabel="Choose TTF, OTF, WOFF or WOFF2 files"
             onFiles={(f) => void onFiles(f)}
           />
         </div>
@@ -102,7 +104,7 @@ export function FontsTab() {
                           style={{ minHeight: 18, padding: 0 }}
                           onClick={() => void del(f)}
                         >
-                          ✕
+                          ✕<span className="touch-label">Delete</span>
                         </button>
                       </span>
                     ))}

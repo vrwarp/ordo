@@ -142,7 +142,9 @@ export function ImportTab() {
             </span>
             <DropZone
               accept=".zip"
+              touchAccept=".zip,application/zip"
               label="Drop a .zip of the ProPresenter library"
+              touchLabel="Choose a .zip of the ProPresenter library"
               onFiles={(f) => void pro7Zip(f)}
             />
             <div className="row">
@@ -165,7 +167,11 @@ export function ImportTab() {
             </span>
             <DropZone
               accept=".txt,.chordpro,.cho,.chopro,.pro,.crd"
+              // The iPad Files picker greys out extensions it has no type for (.cho, .chordpro): offer
+              // every file there; the hub checks what it gets.
+              touchAccept=""
               label="Drop SongSelect files"
+              touchLabel="Choose SongSelect files"
               onFiles={(f) => void songselectFiles(f)}
             />
             <textarea
@@ -186,7 +192,9 @@ export function ImportTab() {
             </span>
             <DropZone
               accept=".pptx,.pdf"
+              touchAccept=".pptx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation"
               label="Drop .pptx or .pdf files"
+              touchLabel="Choose .pptx or .pdf files"
               onFiles={(f) => void documents(f)}
             />
           </div>

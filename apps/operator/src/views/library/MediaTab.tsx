@@ -12,6 +12,7 @@ import { removeLocal, upsertLocal, useLibrary } from '../../state/library.ts';
 import { useSearch } from '../../services/search.ts';
 import { errorText, toast } from '../../state/toasts.ts';
 import { create } from 'zustand';
+import { useCoarsePointer } from '../../components/pointer.ts';
 
 type UploadRow = { id: number; name: string; frac: number; error?: string; done?: boolean };
 export const useUploads = create<{ list: UploadRow[] }>(() => ({ list: [] }));
@@ -67,9 +68,41 @@ export function UploadProgress() {
   );
 }
 
-export function DropZone(props: { onFiles: (f: File[]) => void; accept?: string; label?: string }) {
+/**
+ * Drop files or click to choose. On a touch device (no drag and drop from the Files app into Safari is
+ * assumed) it is a plain button that opens the native picker (Files, Photos, camera), with `touchLabel`
+ * instead of the "drop here" text and `touchAccept` when the iPad needs a wider accept list.
+ */
+export function DropZone(props: {
+  onFiles: (f: File[]) => void;
+  accept?: string;
+  label?: string;
+  touchLabel?: string;
+  touchAccept?: string;
+}) {
   const [over, setOver] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const coarse = useCoarsePointer();
+  if (coarse)
+    return (
+      <div className="drop touch">
+        <button type="button" className="primary" onClick={() => input.current?.click()}>
+          {props.touchLabel ?? 'Choose files'}
+        </button>
+        <input
+          ref={input}
+          type="file"
+          multiple
+          accept={props.touchAccept ?? props.accept}
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const files = [...(e.target.files ?? [])];
+            e.target.value = '';
+            if (files.length) props.onFiles(files);
+          }}
+        />
+      </div>
+    );
   return (
     <div
       className={`drop ${over ? 'over' : ''}`}
@@ -104,7 +137,13 @@ export function DropZone(props: { onFiles: (f: File[]) => void; accept?: string;
   );
 }
 
-export const MEDIA_ACCEPT = 'video/*,image/*,audio/*,.mov,.mp4,.webm,.gif,.wav,.mp3,.aac,.flac,.ogg,.m4a';
+/**
+ * What the media picker offers. On iPad, image/* and video/* open Photos as well as Files: photos come
+ * through as JPEG (Safari transcodes HEIC unless the accept list names HEIC, which the hub does not
+ * take), videos as MOV (QuickTime, accepted) or MP4.
+ */
+export const MEDIA_ACCEPT =
+  'video/*,image/*,audio/*,.mov,.mp4,.m4v,.webm,.gif,.jpg,.jpeg,.png,.webp,.wav,.mp3,.aac,.flac,.ogg,.m4a';
 
 export function stateTag(m: Media) {
   const cls = m.state === 'ready' ? 'green' : m.state === 'failed' ? 'red' : 'amber';
@@ -151,6 +190,7 @@ function MediaPreview({ m, onClose }: { m: Media; onClose: () => void }) {
 
 export function MediaTab() {
   const lib = useLibrary((s) => s.data);
+  const coarse = useCoarsePointer();
   const pairs = lib.settings.audio.pairs;
   const locked = useLockedIds();
   const [q, setQ] = useState('');
@@ -225,6 +265,7 @@ export function MediaTab() {
             <DropZone
               accept={MEDIA_ACCEPT}
               label="Drop video, images or audio here (or click). Large files resume if interrupted."
+              touchLabel="Choose video, images or audio (Files or Photos)"
               onFiles={(f) => void uploadFiles(f, { isBackground: asBackground })}
             />
           </div>
@@ -241,7 +282,7 @@ export function MediaTab() {
       </div>
       <VirtualList
         items={list}
-        rowHeight={64}
+        rowHeight={coarse ? 76 : 64}
         keyOf={(m) => m.id}
         render={(m) => {
           const still = stillHash(m);
@@ -299,6 +340,7 @@ export function MediaTab() {
                   <select
                     value={m.audio?.pairId ?? ''}
                     title="Audio output pair"
+                    aria-label="Audio output pair"
                     onChange={(e) =>
                       void patch(m, {
                         audio: { pairId: e.target.value || undefined, gainDb: m.audio?.gainDb ?? 0 },
@@ -312,9 +354,11 @@ export function MediaTab() {
                       </option>
                     ))}
                   </select>
+                  <span className="touch-label muted small">Gain dB</span>
                   <input
                     type="number"
                     title="Gain (dB)"
+                    aria-label="Gain (dB)"
                     style={{ width: 64 }}
                     defaultValue={m.audio?.gainDb ?? 0}
                     step={1}
@@ -332,6 +376,7 @@ export function MediaTab() {
                     title="Audition on the preview device"
                   >
                     {playing === m.id ? '■' : '🎧'}
+                    <span className="touch-label">{playing === m.id ? 'Stop' : 'Listen'}</span>
                   </button>
                 </>
               )}
@@ -343,7 +388,7 @@ export function MediaTab() {
                   if (n?.trim()) void patch(m, { name: n.trim() });
                 }}
               >
-                ✎
+                ✎<span className="touch-label">Rename</span>
               </button>
               {m.state === 'failed' && (
                 <button
@@ -358,8 +403,8 @@ export function MediaTab() {
                   Retry
                 </button>
               )}
-              <button type="button" className="small ghost" onClick={() => void del(m)}>
-                🗑
+              <button type="button" className="small ghost" onClick={() => void del(m)} aria-label="Delete">
+                🗑<span className="touch-label">Delete</span>
               </button>
             </>
           );

@@ -204,7 +204,7 @@ function ArrangementsSection({ p, readOnly }: { p: Presentation; readOnly: boole
                   change((q) => ({ ...q, arrangements: [a, ...q.arrangements.filter((x) => x.id !== a.id)] }))
                 }
               >
-                ★
+                ★<span className="touch-label">Make default</span>
               </button>
             )}
             {!readOnly && (
@@ -215,7 +215,7 @@ function ArrangementsSection({ p, readOnly }: { p: Presentation; readOnly: boole
                   change((q) => ({ ...q, arrangements: q.arrangements.filter((x) => x.id !== a.id) }))
                 }
               >
-                ✕
+                ✕<span className="touch-label">Delete</span>
               </button>
             )}
           </div>

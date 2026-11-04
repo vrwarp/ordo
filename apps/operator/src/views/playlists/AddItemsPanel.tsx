@@ -28,7 +28,7 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
   const media = useMemo(() => new Map(lib.media.map((m) => [m.id, m])), [lib.media]);
   const results = useSearch(q, { kind, limit: 500 });
   return (
-    <div style={{ display: 'grid', gridTemplateRows: 'auto 1fr auto', height: '100%' }}>
+    <div className="add-items" style={{ display: 'grid', gridTemplateRows: 'auto 1fr auto', height: '100%' }}>
       <div className="col" style={{ padding: 10, borderBottom: '1px solid var(--line)' }}>
         <h4>Add to playlist</h4>
         <div className="row">

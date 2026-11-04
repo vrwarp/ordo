@@ -1,8 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Dialog } from '../../components/Dialog.tsx';
+import { installKeepVisible } from '../../components/keepVisible.ts';
+import { useMedia } from '../../components/pointer.ts';
 import { useLockedIds, useMediaLookup } from '../../hooks.ts';
 import { useLibrary } from '../../state/library.ts';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
+import { LookPreviews } from './LookPreviews.tsx';
 import {
   change,
   currentObject,
@@ -35,6 +38,44 @@ import { SlideCanvas } from './SlideCanvas.tsx';
 import { SlidePanel } from './SlidePanel.tsx';
 import { SlidesPanel } from './SlidesPanel.tsx';
 
+/** Nudge steps (px in slide units) offered by the touch toolbar; the keyboard uses 1 and Shift 10. */
+const STEPS = [1, 10, 50] as const;
+
+/** Move the selected object by (dx, dy); consecutive nudges coalesce into one undo step. */
+function nudge(dx: number, dy: number): void {
+  const st = useEditor.getState();
+  const o = currentObject();
+  if (!o || !st.slideId) return;
+  change(
+    (q) =>
+      updateObject(q, st.slideId!, o.id, (x) => ({
+        ...x,
+        box: { ...x.box, x: x.box.x + dx, y: x.box.y + dy },
+      })),
+    `nudge:${o.id}`,
+  );
+}
+
+/** Focus the selected text box's text field (Enter, double-tap, or the Edit text button). */
+function focusTextEditor(): void {
+  const el = document.getElementById('ordo-text-editor') as HTMLTextAreaElement | null;
+  // Synchronous when the field is already there: iPadOS only raises the keyboard for a focus() made
+  // inside the user's gesture.
+  if (el) el.focus();
+  else
+    setTimeout(() => (document.getElementById('ordo-text-editor') as HTMLTextAreaElement | null)?.focus(), 0);
+}
+
+const LOOKS_OPEN_KEY = 'ordo.editor.looksOpen';
+function storedLooksOpen(): boolean | null {
+  try {
+    const v = localStorage.getItem(LOOKS_OPEN_KEY);
+    return v === null ? null : v === '1';
+  } catch {
+    return null;
+  }
+}
+
 function isTyping(e: KeyboardEvent): boolean {
   const t = e.target as HTMLElement | null;
   return !!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
@@ -51,6 +92,18 @@ export function EditorView({ id }: { id: string }) {
   const [revisions, setRevisions] = useState(false);
   const [imagePick, setImagePick] = useState(false);
   const [dismissedRev, setDismissedRev] = useState(0);
+  const [step, setStep] = useState<(typeof STEPS)[number]>(10);
+  // Look previews: open by default on a touch device in landscape, collapsed in narrow portrait and on
+  // the desktop (where the slide canvas keeps its full height until someone opens them).
+  const touchLandscape = useMedia('(pointer: coarse) and (orientation: landscape)');
+  const [looksOpen, setLooksOpen] = useState<boolean | null>(storedLooksOpen);
+  const root = useRef<HTMLDivElement>(null);
+  const hasRoot = !!ed.draft;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: install once the editor root has rendered
+  useEffect(() => {
+    const el = root.current;
+    return el ? installKeepVisible(el) : undefined;
+  }, [hasRoot]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional dependency list
   useEffect(() => {
@@ -110,14 +163,7 @@ export function EditorView({ id }: { id: string }) {
       ];
       if (d) {
         e.preventDefault();
-        change(
-          (q) =>
-            updateObject(q, st.slideId!, o.id, (x) => ({
-              ...x,
-              box: { ...x.box, x: x.box.x + d[0]!, y: x.box.y + d[1]! },
-            })),
-          `nudge:${o.id}`,
-        );
+        nudge(d[0]!, d[1]!);
         return;
       }
       if (e.key === 'Enter' && o.type === 'text') {
@@ -159,9 +205,27 @@ export function EditorView({ id }: { id: string }) {
     selectObject(o.id);
   };
   const bgId = slide?.backgroundMediaId ?? p.backgroundMediaId;
+  const editText = (objectId?: string) => {
+    if (readOnly) return;
+    if (objectId && objectId !== ed.objectId) selectObject(objectId);
+    setTab('object');
+    focusTextEditor();
+  };
+  const duplicate = () => {
+    if (!obj || !slide) return;
+    let nid: string | undefined;
+    change((q) => {
+      const r = duplicateObject(q, slide.id, obj.id);
+      nid = r.id;
+      return r.p;
+    });
+    if (nid) selectObject(nid);
+  };
+  const looksShown = looksOpen ?? touchLandscape;
+  const noObj = readOnly || !obj;
 
   return (
-    <div className="editor">
+    <div className="editor" ref={root}>
       <div className="toolbar">
         <a className="btn small ghost" href="#/library">
           ← Library
@@ -180,10 +244,10 @@ export function EditorView({ id }: { id: string }) {
           {ed.saving ? 'Saving…' : ed.dirty ? 'Save' : 'Saved'}
         </button>
         <button type="button" disabled={readOnly || !ed.canUndo} onClick={undo} title="Ctrl+Z">
-          ↶
+          ↶<span className="touch-label">Undo</span>
         </button>
         <button type="button" disabled={readOnly || !ed.canRedo} onClick={redo} title="Ctrl+Y">
-          ↷
+          ↷<span className="touch-label">Redo</span>
         </button>
         <span style={{ width: 10 }} />
         <button type="button" disabled={readOnly || !slide} onClick={() => add(newText(theme))}>
@@ -209,7 +273,7 @@ export function EditorView({ id }: { id: string }) {
           onClick={() => z('front')}
           title="Bring to front"
         >
-          ⤒
+          ⤒<span className="touch-label">Front</span>
         </button>
         <button
           type="button"
@@ -218,7 +282,7 @@ export function EditorView({ id }: { id: string }) {
           onClick={() => z('forward')}
           title="Bring forward"
         >
-          ↑
+          ↑<span className="touch-label">Forward</span>
         </button>
         <button
           type="button"
@@ -227,7 +291,7 @@ export function EditorView({ id }: { id: string }) {
           onClick={() => z('backward')}
           title="Send backward"
         >
-          ↓
+          ↓<span className="touch-label">Backward</span>
         </button>
         <button
           type="button"
@@ -236,25 +300,16 @@ export function EditorView({ id }: { id: string }) {
           onClick={() => z('back')}
           title="Send to back"
         >
-          ⤓
+          ⤓<span className="touch-label">Back</span>
         </button>
         <button
           type="button"
           className="small"
           disabled={readOnly || !obj}
           title="Duplicate (Ctrl+D)"
-          onClick={() => {
-            if (!obj || !slide) return;
-            let nid: string | undefined;
-            change((q) => {
-              const r = duplicateObject(q, slide.id, obj.id);
-              nid = r.id;
-              return r.p;
-            });
-            if (nid) selectObject(nid);
-          }}
+          onClick={duplicate}
         >
-          ⧉
+          ⧉<span className="touch-label">Duplicate</span>
         </button>
         <button
           type="button"
@@ -267,8 +322,50 @@ export function EditorView({ id }: { id: string }) {
             selectObject(undefined);
           }}
         >
-          🗑
+          🗑<span className="touch-label">Delete</span>
         </button>
+        {/* Touch: every keyboard-only action as a labelled button (hidden for a mouse, design/15). */}
+        <span className="touch-only ed-touchbar" role="group" aria-label="Object tools">
+          <span className="ed-nudge">
+            <button type="button" className="small" disabled={noObj} onClick={() => nudge(-step, 0)}>
+              ←<span className="touch-label">Left</span>
+            </button>
+            <button type="button" className="small" disabled={noObj} onClick={() => nudge(0, -step)}>
+              ↑<span className="touch-label">Up</span>
+            </button>
+            <button type="button" className="small" disabled={noObj} onClick={() => nudge(0, step)}>
+              ↓<span className="touch-label">Down</span>
+            </button>
+            <button type="button" className="small" disabled={noObj} onClick={() => nudge(step, 0)}>
+              →<span className="touch-label">Right</span>
+            </button>
+            <label className="row small" style={{ gap: 4 }}>
+              Step
+              <select
+                aria-label="Nudge step"
+                value={step}
+                onChange={(e) => setStep(Number(e.target.value) as (typeof STEPS)[number])}
+              >
+                {STEPS.map((n) => (
+                  <option key={n} value={n}>
+                    {n} px
+                  </option>
+                ))}
+              </select>
+            </label>
+          </span>
+          <button
+            type="button"
+            className="small"
+            disabled={noObj || obj?.type !== 'text'}
+            onClick={() => editText()}
+          >
+            Edit text
+          </button>
+          <button type="button" className="small" disabled={!obj} onClick={() => selectObject(undefined)}>
+            Deselect
+          </button>
+        </span>
         <span className="spacer" />
         <PreviewControl p={p} slideId={slide?.id} />
         <button type="button" onClick={() => setRevisions(true)}>
@@ -296,10 +393,33 @@ export function EditorView({ id }: { id: string }) {
           </div>
         )}
         {slide ? (
-          <SlideCanvas slide={slide} backgroundMediaId={bgId} media={media} readOnly={readOnly} />
+          <SlideCanvas
+            slide={slide}
+            backgroundMediaId={bgId}
+            media={media}
+            readOnly={readOnly}
+            onEditText={editText}
+          />
         ) : (
           <div className="center muted">Add a slide to start.</div>
         )}
+        <details
+          className="ed-looks"
+          open={looksShown}
+          onToggle={(e) => {
+            const open = (e.currentTarget as HTMLDetailsElement).open;
+            if (open === looksShown) return;
+            setLooksOpen(open);
+            try {
+              localStorage.setItem(LOOKS_OPEN_KEY, open ? '1' : '0');
+            } catch {
+              /* private mode: not remembered */
+            }
+          }}
+        >
+          <summary>Look previews</summary>
+          {looksShown && <LookPreviews presentation={p} slideId={slide?.id} compact />}
+        </details>
       </div>
       <div className="props">
         <div className="row" style={{ marginBottom: 8, gap: 4 }}>

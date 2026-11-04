@@ -140,7 +140,7 @@ function FolderSide(props: {
               void rename(f);
             }}
           >
-            ✎
+            ✎<span className="touch-label">Rename</span>
           </button>
           <button
             type="button"
@@ -150,7 +150,7 @@ function FolderSide(props: {
               void del(f);
             }}
           >
-            ✕
+            ✕<span className="touch-label">Delete</span>
           </button>
         </span>
       ))}
@@ -298,7 +298,7 @@ export function PresentationsTab() {
                 {p.archived ? 'Unarchive' : 'Archive'}
               </button>
               <button type="button" className="small ghost" onClick={() => void del(p)} title="Delete">
-                🗑
+                🗑<span className="touch-label">Delete</span>
               </button>
             </>
           )}

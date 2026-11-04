@@ -995,3 +995,316 @@ table.list th {
     padding: 0;
   }
 }
+
+/* ---- reordering (components/Sortable.tsx): a grip, the lifted item, the drop line ---- */
+.sort-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  align-self: stretch;
+  width: 18px;
+  color: var(--fg3);
+  font-size: 14px;
+  cursor: grab;
+  /* Only the grip claims the finger: the rest of the list still scrolls under a swipe. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.sort-dragging {
+  position: relative;
+  z-index: 20;
+  opacity: 0.75;
+  background: var(--bg3);
+  box-shadow: 0 8px 24px #000a;
+}
+.sort-before {
+  box-shadow: inset 0 3px 0 var(--accent);
+}
+.sort-after {
+  box-shadow: inset 0 -3px 0 var(--accent);
+}
+.sort-x.sort-before {
+  box-shadow: -3px 0 0 var(--accent);
+}
+.sort-x.sort-after {
+  box-shadow: 3px 0 0 var(--accent);
+}
+body.sorting,
+body.sorting * {
+  cursor: grabbing !important;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.arr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.arr-chip.picked {
+  outline: 2px solid var(--accent);
+}
+button.arr-chip-label {
+  min-height: 0;
+  padding: 0 2px;
+  font-size: inherit;
+  color: inherit;
+}
+/* Labels and tools only a touch device shows (a mouse has the keyboard and title tooltips). */
+.touch-label,
+.touch-only {
+  display: none;
+}
+
+/* ---- playlist editor ---- */
+.pl-editor {
+  grid-template-columns: minmax(360px, 1fr) 380px;
+}
+.pl-add {
+  border-left: 1px solid var(--line);
+}
+
+/* ---- editor: the stage never scrolls or zooms the page under a finger; look previews below it ---- */
+.editor .canvasbox {
+  touch-action: none;
+}
+.ed-looks {
+  flex: none;
+  border-top: 1px solid var(--line);
+  background: var(--bg2);
+}
+.ed-looks > summary {
+  cursor: pointer;
+  padding: 6px 12px;
+  color: var(--fg2);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ed-looks[open] {
+  max-height: 42%;
+  overflow: auto;
+}
+.ed-looks .look-previews.compact {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  padding: 0 12px 10px;
+}
+
+/* ---- touch (iPad): 44 px targets, 16 px inputs, labels, no sticky hover; mouse layouts unchanged ---- */
+@media (pointer: coarse) {
+  .touch-label {
+    display: inline;
+  }
+  .touch-only {
+    display: inline-flex;
+  }
+  .touch-hide {
+    display: none !important;
+  }
+  button,
+  .btn,
+  select,
+  textarea,
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]) {
+    min-height: 44px;
+  }
+  button.small,
+  .btn.small {
+    min-height: 44px;
+    padding: 0 12px;
+    font-size: 14px;
+  }
+  /* Safari zooms the page into any field under 16 px when it is focused. */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+  input[type="checkbox"],
+  input[type="radio"] {
+    width: 24px;
+    height: 24px;
+  }
+  input[type="color"] {
+    min-height: 44px;
+    width: 52px;
+  }
+  label.check {
+    min-height: 44px;
+  }
+  .nav a {
+    height: 44px;
+  }
+  .side a,
+  .side .link {
+    min-height: 44px;
+  }
+  .side .link button.small {
+    min-height: 40px;
+    padding: 0 8px;
+  }
+  .toasts {
+    bottom: calc(24px + var(--safe-bottom, 0px));
+    right: calc(16px + var(--safe-right, 0px));
+  }
+  .sort-handle {
+    width: 44px;
+    min-height: 44px;
+    font-size: 20px;
+  }
+  .pl-item {
+    height: auto;
+    min-height: 60px;
+    padding: 4px 8px 4px 0;
+  }
+  .ed-slide {
+    min-height: 60px;
+    padding: 4px 4px 4px 0;
+  }
+  .ed-sec-head {
+    gap: 4px;
+  }
+  .ed-sec-head .sort-handle {
+    width: 30px;
+  }
+  .ed-sec-head input {
+    min-height: 44px !important;
+    min-width: 64px;
+  }
+  .ed-sec-head button.small {
+    padding: 0 10px;
+  }
+  .arr-chip {
+    min-height: 44px;
+    padding: 0 10px 0 0 !important;
+  }
+  button.arr-chip-label {
+    min-height: 44px;
+    padding: 0 10px;
+    font-size: 16px;
+  }
+  .tag button.small {
+    min-height: 32px;
+  }
+  .thumb {
+    min-height: 44px;
+  }
+  .drop.touch {
+    border-style: solid;
+    padding: 10px;
+    text-align: left;
+  }
+  .editor > .toolbar {
+    padding: 6px 10px;
+    gap: 6px;
+  }
+  .editor > .toolbar button {
+    padding: 0 10px;
+  }
+  .ed-touchbar {
+    order: 10;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+  .ed-nudge {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+  }
+  /* Room below the last field so any field can scroll above the software keyboard (keepVisible.ts). */
+  .editor .props {
+    padding-bottom: calc(40vh + var(--safe-bottom, 0px));
+  }
+  .ed-looks > summary {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+}
+/* No sticky hover after a tap. */
+@media (hover: none) {
+  button:hover:not(:disabled) {
+    background: var(--bg4);
+  }
+  button.ghost:hover:not(:disabled) {
+    background: transparent;
+  }
+  button.primary:hover:not(:disabled) {
+    background: var(--accent2);
+  }
+  button.danger:hover:not(:disabled) {
+    background: #7f1d1d;
+  }
+  button.on:hover:not(:disabled) {
+    background: #1e3a8a;
+  }
+  .pl-item:hover,
+  .vrow:hover {
+    background: inherit;
+  }
+  .pl-item.sel:hover,
+  .vrow.sel:hover {
+    background: #1b2a44;
+  }
+}
+
+/* iPad landscape (1194 x 834) and other wide touch screens: three columns, a little narrower. */
+@media (pointer: coarse) and (min-width: 1001px) {
+  .editor {
+    grid-template-columns: 240px minmax(0, 1fr) 300px;
+  }
+  .pl-editor {
+    grid-template-columns: minmax(0, 1fr) 340px;
+  }
+}
+
+/* iPad portrait (834 x 1194): side lists narrow, the right-hand panels move under the main one. */
+@media (pointer: coarse) and (max-width: 1000px) {
+  .split {
+    grid-template-columns: 180px minmax(0, 1fr) !important;
+  }
+  .pl-editor {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(0, 46%);
+  }
+  .pl-add {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  /* The add panel scrolls as a whole so its search results keep a usable height above the timers. */
+  .add-items {
+    grid-template-rows: auto minmax(220px, 1fr) auto !important;
+    overflow: auto;
+  }
+  .editor {
+    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) minmax(0, 42%);
+  }
+  .editor > .ed-slides {
+    grid-row: 2 / 4;
+  }
+  .editor > .stagewrap {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .editor > .props {
+    grid-column: 2;
+    grid-row: 3;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .ed-slide img,
+  .ed-slide .ph {
+    width: auto;
+    flex: 1;
+    min-width: 0;
+  }
+  .ed-looks[open] {
+    max-height: 50%;
+  }
+}

@@ -1,6 +1,7 @@
 import { api, ApiFailure } from '@ordo/client';
 import { type Arrangement, newId, type Playlist, type PlaylistItem } from '@ordo/domain';
 import { useEffect, useRef, useState } from 'react';
+import { DragHandle, useSortable } from '../../components/Sortable.tsx';
 import { moveItem } from '../../lib/arrangement.ts';
 import { controller } from '../../services/controller.ts';
 import { upsertLocal, useLibrary } from '../../state/library.ts';
@@ -11,7 +12,7 @@ import { AddItemsPanel } from './AddItemsPanel.tsx';
 import { ItemSettings } from './ItemSettings.tsx';
 
 /**
- * Build a service: rename, reorder by drag, add from the library, per-item settings, go live (prd/02).
+ * Build a service: rename, reorder (drag by the handle, touch included, or the arrow buttons), add from the library, per-item settings, go live (prd/02).
  * Changes save automatically (debounced) with the playlist's rev; the live playlist is read-only.
  */
 export function PlaylistEditor(props: {
@@ -25,7 +26,6 @@ export function PlaylistEditor(props: {
   const isLive = useLive((s) => s.state.mode === 'live');
   const [draft, setDraft] = useState<Playlist>(props.playlist);
   const [sel, setSel] = useState<string | undefined>(draft.items[0]?.id);
-  const [drag, setDrag] = useState<number | null>(null);
   const [saving, setSaving] = useState<'idle' | 'pending' | 'saving' | 'error'>('idle');
   const latest = useRef(draft);
   const rev = useRef(props.playlist.rev);
@@ -90,6 +90,12 @@ export function PlaylistEditor(props: {
     clearTimeout(timer.current);
     timer.current = setTimeout(() => void flush(), 600);
   };
+  const sort = useSortable({
+    group: 'playlist-items',
+    axis: 'y',
+    disabled: props.locked,
+    onMove: (from, to) => update((p) => ({ ...p, items: moveItem(p.items, from, to) })),
+  });
   const setItem = (id: string, fn: (it: PlaylistItem) => PlaylistItem) =>
     update((p) => ({ ...p, items: p.items.map((it) => (it.id === id ? fn(it) : it)) }));
   const addItems = (items: PlaylistItem[]) => {
@@ -128,10 +134,10 @@ export function PlaylistEditor(props: {
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: 'minmax(360px, 1fr) 380px',
         height: '100%',
         minHeight: 0,
       }}
+      className="pl-editor"
     >
       <div className="col" style={{ minHeight: 0, overflow: 'auto', padding: 14, gap: 10 }}>
         {props.locked && (
@@ -191,21 +197,22 @@ export function PlaylistEditor(props: {
             Delete
           </button>
         </div>
-        <div className="col" style={{ gap: 0, border: '1px solid var(--line)', borderRadius: 8 }}>
+        <div
+          ref={sort.ref}
+          className="col pl-list"
+          style={{ gap: 0, border: '1px solid var(--line)', borderRadius: 8 }}
+        >
           {draft.items.map((it, i) => (
             <div
               key={it.id}
-              className={`pl-item ${it.id === sel ? 'sel' : ''}`}
-              draggable={!props.locked}
-              onDragStart={() => setDrag(i)}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={() => {
-                if (drag !== null && drag !== i) update((p) => ({ ...p, items: moveItem(p.items, drag, i) }));
-                setDrag(null);
-              }}
+              {...sort.item(i)}
+              {...sort.mouseArea(i)}
+              data-playlist-item={it.id}
+              className={`pl-item ${it.id === sel ? 'sel' : ''} ${sort.cls(i)}`}
               onClick={() => setSel(it.id)}
-              style={{ cursor: props.locked ? 'pointer' : 'grab', opacity: drag === i ? 0.4 : 1 }}
+              style={{ cursor: props.locked ? 'pointer' : 'grab' }}
             >
+              <DragHandle label="Drag to reorder" disabled={props.locked} {...sort.handle(i)} />
               <span className="muted small" style={{ width: 22 }}>
                 {i + 1}
               </span>
@@ -232,8 +239,9 @@ export function PlaylistEditor(props: {
                       e.stopPropagation();
                       update((p) => ({ ...p, items: moveItem(p.items, i, i - 1) }));
                     }}
+                    aria-label="Move up"
                   >
-                    ↑
+                    ↑<span className="touch-label">Up</span>
                   </button>
                   <button
                     type="button"
@@ -243,8 +251,9 @@ export function PlaylistEditor(props: {
                       e.stopPropagation();
                       update((p) => ({ ...p, items: moveItem(p.items, i, i + 1) }));
                     }}
+                    aria-label="Move down"
                   >
-                    ↓
+                    ↓<span className="touch-label">Down</span>
                   </button>
                   <button
                     type="button"
@@ -255,7 +264,7 @@ export function PlaylistEditor(props: {
                     }}
                     title="Remove"
                   >
-                    ✕
+                    ✕<span className="touch-label">Remove</span>
                   </button>
                 </>
               )}
@@ -278,7 +287,7 @@ export function PlaylistEditor(props: {
           </div>
         )}
       </div>
-      <div style={{ borderLeft: '1px solid var(--line)', minHeight: 0, overflow: 'hidden' }}>
+      <div className="pl-add" style={{ minHeight: 0, overflow: 'hidden' }}>
         {props.locked ? (
           <div className="muted" style={{ padding: 16 }}>
             Adding items is disabled while live.

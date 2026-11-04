@@ -12,10 +12,12 @@ import { drawImageFit, drawObject, drawText } from '@ordo/renderer';
 import type Konva from 'konva';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Layer, Line, Rect, Shape, Stage, Transformer } from 'react-konva';
+import { useCoarsePointer } from '../../components/pointer.ts';
 import { stillHash } from '../../services/thumbs.ts';
 import { change, selectObject, useEditor } from './editorStore.ts';
 import { updateObject } from './ops.ts';
 import { snapBox } from './snapping.ts';
+import { rotaterAngle } from './touchGeometry.ts';
 
 // ---- image cache (HTMLImageElement per file hash) ----
 const images = new Map<string, HTMLImageElement>();
@@ -68,6 +70,14 @@ function textCanvas(o: TextObject, tick: number): HTMLCanvasElement {
   return c;
 }
 
+/** Transformer anchors under a finger: 30 px on screen, with a hit area wider than the drawn circle. */
+const TOUCH_ANCHOR = 30;
+/** The rotate handle sits further out under a finger so it is not confused with the top-centre anchor. */
+const TOUCH_ROTATE_OFFSET = 64;
+function touchAnchor(anchor: Konva.Rect): void {
+  anchor.hitStrokeWidth(18);
+}
+
 function local(box: Box): Box {
   return { x: 0, y: 0, w: box.w, h: box.h, rotation: 0 };
 }
@@ -80,6 +90,7 @@ function ObjectNode(props: {
   tick: number;
   readOnly: boolean;
   onSelect: () => void;
+  onEditText?: () => void;
   registerNode: (id: string, n: Konva.Shape | null) => void;
 }) {
   const { o, tick } = props;
@@ -116,7 +127,9 @@ function ObjectNode(props: {
         context.fillStrokeShape(shape);
       }}
       onMouseDown={props.onSelect}
+      onPointerDown={props.onSelect}
       onTap={props.onSelect}
+      onDblTap={props.onEditText}
       onDragMove={(e) => {
         const n = e.target;
         const snapped = snapBox(
@@ -160,8 +173,11 @@ export function SlideCanvas(props: {
   backgroundMediaId?: string;
   media: (id: string) => Media | undefined;
   readOnly: boolean;
+  /** Double-tap on a text box (touch): edit its text. */
+  onEditText?: (objectId: string) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
+  const coarse = useCoarsePointer();
   const [size, setSize] = useState({ w: 960, h: 540 });
   const objectId = useEditor((s) => s.objectId);
   const guides = useEditor((s) => s.guides);
@@ -177,7 +193,24 @@ export function SlideCanvas(props: {
       setSize({ w: Math.max(160, LOGICAL_WIDTH * s), h: Math.max(90, LOGICAL_HEIGHT * s) });
     });
     ro.observe(el);
-    return () => ro.disconnect();
+    // Pinch on the canvas is suppressed, not turned into an editor zoom: the slide is already fitted to the
+    // pane, every edit is in slide units with numeric fields and the nudge toolbar for fine work, and a
+    // two-finger gesture landing on an object must not also move or resize it. `touch-action: none` on the
+    // box (styles.css) keeps Safari from scrolling or zooming the page; its proprietary gesture events and
+    // multi-finger touchmoves are cancelled too for older iPadOS versions that ignore touch-action for pinch.
+    const stop = (e: Event) => e.preventDefault();
+    const multi = (e: TouchEvent) => {
+      if (e.touches.length > 1) e.preventDefault();
+    };
+    el.addEventListener('gesturestart', stop);
+    el.addEventListener('gesturechange', stop);
+    el.addEventListener('touchmove', multi, { passive: false });
+    return () => {
+      ro.disconnect();
+      el.removeEventListener('gesturestart', stop);
+      el.removeEventListener('gesturechange', stop);
+      el.removeEventListener('touchmove', multi);
+    };
   }, []);
   const scale = size.w / LOGICAL_WIDTH;
   const { slide } = props;
@@ -189,6 +222,8 @@ export function SlideCanvas(props: {
     t.nodes(n && !props.readOnly ? [n] : []);
     t.getLayer()?.batchDraw();
   }, [objectId, slide, props.readOnly]);
+  const selBox = objectId ? slide.objects.find((o) => o.id === objectId)?.box : undefined;
+  const rotAngle = coarse && selBox ? rotaterAngle(selBox, scale, TOUCH_ROTATE_OFFSET) : 0;
   const bg = imageFor(stillHash(props.backgroundMediaId ? props.media(props.backgroundMediaId) : undefined));
   const imported = slide.imported ? imageFor(stillHash(props.media(slide.imported.imageMediaId))) : undefined;
   const othersFor = useMemo(
@@ -202,6 +237,9 @@ export function SlideCanvas(props: {
         height={size.h}
         style={{ background: '#000', boxShadow: '0 0 0 1px #333' }}
         onMouseDown={(e) => {
+          if (e.target === e.target.getStage() || e.target.name() === 'bg') selectObject(undefined);
+        }}
+        onTouchStart={(e) => {
           if (e.target === e.target.getStage() || e.target.name() === 'bg') selectObject(undefined);
         }}
       >
@@ -230,6 +268,11 @@ export function SlideCanvas(props: {
               tick={tick}
               readOnly={props.readOnly}
               onSelect={() => selectObject(o.id)}
+              onEditText={
+                o.type === 'text' && !props.readOnly && props.onEditText
+                  ? () => props.onEditText?.(o.id)
+                  : undefined
+              }
               registerNode={(id, n) => {
                 if (n) nodes.current.set(id, n);
                 else nodes.current.delete(id);
@@ -260,7 +303,11 @@ export function SlideCanvas(props: {
             keepRatio={false}
             rotationSnaps={[0, 90, 180, 270]}
             boundBoxFunc={(oldB, newB) => (newB.width < 8 || newB.height < 8 ? oldB : newB)}
-            anchorSize={10}
+            anchorSize={coarse ? TOUCH_ANCHOR : 10}
+            rotateAnchorOffset={coarse ? TOUCH_ROTATE_OFFSET : 50}
+            rotateAnchorAngle={rotAngle}
+            anchorCornerRadius={coarse ? TOUCH_ANCHOR / 2 : 0}
+            anchorStyleFunc={coarse ? touchAnchor : undefined}
             borderStroke="#3b82f6"
             anchorStroke="#3b82f6"
           />
