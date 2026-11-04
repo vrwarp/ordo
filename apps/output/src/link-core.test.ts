@@ -444,7 +444,13 @@ describe('link worker core', () => {
     const job = t.toAsset.find((m) => m.t === 'job' && m.job.kind === 'slide' && m.job.cueIndex === 0);
     expect(job).toBeDefined();
     const key = job!.t === 'job' ? job!.job.key : '';
-    t.asset.port2.postMessage({ t: 'done', layer: 1, key, ms: 1, missingImages: ['img1'] } satisfies FromAsset);
+    t.asset.port2.postMessage({
+      t: 'done',
+      layer: 1,
+      key,
+      ms: 1,
+      missingImages: ['img1'],
+    } satisfies FromAsset);
     await tick(20);
     expect((t.core.introspect() as { missingImages: unknown }).missingImages).toEqual({ [key]: ['img1'] });
     expect(t.core.buildHealth().error).toMatch(/1 slide\(s\) drawn without image/);
@@ -556,7 +562,11 @@ describe('link worker core', () => {
     t.hub.emit('state', stateMsg(liveState({ seq: 3, resolved: { ...liveState().resolved!, files } })));
     await tick(30);
     const c = t.core as unknown as {
-      noteFillOutcome(tried: unknown[], failures: Record<string, string>, mismatched: Record<string, number>): void;
+      noteFillOutcome(
+        tried: unknown[],
+        failures: Record<string, string>,
+        mismatched: Record<string, number>,
+      ): void;
       fileFail: Map<string, { n: number; next: number; reason: string; gaveUp: boolean }>;
     };
     c.noteFillOutcome(files, { empty: 'size' }, {});

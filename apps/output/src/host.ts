@@ -706,7 +706,8 @@ export class OutputHost {
         // another loss (or 2 s after that). Canvas 2D never presents garbage: no probation, the first
         // copy uncovers it (review F2).
         this.restoredSnapPending = true;
-        this.restoredAt = m.compositor === '2d' ? performance.now() - RESTORE_PROBATION_MS : performance.now();
+        this.restoredAt =
+          m.compositor === '2d' ? performance.now() - RESTORE_PROBATION_MS : performance.now();
         setTimeout(() => {
           if (this.restoredSnapPending && performance.now() - this.restoredAt >= RESTORE_PROBATION_MS) {
             this.restoredSnapPending = false;

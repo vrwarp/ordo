@@ -600,7 +600,8 @@ export class LinkCore {
   }
 
   private slotById(id: number): SlotMirror | undefined {
-    for (const p of [this.bgPair, this.mdPair, this.auPair]) for (const s of p.slots) if (s.id === id) return s;
+    for (const p of [this.bgPair, this.mdPair, this.auPair])
+      for (const s of p.slots) if (s.id === id) return s;
     return undefined;
   }
 
@@ -877,7 +878,11 @@ export class LinkCore {
    * raster, invalid data): within the budget it is retried after ERROR_RETRY_MS; past it the key is
    * quarantined for the rest of the service and reported in health (never retried in a loop).
    */
-  private armFailed(key: string, error: string, cause: boolean | 'unavailable' | 'missing' | 'invalid' = false): void {
+  private armFailed(
+    key: string,
+    error: string,
+    cause: boolean | 'unavailable' | 'missing' | 'invalid' = false,
+  ): void {
     const now = Date.now();
     const unavailable = cause === true || cause === 'unavailable' || cause === 'missing';
     if (unavailable) {
@@ -1514,7 +1519,8 @@ export class LinkCore {
         // Not on the hub (404/410): logged once, counted, tried again slowly; a fill after a manifest
         // change or the backoff fetches it again (review F1).
         this.budget.record('cache', `missing: ${f.hash.slice(0, 8)}`);
-        if (prev?.reason !== 'missing') this.diagLog(`cache: ${f.hash.slice(0, 8)} missing on the hub (HTTP 404)`);
+        if (prev?.reason !== 'missing')
+          this.diagLog(`cache: ${f.hash.slice(0, 8)} missing on the hub (HTTP 404)`);
       }
       // A network failure (outage, slow NAS) is retried sooner than a storage one.
       const wait = storage

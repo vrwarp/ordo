@@ -271,7 +271,8 @@ async function run(job: AssetJob): Promise<void> {
       error: (err as Error).message || String(err),
       hash: d?.hash,
       source: d?.source,
-      cause: err instanceof MissingError ? 'missing' : err instanceof UnavailableError ? 'unavailable' : 'invalid',
+      cause:
+        err instanceof MissingError ? 'missing' : err instanceof UnavailableError ? 'unavailable' : 'invalid',
     });
   }
 }
