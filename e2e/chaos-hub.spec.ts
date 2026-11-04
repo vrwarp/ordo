@@ -271,7 +271,23 @@ test('the screen holds through library and live process crashes, a stall, a corr
     await goTo(1);
     await expectCue([out!], 1);
     await out!.bringToFront();
-    await out!.waitForTimeout(500);
+    // A freshly launched output may still be in a device-loss rebuild (SwiftShader loses the WebGPU device at
+    // startup here), covered by an opaque black hold until a good frame exists. Take the reference only once
+    // the renderer has settled and the hold is down.
+    await rendererSettled(out!);
+    await expect
+      .poll(
+        async () => {
+          const held = await out!.evaluate(
+            () =>
+              (window as unknown as { __ordo: { state(): { hold?: boolean } } }).__ordo.state().hold ?? false,
+          );
+          const p = await backgroundPixel(out!);
+          return !held && p.r + p.g + p.b > 30;
+        },
+        { timeout: 20_000 },
+      )
+      .toBe(true);
     const ref = await backgroundPixel(out!);
     expect(ref.r + ref.g + ref.b).toBeGreaterThan(30);
     const WS = hubRequire('ws') as WsCtor;
