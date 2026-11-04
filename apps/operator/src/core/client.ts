@@ -50,6 +50,8 @@ export type CoreClientEvents = {
   ui: Extract<CoreToMain, { t: 'ui' }>['e'];
   welcome: { appVersion: string };
   bye: { reason: string };
+  /** The hub refused the operator's credentials (expired session): sign in again, then `hubResume()`. */
+  auth: { reason: 'unauthorized' | 'forbidden' };
   rtc: RtcSignalIn;
   /** The core worker (re)started and restored its state: generation, and whether it is a restart. */
   ready: { generation: number; restart: boolean };
@@ -205,6 +207,7 @@ export class CoreClient extends Emitter<CoreClientEvents> {
         return;
       case 'hub':
         if (m.e === 'welcome') this.emit('welcome', { appVersion: m.appVersion });
+        else if (m.e === 'auth') this.emit('auth', { reason: m.reason });
         else this.emit('bye', { reason: m.reason });
         return;
       case 'rtc':
@@ -266,6 +269,11 @@ export class CoreClient extends Emitter<CoreClientEvents> {
 
   hubKick(): void {
     this.post({ t: 'hub.kick' });
+  }
+
+  /** Reconnect to the hub now (after a new sign-in cleared a refused session). */
+  hubResume(): void {
+    this.post({ t: 'hub.resume' });
   }
 
   libOp(op: LibOp): void {
@@ -362,6 +370,11 @@ export class CoreClient extends Emitter<CoreClientEvents> {
     this.dropRelay(k);
     this.windows.delete(outputId);
     this.post({ t: 'bus.drop', outputId });
+  }
+
+  /** Ports offered to each known window since it was attached (diagnostics and tests). */
+  offerCounts(): Record<string, number> {
+    return Object.fromEntries([...this.windows].map(([id, k]) => [id, k.offers]));
   }
 
   hasWindow(outputId: string): boolean {

@@ -81,6 +81,8 @@ export type MainToCore =
   | { t: 'call'; aid: string; name: CallName; args: unknown[] }
   | { t: 'hub.send'; m: ClientMessageBody }
   | { t: 'hub.kick' }
+  /** The operator signed in again after the hub refused the session: reconnect now. */
+  | { t: 'hub.resume' }
   /** A fresh fallback-bus port for one window (transferred; the window holds the other end). */
   | { t: 'bus.port'; outputId: string; port: MessagePort }
   /** Legacy path: a port the main thread bridges to window.postMessage for a window without a port. */
@@ -110,6 +112,8 @@ export type LiveSlice = {
   pending: number;
   hubConnected: boolean;
   everConnected: boolean;
+  /** The hub refused this operator's credentials (expired session): not a hub loss; sign in again. */
+  hubRefused?: 'unauthorized' | 'forbidden';
   ownCache: { ready: number; total: number; failed: number; manifestId?: string };
   clock: { offset: number; rtt: number; fallback: boolean };
 };
@@ -167,6 +171,8 @@ export type CoreToMain =
   | { t: 'ui'; e: UiEvent }
   | { t: 'hub'; e: 'welcome'; appVersion: string }
   | { t: 'hub'; e: 'bye'; reason: string }
+  /** The hub refused the credentials (once per refusal, not per reconnect attempt). */
+  | { t: 'hub'; e: 'auth'; reason: 'unauthorized' | 'forbidden' }
   | { t: 'rtc'; m: RtcSignalIn }
   | { t: 'search.res'; reqId: number; hits: SearchHit[] }
   | { t: 'deck.res'; reqId: number; px: Uint8ClampedArray | null }

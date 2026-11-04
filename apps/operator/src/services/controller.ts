@@ -9,6 +9,7 @@ import { useLive } from '../state/live.ts';
 import { refreshSession, useSession } from '../state/session.ts';
 import { toast } from '../state/toasts.ts';
 import { rememberMessage, useUi } from '../state/ui.ts';
+import { RecoveringGate } from '../lib/recovering.ts';
 import { log } from './log.ts';
 import { thumbs } from './thumbs.ts';
 
@@ -16,6 +17,7 @@ export { APP_VERSION };
 /** GO lead: two frames at 60 Hz. */
 export const GO_LEAD_MS = 33;
 export const MUTE_DB = -96;
+const SUPERVISION_MS = 500;
 
 type Hooks = {
   launch?: () => void;
@@ -65,6 +67,7 @@ export class Controller {
   private cuesRev = -1;
   private lastResolvedId?: string;
   private watch?: ReturnType<typeof setInterval>;
+  private recoveringGate = new RecoveringGate(SUPERVISION_MS);
   private offs: (() => void)[] = [];
 
   constructor(
@@ -94,6 +97,12 @@ export class Controller {
         this.hub.emit('welcome', w);
       }),
       c.on('bye', (b) => this.hub.emit('bye', b)),
+      // The hub refused the session (expired, logged out elsewhere): not a hub loss. Ask the hub who we
+      // are, which routes to the sign-in view; once signed in, the core reconnects at once (review item 5).
+      c.on('auth', ({ reason }) => {
+        log('warn', `hub refused this operator's session (${reason}); sign in again`);
+        void refreshSession();
+      }),
       c.on('rtc', (m) => this.hooks.onRtc?.(m)),
       c.on('ready', ({ generation, restart }) => {
         if (restart) {
@@ -110,7 +119,16 @@ export class Controller {
         this.updateSupervision();
       }),
     );
-    this.watch = setInterval(() => this.updateSupervision(), 500);
+    // Signed in again after a refusal: reconnect the core's hub socket now instead of at its slow retry.
+    let signedIn = signedInRole() !== null;
+    this.offs.push(
+      useSession.subscribe(() => {
+        const now = signedInRole() !== null;
+        if (now && !signedIn && useLive.getState().hubRefused) this.core.hubResume();
+        signedIn = now;
+      }),
+    );
+    this.watch = setInterval(() => this.updateSupervision(), SUPERVISION_MS);
     if (test) installTestHooks(this);
   }
 
@@ -148,6 +166,7 @@ export class Controller {
       patch.pending = l.pending;
       patch.hubConnected = l.hubConnected;
       patch.everConnected = l.everConnected;
+      patch.hubRefused = l.hubRefused;
       patch.ownCache = l.ownCache;
       patch.clock = { offset: l.clock.offset, rtt: l.clock.rtt };
     } else if (m.resolved || m.cues) {
@@ -173,7 +192,11 @@ export class Controller {
   private updateSupervision(): void {
     const stats = this.core.sup.stats();
     const core = stats.find((s) => s.name === 'core');
-    const recovering = !!core && !core.gaveUp && (this.core.recovering || core.sinceHeartbeatMs > 750);
+    // Gated on the real restart state, with the supervisor's stall correction for late heartbeats.
+    const recovering =
+      !!core &&
+      !core.gaveUp &&
+      this.recoveringGate.judge(performance.now(), this.core.recovering, core.sinceHeartbeatMs);
     const cur = useLive.getState();
     const budgets = this.core.budgets.snapshot();
     const key = JSON.stringify([
@@ -309,6 +332,9 @@ function installTestHooks(ctl: Controller): void {
         live: s.state.live,
         authority: s.authority,
         hubConnected: s.hubConnected,
+        hubRefused: s.hubRefused,
+        reconcile: s.reconcile,
+        offers: ctl.core.offerCounts(),
         recovering: s.recovering,
         generation: s.core?.generation,
         endpoints: s.core?.endpoints ?? {},
@@ -329,8 +355,15 @@ function installTestHooks(ctl: Controller): void {
       workerDispatch: (action: Action, delayMs = 0) =>
         ctl.core.chaos({ k: 'dispatchLater', action, delayMs }),
       throwInWorker: (reason = 'test') => ctl.core.chaos({ k: 'throw', reason }),
+      /** Drop the core's hub socket now; it reconnects after the backoff. */
+      kickHub: () => ctl.core.hubKick(),
     },
   };
+}
+
+function signedInRole(): 'operate' | 'edit' | null {
+  const r = useSession.getState().me?.role;
+  return r === 'operate' || r === 'edit' ? r : null;
 }
 
 let current: Controller | undefined;

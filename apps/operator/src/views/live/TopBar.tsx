@@ -37,18 +37,21 @@ export function TopBar() {
   const s = live.state;
   const isLive = s.mode === 'live';
   const fallback = live.authority === 'fallback';
-  const hubDot = fallback ? 'amber' : live.hubConnected ? 'green' : 'red';
-  const hubText = fallback
-    ? live.reconcile === 'conflict'
-      ? 'Hub back: choose which service to keep'
-      : live.reconcile === 'adopting' || live.reconcile === 'awaitState' || live.hubConnected
-        ? 'Hub back: handing over…'
-        : 'Hub lost: running from this PC'
-    : live.hubConnected
-      ? 'Hub'
-      : live.everConnected
-        ? 'Hub reconnecting…'
-        : 'Connecting…';
+  const refused = !!live.hubRefused && !live.hubConnected;
+  const hubDot = fallback || refused ? 'amber' : live.hubConnected ? 'green' : 'red';
+  const hubText = refused
+    ? 'Session ended: sign in again (outputs stay on the hub)'
+    : fallback
+      ? live.reconcile === 'conflict'
+        ? 'Hub back: choose which service to keep'
+        : live.reconcile === 'adopting' || live.reconcile === 'awaitState' || live.hubConnected
+          ? 'Hub back: handing over…'
+          : 'Hub lost: running from this PC'
+      : live.hubConnected
+        ? 'Hub'
+        : live.everConnected
+          ? 'Hub reconnecting…'
+          : 'Connecting…';
   const entries = Object.values(live.health);
   const cache = cacheSummary(entries, live.ownCache.total ? live.ownCache : undefined);
   const cacheDot = !isLive ? 'grey' : cache.frac >= 1 ? 'green' : 'amber';

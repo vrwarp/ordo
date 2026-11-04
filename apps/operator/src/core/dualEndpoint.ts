@@ -50,6 +50,16 @@ export class DualEndpoint implements BusEndpoint {
     return !!this.port;
   }
 
+  /** The window has spoken on the current port (it is proven). */
+  portSpoke(): boolean {
+    return !!this.port?.lastRx;
+  }
+
+  /** A port is held and not known to be closed. */
+  portAlive(): boolean {
+    return !!this.port && this.port.ep.alive();
+  }
+
   /** Time of the last message from the window on any channel (0: never). */
   lastRx(): number {
     return Math.max(this.port?.lastRx ?? 0, this.relay?.lastRx ?? 0);

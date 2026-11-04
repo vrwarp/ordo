@@ -1,9 +1,12 @@
 import type { JsonStore } from '@ordo/cache';
 import { type LiveState, parseLyrics, type ResolvedPlaylist, songFromParsed } from '@ordo/domain';
 import { initialState, reduce } from '@ordo/live-state';
-import { afterEach, describe, expect, it } from 'vitest';
+import { checkInvariants } from '@ordo/live-state';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CORE_KEY, CoreEngine, type CoreSnapshot } from '../src/core/engine.ts';
-import type { CoreToMain, ViewModelMsg } from '../src/core/protocol.ts';
+import type { CoreToMain, LibOp, ViewModelMsg } from '../src/core/protocol.ts';
+import { emptyLibrary } from '../src/core/libraryStore.ts';
+import { LiveCore } from '../src/lib/liveCore.ts';
 
 function resolved(): ResolvedPlaylist {
   const a = songFromParsed(parseLyrics('Verse 1\na\nb\n\nChorus\nc\nd'), { linesPerSlide: 1 });
@@ -136,5 +139,220 @@ describe('CoreEngine (operator core worker)', () => {
     // A hidden page's timers are throttled: not a stall (the watchdog refreshes the tick while hidden).
     (engine as unknown as { watch(): void }).watch();
     expect(engine.stats().mainThreadStallMs).toBe(0);
+  });
+
+  const lastLiveOf = (posts: CoreToMain[]) =>
+    posts.filter((p): p is ViewModelMsg => p.t === 'vm' && !!p.live).at(-1)!.live!;
+  /** Feed a raw server message to the engine's hub connection, as the socket would. */
+  const fromHub = (e: CoreEngine, m: unknown) =>
+    (e.hub as unknown as { onMessage(raw: string): void }).onMessage(JSON.stringify(m));
+
+  it('a refused session is not a hub loss: no fallback, one auth event, no toast per attempt; sign-in resumes (item 5)', async () => {
+    vi.useFakeTimers();
+    try {
+      const posts: CoreToMain[] = [];
+      const { store } = memStore({
+        [CORE_KEY]: { state: live(), authority: 'hub', pending: [], aids: [], at: Date.now() },
+      });
+      engine = new CoreEngine((m) => posts.push(m), store);
+      const e = engine;
+      await e.init({ t: 'init', role: 'operate', appVersion: 't', generation: 1, test: true });
+      e.hub.emit('status', { connected: true });
+      e.core.onStatus(true);
+      // The session expired while connected: bye, then the close.
+      fromHub(e, { t: 'bye', v: 1, reason: 'unauthorized' });
+      e.hub.emit('status', { connected: false });
+      // Each retry is refused again: still one auth event and no toast.
+      fromHub(e, { t: 'bye', v: 1, reason: 'unauthorized' });
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(e.core.authority).toBe('hub');
+      expect(posts.filter((p) => p.t === 'hub' && p.e === 'auth')).toHaveLength(1);
+      expect(posts.filter((p) => p.t === 'toast')).toHaveLength(0);
+      expect(lastLiveOf(posts).hubRefused).toBe('unauthorized');
+      // Signed in again: the core reconnects; if the hub is really gone now, the normal grace applies.
+      e.handle({ t: 'hub.resume' });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(lastLiveOf(posts).hubRefused).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(e.core.authority).toBe('fallback');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never persists a state that fails the invariants; the restarted core resumes the last good one (item 17)', async () => {
+    const good = live();
+    const { map, e } = await start({
+      state: good,
+      authority: 'fallback',
+      pending: [],
+      aids: [],
+      at: Date.now(),
+    });
+    const fatal: string[] = [];
+    e.onFatal = (r) => fatal.push(r);
+    expect(e.core.authority).toBe('fallback');
+    // A good change is persisted.
+    e.handle({ t: 'action', aid: 'g1', action: { id: 'next' }, source: 'keyboard' });
+    await flush();
+    await flush();
+    const afterGood = map.get(CORE_KEY) as CoreSnapshot;
+    expect(afterGood.state.live).toBe(0);
+    // Then the authoritative state breaks (a reducer bug): the core asks for a restart...
+    const core = e.core as unknown as { local: LiveState; deps: { onChange(): void } };
+    core.local = { ...core.local, seq: core.local.seq + 1, live: 99 } as LiveState;
+    core.deps.onChange();
+    await flush();
+    await flush();
+    expect(fatal).toHaveLength(1);
+    // ...and the snapshot on disk is still the good one, with a fresh time so the authority resumes.
+    const saved = map.get(CORE_KEY) as CoreSnapshot;
+    expect(checkInvariants(saved.state)).toEqual([]);
+    expect(saved.state.live).toBe(0);
+    expect(saved.authority).toBe('fallback');
+    expect(saved.at).toBeGreaterThanOrEqual(afterGood.at);
+    e.dispose();
+
+    // The restarted core resumes as the authority from it (GO keeps working without the hub).
+    const posts2: CoreToMain[] = [];
+    engine = new CoreEngine((m) => posts2.push(m), memStore({ [CORE_KEY]: saved }).store);
+    await engine.init({ t: 'init', role: 'operate', appVersion: 't', generation: 2, test: true });
+    await flush();
+    const l = lastLiveOf(posts2);
+    expect(l.authority).toBe('fallback');
+    expect(l.state.mode).toBe('live');
+    expect(l.state.live).toBe(0);
+  });
+
+  it('a library write before the cached copy loaded survives it and the first post is a full one (item 26)', async () => {
+    const posts: CoreToMain[] = [];
+    const cached = {
+      ...emptyLibrary(),
+      playlists: [{ id: 'old', rev: 1, name: 'Cached', items: [] }],
+    };
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const store = {
+      get: async <T>(k: string) => {
+        if (k === 'library') {
+          await gate;
+          return structuredClone(cached) as T;
+        }
+        return undefined;
+      },
+      set: async () => undefined,
+    } as unknown as JsonStore;
+    engine = new CoreEngine((m) => posts.push(m), store);
+    const e = engine;
+    await e.init({ t: 'init', role: 'operate', appVersion: 't', generation: 1, test: true });
+    const op: LibOp = {
+      k: 'upsert',
+      key: 'playlists',
+      entity: { id: 'new', rev: 1, name: 'Written', items: [] } as never,
+    };
+    e.handle({ t: 'lib.op', op });
+    release();
+    for (let i = 0; i < 5; i++) await flush();
+    const libs = posts.filter((p): p is Extract<CoreToMain, { t: 'lib' }> => p.t === 'lib');
+    expect(libs.length).toBeGreaterThan(0);
+    // Never a patch that removes the written entity.
+    for (const m of libs) expect(m.patch?.remove?.playlists ?? []).not.toContain('new');
+    const first = libs[0]!;
+    expect(first.full).toBeDefined();
+    const ids = first.full!.data.playlists.map((p) => p.id).sort();
+    expect(ids).toEqual(['new', 'old']);
+    expect(e.lib.data.playlists.map((p) => p.id).sort()).toEqual(['new', 'old']);
+  });
+
+  it('an exceeded cache-fill budget resets the own-cache numbers to the new manifest (item 27)', async () => {
+    const { posts, e } = await start();
+    const eng = e as unknown as {
+      ownCache: { ready: number; total: number; failed: number; manifestId?: string };
+      fillOwnCache(files: { hash: string; bytes: number; mime: string }[], id: string): Promise<void>;
+    };
+    eng.ownCache = { ready: 4, total: 4, failed: 0, manifestId: 'previous' };
+    for (let i = 0; i < 3; i++) e.budgets.record('cacheFill', 'quota');
+    expect(e.budgets.exceeded('cacheFill')).toBe(true);
+    await eng.fillOwnCache(
+      [
+        { hash: 'h1', bytes: 1, mime: 'image/png' },
+        { hash: 'h2', bytes: 1, mime: 'image/png' },
+      ],
+      'm2',
+    );
+    await flush();
+    expect(lastLiveOf(posts).ownCache).toEqual({ ready: 0, total: 2, failed: 2, manifestId: 'm2' });
+  });
+
+  it('in hub mode a quiet proven port is never re-offered; an unproven one is, once per 10 s (item 16)', async () => {
+    let now = 1_000_000;
+    const posts: CoreToMain[] = [];
+    engine = new CoreEngine(
+      (m) => posts.push(m),
+      memStore().store,
+      () => now,
+    );
+    const e = engine;
+    await e.init({ t: 'init', role: 'operate', appVersion: 't', generation: 0, test: true });
+    const proven = new MessageChannel();
+    const unproven = new MessageChannel();
+    e.handle({ t: 'bus.port', outputId: 'o1', port: proven.port1 });
+    e.handle({ t: 'bus.port', outputId: 'o2', port: unproven.port1 });
+    // o1's window answers the introduction on its port (a fallback.ready), then falls quiet.
+    proven.port2.postMessage({ t: 'fallback.ready', v: 1, outputId: 'o1', appliedSeq: 0 });
+    for (let i = 0; i < 100 && e.stats().endpoints.o1?.sinceRxMs === -1; i++)
+      await new Promise((r) => setTimeout(r, 10));
+    expect(e.stats().endpoints.o1?.ready).toBe(true);
+    const watchBus = () => (e as unknown as { watchBus(): void }).watchBus();
+    posts.length = 0;
+    for (let t = 0; t < 60_000; t += 2000) {
+      now += 2000;
+      watchBus();
+    }
+    const needs = (id: string) => posts.filter((p) => p.t === 'bus.need' && p.outputId === id).length;
+    expect(needs('o1')).toBe(0);
+    expect(needs('o2')).toBeGreaterThanOrEqual(5);
+    expect(needs('o2')).toBeLessThanOrEqual(6);
+    // The `fallback ready` line is logged once per window in hub mode, not per re-introduction.
+    proven.port2.postMessage({ t: 'fallback.ready', v: 1, outputId: 'o1', appliedSeq: 0 });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(posts.filter((p) => p.t === 'log' && /fallback ready o1/.test(p.text))).toHaveLength(0);
+    proven.port2.close();
+    unproven.port2.close();
+  });
+});
+
+describe('LiveCore with a refused hub session (item 5)', () => {
+  it('does not arm the fallback grace while the hub refuses the session', () => {
+    const timers: { fn: () => void; ms: number }[] = [];
+    const notices: string[] = [];
+    const c = new LiveCore(
+      {
+        sendHub: () => false,
+        fallback: { activate() {}, deactivate() {}, broadcastDelta() {} },
+        setClockFallback() {},
+        newId: () => Math.random().toString(36),
+        setTimer: (fn, ms) => {
+          const t = { fn, ms };
+          timers.push(t);
+          return t;
+        },
+        clearTimer: (t) => {
+          const i = timers.indexOf(t as never);
+          if (i >= 0) timers.splice(i, 1);
+        },
+        onChange() {},
+        onNotice: (n) => notices.push(n.kind),
+      },
+      live(),
+    );
+    c.onStatus(true);
+    c.setHubRefused(true);
+    c.onStatus(false);
+    for (const t of [...timers]) t.fn();
+    expect(c.authority).toBe('hub');
+    expect(notices).not.toContain('fallback-on');
   });
 });

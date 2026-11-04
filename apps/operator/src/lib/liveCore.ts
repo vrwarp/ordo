@@ -64,6 +64,12 @@ export class LiveCore {
   readonly opt: OptimisticState;
   authority: Authority = 'hub';
   hubConnected = false;
+  /**
+   * The hub refused this operator's credentials (an expired session): the hub is up and the outputs
+   * follow it, so its socket being down is not a hub loss and must not arm the fallback grace (review
+   * item 5).
+   */
+  hubRefused = false;
   reconcile: Reconcile = null;
   /** The hub's state while a conflict dialog is open. */
   conflictHubState?: LiveState;
@@ -165,8 +171,21 @@ export class LiveCore {
       this.clearGrace();
     } else {
       this.reconcile = this.authority === 'fallback' ? null : this.reconcile;
-      if (this.authority === 'hub' && this.view.mode === 'live') this.armGrace();
+      if (this.authority === 'hub' && this.view.mode === 'live' && !this.hubRefused) this.armGrace();
     }
+    this.deps.onChange();
+  }
+
+  /**
+   * The hub refused (on) or may accept again (off: a new sign-in) this operator's credentials. While
+   * refused the fallback grace is neither armed nor running; when cleared and still disconnected, the
+   * normal grace applies again.
+   */
+  setHubRefused(on: boolean): void {
+    if (this.hubRefused === on) return;
+    this.hubRefused = on;
+    if (on) this.clearGrace();
+    else if (!this.hubConnected && this.authority === 'hub' && this.view.mode === 'live') this.armGrace();
     this.deps.onChange();
   }
 
@@ -265,7 +284,7 @@ export class LiveCore {
     this.clearGrace();
     this.graceTimer = this.deps.setTimer(() => {
       this.graceTimer = undefined;
-      if (!this.hubConnected && this.authority === 'hub' && this.view.mode === 'live')
+      if (!this.hubConnected && !this.hubRefused && this.authority === 'hub' && this.view.mode === 'live')
         this.activateFallback();
     }, this.deps.graceMs ?? 5000);
   }

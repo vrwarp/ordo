@@ -91,7 +91,15 @@ export class CoreEngine {
   private mainHidden = false;
   private libReady = false;
   private lastChecked?: LiveState;
+  private lastCheckedOk = true;
   private invariantFailures: number[] = [];
+  /** Windows whose `fallback ready` was logged in hub mode (logged once each). */
+  private readyLogged = new Set<string>();
+  /** The last core snapshot that passed the invariants (the only kind ever persisted; review item 17). */
+  private lastGood?: CoreSnapshot;
+  private brokenLogged = false;
+  /** The hub refused the credentials (expired session): not a hub loss (review item 5). */
+  private hubRefused?: 'unauthorized' | 'forbidden';
   /** Ask the supervisor for a clean restart (set by the worker entry). */
   onFatal?: (reason: string) => void;
   private timers: ReturnType<typeof setInterval>[] = [];
@@ -139,12 +147,16 @@ export class CoreEngine {
       this.scheduleVm();
     });
     this.fallback.on('event', ({ event }) => this.core?.externalEvent(event));
-    this.fallback.on('ready', ({ outputId, appliedSeq }) =>
+    this.fallback.on('ready', ({ outputId, appliedSeq }) => {
+      // In hub mode a window answers every port offer with `fallback.ready`: log the first per window and
+      // every one while the operator is the authority, not each re-introduction (review item 16).
+      if (!this.fallback.active && this.readyLogged.has(outputId)) return;
+      this.readyLogged.add(outputId);
       this.log(
         'info',
         `fallback ready ${outputId} @${appliedSeq} via ${this.endpoints.get(outputId)?.active()}`,
-      ),
-    );
+      );
+    });
   }
 
   // ------------------------------------------------------------------ lifecycle
@@ -242,6 +254,11 @@ export class CoreEngine {
       ),
     );
     h.on('welcome', (w) => {
+      if (this.hubRefused) {
+        this.hubRefused = undefined;
+        this.log('info', 'hub accepted the operator again');
+      }
+      this.core.setHubRefused(false);
       this.core.onWelcome();
       this.post({ t: 'hub', e: 'welcome', appVersion: w.appVersion });
       // Deltas may have been missed while away.
@@ -275,9 +292,24 @@ export class CoreEngine {
     });
     h.on('rtc', (m) => this.post({ t: 'rtc', m }));
     h.on('bye', (m) => {
+      const auth = m.reason === 'unauthorized' || m.reason === 'forbidden';
+      // A refused session is reported once, by the auth event below, not on every reconnect attempt.
+      if (auth && this.hubRefused) return;
       this.log('warn', `hub said bye: ${m.reason}`);
       this.post({ t: 'hub', e: 'bye', reason: m.reason });
-      if (m.reason !== 'version') this.toast(`Hub closed the connection: ${m.reason}`, 'warn');
+      if (m.reason !== 'version' && !auth) this.toast(`Hub closed the connection: ${m.reason}`, 'warn');
+    });
+    // The hub is up but refuses this operator's session: never the fallback authority for that; the host
+    // routes to the sign-in view and posts `hub.resume` once signed in.
+    h.on('auth', ({ reason }) => {
+      this.hubRefused = reason;
+      this.log(
+        'warn',
+        `hub refused the operator's session (${reason}): sign in again; the outputs stay on the hub`,
+      );
+      this.core.setHubRefused(true);
+      this.post({ t: 'hub', e: 'auth', reason });
+      this.scheduleVm();
     });
   }
 
@@ -300,6 +332,13 @@ export class CoreEngine {
       case 'hub.kick':
         this.hub.kick();
         return;
+      case 'hub.resume':
+        // Signed in again: reconnect now. The grace applies again only if the hub is really gone.
+        this.hubRefused = undefined;
+        this.core?.setHubRefused(false);
+        this.hub.resume();
+        this.scheduleVm();
+        return;
       case 'bus.port':
         this.onPort(m.outputId, m.port, 'port');
         return;
@@ -316,13 +355,20 @@ export class CoreEngine {
         // A hidden page's timers are throttled by the browser: that is not a stall.
         this.mainHidden = !!m.hidden;
         return;
-      case 'lib.op':
+      case 'lib.op': {
         this.flushVm(); // post anything older first, so moving the baseline below loses nothing
+        // The baseline moves only once the library was posted in full: before that, the first full post
+        // carries the op (the main thread applied it already, so it is not lost there either), and moving
+        // it early would make the cached copy, arriving later, look like a removal (review item 26).
+        const posted = this.libReady && this.posted.libRev >= 0 && this.posted.lib !== undefined;
         this.lib.applyOp(m.op);
-        // The main thread applied it already: move the baseline so it is not echoed back.
-        this.posted.lib = this.lib.data;
-        this.posted.libRev = this.lib.rev;
+        if (posted) {
+          // The main thread applied it already: move the baseline so it is not echoed back.
+          this.posted.lib = this.lib.data;
+          this.posted.libRev = this.lib.rev;
+        }
         return;
+      }
       case 'lib.reload':
         void this.lib.load();
         return;
@@ -535,14 +581,22 @@ export class CoreEngine {
     this.post({ t: 'bus.need', outputId });
   }
 
-  /** Re-offer ports to windows whose bus has been silent (a reload, or an offer that never arrived). */
+  /**
+   * Re-offer a port to a window that needs one (review item 16): the window never spoke on its current
+   * port (the offer may have reached about:blank), the port is closed, or the bus runs over the relay
+   * (its port died with a reload). A proven port that is merely quiet needs nothing in hub mode, where a
+   * window has nothing to say on the bus; while the operator is the authority windows report health
+   * over it, so a proven port silent for REOFFER_MS is re-offered too. At most one offer per REOFFER_MS.
+   */
   private watchBus(): void {
     const now = this.now();
     for (const [id, d] of this.endpoints) {
-      const silent = now - Math.max(d.lastRx(), d.lastOffer) >= REOFFER_MS;
-      // Talking over the relay only (its port died with a reload): offer a new port now and then.
-      const relayOnly = d.active() === 'window' && now - d.lastOffer >= REOFFER_MS;
-      if (silent || relayOnly) this.needPort(id);
+      if (now - d.lastOffer < REOFFER_MS) continue;
+      const unproven = !d.portSpoke();
+      const closed = !d.portAlive();
+      const relay = d.active() === 'window';
+      const silentInFallback = this.fallback.active && now - d.lastRx() >= REOFFER_MS;
+      if (unproven || closed || relay || silentInFallback) this.needPort(id);
     }
   }
 
@@ -597,12 +651,15 @@ export class CoreEngine {
     if (s === this.lastChecked) return;
     this.lastChecked = s;
     const v = checkInvariants(s);
+    this.lastCheckedOk = v.length === 0;
     if (!v.length) return;
     this.log('error', `live state invariants failed: ${v.slice(0, 3).join('; ')}`);
     const now = this.now();
     this.invariantFailures = this.invariantFailures.filter((t) => now - t < 60_000);
     this.invariantFailures.push(now);
     if (c.authority === 'fallback' || this.invariantFailures.length > 3) {
+      // Nothing broken is persisted (persist() keeps the last good snapshot), so the restarted core
+      // resumes from the last state that passed (review item 17).
       this.onFatal?.(`invariants: ${v[0]}`);
       return;
     }
@@ -630,6 +687,27 @@ export class CoreEngine {
     };
   }
 
+  /**
+   * The snapshot to persist: the current one when its state passes the invariants, otherwise the last
+   * good one with a fresh time (so a restart within RESUME_AUTHORITY_MS still resumes the authority from
+   * it), or nothing when there never was a good one. A broken state is never written over a good one.
+   */
+  private goodSnapshot(): CoreSnapshot | undefined {
+    const snap = this.snapshot();
+    const ok =
+      snap.state === this.lastChecked ? this.lastCheckedOk : checkInvariants(snap.state).length === 0;
+    if (ok) {
+      this.lastGood = snap;
+      this.brokenLogged = false;
+      return snap;
+    }
+    if (!this.brokenLogged) {
+      this.brokenLogged = true;
+      this.log('error', 'live state failed the invariants: keeping the last good snapshot on disk');
+    }
+    return this.lastGood ? { ...this.lastGood, at: snap.at } : undefined;
+  }
+
   /** Persist the core snapshot (coalesced per task). Resolves once written. */
   persist(): Promise<void> {
     if (this.role !== 'operate' || !this.core) return Promise.resolve();
@@ -637,7 +715,11 @@ export class CoreEngine {
     this.persistQueued = new Promise<void>((resolve) => {
       queueMicrotask(() => {
         this.persistQueued = undefined;
-        const snap = this.snapshot();
+        const snap = this.goodSnapshot();
+        if (!snap) {
+          resolve();
+          return;
+        }
         this.store
           .set(CORE_KEY, snap)
           .catch(() => {
@@ -672,6 +754,9 @@ export class CoreEngine {
     this.fillAbort?.abort();
     if (this.budgets.exceeded('cacheFill')) {
       this.log('warn', 'operator cache: fill budget exceeded; not retrying until the operator asks');
+      // The numbers describe this manifest, not the previous service's finished fill (review item 27).
+      this.ownCache = { ready: 0, total: files.length, failed: files.length, manifestId };
+      this.scheduleVm();
       return;
     }
     const ac = new AbortController();
@@ -809,6 +894,7 @@ export class CoreEngine {
       pending: this.core.pendingCount,
       hubConnected: this.hub.connected,
       everConnected: this.everConnected,
+      hubRefused: this.hubRefused,
       ownCache: this.ownCache,
       clock: { offset: this.hub.clock.offset, rtt: this.hub.clock.rtt, fallback: this.hub.clock.fallback },
     };
@@ -874,6 +960,7 @@ function liveSignature(l: LiveSlice, view: LiveState): string {
     l.pending,
     l.hubConnected,
     l.everConnected,
+    l.hubRefused,
     l.ownCache.ready,
     l.ownCache.total,
     l.ownCache.failed,

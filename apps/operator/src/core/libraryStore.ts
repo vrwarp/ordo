@@ -154,6 +154,11 @@ export class LibraryStore {
   rev = 0;
   private persistTimer?: unknown;
   private loading?: Promise<void>;
+  /**
+   * Local writes applied before any copy loaded (the 1.5 s after a core restart): the cached copy, when it
+   * arrives, goes underneath them instead of replacing them (review item 26).
+   */
+  private early: LibOp[] = [];
 
   constructor(private deps: LibraryStoreDeps) {}
 
@@ -161,7 +166,10 @@ export class LibraryStore {
     try {
       const cached = await this.deps.cacheGet();
       if (cached && this.source === 'none') {
-        this.set({ ...cached, settings: withDefaults(cached.settings), jobs: {} }, 'cache');
+        let data: LibraryData = { ...cached, settings: withDefaults(cached.settings), jobs: {} };
+        for (const op of this.early) data = applyLibOp(data, op);
+        this.early = [];
+        this.set(data, 'cache');
         return true;
       }
     } catch {
@@ -180,6 +188,8 @@ export class LibraryStore {
         data.settings = withDefaults(snap.settings);
         data.jobs = this.data.jobs;
         this.error = undefined;
+        // The hub's snapshot follows the API calls behind any early local write: it already holds them.
+        this.early = [];
         this.set(data, 'hub');
         this.persist();
       } catch (e) {
@@ -214,6 +224,7 @@ export class LibraryStore {
   }
 
   applyOp(op: LibOp): void {
+    if (this.source === 'none' && this.early.length < 100) this.early.push(op);
     this.set(applyLibOp(this.data, op), this.source);
     this.persist();
   }

@@ -45,6 +45,12 @@ export type HubEvents = {
   rtc: RtcSignalIn;
   preview: PreviewIn;
   bye: Bye;
+  /**
+   * The hub refused this client's credentials (`bye unauthorized` or `forbidden`: an expired session, a
+   * revoked token). Not a hub loss: the hub is up and answering. Reconnects back off to AUTH_RETRY_MS and
+   * beyond until `resume()` (after a new sign-in) or a welcome.
+   */
+  auth: { reason: 'unauthorized' | 'forbidden' };
   /** Liveness failed: the socket was discarded without waiting for a close handshake. */
   lost: { sincePongMs: number };
 };
@@ -68,6 +74,9 @@ export type HubConnectionOptions = {
 export const IDLE_PING_MS = 10_000;
 export const LIVE_PING_MS = 3000;
 export const LIVE_LOST_MS = 9000;
+/** First reconnect delay after the hub refused the credentials (doubles up to AUTH_RETRY_MAX_MS). */
+export const AUTH_RETRY_MS = 30_000;
+export const AUTH_RETRY_MAX_MS = 120_000;
 /** How often liveness is judged (independent of the ping period, so loss is noticed within a second). */
 const CHECK_MS = 1000;
 
@@ -91,6 +100,9 @@ export class HubConnection extends Emitter<HubEvents> {
   private lastPong = 0;
   private lastSeq?: number;
   private live = false;
+  private authRetry = AUTH_RETRY_MS;
+  /** The hub refused the credentials; cleared by a welcome or `resume()`. */
+  authBlocked = false;
   readonly clock: HubClock;
   connected = false;
 
@@ -119,6 +131,19 @@ export class HubConnection extends Emitter<HubEvents> {
       }
     }
     this.setConnected(false);
+  }
+
+  /**
+   * Reconnect now after the credentials were renewed (a new sign-in): clears the auth back-off. A no-op
+   * while connected.
+   */
+  resume(): void {
+    this.authBlocked = false;
+    this.authRetry = AUTH_RETRY_MS;
+    this.backoff = 500;
+    if (this.stopped || this.ws) return;
+    clearTimeout(this.reconnectTimer);
+    this.open();
   }
 
   /** Force a reconnect: drop the socket now and reconnect after the backoff. */
@@ -243,6 +268,12 @@ export class HubConnection extends Emitter<HubEvents> {
   private scheduleReconnect(): void {
     if (this.stopped) return;
     clearTimeout(this.reconnectTimer);
+    if (this.authBlocked) {
+      // Refused credentials do not get better by hammering the hub every 5 s (review item 5).
+      this.reconnectTimer = setTimeout(() => this.open(), this.authRetry);
+      this.authRetry = Math.min(AUTH_RETRY_MAX_MS, this.authRetry * 2);
+      return;
+    }
     this.reconnectTimer = setTimeout(() => this.open(), this.backoff);
     this.backoff = Math.min(5000, this.backoff * 2);
   }
@@ -286,6 +317,8 @@ export class HubConnection extends Emitter<HubEvents> {
     switch (m.t) {
       case 'welcome': {
         this.backoff = 500;
+        this.authBlocked = false;
+        this.authRetry = AUTH_RETRY_MS;
         this.lastPong = Date.now();
         this.clock.addSample(Date.now(), m.hubMs, Date.now());
         this.setConnected(true);
@@ -329,6 +362,15 @@ export class HubConnection extends Emitter<HubEvents> {
         this.emit('preview', m as PreviewIn);
         return;
       case 'bye':
+        // Refused credentials: flag it before the close (and its status event) follows, so listeners can
+        // tell an auth refusal from a hub loss.
+        if (m.reason === 'unauthorized' || m.reason === 'forbidden') {
+          const first = !this.authBlocked;
+          this.authBlocked = true;
+          this.emit('bye', m);
+          if (first) this.emit('auth', { reason: m.reason });
+          return;
+        }
         this.emit('bye', m);
         // On the main thread a stale app reloads itself; inside a worker the host decides (it sees 'bye').
         if (m.reason === 'version' && typeof document !== 'undefined' && typeof location !== 'undefined')

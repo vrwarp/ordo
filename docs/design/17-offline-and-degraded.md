@@ -33,7 +33,9 @@ cache expires. Two defences, both required:
 ## Hub loss: degraded mode
 
 Trigger: the operator's WebSocket closes or misses three consecutive `time.pong`s
-(30 s), or fails to reconnect within 5 s of a close. Outputs enter degraded mode when
+(30 s), or fails to reconnect within 5 s of a close. A hub that answers with `bye unauthorized` or
+`forbidden` (an expired session) is not lost: the grace is not armed, the outputs stay on the hub,
+and the operator signs in again ([design/15](15-operator-app.md), Session expiry). Outputs enter degraded mode when
 their own socket closes and they receive a `fallback.hello` from the operator.
 
 ### Fallback bus
@@ -43,7 +45,11 @@ their own socket closes and they receive a `fallback.hello` from the operator.
   `window.opener` at the operator origin) and transfers its own end into the core worker. From then on
   the core worker and the output's link worker talk directly; neither main thread is on the path, so
   a long task in either page delays neither the heartbeat nor a delta. Ports are offered again after
-  a reload, on request, and while a window's bus is silent; the window keeps the newest.
+  a reload (the hub reports the window reconnected), on request, and at most every 10 s while the
+  window never spoke on its current port, the port is closed, the bus runs over the relay, or, while
+  the operator is the authority, a proven port has been silent for 10 s. A proven port that is merely
+  quiet in hub mode (where windows have nothing to say on the bus) is left alone. The window keeps the
+  newest.
 - Legacy path: the operator's main thread also relays `window.postMessage` to the core for each window.
   Until a window has spoken on its current port, the core posts to both channels (duplicates are
   harmless: the mirror drops a delta it already applied; hellos and heartbeats are idempotent). Once
@@ -67,7 +73,8 @@ their own socket closes and they receive a `fallback.hello` from the operator.
 
 If the core worker dies while it is the authority, the supervisor restarts it within about 1.5 s. The
 new core restores the operator's own state from IndexedDB and resumes the authority at once (no
-second 5 s grace) when it held it less than two minutes ago; the host hands it fresh ports to every
+second 5 s grace) when it held it less than two minutes ago (a state that broke the invariants is
+never persisted, so it resumes from the last good one); the host hands it fresh ports to every
 window, which are re-introduced with `fallback.hello`. Outputs that went 5 s without a heartbeat in the
 meantime left the bus and hold their frame; the hello brings them back. Key presses made during the
 restart wait in the host's outbox and are applied once.

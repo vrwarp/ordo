@@ -4,7 +4,7 @@ import { Toasts } from './components/Toasts.tsx';
 import { UpdateFailedScreen, UpdatingOverlay } from './components/UpdatingScreen.tsx';
 import { allowedForRole } from './lib/route.ts';
 import { installCacheCheck } from './services/cacheCheck.ts';
-import { startController } from './services/controller.ts';
+import { controller, startController } from './services/controller.ts';
 import { syncFonts } from './services/fonts.ts';
 import { installOutputWindows } from './services/outputs.ts';
 import { installProgramViews } from './services/programView.ts';
@@ -58,11 +58,17 @@ export function App() {
     );
   if (session.me?.setupRequired) return <SetupView />;
   const role = session.me?.role ?? session.offlineRole;
-  if (role !== 'operate' && role !== 'edit') return <LoginView />;
+  if (role !== 'operate' && role !== 'edit') {
+    // The session ended under a running operator (review item 5): keep the shell, its output windows and
+    // the core mounted (the outputs stay on the hub) and sign in over it.
+    const running = controller()?.role;
+    if (running) return <Shell role={running} signedOut />;
+    return <LoginView />;
+  }
   return <Shell role={role} />;
 }
 
-function Shell({ role }: { role: 'operate' | 'edit' }) {
+function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOut?: boolean }) {
   const route = useRoute();
   // The core worker posts the library once it has tried its IndexedDB copy (and the hub snapshot).
   const attempted = useLibrary((s) => s.attempted);
@@ -93,9 +99,11 @@ function Shell({ role }: { role: 'operate' | 'edit' }) {
   // Live keys act on operator screens only; the editor uses arrows, Delete and Ctrl+Z itself.
   useEffect(() => {
     const keysOn =
-      role === 'operate' && (route.name === 'live' || route.name === 'playlists' || route.name === 'library');
+      !signedOut &&
+      role === 'operate' &&
+      (route.name === 'live' || route.name === 'playlists' || route.name === 'library');
     surfaces()?.setKeyboard(keysOn);
-  }, [role, route.name]);
+  }, [role, route.name, signedOut]);
   useEffect(() => {
     if (!allowedForRole(route, role)) navigate({ name: 'library', tab: 'presentations' });
   }, [route, role]);
@@ -130,6 +138,15 @@ function Shell({ role }: { role: 'operate' | 'edit' }) {
       <Toasts />
       <ConfirmHost />
       <UpdatingOverlay />
+      {signedOut && (
+        <div className="signin-overlay" data-session-expired>
+          <div className="banner">
+            Your session ended. Sign in again to keep operating. The outputs keep showing the service from the
+            hub.
+          </div>
+          <LoginView />
+        </div>
+      )}
     </div>
   );
 }

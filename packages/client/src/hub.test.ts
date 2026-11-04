@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HubClock } from './clock.ts';
-import { HubConnection, IDLE_PING_MS, LIVE_LOST_MS, LIVE_PING_MS } from './hub.ts';
+import { AUTH_RETRY_MS, HubConnection, IDLE_PING_MS, LIVE_LOST_MS, LIVE_PING_MS } from './hub.ts';
 import { FakeWebSocket, installFakeWebSocket, lastSocket, welcome } from './__tests__/fakes.ts';
 
 function connect(opts: Partial<ConstructorParameters<typeof HubConnection>[0]> = {}) {
@@ -152,6 +152,56 @@ describe('HubConnection liveness', () => {
     vi.advanceTimersByTime(30_000);
     expect(FakeWebSocket.instances.length).toBe(1);
     expect(statuses).toEqual([true, false]);
+  });
+
+  it('bye unauthorized is not a hub loss: one auth event, a strong back-off, and resume() reconnects now', () => {
+    const { hub, statuses } = connect({ role: 'operate' });
+    const auths: string[] = [];
+    hub.on('auth', (a) => auths.push(a.reason));
+    const ws = lastSocket();
+    welcome(ws);
+    // The session ended while connected: the bye arrives first, then the close.
+    ws.receive({ t: 'bye', v: 1, reason: 'unauthorized' });
+    expect(hub.authBlocked).toBe(true);
+    expect(auths).toEqual(['unauthorized']);
+    ws.finishClose();
+    expect(statuses).toEqual([true, false]);
+    // No reconnect every 5 s: the first retry waits AUTH_RETRY_MS.
+    vi.advanceTimersByTime(AUTH_RETRY_MS - 1);
+    expect(FakeWebSocket.instances.length).toBe(1);
+    vi.advanceTimersByTime(1);
+    expect(FakeWebSocket.instances.length).toBe(2);
+    // Refused again: no second auth event, and the next retry backs off further.
+    lastSocket().open();
+    lastSocket().receive({ t: 'bye', v: 1, reason: 'unauthorized' });
+    lastSocket().finishClose();
+    expect(auths).toEqual(['unauthorized']);
+    vi.advanceTimersByTime(AUTH_RETRY_MS * 2 - 1);
+    expect(FakeWebSocket.instances.length).toBe(2);
+    // Signed in again: resume() reconnects at once and a welcome clears the block.
+    hub.resume();
+    expect(FakeWebSocket.instances.length).toBe(3);
+    welcome(lastSocket());
+    expect(hub.authBlocked).toBe(false);
+    expect(statuses).toEqual([true, false, true]);
+    // A plain close afterwards uses the normal 500 ms backoff again.
+    lastSocket().finishClose();
+    vi.advanceTimersByTime(500);
+    expect(FakeWebSocket.instances.length).toBe(4);
+    hub.stop();
+  });
+
+  it('bye forbidden on hello also backs off (a revoked output token)', () => {
+    const { hub } = connect();
+    const auths: string[] = [];
+    hub.on('auth', (a) => auths.push(a.reason));
+    lastSocket().open();
+    lastSocket().receive({ t: 'bye', v: 1, reason: 'forbidden' });
+    lastSocket().finishClose();
+    expect(auths).toEqual(['forbidden']);
+    vi.advanceTimersByTime(10_000);
+    expect(FakeWebSocket.instances.length).toBe(1);
+    hub.stop();
   });
 
   it('send fails while disconnected and the hello carries the last seq', () => {

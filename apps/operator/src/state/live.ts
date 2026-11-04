@@ -14,6 +14,8 @@ export type LiveStore = {
   hubConnected: boolean;
   /** Ever connected since load (distinguishes "connecting" from "lost"). */
   everConnected: boolean;
+  /** The hub refused this operator's session (review item 5): the outputs stay on the hub; sign in. */
+  hubRefused?: 'unauthorized' | 'forbidden';
   pending: number;
   health: Record<string, OutputHealthEntry>;
   /** Clear-all confirm pending until this time (ms). */

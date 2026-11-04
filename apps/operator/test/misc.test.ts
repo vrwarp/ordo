@@ -127,3 +127,27 @@ describe('service worker', () => {
     expect(() => new Function(src)).not.toThrow();
   });
 });
+
+describe('RecoveringGate (review item 29)', () => {
+  it('does not flash "Recovering" after a long main-thread task, but shows a real restart and a hung core', async () => {
+    const { RecoveringGate } = await import('../src/lib/recovering.ts');
+    const g = new RecoveringGate(500);
+    let t = 0;
+    expect(g.judge(t, false, 100)).toBe(false);
+    t += 500;
+    expect(g.judge(t, false, 200)).toBe(false);
+    // A 2.5 s main-thread block: the first tick after it sees a 2.5 s old heartbeat (still queued).
+    t += 2500;
+    expect(g.judge(t, false, 2600)).toBe(false);
+    t += 500;
+    expect(g.judge(t, false, 100)).toBe(false);
+    // A restart in progress always shows.
+    t += 500;
+    expect(g.judge(t, true, 100)).toBe(true);
+    // A core that stops beating while this thread ticks on time shows after 750 ms.
+    t += 500;
+    expect(g.judge(t, false, 600)).toBe(false);
+    t += 500;
+    expect(g.judge(t, false, 1100)).toBe(true);
+  });
+});

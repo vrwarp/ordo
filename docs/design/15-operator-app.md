@@ -32,7 +32,10 @@ core and thumbnail workers, the outbox            fallback file serving, Stream 
   the main thread (they need a gesture, a window handle or a settings PUT); everything else goes to
   the core.
 - Local library writes after a successful API call (`upsertLocal`, `removeLocal`, `saveSettings`)
-  update the read model at once and are forwarded to the core, which does not echo them back.
+  update the read model at once and are forwarded to the core, which does not echo them back. A write
+  that arrives before the core has posted its library in full (the 1.5 s after a core restart) does
+  not move the posting baseline: the first full post carries it, and the IndexedDB copy, when it
+  arrives, is applied underneath the writes already made instead of replacing them.
 - Library search runs in the core (`useSearch`); while the core restarts the same index runs on the
   read model.
 
@@ -52,15 +55,34 @@ the same supervisor (dead after 5 s). On a core restart:
 1. The new core restores from IndexedDB (`core` key, validated with `isLiveStateShape` and
    `checkInvariants`): the confirmed hub state, the unconfirmed commands (re-proposed and re-sent
    with their ids on the next full state), the ids of actions already applied, and the authority.
-   A core that was the fallback authority less than two minutes ago resumes it at once.
+   A core that was the fallback authority less than two minutes ago resumes it at once. Only states
+   that pass the invariants are ever persisted: when the live state breaks them (the core then asks
+   for a restart), the last good snapshot stays on disk (with a fresh time, so the authority still
+   resumes), and the restarted core continues from it.
 2. The host re-offers a fresh port (and relay) to every known window.
 3. The host re-sends every action the old core did not acknowledge. The core acknowledges an action
    only after the snapshot that contains it is written, so a crash between a keypress and the hub
    send loses nothing and applies nothing twice.
-4. The top bar shows "Recovering…" while the core misses heartbeats or restarts.
+4. The top bar shows "Recovering…" while a restart is in progress, or while the core misses
+   heartbeats (over 750 ms) and this thread has been ticking on time.
 
 The supervisor ignores missing heartbeats after a stall of its own thread (the heartbeats are
-queued behind the late check), so a long React commit never restarts a healthy core.
+queued behind the late check), so a long React commit never restarts a healthy core; the
+"Recovering…" indicator applies the same correction (`src/lib/recovering.ts`), so it does not flash
+after a long main-thread task.
+
+### Session expiry
+
+A `bye` with reason `unauthorized` or `forbidden` (an expired or revoked session, a sign-out
+elsewhere) is not a hub loss: the hub is up and the outputs, which authenticate with their own
+tokens, stay on it. `HubConnection` emits `auth` once and backs its reconnects off to 30 s, doubling
+to 2 minutes; the core neither arms nor runs the fallback grace while refused, posts `hub` `auth` to
+the host and sets `hubRefused` in the live slice (the top bar says "Session ended: sign in again").
+The host calls `refreshSession()`; with no role left, the app keeps the shell, the output windows and
+the core mounted and shows the sign-in view over them, with one persistent banner (no toast per
+attempt; operator keys are off meanwhile). After a successful sign-in the host posts `hub.resume`
+and the core reconnects at once and rejoins as the hub's client. A refusal while the operator is
+already the fallback authority keeps it the authority until the hand-back after sign-in.
 
 ### Main-thread watchdog
 
@@ -76,7 +98,8 @@ Counted per subsystem (`src/lib/budgets.ts`): socket drops, command rejections, 
 activations and cache-fill failures in the core; core restarts and Stream Deck/MIDI errors on the
 host. An exceeded budget turns the top bar red with exactly one action (Reconnect, Resync, Reload
 operator, Diagnostics, Retry download, Reconnect Stream Deck); a cache fill whose budget is spent
-stops retrying until the operator asks. The printed checklist lists each red state with its action.
+stops retrying until the operator asks, and the operator's own cache numbers then describe the new
+manifest (nothing filled), not the previous service's finished fill. The printed checklist lists each red state with its action.
 
 ## State
 
