@@ -619,7 +619,6 @@ test('a 14 s file-route outage on a fresh output quarantines nothing', async ({ 
       .poll(() => context.pages().filter((p) => !before.has(p)).length, { timeout: 20_000 })
       .toBe(1);
     const o = context.pages().find((p) => !before.has(p))!;
-    console.log(`output window at ${o.url()}`);
     const started = Date.now();
     // armedOk must never be true while an armed key is not held. Health is assembled once a second, so a
     // claim is a lie only when it persists for 1.5 s with the same armed cue.

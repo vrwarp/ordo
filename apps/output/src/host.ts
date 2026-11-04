@@ -405,10 +405,14 @@ export class OutputHost {
     if (!this.openerAlive()) {
       this.openerClosedSent = true;
       this.log('opener closed');
-      // The relay has nobody to talk to: release its window listener.
-      this.winEp?.close();
-      this.winEp = undefined;
       this.toLink({ t: 'opener', closed: true });
+      // The relay has nobody to talk to: release its window listener (after a moment, so a message the
+      // operator posted on its way out, `fallback.hub` on pagehide, is still relayed).
+      const ep = this.winEp;
+      setTimeout(() => {
+        ep?.close();
+        if (this.winEp === ep) this.winEp = undefined;
+      }, 2000);
     }
   }
 

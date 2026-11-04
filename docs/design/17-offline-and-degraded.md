@@ -95,10 +95,10 @@ state from IndexedDB (written on every applied state, coalesced) and the files f
 opener for a fresh port (`ordo.port.request`); until one arrives, the host relays `window.postMessage`
 from the opener to the new worker. A clip or audio cue that ended while no link worker was alive is
 still reported to the authority (hub or operator) by the new one, from the host's slot status and its
-replay of unacknowledged media events, so `onEnd: advance` still advances. A newly accepted port is answered at once with `fallback.ready`, so
-the operator proves it even while the hub is the authority. The host detects a closed operator tab
-(`window.opener` closed or nulled by Chrome) on every 250 ms tick, releases its relay and tells the link worker, which leaves the
-bus at once.
+replay of unacknowledged media events, so `onEnd: advance` still advances. A newly accepted port is
+answered at once with `fallback.ready`, so the operator proves it even while the hub is the authority.
+The host detects a closed operator tab (`window.opener` closed or nulled by Chrome) on every 250 ms
+tick, releases its relay and tells the link worker, which leaves the bus at once.
 
 ### Operator reload during degraded mode
 
