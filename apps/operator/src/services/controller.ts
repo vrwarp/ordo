@@ -9,6 +9,7 @@ import { useLive } from '../state/live.ts';
 import { refreshSession, useSession } from '../state/session.ts';
 import { toast } from '../state/toasts.ts';
 import { rememberMessage, useUi } from '../state/ui.ts';
+import { deviceProfile } from '../lib/capabilities.ts';
 import { RecoveringGate } from '../lib/recovering.ts';
 import { log } from './log.ts';
 import { thumbs } from './thumbs.ts';
@@ -372,7 +373,10 @@ export function controller(): Controller | undefined {
   return current;
 }
 
-export function startController(role: 'operate' | 'edit'): Controller {
+export function startController(requested: 'operate' | 'edit'): Controller {
+  // An edit-profile device (an iPad) never runs the service: its core joins the hub as an editor whatever
+  // the session role (no cache fill, fallback authority or keys; design/15 "iPad editing").
+  const role = deviceProfile(requested) === 'edit' ? 'edit' : requested;
   if (current && current.role === role) return current;
   current?.stop();
   current = new Controller(role);

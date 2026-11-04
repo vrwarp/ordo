@@ -100,6 +100,8 @@ export class OutputWindows {
 
   /** Launch every enabled output on its remembered screen. Must run inside a user gesture. */
   async launch(): Promise<void> {
+    // An edit-profile device (an iPad) has no screens to put outputs on (design/15 "iPad editing").
+    if (this.ctl.role !== 'operate') return;
     if (useLaunch.getState().busy) return;
     useLaunch.setState({ busy: true });
     try {

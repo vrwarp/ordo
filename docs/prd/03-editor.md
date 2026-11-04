@@ -57,6 +57,16 @@ Objects, in z-order, each selectable, movable, resizable, rotatable:
   output to idle, as does the next Go live. The control is disabled while a playlist is live.
   Thumbnails elsewhere are CSS approximations.
 
+## On an iPad
+
+The worship lead can do all of this from home on an iPad in Safari, with the edit or operate PIN:
+library and search, the editor, playlists and arrangements, imports, media and fonts, and a Previews
+page showing each slide on the main screen, the lobby lower third, the livestream key and the stage
+display. The iPad never runs a service: there is no live view, Go live or output launch on it ("Go live
+from the venue PC"); while a service runs, a "Live now" chip names it and its presentations are locked.
+It installs to the home screen as a web app. See [design/15](../design/15-operator-app.md), "iPad
+editing".
+
 ## Slide imports into the editor
 
 - PPTX and PDF import produce one image slide per page. Each imported slide keeps a

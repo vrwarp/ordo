@@ -197,6 +197,28 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
 - Saves via `PUT /presentations/:id` with `rev`; 409 shows the reload dialog.
 - Disabled with a banner when the presentation is referenced by the live playlist.
 
+### Touch
+
+Under a finger (iPad Safari) every gesture has a button and nothing depends on hover, `title` tooltips
+or HTML5 drag and drop; all of it is gated by `(pointer: coarse)`, so a mouse sees the desktop layout.
+Reordering (playlist items, arrangement chips, slides across sections, sections) uses one pointer-event
+sortable (`components/Sortable.tsx`, maths in `sortableMath.ts`): a visible grip with
+`touch-action: none` picks the item up after a 300 ms hold (a quicker swipe scrolls), the item follows the
+finger, a line marks the slot, the list auto-scrolls near its edges, Escape or a cancelled touch puts it
+back; a mouse still drags the whole row. Move buttons are always there (row arrows, Earlier/Later for
+the picked arrangement chip, slide and section up/down). The slide editor has 30 px transformer anchors
+with a wider hit area, the rotate handle 64 px out (flipped below or beside the box when it would fall
+off the slide), `touch-action: none` on the stage, and pinch suppressed rather than zooming: the slide is
+already fitted to its pane, numeric fields and the nudge toolbar cover fine work, and a two-finger
+gesture must not also move an object. A double-tap on a text box focuses its text field (inside the
+gesture, so the keyboard opens), and a labelled toolbar carries every keyboard-only action (nudge with
+a 1/10/50 px step, edit text, deselect, plus labels on undo/redo, z-order, duplicate, delete). A focused
+field scrolls back into the visual viewport when the software keyboard shrinks it (`keepVisible.ts`).
+Controls are 44 px with 16 px inputs (no focus zoom); in portrait the editor's property panel and the
+playlist's add panel move under the main pane. File pickers are a plain button to the native picker
+(Files, Photos): photos arrive as JPEG because Safari transcodes HEIC when the accept list does not name
+it (the hub does not accept HEIC), videos as MOV or MP4.
+
 ## Settings
 
 Outputs and looks, audio devices and pairs, key map, Stream Deck pages, MIDI mappings,
@@ -207,3 +229,75 @@ PINs, output tokens, backups, diagnostics export. Each page is a form over the m
 
 A printable page (`/checklist`) generated from the current settings: launch steps, health
 colours, Relaunch, and the ProPresenter switch procedure.
+
+## iPad editing
+
+The worship lead builds the service from home on an iPad in Safari (prd/03): library, search, the
+editor, playlists and arrangements, imports, media and fonts, and previews of every look. Running a
+service stays on the venue PC's Chrome. Everything below is gated by capability or input type, never by
+the user agent, so Chrome on the venue PC behaves exactly as before.
+
+### Capability profile
+
+`src/lib/capabilities.ts` detects once: `hid`, `midi`, `windowManagement` (`getScreenDetails`),
+`fullscreenPopups` (the Fullscreen API on a device whose primary pointer is not a finger), `sinkId`,
+`opfs`, `webgpu`, `coarsePointer` (`pointer: coarse` and `hover: none`) and `standalone`
+(`display-mode: standalone` or `navigator.standalone`). The **profile** is `edit` when the device has
+none of Window Management, fullscreen popups and WebHID (iPadOS Safari, a phone), or when the session
+role is `edit`; otherwise `full`. `?profile=edit|full` or localStorage `ordo.profile` forces it for
+support and tests (never over the edit role). The result is on `window.__ordo.capabilities` (with
+`deviceProfile`) for tests.
+
+### The edit profile
+
+- The core worker joins the hub as an **editor** whatever the session role (`startController`): no
+  own service-cache fill (no multi-GB downloads onto a tablet), no fallback-bus authority (no output
+  windows exist), no core snapshot, and every dispatch is a no-op. No output windows, program views,
+  keyboard driver, Stream Deck or MIDI are installed; `OutputWindows.launch` refuses on an editor core.
+- Navigation: Library, Playlists, Previews and (operate PIN only) Settings with Looks, Stage messages,
+  General, Themes and PINs. The live view, the checklist and the output, audio, key map, Stream Deck,
+  MIDI, backups and diagnostics pages redirect to the library (`allowedForRole(route, role, profile)`).
+- A playlist shows "Go live from the venue PC." instead of Go live; the nav says "This device edits;
+  run services from the venue PC" (operate PIN, wide screens).
+- **Live now.** The hub sends live state only to operators and outputs, so an iPad signed in with the
+  operate PIN polls `GET /live` (8 s, and at once when the page becomes visible; `src/lib/venueLive.ts`)
+  for the nav chip "Live now: <playlist>, <cue>" and for `useLockedIds`/`useLivePlaylistId`, which lock
+  the live playlist's presentations in the editor before the hub would refuse a save with 423. With the
+  edit PIN `GET /live` is refused, so the chip does not show and the hub's 423 is the only lock.
+
+### Look previews
+
+`LookPreviews` (`src/views/editor/LookPreviews.tsx`) draws the selected slide under every look in
+settings, main first, then the lobby lower third, the livestream key (on its key colour) and the stage
+look with the next slide, in the thumbnail worker with the shared rasterizer (480 px wide in the
+editor's compact form, 960 px on the Previews page), ~150 ms after the last edit. A preview job carries
+the look's clear colour and the next slide (`ThumbJob.clear`, `ThumbJob.nextSlide`; both absent for
+ordinary thumbnails, which render as before); the background shows only when the look's background
+layer is visible, else the look's holding image, as the outputs do. The Previews page
+(`#/previews/<presentation>/<slide>`) picks a presentation, steps through its slides in a strip, and
+shows every look full width. Uploaded and Google fonts reach the worker as `FontFace`s in
+`self.fonts`, which WebKit supports in workers (verified in Playwright WebKit: an uploaded face loads
+and changes the measured width in an `OffscreenCanvas`).
+
+### Installable web app and lifecycle
+
+- `public/manifest.webmanifest` (name and short name ordo, standalone, `start_url` and `scope` `./`,
+  the operator's background and bar colours, 192/512 and maskable icons), an `apple-touch-icon`
+  (180), the `apple-mobile-web-app-*` metas and `viewport-fit=cover` without disabling zoom.
+  `src/ipad.css` defines `--safe-top/right/bottom/left` (from `env(safe-area-inset-*)`, 0 on the venue
+  PC), pads `#root` with them and sets `touch-action: manipulation` on controls (no double-tap zoom;
+  pinch zoom stays). The icons are committed PNGs; the manifest and icons are not precached (the
+  installed app keeps its icon; the shell is precached as before).
+- On the first sign-in an edit-profile device asks once for `navigator.storage.persist()` (Safari may
+  grant it to an installed app; otherwise script-written storage goes after 7 days unused).
+- Back from a suspension the core reconnects on its own: the hub connection judges liveness by the time
+  since the last pong, so a socket that died while the page was frozen is declared lost within a
+  second of resuming and reopened after the backoff. A library copy Safari evicted reloads from the
+  hub snapshot. Both are covered in `e2e/ipad/edit.spec.ts`.
+
+### Tests
+
+The Playwright projects `webkit-ipad` (iPad Pro 11 landscape) and `webkit-ipad-portrait` run
+`e2e/ipad/*.spec.ts` in WebKit with touch, each test on its own hub (`ORDO_E2E_IPAD_PORT`, default
+8700 + n, path mode `http://localhost:<port>/`); the Chromium project ignores `e2e/ipad/`.
+`ORDO_E2E_SHOTS=<dir>` keeps a screenshot of each screen per orientation.

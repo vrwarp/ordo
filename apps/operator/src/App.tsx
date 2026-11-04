@@ -3,7 +3,9 @@ import { ConfirmHost } from './components/Confirm.tsx';
 import { Toasts } from './components/Toasts.tsx';
 import { UpdateFailedScreen, UpdatingOverlay } from './components/UpdatingScreen.tsx';
 import { sessionEndedMessage } from './lib/hubStatus.ts';
+import { requestPersistentStorage, useProfile } from './lib/capabilities.ts';
 import { allowedForRole } from './lib/route.ts';
+import { watchVenueLive } from './lib/venueLive.ts';
 import { installCacheCheck } from './services/cacheCheck.ts';
 import { controller, startController } from './services/controller.ts';
 import { syncFonts } from './services/fonts.ts';
@@ -23,6 +25,7 @@ import { EditorView } from './views/editor/EditorView.tsx';
 import { LibraryView } from './views/library/LibraryView.tsx';
 import { LiveView } from './views/live/LiveView.tsx';
 import { PlaylistsView } from './views/playlists/PlaylistsView.tsx';
+import { PreviewsView } from './views/editor/PreviewsView.tsx';
 import { SettingsView } from './views/settings/SettingsView.tsx';
 import { reacquireOnFirstGesture } from './services/reacquire.ts';
 
@@ -72,6 +75,11 @@ export function App() {
 
 function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOut?: boolean }) {
   const route = useRoute();
+  // An edit-profile device (an iPad, or the edit role) builds services but never runs one: its core joins
+  // the hub as an editor (no service-cache fill, no fallback authority, no snapshot), and no output
+  // windows, program views, keyboard, Stream Deck or MIDI are installed (design/15 "iPad editing").
+  const profile = useProfile(role);
+  const coreRole = profile === 'edit' ? 'edit' : role;
   // The core worker posts the library once it has tried its IndexedDB copy (and the hub snapshot).
   const attempted = useLibrary((s) => s.attempted);
   const [timedOut, setTimedOut] = useState(false);
@@ -85,10 +93,10 @@ function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOu
     return () => clearTimeout(t);
   }, []);
   useEffect(() => {
-    const ctl = startController(role);
+    const ctl = startController(coreRole);
     const offUpdate = installUpdateGuard(ctl.hub);
     let offCacheCheck: (() => void) | undefined;
-    if (role === 'operate') {
+    if (coreRole === 'operate') {
       installOutputWindows(ctl);
       installProgramViews(ctl);
       installSurfaces(ctl);
@@ -99,27 +107,35 @@ function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOu
       offUpdate();
       offCacheCheck?.();
     };
-  }, [role]);
+  }, [coreRole]);
+  useEffect(() => {
+    if (profile === 'edit' && !signedOut) void requestPersistentStorage();
+  }, [profile, signedOut]);
+  // What the venue runs, for the "Live now" chip and the editor lock (GET /live needs the operate role).
+  useEffect(
+    () => (profile === 'edit' && role === 'operate' && !signedOut ? watchVenueLive() : undefined),
+    [profile, role, signedOut],
+  );
   useEffect(() => syncFonts(fonts), [fonts]);
   // Live keys act on operator screens only; the editor uses arrows, Delete and Ctrl+Z itself. A signed-out
   // operator keeps its keys only while it is the fallback authority (the outputs would otherwise be stuck).
   useEffect(() => {
     const keysOn =
       (!signedOut || fallback) &&
-      role === 'operate' &&
+      coreRole === 'operate' &&
       (route.name === 'live' || route.name === 'playlists' || route.name === 'library');
     surfaces()?.setKeyboard(keysOn);
-  }, [role, route.name, signedOut, fallback]);
+  }, [coreRole, route.name, signedOut, fallback]);
   useEffect(() => {
-    if (!allowedForRole(route, role)) navigate({ name: 'library', tab: 'presentations' });
-  }, [route, role]);
+    if (!allowedForRole(route, role, profile)) navigate({ name: 'library', tab: 'presentations' });
+  }, [route, role, profile]);
 
   let body: React.ReactNode;
   if (!ready) body = <div className="center muted">Loading library…</div>;
   else
     switch (route.name) {
       case 'live':
-        body = role === 'operate' ? <LiveView /> : null;
+        body = role === 'operate' && profile === 'full' ? <LiveView /> : null;
         break;
       case 'library':
         body = <LibraryView tab={route.tab} />;
@@ -131,15 +147,18 @@ function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOu
         body = <PlaylistsView id={route.id} />;
         break;
       case 'settings':
-        body = role === 'operate' ? <SettingsView page={route.page} /> : null;
+        body = role === 'operate' ? <SettingsView page={route.page} profile={profile} /> : null;
         break;
       case 'checklist':
-        body = <ChecklistView />;
+        body = profile === 'full' ? <ChecklistView /> : null;
+        break;
+      case 'previews':
+        body = <PreviewsView id={route.id} slideId={route.slideId} />;
         break;
     }
   return (
     <div className="app">
-      <Nav role={role} route={route} />
+      <Nav role={role} route={route} profile={profile} />
       <div className="page">{body}</div>
       <Toasts />
       <ConfirmHost />

@@ -1,0 +1,147 @@
+/*
+ * iPad editing (design/15): safe areas, double-tap zoom on controls, the look previews and the
+ * edit-profile chrome. Every rule here is inert on the venue PC: safe-area insets are 0 outside an
+ * installed app with a notch or home indicator, and the classes below only render in the edit profile
+ * or on the Previews page.
+ */
+:root {
+  /* Hooks for the touch layout: the installed app runs edge to edge (viewport-fit=cover). */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+}
+#root {
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+}
+
+/* No double-tap zoom on controls (pinch zoom stays available everywhere). */
+button,
+a,
+input,
+select,
+textarea,
+label,
+[role="button"] {
+  touch-action: manipulation;
+}
+
+/* ---- edit-profile chrome ---- */
+.nav .live-chip {
+  max-width: 340px;
+  font-size: 12px;
+  padding: 3px 8px;
+}
+.nav .edit-device-note {
+  margin: 0 6px;
+  white-space: nowrap;
+}
+@media (max-width: 1100px) {
+  .nav .edit-device-note {
+    display: none;
+  }
+}
+@media (max-width: 900px) {
+  .nav .live-chip {
+    max-width: 200px;
+  }
+}
+.go-live-note {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg2);
+}
+
+/* ---- look previews ---- */
+.look-previews {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+}
+.look-previews.compact {
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+.look-preview {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.look-preview-frame {
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.look-preview-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.look-preview figcaption {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.look-preview-name {
+  font-weight: 600;
+}
+
+/* ---- previews page: the slide strip ---- */
+.preview-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  flex-shrink: 0;
+  -webkit-overflow-scrolling: touch;
+}
+.preview-strip-slide {
+  position: relative;
+  flex: 0 0 auto;
+  width: 160px;
+  height: 90px;
+  min-height: 0;
+  padding: 0;
+  border: 2px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #000;
+}
+.preview-strip-slide.sel {
+  border-color: var(--accent);
+}
+.preview-strip-slide img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.preview-strip-slide .ph {
+  padding: 6px;
+  font-size: 11px;
+  white-space: normal;
+  color: var(--fg2);
+  overflow: hidden;
+}
+.preview-strip-slide .num {
+  position: absolute;
+  left: 4px;
+  top: 3px;
+  font-size: 11px;
+  background: #000a;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+.split.previews-view {
+  grid-template-columns: 240px 1fr;
+}
+@media (max-width: 900px) {
+  .split.previews-view {
+    grid-template-columns: 180px 1fr;
+  }
+}

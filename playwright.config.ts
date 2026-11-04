@@ -36,6 +36,22 @@ export default defineConfig({
       ],
     },
   },
+  projects: [
+    // The venue PC: Chromium desktop, every spec except the iPad ones.
+    { name: 'chromium', testIgnore: /e2e\/ipad\// },
+    // iPad editing (design/15): WebKit with the iPad Pro 11 descriptor (touch, coarse pointer), both
+    // orientations. Each spec starts its own hub; the shared webServer below is not used by them.
+    {
+      name: 'webkit-ipad',
+      testMatch: /e2e\/ipad\/.*\.spec\.ts/,
+      use: { ...devices['iPad Pro 11 landscape'], launchOptions: {} },
+    },
+    {
+      name: 'webkit-ipad-portrait',
+      testMatch: /e2e\/ipad\/.*\.spec\.ts/,
+      use: { ...devices['iPad Pro 11'], launchOptions: {} },
+    },
+  ],
   webServer: {
     // Per-port data so concurrent runs on different ports never wipe each other's hub (not under test-results,
     // which Playwright clears at the start of a run, possibly after the hub has started).

@@ -1,3 +1,5 @@
+import type { Profile } from '../../lib/capabilities.ts';
+import { EDIT_PROFILE_SETTINGS } from '../../lib/route.ts';
 import { AudioSettingsPage } from './AudioSettingsPage.tsx';
 import { BackupsPage } from './BackupsPage.tsx';
 import { DiagnosticsPage } from './DiagnosticsPage.tsx';
@@ -26,7 +28,10 @@ const PAGES: [string, string][] = [
   ['diagnostics', 'Diagnostics'],
 ];
 
-export function SettingsView({ page }: { page: string }) {
+export function SettingsView({ page, profile = 'full' }: { page: string; profile?: Profile }) {
+  // An edit-profile device (an iPad) has no outputs, audio devices, keys, Stream Deck, MIDI or backups.
+  const pages = profile === 'edit' ? PAGES.filter(([k]) => EDIT_PROFILE_SETTINGS.includes(k)) : PAGES;
+  if (!pages.some(([k]) => k === page)) return null;
   let body: React.ReactNode = null;
   switch (page) {
     case 'outputs':
@@ -69,7 +74,7 @@ export function SettingsView({ page }: { page: string }) {
   return (
     <div className="split" style={{ gridTemplateColumns: '200px 1fr' }}>
       <div className="side col" style={{ gap: 2 }}>
-        {PAGES.map(([k, label]) => (
+        {pages.map(([k, label]) => (
           <a key={k} href={`#/settings/${k}`} className={page === k ? 'active' : ''}>
             {label}
           </a>

@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App.tsx';
 import { installGlobalErrorLog } from './services/log.ts';
 import './styles.css';
+import './ipad.css';
 
 installGlobalErrorLog();
 

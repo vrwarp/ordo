@@ -4,7 +4,8 @@ export type Route =
   | { name: 'edit'; id: string }
   | { name: 'playlists'; id?: string }
   | { name: 'settings'; page: string }
-  | { name: 'checklist' };
+  | { name: 'checklist' }
+  | { name: 'previews'; id?: string; slideId?: string };
 
 export const SETTINGS_PAGES = [
   'outputs',
@@ -49,6 +50,8 @@ export function parseRoute(hash: string): Route | null {
       };
     case 'checklist':
       return { name: 'checklist' };
+    case 'previews':
+      return { name: 'previews', id: a, slideId: parts[2] };
     default:
       return null;
   }
@@ -68,11 +71,27 @@ export function routeHash(r: Route): string {
       return `#/settings/${r.page}`;
     case 'checklist':
       return '#/checklist';
+    case 'previews':
+      return `#/previews${r.id ? `/${encodeURIComponent(r.id)}` : ''}${r.id && r.slideId ? `/${encodeURIComponent(r.slideId)}` : ''}`;
   }
 }
 
-/** Routes the edit role may open; everything else redirects to the library. */
-export function allowedForRole(r: Route, role: 'operate' | 'edit'): boolean {
-  if (role === 'operate') return true;
-  return r.name === 'library' || r.name === 'edit' || r.name === 'playlists';
+/** Settings pages that make sense on an edit-profile device (no outputs, audio devices, keys or backups). */
+export const EDIT_PROFILE_SETTINGS: readonly string[] = ['looks', 'messages', 'general', 'themes', 'pins'];
+
+/**
+ * Routes a role may open on a device of this profile; everything else redirects to the library. An
+ * edit-profile device (an iPad) never opens the live view or the checklist, and only the settings pages
+ * in EDIT_PROFILE_SETTINGS.
+ */
+export function allowedForRole(
+  r: Route,
+  role: 'operate' | 'edit',
+  profile: 'full' | 'edit' = 'full',
+): boolean {
+  if (r.name === 'library' || r.name === 'edit' || r.name === 'playlists' || r.name === 'previews')
+    return true;
+  if (role !== 'operate') return false;
+  if (profile === 'full') return true;
+  return r.name === 'settings' && EDIT_PROFILE_SETTINGS.includes(r.page);
 }

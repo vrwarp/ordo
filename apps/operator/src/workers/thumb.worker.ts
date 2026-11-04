@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
-import type { Look, Slide } from '@ordo/domain';
+import type { Look, Rgba, Slide } from '@ordo/domain';
 import { isControl, startHeartbeat } from '@ordo/client';
-import { drawImageFit, drawSlide2D } from '@ordo/renderer';
+import { drawImageFit, drawSlide2D, fillColor } from '@ordo/renderer';
 
 /** Thumbnail worker (design/15): the shared 2D rasterizer on an OffscreenCanvas; the main thread never rasterizes. */
 
@@ -15,6 +15,10 @@ export type ThumbJob = {
   images: Record<string, string>;
   width: number;
   height: number;
+  /** Look previews: the look's clear colour (the stream key green) instead of black. */
+  clear?: Rgba;
+  /** Look previews: the following slide, for a look that shows it (the stage look). */
+  nextSlide?: Slide;
 };
 export type ThumbIn =
   | { t: 'fonts'; fonts: { family: string; weight: number; style: string; url: string }[] }
@@ -74,8 +78,11 @@ async function render(job: ThumbJob): Promise<Blob> {
   const canvas = new OffscreenCanvas(job.width, job.height);
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('no 2d context');
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, job.width, job.height);
+  if (job.clear) fillColor(ctx, job.clear, job.width, job.height);
+  else {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, job.width, job.height);
+  }
   const scale = job.width / 1920;
   const ids = Object.entries(job.images);
   const bms = new Map<string, ImageBitmap>();
@@ -89,7 +96,13 @@ async function render(job: ThumbJob): Promise<Blob> {
     const b = await bitmap(job.bg);
     if (b) drawImageFit(ctx, b, { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 }, scale, 'cover');
   }
-  drawSlide2D(ctx, job.slide, { scale, look: job.look, images: (id) => bms.get(id), isSong: job.isSong });
+  drawSlide2D(ctx, job.slide, {
+    scale,
+    look: job.look,
+    images: (id) => bms.get(id),
+    isSong: job.isSong,
+    nextSlide: job.nextSlide,
+  });
   return canvas.convertToBlob({ type: 'image/jpeg', quality: 0.82 });
 }
 

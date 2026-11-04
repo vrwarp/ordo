@@ -144,7 +144,12 @@ class Thumbs {
   version = 0;
 
   keyOf(job: ThumbJob): string {
-    return `${slideHash(job.slide)}:${job.bg ?? ''}:${job.look?.id ?? 'authored'}:${job.width}:${this.version}`;
+    const extra =
+      job.clear || job.nextSlide
+        ? // Look previews: the look's content too (an edited look re-renders under the same id).
+          `:${job.look ? fnv(JSON.stringify(job.look)) : ''}:${job.clear ? Object.values(job.clear).join(',') : ''}:${job.nextSlide ? slideHash(job.nextSlide) : ''}`
+        : '';
+    return `${slideHash(job.slide)}:${job.bg ?? ''}:${job.look?.id ?? 'authored'}:${job.width}:${this.version}${extra}`;
   }
 
   peek(key: string): string | undefined {

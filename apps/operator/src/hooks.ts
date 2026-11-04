@@ -2,6 +2,7 @@ import { hubNow } from '@ordo/client';
 import type { Media, Presentation } from '@ordo/domain';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLibrary } from './state/library.ts';
+import { useVenueLive } from './lib/venueLive.ts';
 import { useLive } from './state/live.ts';
 
 /** Re-render every `ms` and return hub time. */
@@ -58,17 +59,23 @@ export function usePresentationLookup(): (id: string) => Presentation | undefine
   }, [list]);
 }
 
-/** Presentations locked by the live playlist (prd/09). */
+/**
+ * Presentations locked by the live playlist (prd/09). An edit-profile device (an iPad) learns the venue's
+ * live playlist by polling (lib/venueLive.ts); the venue PC's store stays empty.
+ */
 export function useLockedIds(): Set<string> {
   const resolved = useLive((s) => (s.state.mode === 'live' ? s.state.resolved : undefined));
+  const venue = useVenueLive((s) => s.live);
   return useMemo(() => {
-    const ids = new Set<string>();
+    const ids = new Set<string>(venue?.presentationIds);
     if (!resolved) return ids;
     for (const it of resolved.playlist.items) if (it.kind === 'presentation') ids.add(it.presentationId);
     return ids;
-  }, [resolved]);
+  }, [resolved, venue]);
 }
 
 export function useLivePlaylistId(): string | undefined {
-  return useLive((s) => (s.state.mode === 'live' ? s.state.resolved?.playlist.id : undefined));
+  const own = useLive((s) => (s.state.mode === 'live' ? s.state.resolved?.playlist.id : undefined));
+  const venue = useVenueLive((s) => s.live?.playlistId);
+  return own ?? venue;
 }

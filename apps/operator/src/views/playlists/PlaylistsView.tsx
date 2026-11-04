@@ -3,6 +3,7 @@ import { newId, type Playlist } from '@ordo/domain';
 import { useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
 import { useLivePlaylistId } from '../../hooks.ts';
+import { useProfile } from '../../lib/capabilities.ts';
 import { removeLocal, upsertLocal, useLibrary } from '../../state/library.ts';
 import { currentRole } from '../../state/session.ts';
 import { errorText, toast } from '../../state/toasts.ts';
@@ -13,6 +14,10 @@ export function PlaylistsView({ id }: { id?: string }) {
   const playlists = useLibrary((s) => s.data.playlists);
   const liveId = useLivePlaylistId();
   const [name, setName] = useState('');
+  const role = currentRole();
+  // An edit-profile device (an iPad) cannot launch outputs: no Go live there, a note instead.
+  const profile = useProfile(role);
+  const noteGoLive = role === 'operate' && profile === 'edit';
   const sorted = [...playlists].sort(
     (a, b) => (b.serviceDate ?? '').localeCompare(a.serviceDate ?? '') || a.name.localeCompare(b.name),
   );
@@ -59,6 +64,16 @@ export function PlaylistsView({ id }: { id?: string }) {
       toast(`Could not delete: ${errorText(e)}`, 'error');
     }
   };
+  const editor = (p: Playlist) => (
+    <PlaylistEditor
+      key={p.id}
+      playlist={p}
+      locked={p.id === liveId}
+      canOperate={role === 'operate' && profile === 'full'}
+      onDuplicate={() => void duplicate(p)}
+      onDelete={() => void del(p)}
+    />
+  );
   return (
     <div className="split" style={{ gridTemplateColumns: '260px 1fr' }}>
       <div className="side col" style={{ gap: 2 }}>
@@ -91,14 +106,17 @@ export function PlaylistsView({ id }: { id?: string }) {
       </div>
       <div style={{ minHeight: 0, overflow: 'hidden' }}>
         {current ? (
-          <PlaylistEditor
-            key={current.id}
-            playlist={current}
-            locked={current.id === liveId}
-            canOperate={currentRole() === 'operate'}
-            onDuplicate={() => void duplicate(current)}
-            onDelete={() => void del(current)}
-          />
+          noteGoLive ? (
+            // Edit profile: a one-line note above the editor (grid rows keep the editor's height: 100%).
+            <div style={{ display: 'grid', gridTemplateRows: 'auto 1fr', height: '100%' }}>
+              <div className="muted small go-live-note" data-go-live-note>
+                Go live from the venue PC.
+              </div>
+              <div style={{ minHeight: 0 }}>{editor(current)}</div>
+            </div>
+          ) : (
+            editor(current)
+          )
         ) : (
           <div className="center muted">Create a playlist to start building a service.</div>
         )}
