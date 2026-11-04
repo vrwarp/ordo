@@ -70,7 +70,21 @@ const token = fc.oneof(
   ),
   fc
     .tuple(
-      fc.constantFrom('u', 'uc', 'f', 'fs', 'cf', 'red', 'green', 'blue', 'strokewidth', 'strokec', 'b', 'i'),
+      fc.constantFrom(
+        'u',
+        'uc',
+        'f',
+        'fs',
+        'cf',
+        'red',
+        'green',
+        'blue',
+        'strokewidth',
+        'strokec',
+        'b',
+        'i',
+        'bin',
+      ),
       fc.oneof(
         fc.integer({ min: -70000, max: 70000 }).map(String),
         fc.constantFrom('-', '', '99999999999999999999999', '-0', '0'),
@@ -79,6 +93,11 @@ const token = fc.oneof(
     .map(([w, n]) => `\\${w}${n}`),
   fc.string({ unit: fc.constantFrom(...'0123456789abcdefgAF'), maxLength: 3 }).map((h) => `\\'${h}`),
   fc.string({ maxLength: 8 }),
+  // `\binN` followed by raw bytes (any byte, including braces and backslashes), with N sometimes larger
+  // than what is left of the document.
+  fc
+    .tuple(fc.integer({ min: -5, max: 40 }), fc.string({ unit: 'binary', maxLength: 12 }))
+    .map(([n, raw]) => `\\bin${n} ${raw}`),
 );
 const rtfSoup = fc.array(token, { maxLength: 120 }).map((t) => `{\\rtf1${t.join('')}`);
 

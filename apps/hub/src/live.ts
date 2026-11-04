@@ -55,6 +55,11 @@ export type GoLiveInputs = {
   general: Pick<GeneralSettings, 'logoMediaId'>;
   /** When the copy was taken (remote sources serve a cached copy while the library is down). */
   takenAt?: number;
+  /**
+   * Set when this is a cached copy because the library did not answer: the reason, naming the copy's time.
+   * The goLive carries it as a `degraded` entry (cueIndex -1) so the operator sees it.
+   */
+  cachedCopy?: string;
 };
 
 /** Settings the live service reads outside goLive (audio master, message presets). */
@@ -410,6 +415,10 @@ export class LiveService {
     const inputs = this.source.goLiveInputs(playlistId);
     if (!inputs) throw new LiveRejection(`Playlist ${playlistId} not found`);
     const { playlist, problems } = validatePlaylist(inputs.playlist);
+    if (inputs.cachedCopy) {
+      problems.unshift({ reason: inputs.cachedCopy.slice(0, 500) });
+      this.log.warn({ playlistId, takenAt: inputs.takenAt }, 'goLive from a cached copy of the playlist');
+    }
     const presentations: Record<string, Presentation> = {};
     for (const item of playlist.items) {
       if (item.kind !== 'presentation' || presentations[item.presentationId]) continue;
@@ -619,6 +628,22 @@ export class LiveService {
     for (const l of this.stateListeners) l(this.state);
     this.scheduleAdvance();
     return { ok: true, seq };
+  }
+
+  /** The newest `n` client command ids in the journal with their seqs, oldest first. */
+  recentCommandIds(n: number): { id: string; seq: number }[] {
+    try {
+      return (
+        this.db
+          .prepare(
+            `SELECT cmd_id AS id, seq FROM live_journal WHERE cmd_id IS NOT NULL AND kind = 'event' AND cmd_id != 'auto-advance' ORDER BY seq DESC LIMIT ?`,
+          )
+          .all(n) as { id: string; seq: number }[]
+      ).reverse();
+    } catch (e) {
+      this.log.warn({ err: (e as Error).message }, 'could not read recent command ids from the journal');
+      return [];
+    }
   }
 
   journalTail(n = 500): { seq: number; at: number; id?: string; kind: string; event: unknown }[] {

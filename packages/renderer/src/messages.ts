@@ -74,7 +74,8 @@ export type FromRender =
   | { t: 'telemetry'; tel: RenderTelemetry; mainThreadStallMs?: number }
   | { t: 'frames'; frames: number[] }
   | { t: 'held'; layers: HeldKeys[] }
-  | { t: 'snapshot'; bitmap: ImageBitmap }
+  /** A downscaled frame copy and the slide cue it shows (-1 none). */
+  | { t: 'snapshot'; bitmap: ImageBitmap; cue?: number }
   | { t: 'lost'; reason: string }
   | { t: 'restored'; compositor: 'webgpu' | '2d' }
   | { t: 'fatal'; error: string }
@@ -142,6 +143,11 @@ export type FromAsset =
       /** The file that failed to decode and where it was read from (an OPFS copy may be corrupt). */
       hash?: string;
       source?: 'opfs' | 'network';
+      /**
+       * `unavailable`: a file could not be read (not cached yet and the hub did not serve it): retried
+       * with backoff, never quarantined. `invalid` (default): the content itself failed (decode, raster).
+       */
+      cause?: 'unavailable' | 'invalid';
     }
   | { t: 'fonts'; loaded: number; failed: string[] };
 

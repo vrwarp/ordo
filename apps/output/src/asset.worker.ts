@@ -78,13 +78,25 @@ class DecodeError extends Error {
   }
 }
 
+/**
+ * A file that could not be read: not cached yet and the hub did not serve it (outage, slow NAS). The link
+ * retries it with backoff and never quarantines the cue for it (review 2026-11-04 item 3).
+ */
+class UnavailableError extends Error {}
+
 async function readFile(hash: string): Promise<{ blob: Blob; source: 'opfs' | 'network' }> {
   const b = await store.get(hash).catch(() => undefined);
   if (b && b.size > 0) return { blob: b, source: 'opfs' };
   // Not cached yet (fill still running): read through the hub.
-  const res = await fetch(`${apiPrefix}/files/${hash}${token ? `?token=${encodeURIComponent(token)}` : ''}`);
-  if (!res.ok) throw new Error(`file ${hash.slice(0, 8)} unavailable (${res.status})`);
-  return { blob: await res.blob(), source: 'network' };
+  try {
+    const res = await fetch(
+      `${apiPrefix}/files/${hash}${token ? `?token=${encodeURIComponent(token)}` : ''}`,
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return { blob: await res.blob(), source: 'network' };
+  } catch (err) {
+    throw new UnavailableError(`file ${hash.slice(0, 8)} unavailable (${(err as Error).message})`);
+  }
 }
 
 async function image(hash: string): Promise<ImageBitmap> {
@@ -227,7 +239,7 @@ async function run(job: AssetJob): Promise<void> {
     };
     if (!port) {
       bitmap.close();
-      throw new Error('render port not connected');
+      throw new UnavailableError('render port not connected');
     }
     port.postMessage(msg, [bitmap]);
     post({
@@ -247,6 +259,7 @@ async function run(job: AssetJob): Promise<void> {
       error: (err as Error).message || String(err),
       hash: d?.hash,
       source: d?.source,
+      cause: err instanceof UnavailableError ? 'unavailable' : 'invalid',
     });
   }
 }

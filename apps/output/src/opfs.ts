@@ -169,23 +169,81 @@ export class MemoryStreamStore implements StreamStore {
   }
 }
 
+/** Why a file did not get into the cache. */
+export type FillFailure = 'network' | 'quota' | 'store' | 'size';
+
 export type StreamFillProgress = {
   ready: number;
   total: number;
   bytesReady: number;
   bytesTotal: number;
   failed: string[];
+  /** Why each failed file failed. */
+  failures: Record<string, FillFailure>;
   /** Files present but of the wrong size, removed and fetched again. */
   repaired: string[];
+  /**
+   * Files whose every download disagreed with the manifest's size and were kept (the manifest may be
+   * wrong): hash -> the size kept. The caller remembers these so the file is not fetched again forever.
+   */
+  mismatched: Record<string, number>;
 };
 
 export type FileBody = ReadableStream<Uint8Array> | Blob;
 
+type Outcome = { ok: boolean; reason?: FillFailure; mismatch?: number };
+
+/**
+ * The service cache's downloads in flight, shared across fills (review 2026-11-04 item 11): a manifest
+ * change cancels only the downloads whose hash left the manifest; a file still wanted keeps downloading
+ * and the next fill joins it instead of starting over.
+ */
+export class Downloads {
+  private map = new Map<string, { ac: AbortController; p: Promise<Outcome> }>();
+
+  get size(): number {
+    return this.map.size;
+  }
+
+  has(hash: string): boolean {
+    return this.map.has(hash);
+  }
+
+  /** The download of `hash` in flight, else a new one running `fn` with its own abort signal. */
+  run(hash: string, fn: (signal: AbortSignal) => Promise<Outcome>): Promise<Outcome> {
+    const have = this.map.get(hash);
+    if (have) return have.p;
+    const ac = new AbortController();
+    const p = fn(ac.signal).finally(() => {
+      if (this.map.get(hash)?.p === p) this.map.delete(hash);
+    });
+    this.map.set(hash, { ac, p });
+    return p;
+  }
+
+  /** Abort every download whose hash is not in `keep`; returns how many were aborted. */
+  retain(keep: ReadonlySet<string>): number {
+    let n = 0;
+    for (const [h, d] of this.map)
+      if (!keep.has(h)) {
+        d.ac.abort();
+        this.map.delete(h);
+        n++;
+      }
+    return n;
+  }
+}
+
 /**
  * Fill `store` with every manifest file, `concurrency` downloads at a time, streaming each body into the
  * store. A cached file whose size differs from the manifest is treated as corrupt: removed and fetched
- * again. A fresh download of the wrong size is retried; if every attempt disagrees with the manifest the
- * file is kept (the manifest may be wrong) and reported failed, so it is retried later, never in a loop.
+ * again, unless it is the size the caller already accepted for it (`accepted`). A fresh download of the
+ * wrong size is retried; if every attempt disagrees with the manifest the file is kept (the manifest may
+ * be wrong) and reported in `mismatched`, never fetched in a loop. A full disk (QuotaExceededError) fails
+ * the file at once (`failures[hash] = 'quota'`); retrying is the caller's business, with backoff.
+ *
+ * `signal` stops the fill. With `downloads`, it stops only the queue: downloads in flight belong to the
+ * shared set, which the caller trims with `retain` when the manifest changes.
  */
 export async function fillStreaming(
   store: StreamStore,
@@ -198,6 +256,8 @@ export async function fillStreaming(
     signal?: AbortSignal;
     onStoreError?: (err: unknown) => void;
     sleep?: (ms: number) => Promise<void>;
+    accepted?: ReadonlyMap<string, number>;
+    downloads?: Downloads;
   } = {},
 ): Promise<StreamFillProgress> {
   const unique = [...new Map(files.map((f) => [f.hash, f])).values()];
@@ -207,54 +267,87 @@ export async function fillStreaming(
     bytesReady: 0,
     bytesTotal: unique.reduce((a, f) => a + (f.bytes || 0), 0),
     failed: [],
+    failures: {},
     repaired: [],
+    mismatched: {},
   };
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const retries = opts.retries ?? 2;
   const queue = [...unique];
-  const one = async (f: ManifestFile): Promise<boolean> => {
+  const download = async (f: ManifestFile, signal?: AbortSignal): Promise<Outcome> => {
+    let reason: FillFailure = 'network';
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      if (signal?.aborted) return { ok: false };
+      let body: FileBody | undefined;
+      try {
+        body = await fetchBody(f.hash, signal);
+      } catch {
+        if (signal?.aborted) return { ok: false };
+        reason = 'network';
+      }
+      if (body) {
+        try {
+          const n = await store.putStream(f.hash, body instanceof Blob ? body.stream() : body, signal);
+          if (!f.bytes || n === f.bytes) return { ok: n > 0 || !f.bytes };
+          if (attempt === retries) return n > 0 ? { ok: true, mismatch: n } : { ok: false, reason: 'size' };
+          reason = 'size';
+          await store.remove(f.hash).catch(() => undefined);
+        } catch (err) {
+          if (signal?.aborted) return { ok: false };
+          // A body that breaks mid-stream is the network's fault (TypeError); anything else is storage.
+          const name = (err as { name?: string } | null)?.name;
+          if (name !== 'TypeError' && name !== 'AbortError') opts.onStoreError?.(err);
+          // A full disk does not get better within this fill: stop here, the caller backs off.
+          if (name === 'QuotaExceededError') return { ok: false, reason: 'quota' };
+          reason = name === 'TypeError' || name === 'AbortError' ? 'network' : 'store';
+        }
+      }
+      if (attempt < retries) await sleep(500 * (attempt + 1));
+    }
+    return { ok: false, reason };
+  };
+  const one = async (f: ManifestFile): Promise<Outcome> => {
+    // A download of this file in flight (started by an earlier fill) is joined, not repeated.
+    if (opts.downloads?.has(f.hash)) return opts.downloads.run(f.hash, (s) => download(f, s));
     const have = await store.size(f.hash).catch((err) => {
       opts.onStoreError?.(err);
       return undefined;
     });
-    if (have !== undefined && have > 0 && (!f.bytes || have === f.bytes)) return true;
+    const accepted = opts.accepted?.get(f.hash);
+    if (have !== undefined && have > 0 && (!f.bytes || have === f.bytes || have === accepted))
+      return { ok: true };
     if (have !== undefined) {
       if (have > 0 || f.bytes) p.repaired.push(f.hash);
       await store.remove(f.hash).catch(() => undefined);
     }
-    for (let attempt = 0; attempt <= (opts.retries ?? 2); attempt++) {
-      if (opts.signal?.aborted) return false;
-      let body: FileBody | undefined;
-      try {
-        body = await fetchBody(f.hash, opts.signal);
-      } catch {
-        if (opts.signal?.aborted) return false;
-      }
-      if (body) {
-        try {
-          const n = await store.putStream(f.hash, body instanceof Blob ? body.stream() : body, opts.signal);
-          if (!f.bytes || n === f.bytes || attempt === (opts.retries ?? 2)) return n > 0 || !f.bytes;
-          await store.remove(f.hash).catch(() => undefined);
-        } catch (err) {
-          if (opts.signal?.aborted) return false;
-          // A body that breaks mid-stream is the network's fault (TypeError); anything else is storage.
-          const name = (err as { name?: string } | null)?.name;
-          if (name !== 'TypeError' && name !== 'AbortError') opts.onStoreError?.(err);
-        }
-      }
-      await sleep(500 * (attempt + 1));
-    }
-    return false;
+    if (opts.downloads) return opts.downloads.run(f.hash, (s) => download(f, s));
+    return download(f, opts.signal);
   };
   const worker = async () => {
     for (;;) {
       if (opts.signal?.aborted) return;
       const f = queue.shift();
       if (!f) return;
-      if (await one(f)) {
+      const o = await one(f);
+      if (o.ok) {
         p.ready++;
         p.bytesReady += f.bytes || 0;
-      } else if (!opts.signal?.aborted) p.failed.push(f.hash);
-      onProgress?.({ ...p, failed: [...p.failed], repaired: [...p.repaired] });
+        if (o.mismatch !== undefined) p.mismatched[f.hash] = o.mismatch;
+      } else if (!opts.signal?.aborted && o.reason) {
+        p.failed.push(f.hash);
+        p.failures[f.hash] = o.reason;
+      } else if (!opts.signal?.aborted) {
+        // Aborted by the shared set (the file left the manifest of a newer fill): not a failure.
+        p.failed.push(f.hash);
+        p.failures[f.hash] = 'network';
+      }
+      onProgress?.({
+        ...p,
+        failed: [...p.failed],
+        failures: { ...p.failures },
+        repaired: [...p.repaired],
+        mismatched: { ...p.mismatched },
+      });
     }
   };
   await Promise.all(Array.from({ length: opts.concurrency ?? 3 }, worker));
@@ -262,12 +355,17 @@ export async function fillStreaming(
 }
 
 /** Cached files whose size disagrees with the manifest (truncated or overwritten). */
-export async function findCorrupt(store: StreamStore, files: ManifestFile[]): Promise<string[]> {
+export async function findCorrupt(
+  store: StreamStore,
+  files: ManifestFile[],
+  accepted?: ReadonlyMap<string, number>,
+): Promise<string[]> {
   const bad: string[] = [];
   for (const f of files) {
     if (!f.bytes) continue;
     const n = await store.size(f.hash).catch(() => undefined);
-    if (n !== undefined && n !== f.bytes) bad.push(f.hash);
+    // A size accepted after every download disagreed with the manifest is not corruption.
+    if (n !== undefined && n !== f.bytes && n !== accepted?.get(f.hash)) bad.push(f.hash);
   }
   return bad;
 }

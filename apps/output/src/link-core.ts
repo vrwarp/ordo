@@ -56,7 +56,14 @@ import type {
   WorkerName,
 } from './host-protocol.ts';
 import { SlotPair } from './media.ts';
-import { type FileBody, type StreamStore, findCorrupt, fillStreaming } from './opfs.ts';
+import {
+  Downloads,
+  type FileBody,
+  type FillFailure,
+  type StreamStore,
+  findCorrupt,
+  fillStreaming,
+} from './opfs.ts';
 
 const DELIVERED_GRACE_MS = 1500;
 const ERROR_RETRY_MS = 3000;
@@ -76,6 +83,19 @@ const INTEGRITY_EVERY_MS = 30_000;
 /** How long a hidden render rebuild may wait for its live content before the hold is removed anyway. */
 const COVER_TIMEOUT_MS = 8000;
 const IDB_READ_TIMEOUT_MS = 1500;
+/** An unavailable file (outage, not cached yet) is retried after 1, 2, 4, 8 s, then every 15 s. */
+const UNAVAILABLE_BACKOFF_MS = [1000, 2000, 4000, 8000, 15_000];
+/** A GPU device rebuild longer than this is treated as a stuck renderer after all. */
+const REBUILD_MAX_MS = 15_000;
+/** Cache-fill retries of one file that could not be stored: backoff after each failed fill, doubling. */
+const FILE_RETRY_BASE_MS = 10_000;
+const FILE_RETRY_MAX_MS = 5 * 60_000;
+const NETWORK_RETRY_BASE_MS = 4000;
+const NETWORK_RETRY_MAX_MS = 30_000;
+/** A file that cannot be stored (full disk, storage error) is given up on after this many fills. */
+const FILE_ATTEMPTS = 4;
+/** A media event replayed by the host is acted on only while this fresh. */
+const PENDING_ENDED_MS = 60_000;
 
 /** What "Send to preview" asked an idle output to show (prd/03). */
 export type PreviewRequest = {
@@ -117,6 +137,8 @@ export class SlotMirror {
   ready = false;
   busyUntil = 0;
   error?: string;
+  /** The current load streams from the hub (no complete copy in the service cache). */
+  streamed = false;
   gen = 0;
   waiter?: { key: string; promise: Promise<void>; resolve: () => void; reject: (e: Error) => void };
   constructor(readonly id: number) {}
@@ -152,17 +174,24 @@ export class LinkCore {
   private heldSet = new Set<string>();
   private inflight = new Set<string>();
   private delivered = new Map<string, number>();
-  private errors = new Map<string, { error: string; at: number }>();
+  /** Arm errors by key; the key is not tried again before `until`. */
+  private errors = new Map<string, { error: string; at: number; until: number }>();
+  /** Consecutive "file unavailable" failures per key (backoff; never quarantined). */
+  private unavailable = new Map<string, number>();
   private flips: { key: string; at: number; fadeMs: number; cue: number }[] = [];
   private livePlan?: FramePlan;
   private armedPlan?: FramePlan;
   private clearSent = '';
 
   // Quarantine (design/25): keys that failed too often are skipped for the rest of the service.
-  private budget = new ErrorBudget({ opfs: { max: 5, windowMs: 60_000 } }, () => Date.now(), {
-    max: ARM_FAILURES_BEFORE_QUARANTINE - 1,
-    windowMs: 60_000,
-  });
+  private budget = new ErrorBudget(
+    { opfs: { max: 5, windowMs: 60_000 }, cache: { max: 8, windowMs: 10 * 60_000 } },
+    () => Date.now(),
+    {
+      max: ARM_FAILURES_BEFORE_QUARANTINE - 1,
+      windowMs: 60_000,
+    },
+  );
   private quarantine = new Map<string, string>();
   private quarantineService = '';
   private fontFallbacks = new Set<string>();
@@ -177,6 +206,8 @@ export class LinkCore {
   private prevMdLive = '';
   private prevAuLive = '';
   private endedSent = new Set<string>();
+  /** Ended reports (replayed by the host) that arrived before the live plan was known. */
+  private pendingEnded: { key: string; at: number }[] = [];
   private dropped = new DroppedFrames();
   private wasBlack = false;
   private host?: HostStatus;
@@ -193,6 +224,14 @@ export class LinkCore {
   private manifestSig = '';
   private manifestFiles: ManifestFile[] = [];
   private fillAbort?: AbortController;
+  private downloads = new Downloads();
+  /** Per-file fill failures: backoff, and give-up for a file that cannot be stored (review item 10). */
+  private fileFail = new Map<string, { n: number; next: number; reason: FillFailure; gaveUp: boolean }>();
+  /** Files kept at a size other than the manifest's after every download disagreed: hash -> size. */
+  private acceptedSizes = new Map<string, number>();
+  private retryFillTimer?: ReturnType<typeof setTimeout>;
+  private configReq = 0;
+  private configApplied = 0;
   private cacheProgress: { ready: number; total: number } = { ready: 0, total: 0 };
   private fontsSig = '';
   /** Manifests filled while live, newest first; their files survive prunes (review item 8). */
@@ -214,6 +253,8 @@ export class LinkCore {
   private renderStartedAt = Date.now();
   private presentedSeen = { count: -1, at: Date.now(), raf: -1, rafAt: Date.now() };
   private stallRestarts: number[] = [];
+  /** A GPU device rebuild in progress since (0 none): the no-frame check waits for it. */
+  private rebuildingSince = 0;
   private resyncPending = false;
   private invariantResyncs = 0;
   private gaps = 0;
@@ -275,13 +316,17 @@ export class LinkCore {
     const timeout = <T>(p: Promise<T>) =>
       Promise.race([p, new Promise<undefined>((r) => setTimeout(() => r(undefined), IDB_READ_TIMEOUT_MS))]);
     const outputId = this.link.outputId;
-    const [cfg, saved, recent] = await Promise.all([
+    const [cfg, saved, recent, accepted] = await Promise.all([
       timeout(this.json.get<OutputConfigRes>(`config:${outputId}`)).catch(() => undefined),
       timeout(this.json.get<{ state: LiveState; savedAt: number }>(`state:${outputId}`)).catch(
         () => undefined,
       ),
       timeout(this.json.get<RecentManifest[]>(`manifests:${outputId}`)).catch(() => undefined),
+      timeout(this.json.get<[string, number][]>(`accepted:${outputId}`)).catch(() => undefined),
     ]);
+    if (Array.isArray(accepted))
+      for (const [h, n] of accepted.slice(0, 200))
+        if (typeof h === 'string' && typeof n === 'number') this.acceptedSizes.set(h, n);
     if (Array.isArray(recent) && !this.recentLoaded) {
       this.recentManifests = recent;
       this.recentLoaded = true;
@@ -365,9 +410,17 @@ export class LinkCore {
       this.post({ t: 'reload', reason: `${what}: the service cache is unusable` });
   }
 
+  /**
+   * Fetch the output config (at start, on every hub `welcome`, on a settings/font/media change). Fetches
+   * may overlap; a response older than one already applied is dropped, so a slow stale answer never
+   * overwrites a newer config (review 2026-11-04 items 4 and 21).
+   */
   private async loadConfig(): Promise<void> {
+    const n = ++this.configReq;
     try {
       const cfg = await (this.deps.fetchConfig ?? (() => api<OutputConfigRes>(ROUTES.outputConfig)))();
+      if (n < this.configApplied) return;
+      this.configApplied = n;
       this.applyConfig(cfg);
       void this.json.set(`config:${this.link.outputId}`, cfg).catch(() => undefined);
     } catch (err) {
@@ -426,6 +479,7 @@ export class LinkCore {
       };
       this.tel = { ...EMPTY_TELEMETRY };
       this.renderStartedAt = Date.now();
+      this.rebuildingSince = 0;
       if (!firstStart) {
         this.awaitingCover = true;
         this.coverSince = Date.now();
@@ -485,9 +539,46 @@ export class LinkCore {
       this.presentedSeen.raf = status.rafTicks;
       this.presentedSeen.rafAt = Date.now();
     }
+    this.endedFromHost();
   }
 
-  onMediaEvent(ev: MediaEvent): void {
+  /**
+   * A media element that ended while no link worker was alive (its `ended` event went to a dead worker)
+   * is still reported: the host's status says which slots have ended (review 2026-11-04 item 2). Only for
+   * the live, playing, non-looping item whose expected position has reached its end, and once per play
+   * (`endedSent`); the master-only rule is in onMediaEnded.
+   */
+  private endedFromHost(): void {
+    if (!this.host || !this.livePlan || !this.link.mirror.ready) return;
+    const now = clock.now();
+    for (const s of this.host.slots) {
+      if (!s.ended || !s.key) continue;
+      const md = this.livePlan.media.desc;
+      const au = this.livePlan.audio.desc;
+      const d =
+        md?.kind === 'video' && md.key === s.key && md.state === 'playing' && !md.loop
+          ? md
+          : au && au.key === s.key && au.state === 'playing' && !au.loop
+            ? au
+            : undefined;
+      if (!d) continue;
+      // An element still ended from an earlier play of the same file is not this play's end.
+      const dur = s.durationMs ?? (d as { durationMs?: number }).durationMs ?? 0;
+      if (now - d.startedAt < dur - 750) continue;
+      this.onMediaEnded(s.key);
+    }
+  }
+
+  onMediaEvent(ev: MediaEvent, replay = false): void {
+    if (replay) {
+      // A previous link generation died with this event queued: only an end still matters (the new
+      // generation re-arms everything else itself).
+      if (ev.k === 'ended') {
+        if (this.livePlan && this.link.mirror.ready) this.onMediaEnded(ev.key);
+        else this.pendingEnded.push({ key: ev.key, at: Date.now() });
+      }
+      return;
+    }
     const slot = this.slots[ev.slot];
     if (!slot) return;
     switch (ev.k) {
@@ -517,10 +608,10 @@ export class LinkCore {
         if (!slot.key || slot.key !== ev.key) return;
         slot.error = ev.error;
         this.diagLog(`media slot ${slot.id} (${slot.key}): ${ev.error}`);
-        this.errors.set(slot.key, { error: ev.error, at: Date.now() });
+        this.errors.set(slot.key, { error: ev.error, at: Date.now(), until: Date.now() + ERROR_RETRY_MS });
         return;
       case 'ended':
-        if (slot.key === ev.key) this.onMediaEnded(slot);
+        if (slot.key === ev.key) this.onMediaEnded(slot.key);
         return;
     }
   }
@@ -589,6 +680,9 @@ export class LinkCore {
         this.diagLog(`quarantine lifted for a new service (${this.quarantine.size} keys)`);
       this.quarantine.clear();
       this.fontFallbacks.clear();
+      this.unavailable.clear();
+      // A file given up on (full disk) gets a fresh budget with the new service.
+      for (const [h, f] of this.fileFail) if (f.gaveUp) this.fileFail.delete(h);
     }
     this.ensureFiles();
     this.sync();
@@ -705,6 +799,11 @@ export class LinkCore {
     }
     this.syncVideos(live, armed);
     this.syncAudio(live, armed, state);
+    if (this.pendingEnded.length && this.link.mirror.ready) {
+      const now = Date.now();
+      for (const p of this.pendingEnded.splice(0))
+        if (now - p.at < PENDING_ENDED_MS) this.onMediaEnded(p.key);
+    }
     this.syncProps(false);
     this.checkCover();
   }
@@ -726,15 +825,27 @@ export class LinkCore {
   private errorBlocks(key: string): boolean {
     if (this.quarantine.has(key)) return true;
     const e = this.errors.get(key);
-    return !!e && Date.now() - e.at < ERROR_RETRY_MS;
+    return !!e && Date.now() < e.until;
   }
 
   /**
-   * An arm of `key` failed. Within the budget it is retried after ERROR_RETRY_MS; past it the key is
+   * An arm of `key` failed. `unavailable`: its file could not be read (an outage, a file not cached yet):
+   * retried with backoff (1, 2, 4, 8, then every 15 s) and never quarantined; the backoff is lifted when
+   * a cache fill completes (review 2026-11-04 item 3). Otherwise the content itself failed (decode,
+   * raster, invalid data): within the budget it is retried after ERROR_RETRY_MS; past it the key is
    * quarantined for the rest of the service and reported in health (never retried in a loop).
    */
-  private armFailed(key: string, error: string): void {
-    this.errors.set(key, { error, at: Date.now() });
+  private armFailed(key: string, error: string, unavailable = false): void {
+    const now = Date.now();
+    if (unavailable) {
+      const n = (this.unavailable.get(key) ?? 0) + 1;
+      this.unavailable.set(key, n);
+      const wait = UNAVAILABLE_BACKOFF_MS[Math.min(n, UNAVAILABLE_BACKOFF_MS.length) - 1]!;
+      this.errors.set(key, { error, at: now, until: now + wait });
+      setTimeout(() => this.requestSync(), wait + 20);
+      return;
+    }
+    this.errors.set(key, { error, at: now, until: now + ERROR_RETRY_MS });
     if (this.quarantine.has(key)) return;
     if (this.budget.record(`arm:${key}`, error).exceeded) {
       this.quarantine.set(key, error);
@@ -839,6 +950,7 @@ export class LinkCore {
     void (async () => {
       const blob = await this.store.get(hash).catch(() => undefined);
       if (gen !== slot.gen) return;
+      slot.streamed = !blob;
       this.media({ k: 'load', slot: slot.id, key, hash, blob, url: fileUrl(hash), loop, muted });
     })();
     return promise;
@@ -875,6 +987,7 @@ export class LinkCore {
         if (slot.key !== key) return;
         this.delivered.set(key, Date.now());
         this.errors.delete(key);
+        this.unavailable.delete(key);
         // A media video hidden by this look still plays (for audio) but is not offered to the renderer.
         const visible =
           layer !== LAYER_INDEX.media ||
@@ -887,9 +1000,12 @@ export class LinkCore {
       .catch((err: Error) => {
         this.inflight.delete(key);
         this.diagLog(`arm ${key}: ${err.message}`);
-        this.armFailed(key, err.message);
+        // Streaming a file the cache does not hold yet fails during an outage (a network error, or an
+        // HTTP error the element reports as "not supported"): unavailable, not invalid.
+        const unavailable = slot.streamed || /timed out/.test(err.message);
+        this.armFailed(key, err.message, unavailable);
         // A cached copy that does not play may be corrupt: drop it so the next arm streams a fresh one.
-        void this.dropCached(hash, `video ${hash.slice(0, 8)} failed to load`);
+        if (!unavailable) void this.dropCached(hash, `video ${hash.slice(0, 8)} failed to load`);
       });
   }
 
@@ -1008,11 +1124,12 @@ export class LinkCore {
       this.loadSlot(slot, d.key, d.hash, d.loop, false)
         .then(() => {
           this.inflight.delete(d.key);
+          this.unavailable.delete(d.key);
           this.requestSync();
         })
         .catch((err: Error) => {
           this.inflight.delete(d.key);
-          this.armFailed(d.key, err.message);
+          this.armFailed(d.key, err.message, slot.streamed || /timed out/.test(err.message));
         });
     }
     const slot = this.auPair.find(key);
@@ -1022,12 +1139,13 @@ export class LinkCore {
     }
   }
 
-  private onMediaEnded(slot: SlotMirror): void {
+  /** The element playing `key` ended: report it for the live item (the audio master only, once per play). */
+  private onMediaEnded(key: string): void {
     if (!this.config?.output.audioMaster) return;
     const live = this.livePlan;
     if (!live) return;
     const md = live.media.desc;
-    if (md && md.kind === 'video' && slot.key === md.key && md.state === 'playing' && !md.loop) {
+    if (md && md.kind === 'video' && key === md.key && md.state === 'playing' && !md.loop) {
       const id = `m|${md.key}|${md.startedAt}`;
       if (this.endedSent.has(id)) return;
       this.endedSent.add(id);
@@ -1037,7 +1155,7 @@ export class LinkCore {
       return;
     }
     const au = live.audio.desc;
-    if (au && slot.key === au.key && au.state === 'playing' && !au.loop) {
+    if (au && key === au.key && au.state === 'playing' && !au.loop) {
       const id = `a|${au.key}|${au.startedAt}`;
       if (this.endedSent.has(id)) return;
       this.endedSent.add(id);
@@ -1183,13 +1301,26 @@ export class LinkCore {
     sig: string,
     live: boolean,
   ): Promise<void> {
+    // The previous fill's queue stops; of its downloads only those whose file left the manifest are
+    // cancelled, the rest keep going and this fill joins them (review 2026-11-04 item 11).
     this.fillAbort?.abort();
+    clearTimeout(this.retryFillTimer);
     const ac = new AbortController();
     this.fillAbort = ac;
+    const cancelled = this.downloads.retain(new Set(files.map((f) => f.hash)));
+    if (cancelled) this.diagLog(`cache: ${cancelled} download(s) cancelled (no longer in the manifest)`);
+    // Files in backoff after a failed fill (or given up on: a full disk) are not fetched this time.
+    const now = Date.now();
+    const due = files.filter((f) => {
+      const ff = this.fileFail.get(f.hash);
+      return !ff || (!ff.gaveUp && ff.next <= now);
+    });
+    const deferred = files.length - due.length;
     // Fonts first, then images, then everything else (videos).
     const rank = (f: ManifestFile) => (fontHashes.has(f.hash) ? 0 : f.mime.startsWith('image/') ? 1 : 2);
-    const sorted = [...files].sort((a, b) => rank(a) - rank(b));
-    this.cacheProgress = { ready: 0, total: sorted.length };
+    const sorted = [...due].sort((a, b) => rank(a) - rank(b));
+    const total = new Set(files.map((f) => f.hash)).size;
+    this.cacheProgress = { ready: 0, total };
     const t0 = performance.now();
     let p: Awaited<ReturnType<typeof fillStreaming>>;
     try {
@@ -1199,32 +1330,34 @@ export class LinkCore {
         (h, signal) => this.fetchBody(h, signal),
         (pr) => {
           if (ac.signal.aborted) return;
-          this.cacheProgress = { ready: pr.ready, total: pr.total };
+          this.cacheProgress = { ready: pr.ready, total };
         },
-        { concurrency: 3, retries: 2, signal: ac.signal, onStoreError: (e) => this.storeError(e) },
+        {
+          concurrency: 3,
+          retries: 2,
+          signal: ac.signal,
+          onStoreError: (e) => this.storeError(e),
+          accepted: this.acceptedSizes,
+          downloads: this.downloads,
+        },
       );
     } catch (err) {
       this.diagLog(`cache fill failed: ${(err as Error).message}`);
       return;
     }
     if (ac.signal.aborted) return;
-    this.cacheProgress = { ready: p.ready, total: p.total };
+    this.cacheProgress = { ready: p.ready, total };
     if (p.repaired.length) {
       this.cacheRepairs += p.repaired.length;
       this.diagLog(`cache: ${p.repaired.length} corrupt file(s) fetched again`);
     }
+    this.noteFillOutcome(sorted, p.failures, p.mismatched);
+    const failed = p.failed.length + deferred;
     this.diagLog(
-      `cache: ${p.ready}/${p.total} files in ${Math.round(performance.now() - t0)} ms${p.failed.length ? `, ${p.failed.length} failed` : ''}`,
+      `cache: ${p.ready}/${total} files in ${Math.round(performance.now() - t0)} ms${failed ? `, ${failed} not cached` : ''}`,
     );
-    if (p.failed.length) {
-      // Retry the missing ones later (hub may be back, or the operator can serve them).
-      setTimeout(() => {
-        if (this.fillAbort === ac) {
-          this.manifestSig = '';
-          this.ensureFiles();
-        }
-      }, 10_000);
-    } else if (mayPrune(live, p.failed.length)) {
+    if (failed) this.scheduleFillRetry(ac);
+    else if (mayPrune(live, failed)) {
       // Only a complete live fill prunes, and only what no recent service used: End service (an idle
       // manifest of fonts and logo) leaves the cache intact, so the next Go live downloads nothing.
       this.recentManifests = rememberManifest(this.recentManifests, sig, files, Date.now());
@@ -1236,9 +1369,113 @@ export class LinkCore {
       if (n)
         this.diagLog(`cache: pruned ${n} files unused by the last ${this.recentManifests.length} services`);
     }
-    // Keys that failed for want of a file get a fresh chance (quarantined ones stay quarantined).
-    this.errors.clear();
+    // Keys that failed for want of a file get a fresh chance at once (quarantined ones stay quarantined):
+    // all of them when the fill completed, else those whose file is now cached (review item 3).
+    if (!failed) {
+      this.errors.clear();
+      this.unavailable.clear();
+    } else {
+      const cached = sorted.filter((f) => !p.failures[f.hash]).map((f) => f.hash);
+      for (const k of [...this.errors.keys()])
+        if (cached.some((h) => k.includes(h))) {
+          this.errors.delete(k);
+          this.unavailable.delete(k);
+        }
+    }
     this.requestSync();
+  }
+
+  /**
+   * Per-file bookkeeping after a fill (review 2026-11-04 item 10): a file that failed backs off
+   * (10 s doubling to 5 min); one that cannot be stored (full disk, storage error) is given up on after
+   * FILE_ATTEMPTS fills, or at once when the cache budget is spent; both are counted in the error budget
+   * and shown red in health. A size the manifest disagrees with is accepted once and remembered.
+   */
+  private noteFillOutcome(
+    tried: ManifestFile[],
+    failures: Record<string, FillFailure>,
+    mismatched: Record<string, number>,
+  ): void {
+    const now = Date.now();
+    for (const f of tried) {
+      const reason = failures[f.hash];
+      if (!reason) {
+        this.fileFail.delete(f.hash);
+        continue;
+      }
+      const prev = this.fileFail.get(f.hash);
+      const n = (prev?.n ?? 0) + 1;
+      const storage = reason === 'quota' || reason === 'store';
+      let gaveUp = false;
+      if (storage) {
+        const b = this.budget.record('cache', `${reason}: ${f.hash.slice(0, 8)}`);
+        gaveUp = n >= FILE_ATTEMPTS || b.exceeded;
+        if (gaveUp) this.diagLog(`cache: giving up on ${f.hash.slice(0, 8)} (${reason}, ${n} attempts)`);
+      }
+      // A network failure (outage, slow NAS) is retried sooner than a storage one.
+      const wait = storage
+        ? Math.min(FILE_RETRY_MAX_MS, FILE_RETRY_BASE_MS * 2 ** (n - 1))
+        : Math.min(NETWORK_RETRY_MAX_MS, NETWORK_RETRY_BASE_MS * 2 ** (n - 1));
+      this.fileFail.set(f.hash, { n, next: now + wait, reason, gaveUp });
+    }
+    let accepted = false;
+    for (const [h, size] of Object.entries(mismatched)) {
+      if (this.acceptedSizes.get(h) === size) continue;
+      this.acceptedSizes.set(h, size);
+      accepted = true;
+      this.budget.record('cache', `size: ${h.slice(0, 8)}`);
+      this.diagLog(`cache: ${h.slice(0, 8)} is ${size} bytes, not the manifest's size; kept as it is`);
+    }
+    if (accepted)
+      void this.json
+        .set(`accepted:${this.link.outputId}`, [...this.acceptedSizes].slice(-200))
+        .catch(() => undefined);
+  }
+
+  /** Fill again when the earliest file in backoff is due (never for files given up on). */
+  private scheduleFillRetry(ac: AbortController): void {
+    let next = Number.POSITIVE_INFINITY;
+    for (const h of this.manifestFiles.map((f) => f.hash)) {
+      const ff = this.fileFail.get(h);
+      if (ff && !ff.gaveUp) next = Math.min(next, ff.next);
+    }
+    if (!Number.isFinite(next)) return;
+    clearTimeout(this.retryFillTimer);
+    this.retryFillTimer = setTimeout(
+      () => {
+        if (this.fillAbort === ac) {
+          this.manifestSig = '';
+          this.ensureFiles();
+        }
+      },
+      Math.max(1000, next - Date.now() + 50),
+    );
+  }
+
+  /** Health errors of the service cache: files not stored, sizes kept against the manifest. */
+  private cacheErrors(): string[] {
+    const out: string[] = [];
+    const want = new Set(this.manifestFiles.map((f) => f.hash));
+    let quota = 0;
+    let store = 0;
+    let gaveUp = 0;
+    for (const [h, f] of this.fileFail) {
+      if (!want.has(h)) continue;
+      if (f.reason === 'quota') quota++;
+      else if (f.reason === 'store') store++;
+      if (f.gaveUp) gaveUp++;
+    }
+    if (quota) out.push(`storage full: ${quota} file(s) not cached${gaveUp ? ' (gave up)' : ''}`);
+    else if (store)
+      out.push(`cache storage failing: ${store} file(s) not cached${gaveUp ? ' (gave up)' : ''}`);
+    let sized = 0;
+    for (const f of this.manifestFiles) {
+      const a = this.acceptedSizes.get(f.hash);
+      if (a !== undefined && f.bytes && a !== f.bytes) sized++;
+    }
+    if (sized) out.push(`${sized} cached file(s) differ in size from the manifest`);
+    if (this.budget.exceeded('cache')) out.push('cache error budget exceeded');
+    return out;
   }
 
   /** Remove one cached file and refill (a decode failure on an OPFS copy, or a size mismatch). */
@@ -1259,7 +1496,9 @@ export class LinkCore {
   async verifyCache(force: boolean): Promise<number> {
     if (!force && this.state().mode !== 'live') return 0;
     if (!this.manifestFiles.length) return 0;
-    const bad = await findCorrupt(this.store, this.manifestFiles).catch(() => [] as string[]);
+    const bad = await findCorrupt(this.store, this.manifestFiles, this.acceptedSizes).catch(
+      () => [] as string[],
+    );
     if (!bad.length) return 0;
     for (const h of bad) await this.store.remove(h).catch(() => undefined);
     this.cacheRepairs += bad.length;
@@ -1307,12 +1546,17 @@ export class LinkCore {
         return;
       }
       case 'lost':
+        // A rebuild may take seconds: it is not a stuck renderer (review 2026-11-04 item 8).
         this.diagLog(`GPU device lost: ${m.reason}; rebuilding`);
+        this.rebuildingSince = Date.now();
+        this.renderStartedAt = Date.now();
         return;
       case 'restored':
         this.compositor = m.compositor;
         if (m.compositor === 'webgpu') this.renderNote = undefined;
         this.diagLog(`renderer restored (${m.compositor})`);
+        this.rebuildingSince = 0;
+        this.renderStartedAt = Date.now();
         return;
       case 'fatal':
         this.fatal = m.error;
@@ -1329,6 +1573,7 @@ export class LinkCore {
         this.inflight.delete(m.key);
         this.delivered.set(m.key, Date.now());
         this.errors.delete(m.key);
+        this.unavailable.delete(m.key);
         for (const f of m.fontFallbacks ?? []) {
           if (!this.fontFallbacks.has(f) && this.fontFallbacks.size < 20) {
             this.fontFallbacks.add(f);
@@ -1338,14 +1583,16 @@ export class LinkCore {
         if (m.skippedImages)
           this.diagLog(`${m.key.slice(0, 60)}: ${m.skippedImages} image(s) over the cue budget`);
         return;
-      case 'error':
+      case 'error': {
         this.inflight.delete(m.key);
         this.diagLog(`arm ${m.key.slice(0, 60)}: ${m.error}`);
-        this.armFailed(m.key, m.error);
+        const unavailable = m.cause === 'unavailable';
+        this.armFailed(m.key, m.error, unavailable);
         if (m.hash && m.source === 'opfs')
           void this.dropCached(m.hash, `cached ${m.hash.slice(0, 8)} failed to decode`);
-        setTimeout(() => this.requestSync(), ERROR_RETRY_MS + 50);
+        if (!unavailable) setTimeout(() => this.requestSync(), ERROR_RETRY_MS + 50);
         return;
+      }
       case 'fonts':
         this.diagLog(`fonts loaded: ${m.loaded}${m.failed.length ? `, failed: ${m.failed.join(', ')}` : ''}`);
         return;
@@ -1386,11 +1633,15 @@ export class LinkCore {
 
   // ---------------------------------------------------------------- health and crash-only checks
 
+  /**
+   * Keys the live and armed frames need. A quarantined key is still required: the layer shows nothing
+   * instead of it, so the cue is not armed (`armedOk` false, the key in `health.quarantined`).
+   */
   private armRequired(): string[] {
     const keys: string[] = [];
     for (const p of [this.livePlan, this.armedPlan]) {
       if (!p) continue;
-      for (const name of PLAN_LAYERS) keys.push(this.shown((p[name] as LayerPlan<unknown>).key));
+      for (const name of PLAN_LAYERS) keys.push((p[name] as LayerPlan<unknown>).key);
     }
     return keys;
   }
@@ -1411,6 +1662,7 @@ export class LinkCore {
     const state = this.state();
     const errMap = new Map<string, string>();
     for (const [k, v] of this.errors) errMap.set(k, v.error);
+    for (const [k, v] of this.quarantine) errMap.set(k, `quarantined: ${v}`);
     const arm = armStatus(this.armRequired(), this.heldSet, errMap);
     const host = this.host;
     const hs = new Map((host?.slots ?? []).map((s) => [s.id, s]));
@@ -1424,6 +1676,8 @@ export class LinkCore {
     if (this.fatal) errors.push(this.fatal);
     for (const s of host?.slots ?? []) if (s.key && s.error) errors.push(s.error);
     if (this.quarantine.size) errors.push(`${this.quarantine.size} quarantined`);
+    errors.push(...this.cacheErrors());
+    if (host?.reloadRefused) errors.push(host.reloadRefused);
     const master = !!this.config?.output.audioMaster;
     const h = buildHealth({
       render: this.renderTel(),
@@ -1500,13 +1754,18 @@ export class LinkCore {
       return;
     }
     const painting = now - this.presentedSeen.rafAt < 1500;
+    if (this.rebuildingSince && now - this.rebuildingSince < REBUILD_MAX_MS) {
+      this.presentedSeen.at = now;
+      return;
+    }
     if (!painting || now - this.renderStartedAt < RENDER_GRACE_MS || this.compositor === 'none') return;
     if (now - this.presentedSeen.at < NO_FRAME_MS) return;
     this.presentedSeen.at = now;
     this.stallRestarts = this.stallRestarts.filter((t) => now - t < STALL_RELOAD_WINDOW_MS);
     if (this.stallRestarts.length) {
       this.diagLog('renderer stalled again: reloading the window');
-      this.post({ t: 'reload', reason: 'no frame presented for 3 s while live (twice)' });
+      // A refused reload (budget spent) restarts the render worker instead (review 2026-11-04 item 9).
+      this.post({ t: 'reload', reason: 'no frame presented for 3 s while live (twice)', fallback: 'render' });
       return;
     }
     this.stallRestarts.push(now);
@@ -1524,6 +1783,8 @@ export class LinkCore {
       bus: this.link.bus,
       frameMs: this.tel.frameMs,
       frames: this.frames,
+      // The slide cue on screen and the hub time of the frame that first drew it (e2e flip skew).
+      slideFlip: { cue: this.tel.slideCue ?? -1, at: this.tel.slideFlipAt ?? 0 },
       resyncs: this.gaps,
       invariantResyncs: this.invariantResyncs,
     };

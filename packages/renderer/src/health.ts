@@ -15,6 +15,9 @@ export type RenderTelemetry = {
   frameMs: number;
   compositor: CompositorKind;
   error?: string;
+  /** The slide cue the frame shows (-1 none) and the hub time of the frame that first drew it. */
+  slideCue?: number;
+  slideFlipAt?: number;
 };
 
 export const EMPTY_TELEMETRY: RenderTelemetry = {

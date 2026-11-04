@@ -34,7 +34,8 @@ export type FromChild =
   /** Every HEARTBEAT_MS from a timer: a child whose event loop is stuck stops sending it. */
   | { t: 'beat' }
   | LocksMsg
-  | { t: 'changes'; changes: Change[] }
+  /** `seq`: the library sequence after these changes (the live process's read-your-writes barrier). */
+  | { t: 'changes'; changes: Change[]; seq?: number }
   | { t: 'log'; level: 'info' | 'warn' | 'error'; msg: string };
 
 /** Supervisor -> child. */
@@ -42,7 +43,7 @@ export type ToChild =
   | { t: 'library'; url?: string; state: ChildState }
   | { t: 'live'; url?: string; state: ChildState }
   | LocksMsg
-  | { t: 'changes'; changes: Change[] }
+  | { t: 'changes'; changes: Change[]; seq?: number }
   | { t: 'status'; processes: ProcessStatus[] }
   | { t: 'shutdown' };
 

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 import {
   shownSlideCue,
   fixtures,
@@ -13,6 +13,44 @@ import {
   waitCacheReady,
   telemetry,
 } from './helpers.ts';
+
+/**
+ * Flip timing bounds (design/23): one frame (17 ms) between the outputs and 50 ms after the GO's scheduled
+ * time on a real GPU (ORDO_E2E_REAL_GPU=1 with the SwiftShader flag removed); 100 ms for both under the
+ * default SwiftShader software renderer, whose frames are irregular on a loaded machine.
+ */
+const TIMING =
+  process.env.ORDO_E2E_REAL_GPU === '1' ? { skewMs: 17, lateMs: 50 } : { skewMs: 100, lateMs: 100 };
+
+/** The hub time at which the output's frame first drew `cue` (its render worker's flip timestamp). */
+async function flipOf(page: Page, cue: number): Promise<number> {
+  let at = 0;
+  await expect
+    .poll(
+      async () => {
+        await page.bringToFront();
+        const t = (await telemetry(page)) as unknown as { slideFlip?: { cue: number; at: number } };
+        at = t.slideFlip?.at ?? 0;
+        return t.slideFlip?.cue;
+      },
+      { timeout: 10_000 },
+    )
+    .toBe(cue);
+  return at;
+}
+
+/** Wait until the output has the cue armed (prepared for the next GO). */
+async function waitArmed(page: Page, cue: number): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const t = (await telemetry(page)) as unknown as { armed?: number; armedOk?: boolean };
+        return t.armed === cue && t.armedOk === true;
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+}
 
 test.describe('outputs follow the live state', () => {
   test('two audience outputs and the stage flip together through a song and a video', async ({ context }) => {
@@ -33,12 +71,39 @@ test.describe('outputs follow the live state', () => {
     await waitCacheReady(p1);
     await waitCacheReady(p2);
 
-    // GO the first slide and check both outputs show cue 0, then step to cue 1.
+    // GO the first slide and check both outputs show cue 0, then step to cue 1 and 2. Each output reports
+    // the hub time of the frame that first drew the cue (its own flip timestamp, design/23 "Timing
+    // assertions"): the two outputs must flip within a frame of each other, and on time.
+    const skews: number[] = [];
+    const late: number[] = [];
     for (const cue of [0, 1, 2]) {
+      // A GO is on time when the cue is armed (prepared ahead); the first one may otherwise wait for it.
+      await waitArmed(p1, cue);
+      await waitArmed(p2, cue);
       await json(api.post('actions', { data: { id: 'next' } }));
       await expect.poll(() => shownSlideCue(p1), { timeout: 10_000 }).toBe(cue);
       await expect.poll(() => shownSlideCue(p2), { timeout: 10_000 }).toBe(cue);
+      const at = (await json<{ state: { layers: { slide: { at: number } } } }>(api.get('live'))).state.layers
+        .slide.at;
+      const f1 = await flipOf(p1, cue);
+      const f2 = await flipOf(p2, cue);
+      skews.push(Math.abs(f1 - f2));
+      expect(Math.abs(f1 - f2), `cue ${cue}: outputs flipped ${f1 - f2} ms apart`).toBeLessThanOrEqual(
+        TIMING.skewMs,
+      );
+      for (const f of [f1, f2]) {
+        late.push(f - at);
+        expect(f - at, `cue ${cue}: flipped ${f - at} ms after its scheduled time`).toBeLessThanOrEqual(
+          TIMING.lateMs,
+        );
+        // A flip never shows before its time (less one frame of rounding at the boundary).
+        expect(f - at).toBeGreaterThanOrEqual(-17);
+      }
     }
+    console.log(
+      `flip skew between the outputs per GO (ms): ${skews.map((s) => s.toFixed(1)).join(', ')}; ` +
+        `after the scheduled time: ${late.map((s) => s.toFixed(1)).join(', ')}`,
+    );
     // And the pixels on screen agree.
     await expect.poll(() => testPixelCue(p1), { timeout: 30_000 }).toBe(2);
     // Stage shows the live lyric text.

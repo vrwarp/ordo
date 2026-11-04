@@ -69,7 +69,7 @@ async function init(m: Extract<ToRender, { t: 'init' }>): Promise<void> {
       raf,
       wallNow,
       onHeld: (layers) => postLink({ t: 'held', layers }),
-      onSnapshot: (bitmap) => postMain({ t: 'snapshot', bitmap }, [bitmap]),
+      onSnapshot: (bitmap, cue) => postMain({ t: 'snapshot', bitmap, cue }, [bitmap]),
       onLost: (reason) => lifecycle({ t: 'lost', reason }),
       onRestored: (compositor) => lifecycle({ t: 'restored', compositor }),
       requestCanvas: () =>
@@ -124,8 +124,12 @@ function attachLink(port: MessagePort): void {
   }
   linkPort = port;
   port.onmessage = (ev: MessageEvent<ToRender>) => handle(ev.data);
-  // A restarted link worker that connects after the engine started still needs to know it is ready.
-  if (readyMsg && engine) postLink({ t: 'telemetry', tel: engine.telemetry() });
+  // A restarted link worker that connects after the engine started still needs to know it is ready, and
+  // what this renderer holds (held keys are otherwise reported only when they change).
+  if (readyMsg && engine) {
+    postLink({ t: 'telemetry', tel: engine.telemetry() });
+    postLink({ t: 'held', layers: engine.heldKeys() });
+  }
 }
 
 function handle(m: ToRender): void {

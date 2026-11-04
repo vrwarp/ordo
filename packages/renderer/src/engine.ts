@@ -18,7 +18,11 @@ export type EngineHost = {
   /** Wall clock in ms (Date.now-like, sub-ms where possible). */
   wallNow: () => number;
   onHeld?: (layers: HeldKeys[]) => void;
-  onSnapshot?: (bitmap: ImageBitmap) => void;
+  /**
+   * A downscaled copy of the frame just drawn, with the slide cue it shows (-1 none). The main thread
+   * keeps its own copy of it as the hold image (a bitmap from this worker dies with the worker).
+   */
+  onSnapshot?: (bitmap: ImageBitmap, cue: number) => void;
   onLost?: (reason: string) => void;
   onRestored?: (kind: 'webgpu' | '2d') => void;
   /**
@@ -49,6 +53,8 @@ export type EngineOptions = {
 };
 
 export const GPU_RETRY_MAX_MS = 15 * 60_000;
+/** Snapshots (the hold image and the program view) are never taken more often than this. */
+export const SNAP_MIN_MS = 140;
 
 export class RenderEngine {
   readonly layers: LayerStack<ImageBitmap>[] = LAYERS.map(
@@ -80,14 +86,20 @@ export class RenderEngine {
   private markerCue = -1;
   private markerAt = 0;
   private markerLive = -1;
+  /** Hub time of the frame that first drew `markerLive` (e2e: the outputs' flip skew). */
+  private markerFlipAt = 0;
   // Snapshots
   private snapEvery = 1000;
   private snapLast = 0;
   private snapBusy = false;
+  /** The slide cue shown in the frame being copied. */
+  private snapCue = -1;
+  /** Flips counted at the last snapshot: a settled flip takes a fresh one at once (the hold stays current). */
+  private snapFlips = 0;
   private snapOpts: ImageBitmapOptions = { resizeWidth: 640, resizeHeight: 360, resizeQuality: 'low' };
   private readonly onSnapDone = (b: ImageBitmap) => {
     this.snapBusy = false;
-    if (this.host.onSnapshot) this.host.onSnapshot(b);
+    if (this.host.onSnapshot) this.host.onSnapshot(b, this.snapCue);
     else b.close();
   };
   private readonly onSnapFail = () => {
@@ -364,6 +376,8 @@ export class RenderEngine {
       frameMs: this.clock.frameMs,
       compositor: this.kind,
       error: this.error,
+      slideCue: this.markerLive,
+      slideFlipAt: this.markerFlipAt,
     };
   }
 
@@ -386,6 +400,7 @@ export class RenderEngine {
     ) {
       this.markerPending = false;
       this.markerLive = this.markerCue;
+      this.markerFlipAt = now;
     }
     if (this.opts.testPixel) this.updateTestPixel();
     const c = this.compositor;
@@ -397,11 +412,26 @@ export class RenderEngine {
       return;
     }
     this.clock.tick(ts);
-    if (this.snapEvery > 0 && !this.snapBusy && now - this.snapLast >= this.snapEvery) {
-      // Rare path (at most a few times per second): an async GPU copy, not per-frame work.
-      this.snapLast = now;
-      this.snapBusy = true;
-      createImageBitmap(this.opts.canvas, this.snapOpts).then(this.onSnapDone, this.onSnapFail);
+    if (this.snapEvery > 0 && !this.snapBusy) {
+      // A flip that has settled (no layer fading) is copied at once, else every snapEvery ms; never more
+      // often than SNAP_MIN_MS. Rare path: an async GPU copy, not per-frame work.
+      let flips = 0;
+      let fading = false;
+      for (let i = 0; i < this.layers.length; i++) {
+        const l = this.layers[i]!;
+        flips += l.flips;
+        if (l.fading || l.flipPending) fading = true;
+      }
+      const since = now - this.snapLast;
+      const settled = flips !== this.snapFlips && !fading;
+      if (since >= this.snapEvery || (settled && since >= SNAP_MIN_MS)) {
+        this.snapLast = now;
+        this.snapBusy = true;
+        if (!fading) this.snapFlips = flips;
+        const live = this.layers[LAYER_INDEX.slide]!.liveStack;
+        this.snapCue = live.key !== '' ? live.cueIndex : this.markerLive;
+        createImageBitmap(this.opts.canvas, this.snapOpts).then(this.onSnapDone, this.onSnapFail);
+      }
     }
   }
 

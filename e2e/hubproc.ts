@@ -10,10 +10,13 @@ export class HubProcess {
     readonly dataDir: string,
   ) {}
 
-  /** Data under ORDO_E2E_DATA_ROOT when set (a scratch dir), else `.e2e-data-<port>` in the repo. */
+  /**
+   * Data under ORDO_E2E_DATA_ROOT when set (a scratch dir), else `test-results/.e2e-data-<port>`: with the
+   * other test output, out of the linter's way and removed with it.
+   */
   static fresh(port: number): HubProcess {
-    const root = process.env.ORDO_E2E_DATA_ROOT;
-    const dir = root ? `${root}/.e2e-data-${port}` : `.e2e-data-${port}`;
+    const root = process.env.ORDO_E2E_DATA_ROOT ?? 'test-results';
+    const dir = `${root}/.e2e-data-${port}`;
     rmSync(dir, { recursive: true, force: true });
     return new HubProcess(port, dir);
   }
@@ -48,8 +51,37 @@ export class HubProcess {
   }
 
   kill(): void {
+    // A stopped child cannot notice its supervisor vanished: never leave one behind. Only a pid the
+    // supervisor still lists is ours (one its watchdog already replaced is gone, and its pid may be reused).
+    const stopped = this.stopped.splice(0);
+    let listed: number[] = [];
+    try {
+      listed = Object.values(this.children()).map((c) => c.pid ?? 0);
+    } catch {
+      /* no supervisor.json */
+    }
     this.proc?.kill('SIGKILL');
     this.proc = undefined;
+    for (const pid of stopped) {
+      if (!listed.includes(pid)) continue;
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+
+  /** Pids this test stopped with SIGSTOP (killed by kill() if still there). */
+  private stopped: number[] = [];
+
+  /** Freeze one child (SIGSTOP: a stuck event loop as the supervisor sees it); its watchdog kills it. */
+  stopChild(name: 'live' | 'library'): number {
+    const pid = this.children()[name].pid;
+    if (!pid) throw new Error(`${name} process is not running`);
+    this.stopped.push(pid);
+    process.kill(pid, 'SIGSTOP');
+    return pid;
   }
 
   /** The supervisor's children (two-process hub): pids from <data>/supervisor.json. */

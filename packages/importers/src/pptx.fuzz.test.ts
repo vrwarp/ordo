@@ -25,14 +25,15 @@ async function pptx(parts: Record<string, string | undefined>): Promise<Uint8Arr
   return z.generateAsync({ type: 'uint8array' });
 }
 
-async function check(buf: Uint8Array): Promise<void> {
+/** Extract and check the bounds; says whether the file was accepted or rejected with a clean Error. */
+async function check(buf: Uint8Array): Promise<'ok' | 'rejected'> {
   let res: Awaited<ReturnType<typeof extractPptxText>>;
   try {
     res = await extractPptxText(buf);
   } catch (e) {
     expect(e).toBeInstanceOf(Error);
     expect(e).not.toBeInstanceOf(RangeError); // no stack overflow / invalid array length
-    return;
+    return 'rejected';
   }
   expect(res.slideSize.cx).toBeGreaterThan(0);
   expect(res.slideSize.cy).toBeGreaterThan(0);
@@ -48,7 +49,11 @@ async function check(buf: Uint8Array): Promise<void> {
         expect(b.fontSizePx).toBeLessThanOrEqual(IMPORT_LIMITS.fontSizeMax);
       }
     }
+  return 'ok';
 }
+
+/** `check` as a fast-check property body (which must resolve to void or a boolean). */
+const holds = (buf: Uint8Array): Promise<void> => check(buf).then(() => undefined);
 
 const attrNum = fc.oneof(
   fc.integer({ min: -2e9, max: 2e9 }).map(String),
@@ -107,7 +112,10 @@ const mutatedSlide = fc
 describe('extractPptxText (fuzz)', () => {
   it('random bytes reject cleanly', async () => {
     await fc.assert(
-      fc.asyncProperty(fc.uint8Array({ maxLength: 300 }), async (b) => check(b)),
+      // 300 random bytes are never a zip holding ppt/presentation.xml: each must be rejected, not accepted.
+      fc.asyncProperty(fc.uint8Array({ maxLength: 300 }), async (b) => {
+        expect(await check(b)).toBe('rejected');
+      }),
       { numRuns: 500 },
     );
   });
@@ -115,7 +123,7 @@ describe('extractPptxText (fuzz)', () => {
   it('random slide XML and slide sizes resolve within bounds', async () => {
     await fc.assert(
       fc.asyncProperty(randomSlide, attrNum, attrNum, async (slide, cx, cy) =>
-        check(
+        holds(
           await pptx({
             'ppt/presentation.xml': PRES(`cx="${cx}" cy="${cy}"`, '<p:sldId id="256" r:id="rId2"/>'),
             'ppt/_rels/presentation.xml.rels': RELS,
@@ -130,7 +138,7 @@ describe('extractPptxText (fuzz)', () => {
   it('mutated real slide XML resolves within bounds or rejects', async () => {
     await fc.assert(
       fc.asyncProperty(mutatedSlide, async (slide) =>
-        check(
+        holds(
           await pptx({
             'ppt/presentation.xml': PRES('cx="12192000" cy="6858000"', '<p:sldId id="256" r:id="rId2"/>'),
             'ppt/_rels/presentation.xml.rels': RELS,
@@ -145,7 +153,7 @@ describe('extractPptxText (fuzz)', () => {
   it('archives with missing parts resolve or reject', async () => {
     await fc.assert(
       fc.asyncProperty(fc.array(fc.boolean(), { minLength: 4, maxLength: 4 }), async ([a, b, c, d]) =>
-        check(
+        holds(
           await pptx({
             'ppt/presentation.xml': a
               ? PRES('cx="12192000" cy="6858000"', '<p:sldId id="256" r:id="rId2"/>')

@@ -13,7 +13,7 @@
  */
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import type { Logger } from 'pino';
-import { HEADER_INTERNAL } from './http.ts';
+import { HEADER_INTERNAL, HEADER_LIBRARY_SEQ } from './http.ts';
 import { normaliseIp } from './net.ts';
 
 export const PROXY_IDLE_MS = 120_000;
@@ -37,6 +37,12 @@ export type ProxyOpts = {
   log: Logger;
   trusted(addr: string): boolean;
   effectiveHost(req: IncomingMessage): string;
+  /**
+   * Read-your-writes: resolves once the live process has applied the library's changes up to `seq` (or
+   * after its own bound). The answer to a write is held until then, so what the client reads next from the
+   * live process (output config, the settings delta) already includes the write.
+   */
+  barrier?(seq: number): Promise<void>;
 };
 
 export type Proxy = ((req: IncomingMessage, res: ServerResponse) => void) & {
@@ -120,12 +126,21 @@ export function createProxy(opts: ProxyOpts): Proxy {
       responded = true;
       const headers: Record<string, string | string[]> = {};
       for (const [k, v] of Object.entries(pres.headers))
-        if (v !== undefined && !HOP_BY_HOP.has(k)) headers[k] = v;
-      if (pres.statusMessage) res.writeHead(pres.statusCode ?? 502, pres.statusMessage, headers);
-      else res.writeHead(pres.statusCode ?? 502, headers);
-      pres.pipe(res);
+        if (v !== undefined && !HOP_BY_HOP.has(k) && k !== HEADER_LIBRARY_SEQ) headers[k] = v;
       pres.on('error', () => res.destroy());
       pres.on('aborted', () => res.destroy());
+      const forward = () => {
+        if (res.destroyed) {
+          pres.resume();
+          return;
+        }
+        if (pres.statusMessage) res.writeHead(pres.statusCode ?? 502, pres.statusMessage, headers);
+        else res.writeHead(pres.statusCode ?? 502, headers);
+        pres.pipe(res);
+      };
+      const seq = Number(pres.headers[HEADER_LIBRARY_SEQ]);
+      if (opts.barrier && Number.isInteger(seq) && seq > 0) opts.barrier(seq).then(forward, forward);
+      else forward();
     });
     preq.on('error', (e) => {
       if (!responded) {

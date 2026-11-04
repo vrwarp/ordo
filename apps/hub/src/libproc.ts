@@ -20,7 +20,7 @@ import { type DB, openDb } from './db.ts';
 import { errorMessage, notFound } from './errors.ts';
 import { FontService } from './fonts/service.ts';
 import { venueTimeZone } from './hub.ts';
-import { createHttpApp, HEADER_INTERNAL, withTimeout } from './http.ts';
+import { createHttpApp, HEADER_INTERNAL, HEADER_LIBRARY_SEQ, withTimeout } from './http.ts';
 import { ImportService } from './imports.ts';
 import type { LocksMsg, ProcessStatus } from './ipc.ts';
 import { JobQueue } from './jobs.ts';
@@ -68,7 +68,7 @@ export type LibraryProcess = {
 
 export async function createLibraryProcess(
   overrides: Partial<HubConfig>,
-  opts: { secret: string; onChanges?: (changes: Change[]) => void },
+  opts: { secret: string; onChanges?: (changes: Change[], seq: number) => void },
 ): Promise<LibraryProcess> {
   const cfg: HubConfig = { ...loadConfig(process.env), ...overrides };
   mkdirSync(cfg.dataDir, { recursive: true });
@@ -134,6 +134,15 @@ export async function createLibraryProcess(
     diagExtra: () => ({ processes: status, cpuPool: cpuPool().stats() }),
   };
   registerLibraryApi(app, ctx);
+  // Read-your-writes through the live process: every answer to a write carries the library sequence after
+  // it, and the live proxy holds that answer until the live process has applied the changes up to it
+  // (its context copy refreshed, the delta broadcast). A PUT /settings/looks followed at once by an
+  // output's GET /output/config then sees the new look.
+  app.addHook('onSend', async (req, reply, payload) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS')
+      reply.header(HEADER_LIBRARY_SEQ, String(lib.seq()));
+    return payload;
+  });
 
   const route = (url: string, handler: RouteHandlerMethod) =>
     app.route({ method: 'GET', url, config: { access: 'public' }, handler });
@@ -171,7 +180,7 @@ export async function createLibraryProcess(
   });
   registerApiNotFound(app);
 
-  lib.onChange((changes) => opts.onChanges?.(changes));
+  lib.onChange((changes, seq) => opts.onChanges?.(changes, seq));
   lib.onChange((changes) => {
     if (cfg.scheduleBackups && changes.some((c) => c.kind === 'settings' && c.id === 'general'))
       backups.schedule();

@@ -880,7 +880,8 @@ export function assertOneAudioMaster(
     );
 }
 
-export async function cleanupStaleUploads(hub: Pick<Ctx, 'lib' | 'store' | 'cfg'>): Promise<void> {
+/** Startup cleanup of uploads/ and tmp/. Returns how many orphaned multipart .part files were removed. */
+export async function cleanupStaleUploads(hub: Pick<Ctx, 'lib' | 'store' | 'cfg'>): Promise<number> {
   const cutoff = Date.now() - 7 * 86400_000;
   const rows = hub.lib.db.prepare(`SELECT id FROM uploads WHERE updated_at < ?`).all(cutoff) as {
     id: string;
@@ -889,10 +890,23 @@ export async function cleanupStaleUploads(hub: Pick<Ctx, 'lib' | 'store' | 'cfg'
     await rm(join(hub.store.uploads, `${r.id}.part`), { force: true });
     hub.lib.db.prepare(`DELETE FROM uploads WHERE id = ?`).run(r.id);
   }
+  // A multipart upload streams into uploads/<id>.part with no row; a library process that died mid-upload
+  // (or a client that vanished while it was killed) leaves it behind. At startup nothing is receiving, so
+  // every .part without a row is an orphan; resumable uploads (with a row) keep theirs.
+  const { readdir } = await import('node:fs/promises');
+  const resumable = new Set(
+    (hub.lib.db.prepare(`SELECT id FROM uploads`).all() as { id: string }[]).map((r) => `${r.id}.part`),
+  );
+  let orphans = 0;
+  for (const f of await readdir(hub.store.uploads).catch(() => [] as string[])) {
+    if (!f.endsWith('.part') || resumable.has(f)) continue;
+    await rm(join(hub.store.uploads, f), { force: true });
+    orphans++;
+  }
   // tmp/ only ever holds scratch files of jobs in flight (partial transcodes, inflated imports). Every job
   // that was running is re-queued on start and begins again, so everything in it is garbage now.
-  const { readdir } = await import('node:fs/promises');
   const tmp = join(hub.cfg.dataDir, 'tmp');
   for (const f of await readdir(tmp).catch(() => [] as string[]))
     await rm(join(tmp, f), { recursive: true, force: true });
+  return orphans;
 }

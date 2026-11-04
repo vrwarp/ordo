@@ -1,4 +1,4 @@
-import { copyFile, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { nextTimeOfDay } from '@ordo/domain';
 import Database from 'better-sqlite3';
@@ -17,6 +17,8 @@ export const MIN_SCHEDULE_DELAY_MS = 60_000;
 const SCHEDULE_LEAD_MS = 5_000;
 const BACKUP_RE = /^ordo-(\d{4}-\d{2}-\d{2}(?:-\d{6})?)\.db$/;
 const PRE_RESTORE_RE = /^ordo-pre-restore-.*\.db$/;
+/** A backup or manifest being written; renamed to its real name when complete. */
+const PARTIAL_SUFFIX = '.partial';
 
 export type MediaManifest = { createdAt: string; db: string; files: FileRow[] };
 
@@ -90,12 +92,21 @@ export class Backups {
     return join(this.dir, `ordo-${zonedDate(now, this.timeZone())}.db`);
   }
 
-  /** The timer's work: skipped when today's nightly backup already exists (a restart after 03:00). */
+  /**
+   * The timer's work: skipped when today's nightly backup already exists (a restart after 03:00) and passes
+   * an integrity check. A file that does not (written by an older hub that vacuumed in place and was
+   * interrupted) is removed and the backup taken again.
+   */
   async nightly(now = Date.now()): Promise<{ file: string; skipped: boolean }> {
     const file = this.nightlyFile(now);
     if (await exists(file)) {
-      this.log.info({ file: basename(file) }, 'nightly backup already exists; skipped');
-      return { file: basename(file), skipped: true };
+      const bad = integrityProblem(file);
+      if (!bad) {
+        this.log.info({ file: basename(file) }, 'nightly backup already exists; skipped');
+        return { file: basename(file), skipped: true };
+      }
+      this.log.warn({ file: basename(file), problem: bad }, 'nightly backup is damaged; taking it again');
+      await rm(file, { force: true });
     }
     const r = await this.run({ nightly: true, now });
     return { ...r, skipped: false };
@@ -124,13 +135,25 @@ export class Backups {
       file = join(this.dir, `ordo-${stamp}.db`);
       await rm(file, { force: true });
     }
-    this.db.prepare('VACUUM INTO ?').run(file);
+    // Vacuum into a temporary name and rename: a run interrupted part way (power, a killed process) never
+    // leaves a file under the real name that a later night or a restore would take for a backup.
+    const partial = `${file}${PARTIAL_SUFFIX}`;
+    await rm(partial, { force: true });
+    try {
+      this.db.prepare('VACUUM INTO ?').run(partial);
+      await rename(partial, file);
+    } catch (e) {
+      await rm(partial, { force: true });
+      throw e;
+    }
     const manifest: MediaManifest = {
       createdAt: new Date(now).toISOString(),
       db: basename(file),
       files: this.lib.allFiles(),
     };
-    await writeFile(join(this.dir, `media-manifest-${stamp}.json`), JSON.stringify(manifest, null, 1));
+    const manifestFile = join(this.dir, `media-manifest-${stamp}.json`);
+    await writeFile(`${manifestFile}${PARTIAL_SUFFIX}`, JSON.stringify(manifest, null, 1));
+    await rename(`${manifestFile}${PARTIAL_SUFFIX}`, manifestFile);
     this.log.info({ file: basename(file), files: manifest.files.length }, 'backup written');
     await this.prune(now);
     return { file: basename(file) };
@@ -145,6 +168,12 @@ export class Backups {
     const cutoff = now - RETENTION_DAYS * 86400_000;
     const preRestore: { f: string; mtime: number }[] = [];
     for (const f of await readdir(this.dir)) {
+      // Leftovers of an interrupted run (prune runs after this run renamed its own files).
+      if (f.endsWith(PARTIAL_SUFFIX)) {
+        await rm(join(this.dir, f), { force: true });
+        removed.push(f);
+        continue;
+      }
       const pre = PRE_RESTORE_RE.test(f);
       if (!pre && !BACKUP_RE.test(f) && !/^media-manifest-.*\.json$/.test(f)) continue;
       const st = await stat(join(this.dir, f));
@@ -167,6 +196,21 @@ export class Backups {
     const files = (await readdir(this.dir).catch(() => [] as string[])).filter((f) => BACKUP_RE.test(f));
     files.sort().reverse();
     return { files };
+  }
+}
+
+/** Undefined when `file` is a readable SQLite database that passes `integrity_check`; else what is wrong. */
+export function integrityProblem(file: string): string | undefined {
+  try {
+    const db = new Database(file, { readonly: true, fileMustExist: true });
+    try {
+      const ic = db.pragma('integrity_check', { simple: true });
+      return ic === 'ok' ? undefined : String(ic);
+    } finally {
+      db.close();
+    }
+  } catch (e) {
+    return (e as Error).message;
   }
 }
 
@@ -220,13 +264,8 @@ export async function restoreBackup(
   const print = opts.print ?? ((s: string) => console.log(s));
   const { db, manifest } = await findBackup(dataDir, ref);
   print(`backup: ${db}`);
-  const check = new Database(db, { readonly: true, fileMustExist: true });
-  try {
-    const ic = check.pragma('integrity_check', { simple: true });
-    if (ic !== 'ok') throw new Error(`integrity check failed: ${String(ic)}`);
-  } finally {
-    check.close();
-  }
+  const bad = integrityProblem(db);
+  if (bad) throw new Error(`integrity check failed: ${bad}`);
   const missing: string[] = [];
   const mismatched: string[] = [];
   let verified = 0;
@@ -278,5 +317,28 @@ export async function restoreBackup(
   await rm(`${target}-shm`, { force: true });
   await copyFile(db, target);
   print(`restored ${basename(db)} to ${target}`);
+  resetLiveCopies(dataDir, print);
   return { restored: db, verified, missing, mismatched };
+}
+
+/**
+ * The live process keeps copies of the library in live.db (its context: settings, output tokens, fonts,
+ * logo; and recent goLive bundles). After a restore they describe a library that no longer exists: drop
+ * them, so the live process fetches the restored library's context when it starts (the supervisor starts
+ * the library first) instead of serving old output tokens and settings. The live journal and snapshots
+ * stay: the live state is not part of a backup.
+ */
+export function resetLiveCopies(dataDir: string, print: (s: string) => void = () => undefined): void {
+  const file = join(dataDir, 'live.db');
+  try {
+    const live = new Database(file, { fileMustExist: true });
+    try {
+      const n = live.prepare(`DELETE FROM live_kv WHERE key IN ('context', 'bundles')`).run().changes;
+      if (n) print('cleared the live process copies of the old library in live.db');
+    } finally {
+      live.close();
+    }
+  } catch {
+    /* no live.db (single-process hub, or never started): nothing cached */
+  }
 }

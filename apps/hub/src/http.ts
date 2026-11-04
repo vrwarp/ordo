@@ -30,6 +30,8 @@ export type RouteInfo = { method: string; url: string; access: Access };
 
 /** Header carrying the per-boot secret between the hub processes (set by the supervisor). */
 export const HEADER_INTERNAL = 'x-ordo-internal';
+/** On the library's answers to writes: the library sequence after the write (the proxy's barrier). */
+export const HEADER_LIBRARY_SEQ = 'x-ordo-library-seq';
 
 /** Throws when a route does not declare its access role. */
 export function checkRouteAccess(opts: {

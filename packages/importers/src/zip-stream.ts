@@ -215,13 +215,27 @@ async function extractInto(
       const full = prefix ? `${prefix}/${path}` : path;
       const start = await dataOffset(fh, e);
       if (start + e.compressedSize > size) throw new Error(`zip entry ${e.name} is out of range`);
-      const lim = (s: AsyncIterable<Buffer>) => limited(s, e.uncompressedSize, e.name);
-      const read = (sink: NodeJS.WritableStream | ((s: AsyncIterable<Buffer>) => Promise<void>)) => {
-        if (e.compressedSize === 0) return Promise.resolve();
+      // An error thrown by `limited` reaches pipeline's caller as a bare AbortError when the sink is an
+      // async function (pipeline aborts the other stages first); keep it and rethrow it instead.
+      let own: unknown;
+      const lim = async function* (s: AsyncIterable<Buffer>): AsyncGenerator<Buffer> {
+        try {
+          yield* limited(s, e.uncompressedSize, e.name);
+        } catch (err) {
+          own ??= err;
+          throw err;
+        }
+      };
+      const read = async (sink: NodeJS.WritableStream | ((s: AsyncIterable<Buffer>) => Promise<void>)) => {
+        if (e.compressedSize === 0) return;
         const raw = createReadStream(zipPath, { start, end: start + e.compressedSize - 1 });
-        return e.method === 8
-          ? pipeline(raw, createInflateRaw(), lim, sink as NodeJS.WritableStream)
-          : pipeline(raw, lim, sink as NodeJS.WritableStream);
+        try {
+          await (e.method === 8
+            ? pipeline(raw, createInflateRaw(), lim, sink as NodeJS.WritableStream)
+            : pipeline(raw, lim, sink as NodeJS.WritableStream));
+        } catch (err) {
+          throw own ?? err;
+        }
       };
       const nested = depth < 2 && /\.proplaylist$/i.test(path);
       const spill = nested || opts.spill(full, e.uncompressedSize);

@@ -151,8 +151,10 @@ describe('extractZip (fuzz)', () => {
 
   it('random bytes are rejected', async () => {
     await fc.assert(
+      // 400 random bytes are not a zip (an end-of-central-directory record needs a 4-byte signature in
+      // the right place): every one must be rejected, never listed.
       fc.asyncProperty(fc.uint8Array({ maxLength: 400 }), async (b) => {
-        await attempt(b);
+        expect(await attempt(b)).toBe('rejected');
       }),
       { numRuns: 300 },
     );

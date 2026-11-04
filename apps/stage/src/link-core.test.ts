@@ -175,6 +175,37 @@ describe('StageLinkCore', () => {
     core.stop();
   });
 
+  it('a persistently malformed full state stops resyncing past the budget, keeps the view, reports it', async () => {
+    const { core, hub, last, advance } = setup();
+    await core.start();
+    hub.connect();
+    const s0 = liveAt(0);
+    hub.emit('state', { t: 'live.state', v: 1, seq: s0.seq, state: s0 });
+    hub.sent = [];
+    // Two minutes of a hub that answers every resync with the same malformed state, every 300 ms.
+    for (let i = 0; i < 400; i++) {
+      advance(300);
+      await vi.advanceTimersByTimeAsync(300);
+      core.injectFromHub('state', { t: 'live.state', v: 1, seq: 99, state: { seq: 99 } });
+      expect(last().current?.text).toBe('First line\nSecond line');
+    }
+    const resyncs = hub.sent.filter((m) => m.t === 'live.resync').length;
+    // The budget (10) plus one slow retry a minute; it used to be one every 500 ms (240 here).
+    expect(resyncs).toBeGreaterThanOrEqual(10);
+    expect(resyncs).toBeLessThanOrEqual(12);
+    const health = hub.sent.filter((m) => m.t === 'health').at(-1) as unknown as {
+      health: { error?: string };
+    };
+    expect(health.health.error).toMatch(/no valid state after 10 resyncs/);
+    expect(core.diag().resyncError).toMatch(/showing the last good state/);
+    // A sound state ends it.
+    const s1 = liveAt(1);
+    hub.emit('state', { t: 'live.state', v: 1, seq: s1.seq, state: s1 });
+    expect(last().current?.text).toBe('Chorus alpha\nChorus beta');
+    expect(core.diag().resyncError).toBeUndefined();
+    core.stop();
+  });
+
   it('an invariant violation resyncs; a second one after the full state reloads the window', async () => {
     const { core, hub, last, posted } = setup();
     await core.start();
@@ -245,6 +276,42 @@ describe('StageLinkCore', () => {
     };
     expect(health.health).toMatchObject({ presented: 60, fps: 60, workers: [{ name: 'link', restarts: 1 }] });
     expect(health.health.mainThreadStallMs).toBeGreaterThanOrEqual(2500);
+    core.stop();
+  });
+
+  it('main-thread stall is the longest gap between 250 ms ticks since the last health, then resets', async () => {
+    const { core, hub, advance } = setup();
+    await core.start();
+    hub.connect();
+    const stalls = () =>
+      hub.sent
+        .filter((m) => m.t === 'health')
+        .map((m) => (m as unknown as { health: { mainThreadStallMs: number } }).health.mainThreadStallMs);
+    /** `ms` of wall time with the host ticking every 250 ms (the worker's timers advance alongside). */
+    const ticking = async (ms: number) => {
+      for (let t = 0; t < ms; t += 250) {
+        advance(250);
+        core.onTick();
+        await vi.advanceTimersByTimeAsync(250);
+      }
+    };
+    await ticking(3000);
+    // A healthy host: the gap is the tick period, not the phase difference of two 1 s timers.
+    expect(stalls().length).toBeGreaterThanOrEqual(2);
+    for (const v of stalls()) expect(v).toBeLessThanOrEqual(250);
+    // The main thread blocks for 900 ms between two ticks.
+    advance(900);
+    core.onTick();
+    await ticking(2000);
+    const after = stalls();
+    expect(Math.max(...after)).toBe(900);
+    // Reported once, then back to the tick period.
+    expect(after.at(-1)).toBeLessThanOrEqual(250);
+    expect(core.diag().mainThreadStallMs).toBeLessThanOrEqual(250);
+    // A main thread stalled right now has sent nothing: the open gap counts.
+    advance(1600);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(stalls().at(-1)).toBeGreaterThanOrEqual(1600);
     core.stop();
   });
 

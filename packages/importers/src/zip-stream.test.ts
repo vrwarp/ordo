@@ -86,3 +86,50 @@ describe('extractZip', () => {
     );
   });
 });
+
+describe('extractZip errors (review 2026-11-04 finding 24)', () => {
+  /** A one-entry deflated zip with its declared size (both headers) and optionally its body patched. */
+  async function patched(name: string, declare: number, corrupt = false): Promise<string> {
+    const z = new JSZip();
+    z.file('a.pro', Buffer.alloc(2_000_000, 1), { compression: 'DEFLATE' });
+    const buf = await z.generateAsync({ type: 'nodebuffer' });
+    buf.writeUInt32LE(declare, 22);
+    const cd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+    buf.writeUInt32LE(declare, cd + 24);
+    if (corrupt) buf.fill(0xff, 30 + 5, 30 + 5 + 64);
+    const file = join(dir, name);
+    writeFileSync(file, buf);
+    return file;
+  }
+
+  it('reports an entry larger than declared by name, in memory and spilled, not as an abort', async () => {
+    for (const spill of [false, true]) {
+      const out = mkdtempSync(join(dir, 'err-'));
+      const err = await extractZip(await patched(`lie-${spill}.zip`, 100), {
+        dir: out,
+        spill: () => spill,
+      }).then(
+        () => undefined,
+        (e: Error) => e,
+      );
+      expect(err?.message).toBe('zip entry a.pro is larger than its header declares');
+      expect(err?.name).not.toBe('AbortError');
+    }
+  });
+
+  it('reports a corrupt deflate stream as such, not as an abort', async () => {
+    for (const spill of [false, true]) {
+      const out = mkdtempSync(join(dir, 'err-'));
+      const err = await extractZip(await patched(`bad-${spill}.zip`, 2_000_000, true), {
+        dir: out,
+        spill: () => spill,
+      }).then(
+        () => undefined,
+        (e: Error) => e,
+      );
+      expect(err).toBeInstanceOf(Error);
+      expect(err?.name).not.toBe('AbortError');
+      expect(err?.message).not.toMatch(/aborted/);
+    }
+  });
+});

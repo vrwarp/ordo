@@ -10,6 +10,12 @@
  * Both are persisted in live.db, so a live-process restart while the library process is down still has
  * them: a library outage does not block a reconnect, a GO, or a goLive of a playlist that was fetched
  * before. A goLive of a playlist never fetched is refused with a clear reason until the library is back.
+ *
+ * goLive and the library's health (design/25, review 2026-11-04 items 12 and 13):
+ * - library merely restarting (`starting`/`down`): wait up to UP_WAIT_MS for it before falling back;
+ * - library up but silent (stalled) past FETCH_TIMEOUT_MS, or down: a cached copy is used and the goLive
+ *   carries a `degraded` entry naming the copy's time, so the operator sees it is not the current playlist;
+ * - no cached copy: refused with a reason that says to try again (never "playlist not found").
  */
 import {
   DEFAULT_SURFACES,
@@ -38,15 +44,44 @@ export type GoLiveBundle = {
   takenAt: number;
 };
 
-const FETCH_TIMEOUT_MS = 1500;
+export const FETCH_TIMEOUT_MS = 1500;
+/** How long a goLive waits for a library that is restarting before it falls back to the cached copy. */
+export const UP_WAIT_MS = 1500;
 const BUNDLES_KEEP = 8;
+
+/** Why the last prepare() of a playlist did not get a fresh copy. */
+type Fallback = 'unanswered' | 'down';
+
+/** Does a library change affect the live process's context copy (settings, fonts, the logo media)? */
+export function affectsContext(c: Change, logoId: string | undefined): boolean {
+  return c.kind === 'settings' || c.kind === 'font' || (c.kind === 'media' && (!logoId || c.id === logoId));
+}
+
+function ago(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 90) return `${s} s ago`;
+  const m = Math.round(s / 60);
+  if (m < 90) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 36) return `${h} h ago`;
+  return `${Math.round(h / 24)} days ago`;
+}
+
+/** The degraded reason for a goLive from a cached copy. */
+export function cachedCopyReason(takenAt: number, why: Fallback, now = Date.now()): string {
+  const when = new Date(takenAt).toISOString().slice(0, 16).replace('T', ' ');
+  const cause = why === 'down' ? 'the library is not running' : 'the library did not answer';
+  return `Went live from the copy of this playlist saved ${ago(now - takenAt)} (${when} UTC): ${cause}. Changes made since then are not included; go live again once the library is back.`;
+}
 
 export class LibraryLink implements LiveSource {
   private url?: string;
   state: ChildState = 'starting';
   context?: LiveContext;
   private bundles = new Map<string, GoLiveBundle>();
-  private refreshTimer?: NodeJS.Timeout;
+  /** Playlists whose last prepare() fell back (absent: the copy is fresh). */
+  private fallbacks = new Map<string, Fallback>();
+  private upWaiters = new Set<() => void>();
   private contextListeners: ((prev: LiveContext | undefined, next: LiveContext) => void)[] = [];
   /** Last fetch failure (diagnostics). */
   lastError?: string;
@@ -70,6 +105,22 @@ export class LibraryLink implements LiveSource {
     this.url = state === 'up' ? url : undefined;
     this.state = state;
     if (changed && this.url) void this.refreshContext();
+    if (this.url || state === 'failed' || state === 'stopped') for (const w of [...this.upWaiters]) w();
+  }
+
+  /** Resolve once the library is up, or has failed, or after `ms`. */
+  private waitUp(ms: number): Promise<void> {
+    if (this.up || this.state === 'failed' || this.state === 'stopped') return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(t);
+        this.upWaiters.delete(done);
+        resolve();
+      };
+      const t = setTimeout(done, ms);
+      t.unref();
+      this.upWaiters.add(done);
+    });
   }
 
   get up(): boolean {
@@ -81,26 +132,19 @@ export class LibraryLink implements LiveSource {
     return this.url;
   }
 
-  /** Library changes relayed by the supervisor: refresh the context when it is affected. */
-  onChanges(changes: Change[]): void {
+  /** Do these library changes affect the context copy (so it must be refreshed before they are broadcast)? */
+  affects(changes: Change[]): boolean {
     const logoId = this.context?.settings.general.logoMediaId;
-    if (
-      changes.some(
-        (c) =>
-          c.kind === 'settings' || c.kind === 'font' || (c.kind === 'media' && (!logoId || c.id === logoId)),
-      )
-    )
-      this.scheduleRefresh();
+    return changes.some((c) => affectsContext(c, logoId));
   }
 
-  private scheduleRefresh(): void {
-    clearTimeout(this.refreshTimer);
-    this.refreshTimer = setTimeout(() => void this.refreshContext(), 50);
-    this.refreshTimer.unref();
+  /** Is this one change part of what outputs read from their config? */
+  forOutputs(c: Change): boolean {
+    return affectsContext(c, this.context?.settings.general.logoMediaId);
   }
 
   stop(): void {
-    clearTimeout(this.refreshTimer);
+    for (const w of [...this.upWaiters]) w();
   }
 
   private async get<T>(path: string): Promise<T | undefined> {
@@ -142,7 +186,12 @@ export class LibraryLink implements LiveSource {
 
   /** Fetch the playlist's goLive bundle; on failure the cached copy (if any) stands. Never throws. */
   async prepare(playlistId: string): Promise<void> {
+    this.fallbacks.delete(playlistId);
+    // A library that is merely restarting is back within about a second: wait for it rather than go live
+    // from an old copy (or refuse) needlessly.
+    if (!this.up) await this.waitUp(UP_WAIT_MS);
     if (!this.up) {
+      this.fallbacks.set(playlistId, 'down');
       if (this.bundles.has(playlistId))
         this.log.warn({ playlistId }, 'library process is down; going live from the cached copy');
       return;
@@ -160,6 +209,7 @@ export class LibraryLink implements LiveSource {
       while (this.bundles.size > BUNDLES_KEEP) this.bundles.delete(this.bundles.keys().next().value!);
       this.save('bundles', [...this.bundles.entries()]);
     } catch (e) {
+      this.fallbacks.set(playlistId, 'unanswered');
       this.log.warn(
         { playlistId, err: (e as Error).message, cached: this.bundles.has(playlistId) },
         'goLive fetch from the library failed; using the cached copy if there is one',
@@ -169,8 +219,17 @@ export class LibraryLink implements LiveSource {
 
   goLiveInputs(playlistId: string): GoLiveInputs | undefined {
     const b = this.bundles.get(playlistId);
+    // Without prepare() (never on the goLive path) a library that is down still means a cached copy.
+    const fallback = this.fallbacks.get(playlistId) ?? (this.up ? undefined : 'down');
     if (!b) {
-      if (!this.up) throw new LiveRejection('The library is restarting; try GO live again in a moment');
+      if (fallback === 'unanswered')
+        throw new LiveRejection('The library did not answer; try Go live again in a moment');
+      if (fallback === 'down')
+        throw new LiveRejection(
+          this.state === 'failed'
+            ? 'The library has stopped and this playlist was never live before; restart the hub to go live with it'
+            : 'The library is restarting; try Go live again in a moment',
+        );
       return undefined;
     }
     return {
@@ -181,6 +240,7 @@ export class LibraryLink implements LiveSource {
       looks: b.looks,
       general: b.general,
       takenAt: b.takenAt,
+      ...(fallback ? { cachedCopy: cachedCopyReason(b.takenAt, fallback) } : {}),
     };
   }
 

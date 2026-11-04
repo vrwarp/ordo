@@ -9,6 +9,9 @@
  * - Every task has a timeout; a task that times out or is aborted terminates its worker (a parser stuck in
  *   a loop cannot be interrupted any other way) and the slot is re-created for the next task.
  * - A worker that cannot start rejects with WorkerStartError so the caller can decide to run inline.
+ * - Each worker has its own small heap (WORKER_LIMITS): a runaway parse (a zip bomb, a 200 MB text node)
+ *   fails in seconds inside the worker instead of growing the library process by gigabytes towards the
+ *   container's OOM killer. Its task fails with a clear message and the next task gets a fresh worker.
  */
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -33,6 +36,13 @@ export const TASK_TIMEOUT_MS: Record<CpuTaskKind, number> = {
   font: 15_000,
 };
 const IDLE_MS = 30_000;
+/** Heap limits per worker: generous for any real import, small enough to fail fast on a bomb. */
+export const WORKER_LIMITS = { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 64 };
+
+/** The message for a task whose worker ran out of its heap. */
+export function outOfMemoryMessage(kind: string): string {
+  return `${kind} import needs more memory than an import may use (${WORKER_LIMITS.maxOldGenerationSizeMb} MB); the file is too large or malformed`;
+}
 
 /** Where the worker entry lives: next to this module, `.ts` from source (tsx) or `.js` in the bundle. */
 export function cpuWorkerUrl(): URL {
@@ -65,13 +75,15 @@ export type PoolStats = {
   completed: number;
   failed: number;
   restarts: number;
+  /** Tasks that failed because their worker ran out of heap. */
+  oom: number;
 };
 
 export class CpuPool {
   private slots: Slot[] = [];
   private queue: Task[] = [];
   private nextId = 1;
-  private stats_ = { completed: 0, failed: 0, restarts: 0 };
+  private stats_ = { completed: 0, failed: 0, restarts: 0, oom: 0 };
   private closed = false;
 
   constructor(
@@ -142,7 +154,7 @@ export class CpuPool {
       worker = new Worker(this.url, {
         // From source the worker needs the TypeScript loader; the bundle inherits the process flags.
         ...(fromSource ? { execArgv: ['--import', tsxLoaderUrl()] } : {}),
-        resourceLimits: { maxOldGenerationSizeMb: 2048 },
+        resourceLimits: WORKER_LIMITS,
       });
     } catch (e) {
       const err = new WorkerStartError((e as Error).message);
@@ -169,7 +181,16 @@ export class CpuPool {
       this.release(slot);
     });
     worker.on('error', (e) => {
-      this.drop(slot, slot.started ? e : new WorkerStartError(e.message));
+      const oom = (e as { code?: string }).code === 'ERR_WORKER_OUT_OF_MEMORY';
+      if (oom && slot.busy) this.stats_.oom++;
+      this.drop(
+        slot,
+        oom && slot.busy
+          ? new Error(outOfMemoryMessage(slot.busy.kind))
+          : slot.started
+            ? e
+            : new WorkerStartError(e.message),
+      );
     });
     worker.on('exit', (code) => {
       // A worker that dies while working (out of memory, a native crash) fails that task: the caller must

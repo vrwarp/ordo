@@ -9,6 +9,7 @@
       "!tools/fixtures/out",
       "!**/proto/*.json",
       "!test-results",
+      "!**/.e2e-data*",
       "!playwright-report"
     ]
   },

@@ -4,7 +4,7 @@ import { initialState } from '@ordo/live-state';
 import { clock, HubClock } from './clock.ts';
 import { FALLBACK_SILENCE_MS, FallbackClient } from './fallback.ts';
 import { HubConnection } from './hub.ts';
-import { OutputLink } from './link.ts';
+import { OutputLink, RESYNC_BUDGET, RESYNC_WINDOW_MS } from './link.ts';
 import { FakeWindow, installFakeWebSocket, installWindow, lastSocket, welcome } from './__tests__/fakes.ts';
 
 const OP = 'http://op.test';
@@ -190,5 +190,81 @@ describe('LiveMirror on malformed input', () => {
     expect(link.state.seq).toBe(2);
     expect(gaps).toHaveLength(2);
     vi.useRealTimers();
+  });
+});
+
+describe('OutputLink resync budget (review 2026-11-04 finding 25)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(100_000);
+    installFakeWebSocket();
+    clock.fallback = false;
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('stops asking after the budget, keeps the last good state, reports it in health, asks once a minute', () => {
+    const { link, ws } = setup();
+    const resyncs = () => ws.sent.filter((m) => m.t === 'live.resync').length;
+    /** Answer the hub pings (keeps the socket alive) without losing what else was sent. */
+    const pong = () => {
+      const keep = ws.sent.filter((m) => m.t !== 'time.ping');
+      ws.pongAll();
+      ws.sent.push(...keep);
+    };
+    const gaps: string[] = [];
+    link.mirror.on('gap', (g) => gaps.push(g.reason));
+    // The hub answers every resync with a malformed full state, and keeps sending deltas from seq 7.
+    ws.sent = [];
+    for (let i = 0; i < 200; i++) {
+      vi.advanceTimersByTime(300);
+      pong();
+      ws.receive({ t: 'live.state', v: 1, seq: 7, state: { seq: 7 } });
+      ws.receive({ t: 'live.delta', v: 1, seq: 8 + i, fromSeq: 7 + i, event: { k: 'endService', at: i } });
+    }
+    expect(gaps).toContain('malformed-state');
+    expect(gaps).toContain('sequence');
+    // 60 s of it: the budget plus at most one slow retry, not one per delta.
+    expect(resyncs()).toBeLessThanOrEqual(RESYNC_BUDGET + 1);
+    expect(resyncs()).toBeGreaterThanOrEqual(RESYNC_BUDGET);
+    expect(link.state.seq).toBe(2);
+    expect(link.resyncError).toMatch(/no valid state after 10 resyncs/);
+    ws.sent = [];
+    link.sendHealth({ presented: 0, missed: 0, longTasks: 0, lateFlips: 0, live: -1 } as never);
+    const h = ws.sent.find((m) => m.t === 'health') as unknown as { health: { error?: string } };
+    expect(h.health.error).toMatch(/showing the last good state/);
+    // Once a minute after that.
+    ws.sent = [];
+    for (let t = 0; t < RESYNC_WINDOW_MS; t += 1000) {
+      vi.advanceTimersByTime(1000);
+      pong();
+    }
+    expect(link.hub.connected).toBe(true);
+    ws.receive({ t: 'live.delta', v: 1, seq: 999, fromSeq: 998, event: { k: 'endService', at: 1 } });
+    ws.receive({ t: 'live.delta', v: 1, seq: 1000, fromSeq: 999, event: { k: 'endService', at: 1 } });
+    expect(resyncs()).toBe(1);
+    // A valid state ends it: the budget is whole again.
+    ws.receive({ t: 'live.state', v: 1, seq: 9, state: st(9) });
+    expect(link.state.seq).toBe(9);
+    expect(link.resyncError).toBeUndefined();
+    ws.sent = [];
+    ws.receive({ t: 'live.delta', v: 1, seq: 11, fromSeq: 10, event: { k: 'endService', at: 1 } });
+    expect(resyncs()).toBe(1);
+  });
+
+  it('applies on the fallback bus too', () => {
+    const { link, hello, out, op } = setup();
+    hello();
+    const before = op.posted.length;
+    for (let i = 0; i < 50; i++)
+      out.deliver(op, {
+        t: 'live.delta',
+        v: 1,
+        seq: 50 + i,
+        fromSeq: 49 + i,
+        event: { k: 'endService', at: i },
+      });
+    const readies = op.posted.slice(before).filter((p) => (p.m as { t: string }).t === 'fallback.ready');
+    expect(readies.length).toBe(RESYNC_BUDGET);
+    expect(link.resyncError).toBeDefined();
   });
 });

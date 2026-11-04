@@ -71,13 +71,19 @@ export class StageLinkCore {
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   private intervals: ReturnType<typeof setInterval>[] = [];
   private host: HostStats = { presented: 0, missed: 0, fps: 0, longTasks: 0, workers: [], fontErrors: [] };
-  private lastHostAt: number;
+  /** When the host's last 250 ms watchdog tick arrived, and the longest gap since the last health. */
+  private lastTick: number;
+  private maxStall = 0;
+  /** The value sent in the last health (diagnostics shows it). */
+  private reportedStall = 0;
   private log: string[] = [];
   private gaps = 0;
   private resyncPending = false;
   private invariantResyncs = 0;
   private offlineStart = false;
   private lastGapResync = 0;
+  /** The spent resync budget was logged (once until a state applies again). */
+  private budgetLogged = false;
   /** The last state that passed the invariant checks: what the stage draws. */
   private good: LiveState;
   private hasGood = false;
@@ -90,7 +96,7 @@ export class StageLinkCore {
     this.clock = deps.clock ?? defaultClock;
     this.now = deps.now ?? (() => Date.now());
     this.loadedFonts = new Set(deps.loadedFonts ?? []);
-    this.lastHostAt = this.now();
+    this.lastTick = this.now();
     this.good = deps.link.state;
   }
 
@@ -109,14 +115,25 @@ export class StageLinkCore {
     if (reloadReason) this.diagLog(`window reloaded itself: ${reloadReason}`);
     const link = this.link;
     link.mirror.on('change', ({ event }) => this.onState(!event));
-    link.mirror.on('gap', ({ have, got }) => {
+    link.mirror.on('gap', ({ have, got, reason }) => {
       this.gaps++;
-      this.diagLog(`live state gap or rejected message (have ${have}, got ${got}): resync`);
-      // A rejected delta already asked the hub; a rejected full state has not: ask (rate-limited).
-      if (this.now() - this.lastGapResync > 500) {
-        this.lastGapResync = this.now();
-        this.resync();
+      // A rejected delta already asked (OutputLink); a rejected full state has not: ask, rate-limited and
+      // within the link's resync budget. Past the budget the last good view stays and health says why.
+      if (reason !== 'malformed-state') {
+        this.diagLog(`live state ${reason} (have ${have}, got ${got}): resync`);
+        return;
       }
+      if (this.now() - this.lastGapResync <= 500) return;
+      this.lastGapResync = this.now();
+      const asked = link.requestResync();
+      if (asked) this.diagLog(`malformed live state (have ${have}, got ${got}): resync`);
+      else if (!this.budgetLogged) {
+        this.budgetLogged = true;
+        this.diagLog(link.resyncError ?? 'resync budget spent');
+      }
+    });
+    link.mirror.on('change', () => {
+      this.budgetLogged = false;
     });
     link.on('bus', ({ bus, reason }) => {
       this.diagLog(`bus ${bus}${reason ? ` (${reason})` : ''}`);
@@ -173,11 +190,21 @@ export class StageLinkCore {
 
   onHost(stats: HostStats): void {
     this.host = stats;
-    this.lastHostAt = this.now();
     for (const e of stats.fontErrors) {
       this.lastError = e;
       this.diagLog(e);
     }
+  }
+
+  /** The host's 250 ms main-thread tick. */
+  onTick(): void {
+    this.sampleStall();
+    this.lastTick = this.now();
+  }
+
+  /** The gap since the last tick counts too: a main thread stalled right now has sent nothing. */
+  private sampleStall(): void {
+    this.maxStall = Math.max(this.maxStall, this.now() - this.lastTick);
   }
 
   onFontAck(hash: string, ok: boolean, error?: string): void {
@@ -462,6 +489,9 @@ export class StageLinkCore {
 
   private sendHealth(): void {
     const s = this.link.state;
+    this.sampleStall();
+    this.reportedStall = Math.round(this.maxStall);
+    this.maxStall = 0;
     const h: OutputHealth = {
       presented: this.host.presented,
       missed: this.host.missed,
@@ -473,7 +503,7 @@ export class StageLinkCore {
       videoDropped: 0,
       fps: this.host.fps,
       appVersion: APP_VERSION,
-      mainThreadStallMs: Math.max(0, this.now() - this.lastHostAt),
+      mainThreadStallMs: this.reportedStall,
       workers: this.host.workers.slice(0, 8).map((w) => ({
         name: w.name.slice(0, 40),
         generation: w.generation,
@@ -503,9 +533,10 @@ export class StageLinkCore {
       fonts: [...this.loadedFonts],
       cache: this.cache,
       resyncs: this.gaps,
+      resyncError: this.link.resyncError,
       invariantResyncs: this.invariantResyncs,
       lateFlips: this.lateFlips,
-      mainThreadStallMs: Math.max(0, this.now() - this.lastHostAt),
+      mainThreadStallMs: this.reportedStall,
       error: this.lastError,
       log: this.log.slice(-20),
     };

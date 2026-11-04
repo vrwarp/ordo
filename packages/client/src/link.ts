@@ -17,6 +17,14 @@ const EVENT_KEEP_MS = 30_000;
 const EVENT_KEEP_MAX = 20;
 /** How often the fallback bus is checked for silence or a closed opener. */
 const WATCH_MS = 1000;
+/**
+ * Full-state requests (resyncs) a window makes in a minute before it stops asking (review 2026-11-04
+ * finding 25): a bus that keeps answering with a malformed state would otherwise be asked forever. Past the
+ * budget the window keeps its last good state, reports the error in health and asks once a minute, until a
+ * state applies again.
+ */
+export const RESYNC_BUDGET = 10;
+export const RESYNC_WINDOW_MS = 60_000;
 
 /**
  * The live link an output or stage window uses: hub WebSocket normally, the operator's postMessage bus
@@ -41,6 +49,9 @@ export class OutputLink extends Emitter<{
   readonly outputId: string;
   readonly token: string;
   private watch?: ReturnType<typeof setInterval>;
+  private resyncTimes: number[] = [];
+  /** Set while the resync budget is spent: when it was spent and how many requests were refused since. */
+  private resyncSpent?: { at: number; refused: number };
   private recentEvents: { id: string; event: OutputEvent; at: number; sent: boolean }[] = [];
 
   constructor(opts: {
@@ -92,7 +103,14 @@ export class OutputLink extends Emitter<{
         if (m.fromSeq < this.mirror.state.seq) return;
         this.leaveFallback('hub caught up');
       }
-      if (!this.mirror.applyDelta(m)) this.hub.send({ t: 'live.resync' });
+      if (!this.mirror.applyDelta(m)) this.requestResync();
+    });
+    // A state or delta that applies ends a spent resync budget.
+    this.mirror.on('change', () => {
+      if (this.resyncSpent) {
+        this.resyncSpent = undefined;
+        this.resyncTimes = [];
+      }
     });
     this.hub.on('library', (m) => this.emit('library', m));
     this.hub.on('rtc', (m) => this.emit('rtc', m));
@@ -107,7 +125,7 @@ export class OutputLink extends Emitter<{
     });
     this.fallback?.on('delta', (m) => {
       if (this.bus !== 'fallback') return;
-      if (!this.mirror.applyDelta(m)) this.fallback!.ready(this.mirror.state.seq); // ask for a full state
+      if (!this.mirror.applyDelta(m)) this.requestResync({ fallbackSeq: this.mirror.state.seq });
     });
     this.fallback?.on('hub', ({ hubUp }) => {
       if (hubUp && this.bus === 'fallback') this.leaveFallback('operator says hub up');
@@ -117,6 +135,40 @@ export class OutputLink extends Emitter<{
 
   get state(): LiveState {
     return this.mirror.state;
+  }
+
+  /**
+   * Ask the active bus for a full state (hub `live.resync`, or `fallback.ready` on the operator's bus),
+   * within the resync budget. Returns false when the budget refused it or no bus could carry it. `fallbackSeq` is the sequence
+   * reported to the operator (-1 forces a full state).
+   */
+  requestResync(opts: { fallbackSeq?: number; now?: number } = {}): boolean {
+    const now = opts.now ?? Date.now();
+    this.resyncTimes = this.resyncTimes.filter((t) => now - t < RESYNC_WINDOW_MS);
+    const last = this.resyncTimes.at(-1);
+    if (this.resyncSpent) {
+      // Spent: one request a minute until a state applies again.
+      if (last !== undefined && now - last < RESYNC_WINDOW_MS) {
+        this.resyncSpent.refused++;
+        return false;
+      }
+    } else if (this.resyncTimes.length >= RESYNC_BUDGET) {
+      this.resyncSpent = { at: now, refused: 1 };
+      console.error('[ordo] live state resync budget spent: keeping the last good state');
+      return false;
+    }
+    let sent = true;
+    if (this.bus === 'fallback' && this.fallback) this.fallback.ready(opts.fallbackSeq ?? -1);
+    else sent = this.hub.send({ t: 'live.resync' }); // false with the socket down: nothing was asked
+    if (sent) this.resyncTimes.push(now);
+    return sent;
+  }
+
+  /** The health error while the resync budget is spent (also merged into `sendHealth`). */
+  get resyncError(): string | undefined {
+    const s = this.resyncSpent;
+    if (!s) return undefined;
+    return `live state: no valid state after ${RESYNC_BUDGET} resyncs in a minute (${s.refused} more refused); showing the last good state, asking once a minute`;
   }
 
   start(): void {
@@ -139,6 +191,8 @@ export class OutputLink extends Emitter<{
 
   sendHealth(h: OutputHealth): void {
     const health = { ...h, bus: this.bus === 'fallback' ? ('fallback' as const) : ('hub' as const) };
+    const resyncError = this.resyncError;
+    if (resyncError && !health.error) health.error = resyncError.slice(0, 300);
     this.hub.send({ t: 'health', health });
     if (this.bus === 'fallback') this.fallback?.sendHealth(health);
   }

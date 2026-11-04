@@ -42,7 +42,7 @@ export type WorkerStat = {
   gaveUp: boolean;
 };
 
-/** What the host measures and sends every second (also the main-thread watchdog tick). */
+/** What the host measures and sends every second. */
 export type HostStats = {
   presented: number;
   missed: number;
@@ -82,6 +82,8 @@ export type MainToLink =
   /** The opener window is gone (or back): checked on the main thread, which can see it. */
   | { t: 'opener'; closed: boolean }
   | { t: 'host'; stats: HostStats }
+  /** Main-thread watchdog tick, every 250 ms: the worker reports the longest gap between ticks. */
+  | { t: 'tick' }
   | { t: 'fontAck'; hash: string; ok: boolean; error?: string }
   /** Test hooks (`?test=1` only). */
   | { t: 'chaos'; k: 'delta'; msg: unknown }

@@ -24,6 +24,12 @@ type Dest = 'text' | 'fonttbl' | 'colortbl' | 'skip';
 
 /** Font names longer than this are cut (a real PostScript or family name is far shorter). */
 export const RTF_FONT_NAME_MAX = 200;
+/**
+ * Text kept from one RTF document; more is dropped while reading. A slide's text and its notes are cut to
+ * 10,000 characters later, so this only has to bound the work: 100 MB of `\par` used to build a 20 million
+ * line string and split it (618 MB) before the cut.
+ */
+export const RTF_TEXT_MAX = 64 * 1024;
 /** RTF numeric parameters are 16/32-bit; anything larger is clamped. */
 const NUM_LIMIT = 2 ** 31;
 
@@ -204,6 +210,8 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
   const stack: GroupState[] = [];
   let st: GroupState = { ...initial };
   let out = '';
+  /** No visible character yet: blank lines are dropped as they arrive (tidyLines would drop them anyway). */
+  let leading = true;
   let first: GroupState | null = null;
   const styleKeys = new Set<string>();
   let skipChars = 0;
@@ -242,12 +250,21 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
       text = text.slice(n);
       skipChars -= n;
     }
-    if (!text) return;
+    if (!text || out.length >= RTF_TEXT_MAX) return;
+    if (leading) {
+      if (/[^ \t\n\u00a0]/.test(text)) leading = false;
+      else {
+        out += text;
+        const nl = out.lastIndexOf('\n');
+        if (nl >= 0) out = out.slice(nl + 1);
+        return;
+      }
+    }
     if (/\S/.test(text) && text !== '\n') {
       if (!first) first = { ...st };
       styleKeys.add(`${st.font}|${st.fs}|${st.cf}|${st.b}|${st.i}|${st.strokeWidth}|${st.strokeColor}`);
     }
-    out += text;
+    out += text.length > RTF_TEXT_MAX - out.length ? text.slice(0, RTF_TEXT_MAX - out.length) : text;
   };
 
   const n = src.length;
@@ -317,6 +334,11 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
             st.dest = 'skip';
             continue;
           }
+        }
+        if (word === 'bin') {
+          // `\binN`: N bytes of binary data follow (a picture or object); they are never text.
+          if (num !== undefined && num > 0) p = Math.min(n, p + num);
+          continue;
         }
         controlWord(word, num);
         continue;

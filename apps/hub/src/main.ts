@@ -64,11 +64,17 @@ async function runChild(name: string): Promise<void> {
   if (!secret || (name !== 'live' && name !== 'library')) throw new Error('internal: bad child invocation');
   // Heartbeat from a timer: a stuck event loop stops it and the supervisor restarts this process.
   setInterval(() => sendToParent({ t: 'beat' }), HEARTBEAT_MS).unref();
+  // The supervisor vanished while this child was still starting (before the handlers below exist): exit,
+  // or this process would live on as an orphan holding the port.
+  let started = false;
+  process.once('disconnect', () => {
+    if (!started) process.exit(0);
+  });
   if (name === 'library') {
     const { createLibraryProcess } = await import('./libproc.ts');
     const p = await createLibraryProcess(
       {},
-      { secret, onChanges: (changes) => sendToParent({ t: 'changes', changes }) },
+      { secret, onChanges: (changes, seq) => sendToParent({ t: 'changes', changes, seq }) },
     );
     if (process.env.ORDO_LIVE_URL) p.setLiveUrl(process.env.ORDO_LIVE_URL);
     try {
@@ -90,6 +96,8 @@ async function runChild(name: string): Promise<void> {
       void close().then(() => process.exit(0));
     });
     process.on('unhandledRejection', (e) => p.log.error({ err: String(e) }, 'unhandled rejection'));
+    started = true;
+    if (!process.connected) return void close().then(() => process.exit(0));
     sendToParent({ t: 'ready', url: p.url });
     return;
   }
@@ -101,7 +109,7 @@ async function runChild(name: string): Promise<void> {
   process.on('message', (m) => {
     if (!isToChild(m)) return;
     if (m.t === 'library') p.setLibrary(m.url, m.state);
-    else if (m.t === 'changes') p.onLibraryChanges(m.changes);
+    else if (m.t === 'changes') p.onLibraryChanges(m.changes, m.seq);
     else if (m.t === 'status') p.setStatus(m.processes);
   });
   onSignals(
@@ -120,6 +128,11 @@ async function runChild(name: string): Promise<void> {
     process.exit(1);
   });
   process.on('unhandledRejection', (e) => p.log.error({ err: String(e) }, 'unhandled rejection'));
+  started = true;
+  if (!process.connected) {
+    p.crash();
+    process.exit(0);
+  }
   sendToParent({ t: 'ready', url: p.url });
 }
 

@@ -5,7 +5,8 @@
  *
  * - **library** process first (it creates and migrates ordo.db), then **live** (the front door on
  *   ORDO_PORT). The live process starts anyway if the library is not ready within START_WAIT_MS.
- * - A child that exits, or whose heartbeat stops (stuck event loop: STALL_MS), is restarted within a
+ * - A child that exits, or whose heartbeat stops (stuck event loop: STALL_MS; until it is ready, a
+ *   longer START_GRACE_MS so a slow cold boot is not taken for a stall), is restarted within a
  *   second (RESTART_DELAYS_MS), at most BUDGET.max times in BUDGET.windowMs. Past the budget it stays
  *   down and is reported: a failed library leaves the live service running (and /health says
  *   `library: failed`); a failed live process ends the supervisor with exit code 1, so the container
@@ -29,6 +30,12 @@ export const START_WAIT_MS = 15_000;
 export const SHUTDOWN_MS = 5000;
 /** No heartbeat for this long: the child is killed and restarted. The library may run long synchronous SQLite work (VACUUM INTO). */
 export const STALL_MS: Record<ChildName, number> = { live: 5000, library: 60_000 };
+/**
+ * Until a child is ready, silence is allowed this long instead: a cold boot on a slow NAS (loading the
+ * bundle, opening and migrating SQLite) can take seconds before the first heartbeat, and killing it as
+ * stalled would only burn the restart budget.
+ */
+export const START_GRACE_MS = 30_000;
 
 type Child = {
   name: ChildName;
@@ -51,6 +58,8 @@ export type SupervisorOpts = {
   budget?: { max: number; windowMs: number };
   restartDelaysMs?: number[];
   stallMs?: Partial<Record<ChildName, number>>;
+  /** Silence allowed before a child is ready (default START_GRACE_MS, never below its stall timeout). */
+  startGraceMs?: number;
   /** Called when a child exhausted its budget. Default: exit 1 for live, nothing for library. */
   onGiveUp?(name: ChildName): void;
 };
@@ -229,11 +238,13 @@ export class Supervisor {
     const now = Date.now();
     for (const c of Object.values(this.children)) {
       if (!c.proc || this.stopping) continue;
-      const limit = this.opts.stallMs?.[c.name] ?? STALL_MS[c.name];
+      const stall = this.opts.stallMs?.[c.name] ?? STALL_MS[c.name];
+      const starting = c.status.state === 'starting';
+      const limit = starting ? Math.max(stall, this.opts.startGraceMs ?? START_GRACE_MS) : stall;
       if (now - c.lastBeat > limit) {
         this.opts.log.error(
-          { child: c.name, pid: c.proc.pid, silentMs: now - c.lastBeat },
-          'child process stalled; killing it',
+          { child: c.name, pid: c.proc.pid, silentMs: now - c.lastBeat, starting },
+          starting ? 'child process silent while starting; killing it' : 'child process stalled; killing it',
         );
         c.lastBeat = now;
         c.proc.kill('SIGKILL');

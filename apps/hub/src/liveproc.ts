@@ -62,6 +62,9 @@ export async function waitForPort(port: number, host: string, ms: number): Promi
   }
 }
 
+/** The longest the proxy holds the answer to a library write for the live process to apply it. */
+export const LIBRARY_APPLIED_WAIT_MS = 2500;
+
 export type FileEntry = { path: string; mime: string };
 
 /** Content-store files the live process serves itself: the live playlist's media and fonts, fonts, logo. */
@@ -152,7 +155,10 @@ export type LiveProcess = {
   url: string;
   setLibrary(url: string | undefined, state: ChildState): void;
   setStatus(p: ProcessStatus[]): void;
-  onLibraryChanges(changes: Change[]): void;
+  /** Library changes relayed by the supervisor; `seq` is the library sequence after them. */
+  onLibraryChanges(changes: Change[], seq?: number): void;
+  /** Resolves once changes up to `seq` were applied (context refreshed, delta broadcast), or after a bound. */
+  libraryApplied(seq: number): Promise<void>;
   locks(): LocksMsg;
   /** Snapshot now and drop everything without goodbyes (the supervisor vanished). */
   crash(): void;
@@ -233,18 +239,92 @@ export async function createLiveProcess(
       }),
   });
   const app = http.app;
+  // Library changes are applied in order: a batch that touches the context (settings, fonts, the logo)
+  // first refreshes the copy (bounded by the fetch timeout), THEN is broadcast, so an output that refetches
+  // its config on the delta gets the new look (review 2026-11-04 item 4). Batches that arrive meanwhile
+  // share that refresh.
+  let appliedSeq = 0;
+  let pendingChanges: { changes: Change[]; seq?: number }[] = [];
+  let draining = false;
+  let changeRefresh = false;
+  const seqWaiters = new Set<{ seq: number; done: () => void }>();
+  const releaseWaiters = () => {
+    for (const w of seqWaiters) if (appliedSeq >= w.seq) w.done();
+  };
+  const drainChanges = async () => {
+    if (draining) return;
+    draining = true;
+    try {
+      while (pendingChanges.length) {
+        const batch = pendingChanges;
+        pendingChanges = [];
+        if (batch.some((b) => link.affects(b.changes))) {
+          changeRefresh = true;
+          try {
+            await link.refreshContext();
+          } finally {
+            changeRefresh = false;
+          }
+        }
+        for (const b of batch) {
+          sockets.broadcastLibrary(b.changes, (ch) => link.forOutputs(ch));
+          if (b.seq !== undefined && b.seq > appliedSeq) appliedSeq = b.seq;
+        }
+        releaseWaiters();
+      }
+    } catch (e) {
+      log.error({ err: (e as Error).message }, 'applying library changes failed');
+    } finally {
+      draining = false;
+    }
+  };
+  const libraryApplied = (seq: number): Promise<void> => {
+    if (appliedSeq >= seq) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const w = {
+        seq,
+        done: () => {
+          clearTimeout(t);
+          seqWaiters.delete(w);
+          resolve();
+        },
+      };
+      // The change may never come (the library died after answering): never hold an answer for long.
+      const t = setTimeout(w.done, LIBRARY_APPLIED_WAIT_MS);
+      t.unref();
+      seqWaiters.add(w);
+    });
+  };
+
   proxy = createProxy({
     target: () => link.target(),
     secret: opts.secret,
     log,
     trusted: http.trusted,
     effectiveHost: (req: IncomingMessage) => http.effectiveHost(req),
+    barrier: libraryApplied,
   });
 
   const sockets = new SocketHub(auth, live, () => link.outputs(), log, {
     domain: cfg.domain,
     healthIntervalMs: cfg.healthIntervalMs,
     clientIp: http.clientIp,
+  });
+  // A context refresh that is not part of applying a library delta (the library came back, or this process
+  // restarted and fetched it for the first time) may hold settings the outputs have not seen: tell them to
+  // refetch their config. The first successful refresh after start always does.
+  let firstContext = true;
+  link.onContext((prev, next) => {
+    if (changeRefresh) {
+      firstContext = false;
+      return;
+    }
+    const changed =
+      !prev ||
+      JSON.stringify([prev.settings, prev.fonts, prev.logo]) !==
+        JSON.stringify([next.settings, next.fonts, next.logo]);
+    if (firstContext || changed) sockets.broadcastConfigRefresh();
+    firstContext = false;
   });
   // A rotated or removed output token closes that output's sockets (the library cannot reach them).
   link.onContext((prev, next) => {
@@ -373,10 +453,11 @@ export async function createLiveProcess(
     setStatus(p) {
       status = p;
     },
-    onLibraryChanges(changes) {
-      sockets.broadcastLibrary(changes);
-      link.onChanges(changes);
+    onLibraryChanges(changes, seq) {
+      pendingChanges.push({ changes, seq });
+      void drainChanges();
     },
+    libraryApplied,
     locks,
     crash() {
       if (closed) return;
@@ -387,6 +468,7 @@ export async function createLiveProcess(
       if (closed) return;
       closed = true;
       link.stop();
+      for (const w of [...seqWaiters]) w.done();
       live.stop();
       const closing = sockets.close().catch(() => undefined);
       await withTimeout(closing, 250);

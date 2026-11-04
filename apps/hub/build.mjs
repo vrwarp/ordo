@@ -1,11 +1,14 @@
 // Bundle the hub into dist/main.js (Node 22 ESM). Native modules stay external and are installed
 // next to the bundle in the Docker image.
-import { cpSync, mkdirSync } from 'node:fs';
+import { cpSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
 const here = dirname(fileURLToPath(import.meta.url));
+// Start from an empty dist: an entry that was removed (the old import.worker.js) must not linger next to
+// the bundle, where a stale file could be loaded or shipped.
+rmSync(join(here, 'dist'), { recursive: true, force: true });
 mkdirSync(join(here, 'dist'), { recursive: true });
 
 // Two entries: the hub (supervisor and both of its child processes run main.js), and the CPU pool's

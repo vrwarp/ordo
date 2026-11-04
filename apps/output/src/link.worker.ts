@@ -96,7 +96,9 @@ function handle(m: MainToLink): void {
       c.setOpenerClosed(m.closed);
       return;
     case 'media':
-      c.onMediaEvent(m.ev);
+      c.onMediaEvent(m.ev, m.replay);
+      // Handled: the host need not keep it for a successor (review 2026-11-04 item 2).
+      if (m.n !== undefined) post({ t: 'mediaAck', n: m.n });
       return;
     case 'hubSend':
       c.link.hub.send(m.msg);

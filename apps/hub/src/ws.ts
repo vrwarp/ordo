@@ -113,6 +113,9 @@ export class SocketHub {
       maxPayload: MAX_LARGE_MESSAGE_BYTES,
       perMessageDeflate: false,
     });
+    // Command ids journalled before a restart still count: a command journalled just before a crash and
+    // re-sent after the reconnect is acknowledged with its seq, not applied twice.
+    for (const r of live.recentCommandIds(RECENT_CMD_IDS)) this.recentCmds.set(r.id, r.seq);
     live.onDelta((d) => this.broadcastDelta(d));
     live.onState((s) => this.broadcastState(s));
   }
@@ -490,26 +493,46 @@ export class SocketHub {
     for (const c of this.clients) if (this.receivesLive(c)) this.send(c, raw);
   }
 
-  broadcastLibrary(changes: Change[]): void {
+  /**
+   * Library changes to every client. Outputs and the stage get only ids of what their config holds:
+   * `forOutputs` picks those (default: settings; the live process adds fonts and the logo media).
+   */
+  broadcastLibrary(
+    changes: Change[],
+    forOutputs: (ch: Change) => boolean = (ch) => ch.kind === 'settings',
+  ): void {
     const strip = (ch: Change): Change =>
       ch.kind === 'settings' && ch.id === 'outputs' && Array.isArray(ch.entity)
         ? { ...ch, entity: (ch.entity as { token?: string }[]).map(({ token: _t, ...o }) => o) }
         : ch;
     const full = JSON.stringify({ t: 'library.delta', v: PROTOCOL_VERSION, changes });
     const stripped = JSON.stringify({ t: 'library.delta', v: PROTOCOL_VERSION, changes: changes.map(strip) });
-    const settingsOnly = changes.filter((ch) => ch.kind === ('settings' satisfies LibraryKind));
-    const forOutputs = settingsOnly.length
+    const relevant = changes.filter(forOutputs);
+    const toOutputs = relevant.length
       ? JSON.stringify({
           t: 'library.delta',
           v: PROTOCOL_VERSION,
-          changes: settingsOnly.map((ch) => ({ kind: ch.kind, id: ch.id, rev: ch.rev })),
+          changes: relevant.map((ch) => ({ kind: ch.kind, id: ch.id, rev: ch.rev })),
         })
       : undefined;
     for (const c of this.clients) {
       if (c.role === 'operate') this.send(c, full);
       else if (c.role === 'edit') this.send(c, stripped);
-      else if ((c.role === 'output' || c.role === 'stage') && forOutputs) this.send(c, forOutputs);
+      else if ((c.role === 'output' || c.role === 'stage') && toOutputs) this.send(c, toOutputs);
     }
+  }
+
+  /**
+   * Tell outputs and the stage to refetch their config (a settings-only delta, ids only): the live
+   * process's copy of the library context changed without a library delta (it came back after a restart).
+   */
+  broadcastConfigRefresh(): void {
+    const m = JSON.stringify({
+      t: 'library.delta',
+      v: PROTOCOL_VERSION,
+      changes: [{ kind: 'settings' satisfies LibraryKind, id: 'general' }],
+    });
+    for (const c of this.clients) if (c.role === 'output' || c.role === 'stage') this.send(c, m);
   }
 
   /** Per-output health with connection state, for the operator and diagnostics. */

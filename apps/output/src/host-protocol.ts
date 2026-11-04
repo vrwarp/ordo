@@ -91,7 +91,11 @@ export type MainToLink =
   | { t: 'tick' }
   | { t: 'host'; status: HostStatus }
   | { t: 'opener'; closed: boolean }
-  | { t: 'media'; ev: MediaEvent }
+  /**
+   * A media element event. `n` numbers it for the link's acknowledgement; events a dead link worker never
+   * acknowledged are sent again (`replay`) to its successor.
+   */
+  | { t: 'media'; ev: MediaEvent; n?: number; replay?: boolean }
   /** A message the host wants sent to the hub (program-view answers and candidates). */
   | { t: 'hubSend'; msg: ClientMessageBody }
   /** Test hooks (`?test=1` only). */
@@ -112,6 +116,12 @@ export type SlotStatus = {
   positionMs: number;
   durationMs?: number;
   error?: string;
+  /** The element played to its end (and is not looping). */
+  ended?: boolean;
+  paused?: boolean;
+  /** The element has its first frame (the key is loaded). */
+  ready?: boolean;
+  hash?: string;
 };
 
 export type HostStatus = {
@@ -127,6 +137,8 @@ export type HostStatus = {
   compositor?: 'webgpu' | '2d';
   renderNote?: string;
   fatal?: string;
+  /** The last crash-only reload the host refused (within the reload window), and what it did instead. */
+  reloadRefused?: string;
   /** Lines logged on the main thread since the last status. */
   log: string[];
 };
@@ -142,8 +154,13 @@ export type LinkToMain =
   | { t: 'rtc'; m: RtcSignalIn }
   | { t: 'fatal'; title: string; detail: string }
   | { t: 'close'; reason: string }
-  /** Crash-only restart: reload the window (the host applies a reload budget). */
-  | { t: 'reload'; reason: string }
+  /**
+   * Crash-only restart: reload the window (the host applies a reload budget). When the budget refuses
+   * the reload, the host restarts `fallback` instead, if named.
+   */
+  | { t: 'reload'; reason: string; fallback?: WorkerName }
+  /** Media events up to `n` were handled (the host stops keeping them for replay). */
+  | { t: 'mediaAck'; n: number }
   /** Ask the host's supervisor to restart a worker (e.g. the renderer presents nothing). */
   | { t: 'restartWorker'; name: WorkerName; reason: string }
   /** Ask the opener for a fresh fallback-bus port. */

@@ -80,7 +80,7 @@ function init(m: Extract<MainToLink, { t: 'init' }>): void {
 function handle(m: MainToLink): void {
   const c = core;
   if (!c) {
-    if (m.t !== 'host') early.push(m);
+    if (m.t !== 'host' && m.t !== 'tick') early.push(m);
     return;
   }
   switch (m.t) {
@@ -93,6 +93,9 @@ function handle(m: MainToLink): void {
       return;
     case 'host':
       c.onHost(m.stats);
+      return;
+    case 'tick':
+      c.onTick();
       return;
     case 'fontAck':
       c.onFontAck(m.hash, m.ok, m.error);

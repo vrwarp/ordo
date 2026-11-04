@@ -28,6 +28,8 @@ import type {
 import { MediaSlot } from './media.ts';
 import { ProgramSender } from './program.ts';
 
+type HoldReason = 'lost' | 'restart' | 'silent';
+
 export type HostOptions = {
   canvas: HTMLCanvasElement;
   hold: HTMLCanvasElement;
@@ -45,6 +47,16 @@ const RELOAD_MAX = 3;
 const RELOAD_WINDOW_MS = 10 * 60_000;
 /** A hold raised for a render rebuild comes down after this long even if the link never says so. */
 const HOLD_MAX_MS = 12_000;
+/** No heartbeat from the render worker for this long: cover the screen with the hold until it beats again. */
+const RENDER_SILENT_MS = 1000;
+/** Video frames are not posted to a render worker that has been silent this long (it may be dead). */
+const VFRAME_SILENT_MS = 600;
+/** Snapshot periods: idle (the hold image) and while the program view is watched. */
+const SNAP_IDLE_MS = 500;
+const SNAP_PROGRAM_MS = 150;
+/** Media events kept for replay to a restarted link worker (unacknowledged by the current one). */
+const MEDIA_REPLAY_MAX = 64;
+const MEDIA_REPLAY_MS = 120_000;
 
 /**
  * A supervisor clock that does not count main-thread stalls: each tick advances it by at most 500 ms,
@@ -93,10 +105,20 @@ export class OutputHost {
   private compositor?: 'webgpu' | '2d';
   private renderNote?: string;
   private fatal?: string;
-  private lastSnapshot?: ImageBitmap;
   private pendingCanvas?: HTMLCanvasElement;
-  private holdReasons = new Set<'lost' | 'restart'>();
+  private holdReasons = new Set<HoldReason>();
   private holdSince = 0;
+  /** The hold canvas holds a copy of a frame (painted on the main thread from each snapshot). */
+  private holdPainted = false;
+  /** The slide cue of the frame on the hold canvas (-1 none). */
+  private holdCue = -1;
+  private holdCtx?: CanvasRenderingContext2D | null;
+  private lowerTimer?: ReturnType<typeof setTimeout>;
+  private renderBeat = performance.now();
+  private lastHoldCheck = performance.now();
+  private mediaSeq = 0;
+  private mediaUnacked: { n: number; ev: MediaEvent; at: number }[] = [];
+  private reloadRefused?: { at: number; text: string };
   private mainLongTasks = 0;
   private rafTicks = 0;
   private logBuffer: string[] = [];
@@ -169,6 +191,8 @@ export class OutputHost {
       create: () =>
         new Worker(new URL('./render.worker.ts', import.meta.url), { type: 'module', name: 'ordo-render' }),
       start: (w, gen) => this.startRender(w, gen),
+      // The hold (a main-thread copy of the last frame) is on screen before the worker is terminated.
+      stop: () => this.raiseHold('restart'),
     });
     this.sup.add({
       name: 'asset',
@@ -195,7 +219,7 @@ export class OutputHost {
       this.watchOpener();
     }, 250);
     setInterval(() => this.sendStatus(), 500);
-    setInterval(() => this.checkHold(), 500);
+    setInterval(() => this.checkHold(), 250);
     const raf = () => {
       this.rafTicks++;
       requestAnimationFrame(raf);
@@ -209,6 +233,7 @@ export class OutputHost {
     w.onmessage = (ev: MessageEvent<LinkToMain | { __ordo?: string }>) => {
       const d = ev.data as LinkToMain & { __ordo?: string };
       if (d.__ordo) return;
+      if (this.sup.worker('link') !== w) return; // a message from a worker being replaced
       this.onLink(d);
     };
     // The legacy relay of window.postMessage from the opener, on a fresh channel per link generation.
@@ -239,6 +264,14 @@ export class OutputHost {
     };
     w.postMessage(init, busPort ? [bridge.port2, busPort] : [bridge.port2]);
     if (this.openerClosedSent) w.postMessage({ t: 'opener', closed: true } satisfies MainToLink);
+    // What the media elements did is in the first status the link receives (review 2026-11-04 item 2):
+    // a clip that ended while no link worker was alive is still reported by the new one.
+    w.postMessage({ t: 'host', status: this.status(false) } satisfies MainToLink);
+    // Media events the previous generation never acknowledged (it died with them queued) are replayed.
+    const now = Date.now();
+    this.mediaUnacked = this.mediaUnacked.filter((u) => now - u.at < MEDIA_REPLAY_MS);
+    for (const u of this.mediaUnacked)
+      w.postMessage({ t: 'media', ev: u.ev, n: u.n, replay: true } satisfies MainToLink);
     if (gen > 0) {
       // The bus port died with the old worker: ask the operator for a new one (the relay works meanwhile).
       requestPort(this.operatorOrigin, this.outputId);
@@ -248,9 +281,18 @@ export class OutputHost {
 
   private startRender(w: Worker, gen: number): void {
     this.gens.render = gen;
+    this.renderBeat = performance.now();
     w.onmessage = (ev: MessageEvent<FromRender | { __ordo?: string }>) => {
       const d = ev.data as FromRender & { __ordo?: string };
-      if (d.__ordo) return;
+      if (this.sup.worker('render') !== w) {
+        // A worker being replaced: its frame copies are of no use.
+        if ((d as { t?: string }).t === 'snapshot') (d as { bitmap: ImageBitmap }).bitmap.close();
+        return;
+      }
+      if (d.__ordo) {
+        if (d.__ordo === 'hb') this.renderBeat = performance.now();
+        return;
+      }
       this.onRender(d);
     };
     let target = this.opts.canvas;
@@ -258,6 +300,7 @@ export class OutputHost {
       // The old worker took its canvas with it: cover the screen with the last frame, give the new
       // worker a fresh canvas, show it once the link worker has re-armed the live content.
       this.raiseHold('restart');
+      this.holdReasons.delete('silent');
       const c = document.createElement('canvas');
       c.className = this.opts.canvas.className;
       c.width = this.opts.width;
@@ -333,8 +376,10 @@ export class OutputHost {
 
   /** Relay the opener's window.postMessage bus to the link worker (legacy carrier). */
   private attachBridge(port: MessagePort): void {
-    if (!window.opener) return;
+    // The previous generation's relay goes first, also when the opener is already gone (review item 29).
     this.winEp?.close();
+    this.winEp = undefined;
+    if (!this.openerAlive()) return;
     const ep = windowEndpoint(() => window.opener as Window | null, this.operatorOrigin);
     this.winEp = ep;
     ep.onMessage((m) => {
@@ -347,19 +392,24 @@ export class OutputHost {
     port.onmessage = (ev) => ep.post(ev.data);
   }
 
+  private openerAlive(): boolean {
+    try {
+      const op = window.opener as Window | null;
+      return !!op && !op.closed;
+    } catch {
+      return false;
+    }
+  }
+
   private watchOpener(): void {
     if (this.openerClosedSent) return;
     if (!this.hadOpener) return;
-    let closed = false;
-    try {
-      const op = window.opener as Window | null;
-      closed = !op || op.closed;
-    } catch {
-      closed = true;
-    }
-    if (closed) {
+    if (!this.openerAlive()) {
       this.openerClosedSent = true;
       this.log('opener closed');
+      // The relay has nobody to talk to: release its window listener.
+      this.winEp?.close();
+      this.winEp = undefined;
       this.toLink({ t: 'opener', closed: true });
     }
   }
@@ -376,7 +426,9 @@ export class OutputHost {
 
   private toRender(m: ToRender, transfer: Transferable[] = []): void {
     const w = this.sup.worker<Worker>('render');
-    if (!w) {
+    // A frame posted to a dead worker is never closed (review item 29): while the renderer is silent (it
+    // may be dead, not yet restarted), frames are closed here; a restarted one gets the current frame.
+    if (!w || (m.t === 'vframe' && performance.now() - this.renderBeat > VFRAME_SILENT_MS)) {
       if (m.t === 'vframe') m.frame.close();
       return;
     }
@@ -387,8 +439,12 @@ export class OutputHost {
     }
   }
 
+  /** Media events are kept until the link acknowledges them, and replayed to a restarted link worker. */
   private mediaEvent(ev: MediaEvent): void {
-    this.toLink({ t: 'media', ev });
+    const n = ++this.mediaSeq;
+    this.mediaUnacked.push({ n, ev, at: Date.now() });
+    if (this.mediaUnacked.length > MEDIA_REPLAY_MAX) this.mediaUnacked.shift();
+    this.toLink({ t: 'media', ev, n });
   }
 
   log(line: string): void {
@@ -406,9 +462,10 @@ export class OutputHost {
           m.view.covered &&
           this.holdReasons.has('restart') &&
           !this.pendingCanvas &&
-          (m.view.state.gens as Record<WorkerName, number> | undefined)?.render === this.gens.render
+          (m.view.state.gens as Record<WorkerName, number> | undefined)?.render === this.gens.render &&
+          !this.lowerTimer
         )
-          this.lowerHold('restart');
+          this.lowerHold('restart', 200);
         return;
       case 'media':
         this.onMedia(m.cmd);
@@ -433,7 +490,10 @@ export class OutputHost {
         setTimeout(() => window.close(), 200);
         return;
       case 'reload':
-        this.reload(m.reason);
+        this.reload(m.reason, m.fallback);
+        return;
+      case 'mediaAck':
+        this.mediaUnacked = this.mediaUnacked.filter((u) => u.n > m.n);
         return;
       case 'restartWorker':
         this.sup.restart(m.name, m.reason);
@@ -447,8 +507,10 @@ export class OutputHost {
   /**
    * Crash-only restart: reload the window, at most RELOAD_MAX times in RELOAD_WINDOW_MS (a deterministic
    * failure must not become a reload loop). The reloaded window paints the last cue from IndexedDB first.
+   * A refused reload falls back to restarting `fallback` (the render worker for a stuck renderer) and
+   * says so in health (review 2026-11-04 item 9).
    */
-  reload(reason: string): void {
+  reload(reason: string, fallback?: WorkerName): void {
     const now = Date.now();
     let recent: number[] = [];
     try {
@@ -459,7 +521,12 @@ export class OutputHost {
       recent = [];
     }
     if (recent.length >= RELOAD_MAX && reason !== 'new app version') {
-      this.log(`reload refused (${recent.length} in 10 min): ${reason}`);
+      const text = fallback
+        ? `reload refused (${recent.length} in 10 min): restarted the ${fallback} worker instead (${reason})`
+        : `reload refused (${recent.length} in 10 min): ${reason}`;
+      this.log(text);
+      this.reloadRefused = { at: now, text: text.slice(0, 300) };
+      if (fallback) this.sup.restart(fallback, `reload refused: ${reason}`.slice(0, 300));
       return;
     }
     recent.push(now);
@@ -579,12 +646,13 @@ export class OutputHost {
         for (const s of this.slots) s.resendFrame();
         return;
       case 'snapshot':
-        this.lastSnapshot?.close();
-        this.lastSnapshot = m.bitmap;
         this.program.paint(m.bitmap);
-        // While the device is lost the old frames still reflect the screen; a rebuilt worker's first
-        // frames may not have the live content yet, so a restart hold keeps the pre-crash frame.
-        if (this.holdReasons.size === 1 && this.holdReasons.has('lost')) this.paintHold();
+        // Copied onto the (hidden) hold canvas on the main thread at once: a bitmap from the render
+        // worker is backed by that worker's context and draws nothing once it dies (review item 1). A
+        // restart hold keeps the pre-crash frame (a rebuilt worker's first frames may lack the content).
+        if (!this.holdReasons.has('restart') && !this.holdReasons.has('silent'))
+          this.paintHold(m.bitmap, m.cue ?? -1);
+        m.bitmap.close();
         return;
       case 'lost':
         // The link worker logs render lifecycle events (it hears them on its port too).
@@ -637,21 +705,41 @@ export class OutputHost {
     this.log('renderer switched to the fresh canvas');
   }
 
-  private raiseHold(reason: 'lost' | 'restart'): void {
-    if (!this.holdReasons.size) {
-      this.paintHold();
-      this.holdSince = Date.now();
-    }
+  /** Show the hold canvas: it already holds the main thread's copy of the last frame. */
+  private raiseHold(reason: HoldReason): void {
+    clearTimeout(this.lowerTimer);
+    this.lowerTimer = undefined;
+    if (!this.holdReasons.size) this.holdSince = Date.now();
     this.holdReasons.add(reason);
-    this.opts.hold.hidden = false;
+    if (this.holdPainted) this.opts.hold.hidden = false;
   }
 
-  private lowerHold(reason: 'lost' | 'restart'): void {
+  private lowerHold(reason: HoldReason, delayMs = 0): void {
+    if (delayMs > 0) {
+      // Give the canvas underneath a few frames before uncovering it (never a fade from black).
+      clearTimeout(this.lowerTimer);
+      this.lowerTimer = setTimeout(() => this.lowerHold(reason), delayMs);
+      return;
+    }
+    clearTimeout(this.lowerTimer);
+    this.lowerTimer = undefined;
     this.holdReasons.delete(reason);
     if (!this.holdReasons.size) this.opts.hold.hidden = true;
   }
 
   private checkHold(): void {
+    const now = performance.now();
+    const gap = now - this.lastHoldCheck;
+    this.lastHoldCheck = now;
+    // A renderer that stopped beating may be dead: cover the screen now rather than when the supervisor
+    // restarts it. Not judged right after a main-thread stall (its heartbeats are merely queued).
+    if (gap < 600) {
+      const silent = now - this.renderBeat > RENDER_SILENT_MS && !!this.sup.worker('render');
+      if (silent && !this.holdReasons.has('silent') && !this.holdReasons.has('restart')) {
+        this.log('render worker silent: holding the last frame');
+        this.raiseHold('silent');
+      } else if (!silent && this.holdReasons.has('silent')) this.lowerHold('silent');
+    }
     if (this.holdReasons.size && Date.now() - this.holdSince > HOLD_MAX_MS) {
       this.log('hold canvas removed after its time limit');
       this.holdReasons.clear();
@@ -659,19 +747,36 @@ export class OutputHost {
     }
   }
 
-  private paintHold(): void {
-    const b = this.lastSnapshot;
+  /** Copy a frame onto the hold canvas (main thread; at most a few times a second, 640x360 scaled). */
+  private paintHold(b: ImageBitmap, cue: number): void {
     const c = this.opts.hold;
-    if (!b) return;
-    if (c.width !== this.opts.width) {
+    if (c.width !== this.opts.width || c.height !== this.opts.height) {
       c.width = this.opts.width;
       c.height = this.opts.height;
+      this.holdCtx = undefined;
     }
-    c.getContext('2d')?.drawImage(b, 0, 0, c.width, c.height);
+    this.holdCtx ??= c.getContext('2d', { alpha: false });
+    const ctx = this.holdCtx;
+    if (!ctx) return;
+    try {
+      ctx.drawImage(b, 0, 0, c.width, c.height);
+    } catch {
+      return; // a detached or broken bitmap: keep the previous copy
+    }
+    if (this.opts.testMode) {
+      // The test pixel of the copied frame, exact (the downscaled copy blurs the renderer's 1 px marker).
+      ctx.fillStyle = cue < 0 ? '#000' : `rgb(${cue & 255}, ${(cue >> 8) & 255}, 255)`;
+      ctx.fillRect(0, 0, 1, 1);
+    }
+    this.holdCue = cue;
+    if (!this.holdPainted) {
+      this.holdPainted = true;
+      if (this.holdReasons.size) this.opts.hold.hidden = false;
+    }
   }
 
   private updateSnapshotRate(): void {
-    const everyMs = this.program.active ? 100 : 1000;
+    const everyMs = this.program.active ? SNAP_PROGRAM_MS : SNAP_IDLE_MS;
     this.toRender({ t: 'snapshot', everyMs, width: 640, height: 360 });
   }
 
@@ -697,8 +802,8 @@ export class OutputHost {
     }));
   }
 
-  private sendStatus(): void {
-    const status: HostStatus = {
+  private status(drainLog: boolean): HostStatus {
+    return {
       slots: this.slots.map((s) => ({
         id: s.id,
         key: s.key,
@@ -707,6 +812,10 @@ export class OutputHost {
         positionMs: s.el.currentTime * 1000,
         durationMs: Number.isFinite(s.el.duration) ? s.el.duration * 1000 : undefined,
         error: s.error,
+        ended: !!s.key && s.el.ended,
+        paused: s.el.paused,
+        ready: s.ready,
+        hash: s.hash,
       })),
       audio: this.master ? (this.engine?.status ?? 'none') : undefined,
       meters: this.master ? this.engine?.meters() : undefined,
@@ -718,9 +827,16 @@ export class OutputHost {
       compositor: this.compositor,
       renderNote: this.renderNote,
       fatal: this.fatal,
-      log: this.logBuffer.splice(0),
+      reloadRefused:
+        this.reloadRefused && Date.now() - this.reloadRefused.at < RELOAD_WINDOW_MS
+          ? this.reloadRefused.text
+          : undefined,
+      log: drainLog ? this.logBuffer.splice(0) : [],
     };
-    this.toLink({ t: 'host', status });
+  }
+
+  private sendStatus(): void {
+    this.toLink({ t: 'host', status: this.status(true) });
   }
 
   // ---------------------------------------------------------------- introspection (synchronous)
@@ -737,6 +853,7 @@ export class OutputHost {
       ...(this.view?.state ?? {}),
       workers: this.workerStats(),
       hold: !this.opts.hold.hidden,
+      holdCue: this.holdPainted ? this.holdCue : undefined,
     };
   }
 

@@ -1,7 +1,7 @@
 import { type ExtractedText, LOGICAL_HEIGHT, LOGICAL_WIDTH } from '@ordo/domain';
 import { XMLParser } from 'fast-xml-parser';
 import JSZip from 'jszip';
-import { sanitizeExtracted } from './sanitize.ts';
+import { IMPORT_LIMITS, sanitizeExtracted } from './sanitize.ts';
 
 /** Slides read from one file at most (a sldIdLst can list anything). */
 export const PPTX_MAX_SLIDES = 2000;
@@ -9,6 +9,23 @@ export const PPTX_MAX_SLIDES = 2000;
 const XML_MAX_DEPTH = 256;
 /** Largest slide side OOXML allows (51,206,400 EMU = 56 in). */
 const MAX_SLIDE_EMU = 51_206_400;
+/**
+ * Largest XML part (slide, layout, master, rels, presentation) inflated, checked against the size the zip
+ * declares before inflating and again while inflating (a lying header is caught after this many bytes).
+ * Real slide XML is tens of KB; images and media are separate parts and are never read.
+ */
+export const PPTX_MAX_PART_BYTES = 8 * 1024 * 1024;
+/** Total XML inflated from one file, counting every read (a part read twice counts twice). */
+export const PPTX_MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
+/**
+ * Shapes (`p:sp`, `p:graphicFrame`, `p:grpSp`, `p:pic`, `p:cxnSp`) one slide may hold; counted in the XML
+ * text before it is parsed, because parsing is the expensive part (300,000 shapes cost 8 s and 1 GB).
+ */
+export const PPTX_MAX_SHAPES_PER_SLIDE = 5_000;
+/** Markup tags (`<`) one XML part may hold, counted the same way (a dense real slide has a few thousand). */
+export const PPTX_MAX_TAGS_PER_PART = 250_000;
+/** Text kept per box while walking; more is cut (the box is clipped to IMPORT_LIMITS.text anyway). */
+const TEXT_PER_BOX = IMPORT_LIMITS.text + 1;
 
 /** A namespaced XML element as a small tree (order preserved). */
 interface XNode {
@@ -49,7 +66,11 @@ function toNodes(raw: Raw[], depth = 0): XNode[] {
   return out;
 }
 
-function parseXml(xml: string): XNode[] {
+function parseXml(xml: string, part: string): XNode[] {
+  if (countUpTo(xml, '<', PPTX_MAX_TAGS_PER_PART) > PPTX_MAX_TAGS_PER_PART)
+    throw new Error(
+      `This PowerPoint file is not supported: ${part} has more than ${PPTX_MAX_TAGS_PER_PART.toLocaleString('en-US')} XML tags`,
+    );
   try {
     return toNodes(parser.parse(xml) as Raw[]);
   } catch (e) {
@@ -70,9 +91,21 @@ function path(n: XNode | undefined, ...names: string[]): XNode | undefined {
   for (const nm of names) cur = child(cur, nm);
   return cur;
 }
-function textOf(n: XNode): string {
+/**
+ * A short piece of a huge string as its own string: V8 keeps the parent of a slice alive, so a 10,000
+ * character piece of an 8 MB text node would otherwise hold the whole node (and the XML) after the parse.
+ */
+function detach(s: string): string {
+  return s.length > 1024 ? (s + ' ').slice(0, -1) : s;
+}
+
+/** Text of a node, at most `max` characters (a run can hold megabytes; the box keeps 10,000). */
+function textOf(n: XNode, max: number): string {
   let s = '';
-  for (const c of n.children) s += c.name === '#text' ? c.text : textOf(c);
+  for (const c of n.children) {
+    if (s.length >= max) break;
+    s += c.name === '#text' ? detach(c.text.slice(0, max - s.length)) : textOf(c, max - s.length);
+  }
   return s;
 }
 function num(v: string | undefined): number | undefined {
@@ -161,12 +194,13 @@ function lookupPh(ph: Placeholder, ...indexes: (PhIndex | undefined)[]): Xfrm | 
   return undefined;
 }
 
-function paragraphText(p: XNode): string {
+function paragraphText(p: XNode, max: number): string {
   let s = '';
   for (const c of p.children) {
+    if (s.length >= max) break;
     if (c.name === 'a:r' || c.name === 'a:fld') {
       const t = child(c, 'a:t');
-      if (t) s += textOf(t);
+      if (t) s += textOf(t, max - s.length);
     } else if (c.name === 'a:br') s += '\n';
   }
   return s;
@@ -192,8 +226,13 @@ function firstSize(body: XNode): number | undefined {
 }
 
 function bodyText(body: XNode): string {
-  const paras = [...children(body, 'a:p')].map(paragraphText);
-  return paras.join('\n').trimEnd();
+  let s = '';
+  const paras = children(body, 'a:p');
+  for (let i = 0; i < paras.length && s.length < TEXT_PER_BOX; i++) {
+    if (i > 0) s += '\n';
+    s += paragraphText(paras[i]!, TEXT_PER_BOX - s.length);
+  }
+  return s.trimEnd();
 }
 
 type Rels = Map<string, string>;
@@ -214,25 +253,116 @@ function relsPathFor(part: string): string {
   return `${dir ? dir + '/' : ''}_rels/${file}.rels`;
 }
 
-async function readText(zip: JSZip, p: string): Promise<string | undefined> {
-  const f = zip.file(p);
-  return f ? f.async('string') : undefined;
+/** The size the zip's central directory declares for an entry (JSZip keeps it on a private field). */
+function declaredSize(f: JSZip.JSZipObject): number {
+  const data = (f as unknown as { _data?: { uncompressedSize?: number } })._data;
+  return typeof data?.uncompressedSize === 'number' ? data.uncompressedSize : 0;
 }
 
-async function readRels(zip: JSZip, part: string): Promise<{ rels: Rels; types: Map<string, string> }> {
-  const rels: Rels = new Map();
-  const types = new Map<string, string>();
-  const xml = await readText(zip, relsPathFor(part));
-  if (!xml) return { rels, types };
-  const tree = parseXml(xml);
-  const root = tree.find((n) => n.name === 'Relationships');
-  for (const r of children(root, 'Relationship')) {
-    if (!r.attrs.Id || !r.attrs.Target || r.attrs.TargetMode === 'External') continue;
-    const target = resolveTarget(part, r.attrs.Target);
-    rels.set(r.attrs.Id, target);
-    types.set(r.attrs.Id, (r.attrs.Type ?? '').split('/').pop() ?? '');
+const mb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`;
+
+/**
+ * Reads XML parts from the archive with the size bounds above: the declared size is checked before
+ * inflating, the inflated bytes are counted while streaming (a header that lies is stopped at the bound,
+ * not after inflating everything) and every read counts against the archive's total.
+ */
+class Parts {
+  private used = 0;
+  private readonly rels = new Map<string, { rels: Rels; types: Map<string, string> }>();
+  constructor(private readonly zip: JSZip) {}
+
+  private tooBig(part: string, size: number): Error {
+    return new Error(
+      `This PowerPoint file is not supported: ${part} expands to ${size >= PPTX_MAX_PART_BYTES ? `over ${mb(PPTX_MAX_PART_BYTES)}` : mb(size)} (a slide's XML is normally well under 1 MB)`,
+    );
   }
-  return { rels, types };
+  private tooMuch(): Error {
+    return new Error(
+      `This PowerPoint file is not supported: its slides expand to more than ${mb(PPTX_MAX_ARCHIVE_BYTES)} of XML`,
+    );
+  }
+
+  async text(part: string): Promise<string | undefined> {
+    const f = this.zip.file(part);
+    if (!f) return undefined;
+    const declared = declaredSize(f);
+    if (declared > PPTX_MAX_PART_BYTES) throw this.tooBig(part, declared);
+    if (this.used + declared > PPTX_MAX_ARCHIVE_BYTES) throw this.tooMuch();
+    const bytes = await new Promise<Uint8Array>((resolve, reject) => {
+      const chunks: Uint8Array[] = [];
+      let n = 0;
+      let settled = false;
+      // JSZip streams an entry in chunks (internalStream is public API, missing from its typings).
+      const s = (
+        f as unknown as { internalStream(t: 'uint8array'): JSZip.JSZipStreamHelper<Uint8Array> }
+      ).internalStream('uint8array');
+      const fail = (e: Error) => {
+        if (settled) return;
+        settled = true;
+        s.pause();
+        reject(e);
+      };
+      s.on('data', (c: Uint8Array) => {
+        if (settled) return;
+        n += c.length;
+        if (n > PPTX_MAX_PART_BYTES) return fail(this.tooBig(part, n));
+        if (this.used + n > PPTX_MAX_ARCHIVE_BYTES) return fail(this.tooMuch());
+        chunks.push(c);
+      });
+      s.on('error', (e: unknown) => fail(e instanceof Error ? e : new Error(String(e))));
+      s.on('end', () => {
+        if (settled) return;
+        settled = true;
+        const out = new Uint8Array(n);
+        let o = 0;
+        for (const c of chunks) {
+          out.set(c, o);
+          o += c.length;
+        }
+        resolve(out);
+      });
+      s.resume();
+    });
+    this.used += bytes.length;
+    return new TextDecoder().decode(bytes);
+  }
+
+  async relsOf(part: string): Promise<{ rels: Rels; types: Map<string, string> }> {
+    const hit = this.rels.get(part);
+    if (hit) return hit;
+    const rels: Rels = new Map();
+    const types = new Map<string, string>();
+    const res = { rels, types };
+    this.rels.set(part, res);
+    const xml = await this.text(relsPathFor(part));
+    if (!xml) return res;
+    const tree = parseXml(xml, relsPathFor(part));
+    const root = tree.find((n) => n.name === 'Relationships');
+    for (const r of children(root, 'Relationship')) {
+      if (!r.attrs.Id || !r.attrs.Target || r.attrs.TargetMode === 'External') continue;
+      const target = resolveTarget(part, r.attrs.Target);
+      rels.set(r.attrs.Id, target);
+      types.set(r.attrs.Id, (r.attrs.Type ?? '').split('/').pop() ?? '');
+    }
+    return res;
+  }
+}
+
+/** Occurrences of `needle` in `hay`, stopping once `limit` is passed. */
+function countUpTo(hay: string, needle: string, limit: number): number {
+  let n = 0;
+  for (let i = hay.indexOf(needle); i >= 0 && n <= limit; i = hay.indexOf(needle, i + 1)) n++;
+  return n;
+}
+
+/** Shapes on a slide, counted in its XML text; stops counting past the limit. */
+function shapeCount(xml: string): number {
+  let n = 0;
+  for (const tag of ['<p:sp>', '<p:sp ', '<p:graphicFrame', '<p:grpSp>', '<p:grpSp ', '<p:pic', '<p:cxnSp']) {
+    n += countUpTo(xml, tag, PPTX_MAX_SHAPES_PER_SLIDE - n);
+    if (n > PPTX_MAX_SHAPES_PER_SLIDE) break;
+  }
+  return n;
 }
 
 export type PptxText = {
@@ -247,15 +377,16 @@ export type PptxText = {
  */
 export async function extractPptxText(buf: Uint8Array): Promise<PptxText> {
   const zip = await JSZip.loadAsync(buf);
+  const parts = new Parts(zip);
   const presPart = 'ppt/presentation.xml';
-  const presXml = await readText(zip, presPart);
+  const presXml = await parts.text(presPart);
   if (!presXml) throw new Error('not a PowerPoint file: ppt/presentation.xml is missing');
-  const pres = parseXml(presXml).find((n) => n.name === 'p:presentation');
+  const pres = parseXml(presXml, presPart).find((n) => n.name === 'p:presentation');
   const sz = child(pres, 'p:sldSz');
   const side = (v: number | undefined, def: number) =>
     v !== undefined && v > 0 && v <= MAX_SLIDE_EMU ? v : def;
   const slideSize = { cx: side(num(sz?.attrs.cx), 12192000), cy: side(num(sz?.attrs.cy), 6858000) };
-  const { rels } = await readRels(zip, presPart);
+  const { rels } = await parts.relsOf(presPart);
 
   let slideParts: string[] = [];
   for (const id of children(child(pres, 'p:sldIdLst'), 'p:sldId')) {
@@ -280,27 +411,38 @@ export async function extractPptxText(buf: Uint8Array): Promise<PptxText> {
     if (!part) return undefined;
     const hit = phCache.get(part);
     if (hit) return hit;
-    const xml = await readText(zip, part);
-    const ix = xml ? indexPlaceholders(parseXml(xml)) : { byIdx: new Map(), byType: new Map() };
+    const xml = await parts.text(part);
+    const ix = xml ? indexPlaceholders(parseXml(xml, part)) : { byIdx: new Map(), byType: new Map() };
     phCache.set(part, ix);
     return ix;
   };
 
   const slides: PptxText['slides'] = [];
+  // A slide list may name one part many times: it is read and walked once.
+  const done = new Map<string, ExtractedText[]>();
   for (let i = 0; i < slideParts.length; i++) {
     const part = slideParts[i]!;
-    const xml = await readText(zip, part);
+    const seen = done.get(part);
+    if (seen) {
+      slides.push({ index: i + 1, boxes: seen.map((b) => ({ ...b, box: { ...b.box } })) });
+      continue;
+    }
+    const xml = await parts.text(part);
     const boxes: ExtractedText[] = [];
     if (!xml) {
       slides.push({ index: i + 1, boxes });
       continue;
     }
-    const sr = await readRels(zip, part);
+    if (shapeCount(xml) > PPTX_MAX_SHAPES_PER_SLIDE)
+      throw new Error(
+        `This PowerPoint file is not supported: slide ${i + 1} has more than ${PPTX_MAX_SHAPES_PER_SLIDE.toLocaleString('en-US')} shapes`,
+      );
+    const sr = await parts.relsOf(part);
     let layoutPart: string | undefined;
     for (const [rid, t] of sr.types) if (t === 'slideLayout') layoutPart = sr.rels.get(rid);
     let masterPart: string | undefined;
     if (layoutPart) {
-      const lr = await readRels(zip, layoutPart);
+      const lr = await parts.relsOf(layoutPart);
       for (const [rid, t] of lr.types) if (t === 'slideMaster') masterPart = lr.rels.get(rid);
     }
     const layoutIx = await phIndex(layoutPart);
@@ -335,9 +477,12 @@ export async function extractPptxText(buf: Uint8Array): Promise<PptxText> {
         } else {
           // Tables: every cell's paragraphs, row by row.
           const lines: string[] = [];
+          let len = 0;
           const collect = (m: XNode) => {
             if (m.name === 'a:txBody') {
+              if (len >= TEXT_PER_BOX) return;
               const t = bodyText(m);
+              len += t.length + 1;
               if (t.trim()) lines.push(t);
               szHundredths ??= firstSize(m);
               return;
@@ -364,9 +509,10 @@ export async function extractPptxText(buf: Uint8Array): Promise<PptxText> {
       }
       for (const c of n.children) visit(c, tx);
     };
-    const sld = parseXml(xml).find((n) => n.name === 'p:sld');
+    const sld = parseXml(xml, part).find((n) => n.name === 'p:sld');
     const tree = path(sld, 'p:cSld', 'p:spTree');
     if (tree) for (const c of tree.children) visit(c, IDENTITY);
+    done.set(part, boxes);
     slides.push({ index: i + 1, boxes });
   }
   return { slideSize, slides };

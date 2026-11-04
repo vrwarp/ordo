@@ -23,6 +23,8 @@ import { buildView } from './view.ts';
 const RELOAD_WINDOW_MS = 60_000;
 const RELOAD_MAX = 3;
 const RELOAD_KEY = 'ordo-stage-reloads';
+/** Main-thread watchdog tick period. */
+const TICK_MS = 250;
 
 export function initialView(): StageView {
   return buildView({
@@ -114,6 +116,9 @@ export class StageHost {
     }
     setInterval(() => this.sendStats(), 1000);
     setInterval(() => this.checkOpener(), 1000);
+    // Main-thread watchdog tick (as in the output): the link worker measures the gaps between ticks and
+    // reports the longest since its last health as mainThreadStallMs.
+    setInterval(() => this.post({ t: 'tick' }), TICK_MS);
     this.startFrames();
     this.observeLongTasks();
   }
