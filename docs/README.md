@@ -56,18 +56,18 @@ an ADR.
 | [design/20-importers.md](design/20-importers.md)                       | ProPresenter 7, SongSelect files, PPTX and PDF, Google Fonts                     |
 | [design/21-security.md](design/21-security.md)                         | Auth model, sessions, rate limiting, tokens, headers                             |
 | [design/22-deployment.md](design/22-deployment.md)                     | Docker Hub images, Compose on Synology, DSM reverse proxy, hostnames, PC setup   |
-| [design/23-testing.md](design/23-testing.md)                           | Vitest, Playwright multi-window, soak test, CI                                   |
+| [design/23-testing.md](design/23-testing.md)                           | Vitest, Playwright multi-origin, chaos tests, fuzzing, soak test, CI             |
 | [design/24-repo-conventions.md](design/24-repo-conventions.md)         | Monorepo layout, tooling, coding rules, how Claude Code sessions should work     |
 
 ### Decisions and plan
 
-| Doc                                          | Covers                                                                                                               |
-| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| [adr/](adr/)                                 | Architecture decision records                                                                                        |
-| [milestones.md](milestones.md)               | M1, M2, M3 with rehearsal gates and task breakdown                                                                   |
-| [review-2026-11-03.md](review-2026-11-03.md) | Independent review of the implementation: what to fix before the first service, what to investigate on real hardware |
-| [review-2026-11-04.md](review-2026-11-04.md) | Independent review of the hardening pass: four high findings on the audience path, chaos coverage, what held |
-| [design/25-isolation-and-hardening.md](design/25-isolation-and-hardening.md) | Worker isolation, supervision, validation and quarantine; phased plan |
+| Doc                                                                          | Covers                                                                                                               |
+| ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| [adr/](adr/)                                                                 | Architecture decision records                                                                                        |
+| [milestones.md](milestones.md)                                               | M1, M2, M3 with rehearsal gates and task breakdown                                                                   |
+| [review-2026-11-03.md](review-2026-11-03.md)                                 | Independent review of the implementation: what to fix before the first service, what to investigate on real hardware |
+| [review-2026-11-04.md](review-2026-11-04.md)                                 | Independent review of the hardening pass: four high findings on the audience path, chaos coverage, what held         |
+| [design/25-isolation-and-hardening.md](design/25-isolation-and-hardening.md) | Worker isolation, supervision, validation and quarantine; phased plan                                                |
 
 ## Glossary
 

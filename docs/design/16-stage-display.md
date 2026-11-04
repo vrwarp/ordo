@@ -66,10 +66,19 @@ relay), acceptPorts, Supervisor                 invariant checks, health and the
 - **Invariants as code**: after every applied state the worker runs `checkInvariants`. A violation keeps
   the last good view on screen and asks for a full state (hub `live.resync`, or `fallback.ready` on the
   bus); if the full state that answers still violates, the worker asks the host to reload the window. A
-  delta or state the mirror rejects (malformed, sequence gap) also resyncs.
+  delta or state the mirror rejects (malformed, sequence gap) also resyncs, through `OutputLink`'s resync
+  budget: at most 10 full-state requests a minute. Past that (a bus that keeps answering with a malformed
+  state) the stage keeps the last good view, logs it once, reports `live state: no valid state after 10
+  resyncs in a minute ...` as the health error and asks once a minute until a state applies again. The
+  output's link has the same budget.
 - **Health**: the worker assembles `OutputHealth` every second from its own counters and the host's
-  stats (frames, fps, long tasks, the supervisor's worker table). `mainThreadStallMs` is the time since
-  the host's last 1 s stats message.
+  stats (frames, fps, long tasks, the supervisor's worker table). Main-thread watchdog, as in the output
+  (design/14): the host posts a `tick` every 250 ms; the worker keeps the longest gap between ticks since
+  its last health, counting the gap still open when it sends (a main thread stalled right now has sent
+  nothing), reports it as `mainThreadStallMs` and starts again. A healthy stage reports about 250 ms (the
+  tick period plus timer jitter); a main thread blocked for 900 ms reports 900 ms in the next health and
+  250 ms again after it. (It used to be the time since the host's 1 s stats message, read by the worker's
+  own 1 s timer: the phase difference of two timers, 43 to 318 ms on a healthy stage.)
 - **Superseded / new version**: a `bye` from the hub is handled in the worker; `version` asks the host to
   reload, `superseded` stops the worker and the host closes the window.
 - **Diagnostics and tests**: `ordoStage.telemetry()` / `ordoStage.view()` in the console. With `?test=1`,

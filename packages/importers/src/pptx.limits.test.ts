@@ -168,6 +168,20 @@ describe('extractPptxText resource bounds', () => {
     expect(performance.now() - t0).toBeLessThan(1000);
   });
 
+  it('rejects the review slide with 300,000 shapes (8.5 s and 1.1 GB before) fast, in a 96 MB heap', async () => {
+    const shapes = enc.encode(
+      '<p:sp><p:txBody><a:p><a:r><a:t>x</a:t></a:r></a:p></p:txBody></p:sp>'.repeat(1000),
+    );
+    const chunks = function* () {
+      yield enc.encode(`<?xml version="1.0"?><p:sld ${NS}><p:cSld><p:spTree>`);
+      for (let i = 0; i < 300; i++) yield shapes;
+      yield enc.encode('</p:spTree></p:cSld></p:sld>');
+    };
+    const r = await extractBounded(await deck([{ name: 'ppt/slides/slide1.xml', chunks }]));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.ms).toBeLessThan(500);
+  }, 30_000);
+
   it('rejects a part with more tags than the limit (a run flood in one shape)', async () => {
     const slide = `${HEAD}${'</a:t></a:r><a:r><a:t>x'.repeat(130_000)}${TAIL}`;
     await expect(

@@ -97,13 +97,13 @@ text; per-object builds; cloud sync and user accounts.
 
 All tasks in M1, M2 and M3 are implemented in this repository, with these exceptions and open items:
 
-| Item                                                     | Status                                                                                                                 |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| 1.1 Verify hostnames and wildcard certificate on the NAS | Venue task; deploy/README.md describes it                                                                              |
-| 1.25, 2.13, 3.12 Rehearsals and venue soak runs          | Venue tasks; the soak tool is ready                                                                                    |
-| WebGPU compositor on real hardware                       | Implemented; the build container has no GPU, so only the Canvas 2D path was observed rendering                         |
-| Docker image                                             | Dockerfile written and its runtime layout verified with `pnpm deploy`; not built here (no Docker daemon). CI builds it |
-| Editor "send to preview" to an idle output               | Output side done (`preview` message renders a slide with the output's look while idle); editor UI pending              |
-| Per-window log lines in the operator diagnostics         | Health counters only; windows do not ship logs over the protocol                                                       |
-| Golden-image tests of the text rasterizer                | `pnpm --filter @ordo/renderer golden` (Playwright + OffscreenCanvas, design/23); runs in CI                            |
-| Memory caps on ffmpeg, LibreOffice and pdftoppm          | Timeouts only; set a container memory limit (deploy/compose.yaml)                                                      |
+| Item                                                     | Status                                                                                                                                                                                                             |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1.1 Verify hostnames and wildcard certificate on the NAS | Venue task; deploy/README.md describes it                                                                                                                                                                          |
+| 1.25, 2.13, 3.12 Rehearsals and venue soak runs          | Venue tasks; the soak tool is ready                                                                                                                                                                                |
+| WebGPU compositor on real hardware                       | Implemented; the build container has no GPU, so only the Canvas 2D path was observed rendering                                                                                                                     |
+| Docker image                                             | Dockerfile written and its runtime layout verified with `pnpm deploy`; not built here (no Docker daemon). CI builds it                                                                                             |
+| Editor "send to preview" to an idle output               | Done: the editor's preview control sends the selected slide to an idle output through the hub's `preview` relay (`PreviewControl.tsx`; `apps/operator/test/preview.test.ts`, `apps/hub/test/review-fixes.test.ts`) |
+| Per-window log lines in the operator diagnostics         | Done: outputs and the stage send their last 20 log lines in `health.recentLog`; the diagnostics panel lists them per window                                                                                        |
+| Golden-image tests of the text rasterizer                | `pnpm --filter @ordo/renderer golden` (Playwright + OffscreenCanvas, design/23); runs in CI                                                                                                                        |
+| Memory caps on ffmpeg, LibreOffice and pdftoppm          | Timeouts only; set a container memory limit (deploy/compose.yaml)                                                                                                                                                  |
