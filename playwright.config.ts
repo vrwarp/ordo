@@ -25,6 +25,8 @@ export default defineConfig({
       args: [
         '--enable-unsafe-webgpu',
         '--use-angle=swiftshader',
+        '--use-vulkan=swiftshader',
+        '--enable-features=Vulkan',
         '--autoplay-policy=no-user-gesture-required',
         '--disable-background-timer-throttling',
         '--disable-renderer-backgrounding',
