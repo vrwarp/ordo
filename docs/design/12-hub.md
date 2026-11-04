@@ -36,7 +36,10 @@ operator rides it out on the fallback bus.
 **Supervisor** (`src/supervisor.ts`): starts the library process, then the live process. Each child sends
 a heartbeat every 500 ms; a child that exits, or is silent for 5 s (live) or 60 s (library, which may run a
 long synchronous `VACUUM INTO`), is killed and restarted after 100, 200, 400, 800, 1000 ms, at most five
-times a minute. Past the budget a failed library process stays down (`/health` reports `library: failed`,
+times a minute. Until a child reports ready it may be silent for up to 30 s (a cold boot on a slow NAS
+loads the bundle and opens SQLite before its first heartbeat); only then does the stall timeout apply. A
+child whose supervisor vanishes while it is still starting exits at once rather than linger holding the
+port. Past the budget a failed library process stays down (`/health` reports `library: failed`,
 the service keeps running, library calls answer 503), and a failed live process ends the supervisor with
 exit code 1 so the container's restart policy takes over. The supervisor relays three things and replays
 the last of each to a restarted child: the library's address (to the live process), the live process's
@@ -52,19 +55,40 @@ every non-API path (the built apps). Everything else under `/api/v1` is streamed
 over loopback. We chose the live process as the front door rather than the supervisor so the supervisor
 stays free of network input, and rather than two DSM rules so the deployment is unchanged. The proxy is
 deliberately small (one request in, one out, bodies streamed both ways, no retries) and has its own tests.
-Its failure modes: library down or restarting → `503 library_unavailable` with `Retry-After: 1` before
-any body byte is consumed; library dies mid-response → the client connection is reset; library silent for
-120 s on an open request → 504. The proxy rebuilds `X-Forwarded-For/Host/Proto` from what the live
+Its failure modes: library down or restarting → `503 library_unavailable` with `Retry-After: 1`, sent
+without forwarding anything (the request body is drained, so the client may simply retry); library dies
+after receiving part of a request but before answering → the same 503, though part of the body was
+already sent (an upload must start again; the multipart temp file it left is removed when the library
+starts); library dies mid-response → the client connection is reset; library silent for 120 s on an open
+request → 504.
+
+**Read your writes**: the library's answer to every write carries the library sequence after it
+(`x-ordo-library-seq`, stripped before the client sees it); the proxy holds that answer until the live
+process has applied the changes up to that sequence (its context copy refreshed, the delta broadcast), at
+most 2.5 s. So a `PUT /settings/looks` followed at once by an output's `GET /output/config` sees the new
+look. The proxy rebuilds `X-Forwarded-For/Host/Proto` from what the live
 process trusted and adds the per-boot internal secret; the library process trusts forwarding headers
 from loopback only together with that secret and refuses any request without it, so nothing else on the
 host can talk to it.
 
 **Data between them**: the live process keeps its journal and snapshots in its own `live.db`. It reads
-the library only through `GET /internal/context` (all settings with tokens, fonts, logo; refetched after
-a settings, font or media change) and `GET /internal/golive/<playlist>` (fetched when the operator goes
-live), and keeps the last copy of each in `live.db`, so a library outage blocks neither a reconnect nor
-a GO, and a goLive of a playlist fetched before still works. A goLive of a playlist never fetched while
-the library is down is refused with "The library is restarting; try GO live again in a moment".
+the library only through `GET /internal/context` (all settings with tokens, fonts, logo) and `GET
+/internal/golive/<playlist>` (fetched when the operator goes live), and keeps the last copy of each in
+`live.db`, so a library outage blocks neither a reconnect nor a GO, and a goLive of a playlist fetched
+before still works. Library changes are applied in order: a batch touching the context (settings, fonts,
+the logo media) first refreshes the copy (bounded by the 1.5 s fetch timeout), and only then is the delta
+broadcast, so an output that refetches its config on the delta gets the new look. Outputs and the stage
+receive ids only, for settings, fonts and the logo. A context refresh that is not part of a delta (the
+library came back; the first refresh after a live-process restart) sends outputs and the stage a
+settings-only delta so they refetch; they also refetch on every `welcome`.
+
+goLive against the library: a library that is merely restarting is waited for up to 1.5 s. If it stays
+down, or is up but does not answer within 1.5 s (stalled), a cached copy is used and the goLive carries a
+`degraded` entry (cue -1) naming the copy's time ("Went live from the copy of this playlist saved 3 days
+ago …"), so the operator sees it is not the current playlist. Without a cached copy the goLive is
+refused: "The library did not answer; try Go live again in a moment" (stalled), "The library is
+restarting; try Go live again in a moment" (down), or, when the library has failed for good, a reason
+naming that. A playlist the library says does not exist is "not found".
 Sessions live in ordo.db, which the live process opens directly (WAL readers never wait for the library;
 its sliding-expiry writes use a 50 ms busy timeout and are skipped when busy; it never checkpoints).
 Output tokens come from the context copy; a rotated or removed token closes that output's sockets.
@@ -76,7 +100,10 @@ holding the live tables.
 **CPU work** (`src/pool.ts`, `src/cpu.worker.ts`): ProPresenter decode (including its RTF), PPTX text
 extraction and font table parsing run on a worker-thread pool in the library process (`ORDO_CPU_WORKERS`,
 default 1). Each task has a timeout (pro7 15 min, pptx 2 min, font 15 s); a stuck or aborted task
-terminates its worker and the next task gets a fresh one. Only a worker that cannot start at all falls
+terminates its worker and the next task gets a fresh one. Each worker has its own small heap (512 MB old
+generation, 64 MB young): a runaway parse fails within seconds inside its worker, with "… needs more
+memory than an import may use (512 MB) …", instead of growing the library process towards the container's
+memory limit. Only a worker that cannot start at all falls
 back to inline parsing; a worker that dies while working fails that task.
 
 ## HTTP API
@@ -224,11 +251,17 @@ A nightly job at 03:00 venue time (`settings.general.timeZone`, the same zone co
 use; `ORDO_TZ` only seeds it on first run and stands in if it is unusable): `VACUUM INTO
 /data/backups/ordo-<date>.db`, plus a `media-manifest-<date>.json` listing hashes and paths
 (media files are already immutable and deduplicated, so the manifest plus the media
-directory is the backup). The timer is armed strictly after the current run with a minimum
-delay of a minute, and a run is skipped when today's file already exists (a restart after
-03:00). Retention 30 days; the `ordo-pre-restore-*.db` copies that `restore` keeps are
+directory is the backup). The database is vacuumed into `<name>.partial` and renamed when
+complete (the manifest likewise), so an interrupted run never leaves a file under a backup's
+name; leftover `.partial` files are removed by the next run. The timer is armed strictly
+after the current run with a minimum delay of a minute, and a run is skipped when today's
+file already exists and passes `integrity_check` (a restart after 03:00); a file that fails
+it is removed and the backup taken again. Retention 30 days; the `ordo-pre-restore-*.db` copies that `restore` keeps are
 capped at the newest three. `ordo-hub restore <date>` stops the service, swaps the
-database, and verifies every manifest hash exists.
+database, and verifies every manifest hash exists. `live.db` (the live journal, snapshots
+and the live process's copies of the library) is not part of a backup: the live state is
+not restored, and a restore clears the cached library copies in `live.db` so the live
+process fetches the restored library's settings and output tokens when it starts.
 
 ## Logging and diagnostics
 
@@ -268,7 +301,12 @@ Design/25's table, as implemented in the hub:
 
 Environment variables: `ORDO_DOMAIN` (`<venue>.synology.me`), `ORDO_DATA=/data`,
 `ORDO_TRUSTED_PROXY` (DSM's address), `ORDO_TZ`, `ORDO_PORT=8080`,
-`ORDO_ALLOWED_HOSTS` (optional extra host names). First run with no PINs serves a setup
+`ORDO_ALLOWED_HOSTS` (optional extra host names), `ORDO_CPU_WORKERS` (worker threads for
+CPU-heavy parsing, 1 to 8, default 1), `ORDO_SINGLE_PROCESS=1` (one process instead of the
+supervisor and its two children; development and diagnosis), `ORDO_LOG_LEVEL`, and for
+development and tests only `ORDO_DEV_PIN` and `ORDO_APPS_DIR`. The supervisor sets
+`ORDO_INTERNAL_SECRET`, `ORDO_LIBRARY_URL`, `ORDO_LIVE_URL` and `ORDO_LIVE_LOCKS` for its
+children; they are not configuration. First run with no PINs serves a setup
 page on the operator origin that sets both PINs; the setup page is disabled once PINs
 exist.
 

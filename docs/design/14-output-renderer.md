@@ -20,10 +20,12 @@ after any worker restart. Arming runs link → asset → render (jobs, bitmaps, 
 thread. The host ⇄ link protocol is `apps/output/src/host-protocol.ts`: the link sends media commands
 (`load {slot, key, blob|url}`, `apply {transport}`, `pauseAt`, `holdPaused`, `route`, `unload`), audio
 commands (`config`, `fadeOut`), `clock`, `title`, `rtc` signalling, `fatal`, `close`, `reload`,
-`restartWorker`, `portRequest`, and a `view` (telemetry, introspection, diagnostics, log) that the host
-caches so `window.__ordo.telemetry()`/`state()` stay synchronous. The host sends `tick` (250 ms),
-`host` status (500 ms: media slots, audio meters, long tasks, worker stats, painting), media events
-(`loaded`, `loadError`, `ended`, `error`), opener-closed, bus ports and program-view answers. The link
+`restartWorker`, `portRequest`, `mediaAck`, and a `view` (telemetry, introspection, diagnostics, log)
+that the host caches so `window.__ordo.telemetry()`/`state()` stay synchronous. The host sends `tick`
+(250 ms), `host` status (500 ms, and at once to every new link generation: media slots with their key,
+`ended`, `paused`, position, duration and error; audio meters, long tasks, worker stats, painting, a
+refused reload), numbered media events (`loaded`, `loadError`, `ended`, `error`), opener-closed, bus
+ports and program-view answers. The link
 keeps a mirror of the six media slots (2 background, 2 media, 2 audio), so slot choice, `busyUntil`,
 retries and master-only ended reporting run exactly as before; the elements stay on the main thread
 because the platform requires it (ADR 0005), and the autoplay-muted fallback lives with them.
@@ -33,13 +35,36 @@ for the link, 3 s for the renderer, 5 s for the asset worker; a stall-tolerant c
 thread does not condemn healthy workers) and restarts a dead or `fatal` worker, at most 5 times a
 minute, then gives up and says so. Restarts per worker are in `health.workers`.
 
+Liveness is judged on the host's timers, so it assumes a visible window. That holds by design: an output
+is a fullscreen window on its own display and is never hidden or occluded during a service (Chrome
+throttles a hidden window's timers to once a second and, after five minutes, to once a minute; the
+stall-tolerant clock advances at most 500 ms per tick, so a worker that dies while the window is hidden
+is restarted only once it is visible again, within its dead time). A hidden output is seen by nobody,
+and becoming visible restores full-rate ticks, so nothing on the audience path depends on liveness while
+hidden; message-driven liveness (a worker's death raising an event) is not offered by the platform for
+`terminate`d or crashed dedicated workers, which is why heartbeats are used (review 2026-11-04 item 28).
+
 - Link restart: the new link worker paints from IndexedDB (state, config, recent manifests) and OPFS,
-  re-arms the live and armed cues (the renderer still holds them, so nothing changes on screen),
-  reconnects, and the host asks the opener for a fresh bus port (`ordo.port.request`; the
-  window.postMessage relay carries the bus meanwhile).
-- Render restart: the old worker took its canvas with it. The host raises the hold canvas (painted
-  from the last snapshot), gives the new worker a fresh canvas, and lowers the hold when the link
-  reports the live content is held again (or after 8 s). This is the device-loss path with a new worker.
+  re-arms the live and armed cues (the renderer still holds them and tells the new link at once, so
+  nothing changes on screen), reconnects, and the host asks the opener for a fresh bus port
+  (`ordo.port.request`; the window.postMessage relay carries the bus meanwhile). What the media elements
+  did meanwhile is not lost: the link acknowledges every media event (`mediaAck`); the host replays the
+  ones a dead generation never acknowledged to its successor, and the first host status names every
+  slot that has `ended`. The link reports `media.ended`/`audio.ended` for the live, playing, non-looping
+  item whose element ended once its expected position has reached the end (so an element still ended
+  from an earlier play does not count), on the audio master only, once per play (review 2026-11-04
+  item 2: with `onEnd: advance`, a clip that ends while the link is down still advances the service).
+- Render restart: the old worker took its canvas with it. The hold canvas is a main-thread copy: every
+  snapshot the render worker posts (every 500 ms, every 150 ms while the program view is watched, and
+  as soon as a flip has settled; never more than about 7 a second, 640x360) is drawn onto the hidden
+  hold canvas at once, because a bitmap from the render worker is backed by that worker's context and
+  draws nothing once it dies (review 2026-11-04 item 1). The host shows the hold before it terminates the
+  worker (the supervisor's `stop` hook), and also as soon as the renderer misses heartbeats for 1 s (a
+  crash), then gives the new worker a fresh canvas, and lowers the hold 200 ms after the link reports the
+  live content is held again (or after 8 s), so the new canvas is never seen fading in from black. While
+  the renderer is silent, video frames are closed on the main thread instead of being posted to a worker
+  that may be dead. This is the device-loss path with a new worker. In test mode the hold also carries
+  the test pixel of the frame it copied, and `__ordo.state().holdCue` names that cue.
 - Asset restart: fonts are reloaded and the cache is checked against the manifest. Raster surfaces are
   software-backed because bitmaps from an accelerated worker canvas turn black on screen when that
   worker dies (found by `e2e/chaos-output.spec.ts`).
@@ -47,8 +72,11 @@ minute, then gives up and says so. Restarts per worker are in `health.workers`.
 Crash-only restart. The link worker checks `checkInvariants` after every applied state; a violation
 asks for a full state, and a full state that still violates reloads the window. While live, no frame
 presented for 3 s while the page is painting restarts the render worker; a second time within two
-minutes reloads the window. Repeated non-quota OPFS failures reload the window. The host allows 3
-reloads in 10 minutes (sessionStorage), so a deterministic failure cannot become a reload loop.
+minutes reloads the window. A GPU device rebuild is not a stall: `lost` resets the renderer's grace and
+the check waits until `restored` (at most 15 s). Repeated non-quota OPFS failures reload the window.
+The host allows 3 reloads in 10 minutes (sessionStorage, `reload.ts`), so a deterministic failure cannot
+become a reload loop; a refused reload for a stuck renderer restarts the render worker instead, and the
+refusal is in `health.error` for the rest of the window (review 2026-11-04 item 9).
 
 ## Frame loop
 
@@ -166,7 +194,10 @@ and a GO live discards any preview.
 
 ## Looks
 
-The look is loaded at startup and on `library.delta`. Lyric-only looks typeset the lyric
+The look is loaded at startup, on every hub `welcome` (a restarted live process may have dropped a
+settings delta) and on a `library.delta` that changes settings, fonts or media. Fetches may overlap; an
+answer older than one already applied is dropped, so a slow stale answer never overwrites a newer
+config (review 2026-11-04 items 4 and 21). Lyric-only looks typeset the lyric
 text into the band at arm time; the band is a `Box` in logical 1920x1080 space; outputs
 at other resolutions scale by the logical-to-device transform in the vertex shader.
 
@@ -202,9 +233,8 @@ not a renderer-only change and is left for the domain model.
    windows opened by a user gesture) and acquire a Wake Lock.
 
 `device.lost` rebuilds the device and pipelines from scratch, re-arms the live and armed
-cues, and reports `gpuLost++`. A `<canvas>` 2D copy of the last presented frame (made
-once per second, off the critical path, from the render worker's own copy) is shown by
-the main thread during the rebuild so the screen never goes black.
+cues, and reports `gpuLost++`. The hold canvas (a main-thread 2D copy of the latest
+snapshot, see Render restart) is shown during the rebuild so the screen never goes black.
 
 ## Render-plan clamps and quarantine
 
@@ -217,12 +247,30 @@ image bytes per cue (192 MiB) and reports text in a font family that is not load
 (`health.fontFallbacks`). Property tests (`plan.fuzz.test.ts`) feed random slides and looks within and
 far beyond the clamps: never throws, output within bounds.
 
-A slide, image or media key whose arm fails three times within a minute (`ErrorBudget`) is
-quarantined for the rest of the service: never flipped to (the layer shows nothing), never retried,
-listed in `health.quarantined`; a new service (or End service) lifts it. A cached file that fails to
-decode is removed from OPFS and fetched again; the link also compares cached sizes with the manifest
-every 30 s while live and after an asset-worker restart (`health.cacheRepairs`). Fills stream response
-bodies into the OPFS writable (`apps/output/src/opfs.ts`) instead of buffering blobs.
+Arm failures are classified (review 2026-11-04 item 3). A deterministic failure (the image does not
+decode, the raster throws, the cached video does not play) counts toward quarantine: a slide, image or
+media key whose arm fails that way three times within a minute (`ErrorBudget`) is quarantined for the
+rest of the service: never flipped to (the layer shows nothing), never retried, listed in
+`health.quarantined`; a new service (or End service) lifts it. A quarantined key stays required, so the
+cue is not armed (`armedOk` false, `armError` "quarantined: …"). Unavailability (the file is not cached
+yet and the hub did not serve it; a video streamed during an incomplete fill that fails, which the element
+reports as a network or format error; a load timeout) is never quarantined: the key is retried after 1,
+2, 4, 8 s, then every 15 s, and the backoff is lifted when a cache fill completes (for the keys whose file
+it cached, or all of them when it completed). A slide's own images that cannot be read are drawn without
+the image (the slide still arms). A cached file that fails to decode is removed from OPFS and fetched
+again; the link also compares cached sizes with the manifest every 30 s while live and after an
+asset-worker restart (`health.cacheRepairs`).
+
+Fills stream response bodies into the OPFS writable (`apps/output/src/opfs.ts`) instead of buffering
+blobs. Downloads in flight belong to a shared set: a manifest change (a preview, a library delta, a
+verify) cancels only those whose file left the manifest; the others continue and the new fill joins
+them (review item 11). Each file that fails backs off between fills (network: 4 s doubling to 30 s;
+storage: 10 s doubling to 5 min). A full disk (`QuotaExceededError`) fails the file at once, counts in
+the `cache` error budget, and after 4 fills (or once the budget is spent) the file is given up on for
+the service; `health.error` says "storage full: N file(s) not cached" while it lasts. A file whose every
+download disagrees with the manifest's size is kept once and its size remembered (IndexedDB
+`accepted:<outputId>`), so neither the fill nor the 30 s check fetches it again; it is reported in
+`health.error` (review item 10).
 
 ## Health message
 

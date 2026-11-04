@@ -13,7 +13,12 @@ Filled on `goLive` from the manifest ([design/12](12-hub.md)).
 | Operator | IndexedDB (library snapshot, resolved playlist, manifest) and Cache API (files) | Everything needed to re-render thumbnails and to serve the outputs if asked |
 | Stage    | Cache API                                                                       | Fonts and look                                                              |
 
-Each window reports `cache.progress`. The top bar shows the minimum across windows.
+Each window reports `cache.progress`. The top bar shows the minimum across windows. An output's
+fill never loops: files that fail back off between fills, a full disk is given up on after a few fills
+and shown red in health, and a manifest change cancels only the downloads whose file left it
+([design/14](14-output-renderer.md) "Render-plan clamps and quarantine"). A file the output cannot get
+yet (an outage, a slow NAS at service start) keeps its cue retrying with backoff and is never
+quarantined.
 The apps themselves are served by a Service Worker per origin that precaches the app
 shell on first load and serves it cache-first, so a reload with the hub down still
 loads the app.
@@ -88,9 +93,11 @@ The output's bus client lives in its link worker. If that worker dies, the scree
 render worker is untouched); the host restarts it within about 4 s, the new worker restores the live
 state from IndexedDB (written on every applied state, coalesced) and the files from OPFS, and asks the
 opener for a fresh port (`ordo.port.request`); until one arrives, the host relays `window.postMessage`
-from the opener to the new worker. A newly accepted port is answered at once with `fallback.ready`, so
+from the opener to the new worker. A clip or audio cue that ended while no link worker was alive is
+still reported to the authority (hub or operator) by the new one, from the host's slot status and its
+replay of unacknowledged media events, so `onEnd: advance` still advances. A newly accepted port is answered at once with `fallback.ready`, so
 the operator proves it even while the hub is the authority. The host detects a closed operator tab
-(`window.opener` closed or nulled by Chrome) every second and tells the link worker, which leaves the
+(`window.opener` closed or nulled by Chrome) on every 250 ms tick, releases its relay and tells the link worker, which leaves the
 bus at once.
 
 ### Operator reload during degraded mode

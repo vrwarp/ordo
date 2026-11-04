@@ -27,6 +27,7 @@ import type {
 } from './host-protocol.ts';
 import { MediaSlot } from './media.ts';
 import { ProgramSender } from './program.ts';
+import { RELOAD_WINDOW_MS, planReload } from './reload.ts';
 
 type HoldReason = 'lost' | 'restart' | 'silent';
 
@@ -42,9 +43,6 @@ export type HostOptions = {
 
 const RELOAD_KEY = 'ordo.output.reloads';
 const RELOAD_REASON_KEY = 'ordo.output.reloadReason';
-/** Crash-only reloads allowed within RELOAD_WINDOW_MS before the window stops reloading itself. */
-const RELOAD_MAX = 3;
-const RELOAD_WINDOW_MS = 10 * 60_000;
 /** A hold raised for a render rebuild comes down after this long even if the link never says so. */
 const HOLD_MAX_MS = 12_000;
 /** No heartbeat from the render worker for this long: cover the screen with the hold until it beats again. */
@@ -512,26 +510,21 @@ export class OutputHost {
    */
   reload(reason: string, fallback?: WorkerName): void {
     const now = Date.now();
-    let recent: number[] = [];
+    let stored: string | null = null;
     try {
-      recent = (JSON.parse(sessionStorage.getItem(RELOAD_KEY) ?? '[]') as number[]).filter(
-        (t) => typeof t === 'number' && now - t < RELOAD_WINDOW_MS,
-      );
+      stored = sessionStorage.getItem(RELOAD_KEY);
     } catch {
-      recent = [];
+      /* storage blocked */
     }
-    if (recent.length >= RELOAD_MAX && reason !== 'new app version') {
-      const text = fallback
-        ? `reload refused (${recent.length} in 10 min): restarted the ${fallback} worker instead (${reason})`
-        : `reload refused (${recent.length} in 10 min): ${reason}`;
-      this.log(text);
-      this.reloadRefused = { at: now, text: text.slice(0, 300) };
-      if (fallback) this.sup.restart(fallback, `reload refused: ${reason}`.slice(0, 300));
+    const plan = planReload(stored, now, reason, fallback);
+    if (plan.action !== 'reload') {
+      this.log(plan.text);
+      this.reloadRefused = { at: now, text: plan.text };
+      if (plan.action === 'restart') this.sup.restart(plan.worker, `reload refused: ${reason}`.slice(0, 300));
       return;
     }
-    recent.push(now);
     try {
-      sessionStorage.setItem(RELOAD_KEY, JSON.stringify(recent));
+      sessionStorage.setItem(RELOAD_KEY, JSON.stringify(plan.recent));
       sessionStorage.setItem(RELOAD_REASON_KEY, reason.slice(0, 300));
     } catch {
       /* storage blocked: reload anyway */

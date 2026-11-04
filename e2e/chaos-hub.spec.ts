@@ -72,10 +72,31 @@ async function backgroundPixel(p: Page): Promise<Px> {
     const ph = (pw * 9) / 16;
     return [Math.floor(w / 2), Math.floor((h - ph) / 2 + ph * 0.06)];
   });
-  return PNG.firstPixel(await p.screenshot({ clip: { x: x!, y: y!, width: 1, height: 1 } }));
+  return PNG.firstPixel(await p.screenshot({ clip: { x: x!, y: y!, width: 4, height: 4 } }));
 }
 
 const dist = (a: Px, b: Px) => Math.abs(a.r - b.r) + Math.abs(a.g - b.g) + Math.abs(a.b - b.b);
+
+/** Wait until the output's renderer is up and has not been rebuilt for 2 s (its diagnostics log). */
+async function rendererSettled(out: Page): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const log = await out.evaluate(
+          () => (window as unknown as { __ordo: { state(): { log?: string[] } } }).__ordo.state().log ?? [],
+        );
+        const events = log.filter((l) => /renderer (ready|restored)|device lost|rebuilding/.test(l));
+        const last = events[events.length - 1];
+        if (!last || !/renderer (ready|restored)/.test(last)) return false;
+        const [h, m, sec] = last.slice(0, 12).split(':').map(Number);
+        const now = new Date();
+        const at = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h!, m!, sec!);
+        return Date.now() - at > 2000;
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+}
 
 /**
  * Watch the audience screen through a fault. Call before injecting the fault, then `until(recovered)`.
@@ -120,8 +141,16 @@ async function watchScreen(out: Page, label: string, ref: Px, allowed: number[])
       pixels.push({ t: Date.now(), px });
       if (dist(px, ref) >= 40) {
         const file = test.info().outputPath(`${label.replace(/\W+/g, '-')}-bad-pixel.png`);
-        await out.screenshot({ path: file, clip: { x: 0, y: 0, width: 1280, height: 200 } }).catch(() => undefined);
+        await out
+          .screenshot({ path: file, clip: { x: 0, y: 0, width: 1280, height: 200 } })
+          .catch(() => undefined);
         console.log(`${label}: navigations ${navs.join(', ')}; url ${out.url()}`);
+        const st = await out
+          .evaluate(
+            () => (window as unknown as { __ordo: { state(): { log?: string[] } } }).__ordo.state().log,
+          )
+          .catch(() => undefined);
+        console.log(`${label}: output log at the bad sample:\n  ${(st ?? []).slice(-12).join('\n  ')}`);
         console.log(`${label} at +${at - t0} ms: bad pixel ${JSON.stringify(px)}; screen saved to ${file}`);
         return;
       }
@@ -270,6 +299,9 @@ test('the screen holds through library and live process crashes, a stall, a corr
     await out!.reload();
     await waitCacheReady(out!);
     await expectCue([out!], 2);
+    // The next fault must meet a settled renderer (a WebGPU device lost and rebuilt after a reload is a
+    // different fault, not this spec's).
+    await rendererSettled(out!);
     await goTo(0);
     await expectCue([out!], 0);
     // (b) Kill the live process: the output holds its cue through the restart and is back on the hub; the

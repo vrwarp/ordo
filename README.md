@@ -90,6 +90,9 @@ the operator carrying the outputs until the restarted hub adopts the state.
 | `ORDO_IMPORT_ROOTS`       | `/data/import:/import` | NAS folders the ProPresenter import may read                            |
 | `ORDO_DEV_PIN`            | none                   | Sets the PINs automatically (development and tests only)                |
 | `ORDO_LOG_LEVEL`          | `info`                 | Log level                                                               |
+| `ORDO_ALLOWED_HOSTS`      | none                   | Extra host names the hub answers besides the domain, `localhost` and loopback (comma or space separated, e.g. the NAS's LAN IP); others get 421 |
+| `ORDO_SINGLE_PROCESS`     | unset                  | `1` runs the hub as one process instead of the supervisor with a live and a library process (same as `node main.js --single`; development and diagnosis) |
+| `ORDO_CPU_WORKERS`        | `1`                    | Worker threads (1 to 8) in the library process for CPU-heavy parsing (ProPresenter, PowerPoint, fonts); each has a 512 MB heap |
 
 ## Release
 

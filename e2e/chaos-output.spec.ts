@@ -74,7 +74,7 @@ async function pixel(p: Page, x: number, y: number): Promise<Rgb> {
 }
 
 /** Decode an 8-bit RGB/RGBA PNG screenshot (all five scanline filters): pixel (x, y) as RGB. */
-function decodePng(buf: Buffer): (x: number, y: number) => Rgb {
+function decodePng(buf: Buffer): ((x: number, y: number) => Rgb) & { width: number; height: number } {
   let off = 8;
   let width = 0;
   let height = 0;
@@ -109,13 +109,17 @@ function decodePng(buf: Buffer): (x: number, y: number) => Rgb {
       out[y * stride + i] = (raw[src + i]! + pred) & 255;
     }
   }
-  return (x, y) => {
+  const at = (x: number, y: number): Rgb => {
     const i = y * stride + x * bpp;
     return { r: out[i]!, g: out[i + 1]!, b: out[i + 2]! };
   };
+  return Object.assign(at, { width, height });
 }
 
-type Cdp = { send(m: string, p?: unknown): Promise<unknown> };
+type Cdp = {
+  send(m: string, p?: unknown): Promise<unknown>;
+  on(ev: string, fn: (e: never) => void): void;
+};
 const cdps = new WeakMap<Page, Cdp>();
 
 /**
@@ -168,7 +172,8 @@ async function killAndWatch(
   worker: 'link' | 'render' | 'asset',
   opts: { everyMs?: number; maxMs?: number } = {},
 ): Promise<Sample[]> {
-  const everyMs = opts.everyMs ?? 100;
+  // CHAOS_SAMPLE_MS samples faster (e.g. 20) when checking a fix by hand.
+  const everyMs = opts.everyMs ?? Number(process.env.CHAOS_SAMPLE_MS ?? 100);
   const maxMs = opts.maxMs ?? 25_000;
   await o.bringToFront();
   await o.waitForTimeout(300);
@@ -180,17 +185,34 @@ async function killAndWatch(
   expect(pre.shown).toBe(pre.cue);
   expect(pre.px.r + pre.px.g + pre.px.b).toBeGreaterThan(30);
 
+  // CHAOS_SCREENCAST=1 also records every composited frame (CDP screencast) through the restart.
+  const frames: { t: number; cue: number | null; px: Rgb }[] = [];
+  let cast: Cdp | undefined;
+  let scaled = 0;
+  const vw = await o.evaluate(() => window.innerWidth);
+  if (process.env.CHAOS_SCREENCAST) {
+    cast = (await o.context().newCDPSession(o)) as unknown as Cdp;
+    cast.on('Page.screencastFrame', (e: { data: string; sessionId: number }) => {
+      const px = decodePng(Buffer.from(e.data, 'base64'));
+      // A frame may come scaled: only full-size frames carry the 1 px test marker exactly.
+      if (px.width >= vw) frames.push({ t: Date.now() - t0, cue: markerCue(px(0, 0)), px: px(cx, cy) });
+      else scaled++;
+      void cast!.send('Page.screencastFrameAck', { sessionId: e.sessionId }).catch(() => undefined);
+    });
+    await cast.send('Page.startScreencast', {
+      format: 'png',
+      everyNthFrame: 1,
+      maxWidth: vw,
+      maxHeight: 4000,
+    });
+  }
   const t0 = Date.now();
   await o.evaluate((n) => (window as unknown as Ordo).__ordo.chaos.killWorker(n), worker);
   const samples: Sample[] = [];
   let recoveredAt = 0;
   while (Date.now() - t0 < maxMs) {
     const t = Date.now() - t0;
-    const ta = Date.now();
-    const [[mark, px], s] = await Promise.all([
-      twoPixels(o, cx, cy).finally(() => process.env.CHAOS_DEBUG && console.log(`shot ${Date.now() - ta}`)),
-      st(o).finally(() => process.env.CHAOS_DEBUG && console.log(`state ${Date.now() - ta}`)),
-    ]);
+    const [[mark, px], s] = await Promise.all([twoPixels(o, cx, cy), st(o)]);
     const r = s.workers.find((w) => w.name === worker)?.restarts ?? 0;
     samples.push({
       t,
@@ -204,6 +226,18 @@ async function killAndWatch(
     if (recoveredAt && Date.now() - recoveredAt >= 500) break;
     const wait = everyMs - (Date.now() - t0 - t);
     if (wait > 0) await o.waitForTimeout(wait);
+  }
+  if (cast) {
+    await cast.send('Page.stopScreencast').catch(() => undefined);
+    let gap = 0;
+    for (let i = 1; i < frames.length; i++) gap = Math.max(gap, frames[i]!.t - frames[i - 1]!.t);
+    const wrong = frames.filter(
+      (f) => f.cue !== pre.cue || dist(f.px, pre.px) > 30 || f.px.r + f.px.g + f.px.b < 30,
+    );
+    console.log(
+      `${worker} kill screencast: ${frames.length} frames (${scaled} scaled ones skipped), largest gap ${gap} ms, ${wrong.length} wrong`,
+    );
+    expect(wrong.map((f) => `${f.t}ms cue=${f.cue} px=${f.px.r},${f.px.g},${f.px.b}`)).toEqual([]);
   }
   const line = (x: Sample) =>
     `${x.t}ms cue=${x.cue} shown=${x.shown} px=${x.px.r},${x.px.g},${x.px.b} hold=${x.hold} restarts=${x.restarts}`;
