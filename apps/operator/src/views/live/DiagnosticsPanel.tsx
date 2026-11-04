@@ -13,6 +13,12 @@ import { useLive } from '../../state/live.ts';
 import { toast } from '../../state/toasts.ts';
 import { setUi, useUi } from '../../state/ui.ts';
 
+/**
+ * A healthy window reports its 250 ms watchdog tick as about 250 ms (plus timer jitter); only gaps well beyond
+ * one tick are a stall worth showing.
+ */
+const STALL_REPORT_MS = 400;
+
 export function downloadOperatorLog(): void {
   const live = useLive.getState();
   const data = {
@@ -137,7 +143,7 @@ export function OutputLogs() {
               <span className="muted">
                 {h?.connected ? `${lines.length} lines` : 'not connected'}
                 {h?.compositor ? `, ${h.compositor} compositor` : ''}
-                {h?.mainThreadStallMs !== undefined && h.mainThreadStallMs > 250
+                {h?.mainThreadStallMs !== undefined && h.mainThreadStallMs > STALL_REPORT_MS
                   ? `, main thread stalled ${Math.round(h.mainThreadStallMs)} ms`
                   : ''}
               </span>

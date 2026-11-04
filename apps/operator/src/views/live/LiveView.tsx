@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useLive } from '../../state/live.ts';
 import { setUi, useUi } from '../../state/ui.ts';
+import { DegradedBanner } from './DegradedBanner.tsx';
 import { DiagnosticsPanel } from './DiagnosticsPanel.tsx';
 import { LayerBar } from './LayerBar.tsx';
 import { ConflictDialog, GoLiveErrorDialog, PlacementDialog } from './LiveDialogs.tsx';
@@ -27,6 +28,7 @@ export function LiveView() {
   return (
     <div className="op">
       <TopBar />
+      <DegradedBanner />
       <div className="op-main">
         <PlaylistPane op={op} viewItem={viewItem} />
         <SlideGrid op={op} viewItem={viewItem} />

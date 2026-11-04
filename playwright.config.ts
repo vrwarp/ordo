@@ -35,12 +35,14 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: 'rm -rf .e2e-data && node apps/hub/dist/main.js',
+    // Per-port data so concurrent runs on different ports never wipe each other's hub (not under test-results,
+    // which Playwright clears at the start of a run, possibly after the hub has started).
+    command: `rm -rf .e2e-data/web-${PORT} && node apps/hub/dist/main.js`,
     url: `http://localhost:${PORT}/api/v1/health`,
     reuseExistingServer: false,
     timeout: 60_000,
     env: {
-      ORDO_DATA: '.e2e-data',
+      ORDO_DATA: `.e2e-data/web-${PORT}`,
       ORDO_DOMAIN: 'localhost',
       ORDO_PORT: String(PORT),
       ORDO_HOST: '127.0.0.1',
