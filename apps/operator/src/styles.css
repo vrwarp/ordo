@@ -1381,3 +1381,23 @@ button.arr-chip-label {
     max-height: 50%;
   }
 }
+
+/* The GitHub Pages demo (apps/demo). */
+.demo-banner {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 6px 12px;
+  background: #1e1b4b;
+  border-bottom: 1px solid #4338ca;
+  color: #e0e7ff;
+  font-size: 13px;
+}
+.demo-banner span {
+  flex: 1;
+  min-width: 0;
+}
+.demo-banner a {
+  color: #c7d2fe;
+}

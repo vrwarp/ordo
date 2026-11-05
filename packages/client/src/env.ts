@@ -37,8 +37,12 @@ export function roleUrl(
     const host = kind === 'stage' ? `stage.${opts.domain}` : `out${opts.hostIndex}.${opts.domain}`;
     return `${location.protocol}//${host}${location.port ? ':' + location.port : ''}/?${q}`;
   }
-  const origin = opts.origin ?? location.origin;
-  return kind === 'stage' ? `${origin}/stage/?${q}` : `${origin}/output/?${q}&out=${opts.hostIndex}`;
+  // Path mode: the windows live under the operator app's own directory (`/` on a hub, `/ordo/` on GitHub
+  // Pages), so they are resolved against it rather than the origin root.
+  const root = opts.origin ? `${opts.origin}/` : new URL('./', location.href).href;
+  return kind === 'stage'
+    ? new URL(`stage/?${q}`, root).href
+    : new URL(`output/?${q}&out=${opts.hostIndex}`, root).href;
 }
 
 export function originOf(url: string): string {

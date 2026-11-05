@@ -1,3 +1,4 @@
+import { DEMO, ensureDemoHub } from '@ordo/client';
 import { OutputHost } from './host.ts';
 import type { ChaosHooks } from './host-protocol.ts';
 import './style.css';
@@ -64,11 +65,16 @@ window.__ordo = {
   chaos: testMode ? host.chaos() : undefined,
 };
 
-try {
-  host.start();
-} catch (err) {
-  host.diag.showFatal('The output failed to start.', (err as Error).message);
-}
+// The GitHub Pages demo answers the hub's API from a service worker at the site root (apps/demo): start
+// once it controls this window.
+void ensureDemoHub('../hub-sw.js', '../').then((ok) => {
+  if (!ok) return;
+  try {
+    host.start();
+  } catch (err) {
+    host.diag.showFatal('The output failed to start.', (err as Error).message);
+  }
+});
 
 // ---- window behaviour: fullscreen, wake lock, keys, cursor ----
 
@@ -126,7 +132,7 @@ window.addEventListener('contextmenu', (e) => e.preventDefault());
 void goFullscreen();
 void keepAwake();
 
-if ('serviceWorker' in navigator && location.protocol !== 'file:' && !import.meta.env.DEV) {
+if ('serviceWorker' in navigator && location.protocol !== 'file:' && !import.meta.env.DEV && !DEMO) {
   navigator.serviceWorker.register('./sw.js', { scope: './' }).catch((err: Error) => {
     console.warn('[ordo] service worker registration failed', err);
   });

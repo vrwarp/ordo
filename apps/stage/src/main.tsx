@@ -1,4 +1,5 @@
 import { requestPersistence } from '@ordo/cache';
+import { DEMO, ensureDemoHub } from '@ordo/client';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.tsx';
 import { StageHost } from './host.ts';
@@ -11,7 +12,10 @@ import './styles.css';
  */
 const host = new StageHost();
 (globalThis as unknown as { ordoStage: StageHost }).ordoStage = host;
-host.start();
+// The GitHub Pages demo: start once the site's demo hub service worker controls this window (apps/demo).
+void ensureDemoHub('../hub-sw.js', '../').then((ok) => {
+  if (ok) host.start();
+});
 void requestPersistence();
 
 if (host.testMode) {
@@ -52,7 +56,7 @@ window.addEventListener('click', goFullscreen);
 window.addEventListener('keydown', goFullscreen);
 
 // App shell service worker (build only; dev serves from Vite).
-if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+if (import.meta.env.PROD && 'serviceWorker' in navigator && !DEMO) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => undefined);
   });

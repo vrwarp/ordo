@@ -24,6 +24,8 @@ function serviceWorker(): Plugin {
 
 export default defineConfig({
   base: './',
+  // The GitHub Pages demo build (apps/demo) sets ORDO_DEMO=1: no hub socket, a service worker hub.
+  define: { __ORDO_DEMO__: JSON.stringify(process.env.ORDO_DEMO === '1') },
   plugins: [react(), serviceWorker()],
   worker: { format: 'es' },
   build: { target: 'es2022', sourcemap: true, chunkSizeWarningLimit: 2000 },

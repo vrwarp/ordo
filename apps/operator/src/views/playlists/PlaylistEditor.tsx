@@ -1,4 +1,4 @@
-import { api, ApiFailure } from '@ordo/client';
+import { api, ApiFailure, DEMO } from '@ordo/client';
 import { type Arrangement, newId, type Playlist, type PlaylistItem } from '@ordo/domain';
 import { useEffect, useRef, useState } from 'react';
 import { DragHandle, useSortable } from '../../components/Sortable.tsx';
@@ -215,7 +215,7 @@ export function PlaylistEditor(props: {
             Delete
           </button>
         </div>
-        {props.canOperate && <OfflineControl playlistId={draft.id} rev={draft.rev} />}
+        {props.canOperate && !DEMO && <OfflineControl playlistId={draft.id} rev={draft.rev} />}
         <div
           ref={sort.ref}
           className="col pl-list"

@@ -1,3 +1,4 @@
+import { DEMO } from './demo.ts';
 import {
   type Bye,
   type ClientMessage,
@@ -113,6 +114,8 @@ export class HubConnection extends Emitter<HubEvents> {
 
   start(): void {
     this.stopped = false;
+    // The GitHub Pages demo has no hub to connect to (demo.ts): stay disconnected.
+    if (DEMO) return;
     this.open();
   }
 

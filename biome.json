@@ -10,7 +10,8 @@
       "!**/proto/*.json",
       "!test-results",
       "!**/.e2e-data*",
-      "!playwright-report"
+      "!playwright-report",
+      "!site"
     ]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 110 },

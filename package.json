@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "pnpm --filter @ordo/hub dev",
     "build": "pnpm -r --filter \"./apps/*\" build",
+    "build:pages": "pnpm --filter @ordo/demo build:pages",
     "typecheck": "pnpm -r --parallel typecheck",
     "lint": "biome check .",
     "format": "biome format --write .",

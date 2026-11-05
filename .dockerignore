@@ -14,3 +14,4 @@ soak-*.md
 *.db-shm
 .env
 docs
+site

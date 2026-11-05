@@ -2,6 +2,7 @@ import { CacheApiStore, fillCache, type JsonStore } from '@ordo/cache';
 import {
   ErrorBudget,
   FallbackHost,
+  DEMO,
   fileUrl,
   HubConnection,
   portEndpoint,
@@ -1093,11 +1094,12 @@ export class CoreEngine {
         return;
       case 'local-live':
         this.log('warn', `went live from this PC without the hub: ${n.playlist}`);
-        this.toast(
-          `Live from this PC: ${n.playlist}. The outputs follow this PC until End service.`,
-          'warn',
-          10_000,
-        );
+        if (!DEMO)
+          this.toast(
+            `Live from this PC: ${n.playlist}. The outputs follow this PC until End service.`,
+            'warn',
+            10_000,
+          );
         void this.persist();
         return;
       case 'hub-back-held':

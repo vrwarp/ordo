@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ConfirmHost } from './components/Confirm.tsx';
+import { DemoBanner } from './components/DemoBanner.tsx';
 import { Toasts } from './components/Toasts.tsx';
 import { UpdateFailedScreen, UpdatingOverlay } from './components/UpdatingScreen.tsx';
 import { sessionEndedMessage } from './lib/hubStatus.ts';
@@ -158,6 +159,7 @@ function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOu
     }
   return (
     <div className="app">
+      <DemoBanner />
       <Nav role={role} route={route} profile={profile} />
       <div className="page">{body}</div>
       <Toasts />

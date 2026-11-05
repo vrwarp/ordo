@@ -27,6 +27,25 @@ importers:
         specifier: 3.2.7
         version: 3.2.7(@types/node@22.20.5)(tsx@4.23.15)
 
+  apps/demo:
+    dependencies:
+      '@ordo/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@ordo/importers':
+        specifier: workspace:*
+        version: link:../../packages/importers
+      '@ordo/live-state':
+        specifier: workspace:*
+        version: link:../../packages/live-state
+      '@ordo/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+    devDependencies:
+      vite:
+        specifier: ^7.3.7
+        version: 7.3.7(@types/node@22.20.5)(tsx@4.23.15)
+
   apps/hub:
     dependencies:
       '@fastify/cookie':

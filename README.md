@@ -105,6 +105,14 @@ Two workflows handle the image:
   secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`; the repository variable `DOCKERHUB_IMAGE` overrides the
   image name.
 
+## GitHub Pages demo
+
+`pnpm build && pnpm build:pages` writes `site/`: the operator, output and stage apps running entirely in the
+browser, with a service worker in place of the hub and a sample service ([design/26](docs/design/26-pages-demo.md)).
+Visitors can import ProPresenter files, edit, go live and open output windows; nothing leaves their browser.
+`.github/workflows/pages.yml` publishes it on every merge to `main`; in the repository settings, Pages →
+Build and deployment → Source must be **GitHub Actions**.
+
 ## Before the first service
 
 These cannot be verified in CI and are the rehearsal gates in [docs/milestones.md](docs/milestones.md):

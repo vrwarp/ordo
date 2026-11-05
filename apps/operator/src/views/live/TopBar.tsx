@@ -1,3 +1,4 @@
+import { DEMO } from '@ordo/client';
 import { formatClock } from '@ordo/domain';
 import { useEffect, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
@@ -37,7 +38,15 @@ export function TopBar() {
   const online = useOnline();
   const s = live.state;
   const isLive = s.mode === 'live';
-  const { fallback, dot: hubDot, text: hubText } = hubStatus(live);
+  const status = hubStatus(live);
+  const { fallback } = status;
+  // The GitHub Pages demo has no hub by design: say so instead of "Connecting…".
+  const hubDot = DEMO ? (live.held ? 'amber' : 'green') : status.dot;
+  const hubText = DEMO
+    ? live.held
+      ? 'Demo: live in this browser'
+      : 'Demo: runs in this browser'
+    : status.text;
   const entries = Object.values(live.health);
   const cache = cacheSummary(entries, live.ownCache.total ? live.ownCache : undefined);
   const cacheDot = !isLive ? 'grey' : cache.frac >= 1 ? 'green' : 'amber';

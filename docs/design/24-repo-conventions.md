@@ -15,7 +15,7 @@ ordo/
     soak/           soak runner
     fixtures/       generated test media and documents
   docs/             this suite
-  .github/workflows/ci.yml, docker-pr.yml, docker-publish.yml, audit.yml
+  .github/workflows/ci.yml, docker-pr.yml, docker-publish.yml, pages.yml, audit.yml
   pnpm-workspace.yaml  package.json  tsconfig.base.json  biome.json
 ```
 

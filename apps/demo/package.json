@@ -1,0 +1,20 @@
+{
+  "name": "@ordo/demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The GitHub Pages demo: the operator, output and stage apps with a service-worker hub.",
+  "scripts": {
+    "build:pages": "node build.mjs",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@ordo/domain": "workspace:*",
+    "@ordo/importers": "workspace:*",
+    "@ordo/live-state": "workspace:*",
+    "@ordo/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "^7.3.7"
+  }
+}

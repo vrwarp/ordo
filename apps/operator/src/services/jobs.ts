@@ -1,7 +1,7 @@
-import { api } from '@ordo/client';
+import { api, DEMO } from '@ordo/client';
 import type { Job } from '@ordo/protocol';
 import { useEffect, useState } from 'react';
-import { useLibrary } from '../state/library.ts';
+import { loadLibrary, useLibrary } from '../state/library.ts';
 
 /** Follow a hub job: library.delta 'job' changes when the hub sends them, polling otherwise. */
 export function useJob(id: string | undefined): Job | undefined {
@@ -16,7 +16,11 @@ export function useJob(id: string | undefined): Job | undefined {
         const j = await api<Job>(`/jobs/${id}`);
         if (!alive) return;
         setPolled(j);
-        if (j.state === 'done' || j.state === 'failed') return;
+        if (j.state === 'done' || j.state === 'failed') {
+          // The GitHub Pages demo has no hub socket to announce what the job created: fetch the library.
+          if (DEMO && j.state === 'done') loadLibrary();
+          return;
+        }
       } catch {
         /* retry */
       }

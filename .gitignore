@@ -11,3 +11,4 @@ soak-*.json
 soak-*.md
 .env
 .e2e-data*
+site

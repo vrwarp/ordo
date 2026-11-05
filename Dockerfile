@@ -14,6 +14,7 @@ COPY apps/hub/package.json apps/hub/
 COPY apps/operator/package.json apps/operator/
 COPY apps/output/package.json apps/output/
 COPY apps/stage/package.json apps/stage/
+COPY apps/demo/package.json apps/demo/
 COPY packages ./packages
 COPY tools/soak/package.json tools/soak/
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile

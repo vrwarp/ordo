@@ -26,6 +26,8 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      # The GitHub Pages demo (apps/demo); e2e/pages-demo.spec.ts serves and drives it.
+      - run: pnpm build:pages
       # Advisories in third-party packages must not block an unrelated merge; the weekly audit
       # workflow (.github/workflows/audit.yml) reports them on its own schedule.
       - name: Audit dependencies (advisory only)

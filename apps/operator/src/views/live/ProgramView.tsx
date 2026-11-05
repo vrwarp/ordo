@@ -1,3 +1,4 @@
+import { DEMO } from '@ordo/client';
 import { useEffect, useRef } from 'react';
 import { dotTitle, outputDot } from '../../lib/health.ts';
 import { useProgram } from '../../services/programView.ts';
@@ -25,7 +26,13 @@ export function ProgramView() {
   return (
     <div className="program">
       <h4 style={{ margin: 0 }}>Program</h4>
-      {fallback && <span className="muted small">Program view pauses while the hub is unreachable.</span>}
+      {fallback && (
+        <span className="muted small">
+          {DEMO
+            ? 'The demo has no program view: Launch outputs opens the screens as windows.'
+            : 'Program view pauses while the hub is unreachable.'}
+        </span>
+      )}
       {list.map((o) => {
         const h = health[o.id];
         const p = program[o.id];

@@ -1,3 +1,4 @@
+import { DEMO } from '@ordo/client';
 import { controller } from '../services/controller.ts';
 import { useLive } from '../state/live.ts';
 
@@ -8,6 +9,11 @@ import { useLive } from '../state/live.ts';
  */
 export function startService(playlistId: string): void {
   const s = useLive.getState();
+  // The GitHub Pages demo has no hub: every service runs in the browser, without asking.
+  if (DEMO) {
+    controller()?.goLiveLocal(playlistId);
+    return;
+  }
   if (s.hubConnected) {
     controller()?.goLive(playlistId);
     return;

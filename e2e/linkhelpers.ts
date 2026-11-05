@@ -77,8 +77,13 @@ export async function expectCue(pages: Page[], cue: number, timeout = 15_000): P
   for (const p of pages) await expect.poll(() => cueOn(p), { timeout }).toBe(cue);
 }
 
+/** The window's live bus, or '' while the page is still loading (its __ordo hook not yet defined). */
 export async function busOf(p: Page): Promise<string> {
-  return p.evaluate(() => (window as unknown as { __ordo: { state(): { bus: string } } }).__ordo.state().bus);
+  return p
+    .evaluate(
+      () => (window as unknown as { __ordo?: { state(): { bus: string } } }).__ordo?.state().bus ?? '',
+    )
+    .catch(() => '');
 }
 
 export async function go(page: Page): Promise<void> {
