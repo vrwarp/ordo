@@ -284,18 +284,16 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
     if (!e.last && e.para.spcAft)
       e.block.style.paddingBottom = `${(len(e.para.spcAft) * spacing).toFixed(2)}px`;
     // Line height and where the baseline sits in the line, as editeng computes them; `spacing` is the
-    // shrink-to-fit spacing scale, which also applies to exact and unspecified line spacing.
+    // shrink-to-fit spacing scale, which also applies to exact line spacing.
     const natural = SINGLE * px;
     if (e.para.lnSpcPt !== undefined) {
       const h = e.para.lnSpcPt * s * spacing;
       e.p.style.lineHeight = `${h.toFixed(2)}px`;
       return px + (h - natural);
     }
-    if (e.para.lnSpcPct === undefined) {
-      e.p.style.lineHeight = (SINGLE * spacing).toFixed(4);
-      return Math.min(px, natural * spacing);
-    }
-    const pct = e.para.lnSpcPct / 100_000;
+    // Unset spacing is single spacing, which the spacing scale leaves alone (measured: LibreOffice draws
+    // an unset and an explicit 100 % alike in a shrunk box).
+    const pct = (e.para.lnSpcPct ?? 100_000) / 100_000;
     if (pct === 1 || pct === 0) {
       e.p.style.lineHeight = String(SINGLE);
       return px;
