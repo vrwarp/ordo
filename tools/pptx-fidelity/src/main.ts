@@ -125,8 +125,20 @@ async function drawWithPptxPreview(
   }
 }
 
-/** SSIM of two pictures in greyscale at 960x540 (ffmpeg). */
+/** A PNG's size from its header. */
+async function pngSize(file: string): Promise<{ w: number; h: number } | undefined> {
+  const b = await readFile(file);
+  if (b.length < 24 || b.toString('latin1', 12, 16) !== 'IHDR') return undefined;
+  return { w: b.readUInt32BE(16), h: b.readUInt32BE(20) };
+}
+
+/**
+ * SSIM of two pictures in greyscale at 960x540 (ffmpeg). The reference is first cut to the other's
+ * proportions: LibreOffice rounds a 960 pt wide slide up to 1921 pixels, a blank last column.
+ */
 async function ssim(a: string, b: string): Promise<number> {
+  const size = await pngSize(b);
+  const crop = size ? `crop='min(iw,trunc(ih*${size.w}/${size.h}+0.5))':ih:0:0,` : '';
   const r = await run(
     'ffmpeg',
     [
@@ -137,7 +149,7 @@ async function ssim(a: string, b: string): Promise<number> {
       '-i',
       b,
       '-lavfi',
-      '[0:v]scale=960:540:flags=area,format=gray[a];[1:v]scale=960:540:flags=area,format=gray[b];[a][b]ssim',
+      `[0:v]${crop}scale=960:540:flags=area,format=gray[a];[1:v]scale=960:540:flags=area,format=gray[b];[a][b]ssim`,
       '-f',
       'null',
       '-',

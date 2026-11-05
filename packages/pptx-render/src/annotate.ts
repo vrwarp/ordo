@@ -11,10 +11,14 @@ export type RunStyle = {
   latin?: string;
   /** The run's East Asian typeface, theme references resolved. */
   ea?: string;
+  /** Font size in points (`sz`, inherited; 18 when nothing sets it), before any shrink to fit. */
+  size?: number;
+  /** Extra space between characters in points (`spc`). pptx-preview ignores it and condenses Latin text. */
+  spc?: number;
   /** OOXML baseline shift: thousandths of a percent of the font size (30000 = raised 30 %). */
   baseline?: number;
-  /** A shadow drawn behind the glyphs, in points of the slide. */
-  shadow?: TextShadow;
+  /** Shadows drawn behind the glyphs, in points of the slide, topmost first. */
+  shadows?: TextShadow[];
   /** The run's paragraph (index into `Annotation.paras`). */
   p?: number;
   /** The run's text box (index into `Annotation.bodies`). */
@@ -26,18 +30,20 @@ export type TextShadow = { dx: number; dy: number; blur: number; color: string }
 /** Paragraph properties ordo applies to the run's `<p>`. */
 export type ParaStyle = {
   /**
-   * Line spacing as a percentage of the font's natural line height, in thousandths (100000 = single), the
-   * text box's shrink-to-fit reduction already taken off. pptx-preview uses the font size instead.
+   * Line spacing as a percentage of single spacing, in thousandths (100000 = single). Single spacing is
+   * 1.2 times the font size, whatever the font; pptx-preview uses the font size itself.
    */
   lnSpcPct?: number;
   /** Exact line spacing in points. */
   lnSpcPt?: number;
-  /** Space before and after the paragraph: points, or a share of a line (100000 = one line). */
+  /** Space before and after the paragraph: points, or a multiple of the paragraph's font size. */
   spcBef?: Spacing;
   spcAft?: Spacing;
+  /** The paragraph's end mark (`a:endParaRPr`): what an empty paragraph's height comes from. */
+  end?: RunStyle;
 };
 
-export type Spacing = { pt: number } | { lines: number };
+export type Spacing = { pt: number } | { em: number };
 
 /** Text box properties ordo applies to the run's text wrapper. */
 export type BodyStyle = {
@@ -45,6 +51,26 @@ export type BodyStyle = {
   insets: [number, number, number, number];
   /** Where the text sits in the box (`anchor`; PowerPoint's default is the top). */
   anchor: 't' | 'ctr' | 'b';
+  /** The box's paragraphs in order (indexes into `Annotation.paras`), one per paragraph pptx-preview draws. */
+  paras: number[];
+  /** Shrink text on overflow (`a:normAutofit`) and the scale PowerPoint stored, as fractions. */
+  autofit?: { fontScale: number; lnSpcReduction: number };
+};
+
+/**
+ * A slide picture drawn in a shape other than a rectangle (pptx-preview always draws a rectangle). Only
+ * pictures directly on a slide (not in groups) are listed; geometry in points.
+ */
+export type PictureClip = {
+  /** The slide's position in the deck (0 = first). */
+  slide: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  shape: 'ellipse' | 'roundRect';
+  /** Corner radius in points (roundRect). */
+  radius?: number;
 };
 
 export type Annotation = {
@@ -56,6 +82,8 @@ export type Annotation = {
   paras: ParaStyle[];
   /** Text box styles the runs point to. */
   bodies: BodyStyle[];
+  /** Pictures to clip to their shape. */
+  pictures: PictureClip[];
   /** Distinct typefaces the marked runs name, for font fallback lookup. */
   families: string[];
   /** Slide size in points (`p:sldSz`, 914400 EMU per inch, 72 points per inch). */
@@ -253,6 +281,8 @@ export async function annotatePptx(input: Uint8Array): Promise<Annotation> {
       changed = true;
     }
   }
+  const pictures = await pictureClips(zip, pres, parse);
+  if (await stripColorProfiles(zip, notes)) changed = true;
   const bytes = changed
     ? await zip.generateAsync({
         type: 'uint8array',
@@ -260,7 +290,157 @@ export async function annotatePptx(input: Uint8Array): Promise<Annotation> {
         compressionOptions: { level: 1 },
       })
     : input;
-  return { bytes, runs, paras, bodies, families: [...families].sort(), slideWidthPt, slideHeightPt, notes };
+  return {
+    bytes,
+    runs,
+    paras,
+    bodies,
+    pictures,
+    families: [...families].sort(),
+    slideWidthPt,
+    slideHeightPt,
+    notes,
+  };
+}
+
+/** Slides in presentation order (`p:sldIdLst`), as zip paths. */
+async function slideOrder(zip: JSZip, pres: XNode | undefined): Promise<string[]> {
+  const f = zip.file('ppt/_rels/presentation.xml.rels');
+  if (!f || !pres) return [];
+  const rels = rootOf(parseXml(await f.async('string'), 'ppt/_rels/presentation.xml.rels'));
+  const byId = new Map(children(rels, 'Relationship').map((r) => [r.attrs.Id, r.attrs.Target]));
+  const out: string[] = [];
+  for (const id of children(child(pres, 'p:sldIdLst'), 'p:sldId')) {
+    const target = byId.get(id.attrs['r:id']);
+    if (target) out.push(resolvePath('ppt', target));
+  }
+  return out;
+}
+
+async function pictureClips(
+  zip: JSZip,
+  pres: XNode | undefined,
+  parse: (name: string) => Promise<XNode | undefined>,
+): Promise<PictureClip[]> {
+  const out: PictureClip[] = [];
+  let order: string[] = [];
+  try {
+    order = await slideOrder(zip, pres);
+  } catch {
+    return out;
+  }
+  for (let i = 0; i < order.length; i++) {
+    const name = order[i]!;
+    const xml = await zip.file(name)?.async('string');
+    if (!xml || !/prst="(ellipse|roundRect)"/.test(xml)) continue;
+    const root = await parse(name);
+    for (const pic of children(path(root, 'p:cSld', 'p:spTree'), 'p:pic')) {
+      const spPr = child(pic, 'p:spPr');
+      const geom = child(spPr, 'a:prstGeom');
+      const prst = geom?.attrs.prst;
+      if (prst !== 'ellipse' && prst !== 'roundRect') continue;
+      const xfrm = child(spPr, 'a:xfrm');
+      if (!xfrm || num(xfrm.attrs.rot)) continue;
+      const off = child(xfrm, 'a:off');
+      const ext = child(xfrm, 'a:ext');
+      const pt = (v: string | undefined) => (num(v) ?? 0) / EMU_PER_PT;
+      const clip: PictureClip = {
+        slide: i,
+        x: pt(off?.attrs.x),
+        y: pt(off?.attrs.y),
+        w: pt(ext?.attrs.cx),
+        h: pt(ext?.attrs.cy),
+        shape: prst,
+      };
+      if (prst === 'roundRect') {
+        const gd = children(child(geom, 'a:avLst'), 'a:gd').find((g) => g.attrs.name === 'adj');
+        const adj = num(/^val\s+(-?\d+)$/.exec(gd?.attrs.fmla ?? '')?.[1]) ?? 16_667;
+        clip.radius = (Math.min(clip.w, clip.h) * Math.max(0, Math.min(50_000, adj))) / 100_000;
+      }
+      out.push(clip);
+    }
+  }
+  return out;
+}
+
+/**
+ * Drop embedded colour profiles from pictures (JPEG APP2 ICC_PROFILE segments, PNG iCCP chunks). Chromium
+ * converts a picture from its profile; LibreOffice, the reference for now, uses the values as sRGB.
+ */
+async function stripColorProfiles(zip: JSZip, notes: string[]): Promise<boolean> {
+  let stripped = 0;
+  for (const name of Object.keys(zip.files)) {
+    if (!/^ppt\/media\/[^/]+\.(jpe?g|png)$/i.test(name)) continue;
+    const f = zip.file(name);
+    const size = (f as unknown as { _data?: { uncompressedSize?: number } })?._data?.uncompressedSize ?? 0;
+    if (!f || size > 64 * 1024 * 1024) continue;
+    const b = await f.async('uint8array');
+    const out = /\.png$/i.test(name) ? withoutIccp(b) : withoutJpegIcc(b);
+    if (out) {
+      zip.file(name, out);
+      stripped++;
+    }
+  }
+  if (stripped) notes.push(`${stripped} picture colour profile(s) removed`);
+  return stripped > 0;
+}
+
+/** A JPEG without its ICC_PROFILE segments, or undefined when it has none (or is not a JPEG). */
+export function withoutJpegIcc(b: Uint8Array): Uint8Array | undefined {
+  if (b[0] !== 0xff || b[1] !== 0xd8) return undefined;
+  const keep: [number, number][] = [[0, 2]];
+  let at = 2;
+  let dropped = false;
+  while (at + 4 <= b.length && b[at] === 0xff) {
+    const marker = b[at + 1]!;
+    if (marker === 0xda || marker === 0xd9) break; // image data follows: everything from here is kept
+    const len = (b[at + 2]! << 8) | b[at + 3]!;
+    if (len < 2 || at + 2 + len > b.length) return undefined;
+    const icc =
+      marker === 0xe2 &&
+      len >= 14 &&
+      String.fromCharCode(...b.subarray(at + 4, at + 15)) === 'ICC_PROFILE' &&
+      b[at + 15] === 0;
+    if (icc) dropped = true;
+    else keep.push([at, at + 2 + len]);
+    at += 2 + len;
+  }
+  if (!dropped) return undefined;
+  keep.push([at, b.length]);
+  const out = new Uint8Array(keep.reduce((n, [s, e]) => n + e - s, 0));
+  let o = 0;
+  for (const [s, e] of keep) {
+    out.set(b.subarray(s, e), o);
+    o += e - s;
+  }
+  return out;
+}
+
+/** A PNG without its iCCP chunk, or undefined when it has none (or is not a PNG). */
+export function withoutIccp(b: Uint8Array): Uint8Array | undefined {
+  const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (b.length < 8 || sig.some((v, i) => b[i] !== v)) return undefined;
+  const keep: [number, number][] = [[0, 8]];
+  let at = 8;
+  let dropped = false;
+  while (at + 12 <= b.length) {
+    const len = ((b[at]! << 24) | (b[at + 1]! << 16) | (b[at + 2]! << 8) | b[at + 3]!) >>> 0;
+    const type = String.fromCharCode(...b.subarray(at + 4, at + 8));
+    const end = at + 12 + len;
+    if (end > b.length) return undefined;
+    if (type === 'iCCP') dropped = true;
+    else keep.push([at, end]);
+    at = end;
+    if (type === 'IEND') break;
+  }
+  if (!dropped) return undefined;
+  const out = new Uint8Array(keep.reduce((n, [s, e]) => n + e - s, 0));
+  let o = 0;
+  for (const [s, e] of keep) {
+    out.set(b.subarray(s, e), o);
+    o += e - s;
+  }
+  return out;
 }
 
 /**
@@ -424,14 +604,17 @@ function chain(
   return out;
 }
 
-/** `a:spcBef` / `a:spcAft`: the nearest one decides, so an explicit zero overrides an inherited value. */
+/**
+ * `a:spcBef` / `a:spcAft`: the nearest one decides, so an explicit zero overrides an inherited value. A
+ * percentage is a share of the font size (LibreOffice's reading; PowerPoint's may be of the line).
+ */
 function spacing(nodes: XNode[], name: string): Spacing | undefined {
   const s = nodes.map((n) => child(n, name)).find((x) => x);
   if (!s) return undefined;
   const pts = num(child(s, 'a:spcPts')?.attrs.val);
   if (pts !== undefined) return { pt: Math.max(0, Math.min(1584, pts / 100)) };
   const pct = num(child(s, 'a:spcPct')?.attrs.val);
-  if (pct !== undefined) return { lines: Math.max(0, Math.min(1_320_000, pct)) / 100_000 };
+  if (pct !== undefined) return { em: Math.max(0, Math.min(1_320_000, pct)) / 100_000 };
   return undefined;
 }
 
@@ -448,10 +631,8 @@ function paraStyle(part: PartCtx, shape: ShapeCtx, lvl: number, pPr: XNode | und
     st.lnSpcPt = Math.max(0, Math.min(1584, pts / 100));
     return st;
   }
-  const pct = num(child(ln, 'a:spcPct')?.attrs.val) ?? 100_000;
-  // Shrink to fit takes points off the spacing as well as scaling the text.
-  const reduction = num(child(shape.bodyPr, 'a:normAutofit')?.attrs.lnSpcReduction) ?? 0;
-  st.lnSpcPct = Math.max(0, Math.min(1_320_000, pct - reduction));
+  const pct = num(child(ln, 'a:spcPct')?.attrs.val);
+  if (pct !== undefined) st.lnSpcPct = Math.max(0, Math.min(1_320_000, pct));
   return st;
 }
 
@@ -477,6 +658,19 @@ function bodyStyle(part: PartCtx, shape: ShapeCtx, bodyPr: XNode | undefined): B
   };
   const anchorAttr = nodes.map((n) => n.attrs.anchor).find((a) => a !== undefined);
   const anchor = anchorAttr === 'ctr' || anchorAttr === 'b' ? anchorAttr : 't';
+  // The nearest body that says how text fits decides; the stored scale is only ever on the shape itself.
+  const fit = nodes
+    .map((n) => n.children.find((c) => /^a:(normAutofit|spAutoFit|noAutofit)$/.test(c.name)))
+    .find((c) => c);
+  const fraction = (v: string | undefined, dflt: number) =>
+    Math.max(0, Math.min(1, (num(v) ?? dflt) / 100_000));
+  const autofit =
+    fit?.name === 'a:normAutofit'
+      ? {
+          fontScale: fraction(fit.attrs.fontScale, 100_000),
+          lnSpcReduction: fraction(fit.attrs.lnSpcReduction, 0),
+        }
+      : undefined;
   return {
     insets: [
       inset('lIns', EMU_INSET_LR),
@@ -485,6 +679,8 @@ function bodyStyle(part: PartCtx, shape: ShapeCtx, bodyPr: XNode | undefined): B
       inset('bIns', EMU_INSET_TB),
     ],
     anchor,
+    paras: [],
+    ...(autofit ? { autofit } : {}),
   };
 }
 
@@ -530,12 +726,17 @@ function runStyle(
   if (latin) st.latin = latin;
   const ea = resolveFace(first((n) => typeface(child(n, 'a:ea'))) ?? `${theme0}-ea`, theme);
   if (ea) st.ea = ea;
+  const sz = num(first((n) => n.attrs.sz));
+  st.size = Math.max(1, Math.min(4000, (sz ?? 1800) / 100));
+  const spc = num(first((n) => n.attrs.spc));
+  if (spc) st.spc = Math.max(-4000, Math.min(4000, spc)) / 100;
   const baseline = num(first((n) => n.attrs.baseline));
   if (baseline) st.baseline = Math.max(-100_000, Math.min(100_000, baseline));
+  // The run's own text shadow, then the shadow an unfilled shape casts with its text.
   const own = child(rPr, 'a:effectLst');
-  const runShadow = own ? shadowOf(child(own, 'a:outerShdw'), part, undefined) : undefined;
-  const shadow = own ? runShadow : shape.shadow;
-  if (shadow) st.shadow = shadow;
+  const shadows = [own ? shadowOf(child(own, 'a:outerShdw'), part, undefined) : undefined, shape.shadow];
+  const list = shadows.filter((x): x is TextShadow => x !== undefined);
+  if (list.length) st.shadows = list;
   return st;
 }
 
@@ -596,8 +797,13 @@ function walk(
       case 'a:p': {
         const pPr = child(c, 'a:pPr');
         const lvl = Math.max(0, Math.min(8, num(pPr?.attrs.lvl) ?? 0));
-        acc.paras.push(paraStyle(part, shape, lvl, pPr));
-        walk(c, part, shape, { lvl, pPr, index: acc.paras.length - 1 }, undefined, acc);
+        const ps = paraStyle(part, shape, lvl, pPr);
+        ps.end = runStyle(part, shape, lvl, pPr, child(c, 'a:endParaRPr'));
+        delete ps.end.shadows;
+        acc.paras.push(ps);
+        const index = acc.paras.length - 1;
+        if (shape.body !== undefined) acc.bodies[shape.body]?.paras.push(index);
+        walk(c, part, shape, { lvl, pPr, index }, undefined, acc);
         break;
       }
       case 'a:r':

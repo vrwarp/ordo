@@ -1,6 +1,6 @@
 import JSZip from 'jszip';
 import { describe, expect, it } from 'vitest';
-import { annotatePptx } from './annotate.ts';
+import { annotatePptx, withoutIccp, withoutJpegIcc } from './annotate.ts';
 import { decodeMarker, encodeMarker, MARK_START, MAX_MARKED_RUNS } from './markers.ts';
 
 const NS =
@@ -76,6 +76,7 @@ async function marked(bytes: Uint8Array, runs: unknown[]): Promise<[string, unkn
     if (st) {
       delete st.p;
       delete st.b;
+      if (st.size === 18) delete st.size;
     }
     out.push([text.slice(id === undefined ? 0 : 9), st]);
   }
@@ -137,19 +138,25 @@ describe('annotatePptx', () => {
       sp({ style: '<p:style><a:effectRef idx="2"/></p:style>', body: `<a:p>${run('Themed')}</a:p>` }) +
       sp({
         body: `<a:p>${run('Own', `${shadow(12700, 0, '<a:schemeClr val="accent1"><a:lumMod val="50000"/></a:schemeClr>')}`)}</a:p>`,
+      }) +
+      sp({
+        spPr: `<a:noFill/>${shadow(50800, 2700000)}`,
+        body: `<a:p>${run('Both', shadow(12700, 0))}</a:p>`,
       });
     const a = await annotatePptx(await deck(body));
     const runs = await marked(a.bytes, a.runs);
-    const by = Object.fromEntries(runs) as Record<string, { baseline?: number; shadow?: unknown }>;
+    const by = Object.fromEntries(runs) as Record<string, { baseline?: number; shadows?: unknown[] }>;
     expect(by['18']!.baseline).toBe(30000);
     expect(by.Now!.baseline).toBeUndefined();
     // 50800 EMU at 45 degrees: 4 pt down and right; 25400 EMU of blur is 2 pt.
-    expect(by['18']!.shadow).toEqual({ dx: 2.83, dy: 2.83, blur: 2, color: 'rgba(0,0,0,1)' });
-    expect(by.Boxed!.shadow).toBeUndefined();
-    expect(by.Themed!.shadow).toEqual({ dx: 0, dy: 1, blur: 1, color: 'rgba(0,0,0,0.5)' });
-    // A run's own effect list wins; accent1 (#4472C4) at half luminance.
-    expect(by.Own!.shadow).toMatchObject({ dx: 1, dy: 0, blur: 2 });
-    expect((by.Own!.shadow as { color: string }).color).toBe('rgba(32,56,100,1)');
+    const cast = { dx: 2.83, dy: 2.83, blur: 2, color: 'rgba(0,0,0,1)' };
+    expect(by['18']!.shadows).toEqual([cast]);
+    expect(by.Boxed!.shadows).toBeUndefined();
+    expect(by.Themed!.shadows).toEqual([{ dx: 0, dy: 1, blur: 1, color: 'rgba(0,0,0,0.5)' }]);
+    // A run's own shadow; accent1 (#4472C4) at half luminance.
+    expect(by.Own!.shadows).toEqual([{ dx: 1, dy: 0, blur: 2, color: 'rgba(32,56,100,1)' }]);
+    // The run's own shadow on top of the one its unfilled shape casts.
+    expect(by.Both!.shadows).toEqual([{ dx: 1, dy: 0, blur: 2, color: 'rgba(0,0,0,1)' }, cast]);
   });
 
   it('marks table cells and fields, and leaves empty runs, layouts and masters consistent', async () => {
@@ -179,29 +186,110 @@ describe('annotatePptx', () => {
         spPr: '',
         body:
           '<a:bodyPr lIns="0" tIns="12700"><a:normAutofit fontScale="92500" lnSpcReduction="10000"/></a:bodyPr>' +
-          `<a:p><a:pPr><a:lnSpc><a:spcPct val="150000"/></a:lnSpc></a:pPr>${run('Shrunk')}</a:p>` +
-          `<a:p><a:pPr><a:lnSpc><a:spcPts val="3600"/></a:lnSpc></a:pPr>${run('Exact')}</a:p>`,
+          `<a:p><a:pPr><a:lnSpc><a:spcPct val="150000"/></a:lnSpc><a:spcBef><a:spcPct val="50000"/></a:spcBef></a:pPr>${run('Shrunk', '')}</a:p>`.replace(
+            '<a:rPr lang="en-US"/>',
+            '<a:rPr lang="en-US" sz="4400" spc="-50"/>',
+          ) +
+          `<a:p><a:pPr><a:lnSpc><a:spcPts val="3600"/></a:lnSpc></a:pPr>${run('Exact')}</a:p>` +
+          '<a:p><a:endParaRPr lang="en-US" sz="2000"/></a:p>',
       }).replace('<p:txBody><a:bodyPr/>', '<p:txBody>');
     const z = await JSZip.loadAsync(await deck(body));
     const master = await z.file('ppt/slideMasters/slideMaster1.xml')!.async('string');
     z.file(
       'ppt/slideMasters/slideMaster1.xml',
-      master.replace(
-        '<p:bodyStyle><a:lvl1pPr>',
-        '<p:bodyStyle><a:lvl1pPr><a:lnSpc><a:spcPct val="90000"/></a:lnSpc>',
-      ),
+      master
+        .replace(
+          '<p:bodyStyle><a:lvl1pPr>',
+          '<p:bodyStyle><a:lvl1pPr><a:lnSpc><a:spcPct val="90000"/></a:lnSpc>',
+        )
+        .replace(
+          '<a:lnSpc><a:spcPct val="90000"/></a:lnSpc><a:defRPr>',
+          '<a:lnSpc><a:spcPct val="90000"/></a:lnSpc><a:defRPr sz="3200">',
+        ),
     );
     const a = await annotatePptx(await z.generateAsync({ type: 'uint8array' }));
     const xml = await (await JSZip.loadAsync(a.bytes)).file('ppt/slides/slide1.xml')!.async('string');
-    const by: Record<string, { p?: number; b?: number }> = {};
+    const by: Record<string, { p?: number; b?: number; size?: number; spc?: number }> = {};
     for (const m of xml.matchAll(/<a:t>([^<]*)<\/a:t>/g)) by[m[1]!.slice(9)] = a.runs[decodeMarker(m[1]!)!]!;
-    expect(a.paras[by.Inherited!.p!]).toEqual({ lnSpcPct: 90_000 });
-    // 150 % less the shrink-to-fit reduction of 10 points.
-    expect(a.paras[by.Shrunk!.p!]).toEqual({ lnSpcPct: 140_000 });
-    expect(a.paras[by.Exact!.p!]).toEqual({ lnSpcPt: 36 });
+    const para = (i: number) => {
+      const { end: _end, ...rest } = a.paras[i]!;
+      return rest;
+    };
+    expect(para(by.Inherited!.p!)).toEqual({ lnSpcPct: 90_000 });
+    // The stored shrink to fit stays with the box: the page re-fits the text with the fonts it has.
+    expect(para(by.Shrunk!.p!)).toEqual({ lnSpcPct: 150_000, spcBef: { em: 0.5 } });
+    expect(para(by.Exact!.p!)).toEqual({ lnSpcPt: 36 });
+    // Sizes: the master's body style for the placeholder, the run's own, the default of 18 pt elsewhere.
+    expect(by.Inherited!.size).toBe(32);
+    expect(by.Shrunk).toMatchObject({ size: 44, spc: -0.5 });
+    expect(by.Exact!.size).toBe(18);
     // PowerPoint's defaults (7.2 pt left and right, 3.6 pt top and bottom) where nothing is said.
-    expect(a.bodies[by.Inherited!.b!]).toEqual({ insets: [7.2, 3.6, 7.2, 3.6], anchor: 't' });
-    expect(a.bodies[by.Shrunk!.b!]).toEqual({ insets: [0, 1, 7.2, 3.6], anchor: 't' });
+    const inherited = a.bodies[by.Inherited!.b!]!;
+    expect(inherited).toEqual({ insets: [7.2, 3.6, 7.2, 3.6], anchor: 't', paras: [by.Inherited!.p] });
+    const shrunk = a.bodies[by.Shrunk!.b!]!;
+    expect(shrunk).toMatchObject({ insets: [0, 1, 7.2, 3.6], anchor: 't' });
+    expect(shrunk.autofit).toEqual({ fontScale: 0.925, lnSpcReduction: 0.1 });
+    // Every paragraph of the box, the empty one too; its height comes from its end mark.
+    expect(shrunk.paras).toHaveLength(3);
+    expect(a.paras[shrunk.paras[2]!]!.end?.size).toBe(20);
+  });
+
+  it('lists slide pictures drawn in an ellipse or a rounded rectangle, in presentation order', async () => {
+    const pic = (prst: string, x: number, av = '') =>
+      `<p:pic><p:nvPicPr><p:cNvPr id="4" name="P"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId9"/></p:blipFill>` +
+      `<p:spPr><a:xfrm><a:off x="${x}" y="127000"/><a:ext cx="2540000" cy="1270000"/></a:xfrm><a:prstGeom prst="${prst}"><a:avLst>${av}</a:avLst></a:prstGeom></p:spPr></p:pic>`;
+    const body =
+      pic('ellipse', 0) + pic('rect', 0) + pic('roundRect', 12700, '<a:gd name="adj" fmla="val 10000"/>');
+    const pres =
+      `<?xml version="1.0"?><p:presentation ${NS}><p:sldIdLst><p:sldId id="256" r:id="rId7"/></p:sldIdLst>` +
+      '<p:sldSz cx="12192000" cy="6858000"/></p:presentation>';
+    const a = await annotatePptx(
+      await deck(body, {
+        'ppt/presentation.xml': pres,
+        'ppt/_rels/presentation.xml.rels': rels('slide', 'slides/slide1.xml').replace('rId1', 'rId7'),
+      }),
+    );
+    expect(a.pictures).toEqual([
+      { slide: 0, x: 0, y: 10, w: 200, h: 100, shape: 'ellipse' },
+      // A tenth of the shorter side.
+      { slide: 0, x: 1, y: 10, w: 200, h: 100, shape: 'roundRect', radius: 10 },
+    ]);
+  });
+
+  it('removes embedded colour profiles from JPEG and PNG pictures, and only those', () => {
+    const seg = (marker: number, payload: number[]) => [
+      0xff,
+      marker,
+      (payload.length + 2) >> 8,
+      (payload.length + 2) & 255,
+      ...payload,
+    ];
+    const ascii = (t: string) => Array.from(t, (c) => c.charCodeAt(0));
+    const app0 = seg(0xe0, [...ascii('JFIF'), 0, 1, 1, 0, 0, 1, 0, 1, 0, 0]);
+    const icc = seg(0xe2, [...ascii('ICC_PROFILE'), 0, 1, 1, 9, 9, 9]);
+    const sos = [0xff, 0xda, 0, 2, 0xff, 0xe2, 1, 2, 0xff, 0xd9];
+    const jpeg = Uint8Array.from([0xff, 0xd8, ...app0, ...icc, ...sos]);
+    expect(Array.from(withoutJpegIcc(jpeg)!)).toEqual([0xff, 0xd8, ...app0, ...sos]);
+    expect(withoutJpegIcc(Uint8Array.from([0xff, 0xd8, ...app0, ...sos]))).toBeUndefined();
+    const chunk = (type: string, data: number[]) => [
+      0,
+      0,
+      0,
+      data.length,
+      ...ascii(type),
+      ...data,
+      1,
+      2,
+      3,
+      4,
+    ];
+    const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    const ihdr = chunk('IHDR', [0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]);
+    const rest = [...chunk('IDAT', [7, 7]), ...chunk('IEND', [])];
+    const png = Uint8Array.from([...sig, ...ihdr, ...chunk('iCCP', [...ascii('p'), 0, 0, 5]), ...rest]);
+    expect(Array.from(withoutIccp(png)!)).toEqual([...sig, ...ihdr, ...rest]);
+    expect(withoutIccp(Uint8Array.from([...sig, ...ihdr, ...rest]))).toBeUndefined();
+    expect(withoutIccp(jpeg)).toBeUndefined();
   });
 
   it('drops content-type entries for parts the package does not have (pptxgenjs, multi-slide decks)', async () => {

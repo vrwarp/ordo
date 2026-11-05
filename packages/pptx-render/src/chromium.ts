@@ -79,6 +79,7 @@ export async function renderWithPptxPreview(
     runs: ann?.runs ?? [],
     paras: ann?.paras ?? [],
     bodies: ann?.bodies ?? [],
+    pictures: ann?.pictures ?? [],
     fallbacks,
     slideWidthPt: ann?.slideWidthPt ?? 720,
     fixes,

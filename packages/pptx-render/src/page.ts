@@ -1,4 +1,4 @@
-import type { BodyStyle, ParaStyle, RunStyle } from './annotate.ts';
+import type { BodyStyle, ParaStyle, PictureClip, RunStyle } from './annotate.ts';
 
 /** What the page needs to render one deck. Plain data: it is sent into the browser as JSON. */
 export type PageArgs = {
@@ -12,6 +12,8 @@ export type PageArgs = {
   /** Paragraph and text box styles the runs point to. */
   paras: ParaStyle[];
   bodies: BodyStyle[];
+  /** Pictures to clip to their shape (pptx-preview draws every picture as a rectangle). */
+  pictures: PictureClip[];
   /** Typeface → the installed family the system substitutes for it (fontconfig), when it is missing. */
   fallbacks: Record<string, string>;
   /** Slide width in points, to convert the shadow offsets (points) into pptx-preview's slide units. */
@@ -85,7 +87,8 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
 
   let styled = 0;
   let unstyled = 0;
-  const restyled: [HTMLElement, RunStyle][] = [];
+  /** Marked runs by paragraph element, in document order. */
+  const runsOf = new Map<HTMLElement, [HTMLElement, RunStyle][]>();
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const found: Text[] = [];
   for (let n = walker.nextNode(); n; n = walker.nextNode())
@@ -116,97 +119,216 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
     }
     const family = stackFor(st);
     if (family) el.style.fontFamily = family;
-    if (st.baseline) {
-      // PowerPoint draws a raised or lowered run at about two thirds of its size, and the shift does not
-      // make its line any taller: move it relatively (vertical-align would grow the line box).
-      const k = 0.65;
-      el.style.fontSize = `${k}em`;
-      el.style.position = 'relative';
-      el.style.top = `${(-st.baseline / 100_000 / k).toFixed(3)}em`;
+    const s = scale(el);
+    // pptx-preview condenses Latin text it has no typeface for by 4 % and never reads `spc`.
+    el.style.letterSpacing = `${((st.spc ?? 0) * s).toFixed(2)}px`;
+    // Runs of spaces are kept (PowerPoint draws every space); underlines do not skip descenders.
+    el.style.whiteSpace = 'pre-wrap';
+    el.style.textDecorationSkipInk = 'none';
+    if (st.shadows)
+      el.style.textShadow = st.shadows
+        .map((sh) => `${sh.dx * s}px ${sh.dy * s}px ${sh.blur * s}px ${sh.color}`)
+        .join(', ');
+    const p = el.closest('p') as HTMLElement | null;
+    if (p) {
+      const list = runsOf.get(p);
+      if (list) list.push([el, st]);
+      else runsOf.set(p, [[el, st]]);
     }
-    if (st.shadow) {
-      const s = scale(el);
-      const sh = st.shadow;
-      el.style.textShadow = `${sh.dx * s}px ${sh.dy * s}px ${sh.blur * s}px ${sh.color}`;
-    }
-    restyled.push([el, st]);
     styled++;
   }
 
-  // Paragraphs and text boxes, once each, after every run has its font (line heights depend on it).
+  // Paragraphs and text boxes, after every run has its font. LibreOffice (as PowerPoint) makes single
+  // spacing 1.2 times the font size whatever the font, puts the baseline one font size below the top of a
+  // line, and gives extra spacing to the space above the line; CSS splits it above and below.
   await document.fonts.ready;
-  const natural = new Map<string, number>();
-  /** The font's own line height (ascent + descent + gap) as a multiple of its size: PowerPoint's 100 %. */
-  const naturalRatio = (el: HTMLElement): number => {
-    const cs = getComputedStyle(el);
-    const key = `${cs.fontFamily}|${cs.fontWeight}|${cs.fontStyle}`;
-    let r = natural.get(key);
-    if (r === undefined) {
-      const probe = document.createElement('span');
-      probe.textContent = 'Hg';
-      probe.style.cssText =
-        'position:absolute;visibility:hidden;display:inline-block;white-space:nowrap;line-height:normal;font-size:100px';
-      probe.style.fontFamily = cs.fontFamily;
-      probe.style.fontWeight = cs.fontWeight;
-      probe.style.fontStyle = cs.fontStyle;
-      document.body.appendChild(probe);
-      r = probe.getBoundingClientRect().height / 100;
-      probe.remove();
-      if (!(r > 0.5 && r < 3)) r = 1.2;
-      natural.set(key, r);
-    }
-    return r;
+  const SINGLE = 1.2;
+  /** Raised and lowered runs: their share of the font size (LibreOffice's 58 %). */
+  const SCRIPT = 0.58;
+  type Entry = {
+    block: HTMLElement;
+    p: HTMLElement;
+    para: ParaStyle;
+    first: boolean;
+    last: boolean;
+    runs: [HTMLElement, RunStyle][];
   };
-  /** The run a paragraph's spacing is measured on: its first run that is not raised or lowered. */
-  const mainRun = (p: HTMLElement, fallback: HTMLElement): HTMLElement => {
-    const spans = Array.from(p.querySelectorAll('span')) as HTMLElement[];
-    return spans.find((x) => x.style.position !== 'relative') ?? spans[0] ?? fallback;
-  };
-  const doneP = new Set<Element>();
-  const doneBox = new Set<Element>();
-  for (const [el, st] of restyled) {
-    const s = scale(el);
+  const boxes = new Map<HTMLElement, { body: BodyStyle; entries: Entry[] }>();
+  const loose: Entry[] = [];
+  const blockOf = (p: HTMLElement) => (p.parentElement && p.parentElement !== root ? p.parentElement : p);
+  for (const [p, runs] of runsOf) {
+    const st = runs[0]![1];
     const body = st.b !== undefined ? args.bodies[st.b] : undefined;
-    const box = body ? (el.closest('.text-wrapper') as HTMLElement | null) : null;
-    if (body && box && !doneBox.has(box)) {
-      doneBox.add(box);
-      const [l, t, r, b] = body.insets.map((v) => `${(v * s).toFixed(2)}px`);
-      box.style.padding = `${t} ${r} ${b} ${l}`;
-      // The text wrapper is positioned inside the shape's box: put it where the anchor says (pptx-preview
-      // centres text whose anchor it does not find, and a box that grows to fit keeps a stale height).
-      if (body.anchor === 't') {
-        box.style.top = '0px';
-        box.style.bottom = '';
-        box.style.transform = 'none';
-      } else if (body.anchor === 'b') {
-        box.style.top = 'auto';
-        box.style.bottom = '0px';
-        box.style.transform = 'none';
-      } else {
-        box.style.top = '50%';
-        box.style.bottom = '';
-        box.style.transform = 'translateY(-50%)';
+    const box = body ? (p.closest('.text-wrapper') as HTMLElement | null) : null;
+    if (body && box) {
+      if (!boxes.has(box)) {
+        // pptx-preview draws one block per paragraph, empty ones included: match them up when it did.
+        const blocks = Array.from(box.children) as HTMLElement[];
+        const entries: Entry[] = [];
+        if (blocks.length === body.paras.length)
+          blocks.forEach((block, i) => {
+            const bp = block.querySelector('p') as HTMLElement | null;
+            const para = args.paras[body.paras[i]!];
+            if (bp && para)
+              entries.push({
+                block,
+                p: bp,
+                para,
+                first: i === 0,
+                last: i === blocks.length - 1,
+                runs: runsOf.get(bp) ?? [],
+              });
+          });
+        boxes.set(box, { body, entries });
       }
+      const known = boxes.get(box)!;
+      if (known.entries.some((e) => e.p === p)) continue;
+      const para = st.p !== undefined ? args.paras[st.p] : undefined;
+      const block = blockOf(p);
+      if (para)
+        known.entries.push({
+          block,
+          p,
+          para,
+          first: block === box.firstElementChild,
+          last: block === box.lastElementChild,
+          runs,
+        });
+      continue;
     }
     const para = st.p !== undefined ? args.paras[st.p] : undefined;
-    const p = para ? (el.closest('p') as HTMLElement | null) : null;
-    if (para && p && !doneP.has(p)) {
-      doneP.add(p);
-      // pptx-preview wraps each paragraph in a block whose top margin is the space before and whose
-      // bottom padding the space after; it ignores an explicit zero in favour of an inherited value.
-      const block = p.parentElement;
-      const main = mainRun(p, el);
-      if (block && block !== el && (para.spcBef || para.spcAft)) {
-        const size = Number.parseFloat(getComputedStyle(main).fontSize) || 0;
-        const len = (sp: { pt: number } | { lines: number }) =>
-          'pt' in sp ? sp.pt * s : sp.lines * size * naturalRatio(main);
-        if (para.spcBef) block.style.marginTop = `${len(para.spcBef).toFixed(2)}px`;
-        if (para.spcAft) block.style.paddingBottom = `${len(para.spcAft).toFixed(2)}px`;
+    const block = blockOf(p);
+    if (para)
+      loose.push({
+        block,
+        p,
+        para,
+        first: !block.previousElementSibling,
+        last: !block.nextElementSibling,
+        runs,
+      });
+  }
+
+  /** Lay out a paragraph: run sizes, spacing, line height. Returns where its first baseline belongs. */
+  const layoutPara = (e: Entry, fontScale: number, spacing: number, round: boolean): number => {
+    const s = scale(e.p);
+    const sized = (pt: number) => {
+      const v = pt * fontScale;
+      return round ? Math.max(1, Math.round(v)) : v;
+    };
+    for (const [el, st] of e.runs) {
+      const size = sized(st.size ?? 18);
+      if (st.baseline) {
+        // The shift does not make the line any taller: move the run relatively (vertical-align would).
+        el.style.fontSize = `${(size * SCRIPT * s).toFixed(2)}px`;
+        el.style.position = 'relative';
+        el.style.top = `${(-st.baseline / 100_000 / SCRIPT).toFixed(3)}em`;
+      } else el.style.fontSize = `${(size * s).toFixed(2)}px`;
+    }
+    const main = e.runs.find(([, st]) => !st.baseline) ?? e.runs[0];
+    const mainStyle = main?.[1] ?? e.para.end;
+    const size = sized(mainStyle?.size ?? 18);
+    const px = size * s;
+    // The paragraph's own font makes the line's strut: give it the main run's, not the page default.
+    const family = mainStyle ? stackFor(mainStyle) : undefined;
+    if (family) e.p.style.fontFamily = family;
+    e.p.style.fontSize = `${px.toFixed(2)}px`;
+    if (!e.runs.length) {
+      // An empty paragraph is as tall as its end mark's font (pptx-preview draws a fixed 18 px space).
+      for (const span of Array.from(e.p.querySelectorAll('span')) as HTMLElement[]) {
+        span.style.fontSize = `${px.toFixed(2)}px`;
+        if (family) span.style.fontFamily = family;
       }
-      if (para.lnSpcPt !== undefined) p.style.lineHeight = `${(para.lnSpcPt * s).toFixed(2)}px`;
-      else if (para.lnSpcPct !== undefined) {
-        // The paragraph's main run sets the font the percentage applies to.
-        p.style.lineHeight = ((para.lnSpcPct / 100_000) * naturalRatio(main)).toFixed(4);
+    }
+    // Space before the first paragraph and after the last one is not drawn.
+    const len = (sp: { pt: number } | { em: number }) =>
+      'pt' in sp ? sp.pt * s : sp.em * (mainStyle?.size ?? 18) * s;
+    e.block.style.margin = '0';
+    e.block.style.padding = '0';
+    if (!e.first && e.para.spcBef)
+      e.block.style.paddingTop = `${(len(e.para.spcBef) * spacing).toFixed(2)}px`;
+    if (!e.last && e.para.spcAft)
+      e.block.style.paddingBottom = `${(len(e.para.spcAft) * spacing).toFixed(2)}px`;
+    const natural = SINGLE * px;
+    if (e.para.lnSpcPt !== undefined) {
+      const h = e.para.lnSpcPt * s;
+      e.p.style.lineHeight = `${h.toFixed(2)}px`;
+      return px + (h - natural);
+    }
+    const pct = (e.para.lnSpcPct ?? 100_000) / 100_000;
+    // A text box's shrink to fit scales the spacing of lines that are not single spaced.
+    const factor = pct === 1 ? 1 : pct * spacing;
+    e.p.style.lineHeight = (SINGLE * factor).toFixed(4);
+    const h = natural * factor;
+    return factor < 1 ? Math.min(px, 0.8 * h) : px + (h - natural);
+  };
+
+  /** Move each paragraph so its first baseline is where LibreOffice puts it (reads layout once each). */
+  const placeBaselines = (items: [Entry, number][]) => {
+    const shifts: [HTMLElement, number][] = [];
+    for (const [e] of items) {
+      e.p.style.position = 'relative';
+      e.p.style.top = '0px';
+    }
+    for (const [e, target] of items) {
+      const probe = document.createElement('span');
+      probe.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline';
+      e.p.insertBefore(probe, e.p.firstChild);
+      const pr = e.p.getBoundingClientRect();
+      const ratio = e.p.offsetHeight > 0 ? pr.height / e.p.offsetHeight : 1;
+      const at = (probe.getBoundingClientRect().bottom - pr.top) / (ratio || 1);
+      probe.remove();
+      if (Number.isFinite(at)) shifts.push([e.p, target - at]);
+    }
+    for (const [p, dy] of shifts) p.style.top = `${dy.toFixed(2)}px`;
+  };
+
+  const placed: [Entry, number][] = [];
+  for (const [box, { body, entries }] of boxes) {
+    const s = scale(box);
+    const [l, t, r, b] = body.insets.map((v) => `${(v * s).toFixed(2)}px`);
+    box.style.padding = `${t} ${r} ${b} ${l}`;
+    // The text wrapper is positioned inside the shape's box: put it where the anchor says (pptx-preview
+    // centres text whose anchor it does not find, and a box that grows to fit keeps a stale height).
+    if (body.anchor === 't') {
+      box.style.top = '0px';
+      box.style.bottom = '';
+      box.style.transform = 'none';
+    } else if (body.anchor === 'b') {
+      box.style.top = 'auto';
+      box.style.bottom = '0px';
+      box.style.transform = 'none';
+    } else {
+      box.style.top = '50%';
+      box.style.bottom = '';
+      box.style.transform = 'translateY(-50%)';
+    }
+    const fontScale = body.autofit?.fontScale ?? 1;
+    const spacing = 1 - (body.autofit?.lnSpcReduction ?? 0);
+    for (const e of entries) placed.push([e, layoutPara(e, fontScale, spacing, !!body.autofit)]);
+  }
+  for (const e of loose) placed.push([e, layoutPara(e, 1, 1, false)]);
+  placeBaselines(placed);
+
+  // Pictures in an ellipse or a rounded rectangle. pptx-preview puts each slide's shapes straight into its
+  // slide wrapper, a picture as a positioned box holding a cropping box, at whole points: find it there.
+  if (args.fixes && args.pictures.length) {
+    const wrappers = Array.from(root.querySelectorAll('.pptx-preview-slide-wrapper'));
+    for (const pic of args.pictures) {
+      const slide = wrappers[pic.slide]?.querySelector('.slide-wrapper');
+      if (!slide) continue;
+      const near = (v: string, want: number) => Math.abs(Number.parseFloat(v) - Math.round(want)) <= 1;
+      for (const outer of Array.from(slide.children) as HTMLElement[]) {
+        const inner = outer.firstElementChild as HTMLElement | null;
+        if (!inner?.querySelector('img') || !near(outer.style.left, pic.x) || !near(outer.style.top, pic.y))
+          continue;
+        if (!near(inner.style.width, pic.w) || !near(inner.style.height, pic.h)) continue;
+        const s = scale(inner);
+        inner.style.clipPath =
+          pic.shape === 'ellipse'
+            ? 'ellipse(50% 50% at 50% 50%)'
+            : `inset(0 round ${((pic.radius ?? 0) * s).toFixed(2)}px)`;
+        break;
       }
     }
   }
