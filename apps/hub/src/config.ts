@@ -45,6 +45,11 @@ export type HubConfig = {
   importers?: unknown;
   /** Tool timeouts (ms). */
   timeouts: { probe: number; transcode: number; soffice: number; pdf: number; light: number };
+  /**
+   * Headless Chromium for the pptx-preview PowerPoint renderer (ORDO_CHROMIUM, default `chromium` on the
+   * PATH). `sandbox` keeps Chromium's sandbox (ORDO_CHROMIUM_SANDBOX=1); containers usually cannot.
+   */
+  chromium: { path: string; sandbox: boolean };
   /** Number of concurrent heavy and light jobs. */
   jobs: { heavy: number; light: number };
 };
@@ -88,6 +93,7 @@ export function loadConfig(
     healthIntervalMs: 1000,
     timeouts: { probe: 30_000, transcode: 4 * 3600_000, soffice: 180_000, pdf: 300_000, light: 600_000 },
     jobs: { heavy: 1, light: 2 },
+    chromium: { path: env.ORDO_CHROMIUM || 'chromium', sandbox: env.ORDO_CHROMIUM_SANDBOX === '1' },
     ...overrides,
   };
 }

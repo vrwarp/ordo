@@ -107,7 +107,8 @@ collect `a:t` runs per paragraph and the `a:xfrm` offset and extent (EMU; 914400
 inch; slide size from `ppt/presentation.xml` `p:sldSz`) scaled to the 1920x1080 logical
 canvas. Font size from `a:rPr sz` (hundredths of a point) scaled by the slide's height
 ratio. Result is stored as `Slide.imported.textBoxes` and used by the editor's "make
-editable" command. `PptxGenJS` is not used (it writes PPTX only).
+editable" command. `PptxGenJS` writes PPTX only: it is used for test decks (the fidelity corpus, the
+render tests), never for import.
 
 Before LibreOffice converts a PPTX, `pptxForRendering` removes the outline (`<a:ln>` in a
 run's properties) from filled text in slides, layouts and masters. LibreOffice cannot draw a
@@ -116,6 +117,55 @@ shadow read as broken text (white outlined headlines, common in sermon decks). T
 shadow stay; text meant to be hollow (`<a:noFill/>`) keeps its outline. The job log counts
 the runs changed. Fonts the deck uses must be installed on the hub, or LibreOffice
 substitutes them.
+
+### Two renderers: LibreOffice and pptx-preview
+
+The import screen asks what draws a PowerPoint's slides: LibreOffice (the default) or pptx-preview
+(experimental). The choice is a form field on `POST /import/document` (`renderer`), stays in the job payload
+and is recorded on the presentation (`source.renderer`).
+
+pptx-preview is an npm library that draws a deck as HTML in a browser. Its npm package is free to use,
+commercial use included, but it ships minified, and its author's terms forbid publishing modified source,
+so ordo does not fork it. Its rendering is corrected from the outside instead, in `packages/pptx-render`,
+which ordo owns and can keep fixing:
+
+- **Repair before drawing** (`annotate.ts`). Package defects that stop pptx-preview are mended in a copy of
+  the deck: content-type entries for parts that do not exist (pptxgenjs writes one slide master per slide,
+  and pptx-preview then draws nothing) are dropped.
+- **Run markers.** Every text run's `<a:t>` gets an invisible marker (U+2064 and eight base-4 digits from
+  U+2060..U+2063: zero-width format characters, no line breaks) carrying an id into a side table of what
+  ordo computed for that run from the XML, with PowerPoint's inheritance: run, paragraph, shape list style,
+  layout placeholder, master placeholder, master text styles (title, body, other), presentation defaults,
+  theme fonts (`+mj-lt`, `+mn-ea`…), theme effect styles and the master's colour map.
+- **Restyle after drawing** (`page.ts`, run inside the page). The markers are found in the DOM, removed, and
+  the run's element restyled: the Latin and East Asian typefaces (pptx-preview takes the East Asian one for
+  Latin text, or none), each followed by the family fontconfig substitutes when it is not installed (what
+  LibreOffice does; Chromium would otherwise fall back to its serif default); superscripts and subscripts
+  (`baseline`, which pptx-preview ignores); and the shadow of an unfilled shape, or of the run, on its
+  glyphs. Paragraph and text-box corrections can reach the run's ancestors the same way.
+- **Drawing** (`chromium.ts`). The hub starts headless Chromium (`ORDO_CHROMIUM`) and drives it over the
+  DevTools protocol on a pipe (no Playwright or Puppeteer at run time): a harness page beside the deck loads
+  the unmodified pptx-preview bundle, draws every slide at 1920x1080, and each slide is captured on its own.
+  Every network request is refused (`--host-resolver-rules`), so a deck's linked pictures fetch nothing.
+  Chromium runs without its sandbox unless `ORDO_CHROMIUM_SANDBOX=1`: containers lack the user namespaces
+  it needs. The page is ordo's own and the deck is data, as it is for LibreOffice, which has no sandbox.
+- **Fallback.** If pptx-preview cannot run (no browser, a crash, a timeout), the job says why in its log and
+  draws the deck with LibreOffice instead; the presentation then records `libreoffice`.
+
+The text extraction for "make editable" runs whichever renderer draws the pictures.
+
+### Fidelity
+
+`tools/pptx-fidelity` draws decks with both renderers and scores pptx-preview against LibreOffice slide by
+slide (SSIM of greyscale pictures at 960x540, computed by ffmpeg; 1 is identical). LibreOffice is the ground
+truth for now; PowerPoint's own PDF exports would be better and can replace it. `--corpus` adds synthetic
+decks written with pptxgenjs, one feature per slide (`src/corpus.ts`); real decks are passed as paths and
+never committed. `--raw` also draws with pptx-preview unmodified, to show what ordo's corrections are worth.
+It writes `summary.json` and an HTML report with the pictures side by side, worst slides first.
+
+```
+pnpm --filter @ordo/pptx-fidelity start -- --corpus --raw --out tmp/pptx-fidelity ~/decks/*.pptx
+```
 
 ## Google Fonts
 

@@ -13,6 +13,7 @@ import {
   newId,
   type Output,
   Playlist,
+  PptxRenderer,
   Presentation,
   Theme,
 } from '@ordo/domain';
@@ -735,9 +736,15 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   });
   route('POST', '/import/document', 'edit', async (req, reply) => {
     assertNotLive();
-    const { files } = await readMultipart(hub, req, { maxFiles: 1, limit: 1024 ** 3 });
+    const { files, fields } = await readMultipart(hub, req, { maxFiles: 1, limit: 1024 ** 3 });
     const f = files[0];
     if (!f) throw badRequest('No document');
+    // What draws a PowerPoint's slides (an optional form field; LibreOffice unless pptx-preview is asked).
+    const renderer = PptxRenderer.safeParse(fields.renderer ?? 'libreoffice');
+    if (!renderer.success) {
+      await rm(f.path, { force: true });
+      throw badRequest('renderer must be libreoffice or pptx-preview');
+    }
     const s = sniff(await readHead(f.path));
     const ext = extOf(f.filename);
     let kind: 'pdf' | 'pptx';
@@ -753,7 +760,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
       hash: f.hash,
       bytes: f.bytes,
     });
-    return reply.code(202).send(hub.imports.queueDocument(ref.hash, f.filename, kind));
+    return reply.code(202).send(hub.imports.queueDocument(ref.hash, f.filename, kind, renderer.data));
   });
 
   // ---------------- jobs ----------------

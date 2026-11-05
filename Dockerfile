@@ -29,7 +29,7 @@ ARG VERSION=dev
 LABEL org.opencontainers.image.title="ordo-hub" org.opencontainers.image.version=$VERSION
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ffmpeg poppler-utils libreoffice-impress fonts-dejavu fonts-liberation2 tini ca-certificates \
+      ffmpeg poppler-utils libreoffice-impress chromium fonts-dejavu fonts-liberation2 tini ca-certificates \
  && rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/*
 WORKDIR /app
 COPY --from=build --chown=node:node /out/hub/node_modules /app/apps/hub/node_modules
@@ -44,7 +44,8 @@ ENV NODE_ENV=production \
     ORDO_APPS_DIR=/app/apps \
     ORDO_PORT=8080 \
     ORDO_HOST=0.0.0.0 \
-    ORDO_IMPORT_ROOTS=/data/import:/import
+    ORDO_IMPORT_ROOTS=/data/import:/import \
+    ORDO_CHROMIUM=/usr/bin/chromium
 USER node
 VOLUME ["/data"]
 EXPOSE 8080

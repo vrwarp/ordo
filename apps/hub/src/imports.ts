@@ -8,6 +8,7 @@ import {
   type ExtractedText,
   type ImageObject,
   newId,
+  type PptxRenderer,
   parseLyrics,
   type Playlist,
   type Presentation,
@@ -18,6 +19,7 @@ import {
 } from '@ordo/domain';
 import * as realImporters from '@ordo/importers';
 import type { Pro7ImportOptions, Pro7PresRef } from '@ordo/importers';
+import { renderWithPptxPreview } from '@ordo/pptx-render';
 import { extractZip, ZIP_MAX_IN_MEMORY_BYTES } from '@ordo/importers/zip-stream.ts';
 import type { Logger } from 'pino';
 import type { HubConfig } from './config.ts';
@@ -80,7 +82,14 @@ export type Pro7Progress = {
   playlists: Record<string, string>;
 };
 export type Pro7Payload = { upload?: string; path?: string; name?: string; done?: Pro7Progress };
-export type DocPayload = { hash: string; name: string; ext: 'pdf' | 'pptx'; done?: Record<number, string> };
+export type DocPayload = {
+  hash: string;
+  name: string;
+  ext: 'pdf' | 'pptx';
+  /** What draws a PowerPoint's slides (default LibreOffice). */
+  renderer?: PptxRenderer;
+  done?: Record<number, string>;
+};
 
 /** Files the importer sees: documents in memory, media as empty placeholders backed by `onDisk`. */
 type ImportFiles = { files: Map<string, Uint8Array>; onDisk: Map<string, string> };
@@ -417,12 +426,20 @@ export class ImportService {
   }
 
   // ---- PPTX / PDF ----
-  queueDocument(hash: string, name: string, ext: 'pdf' | 'pptx') {
-    return this.jobs.enqueue('document', { hash, name, ext } satisfies DocPayload, 'heavy');
+  queueDocument(hash: string, name: string, ext: 'pdf' | 'pptx', renderer: PptxRenderer = 'libreoffice') {
+    const payload: DocPayload = {
+      hash,
+      name,
+      ext,
+      ...(ext === 'pptx' && renderer !== 'libreoffice' ? { renderer } : {}),
+    };
+    return this.jobs.enqueue('document', payload, 'heavy');
   }
 
   private async documentJob(ctx: JobCtx<DocPayload>): Promise<{ presentationId: string; pages: number }> {
     const { hash, name, ext } = ctx.payload;
+    let renderer: PptxRenderer | undefined =
+      ext === 'pptx' ? (ctx.payload.renderer ?? 'libreoffice') : undefined;
     // Page images already stored by an earlier attempt of this job (crash or restart) are reused.
     const done: Record<number, string> = { ...(ctx.payload.done ?? {}) };
     if (Object.keys(done).length) ctx.log(`resuming: ${Object.keys(done).length} page(s) already stored`);
@@ -433,6 +450,7 @@ export class ImportService {
     try {
       let pdf = this.store.abs(file.path);
       let text: PptxText | undefined;
+      let pages: string[] | undefined;
       if (ext === 'pptx') {
         const input = join(dir, 'slides.pptx');
         await copyFile(pdf, input);
@@ -444,7 +462,28 @@ export class ImportService {
             ctx.log(`[warn] text extraction failed: ${errorMessage(e)}`);
           }
         } else ctx.log('[warn] PPTX text extraction is not available');
-        if (this.imp.pptxForRendering) {
+        if (renderer === 'pptx-preview') {
+          ctx.log('rendering with pptx-preview');
+          try {
+            const work = join(dir, 'pptx-preview');
+            const r = await renderWithPptxPreview(input, work, {
+              chromium: this.cfg.chromium.path,
+              sandbox: this.cfg.chromium.sandbox,
+              timeoutMs: t.soffice,
+              signal: ctx.signal,
+            });
+            for (const n of r.notes.slice(0, 20)) ctx.log(`[warn] pptx-preview: ${n}`);
+            ctx.log(`${r.pages.length} slide(s) drawn, ${r.styled} text run(s) corrected`);
+            pages = r.pages;
+          } catch (e) {
+            if (ctx.signal.aborted) throw e;
+            // A church needs its slides more than it needs this renderer: draw them the usual way.
+            ctx.log(`[warn] pptx-preview failed (${errorMessage(e)}); rendering with LibreOffice instead`);
+            renderer = 'libreoffice';
+          }
+          ctx.progress(0.3);
+        }
+        if (!pages && this.imp.pptxForRendering) {
           try {
             const r = await this.imp.pptxForRendering(await readFile(input));
             if (r.outlines) {
@@ -457,15 +496,19 @@ export class ImportService {
             ctx.log(`[warn] could not prepare the slides for LibreOffice: ${errorMessage(e)}`);
           }
         }
-        ctx.log('converting with LibreOffice');
-        pdf = await pptxToPdf(input, dir, { timeoutMs: t.soffice, signal: ctx.signal });
-        ctx.progress(0.3);
+        if (!pages) {
+          ctx.log('converting with LibreOffice');
+          pdf = await pptxToPdf(input, dir, { timeoutMs: t.soffice, signal: ctx.signal });
+          ctx.progress(0.3);
+        }
       }
-      ctx.log('rendering pages');
-      const pagesDir = join(dir, 'pages');
-      const { mkdir } = await import('node:fs/promises');
-      await mkdir(pagesDir);
-      const pages = await pdfToPngs(pdf, pagesDir, { timeoutMs: t.pdf, signal: ctx.signal });
+      if (!pages) {
+        ctx.log('rendering pages');
+        const pagesDir = join(dir, 'pages');
+        const { mkdir } = await import('node:fs/promises');
+        await mkdir(pagesDir);
+        pages = await pdfToPngs(pdf, pagesDir, { timeoutMs: t.pdf, signal: ctx.signal });
+      }
       if (!pages.length) throw new Error('The document has no pages');
       ctx.log(`${pages.length} page(s)`);
       const title = baseName(name);
@@ -507,14 +550,15 @@ export class ImportService {
         meta: { tags: [] },
         sections: [{ id: sectionId, label: 'Slides', short: 'S', slides }],
         arrangements: [{ id: newId(), name: 'Default', sectionIds: [sectionId] }],
-        source: { kind: ext, fileId: hash },
+        source: { kind: ext, fileId: hash, ...(renderer ? { renderer } : {}) },
         archived: false,
       };
       const saved = this.lib.savePresentation(pres, { create: true, by: `${ext}-import` });
       this.lib.emit([{ kind: 'presentation', id: saved.id, rev: saved.rev, entity: saved }]);
       return { presentationId: saved.id, pages: pages.length };
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      // Retries: a renderer's helper processes can still be letting go of files for a moment.
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
   }
 

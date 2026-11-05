@@ -2,6 +2,7 @@ packages:
   - apps/*
   - packages/*
   - tools/soak
+  - tools/pptx-fidelity
 onlyBuiltDependencies:
   - better-sqlite3
   - esbuild

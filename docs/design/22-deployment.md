@@ -87,10 +87,12 @@ one that can grow (imports, LibreOffice), and if the kernel kills it the live se
 
 Multi-stage Dockerfile: `node:22-bookworm-slim` build stage running `pnpm install
 --frozen-lockfile` and `pnpm build`; runtime stage adds `ffmpeg`, `poppler-utils`,
-`libreoffice-impress` (no GUI packages), `fonts-dejavu`, and copies `apps/hub/dist` and
+`libreoffice-impress` (no GUI packages), `chromium` (headless, for the pptx-preview PowerPoint
+renderer; `ORDO_CHROMIUM=/usr/bin/chromium`), `fonts-dejavu`, and copies `apps/hub/dist` and
 the built browser apps. Runs as a non-root user under tini, entrypoint the supervisor. Health check
 `GET /api/v1/health` (answered by the live process; it reports the library process state too).
-Image size target under 1.5 GB (LibreOffice dominates).
+Image size target under 1.5 GB (LibreOffice dominates; Chromium adds about 250 MB). The pull-request
+smoke test starts both renderers inside the image.
 
 ## CI and release
 

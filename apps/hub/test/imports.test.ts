@@ -1,10 +1,11 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdirSync, writeFileSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { newId, type Playlist, type Presentation, type TextObject } from '@ordo/domain';
 import { readZip, remapMediaIds } from '@ordo/importers';
 import type { Job } from '@ordo/protocol';
 import JSZip from 'jszip';
+import pptxgen from 'pptxgenjs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Importers, Pro7Result } from '../src/imports.ts';
 import { fixtures } from './fixtures.ts';
@@ -53,6 +54,8 @@ beforeAll(async () => {
   const dir = tempDir();
   hub = await startHub({
     dataDir: dir,
+    // No browser here: a pptx-preview import must fall back to LibreOffice.
+    chromium: { path: join(dir, 'no-such-chromium'), sandbox: false },
     importers: {
       importPro7: fakePro7,
       remapMediaIds,
@@ -233,6 +236,98 @@ describe('documents', () => {
     expect(p.source?.kind).toBe('pptx');
     const slides = p.sections[0]!.slides;
     expect(slides.length).toBe(2);
+    expect(slides[0]!.imported?.textBoxes?.[0]?.text).toBe('Welcome to church');
+  }, 120_000);
+});
+
+/** A two-slide deck written by pptxgenjs (which also exercises the content-type repair). */
+async function pptxgenDeck(dir: string): Promise<string> {
+  const p = new pptxgen();
+  p.layout = 'LAYOUT_16x9';
+  p.addSlide().addText('Welcome to church', { x: 1, y: 1, w: 8, h: 1, fontSize: 40, fontFace: 'Tahoma' });
+  p.addSlide().addText(
+    [{ text: '18', options: { superscript: true } }, { text: ' For God so loved the world' }],
+    {
+      x: 1,
+      y: 1,
+      w: 8,
+      h: 1,
+      fontSize: 32,
+    },
+  );
+  const out = join(dir, 'pptxgen.pptx');
+  writeFileSync(out, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
+  return out;
+}
+
+async function importDeck(c: Client, file: string, renderer?: string): Promise<Job> {
+  const fd = new FormData();
+  if (renderer) fd.append('renderer', renderer);
+  fd.append('file', new Blob([readFileSync(file)]), 'Sermon.pptx');
+  return c.json<Job>('/import/document', { method: 'POST', body: fd });
+}
+
+describe('PowerPoint renderers', () => {
+  it('refuses an unknown renderer', async () => {
+    const fd = new FormData();
+    fd.append('renderer', 'keynote');
+    fd.append('file', new Blob([readFileSync(await pptxgenDeck(tempDir()))]), 'x.pptx');
+    expect((await ed.fetch('/import/document', { method: 'POST', body: fd })).status).toBe(400);
+  });
+
+  it('falls back to LibreOffice when pptx-preview cannot run, and says so', async () => {
+    const job = await importDeck(ed, await pptxgenDeck(tempDir()), 'pptx-preview');
+    await hub.jobs.idle();
+    const done = await ed.json<Job>(`/jobs/${job.id}`);
+    expect(done.error).toBeUndefined();
+    expect(done.state).toBe('done');
+    expect(done.log.join('\n')).toMatch(
+      /pptx-preview failed \(Chromium not found.*\); rendering with LibreOffice instead/,
+    );
+    const p = await ed.json<Presentation>(
+      `/presentations/${(done.result as { presentationId: string }).presentationId}`,
+    );
+    expect(p.source).toMatchObject({ kind: 'pptx', renderer: 'libreoffice' });
+    expect(p.sections[0]!.slides).toHaveLength(2);
+  }, 120_000);
+});
+
+async function findChromium(): Promise<string | undefined> {
+  if (process.env.ORDO_TEST_CHROMIUM) return process.env.ORDO_TEST_CHROMIUM;
+  try {
+    const exe = (await import('@playwright/test')).chromium.executablePath();
+    return existsSync(exe) ? exe : undefined;
+  } catch {
+    return undefined;
+  }
+}
+const chromiumExe = await findChromium();
+
+describe.skipIf(!chromiumExe)('pptx-preview import (headless Chromium)', () => {
+  let h2: TestHub;
+  let c2: Client;
+  beforeAll(async () => {
+    h2 = await startHub({ dataDir: tempDir(), chromium: { path: chromiumExe!, sandbox: false } });
+    c2 = await login(h2.url, EDIT_PIN);
+  });
+  afterAll(() => h2.cleanup());
+
+  it('draws each slide with pptx-preview into a 1920x1080 picture and records the renderer', async () => {
+    const job = await importDeck(c2, await pptxgenDeck(tempDir()), 'pptx-preview');
+    await h2.jobs.idle();
+    const done = await c2.json<Job>(`/jobs/${job.id}`);
+    expect(done.error).toBeUndefined();
+    expect(done.state).toBe('done');
+    expect(done.log.join('\n')).toMatch(/2 slide\(s\) drawn, \d+ text run\(s\) corrected/);
+    const p = await c2.json<Presentation>(
+      `/presentations/${(done.result as { presentationId: string }).presentationId}`,
+    );
+    expect(p.source).toMatchObject({ kind: 'pptx', renderer: 'pptx-preview' });
+    const slides = p.sections[0]!.slides;
+    expect(slides).toHaveLength(2);
+    const img = h2.lib.media.must(slides[0]!.imported!.imageMediaId);
+    expect(img).toMatchObject({ kind: 'image', state: 'ready', width: 1920, height: 1080 });
+    // The text is still extracted for "make editable", whichever renderer drew the picture.
     expect(slides[0]!.imported?.textBoxes?.[0]?.text).toBe('Welcome to church');
   }, 120_000);
 });

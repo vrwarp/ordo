@@ -168,6 +168,10 @@ export type Transition = z.infer<typeof Transition>;
 export const PresentationKind = z.enum(['song', 'slides', 'loop']);
 export type PresentationKind = z.infer<typeof PresentationKind>;
 
+/** What draws a PowerPoint's slides into pictures on import (design/20 "PPTX and PDF"). */
+export const PptxRenderer = z.enum(['libreoffice', 'pptx-preview']);
+export type PptxRenderer = z.infer<typeof PptxRenderer>;
+
 export const Presentation = z.object({
   id: Id,
   rev: z.number().int().min(0).default(1),
@@ -195,6 +199,8 @@ export const Presentation = z.object({
     .object({
       kind: z.enum(['pro7', 'songselect', 'pptx', 'pdf', 'manual', 'paste']),
       fileId: Id.optional(),
+      /** What drew a PowerPoint's slide pictures (design/20 "PPTX and PDF"). */
+      renderer: PptxRenderer.optional(),
       log: z.string().max(MAX.long).optional(),
     })
     .optional(),

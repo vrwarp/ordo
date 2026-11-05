@@ -1,5 +1,5 @@
 import { api, upload } from '@ordo/client';
-import type { Presentation } from '@ordo/domain';
+import type { PptxRenderer, Presentation } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import { useEffect, useState } from 'react';
 import { jobResultPresentationId, useJob } from '../../services/jobs.ts';
@@ -45,8 +45,20 @@ export function JobCard({ id, title }: { id: string; title: string }) {
 type Started = { id: string; title: string };
 
 /** ProPresenter 7, SongSelect and PPTX/PDF imports with job progress and logs (prd/05, design/20). */
+/** The PowerPoint renderer this device last chose (a convenience; the hub defaults to LibreOffice). */
+const RENDERER_KEY = 'ordo.pptxRenderer';
+
+function storedRenderer(): PptxRenderer {
+  try {
+    return localStorage.getItem(RENDERER_KEY) === 'pptx-preview' ? 'pptx-preview' : 'libreoffice';
+  } catch {
+    return 'libreoffice';
+  }
+}
+
 export function ImportTab() {
   const [jobs, setJobs] = useState<Started[]>([]);
+  const [renderer, setRenderer] = useState<PptxRenderer>(storedRenderer);
   const [recent, setRecent] = useState<Job[]>([]);
   const [nasPath, setNasPath] = useState('');
   const [pasted, setPasted] = useState('');
@@ -117,6 +129,7 @@ export function ImportTab() {
   const documents = async (files: File[]) => {
     for (const f of files) {
       const fd = new FormData();
+      if (/\.pptx$/i.test(f.name)) fd.append('renderer', renderer);
       fd.append('file', f, f.name);
       try {
         setProgress(0);
@@ -190,6 +203,25 @@ export function ImportTab() {
               Each page becomes an image slide at 1920×1080. PowerPoint slides can later be made editable in
               the editor (text boxes are approximate; fonts may differ).
             </span>
+            <label className="row small" style={{ gap: 8 }}>
+              PowerPoint drawn by
+              <select
+                data-pptx-renderer
+                value={renderer}
+                onChange={(e) => {
+                  const v = e.target.value as PptxRenderer;
+                  setRenderer(v);
+                  try {
+                    localStorage.setItem(RENDERER_KEY, v);
+                  } catch {
+                    /* storage unavailable: the choice lasts this visit */
+                  }
+                }}
+              >
+                <option value="libreoffice">LibreOffice</option>
+                <option value="pptx-preview">pptx-preview (experimental)</option>
+              </select>
+            </label>
             <DropZone
               accept=".pptx,.pdf"
               touchAccept=".pptx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation"

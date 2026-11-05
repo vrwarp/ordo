@@ -1,0 +1,246 @@
+/**
+ * PowerPoint fidelity: draw decks with LibreOffice (the ground truth for now) and with pptx-preview (with
+ * and without ordo's corrections), score every slide against LibreOffice, and write a report.
+ *
+ *   pnpm --filter @ordo/pptx-fidelity start -- [--corpus] [--out DIR] [--chromium PATH] [--raw]
+ *        [--fresh-lo] [--baseline summary.json] [deck.pptx | dir]...
+ *
+ * --corpus      include the synthetic decks (src/corpus.ts)
+ * --raw         also draw with pptx-preview unmodified, to show what the corrections are worth
+ * --fresh-lo    redraw the LibreOffice pictures even when they exist (they are the slow part)
+ * --baseline    compare with an earlier summary.json and print the change per deck
+ *
+ * Real decks stay outside the repository: pass their paths. The score is SSIM of greyscale pictures at
+ * 960x540 (1 = identical), computed by ffmpeg.
+ */
+import { existsSync } from 'node:fs';
+import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, join, relative, resolve } from 'node:path';
+import { pptxForRendering } from '@ordo/importers';
+import { renderWithPptxPreview } from '@ordo/pptx-render';
+import { pdfToPngs, pptxToPdf } from '../../../apps/hub/src/media/ffmpeg.ts';
+import { run } from '../../../apps/hub/src/media/tools.ts';
+import { buildCorpus } from './corpus.ts';
+import { type DeckScore, writeReport } from './report.ts';
+
+type Args = {
+  out: string;
+  corpus: boolean;
+  raw: boolean;
+  freshLo: boolean;
+  chromium?: string;
+  baseline?: string;
+  decks: string[];
+};
+
+function parseArgs(argv: string[]): Args {
+  const a: Args = { out: 'tmp/pptx-fidelity', corpus: false, raw: false, freshLo: false, decks: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const v = argv[i]!;
+    if (v === '--out') a.out = argv[++i]!;
+    else if (v === '--corpus') a.corpus = true;
+    else if (v === '--raw') a.raw = true;
+    else if (v === '--fresh-lo') a.freshLo = true;
+    else if (v === '--chromium') a.chromium = argv[++i];
+    else if (v === '--baseline') a.baseline = argv[++i];
+    else if (v === '--') continue;
+    else if (v.startsWith('--')) throw new Error(`unknown option ${v}`);
+    else a.decks.push(v);
+  }
+  return a;
+}
+
+async function findChromium(given?: string): Promise<string> {
+  if (given) return given;
+  if (process.env.ORDO_CHROMIUM) return process.env.ORDO_CHROMIUM;
+  try {
+    const exe = (await import('@playwright/test')).chromium.executablePath();
+    if (existsSync(exe)) return exe;
+  } catch {
+    /* not installed */
+  }
+  return 'chromium';
+}
+
+async function decksIn(paths: string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const p of paths) {
+    const st = await stat(p);
+    if (st.isDirectory()) {
+      for (const f of (await readdir(p)).sort()) if (/\.pptx$/i.test(f)) out.push(join(p, f));
+    } else out.push(p);
+  }
+  return out;
+}
+
+async function pngsIn(dir: string): Promise<string[]> {
+  if (!existsSync(dir)) return [];
+  return (await readdir(dir))
+    .filter((f) => /^slide-\d+\.png$/.test(f))
+    .sort()
+    .map((f) => join(dir, f));
+}
+
+/** LibreOffice, as the hub draws a deck: outline repair, PDF export, 144 dpi pages. */
+async function drawWithLibreOffice(deck: string, outDir: string): Promise<string[]> {
+  const work = join(outDir, '.work');
+  await rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  await mkdir(work, { recursive: true });
+  const input = join(work, 'slides.pptx');
+  const prepared = await pptxForRendering(new Uint8Array(await readFile(deck)));
+  await writeFile(input, prepared.bytes);
+  const pdf = await pptxToPdf(input, work, { timeoutMs: 300_000 });
+  const pages = await pdfToPngs(pdf, work, { timeoutMs: 300_000 });
+  const out: string[] = [];
+  for (let i = 0; i < pages.length; i++) {
+    const f = join(outDir, `slide-${String(i + 1).padStart(4, '0')}.png`);
+    await rename(pages[i]!, f);
+    out.push(f);
+  }
+  await rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  return out;
+}
+
+async function drawWithPptxPreview(
+  deck: string,
+  outDir: string,
+  chromium: string,
+  fixes: boolean,
+): Promise<{ pages: string[]; styled: number; notes: string[] }> {
+  const work = join(outDir, '.work');
+  await rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  try {
+    const r = await renderWithPptxPreview(deck, work, { chromium, timeoutMs: 300_000, fixes });
+    const out: string[] = [];
+    for (let i = 0; i < r.pages.length; i++) {
+      const f = join(outDir, `slide-${String(i + 1).padStart(4, '0')}.png`);
+      await copyFile(r.pages[i]!, f);
+      out.push(f);
+    }
+    return { pages: out, styled: r.styled, notes: r.notes };
+  } catch (e) {
+    return { pages: [], styled: 0, notes: [`failed: ${(e as Error).message}`] };
+  } finally {
+    await rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+}
+
+/** SSIM of two pictures in greyscale at 960x540 (ffmpeg). */
+async function ssim(a: string, b: string): Promise<number> {
+  const r = await run(
+    'ffmpeg',
+    [
+      '-hide_banner',
+      '-nostats',
+      '-i',
+      a,
+      '-i',
+      b,
+      '-lavfi',
+      '[0:v]scale=960:540:flags=area,format=gray[a];[1:v]scale=960:540:flags=area,format=gray[b];[a][b]ssim',
+      '-f',
+      'null',
+      '-',
+    ],
+    { timeoutMs: 60_000 },
+  );
+  const m = /All:([0-9.]+)/.exec(r.stderr);
+  return m ? Number(m[1]) : 0;
+}
+
+async function scoreAll(lo: string[], other: string[]): Promise<number[]> {
+  const out: number[] = [];
+  for (let i = 0; i < lo.length; i++) out.push(other[i] ? await ssim(lo[i]!, other[i]!) : 0);
+  return out;
+}
+
+const mean = (xs: number[]) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0);
+
+async function main(): Promise<void> {
+  const a = parseArgs(process.argv.slice(2));
+  const out = resolve(a.out);
+  await mkdir(out, { recursive: true });
+  const chromium = await findChromium(a.chromium);
+  const decks = await decksIn(a.decks);
+  if (a.corpus) decks.unshift(...(await buildCorpus(join(out, 'corpus'))));
+  if (!decks.length) throw new Error('no decks: pass .pptx files or folders, or --corpus');
+
+  const scores: DeckScore[] = [];
+  for (const deck of decks) {
+    const name = basename(deck)
+      .replace(/\.pptx$/i, '')
+      .replace(/[^\w.-]+/g, '_');
+    const dir = join(out, name);
+    const loDir = join(dir, 'libreoffice');
+    let lo = await pngsIn(loDir);
+    if (!lo.length || a.freshLo) {
+      await rm(loDir, { recursive: true, force: true });
+      await mkdir(loDir, { recursive: true });
+      lo = await drawWithLibreOffice(deck, loDir);
+    }
+    const ppvDir = join(dir, 'pptx-preview');
+    await rm(ppvDir, { recursive: true, force: true });
+    await mkdir(ppvDir, { recursive: true });
+    const t0 = performance.now();
+    const ppv = await drawWithPptxPreview(deck, ppvDir, chromium, true);
+    const ms = performance.now() - t0;
+    let raw: { pages: string[]; notes: string[] } | undefined;
+    if (a.raw) {
+      const rawDir = join(dir, 'raw');
+      await rm(rawDir, { recursive: true, force: true });
+      await mkdir(rawDir, { recursive: true });
+      raw = await drawWithPptxPreview(deck, rawDir, chromium, false);
+    }
+    const fixed = await scoreAll(lo, ppv.pages);
+    const rawScores = raw ? await scoreAll(lo, raw.pages) : undefined;
+    const s: DeckScore = {
+      name,
+      slides: lo.length,
+      ppvSlides: ppv.pages.length,
+      ssim: mean(fixed),
+      ...(rawScores ? { rawSsim: mean(rawScores) } : {}),
+      ms: Math.round(ms),
+      styled: ppv.styled,
+      notes: ppv.notes,
+      perSlide: lo.map((f, i) => ({
+        n: i + 1,
+        ssim: fixed[i]!,
+        ...(rawScores ? { raw: rawScores[i]! } : {}),
+        libreoffice: relative(out, f),
+        ppv: ppv.pages[i] ? relative(out, ppv.pages[i]!) : undefined,
+        ...(raw?.pages[i] ? { rawPpv: relative(out, raw.pages[i]!) } : {}),
+      })),
+    };
+    scores.push(s);
+    const rawText = s.rawSsim !== undefined ? `  unmodified ${s.rawSsim.toFixed(3)}` : '';
+    console.log(
+      `${name.padEnd(40)} ${String(s.slides).padStart(3)} slides  ssim ${s.ssim.toFixed(3)}${rawText}  ${s.ms} ms`,
+    );
+  }
+  const summary = {
+    createdAt: new Date().toISOString(),
+    chromium,
+    mean: mean(scores.map((s) => s.ssim)),
+    decks: scores,
+  };
+  await writeFile(join(out, 'summary.json'), JSON.stringify(summary, null, 1));
+  await writeReport(join(out, 'report.html'), summary);
+  console.log(
+    `\nmean ssim ${summary.mean.toFixed(3)} over ${scores.length} deck(s); report: ${join(out, 'report.html')}`,
+  );
+  if (a.baseline) {
+    const base = JSON.parse(await readFile(a.baseline, 'utf8')) as { decks: DeckScore[] };
+    for (const s of scores) {
+      const b = base.decks.find((d) => d.name === s.name);
+      if (b)
+        console.log(
+          `${s.name.padEnd(40)} ${b.ssim.toFixed(3)} -> ${s.ssim.toFixed(3)} (${s.ssim >= b.ssim ? '+' : ''}${(s.ssim - b.ssim).toFixed(3)})`,
+        );
+    }
+  }
+}
+
+main().catch((e) => {
+  console.error(e instanceof Error ? e.message : e);
+  process.exit(1);
+});

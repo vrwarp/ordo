@@ -228,8 +228,9 @@ resumes them.
 | `pro7-import`     | `packages/importers` (protobuf decode) in a `worker_threads` worker, 500 documents per task so the worker's 512 MB heap bounds a task, not the library (the playlists are a last task against the index of every document decoded); zip uploads are streamed from disk, media entries spilled to `tmp/`, documents capped at 256 MB in memory | presentations, playlists, media uploads     |
 | `font-google`     | fetch the family's CSS from Google Fonts with a desktop UA, download referenced woff2 files, store as `Font` rows                                                                                                                                                                                                                             | fonts                                       |
 
-The Docker image includes `ffmpeg`, `poppler-utils` and LibreOffice (`libreoffice-impress`
-with a minimal font set plus the venue's uploaded fonts mounted so PPTX renders use them).
+The Docker image includes `ffmpeg`, `poppler-utils`, LibreOffice (`libreoffice-impress`
+with a minimal font set plus the venue's uploaded fonts mounted so PPTX renders use them) and headless
+Chromium for the pptx-preview PowerPoint renderer (design/20 "PPTX and PDF").
 
 Import jobs are resumable: `pro7-import` records every media id, presentation id and
 playlist id it wrote in its job payload and skips them when the job is re-queued after a
@@ -313,7 +314,8 @@ Design/25's table, as implemented in the hub:
 
 Environment variables: `ORDO_DOMAIN` (`<venue>.synology.me`), `ORDO_DATA=/data`,
 `ORDO_TRUSTED_PROXY` (DSM's address), `ORDO_TZ`, `ORDO_PORT=8080`,
-`ORDO_ALLOWED_HOSTS` (optional extra host names), `ORDO_CPU_WORKERS` (worker threads for
+`ORDO_ALLOWED_HOSTS` (optional extra host names), `ORDO_CHROMIUM` and `ORDO_CHROMIUM_SANDBOX`
+(the pptx-preview renderer's browser), `ORDO_CPU_WORKERS` (worker threads for
 CPU-heavy parsing, 1 to 8, default 1), `ORDO_SINGLE_PROCESS=1` (one process instead of the
 supervisor and its two children; development and diagnosis), `ORDO_LOG_LEVEL`, and for
 development and tests only `ORDO_DEV_PIN` and `ORDO_APPS_DIR`. The supervisor sets

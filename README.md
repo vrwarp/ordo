@@ -34,7 +34,8 @@ path and the zero-dropped-frame target still need verification on the venue PC (
 
 ## Development
 
-Requires Node 22, pnpm 10, and ffmpeg, poppler-utils and LibreOffice for the media pipeline.
+Requires Node 22, pnpm 10, and ffmpeg, poppler-utils and LibreOffice for the media pipeline (Chromium too, for the
+optional pptx-preview PowerPoint renderer).
 
 ```bash
 pnpm install
@@ -93,6 +94,8 @@ the operator carrying the outputs until the restarted hub adopts the state.
 | `ORDO_ALLOWED_HOSTS`      | none                   | Extra host names the hub answers besides the domain, `localhost` and loopback (comma or space separated, e.g. the NAS's LAN IP); others get 421          |
 | `ORDO_SINGLE_PROCESS`     | unset                  | `1` runs the hub as one process instead of the supervisor with a live and a library process (same as `node main.js --single`; development and diagnosis) |
 | `ORDO_CPU_WORKERS`        | `1`                    | Worker threads (1 to 8) in the library process for CPU-heavy parsing (ProPresenter, PowerPoint, fonts); each has a 512 MB heap                           |
+| `ORDO_CHROMIUM`           | `chromium`             | Headless Chromium for the pptx-preview PowerPoint renderer (`/usr/bin/chromium` in the image); without it pptx-preview imports fall back to LibreOffice  |
+| `ORDO_CHROMIUM_SANDBOX`   | unset                  | `1` keeps Chromium's sandbox (needs user namespaces, which containers usually lack)                                                                      |
 
 ## Release
 
