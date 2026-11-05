@@ -277,6 +277,57 @@ describe('annotatePptx', () => {
     ]);
   });
 
+  it('renames pictures pptx-preview would not load, and every relationship to them', async () => {
+    const rel = (target: string) =>
+      `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/slideLayout" Target="../slideLayouts/slideLayout1.xml"/><Relationship Id="rId2" Type="${REL}/image" Target="${target}"/><Relationship Id="rId3" Type="${REL}/hyperlink" Target="https://example.org/media/Slide-1-image-1.png" TargetMode="External"/></Relationships>`;
+    const a = await annotatePptx(
+      await deck('', {
+        'ppt/media/Slide-1-image-1.png': 'x',
+        'ppt/media/image1.png': 'y',
+        'ppt/slides/_rels/slide1.xml.rels': rel('../media/Slide-1-image-1.png'),
+      }),
+    );
+    const z = await JSZip.loadAsync(a.bytes);
+    expect(z.file('ppt/media/Slide-1-image-1.png')).toBeNull();
+    expect(await z.file('ppt/media/image-ordo-Slide-1-image-1.png')!.async('string')).toBe('x');
+    expect(z.file('ppt/media/image1.png')).not.toBeNull();
+    const rels = await z.file('ppt/slides/_rels/slide1.xml.rels')!.async('string');
+    expect(rels).toContain('Target="../media/image-ordo-Slide-1-image-1.png"');
+    expect(rels).toContain('Target="https://example.org/media/Slide-1-image-1.png"');
+  });
+
+  it("gives charts without a title the one PowerPoint shows, not pptx-preview's placeholder", async () => {
+    const C =
+      'xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"';
+    const ser = (name: string) =>
+      `<c:ser><c:idx val="0"/><c:tx><c:strRef><c:strCache><c:pt idx="0"><c:v>${name}</c:v></c:pt></c:strCache></c:strRef></c:tx></c:ser>`;
+    const chart = (inner: string) =>
+      `<?xml version="1.0"?><c:chartSpace ${C}><c:chart>${inner}</c:chart></c:chartSpace>`;
+    const a = await annotatePptx(
+      await deck('', {
+        'ppt/charts/chart1.xml': chart(
+          `<c:autoTitleDeleted val="1"/><c:plotArea>${ser('Attendance')}</c:plotArea>`,
+        ),
+        'ppt/charts/chart2.xml': chart(
+          `<c:autoTitleDeleted val="0"/><c:plotArea>${ser('Giving')}</c:plotArea>`,
+        ),
+        'ppt/charts/chart3.xml': chart(`<c:plotArea>${ser('One')}${ser('Two')}</c:plotArea>`),
+        'ppt/charts/chart4.xml': chart(
+          `<c:title><c:tx><c:rich><a:p><a:r><a:t>Own</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea>${ser('X')}</c:plotArea>`,
+        ),
+      }),
+    );
+    const z = await JSZip.loadAsync(a.bytes);
+    const title = async (n: number) =>
+      /<c:title>[\s\S]*?<a:t>([^<]*)<\/a:t>/.exec(
+        await z.file(`ppt/charts/chart${n}.xml`)!.async('string'),
+      )?.[1];
+    expect(await title(1)).toBe(' ');
+    expect(await title(2)).toBe('Giving');
+    expect(await title(3)).toBe(' ');
+    expect(await title(4)).toBe('Own');
+  });
+
   it('removes embedded colour profiles from JPEG and PNG pictures, and only those', () => {
     const seg = (marker: number, payload: number[]) => [
       0xff,

@@ -106,12 +106,16 @@ export async function renderWithPptxPreview(
     const pages: string[] = [];
     for (let i = 0; i < res.slides.length; i++) {
       const r = res.slides[i]!;
-      // One slide at a time at the top of the page: Chromium does not reliably paint content far below
-      // the viewport for a clipped capture.
+      // One slide at a time, pinned over the top of the viewport: Chromium does not reliably paint content
+      // far below the viewport for a clipped capture. Pinning keeps the slide's size, so charts are not
+      // resized (hiding the other slides did that, and ECharts then replayed its animation).
       await page.evaluate(
-        `document.querySelectorAll('.pptx-preview-slide-wrapper').forEach((el, j) => { el.style.display = j === ${i} ? '' : 'none'; }); window.scrollTo(0, 0); new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`,
+        `(() => { const el = document.querySelectorAll('.pptx-preview-slide-wrapper')[${i}]; el.dataset.ordoCss = el.style.cssText; Object.assign(el.style, { position: 'fixed', left: '0px', top: '0px', zIndex: '2147483647' }); window.scrollTo(0, 0); return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); })()`,
       );
       const png = await page.screenshot({ x: 0, y: 0, width: r.width, height: r.height });
+      await page.evaluate(
+        `(() => { const el = document.querySelectorAll('.pptx-preview-slide-wrapper')[${i}]; el.style.cssText = el.dataset.ordoCss ?? ''; })()`,
+      );
       const file = join(workDir, `slide-${String(i + 1).padStart(4, '0')}.png`);
       await writeFile(file, png);
       pages.push(file);

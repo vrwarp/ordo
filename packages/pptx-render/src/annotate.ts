@@ -290,7 +290,9 @@ export async function annotatePptx(input: Uint8Array): Promise<Annotation> {
     }
   }
   const pictures = await pictureClips(zip, pres, parse);
+  if (await renameMedia(zip, notes)) changed = true;
   if (await stripColorProfiles(zip, notes)) changed = true;
+  if (await titleCharts(zip, notes)) changed = true;
   const bytes = changed
     ? await zip.generateAsync({
         type: 'uint8array',
@@ -369,6 +371,80 @@ async function pictureClips(
     }
   }
   return out;
+}
+
+/** Picture types pptx-preview loads (by extension), when their part name starts with `image`. */
+const PICTURE_EXT = /\.(png|jpe?g|gif|emf|wmf|bmp|tiff?|svg)$/i;
+
+/**
+ * pptx-preview loads only media parts named `ppt/media/image*`; pictures named otherwise (pptxgenjs writes
+ * `Slide-3-image-1.png`) are drawn as nothing, a slide background included. Rename them, and every
+ * relationship that points to them.
+ */
+async function renameMedia(zip: JSZip, notes: string[]): Promise<boolean> {
+  const renames = new Map<string, string>();
+  for (const name of Object.keys(zip.files)) {
+    const m = /^ppt\/media\/([^/]+)$/.exec(name);
+    if (!m || m[1]!.startsWith('image') || !PICTURE_EXT.test(name)) continue;
+    let to = `ppt/media/image-ordo-${m[1]}`;
+    for (let i = 2; zip.file(to) || [...renames.values()].includes(to); i++)
+      to = `ppt/media/image-ordo${i}-${m[1]}`;
+    renames.set(name, to);
+  }
+  if (!renames.size) return false;
+  for (const [from, to] of renames) {
+    const f = zip.file(from);
+    if (!f) continue;
+    zip.file(to, await f.async('uint8array'));
+    zip.remove(from);
+  }
+  for (const rels of Object.keys(zip.files).filter((n) => n.endsWith('.rels'))) {
+    const xml = await zip.file(rels)?.async('string');
+    if (!xml) continue;
+    const dir = rels.replace(/_rels\/[^/]+\.rels$/, '').replace(/\/$/, '');
+    let hit = false;
+    const next = xml.replace(/(\sTarget=")([^"]*)(")/g, (all, a: string, target: string, b: string) => {
+      if (/^[a-z]+:/i.test(target)) return all; // external
+      const resolved = resolvePath(dir, decodeURIComponent(target));
+      const to = renames.get(resolved);
+      if (!to) return all;
+      hit = true;
+      return `${a}${target.slice(0, target.lastIndexOf('/') + 1)}${to.slice(to.lastIndexOf('/') + 1)}${b}`;
+    });
+    if (hit) zip.file(rels, next);
+  }
+  const types = await zip.file('[Content_Types].xml')?.async('string');
+  if (types) {
+    let next = types;
+    for (const [from, to] of renames) next = next.split(`PartName="/${from}"`).join(`PartName="/${to}"`);
+    if (next !== types) zip.file('[Content_Types].xml', next);
+  }
+  notes.push(`${renames.size} picture(s) renamed for pptx-preview, which loads only media named image*`);
+  return true;
+}
+
+/**
+ * pptx-preview prints a placeholder title ("图表标题", "Chart Title") on every line, bar and area chart
+ * without one. PowerPoint shows none when the title was deleted, and the series name when a chart with a
+ * single series has an automatic title. Give such charts the title PowerPoint shows, or a blank one.
+ */
+async function titleCharts(zip: JSZip, notes: string[]): Promise<boolean> {
+  let titled = 0;
+  for (const name of Object.keys(zip.files)) {
+    if (!/^ppt\/charts\/chart[^/]*\.xml$/.test(name)) continue;
+    const xml = await zip.file(name)?.async('string');
+    if (!xml || /<c:title[\s>]/.test(xml) || !/<c:chart>/.test(xml)) continue;
+    const deleted = /<c:autoTitleDeleted\s+val="(1|true)"/.test(xml);
+    const series = xml.match(/<c:ser>/g)?.length ?? 0;
+    const seriesName = /<c:ser>[\s\S]*?<c:tx>[\s\S]*?<c:v>([^<]*)<\/c:v>/.exec(xml)?.[1];
+    const text = !deleted && series === 1 && seriesName ? seriesName : ' ';
+    const title = `<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>${text}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>`;
+    zip.file(name, xml.replace('<c:chart>', `<c:chart>${title}`));
+    titled++;
+  }
+  if (titled)
+    notes.push(`${titled} chart(s) given the title PowerPoint shows instead of pptx-preview's placeholder`);
+  return titled > 0;
 }
 
 /**

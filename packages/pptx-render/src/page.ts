@@ -28,6 +28,8 @@ export type PageResult = {
   styled: number;
   /** Markers removed without a style. */
   unstyled: number;
+  /** Charts on the slides. */
+  charts: number;
   errors: string[];
 };
 
@@ -416,16 +418,29 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
     }
   }
 
-  // Wait for what is still loading: pictures, fonts and (with a short grace) animated charts.
+  // A background picture: pptx-preview writes its size without units ("1920 1080"), which CSS rejects, so
+  // the picture is drawn at its own size in the corner. Stretch it (a fill rectangle other than the whole
+  // slide moves it, and is left alone).
+  if (args.fixes)
+    for (const bg of Array.from(root.querySelectorAll('.slide-background')) as HTMLElement[]) {
+      const st = bg.style;
+      if (!st.backgroundImage || st.backgroundImage.includes('undefined') || st.backgroundSize) continue;
+      if (!st.backgroundPosition || /^0(px)? 0(px)?$/.test(st.backgroundPosition))
+        st.backgroundSize = '100% 100%';
+    }
+
+  // Wait for what is still loading: pictures, fonts and (with a short grace) charts.
   await Promise.all(
     Array.from(root.querySelectorAll('img')).map((img) => img.decode().catch(() => undefined)),
   );
   await document.fonts.ready;
-  if (root.querySelector('canvas')) await new Promise((r) => setTimeout(r, 1500));
+  // Charts are drawn by ECharts (bundled inside pptx-preview, as SVG) a moment after their slide.
+  const charts = root.querySelectorAll('canvas, [_echarts_instance_]').length;
+  if (charts) await new Promise((r) => setTimeout(r, 300));
 
   const slides = Array.from(root.querySelectorAll('.pptx-preview-slide-wrapper')).map((el) => {
     const r = el.getBoundingClientRect();
     return { x: r.left + window.scrollX, y: r.top + window.scrollY, width: r.width, height: r.height };
   });
-  return { slides, styled, unstyled, errors };
+  return { slides, styled, unstyled, errors, charts };
 }

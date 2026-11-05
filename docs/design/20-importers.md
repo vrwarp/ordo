@@ -131,8 +131,12 @@ which ordo owns and can keep fixing:
 
 - **Repair before drawing** (`annotate.ts`). Package defects that stop pptx-preview are mended in a copy of
   the deck: content-type entries for parts that do not exist (pptxgenjs writes one slide master per slide,
-  and pptx-preview then draws nothing) are dropped. Embedded colour profiles are removed from pictures:
-  Chromium converts a picture from its profile, LibreOffice uses the values as they are.
+  and pptx-preview then draws nothing) are dropped. pptx-preview loads only pictures whose part is named
+  `ppt/media/image*`; others (pptxgenjs writes `Slide-3-image-1.png`) are renamed, with every relationship
+  to them. A chart without a title gets the one PowerPoint shows (none when it was deleted, the series name
+  for a single series) instead of pptx-preview's placeholder ("图表标题"). Embedded colour profiles are
+  removed from pictures: Chromium converts a picture from its profile, LibreOffice uses the values as
+  they are.
 - **Run markers.** Every text run's `<a:t>` gets an invisible marker (U+2064 and eight base-4 digits from
   U+2060..U+2063: zero-width format characters, no line breaks) carrying an id into a side table of what
   ordo computed for that run from the XML, with PowerPoint's inheritance: run, paragraph, shape list style,
@@ -161,10 +165,12 @@ which ordo owns and can keep fixing:
   80 % spacing at each step and keeping the tightest fit; font sizes are rounded to whole points. Boxes
   within about half a percent of fitting can still come out one step apart.
 - **Pictures** in an ellipse or a rounded rectangle are clipped to it (pptx-preview draws every picture as
-  a rectangle).
+  a rectangle). A slide background picture is stretched over the slide: pptx-preview writes its size
+  without units, which CSS rejects, and the picture sat at its own size in the corner.
 - **Drawing** (`chromium.ts`). The hub starts headless Chromium (`ORDO_CHROMIUM`) and drives it over the
   DevTools protocol on a pipe (no Playwright or Puppeteer at run time): a harness page beside the deck loads
-  the unmodified pptx-preview bundle, draws every slide at 1920x1080, and each slide is captured on its own.
+  the unmodified pptx-preview bundle, draws every slide at 1920x1080, and each slide is captured on its own,
+  pinned over the viewport (hiding the other slides instead resized their charts).
   Every network request is refused (`--host-resolver-rules`), so a deck's linked pictures fetch nothing.
   Chromium runs without its sandbox unless `ORDO_CHROMIUM_SANDBOX=1`: containers lack the user namespaces
   it needs. The page is ordo's own and the deck is data, as it is for LibreOffice, which has no sandbox.
@@ -185,6 +191,10 @@ rounds a 960 pt slide up to 1921 pixels; its pictures are cut to the slide's pro
 
 Where LibreOffice is known to differ from PowerPoint, ordo follows PowerPoint and the score pays for it:
 LibreOffice does not draw a run's own text shadow (PowerPoint's "Text Shadow" button), ordo does.
+
+Known gaps: pptx-preview's charts (ECharts) misread some chart data (pptxgenjs's multi-level category
+labels; values drawn far too small), tables are drawn by pptx-preview as they are, and photographs score
+lower than their look suggests because the two renderers scale pictures with different filters.
 
 ```
 pnpm --filter @ordo/pptx-fidelity start -- --corpus --raw --out tmp/pptx-fidelity ~/decks/*.pptx
