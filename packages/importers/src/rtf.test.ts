@@ -12,6 +12,14 @@ const COCOA = String.raw`{\rtf1\ansi\ansicpg1252\cocoartf2639
 the sound}`;
 
 describe('parseRtf', () => {
+  it("reports the first paragraph's line spacing and space after", () => {
+    const r = parseRtf(String.raw`{\rtf1\ansi{\fonttbl\f0 Tahoma;}\pard\sa426\sl360\slmult1\qc\f0\fs128 one\
+two\pard\sa0 three}`);
+    expect(r.lineSpacing).toBe(1.5);
+    expect(r.spaceAfterPt).toBeCloseTo(21.3);
+    expect(parseRtf(String.raw`{\rtf1\ansi\pard\sl-300 exact}`).lineSpacing).toBeUndefined();
+  });
+
   it('decodes hex escapes in the font charset: Big5 and GBK double-byte characters, ansicpg for the rest', () => {
     // Cocoa writes a Chinese run as Big5 bytes under a `\fcharset136` font (ProPresenter on a Mac).
     const big5 = String.raw`{\rtf1\ansi\ansicpg1252{\fonttbl\f0\fnil\fcharset0 Tahoma;\f1\fnil\fcharset136 PingFangTC;}

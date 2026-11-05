@@ -632,6 +632,37 @@ describe('ProPresenter export details', () => {
     ]);
   });
 
+  it("draws a slide's own background colour above the running background media, under its objects", () => {
+    const colored = cue('C2', [textElement('Verse', 'In the beginning')]);
+    const base = (colored.actions[0] as { slide: { presentation: { baseSlide: Record<string, unknown> } } })
+      .slide.presentation.baseSlide;
+    base.drawsBackgroundColor = true;
+    base.backgroundColor = { red: 0, green: 0, blue: 0, alpha: 1 };
+    const doc = encodePresentation({
+      uuid: uuid('P-C'),
+      name: 'Title then verses',
+      // The title picture runs as background media; the verse slide's black hides it, as in ProPresenter.
+      cues: [cue('C1', [], [mediaAction('title.png')]), colored],
+    });
+    const res = importPro7(
+      new Map([
+        ['T.pro', doc],
+        ['ProPresenter/Media/title.png', new Uint8Array([1])],
+      ]),
+    );
+    const slides = res.presentations[0]!.sections.flatMap((s) => s.slides);
+    expect(slides[0]!.objects).toEqual([]);
+    const [rect, text] = slides[1]!.objects;
+    expect(rect).toMatchObject({
+      type: 'shape',
+      shape: 'rect',
+      box: { x: 0, y: 0, w: 1920, h: 1080 },
+      fill: { r: 0, g: 0, b: 0, a: 1 },
+    });
+    expect(text!.type).toBe('text');
+    expect(res.log.some((l) => /background colour/.test(l.message))).toBe(false);
+  });
+
   it('reads a ProPresenter zip whose central directory size counts its Zip64 end records', async () => {
     const zip = new JSZip();
     zip.file('Song.pro', 'not a document, only bytes');

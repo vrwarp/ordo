@@ -18,6 +18,10 @@ export interface RtfResult {
   strokeColor?: Rgba;
   /** Number of distinct character styles used by non-whitespace text; > 1 means mixed runs. */
   styleRuns: number;
+  /** The first run's paragraph: `\slN\slmult1` line spacing as a multiple of single spacing. */
+  lineSpacing?: number;
+  /** The first run's paragraph: `\saN` space after it, in points. */
+  spaceAfterPt?: number;
 }
 
 type Dest = 'text' | 'fonttbl' | 'colortbl' | 'skip';
@@ -120,6 +124,10 @@ interface GroupState {
   uc: number;
   strokeWidth: number;
   strokeColor: number;
+  /** Paragraph spacing (`\saN`, `\slN`, `\slmultN`), in twips; reset by `\pard`. */
+  sa: number;
+  sl: number;
+  slmult: boolean;
 }
 
 /** Destinations whose contents are not body text. */
@@ -282,6 +290,9 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
     uc: 1,
     strokeWidth: 0,
     strokeColor: 0,
+    sa: 0,
+    sl: 0,
+    slmult: false,
   };
   const stack: GroupState[] = [];
   let st: GroupState = { ...initial };
@@ -559,6 +570,18 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
         return;
       case 'pard':
         st.align = 'left';
+        st.sa = 0;
+        st.sl = 0;
+        st.slmult = false;
+        return;
+      case 'sa':
+        st.sa = clampInt(num ?? 0, 0, 20_000);
+        return;
+      case 'sl':
+        st.sl = clampInt(num ?? 0, -20_000, 20_000);
+        return;
+      case 'slmult':
+        st.slmult = num === 1;
         return;
       case 'qc':
         st.align = 'center';
@@ -609,6 +632,9 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
     res.bold = f.b;
     res.italic = f.i;
     if (f.alignSeen) res.align = f.align === 'justify' ? 'left' : f.align;
+    // `\slN\slmult1`: N/240 lines (240 twips is single spacing); an exact or at-least `\sl` is not a multiple.
+    if (f.slmult && f.sl > 0) res.lineSpacing = Math.round((f.sl / 240) * 100) / 100;
+    if (f.sa > 0) res.spaceAfterPt = f.sa / 20;
     if (f.strokeWidth) {
       res.strokeWidth = f.strokeWidth;
       const sc = colors[f.strokeColor];

@@ -222,8 +222,10 @@ class MediaResolver {
 
 function colorOf(c: Msg | undefined): Rgba | undefined {
   if (!c) return undefined;
-  const ch = (v: unknown) => Math.round(Math.max(0, Math.min(1, typeof v === 'number' ? v : 0)) * 255);
-  return { r: ch(c.red), g: ch(c.green), b: ch(c.blue), a: typeof c.alpha === 'number' ? c.alpha : 1 };
+  const unit = (v: unknown, dflt: number) =>
+    typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : dflt;
+  const ch = (v: unknown) => Math.round(unit(v, 0) * 255);
+  return { r: ch(c.red), g: ch(c.green), b: ch(c.blue), a: unit(c.alpha, 1) };
 }
 
 /**
@@ -400,6 +402,16 @@ function textObjectFrom(el: Msg, size: SlideSize, ctx: Ctx): TextObject | null {
   const para = attrs.paragraphStyle as Msg | undefined;
   if (typeof para?.lineHeightMultiple === 'number' && para.lineHeightMultiple > 0)
     style.lineHeight = Math.round(para.lineHeightMultiple * 100) / 100;
+  // The RTF's own paragraph spacing wins. ordo has one line height: space after a paragraph is added to
+  // it (Cocoa writes every line as a paragraph, so this is exact for one-line paragraphs).
+  if (parsed.lineSpacing) style.lineHeight = parsed.lineSpacing;
+  if (parsed.spaceAfterPt && sizePt) {
+    style.lineHeight = Math.min(
+      10,
+      Math.round(((style.lineHeight ?? 1) + parsed.spaceAfterPt / sizePt) * 100) / 100,
+    );
+    approx(ctx, 'paragraph spacing (added to the line height)');
+  }
   if (typeof attrs.kerning === 'number' && attrs.kerning !== 0)
     style.letterSpacing = Math.round(attrs.kerning * scale * 100) / 100;
   const margins = t.margins as Msg | undefined;
@@ -664,8 +676,22 @@ function slideFromCue(cue: Msg, ctx: Ctx): Slide | null {
     if (el.text?.rtfData?.length) {
       const to = textObjectFrom(el, size, ctx);
       if (to && (!hasMedia || /[^\s\u200b-\u200d\ufeff]/.test(to.text))) {
-        if (hasMedia) delete to.style.fill; // the box fill is the picture, already drawn below the words
+        const boxFill = to.style.fill;
+        // ProPresenter fills the element's whole box; ordo's text fill hugs the words. The box fill is
+        // drawn as a rectangle behind the text (listed after it here: the list is still front to back).
+        // With a picture, the picture is the fill.
+        delete to.style.fill;
         objects.push(to);
+        if (boxFill && !hasMedia)
+          objects.push({
+            id: newId(),
+            type: 'shape',
+            shape: 'rect',
+            box: { ...to.box },
+            fill: boxFill.color,
+            opacity: to.opacity ?? 1,
+            radius: 0,
+          });
         if (!lyricObjectId) lyricObjectId = to.id;
       }
       continue;
@@ -684,9 +710,19 @@ function slideFromCue(cue: Msg, ctx: Ctx): Slide | null {
   // to front. (A full-screen picture listed after a verse sits behind it.)
   objects.reverse();
   if (base?.drawsBackgroundColor) {
-    // Opaque black is what an output shows anyway; only another colour is lost.
-    const c = colorOf(base.backgroundColor as Msg | undefined);
-    if (!c || c.r + c.g + c.b > 0 || c.a < 1) skip(ctx, 'slide background colours');
+    // The slide's own colour is part of the slide, above the background media: a running background
+    // picture or video is hidden behind it. Drawn as a full-slide rectangle under every other object.
+    const c = colorOf(base.backgroundColor as Msg | undefined) ?? { r: 0, g: 0, b: 0, a: 1 };
+    if (c.a > 0)
+      objects.unshift({
+        id: newId(),
+        type: 'shape',
+        shape: 'rect',
+        box: scaleBox({ origin: { x: 0, y: 0 }, size: { width: size.width, height: size.height } }, size, 0),
+        fill: c,
+        opacity: 1,
+        radius: 0,
+      });
   }
   const slide: Slide = { id: newId(), objects };
   if (clears && !backgroundMediaId) ctx.clearsBackground.add(slide);

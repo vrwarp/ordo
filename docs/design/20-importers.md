@@ -61,6 +61,13 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
     streaming reader never trusted that field).
   - A slide's elements are listed front to back (the first is on top); ordo draws back to
     front, so the order is reversed.
+  - A slide's own background colour is part of the slide, above the background media: a
+    running background picture or video is hidden behind it. It becomes a full-slide
+    rectangle under the slide's objects.
+  - A text element's box fill fills the whole box (ordo's text fill hugs the words): it
+    becomes a rectangle behind the text.
+  - Cocoa writes every line as a paragraph with `\saN` space after it, and line spacing as
+    `\slN\slmult1`: both go into the line height (ordo has one; logged as approximated).
   - A picture is an element whose fill is media, and it carries an (empty) text block like
     every element: the picture is kept, its text only when it has words.
   - Background media runs from the slide that starts it until a slide clears it (a clear

@@ -82,7 +82,15 @@ describe('files written by ProPresenter 7', () => {
       ['Verse 3', 3],
       ['Verse 4', 3],
     ]);
-    const first = p!.sections[0]!.slides[0]!.objects[0]!;
+    // The gradient box fill (its first stop) fills the whole box: a rectangle behind the words.
+    const [box, first] = p!.sections[0]!.slides[0]!.objects;
+    expect(box).toMatchObject({
+      type: 'shape',
+      shape: 'rect',
+      box: { x: 0, y: 409.76, w: 1920, h: 207.52, rotation: 0 },
+      fill: { r: 88, g: 13, b: 114, a: 1 },
+    });
+    if (!first) throw new Error('no text');
     expect(first.type).toBe('text');
     if (first.type !== 'text') return;
     // ALL CAPS is a transform; the words keep their casing.
@@ -96,9 +104,8 @@ describe('files written by ProPresenter 7', () => {
       padding: 20,
       // strokeWidth -3 is 3% of the font size, as Cocoa stores it.
       outline: { width: 2, color: { r: 0, g: 0, b: 0, a: 1 } },
-      // The gradient box fill becomes its first stop.
-      fill: { color: { r: 88, g: 13, b: 114, a: 1 }, radius: 0 },
     });
+    expect(first.style.fill).toBeUndefined();
     expect(first.box).toEqual({ x: 0, y: 409.76, w: 1920, h: 207.52, rotation: 0 });
     // The visibility link on every box is not "linked text"; nothing else is reported for this song.
     const msgs = r.log.map((l) => l.message);
