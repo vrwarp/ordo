@@ -210,12 +210,11 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
   }
 
   /** Lay out a paragraph: run sizes, spacing, line height. Returns where its first baseline belongs. */
-  const layoutPara = (e: Entry, fontScale: number, spacing: number, round: boolean): number => {
+  const layoutPara = (e: Entry, fontScale: number, spacing: number): number => {
     const s = scale(e.p);
-    const sized = (pt: number) => {
-      const v = pt * fontScale;
-      return round ? Math.max(1, Math.round(v)) : v;
-    };
+    // A scaled size is rounded to whole points, before and after scaling (LibreOffice's editeng).
+    const sized = (pt: number) =>
+      fontScale === 1 ? pt : Math.max(1, Math.round(Math.round(pt) * fontScale));
     for (const [el, st] of e.runs) {
       const size = sized(st.size ?? 18);
       if (st.baseline) {
@@ -249,18 +248,77 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
       e.block.style.paddingTop = `${(len(e.para.spcBef) * spacing).toFixed(2)}px`;
     if (!e.last && e.para.spcAft)
       e.block.style.paddingBottom = `${(len(e.para.spcAft) * spacing).toFixed(2)}px`;
+    // Line height and where the baseline sits in the line, as editeng computes them; `spacing` is the
+    // shrink-to-fit spacing scale, which also applies to exact and unspecified line spacing.
     const natural = SINGLE * px;
     if (e.para.lnSpcPt !== undefined) {
-      const h = e.para.lnSpcPt * s;
+      const h = e.para.lnSpcPt * s * spacing;
       e.p.style.lineHeight = `${h.toFixed(2)}px`;
       return px + (h - natural);
     }
-    const pct = (e.para.lnSpcPct ?? 100_000) / 100_000;
-    // A text box's shrink to fit scales the spacing of lines that are not single spaced.
-    const factor = pct === 1 ? 1 : pct * spacing;
-    e.p.style.lineHeight = (SINGLE * factor).toFixed(4);
-    const h = natural * factor;
-    return factor < 1 ? Math.min(px, 0.8 * h) : px + (h - natural);
+    if (e.para.lnSpcPct === undefined) {
+      e.p.style.lineHeight = (SINGLE * spacing).toFixed(4);
+      return Math.min(px, natural * spacing);
+    }
+    const pct = e.para.lnSpcPct / 100_000;
+    if (pct === 1 || pct === 0) {
+      e.p.style.lineHeight = String(SINGLE);
+      return px;
+    }
+    const h = natural * pct * spacing;
+    e.p.style.lineHeight = (SINGLE * pct * spacing).toFixed(4);
+    return pct < 1 ? Math.min(px, 0.8 * h) : px + (h - natural);
+  };
+
+  /**
+   * Shrink text on overflow the way LibreOffice 24.2 re-fits it with the fonts it has
+   * (SdrTextObj::autoFitTextForCompatibility): a ten-step search on the font scale, moved by whether the
+   * text fits at full spacing, trying 100, 90 and 80 % spacing at each step, keeping the tightest fit.
+   * PowerPoint stores the scale it found with its own fonts; with substitutes it may not fit.
+   */
+  const fitBox = (box: HTMLElement, body: BodyStyle, entries: Entry[]): { font: number; spacing: number } => {
+    const s = scale(box);
+    const shape = box.parentElement;
+    const pad = (body.insets[1] + body.insets[3]) * s;
+    const avail = (shape?.offsetHeight ?? 0) - pad;
+    const layout = (fontPct: number, spacingPct: number) => {
+      for (const e of entries) layoutPara(e, fontPct / 100, spacingPct / 100);
+    };
+    if (!(avail > 0) || !entries.length) return { font: 1, spacing: 1 };
+    const slack = (0.5 / 25.4) * 72 * s; // LibreOffice measures the text 0.5 mm short
+    const fit = (fontPct: number, spacingPct: number) => {
+      layout(fontPct, spacingPct);
+      const content = box.offsetHeight - pad;
+      return content - slack > 0 ? avail / (content - slack) : Number.POSITIVE_INFINITY;
+    };
+    const initial = Math.min(100, (body.autofit?.fontScale ?? 1) * 100);
+    const first = fit(initial, 100);
+    if (first >= 1 && initial >= 100) return { font: 1, spacing: 1 };
+    let lo = 0;
+    let hi = 100;
+    let best = { font: 0, spacing: 100, factor: first };
+    if (first >= 1) {
+      lo = initial;
+      best = { font: initial, spacing: 100, factor: first };
+    } else hi = initial;
+    // The scale is rounded to a tenth of a point of the shape's default size, 18 pt for a PowerPoint deck.
+    const OBJECT_PT = 18;
+    for (let i = 0; i < 10; i++) {
+      const mid = lo + (hi - lo) * 0.5;
+      const font = (Math.floor(OBJECT_PT * (mid / 100) * 10) / 10 / OBJECT_PT) * 100;
+      let factor = 0;
+      for (const spacing of [100, 90, 80]) {
+        if (factor >= 1) continue;
+        factor = fit(font, spacing);
+        if (spacing === 100) {
+          if (factor > 1) lo = font;
+          else hi = font;
+        }
+        if ((best.factor < 1 && factor > best.factor) || (factor >= 1 && factor < best.factor))
+          best = { font, spacing, factor };
+      }
+    }
+    return { font: best.font / 100, spacing: best.spacing / 100 };
   };
 
   /** Move each paragraph so its first baseline is where LibreOffice puts it (reads layout once each). */
@@ -303,11 +361,10 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
       box.style.bottom = '';
       box.style.transform = 'translateY(-50%)';
     }
-    const fontScale = body.autofit?.fontScale ?? 1;
-    const spacing = 1 - (body.autofit?.lnSpcReduction ?? 0);
-    for (const e of entries) placed.push([e, layoutPara(e, fontScale, spacing, !!body.autofit)]);
+    const chosen = body.autofit ? fitBox(box, body, entries) : { font: 1, spacing: 1 };
+    for (const e of entries) placed.push([e, layoutPara(e, chosen.font, chosen.spacing)]);
   }
-  for (const e of loose) placed.push([e, layoutPara(e, 1, 1, false)]);
+  for (const e of loose) placed.push([e, layoutPara(e, 1, 1)]);
   placeBaselines(placed);
 
   // Pictures in an ellipse or a rounded rectangle. pptx-preview puts each slide's shapes straight into its

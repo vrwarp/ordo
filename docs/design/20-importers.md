@@ -131,7 +131,8 @@ which ordo owns and can keep fixing:
 
 - **Repair before drawing** (`annotate.ts`). Package defects that stop pptx-preview are mended in a copy of
   the deck: content-type entries for parts that do not exist (pptxgenjs writes one slide master per slide,
-  and pptx-preview then draws nothing) are dropped.
+  and pptx-preview then draws nothing) are dropped. Embedded colour profiles are removed from pictures:
+  Chromium converts a picture from its profile, LibreOffice uses the values as they are.
 - **Run markers.** Every text run's `<a:t>` gets an invisible marker (U+2064 and eight base-4 digits from
   U+2060..U+2063: zero-width format characters, no line breaks) carrying an id into a side table of what
   ordo computed for that run from the XML, with PowerPoint's inheritance: run, paragraph, shape list style,
@@ -140,9 +141,26 @@ which ordo owns and can keep fixing:
 - **Restyle after drawing** (`page.ts`, run inside the page). The markers are found in the DOM, removed, and
   the run's element restyled: the Latin and East Asian typefaces (pptx-preview takes the East Asian one for
   Latin text, or none), each followed by the family fontconfig substitutes when it is not installed (what
-  LibreOffice does; Chromium would otherwise fall back to its serif default); superscripts and subscripts
-  (`baseline`, which pptx-preview ignores); and the shadow of an unfilled shape, or of the run, on its
-  glyphs. Paragraph and text-box corrections can reach the run's ancestors the same way.
+  LibreOffice does; Chromium would otherwise fall back to its serif default); the size (pptx-preview
+  shrinks some faces to 85 %) and character spacing (it condenses Latin text by 4 % and ignores `spc`);
+  superscripts and subscripts (`baseline`, ignored); kept runs of spaces; underlines that do not skip
+  descenders; and the run's own shadow over the one an unfilled shape casts.
+- **Paragraphs and text boxes.** Through the markers, and the side table's list of a text box's paragraphs
+  (pptx-preview draws one block per paragraph, empty ones included), the page sets the box's margins and
+  anchor, each paragraph's spacing, and its line height, as LibreOffice's text engine computes them
+  (measured with test decks, and from its source): single spacing is 1.2 times the font size whatever the
+  font; the baseline sits one font size below the top of a line; spacing above 100 % or exact spacing
+  adds or removes space above the line, below 100 % caps the ascent at 80 % of the line; space before
+  the first paragraph and after the last is not drawn; a percentage of space is a share of the font
+  size. CSS splits leading above and below the line, so each paragraph is then moved until its first
+  baseline is where LibreOffice puts it (a zero-size probe measures where Chromium put it).
+- **Shrink on overflow.** PowerPoint stores the scale it found with its own fonts (`normAutofit`); with
+  substitutes the text may not fit. LibreOffice re-fits it, and the page does the same with LibreOffice's
+  procedure (`SdrTextObj::autoFitTextForCompatibility`): a ten-step search on the font scale, moved by
+  whether the text fits at full spacing, trying 100, 90 and 80 % spacing at each step and keeping the
+  tightest fit; font sizes are rounded to whole points.
+- **Pictures** in an ellipse or a rounded rectangle are clipped to it (pptx-preview draws every picture as
+  a rectangle).
 - **Drawing** (`chromium.ts`). The hub starts headless Chromium (`ORDO_CHROMIUM`) and drives it over the
   DevTools protocol on a pipe (no Playwright or Puppeteer at run time): a harness page beside the deck loads
   the unmodified pptx-preview bundle, draws every slide at 1920x1080, and each slide is captured on its own.
@@ -161,7 +179,11 @@ slide (SSIM of greyscale pictures at 960x540, computed by ffmpeg; 1 is identical
 truth for now; PowerPoint's own PDF exports would be better and can replace it. `--corpus` adds synthetic
 decks written with pptxgenjs, one feature per slide (`src/corpus.ts`); real decks are passed as paths and
 never committed. `--raw` also draws with pptx-preview unmodified, to show what ordo's corrections are worth.
-It writes `summary.json` and an HTML report with the pictures side by side, worst slides first.
+It writes `summary.json` and an HTML report with the pictures side by side, worst slides first. LibreOffice
+rounds a 960 pt slide up to 1921 pixels; its pictures are cut to the slide's proportions before scoring.
+
+Where LibreOffice is known to differ from PowerPoint, ordo follows PowerPoint and the score pays for it:
+LibreOffice does not draw a run's own text shadow (PowerPoint's "Text Shadow" button), ordo does.
 
 ```
 pnpm --filter @ordo/pptx-fidelity start -- --corpus --raw --out tmp/pptx-fidelity ~/decks/*.pptx
