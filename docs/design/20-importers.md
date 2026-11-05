@@ -155,10 +155,11 @@ which ordo owns and can keep fixing:
   size. CSS splits leading above and below the line, so each paragraph is then moved until its first
   baseline is where LibreOffice puts it (a zero-size probe measures where Chromium put it).
 - **Shrink on overflow.** PowerPoint stores the scale it found with its own fonts (`normAutofit`); with
-  substitutes the text may not fit. LibreOffice re-fits it, and the page does the same with LibreOffice's
-  procedure (`SdrTextObj::autoFitTextForCompatibility`): a ten-step search on the font scale, moved by
-  whether the text fits at full spacing, trying 100, 90 and 80 % spacing at each step and keeping the
-  tightest fit; font sizes are rounded to whole points.
+  substitutes the text may not fit. LibreOffice ignores the stored scale and re-fits the text from full
+  size, and the page does the same with LibreOffice's procedure (`SdrTextObj::autoFitTextForCompatibility`):
+  a ten-step search on the font scale, moved by whether the text fits at full spacing, trying 100, 90 and
+  80 % spacing at each step and keeping the tightest fit; font sizes are rounded to whole points. Boxes
+  within about half a percent of fitting can still come out one step apart.
 - **Pictures** in an ellipse or a rounded rectangle are clipped to it (pptx-preview draws every picture as
   a rectangle).
 - **Drawing** (`chromium.ts`). The hub starts headless Chromium (`ORDO_CHROMIUM`) and drives it over the

@@ -286,7 +286,8 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
    * Shrink text on overflow the way LibreOffice 24.2 re-fits it with the fonts it has
    * (SdrTextObj::autoFitTextForCompatibility): a ten-step search on the font scale, moved by whether the
    * text fits at full spacing, trying 100, 90 and 80 % spacing at each step, keeping the tightest fit.
-   * PowerPoint stores the scale it found with its own fonts; with substitutes it may not fit.
+   * PowerPoint stores the scale it found with its own fonts; with substitutes it may not fit, and
+   * LibreOffice does not use it.
    */
   const fitBox = (box: HTMLElement, body: BodyStyle, entries: Entry[]): { font: number; spacing: number } => {
     const s = scale(box);
@@ -303,16 +304,13 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
       const content = heightOf(box) - pad;
       return content - slack > 0 ? avail / (content - slack) : Number.POSITIVE_INFINITY;
     };
-    const initial = Math.min(100, (body.autofit?.fontScale ?? 1) * 100);
-    const first = fit(initial, 100);
-    if (first >= 1 && initial >= 100) return { font: 1, spacing: 1 };
+    // LibreOffice starts from full size whatever scale the deck stored (measured: a stored 92.5 % comes
+    // out larger when the text fits larger), and leaves text that fits at full size alone.
+    const first = fit(100, 100);
+    if (first >= 1) return { font: 1, spacing: 1 };
     let lo = 0;
     let hi = 100;
     let best = { font: 0, spacing: 100, factor: first };
-    if (first >= 1) {
-      lo = initial;
-      best = { font: initial, spacing: 100, factor: first };
-    } else hi = initial;
     // The scale is rounded to a tenth of a point of the shape's default size, 18 pt for a PowerPoint deck.
     const OBJECT_PT = 18;
     for (let i = 0; i < 10; i++) {
