@@ -170,6 +170,10 @@ which ordo owns and can keep fixing:
   a ten-step search on the font scale, moved by whether the text fits at full spacing, trying 100, 90 and
   80 % spacing at each step and keeping the tightest fit; font sizes are rounded to whole points. Boxes
   within about half a percent of fitting can still come out one step apart.
+- **Video and audio.** pptx-preview lays a live `<video controls>` over a video's poster picture (and an
+  audio player over a sound's icon), so the browser's play bar ended up in the slide picture. The players
+  are removed and the poster stays, as PowerPoint and LibreOffice draw a stopped video. The media itself
+  is not imported (by either renderer): see "Embedded media" below.
 - **Pictures** in an ellipse or a rounded rectangle are clipped to it (pptx-preview draws every picture as
   a rectangle). A slide background picture is stretched over the slide: pptx-preview writes its size
   without units, which CSS rejects, and the picture sat at its own size in the corner.
@@ -184,6 +188,15 @@ which ordo owns and can keep fixing:
   draws the deck with LibreOffice instead; the presentation then records `libreoffice`.
 
 The text extraction for "make editable" runs whichever renderer draws the pictures.
+
+### Embedded media
+
+A PowerPoint slide can hold video (`p:pic` with `a:videoFile` and `p14:media`, embedded or linked), audio
+(`a:audioFile`, sounds on animations and transitions) and linked online video. Neither renderer imports
+them: the slide picture shows the video's poster or the sound's icon, and the clip is dropped. Test decks
+for this: the `media` deck of the fidelity corpus, and LibreOffice's own test documents (`sd/qa/unit/data/
+pptx`: `video-loop-mute`, `tdf106867`, `bnc591147`, `narration`, `tdf44223`, `tdf148478_transitionMusic`,
+`animation-sound-*`), which are real-world decks attached to bug reports.
 
 ### Fidelity
 

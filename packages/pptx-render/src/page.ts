@@ -463,6 +463,11 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
     }
   }
 
+  // Video and audio: pptx-preview lays a live <video controls> over the poster picture, so the browser's
+  // play bar ends up in the slide picture. A stopped video shows its poster (PowerPoint, LibreOffice):
+  // take the player away. The media itself is not part of a slide picture.
+  if (args.fixes) for (const m of Array.from(root.querySelectorAll('video, audio'))) m.remove();
+
   // A background picture: pptx-preview writes its size without units ("1920 1080"), which CSS rejects, so
   // the picture is drawn at its own size in the corner. Stretch it (a fill rectangle other than the whole
   // slide moves it, and is left alone).

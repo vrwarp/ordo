@@ -1,6 +1,7 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import pptxgen from 'pptxgenjs';
+import { run } from '../../../apps/hub/src/media/tools.ts';
 import { dataUri, testPicture } from './png.ts';
 
 /**
@@ -9,7 +10,39 @@ import { dataUri, testPicture } from './png.ts';
  * real decks belong in the local corpus, outside the repository). Every text is public domain: World English
  * Bible verses, the 1919 Chinese Union Version, hymn titles.
  */
-type Deck = { name: string; build: (p: pptxgen) => void };
+type Deck = { name: string; build: (p: pptxgen, media: TestMedia) => void };
+
+/** Test media made by ffmpeg from its own test patterns, as pptxgenjs data (`type;base64,...`). */
+type TestMedia = { clip: string; poster: string; loop: string; tone: string };
+
+async function testMedia(dir: string): Promise<TestMedia> {
+  await mkdir(dir, { recursive: true });
+  const ff = (args: string[]) => run('ffmpeg', ['-v', 'error', '-y', ...args], { timeoutMs: 120_000 });
+  const clip = join(dir, 'clip.mp4');
+  const loop = join(dir, 'loop.mp4');
+  const tone = join(dir, 'tone.mp3');
+  const poster = join(dir, 'poster.png');
+  const h264 = ['-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '32'];
+  await ff(['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24:duration=3', ...h264, '-an', clip]);
+  await ff([
+    '-f',
+    'lavfi',
+    '-i',
+    'gradients=size=640x360:rate=24:duration=3:speed=0.02',
+    ...h264,
+    '-an',
+    loop,
+  ]);
+  await ff(['-f', 'lavfi', '-i', 'sine=frequency=330:duration=2', '-c:a', 'libmp3lame', '-b:a', '48k', tone]);
+  await ff(['-ss', '1', '-i', clip, '-frames:v', '1', poster]);
+  const b64 = async (f: string) => (await readFile(f)).toString('base64');
+  return {
+    clip: `video/mp4;base64,${await b64(clip)}`,
+    poster: `image/png;base64,${await b64(poster)}`,
+    loop: `video/mp4;base64,${await b64(loop)}`,
+    tone: `audio/mp3;base64,${await b64(tone)}`,
+  };
+}
 
 const W = 13.333;
 const PIC = dataUri(testPicture(640, 360));
@@ -352,16 +385,52 @@ const DECKS: Deck[] = [
       );
     },
   },
+  {
+    // Slide pictures of media: a stopped video shows its poster; nothing of a player belongs in them.
+    name: 'media',
+    build(p, m) {
+      let s = p.addSlide();
+      title(s, 'Embedded video with a poster frame');
+      s.addMedia({ type: 'video', data: m.clip, cover: m.poster, x: 1.7, y: 1.2, w: 9.9, h: 5.6 });
+      s = p.addSlide();
+      s.addMedia({ type: 'video', data: m.loop, x: 0, y: 0, w: W, h: 7.5 });
+      s.addText('Amazing grace! how sweet the sound,\nThat saved a wretch like me!', {
+        x: 0.8,
+        y: 2.5,
+        w: W - 1.6,
+        h: 2.5,
+        fontSize: 40,
+        bold: true,
+        color: 'FFFFFF',
+        align: 'center',
+        fontFace: 'Arial',
+      });
+      s = p.addSlide();
+      title(s, 'Embedded audio');
+      s.addMedia({ type: 'audio', data: m.tone, x: 6.2, y: 3.3, w: 1, h: 1 });
+      s = p.addSlide();
+      title(s, 'Linked online video (no network: its placeholder)');
+      s.addMedia({
+        type: 'online',
+        link: 'https://www.youtube.com/embed/aqz-KE-bpKQ',
+        x: 1.7,
+        y: 1.2,
+        w: 9.9,
+        h: 5.6,
+      });
+    },
+  },
 ];
 
 /** Write the synthetic decks into `dir`; returns their paths. */
 export async function buildCorpus(dir: string): Promise<string[]> {
   await mkdir(dir, { recursive: true });
   const out: string[] = [];
+  const media = await testMedia(join(dir, 'media'));
   for (const d of DECKS) {
     const p = new pptxgen();
     p.layout = 'LAYOUT_WIDE';
-    d.build(p);
+    d.build(p, media);
     const file = join(dir, `corpus-${d.name}.pptx`);
     await writeFile(file, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
     out.push(file);
