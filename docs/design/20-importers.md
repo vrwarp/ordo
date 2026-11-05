@@ -109,6 +109,14 @@ canvas. Font size from `a:rPr sz` (hundredths of a point) scaled by the slide's 
 ratio. Result is stored as `Slide.imported.textBoxes` and used by the editor's "make
 editable" command. `PptxGenJS` is not used (it writes PPTX only).
 
+Before LibreOffice converts a PPTX, `pptxForRendering` removes the outline (`<a:ln>` in a
+run's properties) from filled text in slides, layouts and masters. LibreOffice cannot draw a
+coloured outline around filled text: it substitutes hollow letters, which with the usual drop
+shadow read as broken text (white outlined headlines, common in sermon decks). The fill and
+shadow stay; text meant to be hollow (`<a:noFill/>`) keeps its outline. The job log counts
+the runs changed. Fonts the deck uses must be installed on the hub, or LibreOffice
+substitutes them.
+
 ## Google Fonts
 
 The hub fetches `https://fonts.googleapis.com/css2?family=<family>:ital,wght@...` with a

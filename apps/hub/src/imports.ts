@@ -49,6 +49,7 @@ export type Importers = {
   remapMediaIds?: <T>(obj: T, map: Map<string, string>) => T;
   readZip?: (buf: Uint8Array) => Promise<Map<string, Uint8Array>>;
   extractPptxText?: (buf: Uint8Array) => Promise<PptxText>;
+  pptxForRendering?: (buf: Uint8Array) => Promise<{ bytes: Uint8Array; outlines: number }>;
 };
 
 const MEDIA_EXT =
@@ -443,6 +444,19 @@ export class ImportService {
             ctx.log(`[warn] text extraction failed: ${errorMessage(e)}`);
           }
         } else ctx.log('[warn] PPTX text extraction is not available');
+        if (this.imp.pptxForRendering) {
+          try {
+            const r = await this.imp.pptxForRendering(await readFile(input));
+            if (r.outlines) {
+              await writeFile(input, r.bytes);
+              ctx.log(
+                `text outlines removed from ${r.outlines} run(s): LibreOffice draws an outline on filled text as hollow letters`,
+              );
+            }
+          } catch (e) {
+            ctx.log(`[warn] could not prepare the slides for LibreOffice: ${errorMessage(e)}`);
+          }
+        }
         ctx.log('converting with LibreOffice');
         pdf = await pptxToPdf(input, dir, { timeoutMs: t.soffice, signal: ctx.signal });
         ctx.progress(0.3);

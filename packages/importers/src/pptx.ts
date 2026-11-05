@@ -517,3 +517,41 @@ export async function extractPptxText(buf: Uint8Array): Promise<PptxText> {
   }
   return { slideSize, slides };
 }
+
+/** Slide, layout and master parts whose text runs LibreOffice draws. */
+const RENDER_PARTS = /^ppt\/(slides|slideLayouts|slideMasters)\/[^/]+\.xml$/;
+const RUN_PROPS = /<a:(rPr|defRPr|endParaRPr)\b([^>]*?)(\/>|>([\s\S]*?)<\/a:\1>)/g;
+const TEXT_OUTLINE = /<a:ln\b[^>]*\/>|<a:ln\b[^>]*>[\s\S]*?<\/a:ln>/g;
+
+/**
+ * Prepare a .pptx for LibreOffice's PDF export. LibreOffice cannot draw a coloured outline around filled
+ * text (`<a:ln>` in a run's properties): it substitutes its own contour effect, hollow letters without the
+ * fill, which with a drop shadow reads as broken text. Filled text loses its outline instead (the fill and
+ * shadow stay, as PowerPoint shows them); text that is meant to be hollow (`<a:noFill/>`) keeps it.
+ * Returns the input itself when nothing needed changing.
+ */
+export async function pptxForRendering(buf: Uint8Array): Promise<{ bytes: Uint8Array; outlines: number }> {
+  const zip = await JSZip.loadAsync(buf);
+  let outlines = 0;
+  for (const name of Object.keys(zip.files)) {
+    if (!RENDER_PARTS.test(name)) continue;
+    const xml = await zip.file(name)!.async('string');
+    if (!xml.includes('<a:ln')) continue;
+    const next = xml.replace(RUN_PROPS, (m, tag: string, attrs: string, _end, body: string | undefined) => {
+      if (body === undefined || !body.includes('<a:ln')) return m;
+      const stripped = body.replace(TEXT_OUTLINE, '');
+      if (stripped.includes('<a:noFill/>')) return m;
+      outlines++;
+      return `<a:${tag}${attrs}>${stripped}</a:${tag}>`;
+    });
+    if (next !== xml) zip.file(name, next);
+  }
+  if (!outlines) return { bytes: buf, outlines };
+  // Unchanged parts keep their compressed bytes (JSZip reuses them when the method matches).
+  const bytes = await zip.generateAsync({
+    type: 'uint8array',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 1 },
+  });
+  return { bytes, outlines };
+}

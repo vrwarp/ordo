@@ -1,6 +1,6 @@
 import JSZip from 'jszip';
 import { describe, expect, it } from 'vitest';
-import { extractPptxText } from './pptx.ts';
+import { extractPptxText, pptxForRendering } from './pptx.ts';
 
 const NS =
   'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
@@ -100,5 +100,42 @@ describe('extractPptxText', () => {
     const zip = new JSZip();
     zip.file('word/document.xml', '<x/>');
     await expect(extractPptxText(await zip.generateAsync({ type: 'uint8array' }))).rejects.toThrow();
+  });
+});
+
+describe('pptxForRendering', () => {
+  const run = (fill: string, text: string) =>
+    `<a:r><a:rPr lang="en-US" sz="2800" b="1"><a:ln><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln>${fill}</a:rPr><a:t>${text}</a:t></a:r>`;
+  const slide = (body: string) =>
+    `<?xml version="1.0"?><p:sld xmlns:a="a" xmlns:p="p"><p:cSld><p:spTree><p:sp><p:txBody><a:p>${body}</a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>`;
+
+  it('drops the outline of filled text (LibreOffice draws it hollow), keeps hollow text as it is', async () => {
+    const zip = new JSZip();
+    zip.file(
+      'ppt/slides/slide1.xml',
+      slide(
+        run('<a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>', 'Main Idea') +
+          run('<a:noFill/>', 'Hollow on purpose'),
+      ),
+    );
+    zip.file('ppt/media/image1.png', new Uint8Array([1, 2, 3]));
+    const r = await pptxForRendering(await zip.generateAsync({ type: 'uint8array' }));
+    expect(r.outlines).toBe(1);
+    const out = await JSZip.loadAsync(r.bytes);
+    const xml = await out.file('ppt/slides/slide1.xml')!.async('string');
+    expect(xml).toContain(
+      '<a:rPr lang="en-US" sz="2800" b="1"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:rPr><a:t>Main Idea',
+    );
+    expect(xml).toContain('<a:ln><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln><a:noFill/>');
+    expect([...(await out.file('ppt/media/image1.png')!.async('uint8array'))]).toEqual([1, 2, 3]);
+  });
+
+  it('returns the input untouched when no text has an outline', async () => {
+    const zip = new JSZip();
+    zip.file('ppt/slides/slide1.xml', slide('<a:r><a:rPr sz="2800"/><a:t>Plain</a:t></a:r>'));
+    const buf = await zip.generateAsync({ type: 'uint8array' });
+    const r = await pptxForRendering(buf);
+    expect(r).toEqual({ bytes: buf, outlines: 0 });
+    expect(r.bytes).toBe(buf);
   });
 });
