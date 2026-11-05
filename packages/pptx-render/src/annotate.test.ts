@@ -328,6 +328,17 @@ describe('annotatePptx', () => {
         'ppt/charts/chart4.xml': chart(
           `<c:title><c:tx><c:rich><a:p><a:r><a:t>Own</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea>${ser('X')}</c:plotArea>`,
         ),
+        // Automatic titles: a title element with no text of its own.
+        'ppt/charts/chart5.xml': chart(
+          `<c:title><c:overlay val="0"/></c:title><c:plotArea>${ser('Offering')}</c:plotArea>`,
+        ),
+        'ppt/charts/chart6.xml': chart(
+          `<c:title><c:overlay val="0"/></c:title><c:plotArea>${ser('A')}${ser('B')}</c:plotArea>`,
+        ),
+        // An axis title is not the chart's.
+        'ppt/charts/chart7.xml': chart(
+          `<c:autoTitleDeleted val="1"/><c:plotArea>${ser('Y')}<c:valAx><c:title><c:tx><c:rich><a:p><a:r><a:t>People</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx></c:plotArea>`,
+        ),
       }),
     );
     const z = await JSZip.loadAsync(a.bytes);
@@ -339,6 +350,9 @@ describe('annotatePptx', () => {
     expect(await title(2)).toBe('Giving');
     expect(await title(3)).toBe(' ');
     expect(await title(4)).toBe('Own');
+    expect(await title(5)).toBe('Offering');
+    expect(await title(6)).toBe('Chart Title');
+    expect(await title(7)).toBe(' ');
   });
 
   it('maps the slides pptx-preview draws (by part name) to the presentation order, without hidden ones', async () => {

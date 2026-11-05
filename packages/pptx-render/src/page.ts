@@ -165,6 +165,8 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
   /** Raised and lowered runs: their share of the font size (LibreOffice's 58 %). */
   const SCRIPT = 0.58;
   type Entry = {
+    /** The shrink scale pptx-preview applied to what it drew (the deck's stored one), to undo it. */
+    drawnScale: number;
     block: HTMLElement;
     p: HTMLElement;
     para: ParaStyle;
@@ -190,6 +192,7 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
             const para = args.paras[body.paras[i]!];
             if (bp && para)
               entries.push({
+                drawnScale: body.autofit?.fontScale || 1,
                 block,
                 p: bp,
                 para,
@@ -206,6 +209,7 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
       const block = blockOf(p);
       if (para)
         known.entries.push({
+          drawnScale: body.autofit?.fontScale || 1,
           block,
           p,
           para,
@@ -219,6 +223,7 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
     const block = blockOf(p);
     if (para)
       loose.push({
+        drawnScale: 1,
         block,
         p,
         para,
@@ -239,8 +244,9 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
     if (e.runs.length)
       for (const span of Array.from(e.p.querySelectorAll('span')) as HTMLElement[]) {
         if (marked.has(span) || span.dataset.ordoProbe !== undefined) continue;
+        // pptx-preview drew it at the deck's stored shrink scale: undo that first.
         if (span.dataset.ordoSize === undefined)
-          span.dataset.ordoSize = String(Number.parseFloat(span.style.fontSize) || 0);
+          span.dataset.ordoSize = String((Number.parseFloat(span.style.fontSize) || 0) / e.drawnScale);
         const own = Number(span.dataset.ordoSize);
         if (own > 0) span.style.fontSize = `${(fontScale === 1 ? own : sized(own / s) * s).toFixed(2)}px`;
       }
@@ -385,6 +391,13 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
   const placed: [Entry, number][] = [];
   for (const [box, { body, entries }] of boxes) {
     if (body.vertical) continue; // vertical text: pptx-preview's layout stands
+    if (body.shaped) {
+      // A shape whose text area is inset (an arrow, a callout): keep pptx-preview's text rectangle and
+      // the deck's stored shrink scale, and lay out only the paragraphs in it.
+      const font = body.autofit?.fontScale || 1;
+      for (const e of entries) placed.push([e, layoutPara(e, font, 1)]);
+      continue;
+    }
     const s = scale(box);
     const [l, t, r, b] = body.insets.map((v) => `${(v * s).toFixed(2)}px`);
     box.style.padding = `${t} ${r} ${b} ${l}`;

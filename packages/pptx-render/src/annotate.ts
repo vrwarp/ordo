@@ -58,6 +58,11 @@ export type BodyStyle = {
   /** Vertical text (`vert`): not re-fitted or re-placed, pptx-preview's layout is kept. */
   vertical?: boolean;
   /**
+   * A preset shape whose text area is not the whole shape (arrows, callouts, diamonds...): pptx-preview's
+   * text rectangle and its stored shrink scale are kept.
+   */
+  shaped?: boolean;
+  /**
    * The shape's exact size in points, when it is known from the XML (not in a group, horizontal text):
    * pptx-preview rounds it to whole points, enough to change where lines break and whether text fits.
    */
@@ -225,11 +230,23 @@ type ShapeCtx = {
   bodyPr?: XNode;
   /** The shape's own `a:xfrm`, and whether it sits in a group (whose transform scales it). */
   xfrm?: XNode;
+  /** Its preset geometry (`a:prstGeom prst`), if it has one. */
+  prst?: string;
   grouped?: boolean;
 };
 
 /** What a walk collects: one entry per `a:t`, and the paragraph and text box tables runs point to. */
 type Acc = { styles: (RunStyle | null)[]; paras: ParaStyle[]; bodies: BodyStyle[] };
+
+/** Preset shapes whose text area is the whole shape, as pptx-preview draws them. */
+const FULL_TEXT_AREA = new Set([
+  'rect',
+  'roundRect',
+  'snip1Rect',
+  'snip2SameRect',
+  'round1Rect',
+  'round2SameRect',
+]);
 
 const EMU_INSET_LR = 91_440;
 const EMU_INSET_TB = 45_720;
@@ -560,14 +577,28 @@ async function titleCharts(zip: JSZip, notes: string[]): Promise<boolean> {
   for (const name of Object.keys(zip.files)) {
     if (!/^ppt\/charts\/chart[^/]*\.xml$/.test(name)) continue;
     const xml = await readText(zip, name);
-    // Only the chart's own title counts (the first child of c:chart), not an axis title.
-    if (!xml || /<c:chart>\s*<c:title[\s>]/.test(xml) || !/<c:chart>/.test(xml)) continue;
+    if (!xml || !/<c:chart>/.test(xml)) continue;
+    // Only the chart's own title counts (the first child of c:chart), not an axis title. A title with no
+    // text of its own is automatic: PowerPoint shows the series name for one series, "Chart Title" else.
+    const own = /<c:chart>\s*<c:title(?:\s[^>]*)?(?:\/>|>([\s\S]*?)<\/c:title>)/.exec(xml);
+    if (own && /<c:tx>/.test(own[1] ?? '')) continue;
     const deleted = /<c:autoTitleDeleted\s+val="(1|true)"/.test(xml);
     const series = xml.match(/<c:ser>/g)?.length ?? 0;
     const seriesName = /<c:ser>[\s\S]*?<c:tx>[\s\S]*?<c:v>([^<]*)<\/c:v>/.exec(xml)?.[1];
-    const text = !deleted && series === 1 && seriesName ? seriesName : ' ';
-    const title = `<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>${text}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>`;
-    zip.file(name, xml.replace('<c:chart>', `<c:chart>${title}`));
+    const text = own
+      ? series === 1 && seriesName
+        ? seriesName
+        : 'Chart Title'
+      : !deleted && series === 1 && seriesName
+        ? seriesName
+        : ' ';
+    const tx = `<c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>${text}</a:t></a:r></a:p></c:rich></c:tx>`;
+    zip.file(
+      name,
+      own
+        ? xml.replace(own[0], `<c:chart><c:title>${tx}${own[1] ?? ''}</c:title>`)
+        : xml.replace('<c:chart>', `<c:chart><c:title>${tx}<c:overlay val="0"/></c:title>`),
+    );
     titled++;
   }
   if (titled)
@@ -908,6 +939,7 @@ function bodyStyle(part: PartCtx, shape: ShapeCtx, bodyPr: XNode | undefined): B
     ...(autofit ? { autofit } : {}),
     ...(size ? { size } : {}),
     ...(vert && vert !== 'horz' ? { vertical: true } : {}),
+    ...(shape.prst && !FULL_TEXT_AREA.has(shape.prst) ? { shaped: true } : {}),
   };
 }
 
@@ -1066,6 +1098,8 @@ function shapeCtx(sp: XNode, part: PartCtx): ShapeCtx {
   const spPr = child(sp, 'p:spPr');
   const xfrm = child(spPr, 'a:xfrm');
   if (xfrm) ctx.xfrm = xfrm;
+  const prst = child(spPr, 'a:prstGeom')?.attrs.prst;
+  if (prst) ctx.prst = prst;
   // A shape's shadow falls on its text only when the shape itself is not filled.
   const filled =
     !child(spPr, 'a:noFill') &&
