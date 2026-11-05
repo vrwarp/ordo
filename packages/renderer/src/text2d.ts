@@ -76,6 +76,7 @@ export function layoutText(
 ): TextLayout {
   // Last line of the render-plan clamps (design/25): bounded text, font size and box whatever the caller.
   text = clampText(text);
+  if (style.transform === 'uppercase') text = text.toUpperCase();
   style = clampStyle(style);
   box = clampBox(box);
   scale = num(scale, 0.01, 8, 1);

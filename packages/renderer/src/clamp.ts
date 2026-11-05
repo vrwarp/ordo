@@ -94,6 +94,7 @@ export function clampStyle(s: unknown, dflt: TextStyle = DEFAULT_STYLE): TextSty
     fontFamily: family,
     fontWeight: Math.round(num(x.fontWeight, 1, 1000, dflt.fontWeight)),
     fontStyle: x.fontStyle === 'italic' ? 'italic' : 'normal',
+    transform: x.transform === 'uppercase' ? 'uppercase' : 'none',
     fontSizePx: clampFontSize(x.fontSizePx, dflt.fontSizePx),
     color: clampColor(x.color, dflt.color),
     align: x.align === 'left' || x.align === 'right' ? x.align : 'center',
@@ -133,6 +134,7 @@ const DEFAULT_STYLE: TextStyle = {
   lineHeight: 1.2,
   letterSpacing: 0,
   padding: 0,
+  transform: 'none',
 };
 
 function str(v: unknown, max = 200): string {

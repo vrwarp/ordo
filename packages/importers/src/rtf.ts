@@ -67,6 +67,9 @@ interface GroupState {
   b: boolean;
   i: boolean;
   align: 'left' | 'center' | 'right' | 'justify';
+  /** Whether a `\fsN` / `\qX` was seen: without one the attributes decide, not RTF's defaults. */
+  fsSeen: boolean;
+  alignSeen: boolean;
   uc: number;
   strokeWidth: number;
   strokeColor: number;
@@ -173,6 +176,23 @@ function plainTextResult(input: string | Uint8Array): RtfResult {
   return { text, plain: true, bold: false, italic: false, styleRuns: 0 };
 }
 
+/**
+ * RTF is ASCII with escapes, but some writers put UTF-8 straight in: when the bytes are valid UTF-8 they
+ * are read as such (ASCII, and so every escape, is unchanged), else byte-for-byte as Latin-1.
+ */
+function rtfSourceString(bytes: Uint8Array): string {
+  let high = false;
+  for (let i = 0; i < bytes.length && !high; i++) if (bytes[i]! >= 0x80) high = true;
+  if (high) {
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch {
+      /* not UTF-8: Latin-1 below */
+    }
+  }
+  return rtfBytesToString(bytes);
+}
+
 /** Decode RTF bytes (ASCII with escapes) into a string without a TextDecoder dependency on encoding. */
 export function rtfBytesToString(bytes: Uint8Array): string {
   let s = '';
@@ -188,7 +208,7 @@ export function rtfBytesToString(bytes: Uint8Array): string {
  */
 export function parseRtf(input: string | Uint8Array): RtfResult {
   if (!isRtf(input)) return plainTextResult(input);
-  const src = typeof input === 'string' ? input : rtfBytesToString(input);
+  const src = typeof input === 'string' ? input : rtfSourceString(input);
   const fonts = new Map<number, string>();
   const colors: (Rgba | null)[] = [];
   let curFontIdx = -1;
@@ -203,6 +223,8 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
     b: false,
     i: false,
     align: 'left',
+    fsSeen: false,
+    alignSeen: false,
     uc: 1,
     strokeWidth: 0,
     strokeColor: 0,
@@ -425,6 +447,7 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
         return;
       case 'fs':
         st.fs = num !== undefined && num > 0 ? Math.min(num, 2000) : 24;
+        st.fsSeen = true;
         return;
       case 'cf':
         st.cf = num ?? 0;
@@ -449,15 +472,19 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
         return;
       case 'qc':
         st.align = 'center';
+        st.alignSeen = true;
         return;
       case 'ql':
         st.align = 'left';
+        st.alignSeen = true;
         return;
       case 'qr':
         st.align = 'right';
+        st.alignSeen = true;
         return;
       case 'qj':
         st.align = 'justify';
+        st.alignSeen = true;
         return;
       case 'strokewidth':
         st.strokeWidth = clampInt(num ?? 0, -2000, 2000);
@@ -479,18 +506,18 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
     }
   }
 
-  const text = wellFormed(tidyLines(out.replace(/ /g, ' ')));
+  const text = wellFormed(tidyLines(out));
   const f = first as GroupState | null;
   const res: RtfResult = { text, bold: false, italic: false, styleRuns: styleKeys.size };
   if (f) {
     const name = fonts.get(f.font);
     if (name) res.fontName = name.slice(0, RTF_FONT_NAME_MAX);
-    res.fontSizePt = f.fs / 2;
+    if (f.fsSeen) res.fontSizePt = f.fs / 2;
     const col = colors[f.cf];
     if (col) res.color = col;
     res.bold = f.b;
     res.italic = f.i;
-    res.align = f.align === 'justify' ? 'left' : f.align;
+    if (f.alignSeen) res.align = f.align === 'justify' ? 'left' : f.align;
     if (f.strokeWidth) {
       res.strokeWidth = f.strokeWidth;
       const sc = colors[f.strokeColor];

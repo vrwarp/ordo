@@ -56,6 +56,8 @@ export const TextStyle = z.object({
   outline: z.object({ width: length, color: Rgba }).optional(),
   shadow: z.object({ dx: coord, dy: coord, blur: length, color: Rgba }).optional(),
   fill: z.object({ color: Rgba, radius: length.default(0) }).optional(),
+  /** Applied when drawn; the text itself keeps its authored casing (ProPresenter's ALL CAPS). */
+  transform: z.enum(['none', 'uppercase']).default('none'),
 });
 export type TextStyle = z.infer<typeof TextStyle>;
 

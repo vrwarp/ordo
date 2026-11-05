@@ -104,9 +104,24 @@ async function centralDirectory(
   let offset: number = tail.readUInt32LE(eocd + 16);
   const needs64 = entries === 0xffff || length === 0xffffffff || offset === 0xffffffff;
   if (needs64 && eocd >= 20 && tail.readUInt32LE(eocd - 20) === SIG_EOCD64_LOCATOR) {
-    const recOffset = u64(tail, eocd - 20 + 8);
-    const rec = await readAt(fh, recOffset, 56);
-    if (rec.readUInt32LE(0) !== SIG_EOCD64) throw new Error('bad zip64 end of central directory');
+    let recOffset = u64(tail, eocd - 20 + 8);
+    let rec = await readAt(fh, recOffset, 56);
+    if (rec.readUInt32LE(0) !== SIG_EOCD64) {
+      // ProPresenter's exports are reported to write a locator that is some tens of bytes off: look for
+      // the record's signature just before the locator.
+      const back = Math.min(recOffset, 4096);
+      const win = await readAt(fh, recOffset - back, back + 4);
+      let found = -1;
+      for (let i = win.length - 4; i >= 0; i--) {
+        if (win.readUInt32LE(i) === SIG_EOCD64) {
+          found = i;
+          break;
+        }
+      }
+      if (found < 0) throw new Error('bad zip64 end of central directory');
+      recOffset = recOffset - back + found;
+      rec = await readAt(fh, recOffset, 56);
+    }
     entries = u64(rec, 32);
     length = u64(rec, 40);
     offset = u64(rec, 48);
@@ -237,7 +252,7 @@ async function extractInto(
           throw own ?? err;
         }
       };
-      const nested = depth < 2 && /\.proplaylist$/i.test(path);
+      const nested = depth < 2 && /\.(proplaylist|probundle)$/i.test(path);
       const spill = nested || opts.spill(full, e.uncompressedSize);
       if (spill) {
         const dest = join(opts.dir, `${nested ? 'bundle' : 'entry'}-${++budget.nested}${extOf(path)}`);

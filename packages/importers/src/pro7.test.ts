@@ -80,8 +80,12 @@ function mediaAction(
           platform: 'PLATFORM_MACOS',
           local: { root: 'ROOT_USER_DOCUMENTS', path: `ProPresenter/Media/${path}` },
         },
+        ...(/\.(mp4|mov|webm)$/i.test(path) ? { video: {} } : { image: {} }),
       },
-      video: { playbackBehavior: 'PLAYBACK_BEHAVIOR_LOOP' },
+      // As ProPresenter writes it: a picture action carries an empty `audio` playback block.
+      ...(/\.(mp4|mov|webm)$/i.test(path)
+        ? { video: { playbackBehavior: 'PLAYBACK_BEHAVIOR_LOOP' } }
+        : { audio: {} }),
     },
   };
 }
@@ -337,7 +341,11 @@ describe('importPro7', () => {
     // The only background video starts on the first slide: lifted to the presentation.
     const bgKey = `${PRO7_MEDIA_PREFIX}Users/worship/Documents/ProPresenter/Media/Motion Backgrounds/Blue Waves.mp4`;
     expect(grace.backgroundMediaId).toBe(bgKey);
-    expect(res.media).toContainEqual({ key: bgKey, path: 'Media/Motion Backgrounds/Blue Waves.mp4' });
+    expect(res.media).toContainEqual({
+      key: bgKey,
+      path: 'Media/Motion Backgrounds/Blue Waves.mp4',
+      background: true,
+    });
 
     const ann = res.presentations.find((p) => p.title === 'Announcements')!;
     expect(ann.kind).toBe('slides');
@@ -377,7 +385,7 @@ describe('importPro7', () => {
       msgs.some((m) => /^warn:Announcements.pro:media file not found in import: nowhere\/gone.jpg/.test(m)),
     ).toBe(true);
     expect(msgs.some((m) => /presentation "Not here" was not in the import/.test(m))).toBe(true);
-    expect(msgs.some((m) => /skipped headers \(1\)/.test(m))).toBe(true);
+    expect(msgs.some((m) => /header "[^"]+" before item 1 not imported/.test(m))).toBe(true);
   });
 
   it('remaps placeholder media ids and drops unresolved ones', async () => {
@@ -497,11 +505,13 @@ describe('importPro7', () => {
     const res = importPro7(new Map([['Library/Transforms.pro', doc]]));
     const slide = res.presentations[0]!.sections[0]!.slides[0]!;
     const texts = slide.objects.filter((o) => o.type === 'text').map((o) => (o as { text: string }).text);
-    expect(texts).toEqual(['SHOUT IT', 'first line\nsecond line\nthird line']);
+    // ALL CAPS is carried as a style transform; the words keep their authored casing.
+    expect(texts).toEqual(['Shout it', 'first line\nsecond line\nthird line']);
+    const shout = slide.objects.find((o) => o.type === 'text') as { style: { transform: string } };
+    expect(shout.style.transform).toBe('uppercase');
     const messages = res.log.filter((l) => l.item === 'Transforms.pro').map((l) => l.message);
     expect(messages).toEqual(
       expect.arrayContaining([
-        'ALL CAPS applied to the text itself (1)',
         'skipped capitalization of part of a text (1)',
         'skipped text transform one word per line (1)',
         'skipped empty text elements (1)',

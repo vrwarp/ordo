@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
-import { copyFile, readdir, readFile, realpath, rm, stat } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { copyFile, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { pipeline } from 'node:stream/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import {
   DEFAULT_THEME,
@@ -30,7 +32,7 @@ import type { Store } from './store.ts';
 export type Pro7Result = {
   presentations: Presentation[];
   playlists: Playlist[];
-  media: { key: string; path: string }[];
+  media: { key: string; path: string; background?: boolean }[];
   log: { level: 'info' | 'warn' | 'error'; item?: string; message: string }[];
   protoVersion: string;
   /** The documents decoded so far (batched imports; see `importPro7Batched`). */
@@ -51,7 +53,7 @@ export type Importers = {
 
 const MEDIA_EXT =
   /\.(mp4|m4v|mov|webm|mkv|avi|mpg|mpeg|jpe?g|png|gif|bmp|tiff?|heic|webp|wav|mp3|aac|m4a|flac|ogg|aiff?)$/i;
-const MAX_DIR_FILES = 20_000;
+const MAX_DIR_FILES = 200_000;
 const MAX_INLINE_BYTES = 64 * 1024 * 1024;
 /** Documents held in memory for one import (zip or folder); media never counts, it stays on disk. */
 export const MAX_IMPORT_MEMORY_BYTES = ZIP_MAX_IN_MEMORY_BYTES;
@@ -141,7 +143,7 @@ export class ImportService {
     return this.jobs.enqueue('pro7-import', { upload: uploadPath, name }, 'light');
   }
 
-  private async readDir(root: string): Promise<ImportFiles> {
+  private async readDir(root: string, scratch: string, signal: AbortSignal): Promise<ImportFiles> {
     const files = new Map<string, Uint8Array>();
     const onDisk = new Map<string, string>();
     let inMemory = 0;
@@ -155,6 +157,19 @@ export class ImportService {
         else if (ent.isFile()) {
           const rel = relative(root, p).split(sep).join('/');
           const st = await stat(p);
+          if (/\.(proplaylist|probundle)$/i.test(ent.name)) {
+            // ProPresenter's exported bundles on the NAS are zips: expand them under their own name.
+            const r = await extractZip(p, {
+              dir: scratch,
+              spill: (path, size) => MEDIA_EXT.test(path) || size > MAX_INLINE_BYTES,
+              maxInMemoryBytes: Math.max(0, MAX_IMPORT_MEMORY_BYTES - inMemory),
+              signal,
+            });
+            for (const [k, v] of r.files) files.set(`${rel}/${k}`, v);
+            for (const [k, v] of r.onDisk) onDisk.set(`${rel}/${k}`, v);
+            inMemory += r.inMemoryBytes;
+            continue;
+          }
           if (MEDIA_EXT.test(ent.name) || st.size > MAX_INLINE_BYTES) {
             // Only the key matters for media resolution; bytes are read from disk on upload.
             files.set(rel, new Uint8Array(0));
@@ -236,12 +251,18 @@ export class ImportService {
         ({ files, onDisk } = await this.readZipUpload(pl.upload, scratch, ctx.signal));
       } else if (pl.path) {
         ctx.log(`reading folder ${pl.path}`);
-        ({ files, onDisk } = await this.readDir(pl.path));
+        ({ files, onDisk } = await this.readDir(pl.path, scratch, ctx.signal));
         fromFolder = true;
       } else throw new Error('Nothing to import');
       ctx.log(`${files.size} file(s), ${onDisk.size} media file(s) on disk`);
       ctx.progress(0.1);
       const result = await this.decodePro7(files, ctx);
+      // Media the zip reader kept in memory (an extension it does not know as media): written out below.
+      const inline = new Map<string, Uint8Array>();
+      for (const m of result.media) {
+        const b = files.get(m.path);
+        if (b && b.length > 0 && !onDisk.has(m.path)) inline.set(m.path, b);
+      }
       files.clear();
       for (const l of result.log) ctx.log(`[${l.level}] ${l.item ? `${l.item}: ` : ''}${l.message}`);
 
@@ -261,10 +282,14 @@ export class ImportService {
               tmp = this.store.tmpPath();
               await copyFile(disk, tmp);
             } else tmp = disk;
+          } else if (inline.has(m.path)) {
+            tmp = this.store.tmpPath();
+            await writeFile(tmp, inline.get(m.path)!);
+            inline.delete(m.path);
           } else {
             throw new Error('file not in the import');
           }
-          const id = await this.mediaFor(tmp, m.path);
+          const id = await this.mediaFor(tmp, m.path, m.background === true);
           map.set(m.key, id);
           done.media[m.key] = id;
           save();
@@ -355,15 +380,25 @@ export class ImportService {
   }
 
   /** Reuse an existing media item with the same original content, else ingest a new one. */
-  private async mediaFor(tmp: string, path: string): Promise<string> {
-    const buf = await readFile(tmp);
-    const hash = createHash('sha256').update(buf).digest('hex');
+  private async mediaFor(tmp: string, path: string, background: boolean): Promise<string> {
+    // Hashed as a stream: a service video can be larger than Node reads into one buffer.
+    const h = createHash('sha256');
+    await pipeline(createReadStream(tmp), h);
+    const hash = h.digest('hex');
+    const bytes = (await stat(tmp)).size;
     const existing = this.lib.media.list().find((m) => m.original.hash === hash);
     if (existing) {
       await rm(tmp, { force: true });
+      if (background && !existing.isBackground) {
+        const updated = this.lib.media.update(existing.id, { ...existing, isBackground: true });
+        this.lib.emit([{ kind: 'media', id: updated.id, rev: updated.rev, entity: updated }]);
+      }
       return existing.id;
     }
-    const m = await this.media.ingest({ path: tmp, hash, bytes: buf.length }, path, { tags: ['pro7'] });
+    const m = await this.media.ingest({ path: tmp, hash, bytes }, path, {
+      tags: ['pro7'],
+      isBackground: background,
+    });
     return m.id;
   }
 

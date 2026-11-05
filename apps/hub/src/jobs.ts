@@ -209,7 +209,11 @@ export class JobQueue {
       signal: ctrl.signal,
       log: (m) => {
         logLines.push(`${new Date().toISOString().slice(11, 19)} ${m}`);
-        if (logLines.length > MAX_LOG) logLines.splice(0, logLines.length - MAX_LOG);
+        // Over the cap, routine lines go first so the warnings of a large import are what remains.
+        while (logLines.length > MAX_LOG) {
+          const i = logLines.findIndex((l) => !/\[(warn|error)\]/.test(l));
+          logLines.splice(i >= 0 ? i : 0, 1);
+        }
         this.update(row.id, { log: JSON.stringify(logLines) }, false);
       },
       progress: (f) => this.update(row.id, { progress: Math.max(0, Math.min(1, f)) }, false),

@@ -51,6 +51,7 @@ function base(style: Partial<TextStyle>): TextStyle {
     lineHeight: 1.15,
     letterSpacing: 0,
     padding: 0,
+    transform: 'none',
     ...style,
   };
 }
@@ -403,6 +404,7 @@ export function textCss(style: TextStyle): Record<string, string | number> {
     fontWeight: style.fontWeight,
     fontStyle: style.fontStyle,
     fontSize: `${style.fontSizePx}px`,
+    textTransform: style.transform === 'uppercase' ? 'uppercase' : 'none',
     color: `rgba(${c.r},${c.g},${c.b},${c.a})`,
     textAlign: style.align,
     lineHeight: style.lineHeight,

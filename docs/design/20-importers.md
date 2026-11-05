@@ -24,7 +24,41 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
 | Builds, transitions per slide, macros, timers, looks, stage layouts, audio routing | Skipped, logged                                                                                                                                                             |
 
 - RTF: a small RTF reader extracts plain text and the first run's font, size and colour;
-  mixed runs collapse to the first run's style with a log line.
+  mixed runs collapse to the first run's style with a log line. Bytes are read as UTF-8 when
+  they are valid UTF-8 (some writers put it straight in), else as Latin-1 with `\'hh` as
+  Windows-1252, which is how ProPresenter on a Mac writes it. Font size and alignment come
+  from the RTF only when it states them (`\fsN`, `\qX`), else from the attributes.
+- What ProPresenter actually writes (learnt from its own exports; the files are under
+  `packages/importers/test-fixtures/pro7/`, checked by `pro7.real.test.ts`):
+  - A media action's kind comes from the element (`image`/`video`/`audio` properties), not
+    from the action's playback block: ProPresenter writes an empty `audio` block on
+    picture actions.
+  - Every document carries an empty chord-chart URL and every text box a visibility link;
+    neither is reported.
+  - ALL CAPS is kept as `TextStyle.transform: 'uppercase'`; the words keep their casing.
+    The stroke width in the attributes (`-3`) and in the RTF (`\strokewidth-60`) are the
+    same percentage of the font size. A gradient box fill becomes its first stop.
+  - Media URLs are tried as the exporting Mac's absolute path, then `local.path` (what
+    ProPresenter itself resolves by), then a relative path; a bare file name that several
+    entries share is taken only when one sits next to the document, else left unlinked.
+  - Playlist items carry `arrangement_name` (field 5, added to the vendored proto); the
+    arrangement is found by UUID, else by name. Headers are logged by name (ordo has no
+    divider item yet), hidden items are skipped, a missing document is a warning.
+  - A document's ordo id is `pro7-<uuid>`, so importing the library again updates the
+    earlier copy. A copy with the same UUID but other content gets a numbered suffix.
+  - Slides of another size are scaled uniformly and centred on the 1920x1080 canvas.
+  - Group names in German, Spanish, French and Portuguese (Strophe, Refrain, Coro,
+    Couplet…) are recognised as song sections; unknown names get a two-letter short form.
+  - `.probundle` and `.proplaylist` files are zips: expanded when nested in an upload and
+    when found in a NAS folder. Entry names that are absolute paths (ProPresenter's own
+    bundle exports) are made relative.
+- Not carried (logged per document): slide labels, cue hot keys, group colours, builds,
+  per-slide transitions, macros, timers, linked text (imported as last saved), text-box
+  borders, small caps and title case, per-side margins (the largest is used on all sides).
+- Schema: the vendored protos are the community `proto/` set (ProPresenter 7.x). A raw
+  scan of real 7.x and 21.x files found only cosmetic fields it lacks (ligature style, an
+  image alpha-type flag); `autogen-proto/` in the same repository tracks ProPresenter 21.4
+  and is the set to move to when a file shows fields that matter.
 - Import root: a zip uploaded from the operator app or a NAS path the hub can read. The
   log groups by presentation: imported, partially imported (with reasons), skipped.
 

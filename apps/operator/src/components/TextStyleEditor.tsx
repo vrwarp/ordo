@@ -45,6 +45,11 @@ export function TextStyleEditor(props: {
         />
       </div>
       <ColorField label={<>Colour{mark('color')}</>} value={s.color} onChange={(c) => set('color', c)} />
+      <Check
+        label={<>Show in capitals{mark('transform')}</>}
+        value={s.transform === 'uppercase'}
+        onChange={(v) => set('transform', v ? 'uppercase' : 'none')}
+      />
       <div className="grid2">
         <Select
           label={<>Align{mark('align')}</>}

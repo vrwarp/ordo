@@ -1,6 +1,6 @@
 import JSZip from 'jszip';
 
-export const ZIP_MAX_ENTRIES = 20_000;
+export const ZIP_MAX_ENTRIES = 200_000;
 export const ZIP_MAX_TOTAL_BYTES = 8 * 1024 ** 3;
 
 /** Paths from macOS archives and filesystems that are never content. */
@@ -14,12 +14,15 @@ function isJunk(path: string): boolean {
   );
 }
 
-/** Normalize a zip entry name, rejecting absolute paths and `..` traversal. */
+/**
+ * Normalize a zip entry name, rejecting `..` traversal. An absolute name (ProPresenter's own bundle
+ * exports store media under the exporting Mac's full path, `/Users/me/.../bg.png`) is made relative.
+ */
 export function safeEntryPath(name: string): string {
-  const unified = name.replace(/\\/g, '/');
-  if (unified.startsWith('/') || /^[a-zA-Z]:\//.test(unified)) {
-    throw new Error(`zip entry has an absolute path: ${name}`);
-  }
+  const unified = name
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '')
+    .replace(/^[a-zA-Z]:\/+/, '');
   const parts: string[] = [];
   for (const part of unified.split('/')) {
     if (part === '' || part === '.') continue;
@@ -67,7 +70,7 @@ async function readInto(
     const full = prefix ? `${prefix}/${path}` : path;
     // ProPresenter's exported .proPlaylist bundles are zips: expand them in place so their documents and
     // media are found by the importer.
-    if (depth < 2 && /\.proplaylist$/i.test(path) && isZip(bytes)) {
+    if (depth < 2 && /\.(proplaylist|probundle)$/i.test(path) && isZip(bytes)) {
       await readInto(bytes, full, out, budget, depth + 1);
       continue;
     }

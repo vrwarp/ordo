@@ -380,6 +380,7 @@ describe('textCss', () => {
       lineHeight: 1.2,
       letterSpacing: 0,
       padding: 10,
+      transform: 'uppercase',
       outline: { width: 3, color: { r: 0, g: 0, b: 0, a: 1 } },
       shadow: { dx: 0, dy: 4, blur: 12, color: { r: 0, g: 0, b: 0, a: 0.5 } },
       fill: { color: { r: 1, g: 2, b: 3, a: 1 }, radius: 8 },
@@ -390,6 +391,7 @@ describe('textCss', () => {
       WebkitTextStroke: '6px rgba(0,0,0,1)',
       textShadow: '0px 4px 12px rgba(0,0,0,0.5)',
       background: 'rgba(1,2,3,1)',
+      textTransform: 'uppercase',
       borderRadius: '8px',
     });
   });

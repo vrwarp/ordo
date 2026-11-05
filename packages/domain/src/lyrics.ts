@@ -4,10 +4,12 @@ import { DEFAULT_THEME } from './defaults.ts';
 
 /** Known section labels and their short forms. Matching is case-insensitive. */
 const SECTION_PATTERNS: { full: string; abbr: string; label: string; short: string }[] = [
-  { full: 'verse', abbr: 'V', label: 'Verse', short: 'V' },
-  { full: 'pre[- ]?chorus', abbr: 'PC', label: 'Pre-Chorus', short: 'PC' },
-  { full: 'chorus', abbr: 'C', label: 'Chorus', short: 'C' },
-  { full: 'bridge', abbr: 'B', label: 'Bridge', short: 'B' },
+  // German, Spanish, French and Portuguese names are accepted too (libraries imported from ProPresenter
+  // carry them); the normalized label stays the English one.
+  { full: 'verse|strophe|vers|estrofa|couplet|verso', abbr: 'V', label: 'Verse', short: 'V' },
+  { full: 'pre[- ]?chorus|pre[- ]?coro', abbr: 'PC', label: 'Pre-Chorus', short: 'PC' },
+  { full: 'chorus|chor|coro|estribillo', abbr: 'C', label: 'Chorus', short: 'C' },
+  { full: 'bridge|br[üu]cke|puente|pont|ponte', abbr: 'B', label: 'Bridge', short: 'B' },
   { full: 'tag', abbr: 'T', label: 'Tag', short: 'T' },
   { full: 'ending|outro', abbr: 'E', label: 'Ending', short: 'E' },
   { full: 'intro', abbr: 'I', label: 'Intro', short: 'I' },

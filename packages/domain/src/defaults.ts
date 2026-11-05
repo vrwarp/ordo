@@ -25,6 +25,7 @@ export const DEFAULT_LYRIC_STYLE: TextStyle = {
   valign: 'middle',
   lineHeight: 1.2,
   letterSpacing: 0,
+  transform: 'none',
   padding: 20,
   outline: { width: 4, color: { r: 0, g: 0, b: 0, a: 0.85 } },
   shadow: { dx: 0, dy: 4, blur: 12, color: { r: 0, g: 0, b: 0, a: 0.6 } },
