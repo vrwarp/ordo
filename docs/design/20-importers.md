@@ -25,9 +25,12 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
 
 - RTF: a small RTF reader extracts plain text and the first run's font, size and colour;
   mixed runs collapse to the first run's style with a log line. Bytes are read as UTF-8 when
-  they are valid UTF-8 (some writers put it straight in), else as Latin-1 with `\'hh` as
-  Windows-1252, which is how ProPresenter on a Mac writes it. Font size and alignment come
-  from the RTF only when it states them (`\fsN`, `\qX`), else from the attributes.
+  they are valid UTF-8 (some writers put it straight in), else as Latin-1. `\'hh` escapes are
+  in the current font's `\fcharsetN` (136 Big5, 134 GBK, 128 Shift-JIS, 129 Korean, 204
+  Cyrillic…) or else the document's `\ansicpgN`, default Windows-1252; a run of escapes is
+  decoded together, so double-byte characters survive. ProPresenter on a Mac writes Chinese
+  this way under a PingFang font with `\fcharset136`. Font size and alignment come from the
+  RTF only when it states them (`\fsN`, `\qX`), else from the attributes.
 - What ProPresenter actually writes (learnt from its own exports; the files are under
   `packages/importers/test-fixtures/pro7/`, checked by `pro7.real.test.ts`):
   - A media action's kind comes from the element (`image`/`video`/`audio` properties), not
@@ -52,6 +55,20 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
   - `.probundle` and `.proplaylist` files are zips: expanded when nested in an upload and
     when found in a NAS folder. Entry names that are absolute paths (ProPresenter's own
     bundle exports) are made relative.
+  - Its exports are Zip64 throughout, and the central directory size it declares counts
+    its own Zip64 end records (98 bytes too many). `unzip` copes, JSZip refuses: `readZip`
+    corrects the size in a copy when the directory actually there proves it (the hub's
+    streaming reader never trusted that field).
+  - A slide's elements are listed front to back (the first is on top); ordo draws back to
+    front, so the order is reversed.
+  - A picture is an element whose fill is media, and it carries an (empty) text block like
+    every element: the picture is kept, its text only when it has words.
+  - Background media runs from the slide that starts it until a slide clears it (a clear
+    action on the background or every layer, or a clear group named "Clear All", for
+    background or media) or starts another, in the document's slide order. Each slide gets
+    the background it would show; one background on every slide becomes the presentation's.
+    A slide that stops a running background gets `clearBackground`, which clears the
+    output's background layer when it is shown.
 - Not carried (logged per document): slide labels, cue hot keys, group colours, builds,
   per-slide transitions, macros, timers, linked text (imported as last saved), text-box
   borders, small caps and title case, per-side margins (the largest is used on all sides).

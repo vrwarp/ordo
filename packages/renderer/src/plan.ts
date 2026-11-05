@@ -380,7 +380,11 @@ export function planPreview(
   // The slide's own background wins over the presentation's, as expandCues does for live cues.
   const bgId = look.layers.background.visible
     ? (slide.backgroundMediaId ??
-      (typeof presentation.backgroundMediaId === 'string' ? presentation.backgroundMediaId : undefined))
+      (slide.clearBackground
+        ? undefined
+        : typeof presentation.backgroundMediaId === 'string'
+          ? presentation.backgroundMediaId
+          : undefined))
     : look.holdingMediaId;
   const m = bgId ? opts.media?.(bgId) : undefined;
   const f = m ? playableFile(m) : undefined;

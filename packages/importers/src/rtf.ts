@@ -59,6 +59,53 @@ function wellFormed(s: string): string {
 
 const clampInt = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.trunc(v)));
 
+/**
+ * Encoding (WHATWG label) for an RTF `\fcharsetN`. 0 (ANSI) and 1 (default) follow the document's
+ * `\ansicpgN`; charsets missing here (symbol, OEM, Mac) keep Windows-1252.
+ */
+const CHARSET_ENCODING: Record<number, string> = {
+  128: 'shift_jis',
+  129: 'euc-kr',
+  134: 'gbk',
+  136: 'big5',
+  161: 'windows-1253',
+  162: 'windows-1254',
+  163: 'windows-1258',
+  177: 'windows-1255',
+  178: 'windows-1256',
+  186: 'windows-1257',
+  204: 'windows-1251',
+  222: 'windows-874',
+  238: 'windows-1250',
+};
+
+/** Encoding for an `\ansicpgN` code page (`undefined`: Windows-1252, decoded without a TextDecoder). */
+function codePageEncoding(cp: number): string | undefined {
+  if (cp === 1252 || cp <= 0) return undefined;
+  if (cp === 932) return 'shift_jis';
+  if (cp === 936) return 'gbk';
+  if (cp === 949) return 'euc-kr';
+  if (cp === 950) return 'big5';
+  if (cp === 874 || (cp >= 1250 && cp <= 1258)) return `windows-${cp}`;
+  if (cp === 10000) return 'macintosh';
+  return undefined;
+}
+
+const decoders = new Map<string, TextDecoder | null>();
+/** A decoder for `label`, or null when this runtime has none (the bytes then read as Windows-1252). */
+function decoderFor(label: string): TextDecoder | null {
+  if (!decoders.has(label)) {
+    let d: TextDecoder | null = null;
+    try {
+      d = new TextDecoder(label);
+    } catch {
+      d = null;
+    }
+    decoders.set(label, d);
+  }
+  return decoders.get(label) ?? null;
+}
+
 interface GroupState {
   dest: Dest;
   font: number;
@@ -210,6 +257,13 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
   if (!isRtf(input)) return plainTextResult(input);
   const src = typeof input === 'string' ? input : rtfSourceString(input);
   const fonts = new Map<number, string>();
+  /** `\fcharsetN` of each font, by font number. */
+  const fontCharsets = new Map<number, number>();
+  /** The document's `\ansicpgN` encoding (undefined: Windows-1252). */
+  let docEncoding: string | undefined;
+  /** `\'hh` bytes in a multi-byte encoding, decoded together once the run of escapes ends. */
+  let pendingBytes: number[] = [];
+  let pendingEncoding = '';
   const colors: (Rgba | null)[] = [];
   let curFontIdx = -1;
   let fontName = '';
@@ -289,10 +343,27 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
     out += text.length > RTF_TEXT_MAX - out.length ? text.slice(0, RTF_TEXT_MAX - out.length) : text;
   };
 
+  /** The encoding `\'hh` escapes are in right now (the current font's charset, else the document's). */
+  const escapeEncoding = (): string | undefined => {
+    const cs = fontCharsets.get(st.font);
+    if (cs !== undefined && cs !== 0 && cs !== 1) return CHARSET_ENCODING[cs];
+    return docEncoding;
+  };
+  const flushBytes = () => {
+    if (!pendingBytes.length) return;
+    const bytes = pendingBytes;
+    pendingBytes = [];
+    const d = decoderFor(pendingEncoding);
+    if (d) emit(d.decode(new Uint8Array(bytes)));
+    else for (const b of bytes) emit(cp1252(b));
+  };
+
   const n = src.length;
   let p = 0;
   while (p < n) {
     const c = src[p]!;
+    // A run of `\'hh` escapes ends at any other token: decode what it spelled before going on.
+    if (pendingBytes.length && !(c === '\\' && src[p + 1] === "'")) flushBytes();
     if (c === '{') {
       stack.push(st);
       st = { ...st };
@@ -371,8 +442,21 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
         const hex = src.slice(p, p + 2);
         p += 2;
         const byte = Number.parseInt(hex, 16);
-        if (!Number.isNaN(byte)) emit(cp1252(byte));
         groupStart = false;
+        if (Number.isNaN(byte)) continue;
+        const enc = st.dest === 'text' ? escapeEncoding() : undefined;
+        if (!enc) {
+          emit(cp1252(byte));
+          continue;
+        }
+        // Fallback bytes after `\uN` (`\ucN` counts bytes, and a double-byte character is two).
+        if (skipChars > 0) {
+          skipChars--;
+          continue;
+        }
+        if (pendingEncoding !== enc) flushBytes();
+        pendingEncoding = enc;
+        pendingBytes.push(byte);
         continue;
       }
       if (next === '*') {
@@ -445,6 +529,12 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
           fontName = '';
         } else st.font = num ?? 0;
         return;
+      case 'fcharset':
+        if (st.dest === 'fonttbl' && curFontIdx >= 0 && num !== undefined) fontCharsets.set(curFontIdx, num);
+        return;
+      case 'ansicpg':
+        docEncoding = codePageEncoding(num ?? 1252);
+        return;
       case 'fs':
         st.fs = num !== undefined && num > 0 ? Math.min(num, 2000) : 24;
         st.fsSeen = true;
@@ -506,6 +596,7 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
     }
   }
 
+  flushBytes();
   const text = wellFormed(tidyLines(out));
   const f = first as GroupState | null;
   const res: RtfResult = { text, bold: false, italic: false, styleRuns: styleKeys.size };

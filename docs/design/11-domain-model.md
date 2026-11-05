@@ -33,6 +33,7 @@ type Slide = {
   objects: SlideObject[]; // z-order, first = back
   lyricObjectId?: Id; // which text box lyric-only looks read
   backgroundMediaId?: Id; // per-slide override, rare
+  clearBackground?: boolean; // showing it clears the running background (ProPresenter clear actions)
   durationMs?: number; // for loop presentations
   notes?: string;
   overrides?: string[]; // paths of theme properties overridden

@@ -66,6 +66,8 @@ export type Cue = {
   slideId?: Id;
   slideIndexInSection?: number;
   backgroundMediaId?: Id;
+  /** The slide clears the running background (only when it has none of its own). */
+  clearBackground?: boolean;
   transition?: Transition;
   mediaId?: Id;
   mediaKind?: 'video' | 'image' | 'audio';

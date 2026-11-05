@@ -350,14 +350,15 @@ describe('importPro7', () => {
     const ann = res.presentations.find((p) => p.title === 'Announcements')!;
     expect(ann.kind).toBe('slides');
     const objs = ann.sections[0]!.slides[0]!.objects;
-    expect(objs.map((o) => o.type)).toEqual(['image', 'text']);
-    const img = objs[0]!;
+    // ProPresenter lists the logo first (frontmost); ordo draws back to front, so it comes last.
+    expect(objs.map((o) => o.type)).toEqual(['text', 'image']);
+    const img = objs[1]!;
     if (img.type !== 'image') throw new Error();
     // 1280x720 slide scaled to 1920x1080.
     expect(img.box).toEqual({ x: 60, y: 60, w: 300, h: 150, rotation: 0 });
     expect(img.fit).toBe('cover');
     expect(res.media.find((m) => m.key === img.mediaId)?.path).toBe('Media/elsewhere/church logo.png');
-    const title = objs[1]!;
+    const title = objs[0]!;
     if (title.type !== 'text') throw new Error();
     expect(title.text).toBe('Welcome {home}');
     expect(title.style.fontSizePx).toBe(90);
@@ -506,8 +507,8 @@ describe('importPro7', () => {
     const slide = res.presentations[0]!.sections[0]!.slides[0]!;
     const texts = slide.objects.filter((o) => o.type === 'text').map((o) => (o as { text: string }).text);
     // ALL CAPS is carried as a style transform; the words keep their authored casing.
-    expect(texts).toEqual(['Shout it', 'first line\nsecond line\nthird line']);
-    const shout = slide.objects.find((o) => o.type === 'text') as { style: { transform: string } };
+    expect(texts).toEqual(['first line\nsecond line\nthird line', 'Shout it']);
+    const shout = slide.objects.findLast((o) => o.type === 'text') as { style: { transform: string } };
     expect(shout.style.transform).toBe('uppercase');
     const messages = res.log.filter((l) => l.item === 'Transforms.pro').map((l) => l.message);
     expect(messages).toEqual(
@@ -530,5 +531,142 @@ describe('readZip', () => {
     await expect(readZip(await zip.generateAsync({ type: 'uint8array' }))).rejects.toThrow(
       /escapes|traversal/,
     );
+  });
+});
+
+/** What ProPresenter 7 writes on export, reproduced with synthetic content (2026-11-05 church playlist). */
+describe('ProPresenter export details', () => {
+  const pictureElement = (name: string, path: string, box = { x: 0, y: 0, w: 1920, h: 1080 }) => ({
+    element: {
+      uuid: uuid(`E-${name}`),
+      name,
+      bounds: { origin: { x: box.x, y: box.y }, size: { width: box.w, height: box.h } },
+      opacity: 1,
+      fill: {
+        enable: true,
+        media: {
+          url: { absoluteString: `file:///Users/worship/Documents/ProPresenter/Media/${encodeURI(path)}` },
+          image: {},
+        },
+      },
+      // Every element carries a text block; a picture's is empty.
+      text: { rtfData: rtf('') },
+    },
+  });
+  const textElement = (name: string, text: string) => ({
+    element: {
+      uuid: uuid(`E-${name}`),
+      name,
+      bounds: { origin: { x: 100, y: 150 }, size: { width: 1720, height: 780 } },
+      opacity: 1,
+      text: { rtfData: rtf(text) },
+    },
+  });
+  const cue = (id: string, elements: unknown[], extra: unknown[] = []) => ({
+    uuid: uuid(id),
+    isEnabled: true,
+    actions: [
+      {
+        uuid: uuid(`A-${id}`),
+        type: 'ACTION_TYPE_PRESENTATION_SLIDE',
+        isEnabled: true,
+        slide: { presentation: { baseSlide: { size: { width: 1920, height: 1080 }, elements } } },
+      },
+      ...extra,
+    ],
+  });
+  const clearBackground = {
+    uuid: uuid('CL'),
+    type: 'ACTION_TYPE_CLEAR',
+    isEnabled: true,
+    clear: { targetLayer: 'CLEAR_TARGET_LAYER_BACKGROUND' },
+  };
+  const clearAll = {
+    uuid: uuid('CG'),
+    type: 'ACTION_TYPE_CLEAR_GROUP',
+    isEnabled: true,
+    clearGroup: { identification: { parameterName: 'Clear All' } },
+  };
+
+  it('keeps pictures that carry an empty text block, stacks front to back, runs the background until cleared', () => {
+    const doc = encodePresentation({
+      uuid: uuid('P-X'),
+      name: 'Sermon',
+      cues: [
+        // The verse is listed first: in front of the full-screen picture.
+        cue(
+          'C1',
+          [textElement('Verse', 'Rest for your souls'), pictureElement('Faded', 'faded.png')],
+          [mediaAction('series.png'), clearAll],
+        ),
+        cue('C2', [pictureElement('Map', 'map.png', { x: 480, y: 0, w: 960, h: 1080 })]),
+        cue('C3', [textElement('Point', 'Point one')], [clearBackground]),
+        cue('C4', [textElement('Point', 'Point two')]),
+        cue('C5', [textElement('Close', 'Amen')], [mediaAction('series.png'), clearAll]),
+      ],
+    });
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const res = importPro7(
+      new Map([
+        ['Sermon.pro', doc],
+        ['ProPresenter/Media/series.png', png],
+        ['ProPresenter/Media/faded.png', png],
+        ['ProPresenter/Media/map.png', png],
+      ]),
+    );
+    const p = res.presentations[0]!;
+    const slides = p.sections.flatMap((s) => s.slides);
+    // Picture behind (drawn first), verse in front; the picture's empty text block is not an object.
+    expect(slides[0]!.objects.map((o) => o.type)).toEqual(['image', 'text']);
+    expect(slides[1]!.objects.map((o) => o.type)).toEqual(['image']);
+    const bg = `${PRO7_MEDIA_PREFIX}Users/worship/Documents/ProPresenter/Media/series.png`;
+    // Started on slide 1, still running on 2, cleared on 3 (and so absent on 4), started again on 5.
+    expect(p.backgroundMediaId).toBeUndefined();
+    expect(slides.map((s) => s.backgroundMediaId)).toEqual([bg, bg, undefined, undefined, bg]);
+    // Slide 3 stops it on the output (ordo, like ProPresenter, keeps a background running otherwise).
+    expect(slides.map((s) => s.clearBackground ?? false)).toEqual([false, false, true, false, false]);
+    expect(res.media.map((m) => m.path).sort()).toEqual([
+      'ProPresenter/Media/faded.png',
+      'ProPresenter/Media/map.png',
+      'ProPresenter/Media/series.png',
+    ]);
+  });
+
+  it('reads a ProPresenter zip whose central directory size counts its Zip64 end records', async () => {
+    const zip = new JSZip();
+    zip.file('Song.pro', 'not a document, only bytes');
+    zip.file('data', 'playlist');
+    const good = await zip.generateAsync({ type: 'uint8array' });
+    const v = new DataView(good.buffer, good.byteOffset, good.byteLength);
+    const eocd = good.length - 22;
+    const entries = v.getUint16(eocd + 10, true);
+    const size = v.getUint32(eocd + 12, true);
+    const offset = v.getUint32(eocd + 16, true);
+    // Rebuild the end as ProPresenter does: Zip64 record + locator + classic record, and a directory size
+    // 98 bytes too large (the three end records counted in) in both size fields.
+    const z64 = new DataView(new ArrayBuffer(56));
+    z64.setUint32(0, 0x06064b50, true);
+    z64.setBigUint64(4, 44n, true);
+    z64.setUint16(12, 45, true);
+    z64.setUint16(14, 45, true);
+    z64.setBigUint64(24, BigInt(entries), true);
+    z64.setBigUint64(32, BigInt(entries), true);
+    z64.setBigUint64(40, BigInt(size + 98), true);
+    z64.setBigUint64(48, BigInt(offset), true);
+    const loc = new DataView(new ArrayBuffer(20));
+    loc.setUint32(0, 0x07064b50, true);
+    loc.setBigUint64(8, BigInt(offset + size), true);
+    loc.setUint32(16, 1, true);
+    const end = new DataView(good.slice(eocd).buffer);
+    end.setUint32(12, size + 98, true);
+    const bad = new Uint8Array(offset + size + 56 + 20 + 22);
+    bad.set(good.subarray(0, offset + size));
+    bad.set(new Uint8Array(z64.buffer), offset + size);
+    bad.set(new Uint8Array(loc.buffer), offset + size + 56);
+    bad.set(new Uint8Array(end.buffer), offset + size + 76);
+    await expect(JSZip.loadAsync(bad)).rejects.toThrow(/Corrupted zip/);
+    const files = await readZip(bad);
+    expect([...files.keys()].sort()).toEqual(['Song.pro', 'data']);
+    expect(new TextDecoder().decode(files.get('data'))).toBe('playlist');
   });
 });

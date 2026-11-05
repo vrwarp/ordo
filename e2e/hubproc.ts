@@ -22,13 +22,17 @@ export class HubProcess {
   }
 
   async start(): Promise<void> {
-    // A hub already answering here is a leftover of an earlier test (a timed-out one whose worker was
-    // torn down before its finally): kill() would then kill nothing and the hub-loss steps wait forever.
-    try {
-      const r = await fetch(`http://localhost:${this.port}/api/v1/health`);
-      if (r.ok) throw new Error(`port ${this.port} already serves a hub: a leftover of an earlier test`);
-    } catch (e) {
-      if (e instanceof Error && e.message.includes('leftover')) throw e;
+    // A hub still answering here after 10 s is a leftover of an earlier test (a timed-out one whose worker
+    // was torn down before its finally): kill() would then kill nothing and the hub-loss steps wait
+    // forever. A hub just killed lets go within a few seconds (its children exit on their own).
+    for (let waited = 0; ; waited += 250) {
+      const up = await fetch(`http://localhost:${this.port}/api/v1/health`)
+        .then((r) => r.ok)
+        .catch(() => false);
+      if (!up) break;
+      if (waited >= 10_000)
+        throw new Error(`port ${this.port} still serves a hub: a leftover of an earlier test`);
+      await new Promise((r) => setTimeout(r, 250));
     }
     // ORDO_E2E_HUB_CMD lets a run use the sources (e.g. "npx tsx apps/hub/src/main.ts") instead of the build.
     const [cmd, ...args] = (process.env.ORDO_E2E_HUB_CMD ?? 'node apps/hub/dist/main.js').split(/\s+/);

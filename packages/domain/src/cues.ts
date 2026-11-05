@@ -49,6 +49,7 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
             slideId: slide.id,
             slideIndexInSection,
             backgroundMediaId: slide.backgroundMediaId ?? item.backgroundMediaId ?? p.backgroundMediaId,
+            ...(slide.clearBackground && !slide.backgroundMediaId ? { clearBackground: true } : {}),
             transition: item.transition ?? p.transition,
             autoAdvanceMs:
               p.kind === 'loop' ? loopDelay(slide.durationMs, p.loop?.defaultSlideMs) : undefined,

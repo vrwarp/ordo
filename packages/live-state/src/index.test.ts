@@ -217,6 +217,25 @@ const arbEvent: fc.Arbitrary<LiveEvent> = fc.oneof(
   fc.constant({ k: 'goToSection' as const, sectionIndex: 1, at: 8 }),
 );
 
+describe('a slide that clears the background', () => {
+  it('stops the running background, and the next slide with one starts it again', () => {
+    const r = fixture();
+    const a =
+      r.presentations[
+        r.playlist.items[0]!.kind === 'presentation' ? r.playlist.items[0]!.presentationId : ''
+      ]!;
+    const slides = a.sections.flatMap((x) => x.slides);
+    slides[1]!.clearBackground = true;
+    let s = reduce(initialState(), { k: 'goLive', resolved: r });
+    s = reduce(s, { k: 'go', cueIndex: 0, at: 1 });
+    expect(s.layers.background.content?.mediaId).toBe('bg1');
+    s = reduce(s, { k: 'go', cueIndex: 1, at: 2 });
+    expect(s.layers.background.content).toBeNull();
+    s = reduce(s, { k: 'go', cueIndex: 2, at: 3 });
+    expect(s.layers.background.content?.mediaId).toBe('bg1');
+  });
+});
+
 describe('reducer properties', () => {
   it('is deterministic, counts seq, and keeps live/armed in range', () => {
     const resolved = fixture();

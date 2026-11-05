@@ -12,6 +12,24 @@ const COCOA = String.raw`{\rtf1\ansi\ansicpg1252\cocoartf2639
 the sound}`;
 
 describe('parseRtf', () => {
+  it('decodes hex escapes in the font charset: Big5 and GBK double-byte characters, ansicpg for the rest', () => {
+    // Cocoa writes a Chinese run as Big5 bytes under a `\fcharset136` font (ProPresenter on a Mac).
+    const big5 = String.raw`{\rtf1\ansi\ansicpg1252{\fonttbl\f0\fnil\fcharset0 Tahoma;\f1\fnil\fcharset136 PingFangTC;}
+\f0\fs48 Hello\
+\f1 \'a7\'41\'a6\'6e
+\f0 !}`;
+    expect(parseRtf(big5).text).toBe('Hello\n你好!');
+    const gbk = String.raw`{\rtf1\ansi{\fonttbl\f0\fnil\fcharset134 SimSun;}\f0 \'c4\'e3\'ba\'c3}`;
+    expect(parseRtf(gbk).text).toBe('你好');
+    const cyrillic = String.raw`{\rtf1\ansi\ansicpg1251{\fonttbl\f0\fnil\fcharset0 Arial;}\f0 \'cf\'f0\'e8\'e2\'e5\'f2}`;
+    expect(parseRtf(cyrillic).text).toBe('Привет');
+    // A \uN character's fallback is counted in bytes: a double-byte fallback is skipped whole.
+    const fallback = String.raw`{\rtf1\ansi{\fonttbl\f0\fnil\fcharset136 PingFangTC;}\f0\uc2\u20320 \'a7\'41\'a6\'6e}`;
+    expect(parseRtf(fallback).text).toBe('你好');
+    // Latin-1 escapes in a Western font are unchanged.
+    expect(parseRtf(String.raw`{\rtf1\ansi\ansicpg1252{\fonttbl\f0 Arial;}\f0 Caf\'e9}`).text).toBe('Café');
+  });
+
   it('extracts Cocoa RTF text and first-run style', () => {
     const r = parseRtf(COCOA);
     expect(r.text).toBe('Amazing grace, how sweet\nthe sound');

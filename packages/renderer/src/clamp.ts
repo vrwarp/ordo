@@ -204,6 +204,7 @@ export function clampSlide(slide: unknown): Slide {
   const out: Slide = { id: str(s.id) || 'slide', objects };
   if (typeof s.lyricObjectId === 'string') out.lyricObjectId = s.lyricObjectId.slice(0, 200);
   if (typeof s.backgroundMediaId === 'string') out.backgroundMediaId = s.backgroundMediaId.slice(0, 200);
+  if (s.clearBackground === true) out.clearBackground = true;
   if (s.imported && typeof s.imported === 'object' && typeof s.imported.imageMediaId === 'string') {
     const imp = s.imported;
     out.imported = {

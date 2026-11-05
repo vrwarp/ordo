@@ -126,6 +126,11 @@ export const Slide = z.object({
   objects: z.array(SlideObject).max(1000).default([]),
   lyricObjectId: Id.optional(),
   backgroundMediaId: Id.optional(),
+  /**
+   * Showing this slide clears the running background (a ProPresenter slide with a clear action). Ignored
+   * when the slide has a background of its own.
+   */
+  clearBackground: z.boolean().optional(),
   durationMs: z.number().min(0).max(MAX.ms).optional(),
   notes: z.string().max(MAX.long).optional(),
   overrides: z.array(z.string().max(200)).max(1000).optional(),

@@ -197,7 +197,12 @@ function goTo(s: LiveState, index: number, at: number): LiveState {
         seq,
         transition: cue.transition,
       };
-      if (cue.backgroundMediaId && layers.background.content?.mediaId !== cue.backgroundMediaId) {
+      if (cue.clearBackground) {
+        // The slide clears the running background (its own playlist item or presentation background
+        // would otherwise have been in backgroundMediaId; a clear wins only over what is running).
+        if (layers.background.content)
+          layers.background = { content: null, at, seq, transition: cue.transition };
+      } else if (cue.backgroundMediaId && layers.background.content?.mediaId !== cue.backgroundMediaId) {
         layers.background = {
           content: { kind: 'background', mediaId: cue.backgroundMediaId },
           at,

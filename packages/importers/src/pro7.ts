@@ -317,6 +317,11 @@ interface Ctx {
   /** Things that were handled approximately (counted, logged once per document). */
   approximated: Map<string, number>;
   rtfMixed: number;
+  /**
+   * Slides whose cue clears the background layer (a clear action on it or on every layer, or a clear group
+   * named for it) without starting new background media: the running background stops there.
+   */
+  clearsBackground: WeakSet<Slide>;
 }
 
 function note(ctx: Ctx, level: ImportLogLevel, message: string) {
@@ -567,9 +572,22 @@ function slideFromCue(cue: Msg, ctx: Ctx): Slide | null {
   let notes: string | undefined;
   let backgroundMediaId: string | undefined;
   let hasTransition = false;
+  let clears = false;
   for (const a of (cue.actions ?? []) as Msg[]) {
     if (a.isEnabled === false) continue;
     const kind = actionKind(a);
+    if (kind === 'ACTION_TYPE_CLEAR') {
+      // No target written means CLEAR_TARGET_LAYER_ALL (the enum's zero value).
+      const target =
+        ((a.clear as Msg | undefined)?.targetLayer as string | undefined) ?? 'CLEAR_TARGET_LAYER_ALL';
+      if (target === 'CLEAR_TARGET_LAYER_ALL' || target === 'CLEAR_TARGET_LAYER_BACKGROUND') clears = true;
+    } else if (kind === 'ACTION_TYPE_CLEAR_GROUP') {
+      // What a clear group clears is defined outside the document; its name is all there is to go by.
+      const name = String(
+        ((a.clearGroup as Msg | undefined)?.identification as Msg | undefined)?.parameterName ?? '',
+      );
+      if (/\b(all|background|media)\b/i.test(name)) clears = true;
+    }
     if (kind === 'ACTION_TYPE_PRESENTATION_SLIDE') {
       const ps = (a.slide as Msg | undefined)?.presentation as Msg | undefined;
       if (ps?.baseSlide && !base) {
@@ -636,30 +654,42 @@ function slideFromCue(cue: Msg, ctx: Ctx): Slide | null {
       skip(ctx, 'hidden elements');
       continue;
     }
+    // A picture is an element whose fill is media. ProPresenter gives most elements a text block too,
+    // usually empty: the picture is kept, and the text only when it has words.
+    const hasMedia = !!(el.fill as Msg | undefined)?.media;
+    if (hasMedia) {
+      const io = imageObjectFrom(el, size, ctx);
+      if (io) objects.push(io);
+    }
     if (el.text?.rtfData?.length) {
       const to = textObjectFrom(el, size, ctx);
-      if (to) {
+      if (to && (!hasMedia || /[^\s\u200b-\u200d\ufeff]/.test(to.text))) {
+        if (hasMedia) delete to.style.fill; // the box fill is the picture, already drawn below the words
         objects.push(to);
         if (!lyricObjectId) lyricObjectId = to.id;
       }
       continue;
     }
-    if (el.text && !(el.fill as Msg | undefined)?.media) {
+    if (hasMedia) continue;
+    if (el.text) {
       // A text box with no RTF at all (an emptied placeholder or a template box): nothing to show.
       skip(ctx, 'empty text elements');
-      continue;
-    }
-    if ((el.fill as Msg | undefined)?.media) {
-      const io = imageObjectFrom(el, size, ctx);
-      if (io) objects.push(io);
       continue;
     }
     const so = shapeObjectFrom(el, size, ctx);
     if (so) objects.push(so);
     else if (el.fill?.enable || el.stroke?.enable) skip(ctx, 'shapes');
   }
-  if (base?.drawsBackgroundColor) skip(ctx, 'slide background colours');
+  // ProPresenter lists a slide's elements front to back (the first is on top); ordo draws its objects back
+  // to front. (A full-screen picture listed after a verse sits behind it.)
+  objects.reverse();
+  if (base?.drawsBackgroundColor) {
+    // Opaque black is what an output shows anyway; only another colour is lost.
+    const c = colorOf(base.backgroundColor as Msg | undefined);
+    if (!c || c.r + c.g + c.b > 0 || c.a < 1) skip(ctx, 'slide background colours');
+  }
   const slide: Slide = { id: newId(), objects };
+  if (clears && !backgroundMediaId) ctx.clearsBackground.add(slide);
   if (lyricObjectId) slide.lyricObjectId = lyricObjectId;
   if (backgroundMediaId) slide.backgroundMediaId = backgroundMediaId;
   if (notes) slide.notes = notes;
@@ -697,6 +727,7 @@ export function mapPresentation(
     skipped: new Map(),
     approximated: new Map(),
     rtfMixed: 0,
+    clearsBackground: new WeakSet(),
   };
   const cuesById = new Map<string, Msg>();
   for (const c of (doc.cues ?? []) as Msg[]) {
@@ -768,18 +799,25 @@ export function mapPresentation(
     arrangements.push({ id: newId(), name: 'Default', sectionIds: sections.map((s) => s.id) });
   }
 
-  // Background: a media file shared by every slide that has one becomes the presentation background.
+  // Background media keeps running from the slide that starts it until a slide clears it or starts another
+  // (in the document's slide order): each slide gets the background it would show in ProPresenter.
   const allSlides = sections.flatMap((s) => s.slides);
+  let running: string | undefined;
+  for (const sl of allSlides) {
+    if (sl.backgroundMediaId) running = sl.backgroundMediaId;
+    else if (ctx.clearsBackground.has(sl)) {
+      // Only a clear that stops something matters (a "Clear All" on the first slide clears nothing).
+      if (running) sl.clearBackground = true;
+      running = undefined;
+    } else if (running) sl.backgroundMediaId = running;
+  }
+  // One background on every slide becomes the presentation background.
   const bgs = new Set(allSlides.map((s) => s.backgroundMediaId).filter((x): x is string => !!x));
   let backgroundMediaId: string | undefined;
-  if (bgs.size === 1 && allSlides.length > 0) {
+  if (bgs.size === 1 && allSlides.length > 0 && allSlides.every((s) => s.backgroundMediaId)) {
     const [only] = bgs;
-    const first = allSlides.find((s) => s.backgroundMediaId);
-    // Only lift it when the first slide sets it (ProPresenter keeps a background running until cleared).
-    if (first === allSlides[0]) {
-      backgroundMediaId = only;
-      for (const s of allSlides) delete s.backgroundMediaId;
-    }
+    backgroundMediaId = only;
+    for (const s of allSlides) delete s.backgroundMediaId;
   }
   const bg = doc.background as Msg | undefined;
   if (bg?.isEnabled && (bg.color || bg.gradient)) skip(ctx, 'presentation background colour');
