@@ -234,6 +234,27 @@ describe('annotatePptx', () => {
     expect(a.paras[shrunk.paras[2]!]!.end?.size).toBe(20);
   });
 
+  it("gives a text box its exact size: its own, its layout placeholder's, none in a group", async () => {
+    const xfrm = (cx: number, cy: number) =>
+      `<a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>`;
+    const body =
+      sp({ spPr: xfrm(127000, 63500), body: `<a:p>${run('Own')}</a:p>` }) +
+      sp({ ph: '<p:ph idx="1"/>', body: `<a:p>${run('Placed')}</a:p>` }) +
+      `<p:grpSp><p:nvGrpSpPr><p:cNvPr id="7" name="G"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>${sp({ spPr: xfrm(127000, 63500), body: `<a:p>${run('Grouped')}</a:p>` })}</p:grpSp>`;
+    const z = await JSZip.loadAsync(await deck(body));
+    const layout = await z.file('ppt/slideLayouts/slideLayout1.xml')!.async('string');
+    z.file(
+      'ppt/slideLayouts/slideLayout1.xml',
+      layout.replace('<p:spPr></p:spPr>', `<p:spPr>${xfrm(254000, 127000)}</p:spPr>`),
+    );
+    const a = await annotatePptx(await z.generateAsync({ type: 'uint8array' }));
+    const xml = await (await JSZip.loadAsync(a.bytes)).file('ppt/slides/slide1.xml')!.async('string');
+    const size: Record<string, unknown> = {};
+    for (const m of xml.matchAll(/<a:t>([^<]*)<\/a:t>/g))
+      size[m[1]!.slice(9)] = a.bodies[a.runs[decodeMarker(m[1]!)!]!.b!]!.size;
+    expect(size).toEqual({ Own: { w: 10, h: 5 }, Placed: { w: 20, h: 10 }, Grouped: undefined });
+  });
+
   it('lists slide pictures drawn in an ellipse or a rounded rectangle, in presentation order', async () => {
     const pic = (prst: string, x: number, av = '') =>
       `<p:pic><p:nvPicPr><p:cNvPr id="4" name="P"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId9"/></p:blipFill>` +

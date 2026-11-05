@@ -134,11 +134,13 @@ async function pngSize(file: string): Promise<{ w: number; h: number } | undefin
 
 /**
  * SSIM of two pictures in greyscale at 960x540 (ffmpeg). The reference is first cut to the other's
- * proportions: LibreOffice rounds a 960 pt wide slide up to 1921 pixels, a blank last column.
+ * proportions: LibreOffice rounds a slide up to a whole pixel (1921x1080, 1440x811), a blank last column
+ * or row.
  */
 async function ssim(a: string, b: string): Promise<number> {
   const size = await pngSize(b);
-  const crop = size ? `crop='min(iw,trunc(ih*${size.w}/${size.h}+0.5))':ih:0:0,` : '';
+  const r = size ? `${size.w}/${size.h}` : '';
+  const crop = size ? `crop='min(iw,trunc(ih*${r}+0.5))':'min(ih,trunc(iw/(${r})+0.5))':0:0,` : '';
   const r = await run(
     'ffmpeg',
     [

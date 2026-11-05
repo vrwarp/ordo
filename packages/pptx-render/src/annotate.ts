@@ -55,6 +55,11 @@ export type BodyStyle = {
   paras: number[];
   /** Shrink text on overflow (`a:normAutofit`) and the scale PowerPoint stored, as fractions. */
   autofit?: { fontScale: number; lnSpcReduction: number };
+  /**
+   * The shape's exact size in points, when it is known from the XML (not in a group, horizontal text):
+   * pptx-preview rounds it to whole points, enough to change where lines break and whether text fits.
+   */
+  size?: { w: number; h: number };
 };
 
 /**
@@ -107,7 +112,7 @@ type Theme = {
   effects: XNode[];
 };
 
-type Placeholder = { type: string; idx?: string; lstStyle?: XNode; bodyPr?: XNode };
+type Placeholder = { type: string; idx?: string; lstStyle?: XNode; bodyPr?: XNode; xfrm?: XNode };
 
 type Master = {
   path: string;
@@ -133,6 +138,9 @@ type ShapeCtx = {
   /** The shape's text box (index into the bodies table) and its own `a:bodyPr`. */
   body?: number;
   bodyPr?: XNode;
+  /** The shape's own `a:xfrm`, and whether it sits in a group (whose transform scales it). */
+  xfrm?: XNode;
+  grouped?: boolean;
 };
 
 /** What a walk collects: one entry per `a:t`, and the paragraph and text box tables runs point to. */
@@ -528,6 +536,7 @@ function placeholdersOf(root: XNode | undefined): Placeholder[] {
             idx: ph.attrs.idx,
             lstStyle: path(c, 'p:txBody', 'a:lstStyle'),
             bodyPr: path(c, 'p:txBody', 'a:bodyPr'),
+            xfrm: path(c, 'p:spPr', 'a:xfrm'),
           });
       } else if (c.name !== '#text') visit(c);
     }
@@ -657,6 +666,18 @@ function bodyStyle(part: PartCtx, shape: ShapeCtx, bodyPr: XNode | undefined): B
     return dflt / EMU_PER_PT;
   };
   const anchorAttr = nodes.map((n) => n.attrs.anchor).find((a) => a !== undefined);
+  // The size: the shape's own transform, else its layout's, else its master's placeholder's.
+  let xfrm = shape.xfrm;
+  if (!xfrm && ph && part.kind === 'slide') xfrm = findLayoutPh(part.layout, ph)?.xfrm;
+  if (!xfrm && ph && part.kind !== 'master') xfrm = findMasterPh(part.master, ph.type)?.xfrm;
+  const ext = child(xfrm, 'a:ext');
+  const cx = num(ext?.attrs.cx);
+  const cy = num(ext?.attrs.cy);
+  const vert = nodes.map((n) => n.attrs.vert).find((v) => v !== undefined);
+  const size =
+    !shape.grouped && cx !== undefined && cy !== undefined && cx > 0 && cy > 0 && (!vert || vert === 'horz')
+      ? { w: cx / EMU_PER_PT, h: cy / EMU_PER_PT }
+      : undefined;
   const anchor = anchorAttr === 'ctr' || anchorAttr === 'b' ? anchorAttr : 't';
   // The nearest body that says how text fits decides; the stored scale is only ever on the shape itself.
   const fit = nodes
@@ -681,6 +702,7 @@ function bodyStyle(part: PartCtx, shape: ShapeCtx, bodyPr: XNode | undefined): B
     anchor,
     paras: [],
     ...(autofit ? { autofit } : {}),
+    ...(size ? { size } : {}),
   };
 }
 
@@ -769,8 +791,14 @@ function walk(
         break;
       }
       case 'p:sp':
-      case 'p:cxnSp':
-        walk(c, part, shapeCtx(c, part), undefined, undefined, acc);
+      case 'p:cxnSp': {
+        const ctx = shapeCtx(c, part);
+        if (shape.grouped) ctx.grouped = true;
+        walk(c, part, ctx, undefined, undefined, acc);
+        break;
+      }
+      case 'p:grpSp':
+        walk(c, part, { grouped: true }, undefined, undefined, acc);
         break;
       case 'p:graphicFrame':
         walk(c, part, {}, undefined, undefined, acc);
@@ -821,6 +849,8 @@ function shapeCtx(sp: XNode, part: PartCtx): ShapeCtx {
   const ctx: ShapeCtx = {};
   if (phNode) ctx.ph = { type: phNode.attrs.type ?? 'obj', idx: phNode.attrs.idx };
   const spPr = child(sp, 'p:spPr');
+  const xfrm = child(spPr, 'a:xfrm');
+  if (xfrm) ctx.xfrm = xfrm;
   // A shape's shadow falls on its text only when the shape itself is not filled.
   const filled =
     !child(spPr, 'a:noFill') &&

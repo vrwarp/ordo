@@ -85,6 +85,18 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
     return Number.isFinite(width) && width > 0 ? width / args.slideWidthPt : 1;
   };
 
+  /** Screen pixels per layout pixel of the slide an element is in (the wrapper is scaled with a transform). */
+  const zoom = (el: Element): number => {
+    const wrap = el.closest(
+      '.slide-wrapper, .slide-layout-wrapper, .slide-master-wrapper',
+    ) as HTMLElement | null;
+    const width = wrap ? Number.parseFloat(wrap.style.width) : Number.NaN;
+    const z = wrap && width > 0 ? wrap.getBoundingClientRect().width / width : 1;
+    return Number.isFinite(z) && z > 0 ? z : 1;
+  };
+  /** An element's height in layout pixels, unrounded (offsetHeight rounds to whole pixels). */
+  const heightOf = (el: HTMLElement) => el.getBoundingClientRect().height / zoom(el);
+
   let styled = 0;
   let unstyled = 0;
   /** Marked runs by paragraph element, in document order. */
@@ -280,7 +292,7 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
     const s = scale(box);
     const shape = box.parentElement;
     const pad = (body.insets[1] + body.insets[3]) * s;
-    const avail = (shape?.offsetHeight ?? 0) - pad;
+    const avail = (body.size ? body.size.h * s : (shape?.offsetHeight ?? 0)) - pad;
     const layout = (fontPct: number, spacingPct: number) => {
       for (const e of entries) layoutPara(e, fontPct / 100, spacingPct / 100);
     };
@@ -288,7 +300,7 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
     const slack = (0.5 / 25.4) * 72 * s; // LibreOffice measures the text 0.5 mm short
     const fit = (fontPct: number, spacingPct: number) => {
       layout(fontPct, spacingPct);
-      const content = box.offsetHeight - pad;
+      const content = heightOf(box) - pad;
       return content - slack > 0 ? avail / (content - slack) : Number.POSITIVE_INFINITY;
     };
     const initial = Math.min(100, (body.autofit?.fontScale ?? 1) * 100);
@@ -333,8 +345,7 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
       probe.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline';
       e.p.insertBefore(probe, e.p.firstChild);
       const pr = e.p.getBoundingClientRect();
-      const ratio = e.p.offsetHeight > 0 ? pr.height / e.p.offsetHeight : 1;
-      const at = (probe.getBoundingClientRect().bottom - pr.top) / (ratio || 1);
+      const at = (probe.getBoundingClientRect().bottom - pr.top) / zoom(e.p);
       probe.remove();
       if (Number.isFinite(at)) shifts.push([e.p, target - at]);
     }
@@ -346,6 +357,23 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
     const s = scale(box);
     const [l, t, r, b] = body.insets.map((v) => `${(v * s).toFixed(2)}px`);
     box.style.padding = `${t} ${r} ${b} ${l}`;
+    // The exact width (pptx-preview rounds it to whole points), so lines break where they should.
+    if (body.size) box.style.width = `${(body.size.w * s).toFixed(2)}px`;
+    // A line break that ends a paragraph still makes a line in PowerPoint and LibreOffice; in HTML a
+    // trailing <br> does not. Give it something to hold, sized like the paragraph's end mark.
+    for (const e of entries) {
+      let last = e.p.lastChild;
+      while (last && last.nodeType === Node.TEXT_NODE && !(last as Text).data.trim())
+        last = last.previousSibling;
+      if (last?.nodeName !== 'BR') continue;
+      const hold = document.createElement('span');
+      hold.textContent = '\u200b';
+      const end = e.para.end;
+      const family = end ? stackFor(end) : undefined;
+      if (family) hold.style.fontFamily = family;
+      e.p.appendChild(hold);
+      if (end) e.runs.push([hold, { ...end, shadows: undefined } as RunStyle]);
+    }
     // The text wrapper is positioned inside the shape's box: put it where the anchor says (pptx-preview
     // centres text whose anchor it does not find, and a box that grows to fit keeps a stale height).
     if (body.anchor === 't') {
