@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react';
 import { DragHandle, useSortable } from '../../components/Sortable.tsx';
 import { moveItem } from '../../lib/arrangement.ts';
 import { deviceProfile } from '../../lib/capabilities.ts';
-import { controller } from '../../services/controller.ts';
 import { upsertLocal, useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
 import { currentRole } from '../../state/session.ts';
@@ -12,6 +11,8 @@ import { errorText, toast } from '../../state/toasts.ts';
 import { itemSubtitle, itemTitle } from '../live/PlaylistPane.tsx';
 import { AddItemsPanel } from './AddItemsPanel.tsx';
 import { ItemSettings } from './ItemSettings.tsx';
+import { startService } from '../../lib/startService.ts';
+import { OfflineControl } from './OfflineControl.tsx';
 
 /**
  * Build a service: rename, reorder (drag by the handle, touch included, or the arrow buttons), add from the library, per-item settings, go live (prd/02).
@@ -194,7 +195,7 @@ export function PlaylistEditor(props: {
               title={isLive ? 'Another playlist is live: End service first' : undefined}
               onClick={async () => {
                 await flush();
-                controller()?.goLive(draft.id);
+                startService(draft.id);
                 location.hash = '#/live';
               }}
             >
@@ -214,6 +215,7 @@ export function PlaylistEditor(props: {
             Delete
           </button>
         </div>
+        {props.canOperate && <OfflineControl playlistId={draft.id} rev={draft.rev} />}
         <div
           ref={sort.ref}
           className="col pl-list"

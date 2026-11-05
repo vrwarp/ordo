@@ -4,7 +4,7 @@ import { primaryScreen, type ScreenInfo, toScreenRef } from '../../lib/screens.t
 import { controller } from '../../services/controller.ts';
 import { log } from '../../services/log.ts';
 import { outputWindows, useLaunch } from '../../services/outputs.ts';
-import { saveSettings, settings } from '../../state/library.ts';
+import { saveSettings, settings, useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
 
 /** "Leave on the main screen": remember the primary screen for the unmatched outputs so Launch stops asking. */
@@ -131,6 +131,79 @@ export function GoLiveErrorDialog() {
       <p className="muted">
         Fix the items above (for example wait for media to finish processing) and try again.
       </p>
+    </Dialog>
+  );
+}
+
+/**
+ * Go live with the hub unreachable (design/17 "Going live without the hub"). The playlist is checked
+ * against this PC's copy of the library and its downloaded files; the operator decides.
+ */
+export function LocalGoLiveDialog() {
+  const playlistId = useLive((s) => s.localGoLive);
+  const check = useLive((s) => (s.localGoLive ? s.offlineChecks[s.localGoLive] : undefined));
+  const hubConnected = useLive((s) => s.hubConnected);
+  const playlistName = useLibrary((s) => s.data.playlists.find((p) => p.id === playlistId)?.name);
+  if (!playlistId) return null;
+  const close = () => useLive.setState({ localGoLive: undefined });
+  const go = () => {
+    close();
+    if (hubConnected) controller()?.goLive(playlistId);
+    else controller()?.goLiveLocal(playlistId);
+  };
+  const missing = check?.missing ?? [];
+  return (
+    <Dialog
+      title={hubConnected ? 'The hub is back' : 'Go live without the hub?'}
+      onClose={close}
+      width={560}
+      footer={
+        <>
+          <button type="button" onClick={close}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="primary"
+            data-local-go-live
+            disabled={!hubConnected && !check?.ok}
+            onClick={go}
+          >
+            {hubConnected ? 'Go live through the hub' : 'Go live from this PC'}
+          </button>
+        </>
+      }
+    >
+      {hubConnected ? (
+        <p>The hub answered again. Go live through it as usual.</p>
+      ) : (
+        <>
+          <p>
+            The hub is not reachable. This PC can run <b>{playlistName ?? 'this playlist'}</b> from its own
+            copy of the library. The outputs follow this PC until you press End service, even if the hub comes
+            back meanwhile; the next service goes through the hub again.
+          </p>
+          {!check && <p className="muted">Checking the playlist on this PC…</p>}
+          {check && !check.ok && (
+            <div className="banner red" style={{ whiteSpace: 'pre-line' }}>
+              {check.error}
+            </div>
+          )}
+          {check?.ok && missing.length === 0 && (
+            <div className="banner green" data-offline-ready>
+              Every file this service uses is on this PC ({check.files}).
+            </div>
+          )}
+          {check?.ok && missing.length > 0 && (
+            <div className="banner" data-offline-missing>
+              <b>{missing.length === 1 ? 'One file is' : `${missing.length} files are`} not on this PC</b> and
+              will be missing from the screens: {missing.slice(0, 8).join(', ')}
+              {missing.length > 8 ? `, and ${missing.length - 8} more` : ''}. Text slides show as usual. Next
+              time, use Download for offline use on the playlist beforehand.
+            </div>
+          )}
+        </>
+      )}
     </Dialog>
   );
 }

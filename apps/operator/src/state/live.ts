@@ -2,7 +2,7 @@ import type { LiveState } from '@ordo/domain';
 import { initialState } from '@ordo/live-state';
 import type { BudgetRow, SupervisedStats } from '@ordo/client';
 import type { OutputHealthEntry } from '@ordo/protocol';
-import type { CoreStats } from '../core/protocol.ts';
+import type { CoreStats, OfflineCheck, OfflineEntry } from '../core/protocol.ts';
 import { create } from 'zustand';
 import type { CacheIntegrity } from '../lib/health.ts';
 import type { Authority, Reconcile } from '../lib/liveCore.ts';
@@ -24,6 +24,14 @@ export type LiveStore = {
   conflict?: { hubPlaylist?: string; localPlaylist?: string };
   /** Why the hub refused the last goLive, shown in a dialog. */
   goLiveError?: string;
+  /** This PC started the live service without the hub and holds it until End service. */
+  held: boolean;
+  /** Playlists downloaded for offline use, by playlist id. */
+  offline: Record<string, OfflineEntry>;
+  /** The last answer to an offline check, by playlist id. */
+  offlineChecks: Record<string, OfflineCheck>;
+  /** A Go live asked for while the hub is not connected: the playlist awaiting the operator's answer. */
+  localGoLive?: string;
   /** Wall-clock offset/rtt for diagnostics. */
   clock: { offset: number; rtt: number };
   /** Result of the last cache integrity check after Launch outputs (prd/08). */
@@ -54,6 +62,9 @@ export const useLive = create<LiveStore>(() => ({
   pending: 0,
   health: {},
   ownCache: { ready: 0, total: 0, failed: 0 },
+  held: false,
+  offline: {},
+  offlineChecks: {},
   clock: { offset: 0, rtt: 0 },
   recovering: false,
   coreGaveUp: false,

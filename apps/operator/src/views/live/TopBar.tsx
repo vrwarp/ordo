@@ -68,7 +68,7 @@ export function TopBar() {
           {s.resolved?.playlist.name ?? '—'}
         </b>
       </div>
-      <span className="stat" title={hubText}>
+      <span className="stat" title={hubText} data-hub-status>
         <span className={`dot ${hubDot}`} /> {hubText}
       </span>
       <span className="stat" title="Internet connection of this PC">

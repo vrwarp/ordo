@@ -83,6 +83,49 @@ describe('OutputLink bus transitions', () => {
     expect(link.state.seq).toBe(4);
   });
 
+  it('a held service ignores the hub whatever its sequence, keeps its picture when the operator goes quiet, and is released only by the operator', () => {
+    const { link, ws, out, op } = setup();
+    const helds: boolean[] = [];
+    link.on('held', ({ held }) => helds.push(held));
+    out.deliver(op, { t: 'fallback.hello', v: 1, seq: 2, operatorMs: Date.now(), hold: true });
+    expect(link.held).toBe(true);
+    out.deliver(op, { t: 'live.state', v: 1, seq: 2, state: st(2) });
+    out.deliver(op, { t: 'live.delta', v: 1, seq: 3, fromSeq: 2, event: { k: 'endService', at: 1 } });
+    // The hub comes back with a much higher sequence (its own, idle): not followed, not applied.
+    ws.sent = [];
+    ws.receive({ t: 'live.state', v: 1, seq: 900, state: st(900, { black: true }) });
+    ws.receive({ t: 'live.delta', v: 1, seq: 901, fromSeq: 900, event: { k: 'endService', at: 9 } });
+    expect(link.bus).toBe('fallback');
+    expect(link.state.seq).toBe(3);
+    expect(link.state.black).toBe(false);
+    // The operator falls silent (its page reloads): the window keeps its picture, asks nothing of the hub.
+    vi.advanceTimersByTime(FALLBACK_SILENCE_MS + 1000);
+    link.watchFallback();
+    expect(link.bus).toBe('none');
+    expect(ws.sent.filter((m) => (m as { t: string }).t === 'live.resync')).toEqual([]);
+    ws.receive({ t: 'live.state', v: 1, seq: 902, state: st(902, { black: true }) });
+    expect(link.state.seq).toBe(3);
+    // The operator is back, still holding; then it ends the service and lets go.
+    out.deliver(op, { t: 'fallback.hello', v: 1, seq: 3, operatorMs: Date.now(), hold: true });
+    expect(link.bus).toBe('fallback');
+    out.deliver(op, { t: 'fallback.hub', v: 1, hubUp: true });
+    expect(link.held).toBe(false);
+    expect(link.bus).toBe('hub');
+    ws.receive({ t: 'live.state', v: 1, seq: 903, state: st(903, { black: true }) });
+    expect(link.state.black).toBe(true);
+    expect(helds).toEqual([true, false]);
+  });
+
+  it('a hold restored after a reload holds until the operator says otherwise', () => {
+    const { link, ws, out, op } = setup();
+    link.restoreHeld(true);
+    ws.receive({ t: 'live.state', v: 1, seq: 50, state: st(50, { black: true }) });
+    expect(link.state.seq).toBe(2);
+    // An operator that is no longer holding (the service ended meanwhile) introduces itself without hold.
+    out.deliver(op, { t: 'fallback.hello', v: 1, seq: 2, operatorMs: Date.now() });
+    expect(link.held).toBe(false);
+  });
+
   it('leaves fallback after 5 s without operator traffic', () => {
     const { link, buses, hello, out, op } = setup();
     hello();

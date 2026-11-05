@@ -8,7 +8,7 @@ import {
 } from '@ordo/domain';
 import { initialState, reduce } from '@ordo/live-state';
 import type { LiveDeltaMsg } from '@ordo/protocol';
-import { type HubOut, LiveCore, type LiveNotice } from '../src/lib/liveCore.ts';
+import { type HubOut, LiveCore, type LiveCoreDeps, type LiveNotice } from '../src/lib/liveCore.ts';
 
 function resolved(id = 'pl', name = 'Sunday'): ResolvedPlaylist {
   const a = songFromParsed(parseLyrics('Verse 1\na\nb\n\nChorus\nc\nd'), { linesPerSlide: 1 });
@@ -24,14 +24,20 @@ function resolved(id = 'pl', name = 'Sunday'): ResolvedPlaylist {
 }
 
 /** A fake hub running the real reducer, plus fake fallback bus and timers. */
-function harness(seed?: LiveState) {
+function harness(seed?: LiveState, extra: Partial<LiveCoreDeps> = {}) {
   const sent: HubOut[] = [];
   const notices: LiveNotice[] = [];
   const deltas: LiveDeltaMsg[] = [];
   const timers: { fn: () => void; ms: number; id: number; cleared: boolean }[] = [];
   let tid = 0;
   let nid = 0;
-  const fb = { active: false, activated: 0, deactivated: 0, last: undefined as LiveState | undefined };
+  const fb = {
+    active: false,
+    activated: 0,
+    deactivated: 0,
+    hold: false,
+    last: undefined as LiveState | undefined,
+  };
   let clockFallback = false;
   let hubUp = true;
   const core = new LiveCore(
@@ -42,13 +48,18 @@ function harness(seed?: LiveState) {
         return true;
       },
       fallback: {
-        activate: (s) => {
+        activate: (s, o) => {
           fb.active = true;
           fb.activated++;
+          fb.hold = !!o?.hold;
           fb.last = s;
+        },
+        setHold: (on) => {
+          fb.hold = on;
         },
         deactivate: () => {
           fb.active = false;
+          fb.hold = false;
           fb.deactivated++;
         },
         broadcastDelta: (d, s) => {
@@ -70,6 +81,7 @@ function harness(seed?: LiveState) {
       },
       onChange: () => undefined,
       onNotice: (n) => notices.push(n),
+      ...extra,
     },
     seed,
   );
@@ -393,5 +405,122 @@ describe('LiveCore pending persistence (core restart, design/25)', () => {
       { id: 'ok', event: { k: 'next', at: 1 }, at: Date.now() },
     ]);
     expect(b.core.pendingCommands().map((p) => p.id)).toEqual(['ok']);
+  });
+});
+
+describe('LiveCore going live without the hub (held service, design/17)', () => {
+  const offline = () => {
+    const h = harness(undefined, { resolveLocal: (id) => resolved(id, 'Sunday from cache') });
+    h.setHub(false);
+    h.core.onStatus(false);
+    return h;
+  };
+
+  it('goes live from this PC only when asked, resolving the playlist locally', () => {
+    const h = offline();
+    // A plain goLive with the hub away is refused, as before: never automatic.
+    h.core.submit({ k: 'goLive', playlistId: 'pl' });
+    expect(h.core.view.mode).toBe('idle');
+    expect(h.notices.at(-1)).toMatchObject({ kind: 'unavailable' });
+    h.core.submit({ k: 'goLive', playlistId: 'pl' }, undefined, { local: true });
+    expect(h.core.view.mode).toBe('live');
+    expect(h.core.view.resolved?.playlist.name).toBe('Sunday from cache');
+    expect(h.core.authority).toBe('fallback');
+    expect(h.core.held).toBe(true);
+    expect(h.fb.hold).toBe(true);
+    expect(h.deltas.at(-1)?.event.k).toBe('goLive');
+    expect(h.notices.at(-1)).toMatchObject({ kind: 'local-live', playlist: 'Sunday from cache' });
+    // Every command now applies on this PC.
+    h.core.submit({ k: 'go', cueIndex: 1, at: 1 });
+    expect(h.core.view.live).toBe(1);
+  });
+
+  it('refuses a local goLive while the hub is connected, and reports a resolve failure', () => {
+    const h = harness(undefined, { resolveLocal: () => resolved() });
+    h.core.onStatus(true);
+    h.core.submit({ k: 'goLive', playlistId: 'pl' }, undefined, { local: true });
+    expect(h.core.view.mode).toBe('idle');
+    expect(h.notices.at(-1)).toMatchObject({ kind: 'unavailable' });
+    const bad = harness(undefined, {
+      resolveLocal: () => {
+        throw new Error('Cannot go live: "Intro video" is still processing');
+      },
+    });
+    bad.core.onStatus(false);
+    bad.core.submit({ k: 'goLive', playlistId: 'pl' }, undefined, { local: true });
+    expect(bad.core.view.mode).toBe('idle');
+    expect(bad.core.held).toBe(false);
+    expect(bad.notices.at(-1)).toMatchObject({
+      kind: 'rejected',
+      reason: expect.stringMatching(/processing/),
+    });
+  });
+
+  it('does not hand a held service to a hub that comes back, whatever the hub holds', () => {
+    const h = offline();
+    h.core.submit({ k: 'goLive', playlistId: 'pl' }, undefined, { local: true });
+    h.core.submit({ k: 'go', cueIndex: 1, at: 1 });
+    h.setHub(true);
+    h.core.onStatus(true);
+    h.core.onWelcome();
+    // An idle hub, and a hub that is itself live with another service: neither is adopted or followed.
+    h.core.onState(initialState());
+    h.core.onState(reduce(initialState(), { k: 'goLive', resolved: resolved('other', 'Other') }));
+    expect(h.sent.some((m) => m.t === 'live.adopt')).toBe(false);
+    expect(h.core.authority).toBe('fallback');
+    expect(h.core.view.resolved?.playlist.name).toBe('Sunday from cache');
+    expect(h.core.view.live).toBe(1);
+    expect(h.fb.hold).toBe(true);
+    expect(h.notices.filter((n) => n.kind === 'hub-back-held')).toHaveLength(1);
+    expect(h.notices.some((n) => n.kind === 'conflict')).toBe(false);
+  });
+
+  it('after End service hands the authority back once the hub answers', () => {
+    const h = offline();
+    h.core.submit({ k: 'goLive', playlistId: 'pl' }, undefined, { local: true });
+    h.setHub(true);
+    h.core.onStatus(true);
+    h.core.submit({ k: 'endService', at: 2 });
+    expect(h.core.held).toBe(false);
+    expect(h.fb.hold).toBe(false);
+    expect(h.notices.at(-1)).toMatchObject({ kind: 'held-ended', hubConnected: true });
+    expect(h.sent.at(-1)).toEqual({ t: 'live.resync' });
+    h.core.onState(initialState());
+    expect(h.core.authority).toBe('hub');
+    expect(h.fb.deactivated).toBe(1);
+    expect(h.sent.some((m) => m.t === 'live.adopt')).toBe(false);
+  });
+
+  it('after End service with the hub still away, stays in charge and may go live locally again', () => {
+    const h = offline();
+    h.core.submit({ k: 'goLive', playlistId: 'pl' }, undefined, { local: true });
+    h.core.submit({ k: 'endService', at: 2 });
+    expect(h.notices.at(-1)).toMatchObject({ kind: 'held-ended', hubConnected: false });
+    expect(h.core.authority).toBe('fallback');
+    h.core.submit({ k: 'goLive', playlistId: 'pl2' }, undefined, { local: true });
+    expect(h.core.held).toBe(true);
+    expect(h.fb.hold).toBe(true);
+    // When the hub finally returns idle after that second service ended, nothing is transferred.
+    h.core.submit({ k: 'endService', at: 3 });
+    h.setHub(true);
+    h.core.onStatus(true);
+    h.core.onWelcome();
+    h.core.onState(initialState());
+    expect(h.core.authority).toBe('hub');
+    expect(h.sent.some((m) => m.t === 'live.adopt')).toBe(false);
+  });
+
+  it('resumes a held service after a core restart, telling the windows to keep holding', () => {
+    const seed = reduce(initialState(), { k: 'goLive', resolved: resolved('pl', 'Held') });
+    const h = harness(seed);
+    h.core.resumeHeld();
+    expect(h.core.authority).toBe('fallback');
+    expect(h.core.held).toBe(true);
+    expect(h.fb.hold).toBe(true);
+    expect(h.notices.some((n) => n.kind === 'fallback-on')).toBe(false);
+    h.core.onStatus(true);
+    h.core.onWelcome();
+    h.core.onState(initialState());
+    expect(h.core.authority).toBe('fallback');
   });
 });

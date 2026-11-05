@@ -92,6 +92,10 @@ export class Controller {
         else if (e.k === 'conflict')
           useLive.setState({ conflict: { hubPlaylist: e.hubPlaylist, localPlaylist: e.localPlaylist } });
         else if (e.k === 'goLiveError') useLive.setState({ goLiveError: e.reason });
+        else if (e.k === 'offlineCheck')
+          useLive.setState((s) => ({
+            offlineChecks: { ...s.offlineChecks, [e.result.playlistId]: e.result },
+          }));
       }),
       c.on('welcome', (w) => {
         if (useSession.getState().status !== 'ready') void refreshSession();
@@ -169,12 +173,14 @@ export class Controller {
       patch.everConnected = l.everConnected;
       patch.hubRefused = l.hubRefused;
       patch.ownCache = l.ownCache;
+      patch.held = l.held;
       patch.clock = { offset: l.clock.offset, rtt: l.clock.rtt };
     } else if (m.resolved || m.cues) {
       const s = useLive.getState().state;
       patch.state = { ...s, resolved: this.resolved, cues: this.cues };
     }
     if (m.health) patch.health = m.health;
+    if (m.offline) patch.offline = m.offline;
     if (m.budgets) patch.coreBudgets = m.budgets;
     if (m.stats) patch.core = m.stats;
     useLive.setState(patch);
@@ -267,6 +273,21 @@ export class Controller {
   goLive(playlistId: string): void {
     useLive.setState({ goLiveError: undefined });
     this.call('goLive', playlistId);
+  }
+  /** Go live from this PC with the hub unreachable (after the operator confirmed; design/17). */
+  goLiveLocal(playlistId: string): void {
+    useLive.setState({ goLiveError: undefined });
+    this.call('goLiveLocal', playlistId);
+  }
+  /** Ask whether a playlist can run from this PC; the answer lands in `useLive().offlineChecks`. */
+  offlineCheck(playlistId: string): void {
+    this.call('offlineCheck', playlistId);
+  }
+  offlineDownload(playlistId: string): void {
+    this.call('offlineDownload', playlistId);
+  }
+  offlineCancel(playlistId: string): void {
+    this.call('offlineCancel', playlistId);
   }
   endService(): void {
     this.call('endService');

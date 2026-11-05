@@ -33,7 +33,14 @@ export type CallName =
   | 'timerReset'
   | 'media'
   | 'resolveConflict'
-  | 'activateFallback';
+  | 'activateFallback'
+  /** Go live from this PC with the hub unreachable (design/17 "Going live without the hub"). */
+  | 'goLiveLocal'
+  /** Check whether a playlist can be run from this PC: answers with a ui `offlineCheck` event. */
+  | 'offlineCheck'
+  /** Download a playlist's media and fonts to this PC so it can go live without the hub. */
+  | 'offlineDownload'
+  | 'offlineCancel';
 
 export type LibKey = 'presentations' | 'playlists' | 'media' | 'fonts' | 'themes' | 'folders';
 export const LIB_KEYS: readonly LibKey[] = [
@@ -116,6 +123,33 @@ export type LiveSlice = {
   hubRefused?: 'unauthorized' | 'forbidden';
   ownCache: { ready: number; total: number; failed: number; manifestId?: string };
   clock: { offset: number; rtt: number; fallback: boolean };
+  /** This PC started the live service without the hub and holds it until End service. */
+  held: boolean;
+};
+
+/** A playlist's files on this PC (Download for offline use). */
+export type OfflineEntry = {
+  state: 'downloading' | 'ready' | 'partial' | 'failed';
+  ready: number;
+  total: number;
+  failed: number;
+  bytesReady: number;
+  bytesTotal: number;
+  /** When the last download finished (ms). */
+  at?: number;
+  error?: string;
+};
+
+/** The answer to `offlineCheck`: whether the playlist resolves from the cached library, and what is missing. */
+export type OfflineCheck = {
+  playlistId: string;
+  ok: boolean;
+  /** Why it cannot go live from this PC (a missing presentation, media still processing). */
+  error?: string;
+  /** Media and fonts not on this PC (names), when it resolves. */
+  missing: string[];
+  files: number;
+  hubConnected: boolean;
 };
 
 export type EndpointInfo = {
@@ -148,12 +182,15 @@ export type ViewModelMsg = {
   health?: Record<string, OutputHealthEntry>;
   budgets?: BudgetRow[];
   stats?: CoreStats;
+  /** Playlists downloaded (or downloading) for offline use, by playlist id. */
+  offline?: Record<string, OfflineEntry>;
 };
 
 export type UiEvent =
   | { k: 'clearAllUntil'; until?: number }
   | { k: 'conflict'; hubPlaylist?: string; localPlaylist?: string }
-  | { k: 'goLiveError'; reason: string };
+  | { k: 'goLiveError'; reason: string }
+  | { k: 'offlineCheck'; result: OfflineCheck };
 
 export type CoreToMain =
   | { t: 'ready'; generation: number }

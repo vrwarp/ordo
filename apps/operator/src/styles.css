@@ -225,6 +225,11 @@ label.check {
   border-color: #1d4ed8;
   color: #bfdbfe;
 }
+.banner.green {
+  background: #0b2a17;
+  border-color: #15803d;
+  color: #bbf7d0;
+}
 .tag {
   display: inline-block;
   font-size: 11px;

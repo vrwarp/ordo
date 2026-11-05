@@ -141,6 +141,8 @@ export class FallbackHost extends Emitter<{
 }> {
   private windows = new Map<string, Win>();
   active = false;
+  /** The operator holds the service it started without the hub: windows ignore the hub until released. */
+  hold = false;
   private lastState?: LiveStateMsg;
   private timer?: ReturnType<typeof setInterval>;
   private seenEvents: string[] = [];
@@ -165,8 +167,17 @@ export class FallbackHost extends Emitter<{
     this.windows.set(outputId, w);
     // A window acquired while the hub is the authority may still be on an older tab's fallback bus.
     if (!this.active) this.postTo(w, { t: 'fallback.hub', v: 1, hubUp: true });
-    else if (this.lastState)
-      this.postTo(w, { t: 'fallback.hello', v: 1, seq: this.lastState.seq, operatorMs: Date.now() });
+    else if (this.lastState) this.postTo(w, this.hello());
+  }
+
+  private hello(): FallbackMessage {
+    return {
+      t: 'fallback.hello',
+      v: 1,
+      seq: this.lastState?.seq ?? 0,
+      operatorMs: Date.now(),
+      ...(this.hold ? { hold: true } : {}),
+    };
   }
 
   /**
@@ -179,8 +190,7 @@ export class FallbackHost extends Emitter<{
     if (!w) return;
     w.ready = false;
     if (!this.active) this.postTo(w, { t: 'fallback.hub', v: 1, hubUp: true });
-    else if (this.lastState)
-      this.postTo(w, { t: 'fallback.hello', v: 1, seq: this.lastState.seq, operatorMs: Date.now() });
+    else if (this.lastState) this.postTo(w, this.hello());
   }
 
   /** Whether a window has answered the current introduction with fallback.ready. */
@@ -201,8 +211,9 @@ export class FallbackHost extends Emitter<{
   }
 
   /** Become the authority: announce to every window and keep re-announcing to those not yet ready. */
-  activate(state: LiveState): void {
+  activate(state: LiveState, opts: { hold?: boolean } = {}): void {
     this.active = true;
+    this.hold = !!opts.hold;
     this.lastState = { t: 'live.state', v: 1, seq: state.seq, state };
     for (const w of this.windows.values()) w.ready = false;
     this.announce();
@@ -210,9 +221,17 @@ export class FallbackHost extends Emitter<{
     this.timer = setInterval(() => this.announce(), FALLBACK_HEARTBEAT_MS);
   }
 
+  /** Start or stop holding the service (a goLive made on this PC while already the authority). */
+  setHold(on: boolean): void {
+    if (this.hold === on) return;
+    this.hold = on;
+    if (this.active) this.announce();
+  }
+
   /** Hub is back: tell windows to return to their hub connection. */
   deactivate(): void {
     this.active = false;
+    this.hold = false;
     clearInterval(this.timer);
     this.timer = undefined;
     this.post({ t: 'fallback.hub', v: 1, hubUp: true });
@@ -229,8 +248,9 @@ export class FallbackHost extends Emitter<{
     if (!this.lastState || !this.active) return;
     for (const w of this.windows.values()) {
       if (!w.ep.alive()) continue;
-      if (w.ready) this.postTo(w, { t: 'fallback.hub', v: 1, hubUp: false });
-      else this.postTo(w, { t: 'fallback.hello', v: 1, seq: this.lastState.seq, operatorMs: Date.now() });
+      if (w.ready)
+        this.postTo(w, { t: 'fallback.hub', v: 1, hubUp: false, ...(this.hold ? { hold: true } : {}) });
+      else this.postTo(w, this.hello());
     }
   }
 
@@ -292,10 +312,10 @@ export class FallbackHost extends Emitter<{
  * Output and stage side of the fallback bus. Accepts messages only from window.opener at the operator origin.
  */
 export class FallbackClient extends Emitter<{
-  hello: { seq: number };
+  hello: { seq: number; hold: boolean };
   state: LiveStateMsg;
   delta: LiveDeltaMsg;
-  hub: { hubUp: boolean };
+  hub: { hubUp: boolean; hold: boolean };
 }> {
   private pendingFiles = new Map<string, (b: Blob | undefined) => void>();
   private ep: BusEndpoint;
@@ -385,7 +405,7 @@ export class FallbackClient extends Emitter<{
     this.lastTraffic = Date.now();
     switch (m.t) {
       case 'fallback.hello':
-        this.emit('hello', { seq: m.seq });
+        this.emit('hello', { seq: m.seq, hold: m.hold === true });
         return;
       case 'live.state':
         this.emit('state', m);
@@ -394,7 +414,7 @@ export class FallbackClient extends Emitter<{
         this.emit('delta', m);
         return;
       case 'fallback.hub':
-        this.emit('hub', { hubUp: m.hubUp });
+        this.emit('hub', { hubUp: m.hubUp, hold: m.hold === true });
         return;
       case 'fallback.file.res': {
         const r = this.pendingFiles.get(m.reqId);

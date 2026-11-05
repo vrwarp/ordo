@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "pnpm --filter @ordo/hub dev",
-    "build": "pnpm -r --filter ./apps/* build",
+    "build": "pnpm -r --filter \"./apps/*\" build",
     "typecheck": "pnpm -r --parallel typecheck",
     "lint": "biome check .",
     "format": "biome format --write .",

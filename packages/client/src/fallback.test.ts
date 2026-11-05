@@ -57,6 +57,25 @@ describe('FallbackHost', () => {
     expect(out.posted).toEqual([]);
   });
 
+  it('carries the hold of a service this PC started in every hello and heartbeat until released', () => {
+    host.register('o1', out as unknown as Window, OUT);
+    out.posted = [];
+    host.activate(state(5), { hold: true });
+    expect(out.posted.at(-1)!.m).toMatchObject({ t: 'fallback.hello', hold: true });
+    op.deliver(out, { t: 'fallback.ready', v: 1, outputId: 'o1', appliedSeq: 5 });
+    out.posted = [];
+    vi.advanceTimersByTime(FALLBACK_HEARTBEAT_MS);
+    expect(out.posted.map((p) => p.m)).toEqual([{ t: 'fallback.hub', v: 1, hubUp: false, hold: true }]);
+    // The service ended with the hub still away: still the authority, no longer holding.
+    host.setHold(false);
+    out.posted = [];
+    vi.advanceTimersByTime(FALLBACK_HEARTBEAT_MS);
+    expect(out.posted.map((p) => p.m)).toEqual([{ t: 'fallback.hub', v: 1, hubUp: false }]);
+    host.setHold(true);
+    host.deactivate();
+    expect(host.hold).toBe(false);
+  });
+
   it('reintroduces a window whose endpoint now reaches a new page (a reload or a re-offered port)', () => {
     host.register('o1', out as unknown as Window, OUT);
     host.activate(state(3));

@@ -39,6 +39,7 @@ export const RESYNC_WINDOW_MS = 60_000;
  */
 export class OutputLink extends Emitter<{
   bus: { bus: Bus; reason?: string };
+  held: { held: boolean };
   library: LibraryDelta;
   rtc: RtcSignalIn;
 }> {
@@ -53,6 +54,13 @@ export class OutputLink extends Emitter<{
   /** Set while the resync budget is spent: when it was spent and how many requests were refused since. */
   private resyncSpent?: { at: number; refused: number };
   private recentEvents: { id: string; event: OutputEvent; at: number; sent: boolean }[] = [];
+  /**
+   * The operator holds the service it started without the hub (design/17 "Going live without the hub").
+   * While held the hub's state is never applied, whatever its sequence: the hub does not know this
+   * service, and following it would blank the screens. Only the operator's `fallback.hub { hubUp: true }`
+   * (or a hold-free introduction) releases it. Survives a silent operator: the window keeps its picture.
+   */
+  held = false;
 
   constructor(opts: {
     role: 'output' | 'stage';
@@ -88,10 +96,11 @@ export class OutputLink extends Emitter<{
     }
 
     this.hub.on('status', ({ connected }) => {
-      if (connected && this.bus !== 'fallback') this.setBus('hub', 'hub connected');
+      if (connected && this.bus !== 'fallback' && !this.held) this.setBus('hub', 'hub connected');
       if (!connected && this.bus === 'hub') this.setBus('none', 'hub disconnected');
     });
     this.hub.on('state', (m) => {
+      if (this.held) return;
       if (this.bus === 'fallback') {
         if (m.seq < this.mirror.state.seq) return; // the hub has not caught up (adopted) yet
         this.leaveFallback('hub caught up');
@@ -99,6 +108,7 @@ export class OutputLink extends Emitter<{
       this.mirror.applyState(m.state);
     });
     this.hub.on('delta', (m) => {
+      if (this.held) return;
       if (this.bus === 'fallback') {
         if (m.fromSeq < this.mirror.state.seq) return;
         this.leaveFallback('hub caught up');
@@ -115,7 +125,8 @@ export class OutputLink extends Emitter<{
     this.hub.on('library', (m) => this.emit('library', m));
     this.hub.on('rtc', (m) => this.emit('rtc', m));
 
-    this.fallback?.on('hello', () => {
+    this.fallback?.on('hello', ({ hold }) => {
+      this.setHeld(hold);
       this.setBus('fallback', 'operator hello');
       clock.fallback = true;
       this.fallback!.ready(this.mirror.state.seq);
@@ -127,14 +138,30 @@ export class OutputLink extends Emitter<{
       if (this.bus !== 'fallback') return;
       if (!this.mirror.applyDelta(m)) this.requestResync({ fallbackSeq: this.mirror.state.seq });
     });
-    this.fallback?.on('hub', ({ hubUp }) => {
-      if (hubUp && this.bus === 'fallback') this.leaveFallback('operator says hub up');
-      else if (hubUp) clock.fallback = false;
+    this.fallback?.on('hub', ({ hubUp, hold }) => {
+      if (hubUp) {
+        this.setHeld(false);
+        if (this.bus === 'fallback') this.leaveFallback('operator says hub up');
+        else clock.fallback = false;
+        return;
+      }
+      if (this.bus === 'fallback') this.setHeld(hold);
     });
   }
 
   get state(): LiveState {
     return this.mirror.state;
+  }
+
+  /** Restore a hold persisted before a reload, so the hub is not followed before the operator re-introduces itself. */
+  restoreHeld(held: boolean): void {
+    this.setHeld(held);
+  }
+
+  private setHeld(on: boolean): void {
+    if (this.held === on) return;
+    this.held = on;
+    this.emit('held', { held: on });
   }
 
   /**
@@ -233,8 +260,9 @@ export class OutputLink extends Emitter<{
 
   private leaveFallback(reason: string): void {
     clock.fallback = false;
-    this.setBus(this.hub.connected ? 'hub' : 'none', reason);
-    this.hub.send({ t: 'live.resync' });
+    // A held window keeps its picture: it does not ask the hub for a state it would not apply.
+    this.setBus(this.hub.connected && !this.held ? 'hub' : 'none', reason);
+    if (!this.held) this.hub.send({ t: 'live.resync' });
   }
 
   private setBus(b: Bus, reason?: string): void {

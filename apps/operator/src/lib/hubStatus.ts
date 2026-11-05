@@ -7,6 +7,8 @@ export type HubStatusInput = {
   hubConnected: boolean;
   everConnected: boolean;
   hubRefused?: 'unauthorized' | 'forbidden';
+  /** This PC started the service without the hub and keeps it to End service. */
+  held?: boolean;
 };
 
 export type HubStatus = {
@@ -28,7 +30,11 @@ export function hubStatus(l: HubStatusInput): HubStatus {
   const refused = !!l.hubRefused && !l.hubConnected;
   const dot = fallback || refused ? 'amber' : l.hubConnected ? 'green' : 'red';
   let text: string;
-  if (fallback) {
+  if (fallback && l.held) {
+    text = l.hubConnected
+      ? 'Live from this PC (hub back; takes over after End service)'
+      : 'Live from this PC (hub unreachable)';
+  } else if (fallback) {
     if (l.reconcile === 'conflict') text = 'Hub back: choose which service to keep';
     else if (l.reconcile === 'adopting' || l.reconcile === 'awaitState' || l.hubConnected)
       text = 'Hub back: handing over…';

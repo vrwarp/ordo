@@ -155,11 +155,21 @@ export class StageLinkCore {
     });
 
     // Offline start: the last config and state from IndexedDB, before any connection.
-    const [cfg, saved] = await Promise.all([
+    const [cfg, saved, held] = await Promise.all([
       this.deps.json.get<OutputConfigRes>(`config:${this.outputId}`).catch(() => undefined),
       this.deps.json.get<{ state: LiveState }>(`state:${this.outputId}`).catch(() => undefined),
+      this.deps.json.get<{ at: number }>(`held:${this.outputId}`).catch(() => undefined),
     ]);
     if (this.stopped) return;
+    // See the output's link core: a held service survives a reload, for at most a service day.
+    if (held && typeof held.at === 'number' && Date.now() - held.at < 8 * 60 * 60 * 1000)
+      link.restoreHeld(true);
+    link.on('held', ({ held: on }) => {
+      this.diagLog(
+        on ? 'the operator holds this service (started without the hub)' : 'operator hold released',
+      );
+      void this.deps.json.set(`held:${this.outputId}`, on ? { at: this.now() } : null).catch(() => undefined);
+    });
     if (cfg && !this.config) this.applyConfig(cfg);
     if (saved?.state && !link.mirror.ready && isLiveStateShape(saved.state)) {
       const bad = checkInvariants(saved.state);

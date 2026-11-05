@@ -8,7 +8,17 @@ import {
   api,
   type ClientMessageBody,
 } from '@ordo/client';
-import { type LiveCommand, type LiveEvent, type LiveState, newId, type TimerSpec } from '@ordo/domain';
+import {
+  type LiveCommand,
+  type LiveEvent,
+  type LiveState,
+  localDigest,
+  type ManifestFile,
+  newId,
+  type ResolvedPlaylist,
+  resolvePlaylist,
+  type TimerSpec,
+} from '@ordo/domain';
 import { actionToEvent, checkInvariants, isLiveEventShape, isLiveStateShape } from '@ordo/live-state';
 import { type LibrarySnapshot, type OutputHealthEntry, ROUTES, type Settings } from '@ordo/protocol';
 import { type Action, renderKeyPixels, renderStripPixels } from '@ordo/surfaces';
@@ -29,6 +39,8 @@ import type {
   SearchHit,
   Source,
   ViewModelMsg,
+  OfflineCheck,
+  OfflineEntry,
 } from './protocol.ts';
 
 /** GO lead: two frames at 60 Hz. */
@@ -59,7 +71,11 @@ export type CoreSnapshot = {
   /** Ids of actions already applied and persisted (re-sent actions are acknowledged, not re-applied). */
   aids: string[];
   at: number;
+  /** A service this PC started without the hub (resumed as the authority whatever its age). */
+  held?: boolean;
 };
+
+const OFFLINE_KEY = 'ordo.offline';
 
 type Post = (m: CoreToMain, transfer?: Transferable[]) => void;
 
@@ -85,6 +101,10 @@ export class CoreEngine {
   private lastConnected = new Map<string, boolean>();
   private everConnected = false;
   private ownCache: LiveSlice['ownCache'] = { ready: 0, total: 0, failed: 0 };
+  /** Playlists downloaded for offline use (persisted) and the download in progress. */
+  private offline: Record<string, OfflineEntry> = {};
+  private offlineAbort?: { playlistId: string; ac: AbortController };
+  private offlinePosted = '';
   private fillingManifest?: string;
   private fillAbort?: AbortController;
   /** The own-cache downloads in flight, shared across fills (a manifest change does not restart them). */
@@ -200,10 +220,24 @@ export class CoreEngine {
         clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
         onChange: () => this.onCoreChange(),
         onNotice: (n) => this.notice(n),
+        resolveLocal: (playlistId) => this.resolveLocal(playlistId),
       },
       seed,
     );
-    if (seed && snap?.authority === 'fallback' && this.now() - snap.at < RESUME_AUTHORITY_MS) {
+    void withTimeout(this.store.get<Record<string, OfflineEntry>>(OFFLINE_KEY), 1500)
+      .then((o) => {
+        if (o && typeof o === 'object') {
+          for (const [k, v] of Object.entries(o))
+            if (v && typeof v === 'object' && v.state !== 'downloading') this.offline[k] = v;
+          this.scheduleVm();
+        }
+      })
+      .catch(() => undefined);
+    if (seed && snap?.held) {
+      // A service this PC started without the hub: the hub never had it, so take it back whatever its age.
+      this.log('warn', 'core restarted during a service started from this PC: resuming it');
+      this.core.resumeHeld();
+    } else if (seed && snap?.authority === 'fallback' && this.now() - snap.at < RESUME_AUTHORITY_MS) {
       // We were the authority when the previous core died: take it back at once (no second grace).
       this.log('warn', 'core restarted while running the service from this PC: resuming as the authority');
       this.core.activateFallback();
@@ -242,6 +276,7 @@ export class CoreEngine {
           pending: Array.isArray(s.pending) ? s.pending.filter((p) => p && isLiveEventShape(p.event)) : [],
           aids: Array.isArray(s.aids) ? s.aids.filter((a) => typeof a === 'string') : [],
           at: Number(s.at) || 0,
+          held: s.held === true && s.authority === 'fallback',
         };
       if (s) this.log('warn', 'stored core state failed validation; starting from the hub');
       const legacy = await withTimeout(this.store.get<LiveState>(LEGACY_LIVE_KEY), 1000);
@@ -574,7 +609,190 @@ export class CoreEngine {
       case 'activateFallback':
         this.core.activateFallback();
         return;
+      case 'goLiveLocal':
+        this.core.submit({ k: 'goLive', playlistId: String(args[0]) }, aid, { local: true });
+        return;
+      case 'offlineCheck':
+        void this.offlineCheck(String(args[0])).then((result) =>
+          this.post({ t: 'ui', e: { k: 'offlineCheck', result } }),
+        );
+        return;
+      case 'offlineDownload':
+        void this.offlineDownload(String(args[0]));
+        return;
+      case 'offlineCancel':
+        if (this.offlineAbort?.playlistId === String(args[0])) this.offlineAbort.ac.abort();
+        return;
     }
+  }
+
+  // ------------------------------------------------------------------ going live without the hub
+
+  /** The cached library as goLive inputs (the same validation the hub applies). */
+  private resolveLocal(playlistId: string): ResolvedPlaylist {
+    const d = this.lib.data;
+    const playlist = d.playlists.find((p) => p.id === playlistId);
+    const byId = <T extends { id: string }>(list: T[]) => new Map(list.map((x) => [x.id, x]));
+    const pres = byId(d.presentations);
+    const media = byId(d.media);
+    return resolvePlaylist(
+      playlist
+        ? {
+            playlist,
+            presentation: (id) => pres.get(id),
+            media: (id) => media.get(id),
+            fonts: () => d.fonts,
+            looks: d.settings.looks,
+            general: d.settings.general,
+          }
+        : undefined,
+      playlistId,
+      { digest: localDigest, warn: (m) => this.log('warn', m) },
+    );
+  }
+
+  /** Whether a playlist can go live from this PC, and which of its files are not here yet. */
+  private async offlineCheck(playlistId: string): Promise<OfflineCheck> {
+    const base = { playlistId, missing: [] as string[], files: 0, hubConnected: this.hub.connected };
+    let resolved: ResolvedPlaylist;
+    try {
+      resolved = this.resolveLocal(playlistId);
+    } catch (e) {
+      return { ...base, ok: false, error: (e as Error).message };
+    }
+    const present = new Set<string>();
+    for (const f of resolved.files) if (await this.files.has(f.hash).catch(() => false)) present.add(f.hash);
+    const names = new Map<string, string>();
+    for (const m of Object.values(resolved.media)) {
+      if (m.delivery) names.set(m.delivery.hash, m.name);
+      names.set(m.original.hash, m.name);
+      if (m.poster) names.set(m.poster.hash, `${m.name} (poster)`);
+    }
+    for (const f of resolved.fonts)
+      names.set(f.file.hash, `${f.family} ${f.weight}${f.style === 'italic' ? ' italic' : ''}`);
+    const missing = [
+      ...new Set(
+        resolved.files
+          .filter((f) => !present.has(f.hash))
+          .map((f) => names.get(f.hash) ?? f.hash.slice(0, 12)),
+      ),
+    ];
+    return { ...base, ok: true, missing, files: resolved.files.length };
+  }
+
+  /**
+   * Download a playlist's media and fonts to this PC (the operator's file cache, which the output windows
+   * read over the direct link when the hub is away). The operator chooses when; nothing is evicted.
+   */
+  private async offlineDownload(playlistId: string): Promise<void> {
+    let files: ManifestFile[];
+    try {
+      files = this.resolveLocal(playlistId).files;
+    } catch (e) {
+      this.setOffline(playlistId, {
+        state: 'failed',
+        ready: 0,
+        total: 0,
+        failed: 0,
+        bytesReady: 0,
+        bytesTotal: 0,
+        error: (e as Error).message,
+      });
+      return;
+    }
+    this.offlineAbort?.ac.abort();
+    const ac = new AbortController();
+    this.offlineAbort = { playlistId, ac };
+    const total = files.length;
+    const bytesTotal = files.reduce((a, f) => a + (Number.isFinite(f.bytes) && f.bytes > 0 ? f.bytes : 0), 0);
+    this.setOffline(playlistId, {
+      state: 'downloading',
+      ready: 0,
+      total,
+      failed: 0,
+      bytesReady: 0,
+      bytesTotal,
+    });
+    try {
+      const p = await fillCache(
+        this.files,
+        files,
+        (hash) =>
+          this.downloads.run(hash, async (signal) => {
+            const r = await fetch(fileUrl(hash), { credentials: 'same-origin', signal });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.blob();
+          }),
+        (pr) => {
+          if (ac.signal.aborted) return;
+          this.setOffline(
+            playlistId,
+            {
+              state: 'downloading',
+              ready: pr.ready,
+              total,
+              failed: pr.failed.length,
+              bytesReady: pr.bytesReady,
+              bytesTotal,
+            },
+            false,
+          );
+        },
+        { concurrency: 3, signal: ac.signal },
+      );
+      if (ac.signal.aborted) {
+        this.setOffline(playlistId, {
+          state: p.ready === total ? 'ready' : 'partial',
+          ready: p.ready,
+          total,
+          failed: p.failed.length,
+          bytesReady: p.bytesReady,
+          bytesTotal,
+          at: this.now(),
+          error: p.ready === total ? undefined : 'Cancelled',
+        });
+        return;
+      }
+      this.setOffline(playlistId, {
+        state: p.failed.length ? 'partial' : 'ready',
+        ready: p.ready,
+        total,
+        failed: p.failed.length,
+        bytesReady: p.bytesReady,
+        bytesTotal,
+        at: this.now(),
+        error: p.failed.length
+          ? `${p.failed.length} file(s) could not be downloaded${this.hub.connected ? '' : ' (the hub is unreachable)'}`
+          : undefined,
+      });
+      this.log(
+        p.failed.length ? 'warn' : 'info',
+        `offline download: ${p.ready}/${total} file(s) for playlist ${playlistId}`,
+      );
+    } catch (e) {
+      this.setOffline(playlistId, {
+        state: 'failed',
+        ready: 0,
+        total,
+        failed: total,
+        bytesReady: 0,
+        bytesTotal,
+        error: String(e),
+      });
+    } finally {
+      if (this.offlineAbort?.ac === ac) this.offlineAbort = undefined;
+    }
+  }
+
+  private setOffline(playlistId: string, e: OfflineEntry, persist = true): void {
+    this.offline = { ...this.offline, [playlistId]: e };
+    if (persist) {
+      const done = Object.fromEntries(
+        Object.entries(this.offline).filter(([, v]) => v.state !== 'downloading'),
+      );
+      void this.store.set(OFFLINE_KEY, done).catch(() => undefined);
+    }
+    this.scheduleVm();
   }
 
   // ------------------------------------------------------------------ fallback bus endpoints
@@ -723,6 +941,7 @@ export class CoreEngine {
       pending: c.pendingCommands(),
       aids: this.processed.slice(-PROCESSED_MAX),
       at: this.now(),
+      held: c.held || undefined,
     };
   }
 
@@ -872,6 +1091,34 @@ export class CoreEngine {
           e: { k: 'conflict', hubPlaylist: n.hubPlaylist, localPlaylist: n.localPlaylist },
         });
         return;
+      case 'local-live':
+        this.log('warn', `went live from this PC without the hub: ${n.playlist}`);
+        this.toast(
+          `Live from this PC: ${n.playlist}. The outputs follow this PC until End service.`,
+          'warn',
+          10_000,
+        );
+        void this.persist();
+        return;
+      case 'hub-back-held':
+        this.log('info', 'hub back during a service started from this PC: the service stays on this PC');
+        this.toast(
+          'The hub is back. This service keeps running from this PC until End service.',
+          'info',
+          10_000,
+        );
+        return;
+      case 'held-ended':
+        this.log('info', 'service started from this PC ended');
+        this.toast(
+          n.hubConnected
+            ? 'Service ended. The hub takes over again.'
+            : 'Service ended. The hub is still unreachable; this PC stays in charge until it returns.',
+          'ok',
+          8000,
+        );
+        void this.persist();
+        return;
     }
   }
 
@@ -945,6 +1192,7 @@ export class CoreEngine {
       hubRefused: this.hubRefused,
       ownCache: this.ownCache,
       clock: { offset: this.hub.clock.offset, rtt: this.hub.clock.rtt, fallback: this.hub.clock.fallback },
+      held: this.core.held,
     };
     const liveKey = liveSignature(live, view);
     if (liveKey !== this.posted.live) {
@@ -955,6 +1203,12 @@ export class CoreEngine {
     if (this.health !== this.posted.health) {
       this.posted.health = this.health;
       vm.health = this.health;
+      any = true;
+    }
+    const ok = JSON.stringify(this.offline);
+    if (ok !== this.offlinePosted) {
+      this.offlinePosted = ok;
+      vm.offline = this.offline;
       any = true;
     }
     const budgets = this.budgets.snapshot();
@@ -1016,6 +1270,7 @@ function liveSignature(l: LiveSlice, view: LiveState): string {
     Math.round(l.clock.offset),
     Math.round(l.clock.rtt),
     l.clock.fallback,
+    l.held,
   ].join('|');
 }
 

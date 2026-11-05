@@ -126,6 +126,55 @@ from the audio master output.
 4. If the hub has a different live playlist (another operator went live meanwhile), the
    operator shows a conflict dialog: keep local (adopt with `force`) or take the hub's.
 
+## Going live without the hub
+
+The gap the fallback bus leaves: the hub is down **before** the service (the NAS failed overnight). The
+fallback bus carries a service that is already live; a goLive needs the playlist resolved into its frozen
+copy, which only the hub did. Now the operator PC can do it too, when the operator asks.
+
+### Preparing: Download for offline use
+
+The playlist editor on the venue PC (operate PIN, full profile) has **Download for offline use**. It
+resolves the playlist from the operator's copy of the library (the same `resolvePlaylist` the hub runs,
+`packages/domain/src/goLive.ts`) and fills the operator's file cache (Cache API, never evicted) with every
+media file and font the service uses. The operator chooses when: the evening before, a week before, or on
+arrival. The status line says whether every file is on this PC; it re-checks when the playlist changes.
+The library itself (playlists, presentations, settings) is already kept on the PC by the core worker.
+
+### Going live
+
+Every Go live button goes through `startService`. With the hub connected nothing changes. Without it the
+operator is asked (_Go live without the hub?_): the dialog resolves the playlist locally and lists files
+that are not on this PC (text slides show regardless). On confirm the core:
+
+1. resolves the playlist with `localDigest` (a synchronous FNV-based id; the hub keeps SHA-256);
+2. becomes the authority (`activateFallback`) and **holds** the service;
+3. applies `goLive { resolved }` with the shared reducer and broadcasts it over the fallback bus.
+
+Output windows get the service and its files over the fallback bus (`fallback.file`), as in degraded mode.
+When the PC starts with the NAS already down, every page loads from its service worker: the operator
+starts offline with the last role used on this PC, and Launch outputs opens windows that load from their
+own caches and remember their configuration.
+
+### The hold: the hub never takes over a service in progress
+
+A service the PC started is held to its end. The hub never had it, and handing a running service to it
+mid-song is a risk with no benefit, so:
+
+- the operator ignores the hub's state while held: no `live.adopt`, no conflict dialog, one notice that
+  the hub is back and takes over after End service;
+- `fallback.hello` and the 2 s heartbeat carry `hold: true`; a held output window ignores the hub's state
+  and deltas whatever their sequence (an idle hub's seq is usually higher), keeps its picture if the
+  operator falls silent instead of following the hub, and remembers the hold across a reload (at most 8
+  hours, so a window is never stuck);
+- the hold survives an operator core restart and page reload (`CoreSnapshot.held`), whatever its age.
+
+**End service** releases the hold. With the hub connected the operator asks for its state; both idle, the
+authority returns to the hub with nothing transferred, and the windows are told `hubUp`. With the hub
+still away the PC stays the authority (and may go live locally again) until the hub returns.
+
+Services the hub started keep the existing behaviour below (_Hub returns_).
+
 ## Outputs on other machines
 
 Not at this venue. An output elsewhere has no opener and cannot join the fallback bus; it
@@ -136,6 +185,12 @@ would freeze on its last cue until the hub returns. Documented limit.
 - Playwright: start a service, block the hub's WebSocket route, verify GO still flips
   every output within one frame, unblock, verify adoption with no visible change.
 - Playwright: reload the operator while degraded, Relaunch, verify continuity.
+- Playwright (`e2e/local-golive.spec.ts`): download a playlist, kill the hub, go live from the PC, verify
+  the background from the downloaded files; restart the hub mid-service and verify it is neither given
+  the service nor followed; End service hands back. Second test: the PC starts with the hub already down
+  (pages from service workers, library from cache), goes live and launches outputs from cache.
+- Unit: `apps/operator/test/liveCore.test.ts` (held service), `packages/client/src/link.test.ts` and
+  `fallback.test.ts` (hold on the bus), `packages/domain/src/goLive.test.ts` (shared resolver).
 - Playwright (`e2e/chaos-operator.spec.ts`): kill the operator's core worker mid-service (GO pressed
   meanwhile reaches the hub exactly once); block the operator's main thread for 2.5 s while a GO is
   dispatched inside the core (it reaches the hub in about 100 ms) and for 7 s while degraded (the

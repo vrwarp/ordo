@@ -50,6 +50,7 @@ export function buildChecklist(s: Settings, opUrl: string): ChecklistSection[] {
       items: [
         'Green: working. Amber: waiting (caching, arming, or the hub is unreachable and this PC is running the service). Red: an output is not connected or has an error.',
         'Amber top bar "Hub lost": keep going. Everything works from this PC; it reconnects by itself.',
+        'Hub down before the service: press Go live anyway and choose "Go live from this PC". It works best when the playlist was downloaded beforehand (Download for offline use on the playlist). The service stays on this PC until End service, even if the hub comes back.',
         'A red output dot: press Relaunch. If it stays red, see below.',
       ],
     },

@@ -4,7 +4,7 @@ import { setUi, useUi } from '../../state/ui.ts';
 import { DegradedBanner } from './DegradedBanner.tsx';
 import { DiagnosticsPanel } from './DiagnosticsPanel.tsx';
 import { LayerBar } from './LayerBar.tsx';
-import { ConflictDialog, GoLiveErrorDialog, PlacementDialog } from './LiveDialogs.tsx';
+import { ConflictDialog, GoLiveErrorDialog, LocalGoLiveDialog, PlacementDialog } from './LiveDialogs.tsx';
 import { PlaylistPane } from './PlaylistPane.tsx';
 import { ProgramView } from './ProgramView.tsx';
 import { SlideGrid } from './SlideGrid.tsx';
@@ -41,6 +41,7 @@ export function LiveView() {
       <PlacementDialog />
       <ConflictDialog />
       <GoLiveErrorDialog />
+      <LocalGoLiveDialog />
       <DiagnosticsPanel />
     </div>
   );

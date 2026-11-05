@@ -176,7 +176,13 @@ export type ServerMessage =
   | (z.infer<typeof PreviewMsg> & { from: string });
 
 // ---- fallback bus (operator <-> outputs via postMessage) ----
-export type FallbackHello = { t: 'fallback.hello'; v: 1; seq: number; operatorMs: number };
+/**
+ * `hold`: the operator PC started this service itself while the hub was unreachable (design/17 "Going live
+ * without the hub"). Windows stay with the operator for the whole service: a hub that comes back is not
+ * followed until the operator lets go (`fallback.hub { hubUp: true }`), and its state is never applied
+ * over the held service.
+ */
+export type FallbackHello = { t: 'fallback.hello'; v: 1; seq: number; operatorMs: number; hold?: boolean };
 export type FallbackReady = { t: 'fallback.ready'; v: 1; outputId: string; appliedSeq: number };
 export type FallbackFileRequest = { t: 'fallback.file'; v: 1; hash: string; reqId: string };
 export type FallbackFileResponse = {
@@ -187,7 +193,7 @@ export type FallbackFileResponse = {
   blob?: Blob;
   error?: string;
 };
-export type FallbackHub = { t: 'fallback.hub'; v: 1; hubUp: boolean };
+export type FallbackHub = { t: 'fallback.hub'; v: 1; hubUp: boolean; hold?: boolean };
 export type FallbackMessage =
   | FallbackHello
   | FallbackReady

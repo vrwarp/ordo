@@ -1,5 +1,6 @@
 import { itemStarts, type PlaylistItem } from '@ordo/domain';
 import { VirtualList } from '../../components/VirtualList.tsx';
+import { startService } from '../../lib/startService.ts';
 import { controller } from '../../services/controller.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
@@ -90,7 +91,7 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
             type="button"
             className="primary big"
             style={{ width: '100%' }}
-            onClick={() => controller()?.goLive(op.playlist!.id)}
+            onClick={() => startService(op.playlist!.id)}
           >
             Go live with this playlist
           </button>

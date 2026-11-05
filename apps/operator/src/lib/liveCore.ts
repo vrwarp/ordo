@@ -1,4 +1,4 @@
-import type { LiveCommand, LiveEvent, LiveState } from '@ordo/domain';
+import type { LiveCommand, LiveEvent, LiveState, ResolvedPlaylist } from '@ordo/domain';
 import { autoAdvance, initialState, OptimisticState, reduce } from '@ordo/live-state';
 import type { LiveAck, LiveDeltaMsg } from '@ordo/protocol';
 
@@ -12,6 +12,12 @@ import type { LiveAck, LiveDeltaMsg } from '@ordo/protocol';
  * operator becomes the authority. It applies events with the shared reducer (seq continues from the last
  * hub seq) and broadcasts deltas to the output windows over the fallback bus. When the hub returns it
  * sends `live.adopt` with its state, waits for the hub's full state, then hands authority back.
+ *
+ * Held service (design/17 "Going live without the hub"): with the hub unreachable the operator may go live
+ * itself (`submit(goLive, id, { local: true })`), resolving the playlist from its cached library. It then
+ * holds that service to its end: a hub that comes back is neither handed the service nor followed, and
+ * the output windows are told to ignore it (`hold`). After End service the authority returns to the hub
+ * as soon as it answers.
  */
 
 export type LiveNotice =
@@ -20,7 +26,10 @@ export type LiveNotice =
   | { kind: 'fallback-off' }
   | { kind: 'hub-newer' }
   | { kind: 'conflict'; hubPlaylist?: string; localPlaylist?: string }
-  | { kind: 'unavailable'; reason: string; command: LiveCommand };
+  | { kind: 'unavailable'; reason: string; command: LiveCommand }
+  | { kind: 'local-live'; playlist: string }
+  | { kind: 'hub-back-held' }
+  | { kind: 'held-ended'; hubConnected: boolean };
 
 export type HubOut =
   | { t: 'live.event'; id: string; event: LiveCommand }
@@ -28,7 +37,8 @@ export type HubOut =
   | { t: 'live.adopt'; state: LiveState; force?: boolean };
 
 export interface FallbackPort {
-  activate(state: LiveState): void;
+  activate(state: LiveState, opts?: { hold?: boolean }): void;
+  setHold?(on: boolean): void;
   deactivate(): void;
   broadcastDelta(d: LiveDeltaMsg, state: LiveState): void;
 }
@@ -46,6 +56,8 @@ export type LiveCoreDeps = {
   clearTimer(t: Timer): void;
   onChange(): void;
   onNotice(n: LiveNotice): void;
+  /** Resolve a playlist from the cached library for a goLive made without the hub (throws a reason). */
+  resolveLocal?(playlistId: string): ResolvedPlaylist;
   graceMs?: number;
   adoptTimeoutMs?: number;
   /** Clock for pending-command ageing (default Date.now). */
@@ -71,6 +83,9 @@ export class LiveCore {
    */
   hubRefused = false;
   reconcile: Reconcile = null;
+  /** This PC started the live service without the hub and holds it until End service. */
+  held = false;
+  private heldNoticeGiven = false;
   /** The hub's state while a conflict dialog is open. */
   conflictHubState?: LiveState;
   private local: LiveState;
@@ -109,9 +124,13 @@ export class LiveCore {
    * Submit a command. Returns its id. `id` may be given by the caller (an action re-sent after a core
    * restart keeps its id, so the hub de-duplicates it).
    */
-  submit(command: LiveCommand, givenId?: string): string {
+  submit(command: LiveCommand, givenId?: string, opts: { local?: boolean } = {}): string {
     if (givenId && this.pending.some((p) => p.id === givenId)) return givenId;
     const id = givenId ?? this.deps.newId();
+    if (command.k === 'goLive' && opts.local) {
+      this.goLiveLocal(command.playlistId, id, command);
+      return id;
+    }
     if (this.authority === 'fallback') {
       if (command.k === 'goLive') {
         this.deps.onNotice({ kind: 'unavailable', reason: 'The hub is unreachable', command });
@@ -190,7 +209,7 @@ export class LiveCore {
   }
 
   onWelcome(): void {
-    if (this.authority === 'fallback') this.reconcile = 'awaitState';
+    if (this.authority === 'fallback') this.reconcile = this.held ? null : 'awaitState';
   }
 
   onState(state: LiveState): void {
@@ -258,7 +277,7 @@ export class LiveCore {
   }
 
   /** Force fallback now (used by tests and the diagnostics panel). */
-  activateFallback(): void {
+  activateFallback(opts: { hold?: boolean; quiet?: boolean } = {}): void {
     if (this.authority === 'fallback') return;
     this.clearGrace();
     this.local = this.opt.view;
@@ -266,10 +285,56 @@ export class LiveCore {
     this.authority = 'fallback';
     this.reconcile = null;
     this.deps.setClockFallback(true);
-    this.deps.fallback.activate(this.local);
+    this.deps.fallback.activate(this.local, { hold: !!opts.hold });
     this.scheduleAuto();
-    this.deps.onNotice({ kind: 'fallback-on' });
+    if (!opts.quiet) this.deps.onNotice({ kind: 'fallback-on' });
     this.deps.onChange();
+  }
+
+  /**
+   * Resume a held service after a core restart: authority at once, windows told to keep holding. The
+   * state is the persisted one (the hub never had it).
+   */
+  resumeHeld(): void {
+    this.held = true;
+    this.heldNoticeGiven = false;
+    this.activateFallback({ hold: true, quiet: true });
+  }
+
+  /**
+   * Go live from this PC (the hub is unreachable). Refused while the hub is connected: then the hub
+   * resolves the playlist, as always. The resolved copy is built from the cached library.
+   */
+  private goLiveLocal(playlistId: string, id: string, command: LiveCommand): void {
+    if (this.hubConnected) {
+      this.deps.onNotice({
+        kind: 'unavailable',
+        reason: 'The hub is connected: go live through the hub',
+        command,
+      });
+      return;
+    }
+    if (this.view.mode === 'live') {
+      this.deps.onNotice({ kind: 'unavailable', reason: 'A service is live: end it first', command });
+      return;
+    }
+    if (!this.deps.resolveLocal) {
+      this.deps.onNotice({ kind: 'unavailable', reason: 'The hub is unreachable', command });
+      return;
+    }
+    let resolved: ResolvedPlaylist;
+    try {
+      resolved = this.deps.resolveLocal(playlistId);
+    } catch (e) {
+      this.deps.onNotice({ kind: 'rejected', id, reason: (e as Error).message, command });
+      return;
+    }
+    if (this.authority === 'fallback') this.deps.fallback.setHold?.(true);
+    else this.activateFallback({ hold: true, quiet: true });
+    this.held = true;
+    this.heldNoticeGiven = false;
+    this.applyLocal({ k: 'goLive', resolved }, id);
+    this.deps.onNotice({ kind: 'local-live', playlist: resolved.playlist.name });
   }
 
   dispose(): void {
@@ -302,7 +367,23 @@ export class LiveCore {
       this.local,
     );
     this.scheduleAuto();
+    if (this.held && this.local.mode !== 'live') this.releaseHold();
     this.deps.onChange();
+  }
+
+  /**
+   * The held service ended. The windows may follow the hub again; when the hub is connected the operator
+   * asks for its state and hands the authority back (both idle: nothing to transfer), otherwise it stays
+   * the authority until the hub returns.
+   */
+  private releaseHold(): void {
+    this.held = false;
+    this.deps.fallback.setHold?.(false);
+    this.deps.onNotice({ kind: 'held-ended', hubConnected: this.hubConnected });
+    if (this.hubConnected) {
+      this.reconcile = 'awaitState';
+      this.deps.sendHub({ t: 'live.resync' });
+    }
   }
 
   /** Loop presentations auto-advance; while the operator is the authority it must drive that itself. */
@@ -325,6 +406,21 @@ export class LiveCore {
 
   private reconcileWith(hub: LiveState): void {
     const local = this.local;
+    if (this.held) {
+      // The hub never had this service and is not given it mid-service: ignore it until End service.
+      this.reconcile = null;
+      if (!this.heldNoticeGiven) {
+        this.heldNoticeGiven = true;
+        this.deps.onNotice({ kind: 'hub-back-held' });
+      }
+      return;
+    }
+    if (hub.mode !== 'live' && local.mode !== 'live') {
+      // Nothing is live on either side: nothing to transfer.
+      this.replay = [];
+      this.leaveFallback(hub);
+      return;
+    }
     if (this.reconcile === 'adopting') {
       if (this.samePlaylist(hub, local) && hub.seq >= local.seq - this.replay.length) {
         this.leaveFallback(hub);

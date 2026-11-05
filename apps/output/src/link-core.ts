@@ -78,6 +78,8 @@ const NO_FRAME_MS = 3000;
 const RENDER_GRACE_MS = 10_000;
 /** A second renderer stall within this window reloads the window instead of restarting the renderer. */
 const STALL_RELOAD_WINDOW_MS = 120_000;
+/** A persisted operator hold is honoured after a reload for at most this long (one long service day). */
+const HELD_MAX_AGE_MS = 8 * 60 * 60 * 1000;
 /** Cached files are checked against the manifest this often while live. */
 const INTEGRITY_EVERY_MS = 30_000;
 /** How long a hidden render rebuild may wait for its live content before the hold is removed anyway. */
@@ -336,14 +338,27 @@ export class LinkCore {
     const timeout = <T>(p: Promise<T>) =>
       Promise.race([p, new Promise<undefined>((r) => setTimeout(() => r(undefined), IDB_READ_TIMEOUT_MS))]);
     const outputId = this.link.outputId;
-    const [cfg, saved, recent, accepted] = await Promise.all([
+    const [cfg, saved, recent, accepted, held] = await Promise.all([
       timeout(this.json.get<OutputConfigRes>(`config:${outputId}`)).catch(() => undefined),
       timeout(this.json.get<{ state: LiveState; savedAt: number }>(`state:${outputId}`)).catch(
         () => undefined,
       ),
       timeout(this.json.get<RecentManifest[]>(`manifests:${outputId}`)).catch(() => undefined),
       timeout(this.json.get<[string, number][]>(`accepted:${outputId}`)).catch(() => undefined),
+      timeout(this.json.get<{ at: number }>(`held:${outputId}`)).catch(() => undefined),
     ]);
+    // A service the operator PC started without the hub: keep ignoring the hub after a reload until the
+    // operator lets go (bounded, so a window is never stuck if that operator never comes back).
+    if (held && typeof held.at === 'number' && Date.now() - held.at < HELD_MAX_AGE_MS)
+      this.link.restoreHeld(true);
+    this.link.on('held', ({ held: on }) => {
+      this.diagLog(
+        on ? 'the operator holds this service (started without the hub)' : 'operator hold released',
+      );
+      void (
+        on ? this.json.set(`held:${outputId}`, { at: Date.now() }) : this.json.set(`held:${outputId}`, null)
+      ).catch(() => undefined);
+    });
     if (Array.isArray(accepted))
       for (const [h, n] of accepted.slice(0, 200))
         if (typeof h === 'string' && typeof n === 'number') this.acceptedSizes.set(h, n);
