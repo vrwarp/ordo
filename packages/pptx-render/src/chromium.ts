@@ -27,6 +27,8 @@ export type PreviewOptions = {
   /** Typeface → installed substitute; default: asked of fontconfig (`fc-match`) for every typeface used. */
   fallbacks?: Record<string, string>;
   log?: (line: string) => void;
+  /** Diagnosis: return the HTML of these slides (1-based) as drawn, corrections applied. */
+  dumpSlides?: number[];
 };
 
 export type PreviewResult = {
@@ -35,6 +37,8 @@ export type PreviewResult = {
   /** Runs styled by ordo's corrections. */
   styled: number;
   notes: string[];
+  /** The HTML of the slides asked for with `dumpSlides`, by slide number. */
+  dom?: Record<number, string>;
 };
 
 /** The unmodified pptx-preview browser bundle (resolved where the calling app installed it). */
@@ -73,6 +77,8 @@ export async function renderWithPptxPreview(
     width,
     height,
     runs: ann?.runs ?? [],
+    paras: ann?.paras ?? [],
+    bodies: ann?.bodies ?? [],
     fallbacks,
     slideWidthPt: ann?.slideWidthPt ?? 720,
     fixes,
@@ -88,6 +94,14 @@ export async function renderWithPptxPreview(
     );
     notes.push(...res.errors.map((e) => `page: ${e}`));
     if (!res.slides.length) throw new Error('pptx-preview rendered no slides');
+    let dom: Record<number, string> | undefined;
+    if (o.dumpSlides?.length) {
+      dom = {};
+      for (const n of o.dumpSlides)
+        dom[n] = await page.evaluate<string>(
+          `(document.querySelectorAll('.pptx-preview-slide-wrapper')[${n - 1}]?.outerHTML ?? '').replace(/data:[^"')]{30}[^"')]*/g, (m) => m.slice(0, 30) + '…')`,
+        );
+    }
     const pages: string[] = [];
     for (let i = 0; i < res.slides.length; i++) {
       const r = res.slides[i]!;
@@ -102,7 +116,7 @@ export async function renderWithPptxPreview(
       pages.push(file);
     }
     o.log?.(`pptx-preview: ${pages.length} slide(s), ${res.styled} run(s) restyled`);
-    return { pages, styled: res.styled, notes };
+    return { pages, styled: res.styled, notes, ...(dom ? { dom } : {}) };
   } finally {
     await browser.shutdown();
   }

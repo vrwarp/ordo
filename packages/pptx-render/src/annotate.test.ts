@@ -72,7 +72,12 @@ async function marked(bytes: Uint8Array, runs: unknown[]): Promise<[string, unkn
   for (const m of xml.matchAll(/<a:t>([^<]*)<\/a:t>/g)) {
     const text = m[1]!;
     const id = decodeMarker(text);
-    out.push([text.slice(id === undefined ? 0 : 9), id === undefined ? undefined : runs[id]]);
+    const st = id === undefined ? undefined : { ...(runs[id] as Record<string, unknown>) };
+    if (st) {
+      delete st.p;
+      delete st.b;
+    }
+    out.push([text.slice(id === undefined ? 0 : 9), st]);
   }
   return out;
 }
@@ -164,6 +169,39 @@ describe('annotatePptx', () => {
     ]);
     const xml = await (await JSZip.loadAsync(a.bytes)).file('ppt/slides/slide1.xml')!.async('string');
     expect(xml).toContain('<a:t/>');
+  });
+
+  it('resolves line spacing and text box margins with their inheritance and defaults', async () => {
+    const body =
+      // Layout placeholder idx 1 sets nothing for spacing; the master body style says 90 %.
+      sp({ ph: '<p:ph idx="1"/>', body: `<a:p>${run('Inherited')}</a:p>` }) +
+      sp({
+        spPr: '',
+        body:
+          '<a:bodyPr lIns="0" tIns="12700"><a:normAutofit fontScale="92500" lnSpcReduction="10000"/></a:bodyPr>' +
+          `<a:p><a:pPr><a:lnSpc><a:spcPct val="150000"/></a:lnSpc></a:pPr>${run('Shrunk')}</a:p>` +
+          `<a:p><a:pPr><a:lnSpc><a:spcPts val="3600"/></a:lnSpc></a:pPr>${run('Exact')}</a:p>`,
+      }).replace('<p:txBody><a:bodyPr/>', '<p:txBody>');
+    const z = await JSZip.loadAsync(await deck(body));
+    const master = await z.file('ppt/slideMasters/slideMaster1.xml')!.async('string');
+    z.file(
+      'ppt/slideMasters/slideMaster1.xml',
+      master.replace(
+        '<p:bodyStyle><a:lvl1pPr>',
+        '<p:bodyStyle><a:lvl1pPr><a:lnSpc><a:spcPct val="90000"/></a:lnSpc>',
+      ),
+    );
+    const a = await annotatePptx(await z.generateAsync({ type: 'uint8array' }));
+    const xml = await (await JSZip.loadAsync(a.bytes)).file('ppt/slides/slide1.xml')!.async('string');
+    const by: Record<string, { p?: number; b?: number }> = {};
+    for (const m of xml.matchAll(/<a:t>([^<]*)<\/a:t>/g)) by[m[1]!.slice(9)] = a.runs[decodeMarker(m[1]!)!]!;
+    expect(a.paras[by.Inherited!.p!]).toEqual({ lnSpcPct: 90_000 });
+    // 150 % less the shrink-to-fit reduction of 10 points.
+    expect(a.paras[by.Shrunk!.p!]).toEqual({ lnSpcPct: 140_000 });
+    expect(a.paras[by.Exact!.p!]).toEqual({ lnSpcPt: 36 });
+    // PowerPoint's defaults (7.2 pt left and right, 3.6 pt top and bottom) where nothing is said.
+    expect(a.bodies[by.Inherited!.b!]).toEqual({ insets: [7.2, 3.6, 7.2, 3.6], anchor: 't' });
+    expect(a.bodies[by.Shrunk!.b!]).toEqual({ insets: [0, 1, 7.2, 3.6], anchor: 't' });
   });
 
   it('drops content-type entries for parts the package does not have (pptxgenjs, multi-slide decks)', async () => {

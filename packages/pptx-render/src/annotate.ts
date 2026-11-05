@@ -15,15 +15,47 @@ export type RunStyle = {
   baseline?: number;
   /** A shadow drawn behind the glyphs, in points of the slide. */
   shadow?: TextShadow;
+  /** The run's paragraph (index into `Annotation.paras`). */
+  p?: number;
+  /** The run's text box (index into `Annotation.bodies`). */
+  b?: number;
 };
 
 export type TextShadow = { dx: number; dy: number; blur: number; color: string };
+
+/** Paragraph properties ordo applies to the run's `<p>`. */
+export type ParaStyle = {
+  /**
+   * Line spacing as a percentage of the font's natural line height, in thousandths (100000 = single), the
+   * text box's shrink-to-fit reduction already taken off. pptx-preview uses the font size instead.
+   */
+  lnSpcPct?: number;
+  /** Exact line spacing in points. */
+  lnSpcPt?: number;
+  /** Space before and after the paragraph: points, or a share of a line (100000 = one line). */
+  spcBef?: Spacing;
+  spcAft?: Spacing;
+};
+
+export type Spacing = { pt: number } | { lines: number };
+
+/** Text box properties ordo applies to the run's text wrapper. */
+export type BodyStyle = {
+  /** Margins in points: left, top, right, bottom (PowerPoint's defaults when the deck sets none). */
+  insets: [number, number, number, number];
+  /** Where the text sits in the box (`anchor`; PowerPoint's default is the top). */
+  anchor: 't' | 'ctr' | 'b';
+};
 
 export type Annotation = {
   /** The deck with a marker in every styled run (the input itself when nothing was marked). */
   bytes: Uint8Array;
   /** Styles by marker id. */
   runs: RunStyle[];
+  /** Paragraph styles the runs point to. */
+  paras: ParaStyle[];
+  /** Text box styles the runs point to. */
+  bodies: BodyStyle[];
   /** Distinct typefaces the marked runs name, for font fallback lookup. */
   families: string[];
   /** Slide size in points (`p:sldSz`, 914400 EMU per inch, 72 points per inch). */
@@ -47,7 +79,7 @@ type Theme = {
   effects: XNode[];
 };
 
-type Placeholder = { type: string; idx?: string; lstStyle?: XNode };
+type Placeholder = { type: string; idx?: string; lstStyle?: XNode; bodyPr?: XNode };
 
 type Master = {
   path: string;
@@ -66,7 +98,20 @@ type PartCtx = {
   defaultTextStyle?: XNode;
 };
 
-type ShapeCtx = { ph?: { type: string; idx?: string }; lstStyle?: XNode; shadow?: TextShadow };
+type ShapeCtx = {
+  ph?: { type: string; idx?: string };
+  lstStyle?: XNode;
+  shadow?: TextShadow;
+  /** The shape's text box (index into the bodies table) and its own `a:bodyPr`. */
+  body?: number;
+  bodyPr?: XNode;
+};
+
+/** What a walk collects: one entry per `a:t`, and the paragraph and text box tables runs point to. */
+type Acc = { styles: (RunStyle | null)[]; paras: ParaStyle[]; bodies: BodyStyle[] };
+
+const EMU_INSET_LR = 91_440;
+const EMU_INSET_TB = 45_720;
 
 /** Annotate a deck for pptx-preview: mark every text run and say how ordo styles it after rendering. */
 export async function annotatePptx(input: Uint8Array): Promise<Annotation> {
@@ -144,6 +189,8 @@ export async function annotatePptx(input: Uint8Array): Promise<Annotation> {
   };
 
   const runs: RunStyle[] = [];
+  const paras: ParaStyle[] = [];
+  const bodies: BodyStyle[] = [];
   const families = new Set<string>();
   let changed = await repairContentTypes(zip, notes);
   let full = false;
@@ -175,8 +222,9 @@ export async function annotatePptx(input: Uint8Array): Promise<Annotation> {
       ctx.master = ctx.layout?.master;
     }
     // One entry per `a:t` in document order: the style of its run, or null outside a run.
-    const styles: (RunStyle | null)[] = [];
-    walk(root, ctx, {}, undefined, undefined, styles);
+    const acc: Acc = { styles: [], paras, bodies };
+    walk(root, ctx, {}, undefined, undefined, acc);
+    const styles = acc.styles;
     const tags = [...xml.matchAll(A_T_RE)];
     if (tags.length !== styles.length) {
       notes.push(`${name}: ${tags.length} text tags but ${styles.length} parsed; left unmarked`);
@@ -212,7 +260,7 @@ export async function annotatePptx(input: Uint8Array): Promise<Annotation> {
         compressionOptions: { level: 1 },
       })
     : input;
-  return { bytes, runs, families: [...families].sort(), slideWidthPt, slideHeightPt, notes };
+  return { bytes, runs, paras, bodies, families: [...families].sort(), slideWidthPt, slideHeightPt, notes };
 }
 
 /**
@@ -299,6 +347,7 @@ function placeholdersOf(root: XNode | undefined): Placeholder[] {
             type: ph.attrs.type ?? 'obj',
             idx: ph.attrs.idx,
             lstStyle: path(c, 'p:txBody', 'a:lstStyle'),
+            bodyPr: path(c, 'p:txBody', 'a:bodyPr'),
           });
       } else if (c.name !== '#text') visit(c);
     }
@@ -328,17 +377,37 @@ function findMasterPh(m: Master | undefined, type: string): Placeholder | undefi
   return m?.placeholders.find((p) => masterType(p.type) === want);
 }
 
-function lvlDef(list: XNode | undefined, lvl: number): XNode[] {
+/** A list style's paragraph properties for a level: the level's own, then the list's default. */
+function lvlPPr(list: XNode | undefined, lvl: number): XNode[] {
   if (!list) return [];
   const out: XNode[] = [];
-  const own = path(list, `a:lvl${lvl + 1}pPr`, 'a:defRPr');
+  const own = child(list, `a:lvl${lvl + 1}pPr`);
   if (own) out.push(own);
-  const dflt = path(list, 'a:defPPr', 'a:defRPr');
+  const dflt = child(list, 'a:defPPr');
   if (dflt) out.push(dflt);
   return out;
 }
 
-/** The run-property nodes that apply to a run, nearest first (run, paragraph, shape, layout, master). */
+/**
+ * The paragraph-property nodes that apply to a paragraph, nearest first: its own, the shape's list style,
+ * the layout's and the master's placeholder, the master's text styles, the presentation's defaults.
+ */
+function paraChain(part: PartCtx, shape: ShapeCtx, lvl: number, pPr: XNode | undefined): XNode[] {
+  const out: XNode[] = [];
+  if (pPr) out.push(pPr);
+  out.push(...lvlPPr(shape.lstStyle, lvl));
+  const ph = shape.ph;
+  if (ph && part.kind === 'slide') out.push(...lvlPPr(findLayoutPh(part.layout, ph)?.lstStyle, lvl));
+  if (ph && part.kind !== 'master') out.push(...lvlPPr(findMasterPh(part.master, ph.type)?.lstStyle, lvl));
+  const m = part.master;
+  const mt = ph ? masterType(ph.type) : 'other';
+  const tx = mt === 'title' ? m?.txStyles.title : mt === 'body' ? m?.txStyles.body : m?.txStyles.other;
+  out.push(...lvlPPr(tx, lvl));
+  out.push(...lvlPPr(part.defaultTextStyle, lvl));
+  return out;
+}
+
+/** The run-property nodes that apply to a run, nearest first (run, then the paragraph chain's defaults). */
 function chain(
   part: PartCtx,
   shape: ShapeCtx,
@@ -348,18 +417,75 @@ function chain(
 ): XNode[] {
   const out: XNode[] = [];
   if (rPr) out.push(rPr);
-  const pDef = child(pPr, 'a:defRPr');
-  if (pDef) out.push(pDef);
-  out.push(...lvlDef(shape.lstStyle, lvl));
-  const ph = shape.ph;
-  if (ph && part.kind === 'slide') out.push(...lvlDef(findLayoutPh(part.layout, ph)?.lstStyle, lvl));
-  if (ph && part.kind !== 'master') out.push(...lvlDef(findMasterPh(part.master, ph.type)?.lstStyle, lvl));
-  const m = part.master;
-  const mt = ph ? masterType(ph.type) : 'other';
-  const tx = mt === 'title' ? m?.txStyles.title : mt === 'body' ? m?.txStyles.body : m?.txStyles.other;
-  out.push(...lvlDef(tx, lvl));
-  out.push(...lvlDef(part.defaultTextStyle, lvl));
+  for (const n of paraChain(part, shape, lvl, pPr)) {
+    const d = child(n, 'a:defRPr');
+    if (d) out.push(d);
+  }
   return out;
+}
+
+/** `a:spcBef` / `a:spcAft`: the nearest one decides, so an explicit zero overrides an inherited value. */
+function spacing(nodes: XNode[], name: string): Spacing | undefined {
+  const s = nodes.map((n) => child(n, name)).find((x) => x);
+  if (!s) return undefined;
+  const pts = num(child(s, 'a:spcPts')?.attrs.val);
+  if (pts !== undefined) return { pt: Math.max(0, Math.min(1584, pts / 100)) };
+  const pct = num(child(s, 'a:spcPct')?.attrs.val);
+  if (pct !== undefined) return { lines: Math.max(0, Math.min(1_320_000, pct)) / 100_000 };
+  return undefined;
+}
+
+function paraStyle(part: PartCtx, shape: ShapeCtx, lvl: number, pPr: XNode | undefined): ParaStyle {
+  const st: ParaStyle = {};
+  const nodes = paraChain(part, shape, lvl, pPr);
+  const bef = spacing(nodes, 'a:spcBef');
+  if (bef) st.spcBef = bef;
+  const aft = spacing(nodes, 'a:spcAft');
+  if (aft) st.spcAft = aft;
+  const ln = nodes.map((n) => child(n, 'a:lnSpc')).find((x) => x);
+  const pts = num(child(ln, 'a:spcPts')?.attrs.val);
+  if (pts !== undefined) {
+    st.lnSpcPt = Math.max(0, Math.min(1584, pts / 100));
+    return st;
+  }
+  const pct = num(child(ln, 'a:spcPct')?.attrs.val) ?? 100_000;
+  // Shrink to fit takes points off the spacing as well as scaling the text.
+  const reduction = num(child(shape.bodyPr, 'a:normAutofit')?.attrs.lnSpcReduction) ?? 0;
+  st.lnSpcPct = Math.max(0, Math.min(1_320_000, pct - reduction));
+  return st;
+}
+
+/** Margins of a text box: its own `a:bodyPr`, then the layout's and master's placeholder, then defaults. */
+function bodyStyle(part: PartCtx, shape: ShapeCtx, bodyPr: XNode | undefined): BodyStyle {
+  const nodes: XNode[] = [];
+  if (bodyPr) nodes.push(bodyPr);
+  const ph = shape.ph;
+  if (ph && part.kind === 'slide') {
+    const l = findLayoutPh(part.layout, ph)?.bodyPr;
+    if (l) nodes.push(l);
+  }
+  if (ph && part.kind !== 'master') {
+    const m = findMasterPh(part.master, ph.type)?.bodyPr;
+    if (m) nodes.push(m);
+  }
+  const inset = (attr: string, dflt: number) => {
+    for (const n of nodes) {
+      const v = num(n.attrs[attr]);
+      if (v !== undefined) return Math.max(0, v) / EMU_PER_PT;
+    }
+    return dflt / EMU_PER_PT;
+  };
+  const anchorAttr = nodes.map((n) => n.attrs.anchor).find((a) => a !== undefined);
+  const anchor = anchorAttr === 'ctr' || anchorAttr === 'b' ? anchorAttr : 't';
+  return {
+    insets: [
+      inset('lIns', EMU_INSET_LR),
+      inset('tIns', EMU_INSET_TB),
+      inset('rIns', EMU_INSET_LR),
+      inset('bIns', EMU_INSET_TB),
+    ],
+    anchor,
+  };
 }
 
 function resolveFace(face: string | undefined, theme: Theme | undefined): string | undefined {
@@ -421,54 +547,65 @@ function walk(
   n: XNode | undefined,
   part: PartCtx,
   shape: ShapeCtx,
-  p: { lvl: number; pPr?: XNode } | undefined,
+  p: { lvl: number; pPr?: XNode; index: number } | undefined,
   rPr: XNode | null | undefined,
-  styles: (RunStyle | null)[],
+  acc: Acc,
 ): void {
   if (!n) return;
   for (const c of n.children) {
     switch (c.name) {
       case '#text':
         break;
-      case 'a:t':
-        styles.push(rPr !== undefined && p ? runStyle(part, shape, p.lvl, p.pPr, rPr ?? undefined) : null);
+      case 'a:t': {
+        if (rPr === undefined || !p) {
+          acc.styles.push(null);
+          break;
+        }
+        const st = runStyle(part, shape, p.lvl, p.pPr, rPr ?? undefined);
+        st.p = p.index;
+        if (shape.body !== undefined) st.b = shape.body;
+        acc.styles.push(st);
         break;
+      }
       case 'p:sp':
       case 'p:cxnSp':
-        walk(c, part, shapeCtx(c, part), undefined, undefined, styles);
+        walk(c, part, shapeCtx(c, part), undefined, undefined, acc);
         break;
       case 'p:graphicFrame':
-        walk(c, part, {}, undefined, undefined, styles);
+        walk(c, part, {}, undefined, undefined, acc);
         break;
+      case 'p:txBody': {
+        // A shape's text box: its margins come from its body properties (table cells have their own).
+        const bodyPr = child(c, 'a:bodyPr');
+        const inner: ShapeCtx = { ...shape, lstStyle: child(c, 'a:lstStyle') ?? shape.lstStyle, bodyPr };
+        acc.bodies.push(bodyStyle(part, shape, bodyPr));
+        inner.body = acc.bodies.length - 1;
+        walk(c, part, inner, undefined, undefined, acc);
+        break;
+      }
       case 'a:txBody':
-      case 'p:txBody':
         walk(
           c,
           part,
           { ...shape, lstStyle: child(c, 'a:lstStyle') ?? shape.lstStyle },
           undefined,
           undefined,
-          styles,
+          acc,
         );
         break;
       case 'a:p': {
         const pPr = child(c, 'a:pPr');
-        walk(
-          c,
-          part,
-          shape,
-          { lvl: Math.max(0, Math.min(8, num(pPr?.attrs.lvl) ?? 0)), pPr },
-          undefined,
-          styles,
-        );
+        const lvl = Math.max(0, Math.min(8, num(pPr?.attrs.lvl) ?? 0));
+        acc.paras.push(paraStyle(part, shape, lvl, pPr));
+        walk(c, part, shape, { lvl, pPr, index: acc.paras.length - 1 }, undefined, acc);
         break;
       }
       case 'a:r':
       case 'a:fld':
-        walk(c, part, shape, p, child(c, 'a:rPr') ?? null, styles);
+        walk(c, part, shape, p, child(c, 'a:rPr') ?? null, acc);
         break;
       default:
-        walk(c, part, shape, p, rPr, styles);
+        walk(c, part, shape, p, rPr, acc);
     }
   }
 }

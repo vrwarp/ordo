@@ -1,4 +1,4 @@
-import type { RunStyle } from './annotate.ts';
+import type { BodyStyle, ParaStyle, RunStyle } from './annotate.ts';
 
 /** What the page needs to render one deck. Plain data: it is sent into the browser as JSON. */
 export type PageArgs = {
@@ -9,6 +9,9 @@ export type PageArgs = {
   height: number;
   /** Run styles by marker id; null when ordo leaves the run as pptx-preview draws it. */
   runs: (RunStyle | null)[];
+  /** Paragraph and text box styles the runs point to. */
+  paras: ParaStyle[];
+  bodies: BodyStyle[];
   /** Typeface → the installed family the system substitutes for it (fontconfig), when it is missing. */
   fallbacks: Record<string, string>;
   /** Slide width in points, to convert the shadow offsets (points) into pptx-preview's slide units. */
@@ -82,6 +85,7 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
 
   let styled = 0;
   let unstyled = 0;
+  const restyled: [HTMLElement, RunStyle][] = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const found: Text[] = [];
   for (let n = walker.nextNode(); n; n = walker.nextNode())
@@ -113,18 +117,98 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
     const family = stackFor(st);
     if (family) el.style.fontFamily = family;
     if (st.baseline) {
-      // PowerPoint draws a raised or lowered run at about two thirds of its size.
+      // PowerPoint draws a raised or lowered run at about two thirds of its size, and the shift does not
+      // make its line any taller: move it relatively (vertical-align would grow the line box).
       const k = 0.65;
       el.style.fontSize = `${k}em`;
-      el.style.verticalAlign = `${(st.baseline / 100_000 / k).toFixed(3)}em`;
-      el.style.lineHeight = '0';
+      el.style.position = 'relative';
+      el.style.top = `${(-st.baseline / 100_000 / k).toFixed(3)}em`;
     }
     if (st.shadow) {
       const s = scale(el);
       const sh = st.shadow;
       el.style.textShadow = `${sh.dx * s}px ${sh.dy * s}px ${sh.blur * s}px ${sh.color}`;
     }
+    restyled.push([el, st]);
     styled++;
+  }
+
+  // Paragraphs and text boxes, once each, after every run has its font (line heights depend on it).
+  await document.fonts.ready;
+  const natural = new Map<string, number>();
+  /** The font's own line height (ascent + descent + gap) as a multiple of its size: PowerPoint's 100 %. */
+  const naturalRatio = (el: HTMLElement): number => {
+    const cs = getComputedStyle(el);
+    const key = `${cs.fontFamily}|${cs.fontWeight}|${cs.fontStyle}`;
+    let r = natural.get(key);
+    if (r === undefined) {
+      const probe = document.createElement('span');
+      probe.textContent = 'Hg';
+      probe.style.cssText =
+        'position:absolute;visibility:hidden;display:inline-block;white-space:nowrap;line-height:normal;font-size:100px';
+      probe.style.fontFamily = cs.fontFamily;
+      probe.style.fontWeight = cs.fontWeight;
+      probe.style.fontStyle = cs.fontStyle;
+      document.body.appendChild(probe);
+      r = probe.getBoundingClientRect().height / 100;
+      probe.remove();
+      if (!(r > 0.5 && r < 3)) r = 1.2;
+      natural.set(key, r);
+    }
+    return r;
+  };
+  /** The run a paragraph's spacing is measured on: its first run that is not raised or lowered. */
+  const mainRun = (p: HTMLElement, fallback: HTMLElement): HTMLElement => {
+    const spans = Array.from(p.querySelectorAll('span')) as HTMLElement[];
+    return spans.find((x) => x.style.position !== 'relative') ?? spans[0] ?? fallback;
+  };
+  const doneP = new Set<Element>();
+  const doneBox = new Set<Element>();
+  for (const [el, st] of restyled) {
+    const s = scale(el);
+    const body = st.b !== undefined ? args.bodies[st.b] : undefined;
+    const box = body ? (el.closest('.text-wrapper') as HTMLElement | null) : null;
+    if (body && box && !doneBox.has(box)) {
+      doneBox.add(box);
+      const [l, t, r, b] = body.insets.map((v) => `${(v * s).toFixed(2)}px`);
+      box.style.padding = `${t} ${r} ${b} ${l}`;
+      // The text wrapper is positioned inside the shape's box: put it where the anchor says (pptx-preview
+      // centres text whose anchor it does not find, and a box that grows to fit keeps a stale height).
+      if (body.anchor === 't') {
+        box.style.top = '0px';
+        box.style.bottom = '';
+        box.style.transform = 'none';
+      } else if (body.anchor === 'b') {
+        box.style.top = 'auto';
+        box.style.bottom = '0px';
+        box.style.transform = 'none';
+      } else {
+        box.style.top = '50%';
+        box.style.bottom = '';
+        box.style.transform = 'translateY(-50%)';
+      }
+    }
+    const para = st.p !== undefined ? args.paras[st.p] : undefined;
+    const p = para ? (el.closest('p') as HTMLElement | null) : null;
+    if (para && p && !doneP.has(p)) {
+      doneP.add(p);
+      // pptx-preview wraps each paragraph in a block whose top margin is the space before and whose
+      // bottom padding the space after; it ignores an explicit zero in favour of an inherited value.
+      const block = p.parentElement;
+      const main = mainRun(p, el);
+      if (block && block !== el && (para.spcBef || para.spcAft)) {
+        const size = Number.parseFloat(getComputedStyle(main).fontSize) || 0;
+        const len = (sp: { pt: number } | { lines: number }) =>
+          'pt' in sp ? sp.pt * s : sp.lines * size * naturalRatio(main);
+        if (para.spcBef) block.style.marginTop = `${len(para.spcBef).toFixed(2)}px`;
+        if (para.spcAft) block.style.paddingBottom = `${len(para.spcAft).toFixed(2)}px`;
+      }
+      if (para.lnSpcPt !== undefined) p.style.lineHeight = `${(para.lnSpcPt * s).toFixed(2)}px`;
+      else if (para.lnSpcPct !== undefined) {
+        // The paragraph's main run sets the font the percentage applies to.
+        p.style.lineHeight = ((para.lnSpcPct / 100_000) * naturalRatio(main)).toFixed(4);
+      }
+    }
   }
 
   // Wait for what is still loading: pictures, fonts and (with a short grace) animated charts.
