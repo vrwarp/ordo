@@ -139,8 +139,8 @@ async function pngSize(file: string): Promise<{ w: number; h: number } | undefin
  */
 async function ssim(a: string, b: string): Promise<number> {
   const size = await pngSize(b);
-  const r = size ? `${size.w}/${size.h}` : '';
-  const crop = size ? `crop='min(iw,trunc(ih*${r}+0.5))':'min(ih,trunc(iw/(${r})+0.5))':0:0,` : '';
+  const ratio = size ? `${size.w}/${size.h}` : '';
+  const crop = size ? `crop='min(iw,trunc(ih*${ratio}+0.5))':'min(ih,trunc(iw/(${ratio})+0.5))':0:0,` : '';
   const r = await run(
     'ffmpeg',
     [
