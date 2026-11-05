@@ -96,8 +96,14 @@ the operator carrying the outputs until the restarted hub adopts the state.
 
 ## Release
 
-Pushing to `main` publishes `vrwarp/ordo-hub:edge` to Docker Hub; a `vX.Y.Z` tag publishes that version and
-`latest`. The workflow needs the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
+Two workflows handle the image:
+
+- **On every pull request**, `docker-pr.yml` builds the image for amd64 and arm64 without pushing, then starts
+  the amd64 image and waits for its health check. It needs no secrets, so pull requests from forks run it too.
+- **On merge to `main`**, `docker-publish.yml` pushes `vrwarp/ordo-hub:edge` and `sha-<commit>` to Docker Hub.
+  A `vX.Y.Z` tag publishes that version and `latest` and drafts a GitHub release. It needs the repository
+  secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`; the repository variable `DOCKERHUB_IMAGE` overrides the
+  image name.
 
 ## Before the first service
 

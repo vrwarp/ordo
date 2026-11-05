@@ -2,13 +2,13 @@
 
 ## Overview
 
-| Piece           | Where                                            | How                                                                                                   |
-| --------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
-| Hub image       | Docker Hub `vrwarp/ordo-hub`                     | Built and pushed by GitHub Actions on tags `v*` and on `main` as `edge`                               |
-| Hub container   | Synology NAS, Container Manager, Compose project | Pulled by tag; manual upgrade                                                                         |
-| TLS and routing | DSM reverse proxy                                | One rule per hostname to `ordo-hub:8080`, WebSocket headers enabled                                   |
-| Certificate     | DSM certificate store                            | Let's Encrypt wildcard for `*.<venue>.synology.me` issued by DSM, assigned to the reverse proxy rules |
-| Presentation PC | Windows 11, Chrome stable                        | Hosts entries, Chrome policies, PWA install, auto-login                                               |
+| Piece           | Where                                            | How                                                                                                                               |
+| --------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| Hub image       | Docker Hub `vrwarp/ordo-hub`                     | Pushed by `docker-publish.yml` on merge to `main` (`edge`, `sha-*`) and on tags `v*`; `docker-pr.yml` dry-runs every pull request |
+| Hub container   | Synology NAS, Container Manager, Compose project | Pulled by tag; manual upgrade                                                                                                     |
+| TLS and routing | DSM reverse proxy                                | One rule per hostname to `ordo-hub:8080`, WebSocket headers enabled                                                               |
+| Certificate     | DSM certificate store                            | Let's Encrypt wildcard for `*.<venue>.synology.me` issued by DSM, assigned to the reverse proxy rules                             |
+| Presentation PC | Windows 11, Chrome stable                        | Hosts entries, Chrome policies, PWA install, auto-login                                                                           |
 
 ## Hostnames to verify first (M1 task 1)
 
@@ -94,11 +94,14 @@ Image size target under 1.5 GB (LibreOffice dominates).
 
 ## CI and release
 
-- Every push: lint, typecheck, unit tests, Playwright, Docker build (no push). `pnpm audit`
+- Every push and pull request (`ci.yml`): lint, typecheck, unit tests, Playwright. `pnpm audit`
   runs too but never fails the build (`continue-on-error`); a weekly scheduled workflow
   (`audit.yml`, Mondays) reports advisories on its own.
-- `main`: push `edge`.
-- Tag `vX.Y.Z`: push `vX.Y.Z` and `latest`; create a GitHub release with the changelog.
+- Every pull request (`docker-pr.yml`): the image is built for amd64 and arm64 without
+  pushing, and the amd64 image is started and must pass its health check.
+- Merge to `main` (`docker-publish.yml`): push `edge` and `sha-<commit>`.
+- Tag `vX.Y.Z` (`docker-publish.yml`): push `vX.Y.Z` and `latest`; create a GitHub release
+  with the changelog.
 - Upgrades at the venue: change the tag in Compose and redeploy, never on a Saturday
   evening or Sunday. The operator top bar shows the hub version; a mismatch with the app
   bundle (same image, so only possible with a stale tab) reloads the tab.
