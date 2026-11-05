@@ -491,6 +491,21 @@ describe('LiveCore going live without the hub (held service, design/17)', () => 
     expect(h.sent.some((m) => m.t === 'live.adopt')).toBe(false);
   });
 
+  it('after End service, a hub that is live with another service is followed, never overridden', () => {
+    const h = offline();
+    h.core.submit({ k: 'goLive', playlistId: 'pl' }, undefined, { local: true });
+    h.setHub(true);
+    h.core.onStatus(true);
+    h.core.submit({ k: 'endService', at: 2 });
+    // Another operator went live through the hub meanwhile: no conflict dialog, no adopt; follow it.
+    const other = reduce(initialState(), { k: 'goLive', resolved: resolved('other', 'Other service') });
+    h.core.onState(other);
+    expect(h.core.authority).toBe('hub');
+    expect(h.core.view.resolved?.playlist.name).toBe('Other service');
+    expect(h.sent.some((m) => m.t === 'live.adopt')).toBe(false);
+    expect(h.notices.some((n) => n.kind === 'conflict')).toBe(false);
+  });
+
   it('after End service with the hub still away, stays in charge and may go live locally again', () => {
     const h = offline();
     h.core.submit({ k: 'goLive', playlistId: 'pl' }, undefined, { local: true });

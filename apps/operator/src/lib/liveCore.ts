@@ -86,6 +86,12 @@ export class LiveCore {
   /** This PC started the live service without the hub and holds it until End service. */
   held = false;
   private heldNoticeGiven = false;
+  /**
+   * A held service ended and the authority has not yet returned to the hub: whatever the hub holds when it
+   * answers (idle, or a service another operator started through it meanwhile) is the truth. Nothing of
+   * this PC's is adopted and no conflict is raised: the hub never had the ended service.
+   */
+  private afterHeld = false;
   /** The hub's state while a conflict dialog is open. */
   conflictHubState?: LiveState;
   private local: LiveState;
@@ -297,6 +303,7 @@ export class LiveCore {
    */
   resumeHeld(): void {
     this.held = true;
+    this.afterHeld = false;
     this.heldNoticeGiven = false;
     this.activateFallback({ hold: true, quiet: true });
   }
@@ -332,6 +339,7 @@ export class LiveCore {
     if (this.authority === 'fallback') this.deps.fallback.setHold?.(true);
     else this.activateFallback({ hold: true, quiet: true });
     this.held = true;
+    this.afterHeld = false;
     this.heldNoticeGiven = false;
     this.applyLocal({ k: 'goLive', resolved }, id);
     this.deps.onNotice({ kind: 'local-live', playlist: resolved.playlist.name });
@@ -378,6 +386,7 @@ export class LiveCore {
    */
   private releaseHold(): void {
     this.held = false;
+    this.afterHeld = true;
     this.deps.fallback.setHold?.(false);
     this.deps.onNotice({ kind: 'held-ended', hubConnected: this.hubConnected });
     if (this.hubConnected) {
@@ -413,6 +422,12 @@ export class LiveCore {
         this.heldNoticeGiven = true;
         this.deps.onNotice({ kind: 'hub-back-held' });
       }
+      return;
+    }
+    if (this.afterHeld) {
+      this.afterHeld = false;
+      this.replay = [];
+      this.leaveFallback(hub);
       return;
     }
     if (hub.mode !== 'live' && local.mode !== 'live') {
