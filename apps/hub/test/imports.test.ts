@@ -7,7 +7,8 @@ import type { Job } from '@ordo/protocol';
 import JSZip from 'jszip';
 import pptxgen from 'pptxgenjs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { Importers, Pro7Result } from '../src/imports.ts';
+import { annotatePptx } from '@ordo/pptx-render';
+import { annotatePptxInWorker, type Importers, type Pro7Result } from '../src/imports.ts';
 import { fixtures } from './fixtures.ts';
 import { type Client, EDIT_PIN, login, song, startHub, type TestHub, tempDir } from './helpers.ts';
 
@@ -290,6 +291,29 @@ describe('PowerPoint renderers', () => {
     expect(p.source).toMatchObject({ kind: 'pptx', renderer: 'libreoffice' });
     expect(p.sections[0]!.slides).toHaveLength(2);
   }, 120_000);
+});
+
+describe('pptx-preview annotation on the CPU pool', () => {
+  it('annotates a deck on a worker thread as it would on the main thread', async () => {
+    const buf = new Uint8Array(readFileSync(await pptxgenDeck(tempDir())));
+    const inline = await annotatePptx(buf);
+    const pooled = await annotatePptxInWorker(buf);
+    expect(inline.runs.length).toBeGreaterThanOrEqual(3);
+    const { bytes: _a, ...rest } = pooled;
+    const { bytes: _b, ...want } = inline;
+    expect(rest).toEqual(want);
+    // The repaired deck comes back too (pptxgenjs lists a slide master per slide).
+    expect(pooled.notes.join('\n')).toMatch(/Content_Types.*removed/);
+    expect(
+      await (await JSZip.loadAsync(pooled.bytes)).file('ppt/slides/slide1.xml')!.async('string'),
+    ).toContain('\u2064');
+  });
+
+  it('stops a cancelled annotation', async () => {
+    const ctrl = new AbortController();
+    ctrl.abort();
+    await expect(annotatePptxInWorker(new Uint8Array(8), ctrl.signal)).rejects.toThrow('cancelled');
+  });
 });
 
 async function findChromium(): Promise<string | undefined> {

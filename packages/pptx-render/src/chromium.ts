@@ -4,15 +4,22 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
-import { annotatePptx } from './annotate.ts';
+import { type Annotation, annotatePptx } from './annotate.ts';
 import { fontFallbacks } from './fonts.ts';
-import { type PageArgs, type PageResult, pageMain } from './page.ts';
+import { type PageArgs, type PageResult, pageMain, takeMarkers } from './page.ts';
 
 export type PreviewOptions = {
   /** Chromium (or Chrome) executable. */
   chromium: string;
+  /** For the whole render, from the call: reading and annotating the deck, finding fonts, Chromium. */
   timeoutMs: number;
   signal?: AbortSignal;
+  /**
+   * Annotate the deck (default `annotatePptx`, on the calling thread). The hub runs it on its CPU worker
+   * pool: a crafted deck must not hold the event loop. `signal` aborts when the render is cancelled or out
+   * of time.
+   */
+  annotate?: (deck: Uint8Array, signal: AbortSignal) => Promise<Annotation>;
   /** Output slide size in pixels (default 1920x1080). */
   width?: number;
   height?: number;
@@ -55,12 +62,37 @@ export async function renderWithPptxPreview(
   workDir: string,
   o: PreviewOptions,
 ): Promise<PreviewResult> {
+  // One deadline for the whole render, from here: the annotation and the font lookup count, not only
+  // Chromium. Cancelling stops it at any step.
+  const stop = new AbortController();
+  const timer = setTimeout(
+    () => stop.abort(new Error(`pptx-preview timed out after ${Math.round(o.timeoutMs / 1000)} s`)),
+    o.timeoutMs,
+  );
+  const cancel = () => stop.abort(new Error('cancelled'));
+  if (o.signal?.aborted) cancel();
+  else o.signal?.addEventListener('abort', cancel, { once: true });
+  try {
+    return await render(input, workDir, o, stop.signal);
+  } finally {
+    clearTimeout(timer);
+    o.signal?.removeEventListener('abort', cancel);
+  }
+}
+
+async function render(
+  input: string,
+  workDir: string,
+  o: PreviewOptions,
+  signal: AbortSignal,
+): Promise<PreviewResult> {
   const width = o.width ?? 1920;
   const height = o.height ?? 1080;
   const fixes = o.fixes !== false;
   const notes: string[] = [];
-  const raw = new Uint8Array(await readFile(input));
-  const ann = fixes ? await annotatePptx(raw) : undefined;
+  const raw = new Uint8Array(await untilAborted(readFile(input), signal));
+  const annotate = o.annotate ?? ((deck, s) => annotatePptx(deck, { signal: s }));
+  const ann = fixes ? await untilAborted(annotate(raw, signal), signal) : undefined;
   if (ann) notes.push(...ann.notes);
   await mkdir(join(workDir, 'profile'), { recursive: true });
   await writeFile(join(workDir, 'deck.pptx'), ann ? ann.bytes : raw);
@@ -71,7 +103,8 @@ export async function renderWithPptxPreview(
       '.pptx-preview-slide-wrapper{margin:0!important}</style><div id="root"></div>' +
       '<script src="pptx-preview.js"></script>',
   );
-  const fallbacks = o.fallbacks ?? (ann ? await fontFallbacks(ann.families, o.timeoutMs) : {});
+  const fallbacks =
+    o.fallbacks ?? (ann ? await untilAborted(fontFallbacks(ann.families, o.timeoutMs, signal), signal) : {});
   const args: PageArgs = {
     pptxUrl: 'deck.pptx',
     width,
@@ -85,13 +118,16 @@ export async function renderWithPptxPreview(
     fixes,
   };
 
-  const browser = await Browser.launch(o.chromium, workDir, o);
+  // Out of time or cancelled while preparing: Chromium is not started at all.
+  signal.throwIfAborted();
+  const browser = await Browser.launch(o.chromium, workDir, { sandbox: o.sandbox, signal });
   try {
     const page = await browser.newPage(width, height);
     await page.navigate(pathToFileURL(join(workDir, 'index.html')).href);
     const res = await page.evaluate<PageResult>(
       // esbuild (tsx, the hub bundle) may wrap named functions in __name(): define it in the page.
-      `var __name = (f) => f; (${pageMain.toString()})(${JSON.stringify(args)})`,
+      // `takeMarkers` is declared first, under the name pageMain's body calls it by.
+      `var __name = (f) => f; ${takeMarkers.toString()}; (${pageMain.toString()})(${JSON.stringify(args)})`,
     );
     notes.push(...res.errors.map((e) => `page: ${e}`));
     if (!res.slides.length) throw new Error('pptx-preview rendered no slides');
@@ -144,6 +180,25 @@ export async function renderWithPptxPreview(
   }
 }
 
+/** `p`, or the signal's reason as soon as it aborts (the work behind `p` is told by the same signal). */
+function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then(
+      (v) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(v);
+      },
+      (e: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(e);
+      },
+    );
+  });
+}
+
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void; method: string };
 
 /** A Chromium process driven over the DevTools protocol on a pipe (`--remote-debugging-pipe`). */
@@ -153,12 +208,19 @@ class Browser {
   private listeners = new Map<string, ((params: unknown, sessionId?: string) => void)[]>();
   private chunks: Buffer[] = [];
   private failure?: Error;
+  private rejectFailed: (e: Error) => void = () => undefined;
+  /** Rejects when the browser fails (exits, crashes, is cancelled or out of time); never resolves. */
+  readonly failed = new Promise<never>((_, reject) => {
+    this.rejectFailed = reject;
+  });
 
   private constructor(
     private proc: ChildProcess,
     private out: Writable,
     input: Readable,
   ) {
+    // Raced by whoever waits on the browser; not an unhandled rejection when nobody is waiting.
+    this.failed.catch(() => undefined);
     input.on('data', (d: Buffer) => this.onData(d));
     // A write after Chromium has gone (EPIPE) fails the pending calls instead of crashing the process.
     out.on('error', (e) => this.fail(e));
@@ -167,7 +229,12 @@ class Browser {
     proc.on('error', (e) => this.fail(e));
   }
 
-  static async launch(exe: string, workDir: string, o: PreviewOptions): Promise<Browser> {
+  /** Start Chromium. `signal` (cancelled, or out of time) fails it with the signal's reason. */
+  static async launch(
+    exe: string,
+    workDir: string,
+    o: { sandbox?: boolean; signal: AbortSignal },
+  ): Promise<Browser> {
     const args = [
       '--headless',
       '--remote-debugging-pipe',
@@ -199,15 +266,10 @@ class Browser {
     proc.stderr?.on('data', (d: Buffer) => {
       stderr = (stderr + d.toString('utf8')).slice(-4000);
     });
-    const timer = setTimeout(
-      () => b.fail(new Error(`Chromium timed out after ${Math.round(o.timeoutMs / 1000)} s`)),
-      o.timeoutMs,
-    );
-    timer.unref?.();
-    proc.on('exit', () => clearTimeout(timer));
-    const onAbort = () => b.fail(new Error('cancelled'));
-    o.signal?.addEventListener('abort', onAbort, { once: true });
-    proc.on('exit', () => o.signal?.removeEventListener('abort', onAbort));
+    const onAbort = () => b.fail(o.signal.reason instanceof Error ? o.signal.reason : new Error('cancelled'));
+    if (o.signal.aborted) onAbort();
+    else o.signal.addEventListener('abort', onAbort, { once: true });
+    proc.on('exit', () => o.signal.removeEventListener('abort', onAbort));
     try {
       await b.send('Browser.getVersion');
     } catch (e) {
@@ -264,6 +326,7 @@ class Browser {
   fail(e: Error): void {
     if (this.failure) return;
     this.failure = e;
+    this.rejectFailed(e);
     for (const p of this.pending.values()) p.reject(e);
     this.pending.clear();
     this.close();
@@ -278,10 +341,15 @@ class Browser {
     });
   }
 
-  on(method: string, fn: (params: unknown, sessionId?: string) => void): void {
+  /** Listen to an event; returns the function that stops listening. */
+  on(method: string, fn: (params: unknown, sessionId?: string) => void): () => void {
     const list = this.listeners.get(method) ?? [];
     list.push(fn);
     this.listeners.set(method, list);
+    return () => {
+      const at = list.indexOf(fn);
+      if (at >= 0) list.splice(at, 1);
+    };
   }
 
   async newPage(width: number, height: number): Promise<Page> {
@@ -332,14 +400,20 @@ class Page {
   }
 
   async navigate(url: string): Promise<void> {
-    const loaded = new Promise<void>((resolve) =>
-      this.browser.on('Page.loadEventFired', (_p, s) => {
+    let off = () => {};
+    const loaded = new Promise<void>((resolve) => {
+      off = this.browser.on('Page.loadEventFired', (_p, s) => {
         if (s === this.sessionId) resolve();
-      }),
-    );
-    const r = await this.send<{ errorText?: string }>('Page.navigate', { url });
-    if (r.errorText) throw new Error(`could not open the harness page: ${r.errorText}`);
-    await loaded;
+      });
+    });
+    try {
+      const r = await this.send<{ errorText?: string }>('Page.navigate', { url });
+      if (r.errorText) throw new Error(`could not open the harness page: ${r.errorText}`);
+      // Chromium can fail after answering the navigation and before the page loads: nothing fires then.
+      await Promise.race([loaded, this.browser.failed]);
+    } finally {
+      off();
+    }
   }
 
   async evaluate<T>(expression: string): Promise<T> {

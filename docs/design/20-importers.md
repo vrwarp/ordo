@@ -138,7 +138,9 @@ which ordo owns and can keep fixing:
   removed from pictures: Chromium converts a picture from its profile, LibreOffice uses the values as
   they are. Every part is read through a stream that stops at a size limit (8 MB per XML part, 128 MB of
   XML in all, 64 MB per picture), counted while inflating rather than trusted from the zip, and at most
-  65,536 runs and paragraphs are described: a deck is untrusted input.
+  65,536 runs and paragraphs are described: a deck is untrusted input. The hub runs the annotation on its
+  CPU worker pool (`pptx-annotate`, with its own timeout and the pool's heap limit), never on the event
+  loop, and the render's timeout counts from its start, annotation included.
 - **Slide order.** pptx-preview takes slides from `[Content_Types].xml` and sorts them by the number in
   the part name, ignoring the presentation's order, and draws hidden slides. The annotator maps each
   slide it will draw to its place among the presentation's shown slides, and the captured pictures are

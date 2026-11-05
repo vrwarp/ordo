@@ -29,7 +29,9 @@ export function decodeMarker(text: string, at = 0): number | undefined {
   if (text[at] !== MARK_START) return undefined;
   let v = 0;
   for (let i = 1; i <= MARK_DIGITS; i++) {
-    const d = MARK_ALPHABET.indexOf(text[at + i] ?? '');
+    // Past the end is not a digit (`indexOf('')` would say 0).
+    const ch = text[at + i];
+    const d = ch === undefined ? -1 : MARK_ALPHABET.indexOf(ch);
     if (d < 0) return undefined;
     v = v * 4 + d;
   }

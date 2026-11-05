@@ -1,6 +1,13 @@
 import JSZip from 'jszip';
 import { describe, expect, it } from 'vitest';
-import { annotatePptx, withoutIccp, withoutJpegIcc } from './annotate.ts';
+import {
+  annotatePptx,
+  placeSlides,
+  previewOrder,
+  stripColorProfiles,
+  withoutIccp,
+  withoutJpegIcc,
+} from './annotate.ts';
 import { decodeMarker, encodeMarker, MARK_START, MAX_MARKED_RUNS } from './markers.ts';
 
 const NS =
@@ -442,5 +449,233 @@ describe('annotatePptx', () => {
     const input = await deck('');
     const b = await annotatePptx(input);
     expect(b.bytes).toBe(input);
+  });
+});
+
+/** What `f` returns, failing when it takes `ms` or longer. */
+async function within<T>(ms: number, f: () => Promise<T> | T): Promise<T> {
+  const t = performance.now();
+  const v = await f();
+  expect(performance.now() - t).toBeLessThan(ms);
+  return v;
+}
+
+describe('annotatePptx on crafted decks (uploads are untrusted)', () => {
+  const C =
+    'xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"';
+  const ser = (name: string) =>
+    `<c:ser><c:idx val="0"/><c:tx><c:strRef><c:strCache><c:pt idx="0"><c:v>${name}</c:v></c:pt></c:strCache></c:strRef></c:tx></c:ser>`;
+  const chart = (inner: string) =>
+    `<?xml version="1.0"?><c:chartSpace ${C}><c:chart>${inner}</c:chart></c:chartSpace>`;
+  const ascii = (t: string) => Array.from(t, (c) => c.charCodeAt(0));
+  const chunk = (type: string, data: number[]) => [0, 0, 0, data.length, ...ascii(type), ...data, 1, 2, 3, 4];
+  const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  const ihdr = chunk('IHDR', [0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]);
+  const iccp = chunk('iCCP', [...ascii('p'), 0, 0, 5]);
+  const iend = chunk('IEND', []);
+
+  it('titles charts in linear time: unclosed series and titles do not backtrack', async () => {
+    const bytes = await deck('', {
+      'ppt/charts/chart1.xml': `<c:chartSpace ${C}><c:chart>${'<c:ser><c:tx><c:v>a'.repeat(1500)}`,
+      'ppt/charts/chart2.xml': `<c:chartSpace ${C}><c:chart><c:title>${'<c:tx><c:ser><c:tx><c:v>a'.repeat(1500)}`,
+    });
+    const a = await within(2000, () => annotatePptx(bytes));
+    const z = await JSZip.loadAsync(a.bytes);
+    for (const n of [1, 2]) {
+      const xml = await z.file(`ppt/charts/chart${n}.xml`)!.async('string');
+      // Many series (none closed) and no title of its own that is closed: a blank title.
+      expect(
+        xml.startsWith(
+          `<c:chartSpace ${C}><c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t> </a:t>`,
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("writes a series name into a chart title as it is: `$'`, `$&` and `$$` are not replacement patterns", async () => {
+    const name = "Revenue $'000 $& $` $$";
+    const a = await annotatePptx(
+      await deck('', {
+        'ppt/charts/chart1.xml': chart(`<c:autoTitleDeleted val="0"/><c:plotArea>${ser(name)}</c:plotArea>`),
+        'ppt/charts/chart2.xml': chart(
+          `<c:title><c:overlay val="0"/></c:title><c:plotArea>${ser(name)}</c:plotArea>`,
+        ),
+      }),
+    );
+    const z = await JSZip.loadAsync(a.bytes);
+    for (const n of [1, 2]) {
+      const xml = await z.file(`ppt/charts/chart${n}.xml`)!.async('string');
+      expect(/<c:title>[\s\S]*?<a:t>([^<]*)<\/a:t>/.exec(xml)?.[1]).toBe(name);
+      expect(xml.split('<c:plotArea>')).toHaveLength(2);
+      expect(xml.split('</c:chartSpace>')).toHaveLength(2);
+    }
+  });
+
+  it('looks placeholders up by key: thousands in a layout, tens of thousands of runs in one box', async () => {
+    // A search of the layout per run took 25 s to a minute; parsing the two parts takes about one second.
+    const many = Array.from(
+      { length: 34_000 },
+      (_, i) => `<p:sp><p:nvSpPr><p:nvPr><p:ph type="pic" idx="${i + 2}"/></p:nvPr></p:nvSpPr></p:sp>`,
+    ).join('');
+    const layout =
+      `<?xml version="1.0"?><p:sldLayout ${NS}><p:cSld><p:spTree>${many}` +
+      sp({
+        ph: '<p:ph type="body" idx="1"/>',
+        lstStyle: '<a:lvl1pPr><a:defRPr><a:latin typeface="Tahoma"/></a:defRPr></a:lvl1pPr>',
+        body: '<a:p><a:endParaRPr/></a:p>',
+      }) +
+      '</p:spTree></p:cSld></p:sldLayout>';
+    // An index the layout does not have: the placeholder is found by its type, the layout's last.
+    const body = sp({
+      ph: '<p:ph type="body" idx="777777"/>',
+      body: `<a:p>${'<a:r><a:t/></a:r>'.repeat(80_000)}${run('Real')}</a:p>`,
+    });
+    const bytes = await deck(body, { 'ppt/slideLayouts/slideLayout1.xml': layout });
+    const a = await within(10_000, () => annotatePptx(bytes));
+    expect(await marked(a.bytes, a.runs)).toEqual([['Real', { latin: 'Tahoma', ea: 'SimSun' }]]);
+  });
+
+  it('walks at most 2^18 text elements in a deck, empty ones included', async () => {
+    const slide2 =
+      `<?xml version="1.0"?><p:sld ${NS}><p:cSld><p:spTree>${'<a:t/>'.repeat(70_000)}` +
+      `${sp({ body: `<a:p>${run('Late')}</a:p>` })}</p:spTree></p:cSld></p:sld>`;
+    const bytes = await deck('<a:t/>'.repeat(200_000), {
+      'ppt/slides/slide2.xml': slide2,
+      'ppt/slides/_rels/slide2.xml.rels': rels('slideLayout', '../slideLayouts/slideLayout1.xml'),
+    });
+    const a = await within(5000, () => annotatePptx(bytes));
+    expect(a.runs).toEqual([]);
+    expect(a.notes).toContain(
+      `more than ${1 << 18} text elements; ppt/slides/slide2.xml and the parts after it are left unmarked`,
+    );
+  });
+
+  it('inflates at most a budget of picture bytes to remove colour profiles', async () => {
+    const png = (data: number) => {
+      const head = [...sig, ...ihdr, ...iccp];
+      const out = new Uint8Array(head.length + 12 + data + iend.length);
+      out.set(head);
+      out.set(
+        [data >>> 24, (data >>> 16) & 255, (data >>> 8) & 255, data & 255, ...ascii('IDAT')],
+        head.length,
+      );
+      out.set(iend, head.length + 12 + data);
+      return out;
+    };
+    const z = new JSZip();
+    for (let i = 1; i <= 8; i++) z.file(`ppt/media/image${i}.png`, png(300_000));
+    const notes: string[] = [];
+    expect(await stripColorProfiles(z, notes, 1_000_000)).toBe(true);
+    const profiled = async (i: number) =>
+      new TextDecoder('latin1')
+        .decode(await z.file(`ppt/media/image${i}.png`)!.async('uint8array'))
+        .includes('iCCP');
+    // 256 KB looked at and 300 KB read for the first; the second does not fit in what is left.
+    expect(await profiled(1)).toBe(false);
+    for (const i of [2, 8]) expect(await profiled(i)).toBe(true);
+    expect(notes).toEqual([
+      '1 picture colour profile(s) removed',
+      'colour profiles: pictures past 1 MB in all are left as they are',
+    ]);
+  });
+
+  it("walks a picture's headers only up to its image data, and only so many", () => {
+    // The rest of the file, from the image data on, is kept as it is.
+    const tail = [...chunk('IDAT', [7, 7]), ...chunk('iCCP', [1]), ...iend];
+    const png = Uint8Array.from([...sig, ...ihdr, ...iccp, ...tail]);
+    expect(Array.from(withoutIccp(png)!)).toEqual([...sig, ...ihdr, ...tail]);
+    // Thousands of chunks or segments before the image data: left as they are.
+    const text = chunk('tEXt', []);
+    const chunks = new Uint8Array(
+      sig.length + ihdr.length + iccp.length + 100_000 * text.length + iend.length,
+    );
+    chunks.set([...sig, ...ihdr, ...iccp]);
+    for (let i = 0; i < 100_000; i++)
+      chunks.set(text, sig.length + ihdr.length + iccp.length + i * text.length);
+    chunks.set(iend, chunks.length - iend.length);
+    expect(withoutIccp(chunks)).toBeUndefined();
+    const app = [0xff, 0xe0, 0, 2];
+    const icc = [0xff, 0xe2, 0, 16, ...ascii('ICC_PROFILE'), 0, 1, 1];
+    const segments = Uint8Array.from([0xff, 0xd8, ...icc, ...Array(10_000).fill(app).flat(), 0xff, 0xd9]);
+    expect(withoutJpegIcc(segments)).toBeUndefined();
+  });
+
+  it('orders and places tens of thousands of slides in linear time', async () => {
+    const n = 100_000;
+    const names = Array.from({ length: n }, (_, i) => `slide${i + 1}`);
+    const parts = names.map((s) => `ppt/slides/${s}.xml`);
+    const xml = types([...names].reverse());
+    // pptx-preview sorts by the number in the part name.
+    const drawn = await within(5000, () => previewOrder(xml));
+    expect(drawn).toEqual(parts);
+    // The presentation shows them last first; the first is hidden.
+    const placed = await within(5000, () => placeSlides([...parts].reverse(), drawn, new Set([parts[0]!])));
+    expect(placed[0]).toBe(-1);
+    expect(placed[1]).toBe(n - 2);
+    expect(placed[n - 1]).toBe(0);
+  });
+
+  it('renames pictures in one pass over the content types, whatever their number', async () => {
+    const n = 2000;
+    const extra: Record<string, string> = {
+      // 6 MB of content types: rewritten once per picture, that took nine seconds.
+      '[Content_Types].xml':
+        '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+        Array.from(
+          { length: n },
+          (_, i) => `<Override PartName="/ppt/media/p${i}.png" ContentType="image/png"/>`,
+        ).join('') +
+        `<!--${' '.repeat(6_000_000)}--></Types>`,
+    };
+    for (let i = 0; i < n; i++) extra[`ppt/media/p${i}.png`] = `${i}`;
+    const bytes = await deck('', extra);
+    const a = await within(3000, () => annotatePptx(bytes));
+    const z = await JSZip.loadAsync(a.bytes);
+    expect(z.file('ppt/media/p0.png')).toBeNull();
+    expect(await z.file(`ppt/media/image-ordo-p${n - 1}.png`)!.async('string')).toBe(`${n - 1}`);
+    const ct = await z.file('[Content_Types].xml')!.async('string');
+    expect(ct).toContain('PartName="/ppt/media/image-ordo-p0.png"');
+    expect(ct).not.toContain('PartName="/ppt/media/p0.png"');
+  });
+
+  it('moves a compressed picture without inflating or changing it', async () => {
+    const pixels = Uint8Array.from({ length: 100_000 }, (_, i) => (i * 7919) % 251);
+    const z = await JSZip.loadAsync(await deck(''));
+    z.file('ppt/media/Slide-1-image-1.png', pixels);
+    const a = await annotatePptx(await z.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }));
+    const out = await JSZip.loadAsync(a.bytes);
+    expect(await out.file('ppt/media/image-ordo-Slide-1-image-1.png')!.async('uint8array')).toEqual(pixels);
+  });
+
+  it('reads part names and targets whose %-escapes do not decode as they are written', async () => {
+    const ct =
+      '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Override PartName="/ppt/notes/100%.xml" ContentType="application/xml"/>' +
+      '<Override PartName="/ppt/media/50%.png" ContentType="image/png"/></Types>';
+    const slideRels =
+      `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>` +
+      `<Relationship Id="rId2" Type="${REL}/image" Target="../media/50%.png"/></Relationships>`;
+    const a = await annotatePptx(
+      await deck('', {
+        '[Content_Types].xml': ct,
+        'ppt/media/50%.png': 'x',
+        'ppt/slides/_rels/slide1.xml.rels': slideRels,
+      }),
+    );
+    const z = await JSZip.loadAsync(a.bytes);
+    expect(await z.file('ppt/media/image-ordo-50%.png')!.async('string')).toBe('x');
+    expect(await z.file('ppt/slides/_rels/slide1.xml.rels')!.async('string')).toContain(
+      'Target="../media/image-ordo-50%.png"',
+    );
+    const types = await z.file('[Content_Types].xml')!.async('string');
+    // The notes part is missing: its entry is dropped.
+    expect(types).not.toContain('100%.xml');
+    expect(types).toContain('PartName="/ppt/media/image-ordo-50%.png"');
+  });
+
+  it('stops when its signal aborts', async () => {
+    const ctrl = new AbortController();
+    ctrl.abort(new Error('cancelled'));
+    await expect(annotatePptx(await deck(''), { signal: ctrl.signal })).rejects.toThrow('cancelled');
   });
 });

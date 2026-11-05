@@ -1,7 +1,7 @@
 /**
  * Worker-thread pool for CPU-bound parsing in the library process (design/25 "Hub"): ProPresenter decode
- * (including its RTF), PPTX XML text extraction and font table parsing never run on the event loop that
- * answers HTTP requests.
+ * (including its RTF), PPTX XML text extraction, the pptx-preview annotation of a deck and font table
+ * parsing never run on the event loop that answers HTTP requests.
  *
  * - Workers start lazily, are `unref`'d (an idle pool never keeps the process alive) and exit after
  *   IDLE_MS without work.
@@ -17,6 +17,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
+import type { Annotation } from '@ordo/pptx-render/annotate.ts';
 import type { Pro7ImportOptions, Pro7Result, PptxText } from './imports.ts';
 import type { FontFace } from './fonts/sfnt.ts';
 
@@ -26,6 +27,8 @@ export class WorkerStartError extends Error {}
 export type CpuTasks = {
   pro7: { input: { files: Map<string, Uint8Array>; opts?: Pro7ImportOptions }; output: Pro7Result };
   pptx: { input: { buf: Uint8Array }; output: PptxText };
+  /** A deck's annotation for pptx-preview (`annotatePptx`: run markers, styles, repaired parts). */
+  'pptx-annotate': { input: { buf: Uint8Array }; output: Annotation };
   font: { input: { buf: Uint8Array }; output: FontFace };
 };
 export type CpuTaskKind = keyof CpuTasks;
@@ -33,6 +36,7 @@ export type CpuTaskKind = keyof CpuTasks;
 export const TASK_TIMEOUT_MS: Record<CpuTaskKind, number> = {
   pro7: 15 * 60_000,
   pptx: 2 * 60_000,
+  'pptx-annotate': 2 * 60_000,
   font: 15_000,
 };
 const IDLE_MS = 30_000;

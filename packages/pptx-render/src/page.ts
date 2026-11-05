@@ -34,14 +34,47 @@ export type PageResult = {
 };
 
 /**
- * Runs inside the browser (serialized with Function.prototype.toString and evaluated in the harness page),
- * so it must not refer to anything outside its own body. `window.pptxPreview` is the unmodified UMD
- * bundle of pptx-preview, loaded by the harness page.
+ * A rendered text's run markers removed in one pass, and the id of the first. Only MARK_START followed by
+ * MARK_DIGITS alphabet digits is a marker; any other U+2064 is the deck's own text and stays. Runs inside
+ * the browser next to `pageMain` (chromium.ts sends both), so it refers to nothing outside its own body.
  */
-export async function pageMain(args: PageArgs): Promise<PageResult> {
+export function takeMarkers(data: string): { text: string; id?: number } {
   const MARK_START = '\u2064';
   const MARK_ALPHABET = '\u2060\u2061\u2062\u2063';
   const MARK_DIGITS = 8;
+  const kept: string[] = [];
+  let from = 0;
+  let id: number | undefined;
+  for (let at = data.indexOf(MARK_START); at >= 0; at = data.indexOf(MARK_START, at + 1)) {
+    let v = 0;
+    let ok = true;
+    for (let i = 1; i <= MARK_DIGITS; i++) {
+      // Past the end is not a digit (`indexOf('')` would say 0).
+      const ch = data[at + i];
+      const d = ch === undefined ? -1 : MARK_ALPHABET.indexOf(ch);
+      if (d < 0) {
+        ok = false;
+        break;
+      }
+      v = v * 4 + d;
+    }
+    if (!ok) continue;
+    kept.push(data.slice(from, at));
+    from = at + MARK_DIGITS + 1;
+    if (id === undefined) id = v;
+  }
+  if (id === undefined) return { text: data };
+  kept.push(data.slice(from));
+  return { text: kept.join(''), id };
+}
+
+/**
+ * Runs inside the browser (serialized with Function.prototype.toString and evaluated in the harness page),
+ * so it must not refer to anything outside its own body but `takeMarkers`, which is sent with it.
+ * `window.pptxPreview` is the unmodified UMD bundle of pptx-preview, loaded by the harness page.
+ */
+export async function pageMain(args: PageArgs): Promise<PageResult> {
+  const MARK_START = '\u2064';
   const errors: string[] = [];
   const w = window as unknown as {
     pptxPreview: {
@@ -113,23 +146,8 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
   for (let n = walker.nextNode(); n; n = walker.nextNode())
     if ((n as Text).data.includes(MARK_START)) found.push(n as Text);
   for (const t of found) {
-    let data = t.data;
-    let id: number | undefined;
-    for (let at = data.indexOf(MARK_START); at >= 0; at = data.indexOf(MARK_START)) {
-      let v = 0;
-      let ok = true;
-      for (let i = 1; i <= MARK_DIGITS; i++) {
-        const d = MARK_ALPHABET.indexOf(data[at + i] ?? '');
-        if (d < 0) {
-          ok = false;
-          break;
-        }
-        v = v * 4 + d;
-      }
-      data = data.slice(0, at) + data.slice(at + (ok ? MARK_DIGITS + 1 : 1));
-      if (ok && id === undefined) id = v;
-    }
-    t.data = data;
+    const { text, id } = takeMarkers(t.data);
+    if (text !== t.data) t.data = text;
     const st = id !== undefined ? args.runs[id] : null;
     const el = t.parentElement;
     if (!st || !el || !args.fixes) {

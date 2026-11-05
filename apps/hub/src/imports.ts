@@ -19,7 +19,7 @@ import {
 } from '@ordo/domain';
 import * as realImporters from '@ordo/importers';
 import type { Pro7ImportOptions, Pro7PresRef } from '@ordo/importers';
-import { renderWithPptxPreview } from '@ordo/pptx-render';
+import { type Annotation, annotatePptx, renderWithPptxPreview } from '@ordo/pptx-render';
 import { extractZip, ZIP_MAX_IN_MEMORY_BYTES } from '@ordo/importers/zip-stream.ts';
 import type { Logger } from 'pino';
 import type { HubConfig } from './config.ts';
@@ -425,6 +425,20 @@ export class ImportService {
     }
   }
 
+  /**
+   * The deck's annotation for pptx-preview runs on the CPU pool (a crafted deck must not hold the event
+   * loop); on the main thread only when no worker can start.
+   */
+  private async annotateDeck(buf: Uint8Array, signal: AbortSignal): Promise<Annotation> {
+    try {
+      return await annotatePptxInWorker(buf, signal);
+    } catch (e) {
+      if (!(e instanceof WorkerStartError)) throw e;
+      this.log.warn({ err: e.message }, 'cpu worker unavailable; annotating the deck on the main thread');
+      return annotatePptx(buf, { signal });
+    }
+  }
+
   // ---- PPTX / PDF ----
   queueDocument(hash: string, name: string, ext: 'pdf' | 'pptx', renderer: PptxRenderer = 'libreoffice') {
     const payload: DocPayload = {
@@ -471,6 +485,7 @@ export class ImportService {
               sandbox: this.cfg.chromium.sandbox,
               timeoutMs: t.soffice,
               signal: ctx.signal,
+              annotate: (deck, signal) => this.annotateDeck(deck, signal),
             });
             for (const n of r.notes.slice(0, 20)) ctx.log(`[warn] pptx-preview: ${n}`);
             ctx.log(`${r.pages.length} slide(s) drawn, ${r.styled} text run(s) corrected`);
@@ -686,4 +701,9 @@ export async function importPro7Batched(
 /** Extract PPTX text on the CPU pool (the XML parse of a large deck takes seconds). */
 export function extractPptxTextInWorker(buf: Uint8Array, signal?: AbortSignal): Promise<PptxText> {
   return cpuPool().run('pptx', { buf }, { signal });
+}
+
+/** Annotate a deck for pptx-preview on the CPU pool (`annotatePptx`, with the pool's timeout and heap limit). */
+export function annotatePptxInWorker(buf: Uint8Array, signal?: AbortSignal): Promise<Annotation> {
+  return cpuPool().run('pptx-annotate', { buf }, { signal });
 }

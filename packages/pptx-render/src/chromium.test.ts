@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
+import { annotatePptx } from './annotate.ts';
 import { renderWithPptxPreview } from './chromium.ts';
 
 /** A Chromium to drive: ORDO_TEST_CHROMIUM, else Playwright's when it is installed. */
@@ -93,6 +94,22 @@ describe.skipIf(!chromium)('renderWithPptxPreview (headless Chromium)', () => {
     expect((await readFile(fixed.pages[0]!)).equals(await readFile(raw.pages[0]!))).toBe(false);
   }, 120_000);
 
+  it('takes the annotation from the caller when given one (the hub runs it on a worker)', async () => {
+    const input = await deck(1);
+    const dir = await work();
+    let calls = 0;
+    const fixed = await renderWithPptxPreview(input, join(dir, 'fixed'), {
+      chromium: chromium!,
+      timeoutMs: 60_000,
+      annotate: (bytes, signal) => {
+        calls++;
+        return annotatePptx(bytes, { signal });
+      },
+    });
+    expect(calls).toBe(1);
+    expect(fixed.styled).toBe(2);
+  }, 120_000);
+
   it('reports a missing browser and a deck pptx-preview cannot read', async () => {
     const dir = await work();
     const input = join(dir, 'bad.pptx');
@@ -108,4 +125,83 @@ describe.skipIf(!chromium)('renderWithPptxPreview (headless Chromium)', () => {
       renderWithPptxPreview(input, join(dir, 'y'), { chromium: chromium!, timeoutMs: 30_000, fixes: false }),
     ).rejects.toThrow(/pptx-preview|no slides/);
   }, 60_000);
+});
+
+/**
+ * A stand-in for Chromium: a script that answers the DevTools calls on the pipe (fd 3 in, fd 4 out) with
+ * empty results, exits soon after answering the navigation (as a crashing browser would, before the page
+ * loads), and leaves a file `launched` behind when it was started at all.
+ */
+async function fakeChromium(dir: string): Promise<string> {
+  const exe = join(dir, 'fake-chromium');
+  await writeFile(
+    exe,
+    `#!${process.execPath}
+const fs = require('node:fs');
+const net = require('node:net');
+fs.writeFileSync(${JSON.stringify(join(dir, 'launched'))}, '');
+// Sockets, not fs streams: a blocking read on the pipe would keep process.exit from finishing.
+const out = new net.Socket({ fd: 4, readable: false, writable: true });
+let buf = '';
+new net.Socket({ fd: 3, readable: true, writable: false }).on('data', (d) => {
+  buf += d.toString('utf8');
+  for (let i = buf.indexOf('\\0'); i >= 0; i = buf.indexOf('\\0')) {
+    const m = JSON.parse(buf.slice(0, i));
+    buf = buf.slice(i + 1);
+    const result =
+      m.method === 'Target.createTarget' ? { targetId: 't' } :
+      m.method === 'Target.attachToTarget' ? { sessionId: 's' } : {};
+    out.write(JSON.stringify({ id: m.id, result }) + '\\0');
+    if (m.method === 'Page.navigate') setTimeout(() => process.exit(3), 50);
+    if (m.method === 'Browser.close') process.exit(0);
+  }
+});
+`,
+    { mode: 0o755 },
+  );
+  return exe;
+}
+
+describe('renderWithPptxPreview (a stand-in browser)', () => {
+  it('fails instead of waiting forever when Chromium dies between the navigation and the page load', async () => {
+    const dir = await work();
+    const input = join(dir, 'in.pptx');
+    await writeFile(input, 'not a deck');
+    await expect(
+      renderWithPptxPreview(input, join(dir, 'w'), {
+        chromium: await fakeChromium(dir),
+        timeoutMs: 60_000,
+        fixes: false,
+      }),
+    ).rejects.toThrow(/Chromium exited \(3\)/);
+    expect(existsSync(join(dir, 'launched'))).toBe(true);
+  }, 20_000);
+
+  it('times the whole render from the call and starts no browser once cancelled or out of time', async () => {
+    const dir = await work();
+    const input = join(dir, 'in.pptx');
+    await writeFile(input, 'not a deck');
+    const chromium = await fakeChromium(dir);
+    const ctrl = new AbortController();
+    ctrl.abort();
+    await expect(
+      renderWithPptxPreview(input, join(dir, 'a'), { chromium, timeoutMs: 60_000, signal: ctrl.signal }),
+    ).rejects.toThrow('cancelled');
+    // An annotation that never finishes: the deadline counts it, and tells it to stop.
+    let told: AbortSignal | undefined;
+    const t = performance.now();
+    await expect(
+      renderWithPptxPreview(input, join(dir, 'b'), {
+        chromium,
+        timeoutMs: 300,
+        annotate: (_bytes, signal) => {
+          told = signal;
+          return new Promise(() => {});
+        },
+      }),
+    ).rejects.toThrow(/timed out after/);
+    expect(performance.now() - t).toBeLessThan(5000);
+    expect(told?.aborted).toBe(true);
+    expect(existsSync(join(dir, 'launched'))).toBe(false);
+  }, 20_000);
 });
