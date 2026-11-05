@@ -5,6 +5,9 @@
  *   pnpm --filter @ordo/pptx-fidelity start -- [--corpus] [--out DIR] [--chromium PATH] [--raw]
  *        [--fresh-lo] [--baseline summary.json] [deck.pptx | dir]...
  *
+ * Folders are searched with their subfolders for .pptx/.pptm/.ppsx/.potx decks; a deck either renderer cannot
+ * draw is recorded in its notes and the run goes on.
+ *
  * --corpus      include the synthetic decks (src/corpus.ts)
  * --raw         also draw with pptx-preview unmodified, to show what the corrections are worth
  * --fresh-lo    redraw the LibreOffice pictures even when they exist (they are the slow part)
@@ -62,13 +65,23 @@ async function findChromium(given?: string): Promise<string> {
   return 'chromium';
 }
 
-async function decksIn(paths: string[]): Promise<string[]> {
-  const out: string[] = [];
+/** PresentationML files: decks, slide shows, templates, macro-enabled decks. */
+const DECK_RE = /\.(pptx|pptm|ppsx|ppsm|potx|potm)$/i;
+
+/** Decks given as files, or found in folders (and their subfolders), each with a name unique in the run. */
+async function decksIn(paths: string[]): Promise<{ file: string; name: string }[]> {
+  const out: { file: string; name: string }[] = [];
+  const walk = async (dir: string, prefix: string) => {
+    for (const f of (await readdir(dir, { withFileTypes: true })).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    )) {
+      if (f.isDirectory()) await walk(join(dir, f.name), `${prefix}${f.name}__`);
+      else if (DECK_RE.test(f.name)) out.push({ file: join(dir, f.name), name: prefix + f.name });
+    }
+  };
   for (const p of paths) {
-    const st = await stat(p);
-    if (st.isDirectory()) {
-      for (const f of (await readdir(p)).sort()) if (/\.pptx$/i.test(f)) out.push(join(p, f));
-    } else out.push(p);
+    if ((await stat(p)).isDirectory()) await walk(p, '');
+    else out.push({ file: p, name: basename(p) });
   }
   return out;
 }
@@ -176,21 +189,27 @@ async function main(): Promise<void> {
   await mkdir(out, { recursive: true });
   const chromium = await findChromium(a.chromium);
   const decks = await decksIn(a.decks);
-  if (a.corpus) decks.unshift(...(await buildCorpus(join(out, 'corpus'))));
+  if (a.corpus)
+    decks.unshift(...(await buildCorpus(join(out, 'corpus'))).map((f) => ({ file: f, name: basename(f) })));
   if (!decks.length) throw new Error('no decks: pass .pptx files or folders, or --corpus');
 
   const scores: DeckScore[] = [];
-  for (const deck of decks) {
-    const name = basename(deck)
-      .replace(/\.pptx$/i, '')
-      .replace(/[^\w.-]+/g, '_');
+  for (const { file: deck, name: given } of decks) {
+    const name = given.replace(DECK_RE, '').replace(/[^\w.-]+/g, '_');
     const dir = join(out, name);
     const loDir = join(dir, 'libreoffice');
     let lo = await pngsIn(loDir);
+    const loNotes: string[] = [];
     if (!lo.length || a.freshLo) {
       await rm(loDir, { recursive: true, force: true });
       await mkdir(loDir, { recursive: true });
-      lo = await drawWithLibreOffice(deck, loDir);
+      // One deck LibreOffice cannot draw must not end the run: it is a finding.
+      try {
+        lo = await drawWithLibreOffice(deck, loDir);
+      } catch (e) {
+        lo = [];
+        loNotes.push(`libreoffice failed: ${(e as Error).message.slice(0, 300)}`);
+      }
     }
     const ppvDir = join(dir, 'pptx-preview');
     await rm(ppvDir, { recursive: true, force: true });
@@ -215,7 +234,7 @@ async function main(): Promise<void> {
       ...(rawScores ? { rawSsim: mean(rawScores) } : {}),
       ms: Math.round(ms),
       styled: ppv.styled,
-      notes: ppv.notes,
+      notes: [...loNotes, ...ppv.notes],
       perSlide: lo.map((f, i) => ({
         n: i + 1,
         ssim: fixed[i]!,
