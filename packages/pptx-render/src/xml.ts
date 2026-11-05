@@ -76,9 +76,9 @@ export function path(n: XNode | undefined, ...names: string[]): XNode | undefine
   return cur;
 }
 
-/** The root element of a parsed part (the first element that is not a text node). */
+/** The root element of a parsed part: the first element (not text, a declaration or another `<?...?>`). */
 export function rootOf(nodes: XNode[]): XNode | undefined {
-  return nodes.find((n) => n.name !== '#text');
+  return nodes.find((n) => n.name !== '#text' && !n.name.startsWith('?') && !n.name.startsWith('!'));
 }
 
 export function num(v: string | undefined): number | undefined {

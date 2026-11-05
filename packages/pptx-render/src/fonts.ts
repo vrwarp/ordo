@@ -7,7 +7,8 @@ import { spawn } from 'node:child_process';
  * are left out (the page then falls back to the generic sans-serif family).
  */
 export async function fontFallbacks(families: string[], timeoutMs: number): Promise<Record<string, string>> {
-  const out: Record<string, string> = {};
+  // No prototype: a typeface may be called anything, "__proto__" included.
+  const out: Record<string, string> = Object.create(null);
   for (const f of families.slice(0, 200)) {
     const got = await fcMatch(f, Math.min(timeoutMs, 10_000));
     if (got && got.toLowerCase() !== f.toLowerCase()) out[f] = got;

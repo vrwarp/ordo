@@ -136,7 +136,13 @@ which ordo owns and can keep fixing:
   to them. A chart without a title gets the one PowerPoint shows (none when it was deleted, the series name
   for a single series) instead of pptx-preview's placeholder ("图表标题"). Embedded colour profiles are
   removed from pictures: Chromium converts a picture from its profile, LibreOffice uses the values as
-  they are.
+  they are. Every part is read through a stream that stops at a size limit (8 MB per XML part, 128 MB of
+  XML in all, 64 MB per picture), counted while inflating rather than trusted from the zip, and at most
+  65,536 runs and paragraphs are described: a deck is untrusted input.
+- **Slide order.** pptx-preview takes slides from `[Content_Types].xml` and sorts them by the number in
+  the part name, ignoring the presentation's order, and draws hidden slides. The annotator maps each
+  slide it will draw to its place among the presentation's shown slides, and the captured pictures are
+  put in that order with hidden slides left out, as LibreOffice exports them.
 - **Run markers.** Every text run's `<a:t>` gets an invisible marker (U+2064 and eight base-4 digits from
   U+2060..U+2063: zero-width format characters, no line breaks) carrying an id into a side table of what
   ordo computed for that run from the XML, with PowerPoint's inheritance: run, paragraph, shape list style,

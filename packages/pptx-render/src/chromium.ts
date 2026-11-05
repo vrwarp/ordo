@@ -120,8 +120,25 @@ export async function renderWithPptxPreview(
       await writeFile(file, png);
       pages.push(file);
     }
-    o.log?.(`pptx-preview: ${pages.length} slide(s), ${res.styled} run(s) restyled`);
-    return { pages, styled: res.styled, notes, ...(dom ? { dom } : {}) };
+    // pptx-preview draws slides in part-name order and draws hidden ones: put them in the presentation's
+    // order and leave hidden slides out, as LibreOffice does.
+    const order = ann?.slideOrder ?? [];
+    let ordered = pages;
+    if (order.length === pages.length && order.some((v, k) => v !== k)) {
+      const placed: string[] = [];
+      pages.forEach((file, k) => {
+        const at = order[k]!;
+        if (at >= 0) placed[at] = file;
+      });
+      ordered = placed.filter((f) => f !== undefined);
+      const hidden = order.filter((v) => v < 0).length;
+      notes.push(`slides put in presentation order${hidden ? `; ${hidden} hidden slide(s) left out` : ''}`);
+    } else if (order.length && order.length !== pages.length)
+      notes.push(
+        `pptx-preview drew ${pages.length} slide(s) where ${order.length} were expected; order kept`,
+      );
+    o.log?.(`pptx-preview: ${ordered.length} slide(s), ${res.styled} run(s) restyled`);
+    return { pages: ordered, styled: res.styled, notes, ...(dom ? { dom } : {}) };
   } finally {
     await browser.shutdown();
   }

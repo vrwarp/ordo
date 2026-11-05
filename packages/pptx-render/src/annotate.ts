@@ -55,6 +55,8 @@ export type BodyStyle = {
   paras: number[];
   /** Shrink text on overflow (`a:normAutofit`) and the scale PowerPoint stored, as fractions. */
   autofit?: { fontScale: number; lnSpcReduction: number };
+  /** Vertical text (`vert`): not re-fitted or re-placed, pptx-preview's layout is kept. */
+  vertical?: boolean;
   /**
    * The shape's exact size in points, when it is known from the XML (not in a group, horizontal text):
    * pptx-preview rounds it to whole points, enough to change where lines break and whether text fits.
@@ -67,7 +69,7 @@ export type BodyStyle = {
  * pictures directly on a slide (not in groups) are listed; geometry in points.
  */
 export type PictureClip = {
-  /** The slide's position in the deck (0 = first). */
+  /** The slide's position among the slides pptx-preview draws (0 = first). */
   slide: number;
   x: number;
   y: number;
@@ -89,6 +91,12 @@ export type Annotation = {
   bodies: BodyStyle[];
   /** Pictures to clip to their shape. */
   pictures: PictureClip[];
+  /**
+   * For each slide pptx-preview draws, in its order (it ignores the presentation's order and sorts slides by
+   * the number in their part name), its place in the presentation's order of shown slides, or -1 for a
+   * hidden slide (LibreOffice leaves those out). Empty when the order could not be read.
+   */
+  slideOrder: number[];
   /** Distinct typefaces the marked runs name, for font fallback lookup. */
   families: string[];
   /** Slide size in points (`p:sldSz`, 914400 EMU per inch, 72 points per inch). */
@@ -100,6 +108,83 @@ export type Annotation = {
 
 /** Largest XML part read (real slide XML is tens of KB). */
 const MAX_PART_BYTES = 8 * 1024 * 1024;
+/** Largest picture read to remove its colour profile. */
+const MAX_PICTURE_BYTES = 64 * 1024 * 1024;
+/** Most paragraphs and text boxes described (a deck of a few KB can hold millions of empty ones). */
+const MAX_PARAS = 1 << 16;
+const MAX_BODIES = 1 << 15;
+/** Most XML read in all, over every part. */
+const MAX_TOTAL_BYTES = 128 * 1024 * 1024;
+
+type ZipStream = {
+  on(event: 'data', fn: (chunk: Uint8Array) => void): ZipStream;
+  on(event: 'error', fn: (e: Error) => void): ZipStream;
+  on(event: 'end', fn: () => void): ZipStream;
+  pause(): ZipStream;
+  resume(): ZipStream;
+};
+
+/**
+ * A part's bytes, or undefined when it is missing or inflates past `limit` (counted while inflating: the
+ * size a zip entry declares is the deck's own claim).
+ */
+async function readBytes(
+  zip: JSZip,
+  name: string,
+  limit: number,
+  /** Return the first `limit` bytes instead of nothing when the part is longer. */
+  head = false,
+): Promise<Uint8Array | undefined> {
+  const f = zip.file(name);
+  if (!f) return undefined;
+  return new Promise((resolve, reject) => {
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    let done = false;
+    // JSZip's streaming reader (documented, missing from its type declarations).
+    const s = (f as unknown as { internalStream(type: 'uint8array'): ZipStream }).internalStream(
+      'uint8array',
+    );
+    const finish = () => {
+      const out = new Uint8Array(Math.min(total, limit));
+      let o = 0;
+      for (const c of chunks) {
+        const n = Math.min(c.length, out.length - o);
+        out.set(c.subarray(0, n), o);
+        o += n;
+      }
+      resolve(out);
+    };
+    s.on('data', (chunk: Uint8Array) => {
+      if (done) return;
+      total += chunk.length;
+      chunks.push(chunk);
+      if (total > limit) {
+        done = true;
+        s.pause();
+        if (head) finish();
+        else resolve(undefined);
+      }
+    });
+    s.on('error', (e: Error) => {
+      if (!done) {
+        done = true;
+        reject(e);
+      }
+    });
+    s.on('end', () => {
+      if (done) return;
+      done = true;
+      finish();
+    });
+    s.resume();
+  });
+}
+
+async function readText(zip: JSZip, name: string, limit = MAX_PART_BYTES): Promise<string | undefined> {
+  const b = await readBytes(zip, name, limit);
+  return b && new TextDecoder().decode(b);
+}
 const EMU_PER_PT = 12_700;
 const PART_RE = /^ppt\/(slides|slideLayouts|slideMasters)\/[^/]+\.xml$/;
 /** Every `a:t` start tag, in document order; group 1 is `/` for an empty `<a:t/>`. */
@@ -153,15 +238,18 @@ const EMU_INSET_TB = 45_720;
 export async function annotatePptx(input: Uint8Array): Promise<Annotation> {
   const zip = await JSZip.loadAsync(input);
   const notes: string[] = [];
+  let budget = MAX_TOTAL_BYTES;
   const read = async (name: string): Promise<string | undefined> => {
-    const f = zip.file(name);
-    if (!f) return undefined;
-    const size = (f as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize ?? 0;
-    if (size > MAX_PART_BYTES) {
-      notes.push(`${name}: larger than ${MAX_PART_BYTES} bytes, not read`);
-      return undefined;
-    }
-    return f.async('string');
+    if (!zip.file(name)) return undefined;
+    if (budget <= 0) return undefined;
+    const limit = Math.min(MAX_PART_BYTES, budget);
+    const xml = await readText(zip, name, limit);
+    if (xml === undefined) {
+      notes.push(`${name}: larger than ${limit} bytes, not read`);
+      // Out of budget: read nothing more. One oversized part is only skipped.
+      if (limit < MAX_PART_BYTES) budget = 0;
+    } else budget -= xml.length;
+    return xml;
   };
   const parse = async (name: string): Promise<XNode | undefined> => {
     const xml = await read(name);
@@ -289,7 +377,15 @@ export async function annotatePptx(input: Uint8Array): Promise<Annotation> {
       changed = true;
     }
   }
-  const pictures = await pictureClips(zip, pres, parse);
+  let drawn: string[] = [];
+  let slideOrder: number[] = [];
+  try {
+    drawn = await previewSlides(zip);
+    slideOrder = await shownOrder(zip, pres, drawn);
+  } catch (e) {
+    notes.push(`slide order: ${(e as Error).message}`);
+  }
+  const pictures = await pictureClips(zip, drawn, parse);
   if (await renameMedia(zip, notes)) changed = true;
   if (await stripColorProfiles(zip, notes)) changed = true;
   if (await titleCharts(zip, notes)) changed = true;
@@ -306,6 +402,7 @@ export async function annotatePptx(input: Uint8Array): Promise<Annotation> {
     paras,
     bodies,
     pictures,
+    slideOrder,
     families: [...families].sort(),
     slideWidthPt,
     slideHeightPt,
@@ -315,9 +412,9 @@ export async function annotatePptx(input: Uint8Array): Promise<Annotation> {
 
 /** Slides in presentation order (`p:sldIdLst`), as zip paths. */
 async function slideOrder(zip: JSZip, pres: XNode | undefined): Promise<string[]> {
-  const f = zip.file('ppt/_rels/presentation.xml.rels');
-  if (!f || !pres) return [];
-  const rels = rootOf(parseXml(await f.async('string'), 'ppt/_rels/presentation.xml.rels'));
+  const xml = pres ? await readText(zip, 'ppt/_rels/presentation.xml.rels') : undefined;
+  if (xml === undefined) return [];
+  const rels = rootOf(parseXml(xml, 'ppt/_rels/presentation.xml.rels'));
   const byId = new Map(children(rels, 'Relationship').map((r) => [r.attrs.Id, r.attrs.Target]));
   const out: string[] = [];
   for (const id of children(child(pres, 'p:sldIdLst'), 'p:sldId')) {
@@ -327,21 +424,49 @@ async function slideOrder(zip: JSZip, pres: XNode | undefined): Promise<string[]
   return out;
 }
 
+/** The slides pptx-preview draws, in its order: the slide parts `[Content_Types].xml` lists, sorted by the
+ * first number in the part name (stable). */
+async function previewSlides(zip: JSZip): Promise<string[]> {
+  const xml = (await readText(zip, '[Content_Types].xml')) ?? '';
+  const parts: string[] = [];
+  for (const m of xml.matchAll(/<Override\b[^>]*>/g)) {
+    if (
+      !/ContentType="application\/vnd\.openxmlformats-officedocument\.presentationml\.slide\+xml"/.test(m[0])
+    )
+      continue;
+    const part = /PartName="\/?([^"]*)"/.exec(m[0])?.[1];
+    if (part) parts.push(part);
+  }
+  const index = (p: string) => Number(/(\d+)/.exec(p)?.[1] ?? 1);
+  return parts
+    .map((p, i) => ({ p, i }))
+    .sort((a, b) => index(a.p) - index(b.p) || a.i - b.i)
+    .map((x) => x.p);
+}
+
+/** Where each drawn slide goes: its place among the presentation's shown slides, or -1. */
+async function shownOrder(zip: JSZip, pres: XNode | undefined, drawn: string[]): Promise<number[]> {
+  const order = await slideOrder(zip, pres);
+  if (!order.length || !drawn.length) return [];
+  const shown: string[] = [];
+  for (const part of order) {
+    if (!drawn.includes(part)) continue;
+    const head = new TextDecoder().decode((await readBytes(zip, part, 4096, true)) ?? new Uint8Array());
+    if (/<p:sld\b[^>]*\sshow="(0|false)"/.test(head)) continue;
+    shown.push(part);
+  }
+  return drawn.map((part) => shown.indexOf(part));
+}
+
 async function pictureClips(
   zip: JSZip,
-  pres: XNode | undefined,
+  order: string[],
   parse: (name: string) => Promise<XNode | undefined>,
 ): Promise<PictureClip[]> {
   const out: PictureClip[] = [];
-  let order: string[] = [];
-  try {
-    order = await slideOrder(zip, pres);
-  } catch {
-    return out;
-  }
   for (let i = 0; i < order.length; i++) {
     const name = order[i]!;
-    const xml = await zip.file(name)?.async('string');
+    const xml = await readText(zip, name);
     if (!xml || !/prst="(ellipse|roundRect)"/.test(xml)) continue;
     const root = await parse(name);
     for (const pic of children(path(root, 'p:cSld', 'p:spTree'), 'p:pic')) {
@@ -395,11 +520,13 @@ async function renameMedia(zip: JSZip, notes: string[]): Promise<boolean> {
   for (const [from, to] of renames) {
     const f = zip.file(from);
     if (!f) continue;
-    zip.file(to, await f.async('uint8array'));
+    const b = await readBytes(zip, from, MAX_PICTURE_BYTES);
+    if (!b) continue;
+    zip.file(to, b);
     zip.remove(from);
   }
   for (const rels of Object.keys(zip.files).filter((n) => n.endsWith('.rels'))) {
-    const xml = await zip.file(rels)?.async('string');
+    const xml = await readText(zip, rels);
     if (!xml) continue;
     const dir = rels.replace(/_rels\/[^/]+\.rels$/, '').replace(/\/$/, '');
     let hit = false;
@@ -413,7 +540,7 @@ async function renameMedia(zip: JSZip, notes: string[]): Promise<boolean> {
     });
     if (hit) zip.file(rels, next);
   }
-  const types = await zip.file('[Content_Types].xml')?.async('string');
+  const types = await readText(zip, '[Content_Types].xml');
   if (types) {
     let next = types;
     for (const [from, to] of renames) next = next.split(`PartName="/${from}"`).join(`PartName="/${to}"`);
@@ -432,8 +559,9 @@ async function titleCharts(zip: JSZip, notes: string[]): Promise<boolean> {
   let titled = 0;
   for (const name of Object.keys(zip.files)) {
     if (!/^ppt\/charts\/chart[^/]*\.xml$/.test(name)) continue;
-    const xml = await zip.file(name)?.async('string');
-    if (!xml || /<c:title[\s>]/.test(xml) || !/<c:chart>/.test(xml)) continue;
+    const xml = await readText(zip, name);
+    // Only the chart's own title counts (the first child of c:chart), not an axis title.
+    if (!xml || /<c:chart>\s*<c:title[\s>]/.test(xml) || !/<c:chart>/.test(xml)) continue;
     const deleted = /<c:autoTitleDeleted\s+val="(1|true)"/.test(xml);
     const series = xml.match(/<c:ser>/g)?.length ?? 0;
     const seriesName = /<c:ser>[\s\S]*?<c:tx>[\s\S]*?<c:v>([^<]*)<\/c:v>/.exec(xml)?.[1];
@@ -455,10 +583,12 @@ async function stripColorProfiles(zip: JSZip, notes: string[]): Promise<boolean>
   let stripped = 0;
   for (const name of Object.keys(zip.files)) {
     if (!/^ppt\/media\/[^/]+\.(jpe?g|png)$/i.test(name)) continue;
-    const f = zip.file(name);
-    const size = (f as unknown as { _data?: { uncompressedSize?: number } })?._data?.uncompressedSize ?? 0;
-    if (!f || size > 64 * 1024 * 1024) continue;
-    const b = await f.async('uint8array');
+    // A profile sits before the image data: look for one in the first bytes before reading it all.
+    const head = await readBytes(zip, name, 256 * 1024, true);
+    const marker = /\.png$/i.test(name) ? 'iCCP' : 'ICC_PROFILE';
+    if (!head || !new TextDecoder('latin1').decode(head).includes(marker)) continue;
+    const b = await readBytes(zip, name, MAX_PICTURE_BYTES);
+    if (!b) continue;
     const out = /\.png$/i.test(name) ? withoutIccp(b) : withoutJpegIcc(b);
     if (out) {
       zip.file(name, out);
@@ -534,9 +664,8 @@ export function withoutIccp(b: Uint8Array): Uint8Array | undefined {
  * one.
  */
 async function repairContentTypes(zip: JSZip, notes: string[]): Promise<boolean> {
-  const f = zip.file('[Content_Types].xml');
-  if (!f) return false;
-  const xml = await f.async('string');
+  const xml = await readText(zip, '[Content_Types].xml');
+  if (xml === undefined) return false;
   let dropped = 0;
   const next = xml.replace(/<Override\b[^>]*?PartName="([^"]*)"[^>]*?\/>/g, (m, part: string) => {
     const name = decodeURIComponent(part).replace(/^\/+/, '');
@@ -554,9 +683,8 @@ async function repairContentTypes(zip: JSZip, notes: string[]): Promise<boolean>
 async function relTarget(zip: JSZip, part: string, type: string): Promise<string | undefined> {
   const slash = part.lastIndexOf('/');
   const relsPath = `${part.slice(0, slash)}/_rels/${part.slice(slash + 1)}.rels`;
-  const f = zip.file(relsPath);
-  if (!f) return undefined;
-  const xml = await f.async('string');
+  const xml = await readText(zip, relsPath);
+  if (xml === undefined) return undefined;
   const root = rootOf(parseXml(xml, relsPath));
   const rel = children(root, 'Relationship').find((r) => (r.attrs.Type ?? '').endsWith(`/${type}`));
   const target = rel?.attrs.Target;
@@ -779,6 +907,7 @@ function bodyStyle(part: PartCtx, shape: ShapeCtx, bodyPr: XNode | undefined): B
     paras: [],
     ...(autofit ? { autofit } : {}),
     ...(size ? { size } : {}),
+    ...(vert && vert !== 'horz' ? { vertical: true } : {}),
   };
 }
 
@@ -861,7 +990,7 @@ function walk(
           break;
         }
         const st = runStyle(part, shape, p.lvl, p.pPr, rPr ?? undefined);
-        st.p = p.index;
+        if (p.index >= 0) st.p = p.index;
         if (shape.body !== undefined) st.b = shape.body;
         acc.styles.push(st);
         break;
@@ -883,8 +1012,10 @@ function walk(
         // A shape's text box: its margins come from its body properties (table cells have their own).
         const bodyPr = child(c, 'a:bodyPr');
         const inner: ShapeCtx = { ...shape, lstStyle: child(c, 'a:lstStyle') ?? shape.lstStyle, bodyPr };
-        acc.bodies.push(bodyStyle(part, shape, bodyPr));
-        inner.body = acc.bodies.length - 1;
+        if (acc.bodies.length < MAX_BODIES) {
+          acc.bodies.push(bodyStyle(part, shape, bodyPr));
+          inner.body = acc.bodies.length - 1;
+        } else delete inner.body;
         walk(c, part, inner, undefined, undefined, acc);
         break;
       }
@@ -901,12 +1032,20 @@ function walk(
       case 'a:p': {
         const pPr = child(c, 'a:pPr');
         const lvl = Math.max(0, Math.min(8, num(pPr?.attrs.lvl) ?? 0));
-        const ps = paraStyle(part, shape, lvl, pPr);
-        ps.end = runStyle(part, shape, lvl, pPr, child(c, 'a:endParaRPr'));
-        delete ps.end.shadows;
-        acc.paras.push(ps);
-        const index = acc.paras.length - 1;
-        if (shape.body !== undefined) acc.bodies[shape.body]?.paras.push(index);
+        let index = -1;
+        if (acc.paras.length < MAX_PARAS) {
+          const ps = paraStyle(part, shape, lvl, pPr);
+          ps.end = runStyle(part, shape, lvl, pPr, child(c, 'a:endParaRPr'));
+          delete ps.end.shadows;
+          acc.paras.push(ps);
+          index = acc.paras.length - 1;
+        }
+        // A box whose paragraphs are not all described gets none: the page then matches by markers only.
+        const box = shape.body !== undefined ? acc.bodies[shape.body] : undefined;
+        if (box) {
+          if (index >= 0) box.paras.push(index);
+          else box.paras.length = 0;
+        }
         walk(c, part, shape, { lvl, pPr, index }, undefined, acc);
         break;
       }

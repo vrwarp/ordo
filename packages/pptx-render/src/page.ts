@@ -70,10 +70,15 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
   await viewer.preview(buf);
 
   const quote = (f: string) => `"${f.replace(/["\\]/g, '')}"`;
+  // Own entries only: a typeface may be called "constructor" or "__proto__".
+  const fallback = (face: string | undefined) => {
+    const v = face && Object.hasOwn(args.fallbacks, face) ? args.fallbacks[face] : undefined;
+    return typeof v === 'string' ? v : undefined;
+  };
   const stackFor = (st: RunStyle): string | undefined => {
     const names: string[] = [];
-    for (const f of [st.latin, st.latin && args.fallbacks[st.latin], st.ea, st.ea && args.fallbacks[st.ea]])
-      if (f && !names.includes(f)) names.push(f);
+    for (const f of [st.latin, fallback(st.latin), st.ea, fallback(st.ea)])
+      if (typeof f === 'string' && f && !names.includes(f)) names.push(f);
     if (!names.length) return undefined;
     return `${names.map(quote).join(', ')}, sans-serif`;
   };
@@ -229,6 +234,16 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
     // A scaled size is rounded to whole points, before and after scaling (LibreOffice's editeng).
     const sized = (pt: number) =>
       fontScale === 1 ? pt : Math.max(1, Math.round(Math.round(pt) * fontScale));
+    // Spans ordo did not mark (bullets, numbers) shrink with the text: their size, first seen, scaled.
+    const marked = new Set(e.runs.map(([el]) => el));
+    if (e.runs.length)
+      for (const span of Array.from(e.p.querySelectorAll('span')) as HTMLElement[]) {
+        if (marked.has(span) || span.dataset.ordoProbe !== undefined) continue;
+        if (span.dataset.ordoSize === undefined)
+          span.dataset.ordoSize = String(Number.parseFloat(span.style.fontSize) || 0);
+        const own = Number(span.dataset.ordoSize);
+        if (own > 0) span.style.fontSize = `${(fontScale === 1 ? own : sized(own / s) * s).toFixed(2)}px`;
+      }
     for (const [el, st] of e.runs) {
       const size = sized(st.size ?? 18);
       if (st.baseline) {
@@ -335,36 +350,54 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
 
   /** Move each paragraph so its first baseline is where LibreOffice puts it (reads layout once each). */
   const placeBaselines = (items: [Entry, number][]) => {
-    const shifts: [HTMLElement, number][] = [];
-    for (const [e] of items) {
+    const todo = items.filter(([, target]) => Number.isFinite(target));
+    const probes: HTMLElement[] = [];
+    // Writes, then reads, then writes: one layout for all paragraphs, not one each.
+    for (const [e] of todo) {
       e.p.style.position = 'relative';
       e.p.style.top = '0px';
-    }
-    for (const [e, target] of items) {
       const probe = document.createElement('span');
+      probe.dataset.ordoProbe = '';
       probe.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline';
       e.p.insertBefore(probe, e.p.firstChild);
-      const pr = e.p.getBoundingClientRect();
-      const at = (probe.getBoundingClientRect().bottom - pr.top) / zoom(e.p);
-      probe.remove();
-      if (Number.isFinite(at)) shifts.push([e.p, target - at]);
+      probes.push(probe);
     }
-    for (const [p, dy] of shifts) p.style.top = `${dy.toFixed(2)}px`;
+    const shifts = todo.map(([e, target], i) => {
+      const at = (probes[i]!.getBoundingClientRect().bottom - e.p.getBoundingClientRect().top) / zoom(e.p);
+      return Number.isFinite(at) ? target - at : 0;
+    });
+    for (const probe of probes) probe.remove();
+    todo.forEach(([e], i) => {
+      e.p.style.top = `${shifts[i]!.toFixed(2)}px`;
+    });
   };
+
+  // Measurements are taken on screen: undo rotations and flips around text while it is laid out (they
+  // are put back below), or a turned box would be measured along the wrong axis.
+  const turned: [HTMLElement, string][] = [];
+  for (const box of boxes.keys())
+    for (let el = box.parentElement; el && !el.classList.contains('slide-wrapper'); el = el.parentElement)
+      if (el.style.transform && el.style.transform !== 'none' && !turned.some(([t]) => t === el)) {
+        turned.push([el, el.style.transform]);
+        el.style.transform = 'none';
+      }
 
   const placed: [Entry, number][] = [];
   for (const [box, { body, entries }] of boxes) {
+    if (body.vertical) continue; // vertical text: pptx-preview's layout stands
     const s = scale(box);
     const [l, t, r, b] = body.insets.map((v) => `${(v * s).toFixed(2)}px`);
     box.style.padding = `${t} ${r} ${b} ${l}`;
-    // The exact width (pptx-preview rounds it to whole points), so lines break where they should.
-    if (body.size) box.style.width = `${(body.size.w * s).toFixed(2)}px`;
+    // The exact width (pptx-preview rounds it to whole points), so lines break where they should; only for
+    // a box whose text area is the whole shape (an ellipse's, say, is inset).
+    if (body.size && !(Number.parseFloat(box.style.left) || 0))
+      box.style.width = `${(body.size.w * s).toFixed(2)}px`;
     // A line break that ends a paragraph still makes a line in PowerPoint and LibreOffice; in HTML a
     // trailing <br> does not. Give it something to hold, sized like the paragraph's end mark.
     for (const e of entries) {
+      // The last node that shows anything (an empty run after the break shows nothing).
       let last = e.p.lastChild;
-      while (last && last.nodeType === Node.TEXT_NODE && !(last as Text).data.trim())
-        last = last.previousSibling;
+      while (last && last.nodeName !== 'BR' && !(last.textContent ?? '').trim()) last = last.previousSibling;
       if (last?.nodeName !== 'BR') continue;
       const hold = document.createElement('span');
       hold.textContent = '\u200b';
@@ -394,6 +427,7 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
   }
   for (const e of loose) placed.push([e, layoutPara(e, 1, 1)]);
   placeBaselines(placed);
+  for (const [el, transform] of turned) el.style.transform = transform;
 
   // Pictures in an ellipse or a rounded rectangle. pptx-preview puts each slide's shapes straight into its
   // slide wrapper, a picture as a positioned box holding a cropping box, at whole points: find it there.

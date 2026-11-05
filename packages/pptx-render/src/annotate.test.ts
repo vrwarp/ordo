@@ -65,6 +65,17 @@ async function deck(slideBody: string, extra: Record<string, string> = {}): Prom
   return z.generateAsync({ type: 'uint8array' });
 }
 
+/** A content-types part listing these slides (`slide1`...). */
+const types = (slides: string[]) =>
+  '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+  slides
+    .map(
+      (n) =>
+        `<Override PartName="/ppt/slides/${n}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`,
+    )
+    .join('') +
+  '</Types>';
+
 /** The marked text runs of slide 1 with their styles, in document order. */
 async function marked(bytes: Uint8Array, runs: unknown[]): Promise<[string, unknown][]> {
   const xml = await (await JSZip.loadAsync(bytes)).file('ppt/slides/slide1.xml')!.async('string');
@@ -255,7 +266,7 @@ describe('annotatePptx', () => {
     expect(size).toEqual({ Own: { w: 10, h: 5 }, Placed: { w: 20, h: 10 }, Grouped: undefined });
   });
 
-  it('lists slide pictures drawn in an ellipse or a rounded rectangle, in presentation order', async () => {
+  it('lists slide pictures drawn in an ellipse or a rounded rectangle, by the slide pptx-preview draws', async () => {
     const pic = (prst: string, x: number, av = '') =>
       `<p:pic><p:nvPicPr><p:cNvPr id="4" name="P"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId9"/></p:blipFill>` +
       `<p:spPr><a:xfrm><a:off x="${x}" y="127000"/><a:ext cx="2540000" cy="1270000"/></a:xfrm><a:prstGeom prst="${prst}"><a:avLst>${av}</a:avLst></a:prstGeom></p:spPr></p:pic>`;
@@ -268,8 +279,10 @@ describe('annotatePptx', () => {
       await deck(body, {
         'ppt/presentation.xml': pres,
         'ppt/_rels/presentation.xml.rels': rels('slide', 'slides/slide1.xml').replace('rId1', 'rId7'),
+        '[Content_Types].xml': types(['slide1']),
       }),
     );
+    expect(a.slideOrder).toEqual([0]);
     expect(a.pictures).toEqual([
       { slide: 0, x: 0, y: 10, w: 200, h: 100, shape: 'ellipse' },
       // A tenth of the shorter side.
@@ -326,6 +339,33 @@ describe('annotatePptx', () => {
     expect(await title(2)).toBe('Giving');
     expect(await title(3)).toBe(' ');
     expect(await title(4)).toBe('Own');
+  });
+
+  it('maps the slides pptx-preview draws (by part name) to the presentation order, without hidden ones', async () => {
+    const sld = (attrs: string) =>
+      `<?xml version="1.0"?><p:sld ${NS}${attrs}><p:cSld><p:spTree/></p:cSld></p:sld>`;
+    const presRels =
+      '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      ['slide1', 'slide2', 'slide10', 'slide3']
+        .map((n, i) => `<Relationship Id="rId${i + 2}" Type="${REL}/slide" Target="slides/${n}.xml"/>`)
+        .join('') +
+      '</Relationships>';
+    // Presentation order: slide10, slide3 (hidden), slide1, slide2.
+    const pres =
+      `<?xml version="1.0"?><p:presentation ${NS}><p:sldIdLst><p:sldId id="256" r:id="rId4"/><p:sldId id="257" r:id="rId5"/>` +
+      '<p:sldId id="258" r:id="rId2"/><p:sldId id="259" r:id="rId3"/></p:sldIdLst><p:sldSz cx="12192000" cy="6858000"/></p:presentation>';
+    const a = await annotatePptx(
+      await deck('', {
+        'ppt/presentation.xml': pres,
+        'ppt/_rels/presentation.xml.rels': presRels,
+        'ppt/slides/slide2.xml': sld(''),
+        'ppt/slides/slide3.xml': sld(' show="0"'),
+        'ppt/slides/slide10.xml': sld(''),
+        '[Content_Types].xml': types(['slide10', 'slide2', 'slide1', 'slide3']),
+      }),
+    );
+    // pptx-preview draws slide1, slide2, slide3, slide10; they go to places 1, 2, (hidden), 0.
+    expect(a.slideOrder).toEqual([1, 2, -1, 0]);
   });
 
   it('removes embedded colour profiles from JPEG and PNG pictures, and only those', () => {
