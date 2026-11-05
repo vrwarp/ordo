@@ -137,6 +137,10 @@ export class OutputWindows {
    * told, and opening by name still navigates the existing window of that name.
    */
   async relaunch(): Promise<void> {
+    // Off the click's own dispatch: opening and closing probe windows (reacquire) inside the input event
+    // can leave Chromium's input pipeline waiting (an automated click never completes). Still within the
+    // gesture's transient activation, so window.open keeps working.
+    await sleep(0);
     const before = this.missing();
     if (before.length) {
       const n = this.reacquire();
@@ -251,7 +255,9 @@ export class OutputWindows {
         blank = false; // cross-origin: an existing output window
       }
       if (blank) {
-        w.close();
+        // Closed after this task, not inside the open: closing a popup synchronously right after creating it
+        // can leave the renderer waiting on the browser process (the page then hangs).
+        setTimeout(() => w.close(), 0);
         continue;
       }
       this.windows.set(o.id, w);

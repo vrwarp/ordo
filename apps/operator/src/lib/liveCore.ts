@@ -94,6 +94,8 @@ export class LiveCore {
   private afterHeld = false;
   /** The hub's state while a conflict dialog is open. */
   conflictHubState?: LiveState;
+  /** A goLive asked for during the hand-back after a held service: sent to the hub once it has the authority. */
+  private deferredGoLive?: LiveCommand;
   private local: LiveState;
   private graceTimer?: Timer;
   private adoptTimer?: Timer;
@@ -139,6 +141,12 @@ export class LiveCore {
     }
     if (this.authority === 'fallback') {
       if (command.k === 'goLive') {
+        if (this.hubConnected && this.reconcile === 'awaitState') {
+          // The hub is back and about to take the authority (End service of a held service): the hub
+          // resolves this one as soon as the hand-back is done.
+          this.deferredGoLive = command;
+          return id;
+        }
         this.deps.onNotice({ kind: 'unavailable', reason: 'The hub is unreachable', command });
         return id;
       }
@@ -196,6 +204,11 @@ export class LiveCore {
       this.clearGrace();
     } else {
       this.reconcile = this.authority === 'fallback' ? null : this.reconcile;
+      if (this.deferredGoLive) {
+        const command = this.deferredGoLive;
+        this.deferredGoLive = undefined;
+        this.deps.onNotice({ kind: 'unavailable', reason: 'The hub is unreachable', command });
+      }
       if (this.authority === 'hub' && this.view.mode === 'live' && !this.hubRefused) this.armGrace();
     }
     this.deps.onChange();
@@ -314,11 +327,8 @@ export class LiveCore {
    */
   private goLiveLocal(playlistId: string, id: string, command: LiveCommand): void {
     if (this.hubConnected) {
-      this.deps.onNotice({
-        kind: 'unavailable',
-        reason: 'The hub is connected: go live through the hub',
-        command,
-      });
+      // The socket came back between the dialog and its confirm: the hub resolves it, as always.
+      this.submit(command, id);
       return;
     }
     if (this.view.mode === 'live') {
@@ -437,7 +447,12 @@ export class LiveCore {
       return;
     }
     if (this.reconcile === 'adopting') {
-      if (this.samePlaylist(hub, local) && hub.seq >= local.seq - this.replay.length) {
+      // A local End service while the adopt was in flight is in the replay: the hub's adopted service
+      // ends there, so nothing is left to choose between.
+      if (
+        local.mode !== 'live' ||
+        (this.samePlaylist(hub, local) && hub.seq >= local.seq - this.replay.length)
+      ) {
         this.leaveFallback(hub);
         return;
       }
@@ -512,6 +527,9 @@ export class LiveCore {
     this.deps.fallback.deactivate();
     this.deps.onNotice({ kind: 'fallback-off' });
     for (const e of replay) this.submit(e);
+    const deferred = this.deferredGoLive;
+    this.deferredGoLive = undefined;
+    if (deferred) this.submit(deferred);
     this.deps.onChange();
   }
 }

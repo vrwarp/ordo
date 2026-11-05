@@ -94,7 +94,7 @@ Image size target under 1.5 GB (LibreOffice dominates).
 
 ## CI and release
 
-- Every push and pull request (`ci.yml`): lint, typecheck, unit tests, Playwright. `pnpm audit`
+- Every pull request, merge to main, or manual run (`ci.yml`): lint, typecheck, unit tests, Playwright. `pnpm audit`
   runs too but never fails the build (`continue-on-error`); a weekly scheduled workflow
   (`audit.yml`, Mondays) reports advisories on its own.
 - Every pull request (`docker-pr.yml`): the image is built for amd64 and arm64 without

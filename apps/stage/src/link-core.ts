@@ -164,10 +164,11 @@ export class StageLinkCore {
     // See the output's link core: a held service survives a reload, for at most a service day.
     if (held && typeof held.at === 'number' && Date.now() - held.at < 8 * 60 * 60 * 1000)
       link.restoreHeld(true);
-    link.on('held', ({ held: on }) => {
-      this.diagLog(
-        on ? 'the operator holds this service (started without the hub)' : 'operator hold released',
-      );
+    link.on('held', ({ held: on, refresh }) => {
+      if (!refresh)
+        this.diagLog(
+          on ? 'the operator holds this service (started without the hub)' : 'operator hold released',
+        );
       void this.deps.json.set(`held:${this.outputId}`, on ? { at: this.now() } : null).catch(() => undefined);
     });
     if (cfg && !this.config) this.applyConfig(cfg);

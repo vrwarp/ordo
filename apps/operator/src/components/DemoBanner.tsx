@@ -1,6 +1,13 @@
 import { DEMO } from '@ordo/client';
 import { confirmDialog } from './Confirm.tsx';
 
+/**
+ * The IndexedDB databases the demo's pages keep: the demo hub's (apps/demo/src/store.ts) and the JsonStore
+ * of the operator core, the output and the stage link workers. Listed for browsers without
+ * `indexedDB.databases()`, which otherwise only see the demo hub's stores cleared.
+ */
+const KNOWN_DATABASES = ['ordo-demo-hub', 'ordo-operator', 'ordo-output', 'ordo-stage'];
+
 /** Forget everything this browser stored for the demo (the demo hub re-seeds on the next request). */
 async function resetDemo(): Promise<void> {
   if (
@@ -18,13 +25,14 @@ async function resetDemo(): Promise<void> {
     /* the service worker may be gone: clear below anyway */
   }
   try {
-    const dbs = (await indexedDB.databases?.()) ?? [];
+    const listed = (await indexedDB.databases?.()) ?? [];
+    const names = new Set(KNOWN_DATABASES);
+    for (const d of listed) if (d.name) names.add(d.name);
     await Promise.all(
-      dbs.map(
-        (d) =>
+      [...names].map(
+        (name) =>
           new Promise<void>((done) => {
-            if (!d.name) return done();
-            const r = indexedDB.deleteDatabase(d.name);
+            const r = indexedDB.deleteDatabase(name);
             r.onsuccess = r.onerror = r.onblocked = () => done();
           }),
       ),

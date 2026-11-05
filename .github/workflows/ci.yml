@@ -1,8 +1,12 @@
 name: CI
 
+# Pull requests, and merges to main (a merge is a push to main). Pushes to other branches do not run CI
+# on their own: open a pull request (or run it by hand) to check a branch.
 on:
-  push:
   pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}

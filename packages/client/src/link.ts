@@ -26,6 +26,9 @@ const WATCH_MS = 1000;
 export const RESYNC_BUDGET = 10;
 export const RESYNC_WINDOW_MS = 60_000;
 
+/** How often a held window renews the persisted age of its hold while the operator keeps heartbeating. */
+const HELD_REFRESH_MS = 60_000;
+
 /**
  * The live link an output or stage window uses: hub WebSocket normally, the operator's postMessage bus
  * when the operator says the hub is gone. Exposes one mirror of the live state either way.
@@ -39,7 +42,8 @@ export const RESYNC_WINDOW_MS = 60_000;
  */
 export class OutputLink extends Emitter<{
   bus: { bus: Bus; reason?: string };
-  held: { held: boolean };
+  /** `refresh`: the hold is still on (a heartbeat; at most once a minute), so its persisted age can be renewed. */
+  held: { held: boolean; refresh?: true };
   library: LibraryDelta;
   rtc: RtcSignalIn;
 }> {
@@ -61,6 +65,7 @@ export class OutputLink extends Emitter<{
    * (or a hold-free introduction) releases it. Survives a silent operator: the window keeps its picture.
    */
   held = false;
+  private heldRefreshedAt = 0;
 
   constructor(opts: {
     role: 'output' | 'stage';
@@ -145,7 +150,10 @@ export class OutputLink extends Emitter<{
         else clock.fallback = false;
         return;
       }
-      if (this.bus === 'fallback') this.setHeld(hold);
+      if (this.bus === 'fallback') {
+        this.setHeld(hold);
+        if (hold && this.held) this.refreshHeld();
+      }
     });
   }
 
@@ -161,7 +169,16 @@ export class OutputLink extends Emitter<{
   private setHeld(on: boolean): void {
     if (this.held === on) return;
     this.held = on;
+    this.heldRefreshedAt = on ? Date.now() : 0;
     this.emit('held', { held: on });
+  }
+
+  /** The hold's age counts from the operator's last word, not from its start (a reload keeps it a day). */
+  private refreshHeld(): void {
+    const now = Date.now();
+    if (now - this.heldRefreshedAt < HELD_REFRESH_MS) return;
+    this.heldRefreshedAt = now;
+    this.emit('held', { held: true, refresh: true });
   }
 
   /**

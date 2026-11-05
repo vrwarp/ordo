@@ -188,7 +188,8 @@ export type ViewModelMsg = {
 
 export type UiEvent =
   | { k: 'clearAllUntil'; until?: number }
-  | { k: 'conflict'; hubPlaylist?: string; localPlaylist?: string }
+  /** A hand-back conflict to decide; without `open` the dialog is closed (nothing left to decide). */
+  | { k: 'conflict'; open?: true; hubPlaylist?: string; localPlaylist?: string }
   | { k: 'goLiveError'; reason: string }
   | { k: 'offlineCheck'; result: OfflineCheck };
 

@@ -110,8 +110,9 @@ function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOu
     };
   }, [coreRole]);
   useEffect(() => {
-    if (profile === 'edit' && !signedOut) void requestPersistentStorage();
-  }, [profile, signedOut]);
+    // The venue PC too: the service files downloaded for offline use live in the Cache API.
+    if (!signedOut) void requestPersistentStorage();
+  }, [signedOut]);
   // What the venue runs, for the "Live now" chip and the editor lock (GET /live/summary, either PIN).
   useEffect(
     () => (profile === 'edit' && role && !signedOut ? watchVenueLive(role) : undefined),

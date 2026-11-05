@@ -45,7 +45,9 @@ jobs:
           load: true
           push: false
           tags: ordo-hub:smoke
-          cache-from: type=gha,scope=docker
+          cache-from: |
+            type=gha,scope=docker
+            type=gha,scope=docker-pr-${{ github.event.pull_request.number || 'manual' }}
       - name: Start the image and wait for its health check
         run: |
           docker run -d --name ordo-smoke -e ORDO_DEV_PIN=246810 -p 8080:8080 ordo-hub:smoke

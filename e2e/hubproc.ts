@@ -22,8 +22,24 @@ export class HubProcess {
   }
 
   async start(): Promise<void> {
+    // A hub already answering here is a leftover of an earlier test (a timed-out one whose worker was
+    // torn down before its finally): kill() would then kill nothing and the hub-loss steps wait forever.
+    try {
+      const r = await fetch(`http://localhost:${this.port}/api/v1/health`);
+      if (r.ok) throw new Error(`port ${this.port} already serves a hub: a leftover of an earlier test`);
+    } catch (e) {
+      if (e instanceof Error && e.message.includes('leftover')) throw e;
+    }
     // ORDO_E2E_HUB_CMD lets a run use the sources (e.g. "npx tsx apps/hub/src/main.ts") instead of the build.
     const [cmd, ...args] = (process.env.ORDO_E2E_HUB_CMD ?? 'node apps/hub/dist/main.js').split(/\s+/);
+    if (!HubProcess.exitHook) {
+      // The worker goes away (a test timed out: its finally never runs): take every hub with it.
+      HubProcess.exitHook = true;
+      process.on('exit', () => {
+        for (const h of HubProcess.running) h.kill();
+      });
+    }
+    HubProcess.running.add(this);
     this.proc = spawn(cmd!, args, {
       env: {
         ...process.env,
@@ -50,7 +66,11 @@ export class HubProcess {
     throw new Error('hub did not start');
   }
 
+  private static exitHook = false;
+  private static readonly running = new Set<HubProcess>();
+
   kill(): void {
+    HubProcess.running.delete(this);
     // A stopped child cannot notice its supervisor vanished: never leave one behind. Only a pid the
     // supervisor still lists is ours (one its watchdog already replaced is gone, and its pid may be reused).
     const stopped = this.stopped.splice(0);

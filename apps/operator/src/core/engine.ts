@@ -63,6 +63,11 @@ const STALL_WINDOW_MS = 60_000;
 const PROCESSED_MAX = 300;
 /** A restarted core resumes the fallback authority at once only if it held it this recently. */
 const RESUME_AUTHORITY_MS = 2 * 60_000;
+/**
+ * A service this PC started without the hub is resumed after a restart for at most a service day (the
+ * output windows keep their hold as long); older, the hub is followed and nothing starts unasked.
+ */
+const RESUME_HELD_MS = 8 * 60 * 60 * 1000;
 
 export type CoreSnapshot = {
   /** Hub mode: the confirmed hub state; fallback: the operator's own authoritative state. */
@@ -234,10 +239,12 @@ export class CoreEngine {
         }
       })
       .catch(() => undefined);
-    if (seed && snap?.held) {
-      // A service this PC started without the hub: the hub never had it, so take it back whatever its age.
+    if (seed && snap?.held && this.now() - snap.at < RESUME_HELD_MS) {
+      // A service this PC started without the hub: the hub never had it, so take it back.
       this.log('warn', 'core restarted during a service started from this PC: resuming it');
       this.core.resumeHeld();
+    } else if (seed && snap?.held) {
+      this.log('warn', 'a service started from this PC was left running too long ago: following the hub');
     } else if (seed && snap?.authority === 'fallback' && this.now() - snap.at < RESUME_AUTHORITY_MS) {
       // We were the authority when the previous core died: take it back at once (no second grace).
       this.log('warn', 'core restarted while running the service from this PC: resuming as the authority');
@@ -313,6 +320,8 @@ export class CoreEngine {
       this.post({ t: 'hub', e: 'welcome', appVersion: w.appVersion });
       // Deltas may have been missed while away.
       void this.lib.load();
+      // A service that went live while the hub was away still needs its files on this PC.
+      this.afterChange();
     });
     h.on('state', (m) => this.core.onState(m.state));
     h.on('delta', (m) => this.core.onDelta(m));
@@ -928,7 +937,9 @@ export class CoreEngine {
     if (this.role !== 'operate' || !this.core) return;
     const view = this.core.view;
     const resolved = view.mode === 'live' ? view.resolved : undefined;
-    if (resolved && resolved.manifestId !== this.fillingManifest) {
+    // A locally resolved service has no hub to fetch from: the fill waits for the next welcome (and
+    // does not spend the fill budget on a dead origin).
+    if (resolved && resolved.manifestId !== this.fillingManifest && this.hub.connected) {
       this.fillingManifest = resolved.manifestId;
       void this.fillOwnCache(resolved.files, resolved.manifestId);
     }
@@ -1081,6 +1092,8 @@ export class CoreEngine {
       case 'fallback-off':
         this.log('info', 'hub back: authority returned to the hub');
         this.toast('Hub reconnected. Service state handed back to the hub.', 'ok');
+        // A conflict dialog still open (End service pressed while it asked) has nothing left to decide.
+        this.post({ t: 'ui', e: { k: 'conflict' } });
         return;
       case 'hub-newer':
         this.log('warn', 'hub state newer than local: took the hub state');
@@ -1089,7 +1102,7 @@ export class CoreEngine {
       case 'conflict':
         this.post({
           t: 'ui',
-          e: { k: 'conflict', hubPlaylist: n.hubPlaylist, localPlaylist: n.localPlaylist },
+          e: { k: 'conflict', open: true, hubPlaylist: n.hubPlaylist, localPlaylist: n.localPlaylist },
         });
         return;
       case 'local-live':

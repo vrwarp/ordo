@@ -41,6 +41,9 @@ importers:
       '@ordo/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
     devDependencies:
       vite:
         specifier: ^7.3.7

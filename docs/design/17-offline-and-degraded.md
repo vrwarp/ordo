@@ -136,7 +136,8 @@ copy, which only the hub did. Now the operator PC can do it too, when the operat
 
 The playlist editor on the venue PC (operate PIN, full profile) has **Download for offline use**. It
 resolves the playlist from the operator's copy of the library (the same `resolvePlaylist` the hub runs,
-`packages/domain/src/goLive.ts`) and fills the operator's file cache (Cache API, never evicted) with every
+`packages/domain/src/goLive.ts`) and fills the operator's file cache (Cache API; the operator app asks the
+browser for persistent storage on every profile, so the files are not evicted under pressure) with every
 media file and font the service uses. The operator chooses when: the evening before, a week before, or on
 arrival. The status line says whether every file is on this PC; it re-checks when the playlist changes.
 The library itself (playlists, presentations, settings) is already kept on the PC by the core worker.
@@ -167,7 +168,8 @@ mid-song is a risk with no benefit, so:
   and deltas whatever their sequence (an idle hub's seq is usually higher), keeps its picture if the
   operator falls silent instead of following the hub, and remembers the hold across a reload (at most 8
   hours, so a window is never stuck);
-- the hold survives an operator core restart and page reload (`CoreSnapshot.held`), whatever its age.
+- the hold survives an operator core restart and page reload (`CoreSnapshot.held`) for the same 8 hours;
+  older, the operator follows the hub and nothing starts unasked.
 
 **End service** releases the hold. With the hub connected the operator asks for its state; both idle, the
 authority returns to the hub with nothing transferred, and the windows are told `hubUp`. With the hub

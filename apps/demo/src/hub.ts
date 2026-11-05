@@ -3,6 +3,7 @@ import {
   type Font,
   type Media,
   newId,
+  type Output,
   type Playlist,
   Playlist as PlaylistSchema,
   type Presentation,
@@ -12,8 +13,15 @@ import {
 } from '@ordo/domain';
 import { importPro7, parseSongFile, PRO7_MEDIA_PREFIX, readZip, remapMediaIds } from '@ordo/importers';
 import { initialState } from '@ordo/live-state';
-import { clearAll, getDoc, getFile, putDoc, putFile } from './store.ts';
-import type { Job, LibrarySnapshot, Settings } from '@ordo/protocol';
+import { clearAll, deleteFile, getDoc, getFile, putDoc, putFile } from './store.ts';
+import {
+  type Job,
+  type LibrarySnapshot,
+  SETTINGS_BODY,
+  type Settings,
+  type SettingsKey,
+} from '@ordo/protocol';
+import { ZodError } from 'zod';
 
 /**
  * The demo hub (apps/demo, GitHub Pages): the hub's REST API answered inside the visitor's browser. The
@@ -40,6 +48,7 @@ const json = (body: unknown, status = 200): Res =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const fail = (status: number, code: string, message: string): Res =>
   json({ error: { code, message } }, status);
+const noContent = (): Res => new Response(null, { status: 204 });
 const notInDemo = (what: string) =>
   fail(
     501,
@@ -47,6 +56,24 @@ const notInDemo = (what: string) =>
     `${what} needs the ordo hub on a server; it is not available in the browser demo.`,
   );
 const nowIso = () => new Date().toISOString();
+
+/** An output token as the hub mints them (library.ts `newToken`): 32 random bytes, base64url. */
+function newToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+/** A `.parse` failure as the hub's `validate()` reports it: one line, the first few issues. */
+function invalid(e: ZodError, what = 'body'): string {
+  const msg = e.issues
+    .slice(0, 5)
+    .map((i) => `${i.path.join('.') || what}: ${i.message}`)
+    .join('; ');
+  return `Invalid ${what}: ${msg}`;
+}
 
 async function seed(): Promise<{ snapshot: Lib; files: string[] }> {
   const r = await fetch(new URL('demo/seed.json', scope));
@@ -288,13 +315,17 @@ export async function handle(req: Request): Promise<Res> {
     // ---- session: one visitor, always the operator
     if (path === '/auth/me')
       return json({ role: 'operate', setupRequired: false, version: VERSION, domain: '' });
+    if (path === '/auth/pins') return notInDemo('Changing the PINs');
     if (seg[0] === 'auth') return json({ ok: true });
     if (path === '/health') return json({ ok: true, demo: true, version: VERSION });
 
     // ---- the reset button
     if (path === '/demo/reset' && m === 'POST') {
-      await clearAll();
+      // Forget the in-memory library first: if the stores cannot be cleared, the next request must not
+      // keep serving the stale one.
       lib = undefined;
+      loading = undefined;
+      await clearAll();
       return json({ ok: true });
     }
 
@@ -339,8 +370,25 @@ export async function handle(req: Request): Promise<Res> {
     if (seg[0] === 'settings') {
       if (m === 'GET') return json(seg[1] ? l.settings[seg[1] as keyof Settings] : l.settings);
       if (m === 'PUT' && seg[1]) {
-        const value = await req.json();
-        await save({ ...l, settings: { ...l.settings, [seg[1]]: value } });
+        const key = seg[1] as SettingsKey;
+        const schema = Object.hasOwn(SETTINGS_BODY, key) ? SETTINGS_BODY[key] : undefined;
+        if (!schema) return fail(404, 'not_found', `Unknown setting ${key}`);
+        let value = schema.parse(await req.json()) as Settings[SettingsKey];
+        if (key === 'outputs') {
+          // Tokens are only changed by rotation; new outputs get a fresh one (as the hub does).
+          const cur = new Map(l.settings.outputs.map((o) => [o.id, o]));
+          value = (value as Output[]).map((o) => ({
+            ...o,
+            id: o.id || newId(),
+            token: cur.get(o.id)?.token ?? newToken(),
+          }));
+          const ids = new Set<string>();
+          for (const o of value as Output[]) {
+            if (ids.has(o.id)) return fail(400, 'bad_request', `Duplicate output id ${o.id}`);
+            ids.add(o.id);
+          }
+        }
+        await save({ ...l, settings: { ...l.settings, [key]: value } });
         return json(value);
       }
     }
@@ -366,6 +414,8 @@ export async function handle(req: Request): Promise<Res> {
           createdAt: nowIso(),
           updatedAt: nowIso(),
         });
+        if (l.presentations.some((x) => x.id === p.id))
+          return fail(409, 'conflict', `Presentation ${p.id} already exists`);
         await save({ ...l, presentations: upsert(l.presentations, p) });
         return json(p, 201);
       }
@@ -382,6 +432,19 @@ export async function handle(req: Request): Promise<Res> {
         });
         await save({ ...l, presentations: upsert(l.presentations, p) });
         return json(p);
+      }
+      if (m === 'DELETE' && seg[1]) {
+        const id = seg[1];
+        if (!l.presentations.some((x) => x.id === id)) return fail(404, 'not_found', 'No such presentation');
+        // Playlist items that showed it go with it.
+        const playlists = l.playlists.map((pl) => {
+          const items = pl.items.filter((it) => it.kind !== 'presentation' || it.presentationId !== id);
+          return items.length === pl.items.length
+            ? pl
+            : { ...pl, items, rev: pl.rev + 1, updatedAt: nowIso() };
+        });
+        await save({ ...l, presentations: l.presentations.filter((x) => x.id !== id), playlists });
+        return noContent();
       }
       if (m === 'POST' && seg[2] === 'restore') return notInDemo('Version history');
       if (m === 'POST' && seg[4] === 'make-editable') return notInDemo('Making an imported slide editable');
@@ -401,6 +464,11 @@ export async function handle(req: Request): Promise<Res> {
         await save({ ...l, playlists: upsert(l.playlists, p) });
         return json(p, m === 'POST' ? 201 : 200);
       }
+      if (m === 'DELETE' && seg[1]) {
+        if (!l.playlists.some((x) => x.id === seg[1])) return fail(404, 'not_found', 'No such playlist');
+        await save({ ...l, playlists: l.playlists.filter((x) => x.id !== seg[1]) });
+        return noContent();
+      }
     }
 
     if (seg[0] === 'themes') {
@@ -409,13 +477,27 @@ export async function handle(req: Request): Promise<Res> {
       if (m === 'POST' || m === 'PUT') {
         const body = (await req.json()) as Theme;
         const t = ThemeSchema.parse({ ...body, id: seg[1] ?? body.id ?? newId() });
+        if (m === 'POST' && l.themes.some((x) => x.id === t.id))
+          return fail(409, 'conflict', `Theme ${t.id} already exists`);
         await save({ ...l, themes: upsert(l.themes, t) });
         return json(t, m === 'POST' ? 201 : 200);
+      }
+      if (m === 'DELETE' && seg[1]) {
+        if (seg[1] === DEFAULT_THEME.id) return fail(409, 'conflict', 'The default theme cannot be deleted');
+        if (!l.themes.some((x) => x.id === seg[1])) return fail(404, 'not_found', 'No such theme');
+        await save({ ...l, themes: l.themes.filter((x) => x.id !== seg[1]) });
+        return noContent();
       }
     }
 
     if (seg[0] === 'folders') {
       if (m === 'GET') return json(l.folders);
+      if (m === 'DELETE' && seg[1]) {
+        if (!l.folders.some((x) => x.id === seg[1])) return fail(404, 'not_found', 'No such folder');
+        await save({ ...l, folders: l.folders.filter((x) => x.id !== seg[1]) });
+        return noContent();
+      }
+      if (m !== 'POST' && m !== 'PUT') return fail(404, 'not_found', `${m} ${path} is not part of the demo`);
       const body = (await req.json()) as { id?: string; name: string; parentId?: string };
       const f = {
         id: seg[1] ?? body.id ?? newId(),
@@ -466,12 +548,34 @@ export async function handle(req: Request): Promise<Res> {
         await save({ ...l, media: upsert(l.media, next) });
         return json(next);
       }
+      if (m === 'DELETE' && seg[1]) {
+        const x = l.media.find((y) => y.id === seg[1]);
+        if (!x) return fail(404, 'not_found', 'No such media');
+        const media = l.media.filter((y) => y.id !== x.id);
+        await save({ ...l, media });
+        // The visitor's own file goes too, unless another item still uses it (the sample's live on the site).
+        for (const h of new Set([x.original.hash, x.delivery?.hash, x.poster?.hash])) {
+          if (!h || seedFiles.has(h)) continue;
+          if (media.some((y) => y.original.hash === h || y.delivery?.hash === h || y.poster?.hash === h))
+            continue;
+          await deleteFile(h);
+        }
+        return noContent();
+      }
+      if (m === 'POST' && seg[2] === 'retry') return notInDemo('Retrying media processing');
       if (seg[1] === 'uploads') return notInDemo('Resumable uploads');
     }
 
     if (seg[0] === 'fonts') {
       if (m === 'GET' && !seg[1]) return json(l.fonts as Font[]);
       if (seg[1] === 'google' && seg[2] === 'search') return json([]);
+      if (m === 'DELETE' && seg[1]) {
+        const f = (l.fonts as Font[]).find((x) => x.id === seg[1]);
+        if (!f) return fail(404, 'not_found', 'No such font');
+        await save({ ...l, fonts: l.fonts.filter((x) => x.id !== seg[1]) });
+        if (!seedFiles.has(f.file.hash)) await deleteFile(f.file.hash);
+        return noContent();
+      }
       return notInDemo('Adding fonts');
     }
 
@@ -517,6 +621,9 @@ export async function handle(req: Request): Promise<Res> {
     if (seg[0] === 'diagnostics') return notInDemo('The diagnostics export');
     return fail(404, 'not_found', `${m} ${path} is not part of the demo`);
   } catch (e) {
+    if (e instanceof ZodError) return fail(400, 'bad_request', invalid(e));
+    // `req.json()` on a body that is not JSON.
+    if (e instanceof SyntaxError) return fail(400, 'bad_request', `Invalid body: ${e.message}`);
     return fail(500, 'internal', (e as Error).message);
   }
 }

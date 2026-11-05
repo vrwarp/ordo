@@ -351,10 +351,11 @@ export class LinkCore {
     // operator lets go (bounded, so a window is never stuck if that operator never comes back).
     if (held && typeof held.at === 'number' && Date.now() - held.at < HELD_MAX_AGE_MS)
       this.link.restoreHeld(true);
-    this.link.on('held', ({ held: on }) => {
-      this.diagLog(
-        on ? 'the operator holds this service (started without the hub)' : 'operator hold released',
-      );
+    this.link.on('held', ({ held: on, refresh }) => {
+      if (!refresh)
+        this.diagLog(
+          on ? 'the operator holds this service (started without the hub)' : 'operator hold released',
+        );
       void (
         on ? this.json.set(`held:${outputId}`, { at: Date.now() }) : this.json.set(`held:${outputId}`, null)
       ).catch(() => undefined);

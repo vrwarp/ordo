@@ -116,6 +116,26 @@ describe('OutputLink bus transitions', () => {
     expect(helds).toEqual([true, false]);
   });
 
+  it('renews the age of a hold from the operator heartbeats, at most once a minute', () => {
+    const { link, out, op } = setup();
+    const events: { held: boolean; refresh?: true }[] = [];
+    link.on('held', (e) => events.push(e));
+    out.deliver(op, { t: 'fallback.hello', v: 1, seq: 2, operatorMs: Date.now(), hold: true });
+    out.deliver(op, { t: 'fallback.hub', v: 1, hubUp: false, hold: true });
+    expect(events).toEqual([{ held: true }]);
+    // The operator heartbeats every 2 s: one renewal per minute, not one per heartbeat.
+    for (let i = 0; i < 29; i++) {
+      vi.advanceTimersByTime(2000);
+      link.watchFallback();
+      out.deliver(op, { t: 'fallback.hub', v: 1, hubUp: false, hold: true });
+    }
+    expect(events).toEqual([{ held: true }]);
+    vi.advanceTimersByTime(2000);
+    out.deliver(op, { t: 'fallback.hub', v: 1, hubUp: false, hold: true });
+    expect(events).toEqual([{ held: true }, { held: true, refresh: true }]);
+    expect(link.bus).toBe('fallback');
+  });
+
   it('a hold restored after a reload holds until the operator says otherwise', () => {
     const { link, ws, out, op } = setup();
     link.restoreHeld(true);

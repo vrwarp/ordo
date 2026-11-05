@@ -11,7 +11,7 @@ import { toast } from '../state/toasts.ts';
 import { rememberMessage, useUi } from '../state/ui.ts';
 import { deviceProfile } from '../lib/capabilities.ts';
 import { RecoveringGate } from '../lib/recovering.ts';
-import { log } from './log.ts';
+import { log, logLines } from './log.ts';
 import { thumbs } from './thumbs.ts';
 
 export { APP_VERSION };
@@ -90,7 +90,9 @@ export class Controller {
       c.on('ui', (e) => {
         if (e.k === 'clearAllUntil') useLive.setState({ clearAllUntil: e.until });
         else if (e.k === 'conflict')
-          useLive.setState({ conflict: { hubPlaylist: e.hubPlaylist, localPlaylist: e.localPlaylist } });
+          useLive.setState({
+            conflict: e.open ? { hubPlaylist: e.hubPlaylist, localPlaylist: e.localPlaylist } : undefined,
+          });
         else if (e.k === 'goLiveError') useLive.setState({ goLiveError: e.reason });
         else if (e.k === 'offlineCheck')
           useLive.setState((s) => ({
@@ -347,6 +349,7 @@ function installTestHooks(ctl: Controller): void {
   w.__ordo = {
     ...(w.__ordo ?? {}),
     state: () => useLive.getState().state,
+    logs: () => logLines(),
     live: () => {
       const s = useLive.getState();
       return {

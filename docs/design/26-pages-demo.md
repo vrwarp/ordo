@@ -24,19 +24,26 @@ Every path is relative, so the site works at a domain root and under `/<repo>/` 
 The apps are unchanged except for a build flag (`__ORDO_DEMO__`, `packages/client/src/demo.ts`):
 
 - `ensureDemoHub` registers `hub-sw.js` with the site root as its scope before the app starts, and
-  reloads once on the first visit so the page is controlled. The apps' own shell service workers are
-  not registered in the demo (one worker per scope).
+  reloads once on the first visit so the page is controlled (a `sessionStorage` flag keeps that to one
+  reload). When the browser cannot run it (no service workers, site storage blocked, the worker never
+  takes control) the page shows "This demo needs a browser with service workers and site storage
+  enabled" instead of the app. The apps' own shell service workers are not registered in the demo (one
+  worker per scope).
 - `HubConnection.start` never opens a socket. The output and stage windows therefore follow the
   operator over the fallback bus, as they do when the hub is down.
 - Go live goes straight to the local path of design/17 ("Going live without the hub"): the operator
   resolves the playlist from its library copy and holds the service. No dialog: there is never a hub.
-- A banner explains the demo and offers **Reset demo** (clears the browser's stores; the demo hub
-  re-seeds from `seed.json`). The top bar says "Demo: runs in this browser".
+- A banner explains the demo and offers **Reset demo** (clears the browser's stores, by name where
+  `indexedDB.databases()` is missing; the demo hub re-seeds from `seed.json`). The top bar says "Demo: runs in this browser".
 
 The service worker answers every `/api/v1/*` request from the pages and workers it controls:
 
-- Library reads and writes (presentations, playlists, themes, folders, settings, media) against one
-  library document in IndexedDB, started from `seed.json`. Writes are validated with the domain schemas.
+- Library reads and writes (presentations, playlists, themes, folders, settings, media, fonts) against
+  one library document in IndexedDB, started from `seed.json`, with the hub's status codes: deletes
+  answer 204 (a deleted presentation leaves its playlists; a deleted media item's own file goes too), a
+  `POST` with an existing id or deleting the default theme 409, a body the schemas refuse 400 with the
+  hub's one-line summary. `PUT /settings/:key` uses the hub's `SETTINGS_BODY` schemas
+  (`@ordo/protocol`): unknown keys are 404 and a new output gets a token, so it can be launched.
 - Media uploads are stored as-is (browsers play these formats); images get their size from
   `createImageBitmap`.
 - **ProPresenter import runs in the browser**: `.pro`, `.probundle`, `.proPlaylist` or a zip of a
@@ -44,8 +51,8 @@ The service worker answers every `/api/v1/*` request from the pages and workers 
 - Files: the visitor's from IndexedDB, the sample's from `/demo/files/<hash>`.
 - `/output/config` finds the output by its token, as the hub does.
 - What needs the hub's server tools answers 501 with "needs the ordo hub on a server": PowerPoint and
-  PDF import (LibreOffice, pdftoppm), media transcoding, Google Fonts, backups, version history, NAS
-  folder imports.
+  PDF import (LibreOffice, pdftoppm), media transcoding and its retry, adding fonts, backups, version
+  history, NAS folder imports, changing the PINs.
 
 ## The sample service
 

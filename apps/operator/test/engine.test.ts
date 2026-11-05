@@ -122,6 +122,21 @@ describe('CoreEngine (operator core worker)', () => {
     expect(lastLive.authority).toBe('fallback');
   });
 
+  it('resumes a held service after a restart only within a service day', async () => {
+    const snap = { state: live(), authority: 'fallback' as const, pending: [], aids: [], held: true };
+    const fresh = await start({ ...snap, at: Date.now() - 3 * 60 * 60 * 1000 });
+    const freshLive = fresh.posts.filter((p): p is ViewModelMsg => p.t === 'vm' && !!p.live).at(-1)!.live!;
+    expect(freshLive.authority).toBe('fallback');
+    expect(freshLive.held).toBe(true);
+    fresh.e.dispose();
+    // Left running a week ago: the hub is followed and nothing starts unasked.
+    const stale = await start({ ...snap, at: Date.now() - 7 * 24 * 60 * 60 * 1000 });
+    const staleLive = stale.posts.filter((p): p is ViewModelMsg => p.t === 'vm' && !!p.live).at(-1)!.live!;
+    expect(staleLive.authority).toBe('hub');
+    expect(staleLive.held).toBeFalsy();
+    expect(stale.posts.some((p) => p.t === 'log' && /too long ago/.test(p.text))).toBe(true);
+  });
+
   it('reports the main-thread stall it sees from the 250 ms ticks', async () => {
     let now = 1_000_000;
     const posts: CoreToMain[] = [];

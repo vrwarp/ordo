@@ -141,7 +141,7 @@ a failing case writes `<case>.actual.png` next to the expected one.
 
 ## CI
 
-GitHub Actions on every push and PR: `pnpm lint`, `pnpm typecheck`, `pnpm test`,
+GitHub Actions on every pull request and merge to main (and by hand): `pnpm lint`, `pnpm typecheck`, `pnpm test`,
 `pnpm e2e` (SwiftShader, so the 100 ms timing bounds above), the golden images, Docker build. Tags build and push the image. Playwright traces are uploaded on failure.
 
 ## Test content

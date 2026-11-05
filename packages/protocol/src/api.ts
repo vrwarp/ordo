@@ -5,21 +5,21 @@
  * operate and edit roles use the `ordo_session` cookie obtained from POST /auth/pin.
  * Errors: non-2xx with `{ error: { code: string, message: string } }`.
  */
-import type {
+import {
   AudioSettings,
-  Font,
+  type Font,
   GeneralSettings,
   KeyMap,
   Look,
-  Media,
+  type Media,
   Output,
-  Playlist,
-  Presentation,
+  type Playlist,
+  type Presentation,
   SurfaceSettings,
-  Theme,
-  ResolvedPlaylist,
-  LiveState,
-  GeneralSettings as General,
+  type Theme,
+  type ResolvedPlaylist,
+  type LiveState,
+  type GeneralSettings as General,
 } from '@ordo/domain';
 import type { Role } from './index.ts';
 import { z } from 'zod';
@@ -86,6 +86,20 @@ export type Settings = {
   surfaces: SurfaceSettings;
 };
 export type SettingsKey = keyof Settings;
+
+/**
+ * PUT /settings/:key bodies (design/25): strict at the top level (unknown keys are refused); list settings
+ * are strict per element. Shared by the hub and the browser demo (apps/demo) so both accept the same.
+ */
+export const SETTINGS_BODY: Record<SettingsKey, z.ZodType> = {
+  general: GeneralSettings.strict(),
+  looks: z.array(Look.strict()).max(100),
+  // A new output arrives with an empty id; the hub assigns one.
+  outputs: z.array(Output.extend({ id: z.string().max(200) }).strict()).max(32),
+  audio: AudioSettings.strict(),
+  keymap: KeyMap,
+  surfaces: SurfaceSettings.strict(),
+};
 
 export type RevisionInfo = { rev: number; savedAt: string; savedBy?: string; title: string };
 

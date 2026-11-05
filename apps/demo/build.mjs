@@ -6,7 +6,8 @@
 //   site/demo/       the sample service, made by the real hub (scripts/seed.ts; needs `pnpm build` first)
 // Every path is relative, so the site works at a domain root and under /<repo>/ alike.
 import { execFileSync } from 'node:child_process';
-import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'vite';
@@ -22,13 +23,21 @@ if (!existsSync(join(repo, 'apps/hub/dist/main.js'))) {
 
 rmSync(out, { recursive: true, force: true });
 const env = { ...process.env, ORDO_DEMO: '1' };
-const viteBin = join(repo, 'node_modules/.bin/vite');
-const app = (name, outDir, empty) =>
-  execFileSync(viteBin, ['build', '--outDir', outDir, ...(empty ? ['--emptyOutDir'] : [])], {
-    cwd: join(repo, 'apps', name),
-    env,
-    stdio: 'inherit',
-  });
+// Each app's own vite (pnpm does not hoist binaries to the root on every machine). A package's `bin` is
+// not in its `exports`, so it is read from the package.json, which is.
+const binOf = (pkgDir, pkg, bin) => {
+  const pkgJson = createRequire(join(pkgDir, 'package.json')).resolve(`${pkg}/package.json`);
+  const b = JSON.parse(readFileSync(pkgJson, 'utf8')).bin;
+  return join(dirname(pkgJson), typeof b === 'string' ? b : b[bin]);
+};
+const app = (name, outDir, empty) => {
+  const dir = join(repo, 'apps', name);
+  execFileSync(
+    process.execPath,
+    [binOf(dir, 'vite', 'vite'), 'build', '--outDir', outDir, ...(empty ? ['--emptyOutDir'] : [])],
+    { cwd: dir, env, stdio: 'inherit' },
+  );
+};
 
 app('operator', out, true);
 app('output', join(out, 'output'), true);
@@ -53,10 +62,11 @@ await build({
   },
 });
 
-execFileSync(join(repo, 'node_modules/.bin/tsx'), [join(here, 'scripts/seed.ts'), out], {
-  cwd: repo,
-  stdio: 'inherit',
-});
+execFileSync(
+  process.execPath,
+  [binOf(join(repo, 'apps/hub'), 'tsx', 'tsx'), join(here, 'scripts/seed.ts'), out],
+  { cwd: repo, stdio: 'inherit' },
+);
 
 // GitHub Pages: serve files as they are (no Jekyll), and send unknown paths to the operator.
 writeFileSync(join(out, '.nojekyll'), '');

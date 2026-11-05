@@ -6,19 +6,14 @@ import { pipeline } from 'node:stream/promises';
 import type { MultipartFile } from '@fastify/multipart';
 import {
   ActionId,
-  AudioSettings,
   DEFAULT_THEME,
-  GeneralSettings,
-  KeyMap,
   LiveCommand,
   type LiveState,
-  Look,
   type Media,
   newId,
-  Output,
+  type Output,
   Playlist,
   Presentation,
-  SurfaceSettings,
   Theme,
 } from '@ordo/domain';
 import { actionToEvent } from '@ordo/live-state';
@@ -31,6 +26,7 @@ import {
   type ManifestRes,
   type OutputConfigRes,
   type OutputHealthEntry,
+  SETTINGS_BODY,
   type Settings,
   type SettingsKey,
 } from '@ordo/protocol';
@@ -105,16 +101,6 @@ const SongselectBody = z
   .object({ text: z.string().max(1_000_000), title: z.string().max(300).optional() })
   .strict();
 const LiveEventsBody = z.object({ id: z.string().max(200).optional(), event: z.unknown() }).strict();
-/** Settings documents are strict at the top level; list settings are strict per element. */
-const SETTINGS_BODY: Record<SettingsKey, z.ZodType> = {
-  general: GeneralSettings.strict(),
-  looks: z.array(Look.strict()).max(100),
-  // A new output arrives with an empty id; the hub assigns one.
-  outputs: z.array(Output.extend({ id: z.string().max(200) }).strict()).max(32),
-  audio: AudioSettings.strict(),
-  keymap: KeyMap,
-  surfaces: SurfaceSettings.strict(),
-};
 
 /** The live service as the library side sees it: edit locks and the mode (from IPC in the library process). */
 export type LiveView = {

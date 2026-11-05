@@ -25,7 +25,11 @@ function open(): Promise<IDBDatabase> {
       };
       resolve(db);
     };
-    r.onerror = () => reject(r.error);
+    r.onerror = () => {
+      // Let the next call try again (storage may be blocked only for now).
+      dbp = undefined;
+      reject(r.error);
+    };
   });
   return dbp;
 }
@@ -55,6 +59,11 @@ export async function getFile(hash: string): Promise<Blob | undefined> {
 export async function putFile(hash: string, blob: Blob): Promise<void> {
   const db = await open();
   await req(db.transaction('files', 'readwrite').objectStore('files').put(blob, hash));
+}
+
+export async function deleteFile(hash: string): Promise<void> {
+  const db = await open();
+  await req(db.transaction('files', 'readwrite').objectStore('files').delete(hash));
 }
 
 export async function clearAll(): Promise<void> {

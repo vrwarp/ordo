@@ -435,12 +435,14 @@ describe('LiveCore going live without the hub (held service, design/17)', () => 
     expect(h.core.view.live).toBe(1);
   });
 
-  it('refuses a local goLive while the hub is connected, and reports a resolve failure', () => {
+  it('a local goLive while the hub is connected goes through the hub; a resolve failure is reported', () => {
+    // The socket came back between the dialog and its confirm: the hub resolves it, nothing is held.
     const h = harness(undefined, { resolveLocal: () => resolved() });
     h.core.onStatus(true);
     h.core.submit({ k: 'goLive', playlistId: 'pl' }, undefined, { local: true });
     expect(h.core.view.mode).toBe('idle');
-    expect(h.notices.at(-1)).toMatchObject({ kind: 'unavailable' });
+    expect(h.core.held).toBe(false);
+    expect(h.sent.at(-1)).toMatchObject({ t: 'live.event', event: { k: 'goLive', playlistId: 'pl' } });
     const bad = harness(undefined, {
       resolveLocal: () => {
         throw new Error('Cannot go live: "Intro video" is still processing');
@@ -523,6 +525,59 @@ describe('LiveCore going live without the hub (held service, design/17)', () => 
     h.core.onState(initialState());
     expect(h.core.authority).toBe('hub');
     expect(h.sent.some((m) => m.t === 'live.adopt')).toBe(false);
+  });
+
+  it('a goLive asked for during the hand-back after End service waits for the hub to take over', () => {
+    const h = offline();
+    h.core.submit({ k: 'goLive', playlistId: 'pl' }, undefined, { local: true });
+    h.setHub(true);
+    h.core.onStatus(true);
+    h.core.submit({ k: 'endService', at: 2 });
+    expect(h.core.reconcile).toBe('awaitState');
+    h.sent.length = 0;
+    h.core.submit({ k: 'goLive', playlistId: 'pl2' });
+    // Not refused as "hub unreachable", not sent yet either: the hub has not got the authority back.
+    expect(h.notices.some((n) => n.kind === 'unavailable')).toBe(false);
+    expect(h.sent.some((m) => m.t === 'live.event')).toBe(false);
+    h.core.onState(initialState());
+    expect(h.core.authority).toBe('hub');
+    expect(h.sent.at(-1)).toMatchObject({ t: 'live.event', event: { k: 'goLive', playlistId: 'pl2' } });
+    // The hub going away again during the hand-back refuses it instead, so the operator is told.
+    const g = offline();
+    g.core.submit({ k: 'goLive', playlistId: 'pl' }, undefined, { local: true });
+    g.setHub(true);
+    g.core.onStatus(true);
+    g.core.submit({ k: 'endService', at: 2 });
+    g.core.submit({ k: 'goLive', playlistId: 'pl2' });
+    g.setHub(false);
+    g.core.onStatus(false);
+    expect(g.notices.at(-1)).toMatchObject({ kind: 'unavailable', command: { k: 'goLive' } });
+    g.setHub(true);
+    g.core.onStatus(true);
+    g.core.onWelcome();
+    g.sent.length = 0;
+    g.core.onState(initialState());
+    expect(g.sent.some((m) => m.t === 'live.event')).toBe(false);
+  });
+
+  it('End service while the hub adopts the fallback service ends it on the hub, with no conflict', () => {
+    const h = harness(reduce(initialState(), { k: 'goLive', resolved: resolved() }));
+    h.core.onStatus(true);
+    h.core.onStatus(false);
+    h.timers.find((t) => !t.cleared)!.fn(); // grace: fallback authority
+    h.core.submit({ k: 'go', cueIndex: 1, at: 1 });
+    h.core.onStatus(true);
+    h.core.onWelcome();
+    h.core.onState(initialState()); // the hub restarted idle: adopt this PC's service
+    expect(h.core.reconcile).toBe('adopting');
+    h.core.submit({ k: 'endService', at: 2 });
+    // The hub answers with the adopted (live) state: the end is replayed to it, no dialog.
+    const adopted = (h.sent.at(-1) as { t: 'live.adopt'; state: LiveState }).state;
+    h.sent.length = 0;
+    h.core.onState(adopted);
+    expect(h.core.authority).toBe('hub');
+    expect(h.notices.some((n) => n.kind === 'conflict')).toBe(false);
+    expect(h.sent.at(-1)).toMatchObject({ t: 'live.event', event: { k: 'endService' } });
   });
 
   it('resumes a held service after a core restart, telling the windows to keep holding', () => {
