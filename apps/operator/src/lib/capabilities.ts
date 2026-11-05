@@ -154,10 +154,16 @@ if (typeof window !== 'undefined') {
       const s = useCapabilities.getState();
       return { ...s.caps, deviceProfile: profileFor(s.caps, 'operate', s.forced) };
     },
+    get persistence() {
+      return lastPersistRequest;
+    },
   };
 }
 
 const PERSIST_KEY = 'ordo.persistRequested';
+
+/** The last request for persistent storage this page made (diagnostics; `__ordo.persistence`). */
+export let lastPersistRequest: { at: number; granted: boolean } | undefined;
 
 /**
  * Ask once per device for persistent storage (Safari may grant it to an installed web app, which keeps
@@ -183,6 +189,7 @@ export async function requestPersistentStorage(
   } catch {
     granted = false;
   }
+  lastPersistRequest = { at: Date.now(), granted };
   // Remember a grant only: a refusal (a Safari tab refuses without asking) is cheap to retry on the
   // next load, and the same origin may qualify later (installed, or used more).
   if (granted) {

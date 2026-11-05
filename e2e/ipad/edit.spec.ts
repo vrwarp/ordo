@@ -282,8 +282,14 @@ test('a library Safari cleared reloads from the hub, and the core reconnects aft
     await json(api.post('import/songselect', { data: { text: SONG } }));
     await signInByTapping(page, url);
     await expect(page.getByText('Tablet Test Song').first()).toBeVisible();
-    // The edit profile asked for persistent storage once.
-    expect(await page.evaluate(() => localStorage.getItem('ordo.persistRequested'))).toBeTruthy();
+    // The edit profile asked for persistent storage (Safari may refuse; the flag is only kept on a grant).
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => !!(window as unknown as { __ordo: { persistence?: unknown } }).__ordo.persistence,
+        ),
+      )
+      .toBe(true);
 
     // Suspension: the page is hidden while the hub goes away (the socket dies with it), then shown again.
     await page.evaluate(() => {
