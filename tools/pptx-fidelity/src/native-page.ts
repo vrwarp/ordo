@@ -1,7 +1,16 @@
 import type { Slide } from '@ordo/domain';
 import { currentFontEnv, type FontFile, FontResolver, installFontEnv } from '@ordo/renderer/text/fonts.ts';
 import type { FaceRequest } from '@ordo/renderer/text/types.ts';
-import { drawImageFit, drawSlide2D, fillColor } from '@ordo/renderer/text2d.ts';
+import { pictureKey } from '@ordo/renderer/bitmap-cache.ts';
+import { type PictureTarget, pictureTarget, preparePicture } from '@ordo/renderer/picture.ts';
+import {
+  type ImageLookup,
+  type SlidePicture,
+  drawImageFit,
+  drawSlide2D,
+  fillColor,
+  slidePictures,
+} from '@ordo/renderer/text2d.ts';
 
 /**
  * Browser side of the harness's native column (design/27 §14.1). `native.ts` bundles this file with
@@ -19,8 +28,11 @@ import { drawImageFit, drawSlide2D, fillColor } from '@ordo/renderer/text2d.ts';
  * family names. `fonts.ts` decides which faces this machine gives each family.
  *
  * Pictures and fonts come from the harness's own origin (`native.ts` answers every request; nothing else
- * is fetched). Pictures are decoded once per deck, scaled down to what the deck shows of them (the hub's
- * picture preparation does the same, design/27 §4), and kept in a bounded cache.
+ * is fetched). Each picture a slide draws unrotated is prepared as the output's asset worker prepares it
+ * (design/27 §7.1): resampled once from the decoded file into an sRGB bitmap of its device rectangle, at
+ * 1920 and at 3840 wide, before the slide is drawn or timed, so the timed draws copy it 1:1. A picture
+ * drawn from its source (rotated, round corners) is decoded scaled down to what the deck shows of it (the
+ * hub's picture preparation does the same, design/27 §4). Both are kept in a bounded cache.
  */
 
 /** A face to register: the resolver's `FontFile`, read from `url`. */
@@ -65,71 +77,129 @@ export type NativePage = {
 
 /** Decoded pixels kept between slides of a deck (about 512 MB of RGBA). */
 const CACHE_PIXELS = 128_000_000;
-/** A picture is scaled down when it is more than this much larger than its largest use (as the hub does). */
+/** A source is scaled down when it is more than this much larger than its largest use (as the hub does). */
 const OVERSIZE = 1.25;
+/** The widths each slide is drawn at: the scored picture and the timings. */
+const WIDTHS = [1920, 3840] as const;
+/** The slide's background picture: the whole frame, cover-fitted (`thumb.worker.ts`). */
+const BACKGROUND = { box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 }, fit: 'cover' } as const;
 
 type Decoded = { bmp: ImageBitmap | undefined; px: number };
 
 const known = new Map<string, PageMedia>();
+/** Sources by media id and prepared pictures by `pictureKey(id, target)`, least recently used first. */
 const cache = new Map<string, Decoded>();
 let cached = 0;
 
 function evict(keep: ReadonlySet<string>): void {
-  for (const [id, d] of cache) {
+  for (const [key, d] of cache) {
     if (cached <= CACHE_PIXELS) return;
-    if (keep.has(id)) continue;
-    d.bmp?.close();
-    cached -= d.px;
-    cache.delete(id);
+    if (keep.has(key)) continue;
+    drop(key, d);
   }
 }
 
+function drop(key: string, d: Decoded): void {
+  d.bmp?.close();
+  cached -= d.px;
+  cache.delete(key);
+}
+
+/** The cached entry, now the most recently used, so eviction takes the oldest first. */
+function touch(key: string): Decoded | undefined {
+  const d = cache.get(key);
+  if (d) {
+    cache.delete(key);
+    cache.set(key, d);
+  }
+  return d;
+}
+
+function put(key: string, bmp: ImageBitmap | undefined): void {
+  const old = cache.get(key);
+  if (old) drop(key, old);
+  const d = { bmp, px: bmp ? bmp.width * bmp.height : 0 };
+  cache.set(key, d);
+  cached += d.px;
+}
+
+/** The file decoded at its own size (colour profile kept, as `createImageBitmap` keeps it in the output). */
 async function decode(m: PageMedia): Promise<ImageBitmap | undefined> {
   try {
     const res = await fetch(m.url);
     if (!res.ok) return undefined;
-    const full = await createImageBitmap(await res.blob());
-    const scale = Math.max(m.needW / full.width, m.needH / full.height);
-    if (!(scale > 0) || scale * OVERSIZE >= 1) return full;
-    const w = Math.max(1, Math.round(full.width * scale));
-    const h = Math.max(1, Math.round(full.height * scale));
-    const small = await createImageBitmap(full, { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' });
-    full.close();
-    return small;
+    return await createImageBitmap(await res.blob());
   } catch {
     return undefined;
   }
 }
 
-/** The decoded pictures a slide uses, by media id; ids that fail are listed in `missing`. */
-async function picturesOf(ids: ReadonlySet<string>, missing: string[]): Promise<Map<string, ImageBitmap>> {
-  const out = new Map<string, ImageBitmap>();
-  for (const id of ids) {
-    let d = cache.get(id);
-    if (d) {
-      // Most recently used last, so eviction takes the oldest first.
-      cache.delete(id);
-      cache.set(id, d);
-    } else {
-      const m = known.get(id);
-      const bmp = m ? await decode(m) : undefined;
-      d = { bmp, px: bmp ? bmp.width * bmp.height : 0 };
-      cache.set(id, d);
-      cached += d.px;
-      evict(ids);
-    }
-    if (d.bmp) out.set(id, d.bmp);
-    else missing.push(id);
+/** `full` scaled down to what the deck shows of it, or `full` itself; `full` is closed when replaced. */
+async function source(full: ImageBitmap, m: PageMedia): Promise<ImageBitmap | undefined> {
+  const scale = Math.max(m.needW / full.width, m.needH / full.height);
+  if (!(scale > 0) || scale * OVERSIZE >= 1) return full;
+  const w = Math.max(1, Math.round(full.width * scale));
+  const h = Math.max(1, Math.round(full.height * scale));
+  try {
+    return await createImageBitmap(full, { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' });
+  } catch {
+    return undefined;
+  } finally {
+    full.close();
+  }
+}
+
+/** The pictures a slide's draws ask for at every width: the background's, then `slidePictures`. */
+function usesOf(slide: Slide): SlidePicture[] {
+  const out: SlidePicture[] = [];
+  for (const width of WIDTHS) {
+    const scale = width / 1920;
+    if (slide.backgroundMediaId)
+      out.push({ mediaId: slide.backgroundMediaId, target: pictureTarget(BACKGROUND, scale) });
+    out.push(...slidePictures(slide, { scale }));
   }
   return out;
 }
 
-function mediaIdsOf(slide: Slide): Set<string> {
-  const ids = new Set<string>();
-  if (slide.backgroundMediaId) ids.add(slide.backgroundMediaId);
-  if (slide.imported?.imageMediaId) ids.add(slide.imported.imageMediaId);
-  for (const o of slide.objects) if (o.type === 'image') ids.add(o.mediaId);
-  return ids;
+/**
+ * Decode and prepare what a slide draws (outside the timed draws), and the lookup the draws use. Each
+ * file is decoded once for all of the slide's targets it lacks; ids that fail are listed in `missing`.
+ */
+async function picturesOf(slide: Slide, missing: string[]): Promise<ImageLookup> {
+  const wants = new Map<string, { targets: Map<string, PictureTarget>; source: boolean }>();
+  for (const u of usesOf(slide)) {
+    let w = wants.get(u.mediaId);
+    if (!w) wants.set(u.mediaId, (w = { targets: new Map(), source: false }));
+    if (u.target) w.targets.set(u.target.key, u.target);
+    else w.source = true;
+  }
+  const keep = new Set<string>();
+  for (const [id, w] of wants) {
+    keep.add(id);
+    for (const t of w.targets.values()) keep.add(pictureKey(id, t));
+  }
+  for (const [id, w] of wants) {
+    // A failed decode is cached too (an entry without a bitmap), so it is not tried again on every slide.
+    const todo = [...w.targets.values()].filter((t) => !touch(pictureKey(id, t)));
+    let needSource = w.source && !touch(id);
+    if (todo.length || needSource) {
+      const m = known.get(id);
+      const full = m ? await decode(m) : undefined;
+      for (const t of todo) {
+        const ready = full && preparePicture(full, t);
+        if (ready || !full) put(pictureKey(id, t), ready);
+        // Not prepared (no canvas): drawn from the source, as before.
+        else if (!cache.has(id)) needSource = true;
+      }
+      if (needSource) put(id, full && m ? await source(full, m) : undefined);
+      else full?.close();
+      evict(keep);
+    }
+    const keys = [...w.targets.values()].map((t) => pictureKey(id, t));
+    if (w.source) keys.push(id);
+    if (keys.some((k) => cache.has(k) && !cache.get(k)!.bmp)) missing.push(id);
+  }
+  return (id, t) => (t && cache.get(pictureKey(id, t))?.bmp) || cache.get(id)?.bmp;
 }
 
 /** The thumbnail worker's drawing: black, background cover-fit, then the slide (`thumb.worker.ts`). */
@@ -137,13 +207,16 @@ function draw(
   ctx: OffscreenCanvasRenderingContext2D,
   slide: Slide,
   width: number,
-  pictures: Map<string, ImageBitmap>,
+  images: ImageLookup,
 ): void {
   const scale = width / 1920;
   fillColor(ctx, { r: 0, g: 0, b: 0, a: 1 }, width, Math.round(1080 * scale));
-  const bg = slide.backgroundMediaId ? pictures.get(slide.backgroundMediaId) : undefined;
-  if (bg) drawImageFit(ctx, bg, { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 }, scale, 'cover');
-  drawSlide2D(ctx, slide, { scale, images: (id) => pictures.get(id) });
+  if (slide.backgroundMediaId) {
+    const target = pictureTarget(BACKGROUND, scale);
+    const bg = images(slide.backgroundMediaId, target);
+    if (bg) drawImageFit(ctx, bg, BACKGROUND.box, scale, 'cover', 1, 0, undefined, target);
+  }
+  drawSlide2D(ctx, slide, { scale, images });
 }
 
 /** Draw, then read one pixel back: Chromium records canvas commands and only rasterizes on a read. */
@@ -151,13 +224,13 @@ function timed(
   ctx: OffscreenCanvasRenderingContext2D,
   slide: Slide,
   width: number,
-  pictures: Map<string, ImageBitmap>,
+  images: ImageLookup,
   repeats: number,
 ): number {
   const times: number[] = [];
   for (let i = 0; i < repeats; i++) {
     const t0 = performance.now();
-    draw(ctx, slide, width, pictures);
+    draw(ctx, slide, width, images);
     ctx.getImageData(0, 0, 1, 1);
     times.push(performance.now() - t0);
   }
@@ -230,9 +303,9 @@ const page: NativePage = {
   },
   async render(job) {
     const missing: string[] = [];
-    const pictures = await picturesOf(mediaIdsOf(job.slide), missing);
+    const images = await picturesOf(job.slide, missing);
     const ctx = context(1920);
-    draw(ctx, job.slide, 1920, pictures);
+    draw(ctx, job.slide, 1920, images);
     const x = Math.max(0, Math.min(1919, Math.round(job.rect.x)));
     const y = Math.max(0, Math.min(1079, Math.round(job.rect.y)));
     const w = Math.max(1, Math.min(1920 - x, Math.round(job.rect.w)));
@@ -240,8 +313,8 @@ const page: NativePage = {
     const crop = new OffscreenCanvas(w, h);
     crop.getContext('2d')!.drawImage(ctx.canvas, x, y, w, h, 0, 0, w, h);
     const png = await blobToBase64(await crop.convertToBlob({ type: 'image/png' }));
-    const ms1920 = job.repeats ? timed(ctx, job.slide, 1920, pictures, job.repeats) : 0;
-    const ms3840 = job.repeats ? timed(context(3840), job.slide, 3840, pictures, job.repeats) : 0;
+    const ms1920 = job.repeats ? timed(ctx, job.slide, 1920, images, job.repeats) : 0;
+    const ms3840 = job.repeats ? timed(context(3840), job.slide, 3840, images, job.repeats) : 0;
     return { png, width: w, height: h, ms1920, ms3840, missing };
   },
 };

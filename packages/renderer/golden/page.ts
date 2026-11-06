@@ -8,6 +8,7 @@ import {
   type Slide,
   type TextStyle,
 } from '@ordo/domain';
+import { type PictureTarget, preparePicture } from '../src/picture.ts';
 import { type PropsModel, propBox } from '../src/props.ts';
 import { rasterImage, rasterLowerThird, rasterProps, rasterSlide } from '../src/raster.ts';
 import { type Ctx2D, drawText, fillColor } from '../src/text2d.ts';
@@ -237,6 +238,23 @@ const cropped: Slide = (() => {
 let quadrantsImage: OffscreenCanvas | undefined;
 const cropImages = (id: string) => (id === 'quadrants' ? (quadrantsImage ??= quadrants()) : undefined);
 
+/**
+ * The output's asset worker's lookup (design/27 §7.1): each unrotated picture prepared once at its device
+ * rectangle and copied 1:1; rotated and round-cornered ones from the source. Drawing the crop slide with it
+ * must look like drawing it from the source, so its expected PNG is `image-crop.png`.
+ */
+const preparedCrop = new Map<string, ImageBitmap>();
+const preparedImages = (id: string, target?: PictureTarget) => {
+  const src = cropImages(id);
+  if (!src || !target) return src;
+  let ready = preparedCrop.get(target.key);
+  if (!ready) {
+    ready = preparePicture(src, target);
+    if (ready) preparedCrop.set(target.key, ready);
+  }
+  return ready ?? src;
+};
+
 export const LEGACY_CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2D) => void> = {
   'main-authored': (ctx) => {
     fillColor(ctx, LOOK_MAIN.clearColor, W, H);
@@ -298,6 +316,10 @@ export const LEGACY_CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2
 export const CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2D) => void> = {
   ...LEGACY_CASES,
   ...RICH_CASES,
+  'image-crop-prepared': (ctx) => {
+    fillColor(ctx, LOOK_MAIN.clearColor, W, H);
+    rasterSlide(ctx, cropped, LOOK_MAIN, SCALE, preparedImages, { isSong: false });
+  },
 };
 
 /** The faces the runner injects: each family is also registered directly under its own name. */

@@ -1,4 +1,5 @@
 export * from './text2d.ts';
+export * from './picture.ts';
 export * from './timing.ts';
 export * from './stacks.ts';
 export * from './plan.ts';
