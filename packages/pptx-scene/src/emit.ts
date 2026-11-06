@@ -98,6 +98,8 @@ export const MAX_OBJECTS = 1_000;
  * thousands of formatted runs on every slide never builds megabytes the hub would discard.
  */
 export const MAX_SLIDE_BYTES = 64 * 1024;
+/** The note a slide gets when it passes `MAX_SLIDE_BYTES` (an importer that logs the budget itself drops it). */
+export const SLIDE_BUDGET_NOTE = `the slide has more than ${MAX_SLIDE_BYTES / 1024} KB of text formatting: its further text is written without it (picture class)`;
 /** Single line spacing in the office line model: 1.2 × the font size (`pptx-render/src/page.ts`). */
 export const SINGLE_LINE = 1.2;
 /** Logical coordinates are bounded by the schema (`coord`). */
@@ -177,6 +179,13 @@ export interface EmittedSlide {
    * goes just under (absent: on top). The shape of the hub's `PptxLoSlide.metafileObjects`.
    */
   metafiles?: { part: string; object: ImageObject; before?: string }[];
+  /**
+   * Classed picture by the slide budget alone (design/27 §3.4): its text formatting passed `MAX_SLIDE_BYTES`,
+   * and it would be native or hybrid otherwise. The slide's JSON is then over 64 KB too (its objects hold
+   * that text), so an importer counts and logs it exactly as its own slide budget would (the hub: a compact
+   * picture slide, one warning), and drops `SLIDE_BUDGET_NOTE`.
+   */
+  overBudget?: true;
 }
 
 /** The placeholder media id of a metafile's object until it is converted (`EmittedSlide.metafiles`). */
@@ -249,6 +258,7 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       ms: performance.now() - t0,
       ...(art ? { art } : {}),
       ...(metafiles.length ? { metafiles } : {}),
+      ...(over && s.classification.class !== 'picture' ? { overBudget: true as const } : {}),
     };
   });
   return {
@@ -950,10 +960,7 @@ function richTextObject(
   if (rich.paras) o.paras = rich.paras;
   if (!over) {
     ctx.textBytes += utf8Bytes(JSON.stringify(o));
-    if (ctx.textBytes > MAX_SLIDE_BYTES)
-      ctx.log(
-        `the slide has more than ${MAX_SLIDE_BYTES / 1024} KB of text formatting: its further text is written without it (picture class)`,
-      );
+    if (ctx.textBytes > MAX_SLIDE_BYTES) ctx.log(SLIDE_BUDGET_NOTE);
   }
   return o;
 }

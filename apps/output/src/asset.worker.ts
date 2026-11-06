@@ -208,9 +208,12 @@ function take(): ImageBitmap {
  * A slide job with `video` (design/27 §7.2, SCENE.md item E): the base (objects up to the playing one,
  * with its poster, and the upper ones that stay clear of the video) and the over (upper objects that
  * overlap it), split by `splitScene` with measured text bounds, and the plane from the object's box, crop,
- * flips, rotation, mask and opacity at this output's scale with the clip's size. Undefined when the
- * slide is not a scene (a lyric-only or hidden look, the object is gone): it is then one bitmap with the
- * poster, as before.
+ * flips, rotation, mask and opacity at this output's scale with the clip's size. Base and over draw the
+ * pictures `preload` prepared for the whole slide (`slidePictures`), asked for with the same targets as the
+ * slide drawn as one bitmap, and pinned until both are drawn; the poster's size, for a clip of unknown size,
+ * comes from the source its prepared bitmap was made from (`sourceSize`). Undefined when the slide is not
+ * a scene (a lyric-only or hidden look, the object is gone): it is then one bitmap with the poster, as
+ * before.
  */
 function sceneParts(
   job: Extract<AssetJob, { kind: 'slide' }>,

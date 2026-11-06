@@ -160,7 +160,10 @@ payload (`PptxImportOptions`).
   over the objects exactly as stored (after remap, sanitize and `Slide.parse`); `Slide.hidden`; the deck's
   `source.log` (`logSafe`) and `source.native` (counts, `slideRect`).
 - Classification with the §3.4 budgets: 64 KB per slide, `planImportSizes` for the 4 MiB total (the tail
-  compact, logged and counted in the result).
+  compact, logged and counted in the result). A slide the converter classed picture for its own 64 KB
+  text formatting budget (`EmittedSlide.overBudget`) is the same 'slide' case: one warning ("slide n is
+  over 64 KB"), counted once in `compact`, the converter's budget note and picture-class line not logged
+  besides.
 - Placeholder remap (`EmitResult.media` per batch → parts → media ids from C); the `pptx-lo` payload
   (`PptxLoSlide` per slide that needs LibreOffice) enqueued before any clip job; resume pairs in
   `PptxNativeProgress` so a re-queued job never stores a picture twice or saves a second presentation.

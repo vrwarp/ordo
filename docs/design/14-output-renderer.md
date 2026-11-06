@@ -161,11 +161,14 @@ A slide job that carries `video` (design/27 §7.2) is answered with `SRC_SCENE` 
 `splitScene`, measuring text with the drawer's own layout so that text overflowing its box into the video
 goes over it; draws the base (with the poster unless the clip is hidden while stopped), transfers it, draws
 the over on the same surface when anything is over the video, and encodes the plane at the output's scale
-with the poster's size, so the clip lands exactly on its poster. A look that does not draw the slide as
-authored, an object that is gone or an empty box leaves the slide one bitmap with its poster. Covered by
-`scene-raster.test.ts` and `asset.worker.test.ts` (fakes) and `scene-raster.browser.test.ts`, which
-recomposes base, the clip through `planeSample` and over in headless Chromium and compares them with the
-slide drawn as one bitmap, with and without the clip playing.
+with the clip's size (the poster's when the clip's is unknown), so the clip lands exactly on its poster.
+Base and over draw the pictures the worker prepared for the whole slide (`slidePictures`), with the same
+targets as the slide drawn as one bitmap; a prepared poster is the box's size, so its source's size
+(`sourceSize`) fits the plane. A look that does not draw the slide as authored, an object that is gone or an
+empty box leaves the slide one bitmap with its poster. Covered by `scene-raster.test.ts` and
+`asset.worker.test.ts` (fakes) and `scene-raster.browser.test.ts`, which recomposes base, the clip through
+`planeSample` and over in headless Chromium and compares them with the slide drawn as one bitmap, with and
+without the clip playing, from source and from prepared pictures.
 
 ## Frame loop
 

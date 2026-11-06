@@ -129,7 +129,11 @@ surface, `transferToImageBitmap` as the take); text is measured with `layoutText
 text fields that can draw past it (M2 runs, paragraph styles, the office line model, insets, no wrapping)
 counts as covering the whole frame until the measure uses the M2 layout. The plane uses the clip's size from
 the job (the drawn poster's size only when the clip's is unknown). The operator's `stillHash` is `stillFile`.
-Pixels: `scene-raster.browser.test.ts` (headless Chromium, skipped without one).
+The worker prepares the pictures `slidePictures` lists for the whole slide (design/27 §7.1); base and over
+draw subsets of them, asking with the same targets, and the poster is asked for with its target too: a
+prepared bitmap is the box's size, so the plane takes the poster's size from the source it was prepared
+from (`sourceSize`). Pixels: `scene-raster.browser.test.ts` (headless Chromium, skipped without one), with
+source pictures and with the asset worker's prepared ones.
 
 **(F) frames-uploads.** `packages/renderer/src/engine.ts`: a 2-deep frame ring per slot presenting the newest
 frame whose timestamp is at most the expected media time (hubNow − startedAt, modulo the duration when

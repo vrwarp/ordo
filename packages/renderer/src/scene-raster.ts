@@ -8,6 +8,7 @@ import {
   type TextObject,
 } from '@ordo/domain';
 import { CLAMP, clampBox, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
+import { pictureTarget, sourceSize } from './picture.ts';
 import { rasterSlide } from './raster.ts';
 import {
   PLANE_FLOATS,
@@ -126,12 +127,15 @@ function turnedBounds(
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
 
-/** The intrinsic size a drawer fits a picture with (`drawImageFit`), 0 x 0 when there is none. */
+/**
+ * The size a drawer fits a picture with (`drawImageFit`): a prepared bitmap's source size, else its own
+ * (`sourceSize`); 0 x 0 when there is none.
+ */
 function pictureSize(img: CanvasImageSource | undefined): [number, number] {
   if (!img) return [0, 0];
-  const i = img as { width?: unknown; height?: unknown; videoWidth?: unknown; videoHeight?: unknown };
-  const w = num(i.width, 0, 1e6, 0) || num(i.videoWidth, 0, 1e6, 0);
-  const h = num(i.height, 0, 1e6, 0) || num(i.videoHeight, 0, 1e6, 0);
+  const [iw, ih] = sourceSize(img);
+  const w = num(iw, 0, 1e6, 0);
+  const h = num(ih, 0, 1e6, 0);
   return w > 0 && h > 0 ? [w, h] : [0, 0];
 }
 
@@ -139,8 +143,12 @@ function pictureSize(img: CanvasImageSource | undefined): [number, number] {
  * Plan the scene of a slide whose ImageObject `objectId` plays its clip in place, drawn at `scale` (device
  * px per logical px) with `look`. `ctx` measures text (nothing is drawn). The plane fits the video with the
  * clip's own size (`clip`, the delivery's Media.width x height): the poster may be any picture the operator
- * chose, of another aspect. Only when the clip's size is unknown is the poster's size used
- * (`images(object.mediaId)`), and without either the clip is stretched to the box.
+ * chose, of another aspect. Only when the clip's size is unknown is the poster's size used, and without
+ * either the clip is stretched to the box. The poster is asked for exactly as `drawSlide2D` asks for it
+ * (`images(object.mediaId, pictureTarget(object, scale))`), so a decoder that prepares only the targets
+ * `slidePictures` lists (the asset worker) hands back the poster's prepared bitmap, whose source's size
+ * `sourceSize` knows. Base and over are subsets of the slide's clamped objects (and its page picture), so
+ * every picture they draw asks for one of those targets too.
  *
  * A play object drawn below full opacity leaves its poster out of base, as 'Hide while not playing' does:
  * the video is mixed over base at that opacity, so a poster in base would show through the moving picture
@@ -172,9 +180,9 @@ export function sceneSlides(
   const plane = new Float32Array(PLANE_FLOATS);
   const cw = num(clip.w, 0, 1e6, 0);
   const ch = num(clip.h, 0, 1e6, 0);
-  const [w, h] = cw > 0 && ch > 0 ? [cw, ch] : pictureSize(images(play.mediaId));
-  if (!encodePlane(play as PlaneSource, num(scale, 0.01, 8, 1), w, h, plane, split.over.length > 0))
-    return undefined;
+  const at = num(scale, 0.01, 8, 1);
+  const [w, h] = cw > 0 && ch > 0 ? [cw, ch] : pictureSize(images(play.mediaId, pictureTarget(play, at)));
+  if (!encodePlane(play as PlaneSource, at, w, h, plane, split.over.length > 0)) return undefined;
   return {
     base: { ...s, objects: split.base },
     over: split.over.length ? { id: s.id, objects: split.over } : null,

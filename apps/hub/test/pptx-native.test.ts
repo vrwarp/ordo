@@ -22,6 +22,7 @@ import {
   pic,
   pictureBg,
   run,
+  solid,
   solidBg,
   sp,
 } from '@ordo/pptx-scene/test-util.ts';
@@ -331,7 +332,8 @@ describe('pptx-native: classes, budgets and timing', () => {
     });
     parts.set('ppt/slides/slide3.xml', enc.encode('<!DOCTYPE x [<!ENTITY a "aaaa">]><p:sld/>'));
     const { result, p } = await importDeck(parts);
-    expect(result).toMatchObject({ slides: 3, native: 1, picture: 2, pending: 2 });
+    // Picture class for its object count, not made compact by the size budgets.
+    expect(result).toMatchObject({ slides: 3, native: 1, picture: 2, compact: 0, pending: 2 });
     const [budget, fine, bad] = slidesOf(p) as [Slide, Slide, Slide];
     expect(budget.objects).toEqual([]);
     expect(budget.lyricObjectId).toBeUndefined();
@@ -347,19 +349,53 @@ describe('pptx-native: classes, budgets and timing', () => {
     ]);
   });
 
+  /** Slide 2 of an import is a compact picture slide over 64 KB: picture class, logged once, counted once. */
+  function expectOneOversized(result: PptxNativeResult, p: Presentation): void {
+    expect(result).toMatchObject({ native: 1, picture: 1, compact: 1, pending: 1 });
+    expect(result.notes.filter((n) => n.includes('slide 2'))).toEqual([
+      'slide 2 is over 64 KB: shown as a LibreOffice picture',
+    ]);
+    const [, s2] = slidesOf(p) as [Slide, Slide];
+    expect(s2.objects).toEqual([]);
+    expect(s2.pptx).toMatchObject({ class: 'picture', pending: true });
+    expect(s2.pptx!.artText!.length).toBeGreaterThan(1000);
+    expect(s2.pptx!.notes).toEqual(['over the slide size budget: a LibreOffice picture']);
+    const log = p.source!.log!.split('\n');
+    expect(log.filter((l) => /\bslide 2\b/.test(l) && /64 KB|picture class/.test(l))).toEqual([
+      '[warn] slide 2 is over 64 KB: shown as a LibreOffice picture',
+    ]);
+  }
+
   it('makes a slide over 64 KB a compact picture slide, logged and counted', async () => {
+    // Its text formatting alone passes 64 KB: the converter classes it picture, the budget counts it.
     const big = Array.from({ length: 8 }, (_, i) =>
       textBox(2 + i, `${'Grace '.repeat(1500)}${i}`, i * 0.6),
     ).join('');
     const { result, p } = await importDeck(
       buildDeck({ slides: [{ shapes: textBox(2, 'Small') }, { shapes: big }] }),
     );
-    expect(result).toMatchObject({ native: 1, picture: 1, compact: 1, pending: 1 });
-    expect(result.notes.join('\n')).toMatch(/slide 2 is over 64 KB/);
-    const [, s2] = slidesOf(p) as [Slide, Slide];
-    expect(s2.objects).toEqual([]);
-    expect(s2.pptx!.artText!.length).toBeGreaterThan(1000);
-    expect(p.source!.log).toMatch(/\[warn\] slide 2 is over 64 KB/);
+    expectOneOversized(result, p);
+  });
+
+  it('counts a slide whose JSON passes 64 KB with its text formatting within it the same way', async () => {
+    // About 55 KB of text (the converter's budget is not reached) and 120 rectangles: about 75 KB of JSON.
+    const text = Array.from({ length: 6 }, (_, i) =>
+      textBox(2 + i, `${'Grace '.repeat(1500)}${i}`, i * 0.6),
+    ).join('');
+    const rects = Array.from({ length: 120 }, (_, i) =>
+      sp({
+        id: 20 + i,
+        x: (i % 12) * 0.5 * IN,
+        y: Math.floor(i / 12) * 0.4 * IN,
+        cx: IN / 4,
+        cy: IN / 4,
+        fill: solid('FF0000'),
+      }),
+    ).join('');
+    const { result, p } = await importDeck(
+      buildDeck({ slides: [{ shapes: textBox(2, 'Small') }, { shapes: text + rects }] }),
+    );
+    expectOneOversized(result, p);
   });
 });
 

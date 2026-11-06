@@ -7,6 +7,7 @@ import {
   pictureTarget,
   preparePicture,
   preparedKey,
+  sourceSize,
 } from './picture.ts';
 import { drawImageFit, drawObject, drawSlide2D, slidePictures } from './text2d.ts';
 
@@ -181,6 +182,14 @@ describe('preparePicture', () => {
     expect(bmp).toBe(c.bmp);
     expect(preparedKey(bmp)).toBe(t.key);
     expect(preparedKey(src)).toBeUndefined();
+    // The prepared bitmap is the box's size; what it is fitted with is still its source's.
+    expect([bmp.width, bmp.height]).toEqual([3654, 2160]);
+    expect(sourceSize(bmp)).toEqual([957, 566]);
+    expect(sourceSize(src)).toEqual([957, 566]);
+    const video = { width: 0, height: 0, videoWidth: 1280, videoHeight: 720 } as unknown as CanvasImageSource;
+    expect(sourceSize(video)).toEqual([1280, 720]);
+    expect(sourceSize(preparePicture(video, t)!)).toEqual([1280, 720]);
+    expect(sourceSize({} as CanvasImageSource)).toEqual([0, 0]);
   });
 
   it('puts every picture pixel where drawImageFit puts it from the source', () => {

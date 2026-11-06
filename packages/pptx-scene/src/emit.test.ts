@@ -6,6 +6,7 @@ import {
   insetBox,
   legacyColor,
   MAX_SLIDE_BYTES,
+  SLIDE_BUDGET_NOTE,
   marginOf,
   overWhite,
   placePicture,
@@ -847,10 +848,22 @@ describe('placement', () => {
     expect(JSON.stringify(s.slide).length).toBeLessThan(MAX_SLIDE_BYTES + 40 * 2_000);
     expect(s.classification.class).toBe('picture');
     expect(s.classification.reasons.join(' ')).toMatch(/KB of text formatting/);
-    expect(s.notes.join(' ')).toMatch(/KB of text formatting/);
+    expect(s.notes).toContain(SLIDE_BUDGET_NOTE);
+    // The budget alone made it picture class: an importer counts it as its own slide budget does.
+    expect(s.overBudget).toBe(true);
     // A slide within the budget is untouched.
-    const small = emitSlides(parseDeck(buildDeck({ slides: [{ shapes: box(2) }] })));
-    expect(small.slides[0]!.classification.class).not.toBe('picture');
+    const small = emitSlides(parseDeck(buildDeck({ slides: [{ shapes: box(2) }] }))).slides[0]!;
+    expect(small.classification.class).not.toBe('picture');
+    expect(small.overBudget).toBeUndefined();
+    // A slide picture class for its object count is not flagged, though its formatting passes the budget too.
+    const few = Array.from({ length: 30 }, (_, i) => run(`w${i} `, '', solid(colors[i % 2]!))).join('');
+    const many = Array.from({ length: 160 }, (_, i) =>
+      sp({ id: i + 2, x: 0, y: 0, cx: IN, cy: IN, txBody: body(para(few)) }),
+    ).join('');
+    const crowded = emitSlides(parseDeck(buildDeck({ slides: [{ shapes: many }] }))).slides[0]!;
+    expect(crowded.classification.class).toBe('picture');
+    expect(crowded.classification.reasons.join(' ')).toMatch(/KB of text formatting/);
+    expect(crowded.overBudget).toBeUndefined();
   });
 
   it('caps a slide at 1,000 objects', () => {

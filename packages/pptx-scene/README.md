@@ -327,8 +327,11 @@ Done (design/27 §3.1, §3.2, §4 "Text bodies", §6, §11 "Mapping"):
   compare like with like (different script classes, or two different primary subtags when both boxes
   carry one).
 - **Slide budget**: once a slide's rich text objects pass 64 KB of JSON (design/27 §3.4), its further text
-  is written without runs and paragraph styles and the slide is classed picture (noted), so layouts that
-  repeat thousands of formatted runs on every slide never build megabytes the hub would discard.
+  is written without runs and paragraph styles and the slide is classed picture (noted,
+  `SLIDE_BUDGET_NOTE`), so layouts that repeat thousands of formatted runs on every slide never build
+  megabytes the hub would discard. When the budget alone made the slide picture class, `overBudget` says
+  so: the slide's JSON is over 64 KB too, and the hub counts and logs it as its own slide budget (one
+  compact picture slide, one warning, the note dropped).
 - The pure domain modules `bullets.ts`, `defaults.ts` and `readable.ts` are the only values imported from
   `@ordo/domain` (`purity.test.ts` checks that they import nothing else at run time); `@ordo/domain` is a
   dependency now.

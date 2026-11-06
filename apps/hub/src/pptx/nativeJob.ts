@@ -17,7 +17,9 @@
  *    parsed on the event loop, and LibreOffice never sees a deck as uploaded (its render copy needs the pool
  *    too). Every zip read refuses overlapping entries (`deckParts.ts`).
  * 3. Classification and the §3.4 size budgets (`@ordo/domain` `planImportSizes`): a slide over 64 KB, and
- *    every slide once the presentation passes 3 MiB, becomes compact picture class, logged and counted.
+ *    every slide once the presentation passes 3 MiB, becomes compact picture class, logged and counted. A
+ *    slide the converter classed picture for its 64 KB budget (`EmittedSlide.overBudget`: its text
+ *    formatting alone passed it) is that same 'slide' case: one warning, counted once.
  * 4. Pictures prepared and stored (`pictures.ts`, item C) for the slides that keep their objects, recorded
  *    as resume pairs: a re-queued job never prepares a stored picture again.
  * 5. Placeholders remapped (`remapMediaIds`; an image whose picture could not be stored is dropped), notes,
@@ -62,7 +64,7 @@ import {
   type SlideClass,
   type SlideRef,
 } from '@ordo/pptx-scene';
-import { digestOf } from '@ordo/pptx-scene/emit.ts';
+import { digestOf, SLIDE_BUDGET_NOTE } from '@ordo/pptx-scene/emit.ts';
 import { relsPartOf } from '@ordo/pptx-scene/opc.ts';
 import { errorMessage } from '../errors.ts';
 import type { JobCtx, JobHandler } from '../jobs.ts';
@@ -151,6 +153,11 @@ type Draft = {
   artText?: string;
   /** Made picture class by the size budgets (§3.4). */
   compact?: boolean;
+  /**
+   * Classed picture by the converter's slide budget (`EmittedSlide.overBudget`): step 3 counts and logs it as
+   * a slide over 64 KB, as it does a slide whose JSON it measures over 64 KB.
+   */
+  overBudget?: boolean;
   /**
    * Metafile pictures version 1 leaves out (`EmittedSlide.metafiles`, item D): LibreOffice converts each part
    * and the follow-up puts the object back just under `before`.
@@ -451,14 +458,18 @@ class NativeImport {
     const drafts = listed.map((ref) => {
       const c = converted.get(ref.index);
       const label = `slide ${ref.index + 1}`;
+      // The converter's budget note is about text a picture slide does not keep: step 3 logs the budget.
+      const own = c ? c.s.notes.filter((n) => n !== SLIDE_BUDGET_NOTE) : [];
+      const overBudget = c?.s.overBudget === true;
       const d: Draft = c
         ? {
             ref,
             slide: c.s.slide,
             media: c.media,
             cls: c.s.classification.class,
-            notes: [...c.s.notes],
+            notes: own,
             ...(c.s.art ? { art: c.s.art, artText: c.s.art.text } : {}),
+            ...(overBudget ? { overBudget } : {}),
           }
         : {
             ref,
@@ -467,8 +478,8 @@ class NativeImport {
             cls: 'picture',
             notes: ['not converted: a LibreOffice picture is shown instead'],
           };
-      for (const n of c?.s.notes ?? []) this.log.add('info', `${label}: ${n}`);
-      if (c?.s.classification.class === 'picture')
+      for (const n of own) this.log.add('info', `${label}: ${n}`);
+      if (c?.s.classification.class === 'picture' && !overBudget)
         this.log.add('info', `${label}: picture class (${c.s.classification.reasons.join(', ')})`);
       if (ref.hidden) d.slide.hidden = true;
       let text = notes.get(ref.index);
@@ -516,8 +527,10 @@ class NativeImport {
     );
     let compact = 0;
     drafts.forEach((d, i) => {
-      const why = plan.reasons[i];
-      if (!why || d.cls === 'picture') return;
+      // A slide the converter classed picture for its own 64 KB budget is this budget's 'slide' case; one
+      // already picture class for any other reason is not made compact.
+      const why = d.overBudget ? 'slide' : d.cls === 'picture' ? null : plan.reasons[i];
+      if (!why) return;
       compact++;
       if (why === 'slide')
         this.warn(

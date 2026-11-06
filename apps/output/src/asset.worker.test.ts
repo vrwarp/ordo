@@ -17,32 +17,50 @@ import {
   SRC_BITMAP,
   SRC_SCENE,
   planeSample,
+  preparedKey,
 } from '@ordo/renderer';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 /**
  * The asset worker with fakes (design/27 §7.2, SCENE.md item E): its global scope, OffscreenCanvas,
  * createImageBitmap and the hub's file route are stand-ins, the render and link ports are recorders. A
- * picture records what was drawn on the surface since the last one was taken, so the base and over of a
- * scene can be told apart.
+ * picture records what was drawn on its canvas since the last one was taken, so the base and over of a
+ * scene can be told apart. Every canvas has its own record: the worker prepares each picture a slide draws
+ * on a canvas of its own (`preparePicture`, design/27 §7.1), and a picture prepared that way keeps the tag
+ * of the file it was made from. Drawing a closed bitmap throws, as in Chromium.
  */
 
-type FakeBitmap = { ops: string[]; width: number; height: number; closed: boolean; close(): void };
+type FakeBitmap = {
+  /** What was drawn on the canvas it was taken from. */
+  ops: string[];
+  /** The bitmaps drawn on that canvas, in order. */
+  drawn: FakeBitmap[];
+  /** The file a decode, reduction or prepared picture shows. */
+  tag?: string;
+  width: number;
+  height: number;
+  closed: boolean;
+  close(): void;
+};
 
 const W = 960;
 const H = 540;
-let surfaceOps: string[] = [];
 
-/** A 2D context that logs fillText and drawImage (every glyph is 10 device px wide). */
-function fakeCtx() {
+/** A 2D context that logs fillText and drawImage on `rec` (every glyph is 10 device px wide). */
+function fakeCtx(rec: { ops: string[]; drawn: FakeBitmap[] }) {
   const state: Record<string | symbol, unknown> = { font: '10px x', letterSpacing: '0px', globalAlpha: 1 };
   return new Proxy(state, {
     get(t, k) {
       if (k === 'measureText') return (s: string) => ({ width: s.length * 10 });
       if (k in t) return t[k];
       return (...args: unknown[]) => {
-        if (k === 'fillText') surfaceOps.push(`text:${args[0]}`);
-        else if (k === 'drawImage') surfaceOps.push(`image:${(args[0] as { tag?: string }).tag}`);
+        if (k === 'fillText') rec.ops.push(`text:${args[0]}`);
+        else if (k === 'drawImage') {
+          const img = args[0] as FakeBitmap;
+          if (img.closed) throw new Error('The image source is detached');
+          rec.ops.push(`image:${img.tag}`);
+          rec.drawn.push(img);
+        }
       };
     },
     set(t, k, v) {
@@ -54,7 +72,8 @@ function fakeCtx() {
 }
 
 class FakeOffscreenCanvas {
-  private ctx = fakeCtx();
+  private readonly rec = { ops: [] as string[], drawn: [] as FakeBitmap[] };
+  private ctx = fakeCtx(this.rec);
   constructor(
     public width: number,
     public height: number,
@@ -63,8 +82,13 @@ class FakeOffscreenCanvas {
     return this.ctx;
   }
   transferToImageBitmap(): FakeBitmap {
+    const ops = this.rec.ops.splice(0);
+    const drawn = this.rec.drawn.splice(0);
     const b: FakeBitmap = {
-      ops: surfaceOps,
+      ops,
+      drawn,
+      // A picture prepared from one file shows that file.
+      tag: drawn.length === 1 ? drawn[0]!.tag : undefined,
       width: this.width,
       height: this.height,
       closed: false,
@@ -72,7 +96,6 @@ class FakeOffscreenCanvas {
         b.closed = true;
       },
     };
-    surfaceOps = [];
     return b;
   }
 }
@@ -111,12 +134,16 @@ beforeAll(async () => {
     'createImageBitmap',
     async (b: { hash?: string; tag?: string }, o?: { resizeWidth: number; resizeHeight: number }) => {
       const tag = b.hash ?? b.tag;
-      return {
+      const bmp = {
         tag,
         width: o?.resizeWidth ?? (tag === 'poster.jpg' ? 400 : 1920),
         height: o?.resizeHeight ?? (tag === 'poster.jpg' ? 300 : 1080),
-        close: () => undefined,
+        closed: false,
+        close: () => {
+          bmp.closed = true;
+        },
       };
+      return bmp;
     },
   );
   await import('./asset.worker.ts');
@@ -258,5 +285,50 @@ describe('asset worker: slide jobs whose video plays in its box', () => {
       'text:Title',
       'text:Footer',
     ]);
+  });
+
+  it('draws in base and over the very prepared pictures the slide drawn as one bitmap draws', async () => {
+    // A badge above the video that overlaps it goes to over with the title; the poster's size fits the plane.
+    const badge = {
+      id: 'badge',
+      type: 'image',
+      box: box(1100, 650, 200, 200),
+      mediaId: 'badge',
+      fit: 'cover',
+      opacity: 1,
+      radius: 0,
+    } as SlideObject;
+    const images = { vposter: 'poster.jpg', page: 'page.png', badge: 'badge.png' };
+    for (const stopped of [true, false]) {
+      const play = stopped
+        ? clip
+        : ({ ...clip, play: { mediaId: 'clip', showWhenStopped: false } } as SlideObject);
+      const s: Slide = { ...slide, objects: [play, slide.objects[1]!, badge, slide.objects[2]!] };
+      const flat = (await run(slideJob({ slide: s, images, video: undefined }))).msg!
+        .bitmap as unknown as FakeBitmap;
+      // As one bitmap every picture is a 1:1 copy of the one prepared for its box at this output's size.
+      expect(flat.drawn.map((b) => [b.tag, b.width, b.height])).toEqual([
+        ['page.png', 960, 540],
+        ['poster.jpg', 400, 225],
+        ['badge.png', 100, 100],
+      ]);
+      expect(flat.drawn.every((b) => preparedKey(b as unknown as CanvasImageSource))).toBe(true);
+      const { msg } = await run(slideJob({ slide: s, images }));
+      expect(msg?.kind).toBe(SRC_SCENE);
+      const base = msg!.bitmap as unknown as FakeBitmap;
+      const over = msg!.over as unknown as FakeBitmap;
+      expect(base.ops).toEqual([
+        ...(stopped ? ['image:page.png', 'image:poster.jpg'] : ['image:page.png']),
+        'text:Footer',
+      ]);
+      expect(over.ops).toEqual(['text:Title', 'image:badge.png']);
+      // The same bitmaps (the prepared ones, from the cache), less the poster when it is hidden while stopped.
+      const scene = [...base.drawn, ...over.drawn];
+      const expected = stopped ? flat.drawn : flat.drawn.filter((b) => b.tag !== 'poster.jpg');
+      expect(scene).toHaveLength(expected.length);
+      for (const [i, b] of scene.entries()) expect(b).toBe(expected[i]);
+      // The clip's size is unknown: the plane is fitted with the 4:3 poster's own size, pillarboxed.
+      expect(msg!.plane![PLANE_UV]).toBeCloseTo(-1 / 6, 5);
+    }
   });
 });

@@ -11,8 +11,9 @@ import {
   splitScene,
 } from './scene.ts';
 import { clampSlide } from './clamp.ts';
+import { type PictureTarget, preparePicture } from './picture.ts';
 import { rasterScene, sceneSlides } from './scene-raster.ts';
-import type { ImageLookup } from './text2d.ts';
+import { type ImageLookup, slidePictures } from './text2d.ts';
 
 /**
  * Browser side of scene-raster.browser.test.ts (design/27 §7.2, SCENE.md item E): draws scene slides with
@@ -23,6 +24,10 @@ import type { ImageLookup } from './text2d.ts';
  * - playing: base, then the clip through the plane (`planeSample`, the compositors' reference), then over,
  *   must be the slide as one bitmap with the clip's picture in place of the poster. Pixels on the plane's
  *   anti-aliased edge are not compared (the compositor golden covers them).
+ * - prepared: drawn with the asset worker's lookup (only the targets `slidePictures` lists, each prepared
+ *   by `preparePicture`, design/27 §7.1), the scene asks for nothing else, its plane is the one fitted
+ *   from the sources (the poster's size from its prepared bitmap) and base, then over, is the slide drawn
+ *   as one bitmap with the same prepared pictures.
  * Controls show the checks can fail: the playing case recomposed without over (where an object is over
  * the video), and with a plane fitted without the poster's size (a clip that is not stretched).
  */
@@ -170,13 +175,38 @@ function lookup(clipPic: Pic): ImageLookup {
   return (id) => (id === 'poster' ? clipPic.canvas : id === 'page' ? PAGE.canvas : undefined);
 }
 
-/** The slide as one bitmap over black, with `pic` as the poster's picture. */
-function flat(slide: Slide, pic: Pic): ImageData {
+/**
+ * The asset worker's lookup for a slide (apps/output pictures.ts): each target `slidePictures` lists
+ * prepared from its source, the source itself only for a use without a target, nothing else. Records each
+ * request as 'mediaId target-key' ('mediaId source' without a target).
+ */
+function preparedLookup(slide: Slide, posterPic: Pic) {
+  const sources = lookup(posterPic);
+  const ready = new Map<string, CanvasImageSource>();
+  for (const u of slidePictures(slide, { scale: SCALE, look: LOOK_MAIN })) {
+    const src = sources(u.mediaId);
+    if (src)
+      ready.set(`${u.mediaId} ${u.target?.key ?? 'source'}`, u.target ? preparePicture(src, u.target)! : src);
+  }
+  const asked: string[] = [];
+  const get: ImageLookup = (id: string, target?: PictureTarget) => {
+    const key = `${id} ${target?.key ?? 'source'}`;
+    asked.push(key);
+    return ready.get(key);
+  };
+  const close = () => {
+    for (const b of ready.values()) if (b instanceof ImageBitmap) b.close();
+  };
+  return { lookup: get, asked, listed: new Set(ready.keys()), close };
+}
+
+/** The slide as one bitmap over black, with `pic` as the poster's picture (or the pictures of `images`). */
+function flat(slide: Slide, pic: Pic, images: ImageLookup = lookup(pic)): ImageData {
   const c = new OffscreenCanvas(W, H);
   const x = c.getContext('2d', { willReadFrequently: true })!;
   x.fillStyle = '#000';
   x.fillRect(0, 0, W, H);
-  rasterSlide(x, slide, LOOK_MAIN, SCALE, lookup(pic));
+  rasterSlide(x, slide, LOOK_MAIN, SCALE, images);
   return x.getImageData(0, 0, W, H);
 }
 
@@ -330,6 +360,34 @@ function run(c: Case): CaseResult {
     base.close();
     over?.close();
   }
+
+  // Prepared: the asset worker's pictures. The same scene, drawn from the prepared bitmaps.
+  const pre = preparedLookup(c.slide, POSTER);
+  const ps = rasterScene(ctx, take, c.slide, LOOK_MAIN, SCALE, pre.lookup, 'vid');
+  if (!ps) checks.push({ what: 'prepared: is a scene', ok: false, detail: 'no scene' });
+  else {
+    const unlisted = [...new Set(pre.asked.filter((k) => !pre.listed.has(k)))];
+    checks.push({
+      what: 'prepared: the scene asks only for the pictures slidePictures lists',
+      ok: unlisted.length === 0,
+      detail: unlisted.length ? `also asked for ${unlisted.join(', ')}` : `${pre.asked.length} request(s)`,
+    });
+    const moved = [...ps.plane].findIndex((v, i) => Math.abs(v - scene.plane[i]!) > 1e-6);
+    checks.push({
+      what: 'prepared: the plane is the one fitted from the sources',
+      ok: moved < 0,
+      detail: moved < 0 ? 'same plane' : `float ${moved}: ${ps.plane[moved]} against ${scene.plane[moved]}`,
+    });
+    checks.push(
+      within(
+        'prepared: base + over is the slide with the same prepared pictures',
+        diff(compose(ps.base, ps.over).img, flat(still, POSTER, pre.lookup)),
+      ),
+    );
+    ps.base.close();
+    ps.over?.close();
+  }
+  pre.close();
   scene.base.close();
   scene.over?.close();
   return { name: c.name, checks };

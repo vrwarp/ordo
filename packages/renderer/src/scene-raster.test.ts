@@ -8,10 +8,12 @@ import {
   type TextObject,
   type TextStyle,
 } from '@ordo/domain';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { type PictureTarget, preparePicture } from './picture.ts';
+import { rasterSlide } from './raster.ts';
 import { PLANE_FLAGS, PLANE_FLOATS, PLANE_HAS_OVER, PLANE_OPACITY, PLANE_UV, planeSample } from './scene.ts';
 import { rasterScene, sceneSlides, textBounds } from './scene-raster.ts';
-import type { Ctx2D } from './text2d.ts';
+import { type Ctx2D, type ImageLookup, slidePictures } from './text2d.ts';
 
 /**
  * A 2D context that records what is drawn: every glyph is 10 device px wide at any font (enough for the
@@ -298,5 +300,101 @@ describe('rasterScene', () => {
     expect(rasterScene(ctx, take, slide(objects), LOOK_LOWER_THIRD, SCALE, images, 'vid')).toBeUndefined();
     expect(rasterScene(ctx, take, slide(objects), LOOK_MAIN, SCALE, images, 'gone')).toBeUndefined();
     expect(ctx.ops).toEqual([]);
+  });
+});
+
+describe('rasterScene with prepared pictures (the asset worker, design/27 §7.1)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** preparePicture on a stand-in canvas: the bitmap is tagged with what was drawn on it, and its size. */
+  function stubPrepare(): void {
+    class FakeOffscreen {
+      private readonly ctx = fakeCtx();
+      constructor(
+        public width: number,
+        public height: number,
+      ) {}
+      getContext() {
+        return this.ctx;
+      }
+      transferToImageBitmap() {
+        const drawn = this.ctx.ops.filter((o) => o.startsWith('image:')).map((o) => o.slice(6));
+        return {
+          width: this.width,
+          height: this.height,
+          tag: `prepared ${drawn.join('+')} ${this.width}x${this.height}`,
+          close() {},
+        };
+      }
+    }
+    vi.stubGlobal('OffscreenCanvas', FakeOffscreen);
+  }
+
+  /**
+   * What the asset worker's preload hands the draw (apps/output pictures.ts): each target `slidePictures`
+   * lists prepared from its source, the source itself only for a use without a target, and nothing for any
+   * other request. Records every request as 'mediaId target-key' ('mediaId source' without a target).
+   */
+  function preloaded(s: Slide, look: Look) {
+    const uses = slidePictures(s, { scale: SCALE, look });
+    const ready = new Map<string, CanvasImageSource>();
+    for (const u of uses) {
+      const src = pictures[u.mediaId] as unknown as CanvasImageSource;
+      const key = `${u.mediaId} ${u.target?.key ?? 'source'}`;
+      ready.set(key, u.target ? preparePicture(src, u.target)! : src);
+    }
+    const asked: string[] = [];
+    const lookup: ImageLookup = (id: string, target?: PictureTarget) => {
+      const key = `${id} ${target?.key ?? 'source'}`;
+      asked.push(key);
+      return ready.get(key);
+    };
+    return { lookup, asked, listed: new Set(ready.keys()) };
+  }
+
+  const images_ = (ops: string[]) => ops.filter((o) => o.startsWith('image:')).sort();
+  const imported = { fileId: 'f', page: 0, imageMediaId: 'page' };
+  const picture = (id: string, b: ReturnType<typeof box>, mediaId = 'page') =>
+    ({ id, type: 'image', box: b, mediaId, fit: 'cover', opacity: 1, radius: 0 }) as SlideObject;
+  const objects = [
+    shape('bg', box(0, 0, 1920, 1080)),
+    video(),
+    text('title', 'Title', box(500, 250, 600, 120)),
+    // Above the video: one picture overlaps it (over), one stays clear of it (base).
+    picture('badge', box(1100, 650, 200, 200)),
+    picture('logo', box(1600, 50, 200, 100), 'poster'),
+    text('footer', 'Footer', box(100, 900, 400, 100)),
+  ];
+
+  it("draws in base and over the same prepared pictures a plain raster of the slide draws, the poster's size fitting the plane", () => {
+    stubPrepare();
+    for (const stopped of [true, false]) {
+      const o = [...objects];
+      if (!stopped) o[1] = video({ showWhenStopped: false });
+      const sl = slide(o, { imported });
+      const plain = fakeCtx();
+      const flat = preloaded(sl, LOOK_MAIN);
+      rasterSlide(plain, sl, LOOK_MAIN, SCALE, flat.lookup);
+      const drawnFlat = images_(plain.ops);
+      // Every picture of the slide is drawn prepared (1:1), none from its source.
+      expect(drawnFlat).toHaveLength(4);
+      expect(drawnFlat.every((x) => x.startsWith('image:prepared '))).toBe(true);
+
+      const ctx = fakeCtx();
+      const take = () => ctx.ops.splice(0);
+      const pre = preloaded(sl, LOOK_MAIN);
+      const s = rasterScene(ctx, take, sl, LOOK_MAIN, SCALE, pre.lookup, 'vid')!;
+      // The badge over the video is in over, prepared at its 100 x 100 device pixels.
+      expect(images_(s.over!)).toEqual(['image:prepared page 100x100']);
+      // Base and over together: the plain raster's pictures, less the poster when it is hidden while stopped.
+      const expected = [...drawnFlat];
+      if (!stopped) expected.splice(expected.indexOf('image:prepared poster 400x225'), 1);
+      expect(images_([...s.base, ...s.over!])).toEqual(expected);
+      // The scene asked only for what the preload prepared (what slidePictures lists).
+      expect(pre.asked.filter((k) => !pre.listed.has(k))).toEqual([]);
+      // The clip's size is unknown: the plane is fitted with the poster's own 4:3 size, not the 16:9 box's.
+      expect(s.plane[PLANE_UV]).toBeCloseTo(-1 / 6, 5);
+      expect(s.plane[PLANE_UV + 2]).toBeCloseTo(7 / 6, 5);
+    }
   });
 });

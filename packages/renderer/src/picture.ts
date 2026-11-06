@@ -104,12 +104,32 @@ export function pictureTarget(o: PictureDraw, scale: number): PictureTarget | un
   return crop ? { ...t, crop } : t;
 }
 
-/** Bitmaps `preparePicture` made, with the key of the target each was made for. */
-const prepared = new WeakMap<object, string>();
+/** Bitmaps `preparePicture` made: the key of the target each was made for, and its source's size. */
+const prepared = new WeakMap<object, { key: string; w: number; h: number }>();
 
 /** The target key a bitmap was prepared for (`preparePicture`), else undefined: a source. */
 export function preparedKey(img: CanvasImageSource): string | undefined {
-  return typeof img === 'object' && img !== null ? prepared.get(img) : undefined;
+  return typeof img === 'object' && img !== null ? prepared.get(img)?.key : undefined;
+}
+
+/** A picture's own pixel size (an image's, a bitmap's or a video's), 0 when it has none. */
+function ownSize(img: CanvasImageSource): [number, number] {
+  return [
+    (img as { width?: number }).width || (img as HTMLVideoElement).videoWidth || 0,
+    (img as { height?: number }).height || (img as HTMLVideoElement).videoHeight || 0,
+  ];
+}
+
+/**
+ * The size a picture is fitted with, as `paintPicture` fits it from its source: for a bitmap
+ * `preparePicture` made, which holds only what one box shows at that box's device size, the size of the
+ * source it was made from; for any other picture its own. What the video plane fits a clip of unknown size
+ * with (the poster's size, design/27 §7.2), whichever of the two the image lookup hands back. Raw numbers:
+ * 0 (or whatever the image says) when it has none; callers clamp.
+ */
+export function sourceSize(img: CanvasImageSource): [number, number] {
+  const p = typeof img === 'object' && img !== null ? prepared.get(img) : undefined;
+  return p ? [p.w, p.h] : ownSize(img);
 }
 
 /**
@@ -136,7 +156,8 @@ export function preparePicture(src: CanvasImageSource, t: PictureTarget): ImageB
   ctx.clip();
   paintPicture(ctx, src, t.bx, t.by, t.bw, t.bh, t.fit, t.crop);
   const bmp = canvas.transferToImageBitmap();
-  prepared.set(bmp, t.key);
+  const [w, h] = ownSize(src);
+  prepared.set(bmp, { key: t.key, w, h });
   return bmp;
 }
 

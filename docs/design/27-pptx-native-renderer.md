@@ -443,7 +443,7 @@ Whole presentations travel in goLive (to every client, into the journal, snapsho
 
 | Unit | Budget | Enforced by |
 |---|---|---|
-| Slide JSON | typical ≤ 8 KB (measured 3.4 KB); hard 64 KB, else picture class | `classify.ts`; `emit.ts` stops writing text formatting past it and classes the slide picture; logged |
+| Slide JSON | typical ≤ 8 KB (measured 3.4 KB); hard 64 KB, else picture class | `classify.ts`; `emit.ts` stops writing text formatting past it and classes the slide picture (`EmittedSlide.overBudget`); the hub's import treats that slide as its own slide budget does, so a slide over 64 KB either way is one compact picture slide, logged once and counted once |
 | Presentation JSON | ≤ 4 MiB at import. Once the running total passes 3 MiB, the remaining slides use the compact picture class; the import card says so. The editor warns above 4 MiB but saves (PUT allows 32 MiB). | importer, editor |
 | Preview | only the previewed slide's section is sent, with the presentation-level fields (`previewSlice`), so it stays far below 16 MiB | `PreviewControl.tsx` |
 | Resolved playlist | `resolvePlaylist` adds a `degraded` warning above 12 MiB ("too large for an operator takeover"). The operator checks the size before `live.adopt` and refuses locally above 15 MiB instead of tripping the cap. | `goLive.ts`, operator engine |
