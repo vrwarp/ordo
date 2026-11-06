@@ -203,6 +203,23 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
   drops the old picture's crop, which does not fit the new one (design/27 §15 M3).
 - Saves via `PUT /presentations/:id` with `rev`; 409 shows the reload dialog.
 - Disabled with a banner when the presentation is referenced by the live playlist.
+- Groups and locked objects (design/27 §11 item 5 and "Locked objects"; pure ops in `views/editor/ops/group.ts`,
+  the panel's parts in `GroupPanel.tsx`). The selection is a set of objects with a primary one, which the
+  Object panel edits. A click on an object of a group (`origin.group`: a flattened PowerPoint group, or a
+  shape with its text) selects the whole group, a click on an object already selected keeps the selection
+  (so the press can drag it), Alt-click or a long press under a finger (500 ms) selects one member, and
+  Shift-click adds or takes out an object's group (Shift+Alt one member). The Transformer spans every
+  selected object: a drag of any of them moves them all (the group box snaps as one), its handles scale every
+  member's box about the group box (font sizes, insets and stroke widths do not scale) and turn them about
+  its centre. Delete, Ctrl+D (the copy is a group of its own, 20 px off, selected), the arrow keys and the
+  touch nudge bar, the z-order buttons (the selection moves as one contiguous block) and Ungroup (toolbar;
+  the touch Arrange menu while a group is selected) act on the selection, one undo step each. With several
+  objects selected the panel says so, offers 'Select one' (Alt-click's equivalent) and Ungroup, and its box
+  editor edits the group box (X, Y, W, H and 'Turn by'); a member selected alone offers 'Select the group'
+  and 'Take out of the group'. A locked object (PowerPoint art, SmartArt, table grids) has a lock badge on
+  the canvas and 'From PowerPoint (not editable)' in the panel: it can be moved, resized (art keeps its
+  aspect: corner handles only, W and H linked), deleted and reordered; it does not turn, and its text, style
+  and geometry fields are disabled.
 - Media playing in place (design/27 §8, §11 item 14; `views/editor/MediaPanels.tsx`, pure ops in
   `mediaOps.ts`, one undo step each). '+ Video' (touch: Add → Video…) adds an ImageObject whose `mediaId`
   is the video, so every drawer shows its poster, with `play` {start automatically, no loop, hold the last

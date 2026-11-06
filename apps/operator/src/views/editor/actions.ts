@@ -1,5 +1,5 @@
 import type { Box, ImageCrop, ImageObject, Presentation, SlideObject, TextObject } from '@ordo/domain';
-import { change, selectObjects, selectSlide, useEditor } from './editorStore.ts';
+import { change, currentObjects, selectObjects, selectSlide, useEditor } from './editorStore.ts';
 import {
   applyStyleToSimilar,
   type BackgroundScope,
@@ -9,6 +9,7 @@ import {
   type FindOptions,
   findReplace,
   formatRange,
+  groupBox,
   hideSlide,
   moveObjects,
   newSlideLike,
@@ -119,9 +120,23 @@ export function moveSelection(dx: number, dy: number): void {
   onSelection((p, slideId, sel) => moveObjects(p, slideId, sel, dx, dy), `nudge:${ids.join(',')}`);
 }
 
+/** A drag of the selection on the canvas: one undo step per drag (nudges coalesce, drags do not). */
+export function dragSelection(dx: number, dy: number): void {
+  onSelection((p, slideId, ids) => moveObjects(p, slideId, ids, dx, dy));
+}
+
 /** The Transformer over the selection: its box went from `from` to `to`. */
 export function transformSelection(from: Box, to: Box): void {
   onSelection((p, slideId, ids) => transformGroup(p, slideId, ids, from, to));
+}
+
+/**
+ * The Object panel's box editor on a multi-object selection: the group box (`groupBox`) set to `to`, every
+ * member scaled and moved with it (a `to.rotation` turns them about its centre).
+ */
+export function setSelectionBox(to: Box): void {
+  const from = groupBox(currentObjects());
+  if (from) transformSelection(from, to);
 }
 
 /** Delete the selection. */
@@ -131,15 +146,16 @@ export function deleteSelection(): void {
   if (s.draft) selectObjects(s.objectIds);
 }
 
-/** Duplicate the selection; the copies become the selection. */
+/** Duplicate the selection; the copies become the selection (the primary's copy the primary). */
 export function duplicateSelection(): void {
+  const { objectIds, objectId } = useEditor.getState();
   let copies: string[] = [];
   onSelection((p, slideId, ids) => {
     const r = duplicateObjects(p, slideId, ids);
     copies = r.ids;
     return r.p;
   });
-  if (copies.length) selectObjects(copies);
+  if (copies.length) selectObjects(copies, objectId ? copies[objectIds.indexOf(objectId)] : undefined);
 }
 
 /** Z-order the selection as one block. */

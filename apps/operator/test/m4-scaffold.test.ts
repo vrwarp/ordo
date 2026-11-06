@@ -121,13 +121,13 @@ describe('the M4 ops (stubs keep their input)', () => {
     expect(selectionParas(t, 0, 0)).toEqual({ para: {}, mixed: [] });
   });
 
-  it('group ops (item B)', () => {
+  it('group ops (item B, built: apps/operator/test/groupOps.test.ts) keep their input when nothing changes', () => {
     expect(groupMembers(p.sections[0]!.slides[0]!, 't1')).toEqual(['t1']);
-    expect(moveObjects(p, 's1', ['t1', 'i1'], 10, 0)).toBe(p);
-    expect(transformGroup(p, 's1', ['t1', 'i1'], box, { ...box, w: 900 })).toBe(p);
-    expect(deleteObjects(p, 's1', ['t1'])).toBe(p);
-    expect(duplicateObjects(p, 's1', ['t1'])).toEqual({ p, ids: [] });
-    expect(reorderObjects(p, 's1', ['t1'], 'front')).toBe(p);
+    expect(moveObjects(p, 's1', ['t1', 'i1'], 0, 0)).toBe(p);
+    expect(transformGroup(p, 's1', ['t1', 'i1'], box, { ...box })).toBe(p);
+    expect(deleteObjects(p, 's1', ['gone'])).toBe(p);
+    expect(duplicateObjects(p, 's1', ['gone'])).toEqual({ p, ids: [] });
+    expect(reorderObjects(p, 's1', ['i1'], 'front')).toBe(p);
     expect(ungroup(p, 's1', ['t1'])).toBe(p);
     expect(isLocked({ locked: true })).toBe(true);
     expect(isLocked({})).toBe(false);
@@ -235,12 +235,10 @@ describe('the actions (store wiring)', () => {
     expect(actions.applyToSimilar('t1')).toBe(0);
     actions.addSlideLike('s1');
     selectObjects(['t1', 'i1']);
-    actions.moveSelection(10, 0);
-    actions.transformSelection(box, { ...box, x: 200 });
+    actions.moveSelection(0, 0);
+    actions.transformSelection(box, { ...box });
     actions.reorderSelection('back');
     actions.ungroupSelection();
-    actions.duplicateSelection();
-    actions.deleteSelection();
     const ed = useEditor.getState();
     expect(ed.draft).toBe(before);
     expect(ed.dirty).toBe(false);

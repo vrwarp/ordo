@@ -1431,6 +1431,15 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   `PropsRule.notes`; `ApiFailure.details`; the re-import route and job stubs; `e2e/editorhelpers.ts`. The
   converter now writes `ObjectOrigin` (shape id, placeholder, role, group: a flattened group or a shape with
   its text), which M3 had left out and groups, 'Apply to similar' and the re-import need.
+- **As built, item B (groups and locked objects):** `ops/group.ts` (the group ops, `clickSelection`, the group
+  box and the member transform: centres by the group's affine, sizes by its scale along each member's axes,
+  rotation turned with the group; a locked member keeps its rotation and locked art its aspect) through
+  `actions.ts`, one undo step each; the canvas's Transformer spans every selected node, a drag of any member
+  moves the selection (the group box snaps as one), a long press under a finger selects one member; lock
+  badges; `GroupPanel.tsx` (the 'From PowerPoint (not editable)' note, the group note with 'Select one',
+  'Select the group' and 'Ungroup', the group box editor with 'Turn by'); Delete, Ctrl+D, arrows, z-order
+  and Ungroup on the selection. Tests: `apps/operator/test/groupOps.test.ts` (properties and 200-step undo),
+  `e2e/editor-group.spec.ts`, `e2e/ipad/group.spec.ts`.
 
 **Files.** `apps/operator/src/views/editor/ops.ts`, `ObjectPanel.tsx`, `SlidePanel.tsx`, `SlidesPanel.tsx`, `PresentationPanel.tsx`, `SlideCanvas.tsx`, `EditorView.tsx`, `editorStore.ts`; `apps/operator/src/components/TextStyleEditor.tsx`, new `FormatBar.tsx`, `ParagraphStrip.tsx`, `CropControl.tsx`; `apps/hub/src/pptx/reimport.ts`, `routes.ts`; `apps/stage/src/model.ts`, `view.ts`; `packages/domain/src/schemas.ts` (`PropsRule.notes`); `packages/client/src/api.ts`.
 

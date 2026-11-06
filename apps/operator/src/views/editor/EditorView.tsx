@@ -8,6 +8,13 @@ import { useProfile } from '../../lib/capabilities.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useSession } from '../../state/session.ts';
 import { toast } from '../../state/toasts.ts';
+import {
+  deleteSelection,
+  duplicateSelection,
+  moveSelection,
+  reorderSelection,
+  ungroupSelection,
+} from './actions.ts';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { LookPreviews } from './LookPreviews.tsx';
 import { addVideo } from './mediaOps.ts';
@@ -26,19 +33,8 @@ import {
 // `window.__ordo.editor`, read by the end-to-end specs (e2e/editorhelpers.ts).
 import './inspect.ts';
 import { ObjectPanel } from './ObjectPanel.tsx';
-import {
-  addObject,
-  deleteObject,
-  duplicateObject,
-  getSlide,
-  newImage,
-  newShape,
-  newText,
-  reorderObject,
-  themeOf,
-  updateObject,
-  type ZOrder,
-} from './ops.ts';
+import { addObject, getSlide, newImage, newShape, newText, themeOf, type ZOrder } from './ops.ts';
+import { hasGroup } from './ops/group.ts';
 import { PresentationPanel } from './PresentationPanel.tsx';
 import { PreviewControl } from './PreviewControl.tsx';
 import { RevisionsDialog } from './RevisionsDialog.tsx';
@@ -49,19 +45,9 @@ import { SlidesPanel } from './SlidesPanel.tsx';
 /** Nudge steps (px in slide units) offered by the touch toolbar; the keyboard uses 1 and Shift 10. */
 const STEPS = [1, 10, 50] as const;
 
-/** Move the selected object by (dx, dy); consecutive nudges coalesce into one undo step. */
+/** Move the selection (a group as one) by (dx, dy); consecutive nudges coalesce into one undo step. */
 function nudge(dx: number, dy: number): void {
-  const st = useEditor.getState();
-  const o = currentObject();
-  if (!o || !st.slideId) return;
-  change(
-    (q) =>
-      updateObject(q, st.slideId!, o.id, (x) => ({
-        ...x,
-        box: { ...x.box, x: x.box.x + dx, y: x.box.y + dy },
-      })),
-    `nudge:${o.id}`,
-  );
+  if (currentObject()) moveSelection(dx, dy);
 }
 
 /** Focus the selected text box's text field (Enter, double-tap, or the Edit text button). */
@@ -180,21 +166,15 @@ export function EditorView({ id }: { id: string }) {
       const st = useEditor.getState();
       const o = currentObject();
       if (!o || !st.slideId || readOnly) return;
+      // The selection acts as one block: a group, or what Shift-click gathered (design/27 §11 item 5).
       if (ctrl && e.key.toLowerCase() === 'd') {
         e.preventDefault();
-        let newId: string | undefined;
-        change((q) => {
-          const r = duplicateObject(q, st.slideId!, o.id);
-          newId = r.id;
-          return r.p;
-        });
-        if (newId) selectObject(newId);
+        duplicateSelection();
         return;
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
-        change((q) => deleteObject(q, st.slideId!, o.id));
-        selectObject(undefined);
+        deleteSelection();
         return;
       }
       const step = e.shiftKey ? 10 : 1;
@@ -243,7 +223,9 @@ export function EditorView({ id }: { id: string }) {
     !ed.saving &&
     otherRev >= libP.rev &&
     libP.rev !== dismissedRev;
-  const z = (zz: ZOrder) => obj && slide && change((q) => reorderObject(q, slide.id, obj.id, zz));
+  const z = (zz: ZOrder) => obj && reorderSelection(zz);
+  // 'Ungroup' applies while a selected object belongs to a group (a PowerPoint group, a shape with its text).
+  const grouped = !!slide && hasGroup(slide.objects.filter((o) => ed.objectIds.includes(o.id)));
   const add = (o: Parameters<typeof addObject>[2]) => {
     if (!slide || readOnly) return;
     change((q) => addObject(q, slide.id, o));
@@ -257,19 +239,10 @@ export function EditorView({ id }: { id: string }) {
     focusTextEditor();
   };
   const duplicate = () => {
-    if (!obj || !slide) return;
-    let nid: string | undefined;
-    change((q) => {
-      const r = duplicateObject(q, slide.id, obj.id);
-      nid = r.id;
-      return r.p;
-    });
-    if (nid) selectObject(nid);
+    if (obj && slide) duplicateSelection();
   };
   const remove = () => {
-    if (!obj || !slide) return;
-    change((q) => deleteObject(q, slide.id, obj.id));
-    selectObject(undefined);
+    if (obj && slide) deleteSelection();
   };
   const looksShown = looksOpen ?? touchLandscape;
   // Touch: the keyboard-only actions as buttons, floating by the selected object (SlideCanvas places them).
@@ -356,6 +329,7 @@ export function EditorView({ id }: { id: string }) {
               { label: '⤓ Send to back', name: 'Back', onSelect: () => z('back') },
               { label: '⧉ Duplicate', name: 'Duplicate', onSelect: duplicate },
               { label: '🗑 Delete', name: 'Delete', danger: true, onSelect: remove },
+              ...(grouped ? [{ label: 'Ungroup', onSelect: ungroupSelection }] : []),
             ]}
           />
           <span className="spacer" />
@@ -460,6 +434,9 @@ export function EditorView({ id }: { id: string }) {
           </button>
           <button type="button" className="small" disabled={readOnly || !obj} title="Delete" onClick={remove}>
             🗑<span className="touch-label">Delete</span>
+          </button>
+          <button type="button" className="small" disabled={readOnly || !grouped} onClick={ungroupSelection}>
+            Ungroup
           </button>
           <span className="spacer" />
           <PreviewControl p={p} slideId={slide?.id} />
