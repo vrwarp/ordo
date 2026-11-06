@@ -146,6 +146,24 @@ transparent. `clampObject` keeps and re-bounds it (a crop that leaves nothing vi
 (existing callers and every existing golden unchanged); one new golden case (crop with negative padding).
 Nothing under `apps/` changes.
 
+Done:
+- `@ordo/domain`: `ImageCrop` (schema and type) and `ImageObject.crop: ImageCrop.optional()`; design/11 lists it.
+- `@ordo/renderer`: `clampCrop(c): ImageCrop | undefined` (each share finite in -1..1, a malformed share
+  reads as 0; undefined when absent or cutting nothing; a crop leaving nothing is kept and draws nothing).
+  `clampObject` keeps it on images and adds no key to images without one. `drawImageFit(ctx, img, box,
+  scale, fit, opacity?, radius?, crop?)`: the cropped rect is what `fit` places; only its part on the
+  picture is drawn (9-argument `drawImage`), the rest stays transparent; without a crop the old 5-argument
+  call is made unchanged. `drawObject` passes `o.crop`. Golden case `image-crop`; the 8 older goldens
+  are unchanged (max delta 0).
+- `@ordo/importers` `sanitizePresentation` bounds each share to -1..1 (NaN → 0) and drops a crop that is
+  not an object, so an importer's crop never fails `lib.savePresentation`.
+- Every copy of image objects in `apps/` spreads or `structuredClone`s them, so `crop` is carried through;
+  both `slideImages` and `previewMedia` read only `mediaId`.
+
+Left for M3 (when the hub first writes crops): the operator editor draws images with its own
+`drawImageFit` call (`apps/operator/src/views/editor/SlideCanvas.tsx`) that does not pass `o.crop` yet, and
+'Replace image' in `ObjectPanel.tsx` keeps the old picture's crop.
+
 ### E: harness (`tools/pptx-fidelity`: `native.ts`, `native-page.ts`, `main.ts`, `report.ts`, `package.json`)
 
 Contracts (design/27 §14.1): `--engine native|ppv|both` and `--no-ppv`; `native.ts` reads a deck with
