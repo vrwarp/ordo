@@ -1,5 +1,5 @@
 import type { Cue, ResolvedPlaylist } from './live.ts';
-import type { Arrangement, Presentation, Section } from './schemas.ts';
+import type { Arrangement, Presentation, Section, Slide } from './schemas.ts';
 
 /** The arrangement used by a playlist item: the named one, else the first, else authoring order. */
 export function arrangementFor(p: Presentation, arrangementId?: string): Arrangement {
@@ -53,6 +53,7 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
             transition: item.transition ?? p.transition,
             autoAdvanceMs:
               p.kind === 'loop' ? loopDelay(slide.durationMs, p.loop?.defaultSlideMs) : undefined,
+            ...slideCueMedia(slide, resolved.media),
           });
         });
       });
@@ -97,6 +98,16 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
     }
   });
   return cues;
+}
+
+/**
+ * M5 (A, packages/renderer/SCENE.md): a slide cue's own media (design/27 §8 "Domain"): the playing
+ * object's clip (mediaId, mediaKind 'video', loop, onEnd, audio, mediaObjectId, mediaStart,
+ * mediaShowWhenStopped) and the slide's sound (slideAudio, with untilCue counted over shown slides), only
+ * for media present in `media`. Stub: none yet.
+ */
+function slideCueMedia(_slide: Slide, _media: ResolvedPlaylist['media']): Partial<Cue> {
+  return {};
 }
 
 export function firstText(slide: {

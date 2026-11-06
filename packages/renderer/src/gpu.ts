@@ -1,5 +1,13 @@
 import { type Compositor, type FrameInputs, MAX_VIDEO_SLOTS } from './compositor.ts';
-import { type LayerStack, SRC_BITMAP, SRC_EMPTY, SRC_VIDEO, type Stack, fitRect } from './stacks.ts';
+import {
+  type LayerStack,
+  SRC_BITMAP,
+  SRC_EMPTY,
+  SRC_SCENE,
+  SRC_VIDEO,
+  type Stack,
+  fitRect,
+} from './stacks.ts';
 
 /**
  * WebGPU compositor. Every pipeline, the sampler, uniform buffer, layer textures (two per layer, at
@@ -408,7 +416,8 @@ export class GpuCompositor implements Compositor {
   private hasSource(s: Stack<ImageBitmap>, f: FrameInputs): boolean {
     /* @hot */
     if (s.kind === SRC_EMPTY) return false;
-    if (s.kind === SRC_BITMAP) return s.bitmap !== null;
+    // M5 (B, SCENE.md): a scene draws its base as a bitmap until the scene pipelines land.
+    if (s.kind === SRC_BITMAP || s.kind === SRC_SCENE) return s.bitmap !== null;
     return s.videoSlot >= 0 && s.videoSlot < MAX_VIDEO_SLOTS && f.video.frames[s.videoSlot] != null;
   }
 
@@ -418,7 +427,7 @@ export class GpuCompositor implements Compositor {
     const up = this.uploaded[l]!;
     if (up[idx] === s.version) return;
     up[idx] = s.version;
-    if (s.kind !== SRC_BITMAP || !s.bitmap) return;
+    if ((s.kind !== SRC_BITMAP && s.kind !== SRC_SCENE) || !s.bitmap) return;
     this.upload(l, idx, s.bitmap);
   }
 

@@ -65,6 +65,7 @@ export class RenderEngine {
   readonly video: VideoFrames = {
     frames: Array.from({ length: MAX_VIDEO_SLOTS }, () => null),
     version: new Int32Array(MAX_VIDEO_SLOTS),
+    gen: new Int32Array(MAX_VIDEO_SLOTS).fill(-1),
   };
   readonly clock = new FrameClock(600);
   private compositor: Compositor | null = null;
@@ -333,6 +334,7 @@ export class RenderEngine {
     const ls = this.layers[layer];
     if (!ls) {
       if (c.bitmap) c.bitmap.close();
+      if (c.over) c.over.close();
       return;
     }
     ls.offer(c);
@@ -349,7 +351,8 @@ export class RenderEngine {
     }
   }
 
-  setVideoFrame(slot: number, frame: VideoFrame | null): void {
+  /** The newest frame of a slot, tagged with the slot generation it was loaded under (`vframe`). */
+  setVideoFrame(slot: number, frame: VideoFrame | null, gen = -1): void {
     if (slot < 0 || slot >= MAX_VIDEO_SLOTS) {
       frame?.close();
       return;
@@ -357,6 +360,7 @@ export class RenderEngine {
     const prev = this.video.frames[slot];
     if (prev && prev !== frame) prev.close();
     this.video.frames[slot] = frame;
+    this.video.gen[slot] = frame ? gen : -1;
     this.video.version[slot]!++;
   }
 

@@ -10,6 +10,7 @@ import {
   type FontLoad,
   type FromAsset,
   SRC_BITMAP,
+  SRC_SCENE,
   type ToAsset,
   downscaleFor,
   jobFontFamilies,
@@ -210,6 +211,18 @@ function fontFallbacks(job: AssetJob): string[] | undefined {
   return missing.length ? missing : undefined;
 }
 
+/** What an SRC_SCENE answer carries besides its base bitmap (design/27 §7.2). */
+type SceneParts = { over: ImageBitmap | null; plane: Float32Array; videoSlot: number; videoGen: number };
+
+/**
+ * M5 (E, SCENE.md): a slide job with `video` is answered with SRC_SCENE: the base drawn on the job's
+ * surface and `over` with splitScene, the plane with encodePlane (scene.ts). Stub: undefined, so the slide
+ * stays one bitmap with the video's poster.
+ */
+function sceneParts(_job: Extract<AssetJob, { kind: 'slide' }>): SceneParts | undefined {
+  return undefined;
+}
+
 async function run(job: AssetJob): Promise<void> {
   const t0 = performance.now();
   const scale = width / LOGICAL_WIDTH;
@@ -237,22 +250,25 @@ async function run(job: AssetJob): Promise<void> {
       const c = surface();
       rasterProps(c, job.model, scale, pre.lookup, job.look.clearColor);
     }
+    const scene = job.kind === 'slide' && job.video ? sceneParts(job) : undefined;
     const bitmap = canvas!.transferToImageBitmap();
     const cueIndex = job.kind === 'slide' ? job.cueIndex : job.kind === 'image' ? job.cueIndex : undefined;
     const msg: AssetToRender = {
       t: 'content',
       layer: job.layer,
       key: job.key,
-      kind: SRC_BITMAP,
+      kind: scene ? SRC_SCENE : SRC_BITMAP,
       bitmap,
       cueIndex,
       refresh: job.kind === 'slide' ? job.refresh : undefined,
+      ...scene,
     };
     if (!port) {
       bitmap.close();
+      scene?.over?.close();
       throw new UnavailableError('render port not connected');
     }
-    port.postMessage(msg, [bitmap]);
+    port.postMessage(msg, scene?.over ? [bitmap, scene.over] : [bitmap]);
     post({
       t: 'done',
       layer: job.layer,

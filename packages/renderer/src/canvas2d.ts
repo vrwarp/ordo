@@ -1,5 +1,13 @@
 import type { Compositor, FrameInputs } from './compositor.ts';
-import { type LayerStack, SRC_BITMAP, SRC_EMPTY, SRC_VIDEO, type Stack, fitRect } from './stacks.ts';
+import {
+  type LayerStack,
+  SRC_BITMAP,
+  SRC_EMPTY,
+  SRC_SCENE,
+  SRC_VIDEO,
+  type Stack,
+  fitRect,
+} from './stacks.ts';
 
 /**
  * Canvas 2D fallback compositor, used when WebGPU is unavailable (headless tests, odd machines). It
@@ -87,13 +95,14 @@ export class Canvas2DCompositor implements Compositor {
   private hasSource(s: Stack<ImageBitmap>, f: FrameInputs): boolean {
     /* @hot */
     if (s.kind === SRC_EMPTY) return false;
-    if (s.kind === SRC_BITMAP) return s.bitmap !== null;
+    // M5 (C, SCENE.md): a scene draws its base until its video and over are drawn here.
+    if (s.kind === SRC_BITMAP || s.kind === SRC_SCENE) return s.bitmap !== null;
     return s.videoSlot >= 0 && f.video.frames[s.videoSlot] != null;
   }
 
   private drawSource(ctx: OffscreenCanvasRenderingContext2D, s: Stack<ImageBitmap>, f: FrameInputs): void {
     /* @hot */
-    if (s.kind === SRC_BITMAP) {
+    if (s.kind === SRC_BITMAP || s.kind === SRC_SCENE) {
       if (s.bitmap) ctx.drawImage(s.bitmap, 0, 0, this.width, this.height);
       return;
     }

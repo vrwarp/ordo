@@ -37,6 +37,11 @@ export type SlideDesc = {
   slide: Slide;
   nextSlide?: Slide;
   isSong: boolean;
+  /**
+   * The slide's video plays in place, in the box of ImageObject `objectId` (design/27 §7.2): set when the
+   * media layer's desc is `inSlide` for this slide.
+   */
+  video?: { objectId: string; mediaId: string; hash: string };
 };
 
 export type LowerThirdDesc = { layer: 'lowerThird'; key: string; text: string };
@@ -56,6 +61,12 @@ export type MediaDesc = {
   positionMs: number;
   durationMs?: number;
   audio: { pairId?: string; gainDb?: number; loudnessLufs?: number };
+  /**
+   * The video plays inside the live slide, in ImageObject `objectId` (design/27 §7.2). The media layer's
+   * key is then '' (the slide layer draws it as a scene) and this desc is kept for arming, transport,
+   * audio and `media.ended`.
+   */
+  inSlide?: { objectId: string };
 };
 
 export type AudioDesc = {

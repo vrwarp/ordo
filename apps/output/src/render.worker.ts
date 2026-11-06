@@ -1,7 +1,7 @@
 import { isControl, startHeartbeat } from '@ordo/client';
 import type { AssetToRender, FromRender, ToRender } from '@ordo/renderer/messages.ts';
 import { RenderEngine } from '@ordo/renderer/engine.ts';
-import { SRC_BITMAP, type StackContent } from '@ordo/renderer/stacks.ts';
+import { SRC_BITMAP, SRC_SCENE, type StackContent } from '@ordo/renderer/stacks.ts';
 
 /**
  * Render worker: owns the OffscreenCanvas and the RenderEngine. From the main thread it receives only its
@@ -112,7 +112,20 @@ function attachAsset(port: MessagePort): void {
   port.onmessage = (ev: MessageEvent<AssetToRender>) => {
     const a = ev.data;
     if (a.t !== 'content') return;
-    const c = { key: a.key, kind: SRC_BITMAP, bitmap: a.bitmap, cueIndex: a.cueIndex, refresh: a.refresh };
+    const c: StackContent<ImageBitmap> =
+      a.kind === SRC_SCENE
+        ? {
+            key: a.key,
+            kind: SRC_SCENE,
+            bitmap: a.bitmap,
+            cueIndex: a.cueIndex,
+            refresh: a.refresh,
+            over: a.over ?? null,
+            plane: a.plane,
+            videoSlot: a.videoSlot,
+            videoGen: a.videoGen,
+          }
+        : { key: a.key, kind: SRC_BITMAP, bitmap: a.bitmap, cueIndex: a.cueIndex, refresh: a.refresh };
     if (engine) engine.offer(a.layer, c);
     else earlyOffers.push({ layer: a.layer, c });
   };
@@ -161,7 +174,7 @@ function handle(m: ToRender): void {
       e.flip(m.layer, m.key, m.at, m.fadeMs, m.cueIndex);
       return;
     case 'vframe':
-      e.setVideoFrame(m.slot, m.frame);
+      e.setVideoFrame(m.slot, m.frame, m.gen);
       return;
     case 'vclear':
       e.setVideoFrame(m.slot, null);

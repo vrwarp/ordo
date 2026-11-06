@@ -1,9 +1,51 @@
 import type { ManifestFile } from './live.ts';
-import type { FileRef, Font, Look, Media, Playlist, Presentation } from './schemas.ts';
+import type {
+  FileRef,
+  Font,
+  ImageObject,
+  Look,
+  Media,
+  Play,
+  Playlist,
+  Presentation,
+  Slide,
+} from './schemas.ts';
 
 /** The file an output plays or draws for a media item. */
 export function playableFile(m: Media): FileRef | undefined {
   return m.delivery ?? (m.kind === 'image' ? m.original : undefined);
+}
+
+/**
+ * The file a media item shows as a still: an image itself, a video's poster. An ImageObject whose media is
+ * a video draws this on outputs, thumbnails and the editor alike (design/27 §8 "Output").
+ */
+export function stillFile(m: Media): FileRef | undefined {
+  if (m.kind === 'image') return m.delivery ?? m.original;
+  if (m.kind === 'video') return m.poster;
+  return undefined;
+}
+
+/**
+ * The ImageObject a slide plays in place: the first one with `play`, in z order. Others keep showing their
+ * posters (design/27 §8: one video and one sound per slide).
+ */
+export function playingObject(slide: Pick<Slide, 'objects'>): (ImageObject & { play: Play }) | undefined {
+  for (const o of slide.objects) if (o.type === 'image' && o.play) return o as ImageObject & { play: Play };
+  return undefined;
+}
+
+/**
+ * Media a slide plays when it is shown: its playing object's clip and its sound. These are optional at
+ * goLive: a clip still transcoding or failed leaves the slide showing its poster (design/27 §8 "Domain").
+ */
+export function slideMediaIds(slide: Pick<Slide, 'objects' | 'audio'>): string[] {
+  const out: string[] = [];
+  const play = playingObject(slide)?.play.mediaId;
+  if (play) out.push(play);
+  const sound = slide.audio?.mediaId;
+  if (sound && sound !== play) out.push(sound);
+  return out;
 }
 
 /** Every media id referenced by a playlist and its presentations, plus look holding slides and the logo. */

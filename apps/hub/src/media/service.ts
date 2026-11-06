@@ -63,6 +63,12 @@ export type IngestOpts = {
   tags?: string[];
   loop?: boolean;
   checkExtension?: boolean;
+  /**
+   * M5 (G, packages/renderer/SCENE.md): keep only [startMs, endMs] of the source in the delivery
+   * (PowerPoint's p14:trim, baked so loops, onEnd and media.ended need no trim logic; design/27 §8 "Hub").
+   * Not applied yet.
+   */
+  trim?: { startMs: number; endMs: number };
 };
 
 export function baseName(name: string): string {

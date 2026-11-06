@@ -42,6 +42,8 @@ export type MediaCommand =
       url: string;
       loop: boolean;
       muted: boolean;
+      /** The link's slot generation (SlotMirror.gen): every `vframe` of this load is tagged with it. */
+      gen: number;
     }
   | { k: 'apply'; slot: number; transport: Transport }
   | { k: 'pauseAt'; slot: number; at: number }

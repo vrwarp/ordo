@@ -4,6 +4,12 @@ import type { LayerStack } from './stacks.ts';
 export type VideoFrames = {
   frames: (VideoFrame | null)[];
   version: Int32Array;
+  /**
+   * The link's slot generation each held frame was loaded under (-1 none; design/27 §7.2). A scene stack
+   * shows its video only while `gen[slot] === stack.videoGen`, so a slot reloaded with another clip never
+   * shows up in a slide that still holds the old generation (its poster shows instead).
+   */
+  gen: Int32Array;
 };
 
 /** Per-frame inputs the compositor reads. Pre-allocated by the engine and mutated in place. */

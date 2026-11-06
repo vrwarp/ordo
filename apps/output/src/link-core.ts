@@ -28,6 +28,7 @@ import {
   type RecentManifest,
   type RenderTelemetry,
   SRC_VIDEO,
+  type SlideDesc,
   type ToAsset,
   type ToRender,
   armStatus,
@@ -968,6 +969,7 @@ export class LinkCore {
         look: this.look,
         images: this.slideImages(d.slide, d.nextSlide),
         refresh: refresh || undefined,
+        video: this.slideVideo(d),
       });
     } else if (name === 'lowerThird' && plan.lowerThird.desc) {
       this.job({ kind: 'lowerThird', layer, key, text: plan.lowerThird.desc.text, look: this.look });
@@ -977,6 +979,15 @@ export class LinkCore {
         this.job({ kind: 'image', layer, key, hash: d.hash, fit: 'contain', cueIndex: d.cueIndex });
       else this.armVideo(this.mdPair, layer, key, d.hash, d.loop, FIT_CONTAIN, d.cueIndex);
     }
+  }
+
+  /**
+   * M5 (D, SCENE.md): the media slot of the slide's in-slide clip (`d.video`) and the slot's load
+   * generation, picked synchronously with the pair.pick that armVideo uses, so the slide job never waits
+   * for the clip (design/27 §7.2). Stub: none yet, so the slide draws its poster as one bitmap.
+   */
+  private slideVideo(_d: SlideDesc): { objectId: string; slot: number; gen: number } | undefined {
+    return undefined;
   }
 
   private slideImages(...slides: (Slide | undefined)[]): Record<string, string> {
@@ -1030,7 +1041,7 @@ export class LinkCore {
       const blob = await this.store.get(hash).catch(() => undefined);
       if (gen !== slot.gen) return;
       slot.streamed = !blob;
-      this.media({ k: 'load', slot: slot.id, key, hash, blob, url: fileUrl(hash), loop, muted });
+      this.media({ k: 'load', slot: slot.id, key, hash, blob, url: fileUrl(hash), loop, muted, gen });
     })();
     return promise;
   }

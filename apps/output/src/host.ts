@@ -109,6 +109,8 @@ export class OutputHost {
   readonly sup: Supervisor;
   private program: ProgramSender;
   private slots: MediaSlot[] = [];
+  /** The link's generation of each slot's current load (`load.gen`); its video frames carry it. */
+  private slotGens = new Int32Array(6).fill(-1);
   private engine?: AudioEngine;
   private engineStarted = false;
   private master = false;
@@ -177,7 +179,10 @@ export class OutputHost {
         hubNow: () => Date.now() + this.hubOffset,
         getBlob: async (h) => this.pendingBlob.get(h)?.blob,
         fileUrl: (h) => this.pendingBlob.get(h)?.url ?? `${API_PREFIX}/files/${h}`,
-        onFrame: video ? (slot, frame) => this.toRender({ t: 'vframe', slot, frame }, [frame]) : undefined,
+        onFrame: video
+          ? (slot, frame) =>
+              this.toRender({ t: 'vframe', slot, frame, gen: this.slotGens[slot] ?? -1 }, [frame])
+          : undefined,
         onEnded: (s) => this.mediaEvent({ k: 'ended', slot: s.id, key: s.key }),
         onError: (s, e) => this.mediaEvent({ k: 'error', slot: s.id, key: s.key, error: e }),
         log: (m) => this.log(m),
@@ -572,6 +577,7 @@ export class OutputHost {
     switch (c.k) {
       case 'load': {
         const already = slot.key === c.key && slot.ready;
+        this.slotGens[c.slot] = c.gen;
         this.pendingBlob.set(c.hash, { blob: c.blob, url: c.url });
         slot
           .load(c.key, c.hash, c.loop, c.muted)

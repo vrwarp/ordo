@@ -1,8 +1,10 @@
 import {
+  type AudioContent,
   type Cue,
   type LayerState,
   type LiveEvent,
   type LiveState,
+  type MediaContent,
   type ActionId,
   expandCues,
   itemStarts,
@@ -210,8 +212,13 @@ function goTo(s: LiveState, index: number, at: number): LiveState {
           transition: cue.transition,
         };
       }
-      if (layers.media.content) layers.media = { content: null, at, seq };
-      out = { ...out, layers, props: out.props.logo ? { ...out.props, logo: false, at, seq } : out.props };
+      layers.media = slideMediaLayer(layers.media, cue, index, at, seq);
+      out = {
+        ...out,
+        layers,
+        audio: slideAudioLayer(out.audio, cue, index, at, seq),
+        props: out.props.logo ? { ...out.props, logo: false, at, seq } : out.props,
+      };
       return out;
     }
     case 'media': {
@@ -269,6 +276,34 @@ function goTo(s: LiveState, index: number, at: number): LiveState {
     case 'action':
       return applyAction(out, cue.action!, at);
   }
+}
+
+/**
+ * M5 (A, packages/renderer/SCENE.md): the media layer as slide cue `index` goes live, with the slide's own
+ * video from the cue (design/27 §8 "Reducer"). Stub: cleared, as for every slide until then.
+ */
+function slideMediaLayer(
+  media: LayerState<MediaContent>,
+  _cue: Cue,
+  _index: number,
+  at: number,
+  seq: number,
+): LayerState<MediaContent> {
+  return media.content ? { content: null, at, seq } : media;
+}
+
+/**
+ * M5 (A): the audio slot as slide cue `index` goes live: the slide's own sound, kept while a slide-owned
+ * sound still plays, cleared once the live cue leaves [cueIndex, untilCue] (design/27 §8). Stub: unchanged.
+ */
+function slideAudioLayer(
+  audio: LayerState<AudioContent>,
+  _cue: Cue,
+  _index: number,
+  _at: number,
+  _seq: number,
+): LayerState<AudioContent> {
+  return audio;
 }
 
 function applyAction(s: LiveState, action: ActionId, at: number): LiveState {

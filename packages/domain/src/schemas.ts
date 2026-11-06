@@ -27,6 +27,43 @@ export type Id = z.infer<typeof Id>;
 export const LOGICAL_WIDTH = 1920;
 export const LOGICAL_HEIGHT = 1080;
 
+/*
+ * Media playing in place (design/27 §3.1, §8). Enums inside these new fields use .catch(default), so a
+ * value a later release adds degrades instead of failing Slide.safeParse. Trims are baked into the clip at
+ * ingest, so there are no trim fields.
+ */
+
+export const MediaOnEnd = z.enum(['hold', 'black', 'advance']);
+export type MediaOnEnd = z.infer<typeof MediaOnEnd>;
+
+/** The clip an ImageObject plays in its box; `ImageObject.mediaId` stays the poster an older build draws. */
+export const Play = z.object({
+  mediaId: Id,
+  /** click: goes live paused at 0, and F8 plays it. */
+  start: z.enum(['auto', 'click']).catch('auto').optional(),
+  loop: z.boolean().optional(),
+  /** 'black' is PowerPoint's "Rewind after playing": the poster shows again. */
+  onEnd: MediaOnEnd.catch('hold').optional(),
+  /** 20·log10(vol/100000) of PowerPoint's volume. */
+  gainDb: z.number().min(-100).max(100).optional(),
+  muted: z.boolean().optional(),
+  /** false: PowerPoint's "Hide while not playing" (no poster). */
+  showWhenStopped: z.boolean().optional(),
+});
+export type Play = z.infer<typeof Play>;
+
+/** One sound per slide (PowerPoint's embedded audio). */
+export const SlideSound = z.object({
+  mediaId: Id,
+  start: z.enum(['auto', 'click']).catch('auto').optional(),
+  loop: z.boolean().optional(),
+  gainDb: z.number().min(-100).max(100).optional(),
+  muted: z.boolean().optional(),
+  /** PowerPoint's numSld: plays across this many shown slides of the same playlist item. */
+  slides: z.number().int().min(1).max(999).optional(),
+});
+export type SlideSound = z.infer<typeof SlideSound>;
+
 const channel = z.number().min(0).max(255);
 export const Rgba = z.object({ r: channel, g: channel, b: channel, a: z.number().min(0).max(1) });
 export type Rgba = z.infer<typeof Rgba>;
@@ -76,6 +113,8 @@ export const ImageObject = z.object({
   type: z.literal('image'),
   box: Box,
   mediaId: Id,
+  /** The clip this object plays in its box, at its z-order (design/27 §7.2); `mediaId` is its poster. */
+  play: Play.optional(),
   fit: z.enum(['contain', 'cover', 'stretch']).default('contain'),
   opacity: z.number().min(0).max(1).default(1),
   radius: length.default(0),
@@ -143,6 +182,8 @@ export const Slide = z.object({
     })
     .optional(),
   scripture: ScriptureSlideSource.optional(),
+  /** The slide's own sound (design/27 §8); it can play on across `slides` shown slides. */
+  audio: SlideSound.optional(),
 });
 export type Slide = z.infer<typeof Slide>;
 
@@ -314,9 +355,6 @@ export const ActionId = z.enum([
   'relaunchOutputs',
 ]);
 export type ActionId = z.infer<typeof ActionId>;
-
-export const MediaOnEnd = z.enum(['hold', 'black', 'advance']);
-export type MediaOnEnd = z.infer<typeof MediaOnEnd>;
 
 export const PlaylistItem = z.discriminatedUnion('kind', [
   z.object({

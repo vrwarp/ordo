@@ -38,6 +38,25 @@ type Slide = {
   notes?: string;
   overrides?: string[]; // paths of theme properties overridden
   imported?: { fileId: Id; page: number; imageMediaId: Id; textBoxes?: ExtractedText[] };
+  audio?: SlideSound; // the slide's own sound (design/27 §8)
+};
+// Media played in place (design/27 §3.1). Enums degrade to their default (.catch); trims are baked at ingest.
+type Play = {
+  mediaId: Id; // the clip; the ImageObject's own mediaId stays its poster
+  start?: 'auto' | 'click'; // click: goes live paused at 0, F8 plays
+  loop?: boolean;
+  onEnd?: 'hold' | 'black' | 'advance'; // black = PowerPoint "Rewind after playing": the poster shows again
+  gainDb?: number; // -100..100
+  muted?: boolean;
+  showWhenStopped?: boolean; // false = PowerPoint "Hide while not playing"
+};
+type SlideSound = {
+  mediaId: Id;
+  start?: 'auto' | 'click';
+  loop?: boolean;
+  gainDb?: number;
+  muted?: boolean;
+  slides?: number; // 1..999: plays across this many shown slides of the same playlist item
 };
 
 type SlideObject = TextObject | ImageObject | ShapeObject;
@@ -63,6 +82,7 @@ type ImageObject = {
   type: 'image';
   box: Box;
   mediaId: Id;
+  play?: Play; // the clip this object plays in its box, at its z-order (design/27 §7.2)
   fit: 'contain' | 'cover' | 'stretch';
   opacity: number;
   radius: number;
@@ -269,6 +289,11 @@ The reducer handles events: `goLive(playlistId)`, `endService`, `select(cueIndex
 `media.play|pause|restart`, `timer.start|stop|reset`, `message.send|dismiss`,
 `output.register|health`. It is deterministic so hub, operator and outputs compute the
 same state from the same event sequence.
+
+A slide cue can carry its own media (design/27 §8): the playing ImageObject's clip
+(`mediaObjectId`, `mediaStart`, `mediaShowWhenStopped` with the cue's media fields) goes on
+the media layer with `objectId`, and `Slide.audio` (`slideAudio` with `untilCue`) goes in
+the audio slot as `slideOwned` until the live cue leaves `[cueIndex, untilCue]`.
 
 ## Identifiers and content addressing
 

@@ -45,7 +45,8 @@ export type ToRender =
       cueIndex?: number;
     }
   | { t: 'flip'; layer: number; key: string; at: number; fadeMs: number; cueIndex?: number }
-  | { t: 'vframe'; slot: number; frame: VideoFrame }
+  /** A presented frame of a slot, tagged with the link's slot generation it was loaded under (`load`). */
+  | { t: 'vframe'; slot: number; frame: VideoFrame; gen: number }
   | { t: 'vclear'; slot: number }
   /** Period of the small frame copies sent back to the main thread (0 disables). */
   | { t: 'snapshot'; everyMs: number; width: number; height: number }
@@ -62,11 +63,20 @@ export type AssetToRender = {
   t: 'content';
   layer: number;
   key: string;
+  /** SRC_BITMAP, or SRC_SCENE for a slide whose video plays in its box (design/27 §7.2). */
   kind: number;
+  /** The picture; for SRC_SCENE the base. */
   bitmap: ImageBitmap;
   cueIndex?: number;
   /** A fresh copy of content the renderer may already show (a slide re-drawn with an image that arrived). */
   refresh?: boolean;
+  /** SRC_SCENE: objects above the video that overlap it, if any. */
+  over?: ImageBitmap | null;
+  /** SRC_SCENE: the video plane (PLANE_FLOATS floats, scene.ts). */
+  plane?: Float32Array;
+  /** SRC_SCENE: the media slot playing the clip, and the slot generation it was loaded under. */
+  videoSlot?: number;
+  videoGen?: number;
 };
 
 // ---- render -> main and render -> link (port) ----
@@ -105,6 +115,12 @@ export type AssetJob =
       images: Record<string, string>;
       /** Re-draw of a key the renderer holds: it replaces the held copy in place (no flip). */
       refresh?: boolean;
+      /**
+       * The slide's video plays in the box of ImageObject `objectId` from media slot `slot`, loaded under
+       * slot generation `gen` (design/27 §7.2): the worker answers SRC_SCENE. Absent: a plain bitmap, the
+       * poster included.
+       */
+      video?: { objectId: string; slot: number; gen: number };
     }
   | { kind: 'image'; layer: number; key: string; hash: string; fit: 'contain' | 'cover'; cueIndex?: number }
   | { kind: 'lowerThird'; layer: number; key: string; text: string; look: Look }

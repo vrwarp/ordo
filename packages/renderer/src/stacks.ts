@@ -1,3 +1,4 @@
+import { PLANE_FLOATS } from './scene.ts';
 import { crossfadeWeight, flipDue, isLateFlip } from './timing.ts';
 
 /** Render layers back to front. Indices are used in typed arrays and messages. */
@@ -15,21 +16,35 @@ export const LAYER_INDEX: Record<RenderLayer, number> = {
 export const SRC_EMPTY = 0;
 export const SRC_BITMAP = 1;
 export const SRC_VIDEO = 2;
+/**
+ * A slide with a video playing in its box (design/27 §7.2): `bitmap` is the base (objects up to the playing
+ * one, with its poster), the video of `videoSlot` is drawn through `plane`, then `over` (objects above it
+ * that overlap the video). See scene.ts.
+ */
+export const SRC_SCENE = 3;
 
 /** How a video is fitted to the frame (bitmaps are always full-frame). */
 export const FIT_COVER = 0;
 export const FIT_CONTAIN = 1;
 
-/** Content offered to a layer: a prepared bitmap, a video slot, or nothing. */
+/** Content offered to a layer: a prepared bitmap, a video slot, a scene, or nothing. */
 export type StackContent<B> = {
   key: string;
   kind: number;
+  /** SRC_BITMAP: the picture; SRC_SCENE: the base. */
   bitmap?: B | null;
+  /** SRC_VIDEO: the video; SRC_SCENE: the video played through `plane`. */
   videoSlot?: number;
   fit?: number;
   cueIndex?: number;
   /** Replace the held copy of this key in place (a re-draw with content that arrived late). */
   refresh?: boolean;
+  /** SRC_SCENE: objects above the video that overlap it (null when there are none). */
+  over?: B | null;
+  /** SRC_SCENE: the video plane (PLANE_FLOATS floats, scene.ts), copied into the stack's own array. */
+  plane?: Float32Array;
+  /** SRC_SCENE: the slot generation the clip was loaded under; frames of another generation are not shown. */
+  videoGen?: number;
 };
 
 /** One fully prepared stack. Objects are pre-allocated and mutated in place. */
@@ -40,6 +55,10 @@ export class Stack<B> {
   videoSlot = -1;
   fit = FIT_COVER;
   cueIndex = -1;
+  /** SRC_SCENE: see StackContent. `plane` is pre-allocated and overwritten with set(), never replaced. */
+  over: B | null = null;
+  readonly plane = new Float32Array(PLANE_FLOATS);
+  videoGen = -1;
   /** Bumped whenever the content changes so the compositor knows to re-upload. */
   version = 0;
 }
@@ -105,6 +124,7 @@ export class LayerStack<B> {
       if (!this.fading) {
         // Already live (a duplicate arm): refresh nothing, drop the copy.
         if (c.bitmap) this.release(c.bitmap);
+        if (c.over) this.release(c.over);
         return;
       }
     }
@@ -198,14 +218,19 @@ export class LayerStack<B> {
     const a = this.armedStack;
     const q = this.queued;
     if (a.bitmap && a.bitmap !== q.bitmap) this.release(a.bitmap);
+    if (a.over && a.over !== q.over) this.release(a.over);
     a.key = q.key;
     a.kind = q.kind;
     a.bitmap = q.bitmap;
     a.videoSlot = q.videoSlot;
     a.fit = q.fit;
     a.cueIndex = q.cueIndex;
+    a.over = q.over;
+    a.plane.set(q.plane);
+    a.videoGen = q.videoGen;
     a.version++;
     q.bitmap = null;
+    q.over = null;
     q.key = '';
     q.kind = SRC_EMPTY;
     this.hasQueued = false;
@@ -214,22 +239,31 @@ export class LayerStack<B> {
   private clearStack(s: Stack<B>): void {
     /* @hot */
     if (s.bitmap) this.release(s.bitmap);
+    if (s.over) this.release(s.over);
     s.bitmap = null;
+    s.over = null;
     s.key = '';
     s.kind = SRC_EMPTY;
     s.videoSlot = -1;
     s.cueIndex = -1;
+    s.plane.fill(0);
+    s.videoGen = -1;
     s.version++;
   }
 
   private assign(s: Stack<B>, c: StackContent<B>): void {
     if (s.bitmap && s.bitmap !== c.bitmap) this.release(s.bitmap);
+    if (s.over && s.over !== c.over) this.release(s.over);
     s.key = c.key;
     s.kind = c.key === '' ? SRC_EMPTY : c.kind;
     s.bitmap = c.bitmap ?? null;
     s.videoSlot = c.videoSlot ?? -1;
     s.fit = c.fit ?? FIT_COVER;
     s.cueIndex = c.cueIndex ?? -1;
+    s.over = c.over ?? null;
+    if (c.plane && c.plane.length === PLANE_FLOATS) s.plane.set(c.plane);
+    else s.plane.fill(0);
+    s.videoGen = c.videoGen ?? -1;
     s.version++;
   }
 }
