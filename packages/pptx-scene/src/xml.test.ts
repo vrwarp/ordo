@@ -1,0 +1,124 @@
+import { describe, expect, it } from 'vitest';
+import {
+  child,
+  children,
+  decodeEntities,
+  MAX_TAGS_PER_PART,
+  parseXml,
+  rootOf,
+  startTags,
+  textOf,
+  XML_MAX_DEPTH,
+  type XNode,
+} from './xml.ts';
+
+const root = (xml: string) => rootOf(parseXml(xml, 'test.xml'))!;
+
+describe('parseXml', () => {
+  it('keeps elements, attributes and text in order', () => {
+    const r = root(
+      '<?xml version="1.0"?>\n<a:p x="1"><a:r><a:t>Hi </a:t></a:r><a:br/><a:r><a:t>there</a:t></a:r></a:p>',
+    );
+    expect(r.name).toBe('a:p');
+    expect(r.attrs.x).toBe('1');
+    expect(r.children.map((c) => c.name)).toEqual(['a:r', 'a:br', 'a:r']);
+    expect(textOf(child(r.children[0], 'a:t'))).toBe('Hi ');
+    expect(children(r, 'a:r')).toHaveLength(2);
+  });
+
+  it('keeps whitespace-only text inside elements and drops it at the top level', () => {
+    const nodes = parseXml('\n<a>\n  <b/> </a>\n', 'x');
+    expect(nodes.map((n) => n.name)).toEqual(['a']);
+    expect(nodes[0]!.children.map((c) => (c.name === '#text' ? JSON.stringify(c.text) : c.name))).toEqual([
+      '"\\n  "',
+      'b',
+      '" "',
+    ]);
+  });
+
+  it('decodes the predefined entities and numeric references in text and attributes, once', () => {
+    const r = root(
+      '<a v="1 &amp; 2 &#x41;&#66;">&lt;&gt;&quot;&apos;&amp;amp; &#x2019; &nbsp; &#0; &#xD800;</a>',
+    );
+    expect(r.attrs.v).toBe('1 & 2 AB');
+    expect(textOf(r)).toBe('<>"\'&amp; ’ &nbsp; &#0; &#xD800;');
+  });
+
+  it('reads CDATA as text, drops comments and processing instructions, normalises line ends', () => {
+    const r = root('<a>x<!-- c -->y<![CDATA[<z>&amp;]]><?pi data?>\r\nq\rr</a>');
+    expect(r.children).toHaveLength(1);
+    expect(textOf(r)).toBe('xy<z>&amp;\nq\nr');
+  });
+
+  it('refuses a DOCTYPE and any other declaration (no entity can be defined)', () => {
+    expect(() => parseXml('<!DOCTYPE a [<!ENTITY e "x">]><a>&e;</a>', 'd.xml')).toThrow(/DOCTYPE/);
+    expect(() => parseXml('<!doctype a><a/>', 'd.xml')).toThrow(/DOCTYPE/);
+    expect(() => parseXml('<a/><!ENTITY e "x">', 'd.xml')).toThrow(/declaration/);
+    const lol =
+      '<!DOCTYPE l [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">]><l>&b;&b;&b;</l>';
+    expect(() => parseXml(lol, 'lol.xml')).toThrow(/DOCTYPE/);
+  });
+
+  it('gives null-prototype attribute maps, so deck names cannot reach Object.prototype', () => {
+    const r = root('<a __proto__="1" constructor="2" toString="3" hasOwnProperty="4"/>');
+    expect(Object.getPrototypeOf(r.attrs)).toBeNull();
+    expect(Object.entries(r.attrs)).toEqual([
+      ['__proto__', '1'],
+      ['constructor', '2'],
+      ['toString', '3'],
+      ['hasOwnProperty', '4'],
+    ]);
+    expect(({} as Record<string, unknown>).toString).toBe(Object.prototype.toString);
+    const t = root('<a:__proto__><a:constructor/></a:__proto__>');
+    expect(t.name).toBe('a:__proto__');
+    expect(child(t, 'a:constructor')?.name).toBe('a:constructor');
+    expect(child(t, 'constructor')).toBeUndefined();
+  });
+
+  it('skips attributes without a quoted value, keeps the last of duplicates', () => {
+    expect({ ...root('<a b c=1 d="2" d="3" e = \'4\'/>').attrs }).toEqual({ d: '3', e: '4' });
+  });
+
+  it('reads mismatched end tags leniently and closes what is left open', () => {
+    const r = root('<a><b><c></b><d/></x></a>');
+    expect(r.children.map((n) => n.name)).toEqual(['b', 'd']);
+    expect(root('<a><b>').children.map((n) => n.name)).toEqual(['b']);
+  });
+
+  it('throws on cut markup', () => {
+    expect(() => parseXml('<a><b x="1', 'cut.xml')).toThrow(/unterminated tag/);
+    expect(() => parseXml('<a><!-- x', 'cut.xml')).toThrow(/comment/);
+    expect(() => parseXml('<a><![CDATA[ x', 'cut.xml')).toThrow(/CDATA/);
+    expect(() => parseXml('<a>< b/></a>', 'cut.xml')).toThrow(/without a name/);
+  });
+
+  it('drops content nested deeper than the limit without recursion', () => {
+    const n = 100_000;
+    const xml = `${'<d>'.repeat(n)}x${'</d>'.repeat(n)}<after/>`;
+    const nodes = parseXml(`<r>${xml}</r>`, 'deep.xml');
+    let depth = 0;
+    for (let cur: XNode | undefined = nodes[0]; cur; cur = cur.children.find((c) => c.name === 'd')) depth++;
+    expect(depth).toBe(XML_MAX_DEPTH + 1);
+    expect(nodes[0]!.children.map((c) => c.name)).toEqual(['d', 'after']);
+  });
+
+  it('refuses a part with too many tags', () => {
+    expect(() => parseXml(`<r>${'<a/>'.repeat(MAX_TAGS_PER_PART)}</r>`, 'big.xml')).toThrow(/more than/);
+  });
+
+  it('stays linear on crafted input', () => {
+    const t0 = performance.now();
+    decodeEntities('&'.repeat(2_000_000));
+    decodeEntities('&#x'.repeat(500_000));
+    parseXml(`<a v="${'&amp'.repeat(500_000)}">${'&'.repeat(1_000_000)}</a>`, 'x');
+    expect(startTags(`${'<a:t'.repeat(200_000)}`, 'a:t')).toEqual([]);
+    expect(performance.now() - t0).toBeLessThan(5_000);
+  });
+});
+
+describe('startTags', () => {
+  it('finds whole start tags, quotes respected, names not prefixes of others', () => {
+    const xml = '<a:t x=">">1</a:t><a:tab/><a:t/>';
+    expect(startTags(xml, 'a:t').map(([s, e]) => xml.slice(s, e))).toEqual(['<a:t x=">">', '<a:t/>']);
+  });
+});

@@ -340,15 +340,21 @@ importers:
 
   packages/pptx-render:
     dependencies:
-      fast-xml-parser:
-        specifier: ^5.11.2
-        version: 5.11.2
+      '@ordo/pptx-scene':
+        specifier: workspace:*
+        version: link:../pptx-scene
       jszip:
         specifier: ^3.10.2
         version: 3.10.2
       pptx-preview:
         specifier: 1.0.7
         version: 1.0.7
+
+  packages/pptx-scene:
+    devDependencies:
+      '@ordo/domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/protocol:
     dependencies:
@@ -390,6 +396,9 @@ importers:
       '@ordo/pptx-render':
         specifier: workspace:*
         version: link:../../packages/pptx-render
+      '@ordo/pptx-scene':
+        specifier: workspace:*
+        version: link:../../packages/pptx-scene
       pptxgenjs:
         specifier: 4.0.1
         version: 4.0.1

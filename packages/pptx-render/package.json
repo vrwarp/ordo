@@ -13,7 +13,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "fast-xml-parser": "^5.11.2",
+    "@ordo/pptx-scene": "workspace:*",
     "jszip": "^3.10.2",
     "pptx-preview": "1.0.7"
   },

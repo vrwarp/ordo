@@ -164,7 +164,7 @@ Source: a census of 4,897 shown slides of worship decks in the local validation 
 | Module | Contents |
 |---|---|
 | `packages/pptx-scene` (new, `@ordo/pptx-scene`) | Pure TypeScript: no DOM, no JSZip, no fs. Input is a `PartSource` (`Map<string, Uint8Array>` from `extractZip`). Runs on the hub CPU pool (task `pptx-scene`) and in Node for the harness. |
-| `pptx-scene/src/xml.ts` | Moved from `pptx-render/src/xml.ts`. Bounded, order-preserving parse (depth 256, 250k tags, linear start-tag scan, indexed child lookup), plus: refuse `<!DOCTYPE`, `maxTotalExpansions` 10,000, `attrs` as null-prototype objects. |
+| `pptx-scene/src/xml.ts` | Moved from `pptx-render/src/xml.ts` and made dependency-free (its own linear reader instead of fast-xml-parser). Bounded, order-preserving parse (depth 256, 250k tags, linear start-tag scan, indexed child lookup), plus: no DTD at all (`<!DOCTYPE` and every other declaration refused, only the five predefined entities and numeric references decoded, so nothing expands), `attrs` as null-prototype objects. |
 | `opc.ts` | Content types (an override naming a missing part is ignored). Relationships resolved inside the package: percent-decode, normalise, case-insensitive (a duplicate that differs only by case keeps the first), matched by type URI, Strict→Transitional (port of `annotate.ts:1478-1539`). External targets are logged with their host only. |
 | `deck.ts` | `presentation.xml`: `sldSz` (one default, 12192000x6858000), `sldIdLst` with a prefix-agnostic r:id, duplicates placed once, `show="0"/"false"` hidden flag and shown index (port of `annotate.ts:725-800`), `p14:sectionLst`, `defaultTextStyle`, `embeddedFontLst`. |
 | `frame.ts` | EMU → logical px: `s = min(1920/cx, 1080/cy)`, `x0 = (1920 − cx·s)/2`, `y0 = (1080 − cy·s)/2`. The same mapping as `fitPage` (`ffmpeg.ts:332`). 1 pt = `12700·s` px, which is 2.0 px for both standard sizes. |
@@ -1043,7 +1043,7 @@ The extensions, in priority order (M4 unless noted):
 - Entry names never become paths (`Store.abs` and generated names only).
 
 **XML**
-- Refuse `<!DOCTYPE`; keep fast-xml-parser's entity caps plus `maxTotalExpansions` 10,000.
+- Refuse `<!DOCTYPE` and every other markup declaration: no entity is defined, and only the five predefined entities and numeric references are decoded, one character each (pptx-scene's own reader; fast-xml-parser is not on this path).
 - Before parsing, count ≤ 250k tags per part and ≤ 5,000 shapes per slide.
 - Depth 256; ≤ 2,000 slides; group depth ≤ 32.
 - A parse error quarantines that slide (class picture), never the deck.

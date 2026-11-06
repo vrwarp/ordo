@@ -17,7 +17,7 @@ import {
   withoutJpegIcc,
 } from './annotate.ts';
 import { decodeMarker, encodeMarker, MARK_START, MAX_MARKED_RUNS } from './markers.ts';
-import { parseXml, rootOf } from './xml.ts';
+import { parseXml, rootOf } from '@ordo/pptx-scene/xml.ts';
 
 const NS =
   'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
