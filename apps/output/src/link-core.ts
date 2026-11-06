@@ -25,6 +25,7 @@ import {
   type HeldKeys,
   LAYER_INDEX,
   type LayerPlan,
+  type MediaDesc,
   type RecentManifest,
   type RenderTelemetry,
   SRC_VIDEO,
@@ -225,7 +226,15 @@ export class LinkCore {
   private auPair = new SlotPair<SlotMirror>([this.slots[4]!, this.slots[5]!]);
   private prevBgLive = '';
   private prevMdLive = '';
+  /** The live media video plays inside its slide (design/27 §7.2). */
+  private prevMdInSlide = false;
   private prevAuLive = '';
+  /**
+   * Slide keys whose clip plays in their box: the media slot and load generation (`slot|gen`, '' none) the
+   * last job of the key was drawn for. A key whose clip sits in another slot or generation now is drawn
+   * again in place (`refresh`), so its scene never waits on, or shows, another load.
+   */
+  private sceneVideo = new Map<string, string>();
   private endedSent = new Set<string>();
   /** Ended reports (replayed by the host) that arrived before the live plan was known. */
   private pendingEnded: { key: string; at: number }[] = [];
@@ -507,6 +516,7 @@ export class LinkCore {
       this.delivered.clear();
       this.flips = [];
       this.clearSent = '';
+      this.sceneVideo.clear();
       this.propsKey = '';
       this.clockOffsetSent = Number.NaN;
       this.telBase = {
@@ -843,6 +853,10 @@ export class LinkCore {
     }
     this.livePlan = live;
     this.armedPlan = armed;
+    // Before anything is armed: a video that just left keeps its slot until its fade ends, and the clips
+    // playing inside the live and armed slides get their slots (the slide jobs below carry them).
+    this.markOutgoing(live);
+    this.armSlideClips(live, armed);
 
     const clearSig = JSON.stringify(look.clearColor);
     if (clearSig !== this.clearSent && this.renderPort) {
@@ -941,14 +955,18 @@ export class LinkCore {
     const video =
       (name === 'background' && plan.background.desc?.kind === 'video') ||
       (name === 'media' && plan.media.desc?.kind === 'video');
+    // A slide whose clip plays in its box: a scene drawn for another slot or load generation (none was
+    // free then, or the slot was loaded again since) is drawn again in place.
+    const scene = name === 'slide' && plan.slide.desc ? this.slideVideo(plan.slide.desc, plan) : undefined;
+    const stale = !!scene && this.sceneVideo.get(key) !== sceneSig(scene);
     if (video) {
       // A video key is only valid while a media slot still holds that video (slots are reused).
       const pair = name === 'background' ? this.bgPair : this.mdPair;
       const slot = pair.find(key);
       if (this.inflight.has(key)) return;
       if (slot?.ready && this.has(key)) return;
-    } else if (this.has(key) && !this.refreshKeys.has(key)) return;
-    if (this.inflight.has(key)) return;
+    } else if (this.has(key) && !this.refreshKeys.has(key) && !stale) return;
+    if (this.inflight.has(key) && !stale) return;
     if (name === 'background' && plan.background.desc) {
       const d = plan.background.desc;
       if (d.kind === 'image') this.job({ kind: 'image', layer, key, hash: d.hash, fit: 'cover' });
@@ -956,8 +974,10 @@ export class LinkCore {
     } else if (name === 'slide' && plan.slide.desc) {
       const d = plan.slide.desc;
       // A re-draw for an image that arrived late replaces the renderer's copy in place.
-      const refresh = this.refreshKeys.delete(key);
-      if (refresh) this.refreshedAt.set(key, Date.now());
+      const images = this.refreshKeys.delete(key);
+      if (images) this.refreshedAt.set(key, Date.now());
+      const refresh = images || (stale && this.has(key));
+      this.sceneVideo.set(key, scene ? sceneSig(scene) : '');
       this.job({
         kind: 'slide',
         layer,
@@ -969,7 +989,7 @@ export class LinkCore {
         look: this.look,
         images: this.slideImages(d.slide, d.nextSlide),
         refresh: refresh || undefined,
-        video: this.slideVideo(d),
+        video: scene,
       });
     } else if (name === 'lowerThird' && plan.lowerThird.desc) {
       this.job({ kind: 'lowerThird', layer, key, text: plan.lowerThird.desc.text, look: this.look });
@@ -982,12 +1002,44 @@ export class LinkCore {
   }
 
   /**
-   * M5 (D, SCENE.md): the media slot of the slide's in-slide clip (`d.video`) and the slot's load
-   * generation, picked synchronously with the pair.pick that armVideo uses, so the slide job never waits
-   * for the clip (design/27 §7.2). Stub: none yet, so the slide draws its poster as one bitmap.
+   * The media slot of the slide's in-slide clip (`d.video`) and the slot's load generation (design/27
+   * §7.2), picked synchronously with the same pair.pick armVideo uses: the slide job never waits for the
+   * clip to load, so a slow clip never delays the flip. Undefined when no slot is free (both busy fading):
+   * the slide is drawn with its poster and drawn again once a slot is armed (`sceneVideo`).
    */
-  private slideVideo(_d: SlideDesc): { objectId: string; slot: number; gen: number } | undefined {
-    return undefined;
+  private slideVideo(
+    d: SlideDesc,
+    plan: FramePlan,
+  ): { objectId: string; slot: number; gen: number } | undefined {
+    const md = plan.media.desc;
+    if (!d.video || md?.kind !== 'video' || !md.inSlide || md.cueIndex !== d.cueIndex) return undefined;
+    this.armInSlide(md);
+    const slot = this.inSlideSlot(md);
+    return slot ? { objectId: d.video.objectId, slot: slot.id, gen: slot.gen } : undefined;
+  }
+
+  /**
+   * The clips playing inside the live and armed slides are armed on every output, not only on the audio
+   * master (design/27 §7.2): in the media pair under the media desc key, so transport, routing, holdPaused,
+   * protection and `media.ended` find them as for a media video.
+   */
+  private armSlideClips(...plans: (FramePlan | undefined)[]): void {
+    for (const p of plans) {
+      const md = p?.media.desc;
+      if (md?.kind === 'video' && md.inSlide) this.armInSlide(md);
+    }
+  }
+
+  /** Arm an in-slide clip unless a slot holds it: muted unless the audio master, never offered as SRC_VIDEO. */
+  private armInSlide(md: MediaDesc): void {
+    if (this.inSlideSlot(md) || this.inflight.has(md.key) || this.errorBlocks(md.key)) return;
+    this.armVideo(this.mdPair, LAYER_INDEX.media, md.key, md.hash, md.loop, FIT_CONTAIN, md.cueIndex, false);
+  }
+
+  /** The media slot holding an in-slide clip, loaded or loading. */
+  private inSlideSlot(md: MediaDesc): SlotMirror | undefined {
+    const slot = this.mdPair.find(md.key);
+    return slot && (slot.ready || slot.waiter) ? slot : undefined;
   }
 
   private slideImages(...slides: (Slide | undefined)[]): Record<string, string> {
@@ -1046,6 +1098,11 @@ export class LinkCore {
     return promise;
   }
 
+  /**
+   * Load a video into a slot of `pair` and, once its first frame is there, offer it to the renderer as
+   * SRC_VIDEO content of `layer`. `render: false` (a clip playing inside its slide) never offers it: the
+   * slide's scene draws the slot.
+   */
   private armVideo(
     pair: SlotPair<SlotMirror>,
     layer: number,
@@ -1054,6 +1111,7 @@ export class LinkCore {
     loop: boolean,
     fit: number,
     cueIndex?: number,
+    render = true,
   ): void {
     const protect = this.protectedKeys(pair);
     const now = clock.now();
@@ -1081,16 +1139,18 @@ export class LinkCore {
       .then(() => {
         this.inflight.delete(key);
         if (slot.key !== key) return;
-        this.delivered.set(key, Date.now());
         this.errors.delete(key);
         this.unavailable.delete(key);
-        // A media video hidden by this look still plays (for audio) but is not offered to the renderer.
-        const visible =
-          layer !== LAYER_INDEX.media ||
-          this.livePlan?.media.key === key ||
-          this.armedPlan?.media.key === key;
-        if (visible)
-          this.postRender({ t: 'content', layer, key, kind: SRC_VIDEO, videoSlot: slot.id, fit, cueIndex });
+        if (render) {
+          this.delivered.set(key, Date.now());
+          // A media video hidden by this look still plays (for audio) but is not offered to the renderer.
+          const visible =
+            layer !== LAYER_INDEX.media ||
+            this.livePlan?.media.key === key ||
+            this.armedPlan?.media.key === key;
+          if (visible)
+            this.postRender({ t: 'content', layer, key, kind: SRC_VIDEO, videoSlot: slot.id, fit, cueIndex });
+        }
         this.syncVideos(this.livePlan, this.armedPlan);
       })
       .catch((err: Error) => {
@@ -1139,12 +1199,16 @@ export class LinkCore {
     this.media({ k: 'pauseAt', slot: slot.id, at });
   }
 
-  private syncVideos(live?: FramePlan, armed?: FramePlan): void {
-    if (!live) return;
+  /**
+   * The live background and media videos that just left: paused when their fade ends and not reused before
+   * (`busyUntil`). Runs before anything is armed in a sync, so the next clip never takes the slot of one
+   * still fading out. An in-slide clip leaves with its slide: it plays on while the slide layer fades it
+   * out, then its picture leaves the renderer (`vclear`), so a slide still on screen (Clear media, onEnd
+   * 'black') shows its poster.
+   */
+  private markOutgoing(live: FramePlan): void {
     const now = clock.now();
-    // Backgrounds: loop, muted, keep playing across slides; synced to the layer's start time.
-    const bg = live.background.desc?.kind === 'video' ? live.background : undefined;
-    const bgKey = bg?.key ?? '';
+    const bgKey = live.background.desc?.kind === 'video' ? live.background.key : '';
     if (bgKey !== this.prevBgLive) {
       const old = this.bgPair.find(this.prevBgLive);
       if (old) {
@@ -1153,24 +1217,40 @@ export class LinkCore {
       }
       this.prevBgLive = bgKey;
     }
-    const bgSlot = this.bgPair.find(bgKey);
-    if (bg && bgSlot) this.apply(bgSlot, { state: 'playing', startedAt: bg.at, positionMs: 0, loop: true });
-
-    // Media video: transport from the reducer state; audio through the engine on the master.
     const md = live.media.desc?.kind === 'video' ? live.media.desc : undefined;
     const mdKey = md?.key ?? '';
     if (mdKey !== this.prevMdLive) {
       const old = this.mdPair.find(this.prevMdLive);
       if (old) {
+        const slideFade = this.prevMdInSlide && live.slide.at >= live.media.at ? live.slide.fadeMs : 0;
+        const fadeMs = Math.max(live.media.fadeMs, slideFade);
         // On clear-all the sound fades over 500 ms; keep the element running until then.
-        this.pauseAt(old, live.media.at + Math.max(live.media.fadeMs, live.black ? 520 : 0));
-        old.busyUntil = Math.max(now, live.media.at) + live.media.fadeMs + 100;
+        const pauseAt = live.media.at + Math.max(fadeMs, live.black ? 520 : 0);
+        this.pauseAt(old, pauseAt);
+        old.busyUntil = Math.max(now, live.media.at) + fadeMs + 100;
+        if (this.prevMdInSlide) this.media({ k: 'vclear', slot: old.id, key: old.key, at: pauseAt });
       }
       this.prevMdLive = mdKey;
     }
+    this.prevMdInSlide = !!md?.inSlide;
+  }
+
+  private syncVideos(live?: FramePlan, armed?: FramePlan): void {
+    if (!live) return;
+    this.markOutgoing(live);
+    // Backgrounds: loop, muted, keep playing across slides; synced to the layer's start time.
+    const bg = live.background.desc?.kind === 'video' ? live.background : undefined;
+    const bgSlot = this.bgPair.find(bg?.key ?? '');
+    if (bg && bgSlot) this.apply(bgSlot, { state: 'playing', startedAt: bg.at, positionMs: 0, loop: true });
+
+    // Media video: transport from the reducer state; audio through the engine on the master. A clip
+    // playing inside its slide is found by its desc key exactly the same way (armSlideClips arms it).
+    const md = live.media.desc?.kind === 'video' ? live.media.desc : undefined;
+    const mdKey = md?.key ?? '';
     const mdSlot = this.mdPair.find(mdKey);
     if (
       md &&
+      !md.inSlide &&
       !mdSlot &&
       !live.media.key &&
       this.config?.output.audioMaster &&
@@ -1187,11 +1267,13 @@ export class LinkCore {
         positionMs: md.positionMs,
         loop: md.loop,
       });
+      if (hiddenWhileStopped(md)) this.media({ k: 'vclear', slot: mdSlot.id, key: md.key });
     }
     // Armed media video stays paused on its first frame.
     const amd = armed?.media.desc?.kind === 'video' ? armed.media.desc : undefined;
     const amSlot = amd && amd.key !== mdKey ? this.mdPair.find(amd.key) : undefined;
     if (amSlot?.ready) this.media({ k: 'holdPaused', slot: amSlot.id });
+    if (amd && amSlot && hiddenWhileStopped(amd)) this.media({ k: 'vclear', slot: amSlot.id, key: amd.key });
   }
 
   private routeAudio(slot: SlotMirror, a: AudioRoute): void {
@@ -1693,6 +1775,7 @@ export class LinkCore {
         // A slide the renderer no longer holds needs no re-draw for its late images.
         for (const k of this.missingImages.keys()) if (!this.has(k)) this.missingImages.delete(k);
         for (const k of this.refreshKeys) if (!this.has(k)) this.refreshKeys.delete(k);
+        for (const k of this.sceneVideo.keys()) if (!this.has(k)) this.sceneVideo.delete(k);
         this.requestSync();
         this.queueView();
         return;
@@ -1974,6 +2057,7 @@ export class LinkCore {
       errors: Object.fromEntries([...this.errors].map(([k, v]) => [k, v.error])),
       quarantined: [...this.quarantine.keys()],
       missingImages: Object.fromEntries(this.missingImages),
+      scenes: Object.fromEntries(this.sceneVideo),
       cache: this.cacheProgress,
       cacheRepairs: this.cacheRepairs,
       recentManifests: this.recentManifests.map((r) => ({ at: r.at, files: r.files.length })),
@@ -2031,4 +2115,17 @@ export class LinkCore {
       error: h.error ?? '-',
     };
   }
+}
+
+/** The slot and load generation a slide's scene was drawn for. */
+function sceneSig(v: { slot: number; gen: number }): string {
+  return `${v.slot}|${v.gen}`;
+}
+
+/**
+ * An in-slide clip with "Hide while not playing" (`showWhenStopped: false`) shows no frame while the
+ * reducer's state is not 'playing' (design/27 §8 "Output"); its slide's base has no poster either.
+ */
+function hiddenWhileStopped(md: MediaDesc): boolean {
+  return md.inSlide?.showWhenStopped === false && md.state !== 'playing';
 }

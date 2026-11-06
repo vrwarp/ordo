@@ -18,10 +18,10 @@ Topology. The host creates the three workers and three `MessageChannel`s (asset�
 link↔asset) and hands the ends over with a `ports` message (`packages/renderer/src/messages.ts`), again
 after any worker restart. Arming runs link → asset → render (jobs, bitmaps, flips) without the main
 thread. The host ⇄ link protocol is `apps/output/src/host-protocol.ts`: the link sends media commands
-(`load {slot, key, blob|url}`, `apply {transport}`, `pauseAt`, `holdPaused`, `route`, `unload`), audio
-commands (`config`, `fadeOut`), `clock`, `title`, `rtc` signalling, `fatal`, `close`, `reload`,
-`restartWorker`, `portRequest`, `mediaAck`, and a `view` (telemetry, introspection, diagnostics, log)
-that the host caches so `window.__ordo.telemetry()`/`state()` stay synchronous. The host sends `tick`
+(`load {slot, key, blob|url, gen}`, `apply {transport}`, `pauseAt`, `holdPaused`, `route`, `vclear`,
+`unload`), audio commands (`config`, `fadeOut`), `clock`, `title`, `rtc` signalling, `fatal`, `close`,
+`reload`, `restartWorker`, `portRequest`, `mediaAck`, and a `view` (telemetry, introspection, diagnostics,
+log) that the host caches so `window.__ordo.telemetry()`/`state()` stay synchronous. The host sends `tick`
 (250 ms), `host` status (500 ms, and at once to every new link generation: media slots with their key,
 `ended`, `paused`, position, duration and error; audio meters, long tasks, worker stats, painting, a
 refused reload), numbered media events (`loaded`, `loadError`, `ended`, `error`), opener-closed, bus

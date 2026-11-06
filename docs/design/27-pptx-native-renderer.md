@@ -422,6 +422,7 @@ AudioContent += { untilCue?: number; slideOwned?: boolean };
 
 // apps/output host protocol
 MediaCommand 'load' += { gen: number };   // the link's slot generation (SlotMirror.gen)
+MediaCommand += { k: 'vclear'; slot: number; key: string; at?: number };  // the host sends ToRender 'vclear'
 ToRender 'vframe' += { gen: number };
 
 // packages/renderer/src/stacks.ts, messages.ts, plan.ts
@@ -430,7 +431,7 @@ Stack<B> += { over: B | null; plane: Float32Array /* 16, pre-allocated, copied w
 StackContent<B> += { over?: B | null; plane?: Float32Array; videoGen?: number };  // SRC_SCENE also uses videoSlot
 AssetJob 'slide' += { video?: { objectId: string; slot: number; gen: number } };
 SlideDesc += { video?: { objectId: string; mediaId: string; hash: string } };
-MediaDesc += { inSlide?: { objectId: string } };
+MediaDesc += { inSlide?: { objectId: string; showWhenStopped?: false } };
 ```
 
 ### 3.4 Size budgets
@@ -755,7 +756,8 @@ A slide whose playing `ImageObject` (`play`) is on the media layer becomes a **s
   The media layer key becomes `''` and its desc is kept, so the reducer's transport, audio routing on the master and `media.ended` keep working.
 - **Every output arms the clip.** `syncVideos` arms an `inSlide` clip on every output, not only on the master. It uses the media desc key (`md|cueIndex|mediaId|hash`) in the mdPair, muted unless the output is the audio master, with a new `render: false` flag so `armVideo` never posts `SRC_VIDEO` content for it. Transport (`apply`), `route` and `holdPaused` then find the slot by the desc key exactly as for a media video. `protectedKeys` already protects desc keys.
 - **The slide job does not wait for the video.** `ensureContent` for the slide layer picks the slot synchronously (the same `pair.pick` that `armVideo` uses) and posts the slide AssetJob at once with `video:{objectId, slot, gen}`, where `gen` is the slot's load generation (`SlotMirror.gen`). It never waits for 'loaded', so a slow clip never delays the slide flip. When no slot is free (both busy fading), the job is posted without video (poster only) and re-posted with `refresh` once a slot is armed. The asset worker answers `SRC_SCENE {bitmap: base, over, plane, videoSlot, videoGen}` under the unchanged slide key.
-- **Generations stop a reused slot from showing the wrong clip.** The host's `load` command carries `gen`, and every `vframe` is tagged with the generation it was loaded under. The engine keeps `frameGen[slot]` in a pre-allocated Int32Array. The compositors set the plane's "video present" bit only while `frameGen[slot] === stack.videoGen`. After Clear media, or when a playlist media cue takes the media layer, the slot can be reloaded with another clip, and the live slide then simply shows its poster. When the media layer clears, the link also sends the existing `vclear` (`render.worker.ts:166-168`, no sender today).
+- **Generations stop a reused slot from showing the wrong clip.** The host's `load` command carries `gen`, and every `vframe` is tagged with the generation it was loaded under. The engine keeps `frameGen[slot]` in a pre-allocated Int32Array. The compositors set the plane's "video present" bit only while `frameGen[slot] === stack.videoGen`. After Clear media, or when a playlist media cue takes the media layer, the slot can be reloaded with another clip, and the live slide then simply shows its poster. When the media layer clears, the link also sends `vclear` for the slot, at the hub time the clip pauses (when the media layer's fade ends, or the slide's when the slide leaves with it). It goes through the host as the `vclear` media command: the host sends the renderer's existing `vclear` (`render.worker.ts`) on the channel its frames travel, so it lands after every frame already sent, and it delivers no frame of that key again until it plays or another key loads.
+- **Outgoing slots first.** Each sync marks the live videos that just left (`pauseAt`, `busyUntil`) before anything is armed, so the next slide's clip never takes the slot of a clip still fading out with its slide; it waits, its slide is drawn with the poster, and is drawn again in place once the slot frees.
 - In lyric-only and hidden slide modes the boxed video is not drawn, but its sound still plays on the master. `inSlide` is not set, and the master arms the clip for sound as today.
 - **Frame selection.** `vframe` keeps a 2-deep ring per slot and presents the newest frame whose timestamp is ≤ the expected media time (hubNow − startedAt, modulo the duration when looping). This fixes the design/14:217-218 mismatch.
 - **Fallback adapter.** An output whose adapter reports `isFallbackAdapter` (SwiftShader) is treated as Canvas 2D.
@@ -829,7 +831,7 @@ The exact `'lighter'` crossfade (`canvas2d.ts:60-85`) is unchanged.
 
 **Output.**
 - The armed plan preloads the next slide's clip, paused on its first frame (`link-core.ts:836-842, 1180-1183`), on every output (§7.2).
-- With `showWhenStopped: false`, the link sends `vclear` for the slot whenever the reducer's state is not 'playing', and the base has no poster, so nothing shows until the clip plays.
+- With `showWhenStopped: false`, the link sends `vclear` for the slot whenever the reducer's state is not 'playing' (also for the armed clip, and before its load reaches the host, so not even its first frame shows), and the base has no poster, so nothing shows until the clip plays.
 - An `ImageObject` whose `mediaId` is a *video* Media (Pro7 video fills, earlier editor picks) draws that Media's poster on outputs, as thumbnails and the editor already do: `slideImages` maps a video to `poster.hash`, which the manifest already ships. Today outputs draw nothing for it (`asset.worker.ts:199-203`, `link-core.ts:982-995`). It plays only once it has `play`; `play.mediaId` may be the same video.
 
 **Hub.**

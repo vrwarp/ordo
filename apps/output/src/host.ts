@@ -183,6 +183,8 @@ export class OutputHost {
           ? (slot, frame) =>
               this.toRender({ t: 'vframe', slot, frame, gen: this.slotGens[slot] ?? -1 }, [frame])
           : undefined,
+        // On the same channel as the frames, so the renderer clears after every frame already sent.
+        onClearFrame: video ? (slot) => this.toRender({ t: 'vclear', slot }) : undefined,
         onEnded: (s) => this.mediaEvent({ k: 'ended', slot: s.id, key: s.key }),
         onError: (s, e) => this.mediaEvent({ k: 'error', slot: s.id, key: s.key, error: e }),
         log: (m) => this.log(m),
@@ -604,6 +606,9 @@ export class OutputHost {
         return;
       case 'route':
         this.routeAudio(slot, c.master, c.audio);
+        return;
+      case 'vclear':
+        slot.hideFrames(c.key, c.at);
         return;
       case 'unload':
         slot.unload();

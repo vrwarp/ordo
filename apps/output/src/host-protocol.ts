@@ -51,6 +51,13 @@ export type MediaCommand =
   | { k: 'holdPaused'; slot: number }
   /** Route the slot's sound: through the audio engine on the master, muted elsewhere. */
   | { k: 'route'; slot: number; master: boolean; audio: AudioRoute }
+  /**
+   * Take the slot's picture out of the renderer (design/27 §7.2): at hub time `at` (now when absent) the
+   * host sends the renderer `vclear` for the slot, after every frame it already sent, and sends no frame
+   * of `key` again until it plays or another key loads. An in-slide clip whose media layer cleared, or one
+   * hidden while not playing (`showWhenStopped: false`); its slide then shows its poster, or nothing.
+   */
+  | { k: 'vclear'; slot: number; key: string; at?: number }
   | { k: 'unload'; slot: number };
 
 export type AudioCommand =
