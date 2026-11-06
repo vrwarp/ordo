@@ -125,16 +125,21 @@ async function takeOver(pid: string): Promise<void> {
 /**
  * Turn 'Show original' on for a presentation whose slides have no PowerPoint picture yet: save unsaved
  * edits first (the job saves a new revision), then ask the hub for the pictures and follow the job.
+ * `showPicture`: the slides the job also sets to show their picture on the screens (the PowerPoint card's
+ * 'Show the PowerPoint picture on the screens', M4 item F); none by default.
  * Resolves once the request is queued (true) or refused (false).
  */
-export async function requestOriginals(p: Pick<Presentation, 'id'>): Promise<boolean> {
+export async function requestOriginals(
+  p: Pick<Presentation, 'id'>,
+  showPicture: string[] = [],
+): Promise<boolean> {
   if (referenceRunning(useOriginal.getState().jobs[p.id])) return true;
   if (useEditor.getState().dirty && !(await save())) return false;
   let job: Job;
   try {
     job = await api<Job>(`/presentations/${p.id}/pptx-reference`, {
       method: 'POST',
-      json: { showPicture: [] },
+      json: { showPicture },
     });
   } catch (e) {
     toast(`Could not ask for the PowerPoint pictures: ${errorText(e)}`, 'error');

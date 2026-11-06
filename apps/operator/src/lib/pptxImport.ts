@@ -7,8 +7,9 @@
  * job or a failed one shows less on the card, never breaks it. Deck-derived strings (notes, font names) are
  * only ever rendered as text, and are bounded here once more.
  */
-import type { Presentation, Slide } from '@ordo/domain';
+import type { Presentation, Slide, SlideObject } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
+import { metricCompatible } from '@ordo/renderer';
 
 // ── The import screen ───────────────────────────────────────────────────────────────────────────────────
 
@@ -299,6 +300,162 @@ export function showObjects(slide: Slide): Slide {
 }
 
 /**
+ * The slide set to show its PowerPoint picture on every screen instead of its objects (`Slide.pptx.show`
+ * 'picture'; objects added in ordo still draw over it, `slideContent`). The slide itself when it has no
+ * picture yet or already shows it.
+ */
+export function showPicture(slide: Slide): Slide {
+  if (!slide.pptx?.refMediaId || slide.pptx.show === 'picture') return slide;
+  return { ...slide, pptx: { ...slide.pptx, show: 'picture' } };
+}
+
+// ── M4 item F: the editor's PowerPoint card and import report ──────────────────────────────────────────
+
+/**
+ * The digest the hub writes in `Slide.pptx.digest` (`@ordo/pptx-scene` `digestOf`: two FNV-1a lanes over
+ * the objects' JSON, 16 hex digits). Kept identical to it (tested), so the editor can tell an edited slide.
+ */
+export function objectsDigest(objects: readonly SlideObject[]): string {
+  const s = JSON.stringify(objects);
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193 ^ 0x5bd1e995;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193);
+    h2 = Math.imul(h2 ^ c, 0x01000193) ^ (h2 >>> 13);
+  }
+  return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
+}
+
+/**
+ * Whether a PowerPoint slide was edited since the hub last wrote it: its imported objects (those with an
+ * `origin`) no longer match `Slide.pptx.digest`, as the re-import tests it (`reimport.ts` `unedited`).
+ * Objects added in ordo do not count. A copy (no digest) counts as edited; a slide not from PowerPoint never.
+ */
+export function slideEdited(slide: Pick<Slide, 'objects' | 'pptx'>): boolean {
+  const d = slide.pptx?.digest;
+  if (!slide.pptx) return false;
+  if (!d) return true;
+  return objectsDigest(slide.objects) !== d && objectsDigest(slide.objects.filter((o) => o.origin)) !== d;
+}
+
+/** Families every output draws as they are. */
+const GENERIC_FAMILIES: ReadonlySet<string> = new Set(['sans-serif', 'serif', 'monospace', 'system-ui']);
+/** A family name as the card shows it: no control characters, at most 100 characters. */
+function familyName(f: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what is removed
+  const t = f.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+  return t.length > 100 ? `${t.slice(0, 99)}…` : t;
+}
+
+/**
+ * The font families a slide's text asks for that the hub's fonts do not draw with their own widths: neither
+ * the family nor, among the box's fallback fonts, a metric-compatible one (Carlito for Calibri) is in
+ * `library`. The card offers 'Upload font' for these (design/27 §10, §11 item 12). In first-use order, each
+ * once (case-insensitive), at most `max`.
+ */
+export function missingSlideFonts(
+  slides: readonly Pick<Slide, 'objects'>[],
+  library: Iterable<string>,
+  max = 20,
+): string[] {
+  const have = new Set<string>();
+  for (const f of library) have.add(f.trim().toLowerCase());
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const check = (family: string | undefined, fallbacks: readonly string[]) => {
+    if (!family || out.length >= max) return;
+    const name = familyName(family);
+    const k = name.toLowerCase();
+    if (!name || seen.has(k)) return;
+    if (have.has(k) || GENERIC_FAMILIES.has(k)) {
+      seen.add(k);
+      return;
+    }
+    // A metric-compatible face the box falls back to, when the hub has it, keeps PowerPoint's line breaks.
+    if (fallbacks.some((f) => have.has(f.trim().toLowerCase()) && metricCompatible(family, f))) return;
+    seen.add(k);
+    out.push(name);
+  };
+  for (const s of slides)
+    for (const o of s.objects) {
+      if (o.type !== 'text') continue;
+      const fallbacks = o.style.fallbackFonts ?? [];
+      check(o.style.fontFamily, fallbacks);
+      for (const r of o.runs ?? []) check(r.fontFamily, fallbacks);
+    }
+  return out;
+}
+
+/** What the Presentation panel's PowerPoint report shows (design/27 §11 item 12, §15 M4). */
+export type ImportReport = {
+  /** The native import's counts (`source.native`), or the legacy picture import's. */
+  native?: { slides: number; native: number; hybrid: number; picture: number; version: number };
+  /** Legacy picture pages still in the presentation (`Slide.imported` without `pptx`). */
+  pages: number;
+  /** PowerPoint slides waiting for LibreOffice, and those it could not draw. */
+  pending: number;
+  failed: number;
+  hidden: number;
+  /** Slides edited since the import (their objects no longer match the digest). */
+  edited: number;
+  /** What drew a legacy import's pictures. */
+  renderer?: string;
+  /** `source.log` lines, at most `LOG_LINES` of the newest, each a warning or not. */
+  log: { text: string; warn: boolean }[];
+  /** Log lines left out (older ones). */
+  logMore: number;
+};
+
+/** Import log lines the report shows. */
+export const LOG_LINES = 200;
+
+/** The report of a PowerPoint presentation; undefined for any other presentation. */
+export function importReport(p: Pick<Presentation, 'source' | 'sections'>): ImportReport | undefined {
+  const src = p.source;
+  if (src?.kind !== 'pptx') return undefined;
+  let pages = 0;
+  let pending = 0;
+  let failed = 0;
+  let hidden = 0;
+  let edited = 0;
+  for (const sec of p.sections)
+    for (const sl of sec.slides) {
+      if (sl.hidden) hidden++;
+      if (sl.imported && !sl.pptx) pages++;
+      if (sl.pptx?.pending) pending++;
+      if (sl.pptx?.failed) failed++;
+      if (sl.pptx && slideEdited(sl)) edited++;
+    }
+  const all = (src.log ?? '').split('\n').filter((l) => l.trim());
+  const lines = texts(all.slice(-LOG_LINES), LOG_LINES, 400);
+  const n = src.native;
+  return {
+    ...(n
+      ? {
+          native: {
+            slides: count(n.slides),
+            native: count(n.native),
+            hybrid: count(n.hybrid),
+            picture: count(n.picture),
+            version: count(n.version),
+          },
+        }
+      : {}),
+    pages,
+    pending,
+    failed,
+    hidden,
+    edited,
+    ...(src.renderer ? { renderer: src.renderer } : {}),
+    log: lines.map((t) =>
+      t.startsWith('[warn] ') ? { text: t.slice(7), warn: true } : { text: t, warn: false },
+    ),
+    logMore: Math.max(0, all.length - LOG_LINES),
+  };
+}
+
+/**
  * `draft` with the reference pictures (and picture settings) of `latest`, slide by slide; nothing else, and
  * its own `rev` (a save still meets the hub's revision check). Slides the draft no longer has, or that are
  * not from a PowerPoint, are left alone.
@@ -327,11 +484,16 @@ function withReference(sl: Slide, r: NonNullable<Slide['pptx']>): Slide {
   return { ...sl, pptx };
 }
 
-/** `savedBy` of the revisions the hub's PowerPoint jobs save (version 2, reference pictures, text repair). */
+/**
+ * `savedBy` of the revisions the hub's PowerPoint jobs save (version 2, reference pictures, text repair, and
+ * 'Re-import from PowerPoint': its revision is taken over like a follow-up's, slide by slide, so a volunteer's
+ * unsaved edit of a slide stays and every other slide shows what the re-import made).
+ */
 export const PPTX_JOB_SAVERS: ReadonlySet<string> = new Set([
   'pptx-lo',
   'pptx-reference',
   'pptx-text-repair',
+  'pptx-reimport',
 ]);
 
 /**

@@ -476,9 +476,12 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     hub.imports.pptx.followUp(saved);
     return saved;
   });
-  route('POST', '/presentations/:id/slides/:slideId/make-editable', 'edit', async (req) => {
+  route('POST', '/presentations/:id/slides/:slideId/make-editable', 'edit', async (req, reply) => {
     const id = params(req).id!;
     assertPresentationUnlocked(id);
+    // A legacy PowerPoint page whose deck is stored is rebuilt natively (M4 item F): 202 and the job.
+    const job = hub.imports.makeEditableNative(id, params(req).slideId!, by(req));
+    if (job) return reply.code(202).send(job);
     return hub.imports.makeEditable(id, params(req).slideId!, by(req));
   });
   // 'Show PowerPoint picture' (design/27 §5 "Operator fallback"): LibreOffice pictures of every shown slide.

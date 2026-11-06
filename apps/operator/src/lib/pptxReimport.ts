@@ -70,3 +70,76 @@ export function readReimportResult(v: unknown): PptxReimportResult | undefined {
     userObjects: count(v.userObjects),
   };
 }
+
+/** What the 'Re-import from PowerPoint' dialog says a plan will do. */
+export type PlanSummary = {
+  /** Native slides as imported (or reset): rebuilt from the deck. */
+  rebuild: number;
+  /** Native slides edited in ordo: kept as they are. */
+  keptEdited: number;
+  /** Legacy picture pages: become editable slides. */
+  pages: number;
+  /** Slides made editable by an older build: listed, each with 'Keep as it is'. */
+  madeEditable: PptxReimportPlanSlide[];
+  /** Any other slide (typed in ordo, from another file): kept as it is. */
+  other: number;
+  /** Objects added in ordo on the slides that change, kept on top. */
+  userObjects: number;
+};
+
+/** A plan in the dialog's terms. */
+export function planSummary(plan: PptxReimportPlan): PlanSummary {
+  const out: PlanSummary = {
+    rebuild: 0,
+    keptEdited: 0,
+    pages: 0,
+    madeEditable: [],
+    other: 0,
+    userObjects: 0,
+  };
+  for (const s of plan.slides) {
+    if (s.kind === 'native' && s.action === 'regenerate') out.rebuild++;
+    else if (s.kind === 'native') out.keptEdited++;
+    else if (s.kind === 'page') out.pages++;
+    else if (s.kind === 'made-editable') out.madeEditable.push(s);
+    else out.other++;
+    if (s.action === 'regenerate' || s.action === 'replace') out.userObjects += s.userObjects;
+  }
+  return out;
+}
+
+/** What asked for a re-import: the Presentation panel, 'Reset slide' or 'Make editable'. */
+export type ReimportWhat = 'reimport' | 'reset' | 'make-editable';
+
+const n = (k: number, one: string, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
+
+/** What the editor says when a re-import job is done (its result read defensively). */
+export function reimportMessage(
+  what: ReimportWhat,
+  r: PptxReimportResult | undefined,
+): { text: string; tone: 'ok' | 'warn' } {
+  if (!r) return { text: 'The re-import is done. Reload the presentation to see it.', tone: 'warn' };
+  if (what === 'reset')
+    return r.regenerated
+      ? { text: 'The slide is as the PowerPoint file has it again.', tone: 'ok' }
+      : { text: 'Nothing to reset: the slide is as the PowerPoint file has it.', tone: 'ok' };
+  if (what === 'make-editable')
+    return r.replaced
+      ? {
+          text: 'The slide was rebuilt from the PowerPoint file: its text, pictures and shapes are editable.',
+          tone: 'ok',
+        }
+      : {
+          text: 'ordo could not rebuild this slide from the PowerPoint file: it stays a picture.',
+          tone: 'warn',
+        };
+  if (!r.rev) return { text: 'Nothing changed: every slide is as the PowerPoint file has it.', tone: 'ok' };
+  const parts = [
+    ...(r.regenerated ? [`${n(r.regenerated, 'slide')} rebuilt`] : []),
+    ...(r.replaced ? [`${n(r.replaced, 'picture slide')} made editable`] : []),
+    ...(r.keptEdited
+      ? [`${n(r.keptEdited, 'edited slide')} kept as ${r.keptEdited === 1 ? 'it is' : 'they are'}`]
+      : []),
+  ];
+  return { text: `Re-imported from PowerPoint: ${parts.join(', ') || 'nothing changed'}.`, tone: 'ok' };
+}

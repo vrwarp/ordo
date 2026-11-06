@@ -235,6 +235,11 @@ export type PptxReimportPayload = {
   options?: PptxImportOptions;
   /** Times the job found the presentation live-locked and deferred itself (the backoff step). */
   deferrals?: number;
+  /**
+   * The conversion's resume points (`PptxNativeProgress`: pictures and clips already stored, the
+   * presentation's id), so a job re-run after a restart or a deferral never stores a picture twice.
+   */
+  done?: PptxNativeProgress;
 };
 
 export type PptxJobPayloads = {
