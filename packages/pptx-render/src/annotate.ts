@@ -333,6 +333,10 @@ export async function annotatePptx(
   const read = reader(MAX_TOTAL_BYTES);
   /** The passes after the text walk (picture shapes, chart titles, relationships) read on their own budget. */
   const readLater = reader(MAX_TOTAL_BYTES);
+  /** The repairs before it (Strict OOXML, group transforms, placeholders) too. */
+  const readRepair = reader(MAX_TOTAL_BYTES);
+  // First, as everything after reads Transitional names and values.
+  let changed = await repairStrict(zip, notes, readRepair);
   const parse = async (name: string): Promise<XNode | undefined> => {
     const xml = await read(name);
     if (xml === undefined) return undefined;
@@ -398,13 +402,46 @@ export async function annotatePptx(
   const paras: ParaStyle[] = [];
   const bodies: BodyStyle[] = [];
   const families = new Set<string>();
-  let changed = await repairContentTypes(zip, notes);
+  if (await repairContentTypes(zip, notes)) changed = true;
   let full = false;
   /** Text tags walked so far, over every part. */
   let texts = 0;
   const names = Object.keys(zip.files)
     .filter((n) => PART_RE.test(n))
     .sort();
+  /** What pptx-preview finds on each layout (see `topPlaceholders`). */
+  const layoutTops = new Map<string, { idx: Set<string>; type: Set<string> }>();
+  for (const name of names) {
+    const xml = await readRepair(name);
+    if (xml === undefined) continue;
+    let fixed = xml.includes('<p:grpSpPr') ? completeGroupTransforms(xml) : xml;
+    if (fixed !== xml) notes.push(`${name}: group transforms completed`);
+    if (name.startsWith('ppt/slides/') && fixed.includes('<p:ph')) {
+      const lp = await relTarget(zip, name, 'slideLayout');
+      // Without a layout pptx-preview draws no placeholder at all; there is nothing to match.
+      const layout = lp && zip.file(lp) ? await layoutOf(lp) : undefined;
+      if (lp && layout) {
+        let top = layoutTops.get(lp);
+        if (!top) {
+          top = topPlaceholders(await parse(lp));
+          layoutTops.set(lp, top);
+        }
+        const r = placeOrphanPlaceholders(
+          fixed,
+          top,
+          (ph) => findLayoutPh(layout, ph)?.xfrm ?? findMasterPh(layout.master, ph.type)?.xfrm,
+          { cx: Math.round(slideWidthPt * EMU_PER_PT), cy: Math.round(slideHeightPt * EMU_PER_PT) },
+        );
+        if (r.placed || r.dropped)
+          notes.push(`${name}: placeholders not on the layout: ${r.placed} placed, ${r.dropped} dropped`);
+        fixed = r.xml;
+      }
+    }
+    if (fixed !== xml) {
+      zip.file(name, fixed);
+      changed = true;
+    }
+  }
   for (const name of names) {
     if (full) break;
     const xml = await read(name);
@@ -511,7 +548,9 @@ async function slideOrder(zip: JSZip, pres: XNode | undefined): Promise<string[]
   const byId = new Map(children(rels, 'Relationship').map((r) => [r.attrs.Id, r.attrs.Target]));
   const out: string[] = [];
   for (const id of children(child(pres, 'p:sldIdLst'), 'p:sldId')) {
-    const target = byId.get(id.attrs['r:id']);
+    // The relationships namespace's prefix is the deck's choice; `r` is only the usual one.
+    const rid = id.attrs['r:id'] ?? Object.entries(id.attrs).find(([k]) => k.endsWith(':id'))?.[1];
+    const target = rid === undefined ? undefined : byId.get(rid);
     if (target) out.push(resolvePath('ppt', target));
   }
   return out;
@@ -901,6 +940,207 @@ function concat(b: Uint8Array, ranges: [number, number][]): Uint8Array {
     o += e - s;
   }
   return out;
+}
+
+/** The namespace and relationship-type root of Strict OOXML (ISO/IEC 29500 Strict). */
+const STRICT = 'http://purl.oclc.org/ooxml/';
+const STRICT_URI =
+  /http:\/\/purl\.oclc\.org\/ooxml\/(drawingml|presentationml|spreadsheetml|wordprocessingml|officeDocument)\/([A-Za-z0-9/-]+)/g;
+/** Strict names that differ in Transitional (the rest only move under `.../2006/`). */
+const STRICT_RENAMED: Record<string, string> = {
+  'officeDocument/relationships/metadata/thumbnail':
+    'http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail',
+  'officeDocument/relationships/metadata/core-properties':
+    'http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties',
+  'officeDocument/relationships/extendedProperties':
+    'http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties',
+  'officeDocument/relationships/customProperties':
+    'http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties',
+  'officeDocument/extendedProperties':
+    'http://schemas.openxmlformats.org/officeDocument/2006/extended-properties',
+  'officeDocument/customProperties':
+    'http://schemas.openxmlformats.org/officeDocument/2006/custom-properties',
+};
+/** DrawingML and PresentationML parts, whose Strict percentages (`"90%"`) are thousandths in Transitional. */
+const PERCENT_PART_RE =
+  /^ppt\/(slides|slideLayouts|slideMasters|notesSlides|notesMasters|handoutMasters|theme)\/[^/]+\.xml$/;
+
+/**
+ * A part of a Strict OOXML deck in its Transitional form: namespace and relationship-type URIs, and, with
+ * `percents`, percentage attributes (`val="90%"` is `val="90000"`). pptx-preview knows only Transitional
+ * URIs: in a Strict deck it finds no theme, layout or master and draws no slide at all.
+ */
+export function strictToTransitional(xml: string, percents: boolean): string {
+  let out = xml.replace(STRICT_URI, (_m, area: string, rest: string) => {
+    const key = `${area}/${rest}`;
+    return STRICT_RENAMED[key] ?? `http://schemas.openxmlformats.org/${area}/2006/${rest}`;
+  });
+  if (percents)
+    out = out.replace(/<[^<>!?]*>/g, (tag) =>
+      tag.replace(
+        /(\s[\w:.-]+=")(-?\d+(?:\.\d+)?)%"/g,
+        (_m, pre: string, n: string) => `${pre}${Math.round(Number(n) * 1000)}"`,
+      ),
+    );
+  return out;
+}
+
+/** Rewrite a Strict deck's XML parts, relationships and content types to Transitional (see above). */
+async function repairStrict(
+  zip: JSZip,
+  notes: string[],
+  read: (name: string) => Promise<string | undefined>,
+): Promise<boolean> {
+  const root = (await readText(zip, '_rels/.rels')) ?? '';
+  const presRels = (await readText(zip, 'ppt/_rels/presentation.xml.rels')) ?? '';
+  if (!root.includes(STRICT) && !presRels.includes(STRICT)) return false;
+  let n = 0;
+  for (const name of Object.keys(zip.files)) {
+    if (zip.files[name]?.dir || !/\.(xml|rels)$/i.test(name)) continue;
+    const xml = await read(name);
+    if (xml === undefined || !xml.includes(STRICT)) continue;
+    zip.file(name, strictToTransitional(xml, PERCENT_PART_RE.test(name)));
+    n++;
+  }
+  notes.push(`Strict OOXML: ${n} part${n === 1 ? '' : 's'} rewritten to Transitional`);
+  return n > 0;
+}
+
+/**
+ * Give every group transform (`p:grpSpPr/a:xfrm`) all four of `a:off`, `a:ext`, `a:chOff` and `a:chExt`.
+ * Each is optional; pptx-preview reads all four and stops drawing the deck (no slide at all) on a group
+ * without one. A missing offset is the origin (as LibreOffice reads it) and a missing size is the other
+ * one, so a group without child extents does not scale its shapes.
+ */
+export function completeGroupTransforms(xml: string): string {
+  let out = '';
+  let last = 0;
+  /** Where the last group's properties close: a tag before it is inside them (one scan, not one each). */
+  let after = 0;
+  for (const [start, end] of startTags(xml, 'p:grpSpPr')) {
+    if (xml[end - 2] === '/' || start < after) continue;
+    const close = xml.indexOf('</p:grpSpPr>', end);
+    if (close < 0) break;
+    after = close;
+    const inner = xml.slice(end, close);
+    const tag = startTags(inner, 'a:xfrm')[0];
+    if (!tag) continue;
+    const xs = end + tag[0];
+    const selfClosing = inner[tag[1] - 2] === '/';
+    const xclose = selfClosing ? tag[1] : inner.indexOf('</a:xfrm>', tag[1]);
+    if (xclose < 0) continue;
+    const xe = end + xclose + (selfClosing ? 0 : '</a:xfrm>'.length);
+    const span = xml.slice(xs, xe);
+    let x: XNode | undefined;
+    try {
+      x = rootOf(parseXml(span, 'a:xfrm'));
+    } catch {
+      continue;
+    }
+    const got = (name: string) => {
+      const a = child(x, name)?.attrs;
+      return a && Object.keys(a).length ? a : undefined;
+    };
+    const off = got('a:off');
+    const ext = got('a:ext');
+    const chOff = got('a:chOff');
+    const chExt = got('a:chExt');
+    if (off && ext && chOff && chExt) continue;
+    const pt = (a: Record<string, string> | undefined, k1: string, k2: string) =>
+      `${k1}="${num(a?.[k1]) ?? 0}" ${k2}="${num(a?.[k2]) ?? 0}"`;
+    const head = xml.slice(xs, end + tag[1] - (selfClosing ? 2 : 1));
+    out +=
+      xml.slice(last, xs) +
+      `${head}><a:off ${pt(off, 'x', 'y')}/><a:ext ${pt(ext ?? chExt, 'cx', 'cy')}/>` +
+      `<a:chOff ${pt(chOff, 'x', 'y')}/><a:chExt ${pt(chExt ?? ext, 'cx', 'cy')}/></a:xfrm>`;
+    last = xe;
+  }
+  return last ? out + xml.slice(last) : xml;
+}
+
+/** The placeholders pptx-preview can find on a layout: those directly in its shape tree, by idx and type. */
+function topPlaceholders(root: XNode | undefined): { idx: Set<string>; type: Set<string> } {
+  const out = { idx: new Set<string>(), type: new Set<string>() };
+  for (const sp of children(path(root, 'p:cSld', 'p:spTree'), 'p:sp')) {
+    const ph = path(sp, 'p:nvSpPr', 'p:nvPr', 'p:ph');
+    if (ph?.attrs.idx) out.idx.add(ph.attrs.idx);
+    if (ph?.attrs.type) out.type.add(ph.attrs.type);
+  }
+  return out;
+}
+
+/** Placeholders for the date, footer, slide number and header: LibreOffice draws none without a place. */
+const FOOTER_TYPES = new Set(['dt', 'ftr', 'sldNum', 'hdr']);
+
+/**
+ * A slide placeholder without a position of its own whose layout has no placeholder pptx-preview matches
+ * it to (by idx, or by type when it has no idx): pptx-preview stops drawing the deck on it. Give it the
+ * position it inherits (the layout's placeholder of its type, else the master's). When nothing places it,
+ * drop a date, footer, slide number or header (LibreOffice draws none) and give anything else the whole
+ * slide (`slide`, in EMU), so its text is still drawn.
+ */
+export function placeOrphanPlaceholders(
+  xml: string,
+  layout: { idx: Set<string>; type: Set<string> },
+  inherited: (ph: { type: string; idx?: string }) => XNode | undefined,
+  slide: { cx: number; cy: number },
+): { xml: string; placed: number; dropped: number } {
+  let out = '';
+  let last = 0;
+  let placed = 0;
+  let dropped = 0;
+  /** Where the last shape ends: shapes do not nest, so each is scanned once. */
+  let after = 0;
+  for (const [start, tagEnd] of startTags(xml, 'p:sp')) {
+    if (start < after || xml[tagEnd - 2] === '/') continue;
+    const close = xml.indexOf('</p:sp>', tagEnd);
+    if (close < 0) break;
+    const end = close + '</p:sp>'.length;
+    after = end;
+    const span = xml.slice(start, end);
+    if (!span.includes('<p:ph')) continue;
+    let sp: XNode | undefined;
+    try {
+      sp = rootOf(parseXml(span, 'p:sp'));
+    } catch {
+      continue;
+    }
+    const ph = path(sp, 'p:nvSpPr', 'p:nvPr', 'p:ph');
+    const spPr = child(sp, 'p:spPr');
+    if (!ph || !spPr || child(spPr, 'a:xfrm')) continue;
+    const { idx, type } = ph.attrs;
+    if (idx ? layout.idx.has(idx) : !type || layout.type.has(type)) continue;
+    let xfrm = inherited({ type: type ?? 'obj', idx });
+    let off = child(xfrm, 'a:off')?.attrs;
+    let ext = child(xfrm, 'a:ext')?.attrs;
+    if (!off || !ext) {
+      if (FOOTER_TYPES.has(type ?? '')) {
+        out += xml.slice(last, start);
+        last = end;
+        dropped++;
+        continue;
+      }
+      xfrm = undefined;
+      off = { x: '0', y: '0' };
+      ext = { cx: String(slide.cx), cy: String(slide.cy) };
+    }
+    const attrs = Object.entries(xfrm?.attrs ?? {})
+      .filter(([k]) => k === 'rot' || k === 'flipH' || k === 'flipV')
+      .map(([k, v]) => ` ${k}="${num(v) ?? (v === 'true' ? 1 : 0)}"`)
+      .join('');
+    const own =
+      `<a:xfrm${attrs}><a:off x="${num(off.x) ?? 0}" y="${num(off.y) ?? 0}"/>` +
+      `<a:ext cx="${num(ext.cx) ?? 0}" cy="${num(ext.cy) ?? 0}"/></a:xfrm>`;
+    const pe = startTags(span, 'p:spPr')[0]![1];
+    const fixed =
+      span[pe - 2] === '/'
+        ? `${span.slice(0, pe - 2).trimEnd()}>${own}</p:spPr>${span.slice(pe)}`
+        : span.slice(0, pe) + own + span.slice(pe);
+    out += xml.slice(last, start) + fixed;
+    last = end;
+    placed++;
+  }
+  return { xml: last ? out + xml.slice(last) : xml, placed, dropped };
 }
 
 /**

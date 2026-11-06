@@ -2,13 +2,17 @@ import JSZip from 'jszip';
 import { describe, expect, it } from 'vitest';
 import {
   annotatePptx,
+  completeGroupTransforms,
+  placeOrphanPlaceholders,
   placeSlides,
   previewOrder,
+  strictToTransitional,
   stripColorProfiles,
   withoutIccp,
   withoutJpegIcc,
 } from './annotate.ts';
 import { decodeMarker, encodeMarker, MARK_START, MAX_MARKED_RUNS } from './markers.ts';
+import { parseXml, rootOf } from './xml.ts';
 
 const NS =
   'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
@@ -57,6 +61,8 @@ async function deck(slideBody: string, extra: Record<string, string> = {}): Prom
         lstStyle: '<a:lvl1pPr><a:defRPr><a:latin typeface="Tahoma"/></a:defRPr></a:lvl1pPr>',
         body: '<a:p><a:endParaRPr/></a:p>',
       }) +
+      // Every placeholder a slide has is on its layout: pptx-preview draws no slide when one is not.
+      sp({ ph: '<p:ph type="title"/>', body: '<a:p><a:endParaRPr/></a:p>' }) +
       '</p:spTree></p:cSld></p:sldLayout>',
   );
   z.file(
@@ -400,6 +406,171 @@ describe('annotatePptx', () => {
     );
     // pptx-preview draws slide1, slide2, slide3, slide10; they go to places 1, 2, (hidden), 0.
     expect(a.slideOrder).toEqual([1, 2, -1, 0]);
+  });
+
+  it('reads a Strict OOXML deck as the Transitional one pptx-preview knows', async () => {
+    /** The deck as Strict OOXML writes it: other namespace and relationship URIs, percentages as `N%`. */
+    const strict = async (bytes: Uint8Array) => {
+      const z = await JSZip.loadAsync(bytes);
+      for (const name of Object.keys(z.files)) {
+        if (z.files[name]!.dir) continue;
+        const xml = await z.file(name)!.async('string');
+        z.file(
+          name,
+          xml
+            .replaceAll(
+              'http://schemas.openxmlformats.org/drawingml/2006/main',
+              'http://purl.oclc.org/ooxml/drawingml/main',
+            )
+            .replaceAll(
+              'http://schemas.openxmlformats.org/presentationml/2006/main',
+              'http://purl.oclc.org/ooxml/presentationml/main',
+            )
+            .replaceAll(REL, 'http://purl.oclc.org/ooxml/officeDocument/relationships'),
+        );
+      }
+      return z.generateAsync({ type: 'uint8array' });
+    };
+    const presRels =
+      '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      `<Relationship Id="rId2" Type="${REL}/slide" Target="slides/slide1.xml"/>` +
+      `<Relationship Id="rId3" Type="${REL}/extendedProperties" Target="../docProps/app.xml"/></Relationships>`;
+    // The relationships prefix is the writer's choice (`rel`, not `r`).
+    const pres =
+      `<?xml version="1.0"?><p:presentation ${NS.replace('xmlns:r=', 'xmlns:rel=')}>` +
+      '<p:sldIdLst><p:sldId id="256" rel:id="rId2"/></p:sldIdLst><p:sldSz cx="12192000" cy="6858000"/></p:presentation>';
+    const body = sp({
+      ph: '<p:ph type="title"/>',
+      spPr: '<a:solidFill><a:schemeClr val="accent1"><a:lumMod val="75%"/></a:schemeClr></a:solidFill>',
+      body: `<a:p><a:pPr><a:lnSpc><a:spcPct val="90.5%"/></a:lnSpc></a:pPr>${run('Strict')}</a:p>`,
+    });
+    const a = await annotatePptx(
+      await strict(
+        await deck(body, {
+          'ppt/presentation.xml': pres,
+          'ppt/_rels/presentation.xml.rels': presRels,
+          '[Content_Types].xml': types(['slide1']),
+        }),
+      ),
+    );
+    expect(a.notes).toEqual(['Strict OOXML: 9 parts rewritten to Transitional']);
+    const z = await JSZip.loadAsync(a.bytes);
+    const slide = await z.file('ppt/slides/slide1.xml')!.async('string');
+    expect(slide).not.toContain('purl.oclc.org');
+    expect(slide).toContain('xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"');
+    expect(slide).toContain('<a:lumMod val="75000"/>');
+    expect(slide).toContain('<a:spcPct val="90500"/>');
+    expect(await z.file('ppt/slides/_rels/slide1.xml.rels')!.async('string')).toContain(
+      `Type="${REL}/slideLayout"`,
+    );
+    expect(await z.file('ppt/_rels/presentation.xml.rels')!.async('string')).toContain(
+      `Type="${REL}/extended-properties"`,
+    );
+    expect(await marked(a.bytes, a.runs)).toEqual([['Strict', { latin: 'Aptos Display' }]]);
+    expect(a.paras[0]?.lnSpcPct).toBe(90_500);
+    expect(a.slideOrder).toEqual([0]);
+  });
+
+  it('rewrites Strict URIs and percentages only where they are', () => {
+    expect(
+      strictToTransitional(
+        '<Relationships><Relationship Type="http://purl.oclc.org/ooxml/officeDocument/relationships/metadata/thumbnail"/>' +
+          '<Relationship Type="http://purl.oclc.org/ooxml/officeDocument/relationships/chart"/></Relationships>',
+        false,
+      ),
+    ).toBe(
+      '<Relationships><Relationship Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail"/>' +
+        `<Relationship Type="${REL}/chart"/></Relationships>`,
+    );
+    expect(
+      strictToTransitional(
+        '<a:graphicData uri="http://purl.oclc.org/ooxml/drawingml/chart"><a:gs pos="50%"/><a:t> w="5%" </a:t></a:graphicData>',
+        true,
+      ),
+    ).toBe(
+      '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><a:gs pos="50000"/><a:t> w="5%" </a:t></a:graphicData>',
+    );
+  });
+
+  it('completes group transforms: pptx-preview reads all four of offset, size and child offset and size', async () => {
+    const grp = (xfrm: string) => `<p:grpSp><p:nvGrpSpPr/><p:grpSpPr>${xfrm}</p:grpSpPr></p:grpSp>`;
+    const whole =
+      '<a:xfrm><a:off x="1" y="2"/><a:ext cx="3" cy="4"/><a:chOff x="5" y="6"/><a:chExt cx="7" cy="8"/></a:xfrm>';
+    expect(completeGroupTransforms(grp(whole))).toBe(grp(whole));
+    expect(
+      completeGroupTransforms(
+        grp(
+          '<a:xfrm rot="60000"><a:off x="10" y="20"/><a:ext cx="30" cy="40"/><a:chExt cx="300" cy="400"/></a:xfrm>',
+        ) +
+          grp('<a:xfrm><a:off x="10" y="20"/><a:ext cx="30" cy="40"/></a:xfrm>') +
+          grp('<a:xfrm/>') +
+          '<p:grpSpPr/>',
+      ),
+    ).toBe(
+      grp(
+        '<a:xfrm rot="60000"><a:off x="10" y="20"/><a:ext cx="30" cy="40"/><a:chOff x="0" y="0"/><a:chExt cx="300" cy="400"/></a:xfrm>',
+      ) +
+        grp(
+          '<a:xfrm><a:off x="10" y="20"/><a:ext cx="30" cy="40"/><a:chOff x="0" y="0"/><a:chExt cx="30" cy="40"/></a:xfrm>',
+        ) +
+        grp(
+          '<a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm>',
+        ) +
+        '<p:grpSpPr/>',
+    );
+    // In a deck: the slide's group is repaired before its text is marked.
+    const a = await annotatePptx(
+      await deck(
+        '<p:grpSp><p:nvGrpSpPr/><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="9" cy="9"/></a:xfrm></p:grpSpPr>' +
+          `${sp({ body: `<a:p>${run('In a group')}</a:p>` })}</p:grpSp>`,
+      ),
+    );
+    expect(a.notes).toEqual(['ppt/slides/slide1.xml: group transforms completed']);
+    const slide = await (await JSZip.loadAsync(a.bytes)).file('ppt/slides/slide1.xml')!.async('string');
+    expect(slide).toContain('<a:chOff x="0" y="0"/><a:chExt cx="9" cy="9"/>');
+    expect((await marked(a.bytes, a.runs)).map(([t]) => t)).toEqual(['In a group']);
+  });
+
+  it('places or drops slide placeholders pptx-preview cannot find on their layout', async () => {
+    const ph = (attrs: string, spPr = '<p:spPr/>') =>
+      `<p:sp><p:nvSpPr><p:cNvPr id="2" name="S"/><p:cNvSpPr/><p:nvPr><p:ph ${attrs}/></p:nvPr></p:nvSpPr>${spPr}<p:txBody><a:bodyPr/><a:p/></p:txBody></p:sp>`;
+    const own = '<p:spPr><a:xfrm><a:off x="1" y="1"/><a:ext cx="1" cy="1"/></a:xfrm></p:spPr>';
+    const footer = rootOf(
+      parseXml('<a:xfrm flipH="1"><a:off x="10" y="20"/><a:ext cx="30" cy="40"/></a:xfrm>', 'xfrm'),
+    );
+    const layout = { idx: new Set(['1']), type: new Set(['title']) };
+    const keep =
+      ph('type="body" idx="1"') + ph('type="title"') + ph('type="dt" idx="13"', own) + ph('idx="14"', '');
+    const r = placeOrphanPlaceholders(
+      keep +
+        ph('type="ftr" idx="11"') +
+        ph('type="sldNum" idx="12"', '<p:spPr bwMode="auto"></p:spPr>') +
+        ph('type="pic" idx="15"'),
+      layout,
+      (p) => (p.type === 'ftr' ? footer : undefined),
+      { cx: 100, cy: 50 },
+    );
+    expect(r).toEqual({
+      xml:
+        keep +
+        ph(
+          'type="ftr" idx="11"',
+          '<p:spPr><a:xfrm flipH="1"><a:off x="10" y="20"/><a:ext cx="30" cy="40"/></a:xfrm></p:spPr>',
+        ) +
+        // Nothing places it: the whole slide, so its text is still drawn.
+        ph(
+          'type="pic" idx="15"',
+          '<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="50"/></a:xfrm></p:spPr>',
+        ),
+      placed: 2,
+      dropped: 1,
+    });
+    // In a deck: a footer with nothing to inherit its place from (the layout and master have none) is dropped.
+    const a = await annotatePptx(
+      await deck(sp({ ph: '<p:ph type="ftr" idx="7"/>', body: `<a:p>${run('F')}</a:p>` })),
+    );
+    expect(a.notes).toEqual(['ppt/slides/slide1.xml: placeholders not on the layout: 0 placed, 1 dropped']);
+    expect(await marked(a.bytes, a.runs)).toEqual([]);
   });
 
   it('removes embedded colour profiles from JPEG and PNG pictures, and only those', () => {

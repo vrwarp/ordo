@@ -131,7 +131,17 @@ which ordo owns and can keep fixing:
 
 - **Repair before drawing** (`annotate.ts`). Package defects that stop pptx-preview are mended in a copy of
   the deck: content-type entries for parts that do not exist (pptxgenjs writes one slide master per slide,
-  and pptx-preview then draws nothing) are dropped. pptx-preview loads only pictures whose part is named
+  and pptx-preview then draws nothing) are dropped. A Strict OOXML deck (ISO 29500 Strict, namespaces and
+  relationship types under `http://purl.oclc.org/ooxml/`) is rewritten to Transitional, the only form
+  pptx-preview knows (it finds no theme, layout or master otherwise and draws no slide): URIs in every XML
+  part and `.rels`, and percentages in slides, layouts, masters and themes (`"90%"` is `"90000"`). A
+  group transform missing one of `a:off`, `a:ext`, `a:chOff`, `a:chExt` (all optional; Aspose omits
+  some) gets it (a missing offset is the origin, as LibreOffice reads it, a missing size the other one).
+  A slide placeholder without a position of its own whose layout has no placeholder pptx-preview matches
+  (by idx, else by type) gets the position it inherits (the layout's placeholder of its type, else the
+  master's); with none, a date, footer, slide number or header is dropped (LibreOffice draws none) and
+  anything else gets the whole slide. Each of these otherwise stops pptx-preview drawing the whole deck.
+  pptx-preview loads only pictures whose part is named
   `ppt/media/image*`; others (pptxgenjs writes `Slide-3-image-1.png`) are renamed, with every relationship
   to them. A chart without a title gets the one PowerPoint shows (none when it was deleted, the series name
   for a single series) instead of pptx-preview's placeholder ("图表标题"). Embedded colour profiles are
