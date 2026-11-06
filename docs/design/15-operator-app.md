@@ -203,6 +203,31 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
   drops the old picture's crop, which does not fit the new one (design/27 §15 M3).
 - Saves via `PUT /presentations/:id` with `rev`; 409 shows the reload dialog.
 - Disabled with a banner when the presentation is referenced by the live playlist.
+- Slide and presentation ops for churches (design/27 §11 items 6-11; pure ops in `views/editor/ops/slides.ts`
+  through `actions.ts`, one undo step each, saved with the presentation). 'Find…' in the toolbar (Ctrl+F
+  outside a text field) opens Find and replace (`FindReplaceDialog.tsx`): Find, Replace with, Match case,
+  Whole words (letters, marks and digits are word characters; a typed space also finds a no-break space);
+  the count ('3 matches on 2 slides', a polite live region) and every match listed by slide number with the
+  text around it before anything is replaced, hidden slides included and tagged, locked objects left out; a
+  listed match opens its slide with the match selected in the text field; Replace all replaces every match
+  as the text field replaces a selection, so the replacement keeps the formatting of the text it replaces (a
+  bold red date stays bold and red; the box style and its stored fit are untouched). The slide list dims a
+  hidden slide (its number and picture; the Hidden tag stays readable), and the selected slide's actions
+  have 'New slide like this' (a copy right after it with its text cleared, keeping each box's style, its
+  first paragraph's style and the formatting of a run over its whole first paragraph, without notes, the
+  hidden flag, a scripture reference or the PowerPoint picture; the new slide opens) and a 'Hidden' toggle
+  (`aria-pressed`). The Slide panel's Background shows the picture the slide shows and where it comes from
+  (from PowerPoint, this slide only, the presentation's default), 'Replace…' (images and videos) with a
+  scope radio group, 'This slide' or 'All N slides using it', and 'None' or 'Use the default' for a
+  background of its own; the Presentation panel has 'Replace on all slides…' for the deck's background (its
+  default, else the picture most slides show). A replace rewrites every use of the picture: slides' and the
+  presentation's `backgroundMediaId` (drawn cover-fit) and `role: 'bg'` pictures, re-cropped by the picture
+  replace rule so a picture of another aspect is never distorted; a slide with a solid PowerPoint background
+  loses that shape so the picture shows; a video becomes a motion background. A box from a PowerPoint
+  placeholder (or layout shape) offers 'Apply to similar boxes…' in the Object panel, confirmed with the
+  count ('Apply to 12 boxes on 12 slides?'): the similar boxes take its style and paragraph styles by level,
+  keeping their text and runs (a themed lyric box marks the style fields it now overrides). A picture that
+  covers the slide offers 'Use as background', which moves it to the slide's `backgroundMediaId`.
 - Media playing in place (design/27 §8, §11 item 14; `views/editor/MediaPanels.tsx`, pure ops in
   `mediaOps.ts`, one undo step each). '+ Video' (touch: Add → Video…) adds an ImageObject whose `mediaId`
   is the video, so every drawer shows its poster, with `play` {start automatically, no loop, hold the last

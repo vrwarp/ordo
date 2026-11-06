@@ -7,6 +7,7 @@ import { type FlatEntry, flatSlideMove } from '../../components/sortableMath.ts'
 import { useMediaLookup, useVisible } from '../../hooks.ts';
 import { stillHash, useThumb } from '../../services/thumbs.ts';
 import { useLibrary } from '../../state/library.ts';
+import { addSlideLike, setSlideHidden } from './actions.ts';
 import { change, selectSlide, useEditor } from './editorStore.ts';
 import {
   addSection,
@@ -22,6 +23,9 @@ import {
   themeOf,
 } from './ops.ts';
 import type { Slide } from '@ordo/domain';
+
+/** How a hidden slide's number and picture are dimmed in the slide list (design/27 §11 item 9). */
+export const HIDDEN_DIM = { opacity: 0.4 } as const;
 
 function SlideItem(props: {
   slide: Slide;
@@ -44,20 +48,23 @@ function SlideItem(props: {
     { isSong: props.p.kind === 'song', media, bg: bgId ? stillHash(media(bgId)) : undefined, width: 320 },
     visible,
   );
+  // A hidden slide is dimmed (its number and picture; the tag stays readable), as in the live slide grid.
+  const hidden = !!props.slide.hidden;
+  const dim = hidden ? HIDDEN_DIM : undefined;
   return (
     <div
       ref={ref}
       {...props.sort.item}
       {...props.sort.mouseArea}
       data-slide-id={props.slide.id}
-      className={`ed-slide ${props.selected ? 'sel' : ''} ${props.sort.cls}`}
+      className={`ed-slide ${props.selected ? 'sel' : ''} ${hidden ? 'hidden-slide' : ''} ${props.sort.cls}`}
       onClick={() => selectSlide(props.slide.id)}
     >
       <DragHandle label="Drag to reorder" disabled={props.readOnly} {...props.sort.handle} />
-      <span className="muted small" style={{ width: 16 }}>
+      <span className="muted small" style={{ width: 16, ...dim }}>
         {props.index + 1}
       </span>
-      {url ? <img src={url} alt="" draggable={false} /> : <div className="ph" />}
+      {url ? <img src={url} alt="" draggable={false} style={dim} /> : <div className="ph" style={dim} />}
       {props.slide.overrides?.length ? (
         <span className="override-mark" title="Overrides the theme">
           ●<span className="touch-label">Overrides theme</span>
@@ -115,6 +122,9 @@ export function SlidesPanel({ p, readOnly }: { p: Presentation; readOnly: boolea
     disabled: readOnly,
     onMove: (from, to) => edit((q) => moveSection(q, from, to)),
   });
+  const selected = slideId
+    ? p.sections.flatMap((sec) => sec.slides).find((x) => x.id === slideId)
+    : undefined;
   const selFlat = slideId !== undefined ? flatIndex.get(slideId) : undefined;
   const selSection = slideId ? p.sections.findIndex((s) => s.slides.some((x) => x.id === slideId)) : -1;
   const slideUp = selFlat !== undefined ? flatSlideMove(flat, selFlat, selFlat - 1) : null;
@@ -236,6 +246,15 @@ export function SlidesPanel({ p, readOnly }: { p: Presentation; readOnly: boolea
             <button
               type="button"
               className="small"
+              onClick={() => addSlideLike(slideId)}
+              title="A copy with its text cleared, to type a new verse or notice in the same look"
+              data-new-slide-like
+            >
+              New slide like this
+            </button>
+            <button
+              type="button"
+              className="small"
               onClick={() => edit((q) => splitSlide(q, slideId))}
               title="Split the lyric text into two slides"
             >
@@ -260,6 +279,7 @@ export function SlidesPanel({ p, readOnly }: { p: Presentation; readOnly: boolea
               Delete
             </button>
           </div>
+          <HideSlideToggle hidden={!!selected?.hidden} onToggle={(h) => setSlideHidden(slideId, h)} />
           <div className="row wrap" style={{ gap: 4 }}>
             <button
               type="button"
@@ -303,6 +323,35 @@ export function SlidesPanel({ p, readOnly }: { p: Presentation; readOnly: boolea
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * 'Hidden' for the selected slide (design/27 §11 item 9), a toggle button (`aria-pressed`): Next, Prev and
+ * auto-advance skip a hidden slide during the service, a click in the slide grid still shows it.
+ */
+export function HideSlideToggle({
+  hidden,
+  onToggle,
+}: {
+  hidden: boolean;
+  onToggle: (hidden: boolean) => void;
+}) {
+  return (
+    <div className="row wrap" style={{ gap: 6 }}>
+      <button
+        type="button"
+        className={`small ${hidden ? 'on' : ''}`}
+        aria-pressed={hidden}
+        onClick={() => onToggle(!hidden)}
+        data-hide-slide
+      >
+        Hidden
+      </button>
+      <span className="muted small grow">
+        {hidden ? 'Next skips this slide; a click in the slide grid shows it.' : 'Shown in the service.'}
+      </span>
     </div>
   );
 }

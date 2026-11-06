@@ -2,7 +2,9 @@ import type { Box, ImageCrop, ImageObject, Presentation, SlideObject, TextObject
 import { change, selectObjects, selectSlide, useEditor } from './editorStore.ts';
 import {
   applyStyleToSimilar,
+  type BackgroundMedia,
   type BackgroundScope,
+  clearSlideBackground,
   deleteObjects,
   duplicateObjects,
   editText,
@@ -19,6 +21,7 @@ import {
   refitText,
   reorderObjects,
   replaceBackground,
+  replaceBackgroundOf,
   replacePicture,
   resizeRange,
   type RunPatch,
@@ -189,8 +192,19 @@ export function setSlideHidden(slideId: string, hidden: boolean): void {
   change((p) => hideSlide(p, slideId, hidden));
 }
 
-export function replaceBackgroundWith(slideId: string, media: PictureSize, scope: BackgroundScope): void {
+/** 'Replace background…' on a slide, on it alone or on every slide using the same picture. */
+export function replaceBackgroundWith(slideId: string, media: BackgroundMedia, scope: BackgroundScope): void {
   change((p) => replaceBackground(p, slideId, media, scope));
+}
+
+/** The slide's own background removed ('None', or 'Use the default' when the presentation has one). */
+export function removeSlideBackground(slideId: string): void {
+  change((p) => clearSlideBackground(p, slideId));
+}
+
+/** The Presentation panel's 'Replace on all slides…': picture `old` (or no picture) replaced everywhere. */
+export function replaceDeckBackground(old: string | undefined, media: BackgroundMedia): void {
+  change((p) => replaceBackgroundOf(p, old, media));
 }
 
 /** 'Apply to similar boxes'; how many boxes changed. */
@@ -217,8 +231,12 @@ export function addSlideLike(slideId: string): void {
   if (id) selectSlide(id);
 }
 
-/** 'Use as background' for a full-slide picture of the open slide. */
+/** 'Use as background' for a full-slide picture of the open slide; the picture, now gone, is deselected. */
 export function pictureToBackground(objectId: string): void {
   const slideId = openSlide();
-  if (slideId) change((p) => useAsBackground(p, slideId, objectId));
+  if (!slideId) return;
+  const before = useEditor.getState().draft;
+  change((p) => useAsBackground(p, slideId, objectId));
+  const s = useEditor.getState();
+  if (s.draft !== before) selectObjects(s.objectIds.filter((id) => id !== objectId));
 }

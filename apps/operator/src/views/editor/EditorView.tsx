@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Dialog } from '../../components/Dialog.tsx';
+import { FindReplaceDialog } from './FindReplaceDialog.tsx';
 import { installKeepVisible } from '../../components/keepVisible.ts';
 import { Menu } from '../../components/Menu.tsx';
 import { useCoarsePointer, useMedia } from '../../components/pointer.ts';
@@ -100,6 +101,8 @@ export function EditorView({ id }: { id: string }) {
   const [revisions, setRevisions] = useState(false);
   const [imagePick, setImagePick] = useState(false);
   const [videoPick, setVideoPick] = useState(false);
+  // 'Find…' (Ctrl+F outside a text field): find and replace across the presentation (M4 item E).
+  const [finding, setFinding] = useState(false);
   const [dismissedRev, setDismissedRev] = useState(0);
   // The newest revision found saved by someone else (not only by the hub's PowerPoint jobs): the banner's.
   const [otherRev, setOtherRev] = useState(0);
@@ -167,6 +170,11 @@ export function EditorView({ id }: { id: string }) {
         return;
       }
       if (isTyping(e)) return;
+      if (ctrl && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        setFinding(true);
+        return;
+      }
       if (ctrl && e.key.toLowerCase() === 'z' && !e.shiftKey) {
         e.preventDefault();
         if (!readOnly) undo();
@@ -360,6 +368,9 @@ export function EditorView({ id }: { id: string }) {
           />
           <span className="spacer" />
           <PreviewControl p={p} slideId={slide?.id} />
+          <button type="button" onClick={() => setFinding(true)} title="Find and replace (Ctrl+F)">
+            Find…
+          </button>
           <button type="button" onClick={() => setRevisions(true)}>
             History
           </button>
@@ -463,6 +474,9 @@ export function EditorView({ id }: { id: string }) {
           </button>
           <span className="spacer" />
           <PreviewControl p={p} slideId={slide?.id} />
+          <button type="button" onClick={() => setFinding(true)} title="Find and replace (Ctrl+F)">
+            Find…
+          </button>
           <button type="button" onClick={() => setRevisions(true)}>
             History
           </button>
@@ -553,6 +567,7 @@ export function EditorView({ id }: { id: string }) {
         {tab === 'presentation' && <PresentationPanel p={p} readOnly={readOnly} />}
       </div>
       {revisions && <RevisionsDialog id={p.id} readOnly={readOnly} onClose={() => setRevisions(false)} />}
+      {finding && <FindReplaceDialog readOnly={readOnly} onClose={() => setFinding(false)} />}
       {imagePick && (
         <MediaPickerDialog
           title="Insert an image"

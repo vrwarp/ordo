@@ -2,6 +2,7 @@ import { nearColor, type SlideObject, type TextStyle } from '@ordo/domain';
 import { useEffect, useState } from 'react';
 import { BoxEditor, Check, ColorField, NumberField, Select } from '../../components/fields.tsx';
 import { TextStyleEditor } from '../../components/TextStyleEditor.tsx';
+import { ObjectSlideOps } from './ObjectSlideOps.tsx';
 import { useLibrary } from '../../state/library.ts';
 import { typeText } from './actions.ts';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
@@ -171,6 +172,7 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
       {o.type === 'image' && slide && (
         <VideoPanel o={o} slide={slide} media={(id) => media.find((m) => m.id === id)} readOnly={readOnly} />
       )}
+      <ObjectSlideOps o={o} readOnly={readOnly} />
       {o.type === 'shape' && (
         <section className="col">
           <h4>Shape</h4>

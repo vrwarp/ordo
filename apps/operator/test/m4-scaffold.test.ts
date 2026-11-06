@@ -140,14 +140,14 @@ describe('the M4 ops (stubs keep their input)', () => {
     expect(replacePicture(i, size)).toBe(i);
   });
 
-  it('slide ops (item E)', () => {
-    expect(findText(p, 'Sunday')).toEqual([]);
-    expect(findReplace(p, 'Sunday', 'Saturday')).toEqual({ p, replaced: 0 });
-    expect(hideSlide(p, 's2', true)).toBe(p);
-    expect(replaceBackground(p, 's1', size, 'all')).toBe(p);
+  it('slide ops (item E, built: apps/operator/test/slideOps.test.ts) keep their input when nothing changes', () => {
+    expect(findText(p, 'Christmas')).toEqual([]);
+    expect(findReplace(p, 'Sunday', 'Sunday')).toEqual({ p, replaced: 0 });
+    expect(hideSlide(p, 's2', false)).toBe(p);
+    expect(replaceBackground(p, 'gone', size, 'all')).toBe(p);
     expect(similarObjects(p, 's1', 't1')).toEqual([]);
     expect(applyStyleToSimilar(p, 's1', 't1')).toEqual({ p, changed: 0 });
-    expect(newSlideLike(p, 's1')).toEqual({ p });
+    expect(newSlideLike(p, 'gone')).toEqual({ p });
     expect(useAsBackground(p, 's1', 'i1')).toBe(p);
   });
 });
@@ -228,12 +228,12 @@ describe('the actions (store wiring)', () => {
     actions.maskPicture('i1', { preset: 'ellipse' });
     actions.flipPicture('i1', { flipV: true });
     actions.replacePictureWith('i1', { id: 'other', width: 10, height: 10 });
-    actions.setSlideHidden('s2', true);
-    actions.replaceBackgroundWith('s1', { id: 'other' }, 'slide');
+    actions.setSlideHidden('s2', false);
+    actions.replaceBackgroundWith('gone', { id: 'other' }, 'slide');
     actions.pictureToBackground('i1');
-    expect(actions.findAndReplace('Sunday', 'Saturday')).toBe(0);
+    expect(actions.findAndReplace('Christmas', 'Easter')).toBe(0);
     expect(actions.applyToSimilar('t1')).toBe(0);
-    actions.addSlideLike('s1');
+    actions.addSlideLike('gone');
     selectObjects(['t1', 'i1']);
     actions.moveSelection(10, 0);
     actions.transformSelection(box, { ...box, x: 200 });
