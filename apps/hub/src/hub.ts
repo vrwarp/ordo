@@ -7,6 +7,7 @@ import { Backups } from './backup.ts';
 import { type HubConfig, loadConfig } from './config.ts';
 import { type DB, openDb } from './db.ts';
 import { errorMessage } from './errors.ts';
+import { outputFonts } from './fonts/bundled.ts';
 import { FontService } from './fonts/service.ts';
 import { createHttpApp, type RouteInfo, withTimeout } from './http.ts';
 import { ImportService } from './imports.ts';
@@ -199,7 +200,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
         audio: s.audio,
         general: s.general,
         logo,
-        fonts: lib.listFonts(),
+        fonts: outputFonts(lib.listFonts(), s.looks),
       };
     },
   });

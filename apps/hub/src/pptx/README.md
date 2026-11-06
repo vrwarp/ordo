@@ -279,6 +279,19 @@ scan, additive).
   `unicodeRange` (one family, weight and style no longer collide). The drawers pass it to `FontFace`
   (M2's resolver: a one-line additive change where faces are registered).
 
+Done (`apps/hub/test/fonts-bundled.test.ts`, `fonts-google.test.ts`, domain `resolve.fonts.test.ts`):
+- `fonts/bundled.ts`: `BUNDLED_FACES` (40 faces; family names as `SCRIPT_FALLBACK_FONTS` and the converter's
+  substitutes name them), `SCRIPT_RANGES`, `bundledSubstitute(family)` (for the import card's missing-font
+  note), `outputFonts(fonts, looks)`, `registerBundledFonts`. `FontService.bundled` is the start-up
+  registration (`HubConfig.fontsDir`, `ORDO_FONTS_DIR`); bundled rows answer 409 to DELETE.
+- `@ordo/domain`: `SCRIPT_FALLBACK_FONTS` (identical to M2's, so the merge is clean), `fallbackFontScripts`,
+  `scriptFontFamilies` (added to `referencedFontFamilies`), `ON_DEMAND_FONT_SCRIPTS`, `isOnDemandFontFamily`.
+  After M2 merges, `fallbackFontScripts` can become `textScripts`.
+- `library.upsertFont` keys faces by family, weight, style and `unicodeRange`; `FontLoad.unicodeRange`
+  (renderer `messages.ts`) carries it to the asset worker. The operator's resolver and thumbnail worker
+  still map `Font` without it (M2's files: one field each).
+- Licences: `fonts/LICENSES.md`, `fonts/OFL-1.1.txt`; the image keeps the font packages' copyright files.
+
 ### F: budgets
 
 Files: `packages/domain/src/size.ts` (refine; add `previewSlice`), `goLive.ts` (a `degraded` warning above

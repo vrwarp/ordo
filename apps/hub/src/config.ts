@@ -52,6 +52,11 @@ export type HubConfig = {
   chromium: { path: string; sandbox: boolean };
   /** Number of concurrent heavy and light jobs. */
   jobs: { heavy: number; light: number };
+  /**
+   * Where the bundled fonts are installed (ORDO_FONTS_DIR; the image sets /usr/share/fonts): registered as
+   * library fonts at start (fonts/bundled.ts, design/27 §10). Unset: none are registered.
+   */
+  fontsDir?: string;
 };
 
 /** apps/ of this repo: src/ and dist/ both sit two levels below it. */
@@ -94,6 +99,7 @@ export function loadConfig(
     timeouts: { probe: 30_000, transcode: 4 * 3600_000, soffice: 180_000, pdf: 300_000, light: 600_000 },
     jobs: { heavy: 1, light: 2 },
     chromium: { path: env.ORDO_CHROMIUM || 'chromium', sandbox: env.ORDO_CHROMIUM_SANDBOX === '1' },
+    fontsDir: env.ORDO_FONTS_DIR ? resolve(env.ORDO_FONTS_DIR) : undefined,
     ...overrides,
   };
 }

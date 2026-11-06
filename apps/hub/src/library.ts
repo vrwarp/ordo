@@ -464,11 +464,17 @@ export class Library {
     const r = this.db.prepare(`SELECT json FROM fonts WHERE id = ?`).get(id) as { json: string } | undefined;
     return r ? (JSON.parse(r.json) as Font) : undefined;
   }
-  /** Insert or replace the face with the same family/weight/style. */
+  /**
+   * Insert or replace the face with the same family/weight/style and unicode-range: the subsets of one
+   * Google family, weight and style are separate faces (design/27 §10).
+   */
   upsertFont(f: Omit<Font, 'id'> & { id?: string }): Font {
-    const existing = this.db
-      .prepare(`SELECT id FROM fonts WHERE family = ? AND weight = ? AND style = ?`)
-      .get(f.family, f.weight, f.style) as { id: string } | undefined;
+    const range = f.unicodeRange ?? '';
+    const existing = (
+      this.db
+        .prepare(`SELECT id, json FROM fonts WHERE family = ? AND weight = ? AND style = ?`)
+        .all(f.family, f.weight, f.style) as { id: string; json: string }[]
+    ).find((r) => ((JSON.parse(r.json) as Font).unicodeRange ?? '') === range);
     const font = validate(Font, { ...f, id: existing?.id ?? f.id ?? newId() });
     this.db
       .prepare(
