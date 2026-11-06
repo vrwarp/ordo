@@ -1492,6 +1492,16 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   `PptxReport.tsx` (the import report and the re-import dialog), `pptxJobs.ts` (follow and take over).
   Tests: `apps/hub/test/pptx-reimport.test.ts`, `apps/operator/test/pptxCard.test.ts`,
   `e2e/editor-reimport.spec.ts`.
+- **As built, item G (stage):** the notes region (`apps/stage/src/model.ts` `notesRegion`, `defaultNotes`,
+  `clearOf`, `cutNotes`, `notesText`; `StageView.notes`; `App.tsx` `NotesRegion`): `style['notes']` or a box
+  under the next-slide band, cut clear of the current lyrics, the notes cut to 4,000 characters and to the
+  box, never shrunk. Stage direction: the current, next, notes and message text drawn paragraph by
+  paragraph with `dir="auto"` and `unicode-bidi: plaintext` (`Paragraphs`, `stageParagraphs`), readable
+  text with its automatic numbers. The look editor's 'Stage screen' card (`StageNotesOptions.tsx`): 'Notes',
+  the box and the text style, the default shown until edited, an overlap banner. Tests:
+  `apps/stage/src/model.test.ts` (a property: the notes never overlap the current lyrics), `App.test.ts`,
+  `apps/operator/test/stageNotes.test.ts` (the editor's defaults are the stage's), `e2e/editor-stage.spec.ts`
+  (8907). design/16 "Direction" and "Notes region", design/15 "Settings".
 
 **Files.** `apps/operator/src/views/editor/ops.ts`, `ObjectPanel.tsx`, `SlidePanel.tsx`, `SlidesPanel.tsx`, `PresentationPanel.tsx`, `SlideCanvas.tsx`, `EditorView.tsx`, `editorStore.ts`; `apps/operator/src/components/TextStyleEditor.tsx`, new `FormatBar.tsx`, `ParagraphStrip.tsx`, `CropControl.tsx`; `apps/hub/src/pptx/reimport.ts`, `routes.ts`; `apps/stage/src/model.ts`, `view.ts`; `packages/domain/src/schemas.ts` (`PropsRule.notes`); `packages/client/src/api.ts`.
 

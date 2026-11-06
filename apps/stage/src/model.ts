@@ -36,6 +36,12 @@ export type StageLayout = {
   messages: PropBox | null;
   /** Section label shown as a kicker above the current lyrics. */
   section: TextStyle | null;
+  /**
+   * The live slide's notes for the preacher (`PropsRule.notes`, design/27 §11 item 13): the look's
+   * `style['notes']`, else `defaultNotes` under the next-slide band, always cut clear of the current lyrics
+   * (`clearOf`). Null when the look shows no notes or not one line of them fits beside the lyrics.
+   */
+  notes: PropBox | null;
   clearColor: Rgba;
   nonSong: 'text' | 'none';
 };
@@ -94,6 +100,88 @@ export function defaultPropBoxes(fontFamily: string): Record<PropKey, PropBox> {
   };
 }
 
+/** The logical stage the layout is in (the host scales it to the screen). */
+export const STAGE_W = 1920;
+export const STAGE_H = 1080;
+/** Between the band above the default notes box and the box, and between the box and the stage's bottom. */
+const NOTES_GAP = 12;
+const NOTES_MARGIN = 16;
+
+/** The notes' text when the look styles none: smaller than the lyrics, light, on a faint card. */
+export function defaultNotesStyle(fontFamily: string): TextStyle {
+  return base({
+    fontFamily,
+    fontSizePx: 32,
+    fontWeight: 400,
+    align: 'left',
+    valign: 'top',
+    lineHeight: 1.2,
+    padding: 8,
+    color: { r: 235, g: 235, b: 235, a: 1 },
+    fill: { color: { r: 255, g: 255, b: 255, a: 0.1 }, radius: 10 },
+  });
+}
+
+/** Height of `lines` lines of `style` with its padding (the notes box's least useful height). */
+export function linesHeight(style: TextStyle, lines: number): number {
+  return Math.ceil(lines * style.fontSizePx * style.lineHeight + 2 * style.padding);
+}
+
+/**
+ * The notes region when the look gives no `style['notes']`: under the lower of the lyric bands (the
+ * next-slide band in the stage look), as wide as it, down to the stage's bottom margin, and at least two
+ * lines high (it then rises over that band's bottom; `notesRegion` keeps it off the current lyrics).
+ */
+export function defaultNotes(fontFamily: string, current: Box | undefined, next: Box | undefined): PropBox {
+  const style = defaultNotesStyle(fontFamily);
+  const above =
+    current && next ? (next.y + next.h >= current.y + current.h ? next : current) : (next ?? current);
+  const top = above ? above.y + above.h + NOTES_GAP : 140;
+  const bottom = STAGE_H - NOTES_MARGIN;
+  const y = Math.max(0, Math.min(top, bottom - linesHeight(style, 2)));
+  return {
+    ...style,
+    box: { x: above?.x ?? 60, y, w: above?.w ?? STAGE_W - 120, h: bottom - y, rotation: 0 },
+  };
+}
+
+/** Whether two boxes overlap (boxes that only touch do not). Stage boxes are not rotated. */
+export function overlaps(a: Box, b: Box): boolean {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+/**
+ * `box` cut clear of `avoid`: itself when they do not overlap, else the largest of its parts below, above,
+ * left and right of `avoid` that is at least `minW` x `minH` (null when none is).
+ */
+export function clearOf(box: Box, avoid: Box | undefined, minW: number, minH: number): Box | null {
+  if (!avoid || !overlaps(box, avoid)) return box;
+  const right = box.x + box.w;
+  const bottom = box.y + box.h;
+  const parts: Box[] = [
+    { ...box, y: avoid.y + avoid.h, h: bottom - (avoid.y + avoid.h) },
+    { ...box, h: avoid.y - box.y },
+    { ...box, w: avoid.x - box.x },
+    { ...box, x: avoid.x + avoid.w, w: right - (avoid.x + avoid.w) },
+  ];
+  let best: Box | null = null;
+  for (const p of parts) if (p.w >= minW && p.h >= minH && (!best || p.w * p.h > best.w * best.h)) best = p;
+  return best;
+}
+
+/**
+ * The notes region of a look (`StageLayout.notes`): its `style['notes']` or `defaultNotes`, cut clear of
+ * the current lyrics so the notes never cover them; null when off or when not one line fits.
+ */
+export function notesRegion(look: Look, current: Region | null, next: Region | null): PropBox | null {
+  const props = look.layers.props;
+  if (props.notes !== true) return null;
+  const family = current?.style.fontFamily ?? 'Inter';
+  const n = props.style.notes ?? defaultNotes(family, current?.box, next?.box);
+  const box = clearOf(n.box, current?.box, Math.max(1, n.fontSizePx * 4), linesHeight(n, 1));
+  return box ? { ...n, box } : null;
+}
+
 /** Compute the stage layout from a look; props without a style box use the defaults above. */
 export function stageLayout(look: Look | undefined): StageLayout {
   const l = look ?? LOOK_STAGE;
@@ -145,6 +233,7 @@ export function stageLayout(look: Look | undefined): StageLayout {
     mediaRemaining: pick('mediaRemaining', props.mediaRemaining ?? props.elapsed),
     messages: pick('messages', props.messages),
     section: props.style.section ?? section,
+    notes: notesRegion(l, current, next),
     clearColor: l.clearColor,
     nonSong,
   };
@@ -258,6 +347,50 @@ export function nextText(s: LiveState, content: SlideContent | null, layout: Sta
     return out;
   }
   return null;
+}
+
+/** The most notes the stage view carries; the box cuts what does not fit (`Slide.notes` holds up to 200,000). */
+export const NOTES_MAX = 4000;
+
+/**
+ * Notes as the stage shows them: line ends made '\n', spaces at line ends and runs of blank lines removed,
+ * trimmed, and cut to `max` characters at a word (with '…'). Null when there is nothing to show. Only the
+ * first `4 × max` characters are read, so a huge note costs the same as a long one on every view.
+ */
+export function cutNotes(notes: unknown, max = NOTES_MAX): string | null {
+  if (typeof notes !== 'string') return null;
+  const head = notes.length > max * 4 ? notes.slice(0, max * 4) : notes;
+  const t = head
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t\u{a0}]+$/gmu, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  if (!t) return null;
+  if (t.length <= max && head.length === notes.length) return t;
+  let end = Math.min(max, t.length);
+  // At a word when one ends in the last fifth; never inside a surrogate pair.
+  const space = t.slice(0, end + 1).search(/\s\S*$/);
+  if (space >= max * 0.8) end = space;
+  const c = t.charCodeAt(end - 1);
+  if (c >= 0xd800 && c <= 0xdbff) end--;
+  return `${t.slice(0, end).trimEnd()}…`;
+}
+
+/** The notes of the displayed slide (`Slide.notes`), as `cutNotes` shows them; null when there are none. */
+export function notesText(s: LiveState, content: SlideContent | null): string | null {
+  if (!content) return null;
+  return cutNotes(findSlide(s, content.presentationId, content.slideId)?.notes);
+}
+
+/**
+ * The paragraphs of stage text: its '\n' pieces, as `readableText` keeps them (paragraph i is
+ * `TextObject.paras[i]`'s, a soft line included). The host draws each as its own block with `dir="auto"`
+ * and `unicode-bidi: plaintext`, so each takes its direction from its own first strong character,
+ * whatever the look's style says (design/27 §6 "Bands, stage and readable text"): a Hebrew line reads right
+ * to left, its punctuation at its left end, beside an English line that reads left to right.
+ */
+export function stageParagraphs(text: string): string[] {
+  return text.split('\n');
 }
 
 export type TimerDisplay = { label: string; value: string; running: boolean; overdue?: boolean };
@@ -451,7 +584,14 @@ export function boxCss(b: Box): Record<string, string> {
 export function stageFontFamilies(layout: StageLayout): Set<string> {
   const fams = new Set<string>();
   for (const r of [layout.current, layout.next]) if (r) fams.add(r.style.fontFamily);
-  for (const p of [layout.clock, layout.countdown, layout.elapsed, layout.mediaRemaining, layout.messages])
+  for (const p of [
+    layout.clock,
+    layout.countdown,
+    layout.elapsed,
+    layout.mediaRemaining,
+    layout.messages,
+    layout.notes,
+  ])
     if (p) fams.add(p.fontFamily);
   if (layout.section) fams.add(layout.section.fontFamily);
   return fams;

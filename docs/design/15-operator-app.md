@@ -366,6 +366,15 @@ Outputs and looks, audio devices and pairs, key map, Stream Deck pages, MIDI map
 PINs, output tokens, backups, diagnostics export. Each page is a form over the matching
 `/settings/*` resource.
 
+- **The stage look's notes** (design/27 §11 item 13, M4). The look page's 'Stage screen' card
+  (`src/views/settings/StageNotesOptions.tsx`, shown for a look of kind stage, and for any look whose notes
+  are on) has 'Notes: show the live slide's notes, for the preacher' (`PropsRule.notes`). While it is on it
+  shows the notes box (a `BoxEditor` without rotation, in a fieldset) and the notes text (`TextStyleEditor`).
+  Until either is edited the look stores no `style['notes']`, and the card shows the stage's default box,
+  under the next-slide band, which follows the lyric bands. Editing stores both. 'Use the default box and
+  text' removes them again. A box that overlaps the current lyrics band is said in a status banner: the
+  stage shows only the part beside the lyrics. The preview draws a sample line in the notes box.
+
 ## PowerPoint imports
 
 The import screen (`views/library/ImportTab.tsx`) asks how a PowerPoint is imported

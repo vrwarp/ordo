@@ -2,6 +2,7 @@ import { hubNow } from '@ordo/client';
 import { type PropBox, rgbaCss, type TextStyle } from '@ordo/domain';
 import {
   type CSSProperties,
+  Fragment,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -15,6 +16,7 @@ import {
   reconcileMessages,
   type ShownMessage,
   type StageText,
+  stageParagraphs,
   textCss,
 } from './model.ts';
 
@@ -56,7 +58,29 @@ function useFitText(ref: React.RefObject<HTMLDivElement | null>, baseSize: numbe
   }, [ref, baseSize, key]);
 }
 
-function TextRegion(props: {
+/**
+ * Stage text drawn paragraph by paragraph (design/27 §6 "Bands, stage and readable text"): each paragraph
+ * is its own block with `dir="auto"` and `unicode-bidi: plaintext` (styles.css `.para`), so it takes its
+ * direction from its own first strong character whatever the look's style says. A '\n' between the blocks
+ * keeps the text content as the text (collapsed between blocks, so it draws no extra line).
+ */
+export function Paragraphs(props: { text: string; className?: string }) {
+  return (
+    <div className={props.className}>
+      {stageParagraphs(props.text).map((p, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: paragraphs are positional
+        <Fragment key={i}>
+          {i > 0 ? '\n' : null}
+          <div className="para" dir="auto">
+            {p}
+          </div>
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+export function TextRegion(props: {
   box: { x: number; y: number; w: number; h: number; rotation: number };
   style: TextStyle;
   text: StageText | null;
@@ -85,7 +109,7 @@ function TextRegion(props: {
             {t.position ? <span className="pos">{t.position}</span> : null}
           </div>
         ) : null}
-        {t?.text ? <div className="lyrics">{t.text}</div> : null}
+        {t?.text ? <Paragraphs className="lyrics" text={t.text} /> : null}
       </div>
     </div>
   );
@@ -100,6 +124,41 @@ function kickerCss(style: TextStyle): CSSProperties {
     color: rgbaCss(style.color),
     letterSpacing: '0.04em',
   };
+}
+
+/**
+ * The live slide's notes for the preacher (`PropsRule.notes`, design/27 §11 item 13), in their box, which
+ * the layout keeps off the current lyrics. Long notes are cut to the box, never shrunk: their start stays
+ * in view whatever the vertical alignment (`safe`), and the last line fades out when something is cut.
+ */
+export function NotesRegion(props: { prop: PropBox; text: string; fontsVersion: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const { justifyContent, padding, background, borderRadius, ...font } = textCss(props.prop);
+  const sig = `${props.text}|${props.fontsVersion}|${JSON.stringify(props.prop)}`;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `sig` changes whenever the text, box or fonts do
+  useLayoutEffect(() => {
+    const clip = ref.current;
+    const inner = clip?.firstElementChild as HTMLElement | null;
+    if (!clip || !inner) return;
+    clip.dataset.cut = inner.scrollHeight > clip.clientHeight + 1 ? '1' : '';
+  }, [sig]);
+  const outer: CSSProperties = {
+    ...boxCss(props.prop.box),
+    padding: padding as string,
+    background: background as string | undefined,
+    borderRadius: borderRadius as string | undefined,
+  };
+  return (
+    <div className="region notes" style={outer}>
+      <div
+        ref={ref}
+        className="notes-clip"
+        style={{ ...(font as CSSProperties), justifyContent: `safe ${justifyContent as string}` }}
+      >
+        <Paragraphs className="notes-text" text={props.text} />
+      </div>
+    </div>
+  );
 }
 
 function PropText(props: { prop: PropBox; children: React.ReactNode; className?: string; dim?: boolean }) {
@@ -141,7 +200,11 @@ function MessageCard(props: { m: ShownMessage; style: CSSProperties }) {
   }, []);
   const opacity = props.m.phase === 'out' || !entered ? 0 : 1;
   return (
-    <div className="message" style={{ ...props.style, opacity, transitionDuration: `${MESSAGE_FADE_MS}ms` }}>
+    <div
+      className="message"
+      dir="auto"
+      style={{ ...props.style, opacity, transitionDuration: `${MESSAGE_FADE_MS}ms` }}
+    >
       {props.m.text}
     </div>
   );
@@ -187,6 +250,10 @@ export function App(props: { host: StageHost }) {
   return (
     <div className="viewport" style={{ background: rgbaCss(layout.clearColor) }}>
       <div className="stage" style={stageStyle}>
+        {/* Under the lyrics in the stacking order too, although the layout keeps it off them. */}
+        {layout.notes && v.notes ? (
+          <NotesRegion prop={layout.notes} text={v.notes} fontsVersion={snap.fontsVersion} />
+        ) : null}
         {layout.current ? (
           <TextRegion
             className="current"
