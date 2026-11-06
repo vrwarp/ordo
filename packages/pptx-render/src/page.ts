@@ -582,7 +582,9 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
         inner.style.clipPath =
           pic.shape === 'ellipse'
             ? 'ellipse(50% 50% at 50% 50%)'
-            : `inset(0 round ${((pic.radius ?? 0) * s).toFixed(2)}px)`;
+            : pic.shape === 'path'
+              ? `path("${(pic.d ?? '').replace(/-?\d+(\.\d+)?/g, (n) => (Number(n) * s).toFixed(2))}")`
+              : `inset(0 round ${((pic.radius ?? 0) * s).toFixed(2)}px)`;
         break;
       }
     }

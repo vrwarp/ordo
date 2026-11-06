@@ -563,6 +563,29 @@ describe('annotatePptx', () => {
     expect(pictureSize(jpeg.subarray(0, 24))).toBeUndefined();
   });
 
+  it('lists slide pictures cut to a custom outline, with the outline in points of the picture', async () => {
+    const pic = (path: string, flip = '') =>
+      `<p:pic><p:nvPicPr><p:cNvPr id="4" name="P"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId9"/></p:blipFill>` +
+      `<p:spPr><a:xfrm${flip}><a:off x="127000" y="0"/><a:ext cx="2540000" cy="1270000"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst/>` +
+      `<a:pathLst>${path}</a:pathLst></a:custGeom></p:spPr></p:pic>`;
+    const pt = (x: number | string, y: number) => `<a:pt x="${x}" y="${y}"/>`;
+    const shape =
+      `<a:path w="1000" h="500"><a:moveTo>${pt(500, 0)}</a:moveTo><a:lnTo>${pt(1000, 0)}</a:lnTo>` +
+      `<a:cubicBezTo>${pt(1000, 250)}${pt(750, 500)}${pt(500, 500)}</a:cubicBezTo><a:close/></a:path>`;
+    const body =
+      pic(shape) +
+      pic(shape, ' flipH="1"') +
+      // Arcs and guide names are not drawn: those pictures stay rectangles.
+      pic(
+        '<a:path w="10" h="10"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:arcTo wR="5" hR="5" stAng="0" swAng="5400000"/></a:path>',
+      ) +
+      pic(`<a:path w="10" h="10"><a:moveTo>${pt('w', 0)}</a:moveTo></a:path>`);
+    const a = await annotatePptx(await deck(body, { '[Content_Types].xml': types(['slide1']) }));
+    expect(a.pictures).toEqual([
+      { slide: 0, x: 10, y: 0, w: 200, h: 100, shape: 'path', d: 'M100 0 L200 0 C200 50 150 100 100 100 Z' },
+    ]);
+  });
+
   it('renames pictures pptx-preview would not load, and every relationship to them', async () => {
     const rel = (target: string) =>
       `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/slideLayout" Target="../slideLayouts/slideLayout1.xml"/><Relationship Id="rId2" Type="${REL}/image" Target="${target}"/><Relationship Id="rId3" Type="${REL}/hyperlink" Target="https://example.org/media/Slide-1-image-1.png" TargetMode="External"/></Relationships>`;
@@ -867,6 +890,77 @@ describe('annotatePptx', () => {
     expect(out).toContain('slideMaster1.xml');
     expect(out).not.toContain('slideMaster2.xml');
     expect(a.notes).toEqual(['[Content_Types].xml: 1 entry for missing parts removed']);
+  });
+
+  it('gives slides with their own colour mapping copies of their layout and master with that mapping', async () => {
+    const slide = (ovr: string) =>
+      `<?xml version="1.0"?><p:sld ${NS}><p:cSld><p:bg><p:bgPr><a:solidFill><a:schemeClr val="bg1"/></a:solidFill></p:bgPr></p:bg><p:spTree/></p:cSld>` +
+      `<p:clrMapOvr>${ovr}</p:clrMapOvr></p:sld>`;
+    const dark = '<a:overrideClrMapping bg1="dk1" tx1="lt1" bg2="dk2" tx2="lt2"/>';
+    const toLayout1 = rels('slideLayout', '../slideLayouts/slideLayout1.xml');
+    const a = await annotatePptx(
+      await deck('', {
+        '[Content_Types].xml': types(['slide1', 'slide2', 'slide3', 'slide4']),
+        'ppt/slides/slide1.xml': slide(dark),
+        'ppt/slides/slide2.xml': slide('<a:masterClrMapping/>'),
+        'ppt/slides/_rels/slide2.xml.rels': toLayout1,
+        'ppt/slides/slide3.xml': slide(dark),
+        'ppt/slides/_rels/slide3.xml.rels': toLayout1,
+        // The master's own mapping: nothing to copy.
+        'ppt/slides/slide4.xml': slide('<a:overrideClrMapping bg1="lt1" tx1="dk1"/>'),
+        'ppt/slides/_rels/slide4.xml.rels': toLayout1,
+      }),
+    );
+    const z = await JSZip.loadAsync(a.bytes);
+    const text = (p: string) => z.file(p)!.async('string');
+    expect(await text('ppt/slides/_rels/slide1.xml.rels')).toContain(
+      'Target="../slideLayouts/slideLayout2.xml"',
+    );
+    expect(await text('ppt/slides/_rels/slide3.xml.rels')).toContain(
+      'Target="../slideLayouts/slideLayout2.xml"',
+    );
+    expect(await text('ppt/slides/_rels/slide2.xml.rels')).toContain(
+      'Target="../slideLayouts/slideLayout1.xml"',
+    );
+    expect(await text('ppt/slides/_rels/slide4.xml.rels')).toContain(
+      'Target="../slideLayouts/slideLayout1.xml"',
+    );
+    expect(await text('ppt/slideLayouts/slideLayout2.xml')).toBe(
+      await text('ppt/slideLayouts/slideLayout1.xml'),
+    );
+    expect(await text('ppt/slideLayouts/_rels/slideLayout2.xml.rels')).toContain(
+      'Target="../slideMasters/slideMaster2.xml"',
+    );
+    const master = await text('ppt/slideMasters/slideMaster2.xml');
+    expect(master).toContain('<p:clrMap bg1="dk1" tx1="lt1" bg2="dk2" tx2="lt2" accent1="accent1"/>');
+    expect(master.replace(/<p:clrMap [^>]*>/, '')).toBe(
+      (await text('ppt/slideMasters/slideMaster1.xml')).replace(/<p:clrMap [^>]*>/, ''),
+    );
+    expect(await text('ppt/slideMasters/_rels/slideMaster2.xml.rels')).toContain('../theme/theme1.xml');
+    expect(z.file('ppt/slideLayouts/slideLayout3.xml')).toBeNull();
+    const ct = await text('[Content_Types].xml');
+    expect(ct).toContain(
+      '<Override PartName="/ppt/slideMasters/slideMaster2.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>',
+    );
+    expect(ct).toContain(
+      '<Override PartName="/ppt/slideLayouts/slideLayout2.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>',
+    );
+    expect(a.notes).toEqual([]);
+  });
+
+  it('resolves text colours of a slide with its own colour mapping through it', async () => {
+    const body = sp({
+      body: `<a:p>${run('Hi', `<a:effectLst><a:outerShdw dist="12700" dir="0"><a:schemeClr val="tx1"/></a:outerShdw></a:effectLst>`)}</a:p>`,
+    });
+    const a = await annotatePptx(
+      await deck('', {
+        '[Content_Types].xml': types(['slide1']),
+        'ppt/slides/slide1.xml':
+          `<?xml version="1.0"?><p:sld ${NS}><p:cSld><p:spTree>${body}</p:spTree></p:cSld>` +
+          '<p:clrMapOvr><a:overrideClrMapping bg1="dk1" tx1="lt1" bg2="dk2" tx2="lt2"/></p:clrMapOvr></p:sld>',
+      }),
+    );
+    expect(a.runs[a.runs.length - 1]?.shadows?.[0]?.color).toBe('rgba(255,255,255,1)');
   });
 
   it('leaves a part it cannot align unmarked and returns an untouched deck when nothing is marked', async () => {

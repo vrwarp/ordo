@@ -113,9 +113,11 @@ export type PictureClip = {
   y: number;
   w: number;
   h: number;
-  shape: 'ellipse' | 'roundRect';
+  shape: 'ellipse' | 'roundRect' | 'path';
   /** Corner radius in points (roundRect). */
   radius?: number;
+  /** The outline (`path`: a custom geometry), as SVG path data in points from the picture's corner. */
+  d?: string;
 };
 
 /** Insets of a rectangle, as fractions of its size (`a:fillRect`, `a:srcRect` give thousandths of a percent). */
@@ -140,6 +142,41 @@ export type BackgroundFill = {
    */
   tile?: { w: number; h: number; x: number; y: number; flip: 'none' | 'x' | 'y' | 'xy' };
 };
+
+/** Most points of a custom outline a picture is clipped to. */
+const MAX_PATH_POINTS = 4096;
+
+/**
+ * A custom geometry (`a:custGeom`) as SVG path data in points from the shape's corner, for a box of
+ * `w` x `h` points; undefined when it uses what this does not draw (arcs, guide names) or is too long.
+ */
+export function custPath(geom: XNode | undefined, w: number, h: number): string | undefined {
+  const paths = children(child(geom, 'a:pathLst'), 'a:path');
+  if (!paths.length) return undefined;
+  let d = '';
+  let points = 0;
+  for (const p of paths) {
+    const pw = num(p.attrs.w);
+    const ph = num(p.attrs.h);
+    // A path without its own size is in the shape's EMU.
+    const sx = pw ? w / pw : 1 / EMU_PER_PT;
+    const sy = ph ? h / ph : 1 / EMU_PER_PT;
+    for (const seg of p.children) {
+      const cmd = { 'a:moveTo': 'M', 'a:lnTo': 'L', 'a:cubicBezTo': 'C', 'a:quadBezTo': 'Q', 'a:close': 'Z' }[
+        seg.name
+      ];
+      if (!cmd) return undefined;
+      d += cmd;
+      for (const pt of children(seg, 'a:pt')) {
+        const x = Number(pt.attrs.x);
+        const y = Number(pt.attrs.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || ++points > MAX_PATH_POINTS) return undefined;
+        d += `${+(x * sx).toFixed(2)} ${+(y * sy).toFixed(2)} `;
+      }
+    }
+  }
+  return d.trim() || undefined;
+}
 
 export type Annotation = {
   /** The deck with a marker in every styled run (the input itself when nothing was marked). */
@@ -465,6 +502,7 @@ export async function annotatePptx(
   const bodies: BodyStyle[] = [];
   const families = new Set<string>();
   if (await repairContentTypes(zip, notes)) changed = true;
+  if (await applyColorOverrides(zip, notes)) changed = true;
   let full = false;
   /** Text tags walked so far, over every part. */
   let texts = 0;
@@ -692,7 +730,7 @@ async function pictureClips(
   for (let i = 0; i < order.length; i++) {
     const name = order[i]!;
     const xml = await read(name);
-    if (!xml || !/prst="(ellipse|roundRect)"/.test(xml)) continue;
+    if (!xml || !/prst="(ellipse|roundRect)"|<a:custGeom/.test(xml)) continue;
     let root: XNode | undefined;
     try {
       root = rootOf(parseXml(xml, name));
@@ -702,11 +740,14 @@ async function pictureClips(
     }
     for (const pic of children(path(root, 'p:cSld', 'p:spTree'), 'p:pic')) {
       const spPr = child(pic, 'p:spPr');
+      const cust = child(spPr, 'a:custGeom');
       const geom = child(spPr, 'a:prstGeom');
-      const prst = geom?.attrs.prst;
-      if (prst !== 'ellipse' && prst !== 'roundRect') continue;
+      const prst = cust ? 'path' : geom?.attrs.prst;
+      if (prst !== 'ellipse' && prst !== 'roundRect' && prst !== 'path') continue;
       const xfrm = child(spPr, 'a:xfrm');
       if (!xfrm || num(xfrm.attrs.rot)) continue;
+      // A flipped outline would need flipping too; pictures with one are rare.
+      if (prst === 'path' && (xfrm.attrs.flipH === '1' || xfrm.attrs.flipV === '1')) continue;
       const off = child(xfrm, 'a:off');
       const ext = child(xfrm, 'a:ext');
       const pt = (v: string | undefined) => (num(v) ?? 0) / EMU_PER_PT;
@@ -722,6 +763,10 @@ async function pictureClips(
         const gd = children(child(geom, 'a:avLst'), 'a:gd').find((g) => g.attrs.name === 'adj');
         const adj = num(/^val\s+(-?\d+)$/.exec(gd?.attrs.fmla ?? '')?.[1]) ?? 16_667;
         clip.radius = (Math.min(clip.w, clip.h) * Math.max(0, Math.min(50_000, adj))) / 100_000;
+      }
+      if (prst === 'path') {
+        clip.d = custPath(cust, clip.w, clip.h);
+        if (!clip.d) continue;
       }
       out.push(clip);
     }
@@ -1547,6 +1592,121 @@ async function repairContentTypes(zip: JSZip, notes: string[]): Promise<boolean>
   zip.file('[Content_Types].xml', out + xml.slice(last));
   notes.push(`[Content_Types].xml: ${dropped} entr${dropped === 1 ? 'y' : 'ies'} for missing parts removed`);
   return true;
+}
+
+/** Most layout and master copies made for slides with their own colour mapping. */
+const MAX_OVERRIDE_COPIES = 64;
+const CT_LAYOUT = 'application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml';
+const CT_MASTER = 'application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml';
+
+function relsOf(part: string): string {
+  const slash = part.lastIndexOf('/');
+  return `${part.slice(0, slash)}/_rels/${part.slice(slash + 1)}.rels`;
+}
+
+/** A start tag's attributes as written (`name="value"` pairs). */
+function tagAttrs(tag: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const m of tag.matchAll(/([\w:]+)="([^"]*)"/g)) out.set(m[1]!, m[2]!);
+  return out;
+}
+
+/** A relationships part with the target of its first relationship of `type` replaced. */
+export function retarget(rels: string, type: string, target: string): string {
+  for (const [start, end] of startTags(rels, 'Relationship')) {
+    const tag = rels.slice(start, end);
+    if (!new RegExp(`Type="[^"]*/${type}"`).test(tag)) continue;
+    return rels.slice(0, start) + tag.replace(/Target="[^"]*"/, `Target="${target}"`) + rels.slice(end);
+  }
+  return rels;
+}
+
+/** The first free `<dir>/<stem><n>.xml` part name. */
+function freePart(zip: JSZip, dir: string, stem: string): string {
+  for (let n = 1; ; n++) {
+    const p = `${dir}/${stem}${n}.xml`;
+    if (!zip.file(p)) return p;
+  }
+}
+
+/**
+ * pptx-preview ignores a slide's own colour mapping (`p:clrMapOvr/a:overrideClrMapping`, typically a dark
+ * slide in a light deck: bg1 → dk1, tx1 → lt1) and maps every scheme colour through its master's
+ * `p:clrMap`: the slide's dark background and light text come out white and black. Each such slide is
+ * pointed to a copy of its layout, and of that layout's master with the slide's mapping as its `p:clrMap`,
+ * so the slide's own colours, its background and what it inherits resolve as in PowerPoint and LibreOffice.
+ */
+export async function applyColorOverrides(zip: JSZip, notes: string[]): Promise<boolean> {
+  let types = await readText(zip, '[Content_Types].xml');
+  if (types === undefined || !types.includes('</Types>')) return false;
+  const slides = Object.keys(zip.files)
+    .filter((n) => /^ppt\/slides\/[^/]+\.xml$/.test(n))
+    .sort();
+  /** Copies by original part and mapping. */
+  const copies = new Map<string, string>();
+  let made = 0;
+  let changed = false;
+  for (const slide of slides) {
+    const xml = await readText(zip, slide);
+    if (xml === undefined) continue;
+    const ovr = /<p:clrMapOvr>\s*(<a:overrideClrMapping\b[^>]*>)/.exec(xml)?.[1];
+    if (!ovr) continue;
+    const mapping = [...tagAttrs(ovr)].filter(([k]) => !k.includes(':'));
+    const layout = await relTarget(zip, slide, 'slideLayout');
+    const master = layout && (await relTarget(zip, layout, 'slideMaster'));
+    const layoutXml = layout && (await readText(zip, layout));
+    const masterXml = master && (await readText(zip, master));
+    if (!layout || !master || layoutXml === undefined || masterXml === undefined) continue;
+    const clrMap = /<p:clrMap\b[^>]*>/.exec(masterXml);
+    if (!clrMap) continue;
+    const merged = tagAttrs(clrMap[0]);
+    // The master's own mapping (written again, as PowerPoint often does) changes nothing.
+    if (mapping.every(([k, v]) => (merged.get(k) ?? k) === v)) continue;
+    for (const [k, v] of mapping) merged.set(k, v);
+    const key = [...merged].map(([k, v]) => `${k}=${v}`).join(' ');
+    let newLayout = copies.get(`${layout}|${key}`);
+    if (!newLayout) {
+      if (made >= MAX_OVERRIDE_COPIES) {
+        notes.push(`${slide}: colour mapping left to its master (more than ${MAX_OVERRIDE_COPIES} copies)`);
+        continue;
+      }
+      let newMaster = copies.get(`${master}|${key}`);
+      if (!newMaster) {
+        newMaster = freePart(zip, 'ppt/slideMasters', 'slideMaster');
+        const attrs = [...merged].map(([k, v]) => ` ${k}="${v}"`).join('');
+        let rest = masterXml.slice(clrMap.index + clrMap[0].length);
+        const close = rest.indexOf('</p:clrMap>');
+        if (!clrMap[0].endsWith('/>') && close >= 0) rest = rest.slice(close + '</p:clrMap>'.length);
+        zip.file(newMaster, `${masterXml.slice(0, clrMap.index)}<p:clrMap${attrs}/>${rest}`);
+        const mrels = await readText(zip, relsOf(master));
+        if (mrels !== undefined) zip.file(relsOf(newMaster), mrels);
+        types = types.replace(
+          '</Types>',
+          `<Override PartName="/${newMaster}" ContentType="${CT_MASTER}"/></Types>`,
+        );
+        copies.set(`${master}|${key}`, newMaster);
+        made++;
+      }
+      newLayout = freePart(zip, 'ppt/slideLayouts', 'slideLayout');
+      zip.file(newLayout, layoutXml);
+      const lrels = (await readText(zip, relsOf(layout))) ?? '';
+      const masterName = newMaster.slice(newMaster.lastIndexOf('/') + 1);
+      zip.file(relsOf(newLayout), retarget(lrels, 'slideMaster', `../slideMasters/${masterName}`));
+      types = types.replace(
+        '</Types>',
+        `<Override PartName="/${newLayout}" ContentType="${CT_LAYOUT}"/></Types>`,
+      );
+      copies.set(`${layout}|${key}`, newLayout);
+      made++;
+    }
+    const srels = await readText(zip, relsOf(slide));
+    if (srels === undefined) continue;
+    const layoutName = newLayout.slice(newLayout.lastIndexOf('/') + 1);
+    zip.file(relsOf(slide), retarget(srels, 'slideLayout', `../slideLayouts/${layoutName}`));
+    changed = true;
+  }
+  if (changed) zip.file('[Content_Types].xml', types);
+  return changed;
 }
 
 /** The part a relationship of `type` (the last segment of its Type URI) points to, as a zip path. */
