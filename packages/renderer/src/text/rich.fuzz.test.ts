@@ -137,6 +137,11 @@ const object = fc
       valign: fc.constantFrom('top', 'middle', 'bottom'),
       direction: fc.constantFrom('ltr', 'rtl', 'auto', 'ttb'),
       fallbackFonts: fc.array(fc.constantFrom('Carlito', '', 'Noto Naskh Arabic'), { maxLength: 12 }),
+      underline: fc.boolean(),
+      glow: fc.record({ radius: n(-10, 500), color }),
+      fill: fc.record({ color, radius: n(-10, 5000) }),
+      shadow: fc.record({ dx: n(-500, 500), dy: n(-500, 500), blur: n(-10, 500), color }),
+      outline: fc.record({ width: n(-10, 500), color }),
       runs: fc.array(run, { maxLength: 30 }),
       paras: fc.array(para, { maxLength: 30 }),
     },
@@ -171,6 +176,11 @@ const object = fc
           fitScale: r.fitScale,
           direction: r.direction,
           fallbackFonts: r.fallbackFonts,
+          underline: r.underline,
+          glow: r.glow,
+          fill: r.fill,
+          shadow: r.shadow,
+          outline: r.outline,
         },
       }) as unknown as TextObject,
   );
@@ -202,7 +212,17 @@ describe('rich text engine fuzz', () => {
             expect(s.sizePx).toBeLessThanOrEqual(CLAMP.maxFontPx);
           }
         }
-        paintRich(recordingCtx(), o, l, scale, LEGACY_FONT_ENV);
+        const ctx = recordingCtx();
+        paintRich(ctx, o, l, scale, LEGACY_FONT_ENV);
+        // Every coordinate, size and effect handed to the canvas is finite.
+        const keys = ['shadowBlur', 'shadowOffsetX', 'shadowOffsetY', 'lineWidth', 'globalAlpha'] as const;
+        const bad = ctx.ops.find(
+          (op) =>
+            op.args.some((a) => typeof a === 'number' && !finite(a)) ||
+            !op.transform.every(finite) ||
+            keys.some((k) => !finite(op.state[k] as number)),
+        );
+        expect(bad).toBeUndefined();
       }),
       { numRuns: 100 },
     );

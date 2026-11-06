@@ -1,4 +1,4 @@
-import { nearColor, type SlideObject, type TextStyle } from '@ordo/domain';
+import { editText, nearColor, type SlideObject, type TextStyle } from '@ordo/domain';
 import { useState } from 'react';
 import { BoxEditor, Check, ColorField, NumberField, Select } from '../../components/fields.tsx';
 import { TextStyleEditor } from '../../components/TextStyleEditor.tsx';
@@ -63,7 +63,12 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
             value={o.text}
             disabled={readOnly}
             id="ordo-text-editor"
-            onChange={(e) => set((x) => ({ ...x, text: e.target.value }) as SlideObject, `text:${o.id}`)}
+            onChange={(e) => {
+              // Runs and paragraph styles follow the edit (design/27 §11): a typo fix keeps the formatting.
+              const next = e.target.value;
+              const caret = e.target.selectionEnd;
+              set((x) => (x.type === 'text' ? editText(x, next, caret) : x), `text:${o.id}`);
+            }}
           />
           {keyClash && (
             <div className="banner small">

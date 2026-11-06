@@ -193,6 +193,11 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
 
 - Canvas-based editor with `react-konva` for selection, transforms and guides; the
   visual preview inside the editor uses the shared rasterizer for text so WYSIWYG holds.
+  Rich text objects (design/27) are drawn by the rich engine into their cached canvas at the stage
+  scale × `devicePixelRatio` (keyed by the font generation), legacy ones at 1:1 as before.
+- Editing a text box's plain text keeps its formatting: `editText` (`@ordo/domain`) shifts, trims and
+  splits the runs and paragraph styles with the change, placed by the textarea's caret; splitting and
+  merging slides cut and join them with the lines (design/27 §11).
 - Property panel bound to the selected object's schema.
 - Saves via `PUT /presentations/:id` with `rev`; 409 shows the reload dialog.
 - Disabled with a banner when the presentation is referenced by the live playlist.

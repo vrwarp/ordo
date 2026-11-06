@@ -11,7 +11,15 @@ import {
 import { clampLook, clampSlide } from './clamp.ts';
 import type { AssetJob } from './messages.ts';
 import type { PropsModel } from './props.ts';
-import { type Ctx2D, type ImageLookup, drawImageFit, drawSlide2D, drawText, fillColor } from './text2d.ts';
+import {
+  type Ctx2D,
+  type ImageLookup,
+  drawBandText,
+  drawImageFit,
+  drawSlide2D,
+  drawText,
+  fillColor,
+} from './text2d.ts';
 
 /**
  * Full-frame rasterization used by the output's asset worker and by thumbnails. Every function draws
@@ -42,7 +50,7 @@ export function rasterSlide(
 
 export function rasterLowerThird(ctx: Ctx2D, text: string, look: Look, scale: number): void {
   const { style, band } = lowerThirdStyle(look);
-  drawText(ctx, text, style, band, scale, { fit: true });
+  drawBandText(ctx, text, style, band, scale);
 }
 
 export function rasterImage(

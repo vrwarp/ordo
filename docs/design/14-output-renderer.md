@@ -234,6 +234,16 @@ occupies; the render worker composites it like any image. Word wrap uses canvas
 uses canvas shadow properties on a separate pass to avoid outlining the shadow. The same
 rasterizer runs in the operator's thumbnail worker so previews match outputs.
 
+Text objects with runs, paragraph styles or a rich style field go through ordo's text engine
+(`packages/renderer/src/text`, design/27 §6): laid out in logical px whatever the output size, then
+painted under the scale transform in the same pass order (fill box and highlights, shadows, glow,
+outline, fill, underline and strike, bullets). Every other text object is drawn by `drawText` as above,
+byte for byte, except that a paragraph containing a strong right-to-left character is measured and drawn
+with `ctx.direction` set to its first strong character's direction. Lyric-only, next-slide and
+lower-third bands go through the engine when the source object is rich, the text has a strong
+right-to-left character or the look's style has a rich field: the source's readable text in the look's
+style, shrunk to fit, with the source paragraphs' directions.
+
 A hidden DOM text layer exists for a diagnostics overlay (Ctrl+Shift+D) only.
 
 ## Transitions

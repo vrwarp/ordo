@@ -17,6 +17,7 @@ import { stillHash } from '../../services/thumbs.ts';
 import { change, selectObject, useEditor } from './editorStore.ts';
 import { updateObject } from './ops.ts';
 import { snapBox } from './snapping.ts';
+import { TEXT_MARGIN, textDensity, textRasterKey } from './textRaster.ts';
 import { objectToolsSpot, rotaterAngle } from './touchGeometry.ts';
 
 // ---- image cache (HTMLImageElement per file hash) ----
@@ -52,21 +53,27 @@ function useImageTick(): number {
 }
 
 // ---- text raster cache: the shared rasterizer into an offscreen canvas (WYSIWYG with outputs) ----
-const MARGIN = 80;
-const textCache = new WeakMap<TextObject, { key: string; canvas: HTMLCanvasElement }>();
-function textCanvas(o: TextObject, tick: number): HTMLCanvasElement {
-  const key = `${o.box.w}x${o.box.h}:${tick}`;
+const MARGIN = TEXT_MARGIN;
+type TextRaster = { key: string; canvas: HTMLCanvasElement; density: number };
+const textCache = new WeakMap<TextObject, TextRaster>();
+/**
+ * `o` drawn into its cached canvas: rich objects through the rich engine at `screen` density (stage scale ×
+ * devicePixelRatio), legacy ones through drawText at 1:1 exactly as before (design/27 §6, §7.4).
+ */
+function textCanvas(o: TextObject, tick: number, screen: number): TextRaster {
+  const density = textDensity(o, screen);
+  const key = textRasterKey(o, tick, density);
   const hit = textCache.get(o);
-  if (hit && hit.key === key) return hit.canvas;
+  if (hit && hit.key === key) return hit;
   const c = hit?.canvas ?? document.createElement('canvas');
-  c.width = Math.max(1, Math.ceil(o.box.w + 2 * MARGIN));
-  c.height = Math.max(1, Math.ceil(o.box.h + 2 * MARGIN));
+  c.width = Math.max(1, Math.ceil((o.box.w + 2 * MARGIN) * density));
+  c.height = Math.max(1, Math.ceil((o.box.h + 2 * MARGIN) * density));
   const ctx = c.getContext('2d')!;
   ctx.clearRect(0, 0, c.width, c.height);
-  // Rich objects go through the rich engine, legacy ones through drawText exactly as before (design/27 §6).
-  drawTextObject(ctx, { ...o, box: { x: MARGIN, y: MARGIN, w: o.box.w, h: o.box.h, rotation: 0 } }, 1);
-  textCache.set(o, { key, canvas: c });
-  return c;
+  drawTextObject(ctx, { ...o, box: { x: MARGIN, y: MARGIN, w: o.box.w, h: o.box.h, rotation: 0 } }, density);
+  const out = { key, canvas: c, density };
+  textCache.set(o, out);
+  return out;
 }
 
 /** Transformer anchors under a finger: 30 px on screen, with a hit area wider than the drawn circle. */
@@ -87,6 +94,8 @@ function ObjectNode(props: {
   media: (id: string) => Media | undefined;
   others: Box[];
   tick: number;
+  /** Device px per logical px on screen: the stage scale × devicePixelRatio. */
+  density: number;
   readOnly: boolean;
   onSelect: () => void;
   onEditText?: () => void;
@@ -109,7 +118,8 @@ function ObjectNode(props: {
       sceneFunc={(context) => {
         const ctx = context._context as CanvasRenderingContext2D;
         if (o.type === 'text') {
-          ctx.drawImage(textCanvas(o, tick), -MARGIN, -MARGIN);
+          const t = textCanvas(o, tick, props.density);
+          ctx.drawImage(t.canvas, -MARGIN, -MARGIN, t.canvas.width / t.density, t.canvas.height / t.density);
         } else if (o.type === 'image') {
           const img = imageFor(stillHash(props.media(o.mediaId)));
           if (img) drawImageFit(ctx, img, local(b), 1, o.fit, o.opacity, o.radius);
@@ -218,6 +228,7 @@ export function SlideCanvas(props: {
     };
   }, []);
   const scale = size.w / LOGICAL_WIDTH;
+  const density = scale * (typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1);
   const { slide } = props;
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-attach the transformer when the slide re-renders
   useEffect(() => {
@@ -290,6 +301,7 @@ export function SlideCanvas(props: {
               media={props.media}
               others={othersFor(o.id)}
               tick={tick}
+              density={density}
               readOnly={props.readOnly}
               onSelect={() => selectObject(o.id)}
               onEditText={

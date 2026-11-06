@@ -45,7 +45,31 @@ export function testMeasurer(
 }
 
 /** One recorded call on a `RecordingCtx`. */
-export type CtxOp = { op: string; args: unknown[]; font: string; fillStyle: unknown; transform: number[] };
+export type CtxOp = {
+  op: string;
+  args: unknown[];
+  font: string;
+  fillStyle: unknown;
+  transform: number[];
+  /** The rest of the drawing state in effect (`SNAPSHOT_KEYS`). */
+  state: Record<string, unknown>;
+};
+
+/** Context state recorded with every call besides the font, fill style and transform. */
+export const SNAPSHOT_KEYS = [
+  'direction',
+  'textAlign',
+  'lang',
+  'letterSpacing',
+  'globalAlpha',
+  'shadowColor',
+  'shadowBlur',
+  'shadowOffsetX',
+  'shadowOffsetY',
+  'strokeStyle',
+  'lineWidth',
+  'lineJoin',
+] as const;
 
 export type RecordingCtx = CanvasRenderingContext2D & { ops: CtxOp[] };
 
@@ -68,11 +92,26 @@ export function recordingCtx(em = 0.5): RecordingCtx {
     lang: 'inherit',
     textAlign: 'start',
     textBaseline: 'alphabetic',
+    shadowColor: 'rgba(0, 0, 0, 0)',
+    shadowBlur: 0,
+    shadowOffsetX: 0,
+    shadowOffsetY: 0,
+    lineWidth: 1,
+    lineJoin: 'miter',
   };
   const record =
     (op: string) =>
     (...args: unknown[]) => {
-      ops.push({ op, args, font: String(state.font), fillStyle: state.fillStyle, transform: [...m] });
+      const snap: Record<string, unknown> = {};
+      for (const k of SNAPSHOT_KEYS) snap[k] = state[k];
+      ops.push({
+        op,
+        args,
+        font: String(state.font),
+        fillStyle: state.fillStyle,
+        transform: [...m],
+        state: snap,
+      });
     };
   const mul = (a: number, b: number, c: number, d: number, e: number, f: number) => {
     const [A, B, C, D, E, F] = m as [number, number, number, number, number, number];
