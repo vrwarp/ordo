@@ -279,6 +279,12 @@ LibreOffice does not draw a run's own text shadow (PowerPoint's "Text Shadow" bu
 Known gaps: pptx-preview's charts (ECharts) misread some chart data (pptxgenjs's multi-level category
 labels; values drawn far too small), table text can still wrap differently, and photographs score
 lower than their look suggests because the two renderers scale pictures with different filters.
+pptx-preview applies a colour's `a:tint` as a blend of HSL lightness toward white, after its shade and
+luminance changes whatever their order in the XML; PowerPoint and LibreOffice blend in linear RGB, in
+order, so a dark theme colour with a tint comes out darker (black with a 95 % tint: #0D0D0D against
+#404040). Correcting it means resolving each scheme colour, theme placeholder colours included, per slide.
+Slide decks that are not valid packages (no theme, master or layout: hand-written test files) can draw
+nothing, where LibreOffice draws them with defaults.
 
 ```
 pnpm --filter @ordo/pptx-fidelity start -- --corpus --raw --out tmp/pptx-fidelity ~/decks/*.pptx
