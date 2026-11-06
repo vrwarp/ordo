@@ -1086,9 +1086,28 @@ function backgroundStyles(theme: string): string[] {
 }
 
 /**
- * A background that refers to a picture fill of its theme (`p:bgRef` idx 1001 and up: the theme's
- * background fill styles) is drawn by pptx-preview as a plain colour. Writes the picture fill into the part
- * (`p:bgPr`) with a relationship to the theme's picture, so pptx-preview draws it.
+ * A theme fill with its placeholder colour (`phClr`) replaced by `color` (one colour element, as a
+ * `p:bgRef` holds it): the placeholder's own changes (tint, shade, ...) follow the colour's. Undefined when
+ * `color` is not one colour element.
+ */
+export function withPlaceholderColor(fill: string, color: string): string | undefined {
+  const c =
+    /^\s*<a:(scrgbClr|srgbClr|hslClr|sysClr|schemeClr|prstClr)\b([^>]*?)(?:\/>|>([\s\S]*?)<\/a:\1>)\s*$/.exec(
+      color,
+    );
+  if (!c) return undefined;
+  const [, tag, attrs, inner = ''] = c;
+  return fill.replace(
+    /<a:schemeClr val="phClr"\s*(?:\/>|>([\s\S]*?)<\/a:schemeClr>)/g,
+    (_m, own: string | undefined) => `<a:${tag}${attrs}>${inner}${own ?? ''}</a:${tag}>`,
+  );
+}
+
+/**
+ * A background that refers to a picture or gradient fill of its theme (`p:bgRef` idx 1001 and up: the
+ * theme's background fill styles, as Office 2007 and 2010 themes use) is drawn by pptx-preview as a plain
+ * colour. Writes the fill into the part (`p:bgPr`), a picture with a relationship to the theme's picture, a
+ * gradient with the reference's colour in place of the placeholder colour, so pptx-preview draws it.
  */
 async function themeBackgrounds(
   zip: JSZip,
@@ -1100,7 +1119,7 @@ async function themeBackgrounds(
   let pictures = false;
   for (const t of Object.keys(zip.files).filter((n) => /^ppt\/theme\/[^/]+\.xml$/.test(n))) {
     const xml = await read(t);
-    if (xml && backgroundStyles(xml).some((f) => f.startsWith('<a:blipFill'))) pictures = true;
+    if (xml && backgroundStyles(xml).some((f) => /^<a:(blipFill|gradFill)\b/.test(f))) pictures = true;
   }
   if (!pictures) return false;
   const themes = new Map<string, Promise<string | undefined>>();
@@ -1128,14 +1147,22 @@ async function themeBackgrounds(
       const theme = themePart && (await read(themePart));
       if (!themePart || !theme) continue;
       const fill = backgroundStyles(theme)[idx - 1001];
-      if (!fill?.startsWith('<a:blipFill')) continue;
-      const id = /\sr:embed="([^"]*)"/.exec(fill)?.[1];
-      const media = id ? await relById(themePart, id, read) : undefined;
-      if (!media || !zip.file(media)) continue;
       const gt = xml.indexOf('>', at);
       const end = gt < 0 || xml[gt - 1] === '/' ? gt : xml.indexOf('</p:bgRef>', gt);
       if (end < 0) continue;
       const stop = end === gt ? gt + 1 : end + 10;
+      if (fill?.startsWith('<a:gradFill')) {
+        // The gradient's placeholder colour is the reference's colour; without one there is nothing to draw.
+        const own = end > gt ? withPlaceholderColor(fill, xml.slice(gt + 1, end)) : undefined;
+        if (!own) continue;
+        zip.file(name, `${xml.slice(0, at)}<p:bgPr>${own}<a:effectLst/></p:bgPr>${xml.slice(stop)}`);
+        changed = true;
+        continue;
+      }
+      if (!fill?.startsWith('<a:blipFill')) continue;
+      const id = /\sr:embed="([^"]*)"/.exec(fill)?.[1];
+      const media = id ? await relById(themePart, id, read) : undefined;
+      if (!media || !zip.file(media)) continue;
       const slash = name.lastIndexOf('/');
       const relsPath = `${name.slice(0, slash)}/_rels/${name.slice(slash + 1)}.rels`;
       const rels =

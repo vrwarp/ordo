@@ -6,6 +6,7 @@ import {
   completeGroupTransforms,
   pictureSize,
   placeOrphanPlaceholders,
+  withPlaceholderColor,
   autoNumber,
   moveGroupOrigins,
   placeSlides,
@@ -620,9 +621,18 @@ describe('annotatePptx', () => {
         'ppt/theme/_rels/theme1.xml.rels': rels('image', '../media/image1.png').replace('rId1', 'rId5'),
         'ppt/media/image1.png': png(96, 48),
         'ppt/slideMasters/slideMaster1.xml': master,
-        // A gradient stays as pptx-preview draws it.
+        // A gradient with no colour for its placeholder stays as pptx-preview draws it.
         'ppt/slideLayouts/slideLayout2.xml': layout(1002),
         'ppt/slideLayouts/_rels/slideLayout2.xml.rels': rels(
+          'slideMaster',
+          '../slideMasters/slideMaster1.xml',
+        ),
+        // A gradient with one is written into the part.
+        'ppt/slideLayouts/slideLayout3.xml': layout(1002).replace(
+          '<p:bgRef idx="1002"/>',
+          '<p:bgRef idx="1002"><a:srgbClr val="112233"><a:lumMod val="50000"/></a:srgbClr></p:bgRef>',
+        ),
+        'ppt/slideLayouts/_rels/slideLayout3.xml.rels': rels(
           'slideMaster',
           '../slideMasters/slideMaster1.xml',
         ),
@@ -640,6 +650,22 @@ describe('annotatePptx', () => {
     expect(await z.file('ppt/slideLayouts/slideLayout2.xml')!.async('string')).toContain(
       '<p:bgRef idx="1002"/>',
     );
+    expect(await z.file('ppt/slideLayouts/slideLayout3.xml')!.async('string')).toContain(
+      '<p:bg><p:bgPr><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:srgbClr val="112233"><a:lumMod val="50000"/></a:srgbClr></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill><a:effectLst/></p:bgPr></p:bg>',
+    );
+    // The placeholder's own changes follow the colour's.
+    expect(
+      withPlaceholderColor(
+        '<a:gs pos="0"><a:schemeClr val="phClr"><a:tint val="88000"/></a:schemeClr></a:gs><a:schemeClr val="bg1"/>',
+        '<a:schemeClr val="bg2"><a:shade val="50000"/></a:schemeClr>',
+      ),
+    ).toBe(
+      '<a:gs pos="0"><a:schemeClr val="bg2"><a:shade val="50000"/><a:tint val="88000"/></a:schemeClr></a:gs><a:schemeClr val="bg1"/>',
+    );
+    expect(withPlaceholderColor('<a:schemeClr val="phClr"/>', '<a:schemeClr val="bg2"/>')).toBe(
+      '<a:schemeClr val="bg2"></a:schemeClr>',
+    );
+    expect(withPlaceholderColor('<a:schemeClr val="phClr"/>', 'two<a:b/>')).toBeUndefined();
     // The slide shows its master's background, now a tiled picture.
     expect(a.backgrounds).toEqual([
       { slide: 0, tile: { w: 36 / 960, h: 18 / 540, x: 0, y: 0, flip: 'none' } },

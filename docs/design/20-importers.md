@@ -225,8 +225,10 @@ which ordo owns and can keep fixing:
   annotation computes these as fractions of the slide (`backgrounds`) and the page sets the CSS
   background size, position and repeat. A background that refers to a picture among the theme's
   background styles (`p:bgRef` idx 1001 and up) is drawn by pptx-preview as a flat colour: the picture
-  fill is written into the part, with a relationship to the theme's picture. Not corrected: a crop of a
-  tiled picture, the theme's gradient background styles, duotone and other colour changes of the picture.
+  fill is written into the part, with a relationship to the theme's picture; a gradient among them (Office
+  2007 and 2010 themes) is written in with the reference's colour in place of the placeholder colour
+  (`phClr`), the placeholder's own tint or shade following it. Not corrected: a crop of a tiled picture,
+  duotone and other colour changes of the picture.
 - **A slide's own colour mapping** (`p:clrMapOvr`, a dark slide in a light deck: bg1 → dk1, tx1 → lt1) is
   ignored by pptx-preview, which maps scheme colours through the master only: such a slide is pointed to a
   copy of its layout and master whose `p:clrMap` is the slide's mapping.
