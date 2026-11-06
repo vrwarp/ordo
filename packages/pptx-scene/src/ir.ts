@@ -84,6 +84,10 @@ export type Fill =
       path?: string;
       /** `a:path/a:fillToRect`: the focus rectangle as insets of the box (fractions, ±1). */
       focus?: Insets;
+      /** `a:lin scaled="1"`: the angle is taken in the unit square and scaled with the box (M6). */
+      scaled?: boolean;
+      /** `rotWithShape="0"`: the gradient keeps its angle on the slide when the shape turns (M6). */
+      fixed?: boolean;
     }
   | { kind: 'picture'; picture: PictureFill }
   | { kind: 'pattern'; preset: string; fg: Rgba; bg: Rgba }
@@ -120,6 +124,15 @@ export interface Line {
   dash?: string;
   head?: string;
   tail?: string;
+  /** `a:custDash`: dash and space lengths in line widths (`a:ds d`, `sp` / 100,000), pairs flattened (M6). */
+  custDash?: number[];
+  /** Arrowhead sizes (`w`, `len`: sm, med, lg) when not medium (M6). */
+  headSize?: { w: string; len: string };
+  tailSize?: { w: string; len: string };
+  /** `a:round`, `a:bevel` or `a:miter` (M6); undefined when the line sets none. */
+  join?: 'round' | 'bevel' | 'miter';
+  /** `cap`: flat, rnd or sq (M6); undefined when the line sets none. */
+  cap?: 'flat' | 'round' | 'square';
 }
 
 /** An outer shadow (`a:outerShdw`). */
@@ -281,6 +294,45 @@ export interface ShapeElement extends ElementBase {
    * when every point could be read. M1 draws the legacy rect only when most of the box is filled.
    */
   coverage?: number;
+  /** Custom geometry built (M6, `geom.ts`): its paths, text rectangle and connection sites. */
+  custom?: CustomPaths;
+  /** `a:glow` (M6): radius in EMU. */
+  glow?: { radius: Emu; color: Rgba };
+  /** `a:softEdge rad` in EMU (M6). */
+  softEdge?: Emu;
+  /** A connector's ends glued to shapes (`a:stCxn`, `a:endCxn`; M6): their `cNvPr id` and site index. */
+  cxn?: { start?: CxnRef; end?: CxnRef };
+}
+
+/** One end of a connector glued to a shape's connection site. */
+export interface CxnRef {
+  id: number;
+  idx: number;
+}
+
+/**
+ * A custom geometry (`a:custGeom`) built for one shape (M6, `geom.ts`): each path as an SVG-like string in its
+ * own space (the deck's `w`/`h`, else the shape's box in logical px), the text rectangle and connection
+ * sites in unit-square fractions of the box.
+ */
+export interface CustomPaths {
+  paths: {
+    d: string;
+    w: number;
+    h: number;
+    fill?: 'norm' | 'none' | 'lighten' | 'lightenLess' | 'darken' | 'darkenLess';
+    stroke?: boolean;
+  }[];
+  /** Points of all paths (an arc counts its cubic segments' points). */
+  points: number;
+  /** `a:rect` as fractions of the box: l, t, r, b. */
+  text: [number, number, number, number];
+  /** `a:cxnLst` as fractions of the box, with the angle a connector leaves at (degrees clockwise). */
+  sites: { x: number; y: number; angle: number }[];
+  /** The geometry lost parts to its bounds (or a path string over the schema's length): not drawn natively. */
+  over?: boolean;
+  /** What compiling replaced by 0 or dropped (cleaned, short). */
+  notes: string[];
 }
 
 /** A `p:pic` (or a picture placeholder filled with one). */
@@ -294,6 +346,8 @@ export interface PictureElement extends ElementBase {
   media?: MediaRef;
   /** `a:avLst` guide values of the clip geometry (a roundRect's corner), as `ShapeElement.adj`. */
   adj?: [string, number][];
+  /** A custom clip geometry built (M6, `geom.ts`). */
+  custom?: CustomPaths;
 }
 
 /**

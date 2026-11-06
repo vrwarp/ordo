@@ -185,10 +185,14 @@ describe('p:pic', () => {
     expect((s.elements[0] as PictureElement).media).toEqual({ kind: 'video', part: 'ppt/media/media1.mp4' });
   });
 
-  it('notes clip geometries other than rect, roundRect and ellipse', () => {
-    const s = picturesOf(p({ geom: 'ellipse' }) + p({ id: 3, geom: 'hexagon' }), [imageRel('rId2', 'a.png')]);
+  it('clips to every preset of the table (M6) and notes a preset it does not know', () => {
+    const s = picturesOf(
+      p({ geom: 'ellipse' }) + p({ id: 3, geom: 'hexagon' }) + p({ id: 4, geom: 'noSuchShape' }),
+      [imageRel('rId2', 'a.png')],
+    );
     expect((s.elements[0] as PictureElement).support).toBe('native');
-    expect(s.elements[1]).toMatchObject({ support: 'approx', reasons: ['mask:hexagon'] });
+    expect((s.elements[1] as PictureElement).support).toBe('native');
+    expect(s.elements[2]).toMatchObject({ support: 'approx', reasons: ['mask:noSuchShape'] });
   });
 
   it('names extensions in lower case', () => {

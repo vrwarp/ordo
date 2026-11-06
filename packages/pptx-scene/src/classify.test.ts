@@ -316,9 +316,13 @@ describe('element support (design/27 §5)', () => {
       ['native', []],
       ['native', []],
     ]);
+    // M6: every preset of the table is drawn; one it does not know is drawn as its rect.
     expect(support(sp({ id: 2, x: 0, y: 0, cx: IN, cy: IN, geom: 'star5', fill: solid('FF0000') }))).toEqual([
-      ['approx', ['preset:star5']],
+      ['native', []],
     ]);
+    expect(
+      support(sp({ id: 2, x: 0, y: 0, cx: IN, cy: IN, geom: 'noSuchShape', fill: solid('FF0000') })),
+    ).toEqual([['approx', ['preset:noSuchShape']]]);
   });
 
   it('makes charts, tables, SmartArt, OLE, maths, real 3D, warps and vertical or column text residual', () => {

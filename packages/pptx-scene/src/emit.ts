@@ -8,8 +8,9 @@
  * each stands for is listed in `EmitResult.media`), which the harness (and later the hub) maps to real media.
  *
  * - **Placement.** Every element's affine is mapped to the 1920x1080 logical canvas (`frame.ts`: contain-
- *   fit, 4:3 decks centred). Boxes keep their rotation; flips of symmetric shapes need nothing, a flipped
- *   picture is drawn unflipped (M3) and noted.
+ *   fit, 4:3 decks centred). Boxes keep their rotation; a reflection (of the shape, of a group, or both) is
+ *   `flipH` with the rotation that makes it exact (a vertical flip is a horizontal one turned half a turn),
+ *   written on pictures and on shapes whose geometry or gradient it changes (M6).
  * - **Rich text** (default): one `TextObject` per body, `richtext.ts`, its box the shape's text rectangle
  *   (the preset's, turned a quarter for vertical text); insets and margins are written, not folded.
  * - **Legacy text** (`richText: false`): one `TextObject` per body in its dominant run's style (most
@@ -19,27 +20,34 @@
  *   (single = 1.2 × the font size, the office line model; a `lnSpcReduction` is subtracted), text outline
  *   → `outline` with width w/2 (ordo strokes twice the width under the fill), hollow text → alpha 0 plus
  *   the outline, the run's outer shadow (or the shape's, when the shape itself draws nothing) → `shadow`.
- * - **Text rectangle.** The shape's box, narrowed to the preset's text rectangle for roundRect and ellipse.
+ * - **Text rectangle.** The geometry's text rectangle (M6: every preset of POI's table, a custom
+ *   geometry's `a:rect`), placed through the shape's affine, so it is mirrored with a flipped shape.
  *   For legacy text `padding` is the smallest body inset and the difference to each other inset is folded
  *   into the box, so the text area is PowerPoint's exactly; `wrap="none"` widens the box on the side(s) the
  *   alignment grows into, so ordo never wraps it. `vert`/`vert270`/`eaVert` turn the box a quarter turn.
- * - **Shapes**: rect, roundRect (radius from its `adj`), ellipse; lines and connectors as one `line` object
- *   per straight segment at any angle. Other presets are drawn as the nearest of these (noted). Fills as
- *   their legacy colour: solid; a gradient's first stop; a pattern's blend. A picture fill is an image.
+ * - **Shapes**: rect, roundRect (radius from its `adj`), ellipse as today's fields, and beside them since M6
+ *   (`geom.ts`) the preset (`geom.preset`, `adj`) or custom geometry (`geom.paths`), the gradient, dash,
+ *   arrowheads, flips and effects (outer shadow, glow, soft edge). Lines and straight connectors are one
+ *   `line` object at any angle; bent and curved connectors one `line` object whose midline joins their ends
+ *   (what an older build draws) with their route as `geom.paths`. Other presets' legacy is the nearest of
+ *   rect and ellipse; a thin custom geometry's is a line (no fill). Fills' legacy colour: solid; a
+ *   gradient's first stop; a pattern's blend (noted). A picture fill is an image clipped to the geometry.
  * - **Paragraph margins** (legacy text) fold into the text box, as `padding` does: the box is narrowed on
  *   the paragraphs' start side by the margin all of their text keeps clear of (`marL`; for a paragraph
  *   without a bullet, the first line's `marL + indent` when that is less), since a legacy `TextObject` has
  *   one left edge.
  * - **Pictures** (`p:pic` and picture fills) are stretched images. `a:fillRect` folds into the box (clipped
  *   to the shape) and, with `crop`, into the crop together with `a:srcRect`. roundRect and ellipse clips
- *   become `radius` (an ellipse is exact for a circle); a picture outline is a stroke-only shape above it.
+ *   become `radius` (an ellipse is exact for a circle) for an older build, every clip geometry `mask` (M6);
+ *   a picture outline is a stroke-only shape above it along the same geometry.
  *   An unrotated picture reaching past ±2× the canvas (the render clamp, design/27 §12) is cut there and
  *   the cut folded into the crop, so the clamp never squeezes it.
  * - **Backgrounds**: a plain stretched picture known to be opaque whose aspect is known and matches a 16:9
  *   slide → `backgroundMediaId` (drawn cover-fit, on black); any other picture, one that may be transparent
  *   or of unknown size or alpha included (a spilled part without `ParseOptions.pictureSize`) → a bottom
  *   image stretched over the slide area, on white; solid,
- *   gradient and pattern → a bottom rect over the whole 1920x1080 frame (`extendBackgrounds`, default) or
+ *   gradient (M6: its `gradient`, stops laid on white) and pattern → a bottom rect over the whole 1920x1080
+ *   frame (`extendBackgrounds`, default) or
  *   the slide area; none → white, as PowerPoint shows it.
  * - **Video and sound** (`media.ts`): the first slide video plays in its poster's box (`ImageObject.play`),
  *   the first slide sound is `Slide.audio`, a looping muted full-slide video is the slide's motion background
@@ -54,12 +62,25 @@
 import type {
   ImageObject,
   Rgba as OrdoRgba,
+  ShapeGeom,
   ShapeObject,
   Slide,
   SlideObject,
   TextObject,
 } from '@ordo/domain';
+import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD } from '@ordo/renderer/geom/ops.ts';
 import { apply, boxPx, decompose, lenPx, multiply, ptPx, slideRect } from './frame.ts';
+import {
+  adjPairs,
+  dashOf,
+  endsOf,
+  gradientOf,
+  knownPreset,
+  pictureFillPlacement,
+  presetRoute,
+  textRectOf,
+  transformedPaths,
+} from './geom.ts';
 import { artInfo } from './hybrid.ts';
 import { isFooter, isTitle, masterClass } from './inherit.ts';
 import { type EmittedClip, emitMedia } from './media.ts';
@@ -67,6 +88,7 @@ import type {
   Affine,
   ArtInfo,
   Classification,
+  CustomPaths,
   DeckScene,
   Element,
   Fill,
@@ -77,6 +99,7 @@ import type {
   PictureFill,
   Rgba,
   RunStyle,
+  Shadow,
   ShapeElement,
   SlideScene,
   TextBody,
@@ -123,10 +146,6 @@ const NO_WRAP_GROWTH = 1_920;
 export const MIN_RECT_COVERAGE = 0.5;
 /** A roundRect's default corner (`adj` 16,667 of the shorter side, /100,000). */
 const ROUND_RECT_ADJ = 16_667;
-/** The ellipse's text rectangle inset on each side, as a share of the box (POI: hc − wd2·cos 45°). */
-const ELLIPSE_TEXT_INSET = 0.5 - 0.5 * Math.SQRT1_2;
-/** The roundRect's text rectangle inset as a share of its corner radius (POI: 29,289/100,000). */
-const ROUND_RECT_TEXT_INSET = 0.29289;
 
 const WHITE: OrdoRgba = { r: 255, g: 255, b: 255, a: 1 };
 
@@ -502,10 +521,13 @@ function emitBackground(ctx: EmitCtx, s: SlideScene, slide: Slide): void {
     if (img) slide.objects.push(img);
     return;
   }
-  if (fill.kind === 'gradient') ctx.log('a gradient background is drawn as its first colour (M6)');
-  if (fill.kind === 'pattern') ctx.log('a pattern background is drawn as its blended colour (M6)');
+  if (fill.kind === 'pattern') ctx.log('a pattern background is drawn as its blended colour');
   const color = legacyColor(fill);
-  slide.objects.push(shape(ctx, area, 'rect', color ? overWhite(color) : WHITE));
+  const bg = shape(ctx, area, 'rect', color ? overWhite(color) : WHITE);
+  // M6: a gradient over the background area, each stop laid on white (the first stop is the legacy colour).
+  const gradient = gradientOf(fill, 0, ctx.log, overWhite);
+  if (gradient) bg.gradient = gradient;
+  slide.objects.push(bg);
 }
 
 /** A colour laid on white, as a slide background is: opaque. */
@@ -542,48 +564,85 @@ function emitElement(ctx: EmitCtx, e: Element, out: SlideObject[], texts: Emitte
 }
 
 function emitPicture(ctx: EmitCtx, e: PictureElement, out: SlideObject[]): void {
-  if (decompose(e.xf).flipH) ctx.log('a flipped picture is drawn unflipped (M3)');
   if (e.reasons?.some((r) => r.startsWith('mask:')))
-    ctx.log(`a picture clipped to ${e.geom} is drawn as a rect (M3)`);
+    ctx.log(`a picture clipped to ${e.geom} is drawn as a rect`);
   if (e.picture.effects?.length) ctx.log('a recoloured picture is drawn without its recolouring (M3)');
-  const img = pictureObject(ctx, e.xf, e.picture, e.geom, e.adj);
+  const img = pictureObject(ctx, e.xf, e.picture, e.geom, e.adj, e.custom);
   if (img) out.push(img);
   const stroke = e.line ? legacyColor(e.line.fill) : undefined;
   if (e.line && stroke) {
+    // The outline: a stroke-only shape above the picture, along the same geometry (M6).
     const box = boxOf(ctx, e.xf);
     const kind = e.geom === 'ellipse' ? 'ellipse' : 'rect';
     const o = shape(ctx, box, kind, undefined);
     o.stroke = { width: strokeWidth(ctx, e.line.width), color: stroke };
     if (e.geom === 'roundRect') o.radius = cornerRadius(box, e.adj);
+    const geom = geomOf(e);
+    if (geom) o.geom = geom;
+    if (geom && decompose(e.xf).flipH) o.flipH = true;
+    const dash = dashOf(e.line, ctx.log);
+    if (dash) o.dash = dash;
     out.push(o);
   }
 }
 
-/** Lines and connectors drawn as straight segments, in the shape's unit square. */
-function segmentsOf(geom: string, adj: [string, number][] | undefined): [number, number][] | undefined {
-  if (geom === 'line' || geom === 'straightConnector1' || geom.startsWith('curvedConnector')) {
-    return [
-      [0, 0],
-      [1, 1],
-    ];
-  }
-  if (geom === 'bentConnector2')
-    return [
-      [0, 0],
-      [1, 0],
-      [1, 1],
-    ];
-  if (geom.startsWith('bentConnector')) {
-    const x = Math.min(10, Math.max(-10, adjOf(adj, 'adj1', 50_000) / 100_000));
-    return [
-      [0, 0],
-      [x, 0],
-      [x, 1],
-      [1, 1],
-    ];
-  }
-  return undefined;
+/** Geometries the rectangle's mirrors and half turns leave as they are (at any adjust values). */
+const SYMMETRIC: ReadonlySet<string> = new Set(['rect', 'roundRect', 'ellipse']);
+
+function isIdentity(t: Affine): boolean {
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
+  return near(t[0], 1) && near(t[1], 0) && near(t[2], 0) && near(t[3], 1) && near(t[4], 0) && near(t[5], 0);
 }
+
+/**
+ * The `ShapeGeom` of an element's geometry (M6): a custom geometry's paths, else the preset with its adjust
+ * values. None for a rect, an ellipse (today's fields draw them exactly), a preset the table does not know
+ * (drawn as its rect) or a custom geometry past the bounds.
+ */
+function geomOf(e: { geom: string; adj?: [string, number][]; custom?: CustomPaths }): ShapeGeom | undefined {
+  if (e.custom) return e.custom.over ? undefined : { paths: e.custom.paths.map((p) => ({ ...p })) };
+  if (e.geom === 'rect' || e.geom === 'ellipse' || e.geom === 'custom' || !knownPreset(e.geom))
+    return undefined;
+  const adj = adjPairs(e.adj);
+  return { preset: e.geom, ...(adj ? { adj } : {}) };
+}
+
+/** A shadow in logical px (`Shadow`: offset from distance and direction, blur radius). */
+function shadowPx(ctx: EmitCtx, shadow: Shadow): NonNullable<ShapeObject['shadow']> {
+  const dir = (shadow.dir * Math.PI) / 180;
+  const dist = lenPx(ctx.frame, shadow.dist);
+  return {
+    dx: bound(dist * Math.cos(dir), -500, 500),
+    dy: bound(dist * Math.sin(dir), -500, 500),
+    blur: bound(lenPx(ctx.frame, shadow.blur), 0, 500),
+    color: ordo(shadow.color),
+  };
+}
+
+/**
+ * The M6 fields of a shape object (design/27 §3.1): its geometry, gradient, dash, arrowheads, flips and
+ * effects. The legacy fields beside them stay what an older build draws.
+ */
+function styleShape(ctx: EmitCtx, o: ShapeObject, e: ShapeElement, geom: ShapeGeom | undefined): void {
+  if (geom) o.geom = geom;
+  const gradient = gradientOf(e.fill, o.box.rotation, ctx.log);
+  if (gradient && o.fill) o.gradient = gradient;
+  if ((o.geom || o.gradient) && decompose(e.xf).flipH) o.flipH = true;
+  if (o.stroke && e.line) {
+    const dash = dashOf(e.line, ctx.log);
+    if (dash) o.dash = dash;
+    const ends = endsOf(e.line);
+    if (ends) o.ends = ends;
+  }
+  if (e.shadow) o.shadow = shadowPx(ctx, e.shadow);
+  if (e.glow) o.glow = { radius: bound(lenPx(ctx.frame, e.glow.radius), 0, 500), color: ordo(e.glow.color) };
+  if (e.softEdge) o.softEdge = bound(lenPx(ctx.frame, e.softEdge), 0, 500);
+}
+
+/** Straight lines: one `line` object from the start (0, 0) of the unit square to its end (1, 1). */
+const STRAIGHT: ReadonlySet<string> = new Set(['line', 'straightConnector1']);
+/** Connector presets drawn as their route (`routeObject`). */
+const isRoute = (geom: string) => /^(bent|curved)Connector[2-5]$/.test(geom);
 
 /** Presets drawn as an ellipse, and as a rect with fully rounded ends. */
 const ELLIPTIC = new Set([
@@ -602,37 +661,61 @@ const ROUNDED = new Set(['roundRect', 'flowChartAlternateProcess']);
 function emitShape(ctx: EmitCtx, e: ShapeElement, out: SlideObject[], texts: Emitted[]): void {
   const box = boxOf(ctx, e.xf);
   if (e.fill.kind === 'picture') {
-    const img = pictureObject(ctx, e.xf, e.fill.picture, e.geom, e.adj);
+    // A shape's picture fill is never mirrored, and is drawn square to the nearest quarter turn of the shape
+    // (`geom.ts` `pictureFillPlacement`, LibreOffice's drawing, verified with probe decks); the picture is
+    // clipped to the shape's geometry as it lies in that box.
+    const fit = pictureFillPlacement(e.xf);
+    const shape = boxOf(ctx, e.xf);
+    const img = pictureObject(ctx, fit.xf, e.fill.picture, e.geom, e.adj, e.custom, {
+      t: fit.t,
+      w: shape.w,
+      h: shape.h,
+    });
     if (img) out.push(img);
   }
   const fill = e.fill.kind === 'picture' ? undefined : legacyColor(e.fill);
   const stroke = e.line ? legacyColor(e.line.fill) : undefined;
   // PowerPoint casts a shape's shadow on its text only when the shape itself shows nothing.
   const visible = e.fill.kind === 'picture' || fill !== undefined || stroke !== undefined;
-  const segments = segmentsOf(e.geom, e.adj);
-  if (segments) {
+  const geom = geomOf(e);
+  const thin = e.geom === 'custom' && e.coverage !== undefined && e.coverage < MIN_RECT_COVERAGE;
+  if (STRAIGHT.has(e.geom) || isRoute(e.geom)) {
     if (stroke && e.line) {
-      for (let i = 1; i < segments.length; i++)
-        out.push(
-          lineObject(ctx, e.xf, segments[i - 1]!, segments[i]!, strokeWidth(ctx, e.line.width), stroke),
-        );
-      if (e.line.head || e.line.tail) ctx.log('arrowheads are not drawn yet (M6)');
+      const width = strokeWidth(ctx, e.line.width);
+      const o = isRoute(e.geom)
+        ? routeObject(ctx, e, width, stroke)
+        : lineObject(ctx, e.xf, [0, 0], [1, 1], width, stroke);
+      if (o) {
+        const dash = dashOf(e.line, ctx.log);
+        if (dash) o.dash = dash;
+        const ends = endsOf(e.line);
+        if (ends) o.ends = ends;
+        if (e.shadow) o.shadow = shadowPx(ctx, e.shadow);
+        if (e.glow)
+          o.glow = { radius: bound(lenPx(ctx.frame, e.glow.radius), 0, 500), color: ordo(e.glow.color) };
+        out.push(o);
+      }
     }
-  } else if (e.geom === 'custom' && e.coverage !== undefined && e.coverage < MIN_RECT_COVERAGE) {
-    if (fill || stroke) ctx.log('custom geometry that fills little of its box is not drawn (M6)');
+  } else if (e.geom === 'custom' && !geom && thin) {
+    if (fill || stroke) ctx.log('custom geometry that fills little of its box is not drawn');
   } else if (fill || stroke) {
-    const kind = ELLIPTIC.has(e.geom) ? 'ellipse' : 'rect';
+    // A thin custom geometry's legacy is a line (its midline outline at most): a rect over a swoosh is
+    // further from it than nothing.
+    const kind = geom && thin ? 'line' : ELLIPTIC.has(e.geom) ? 'ellipse' : 'rect';
     const o = shape(ctx, box, kind, fill);
     if (stroke && e.line) o.stroke = { width: strokeWidth(ctx, e.line.width), color: stroke };
     if (ROUNDED.has(e.geom)) o.radius = cornerRadius(box, e.adj);
     else if (e.geom === 'flowChartTerminator') o.radius = Math.min(box.w, box.h) / 2;
-    const approx = (e.reasons ?? []).filter((r) => r !== 'vert' && r !== 'warp' && r !== 'numCol');
+    styleShape(ctx, o, e, geom);
+    const approx = (e.reasons ?? []).filter(
+      (r) => r !== 'vert' && r !== 'warp' && r !== 'numCol' && r !== 'pattFill',
+    );
     if (approx.length) ctx.log(`${approx.join(', ')} drawn as ${kind}`);
+    if (e.fill.kind === 'pattern') ctx.log('a pattern fill is drawn as its blended colour');
     out.push(o);
   }
-  if (e.line?.dash) ctx.log('dashed lines are drawn solid (M6)');
   if (e.text) {
-    const t = textObject(ctx, e, box, visible);
+    const t = textObject(ctx, e, visible);
     if (t) {
       out.push(t);
       texts.push({ o: t, e, area: box.w * box.h });
@@ -667,6 +750,70 @@ function lineObject(
   );
   o.stroke = { width, color };
   return o;
+}
+
+/**
+ * A bent or curved connector as one object (M6): its preset's route (through the connector's affine, its
+ * ends glued to shapes already placed by the walk) as a path in a box whose midline runs from the route's
+ * start to its end, so an older build, which draws `line` along the midline, draws the straight line between
+ * the two ends.
+ */
+function routeObject(ctx: EmitCtx, e: ShapeElement, width: number, color: OrdoRgba): ShapeObject | undefined {
+  const route = presetRoute(e.geom, e.adj, e.xf);
+  if (!route?.length) return undefined;
+  const f = ctx.frame;
+  const pts = route.map((r) => r.pts.map((v, i) => (i % 2 === 0 ? f.x0 : f.y0) + v * f.s));
+  const first = pts[0]!;
+  const last = pts[pts.length - 1]!;
+  if (first.length < 2 || last.length < 2) return undefined;
+  const p0: [number, number] = [first[0]!, first[1]!];
+  const p1: [number, number] = [last[last.length - 2]!, last[last.length - 1]!];
+  const chord = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
+  const u: [number, number] = chord > 1e-9 ? [(p1[0] - p0[0]) / chord, (p1[1] - p0[1]) / chord] : [1, 0];
+  const v: [number, number] = [-u[1], u[0]];
+  let reach = 0;
+  for (const list of pts)
+    for (let i = 0; i < list.length; i += 2) {
+      const b = (list[i]! - p0[0]) * v[0] + (list[i + 1]! - p0[1]) * v[1];
+      reach = Math.max(reach, Math.abs(b));
+    }
+  const len = Math.max(chord, 1);
+  const H = Math.max(2 * reach, 1);
+  const n = (x: number) => fmtPx(x);
+  const parts: string[] = [];
+  route.forEach((r, k) => {
+    const list = pts[k]!;
+    let at = 0;
+    for (const op of r.cmds) {
+      const pairs = op === CMD_QUAD ? 2 : op === CMD_CUBIC ? 3 : op === CMD_CLOSE ? 0 : 1;
+      let s =
+        op === CMD_MOVE ? 'M' : op === CMD_LINE ? 'L' : op === CMD_QUAD ? 'Q' : op === CMD_CUBIC ? 'C' : 'Z';
+      for (let j = 0; j < pairs; j++, at += 2) {
+        const dx = list[at]! - p0[0];
+        const dy = list[at + 1]! - p0[1];
+        s += ` ${n(dx * u[0] + dy * u[1])} ${n(dx * v[0] + dy * v[1] + H / 2)}`;
+      }
+      parts.push(s);
+    }
+  });
+  const rot = (Math.atan2(u[1], u[0]) * 180) / Math.PI;
+  const cx = p0[0] + (u[0] * chord) / 2;
+  const cy = p0[1] + (u[1] * chord) / 2;
+  const o = shape(
+    ctx,
+    clampBox({ x: cx - len / 2, y: cy - H / 2, w: len, h: H, rotation: Math.abs(rot) < 1e-9 ? 0 : rot }),
+    'line',
+    undefined,
+  );
+  o.stroke = { width, color };
+  o.geom = { paths: [{ d: parts.join(' '), w: len, h: H, fill: 'none' }] };
+  return o;
+}
+
+/** A logical px coordinate with two decimals, never `-0`. */
+function fmtPx(v: number): string {
+  const r = Number(v.toFixed(2)) + 0;
+  return Object.is(r, -0) ? '0' : String(r);
 }
 
 /** A line width in logical px: PowerPoint draws a zero-width line one device pixel wide. */
@@ -723,14 +870,19 @@ function pictureObject(
   p: PictureFill,
   geom = 'rect',
   adj?: [string, number][],
+  custom?: CustomPaths,
+  maskIn?: { t: Affine; w: number; h: number },
 ): CroppedImage | undefined {
   const placed = placePicture(ctx.crop ? p : { ...p, crop: undefined });
   if (!placed) return undefined;
   const [x0, y0, x1, y1] = placed.rect;
-  let box = boxPx(ctx.frame, multiply(xf, [x1 - x0, 0, 0, y1 - y0, x0, y0]));
+  const m = multiply(xf, [x1 - x0, 0, 0, y1 - y0, x0, y0]);
+  let box = boxPx(ctx.frame, m);
+  const flipH = decompose(m).flipH;
   let crop = ctx.crop ? placed.crop : undefined;
   if (outsideClamp(box)) {
-    if (box.rotation === 0 && geom === 'rect' && ctx.crop) {
+    // The cut is folded into the crop on the box's sides: only while the picture is drawn unmirrored.
+    if (box.rotation === 0 && geom === 'rect' && ctx.crop && !flipH) {
       const cut = cutToClamp(box, crop);
       if (!cut) return undefined;
       box = cut.box;
@@ -749,6 +901,19 @@ function pictureObject(
   };
   if (geom === 'roundRect') o.radius = cornerRadius(box, adj);
   else if (geom === 'ellipse') o.radius = bound(Math.min(box.w, box.h) / 2, 0, MAX_COORD);
+  // M6: mirrored in its box, and clipped to its geometry (an older build draws `radius`).
+  if (flipH) o.flipH = true;
+  let mask: ShapeGeom | undefined =
+    geom === 'ellipse' ? { preset: 'ellipse' } : geomOf({ geom, adj, custom });
+  if (mask && maskIn && !SYMMETRIC.has(geom) && !isIdentity(maskIn.t)) {
+    const paths = transformedPaths(mask, maskIn.w, maskIn.h, maskIn.t, box.w, box.h);
+    mask = paths ? { paths } : undefined;
+  }
+  if (mask) {
+    o.mask = mask;
+    if (x0 !== 0 || y0 !== 0 || x1 !== 1 || y1 !== 1)
+      ctx.log('a clipped picture with a fill rectangle is clipped in its own box');
+  }
   if (crop) {
     const c = (v: number) => bound(v, -1, 1);
     o.crop = { l: c(crop.l), t: c(crop.t), r: c(crop.r), b: c(crop.b) };
@@ -879,13 +1044,8 @@ function scriptOf(text: string): 'latin' | 'ea' | 'cs' {
   return ea > other && ea >= cs ? 'ea' : cs > other ? 'cs' : 'latin';
 }
 
-function textObject(
-  ctx: EmitCtx,
-  e: ShapeElement,
-  shapeBox: Box,
-  shapeVisible: boolean,
-): TextObject | undefined {
-  if (ctx.rich) return richTextObject(ctx, e, shapeBox, shapeVisible);
+function textObject(ctx: EmitCtx, e: ShapeElement, shapeVisible: boolean): TextObject | undefined {
+  if (ctx.rich) return richTextObject(ctx, e, shapeVisible);
   const body = e.text!;
   let text = legacyText(body);
   if (!text.trim()) return undefined;
@@ -901,7 +1061,7 @@ function textObject(
   const fontPx = bound(ptPx(f, st.sizePt * (fit?.fontScale ?? 1)), MIN_FONT_PX, MAX_FONT_PX);
 
   // The text rectangle: the preset's, minus the insets; padding is the smallest inset, the rest is folded.
-  let box = textRect(e, shapeBox);
+  let box = textBox(ctx, e);
   const ins = body.insets;
   const l = lenPx(f, ins.l);
   const t = lenPx(f, ins.t);
@@ -978,12 +1138,7 @@ function textObject(
  * A body as a rich `TextObject` (`richtext.ts`): the box is the shape's text rectangle (the preset's, turned
  * a quarter for vertical text), the insets and paragraph margins are written as they are.
  */
-function richTextObject(
-  ctx: EmitCtx,
-  e: ShapeElement,
-  shapeBox: Box,
-  shapeVisible: boolean,
-): TextObject | undefined {
+function richTextObject(ctx: EmitCtx, e: ShapeElement, shapeVisible: boolean): TextObject | undefined {
   const body = e.text!;
   // Past the slide's budget the text is written without runs and paragraph styles (picture class anyway).
   const over = ctx.textBytes > MAX_SLIDE_BYTES;
@@ -995,7 +1150,7 @@ function richTextObject(
     ...(over ? { plain: true } : {}),
   });
   if (!rich) return undefined;
-  let box = textRect(e, shapeBox);
+  let box = textBox(ctx, e);
   if (
     body.vert === 'vert' ||
     body.vert === 'eaVert' ||
@@ -1052,18 +1207,16 @@ function lineHeightOf(p: Para, fontPx: number, f: Frame, reduction: number): num
   return bound(h, 0.1, 10);
 }
 
-/** The preset's text rectangle in the shape's box (rect for presets M1 does not know). */
-function textRect(e: ShapeElement, box: Box): Box {
-  if (ELLIPTIC.has(e.geom) && e.geom !== 'pie' && e.geom !== 'chord') {
-    const dx = box.w * ELLIPSE_TEXT_INSET;
-    const dy = box.h * ELLIPSE_TEXT_INSET;
-    return insetBox(box, dx, dy, dx, dy);
-  }
-  if (ROUNDED.has(e.geom)) {
-    const d = cornerRadius(box, e.adj) * ROUND_RECT_TEXT_INSET;
-    return insetBox(box, d, d, d, d);
-  }
-  return box;
+/**
+ * The shape's text rectangle as a box (M6): its geometry's `a:rect` (every preset of POI's table, a custom
+ * geometry's own) placed through the shape's affine, so a flipped shape's rectangle is mirrored with it
+ * (and its text turned half a turn by a vertical flip, as PowerPoint draws it); the whole box for a rect or
+ * a preset the table does not know.
+ */
+function textBox(ctx: EmitCtx, e: ShapeElement): Box {
+  const [l, t, r, b] = textRectOf(e);
+  if (l === 0 && t === 0 && r === 1 && b === 1) return boxOf(ctx, e.xf);
+  return boxOf(ctx, multiply(e.xf, [Math.max(0, r - l), 0, 0, Math.max(0, b - t), l, t]));
 }
 
 // ── Boxes and colours ───────────────────────────────────────────────────────────────────────────────────

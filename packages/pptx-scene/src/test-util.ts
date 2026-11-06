@@ -393,15 +393,66 @@ export interface GroupSpec {
   chY?: number;
   chCx?: number;
   chCy?: number;
+  /** The group's rotation in degrees and flips (M6). */
+  rot?: number;
+  flipH?: boolean;
+  flipV?: boolean;
 }
 
 /** A `p:grpSp` around `inner` shapes. */
 export function grpSp(o: GroupSpec, inner: string): string {
+  const attrs = `${o.rot ? ` rot="${Math.round(o.rot * 60_000)}"` : ''}${o.flipH ? ' flipH="1"' : ''}${o.flipV ? ' flipV="1"' : ''}`;
   return (
     `<p:grpSp><p:nvGrpSpPr><p:cNvPr id="${o.id}" name="Group ${o.id}"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>` +
-    `<p:grpSpPr><a:xfrm><a:off x="${o.x}" y="${o.y}"/><a:ext cx="${o.cx}" cy="${o.cy}"/>` +
+    `<p:grpSpPr><a:xfrm${attrs}><a:off x="${o.x}" y="${o.y}"/><a:ext cx="${o.cx}" cy="${o.cy}"/>` +
     `<a:chOff x="${o.chX ?? o.x}" y="${o.chY ?? o.y}"/><a:chExt cx="${o.chCx ?? o.cx}" cy="${o.chCy ?? o.cy}"/></a:xfrm></p:grpSpPr>` +
     `${inner}</p:grpSp>`
+  );
+}
+
+export interface CxnSpec {
+  id: number;
+  x: number;
+  y: number;
+  cx: number;
+  cy: number;
+  rot?: number;
+  flipH?: boolean;
+  flipV?: boolean;
+  /** `a:prstGeom prst` (default 'straightConnector1') and its `a:avLst` inner XML. */
+  geom?: string;
+  av?: string;
+  /** The ends glued to shapes: `a:stCxn`, `a:endCxn` (`cNvPr id`, site index). */
+  start?: { id: number; idx: number };
+  end?: { id: number; idx: number };
+  /** The `a:ln` element (default 1 pt black). */
+  ln?: string;
+}
+
+/** A `p:cxnSp` connector (M6). */
+export function cxnSp(o: CxnSpec): string {
+  const ref = (name: string, r?: { id: number; idx: number }) =>
+    r ? `<a:${name} id="${r.id}" idx="${r.idx}"/>` : '';
+  return (
+    `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="${o.id}" name="Connector ${o.id}"/><p:cNvCxnSpPr>${ref('stCxn', o.start)}${ref('endCxn', o.end)}</p:cNvCxnSpPr><p:nvPr/></p:nvCxnSpPr>` +
+    `<p:spPr>${xfrm(o.x, o.y, o.cx, o.cy, { rot: o.rot, flipH: o.flipH, flipV: o.flipV })}` +
+    `<a:prstGeom prst="${o.geom ?? 'straightConnector1'}"><a:avLst>${o.av ?? ''}</a:avLst></a:prstGeom>` +
+    `${o.ln ?? `<a:ln w="12700">${solid('000000')}</a:ln>`}</p:spPr></p:cxnSp>`
+  );
+}
+
+/** An `a:custGeom` from its `a:avLst`/`a:gdLst` inner XML, `a:path` elements, `a:rect` and `a:cxnLst` (M6). */
+export function custGeom(o: {
+  av?: string;
+  gd?: string;
+  paths: string;
+  rect?: string;
+  cxn?: string;
+}): string {
+  return (
+    `<a:custGeom><a:avLst>${o.av ?? ''}</a:avLst><a:gdLst>${o.gd ?? ''}</a:gdLst><a:ahLst/>` +
+    `<a:cxnLst>${o.cxn ?? ''}</a:cxnLst>${o.rect ? `<a:rect ${o.rect}/>` : '<a:rect l="l" t="t" r="r" b="b"/>'}` +
+    `<a:pathLst>${o.paths}</a:pathLst></a:custGeom>`
   );
 }
 
