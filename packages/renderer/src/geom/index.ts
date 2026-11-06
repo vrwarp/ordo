@@ -34,12 +34,14 @@ export {
   writeBuiltins,
 } from './eval.ts';
 export {
+  CLOSED_TOLERANCE,
   drawGeom,
   FILL_BRIGHTNESS,
   GEOM_FILL_RULE,
   type GeomFill,
   geomFillPath2D,
   geomPath2D,
+  geomPathOpen,
   type GeomStroke,
   type GeomStyle,
   type PathSink,

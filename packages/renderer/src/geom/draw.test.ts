@@ -2,11 +2,13 @@ import type { Rgba } from '@ordo/domain';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Ctx2D } from '../ctx.ts';
 import {
+  CLOSED_TOLERANCE,
   drawGeom,
   FILL_BRIGHTNESS,
   GEOM_FILL_RULE,
   geomFillPath2D,
   geomPath2D,
+  geomPathOpen,
   type PathSink,
   shadeRgba,
   traceGeomPath,
@@ -130,25 +132,16 @@ describe('drawGeom', () => {
     expect(calls[2]!.path.ops[0]).toMatch(/^M /);
   });
 
-  it('draws a path filled and stroked as fill then stroke before the next path (LibreOffice order)', () => {
+  const tri = (x: number, close: boolean) => [
+    { op: 'moveTo', args: [String(x), '0'] },
+    { op: 'lnTo', args: [String(x + 5), '10'] },
+    { op: 'lnTo', args: [String(x), '10'] },
+    ...(close ? [{ op: 'close', args: [] }] : []),
+  ];
+
+  it('draws a closed path filled and stroked as fill then stroke before the next path (LibreOffice order)', () => {
     const g = customGeometry(
-      {
-        paths: [
-          {
-            cmds: [
-              { op: 'moveTo', args: ['0', '0'] },
-              { op: 'lnTo', args: ['10', '0'] },
-            ],
-          },
-          {
-            fill: 'darken',
-            cmds: [
-              { op: 'moveTo', args: ['0', '0'] },
-              { op: 'lnTo', args: ['0', '10'] },
-            ],
-          },
-        ],
-      },
+      { paths: [{ cmds: tri(0, true) }, { fill: 'darken', cmds: tri(5, true) }] },
       10,
       10,
     );
@@ -159,6 +152,63 @@ describe('drawGeom', () => {
       'stroke rgba(200,100,50,0.5)',
       'fill rgba(120,60,30,0.5)',
       'stroke rgba(200,100,50,0.5)',
+    ]);
+  });
+
+  it("strokes open paths after every path, in order (LibreOffice's line objects go last)", () => {
+    const g = customGeometry(
+      { paths: [{ cmds: tri(0, false) }, { fill: 'darken', cmds: tri(5, true) }, { cmds: tri(2, false) }] },
+      10,
+      10,
+    );
+    const { ctx, calls } = recCtx();
+    drawGeom(ctx, g, red, { color: { r: 0, g: 0, b: 0, a: 1 }, width: 1 });
+    expect(calls.map((c) => `${c.kind} ${c.path.ops[0]}`)).toEqual([
+      'fill M 0 0',
+      'fill M 5 0',
+      'stroke M 5 0',
+      'fill M 2 0',
+      'stroke M 0 0',
+      'stroke M 2 0',
+    ]);
+    // chartX: its lines (fill none, open) come before the filled box and are drawn over it.
+    const chart = recCtx();
+    drawGeom(chart.ctx, presetGeometry('chartX', 300, 200)!, red, {
+      color: { r: 0, g: 0, b: 0, a: 1 },
+      width: 2,
+    });
+    expect(chart.calls.map((c) => c.kind)).toEqual(['fill', 'stroke']);
+    expect(chart.calls[1]!.path.ops.filter((op) => op.startsWith('M')).length).toBe(2);
+  });
+
+  it('counts a path as open when a sub-path is neither closed nor ends at its start', () => {
+    const path = (cmds: ReturnType<typeof tri>) => customGeometry({ paths: [{ cmds }] }, 10, 10).paths[0]!;
+    expect(geomPathOpen(path(tri(0, false)))).toBe(true);
+    expect(geomPathOpen(path(tri(0, true)))).toBe(false);
+    // Back at its start without a close: closed for LibreOffice (checkClosed), within the tolerance only.
+    const back = (end: string) => [...tri(0, false), { op: 'lnTo', args: [end, '0'] }];
+    expect(geomPathOpen(path(back('0')))).toBe(false);
+    expect(geomPathOpen(path(back('0.001')))).toBe(true);
+    expect(geomPathOpen(path(back('0.001')), 0.01)).toBe(false);
+    // One open sub-path among closed ones; a lone moveTo or a moveTo and close is not a sub-path.
+    expect(geomPathOpen(path([...tri(0, true), ...tri(2, false)]))).toBe(true);
+    expect(geomPathOpen(path([...tri(2, false), ...tri(0, true)]))).toBe(true);
+    expect(geomPathOpen(path([...tri(0, true), { op: 'moveTo', args: ['3', '3'] }]))).toBe(false);
+    expect(
+      geomPathOpen(
+        path([
+          { op: 'moveTo', args: ['3', '3'] },
+          { op: 'close', args: [] },
+        ]),
+      ),
+    ).toBe(false);
+    // The presets' full ellipses end at their start up to rounding: smileyFace's eyes are not open.
+    const smiley = presetGeometry('smileyFace', 300, 200)!;
+    expect(smiley.paths.map((p) => geomPathOpen(p, CLOSED_TOLERANCE * 300))).toEqual([
+      false,
+      false,
+      true,
+      false,
     ]);
   });
 

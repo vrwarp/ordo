@@ -4,8 +4,8 @@ The preset and custom geometry engine of design/27 §1 (`geom/`), §3.1 (`ShapeG
 PowerPoint `a:prstGeom` or `a:custGeom` means, as numbers. Read design/27 §3.1, §12 (bounds) and §14 item 6 first.
 
 Status: **M6 wave 1, self-contained.** The preset table, the compiler, the guide evaluator, the path builder
-(arcTo with POI's visual-angle rule, path spaces, fill modes) and the Canvas 2D drawer are built and tested;
-`@ordo/renderer` exports the drawing API, and nothing draws with it yet. The next wave wires geometry into
+(arcTo with POI's visual-angle rule, path spaces, fill modes) and the Canvas 2D drawer are built and tested, and
+the preset golden compares them with LibreOffice; `@ordo/renderer` exports the drawing API, and nothing draws with it yet. The next wave wires geometry into
 `ShapeObject` drawing, the schema, the converter and the editor.
 
 ```ts
@@ -104,11 +104,22 @@ differences below.
 - **Commands.** Two moveTos in a row keep the second, a close with nothing open is dropped (Java's Path2D); a
   lnTo, quadBezTo or cubicBezTo with no current point starts a sub-path as Canvas does, an arcTo with none is
   skipped (LibreOffice), where POI throws.
-- **Drawing** (`draw.ts`) follows LibreOffice, the fidelity reference: paths in order, each filled then stroked (POI
-  fills all, then strokes all); the even-odd rule; fill="none" unfilled, stroke="false" unstroked; lighten,
+- **Drawing** (`draw.ts`) follows LibreOffice, the fidelity reference: paths in order, each filled then stroked,
+  except that the outlines of open paths (a sub-path neither closed nor ending at its start, `geomPathOpen`) are
+  stroked after every path, because LibreOffice sorts its line objects behind the rest for every OOXML shape
+  (chartX, chartStar and chartPlus list their lines before the filled box; POI fills all, then strokes all); the
+  even-odd rule; fill="none" unfilled, stroke="false" unstroked; lighten,
   lightenLess, darken and darkenLess blend the fill per channel towards white or black by 40 % and 20 %, truncated
   (`GetColorData`), strokes unshaded. A gradient or picture fill is a painter called with each path's brightness.
-  `draw.browser.test.ts` checks the shades, the even-odd hole, stroke-only paths and the clip path with Chromium.
+  `draw.browser.test.ts` checks the shades, the even-odd hole, stroke-only paths, open outlines over the fill and
+  the clip path with Chromium.
+
+## Preset golden
+
+`pnpm --filter @ordo/geom-gen golden` (`tools/geom-gen/README.md`) draws all 187 presets at their default adjust
+values with LibreOffice (a probe deck through soffice) and with `drawGeom` in Chromium, and scores each box with the
+fidelity harness's SSIM against the committed baseline: 186 at ≥ 0.95 (mean 0.9959). The one listed exception,
+funnel (0.928), is LibreOffice's: its preset table reads the guide name `2da` as the number 2.
 
 Bounds: at most 8 paths and 4,096 points per path after arcs become segments (the compiler counts an arcTo as 12),
 checked again by the builder for a `CompiledGeom` from elsewhere (an operand slot out of range reads 0, an unknown

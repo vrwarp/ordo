@@ -5,7 +5,7 @@ import { type BuiltGeom, customGeometry, presetGeometry } from './path.ts';
 /**
  * Browser side of draw.browser.test.ts: draws built geometries with drawGeom on an OffscreenCanvas in headless
  * Chromium and reads pixels well inside each region (away from anti-aliased edges): the fill-mode shades, the
- * even-odd rule, stroke-only paths and the picture clip path.
+ * even-odd rule, stroke-only paths, open outlines drawn last and the picture clip path.
  */
 
 export interface Check {
@@ -89,6 +89,12 @@ function run(): Check[] {
   // can stroked: the outline path draws the rim between body and top.
   const rim = draw(presetGeometry('can', 300, 200)!, RED, { color: BLACK, width: 4 });
   expectPixel(checks, 'can rim stroked over the fills', rim, 150, 50, [0, 0, 0, 255]);
+
+  // chartX: the open diagonals come before the filled box in the preset and are stroked over it (LibreOffice).
+  const chartX = draw(presetGeometry('chartX', 300, 200)!, RED, { color: BLACK, width: 6 });
+  expectPixel(checks, 'chartX diagonals over the fill', chartX, 150, 100, [0, 0, 0, 255]);
+  expectPixel(checks, 'chartX diagonal over the fill', chartX, 75, 50, [0, 0, 0, 255]);
+  expectPixel(checks, 'chartX fill beside the diagonals', chartX, 150, 20, [200, 100, 50, 255]);
 
   // The picture clip of a donut keeps the hole.
   const canvas = new OffscreenCanvas(300, 200);

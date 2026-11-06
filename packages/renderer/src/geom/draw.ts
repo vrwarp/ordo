@@ -5,9 +5,13 @@ import type { BuiltGeom, GeomPath } from './path.ts';
 
 /*
  * Drawing a built geometry (path.ts) with Canvas 2D (design/27 §7.1, §15 M6). Order and colours follow
- * LibreOffice, the fidelity reference (svx EnhancedCustomShape2d: CreateSubPath, GetColorData):
- * - Paths are drawn in document order, each filled and then stroked, so a later path covers an earlier one's
- *   outline (POI fills every path before stroking any; the presets look the same either way).
+ * LibreOffice, the fidelity reference (svx EnhancedCustomShape2d: CreateSubPath, CreatePathObj, GetColorData):
+ * - Paths are drawn in document order, each filled and then stroked, except the outline of an open path (one
+ *   with a sub-path that is neither closed nor ends where it starts), which is stroked after every path, in
+ *   order. LibreOffice makes a fill object and a line object of each path, then moves the open line objects
+ *   (PolyLine, `IsLine()`) behind the rest because every OOXML shape type sorts "filled objects to back"
+ *   (`SortFilledObjectsToBackByDefault` is true for mso_sptNil). It shows in chartX, chartStar and chartPlus,
+ *   whose lines come before the filled box and still draw over it. POI fills every path before stroking any.
  * - A path is filled with the even-odd rule, LibreOffice's (and PowerPoint's for freeforms); an open path is
  *   filled as if closed and stroked open.
  * - fill="none" is not filled, stroke="false" not stroked.
@@ -94,6 +98,61 @@ export function traceGeomPath(sink: PathSink, path: GeomPath): void {
   }
 }
 
+/**
+ * How close, as a fraction of the box's larger side, a sub-path's end must be to its start to count as closed
+ * when the drawing order is decided (LibreOffice's `checkClosed` compares the points rounded to 1/100 mm, about
+ * 1e-4 of a slide-sized box; a millionth is above arithmetic noise and below anything visible).
+ */
+export const CLOSED_TOLERANCE = 1e-6;
+
+const OPEN_CACHE = new WeakMap<GeomPath, boolean>();
+
+/**
+ * Whether a built path is open as LibreOffice decides it: some sub-path with a segment is not closed and does
+ * not end within `tolerance` of its start. Its outline is drawn after the other paths (drawGeom).
+ */
+export function geomPathOpen(path: GeomPath, tolerance = 0): boolean {
+  const p = path.pts;
+  let at = 0;
+  let sx = 0;
+  let sy = 0;
+  let ex = 0;
+  let ey = 0;
+  let segments = 0;
+  const open = () => segments > 0 && (Math.abs(ex - sx) > tolerance || Math.abs(ey - sy) > tolerance);
+  for (const op of path.cmds) {
+    if (op === CMD_MOVE) {
+      if (open()) return true;
+      sx = ex = p[at]!;
+      sy = ey = p[at + 1]!;
+      segments = 0;
+      at += 2;
+    } else if (op === CMD_CLOSE) {
+      segments = 0;
+      ex = sx;
+      ey = sy;
+    } else {
+      const n = op === CMD_LINE ? 2 : op === CMD_QUAD ? 4 : op === CMD_CUBIC ? 6 : 0;
+      if (n === 0) continue;
+      at += n;
+      ex = p[at - 2]!;
+      ey = p[at - 1]!;
+      segments++;
+    }
+  }
+  return open();
+}
+
+/** geomPathOpen at CLOSED_TOLERANCE of the geometry's box, once per path object. */
+function pathOpen(path: GeomPath, built: BuiltGeom): boolean {
+  let open = OPEN_CACHE.get(path);
+  if (open === undefined) {
+    open = geomPathOpen(path, CLOSED_TOLERANCE * Math.max(built.w, built.h));
+    OPEN_CACHE.set(path, open);
+  }
+  return open;
+}
+
 const PATH2D_CACHE = new WeakMap<GeomPath, Path2D>();
 
 /** A Path2D of a built path, made once per path object. */
@@ -123,7 +182,8 @@ function styleOf(paint: Rgba | GeomStyle): GeomStyle {
 
 /**
  * Draws a built geometry at the context's current transform, which maps box space (0..w, 0..h) to the canvas
- * (the caller translates to the box and applies rotation, flips and opacity). No fill or no stroke: pass
+ * (the caller translates to the box and applies rotation, flips and opacity), in LibreOffice's order: each path
+ * filled, then stroked unless it is open; the open paths' outlines last. No fill or no stroke: pass
  * undefined or null. Leaves fillStyle, strokeStyle and lineWidth changed; save and restore around it.
  */
 export function drawGeom(
@@ -144,6 +204,12 @@ export function drawGeom(
     }
     return s;
   };
+  const stroke2d = (p2d: Path2D): void => {
+    ctx.lineWidth = width;
+    ctx.strokeStyle = strokeStyle!;
+    ctx.stroke(p2d);
+  };
+  let later: Path2D[] | undefined;
   for (const path of built.paths) {
     const doFill = fill !== undefined && fill !== null && path.fill !== 'none';
     const doStroke = stroked && path.stroke;
@@ -154,9 +220,9 @@ export function drawGeom(
       ctx.fill(p2d, GEOM_FILL_RULE);
     }
     if (doStroke) {
-      ctx.lineWidth = width;
-      ctx.strokeStyle = strokeStyle!;
-      ctx.stroke(p2d);
+      if (pathOpen(path, built)) (later ??= []).push(p2d);
+      else stroke2d(p2d);
     }
   }
+  if (later) for (const p2d of later) stroke2d(p2d);
 }

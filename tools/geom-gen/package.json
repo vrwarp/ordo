@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "gen": "tsx src/main.ts",
+    "golden": "tsx src/golden/run.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
