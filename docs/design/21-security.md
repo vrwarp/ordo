@@ -54,6 +54,11 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
 ## Input handling
 
 - All bodies validated with Zod; unknown keys rejected.
+- Pictures of a native PowerPoint import (design/27 §4, §12) are identified by their header, read with
+  bounded reads, never by name. ffmpeg reads each only through the demuxer of the format it was checked as,
+  with the file-only protocol whitelist and `-max_pixels` from the header's size; a picture stored ready
+  (without a media job) must be a still PNG, JPEG, GIF or WebP within 8,192 px a side and 40 MP, and one
+  import decodes at most 6,000 MP.
 - Uploads: size limit 4 GB, extension and sniffed MIME must agree, stored under a hash
   name, never executed. ffmpeg, LibreOffice and pdftoppm run with a timeout, a memory
   limit, and no network.

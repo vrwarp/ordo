@@ -184,7 +184,10 @@ bounded, so the process exits within about 2 s even with a frozen client; `main.
 SQLite file at `/data/ordo.db`, WAL mode, `synchronous=NORMAL`. Tables: `presentations`,
 `presentation_revisions`, `playlists`, `media`, `files`, `fonts`, `themes`, `looks`,
 `outputs`, `settings`, `sessions`, `auth_attempts`, `jobs`, `job_attempts`, `library_changes`,
-`uploads`. Migrations with a simple numbered-SQL runner; every migration is idempotent and tested.
+`uploads`, `media_hashes` (the SHA-256 media hash index: imports find media with the same content without
+scanning `media`; its `content` rows are kept by triggers on `media`, its `source` rows record the deck
+part a prepared picture was made from, design/20 "Pictures of the native import"). Migrations with a
+simple numbered-SQL runner; every migration is idempotent and tested.
 
 `/data/live.db` (live process only): `live_journal (seq, at, cmd_id, kind, event_json)`,
 `live_snapshot (singleton)`, `live_snapshot_prev` (the two snapshots before it) and `live_kv` (the cached
