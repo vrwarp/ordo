@@ -8,6 +8,7 @@ import { errorText, toast } from '../../state/toasts.ts';
 import { BackgroundPicker } from './BackgroundPicker.tsx';
 import { change, replaceBase, save, useEditor } from './editorStore.ts';
 import { resetSlideToTheme, themeOf, updateSlide } from './ops.ts';
+import { PptxSlideCard } from './PptxSlideCard.tsx';
 
 /** Slide-level properties: lyric box, background override, loop duration, notes, theme overrides, import. */
 export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentation; readOnly: boolean }) {
@@ -99,6 +100,7 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
           </button>
         </div>
       )}
+      <PptxSlideCard slide={slide} p={p} readOnly={readOnly} />
       {slide.imported && (
         <div className="card col small">
           <span>

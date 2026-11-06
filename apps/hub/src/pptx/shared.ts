@@ -177,6 +177,12 @@ export type PptxReferencePayload = {
   presentationId: string;
   hash: string;
   by?: string;
+  /**
+   * The slides (ids) switched to the picture (`Slide.pptx.show: 'picture'`) once it is stored. Absent: every
+   * shown slide ('Show PowerPoint picture' for the presentation). Empty: none; the editor's 'Show original'
+   * only compares the slide with the picture (item H).
+   */
+  showPicture?: string[];
   /** Reference pictures already stored: [`SlideRef.index`, media id] pairs. */
   done?: [number, string][];
   /** Times the job found the presentation live-locked and deferred itself (the backoff step). */

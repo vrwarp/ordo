@@ -366,6 +366,21 @@ Files: `routes.ts` (`POST /import/document`: `renderer=native` the default; `ext
   select) and 'Extend plain backgrounds to 16:9'.
 - The import card shows `PptxNativeResult`: per-class counts, compact slides, pending LibreOffice work, notes
   and the missing fonts ("Upload Century Gothic for exact line breaks").
+- Done (m3/import-ui). Contracts for the integration with B and D:
+  - The route parses its form with `documentImportForm` (`routes.ts`): `renderer` `native` (default) →
+    `imports.pptx.queueNative(hash, name, options)`; `libreoffice` / `pptx-preview` → the `document` job; a PDF
+    is always `document`. `extendBackgrounds` and `transitionSounds` take `1`/`0` (also `true`/`false`,
+    `on`/`off`); anything else is a 400 and the upload is removed.
+  - The import card reads the `pptx-native` result defensively (`apps/operator/src/lib/pptxImport.ts`):
+    `PptxNativeResult`, or `PptxNativeFallback` (`fallback: 'libreoffice'`, `jobId`, `reason`); it follows
+    `loJobId` while `pending > 0` and shows its last log line while it waits (the lock deferral's line).
+  - The editor's 'Show original' is a view (the PowerPoint picture over the canvas), not `Slide.pptx.show`.
+    With no pictures yet it posts `POST /presentations/:id/pptx-reference` with `{ showPicture: [] }`, then
+    takes `refMediaId` of every slide over from the saved presentation. D's route has to read that body
+    (strict, ≤ 5,000 ids) and pass it to `queueReference(id, hash, by, showPicture)`; D's job has to set
+    `show: 'picture'` only on the slides `PptxReferencePayload.showPicture` names (every slide when absent).
+    Until then the job switches every slide to its picture, and the editor's card offers 'Show the objects
+    instead' on each.
 
 ## Not in this wave
 

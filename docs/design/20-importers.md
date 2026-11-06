@@ -185,9 +185,13 @@ Hybrid slides (a chart, SmartArt without a drawing, OLE, 3D, …) and picture sl
 
 ### Two renderers: LibreOffice and pptx-preview
 
-The import screen asks what draws a PowerPoint's slides: LibreOffice (the default) or pptx-preview
-(experimental). The choice is a form field on `POST /import/document` (`renderer`), stays in the job payload
-and is recorded on the presentation (`source.renderer`).
+The import screen asks how to import a PowerPoint: 'Editable (recommended)', the native import of
+[design/27](27-pptx-native-renderer.md) (`renderer=native`, the route's default, with 'Extend plain backgrounds
+to 16:9' as `extendBackgrounds`), or 'Pictures (LibreOffice)' (`renderer=libreoffice`). pptx-preview
+(experimental) is no longer offered there; the route still takes `renderer=pptx-preview` until design/27 M8
+retires it. The choice is a form field on `POST /import/document`, stays in the job payload and, for the
+picture imports, is recorded on the presentation (`source.renderer`). 'native' is never stored there (the
+`PptxRenderer` enum is not widened): a native import records `source.native` instead.
 
 pptx-preview is an npm library that draws a deck as HTML in a browser. Its npm package is free to use,
 commercial use included, but it ships minified, and its author's terms forbid publishing modified source,

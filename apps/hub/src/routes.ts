@@ -13,7 +13,6 @@ import {
   newId,
   type Output,
   Playlist,
-  PptxRenderer,
   Presentation,
   Theme,
 } from '@ordo/domain';
@@ -49,6 +48,7 @@ import type { MediaService } from './media/service.ts';
 import type { Store } from './store.ts';
 import { searchGoogleFonts } from './fonts/google.ts';
 import { PPTX_MIME } from './imports.ts';
+import type { PptxImportOptions } from './pptx/shared.ts';
 import { sendFile } from './send.ts';
 import { extOf, MAX_UPLOAD_BYTES, readHead, sniff } from './store.ts';
 import { validate } from './validate.ts';
@@ -102,6 +102,35 @@ const SongselectBody = z
   .object({ text: z.string().max(1_000_000), title: z.string().max(300).optional() })
   .strict();
 const LiveEventsBody = z.object({ id: z.string().max(200).optional(), event: z.unknown() }).strict();
+
+/**
+ * What `POST /import/document` does with a PowerPoint (design/27 §2, §3.2): 'native' (the default) imports
+ * editable slides (`pptx-native`); 'libreoffice' and 'pptx-preview' (accepted until design/27 M8 retires it)
+ * import one picture per slide (`document`). 'native' exists only in this form field and the job payload:
+ * the stored `PptxRenderer` is not widened, and native imports record `source.native` instead.
+ */
+export const DocumentImportRenderer = z.enum(['native', 'libreoffice', 'pptx-preview']);
+export type DocumentImportForm = {
+  renderer: z.infer<typeof DocumentImportRenderer>;
+  /** The native import's options; only the fields that were sent. */
+  options: PptxImportOptions;
+};
+
+/** `POST /import/document`'s form fields; an unknown value is refused (400), absent fields are defaults. */
+export function documentImportForm(fields: Readonly<Record<string, string>>): DocumentImportForm {
+  const own = (k: string) => (Object.hasOwn(fields, k) ? fields[k] : undefined);
+  const renderer = DocumentImportRenderer.safeParse(own('renderer') || 'native');
+  if (!renderer.success) throw badRequest('renderer must be native, libreoffice or pptx-preview');
+  const options: PptxImportOptions = {};
+  for (const key of ['extendBackgrounds', 'transitionSounds'] as const) {
+    const v = own(key);
+    if (v === undefined || v === '') continue;
+    if (v === '1' || v === 'true' || v === 'on') options[key] = true;
+    else if (v === '0' || v === 'false' || v === 'off') options[key] = false;
+    else throw badRequest(`${key} must be 1 or 0`);
+  }
+  return { renderer: renderer.data, options };
+}
 
 /** The live service as the library side sees it: edit locks and the mode (from IPC in the library process). */
 export type LiveView = {
@@ -754,11 +783,13 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const { files, fields } = await readMultipart(hub, req, { maxFiles: 1, limit: 1024 ** 3 });
     const f = files[0];
     if (!f) throw badRequest('No document');
-    // What draws a PowerPoint's slides (an optional form field; LibreOffice unless pptx-preview is asked).
-    const renderer = PptxRenderer.safeParse(fields.renderer ?? 'libreoffice');
-    if (!renderer.success) {
+    // How a PowerPoint is imported (optional form fields): editable slides unless pictures are asked for.
+    let form: DocumentImportForm;
+    try {
+      form = documentImportForm(fields);
+    } catch (e) {
       await rm(f.path, { force: true });
-      throw badRequest('renderer must be libreoffice or pptx-preview');
+      throw e;
     }
     const s = sniff(await readHead(f.path));
     const ext = extOf(f.filename);
@@ -775,7 +806,11 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
       hash: f.hash,
       bytes: f.bytes,
     });
-    return reply.code(202).send(hub.imports.queueDocument(ref.hash, f.filename, kind, renderer.data));
+    if (kind === 'pptx' && form.renderer === 'native')
+      return reply.code(202).send(hub.imports.pptx.queueNative(ref.hash, f.filename, form.options));
+    // A PDF is always pictures: the PowerPoint choice does not apply to it.
+    const renderer = form.renderer === 'native' ? 'libreoffice' : form.renderer;
+    return reply.code(202).send(hub.imports.queueDocument(ref.hash, f.filename, kind, renderer));
   });
 
   // ---------------- jobs ----------------
