@@ -1,6 +1,6 @@
 import { type ImageObject, type ShapeObject, Slide, type SlideObject, type TextObject } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
-import { type EmitOptions, insetBox, legacyColor, placePicture } from './emit.ts';
+import { type EmitOptions, insetBox, legacyColor, overWhite, placePicture } from './emit.ts';
 import { emitSlides, parseDeck } from './index.ts';
 import type { DeckScene, ShapeElement } from './ir.ts';
 import {
@@ -594,20 +594,47 @@ describe('backgrounds', () => {
     expect(slide.objects).toEqual([]);
   });
 
-  it('draws a picture of another aspect, or on a 4:3 slide, as a bottom image over the slide area', () => {
+  it('draws a picture of another aspect, or on a 4:3 slide, as a bottom image over white on the slide area', () => {
+    const white = { type: 'shape', shape: 'rect', fill: { r: 255, g: 255, b: 255, a: 1 } };
     const wrong = emitOne({
       slides: [{ rels, bg: pictureBg('rId2') }],
       media: { 'ppt/media/bg.png': pngHeader(800, 600) },
     });
     expect(wrong.slide.backgroundMediaId).toBeUndefined();
-    expect(wrong.objects[0]).toMatchObject({ type: 'image', box: { x: 0, y: 0, w: 1920, h: 1080 } });
+    expect(wrong.objects[0]).toMatchObject({ ...white, box: { x: 0, y: 0, w: 1920, h: 1080 } });
+    expect(wrong.objects[1]).toMatchObject({ type: 'image', box: { x: 0, y: 0, w: 1920, h: 1080 } });
     const four = emitOne({
       size: { cx: 9_144_000, cy: 6_858_000 },
       slides: [{ rels, bg: pictureBg('rId2') }],
       media: { 'ppt/media/bg.png': pngHeader(800, 600) },
     });
-    expect(four.objects[0]!.box.x).toBeCloseTo(240);
-    expect(four.objects[0]!.box.w).toBeCloseTo(1440);
+    for (const o of four.objects.slice(0, 2)) {
+      expect(o.box.x).toBeCloseTo(240);
+      expect(o.box.w).toBeCloseTo(1440);
+    }
+  });
+
+  it('lays a translucent background picture on white, as PowerPoint does', () => {
+    const { slide, objects } = emitOne({
+      slides: [{ rels, bg: pictureBg('rId2').replace('/>', '><a:alphaModFix amt="45000"/></a:blip>') }],
+      media: { 'ppt/media/bg.png': pngHeader(1280, 720) },
+    });
+    expect(slide.backgroundMediaId).toBeUndefined();
+    expect(objects[0]).toMatchObject({ type: 'shape', fill: { r: 255, g: 255, b: 255, a: 1 } });
+    expect(objects[1]).toMatchObject({ type: 'image', opacity: 0.45 });
+  });
+
+  it('lays a translucent colour or gradient background on white as one opaque rect', () => {
+    const clear = '<a:srgbClr val="9AB4E4"><a:alpha val="0"/></a:srgbClr>';
+    const grad = `<p:bg><p:bgPr><a:gradFill><a:gsLst><a:gs pos="0">${clear}</a:gs><a:gs pos="100000"><a:srgbClr val="9AB4E4"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill><a:effectLst/></p:bgPr></p:bg>`;
+    expect(emitOne({ slides: [{ bg: grad }] }).objects).toEqual([
+      expect.objectContaining({ type: 'shape', fill: { r: 255, g: 255, b: 255, a: 1 } }),
+    ]);
+    const half = `<p:bg><p:bgPr><a:solidFill><a:srgbClr val="000000"><a:alpha val="50000"/></a:srgbClr></a:solidFill><a:effectLst/></p:bgPr></p:bg>`;
+    expect(emitOne({ slides: [{ bg: half }] }).objects[0]).toMatchObject({
+      fill: { r: 128, g: 128, b: 128, a: 1 },
+    });
+    expect(overWhite({ r: 10, g: 20, b: 30, a: 1 })).toEqual({ r: 10, g: 20, b: 30, a: 1 });
   });
 
   it('extends solid backgrounds to the whole frame unless asked not to', () => {

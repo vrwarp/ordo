@@ -215,7 +215,8 @@ Done (design/27 §4, §15 M1):
   connectors as straight segments at any angle; roundRect radius from adj; ellipse and roundRect picture
   clips as `radius`; picture outlines as stroke-only shapes; custom geometry as its rect only when it fills
   half its box); backgrounds (16:9 plain picture of the slide's aspect → `backgroundMediaId`, other pictures
-  a bottom image over the slide area, colours a bottom rect over the frame or the slide area, none white);
+  a bottom image on a white rect over the slide area, colours a bottom rect over the frame or the slide area
+  composited on white, none white: PowerPoint lays every background on white);
   the lyric box of §4 "Church mappings" (not the bilingual rule); ≤ 1,000 objects.
 - `crop`: written from srcRect (and fillRect clipping) by default, now that `ImageObject.crop` is in the
   schema; `EmitOptions.crop: false` writes the legacy uncropped picture and notes it.

@@ -260,6 +260,9 @@ function emitBackground(ctx: EmitCtx, s: SlideScene, slide: Slide): void {
     }
     if (p.tile) ctx.log('a tiled background is drawn stretched (M3 pre-tiles it)');
     if (p.effects?.length) ctx.log('a recoloured background picture is drawn without its recolouring');
+    // PowerPoint and LibreOffice lay the background on white: a translucent picture, its transparent pixels
+    // and the parts of the slide it leaves uncovered show white, not the frame's black.
+    slide.objects.push(shape(ctx, rect, 'rect', WHITE));
     const unit: Affine = [ctx.frame.cx, 0, 0, ctx.frame.cy, 0, 0];
     const img = pictureObject(ctx, unit, p.tile ? { ...p, crop: undefined, fillRect: undefined } : p);
     if (img) slide.objects.push(img);
@@ -267,8 +270,15 @@ function emitBackground(ctx: EmitCtx, s: SlideScene, slide: Slide): void {
   }
   if (fill.kind === 'gradient') ctx.log('a gradient background is drawn as its first colour (M6)');
   if (fill.kind === 'pattern') ctx.log('a pattern background is drawn as its blended colour (M6)');
-  const color = legacyColor(fill) ?? WHITE;
-  slide.objects.push(shape(ctx, area, 'rect', color));
+  const color = legacyColor(fill);
+  slide.objects.push(shape(ctx, area, 'rect', color ? overWhite(color) : WHITE));
+}
+
+/** A colour laid on white, as a slide background is: opaque. */
+export function overWhite(c: OrdoRgba): OrdoRgba {
+  const a = bound(c.a, 0, 1);
+  const mix = (v: number) => Math.round(v * a + 255 * (1 - a));
+  return { r: mix(c.r), g: mix(c.g), b: mix(c.b), a: 1 };
 }
 
 // ── Elements ────────────────────────────────────────────────────────────────────────────────────────────
