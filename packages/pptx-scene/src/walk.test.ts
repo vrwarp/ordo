@@ -229,13 +229,13 @@ describe('shapes', () => {
     expect(e.line).toBeUndefined();
   });
 
-  it('marks presets M1 does not draw, custom geometry and connectors', () => {
+  it('draws every preset of the table and custom geometry (M6), notes an unknown preset, reads connectors', () => {
     const s = slideOf({
       slides: [
         {
           shapes:
-            rect(2, 0, 'FF0000', { geom: 'star5' }) +
-            rect(3, 0, 'FF0000', { geom: 'roundRect' }) +
+            rect(2, 0, 'FF0000', { geom: 'noSuchShape' }) +
+            rect(3, 0, 'FF0000', { geom: 'star5' }) +
             sp({ id: 4, x: 0, y: 0, cx: IN, cy: IN, geom: 'none', fill: solid('FF0000') }).replace(
               '<p:spPr>',
               '<p:spPr><a:custGeom><a:pathLst/></a:custGeom>',
@@ -244,10 +244,10 @@ describe('shapes', () => {
         },
       ],
     });
-    const [star, round, cust, cxn] = s.elements as ShapeElement[];
-    expect([star!.support, star!.reasons]).toEqual(['approx', ['preset:star5']]);
-    expect([round!.support, round!.reasons]).toEqual(['native', undefined]);
-    expect(cust).toMatchObject({ geom: 'custom', support: 'approx', reasons: ['custGeom'] });
+    const [unknown, star, cust, cxn] = s.elements as ShapeElement[];
+    expect([unknown!.support, unknown!.reasons]).toEqual(['approx', ['preset:noSuchShape']]);
+    expect([star!.support, star!.reasons]).toEqual(['native', undefined]);
+    expect(cust).toMatchObject({ geom: 'custom', support: 'native', custom: { paths: [], points: 0 } });
     expect(cxn).toMatchObject({ geom: 'straightConnector1', line: { width: 12_700, tail: 'triangle' } });
   });
 

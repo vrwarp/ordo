@@ -40,6 +40,7 @@ import {
 } from './inherit.ts';
 import type { Affine, Element, ElementBase, Fill, Line, ShapeElement, Support } from './ir.ts';
 import { chooseAlternate } from './markup.ts';
+import { customPaths, knownPreset, MAX_SLIDE_PATH_POINTS, placeConnectors, readCxnRef } from './geom.ts';
 import { blipReader, blipReaderOf, readPicture } from './picture.ts';
 import { readShadow, readTextBody, textChars } from './text.ts';
 import { child, num, path, type XNode } from './xml.ts';
@@ -49,7 +50,10 @@ export const MAX_GROUP_DEPTH = 32;
 /** Shape-tree elements read per slide, decorations included (design/27 §12). */
 export const MAX_SHAPES_PER_SLIDE = 5_000;
 
-/** Presets drawn natively in M1 (ordo's rect/ellipse/line and a rounded rect). */
+/**
+ * Presets M1 drew with today's fields (ordo's rect/ellipse/line and a rounded rect). Since M6 every preset of
+ * the table is drawn (`geom.ts` `knownPreset`); this is the set an older build draws exactly.
+ */
 export const M1_PRESETS: ReadonlySet<string> = new Set([
   'rect',
   'roundRect',
@@ -68,6 +72,8 @@ export interface WalkState {
   groups: number;
   /** The slide's background, read once when a shape uses it (`useBgFill`). */
   background?: Fill;
+  /** Custom geometry points so far (design/27 §12: 64k per slide; M6). */
+  points?: number;
 }
 
 const shows = (n: XNode | undefined) => n?.attrs.showMasterSp !== '0' && n?.attrs.showMasterSp !== 'false';
@@ -82,6 +88,8 @@ export function walkSlide(ctx: SlideCtx): Element[] {
   const st: WalkState = { out: [], count: 0, groups: 0 };
   if (shows(ctx.slide)) decorations(ctx, st);
   walkTree(ctx, treeOf(ctx.slide), 'slide', IDENTITY, undefined, 0, st);
+  // Connector ends glued to shapes move to their connection sites (M6).
+  placeConnectors(st.out);
   return st.out;
 }
 
@@ -91,6 +99,7 @@ interface Decorations {
   count: number;
   groups: number;
   notes: string[];
+  points: number;
 }
 
 /**
@@ -122,6 +131,7 @@ function decorations(ctx: SlideCtx, st: WalkState): void {
     for (const e of known.out) st.out.push({ ...e });
     st.count = known.count;
     st.groups = known.groups;
+    st.points = known.points;
     return;
   }
   const notes: string[] = [];
@@ -137,7 +147,7 @@ function decorations(ctx: SlideCtx, st: WalkState): void {
     return;
   }
   // Kept as walked; this slide and the next ones get copies.
-  byKey.set(key, { out: st.out.slice(), count: st.count, groups: st.groups, notes });
+  byKey.set(key, { out: st.out.slice(), count: st.count, groups: st.groups, notes, points: st.points ?? 0 });
   for (let i = 0; i < st.out.length; i++) st.out[i] = { ...st.out[i]! };
 }
 
@@ -266,6 +276,14 @@ export function walkTree(
           if (pic.kind === 'picture') {
             const line = readLine(ctx, chain);
             if (line) pic.line = line;
+            const custNode = pic.geom === 'custom' ? firstChildOf(spPrChain(chain), 'a:custGeom') : undefined;
+            if (custNode) {
+              pic.custom = slideCustom(ctx, custNode, base, st);
+              if (pic.custom.over) {
+                pic.support = pic.support === 'residual' ? 'residual' : 'approx';
+                pic.reasons = [...(pic.reasons ?? []), 'mask:custom'];
+              }
+            }
           }
           st.out.push(pic);
         }
@@ -352,7 +370,9 @@ function readShape(
   groupFill: Fill | undefined,
 ): ShapeElement | undefined {
   const { geom, adj } = geometryOf(chain);
-  const coverage = geom === 'custom' ? pathCoverage(firstChildOf(spPrChain(chain), 'a:custGeom')) : undefined;
+  const custNode = geom === 'custom' ? firstChildOf(spPrChain(chain), 'a:custGeom') : undefined;
+  const coverage = custNode ? pathCoverage(custNode) : undefined;
+  const custom = custNode ? slideCustom(ctx, custNode, base, st) : undefined;
   let fill = fillOf(ctx, chain) ?? { kind: 'none' };
   if (on(el.attrs.useBgFill)) {
     st.background ??= readBackground(ctx).fill;
@@ -368,15 +388,27 @@ function readShape(
   // An empty slide placeholder shows only its prompt text, which is never drawn.
   if (base.from === 'slide' && chain.ph && !chars && fill.kind !== 'picture') return undefined;
   const line = readLine(ctx, chain);
-  const shadow = shadowOf(ctx, chain);
+  const fx = effectsOf(ctx, chain);
   const reasons: string[] = [];
   let support: Support = 'native';
-  if (geom === 'custom') reasons.push('custGeom');
-  else if (!M1_PRESETS.has(geom)) reasons.push(`preset:${geom}`);
-  if (fill.kind === 'gradient') reasons.push('gradFill');
+  // M6: every preset of the table, custom geometry within the bounds, gradients and line styles are drawn;
+  // an unknown preset is drawn as its rect and a pattern as its blended colour.
+  if (geom !== 'custom' && !knownPreset(geom)) reasons.push(`preset:${geom}`);
   if (fill.kind === 'pattern') reasons.push('pattFill');
-  if (line?.dash || line?.head || line?.tail) reasons.push('lineStyle');
   if (reasons.length) support = 'approx';
+  if (custom?.over) {
+    reasons.push('custGeom');
+    support = 'residual';
+  }
+  const cxn =
+    el.name === 'p:cxnSp'
+      ? (() => {
+          const nv = child(nvOf(el), 'p:cNvCxnSpPr');
+          const start = readCxnRef(child(nv, 'a:stCxn'));
+          const end = readCxnRef(child(nv, 'a:endCxn'));
+          return start || end ? { ...(start ? { start } : {}), ...(end ? { end } : {}) } : undefined;
+        })()
+      : undefined;
   if (text && chars) {
     // Vertical text, warped text and columns are residual until M8 (design/27 §5); M1 still draws them.
     const residual = [
@@ -396,12 +428,34 @@ function readShape(
     ...(adj ? { adj } : {}),
     fill,
     ...(line ? { line } : {}),
-    ...(shadow ? { shadow } : {}),
+    ...(fx.shadow ? { shadow: fx.shadow } : {}),
     ...(text && chars ? { text } : {}),
     ...(coverage !== undefined ? { coverage } : {}),
     support,
     ...(reasons.length ? { reasons } : {}),
+    ...(custom ? { custom } : {}),
+    ...(fx.glow ? { glow: fx.glow } : {}),
+    ...(fx.softEdge ? { softEdge: fx.softEdge } : {}),
+    ...(cxn ? { cxn } : {}),
   };
+}
+
+/**
+ * A custom geometry built for an element (`geom.ts`), its points counted against the slide's 64k; past them
+ * it is marked over the bounds (residual: LibreOffice draws it). Its compile notes go to the slide's log.
+ */
+export function slideCustom(ctx: SlideCtx, node: XNode, base: ElementBase, st: WalkState) {
+  const p = decompose(base.xf);
+  const custom = customPaths(node, p.w, p.h, ctx.frame.s);
+  for (const n of custom.notes) ctx.log(`custom geometry: ${n}`);
+  st.points = (st.points ?? 0) + custom.points;
+  if (st.points > MAX_SLIDE_PATH_POINTS && !custom.over) {
+    ctx.log(
+      `more than ${MAX_SLIDE_PATH_POINTS} path points: further custom geometry is drawn by LibreOffice`,
+    );
+    return { ...custom, over: true };
+  }
+  return custom;
 }
 
 /**
@@ -428,27 +482,107 @@ function readLine(ctx: SlideCtx, c: Chain): Line | undefined {
   const childAttr = (name: string, a: string) =>
     all.map((n) => child(n, name)?.attrs[a]).find((v) => v !== undefined);
   const out: Line = { width: Math.max(0, Math.min(20_116_800, finite(num(attr('w')), 9_525))), fill };
-  const dash = childAttr('a:prstDash', 'val');
-  if (dash && dash !== 'solid') out.dash = dash.slice(0, 20);
+  // The nearest a:ln that sets a dash decides it, preset or custom (M6).
+  for (const n of all) {
+    const prst = child(n, 'a:prstDash');
+    if (prst) {
+      const dash = prst.attrs.val;
+      if (dash && dash !== 'solid') out.dash = dash.slice(0, 20);
+      break;
+    }
+    const cust = child(n, 'a:custDash');
+    if (cust) {
+      const ds: number[] = [];
+      for (let i = 0; i < cust.children.length && i < MAX_DASH_SCAN && ds.length < MAX_DASH_STOPS; i++) {
+        const d = cust.children[i]!;
+        if (d.name !== 'a:ds') continue;
+        ds.push(dashLength(num(d.attrs.d)), dashLength(num(d.attrs.sp)));
+      }
+      if (ds.length) out.custDash = ds;
+      break;
+    }
+  }
   const head = childAttr('a:headEnd', 'type');
   if (head && head !== 'none') out.head = head.slice(0, 20);
   const tail = childAttr('a:tailEnd', 'type');
   if (tail && tail !== 'none') out.tail = tail.slice(0, 20);
+  const size = (el: string) => {
+    const w = childAttr(el, 'w') ?? 'med';
+    const len = childAttr(el, 'len') ?? 'med';
+    return w === 'med' && len === 'med' ? undefined : { w: w.slice(0, 4), len: len.slice(0, 4) };
+  };
+  const headSize = out.head ? size('a:headEnd') : undefined;
+  if (headSize) out.headSize = headSize;
+  const tailSize = out.tail ? size('a:tailEnd') : undefined;
+  if (tailSize) out.tailSize = tailSize;
+  for (const n of all) {
+    const join = child(n, 'a:round')
+      ? 'round'
+      : child(n, 'a:bevel')
+        ? 'bevel'
+        : child(n, 'a:miter')
+          ? 'miter'
+          : undefined;
+    if (join) {
+      out.join = join;
+      break;
+    }
+  }
+  const cap = attr('cap');
+  if (cap === 'flat' || cap === 'rnd' || cap === 'sq')
+    out.cap = cap === 'rnd' ? 'round' : cap === 'sq' ? 'square' : 'flat';
   return out;
 }
 
-/** A shape's outer shadow: the nearest `a:effectLst` along the chain decides, else the style's `a:effectRef`. */
-function shadowOf(ctx: SlideCtx, c: Chain): ShapeElement['shadow'] {
+/** Dash stops read per `a:custDash` (pairs flattened), and its children scanned. */
+const MAX_DASH_STOPS = 16;
+const MAX_DASH_SCAN = 64;
+
+/** A custom dash length (`a:ds d`, `sp`: 100,000 = one line width) in line widths, within 0..100. */
+function dashLength(v: number | undefined): number {
+  return v !== undefined && Number.isFinite(v) ? Math.max(0, Math.min(100, v / 100_000)) : 1;
+}
+
+/** A shape's effects (M6: outer shadow, glow, soft edge). */
+interface Effects {
+  shadow?: ShapeElement['shadow'];
+  glow?: ShapeElement['glow'];
+  softEdge?: number;
+}
+
+/** Effect radii in EMU are bounded (design/27 §12). */
+const MAX_EFFECT_EMU = 20_116_800;
+
+/** The effects of one `a:effectLst`, colours in `color`. */
+function effectList(lst: XNode | undefined, color: SlideCtx['color']): Effects {
+  if (!lst) return {};
+  const out: Effects = {};
+  const shadow = readShadow(child(lst, 'a:outerShdw'), color);
+  if (shadow) out.shadow = shadow;
+  const glow = child(lst, 'a:glow');
+  const radius = Math.max(0, Math.min(MAX_EFFECT_EMU, finite(num(glow?.attrs.rad), 0)));
+  const glowColor = glow ? colorIn(glow, color) : undefined;
+  if (glow && radius > 0 && glowColor) out.glow = { radius, color: glowColor };
+  const soft = Math.max(0, Math.min(MAX_EFFECT_EMU, finite(num(child(lst, 'a:softEdge')?.attrs.rad), 0)));
+  if (soft > 0) out.softEdge = soft;
+  return out;
+}
+
+/**
+ * A shape's effects: the nearest `a:effectLst` along the chain decides them all, else the style's
+ * `a:effectRef` (the theme's effect style, its `phClr` the reference's colour).
+ */
+function effectsOf(ctx: SlideCtx, c: Chain): Effects {
   for (const n of nodes(c)) {
     const lst = child(spPrOf(n), 'a:effectLst');
-    if (lst) return readShadow(child(lst, 'a:outerShdw'), ctx.color);
+    if (lst) return effectList(lst, ctx.color);
   }
   const ref = child(styleOf(c), 'a:effectRef');
   const idx = num(ref?.attrs.idx) ?? 0;
   const entry = idx > 0 && idx <= 3 ? ctx.theme.effects[idx - 1] : undefined;
-  if (!entry) return undefined;
+  if (!entry) return {};
   const refCtx = withPhClr(ctx.color, colorIn(ref, ctx.color));
-  return readShadow(path(entry, 'a:effectLst', 'a:outerShdw'), refCtx);
+  return effectList(path(entry, 'a:effectLst'), refCtx);
 }
 
 /** Points read per custom geometry for its coverage (design/27 §12: ≤ 4,096 path points per path). */

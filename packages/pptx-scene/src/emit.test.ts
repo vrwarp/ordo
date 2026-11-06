@@ -357,7 +357,7 @@ describe('text', () => {
 });
 
 describe('shapes', () => {
-  it('draws rect, roundRect with its corner, ellipse, and other presets as the nearest (noted)', () => {
+  it('draws rect, roundRect with its corner, ellipse, other presets by their geometry (M6)', () => {
     const { objects, notes } = emitOne({
       slides: [
         {
@@ -377,22 +377,33 @@ describe('shapes', () => {
             ) +
             sp({ id: 4, x: 0, y: 0, cx: 2 * IN, cy: IN, geom: 'ellipse', fill: solid('FF0000') }) +
             sp({ id: 5, x: 0, y: 0, cx: 2 * IN, cy: IN, geom: 'star5', fill: solid('FF0000') }) +
-            sp({ id: 6, x: 0, y: 0, cx: 2 * IN, cy: IN, geom: 'roundRect', fill: solid('FF0000') }),
+            sp({ id: 6, x: 0, y: 0, cx: 2 * IN, cy: IN, geom: 'roundRect', fill: solid('FF0000') }) +
+            sp({ id: 7, x: 0, y: 0, cx: 2 * IN, cy: IN, geom: 'noSuchShape', fill: solid('FF0000') }),
         },
       ],
     });
-    const [rect, round, ell, star, dflt] = content(objects) as ShapeObject[];
+    const [rect, round, ell, star, dflt, unknown] = content(objects) as ShapeObject[];
     expect(rect).toMatchObject({
       shape: 'rect',
       fill: RED,
       stroke: { width: 4, color: { r: 0, g: 0, b: 255, a: 1 } },
       radius: 0,
     });
-    expect(round).toMatchObject({ shape: 'rect', radius: PX / 2 });
+    expect(rect!.geom).toBeUndefined();
+    expect(round).toMatchObject({
+      shape: 'rect',
+      radius: PX / 2,
+      geom: { preset: 'roundRect', adj: [['adj', 50_000]] },
+    });
     expect(ell!.shape).toBe('ellipse');
-    expect(star!.shape).toBe('rect');
+    expect(ell!.geom).toBeUndefined(); // today's ellipse is exact
+    // The legacy rect an older build draws, and the preset beside it.
+    expect(star).toMatchObject({ shape: 'rect', fill: RED, geom: { preset: 'star5' } });
     expect(dflt!.radius).toBeCloseTo(PX * 0.16667, 2);
-    expect(notes.join(' ')).toMatch(/preset:star5 drawn as rect/);
+    expect(dflt!.geom).toEqual({ preset: 'roundRect' });
+    expect(unknown!.geom).toBeUndefined();
+    expect(notes.join(' ')).toMatch(/preset:noSuchShape drawn as rect/);
+    expect(notes.join(' ')).not.toMatch(/star5/);
   });
 
   it('draws a line at its angle, through flips and groups', () => {
@@ -421,20 +432,37 @@ describe('shapes', () => {
     expect(flat!.box.w).toBeCloseTo(2 * PX);
   });
 
-  it('draws an elbow connector as its segments and notes arrowheads', () => {
+  it('draws an elbow connector as one route along its chord, with its arrowhead (M6)', () => {
     const cxn =
       '<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="5" name="C"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1828800" cy="914400"/></a:xfrm>' +
       '<a:prstGeom prst="bentConnector3"><a:avLst><a:gd name="adj1" fmla="val 25000"/></a:avLst></a:prstGeom><a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:tailEnd type="triangle"/></a:ln></p:spPr></p:cxnSp>';
     const { objects, notes } = emitOne({ slides: [{ shapes: cxn }] });
-    const segs = content(objects) as ShapeObject[];
-    expect(segs).toHaveLength(3);
-    expect(segs[0]!.box.w).toBeCloseTo(0.5 * PX);
-    expect(segs[1]!.box.rotation).toBeCloseTo(90);
-    expect(segs[2]!.box.w).toBeCloseTo(1.5 * PX);
-    expect(notes.join(' ')).toMatch(/arrowheads/);
+    const [route, ...rest] = content(objects) as ShapeObject[];
+    expect(rest).toHaveLength(0);
+    // An older build draws the line from the start (0, 0) to the end (2, 1) in, along the box's midline.
+    const chord = Math.hypot(2 * PX, PX);
+    expect(route).toMatchObject({
+      shape: 'line',
+      stroke: { width: 2 },
+      ends: { tail: { type: 'triangle' } },
+    });
+    expect(route!.box.w).toBeCloseTo(chord);
+    expect(route!.box.rotation).toBeCloseTo((Math.atan2(1, 2) * 180) / Math.PI);
+    expect(route!.box.x + route!.box.w / 2).toBeCloseTo(PX);
+    expect(route!.box.y + route!.box.h / 2).toBeCloseTo(PX / 2);
+    // The route in the chord's frame: (0, 0) → (0.5, 0) → (0.5, 1) → (2, 1) in, as the preset builds it.
+    const [path] = route!.geom!.paths!;
+    expect(path).toMatchObject({ w: route!.box.w, h: route!.box.h, fill: 'none' });
+    const nums = path!.d.match(/-?[\d.]+/g)!.map(Number);
+    const u = [2 / Math.sqrt(5), 1 / Math.sqrt(5)];
+    const at = (x: number, y: number) => [x * u[0]! + y * u[1]!, -x * u[1]! + y * u[0]! + route!.box.h / 2];
+    const want = [at(0, 0), at(0.5 * PX, 0), at(0.5 * PX, PX), at(2 * PX, PX)].flat();
+    expect(path!.d.replace(/[-\d. ]/g, '')).toBe('MLLL');
+    for (const [i, v] of nums.entries()) expect(v).toBeCloseTo(want[i]!, 1);
+    expect(notes.join(' ')).not.toMatch(/arrowheads/);
   });
 
-  it('draws custom geometry as its legacy rect only when it fills most of its box', () => {
+  it('draws custom geometry as its paths, its legacy rect only when it fills most of its box (M6)', () => {
     const custom = (id: number, pts: string) =>
       sp({
         id,
@@ -453,9 +481,19 @@ describe('shapes', () => {
       '<a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="10" y="0"/></a:lnTo><a:lnTo><a:pt x="10" y="10"/></a:lnTo><a:lnTo><a:pt x="0" y="10"/></a:lnTo>';
     const thin =
       '<a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="10" y="0"/></a:lnTo><a:lnTo><a:pt x="10" y="1"/></a:lnTo><a:lnTo><a:pt x="0" y="1"/></a:lnTo>';
-    const { objects, notes } = emitOne({ slides: [{ shapes: custom(2, full) + custom(3, thin) }] });
-    expect(content(objects).map((o) => o.type)).toEqual(['shape', 'text', 'text']);
-    expect(notes.join(' ')).toMatch(/fills little of its box/);
+    const { objects } = emitOne({ slides: [{ shapes: custom(2, full) + custom(3, thin) }] });
+    const [fullShape, , thinShape] = content(objects) as ShapeObject[];
+    expect(content(objects).map((o) => o.type)).toEqual(['shape', 'text', 'shape', 'text']);
+    expect(fullShape).toMatchObject({
+      shape: 'rect',
+      geom: { paths: [{ d: 'M 0 0 L 10 0 L 10 10 L 0 10 Z', w: 10, h: 10 }] },
+    });
+    // A thin silhouette's legacy is a line, which draws no fill: an older build draws nothing of it.
+    expect(thinShape).toMatchObject({
+      shape: 'line',
+      fill: RED,
+      geom: { paths: [{ d: 'M 0 0 L 10 0 L 10 1 L 0 1 Z', w: 10, h: 10 }] },
+    });
   });
 
   it('draws a shape and its text as two objects, the text above', () => {

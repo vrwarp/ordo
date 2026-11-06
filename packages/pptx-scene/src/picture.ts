@@ -18,6 +18,7 @@ import type { BlipReader } from './color.ts';
 import { partOf, type SlideCtx, type Source } from './context.ts';
 import { chainOf, geometryOf } from './inherit.ts';
 import type { ElementBase, Insets, PictureElement, PictureFill, ResidualElement } from './ir.ts';
+import { knownPreset } from './geom.ts';
 import { readMediaRef } from './media.ts';
 import { externalHost } from './opc.ts';
 import { child, num, type XNode } from './xml.ts';
@@ -144,8 +145,9 @@ export function readPicture(
   const out: PictureElement = { ...base, kind: 'picture', picture, geom, ...(adj ? { adj } : {}) };
   const reasons: string[] = [];
   if (PREPARED_EXTENSIONS.has(ext)) reasons.push(`pic:${ext}`);
-  if (geom !== 'rect' && geom !== 'roundRect' && geom !== 'ellipse')
-    reasons.push(`mask:${geom.slice(0, 30)}`);
+  // M6: every preset of the table and custom geometry clip the picture (`ImageObject.mask`); an unknown
+  // preset is drawn as a rect (the walk rates a custom one past the bounds the same way).
+  if (geom !== 'custom' && !knownPreset(geom)) reasons.push(`mask:${geom.slice(0, 30)}`);
   if (picture.effects?.length) reasons.push('recolor');
   if (reasons.length) {
     out.support = 'approx';

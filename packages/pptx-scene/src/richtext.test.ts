@@ -519,3 +519,46 @@ describe('legacy text (richText: false)', () => {
     expect(t.style.color).not.toEqual(WHITE);
   });
 });
+
+describe('gradient text (M6)', () => {
+  const grad = (a: string, b: string) =>
+    `<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="${a}"/></a:gs><a:gs pos="100000"><a:srgbClr val="${b}"/></a:gs></a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill>`;
+
+  it('paints the box with its dominant run’s gradient, its first stop the legacy colour', () => {
+    const {
+      texts: [t],
+      notes,
+    } = texts({
+      slides: [
+        {
+          shapes: box(
+            body(
+              para(
+                run('Glory to God', 'sz="4000"', grad('FF0000', '0000FF')) +
+                  run(' in the highest', 'sz="4000"', grad('FF0000', '0000FF')) +
+                  run('!', 'sz="4000"', solid('00FF00')) +
+                  run('?', 'sz="4000"', grad('FFFF00', '000000')),
+              ),
+            ),
+          ),
+        },
+      ],
+    });
+    expect(t!.style.color).toEqual(RED);
+    expect(t!.style.paint).toEqual({
+      kind: 'linear',
+      angle: 90,
+      stops: [
+        { at: 0, color: RED },
+        { at: 1, color: { r: 0, g: 0, b: 255, a: 1 } },
+      ],
+    });
+    // A run in its own colour keeps it; one in another gradient is drawn in that gradient's first colour.
+    expect(t!.runs?.map((r) => [t!.text.slice(r.start, r.end), r.color])).toEqual([
+      ['!', { r: 0, g: 255, b: 0, a: 1 }],
+      ['?', { r: 255, g: 255, b: 0, a: 1 }],
+    ]);
+    expect(notes.join(' ')).toMatch(/text in a gradient other than its box’s is drawn in its first colour/);
+    expect(notes.join(' ')).not.toMatch(/M6/);
+  });
+});

@@ -13,6 +13,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@ordo/domain": "workspace:*"
+    "@ordo/domain": "workspace:*",
+    "@ordo/renderer": "workspace:*"
   }
 }

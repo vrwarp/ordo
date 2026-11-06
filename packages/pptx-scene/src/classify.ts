@@ -8,8 +8,10 @@
  * `deco:<feature>`, those of the layout and master decorations it shows (non-placeholder shapes, honouring
  * `showMasterSp`); the tier is decided by the union. Backgrounds (`p:bg`) are not part of the census.
  *
- * **Support** (`native` / `approx` / `residual`) is per element: the reader's own verdict (`walk.ts`: presets
- * and fills it cannot draw yet, sheared group children) combined with the rules of §5 (charts, tables,
+ * **Support** (`native` / `approx` / `residual`) is per element: the reader's own verdict (`walk.ts`: since M6
+ * every preset of the table, custom geometry, gradients and line styles are native; a preset the table does
+ * not know and a pattern fill are approx; custom geometry past the bounds and sheared group children are
+ * residual) combined with the rules of §5 (charts, tables,
  * SmartArt, OLE, maths, real 3D, WordArt warps, vertical and multi-column text, HD Photo pictures are residual;
  * reflections, inner shadows, soft edges on pictures and metafiles waiting for conversion are approx).
  *

@@ -12,8 +12,9 @@ const out = emitSlides(scene, { mediaId }); // ordo Slides; pictures as 'pptxmed
 ```
 
 - **Pure TypeScript.** No DOM, no zip, no fs and no runtime dependency: it runs on the hub's CPU pool (M3)
-  and in Node for the fidelity harness. Code outside tests imports only its own modules and _types_ from
-  `@ordo/domain` (`purity.test.ts` enforces it). Media parts may be empty (spilled by `extractZip`): only
+  and in Node for the fidelity harness. Code outside tests imports only its own modules, _types_ from
+  `@ordo/domain`, a few pure domain tables and, since M6, the renderer's geometry engine without its drawer
+  (`@ordo/renderer/geom/{compile,eval,arc,path,ops,presets.gen}.ts`; `purity.test.ts` enforces it). Media parts may be empty (spilled by `extractZip`): only
   their names are used, plus their pixel size when the caller gives `ParseOptions.pictureSize` (read from
   the spilled file's first bytes).
 - **Never throws for one bad slide.** A slide that cannot be read gets `error` and class `'picture'`; the
@@ -82,7 +83,77 @@ Embedded video and sound play in place (design/27 §4 "Media", §8 "p:timing map
   `clipKey`), listed in `EmittedSlide.clips` with linked and missing clips; objects left out keep the art's
   and the metafiles' places (`leaveOut` remaps the element spans).
 
-## Module map
+## M6 wave 2: shape geometry on real slides (`geom.ts`)
+
+Shapes, pictures and connectors draw as PowerPoint draws them (design/27 §3.1 `ShapeGeom`, `Gradient`, the
+`ShapeObject` additions and `ImageObject.mask`; §4 "Simple shapes", "Groups"; §12), always beside the legacy
+values an older build draws (§3.2: `shape` rect, ellipse or line, `fill` a gradient's first stop, `radius`):
+- **Presets** stay presets: `geom: { preset, adj }` (the `a:avLst` pairs, at most 10), evaluated by the
+  renderer at draw time; rect and ellipse need none. A name the table does not know is its rect (approx,
+  noted). The text rectangle is the preset's (`a:rect` of POI's table), placed through the shape's affine,
+  so it is mirrored with a flipped shape; the connection sites are the preset's.
+- **Custom geometry** (`a:custGeom`) is read with bounded scans (`readCustGeom`; attributes cut one past the
+  compiler's own bounds), compiled once per node with the renderer's compiler (POI semantics, the same code
+  that draws presets) and built at the shape's size: `geom.paths`, each path an `M L Q C Z` string in its own
+  space (the deck's `w`/`h`, else the shape's box in logical px; written with about 1/20,000 of the space
+  as precision, coarser until it fits the schema's 40,000 characters), arcs already cubic. A long deck path
+  is compiled in chunks at its sub-paths (the compiler counts an arc as a full turn's 12 points) and stored
+  whole when its real points fit 4,096; past that it is split into stored paths only where no sub-path of one
+  part overlaps one of another (even-odd holes stay with their outlines). What the compiler replaced by 0 is
+  noted (`custom geometry: …`) and still drawn. Native while within the bounds (8 paths, 4,096 points a path,
+  64k points a slide); past them residual (`custGeom`, the LibreOffice art). A thin custom geometry's legacy
+  is a `line`, which draws no fill, as M1 drew nothing for it.
+- **Gradients** (`a:gradFill`): `gradient` with the stops (≤ 16, laid on white for backgrounds); linear with
+  `angle` and `scaled` as written (`rotWithShape="0"`: turned back by the shape's rotation), path gradients
+  radial from the centre of `a:fillToRect` (`rect` and `shape` paths noted as radial). Background gradients
+  are drawn; gradient text paints the box (`TextStyle.paint`, `richtext.ts`), a run in another gradient
+  keeps its first stop (noted). Pattern fills stay their blended colour (approx, noted).
+- **Lines**: `dash` from `a:prstDash` (all eleven), `a:custDash` the nearest by its lengths (noted); `ends`
+  from `a:headEnd`/`a:tailEnd` with their sizes. Joins (`a:round`/`a:bevel`/`a:miter`) and caps are read
+  into the IR (`Line.join`, `Line.cap`); the schema has no field for them yet.
+- **Effects**: `shadow`, `glow` and `softEdge` of a visible shape from the nearest `a:effectLst` along the
+  chain, else the theme's effect style (`a:effectRef`, `phClr` its colour). An invisible shape's shadow still
+  falls on its text.
+- **Flips** (design/27 §4 "Groups"): the composed affine of every group level (offset, `chOff`/`chExt`
+  scale, rotation, flips) is decomposed into a box, a rotation and `flipH` (a vertical flip is a horizontal
+  one turned half a turn, exact for any shape, and PowerPoint's upside-down text with it), written on pictures
+  and on shapes whose geometry or gradient it changes. Text is never mirrored.
+- **Pictures**: `mask` from the clip geometry (every preset, custom paths; ellipse and roundRect keep their
+  legacy `radius`), `flipH`, and the outline along the same geometry with its dash. A shape's picture fill
+  is clipped to the shape's geometry but never mirrored, and drawn square to the nearest quarter turn of
+  the shape (`pictureFillPlacement`): the mirror-free rotation ρ becomes ρ − 90k, the box's sides swapped
+  when k is odd, so a shape turned 170° shows its picture turned −10° and one turned 90° shows it upright in
+  the tall box. This is LibreOffice 24.2's drawing, measured with probe decks (flips, both flips, rot 30, 90,
+  120, 170, 180, 200, flips in groups), and the reference the pictures are scored against; PowerPoint is
+  known not to mirror a picture fill, and its turning past 45° was not verified. The clip geometry is
+  carried into the picture's box (mirrored and turned there, as paths).
+- **Connectors** (`p:cxnSp`): an end glued to a shape of the same part (`a:stCxn`/`a:endCxn`: its `cNvPr id`
+  and site) moves to that site after the walk (`placeConnectors`), keeping the connector's frame (rotation;
+  the signs of its extents become its flips); an end that names no shape, or a site the shape lacks, keeps
+  the stored geometry, and so does a connector whose stored ends are at their sites already (within 1 % of
+  its length): PowerPoint keeps a routed elbow in a 1 EMU extent with an adjust value of −24,700,009, which
+  re-placing would flatten. Straight connectors and lines are one `line` object with `dash` and `ends`; bent and
+  curved connectors one `line` object whose box's midline runs from the route's start to its end (an older
+  build draws that straight line) with the preset's route in that box as `geom.paths` (fill none).
+- **Classification**: every preset of the table, custom geometry within the bounds, gradients and line styles
+  are native (no reason); approx: unknown presets (`preset:<name>`, `mask:<name>`), pattern fills; residual:
+  custom geometry past the bounds. Census tiers are unchanged (they count feature use, not support).
+
+Measured (the census over worship shards 0-2 of `validate/sample4`, 2,713 shown slides, and the five sermon
+decks; tiers are features, so unchanged): T1 22.8 %, T1-T2 54.4 %, T1-T3 81.8 %, T1-T4 86.8 %, T1-T5 92.4 %.
+Of the 2,220 T1-T3 slides 2,120 are native class (95.5 %; before 2,132, 96.0 %): 12 slides of one deck
+became hybrid, its layout's traced decorations having paths of up to 6,532 overlapping points (LibreOffice
+draws them now; before they were a rect or nothing), and one picture-class slide of the same deck became
+hybrid (the art took its decorations under the object budget). 19,653 objects carry a geometry, 1,671 a gradient and 699 pictures a mask. The 73 sermon slides are
+unchanged (72 native, one hybrid for its 3D).
+
+Fidelity (`--engine native`, LibreOffice 24.2 pictures, per slide over the 1,000 slides of worship shard 2
+scored both times): with this converter alone, whose renderer still ignores the new fields, 0.8616 →
+0.8623; with M6 wave 2 item A's renderer, which draws them, 0.8616 → 0.8813 (335 slides up by more than
+0.002, 6 down; the falls over 0.01 are four picture-class slides of one template, which the hub draws with
+LibreOffice and whose extra objects pass the renderer's 200-object clamp in the harness, and one table slide
+by 0.014). Tier means with both: T1 0.945, T2 0.846, T3 0.873. The sermon decks stay 0.953.
+
 
 | File            | What                                                                                                              | Owner  |
 | --------------- | ----------------------------------------------------------------------------------------------------------------- | ------ |
@@ -102,6 +173,7 @@ Embedded video and sound play in place (design/27 §4 "Media", §8 "p:timing map
 | `richtext.ts`   | A text body as rich ordo text: runs, paragraph styles, office box fields (M2)                                     | C (M2) |
 | `fontmap.ts`    | Script class of each character (Latin, East Asian, complex), substitutes and fallback families (M2)               | C (M2) |
 | `classify.ts`   | Census tiers T1-T5, reasons, slide class                                                                          | F      |
+| `geom.ts`       | Presets, custom geometry, text rectangles and sites, gradients, dashes, arrowheads, connector glue (M6)           | M6b B  |
 | `notes.ts`      | `readNotes`: a slide's speaker notes (notesSlide body placeholders), bounded                                      | M3 B   |
 | `transition.ts` | `readTransition`, `readSlideTransition` (a slide's tail only), `showLoops` (`p:showPr loop`)                      | M3 B   |
 | `timing.ts`     | `readSlideTiming`: the `p:timing` mapping of clips, transition and animation sounds; `gainDbOf`                   | M3b A  |
@@ -134,7 +206,8 @@ colours as `Rgba` (channels 0-255, alpha 0-1, the shape of `@ordo/domain` `Rgba`
   packages/pptx-scene packages/pptx-render`, `npx biome check --write <changed paths>`.
 - A worktree without `pnpm install` needs the `@ordo/*` links (`packages/pptx-render/node_modules/@ordo/
   pptx-scene → ../../../pptx-scene`, `tools/pptx-fidelity/node_modules/@ordo/pptx-scene →
-  ../../../../packages/pptx-scene`, `packages/pptx-scene/node_modules/@ordo/domain → ../../../domain`).
+  ../../../../packages/pptx-scene`, `packages/pptx-scene/node_modules/@ordo/domain → ../../../domain`,
+  and since M6 `packages/pptx-scene/node_modules/@ordo/renderer → ../../../renderer`).
 
 ### A: reading (`xml.ts`, `opc.ts`, `markup.ts`, `deck.ts`, `frame.ts`)
 
@@ -298,7 +371,8 @@ Done (design/27 §4, §15 M1):
   schema; `EmitOptions.crop: false` writes the legacy uncropped picture and notes it.
 
 Left for later milestones: shape text rectangles of other presets and custom paths (M6), picture
-masks/flips/adjust (M3), arrowheads and dashes (M6), tiles pre-tiled (M3), media (M5).
+masks/flips/adjust (M3), arrowheads and dashes (M6), tiles pre-tiled (M3), media (M5). (M6 wave 2 has done the text
+rectangles, picture masks and flips, arrowheads and dashes: see "M6 wave 2" above.)
 
 ### M2 wave 2: rich emission (`richtext.ts`, `fontmap.ts`; `text.ts`, `emit.ts`)
 

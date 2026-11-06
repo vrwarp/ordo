@@ -613,6 +613,8 @@ function gradientOf(el: XNode, ctx: ColorCtx): Fill {
   if (stops.length === 1) return { kind: 'solid', color: stops[0]!.color };
   const lin = child(el, 'a:lin');
   const path = child(el, 'a:path');
+  // M6: `rotWithShape="0"` keeps the angle on the slide; `scaled="1"` scales it with the box.
+  const fixed = el.attrs.rotWithShape === '0' || el.attrs.rotWithShape === 'false';
   if (path) {
     const r = child(path, 'a:fillToRect')?.attrs;
     const kind = path.attrs.path ?? '';
@@ -621,10 +623,18 @@ function gradientOf(el: XNode, ctx: ColorCtx): Fill {
       stops,
       path: PATH_KINDS.has(kind) ? kind : 'circle',
       ...(r ? { focus: { l: frac(r.l), t: frac(r.t), r: frac(r.r), b: frac(r.b) } } : {}),
+      ...(fixed ? { fixed } : {}),
     };
   }
   const ang = intOf(lin?.attrs.ang) / PER_DEGREE;
-  return { kind: 'gradient', stops, angle: ((ang % 360) + 360) % 360 };
+  const scaled = lin?.attrs.scaled === '1' || lin?.attrs.scaled === 'true';
+  return {
+    kind: 'gradient',
+    stops,
+    angle: ((ang % 360) + 360) % 360,
+    ...(scaled ? { scaled } : {}),
+    ...(fixed ? { fixed } : {}),
+  };
 }
 
 /** One fill element. A gradient without stops is no fill; a pattern keeps its two colours. */
