@@ -279,7 +279,8 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
 
 /** The degraded note of a slide whose clip or sound is not ready, so the slide goes live without it. */
 function unplayable(play: SlidePlay, id: string, m: Media | undefined): GoLiveProblem {
-  const what = play.role === 'sound' ? 'slide sound' : 'slide video';
+  const what =
+    play.role === 'sound' ? 'slide sound' : play.role === 'background' ? 'slide background' : 'slide video';
   const name = m ? `"${m.name.slice(0, 200)}" (${what})` : `${what} ${id.slice(0, 200)}`;
   const shown = play.role === 'video' ? 'showing its poster' : 'the slide shows without it';
   const reason = !m

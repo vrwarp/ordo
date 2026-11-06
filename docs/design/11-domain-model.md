@@ -366,7 +366,10 @@ the audio slot as `slideOwned` until the live cue leaves `[cueIndex, untilCue]`.
   `clear('slide')` also clears the slide's video and sound. onEnd works as for media cues,
   because `cueIndex` is the slide's own cue.
 - At goLive these clips and sounds are optional: one that is missing, still processing or
-  failed is left out with a `degraded` note, and the slide shows its poster.
+  failed is left out with a `degraded` note, and the slide shows its poster. So is the own
+  background of a PowerPoint slide (`Slide.pptx` set: the importer makes a looping, muted
+  full-slide video its motion background): left out, the cue shows the item's or the
+  presentation's background instead.
 
 ## Identifiers and content addressing
 

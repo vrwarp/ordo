@@ -53,7 +53,7 @@ export function esc(s: string): string {
 
 export interface RelSpec {
   id: string;
-  /** Short type name: 'image', 'slideLayout', 'hyperlink', … */
+  /** Short type name: 'image', 'slideLayout', 'hyperlink', …, or a whole type URI (`MEDIA_REL`). */
   type: string;
   target: string;
   external?: boolean;
@@ -108,7 +108,7 @@ function rels(list: RelSpec[]): string {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${REL_PKG}">${list
     .map(
       (r) =>
-        `<Relationship Id="${esc(r.id)}" Type="${relTypeUri(r.type)}" Target="${esc(r.target)}"${r.external ? ' TargetMode="External"' : ''}/>`,
+        `<Relationship Id="${esc(r.id)}" Type="${r.type.includes('://') ? esc(r.type) : relTypeUri(r.type)}" Target="${esc(r.target)}"${r.external ? ' TargetMode="External"' : ''}/>`,
     )
     .join('')}</Relationships>`;
 }
@@ -489,3 +489,127 @@ export function withPart(
 }
 
 export const CHART_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.drawingml.chart+xml';
+
+// ── Video and sound (M5 hub scope, `media.ts`, `timing.ts`) ───────────────────────────────────────────────
+
+/** PowerPoint 2010's media relationship type (`p14:media r:embed`). */
+export const MEDIA_REL = 'http://schemas.microsoft.com/office/2007/relationships/media';
+const NS_P14 = 'http://schemas.microsoft.com/office/powerpoint/2010/main';
+/** The slide's colour map override, which `SlideSpec.after` replaces: put it before a `timingXml`. */
+export const CLRMAP_OVR = '<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>';
+
+export interface MediaPicSpec extends Omit<PicSpec, 'srcRect' | 'blip'> {
+  /** The element under `p:nvPr`: `a:videoFile` or `a:audioFile`; 'p14' writes only `p14:media`. */
+  kind: 'video' | 'audio' | 'p14';
+  /** The relationship of `p14:media r:embed` (none when absent). */
+  embed?: string;
+  /** The relationship of `a:videoFile`/`a:audioFile r:link` (none when absent). */
+  link?: string;
+  /** `p14:trim` attributes, in ms. */
+  trim?: { st?: number; end?: number };
+}
+
+/** A video or sound: a `p:pic` poster (`rId`) with its media elements, as PowerPoint 2010+ writes it. */
+export function mediaPic(o: MediaPicSpec): string {
+  const el =
+    o.kind === 'p14' || o.link === undefined
+      ? ''
+      : `<a:${o.kind === 'video' ? 'videoFile' : 'audioFile'} r:link="${o.link}"/>`;
+  const trim = o.trim
+    ? `<p14:trim${o.trim.st !== undefined ? ` st="${o.trim.st}"` : ''}${o.trim.end !== undefined ? ` end="${o.trim.end}"` : ''}/>`
+    : '';
+  const p14 =
+    o.embed === undefined
+      ? ''
+      : `<p:extLst><p:ext uri="{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230}"><p14:media xmlns:p14="${NS_P14}" r:embed="${o.embed}">${trim}</p14:media></p:ext></p:extLst>`;
+  return (
+    `<p:pic><p:nvPicPr><p:cNvPr id="${o.id}" name="${esc(o.name ?? `Media ${o.id}`)}"><a:hlinkClick r:id="" action="ppaction://media"/></p:cNvPr>` +
+    `<p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr>${el}${p14}</p:nvPr></p:nvPicPr>` +
+    `<p:blipFill><a:blip r:embed="${o.rId}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
+    `<p:spPr>${xfrm(o.x, o.y, o.cx, o.cy)}<a:prstGeom prst="${o.geom ?? 'rect'}"><a:avLst/></a:prstGeom></p:spPr></p:pic>`
+  );
+}
+
+/** The relationships of an embedded clip, as PowerPoint writes them: `p14:media` and `a:videoFile`/`a:audioFile`. */
+export function clipRels(
+  kind: 'video' | 'audio',
+  file: string,
+  ids: { embed: string; link: string },
+): RelSpec[] {
+  return [
+    { id: ids.embed, type: MEDIA_REL, target: `../media/${file}` },
+    { id: ids.link, type: kind, target: `../media/${file}` },
+  ];
+}
+
+export interface MediaTimingSpec {
+  /** The picture's `p:cNvPr id`. */
+  spid: number;
+  kind: 'video' | 'audio';
+  /**
+   * auto: an after-previous play effect first in the main sequence; with: a with-previous one; click: an
+   * on-click play effect; trigger: "When clicked on" (an interactive sequence); late: an after-previous play
+   * effect after a click effect; none: no effect starts it.
+   */
+  start?: 'auto' | 'with' | 'click' | 'trigger' | 'late' | 'none';
+  loop?: boolean;
+  rewind?: boolean;
+  vol?: number;
+  mute?: boolean;
+  showWhenStopped?: boolean;
+  numSld?: number;
+  fullScrn?: boolean;
+  narration?: boolean;
+}
+
+/** A slide's `p:timing` for these clips, as PowerPoint writes it (put after `CLRMAP_OVR` in `SlideSpec.after`). */
+export function timingXml(media: MediaTimingSpec[], extra = ''): string {
+  let id = 2;
+  const play = (spid: number, nodeType: string, cmd = 'playFrom(0.0)') =>
+    `<p:par><p:cTn id="${++id}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="${++id}" presetID="1" presetClass="mediacall" presetSubtype="0" fill="hold" nodeType="${nodeType}">` +
+    `<p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:cmd type="call" cmd="${cmd}"><p:cBhvr><p:cTn id="${++id}" dur="1000" fill="hold"/>` +
+    `<p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl></p:cBhvr></p:cmd></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`;
+  const group = (inner: string, auto: boolean) =>
+    `<p:par><p:cTn id="${++id}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/>${auto ? '<p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond>' : ''}</p:stCondLst><p:childTnLst>${inner}</p:childTnLst></p:cTn></p:par>`;
+  const groups: string[] = [];
+  const auto = media.filter((m) => m.start === 'auto' || m.start === 'with');
+  if (auto.length)
+    groups.push(
+      group(auto.map((m) => play(m.spid, m.start === 'with' ? 'withEffect' : 'afterEffect')).join(''), true),
+    );
+  for (const m of media.filter((x) => x.start === 'click'))
+    groups.push(group(play(m.spid, 'clickEffect'), false));
+  const late = media.filter((m) => m.start === 'late');
+  if (late.length)
+    groups.push(
+      group(
+        `<p:par><p:cTn id="${++id}" presetID="10" presetClass="entr" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn></p:par>${late.map((m) => play(m.spid, 'afterEffect')).join('')}`,
+        false,
+      ),
+    );
+  const main = groups.length
+    ? `<p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${groups.join('')}</p:childTnLst></p:cTn>` +
+      '<p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq>'
+    : '';
+  const nodes = media
+    .map((m) => {
+      const node = m.kind === 'video' ? 'video' : 'audio';
+      const attrs = `${m.fullScrn ? ' fullScrn="1"' : ''}${m.narration ? ' isNarration="1"' : ''}`;
+      const media = `${m.vol !== undefined ? ` vol="${m.vol}"` : ''}${m.mute ? ' mute="1"' : ''}${m.showWhenStopped === false ? ' showWhenStopped="0"' : ''}${m.numSld !== undefined ? ` numSld="${m.numSld}"` : ''}`;
+      return (
+        `<p:${node}${attrs}><p:cMediaNode${media}><p:cTn id="${++id}"${m.loop ? ' repeatCount="indefinite"' : ''} fill="${m.rewind ? 'remove' : 'hold'}" display="0">` +
+        `<p:stCondLst><p:cond delay="indefinite"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${m.spid}"/></p:tgtEl></p:cMediaNode></p:${node}>`
+      );
+    })
+    .join('');
+  const triggers = media
+    .filter((m) => m.start === 'trigger')
+    .map(
+      (m) =>
+        `<p:seq concurrent="1" nextAc="seek"><p:cTn id="${++id}" restart="whenNotActive" fill="hold" evtFilter="cancelBubble" nodeType="interactiveSeq">` +
+        `<p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="${m.spid}"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${play(m.spid, 'clickEffect', 'togglePause')}</p:childTnLst></p:cTn>` +
+        `<p:nextCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="${m.spid}"/></p:tgtEl></p:cond></p:nextCondLst></p:seq>`,
+    )
+    .join('');
+  return `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>${main}${nodes}${triggers}${extra}</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`;
+}

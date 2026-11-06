@@ -101,8 +101,15 @@ export class JobQueue {
     return r?.attempts ?? 0;
   }
 
-  enqueue(kind: string, payload: unknown, cls: JobClass = 'light'): Job {
-    const now = nowIso();
+  /**
+   * Queue a job. With `after`, it is created at least a millisecond after that job: jobs of a class start
+   * in creation order, and ids (random within a millisecond) would otherwise order two jobs queued in the
+   * same millisecond either way (the PowerPoint import queues its clips after its LibreOffice follow-up).
+   */
+  enqueue(kind: string, payload: unknown, cls: JobClass = 'light', opts: { after?: Job } = {}): Job {
+    let now = nowIso();
+    const after = opts.after ? Date.parse(opts.after.createdAt) + 1 : Number.NaN;
+    if (Number.isFinite(after) && after > Date.parse(now)) now = new Date(after).toISOString();
     const id = newId();
     this.db
       .prepare(
@@ -113,6 +120,25 @@ export class JobQueue {
     this.notify(job);
     queueMicrotask(() => this.pump());
     return job;
+  }
+
+  /**
+   * Whether a job of `kind` whose payload `match` accepts is queued or running (at most `limit` of them are
+   * looked at, newest first).
+   */
+  active(kind: string, match: (payload: unknown) => boolean, limit = 1_000): boolean {
+    const rows = this.db
+      .prepare(
+        `SELECT payload FROM jobs WHERE kind = ? AND state IN ('queued','running') ORDER BY created_at DESC LIMIT ?`,
+      )
+      .all(kind, limit) as { payload: string }[];
+    return rows.some((r) => {
+      try {
+        return match(JSON.parse(r.payload));
+      } catch {
+        return false;
+      }
+    });
   }
 
   get(id: string): Job {

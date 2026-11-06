@@ -4,6 +4,7 @@ import { newId } from '@ordo/domain';
 import type { Logger } from 'pino';
 import type { HubConfig } from '../config.ts';
 import { errorMessage, HttpError } from '../errors.ts';
+import type { Job } from '@ordo/protocol';
 import type { JobCtx, JobQueue } from '../jobs.ts';
 import type { Library } from '../library.ts';
 import { extensionAgrees, extOf, hashFile, readHead, type Sniffed, sniff, type Store } from '../store.ts';
@@ -69,6 +70,12 @@ export type IngestOpts = {
    * and recorded as Media.trim. Normalised by normTrim; images ignore it.
    */
   trim?: MediaTrim;
+  /**
+   * false: the item is stored ('uploaded') but its processing job is not queued; the caller queues it with
+   * `queue` (the PowerPoint import queues its clips after its LibreOffice follow-up, design/27 §5). Default
+   * true.
+   */
+  queue?: boolean;
 };
 
 /**
@@ -184,9 +191,22 @@ export class MediaService {
       ...(trim ? { trim } : {}),
     });
     this.lib.emit([{ kind: 'media', id: media.id, rev: media.rev, entity: media }]);
-    const heavy = kind === 'video' || s.ext === 'gif';
-    this.jobs.enqueue('media', { mediaId: media.id, name: media.name }, heavy ? 'heavy' : 'light');
+    if (opts.queue !== false) this.queue(media.id);
     return media;
+  }
+
+  /**
+   * Queue the processing job of an item stored without one (`IngestOpts.queue` false), placed after
+   * `after` in its class (`JobQueue.enqueue`). Nothing when the item is gone, already processed or failed,
+   * or its job is already queued or running. Synchronous, so it can run inside a library transaction.
+   */
+  queue(mediaId: string, opts: { after?: Job } = {}): Job | undefined {
+    const m = this.lib.media.get(mediaId);
+    if (m?.state !== 'uploaded') return undefined;
+    const mine = (p: unknown) => (p as { mediaId?: unknown } | null)?.mediaId === mediaId;
+    if (this.jobs.active('media', mine)) return undefined;
+    const heavy = m.kind === 'video' || m.original.mime === 'image/gif';
+    return this.jobs.enqueue('media', { mediaId, name: m.name }, heavy ? 'heavy' : 'light', opts);
   }
 
   async ingestBytes(buf: Uint8Array, name: string, opts: IngestOpts = {}): Promise<Media> {

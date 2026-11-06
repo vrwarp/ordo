@@ -17,6 +17,7 @@ import {
   sniffPicture,
   spilledPictureSize,
   spillPart,
+  still,
 } from './native.ts';
 import { dataUri, testPicture } from './png.ts';
 import { beatsBlack, type DeckScore, featureRows, nativeStats } from './report.ts';
@@ -69,6 +70,40 @@ describe('native column helpers', () => {
     expect(spillPart('ppt/slides/slide1.xml', 9 * 1024 * 1024)).toBe(true);
     expect(spillPart('ppt/media/image1.png', 10)).toBe(true);
     expect(spillPart('ppt/embeddings/oleObject1.bin', 10)).toBe(true);
+  });
+
+  it("draws a slide's motion background as its poster: a still, as LibreOffice draws it", () => {
+    const poster = {
+      id: 'poster',
+      type: 'image' as const,
+      box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+      mediaId: 'pptxmedia:1',
+      fit: 'stretch' as const,
+      opacity: 1,
+      radius: 0,
+    };
+    const emitted = {
+      index: 0,
+      hidden: false,
+      slide: slide([], { backgroundMediaId: 'pptxmedia:clip1' }),
+      classification: { tier: 'T1' as const, class: 'native' as const, reasons: [] },
+      digest: '',
+      notes: [],
+      ms: 0,
+      clips: [
+        {
+          role: 'background' as const,
+          kind: 'video' as const,
+          id: 'pptxmedia:clip1',
+          part: 'ppt/media/a.mp4',
+          poster,
+        },
+      ],
+    };
+    const s = still(emitted);
+    expect(s.backgroundMediaId).toBeUndefined();
+    expect(s.objects).toEqual([poster]);
+    expect(still({ ...emitted, clips: [] })).toBe(emitted.slide);
   });
 
   it('draws only the picture types Chromium decodes', () => {

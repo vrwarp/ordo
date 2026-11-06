@@ -327,8 +327,18 @@ The text extraction for "make editable" runs whichever renderer draws the pictur
 ### Embedded media
 
 A PowerPoint slide can hold video (`p:pic` with `a:videoFile` and `p14:media`, embedded or linked), audio
-(`a:audioFile`, sounds on animations and transitions) and linked online video. Neither renderer imports
-them: the slide picture shows the video's poster or the sound's icon, and the clip is dropped. Test decks
+(`a:audioFile`, sounds on animations and transitions) and linked online video. Neither picture renderer
+imports them: the slide picture shows the video's poster or the sound's icon, and the clip is dropped.
+
+The native import does (design/27 §4 "Media", §8; `apps/hub/src/pptx/clips.ts`): the first video of a slide
+plays in its poster's box (`ImageObject.play`), the first sound is the slide's sound (`Slide.audio`, across
+`numSld` slides), and a looping, muted video over a whole 16:9 slide becomes its motion background. Start
+(automatic or on click), loop, 'Rewind after playing', volume, mute, 'Hide while not playing' and full screen
+come from the slide's `p:timing`; `p14:trim` is baked into the clip. Clips are sniffed (a sound written as a
+video is a sound), stored once per file and trim (tag `pptx`, '<deck> – slide N video'), and transcoded by
+their `media` jobs after the import's LibreOffice follow-up. Linked clips are never fetched, and a clip that
+cannot be imported stays its poster with a `[warn]` line in the import log. Transition sounds are imported
+only with 'Import transition sounds'; animation sounds never. Test decks
 for this: the `media` deck of the fidelity corpus, and LibreOffice's own test documents (`sd/qa/unit/data/
 pptx`: `video-loop-mute`, `tdf106867`, `bnc591147`, `narration`, `tdf44223`, `tdf148478_transitionMusic`,
 `animation-sound-*`), which are real-world decks attached to bug reports.

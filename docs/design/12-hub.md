@@ -256,7 +256,11 @@ of at most 150 slides, 2 minutes each and 15 minutes of pool time per import), s
 slides use, and saves version 1 of the presentation. In the same synchronous step it queues the heavy
 `pptx-lo` follow-up for the slides that wait for LibreOffice, so that job never starts before version 1
 exists and is queued before any clip job of the deck; version 1, that job and the import's resume point are
-written in one transaction. When the CPU pool cannot start, the import fails cleanly: a deck is never parsed
+written in one transaction. The deck's clips are stored before the save without their `media` jobs
+(`IngestOpts.queue: false`), and those jobs are queued in the same transaction right after `pptx-lo`, each
+created at least a millisecond after the job before it (`JobQueue.enqueue` `after`): jobs of a class start in
+creation order, and ids alone would order two jobs of one millisecond at random. The import never waits for
+a clip's transcode; an import that fails after storing clips queues their jobs anyway. When the CPU pool cannot start, the import fails cleanly: a deck is never parsed
 on the event loop, and never handed to LibreOffice as uploaded. The follow-up retries a LibreOffice run that
 fails (twice, deferred with backoff), then marks the slides it could not draw (`Slide.pptx.failed`, named by
 goLive). A save from the editor (or a restored revision) that brings back slides still `pending` while no

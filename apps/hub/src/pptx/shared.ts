@@ -94,6 +94,11 @@ export type PptxNativeProgress = {
   loJobId?: string;
   /** The `document` job the deck went to when the CPU pool could not start (`PptxNativeFallback`). */
   fallbackJobId?: string;
+  /**
+   * Clips already ingested (their media jobs not yet queued until version 1 is saved): [`clipKey`, media
+   * id] pairs (`clips.ts`). A re-run reuses them instead of storing a clip twice.
+   */
+  clips?: [string, string][];
 };
 
 export type PptxNativePayload = {
@@ -258,6 +263,11 @@ export type SceneTaskInput = {
    * reads (`SceneTaskOutput.scan`): referenced pictures, metafiles, notes, the show's loop flag.
    */
   scan?: boolean;
+  /**
+   * Whether each spilled clip is a video or a sound, sniffed from its bytes: [part, kind] pairs
+   * (`ParseOptions.mediaKind`; pptxgenjs writes sounds under `a:videoFile`).
+   */
+  mediaKinds?: [string, 'video' | 'audio'][];
 };
 export type SceneTaskOutput = {
   result: ConvertResult;
@@ -285,6 +295,13 @@ export type SceneScan = {
   notes: [number, string][];
   /** `p:showPr loop`: the show loops until Esc. */
   loop: boolean;
+  /**
+   * Clip parts (video, sound and PowerPoint 2010 media relationships of the listed slides, those of
+   * `p14:media` and the video elements first), at most `PPTX_LIMITS.clips`: what the job spills and sniffs.
+   */
+  clips?: string[];
+  /** Clip parts past `PPTX_LIMITS.clips` (logged; their posters stay). */
+  clipsOver?: number;
 };
 
 /** A slide's transition and timing (`transition.ts`). */
