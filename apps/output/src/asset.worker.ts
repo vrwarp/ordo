@@ -4,25 +4,28 @@ import {
   type AssetJob,
   type AssetToRender,
   BitmapCache,
-  CLAMP,
   DEFAULT_BITMAP_BUDGET,
   FALLBACK_FAMILIES,
   type FontLoad,
   FontResolver,
   type FromAsset,
+  type ImageLookup,
   SRC_BITMAP,
   SRC_SCENE,
+  type SlidePicture,
   type ToAsset,
-  downscaleFor,
   installFontEnv,
   jobFontFamilies,
+  preparePicture,
   rasterImage,
   rasterLowerThird,
   rasterProps,
   rasterScene,
   rasterSlide,
+  slidePictures,
 } from '@ordo/renderer';
 import { LOGICAL_WIDTH } from '@ordo/domain';
+import { type PictureDecoder, preloadPictures, sourcePicture } from './pictures.ts';
 
 /**
  * Asset worker: OPFS reads, image decoding, font loading and text rasterization at output resolution.
@@ -52,8 +55,10 @@ let canvas: OffscreenCanvas | null = null;
 let ctx: OffscreenCanvasRenderingContext2D | null = null;
 const store = new OpfsStore();
 
-// Decoded images by hash: LRU bounded by bytes (256 MiB) rather than count, so a photo-heavy service
-// cannot pin a gigabyte of bitmaps (review item 26). Each image is reduced to the output size on decode.
+// Decoded images by hash and target size (`pictureKey`): LRU bounded by bytes (256 MiB) rather than count,
+// so a photo-heavy service cannot pin a gigabyte of bitmaps (review item 26). A picture a slide draws
+// unrotated is kept at its displayed device size (design/27 §7.1); any other is reduced to the output size.
+// What a cue's draw holds is pinned from its preload until the draw is done (pictures.ts).
 const images = new BitmapCache<ImageBitmap>(DEFAULT_BITMAP_BUDGET, 64);
 
 // Fonts (design/27 §10): every face under a fresh internal family name, so a face that loads late (a retry,
@@ -121,34 +126,28 @@ async function readFile(hash: string): Promise<{ blob: Blob; source: 'opfs' | 'n
   }
 }
 
-async function image(hash: string): Promise<ImageBitmap> {
-  const hit = images.get(hash);
-  if (hit) return hit;
-  const { blob, source } = await readFile(hash);
-  let bmp: ImageBitmap;
-  try {
-    bmp = await createImageBitmap(blob);
-  } catch (err) {
-    throw new DecodeError(
-      `image ${hash.slice(0, 8)} could not be decoded: ${(err as Error).message}`,
-      hash,
-      source,
-    );
-  }
-  // Large images are reduced so that they still cover the output without upscaling (1x, not 2x).
-  const down = downscaleFor(bmp.width, bmp.height, width, height);
-  if (down) {
-    const scaled = await createImageBitmap(bmp, {
-      resizeWidth: down.width,
-      resizeHeight: down.height,
-      resizeQuality: 'high',
-    });
-    bmp.close();
-    bmp = scaled;
-  }
-  images.set(hash, bmp);
-  return bmp;
-}
+/**
+ * The worker's picture decoder (pictures.ts): a file read from OPFS or the hub and decoded at its own size
+ * (colour profile kept); a target resampled once into an sRGB bitmap of its device size, upscaling
+ * included, which the slide copies 1:1 (design/27 §7.1: resampling and colour conversion on every draw
+ * cost 4-50 ms per full-slide picture); a source reduced with high quality.
+ */
+const decoder: PictureDecoder<ImageBitmap> = {
+  async decode(hash) {
+    const { blob, source } = await readFile(hash);
+    try {
+      return await createImageBitmap(blob);
+    } catch (err) {
+      throw new DecodeError(
+        `image ${hash.slice(0, 8)} could not be decoded: ${(err as Error).message}`,
+        hash,
+        source,
+      );
+    }
+  },
+  prepare: (src, t) => preparePicture(src, t),
+  reduce: (src, w, h) => createImageBitmap(src, { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' }),
+};
 
 async function loadFonts(list: FontLoad[]): Promise<void> {
   const r = await fonts.sync(list);
@@ -170,37 +169,21 @@ function surface(): OffscreenCanvasRenderingContext2D {
 }
 
 /**
- * Decode the images one cue draws, within the cue's bitmap budget (design/25 clamps): at most
- * `maxImagesPerSlide` images and `maxCueBitmapBytes` of decoded pixels; the rest are skipped.
+ * Decode and prepare the images one cue draws (pictures.ts): one decode per file, within the cue's bitmap
+ * budget (design/25 clamps), every bitmap the draw holds pinned until `release`. `uses` are the pictures
+ * the draw asks for (`slidePictures`); without them every image is decoded as its source.
  */
 async function preload(
   map: Record<string, string>,
-): Promise<{ lookup: (id: string) => ImageBitmap | undefined; skipped: number; missing: string[] }> {
-  const out = new Map<string, ImageBitmap>();
-  let bytes = 0;
-  let skipped = 0;
+  uses?: readonly SlidePicture[],
+): Promise<{ lookup: ImageLookup; skipped: number; missing: string[]; release: () => void }> {
+  const pre = await preloadPictures(images, decoder, map, uses, { w: width, h: height });
+  // Drawn without the image. One whose file is not there yet is reported so the link re-draws the slide
+  // once the file arrives; a corrupt one is not (it would be missing again every time).
   const missing: string[] = [];
-  for (const [mediaId, hash] of Object.entries(map)) {
-    if (out.size >= CLAMP.maxImagesPerSlide) {
-      skipped++;
-      continue;
-    }
-    try {
-      const bmp = await image(hash);
-      const b = bmp.width * bmp.height * 4;
-      if (bytes + b > CLAMP.maxCueBitmapBytes) {
-        skipped++;
-        continue;
-      }
-      bytes += b;
-      out.set(mediaId, bmp);
-    } catch (err) {
-      // Drawn without the image. One whose file is not there yet is reported so the link re-draws the
-      // slide once the file arrives; a corrupt one is not (it would be missing again every time).
-      if (err instanceof UnavailableError && !missing.includes(hash)) missing.push(hash);
-    }
-  }
-  return { lookup: (id) => out.get(id), skipped, missing };
+  for (const f of pre.failed)
+    if (f.error instanceof UnavailableError && !missing.includes(f.hash)) missing.push(f.hash);
+  return { lookup: pre.lookup, skipped: pre.skipped, missing, release: pre.release };
 }
 
 /** Missing families a 'done' message reports: as many as the link keeps (FromAsset, protocol health). */
@@ -233,7 +216,7 @@ function sceneParts(
   job: Extract<AssetJob, { kind: 'slide' }>,
   c: OffscreenCanvasRenderingContext2D,
   scale: number,
-  lookup: (id: string) => ImageBitmap | undefined,
+  lookup: ImageLookup,
 ): (SceneParts & { base: ImageBitmap }) | undefined {
   const v = job.video;
   if (!v) return undefined;
@@ -250,18 +233,22 @@ async function run(job: AssetJob): Promise<void> {
   let scene: (SceneParts & { base: ImageBitmap }) | undefined;
   try {
     if (job.kind === 'slide') {
-      const pre = await preload(job.images);
+      const pre = await preload(job.images, slidePictures(job.slide, { scale, look: job.look }));
       skipped = pre.skipped;
       missing = pre.missing;
-      const c = surface();
-      scene = sceneParts(job, c, scale, pre.lookup);
-      if (!scene)
-        rasterSlide(c, job.slide, job.look, scale, pre.lookup, {
-          nextSlide: job.nextSlide,
-          isSong: job.isSong,
-        });
+      try {
+        const c = surface();
+        scene = sceneParts(job, c, scale, pre.lookup);
+        if (!scene)
+          rasterSlide(c, job.slide, job.look, scale, pre.lookup, {
+            nextSlide: job.nextSlide,
+            isSong: job.isSong,
+          });
+      } finally {
+        pre.release();
+      }
     } else if (job.kind === 'image') {
-      const img = await image(job.hash);
+      const img = await sourcePicture(images, decoder, job.hash, { w: width, h: height });
       const c = surface();
       rasterImage(c, img, job.fit, scale);
     } else if (job.kind === 'lowerThird') {
@@ -269,8 +256,12 @@ async function run(job: AssetJob): Promise<void> {
       rasterLowerThird(c, job.text, job.look, scale);
     } else {
       const pre = await preload(job.images);
-      const c = surface();
-      rasterProps(c, job.model, scale, pre.lookup, job.look.clearColor);
+      try {
+        const c = surface();
+        rasterProps(c, job.model, scale, pre.lookup, job.look.clearColor);
+      } finally {
+        pre.release();
+      }
     }
     const bitmap = scene ? scene.base : take();
     const cueIndex = job.kind === 'slide' ? job.cueIndex : job.kind === 'image' ? job.cueIndex : undefined;

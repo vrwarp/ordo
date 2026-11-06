@@ -98,18 +98,46 @@ const layouts = new WeakMap<
 >();
 
 /**
+ * Whether the stored autofit scale of `o` (`style.fitScale`, PowerPoint's) holds in `env` (design/27 §6
+ * step 10): PowerPoint computed it with the box family's own widths, so it holds only while that family is
+ * drawn with its own face or a metric-compatible one (`FontEnv.metricMatch`; an environment without it
+ * keeps the scale). True when there is no stored scale.
+ */
+export function storedFitHolds(o: TextObject, env: FontEnv): boolean {
+  const s = o.style;
+  if (s.autofit !== 'shrink' || !s.fitScale || !env.metricMatch) return true;
+  return env.metricMatch(s.fontFamily, s.fallbackFonts ?? []);
+}
+
+const refits = new WeakMap<TextObject, TextObject>();
+
+/** `o` without its stored autofit scale, memoised by identity: the engine fits it again from full size. */
+function withoutFitScale(o: TextObject): TextObject {
+  let c = refits.get(o);
+  if (!c) {
+    const { fitScale: _, ...style } = o.style;
+    c = { ...o, style };
+    refits.set(o, c);
+  }
+  return c;
+}
+
+/**
  * Lay out a clamped text object (`clampObject` output) in logical px. Pure: the same object, measurer,
- * font generation and options give the same layout, memoised by object identity.
+ * font generation and options give the same layout, memoised by object identity. A stored autofit scale
+ * that does not hold for the faces drawing the box (`storedFitHolds`) is ignored: the box is fitted again
+ * from full size, as LibreOffice fits every box.
  */
 export function layoutRich(m: Measurer, o: TextObject, env: FontEnv, opts?: RichLayoutOptions): RichLayout {
   const min = opts?.minFontScale;
   const hit = layouts.get(o);
   if (hit && hit.m === m && hit.env === env && hit.generation === env.generation && hit.min === min)
     return hit.layout;
-  const it = itemize(o);
+  const src = storedFitHolds(o, env) ? o : withoutFitScale(o);
+  const it = itemize(src);
   const prepared = prepare(it);
-  const bullets = paraBullets(o, it);
-  const layout = layoutBox(m, o, prepared, bullets, env, min);
+  const bullets = paraBullets(src, it);
+  const layout = layoutBox(m, src, prepared, bullets, env, min);
   layouts.set(o, { m, env, generation: env.generation, min, layout });
   return layout;
 }

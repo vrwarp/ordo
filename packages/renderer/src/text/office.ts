@@ -15,10 +15,18 @@ import type { ParaStyle } from './types.ts';
  * - exact spacing P is P·k high and adds or removes space above the line;
  * - unset spacing and an explicit 100 % are single spacing, which k leaves alone (measured: a shrunk box
  *   draws them alike).
- * Space before and after (k-scaled), the main size F and raised runs are applied by lines.ts.
+ * PowerPoint's stored scale (`fitScale` while it holds, `FitScale.stored`) is drawn as PowerPoint draws it
+ * instead: its spacing is 1 − lnSpcReduction, and OOXML subtracts the reduction from every paragraph's
+ * proportional spacing, single spacing included (`reduce`: 100 % with a 20 % reduction is 80 %, 90 % is
+ * 70 %, not LibreOffice's 72 %); exact spacing and space before and after are scaled by k as above.
+ * Space before and after (k-scaled), the main size F, raised runs and the single-spaced line of a trailing
+ * a:br are applied by lines.ts.
  *
  * Autofit (`autofit`): ordo keeps the stored `fitScale` while the text fits at it, so an edit never makes
- * text jump in size (§11). When it does not fit, LibreOffice's search (`searchFit`,
+ * text jump in size (§11). The stored scale is PowerPoint's, computed with the box family's own widths: it
+ * reaches `autofit` only while the box is drawn with that face or a metric-compatible one (rich.ts
+ * `storedFitHolds`); a box drawn with another face (Aptos with Inter) comes without it and is fitted from
+ * full size, as LibreOffice fits every box. When it does not fit, LibreOffice's search (`searchFit`,
  * SdrTextObj::autoFitTextForCompatibility) runs from full size: ten bisection steps on the font %,
  * quantised to tenths of the 18 pt object size, moved by whether the text fits at full spacing, trying
  * 100, 90 and 80 % spacing at each step and keeping the tightest fit, with 0.5 mm of slack. Run sizes are
@@ -48,8 +56,11 @@ const FIT_OBJECT_PT = 18;
 /** The smallest font scale the schema stores (`fitScale.font`). */
 export const MIN_FONT_SCALE = 0.01;
 
-/** Shrink-to-fit scales. */
-export type FitScale = { font: number; spacing: number };
+/**
+ * Shrink-to-fit scales. `stored`: PowerPoint's stored scale (`TextStyle.fitScale`), whose spacing is drawn
+ * the PowerPoint way (`officeLine`'s `reduce`); without it, `spacing` is LibreOffice's spacing scale k.
+ */
+export type FitScale = { font: number; spacing: number; stored?: boolean };
 
 /** No shrinking. */
 export const NO_FIT: FitScale = { font: 1, spacing: 1 };
@@ -67,24 +78,35 @@ export function lineProportion(para: ParaStyle, lineHeight: number): number {
 /**
  * Height of one line and where its baseline sits below the line's top, in the office model. `F` is the
  * line's main size after autofit, `k` the autofit spacing scale, `lineHeight` the box's (`TextStyle`), used
- * when the paragraph sets no spacing of its own.
+ * when the paragraph sets no spacing of its own. `reduce` (> 0 only at PowerPoint's stored scale): the
+ * lnSpcReduction subtracted from the proportional spacing, single spacing included, in place of k.
  */
 export function officeLine(
   F: number,
   para: ParaStyle,
   k: number,
   lineHeight = OFFICE_SINGLE,
+  reduce = 0,
 ): { height: number; ascent: number } {
   const natural = OFFICE_SINGLE * F;
   if (para.lineSpacingPx !== null) {
     const h = para.lineSpacingPx * k;
     return { height: h, ascent: F + (h - natural) };
   }
-  // Unset (and 100 %) spacing is single spacing, which the spacing scale leaves alone.
-  const p = lineProportion(para, lineHeight);
-  if (p === 1) return { height: natural, ascent: F };
-  const h = natural * p * k;
+  let p = lineProportion(para, lineHeight);
+  let scale = k;
+  if (reduce > 0) {
+    // PowerPoint's stored lnSpcReduction (ECMA-376 normAutofit): subtracted, single spacing included.
+    p = Math.max(0, p - reduce);
+    scale = 1;
+  } else if (p === 1) return { height: natural, ascent: F }; // single spacing: k leaves it alone
+  const h = natural * p * scale;
   return { height: h, ascent: p < 1 ? Math.min(F, 0.8 * h) : F + (h - natural) };
+}
+
+/** The lnSpcReduction `officeLine` subtracts at `fit`: PowerPoint's, at its stored scale only. */
+export function spacingReduction(fit: FitScale): number {
+  return fit.stored ? Math.max(0, 1 - fit.spacing) : 0;
 }
 
 /**
@@ -142,10 +164,16 @@ export function searchFit(
  * at `ref`. `spacings` are the spacing scales the search tries (the 'ordo' model has no spacing scale: 100
  * only).
  * - Not 'shrink': no scaling.
- * - The stored `fitScale` (else full size) while the text fits at it.
+ * - The stored `fitScale` (else full size) while the text fits at it, its spacing drawn the PowerPoint way
+ *   (`FitScale.stored`). The caller leaves out a stored scale that does not hold for the faces drawing the
+ *   box (rich.ts `storedFitHolds`).
  * - Else LibreOffice's search from full size, never larger than the stored font scale: a larger result is
  *   brought down to the stored scale with the widest spacing that fits there.
  * - Never below `minFont` (look bands pass drawText's 0.5, so they shrink alike whatever the script).
+ * Each scale the search asks for is laid out once (the quantised font scale repeats in its last steps), and
+ * with `spacingFree` (no proportional or exact spacing, no space between paragraphs: LibreOffice's k changes
+ * nothing) every spacing is laid out as 100 %, so a single-spaced body costs at most 11 layouts, not 31.
+ * Both give exactly the values the literal search would.
  */
 export function autofit(
   style: TextStyle,
@@ -154,15 +182,25 @@ export function autofit(
   linearHeight: (fit: FitScale, ref: FitScale) => number,
   spacings: readonly number[] = FIT_SPACINGS,
   minFont = MIN_FONT_SCALE,
+  spacingFree = false,
 ): FitScale {
   if (style.autofit !== 'shrink') return NO_FIT;
-  const stored = style.fitScale
-    ? { font: style.fitScale.font, spacing: style.fitScale.spacing }
+  const stored: FitScale = style.fitScale
+    ? { font: style.fitScale.font, spacing: style.fitScale.spacing, stored: true }
     : { font: 1, spacing: 1 };
   const atStored = fitFactor(exactHeight(stored), innerH);
   if (atStored >= 1) return stored;
-  const factorAt = (fontPct: number, spacingPct: number) =>
-    fitFactor(linearHeight({ font: fontPct / 100, spacing: spacingPct / 100 }, stored), innerH);
+  const memo = new Map<string, number>();
+  const factorAt = (fontPct: number, spacingPct: number) => {
+    const s = spacingFree ? 100 : spacingPct;
+    const key = `${fontPct} ${s}`;
+    let f = memo.get(key);
+    if (f === undefined) {
+      f = fitFactor(linearHeight({ font: fontPct / 100, spacing: s / 100 }, stored), innerH);
+      memo.set(key, f);
+    }
+    return f;
+  };
   const first = stored.font === 1 && stored.spacing === 1 ? atStored : factorAt(100, 100);
   let found = searchFit(factorAt, first, spacings);
   if (found.font > stored.font) {

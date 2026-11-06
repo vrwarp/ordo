@@ -389,6 +389,7 @@ export const SlideSound = z.object({                     // M5: one sound per sl
   - the art as an ordinary image.
 
   Hub and clients ship together, and the socket version check reloads clients. After a rollback, though, the next save of an imported presentation loses its formatting for good. The release notes say so. The schema ships one release before the importer starts writing the new fields.
+  - Text is the exception to "closest": rich text needs the unscaled `fontSizePx` and the shape's own box, so the legacy values beside it are not M1's legacy emission (`EmitOptions.richText: false`). An older build after a rollback draws a PowerPoint-shrunk box at its unscaled size (`fitScale` is stripped) and so overflows it, ignores `lnSpcReduction` in `lineHeight`, wraps `wrap="none"` lines (the box is not widened), and places text at the smallest inset without folding the other insets or paragraph margins into the box. Accepted: the rollback window is one release, and the release notes say that imported text may overflow or wrap there until the presentation is imported again.
 - **Each field is wired everywhere it is read, in the same change:**
   - the schema;
   - `sanitizePresentation` (runs and paras are cut together with the text: a run whose start is at or past the cut is dropped, its end is clamped; extra paras are dropped);
@@ -403,7 +404,8 @@ export const SlideSound = z.object({                     // M5: one sound per sl
   - runs that are unsorted, overlapping or out of range are dropped;
   - paras are capped at 1,000 (render) against 5,000 (schema);
   - path strings are re-tokenised (only `MLCQZ` plus numbers) before `new Path2D`;
-  - every effective font size (`fontSizePx × sizeScale`, after autofit) is clamped to 4-1,000 px, the same bound as `IMPORT_LIMITS` (the parser's 1-4,000 pt clamp applies only before conversion).
+  - a box's font size (`fontSizePx`) is clamped to 4-1,000 px, and every run's effective size (`fontSizePx × sizeScale`, after autofit) to 2-1,000 px, the same bounds as `IMPORT_LIMITS` (`fontSizeMin`, `runFontSizeMin`; the parser's 1-4,000 pt clamp applies only before conversion). Raised and lowered runs and bullets are still drawn at no less than 4 px (§6).
+    - Why 2 px for runs (`CLAMP.minRunFontPx`): it is 1 pt, PowerPoint's smallest size, on both standard deck sizes, and the office model's rounding never goes below it either. Dense verse decks separate list items with 1 pt paragraphs (`<a:rPr sz="100"/>` on a space), which PowerPoint and LibreOffice draw 2.4 px tall; at the 4 px floor each was 4.8 px and every line below it moved 2.4 px further per spacer (a list pitch of 21.4 px against LibreOffice's 19.1). With the run floor at 2 px (measured against LibreOffice's pictures, `--lo-compat`), four slides of worship shards 0 and 2 rose, from 0.342, 0.344, 0.292 and 0.544 to 0.764, 0.464, 0.388 and 0.563 (shard means 0.795 → 0.801 and 0.832 → 0.834); no other slide moved by more than 0.001 and none fell, and the sermon decks did not change. Box sizes keep 4 px, so legacy text, bands and an older build draw as before.
 - **`PptxRenderer` is not widened.** "native" exists only as a route form field and in the job payload. Native imports are recorded in `source.native`, so an older build never resets presentation settings through quarantine.
 
 ### 3.3 Runtime types (TypeScript only, all optional, so old snapshots and journals stay valid)
@@ -441,7 +443,7 @@ Whole presentations travel in goLive (to every client, into the journal, snapsho
 
 | Unit | Budget | Enforced by |
 |---|---|---|
-| Slide JSON | typical ≤ 8 KB (measured 3.4 KB); hard 64 KB, else picture class | `classify.ts`, logged |
+| Slide JSON | typical ≤ 8 KB (measured 3.4 KB); hard 64 KB, else picture class | `classify.ts`; `emit.ts` stops writing text formatting past it and classes the slide picture; logged |
 | Presentation JSON | ≤ 4 MiB at import. Once the running total passes 3 MiB, the remaining slides use the compact picture class; the import card says so. The editor warns above 4 MiB but saves (PUT allows 32 MiB). | importer, editor |
 | Preview | only the previewed slide's section is sent, with the presentation-level fields (`previewSlice`), so it stays far below 16 MiB | `PreviewControl.tsx` |
 | Resolved playlist | `resolvePlaylist` adds a `degraded` warning above 12 MiB ("too large for an operator takeover"). The operator checks the size before `live.adopt` and refuses locally above 15 MiB instead of tripping the cap. | `goLive.ts`, operator engine |
@@ -496,12 +498,12 @@ As built in M3 (`packages/domain/src/size.ts`):
 **Text bodies** → one `TextObject` per body, `style.lineModel = 'office'`:
 - `style` is the dominant run's values (most characters). Other runs become sparse `runs`.
 - Paragraphs become `paras`: align (incl. justify and distribute), level, marL/indent, spacing (spcPts in 1/100 pt; spcPct as a share of F), line spacing, bullets, rtl. `a:br` becomes `\n` with `soft: true`. `a:tab` becomes a space (logged once per deck; Canvas draws tabs as spaces).
-- Sizes: px = pt × 12700 × s, clamped to 1-4,000 pt in the parser and to 4-1,000 px when stored.
+- Sizes: px = pt × 12700 × s, clamped to 1-4,000 pt in the parser and when stored to 4-1,000 px for the box size and 2-1,000 px for a run (§3.2). A run's `sizeScale` is its real size over the box's, never raised to the box floor: a 1 pt spacer under 7 pt text is 2/14.
 - Text outline: `a:ln w` → `outline.width = w/2`, because ordo strokes 2× under the fill. An outline without a solid fill is not drawn. Hollow text (noFill) becomes alpha 0 plus the outline.
 - Run text shadows and coloured outlines are drawn as PowerPoint draws them.
 - `cap="all"` → `caps` (applied at draw time, so offsets stay valid). Fields keep their stored `a:t` text (logged). Hyperlinks are dropped (logged).
 - Body properties: insets (defaults 7.2/3.6 pt) → `insets`; anchor → `valign`; `wrap="none"` → `wrap:false`.
-- Autofit: `normAutofit` → `autofit:'shrink'` plus `fitScale` from fontScale/lnSpcReduction. `spAutoFit` keeps the stored (already grown) xfrm; the editor warns when later edits overflow it (§11).
+- Autofit: `normAutofit` → `autofit:'shrink'` plus `fitScale` from fontScale/lnSpcReduction of the shape's own `a:bodyPr` (an inherited `normAutofit` keeps the policy, but its scale was fitted to the layout's prompt text, so the box shrinks from full size). `spAutoFit` keeps the stored (already grown) xfrm; the editor warns when later edits overflow it (§11).
 - Text in non-rect presets uses the preset's text rect from the POI table (M6). Before M6, rect/roundRect/ellipse text rects are computed directly; other presets are 'approx'.
 - `vert ≠ horz`, `numCol > 1` and `anchorCtr` are residual until M8.
 
@@ -552,7 +554,7 @@ As built in M3 (`packages/domain/src/size.ts`):
 - **Linked External clips:** `[warn] slide N: linked video (<host>) not imported`, never fetched. Their poster stays as an ImageObject.
 
 **Church mappings**
-- `lyricObjectId` = the body placeholder with the most characters; else the largest text by characters × area, excluding title, footer, date and slide number. The title is used only when it is the only text. On bilingual slides with one box per language, the first box in reading order is the lyric box. The other box gets `role:'translation'`, for a later bilingual band.
+- `lyricObjectId` = the body placeholder with the most characters; else the largest text by characters × area, excluding title, footer, date and slide number. The title is used only when it is the only text. On bilingual slides with one box per language, the first box in reading order is the lyric box. Lengths are compared with Han, Kana and Hangul weighed as 2.5 Latin characters (a Korean line takes a quarter to a half of the characters of its English translation), and languages like with like: different script classes, or two different primary subtags when both boxes carry a language. The other box gets `role:'translation'`, for a later bilingual band.
 - notesSlide body → `Slide.notes`.
 - `p14:sectionLst` → Sections plus a Default arrangement in order.
 - Transitions: fade/dissolve → `Slide.transition` crossfade (`p14:dur`, else 700 ms); none → cut; anything else → crossfade (logged).
@@ -683,7 +685,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
 1. **Itemize.** Paragraphs are the `\n` pieces; `soft` continues the previous paragraph: it takes its style, spacing and direction, overriding only what its own `paras[i]` sets, and has no bullet and no space between them. Style runs are runs ∩ paragraphs. An empty paragraph's end mark is the run covering its `\n`; the last paragraph, which has none, takes the run covering the `\n` before it.
 2. **Bidi.** UAX#9 per paragraph (bidi-js), run only when strong RTL characters exist or a direction is set. The base direction comes from `paras[i].rtl`, else `style.direction`, else `auto` (first strong character of the whole soft-break chain, which is one PowerPoint paragraph). bidi-js classifies UTF-16 units, so astral characters are passed as two BMP characters of their class.
 3. **Breaks.**
-   - UAX#14 opportunities over the logical text. U+00A0, U+202F and U+2060 (also U+2007, U+2011 and U+FEFF) never break on either side, even after a space, which fixes the verified 'Dieu !' split.
+   - UAX#14 opportunities over the logical text. U+00A0, U+202F and U+2060 (also U+2007, U+2011 and U+FEFF) never break on either side, which fixes the verified 'Dieu !' split. After a breaking space a line may still end before one (UAX#14 LB18), as LibreOffice breaks the ". \u00A0" that text pasted with two spaces after a full stop stores.
    - SA scripts (Thai, Lao, Khmer, Myanmar) break at `Intl.Segmenter` word boundaries; CJK follows the ID/CL/NS classes.
    - Emergency breaks fall only between clusters: `Intl.Segmenter` graphemes joined across a conjunct-forming virama, so Tamil 'க்ஷி' stays whole. Graphemes alone do not keep it whole: UAX#29 GB9c joins conjuncts in six Indic scripts only, not Tamil, Kannada or Sinhala.
    - An emergency break costs what its line holds, never what is left of the word: the cut is found by galloping from the piece's start (1, 2, 4, ... clusters, then a bisection), cluster boundaries are found only that far (one list per piece serves every line and autofit step), and the rest of the word is carried unmeasured until it may fit. A 10,000-letter word in a narrow box is laid out in linear time (`rich.fuzz.test.ts`).
@@ -693,7 +695,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
 5. **Measure.** `measureText` with `ctx.font` set to the resolved internal-name stack (§10), and `ctx.direction`, `ctx.lang` and `ctx.letterSpacing` set per segment. The trailing spacing Canvas adds after the last character is subtracted. Widths go into an LRU cache (20,000 entries, key `font|dir|lang|spacing|text`) for strings of at most 256 UTF-16 units, so a hostile word never leaves megabytes of keys in a worker. `measureText` and `fillText` always see the same string in the same state.
 6. **Lines.** Greedy fill.
    - Available width = box − insets − marL − first-line indent; a hanging bullet sits in the negative indent and its box is at least −indent wide.
-   - Trailing spaces hang.
+   - Trailing spaces hang at a wrap. At the end of a paragraph or before an `a:br` they are text and are aligned with the rest (LibreOffice 24.2 and PowerPoint: centred "Amen " sits half a space left of "Amen").
    - `wrap:false` never wraps; a line grows from its alignment (centre both ways, right leftwards, left rightwards).
    - A right-to-left paragraph mirrors its start: indents and the bullet are on the right and its trailing space hangs on the left. `align` stays visual.
    - Then UAX#9 L2 visual reordering between segments. The browser orders glyphs within a segment.
@@ -701,9 +703,10 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
    - F = the size of the paragraph's main run: its first run without a baseline shift, else its first run, else the end mark, after autofit. A larger unshifted run raises F for its own line (LibreOffice sizes each line by its portions), so lines never overlap.
    - Single spacing: pitch 1.2F, first baseline F below the line top.
    - Proportional p ≠ 1: h = 1.2F·p·k, where k is the autofit spacing scale. The baseline is F + (h − 1.2F) when p > 1, else min(F, 0.8h).
+   - At PowerPoint's stored `fitScale` (step 10) its spacing is drawn the PowerPoint way: OOXML subtracts `lnSpcReduction` (1 − `fitScale.spacing`) from every paragraph's proportional spacing, single spacing included, so p becomes max(0, p − r) and k does not apply to it (100 % less 20 % is 80 %, 90 % is 70 %, where LibreOffice's k gives 72 % and leaves 100 % alone). Exact spacing and spcBef/spcAft are scaled by 1 − r. LibreOffice's k stays for the search and for `--lo-compat`.
    - Exact spacing P: h = P·k.
    - spcBef/spcAft are scaled by k and not drawn before the first paragraph or after the last.
-   - An empty paragraph takes its end-mark size; a trailing `a:br` adds a line.
+   - An empty paragraph takes its end-mark size; a trailing `a:br` (one that ends a paragraph, the last or one before another paragraph) adds a line as tall as the paragraph's end mark, whatever the size of the text before it, at single spacing: proportional spacing (and with it k) does not apply to it, exact spacing does. An empty line between two `a:br` and an empty paragraph keep the paragraph's spacing. Measured in LibreOffice 24.2: a 40 pt trailing line is 96 px at 80, 90 and 150 %, 80 px at an exact 40 pt.
    - Superscript and subscript are drawn at 0.58 × size (at least 4 px), shifted by baseline × size, without growing the line.
 8. **Align.**
    - justify spreads extra space over the inter-segment spaces of non-last lines; distribute also justifies the last line;
@@ -711,13 +714,17 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
    - RTL paragraphs start at the right.
 9. **Anchor and insets.**
 10. **Autofit `'shrink'`.**
-    - Use `fitScale` while the text fits at that scale.
-    - Otherwise run LibreOffice's search (`page.ts:355-402`): 10 bisection steps on the font %, quantised `floor(18·mid/100·10)/10/18·100`, spacing tries 100/90/80%, 0.5 mm slack, run size `max(1, round(round(pt)·font%))`. Because the text overflows at the stored scale, the result can only be smaller, so an edit never makes text jump larger.
+    - Use `fitScale` while the text fits at that scale, when the box is drawn with the face PowerPoint fitted it with or a metric-compatible one.
+      - PowerPoint computed the scale with the box family's own widths, so it holds only for those widths: the family's own face, or a metric substitute (Carlito, Caladea, Liberation, Gelasio and the other metric clones of `METRIC_FAMILIES` in `text/fonts.ts`). There PowerPoint's scale is what PowerPoint draws, and ordo keeps it even where LibreOffice, which fits again, draws differently.
+      - The font environment decides (`FontEnv.metricMatch` of the box's `fontFamily` and `fallbackFonts`, §10). A box drawn with another face (Aptos, Corbel, Calibri Light or Gill Sans MT drawn with Inter: §10 "Non-metric families") is laid out without `fitScale` (`storedFitHolds` in `rich.ts`) and fitted from full size, as LibreOffice fits every box.
+      - Why: kept, PowerPoint's 92.5 % font and 90 % spacing for an Aptos body still fits when drawn with the wider Inter (717 of 733 px), but every line breaks elsewhere than in PowerPoint and in LibreOffice, whose search ends at 37 pt and 100 % spacing instead of 41 pt and 90 %. On the sermon decks this lifted the three slides it touches from 0.734, 0.594 and 0.594 to 0.956, 0.899 and 0.899 (ordo's way 0.932 → 0.942). On worship shards 0 and 2 it changed 39 slides, each now drawn as LibreOffice's way draws it but for the other policies: 38 rose and one fell to its LibreOffice-way score; LibreOffice's way did not change anywhere.
+      - The object keeps `fitScale`: uploading the real family brings PowerPoint's scale back (the font generation changes). The converter cannot decide this, because only the drawer knows which faces it has.
+    - Otherwise run LibreOffice's search (`page.ts:355-402`): 10 bisection steps on the font %, quantised `floor(18·mid/100·10)/10/18·100`, spacing tries 100/90/80%, 0.5 mm slack, run size `max(1, round(round(pt)·font%))`. Because the text overflows at the stored scale, the result can only be smaller, so an edit never makes text jump larger. A box whose stored scale does not hold has none, so its size follows the search alone, as in LibreOffice.
     - During the search, widths scale linearly from one measure at the base size. Only the final size is re-measured.
     - Points are 2 logical px (both standard deck sizes). The `'ordo'` model scales run sizes exactly and has no spacing scale.
     - Text edits keep `fitScale`; only 'Re-fit text' clears it (§11).
 11. **Bullets.**
-    - Character bullets use their own font and size. Wingdings/Symbol PUA codes are mapped to Unicode at import (0x6C→●, 0x6E→■, 0xA7→▪, 0xD8→➢, 0xFC→✓, 0x71→❑, 0x76→❖, Symbol 0xB7→•; U+F0xx offset stripped).
+    - Character bullets use their own font and size. Wingdings/Symbol PUA codes are mapped to Unicode at import (0x6C→●, 0x6E→■, 0xA7→▪, 0xD8→➢, 0xFC→✓, 0x71→❑, 0x76→❖, Symbol 0xB7→•; U+F0xx offset stripped). So are the Office themes' Wingdings 2, Wingdings 3 and Webdings bullets (Wingdings 2 0x97→●, 0x96→•, 0x9A→○, 0xA0→▪; Wingdings 3 0x75→▶, 0x7D→▸; Webdings 0x34→▸), from LibreOffice's fontcvt tables where they name a standard character and as the nearest common shape where they map into OpenSymbol's private-use area. An unknown code, a code of another symbol font (Marlett, MT Extra, Monotype Sorts, Zapf Dingbats…) and any other private-use character become '•' in the text's font: no output font draws them.
     - Automatic numbers keep a counter per level, keyed by type:startAt (`annotate.ts:2122-2137`). Labels: arabic, roman, alpha and circled ①-⑳, in period, ParenR, ParenBoth and plain forms; `(17)` for verse numbers. The same counter code serves `readableText`.
     - An empty paragraph draws no bullet and does not advance the counter.
     - A bullet is drawn at `sizePct` × F within 4-1,000 px, in its paragraph's direction and its first run's language, so a Hebrew or Arabic number reads as the band's `readableText` writes it ('.1' for '1.' in a right-to-left paragraph). It takes the first run's shadow, outline and glow (passes 2-4) and its colour, as PowerPoint gives it the first run's character formatting.
@@ -741,7 +748,17 @@ Hidden paragraphs (M8) are laid out but not painted, so revealed lines never mov
 
 - **Unchanged path.** The asset worker draws `slideContent(slide)` with the shared drawers onto its CPU-backed (`willReadFrequently`) OffscreenCanvas at `scale = width/1920`, and transfers one full-frame `SRC_BITMAP`. The compositors do not change.
 - **Rasterized at device resolution:** text, vectors, gradients, effects and pictures (crop via the 9-argument `drawImage`, mask via a clip path, flip via the transform, `adjust` via `ctx.filter`).
-- **Decode target.** A picture is decoded at min(native size, displayed device size ÷ visible crop fraction, 16 MP). The decode cache is keyed by hash and target size. Today a picture is decoded just large enough to cover the output (`bitmap-cache.ts:18-28`), which blurs a tightly cropped photo at 4K. Import-time preparation (§4) already bounds the source.
+- **Decode target.** A picture is prepared at its displayed device size, upscaling included, and converted to sRGB once.
+  - The target (`pictureTarget`, `packages/renderer/src/picture.ts`) is the box's device rectangle widened to whole pixels and cut to the canvas, at most 16 MP. A 128 px tile stretched over the slide is prepared at the slide's size; a photo overflowing the slide on every side at the output's size (8.3 MB at 1080p), not its box's (35.8 MB for a 3920x2280 box). Not min(native, device): enlarging on every draw is the cost this avoids.
+  - The decoder resamples the visible crop once from the decoded file (fit and crop applied) into a CPU-backed sRGB OffscreenCanvas and keeps `transferToImageBitmap()` of it (`preparePicture`). The colour profile of a JPEG that has one is therefore applied once.
+  - The picture keeps its exact sub-pixel position and size inside that bitmap, as the source path draws it. Rounding the box to whole pixels was measured too; LibreOffice's `DrawTransformedBitmapEx` rounds that way, but only after quantising positions to 1/100 mm. Moving pictures by up to half a pixel lowered 141 of the 924 slides of worship shard 0 against LibreOffice, by up to 0.024 SSIM. With the exact position, 24 slides were lower, by at most 0.005.
+  - Smoothing is `imageSmoothingQuality` 'medium' (bilinear, mipmapped when reducing), the closest to LibreOffice's bitmap scaling (bilinear when enlarging, area-averaging when reducing). Over the sermon decks and worship shard 0 it scored higher than 'high' (bicubic when enlarging) on 58 slides and lower on 3, by at most 0.0007; 'low' scored lower in the mean.
+  - `drawImageFit` copies a bitmap prepared for exactly that target 1:1 at the target's origin, with no resampling and no clip. The image lookup receives the target, and `slidePictures` lists what `drawSlide2D` will ask for, so a decoder prepares before the synchronous draw.
+  - A rotated picture, one with round corners and one over 16 MP keep the source path: decoded to cover the output (`downscaleFor`) and drawn through the transform and the clip.
+  - The decode cache is keyed by hash and target (`pictureKey`). A full-slide picture takes 8.3 MB at 1080p and 33 MB at 4K, within the 256 MiB LRU.
+  - The asset worker (`apps/output/src/pictures.ts`) groups a cue's uses by file: a file whose targets are not all cached is decoded once and every missing target is prepared from that decode, which is then closed (a slide showing one photo at 200 sizes decodes it once). What the draw holds is pinned in the LRU from the preload until the draw is done, so no insert or prune of the same cue closes a bitmap the draw is about to use (drawing a closed bitmap throws and loses the slide). A cue prepares at most 32 targets (the LRU holds 64) and checks each against the cue's bitmap budget before preparing it (`w × h × 4`); a target past either is drawn from the source, reduced to cover the output.
+  - Why: Chromium's rasterizer resamples a picture drawn at any other size on every draw, and converts a picture that kept its colour profile on every draw. A full-slide picture cost 4.4-5.2 ms at 1920 and 17-23 ms at 3840 that way (12.8 and 46 ms with a profile), against 0.7 and 2.7 ms for a 1:1 copy. Before, a picture was decoded just large enough to cover the output and redrawn at the box's size on every draw. Harness raster p95 (median of 3 draws, Chromium's software rasterizer): on the 73 sermon slides from 10.5 to 3.4 ms at 1920 and from 44.3 to 12.4 ms at 3840; on the 924 slides of worship shard 0 from 15.6 to 5.2 ms and from 49.9 to 21.2 ms. Mean native SSIM rose slightly on both (0.9438 to 0.9439, 0.7947 to 0.7954).
+  - Import-time preparation (§4) already bounds the source. The thumbnail worker draws from 640 px sources and can follow later.
 - **Art and page pictures** are made at 3840 px density instead of 1920x1080, so they are no longer upscaled on 4K outputs.
 - **Clear.** A first draw that is opaque and covers the frame uses `globalCompositeOperation = 'copy'`, which skips the clear (11.4 ms at 4K, measured).
 
@@ -828,7 +845,7 @@ A scene is several draws, so it is composed at full alpha before it is weighted:
 ### 7.5 Caches and queues
 
 **Asset worker**
-- the decoded-picture LRU (256 MiB, unchanged; keyed by hash and target size);
+- the decoded-picture LRU (256 MiB, unchanged; keyed by hash and target size, `pictureKey`, §7.1);
 - the measure LRU;
 - the layout memo per object identity, box and font generation;
 - an effect sprite cache (large blurred shadows, glows; key fnv(object JSON) × scale, ≤ 64 MiB).
@@ -956,6 +973,8 @@ A scene is several draws, so it is composed at full alpha before it is weighted:
 - `FontLoad.unicodeRange` carries the range to the asset worker.
 
 **Non-metric families.** Century Gothic, Tahoma, Aptos, Gill Sans and Trebuchet are named in the import card: "Upload Century Gothic for exact line breaks". Uploading the real font fixes it automatically, because the family stays first in the stack.
+- Until then, a shrunk box in such a family is drawn with another face's widths, so PowerPoint's stored autofit scale is not used: the box is fitted again from full size, as LibreOffice fits it (§6 step 10). The resolver's `metricMatch(family, fallbacks)` decides: true when the family's own faces have loaded and are not a stand-in (`FontFile.substitute`: another family's face registered under its name, as the fidelity harness registers fontconfig's choice), or when the first loaded `fallbackFonts` entry is a metric clone of the family (`METRIC_FAMILIES`: fontconfig's metric aliases and the bundled substitutes above; Calibri Light has none). Once the real font is uploaded, the stored scale is used again.
+- Rejected: dropping `fitScale` in the converter for the non-metric families. The hub cannot know which faces an output will have, and PowerPoint's scale would be lost even after the real font is uploaded.
 
 **Embedded fonts (M8).** They are EOT, 88% MTX-compressed.
 - Decoded on the pool by a bounded TypeScript MTX/LZCOMP+CTF decoder written from the W3C MTX submission. `eot2ttf` via `tools.run` (timeout, SIGKILL, address-space cap, ≤32 MB in, ≤64 MB out) is the stop-gap.
@@ -1001,7 +1020,7 @@ The extensions, in priority order (M4 unless noted):
    - The textarea stays.
    - `editText(obj, next)` diffs the common prefix and suffix. Text that replaces a selection takes the style of the text it replaces (its first character), so a retyped bold date or raised verse number stays bold or raised. Text typed at a paragraph's start takes the style of that paragraph's first character, or in an empty paragraph its end mark; anywhere else, the style of the character before it. Runs inside a deleted range are trimmed. Paragraph styles are inserted or removed with the `\n` count; a new line copies the style of the paragraph it splits.
    - Soft paragraphs (a:br lines) stay lines of their PowerPoint paragraph: deleting a paragraph's first line leaves its remaining soft lines that paragraph's style (bullet, number, indents, spacing), and a line split off a soft line by Enter takes the paragraph's style without `soft`, so Enter always starts a new paragraph or stanza.
-   - It keeps `fitScale` while the edited text still fits at that scale. A one-character fix therefore never changes the text size; overflowing text shrinks (§6 step 10). 'Re-fit text' in TextStyleEditor clears `fitScale` on request.
+   - It keeps `fitScale` while the edited text still fits at that scale. A one-character fix therefore never changes the text size; overflowing text shrinks (§6 step 10). 'Re-fit text' in TextStyleEditor clears `fitScale` on request. A box drawn with a face other than the one PowerPoint fitted (no metric match, §10) is fitted from full size after every edit, as LibreOffice does, until the family is uploaded.
    - This is what makes a typo fix or a date change safe in the 20-27% of real worship text bodies that mix styles.
 2. **Format a selection.** A bar over the textarea: Bold, Italic, Underline, colour (swatches from the deck's theme colours), Size ±, Superscript (verse numbers), Clear formatting.
    - `formatRange(obj, start, end, patch)` splits and merges runs and normalises them: sorted, non-overlapping, at most 2,000, equal neighbours merged.
@@ -1106,8 +1125,8 @@ The extensions, in priority order (M4 unless noted):
 - Job payload maps are arrays of pairs, with part names ≤ 512 characters; `adj` is an array of pairs.
 
 **Numbers.** Every number is finite and clamped:
-- slide side 1-51,206,400 EMU; logical coordinates ±100,000; box span ±2× the canvas; font 1-4,000 pt in the parser, 4-1,000 px stored;
-- per text object at most 16 distinct run and bullet families and 64 distinct size scales (`FontBudget` in `clamp.ts`, the same in `sanitizePresentation`): later families take the box's, later scales the nearest kept one. Each new family name costs the browser a platform font lookup (about 1 ms in Chromium), so 2,000 runs with 2,000 families would cost seconds per object. Family names lose every control character (a form feed is a CSS newline that voids the whole `ctx.font` assignment);
+- slide side 1-51,206,400 EMU; logical coordinates ±100,000; box span ±2× the canvas; font 1-4,000 pt in the parser, 4-1,000 px stored for a box and 2-1,000 px for a run;
+- per text object at most 16 distinct run and bullet families and 64 distinct size scales (`FontBudget` in `clamp.ts`, the same in `sanitizePresentation`): later families take the box's, later scales the nearest kept one. Each new family name costs the browser a platform font lookup (about 1 ms in Chromium), so 2,000 runs with 2,000 families would cost seconds per object. Family names lose every control character (a form feed is a CSS newline that voids the whole `ctx.font` assignment). A family is keyed by that cleaned name, trimmed and lower-cased, and every name with the key takes the spelling first kept, so names differing in case, surrounding spaces, quotes or control characters neither take more places nor make more font strings;
 - adj ±1e7; ≤ 256 guides per shape; ≤ 4,096 path points per path and 64k per slide; ≤ 16 gradient stops;
 - colour maths clamped to 0..1; NaN and Infinity become 0.
 
@@ -1129,7 +1148,7 @@ The extensions, in priority order (M4 unless noted):
 
 **Saving.** Everything goes through `sanitizePresentation` (which now cuts runs and paras with the text) and the validating `lib.savePresentation`.
 
-**Rendering.** `clamp.ts` re-bounds every new field: runs ≤ 2,000 (sorted, in range, else dropped), paras ≤ 1,000, path strings re-tokenised, stops ≤ 16, effect sizes ≤ `maxEffectPx`, effective font sizes 4-1,000 px. Unknown values fall back to defaults; nothing throws.
+**Rendering.** `clamp.ts` re-bounds every new field: runs ≤ 2,000 (sorted, in range, else dropped), paras ≤ 1,000, path strings re-tokenised, stops ≤ 16, effect sizes ≤ `maxEffectPx`, font sizes 4-1,000 px for boxes and 2-1,000 px for runs. Unknown values fall back to defaults; nothing throws.
 
 ## 13. Performance budgets
 
@@ -1172,10 +1191,13 @@ The current JSZip text path takes 1.17 s per 100 slides.
      - It draws each shown slide with the real `drawSlide2D` (background cover-fit under it, like the thumbnail worker) at 1920x1080, then crops the slide rect, so 4:3 decks compare like for like.
      - It also renders at 3840 for raster timing.
    - Fonts: the host `fc-match` file of every requested family (`pptx-render/src/fonts.ts`), registered under internal names; the bundled substitutes once M3 lands.
+     - *As built (M2):* the page installs the renderer's `FontResolver` as its font environment, as the asset and thumbnail workers do, and the slides keep the deck's family names. Every requested family (run, bullet and `fallbackFonts` families included) gets its `fc-match` faces; ordo's default face is registered, and so are the `SCRIPT_FALLBACK_FONTS` families of the text's scripts that are installed, each with its script's `unicodeRange`. A missing one falls back per glyph as LibreOffice's does; `--script-stand-ins` registers fontconfig's face for the script's language under its name instead (closer to an output, further from LibreOffice: Arabic set in Times New Roman lost 0.02 on a worship deck). A face fontconfig gives for another family (Inter for Aptos) is registered as `substitute` unless one of its names is the family or a metric clone of it, so the resolver does not take it for the family's own face and fits such boxes again as an output without the family does (§6 step 10).
    - Scoring uses the existing `ssim()` (greyscale, 960x540). Cached LibreOffice pictures are reused through `--out` (the local validation suite and the sermon decks are kept outside the repository).
    - `summary.json` gains, per slide: `nativeSsim`, tier, class, reasons, `convertMs`, `rasterMs` at 1920/3840. The report gains a native column and per-tier and per-feature (manifest `features`, worship-high first) means.
    - `--no-ppv` skips pptx-preview. `--baseline` gates regressions: no worship deck drops by more than 0.02.
    - `--lo-compat` (harness only) draws like LibreOffice where the policies differ: no run shadows, hollow outlined text, re-fit instead of the stored scale. Policy rules are reported separately, so progress is not hidden.
+     - *As built (M2):* the converter writes the text with LibreOffice 24.2's policies (`EmitOptions.loCompat`, never set by the hub): no run shadows (an unfilled shape's shadow on its text stays), no outline on filled text (the reference pictures come from `pptxForRendering`'s copy, which strips them, so hollow letters never appear in them), shrink-to-fit re-fitted from full size, and only for a shape's own `normAutofit` (LibreOffice ignores one inherited from a layout or master placeholder; measured with a probe deck). The harness emits each deck both ways and records per slide the rules that change its drawing (`runShadow`, `textOutline`, `refit`, `inheritedFit`); with `--lo-compat` such a slide is drawn both ways, and `summary.json` and the report give the means both ways, per rule and overall. `--baseline` compares ordo's own drawings.
+   - *Also built in M2:* per-slide text features read from the slide's XML with the suite inventory's rules (superSub, lnSpcPct, normAutofitScaled, rtl, rtlScriptText, bulletsAuto) and the census's mixedRuns, with means per feature, per tier and per deck next to the M2 targets; `--slides [DECK:]LIST` scores only some slides.
    - Decks with embedded fonts are excluded from means; LibreOffice 24.2 ignores them (it drew Inter).
 2. **Committed probe decks.** Synthetic generators, as in `corpus.ts`, one per verified rule:
    - tint/shade (#454545);

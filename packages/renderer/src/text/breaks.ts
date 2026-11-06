@@ -8,9 +8,11 @@ import LineBreaker from 'linebreak';
  *   punctuation with its ideographs by the ID/CL/NS/OP classes (no break before 、。」ー or small kana, none
  *   after 「), breaks between ideographs and Hangul syllables, and never breaks inside a word of an
  *   alphabetic script, a combining sequence, an emoji sequence or a pair of regional indicators.
- * - No-break characters never break on either side, even after a space where UAX#14 would allow it
- *   (LB18): U+00A0, U+202F, U+2060, and also U+2007, U+2011 and U+FEFF. This is the verified 'Dieu !'
- *   split: French puts U+00A0 or U+202F before '!', '?', ':' and ';'.
+ * - No-break characters never break on either side: U+00A0, U+202F, U+2060, and also U+2007, U+2011 and
+ *   U+FEFF. This is the verified 'Dieu !' split: French puts U+00A0 or U+202F before '!', '?', ':' and ';'.
+ *   After a breaking space a line may still end before one (UAX#14 LB18 over LB12a), as LibreOffice and
+ *   PowerPoint break it: text pasted with two spaces after a full stop stores ". \u00A0", and its lines
+ *   break after the space, the no-break space starting the next line.
  * - SA scripts (Thai, Lao, Khmer, Myanmar) write words without spaces; UAX#14 resolves them to AL (no
  *   break), so their runs are split at `Intl.Segmenter` word boundaries (the ICU dictionaries, the same
  *   the browser uses). Never before a mark, a repetition mark (ๆ) or an abbreviation mark (ฯ).
@@ -49,7 +51,8 @@ export function breakOpportunities(text: string, start: number, end: number, lan
   const lb = new LineBreaker(s);
   for (let b = lb.nextBreak(); b && b.position < s.length; b = lb.nextBreak()) {
     const p = b.position;
-    if (p > 0 && !isGlue(s.charCodeAt(p - 1)) && !isGlue(s.charCodeAt(p))) out.push(start + p);
+    const before = s.charCodeAt(p - 1);
+    if (p > 0 && !isGlue(before) && (!isGlue(s.charCodeAt(p)) || isBreakSpace(before))) out.push(start + p);
   }
   if (!SA_BLOCK.test(s)) return out;
   const sa = saBreaks(s, lang);

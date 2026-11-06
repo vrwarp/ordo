@@ -5,6 +5,7 @@ import {
   type EmitOptions,
   insetBox,
   legacyColor,
+  MAX_SLIDE_BYTES,
   marginOf,
   overWhite,
   placePicture,
@@ -48,6 +49,8 @@ function emitOne(spec: DeckSpec, opts: EmitOptions = {}) {
 const content = (objects: SlideObject[]) => objects.slice(1);
 const textIn = (objects: SlideObject[]) => objects.filter((o): o is TextObject => o.type === 'text');
 const close = (a: number, b: number, d = 0.01) => Math.abs(a - b) <= d;
+/** M1's text in today's fields only (`EmitOptions.richText: false`). */
+const LEGACY: EmitOptions = { richText: false };
 
 describe('text', () => {
   const tb = (txBody: string, extra: Partial<Parameters<typeof sp>[0]> = {}) =>
@@ -95,9 +98,9 @@ describe('text', () => {
     expect(content(objects).map((o) => o.type)).toEqual(['text', 'shape']);
   });
 
-  it('pads with the smallest inset and folds the others into the box', () => {
+  it('legacy: pads with the smallest inset and folds the others into the box', () => {
     // Default insets: 0.1 in left/right (14.4 px), 0.05 in top/bottom (7.2 px).
-    const { objects } = emitOne({ slides: [{ shapes: tb(body(para(run('x')))) }] });
+    const { objects } = emitOne({ slides: [{ shapes: tb(body(para(run('x')))) }] }, LEGACY);
     const [t] = textIn(objects);
     expect(t!.style.padding).toBeCloseTo(7.2);
     expect(t!.box.x).toBeCloseTo(PX + 7.2);
@@ -126,32 +129,35 @@ describe('text', () => {
     expect(r!.box.w).toBeCloseTo(4 * PX - 2 * d, 1);
   });
 
-  it('maps alignment, anchor, line spacing and the stored autofit scale', () => {
-    const { objects, notes } = emitOne({
-      slides: [
-        {
-          shapes:
-            tb(body(para(run('a', 'sz="4000"'), 'algn="ctr"'), 'anchor="b"')) +
-            tb(
-              body(
-                `<a:p><a:pPr algn="just"><a:lnSpc><a:spcPct val="90000"/></a:lnSpc></a:pPr>${run('b', 'sz="4000"')}</a:p>`,
-              ).replace(
-                '<a:bodyPr/>',
-                '<a:bodyPr><a:normAutofit fontScale="50000" lnSpcReduction="10000"/></a:bodyPr>',
-              ),
-              { id: 3 },
-            ) +
-            tb(
-              body(
-                `<a:p><a:pPr algn="dist"><a:lnSpc><a:spcPts val="3000"/></a:lnSpc></a:pPr>${run('c', 'sz="2000"')}</a:p>`,
-                'anchor="ctr"',
-              ),
-              { id: 4 },
-            ) +
-            tb(body(para(run('d'), 'algn="r"')), { id: 5 }),
-        },
-      ],
-    });
+  it('legacy: maps alignment, anchor, line spacing and the stored autofit scale', () => {
+    const { objects, notes } = emitOne(
+      {
+        slides: [
+          {
+            shapes:
+              tb(body(para(run('a', 'sz="4000"'), 'algn="ctr"'), 'anchor="b"')) +
+              tb(
+                body(
+                  `<a:p><a:pPr algn="just"><a:lnSpc><a:spcPct val="90000"/></a:lnSpc></a:pPr>${run('b', 'sz="4000"')}</a:p>`,
+                ).replace(
+                  '<a:bodyPr/>',
+                  '<a:bodyPr><a:normAutofit fontScale="50000" lnSpcReduction="10000"/></a:bodyPr>',
+                ),
+                { id: 3 },
+              ) +
+              tb(
+                body(
+                  `<a:p><a:pPr algn="dist"><a:lnSpc><a:spcPts val="3000"/></a:lnSpc></a:pPr>${run('c', 'sz="2000"')}</a:p>`,
+                  'anchor="ctr"',
+                ),
+                { id: 4 },
+              ) +
+              tb(body(para(run('d'), 'algn="r"')), { id: 5 }),
+          },
+        ],
+      },
+      LEGACY,
+    );
     const [a, b, c, d] = textIn(objects);
     expect(a!.style).toMatchObject({ align: 'center', valign: 'bottom', fontSizePx: 80, lineHeight: 1.2 });
     expect(b!.style).toMatchObject({ align: 'left', valign: 'top', fontSizePx: 40 });
@@ -234,13 +240,14 @@ describe('text', () => {
     expect(c!.style.shadow).toMatchObject({ dy: 4, blur: 0, color: RED });
   });
 
-  it('folds the common left margin of the paragraphs into the box (bullets are not drawn in M1)', () => {
+  it('legacy: folds the common left margin of the paragraphs into the box (bullets are not drawn in M1)', () => {
     const bullet = '<a:buChar char="•"/>';
     const p = (text: string, pPr: string, children = '') =>
       `<a:p><a:pPr ${pPr}>${children}</a:pPr>${run(text)}</a:p>`;
     const one = (paras: string) =>
       textIn(
-        emitOne({ slides: [{ shapes: tb(body(paras, 'lIns="0" tIns="0" rIns="0" bIns="0"')) }] }).objects,
+        emitOne({ slides: [{ shapes: tb(body(paras, 'lIns="0" tIns="0" rIns="0" bIns="0"')) }] }, LEGACY)
+          .objects,
       )[0]!;
     // A bulleted level: text at marL (0.5 in); a level below at 1 in: the least is folded.
     const bulleted = one(
@@ -263,18 +270,21 @@ describe('text', () => {
     ).toEqual({ l: 0, r: 0 });
   });
 
-  it('widens a wrap="none" box on the side its alignment grows into', () => {
-    const { objects } = emitOne({
-      slides: [
-        {
-          shapes:
-            tb(body(para(run('l')), 'wrap="none" lIns="0" tIns="0" rIns="0" bIns="0"')) +
-            tb(body(para(run('c'), 'algn="ctr"'), 'wrap="none" lIns="0" tIns="0" rIns="0" bIns="0"'), {
-              id: 3,
-            }),
-        },
-      ],
-    });
+  it('legacy: widens a wrap="none" box on the side its alignment grows into', () => {
+    const { objects } = emitOne(
+      {
+        slides: [
+          {
+            shapes:
+              tb(body(para(run('l')), 'wrap="none" lIns="0" tIns="0" rIns="0" bIns="0"')) +
+              tb(body(para(run('c'), 'algn="ctr"'), 'wrap="none" lIns="0" tIns="0" rIns="0" bIns="0"'), {
+                id: 3,
+              }),
+          },
+        ],
+      },
+      LEGACY,
+    );
     const [l, c] = textIn(objects);
     expect(l!.box.x).toBeCloseTo(PX);
     expect(l!.box.w).toBeCloseTo(4 * PX + 1920);
@@ -298,10 +308,15 @@ describe('text', () => {
     expect(w!.box.rotation).toBe(-90);
   });
 
-  it('keeps a rotated box rotated and folds insets along its own axes', () => {
-    const { objects } = emitOne({
-      slides: [{ shapes: tb(body(para(run('r')), 'lIns="182880" tIns="0" rIns="0" bIns="0"'), { rot: 90 }) }],
-    });
+  it('legacy: keeps a rotated box rotated and folds insets along its own axes', () => {
+    const { objects } = emitOne(
+      {
+        slides: [
+          { shapes: tb(body(para(run('r')), 'lIns="182880" tIns="0" rIns="0" bIns="0"'), { rot: 90 }) },
+        ],
+      },
+      LEGACY,
+    );
     const [t] = textIn(objects);
     expect(t!.box.rotation).toBe(90);
     expect(t!.box.w).toBeCloseTo(4 * PX - 0.2 * PX);
@@ -813,6 +828,31 @@ describe('placement', () => {
     expect(insetBox({ x: 0, y: 0, w: 10, h: 10, rotation: 0 }, 20, 0, 20, 0).w).toBe(0);
   });
 
+  it('writes formatting within the slide budget, then plain text, and classes the slide picture', () => {
+    // 40 boxes of 300 differently coloured runs each: far past 64 KB of formatting.
+    const colors = ['FF0000', '00FF00'];
+    const runs = Array.from({ length: 300 }, (_, i) => run(`w${i} `, '', solid(colors[i % 2]!))).join('');
+    const box = (id: number) => sp({ id, x: 0, y: 0, cx: IN, cy: IN, txBody: body(para(runs)) });
+    const boxes = Array.from({ length: 40 }, (_, i) => box(i + 2)).join('');
+    const out = emitSlides(parseDeck(buildDeck({ slides: [{ shapes: boxes }] })));
+    const s = out.slides[0]!;
+    const texts = s.slide.objects.filter((o): o is TextObject => o.type === 'text');
+    expect(texts).toHaveLength(40);
+    const formatted = texts.filter((t) => t.runs);
+    expect(formatted.length).toBeGreaterThan(0);
+    expect(formatted.length).toBeLessThan(10);
+    // The rest keep their text and box style.
+    expect(texts.at(-1)!.text).toBe(texts[0]!.text);
+    expect(texts.at(-1)!.runs).toBeUndefined();
+    expect(JSON.stringify(s.slide).length).toBeLessThan(MAX_SLIDE_BYTES + 40 * 2_000);
+    expect(s.classification.class).toBe('picture');
+    expect(s.classification.reasons.join(' ')).toMatch(/KB of text formatting/);
+    expect(s.notes.join(' ')).toMatch(/KB of text formatting/);
+    // A slide within the budget is untouched.
+    const small = emitSlides(parseDeck(buildDeck({ slides: [{ shapes: box(2) }] })));
+    expect(small.slides[0]!.classification.class).not.toBe('picture');
+  });
+
   it('caps a slide at 1,000 objects', () => {
     const many = sp({ id: 2, x: 0, y: 0, cx: IN, cy: IN, fill: solid('FF0000') }).repeat(1_100);
     const { objects, notes } = emitOne({ slides: [{ shapes: many }] });
@@ -860,6 +900,90 @@ describe('lyric box', () => {
     expect((b.slide.objects.find((o) => o.id === b.slide.lyricObjectId) as TextObject).text).toBe(
       'Only a title',
     );
+  });
+
+  it('on a bilingual slide picks the first of the two language boxes in reading order', () => {
+    const lang = (id: number, text: string, l: string, x: number, y: number, ph = 'type="body" idx="1"') =>
+      sp({ id, x, y, cx: 5 * IN, cy: 2 * IN, ph, txBody: body(para(run(text, `lang="${l}"`))) });
+    const lyric = (shapes: string) => {
+      const { slide } = emitOne({ slides: [{ shapes }] });
+      return (slide.objects.find((o) => o.id === slide.lyricObjectId) as TextObject).text;
+    };
+    // Side by side: the left box, even with less text.
+    expect(
+      lyric(
+        lang(2, 'Amazing grace how sweet', 'en-US', 6 * IN, IN) +
+          lang(3, 'Sublime gracia del Señor', 'es-ES', 0, IN, 'type="body" idx="2"'),
+      ),
+    ).toBe('Sublime gracia del Señor');
+    // Stacked: the upper box, by script when no language is given.
+    expect(
+      lyric(
+        lang(2, '奇异恩典何等甘甜', '', 0, 4 * IN) +
+          lang(3, 'Amazing grace', '', 0, IN, 'type="body" idx="2"'),
+      ),
+    ).toBe('Amazing grace');
+    // One language, or a much shorter second box: the box with the most text.
+    expect(
+      lyric(
+        lang(2, 'Amazing grace how sweet', 'en-US', 6 * IN, IN) +
+          lang(3, 'the sound', 'en-GB', 0, IN, 'type="body" idx="2"'),
+      ),
+    ).toBe('Amazing grace how sweet');
+    expect(
+      lyric(
+        lang(2, 'Amazing grace how sweet the sound', 'en-US', 6 * IN, IN) +
+          lang(3, 'Gracia', 'es-ES', 0, IN, 'type="body" idx="2"'),
+      ),
+    ).toBe('Amazing grace how sweet the sound');
+  });
+
+  it('weighs Han, Kana and Hangul against Latin text, so a parallel translation is bilingual', () => {
+    const box = (id: number, text: string, rPr: string, y: number) =>
+      sp({
+        id,
+        x: 0,
+        y,
+        cx: 10 * IN,
+        cy: 2 * IN,
+        ph: `type="body" idx="${id}"`,
+        txBody: body(para(run(text, rPr))),
+      });
+    const lyric = (shapes: string) => {
+      const { slide } = emitOne({ slides: [{ shapes }] });
+      return (slide.objects.find((o) => o.id === slide.lyricObjectId) as TextObject).text;
+    };
+    const en = 'Amazing grace, how sweet the sound that saved a wretch like me';
+    // Korean above (16 visible characters) and its English line below (52): the upper box, in reading order.
+    const ko = '나 같은 죄인 살리신 주 은혜 놀라워';
+    expect(lyric(box(2, ko, 'lang="ko-KR"', IN) + box(3, en, '', 4 * IN))).toBe(ko);
+    const zh = '奇异恩典，何等甘甜，我罪已得赦免';
+    expect(lyric(box(2, zh, 'lang="zh-CN"', IN) + box(3, en, '', 4 * IN))).toBe(zh);
+  });
+
+  it('compares like with like: a box without a language matches one with it in the same script', () => {
+    const side = (id: number, x: number, text: string, rPr: string) =>
+      sp({
+        id,
+        x,
+        y: IN,
+        cx: 5 * IN,
+        cy: 2 * IN,
+        ph: `type="body" idx="${id}"`,
+        txBody: body(para(run(text, rPr))),
+      });
+    const { slide } = emitOne({
+      slides: [
+        {
+          shapes:
+            side(2, 0, 'Amazing grace how sweet', '') +
+            side(3, 6 * IN, 'Amazing grace how sweet the sound', 'lang="en-GB"'),
+        },
+      ],
+    });
+    // Not a bilingual slide: the larger box, not the left one.
+    const lyric = slide.objects.find((o) => o.id === slide.lyricObjectId) as TextObject;
+    expect(lyric.text).toBe('Amazing grace how sweet the sound');
   });
 
   it('ignores decoration text', () => {

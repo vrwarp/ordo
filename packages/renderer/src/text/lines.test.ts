@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_LYRIC_STYLE, type TextObject, type TextStyle } from '@ordo/domain';
+import { DEFAULT_LYRIC_STYLE, type TextObject, type TextPara, type TextStyle } from '@ordo/domain';
 import { LEGACY_FONT_ENV } from './fonts.ts';
 import { itemize } from './itemize.ts';
 import { layoutBox } from './lines.ts';
@@ -184,6 +184,54 @@ describe('bullets', () => {
   });
 });
 
+describe('emergency breaks', () => {
+  const lineTexts = (o: TextObject, l: RichLayout) =>
+    l.lines.map((line) => line.segs.map((s) => o.text.slice(s.start, s.end)).join(''));
+
+  it('hang the trailing whitespace of a cut word on its last line', () => {
+    // The rest of the cut word ('aa' and four spaces) is carried unmeasured until it may fit a line: its
+    // whitespace hangs there as it does on any line, and never starts the next one.
+    const o = obj('aaaaaaaaaa    bb', {}, box(40));
+    const l = layout(o);
+    expect(lineTexts(o, l)).toEqual(['aaaa', 'aaaa', 'aa    ', 'bb']);
+    expect(l.lines.map((x) => [x.x, x.w])).toEqual([
+      [0, 40],
+      [0, 40],
+      [0, 20],
+      [0, 20],
+    ]);
+    // Right-aligned, the hanging whitespace stays out of the line's width.
+    const r = obj('aaaaaaaaaa    bb', { align: 'right' }, box(40));
+    expect(layout(r).lines[2]).toMatchObject({ x: 20, w: 20 });
+  });
+
+  it('hang the whitespace after a single cluster wider than the line', () => {
+    const o = obj('aaaaaW   bb', {}, box(40));
+    const wide = layoutBox(
+      testMeasurer({ advance: (ch, px) => (ch === 'W' ? 3 * px : px / 2) }),
+      o,
+      prepare(itemize(o)),
+      [],
+      LEGACY_FONT_ENV,
+    );
+    expect(lineTexts(o, wide)).toEqual(['aaaa', 'a', 'W   ', 'bb']);
+  });
+
+  it('cut a word the same way whatever its trailing whitespace', () => {
+    for (const n of [1, 2, 5, 40]) {
+      const o = obj(`${'a'.repeat(23)}${' '.repeat(n)}bb`, {}, box(50));
+      expect(lineTexts(o, layout(o))).toEqual([
+        'aaaaa',
+        'aaaaa',
+        'aaaaa',
+        'aaaaa',
+        `aaa${' '.repeat(n)}`,
+        'bb',
+      ]);
+    }
+  });
+});
+
 describe('wrap: false', () => {
   it('never breaks and grows from the alignment', () => {
     const left = layout(obj('aaa bbb ccc', { wrap: false, align: 'left' }, box(60)));
@@ -277,6 +325,109 @@ describe('soft paragraphs', () => {
   });
 });
 
+describe('trailing whitespace and line ends (LibreOffice 24.2, measured)', () => {
+  it('aligns the whitespace at the end of a paragraph or before an a:br, and hangs it at a wrap', () => {
+    // 'ab ' centred in 100: the space is text (30 wide), so the line starts at 35, not 40.
+    const centred = layout(obj('ab \nab', { align: 'center' }, box(100)));
+    expect(centred.lines.map((x) => [x.x, x.w])).toEqual([
+      [35, 30],
+      [40, 20],
+    ]);
+    const right = layout(
+      obj('ab  \nab ', { align: 'right' }, { ...box(100), paras: [null, { soft: true }] }),
+    );
+    expect(right.lines.map((x) => [x.x, x.w])).toEqual([
+      [60, 40],
+      [70, 30],
+    ]);
+    // At a wrap the space hangs: 'aaa ' then 'bbb', both 30 wide, centred.
+    const wrapped = layout(obj('aaa bbb', { align: 'center' }, box(55)));
+    expect(wrapped.lines.map((x) => [x.x, x.w])).toEqual([
+      [12.5, 30],
+      [12.5, 30],
+    ]);
+    // A right-to-left paragraph's aligned whitespace sits at its visual left, inside the line.
+    const o = obj('ab ', { align: 'right' }, box(100));
+    const rtl = layout(o, { rtl: [true] });
+    expect(rtl.lines[0]).toMatchObject({ x: 70, w: 30 });
+    expect(segTexts(o, rtl, 0)).toEqual([['ab ', 70]]);
+  });
+
+  it("makes the empty line after a trailing a:br as tall as its end mark, not the paragraph's size", () => {
+    // 20 px text; the last '\n' (the a:br before the empty last line) carries a 10 px end mark.
+    const o = obj(
+      'ab\n',
+      {},
+      { paras: [null, { soft: true }], runs: [{ start: 2, end: 3, sizeScale: 0.5 }] },
+    );
+    const l = layout(o);
+    expect(l.lines.map((x) => x.height)).toEqual([20, 10]);
+    // Without a smaller end mark it is a full line.
+    expect(layout(obj('ab\n', {}, { paras: [null, { soft: true }] })).lines.map((x) => x.height)).toEqual([
+      20, 20,
+    ]);
+  });
+
+  describe('in the office model, the empty line a trailing a:br makes is single spaced', () => {
+    // 20 px text: single spacing is 24 px. LibreOffice 24.2 (40 pt Liberation Sans, measured): the trailing
+    // line is 96 px at 80 %, 90 %, 100 % and 150 %, and 80 px at an exact 40 pt.
+    const office = (text: string, paras: (TextPara | null)[], style: Partial<TextStyle> = {}) =>
+      obj(text, { lineModel: 'office', lineHeight: 1.2, ...style }, { paras });
+    /** Line heights, rounded to a millionth of a px. */
+    const heights = (o: TextObject) => layout(o).lines.map((x) => Math.round(x.height * 1e6) / 1e6);
+
+    it('whatever the proportional spacing, while exact spacing still applies', () => {
+      expect(heights(office('ab\n', [{ lineSpacing: 0.9 }, { soft: true }]))).toEqual([21.6, 24]);
+      expect(heights(office('ab\n', [{ lineSpacing: 0.8 }, { soft: true }]))).toEqual([19.2, 24]);
+      expect(heights(office('ab\n', [{ lineSpacing: 1.5 }, { soft: true }]))).toEqual([36, 24]);
+      expect(heights(office('ab\n', [{ lineSpacingPx: 40 }, { soft: true }]))).toEqual([40, 40]);
+      expect(heights(office('ab\n', [{ lineSpacingPx: 16 }, { soft: true }]))).toEqual([16, 16]);
+      // The box's spacing, for paragraphs without their own, is proportional spacing too.
+      expect(heights(office('ab\n', [null, { soft: true }], { lineHeight: 0.9 * 1.2 }))[1]).toBe(24);
+      // Single spacing puts the baseline F below the line's top.
+      const l = layout(office('ab\n', [{ lineSpacing: 1.5 }, { soft: true }]));
+      expect(l.lines[1]!.baseline - l.lines[1]!.top).toBe(20);
+    });
+
+    it('before another paragraph too, and the autofit spacing scale leaves it alone', () => {
+      const paras = [{ lineSpacing: 0.9 }, { soft: true }, { lineSpacing: 0.9 }];
+      expect(heights(office('ab\n\ncd', paras))).toEqual([21.6, 24, 21.6]);
+      const p15 = [{ lineSpacing: 1.5 }, { soft: true }, { lineSpacing: 1.5 }];
+      expect(heights(office('ab\n\ncd', p15))).toEqual([36, 24, 36]);
+      // LibreOffice's spacing scale (the search's) shrinks proportional and exact spacing, not single
+      // spacing: in 41 px the 21.6 + 24 px of the text do not fit, 0.9 x 21.6 + 24 do (0.5 mm of slack).
+      const shrink = { lineModel: 'office' as const, lineHeight: 1.2, autofit: 'shrink' as const };
+      const paras9 = [{ lineSpacing: 0.9 }, { soft: true }];
+      const search = layout(obj('ab\n', shrink, { paras: paras9, ...box(200, 41) }));
+      expect(search.spacingScale).toBe(0.9);
+      expect(search.lines[0]!.height).toBeCloseTo(21.6 * 0.9, 9);
+      expect(search.lines[1]!.height).toBe(24);
+    });
+
+    it("at PowerPoint's stored scale, its lnSpcReduction is subtracted from every line's proportion", () => {
+      // OOXML normAutofit/@lnSpcReduction: 90 % less 20 % is 70 %, and single spacing (the trailing line)
+      // is 80 %. Exact spacing is scaled.
+      const fit = { autofit: 'shrink' as const, fitScale: { font: 1, spacing: 0.8 } };
+      const k = layout(office('ab\n', [{ lineSpacing: 0.9 }, { soft: true }], fit));
+      expect(k.spacingScale).toBe(0.8);
+      expect(k.lines[0]!.height).toBeCloseTo(24 * 0.7, 9);
+      expect(k.lines[1]!.height).toBeCloseTo(24 * 0.8, 9);
+      expect(heights(office('ab\n', [{ lineSpacingPx: 40 }, { soft: true }], fit))).toEqual([32, 32]);
+    });
+
+    it('but an empty line between two a:br and an empty paragraph keep the paragraph spacing', () => {
+      const p9 = { lineSpacing: 0.9 };
+      expect(heights(office('ab\n\ncd', [p9, { soft: true }, { soft: true }]))).toEqual([21.6, 21.6, 21.6]);
+      expect(heights(office('ab\n\ncd', [p9, p9, p9]))).toEqual([21.6, 21.6, 21.6]);
+      // Two trailing a:br: the first empty line is a middle one, the last a trailing one.
+      expect(heights(office('ab\n\n', [p9, { soft: true }, { soft: true }]))).toEqual([21.6, 21.6, 24]);
+      // The 'ordo' line model is unchanged: p × 1.2F on every line.
+      const ordo = obj('ab\n', { lineHeight: 1.2 }, { paras: [p9, { soft: true }] });
+      expect(heights(ordo)).toEqual([21.6, 21.6]);
+    });
+  });
+});
+
 describe('logical layout', () => {
   it('breaks and places lines identically at any output scale', () => {
     const o = obj('For God so loved the world that he gave', { align: 'center', wrap: true }, box(150));
@@ -287,5 +438,43 @@ describe('logical layout', () => {
     });
     expect(draws[0]!.length).toBeGreaterThan(3);
     for (const d of draws) expect(d).toEqual(draws[0]);
+  });
+});
+
+describe("PowerPoint's stored lnSpcReduction", () => {
+  // 15 single-spaced 20 px paragraphs (24 px each, 360 px) in a 300 px box: PowerPoint stored 100 % font and
+  // a 20 % line spacing reduction, which it draws as 80 % spacing (19.2 px each, 288 px), so it fits there.
+  const text = Array.from({ length: 15 }, (_, i) => `line ${i}`).join('\n');
+  const style = {
+    lineModel: 'office' as const,
+    lineHeight: 1.2,
+    autofit: 'shrink' as const,
+    fitScale: { font: 1, spacing: 0.8 },
+  };
+
+  it('keeps the stored scale for single-spaced text, subtracting the reduction from single spacing', () => {
+    const l = layout(obj(text, style, box(400, 300)));
+    expect([l.fontScale, l.spacingScale, l.overflow]).toEqual([1, 0.8, false]);
+    for (const line of l.lines) expect(line.height).toBeCloseTo(19.2, 9);
+    expect(l.lines[14]!.top - l.lines[0]!.top).toBeCloseTo(14 * 19.2, 6);
+  });
+
+  it('subtracts it from proportional spacing (90 % less 20 % is 70 %), while the search multiplies', () => {
+    const paras = Array.from({ length: 15 }, () => ({ lineSpacing: 0.9 }));
+    const l = layout(obj(text, style, { paras, ...box(400, 300) }));
+    expect([l.fontScale, l.spacingScale]).toEqual([1, 0.8]);
+    for (const line of l.lines) expect(line.height).toBeCloseTo(24 * 0.7, 9);
+    // Without a stored scale the same box is fitted by LibreOffice's search, whose spacing scale k
+    // multiplies (0.9 x k) and leaves single spacing alone.
+    const { fitScale: _, ...searched } = style;
+    const s = layout(obj(text, searched, { paras, ...box(400, 300) }));
+    const F = s.lines[0]!.segs[0]!.sizePx;
+    expect(s.lines[0]!.height).toBeCloseTo(1.2 * F * 0.9 * s.spacingScale, 9);
+  });
+
+  it('is not applied when the stored scale no longer fits: the search runs from full size', () => {
+    const l = layout(obj(`${text}\nmore\nmore\nmore`, style, box(400, 300)));
+    expect(l.fontScale).toBeLessThan(1);
+    expect(l.overflow).toBe(false);
   });
 });

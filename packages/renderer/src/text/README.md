@@ -26,18 +26,23 @@ Integration decisions (wave 1):
 Bounds (review of wave 1; `rich.fuzz.test.ts` and `clamp.test.ts` keep them):
 - An emergency break costs what its line holds (lines.ts header): galloping cut search, cluster boundaries
   found only as far as asked and shared by every line and autofit step of a piece, the rest of the word
-  carried unmeasured (`Measured.lazy`) until it may fit, and the autofit search computing heights only.
+  carried unmeasured (`Measured.lazy`) until it may fit (its trailing whitespace hangs there as on any line:
+  a cut never lands in it), and the autofit search computing heights only.
   A 10,000-letter word in a 0-200 px box measures about n characters per layout, not n²/line.
 - `WidthCache` keeps strings of at most 256 units; `memoMeasurer` (one layout) keys by state, then text.
 - At most 16 distinct run and bullet families and 64 size scales per object (`FontBudget`, clamp.ts and
   sanitize.ts), so no object costs more platform font lookups than a slide of ordinary text; family names
-  lose every C0 and C1 control character.
-- Bullets are drawn within 4-1,000 px; raised and lowered runs at no less than 4 px.
+  lose every C0 and C1 control character, and a family is keyed by its cleaned name (trimmed, lower-cased)
+  and keeps the spelling first seen, so case, spaces, quotes and controls never make another font string.
+- Runs are laid out within 2-1,000 px (`CLAMP.minRunFontPx`: 1 pt, so PowerPoint's 1 pt spacer paragraphs
+  keep their 2.4 px line); box sizes stay within 4-1,000 px. Bullets are drawn within 4-1,000 px; raised and
+  lowered runs at no less than 4 px.
 
 ## Pipeline
 
 ```
 TextObject (clamped)                                         rich.ts  layoutRich(m, o, env)  memo: object, m, env.generation
+  (o without style.fitScale unless storedFitHolds(o, env))
   1 itemize(o)            → Itemized {paras: ItemPara[]}      itemize.ts   paragraphs, runs ∩ paragraphs, resolved styles
   2-4 prepare(it)         → PreparedPara[] {bidi, pieces}     segments.ts  bidi.ts (UAX#9), breaks.ts (UAX#14), pieces
   11 paraBullets(o, it)   → (BulletSpec | null)[]             bullets.ts   labels from @ordo/domain paraLabels
@@ -49,9 +54,10 @@ drawRichText(ctx, o, scale)                                   rich.ts      clamp
 
 Public surface (`index.ts`, re-exported by `@ordo/renderer`): `Measurer`, `Seg`, `LaidLine`, `RichLayout`,
 `FontEnv`, `FaceRequest`, `layoutRich`, `paintRich`, `isRichText`, `drawRichText`, `clampTextObject`,
-`RICH_STYLE_KEYS`, the font environment (`LEGACY_FONT_ENV`, `FontResolver` and its `FontFile`, `FontHost`,
-`FontChange` and `FontSyncResult` types, `internalFamilyName`, `installFontEnv`, `currentFontEnv`) and the
-measurers (`canvasMeasurer`, `measurerFor`, `WidthCache`).
+`RICH_STYLE_KEYS`, `storedFitHolds`, the font environment (`LEGACY_FONT_ENV`, `FontResolver` and its
+`FontFile`, `FontHost`, `FontChange` and `FontSyncResult` types, `internalFamilyName`, `installFontEnv`,
+`currentFontEnv`, `METRIC_FAMILIES`, `metricCompatible`) and the measurers (`canvasMeasurer`, `measurerFor`,
+`WidthCache`).
 
 ## Rules every stage keeps
 
@@ -101,6 +107,19 @@ advances by `w + letterSpacing` (lines.ts `Measured.a`).
 `FontEnv.font(req)` returns the CSS font string for `ctx.font` at `req.sizePx` (logical). `generation`
 changes whenever the face set changes; layouts memoised under another generation are recomputed.
 
+`FontEnv.metricMatch(family, fallbacks)` (optional) says whether text in `family` is drawn with the family's
+own face or a metric-compatible one. **PowerPoint's stored autofit scale is kept only then** (design/27 §6
+step 10): PowerPoint computed `fitScale` with the family's own widths, and a face of other widths breaks
+the lines elsewhere. Aptos has no metric substitute, so a box PowerPoint shrank to 92.5 % at 90 % spacing
+for Aptos is drawn with Inter; Inter is wider, the text still fits at that scale, but every line breaks
+differently from PowerPoint and from LibreOffice, which fits again from full size (37 pt at 100 % spacing
+instead of 41 pt at 90 %). So `layoutRich` lays out a box whose family is not matched without its stored
+scale (`storedFitHolds`; the object keeps it), and office.ts fits it from full size as LibreOffice does.
+Metric-compatible faces (Carlito for Calibri, Liberation for Arial, Times New Roman and Courier New,
+Caladea for Cambria, Gelasio for Georgia: `METRIC_FAMILIES`) keep PowerPoint's scale, which is what
+PowerPoint draws there. Uploading the real family brings the stored scale back (the generation changes).
+An environment without `metricMatch` (`LEGACY_FONT_ENV`, tests) keeps the stored scale.
+
 `Seg.shift` is positive downwards (a superscript is negative): `-baseline × size`, where size is the run's
 size after autofit; the drawn `sizePx` of a raised or lowered run is `0.58 × size`, and it never grows the
 line (§6 step 7). `LaidLine.x` excludes the bullet; `bullet.x` is the left edge of the bullet text.
@@ -119,11 +138,14 @@ Steps 1-4 of §6. **Done** (M2 wave 1); tests in `itemize.test.ts`, `breaks.test
 `segments.test.ts` and `vendor.test.ts` (the browser bundle).
 - `itemize(o)`: a soft paragraph takes the style of the paragraph it continues and overrides only what its
   own `paras[i]` sets (`resolveParaStyle(style, p, base)`). An empty paragraph's end mark is the run covering
-  its '\n'; the last paragraph, which has none, takes the run covering the '\n' before it.
+  its '\n'; the last paragraph, which has none, takes the run covering the '\n' before it. When the line
+  before it is empty too, that '\n' ends both, so the two empty lines share one end mark (the converter
+  writes the last paragraph's): a known limit, as the schema has no field for the last paragraph's own.
 - `breakOpportunities(text, start, end, lang)`: UAX#14 (`linebreak` 1.1.0, typed in `vendor.d.ts`, which
   `breaks.ts` references so every app that compiles the renderer gets it); no break on either side of
-  U+00A0, U+202F, U+2060, U+2007, U+2011, U+FEFF (`isGlue`), even after a space; SA runs (Thai, Lao, Khmer,
-  Myanmar) at `Intl.Segmenter` word boundaries, never before a mark, ๆ or ฯ; CJK by UAX#14's classes.
+  U+00A0, U+202F, U+2060, U+2007, U+2011, U+FEFF (`isGlue`), except after a breaking space (UAX#14 LB18,
+  as LibreOffice breaks ". \u00A0"); SA runs (Thai, Lao, Khmer, Myanmar) at `Intl.Segmenter` word
+  boundaries, never before a mark, ๆ or ฯ; CJK by UAX#14's classes.
   `isBreakSpace` (the trailing whitespace that hangs) is space, tab and the breaking space separators
   (U+1680, U+2000-U+200A except U+2007, U+205F, U+3000).
 - `graphemeBoundaries(text, start, end)`: clusters, i.e. `Intl.Segmenter` graphemes joined across a
@@ -157,7 +179,8 @@ Steps 5-10 of §6. Status: **done** (M2 wave 1); the rules are in each file's he
   exists on DOM and Offscreen contexts; advances scale exactly with the size; kerning applies only within a
   measured string.
 - `lines.ts` `layoutBox`: greedy lines (first line at marL + indent, others at marL, both ≥ 0), hanging
-  bullets in a box at least -indent wide, trailing whitespace hanging, emergency breaks between graphemes,
+  bullets in a box at least -indent wide, trailing whitespace hanging at a wrap (aligned with the text at a
+  paragraph end or an a:br, as LibreOffice and PowerPoint align it), emergency breaks between graphemes,
   `wrap: false` growing from its alignment; justify and distribute (`extraPerSpace` per trailing whitespace
   unit of every piece but a line's last); right-to-left paragraphs mirrored (indents and bullet on the right,
   pieces from the right, hanging whitespace on the left); valign over the box less its insets; `overflow`
@@ -165,7 +188,14 @@ Steps 5-10 of §6. Status: **done** (M2 wave 1); the rules are in each file's he
 - `office.ts`: `officeLine` (page.ts's measured formulas), `officeFontPx` (editeng's rounding to whole
   points), `fitFactor` (0.5 mm slack), `searchFit` (page.ts `fitBox`'s search, literally) and `autofit`:
   the stored `fitScale` while the text fits at it, else the search from full size with widths scaled
-  linearly from the layout at the stored scale, never above the stored font scale.
+  linearly from the layout at the stored scale, never above the stored font scale. At the stored scale
+  its spacing is drawn as PowerPoint draws lnSpcReduction (OOXML subtracts it from every paragraph's
+  proportional spacing, single spacing included: 100 % less 20 % is 80 %, 90 % is 70 %); the search's
+  spacing scale is LibreOffice's k, which multiplies and leaves single spacing alone. Exact spacing and
+  space before and after are scaled by either. The search lays each scale out once, and a body LibreOffice's
+  k cannot change (single spaced, no space between paragraphs) once per font scale: at most 11 layouts
+  instead of 31, with the same result (a body of 5,000 a:br lines with autofit: 472 → 165 ms). A stored scale that
+  does not hold for the face drawing the box never reaches it (`storedFitHolds` in rich.ts, Contracts).
 
 Decisions the other items rely on:
 - **Line spacing means the same in both models.** `paras[i].lineSpacing` is a multiple of single spacing
@@ -179,6 +209,14 @@ Decisions the other items rely on:
   main size and direction; no bullet, no space between them. The converter may write `{ soft: true }` only;
   the editor's paragraph strip edits the paragraph a soft one continues. `prepare` (A) gives a soft
   paragraph its paragraph's base direction.
+- **A trailing a:br** (an empty soft paragraph that no soft paragraph follows, at the end of the text or
+  before another paragraph) makes a line as tall as its own end mark, and in the office model at single
+  spacing: the paragraph's proportional spacing does not apply to it (so neither does the spacing scale),
+  its exact spacing does. An empty line between two a:br and an empty paragraph keep the paragraph's
+  spacing. LibreOffice 24.2, measured with 40 pt text: the trailing line is 96 px at 80, 90 and 150 %, and
+  80 px at an exact 40 pt. At the Office theme's 90 % a title ending in an a:br was 0.12 F shorter than
+  LibreOffice's, so it sat lower when centred and fitted a point larger under its own normAutofit. The
+  'ordo' model applies the paragraph's spacing to it as to any line.
 - **`align` is visual** (left is left in a right-to-left paragraph); RTL changes the start edge: where
   indents and the bullet are, and where the last line of a justified paragraph goes.
 - **Points**: 2 logical px per point (`PX_PER_PT`, both standard deck sizes).
@@ -240,7 +278,10 @@ Paint passes and the dispatch of §6. **Done** (wave 1):
   empty one's end mark), and soft lines stay lines of their paragraph (design/27 §11 item 1).
 - To do: the M6 gradient over the box; an effect sprite cache for large blurs (§7.5). The raster bench
   shows the need: the default lyric style's shadow (blur 12) costs about 7 ms of a 1920 raster and 20 ms
-  of a 3840 one, in drawText and in the engine alike.
+  of a 3840 one, in drawText and in the engine alike. A cache keyed by object and scale only speeds a
+  repeated raster of the same object (the bench's per-job figure); a newly armed cue always misses it, so
+  its first raster (about 12 ms at 1920, 8 ms without the shadow) needs a cheaper blur as well. A sprite of
+  pass 2 also has to carry the caller's transform, the opacity and the font generation in its key.
 
 ### E. fonts: `fonts.ts` and the three drawers
 
@@ -255,6 +296,11 @@ Paint passes and the dispatch of §6. **Done** (wave 1):
   parses time out (`FontHost.timeoutMs`, 15 s) and `sync` never waits for a background retry. Families a
   later list leaves out keep their faces but are no longer retried. `loaded({family,
   internal})` announces faces registered elsewhere.
+- `metricMatch(family, fallbacks)`: the family's own faces when loaded, unless every one is a stand-in
+  (`FontFile.substitute`: another family's face registered under its name, as the fidelity harness
+  registers fontconfig's choice); else the first loaded fallback, when `metricCompatible` with the family
+  (the converter lists the box family's metric substitute first); else false (ordo's default face draws).
+  A stand-in is part of the face key, so a family whose flag changes loads again.
 - `font(req)`: loaded internal names only, in order: the exact face, `fallbackFonts`, the script fallback
   for `FaceRequest.script` (`SCRIPT_FALLBACK_FONTS` in `@ordo/domain`), then the original family name while
   its faces have not loaded (the asset worker reports it), ordo's default face (Inter, once shipped) and

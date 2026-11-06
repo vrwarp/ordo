@@ -1,9 +1,14 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_LYRIC_STYLE, type TextObject, type TextPara, type TextStyle } from '@ordo/domain';
+import { CLAMP } from '../clamp.ts';
 import { LEGACY_FONT_ENV } from './fonts.ts';
+import { paraBullets } from './bullets.ts';
+import { itemize } from './itemize.ts';
+import { fitSize, layoutBox } from './lines.ts';
 import {
   FIT_SLACK_PX,
+  FIT_SPACINGS,
   type FitScale,
   autofit,
   fitFactor,
@@ -12,6 +17,7 @@ import {
   searchFit,
 } from './office.ts';
 import { clampTextObject, layoutRich } from './rich.ts';
+import { prepare } from './segments.ts';
 import { testMeasurer } from './test-util.ts';
 import type { Measurer, ParaStyle, RichLayout } from './types.ts';
 
@@ -65,6 +71,11 @@ function office(
 
 const m = () => testMeasurer({ em: 0.5 });
 const lay = (o: TextObject, mm: Measurer = m()) => layoutRich(mm, o, LEGACY_FONT_ENV);
+/** `o` laid out at exactly `fit`: LibreOffice's spacing scale k (`fit.stored` unset). */
+const layAt = (o: TextObject, fit: FitScale, mm: Measurer = m()) => {
+  const it = itemize(o);
+  return layoutBox(mm, o, prepare(it), paraBullets(o, it), LEGACY_FONT_ENV, undefined, fit);
+};
 /** Height of the laid-out text: from the first line's top to the last line's bottom. */
 const textHeight = (l: RichLayout) => l.ink.h;
 
@@ -107,6 +118,14 @@ describe('officeFontPx: run sizes as editeng rounds them', () => {
     expect(officeFontPx(75, 1)).toBe(75);
     expect(officeFontPx(75, 0.5)).toBe(38); // 37.5 → 38 pt, × 0.5 = 19 pt
     expect(officeFontPx(4, 0.01)).toBe(2); // max(1 pt, …)
+  });
+
+  it('keeps run sizes after autofit within 2-1,000 px in both line models (1 pt is never raised)', () => {
+    expect(fitSize(2, 1, true)).toBe(2);
+    expect(fitSize(2, 0.3, true)).toBe(2);
+    expect(fitSize(2, 1)).toBe(2);
+    expect(fitSize(2, 0.3)).toBe(CLAMP.minRunFontPx);
+    expect(fitSize(5000, 1)).toBe(CLAMP.maxFontPx);
   });
 });
 
@@ -179,6 +198,31 @@ describe("searchFit: LibreOffice's autofit search", () => {
     );
   });
 
+  it('lays each scale out once, and spacing-free text once per font scale, with the same result', () => {
+    // Single-spaced text: LibreOffice's k changes nothing, so 90 and 80 % are 100 %.
+    const height = (font: number) => 5_000 * 1.2 * Math.max(2, Math.round(20 * font));
+    const calls: string[] = [];
+    const lin = (f: FitScale) => {
+      calls.push(`${f.font} ${f.spacing}`);
+      return height(f.font);
+    };
+    const free = autofit(SHRINK, 1000, (f) => height(f.font), lin, FIT_SPACINGS, 0.01, true);
+    expect(calls.length).toBeLessThanOrEqual(11);
+    expect(new Set(calls).size).toBe(calls.length);
+    expect(calls.every((c) => c.endsWith(' 1'))).toBe(true);
+    // The literal search, every spacing laid out: the same scales.
+    const all = autofit(
+      SHRINK,
+      1000,
+      (f) => height(f.font),
+      (f) => height(f.font),
+      FIT_SPACINGS,
+      0.01,
+    );
+    expect(free).toEqual(all);
+    expect(free).toEqual(pageFitBox((font) => height(font), 1000));
+  });
+
   it('quantises the font scale to tenths of 18 pt and tries 90 and 80 % spacing when 100 % overflows', () => {
     const tried: [number, number][] = [];
     searchFit((font, spacing) => {
@@ -212,11 +256,17 @@ describe('office layout', () => {
     const l = lay(office('a\nb', {}, { paras }));
     expect(l.lines.map((x) => x.top)).toEqual([0, 24 + 10 + 20]);
     expect(textHeight(l)).toBe(24 + 30 + 24);
-    // A stored spacing scale that still fits applies to paragraph spacing; single spacing keeps 1.2F.
-    const k = lay(office('a\nb', { autofit: 'shrink', fitScale: { font: 1, spacing: 0.5 } }, { paras }));
+    // LibreOffice's spacing scale applies to paragraph spacing; single spacing keeps 1.2F.
+    const k = layAt(office('a\nb', { autofit: 'shrink' }, { paras }), { font: 1, spacing: 0.5 });
     expect(k.spacingScale).toBe(0.5);
     expect(k.lines.map((x) => x.top)).toEqual([0, 24 + 15]);
     expect(k.lines[1]!.height).toBe(24);
+    // PowerPoint's stored scale scales paragraph spacing too, and subtracts its reduction from single
+    // spacing (1.2F less 50 %).
+    const p = lay(office('a\nb', { autofit: 'shrink', fitScale: { font: 1, spacing: 0.5 } }, { paras }));
+    expect(p.spacingScale).toBe(0.5);
+    expect(p.lines.map((x) => x.top)).toEqual([0, 12 + 15]);
+    expect(p.lines[1]!.height).toBe(12);
   });
 
   it('makes an empty paragraph as tall as its end mark, and a trailing a:br a line', () => {
@@ -226,6 +276,27 @@ describe('office layout', () => {
     const br = lay(office('Line\n', {}, { paras: [null, { soft: true }] }));
     expect(br.lines).toHaveLength(2);
     expect(br.lines[1]).toMatchObject({ top: 24, height: 24, segs: [] });
+  });
+
+  it('lays a 1 pt spacer paragraph out 2.4 px tall, at full size and shrunk', () => {
+    // Verse lines at 7 pt (14 px) separated by PowerPoint's 1 pt paragraphs (sz="100": 2 px): LibreOffice's
+    // pitch is 16.8 + 2.4 px. A 4 px floor made each spacer 4.8 px and moved every line below it.
+    const spacer = { start: 2, end: 3, sizeScale: 2 / 14 };
+    const o = office(
+      'a\n \nb\n \nc',
+      { fontSizePx: 14 },
+      { runs: [spacer, { ...spacer, start: 6, end: 7 }] },
+    );
+    const l = lay(o);
+    expect(l.lines.map((x) => x.height)).toEqual(
+      [16.8, 2.4, 16.8, 2.4, 16.8].map((h) => expect.closeTo(h, 9)),
+    );
+    expect(l.lines.map((x) => x.top)).toEqual([0, 16.8, 19.2, 36, 38.4].map((t) => expect.closeTo(t, 9)));
+    expect(l.lines[1]!.segs[0]!.sizePx).toBeCloseTo(2, 9);
+    // Shrunk to 50 %, the spacer keeps 1 pt as editeng rounds it (`officeFontPx`: 0.5 pt → 1 pt; 7 pt → 4 pt).
+    const shrunk = { fontSizePx: 14, autofit: 'shrink' as const, fitScale: { font: 0.5, spacing: 1 } };
+    const fit = lay(office('a\n \nb', shrunk, { runs: [spacer] }));
+    expect(fit.lines.map((x) => x.height)).toEqual([9.6, 2.4, 9.6].map((h) => expect.closeTo(h, 9)));
   });
 
   it('draws raised text at 58 % of its size, moved 30 %, without growing the line', () => {
@@ -270,14 +341,10 @@ describe('autofit', () => {
       // The text laid out at a given scale: a stored fitScale in a box tall enough to hold it.
       const at = (font: number, spacing: number) =>
         textHeight(
-          lay(
-            office(
-              text,
-              { ...style, autofit: 'shrink', fitScale: { font, spacing } },
-              { paras },
-              { w: box.w, h: 4000 },
-            ),
-          ),
+          layAt(office(text, { ...style, autofit: 'shrink' }, { paras }, { w: box.w, h: 4000 }), {
+            font,
+            spacing,
+          }),
         );
       const want = pageFitBox(at, box.h);
       expect({ font: l.fontScale, spacing: l.spacingScale }).toEqual(want);
@@ -308,9 +375,7 @@ describe('autofit', () => {
     const fitScale = { font: 0.45, spacing: 1 };
     const at = (font: number, spacing: number) =>
       textHeight(
-        lay(
-          office(text, { autofit: 'shrink', fitScale: { font, spacing } }, { paras }, { w: box.w, h: 4000 }),
-        ),
+        layAt(office(text, { autofit: 'shrink' }, { paras }, { w: box.w, h: 4000 }), { font, spacing }),
       );
     expect(fitFactor(at(0.45, 1), box.h)).toBeLessThan(1); // overflows at the stored scale
     expect(pageFitBox(at, box.h)).toEqual({ font: 0.5, spacing: 0.8 }); // what LibreOffice would choose

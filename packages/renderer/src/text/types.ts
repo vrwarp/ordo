@@ -113,6 +113,14 @@ export interface FontEnv {
   font(req: FaceRequest): string;
   /** Changes whenever a face finishes loading or the face set changes: memoised layouts of an older one are stale. */
   readonly generation: number;
+  /**
+   * Whether text asked for in `family`, with these `fallbackFonts`, is drawn with the family's own face or a
+   * metric-compatible one (Carlito for Calibri), so its lines break where PowerPoint broke them. Only then
+   * does PowerPoint's stored autofit scale (`TextStyle.fitScale`) hold; otherwise the text is fitted again
+   * from full size, as LibreOffice fits it (§6 step 10, §10). Absent: assumed true (the stored scale is
+   * kept). Its answer changes only together with `generation`.
+   */
+  metricMatch?(family: string, fallbacks: readonly string[]): boolean;
 }
 
 // ---- Shared between the pipeline stages ----

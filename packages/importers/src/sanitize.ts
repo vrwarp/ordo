@@ -29,6 +29,8 @@ export const IMPORT_LIMITS = {
   fontFamily: 120,
   fontSizeMin: 4,
   fontSizeMax: 1000,
+  /** A style run's size (`fontSizePx` × `sizeScale`): 1 pt, as the render plan keeps it (`minRunFontPx`). */
+  runFontSizeMin: 2,
   /** Boxes stay within ±2× the canvas (the render plan's clamp). */
   boxSpan: 2,
   durationMinMs: 500,
@@ -43,22 +45,43 @@ export const IMPORT_LIMITS = {
 } as const;
 
 /**
+ * A family name as the render plan draws it (its `clampFamily`): without quotes, backslashes, C0 and C1
+ * control characters and line or paragraph separators, and here without surrounding whitespace.
+ */
+function cleanFamily(f: string): string {
+  let out = '';
+  for (let i = 0; i < f.length; i++) {
+    const c = f.charCodeAt(i);
+    if (c < 0x20 || (c >= 0x7f && c <= 0x9f) || c === 0x22 || c === 0x5c || c === 0x2028 || c === 0x2029)
+      continue;
+    out += f[i];
+  }
+  return out.trim();
+}
+
+/**
  * The distinct fonts one text object may name, shared by its runs and bullets (the render plan's
  * `FontBudget`): families past `runFamilies` are dropped (the box's or the first run's is used), size scales
- * past `sizeScales` take the nearest one kept. Each new family or size costs a drawer a font lookup.
+ * past `sizeScales` take the nearest one kept. Each new family or size costs a drawer a font lookup. A family
+ * is keyed by its cleaned name (`cleanFamily`), lower-cased, as the render plan keys it, and is stored with
+ * the spelling first kept: names that differ in case, surrounding spaces, quotes or control characters are
+ * one family and one name.
  */
 export type FontBudget = { family(f: string): string; scale(s: number): number };
 
 export function fontBudget(): FontBudget {
-  const families = new Set<string>();
+  const families = new Map<string, string>();
   const scales = new Set<number>();
   return {
     family(f) {
-      const k = f.trim().toLowerCase();
-      if (!k || families.has(k)) return f;
+      const name = cleanFamily(f);
+      const k = name.toLowerCase();
+      if (!k) return '';
+      const kept = families.get(k);
+      if (kept !== undefined) return kept;
       if (families.size >= IMPORT_LIMITS.runFamilies) return '';
-      families.add(k);
-      return f;
+      families.set(k, name);
+      return name;
     },
     scale(v) {
       if (scales.has(v) || scales.size < IMPORT_LIMITS.sizeScales) {
@@ -177,7 +200,7 @@ export function cutRuns(
   budget: FontBudget = fontBudget(),
 ): TextRun[] {
   const fs = finite(fontSizePx, 64, IMPORT_LIMITS.fontSizeMin, IMPORT_LIMITS.fontSizeMax);
-  const minScale = Math.max(0.01, IMPORT_LIMITS.fontSizeMin / fs);
+  const minScale = Math.max(0.01, IMPORT_LIMITS.runFontSizeMin / fs);
   const maxScale = Math.min(50, IMPORT_LIMITS.fontSizeMax / fs);
   const out: TextRun[] = [];
   let at = 0;

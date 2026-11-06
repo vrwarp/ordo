@@ -283,6 +283,25 @@ describe('body properties', () => {
     });
   });
 
+  it("takes a stored autofit scale from the shape's own bodyPr only, the shrink policy from the chain", () => {
+    const fit = '<a:normAutofit fontScale="55000" lnSpcReduction="20000"/>';
+    const layoutBody = body(para('')).replace('<a:bodyPr/>', `<a:bodyPr>${fit}</a:bodyPr>`);
+    const layouts = [{ shapes: sp({ id: 2, ph: 'type="body" idx="1"', txBody: layoutBody }) }];
+    // Inherited: the layout's scale was fitted to its prompt text, so the slide's text shrinks from 100 %.
+    const [inherited] = bodies({
+      layouts,
+      slides: [{ shapes: sp({ id: 2, ph: 'idx="1"', txBody: body(para(run('A short line'))) }) }],
+    });
+    expect(inherited!.autofit).toEqual({ kind: 'shrink', fontScale: 1, lnSpcReduction: 0 });
+    // The shape's own normAutofit keeps its stored scale.
+    const own = body(para(run('Text'))).replace(
+      '<a:bodyPr/>',
+      '<a:bodyPr><a:normAutofit fontScale="70000" lnSpcReduction="10000"/></a:bodyPr>',
+    );
+    const [mine] = bodies({ layouts, slides: [{ shapes: sp({ id: 2, ph: 'idx="1"', txBody: own }) }] });
+    expect(mine!.autofit).toEqual({ kind: 'shrink', fontScale: 0.7, lnSpcReduction: 0.1, own: true });
+  });
+
   it('reads autofit, vertical text, columns and warps', () => {
     const [a, b, c] = bodies({
       slides: [

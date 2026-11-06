@@ -11,8 +11,10 @@ import {
   SCRIPT_SCALE,
   autofit,
   fitFactor,
+  lineProportion,
   officeFontPx,
   officeLine,
+  spacingReduction,
 } from './office.ts';
 import { segText } from './segments.ts';
 import type {
@@ -41,13 +43,16 @@ import type {
  *   the box. Available width = inner width - that start.
  * - Pieces fill a line while they fit; a word (pieces with no break between them) that does not fit goes to
  *   the next line; one wider than a whole line is cut between clusters (an emergency break). Trailing
- *   whitespace hangs: it never counts against the width.
+ *   whitespace never counts against the width. At a wrap it hangs, outside the alignment too; at the end of
+ *   a paragraph or before an a:br it is text and is aligned with the rest, as LibreOffice and PowerPoint
+ *   align it (centred "Amen " sits half a space left of centred "Amen").
  * - An emergency break costs work in proportion to the line it fills, never to the rest of the word: the cut
  *   is found by galloping from the piece's start (prefixes of 1, 2, 4, ... clusters, then a bisection of the
  *   last window), cluster boundaries are found only as far as that reaches, and the rest of the piece is
  *   carried unmeasured (`Measured.lazy`, its width estimated) until it may fit a line. So a 10,000-letter
  *   word in a narrow box costs about as much as the lines it makes, in every drawer and in every step of
- *   the autofit search.
+ *   the autofit search. The cut search measures a cut in the trailing whitespace without it, so that
+ *   whitespace hangs on the word's last line as on any other and is never cut off onto the next one.
  * - `wrap: false` never breaks a line.
  * - Right-to-left paragraphs (bidi level 1) mirror the start: indents and the bullet are on the right, the
  *   pieces run from the right (UAX#9 L2 between pieces, `visualOrder`), and the hanging whitespace is on
@@ -70,11 +75,18 @@ import type {
  * Raised and lowered runs are drawn at 0.58 × their size (at least 4 px), shifted by baseline × size, and
  * never grow the line. A bullet is drawn at `sizePct` × F within 4-1,000 px, in the paragraph's direction
  * and its first run's language (an Arabic or Hebrew number reads as its paragraph does: '.1' for '1.'). Space before and after a paragraph are not drawn before the first or after the last; in the office
- * model they are scaled by the autofit spacing scale k, as are proportional and exact spacing.
+ * model they are scaled by the autofit spacing scale k, as are proportional and exact spacing; at
+ * PowerPoint's stored scale its lnSpcReduction is subtracted from proportional spacing instead, single
+ * spacing included (office.ts `officeLine`).
  *
  * Soft paragraphs continue the paragraph before them: no bullet, no space between them, and that
  * paragraph's style (alignment, indents, spacing, line spacing, main size and direction). A trailing a:br
- * (an empty soft paragraph) makes a line as tall as the paragraph's, or its end mark's when larger.
+ * (an empty soft paragraph that no soft paragraph follows) makes a line as tall as its own end mark (the
+ * run covering its '\n', or for the last paragraph the '\n' before it), not the paragraph's main size, and
+ * in the office model at single spacing: the paragraph's proportional spacing does not apply to it (so
+ * neither does the spacing scale k, which leaves single spacing alone; PowerPoint's stored reduction, which
+ * applies to single spacing too, does), its exact spacing does, as on any line. An empty line between two a:br and an empty paragraph keep the paragraph's spacing. LibreOffice
+ * 24.2, measured: at 90 % a 40 pt trailing line is 96 px high, not 86.4.
  *
  * Anchor and insets: `valign` places the laid-out text in the box less its insets (`style.insets`, else
  * `padding` on every side); text taller than that overflows equally (middle), downwards (top) or upwards
@@ -83,7 +95,8 @@ import type {
  * Autofit (`autofit` in office.ts): laid out once at the stored `fitScale` (else full size) with measured
  * widths; when that does not fit, LibreOffice's search lays the text out with widths scaled linearly from
  * that layout, and only the scale it finds is laid out again with measured widths. Run sizes are rounded to
- * whole points in the office model (`officeFontPx`), scaled exactly in the 'ordo' one.
+ * whole points in the office model (`officeFontPx`), scaled exactly in the 'ordo' one, and stay within
+ * 2-1,000 px (`fitSize`): a 1 pt run, PowerPoint's smallest, keeps its size and its 2.4 px line.
  */
 
 /** The four insets: `style.insets`, else `padding` on every side. */
@@ -93,12 +106,12 @@ export function insetsOf(style: TextStyle): { l: number; t: number; r: number; b
 }
 
 /**
- * A run size under the autofit font scale, within the render bounds (4-1,000 px, design/27 §3.2): scaled
- * exactly, or rounded to whole points as LibreOffice does in the office model.
+ * A run size under the autofit font scale, within the render bounds of runs (2-1,000 px, design/27 §3.2):
+ * scaled exactly, or rounded to whole points as LibreOffice does in the office model (never below 1 pt).
  */
 export function fitSize(sizePx: number, fontScale: number, office = false): number {
   const s = office ? officeFontPx(sizePx, fontScale) : sizePx * fontScale;
-  return Math.min(CLAMP.maxFontPx, Math.max(CLAMP.minFontPx, s));
+  return Math.min(CLAMP.maxFontPx, Math.max(CLAMP.minRunFontPx, s));
 }
 
 /**
@@ -216,7 +229,8 @@ const EPS = 1e-6;
 
 /**
  * Lay out prepared paragraphs in the object's box: absolute logical coordinates (§6). Autofit never goes
- * below `minFontScale` (look bands: 0.5, as drawText's).
+ * below `minFontScale` (look bands: 0.5, as drawText's). `fixed` lays the text out at exactly that scale
+ * instead of fitting it (tests compare the search with LibreOffice's at given scales).
  */
 export function layoutBox(
   m: Measurer,
@@ -225,6 +239,7 @@ export function layoutBox(
   bullets: readonly (BulletSpec | null)[],
   env: FontEnv,
   minFontScale?: number,
+  fixed?: FitScale,
 ): RichLayout {
   const style = o.style;
   const box = o.box;
@@ -236,19 +251,28 @@ export function layoutBox(
   const shared: Shared = { bases: new WeakMap(), clusters: new WeakMap() };
   let exact: { fit: FitScale; flowed: Flowed } | null = null;
   const flowExact = (fit: FitScale): Flowed => {
-    if (exact && exact.fit.font === fit.font && exact.fit.spacing === fit.spacing) return exact.flowed;
+    if (
+      exact &&
+      exact.fit.font === fit.font &&
+      exact.fit.spacing === fit.spacing &&
+      exact.fit.stored === fit.stored
+    )
+      return exact.flowed;
     const flowed = flowParas(mm, o, prepared, bullets, env, innerW, fit, shared);
     exact = { fit, flowed };
     return flowed;
   };
-  const fit = autofit(
-    style,
-    innerH,
-    (f) => flowExact(f).height,
-    (f, ref) => flowParas(mm, o, prepared, bullets, env, innerW, f, shared, ref).height,
-    style.lineModel === 'office' ? FIT_SPACINGS : FIT_SPACINGS.slice(0, 1),
-    minFontScale,
-  );
+  const fit =
+    fixed ??
+    autofit(
+      style,
+      innerH,
+      (f) => flowExact(f).height,
+      (f, ref) => flowParas(mm, o, prepared, bullets, env, innerW, f, shared, ref).height,
+      style.lineModel === 'office' ? FIT_SPACINGS : FIT_SPACINGS.slice(0, 1),
+      minFontScale,
+      spacingFree(prepared, style.lineHeight),
+    );
   const laid = flowExact(fit);
   let y0 = box.y + ins.t;
   if (style.valign === 'middle') y0 += (innerH - laid.height) / 2;
@@ -287,6 +311,25 @@ export function layoutBox(
 }
 
 /**
+ * Whether LibreOffice's spacing scale k changes nothing in these paragraphs: every hard paragraph single
+ * spaced (no proportional spacing but 100 %, no exact spacing) and no space between paragraphs. Soft
+ * paragraphs take their paragraph's style; the empty line of a trailing a:br is single spaced anyway.
+ */
+function spacingFree(prepared: readonly PreparedPara[], lineHeight: number): boolean {
+  let prevAfter = 0;
+  let first = true;
+  for (const pp of prepared) {
+    if (pp.para.soft) continue;
+    const ps = pp.para.style;
+    if (ps.lineSpacingPx !== null || lineProportion(ps, lineHeight) !== 1) return false;
+    if (!first && prevAfter + ps.spaceBeforePx !== 0) return false;
+    prevAfter = ps.spaceAfterPx;
+    first = false;
+  }
+  return true;
+}
+
+/**
  * Lines of every paragraph at one autofit scale, relative to the inner box's top-left corner. With
  * `linear` (a reference scale), widths are not measured at `fit` but scaled linearly from their measure at
  * `linear`, and only `height` is computed (the autofit search: `lines` is empty).
@@ -307,6 +350,8 @@ function flowParas(
   const office = style.lineModel === 'office';
   const wrap = style.wrap !== false;
   const k = office ? fit.spacing : 1;
+  // At PowerPoint's stored scale its lnSpcReduction is subtracted from proportional spacing (office.ts).
+  const reduce = office ? spacingReduction(fit) : 0;
   // The spacing scale never changes a width: only a different font scale needs the linear estimate.
   const base = linear && linear.font !== fit.font ? linear : null;
   const size = (px: number, f: FitScale) => fitSize(px, f.font, office);
@@ -474,13 +519,18 @@ function flowParas(
      * Where an emergency break cuts piece `c` to fit `room`: after the most clusters that fit (the first
      * cluster when nothing fits and `force`), by galloping from the piece's start and bisecting the last
      * window, so the strings measured are at most about twice the line. `all`: every cut inside the piece
-     * fits (the whole piece was not measured).
+     * fits (the whole piece was not measured). Trailing whitespace hangs: a cut inside it fits when the
+     * text before it does, and `'whole'` says the piece's text fits (or is one cluster wider than the line,
+     * when `force`) with its whitespace hanging, so it is never cut and never starts the next line.
      */
     const splitPiece = (
       c: Measured,
       room: number,
       force: boolean,
-    ): { head: Piece; tail: Piece; all: boolean; cuts: { list: ClusterCuts; base: number } } | null => {
+    ):
+      | { head: Piece; tail: Piece; all: boolean; cuts: { list: ClusterCuts; base: number } }
+      | 'whole'
+      | null => {
       const p = c.piece;
       let view = c.cuts;
       if (!view) {
@@ -494,12 +544,20 @@ function flowParas(
       const { list, base: b0 } = view;
       const cuts = { at: (k: number) => list.at(b0 + k), count: () => list.count - b0 };
       const dir = p.level % 2 ? 'rtl' : 'ltr';
-      const fits = (k: number) =>
-        widthOf(c.style, p.script, dir, segText(text, p.start, cuts.at(k)!, c.style.caps)) <= room + EPS;
+      // Where the trailing whitespace starts: a cut at or after it measures the text before it only.
+      const hang = Math.max(p.start, p.trail);
+      const fits = (k: number) => {
+        const end = Math.min(cuts.at(k)!, hang);
+        return (
+          end <= p.start ||
+          widthOf(c.style, p.script, dir, segText(text, p.start, end, c.style.caps)) <= room + EPS
+        );
+      };
       let lo = -1; // the last cut known to fit
       let hi: number; // the first cut known not to fit, or the number of cuts
       for (let k = 0, step = 1; ; ) {
-        if (cuts.at(k) === undefined) {
+        const at = cuts.at(k);
+        if (at === undefined) {
           hi = cuts.count();
           break;
         }
@@ -507,21 +565,27 @@ function flowParas(
           hi = k;
           break;
         }
+        // Every later cut is in the whitespace too, and fits: the clusters there need not be found.
+        if (at >= hang) return 'whole';
         lo = k;
         k += step;
         step *= 2;
       }
       while (hi - lo > 1) {
         const mid = (lo + hi) >> 1;
-        if (fits(mid)) lo = mid;
-        else hi = mid;
+        if (!fits(mid)) hi = mid;
+        else if (cuts.at(mid)! >= hang) return 'whole';
+        else lo = mid;
       }
       if (lo < 0 && !force) return null;
       const at = cuts.at(Math.max(0, lo));
       if (at === undefined) return null;
+      // Forced: the first cluster is wider than the line, and only whitespace follows it.
+      if (at >= hang) return 'whole';
       return {
-        head: { ...p, end: at, trail: Math.min(at, Math.max(p.start, p.trail)), breakAfter: false },
-        tail: { ...p, start: at, trail: Math.max(at, p.trail) },
+        // The cut is before the whitespace: the head has none, the tail keeps all of it.
+        head: { ...p, end: at, trail: at, breakAfter: false },
+        tail: { ...p, start: at },
         all: lo >= 0 && cuts.at(lo + 1) === undefined,
         cuts: { list, base: b0 + Math.max(0, lo) + 1 },
       };
@@ -575,7 +639,8 @@ function flowParas(
         // off it, or measure it once all of it may fit.
         const sr = runs[head.piece.sr]!;
         const cut = splitPiece(head, room, true);
-        if (!cut || cut.all) replace(i, { ...measure(head.piece, sr, false), cuts: head.cuts });
+        if (!cut || cut === 'whole' || cut.all)
+          replace(i, { ...measure(head.piece, sr, false), cuts: head.cuts });
         else {
           const h = measure(cut.head, sr, false);
           push(h);
@@ -600,11 +665,11 @@ function flowParas(
         const c = queue[q]!;
         const cut = splitPiece(c, room - adv, cur.length === 0);
         const sr = runs[c.piece.sr]!;
-        if (cut) {
+        if (cut && cut !== 'whole') {
           const h = measure(cut.head, sr, false);
           push(h);
           replace(q, rest(c, h, cut.tail, cut.cuts));
-        } else if (!cur.length) take(q++); // one cluster wider than the line: it overflows
+        } else if (cut || !cur.length) take(q++); // one cluster wider than the line overflows; whitespace hangs
       }
       endLine();
       i = q;
@@ -614,12 +679,28 @@ function flowParas(
     // Placing: line metrics, then (not for the autofit search, which needs heights only) alignment and
     // visual order.
     broken.forEach((items, n) => {
-      let lineF = F;
+      // An empty line after an a:br (an empty soft paragraph) is as tall as its own end mark, not as the
+      // paragraph it continues (LibreOffice 24.2, measured): a small endParaRPr makes a short last line.
+      let lineF = !items.length && para.soft ? 0 : F;
       for (const c of items) if (!c.style.baseline && c.size > lineF) lineF = c.size;
       if (!items.length)
         for (const r of runs) if (!r.style.baseline) lineF = Math.max(lineF, size(r.style.sizePx, fit));
+      if (!(lineF > 0)) lineF = F;
+      // That line, when it ends its paragraph (no soft paragraph follows), is single spaced in the office
+      // model whatever the paragraph's proportional spacing, so the spacing scale leaves it alone too; exact
+      // spacing still applies. An empty line between two a:br and an empty paragraph keep the paragraph's
+      // spacing. LibreOffice 24.2, measured.
+      const trailingBr = office && !items.length && para.soft && !prepared[pi + 1]?.para.soft;
       const metrics = office
-        ? officeLine(lineF, ps, k, style.lineHeight)
+        ? trailingBr
+          ? officeLine(
+              lineF,
+              ps.lineSpacingPx === null ? { ...ps, lineSpacing: 1 } : ps,
+              k,
+              OFFICE_SINGLE,
+              reduce,
+            )
+          : officeLine(lineF, ps, k, style.lineHeight, reduce)
         : ordoLine(lineF, ps, style.lineHeight);
       if (linear) {
         y += metrics.height;
@@ -629,12 +710,14 @@ function flowParas(
       const A = innerW - lineStart;
       const L = rtl ? 0 : lineStart;
       const tail = items[items.length - 1];
+      // The paragraph's last line ends at its end or at an a:br: its trailing whitespace is text, aligned
+      // with the rest, as LibreOffice and PowerPoint align it. Only whitespace at a wrap hangs.
+      const last = n === broken.length - 1;
       let lineW = 0;
       for (const c of items) lineW += c.a;
-      if (tail) lineW += tail.t - tail.a;
+      if (tail) lineW += (last ? tail.w : tail.t) - tail.a;
       let spaces = 0;
       for (let q = 0; q < items.length - 1; q++) spaces += items[q]!.spaces;
-      const last = n === broken.length - 1;
       const spread = ps.align === 'distribute' || (ps.align === 'justify' && !last);
       const extra = spread && spaces > 0 && A > lineW ? (A - lineW) / spaces : 0;
       const contentW = lineW + extra * spaces;
@@ -653,7 +736,7 @@ function flowParas(
         segs.push({
           start: c.piece.start,
           end: c.piece.end,
-          x: isTail && odd ? sx - (c.w - c.t) : sx,
+          x: isTail && odd && !last ? sx - (c.w - c.t) : sx,
           w: c.w,
           run: c.run,
           level: c.piece.level,

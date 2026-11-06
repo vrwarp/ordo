@@ -1,128 +1,128 @@
 {
-  "createdAt": "2026-11-06T07:45:18.878Z",
+  "createdAt": "2026-11-06T09:27:59.518Z",
   "chromium": "/opt/pw-browsers/chromium-1243/chrome-linux64/chrome",
   "decks": [
     {
       "name": "corpus-typography",
-      "nativeSsim": 0.9007060000000001,
+      "nativeSsim": 0.9586302,
       "perSlide": [
         {
           "n": 1,
-          "nativeSsim": 0.965275
+          "nativeSsim": 0.992364
         },
         {
           "n": 2,
-          "nativeSsim": 0.808478
+          "nativeSsim": 0.897006
         },
         {
           "n": 3,
-          "nativeSsim": 0.946116
+          "nativeSsim": 0.995636
         },
         {
           "n": 4,
-          "nativeSsim": 0.887829
+          "nativeSsim": 0.907888
         },
         {
           "n": 5,
-          "nativeSsim": 0.970795
+          "nativeSsim": 0.993475
         },
         {
           "n": 6,
-          "nativeSsim": 0.898773
+          "nativeSsim": 0.982942
         },
         {
           "n": 7,
-          "nativeSsim": 0.949124
+          "nativeSsim": 0.9684
         },
         {
           "n": 8,
-          "nativeSsim": 0.869642
+          "nativeSsim": 0.947547
         },
         {
           "n": 9,
-          "nativeSsim": 0.814984
+          "nativeSsim": 0.919893
         },
         {
           "n": 10,
-          "nativeSsim": 0.896044
+          "nativeSsim": 0.981151
         }
       ]
     },
     {
       "name": "corpus-shapes",
-      "nativeSsim": 0.9824259999999999,
+      "nativeSsim": 0.9912126666666667,
       "perSlide": [
         {
           "n": 1,
-          "nativeSsim": 0.980795
+          "nativeSsim": 0.986137
         },
         {
           "n": 2,
-          "nativeSsim": 0.985775
+          "nativeSsim": 0.990156
         },
         {
           "n": 3,
-          "nativeSsim": 0.980708
+          "nativeSsim": 0.997345
         }
       ]
     },
     {
       "name": "corpus-pictures",
-      "nativeSsim": 0.9454883333333334,
+      "nativeSsim": 0.9607296666666668,
       "perSlide": [
         {
           "n": 1,
-          "nativeSsim": 0.956728
+          "nativeSsim": 0.963751
         },
         {
           "n": 2,
-          "nativeSsim": 0.975304
+          "nativeSsim": 0.983021
         },
         {
           "n": 3,
-          "nativeSsim": 0.904433
+          "nativeSsim": 0.935417
         }
       ]
     },
     {
       "name": "corpus-tables-charts",
-      "nativeSsim": 0.8556785,
+      "nativeSsim": 0.8594040000000001,
       "perSlide": [
         {
           "n": 1,
-          "nativeSsim": 0.856952
+          "nativeSsim": 0.861389
         },
         {
           "n": 2,
-          "nativeSsim": 0.854405
+          "nativeSsim": 0.857419
         }
       ]
     },
     {
       "name": "corpus-media",
-      "nativeSsim": 0.8099075,
+      "nativeSsim": 0.8207092500000001,
       "perSlide": [
         {
           "n": 1,
-          "nativeSsim": 0.987768
+          "nativeSsim": 0.993745
         },
         {
           "n": 2,
-          "nativeSsim": 0.527442
+          "nativeSsim": 0.554347
         },
         {
           "n": 3,
-          "nativeSsim": 0.98991
+          "nativeSsim": 0.992668
         },
         {
           "n": 4,
-          "nativeSsim": 0.73451
+          "nativeSsim": 0.742077
         }
       ]
     },
     {
       "name": "corpus-placement-4x3",
-      "nativeSsim": 0.994329,
+      "nativeSsim": 0.9986645000000001,
       "perSlide": [
         {
           "n": 1,
@@ -130,7 +130,7 @@
         },
         {
           "n": 2,
-          "nativeSsim": 0.988884
+          "nativeSsim": 0.997555
         }
       ]
     }

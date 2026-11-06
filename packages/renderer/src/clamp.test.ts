@@ -110,14 +110,33 @@ describe('rich text clamps (design/27 §3.2)', () => {
             expect(r.end).toBeLessThanOrEqual(len);
             at = r.end;
             const px = style.fontSizePx * (r.sizeScale ?? 1);
-            expect(px).toBeGreaterThanOrEqual(CLAMP.minFontPx - 1e-9);
+            expect(px).toBeGreaterThanOrEqual(CLAMP.minRunFontPx - 1e-9);
             expect(px).toBeLessThanOrEqual(CLAMP.maxFontPx + 1e-9);
-            expect(runFontPx(style, r, 0.001)).toBe(CLAMP.minFontPx);
+            expect(runFontPx(style, r, 0.001)).toBe(CLAMP.minRunFontPx);
           }
         },
       ),
       { numRuns: 300 },
     );
+  });
+
+  it('keeps a 1 pt run at 2 px: runs are floored at minRunFontPx, box sizes still at minFontPx', () => {
+    // PowerPoint's 1 pt spacer paragraph (sz="100", 2 px) between 7 pt (14 px) verse lines.
+    const o = clampObject({
+      ...text(1, 'a\n \nb'),
+      style: { ...DEFAULT_LYRIC_STYLE, fontSizePx: 14 },
+      runs: [{ start: 2, end: 3, sizeScale: 2 / 14 }],
+    }) as TextObject;
+    expect(CLAMP.minRunFontPx).toBe(2);
+    expect(o.runs).toEqual([{ start: 2, end: 3, sizeScale: 2 / 14 }]);
+    expect(runFontPx(o.style, o.runs![0])).toBeCloseTo(2, 12);
+    // Below 1 pt the run is floored at 2 px, never at the 4 px of box sizes.
+    const tiny = clampRuns([{ start: 0, end: 1, sizeScale: 0.05 }], 1, 14);
+    expect(tiny[0]!.sizeScale).toBeCloseTo(2 / 14, 12);
+    expect(runFontPx(o.style, { sizeScale: 0.05 })).toBe(2);
+    expect(runFontPx(o.style, o.runs![0], 0.5)).toBe(2);
+    // The box size, which legacy drawText, bands and an older build draw, keeps its 4 px floor.
+    expect(clampStyle({ ...DEFAULT_LYRIC_STYLE, fontSizePx: 2 }).fontSizePx).toBe(CLAMP.minFontPx);
   });
 
   it('keeps at most 16 distinct run and bullet families and 64 size scales per object', () => {
@@ -150,6 +169,36 @@ describe('rich text clamps (design/27 §3.2)', () => {
       72,
     );
     expect(same.every((r) => r.fontFamily !== undefined)).toBe(true);
+  });
+
+  it('keys a family by its cleaned name and keeps one spelling of it, so variants never make a font', () => {
+    // Case, surrounding spaces, quotes and control characters: one family, one CSS name, one font lookup.
+    const variants = (k: number) =>
+      [
+        `${' '.repeat(k % 7)}Zq${' '.repeat(k % 5)}`,
+        k % 2 ? 'ZQ' : 'zq',
+        `"Z\u0001q${'\u0085'.repeat(k % 3)}"`,
+        `Z\\q\t`,
+      ][k % 4]!;
+    const runs = Array.from({ length: 2000 }, (_, k) => ({
+      start: k,
+      end: k + 1,
+      fontFamily: k < 1000 ? variants(k) : `Family ${k % 20}`,
+    }));
+    const out = clampRuns(runs, 2000, 72);
+    const families = new Set(out.map((r) => r.fontFamily));
+    expect(out.slice(0, 1000).every((r) => r.fontFamily === 'Zq')).toBe(true);
+    // The variants took one place in the budget: fifteen more families fit, and none of them twice.
+    expect(families.size).toBe(1 + (CLAMP.maxRunFamilies - 1) + 1); // 'Zq', 15 families, undefined
+    expect(out[1000 + 15]!.fontFamily).toBeUndefined();
+    // Bullets share the budget and take the spelling a run already has.
+    const o = clampObject({
+      ...text(0, 'ab'),
+      runs: [{ start: 0, end: 1, fontFamily: ' Wingdings ' }],
+      paras: [{ bullet: { char: '§', fontFamily: 'WINGDINGS\u0000' } }],
+    }) as TextObject;
+    expect(o.runs![0]!.fontFamily).toBe('Wingdings');
+    expect(o.paras![0]!.bullet!.fontFamily).toBe('Wingdings');
   });
 
   it('strips every control character from family names, so a font string stays valid', () => {

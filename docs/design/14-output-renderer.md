@@ -221,7 +221,8 @@ Arm sequence for a cue (asset worker, then render worker):
    without restarting the worker; the worker then reports the family `ready` and the link
    draws again in place the held slides that fell back for it.
 3. For images, `createImageBitmap` from the OPFS blob (cached bitmaps by hash and size
-   are reused).
+   are reused). A picture a slide draws unrotated is resampled once into an sRGB bitmap
+   of its device rectangle and copied 1:1 (design/27 §7.1).
 4. Post bitmaps to the render worker, which uploads them into pre-allocated texture
    slots (`copyExternalImageToTexture`) and writes the quad list for the stack. Uploads
    never run inside the compositor's `draw` (design/27 §7.3): the frame loop uploads armed

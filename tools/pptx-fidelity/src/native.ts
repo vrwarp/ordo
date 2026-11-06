@@ -8,10 +8,13 @@
  *   name never becomes a path). It never throws: a deck the converter cannot read is a note.
  * - `convertDeckIsolated` runs it in a worker thread with a heap limit and a timeout, as the hub's CPU pool
  *   will (design/27 §12): a deck that exhausts either is a note, and the run goes on.
- * - `NativeRenderer` loads `native-page.ts` (bundled with esbuild) in headless Chromium, registers the host
- *   fonts fontconfig gives for every family the slides ask for (as `pptx-render/src/fonts.ts` and
- *   LibreOffice do) under internal names, and draws every shown slide with `drawSlide2D`: a 1920x1080
- *   picture cut to the slide area, and raster timings at 1920 and 3840 px.
+ * - Each slide also gets its text features (`features.ts`, from its own XML) and the LibreOffice policy
+ *   rules that change its drawing (`compat.ts`; the deck is emitted a second time with
+ *   `EmitOptions.loCompat`); with `loCompat` the slide as LibreOffice draws it is kept too (`compatSlide`).
+ * - `NativeRenderer` loads `native-page.ts` (bundled with esbuild) in headless Chromium, gives the page's
+ *   font resolver the faces this machine has for every family the slides ask for, ordo's default face and
+ *   the script fallbacks (`fonts.ts`, as LibreOffice and the outputs draw them), and draws every shown slide
+ *   with `drawSlide2D`: a 1920x1080 picture cut to the slide area, and raster timings at 1920 and 3840 px.
  *
  * The deck is untrusted: the page fetches only from the harness's own origin, which answers from a fixed
  * table of generated names, and every other request is refused.
@@ -33,8 +36,11 @@ import {
   type SlideClass,
   type Tier,
 } from '@ordo/pptx-scene';
+import type { FaceRequest } from '@ordo/renderer/text/types.ts';
 import type { Browser, Page } from '@playwright/test';
-import { run } from '../../../apps/hub/src/media/tools.ts';
+import { type CompatRule, compatRules, drawingKey } from './compat.ts';
+import { deckTextFeatures, textFeatures } from './features.ts';
+import { hostFonts, type ScriptFace } from './fonts.ts';
 import type { NativePage, PageFont, PageMedia, RenderResult } from './native-page.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -67,7 +73,20 @@ export type NativeSlide = {
   /** Reading and emitting this slide, in ms (`SlideScene.ms` + `EmittedSlide.ms`). */
   convertMs: number;
   notes: string[];
+  /** The slide as ordo draws it. */
   slide: Slide;
+  /** Text features of the slide's own XML (`features.ts`). */
+  textFeatures: string[];
+  /** LibreOffice policy rules that change how the slide is drawn (`compat.ts`). */
+  compat: CompatRule[];
+  /** With `loCompat`: the slide as LibreOffice draws it, when that differs from `slide`. */
+  compatSlide?: Slide;
+};
+
+/** What `convertDeck` is asked for besides the slides. */
+export type ConvertOptions = {
+  /** Keep each slide as LibreOffice draws it as well (`--lo-compat`). */
+  loCompat?: boolean;
 };
 
 export type NativeMedia = {
@@ -88,6 +107,8 @@ export type NativeDeck = {
   notes: string[];
   /** The deck carries font files (`ppt/fonts/`); LibreOffice 24.2 ignores them (design/27 §14.1). */
   embeddedFonts: boolean;
+  /** Text features of every slide part and the presentation part (`deckTextFeatures`). */
+  textFeatures: string[];
   /** Reading the zip, parsing and emitting the whole deck, in ms. */
   extractMs: number;
   parseMs: number;
@@ -132,6 +153,12 @@ async function head(file: string): Promise<Uint8Array> {
   }
 }
 
+/** A part's XML text ('' when it is missing or was spilled). */
+function xmlOf(files: ReadonlyMap<string, Uint8Array>, part: string): string {
+  const b = files.get(part) ?? files.get(findCaselessKey(files, part) ?? '');
+  return b?.length ? new TextDecoder().decode(b) : '';
+}
+
 const extOf = (part: string) => /\.([a-z0-9]{1,8})$/i.exec(part)?.[1]?.toLowerCase() ?? '';
 
 /** The first `n` bytes of a file, synchronously (`parseDeck` asks for picture sizes while it runs). */
@@ -166,13 +193,18 @@ export function spilledPictureSize(file: string | undefined): PictureHeader | un
  * Convert one deck into `dir` (which must exist): `slides.json` and `media/`. Never throws; a deck that
  * cannot be read comes back with `error` and no slides.
  */
-export async function convertDeck(deckFile: string, dir: string): Promise<NativeDeck> {
+export async function convertDeck(
+  deckFile: string,
+  dir: string,
+  opts: ConvertOptions = {},
+): Promise<NativeDeck> {
   const out: NativeDeck = {
     slides: [],
     slideRect: { x: 0, y: 0, w: 1920, h: 1080 },
     media: [],
     notes: [],
     embeddedFonts: false,
+    textFeatures: [],
     extractMs: 0,
     parseMs: 0,
     emitMs: 0,
@@ -210,17 +242,43 @@ export async function convertDeck(deckFile: string, dir: string): Promise<Native
     for (const n of [...scene.notes, ...emitted.notes]) note(n);
 
     const sceneMs = new Map(scene.slides.map((s) => [s.index, s.ms]));
-    out.slides = emitted.slides.map((s) => ({
-      index: s.index,
-      ...(s.shown !== undefined ? { shown: s.shown } : {}),
-      hidden: s.hidden,
-      tier: s.classification.tier,
-      class: s.classification.class,
-      reasons: s.classification.reasons,
-      convertMs: (sceneMs.get(s.index) ?? 0) + s.ms,
-      notes: s.notes,
-      slide: s.slide,
-    }));
+    const features = new Map(
+      scene.slides.map((s) => [s.index, textFeatures(xmlOf(zip.files, s.part))] as const),
+    );
+    out.textFeatures = deckTextFeatures(
+      features.values(),
+      textFeatures(xmlOf(zip.files, 'ppt/presentation.xml')),
+    );
+    // LibreOffice's policies: the converter writes them (`EmitOptions.loCompat`), compat.ts names them.
+    const hits = compatRules(scene);
+    let compatSlides: Map<number, Slide> | undefined;
+    try {
+      if (hits.size)
+        compatSlides = new Map(
+          emitSlides(scene, { loCompat: true }).slides.map((s) => [s.index, s.slide] as const),
+        );
+    } catch (e) {
+      note(`the slides as LibreOffice draws them could not be emitted: ${errorText(e)}`);
+    }
+    out.slides = emitted.slides.map((s) => {
+      const lo = compatSlides?.get(s.index);
+      const differs = lo !== undefined && drawingKey(lo) !== drawingKey(s.slide);
+      const rules: CompatRule[] = differs ? [...(hits.get(s.index) ?? [])].sort() : [];
+      return {
+        index: s.index,
+        ...(s.shown !== undefined ? { shown: s.shown } : {}),
+        hidden: s.hidden,
+        tier: s.classification.tier,
+        class: s.classification.class,
+        reasons: s.classification.reasons,
+        convertMs: (sceneMs.get(s.index) ?? 0) + s.ms,
+        notes: s.notes,
+        slide: s.slide,
+        textFeatures: features.get(s.index) ?? [],
+        compat: rules,
+        ...(opts.loCompat && differs ? { compatSlide: lo } : {}),
+      };
+    });
 
     // The pictures the slides use, under generated names; anything Chromium is not asked to draw is
     // counted by its extension.
@@ -297,7 +355,7 @@ function spawnWorker(heapMb: number): Worker {
 export function convertDeckIsolated(
   deckFile: string,
   dir: string,
-  limits: { heapMb?: number; timeoutMs?: number } = {},
+  limits: { heapMb?: number; timeoutMs?: number } & ConvertOptions = {},
 ): Promise<NativeDeck> {
   const run = queue.then(() => convertInWorker(deckFile, dir, limits));
   queue = run.catch(() => undefined);
@@ -307,7 +365,7 @@ export function convertDeckIsolated(
 async function convertInWorker(
   deckFile: string,
   dir: string,
-  limits: { heapMb?: number; timeoutMs?: number },
+  limits: { heapMb?: number; timeoutMs?: number } & ConvertOptions,
 ): Promise<NativeDeck> {
   const heapMb = limits.heapMb ?? CONVERT_HEAP_MB;
   const timeoutMs = limits.timeoutMs ?? CONVERT_TIMEOUT_MS;
@@ -352,7 +410,7 @@ async function convertInWorker(
     worker.on('error', onError);
     worker.on('exit', onExit);
     worker.ref();
-    worker.postMessage({ deckFile, dir });
+    worker.postMessage({ deckFile, dir, opts: { loCompat: limits.loCompat === true } });
   });
   if (typeof result !== 'string') return result;
   await rm(join(dir, '.parts'), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
@@ -362,6 +420,7 @@ async function convertInWorker(
     media: [],
     notes: [`converter failed: ${result}`],
     embeddedFonts: false,
+    textFeatures: [],
     extractMs: 0,
     parseMs: 0,
     emitMs: 0,
@@ -384,111 +443,10 @@ export function caseless(onDisk: ReadonlyMap<string, string>): Map<string, strin
   return out;
 }
 
-// ── Fonts ────────────────────────────────────────────────────────────────────────────────────────────────
-
-type FaceFile = { file: string; index: number; bold: boolean; italic: boolean };
-
-const fcCache = new Map<string, FaceFile | undefined>();
-
-/** The file fontconfig substitutes for `family` in one variant, as LibreOffice would draw it. */
-async function fcMatch(family: string, bold: boolean, italic: boolean): Promise<FaceFile | undefined> {
-  const key = `${family}\u0000${bold}\u0000${italic}`;
-  if (fcCache.has(key)) return fcCache.get(key);
-  // The pattern is one argv element (no shell); fontconfig parses `-`, `:` and `,` in it, so escape them.
-  const pattern =
-    family.replace(/[\\\-:,]/g, (c) => `\\${c}`) + (bold ? ':bold' : '') + (italic ? ':italic' : '');
-  let got: FaceFile | undefined;
-  try {
-    const r = await run('fc-match', ['-f', '%{file}\t%{index}\t%{weight}\t%{slant}', pattern], {
-      timeoutMs: 10_000,
-      allowFail: true,
-    });
-    const [file, index, weight, slant] = r.stdout.split('\t');
-    if (r.code === 0 && file)
-      got = {
-        file,
-        index: Number(index) || 0,
-        bold: Number(weight) >= 180, // fontconfig: semibold 180, bold 200
-        italic: Number(slant) >= 100, // italic 100, oblique 110
-      };
-  } catch {
-    /* fc-match missing: the page falls back to the generic families */
-  }
-  fcCache.set(key, got);
-  return got;
-}
-
-/** Every font family the slides draw text with (any `fontFamily` value, so rich runs count too). */
-export function familiesOf(slides: readonly Slide[]): Set<string> {
-  const out = new Set<string>();
-  const walk = (v: unknown, depth: number) => {
-    if (depth > 12 || !v || typeof v !== 'object') return;
-    if (Array.isArray(v)) {
-      for (const x of v) walk(x, depth + 1);
-      return;
-    }
-    for (const [k, x] of Object.entries(v)) {
-      if (k === 'fontFamily' && typeof x === 'string' && x.trim()) out.add(x.trim());
-      else walk(x, depth + 1);
-    }
-  };
-  for (const s of slides) walk(s, 0);
-  return out;
-}
-
-/** The same slide with every `fontFamily` renamed through `names` (the page's internal family names). */
-export function renameFamilies<T>(v: T, names: ReadonlyMap<string, string>): T {
-  const walk = (x: unknown, depth: number): unknown => {
-    if (depth > 12 || !x || typeof x !== 'object') return x;
-    if (Array.isArray(x)) return x.map((y) => walk(y, depth + 1));
-    // fromEntries defines own properties: a key named "__proto__" stays a key.
-    return Object.fromEntries(
-      Object.entries(x).map(([k, y]) => [
-        k,
-        k === 'fontFamily' && typeof y === 'string' ? (names.get(y.trim()) ?? y) : walk(y, depth + 1),
-      ]),
-    );
-  };
-  return walk(v, 0) as T;
-}
-
-/**
- * The faces to register for `families`, each under an internal name the page has never resolved
- * (design/27 decision 6): fontconfig's regular face, plus its bold, italic and bold italic faces when they
- * are separate files of that weight and slope. Missing variants are synthesized by Chromium, as
- * LibreOffice synthesizes them.
- */
-export async function fontFaces(
-  families: Iterable<string>,
-  internal: (family: string) => string,
-): Promise<{ faces: (Omit<PageFont, 'url'> & { file: string })[]; notes: string[] }> {
-  const faces: (Omit<PageFont, 'url'> & { file: string })[] = [];
-  const notes: string[] = [];
-  for (const family of [...families].slice(0, 200)) {
-    const regular = await fcMatch(family, false, false);
-    if (!regular) continue;
-    const name = internal(family);
-    const used = new Set([regular.file]);
-    faces.push({ family: name, weight: 400, style: 'normal', file: regular.file });
-    const variants: [boolean, boolean][] = [
-      [true, false],
-      [false, true],
-      [true, true],
-    ];
-    for (const [bold, italic] of variants) {
-      const f = await fcMatch(family, bold, italic);
-      if (!f || used.has(f.file) || (bold && !f.bold) || (italic && !f.italic)) continue;
-      used.add(f.file);
-      faces.push({
-        family: name,
-        weight: bold ? 700 : 400,
-        style: italic ? 'italic' : 'normal',
-        file: f.file,
-      });
-    }
-    if (regular.index > 0) notes.push(`font ${clean(family, 60)}: face ${regular.index} of a collection`);
-  }
-  return { faces, notes };
+function findCaselessKey(m: ReadonlyMap<string, unknown>, name: string): string | undefined {
+  const want = name.toLowerCase();
+  for (const k of m.keys()) if (k.toLowerCase() === want) return k;
+  return undefined;
 }
 
 // ── Chromium ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -528,15 +486,40 @@ async function bundlePage(): Promise<string> {
 
 export type RenderedSlide = {
   shown: number;
-  /** The PNG, relative to the deck's native folder. */
+  /** The PNG, relative to the deck's native folder: the slide as drawn (as LibreOffice would with `loCompat`). */
   png?: string;
+  /** With `loCompat`, on a slide a policy rule changes: the slide as ordo draws it. */
+  policyPng?: string;
   width?: number;
   height?: number;
   rasterMs?: { '1920': number; '3840': number };
+  /** Preparing the pictures the cache lacks plus the first draw, in ms (`RenderResult.cold1920`). */
+  coldMs?: { '1920': number; '3840': number };
   error?: string;
 };
 
-export type RenderedDeck = { slides: RenderedSlide[]; notes: string[]; ms: number };
+export type RenderedDeck = {
+  slides: RenderedSlide[];
+  notes: string[];
+  ms: number;
+  /** Faces the page's resolver loaded for the deck (`fonts.ts`). */
+  fonts?: { offered: number; loaded: number };
+  /** `RenderOptions.probe`: the CSS font each request resolves to on the page. */
+  probes?: string[];
+};
+
+export type RenderOptions = {
+  /** Timed draws per width (default 3). */
+  repeats?: number;
+  /** Draw only these shown slides (0-based); default every one. */
+  only?: ReadonlySet<number>;
+  /** Draw each slide as LibreOffice would (`compatSlide`), and as ordo does next to it (`policyPng`). */
+  loCompat?: boolean;
+  /** Font requests to resolve on the page once its faces are loaded (diagnostics, tests). */
+  probe?: FaceRequest[];
+  /** Register stand-ins for script fallback families this machine lacks (`fonts.ts`). */
+  standIns?: boolean;
+};
 
 declare global {
   interface Window {
@@ -556,7 +539,8 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 
 /** Headless Chromium with the native page; one page per deck. */
 export class NativeRenderer {
-  private families = new Map<string, string>();
+  /** How each script fallback family was served, over the run (by family). */
+  private scriptFaces = new Map<string, ScriptFace>();
 
   private constructor(
     private browser: Browser,
@@ -590,15 +574,10 @@ export class NativeRenderer {
     await this.browser.close().catch(() => undefined);
   }
 
-  /** The internal family name of a deck's family (stable for the run). */
-  private internal = (family: string): string => {
-    let n = this.families.get(family);
-    if (!n) {
-      n = `ordo-native-${this.families.size + 1}`;
-      this.families.set(family, n);
-    }
-    return n;
-  };
+  /** The script fallbacks the run used, and the face this machine gave each. */
+  scriptFallbacks(): ScriptFace[] {
+    return [...this.scriptFaces.values()].sort((a, b) => a.family.localeCompare(b.family));
+  }
 
   /** A fresh page serving `files` (URL path → file on disk) and the bundle; every other request fails. */
   private async page(files: ReadonlyMap<string, string>, notes: string[]): Promise<Page> {
@@ -624,16 +603,24 @@ export class NativeRenderer {
     return page;
   }
 
-  /** Draw every shown slide of a converted deck into `dir` (`slide-NNNN.png`, NNNN = shown + 1). */
-  async renderDeck(deck: NativeDeck, dir: string, repeats = 3): Promise<RenderedDeck> {
+  /**
+   * Draw the shown slides of a converted deck into `dir` (`slide-NNNN.png`, NNNN = shown + 1; with
+   * `loCompat`, a slide a policy rule changes also as `slide-NNNN.policy.png`).
+   */
+  async renderDeck(deck: NativeDeck, dir: string, opts: RenderOptions = {}): Promise<RenderedDeck> {
     const t0 = performance.now();
+    const repeats = opts.repeats ?? 3;
     const notes: string[] = [];
     const shown = deck.slides
       .filter((s): s is NativeSlide & { shown: number } => s.shown !== undefined)
+      .filter((s) => !opts.only || opts.only.has(s.shown))
       .sort((a, b) => a.shown - b.shown);
+    const drawn = shown.flatMap((s) =>
+      opts.loCompat && s.compatSlide ? [s.slide, s.compatSlide] : [s.slide],
+    );
     const files = new Map<string, string>();
     const media: PageMedia[] = [];
-    const need = picturesNeeded(shown.map((s) => s.slide));
+    const need = picturesNeeded(drawn);
     for (const [k, m] of deck.media.entries()) {
       if (!m.file) continue;
       const path = `/media/${k + 1}`;
@@ -641,48 +628,73 @@ export class NativeRenderer {
       const n = need.get(m.id) ?? { w: 0, h: 0 };
       media.push({ id: m.id, url: path, needW: n.w, needH: n.h });
     }
-    const { faces, notes: fontNotes } = await fontFaces(familiesOf(shown.map((s) => s.slide)), this.internal);
-    notes.push(...fontNotes);
-    const fonts: PageFont[] = faces.map((f, k) => {
-      const path = `/font/${k + 1}`;
-      files.set(path, f.file);
-      return { family: f.family, weight: f.weight, style: f.style, url: path };
+    const host = await hostFonts(drawn, { standIns: opts.standIns === true });
+    notes.push(...host.notes);
+    for (const f of host.scripts) if (!this.scriptFaces.has(f.family)) this.scriptFaces.set(f.family, f);
+    const urls = new Map<string, string>();
+    const fonts: PageFont[] = host.fonts.map((f) => {
+      let path = urls.get(f.hash);
+      if (!path) {
+        path = `/font/${urls.size + 1}`;
+        urls.set(f.hash, path);
+        files.set(path, f.file);
+      }
+      const { file: _, ...face } = f;
+      return { ...face, url: path };
     });
 
     let page: Page | undefined;
+    let loaded: RenderedDeck['fonts'];
+    let probes: string[] | undefined;
     const open = async () => {
       page = await this.page(files, notes);
       const p = page;
       const got = await p.evaluate((list) => window.__native.fonts(list), fonts);
-      if (got.failed.length) notes.push(`${got.failed.length} font file(s) could not be loaded`);
+      if (got.failed.length) notes.push(`${got.failed.length} font face(s) could not be loaded`);
+      loaded = { offered: fonts.length, loaded: got.loaded };
+      if (opts.probe) probes = await p.evaluate((reqs) => window.__native.font(reqs), opts.probe);
       await p.evaluate((list) => window.__native.media(list), media);
       return p;
     };
     const slides: RenderedSlide[] = [];
     const missing = new Set<string>();
     const offered = new Set(media.map((m) => m.id));
+    const draw = async (slide: Slide, name: string, times: number) => {
+      const p = page ?? (await open());
+      const job = { slide, rect: deck.slideRect, repeats: times };
+      const r: RenderResult = await withTimeout(
+        p.evaluate((j) => window.__native.render(j), job),
+        SLIDE_TIMEOUT_MS,
+        name,
+      );
+      await writeFile(join(dir, name), Buffer.from(r.png, 'base64'));
+      // Pictures never offered to the page (EMF, TIFF, …) are already counted by `convertDeck`.
+      for (const id of r.missing) if (offered.has(id)) missing.add(id);
+      return r;
+    };
     try {
       for (const s of shown) {
         const out: RenderedSlide = { shown: s.shown };
         slides.push(out);
+        const base = `slide-${String(s.shown + 1).padStart(4, '0')}`;
         try {
-          const p = page ?? (await open());
-          const job = { slide: renameFamilies(s.slide, this.families), rect: deck.slideRect, repeats };
-          const r: RenderResult = await withTimeout(
-            p.evaluate((j) => window.__native.render(j), job),
-            SLIDE_TIMEOUT_MS,
-            `slide ${s.shown + 1}`,
-          );
-          const name = `slide-${String(s.shown + 1).padStart(4, '0')}.png`;
-          await writeFile(join(dir, name), Buffer.from(r.png, 'base64'));
+          const compat = opts.loCompat ? s.compatSlide : undefined;
+          const r = await draw(compat ?? s.slide, `${base}.png`, repeats);
           Object.assign(out, {
-            png: name,
+            png: `${base}.png`,
             width: r.width,
             height: r.height,
-            rasterMs: { '1920': round2(r.ms1920), '3840': round2(r.ms3840) },
+            ...(repeats
+              ? {
+                  rasterMs: { '1920': round2(r.ms1920), '3840': round2(r.ms3840) },
+                  coldMs: { '1920': round2(r.cold1920), '3840': round2(r.cold3840) },
+                }
+              : {}),
           });
-          // Pictures never offered to the page (EMF, TIFF, …) are already counted by `convertDeck`.
-          for (const id of r.missing) if (offered.has(id)) missing.add(id);
+          if (compat) {
+            await draw(s.slide, `${base}.policy.png`, 0);
+            out.policyPng = `${base}.policy.png`;
+          }
         } catch (e) {
           out.error = errorText(e);
           notes.push(`slide ${s.shown + 1} not drawn: ${out.error}`);
@@ -695,7 +707,13 @@ export class NativeRenderer {
       await page?.close().catch(() => undefined);
     }
     if (missing.size) notes.push(`${missing.size} picture(s) could not be decoded`);
-    return { slides, notes, ms: performance.now() - t0 };
+    return {
+      slides,
+      notes,
+      ms: performance.now() - t0,
+      ...(loaded ? { fonts: loaded } : {}),
+      ...(probes ? { probes } : {}),
+    };
   }
 }
 

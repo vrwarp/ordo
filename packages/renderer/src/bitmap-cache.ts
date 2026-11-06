@@ -1,6 +1,6 @@
 /**
  * Decoded-image cache of the asset worker, bounded by bytes rather than count (review item 26), and the
- * downscale rule that keeps any decoded image at or under the output size. Pure, so both are unit tested.
+ * downscale rule that keeps a decoded source at or under the output size. Pure, so both are unit tested.
  */
 
 export type Sized = { width: number; height: number; close(): void };
@@ -27,9 +27,29 @@ export function downscaleFor(
   return { width: Math.max(1, Math.round(w * scale)), height: Math.max(1, Math.round(h * scale)) };
 }
 
-/** LRU by last use; eviction closes the bitmap. */
+/**
+ * Key of a decoded picture: the file's hash, plus `@` and the target's key for one prepared at a device
+ * size (`preparePicture`, design/27 §7.1), so one file prepared for several sizes holds several entries.
+ */
+export function pictureKey(hash: string, target?: { key: string }): string {
+  return target ? `${hash}@${target.key}` : hash;
+}
+
+/** The file hash of a `pictureKey`. */
+export function pictureKeyHash(key: string): string {
+  const at = key.indexOf('@');
+  return at < 0 ? key : key.slice(0, at);
+}
+
+/**
+ * LRU by last use; eviction closes the bitmap. Keys are `pictureKey`s. A pinned key (`pin`) is never
+ * evicted or pruned: the asset worker pins what a cue's draw holds from its preload until the draw is done
+ * (`unpinAll`), so neither a later insert of the same preload nor a prune arriving meanwhile closes a bitmap
+ * the draw is about to use. Pinned entries may hold the cache over its limits until they are unpinned.
+ */
 export class BitmapCache<B extends Sized> {
   private map = new Map<string, B>();
+  private pinned = new Set<string>();
   bytes = 0;
 
   constructor(
@@ -63,21 +83,42 @@ export class BitmapCache<B extends Sized> {
     this.map.delete(hash);
     this.map.set(hash, bmp);
     if (!prev || prev !== bmp) this.bytes += bitmapBytes(bmp);
-    for (const [k, b] of this.map) {
-      if ((this.bytes <= this.budgetBytes && this.map.size <= this.maxCount) || k === hash) break;
-      this.evict(k, b);
-    }
+    this.trim(hash);
   }
 
-  /** Drop every entry not in `keep`. */
+  /** Keep `key` (inserted or not yet) from eviction and pruning until `unpinAll`. */
+  pin(key: string): void {
+    this.pinned.add(key);
+  }
+
+  get pinnedCount(): number {
+    return this.pinned.size;
+  }
+
+  /** Unpin every key and evict back to the limits. */
+  unpinAll(): void {
+    this.pinned.clear();
+    this.trim();
+  }
+
+  /** Drop every entry whose file hash (`pictureKeyHash`) is not in `keep`; pinned entries stay. */
   prune(keep: ReadonlySet<string>): number {
     let n = 0;
     for (const [k, b] of [...this.map]) {
-      if (keep.has(k)) continue;
+      if (keep.has(pictureKeyHash(k)) || this.pinned.has(k)) continue;
       this.evict(k, b);
       n++;
     }
     return n;
+  }
+
+  /** Evict least recently used, unpinned entries (never `newest`) while over the limits. */
+  private trim(newest?: string): void {
+    for (const [k, b] of [...this.map]) {
+      if ((this.bytes <= this.budgetBytes && this.map.size <= this.maxCount) || k === newest) break;
+      if (this.pinned.has(k)) continue;
+      this.evict(k, b);
+    }
   }
 
   private evict(k: string, b: B): void {

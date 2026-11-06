@@ -80,6 +80,8 @@ Hardening after the M1 re-review (M3 item A; each case a crafted deck under the 
 | `picture.ts`    | `p:pic` and every `a:blipFill`                                                                                    | C      |
 | `background.ts` | Slide → layout → master background                                                                                | C      |
 | `emit.ts`       | IR → ordo objects, media placeholders, digest                                                                     | C      |
+| `richtext.ts`   | A text body as rich ordo text: runs, paragraph styles, office box fields (M2)                                     | C (M2) |
+| `fontmap.ts`    | Script class of each character (Latin, East Asian, complex), substitutes and fallback families (M2)               | C (M2) |
 | `classify.ts`   | Census tiers T1-T5, reasons, slide class                                                                          | F      |
 | `notes.ts`      | `readNotes`: a slide's speaker notes (notesSlide body placeholders), bounded                                      | M3 B   |
 | `transition.ts` | `readTransition`, `readSlideTransition` (a slide's tail only), `showLoops` (`p:showPr loop`)                      | M3 B   |
@@ -274,9 +276,158 @@ Done (design/27 §4, §15 M1):
 - `crop`: written from srcRect (and fillRect clipping) by default, now that `ImageObject.crop` is in the
   schema; `EmitOptions.crop: false` writes the legacy uncropped picture and notes it.
 
-Left for later milestones: rich runs and paragraphs (M2: dominant style only today), bullets and numbering
-drawn (M2; read into the IR), shape text rectangles of other presets and custom paths (M6), the bilingual
-lyric rule, picture masks/flips/adjust (M3), arrowheads and dashes (M6), tiles pre-tiled (M3), media (M5).
+Left for later milestones: shape text rectangles of other presets and custom paths (M6), picture
+masks/flips/adjust (M3), arrowheads and dashes (M6), tiles pre-tiled (M3), media (M5).
+
+### M2 wave 2: rich emission (`richtext.ts`, `fontmap.ts`; `text.ts`, `emit.ts`)
+
+Contracts: `richText(body, { frame, shapeShadow?, log }): RichText | undefined` (`text`, `style`, `runs?`,
+`paras?`); `EmitOptions.richText` (default true; false writes M1's legacy text, what the importer writes
+while the schema ships one release ahead of it, design/27 §3.2); `EmitOptions.loCompat` (the harness's `--lo-compat` only: LibreOffice's text policies, `RichOptions.lo`);
+`charClass`, `scriptClasses`, `substituteOf`, `scriptFallbacks`, `fallbackFonts`, `MAX_FALLBACK_FONTS`. IR
+additions: `Para.bulletNone` (the nearest bullet setting is `a:buNone`), `Bullet.sizePt` (`a:buSzPts`),
+`TextBody.autofit.own` (the shape's own `a:bodyPr` asks for shrink-to-fit); `runStyle` resolves an empty
+theme ea/cs typeface through the theme's font for the run language's script.
+
+Done (design/27 §3.1, §3.2, §4 "Text bodies", §6, §11 "Mapping"):
+- **Text**: paragraphs joined by '\n', each `a:br` a '\n' starting a `{ soft: true }` paragraph; tabs and
+  other control characters in `a:t` become spaces (one per UTF-16 unit, so `paras[i]` stays paragraph i);
+  at most 20,000 characters, runs and paragraph styles cut with it.
+- **Box style**: the dominant run (most visible characters) and the paragraph holding most of the text give
+  the legacy values an older build draws (family, weight, slant, size, colour, letter spacing, outline,
+  shadow, caps as uppercase, align, lineHeight, `padding` = the smallest inset); beside them `lineModel:
+  'office'`, `insets`, `wrap: false`, `autofit: 'shrink'` with PowerPoint's stored `fitScale` (font =
+  fontScale, spacing = 1 − lnSpcReduction, from the shape's own `a:bodyPr` only: a layout's or master's
+  scale was fitted to their prompt text, so an inherited `normAutofit` shrinks from full size; sizes
+  unscaled; the engine subtracts the reduction from every paragraph's proportional spacing as PowerPoint
+  does), `direction` (PowerPoint paragraphs are left to
+  right unless `rtl="1"`), `lang`, `underline` and `fallbackFonts`. The box is the shape's text rectangle:
+  insets, margins and `wrap="none"` no longer fold into it.
+- **Runs**: whatever differs from the box, merged while unchanged: family per script (a run's Latin,
+  East Asian or complex-script typeface by LibreOffice's block table, weak characters taking the script
+  before them), weight, slant, `sizeScale`, colour (gradient as its first stop until M6, hollow text
+  transparent), highlight, underline, strike, caps, letter spacing, `baseline`, outline and shadow (null
+  where only the box has one), language (primary subtag). The '\n' ending an empty paragraph carries its end
+  mark; the a:br before an empty last line carries the paragraph's end mark. Known limit: when the line
+  before an empty last paragraph is empty too, its '\n' ends both and carries the last paragraph's end mark
+  (the schema has no field for it), so that line is sized by it rather than by its own.
+- **Paragraphs**: align (justify, distribute) where it differs from the box, level, marL/indent, space
+  before/after (points, or a share of the paragraph's largest run, as LibreOffice takes it), line spacing where it differs from the box's
+  `lineHeight`, rtl where it differs from the box direction, and the nearest bullet: Wingdings, Wingdings
+  2 and 3, Webdings and Symbol characters mapped with `@ordo/domain` `symbolFontChar` (drawn in the text's
+  font; an unknown code, another symbol font's or any private-use character is '•'), other `buFont`s kept,
+  automatic numbers with scheme and `startAt` (`(17)` verse numbers), `buClr`, `buSzPct`/`buSzPts`, a
+  picture bullet as '•', `a:buNone` as null.
+- **Fallback families** (`fontmap.ts`, at most 8): the box family's metric substitute (Carlito, Caladea,
+  Liberation, Gelasio), the East Asian and complex-script families the text uses with theirs, the other run
+  families' substitutes, then ordo's bundled script fallback for every script present (Han by language).
+- **Lyric box**: on a bilingual slide (the two boxes with the most text in different languages, of
+  comparable length) the first in reading order, as design/27 §4 says. Lengths weigh a Han, Kana or Hangul
+  character as 2.5 Latin ones, so a Korean or Chinese line and its English translation compare; languages
+  compare like with like (different script classes, or two different primary subtags when both boxes
+  carry one).
+- **Slide budget**: once a slide's rich text objects pass 64 KB of JSON (design/27 §3.4), its further text
+  is written without runs and paragraph styles and the slide is classed picture (noted), so layouts that
+  repeat thousands of formatted runs on every slide never build megabytes the hub would discard.
+- The pure domain modules `bullets.ts`, `defaults.ts` and `readable.ts` are the only values imported from
+  `@ordo/domain` (`purity.test.ts` checks that they import nothing else at run time); `@ordo/domain` is a
+  dependency now.
+- Tests: `richtext.test.ts` (crafted decks for each rule: verse superscripts, Wingdings and Symbol bullets,
+  `(17)` numbering from startAt, mixed runs, Arabic right to left, a:br, end marks, normAutofit with a
+  stored scale, scripts and fallbacks, the previous release's schema) and the lyric rules in `emit.test.ts`.
+
+Measured (`--engine native --lo-compat`, LibreOffice 24.2 pictures, mean SSIM per deck; pptx-preview from
+the validation suite's scores): the sermon decks 0.825 (M1) → 0.944, every deck above pptx-preview (0.927
+mean); without `--lo-compat` 0.932, one deck 0.05 below where PowerPoint's stored shrink scale fits ordo's
+box and LibreOffice re-fits smaller. Worship shard 0: 0.693 → 0.795 (pptx-preview 0.765), shard 2: 0.719 →
+0.832 (0.765); on decks made only of T1 and T2 slides 0.840 and 0.831 against pptx-preview's 0.827 and
+0.791. Shard 2's feature decks (pptx-preview on the same decks): lnSpcPct 0.782 (0.578), normAutofitScaled
+0.780 (0.544), rtl 0.846 (0.835), rtlScriptText 0.889 (0.852), superSub 0.648 (0.558). Two decks of one
+template lose 0.04 against M1: LibreOffice draws their (glowing) text at about 55 % of its size, which no
+ordo rule explains yet.
+
+Measured after the merge with the engine fixes and the harness's font resolver (the M2 exit of design/27
+§15; `--lo-compat` runs, which draw each slide a policy rule changes both ways, so every number is given
+drawn with LibreOffice's policies / with ordo's; pptx-preview with ordo's corrections, per slide):
+- Sermon decks (73 slides): 0.944 / 0.932 against pptx-preview's 0.927. With LibreOffice's policies every
+  deck is above pptx-preview; with ordo's, one deck is 0.040 below it, all of it on three slides whose
+  body PowerPoint stored at a 92.5 % fit for a face this machine substitutes (ordo keeps the stored scale,
+  LibreOffice fits again and wraps differently). 72 of 73 slides are native class (one hybrid: 3D).
+- Worship shards 0 and 2 (179 decks): T1+T2 slides (1,014) 0.906 / 0.895 against 0.859 on the same slides
+  (shard 0 0.918 / 0.913 against 0.883, shard 2 0.896 / 0.880 against 0.838).
+- Text features, deck means as the targets were taken (pptx-preview on the same decks; target): superSub
+  0.642 / 0.635 (0.616; 0.61), lnSpcPct 0.798 / 0.797 (0.743; 0.75), normAutofitScaled 0.849 / 0.838
+  (0.762; 0.77), rtl 0.799 / 0.798 (0.685; 0.71), rtlScriptText 0.674 / 0.674 (0.645; 0.66). Per slide,
+  native is above pptx-preview on the same slides for every feature; the normAutofitScaled slides alone
+  are 0.758 / 0.714 (0.668).
+- Raster p95 on the sermon slides, ordo's drawings, software raster on a shared 4-CPU machine: 10.2 ms at
+  1920 and 45.4 ms at 3840 (M1: 9.1 and 45.4), over the budget of 8 and 30 ms. The slowest slides draw
+  three or four full-slide pictures; then come slides with shadowed text (7.0 ms mean against 3.7 ms
+  without), which the effect sprite cache of design/27 §7.5 is for.
+- `--baseline` against M1's native scores flags one deck per shard (−0.044 each): the two decks of the
+  template above.
+
+Round 1, measured the same way after four renderer fixes were merged (PowerPoint's stored fit scale kept
+only for the face it was fitted with, design/27 §6 step 10 and §10; the line of a trailing a:br single
+spaced; pictures prepared once at their device size, §7.1; 1 pt runs kept at 2 px, §3.2). Every M2 exit
+criterion of design/27 §15 is now met:
+- Sermon decks: 0.955 / 0.953 (round 0: 0.944 / 0.932) against pptx-preview's 0.927, every deck above
+  pptx-preview with both policies, by 0.012 to 0.063. The three slides whose face is substituted went
+  from 0.734, 0.594 and 0.594 to 0.956, 0.899 and 0.899 with ordo's policies, and five slides of another
+  deck that end paragraphs with a:br from 0.73-0.90 to 0.96-0.98. 72 of 73 slides native class (the 3D
+  slide hybrid).
+- Worship shards 0 and 2: T1+T2 slides (1,014; 1,003 native class, 11 hybrid for `anchorCtr` until
+  M8) 0.908 / 0.897 (round 0: 0.906 / 0.895) against 0.859 on the same slides; shard 0 0.920 / 0.915
+  against 0.883, shard 2 0.897 / 0.881 against 0.838. Shard means 0.802 / 0.799 and 0.834 / 0.827
+  (round 0: 0.795 / 0.792 and 0.832 / 0.824). Of 1,999 slides compared with round 0, 283 rose by more
+  than 0.002 and 10 fell, one by more than 0.01: a Tamil slide (0.638 → 0.597) whose face is
+  substituted, so it is now fitted from full size as LibreOffice fits it, a drawing that scored 0.597 in
+  round 0 as well (its `--lo-compat` picture), where PowerPoint's stored scale scored 0.638.
+- Text features, deck means (pptx-preview; target): superSub 0.661 / 0.654 (0.616; 0.61), lnSpcPct 0.800 /
+  0.799 (0.743; 0.75), normAutofitScaled 0.850 / 0.840 (0.762; 0.77), rtl 0.800 / 0.799 (0.685; 0.71),
+  rtlScriptText 0.688 / 0.688 (0.645; 0.66).
+- Raster p95 on the sermon slides, ordo's drawings (a run without `--lo-compat`, twice): 4.1 ms at 1920
+  and 23.9-24.4 ms at 3840 (round 0: 10.2 and 45.4), within the budget of 8 and 30 ms. The slowest are
+  slides with shadowed text (the effect sprite cache of design/27 §7.5), up to 29.7 ms at 3840; drawn as
+  LibreOffice draws them, without run shadows, the p95 is 3.9 and 14.1 ms.
+- The 25 lowest T1+T2 slides with ordo's policies (0.31-0.47) come from seven decks. Ten are two decks of
+  one template whose theme background (`bgRef` 1002, a gradient) is drawn flat until M6 (pptx-preview
+  0.42-0.63). Seven are one deck where ordo keeps PowerPoint's stored scale on a metric-compatible face
+  and LibreOffice fits again (0.76-0.91 drawn with LibreOffice's policies), four a deck with an inherited
+  stored scale. The rest: a Google Slides deck whose Arabic face is wider than LibreOffice's and one with
+  embedded fonts, both within 0.01 of pptx-preview, and a page of very small verse references (0.464,
+  pptx-preview 0.545).
+
+Repair round, measured the same way after the review's fixes (PowerPoint's stored lnSpcReduction
+subtracted from every paragraph's proportional spacing, single spacing included; a stored scale taken
+from the shape's own `a:bodyPr` only; Wingdings 2, Wingdings 3 and Webdings bullets mapped; percentage
+gaps sized by the paragraph's largest run; the bilingual rule weighing wide scripts; the 64 KB text
+budget per slide; pictures cut to the canvas, decoded once per file and pinned while a cue draws them).
+The M2 exit criteria stay met:
+- Sermon decks: unchanged, 0.955 / 0.953 against pptx-preview's 0.927, every deck above it by 0.012 to
+  0.063; 72 of 73 slides native class.
+- Worship shards 0 and 2: T1+T2 slides 0.908 / 0.896 (round 1: 0.908 / 0.897) against 0.859; shard 0
+  0.920 / 0.915 against 0.883, shard 2 0.897 / 0.880 against 0.838. Drawn as LibreOffice draws them, 7
+  slides rose and 4 fell by more than 0.002; one fell by more than 0.01: a T2 slide of five columns of
+  densely coloured runs (0.471 → 0.341), which passes the 64 KB budget (85 KB with three of its boxes
+  formatted), so its last two boxes are written plain and it is classed picture, as the hub classes it.
+  With ordo's policies, 12 rose and 40 fell: 29 slides whose PowerPoint scale is kept, which now fits
+  single-spaced text with its line spacing reduced, as PowerPoint draws it, where LibreOffice fits again
+  from full size and leaves single spacing alone (by up to 0.35, on slides where the reduced lines end
+  well above LibreOffice's); seven where a layout's scale is no longer applied to the slide's text; four
+  others by at most 0.13 (the slide above among them).
+- Text features, deck means (pptx-preview; target): superSub 0.661 / 0.654 (0.616; 0.61), lnSpcPct 0.800 /
+  0.800 (0.743; 0.75), normAutofitScaled 0.850 / 0.840 (0.762; 0.77), rtl 0.800 / 0.799 (0.685; 0.71),
+  rtlScriptText 0.688 / 0.688 (0.645; 0.66). Per slide every feature stays above pptx-preview on the same
+  slides; normAutofitScaled with ordo's policies 0.715 (round 1: 0.722; pptx-preview 0.668).
+- Raster p95 on the sermon slides, ordo's drawings (two runs): 4.0-4.1 ms at 1920 and 23.3-24.1 ms at
+  3840, within 8 and 30 ms. The harness now also reports the cold time, what an output pays on a slide
+  change when its cache lacks the slide's pictures (decode and preparation plus the first draw): p95 67
+  ms at 1920 and 137-144 ms at 3840 on the sermon slides, 73 / 109 ms and 86 / 112 ms on the shards.
+
+Not done: hyperlink colours (PowerPoint draws linked runs in the theme's hlink colour), symbol-font
+characters inside the text itself (`a:sym`), `origin` and the `role: 'translation'` of the second
+language box (M3, with the rest of `ObjectOrigin`), vertical text (residual until M8).
 
 ### D: image-crop (`packages/domain/src/schemas.ts`, `packages/renderer/src/clamp.ts`, `text2d.ts`, `golden/`)
 
@@ -335,9 +486,15 @@ Done:
   BMP by their bytes (EMF, WMF, TIFF, …) are counted in a note and not drawn. `slides.json` holds every
   slide (hidden ones too) with its tier, class, reasons, convert time, notes and ordo `Slide`.
 - **Drawing** (`NativeRenderer`). One headless Chromium per run, a fresh page per deck. Every request
-  except the page's own origin is refused, and host resolution is off. Each family the slides use is
-  registered as `ordo-native-<n>` with fontconfig's regular face, plus its bold, italic and bold italic
-  faces when those are separate files; missing variants are synthesized. Pictures are decoded once per
+  except the page's own origin is refused, and host resolution is off. The page installs the renderer's
+  `FontResolver` as its font environment, as the outputs' asset worker does, and the slides keep the
+  deck's family names (`src/fonts.ts`): every family the slides ask for (runs, bullets, `fallbackFonts`)
+  gets fontconfig's regular face, plus its bold, italic and bold italic faces when those are separate files
+  of that family (missing variants are synthesized); ordo's default face, and the script fallbacks of the
+  text's scripts that are installed here, with their script's `unicodeRange`. A script whose fallback family
+  is missing falls back per glyph as LibreOffice's does (`--script-stand-ins` registers fontconfig's face
+  for the script's language under the family's name instead). `summary.json` lists how each script
+  fallback was served (`scriptFallbacks`). Pictures are decoded once per
   deck, scaled to the largest size the deck draws them at 3840 px (as the hub's picture preparation will),
   and kept in a bounded cache. `rasterMs` is the median of three draws (thumbnail-worker order: black,
   background cover, `drawSlide2D`) plus a one-pixel read-back, which makes Chromium rasterize.
@@ -363,8 +520,23 @@ Done:
   (`--engine native --corpus`); real and third-party decks keep their baselines outside the repository.
   Check a change with `--engine native --corpus --baseline tools/pptx-fidelity/native-baseline.json`.
 
-To do: `--lo-compat` (design/27 §14.1) and the committed probe corpus with its CI gate (§14.2) belong to later
-milestones.
+- **`--lo-compat`** (M2, design/27 §14.1): the native column drawn with LibreOffice 24.2's policies where
+  ordo's follow PowerPoint. The converter writes them (`EmitOptions.loCompat`, emitted beside ordo's own
+  slides by `convertDeck`): shrink-to-fit only for a shape's own `normAutofit` (LibreOffice ignores one
+  inherited from a layout or master placeholder, measured) and re-fitted from full size instead of
+  PowerPoint's stored scale; no run shadows (the shadow an unfilled shape casts stays); no outline on
+  filled text (the copy LibreOffice draws has them stripped). `src/compat.ts` names the rules a slide hits
+  (`runShadow`, `textOutline`, `refit`, `inheritedFit`), kept where the two drawings differ. Every run
+  records them; `--lo-compat` draws those slides both ways (`slide-NNNN.policy.png`, `policySsim`,
+  `nativePolicySsim`, `nativePolicyMean`), and `summary.json` and the report say `loCompat` and give the
+  means both ways, overall and per rule; `--baseline` compares ordo's own drawings either way.
+- **Text features and slide lists** (M2). Each slide gets the text features of its own XML
+  (`src/features.ts`: the suite inventory's superSub, lnSpcPct, normAutofitScaled, rtl, rtlScriptText and
+  bulletsAuto, and the census's mixedRuns). `summary.json` (`native.all`, `native.worship`) and the report
+  give per feature the slide count and means, means per tier, the deck means and the M2 target.
+  `--slides [DECK:]LIST` scores only some slides (repeatable; decks no list names are left out).
+
+To do: the committed probe corpus with its CI gate (§14.2) belongs to a later milestone.
 
 ### F: classify (`classify.ts`)
 

@@ -13,6 +13,7 @@ import {
   hash8,
   installFontEnv,
   internalFamilyName,
+  metricCompatible,
 } from './fonts.ts';
 import { layoutRich } from './rich.ts';
 import { testMeasurer } from './test-util.ts';
@@ -125,6 +126,62 @@ describe('internal family names', () => {
     expect(faceKey({ ...face('X', 'h', 700, 'italic'), unicodeRange: 'U+0590-05FF' })).toBe(
       'h|700|italic|U+0590-05FF',
     );
+    // A stand-in is another face, so a family whose stand-in flag changes loads again.
+    expect(faceKey({ ...face('X', 'h'), substitute: true })).toBe('h|400|normal||substitute');
+    expect(faceKey({ ...face('X', 'h'), substitute: false })).toBe(faceKey(face('X', 'h')));
+  });
+});
+
+describe('metric matches', () => {
+  it('pairs the metric-compatible families, case-insensitively, and nothing else', () => {
+    expect(metricCompatible('Calibri', 'Carlito')).toBe(true);
+    expect(metricCompatible('calibri', ' CARLITO ')).toBe(true);
+    expect(metricCompatible('Times New Roman', 'Liberation Serif')).toBe(true);
+    expect(metricCompatible('Arial', 'Nimbus Sans')).toBe(true);
+    expect(metricCompatible('Georgia', 'Gelasio')).toBe(true);
+    expect(metricCompatible('Aptos', 'Aptos')).toBe(true);
+    // Calibri Light has its own widths: Carlito is only its nearest face.
+    expect(metricCompatible('Calibri Light', 'Carlito')).toBe(false);
+    expect(metricCompatible('Aptos', 'Inter')).toBe(false);
+    expect(metricCompatible('Arial', 'Liberation Serif')).toBe(false);
+    expect(metricCompatible('', '')).toBe(false);
+    expect(metricCompatible('__proto__', 'constructor')).toBe(false);
+  });
+
+  it('says whether the face drawing a family is its own or a metric-compatible one', async () => {
+    const h = fakeHost();
+    const r = new FontResolver(h.host);
+    // Nothing loaded: ordo's default face draws, which is no family's match.
+    expect(r.metricMatch('Calibri', ['Carlito'])).toBe(false);
+    await r.sync([
+      face('Carlito', 'car'),
+      face('Noto Sans Hebrew', 'heb'),
+      face('Aptos', 'inter', 400),
+      { ...face('Aptos', 'inter-b', 700), substitute: true },
+      { ...face('Corbel', 'inter'), substitute: true },
+      face('Inter', 'inter'),
+    ]);
+    const g = r.generation;
+    // The first loaded fallback draws: a metric substitute holds, another face does not.
+    expect(r.metricMatch('Calibri', ['Missing', 'Carlito', 'Noto Sans Hebrew'])).toBe(true);
+    expect(r.metricMatch('Calibri', ['Noto Sans Hebrew', 'Carlito'])).toBe(false);
+    expect(r.metricMatch('Calibri Light', ['Carlito'])).toBe(false);
+    expect(r.metricMatch('Century Gothic', [])).toBe(false);
+    // The family's own faces draw: a stand-in for all of them does not hold, one real face does.
+    expect(r.metricMatch('aptos', [])).toBe(true);
+    expect(r.metricMatch('Corbel', ['Carlito'])).toBe(false);
+    expect(r.metricMatch('Inter', [])).toBe(true);
+    expect(r.metricMatch('', ['Carlito'])).toBe(false);
+    expect(r.generation).toBe(g);
+    // A stand-in fallback is not the metric substitute it is named after.
+    await r.sync([{ ...face('Carlito', 'inter'), substitute: true }]);
+    expect(r.generation).toBe(g + 1);
+    expect(r.metricMatch('Calibri', ['Carlito'])).toBe(false);
+    // Faces registered elsewhere say so themselves.
+    r.loaded({ family: 'Gill Sans MT', internal: 'o0000aaaa', substitute: true });
+    r.loaded({ family: 'Cambria', internal: 'o0000bbbb' });
+    expect(r.metricMatch('Gill Sans MT', [])).toBe(false);
+    expect(r.metricMatch('Cambria', [])).toBe(true);
   });
 });
 

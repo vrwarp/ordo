@@ -1,32 +1,35 @@
 /**
  * IR → ordo objects (design/27 §1 `emit.ts`, §3.2 "The importer always writes the closest legacy values").
  *
- * M1 emits today's objects only (`TextObject`, `ImageObject`, `ShapeObject`), plus `ImageObject.crop`
- * (design/27 §3.1; on unless `EmitOptions.crop` is false).
+ * It emits today's objects (`TextObject`, `ImageObject`, `ShapeObject`), plus `ImageObject.crop` (design/27
+ * §3.1; on unless `EmitOptions.crop` is false) and, since M2, rich text: `TextObject.runs`, `paras` and the
+ * office box fields (`richtext.ts`; `EmitOptions.richText: false` writes the M1 text described below).
  * Pictures carry placeholder media ids, `pptxmedia:<n>` by default (numbered in first-use order; the part
  * each stands for is listed in `EmitResult.media`), which the harness (and later the hub) maps to real media.
  *
  * - **Placement.** Every element's affine is mapped to the 1920x1080 logical canvas (`frame.ts`: contain-
  *   fit, 4:3 decks centred). Boxes keep their rotation; flips of symmetric shapes need nothing, a flipped
  *   picture is drawn unflipped (M3) and noted.
- * - **Text** becomes one `TextObject` per body in its dominant run's style (most characters): size (times a
- *   stored `normAutofit` fontScale), colour, bold, italic, the Latin typeface (the East Asian or complex-
- *   script one when the text is mostly in those scripts), caps, letter spacing. `algn` → align (justify →
- *   left, distribute → center), anchor → valign, line spacing → lineHeight (single = 1.2 × the font size,
- *   the office line model; a `lnSpcReduction` is subtracted), text outline → `outline` with width w/2
- *   (ordo strokes twice the width under the fill), hollow text → alpha 0 plus the outline, the run's outer
- *   shadow (or the shape's, when the shape itself draws nothing) → `shadow`.
- * - **Text rectangle.** The shape's box, narrowed to the preset's text rectangle for roundRect and ellipse;
- *   `padding` is the smallest body inset and the difference to each other inset is folded into the box,
- *   so the text area is PowerPoint's exactly (until `TextStyle.insets` exists, M2). `wrap="none"` widens
- *   the box on the side(s) the alignment grows into, so ordo never wraps it. `vert`/`vert270`/`eaVert` turn
- *   the box a quarter turn.
+ * - **Rich text** (default): one `TextObject` per body, `richtext.ts`, its box the shape's text rectangle
+ *   (the preset's, turned a quarter for vertical text); insets and margins are written, not folded.
+ * - **Legacy text** (`richText: false`): one `TextObject` per body in its dominant run's style (most
+ *   characters): size (times a stored `normAutofit` fontScale), colour, bold, italic, the Latin typeface
+ *   (the East Asian or complex-script one when the text is mostly in those scripts), caps, letter spacing.
+ *   `algn` → align (justify → left, distribute → center), anchor → valign, line spacing → lineHeight
+ *   (single = 1.2 × the font size, the office line model; a `lnSpcReduction` is subtracted), text outline
+ *   → `outline` with width w/2 (ordo strokes twice the width under the fill), hollow text → alpha 0 plus
+ *   the outline, the run's outer shadow (or the shape's, when the shape itself draws nothing) → `shadow`.
+ * - **Text rectangle.** The shape's box, narrowed to the preset's text rectangle for roundRect and ellipse.
+ *   For legacy text `padding` is the smallest body inset and the difference to each other inset is folded
+ *   into the box, so the text area is PowerPoint's exactly; `wrap="none"` widens the box on the side(s) the
+ *   alignment grows into, so ordo never wraps it. `vert`/`vert270`/`eaVert` turn the box a quarter turn.
  * - **Shapes**: rect, roundRect (radius from its `adj`), ellipse; lines and connectors as one `line` object
  *   per straight segment at any angle. Other presets are drawn as the nearest of these (noted). Fills as
  *   their legacy colour: solid; a gradient's first stop; a pattern's blend. A picture fill is an image.
- * - **Paragraph margins** fold into the text box, as `padding` does: the box is narrowed on the paragraphs'
- *   start side by the margin all of their text keeps clear of (`marL`; for a paragraph without a bullet,
- *   the first line's `marL + indent` when that is less), since a legacy `TextObject` has one left edge.
+ * - **Paragraph margins** (legacy text) fold into the text box, as `padding` does: the box is narrowed on
+ *   the paragraphs' start side by the margin all of their text keeps clear of (`marL`; for a paragraph
+ *   without a bullet, the first line's `marL + indent` when that is less), since a legacy `TextObject` has
+ *   one left edge.
  * - **Pictures** (`p:pic` and picture fills) are stretched images. `a:fillRect` folds into the box (clipped
  *   to the shape) and, with `crop`, into the crop together with `a:srcRect`. roundRect and ellipse clips
  *   become `radius` (an ellipse is exact for a circle); a picture outline is a stroke-only shape above it.
@@ -40,7 +43,8 @@
  *   the slide area; none → white, as PowerPoint shows it.
  * - **Lyric box** (design/27 §4 "Church mappings"): the slide's own body placeholder with the most
  *   characters; else the largest other text by characters × area (not title, date, footer, slide number);
- *   the title only when it is the only text.
+ *   the title only when it is the only text. On a bilingual slide (the two boxes with the most text in
+ *   different languages, of comparable length) the first of them in reading order.
  *
  * Owned by work item C (inherit-emit).
  */
@@ -75,6 +79,8 @@ import type {
 } from './ir.ts';
 import { EMU_PER_PT } from './ir.ts';
 import { noteList } from './log.ts';
+import { scriptClasses } from './fontmap.ts';
+import { richText } from './richtext.ts';
 
 /** The prefix of placeholder media ids. */
 export const MEDIA_PREFIX = 'pptxmedia:';
@@ -85,6 +91,13 @@ export const MIN_FONT_PX = 4;
 export const MAX_FONT_PX = 1_000;
 /** Objects one ordo slide holds (`Slide.objects` in `@ordo/domain`). */
 export const MAX_OBJECTS = 1_000;
+/**
+ * A slide's JSON budget (design/27 §3.4: hard 64 KB, else picture class). Rich text formatting (runs and
+ * paragraph styles) is written while the slide's text objects stay within it; past it, the slide's further
+ * text is written without its formatting and the slide is classed picture, so a deck whose layouts repeat
+ * thousands of formatted runs on every slide never builds megabytes the hub would discard.
+ */
+export const MAX_SLIDE_BYTES = 64 * 1024;
 /** Single line spacing in the office line model: 1.2 × the font size (`pptx-render/src/page.ts`). */
 export const SINGLE_LINE = 1.2;
 /** Logical coordinates are bounded by the schema (`coord`). */
@@ -125,6 +138,20 @@ export interface EmitOptions {
    * legacy value an older build draws), and each cropped picture is noted.
    */
   crop?: boolean;
+  /**
+   * Write rich text (design/27 §3.1, M2; `richtext.ts`): runs, paragraph styles and the office box fields,
+   * the box being the shape's text rectangle. Default true. With false, each body is written as M1 wrote
+   * it, in today's fields only (the dominant run's style, insets and paragraph margins folded into the box,
+   * a `wrap="none"` box widened): what the importer writes while the schema ships one release ahead of it
+   * (§3.2).
+   */
+  richText?: boolean;
+  /**
+   * For the fidelity harness only (`--lo-compat`, design/27 §14.1): write text with LibreOffice 24.2's
+   * policies where they differ from PowerPoint's (`RichOptions.lo` in `richtext.ts`), so the native column
+   * compares like for like with LibreOffice's pictures. Never set by the hub.
+   */
+  loCompat?: boolean;
 }
 
 /** An image object with the crop of design/27 §3.1 (now `ImageObject.crop` in `@ordo/domain`). */
@@ -171,10 +198,14 @@ interface EmitCtx {
   mediaId: (part: string) => string;
   extend: boolean;
   crop: boolean;
+  rich: boolean;
+  lo: boolean;
   media: Map<string, string>;
   log: (msg: string) => void;
   /** Metafile pictures set aside, with the index in the slide's objects where each would go. */
   metafiles?: { part: string; object: ImageObject; at: number }[];
+  /** UTF-8 bytes of the slide's rich text objects so far (`MAX_SLIDE_BYTES`). */
+  textBytes: number;
 }
 
 export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
@@ -192,12 +223,16 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       mediaId,
       extend: opts.extendBackgrounds ?? true,
       crop: opts.crop ?? true,
+      rich: opts.richText ?? true,
+      lo: opts.loCompat === true,
       media,
       log,
+      textBytes: 0,
     };
     const spans: [number, number][] = [];
     ctx.metafiles = [];
     const slide = emitSlide(ctx, s, spans);
+    const over = ctx.textBytes > MAX_SLIDE_BYTES;
     const art = artInfo(s, scene.frame, spans, slide.objects);
     const metafiles = ctx.metafiles.map(({ part, object, at }) => {
       const before = slide.objects[at]?.id;
@@ -208,7 +243,7 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       ...(s.shown !== undefined ? { shown: s.shown } : {}),
       hidden: s.hidden,
       slide,
-      classification: s.classification,
+      classification: over ? overBudget(s.classification) : s.classification,
       digest: digestOf(slide.objects),
       notes,
       ms: performance.now() - t0,
@@ -260,29 +295,115 @@ function visibleChars(s: string): number {
   return n;
 }
 
+/** A lyric box candidate with its visible characters counted once. */
+interface Candidate {
+  t: Emitted;
+  chars: number;
+}
+
 function lyricOf(texts: Emitted[]): TextObject | undefined {
-  const own = texts.filter((t) => t.e.from === 'slide' && visibleChars(t.o.text) > 0);
-  const best = (list: Emitted[], score: (t: Emitted) => number) => {
-    let top: Emitted | undefined;
+  const own: Candidate[] = [];
+  for (const t of texts) {
+    if (t.e.from !== 'slide') continue;
+    const chars = visibleChars(t.o.text);
+    if (chars > 0) own.push({ t, chars });
+  }
+  const best = (list: Candidate[], score: (c: Candidate) => number) => {
+    let top: Candidate | undefined;
     let topScore = Number.NEGATIVE_INFINITY;
-    for (const t of list) {
-      const v = score(t);
+    for (const c of list) {
+      const v = score(c);
       if (v > topScore) {
-        top = t;
+        top = c;
         topScore = v;
       }
     }
-    return top?.o;
+    return top?.t.o;
   };
-  const chars = (t: Emitted) => visibleChars(t.o.text);
-  const body = own.filter((t) => t.e.ph && masterClass(t.e.ph.type) === 'body');
-  if (body.length) return best(body, chars);
-  const other = own.filter((t) => !isTitle(t.e.ph) && !isFooter(t.e.ph));
-  if (other.length) return best(other, (t) => chars(t) * Math.max(1, t.area));
+  const chars = (c: Candidate) => c.chars;
+  const body = own.filter((c) => c.t.e.ph && masterClass(c.t.e.ph.type) === 'body');
+  if (body.length) return bilingual(body) ?? best(body, chars);
+  const other = own.filter((c) => !isTitle(c.t.e.ph) && !isFooter(c.t.e.ph));
+  if (other.length) return bilingual(other) ?? best(other, (c) => c.chars * Math.max(1, c.t.area));
   return best(
-    own.filter((t) => isTitle(t.e.ph)),
+    own.filter((c) => isTitle(c.t.e.ph)),
     chars,
   );
+}
+
+/** Two candidate boxes count as one per language when the smaller holds at least this share of the text. */
+const BILINGUAL_SHARE = 0.5;
+/**
+ * What a Han, Kana or Hangul character weighs against a Latin one when comparing lengths: the same line in
+ * Korean, Chinese or Japanese takes a quarter to a half of the characters it takes in English.
+ */
+const WIDE_SCRIPT_WEIGHT = 2.5;
+const WIDE_SCRIPT = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+/**
+ * A bilingual slide (design/27 §4 "Church mappings"): when the two candidates with the most text (Han, Kana
+ * and Hangul weighed as `WIDE_SCRIPT_WEIGHT` Latin characters) are in different languages and of
+ * comparable length, the lyric box is the first of them in reading order: the left one of two side by side,
+ * else the upper one.
+ */
+function bilingual(list: Candidate[]): TextObject | undefined {
+  if (list.length < 2) return undefined;
+  const weighed = list.map((c) => ({ c, n: textWeight(c.t.o.text) })).sort((x, y) => y.n - x.n);
+  const [a, b] = weighed;
+  if (!a || !b || b.n < BILINGUAL_SHARE * a.n || sameLanguage(a.c.t.o, b.c.t.o)) return undefined;
+  const A = a.c.t.o.box;
+  const B = b.c.t.o.box;
+  const overlap = Math.min(A.y + A.h, B.y + B.h) - Math.max(A.y, B.y);
+  const sideBySide = overlap > 0.5 * Math.min(A.h, B.h);
+  const aFirst = sideBySide ? A.x <= B.x : A.y <= B.y;
+  return (aFirst ? a : b).c.t.o;
+}
+
+/** The length of a text for comparing two languages: visible characters, wide scripts weighed more. */
+function textWeight(s: string): number {
+  let n = 0;
+  for (const ch of s) if (ch.trim()) n += WIDE_SCRIPT.test(ch) ? WIDE_SCRIPT_WEIGHT : 1;
+  return n;
+}
+
+/**
+ * Whether two text objects are in the same language, comparing like with like: they differ when most of
+ * their text is in different script classes (Latin, East Asian, complex), or when both carry a language
+ * and the primary subtags differ. A box without a language is taken to match one with it in its script.
+ */
+function sameLanguage(a: TextObject, b: TextObject): boolean {
+  if (scriptClassOf(a.text) !== scriptClassOf(b.text)) return false;
+  const la = primaryLang(a);
+  const lb = primaryLang(b);
+  return !la || !lb || la === lb;
+}
+
+function primaryLang(o: TextObject): string {
+  return o.style.lang?.split('-')[0]?.toLowerCase() ?? '';
+}
+
+/** The script class most of a text's visible characters are in (fontmap.ts `scriptClasses`). */
+function scriptClassOf(text: string): 'latin' | 'ea' | 'cs' {
+  const n = { latin: 0, ea: 0, cs: 0 };
+  const classes = scriptClasses(text);
+  for (let i = 0; i < classes.length; i++) if (text.charCodeAt(i) > 0x20) n[classes[i]!]++;
+  return n.ea > n.latin && n.ea >= n.cs ? 'ea' : n.cs > n.latin ? 'cs' : 'latin';
+}
+
+/** A slide over `MAX_SLIDE_BYTES`: picture class (design/27 §3.4), with why. */
+function overBudget(c: Classification): Classification {
+  const reason = `more than ${MAX_SLIDE_BYTES / 1024} KB of text formatting`;
+  return { ...c, class: 'picture', reasons: [...c.reasons.filter((r) => r !== reason), reason] };
+}
+
+/** UTF-8 length of `s`. */
+function utf8Bytes(s: string): number {
+  let n = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c >= 0xd800 && c <= 0xdbff ? 2 : 3; // a pair counts 2 + 2
+  }
+  return n;
 }
 
 // ── Backgrounds ─────────────────────────────────────────────────────────────────────────────────────────
@@ -697,6 +818,7 @@ function textObject(
   shapeBox: Box,
   shapeVisible: boolean,
 ): TextObject | undefined {
+  if (ctx.rich) return richTextObject(ctx, e, shapeBox, shapeVisible);
   const body = e.text!;
   let text = legacyText(body);
   if (!text.trim()) return undefined;
@@ -783,6 +905,57 @@ function textObject(
   }
   if (st.caps === 'small') ctx.log('small caps are drawn as capitals (M2)');
   return { id: ctx.newId(), type: 'text', box: clampBox(box), text, style, opacity: 1 };
+}
+
+/**
+ * A body as a rich `TextObject` (`richtext.ts`): the box is the shape's text rectangle (the preset's, turned
+ * a quarter for vertical text), the insets and paragraph margins are written as they are.
+ */
+function richTextObject(
+  ctx: EmitCtx,
+  e: ShapeElement,
+  shapeBox: Box,
+  shapeVisible: boolean,
+): TextObject | undefined {
+  const body = e.text!;
+  // Past the slide's budget the text is written without runs and paragraph styles (picture class anyway).
+  const over = ctx.textBytes > MAX_SLIDE_BYTES;
+  const rich = richText(body, {
+    frame: ctx.frame,
+    ...(shapeVisible || !e.shadow ? {} : { shapeShadow: e.shadow }),
+    log: ctx.log,
+    ...(ctx.lo ? { lo: true } : {}),
+    ...(over ? { plain: true } : {}),
+  });
+  if (!rich) return undefined;
+  let box = textRect(e, shapeBox);
+  if (
+    body.vert === 'vert' ||
+    body.vert === 'eaVert' ||
+    body.vert === 'mongolianVert' ||
+    body.vert === 'vert270'
+  )
+    box = quarterTurn(box, body.vert === 'vert270' ? -90 : 90);
+  if (body.vert || body.warp || body.numCol)
+    ctx.log('vertical, warped or multi-column text is drawn as plain text (M8)');
+  const o: TextObject = {
+    id: ctx.newId(),
+    type: 'text',
+    box: clampBox(box),
+    text: rich.text,
+    style: rich.style,
+    opacity: 1,
+  };
+  if (rich.runs) o.runs = rich.runs;
+  if (rich.paras) o.paras = rich.paras;
+  if (!over) {
+    ctx.textBytes += utf8Bytes(JSON.stringify(o));
+    if (ctx.textBytes > MAX_SLIDE_BYTES)
+      ctx.log(
+        `the slide has more than ${MAX_SLIDE_BYTES / 1024} KB of text formatting: its further text is written without it (picture class)`,
+      );
+  }
+  return o;
 }
 
 /**
