@@ -5,7 +5,7 @@ import { confirmDialog } from '../../components/Confirm.tsx';
 import { NumberField, TextField } from '../../components/fields.tsx';
 import { useLibrary } from '../../state/library.ts';
 import { errorText, toast } from '../../state/toasts.ts';
-import { BackgroundPicker } from './BackgroundPicker.tsx';
+import { SlideBackgroundSection } from './BackgroundReplace.tsx';
 import { change, replaceBase, save, useEditor } from './editorStore.ts';
 import { SlideSoundPanel } from './MediaPanels.tsx';
 import { resetSlideToTheme, themeOf, updateSlide } from './ops.ts';
@@ -64,14 +64,7 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
           </select>
         </label>
       )}
-      <label className="field">
-        <span>Background for this slide only</span>
-        <BackgroundPicker
-          value={slide.backgroundMediaId}
-          disabled={readOnly}
-          onChange={(backgroundMediaId) => set((s) => ({ ...s, backgroundMediaId }))}
-        />
-      </label>
+      <SlideBackgroundSection slide={slide} p={p} readOnly={readOnly} />
       <SlideSoundPanel slide={slide} media={(id) => media.find((m) => m.id === id)} readOnly={readOnly} />
       {p.kind === 'loop' && (
         <NumberField

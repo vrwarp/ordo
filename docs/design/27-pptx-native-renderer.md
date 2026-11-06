@@ -1451,6 +1451,26 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   `setCrop`, `setMask`, `setFlip`, `replacePicture` (with `coverCrop`); the Object panel's crop fields,
   'Keep proportions', 'Crop on the slide' (handles that move and scale the picture at its aspect behind the
   fixed box, `cropGeometry.ts`), mask and flips (design/15 "Editor"); `e2e/editor-pictures.spec.ts`.
+- **As built, item E (slide ops):** `ops/slides.ts` through `actions.ts`, one undo step each: `findText`
+  and `findReplace` (case folded unless asked, whole words by Unicode letters, marks and digits, a space
+  finding a no-break space; each match replaced with `replaceText`, the rule `editText` applies to a replaced
+  selection, so it takes the style of the first character it replaces; locked objects and a result past the
+  text bound left alone), `hideSlide`, `replaceBackground` and `replaceBackgroundOf` (a slide's background
+  is its bottom unlocked `role: 'bg'` picture, drawn over any `backgroundMediaId`, else its own, else the
+  presentation's; scope 'all' rewrites every use of that picture, `role: 'bg'` pictures through
+  `replacePicture`; a slide drawing the new picture through `backgroundMediaId` loses the bottom `role:
+  'bg'` shapes that would hide it; a video replaces `role: 'bg'` pictures as the `backgroundMediaId`),
+  `similarObjects` (the same `origin.ph`, else `role: 'deco'` and its `shapeId`: a slide's own boxes are
+  never matched by id, PowerPoint numbers shapes per slide), `applyStyleToSimilar` (the box style without
+  `fitScale`, which a target keeps when only colour, fill, alignment and the like change; paragraph styles
+  by level, each paragraph keeping `soft`, `hidden` and its own numbering start), `newSlideLike`,
+  `useAsBackground` (an unrotated unlocked picture covering the slide area; the `role: 'bg'` objects below
+  it removed), `clearSlideBackground`. UI: `FindReplaceDialog.tsx` ('Find…', Ctrl+F), `BackgroundReplace.tsx`
+  (the Slide panel's background with its scope, the Presentation panel's 'Replace on all slides…'),
+  `ObjectSlideOps.tsx` ('Apply to similar boxes…', 'Use as background'), the slide list's dimmed hidden
+  slides, 'New slide like this' and 'Hidden'. Tests: `apps/operator/test/slideOps.test.ts` (find and replace
+  property: text, run invariants and every character's style outside the matches; no distortion across
+  aspects, run once item D's `replacePicture` is in), `e2e/editor-slides.spec.ts`.
 
 **Files.** `apps/operator/src/views/editor/ops.ts`, `ObjectPanel.tsx`, `SlidePanel.tsx`, `SlidesPanel.tsx`, `PresentationPanel.tsx`, `SlideCanvas.tsx`, `EditorView.tsx`, `editorStore.ts`; `apps/operator/src/components/TextStyleEditor.tsx`, new `FormatBar.tsx`, `ParagraphStrip.tsx`, `CropControl.tsx`; `apps/hub/src/pptx/reimport.ts`, `routes.ts`; `apps/stage/src/model.ts`, `view.ts`; `packages/domain/src/schemas.ts` (`PropsRule.notes`); `packages/client/src/api.ts`.
 
