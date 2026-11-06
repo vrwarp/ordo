@@ -14,7 +14,8 @@ export type ActionContext = {
 /**
  * Map a surface action to a live event. Returns null for actions that are not live events
  * (audio, launch, relaunch) or that have no effect in the current state. `clearAll` confirmation is the
- * caller's job. Section indices are 0-based; slide numbers (goToSlide) are 1-based within the live section.
+ * caller's job. Section indices are 0-based; slide numbers (goToSlide) are 1-based within the live section
+ * and count hidden slides, which a slide key shows (design/27 §9).
  */
 export function actionToEvent(
   s: LiveState,
@@ -50,9 +51,8 @@ export function actionToEvent(
       const target = sameSection[n - 1];
       if (!target) {
         // Not a slide presentation: fall back to the Nth section.
-        const secs = sectionsOfItem(s.cues, ref);
-        const sec = secs[n - 1];
-        return sec ? { k: 'go', cueIndex: sec.first, at } : null;
+        const sec = sectionsOfItem(s.cues, ref)[n - 1];
+        return sec ? { k: 'go', cueIndex: sec.entry, at } : null;
       }
       return { k: 'go', cueIndex: target.index, at };
     }

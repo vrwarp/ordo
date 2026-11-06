@@ -1,4 +1,4 @@
-import { itemStarts, type LiveState, sectionsOfItem } from '@ordo/domain';
+import { isHiddenCue, type LiveState, sectionsOfItem } from '@ordo/domain';
 import { mediaPlayTarget } from '@ordo/live-state';
 import type { DeckView } from '@ordo/surfaces';
 
@@ -7,14 +7,15 @@ export function deckView(s: LiveState, connected: boolean, masterDb?: number): D
   const ref = s.live ?? s.armed;
   const secs = ref !== undefined ? sectionsOfItem(s.cues, ref) : [];
   const liveCue = s.live !== undefined ? s.cues[s.live] : undefined;
-  const starts = itemStarts(s.cues);
-  const cur = s.live ?? -1;
+  const cur = s.live === undefined ? undefined : s.cues[s.live]?.itemIndex;
   const nextItems: string[] = [];
   const items = s.resolved?.playlist.items ?? [];
-  for (const st of starts) {
-    if (st <= cur) continue;
-    const c = s.cues[st];
-    if (!c) continue;
+  // The items Next item goes to, one press each: those after the live one with a cue that is not hidden
+  // (design/27 §9), so the "Next N" keys, which press it N times, land on the item they name.
+  let last: number | undefined;
+  for (const c of s.cues) {
+    if ((cur !== undefined && c.itemIndex <= cur) || c.itemIndex === last || isHiddenCue(c)) continue;
+    last = c.itemIndex;
     const item = items[c.itemIndex];
     let label = c.label;
     if (item?.kind === 'presentation') label = s.resolved?.presentations[item.presentationId]?.title ?? label;

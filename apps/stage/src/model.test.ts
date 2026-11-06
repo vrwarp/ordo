@@ -168,6 +168,69 @@ describe('slide text', () => {
     const none = { ...layout, nonSong: 'none' as const };
     expect(currentText(s3, s3.layers.slide.content, none)).toBeNull();
   });
+  it('skips hidden slides as Next does, and goes on from one a click showed (design/27 §9)', () => {
+    const text = (id: string, t: string, hidden?: true) => ({
+      id,
+      objects: [
+        {
+          id: `${id}-t`,
+          type: 'text' as const,
+          text: t,
+          box: { x: 0, y: 0, w: 1, h: 1, rotation: 0 },
+          style: LOOK_MAIN as never,
+          opacity: 1,
+        },
+      ],
+      ...(hidden ? { hidden } : {}),
+    });
+    const deck: Presentation = {
+      ...announcement(),
+      sections: [
+        {
+          id: 'sa',
+          label: 'Slides',
+          short: 'S',
+          slides: [
+            text('a', 'Welcome'),
+            text('h', 'Backup', true),
+            text('b', 'Offering'),
+            text('k', 'Spare', true),
+          ],
+        },
+      ],
+    };
+    const after = { ...announcement(), id: 'after', title: 'Benediction' };
+    const resolved: ResolvedPlaylist = {
+      playlist: {
+        id: 'pl',
+        rev: 1,
+        name: 'Sunday',
+        items: [
+          { id: 'i1', kind: 'presentation', presentationId: deck.id },
+          { id: 'i2', kind: 'presentation', presentationId: after.id },
+        ],
+      },
+      presentations: { [deck.id]: deck, [after.id]: after },
+      media: {},
+      fonts: [],
+      looks: DEFAULT_LOOKS,
+      files: [],
+      manifestId: 'm',
+    };
+    const layout = stageLayout(LOOK_STAGE);
+    let s = reduce(initialState(), { k: 'goLive', resolved });
+    s = reduce(s, { k: 'go', cueIndex: 0, at: 1000 });
+    expect(nextText(s, s.layers.slide.content, layout)).toEqual({ text: 'Offering' });
+    s = reduce(s, { k: 'go', cueIndex: 1, at: 2000 });
+    expect(currentText(s, s.layers.slide.content, layout)).toMatchObject({ text: 'Backup' });
+    expect(nextText(s, s.layers.slide.content, layout)).toEqual({ text: 'Offering' });
+    s = reduce(s, { k: 'next', at: 3000 });
+    expect(s.layers.slide.content?.slideId).toBe('b');
+    expect(nextText(s, s.layers.slide.content, layout)).toEqual({
+      text: 'Benediction',
+      label: 'Next: Benediction',
+    });
+  });
   it('nothing when cleared', () => {
     const { s } = live();
     const c = reduce(s, { k: 'clear', layer: 'slide', at: 5000 });

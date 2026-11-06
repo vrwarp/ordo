@@ -323,8 +323,8 @@ export const FAILED_SLIDE_REASON =
  */
 function pendingSlides(resolved: ResolvedPlaylist): GoLiveProblem[] {
   const out: GoLiveProblem[] = [];
-  const flagged = (s: Slide) => (s.pptx?.pending || s.pptx?.failed) && !s.hidden;
-  // A hidden slide gives no cue (`expandCues`): there is no cue to report it at.
+  // A hidden slide is listed too: its cue is skipped by Next, but a click shows it (design/27 §9).
+  const flagged = (s: Slide) => s.pptx?.pending || s.pptx?.failed;
   for (const p of Object.values(resolved.presentations))
     for (const sec of p.sections)
       for (const s of sec.slides)

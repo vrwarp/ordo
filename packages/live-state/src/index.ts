@@ -7,7 +7,9 @@ import {
   type MediaContent,
   type ActionId,
   expandCues,
-  itemStarts,
+  isHiddenCue,
+  nextShownCue,
+  prevShownCue,
   sectionsOfItem,
 } from '@ordo/domain';
 
@@ -40,6 +42,10 @@ export function initialState(): LiveState {
  * The single live-state reducer, run identically by hub, operator and every output.
  * Pure: never reads a clock or random source. Every event increments `seq`, even a no-op,
  * so that all clients agree on sequence numbers.
+ *
+ * Hidden cues (design/27 §9, `Cue.hidden`): `next`, `prev`, the cue a GO arms, onEnd 'advance', `nextItem`
+ * and `prevItem` skip them (`autoAdvance` too); `goToSection` lands on its section's first cue that is not
+ * hidden; `go` and `select` reach any cue.
  */
 export function reduce(prev: LiveState, e: LiveEvent): LiveState {
   const seq = prev.seq + 1;
@@ -48,7 +54,7 @@ export function reduce(prev: LiveState, e: LiveEvent): LiveState {
     case 'goLive': {
       const base = initialState();
       const cues = expandCues(e.resolved);
-      return { ...base, seq, mode: 'live', resolved: e.resolved, cues, armed: cues.length ? 0 : undefined };
+      return { ...base, seq, mode: 'live', resolved: e.resolved, cues, armed: nextShownCue(cues, -1) };
     }
     case 'endService': {
       const base = initialState();
@@ -71,30 +77,40 @@ export function reduce(prev: LiveState, e: LiveEvent): LiveState {
     case 'go':
       return goTo(s, e.cueIndex, e.at);
     case 'next': {
-      const target = s.live === undefined ? (s.armed ?? 0) : s.live + 1;
-      return goTo(s, target, e.at);
-    }
-    case 'prev':
-      if (s.live === undefined || s.live <= 0) return s;
-      return goTo(s, s.live - 1, e.at);
-    case 'nextItem': {
-      const starts = itemStarts(s.cues);
-      const cur = s.live ?? -1;
-      const target = starts.find((x) => x > cur);
+      // Before the first GO, the armed cue (which `select` may have set to a hidden one).
+      const target =
+        s.live === undefined ? (s.armed ?? nextShownCue(s.cues, -1)) : nextShownCue(s.cues, s.live);
       return target === undefined ? s : goTo(s, target, e.at);
     }
-    case 'prevItem': {
-      const starts = itemStarts(s.cues);
+    case 'prev': {
       if (s.live === undefined) return s;
-      const curStart = [...starts].reverse().find((x) => x <= s.live!) ?? 0;
-      const prevStart = [...starts].reverse().find((x) => x < curStart);
-      return goTo(s, prevStart ?? curStart, e.at);
+      const target = prevShownCue(s.cues, s.live);
+      return target === undefined ? s : goTo(s, target, e.at);
+    }
+    case 'nextItem': {
+      // The first cue that is not hidden of the next item that has one.
+      const cur = s.live === undefined ? undefined : s.cues[s.live]?.itemIndex;
+      const target = s.cues.find((c) => (cur === undefined || c.itemIndex > cur) && !isHiddenCue(c));
+      return target === undefined ? s : goTo(s, target.index, e.at);
+    }
+    case 'prevItem': {
+      // The first cue that is not hidden of the previous item that has one, else of the live item.
+      if (s.live === undefined) return s;
+      const cur = s.cues[s.live]?.itemIndex;
+      if (cur === undefined) return s;
+      const before = prevShownCue(
+        s.cues,
+        s.cues.findIndex((c) => c.itemIndex === cur),
+      );
+      const item = before === undefined ? cur : s.cues[before]!.itemIndex;
+      const target = s.cues.find((c) => c.itemIndex === item && !isHiddenCue(c));
+      return target === undefined ? s : goTo(s, target.index, e.at);
     }
     case 'goToSection': {
       const ref = s.live ?? s.armed;
       if (ref === undefined) return s;
       const sec = sectionsOfItem(s.cues, ref)[e.sectionIndex];
-      return sec ? goTo(s, sec.first, e.at) : s;
+      return sec ? goTo(s, sec.entry, e.at) : s;
     }
     case 'clear':
       return clear(s, e.layer, e.at);
@@ -124,7 +140,10 @@ export function reduce(prev: LiveState, e: LiveEvent): LiveState {
           media: { ...s.layers.media, content: { ...m, state: 'ended', positionMs: e.at - m.startedAt } },
         },
       };
-      if (m.onEnd === 'advance' && s.live === e.cueIndex) return goTo(ended, e.cueIndex + 1, e.at);
+      if (m.onEnd === 'advance' && s.live === e.cueIndex) {
+        const target = nextShownCue(s.cues, e.cueIndex);
+        return target === undefined ? ended : goTo(ended, target, e.at);
+      }
       return ended;
     }
     case 'audio.stop':
@@ -183,11 +202,10 @@ function goTo(s: LiveState, index: number, at: number): LiveState {
   const cue = s.cues[index];
   if (!cue) return s;
   const seq = s.seq;
-  const next = s.cues[index + 1] ? index + 1 : undefined;
   let out: LiveState = {
     ...s,
     live: index,
-    armed: next,
+    armed: nextShownCue(s.cues, index),
     black: false,
     audio: keepSlideAudio(s.audio, index, at, seq),
   };
@@ -532,8 +550,10 @@ export function reduceAll(s: LiveState, events: LiveEvent[]): LiveState {
 }
 
 /**
- * For loop presentations: when the live slide should auto-advance and to which cue (wrapping within the item).
- * Returns null when the live cue does not auto-advance or the slide layer is not showing it.
+ * For loop presentations: when the live slide should auto-advance and to which cue: the next cue of the item
+ * that is not hidden, wrapping within the item (a hidden slide a click showed advances too). Returns null
+ * when the live cue does not auto-advance, the slide layer is not showing it, or every cue of the item is
+ * hidden.
  */
 export function autoAdvance(s: LiveState): { dueAt: number; target: number } | null {
   if (s.live === undefined) return null;
@@ -543,8 +563,11 @@ export function autoAdvance(s: LiveState): { dueAt: number; target: number } | n
   if (!slide || slide.cueIndex !== s.live) return null;
   const sameItem = s.cues.filter((c) => c.itemIndex === cue.itemIndex);
   const pos = sameItem.findIndex((c) => c.index === cue.index);
-  const target = sameItem[(pos + 1) % sameItem.length]!.index;
-  return { dueAt: s.layers.slide.at + cue.autoAdvanceMs, target };
+  for (let k = 1; k <= sameItem.length; k++) {
+    const c = sameItem[(pos + k) % sameItem.length]!;
+    if (!isHiddenCue(c)) return { dueAt: s.layers.slide.at + cue.autoAdvanceMs, target: c.index };
+  }
+  return null;
 }
 
 /** The cue that is live, if any. */

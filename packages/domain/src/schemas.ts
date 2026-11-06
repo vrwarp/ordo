@@ -349,8 +349,8 @@ export const Slide = z.object({
   notes: z.string().max(MAX.long).optional(),
   overrides: z.array(z.string().max(200)).max(1000).optional(),
   /**
-   * A hidden PowerPoint slide (design/27 §9): kept in the editor, left out of the service (it gives no cue)
-   * until the cue flag and Next/Prev skipping arrive with M5's navigation.
+   * A hidden PowerPoint slide (design/27 §9): its cue is flagged `hidden`, so Next, Prev, auto-advance and
+   * onEnd 'advance' skip it, while a click in the slide grid (a GO with its index) shows it.
    */
   hidden: z.boolean().optional(),
   /** The slide's own transition: a cue uses `item ?? slide ?? presentation` (design/27 §9). */

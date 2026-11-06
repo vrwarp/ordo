@@ -91,7 +91,7 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
             disabled={readOnly}
             onChange={(e) => set((s) => ({ ...s, hidden: e.target.checked || undefined }))}
           />
-          Hidden: left out of the service (as in PowerPoint)
+          Hidden: Next skips it, a click in the slide grid shows it (as in PowerPoint)
         </label>
       )}
       <TextField

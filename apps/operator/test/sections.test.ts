@@ -1,7 +1,7 @@
-import { parseLyrics, songFromParsed } from '@ordo/domain';
+import { type Presentation, parseLyrics, songFromParsed } from '@ordo/domain';
 import { initialState, reduce } from '@ordo/live-state';
 import { describe, expect, it } from 'vitest';
-import { groupCues, sectionGoTarget } from '../src/lib/sections.ts';
+import { groupCues, itemGoTarget, sectionGoTarget } from '../src/lib/sections.ts';
 
 /** Two songs live in one playlist, so section clicks in the item on screen can differ from the live item. */
 function twoSongState() {
@@ -55,5 +55,56 @@ describe('section click → cue index (review item 4)', () => {
 
   it('has no target for an empty group', () => {
     expect(sectionGoTarget({ pos: 0, label: 'x', short: '', cues: [] })).toBeUndefined();
+  });
+});
+
+describe('section and item clicks with hidden slides (design/27 §9)', () => {
+  const slide = (id: string, hidden?: true) => ({ id, objects: [], ...(hidden ? { hidden } : {}) });
+  const deck: Presentation = {
+    id: 'deck',
+    rev: 1,
+    title: 'Deck',
+    kind: 'slides',
+    meta: { tags: [] },
+    sections: [
+      { id: 'a', label: 'Intro', short: 'I', slides: [slide('h1', true), slide('s1')] },
+      { id: 'b', label: 'Extras', short: 'E', slides: [slide('x1', true), slide('x2', true)] },
+    ],
+    arrangements: [],
+    archived: false,
+  };
+  const s = reduce(initialState(), {
+    k: 'goLive',
+    resolved: {
+      playlist: {
+        id: 'pl',
+        rev: 1,
+        name: 'x',
+        items: [
+          { id: 'i0', kind: 'presentation', presentationId: 'deck' },
+          { id: 'i1', kind: 'presentation', presentationId: 'deck' },
+        ],
+      },
+      presentations: { deck },
+      media: {},
+      fonts: [],
+      looks: [],
+      files: [],
+      manifestId: 'm',
+    },
+  });
+
+  it("a section header goes to the section's first shown slide, else its first slide", () => {
+    const [intro, extras] = groupCues(s.cues.filter((c) => c.itemIndex === 1));
+    expect(s.cues[sectionGoTarget(intro!)!]).toMatchObject({ itemIndex: 1, slideId: 's1' });
+    expect(s.cues[sectionGoTarget(extras!)!]).toMatchObject({ itemIndex: 1, slideId: 'x1', hidden: true });
+  });
+
+  it("a playlist item double-click goes to the item's first shown slide, where Next item lands", () => {
+    const target = itemGoTarget(s.cues, 1)!;
+    expect(s.cues[target]).toMatchObject({ itemIndex: 1, slideId: 's1' });
+    const viaNextItem = reduce(reduce(s, { k: 'go', cueIndex: 1, at: 1 }), { k: 'nextItem', at: 2 });
+    expect(viaNextItem.live).toBe(target);
+    expect(itemGoTarget(s.cues, 5)).toBeUndefined();
   });
 });

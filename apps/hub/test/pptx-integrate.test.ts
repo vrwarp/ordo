@@ -481,7 +481,7 @@ describe.skipIf(!tools)('a 4:3 deck (design/27 §4, §15 M3 exit)', () => {
 });
 
 describe('a deck with a hidden slide (design/27 §4, §15 M3 exit)', () => {
-  it('keeps notes, pictures and text with their own slide', async () => {
+  it('keeps notes, pictures and text with their own slide; Next skips it live, a click shows it', async () => {
     const colours = ['red', 'lime', 'blue', 'yellow'] as const;
     const parts = buildDeck({
       slides: colours.map((c, i) => ({
@@ -514,6 +514,32 @@ describe('a deck with a hidden slide (design/27 §4, §15 M3 exit)', () => {
       expect(probe[c]!(px.at(8, 8))).toBe(true);
     });
     saved.push({ name: 'hidden slide', p });
+
+    // Live (design/27 §9): Next skips the hidden slide, a click (a GO with its index) shows it.
+    const pl = hub.lib.playlists.insert({
+      id: newId(),
+      rev: 1,
+      name: 'Hidden',
+      items: [{ id: newId(), kind: 'presentation', presentationId: p.id }],
+    });
+    const live = hub.live;
+    const shows = () => live.state.layers.slide.content?.slideId;
+    try {
+      live.submit({ k: 'goLive', playlistId: pl.id }, { role: 'operate' });
+      expect(live.state.cues.map((c) => c.hidden ?? false)).toEqual([false, true, false, false]);
+      expect(live.state.armed).toBe(0);
+      live.submit({ k: 'next', at: Date.now() }, { role: 'operate' });
+      expect([shows(), live.state.armed]).toEqual([slides[0]!.id, 2]);
+      live.submit({ k: 'next', at: Date.now() }, { role: 'operate' });
+      expect(shows()).toBe(slides[2]!.id);
+      live.submit({ k: 'prev', at: Date.now() }, { role: 'operate' });
+      expect(shows()).toBe(slides[0]!.id);
+      live.submit({ k: 'go', cueIndex: 1, at: Date.now() }, { role: 'operate' });
+      expect(shows()).toBe(slides[1]!.id);
+      expect(live.state.armed).toBe(2);
+    } finally {
+      live.submit({ k: 'endService', at: Date.now() }, { role: 'operate' });
+    }
   }, 60_000);
 });
 

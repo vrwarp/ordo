@@ -66,8 +66,8 @@ type Slide = {
   durationMs?: number; // for loop presentations
   notes?: string;
   overrides?: string[]; // paths of theme properties overridden
-  hidden?: boolean; // a hidden PowerPoint slide (design/27 §9): kept in the editor, gives no cue (left out of
-  // the service, as LibreOffice's pictures were) until M5's navigation flags its cue and Next/Prev skip it
+  hidden?: boolean; // a hidden PowerPoint slide (design/27 §9): its cue is flagged `hidden`; Next, Prev,
+  // auto-advance and onEnd 'advance' skip it, a click in the slide grid (a GO with its index) shows it
   transition?: Transition; // the slide's own: a cue uses item ?? slide ?? presentation (design/27 §9)
   pptx?: SlidePptx; // PowerPoint provenance, never drawable content (design/27 §3.1)
   // imported.textAligned?: boolean: true when the text boxes are keyed by shown slide, so text readers
@@ -325,6 +325,7 @@ type Cue = {
   sectionId?: Id;
   slideId?: Id;
   label: string;
+  hidden?: boolean; // true on a hidden slide (design/27 §9): sequential navigation skips it, `go` reaches it
 };
 type LayerContent = { kind: 'slide' | 'media' | 'logo' | 'lowerThird'; ref: Id; sinceSeq: number };
 type Timer = { id: Id; spec: TimerSpec; startedAtHub?: number; endsAtHub?: number; running: boolean };
@@ -347,6 +348,13 @@ The reducer handles events: `goLive(playlistId)`, `endService`, `select(cueIndex
 `media.play|pause|restart`, `timer.start|stop|reset`, `message.send|dismiss`,
 `output.register|health`. It is deterministic so hub, operator and outputs compute the
 same state from the same event sequence.
+
+A hidden slide keeps its cue, flagged `hidden` (design/27 §9). `next`, `prev`, the cue a GO
+arms, `autoAdvance` (wrapping within the item), onEnd 'advance', `nextItem` and `prevItem` skip
+hidden cues (`nextShownCue`, `prevShownCue`; an item whose slides are all hidden is passed by);
+`goToSection` lands on the section's first cue that is not hidden, else its first cue
+(`sectionsOfItem().entry`); `go` and `select` reach any cue. A slide sound's `untilCue` counts
+shown slides only, so a hidden cue inside its range keeps the sound playing when a click shows it.
 
 A slide cue can carry its own media (design/27 §8): the playing ImageObject's clip
 (`mediaObjectId`, `mediaStart`, `mediaShowWhenStopped` with the cue's media fields) goes on

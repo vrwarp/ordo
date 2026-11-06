@@ -898,6 +898,8 @@ A scene is several draws, so it is composed at full alpha before it is weighted:
 
   `go` with an explicit cue (a click in the grid, `goToSlide`, a Stream Deck slide key) shows a hidden slide. SlideGrid draws hidden slides dimmed with a 'hidden' tag. The stage's `nextText` skips them. An older build strips `hidden` and shows them as normal slides.
 
+  As built (M3 wave 2): `nextShownCue`/`prevShownCue` in `cues.ts` carry the rule; the outputs' armed plan, the lyric-only next band and the look previews follow it. An item whose slides are all hidden is passed by `nextItem`, `prevItem` and the Stream Deck's next-items keys. A jump that names a group (a section key, a section header in the grid, a playlist item double-clicked) lands on its first shown cue, or on its first cue when every slide of the group is hidden. A pending or failed hidden slide is listed in `degraded` at its cue, since a click can show it.
+
 ## 10. Fonts
 
 **Resolver (M2).** Used by the asset worker, the thumbnail worker and the editor.

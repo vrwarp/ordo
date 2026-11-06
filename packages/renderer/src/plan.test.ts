@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { LOOK_LOWER_THIRD, LOOK_MAIN, LOOK_STAGE, LOOK_STREAM, type Look } from '@ordo/domain';
+import {
+  DEFAULT_LYRIC_STYLE,
+  LOOK_LOWER_THIRD,
+  LOOK_MAIN,
+  LOOK_STAGE,
+  LOOK_STREAM,
+  type Look,
+  type Presentation,
+  type ResolvedPlaylist,
+  type Slide,
+  expandCues,
+} from '@ordo/domain';
 import { fadeMsFor, lookSignature, planFrame, planPreview, resolveLook } from './plan.ts';
 import { liveState, resolved, slideLive } from './fixtures.test-util.ts';
 
@@ -163,5 +174,69 @@ describe('send to preview (prd/03)', () => {
     expect(planPreview(song, 'nope', LOOK_MAIN).idle).toBe(true);
     // Without a media lookup the slide still renders, just without its background.
     expect(planPreview(song, 's1', LOOK_MAIN).background.key).toBe('');
+  });
+});
+
+describe('the next slide skips hidden slides (design/27 §9)', () => {
+  const slide = (id: string, hidden?: true): Slide => ({
+    id,
+    objects: [
+      {
+        id: `${id}-t`,
+        type: 'text',
+        box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+        text: id.toUpperCase(),
+        style: DEFAULT_LYRIC_STYLE,
+        opacity: 1,
+      },
+    ],
+    ...(hidden ? { hidden } : {}),
+  });
+  const deck: Presentation = {
+    id: 'deck',
+    rev: 1,
+    title: 'Deck',
+    kind: 'slides',
+    meta: { tags: [] },
+    sections: [{ id: 'm', label: 'Main', short: 'M', slides: [slide('a'), slide('h', true), slide('b')] }],
+    arrangements: [],
+    archived: false,
+  };
+  const r: ResolvedPlaylist = {
+    ...resolved,
+    playlist: { ...resolved.playlist, items: [{ id: 'i', kind: 'presentation', presentationId: 'deck' }] },
+    presentations: { deck },
+  };
+  const showing = (i: number) => {
+    const cues = expandCues(r);
+    const s = liveState({ resolved: r, cues, live: i });
+    return {
+      ...s,
+      layers: {
+        ...s.layers,
+        slide: {
+          content: {
+            kind: 'slide' as const,
+            cueIndex: i,
+            presentationId: 'deck',
+            slideId: cues[i]!.slideId!,
+          },
+          at: 1000,
+          seq: 1,
+        },
+      },
+    };
+  };
+
+  it('the lyric-only next band shows the slide Next goes to', () => {
+    expect(planFrame(showing(0), LOOK_STAGE).slide.desc?.nextSlide?.id).toBe('b');
+    // A hidden slide a click showed is followed by the next shown one.
+    expect(planFrame(showing(1), LOOK_STAGE).slide.desc?.nextSlide?.id).toBe('b');
+    expect(planFrame(showing(2), LOOK_STAGE).slide.desc?.nextSlide).toBeUndefined();
+  });
+
+  it('so does the preview of a presentation', () => {
+    expect(planPreview(deck, 'a', LOOK_STAGE).slide.desc?.nextSlide?.id).toBe('b');
+    expect(planPreview(deck, 'h', LOOK_STAGE).slide.desc?.nextSlide?.id).toBe('b');
   });
 });

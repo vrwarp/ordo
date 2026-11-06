@@ -6,7 +6,15 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { hexToRgba, nearColor, rgbaCss, rgbaHex } from './color.ts';
-import { arrangedSections, expandCues, itemStarts, sectionsOfItem } from './cues.ts';
+import {
+  arrangedSections,
+  entryCue,
+  expandCues,
+  itemStarts,
+  nextShownCue,
+  prevShownCue,
+  sectionsOfItem,
+} from './cues.ts';
 import type { Media, Playlist, Presentation } from './schemas.ts';
 
 const LONE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
@@ -136,7 +144,10 @@ describe('expandCues / arrangedSections (fuzz)', () => {
               (r.playlist.items[c.itemIndex] as { arrangementId?: string }).arrangementId,
             );
             expect(c.arrangementPos).toBeLessThan(secs.length);
-            expect(secs[c.arrangementPos!]!.slides[c.slideIndexInSection!]!.id).toBe(c.slideId);
+            const slide = secs[c.arrangementPos!]!.slides[c.slideIndexInSection!]!;
+            expect(slide.id).toBe(c.slideId);
+            // A hidden slide keeps its cue, flagged (design/27 §9).
+            expect(c.hidden === true).toBe(slide.hidden === true);
             if (c.autoAdvanceMs !== undefined) {
               expect(Number.isFinite(c.autoAdvanceMs)).toBe(true);
               expect(c.autoAdvanceMs).toBeGreaterThanOrEqual(500);
@@ -154,11 +165,26 @@ describe('expandCues / arrangedSections (fuzz)', () => {
             }
           }
           if (c.kind === 'media') expect(r.media[c.mediaId!]).toBeDefined();
+          if (c.hidden !== undefined) expect([c.kind, c.hidden]).toEqual(['slide', true]);
         });
+        // Next and Prev land on the nearest cue that is not hidden, past every hidden one in between.
+        const shown = cues.filter((c) => !c.hidden).map((c) => c.index);
+        for (let i = -1; i <= cues.length; i++) {
+          expect(nextShownCue(cues, i)).toBe(shown.find((x) => x > i));
+          expect(prevShownCue(cues, i)).toBe(shown.filter((x) => x < i).pop());
+        }
         const starts = itemStarts(cues);
         for (const s of starts) expect(cues[s]).toBeDefined();
         for (let i = 0; i < Math.min(cues.length, 5); i++)
-          for (const s of sectionsOfItem(cues, i)) expect(cues[s.first]!.arrangementPos).toBe(s.pos);
+          for (const s of sectionsOfItem(cues, i)) {
+            expect(cues[s.first]!.arrangementPos).toBe(s.pos);
+            // A section key lands on the section's first cue that is not hidden, else its first.
+            const group = cues.filter(
+              (x) => x.itemIndex === cues[i]!.itemIndex && x.arrangementPos === s.pos,
+            );
+            expect(s.entry).toBe(entryCue(group)!.index);
+            expect(group[0]!.index).toBe(s.first);
+          }
         expect(sectionsOfItem(cues, cues.length + 3)).toEqual([]);
       }),
       { numRuns: 1500 },
