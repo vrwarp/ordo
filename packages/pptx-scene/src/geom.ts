@@ -55,8 +55,9 @@ import {
   hasPreset,
   presetGeometry,
 } from '@ordo/renderer/geom/path.ts';
+import { parsePathData } from '@ordo/domain/pathdata.ts';
 import { apply, decompose, multiply, xfrmAffine } from './frame.ts';
-import type { Affine, CustomPaths, Element, Fill, Line, Rgba } from './ir.ts';
+import type { Affine, CustomPaths, Element, Fill, Line, RectEmu, Rgba, ShapeElement } from './ir.ts';
 import { clean } from './log.ts';
 import { child, type XNode } from './xml.ts';
 
@@ -618,6 +619,190 @@ function transformPathData(
     x = undefined;
   }
   return out.join(' ');
+}
+
+// ── Merged shapes ───────────────────────────────────────────────────────────────────────────────────────
+
+/** One path of a shape's geometry in the shape's unit square (0..1 x 0..1 is its box), as ordo draws it. */
+interface UnitPath {
+  /** One letter per command: M, L, Q, C or Z. */
+  cmds: string;
+  /** Coordinates in the unit square, x y pairs in command order. */
+  pts: number[];
+  fill: GeomPath['fill'];
+  stroke: boolean;
+}
+
+/** Coordinate pairs each path command takes. */
+const PAIRS: Readonly<Record<string, number>> = Object.assign(Object.create(null), {
+  M: 1,
+  L: 1,
+  Q: 2,
+  C: 3,
+  Z: 0,
+});
+
+/**
+ * A shape's geometry as one piece of a merged object (M6, `classify.ts` `shapeRuns`): its paths in its unit
+ * square, the most commands and coordinates one of them has (what bounds its string, `mergedChars`), whether
+ * a stroked sub-path is left open, and the bounding box of its points in slide EMU.
+ */
+export interface ShapePiece {
+  paths: UnitPath[];
+  cmds: number;
+  coords: number;
+  /**
+   * A stroked sub-path is not closed by Z: LibreOffice, and `drawGeom`, stroke such an outline after every
+   * other path of the geometry, so in one object it would move above the fill of the pieces over it.
+   */
+  open: boolean;
+  /** The bounding box of its points (control points included) in slide EMU. */
+  extent: RectEmu;
+}
+
+const pieces = new WeakMap<ShapeElement, ShapePiece | null>();
+
+/**
+ * A shape's geometry as ordo draws it, as a `ShapePiece` (`s`: logical px per EMU): a custom geometry's stored
+ * paths, else its preset (rect and ellipse included) built at its box in logical px with its adjust values,
+ * as the renderer evaluates a stored preset. Undefined for a preset the table does not know, a custom
+ * geometry past the bounds, or no path. Memoised per element (one deck has one frame).
+ */
+export function shapePiece(e: ShapeElement, s: number): ShapePiece | undefined {
+  const hit = pieces.get(e);
+  if (hit !== undefined) return hit ?? undefined;
+  const out = buildPiece(e, s);
+  pieces.set(e, out ?? null);
+  return out;
+}
+
+function buildPiece(e: ShapeElement, s: number): ShapePiece | undefined {
+  const paths: UnitPath[] = [];
+  if (e.custom) {
+    if (e.custom.over) return undefined;
+    for (const p of e.custom.paths) {
+      const parsed = parsePathData(p.d, GEOM_LIMITS.points);
+      const kx = p.w > 0 ? 1 / p.w : 0;
+      const ky = p.h > 0 ? 1 / p.h : 0;
+      const pts = parsed.pts.map((v, i) => v * (i % 2 === 0 ? kx : ky));
+      paths.push({ cmds: parsed.cmds, pts, fill: p.fill ?? 'norm', stroke: p.stroke !== false });
+    }
+  } else {
+    if (e.geom === 'custom' || !hasPreset(e.geom)) return undefined;
+    const d = decompose(e.xf);
+    // As the renderer draws the stored preset: at the box in logical px, with the stored adjust pairs.
+    const g = preset(e.geom, d.w * s, d.h * s, adjPairs(e.adj));
+    if (!g) return undefined;
+    const kx = g.w > 0 ? 1 / g.w : 0;
+    const ky = g.h > 0 ? 1 / g.h : 0;
+    for (const p of g.paths) {
+      let cmds = '';
+      for (const op of p.cmds)
+        cmds +=
+          op === CMD_MOVE
+            ? 'M'
+            : op === CMD_LINE
+              ? 'L'
+              : op === CMD_QUAD
+                ? 'Q'
+                : op === CMD_CUBIC
+                  ? 'C'
+                  : 'Z';
+      const pts = p.pts.map((v, i) => v * (i % 2 === 0 ? kx : ky));
+      paths.push({ cmds, pts, fill: p.fill, stroke: p.stroke });
+    }
+  }
+  if (!paths.length || paths.length > GEOM_LIMITS.paths) return undefined;
+  let cmds = 0;
+  let coords = 0;
+  let open = false;
+  let x0 = Number.POSITIVE_INFINITY;
+  let y0 = Number.POSITIVE_INFINITY;
+  let x1 = Number.NEGATIVE_INFINITY;
+  let y1 = Number.NEGATIVE_INFINITY;
+  for (const p of paths) {
+    cmds = Math.max(cmds, p.cmds.length);
+    coords = Math.max(coords, p.pts.length);
+    // A sub-path with a segment that no Z closes (one ending at its start counts as open: stricter than
+    // the drawer's tolerance, which depends on the box).
+    let segments = 0;
+    for (const c of p.cmds) {
+      if (c === 'M') {
+        if (segments > 0 && p.stroke) open = true;
+        segments = 0;
+      } else if (c === 'Z') segments = 0;
+      else segments++;
+    }
+    if (segments > 0 && p.stroke) open = true;
+    for (let i = 0; i + 1 < p.pts.length; i += 2) {
+      const [x, y] = apply(e.xf, p.pts[i]!, p.pts[i + 1]!);
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+  }
+  if (!(x1 >= x0) || !(y1 >= y0)) return undefined;
+  return { paths, cmds, coords, open, extent: { x: x0, y: y0, cx: x1 - x0, cy: y1 - y0 } };
+}
+
+/**
+ * The longest a path string of a merged object can be (`mergedPaths`): its box in slide EMU (`s` logical px
+ * per EMU), the bounding box of its pieces' points, and the most commands and coordinates of one path. Each
+ * coordinate is written in logical px from the box's corner with the decimals of the box (`decimalsFor`), so
+ * it takes at most a sign, the digits of the farthest point and its decimals.
+ */
+export function mergedChars(box: RectEmu, extent: RectEmu, cmds: number, coords: number, s: number): number {
+  const dec = decimalsFor(spaceSide(box.cx * s), spaceSide(box.cy * s));
+  const far =
+    Math.max(
+      Math.abs(extent.x - box.x),
+      Math.abs(extent.x + extent.cx - box.x),
+      Math.abs(extent.y - box.y),
+      Math.abs(extent.y + extent.cy - box.y),
+    ) * s;
+  if (!Number.isFinite(far) || far > 1e9) return Number.POSITIVE_INFINITY;
+  // Rounding can carry into one more digit (999.996 → 1000): count the digits of the next whole number.
+  const coord = 1 + String(Math.floor(far) + 1).length + (dec > 0 ? dec + 1 : 0);
+  return 2 * cmds + coords * (coord + 1);
+}
+
+/**
+ * The paths of one object drawing several shapes (M6, `classify.ts` `shapeRuns`): each piece's paths in
+ * order, its unit square mapped through its affine `xf` to slide EMU and from there into `box` (slide EMU,
+ * unrotated: the object's box), written in that box's logical px (`s` px per EMU) as `ShapeGeom.paths`.
+ * The pieces' rotations and flips are in their points, so the object is neither turned nor mirrored.
+ */
+export function mergedPaths(
+  list: readonly { xf: Affine; piece: ShapePiece }[],
+  box: RectEmu,
+  s: number,
+): CustomPaths['paths'] {
+  const W = spaceSide(box.cx * s);
+  const H = spaceSide(box.cy * s);
+  const dec = decimalsFor(W, H);
+  const out: CustomPaths['paths'] = [];
+  for (const { xf, piece } of list)
+    for (const p of piece.paths) {
+      const parts: string[] = [];
+      let at = 0;
+      for (const c of p.cmds) {
+        let t = c;
+        for (let j = 0; j < (PAIRS[c] ?? 0); j++, at += 2) {
+          const [x, y] = apply(xf, p.pts[at] ?? 0, p.pts[at + 1] ?? 0);
+          t += ` ${fmt((x - box.x) * s, dec)} ${fmt((y - box.y) * s, dec)}`;
+        }
+        parts.push(t);
+      }
+      out.push({
+        d: parts.join(' '),
+        w: W,
+        h: H,
+        ...(p.fill !== 'norm' ? { fill: p.fill } : {}),
+        ...(p.stroke ? {} : { stroke: false }),
+      });
+    }
+  return out;
 }
 
 /** The `ShapeGeom.adj` pairs of an element: at most the schema's 10, values within ±1e7. */

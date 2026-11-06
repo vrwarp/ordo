@@ -11,6 +11,7 @@ import {
   overWhite,
   placePicture,
 } from './emit.ts';
+import { legacyGeometry, storedGeometry } from '@ordo/renderer/geom/stored.ts';
 import { emitSlides, parseDeck } from './index.ts';
 import type { DeckScene, ShapeElement } from './ir.ts';
 import {
@@ -905,10 +906,120 @@ describe('placement', () => {
   });
 
   it('caps a slide at 1,000 objects', () => {
-    const many = sp({ id: 2, x: 0, y: 0, cx: IN, cy: IN, fill: solid('FF0000') }).repeat(1_100);
+    // Text boxes: shapes without text over the budget would go to the art (and emit nothing).
+    const many = sp({ id: 2, x: 0, y: 0, cx: IN, cy: IN, txBody: body(para(run('x'))) }).repeat(1_100);
     const { objects, notes } = emitOne({ slides: [{ shapes: many }] });
     expect(objects).toHaveLength(1_000);
     expect(notes.join(' ')).toMatch(/more than 1000 objects/);
+  });
+});
+
+describe('the object budget (M6)', () => {
+  /** `n` shapes 0.1 in wide in rows of 20 of `colors` in turn; `shape` makes each (its id, x and y in EMU). */
+  const pieces = (n: number, shape: (id: number, x: number, y: number, i: number) => string) => {
+    let out = '';
+    for (let i = 0; i < n; i++) out += shape(10 + i, (i % 20) * 0.1 * IN, Math.floor(i / 20) * 0.1 * IN, i);
+    return out;
+  };
+  const square = (color: string) => (id: number, x: number, y: number) =>
+    sp({ id, x, y, cx: 0.1 * IN, cy: 0.1 * IN, fill: solid(color) });
+  const group = (inner: string) => grpSp({ id: 2, x: 0, y: 0, cx: 4 * IN, cy: 4 * IN }, inner);
+  /** Device points (logical px) of a shape as the renderer builds it: box space flipped, turned, placed. */
+  const devicePoints = (o: ShapeObject): number[][] => {
+    const g = storedGeometry(o.geom, o.box.w, o.box.h) ?? legacyGeometry(o.shape, o.radius, o.box.w, o.box.h);
+    const a = (o.box.rotation * Math.PI) / 180;
+    const cx = o.box.x + o.box.w / 2;
+    const cy = o.box.y + o.box.h / 2;
+    return g.paths.map((p) => {
+      const out: number[] = [];
+      for (let i = 0; i < p.pts.length; i += 2) {
+        const u = (p.pts[i]! - o.box.w / 2) * (o.flipH ? -1 : 1);
+        const v = (p.pts[i + 1]! - o.box.h / 2) * (o.flipV ? -1 : 1);
+        out.push(cx + u * Math.cos(a) - v * Math.sin(a), cy + u * Math.sin(a) + v * Math.cos(a));
+      }
+      return out;
+    });
+  };
+
+  it('draws shapes of one look as one object per eight paths that draws as they do apart', () => {
+    // Triangles, turned and mirrored in turn, and custom stars: 160 in one group, past the budget apart.
+    const star =
+      '<a:custGeom><a:pathLst><a:path w="10" h="10"><a:moveTo><a:pt x="5" y="0"/></a:moveTo>' +
+      '<a:lnTo><a:pt x="10" y="10"/></a:lnTo><a:lnTo><a:pt x="0" y="4"/></a:lnTo><a:lnTo><a:pt x="10" y="4"/></a:lnTo>' +
+      '<a:lnTo><a:pt x="0" y="10"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom>';
+    const shape = (id: number, x: number, y: number, i: number) =>
+      i % 3 === 2
+        ? sp({ id, x, y, cx: 0.1 * IN, cy: 0.08 * IN, geom: 'none', fill: solid('FF0000') }).replace(
+            '<p:spPr>',
+            `<p:spPr>${star}`,
+          )
+        : sp({
+            id,
+            x,
+            y,
+            cx: 0.1 * IN,
+            cy: 0.06 * IN,
+            geom: 'triangle',
+            fill: solid('FF0000'),
+            rot: i % 2 ? 30 : 0,
+            flipH: i % 4 === 1,
+            flipV: i % 5 === 3,
+          });
+    const scene = parseDeck(buildDeck({ slides: [{ shapes: group(pieces(160, shape)) }] }));
+    const merged = emitSlides(scene).slides[0]!;
+    expect(Slide.parse(merged.slide)).toEqual(merged.slide);
+    expect(merged.classification.class).toBe('native');
+    const objects = content(merged.slide.objects) as ShapeObject[];
+    expect(objects).toHaveLength(20);
+    for (const o of objects) {
+      // No legacy fill an older build would draw over the union box: a line, without an outline here.
+      expect(o).toMatchObject({ type: 'shape', shape: 'line', fill: RED, opacity: 1 });
+      expect(o.box.rotation).toBe(0);
+      expect(o.stroke).toBeUndefined();
+      expect(o.geom?.paths).toHaveLength(8);
+    }
+    // The same shapes emitted apart (the marks removed) put every point where the merged object does.
+    for (const e of scene.slides[0]!.elements) delete (e as ShapeElement).merge;
+    const apart = content(emitSlides(scene).slides[0]!.slide.objects) as ShapeObject[];
+    expect(apart).toHaveLength(160);
+    const together = objects.flatMap(devicePoints);
+    const each = apart.flatMap(devicePoints);
+    expect(together).toHaveLength(each.length);
+    each.forEach((pts, k) => {
+      expect(together[k]).toHaveLength(pts.length);
+      for (const [j, v] of pts.entries()) expect(Math.abs(together[k]![j]! - v)).toBeLessThan(0.02);
+    });
+    expect(merged.notes).toContain(
+      "160 shapes of one look are drawn as 20 objects (the slide's object budget)",
+    );
+  });
+
+  it('keeps a common outline and its dash on the merged object', () => {
+    const ln = `<a:ln w="25400">${solid('0000FF')}<a:prstDash val="dash"/></a:ln>`;
+    const shape = (id: number, x: number, y: number) =>
+      sp({ id, x, y, cx: 0.1 * IN, cy: 0.1 * IN, fill: solid('FF0000'), ln });
+    const { objects } = emitOne({ slides: [{ shapes: group(pieces(160, shape)) }] });
+    expect(content(objects)).toHaveLength(20);
+    expect(content(objects)[0]).toMatchObject({
+      shape: 'line',
+      fill: RED,
+      stroke: { width: 4, color: { r: 0, g: 0, b: 255, a: 1 } },
+      dash: 'dash',
+    });
+  });
+
+  it('leaves out of version 1 what the budget sends to the art, so the slide stays within it', () => {
+    // 160 squares of two looks in turn (none merge) under a title: the squares go to the art.
+    const shape = (id: number, x: number, y: number, i: number) =>
+      square(i % 2 ? '336699' : '993366')(id, x, y);
+    const title = sp({ id: 3, x: 0, y: 5 * IN, cx: 4 * IN, cy: IN, txBody: body(para(run('Words'))) });
+    const { out, objects } = emitOne({ slides: [{ shapes: group(pieces(160, shape)) + title }] });
+    const e = out.slides[0]!;
+    expect(e.classification.class).toBe('hybrid');
+    expect(e.classification.reasons).toContain('art:budget:shapes');
+    expect(objects.map((o) => o.type)).toEqual(['shape', 'text']);
+    expect(e.art).toMatchObject({ at: 1, replaces: [], before: objects[1]!.id });
+    expect(e.art?.elements).toHaveLength(160);
   });
 });
 

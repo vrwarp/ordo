@@ -18,21 +18,28 @@
  * **Class**: native without residual elements; hybrid with them, the residuals and what they overlap baked
  * into one art picture over the range [Rmin, Rmax]; picture when the objects or pictures left after the
  * split exceed the slide budgets (or the slide could not be read, `index.ts`). A table read natively
- * (`tables.ts`, M6) counts the objects it emits; tables that would take the slide past the object budget go
- * to the art first (`budget:table`), then whole SmartArt drawings (`budget:smartart`, `wholeDiagrams`), so
- * the slide becomes hybrid rather than picture.
+ * (`tables.ts`, M6) counts the objects it emits. A slide past the object budget counts its z-adjacent shapes
+ * of one look as one object each run (`shapeRuns`, drawn so by `emit.ts`); while it still passes the budget,
+ * tables go to the art first (`budget:table`), then whole SmartArt drawings (`budget:smartart`,
+ * `wholeDiagrams`), then decorations and runs of shapes and pictures without text (`budget:shapes`,
+ * `fitShapes`), so the slide becomes hybrid rather than picture.
  *
  * Every walk here is iterative and linear in the size of the parsed tree; deck strings are only compared,
  * never used as plain-object keys.
  */
+import { GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
 import { rootOf, type SlideCtx } from './context.ts';
+import { endsOf, MAX_PATH_CHARS, mergedChars, type ShapePiece, shapePiece } from './geom.ts';
 import { bodyPrChain, chainOf, firstAttr, firstChildOf, nvOf } from './inherit.ts';
 import type {
   ArtRange,
   Background,
   Classification,
   Element,
+  Fill,
+  Frame,
   RectEmu,
+  ShapeElement,
   SlideClass,
   Support,
   Tier,
@@ -674,12 +681,15 @@ function videoUnderArt(elements: readonly Element[], art: ArtRange): boolean {
 
 /**
  * What a slide costs against the budgets once the art is split off: the ordo objects it emits (a shape with
- * a fill or line and text is two) and its distinct pictures (the background's and the art included).
+ * a fill or line and text is two) and its distinct pictures (the background's and the art included). With
+ * the slide's `frame`, a slide that would pass `MAX_SLIDE_OBJECTS` counts each of its runs of shapes of one
+ * look (`shapeRuns`) as the one object `emit.ts` draws it as.
  */
 export function slideCost(
   elements: readonly Element[],
   background: Background,
   art: ArtRange | undefined,
+  frame?: Frame,
 ): { objects: number; pictures: number } {
   const inArt = new Set(art?.elements);
   const pictures = new Set<string>();
@@ -694,7 +704,144 @@ export function slideCost(
     else if (e.kind === 'table') objects += e.objects;
     else objects += (e.fill.kind !== 'none' || e.line ? 1 : 0) + (e.text ? 1 : 0);
   });
+  if (frame && objects > MAX_SLIDE_OBJECTS)
+    for (const run of shapeRuns(elements, frame, inArt)) objects -= run.length - 1;
   return { objects, pictures: pictures.size + (art ? 1 : 0) };
+}
+
+// ── Shapes of one look drawn as one object ──────────────────────────────────────────────────────────────
+
+/** Straight lines and connector routes: drawn as lines (`emit.ts`), never merged. */
+const LINE_GEOMS = /^(line|straightConnector1|(bent|curved)Connector[2-5])$/;
+/** The render clamp keeps box edges within ±2× the logical canvas (`@ordo/renderer` `CLAMP.boxFactor`). */
+const CLAMP_W = 2 * 1_920;
+const CLAMP_H = 2 * 1_080;
+
+/** What a mergeable shape brings to a run: its look and scope (`key`), geometry and box. */
+interface Mergeable {
+  key: string;
+  piece: ShapePiece;
+  box: RectEmu;
+}
+
+/** Each shape's `Mergeable` (null: never merged), memoised: none of what it reads changes after the walk. */
+const mergeables = new WeakMap<Element, Mergeable | null>();
+
+/**
+ * Whether a shape can be drawn as part of one object with its z-neighbours, and its look (M6). Drawn as
+ * paths of one geometry in their z-order (`drawGeom` fills and strokes each path in turn, as separate shapes
+ * are drawn), shapes look exactly as they do apart when nothing is drawn between them, each path keeps its
+ * own fill mode, and their paint does not depend on their box or on what lies under the object:
+ * - a shape without text, of the slide's support verdict native, not in a SmartArt drawing, neither a line
+ *   nor a connector route (drawn as lines), with a known preset or custom geometry within the bounds;
+ * - an opaque solid fill or none, and an opaque solid line or none (not both none), without arrowheads; a
+ *   fill with a line only when every stroked outline is closed (an open one is stroked after every other
+ *   path of a geometry, `geomPathOpen`, so it would move above the shapes over it);
+ * - no shadow, glow or soft edge (each is drawn around the whole object);
+ * - inside the render clamp's bounds (a box past them is squeezed);
+ * - in a top-level group, or a layout or master decoration: the slide's own shapes stay separate objects.
+ * The key is the source and group with the fill and line: shapes merge only with the same key.
+ */
+function mergeable(e: Element, frame: Frame): Mergeable | undefined {
+  if (e.kind !== 'shape') return undefined;
+  let m = mergeables.get(e);
+  if (m === undefined) {
+    m = mergeLook(e, frame) ?? null;
+    mergeables.set(e, m);
+  }
+  return m && !e.hidden && e.support === 'native' ? m : undefined;
+}
+
+function mergeLook(e: ShapeElement, frame: Frame): Mergeable | undefined {
+  if (e.text || e.diagram !== undefined || e.shadow || e.glow || e.softEdge || LINE_GEOMS.test(e.geom))
+    return undefined;
+  if (e.group === undefined && e.from === 'slide') return undefined;
+  const opaque = (f: Fill) => f.kind === 'solid' && f.color.a === 1;
+  if (e.fill.kind !== 'none' && !opaque(e.fill)) return undefined;
+  const line = e.line && e.line.fill.kind !== 'none' ? e.line : undefined;
+  if (line && (!opaque(line.fill) || endsOf(line))) return undefined;
+  const fill = e.fill.kind === 'solid' ? e.fill.color : undefined;
+  if (!fill && !line) return undefined;
+  const piece = shapePiece(e, frame.s);
+  if (!piece || (fill && line && piece.open)) return undefined;
+  const box = boundsOf(e);
+  const x0 = frame.x0 + box.x * frame.s;
+  const y0 = frame.y0 + box.y * frame.s;
+  const x1 = x0 + box.cx * frame.s;
+  const y1 = y0 + box.cy * frame.s;
+  if (!(x0 >= -CLAMP_W && x1 <= CLAMP_W && y0 >= -CLAMP_H && y1 <= CLAMP_H)) return undefined;
+  return { key: JSON.stringify([e.from, e.group ?? null, fill ?? null, line ?? null]), piece, box };
+}
+
+/** The bounding box of two boxes. */
+export function unionBox(p: RectEmu, q: RectEmu): RectEmu {
+  const x = Math.min(p.x, q.x);
+  const y = Math.min(p.y, q.y);
+  return { x, y, cx: Math.max(p.x + p.cx, q.x + q.cx) - x, cy: Math.max(p.y + p.cy, q.y + q.cy) - y };
+}
+
+/**
+ * Runs of z-adjacent shapes of one look drawn as one object (M6; design/27 §5 "picture"): consecutive shown
+ * elements that are `mergeable` with the same key, none of them in the art (`inArt`), their paths together at
+ * most `GEOM_LIMITS.paths` and every path string within the schema's 40,000 characters once written in the
+ * run's box (`mergedChars`). Hidden elements draw nothing and do not end a run. Greedy, bottom first, linear;
+ * each run has at least two elements (indexes, bottom first). The object (`emit.ts`) draws the run's paths
+ * in z-order in their union box, so it looks as the shapes do.
+ */
+export function shapeRuns(
+  elements: readonly Element[],
+  frame: Frame,
+  inArt: ReadonlySet<number> = new Set(),
+): number[][] {
+  const runs: number[][] = [];
+  type Run = {
+    key: string;
+    list: number[];
+    paths: number;
+    cmds: number;
+    coords: number;
+    box: RectEmu;
+    extent: RectEmu;
+  };
+  let run: Run | undefined;
+  const end = () => {
+    if (run && run.list.length > 1) runs.push(run.list);
+    run = undefined;
+  };
+  for (let i = 0; i < elements.length; i++) {
+    const e = elements[i]!;
+    if (e.hidden) continue;
+    const m = inArt.has(i) ? undefined : mergeable(e, frame);
+    if (!m) {
+      end();
+      continue;
+    }
+    const p = m.piece;
+    if (run && run.key === m.key && run.paths + p.paths.length <= GEOM_LIMITS.paths) {
+      const box = unionBox(run.box, m.box);
+      const extent = unionBox(run.extent, p.extent);
+      const cmds = Math.max(run.cmds, p.cmds);
+      const coords = Math.max(run.coords, p.coords);
+      if (mergedChars(box, extent, cmds, coords, frame.s) <= MAX_PATH_CHARS) {
+        run.list.push(i);
+        run.paths += p.paths.length;
+        Object.assign(run, { box, extent, cmds, coords });
+        continue;
+      }
+    }
+    end();
+    run = {
+      key: m.key,
+      list: [i],
+      paths: p.paths.length,
+      cmds: p.cmds,
+      coords: p.coords,
+      box: m.box,
+      extent: p.extent,
+    };
+  }
+  end();
+  return runs;
 }
 
 /** No background: `slideCost` of some elements alone. */
@@ -748,7 +895,7 @@ export function wholeDiagrams(
       }
     }
     if (moved) continue;
-    if (slideCost(elements, background, art).objects <= MAX_SLIDE_OBJECTS) return;
+    if (slideCost(elements, background, art, ctx.frame).objects <= MAX_SLIDE_OBJECTS) return;
     let worst: number[] | undefined;
     let most = 0;
     for (const list of members.values()) {
@@ -777,7 +924,7 @@ export function wholeDiagrams(
  */
 function fitTables(ctx: SlideCtx, elements: Element[], background: Background, residual: string[][]): void {
   for (;;) {
-    if (slideCost(elements, background, artRange(elements)).objects <= MAX_SLIDE_OBJECTS) return;
+    if (slideCost(elements, background, artRange(elements), ctx.frame).objects <= MAX_SLIDE_OBJECTS) return;
     let worst = -1;
     elements.forEach((e, i) => {
       if (e.kind !== 'table' || e.hidden || e.support === 'residual') return;
@@ -793,21 +940,170 @@ function fitTables(ctx: SlideCtx, elements: Element[], background: Background, r
   }
 }
 
+/** An element the shape budget can send to the art: shown, native or approx, a picture or a shape without text. */
+function textless(e: Element): boolean {
+  return (
+    !e.hidden &&
+    e.support !== 'residual' &&
+    e.diagram === undefined &&
+    !isVideo(e) &&
+    (e.kind === 'picture' || (e.kind === 'shape' && !e.text))
+  );
+}
+
+/**
+ * Plain shapes and pictures over the object budget go to the art (design/27 §5 "picture", §15 M6: no slide
+ * passes `MAX_SLIDE_OBJECTS` without becoming hybrid). While the slide passes it, its shapes of one look
+ * merged (`shapeRuns`), elements without text are made residual ('budget:shapes'), LibreOffice drawing them:
+ * 1. the fewest of the layout's and master's decorations without text, bottom first: they lie under the
+ *    slide's own shapes, so the art stays at the bottom and the slide's text native above it;
+ * 2. then the costliest z-contiguous run of elements without text in one top-level group, and once no
+ *    group has one, the costliest such run of ungrouped elements (a run ends at any other shown element, one
+ *    already in the art, and where the group or source changes), until the slide fits.
+ * A slide that stays over the budget with every such element in the art keeps none of these marks: it is a
+ * picture. `residual` (per element, `refineSupport`) gets the reason.
+ */
+function fitShapes(ctx: SlideCtx, elements: Element[], background: Background, residual: string[][]): void {
+  const frame = ctx.frame;
+  const objects = () => slideCost(elements, background, artRange(elements), frame).objects;
+  if (objects() <= MAX_SLIDE_OBJECTS) return;
+  const before = elements.map((e) => ({ support: e.support, reasons: e.reasons }));
+  const mark = (list: readonly number[]) => {
+    for (const i of list) {
+      const e = elements[i]!;
+      e.support = 'residual';
+      e.reasons = [...(before[i]!.reasons ?? []), 'budget:shapes'];
+    }
+  };
+  const unmark = (list: readonly number[]) => {
+    for (const i of list) {
+      const e = elements[i]!;
+      e.support = before[i]!.support;
+      if (before[i]!.reasons) e.reasons = before[i]!.reasons;
+      else delete e.reasons;
+    }
+  };
+  const all: number[] = [];
+  elements.forEach((e, i) => {
+    if (textless(e)) all.push(i);
+  });
+  // With all of them in the art the slide is as small as these steps make it: still over, it is a picture.
+  mark(all);
+  const least = objects();
+  unmark(all);
+  if (least > MAX_SLIDE_OBJECTS) return;
+  const marked: number[] = [];
+  const decos = all.filter((i) => elements[i]!.from !== 'slide');
+  if (decos.length) {
+    mark(decos);
+    if (objects() <= MAX_SLIDE_OBJECTS) {
+      unmark(decos);
+      // The fewest from the bottom (the art only grows as more go): within the budget at `hi`.
+      let lo = 1;
+      let hi = decos.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        const some = decos.slice(0, mid);
+        mark(some);
+        const fits = objects() <= MAX_SLIDE_OBJECTS;
+        unmark(some);
+        if (fits) hi = mid;
+        else lo = mid + 1;
+      }
+      mark(decos.slice(0, hi));
+      marked.push(...decos.slice(0, hi));
+    } else marked.push(...decos);
+  }
+  // Runs in order of preference, each taken while what is left would pass the budget; the slide is costed
+  // again only once that estimate fits (the art takes what it overlaps too, so it can only cost less, unless
+  // that cuts a run of merged shapes), and the runs are listed again from there.
+  for (let left = objects(); left > MAX_SLIDE_OBJECTS; ) {
+    const runs = textlessRuns(elements, artRange(elements), frame);
+    if (!runs.length) break;
+    let estimate = left;
+    for (const run of runs) {
+      if (estimate <= MAX_SLIDE_OBJECTS) break;
+      mark(run.list);
+      marked.push(...run.list);
+      estimate -= run.cost;
+    }
+    left = objects();
+  }
+  if (objects() > MAX_SLIDE_OBJECTS) {
+    unmark(marked);
+    return;
+  }
+  for (const i of marked) residual[i] = [...residual[i]!, 'budget:shapes'];
+  ctx.log(`${marked.length} shapes and pictures pass the slide's object budget: LibreOffice draws them`);
+}
+
+/**
+ * The runs of elements without text (`textless`) the shape budget sends to the art, in its order: z-contiguous
+ * shown elements of one source and top-level group, none in the art, each with the objects it costs the slide
+ * (its shapes of one look merged); those in a group first, each part costliest first. Runs that cost nothing
+ * are left out.
+ */
+function textlessRuns(
+  elements: readonly Element[],
+  art: ArtRange | undefined,
+  frame: Frame,
+): { list: number[]; cost: number; grouped: boolean }[] {
+  const inArt = new Set(art?.elements);
+  const out: { list: number[]; cost: number; grouped: boolean }[] = [];
+  let list: number[] = [];
+  let scope = '';
+  const end = () => {
+    if (!list.length) return;
+    const members = list.map((i) => elements[i]!);
+    let cost = slideCost(members, NO_BACKGROUND, undefined).objects;
+    for (const r of shapeRuns(members, frame)) cost -= r.length - 1;
+    if (cost > 0) out.push({ list, cost, grouped: members[0]!.group !== undefined });
+    list = [];
+  };
+  elements.forEach((e, i) => {
+    if (e.hidden) return;
+    if (!textless(e) || inArt.has(i)) {
+      end();
+      return;
+    }
+    const s = `${e.from}:${e.group ?? ''}`;
+    if (s !== scope) end();
+    scope = s;
+    list.push(i);
+  });
+  end();
+  // Stable: equal runs keep their z-order, bottom first.
+  return out.sort((p, q) => Number(q.grouped) - Number(p.grouped) || q.cost - p.cost);
+}
+
 /**
  * Tier, class and reasons of a slide that was read. Sets each element's `support` and `reasons` first
- * (`refineSupport`). Reasons: the tier's (features that keep the slide out of the tier below), then
- * `art:<reason>` for what made it hybrid and `budget:objects` / `budget:pictures` for what made it a picture.
+ * (`refineSupport`), and on a slide over the object budget marks its runs of shapes of one look
+ * (`ShapeElement.merge`, `shapeRuns`). Reasons: the tier's (features that keep the slide out of the tier
+ * below), then `art:<reason>` for what made it hybrid and `budget:objects` / `budget:pictures` for what made
+ * it a picture.
  */
 export function classifySlide(ctx: SlideCtx, elements: Element[], background: Background): Classification {
   const { tier, reasons } = tierOf(slideFeatures(ctx));
   const residual = refineSupport(ctx, elements);
   fitTables(ctx, elements, background, residual);
   wholeDiagrams(ctx, elements, background, residual);
+  fitShapes(ctx, elements, background, residual);
+  // The art may now overlap part of a SmartArt drawing, which goes with it whole.
+  wholeDiagrams(ctx, elements, background, residual);
   const art = artRange(elements);
   const why: string[] = [];
   for (const i of art?.elements ?? []) for (const r of residual[i]!) why.push(`art:${r}`);
   if (art && videoUnderArt(elements, art)) ctx.log('a residual element above a video is drawn under it');
-  const cost = slideCost(elements, background, art);
+  if (slideCost(elements, background, art).objects > MAX_SLIDE_OBJECTS) {
+    const runs = shapeRuns(elements, ctx.frame, new Set(art?.elements));
+    for (const run of runs) for (const i of run) (elements[i] as ShapeElement).merge = run[0]!;
+    if (runs.length) {
+      const n = runs.reduce((sum, r) => sum + r.length, 0);
+      ctx.log(`${n} shapes of one look are drawn as ${runs.length} objects (the slide's object budget)`);
+    }
+  }
+  const cost = slideCost(elements, background, art, ctx.frame);
   const over: string[] = [];
   if (cost.objects > MAX_SLIDE_OBJECTS) over.push('budget:objects');
   if (cost.pictures > MAX_SLIDE_PICTURES) over.push('budget:pictures');
