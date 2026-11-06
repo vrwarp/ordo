@@ -272,6 +272,13 @@ export interface ResidualElement extends ElementBase {
   kind: 'residual';
   /** 'chart', 'table', 'smartart', 'ole', 'math', 'ink', 'graphicFrame', 'shear', … */
   what: string;
+  /**
+   * A metafile (`what` 'metafile'): its picture and clip geometry, so the emitter can describe the image
+   * object it becomes once LibreOffice has converted it (M3 item D, `EmittedSlide.metafiles`).
+   */
+  picture?: PictureFill;
+  geom?: string;
+  adj?: [string, number][];
 }
 
 export type Element = ShapeElement | PictureElement | ResidualElement;
@@ -384,4 +391,10 @@ export interface ArtInfo {
   replaces: string[];
   /** Text of the text bodies baked into the art (`Slide.pptx.artText`, search only). */
   text: string;
+  /**
+   * The object the art goes just under in version 2 (the first object at or after `at` that it does not
+   * replace); absent when the art goes on top. Found by id, so objects added or left out below it by the
+   * import do not move the art.
+   */
+  before?: string;
 }

@@ -57,6 +57,16 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
 - Uploads: size limit 4 GB, extension and sniffed MIME must agree, stored under a hash
   name, never executed. ffmpeg, LibreOffice and pdftoppm run with a timeout, a memory
   limit, and no network.
+- LibreOffice never sees a deck as uploaded (design/27 §5 "Render copy", §12). A CPU-pool task writes
+  a render copy: every XML part re-written from the bounded parser's tree (no declaration or entity
+  survives), every relationship and the content types rebuilt under generated part names, and
+  External targets, `vbaProject.bin`, OLE binaries, embedded packages and fonts, ActiveX, media
+  payloads, notes, comments and custom XML left out. soffice then runs through `sofficeToPdf`
+  (`apps/hub/src/pptx/fallback.ts`): `prlimit --as` (2 GiB), `unshare -rn` (an empty network
+  namespace) where the container allows it, else proxy variables pointing at a dead port, a
+  throwaway profile and `HOME` in the job's scratch directory, a minimal environment, and the
+  `tools.run` timeout that kills its whole process group (`soffice.bin` included). The native
+  import and the 'Pictures (LibreOffice)' import share this path.
 - Import zips: path traversal rejected; member count and total size capped.
 
 ## Secrets and logs

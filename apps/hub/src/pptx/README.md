@@ -199,6 +199,24 @@ while locked).
 - Tests: the alpha formula against synthetic white/black rasters (within 2/255); a chart slide over a photo
   background: only that slide hybrid, version 2 adds the transparent art, an edit made in between survives;
   page selection with a hidden slide; deferral while locked.
+- Done (m3/libreoffice). Contracts for the integration with B:
+  - `EmittedSlide.art` (`hybrid.ts`) carries `ArtInfo.before` (the object the art goes under, by id), so
+    version 2 finds the art's place after the import added or dropped objects below it.
+  - Metafile pictures are emitted aside as `EmittedSlide.metafiles` (`{ part, object, before }`, the object's
+    `mediaId` is `METAFILE_MEDIA`): B passes them as `PptxLoSlide.metafileObjects` and marks the slide
+    `pending`. `metafiles` pairs still work when their ids name objects on the slide.
+  - A hybrid slide's `PptxLoSlide.art` is `EmittedSlide.art` as is; picture-class slides need only their
+    index, shown index and digest (D reads their text boxes from the deck for `imported.textBoxes`).
+  - Pages are `pdftoppm -f k -l k -scale-to-x/-y` at 2 px per logical px (3840 x 2160 at 16:9, which is
+    288 dpi for the standard sizes, and bounded for any other size).
+  - The second art page is printed over yellow, not black: LibreOffice turns text of automatic colour white
+    on a background of luminance ≤ 156 (verified with a probe deck; `pptx-libreoffice.test.ts` checks it).
+    Yellow keeps automatic colours as on white; alpha comes from the blue channel (255 levels apart). The
+    art task takes any two background colours (`ArtTaskInput.colors`).
+  - `jobs.ts` `JobDeferred` (no migration: the delay is in memory, a restart re-runs the job, which defers
+    again); `POST /presentations/:id/pptx-reference` (423 while locked); the 'Pictures (LibreOffice)'
+    import uses the worker-built copy (`renderCopyForDocument`) and the hardened `sofficeToPdf`.
+  - `addReadyPicture` is item C's: D's tests stand it in with a ready image.
 
 ### E: fonts
 

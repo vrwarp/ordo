@@ -344,6 +344,40 @@ export async function pdfToPngs(pdf: string, outDir: string, o: TOpts): Promise<
   return files.map((f) => join(outDir, f));
 }
 
+/**
+ * One PDF page as a picture (design/27 §5 step 3, `pdftoppm -f k -l k`): `format` 'ppm' is raw RGB for the
+ * art task, 'png' a page picture. The page is scaled to exactly `width` x `height` px (the deck's slide at
+ * 2 px per logical px: 3840x2160 at 16:9, which is 288 dpi for the standard sizes). Returns the file.
+ */
+export async function pdfPage(
+  pdf: string,
+  page: number,
+  outPrefix: string,
+  o: TOpts & { width: number; height: number; format: 'ppm' | 'png' },
+): Promise<string> {
+  if (!Number.isInteger(page) || page < 1) throw new Error(`no page ${page}`);
+  const size = (v: number) => String(Math.max(1, Math.min(16_384, Math.round(v))));
+  await run(
+    'pdftoppm',
+    [
+      '-f',
+      String(page),
+      '-l',
+      String(page),
+      '-scale-to-x',
+      size(o.width),
+      '-scale-to-y',
+      size(o.height),
+      ...(o.format === 'png' ? ['-png'] : []),
+      '-singlefile',
+      pdf,
+      outPrefix,
+    ],
+    { timeoutMs: o.timeoutMs, signal: o.signal },
+  );
+  return `${outPrefix}.${o.format}`;
+}
+
 /** LibreOffice headless conversion of a PPTX to PDF, with a throwaway profile. */
 export async function pptxToPdf(pptx: string, outDir: string, o: TOpts): Promise<string> {
   const profile = join(outDir, 'lo-profile');

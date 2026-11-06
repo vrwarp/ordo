@@ -436,6 +436,16 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     assertPresentationUnlocked(id);
     return hub.imports.makeEditable(id, params(req).slideId!, by(req));
   });
+  // 'Show PowerPoint picture' (design/27 §5 "Operator fallback"): LibreOffice pictures of every shown slide.
+  route('POST', '/presentations/:id/pptx-reference', 'edit', async (req, reply) => {
+    const id = params(req).id!;
+    assertPresentationUnlocked(id);
+    const p = lib.presentations.must(id);
+    const fileId = p.source?.kind === 'pptx' ? p.source.fileId : undefined;
+    if (!fileId || !lib.getFile(fileId))
+      throw badRequest('This presentation has no stored PowerPoint file', 'no_pptx');
+    return reply.code(202).send(hub.imports.pptx.queueReference(id, fileId, by(req)));
+  });
 
   // playlists
   route('GET', '/playlists', 'edit', async () => lib.playlists.list());

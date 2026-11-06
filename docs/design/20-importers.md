@@ -110,13 +110,47 @@ ratio. Result is stored as `Slide.imported.textBoxes` and used by the editor's "
 editable" command. `PptxGenJS` writes PPTX only: it is used for test decks (the fidelity corpus, the
 render tests), never for import.
 
-Before LibreOffice converts a PPTX, `pptxForRendering` removes the outline (`<a:ln>` in a
-run's properties) from filled text in slides, layouts and masters. LibreOffice cannot draw a
-coloured outline around filled text: it substitutes hollow letters, which with the usual drop
-shadow read as broken text (white outlined headlines, common in sermon decks). The fill and
-shadow stay; text meant to be hollow (`<a:noFill/>`) keeps its outline. The job log counts
-the runs changed. Fonts the deck uses must be installed on the hub, or LibreOffice
-substitutes them.
+LibreOffice never converts the uploaded deck itself: a CPU-pool task (`pptx-render-copy`,
+`@ordo/pptx-scene` `rendercopy.ts`, design/27 §5) writes a render copy of the slides to print,
+every shown slide for this import. Every hidden slide is left out (a page is a shown slide, so
+the page index is the shown index), every part is written again from the bounded parser's
+tree under a generated name, and External relationships, macros, OLE binaries, embedded
+packages and fonts, media payloads (posters stay), notes and comments are left out; fields
+keep their stored text. The copy also removes the outline (`<a:ln>` in a run's properties)
+from filled text in slides, layouts and masters. LibreOffice cannot draw a coloured outline
+around filled text: it substitutes hollow letters, which with the usual drop shadow read as
+broken text (white outlined headlines, common in sermon decks). The fill and shadow stay; text
+meant to be hollow (`<a:noFill/>`) keeps its outline. The job log counts the runs changed.
+soffice runs hardened (design/21: address-space cap, no network, process-group timeout). When
+the pool cannot start, the deck is converted as it is, with a warning. Fonts the deck uses must
+be installed on the hub, or LibreOffice substitutes them.
+
+### LibreOffice in the native import (design/27 §5)
+
+The native import (`renderer=native`) draws every slide with ordo's own objects; LibreOffice has
+three roles beside it, each a heavy job that runs after version 1 is saved and never writes a
+presentation while it is live-locked (it re-queues itself with backoff, 30 s doubling to 15 min):
+
+- `pptx-lo`, queued by the import before any clip job: one render copy and one soffice run for
+  everything the deck needs. A hybrid slide's art (charts, tables, SmartArt, OLE, maths, 3D,
+  WordArt warps, vertical text) is printed twice, alone, over a forced white and a forced yellow
+  background (not black: LibreOffice draws text of automatic colour white on any background of
+  luminance 156 or less, so automatic black text would come back white); `pdftoppm` renders both
+  pages at 2 px per logical px (3840 x 2160 at 16:9) and the `pptx-art` pool task takes alpha =
+  1 − (white − yellow)/255 in the blue channel, where the two differ by 255, and colour =
+  (yellow − (1 − alpha)·background)/alpha (over white and black this is design/27's
+  alpha = 1 − max(white − black)/255, colour = black/alpha), cut to the art's box and cropped to
+  what it drew. The result is one locked, transparent image at
+  the art's place in the z-order, over the native background and pictures. A metafile (EMF,
+  WMF) is printed the same way alone at its own aspect and comes back as a transparent PNG in
+  its object's place. A picture-class slide gets its page picture, unpadded, with text boxes
+  keyed by the slide (`imported.textAligned`). Version 2 is one revision: a slide whose objects
+  still match `Slide.pptx.digest` has its art range replaced; a slide edited meanwhile keeps
+  every object and gets the art on top, with a note in `Slide.pptx.notes`.
+- `pptx-reference` ('Show PowerPoint picture', `POST /presentations/:id/pptx-reference`, 423
+  while the presentation is live): every shown slide once into `Slide.pptx.refMediaId`, shown
+  instead of the objects (`show: 'picture'`).
+- The fidelity reference of `tools/pptx-fidelity`.
 
 ### Two renderers: LibreOffice and pptx-preview
 
@@ -175,7 +209,7 @@ which ordo owns and can keep fixing:
   box paints it; a shadow under gradient text is a drop shadow of the painted glyphs. Hollow text
   (`a:noFill`), which pptx-preview filled black, shows only its outline (`a:ln`, 0.75 pt by default) or
   nothing. pptx-preview draws no text outlines on filled text either, matching what LibreOffice draws once
-  `pptxForRendering` has removed them. WordArt warps (`a:prstTxWarp`) are not drawn.
+  the render copy has removed them. WordArt warps (`a:prstTxWarp`) are not drawn.
 - **Paragraphs and text boxes.** Through the markers, and the side table's list of a text box's paragraphs
   (pptx-preview draws one block per paragraph, empty ones included), the page sets the box's margins and
   anchor, each paragraph's spacing, and its line height, as LibreOffice's text engine computes them

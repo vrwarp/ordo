@@ -14,6 +14,9 @@ export class ToolError extends Error {
 /**
  * Run an external tool without a shell, with a timeout (SIGKILL) and an optional abort signal.
  * Only the last 64 KB of stderr is kept. `onStdout` receives stdout chunks (ffmpeg -progress).
+ * With `group`, the tool runs in its own process group and the timeout or abort kills the whole group: a
+ * launcher that starts the real process as its child (soffice → oosplash → soffice.bin) leaves nothing
+ * behind.
  */
 export function run(
   cmd: string,
@@ -26,6 +29,7 @@ export function run(
     onStdout?: (chunk: string) => void;
     keepStdout?: boolean;
     allowFail?: boolean;
+    group?: boolean;
   },
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
@@ -34,6 +38,7 @@ export function run(
       env: opts.env ?? { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8' },
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: false,
+      ...(opts.group ? { detached: true } : {}),
     });
     let stdout = '';
     let stderr = '';
@@ -41,6 +46,13 @@ export function run(
     const kill = (why: string) => {
       if (killedFor) return;
       killedFor = why;
+      if (opts.group && child.pid !== undefined)
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+          return;
+        } catch {
+          // the group is gone already: kill the child itself
+        }
       child.kill('SIGKILL');
     };
     const timer = setTimeout(
@@ -70,6 +82,13 @@ export function run(
     child.on('close', (code) => {
       clearTimeout(timer);
       opts.signal?.removeEventListener('abort', onAbort);
+      // A helper the tool left running in its group goes with it.
+      if (opts.group && child.pid !== undefined)
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          // nothing left
+        }
       if (killedFor) return reject(new ToolError(`${cmd} ${killedFor}`, stderr));
       const r = { code: code ?? -1, stdout, stderr };
       if (code !== 0 && !opts.allowFail) {

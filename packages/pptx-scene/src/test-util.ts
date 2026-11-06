@@ -420,3 +420,68 @@ export function imageRel(id: string, file: string): RelSpec {
 export function partText(parts: PartSource, name: string): string {
   return new TextDecoder().decode(parts.get(name));
 }
+
+// ── Charts and extra parts (M3 item D) ──────────────────────────────────────────────────────────────────
+
+const NS_C = 'http://schemas.openxmlformats.org/drawingml/2006/chart';
+
+/** A `p:graphicFrame` holding a chart (`rId` relates to the chart part). */
+export function chartFrame(o: {
+  id: number;
+  x: number;
+  y: number;
+  cx: number;
+  cy: number;
+  rId: string;
+}): string {
+  return (
+    `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${o.id}" name="Chart ${o.id}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>` +
+    `<p:xfrm><a:off x="${o.x}" y="${o.y}"/><a:ext cx="${o.cx}" cy="${o.cy}"/></p:xfrm>` +
+    `<a:graphic><a:graphicData uri="${NS_C}"><c:chart xmlns:c="${NS_C}" r:id="${o.rId}"/></a:graphicData></a:graphic></p:graphicFrame>`
+  );
+}
+
+/**
+ * A column chart part with its values cached (LibreOffice draws it without the embedded workbook): bars of
+ * `color`, no chart or plot background, so everything around the bars is transparent.
+ */
+export function chartXml(values: number[] = [3, 5, 2], color = 'C00000'): string {
+  const pts = (f: (v: number, i: number) => string) =>
+    values.map((v, i) => `<c:pt idx="${i}"><c:v>${f(v, i)}</c:v></c:pt>`).join('');
+  return (
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<c:chartSpace xmlns:c="${NS_C}" xmlns:a="${NS_A}" xmlns:r="${NS_R}">` +
+    '<c:chart><c:autoTitleDeleted val="1"/><c:plotArea><c:layout/><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>' +
+    `<c:varyColors val="0"/><c:ser><c:idx val="0"/><c:order val="0"/><c:spPr>${solid(color)}</c:spPr>` +
+    `<c:cat><c:strRef><c:f>Sheet1!$A$2</c:f><c:strCache><c:ptCount val="${values.length}"/>${pts((_, i) => String.fromCharCode(65 + (i % 26)))}</c:strCache></c:strRef></c:cat>` +
+    `<c:val><c:numRef><c:f>Sheet1!$B$2</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${values.length}"/>${pts((v) => String(v))}</c:numCache></c:numRef></c:val>` +
+    '</c:ser><c:gapWidth val="80"/><c:axId val="1"/><c:axId val="2"/></c:barChart>' +
+    '<c:catAx><c:axId val="1"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="1"/><c:axPos val="b"/><c:crossAx val="2"/></c:catAx>' +
+    '<c:valAx><c:axId val="2"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="1"/><c:axPos val="l"/><c:majorGridlines><c:spPr><a:ln><a:noFill/></a:ln></c:spPr></c:majorGridlines><c:crossAx val="1"/></c:valAx>' +
+    '<c:spPr><a:noFill/></c:spPr></c:plotArea><c:plotVisOnly val="1"/></c:chart><c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr></c:chartSpace>'
+  );
+}
+
+/** Add a part (with a content-type override when `contentType` is given) to a built deck. */
+export function withPart(
+  parts: PartSource,
+  name: string,
+  content: string | Uint8Array,
+  contentType?: string,
+): PartSource {
+  parts.set(name, typeof content === 'string' ? new TextEncoder().encode(content) : content);
+  if (contentType) {
+    const ct = partText(parts, '[Content_Types].xml');
+    parts.set(
+      '[Content_Types].xml',
+      new TextEncoder().encode(
+        ct.replace(
+          '</Types>',
+          `<Override PartName="/${esc(name)}" ContentType="${esc(contentType)}"/></Types>`,
+        ),
+      ),
+    );
+  }
+  return parts;
+}
+
+export const CHART_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.drawingml.chart+xml';

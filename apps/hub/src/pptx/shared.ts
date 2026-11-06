@@ -6,6 +6,7 @@
  * Every map in a payload is an array of pairs (design/27 §12 "Prototype safety"): job payloads are JSON and
  * their keys come from deck strings (part names). Part names are at most `PPTX_LIMITS.partName` characters.
  */
+import type { ExtractedText, ImageObject } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import type { ArtInfo, ConvertResult, SlideClass } from '@ordo/pptx-scene';
 import { MAX_XML_PART_BYTES } from '@ordo/pptx-scene/opc.ts';
@@ -130,6 +131,13 @@ export type PptxLoSlide = {
   metafiles?: [string, string[]][];
   /** Version 1's `Slide.pptx.digest`: the patch replaces objects only while the slide still matches it. */
   digest: string;
+  /**
+   * Metafile pictures version 1 left out, as emitted (their `mediaId` any placeholder): once LibreOffice has
+   * converted `part`, each goes in just under the object `before` names (on top when absent or gone; on top
+   * with a note when the slide was edited). `metafiles` ids that name objects still on the slide get the
+   * converted picture as their `mediaId` instead.
+   */
+  metafileObjects?: { part: string; object: ImageObject; before?: string }[];
 };
 
 export type PptxLoPayload = {
@@ -142,6 +150,11 @@ export type PptxLoPayload = {
   deferrals?: number;
   /** Pictures already stored by an earlier attempt: [`<slideId>:<what>`, media id] pairs. */
   done?: [string, string][];
+  /**
+   * Where each stored art picture goes, in logical px: [`<slideId>:art`, box] pairs (an art picture is cropped
+   * to what LibreOffice drew, so its box is known only once it is made). '' as a `done` media id: nothing.
+   */
+  placed?: [string, { x: number; y: number; w: number; h: number }][];
 };
 
 export type PptxReferencePayload = {
@@ -150,6 +163,8 @@ export type PptxReferencePayload = {
   by?: string;
   /** Reference pictures already stored: [`SlideRef.index`, media id] pairs. */
   done?: [number, string][];
+  /** Times the job found the presentation live-locked and deferred itself (the backoff step). */
+  deferrals?: number;
 };
 
 export type TextRepairPayload = {
@@ -218,12 +233,20 @@ export type RenderCopyTaskInput = {
   pages: RenderCopyPage[];
   /** Where the worker writes the copy (.pptx), inside the job's scratch directory. */
   out: string;
+  /** Slides (`SlideRef.index`) whose text boxes to read as well (`RenderCopyTaskOutput.texts`). */
+  texts?: number[];
+  /** Print every shown slide whole, in order, instead of `pages` (the 'Pictures (LibreOffice)' import). */
+  allShown?: boolean;
 };
 export type RenderCopyTaskOutput = {
   pages: RenderCopyPage[];
   bytes: number;
   outlines: number;
   notes: string[];
+  /** The deck's slide size in EMU: the pages are printed at 2 px per logical px from it. */
+  slideSize?: { cx: number; cy: number };
+  /** Text boxes of `RenderCopyTaskInput.texts` (uniform contain mapping, logical px): [index, boxes]. */
+  texts?: [number, ExtractedText[]][];
 };
 
 /** Pixels: rows top to bottom, `channels` bytes per pixel (RGB or RGBA, straight alpha). */
@@ -234,8 +257,17 @@ export type ArtTaskInput = {
   /** The same page printed over a forced white and a forced black background; same size. */
   white: RasterImage;
   black: RasterImage;
+  /**
+   * The RGB colours the two pages were printed over, when not white and black (the follow-up prints the second
+   * page over yellow: `@ordo/pptx-scene` `PAGE_BACKGROUNDS`). Channels where they are equal carry no alpha.
+   */
+  colors?: { white: readonly [number, number, number]; black: readonly [number, number, number] };
   /** The art's box on the page, in page pixels: nothing outside it is kept. */
   box: { x: number; y: number; w: number; h: number };
+  /** Keep the whole box instead of cropping to the visible pixels (a converted metafile keeps its extent). */
+  whole?: boolean;
+  /** Also encode the PNG (`ArtTaskOutput.png`) and hand back `image` without its pixels. */
+  encode?: boolean;
 };
 export type ArtTaskOutput = {
   /** RGBA, straight alpha, cropped to the bounding box of the pixels that are not fully transparent. */
@@ -244,6 +276,8 @@ export type ArtTaskOutput = {
   at: { x: number; y: number };
   /** Nothing visible survived: the art draws nothing. */
   empty: boolean;
+  /** With `ArtTaskInput.encode`: `image` as a PNG (RGBA, 8 bits). */
+  png?: Uint8Array;
 };
 
 /** A stub's error: the work item that will implement it (README.md). */

@@ -125,12 +125,21 @@ export function readPicture(
   const picture = blipFill && source !== undefined ? readBlipFill(ctx, blipFill, source) : undefined;
   if (!picture) return undefined;
   const ext = extensionOf(picture.part);
-  if (METAFILE_EXTENSIONS.has(ext)) {
-    ctx.log(`a ${ext} picture is not drawn yet (LibreOffice converts it in M3)`);
-    return { ...base, kind: 'residual', what: 'metafile', support: 'approx', reasons: ['metafile'] };
-  }
   // A picture placeholder takes its clip geometry from the layout or master when it has none.
   const { geom, adj } = geometryOf(chainOf(ctx, el, base.from));
+  if (METAFILE_EXTENSIONS.has(ext)) {
+    ctx.log(`a ${ext} picture is not drawn yet (LibreOffice converts it in M3)`);
+    return {
+      ...base,
+      kind: 'residual',
+      what: 'metafile',
+      support: 'approx',
+      reasons: ['metafile'],
+      picture,
+      geom,
+      ...(adj ? { adj } : {}),
+    };
+  }
   const out: PictureElement = { ...base, kind: 'picture', picture, geom, ...(adj ? { adj } : {}) };
   const reasons: string[] = [];
   if (PREPARED_EXTENSIONS.has(ext)) reasons.push(`pic:${ext}`);

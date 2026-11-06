@@ -26,10 +26,12 @@ import type { HubConfig } from './config.ts';
 import { badRequest, errorMessage, forbidden } from './errors.ts';
 import type { JobCtx, JobQueue } from './jobs.ts';
 import type { Library } from './library.ts';
-import { fitPage, pdfToPngs, pptxToPdf } from './media/ffmpeg.ts';
+import { fitPage, pdfToPngs } from './media/ffmpeg.ts';
 import { baseName, type MediaService } from './media/service.ts';
 import { cpuPool, transferables, WorkerStartError } from './pool.ts';
+import { renderCopyForDocument, sofficeToPdf } from './pptx/fallback.ts';
 import { PptxImports } from './pptx/index.ts';
+import { logSafe } from './pptx/report.ts';
 import type { Store } from './store.ts';
 
 export type Pro7Result = {
@@ -508,22 +510,21 @@ export class ImportService {
           }
           ctx.progress(0.3);
         }
-        if (!pages && this.imp.pptxForRendering) {
+        if (!pages) {
+          // The worker-built render copy (design/27 §5): every shown slide, External relationships, macros
+          // and OLE binaries gone, outlines stripped. Without the pool the deck goes to LibreOffice as it is.
           try {
-            const r = await this.imp.pptxForRendering(await readFile(input));
-            if (r.outlines) {
-              await writeFile(input, r.bytes);
+            const r = await renderCopyForDocument(input, dir, ctx.signal);
+            for (const n of r.notes.slice(0, 20)) ctx.log(`[warn] ${logSafe(n)}`);
+            if (r.outlines)
               ctx.log(
                 `text outlines removed from ${r.outlines} run(s): LibreOffice draws an outline on filled text as hollow letters`,
               );
-            }
           } catch (e) {
             ctx.log(`[warn] could not prepare the slides for LibreOffice: ${errorMessage(e)}`);
           }
-        }
-        if (!pages) {
           ctx.log('converting with LibreOffice');
-          pdf = await pptxToPdf(input, dir, { timeoutMs: t.soffice, signal: ctx.signal });
+          pdf = await sofficeToPdf(input, dir, { timeoutMs: t.soffice, signal: ctx.signal });
           ctx.progress(0.3);
         }
       }
