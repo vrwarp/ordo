@@ -123,22 +123,30 @@ Steps 5-10 of §6.
 - Tests: page.ts parity cases (line spacing, autofit sizes, superscript), autofit never growing past the
   stored scale, edits keeping `fitScale` while the text still fits.
 
-### C. bullets-readable: `bullets.ts`, `packages/domain/src/readable.ts` and their uses
+### C. bullets-readable: `bullets.ts`, `packages/domain/src/bullets.ts`, `readable.ts` and their uses
 
-Step 11 of §6 and `readableText` (§1, §3.2).
-- `paraLabels(o)` in the domain: port annotate.ts `bulletOf`/`autoNumber` (counter per level keyed by
-  type:startAt; arabic, roman, alpha, circled ①-⑳; Period, ParenR, ParenBoth, Plain; `(17)` for verses).
-  An empty or soft paragraph has no label and does not advance the counter; `bullet: null` ends a sequence.
-- `readableText(o)` and `textScripts(text)` (scaffolded): labels written as text for people to read.
+Step 11 of §6 and `readableText` (§1, §3.2). **Done.**
+- `paraLabels(o)` (domain `bullets.ts`): the port of annotate.ts `bulletOf`/`autoNumber` as `NumberCounter`
+  (a counter per level keyed by type:startAt) and `autoNumberLabel` (arabic, roman, alpha, circled ①-⑳ and
+  ❶-⓴, full-width, Thai and Devanagari digits; Period, ParenR, ParenBoth, Plain, Minus; `(17)` for verses;
+  unknown schemes read as arabicPeriod). An empty paragraph has no label and neither counts nor ends a
+  sequence; a soft paragraph has no label and its text counts for the paragraph before it; a shallower
+  paragraph, or a same-level one without a number, ends a sequence; `auto` wins over `char`. Labels never
+  contain a line break, a control character or a bidi override, and inputs need not be clamped.
+- `WINGDINGS_TO_UNICODE`, `SYMBOL_TO_UNICODE` and `symbolFontChar(family, char)` (domain): the converter maps
+  symbol-font bullets with them (U+F0xx offset stripped, unknown codes '•'); `paraLabels` maps a bullet stored
+  unmapped too, and `paraBullets` then draws it in the run's family, never in the symbol font.
+- `readableText(o)` (domain `readable.ts`): each label, a no-break space (`LABEL_GAP`), the paragraph. The '\n'
+  count is unchanged, so `paras[i]` still describes line i (a drawer laying the result out drops `bullet`
+  from them). `textScripts(text)` reports the `FALLBACK_SCRIPTS` codes (ISO 15924) present; `FaceRequest.script`
+  should use the same table.
 - `paraBullets(o, it)`: font (own family, else the first run's), `sizePct`, colour (own, else the first
-  run's). The Wingdings/Symbol → Unicode table (0x6C→●, 0x6E→■, 0xA7→▪, 0xD8→➢, 0xFC→✓, 0x71→❑, 0x76→❖,
-  Symbol 0xB7→•, U+F0xx offset stripped) belongs in the domain so the converter can use it without the
-  renderer.
-- Uses: cue labels (`packages/domain/src/cues.ts` `firstText`), operator search (`apps/operator/src/lib/search.ts`,
-  `services/search.ts`), lyric-only bands and the next-slide band (`text2d.ts` `lyricTextFor`, coordinate
-  with D), the stage's `slideText` (`apps/stage/src/model.ts`).
-- Tests: numbering with startAt, restart rules, empty paragraphs, a verse-number round trip through
-  `readableText`.
+  run's), weight and slant of the first run.
+- Uses: `firstText` (cue labels, lyric-only and next-slide bands through `lyricTextFor`, editor previews,
+  slide thumbnails), the stage's `slideText`, operator search.
+- Open for B: lines.ts draws a bullet only when the paragraph's first piece list is non-empty, so a paragraph
+  whose first line is empty and whose soft line has text gets its label in `readableText` but no drawn bullet
+  (PowerPoint draws it on the empty first line).
 
 ### D. paint-dispatch: `paint.ts`, `rich.ts`, the `text2d.ts` dispatch, bands, the editor
 

@@ -51,6 +51,8 @@ type TextObject = {
   opacity: number;
   runs?: TextRun[]; // sparse styles over `text` (UTF-16 offsets), sorted, non-overlapping (design/27 §3.1)
   paras?: (TextPara | null)[]; // paragraph styles: paras[i] ↔ text.split('\n')[i]; bullets, numbering, spacing
+  // `text` stays canonical (no bullets or numbers in it); what people read (cue labels, stage, bands,
+  // search) is readableText(o), which writes each paragraph's label ('(17)', '•') in front of it.
 };
 type TextStyle = {
   fontFamily: string;

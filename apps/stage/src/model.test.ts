@@ -199,6 +199,26 @@ describe('slide text', () => {
       }),
     ).toBe('Lyric');
   });
+  it('shows automatic verse numbers as text', () => {
+    const box = { x: 0, y: 0, w: 1, h: 1, rotation: 0 };
+    const verse = { bullet: { auto: 'arabicParenBoth', startAt: 16 } };
+    expect(
+      slideText({
+        id: 's',
+        objects: [
+          {
+            id: 'b',
+            type: 'text',
+            text: 'For God so loved the world\nFor God did not send his Son',
+            box,
+            style: LOOK_MAIN as never,
+            opacity: 1,
+            paras: [verse, verse],
+          },
+        ],
+      }),
+    ).toBe('(16)\u{a0}For God so loved the world\n(17)\u{a0}For God did not send his Son');
+  });
 });
 
 describe('timers', () => {
