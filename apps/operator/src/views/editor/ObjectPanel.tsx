@@ -6,6 +6,13 @@ import { useLibrary } from '../../state/library.ts';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { change, useEditor } from './editorStore.ts';
 import { VideoPanel } from './MediaPanels.tsx';
+import {
+  ShapeFillFields,
+  ShapeGeometryField,
+  ShapeLineFields,
+  ShapeShadowField,
+  shapeName,
+} from './ObjectShapeFields.tsx';
 import { getSlide, markOverride, updateObject, updateSlide } from './ops.ts';
 
 /** Property panel for the selected object: every TextStyle, ImageObject and ShapeObject field (prd/03). */
@@ -33,6 +40,9 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
     (l) => l.kind === 'stream' || (l.clearColor.g > 200 && l.clearColor.r < 60 && l.clearColor.b < 60),
   );
   const keyClash = o.type === 'text' && keyLooks.some((l) => nearColor(o.style.color, l.clearColor));
+  // A locked shape (PowerPoint art, table grids: design/27 §11 "Locked objects") keeps its style fields
+  // read-only; its box stays editable.
+  const shapeFixed = readOnly || (o.type === 'shape' && !!o.locked);
 
   return (
     <div className="col" style={{ gap: 10 }}>
@@ -46,7 +56,7 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
               ? o.play
                 ? 'Video'
                 : 'Image'
-              : `Shape (${o.shape})`}
+              : `Shape (${shapeName(o)})`}
         </b>
         {o.type === 'text' && !isLyric && (
           <button
@@ -157,29 +167,12 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
       {o.type === 'shape' && (
         <section className="col">
           <h4>Shape</h4>
-          <Select
-            label="Shape"
-            value={o.shape}
-            options={['rect', 'ellipse', 'line'] as const}
-            onChange={(shape) => set((x) => ({ ...x, shape }) as SlideObject)}
-          />
-          {o.shape !== 'line' && (
-            <>
-              <Check
-                label="Fill"
-                value={!!o.fill}
-                onChange={(on) =>
-                  set((x) => ({ ...x, fill: on ? { r: 40, g: 90, b: 200, a: 1 } : undefined }) as SlideObject)
-                }
-              />
-              {o.fill && (
-                <ColorField value={o.fill} onChange={(fill) => set((x) => ({ ...x, fill }) as SlideObject)} />
-              )}
-            </>
-          )}
+          <ShapeGeometryField o={o} disabled={shapeFixed} set={set} />
+          {o.shape !== 'line' && <ShapeFillFields o={o} disabled={shapeFixed} set={set} />}
           <Check
             label="Stroke"
             value={!!o.stroke}
+            disabled={shapeFixed}
             onChange={(on) =>
               set(
                 (x) =>
@@ -195,21 +188,26 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
               <NumberField
                 value={o.stroke.width}
                 min={0}
+                disabled={shapeFixed}
                 onChange={(width) => set((x) => ({ ...x, stroke: { ...o.stroke!, width } }) as SlideObject)}
                 suffix="px"
                 width={60}
               />
               <ColorField
                 value={o.stroke.color}
+                disabled={shapeFixed}
                 onChange={(color) => set((x) => ({ ...x, stroke: { ...o.stroke!, color } }) as SlideObject)}
               />
             </div>
           )}
-          {o.shape === 'rect' && (
+          {o.stroke && <ShapeLineFields o={o} disabled={shapeFixed} set={set} />}
+          <ShapeShadowField o={o} disabled={shapeFixed} set={set} />
+          {o.shape === 'rect' && !o.geom && (
             <NumberField
               label="Corner radius"
               value={o.radius}
               min={0}
+              disabled={shapeFixed}
               onChange={(radius) => set((x) => ({ ...x, radius }) as SlideObject)}
             />
           )}
