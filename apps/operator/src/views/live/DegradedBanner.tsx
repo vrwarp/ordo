@@ -1,11 +1,40 @@
+import type { DegradedKind } from '@ordo/domain';
 import { useState } from 'react';
 import { degradedKey, summarizeDegraded } from '../../lib/degraded.ts';
 import { useLive } from '../../state/live.ts';
 
+const slides = (n: number) => (n === 1 ? 'One slide' : `${n} slides`);
+
+/**
+ * The cue rows by what their slides show (`degradedKind`): only a quarantined slide is empty; a slide whose
+ * clip, sound, background or PowerPoint picture is not ready shows its poster or goes without it, and going
+ * live again once it is ready brings it back; a PowerPoint slide LibreOffice is drawing shows what it has.
+ */
+const groups: { kind: DegradedKind; title: (n: number) => string; after?: string }[] = [
+  {
+    kind: 'empty',
+    title: (n) =>
+      `${slides(n)} could not be shown and ${n === 1 ? 'was' : 'were'} replaced with an empty slide:`,
+    after: 'Fix them in the editor after the service.',
+  },
+  {
+    kind: 'media',
+    title: (n) => `${slides(n)} went live without media that is not ready:`,
+    after: 'A clip still processing plays once you go live again after it is ready.',
+  },
+  {
+    kind: 'drawing',
+    title: (n) => `${slides(n)} from PowerPoint ${n === 1 ? 'is' : 'are'} not fully drawn yet:`,
+  },
+  { kind: 'other', title: (n) => `${slides(n)} went live with a warning:` },
+];
+
 /**
  * Shows what the hub quarantined when the service went live (design/25): a playlist taken from a cached copy
- * because the library did not answer, and slides replaced by empty ones because their data was invalid.
- * The service runs either way; the operator must know. Dismissable for the current service.
+ * because the library did not answer, slides replaced by empty ones because their data was invalid, and
+ * slides that went live without media that is not ready or before LibreOffice drew them (design/27 §5, §8),
+ * each with its reason. The service runs either way; the operator must know. Dismissable for the current
+ * service.
  */
 export function DegradedBanner() {
   const resolved = useLive((s) => s.state.resolved);
@@ -27,15 +56,24 @@ export function DegradedBanner() {
             <b>Live with a warning:</b> {r}
           </div>
         ))}
-        {sum.cues.length > 0 && (
-          <div>
-            <b>
-              {sum.cues.length === 1 ? 'One slide' : `${sum.cues.length} slides`} could not be shown and{' '}
-              {sum.cues.length === 1 ? 'was' : 'were'} replaced with an empty slide:
-            </b>{' '}
-            {sum.cues.map((c) => c.label).join('; ')}. Fix them in the editor after the service.
-          </div>
-        )}
+        {groups.map((g) => {
+          const rows = sum.cues.filter((c) => c.kind === g.kind);
+          if (!rows.length) return null;
+          return (
+            <div key={g.kind} data-degraded-kind={g.kind}>
+              <b>{g.title(rows.length)}</b>
+              <ul style={{ margin: '2px 0 4px', paddingLeft: 18 }}>
+                {rows.map((c) => (
+                  <li key={`${c.cueIndex}:${c.reason}`}>
+                    {c.label}
+                    {g.kind === 'empty' ? '' : ` — ${c.reason}`}
+                  </li>
+                ))}
+              </ul>
+              {g.after}
+            </div>
+          );
+        })}
       </div>
       <button type="button" onClick={() => setDismissed(key)}>
         Dismiss

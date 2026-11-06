@@ -149,6 +149,15 @@ CREATE TRIGGER IF NOT EXISTS media_hashes_delete AFTER DELETE ON media BEGIN
 END;
 `,
   },
+  {
+    version: 9,
+    name: 'jobs-kind-state',
+    // `JobQueue.active`: whether an item already has a queued or running job, looked up among the jobs of
+    // one kind and state rather than every job (a library import can queue thousands of media jobs).
+    sql: `
+CREATE INDEX IF NOT EXISTS jobs_kind_state ON jobs(kind, state);
+`,
+  },
 ];
 
 /**

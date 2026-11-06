@@ -899,7 +899,13 @@ A scene is several draws, so it is composed at full alpha before it is weighted:
   the slide's own below it; what it covers is left out. It stays the slide's background, never the
   presentation's, and goLive treats a PowerPoint slide's own background as optional like its clips
   (`SlidePlay.role` 'background'; `expandCues` shows the item's or the presentation's instead), so a motion
-  background still transcoding never refuses the service.
+  background still transcoding never refuses the service. Accepted gap (M3 wave 2): unlike a boxed clip, a
+  motion background still transcoding or failed after the import has no poster to fall back to (the
+  converter leaves out what it covers, its poster included, and the hub puts the poster back only when the
+  clip cannot be imported at all), so until the operator goes live again once it is ready the slide's text
+  shows over the item's or presentation's background, or black; the banner names it ('went live without
+  media that is not ready'). Keeping the poster as a still background (a `Slide.pptx` poster id `expandCues`
+  would use) is left for a later wave.
 - The hub sniffs each clip part before the batches (`SceneTaskInput.mediaKinds`), so the converter decides
   video or sound by the bytes. Clips are stored with `IngestOpts.queue: false` and their media jobs queued in
   the transaction that saves version 1, right after `pptx-lo` (`JobQueue.enqueue` `after`: jobs start in
@@ -1120,7 +1126,7 @@ The extensions, in priority order (M4 unless noted):
 - Trust the central directory only.
 - Refuse encrypted entries and unknown methods; count inflated bytes against declared sizes.
 - ≤ 200k entries; XML ≤ 8 MB per part and ≤ 64 MB in all; spilled media ≤ 1 GiB per import.
-- At most 2,000 picture parts, 50 clips and 20 font parts per deck are extracted; the rest are logged and keep their posters or fallbacks. This bounds the Media rows and jobs one deck can create.
+- At most 2,000 picture parts, 50 clips and 20 font parts per deck are extracted; the rest are logged and keep their posters or fallbacks. This bounds the Media rows and jobs one deck can create. The clip limit counts clips as stored, one per part and trim, so one part trimmed differently on every slide still makes at most 50.
 - Add a `skip` filter (only referenced media and font parts spill) and `nested:false`.
 - Entry names never become paths (`Store.abs` and generated names only).
 
@@ -1154,7 +1160,7 @@ The extensions, in priority order (M4 unless noted):
 
 **Fonts.** EOT ≤ 32 MB; decoded ≤ 64 MB with `FONT_LIMITS`-style table caps; then sfnt validation.
 
-**External tools.** Only through `run()` (no shell, SIGKILL timeout, minimal env); ffmpeg keeps `-protocol_whitelist file,pipe`; soffice without network where possible and with an address-space cap (§5); `eot2ttf` with an address-space cap.
+**External tools.** Only through `run()` (no shell, SIGKILL timeout, minimal env); ffmpeg and ffprobe keep `-protocol_whitelist file,pipe`, and clips are probed under a name from their sniffed bytes, never the part's; soffice without network where possible and with an address-space cap (§5); `eot2ttf` with an address-space cap.
 
 **Saving.** Everything goes through `sanitizePresentation` (which now cuts runs and paras with the text) and the validating `lib.savePresentation`.
 
@@ -1471,7 +1477,7 @@ Also:
 - Clear media during an in-slide video, then arm the next slide's clip: the live slide shows its poster, never the next clip.
 
 Also:
-- A clip still transcoding goes live with a degraded note and its poster.
+- A clip still transcoding goes live with a degraded note and its poster (a motion background still transcoding goes live without it: §8 "p:timing mapping", accepted gap).
 - A failed clip leaves a `[warn]` line and the poster.
 - A trimmed looping clip loops between its trim points.
 - The compositor golden passes; hot-lint is green.

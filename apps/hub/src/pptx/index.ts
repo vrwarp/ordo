@@ -5,12 +5,13 @@
 import type { Presentation } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import { loJob, queueFollowUp, referenceJob } from './fallback.ts';
-import { nativeJob } from './nativeJob.ts';
+import { nativeJob, queueStoredClips } from './nativeJob.ts';
 import {
   enqueuePptx,
   PPTX_JOBS,
   type PptxDeps,
   type PptxImportOptions,
+  type PptxNativePayload,
   type PptxReferencePayload,
 } from './shared.ts';
 import { queueTextRepair, textRepairJob } from './textRepair.ts';
@@ -18,7 +19,10 @@ import { queueTextRepair, textRepairJob } from './textRepair.ts';
 export class PptxImports {
   constructor(readonly deps: PptxDeps) {
     const { jobs } = deps;
-    jobs.register(PPTX_JOBS.native, nativeJob(deps));
+    // Abandoned after repeated crashes: the clips it stored still get their media jobs.
+    jobs.register(PPTX_JOBS.native, nativeJob(deps), (payload: PptxNativePayload) =>
+      queueStoredClips(deps, payload?.done),
+    );
     jobs.register(PPTX_JOBS.lo, loJob(deps));
     jobs.register(PPTX_JOBS.reference, referenceJob(deps));
     jobs.register(PPTX_JOBS.textRepair, textRepairJob(deps));

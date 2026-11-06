@@ -123,22 +123,18 @@ export class JobQueue {
   }
 
   /**
-   * Whether a job of `kind` whose payload `match` accepts is queued or running (at most `limit` of them are
-   * looked at, newest first).
+   * Whether a job of `kind` whose payload holds `value` at its top-level `field` is queued or running. Every
+   * such job is looked at (the `jobs_kind_state` index), in SQLite: no row cap, nothing parsed here.
    */
-  active(kind: string, match: (payload: unknown) => boolean, limit = 1_000): boolean {
-    const rows = this.db
+  active(kind: string, field: string, value: string): boolean {
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(field)) throw new Error(`not a payload field: ${field}`);
+    const row = this.db
       .prepare(
-        `SELECT payload FROM jobs WHERE kind = ? AND state IN ('queued','running') ORDER BY created_at DESC LIMIT ?`,
+        `SELECT 1 FROM jobs WHERE kind = ? AND state IN ('queued','running')
+           AND (CASE WHEN json_valid(payload) THEN json_extract(payload, ?) END) = ? LIMIT 1`,
       )
-      .all(kind, limit) as { payload: string }[];
-    return rows.some((r) => {
-      try {
-        return match(JSON.parse(r.payload));
-      } catch {
-        return false;
-      }
-    });
+      .get(kind, `$.${field}`, value);
+    return row !== undefined;
   }
 
   get(id: string): Job {

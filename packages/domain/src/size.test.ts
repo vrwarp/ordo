@@ -370,6 +370,27 @@ describe('previewSlice', () => {
     );
   });
 
+  it('the next slide is the next shown one: hidden slides are skipped, as Next skips them (design/27 §9)', () => {
+    const p = deck(slides.slice(0, 6), 3);
+    const [a, h] = p.sections[0]!.slides as [Slide, Slide];
+    const hide = (x: Slide): Slide => ({ ...x, hidden: true });
+    // Sections [a, hidden] and [hidden, b]: the band shows b.
+    const q: Presentation = {
+      ...p,
+      sections: [
+        { ...p.sections[0]!, slides: [a, hide(h)] },
+        { ...p.sections[1]!, slides: [hide(p.sections[1]!.slides[0]!), p.sections[1]!.slides[1]!] },
+      ],
+    };
+    const s = previewSlice(q, a.id);
+    expect(flat(s)).toEqual([a.id, h.id, p.sections[1]!.slides[1]!.id]);
+    // Cut to the pair, the hidden slide in between is left out.
+    const c = p.sections[2]!.slides[0]!;
+    const r: Presentation = { ...q, sections: [{ ...q.sections[0]!, slides: [a, hide(h), c] }] };
+    const pair = previewSlice(r, a.id, jsonBytes(previewSlice(r, a.id, 1)) + slideBytes(c) + 10);
+    expect(flat(pair)).toEqual([a.id, c.id]);
+  });
+
   it('previews the first slide without an id, nothing for an unknown id, and a giant slide alone', () => {
     const p = deck(slides.slice(0, 30), 3);
     expect(flat(previewSlice(p))[0]).toBe(slides[0]!.id);

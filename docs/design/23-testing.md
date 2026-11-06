@@ -80,7 +80,8 @@ hidden slide (Next and Prev skip it, a double-click in the grid shows it). `pptx
 with PowerPoint decks: a boxed autoplay clip turned, cropped and rounded under a title, a click-start clip
 (F8, Shift+F8, onEnd 'advance' set in ordo, the stage's remaining time), a muted motion background, a
 `numSld=3` sound across a hidden slide, a clip that is not a video (`[warn]`, poster), a clip whose
-processing fails (degraded note, poster), a looping clip trimmed by `p14:trim`, and a looping
+processing fails (degraded note, poster, and the operator's banner giving that reason rather than an
+empty slide), a looping clip trimmed by `p14:trim`, and a looping
 announcement deck whose music does not restart on the wrap.
 
 ## Chaos tests

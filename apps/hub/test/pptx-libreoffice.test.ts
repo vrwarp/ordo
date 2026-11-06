@@ -392,15 +392,18 @@ describe.skipIf(!tools)('pptx-lo through LibreOffice', () => {
     expect(v2.rev).toBe(saved.rev + 1);
     expect(slidesOf(v2)[2]!.objects.some((o) => o.type === 'image' && o.fit === 'stretch')).toBe(true);
 
-    // 'Show PowerPoint picture': every shown slide once, shown as the picture.
+    // 'Show PowerPoint picture': every slide once, the hidden one too (a click shows it, design/27 §9),
+    // shown as the picture.
     const res = await ed.fetch(`/presentations/${saved.id}/pptx-reference`, { method: 'POST' });
     expect(res.status).toBe(202);
     const ref = (await res.json()) as Job;
     await hub.jobs.idle();
-    expect(hub.jobs.get(ref.id)).toMatchObject({ state: 'done', result: { slides: 3 } });
+    expect(hub.jobs.get(ref.id)).toMatchObject({ state: 'done', result: { slides: 4 } });
     const v3 = slidesOf(hub.lib.presentations.must(saved.id));
-    expect(v3.map((s) => s.pptx?.show)).toEqual(['picture', undefined, 'picture', 'picture']);
-    expect(v3[1]!.pptx?.refMediaId).toBeUndefined(); // hidden
+    expect(v3.map((s) => s.pptx?.show)).toEqual(['picture', 'picture', 'picture', 'picture']);
+    expect(v3[1]!.hidden).toBe(true);
+    expect(v3[1]!.pptx?.refMediaId).toBeDefined();
+    expect(v3[1]!.pptx!.refMediaId).not.toBe(v3[0]!.pptx!.refMediaId);
     const pic = hub.lib.media.must(v3[0]!.pptx!.refMediaId!);
     expect([pic.width, pic.height]).toEqual([3840, 2160]);
     expect(v3[2]!.pptx!.refMediaId).not.toBe(v3[0]!.pptx!.refMediaId);

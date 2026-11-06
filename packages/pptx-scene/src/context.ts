@@ -42,7 +42,8 @@ export interface SlideCtx {
   pictureSize?: (part: string) => { w: number; h: number } | undefined;
   /**
    * Whether a clip part is a video or a sound, from its bytes, when the caller can tell
-   * (`ParseOptions.mediaKind`; M5 hub scope). Undefined: the element and the timing decide.
+   * (`ParseOptions.mediaKind`; M5 hub scope; `readMediaRef` has the rule). Undefined: the element and the
+   * timing decide.
    */
   mediaKind?: (part: string) => 'video' | 'audio' | undefined;
   /** The slide's `p:timing` and transition sound (`timing.ts`), read before its shape tree. */

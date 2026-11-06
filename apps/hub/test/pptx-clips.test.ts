@@ -1,14 +1,15 @@
 /**
  * Clips of the native PowerPoint import (design/27 §2 step 5, §8 "Hub" and "p:timing mapping"; M3 wave 2,
- * M5 hub scope): crafted decks with generated clips (MP4, WMV, MP3, WAV) through the real `pptx-native` job,
- * CPU pool and media jobs.
+ * M5 hub scope): crafted decks with generated clips (MP4, WMV, WMA, MP3, WAV) through the real
+ * `pptx-native` job, CPU pool and media jobs.
  */
 import { mkdirSync, rmSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { copyFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   DEFAULT_GENERAL,
   DEFAULT_LOOKS,
+  expandCues,
   type ImageObject,
   localDigest,
   type Media,
@@ -38,10 +39,10 @@ import {
   withPart,
 } from '@ordo/pptx-scene/test-util.ts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { JobCtx } from '../src/jobs.ts';
+import { type JobCtx, MAX_JOB_ATTEMPTS } from '../src/jobs.ts';
 import { volumeGainDb } from '../src/media/service.ts';
 import { nativeJob } from '../src/pptx/nativeJob.ts';
-import type { PptxNativePayload, PptxNativeResult } from '../src/pptx/shared.ts';
+import { PPTX_LIMITS, type PptxNativePayload, type PptxNativeResult } from '../src/pptx/shared.ts';
 import { ffmpeg, fixtures } from './fixtures.ts';
 import { startHub, type TestHub, tempDir } from './helpers.ts';
 import { slidesOf, storeDeck, waitJob, zipDeck } from './pptx-helpers.ts';
@@ -105,6 +106,23 @@ beforeAll(async () => {
     'failing.wav': ffmpeg(m, 'failing.wav', ['-f', 'lavfi', '-i', 'sine=frequency=660:duration=0.5']),
     'resume.wmv': av('resume.wmv', 2, ['-c:v', 'wmv2', '-c:a', 'wmav2']),
     'poster.png': ffmpeg(m, 'poster.png', ['-f', 'lavfi', '-i', 'color=c=navy:s=320x180', '-frames:v', '1']),
+    // A WMA whose stream list follows 12 KB of metadata, past the 4,100 bytes a sniff used to read.
+    'big.wma': ffmpeg(m, 'big.wma', [
+      ...['-f', 'lavfi', '-i', 'sine=frequency=470:duration=1'],
+      ...['-metadata', `comment=${'x'.repeat(6000)}`, '-c:a', 'wmav2'],
+    ]),
+    // An audio-only MP4 of brand isom: its head looks like any MP4 video.
+    'isom.mp4': ffmpeg(m, 'isom.mp4', [
+      ...['-f', 'lavfi', '-i', 'sine=frequency=490:duration=1'],
+      ...['-c:a', 'aac', '-brand', 'isom'],
+    ]),
+    'trims.mp3': ffmpeg(m, 'trims.mp3', [
+      ...['-f', 'lavfi', '-i', 'sine=frequency=510:duration=1'],
+      ...['-c:a', 'libmp3lame'],
+    ]),
+    'orphan.wav': ffmpeg(m, 'orphan.wav', ['-f', 'lavfi', '-i', 'sine=frequency=530:duration=0.5']),
+    'given-up.wav': ffmpeg(m, 'given-up.wav', ['-f', 'lavfi', '-i', 'sine=frequency=550:duration=0.5']),
+    'hash.mp4': av('hash.mp4', 1, ['-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p']),
   };
   for (const [k, f] of Object.entries(files)) bytes[k] = await readFile(f);
   bytes['garbage.mp4'] = new TextEncoder().encode('this is not a video at all, only text');
@@ -581,5 +599,190 @@ describe('pptx-native: clips and the one fallback rule (M3 wave 2 items A and B)
       expect(shown.pictureMediaId).toBe('ref');
       expect(shown.objects.map((o) => o.id)).toEqual(['mine']);
     }
+  }, 60_000);
+});
+
+describe('pptx-native: clips the bytes or the deck could mislead (review)', () => {
+  it('a sound element stays a sound whatever its container: a WMA with a long header, an isom MP4', async () => {
+    const icon = { x: W - IN, y: H - IN, cx: IN / 2, cy: IN / 2 };
+    const parts = deckOf(
+      [
+        clipSlide([
+          {
+            id: 4,
+            kind: 'audio',
+            file: 'big.wma',
+            box: icon,
+            timing: { start: 'auto', showWhenStopped: false },
+          },
+        ]),
+        clipSlide([{ id: 4, kind: 'audio', file: 'isom.mp4', box: icon, timing: { start: 'auto' } }]),
+      ],
+      { 'big.wma': 'big.wma', 'isom.mp4': 'isom.mp4' },
+    );
+    const { p, job } = await importDeck(parts, 'Sounds.pptx');
+    const [s1, s2] = slidesOf(p) as [Slide, Slide];
+    for (const s of [s1, s2]) {
+      expect(playOf(s)).toBeUndefined();
+      expect(s.audio).toMatchObject({ mediaId: expect.any(String), start: 'auto' });
+    }
+    // The hidden icon is not drawn; the one shown while stopped is.
+    expect(images(s1)).toHaveLength(0);
+    expect(images(s2)).toHaveLength(1);
+    expect(p.source!.log).toContain('slide 1: sound stored');
+    expect(p.source!.log).toContain('slide 2: sound stored');
+    expect(job.log.join('\n')).not.toContain('[warn]');
+    const [a1, a2] = await settled([s1.audio!.mediaId, s2.audio!.mediaId]);
+    expect(a1).toMatchObject({ kind: 'audio', state: 'ready' });
+    expect(a2).toMatchObject({ state: 'ready' });
+    // The cue plays them as the slide's sound.
+    const resolved = resolvePlaylist(
+      {
+        playlist: {
+          id: 'pl',
+          rev: 1,
+          name: 'Sunday',
+          items: [{ id: 'i', kind: 'presentation', presentationId: p.id }],
+        },
+        presentation: (id) => hub.lib.presentations.get(id),
+        media: (id) => hub.lib.media.get(id),
+        fonts: () => [],
+        looks: DEFAULT_LOOKS,
+        general: DEFAULT_GENERAL,
+      },
+      'pl',
+      { digest: localDigest },
+    );
+    expect(expandCues(resolved).map((c) => c.slideAudio?.mediaId)).toEqual([
+      s1.audio!.mediaId,
+      s2.audio!.mediaId,
+    ]);
+  }, 120_000);
+
+  it('the clip limit counts parts and trims: one part trimmed on every slide stores at most the limit', async () => {
+    const n = PPTX_LIMITS.clips + 5;
+    const slides = Array.from({ length: n }, (_, i) =>
+      clipSlide([
+        { id: 4, kind: 'audio', file: 'trims.mp3', trim: { st: 10 * (i + 1) }, timing: { start: 'auto' } },
+      ]),
+    );
+    const before = new Set(hub.lib.media.list().map((m) => m.id));
+    const { p, job } = await importDeck(deckOf(slides, { 'trims.mp3': 'trims.mp3' }), 'Trims.pptx');
+    const created = hub.lib.media.list().filter((m) => !before.has(m.id) && m.name.startsWith('Trims'));
+    expect(created).toHaveLength(PPTX_LIMITS.clips);
+    expect(created.flatMap((m) => mediaJobs(m.id))).toHaveLength(PPTX_LIMITS.clips);
+    const sl = slidesOf(p);
+    expect(sl.filter((s) => s.audio)).toHaveLength(PPTX_LIMITS.clips);
+    expect(sl.at(-1)!.audio).toBeUndefined();
+    const log = job.log.join('\n');
+    expect(log).toContain(
+      `[warn] 5 clip(s) past the ${PPTX_LIMITS.clips} (parts and trims) an import may store`,
+    );
+    expect(log).toContain(
+      `[warn] slide ${n}: the sound could not be imported (past the ${PPTX_LIMITS.clips} clips`,
+    );
+    await hub.jobs.idle();
+  }, 180_000);
+
+  it('a part whose name holds # is the same part whole and trimmed; a [warn] never shows a scratch path', async () => {
+    const parts = deckOf(
+      [
+        clipSlide([
+          { id: 4, kind: 'video', file: 'hash.mp4', part: 'h%23ash.mp4', timing: { start: 'auto' } },
+        ]),
+        clipSlide([
+          {
+            id: 4,
+            kind: 'video',
+            file: 'hash.mp4',
+            part: 'h%23ash.mp4',
+            trim: { st: 200 },
+            timing: { start: 'auto' },
+          },
+        ]),
+      ],
+      { 'h#ash.mp4': 'hash.mp4' },
+    );
+    const { p, job } = await importDeck(parts, 'Hash.pptx');
+    const [s1, s2] = slidesOf(p) as [Slide, Slide];
+    const whole = playOf(s1)!.mediaId;
+    const trimmed = playOf(s2)!.mediaId;
+    expect(whole).not.toBe(trimmed);
+    expect(hub.lib.media.must(trimmed).trim).toEqual({ startMs: 200, endMs: expect.any(Number) });
+    expect(job.log.join('\n')).not.toContain('could not be imported');
+    expect(`${job.log.join('\n')}\n${p.source!.log}`).not.toMatch(/[\\/]tmp[\\/]/);
+  }, 120_000);
+
+  it('a resumed run that fails queues the clips an earlier attempt stored', async () => {
+    const parts = deckOf(
+      [clipSlide([{ id: 4, kind: 'audio', file: 'orphan.wav', timing: { start: 'auto' } }])],
+      { 'orphan.wav': 'orphan.wav' },
+    );
+    const hash = await storeDeck(hub, await zipDeck(parts, dir, 'orphan.pptx'));
+    const deps = hub.imports.pptx.deps;
+    const proxy = <T extends object>(target: T, key: string, v: unknown): T =>
+      new Proxy(target, {
+        get(t, k) {
+          if (k === key) return v;
+          const x = Reflect.get(t, k, t);
+          return typeof x === 'function' ? x.bind(t) : x;
+        },
+      });
+    const failing = proxy(deps.lib, 'savePresentation', () => {
+      throw new Error('stopped');
+    });
+    const ctxOf = (payload: PptxNativePayload) => {
+      const ctx: JobCtx<PptxNativePayload> = {
+        id: 'direct',
+        payload,
+        signal: new AbortController().signal,
+        log: () => {},
+        progress: () => {},
+        setPayload: (pl) => {
+          ctx.payload = pl;
+        },
+      };
+      return ctx;
+    };
+    // Attempt 1 dies after storing the clip (nothing of the process runs after it: no queue).
+    const ctx1 = ctxOf({ hash, name: 'Orphan.pptx' });
+    const dead = proxy(deps.media, 'queue', () => undefined);
+    await expect(nativeJob({ ...deps, lib: failing, media: dead })(ctx1)).rejects.toThrow(/stopped/);
+    const id = ctx1.payload.done!.clips![0]![1];
+    expect(hub.lib.media.must(id).state).toBe('uploaded');
+    expect(mediaJobs(id)).toHaveLength(0);
+    // Attempt 2 resumes from the pairs, reuses the clip and fails: the clip is queued now.
+    await expect(nativeJob({ ...deps, lib: failing })(ctxOf(ctx1.payload))).rejects.toThrow(/stopped/);
+    expect(mediaJobs(id)).toHaveLength(1);
+    expect((await settled([id]))[0]!.state).toBe('ready');
+  }, 60_000);
+
+  it('a job abandoned after repeated crashes queues the clips it stored (its give-up)', async () => {
+    const f = join(dir, 'given-up-copy.wav');
+    await copyFile(join(dir, 'media', 'given-up.wav'), f);
+    const m = await hub.media.ingest({ path: f }, 'Given up – slide 1 sound', {
+      queue: false,
+      tags: ['pptx'],
+    });
+    await hub.jobs.idle();
+    const now = new Date().toISOString();
+    const jobId = `abandoned-${Math.random().toString(36).slice(2)}`;
+    const payload: PptxNativePayload = {
+      hash: 'f'.repeat(64),
+      name: 'Given up.pptx',
+      done: { media: [], clips: [['ppt/media/given-up.wav', m.id]] },
+    };
+    hub.lib.db
+      .prepare(
+        `INSERT INTO jobs (id, kind, class, state, progress, payload, log, created_at, updated_at) VALUES (?, 'pptx-native', 'light', 'running', 0, ?, '[]', ?, ?)`,
+      )
+      .run(jobId, JSON.stringify(payload), now, now);
+    hub.lib.db
+      .prepare('INSERT INTO job_attempts (job_id, attempts) VALUES (?, ?)')
+      .run(jobId, MAX_JOB_ATTEMPTS);
+    hub.jobs.start(); // the sweep a restart runs
+    expect(hub.jobs.get(jobId).state).toBe('failed');
+    expect(mediaJobs(m.id)).toHaveLength(1);
+    expect((await settled([m.id]))[0]!.state).toBe('ready');
   }, 60_000);
 });

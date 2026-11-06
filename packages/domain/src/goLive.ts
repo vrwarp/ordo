@@ -327,6 +327,25 @@ export function localDigest(parts: string[]): string {
   return `pc${lanes.map((x) => x.toString(16).padStart(8, '0')).join('')}`.slice(0, 26);
 }
 
+/**
+ * What a `degraded` entry's slide shows, from its reason, for the operator's banner (design/25, design/27 §5,
+ * §8): 'empty' a slide quarantined and replaced by an empty one; 'media' a slide that goes live without a
+ * clip, sound, background or PowerPoint picture that is not ready (its poster shows); 'drawing' a PowerPoint
+ * slide LibreOffice is still drawing or could not draw; 'other' anything else (a damaged presentation).
+ * The reasons are written in this file, so the kinds stay in step with them.
+ */
+export type DegradedKind = 'empty' | 'media' | 'drawing' | 'other';
+
+const MEDIA_REASON =
+  /; (?:showing its poster|the slide shows without it|the slide shows only the objects added in ordo)(?:; Go live again once it is ready)?$/;
+
+export function degradedKind(reason: string): DegradedKind {
+  if (reason === PENDING_SLIDE_REASON || reason === FAILED_SLIDE_REASON) return 'drawing';
+  if (MEDIA_REASON.test(reason)) return 'media';
+  if (/ slide \d+ is invalid \(.*\); shown empty$/s.test(reason)) return 'empty';
+  return 'other';
+}
+
 /** The reason a slide waiting for the LibreOffice follow-up of a PowerPoint import is listed in `degraded`. */
 export const PENDING_SLIDE_REASON =
   'PowerPoint slide still being drawn by LibreOffice: its chart, art or page picture is missing until then';

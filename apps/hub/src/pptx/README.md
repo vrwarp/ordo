@@ -36,7 +36,7 @@ POST /import/document  (423 while live, ≤ 1 GiB, zip + .pptx sniff, stored by 
      ─► addReadyPicture ─► patch slides (per object on an edited one) ── version 2; a failed run is tried
      again twice (deferred), then the slides are marked pptx.failed (card and goLive report them)
  PUT /presentations/:id or a restored revision with slides pending again ─► queueFollowUp (fallback.ts)
- heavy job 'pptx-reference' ('Show PowerPoint picture': every shown slide into Slide.pptx.refMediaId)          [D]
+ heavy job 'pptx-reference' ('Show PowerPoint picture': every slide, hidden ones too, into Slide.pptx.refMediaId)          [D]
  light job 'pptx-text-repair' (legacy imported.textBoxes, once)                                                [G]
  goLive ─► resolvePlaylist: bundled and script-fallback fonts, CJK faces by text scan [E]; > 12 MiB warning [F]
  operator: ImportTab and import card [H]; previewSlice and the adopt check [F]; MediaTab and gated text [G]
@@ -475,11 +475,23 @@ scope). The converter side is `@ordo/pptx-scene` `media.ts` and `timing.ts` (its
   `pptx`, named '<deck title> – slide N video' (or 'sound'), the extension never checked. `p14:trim` is
   baked (`IngestOpts.trim`); its `end` is how much PowerPoint cuts from the end, so a trimmed clip is
   probed for its duration first. Resume pairs: `PptxNativeProgress.clips`.
+  - `PPTX_LIMITS.clips` counts keys (part and trim), not parts: one part trimmed differently on every slide
+    stores at most 50 items and queues at most 50 media jobs; the keys past it, in slide order, get a
+    `[warn]` and keep their posters (design/27 §12). A part is hashed and probed once whatever its trims,
+    and a part used by several keys is ingested from hard links (copies where linking fails) until its
+    last use. Keys keep their part beside them (a part name may hold '#').
+  - The sniff decides only that a video element holds a sound (pptxgenjs); a sound element is never made a
+    video by it (an audio-only MP4 of brand isom, or a WMA whose stream list follows long metadata, sniffs
+    as video). `readHead` reads an ASF header object whole, up to 64 KB. Spilled clips are renamed
+    `clip-N.<sniffed extension>`, and ffprobe runs with `-protocol_whitelist file,pipe` like ffmpeg.
 - **Queued after LibreOffice, never awaited.** `IngestOpts.queue: false` stores the item without its media
   job; the job queues every clip it uses (`MediaService.queue`: only an 'uploaded' item with no media job
   queued or running) in the transaction that saves version 1, right after `pptx-lo`, each created at least a
   millisecond after the job before it (`JobQueue.enqueue` `after`: jobs of a class start by creation time,
-  and ids are random within a millisecond). An import that fails after storing clips queues them anyway.
+  and ids are random within a millisecond). An import that fails after storing clips queues them anyway,
+  those of an earlier attempt (the resume pairs) included, and so does the kind's give-up when a job is
+  abandoned after repeated crashes (`queueStoredClips`). `JobQueue.active` looks a job up by its payload
+  field in SQLite (`jobs_kind_state` index, migration 9), with no row cap.
 - **What a slide gets.** `ImageObject.play` on the first slide video's poster, `Slide.audio` for the first
   sound (a picture-class slide keeps only its sound), a motion background as `Slide.backgroundMediaId`,
   never promoted to `Presentation.backgroundMediaId`: goLive treats a PowerPoint slide's own background as
@@ -494,8 +506,11 @@ scope). The converter side is `@ordo/pptx-scene` `media.ts` and `timing.ts` (its
   slide has no sound of its own; animation sounds never (noted).
 - Tests: `apps/hub/test/pptx-clips.test.ts` (generated MP4, WMV, MP3, WAV clips; a trimmed looping clip; a
   failed clip; a linked one; a motion background; dedup on hash plus trim; job order after `pptx-lo`;
-  transition sounds; resume; a failing import), `pptx-scene` `media.test.ts`, `timing.test.ts`, domain
-  `cues.media.test.ts`.
+  transition sounds; resume; a failing import; sounds in containers the sniff calls video, a WMA with a
+  long header and an isom MP4; one part trimmed on more slides than the limit; a part name holding '#';
+  a resumed run that fails, and a job given up after repeated crashes, queueing the clips they stored),
+  `media-formats.test.ts` (`readHead` of a long ASF header), `pptx-scene` `media.test.ts`,
+  `timing.test.ts`, domain `cues.media.test.ts`.
 
 ## Wave 2, item B: the one fallback rule (m3b/slide-content)
 

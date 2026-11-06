@@ -233,6 +233,31 @@ describe('expandCues: a slide sound plays across shown slides', () => {
     expect(cues[3]?.slideAudio).toBeUndefined();
     expect(cues[4]?.slideAudio).toBeUndefined();
   });
+
+  it("a playing object whose clip turned out to be a sound is the slide's sound, unless the slide has one", () => {
+    const tune = media('tune', 'audio', { audio: { gainDb: 0 } });
+    const p = deck('d', [
+      [
+        slide('a', [image('icon', 'pic', { mediaId: 'tune', start: 'click', loop: true, gainDb: -2 })], {
+          audio: { mediaId: 'gone', slides: 3 },
+        }),
+        slide('b'),
+        slide('c', [image('icon', 'pic', { mediaId: 'tune', muted: true })], withSound(1)),
+      ],
+    ]);
+    const cues = expandCues({ playlist: playlist('d'), presentations: byId(p), media: byId(song, tune) });
+    // Its own cue only, never the video fields.
+    expect(cues[0]?.slideAudio).toEqual({
+      mediaId: 'tune',
+      start: 'click',
+      loop: true,
+      gainDb: -2,
+      untilCue: 0,
+    });
+    expect(cues[0]?.mediaId).toBeUndefined();
+    expect(cues[0]?.mediaObjectId).toBeUndefined();
+    expect(cues[2]?.slideAudio?.mediaId).toBe('song');
+  });
 });
 
 describe('media slides play are referenced and optional at goLive', () => {

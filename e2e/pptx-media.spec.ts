@@ -370,6 +370,15 @@ test('PowerPoint clips and sounds import, go live and play in place on WebGPU an
     await op.evaluate(() => {
       location.hash = '#/live';
     });
+    // (5) The operator's banner says why the failed clip's slide shows its poster, never that it was
+    // replaced with an empty slide.
+    const why = op.locator('[data-degraded-kind="media"]');
+    await expect(why).toContainText('went live without media that is not ready', { timeout: 20_000 });
+    await expect(why).toContainText(
+      '"Probe media – slide 11 video" (slide video) failed; showing its poster',
+    );
+    await expect(op.locator('[data-degraded-kind="empty"]')).toHaveCount(0);
+    await expect(op.locator('[data-degraded]')).not.toContainText('replaced with an empty slide');
     await expect(op.getByText('Probe media').first()).toBeVisible({ timeout: 20_000 });
     await go(1);
     await expect.poll(async () => (await live()).layers.media.content?.state).toBe('paused');

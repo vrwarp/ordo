@@ -67,7 +67,7 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
           // A hidden PowerPoint slide stays in the service (design/27 §9): sequential navigation skips its
           // cue (`nextShownCue`), a GO with its index shows it.
           ...(slide.hidden === true ? { hidden: true } : {}),
-          ...slideCueMedia(slide, resolved.media, first + until(k)),
+          ...slideCueMedia(slide, resolved.media, first + k, first + until(k)),
         });
       });
     } else if (item.kind === 'media') {
@@ -133,9 +133,16 @@ const MUTED_DB = -100;
  * references media the outputs do not have:
  * - the playing object's clip (the first ImageObject with `play`, in z order), a video: mediaId,
  *   mediaKind 'video', loop, onEnd, audio, mediaObjectId, mediaStart, mediaShowWhenStopped;
- * - the slide's sound (an audio file, or a video's soundtrack): slideAudio, playing on until cue `untilCue`.
+ * - the slide's sound (an audio file, or a video's soundtrack): slideAudio, playing on until cue `untilCue`;
+ * - a playing object whose clip turned out to be a sound (its media job found no picture: an import that took
+ *   a sound for a video) is the slide's sound when the slide has none of its own, on this cue (`self`) only.
  */
-function slideCueMedia(slide: Slide, media: ResolvedPlaylist['media'], untilCue: number): Partial<Cue> {
+function slideCueMedia(
+  slide: Slide,
+  media: ResolvedPlaylist['media'],
+  self: number,
+  untilCue: number,
+): Partial<Cue> {
   const out: Partial<Cue> = {};
   const obj = playingObject(slide);
   const clip = obj ? media[obj.play.mediaId] : undefined;
@@ -161,6 +168,16 @@ function slideCueMedia(slide: Slide, media: ResolvedPlaylist['media'], untilCue:
       loop: !!(sound.loop ?? track.loop),
       ...(gainDb !== undefined ? { gainDb } : {}),
       untilCue,
+    };
+  } else if (obj && clip?.kind === 'audio') {
+    const play = obj.play;
+    const gainDb = play.muted ? MUTED_DB : play.gainDb;
+    out.slideAudio = {
+      mediaId: play.mediaId,
+      start: play.start ?? 'auto',
+      loop: !!(play.loop ?? clip.loop),
+      ...(gainDb !== undefined ? { gainDb } : {}),
+      untilCue: self,
     };
   }
   return out;

@@ -125,6 +125,8 @@ export type ClipOptions = {
   tags: string[];
   /** The part of the clip kept, baked into its delivery (`IngestOpts.trim`). */
   trim?: MediaTrim;
+  /** The file's hash and size when the caller has them (a part used with several trims is hashed once). */
+  hashed?: { hash: string; bytes: number };
 };
 
 /**
@@ -139,7 +141,7 @@ export async function clipForFile(
   path: string,
   opts: ClipOptions,
 ): Promise<{ media: Media; created: boolean }> {
-  const { hash, bytes } = await hashFile(path);
+  const { hash, bytes } = opts.hashed ?? (await hashFile(path));
   const trim = normTrim(opts.trim);
   const same = (m: Media) =>
     (m.kind === 'video' || m.kind === 'audio') && m.state !== 'failed' && sameTrim(normTrim(m.trim), trim);

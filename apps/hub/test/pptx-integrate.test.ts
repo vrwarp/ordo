@@ -542,7 +542,24 @@ describe('a deck with a hidden slide (design/27 §4, §15 M3 exit)', () => {
     } finally {
       live.submit({ k: 'endService', at: Date.now() }, { role: 'operate' });
     }
-  }, 60_000);
+
+    // 'Show PowerPoint picture' draws the hidden slide too (a click shows it): its own picture, its colour.
+    const ed = await login(hub.url, EDIT_PIN);
+    const ref = await ed.json<Job>(`/presentations/${p.id}/pptx-reference`, { method: 'POST' });
+    const refDone = await waitJob(hub, ref.id, 180_000);
+    expect(refDone.error).toBeUndefined();
+    expect(refDone.result).toMatchObject({ pictures: 4, slides: 4 });
+    const withRefs = slidesOf(hub.lib.presentations.must(p.id));
+    withRefs.forEach((s, i) => {
+      expect(s.pptx).toMatchObject({ show: 'picture', refMediaId: expect.any(String) });
+      // The picture's centre: 2 in from the left of 13.33 in, 2 in from the top of 7.5 in.
+      const px = pixels(hub.lib.media.must(s.pptx!.refMediaId!));
+      expect(probe[colours[i]!]!(px.at(Math.round(px.w * 0.15), Math.round(px.h * 0.267)))).toBe(true);
+    });
+    expect(hub.lib.media.must(withRefs[1]!.pptx!.refMediaId!).name).toBe(
+      'Hidden – hidden slide 2 (PowerPoint)',
+    );
+  }, 240_000);
 });
 
 describe('the size budgets through the job (design/27 §3.4, §14.10)', () => {

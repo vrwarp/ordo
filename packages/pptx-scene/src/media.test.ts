@@ -287,6 +287,29 @@ describe('clips in place (design/27 §4 "Media", §8)', () => {
     expect(images(p14)[0]?.play?.start).toBe('auto');
   });
 
+  it('never lets a sniffed video turn a sound element into a video (the sniff calls what it cannot tell a video)', () => {
+    // An audio-only MP4 of brand isom, or a WMA whose stream list is past the sniffed head: 'video' to the hub.
+    const asVideo = () => 'video' as const;
+    const s = convert(
+      deckWith([{ id: 4, kind: 'audio', file: 'tune.wma', ...box, timing: { start: 'auto' } }]),
+      { mediaKind: asVideo },
+    );
+    expect(s.slide.audio).toEqual({ mediaId: `${CLIP_PREFIX}1`, start: 'auto' });
+    expect(images(s).some((o) => o.play)).toBe(false);
+    expect(s.clips).toEqual([expect.objectContaining({ role: 'sound', kind: 'audio' })]);
+    // A p14-only clip whose timing node is p:audio stays a sound too.
+    const parts = deckWith([{ id: 4, kind: 'p14', file: 'x.m4a', ...box, timing: { start: 'auto' } }]);
+    const xml = new TextDecoder().decode(parts.get('ppt/slides/slide1.xml'));
+    parts.set(
+      'ppt/slides/slide1.xml',
+      new TextEncoder().encode(
+        xml.replaceAll('<p:video>', '<p:audio>').replaceAll('</p:video>', '</p:audio>'),
+      ),
+    );
+    const p14 = convert(parts, { mediaKind: asVideo });
+    expect(p14.slide.audio?.mediaId).toBe(`${CLIP_PREFIX}1`);
+  });
+
   it('plays a full-screen video over the slide, its poster fitted inside', () => {
     const s = convert(
       deckWith([{ id: 4, kind: 'video', file: 'a.mp4', ...box, timing: { start: 'auto', fullScrn: true } }]),

@@ -5,8 +5,8 @@ import type { Media, MediaTrim } from '@ordo/domain';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { measureLoudness, probe, trimArgs } from '../src/media/ffmpeg.ts';
 import { keptMs, normTrim, sameTrim, volumeGainDb } from '../src/media/service.ts';
-import { extensionAgrees, hashFile, type Sniffed, sniff } from '../src/store.ts';
-import { fixtures } from './fixtures.ts';
+import { ASF_HEAD_MAX, extensionAgrees, hashFile, readHead, type Sniffed, sniff } from '../src/store.ts';
+import { ffmpeg, fixtures } from './fixtures.ts';
 import { type Client, EDIT_PIN, login, startHub, type TestHub, tempDir } from './helpers.ts';
 
 /*
@@ -82,6 +82,22 @@ describe('sniffing old formats', () => {
     expect(sniff(head(fixtures.vob(fx)))).toEqual({ ext: 'mpg', mime: 'video/mpeg', kind: 'video' });
     expect(sniff(head(fixtures.aiff(fx)))).toEqual({ ext: 'aiff', mime: 'audio/aiff', kind: 'audio' });
     expect(sniff(head(fixtures.avi(fx)))?.ext).toBe('avi');
+  });
+
+  it('reads an ASF header whole (to 64 KB) when metadata pushes its stream list past the usual head', async () => {
+    const big = ffmpeg(fx, 'big-header.wma', [
+      ...['-f', 'lavfi', '-i', 'sine=frequency=440:duration=1'],
+      ...['-metadata', `comment=${'x'.repeat(6000)}`, '-c:a', 'wmav2'],
+    ]);
+    // The stream properties sit past 12 KB: the first 4,100 bytes cannot tell.
+    expect(sniff(head(big))?.kind).toBe('video');
+    const whole = await readHead(big);
+    expect(whole.length).toBeGreaterThan(12_000);
+    expect(whole.length).toBeLessThanOrEqual(ASF_HEAD_MAX);
+    expect(sniff(whole)).toEqual({ ext: 'wma', mime: 'audio/x-ms-wma', kind: 'audio' });
+    // Anything else, a WMV with a short header included, is read to 4,100 bytes as before.
+    expect((await readHead(fixtures.wmv(fx))).length).toBeLessThan(12_000);
+    expect((await readHead(fixtures.wav(fx))).length).toBe(4100);
   });
 
   it('falls back to video for an ASF head without its stream list, and refuses near misses', () => {

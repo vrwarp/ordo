@@ -102,6 +102,20 @@ export type NativeJobEnv = {
   limits?: { batchSlides?: number; importPoolMs?: number };
 };
 
+/**
+ * Queue the media jobs of the clips an import stored (its resume pairs, `PptxNativeProgress.clips`), for an
+ * import that stops before version 1: a failed or cancelled run, or a job abandoned after repeated crashes
+ * (the kind's give-up). `MediaService.queue` only queues an item still waiting for its job, so a clip already
+ * queued or processed is left alone.
+ */
+export function queueStoredClips(deps: Pick<PptxDeps, 'media'>, done: PptxNativeProgress | undefined): void {
+  const pairs = Array.isArray(done?.clips) ? done.clips : [];
+  for (const pair of pairs.slice(0, PPTX_LIMITS.clips * 2)) {
+    const id = Array.isArray(pair) ? pair[1] : undefined;
+    if (typeof id === 'string') deps.media.queue(id);
+  }
+}
+
 export function nativeJob(deps: PptxDeps, env: NativeJobEnv = {}): JobHandler<PptxNativePayload> {
   const limits = {
     batchSlides: env.limits?.batchSlides ?? PPTX_LIMITS.batchSlides,
@@ -258,8 +272,10 @@ class NativeImport {
     try {
       return await this.steps(deck, scratch);
     } catch (e) {
-      // Clips stored without their media job (queued with version 1): never left waiting for it.
+      // Clips stored without their media job (queued with version 1): never left waiting for it, those of an
+      // earlier attempt (the resume pairs) included.
       for (const id of this.clipsCreated) this.deps.media.queue(id);
+      queueStoredClips(this.deps, this.done);
       throw e;
     }
   }

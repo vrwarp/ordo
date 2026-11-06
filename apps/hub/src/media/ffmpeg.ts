@@ -37,10 +37,16 @@ function rate(s?: string): number | undefined {
   return a / b;
 }
 
+/**
+ * Inputs open local files only (design/27 §12 "External tools"): a playlist or SDP body among untrusted bytes
+ * (an HLS or RTP demuxer picked by the content or the name) cannot make ffmpeg or ffprobe open a URL.
+ */
+const IN_SAFE = ['-protocol_whitelist', 'file,pipe'];
+
 export async function probe(file: string, timeoutMs: number): Promise<ProbeInfo> {
   const r = await run(
     'ffprobe',
-    ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file],
+    ['-v', 'error', ...IN_SAFE, '-print_format', 'json', '-show_format', '-show_streams', file],
     { timeoutMs },
   );
   const p = JSON.parse(r.stdout) as Probe;
@@ -101,7 +107,6 @@ type TOpts = {
 /** The kept part of a source, in its own timeline (Media.trim). */
 export type Trim = { startMs: number; endMs: number };
 const BASE = ['-hide_banner', '-nostdin', '-y', '-loglevel', 'error'];
-const IN_SAFE = ['-protocol_whitelist', 'file,pipe'];
 
 /**
  * Input options that read only [startMs, endMs] of the source, placed before its `-i`. Transcoding after an

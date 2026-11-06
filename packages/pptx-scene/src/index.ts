@@ -60,7 +60,9 @@ export interface ParseOptions {
   /**
    * Whether a clip part (video, sound) is a video or a sound, from its bytes, when the caller can tell: the
    * hub sniffs each spilled clip (design/27 §4 "Media": pptxgenjs writes sounds under `a:videoFile`). Asked
-   * at most once per part. Undefined, or without it: the element and the slide's timing decide.
+   * at most once per part. Only 'audio' overrides the element (a sniff may call a sound it cannot tell a
+   * video); 'video' decides only a clip whose element and timing do not. Undefined, or without it: the
+   * element and the slide's timing decide.
    */
   mediaKind?: (part: string) => 'video' | 'audio' | undefined;
 }

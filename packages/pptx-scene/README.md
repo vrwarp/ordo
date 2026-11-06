@@ -69,8 +69,9 @@ Embedded video and sound play in place (design/27 §4 "Media", §8 "p:timing map
 - `readSlideTiming` runs before the shape tree (`SlideCtx.timing`), and `readMediaRef` (from `picture.ts`)
   gives each poster its `PictureElement.media`: the embedded part (`p14:media r:embed`, else an internal
   `r:link`), or a linked clip's host; `p14:trim` (`st`, `end`: PowerPoint's `end` is how much is cut from the
-  end, verified on real decks); the kind from the caller's sniff (`ParseOptions.mediaKind`), else the element,
-  else the timing node; the slide's timing (start auto/click, loop, rewind = the media node's
+  end, verified on real decks); the kind: a sound when the caller's sniff says so (`ParseOptions.mediaKind`),
+  else the element, else the timing node, else the sniff (a sniffed video never overrides a sound element:
+  the hub's sniff calls what it cannot tell a video); the slide's timing (start auto/click, loop, rewind = the media node's
   `fill="remove"`, `vol`, `mute`, `showWhenStopped`, `numSld`, `fullScrn`).
 - `emitMedia` (called by `emitSlide` once the slide's objects are emitted): the first slide video plays in its
   poster (`ImageObject.play`), the first slide sound is `Slide.audio`, a looping, muted (or volume 0),

@@ -203,8 +203,7 @@ export class MediaService {
   queue(mediaId: string, opts: { after?: Job } = {}): Job | undefined {
     const m = this.lib.media.get(mediaId);
     if (m?.state !== 'uploaded') return undefined;
-    const mine = (p: unknown) => (p as { mediaId?: unknown } | null)?.mediaId === mediaId;
-    if (this.jobs.active('media', mine)) return undefined;
+    if (this.jobs.active('media', 'mediaId', mediaId)) return undefined;
     const heavy = m.kind === 'video' || m.original.mime === 'image/gif';
     return this.jobs.enqueue('media', { mediaId, name: m.name }, heavy ? 'heavy' : 'light', opts);
   }

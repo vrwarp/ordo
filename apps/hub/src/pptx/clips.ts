@@ -9,6 +9,10 @@
  *    like any picture): one media item per part and trim (`clipKey`), through the media hash index
  *    (`clipForFile`: hash plus trim, a failed item never reused), tagged `pptx`, named
  *    '<deck title> – slide N video' (or 'sound'), the extension never checked (part names are the deck's).
+ *    At most `PPTX_LIMITS.clips` keys, in slide order, are stored (design/27 §12: the limit bounds the media
+ *    items and jobs one deck creates, so one part with a trim per slide counts once per trim); the others
+ *    keep their posters. Each part is hashed and probed once, and a part used by several keys is ingested
+ *    from hard links (copies where links fail) until its last use.
  *    `p14:trim` is baked (`IngestOpts.trim`): its end is how much PowerPoint cuts from the end, so the clip
  *    is probed for its duration first. The media job is **not** queued here, and never awaited: the job
  *    queues it once version 1 and its LibreOffice follow-up are saved (`MediaService.queue`, after the
@@ -21,7 +25,7 @@
  *
  * Resume pairs [`clipKey`, media id] (`PptxNativeProgress.clips`) make a re-run reuse what it stored.
  */
-import { copyFile } from 'node:fs/promises';
+import { copyFile, link, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ImageObject, Slide } from '@ordo/domain';
 import { CLIP_PREFIX, type EmittedClip } from '@ordo/pptx-scene';
@@ -29,7 +33,7 @@ import { clipKey } from '@ordo/pptx-scene/media.ts';
 import { errorMessage } from '../errors.ts';
 import { probe } from '../media/ffmpeg.ts';
 import { normTrim } from '../media/service.ts';
-import { readHead, sniff } from '../store.ts';
+import { hashFile, readHead, sniff } from '../store.ts';
 import { spillDeckParts } from './deckParts.ts';
 import { clipForFile } from './mediaParts.ts';
 import { logSafe } from './report.ts';
@@ -55,11 +59,18 @@ export async function spillClips(
     bytes: bytesLeft,
   });
   const files = new Map<string, ClipFile>();
-  for (const [part, file] of spilled.files) {
+  let n = 0;
+  for (const [part, spilledFile] of spilled.files) {
     let kind: ClipFile['kind'];
+    let file = spilledFile;
     try {
-      const k = sniff(await readHead(file))?.kind;
-      if (k === 'video' || k === 'audio') kind = k;
+      const s = sniff(await readHead(spilledFile));
+      if (s?.kind === 'video' || s?.kind === 'audio') kind = s.kind;
+      // Named by what the bytes are, never by the part (a part named *.m3u8 or *.sdp must not pick
+      // ffprobe's demuxer when the clip's length is probed).
+      const named = join(dir, `clip-${++n}.${kind ? s!.ext : 'bin'}`);
+      await rename(spilledFile, named);
+      file = named;
     } catch {
       kind = undefined; // unreadable: the ingest says so
     }
@@ -111,8 +122,13 @@ export class ClipImport {
    */
   readonly created: string[] = [];
   private readonly ingests = new Map<string, Promise<string | ClipError>>();
-  /** How many keys still need each spilled file: the last one may take the file, the others get a copy. */
+  /** The keys stored (the first `PPTX_LIMITS.clips` in slide order). */
+  private readonly allowed = new Set<string>();
+  /** How many keys still need each spilled file: the last one may take the file, the others get a link. */
   private readonly uses = new Map<string, number>();
+  /** Per part: its hash and its duration, each read once whatever the number of trims. */
+  private readonly hashes = new Map<string, Promise<{ hash: string; bytes: number }>>();
+  private readonly durations = new Map<string, Promise<number | undefined>>();
   private copies = 0;
 
   constructor(
@@ -122,14 +138,25 @@ export class ClipImport {
 
   /** Ingest every clip the slides use and replace their placeholders. */
   async apply(slides: readonly ClipSlide[]): Promise<void> {
-    const keys = new Set<string>();
+    // Each key with its part (never parsed back out of the key: a part name may hold '#').
+    const keys = new Map<string, string>();
     for (const s of slides)
       for (const c of s.clips)
-        if (c.part !== undefined && wanted(c, s.picture)) keys.add(clipKey(c.part, c.trim));
-    for (const k of keys) {
-      const part = partOf(k);
-      this.uses.set(part, (this.uses.get(part) ?? 0) + 1);
+        if (c.part !== undefined && c.id !== undefined && wanted(c, s.picture))
+          keys.set(clipKey(c.part, c.trim), c.part);
+    let over = 0;
+    for (const [k, part] of keys) {
+      if (this.allowed.size >= PPTX_LIMITS.clips) {
+        over++;
+        continue;
+      }
+      this.allowed.add(k);
+      if (this.o.files.has(part)) this.uses.set(part, (this.uses.get(part) ?? 0) + 1);
     }
+    if (over)
+      this.o.warn(
+        `${over} clip(s) past the ${PPTX_LIMITS.clips} (parts and trims) an import may store are not imported: their posters are shown`,
+      );
     for (const s of slides) {
       for (const c of s.clips) {
         if (this.o.signal.aborted) return;
@@ -173,9 +200,12 @@ export class ClipImport {
     const key = clipKey(c.part!, c.trim);
     let p = this.ingests.get(key);
     if (!p) {
-      p = this.store(key, c, n).catch((e: unknown) =>
-        e instanceof ClipError ? e : new ClipError(logSafe(errorMessage(e), 200)),
-      );
+      p = this.store(key, c, n).catch((e: unknown) => {
+        if (e instanceof ClipError) return e;
+        // The hub's log has the error; the job log and the import log never get a scratch path.
+        this.deps.log.warn({ err: errorMessage(e) }, 'pptx clip not stored');
+        return new ClipError('it could not be stored');
+      });
       this.ingests.set(key, p);
     }
     return p;
@@ -183,25 +213,29 @@ export class ClipImport {
 
   private async store(key: string, c: EmittedClip, n: number): Promise<string> {
     const part = c.part!;
-    const last = (this.uses.get(part) ?? 1) <= 1;
-    this.uses.set(part, (this.uses.get(part) ?? 1) - 1);
+    if (!this.allowed.has(key))
+      throw new ClipError(`past the ${PPTX_LIMITS.clips} clips (parts and trims) an import may store`);
     const resumed = this.o.done.find(([k]) => k === key)?.[1];
     const prior = resumed === undefined ? undefined : this.deps.lib.media.get(resumed);
+    const left = this.uses.get(part) ?? 1;
+    this.uses.set(part, left - 1);
     if (prior && prior.state !== 'failed') return prior.id;
     const f = this.o.files.get(part);
     if (!f) throw new ClipError('past the clips or bytes an import may extract');
     if (!f.kind) throw new ClipError('not a video or sound file');
-    const trim = c.trim ? await this.trimOf(f.file, c.trim) : undefined;
-    // A part used twice (whole and trimmed) is ingested from a copy until its last use.
+    const trim = c.trim ? await this.trimOf(part, f.file, c.trim) : undefined;
+    const hashed = await this.hashOf(part, f.file);
+    // A part used by several keys (whole and trimmed) is ingested from a link until its last use.
     let file = f.file;
-    if (!last) {
+    if (left > 1) {
       file = join(this.o.dir, `clip-copy-${++this.copies}`);
-      await copyFile(f.file, file);
+      await link(f.file, file).catch(() => copyFile(f.file, file));
     }
     const name = `${this.o.title} – slide ${n} ${c.kind === 'audio' ? 'sound' : 'video'}`.slice(0, 200);
     const { media, created } = await clipForFile(this.deps, file, {
       name,
       tags: ['pptx'],
+      hashed,
       ...(trim ? { trim } : {}),
     });
     if (created) this.created.push(media.id);
@@ -213,31 +247,39 @@ export class ClipImport {
     return media.id;
   }
 
+  /** The part's hash and size, read once (before its last use takes the file). */
+  private hashOf(part: string, file: string): Promise<{ hash: string; bytes: number }> {
+    let h = this.hashes.get(part);
+    if (!h) {
+      h = hashFile(file);
+      this.hashes.set(part, h);
+    }
+    return h;
+  }
+
   /**
    * `p14:trim` as the part kept: PowerPoint's `end` is how much is cut from the end, so the clip's duration
-   * is probed. A trim that keeps nothing is ignored (the whole clip plays), as `normTrim` does.
+   * is probed, once per part. A trim that keeps nothing is ignored (the whole clip plays), as `normTrim` does.
    */
   private async trimOf(
+    part: string,
     file: string,
     t: NonNullable<EmittedClip['trim']>,
   ): Promise<{ startMs: number; endMs: number } | undefined> {
-    let durationMs: number | undefined;
-    try {
-      durationMs = (await probe(file, this.o.probeMs)).durationMs;
-    } catch (e) {
-      throw new ClipError(`its length could not be read: ${logSafe(errorMessage(e), 120)}`);
+    let d = this.durations.get(part);
+    if (!d) {
+      d = probe(file, this.o.probeMs).then(
+        (x) => x.durationMs,
+        () => undefined,
+      );
+      this.durations.set(part, d);
     }
+    const durationMs = await d;
     if (durationMs === undefined) throw new ClipError('its length could not be read');
     const trim = normTrim({ startMs: t.startMs, endMs: durationMs - t.endCutMs });
     if (!trim) this.o.info('a clip trimmed to nothing plays whole');
     return trim;
   }
-}
-
-/** The part of a `clipKey`. */
-function partOf(key: string): string {
-  const at = key.lastIndexOf('#');
-  return at < 0 ? key : key.slice(0, at);
 }
 
 /** Whether the slide keeps a use for the clip: a picture-class slide keeps only its sound. */

@@ -7,8 +7,11 @@
  * - The part is the embedded one: `p14:media r:embed`, else the element's own relationship when it stays in
  *   the package (PowerPoint writes `a:videoFile r:link` to an internal part too). A relationship with
  *   `TargetMode="External"` is a linked clip: only its host is kept, it is never fetched.
- * - The kind is the caller's sniff of the bytes when given (`ParseOptions.mediaKind`: pptxgenjs writes sounds
- *   under `a:videoFile`), else the element, else the slide's timing node (`p:video` / `p:audio`).
+ * - The kind is a sound when the caller's sniff of the bytes says so (`ParseOptions.mediaKind`: pptxgenjs
+ *   writes sounds under `a:videoFile`), else the element, else the slide's timing node (`p:video` /
+ *   `p:audio`), else the sniff. A sniffed video never overrides a sound element: the hub's sniff calls a
+ *   container it cannot tell a video (an audio-only MP4 of brand isom, an ASF whose stream list is past the
+ *   head it reads).
  * - `p14:trim` (`st`, `end`: milliseconds cut from the start and from the end) is kept for the hub, which
  *   bakes it into the clip at ingest.
  *
@@ -104,7 +107,12 @@ export function readMediaRef(
     }
   }
   const sniffed = part === undefined ? undefined : ctx.mediaKind?.(part);
-  const kind = sniffed ?? (video ? 'video' : audio ? 'audio' : (timing?.kind ?? 'video'));
+  const kind =
+    sniffed === 'audio' || (!video && (audio !== undefined || timing?.kind === 'audio'))
+      ? 'audio'
+      : video
+        ? 'video'
+        : (sniffed ?? 'video');
   const out: MediaRef = { kind };
   if (part !== undefined) out.part = part;
   else if (external !== undefined) out.external = external;

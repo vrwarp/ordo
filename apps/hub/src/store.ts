@@ -164,12 +164,26 @@ export function extensionAgrees(name: string, s: Sniffed): boolean {
   return false;
 }
 
+/** The most of an ASF header object `readHead` reads: its stream list may follow large metadata. */
+export const ASF_HEAD_MAX = 64 * 1024;
+
+/**
+ * A file's first `n` bytes, for `sniff`. An ASF file's header object is read whole, up to `ASF_HEAD_MAX`
+ * (its size is bytes 16-23): a Header Extension or metadata can push the stream properties, which say
+ * whether it is a WMV or a WMA, past `n`.
+ */
 export async function readHead(path: string, n = 4100): Promise<Uint8Array> {
   const fh = await open(path, 'r');
   try {
     const buf = Buffer.alloc(n);
     const { bytesRead } = await fh.read(buf, 0, n, 0);
-    return buf.subarray(0, bytesRead);
+    const head = buf.subarray(0, bytesRead);
+    if (bytesRead < 24 || bytesRead < n || !ASF_HEADER.every((x, i) => head[i] === x)) return head;
+    const size = Math.min(ASF_HEAD_MAX, Number(head.readBigUInt64LE(16)));
+    if (!(size > bytesRead)) return head;
+    const more = Buffer.alloc(size);
+    const got = await fh.read(more, 0, size, 0);
+    return more.subarray(0, got.bytesRead);
   } finally {
     await fh.close();
   }

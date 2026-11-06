@@ -75,7 +75,7 @@ export const PPTX_JOBS = {
   native: 'pptx-native',
   /** The heavy LibreOffice follow-up: art, metafiles and page pictures, version 2 (item D). */
   lo: 'pptx-lo',
-  /** 'Show PowerPoint picture': reference pictures of every shown slide, on demand (item D). */
+  /** 'Show PowerPoint picture': reference pictures of every slide (hidden ones too), on demand (item D). */
   reference: 'pptx-reference',
   /** The one-shot repair of legacy `imported.textBoxes` (item G). */
   textRepair: 'pptx-text-repair',
