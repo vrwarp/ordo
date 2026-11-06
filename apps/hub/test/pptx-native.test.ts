@@ -6,7 +6,7 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Presentation, type Slide } from '@ordo/domain';
+import { Presentation, type Slide, slideContent } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import { digestOf } from '@ordo/pptx-scene/emit.ts';
 import {
@@ -217,6 +217,14 @@ describe('pptx-native: a synthetic service deck', () => {
       expect(s.pptx).toMatchObject({ fileId: hash, index: i, version: 1 });
       expect(s.pptx!.digest).toBe(digestOf(s.objects));
     }
+    // Every imported object is marked as the import's (`origin`), so a slide set to show its PowerPoint
+    // picture draws that picture and only what the operator adds (design/27 §5 "One rule for every drawer").
+    for (const s of [s1, s2, s3, s4]) {
+      expect(s.objects.length).toBeGreaterThan(0);
+      for (const o of s.objects) expect(o.origin?.src).toBe('pptx');
+      const shown = { ...s, pptx: { ...s.pptx!, refMediaId: 'ref', show: 'picture' as const } };
+      expect(slideContent(shown)).toEqual({ pictureMediaId: 'ref', reference: true, objects: [] });
+    }
     // The chart slide is hybrid: its native objects now, LibreOffice art later.
     expect(s4.pptx).toMatchObject({ class: 'hybrid', pending: true });
     expect(texts(s4)).toEqual(['Giving']);
@@ -280,6 +288,7 @@ describe('pptx-native: backgrounds', () => {
       box: full,
     });
     expect(image).toMatchObject({ type: 'image', fit: 'stretch', box: full });
+    expect([white!.origin?.src, image!.origin?.src]).toEqual(['pptx', 'pptx']);
     // The converter lays it on white itself (item A: the PNG header tells the alpha), so the job's own
     // backstop for a stored picture with alpha has nothing to add.
     expect(s.pptx!.digest).toBe(digestOf(s.objects));

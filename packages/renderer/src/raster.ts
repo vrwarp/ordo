@@ -9,7 +9,8 @@ import {
   type TextStyle,
   isSymbolFont,
 } from '@ordo/domain';
-import { clampLook, clampSlide } from './clamp.ts';
+import { clampLook } from './clamp.ts';
+import { drawableContent } from './content.ts';
 import type { AssetJob } from './messages.ts';
 import type { PropsModel } from './props.ts';
 import {
@@ -161,8 +162,8 @@ export const FALLBACK_FAMILIES: ReadonlySet<string> = new Set([
 
 /**
  * Every font family a raster job draws text with (clamped, deduplicated, lower-cased): each text style's
- * family and `fallbackFonts`, and for text objects also their runs' and bullets' families (not a symbol
- * font's: its bullet is drawn mapped, in the run's family). With
+ * family and `fallbackFonts`, and for the text objects the slide draws (`slideContent`) also their runs'
+ * and bullets' families (not a symbol font's: its bullet is drawn mapped, in the run's family). With
  * `fallbacks: false`, only the families text asks for (what the asset worker reports when not loaded: a
  * missing fallback face matters only through them).
  */
@@ -181,7 +182,7 @@ export function jobFontFamilies(job: AssetJob, opts: { fallbacks?: boolean } = {
   const rule = look.layers.slide;
   if (job.kind === 'slide') {
     if (rule.mode === 'authored')
-      for (const o of clampSlide(job.slide).objects) {
+      for (const o of drawableContent(job.slide).objects) {
         if (o.type !== 'text' || !o.text.trim()) continue;
         addStyle(o.style);
         for (const r of o.runs ?? []) add(r.fontFamily);

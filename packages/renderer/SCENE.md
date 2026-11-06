@@ -75,6 +75,10 @@ playing one (its poster) unless `showWhenStopped === false`, and the upper objec
 video nor anything already in over; over = the upper objects that overlap the video, or overlap an object
 already in over (so z order holds where they meet outside the video). Overlap uses axis-aligned bounds
 widened by effects; text that overflows its box needs measured bounds (`bounds` callback, item E).
+The split is over what the slide draws (`slideContent`, design/27 §5, M3 wave 2): base starts with the
+slide's picture (an imported page, or the PowerPoint reference picture with only the operator's objects),
+and an imported play object under a reference picture is not drawn, so the slide is one bitmap and the
+planner gives it no video (its sound still plays on the audio master).
 
 ## Items (each on its own branch from the scaffold)
 

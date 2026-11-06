@@ -203,7 +203,9 @@ export type ResolveOptions = {
  * Resolve a playlist into the frozen copy a goLive carries. Every presentation is validated against the
  * schema; what fails is quarantined and listed in `degraded`, and the service still goes live. Missing
  * presentations and media that is not ready still refuse the goLive, except the clips and sounds slides play
- * in place: those are left out with a `degraded` note and the slide shows its poster. Throws GoLiveRejection.
+ * in place and the PowerPoint pictures slides are set to show: those are left out with a `degraded` note
+ * and the slide shows its poster (or, without its picture, the objects added in ordo). Throws
+ * GoLiveRejection.
  */
 export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: string, opts: ResolveOptions) {
   if (!inputs) throw new GoLiveRejection(`Playlist ${playlistId} not found`);
@@ -234,7 +236,8 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
     const m = inputs.media(id);
     const plays = slideOnly.get(id);
     if (m?.state !== 'ready') {
-      // What a slide plays in place never refuses the service: the slide shows its poster (design/27 §8).
+      // What a slide plays in place never refuses the service: the slide shows its poster (design/27 §8);
+      // nor does a reference picture, optional like a look's holding slide (design/27 §5).
       if (plays) for (const play of plays) problems.push(unplayable(play, id, m));
       else if (optional.has(id)) continue;
       else if (!m) missing.push(`media ${id} is missing`);
@@ -277,12 +280,26 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
   return resolved;
 }
 
-/** The degraded note of a slide whose clip or sound is not ready, so the slide goes live without it. */
+/**
+ * The degraded note of a slide whose clip, sound or PowerPoint reference picture is not ready, so the slide
+ * goes live without it.
+ */
 function unplayable(play: SlidePlay, id: string, m: Media | undefined): GoLiveProblem {
   const what =
-    play.role === 'sound' ? 'slide sound' : play.role === 'background' ? 'slide background' : 'slide video';
+    play.role === 'sound'
+      ? 'slide sound'
+      : play.role === 'background'
+        ? 'slide background'
+        : play.role === 'picture'
+          ? 'PowerPoint picture'
+          : 'slide video';
   const name = m ? `"${m.name.slice(0, 200)}" (${what})` : `${what} ${id.slice(0, 200)}`;
-  const shown = play.role === 'video' ? 'showing its poster' : 'the slide shows without it';
+  const shown =
+    play.role === 'video'
+      ? 'showing its poster'
+      : play.role === 'picture'
+        ? 'the slide shows only the objects added in ordo'
+        : 'the slide shows without it';
   const reason = !m
     ? `${name} is missing; ${shown}`
     : m.state === 'failed'

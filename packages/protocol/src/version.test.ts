@@ -27,6 +27,7 @@ const SHARED = [
   'packages/live-state/src/index.ts',
   'packages/live-state/src/actions.ts',
   'packages/live-state/src/invariants.ts',
+  'packages/domain/src/content.ts',
   'packages/domain/src/cues.ts',
   'packages/domain/src/live.ts',
   'packages/domain/src/schemas.ts',

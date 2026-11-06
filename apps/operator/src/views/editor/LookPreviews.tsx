@@ -17,19 +17,22 @@ function useDebounced<T>(value: T, ms: number): T {
   return v;
 }
 
-/** One look's rendering of a slide, from the thumbnail worker; keeps the previous image until the next arrives. */
-const LookPreview = memo(function LookPreview(props: {
+/**
+ * The thumbnail job of one look's preview of a slide: the slide as that look draws it on an output, with the
+ * pictures the slide draws (`slideImages`, the outputs' rule of design/27 §5) and the look's background.
+ */
+export function lookPreviewJob(props: {
   look: Look;
   presentation: Presentation;
   slide: Slide;
   next?: Slide;
   media: (id: string) => Media | undefined;
   width: number;
-}) {
+}): ThumbJob {
   const { look, presentation: p, slide, next, media, width } = props;
   const bgId = lookBackgroundId(look, p, slide);
   const nextShown = look.layers.slide.mode === 'lyricOnly' && look.layers.slide.nextSlide ? next : undefined;
-  const job: ThumbJob = {
+  return {
     slide,
     look,
     isSong: p.kind === 'song',
@@ -40,6 +43,19 @@ const LookPreview = memo(function LookPreview(props: {
     clear: look.clearColor,
     nextSlide: nextShown,
   };
+}
+
+/** One look's rendering of a slide, from the thumbnail worker; keeps the previous image until the next arrives. */
+const LookPreview = memo(function LookPreview(props: {
+  look: Look;
+  presentation: Presentation;
+  slide: Slide;
+  next?: Slide;
+  media: (id: string) => Media | undefined;
+  width: number;
+}) {
+  const { look } = props;
+  const job = lookPreviewJob(props);
   const key = thumbs.keyOf(job);
   const [shown, setShown] = useState<{ key: string; url: string } | undefined>(() => {
     const hit = thumbs.peek(key);

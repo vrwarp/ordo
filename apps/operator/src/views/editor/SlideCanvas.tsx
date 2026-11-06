@@ -15,6 +15,7 @@ import { Layer, Line, Rect, Shape, Stage, Transformer } from 'react-konva';
 import { useCoarsePointer } from '../../components/pointer.ts';
 import { onFontsChanged } from '../../services/fonts.ts';
 import { stillHash } from '../../services/thumbs.ts';
+import { canvasContent } from './canvasContent.ts';
 import { change, selectObject, useEditor } from './editorStore.ts';
 import { updateObject } from './ops.ts';
 import { useOriginalOver } from './original.ts';
@@ -278,6 +279,9 @@ export function SlideCanvas(props: {
   const scale = size.w / LOGICAL_WIDTH;
   const density = scale * (typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1);
   const { slide } = props;
+  // What the screens draw (design/27 §5): the slide's picture, then its objects (on a slide set to show its
+  // PowerPoint picture, only the ones added in ordo, which are all the canvas can select).
+  const drawn = useMemo(() => canvasContent(slide, props.media), [slide, props.media]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-attach the transformer when the slide re-renders
   useEffect(() => {
     const t = tr.current;
@@ -286,7 +290,7 @@ export function SlideCanvas(props: {
     t.nodes(n && !props.readOnly ? [n] : []);
     t.getLayer()?.batchDraw();
   }, [objectId, slide, props.readOnly]);
-  const selBox = objectId ? slide.objects.find((o) => o.id === objectId)?.box : undefined;
+  const selBox = objectId ? drawn.objects.find((o) => o.id === objectId)?.box : undefined;
   const rotAngle = coarse && selBox ? rotaterAngle(selBox, scale, TOUCH_ROTATE_OFFSET) : 0;
   const showTools = !!props.objectTools && !!selBox;
   useLayoutEffect(() => {
@@ -308,13 +312,13 @@ export function SlideCanvas(props: {
         )
       : undefined;
   const bg = imageFor(stillHash(props.backgroundMediaId ? props.media(props.backgroundMediaId) : undefined));
-  const imported = slide.imported ? imageFor(stillHash(props.media(slide.imported.imageMediaId))) : undefined;
+  const picture = imageFor(drawn.pictureHash);
   // 'Show original' (PptxSlideCard): the PowerPoint picture over the slide, to compare; it takes the pointer.
   const originalId = useOriginalOver(slide);
   const original = originalId ? imageFor(stillHash(props.media(originalId))) : undefined;
   const othersFor = useMemo(
-    () => (id: string) => slide.objects.filter((o) => o.id !== id).map((o) => o.box),
-    [slide.objects],
+    () => (id: string) => drawn.objects.filter((o) => o.id !== id).map((o) => o.box),
+    [drawn.objects],
   );
   return (
     <div ref={box} className="canvasbox">
@@ -338,13 +342,13 @@ export function SlideCanvas(props: {
               ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
               const full = { x: 0, y: 0, w: LOGICAL_WIDTH, h: LOGICAL_HEIGHT, rotation: 0 };
               if (bg) drawImageFit(ctx, bg, full, 1, 'cover');
-              if (imported) drawImageFit(ctx, imported, full, 1, 'contain');
+              if (picture) drawImageFit(ctx, picture, full, 1, 'contain');
             }}
           />
         </Layer>
         <Layer scaleX={scale} scaleY={scale}>
           <Rect name="bg" x={0} y={0} width={LOGICAL_WIDTH} height={LOGICAL_HEIGHT} fill="rgba(0,0,0,0)" />
-          {slide.objects.map((o) => (
+          {drawn.objects.map((o) => (
             <ObjectNode
               key={o.id}
               o={o}

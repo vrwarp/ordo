@@ -9,6 +9,7 @@ import {
   type Media,
   type Presentation,
   type Slide,
+  drawnMediaIds,
   playableFile,
   stillFile,
 } from '@ordo/domain';
@@ -1087,21 +1088,20 @@ export class LinkCore {
   }
 
   /**
-   * mediaId -> file hash of every picture the slides draw: an image itself, a video's poster (an
-   * ImageObject whose media is a video shows its poster, as thumbnails and the editor do; design/27 §8).
+   * mediaId -> file hash of every picture the slides draw (`drawnMediaIds`: the slide's picture, its
+   * PowerPoint reference picture or imported page, then its image objects, only the operator's own on a
+   * reference picture; design/27 §5): an image itself, a video's poster (an ImageObject whose media is a
+   * video shows its poster, as thumbnails and the editor do; design/27 §8).
    */
   private slideImages(...slides: (Slide | undefined)[]): Record<string, string> {
     const out: Record<string, string> = {};
-    const add = (id?: string) => {
-      if (!id) return;
-      const m = this.mediaById(id);
-      const f = m ? stillFile(m) : undefined;
-      if (f) out[id] = f.hash;
-    };
     for (const s of slides) {
       if (!s) continue;
-      add(s.imported?.imageMediaId);
-      for (const o of s.objects) if (o.type === 'image') add(o.mediaId);
+      for (const id of drawnMediaIds(s)) {
+        const m = this.mediaById(id);
+        const f = m ? stillFile(m) : undefined;
+        if (f) out[id] = f.hash;
+      }
     }
     return out;
   }

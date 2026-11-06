@@ -556,7 +556,7 @@ class NativeImport {
       const d: Draft = c
         ? {
             ref,
-            slide: c.s.slide,
+            slide: { ...c.s.slide, objects: c.s.slide.objects.map(imported) },
             media: c.media,
             cls: c.s.classification.class,
             notes: [...c.s.notes],
@@ -594,7 +594,7 @@ class NativeImport {
       // The metafiles the slide draws, set aside by the converter (item D): LibreOffice converts them.
       const mf = c?.s.metafiles;
       if (mf?.length && d.cls !== 'picture') {
-        d.metafiles = mf;
+        d.metafiles = mf.map((m) => ({ ...m, object: imported(m.object) }));
         d.notes.push(`${mf.length} metafile picture(s) wait for LibreOffice`);
       }
       if (d.cls === 'picture') toPicture(d);
@@ -1008,15 +1008,34 @@ function usedPlaceholders(slides: readonly Slide[]): Set<string> {
   return used;
 }
 
+/**
+ * `o` marked as a PowerPoint import's (`origin`, design/27 §3.1), unless the converter marked it already. A
+ * slide set to show its PowerPoint picture draws that picture and only the objects without an origin, the
+ * ones the operator added in ordo (`slideContent`, design/27 §5).
+ */
+function imported<T extends SlideObject>(o: T): T {
+  return o.origin ? o : { ...o, origin: { src: 'pptx' } };
+}
+
 /** A background picture with alpha as PowerPoint draws it: on a white rect over the slide area. */
 function backgroundOnWhite(
   mediaId: string,
   rect: { x: number; y: number; w: number; h: number },
 ): [ShapeObject, ImageObject] {
   const box = { x: rect.x, y: rect.y, w: rect.w, h: rect.h, rotation: 0 };
+  const origin = { src: 'pptx', role: 'bg' };
   return [
-    { id: newId(), type: 'shape', box, shape: 'rect', fill: WHITE, opacity: 1, radius: 0 },
-    { id: newId(), type: 'image', box: { ...box }, mediaId, fit: 'stretch', opacity: 1, radius: 0 },
+    { id: newId(), type: 'shape', box, shape: 'rect', fill: WHITE, opacity: 1, radius: 0, origin },
+    {
+      id: newId(),
+      type: 'image',
+      box: { ...box },
+      mediaId,
+      fit: 'stretch',
+      opacity: 1,
+      radius: 0,
+      origin: { ...origin },
+    },
   ];
 }
 

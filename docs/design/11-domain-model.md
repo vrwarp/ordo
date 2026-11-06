@@ -46,7 +46,7 @@ type SlidePptx = {
   notes?: string[]; // what was approximated (≤ 16)
   artText?: string; // text baked into the art or page picture (search and labels only)
   refMediaId?: Id; // LibreOffice picture of the whole slide, on demand
-  show?: 'objects' | 'picture';
+  show?: 'objects' | 'picture'; // 'picture' + refMediaId: drawers show it and only the objects without origin
 };
 type PptxNativeSource = {
   version: number;
@@ -152,7 +152,9 @@ type ShapeObject = {
 };
 
 // Every object may also carry origin?: { src; shapeId?; ph?; role?; group? } (where an imported PowerPoint
-// shape came from) and locked?: boolean (move, resize, delete and z-order only), design/27 §3.1.
+// shape came from; the native import sets at least { src: 'pptx' } on every object it writes, so objects
+// without one are the operator's own) and locked?: boolean (move, resize, delete and z-order only),
+// design/27 §3.1. What a slide draws is `slideContent(slide)` (@ordo/domain, design/27 §5).
 
 type Arrangement = { id: Id; name: string; sectionIds: Id[] };
 

@@ -497,12 +497,22 @@ scope). The converter side is `@ordo/pptx-scene` `media.ts` and `timing.ts` (its
   transition sounds; resume; a failing import), `pptx-scene` `media.test.ts`, `timing.test.ts`, domain
   `cues.media.test.ts`.
 
+## Wave 2, item B: the one fallback rule (m3b/slide-content)
+
+Every drawer reads a slide through `slideContent` (`@ordo/domain` `content.ts`, re-exported by
+`@ordo/renderer`; design/27 §5 "One rule for every drawer"): a slide set to show its PowerPoint picture
+(`pptx.show === 'picture'` with `refMediaId`) draws that picture and only the objects without `origin`;
+any other slide draws its page picture (`imported`) when it has one, and every object. The native job
+therefore marks every object it writes with `origin` (`imported()` in `nativeJob.ts`: converted objects
+and the metafile objects version 2 puts back get `{ src: 'pptx' }` unless the converter set one; the job's
+own background on white gets `role: 'bg'`; `artObject` already had `role: 'art'`), before the size budgets
+and the digest. goLive ships the pictures each slide draws (`referencedMediaIds`), the reference picture
+optional with a `degraded` note.
+
 ## Not in this wave
 
-Waiting for M2's second wave and M5 to merge: rich text emission (runs and paragraphs) from the converter; `slideContent()` in every drawer
-(`refMediaId` and `show: 'picture'` are drawn by nothing yet); the art's `locked`/`origin` (M2's schema);
-bundled substitutes in drawers
-(M2's font resolver); video posters on outputs. M3 wave 2: flipped pictures (drawn unflipped), ellipse and
+Waiting for M2's second wave to merge: rich text emission (runs and paragraphs) from the converter; bundled
+substitutes in drawers (M2's font resolver). Later in M3 wave 2: flipped pictures (drawn unflipped), ellipse and
 roundRect picture masks (drawn as rects), recoloured pictures (drawn without the recolouring), all noted on
 the slide. Hub budgets measured on a reference NAS. 'Re-import from PowerPoint' (M4). A copy of a hybrid
 slide made before LibreOffice finished keeps no art.

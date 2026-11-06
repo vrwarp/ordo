@@ -153,7 +153,9 @@ presentation while it is live-locked (it re-queues itself with backoff, 30 s dou
   every object and gets the art on top, with a note in `Slide.pptx.notes`.
 - `pptx-reference` ('Show PowerPoint picture', `POST /presentations/:id/pptx-reference`, 423
   while the presentation is live): every shown slide once into `Slide.pptx.refMediaId`, shown
-  instead of the objects (`show: 'picture'`).
+  instead of the objects (`show: 'picture'`). Every drawer then shows that picture and only the
+  objects without `origin`, the ones the operator added (design/27 §5); the native import marks
+  every object it writes with `origin: { src: 'pptx' }` (the converter's own origin wins).
 - The fidelity reference of `tools/pptx-fidelity`.
 
 ### Native import (editable slides)

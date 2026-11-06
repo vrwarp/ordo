@@ -1,5 +1,6 @@
 import { HubConnection, OutputLink } from '@ordo/client';
-import type { LiveState } from '@ordo/domain';
+import { type LiveState, type Media, expandCues, slideContent } from '@ordo/domain';
+import { CONTENT_CASES } from '@ordo/domain/content.test-util.ts';
 import type { FromAsset, ToAsset, ToRender } from '@ordo/renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { liveState, slideLive } from '../../../packages/renderer/src/fixtures.test-util.ts';
@@ -738,6 +739,70 @@ describe('link worker core', () => {
     expect(job?.t === 'job' && job.job.kind === 'slide' ? job.job.images : undefined).toEqual({
       vid: 'poster1',
     });
+    t.close();
+  });
+
+  it('a slide job gets exactly the pictures its slide draws, by slideContent (design/27 §5)', async () => {
+    const t = setup();
+    await t.core.start();
+    const s0 = liveState();
+    const r = s0.resolved!;
+    const picture = (id: string): Media => ({
+      id,
+      rev: 1,
+      name: id,
+      tags: [],
+      kind: 'image',
+      original: { hash: `${id}-file`, bytes: 10, mime: 'image/png', path: `files/${id}-file` },
+      state: 'ready',
+      loop: false,
+      isBackground: false,
+    });
+    const all = ['page', 'ref', 'art', 'photo', 'photo2', 'mine'];
+    const talk = r.presentations.talk!;
+    const sec = talk.sections[0]!;
+    const resolved = {
+      ...r,
+      media: { ...r.media, ...Object.fromEntries(all.map((id) => [id, picture(id)])) },
+      presentations: {
+        ...r.presentations,
+        talk: { ...talk, sections: [{ ...sec, slides: CONTENT_CASES.map((c) => c.slide) }] },
+      },
+    };
+    const cues = expandCues(resolved);
+    for (const c of CONTENT_CASES) {
+      const i = cues.findIndex((x) => x.slideId === c.slide.id);
+      t.toAsset.length = 0;
+      const live = slideLive(0);
+      const cue = cues[i]!;
+      t.hub.emit(
+        'state',
+        stateMsg({
+          ...live,
+          seq: 10 + i,
+          cues,
+          live: i,
+          armed: undefined,
+          resolved,
+          layers: {
+            ...live.layers,
+            slide: {
+              content: { kind: 'slide', cueIndex: i, presentationId: 'talk', slideId: cue.slideId! },
+              at: 1000,
+              seq: 10 + i,
+            },
+          },
+        }),
+      );
+      await tick(30);
+      const job = t.toAsset.find((m) => m.t === 'job' && m.job.kind === 'slide' && m.job.cueIndex === i);
+      const images = job?.t === 'job' && job.job.kind === 'slide' ? job.job.images : undefined;
+      // A slide that draws nothing (a compact slide waiting for LibreOffice) gets no slide job at all.
+      const draws = !!c.picture || slideContent(c.slide).objects.length > 0;
+      expect(images, c.name).toEqual(
+        draws ? Object.fromEntries(c.pictures.map((id) => [id, `${id}-file`])) : undefined,
+      );
+    }
     t.close();
   });
 });
