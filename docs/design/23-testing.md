@@ -139,6 +139,17 @@ the system (recorded in `expected/meta.json`) so the result does not depend on i
 fonts; on a machine without it the run is skipped. `--update` rewrites the expected images;
 a failing case writes `<case>.actual.png` next to the expected one.
 
+`pnpm --filter @ordo/renderer golden:compositor` is the compositor golden (design/27 §14.5). It has
+no expected images: in a worker in headless Chromium (WebGPU on SwiftShader, the flags above), two
+real render engines draw the same layer stacks, one with the WebGPU compositor and one with Canvas
+2D, and a CPU reference composes them with `planeSample` (`packages/renderer/src/scene.ts`). Cases
+cover scene stacks (a video in its box with masks, crops, rotation, flips and an over), crossfade
+midpoints of every source pair, a stale slot generation and a slot without a frame (both must show
+the poster, never black), and the legacy bitmap and video paths. WebGPU must match Canvas 2D within
+40 per channel on all but 0.4 % of the pixels and the reference within 8 on all but 0.05 %.
+Failing cases write their three images to `test-results/compositor-golden/` (`--images` writes
+every case).
+
 ## CI
 
 GitHub Actions on every pull request and merge to main (and by hand): `pnpm lint`, `pnpm typecheck`, `pnpm test`,

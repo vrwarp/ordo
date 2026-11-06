@@ -48,6 +48,8 @@ jobs:
           ORDO_CI: "1"
       - name: Golden images of the text rasterizer
         run: pnpm --filter @ordo/renderer golden
+      - name: Compositor golden (WebGPU on SwiftShader against Canvas 2D and the scene reference)
+        run: pnpm --filter @ordo/renderer golden:compositor
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
