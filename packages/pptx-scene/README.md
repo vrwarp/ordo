@@ -293,9 +293,15 @@ Done:
   BMP by their bytes (EMF, WMF, TIFF, …) are counted in a note and not drawn. `slides.json` holds every
   slide (hidden ones too) with its tier, class, reasons, convert time, notes and ordo `Slide`.
 - **Drawing** (`NativeRenderer`). One headless Chromium per run, a fresh page per deck. Every request
-  except the page's own origin is refused, and host resolution is off. Each family the slides use is
-  registered as `ordo-native-<n>` with fontconfig's regular face, plus its bold, italic and bold italic
-  faces when those are separate files; missing variants are synthesized. Pictures are decoded once per
+  except the page's own origin is refused, and host resolution is off. The page installs the renderer's
+  `FontResolver` as its font environment, as the outputs' asset worker does, and the slides keep the
+  deck's family names (`src/fonts.ts`): every family the slides ask for (runs, bullets, `fallbackFonts`)
+  gets fontconfig's regular face, plus its bold, italic and bold italic faces when those are separate files
+  of that family (missing variants are synthesized); ordo's default face, and the script fallbacks of the
+  text's scripts that are installed here, with their script's `unicodeRange`. A script whose fallback family
+  is missing falls back per glyph as LibreOffice's does (`--script-stand-ins` registers fontconfig's face
+  for the script's language under the family's name instead). `summary.json` lists how each script
+  fallback was served (`scriptFallbacks`). Pictures are decoded once per
   deck, scaled to the largest size the deck draws them at 3840 px (as the hub's picture preparation will),
   and kept in a bounded cache. `rasterMs` is the median of three draws (thumbnail-worker order: black,
   background cover, `drawSlide2D`) plus a one-pixel read-back, which makes Chromium rasterize.
@@ -321,8 +327,17 @@ Done:
   (`--engine native --corpus`); real and third-party decks keep their baselines outside the repository.
   Check a change with `--engine native --corpus --baseline tools/pptx-fidelity/native-baseline.json`.
 
-To do: `--lo-compat` (design/27 §14.1) and the committed probe corpus with its CI gate (§14.2) belong to later
-milestones.
+- **Text features, LibreOffice policies, slide lists** (M2). Each slide gets the text features of its own
+  XML (`src/features.ts`: the suite inventory's superSub, lnSpcPct, normAutofitScaled, rtl, rtlScriptText
+  and bulletsAuto, and the census's mixedRuns) and the LibreOffice policy rules that change how it is drawn
+  (`src/compat.ts`: `runShadow`, `textOutline`, `refit`). `summary.json` (`native.all`,
+  `native.worship`) and the report give per feature the slide count and means, means per tier, the deck
+  means and the M2 target; per rule the slides it changes. `--lo-compat` draws those slides as LibreOffice
+  would and as ordo does (`slide-NNNN.policy.png`, `policySsim`, `nativePolicySsim`,
+  `nativePolicyMean`); `--baseline` compares ordo's drawings either way. `--slides [DECK:]LIST` scores only
+  some slides (repeatable; decks no list names are left out).
+
+To do: the committed probe corpus with its CI gate (§14.2) belongs to a later milestone.
 
 ### F: classify (`classify.ts`)
 

@@ -274,7 +274,9 @@ It writes `summary.json` and an HTML report with the pictures side by side, wors
 rounds a 960 pt slide up to 1921 pixels; its pictures are cut to the slide's proportions before scoring.
 
 Where LibreOffice is known to differ from PowerPoint, ordo follows PowerPoint and the score pays for it:
-LibreOffice does not draw a run's own text shadow (PowerPoint's "Text Shadow" button), ordo does.
+LibreOffice does not draw a run's own text shadow (PowerPoint's "Text Shadow" button), ordo does. The native
+column's `--lo-compat` draws the slides those policies change as LibreOffice would and as ordo does, and
+reports the means both ways and per rule (design/27 §14.1).
 
 Known gaps: pptx-preview's charts (ECharts) misread some chart data (pptxgenjs's multi-level category
 labels; values drawn far too small), table text can still wrap differently, and photographs score
