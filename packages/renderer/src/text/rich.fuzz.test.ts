@@ -207,7 +207,7 @@ describe('rich text engine fuzz', () => {
             expect(s.end).toBeLessThanOrEqual(o.text.length);
             expect(s.run).toBeLessThan(o.runs?.length ?? 0);
             for (const v of [s.x, s.w, s.sizePx, s.shift]) expect(finite(v)).toBe(true);
-            expect(s.sizePx).toBeGreaterThanOrEqual(CLAMP.minFontPx - 1e-9);
+            expect(s.sizePx).toBeGreaterThanOrEqual((s.shift ? CLAMP.minFontPx : CLAMP.minRunFontPx) - 1e-9);
             expect(s.sizePx).toBeLessThanOrEqual(CLAMP.maxFontPx);
           }
           if (line.bullet) {

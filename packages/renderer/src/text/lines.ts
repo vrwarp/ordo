@@ -87,7 +87,8 @@ import type {
  * Autofit (`autofit` in office.ts): laid out once at the stored `fitScale` (else full size) with measured
  * widths; when that does not fit, LibreOffice's search lays the text out with widths scaled linearly from
  * that layout, and only the scale it finds is laid out again with measured widths. Run sizes are rounded to
- * whole points in the office model (`officeFontPx`), scaled exactly in the 'ordo' one.
+ * whole points in the office model (`officeFontPx`), scaled exactly in the 'ordo' one, and stay within
+ * 2-1,000 px (`fitSize`): a 1 pt run, PowerPoint's smallest, keeps its size and its 2.4 px line.
  */
 
 /** The four insets: `style.insets`, else `padding` on every side. */
@@ -97,12 +98,12 @@ export function insetsOf(style: TextStyle): { l: number; t: number; r: number; b
 }
 
 /**
- * A run size under the autofit font scale, within the render bounds (4-1,000 px, design/27 §3.2): scaled
- * exactly, or rounded to whole points as LibreOffice does in the office model.
+ * A run size under the autofit font scale, within the render bounds of runs (2-1,000 px, design/27 §3.2):
+ * scaled exactly, or rounded to whole points as LibreOffice does in the office model (never below 1 pt).
  */
 export function fitSize(sizePx: number, fontScale: number, office = false): number {
   const s = office ? officeFontPx(sizePx, fontScale) : sizePx * fontScale;
-  return Math.min(CLAMP.maxFontPx, Math.max(CLAMP.minFontPx, s));
+  return Math.min(CLAMP.maxFontPx, Math.max(CLAMP.minRunFontPx, s));
 }
 
 /**

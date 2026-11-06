@@ -34,7 +34,9 @@ Bounds (review of wave 1; `rich.fuzz.test.ts` and `clamp.test.ts` keep them):
   sanitize.ts), so no object costs more platform font lookups than a slide of ordinary text; family names
   lose every C0 and C1 control character, and a family is keyed by its cleaned name (trimmed, lower-cased)
   and keeps the spelling first seen, so case, spaces, quotes and controls never make another font string.
-- Bullets are drawn within 4-1,000 px; raised and lowered runs at no less than 4 px.
+- Runs are laid out within 2-1,000 px (`CLAMP.minRunFontPx`: 1 pt, so PowerPoint's 1 pt spacer paragraphs
+  keep their 2.4 px line); box sizes stay within 4-1,000 px. Bullets are drawn within 4-1,000 px; raised and
+  lowered runs at no less than 4 px.
 
 ## Pipeline
 

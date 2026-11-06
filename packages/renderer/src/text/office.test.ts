@@ -1,7 +1,9 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_LYRIC_STYLE, type TextObject, type TextPara, type TextStyle } from '@ordo/domain';
+import { CLAMP } from '../clamp.ts';
 import { LEGACY_FONT_ENV } from './fonts.ts';
+import { fitSize } from './lines.ts';
 import {
   FIT_SLACK_PX,
   type FitScale,
@@ -107,6 +109,14 @@ describe('officeFontPx: run sizes as editeng rounds them', () => {
     expect(officeFontPx(75, 1)).toBe(75);
     expect(officeFontPx(75, 0.5)).toBe(38); // 37.5 → 38 pt, × 0.5 = 19 pt
     expect(officeFontPx(4, 0.01)).toBe(2); // max(1 pt, …)
+  });
+
+  it('keeps run sizes after autofit within 2-1,000 px in both line models (1 pt is never raised)', () => {
+    expect(fitSize(2, 1, true)).toBe(2);
+    expect(fitSize(2, 0.3, true)).toBe(2);
+    expect(fitSize(2, 1)).toBe(2);
+    expect(fitSize(2, 0.3)).toBe(CLAMP.minRunFontPx);
+    expect(fitSize(5000, 1)).toBe(CLAMP.maxFontPx);
   });
 });
 
@@ -226,6 +236,27 @@ describe('office layout', () => {
     const br = lay(office('Line\n', {}, { paras: [null, { soft: true }] }));
     expect(br.lines).toHaveLength(2);
     expect(br.lines[1]).toMatchObject({ top: 24, height: 24, segs: [] });
+  });
+
+  it('lays a 1 pt spacer paragraph out 2.4 px tall, at full size and shrunk', () => {
+    // Verse lines at 7 pt (14 px) separated by PowerPoint's 1 pt paragraphs (sz="100": 2 px): LibreOffice's
+    // pitch is 16.8 + 2.4 px. A 4 px floor made each spacer 4.8 px and moved every line below it.
+    const spacer = { start: 2, end: 3, sizeScale: 2 / 14 };
+    const o = office(
+      'a\n \nb\n \nc',
+      { fontSizePx: 14 },
+      { runs: [spacer, { ...spacer, start: 6, end: 7 }] },
+    );
+    const l = lay(o);
+    expect(l.lines.map((x) => x.height)).toEqual(
+      [16.8, 2.4, 16.8, 2.4, 16.8].map((h) => expect.closeTo(h, 9)),
+    );
+    expect(l.lines.map((x) => x.top)).toEqual([0, 16.8, 19.2, 36, 38.4].map((t) => expect.closeTo(t, 9)));
+    expect(l.lines[1]!.segs[0]!.sizePx).toBeCloseTo(2, 9);
+    // Shrunk to 50 %, the spacer keeps 1 pt as editeng rounds it (`officeFontPx`: 0.5 pt → 1 pt; 7 pt → 4 pt).
+    const shrunk = { fontSizePx: 14, autofit: 'shrink' as const, fitScale: { font: 0.5, spacing: 1 } };
+    const fit = lay(office('a\n \nb', shrunk, { runs: [spacer] }));
+    expect(fit.lines.map((x) => x.height)).toEqual([9.6, 2.4, 9.6].map((h) => expect.closeTo(h, 9)));
   });
 
   it('draws raised text at 58 % of its size, moved 30 %, without growing the line', () => {

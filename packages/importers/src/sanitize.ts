@@ -29,6 +29,8 @@ export const IMPORT_LIMITS = {
   fontFamily: 120,
   fontSizeMin: 4,
   fontSizeMax: 1000,
+  /** A style run's size (`fontSizePx` × `sizeScale`): 1 pt, as the render plan keeps it (`minRunFontPx`). */
+  runFontSizeMin: 2,
   /** Boxes stay within ±2× the canvas (the render plan's clamp). */
   boxSpan: 2,
   durationMinMs: 500,
@@ -198,7 +200,7 @@ export function cutRuns(
   budget: FontBudget = fontBudget(),
 ): TextRun[] {
   const fs = finite(fontSizePx, 64, IMPORT_LIMITS.fontSizeMin, IMPORT_LIMITS.fontSizeMax);
-  const minScale = Math.max(0.01, IMPORT_LIMITS.fontSizeMin / fs);
+  const minScale = Math.max(0.01, IMPORT_LIMITS.runFontSizeMin / fs);
   const maxScale = Math.min(50, IMPORT_LIMITS.fontSizeMax / fs);
   const out: TextRun[] = [];
   let at = 0;

@@ -151,6 +151,17 @@ describe('sanitize: runs and paragraph styles are cut with the text', () => {
     expect('fontFamily' in none.runs![0]!).toBe(false);
   });
 
+  it('keeps a 1 pt run (2 px) as the render plan draws it, and floors smaller runs there', () => {
+    const o = (runs: TextRun[]) =>
+      cutText({ ...textObject('a\n \nb', runs, []), style: { ...DEFAULT_LYRIC_STYLE, fontSizePx: 14 } }, 10);
+    // PowerPoint's 1 pt spacer paragraph between 7 pt lines: sizeScale 2/14, not raised to 4 px.
+    expect(o([{ start: 2, end: 3, sizeScale: 2 / 14 }]).runs).toEqual([
+      { start: 2, end: 3, sizeScale: 2 / 14 },
+    ]);
+    expect(IMPORT_LIMITS.runFontSizeMin).toBe(2);
+    expect(o([{ start: 2, end: 3, sizeScale: 0.01 }]).runs![0]!.sizeScale).toBeCloseTo(2 / 14, 12);
+  });
+
   it('bounds run sizes and keeps legacy objects as they were', () => {
     const p: Presentation = {
       id: 'p',
