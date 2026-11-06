@@ -174,11 +174,11 @@ Contracts:
   `firstOfAny`.
 - `walkSlide(ctx): Element[]` bottom first (master decorations, layout decorations, own shapes), groups
   flattened with `group`; `walkTree(ctx, tree, from, map, group, depth, st, inherit?)` (`GroupInherit`:
-  `fill` for `a:grpFill`, `sheared`), `boxAffine`, `alternateBranch`, `UNDERSTOOD_PREFIXES`, `pathCoverage`,
-  `readXfrm`, `M1_PRESETS`, `MAX_GROUP_DEPTH`, `MAX_SHAPES_PER_SLIDE`.
+  `fill` for `a:grpFill`, `sheared`), `boxAffine`, `alternateBranch` (= `markup.ts` `chooseAlternate`),
+  `pathCoverage`, `readXfrm`, `M1_PRESETS`, `MAX_GROUP_DEPTH`, `MAX_SHAPES_PER_SLIDE`.
 - `readTextBody(ctx, chain): TextBody | undefined`, `runStyle`, `readShadow`, `plainText`, `textChars`.
 - `readBlipFill(ctx, blipFill, source)`, `readPicture(ctx, el, base)` (a `PictureElement`, or a
-  `ResidualElement` for a metafile), `blipReader(ctx, from)`, `blipReaderOf(ctx, part)`, `readInsets`,
+  `ResidualElement` with approx support for a metafile), `blipReader(ctx, from)`, `blipReaderOf(ctx, part)`, `readInsets`,
   `pictureSize`, `extensionOf`.
 - `readBackground(ctx): Background`.
 - `emitDeck(scene, opts): EmitResult` (`slides: EmittedSlide[]` with `slide` (an ordo `Slide` that
@@ -200,14 +200,14 @@ Done (design/27 §4, §15 M1):
   shadow, highlight, lang. Paragraphs: algn, level, marL/indent, rtl, spcBef/spcAft/lnSpc, the nearest
   bullet setting (buNone wins). Bodies: insets, anchor, wrap, normAutofit/spAutoFit, vert, numCol,
   anchorCtr, warp.
-- Walk: `showMasterSp` on the slide (both) and the layout (the master's); `mc:AlternateContent` first
-  understood Choice (p14, p15) else Fallback; style references (fillRef, lnRef, effectRef with phClr);
+- Walk: `showMasterSp` on the slide (both) and the layout (the master's); `mc:AlternateContent` through
+  `chooseAlternate` (the branch `Package.xml` keeps: the first Choice of a14, p14 or p15, else Fallback); style references (fillRef, lnRef, effectRef with phClr);
   `useBgFill` with a solid background; `a:grpFill`; groups by offset, scale, rotation and flips, a child's
   own box scaled along the group's axes (`boxAffine`, no shear; a child the composed affine would shear is
   marked residual and still drawn); graphic frames residual; ≤ 32 group levels, ≤ 5,000 shapes.
 - Pictures: blip part through the holding part's relationships (theme parts too), srcRect, fillRect,
   tile, alphaModFix, recolour effects (an empty `a:lum` is not one), header-sniffed size, metafiles
-  residual, TIFF/WDP noted, linked pictures logged with their host only, video/audio posters recorded.
+  residual elements rated approx (not drawn before M3 converts them; design/27 §5), TIFF/WDP noted, linked pictures logged with their host only, video/audio posters recorded.
 - Emission: legacy objects per §3.2 (text in its dominant run's style; padding the smallest inset with the
   rest folded into the box; ellipse/roundRect text rectangles; wrap="none" widened; vert turned a quarter;
   lineHeight 1.2 × lnSpcPct minus lnSpcReduction, or the exact pitch; stored fontScale applied; outline
@@ -217,8 +217,8 @@ Done (design/27 §4, §15 M1):
   half its box); backgrounds (16:9 plain picture of the slide's aspect → `backgroundMediaId`, other pictures
   a bottom image over the slide area, colours a bottom rect over the frame or the slide area, none white);
   the lyric box of §4 "Church mappings" (not the bilingual rule); ≤ 1,000 objects.
-- `crop`: written from srcRect (and fillRect clipping) when `EmitOptions.crop` is set. Off by default until
-  work item D's schema field is merged: the integrator turns it on (default or in the harness).
+- `crop`: written from srcRect (and fillRect clipping) by default, now that `ImageObject.crop` is in the
+  schema; `EmitOptions.crop: false` writes the legacy uncropped picture and notes it.
 
 Left for later milestones: rich runs and paragraphs (M2: dominant style only today), bullets and numbering
 drawn (M2; read into the IR), shape text rectangles of other presets and custom paths (M6), the bilingual
@@ -294,8 +294,12 @@ Done:
   `summary.json`, prints the change per deck, and exits 1 when a worship deck (every deck without
   `--manifest`) loses more than `--max-drop` (default 0.02) of native SSIM.
 
+- **Placement.** The corpus deck `placement-4x3` (solid boxes in their own colours on 4:3 slides) and
+  `src/placement.ts <out>/corpus-placement-4x3`: each colour's bounding box on LibreOffice's page against
+  the native page, written to `placement.json`, exit 1 above 2 px (the M1 exit).
+
 To do: `--lo-compat` (design/27 §14.1) and the committed probe corpus with its CI gate (§14.2) belong to later
-milestones. The 4:3 placement check of the M1 exit needs a synthetic 4:3 deck run with LibreOffice.
+milestones.
 
 ### F: classify (`classify.ts`)
 
@@ -308,8 +312,9 @@ elements)`, `artRange(elements)`, `slideCost`, `boundsOf`, `overlaps`, `MAX_SLID
 **Tiers** (the census of design/27 "Why this design"). Feature names: group, table, chart, smartart, ole,
 altcontent, connector, custGeom, gradFill, pattFill, video, vert, warp, 3d, glow, reflection, softEdge,
 innerShdw, recolor, lum, artistic, bullet, rtl, superSub, tile, math, ink, mixedRuns, preset:other,
-pic:&lt;ext&gt;, crop, shadow, outline. The slide's own shape tree (both `mc:AlternateContent` branches) gives
-all of them; the decorations it shows (non-placeholder layout shapes unless the slide has
+pic:&lt;ext&gt;, crop, shadow, outline. The slide's own shape tree gives all of them (since `Package.xml`
+keeps one `mc:AlternateContent` branch, only the branch that is read counts; the wrapper still counts as
+altcontent); the decorations it shows (non-placeholder layout shapes unless the slide has
 `showMasterSp="0"`, master shapes unless the layout has it too) give the `featuresOf` ones as
 `deco:<feature>` (cached per layout and master). Backgrounds are not part of the census. Tiers: fallback
 when any of `FALLBACK_FEATURES`; else the first of T1-T4 whose `TIER_BLOCKERS` the slide avoids; else T5.
@@ -326,7 +331,7 @@ residual (chart, table, SmartArt, OLE, other graphic frames, maths, a bevel with
 a warp other than `textNoShape`, text that is vertical, `numCol` > 1 or `anchorCtr` through the bodyPr
 chain, `.wdp`/`.hdp` pictures) and approx (reflection, inner shadow, soft edge on a picture, EMF/WMF
 waiting for conversion). The XML of an element is `ShapeElement.node` when the walk keeps it, else found
-by source and `cNvPr id` (alternate-content branches merged).
+by source and `cNvPr id`.
 
 **Class**: native without residual elements; hybrid with them: the art range [Rmin, Rmax] holds every
 residual and every other element of the range that an art element above it overlaps (top down; hidden
