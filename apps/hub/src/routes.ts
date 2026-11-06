@@ -48,6 +48,7 @@ import type { MediaService } from './media/service.ts';
 import type { Store } from './store.ts';
 import { searchGoogleFonts } from './fonts/google.ts';
 import { PPTX_MIME } from './imports.ts';
+import { planReimport } from './pptx/reimport.ts';
 import type { PptxImportOptions } from './pptx/shared.ts';
 import { sendFile } from './send.ts';
 import { extOf, MAX_UPLOAD_BYTES, readHead, sniff } from './store.ts';
@@ -108,6 +109,11 @@ const LiveEventsBody = z.object({ id: z.string().max(200).optional(), event: z.u
  */
 const PptxReferenceBody = z
   .object({ showPicture: z.array(z.string().min(1).max(200)).max(5_000).optional() })
+  .strict();
+/** 'Re-import from PowerPoint' (`PptxReimportReq`; M4 item F): slide ids, each list at most 5,000. */
+const SlideIds = z.array(z.string().min(1).max(200)).max(5_000);
+const PptxReimportBody = z
+  .object({ slideIds: SlideIds.optional(), reset: SlideIds.optional(), keep: SlideIds.optional() })
   .strict();
 
 /**
@@ -470,9 +476,12 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     hub.imports.pptx.followUp(saved);
     return saved;
   });
-  route('POST', '/presentations/:id/slides/:slideId/make-editable', 'edit', async (req) => {
+  route('POST', '/presentations/:id/slides/:slideId/make-editable', 'edit', async (req, reply) => {
     const id = params(req).id!;
     assertPresentationUnlocked(id);
+    // A legacy PowerPoint page whose deck is stored is rebuilt natively (M4 item F): 202 and the job.
+    const job = hub.imports.makeEditableNative(id, params(req).slideId!, by(req));
+    if (job) return reply.code(202).send(job);
     return hub.imports.makeEditable(id, params(req).slideId!, by(req));
   });
   // 'Show PowerPoint picture' (design/27 §5 "Operator fallback"): LibreOffice pictures of every shown slide.
@@ -485,6 +494,26 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
       throw badRequest('This presentation has no stored PowerPoint file', 'no_pptx');
     const body = validate(PptxReferenceBody, req.body ?? {});
     return reply.code(202).send(hub.imports.pptx.queueReference(id, fileId, by(req), body.showPicture));
+  });
+  // 'Re-import from PowerPoint' (design/27 §11, M4 item F): the plan, then the job on the stored deck.
+  const storedDeck = (id: string) => {
+    const p = lib.presentations.must(id);
+    const fileId = p.source?.kind === 'pptx' ? p.source.fileId : undefined;
+    if (!fileId || !lib.getFile(fileId))
+      throw badRequest('This presentation has no stored PowerPoint file', 'no_pptx');
+    return { p, fileId };
+  };
+  route('GET', '/presentations/:id/pptx-reimport', 'edit', async (req) => {
+    const { p } = storedDeck(params(req).id!);
+    const tags = (mediaId: string) => lib.media.get(mediaId)?.tags;
+    return planReimport(p, {}, tags);
+  });
+  route('POST', '/presentations/:id/pptx-reimport', 'edit', async (req, reply) => {
+    const id = params(req).id!;
+    assertPresentationUnlocked(id);
+    const { fileId } = storedDeck(id);
+    const body = validate(PptxReimportBody, req.body ?? {});
+    return reply.code(202).send(hub.imports.pptx.queueReimport(id, fileId, body, by(req)));
   });
 
   // playlists

@@ -79,6 +79,8 @@ export const PPTX_JOBS = {
   reference: 'pptx-reference',
   /** The one-shot repair of legacy `imported.textBoxes` (item G). */
   textRepair: 'pptx-text-repair',
+  /** 'Re-import from PowerPoint': the native import again, merged into the presentation (M4 item F). */
+  reimport: 'pptx-reimport',
 } as const;
 
 /** Resume points of a native import (`ctx.setPayload` after each step), so a re-queued job never repeats one. */
@@ -212,11 +214,40 @@ export type TextRepairPayload = {
   deferred?: string[];
 };
 
+/**
+ * 'Re-import from PowerPoint' (M4 item F, `reimport.ts`; design/27 §11): the presentation's stored deck
+ * through the native import again, merged into the presentation as one new revision. The request fields are
+ * `PptxReimportReq` (`@ordo/protocol`).
+ */
+export type PptxReimportPayload = {
+  presentationId: string;
+  /** The stored deck (`Presentation.source.fileId`), checked again when the job runs. */
+  hash: string;
+  /** Who asked (logged; the revision is saved by `pptx-reimport`). */
+  by?: string;
+  /** Only these slides; absent: every slide. */
+  slideIds?: string[];
+  /** Slides regenerated even though edited ('Reset slide from PowerPoint'). */
+  reset?: string[];
+  /** Made-editable slides kept as they are. */
+  keep?: string[];
+  /** The import options of the first import, when known (`source.native`); absent: the defaults. */
+  options?: PptxImportOptions;
+  /** Times the job found the presentation live-locked and deferred itself (the backoff step). */
+  deferrals?: number;
+  /**
+   * The conversion's resume points (`PptxNativeProgress`: pictures and clips already stored, the
+   * presentation's id), so a job re-run after a restart or a deferral never stores a picture twice.
+   */
+  done?: PptxNativeProgress;
+};
+
 export type PptxJobPayloads = {
   'pptx-native': PptxNativePayload;
   'pptx-lo': PptxLoPayload;
   'pptx-reference': PptxReferencePayload;
   'pptx-text-repair': TextRepairPayload;
+  'pptx-reimport': PptxReimportPayload;
 };
 export type PptxJobKind = keyof PptxJobPayloads;
 
@@ -230,6 +261,7 @@ export const PPTX_JOB_CLASS: { readonly [K in PptxJobKind]: JobClass } = {
   'pptx-lo': 'heavy',
   'pptx-reference': 'heavy',
   'pptx-text-repair': 'light',
+  'pptx-reimport': 'light',
 };
 
 /** Enqueue a pptx job on its class with a typed payload. */

@@ -7,6 +7,7 @@ import {
   type Look,
   type ObjectOrigin,
   type Rgba,
+  type ShapeGeom,
   type Slide,
   type SlideObject,
   type TextObject,
@@ -448,6 +449,26 @@ export function clampCrop(c: unknown): ImageCrop | undefined {
   return out.l || out.t || out.r || out.b ? out : undefined;
 }
 
+/**
+ * A picture's mask (`ImageObject.mask`, a ShapeGeom) as the drawers read it: the preset name (at most 40
+ * characters) and up to 10 finite adjust pairs. Undefined without a preset: custom paths are drawn from M6,
+ * which re-tokenises them, so here the picture keeps its `radius` (as the video plane does, `scene.ts`).
+ */
+export function clampMask(m: unknown): ShapeGeom | undefined {
+  if (!m || typeof m !== 'object') return undefined;
+  const x = m as { preset?: unknown; adj?: unknown };
+  if (typeof x.preset !== 'string' || !x.preset) return undefined;
+  const out: ShapeGeom = { preset: x.preset.slice(0, 40) };
+  if (Array.isArray(x.adj)) {
+    const adj: [string, number][] = [];
+    for (const a of x.adj.slice(0, 10))
+      if (Array.isArray(a) && typeof a[0] === 'string' && typeof a[1] === 'number' && Number.isFinite(a[1]))
+        adj.push([a[0].slice(0, 16), Math.min(1e7, Math.max(-1e7, a[1]))]);
+    if (adj.length) out.adj = adj;
+  }
+  return out;
+}
+
 export function clampObject(o: unknown): SlideObject | undefined {
   if (!o || typeof o !== 'object') return undefined;
   const x = o as Partial<SlideObject> & { type?: unknown };
@@ -481,6 +502,10 @@ export function clampObject(o: unknown): SlideObject | undefined {
     };
     const crop = clampCrop(i.crop);
     if (crop) out.crop = crop;
+    if (i.flipH === true) out.flipH = true;
+    if (i.flipV === true) out.flipV = true;
+    const mask = clampMask(i.mask);
+    if (mask) out.mask = mask;
     return clampCommon(x, out);
   }
   if (x.type === 'shape') {
@@ -699,6 +724,7 @@ export function clampLook(look: unknown): Look {
     style,
   };
   if (typeof pr.mediaRemaining === 'boolean') props.mediaRemaining = pr.mediaRemaining;
+  if (typeof pr.notes === 'boolean') props.notes = pr.notes;
   const tr = l.transition as Look['transition'] | undefined;
   const transition: Look['transition'] =
     tr && typeof tr === 'object' && (tr.kind === 'cut' || tr.kind === 'crossfade')

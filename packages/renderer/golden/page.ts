@@ -1,19 +1,31 @@
 import {
+  type Box,
   DEFAULT_LYRIC_STYLE,
+  type ImageObject,
   LOOK_LOWER_THIRD,
   LOOK_MAIN,
   LOOK_STAGE,
   LOOK_STREAM,
   type Look,
   type Slide,
+  type SlideObject,
+  type TextObject,
   type TextStyle,
 } from '@ordo/domain';
 import { type PictureTarget, preparePicture } from '../src/picture.ts';
 import { type PropsModel, propBox } from '../src/props.ts';
 import { rasterImage, rasterLowerThird, rasterProps, rasterSlide } from '../src/raster.ts';
-import { type Ctx2D, drawText, fillColor } from '../src/text2d.ts';
+import {
+  type Ctx2D,
+  drawImageFit,
+  drawObject,
+  drawSlide2D,
+  drawText,
+  drawTextObject,
+  fillColor,
+} from '../src/text2d.ts';
 import { type FontFile, FontResolver, LEGACY_FONT_ENV, installFontEnv } from '../src/text/fonts.ts';
-import { RICH_STYLE_KEYS } from '../src/text/rich.ts';
+import { isRichText, RICH_STYLE_KEYS } from '../src/text/rich.ts';
 import { CONTENT_CASES } from './content-cases.ts';
 import { RICH_CASES, invarianceObjects } from './rich-cases.ts';
 
@@ -242,6 +254,109 @@ let quadrantsImage: OffscreenCanvas | undefined;
 const cropImages = (id: string) => (id === 'quadrants' ? (quadrantsImage ??= quadrants()) : undefined);
 
 /**
+ * Pictures with masks and flips (design/27 §3.1 `ImageObject.mask`, `flipH`, `flipV`; M4 item D), with crops,
+ * rotation, radius and opacity: an ellipse, rounded rects (their own corner and the default), mirrors on
+ * either axis and both. The quadrants tell the sides apart, so a mirror shows. Each box is outlined.
+ */
+const shaped: Slide = (() => {
+  const box = (x: number, y: number, rotation = 0) => ({ x, y, w: 560, h: 420, rotation });
+  const boxes = [
+    box(60, 60),
+    box(680, 60),
+    box(1300, 60, 12),
+    box(60, 600, -10),
+    box(680, 600),
+    box(1300, 600),
+  ];
+  const image = (id: string, b: Box, fit: 'contain' | 'cover' | 'stretch', extra: Partial<ImageObject>) =>
+    ({
+      id,
+      type: 'image',
+      box: b,
+      mediaId: 'quadrants',
+      fit,
+      opacity: 1,
+      radius: 0,
+      ...extra,
+    }) as ImageObject;
+  return {
+    id: 'shape',
+    objects: [
+      {
+        id: 'backdrop',
+        type: 'shape',
+        box: { x: 40, y: 40, w: 1840, h: 1000, rotation: 0 },
+        shape: 'rect',
+        fill: { r: 30, g: 90, b: 110, a: 1 },
+        opacity: 1,
+        radius: 0,
+      },
+      // An ellipse, stretched; the radius beside it is the legacy value and is not drawn.
+      image('ellipse', boxes[0]!, 'stretch', { mask: { preset: 'ellipse' }, radius: 200 }),
+      // A rounded rect with its own corner, cropped, cover-fitted and mirrored left to right.
+      image('round', boxes[1]!, 'cover', {
+        mask: { preset: 'roundRect', adj: [['adj', 30_000]] },
+        crop: { l: 0.1, t: 0, r: 0.2, b: 0.1 },
+        flipH: true,
+      }),
+      // Mirrored top to bottom, rotated, contain-fitted with a crop and round corners (no mask).
+      image('upside', boxes[2]!, 'contain', { flipV: true, crop: { l: 0, t: 0.25, r: 0, b: 0 }, radius: 40 }),
+      // Both mirrors, an ellipse, padded on two sides, rotated and translucent.
+      image('both', boxes[3]!, 'stretch', {
+        flipH: true,
+        flipV: true,
+        mask: { preset: 'ellipse' },
+        crop: { l: -0.2, t: 0, r: 0, b: -0.2 },
+        opacity: 0.8,
+      }),
+      // A plain mirror, stretched.
+      image('mirror', boxes[4]!, 'stretch', { flipH: true }),
+      // The default rounded rect, contain-fitted, padded on the left.
+      image('rounddefault', boxes[5]!, 'contain', {
+        mask: { preset: 'roundRect' },
+        crop: { l: -0.25, t: 0, r: 0, b: 0 },
+      }),
+      ...boxes.map((b, i) => ({
+        id: `frame${i}`,
+        type: 'shape' as const,
+        box: b,
+        shape: 'rect' as const,
+        stroke: { width: 4, color: { r: 255, g: 255, b: 255, a: 0.7 } },
+        opacity: 1,
+        radius: 0,
+      })),
+    ],
+  };
+})();
+
+/**
+ * The editor's canvas (`SlideCanvas`): each object a Konva node at its box centre, turned by the box's
+ * rotation, drawing itself in its unrotated local box at scale 1 inside the stage's scaled layer; a picture
+ * through `drawImageFit` with its flips and mask, the others through `drawObject`.
+ */
+function editorDraw(
+  ctx: Ctx2D,
+  slide: Slide,
+  scale: number,
+  images: (id: string) => CanvasImageSource | undefined,
+) {
+  for (const o of slide.objects) {
+    const b = o.box;
+    const local = { x: 0, y: 0, w: b.w, h: b.h, rotation: 0 };
+    ctx.save();
+    ctx.scale(scale, scale);
+    ctx.translate(b.x + b.w / 2, b.y + b.h / 2);
+    ctx.rotate(((b.rotation ?? 0) * Math.PI) / 180);
+    ctx.translate(-b.w / 2, -b.h / 2);
+    if (o.type === 'image') {
+      const img = images(o.mediaId);
+      if (img) drawImageFit(ctx, img, local, 1, o.fit, o.opacity, o.radius, o.crop, undefined, o);
+    } else drawObject(ctx, { ...o, box: local }, 1);
+    ctx.restore();
+  }
+}
+
+/**
  * The output's asset worker's lookup (design/27 §7.1): each unrotated picture prepared once at its device
  * rectangle and copied 1:1; rotated and round-cornered ones from the source. Drawing the crop slide with it
  * must look like drawing it from the source, so its expected PNG is `image-crop.png`.
@@ -257,6 +372,181 @@ const preparedImages = (id: string, target?: PictureTarget) => {
   }
   return ready ?? src;
 };
+
+/**
+ * A slide as the M4 editor leaves an imported church slide (design/27 §15 M4 "Also": editor, thumbnail and
+ * output pixels agree): a background shape, a rounded box with its text (a shape+text pair), an
+ * announcement whose bold red date was retyped in a shrink-to-fit box that keeps PowerPoint's stored fit,
+ * John 3:16-17 with raised verse numbers, verses numbered from 17, a right-to-left Hebrew line, a turned
+ * caption, and a picture cropped, masked and mirrored beside a plainly cropped one (prepared by the outputs).
+ */
+const edited: Slide = (() => {
+  const st = (over: Partial<TextStyle>): TextStyle => ({
+    ...withFont(DEFAULT_LYRIC_STYLE),
+    outline: undefined,
+    shadow: undefined,
+    fontSizePx: 44,
+    align: 'left',
+    valign: 'top',
+    lineHeight: 1.2,
+    padding: 10,
+    lineModel: 'office',
+    ...over,
+  });
+  const box = (x: number, y: number, w: number, h: number, rotation = 0) => ({ x, y, w, h, rotation });
+  const RED = { r: 220, g: 40, b: 40, a: 1 };
+  const GOLD = { r: 255, g: 200, b: 60, a: 1 };
+  const announcement = 'Potluck lunch on Sunday 19 May in the hall\nBring a dish to share';
+  const date = announcement.indexOf('Sunday 19 May');
+  const verses =
+    '16 For God so loved the world, that he gave his one and only Son\n17 For God did not send his Son into the world to judge the world';
+  const second = verses.indexOf('17');
+  const numbered = 'Blessed are the poor in spirit\nBlessed are those who mourn\nBlessed are the gentle';
+  const hebrew = 'בְּרֵאשִׁית בָּרָא אֱלֹהִים\nIn the beginning God created';
+  const text = (
+    id: string,
+    b: Box,
+    body: string,
+    style: TextStyle,
+    rich: Partial<TextObject> = {},
+  ): TextObject => ({
+    id,
+    type: 'text',
+    box: b,
+    text: body,
+    style,
+    opacity: 1,
+    ...rich,
+  });
+  const objects: SlideObject[] = [
+    {
+      id: 'bg',
+      type: 'shape',
+      box: box(0, 0, 1920, 1080),
+      shape: 'rect',
+      fill: { r: 20, g: 32, b: 54, a: 1 },
+      opacity: 1,
+      radius: 0,
+      origin: { src: 'pptx', role: 'bg' },
+    },
+    {
+      id: 'pair-shape',
+      type: 'shape',
+      box: box(80, 60, 820, 200),
+      shape: 'rect',
+      fill: { r: 46, g: 110, b: 160, a: 1 },
+      stroke: { width: 6, color: GOLD },
+      opacity: 1,
+      radius: 40,
+      origin: { src: 'pptx', shapeId: 4, role: 'shape', group: 9 },
+    },
+    text(
+      'pair-text',
+      box(80, 60, 820, 200),
+      'Coffee after the service',
+      st({ fontSizePx: 56, align: 'center', valign: 'middle', fontWeight: 700 }),
+      {
+        runs: [{ start: 0, end: 6, fontStyle: 'italic' }],
+        origin: { src: 'pptx', shapeId: 4, role: 'text', group: 9 },
+      },
+    ),
+    text(
+      'announce',
+      box(80, 300, 820, 220),
+      announcement,
+      st({ fontSizePx: 52, autofit: 'shrink', fitScale: { font: 0.8, spacing: 0.9 } }),
+      { runs: [{ start: date, end: date + 'Sunday 19 May'.length, fontWeight: 700, color: RED }] },
+    ),
+    text('verses', box(80, 560, 820, 300), verses, st({ fontSizePx: 40 }), {
+      runs: [
+        { start: 0, end: 2, baseline: 0.3, sizeScale: 0.6, color: GOLD },
+        { start: second, end: second + 2, baseline: 0.3, sizeScale: 0.6, color: GOLD },
+      ],
+    }),
+    text('numbered', box(960, 560, 880, 240), numbered, st({ fontSizePx: 40 }), {
+      paras: [0, 1, 2].map(() => ({
+        bullet: { auto: 'arabicPeriod', startAt: 17 },
+        indentPx: 70,
+        firstLinePx: -70,
+      })),
+    }),
+    text('hebrew', box(960, 820, 880, 180), hebrew, st({ fontSizePx: 44, align: 'right' }), {
+      paras: [{ rtl: true, align: 'right' }, { align: 'right' }],
+    }),
+    text('turned', box(120, 900, 700, 120, -6), 'Our new hall', st({ fontSizePx: 60, fontWeight: 700 }), {
+      runs: [{ start: 4, end: 7, underline: true, color: GOLD }],
+    }),
+    {
+      id: 'photo',
+      type: 'image',
+      box: box(960, 60, 420, 315),
+      mediaId: 'quadrants',
+      fit: 'stretch',
+      opacity: 1,
+      radius: 0,
+      crop: { l: 0.05, t: 0.1, r: 0.15, b: 0 },
+    },
+    {
+      id: 'masked',
+      type: 'image',
+      box: box(1420, 60, 420, 420, 8),
+      mediaId: 'quadrants',
+      fit: 'cover',
+      opacity: 1,
+      radius: 0,
+      crop: { l: 0.1, t: 0, r: 0.1, b: 0 },
+      mask: { preset: 'ellipse' },
+      flipH: true,
+    },
+  ];
+  return { id: 'edited', objects };
+})();
+
+/**
+ * The editor's canvas as `SlideCanvas` draws a slide: each object a Konva node at its box centre, turned by
+ * the box's rotation, inside the stage's layer scaled by `scale`; a text object through its cached text
+ * raster (`textCanvas`: an offscreen canvas `TEXT_MARGIN` px larger on every side, at the screen's density
+ * for rich text and 1:1 for legacy text, drawn into the node), a picture through `drawImageFit` with its
+ * flips and mask, the others through `drawObject`. The text raster is `textDensity` and `textCanvas` of
+ * apps/operator/src/views/editor/textRaster.ts and SlideCanvas.tsx (devicePixelRatio 1).
+ */
+const TEXT_MARGIN = 80;
+function editorCanvasDraw(
+  ctx: Ctx2D,
+  slide: Slide,
+  scale: number,
+  images: (id: string) => CanvasImageSource | undefined,
+) {
+  for (const o of slide.objects) {
+    const b = o.box;
+    const local = { x: 0, y: 0, w: b.w, h: b.h, rotation: 0 };
+    ctx.save();
+    ctx.scale(scale, scale);
+    ctx.translate(b.x + b.w / 2, b.y + b.h / 2);
+    ctx.rotate(((b.rotation ?? 0) * Math.PI) / 180);
+    ctx.translate(-b.w / 2, -b.h / 2);
+    if (o.type === 'text') {
+      const rich = isRichText(o);
+      const side = (v: number) => Math.abs(v) + 2 * TEXT_MARGIN;
+      const density = rich ? Math.max(0.05, Math.min(scale, 8, 8192 / Math.max(side(b.w), side(b.h)))) : 1;
+      const c = new OffscreenCanvas(
+        Math.max(1, Math.ceil((b.w + 2 * TEXT_MARGIN) * density)),
+        Math.max(1, Math.ceil((b.h + 2 * TEXT_MARGIN) * density)),
+      );
+      const t = c.getContext('2d')!;
+      if (rich) {
+        t.translate((TEXT_MARGIN - b.x) * density, (TEXT_MARGIN - b.y) * density);
+        drawTextObject(t, { ...o, box: { ...b, rotation: 0 } }, density);
+      } else
+        drawTextObject(t, { ...o, box: { x: TEXT_MARGIN, y: TEXT_MARGIN, w: b.w, h: b.h, rotation: 0 } }, 1);
+      ctx.drawImage(c, -TEXT_MARGIN, -TEXT_MARGIN, c.width / density, c.height / density);
+    } else if (o.type === 'image') {
+      const img = images(o.mediaId);
+      if (img) drawImageFit(ctx, img, local, 1, o.fit, o.opacity, o.radius, o.crop, undefined, o);
+    } else drawObject(ctx, { ...o, box: local }, 1);
+    ctx.restore();
+  }
+}
 
 export const LEGACY_CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2D) => void> = {
   'main-authored': (ctx) => {
@@ -323,7 +613,47 @@ export const CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2D) => v
     fillColor(ctx, LOOK_MAIN.clearColor, W, H);
     rasterSlide(ctx, cropped, LOOK_MAIN, SCALE, preparedImages, { isSong: false });
   },
+  // Masks and flips as the thumbnails draw them (the source lookup), as the outputs do (prepared pictures)
+  // and as the editor does: the three must agree (SAME_AS).
+  'image-shape': (ctx) => {
+    fillColor(ctx, LOOK_MAIN.clearColor, W, H);
+    rasterSlide(ctx, shaped, LOOK_MAIN, SCALE, cropImages, { isSong: false });
+  },
+  'image-shape-prepared': (ctx) => {
+    fillColor(ctx, LOOK_MAIN.clearColor, W, H);
+    rasterSlide(ctx, shaped, LOOK_MAIN, SCALE, preparedImages, { isSong: false });
+  },
+  'image-shape-editor': (ctx) => {
+    fillColor(ctx, LOOK_MAIN.clearColor, W, H);
+    editorDraw(ctx, shaped, SCALE, cropImages);
+  },
+  // A slide as the M4 editor leaves it, as the thumbnail worker draws it (`drawSlide2D`, pictures from
+  // their source), as the outputs do (`rasterSlide`, prepared pictures) and as the editor's canvas does:
+  // the three must agree (SAME_AS).
+  'edited-slide': (ctx) => {
+    fillColor(ctx, LOOK_MAIN.clearColor, W, H);
+    drawSlide2D(ctx, edited, { scale: SCALE, look: LOOK_MAIN, images: cropImages, isSong: false });
+  },
+  'edited-slide-output': (ctx) => {
+    fillColor(ctx, LOOK_MAIN.clearColor, W, H);
+    rasterSlide(ctx, edited, LOOK_MAIN, SCALE, preparedImages, { isSong: false });
+  },
+  'edited-slide-editor': (ctx) => {
+    fillColor(ctx, LOOK_MAIN.clearColor, W, H);
+    editorCanvasDraw(ctx, edited, SCALE, cropImages);
+  },
   ...CONTENT_CASES,
+};
+
+/**
+ * Cases compared with another case's PNG rather than one of their own: the same slide drawn by another
+ * drawer, which must look the same within the tolerance.
+ */
+export const SAME_AS: Record<string, string> = {
+  'image-shape-prepared': 'image-shape',
+  'image-shape-editor': 'image-shape',
+  'edited-slide-output': 'edited-slide',
+  'edited-slide-editor': 'edited-slide',
 };
 
 /** The faces the runner injects: each family is also registered directly under its own name. */
@@ -434,6 +764,7 @@ type Golden = {
   size: { width: number; height: number };
   names(): string[];
   legacyNames(): string[];
+  sameAs(): Record<string, string>;
   fonts(files: GoldenFace[]): Promise<number>;
   render(name: string, env?: 'legacy' | 'resolver'): Promise<string>;
   invariance(): Invariance;
@@ -464,6 +795,7 @@ const golden: Golden = {
   size: { width: W, height: H },
   names: () => Object.keys(CASES),
   legacyNames: () => Object.keys(LEGACY_CASES),
+  sameAs: () => SAME_AS,
   async fonts(files) {
     let n = 0;
     const list: FontFile[] = [];

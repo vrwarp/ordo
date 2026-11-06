@@ -38,6 +38,8 @@ POST /import/document  (423 while live, ≤ 1 GiB, zip + .pptx sniff, stored by 
  PUT /presentations/:id or a restored revision with slides pending again ─► queueFollowUp (fallback.ts)
  heavy job 'pptx-reference' ('Show PowerPoint picture': every slide, hidden ones too, into Slide.pptx.refMediaId)          [D]
  light job 'pptx-text-repair' (legacy imported.textBoxes, once)                                                [G]
+ light job 'pptx-reimport' ('Re-import from PowerPoint', reimport.ts): steps 1-5 again (buildNative), merged
+     into the stored presentation, one revision, then 'pptx-lo' as above; 'Make editable' on a legacy page  [M4 F]
  goLive ─► resolvePlaylist: bundled and script-fallback fonts, CJK faces by text scan [E]; > 12 MiB warning [F]
  operator: ImportTab and import card [H]; previewSlice and the adopt check [F]; MediaTab and gated text [G]
 ```
@@ -66,7 +68,8 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 | `renderCopyTask.ts` | Worker side of `pptx-render-copy`: `buildRenderCopy` + spilled media → .pptx               | D      |
 | `art.ts`            | Worker side of `pptx-art`: white/black alpha and bounding-box crop                         | D      |
 | `textRepair.ts`     | `pptx-text-repair` job, `pagesOf`, `readDeckText`, `slideBoxes`, `queueTextRepair`         | G      |
-| `reimport.ts`       | 'Re-import from PowerPoint' (M4, not this wave)                                            | M4     |
+| `reimport.ts`       | 'Re-import from PowerPoint': plan, merge and the `pptx-reimport` job (M4; editor/M4.md)    | M4 F   |
+| `digest.ts`         | `importDigest`, `digestMatches`: "unedited" over the objects with an origin, everywhere    | M4     |
 
 Contracts already in place (the scaffold):
 - `@ordo/domain`: `Slide.pptx` (`SlidePptx`: fileId, index, shown, class, version, digest, pending, notes,
@@ -558,7 +561,7 @@ What wires items A-C together:
 ## Not in this wave
 
 Waiting for M2's second wave to merge: rich text emission (runs and paragraphs) from the converter; bundled
-substitutes in drawers (M2's font resolver). Later in M3 wave 2: flipped pictures (drawn unflipped), ellipse and
-roundRect picture masks (drawn as rects), recoloured pictures (drawn without the recolouring), all noted on
-the slide. Hub budgets measured on a reference NAS. 'Re-import from PowerPoint' (M4). A copy of a hybrid
+substitutes in drawers (M2's font resolver). Later in M3 wave 2: recoloured pictures (drawn without the
+recolouring), noted on the slide; flipped pictures and ellipse and roundRect picture masks are written and
+drawn since M4 item D. Hub budgets measured on a reference NAS. 'Re-import from PowerPoint' (M4). A copy of a hybrid
 slide made before LibreOffice finished keeps no art.

@@ -1094,7 +1094,7 @@ The extensions, in priority order (M4 unless noted):
     - one playing video per slide is enforced: the panel says which object plays.
 15. **Media library hygiene (M3).** MediaTab hides media tagged `pptx` or `document` unless 'Show presentation pictures' is ticked. Deleting a media item that stored presentations reference asks for confirmation and names them, because a missing picture refuses goLive.
 16. **Later (M8):** 'Split reveal into slides'; 'Convert to song' (lyric objects → sections and arrangement, kind song) with a 'Re-flow lyrics' op using the stored but unused `linesPerSlide`; preset adjust handles from the compiled `ahLst`; a bilingual band that also shows the `role:'translation'` box.
-17. **Optional (M4):** a three-way merge per slide on 409 (base = `ed.base`, mine = draft, theirs = the 409 body's `current` once `ApiFailure` keeps it, `packages/client/src/api.ts:35-39`), so two volunteers editing different slides, or a volunteer and the version-2 patch, do not overwrite each other.
+17. **Optional (M4):** a three-way merge per slide on 409 (base = `ed.base`, mine = draft, theirs = the 409 body's `current` once `ApiFailure` keeps it, `packages/client/src/api.ts:35-39`), so two volunteers editing different slides, or a volunteer and the version-2 patch, do not overwrite each other. Built in M4 (item H, `views/editor/merge.ts`): slide and object level, the rules in §15 M4 "As built, item H".
 
 **Locked objects** show 'From PowerPoint (not editable)'. The Transformer allows move and resize (aspect kept for art). Delete and z-order work; text and geometry fields are read-only.
 
@@ -1106,8 +1106,8 @@ The extensions, in priority order (M4 unless noted):
 
 - **Round trip.** There is no PPTX export. The deck stays stored (`fileReferenced`, `library.ts:446-452`). Inheritance is frozen at import: a changed PowerPoint master means a re-import.
 - **Re-import.** 'Re-import from PowerPoint' (a hub job on the stored deck; refused while the presentation is locked):
-  - regenerates only slides whose objects still match `pptx.digest`;
-  - keeps slide ids, sections, arrangements, notes, durations, per-slide backgrounds and the operator's own objects (those without `origin`, kept on top);
+  - regenerates only slides whose objects still match `pptx.digest`. The digest covers the import's objects only (those with an `origin`): the native import, the re-import and the LibreOffice patch all write it that way (`apps/hub/src/pptx/digest.ts`), so an object added in ordo never makes a slide edited, before or after a re-import kept it;
+  - keeps slide ids, sections, arrangements, notes, durations, per-slide backgrounds, the lyric box the volunteer chose (an imported one mapped to the fresh object of the same PowerPoint shape) and the operator's own objects (those without `origin`, kept on top);
   - saves a new revision that History can restore.
 - **No data migration.** Today's picture slides (`imported`) and made-editable slides render exactly as before.
 - **Legacy text repair (M3).** The fix-now text fallback must not show another slide's text, so it is gated:
@@ -1119,7 +1119,7 @@ The extensions, in priority order (M4 unless noted):
   - It skips presentations that are locked (retried after End service) or whose deck is gone. Those keep today's behaviour: no text fallback.
 - **'Re-import as editable'** is opt-in for legacy PowerPoint presentations. Slides are matched with the same page rule as the repair job. Legacy slides are handled by kind:
   - **page slides** (`imported` present): replaced by the native slide; objects the user added on top are kept on top;
-  - **made-editable slides** (no `imported`; in a pptx-sourced presentation; the bottom object is a full-frame ImageObject whose media is tagged 'document'): that page picture and every text object whose text equals an extracted box are replaced by the native slide. Other objects are kept on top. The dialog lists these slides, and the user can keep any of them unchanged;
+  - **made-editable slides** (no `imported`; in a pptx-sourced presentation; the bottom object is a full-frame ImageObject whose media is tagged 'document'): that page picture and every text object whose text equals an extracted box are replaced by the native slide. Other objects are kept on top. A text object at an extracted box's place (overlapping it by 60 % of their union) with another text is the volunteer's correction of that box: the slide is kept as it is and counted as edited (the rebuild would bring the deck's old wording back, and keeping the box would show both), unless the request resets it. The dialog lists these slides, and the user can keep any of them unchanged;
   - **any other slide:** kept as it is.
 
   Slide ids, sections, arrangements, notes (unless empty), durations and per-slide backgrounds are kept. The result is one new revision.
@@ -1373,7 +1373,7 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
 - **As built in wave 2, item B (one fallback rule):** `slideContent()` in every drawer (§5 "As built").
 - **As built in wave 2, item C (hidden slides):** flagged cues that sequential navigation skips and a click shows (§9 "As built").
 - **Wave 2 end to end** (§14.12): a probe deck imported through the route draws on an output at 1080p (WebGPU) and at 4K (Canvas 2D) as the harness's native page draws it (SSIM 1.000 and 0.999 on three slides); the stage, the Lobby and Stream looks (set to show non-song text), cue labels and search show the slide text with its verse numbers; Next and Prev skip the hidden slide and a double-click in the grid shows it. The verse numbers are the text's own digits, raised by runs since M2's second wave: a band whose source is rich text is laid out by the rich engine in the look's style (§6 "Bands, stage and readable text"), so the verse the Lobby and Stream bands are compared with is typed in ordo the same way, its numbers raised.
-- **As built in wave 1** (apps/hub/src/pptx/README.md): everything above except rich text emission and clip extraction (with M2 and M5), `slideContent()` in every drawer (wave 2), hidden-cue navigation (wave 2; hidden slides gave no cue until then), and flips, ellipse/roundRect masks and recolouring of pictures (wave 2; drawn unflipped, as rects and without the recolouring, each noted on the slide). Every read of a stored deck spills only referenced pictures and refuses overlapping zip entries; a LibreOffice run that fails is retried, then the slides it could not draw are marked `Slide.pptx.failed`; a save that brings back pending slides queues the follow-up again.
+- **As built in wave 1** (apps/hub/src/pptx/README.md): everything above except rich text emission and clip extraction (with M2 and M5), `slideContent()` in every drawer (wave 2), hidden-cue navigation (wave 2; hidden slides gave no cue until then), and flips, ellipse/roundRect masks and recolouring of pictures (wave 2; drawn unflipped, as rects and without the recolouring, each noted on the slide; flips and those masks are written and drawn since M4 item D). Every read of a stored deck spills only referenced pictures and refuses overlapping zip entries; a LibreOffice run that fails is retried, then the slides it could not draw are marked `Slide.pptx.failed`; a save that brings back pending slides queues the follow-up again.
 
 **Files.**
 - `apps/hub/src/pptx/*`, `imports.ts`, `routes.ts`, `pool.ts`, `cpu.worker.ts`, `jobs.ts`, `media/service.ts`, `media/ffmpeg.ts`, `library.ts`, `db.ts`, `fonts/bundled.ts`, `fonts/google.ts`; `Dockerfile`.
@@ -1426,6 +1426,154 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
 - `applyTheme` keeps structural run formatting.
 - Stage notes region and stage direction.
 - Optional: three-way merge on 409.
+- **As built, the scaffold** (`apps/operator/src/views/editor/M4.md`, which assigns the eight items): the ops
+  as typed stubs in `views/editor/ops/` (one module per item), applied through `actions.ts`; the multi-object
+  selection in the editor store; `FormatBar`, `ParagraphStrip`, `CropControl` and the canvas guides mounted;
+  `PropsRule.notes`; `ApiFailure.details`; the re-import route and job stubs; `e2e/editorhelpers.ts`. The
+  converter now writes `ObjectOrigin` (shape id, placeholder, role, group: a flattened group or a shape with
+  its text), which M3 had left out and groups, 'Apply to similar' and the re-import need.
+- **As built, item A (text ops):** `ops/text.ts` through `actions.ts`, one undo step each: `formatRange`
+  (splits the runs at the range ends and normalises them: sorted, non-overlapping, equal neighbours merged,
+  empty runs dropped; a change past 2,000 runs is refused), `resizeRange`, `selectionStyle` (fields
+  resolved as the engine resolves them), `setParas`, `selectionParas`, `refitText` (the only op that clears
+  `fitScale`) and `themedRuns` (structural run fields and `paras` kept; `VISUAL_RUN_FIELDS` and
+  `style.fitScale` dropped unless the slide overrides them). The theme override paths for runs are
+  `runs.<field>` per visual field and `runs` for all of them, marked by `formatSelection` and
+  `resizeSelection` on a themed lyric object (`runOverrides`, `textOnSlide`). The domain `editText` needed
+  no fix: it keeps `fitScale`, and the engine fits smaller only when the edited text overflows. Tests:
+  `apps/operator/test/textOps.test.ts` (the fit rule through `layoutRich` with a fixed-width measurer),
+  `textOps.fuzz.test.ts` (10,000 random sequences of `editText`, `formatRange`, `resizeRange` and
+  `setParas`), `e2e/editor-text.spec.ts`.
+- **As built, item B (groups and locked objects):** `ops/group.ts` (the group ops, `clickSelection`, the group
+  box and the member transform: centres by the group's affine, sizes by its scale along each member's axes,
+  rotation turned with the group; a locked member keeps its rotation and locked art its aspect) through
+  `actions.ts`, one undo step each; the canvas's Transformer spans every selected node, a drag of any member
+  moves the selection (the group box snaps as one), a long press under a finger selects one member; lock
+  badges; `GroupPanel.tsx` (the 'From PowerPoint (not editable)' note, the group note with 'Select one',
+  'Select the group' and 'Ungroup', the group box editor with 'Turn by'); Delete, Ctrl+D, arrows, z-order
+  and Ungroup on the selection. Tests: `apps/operator/test/groupOps.test.ts` (properties and 200-step undo),
+  `e2e/editor-group.spec.ts`, `e2e/ipad/group.spec.ts`.
+- **As built, item C (format UI):** `FormatBar.tsx` (the 'Text format' toolbar over the text field: font,
+  Size − / +, Bold, Italic, Underline, Strikethrough, Superscript, Subscript, Caps, Clear formatting, the
+  deck's colours first, a highlight; letter spacing, outline, shadow and language behind 'More'),
+  `ParagraphStrip.tsx` (align, list with bullets or numbers and 'Start at', level, indent, spacing, line
+  spacing, direction), `TextStyleEditor`'s `box` options (four insets, wrap, 'Shrink text to fit' with
+  'Re-fit text', the line model, direction, 'Fallback font'), `CanvasGuides.tsx` with `textFit.ts` (the
+  dashed red edge of a box whose text does not fit, laid out as the drawers lay it out, the panel's note,
+  and the area of a deck that is not 16:9) and `formatControls.tsx` (the shared toggles, radio groups and
+  the text field's refocusing). Each component is a store-bound wrapper and a props-only view. Tests:
+  `apps/operator/test/formatUi.test.ts`, `e2e/editor-format.spec.ts`.
+- **As built, item D (pictures):** `ImageObject.flipH`, `flipV` and `mask` (a `ShapeGeom`) in the schema,
+  `clampObject` (`clampMask`: a preset and 10 adjust pairs) and `drawImageFit` (mirrored about the box's
+  centre inside the rotation, then cut by an ellipse or a rounded-rect clip, `pictureCut` reading masks as
+  the video plane does; another preset is the box until M6). A masked or flipped picture has no prepared
+  target, so the outputs draw it from its source. The converter writes `flipH` (a vertical flip is a
+  horizontal one turned half a turn) and ellipse/roundRect masks beside the legacy `radius`, and no longer
+  notes them. Goldens `image-shape` (the thumbnails' path), `image-shape-prepared` (the outputs' lookup)
+  and `image-shape-editor` (the editor's Konva node transform) compare with one PNG (`SAME_AS`). Ops
+  `setCrop`, `setMask`, `setFlip`, `replacePicture` (with `coverCrop`); the Object panel's crop fields,
+  'Keep proportions', 'Crop on the slide' (handles that move and scale the picture at its aspect behind the
+  fixed box, `cropGeometry.ts`), mask and flips (design/15 "Editor"); `e2e/editor-pictures.spec.ts`.
+- **As built, item E (slide ops):** `ops/slides.ts` through `actions.ts`, one undo step each: `findText`
+  and `findReplace` (case folded unless asked, whole words by Unicode letters, marks and digits, a space
+  finding a no-break space; each match replaced with `replaceText`, the rule `editText` applies to a replaced
+  selection, so it takes the style of the first character it replaces; locked objects and a result past the
+  text bound left alone), `hideSlide`, `replaceBackground` and `replaceBackgroundOf` (a slide's background
+  is its bottom unlocked `role: 'bg'` picture, drawn over any `backgroundMediaId`, else its own, else the
+  presentation's; scope 'all' rewrites every use of that picture, `role: 'bg'` pictures through
+  `replacePicture`; a slide drawing the new picture through `backgroundMediaId` loses the bottom `role:
+  'bg'` shapes that would hide it; a video replaces `role: 'bg'` pictures as the `backgroundMediaId`),
+  `similarObjects` (the same `origin.ph`, else `role: 'deco'` and its `shapeId`: a slide's own boxes are
+  never matched by id, PowerPoint numbers shapes per slide), `applyStyleToSimilar` (the box style without
+  `fitScale`, which a target keeps when only colour, fill, alignment and the like change; paragraph styles
+  by level, each paragraph keeping `soft`, `hidden` and its own numbering start), `newSlideLike`,
+  `useAsBackground` (an unrotated unlocked picture covering the slide area; the `role: 'bg'` objects below
+  it removed), `clearSlideBackground`. UI: `FindReplaceDialog.tsx` ('Find…', Ctrl+F), `BackgroundReplace.tsx`
+  (the Slide panel's background with its scope, the Presentation panel's 'Replace on all slides…'),
+  `ObjectSlideOps.tsx` ('Apply to similar boxes…', 'Use as background'), the slide list's dimmed hidden
+  slides, 'New slide like this' and 'Hidden'. Tests: `apps/operator/test/slideOps.test.ts` (find and replace
+  property: text, run invariants and every character's style outside the matches; no distortion across
+  aspects through item D's `replacePicture`), `e2e/editor-slides.spec.ts`.
+- **As built, item F (PowerPoint card and re-import):** `apps/hub/src/pptx/reimport.ts` (`planReimport`,
+  `mergeReimport` pure; the light `pptx-reimport` job). The job runs the native job's steps 1-5 without the
+  save (`nativeJob.ts` `buildNative`, only the deck slides a one-slide request needs: `NativeJobEnv.only`)
+  and merges into the presentation as it is when the conversion ends, saving one revision with its
+  `pptx-lo` (earlier follow-ups' art, page and metafile pictures of the same slide and deck elements reused,
+  `earlierWork`) and the clips' media jobs. A re-import of some slides budgets them with the slides it keeps
+  (`NativeJobEnv.reserve`, `keptBytes`), so they go compact where the merged presentation would pass §3.4's
+  budget, and the job logs a warning when it is still over. Rules beyond §11: "unedited" means `digest`
+  matches the objects with an `origin`, or (a digest stored before that rule) all the objects (objects
+  added in ordo are kept on top and are not an edit); a slide the
+  same converter would write again with its LibreOffice work done is left alone, so a re-import that changes
+  nothing saves nothing; slide-level settings (timing, transition, hidden, sound, background, the reference
+  picture) stay, on a legacy slide only where the operator set them; a legacy page whose deck slide is a
+  picture again stays; a made-editable slide is placed by its picture's name ('<title> – N', the picture
+  import's page) else by the deck slide whose text its boxes repeat (whitespace folded); a legacy deck
+  converted whole gets its one background back as the presentation's; the presentation becomes a native
+  import (`source.native` counted over its slides, the fresh `source.log` on a whole re-import). The job
+  defers while live and while a `pptx-lo` of the presentation is queued or running. 'Make editable' on a
+  legacy page with a stored deck is that job (`imports.ts` `makeEditableNative`, 202). Editors take the
+  revision over (`PPTX_JOB_SAVERS`). Operator: `PptxSlideCard.tsx` (edited state, fonts to upload, 'Show the
+  PowerPoint picture on the screens' with the digest warning, 'Reset slide from PowerPoint'),
+  `PptxReport.tsx` (the import report and the re-import dialog), `pptxJobs.ts` (follow and take over).
+  Tests: `apps/hub/test/pptx-reimport.test.ts`, `apps/operator/test/pptxCard.test.ts`,
+  `e2e/editor-reimport.spec.ts`.
+- **As built, item G (stage):** the notes region (`apps/stage/src/model.ts` `notesRegion`, `defaultNotes`,
+  `clearOf`, `cutNotes`, `notesText`; `StageView.notes`; `App.tsx` `NotesRegion`): `style['notes']` or a box
+  under the next-slide band, cut clear of the current lyrics, the notes cut to 4,000 characters and to the
+  box, never shrunk. Stage direction: the current, next, notes and message text drawn paragraph by
+  paragraph with `dir="auto"` and `unicode-bidi: plaintext` (`Paragraphs`, `stageParagraphs`), readable
+  text with its automatic numbers. The look editor's 'Stage screen' card (`StageNotesOptions.tsx`): 'Notes',
+  the box and the text style, the default shown until edited, an overlap banner. Tests:
+  `apps/stage/src/model.test.ts` (a property: the notes never overlap the current lyrics), `App.test.ts`,
+  `apps/operator/test/stageNotes.test.ts` (the editor's defaults are the stage's), `e2e/editor-stage.spec.ts`
+  (8907). design/16 "Direction" and "Notes region", design/15 "Settings".
+- **As built, item H (three-way merge on 409):** `views/editor/merge.ts` `mergeThreeWay` (and `prepareMerge`,
+  which remembers what theirs changed for several drafts). JSON content is compared (key order and keys
+  holding `undefined` do not count). A value only one side changed takes that side; both changed differently
+  is a conflict. Presentation fields per field (`meta` and `source` inside, `meta.tags` as a set); sections
+  by id (name, short name, chords); slides by id, whole when one side changed them, else per field (`pptx`
+  inside, `overrides` as a set) and object by object, objects whole; a slide or object deleted on one side
+  goes unless the other changed it, a slide one side put in a section the other deleted is a conflict;
+  orders (sections, each section's slides, each slide's objects, arrangements) follow the side that
+  reordered them, both reordering differently is a conflict, additions follow their neighbour (mine after
+  theirs at one place); arrangements per field, their sections by diff3 (two sections added at once both
+  stay), entries of deleted sections dropped; a lyric box that went is cleared; duplicate ids or a result
+  the schema refuses are not merged. `editorStore.ts` `save()`: on 409 `adoptJobSaves` first (unchanged),
+  else the 409 body's `current` (`theirsOf`) is merged with the draft, the draft becomes the merge on theirs'
+  revision, its undo and redo steps move onto theirs too (`History.rebase`; a step that cannot move ends
+  the stack there) and it saves again, up to three merges per save ('Saved together with the changes someone
+  else saved meanwhile.'); a draft theirs already holds is not saved again. Conflicts open
+  `ConflictDialog.tsx` with what overlaps by slide number ('Slide 2: both changed the text box
+  “Potluck on Sunday 12 May”'), Cancel focused, 'Reload theirs (discard mine)' and 'Save mine anyway'
+  (which never merges). Tests: `apps/operator/test/merge.test.ts` (rules and properties: a side that changed
+  nothing takes the other whole, edits to different slides always merge, the merge is the same whichever
+  side is mine), `mergeSave.test.ts` (the save flow against a fake hub, the dialog);
+  `e2e/editor-merge.spec.ts` (two editor pages, port 8908).
+- **As built, the integration** (`m4/integrate`): the eight items merged in the order A-H, the scaffold's
+  stub expectations replaced by the items' own tests (`apps/operator/test/m4-scaffold.test.ts` keeps the
+  wiring and the ops' identity when they change nothing), item E's re-crop tests run on item D's
+  `replacePicture`, the 200-step undo test covers typing, formats, sizes, paragraph styles and group
+  transforms, and the specs follow item B's fieldset sections. `window.__ordo.editor` (the scaffold's
+  `inspect.ts`) is added to the diagnostics object rather than spread into a new one, which had frozen
+  the `persistence` and `capabilities` getters (the iPad storage spec caught it). The golden case `edited-slide` (a slide as
+  the editor leaves an imported church slide: a shape+text pair, a retyped bold red date in a box that keeps
+  its stored fit, raised verse numbers, verses numbered from 17, a right-to-left Hebrew line, a turned
+  caption, a cropped picture and a cropped, masked and mirrored one) is drawn by the thumbnail worker's
+  `drawSlide2D`, by the outputs' `rasterSlide` with prepared pictures (`edited-slide-output`) and by the
+  editor canvas's text rasters and node transforms (`edited-slide-editor`), all against one PNG
+  (`SAME_AS`). Every exit item below is a Playwright spec ending in `saveAndReload`.
+- **As built, the review round:** the editor's shortcuts follow the focus (`editorKeys.ts`: a dialog keeps
+  every key, a button or radio its Enter, arrows and Delete, the canvas gets them all), and Ctrl+Z / Ctrl+Y
+  in the text field are the editor's undo and redo (`e2e/editor-keys.spec.ts`, port 8909); taking a job's
+  revision over moves the undo steps with the draft, a re-import's through the three-way merge; Find and
+  replace changes only the part of each match that differs (typing's rule) and marks matches the screens
+  do not show; the picture pickers of Replace and the background replace wait for a picture's size (and
+  `replacePicture` covers instead of stretching without one); 'Use as background' needs a picture covering
+  the whole frame; the slide ops stay within the schema's bounds. In the hub, "unedited" is the digest of
+  the objects with an origin everywhere (`digest.ts`), a re-import keeps the chosen lyric box, keeps a
+  made-editable slide whose box the volunteer corrected, and budgets the slides it builds with those it
+  keeps.
 
 **Files.** `apps/operator/src/views/editor/ops.ts`, `ObjectPanel.tsx`, `SlidePanel.tsx`, `SlidesPanel.tsx`, `PresentationPanel.tsx`, `SlideCanvas.tsx`, `EditorView.tsx`, `editorStore.ts`; `apps/operator/src/components/TextStyleEditor.tsx`, new `FormatBar.tsx`, `ParagraphStrip.tsx`, `CropControl.tsx`; `apps/hub/src/pptx/reimport.ts`, `routes.ts`; `apps/stage/src/model.ts`, `view.ts`; `packages/domain/src/schemas.ts` (`PropsRule.notes`); `packages/client/src/api.ts`.
 

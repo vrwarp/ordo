@@ -4,6 +4,7 @@ import {
   type Look,
   nearColor,
   newId,
+  type PropBox,
   parseLyrics,
   rgbaCss,
   type SlideRule,
@@ -24,6 +25,7 @@ import {
 import { TextStyleEditor } from '../../components/TextStyleEditor.tsx';
 import { useFontGeneration } from '../../services/fonts.ts';
 import { BackgroundPicker } from '../editor/BackgroundPicker.tsx';
+import { notesOf, StageNotesOptions } from './StageNotesOptions.tsx';
 import { SaveBar, useSettingsDraft } from './useSettingsDraft.tsx';
 
 const SAMPLE = songFromParsed(
@@ -55,6 +57,7 @@ function LookPreview({ look }: { look: Look }) {
     const s0 = SAMPLE.sections[0]!.slides[0]!;
     const s1 = SAMPLE.sections[1]!.slides[0]!;
     drawSlide2D(ctx, s0, { scale: c.width / 1920, look, isSong: true, nextSlide: s1 });
+    if (look.layers.props.notes) drawNotesSample(ctx, notesOf(look), c.width / 1920);
   }, [look, fontGen]);
   return (
     <canvas
@@ -64,6 +67,24 @@ function LookPreview({ look }: { look: Look }) {
       style={{ width: 480, maxWidth: '100%', borderRadius: 6, border: '1px solid var(--line)' }}
     />
   );
+}
+
+/** Where a stage look's notes go (its notes box, a sample line in their style), on the preview. */
+function drawNotesSample(ctx: CanvasRenderingContext2D, n: PropBox, k: number) {
+  const { x, y, w, h } = n.box;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x * k, y * k, w * k, h * k);
+  ctx.clip();
+  if (n.fill) {
+    ctx.fillStyle = rgbaCss(n.fill.color);
+    ctx.fillRect(x * k, y * k, w * k, h * k);
+  }
+  ctx.fillStyle = rgbaCss(n.color);
+  ctx.font = `${n.fontStyle} ${n.fontWeight} ${n.fontSizePx * k}px "${n.fontFamily}", Inter, sans-serif`;
+  ctx.textBaseline = 'top';
+  ctx.fillText('Notes for the preacher', (x + n.padding) * k, (y + n.padding) * k);
+  ctx.restore();
 }
 
 /** Data-driven look editor (prd/04): layer rules, slide mode, props, clear/key colour, transition. */
@@ -264,6 +285,9 @@ export function LooksPage() {
               ))}
             </div>
           </div>
+          {(look.kind === 'stage' || look.layers.props.notes) && (
+            <StageNotesOptions look={look} onChange={(props) => setLayers({ props })} />
+          )}
           <div className="card col">
             <h4>Clear colour and transition</h4>
             <ColorField

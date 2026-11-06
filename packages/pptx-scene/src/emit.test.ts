@@ -29,6 +29,7 @@ import {
   solid,
   solidBg,
   sp,
+  xfrm,
 } from './test-util.ts';
 
 const IN = 914_400;
@@ -655,6 +656,72 @@ describe('pictures', () => {
     expect(stroke).not.toHaveProperty('fill');
   });
 
+  it('masks ellipse and roundRect pictures (M4), with the legacy radius beside the mask', () => {
+    const round = pic({ id: 3, x: 3 * IN, y: 0, cx: 2 * IN, cy: IN, rId: 'rId2', geom: 'roundRect' }).replace(
+      '<a:avLst/>',
+      '<a:avLst><a:gd name="adj" fmla="val 30000"/></a:avLst>',
+    );
+    const { objects, notes } = emitOne({
+      slides: [
+        {
+          rels,
+          shapes:
+            pic({ id: 2, x: 0, y: 0, cx: 2 * IN, cy: IN, rId: 'rId2', geom: 'ellipse' }) +
+            round +
+            pic({ id: 4, x: 0, y: 2 * IN, cx: IN, cy: IN, rId: 'rId2', geom: 'roundRect' }) +
+            pic({ id: 5, x: 3 * IN, y: 2 * IN, cx: IN, cy: IN, rId: 'rId2' }),
+        },
+      ],
+    });
+    const [ell, rr, dflt, plain] = content(objects) as ImageObject[];
+    expect(ell!.mask).toEqual({ preset: 'ellipse' });
+    expect(ell!.radius).toBeCloseTo(PX / 2);
+    expect(rr!.mask).toEqual({ preset: 'roundRect', adj: [['adj', 30_000]] });
+    expect(rr!.radius).toBeCloseTo(PX * 0.3);
+    expect(dflt!.mask).toEqual({ preset: 'roundRect' });
+    expect(plain).not.toHaveProperty('mask');
+    expect(notes.join('\n')).not.toMatch(/clipped to/);
+  });
+
+  it('writes flipped pictures with flipH (a vertical flip turned half a turn), crop unchanged', () => {
+    const flipped = (id: number, x: number, o: { flipH?: boolean; flipV?: boolean }) =>
+      pic({ id, x, y: 0, cx: 2 * IN, cy: IN, rId: 'rId2', srcRect: 'l="25000"' }).replace(
+        /<a:xfrm>.*?<\/a:xfrm>/,
+        xfrm(x, 0, 2 * IN, IN, o),
+      );
+    const { objects, notes } = emitOne({
+      slides: [
+        {
+          rels,
+          shapes:
+            flipped(2, 0, { flipH: true }) + flipped(3, 3 * IN, { flipV: true }) + flipped(4, 6 * IN, {}),
+        },
+      ],
+    });
+    const [h, v, none] = content(objects) as ImageObject[];
+    expect(h).toMatchObject({ flipH: true, box: { x: 0, y: 0, w: 2 * PX, h: PX, rotation: 0 } });
+    expect(h!.crop).toEqual({ l: 0.25, t: 0, r: 0, b: 0 });
+    expect(v!.flipH).toBe(true);
+    expect(v!.box.rotation).toBeCloseTo(180);
+    expect(v!.box).toMatchObject({ x: 3 * PX, y: 0 });
+    expect(none).not.toHaveProperty('flipH');
+    expect(notes.join('\n')).not.toMatch(/flipped/);
+  });
+
+  it('cuts a mirrored picture reaching past the render bounds on the side its box shows', () => {
+    // 20 inches wide from x = 0: the box is cut on the right, which shows the source's left.
+    const wide = pic({ id: 2, x: 0, y: 0, cx: 40 * IN, cy: IN, rId: 'rId2' }).replace(
+      /<a:xfrm>.*?<\/a:xfrm>/,
+      xfrm(0, 0, 40 * IN, IN, { flipH: true }),
+    );
+    const { objects } = emitOne({ slides: [{ rels, shapes: wide }] });
+    const [img] = content(objects) as ImageObject[];
+    expect(img!.flipH).toBe(true);
+    expect(img!.box.x + img!.box.w).toBeCloseTo(2 * 1920);
+    expect(img!.crop!.r).toBeCloseTo(0);
+    expect(img!.crop!.l).toBeCloseTo(1 - (2 * 1920) / (40 * PX));
+  });
+
   it('draws a picture-filled shape as an image', () => {
     const blipFill = '<a:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>';
     const { objects } = emitOne({
@@ -1118,4 +1185,76 @@ it('reports point sizes at 2 px per point on both standard sizes', () => {
     expect(close(textIn(objects)[0]!.style.fontSizePx, 72)).toBe(true);
     expect(PT).toBe(12_700);
   }
+});
+
+describe('origin (design/27 §3.1 ObjectOrigin; M4 scaffold)', () => {
+  it('marks every object with its shape, placeholder, role and group; a shape and its text are a pair', () => {
+    const { objects } = emitOne({
+      slides: [
+        {
+          bg: solidBg('FFFFFF'),
+          rels: [imageRel('rId2', 'photo.png')],
+          shapes:
+            sp({
+              id: 2,
+              ph: 'type="title"',
+              x: IN,
+              y: 0,
+              cx: 8 * IN,
+              cy: IN,
+              txBody: body(para(run('Welcome'))),
+            }) +
+            sp({
+              id: 3,
+              geom: 'roundRect',
+              x: IN,
+              y: 2 * IN,
+              cx: 3 * IN,
+              cy: IN,
+              fill: solid('1F4E79'),
+              txBody: body(para(run('Coffee in the hall'))),
+            }) +
+            grpSp(
+              { id: 10, x: 5 * IN, y: 2 * IN, cx: 2 * IN, cy: IN },
+              sp({ id: 4, x: 5 * IN, y: 2 * IN, cx: IN, cy: IN, fill: solid('FF0000') }) +
+                sp({ id: 5, x: 6 * IN, y: 2 * IN, cx: IN, cy: IN, fill: solid('00FF00') }),
+            ) +
+            pic({ id: 6, x: 8 * IN, y: 2 * IN, cx: 2 * IN, cy: IN, rId: 'rId2' }),
+        },
+      ],
+    });
+    const of = (o: SlideObject) => o.origin;
+    expect(of(objects[0]!)).toEqual({ src: 'pptx', role: 'bg' });
+    const title = objects.find((o) => o.type === 'text' && o.text === 'Welcome')!;
+    expect(of(title)).toEqual({ src: 'pptx', role: 'title', shapeId: 2, ph: 'title' });
+    const pairText = objects.find((o) => o.type === 'text' && o.text === 'Coffee in the hall')!;
+    const pairShape = objects.find((o) => o.type === 'shape' && o.origin?.shapeId === 3)!;
+    expect(of(pairText)).toMatchObject({ role: 'text', shapeId: 3 });
+    expect(of(pairShape)).toMatchObject({ role: 'shape', shapeId: 3 });
+    expect(of(pairText)!.group).toBeDefined();
+    expect(of(pairShape)!.group).toBe(of(pairText)!.group);
+    const red = objects.find((o) => o.origin?.shapeId === 4)!;
+    const green = objects.find((o) => o.origin?.shapeId === 5)!;
+    expect(of(red)!.group).toBeDefined();
+    expect(of(green)!.group).toBe(of(red)!.group);
+    expect(of(red)!.group).not.toBe(of(pairText)!.group);
+    const img = objects.find((o) => o.type === 'image')!;
+    expect(of(img)).toEqual({ src: 'pptx', role: 'picture', shapeId: 6 });
+  });
+
+  it('keeps deck strings out of the placeholder key and writes nothing with the M1 emission', () => {
+    const hostile = sp({
+      id: 2,
+      ph: 'type="body&lt;script&gt;" idx="1x2"',
+      x: IN,
+      y: IN,
+      cx: 4 * IN,
+      cy: IN,
+      txBody: body(para(run('Body'))),
+    });
+    const { objects } = emitOne({ slides: [{ shapes: hostile }] });
+    expect(textIn(objects)[0]!.origin).toMatchObject({ role: 'body', ph: 'bodyscript:12' });
+    const legacy = emitOne({ slides: [{ shapes: hostile }] }, LEGACY);
+    expect(legacy.objects.every((o) => o.origin === undefined)).toBe(true);
+  });
 });

@@ -25,6 +25,7 @@ import {
   sofficeCommand,
   toPage,
 } from '../src/pptx/fallback.ts';
+import { digestMatches, importDigest } from '../src/pptx/digest.ts';
 import { writeZip } from '../src/pptx/renderCopyTask.ts';
 import type { PptxLoSlide, RasterImage } from '../src/pptx/shared.ts';
 
@@ -269,7 +270,14 @@ describe('version 2 patch', () => {
   });
 
   function version1(): { slide: Slide; lo: PptxLoSlide } {
-    const objects = [shape('bg'), caption('title'), shape('rectA'), caption('captionA'), shape('rectB', 50)];
+    // Every object the native import writes carries an origin (`nativeJob.ts` `imported`).
+    const objects = [
+      shape('bg'),
+      caption('title'),
+      shape('rectA'),
+      caption('captionA'),
+      shape('rectB', 50),
+    ].map((o): SlideObject => ({ ...o, origin: { src: 'pptx' } }));
     const slide: Slide = {
       id: 's1',
       objects,
@@ -312,9 +320,30 @@ describe('version 2 patch', () => {
     expect(next.pptx!.digest).toBe(digestOf(next.objects));
   });
 
+  it('an object added in ordo before LibreOffice ran does not make the slide edited', () => {
+    const { slide, lo } = version1();
+    const withMine: Slide = { ...slide, objects: [...slide.objects, shape('mine', 300)] };
+    const next = patchSlide(
+      withMine,
+      lo,
+      { art: { mediaId: 'art1', box: { x: 1, y: 1, w: 9, h: 9 } } },
+      'deck',
+    );
+    // The art replaces its range in place, as on an unedited slide; the volunteer's shape stays.
+    expect(next.objects.map((o) => o.id)).toEqual(['bg', 'title', next.objects[2]!.id, 'rectB', 'mine']);
+    expect(next.pptx!.notes).toBeUndefined();
+    // The digest covers the import's objects only (`digest.ts`): still unedited, for the next re-import too.
+    expect(next.pptx!.digest).toBe(importDigest(next.objects));
+    expect(digestMatches(next.objects, next.pptx!.digest)).toBe(true);
+  });
+
   it('adds the art on top of an edited slide, keeping every object, with a note', () => {
     const { slide, lo } = version1();
-    const edited: Slide = { ...slide, objects: [...slide.objects, shape('mine', 300)] };
+    // The title's text changed (an imported object), and an object added in ordo.
+    const objects = slide.objects.map((o) =>
+      o.id === 'title' ? { ...o, text: 'Giving' } : o,
+    ) as SlideObject[];
+    const edited: Slide = { ...slide, objects: [...objects, shape('mine', 300)] };
     const next = patchSlide(
       edited,
       lo,

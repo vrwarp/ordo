@@ -167,7 +167,11 @@ pixel differs when any channel is more than 40 apart, and a case fails when more
 of its pixels differ. The legacy cases are drawn a second time with the font resolver
 installed (design/27 §10) against the same images, and the line-break invariance check
 draws every rich case at 320, 960, 1920 and 3840 px wide and fails unless the drawn strings,
-logical positions and fonts are identical.
+logical positions and fonts are identical. A case can be compared with another case's PNG (`SAME_AS` in `golden/page.ts`):
+the same slide drawn by another drawer must look the same. `image-shape` (pictures masked and mirrored)
+and `edited-slide` (a slide as the M4 editor leaves an imported church slide, rich text and pictures) are
+drawn as the thumbnail worker draws them, as the outputs do with prepared pictures (`-prepared`,
+`-output`) and as the editor's canvas does (`-editor`: Konva node transforms and the cached text rasters).
 
 Text uses faces injected from the system so the result does not depend on installed fonts:
 DejaVu Sans ('Golden': Latin, Hebrew, Arabic), FreeSerif ('Golden Serif': Tamil) and

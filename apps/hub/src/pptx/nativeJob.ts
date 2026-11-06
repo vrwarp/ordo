@@ -42,7 +42,9 @@
  */
 import { open, rm, stat } from 'node:fs/promises';
 import {
+  type Box,
   compactSlideBytes,
+  IMPORT_RESERVE_BYTES,
   type ImageObject,
   newId,
   planImportSizes,
@@ -78,6 +80,7 @@ import { baseName } from '../media/service.ts';
 import { type CpuPool, cpuPool, transferables, WorkerStartError } from '../pool.ts';
 import { type ClipFile, ClipImport, spillClips } from './clips.ts';
 import { type DeckXml, readDeckXml, spillDeckParts } from './deckParts.ts';
+import { importDigest } from './digest.ts';
 import { displayNeeds, PictureBudget, type PictureItem, storePictures } from './pictures.ts';
 import { ImportLog, importResult, logSafe, missingFonts } from './report.ts';
 import {
@@ -102,7 +105,86 @@ import {
 export type NativeJobEnv = {
   pool?: Pick<CpuPool, 'run'>;
   limits?: { batchSlides?: number; importPoolMs?: number };
+  /**
+   * 'Re-import from PowerPoint' (`buildNative`, `reimport.ts`): the deck slides (`SlideRef.index`) to build,
+   * decided once the scan has listed the deck; undefined: every slide. Batches without one are not
+   * converted, and only those slides' pictures and clips are stored.
+   */
+  only?: (listed: readonly SlideRef[]) => ReadonlySet<number> | undefined;
+  /**
+   * A re-import: the bytes of the stored slides it keeps as they are, which share the presentation's size
+   * budget with the slides it builds (§3.4): added to `planImportSizes`' reserve, so the new slides go compact
+   * where the merged presentation would pass it.
+   */
+  reserve?: number;
 };
+
+/**
+ * Steps 1-5 of the job without the save (`buildNative`): version 1 as the job would save it, for the
+ * re-import to merge into the stored presentation instead (`reimport.ts`, design/27 §11).
+ */
+export type NativeBuild = {
+  /**
+   * The presentation as version 1 is saved (sanitized, parsed, `Slide.pptx.digest` set, `source.native`,
+   * `source.log`), under `PptxNativeProgress.presentationId`; only the slides `NativeJobEnv.only` asked for.
+   */
+  p: Presentation;
+  /** The LibreOffice follow-up of its slides that wait (`pptx.pending`), by the built slides' ids. */
+  lo: PptxLoSlide[];
+  /** Every slide the deck lists, in order (also those `only` left out). */
+  listed: SlideRef[];
+  /**
+   * The text of each converted slide's text bodies (its text objects, then the text baked into its art), by
+   * `SlideRef.index`, read before any slide became a picture: what a legacy page's text boxes were made of.
+   */
+  texts: Map<number, string[]>;
+  /**
+   * Where those text bodies are, in the 1920x1080 contain frame a legacy page's text boxes used (what the old
+   * 'Make editable' laid its text boxes at): a re-import tells a made-editable box the volunteer corrected
+   * from one added in ordo by its place.
+   */
+  textBoxes: Map<number, { text: string; box: Box }[]>;
+  /** The clips the built slides play (their media jobs are queued with the save) and every clip stored. */
+  clipIds: Set<string>;
+  clipsCreated: string[];
+  compact: number;
+  missingFonts: string[];
+};
+
+/**
+ * Run steps 1-5 of the native import on `ctx.payload`'s stored deck and return what version 1 would be,
+ * saving nothing (the re-import, `reimport.ts`). `ctx.payload.done.presentationId` names the presentation;
+ * pictures and clips are stored as the job stores them (resume pairs in `done`, through `setPayload`). A clip
+ * stored for a run that then fails gets its media job, as the job's does.
+ */
+export async function buildNative(
+  deps: PptxDeps,
+  ctx: JobCtx<PptxNativePayload>,
+  env: NativeJobEnv = {},
+): Promise<NativeBuild> {
+  const limits = {
+    batchSlides: env.limits?.batchSlides ?? PPTX_LIMITS.batchSlides,
+    importPoolMs: env.limits?.importPoolMs ?? PPTX_LIMITS.importPoolMs,
+  };
+  const pl = ctx.payload;
+  const done: PptxNativeProgress = { ...pl.done, media: [...(pl.done?.media ?? [])] };
+  const save = () => ctx.setPayload({ ...pl, done: { ...done, media: [...done.media] } });
+  try {
+    if (!done.presentationId) throw new Error('no presentation to build for');
+    const file = deps.lib.getFile(pl.hash);
+    if (!file) throw new Error('The PowerPoint file is no longer stored');
+    const job = new NativeImport(deps, env.pool ?? cpuPool(), limits, ctx, done, save, env.only, env.reserve);
+    const scratch = await deps.store.tmpDir();
+    try {
+      return await job.buildOnly(deps.store.abs(file.path), scratch);
+    } finally {
+      await rm(scratch, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  } catch (e) {
+    queueStoredClips(deps, done);
+    throw e;
+  }
+}
 
 /**
  * Queue the media jobs of the clips an import stored (its resume pairs, `PptxNativeProgress.clips`), for an
@@ -252,6 +334,8 @@ class NativeImport {
     private readonly ctx: JobCtx<PptxNativePayload>,
     private readonly done: PptxNativeProgress,
     private readonly save: () => void,
+    private readonly only?: NativeJobEnv['only'],
+    private readonly reserve = 0,
   ) {
     this.options = ctx.payload.options ?? {};
     // The upload's file name: one line, like every other string that reaches a list or a log.
@@ -284,8 +368,25 @@ class NativeImport {
   }
 
   async run(deck: string, scratch: string): Promise<PptxNativeResult> {
+    return this.guard(async () => {
+      const t0 = performance.now();
+      const result = this.saveVersion1(await this.steps(deck, scratch));
+      this.ctx.log(
+        `version 1 saved in ${Math.round(performance.now() - t0)} ms: ${result.native} native, ${result.hybrid} hybrid, ` +
+          `${result.picture} picture slide(s)${result.pending ? `, ${result.pending} waiting for LibreOffice` : ''}`,
+      );
+      return result;
+    });
+  }
+
+  /** Steps 1-5 only (`buildNative`): nothing is saved. */
+  buildOnly(deck: string, scratch: string): Promise<NativeBuild> {
+    return this.guard(() => this.steps(deck, scratch));
+  }
+
+  private async guard<T>(fn: () => Promise<T>): Promise<T> {
     try {
-      return await this.steps(deck, scratch);
+      return await fn();
     } catch (e) {
       // Clips stored without their media job (queued with version 1): never left waiting for it. Those of an
       // earlier attempt (the resume pairs) are queued by `runNative`, whatever stops the run.
@@ -294,9 +395,8 @@ class NativeImport {
     }
   }
 
-  private async steps(deck: string, scratch: string): Promise<PptxNativeResult> {
+  private async steps(deck: string, scratch: string): Promise<NativeBuild> {
     const { ctx } = this;
-    const t0 = performance.now();
     this.scratch = scratch;
 
     // 1. XML parts in memory; every other part a placeholder.
@@ -341,15 +441,18 @@ class NativeImport {
     const mediaKinds: [string, 'video' | 'audio'][] = [];
     for (const [part, f] of clipFiles) if (f.kind) mediaKinds.push([part, f.kind]);
 
-    // 2c. The slides, in batches.
-    const converted = await this.convert(parts, listed, pictureSizes, mediaKinds);
+    // 2c. The slides, in batches (a re-import: only those it asks for).
+    const want = this.only?.(listed);
+    const converted = await this.convert(parts, listed, pictureSizes, mediaKinds, want);
     parts.clear();
     ctx.log(
       `converted in ${Math.round(this.poolMs)} ms of pool time, worker heap ${Math.round(this.heapMb)} MB`,
     );
+    const texts = new Map([...converted].map(([index, c]) => [index, bodyTexts(c.s)]));
+    const textBoxes = new Map([...converted].map(([index, c]) => [index, bodyBoxes(c.s)]));
 
     // 3. Drafts, classes and the size budgets.
-    const drafts = this.drafts(listed, converted, scan);
+    const drafts = this.drafts(want ? listed.filter((r) => want.has(r.index)) : listed, converted, scan);
     const compact = this.budget(drafts);
 
     // 3b. Clips: stored (their media jobs queued with version 1), placeholders replaced.
@@ -360,20 +463,9 @@ class NativeImport {
     const stored = await this.pictures(drafts, spilled, new Map(pictureSizes));
     ctx.progress(0.95);
 
-    // 5-6. Version 1.
-    const result = this.saveVersion1(
-      drafts,
-      stored,
-      first.result.sections,
-      first.result.slideRect,
-      scan,
-      compact,
-    );
-    ctx.log(
-      `version 1 saved in ${Math.round(performance.now() - t0)} ms: ${result.native} native, ${result.hybrid} hybrid, ` +
-        `${result.picture} picture slide(s)${result.pending ? `, ${result.pending} waiting for LibreOffice` : ''}`,
-    );
-    return result;
+    // 5. Version 1, assembled (`saveVersion1` saves it).
+    const built = this.assemble(drafts, stored, first.result.sections, first.result.slideRect, scan);
+    return { ...built, listed: [...listed], texts, textBoxes, compact };
   }
 
   /**
@@ -504,6 +596,7 @@ class NativeImport {
     listed: readonly SlideRef[],
     pictureSizes: [string, PictureHeader][],
     mediaKinds: [string, 'video' | 'audio'][] = [],
+    want?: ReadonlySet<number>,
   ): Promise<Map<number, { s: EmittedSlide; media: Map<string, string>; extra?: SceneSlideExtra }>> {
     const out = new Map<number, { s: EmittedSlide; media: Map<string, string>; extra?: SceneSlideExtra }>();
     const own = new Set<string>();
@@ -518,6 +611,7 @@ class NativeImport {
     for (let from = 0; from < n; from += step) {
       this.checkCancelled();
       const to = Math.min(n, from + step);
+      if (want && !listed.slice(from, to).some((r) => want.has(r.index))) continue;
       if (this.poolMs > this.limits.importPoolMs) {
         this.warn(
           'batch',
@@ -650,6 +744,8 @@ class NativeImport {
     const plan = planImportSizes(
       sizes,
       stored.map((sl) => compactSlideBytes(sl)),
+      // A re-import's kept slides take their part of the budget (`NativeJobEnv.reserve`).
+      IMPORT_RESERVE_BYTES + (Number.isFinite(this.reserve) && this.reserve > 0 ? this.reserve : 0),
     );
     let compact = 0;
     drafts.forEach((d, i) => {
@@ -763,15 +859,14 @@ class NativeImport {
     return res.media;
   }
 
-  /** Steps 5-6: remap, assemble, sanitize, digest, save version 1 and queue the LibreOffice follow-up. */
-  private saveVersion1(
+  /** Step 5: remap, assemble, sanitize, digest; the follow-up's plan (`saveVersion1` saves them). */
+  private assemble(
     drafts: Draft[],
     stored: Map<string, string>,
     sectionInfo: SectionInfo[],
     slideRect: { x: number; y: number; w: number; h: number },
     scan: SceneScan,
-    compact: number,
-  ): PptxNativeResult {
+  ): Omit<NativeBuild, 'listed' | 'texts' | 'textBoxes' | 'compact'> {
     const { deps, ctx } = this;
     const hash = ctx.payload.hash;
     // Remap each slide with its own batch's placeholders.
@@ -845,9 +940,10 @@ class NativeImport {
         return again.success ? again.data : Slide.parse({ id: sl.id, objects: [], pptx: d.slide.pptx });
       });
     const parsed = Presentation.parse(p);
-    // The digest of the objects exactly as stored: the "unedited" test of the follow-up and re-import.
+    // The digest of the import's objects (every object here has an origin, `imported`): the "unedited" test
+    // of the follow-up and re-import (`digest.ts`).
     const slides = parsed.sections.flatMap((s) => s.slides);
-    for (const sl of slides) if (sl.pptx) sl.pptx.digest = digestOf(sl.objects);
+    for (const sl of slides) if (sl.pptx) sl.pptx.digest = importDigest(sl.objects);
     const classes = slides.map((sl) => sl.pptx?.class ?? 'native');
     const counts = {
       native: classes.filter((c) => c === 'native').length,
@@ -871,7 +967,21 @@ class NativeImport {
     );
     for (const f of fonts) this.log.add('info', `font not available: ${f}`);
     parsed.source.log = this.log.toString();
+    return {
+      p: parsed,
+      lo,
+      clipIds: this.clipIds,
+      clipsCreated: this.clipsCreated,
+      missingFonts: fonts,
+    };
+  }
 
+  /** Step 6: save version 1 and queue the LibreOffice follow-up, then the clips' media jobs. */
+  private saveVersion1(b: NativeBuild): PptxNativeResult {
+    const { deps, ctx } = this;
+    const hash = ctx.payload.hash;
+    const { p: parsed, lo, compact, missingFonts: fonts } = b;
+    const classes = parsed.sections.flatMap((s) => s.slides).map((sl) => sl.pptx?.class ?? 'native');
     // Version 1, its follow-up and the resume point in one transaction: the follow-up cannot start before
     // the save, and a process that dies in between leaves neither (a re-run imports again), never a version 1
     // whose follow-up lost its art and metafile plans.
@@ -986,6 +1096,23 @@ function textOfObjects(objects: readonly SlideObject[]): string {
     if (n > ART_TEXT_CHARS) break;
   }
   return out.join('\n').slice(0, ART_TEXT_CHARS);
+}
+
+/** The text of an emitted slide's text bodies: its text objects, then the text baked into its art. */
+function bodyTexts(s: Pick<EmittedSlide, 'slide' | 'art'>): string[] {
+  const out: string[] = [];
+  for (const o of s.slide.objects) if (o.type === 'text' && o.text.trim()) out.push(o.text);
+  if (s.art?.text?.trim()) out.push(s.art.text);
+  return out;
+}
+
+/** `bodyTexts` with where each body is (the art's text at the art's box). */
+function bodyBoxes(s: Pick<EmittedSlide, 'slide' | 'art'>): { text: string; box: Box }[] {
+  const out: { text: string; box: Box }[] = [];
+  for (const o of s.slide.objects)
+    if (o.type === 'text' && o.text.trim()) out.push({ text: o.text, box: o.box });
+  if (s.art?.text?.trim()) out.push({ text: s.art.text, box: { ...s.art.box, rotation: 0 } });
+  return out;
 }
 
 /** `s` cut to at most `n` UTF-16 units, never inside a surrogate pair. */

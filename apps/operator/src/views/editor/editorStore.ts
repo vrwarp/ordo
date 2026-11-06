@@ -5,10 +5,11 @@ import { create } from 'zustand';
 import { deviceProfile } from '../../lib/capabilities.ts';
 import { onlyJobSaves, rebaseOnJobs } from '../../lib/pptxImport.ts';
 import { saveSizeCheck } from '../../lib/sizes.ts';
-import { upsertLocal } from '../../state/library.ts';
+import { upsertLocal, useLibrary } from '../../state/library.ts';
 import { currentRole } from '../../state/session.ts';
 import { errorText, toast } from '../../state/toasts.ts';
 import { History } from './history.ts';
+import { type MergeConflict, prepareMerge, same, theirsOf } from './merge.ts';
 import { getSlide } from './ops.ts';
 import type { Guides } from './snapping.ts';
 
@@ -18,11 +19,22 @@ export type EditorState = {
   base?: Presentation;
   draft?: Presentation;
   slideId?: string;
+  /** The primary selected object: the one the Object panel edits (M4 item B: `Selection.primary`). */
   objectId?: string;
+  /**
+   * Every selected object, in the slide's z order (a group selected by a click, members added with Shift):
+   * empty with no selection, `[objectId]` for one object. Always contains `objectId` when it is set.
+   */
+  objectIds: string[];
   dirty: boolean;
   saving: boolean;
   /** The hub refused the save with 409 (changed elsewhere). */
   conflict: boolean;
+  /**
+   * What the last 409's three-way merge could not combine (M4 item H; the conflict dialog lists it): empty when
+   * there was nothing to merge (no version in the answer, or 'Save mine anyway').
+   */
+  mergeConflicts: MergeConflict[];
   guides: Guides;
   canUndo: boolean;
   canRedo: boolean;
@@ -30,9 +42,11 @@ export type EditorState = {
 };
 
 export const useEditor = create<EditorState>(() => ({
+  objectIds: [],
   dirty: false,
   saving: false,
   conflict: false,
+  mergeConflicts: [],
   guides: { x: [], y: [] },
   canUndo: false,
   canRedo: false,
@@ -57,9 +71,11 @@ export function openPresentation(p: Presentation): void {
     draft: p,
     slideId: keepSlide ?? firstSlideId(p),
     objectId: undefined,
+    objectIds: [],
     dirty: false,
     saving: false,
     conflict: false,
+    mergeConflicts: [],
     canUndo: false,
     canRedo: false,
     loadError: undefined,
@@ -108,16 +124,35 @@ function fixSelection(): void {
   const s = useEditor.getState();
   if (!s.draft) return;
   const slide = getSlide(s.draft, s.slideId);
-  if (!slide) useEditor.setState({ slideId: firstSlideId(s.draft), objectId: undefined });
-  else if (s.objectId && !slide.objects.some((o) => o.id === s.objectId))
-    useEditor.setState({ objectId: undefined });
+  if (!slide) {
+    useEditor.setState({ slideId: firstSlideId(s.draft), objectId: undefined, objectIds: [] });
+    return;
+  }
+  // A state set with `objectId` alone (older callers) selects that one object.
+  const sel = s.objectIds.length ? s.objectIds : s.objectId ? [s.objectId] : [];
+  const ids = sel.filter((id) => slide.objects.some((o) => o.id === id));
+  const primary = s.objectId && ids.includes(s.objectId) ? s.objectId : ids[0];
+  if (primary !== s.objectId || ids.length !== s.objectIds.length)
+    useEditor.setState({ objectId: primary, objectIds: ids });
 }
 
 export function selectSlide(slideId: string | undefined): void {
-  useEditor.setState({ slideId, objectId: undefined });
+  useEditor.setState({ slideId, objectId: undefined, objectIds: [] });
 }
+/** Select one object (or none): it is the whole selection. */
 export function selectObject(objectId: string | undefined): void {
-  useEditor.setState({ objectId });
+  useEditor.setState({ objectId, objectIds: objectId ? [objectId] : [] });
+}
+/**
+ * Select several objects (a group, design/27 §11 item 5): `ids` kept in the open slide's z order, `primary`
+ * (default: the first of `ids`) the one the Object panel edits. Ids not on the open slide are left out.
+ */
+export function selectObjects(ids: readonly string[], primary?: string): void {
+  const slide = currentSlide();
+  const want = new Set(ids);
+  const ordered = slide ? slide.objects.filter((o) => want.has(o.id)).map((o) => o.id) : [];
+  const first = primary && ordered.includes(primary) ? primary : ids.find((id) => ordered.includes(id));
+  useEditor.setState({ objectId: first, objectIds: ordered });
 }
 
 export function currentSlide() {
@@ -130,12 +165,25 @@ export function currentObject(): SlideObject | undefined {
   return currentSlide()?.objects.find((o) => o.id === s.objectId);
 }
 
+/** Every selected object of the open slide, in z order. */
+export function currentObjects(): SlideObject[] {
+  const s = useEditor.getState();
+  const ids = new Set(s.objectIds);
+  return currentSlide()?.objects.filter((o) => ids.has(o.id)) ?? [];
+}
+
+/** A save merges someone else's version at most this many times before it shows the conflict dialog. */
+const MAX_MERGES = 3;
+
 /**
- * Save with the base rev. 409 opens the reload dialog; 423 means locked by the live playlist. A presentation
+ * Save with the base rev. On 409 the editor first takes over a revision only the PowerPoint jobs saved
+ * (`adoptJobSaves`), else merges the version that won (`mergeTheirs`) and saves again (a second 409 merges
+ * again, `MAX_MERGES` at most), else opens the conflict dialog with what could not be merged. `force` ('Save
+ * mine anyway') saves over theirs without merging. 423 means locked by the live playlist. A presentation
  * over the 4 MiB budget saves with a warning (once per session); one over the hub's 32 MiB body limit is
- * refused here with the reason (design/27 §3.4).
+ * refused here with the reason (design/27 §3.4). `merges` counts the merges this save made.
  */
-export async function save(force = false, adopted = false): Promise<boolean> {
+export async function save(force = false, adopted = false, merges = 0): Promise<boolean> {
   const s = useEditor.getState();
   if (!s.draft || !s.base || s.saving) return false;
   const size = saveSizeCheck(s.draft);
@@ -161,6 +209,7 @@ export async function save(force = false, adopted = false): Promise<boolean> {
       dirty: stillDirty,
       saving: false,
       conflict: false,
+      mergeConflicts: [],
     });
     if (size.warn && !warnedLarge.has(saved.id)) {
       warnedLarge.add(saved.id);
@@ -173,8 +222,16 @@ export async function save(force = false, adopted = false): Promise<boolean> {
       // Saved meanwhile only by the hub's PowerPoint jobs (version 2 of an import): take their work over and
       // save again, instead of offering to overwrite it.
       if (!force && !adopted && (await adoptJobSaves().catch(() => 'other')) === 'adopted')
-        return save(false, true);
-      useEditor.setState({ conflict: true });
+        return save(false, true, merges);
+      // Saved by someone else: their version merged with the draft and saved again (design/27 §11 item 17).
+      const merged = force || merges >= MAX_MERGES ? undefined : mergeTheirs(s, theirsOf(e));
+      if (merged === 'same') return true;
+      if (merged === 'merged') {
+        const ok = await save(false, adopted, merges + 1);
+        if (ok && merges === 0) toast('Saved together with the changes someone else saved meanwhile.', 'ok');
+        return ok;
+      }
+      useEditor.setState({ conflict: true, mergeConflicts: merged ?? [] });
       return false;
     }
     if (e instanceof ApiFailure && e.status === 423)
@@ -189,11 +246,58 @@ export async function save(force = false, adopted = false): Promise<boolean> {
   }
 }
 
+const content = (p: Presentation) => {
+  const { rev: _rev, createdAt: _c, updatedAt: _u, ...rest } = p;
+  return rest;
+};
+
+/**
+ * Merge `theirs` (the version that won a 409, `theirsOf`) with the draft over the base (M4 item H, `merge.ts`).
+ * Merged: the draft becomes the merge on theirs' revision, its undo and redo steps move onto theirs too, and
+ * the caller saves again ('merged'); 'same' when theirs already holds every change of the draft (nothing is
+ * left to save). The conflicts when it cannot merge; undefined when there is nothing to merge with, or the
+ * editor moved on since the save began (`start`).
+ */
+function mergeTheirs(
+  start: EditorState,
+  theirs: Presentation | undefined,
+): 'merged' | 'same' | MergeConflict[] | undefined {
+  const cur = useEditor.getState();
+  const { base, draft } = cur;
+  if (!theirs || !base || !draft || cur.saving || cur.id !== start.id || base !== start.base)
+    return undefined;
+  if (theirs.id !== base.id || theirs.rev <= base.rev) return undefined;
+  const merge = prepareMerge(base, theirs);
+  const r = merge(draft, true);
+  if (!r.merged) return r.conflicts;
+  const nothingLeft = same(content(r.merged), content(theirs));
+  history.rebase((snapshot) => merge(snapshot).merged);
+  useEditor.setState({
+    base: theirs,
+    draft: nothingLeft ? theirs : r.merged,
+    dirty: !nothingLeft,
+    conflict: false,
+    mergeConflicts: [],
+    canUndo: history.canUndo,
+    canRedo: history.canRedo,
+  });
+  fixSelection();
+  // Nothing to save: the library takes theirs over (unless it already holds a newer one).
+  const lib = useLibrary.getState().data.presentations.find((x) => x.id === theirs.id);
+  if (nothingLeft && (!lib || lib.rev < theirs.rev)) upsertLocal('presentations', theirs);
+  return nothingLeft ? 'same' : 'merged';
+}
+
 /**
  * When only the hub's PowerPoint jobs saved the open presentation since it was opened (`onlyJobSaves`: its
- * LibreOffice follow-up, reference pictures, the text repair), take their revision over: the whole of it when
- * nothing is unsaved, else slide by slide (`rebaseOnJobs`), unsaved edits kept. 'other' when someone else
- * saved (the usual banner and conflict dialog apply); 'none' when there is nothing newer or the editor moved on.
+ * LibreOffice follow-up, reference pictures, the text repair, a re-import), take their revision over: the
+ * whole of it when nothing is unsaved, else with the unsaved edits kept. The follow-ups' revisions are taken
+ * slide by slide (`rebaseOnJobs`); a re-import's, which rebuilds whole slides, through the three-way merge
+ * (`merge.ts`), so a slide the volunteer changed while the re-import rebuilt it is a conflict ('other': the
+ * banner and, at the next save, the conflict dialog say so) instead of the rebuild being dropped silently.
+ * The undo and redo steps move with the draft, so an undo never takes the job's work back out. 'other' when
+ * someone else saved (the usual banner and conflict dialog apply); 'none' when there is nothing newer or the
+ * editor moved on.
  */
 export async function adoptJobSaves(): Promise<'adopted' | 'other' | 'none'> {
   const s = useEditor.getState();
@@ -208,12 +312,31 @@ export async function adoptJobSaves(): Promise<'adopted' | 'other' | 'none'> {
   if (cur.id !== s.id || cur.base !== s.base || !cur.draft || cur.saving) return 'none';
   upsertLocal('presentations', latest);
   if (!cur.dirty) {
-    const objectId = cur.objectId;
+    const { objectId, objectIds } = cur;
     openPresentation(latest);
-    if (objectId && currentSlide()?.objects.some((o) => o.id === objectId)) useEditor.setState({ objectId });
+    const kept = objectIds.filter((id) => currentSlide()?.objects.some((o) => o.id === id));
+    if (kept.length) selectObjects(kept, objectId);
     return 'adopted';
   }
-  useEditor.setState({ base: latest, draft: rebaseOnJobs(cur.base!, cur.draft, latest) });
+  const oldBase = cur.base!;
+  const reimported = revisions.some(
+    (r) => r.rev > oldBase.rev && r.rev <= latest.rev && r.savedBy === 'pptx-reimport',
+  );
+  let draft: Presentation;
+  let move: (snapshot: Presentation) => Presentation | undefined;
+  if (reimported) {
+    const merge = prepareMerge(oldBase, latest);
+    const r = merge(cur.draft, true);
+    if (!r.merged) return 'other';
+    draft = r.merged;
+    move = (snapshot) => merge(snapshot).merged;
+  } else {
+    draft = rebaseOnJobs(oldBase, cur.draft, latest);
+    move = (snapshot) => rebaseOnJobs(oldBase, snapshot, latest);
+  }
+  history.rebase(move);
+  useEditor.setState({ base: latest, draft, canUndo: history.canUndo, canRedo: history.canRedo });
+  fixSelection();
   return 'adopted';
 }
 

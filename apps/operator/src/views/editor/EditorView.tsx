@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Dialog } from '../../components/Dialog.tsx';
+import { FindReplaceDialog } from './FindReplaceDialog.tsx';
 import { installKeepVisible } from '../../components/keepVisible.ts';
 import { Menu } from '../../components/Menu.tsx';
 import { useCoarsePointer, useMedia } from '../../components/pointer.ts';
@@ -8,7 +8,16 @@ import { useProfile } from '../../lib/capabilities.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useSession } from '../../state/session.ts';
 import { toast } from '../../state/toasts.ts';
+import {
+  deleteSelection,
+  duplicateSelection,
+  moveSelection,
+  reorderSelection,
+  ungroupSelection,
+} from './actions.ts';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
+import { ConflictDialog } from './ConflictDialog.tsx';
+import { historyKey, keyPlace } from './editorKeys.ts';
 import { LookPreviews } from './LookPreviews.tsx';
 import { addVideo } from './mediaOps.ts';
 import {
@@ -23,20 +32,11 @@ import {
   undo,
   useEditor,
 } from './editorStore.ts';
+// `window.__ordo.editor`, read by the end-to-end specs (e2e/editorhelpers.ts).
+import './inspect.ts';
 import { ObjectPanel } from './ObjectPanel.tsx';
-import {
-  addObject,
-  deleteObject,
-  duplicateObject,
-  getSlide,
-  newImage,
-  newShape,
-  newText,
-  reorderObject,
-  themeOf,
-  updateObject,
-  type ZOrder,
-} from './ops.ts';
+import { addObject, getSlide, newImage, newShape, newText, themeOf, type ZOrder } from './ops.ts';
+import { hasGroup } from './ops/group.ts';
 import { PresentationPanel } from './PresentationPanel.tsx';
 import { PreviewControl } from './PreviewControl.tsx';
 import { RevisionsDialog } from './RevisionsDialog.tsx';
@@ -47,19 +47,9 @@ import { SlidesPanel } from './SlidesPanel.tsx';
 /** Nudge steps (px in slide units) offered by the touch toolbar; the keyboard uses 1 and Shift 10. */
 const STEPS = [1, 10, 50] as const;
 
-/** Move the selected object by (dx, dy); consecutive nudges coalesce into one undo step. */
+/** Move the selection (a group as one) by (dx, dy); consecutive nudges coalesce into one undo step. */
 function nudge(dx: number, dy: number): void {
-  const st = useEditor.getState();
-  const o = currentObject();
-  if (!o || !st.slideId) return;
-  change(
-    (q) =>
-      updateObject(q, st.slideId!, o.id, (x) => ({
-        ...x,
-        box: { ...x.box, x: x.box.x + dx, y: x.box.y + dy },
-      })),
-    `nudge:${o.id}`,
-  );
+  if (currentObject()) moveSelection(dx, dy);
 }
 
 /** Focus the selected text box's text field (Enter, double-tap, or the Edit text button). */
@@ -82,11 +72,6 @@ function storedLooksOpen(): boolean | null {
   }
 }
 
-function isTyping(e: KeyboardEvent): boolean {
-  const t = e.target as HTMLElement | null;
-  return !!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
-}
-
 /** The full slide editor (prd/03, design/15). */
 export function EditorView({ id }: { id: string }) {
   const ed = useEditor();
@@ -98,6 +83,8 @@ export function EditorView({ id }: { id: string }) {
   const [revisions, setRevisions] = useState(false);
   const [imagePick, setImagePick] = useState(false);
   const [videoPick, setVideoPick] = useState(false);
+  // 'Find…' (Ctrl+F outside a text field): find and replace across the presentation (M4 item E).
+  const [finding, setFinding] = useState(false);
   const [dismissedRev, setDismissedRev] = useState(0);
   // The newest revision found saved by someone else (not only by the hub's PowerPoint jobs): the banner's.
   const [otherRev, setOtherRev] = useState(0);
@@ -158,47 +145,46 @@ export function EditorView({ id }: { id: string }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // A control that handled the key itself (a radio group's arrows, a menu's Escape) keeps it.
+      if (e.defaultPrevented) return;
       const ctrl = e.ctrlKey || e.metaKey;
+      // Where the focus is decides which shortcuts apply (editorKeys.ts): a dialog keeps every key, a field
+      // its own keys, a button Enter, Space, the arrows and Delete; the slide canvas gets them all.
+      const place = keyPlace(e.target);
       if (ctrl && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        if (!readOnly) void save();
+        if (!readOnly && place !== 'dialog') void save();
         return;
       }
-      if (isTyping(e)) return;
-      if (ctrl && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+      if (place === 'field' || place === 'dialog') return;
+      if (ctrl && e.key.toLowerCase() === 'f') {
         e.preventDefault();
-        if (!readOnly) undo();
+        setFinding(true);
         return;
       }
-      if (ctrl && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) {
+      const step = historyKey(e);
+      if (step) {
         e.preventDefault();
-        if (!readOnly) redo();
+        if (!readOnly) (step === 'undo' ? undo : redo)();
         return;
       }
       const st = useEditor.getState();
       const o = currentObject();
       if (!o || !st.slideId || readOnly) return;
+      // The selection acts as one block: a group, or what Shift-click gathered (design/27 §11 item 5).
       if (ctrl && e.key.toLowerCase() === 'd') {
         e.preventDefault();
-        let newId: string | undefined;
-        change((q) => {
-          const r = duplicateObject(q, st.slideId!, o.id);
-          newId = r.id;
-          return r.p;
-        });
-        if (newId) selectObject(newId);
+        duplicateSelection();
         return;
       }
+      if (place !== 'canvas' || ctrl || e.altKey) return;
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
-        change((q) => deleteObject(q, st.slideId!, o.id));
-        selectObject(undefined);
+        deleteSelection();
         return;
       }
-      const step = e.shiftKey ? 10 : 1;
-      const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[
-        e.key
-      ];
+      const by = e.shiftKey ? 10 : 1;
+      const d = { ArrowLeft: [-by, 0], ArrowRight: [by, 0], ArrowUp: [0, -by], ArrowDown: [0, by] }[e.key];
       if (d) {
         e.preventDefault();
         nudge(d[0]!, d[1]!);
@@ -241,7 +227,9 @@ export function EditorView({ id }: { id: string }) {
     !ed.saving &&
     otherRev >= libP.rev &&
     libP.rev !== dismissedRev;
-  const z = (zz: ZOrder) => obj && slide && change((q) => reorderObject(q, slide.id, obj.id, zz));
+  const z = (zz: ZOrder) => obj && reorderSelection(zz);
+  // 'Ungroup' applies while a selected object belongs to a group (a PowerPoint group, a shape with its text).
+  const grouped = !!slide && hasGroup(slide.objects.filter((o) => ed.objectIds.includes(o.id)));
   const add = (o: Parameters<typeof addObject>[2]) => {
     if (!slide || readOnly) return;
     change((q) => addObject(q, slide.id, o));
@@ -255,19 +243,10 @@ export function EditorView({ id }: { id: string }) {
     focusTextEditor();
   };
   const duplicate = () => {
-    if (!obj || !slide) return;
-    let nid: string | undefined;
-    change((q) => {
-      const r = duplicateObject(q, slide.id, obj.id);
-      nid = r.id;
-      return r.p;
-    });
-    if (nid) selectObject(nid);
+    if (obj && slide) duplicateSelection();
   };
   const remove = () => {
-    if (!obj || !slide) return;
-    change((q) => deleteObject(q, slide.id, obj.id));
-    selectObject(undefined);
+    if (obj && slide) deleteSelection();
   };
   const looksShown = looksOpen ?? touchLandscape;
   // Touch: the keyboard-only actions as buttons, floating by the selected object (SlideCanvas places them).
@@ -354,10 +333,14 @@ export function EditorView({ id }: { id: string }) {
               { label: '⤓ Send to back', name: 'Back', onSelect: () => z('back') },
               { label: '⧉ Duplicate', name: 'Duplicate', onSelect: duplicate },
               { label: '🗑 Delete', name: 'Delete', danger: true, onSelect: remove },
+              ...(grouped ? [{ label: 'Ungroup', onSelect: ungroupSelection }] : []),
             ]}
           />
           <span className="spacer" />
           <PreviewControl p={p} slideId={slide?.id} />
+          <button type="button" onClick={() => setFinding(true)} title="Find and replace (Ctrl+F)">
+            Find…
+          </button>
           <button type="button" onClick={() => setRevisions(true)}>
             History
           </button>
@@ -459,8 +442,14 @@ export function EditorView({ id }: { id: string }) {
           <button type="button" className="small" disabled={readOnly || !obj} title="Delete" onClick={remove}>
             🗑<span className="touch-label">Delete</span>
           </button>
+          <button type="button" className="small" disabled={readOnly || !grouped} onClick={ungroupSelection}>
+            Ungroup
+          </button>
           <span className="spacer" />
           <PreviewControl p={p} slideId={slide?.id} />
+          <button type="button" onClick={() => setFinding(true)} title="Find and replace (Ctrl+F)">
+            Find…
+          </button>
           <button type="button" onClick={() => setRevisions(true)}>
             History
           </button>
@@ -478,7 +467,8 @@ export function EditorView({ id }: { id: string }) {
         {changedElsewhere && (
           <div className="banner blue row" style={{ margin: 8 }}>
             <span className="grow">
-              Someone else saved this presentation (rev {libP.rev}) since you opened it.
+              Someone else saved this presentation (rev {libP.rev}) since you opened it. Saving combines your
+              changes with theirs.
             </span>
             <button type="button" className="small" onClick={() => void reloadLatest()}>
               Reload theirs
@@ -496,6 +486,7 @@ export function EditorView({ id }: { id: string }) {
             readOnly={readOnly}
             onEditText={editText}
             objectTools={objectTools}
+            slideRect={p.source?.native?.slideRect}
           />
         ) : (
           <div className="center muted">Add a slide to start.</div>
@@ -550,6 +541,7 @@ export function EditorView({ id }: { id: string }) {
         {tab === 'presentation' && <PresentationPanel p={p} readOnly={readOnly} />}
       </div>
       {revisions && <RevisionsDialog id={p.id} readOnly={readOnly} onClose={() => setRevisions(false)} />}
+      {finding && <FindReplaceDialog readOnly={readOnly} onClose={() => setFinding(false)} />}
       {imagePick && (
         <MediaPickerDialog
           title="Insert an image"
@@ -595,30 +587,8 @@ export function EditorView({ id }: { id: string }) {
           }}
         />
       )}
-      {ed.conflict && (
-        <Dialog
-          title="Changed by someone else"
-          onClose={() => useEditor.setState({ conflict: false })}
-          footer={
-            <>
-              <button type="button" onClick={() => useEditor.setState({ conflict: false })}>
-                Cancel
-              </button>
-              <button type="button" onClick={() => void reloadLatest()}>
-                Reload theirs (discard mine)
-              </button>
-              <button type="button" className="primary" onClick={() => void save(true)}>
-                Save mine anyway
-              </button>
-            </>
-          }
-        >
-          <p style={{ marginTop: 0 }}>
-            This presentation was saved by someone else after you opened it. Saving yours replaces theirs
-            (their version stays in the history), or reload to see their changes.
-          </p>
-        </Dialog>
-      )}
+      {/* A 409 the three-way merge could not resolve (M4 item H): what overlaps, Reload theirs, Save mine. */}
+      {ed.conflict && <ConflictDialog />}
     </div>
   );
 }

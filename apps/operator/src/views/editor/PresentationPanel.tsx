@@ -6,8 +6,10 @@ import { NumberField, Select, TextField, TransitionEditor } from '../../componen
 import { authoringArrangement, upsertArrangement } from '../../lib/arrangement.ts';
 import { useLibrary } from '../../state/library.ts';
 import { BackgroundPicker } from './BackgroundPicker.tsx';
+import { ReplaceOnAllSlides } from './BackgroundReplace.tsx';
 import { change } from './editorStore.ts';
 import { applyTheme, themeChangeCount } from './ops.ts';
+import { PptxReport } from './PptxReport.tsx';
 
 /** Presentation metadata, theme, background, transition, loop timing and arrangements. */
 export function PresentationPanel({ p, readOnly }: { p: Presentation; readOnly: boolean }) {
@@ -157,6 +159,7 @@ export function PresentationPanel({ p, readOnly }: { p: Presentation; readOnly: 
           onChange={(backgroundMediaId) => set((q) => ({ ...q, backgroundMediaId }))}
         />
       </label>
+      <ReplaceOnAllSlides p={p} readOnly={readOnly} />
       <label className="field">
         <span>Transition</span>
         <TransitionEditor
@@ -166,6 +169,7 @@ export function PresentationPanel({ p, readOnly }: { p: Presentation; readOnly: 
         />
       </label>
       <ArrangementsSection p={p} readOnly={readOnly} />
+      <PptxReport p={p} readOnly={readOnly} />
     </div>
   );
 }

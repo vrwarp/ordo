@@ -15,9 +15,13 @@ import { Layer, Line, Rect, Shape, Stage, Transformer } from 'react-konva';
 import { useCoarsePointer } from '../../components/pointer.ts';
 import { onFontsChanged } from '../../services/fonts.ts';
 import { stillHash } from '../../services/thumbs.ts';
+import { CanvasGuides, type SlideRect } from './CanvasGuides.tsx';
 import { canvasContent } from './canvasContent.ts';
-import { change, selectObject, useEditor } from './editorStore.ts';
+import { CropHandles } from './CropControl.tsx';
+import { change, selectObject, selectObjects, useEditor } from './editorStore.ts';
+import { dragSelection, transformSelection } from './actions.ts';
 import { updateObject } from './ops.ts';
+import { boxFromCorner, clickSelection, groupBox, groupMembers, isLocked, keepsAspect } from './ops/group.ts';
 import { useOriginalOver } from './original.ts';
 import { snapBox } from './snapping.ts';
 import { TEXT_MARGIN, textDensity, textRasterKey } from './textRaster.ts';
@@ -103,6 +107,11 @@ function textCanvas(o: TextObject, tick: number, screen: number): TextRaster {
   return out;
 }
 
+/** A press this long (ms) on a group member under a finger selects that member alone (Alt-click by touch). */
+const LONG_PRESS_MS = 500;
+const CORNER_ANCHORS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+const ALL_ANCHORS = [...CORNER_ANCHORS, 'top-center', 'middle-left', 'middle-right', 'bottom-center'];
+
 /** Transformer anchors under a finger: 30 px on screen, with a hit area wider than the drawn circle. */
 const TOUCH_ANCHOR = 30;
 /** The rotate handle sits further out under a finger so it is not confused with the top-centre anchor. */
@@ -136,20 +145,55 @@ export function drawPlayBadge(ctx: CanvasRenderingContext2D, w: number, h: numbe
   ctx.restore();
 }
 
+/**
+ * The lock badge of a locked object (PowerPoint art, SmartArt, table grids: move, resize, delete and z-order
+ * only; design/27 §7.4, §11), in its top-right corner, `size` slide px (a constant size on screen).
+ */
+export function drawLockBadge(ctx: CanvasRenderingContext2D, w: number, size: number): void {
+  const s = size;
+  const x = w - s * 1.15;
+  const y = s * 0.15;
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+  ctx.fillRect(x, y, s, s);
+  // The padlock: a shackle over a body.
+  ctx.strokeStyle = '#fcd34d';
+  ctx.fillStyle = '#fcd34d';
+  ctx.lineWidth = s * 0.1;
+  ctx.beginPath();
+  ctx.arc(x + s / 2, y + s * 0.42, s * 0.18, Math.PI, 0);
+  ctx.stroke();
+  ctx.fillRect(x + s * 0.24, y + s * 0.42, s * 0.52, s * 0.38);
+  ctx.restore();
+}
+
+/** The canvas's handlers for one object node: selection, drags and transforms of the whole selection. */
+type NodeHandlers = {
+  press: (o: SlideObject, e: Konva.KonvaEventObject<Event>, kind: 'pointer' | 'mouse' | 'tap') => void;
+  pressMove: (e: Konva.KonvaEventObject<Event>) => void;
+  pressEnd: () => void;
+  dragStart: (o: SlideObject, e: Konva.KonvaEventObject<DragEvent>) => void;
+  dragMove: (o: SlideObject, e: Konva.KonvaEventObject<DragEvent>, others: Box[]) => void;
+  dragEnd: (o: SlideObject, e: Konva.KonvaEventObject<DragEvent>) => void;
+  transformEnd: (o: SlideObject, e: Konva.KonvaEventObject<Event>) => void;
+};
+
 function ObjectNode(props: {
   o: SlideObject;
-  slideId: string;
   media: (id: string) => Media | undefined;
   others: Box[];
   tick: number;
   /** Device px per logical px on screen: the stage scale × devicePixelRatio. */
   density: number;
   readOnly: boolean;
-  onSelect: () => void;
+  /** The lock badge's size in slide px (constant on screen). */
+  badge: number;
+  on: NodeHandlers;
   onEditText?: () => void;
   registerNode: (id: string, n: Konva.Shape | null) => void;
 }) {
-  const { o, tick } = props;
+  const { o, tick, on } = props;
   const b = o.box;
   return (
     <Shape
@@ -170,13 +214,15 @@ function ObjectNode(props: {
           ctx.drawImage(t.canvas, -MARGIN, -MARGIN, t.canvas.width / t.density, t.canvas.height / t.density);
         } else if (o.type === 'image') {
           const img = imageFor(stillHash(props.media(o.mediaId)));
-          if (img) drawImageFit(ctx, img, local(b), 1, o.fit, o.opacity, o.radius, o.crop);
+          // Flips and the mask as every drawer applies them (design/27 §3.1).
+          if (img) drawImageFit(ctx, img, local(b), 1, o.fit, o.opacity, o.radius, o.crop, undefined, o);
           else {
             ctx.fillStyle = '#333';
             ctx.fillRect(0, 0, b.w, b.h);
           }
           if (o.play) drawPlayBadge(ctx, b.w, b.h);
         } else drawObject(ctx, { ...o, box: local(b) }, 1);
+        if (o.locked) drawLockBadge(ctx, b.w, Math.min(props.badge, Math.abs(b.w) / 2, Math.abs(b.h) / 2));
       }}
       hitFunc={(context, shape) => {
         context.beginPath();
@@ -184,43 +230,17 @@ function ObjectNode(props: {
         context.closePath();
         context.fillStrokeShape(shape);
       }}
-      onMouseDown={props.onSelect}
-      onPointerDown={props.onSelect}
-      onTap={props.onSelect}
+      onMouseDown={(e) => on.press(o, e, 'mouse')}
+      onPointerDown={(e) => on.press(o, e, 'pointer')}
+      onTap={(e) => on.press(o, e, 'tap')}
+      onPointerMove={on.pressMove}
+      onPointerUp={on.pressEnd}
+      onPointerCancel={on.pressEnd}
       onDblTap={props.onEditText}
-      onDragMove={(e) => {
-        const n = e.target;
-        const snapped = snapBox(
-          { x: n.x() - b.w / 2, y: n.y() - b.h / 2, w: b.w, h: b.h, rotation: 0 },
-          props.others,
-          10,
-        );
-        n.position({ x: snapped.x + b.w / 2, y: snapped.y + b.h / 2 });
-        useEditor.setState({ guides: snapped.guides });
-      }}
-      onDragEnd={(e) => {
-        const n = e.target;
-        useEditor.setState({ guides: { x: [], y: [] } });
-        const x = Math.round(n.x() - b.w / 2);
-        const y = Math.round(n.y() - b.h / 2);
-        if (x === b.x && y === b.y) return;
-        change((p) => updateObject(p, props.slideId, o.id, (ob) => ({ ...ob, box: { ...ob.box, x, y } })));
-      }}
-      onTransformEnd={(e) => {
-        const n = e.target;
-        const w = Math.max(8, Math.round(n.width() * n.scaleX()));
-        const h = Math.max(8, Math.round(n.height() * n.scaleY()));
-        n.scaleX(1);
-        n.scaleY(1);
-        const box: Box = {
-          x: Math.round(n.x() - w / 2),
-          y: Math.round(n.y() - h / 2),
-          w,
-          h,
-          rotation: Math.round(n.rotation() * 10) / 10,
-        };
-        change((p) => updateObject(p, props.slideId, o.id, (ob) => ({ ...ob, box })));
-      }}
+      onDragStart={(e) => on.dragStart(o, e)}
+      onDragMove={(e) => on.dragMove(o, e, props.others)}
+      onDragEnd={(e) => on.dragEnd(o, e)}
+      onTransformEnd={(e) => on.transformEnd(o, e)}
     />
   );
 }
@@ -235,6 +255,8 @@ export function SlideCanvas(props: {
   onEditText?: (objectId: string) => void;
   /** Touch: tools for the selected object, floated just above or below it (objectToolsSpot). */
   objectTools?: ReactNode;
+  /** The deck's area of an imported deck that is not 16:9 (`source.native.slideRect`): the 4:3 guide. */
+  slideRect?: SlideRect;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const coarse = useCoarsePointer();
@@ -242,7 +264,7 @@ export function SlideCanvas(props: {
   const [pane, setPane] = useState({ w: 984, h: 564 });
   const bar = useRef<HTMLDivElement>(null);
   const [barSize, setBarSize] = useState({ w: 480, h: 52 });
-  const objectId = useEditor((s) => s.objectId);
+  const objectIds = useEditor((s) => s.objectIds);
   const guides = useEditor((s) => s.guides);
   const tick = useImageTick();
   const nodes = useRef(new Map<string, Konva.Shape>());
@@ -282,15 +304,182 @@ export function SlideCanvas(props: {
   // What the screens draw (design/27 §5): the slide's picture, then its objects (on a slide set to show its
   // PowerPoint picture, only the ones added in ordo, which are all the canvas can select).
   const drawn = useMemo(() => canvasContent(slide, props.media), [slide, props.media]);
+  // The selection (design/27 §11 item 5): every selected object the canvas draws, in z order. The
+  // Transformer spans them all (one node per member), so a drag or a transform moves the group as one.
+  const selected = useMemo(() => {
+    const ids = new Set(objectIds);
+    return drawn.objects.filter((o) => ids.has(o.id));
+  }, [drawn.objects, objectIds]);
+  const lockedSel = selected.some(isLocked);
+  // A locked art picture alone keeps its aspect: corner anchors only.
+  const aspect = selected.length === 1 && keepsAspect(selected[0]!);
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-attach the transformer when the slide re-renders
   useEffect(() => {
     const t = tr.current;
     if (!t) return;
-    const n = objectId ? nodes.current.get(objectId) : undefined;
-    t.nodes(n && !props.readOnly ? [n] : []);
+    const ns = props.readOnly
+      ? []
+      : objectIds.map((id) => nodes.current.get(id)).filter((n): n is Konva.Shape => !!n);
+    t.nodes(ns);
     t.getLayer()?.batchDraw();
-  }, [objectId, slide, props.readOnly]);
-  const selBox = objectId ? drawn.objects.find((o) => o.id === objectId)?.box : undefined;
+  }, [objectIds, slide, props.readOnly]);
+  const selBox = selected.length > 1 ? groupBox(selected) : selected[0]?.box;
+  // A long press under a finger (Alt-click's touch equivalent) is pending.
+  const press = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | undefined>(undefined);
+  const endPress = () => {
+    if (press.current) clearTimeout(press.current.timer);
+    press.current = undefined;
+  };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: clear a pending long press on unmount only
+  useEffect(() => endPress, []);
+  // A drag of a multi-object selection: the node under the pointer leads; the members' start positions.
+  const drag = useRef<{ leader: string; from: Map<string, { x: number; y: number }>; box: Box } | undefined>(
+    undefined,
+  );
+  // The group box when a transform of a multi-object selection started (Konva's own measure of it).
+  const transformFrom = useRef<Box | undefined>(undefined);
+  const inGroup = (id: string) => {
+    const st = useEditor.getState();
+    return st.objectIds.length > 1 && st.objectIds.includes(id);
+  };
+  const on: NodeHandlers = {
+    press(o, e, kind) {
+      const ev = e.evt as MouseEvent;
+      const mods = { alt: !!ev.altKey, shift: !!ev.shiftKey };
+      // Shift toggles, so it acts once per press: on its pointer event (a mouse press fires mousedown too).
+      if (mods.shift && kind !== 'pointer') return;
+      const st = useEditor.getState();
+      const sel = clickSelection(
+        { objects: drawn.objects },
+        { ids: st.objectIds, primary: st.objectId },
+        o.id,
+        mods,
+      );
+      if (!sel) selectObject(undefined);
+      else if (
+        sel.primary !== st.objectId ||
+        sel.ids.length !== st.objectIds.length ||
+        sel.ids.some((id, i) => id !== st.objectIds[i])
+      )
+        selectObjects(sel.ids, sel.primary);
+      const pe = e.evt as PointerEvent;
+      if (
+        kind === 'pointer' &&
+        pe.pointerType === 'touch' &&
+        !mods.alt &&
+        groupMembers({ objects: drawn.objects }, o.id).length > 1
+      ) {
+        endPress();
+        press.current = {
+          x: pe.clientX,
+          y: pe.clientY,
+          timer: setTimeout(() => {
+            press.current = undefined;
+            selectObjects([o.id], o.id);
+          }, LONG_PRESS_MS),
+        };
+      }
+    },
+    pressMove(e) {
+      const p = press.current;
+      const pe = e.evt as PointerEvent;
+      if (p && Math.hypot(pe.clientX - p.x, pe.clientY - p.y) > 10) endPress();
+    },
+    pressEnd: endPress,
+    dragStart(o) {
+      endPress();
+      if (!inGroup(o.id)) return;
+      const d = drag.current;
+      if (d && nodes.current.get(d.leader)?.isDragging()) return;
+      const ids = useEditor.getState().objectIds;
+      const from = new Map<string, { x: number; y: number }>();
+      for (const id of ids) {
+        const n = nodes.current.get(id);
+        if (n) from.set(id, n.position());
+      }
+      const box = groupBox(drawn.objects.filter((x) => from.has(x.id)));
+      drag.current = box ? { leader: o.id, from, box } : undefined;
+    },
+    dragMove(o, e, others) {
+      const n = e.target;
+      if (inGroup(o.id)) {
+        const d = drag.current;
+        if (!d || d.leader !== o.id) return;
+        // The group box snaps as one; every member keeps its place in it.
+        const p0 = d.from.get(o.id)!;
+        const moved = { ...d.box, x: d.box.x + n.x() - p0.x, y: d.box.y + n.y() - p0.y };
+        const rest = drawn.objects.filter((x) => !d.from.has(x.id)).map((x) => x.box);
+        const snapped = snapBox(moved, rest, 10);
+        const dx = snapped.x - d.box.x;
+        const dy = snapped.y - d.box.y;
+        for (const [id, q] of d.from) {
+          const m = nodes.current.get(id);
+          // The others follow once they drag (the Transformer starts them on the first move, by this delta).
+          if (m && (id === o.id || m.isDragging())) m.position({ x: q.x + dx, y: q.y + dy });
+        }
+        useEditor.setState({ guides: snapped.guides });
+        return;
+      }
+      const b = o.box;
+      const snapped = snapBox(
+        { x: n.x() - b.w / 2, y: n.y() - b.h / 2, w: b.w, h: b.h, rotation: 0 },
+        others,
+        10,
+      );
+      n.position({ x: snapped.x + b.w / 2, y: snapped.y + b.h / 2 });
+      useEditor.setState({ guides: snapped.guides });
+    },
+    dragEnd(o, e) {
+      const n = e.target;
+      if (inGroup(o.id)) {
+        const d = drag.current;
+        if (!d || d.leader !== o.id) return;
+        drag.current = undefined;
+        useEditor.setState({ guides: { x: [], y: [] } });
+        const p0 = d.from.get(o.id)!;
+        const dx = Math.round(n.x() - p0.x);
+        const dy = Math.round(n.y() - p0.y);
+        if (dx || dy) dragSelection(dx, dy);
+        else for (const [id, q] of d.from) nodes.current.get(id)?.position(q);
+        return;
+      }
+      const b = o.box;
+      useEditor.setState({ guides: { x: [], y: [] } });
+      const x = Math.round(n.x() - b.w / 2);
+      const y = Math.round(n.y() - b.h / 2);
+      if (x === b.x && y === b.y) return;
+      change((p) => updateObject(p, slide.id, o.id, (ob) => ({ ...ob, box: { ...ob.box, x, y } })));
+    },
+    transformEnd(o, e) {
+      // A multi-object selection is transformed as one by the Transformer's own end (below).
+      if (inGroup(o.id)) return;
+      const n = e.target;
+      let w = Math.max(8, Math.round(n.width() * n.scaleX()));
+      let h = Math.max(8, Math.round(n.height() * n.scaleY()));
+      if (keepsAspect(o) && o.box.w > 0 && o.box.h > 0) {
+        const k = (Math.abs(n.scaleX()) + Math.abs(n.scaleY())) / 2;
+        w = Math.max(8, Math.round(o.box.w * k));
+        h = Math.max(8, Math.round(o.box.h * k));
+      }
+      n.scaleX(1);
+      n.scaleY(1);
+      const box: Box = {
+        x: Math.round(n.x() - w / 2),
+        y: Math.round(n.y() - h / 2),
+        w,
+        h,
+        // A locked object does not turn (move, resize, delete and z-order only).
+        rotation: isLocked(o) ? (o.box.rotation ?? 0) : Math.round(n.rotation() * 10) / 10,
+      };
+      change((p) => updateObject(p, slide.id, o.id, (ob) => ({ ...ob, box })));
+    },
+  };
+  /** The Transformer's box over a multi-object selection, as a slide Box (`boxFromCorner`). */
+  const trBox = (t: Konva.Transformer) =>
+    boxFromCorner(
+      { x: t.x(), y: t.y(), width: t.width(), height: t.height(), rotation: t.rotation() },
+      scale,
+    );
   const rotAngle = coarse && selBox ? rotaterAngle(selBox, scale, TOUCH_ROTATE_OFFSET) : 0;
   const showTools = !!props.objectTools && !!selBox;
   useLayoutEffect(() => {
@@ -352,13 +541,13 @@ export function SlideCanvas(props: {
             <ObjectNode
               key={o.id}
               o={o}
-              slideId={slide.id}
               media={props.media}
               others={othersFor(o.id)}
               tick={tick}
               density={density}
               readOnly={props.readOnly}
-              onSelect={() => selectObject(o.id)}
+              badge={22 / scale}
+              on={on}
               onEditText={
                 o.type === 'text' && !props.readOnly && props.onEditText
                   ? () => props.onEditText?.(o.id)
@@ -388,10 +577,40 @@ export function SlideCanvas(props: {
               listening={false}
             />
           ))}
+          <CanvasGuides objects={drawn.objects} slideRect={props.slideRect} scale={scale} />
+          <CropHandles objects={drawn.objects} scale={scale} readOnly={props.readOnly} />
           <Transformer
             ref={tr}
-            rotateEnabled
-            keepRatio={false}
+            rotateEnabled={!lockedSel}
+            keepRatio={aspect}
+            enabledAnchors={aspect ? CORNER_ANCHORS : ALL_ANCHORS}
+            onTransformStart={() => {
+              const t = tr.current;
+              transformFrom.current = t && t.nodes().length > 1 ? trBox(t) : undefined;
+            }}
+            onTransformEnd={() => {
+              const t = tr.current;
+              const from = transformFrom.current;
+              transformFrom.current = undefined;
+              if (!t || !from || t.nodes().length < 2) return;
+              const to = trBox(t);
+              // The nodes back as the store has them (Konva scaled and turned them as a preview); the members'
+              // new boxes come with the next render. Re-attaching resets the Transformer's own rotation.
+              for (const o of selected) {
+                const b = o.box;
+                nodes.current.get(o.id)?.setAttrs({
+                  x: b.x + b.w / 2,
+                  y: b.y + b.h / 2,
+                  rotation: b.rotation ?? 0,
+                  scaleX: 1,
+                  scaleY: 1,
+                  skewX: 0,
+                  skewY: 0,
+                });
+              }
+              t.nodes(t.nodes());
+              transformSelection(from, to);
+            }}
             rotationSnaps={[0, 90, 180, 270]}
             boundBoxFunc={(oldB, newB) => (newB.width < 8 || newB.height < 8 ? oldB : newB)}
             anchorSize={coarse ? TOUCH_ANCHOR : 10}

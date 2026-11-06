@@ -140,6 +140,8 @@ All under `https://hub.<venue>.synology.me/api/v1`. JSON bodies validated with t
 | `POST /import/pro7` (zip or NAS path), `POST /import/songselect` (file or text), `POST /import/document` (pptx or pdf) | edit                                                 | Import jobs; return a job id. `document`: form field `renderer`, `native` by default (editable slides, `pptx-native`, design/27), `libreoffice` or `pptx-preview` (page pictures); native options `extendBackgrounds`, `transitionSounds` (`1`/`0`) |
 | `GET /jobs/:id`                                                                                                        | edit                                                 | Job state and log                                                                                                                                                          |
 | `POST /presentations/:id/pptx-reference`                                                                               | edit                                                 | 'Show PowerPoint picture': queues `pptx-reference` (design/27 §5); body `{ showPicture? }` (slide ids switched to the picture, ≤ 5,000; absent: all); 423 while live                                                                      |
+| `GET /presentations/:id/pptx-reimport`, `POST /presentations/:id/pptx-reimport`                                        | edit                                                 | 'Re-import from PowerPoint' (design/27 §11): `GET` answers the plan (each slide's kind and action, nothing written); `POST` queues `pptx-reimport` (202) with `{ slideIds?, reset?, keep? }` (strict, ≤ 5,000 ids each); 400 `no_pptx` without a stored deck, 423 while live |
+| `POST /presentations/:id/slides/:slideId/make-editable`                                                                | edit                                                 | 'Make editable' on an imported page: a legacy PowerPoint page whose deck is stored is rebuilt natively (202, the `pptx-reimport` job of that slide); any other page (a PDF, a deck gone) gets text boxes over its picture (200, the presentation); 423 while live |
 | `GET                                                                                                                   | PUT /settings/{looks,outputs,audio,keymap,surfaces}` | operate                                                                                                                                                                    | Settings                     |
 | `POST /outputs/:id/token/rotate`                                                                                       | operate                                              | New output token                                                                                                                                                           |
 | `GET /live`                                                                                                            | operate, output                                      | Current live state (full)                                                                                                                                                  |
@@ -213,7 +215,7 @@ already: then it fails for good with "Stopped 3 times while this job was running
 was processing is marked failed. A clean shutdown does not count as an attempt.
 
 **Jobs that wait for the live lock**: a job that must not write a presentation while it is in the live
-playlist (ADR 0007), such as the PowerPoint follow-ups `pptx-lo` and `pptx-reference`, throws `JobDeferred`
+playlist (ADR 0007), such as the PowerPoint follow-ups `pptx-lo` and `pptx-reference` and the re-import `pptx-reimport`, throws `JobDeferred`
 instead of running: it goes back to `queued` with a log line ("waiting: the presentation is live …") and
 is not started again before its delay (30 s, doubling per deferral to 15 min; kept in the payload). A
 deferral is not a crashed attempt. The delay lives in the process only: after a restart the job runs at
@@ -243,6 +245,7 @@ resumes them.
 | `pptx-text-repair` | one-shot, queued at start-up while a stored legacy picture import has unchecked pages (boxes matched by list index before M3): re-reads the stored deck as `pptx-text` does, one revision per presentation; live-locked ones retried after End service, decks gone skipped (design/27 §11)                                                   | re-keyed `textBoxes`, `textAligned`         |
 | `pptx-lo`         | heavy, after a native import (design/27 §5): render copy (art slides twice over forced white and yellow, picture-class slides, metafiles), soffice once, `pdftoppm -f k -l k` at 2 px per logical px, pool task `pptx-art` (alpha from the two pages, colour un-blended, cropped)                                                 | transparent art, page and metafile pictures; version 2 of the presentation (one revision) |
 | `pptx-reference`  | heavy, 'Show PowerPoint picture': render copy of every shown slide, soffice once, `pdftoppm` per page                                                                                                                                                                                                                                         | `Slide.pptx.refMediaId`, `show: picture`    |
+| `pptx-reimport`   | light, 'Re-import from PowerPoint' (design/27 §11): the native import's steps on the stored deck (only the slides asked for), merged into the presentation: unedited native slides and legacy pages rebuilt, edited ones kept, ids, notes, timings, backgrounds, sections, arrangements and objects added in ordo kept; then `pptx-lo` for the slides that wait (earlier follow-ups' pictures reused) | one revision (`savedBy` `pptx-reimport`), or none when nothing changes |
 | `pro7-import`     | `packages/importers` (protobuf decode) in a `worker_threads` worker, 500 documents per task so the worker's 512 MB heap bounds a task, not the library (the playlists are a last task against the index of every document decoded); zip uploads are streamed from disk, media entries spilled to `tmp/`, documents capped at 256 MB in memory | presentations, playlists, media uploads     |
 | `font-google`     | fetch the family's CSS from Google Fonts with a desktop UA, download referenced woff2 files, store each unicode-range subset as a `Font` row with `unicodeRange` (at most 400 per family; then only the weights nearest 400 and 700), and drop the family's earlier Google faces                                                              | fonts                                       |
 
@@ -266,6 +269,16 @@ fails (twice, deferred with backoff), then marks the slides it could not draw (`
 goLive). A save from the editor (or a restored revision) that brings back slides still `pending` while no
 follow-up is queued or running queues one, planned as the last one was and reusing its pictures.
 `POST /presentations/:id/pptx-reference` joins a reference job already waiting for the presentation.
+
+'Re-import from PowerPoint' (`pptx-reimport`, light) runs the same conversion again on the presentation's
+stored deck (`buildNative`: the native job's steps without its save, only the deck slides a one-slide request
+needs) and merges the result into the presentation as it is when the conversion ends, in one synchronous
+step with its `pptx-lo` follow-up and the clips' media jobs (rules in `apps/hub/src/pptx/reimport.ts`). It
+defers itself while the presentation is live (as the follow-ups do) and while a `pptx-lo` follow-up of the
+presentation is queued or running (its plans name the slides as they are: 15 s, not counted); a re-import
+that changes nothing saves nothing. A request equal to one queued or running joins it. Its pictures and clips
+are resume pairs in its payload (`done`), as `pptx-native`'s. Editors take its revision over like a
+follow-up's (`PPTX_JOB_SAVERS`).
 
 Import jobs are resumable: `pro7-import` records every media id, presentation id and
 playlist id it wrote in its job payload and skips them when the job is re-queued after a

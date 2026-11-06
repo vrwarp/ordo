@@ -1,15 +1,17 @@
 import { api } from '@ordo/client';
 import type { Presentation, Slide } from '@ordo/domain';
+import type { Job } from '@ordo/protocol';
 import { useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
 import { NumberField, TextField } from '../../components/fields.tsx';
 import { useLibrary } from '../../state/library.ts';
 import { errorText, toast } from '../../state/toasts.ts';
-import { BackgroundPicker } from './BackgroundPicker.tsx';
+import { SlideBackgroundSection } from './BackgroundReplace.tsx';
 import { change, replaceBase, save, useEditor } from './editorStore.ts';
 import { SlideSoundPanel } from './MediaPanels.tsx';
 import { resetSlideToTheme, themeOf, updateSlide } from './ops.ts';
 import { PptxSlideCard } from './PptxSlideCard.tsx';
+import { followReimport, isJob, rebuildsFromPptx } from './pptxJobs.ts';
 
 /**
  * Slide-level properties: lyric box, background override, the slide's own sound, loop duration, notes, theme
@@ -24,18 +26,27 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
     !readOnly && change((q) => updateSlide(q, slide.id, fn), key);
   const texts = slide.objects.filter((o) => o.type === 'text');
   const makeEditable = async () => {
+    // A PowerPoint page is rebuilt from the stored file (M4 item F, the hub's re-import of this slide);
+    // anything else (a PDF page, a file no longer stored) gets text boxes over the page picture.
+    const native = rebuildsFromPptx(p, slide);
     const ok = await confirmDialog(
       'Make this slide editable',
-      'Text boxes are created from the PowerPoint text with approximate position and size. The rendered page stays as the background until you remove it.\n\nFonts will not match PowerPoint exactly.',
+      native
+        ? 'ordo rebuilds this slide from the PowerPoint file: its text, pictures and shapes become objects you can edit, in place of the page picture. Objects you added stay on top, and its notes stay.'
+        : 'Text boxes are created from the PowerPoint text with approximate position and size. The rendered page stays as the background until you remove it.\n\nFonts will not match PowerPoint exactly.',
       'Make editable',
     );
     if (!ok) return;
     if (dirty && !(await save())) return;
     setBusy(true);
     try {
-      const res = await api<Presentation>(`/presentations/${p.id}/slides/${slide.id}/make-editable`, {
+      const res = await api<Presentation | Job>(`/presentations/${p.id}/slides/${slide.id}/make-editable`, {
         method: 'POST',
       });
+      if (isJob(res)) {
+        await followReimport(p.id, res, 'make-editable', slide.id);
+        return;
+      }
       replaceBase(res);
       toast('Slide converted. Check fonts and positions: they are approximate.', 'warn', 8000);
     } catch (e) {
@@ -64,14 +75,7 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
           </select>
         </label>
       )}
-      <label className="field">
-        <span>Background for this slide only</span>
-        <BackgroundPicker
-          value={slide.backgroundMediaId}
-          disabled={readOnly}
-          onChange={(backgroundMediaId) => set((s) => ({ ...s, backgroundMediaId }))}
-        />
-      </label>
+      <SlideBackgroundSection slide={slide} p={p} readOnly={readOnly} />
       <SlideSoundPanel slide={slide} media={(id) => media.find((m) => m.id === id)} readOnly={readOnly} />
       {p.kind === 'loop' && (
         <NumberField

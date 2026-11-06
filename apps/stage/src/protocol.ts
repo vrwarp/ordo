@@ -22,6 +22,8 @@ export type StageView = {
   layout: StageLayout;
   current: StageText | null;
   next: StageText | null;
+  /** The displayed slide's notes when the look shows them (`layout.notes`), cut to `NOTES_MAX`. */
+  notes: string | null;
   clock: string;
   countdown: TimerDisplay | null;
   elapsed: TimerDisplay | null;

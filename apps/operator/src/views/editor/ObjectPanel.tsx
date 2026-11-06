@@ -1,27 +1,45 @@
-import { editText, nearColor, type SlideObject, type TextStyle } from '@ordo/domain';
-import { useState } from 'react';
-import { BoxEditor, Check, ColorField, NumberField, Select } from '../../components/fields.tsx';
+import { nearColor, type SlideObject, type TextStyle } from '@ordo/domain';
+import { useEffect, useState } from 'react';
+import { Check, ColorField, NumberField, Select } from '../../components/fields.tsx';
 import { TextStyleEditor } from '../../components/TextStyleEditor.tsx';
+import { ObjectSlideOps } from './ObjectSlideOps.tsx';
 import { useLibrary } from '../../state/library.ts';
+import { refit, replacePictureWith, typeText } from './actions.ts';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
-import { change, useEditor } from './editorStore.ts';
+import { CropControl } from './CropControl.tsx';
+import { change, redo, undo, useEditor } from './editorStore.ts';
+import { historyKey } from './editorKeys.ts';
+import { FormatBar } from './FormatBar.tsx';
+import { GroupNote, LockedNote, SelectionBox } from './GroupPanel.tsx';
 import { VideoPanel } from './MediaPanels.tsx';
 import { getSlide, markOverride, updateObject, updateSlide } from './ops.ts';
+import { isLocked } from './ops/group.ts';
+import type { TextRange } from './ops/text.ts';
+import { ParagraphStrip } from './ParagraphStrip.tsx';
+import { fitMessage } from './textFit.ts';
 
 /** Property panel for the selected object: every TextStyle, ImageObject and ShapeObject field (prd/03). */
-export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean }) {
+export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readOnly: boolean }) {
+  // A locked object (PowerPoint art, SmartArt, table grids): its box only; every other field is read-only
+  // (design/27 §11 "Locked objects"). `readOnly` below covers both.
+  const locked = isLocked(o);
+  const readOnly = liveLocked || locked;
   const slideId = useEditor((s) => s.slideId)!;
   const draft = useEditor((s) => s.draft)!;
   const looks = useLibrary((s) => s.data.settings.looks);
   const media = useLibrary((s) => s.data.media);
   const [picking, setPicking] = useState(false);
+  // The text field's selection, for the format bar and the paragraph strip (M4 item C).
+  const [range, setRange] = useState<TextRange>({ start: 0, end: 0 });
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new object starts with a caret at its start
+  useEffect(() => setRange({ start: 0, end: 0 }), [o.id]);
   const slide = getSlide(draft, slideId);
   const isLyric =
     slide?.lyricObjectId === o.id ||
     (!slide?.lyricObjectId && slide?.objects.find((x) => x.type === 'text')?.id === o.id);
   const themed = isLyric && !!draft.themeId;
   const set = (fn: (x: SlideObject) => SlideObject, key?: string, overridePath?: string) => {
-    if (readOnly) return;
+    if (liveLocked || (locked && overridePath !== 'box')) return;
     change((p) => {
       let q = updateObject(p, slideId, o.id, fn);
       if (themed && overridePath) q = updateSlide(q, slideId, (s) => markOverride(s, overridePath));
@@ -59,20 +77,51 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
           </button>
         )}
       </div>
+      <LockedNote o={o} />
+      <GroupNote o={o} readOnly={liveLocked} />
       {o.type === 'text' && (
         <>
+          <FormatBar o={o} range={clampRange(range, o.text.length)} readOnly={readOnly} />
           <textarea
             rows={5}
             value={o.text}
             disabled={readOnly}
             id="ordo-text-editor"
+            aria-label="Text"
+            onSelect={(e) =>
+              setRange({ start: e.currentTarget.selectionStart, end: e.currentTarget.selectionEnd })
+            }
+            onKeyDown={(e) => {
+              // Ctrl+Z and Ctrl+Y here are the editor's undo and redo, not the field's own: the field's
+              // undo knows nothing of a Bold or a colour and would take typed letters back instead. Typing
+              // is one undo step per pause, so the editor's undo covers the text too.
+              const step = historyKey(e);
+              if (!step) return;
+              e.preventDefault();
+              e.stopPropagation();
+              if (readOnly) return;
+              const el = e.currentTarget;
+              const at = { start: el.selectionStart, end: el.selectionEnd };
+              (step === 'undo' ? undo : redo)();
+              // The field shows the restored text on the next render: the caret stays where it was.
+              requestAnimationFrame(() => {
+                const f = document.getElementById('ordo-text-editor');
+                if (!(f instanceof HTMLTextAreaElement)) return;
+                const n = f.value.length;
+                const r = { start: Math.min(at.start, n), end: Math.min(at.end, n) };
+                f.setSelectionRange(r.start, r.end);
+                setRange(r);
+              });
+            }}
             onChange={(e) => {
               // Runs and paragraph styles follow the edit (design/27 §11): a typo fix keeps the formatting.
               const next = e.target.value;
               const caret = e.target.selectionEnd;
-              set((x) => (x.type === 'text' ? editText(x, next, caret) : x), `text:${o.id}`);
+              setRange({ start: e.target.selectionStart, end: caret });
+              if (!readOnly) typeText(o.id, next, caret);
             }}
           />
+          <ParagraphStrip o={o} range={clampRange(range, o.text.length)} readOnly={readOnly} />
           {keyClash && (
             <div className="banner small">
               This text colour is close to a look's key colour; it may be keyed out on the stream.
@@ -84,7 +133,11 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
         <h4>
           Position and size{marks.has('box') && <span className="override-mark"> ● overrides theme</span>}
         </h4>
-        <BoxEditor value={o.box} onChange={(box) => set((x) => ({ ...x, box }), undefined, 'box')} />
+        <SelectionBox
+          o={o}
+          readOnly={liveLocked}
+          onChange={(box) => set((x) => ({ ...x, box }), undefined, 'box')}
+        />
       </section>
       <NumberField
         label="Opacity"
@@ -92,13 +145,23 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
         min={0}
         max={1}
         step={0.05}
+        disabled={readOnly}
         onChange={(opacity) => set((x) => ({ ...x, opacity }))}
       />
       {o.type === 'text' && (
-        <section>
+        <fieldset disabled={readOnly} style={SECTION}>
           <h4>Text style</h4>
+          <div role="status">
+            {fitMessage(o) && (
+              <div className="banner small" style={{ marginBottom: 8 }}>
+                {fitMessage(o)}
+              </div>
+            )}
+          </div>
           <TextStyleEditor
             value={o.style}
+            box
+            onRefit={readOnly ? undefined : () => refit(o.id)}
             marks={themed ? marks : undefined}
             onChange={(style: TextStyle, key) =>
               set(
@@ -108,10 +171,10 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
               )
             }
           />
-        </section>
+        </fieldset>
       )}
       {o.type === 'image' && (
-        <section className="col">
+        <fieldset className="col" disabled={readOnly} style={SECTION}>
           <h4>{o.play ? 'Poster' : 'Image'}</h4>
           <div className="row">
             <span className="grow ellipsis small">
@@ -127,35 +190,36 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
             options={['contain', 'cover', 'stretch'] as const}
             onChange={(fit) => set((x) => ({ ...x, fit }) as SlideObject)}
           />
-          <NumberField
-            label="Corner radius"
-            value={o.radius}
-            min={0}
-            onChange={(radius) => set((x) => ({ ...x, radius }) as SlideObject)}
-          />
+          {!o.mask?.preset && (
+            <NumberField
+              label="Corner radius"
+              value={o.radius}
+              min={0}
+              onChange={(radius) => set((x) => ({ ...x, radius }) as SlideObject)}
+            />
+          )}
+          <CropControl o={o} readOnly={readOnly} />
           {picking && (
             <MediaPickerDialog
               title={o.play ? 'Choose a poster image' : 'Choose an image'}
               kinds={['image']}
+              needsSize={o.fit !== 'contain' && o.fit !== 'cover'}
               onClose={() => setPicking(false)}
               onPick={(m) => {
-                // The old picture's crop does not fit the new one: it is dropped (design/27 §15 M3).
-                set((x) => {
-                  if (x.type !== 'image') return x;
-                  const { crop: _crop, ...rest } = x;
-                  return { ...rest, mediaId: m.id };
-                });
+                // Re-cropped to the box, never distorted; the mask, flips and the rest stay (design/27 §11).
+                if (!readOnly) replacePictureWith(o.id, m);
                 setPicking(false);
               }}
             />
           )}
-        </section>
+        </fieldset>
       )}
       {o.type === 'image' && slide && (
         <VideoPanel o={o} slide={slide} media={(id) => media.find((m) => m.id === id)} readOnly={readOnly} />
       )}
+      <ObjectSlideOps o={o} readOnly={readOnly} />
       {o.type === 'shape' && (
-        <section className="col">
+        <fieldset className="col" disabled={readOnly} style={SECTION}>
           <h4>Shape</h4>
           <Select
             label="Shape"
@@ -213,8 +277,26 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
               onChange={(radius) => set((x) => ({ ...x, radius }) as SlideObject)}
             />
           )}
-        </section>
+        </fieldset>
       )}
     </div>
   );
+}
+
+/**
+ * A panel section as a fieldset, so a locked object (or the live lock) disables every field in it at once;
+ * drawn as `.props section` is.
+ */
+const SECTION = {
+  border: 0,
+  borderBottom: '1px solid var(--line)',
+  margin: 0,
+  padding: '8px 0 12px',
+  minWidth: 0,
+} as const;
+
+/** A selection kept inside the text (the text can shrink under it: undo, another editor's change). */
+function clampRange(r: TextRange, len: number): TextRange {
+  const start = Math.max(0, Math.min(len, r.start));
+  return { start, end: Math.max(start, Math.min(len, r.end)) };
 }

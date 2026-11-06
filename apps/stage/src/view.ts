@@ -10,6 +10,7 @@ import {
   elapsedDisplay,
   mediaRemainingDisplay,
   nextText,
+  notesText,
   type StageLayout,
 } from './model.ts';
 import type { Bus, StageView } from './protocol.ts';
@@ -43,6 +44,7 @@ export function buildView(i: ViewInput): StageView {
     layout,
     current: safe(() => currentText(state, i.shown, layout), null),
     next: safe(() => nextText(state, i.shown, layout), null),
+    notes: layout.notes ? safe(() => notesText(state, i.shown), null) : null,
     clock: layout.clock
       ? safe(
           () => formatClock(now, i.general.timeZone, i.general.clock24h),

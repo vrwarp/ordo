@@ -198,11 +198,142 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
 - Editing a text box's plain text keeps its formatting: `editText` (`@ordo/domain`) shifts, trims and
   splits the runs and paragraph styles with the change, placed by the textarea's caret; splitting and
   merging slides cut and join them with the lines (design/27 §11).
+- Text ops (M4; `views/editor/ops/text.ts`, applied through `actions.ts`, one undo step each, nothing
+  recorded when nothing changes): `formatRange` formats the textarea's selection (runs split, normalised,
+  equal neighbours merged, at most 2,000, values bounded as the schema bounds them; Clear formatting
+  removes every run field), `resizeRange` scales its sizes relative to the box size (an effective
+  2-1,000 px; back to the box size drops the override), `setParas` styles the whole PowerPoint paragraphs
+  it touches (a soft line inherits the change; exact and proportional line spacing replace each other),
+  `selectionStyle` / `selectionParas` give the format bar and the paragraph strip their values (resolved
+  as the engine resolves them, mixed fields listed), and `refitText` is 'Re-fit text'. A text edit never
+  touches the box style, so PowerPoint's stored fit scale (`fitScale`) holds while the text fits and the
+  engine fits smaller when it does not; only 'Re-fit text' clears it.
+- Themes keep the lyric runs' structure (`themedRuns`): applying one drops each run's face, colour, size,
+  letter spacing, outline, shadow and highlight, keeps weight, italics, underline, strike, caps, language
+  and the verse superscripts (`baseline`) and paragraph styles, and drops the stored fit scale (the theme's
+  box is fitted again). Formatting the lyric object of a themed presentation marks the slide's override
+  `runs.<field>` (`runs.color`, `runs.sizeScale`, ...; `runs` keeps every one), so the next theme keeps it,
+  as `style.<field>` keeps a box style field.
 - Property panel bound to the selected object's schema.
-- Pictures are drawn with their crop (`ImageObject.crop`), as every other drawer draws them; 'Replace'
-  drops the old picture's crop, which does not fit the new one (design/27 §15 M3).
-- Saves via `PUT /presentations/:id` with `rev`; 409 shows the reload dialog.
+- Pictures are drawn with their crop, flips and mask (`ImageObject.crop`, `flipH`, `flipV`, `mask`) by the
+  same `drawImageFit` every other drawer uses (design/27 §11 item 6; M4 item D, `CropControl.tsx`, pure ops
+  in `ops/pictures.ts`, one undo step each, the crop fields coalescing per picture). The Object panel's
+  image section has:
+  - Crop: Left, Right, Top and Bottom as percentages of the picture, named as seen on the slide (a
+    mirrored picture's Left is its source's right share), each kept short of its opposite side; a negative
+    share leaves that side empty. 'Reset crop' shows the whole picture. A stretched picture whose cropped
+    part is not the shape of its box (a 4:3 photo stretched over a 16:9 box) says so and offers 'Keep
+    proportions': the largest part of it with the box's aspect, centred where it is.
+  - 'Crop on the slide' (`aria-pressed`): the whole picture is drawn faintly around its box; dragging it
+    (or the box) moves the picture behind the box, the arrow keys move it by 1 px (Shift: 10), and eight
+    handles (30 px under a finger) scale it at its own aspect about the opposite corner or side, so the
+    handles never distort it. The box stays; the selection's Transformer is hidden meanwhile. Enter or
+    Escape, a click on another object or on the slide, or the button again ends it. Every handle has its
+    numeric field.
+  - Mask (a radio group): None, Ellipse, Rounded with its 'Corner size' (% of the shorter side). 'Corner
+    radius' is hidden under a mask, which draws the corners; removing a mask also drops a radius that was
+    only the importer's stand-in for it. Flip horizontal and Flip vertical are toggle buttons.
+  - 'Replace' keeps the look, not the crop numbers: a stretched picture is cover-cropped to its box,
+    centred on the old crop's centre, so a picture of another aspect is never distorted; a contained or
+    covered one keeps its fit and drops the crop. Box, mask, flips, opacity, radius and a video's clip stay.
+  - All of these are read-only on locked art and while the presentation is locked.
+- Saves via `PUT /presentations/:id` with `rev`. On 409 a revision only the PowerPoint jobs saved is taken
+  over (`adoptJobSaves`, also as soon as the library shows it: unsaved edits are kept, a follow-up's slides
+  taken slide by slide, a re-import's through the three-way merge below, so a slide the volunteer changed
+  while the re-import rebuilt it is a conflict, not a silent loss; the undo and redo steps move with the
+  draft, so an undo never takes the job's work back out); else the version that won (the 409 body's `current`) is merged with the draft by
+  a three-way merge over the base (`views/editor/merge.ts`, design/27 §11 item 17): edits to different
+  slides, or to different boxes of one slide, are combined, the draft becomes the merge on their revision
+  (undo and redo move with it, so an undo never takes their work out) and saves again, with a toast. Where
+  both changed the same box, slide field or presentation field differently, the conflict dialog
+  (`ConflictDialog.tsx`) lists what overlaps by slide number and keeps 'Reload theirs (discard mine)' and
+  'Save mine anyway'; Cancel has the focus, which goes back where it was when the dialog closes. The
+  'Someone else saved' banner says that saving combines the two.
 - Disabled with a banner when the presentation is referenced by the live playlist.
+- The editor's shortcuts follow the focus (`views/editor/editorKeys.ts`): an open dialog keeps every key
+  (Delete on its Close button never deletes the object behind it, Enter presses its buttons); a field keeps
+  its own keys (Ctrl+S still saves); a focused button, link, radio or menu item keeps Enter, Space, the
+  arrows (a radio group moves between its choices without nudging the box) and Delete, and only the Ctrl
+  commands (undo, redo, duplicate, find) apply; with the focus on the slide canvas or the page, Delete, the
+  arrow nudges, Enter (edit the text) and Escape (drop the selection) apply too.
+- Groups and locked objects (design/27 §11 item 5 and "Locked objects"; pure ops in `views/editor/ops/group.ts`,
+  the panel's parts in `GroupPanel.tsx`). The selection is a set of objects with a primary one, which the
+  Object panel edits. A click on an object of a group (`origin.group`: a flattened PowerPoint group, or a
+  shape with its text) selects the whole group, a click on an object already selected keeps the selection
+  (so the press can drag it), Alt-click or a long press under a finger (500 ms) selects one member, and
+  Shift-click adds or takes out an object's group (Shift+Alt one member). The Transformer spans every
+  selected object: a drag of any of them moves them all (the group box snaps as one), its handles scale every
+  member's box about the group box (font sizes, insets and stroke widths do not scale) and turn them about
+  its centre. Delete, Ctrl+D (the copy is a group of its own, 20 px off, selected), the arrow keys and the
+  touch nudge bar, the z-order buttons (the selection moves as one contiguous block) and Ungroup (toolbar;
+  the touch Arrange menu while a group is selected) act on the selection, one undo step each. With several
+  objects selected the panel says so, offers 'Select one' (Alt-click's equivalent) and Ungroup, and its box
+  editor edits the group box (X, Y, W, H and 'Turn by'); a member selected alone offers 'Select the group'
+  and 'Take out of the group'. A locked object (PowerPoint art, SmartArt, table grids) has a lock badge on
+  the canvas and 'From PowerPoint (not editable)' in the panel: it can be moved, resized (art keeps its
+  aspect: corner handles only, W and H linked), deleted and reordered; it does not turn, and its text, style
+  and geometry fields are disabled.
+- Formatting text (M4; `views/editor/FormatBar.tsx` and `ParagraphStrip.tsx` around the text field,
+  applying `ops/text.ts` through `actions.ts`, one undo step each). The 'Text format' toolbar over the
+  field formats its selection: font, Size − / +, Bold, Italic, Underline, Strikethrough, Superscript and
+  Subscript (verse numbers), Caps, Clear formatting, the text colour (swatches of the deck's colours first:
+  the applied theme's text colour, then the colours its text and shapes use, most used first; then the
+  Office theme's) and a highlight; letter spacing, outline, shadow and language are behind 'More'. Pressed
+  states and values show the selection (`aria-pressed="mixed"` and 'Mixed' where it differs), a value equal
+  to the box's removes the override, and with a caret the bar is disabled ('Select text to format it.').
+  Ctrl+B / Ctrl+I / Ctrl+U work in the field; a button gives the field its focus and selection back, and a
+  pointer never takes them away. Ctrl+Z and Ctrl+Y (Ctrl+Shift+Z) in the field are the editor's undo and
+  redo, not the field's own (which knows nothing of a Bold), so Bold then Ctrl+Z takes the Bold back; the
+  caret stays where it was. The 'Paragraph' strip under the field styles the PowerPoint paragraphs the
+  selection touches: Align and Direction (Auto, Left to right, Right to left) as radio groups, List (bullets
+  • ● ■ ▪ ➢ ✓, numbers 1. (1) 1) a. i. with 'Start at'; a list started on paragraphs without an indent gets
+  a hanging one wide enough for its labels), Level and Indent − / + (each paragraph from its own value),
+  space before and after, and line spacing (as the box, a multiple of single, or exactly). Number fields
+  apply as they are typed, coalesced into one undo step per field. Every control is a design-system
+  button or field (44 px under a finger).
+- Text box options (TextStyleEditor's `box`, in the Object panel only; themes and looks keep their editor):
+  Shrink text to fit with 'Re-fit text' (clears PowerPoint's stored fit scale, so the text is fitted again
+  from full size), Wrap lines, the four insets in place of Padding (the padding keeps the smallest, the
+  closest value for an older build), Direction, the line spacing model (ordo or PowerPoint) and a fallback
+  font for a second script.
+- Guides (`CanvasGuides.tsx`, `textFit.ts`): a text box whose text does not fit, laid out as the drawers lay
+  it out (the rich engine's `overflow`, a shrink-to-fit box only past its smallest fit; legacy text whose
+  lines are taller than the box), has a dashed red edge on the canvas, and the Object panel says "Text does
+  not fit: turn on Shrink text to fit or enlarge the box" (a box already shrinking: enlarge it or shorten
+  the text). An imported deck that is not 16:9 (`source.native.slideRect`) has its area outlined and the
+  bars outside it shaded, so text stays inside what PowerPoint showed.
+- Slide and presentation ops for churches (design/27 §11 items 6-11; pure ops in `views/editor/ops/slides.ts`
+  through `actions.ts`, one undo step each, saved with the presentation). 'Find…' in the toolbar (Ctrl+F
+  outside a text field) opens Find and replace (`FindReplaceDialog.tsx`): Find, Replace with, Match case,
+  Whole words (letters, marks and digits are word characters; a typed space also finds a no-break space);
+  the count ('3 matches on 2 slides', a polite live region) and every match listed by slide number with the
+  text around it before anything is replaced, hidden slides included and tagged, locked objects left out; a
+  listed match opens its slide with the match selected in the text field; Replace all replaces every match
+  as typing the same change in the text field would: only the part of the match that differs is replaced
+  and takes the formatting of the text it replaces (a bold red date stays bold and red, the plain words a
+  match also covers stay plain; the box style and its stored fit are untouched). A match on a slide that
+  shows its PowerPoint picture on the screens is marked, since the change does not show there. The slide list dims a
+  hidden slide (its number and picture; the Hidden tag stays readable), and the selected slide's actions
+  have 'New slide like this' (a copy right after it with its text cleared, keeping each box's style, its
+  first paragraph's style and the formatting of a run over its whole first paragraph, without notes, the
+  hidden flag, a scripture reference or the PowerPoint picture; the new slide opens) and a 'Hidden' toggle
+  (`aria-pressed`). The Slide panel's Background shows the picture the slide shows and where it comes from
+  (from PowerPoint, this slide only, the presentation's default), 'Replace…' (images and videos) with a
+  scope radio group, 'This slide' or 'All N slides using it', and 'None' or 'Use the default' for a
+  background of its own; the Presentation panel has 'Replace on all slides…' for the deck's background (its
+  default, else the picture most slides show). A replace rewrites every use of the picture: slides' and the
+  presentation's `backgroundMediaId` (drawn cover-fit) and `role: 'bg'` pictures, re-cropped by the picture
+  replace rule so a picture of another aspect is never distorted; a slide with a solid PowerPoint background
+  loses that shape so the picture shows; a video becomes a motion background. A box from a PowerPoint
+  placeholder (or layout shape) offers 'Apply to similar boxes…' in the Object panel, confirmed with the
+  count ('Apply to 12 boxes on 12 slides?'): the similar boxes take its style and paragraph styles by level,
+  keeping their text and runs (a themed lyric box marks the style fields it now overrides). A picture that
+  covers the whole screen offers 'Use as background', which moves it to the slide's `backgroundMediaId`
+  (on a 4:3 deck a picture covering only the slide area stays a picture: a background is drawn over the
+  whole screen and would lose a quarter of its height). The pickers of 'Replace' and the background replace
+  list a picture still being processed but let it be chosen only once its size is known (a stretched
+  picture replaced by one of unknown size would be distorted; `replacePicture` gives such a picture
+  `fit: 'cover'` as a safety net); each thumbnail is a button named by the media name.
 - Media playing in place (design/27 §8, §11 item 14; `views/editor/MediaPanels.tsx`, pure ops in
   `mediaOps.ts`, one undo step each). '+ Video' (touch: Add → Video…) adds an ImageObject whose `mediaId`
   is the video, so every drawer shows its poster, with `play` {start automatically, no loop, hold the last
@@ -261,6 +392,15 @@ Outputs and looks, audio devices and pairs, key map, Stream Deck pages, MIDI map
 PINs, output tokens, backups, diagnostics export. Each page is a form over the matching
 `/settings/*` resource.
 
+- **The stage look's notes** (design/27 §11 item 13, M4). The look page's 'Stage screen' card
+  (`src/views/settings/StageNotesOptions.tsx`, shown for a look of kind stage, and for any look whose notes
+  are on) has 'Notes: show the live slide's notes, for the preacher' (`PropsRule.notes`). While it is on it
+  shows the notes box (a `BoxEditor` without rotation, in a fieldset) and the notes text (`TextStyleEditor`).
+  Until either is edited the look stores no `style['notes']`, and the card shows the stage's default box,
+  under the next-slide band, which follows the lyric bands. Editing stores both. 'Use the default box and
+  text' removes them again. A box that overlaps the current lyrics band is said in a status banner: the
+  stage shows only the part beside the lyrics. The preview draws a sample line in the notes box.
+
 ## PowerPoint imports
 
 The import screen (`views/library/ImportTab.tsx`) asks how a PowerPoint is imported
@@ -273,7 +413,7 @@ LibreOffice follow-up as it waits, runs, finishes or fails, fonts to upload "for
 to the Fonts tab), the slides whose import approximated something (`Slide.pptx.notes`, numbered as in the
 editor) and the import's notes. Job results are read defensively (`lib/pptxImport.ts`): another hub version
 or a failed job shows less, never breaks the card, and deck text is only ever shown as text. Follow-up jobs
-(`pptx-lo`, `pptx-reference`, the text repair) are not listed as imports.
+(`pptx-lo`, `pptx-reference`, the text repair, the re-import) are not listed as imports.
 
 In the editor, a slide imported natively has a 'From PowerPoint' card in the Slide panel
 (`PptxSlideCard.tsx`): its class, what was approximated, LibreOffice work still pending, and 'Show
@@ -287,6 +427,39 @@ instead'. The canvas, the thumbnails, the look previews and 'Send to preview' dr
 do (design/27 §5 "One rule for every drawer", `slideContent`): a slide set to show its PowerPoint picture
 shows that picture and only the objects added in ordo (the imported objects, marked by `origin`, are
 neither drawn nor selectable on the canvas), and a picture slide its page picture under its objects.
+
+The card also (M4, design/27 §11 item 12) says when the slide was edited in ordo since the import (its
+imported objects no longer match `Slide.pptx.digest`; objects added in ordo do not count), names the fonts
+of its text the hub cannot draw with their own widths (neither the family nor a metric-compatible fallback
+of the box, such as Carlito for Calibri, is a library font) with 'Upload font' (the Fonts tab), and offers:
+- 'Show the PowerPoint picture on the screens' (`Slide.pptx.show`, one undo step through `actions.ts`
+  `setSlideShows`, saved with the presentation): on an edited slide a confirmation first says that the
+  picture shows the slide as imported, without the edits (objects added in ordo still draw over it); with
+  no picture yet it saves unsaved edits and asks the hub for the pictures with this slide switched
+  (`showPicture: [slide]`), then takes the job's revision over.
+- 'Reset slide from PowerPoint', for an edited slide or one LibreOffice could not draw: after a
+  confirmation it saves unsaved edits and runs the hub's re-import of that slide (`pptx-reimport` with
+  `{ slideIds, reset }`), its progress in the card (a live region); the slide gets the deck's objects back,
+  keeping its id, notes, timing, background and the objects added in ordo on top. History keeps the slide
+  as it was.
+
+'Make editable' on a legacy PowerPoint page (a picture import from before M3) rebuilds the page from the
+stored deck: the hub reroutes it to the re-import of that slide (202 and the job), the editor follows the
+job and takes it over, and the page becomes the native slide with the objects added over it on top and its
+notes. A PDF page, or a deck no longer stored, keeps today's text boxes over the page picture.
+
+The Presentation panel of a PowerPoint presentation ends with its import report (`PptxReport.tsx`): the
+slides per class (`source.native`) or, for a legacy import, that its slides are pictures; legacy pages
+left; hidden and edited slides; slides waiting for LibreOffice or that it could not draw; the fonts to
+upload; the approximated slides (each a button that opens the slide); and the import log (`source.log`,
+the newest 200 lines, warnings tagged), all deck text shown as text. 'Re-import from PowerPoint…' opens a
+dialog with the hub's plan (`GET /presentations/:id/pptx-reimport`, nothing written): slides rebuilt,
+picture slides made editable, edited slides kept, other slides kept, and what is always kept; slides made
+editable by an older build are listed, each with 'Slide N: keep as it is'. 'Re-import' saves unsaved edits
+first, queues the job and closes the dialog (focus goes back to the button, or to the report while the job
+runs); the report shows its progress, and when it is done the editor takes its revision over like a
+PowerPoint follow-up's (`PPTX_JOB_SAVERS` includes 'pptx-reimport': an unsaved edit of a slide stays, every
+other slide shows the re-import) and says what changed. Nothing runs while the presentation is live.
 
 ## Service checklist
 

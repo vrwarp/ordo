@@ -240,6 +240,38 @@ const frac = z.number().min(-1).max(1);
 export const ImageCrop = z.object({ l: frac, t: frac, r: frac, b: frac });
 export type ImageCrop = z.infer<typeof ImageCrop>;
 
+/**
+ * A DrawingML geometry (design/27 §3.1): a preset by POI's name, evaluated at draw time so a resize keeps
+ * its corners, with adjust values as [name, value] pairs (no deck string is ever a key), or the paths of a
+ * custGeom (`d` with M, L, C, Q, Z and numbers only, in the path's own `w` x `h`, scaled to the box; M6).
+ * As a picture's mask (M4): 'ellipse' and 'roundRect' are drawn, roundRect's 'adj' being the corner radius
+ * in 1/100,000 of the box's shorter side (default 16,667); any other geometry draws the picture uncut until
+ * M6 draws it.
+ */
+export const ShapeGeom = z.object({
+  preset: z.string().max(40).optional(),
+  adj: z
+    .array(z.tuple([z.string().max(16), z.number().min(-1e7).max(1e7)]))
+    .max(10)
+    .optional(),
+  paths: z
+    .array(
+      z.object({
+        d: z.string().max(40_000),
+        w: z.number().min(0).max(1e9),
+        h: z.number().min(0).max(1e9),
+        fill: z
+          .enum(['norm', 'none', 'lighten', 'lightenLess', 'darken', 'darkenLess'])
+          .catch('norm')
+          .optional(),
+        stroke: z.boolean().optional(),
+      }),
+    )
+    .max(8)
+    .optional(),
+});
+export type ShapeGeom = z.infer<typeof ShapeGeom>;
+
 export const ImageObject = z.object({
   id: Id,
   type: z.literal('image'),
@@ -252,6 +284,14 @@ export const ImageObject = z.object({
   radius: length.default(0),
   /** Absent in older builds, which strip it and draw the whole picture (design/27 §3.2). */
   crop: ImageCrop.optional(),
+  /**
+   * Mirrored about the box's centre before the box's rotation, crop and mask included (PowerPoint's
+   * `flipH`/`flipV`; a crop share keeps naming the source's side). Older builds draw the picture unflipped.
+   */
+  flipH: z.boolean().optional(),
+  flipV: z.boolean().optional(),
+  /** The picture is cut to this geometry in its box; `radius` applies only without one (design/27 §3.1). */
+  mask: ShapeGeom.optional(),
   ...common,
 });
 export type ImageObject = z.infer<typeof ImageObject>;
@@ -633,6 +673,11 @@ export const PropsRule = z.object({
    */
   mediaRemaining: z.boolean().optional(),
   style: bounded(z.record(z.string().max(100), PropBox), 100).default({}),
+  /**
+   * Stage look: show the live slide's notes (`Slide.notes`) for the preacher, drawn in `style['notes']`
+   * (design/27 §11 item 13). Optional so stored looks need no migration; absent means off.
+   */
+  notes: z.boolean().optional(),
 });
 export type PropsRule = z.infer<typeof PropsRule>;
 
