@@ -294,6 +294,27 @@ box and LibreOffice re-fits smaller. Worship shard 0: 0.693 → 0.795 (pptx-prev
 template lose 0.04 against M1: LibreOffice draws their (glowing) text at about 55 % of its size, which no
 ordo rule explains yet.
 
+Measured after the merge with the engine fixes and the harness's font resolver (the M2 exit of design/27
+§15; `--lo-compat` runs, which draw each slide a policy rule changes both ways, so every number is given
+drawn with LibreOffice's policies / with ordo's; pptx-preview with ordo's corrections, per slide):
+- Sermon decks (73 slides): 0.944 / 0.932 against pptx-preview's 0.927. With LibreOffice's policies every
+  deck is above pptx-preview; with ordo's, one deck is 0.040 below it, all of it on three slides whose
+  body PowerPoint stored at a 92.5 % fit for a face this machine substitutes (ordo keeps the stored scale,
+  LibreOffice fits again and wraps differently). 72 of 73 slides are native class (one hybrid: 3D).
+- Worship shards 0 and 2 (179 decks): T1+T2 slides (1,014) 0.906 / 0.895 against 0.859 on the same slides
+  (shard 0 0.918 / 0.913 against 0.883, shard 2 0.896 / 0.880 against 0.838).
+- Text features, deck means as the targets were taken (pptx-preview on the same decks; target): superSub
+  0.642 / 0.635 (0.616; 0.61), lnSpcPct 0.798 / 0.797 (0.743; 0.75), normAutofitScaled 0.849 / 0.838
+  (0.762; 0.77), rtl 0.799 / 0.798 (0.685; 0.71), rtlScriptText 0.674 / 0.674 (0.645; 0.66). Per slide,
+  native is above pptx-preview on the same slides for every feature; the normAutofitScaled slides alone
+  are 0.758 / 0.714 (0.668).
+- Raster p95 on the sermon slides, ordo's drawings, software raster on a shared 4-CPU machine: 10.2 ms at
+  1920 and 45.4 ms at 3840 (M1: 9.1 and 45.4), over the budget of 8 and 30 ms. The slowest slides draw
+  three or four full-slide pictures; then come slides with shadowed text (7.0 ms mean against 3.7 ms
+  without), which the effect sprite cache of design/27 §7.5 is for.
+- `--baseline` against M1's native scores flags one deck per shard (−0.044 each): the two decks of the
+  template above.
+
 Not done: hyperlink colours (PowerPoint draws linked runs in the theme's hlink colour), symbol-font
 characters inside the text itself (`a:sym`), `origin` and the `role: 'translation'` of the second
 language box (M3, with the rest of `ObjectOrigin`), vertical text (residual until M8).
