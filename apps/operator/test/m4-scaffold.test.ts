@@ -282,9 +282,12 @@ describe('the component stubs', () => {
 });
 
 describe('merge on 409 (item H)', () => {
-  it('never merges while it is a stub', () => {
+  it('merges (built: apps/operator/test/merge.test.ts, mergeSave.test.ts)', () => {
     const p = deck();
-    expect(mergeThreeWay(p, p, p).merged).toBeUndefined();
+    expect(mergeThreeWay(p, p, { ...p, rev: p.rev + 1 })).toEqual({
+      merged: { ...p, rev: p.rev + 1 },
+      conflicts: [],
+    });
   });
 
   it('theirsOf reads the version that won from a 409, and nothing else', () => {

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { Dialog } from '../../components/Dialog.tsx';
 import { FindReplaceDialog } from './FindReplaceDialog.tsx';
 import { installKeepVisible } from '../../components/keepVisible.ts';
 import { Menu } from '../../components/Menu.tsx';
@@ -17,6 +16,7 @@ import {
   ungroupSelection,
 } from './actions.ts';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
+import { ConflictDialog } from './ConflictDialog.tsx';
 import { LookPreviews } from './LookPreviews.tsx';
 import { addVideo } from './mediaOps.ts';
 import {
@@ -471,7 +471,8 @@ export function EditorView({ id }: { id: string }) {
         {changedElsewhere && (
           <div className="banner blue row" style={{ margin: 8 }}>
             <span className="grow">
-              Someone else saved this presentation (rev {libP.rev}) since you opened it.
+              Someone else saved this presentation (rev {libP.rev}) since you opened it. Saving combines your
+              changes with theirs.
             </span>
             <button type="button" className="small" onClick={() => void reloadLatest()}>
               Reload theirs
@@ -590,30 +591,8 @@ export function EditorView({ id }: { id: string }) {
           }}
         />
       )}
-      {ed.conflict && (
-        <Dialog
-          title="Changed by someone else"
-          onClose={() => useEditor.setState({ conflict: false })}
-          footer={
-            <>
-              <button type="button" onClick={() => useEditor.setState({ conflict: false })}>
-                Cancel
-              </button>
-              <button type="button" onClick={() => void reloadLatest()}>
-                Reload theirs (discard mine)
-              </button>
-              <button type="button" className="primary" onClick={() => void save(true)}>
-                Save mine anyway
-              </button>
-            </>
-          }
-        >
-          <p style={{ marginTop: 0 }}>
-            This presentation was saved by someone else after you opened it. Saving yours replaces theirs
-            (their version stays in the history), or reload to see their changes.
-          </p>
-        </Dialog>
-      )}
+      {/* A 409 the three-way merge could not resolve (M4 item H): what overlaps, Reload theirs, Save mine. */}
+      {ed.conflict && <ConflictDialog />}
     </div>
   );
 }
