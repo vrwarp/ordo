@@ -25,6 +25,8 @@ export interface SlideCtx {
   /** `p:sldMaster`. */
   master?: XNode;
   theme: Theme;
+  /** The theme part, for the relationships of its picture fills (added by work item C). */
+  themePart?: string;
   /** Master clrMap with the slide's clrMapOvr: used for the slide's own, inherited and background colours. */
   color: ColorCtx;
   /** This slide's notes (approximations, skipped content). */
@@ -60,6 +62,7 @@ export function slideContext(pkg: Package, deck: DeckInfo, frame: Frame, ref: Sl
     masterPart: parts.masterPart,
     master: parts.master,
     theme,
+    themePart: parts.themePart,
     color: colorContext(theme, child(parts.master, 'p:clrMap'), child(parts.slide, 'p:clrMapOvr')),
     log,
   };

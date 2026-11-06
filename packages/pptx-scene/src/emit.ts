@@ -1,15 +1,41 @@
 /**
  * IR → ordo objects (design/27 §1 `emit.ts`, §3.2 "The importer always writes the closest legacy values").
  *
- * M1 emits today's objects only (`TextObject`, `ImageObject`, `ShapeObject`), plus `ImageObject.crop` once
- * work item D has added it to the schema. Pictures carry placeholder media ids, `pptxmedia:<part>` by
- * default, which the harness (and later the hub) maps to real media.
+ * M1 emits today's objects only (`TextObject`, `ImageObject`, `ShapeObject`), plus `ImageObject.crop` when
+ * `EmitOptions.crop` is set (work item D adds the schema field; until then `Slide.parse` would strip it).
+ * Pictures carry placeholder media ids, `pptxmedia:<part>` by default, which the harness (and later the
+ * hub) maps to real media.
  *
- * Owned by work item C (inherit-emit). The scaffold emits a text box in its first run's style, solid
- * rect/roundRect/ellipse/line shapes, stretched pictures, and solid or picture backgrounds. Still to do:
- * the dominant run, line height from lnSpcPct, outline (w/2), outer shadow, caps, lines at any angle,
- * picture backgrounds that are not a 16:9 stretch, the lyric object rule of §4 "Church mappings", and
- * `crop` (one line, once D's schema lands).
+ * - **Placement.** Every element's affine is mapped to the 1920x1080 logical canvas (`frame.ts`: contain-
+ *   fit, 4:3 decks centred). Boxes keep their rotation; flips of symmetric shapes need nothing, a flipped
+ *   picture is drawn unflipped (M3) and noted.
+ * - **Text** becomes one `TextObject` per body in its dominant run's style (most characters): size (times a
+ *   stored `normAutofit` fontScale), colour, bold, italic, the Latin typeface (the East Asian or complex-
+ *   script one when the text is mostly in those scripts), caps, letter spacing. `algn` → align (justify →
+ *   left, distribute → center), anchor → valign, line spacing → lineHeight (single = 1.2 × the font size,
+ *   the office line model; a `lnSpcReduction` is subtracted), text outline → `outline` with width w/2
+ *   (ordo strokes twice the width under the fill), hollow text → alpha 0 plus the outline, the run's outer
+ *   shadow (or the shape's, when the shape itself draws nothing) → `shadow`.
+ * - **Text rectangle.** The shape's box, narrowed to the preset's text rectangle for roundRect and ellipse;
+ *   `padding` is the smallest body inset and the difference to each other inset is folded into the box,
+ *   so the text area is PowerPoint's exactly (until `TextStyle.insets` exists, M2). `wrap="none"` widens
+ *   the box on the side(s) the alignment grows into, so ordo never wraps it. `vert`/`vert270`/`eaVert` turn
+ *   the box a quarter turn.
+ * - **Shapes**: rect, roundRect (radius from its `adj`), ellipse; lines and connectors as one `line` object
+ *   per straight segment at any angle. Other presets are drawn as the nearest of these (noted). Fills as
+ *   their legacy colour: solid; a gradient's first stop; a pattern's blend. A picture fill is an image.
+ * - **Pictures** (`p:pic` and picture fills) are stretched images. `a:fillRect` folds into the box (clipped
+ *   to the shape) and, with `crop`, into the crop together with `a:srcRect`. roundRect and ellipse clips
+ *   become `radius` (an ellipse is exact for a circle); a picture outline is a stroke-only shape above it.
+ * - **Backgrounds**: a plain stretched picture whose aspect matches a 16:9 slide → `backgroundMediaId`;
+ *   any other picture → a bottom image over the slide area; solid, gradient and pattern → a bottom rect over
+ *   the whole 1920x1080 frame (`extendBackgrounds`, default) or the slide area; none → white, as
+ *   PowerPoint shows it.
+ * - **Lyric box** (design/27 §4 "Church mappings"): the slide's own body placeholder with the most
+ *   characters; else the largest other text by characters × area (not title, date, footer, slide number);
+ *   the title only when it is the only text.
+ *
+ * Owned by work item C (inherit-emit).
  */
 import type {
   ImageObject,
@@ -19,20 +45,27 @@ import type {
   SlideObject,
   TextObject,
 } from '@ordo/domain';
-import { boxPx, lenPx, ptPx, slideRect } from './frame.ts';
+import { apply, boxPx, decompose, lenPx, multiply, ptPx, slideRect } from './frame.ts';
+import { isFooter, isTitle, masterClass } from './inherit.ts';
 import type {
+  Affine,
   Classification,
   DeckScene,
   Element,
   Fill,
   Frame,
+  Insets,
+  Para,
+  PictureElement,
   PictureFill,
   Rgba,
+  RunStyle,
   ShapeElement,
   SlideScene,
+  TextBody,
 } from './ir.ts';
+import { EMU_PER_PT } from './ir.ts';
 import { noteList } from './log.ts';
-import { plainText } from './text.ts';
 
 /** The prefix of placeholder media ids. */
 export const MEDIA_PREFIX = 'pptxmedia:';
@@ -41,8 +74,27 @@ export const MAX_TEXT = 20_000;
 /** Stored font sizes in logical px (design/27 §4 "Sizes"). */
 export const MIN_FONT_PX = 4;
 export const MAX_FONT_PX = 1_000;
+/** Objects one ordo slide holds (`Slide.objects` in `@ordo/domain`). */
+export const MAX_OBJECTS = 1_000;
+/** Single line spacing in the office line model: 1.2 × the font size (`pptx-render/src/page.ts`). */
+export const SINGLE_LINE = 1.2;
 /** Logical coordinates are bounded by the schema (`coord`). */
 const MAX_COORD = 100_000;
+/** How far a `wrap="none"` box grows on the side its alignment extends to, in logical px. */
+const NO_WRAP_GROWTH = 1_920;
+/**
+ * Custom geometry is drawn as its legacy rect only when its paths fill at least this share of the box: a
+ * rect over a thin silhouette or swoosh is further from it than nothing (M6 draws the paths).
+ */
+export const MIN_RECT_COVERAGE = 0.5;
+/** A roundRect's default corner (`adj` 16,667 of the shorter side, /100,000). */
+const ROUND_RECT_ADJ = 16_667;
+/** The ellipse's text rectangle inset on each side, as a share of the box (POI: hc − wd2·cos 45°). */
+const ELLIPSE_TEXT_INSET = 0.5 - 0.5 * Math.SQRT1_2;
+/** The roundRect's text rectangle inset as a share of its corner radius (POI: 29,289/100,000). */
+const ROUND_RECT_TEXT_INSET = 0.29289;
+
+const WHITE: OrdoRgba = { r: 255, g: 255, b: 255, a: 1 };
 
 export interface EmitOptions {
   /** A new id for each slide and object; default: deterministic `pptx-<n>`. */
@@ -51,7 +103,16 @@ export interface EmitOptions {
   mediaId?: (part: string) => string;
   /** Solid backgrounds cover the whole 1920x1080 frame instead of the slide area (default true). */
   extendBackgrounds?: boolean;
+  /**
+   * Write `ImageObject.crop` (design/27 §3.1: `a:srcRect` fractions, negative values pad with transparency)
+   * and fold `a:fillRect` into it. Default false until the schema has the field (work item D): without it
+   * `Slide.parse` strips the key. Without crop, pictures are stretched and uncropped (the legacy value).
+   */
+  crop?: boolean;
 }
+
+/** An image object with the crop of design/27 §3.1 (`@ordo/domain` gains the field with work item D). */
+export type CroppedImage = ImageObject & { crop?: Insets };
 
 export interface EmittedSlide {
   index: number;
@@ -82,6 +143,7 @@ interface EmitCtx {
   newId: () => string;
   mediaId: (part: string) => string;
   extend: boolean;
+  crop: boolean;
   media: Map<string, string>;
   log: (msg: string) => void;
 }
@@ -100,6 +162,7 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       newId,
       mediaId,
       extend: opts.extendBackgrounds ?? true,
+      crop: opts.crop ?? false,
       media,
       log,
     };
@@ -123,106 +186,309 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
   };
 }
 
+/** A text object with the element it came from, for the lyric box. */
+interface Emitted {
+  o: TextObject;
+  e: ShapeElement;
+  area: number;
+}
+
 function emitSlide(ctx: EmitCtx, s: SlideScene): Slide {
   const objects: SlideObject[] = [];
   const slide: Slide = { id: ctx.newId(), objects };
   if (s.error) return slide;
   emitBackground(ctx, s, slide);
-  for (const e of s.elements) if (!e.hidden) objects.push(...emitElement(ctx, e));
-  // M1: the text with the most characters is the lyric box (design/27 §4 "Church mappings" refines it).
-  let best: TextObject | undefined;
-  for (const o of objects) if (o.type === 'text' && (!best || o.text.length > best.text.length)) best = o;
-  if (best?.text.trim()) slide.lyricObjectId = best.id;
+  const texts: Emitted[] = [];
+  for (const e of s.elements) if (!e.hidden) emitElement(ctx, e, objects, texts);
+  if (objects.length > MAX_OBJECTS) {
+    ctx.log(`more than ${MAX_OBJECTS} objects: the top ones are not drawn`);
+    objects.length = MAX_OBJECTS;
+  }
+  const lyric = lyricOf(texts.filter((t) => objects.includes(t.o)));
+  if (lyric) slide.lyricObjectId = lyric.id;
   return slide;
 }
 
+// ── Lyric box ───────────────────────────────────────────────────────────────────────────────────────────
+
+function visibleChars(s: string): number {
+  let n = 0;
+  for (const ch of s) if (ch.trim()) n++;
+  return n;
+}
+
+function lyricOf(texts: Emitted[]): TextObject | undefined {
+  const own = texts.filter((t) => t.e.from === 'slide' && visibleChars(t.o.text) > 0);
+  const best = (list: Emitted[], score: (t: Emitted) => number) => {
+    let top: Emitted | undefined;
+    let topScore = Number.NEGATIVE_INFINITY;
+    for (const t of list) {
+      const v = score(t);
+      if (v > topScore) {
+        top = t;
+        topScore = v;
+      }
+    }
+    return top?.o;
+  };
+  const chars = (t: Emitted) => visibleChars(t.o.text);
+  const body = own.filter((t) => t.e.ph && masterClass(t.e.ph.type) === 'body');
+  if (body.length) return best(body, chars);
+  const other = own.filter((t) => !isTitle(t.e.ph) && !isFooter(t.e.ph));
+  if (other.length) return best(other, (t) => chars(t) * Math.max(1, t.area));
+  return best(
+    own.filter((t) => isTitle(t.e.ph)),
+    chars,
+  );
+}
+
+// ── Backgrounds ─────────────────────────────────────────────────────────────────────────────────────────
+
 function emitBackground(ctx: EmitCtx, s: SlideScene, slide: Slide): void {
   const fill = s.background.fill;
-  const rect = slideRect(ctx.frame);
-  const area = ctx.extend ? { x: 0, y: 0, w: 1920, h: 1080 } : rect;
-  if (fill.kind === 'solid') {
-    slide.objects.push(shape(ctx, { ...area, rotation: 0 }, 'rect', fill.color));
-  } else if (fill.kind === 'picture') {
+  const rect = { ...slideRect(ctx.frame), rotation: 0 };
+  const area = ctx.extend ? { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 } : rect;
+  if (fill.kind === 'picture') {
     const p = fill.picture;
-    const sixteenNine = Math.abs(ctx.frame.cx / ctx.frame.cy - 16 / 9) < (16 / 9) * 0.01;
+    const slideAspect = ctx.frame.cx / ctx.frame.cy;
+    const sixteenNine = Math.abs(slideAspect - 16 / 9) < (16 / 9) * 0.01;
+    const sameAspect = !p.px || Math.abs(p.px.w / p.px.h - slideAspect) <= slideAspect * 0.01;
     const plain = !p.crop && !p.fillRect && !p.tile && p.alpha === undefined && !p.effects?.length;
-    if (sixteenNine && plain) slide.backgroundMediaId = mediaOf(ctx, p.part);
-    else slide.objects.push(image(ctx, { ...rect, rotation: 0 }, p));
-  } else if (fill.kind !== 'none') ctx.log(`background: ${fill.kind} fill not drawn yet`);
+    if (sixteenNine && sameAspect && plain) {
+      slide.backgroundMediaId = mediaOf(ctx, p.part);
+      return;
+    }
+    if (p.tile) ctx.log('a tiled background is drawn stretched (M3 pre-tiles it)');
+    if (p.effects?.length) ctx.log('a recoloured background picture is drawn without its recolouring');
+    const unit: Affine = [ctx.frame.cx, 0, 0, ctx.frame.cy, 0, 0];
+    const img = pictureObject(ctx, unit, p.tile ? { ...p, crop: undefined, fillRect: undefined } : p);
+    if (img) slide.objects.push(img);
+    return;
+  }
+  if (fill.kind === 'gradient') ctx.log('a gradient background is drawn as its first colour (M6)');
+  if (fill.kind === 'pattern') ctx.log('a pattern background is drawn as its blended colour (M6)');
+  const color = legacyColor(fill) ?? WHITE;
+  slide.objects.push(shape(ctx, area, 'rect', color));
 }
 
-function emitElement(ctx: EmitCtx, e: Element): SlideObject[] {
-  const box = clampBox(boxPx(ctx.frame, e.xf));
+// ── Elements ────────────────────────────────────────────────────────────────────────────────────────────
+
+function emitElement(ctx: EmitCtx, e: Element, out: SlideObject[], texts: Emitted[]): void {
   if (e.kind === 'residual') {
     ctx.log(`${e.what} not drawn (LibreOffice art comes in M3)`);
-    return [];
+    return;
   }
-  if (e.kind === 'picture') return [image(ctx, box, e.picture)];
-  return emitShape(ctx, e, box);
+  if (e.kind === 'picture') {
+    emitPicture(ctx, e, out);
+    return;
+  }
+  emitShape(ctx, e, out, texts);
 }
 
-function emitShape(ctx: EmitCtx, e: ShapeElement, box: Box): SlideObject[] {
-  const out: SlideObject[] = [];
-  if (e.fill.kind === 'picture') out.push(image(ctx, box, e.fill.picture));
-  else {
-    const fill = solidOf(e.fill);
-    const stroke = e.line ? solidOf(e.line.fill) : undefined;
-    if (fill || stroke) {
-      const kind =
-        e.geom === 'ellipse'
-          ? 'ellipse'
-          : e.geom === 'line' || e.geom === 'straightConnector1'
-            ? 'line'
-            : 'rect';
-      const o = shape(ctx, box, kind, fill);
-      if (stroke && e.line) o.stroke = { width: lenPx(ctx.frame, e.line.width), color: stroke };
-      if (e.geom === 'roundRect') o.radius = (Math.min(box.w, box.h) * 16_667) / 100_000;
-      out.push(o);
+function emitPicture(ctx: EmitCtx, e: PictureElement, out: SlideObject[]): void {
+  if (decompose(e.xf).flipH) ctx.log('a flipped picture is drawn unflipped (M3)');
+  if (e.reasons?.some((r) => r.startsWith('mask:')))
+    ctx.log(`a picture clipped to ${e.geom} is drawn as a rect (M3)`);
+  if (e.picture.effects?.length) ctx.log('a recoloured picture is drawn without its recolouring (M3)');
+  if (e.media) ctx.log(`a ${e.media.kind} is drawn as its poster (M5)`);
+  const img = pictureObject(ctx, e.xf, e.picture, e.geom, e.adj);
+  if (img) out.push(img);
+  const stroke = e.line ? legacyColor(e.line.fill) : undefined;
+  if (e.line && stroke) {
+    const box = boxOf(ctx, e.xf);
+    const kind = e.geom === 'ellipse' ? 'ellipse' : 'rect';
+    const o = shape(ctx, box, kind, undefined);
+    o.stroke = { width: strokeWidth(ctx, e.line.width), color: stroke };
+    if (e.geom === 'roundRect') o.radius = cornerRadius(box, e.adj);
+    out.push(o);
+  }
+}
+
+/** Lines and connectors drawn as straight segments, in the shape's unit square. */
+function segmentsOf(geom: string, adj: [string, number][] | undefined): [number, number][] | undefined {
+  if (geom === 'line' || geom === 'straightConnector1' || geom.startsWith('curvedConnector')) {
+    return [
+      [0, 0],
+      [1, 1],
+    ];
+  }
+  if (geom === 'bentConnector2')
+    return [
+      [0, 0],
+      [1, 0],
+      [1, 1],
+    ];
+  if (geom.startsWith('bentConnector')) {
+    const x = Math.min(10, Math.max(-10, adjOf(adj, 'adj1', 50_000) / 100_000));
+    return [
+      [0, 0],
+      [x, 0],
+      [x, 1],
+      [1, 1],
+    ];
+  }
+  return undefined;
+}
+
+/** Presets drawn as an ellipse, and as a rect with fully rounded ends. */
+const ELLIPTIC = new Set([
+  'ellipse',
+  'flowChartConnector',
+  'flowChartOr',
+  'flowChartSummingJunction',
+  'pie',
+  'chord',
+  'teardrop',
+  'cloud',
+  'smileyFace',
+]);
+const ROUNDED = new Set(['roundRect', 'flowChartAlternateProcess']);
+
+function emitShape(ctx: EmitCtx, e: ShapeElement, out: SlideObject[], texts: Emitted[]): void {
+  const box = boxOf(ctx, e.xf);
+  if (e.fill.kind === 'picture') {
+    const img = pictureObject(ctx, e.xf, e.fill.picture, e.geom, e.adj);
+    if (img) out.push(img);
+  }
+  const fill = e.fill.kind === 'picture' ? undefined : legacyColor(e.fill);
+  const stroke = e.line ? legacyColor(e.line.fill) : undefined;
+  // PowerPoint casts a shape's shadow on its text only when the shape itself shows nothing.
+  const visible = e.fill.kind === 'picture' || fill !== undefined || stroke !== undefined;
+  const segments = segmentsOf(e.geom, e.adj);
+  if (segments) {
+    if (stroke && e.line) {
+      for (let i = 1; i < segments.length; i++)
+        out.push(
+          lineObject(ctx, e.xf, segments[i - 1]!, segments[i]!, strokeWidth(ctx, e.line.width), stroke),
+        );
+      if (e.line.head || e.line.tail) ctx.log('arrowheads are not drawn yet (M6)');
+    }
+  } else if (e.geom === 'custom' && e.coverage !== undefined && e.coverage < MIN_RECT_COVERAGE) {
+    if (fill || stroke) ctx.log('custom geometry that fills little of its box is not drawn (M6)');
+  } else if (fill || stroke) {
+    const kind = ELLIPTIC.has(e.geom) ? 'ellipse' : 'rect';
+    const o = shape(ctx, box, kind, fill);
+    if (stroke && e.line) o.stroke = { width: strokeWidth(ctx, e.line.width), color: stroke };
+    if (ROUNDED.has(e.geom)) o.radius = cornerRadius(box, e.adj);
+    else if (e.geom === 'flowChartTerminator') o.radius = Math.min(box.w, box.h) / 2;
+    const approx = (e.reasons ?? []).filter((r) => r !== 'vert' && r !== 'warp' && r !== 'numCol');
+    if (approx.length) ctx.log(`${approx.join(', ')} drawn as ${kind}`);
+    out.push(o);
+  }
+  if (e.line?.dash) ctx.log('dashed lines are drawn solid (M6)');
+  if (e.text) {
+    const t = textObject(ctx, e, box, visible);
+    if (t) {
+      out.push(t);
+      texts.push({ o: t, e, area: box.w * box.h });
     }
   }
-  if (e.text) {
-    const t = textObject(ctx, e, box);
-    if (t) out.push(t);
-  }
-  return out;
 }
 
-type Box = { x: number; y: number; w: number; h: number; rotation: number };
-
-/** `v` within [lo, hi]; NaN and infinities become `lo` clamped to 0. */
-function bound(v: number, lo: number, hi: number): number {
-  return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : Math.min(hi, Math.max(lo, 0));
-}
-
-function clampBox(b: Box): Box {
-  const c = (v: number) => bound(v, -MAX_COORD, MAX_COORD);
-  return { x: c(b.x), y: c(b.y), w: c(b.w), h: c(b.h), rotation: bound(b.rotation, -36_000, 36_000) };
-}
-
-function ordo(c: Rgba): OrdoRgba {
-  const ch = (v: number) => (Number.isFinite(v) ? Math.min(255, Math.max(0, v)) : 0);
-  return { r: ch(c.r), g: ch(c.g), b: ch(c.b), a: Number.isFinite(c.a) ? Math.min(1, Math.max(0, c.a)) : 1 };
-}
-
-function solidOf(f: Fill): OrdoRgba | undefined {
-  return f.kind === 'solid' ? ordo(f.color) : undefined;
-}
-
-function shape(
+function lineObject(
   ctx: EmitCtx,
-  box: Box,
-  kind: ShapeObject['shape'],
-  fill: OrdoRgba | Rgba | undefined,
+  xf: Affine,
+  a: [number, number],
+  b: [number, number],
+  width: number,
+  color: OrdoRgba,
 ): ShapeObject {
-  return {
+  const f = ctx.frame;
+  const [x0, y0] = apply(xf, a[0], a[1]);
+  const [x1, y1] = apply(xf, b[0], b[1]);
+  const px0 = f.x0 + x0 * f.s;
+  const py0 = f.y0 + y0 * f.s;
+  const px1 = f.x0 + x1 * f.s;
+  const py1 = f.y0 + y1 * f.s;
+  const len = Math.hypot(px1 - px0, py1 - py0);
+  const rot = len > 0 ? (Math.atan2(py1 - py0, px1 - px0) * 180) / Math.PI : 0;
+  const cx = (px0 + px1) / 2;
+  const cy = (py0 + py1) / 2;
+  const o = shape(
+    ctx,
+    clampBox({ x: cx - len / 2, y: cy, w: len, h: 0, rotation: Math.abs(rot) < 1e-9 ? 0 : rot }),
+    'line',
+    undefined,
+  );
+  o.stroke = { width, color };
+  return o;
+}
+
+/** A line width in logical px: PowerPoint draws a zero-width line one device pixel wide. */
+function strokeWidth(ctx: EmitCtx, w: number): number {
+  return bound(Math.max(lenPx(ctx.frame, w), 0.5), 0, 500);
+}
+
+function adjOf(adj: [string, number][] | undefined, name: string, dflt: number): number {
+  for (const [k, v] of adj ?? []) if (k === name) return v;
+  return dflt;
+}
+
+/** A roundRect's corner radius: `adj` (0-50,000) of the shorter side. */
+function cornerRadius(box: Box, adj: [string, number][] | undefined): number {
+  const a = Math.min(50_000, Math.max(0, adjOf(adj, 'adj', ROUND_RECT_ADJ)));
+  return bound((Math.min(box.w, box.h) * a) / 100_000, 0, MAX_COORD);
+}
+
+// ── Pictures ────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Where a picture lands in its shape's unit square and what of it shows: `a:fillRect` places the (cropped)
+ * picture inside the box and the box clips it, so the visible part becomes the placement and the crop
+ * grows by what the clip removes. Undefined when nothing of it shows.
+ */
+export function placePicture(
+  p: PictureFill,
+): { rect: [number, number, number, number]; crop?: Insets } | undefined {
+  const c = p.crop ?? { l: 0, t: 0, r: 0, b: 0 };
+  const f = p.fillRect ?? { l: 0, t: 0, r: 0, b: 0 };
+  const axis = (cl: number, cr: number, fl: number, fr: number) => {
+    const span = 1 - fl - fr; // the picture's share of the box
+    const used = 1 - cl - cr; // the source's share used
+    if (!(span > 1e-9) || !(used > 1e-9)) return undefined;
+    const lo = Math.max(0, fl);
+    const hi = Math.min(1, 1 - fr);
+    if (!(hi > lo)) return undefined;
+    const u = (x: number) => cl + ((x - fl) / span) * used;
+    // Where the box does not clip, the source crop stays exactly as written.
+    return { lo, hi, cl: lo === fl ? cl : u(lo), cr: hi === 1 - fr ? cr : 1 - u(hi) };
+  };
+  const x = axis(c.l, c.r, f.l, f.r);
+  const y = axis(c.t, c.b, f.t, f.b);
+  if (!x || !y) return undefined;
+  const crop = { l: x.cl, t: y.cl, r: x.cr, b: y.cr };
+  const any =
+    Math.abs(crop.l) > 1e-9 || Math.abs(crop.t) > 1e-9 || Math.abs(crop.r) > 1e-9 || Math.abs(crop.b) > 1e-9;
+  return { rect: [x.lo, y.lo, x.hi, y.hi], ...(any ? { crop } : {}) };
+}
+
+function pictureObject(
+  ctx: EmitCtx,
+  xf: Affine,
+  p: PictureFill,
+  geom = 'rect',
+  adj?: [string, number][],
+): CroppedImage | undefined {
+  const placed = placePicture(ctx.crop ? p : { ...p, crop: undefined });
+  if (!placed) return undefined;
+  const [x0, y0, x1, y1] = placed.rect;
+  const box = boxOf(ctx, multiply(xf, [x1 - x0, 0, 0, y1 - y0, x0, y0]));
+  const o: CroppedImage = {
     id: ctx.newId(),
-    type: 'shape',
+    type: 'image',
     box,
-    shape: kind,
-    ...(fill ? { fill: ordo(fill) } : {}),
-    opacity: 1,
+    mediaId: mediaOf(ctx, p.part),
+    fit: 'stretch',
+    opacity: bound(p.alpha ?? 1, 0, 1),
     radius: 0,
   };
+  if (geom === 'roundRect') o.radius = cornerRadius(box, adj);
+  else if (geom === 'ellipse') o.radius = bound(Math.min(box.w, box.h) / 2, 0, MAX_COORD);
+  if (ctx.crop && placed.crop) {
+    const c = (v: number) => bound(v, -1, 1);
+    o.crop = { l: c(placed.crop.l), t: c(placed.crop.t), r: c(placed.crop.r), b: c(placed.crop.b) };
+  } else if (!ctx.crop && p.crop) ctx.log('a cropped picture is drawn uncropped');
+  return o;
 }
 
 function mediaOf(ctx: EmitCtx, part: string): string {
@@ -234,52 +500,302 @@ function mediaOf(ctx: EmitCtx, part: string): string {
   return id;
 }
 
-function image(ctx: EmitCtx, box: Box, p: PictureFill): ImageObject {
-  return {
-    id: ctx.newId(),
-    type: 'image',
-    box,
-    mediaId: mediaOf(ctx, p.part),
-    fit: 'stretch',
-    opacity: p.alpha ?? 1,
-    radius: 0,
-  };
+// ── Text ────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** The text of a body as `TextObject.text`: paragraphs and breaks as '\n', tabs as spaces. */
+export function legacyText(body: TextBody): string {
+  return body.paras
+    .map((p) => p.runs.map((r) => (r.kind === 'break' ? '\n' : r.text.replaceAll('\t', ' '))).join(''))
+    .join('\n');
 }
 
-function textObject(ctx: EmitCtx, e: ShapeElement, box: Box): TextObject | undefined {
+/** A key for "the same look" when counting characters per style. */
+function styleKey(s: RunStyle): string {
+  const f =
+    s.fill.kind === 'solid'
+      ? `${s.fill.color.r},${s.fill.color.g},${s.fill.color.b},${s.fill.color.a}`
+      : s.fill.kind;
+  return [
+    s.sizePt,
+    s.bold,
+    s.italic,
+    s.latin ?? '',
+    f,
+    s.caps,
+    s.spacingPt,
+    s.outline ? s.outline.width : '',
+    s.shadow ? 1 : 0,
+  ].join('|');
+}
+
+/** The dominant run style (most characters) and the paragraph holding most of the text. */
+export function dominant(body: TextBody): { style: RunStyle; para: Para; text: string } | undefined {
+  const count = new Map<string, { n: number; style: RunStyle; text: string }>();
+  let top: { n: number; style: RunStyle; text: string } | undefined;
+  let para: Para | undefined;
+  let paraChars = -1;
+  for (const p of body.paras) {
+    let pc = 0;
+    for (const r of p.runs) {
+      if (r.kind === 'break') continue;
+      const n = visibleChars(r.text);
+      pc += n;
+      if (!n) continue;
+      const k = styleKey(r.style);
+      let c = count.get(k);
+      if (!c) count.set(k, (c = { n: 0, style: r.style, text: '' }));
+      c.n += n;
+      if (c.text.length < 400) c.text += r.text;
+      if (!top || c.n > top.n) top = c;
+    }
+    if (pc > paraChars) {
+      para = p;
+      paraChars = pc;
+    }
+  }
+  if (!para) return undefined;
+  return { style: top?.style ?? para.end, para, text: top?.text ?? '' };
+}
+
+/** Text mostly in East Asian scripts, or in complex scripts (Arabic, Hebrew, Indic, Thai). */
+function scriptOf(text: string): 'latin' | 'ea' | 'cs' {
+  let ea = 0;
+  let cs = 0;
+  let other = 0;
+  for (const ch of text) {
+    const c = ch.codePointAt(0)!;
+    if (
+      (c >= 0x2e80 && c <= 0x9fff) ||
+      (c >= 0xac00 && c <= 0xd7af) ||
+      (c >= 0xf900 && c <= 0xfaff) ||
+      (c >= 0xff00 && c <= 0xffef) ||
+      c >= 0x20000
+    )
+      ea++;
+    else if (
+      (c >= 0x0590 && c <= 0x08ff) ||
+      (c >= 0x0900 && c <= 0x0e7f) ||
+      (c >= 0xfb1d && c <= 0xfdff) ||
+      (c >= 0xfe70 && c <= 0xfeff)
+    )
+      cs++;
+    else if (ch.trim()) other++;
+  }
+  return ea > other && ea >= cs ? 'ea' : cs > other ? 'cs' : 'latin';
+}
+
+function textObject(
+  ctx: EmitCtx,
+  e: ShapeElement,
+  shapeBox: Box,
+  shapeVisible: boolean,
+): TextObject | undefined {
   const body = e.text!;
-  let text = plainText(body);
+  let text = legacyText(body);
   if (!text.trim()) return undefined;
   if (text.length > MAX_TEXT) {
     ctx.log(`a text box was cut to ${MAX_TEXT} characters`);
     text = text.slice(0, MAX_TEXT);
   }
-  const first = body.paras[0];
-  const run =
-    body.paras.flatMap((p) => p.runs).find((r) => r.kind !== 'break' && r.text.trim()) ?? first?.runs[0];
-  const st = run?.style ?? first?.end;
-  const align = first?.align === 'center' ? 'center' : first?.align === 'right' ? 'right' : 'left';
+  const dom = dominant(body);
+  if (!dom) return undefined;
+  const st = dom.style;
+  const f = ctx.frame;
+  const fit = body.autofit.kind === 'shrink' ? body.autofit : undefined;
+  const fontPx = bound(ptPx(f, st.sizePt * (fit?.fontScale ?? 1)), MIN_FONT_PX, MAX_FONT_PX);
+
+  // The text rectangle: the preset's, minus the insets; padding is the smallest inset, the rest is folded.
+  let box = textRect(e, shapeBox);
   const ins = body.insets;
-  const color = st ? solidOf(st.fill) : undefined;
+  const l = lenPx(f, ins.l);
+  const t = lenPx(f, ins.t);
+  const r = lenPx(f, ins.r);
+  const b = lenPx(f, ins.b);
+  const pad = Math.min(l, t, r, b);
+  box = insetBox(box, l - pad, t - pad, r - pad, b - pad);
+  const para = dom.para;
+  const align =
+    para.align === 'center' || para.align === 'distribute'
+      ? 'center'
+      : para.align === 'right'
+        ? 'right'
+        : 'left';
+  if (para.align === 'justify' || para.align === 'distribute')
+    ctx.log(`${para.align} text is drawn ${align}-aligned (M2)`);
+  if (!body.wrap) {
+    const g = NO_WRAP_GROWTH;
+    box =
+      align === 'left'
+        ? insetBox(box, 0, 0, -g, 0)
+        : align === 'right'
+          ? insetBox(box, -g, 0, 0, 0)
+          : insetBox(box, -g / 2, 0, -g / 2, 0);
+  }
+  if (
+    body.vert === 'vert' ||
+    body.vert === 'eaVert' ||
+    body.vert === 'mongolianVert' ||
+    body.vert === 'vert270'
+  )
+    box = quarterTurn(box, body.vert === 'vert270' ? -90 : 90);
+  if (body.vert || body.warp || body.numCol)
+    ctx.log('vertical, warped or multi-column text is drawn as plain text (M8)');
+
+  const face = scriptOf(dom.text);
+  const family = (face === 'ea' ? st.ea : face === 'cs' ? st.cs : undefined) ?? st.latin ?? 'Calibri';
+  let color = legacyColor(st.fill);
+  if (st.fill.kind === 'none') color = { r: 0, g: 0, b: 0, a: 0 }; // hollow: only the outline shows
+  const style: TextObject['style'] = {
+    fontFamily: family.slice(0, 300),
+    fontWeight: st.bold ? 700 : 400,
+    fontStyle: st.italic ? 'italic' : 'normal',
+    fontSizePx: fontPx,
+    color: color ?? { r: 0, g: 0, b: 0, a: 1 },
+    align,
+    valign: body.anchor,
+    lineHeight: lineHeightOf(para, fontPx, f, fit?.lnSpcReduction ?? 0),
+    letterSpacing: bound(ptPx(f, st.spacingPt), -1000, 1000),
+    padding: bound(pad, 0, MAX_COORD),
+    transform: st.caps === 'none' ? 'none' : 'uppercase',
+  };
+  const outline = st.outline && st.outline.fill.kind === 'solid' ? ordo(st.outline.fill.color) : undefined;
+  if (st.outline && outline)
+    style.outline = { width: bound(lenPx(f, st.outline.width) / 2, 0, 500), color: outline };
+  const shadow = st.shadow ?? (shapeVisible ? undefined : e.shadow);
+  if (shadow) {
+    const dir = (shadow.dir * Math.PI) / 180;
+    const dist = lenPx(f, shadow.dist);
+    style.shadow = {
+      dx: bound(dist * Math.cos(dir), -500, 500),
+      dy: bound(dist * Math.sin(dir), -500, 500),
+      blur: bound(lenPx(f, shadow.blur), 0, 500),
+      color: ordo(shadow.color),
+    };
+  }
+  if (st.caps === 'small') ctx.log('small caps are drawn as capitals (M2)');
+  return { id: ctx.newId(), type: 'text', box: clampBox(box), text, style, opacity: 1 };
+}
+
+/** `TextStyle.lineHeight` (a multiple of the font size) from the paragraph's line spacing. */
+function lineHeightOf(p: Para, fontPx: number, f: Frame, reduction: number): number {
+  const ls = p.lineSpacing;
+  let h: number;
+  if (ls && 'pts' in ls) h = (ls.pts * EMU_PER_PT * f.s) / fontPx;
+  else h = SINGLE_LINE * Math.max(0, (ls?.pct ?? 1) - reduction);
+  return bound(h, 0.1, 10);
+}
+
+/** The preset's text rectangle in the shape's box (rect for presets M1 does not know). */
+function textRect(e: ShapeElement, box: Box): Box {
+  if (ELLIPTIC.has(e.geom) && e.geom !== 'pie' && e.geom !== 'chord') {
+    const dx = box.w * ELLIPSE_TEXT_INSET;
+    const dy = box.h * ELLIPSE_TEXT_INSET;
+    return insetBox(box, dx, dy, dx, dy);
+  }
+  if (ROUNDED.has(e.geom)) {
+    const d = cornerRadius(box, e.adj) * ROUND_RECT_TEXT_INSET;
+    return insetBox(box, d, d, d, d);
+  }
+  return box;
+}
+
+// ── Boxes and colours ───────────────────────────────────────────────────────────────────────────────────
+
+type Box = { x: number; y: number; w: number; h: number; rotation: number };
+
+/** `v` within [lo, hi]; NaN and infinities become `lo` clamped to 0. */
+function bound(v: number, lo: number, hi: number): number {
+  return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : Math.min(hi, Math.max(lo, 0));
+}
+
+function clampBox(b: Box): Box {
+  const c = (v: number) => bound(v, -MAX_COORD, MAX_COORD);
+  return {
+    x: c(b.x),
+    y: c(b.y),
+    w: bound(b.w, 0, MAX_COORD),
+    h: bound(b.h, 0, MAX_COORD),
+    rotation: bound(b.rotation, -36_000, 36_000),
+  };
+}
+
+function boxOf(ctx: EmitCtx, xf: Affine): Box {
+  return clampBox(boxPx(ctx.frame, xf));
+}
+
+/**
+ * A box narrowed by `l`, `t`, `r`, `b` along its own (rotated) axes; negative values grow it. The size never
+ * goes below zero.
+ */
+export function insetBox(box: Box, l: number, t: number, r: number, b: number): Box {
+  const w = Math.max(0, box.w - l - r);
+  const h = Math.max(0, box.h - t - b);
+  const lx = (l - r) / 2;
+  const ly = (t - b) / 2;
+  const a = (box.rotation * Math.PI) / 180;
+  const cx = box.x + box.w / 2 + lx * Math.cos(a) - ly * Math.sin(a);
+  const cy = box.y + box.h / 2 + lx * Math.sin(a) + ly * Math.cos(a);
+  return { x: cx - w / 2, y: cy - h / 2, w, h, rotation: box.rotation };
+}
+
+/** The same centre, the sides swapped and turned by `deg` (vertical text laid out along the long side). */
+function quarterTurn(box: Box, deg: number): Box {
+  const cx = box.x + box.w / 2;
+  const cy = box.y + box.h / 2;
+  let rotation = box.rotation + deg;
+  if (rotation > 180) rotation -= 360;
+  if (rotation <= -180) rotation += 360;
+  return { x: cx - box.h / 2, y: cy - box.w / 2, w: box.h, h: box.w, rotation };
+}
+
+function ordo(c: Rgba): OrdoRgba {
+  const ch = (v: number) => (Number.isFinite(v) ? Math.min(255, Math.max(0, v)) : 0);
+  return { r: ch(c.r), g: ch(c.g), b: ch(c.b), a: Number.isFinite(c.a) ? Math.min(1, Math.max(0, c.a)) : 1 };
+}
+
+/** The share of the foreground in a `pctNN` pattern; 0.5 for the others. */
+function patternShare(preset: string): number {
+  const m = /^pct(\d{1,2})$/.exec(preset);
+  return m ? Number(m[1]) / 100 : 0.5;
+}
+
+/**
+ * The legacy solid colour of a fill (design/27 §3.2): solid as it is, a gradient's first stop, a pattern's
+ * foreground and background blended by coverage. Undefined for none, pictures and group fills.
+ */
+export function legacyColor(f: Fill): OrdoRgba | undefined {
+  switch (f.kind) {
+    case 'solid':
+      return ordo(f.color);
+    case 'gradient': {
+      let first = f.stops[0];
+      for (const s of f.stops) if (first && s.at < first.at) first = s;
+      return first ? ordo(first.color) : undefined;
+    }
+    case 'pattern': {
+      const k = patternShare(f.preset);
+      const mix = (a: number, b: number) => a * k + b * (1 - k);
+      return ordo({
+        r: mix(f.fg.r, f.bg.r),
+        g: mix(f.fg.g, f.bg.g),
+        b: mix(f.fg.b, f.bg.b),
+        a: mix(f.fg.a, f.bg.a),
+      });
+    }
+    default:
+      return undefined;
+  }
+}
+
+function shape(ctx: EmitCtx, box: Box, kind: ShapeObject['shape'], fill: OrdoRgba | undefined): ShapeObject {
   return {
     id: ctx.newId(),
-    type: 'text',
-    box,
-    text,
-    style: {
-      fontFamily: st?.latin ?? 'Calibri',
-      fontWeight: st?.bold ? 700 : 400,
-      fontStyle: st?.italic ? 'italic' : 'normal',
-      fontSizePx: Math.min(MAX_FONT_PX, Math.max(MIN_FONT_PX, ptPx(ctx.frame, st?.sizePt ?? 18))),
-      color: color ?? { r: 0, g: 0, b: 0, a: st?.fill.kind === 'none' ? 0 : 1 },
-      align,
-      valign: body.anchor,
-      lineHeight: 1.2,
-      letterSpacing: bound(ptPx(ctx.frame, st?.spacingPt ?? 0), -1000, 1000),
-      padding: bound(lenPx(ctx.frame, Math.min(ins.l, ins.t, ins.r, ins.b)), 0, MAX_COORD),
-      transform: st?.caps === 'all' ? 'uppercase' : 'none',
-    },
+    type: 'shape',
+    box: clampBox(box),
+    shape: kind,
+    ...(fill ? { fill } : {}),
     opacity: 1,
+    radius: 0,
   };
 }
 

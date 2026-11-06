@@ -1,7 +1,19 @@
 import { Slide } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
 import { emitSlides, MEDIA_PREFIX, parseDeck } from './index.ts';
-import { body, buildDeck, imageRel, para, pic, pictureBg, run, solid, solidBg, sp } from './test-util.ts';
+import {
+  body,
+  buildDeck,
+  imageRel,
+  para,
+  pic,
+  pictureBg,
+  pngHeader,
+  run,
+  solid,
+  solidBg,
+  sp,
+} from './test-util.ts';
 
 const IN = 914_400;
 const PT = 12_700;
@@ -112,7 +124,10 @@ describe('parseDeck → emitSlides', () => {
 
   it('uses a stretched 16:9 picture background as the slide background', () => {
     const scene = parseDeck(
-      buildDeck({ slides: [{ bg: pictureBg('rId2'), rels: [imageRel('rId2', 'photo.png')] }] }),
+      buildDeck({
+        slides: [{ bg: pictureBg('rId2'), rels: [imageRel('rId2', 'photo.png')] }],
+        media: { 'ppt/media/photo.png': pngHeader(1920, 1080) },
+      }),
     );
     const out = emitSlides(scene, { mediaId: (part) => `m-${part.split('/').pop()}` });
     expect(out.slides[0]!.slide.backgroundMediaId).toBe('m-photo.png');
