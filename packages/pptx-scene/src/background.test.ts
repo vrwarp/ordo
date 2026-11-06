@@ -103,6 +103,43 @@ describe('readBackground', () => {
     });
   });
 
+  it('recolours a theme picture fill in its reference colour (a tiled texture duotoned in phClr)', () => {
+    // As PowerPoint's own themes write it: bgRef 1003 in bg1 (white), the texture duotoned between phClr
+    // shaded and tinted, so the slide shows a white paper texture, not the black and white source.
+    const duotone =
+      '<a:duotone><a:schemeClr val="phClr"><a:shade val="90000"/></a:schemeClr><a:schemeClr val="phClr"><a:tint val="88000"/></a:schemeClr></a:duotone>';
+    const fmt =
+      '<a:fmtScheme name="T"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst/><a:effectStyleLst/>' +
+      '<a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill>' +
+      `<a:blipFill><a:blip r:embed="rId1">${duotone}</a:blip><a:tile tx="0" ty="0" sx="65000" sy="65000" flip="none" algn="tl"/></a:blipFill></a:bgFillStyleLst></a:fmtScheme>`;
+    const parts = buildDeck({
+      theme: themeXml({ fmtScheme: fmt }).replace(
+        '<a:theme ',
+        '<a:theme xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ',
+      ),
+      slides: [{ bg: `<p:bg><p:bgRef idx="1003">${scheme('bg1')}</p:bgRef></p:bg>` }],
+    });
+    const enc = new TextEncoder();
+    parts.set(
+      'ppt/theme/_rels/theme1.xml.rels',
+      enc.encode(
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/texture.jpeg"/></Relationships>',
+      ),
+    );
+    parts.set('ppt/media/texture.jpeg', new Uint8Array(0));
+    const fill = parseDeck(parts).slides[0]!.background.fill;
+    expect(fill.kind).toBe('picture');
+    const recolor = fill.kind === 'picture' ? fill.picture.recolor : undefined;
+    expect(recolor).toHaveLength(1);
+    const d = recolor![0]!;
+    expect(d.kind).toBe('duotone');
+    if (d.kind !== 'duotone') return;
+    // White shaded to 90 % and white tinted: both light, never the slide context's missing phClr.
+    expect(d.dark.r).toBeGreaterThan(200);
+    expect(d.dark.r).toBeLessThan(255);
+    expect(d.light).toEqual({ r: 255, g: 255, b: 255, a: 1 });
+  });
+
   it('keeps a slide colour override for an inherited solid background colour', () => {
     const out = bgOf({
       master: { bg: `<p:bg><p:bgPr>${solid(scheme('tx2'))}</p:bgPr></p:bg>` },

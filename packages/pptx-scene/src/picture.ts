@@ -18,7 +18,7 @@
  *
  * Owned by work item C (inherit-emit).
  */
-import { type BlipReader, readColor } from './color.ts';
+import { type BlipReader, type ColorCtx, readColor } from './color.ts';
 import { partOf, type SlideCtx, type Source } from './context.ts';
 import { chainOf, geometryOf } from './inherit.ts';
 import type {
@@ -66,8 +66,17 @@ export function extensionOf(part: string): string {
   return dot > slash ? part.slice(dot + 1).toLowerCase() : '';
 }
 
-/** An `a:blipFill` of the part `source` as a picture fill, or undefined when its picture is missing. */
-export function readBlipFill(ctx: SlideCtx, blipFill: XNode, source: string): PictureFill | undefined {
+/**
+ * An `a:blipFill` of the part `source` as a picture fill, or undefined when its picture is missing. Its
+ * recolouring's colours are read in `color` (the fill's own context: a style entry's `phClr`), else the
+ * slide's.
+ */
+export function readBlipFill(
+  ctx: SlideCtx,
+  blipFill: XNode,
+  source: string,
+  color: ColorCtx = ctx.color,
+): PictureFill | undefined {
   const blip = child(blipFill, 'a:blip');
   const id = blip?.attrs['r:embed'] ?? blip?.attrs['r:link'];
   if (!blip || !id) return undefined;
@@ -99,7 +108,7 @@ export function readBlipFill(ctx: SlideCtx, blipFill: XNode, source: string): Pi
   if (alpha !== undefined) out.alpha = Math.min(1, Math.max(0, alpha / 100_000));
   const effects = effectsOf(blip);
   if (effects.length) out.effects = effects;
-  const recolor = recolorOf(ctx, blip);
+  const recolor = recolorOf(color, blip);
   if (recolor.length) out.recolor = recolor;
   const bytes = ctx.pkg.bytes(rel.target);
   const px = bytes?.length ? pictureSize(bytes) : ctx.pictureSize?.(rel.target);
@@ -153,13 +162,13 @@ const COLOR_NAMES: ReadonlySet<string> = new Set([
 const MAX_COLOR_SCAN = 16;
 
 /** The first `n` colour elements among a node's children, resolved. */
-function colorsIn(ctx: SlideCtx, n: XNode | undefined, want: number): Rgba[] {
+function colorsIn(color: ColorCtx, n: XNode | undefined, want: number): Rgba[] {
   const out: Rgba[] = [];
   const cs = n?.children ?? [];
   for (let i = 0; i < cs.length && i < MAX_COLOR_SCAN && out.length < want; i++) {
     const c = cs[i]!;
     if (!COLOR_NAMES.has(c.name)) continue;
-    const v = readColor(c, ctx.color);
+    const v = readColor(c, color);
     if (!v) return [];
     out.push(v);
   }
@@ -177,7 +186,7 @@ function share(v: string | undefined, dflt: number, lo: number, hi: number): num
  * colour context (an effect missing what it needs, such as a duotone without two colours, is left out, as
  * LibreOffice leaves it out).
  */
-function recolorOf(ctx: SlideCtx, blip: XNode): Recolor[] {
+function recolorOf(color: ColorCtx, blip: XNode): Recolor[] {
   const out: Recolor[] = [];
   for (const fx of effectNodes(blip).nodes) {
     switch (fx.name) {
@@ -194,13 +203,13 @@ function recolorOf(ctx: SlideCtx, blip: XNode): Recolor[] {
         break;
       }
       case 'a:duotone': {
-        const [dark, light] = colorsIn(ctx, fx, 2);
+        const [dark, light] = colorsIn(color, fx, 2);
         if (dark && light) out.push({ kind: 'duotone', dark, light });
         break;
       }
       case 'a:clrChange': {
-        const [from] = colorsIn(ctx, child(fx, 'a:clrFrom'), 1);
-        const [to] = colorsIn(ctx, child(fx, 'a:clrTo'), 1);
+        const [from] = colorsIn(color, child(fx, 'a:clrFrom'), 1);
+        const [to] = colorsIn(color, child(fx, 'a:clrTo'), 1);
         if (from && to) out.push({ kind: 'clrChange', from, to });
         break;
       }
@@ -265,12 +274,12 @@ export function readPicture(
 /** A blip reader for fills of the given source part (`color.ts` `readFill`). */
 export function blipReader(ctx: SlideCtx, from: Source): BlipReader {
   const source = partOf(ctx, from);
-  return (blipFill) => (source === undefined ? undefined : readBlipFill(ctx, blipFill, source));
+  return (blipFill, color) => (source === undefined ? undefined : readBlipFill(ctx, blipFill, source, color));
 }
 
 /** A blip reader for fills in another part (a theme's bgFillStyleLst). */
 export function blipReaderOf(ctx: SlideCtx, source: string | undefined): BlipReader {
-  return (blipFill) => (source === undefined ? undefined : readBlipFill(ctx, blipFill, source));
+  return (blipFill, color) => (source === undefined ? undefined : readBlipFill(ctx, blipFill, source, color));
 }
 
 /** JPEG markers read before giving up on finding the frame header. */

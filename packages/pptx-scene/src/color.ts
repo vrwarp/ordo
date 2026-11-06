@@ -39,8 +39,12 @@ export interface ColorCtx {
   phClr?: Rgba;
 }
 
-/** Reads an `a:blipFill` into a picture fill; supplied by `picture.ts`, which knows the relationships. */
-export type BlipReader = (blipFill: XNode) => PictureFill | undefined;
+/**
+ * Reads an `a:blipFill` into a picture fill; supplied by `picture.ts`, which knows the relationships. `color`
+ * is the context the fill is read in (a style-matrix entry's, with its `phClr`), for the colours of its
+ * recolouring (M6: a theme background's duotone in the reference's colour).
+ */
+export type BlipReader = (blipFill: XNode, color?: ColorCtx) => PictureFill | undefined;
 
 /** Modifiers read per colour element; real decks use up to four. Bounds the work a theme entry can cause. */
 export const MAX_MODIFIERS = 32;
@@ -656,7 +660,7 @@ export function fillOf(el: XNode, ctx: ColorCtx, blip?: BlipReader): Fill {
       };
     }
     case 'a:blipFill': {
-      const picture = blip?.(el);
+      const picture = blip?.(el, ctx);
       return picture ? { kind: 'picture', picture } : { kind: 'none' };
     }
     case 'a:grpFill':

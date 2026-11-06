@@ -11,15 +11,16 @@
  * **Support** (`native` / `approx` / `residual`) is per element: the reader's own verdict (`walk.ts`: since M6
  * every preset of the table, custom geometry, gradients and line styles are native; a preset the table does
  * not know and a pattern fill are approx; custom geometry past the bounds and sheared group children are
- * residual) combined with the rules of §5 (charts, tables,
- * SmartArt, OLE, maths, real 3D, WordArt warps, vertical and multi-column text, HD Photo pictures are residual;
+ * residual) combined with the rules of §5 (charts, the tables and SmartArt the walk leaves residual, OLE, maths,
+ * real 3D, WordArt warps, vertical and multi-column text, HD Photo pictures are residual;
  * reflections, inner shadows, soft edges on pictures and metafiles waiting for conversion are approx).
  *
  * **Class**: native without residual elements; hybrid with them, the residuals and what they overlap baked
  * into one art picture over the range [Rmin, Rmax]; picture when the objects or pictures left after the
  * split exceed the slide budgets (or the slide could not be read, `index.ts`). A table read natively
  * (`tables.ts`, M6) counts the objects it emits; tables that would take the slide past the object budget go
- * to the art first (`budget:table`), so the slide becomes hybrid rather than picture.
+ * to the art first (`budget:table`), then whole SmartArt drawings (`budget:smartart`, `wholeDiagrams`), so
+ * the slide becomes hybrid rather than picture.
  *
  * Every walk here is iterative and linear in the size of the parsed tree; deck strings are only compared,
  * never used as plain-object keys.
