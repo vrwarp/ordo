@@ -299,6 +299,10 @@ Done:
   `src/placement.ts <out>/corpus-placement-4x3`: each colour's bounding box on LibreOffice's page against
   the native page, written to `placement.json`, exit 1 above 2 px (the M1 exit).
 
+- **Committed baseline.** `tools/pptx-fidelity/native-baseline.json` covers the synthetic corpus only
+  (`--engine native --corpus`); real and third-party decks keep their baselines outside the repository.
+  Check a change with `--engine native --corpus --baseline tools/pptx-fidelity/native-baseline.json`.
+
 To do: `--lo-compat` (design/27 §14.1) and the committed probe corpus with its CI gate (§14.2) belong to later
 milestones.
 

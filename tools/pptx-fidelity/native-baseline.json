@@ -1,0 +1,138 @@
+{
+  "createdAt": "2026-11-06T06:38:12.983Z",
+  "chromium": "/opt/pw-browsers/chromium-1243/chrome-linux64/chrome",
+  "decks": [
+    {
+      "name": "corpus-typography",
+      "nativeSsim": 0.8994663,
+      "perSlide": [
+        {
+          "n": 1,
+          "nativeSsim": 0.965275
+        },
+        {
+          "n": 2,
+          "nativeSsim": 0.808478
+        },
+        {
+          "n": 3,
+          "nativeSsim": 0.946116
+        },
+        {
+          "n": 4,
+          "nativeSsim": 0.887829
+        },
+        {
+          "n": 5,
+          "nativeSsim": 0.970795
+        },
+        {
+          "n": 6,
+          "nativeSsim": 0.898773
+        },
+        {
+          "n": 7,
+          "nativeSsim": 0.936727
+        },
+        {
+          "n": 8,
+          "nativeSsim": 0.869642
+        },
+        {
+          "n": 9,
+          "nativeSsim": 0.814984
+        },
+        {
+          "n": 10,
+          "nativeSsim": 0.896044
+        }
+      ]
+    },
+    {
+      "name": "corpus-shapes",
+      "nativeSsim": 0.9824259999999999,
+      "perSlide": [
+        {
+          "n": 1,
+          "nativeSsim": 0.980795
+        },
+        {
+          "n": 2,
+          "nativeSsim": 0.985775
+        },
+        {
+          "n": 3,
+          "nativeSsim": 0.980708
+        }
+      ]
+    },
+    {
+      "name": "corpus-pictures",
+      "nativeSsim": 0.9454883333333334,
+      "perSlide": [
+        {
+          "n": 1,
+          "nativeSsim": 0.956728
+        },
+        {
+          "n": 2,
+          "nativeSsim": 0.975304
+        },
+        {
+          "n": 3,
+          "nativeSsim": 0.904433
+        }
+      ]
+    },
+    {
+      "name": "corpus-tables-charts",
+      "nativeSsim": 0.8556785,
+      "perSlide": [
+        {
+          "n": 1,
+          "nativeSsim": 0.856952
+        },
+        {
+          "n": 2,
+          "nativeSsim": 0.854405
+        }
+      ]
+    },
+    {
+      "name": "corpus-media",
+      "nativeSsim": 0.8099075,
+      "perSlide": [
+        {
+          "n": 1,
+          "nativeSsim": 0.987768
+        },
+        {
+          "n": 2,
+          "nativeSsim": 0.527442
+        },
+        {
+          "n": 3,
+          "nativeSsim": 0.98991
+        },
+        {
+          "n": 4,
+          "nativeSsim": 0.73451
+        }
+      ]
+    },
+    {
+      "name": "corpus-placement-4x3",
+      "nativeSsim": 0.994329,
+      "perSlide": [
+        {
+          "n": 1,
+          "nativeSsim": 0.999774
+        },
+        {
+          "n": 2,
+          "nativeSsim": 0.988884
+        }
+      ]
+    }
+  ]
+}
