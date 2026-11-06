@@ -8,6 +8,7 @@ import type { Frame } from './ir.ts';
 import type { Log } from './log.ts';
 import type { Package } from './opc.ts';
 import { readTheme, type Theme } from './theme.ts';
+import type { SlideTiming } from './timing.ts';
 import { child, type XNode } from './xml.ts';
 
 export interface SlideCtx {
@@ -39,6 +40,14 @@ export interface SlideCtx {
    * can tell (`ParseOptions.pictureSize`). Undefined: unknown.
    */
   pictureSize?: (part: string) => { w: number; h: number } | undefined;
+  /**
+   * Whether a clip part is a video or a sound, from its bytes, when the caller can tell
+   * (`ParseOptions.mediaKind`; M5 hub scope; `readMediaRef` has the rule). Undefined: the element and the
+   * timing decide.
+   */
+  mediaKind?: (part: string) => 'video' | 'audio' | undefined;
+  /** The slide's `p:timing` and transition sound (`timing.ts`), read before its shape tree. */
+  timing?: SlideTiming;
 }
 
 /** Where an element comes from in the inheritance chain. */
@@ -61,7 +70,7 @@ export function slideContext(
   frame: Frame,
   ref: SlideRef,
   log: Log,
-  extra: Pick<SlideCtx, 'pictureSize'> = {},
+  extra: Pick<SlideCtx, 'pictureSize' | 'mediaKind'> = {},
 ): SlideCtx {
   const parts = slideParts(pkg, ref.part);
   const theme = readTheme(parts.theme);
@@ -86,5 +95,6 @@ export function slideContext(
     ),
     log,
     ...(extra.pictureSize ? { pictureSize: extra.pictureSize } : {}),
+    ...(extra.mediaKind ? { mediaKind: extra.mediaKind } : {}),
   };
 }

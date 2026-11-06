@@ -397,4 +397,66 @@ describe('rasterScene with prepared pictures (the asset worker, design/27 §7.1)
       expect(s.plane[PLANE_UV + 2]).toBeCloseTo(7 / 6, 5);
     }
   });
+
+  it('asks for the prepared targets slidePictures lists for whatever slideContent draws', () => {
+    stubPrepare();
+    pictures.ref = { width: 1920, height: 1080, tag: 'ref' };
+    try {
+      const pptx = { fileId: 'f'.repeat(64), index: 0, shown: 0, class: 'native' as const, version: 1 };
+      const fromPptx = (o: SlideObject): SlideObject => ({ ...o, origin: { src: 'pptx' } });
+      // Native objects (no page picture), a picture-class page under them, and a slide showing its
+      // PowerPoint picture: the imported objects are left out, the operator's own clip plays over it.
+      const cases: { name: string; slide: Slide; drawn: string[] }[] = [
+        {
+          name: 'native',
+          slide: slide(objects.map(fromPptx), { pptx }),
+          drawn: ['page 100x100', 'poster 100x50', 'poster 400x225'],
+        },
+        {
+          name: 'page',
+          slide: slide(objects, { imported }),
+          drawn: ['page 100x100', 'page 960x540', 'poster 100x50', 'poster 400x225'],
+        },
+        {
+          name: 'reference',
+          slide: slide(
+            [...objects.map((o) => (o.id === 'vid' ? o : fromPptx(o))), picture('mine', box(0, 0, 400, 200))],
+            {
+              pptx: { ...pptx, refMediaId: 'ref', show: 'picture' },
+            },
+          ),
+          drawn: ['page 200x100', 'poster 400x225', 'ref 960x540'],
+        },
+      ];
+      for (const c of cases) {
+        const plain = fakeCtx();
+        const flat = preloaded(c.slide, LOOK_MAIN);
+        rasterSlide(plain, c.slide, LOOK_MAIN, SCALE, flat.lookup);
+        const drawnFlat = images_(plain.ops);
+        expect(drawnFlat, c.name).toEqual(c.drawn.map((d) => `image:prepared ${d}`));
+
+        const ctx = fakeCtx();
+        const take = () => ctx.ops.splice(0);
+        const pre = preloaded(c.slide, LOOK_MAIN);
+        const sc = rasterScene(ctx, take, c.slide, LOOK_MAIN, SCALE, pre.lookup, 'vid');
+        expect(sc, c.name).toBeDefined();
+        expect(images_([...sc!.base, ...(sc!.over ?? [])]), c.name).toEqual(drawnFlat);
+        expect(
+          pre.asked.filter((k) => !pre.listed.has(k)),
+          c.name,
+        ).toEqual([]);
+        // The poster's own 4:3 size fits the plane, whichever picture the slide draws under it.
+        expect(sc!.plane[PLANE_UV], c.name).toBeCloseTo(-1 / 6, 5);
+      }
+      // An imported clip under the slide's PowerPoint picture is not drawn, so it is no scene.
+      const hiddenClip = slide(objects.map(fromPptx), {
+        pptx: { ...pptx, refMediaId: 'ref', show: 'picture' },
+      });
+      expect(
+        sceneSlides(fakeCtx(), hiddenClip, LOOK_MAIN, SCALE, preloaded(hiddenClip, LOOK_MAIN).lookup, 'vid'),
+      ).toBeUndefined();
+    } finally {
+      delete pictures.ref;
+    }
+  });
 });

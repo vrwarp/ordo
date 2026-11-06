@@ -15,6 +15,7 @@ import {
 } from '@ordo/domain';
 
 import { CLAMP, clampBox, clampCrop, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
+import { drawableContent } from './content.ts';
 import { type Ctx2D, roundRect, setLetterSpacing, withRotation } from './ctx.ts';
 import { type PictureTarget, paintPicture, pictureFit, pictureTarget, preparedKey } from './picture.ts';
 import { firstStrong, hasStrongRtl } from './text/bidi.ts';
@@ -393,8 +394,6 @@ export type SlideDrawOptions = {
   nextSlide?: Slide;
   /** Whether the slide belongs to a song (lyric-only looks treat non-song slides per `nonSong`). */
   isSong?: boolean;
-  /** Draw the slide's imported page image (an image slide) even if hidden under objects. */
-  skipImported?: boolean;
 };
 
 /**
@@ -448,36 +447,44 @@ export function lyricTextFor(slide: Slide, look: Look | undefined, isSong: boole
   return t.trim() ? t : null;
 }
 
-/** An imported slide's page picture: the whole frame, contain-fitted. */
-const IMPORTED_PAGE = { box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 }, fit: 'contain' } as const;
+/**
+ * A slide's whole-slide picture (`slideContent`: its PowerPoint reference picture, or an imported page
+ * picture): the whole frame, contain-fitted.
+ */
+const SLIDE_PICTURE = { box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 }, fit: 'contain' } as const;
 
 /** A picture `drawSlide2D` draws: its media id and the target it asks the image lookup for. */
 export type SlidePicture = { mediaId: string; target?: PictureTarget };
 
 /**
  * The pictures `drawSlide2D` draws for these options, in drawing order, each with the `pictureTarget` it
- * passes to the image lookup: what a decoder prepares before the (synchronous) draw. Nothing in the
+ * passes to the image lookup: what a decoder prepares before the (synchronous) draw. They follow
+ * `slideContent` as the draw does (design/27 §5): the slide's picture (a reference picture or an imported
+ * page) under the image objects it draws (only the operator's own on a reference picture). Nothing in the
  * lyric-only and hidden modes, which draw text bands only.
  */
 export function slidePictures(
   rawSlide: Slide,
-  opts: Pick<SlideDrawOptions, 'scale' | 'look' | 'skipImported'>,
+  opts: Pick<SlideDrawOptions, 'scale' | 'look'>,
 ): SlidePicture[] {
   const look = opts.look ? clampLook(opts.look) : undefined;
   if ((look?.layers.slide.mode ?? 'authored') !== 'authored') return [];
-  const slide = clampSlide(rawSlide);
+  const drawn = drawableContent(rawSlide);
   const scale = num(opts.scale, 0.01, 8, 1);
   const out: SlidePicture[] = [];
-  if (slide.imported && !opts.skipImported)
-    out.push({ mediaId: slide.imported.imageMediaId, target: pictureTarget(IMPORTED_PAGE, scale) });
-  for (const o of slide.objects)
+  if (drawn.pictureMediaId)
+    out.push({ mediaId: drawn.pictureMediaId, target: pictureTarget(SLIDE_PICTURE, scale) });
+  for (const o of drawn.objects)
     if (o.type === 'image') out.push({ mediaId: o.mediaId, target: pictureTarget(o, scale) });
   return out;
 }
 
 /**
  * Draw the Slide layer of a slide as a look renders it, on a transparent canvas. Backgrounds are not
- * drawn here (they are their own layer).
+ * drawn here (they are their own layer). A look that draws slides as authored draws what `slideContent`
+ * says (design/27 §5): the slide's picture contain-fitted (its PowerPoint reference picture, or an imported
+ * page), then its objects (only the operator's own on a reference picture). Lyric-only looks read the
+ * slide's text, whichever way it is drawn.
  */
 export function drawSlide2D(ctx: Ctx2D, rawSlide: Slide, opts: SlideDrawOptions): void {
   const slide = clampSlide(rawSlide);
@@ -487,12 +494,13 @@ export function drawSlide2D(ctx: Ctx2D, rawSlide: Slide, opts: SlideDrawOptions)
   const rule = look?.layers.slide ?? { mode: 'authored' as const };
   if (rule.mode === 'hidden') return;
   if (rule.mode === 'authored') {
-    if (slide.imported && !opts.skipImported) {
-      const target = pictureTarget(IMPORTED_PAGE, scale);
-      const img = opts.images?.(slide.imported.imageMediaId, target);
-      if (img) drawImageFit(ctx, img, IMPORTED_PAGE.box, scale, 'contain', 1, 0, undefined, target);
+    const drawn = drawableContent(slide);
+    if (drawn.pictureMediaId) {
+      const target = pictureTarget(SLIDE_PICTURE, scale);
+      const img = opts.images?.(drawn.pictureMediaId, target);
+      if (img) drawImageFit(ctx, img, SLIDE_PICTURE.box, scale, 'contain', 1, 0, undefined, target);
     }
-    for (const o of slide.objects) drawObject(ctx, o, scale, opts.images);
+    for (const o of drawn.objects) drawObject(ctx, o, scale, opts.images);
     return;
   }
   const text = lyricTextFor(slide, look, opts.isSong ?? true);

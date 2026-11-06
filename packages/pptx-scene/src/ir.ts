@@ -290,10 +290,64 @@ export interface PictureElement extends ElementBase {
   /** The clip geometry (`a:prstGeom` of the picture), 'rect' when none. */
   geom: string;
   line?: Line;
-  /** Media the picture is the poster of (`a:videoFile`, `a:audioFile`, `p14:media`): M5. */
-  media?: { kind: 'video' | 'audio'; part?: string; external?: string };
+  /** Media the picture is the poster of (`a:videoFile`, `a:audioFile`, `p14:media`; `media.ts`). */
+  media?: MediaRef;
   /** `a:avLst` guide values of the clip geometry (a roundRect's corner), as `ShapeElement.adj`. */
   adj?: [string, number][];
+}
+
+/**
+ * How a clip plays, from the slide's `p:timing` (design/27 §8 "p:timing mapping"; `timing.ts`). Read only for
+ * the slide's own media: a clip on a layout or master is shown as its poster.
+ */
+export interface MediaTiming {
+  /**
+   * `auto`: a `mediacall` effect starts it after or with the previous one, before the first click of the main
+   * sequence; `click`: a click effect, a trigger (`interactiveSeq`), or a play effect after the first click.
+   * Undefined when nothing in the timing tree starts it (PowerPoint then shows play controls: a click).
+   */
+  start?: 'auto' | 'click';
+  /** `repeatCount="indefinite"` on the media node. */
+  loop: boolean;
+  /** "Rewind after playing": the media node's `fill="remove"` (the poster shows again at the end). */
+  rewind: boolean;
+  /** `p:cMediaNode vol`, 0-100,000, when written. */
+  vol?: number;
+  /** `mute="1"`. */
+  muted: boolean;
+  /** `showWhenStopped` (default true; false is PowerPoint's "Hide while not playing"). */
+  showWhenStopped: boolean;
+  /** `numSld` when more than one: the sound plays on across this many slides (1-999). */
+  slides?: number;
+  /** `p:video fullScrn="1"`. */
+  fullScreen: boolean;
+  /** `p:audio isNarration="1"`. */
+  narration: boolean;
+  /** The media node's element: `p:video` or `p:audio`. */
+  kind?: 'video' | 'audio';
+}
+
+/** `p14:trim`: milliseconds cut from the start and from the end of the clip (`st`, `end`). */
+export interface ClipTrim {
+  startMs: number;
+  /** PowerPoint stores how much is cut from the end, not where the kept part ends (verified on real decks). */
+  endCutMs: number;
+}
+
+/** A video or sound a picture is the poster of (design/27 §4 "Media", `media.ts`). */
+export interface MediaRef {
+  /**
+   * What it is: the caller's sniff of the part's bytes when given (`ParseOptions.mediaKind`; pptxgenjs writes
+   * sounds under `a:videoFile`), else the element (`a:videoFile`, `a:audioFile`), else the timing node.
+   */
+  kind: 'video' | 'audio';
+  /** The embedded part (a relationship inside the package to a part that exists). */
+  part?: string;
+  /** A linked clip (`TargetMode="External"`): its host only. It is never fetched. */
+  external?: string;
+  trim?: ClipTrim;
+  /** The slide's timing for it (slide elements only). */
+  timing?: MediaTiming;
 }
 
 /** Something ordo does not draw natively (chart, table, SmartArt, OLE, maths, ink, 3D, …). */
@@ -371,6 +425,10 @@ export interface SlideScene {
   error?: string;
   /** Time spent reading this slide, in ms. */
   ms: number;
+  /** The transition's sound (`p:transition/p:sndAc/p:stSnd`): imported only with the import option. */
+  transitionSound?: { part?: string; external?: string; loop: boolean };
+  /** Sounds of animation effects (`p:sndTgt`): never imported (counted for a note). */
+  animationSounds?: number;
 }
 
 /** A `p14:sectionLst` section. */

@@ -362,6 +362,8 @@ describe.skipIf(!tools)('a chart over a photo background (design/27 §15 M3 exit
     expect([after.objects[0]!.id, after.objects[2]!.id]).toEqual(s.objects.map((x) => x.id));
     const img = after.objects[1] as ImageObject;
     expect(img.box.x).toBeCloseTo(IN * (1920 / 12_192_000), 3);
+    // Marked as the import's, like every object it wrote: hidden under a PowerPoint picture (design/27 §5).
+    expect(after.objects.map((x) => x.origin?.src)).toEqual(['pptx', 'pptx', 'pptx']);
     const m = hub.lib.media.must(img.mediaId);
     expect(m).toMatchObject({ hasAlpha: true, state: 'ready' });
     const px = pixels(m);
@@ -481,7 +483,7 @@ describe.skipIf(!tools)('a 4:3 deck (design/27 §4, §15 M3 exit)', () => {
 });
 
 describe('a deck with a hidden slide (design/27 §4, §15 M3 exit)', () => {
-  it('keeps notes, pictures and text with their own slide', async () => {
+  it('keeps notes, pictures and text with their own slide; Next skips it live, a click shows it', async () => {
     const colours = ['red', 'lime', 'blue', 'yellow'] as const;
     const parts = buildDeck({
       slides: colours.map((c, i) => ({
@@ -514,7 +516,50 @@ describe('a deck with a hidden slide (design/27 §4, §15 M3 exit)', () => {
       expect(probe[c]!(px.at(8, 8))).toBe(true);
     });
     saved.push({ name: 'hidden slide', p });
-  }, 60_000);
+
+    // Live (design/27 §9): Next skips the hidden slide, a click (a GO with its index) shows it.
+    const pl = hub.lib.playlists.insert({
+      id: newId(),
+      rev: 1,
+      name: 'Hidden',
+      items: [{ id: newId(), kind: 'presentation', presentationId: p.id }],
+    });
+    const live = hub.live;
+    const shows = () => live.state.layers.slide.content?.slideId;
+    try {
+      live.submit({ k: 'goLive', playlistId: pl.id }, { role: 'operate' });
+      expect(live.state.cues.map((c) => c.hidden ?? false)).toEqual([false, true, false, false]);
+      expect(live.state.armed).toBe(0);
+      live.submit({ k: 'next', at: Date.now() }, { role: 'operate' });
+      expect([shows(), live.state.armed]).toEqual([slides[0]!.id, 2]);
+      live.submit({ k: 'next', at: Date.now() }, { role: 'operate' });
+      expect(shows()).toBe(slides[2]!.id);
+      live.submit({ k: 'prev', at: Date.now() }, { role: 'operate' });
+      expect(shows()).toBe(slides[0]!.id);
+      live.submit({ k: 'go', cueIndex: 1, at: Date.now() }, { role: 'operate' });
+      expect(shows()).toBe(slides[1]!.id);
+      expect(live.state.armed).toBe(2);
+    } finally {
+      live.submit({ k: 'endService', at: Date.now() }, { role: 'operate' });
+    }
+
+    // 'Show PowerPoint picture' draws the hidden slide too (a click shows it): its own picture, its colour.
+    const ed = await login(hub.url, EDIT_PIN);
+    const ref = await ed.json<Job>(`/presentations/${p.id}/pptx-reference`, { method: 'POST' });
+    const refDone = await waitJob(hub, ref.id, 180_000);
+    expect(refDone.error).toBeUndefined();
+    expect(refDone.result).toMatchObject({ pictures: 4, slides: 4 });
+    const withRefs = slidesOf(hub.lib.presentations.must(p.id));
+    withRefs.forEach((s, i) => {
+      expect(s.pptx).toMatchObject({ show: 'picture', refMediaId: expect.any(String) });
+      // The picture's centre: 2 in from the left of 13.33 in, 2 in from the top of 7.5 in.
+      const px = pixels(hub.lib.media.must(s.pptx!.refMediaId!));
+      expect(probe[colours[i]!]!(px.at(Math.round(px.w * 0.15), Math.round(px.h * 0.267)))).toBe(true);
+    });
+    expect(hub.lib.media.must(withRefs[1]!.pptx!.refMediaId!).name).toBe(
+      'Hidden – hidden slide 2 (PowerPoint)',
+    );
+  }, 240_000);
 });
 
 describe('the size budgets through the job (design/27 §3.4, §14.10)', () => {

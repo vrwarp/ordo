@@ -178,7 +178,7 @@ Source: a census of 4,897 shown slides of worship decks in the local validation 
 | `packages/domain/src/readable.ts`, `bullets.ts` (M2) | `readableText(o)`: `TextObject.text` with automatic numbers and bullets written as text, for the stage, bands, labels and search. `textScripts(text)` for the font scan. `bullets.ts`: `paraLabels(o)` and the number counter (port of `annotate.ts` `autoNumber`) that the renderer's bullets draw too, and the Wingdings/Symbol table (`symbolFontChar`) for the converter. |
 | `packages/domain/src/size.ts` (M3) | JSON size estimates for slides, presentations and resolved playlists (§3.4). |
 | `packages/renderer/src/text/` (M2) | `itemize.ts`, `breaks.ts` (UAX#14 via npm `linebreak` 1.1.0, MIT; 2.0.0 was days old when chosen; `Intl.Segmenter`), `bidi.ts` (npm `bidi-js` 1.1.0, MIT), `measure.ts`, `lines.ts`, `office.ts` (LibreOffice line model and autofit, ported from `pptx-render/src/page.ts:202-426`), `bullets.ts` (port of `annotate.ts` `autoNumber`), `paint.ts`, `rich.ts`, `fonts.ts` (the resolver, §10). |
-| `packages/renderer/src/content.ts` (M3) | `slideContent()`, the one fallback rule (§5). |
+| `packages/renderer/src/content.ts` (M3) | `slideContent()`, the one fallback rule (§5). As built, the rule itself is `packages/domain/src/content.ts` (`slideContent`, `drawnMediaIds`), so `referencedMediaIds` follows it too; the renderer's module re-exports it and adds `drawableContent` (the rule over the clamped slide, memoised). |
 | `packages/renderer/src/scene.ts` (M5) | Video split and the plane encoding (§7.2). |
 | `packages/renderer/src/geom/` (M6) | `presets.gen.ts` (compiled from POI), `eval.ts` (guide evaluator), `arc.ts`, `path.ts`. |
 | `third_party/poi-presets/`, `tools/geom-gen/` (M6) | Vendored POI 5.2.5 `presetShapeDefinitions.xml` (Apache-2.0) with two documented fixes, and the generator. |
@@ -609,6 +609,12 @@ The budgets keep slides inside the render clamps (200 objects, 16 images, 192 Mi
 
 It is used by `drawSlide2D`, `slideVisible` (`plan.ts:138-144`), both `slideImages` copies, `SlideCanvas`, `previewMedia` and `referencedMediaIds`, where `refMediaId` is optional like holding slides and the logo. It replaces the unused `skipImported` hook (`text2d.ts:298, 322`). The picture is decoded only when shown, which matters for the 16-image and 192 MiB budgets.
 
+As built (M3 wave 2):
+- The rule is `slideContent(slide): { pictureMediaId?, reference, objects }` in `@ordo/domain` (`content.ts`), with `drawnMediaIds(slide)` (the picture, then the image objects drawn, once each). `@ordo/renderer` re-exports both and adds `drawableContent(slide)`, the rule over the clamped slide, memoised per slide.
+- Drawers: `drawSlide2D` (as authored; lyric-only bands still read the slide's own text), the scene split (`sceneSlides`: the split is over the drawn objects, base starts with the picture; an imported play object under a reference picture is no scene), the planner (`slideVisible`; the in-slide video only for a drawn play object, so an imported clip under a reference picture is not drawn and its sound still plays on the audio master, as in lyric-only looks), `jobFontFamilies`, the thumbnail worker, look previews (`lookPreviewJob`), the editor canvas (`canvasContent`: only the drawn objects are selectable) and `previewMedia`.
+- Media: both `slideImages` copies, `previewMedia` and `referencedMediaIds` name the pictures drawn, so a goLive ships the reference picture and the operator's pictures, not the imported pictures it hides. A reference picture that is missing or not ready never refuses the service: it is left out with a `degraded` note at the slide ("the slide shows only the objects added in ordo"). The render clamp's 16-picture budget counts only drawn pictures, and keeps the hidden objects, whose text bands and the stage still read.
+- `origin` is what tells the import's objects from the operator's: the native job marks every object it writes (converted objects, metafiles put back by version 2, the job's own background on white; the art already was) with at least `{ src: 'pptx' }`, keeping an origin the converter wrote.
+
 **Two-phase save.**
 - Version 1 has native objects for every slide.
   - Hybrid slides show their non-residual elements natively. Residuals are left out until version 2.
@@ -896,6 +902,33 @@ A scene is several draws, so it is composed at full alpha before it is weighted:
 - `numSld` → `slides`;
 - only the first video and the first sound per slide play; others keep their posters (logged).
 
+*As built (M3 wave 2, `packages/pptx-scene/src/media.ts`, `timing.ts`; `apps/hub/src/pptx/clips.ts`):*
+- 'Rewind after playing' is the media node's `fill="remove"` (`fill="hold"` holds the last frame). A play
+  effect counts when it plays (`playFrom(…)`, `play`, `togglePause`); pause and stop effects do not. A clip
+  nothing in the timing starts is a click (PowerPoint shows its play controls); an automatic start wins over a
+  trigger that also toggles the clip, as PowerPoint writes "Automatically".
+- `p14:trim end` is how much is cut from the end of the clip, not where the kept part ends (verified on real
+  decks: `end="6458.3125"` on a 146.458 s sound keeps 140 s), so the hub probes a trimmed clip's duration
+  before it ingests it.
+- Muted for the motion background is `mute="1"` or `vol="0"` (a real deck mutes its loop with the volume).
+  The promotion also needs a 16:9 deck, an automatic, looping video whose box is the slide (each edge within
+  2.5 %, unturned, uncropped, unmasked, opaque, its poster at the slide's aspect when known) with nothing of
+  the slide's own below it; what it covers is left out. It stays the slide's background, never the
+  presentation's, and goLive treats a PowerPoint slide's own background as optional like its clips
+  (`SlidePlay.role` 'background'; `expandCues` shows the item's or the presentation's instead), so a motion
+  background still transcoding never refuses the service. Accepted gap (M3 wave 2): unlike a boxed clip, a
+  motion background still transcoding or failed after the import has no poster to fall back to (the
+  converter leaves out what it covers, its poster included, and the hub puts the poster back only when the
+  clip cannot be imported at all), so until the operator goes live again once it is ready the slide's text
+  shows over the item's or presentation's background, or black; the banner names it ('went live without
+  media that is not ready'). Keeping the poster as a still background (a `Slide.pptx` poster id `expandCues`
+  would use) is left for a later wave.
+- The hub sniffs each clip part before the batches (`SceneTaskInput.mediaKinds`), so the converter decides
+  video or sound by the bytes. Clips are stored with `IngestOpts.queue: false` and their media jobs queued in
+  the transaction that saves version 1, right after `pptx-lo` (`JobQueue.enqueue` `after`: jobs start in
+  creation order, and ids are random within a millisecond). Clip placeholders are `pptxmedia:clip<n>`, one per
+  part and trim, listed in `EmittedSlide.clips`.
+
 ## 9. Builds, transitions and hidden slides
 
 - **Final state.** Every slide draws its final state, as LibreOffice and pptx-preview do. Exit, emphasis and motion effects are dropped (logged).
@@ -914,6 +947,8 @@ A scene is several draws, so it is composed at full alpha before it is weighted:
   - `nextItem` and `goToSection` (the first non-hidden cue of the target).
 
   `go` with an explicit cue (a click in the grid, `goToSlide`, a Stream Deck slide key) shows a hidden slide. SlideGrid draws hidden slides dimmed with a 'hidden' tag. The stage's `nextText` skips them. An older build strips `hidden` and shows them as normal slides.
+
+  As built (M3 wave 2): `nextShownCue`/`prevShownCue` in `cues.ts` carry the rule; the outputs' armed plan, the lyric-only next band and the look previews follow it. An item whose slides are all hidden is passed by `nextItem`, `prevItem` and the Stream Deck's next-items keys. A jump that names a group (a section key, a section header in the grid, a playlist item double-clicked) lands on its first shown cue, or on its first cue when every slide of the group is hidden. A pending or failed hidden slide is listed in `degraded` at its cue, since a click can show it.
 
 ## 10. Fonts
 
@@ -1110,7 +1145,7 @@ The extensions, in priority order (M4 unless noted):
 - Trust the central directory only.
 - Refuse encrypted entries and unknown methods; count inflated bytes against declared sizes.
 - ≤ 200k entries; XML ≤ 8 MB per part and ≤ 64 MB in all; spilled media ≤ 1 GiB per import.
-- At most 2,000 picture parts, 50 clips and 20 font parts per deck are extracted; the rest are logged and keep their posters or fallbacks. This bounds the Media rows and jobs one deck can create.
+- At most 2,000 picture parts, 50 clips and 20 font parts per deck are extracted; the rest are logged and keep their posters or fallbacks. This bounds the Media rows and jobs one deck can create. The clip limit counts clips as stored, one per part and trim, so one part trimmed differently on every slide still makes at most 50.
 - Add a `skip` filter (only referenced media and font parts spill) and `nested:false`.
 - Entry names never become paths (`Store.abs` and generated names only).
 
@@ -1144,7 +1179,7 @@ The extensions, in priority order (M4 unless noted):
 
 **Fonts.** EOT ≤ 32 MB; decoded ≤ 64 MB with `FONT_LIMITS`-style table caps; then sfnt validation.
 
-**External tools.** Only through `run()` (no shell, SIGKILL timeout, minimal env); ffmpeg keeps `-protocol_whitelist file,pipe`; soffice without network where possible and with an address-space cap (§5); `eot2ttf` with an address-space cap.
+**External tools.** Only through `run()` (no shell, SIGKILL timeout, minimal env); ffmpeg and ffprobe keep `-protocol_whitelist file,pipe`, and clips are probed under a name from their sniffed bytes, never the part's; soffice without network where possible and with an address-space cap (§5); `eot2ttf` with an address-space cap.
 
 **Saving.** Everything goes through `sanitizePresentation` (which now cuts runs and paras with the text) and the validating `lib.savePresentation`.
 
@@ -1235,7 +1270,7 @@ The current JSZip text path takes 1.17 s per 100 slides.
 11. **Migration.**
     - The legacy repair job on a stored deck with a hidden slide (LibreOffice and pptx-preview variants): stage, labels and search show the right slide's text.
     - Re-import of made-editable slides replaces the page picture and matching boxes and keeps user objects.
-12. **e2e.** Import → goLive → two outputs (slide pixels, in-slide video at its z, F8, onEnd advance, skew) → stage text and notes → lower-third and stream text → search and cue labels. Also: Clear media during an in-slide video and then arm the next slide's clip; the live slide shows its poster, never the next clip. The authored-slide half (no import) is `e2e/slide-media.spec.ts` (M5 wave 1).
+12. **e2e.** Import → goLive → two outputs (slide pixels, in-slide video at its z, F8, onEnd advance, skew) → stage text and notes → lower-third and stream text → search and cue labels. Also: Clear media during an in-slide video and then arm the next slide's clip; the live slide shows its poster, never the next clip. The authored-slide half (no import) is `e2e/slide-media.spec.ts` (M5 wave 1). The imported half is `e2e/pptx-native.spec.ts` (slide pixels against the harness at 1080p and 4K, stage, Lobby and Stream text, cue labels, search, the hidden slide) and `e2e/pptx-media.spec.ts` (PowerPoint clips and sounds through the M5 exit), on synthetic probe decks (`e2e/pptxdecks.ts`), M3 wave 2. The stage's notes region is M4's (`PropsRule.notes`), so notes are checked in the stored slides.
 13. **Perf.** The raster bench moves into `packages/renderer/bench` with rich slides at 1080p and 4K. A 30-minute 4K soak with slide videos on a reference venue GPU runs before media ships. The hub budgets are measured once on a reference NAS in M3.
 
 ## 15. Milestones
@@ -1331,7 +1366,13 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   - video ImageObjects draw their poster on outputs;
   - MediaTab hides `pptx`/`document` media; reference-aware delete confirmation.
 - Hub budgets measured on a reference NAS.
-- **As built in wave 1** (apps/hub/src/pptx/README.md): everything above except rich text emission and clip extraction (with M2 and M5), `slideContent()` in every drawer, hidden-cue navigation (hidden slides give no cue until then), and flips, ellipse/roundRect masks and recolouring of pictures (wave 2; drawn unflipped, as rects and without the recolouring, each noted on the slide). Every read of a stored deck spills only referenced pictures and refuses overlapping zip entries; a LibreOffice run that fails is retried, then the slides it could not draw are marked `Slide.pptx.failed`; a save that brings back pending slides queues the follow-up again.
+- **As built in wave 2, item A (clips):** clip and poster extraction with the `p:timing` mapping, trims baked,
+  motion backgrounds, linked and failed clips as posters with `[warn]` lines (§8 "As built";
+  apps/hub/src/pptx/README.md "Wave 2, item A").
+- **As built in wave 2, item B (one fallback rule):** `slideContent()` in every drawer (§5 "As built").
+- **As built in wave 2, item C (hidden slides):** flagged cues that sequential navigation skips and a click shows (§9 "As built").
+- **Wave 2 end to end** (§14.12): a probe deck imported through the route draws on an output at 1080p (WebGPU) and at 4K (Canvas 2D) as the harness's native page draws it (SSIM 1.000 and 0.999 on three slides); the stage, the Lobby and Stream looks (set to show non-song text), cue labels and search show the slide text with its verse numbers; Next and Prev skip the hidden slide and a double-click in the grid shows it. The verse numbers are the text's own digits, raised by runs since M2's second wave: a band whose source is rich text is laid out by the rich engine in the look's style (§6 "Bands, stage and readable text"), so the verse the Lobby and Stream bands are compared with is typed in ordo the same way, its numbers raised.
+- **As built in wave 1** (apps/hub/src/pptx/README.md): everything above except rich text emission and clip extraction (with M2 and M5), `slideContent()` in every drawer (wave 2), hidden-cue navigation (wave 2; hidden slides gave no cue until then), and flips, ellipse/roundRect masks and recolouring of pictures (wave 2; drawn unflipped, as rects and without the recolouring, each noted on the slide). Every read of a stored deck spills only referenced pictures and refuses overlapping zip entries; a LibreOffice run that fails is retried, then the slides it could not draw are marked `Slide.pptx.failed`; a save that brings back pending slides queues the follow-up again.
 
 **Files.**
 - `apps/hub/src/pptx/*`, `imports.ts`, `routes.ts`, `pool.ts`, `cpu.worker.ts`, `jobs.ts`, `media/service.ts`, `media/ffmpeg.ts`, `library.ts`, `db.ts`, `fonts/bundled.ts`, `fonts/google.ts`; `Dockerfile`.
@@ -1458,7 +1499,7 @@ Also:
 - Clear media during an in-slide video, then arm the next slide's clip: the live slide shows its poster, never the next clip.
 
 Also:
-- A clip still transcoding goes live with a degraded note and its poster.
+- A clip still transcoding goes live with a degraded note and its poster (a motion background still transcoding goes live without it: §8 "p:timing mapping", accepted gap).
 - A failed clip leaves a `[warn]` line and the poster.
 - A trimmed looping clip loops between its trim points.
 - The compositor golden passes; hot-lint is green.

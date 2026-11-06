@@ -19,6 +19,7 @@ import {
   planeSample,
   preparedKey,
 } from '@ordo/renderer';
+import { CONTENT_CASES, contentCase } from '@ordo/domain/content.test-util.ts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -330,5 +331,67 @@ describe('asset worker: slide jobs whose video plays in its box', () => {
       // The clip's size is unknown: the plane is fitted with the 4:3 poster's own size, pillarboxed.
       expect(msg!.plane![PLANE_UV]).toBeCloseTo(-1 / 6, 5);
     }
+  });
+});
+
+describe('asset worker: what a slide job draws follows slideContent (design/27 §5)', () => {
+  // The link sends the pictures a slide draws (link-core.test.ts); here every picture any case names is
+  // available, so what is drawn is the worker's own choice.
+  const images: Record<string, string> = { vposter: 'poster.jpg' };
+  for (const id of ['page', 'ref', 'art', 'photo', 'photo2', 'mine']) images[id] = `${id}.png`;
+  const ops = (c: (typeof CONTENT_CASES)[number]) => [
+    ...c.pictures.map((id) => `image:${id}.png`),
+    ...c.texts.map((t) => `text:${t}`),
+  ];
+
+  for (const c of CONTENT_CASES)
+    it(`${c.name}: one bitmap with the picture, then the objects drawn`, async () => {
+      const { msg } = await run(
+        slideJob({ slide: c.slide, images, video: undefined, key: `sl|${c.slide.id}` }),
+      );
+      expect(msg?.kind).toBe(SRC_BITMAP);
+      const drawn = (msg!.bitmap as unknown as FakeBitmap).ops;
+      // Pictures in drawing order, texts in theirs (each case draws its pictures under its texts or keeps
+      // them in z order; the renderer's tests check the interleaving).
+      expect(drawn.filter((o) => o.startsWith('image:'))).toEqual(
+        ops(c).filter((o) => o.startsWith('image:')),
+      );
+      expect(drawn.filter((o) => o.startsWith('text:'))).toEqual(ops(c).filter((o) => o.startsWith('text:')));
+    });
+
+  it('the hybrid art is drawn at its place in the z order', async () => {
+    const { msg } = await run(
+      slideJob({ slide: contentCase('hybrid').slide, images, video: undefined, key: 'sl|hybrid' }),
+    );
+    expect((msg!.bitmap as unknown as FakeBitmap).ops).toEqual([
+      'text:Under',
+      'image:art.png',
+      'image:photo2.png',
+      'text:Over',
+    ]);
+  });
+
+  it('on a slide showing its PowerPoint picture an added clip plays in its box, an imported one does not', async () => {
+    const ref = contentCase('ref').slide;
+    const added: Slide = { ...ref, objects: [...ref.objects, clip] };
+    const scene = await run(slideJob({ slide: added, images, key: 'sl|ref-added' }));
+    expect(scene.msg?.kind).toBe(SRC_SCENE);
+    expect((scene.msg!.bitmap as unknown as FakeBitmap).ops).toEqual([
+      'image:ref.png',
+      'image:mine.png',
+      'text:Added',
+      'image:poster.jpg',
+    ]);
+    const imported: Slide = {
+      ...ref,
+      objects: [...ref.objects, { ...clip, origin: { src: 'pptx', role: 'poster' } } as SlideObject],
+    };
+    const flat = await run(slideJob({ slide: imported, images, key: 'sl|ref-imported' }));
+    expect(flat.msg?.kind).toBe(SRC_BITMAP);
+    expect((flat.msg!.bitmap as unknown as FakeBitmap).ops).toEqual([
+      'image:ref.png',
+      'image:mine.png',
+      'text:Added',
+    ]);
   });
 });

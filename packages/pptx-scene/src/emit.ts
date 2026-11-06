@@ -41,6 +41,9 @@
  *   image stretched over the slide area, on white; solid,
  *   gradient and pattern → a bottom rect over the whole 1920x1080 frame (`extendBackgrounds`, default) or
  *   the slide area; none → white, as PowerPoint shows it.
+ * - **Video and sound** (`media.ts`): the first slide video plays in its poster's box (`ImageObject.play`),
+ *   the first slide sound is `Slide.audio`, a looping muted full-slide video is the slide's motion background
+ *   (`backgroundMediaId`); clips carry `pptxmedia:clip<n>` placeholders, listed in `EmittedSlide.clips`.
  * - **Lyric box** (design/27 §4 "Church mappings"): the slide's own body placeholder with the most
  *   characters; else the largest other text by characters × area (not title, date, footer, slide number);
  *   the title only when it is the only text. On a bilingual slide (the two boxes with the most text in
@@ -59,6 +62,7 @@ import type {
 import { apply, boxPx, decompose, lenPx, multiply, ptPx, slideRect } from './frame.ts';
 import { artInfo } from './hybrid.ts';
 import { isFooter, isTitle, masterClass } from './inherit.ts';
+import { type EmittedClip, emitMedia } from './media.ts';
 import type {
   Affine,
   ArtInfo,
@@ -84,6 +88,8 @@ import { richText } from './richtext.ts';
 
 /** The prefix of placeholder media ids. */
 export const MEDIA_PREFIX = 'pptxmedia:';
+/** The prefix of clip placeholders (`media.ts`): `pptxmedia:clip<n>`, one per clip part and trim. */
+export const CLIP_PREFIX = `${MEDIA_PREFIX}clip`;
 /** Longest text an ordo `TextObject` holds (`@ordo/domain` MAX.text). */
 export const MAX_TEXT = 20_000;
 /** Stored font sizes in logical px (design/27 §4 "Sizes"). */
@@ -132,6 +138,13 @@ export interface EmitOptions {
    * can be long; a slide's ids must stay within the schema's 200 characters).
    */
   mediaId?: (part: string) => string;
+  /**
+   * The placeholder media id of a clip, by `media.ts` `clipKey` (its part and trim); default
+   * `pptxmedia:clip<n>`, numbered from 1 in first-use order.
+   */
+  clipId?: (key: string) => string;
+  /** 'Import transition sounds' (default false): a slide's transition sound becomes its sound. */
+  transitionSounds?: boolean;
   /** Solid backgrounds cover the whole 1920x1080 frame instead of the slide area (default true). */
   extendBackgrounds?: boolean;
   /**
@@ -186,6 +199,8 @@ export interface EmittedSlide {
    * picture slide, one warning), and drops `SLIDE_BUDGET_NOTE`.
    */
   overBudget?: true;
+  /** The clips the slide plays or names (`media.ts`): what the hub ingests and puts in place of placeholders. */
+  clips?: EmittedClip[];
 }
 
 /** The placeholder media id of a metafile's object until it is converted (`EmittedSlide.metafiles`). */
@@ -215,6 +230,10 @@ interface EmitCtx {
   metafiles?: { part: string; object: ImageObject; at: number }[];
   /** UTF-8 bytes of the slide's rich text objects so far (`MAX_SLIDE_BYTES`). */
   textBytes: number;
+  clipId: (key: string) => string;
+  transitionSounds: boolean;
+  /** The slide's clips (`media.ts`). */
+  clips?: EmittedClip[];
 }
 
 export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
@@ -222,6 +241,15 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
   const newId = opts.newId ?? (() => `pptx-${++n}`);
   const media = new Map<string, string>();
   const mediaId = opts.mediaId ?? (() => `${MEDIA_PREFIX}${media.size + 1}`);
+  const clips = new Map<string, string>();
+  const clipId = (key: string) => {
+    let id = clips.get(key);
+    if (id === undefined) {
+      id = opts.clipId ? opts.clipId(key) : `${CLIP_PREFIX}${clips.size + 1}`;
+      clips.set(key, id);
+    }
+    return id;
+  };
   const slides = scene.slides.map((s) => {
     const t0 = performance.now();
     const { notes, log } = noteList();
@@ -237,9 +265,12 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       media,
       log,
       textBytes: 0,
+      clipId,
+      transitionSounds: opts.transitionSounds ?? false,
     };
     const spans: [number, number][] = [];
     ctx.metafiles = [];
+    ctx.clips = [];
     const slide = emitSlide(ctx, s, spans);
     const over = ctx.textBytes > MAX_SLIDE_BYTES;
     const art = artInfo(s, scene.frame, spans, slide.objects);
@@ -259,6 +290,7 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       ...(art ? { art } : {}),
       ...(metafiles.length ? { metafiles } : {}),
       ...(over && s.classification.class !== 'picture' ? { overBudget: true as const } : {}),
+      ...(ctx.clips.length ? { clips: ctx.clips } : {}),
     };
   });
   return {
@@ -288,6 +320,9 @@ function emitSlide(ctx: EmitCtx, s: SlideScene, spans: [number, number][] = []):
     if (!e.hidden) emitElement(ctx, e, objects, texts);
     spans.push([at, objects.length]);
   }
+  const media = emitMedia(ctx, s, slide, spans);
+  ctx.clips?.push(...media.clips);
+  if (media.remove.size) leaveOut(ctx, slide, spans, media.remove);
   if (objects.length > MAX_OBJECTS) {
     ctx.log(`more than ${MAX_OBJECTS} objects: the top ones are not drawn`);
     objects.length = MAX_OBJECTS;
@@ -295,6 +330,29 @@ function emitSlide(ctx: EmitCtx, s: SlideScene, spans: [number, number][] = []):
   const lyric = lyricOf(texts.filter((t) => objects.includes(t.o)));
   if (lyric) slide.lyricObjectId = lyric.id;
   return slide;
+}
+
+/**
+ * Leave the objects at `remove` out of the slide, keeping `spans` and the metafiles' places pointing at the
+ * same objects (an element whose objects all went keeps an empty span where they were).
+ */
+function leaveOut(ctx: EmitCtx, slide: Slide, spans: [number, number][], remove: Set<number>): void {
+  const before: number[] = []; // before[k]: objects kept below index k
+  let kept = 0;
+  for (let k = 0; k <= slide.objects.length; k++) {
+    before.push(kept);
+    if (k < slide.objects.length && !remove.has(k)) kept++;
+  }
+  const at = (k: number) => before[Math.min(k, before.length - 1)]!;
+  // In place: the slide's object array is the emitter's.
+  let n = 0;
+  for (let k = 0; k < slide.objects.length; k++) if (!remove.has(k)) slide.objects[n++] = slide.objects[k]!;
+  slide.objects.length = n;
+  for (const span of spans) {
+    span[0] = at(span[0]);
+    span[1] = at(span[1]);
+  }
+  for (const m of ctx.metafiles ?? []) m.at = at(m.at);
 }
 
 // ── Lyric box ───────────────────────────────────────────────────────────────────────────────────────────
@@ -488,7 +546,6 @@ function emitPicture(ctx: EmitCtx, e: PictureElement, out: SlideObject[]): void 
   if (e.reasons?.some((r) => r.startsWith('mask:')))
     ctx.log(`a picture clipped to ${e.geom} is drawn as a rect (M3)`);
   if (e.picture.effects?.length) ctx.log('a recoloured picture is drawn without its recolouring (M3)');
-  if (e.media) ctx.log(`a ${e.media.kind} is drawn as its poster (M5)`);
   const img = pictureObject(ctx, e.xf, e.picture, e.geom, e.adj);
   if (img) out.push(img);
   const stroke = e.line ? legacyColor(e.line.fill) : undefined;

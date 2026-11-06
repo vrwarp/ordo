@@ -176,14 +176,34 @@ describe('expandCues: a slide sound plays across shown slides', () => {
     expect(cues.map((c) => c.slideAudio?.untilCue)).toEqual([1, undefined, 3, undefined]);
   });
 
-  // Until hidden cues are flagged and skipped by navigation (design/27 §9, M3 wave 2), a hidden slide has no
-  // cue at all; the sound still spans its shown slides. Wave 2 brings back the hidden cue inside the range.
-  it('does not count hidden slides, which have no cue yet', () => {
-    const hidden = { hidden: true } as Partial<Slide>;
+  // A hidden slide's cue is flagged and skipped by Next (design/27 §9): the sound spans its shown slides, and
+  // the hidden cue inside that range stays reachable (a click on it keeps the sound playing).
+  it('does not count hidden slides (M3), which stay reachable inside the range', () => {
+    const hidden: Partial<Slide> = { hidden: true };
     const p = deck('d', [[slide('a', [], withSound(2)), slide('h', [], hidden), slide('b'), slide('c')]]);
     const cues = expandCues({ playlist: playlist('d'), presentations: byId(p), media: byId(song) });
-    expect(cues.map((c) => c.slideId)).toEqual(['a', 'b', 'c']);
-    expect(cues[0]?.slideAudio?.untilCue).toBe(1);
+    expect(cues.map((c) => [c.slideId, c.hidden])).toEqual([
+      ['a', undefined],
+      ['h', true],
+      ['b', undefined],
+      ['c', undefined],
+    ]);
+    expect(cues[0]?.slideAudio?.untilCue).toBe(2);
+  });
+
+  it("counts from a hidden slide's own sound, and runs to the item's end past trailing hidden slides", () => {
+    const hidden: Partial<Slide> = { hidden: true };
+    const p = deck('d', [
+      [
+        slide('h', [], { ...hidden, ...withSound(2) }),
+        slide('a'),
+        slide('b', [], withSound(9)),
+        slide('h2', [], hidden),
+      ],
+    ]);
+    const cues = expandCues({ playlist: playlist('d'), presentations: byId(p), media: byId(song) });
+    expect(cues[0]).toMatchObject({ hidden: true, slideAudio: { untilCue: 1 } });
+    expect(cues[2]?.slideAudio?.untilCue).toBe(3);
   });
 
   it('click start, loop, gain and mute; a video soundtrack plays too; an image does not', () => {
@@ -212,6 +232,31 @@ describe('expandCues: a slide sound plays across shown slides', () => {
     expect(cues[2]?.slideAudio?.mediaId).toBe('clip');
     expect(cues[3]?.slideAudio).toBeUndefined();
     expect(cues[4]?.slideAudio).toBeUndefined();
+  });
+
+  it("a playing object whose clip turned out to be a sound is the slide's sound, unless the slide has one", () => {
+    const tune = media('tune', 'audio', { audio: { gainDb: 0 } });
+    const p = deck('d', [
+      [
+        slide('a', [image('icon', 'pic', { mediaId: 'tune', start: 'click', loop: true, gainDb: -2 })], {
+          audio: { mediaId: 'gone', slides: 3 },
+        }),
+        slide('b'),
+        slide('c', [image('icon', 'pic', { mediaId: 'tune', muted: true })], withSound(1)),
+      ],
+    ]);
+    const cues = expandCues({ playlist: playlist('d'), presentations: byId(p), media: byId(song, tune) });
+    // Its own cue only, never the video fields.
+    expect(cues[0]?.slideAudio).toEqual({
+      mediaId: 'tune',
+      start: 'click',
+      loop: true,
+      gainDb: -2,
+      untilCue: 0,
+    });
+    expect(cues[0]?.mediaId).toBeUndefined();
+    expect(cues[0]?.mediaObjectId).toBeUndefined();
+    expect(cues[2]?.slideAudio?.mediaId).toBe('song');
   });
 });
 
@@ -293,6 +338,50 @@ describe('media slides play are referenced and optional at goLive', () => {
     expect(r.degraded?.map((d) => d.reason)).toEqual([
       '"Media clip" (slide video) is still processing; the slide shows without it; Go live again once it is ready',
     ]);
+  });
+
+  it("a PowerPoint slide's motion background still processing goes live without it, the presentation's showing", () => {
+    const pptx = { fileId: 'deck', index: 0, class: 'native' as const, version: 1 };
+    const imported = deck(
+      'd',
+      [
+        [
+          slide('a', [], { backgroundMediaId: 'loop', pptx }),
+          slide('b', [], { backgroundMediaId: 'pic', pptx: { ...pptx, index: 1 } }),
+        ],
+      ],
+      { backgroundMediaId: 'wall' },
+    );
+    const lib = [
+      { ...clip, id: 'loop', state: 'processing' as const },
+      media('pic', 'image'),
+      media('wall', 'image'),
+    ];
+    const r = resolvePlaylist(inputs(lib, playlist('d'), imported), 'pl', { digest: localDigest });
+    expect(Object.keys(r.media).sort()).toEqual(['pic', 'wall']);
+    expect(r.degraded?.map((d) => d.reason)).toEqual([
+      '"Media clip" (slide background) is still processing; the slide shows without it; Go live again once it is ready',
+    ]);
+    const cues = expandCues(r);
+    expect(cues.map((c) => c.backgroundMediaId)).toEqual(['wall', 'pic']);
+    // Ready, it is the slide's background like any other.
+    const ready = resolvePlaylist(
+      inputs(
+        [{ ...clip, id: 'loop' }, media('pic', 'image'), media('wall', 'image')],
+        playlist('d'),
+        imported,
+      ),
+      'pl',
+      {
+        digest: localDigest,
+      },
+    );
+    expect(expandCues(ready)[0]?.backgroundMediaId).toBe('loop');
+    // A slide of ordo's own keeps its background required.
+    const own = deck('d', [[slide('a', [], { backgroundMediaId: 'loop' })]]);
+    expect(() => resolvePlaylist(inputs(lib, playlist('d'), own), 'pl', { digest: localDigest })).toThrow(
+      /still processing/,
+    );
   });
 
   it('a clip that something else also draws or plays stays required', () => {

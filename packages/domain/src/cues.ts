@@ -32,11 +32,12 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
       if (!p) return;
       const sections = arrangedSections(p, item.arrangementId);
       const slides = sections.flatMap((section, arrangementPos) =>
-        section.slides.flatMap((slide, slideIndexInSection) =>
-          // A hidden PowerPoint slide stays out of the service, as LibreOffice's pictures left it out, until
-          // navigation flags its cue and skips it (design/27 §9).
-          slide.hidden ? [] : [{ section, arrangementPos, slide, slideIndexInSection }],
-        ),
+        section.slides.map((slide, slideIndexInSection) => ({
+          section,
+          arrangementPos,
+          slide,
+          slideIndexInSection,
+        })),
       );
       const first = cues.length;
       const until = soundEnds(slides.map((x) => x.slide));
@@ -58,11 +59,15 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
           arrangementPos,
           slideId: slide.id,
           slideIndexInSection,
-          backgroundMediaId: slide.backgroundMediaId ?? item.backgroundMediaId ?? p.backgroundMediaId,
+          backgroundMediaId:
+            slideBackground(slide, resolved.media) ?? item.backgroundMediaId ?? p.backgroundMediaId,
           ...(slide.clearBackground && !slide.backgroundMediaId ? { clearBackground: true } : {}),
           transition: item.transition ?? slide.transition ?? p.transition,
           autoAdvanceMs: p.kind === 'loop' ? loopDelay(slide.durationMs, p.loop?.defaultSlideMs) : undefined,
-          ...slideCueMedia(slide, resolved.media, first + until(k)),
+          // A hidden PowerPoint slide stays in the service (design/27 §9): sequential navigation skips its
+          // cue (`nextShownCue`), a GO with its index shows it.
+          ...(slide.hidden === true ? { hidden: true } : {}),
+          ...slideCueMedia(slide, resolved.media, first + k, first + until(k)),
         });
       });
     } else if (item.kind === 'media') {
@@ -109,6 +114,15 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
 }
 
 /**
+ * The slide's own background, unless it is a PowerPoint slide's that goLive left out (a motion background
+ * still transcoding or failed, design/27 §8): then the item's or the presentation's shows.
+ */
+function slideBackground(slide: Slide, media: ResolvedPlaylist['media']): string | undefined {
+  const id = slide.backgroundMediaId;
+  return id && slide.pptx && !media[id] ? undefined : id;
+}
+
+/**
  * A muted clip or sound still plays, so its transport and the stage's remaining time work as usual, at the
  * schema's gain floor, which is silent.
  */
@@ -119,9 +133,16 @@ const MUTED_DB = -100;
  * references media the outputs do not have:
  * - the playing object's clip (the first ImageObject with `play`, in z order), a video: mediaId,
  *   mediaKind 'video', loop, onEnd, audio, mediaObjectId, mediaStart, mediaShowWhenStopped;
- * - the slide's sound (an audio file, or a video's soundtrack): slideAudio, playing on until cue `untilCue`.
+ * - the slide's sound (an audio file, or a video's soundtrack): slideAudio, playing on until cue `untilCue`;
+ * - a playing object whose clip turned out to be a sound (its media job found no picture: an import that took
+ *   a sound for a video) is the slide's sound when the slide has none of its own, on this cue (`self`) only.
  */
-function slideCueMedia(slide: Slide, media: ResolvedPlaylist['media'], untilCue: number): Partial<Cue> {
+function slideCueMedia(
+  slide: Slide,
+  media: ResolvedPlaylist['media'],
+  self: number,
+  untilCue: number,
+): Partial<Cue> {
   const out: Partial<Cue> = {};
   const obj = playingObject(slide);
   const clip = obj ? media[obj.play.mediaId] : undefined;
@@ -148,6 +169,16 @@ function slideCueMedia(slide: Slide, media: ResolvedPlaylist['media'], untilCue:
       ...(gainDb !== undefined ? { gainDb } : {}),
       untilCue,
     };
+  } else if (obj && clip?.kind === 'audio') {
+    const play = obj.play;
+    const gainDb = play.muted ? MUTED_DB : play.gainDb;
+    out.slideAudio = {
+      mediaId: play.mediaId,
+      start: play.start ?? 'auto',
+      loop: !!(play.loop ?? clip.loop),
+      ...(gainDb !== undefined ? { gainDb } : {}),
+      untilCue: self,
+    };
   }
   return out;
 }
@@ -158,10 +189,9 @@ function slideCueMedia(slide: Slide, media: ResolvedPlaylist['media'], untilCue:
  * item's last slide. Without `slides`, a sound plays on its own slide only.
  */
 function soundEnds(slides: Slide[]): (k: number) => number {
-  // Hidden slides are M3's (`Slide.hidden`); read structurally until that field lands.
   const shown: number[] = [];
   slides.forEach((s, k) => {
-    if ((s as { hidden?: unknown }).hidden !== true) shown.push(k);
+    if (s.hidden !== true) shown.push(k);
   });
   return (k) => {
     const n = slides[k]?.audio?.slides;
@@ -227,6 +257,43 @@ function truncate(raw: string, n: number): string {
   return s.slice(0, end) + '…';
 }
 
+/*
+ * Hidden cues (design/27 §9). A hidden PowerPoint slide keeps its cue, flagged `hidden`. Sequential
+ * navigation skips it: Next, Prev, the cue a GO arms, a loop's auto-advance, onEnd 'advance', Next item and
+ * Previous item. A GO with its index (a click in the slide grid, goToSlide, a Stream Deck slide key) shows
+ * it, as PowerPoint does. A jump to a named group of cues (a section key, a section header, a playlist item
+ * picked in the playlist) lands on the group's first cue that is not hidden (`entryCue`).
+ */
+
+/** Whether sequential navigation skips cue `c`: a hidden PowerPoint slide (design/27 §9). */
+export function isHiddenCue(c: Pick<Cue, 'hidden'> | undefined): boolean {
+  return c?.hidden === true;
+}
+
+/**
+ * The first cue after `from` that is not hidden: what Next goes to and what a GO on `from` arms. `from` -1
+ * gives the first cue that is not hidden. Undefined when none follows.
+ */
+export function nextShownCue(cues: readonly Cue[], from: number): number | undefined {
+  for (let i = Math.max(0, Math.floor(from) + 1); i < cues.length; i++) if (!isHiddenCue(cues[i])) return i;
+  return undefined;
+}
+
+/** The last cue before `from` that is not hidden: what Prev goes to. Undefined when none precedes. */
+export function prevShownCue(cues: readonly Cue[], from: number): number | undefined {
+  for (let i = Math.min(Math.ceil(from), cues.length) - 1; i >= 0; i--) if (!isHiddenCue(cues[i])) return i;
+  return undefined;
+}
+
+/**
+ * Where a jump to a named group of cues lands (the cues of one section occurrence or one playlist item, in
+ * cue order): its first cue that is not hidden; for a group whose slides are all hidden, its first cue, since
+ * the operator named the group.
+ */
+export function entryCue<C extends Pick<Cue, 'hidden'>>(group: readonly C[]): C | undefined {
+  return group.find((c) => !isHiddenCue(c)) ?? group[0];
+}
+
 /** First cue index of each playlist item. */
 export function itemStarts(cues: Cue[]): number[] {
   const starts: number[] = [];
@@ -240,24 +307,29 @@ export function itemStarts(cues: Cue[]): number[] {
   return starts;
 }
 
-/** Sections (by arrangement position) of the item containing cue `index`, with their first cue. */
+/**
+ * Sections (by arrangement position) of the item containing cue `index`, with their first cue and the cue a
+ * jump to the section lands on (`entry`: its first cue that is not hidden, else its first cue; `entryCue`).
+ */
 export function sectionsOfItem(
   cues: Cue[],
   index: number,
-): { label: string; short: string; first: number; pos: number }[] {
+): { label: string; short: string; first: number; entry: number; pos: number }[] {
   const c = cues[index];
   if (!c) return [];
-  const out: { label: string; short: string; first: number; pos: number }[] = [];
+  const out: { label: string; short: string; first: number; entry: number; pos: number }[] = [];
   for (const x of cues) {
     if (x.itemIndex !== c.itemIndex || x.arrangementPos === undefined) continue;
-    if (!out.some((o) => o.pos === x.arrangementPos)) {
+    const o = out.find((o) => o.pos === x.arrangementPos);
+    if (!o) {
       out.push({
         label: x.sectionLabel ?? '',
         short: x.sectionShort ?? '',
         first: x.index,
+        entry: x.index,
         pos: x.arrangementPos,
       });
-    }
+    } else if (isHiddenCue(cues[o.entry]) && !isHiddenCue(x)) o.entry = x.index;
   }
   return out;
 }

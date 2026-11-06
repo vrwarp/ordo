@@ -14,4 +14,5 @@ export * from './bitmap-cache.ts';
 export type { Compositor, FrameInputs, VideoFrames } from './compositor.ts';
 export { MAX_VIDEO_SLOTS } from './compositor.ts';
 export * from './clamp.ts';
+export * from './content.ts';
 export * from './text/index.ts';

@@ -14,8 +14,9 @@
  *   item.
  */
 import { rm } from 'node:fs/promises';
-import type { Media } from '@ordo/domain';
+import type { Media, MediaTrim } from '@ordo/domain';
 import { type DB, nowIso } from '../db.ts';
+import { normTrim, sameTrim } from '../media/service.ts';
 import { hashFile } from '../store.ts';
 import type { PptxDeps } from './shared.ts';
 
@@ -116,4 +117,44 @@ export async function mediaForFile(deps: PptxDeps, path: string, opts: MediaPart
     isBackground: opts.background ?? false,
   });
   return m.id;
+}
+
+export type ClipOptions = {
+  /** The media item's name (`baseName` applies). */
+  name: string;
+  tags: string[];
+  /** The part of the clip kept, baked into its delivery (`IngestOpts.trim`). */
+  trim?: MediaTrim;
+  /** The file's hash and size when the caller has them (a part used with several trims is hashed once). */
+  hashed?: { hash: string; bytes: number };
+};
+
+/**
+ * The clip for the file at `path` (a scratch file this call moves or deletes): an existing video or audio
+ * item with the same content and the same trim (design/27 §8 "Hub": deduplication keys on hash plus trim, so
+ * one file used whole and trimmed gives two clips), else a new item stored without its processing job, which
+ * the caller queues (`MediaService.queue`) once the import has queued its LibreOffice follow-up. A failed
+ * item is not reused: the file is ingested again. Throws when the file is not a video or audio file.
+ */
+export async function clipForFile(
+  deps: PptxDeps,
+  path: string,
+  opts: ClipOptions,
+): Promise<{ media: Media; created: boolean }> {
+  const { hash, bytes } = opts.hashed ?? (await hashFile(path));
+  const trim = normTrim(opts.trim);
+  const same = (m: Media) =>
+    (m.kind === 'video' || m.kind === 'audio') && m.state !== 'failed' && sameTrim(normTrim(m.trim), trim);
+  const existing = findMedia(deps, hash, 'content', same)[0];
+  if (existing) {
+    await rm(path, { force: true });
+    return { media: existing, created: false };
+  }
+  const media = await deps.media.ingest({ path, hash, bytes }, opts.name, {
+    checkExtension: false,
+    tags: opts.tags,
+    ...(trim ? { trim } : {}),
+    queue: false,
+  });
+  return { media, created: true };
 }

@@ -79,6 +79,11 @@ export type Cue = {
   action?: ActionId;
   /** Loop presentations auto-advance after this many ms. */
   autoAdvanceMs?: number;
+  /**
+   * A hidden PowerPoint slide (design/27 §9): Next, Prev, the cue a GO arms, auto-advance, onEnd 'advance',
+   * Next item and Previous item skip it; a GO with its index shows it. Only ever `true` on a slide cue.
+   */
+  hidden?: boolean;
   /*
    * A slide cue's own media (design/27 §3.3, §8), set by expandCues only for media in `resolved.media`.
    * The playing video also fills mediaId, mediaKind 'video', loop, onEnd and audio above.

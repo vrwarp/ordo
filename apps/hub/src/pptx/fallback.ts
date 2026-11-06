@@ -850,12 +850,17 @@ export function referenceJob(deps: PptxDeps): JobHandler<PptxReferencePayload> {
       return { presentationId: pl.presentationId, deleted: true };
     }
     if (deps.locked(p0.id)) deferWhileLocked(ctx, 'LibreOffice will try');
-    // Every shown slide of this deck, once (a duplicated slide shares its picture).
-    const want = new Map<number, number>();
+    // Every slide of this deck, once (a duplicated slide shares its picture), hidden ones too: a click in
+    // the grid shows a hidden slide in the service (design/27 §9), and it must draw what the others draw.
+    // The render copy prints each page asked for, hidden or not. Named by the shown position.
+    const want = new Map<number, string>();
     for (const sec of p0.sections)
       for (const sl of sec.slides)
-        if (sl.pptx?.fileId === pl.hash && sl.pptx.shown !== undefined && !sl.hidden)
-          want.set(sl.pptx.index, sl.pptx.shown);
+        if (sl.pptx?.fileId === pl.hash)
+          want.set(
+            sl.pptx.index,
+            sl.pptx.shown !== undefined ? `${sl.pptx.shown + 1}` : `hidden slide ${sl.pptx.index + 1}`,
+          );
     const pages: RenderCopyPage[] = [...want.keys()]
       .filter((i) => !done.has(i))
       .sort((a, b) => a - b)
@@ -879,7 +884,7 @@ export function referenceJob(deps: PptxDeps): JobHandler<PptxReferencePayload> {
             ...page,
             hasAlpha: false,
             key: `${pl.hash}:reference:${got.index}`,
-            name: `${p0.title} – ${(want.get(got.index) ?? got.index) + 1} (PowerPoint)`,
+            name: `${p0.title} – ${want.get(got.index) ?? got.index + 1} (PowerPoint)`,
           });
           done.set(got.index, id);
           save();

@@ -8,6 +8,7 @@ import {
   type TextObject,
 } from '@ordo/domain';
 import { CLAMP, clampBox, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
+import { drawableContent } from './content.ts';
 import { pictureTarget, sourceSize } from './picture.ts';
 import { rasterSlide } from './raster.ts';
 import {
@@ -147,16 +148,19 @@ function pictureSize(img: CanvasImageSource | undefined): [number, number] {
  * either the clip is stretched to the box. The poster is asked for exactly as `drawSlide2D` asks for it
  * (`images(object.mediaId, pictureTarget(object, scale))`), so a decoder that prepares only the targets
  * `slidePictures` lists (the asset worker) hands back the poster's prepared bitmap, whose source's size
- * `sourceSize` knows. Base and over are subsets of the slide's clamped objects (and its page picture), so
- * every picture they draw asks for one of those targets too.
+ * `sourceSize` knows. Base and over are subsets of what the slide draws (`slideContent` of its clamped copy:
+ * its picture, a reference or a page, and its objects), so every picture they draw asks for one of those
+ * targets too.
  *
  * A play object drawn below full opacity leaves its poster out of base, as 'Hide while not playing' does:
  * the video is mixed over base at that opacity, so a poster in base would show through the moving picture
  * (SCENE.md). Its slot's paused frame still shows while it is stopped.
  *
- * Undefined when the slide is not a scene and stays one bitmap: the look does not draw the slide as
- * authored (lyric-only, hidden), the object is not an image of the drawable slide, or nothing of the video
- * can show (an empty box, a crop that leaves nothing).
+ * The split is over what the slide draws (`slideContent`, design/27 §5): base keeps the slide's picture
+ * under everything. Undefined when the slide is not a scene and stays one bitmap: the look does not draw the
+ * slide as authored (lyric-only, hidden), the object is not an image the slide draws (gone, or an imported
+ * object under the slide's PowerPoint picture), or nothing of the video can show (an empty box, a crop that
+ * leaves nothing).
  */
 export function sceneSlides(
   ctx: Ctx2D,
@@ -169,11 +173,12 @@ export function sceneSlides(
 ): SceneSlides | undefined {
   if (look && clampLook(look).layers.slide.mode !== 'authored') return undefined;
   const s = clampSlide(slide);
-  const index = s.objects.findIndex((o) => o.type === 'image' && o.id === objectId);
-  const play = s.objects[index] as ImageObject | undefined;
+  const drawn = drawableContent(s).objects;
+  const index = drawn.findIndex((o) => o.type === 'image' && o.id === objectId);
+  const play = drawn[index] as ImageObject | undefined;
   if (!play) return undefined;
   const translucent = num(play.opacity, 0, 1, 1) < 1;
-  const split = splitScene(s.objects, index, {
+  const split = splitScene(drawn, index, {
     showWhenStopped: translucent ? false : play.play?.showWhenStopped,
     bounds: (o: SlideObject) => (o.type === 'text' ? textBounds(ctx, o, scale) : objectBounds(o)),
   });

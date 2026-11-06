@@ -20,6 +20,10 @@
  *    every slide once the presentation passes 3 MiB, becomes compact picture class, logged and counted. A
  *    slide the converter classed picture for its 64 KB budget (`EmittedSlide.overBudget`: its text
  *    formatting alone passed it) is that same 'slide' case: one warning, counted once.
+ * 3b. Clips (`clips.ts`): the scan's clip parts were spilled after the pictures and sniffed (the batches
+ *    emit `ImageObject.play`, `Slide.audio` and motion backgrounds with the sniffed kinds); each clip the
+ *    slides keep is stored once per part and trim (trims baked), its media job not yet queued, and its
+ *    placeholder replaced; a clip that cannot be imported gives a `[warn]` and leaves its poster.
  * 4. Pictures prepared and stored (`pictures.ts`, item C) for the slides that keep their objects, recorded
  *    as resume pairs: a re-queued job never prepares a stored picture again.
  * 5. Placeholders remapped (`remapMediaIds`; an image whose picture could not be stored is dropped), notes,
@@ -29,14 +33,14 @@
  *    that fails it becomes picture class), `Slide.pptx.digest` over the objects exactly as stored.
  * 6. `lib.savePresentation` (version 1) and, in the same synchronous step, the heavy `pptx-lo` job for the
  *    slides that wait for LibreOffice (`pptx.pending`: hybrid, picture class, metafiles): it cannot start
- *    before version 1 exists, its digests are version 1's, and it is queued before any clip job of the deck
- *    (M5 must queue clip jobs after this step). The presentation id is chosen and recorded before the save,
- *    so a re-run never saves a second presentation.
+ *    before version 1 exists, its digests are version 1's, and it is queued before any clip job of the deck:
+ *    the clips' media jobs are queued right after it (`MediaService.queue`), never awaited. The presentation
+ *    id is chosen and recorded before the save, so a re-run never saves a second presentation.
  *
  * Version 1 of a picture-class slide has no objects, `pptx.pending` and its text in `pptx.artText`; a hybrid
  * slide has its native objects (residuals are left out until version 2) and `pptx.artText` from its art.
  */
-import { open, rm } from 'node:fs/promises';
+import { open, rm, stat } from 'node:fs/promises';
 import {
   compactSlideBytes,
   type ImageObject,
@@ -56,6 +60,7 @@ import { remapMediaIds } from '@ordo/importers';
 import { sanitizePresentation } from '@ordo/importers/sanitize.ts';
 import {
   type ArtInfo,
+  type EmittedClip,
   type EmittedSlide,
   MEDIA_PREFIX,
   type PictureHeader,
@@ -66,10 +71,12 @@ import {
 } from '@ordo/pptx-scene';
 import { digestOf, SLIDE_BUDGET_NOTE } from '@ordo/pptx-scene/emit.ts';
 import { relsPartOf } from '@ordo/pptx-scene/opc.ts';
+import type { Job } from '@ordo/protocol';
 import { errorMessage } from '../errors.ts';
 import type { JobCtx, JobHandler } from '../jobs.ts';
 import { baseName } from '../media/service.ts';
 import { type CpuPool, cpuPool, transferables, WorkerStartError } from '../pool.ts';
+import { type ClipFile, ClipImport, spillClips } from './clips.ts';
 import { type DeckXml, readDeckXml, spillDeckParts } from './deckParts.ts';
 import { displayNeeds, PictureBudget, type PictureItem, storePictures } from './pictures.ts';
 import { ImportLog, importResult, logSafe, missingFonts } from './report.ts';
@@ -96,6 +103,20 @@ export type NativeJobEnv = {
   pool?: Pick<CpuPool, 'run'>;
   limits?: { batchSlides?: number; importPoolMs?: number };
 };
+
+/**
+ * Queue the media jobs of the clips an import stored (its resume pairs, `PptxNativeProgress.clips`), for an
+ * import that stops before version 1: a failed or cancelled run, or a job abandoned after repeated crashes
+ * (the kind's give-up). `MediaService.queue` only queues an item still waiting for its job, so a clip already
+ * queued or processed is left alone.
+ */
+export function queueStoredClips(deps: Pick<PptxDeps, 'media'>, done: PptxNativeProgress | undefined): void {
+  const pairs = Array.isArray(done?.clips) ? done.clips : [];
+  for (const pair of pairs.slice(0, PPTX_LIMITS.clips * 2)) {
+    const id = Array.isArray(pair) ? pair[1] : undefined;
+    if (typeof id === 'string') deps.media.queue(id);
+  }
+}
 
 export function nativeJob(deps: PptxDeps, env: NativeJobEnv = {}): JobHandler<PptxNativePayload> {
   const limits = {
@@ -163,6 +184,8 @@ type Draft = {
    * and the follow-up puts the object back just under `before`.
    */
   metafiles?: { part: string; object: ImageObject; before?: string }[];
+  /** The clips the slide plays or names (`EmittedSlide.clips`, `clips.ts`). */
+  clips?: EmittedClip[];
 };
 
 class Cancelled extends Error {
@@ -209,6 +232,10 @@ class NativeImport {
   private heapMb = 0;
   private jobLines = new Map<string, number>();
   private scratch = '';
+  /** Media ids of the deck's clips: queued after version 1 and its follow-up, never the presentation's background. */
+  private clipIds = new Set<string>();
+  /** The clips this run created (`ClipImport.created`). */
+  private clipsCreated: string[] = [];
 
   constructor(
     private readonly deps: PptxDeps,
@@ -249,6 +276,18 @@ class NativeImport {
   }
 
   async run(deck: string, scratch: string): Promise<PptxNativeResult> {
+    try {
+      return await this.steps(deck, scratch);
+    } catch (e) {
+      // Clips stored without their media job (queued with version 1): never left waiting for it, those of an
+      // earlier attempt (the resume pairs) included.
+      for (const id of this.clipsCreated) this.deps.media.queue(id);
+      queueStoredClips(this.deps, this.done);
+      throw e;
+    }
+  }
+
+  private async steps(deck: string, scratch: string): Promise<PptxNativeResult> {
     const { ctx } = this;
     const t0 = performance.now();
     this.scratch = scratch;
@@ -279,16 +318,24 @@ class NativeImport {
     ctx.log(`${listed.length} slide(s), ${scan.pictures.length} picture(s) referenced`);
     ctx.progress(0.1);
 
-    // 2b. Referenced pictures spilled, their sizes read.
+    // 2b. Referenced pictures spilled, their sizes read; then the clips, within what the pictures left.
     const spilled = await this.spillPictures(deck, scratch, scan);
     const pictureSizes: [string, PictureHeader][] = [];
+    let spilledBytes = 0;
     for (const [part, path] of spilled) {
       const px = await spilledSize(path);
       if (px) pictureSizes.push([part, px]);
+      spilledBytes += await stat(path).then(
+        (s) => s.size,
+        () => 0,
+      );
     }
+    const clipFiles = await this.spillClips(deck, scratch, scan, PPTX_LIMITS.spillBytes - spilledBytes);
+    const mediaKinds: [string, 'video' | 'audio'][] = [];
+    for (const [part, f] of clipFiles) if (f.kind) mediaKinds.push([part, f.kind]);
 
     // 2c. The slides, in batches.
-    const converted = await this.convert(parts, listed, pictureSizes);
+    const converted = await this.convert(parts, listed, pictureSizes, mediaKinds);
     parts.clear();
     ctx.log(
       `converted in ${Math.round(this.poolMs)} ms of pool time, worker heap ${Math.round(this.heapMb)} MB`,
@@ -297,6 +344,10 @@ class NativeImport {
     // 3. Drafts, classes and the size budgets.
     const drafts = this.drafts(listed, converted, scan);
     const compact = this.budget(drafts);
+
+    // 3b. Clips: stored (their media jobs queued with version 1), placeholders replaced.
+    await this.clips(drafts, clipFiles);
+    this.checkCancelled();
 
     // 4. Pictures.
     const stored = await this.pictures(drafts, spilled, new Map(pictureSizes));
@@ -374,11 +425,78 @@ class NativeImport {
     return spilled.files;
   }
 
+  /**
+   * Step 2b: the scan's clip parts spilled within `bytesLeft` and sniffed (`clips.ts`); parts past the limits
+   * are warned about here, and each slide that uses one warns again when its clips are stored.
+   */
+  private async spillClips(
+    deck: string,
+    scratch: string,
+    scan: SceneScan,
+    bytesLeft: number,
+  ): Promise<Map<string, ClipFile>> {
+    if (scan.clipsOver)
+      this.warn(
+        'clip',
+        `${scan.clipsOver} clip(s) past the ${PPTX_LIMITS.clips} a deck may hold are not imported: their posters are shown`,
+      );
+    const parts = scan.clips ?? [];
+    if (!parts.length) return new Map();
+    try {
+      const got = await spillClips(deck, scratch, parts, bytesLeft, this.ctx.signal);
+      if (got.skipped)
+        this.warn(
+          'clip',
+          `${got.skipped} clip(s) past the ${PPTX_LIMITS.spillBytes / 1024 ** 3} GiB an import may extract are not imported: their posters are shown`,
+        );
+      return got.files;
+    } catch (e) {
+      this.checkCancelled();
+      this.warn(
+        'clip',
+        `the deck's clips could not be read (${logSafe(errorMessage(e))}): their posters are shown`,
+      );
+      return new Map();
+    }
+  }
+
+  /** Step 3b: every clip the drafts keep stored and put in place of its placeholder (`ClipImport`). */
+  private async clips(drafts: Draft[], files: Map<string, ClipFile>): Promise<void> {
+    const slides = drafts
+      .filter((d) => d.clips?.length)
+      .map((d) => ({
+        index: d.ref.index,
+        slide: d.slide,
+        clips: d.clips!,
+        picture: d.cls === 'picture',
+        notes: d.notes,
+      }));
+    if (!slides.length) return;
+    this.done.clips ??= [];
+    const clips = new ClipImport(this.deps, {
+      title: this.title,
+      files,
+      done: this.done.clips,
+      save: this.save,
+      warn: (msg) => this.warn('clip', msg),
+      info: (msg) => this.log.add('info', msg),
+      dir: this.scratch,
+      probeMs: this.deps.cfg.timeouts.probe,
+      signal: this.ctx.signal,
+    });
+    this.clipsCreated = clips.created;
+    await clips.apply(slides);
+    this.clipIds = clips.used;
+    if (clips.used.size)
+      this.ctx.log(`${clips.used.size} clip(s) stored; their media jobs follow the import`);
+  }
+
   /** Step 2c: every slide through the pool in batches; a failed batch's slides are left out (picture class). */
   private async convert(
     parts: Map<string, Uint8Array>,
     listed: readonly SlideRef[],
     pictureSizes: [string, PictureHeader][],
+    mediaKinds: [string, 'video' | 'audio'][] = [],
   ): Promise<Map<number, { s: EmittedSlide; media: Map<string, string>; extra?: SceneSlideExtra }>> {
     const out = new Map<number, { s: EmittedSlide; media: Map<string, string>; extra?: SceneSlideExtra }>();
     const own = new Set<string>();
@@ -423,7 +541,7 @@ class NativeImport {
       }
       try {
         const r = await this.scene(
-          { parts: batch, pictureSizes, range: { from, to }, options: this.options },
+          { parts: batch, pictureSizes, range: { from, to }, options: this.options, mediaKinds },
           transferables(mine),
         );
         // Every batch must list the deck as the scan did, or its indexes would name other slides.
@@ -464,12 +582,13 @@ class NativeImport {
       const d: Draft = c
         ? {
             ref,
-            slide: c.s.slide,
+            slide: { ...c.s.slide, objects: c.s.slide.objects.map(imported) },
             media: c.media,
             cls: c.s.classification.class,
             notes: own,
             ...(c.s.art ? { art: c.s.art, artText: c.s.art.text } : {}),
             ...(overBudget ? { overBudget } : {}),
+            ...(c.s.clips?.length ? { clips: c.s.clips } : {}),
           }
         : {
             ref,
@@ -502,7 +621,7 @@ class NativeImport {
       // The metafiles the slide draws, set aside by the converter (item D): LibreOffice converts them.
       const mf = c?.s.metafiles;
       if (mf?.length && d.cls !== 'picture') {
-        d.metafiles = mf;
+        d.metafiles = mf.map((m) => ({ ...m, object: imported(m.object) }));
         d.notes.push(`${mf.length} metafile picture(s) wait for LibreOffice`);
       }
       if (d.cls === 'picture') toPicture(d);
@@ -687,10 +806,11 @@ class NativeImport {
       };
       this.log.add('info', 'a looping show with every slide timed: imported as a loop');
     }
-    // One background on every slide becomes the presentation's, so the pickers swap it (the pro7 pattern).
+    // One background on every slide becomes the presentation's, so the pickers swap it (the pro7 pattern). A
+    // motion background stays the slides': goLive does not wait for a slide's clip (design/27 §8).
     const bgs = new Set(drafts.map((d) => d.slide.backgroundMediaId));
     const [onlyBg] = bgs;
-    if (bgs.size === 1 && onlyBg) {
+    if (bgs.size === 1 && onlyBg && !this.clipIds.has(onlyBg)) {
       p.backgroundMediaId = onlyBg;
       for (const d of drafts) delete d.slide.backgroundMediaId;
     }
@@ -751,6 +871,7 @@ class NativeImport {
     let loJobId: string | undefined;
     const saved = deps.lib.db.transaction(() => {
       const v1 = deps.lib.savePresentation(parsed, { create: true, by: 'pptx-import' });
+      let after: Job | undefined;
       if (lo.length) {
         const job = enqueuePptx(deps.jobs, PPTX_JOBS.lo, {
           presentationId: v1.id,
@@ -760,7 +881,10 @@ class NativeImport {
         });
         loJobId = job.id;
         this.done.loJobId = loJobId;
+        after = job;
       }
+      // The clips' media jobs, after the follow-up (jobs of a class run in creation order): never awaited.
+      for (const id of this.clipIds) after = deps.media.queue(id, after ? { after } : {}) ?? after;
       this.save();
       return v1;
     })();
@@ -913,15 +1037,34 @@ function usedPlaceholders(slides: readonly Slide[]): Set<string> {
   return used;
 }
 
+/**
+ * `o` marked as a PowerPoint import's (`origin`, design/27 §3.1), unless the converter marked it already. A
+ * slide set to show its PowerPoint picture draws that picture and only the objects without an origin, the
+ * ones the operator added in ordo (`slideContent`, design/27 §5).
+ */
+function imported<T extends SlideObject>(o: T): T {
+  return o.origin ? o : { ...o, origin: { src: 'pptx' } };
+}
+
 /** A background picture with alpha as PowerPoint draws it: on a white rect over the slide area. */
 function backgroundOnWhite(
   mediaId: string,
   rect: { x: number; y: number; w: number; h: number },
 ): [ShapeObject, ImageObject] {
   const box = { x: rect.x, y: rect.y, w: rect.w, h: rect.h, rotation: 0 };
+  const origin = { src: 'pptx', role: 'bg' };
   return [
-    { id: newId(), type: 'shape', box, shape: 'rect', fill: WHITE, opacity: 1, radius: 0 },
-    { id: newId(), type: 'image', box: { ...box }, mediaId, fit: 'stretch', opacity: 1, radius: 0 },
+    { id: newId(), type: 'shape', box, shape: 'rect', fill: WHITE, opacity: 1, radius: 0, origin },
+    {
+      id: newId(),
+      type: 'image',
+      box: { ...box },
+      mediaId,
+      fit: 'stretch',
+      opacity: 1,
+      radius: 0,
+      origin: { ...origin },
+    },
   ];
 }
 

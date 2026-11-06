@@ -10,7 +10,8 @@
  *   (slide list, frame, sections) and what the job needs before the batches: the picture parts the listed
  *   slides, their layouts, masters and themes relate to (the job spills only those), the metafiles each slide
  *   may show (LibreOffice converts them), speaker notes (`notes.ts`, read once here so no batch needs the
- *   notes parts) and the show's loop flag.
+ *   notes parts), the show's loop flag and the clip parts of the listed slides (`clips.ts` spills and sniffs
+ *   them before the batches, which emit `ImageObject.play` and `Slide.audio` with the sniffed kinds).
  * - **Batch**: the slides of `range`, plus each one's transition and timing (`transition.ts`), which
  *   `convertDeck` does not read: only the part's tail after `p:cSld` is parsed for it.
  */
@@ -35,10 +36,13 @@ const MAX_METAFILES_PER_SLIDE = 50;
 export function sceneTask(input: SceneTaskInput): SceneTaskOutput {
   const t0 = performance.now();
   const sizes = new Map(input.pictureSizes);
+  const kinds = new Map(input.mediaKinds ?? []);
   const result = convertDeck(input.parts, {
     range: input.range,
     pictureSize: (part) => sizes.get(part),
+    mediaKind: (part) => kinds.get(part),
     extendBackgrounds: input.options.extendBackgrounds ?? true,
+    transitionSounds: input.options.transitionSounds ?? false,
     newId,
   });
   const out: SceneTaskOutput = { result, ms: 0, heapMb: 0 };
@@ -50,6 +54,38 @@ export function sceneTask(input: SceneTaskInput): SceneTaskOutput {
 }
 
 type Images = { pictures: string[]; metafiles: string[] };
+
+/** Relationship types of clips: PowerPoint 2010's media (`p14:media`), video, then sound. */
+const CLIP_TYPES: ReadonlyMap<string, number> = new Map([
+  ['media', 0],
+  ['video', 1],
+  ['audio', 2],
+]);
+
+/** Distinct clip parts considered before the best `PPTX_LIMITS.clips` are chosen. */
+const CLIP_CANDIDATES = 4 * PPTX_LIMITS.clips + 1_000;
+
+/**
+ * The clip parts of the listed slides (their own relationships: layouts' and masters' clips are drawn as
+ * posters), at most `PPTX_LIMITS.clips`: those a `p14:media` or video relationship names first, then sounds
+ * (transition and animation sounds are sound relationships too, and are usually not imported).
+ */
+export function clipParts(pkg: Package, listed: readonly SlideRef[]): { clips: string[]; over: number } {
+  const best = new Map<string, number>();
+  for (const ref of listed)
+    for (const r of pkg.rels(ref.part)) {
+      const rank = CLIP_TYPES.get(relType(r.type));
+      if (rank === undefined || r.external || !pkg.has(r.target)) continue;
+      const stored = pkg.find(r.target) ?? r.target;
+      if (/\.(xml|rels)$/i.test(stored)) continue;
+      const was = best.get(stored);
+      // A hostile list: enough candidates to choose from, each relationship looked at once.
+      if (was === undefined && best.size >= CLIP_CANDIDATES) continue;
+      if (was === undefined || rank < was) best.set(stored, rank);
+    }
+  const ranked = [...best].sort((a, b) => a[1] - b[1]).map(([part]) => part);
+  return { clips: ranked.slice(0, PPTX_LIMITS.clips), over: Math.max(0, ranked.length - PPTX_LIMITS.clips) };
+}
 
 /** What the job needs of the whole deck before its batches (see the module comment). */
 export function scanDeck(pkg: Package, listed: readonly SlideRef[]): SceneScan {
@@ -99,7 +135,16 @@ export function scanDeck(pkg: Package, listed: readonly SlideRef[]): SceneScan {
     const text = readNotes(pkg, ref.part);
     if (text) notes.push([ref.index, text]);
   }
-  return { pictures: [...pictures], picturesOver, metafiles, notes, loop: showLoops(pkg) };
+  const clips = clipParts(pkg, listed);
+  return {
+    pictures: [...pictures],
+    picturesOver,
+    metafiles,
+    notes,
+    loop: showLoops(pkg),
+    ...(clips.clips.length ? { clips: clips.clips } : {}),
+    ...(clips.over ? { clipsOver: clips.over } : {}),
+  };
 }
 
 /** Each converted slide's transition and timing, read from its part's tail (`readSlideTransition`). */

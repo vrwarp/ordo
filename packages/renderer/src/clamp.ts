@@ -13,6 +13,8 @@ import {
   type TextPara,
   type TextRun,
   type TextStyle,
+  fromImport,
+  referencePicture,
 } from '@ordo/domain';
 
 /**
@@ -504,7 +506,9 @@ const slideMemo = new WeakMap<object, Slide>();
 
 /**
  * A drawable copy of `slide`: at most 200 objects, each clamped; unknown objects dropped; at most
- * `maxImagesPerSlide` distinct images (further image objects are dropped). An image object keeps its
+ * `maxImagesPerSlide` distinct images drawn (further image objects are dropped). The imported image objects
+ * of a slide set to show its PowerPoint picture are not drawn (`slideContent`, design/27 §5) and do not
+ * count; they are kept, since lyric-only looks still read the slide's text. An image object keeps its
  * clamped `play`, and the slide its clamped `audio` (design/27 §3.1). Never throws.
  */
 export function clampSlide(slide: unknown): Slide {
@@ -516,10 +520,11 @@ export function clampSlide(slide: unknown): Slide {
   const objects: SlideObject[] = [];
   const images = new Set<string>();
   const src = Array.isArray(s.objects) ? s.objects : [];
+  const underPicture = !!referencePicture(s);
   for (let i = 0; i < src.length && objects.length < CLAMP.maxObjects; i++) {
     const o = withPlay(clampObject(src[i]), src[i]);
     if (!o) continue;
-    if (o.type === 'image') {
+    if (o.type === 'image' && !(underPicture && fromImport(o))) {
       if (!images.has(o.mediaId) && images.size >= CLAMP.maxImagesPerSlide) continue;
       images.add(o.mediaId);
     }

@@ -8,6 +8,7 @@ import {
   formatDuration,
   type GeneralSettings,
   importedText,
+  isHiddenCue,
   LOOK_STAGE,
   type LiveState,
   type Look,
@@ -231,8 +232,8 @@ export function currentText(
 }
 
 /**
- * The next slide after the displayed one: the following slide cue of the same item, else the next item's
- * first slide (labelled with its title).
+ * The next slide after the displayed one, as Next goes: the following slide cue of the same item, else the
+ * next item's first slide (labelled with its title). Hidden slides are skipped (design/27 §9).
  */
 export function nextText(s: LiveState, content: SlideContent | null, layout: StageLayout): StageText | null {
   if (!content || !layout.next) return null;
@@ -240,6 +241,7 @@ export function nextText(s: LiveState, content: SlideContent | null, layout: Sta
   if (!cur) return null;
   for (let i = content.cueIndex + 1; i < s.cues.length; i++) {
     const c = s.cues[i]!;
+    if (isHiddenCue(c)) continue;
     if (c.kind !== 'slide') {
       if (c.itemIndex !== cur.itemIndex) {
         return { text: '', label: c.label ? `Next: ${c.label}` : undefined };

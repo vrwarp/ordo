@@ -233,8 +233,8 @@ export function compactSlideBytes(slide: Slide, artText?: string): number {
 /**
  * What "Send to preview" sends (design/27 §3.4): the presentation-level fields with only the previewed
  * slide's section, so a preview stays far below the socket cap however large the presentation is. The slide
- * after it travels too, for the look's next-slide band (`planPreview` takes the slide after it in section
- * order): in its own section when it opens the next one. Without `slideId` the first slide is previewed, as
+ * after it travels too, for the look's next-slide band (`planPreview` takes the first shown slide after it in
+ * section order, hidden slides skipped as Next skips them): in its own section when it is in a later one. Without `slideId` the first slide is previewed, as
  * `planPreview` does; an unknown `slideId` leaves no slides (the output shows its idle frame).
  *
  * Arrangements, chords and the import log are left out (an output never reads them). A section over `max`
@@ -269,14 +269,14 @@ export function previewSlice(
   };
   const sec = sections[si]!;
   const slide = sec.slides[k]!;
-  let next = sec.slides[k + 1];
+  // The next slide as Next goes (`planPreview`, the live planner's `nextShownCue`): hidden slides skipped.
+  const shown = (x: Slide) => x.hidden !== true;
+  let next = sec.slides.slice(k + 1).find(shown);
   let nextSec: Section | undefined;
-  if (!next)
-    for (let i = si + 1; i < sections.length && !next; i++)
-      if (sections[i]!.slides.length) {
-        nextSec = sections[i]!;
-        next = nextSec.slides[0];
-      }
+  for (let i = si + 1; i < sections.length && !next; i++) {
+    next = sections[i]!.slides.find(shown);
+    if (next) nextSec = sections[i]!;
+  }
   const own = bare(sec);
   const tail = nextSec && next ? [{ ...bare(nextSec), slides: [next] }] : [];
   const sized = (slides: Slide[]) => ({ ...head, sections: [{ ...own, slides }, ...tail] });

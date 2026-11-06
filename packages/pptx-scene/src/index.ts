@@ -11,19 +11,29 @@ import { classifySlide } from './classify.ts';
 import { slideContext } from './context.ts';
 import { type DeckInfo, readDeck, type SlideRef } from './deck.ts';
 import { readBackground } from './background.ts';
-import { type EmitOptions, type EmitResult, type EmittedSlide, emitDeck, MEDIA_PREFIX } from './emit.ts';
+import {
+  CLIP_PREFIX,
+  type EmitOptions,
+  type EmitResult,
+  type EmittedSlide,
+  emitDeck,
+  MEDIA_PREFIX,
+} from './emit.ts';
 import { frameOf, slideRect } from './frame.ts';
 import type { DeckScene, Frame, SectionInfo, SlideScene } from './ir.ts';
 import { clean, type Log, noteList } from './log.ts';
 import { openPackage, type PartSource } from './opc.ts';
+import { readSlideSounds } from './media.ts';
 import type { PictureHeader } from './picture.ts';
+import { readSlideTiming } from './timing.ts';
 import { walkSlide } from './walk.ts';
 
 export type { BlipReader, ColorCtx } from './color.ts';
 export type { SlideCtx, Source } from './context.ts';
 export type { DeckInfo, SlideRef } from './deck.ts';
 export type { EmitOptions, EmitResult, EmittedSlide } from './emit.ts';
-export { MEDIA_PREFIX } from './emit.ts';
+export { CLIP_PREFIX, MEDIA_PREFIX } from './emit.ts';
+export type { EmittedClip } from './media.ts';
 export { type PictureHeader, pictureSize } from './picture.ts';
 export * from './ir.ts';
 export type { Log } from './log.ts';
@@ -47,6 +57,32 @@ export interface ParseOptions {
    * the hub's pool task (design/27 §2). Deck facts (frame, sections, notes) are read whole either way.
    */
   range?: { from: number; to: number };
+  /**
+   * Whether a clip part (video, sound) is a video or a sound, from its bytes, when the caller can tell: the
+   * hub sniffs each spilled clip (design/27 §4 "Media": pptxgenjs writes sounds under `a:videoFile`). Asked
+   * at most once per part. Only 'audio' overrides the element (a sniff may call a sound it cannot tell a
+   * video); 'video' decides only a clip whose element and timing do not. Undefined, or without it: the
+   * element and the slide's timing decide.
+   */
+  mediaKind?: (part: string) => 'video' | 'audio' | undefined;
+}
+
+/** `ParseOptions.mediaKind` asked once per part, its answer checked. */
+function mediaKinds(get: ParseOptions['mediaKind']): ParseOptions['mediaKind'] {
+  if (!get) return undefined;
+  const known = new Map<string, 'video' | 'audio' | undefined>();
+  return (part) => {
+    if (known.has(part)) return known.get(part);
+    let v: 'video' | 'audio' | undefined;
+    try {
+      const got = get(part);
+      v = got === 'video' || got === 'audio' ? got : undefined;
+    } catch {
+      v = undefined; // a kind the caller cannot tell is unknown
+    }
+    known.set(part, v);
+    return v;
+  };
 }
 
 /** Picture sides a caller's size may have (`picture.ts` reads headers to the same bound). */
@@ -106,6 +142,7 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
   const deck = readDeck(pkg);
   const frame = frameOf(deck.size.cx, deck.size.cy);
   const pictureSize = pictureSizes(opts.pictureSize);
+  const mediaKind = mediaKinds(opts.mediaKind);
   const range = opts.range;
   const refs = range ? deck.slides.filter((r) => r.index >= range.from && r.index < range.to) : deck.slides;
   const readSlide = (ref: SlideRef): SlideScene => {
@@ -118,7 +155,12 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
       part: ref.part,
     };
     try {
-      const ctx = slideContext(pkg, deck, frame, ref, slideLog, pictureSize ? { pictureSize } : {});
+      const ctx = slideContext(pkg, deck, frame, ref, slideLog, {
+        ...(pictureSize ? { pictureSize } : {}),
+        ...(mediaKind ? { mediaKind } : {}),
+      });
+      // Clip timing is read before the shape tree, which attaches it to each poster (`media.ts`).
+      ctx.timing = readSlideTiming(ctx.slide);
       const elements = walkSlide(ctx);
       const background = readBackground(ctx);
       const classification = classifySlide(ctx, elements, background);
@@ -131,6 +173,7 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
         classification,
         notes,
         ms: performance.now() - t0,
+        ...readSlideSounds(ctx, ctx.timing),
       };
     } catch (e) {
       const error = clean(e instanceof Error ? e.message : String(e));
@@ -185,10 +228,20 @@ export function convertDeck(src: PartSource, opts: ConvertOptions = {}): Convert
     }
     return id;
   };
+  // Clip placeholders numbered across the call too (one per part and trim).
+  const clips = new Map<string, string>();
+  const clipId = (key: string) => {
+    let id = clips.get(key);
+    if (id === undefined) {
+      id = opts.clipId ? opts.clipId(key) : `${CLIP_PREFIX}${clips.size + 1}`;
+      clips.set(key, id);
+    }
+    return id;
+  };
   const slides: EmittedSlide[] = [];
   for (const ref of r.refs) {
     const scene: DeckScene = { frame: r.frame, slides: [r.readSlide(ref)], sections: [], notes: [] };
-    slides.push(emitDeck(scene, { ...opts, newId, mediaId }).slides[0]!);
+    slides.push(emitDeck(scene, { ...opts, newId, mediaId, clipId }).slides[0]!);
   }
   return {
     slides,

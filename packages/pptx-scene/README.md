@@ -63,6 +63,25 @@ Hardening after the M1 re-review (M3 item A; each case a crafted deck under the 
   `ParseOptions.pictureSize`. Only a picture known to be opaque becomes `backgroundMediaId` (drawn
   cover-fit on black); one that may be transparent stays the bottom image on white, as PowerPoint draws it.
 
+## M3 wave 2: clips (`media.ts`, `timing.ts`)
+
+Embedded video and sound play in place (design/27 §4 "Media", §8 "p:timing mapping"):
+- `readSlideTiming` runs before the shape tree (`SlideCtx.timing`), and `readMediaRef` (from `picture.ts`)
+  gives each poster its `PictureElement.media`: the embedded part (`p14:media r:embed`, else an internal
+  `r:link`), or a linked clip's host; `p14:trim` (`st`, `end`: PowerPoint's `end` is how much is cut from the
+  end, verified on real decks); the kind: a sound when the caller's sniff says so (`ParseOptions.mediaKind`),
+  else the element, else the timing node, else the sniff (a sniffed video never overrides a sound element:
+  the hub's sniff calls what it cannot tell a video); the slide's timing (start auto/click, loop, rewind = the media node's
+  `fill="remove"`, `vol`, `mute`, `showWhenStopped`, `numSld`, `fullScrn`).
+- `emitMedia` (called by `emitSlide` once the slide's objects are emitted): the first slide video plays in its
+  poster (`ImageObject.play`), the first slide sound is `Slide.audio`, a looping, muted (or volume 0),
+  automatic full-slide video at the bottom of a 16:9 slide is its motion background (`backgroundMediaId`;
+  what it covered is left out, its poster kept in `EmittedClip.poster`); audio icons are drawn only when shown
+  while stopped and on the slide; transition sounds only with `EmitOptions.transitionSounds`; animation
+  sounds never. Clip ids are placeholders `pptxmedia:clip<n>` (`CLIP_PREFIX`, one per part and trim,
+  `clipKey`), listed in `EmittedSlide.clips` with linked and missing clips; objects left out keep the art's
+  and the metafiles' places (`leaveOut` remaps the element spans).
+
 ## Module map
 
 | File            | What                                                                                                              | Owner  |
@@ -85,6 +104,8 @@ Hardening after the M1 re-review (M3 item A; each case a crafted deck under the 
 | `classify.ts`   | Census tiers T1-T5, reasons, slide class                                                                          | F      |
 | `notes.ts`      | `readNotes`: a slide's speaker notes (notesSlide body placeholders), bounded                                      | M3 B   |
 | `transition.ts` | `readTransition`, `readSlideTransition` (a slide's tail only), `showLoops` (`p:showPr loop`)                      | M3 B   |
+| `timing.ts`     | `readSlideTiming`: the `p:timing` mapping of clips, transition and animation sounds; `gainDbOf`                   | M3b A  |
+| `media.ts`      | `readMediaRef` (a poster's clip, trim, kind), `emitMedia` (play, slide sound, motion background), `EmittedClip`   | M3b A  |
 | `ir.ts`         | The scene IR (types only)                                                                                         | shared |
 | `context.ts`    | `SlideCtx`, `slideContext`                                                                                        | shared |
 | `log.ts`        | `clean`, `noteList`                                                                                               | shared |

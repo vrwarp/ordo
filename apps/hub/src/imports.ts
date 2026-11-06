@@ -582,6 +582,11 @@ export class ImportService {
         if (sl.id !== slideId) return sl;
         found = sl;
         if (!sl.imported) return sl;
+        // On a PowerPoint slide these are the import's, as every object the native job writes is (design/27
+        // §3.1, §11): 'Show PowerPoint picture' leaves them out (`slideContent`), and a re-import can tell
+        // them from what the operator added. The page is the slide's background picture.
+        const origin = (role?: string) =>
+          sl.pptx ? { origin: { src: 'pptx', ...(role ? { role } : {}) } } : {};
         const back: ImageObject = {
           id: newId(),
           type: 'image',
@@ -590,6 +595,7 @@ export class ImportService {
           fit: 'contain',
           opacity: 1,
           radius: 0,
+          ...origin('bg'),
         };
         const texts: TextObject[] = (sl.imported.textBoxes ?? []).map((tb) => ({
           id: newId(),
@@ -603,6 +609,7 @@ export class ImportService {
             valign: 'top',
           },
           opacity: 1,
+          ...origin('text'),
         }));
         const { imported: _i, ...rest } = sl;
         return { ...rest, objects: [back, ...sl.objects, ...texts] };

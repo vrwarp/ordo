@@ -5,8 +5,8 @@
  * nothing stored and nothing the screens show.
  *
  * When a slide has no picture yet, turning it on asks the hub for them (`pptx-reference`, one LibreOffice
- * run for every shown slide; `showPicture: []` so no slide switches to its picture) and follows the job:
- * when it is done the editor takes the job's revision over (`adoptJobSaves`, unsaved edits kept). When
+ * run for every slide, hidden ones too; `showPicture: []` so no slide switches to its picture) and follows
+ * the job: when it is done the editor takes the job's revision over (`adoptJobSaves`, unsaved edits kept). When
  * someone else saved meanwhile, only the pictures go into the draft (`withReferences`) and the next save
  * meets the usual conflict dialog.
  */

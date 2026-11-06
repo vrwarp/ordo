@@ -168,7 +168,8 @@ function NativeSummary(props: {
       )}
       {hidden > 0 && (
         <span className="muted small" data-hidden-count>
-          {plural(hidden, 'hidden slide')}: kept in the editor and left out of the service, as in PowerPoint.
+          {plural(hidden, 'hidden slide')}: Next skips them during the service and a click in the slide grid
+          shows them, as in PowerPoint.
         </span>
       )}
       {r.compact > 0 && (

@@ -101,8 +101,15 @@ export class JobQueue {
     return r?.attempts ?? 0;
   }
 
-  enqueue(kind: string, payload: unknown, cls: JobClass = 'light'): Job {
-    const now = nowIso();
+  /**
+   * Queue a job. With `after`, it is created at least a millisecond after that job: jobs of a class start
+   * in creation order, and ids (random within a millisecond) would otherwise order two jobs queued in the
+   * same millisecond either way (the PowerPoint import queues its clips after its LibreOffice follow-up).
+   */
+  enqueue(kind: string, payload: unknown, cls: JobClass = 'light', opts: { after?: Job } = {}): Job {
+    let now = nowIso();
+    const after = opts.after ? Date.parse(opts.after.createdAt) + 1 : Number.NaN;
+    if (Number.isFinite(after) && after > Date.parse(now)) now = new Date(after).toISOString();
     const id = newId();
     this.db
       .prepare(
@@ -113,6 +120,21 @@ export class JobQueue {
     this.notify(job);
     queueMicrotask(() => this.pump());
     return job;
+  }
+
+  /**
+   * Whether a job of `kind` whose payload holds `value` at its top-level `field` is queued or running. Every
+   * such job is looked at (the `jobs_kind_state` index), in SQLite: no row cap, nothing parsed here.
+   */
+  active(kind: string, field: string, value: string): boolean {
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(field)) throw new Error(`not a payload field: ${field}`);
+    const row = this.db
+      .prepare(
+        `SELECT 1 FROM jobs WHERE kind = ? AND state IN ('queued','running')
+           AND (CASE WHEN json_valid(payload) THEN json_extract(payload, ?) END) = ? LIMIT 1`,
+      )
+      .get(kind, `$.${field}`, value);
+    return row !== undefined;
   }
 
   get(id: string): Job {

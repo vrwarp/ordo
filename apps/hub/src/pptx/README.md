@@ -23,17 +23,20 @@ POST /import/document  (423 while live, ≤ 1 GiB, zip + .pptx sniff, stored by 
        embeddings, vbaProject, customXml skipped; no nested zips; overlapping entries refused; no pool: fail [B]
      2 pool 'pptx-scene' (sceneTask.ts → convertDeck), batches ≤ 150 slides (slide parts transferred, shared
        parts copied), 2 min per batch, ≤ 15 min of pool time per import                                        [B, A]
+       clip parts (SceneScan.clips, ≤ 50) spilled after the pictures, sniffed: the batches get their kinds      [w2 A]
      3 classification and size budgets (@ordo/domain planImportSizes): over budget → picture class (logged)    [B]
+     3b clips ─► clipForFile (hash + trim, trims baked), media job not queued yet; placeholders replaced     [w2 A]
      4 any hybrid/picture/metafile slide: enqueue heavy 'pptx-lo' now, before any clip job                     [B]
      5 pictures ─► preparePicture ─► addReadyPicture; dedup through the media hash index; resume pairs        [C]
-     6 remap placeholders, Slide.pptx/hidden/transition/notes, sections, sanitize, save ── version 1          [B]
+     6 remap placeholders, Slide.pptx/hidden/transition/notes, sections, sanitize, save ── version 1;
+       in the same transaction pptx-lo, then the clips' media jobs (MediaService.queue, after it)              [B, w2 A]
  heavy job 'pptx-lo' (fallback.ts; deferred while live-locked)                                                 [D]
      readDeckXml ─► pool 'pptx-render-copy' plan (the pictures the copy keeps) ─► spillDeckParts
      ─► pool 'pptx-render-copy' ─► soffice once ─► pdftoppm -r 288 -f k -l k ─► pool 'pptx-art'
      ─► addReadyPicture ─► patch slides (per object on an edited one) ── version 2; a failed run is tried
      again twice (deferred), then the slides are marked pptx.failed (card and goLive report them)
  PUT /presentations/:id or a restored revision with slides pending again ─► queueFollowUp (fallback.ts)
- heavy job 'pptx-reference' ('Show PowerPoint picture': every shown slide into Slide.pptx.refMediaId)          [D]
+ heavy job 'pptx-reference' ('Show PowerPoint picture': every slide, hidden ones too, into Slide.pptx.refMediaId)          [D]
  light job 'pptx-text-repair' (legacy imported.textBoxes, once)                                                [G]
  goLive ─► resolvePlaylist: bundled and script-fallback fonts, CJK faces by text scan [E]; > 12 MiB warning [F]
  operator: ImportTab and import card [H]; previewSlice and the adopt check [F]; MediaTab and gated text [G]
@@ -56,7 +59,8 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 | `nativeJob.ts`      | The light `pptx-native` job, steps 1-6                                                     | B      |
 | `sceneTask.ts`      | Worker side of `pptx-scene`: one batch through `convertDeck` (working pass-through)        | B      |
 | `report.ts`         | `PptxNativeResult` for the import card, `source.log`, `logSafe`                            | B      |
-| `mediaParts.ts`     | `mediaForFile`: the generalised `mediaFor`, through the media hash index                   | C      |
+| `mediaParts.ts`     | `mediaForFile`: the generalised `mediaFor`, through the media hash index; `clipForFile`    | C      |
+| `clips.ts`          | `spillClips` (spill and sniff), `ClipImport` (store clips, replace their placeholders)     | w2 A   |
 | `pictures.ts`       | `pictureHeader`, `displayNeeds`, `preparePicture`, `addReadyPicture`, `PICTURE_LIMITS`     | C      |
 | `fallback.ts`       | `pptx-lo` and `pptx-reference` jobs, `sofficeToPdf` (hardened)                             | D      |
 | `renderCopyTask.ts` | Worker side of `pptx-render-copy`: `buildRenderCopy` + spilled media → .pptx               | D      |
@@ -66,8 +70,8 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 
 Contracts already in place (the scaffold):
 - `@ordo/domain`: `Slide.pptx` (`SlidePptx`: fileId, index, shown, class, version, digest, pending, notes,
-  artText, refMediaId, show; `failed` since the review round), `Slide.hidden` (no cue until M5's navigation),
-  `Slide.transition` (cues use it since the review round), `Slide.imported.textAligned`,
+  artText, refMediaId, show; `failed` since the review round), `Slide.hidden` (a flagged cue that navigation
+  skips, since wave 2), `Slide.transition` (cues use it since the review round), `Slide.imported.textAligned`,
   `Presentation.source.native` (`PptxNativeSource`), `Font.unicodeRange`;
   bounded by `sanitizePresentation` (`@ordo/importers`) and kept by `clampSlide` (`@ordo/renderer`:
   `clampPptx` keeps what drawers read, `clampTransition`). `size.ts`: `SIZE_BUDGETS`, `jsonBytes`,
@@ -444,8 +448,9 @@ The items merged in the order A-H; what wires them together:
   (`adoptJobSaves`, `rebaseOnJobs`: per slide against its base) instead of announcing them as someone
   else's; `withReferences` keeps the draft's revision; a duplicated slide drops `digest` and, unless it is a
   picture slide, `pending`.
-- Hidden slides stay out of the service (`expandCues` skips them, as LibreOffice's pictures did) until M5's
-  navigation flags and skips their cues; the editor tags them and can unhide one; the card counts them.
+- Hidden slides give flagged cues (wave 2: `Cue.hidden`; Next, Prev, auto-advance and onEnd advance skip
+  them, a click in the slide grid shows them, design/27 §9); the editor tags them and can unhide one; the
+  card counts them.
   `expandCues` uses `item ?? slide ?? presentation` transitions.
 - Converter notes say what happens ('drawn by LibreOffice as a picture', 'converted by LibreOffice'); the
   card no longer calls the art locked. `missingFonts` counts only families the library has (no drawer uses
@@ -458,13 +463,96 @@ The items merged in the order A-H; what wires them together:
   `soundEnds`, so a slide's sound counts shown slides), and `slide.transition` in its `transition:` line.
   `imports.ts` conflicts as it did before the review round.
 
+## Wave 2, item A: clips (m3b/clips)
+
+Embedded video and sound play in place (design/27 §4 "Media", §8 "Hub" and "p:timing mapping"; §15 M5 hub
+scope). The converter side is `@ordo/pptx-scene` `media.ts` and `timing.ts` (its README); the hub side is
+`clips.ts`, `mediaParts.ts` `clipForFile` and the job's steps 2b, 3b and 6:
+- **Scan, spill, sniff.** `SceneScan.clips` lists the video, sound and PowerPoint 2010 media parts of the
+  listed slides (media and video relationships first, at most `PPTX_LIMITS.clips`; past it a `[warn]`).
+  They are spilled after the pictures, within what the pictures left of the 1 GiB, and each is sniffed
+  (`store.ts` `sniff`): `SceneTaskInput.mediaKinds` tells the batches what each part is (pptxgenjs writes
+  sounds under `a:videoFile`).
+- **Store** (`ClipImport`, before the pictures): one media item per part and trim (`clipKey`), through the
+  media hash index (`clipForFile`: same content and same trim; a failed item is never reused), tagged
+  `pptx`, named '<deck title> – slide N video' (or 'sound'), the extension never checked. `p14:trim` is
+  baked (`IngestOpts.trim`); its `end` is how much PowerPoint cuts from the end, so a trimmed clip is
+  probed for its duration first. Resume pairs: `PptxNativeProgress.clips`.
+  - `PPTX_LIMITS.clips` counts keys (part and trim), not parts: one part trimmed differently on every slide
+    stores at most 50 items and queues at most 50 media jobs; the keys past it, in slide order, get a
+    `[warn]` and keep their posters (design/27 §12). A part is hashed and probed once whatever its trims,
+    and a part used by several keys is ingested from hard links (copies where linking fails) until its
+    last use. Keys keep their part beside them (a part name may hold '#').
+  - The sniff decides only that a video element holds a sound (pptxgenjs); a sound element is never made a
+    video by it (an audio-only MP4 of brand isom, or a WMA whose stream list follows long metadata, sniffs
+    as video). `readHead` reads an ASF header object whole, up to 64 KB. Spilled clips are renamed
+    `clip-N.<sniffed extension>`, and ffprobe runs with `-protocol_whitelist file,pipe` like ffmpeg.
+- **Queued after LibreOffice, never awaited.** `IngestOpts.queue: false` stores the item without its media
+  job; the job queues every clip it uses (`MediaService.queue`: only an 'uploaded' item with no media job
+  queued or running) in the transaction that saves version 1, right after `pptx-lo`, each created at least a
+  millisecond after the job before it (`JobQueue.enqueue` `after`: jobs of a class start by creation time,
+  and ids are random within a millisecond). An import that fails after storing clips queues them anyway,
+  those of an earlier attempt (the resume pairs) included, and so does the kind's give-up when a job is
+  abandoned after repeated crashes (`queueStoredClips`). `JobQueue.active` looks a job up by its payload
+  field in SQLite (`jobs_kind_state` index, migration 9), with no row cap.
+- **What a slide gets.** `ImageObject.play` on the first slide video's poster, `Slide.audio` for the first
+  sound (a picture-class slide keeps only its sound), a motion background as `Slide.backgroundMediaId`,
+  never promoted to `Presentation.backgroundMediaId`: goLive treats a PowerPoint slide's own background as
+  optional like its clips (`@ordo/domain` `slideOnlyMedia`, role 'background'; `expandCues` then shows the
+  item's or presentation's background), so a motion background still transcoding never refuses the service.
+- **A clip that cannot be imported** (linked, missing from the deck, past the limits, not a video or sound,
+  its length unreadable when trimmed, refused by the media service) gives `[warn] slide N: …` in the job
+  log and `source.log`, a note on the slide, and its object stays a poster (`play` removed, the sound
+  dropped, a motion background's poster put back at the bottom). A clip whose media job fails later stays in
+  place: goLive leaves it out with a degraded note and the slide shows the poster.
+- Transition sounds only with 'Import transition sounds' (`PptxImportOptions.transitionSounds`), when the
+  slide has no sound of its own; animation sounds never (noted).
+- Tests: `apps/hub/test/pptx-clips.test.ts` (generated MP4, WMV, MP3, WAV clips; a trimmed looping clip; a
+  failed clip; a linked one; a motion background; dedup on hash plus trim; job order after `pptx-lo`;
+  transition sounds; resume; a failing import; sounds in containers the sniff calls video, a WMA with a
+  long header and an isom MP4; one part trimmed on more slides than the limit; a part name holding '#';
+  a resumed run that fails, and a job given up after repeated crashes, queueing the clips they stored),
+  `media-formats.test.ts` (`readHead` of a long ASF header), `pptx-scene` `media.test.ts`,
+  `timing.test.ts`, domain `cues.media.test.ts`.
+
+## Wave 2, item B: the one fallback rule (m3b/slide-content)
+
+Every drawer reads a slide through `slideContent` (`@ordo/domain` `content.ts`, re-exported by
+`@ordo/renderer`; design/27 §5 "One rule for every drawer"): a slide set to show its PowerPoint picture
+(`pptx.show === 'picture'` with `refMediaId`) draws that picture and only the objects without `origin`;
+any other slide draws its page picture (`imported`) when it has one, and every object. The native job
+therefore marks every object it writes with `origin` (`imported()` in `nativeJob.ts`: converted objects
+and the metafile objects version 2 puts back get `{ src: 'pptx' }` unless the converter set one; the job's
+own background on white gets `role: 'bg'`; `artObject` already had `role: 'art'`), before the size budgets
+and the digest. goLive ships the pictures each slide draws (`referencedMediaIds`), the reference picture
+optional with a `degraded` note.
+
+## Wave 2, item C: hidden slides (m3b/hidden-nav)
+
+Hidden slides give flagged cues (`Cue.hidden`): Next, Prev, auto-advance, onEnd advance, Next item and the
+armed cue skip them; a GO with the cue's index (a double-click in the slide grid, goToSlide, a Stream Deck
+slide key) shows them (design/27 §9 "As built"). A slide sound's `slides` still counts shown slides only.
+
+## Wave 2: integration (m3b/integrate)
+
+What wires items A-C together:
+- A with B: a motion background that cannot be imported puts its poster back at the bottom of the slide
+  marked `origin: { src: 'pptx', role: 'bg' }` (`clips.ts` `unplace`), like every object the job writes, so a
+  slide set to show its PowerPoint picture leaves it out and the background pickers find it. Test:
+  `pptx-clips.test.ts` "clips and the one fallback rule".
+- A with C: a hidden slide inside a sound's `numSld` range keeps its cue; the sound spans the shown slides
+  (`soundEnds`) and plays on through the hidden cue when a click shows it.
+- B with C: the lyric-only next band and the look previews take the next slide Next goes to; an imported
+  play object under a reference picture is not drawn, and its sound still plays.
+- goLive: a PowerPoint slide's own background, its clips and its reference picture are optional
+  (`slideOnlyMedia` roles 'background', 'video', 'poster', 'sound', 'picture').
+- End to end (design/27 §14.12): `e2e/pptx-native.spec.ts` and `e2e/pptx-media.spec.ts` on synthetic
+  probe decks (`e2e/pptxdecks.ts`), through the upload route on a hub with the bundled fonts.
+
 ## Not in this wave
 
-Waiting for M2's second wave and M5 to merge: rich text emission (runs and paragraphs) from the converter; clip extraction
-(`pptx-scene` `media.ts`, `timing.ts`, `ImageObject.play`, `Slide.audio`); `slideContent()` in every drawer
-(`refMediaId` and `show: 'picture'` are drawn by nothing yet); hidden-cue navigation in the reducer (hidden
-slides give no cue until then); the art's `locked`/`origin` (M2's schema); bundled substitutes in drawers
-(M2's font resolver); video posters on outputs. M3 wave 2: flipped pictures (drawn unflipped), ellipse and
+Waiting for M2's second wave to merge: rich text emission (runs and paragraphs) from the converter; bundled
+substitutes in drawers (M2's font resolver). Later in M3 wave 2: flipped pictures (drawn unflipped), ellipse and
 roundRect picture masks (drawn as rects), recoloured pictures (drawn without the recolouring), all noted on
 the slide. Hub budgets measured on a reference NAS. 'Re-import from PowerPoint' (M4). A copy of a hybrid
 slide made before LibreOffice finished keeps no art.

@@ -46,7 +46,7 @@ type SlidePptx = {
   notes?: string[]; // what was approximated (≤ 16)
   artText?: string; // text baked into the art or page picture (search and labels only)
   refMediaId?: Id; // LibreOffice picture of the whole slide, on demand
-  show?: 'objects' | 'picture';
+  show?: 'objects' | 'picture'; // 'picture' + refMediaId: drawers show it and only the objects without origin
 };
 type PptxNativeSource = {
   version: number;
@@ -66,8 +66,8 @@ type Slide = {
   durationMs?: number; // for loop presentations
   notes?: string;
   overrides?: string[]; // paths of theme properties overridden
-  hidden?: boolean; // a hidden PowerPoint slide (design/27 §9): kept in the editor, gives no cue (left out of
-  // the service, as LibreOffice's pictures were) until M5's navigation flags its cue and Next/Prev skip it
+  hidden?: boolean; // a hidden PowerPoint slide (design/27 §9): its cue is flagged `hidden`; Next, Prev,
+  // auto-advance and onEnd 'advance' skip it, a click in the slide grid (a GO with its index) shows it
   transition?: Transition; // the slide's own: a cue uses item ?? slide ?? presentation (design/27 §9)
   pptx?: SlidePptx; // PowerPoint provenance, never drawable content (design/27 §3.1)
   // imported.textAligned?: boolean: true when the text boxes are keyed by shown slide, so text readers
@@ -152,7 +152,9 @@ type ShapeObject = {
 };
 
 // Every object may also carry origin?: { src; shapeId?; ph?; role?; group? } (where an imported PowerPoint
-// shape came from) and locked?: boolean (move, resize, delete and z-order only), design/27 §3.1.
+// shape came from; the native import sets at least { src: 'pptx' } on every object it writes, so objects
+// without one are the operator's own) and locked?: boolean (move, resize, delete and z-order only),
+// design/27 §3.1. What a slide draws is `slideContent(slide)` (@ordo/domain, design/27 §5).
 
 type Arrangement = { id: Id; name: string; sectionIds: Id[] };
 
@@ -325,6 +327,7 @@ type Cue = {
   sectionId?: Id;
   slideId?: Id;
   label: string;
+  hidden?: boolean; // true on a hidden slide (design/27 §9): sequential navigation skips it, `go` reaches it
 };
 type LayerContent = { kind: 'slide' | 'media' | 'logo' | 'lowerThird'; ref: Id; sinceSeq: number };
 type Timer = { id: Id; spec: TimerSpec; startedAtHub?: number; endsAtHub?: number; running: boolean };
@@ -348,6 +351,13 @@ The reducer handles events: `goLive(playlistId)`, `endService`, `select(cueIndex
 `output.register|health`. It is deterministic so hub, operator and outputs compute the
 same state from the same event sequence.
 
+A hidden slide keeps its cue, flagged `hidden` (design/27 §9). `next`, `prev`, the cue a GO
+arms, `autoAdvance` (wrapping within the item), onEnd 'advance', `nextItem` and `prevItem` skip
+hidden cues (`nextShownCue`, `prevShownCue`; an item whose slides are all hidden is passed by);
+`goToSection` lands on the section's first cue that is not hidden, else its first cue
+(`sectionsOfItem().entry`); `go` and `select` reach any cue. A slide sound's `untilCue` counts
+shown slides only, so a hidden cue inside its range keeps the sound playing when a click shows it.
+
 A slide cue can carry its own media (design/27 §8): the playing ImageObject's clip
 (`mediaObjectId`, `mediaStart`, `mediaShowWhenStopped` with the cue's media fields) goes on
 the media layer with `objectId`, and `Slide.audio` (`slideAudio` with `untilCue`) goes in
@@ -366,7 +376,10 @@ the audio slot as `slideOwned` until the live cue leaves `[cueIndex, untilCue]`.
   `clear('slide')` also clears the slide's video and sound. onEnd works as for media cues,
   because `cueIndex` is the slide's own cue.
 - At goLive these clips and sounds are optional: one that is missing, still processing or
-  failed is left out with a `degraded` note, and the slide shows its poster.
+  failed is left out with a `degraded` note, and the slide shows its poster. So is the own
+  background of a PowerPoint slide (`Slide.pptx` set: the importer makes a looping, muted
+  full-slide video its motion background): left out, the cue shows the item's or the
+  presentation's background instead.
 
 ## Identifiers and content addressing
 

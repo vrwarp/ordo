@@ -68,6 +68,23 @@ F8 and Shift+F8 pressed in the operator, onEnd 'advance', a slide sound over 3 s
 loop, music that does not restart when its loop wraps, a clip still transcoding at Go live and a clip
 whose processing failed (degraded notes, posters).
 
+`e2e/pptx-native.spec.ts` and `e2e/pptx-media.spec.ts` cover PowerPoint decks imported as editable
+slides (design/27 §14.12), each on a hub of its own with the bundled fonts (`ORDO_FONTS_DIR`). The decks
+are synthetic probes written by `e2e/pptxdecks.ts` (pptxgenjs, and crafted OOXML with `p:timing` and
+ffmpeg test clips), sent through `POST /import/document`. `pptx-native` draws the deck with the fidelity
+harness's native page (`tools/pptx-fidelity` `convertDeck` and `NativeRenderer`) and asks three slides
+captured from Audience 1 at 1920x1080 (WebGPU) and Audience 2 at 3840x2160 (Canvas 2D) for SSIM ≥ 0.99
+against it; it checks the stage text, the Lobby and Stream bands against the same text typed in ordo
+(set as the deck sets it, its verse numbers raised, so both bands go through the rich engine; and against
+the text without its verse numbers, which must differ), cue labels, library search, and the
+hidden slide (Next and Prev skip it, a double-click in the grid shows it). `pptx-media` plays the M5 exit
+with PowerPoint decks: a boxed autoplay clip turned, cropped and rounded under a title, a click-start clip
+(F8, Shift+F8, onEnd 'advance' set in ordo, the stage's remaining time), a muted motion background, a
+`numSld=3` sound across a hidden slide, a clip that is not a video (`[warn]`, poster), a clip whose
+processing fails (degraded note, poster, and the operator's banner giving that reason rather than an
+empty slide), a looping clip trimmed by `p14:trim`, and a looping
+announcement deck whose music does not restart on the wrap.
+
 ## Chaos tests
 
 The design/25 faults are injected into the real apps by Playwright specs (`e2e/chaos-*.spec.ts`, the

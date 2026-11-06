@@ -111,12 +111,19 @@ describe('resolvePlaylist: slides waiting for LibreOffice', () => {
     ]);
   });
 
-  it('leaves a hidden slide out of the service, and out of the degraded list', () => {
+  it('keeps a hidden slide in the service as a flagged cue, named while it waits (a click shows it)', () => {
     const hidden = structuredClone(deck);
     hidden.sections[0]!.slides[1]!.hidden = true;
     const r = resolve(hidden);
-    expect(expandCues(r).map((c) => c.slideId)).toEqual(['a', 'c']);
-    expect(r.degraded).toBeUndefined();
+    const cues = expandCues(r);
+    expect(cues.map((c) => [c.slideId, c.hidden])).toEqual([
+      ['a', undefined],
+      ['b', true],
+      ['c', undefined],
+    ]);
+    expect(r.degraded).toEqual([
+      { cueIndex: 1, presentationId: 'deck', slideId: 'b', reason: PENDING_SLIDE_REASON },
+    ]);
   });
 
   it("gives a slide's own transition to its cue, under the playlist item's", () => {

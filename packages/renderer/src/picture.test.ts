@@ -317,6 +317,7 @@ const image = fc.record({
   opacity: fc.constantFrom(1, 0.5),
   radius: fc.constantFrom(0, 0, 12),
   crop,
+  origin: fc.option(fc.constant({ src: 'pptx' }), { nil: undefined }),
 });
 const shape = fc.constant({
   id: 's',
@@ -331,6 +332,19 @@ const slide = fc.record({
   id: fc.constant('s'),
   objects: fc.array(fc.oneof(image, shape), { maxLength: 24 }),
   imported: fc.option(fc.record({ imageMediaId: fc.constantFrom('page', 'a') }), { nil: undefined }),
+  // Every way slideContent can choose (design/27 §5): objects, or the reference picture over the operator's own.
+  pptx: fc.option(
+    fc.record({
+      fileId: fc.constant('f'.repeat(64)),
+      index: fc.constant(0),
+      shown: fc.constant(0),
+      class: fc.constantFrom('native', 'hybrid', 'picture'),
+      version: fc.constant(1),
+      refMediaId: fc.option(fc.constantFrom('ref', 'b'), { nil: undefined }),
+      show: fc.option(fc.constantFrom('objects', 'picture'), { nil: undefined }),
+    }),
+    { nil: undefined },
+  ),
 }) as fc.Arbitrary<Slide>;
 const lyricOnly = LOOK_LOWER_THIRD;
 const hidden: Look = { ...LOOK_MAIN, layers: { ...LOOK_MAIN.layers, slide: { mode: 'hidden' } as never } };
@@ -342,20 +356,18 @@ describe('slidePictures', () => {
         slide,
         fc.constantFrom<Look | undefined>(undefined, LOOK_MAIN, lyricOnly, hidden),
         fc.constantFrom(0.5, 1, 2, 1 / 3),
-        fc.boolean(),
-        (s, look, scale, skipImported) => {
+        (s, look, scale) => {
           const asked: { mediaId: string; target?: PictureTarget }[] = [];
           const r = recorder();
           drawSlide2D(r.ctx, s, {
             scale,
             look,
-            skipImported,
             images: (mediaId, target) => {
               asked.push({ mediaId, target });
               return source(640, 480);
             },
           });
-          expect(slidePictures(s, { scale, look, skipImported })).toEqual(asked);
+          expect(slidePictures(s, { scale, look })).toEqual(asked);
         },
       ),
       { numRuns: 300 },
@@ -392,11 +404,42 @@ describe('slidePictures', () => {
     expect(got[0]!.target).toMatchObject({ x: 0, y: 0, w: 3840, h: 2160, fit: 'contain' });
     expect(got[1]!.target).toMatchObject({ x: 0, y: 0, w: 3840, h: 2160, fit: 'cover' });
     expect(got[2]!.target).toBeUndefined();
-    expect(slidePictures(s, { scale: 2, skipImported: true }).map((p) => p.mediaId)).toEqual([
-      'photo',
-      'logo',
-    ]);
     expect(slidePictures(s, { scale: 2, look: lyricOnly })).toEqual([]);
     expect(slidePictures(s, { scale: 2, look: hidden })).toEqual([]);
+  });
+
+  it("follows slideContent: a reference picture over only the operator's own pictures", () => {
+    const pptx = { fileId: 'f'.repeat(64), index: 0, shown: 0, class: 'native' as const, version: 1 };
+    const s = {
+      id: 's',
+      objects: [
+        {
+          id: 'p',
+          type: 'image',
+          box: box(0, 0, 1920, 1080),
+          mediaId: 'photo',
+          fit: 'cover',
+          opacity: 1,
+          radius: 0,
+          origin: { src: 'pptx', role: 'picture' },
+        },
+        {
+          id: 'm',
+          type: 'image',
+          box: box(10, 10, 300, 200),
+          mediaId: 'mine',
+          fit: 'contain',
+          opacity: 1,
+          radius: 0,
+        },
+      ],
+      pptx: { ...pptx, refMediaId: 'ref', show: 'picture' },
+    } as Slide;
+    const got = slidePictures(s, { scale: 2 });
+    expect(got.map((p) => p.mediaId)).toEqual(['ref', 'mine']);
+    expect(got[0]!.target).toMatchObject({ x: 0, y: 0, w: 3840, h: 2160, fit: 'contain' });
+    // Set back to objects, the same slide lists its imported picture and the reference is not asked for.
+    const objects = { ...s, pptx: { ...pptx, refMediaId: 'ref', show: 'objects' as const } };
+    expect(slidePictures(objects, { scale: 2 }).map((p) => p.mediaId)).toEqual(['photo', 'mine']);
   });
 });

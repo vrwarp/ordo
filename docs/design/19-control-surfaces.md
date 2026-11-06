@@ -68,6 +68,13 @@ Combos are normalised (`Ctrl+Shift+L`).
   the entry. A 5 s timeout cancels.
 - Defaults: notes 60 and 62 on any device to `next` and `prev`.
 
+Every driver dispatches actions through `actionToEvent` into the reducer, so hidden PowerPoint
+slides (design/27 §9) behave the same on all of them: `next`, `prev`, `nextItem`, `prevItem` and
+`go` without an armed choice skip hidden cues, a section key lands on the section's first shown
+slide, and a slide key (`goToSlide`, which counts hidden slides) shows the hidden slide it names.
+The Stream Deck's next-items keys list the items Next item goes to, so an item whose slides are
+all hidden is not offered.
+
 ## HTTP bridge
 
 `POST /live/events` and `POST /actions` on the hub accept the same actions with the

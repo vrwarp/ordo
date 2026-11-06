@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdirSync, writeFileSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { newId, type Playlist, type Presentation, type TextObject } from '@ordo/domain';
+import { newId, type Playlist, type Presentation, slideContent, type TextObject } from '@ordo/domain';
 import { readZip, remapMediaIds } from '@ordo/importers';
 import type { Job } from '@ordo/protocol';
 import JSZip from 'jszip';
@@ -219,6 +219,50 @@ describe('documents', () => {
     expect(
       (await ed.fetch(`/presentations/${p.id}/slides/${slideId}/make-editable`, { method: 'POST' })).status,
     ).toBe(400);
+    // Not a PowerPoint slide: the objects are the operator's (no origin).
+    expect(sl.objects.every((o) => o.origin === undefined)).toBe(true);
+
+    // A native PowerPoint picture-class slide: the objects are the import's, so 'Show PowerPoint picture'
+    // leaves them out (design/27 §5) and a re-import can tell them from the operator's.
+    const pptxSlideId = newId();
+    const q = hub.lib.savePresentation(
+      {
+        ...song('Deck 2'),
+        kind: 'slides',
+        sections: [
+          {
+            id: sid,
+            label: 'Slides',
+            short: 'S',
+            slides: [
+              {
+                id: pptxSlideId,
+                objects: [],
+                pptx: { fileId: 'f', index: 0, shown: 0, class: 'picture', version: 2 },
+                imported: {
+                  fileId: 'f',
+                  page: 1,
+                  imageMediaId: img.id,
+                  textBoxes: [{ text: 'Hello', box: { x: 10, y: 10, w: 100, h: 50, rotation: 0 } }],
+                },
+              },
+            ],
+          },
+        ],
+        arrangements: [{ id: newId(), name: 'Default', sectionIds: [sid] }],
+      },
+      { create: true },
+    );
+    const edited = await ed.json<Presentation>(`/presentations/${q.id}/slides/${pptxSlideId}/make-editable`, {
+      method: 'POST',
+    });
+    const ps = edited.sections[0]!.slides[0]!;
+    expect(ps.objects.map((o) => o.origin)).toEqual([
+      { src: 'pptx', role: 'bg' },
+      { src: 'pptx', role: 'text' },
+    ]);
+    const shown = slideContent({ ...ps, pptx: { ...ps.pptx!, refMediaId: img.id, show: 'picture' } });
+    expect(shown.objects).toEqual([]);
   });
 
   it('converts a PPTX through LibreOffice and attaches extracted text', async () => {

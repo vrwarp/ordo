@@ -1,5 +1,6 @@
-import { itemStarts, type PlaylistItem } from '@ordo/domain';
+import type { PlaylistItem } from '@ordo/domain';
 import { VirtualList } from '../../components/VirtualList.tsx';
+import { itemGoTarget } from '../../lib/sections.ts';
 import { startService } from '../../lib/startService.ts';
 import { controller } from '../../services/controller.ts';
 import { useLibrary } from '../../state/library.ts';
@@ -52,8 +53,7 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
   const selectedId = useUi((s) => s.selectedPlaylistId);
   const items = op.playlist?.items ?? [];
   const liveItem = live.live !== undefined ? live.cues[live.live]?.itemIndex : undefined;
-  const starts = op.live ? itemStarts(op.cues) : [];
-  const firstCueOf = (itemIndex: number) => starts.find((s) => op.cues[s]?.itemIndex === itemIndex);
+  const firstCueOf = (itemIndex: number) => (op.live ? itemGoTarget(op.cues, itemIndex) : undefined);
   return (
     <div className="pane" style={{ display: 'flex', flexDirection: 'column' }}>
       <div className="pane-head">

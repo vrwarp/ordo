@@ -141,14 +141,14 @@ reducer events. Keyboard, Stream Deck and MIDI dispatch the same actions.
 
 ## Operator view components
 
-| Component      | Notes                                                                                                                                                  |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `TopBar`       | Connection, WAN, cache, output dots, clock, Launch and Relaunch                                                                                        |
-| `PlaylistPane` | Virtualized list; drag to reorder when not live                                                                                                        |
-| `SlideGrid`    | Sections as headed groups following the arrangement; thumbnails from the thumbnail worker; live and armed markers; click to select, double-click to GO |
-| `ProgramView`  | One `<video>` per output fed by WebRTC; health overlay                                                                                                 |
-| `StageTools`   | Message box, recent messages, timers                                                                                                                   |
-| `LayerBar`     | Five chips with clear buttons; media transport and remaining time; audio meters                                                                        |
+| Component      | Notes                                                                                                                                                                                                                                          |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TopBar`       | Connection, WAN, cache, output dots, clock, Launch and Relaunch                                                                                                                                                                                |
+| `PlaylistPane` | Virtualized list; drag to reorder when not live                                                                                                                                                                                                |
+| `SlideGrid`    | Sections as headed groups following the arrangement; thumbnails from the thumbnail worker; live and armed markers; click to select, double-click to GO; hidden PowerPoint slides dimmed with a `hidden` tag and still clickable (design/27 §9) |
+| `ProgramView`  | One `<video>` per output fed by WebRTC; health overlay                                                                                                                                                                                         |
+| `StageTools`   | Message box, recent messages, timers                                                                                                                                                                                                           |
+| `LayerBar`     | Five chips with clear buttons; media transport and remaining time; audio meters                                                                                                                                                                |
 
 Thumbnails: a supervised worker runs the shared text rasterizer and a 2D compositor at 320x180,
 cached by (slide rev, look). The main thread never rasterizes; a restarted thumbnail worker gets the
@@ -283,7 +283,10 @@ nothing stored. When there are no pictures yet, turning it on saves unsaved edit
 (`POST /presentations/:id/pptx-reference` with `{ showPicture: [] }`: no slide switches to its picture) and
 follows the job; when it is done the editor takes the pictures over, keeping edits made meanwhile. A slide
 set to show its PowerPoint picture on the screens (`Slide.pptx.show`) says so, with 'Show the objects
-instead'.
+instead'. The canvas, the thumbnails, the look previews and 'Send to preview' draw a slide as the outputs
+do (design/27 §5 "One rule for every drawer", `slideContent`): a slide set to show its PowerPoint picture
+shows that picture and only the objects added in ordo (the imported objects, marked by `origin`, are
+neither drawn nor selectable on the canvas), and a picture slide its page picture under its objects.
 
 ## Service checklist
 

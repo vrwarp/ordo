@@ -29,6 +29,7 @@ import { extractZip } from '@ordo/importers/zip-stream.ts';
 import { Worker } from 'node:worker_threads';
 import {
   type EmitResult,
+  type EmittedSlide,
   emitSlides,
   parseDeck,
   type PictureHeader,
@@ -255,14 +256,16 @@ export async function convertDeck(
     try {
       if (hits.size)
         compatSlides = new Map(
-          emitSlides(scene, { loCompat: true }).slides.map((s) => [s.index, s.slide] as const),
+          emitSlides(scene, { loCompat: true }).slides.map((s) => [s.index, still(s)] as const),
         );
     } catch (e) {
       note(`the slides as LibreOffice draws them could not be emitted: ${errorText(e)}`);
     }
     out.slides = emitted.slides.map((s) => {
+      // Drawn as a still (a motion background as its poster), as LibreOffice draws the slide.
+      const slide = still(s);
       const lo = compatSlides?.get(s.index);
-      const differs = lo !== undefined && drawingKey(lo) !== drawingKey(s.slide);
+      const differs = lo !== undefined && drawingKey(lo) !== drawingKey(slide);
       const rules: CompatRule[] = differs ? [...(hits.get(s.index) ?? [])].sort() : [];
       return {
         index: s.index,
@@ -273,7 +276,7 @@ export async function convertDeck(
         reasons: s.classification.reasons,
         convertMs: (sceneMs.get(s.index) ?? 0) + s.ms,
         notes: s.notes,
-        slide: s.slide,
+        slide,
         textFeatures: features.get(s.index) ?? [],
         compat: rules,
         ...(opts.loCompat && differs ? { compatSlide: lo } : {}),
@@ -745,4 +748,15 @@ export function picturesNeeded(slides: readonly Slide[]): Map<string, { w: numbe
     }
   }
   return out;
+}
+
+/**
+ * The slide as a still: a motion background (a clip the hub ingests, `EmittedSlide.clips`) is drawn as its
+ * poster, as an output shows it before the clip's first frame, and as LibreOffice draws the slide.
+ */
+export function still(s: EmittedSlide): Slide {
+  const bg = s.clips?.find((c) => c.role === 'background' && c.id === s.slide.backgroundMediaId);
+  if (!bg?.poster) return s.slide;
+  const { backgroundMediaId: _, ...rest } = s.slide;
+  return { ...rest, objects: [bg.poster, ...s.slide.objects] };
 }

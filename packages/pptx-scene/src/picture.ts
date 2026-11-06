@@ -9,8 +9,8 @@
  * - A picture's pixel size is read from its header (PNG, JPEG, GIF, BMP, WebP) when its bytes are present,
  *   else asked of the caller (`SlideCtx.pictureSize`, for parts spilled to disk), so a background whose
  *   aspect differs from the slide is not cover-fitted.
- * - Video and audio posters (`a:videoFile`, `a:audioFile`, `p14:media`) keep their poster; the media is
- *   recorded for M5.
+ * - Video and audio posters (`a:videoFile`, `a:audioFile`, `p14:media`) keep their poster; the clip is read
+ *   by `media.ts` (`PictureElement.media`).
  *
  * Owned by work item C (inherit-emit).
  */
@@ -18,8 +18,9 @@ import type { BlipReader } from './color.ts';
 import { partOf, type SlideCtx, type Source } from './context.ts';
 import { chainOf, geometryOf } from './inherit.ts';
 import type { ElementBase, Insets, PictureElement, PictureFill, ResidualElement } from './ir.ts';
+import { readMediaRef } from './media.ts';
 import { externalHost } from './opc.ts';
-import { child, num, path, type XNode } from './xml.ts';
+import { child, num, type XNode } from './xml.ts';
 
 /** Picture formats LibreOffice converts (M3): drawn by nothing in a browser, residual until then. */
 export const METAFILE_EXTENSIONS: ReadonlySet<string> = new Set(['emf', 'wmf', 'emz', 'wmz', 'pict', 'pct']);
@@ -150,26 +151,8 @@ export function readPicture(
     out.support = 'approx';
     out.reasons = reasons;
   }
-  const media = mediaOf(ctx, el, source!);
+  const media = readMediaRef(ctx, el, source!, base);
   if (media) out.media = media;
-  return out;
-}
-
-/** The video or audio a picture is the poster of (`a:videoFile`, `a:audioFile`, `p14:media`): M5. */
-function mediaOf(ctx: SlideCtx, el: XNode, source: string): PictureElement['media'] {
-  const nvPr = path(el, 'p:nvPicPr', 'p:nvPr');
-  if (!nvPr) return undefined;
-  const video = child(nvPr, 'a:videoFile');
-  const audio = child(nvPr, 'a:audioFile') ?? child(nvPr, 'a:wavAudioFile');
-  let media: XNode | undefined;
-  for (const ext of path(nvPr, 'p:extLst')?.children ?? [])
-    media ??= ext.children.find((c) => c.name === 'p14:media');
-  if (!video && !audio && !media) return undefined;
-  const out: NonNullable<PictureElement['media']> = { kind: video ? 'video' : audio ? 'audio' : 'video' };
-  const rid = media?.attrs['r:embed'] ?? (video ?? audio)?.attrs['r:link'];
-  const rel = rid === undefined ? undefined : ctx.pkg.rel(source, rid);
-  if (rel?.external) out.external = externalHost(rel.target);
-  else if (rel) out.part = rel.target;
   return out;
 }
 
