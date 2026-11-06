@@ -44,6 +44,8 @@ export type { Pro7ImportOptions, Pro7PresRef };
 export type PptxText = {
   slideSize: { cx: number; cy: number };
   slides: { index: number; boxes: ExtractedText[] }[];
+  /** Slides whose text was not read (over the per-slide limits), with why. */
+  skipped?: { index: number; reason: string }[];
 };
 /** The parts of @ordo/importers the hub uses (injectable for tests). */
 export type Importers = {
@@ -472,6 +474,8 @@ export class ImportService {
           try {
             text = await this.extractPptx(await readFile(input), ctx.signal);
             ctx.log(`extracted text from ${text.slides.length} slide(s)`);
+            for (const s of (text.skipped ?? []).slice(0, 20))
+              ctx.log(`[warn] slide ${s.index}: text not read (${s.reason})`);
           } catch (e) {
             ctx.log(`[warn] text extraction failed: ${errorMessage(e)}`);
           }

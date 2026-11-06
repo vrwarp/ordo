@@ -118,7 +118,7 @@ async function extractBounded(buf: Uint8Array, heapMb = 96) {
   const copy = buf.slice();
   return runBounded(
     PPTX,
-    'const r = await mod.extractPptxText(new Uint8Array(input)); return r.slides.length;',
+    'const r = await mod.extractPptxText(new Uint8Array(input)); return { slides: r.slides.length, skipped: r.skipped ?? [] };',
     copy.buffer,
     heapMb,
     [copy.buffer as ArrayBuffer],
@@ -126,22 +126,33 @@ async function extractBounded(buf: Uint8Array, heapMb = 96) {
 }
 
 describe('extractPptxText resource bounds', () => {
-  it('rejects the review file (205 KB, one 200 MB text node) on its declared size, fast, in a 96 MB heap', async () => {
-    const buf = await deck([{ name: 'ppt/slides/slide1.xml', chunks: hugeRun(200) }]);
+  // A slide over the per-slide bounds loses its own text, not the deck's (a free template pack's icon
+  // sheet of 6,500 vector shapes is 10 MB of XML); it is still refused before or while inflating.
+  type Out = { slides: number; skipped: { index: number; reason: string }[] };
+
+  it('skips the review slide (205 KB file, one 200 MB text node) on its declared size, fast, in a 96 MB heap', async () => {
+    const buf = await deck([
+      { name: 'ppt/slides/slide1.xml', chunks: hugeRun(200) },
+      { name: 'ppt/slides/slide2.xml', chunks: once(`${HEAD}Amazing grace${TAIL}`) },
+    ]);
     expect(buf.length).toBeLessThan(400 * 1024);
     const r = await extractBounded(buf);
-    expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.error).toMatch(/ppt\/slides\/slide1\.xml expands to over 8 MB/);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const v = r.value as Out;
+    expect(v.slides).toBe(2);
+    expect(v.skipped).toEqual([
+      { index: 1, reason: expect.stringMatching(/slide1\.xml expands to over 8 MB/) },
+    ]);
     expect(r.ms).toBeLessThan(500);
   }, 30_000);
 
-  it('stops a part whose header understates its size once it passes 8 MB', async () => {
+  it('stops a slide whose header understates its size once it passes 8 MB', async () => {
     const buf = await deck([{ name: 'ppt/slides/slide1.xml', chunks: hugeRun(200), declare: 2000 }]);
     const r = await extractBounded(buf);
-    expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.error).toMatch(/slide1\.xml expands to over 8 MB/);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect((r.value as Out).skipped[0]!.reason).toMatch(/slide1\.xml expands to over 8 MB/);
     expect(r.ms).toBeLessThan(1000);
   }, 30_000);
 
@@ -157,18 +168,24 @@ describe('extractPptxText resource bounds', () => {
     expect(r.error).toMatch(/more than 64 MB of XML/);
   }, 30_000);
 
-  it('rejects a slide with more shapes than the limit before parsing it', async () => {
+  it('skips a slide with more shapes than the limit before parsing it, and reads the others', async () => {
     const shape = '<p:sp><p:txBody><a:p><a:r><a:t>x</a:t></a:r></a:p></p:txBody></p:sp>';
     const n = PPTX_MAX_SHAPES_PER_SLIDE + 1;
     const slide = `<?xml version="1.0"?><p:sld ${NS}><p:cSld><p:spTree>${shape.repeat(n)}</p:spTree></p:cSld></p:sld>`;
     const t0 = performance.now();
-    await expect(
-      extractPptxText(await deck([{ name: 'ppt/slides/slide1.xml', chunks: once(slide) }])),
-    ).rejects.toThrow(/slide 1 has more than 5,000 shapes/);
+    const r = await extractPptxText(
+      await deck([
+        { name: 'ppt/slides/slide1.xml', chunks: once(slide) },
+        { name: 'ppt/slides/slide2.xml', chunks: once(`${HEAD}Amazing grace${TAIL}`) },
+      ]),
+    );
     expect(performance.now() - t0).toBeLessThan(1000);
+    expect(r.skipped).toEqual([{ index: 1, reason: 'slide 1 has more than 5,000 shapes' }]);
+    expect(r.slides.map((s) => s.boxes.length)).toEqual([0, 1]);
+    expect(r.slides[1]!.boxes[0]!.text).toBe('Amazing grace');
   });
 
-  it('rejects the review slide with 300,000 shapes (8.5 s and 1.1 GB before) fast, in a 96 MB heap', async () => {
+  it('skips the review slide with 300,000 shapes (8.5 s and 1.1 GB before) fast, in a 96 MB heap', async () => {
     const shapes = enc.encode(
       '<p:sp><p:txBody><a:p><a:r><a:t>x</a:t></a:r></a:p></p:txBody></p:sp>'.repeat(1000),
     );
@@ -178,8 +195,9 @@ describe('extractPptxText resource bounds', () => {
       yield enc.encode('</p:spTree></p:cSld></p:sld>');
     };
     const r = await extractBounded(await deck([{ name: 'ppt/slides/slide1.xml', chunks }]));
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.ms).toBeLessThan(500);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect((r.value as Out).skipped).toHaveLength(1);
+    expect(r.ms).toBeLessThan(500);
   }, 30_000);
 
   it('rejects a part with more tags than the limit (a run flood in one shape)', async () => {

@@ -272,7 +272,7 @@ class Parts {
   constructor(private readonly zip: JSZip) {}
 
   private tooBig(part: string, size: number): Error {
-    return new Error(
+    return new SlideTooLarge(
       `This PowerPoint file is not supported: ${part} expands to ${size >= PPTX_MAX_PART_BYTES ? `over ${mb(PPTX_MAX_PART_BYTES)}` : mb(size)} (a slide's XML is normally well under 1 MB)`,
     );
   }
@@ -368,7 +368,12 @@ function shapeCount(xml: string): number {
 export type PptxText = {
   slideSize: { cx: number; cy: number };
   slides: { index: number; boxes: ExtractedText[] }[];
+  /** Slides whose text was not read (too large or too many shapes), with why; the others are read. */
+  skipped?: { index: number; reason: string }[];
 };
+
+/** A slide over the per-slide limits: that slide's text is skipped, not the whole deck's. */
+class SlideTooLarge extends Error {}
 
 /**
  * Extract each slide's text boxes from a .pptx: paragraphs from `a:t` runs, geometry from `a:xfrm` (falling
@@ -418,6 +423,7 @@ export async function extractPptxText(buf: Uint8Array): Promise<PptxText> {
   };
 
   const slides: PptxText['slides'] = [];
+  const skipped: NonNullable<PptxText['skipped']> = [];
   // A slide list may name one part many times: it is read and walked once.
   const done = new Map<string, ExtractedText[]>();
   for (let i = 0; i < slideParts.length; i++) {
@@ -427,16 +433,35 @@ export async function extractPptxText(buf: Uint8Array): Promise<PptxText> {
       slides.push({ index: i + 1, boxes: seen.map((b) => ({ ...b, box: { ...b.box } })) });
       continue;
     }
-    const xml = await parts.text(part);
+    // A slide over the per-slide limits (an icon sheet of thousands of vector shapes, common in free
+    // template packs) loses its own text, not the deck's; the deck-wide total still stops everything.
+    let xml: string | undefined;
+    try {
+      xml = await parts.text(part);
+    } catch (e) {
+      if (!(e instanceof SlideTooLarge)) throw e;
+      skipped.push({
+        index: i + 1,
+        reason: e.message.replace(/^This PowerPoint file is not supported: /, ''),
+      });
+      done.set(part, []);
+      slides.push({ index: i + 1, boxes: [] });
+      continue;
+    }
     const boxes: ExtractedText[] = [];
     if (!xml) {
       slides.push({ index: i + 1, boxes });
       continue;
     }
-    if (shapeCount(xml) > PPTX_MAX_SHAPES_PER_SLIDE)
-      throw new Error(
-        `This PowerPoint file is not supported: slide ${i + 1} has more than ${PPTX_MAX_SHAPES_PER_SLIDE.toLocaleString('en-US')} shapes`,
-      );
+    if (shapeCount(xml) > PPTX_MAX_SHAPES_PER_SLIDE) {
+      skipped.push({
+        index: i + 1,
+        reason: `slide ${i + 1} has more than ${PPTX_MAX_SHAPES_PER_SLIDE.toLocaleString('en-US')} shapes`,
+      });
+      done.set(part, []);
+      slides.push({ index: i + 1, boxes: [] });
+      continue;
+    }
     const sr = await parts.relsOf(part);
     let layoutPart: string | undefined;
     for (const [rid, t] of sr.types) if (t === 'slideLayout') layoutPart = sr.rels.get(rid);
@@ -515,7 +540,7 @@ export async function extractPptxText(buf: Uint8Array): Promise<PptxText> {
     done.set(part, boxes);
     slides.push({ index: i + 1, boxes });
   }
-  return { slideSize, slides };
+  return { slideSize, slides, ...(skipped.length ? { skipped } : {}) };
 }
 
 /** Slide, layout and master parts whose text runs LibreOffice draws. */
