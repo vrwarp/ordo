@@ -218,6 +218,16 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
   list, open and upload images only (a dropped file of another kind is not uploaded); the canvas marks an
   object with `play` with a ▶ badge; the slide grid tags slides with `video` / `audio` (amber when the clip
   will not play).
+- PowerPoint shapes (design/27 §11 "Mapping", §15 M6; `views/editor/ObjectShapeFields.tsx`, its patches pure
+  functions in the same file). The Shape section shows a stored geometry read-only in place of the
+  rect/ellipse/line picker: the preset's name with each adjust value (the stored one, else the preset's
+  default, evaluated as the drawer evaluates it), or a freeform's path count. Fill is none, a solid colour,
+  or a linear (angle) or radial gradient of 2 to 16 stops, each with a colour and a position; every gradient
+  edit also writes the legacy `fill` as the first stop's colour, which an older build draws. The stroke has
+  a dash and, on an open outline (a line, an arc, a bracket, a connector, or a shape that already has one), a
+  start and an end arrowhead with its size; a solid dash and no arrowheads store nothing, so a plain shape
+  keeps its legacy drawing. Shadow on adds PowerPoint's 'Offset: Bottom Right' outer shadow, or keeps an
+  imported one. A locked shape's style fields are read-only; its box stays editable.
 
 ### Touch
 
