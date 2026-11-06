@@ -101,6 +101,29 @@ export type PictureClip = {
   radius?: number;
 };
 
+/** Insets of a rectangle, as fractions of its size (`a:fillRect`, `a:srcRect` give thousandths of a percent). */
+export type Insets = { l: number; t: number; r: number; b: number };
+
+/**
+ * A slide's background picture as PowerPoint places it (`p:bg/p:bgPr/a:blipFill` of the slide, else of its
+ * layout, else of its master, the first that has a background, as pptx-preview looks it up). pptx-preview
+ * stretches it over its fill rectangle (or, with a fill rectangle, draws it at its own size: its size has no
+ * units), ignoring the crop and the tiling. Lengths are fractions of the slide's width (x) and height (y).
+ */
+export type BackgroundFill = {
+  /** The slide's position among the slides pptx-preview draws (0 = first). */
+  slide: number;
+  /** Stretched: the rectangle the picture fills (`a:stretch/a:fillRect`), as insets of the slide. */
+  rect?: Insets;
+  /** Stretched: the part of the picture shown (`a:srcRect`), as insets of the picture. */
+  crop?: Insets;
+  /**
+   * Tiled (`a:tile`): one tile's size (the picture's own size at its resolution, scaled by sx/sy), where one
+   * tile's corner lies (alignment plus offset), and the mirroring of every other tile.
+   */
+  tile?: { w: number; h: number; x: number; y: number; flip: 'none' | 'x' | 'y' | 'xy' };
+};
+
 export type Annotation = {
   /** The deck with a marker in every styled run (the input itself when nothing was marked). */
   bytes: Uint8Array;
@@ -112,6 +135,8 @@ export type Annotation = {
   bodies: BodyStyle[];
   /** Pictures to clip to their shape. */
   pictures: PictureClip[];
+  /** Slide background pictures tiled, cropped or placed in a fill rectangle. */
+  backgrounds: BackgroundFill[];
   /**
    * For each slide pptx-preview draws, in its order (it ignores the presentation's order and sorts slides by
    * the number in their part name), its place in the presentation's order of shown slides, or -1 for a
@@ -514,8 +539,11 @@ export async function annotatePptx(
     notes.push(`slide order: ${(e as Error).message}`);
   }
   // Relationships first: they are small, and a renamed picture needs every one pointing to it rewritten.
+  // Before the renames: the relationships it adds point to pictures that may be renamed.
+  if (await themeBackgrounds(zip, notes, readLater)) changed = true;
   if (await renameMedia(zip, notes, readLater)) changed = true;
   const pictures = await pictureClips(drawn, readLater, notes);
+  const backgrounds = await backgroundFills(zip, drawn, readLater, notes, slideWidthPt, slideHeightPt);
   if (await stripColorProfiles(zip, notes, MAX_MEDIA_BYTES, signal)) changed = true;
   if (await titleCharts(zip, notes, readLater)) changed = true;
   signal?.throwIfAborted();
@@ -532,6 +560,7 @@ export async function annotatePptx(
     paras,
     bodies,
     pictures,
+    backgrounds,
     slideOrder,
     families: [...families].sort(),
     slideWidthPt,
@@ -661,6 +690,320 @@ async function pictureClips(
     }
   }
   return out;
+}
+
+/** Bytes of a slide, layout or master read to find its background (`p:bg` comes first in `p:cSld`). */
+const PART_HEAD_BYTES = 16 * 1024;
+
+/** The start of a part, as text. */
+async function partHead(zip: JSZip, name: string): Promise<string | undefined> {
+  const b = await readBytes(zip, name, PART_HEAD_BYTES, true);
+  return b && new TextDecoder().decode(b);
+}
+
+/** The background a part names (`p:cSld/p:bg`): its blip fill, `null` for another fill, undefined for none. */
+function backgroundOf(xml: string, name: string): XNode | null | undefined {
+  const at = xml.indexOf('<p:bg>');
+  if (at < 0) return undefined;
+  // Past the part's start read: not known, so not corrected.
+  const end = xml.indexOf('</p:bg>', at);
+  if (end < 0) return null;
+  const bg = rootOf(parseXml(xml.slice(at, end + 7), name));
+  const bgPr = child(bg, 'p:bgPr');
+  if (child(bg, 'p:bgRef') || child(bgPr, 'a:solidFill') || child(bgPr, 'a:gradFill')) return null;
+  return child(bgPr, 'a:blipFill') ?? undefined;
+}
+
+/** A relationship's target by id, as a zip path. */
+async function relById(
+  part: string,
+  id: string,
+  read: (name: string) => Promise<string | undefined>,
+): Promise<string | undefined> {
+  const slash = part.lastIndexOf('/');
+  const relsPath = `${part.slice(0, slash)}/_rels/${part.slice(slash + 1)}.rels`;
+  const xml = await read(relsPath);
+  if (xml === undefined) return undefined;
+  const rel = children(rootOf(parseXml(xml, relsPath)), 'Relationship').find((r) => r.attrs.Id === id);
+  if (!rel?.attrs.Target || rel.attrs.TargetMode === 'External') return undefined;
+  return resolvePath(part.slice(0, slash), decodePart(rel.attrs.Target));
+}
+
+/** Insets in thousandths of a percent as fractions; undefined when all are zero. */
+function insetsOf(n: XNode | undefined): Insets | undefined {
+  if (!n) return undefined;
+  const f = (k: string) => (num(n.attrs[k]) ?? 0) / 100_000;
+  const v = { l: f('l'), t: f('t'), r: f('r'), b: f('b') };
+  return v.l || v.t || v.r || v.b ? v : undefined;
+}
+
+/**
+ * A picture's size in pixels and its resolution (pixels per inch; 96 when it states none), from the header
+ * of a PNG, JPEG, GIF or BMP file.
+ */
+export function pictureSize(b: Uint8Array): { w: number; h: number; dpiX: number; dpiY: number } | undefined {
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const ok = (o: number, n: number) => o >= 0 && o + n <= b.length;
+  let dpiX = 96;
+  let dpiY = 96;
+  if (ok(0, 24) && dv.getUint32(0) === 0x89504e47) {
+    const w = dv.getUint32(16);
+    const h = dv.getUint32(20);
+    for (let o = 8, n = 0; ok(o, 8) && n < MAX_PICTURE_HEADERS; n++) {
+      const len = dv.getUint32(o);
+      const type = String.fromCharCode(b[o + 4]!, b[o + 5]!, b[o + 6]!, b[o + 7]!);
+      if (type === 'pHYs' && ok(o + 8, 9) && b[o + 16] === 1) {
+        dpiX = Math.round(dv.getUint32(o + 8) * 0.0254) || 96;
+        dpiY = Math.round(dv.getUint32(o + 12) * 0.0254) || 96;
+      }
+      if (type === 'IDAT' || type === 'IEND') break;
+      o += 12 + len;
+    }
+    return w && h ? { w, h, dpiX, dpiY } : undefined;
+  }
+  if (ok(0, 4) && dv.getUint16(0) === 0xffd8) {
+    for (let o = 2, n = 0; ok(o, 4) && b[o] === 0xff && n < MAX_PICTURE_HEADERS; n++) {
+      const m = b[o + 1]!;
+      const len = dv.getUint16(o + 2);
+      if (m === 0xe0 && ok(o + 4, 12) && dv.getUint32(o + 4) === 0x4a464946) {
+        const unit = b[o + 11];
+        const k = unit === 1 ? 1 : unit === 2 ? 2.54 : 0;
+        if (k) {
+          dpiX = dv.getUint16(o + 12) * k || 96;
+          dpiY = dv.getUint16(o + 14) * k || 96;
+        }
+      }
+      if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc && ok(o + 5, 5)) {
+        const h = dv.getUint16(o + 5);
+        const w = dv.getUint16(o + 7);
+        return w && h ? { w, h, dpiX, dpiY } : undefined;
+      }
+      o += 2 + len;
+    }
+    return undefined;
+  }
+  if (ok(0, 10) && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) {
+    const w = dv.getUint16(6, true);
+    const h = dv.getUint16(8, true);
+    return w && h ? { w, h, dpiX, dpiY } : undefined;
+  }
+  if (ok(0, 46) && b[0] === 0x42 && b[1] === 0x4d) {
+    const w = Math.abs(dv.getInt32(18, true));
+    const h = Math.abs(dv.getInt32(22, true));
+    dpiX = Math.round(dv.getInt32(38, true) * 0.0254) || 96;
+    dpiY = Math.round(dv.getInt32(42, true) * 0.0254) || 96;
+    return w && h ? { w, h, dpiX, dpiY } : undefined;
+  }
+  return undefined;
+}
+
+/** Bytes of a picture's header read for its size (a JPEG's frame header follows its metadata). */
+const PICTURE_HEAD_BYTES = 256 * 1024;
+
+/**
+ * For each drawn slide whose background picture pptx-preview places wrongly (tiled, cropped, or in a fill
+ * rectangle), where PowerPoint places it.
+ */
+async function backgroundFills(
+  zip: JSZip,
+  order: string[],
+  read: (name: string) => Promise<string | undefined>,
+  notes: string[],
+  slideW: number,
+  slideH: number,
+): Promise<BackgroundFill[]> {
+  const out: BackgroundFill[] = [];
+  /** A part's own background, with the part its relationships belong to. */
+  const own = new Map<string, Promise<{ fill: XNode | null; part: string } | undefined>>();
+  const ownOf = (part: string) => {
+    let p = own.get(part);
+    if (!p) {
+      p = (async () => {
+        const xml = await partHead(zip, part);
+        if (!xml?.includes('<p:bg>')) return undefined;
+        const fill = backgroundOf(xml, part);
+        return fill === undefined ? undefined : { fill, part };
+      })();
+      own.set(part, p);
+    }
+    return p;
+  };
+  const up = new Map<string, Promise<string | undefined>>();
+  const upOf = (part: string, type: string) => {
+    let p = up.get(part);
+    if (!p) {
+      p = relTarget(zip, part, type);
+      up.set(part, p);
+    }
+    return p;
+  };
+  const sizes = new Map<string, ReturnType<typeof pictureSize>>();
+  for (let i = 0; i < order.length; i++) {
+    try {
+      let part: string | undefined = order[i]!;
+      let found: { fill: XNode | null; part: string } | undefined;
+      for (const type of ['slideLayout', 'slideMaster', '']) {
+        found = await ownOf(part);
+        if (found || !type) break;
+        part = type === 'slideLayout' ? await relTarget(zip, part, type) : await upOf(part, type);
+        if (!part) break;
+      }
+      const fill = found?.fill;
+      if (!found || !fill) continue;
+      const bg: BackgroundFill = { slide: i };
+      const tile = child(fill, 'a:tile');
+      if (tile) {
+        const id = path(fill, 'a:blip')?.attrs['r:embed'];
+        const media = id ? await relById(found.part, id, read) : undefined;
+        if (!media) continue;
+        if (!sizes.has(media)) {
+          const head = await readBytes(zip, media, PICTURE_HEAD_BYTES, true);
+          sizes.set(media, head && pictureSize(head));
+        }
+        const size = sizes.get(media);
+        if (!size) continue;
+        const a = tile.attrs;
+        // The picture's size in points, scaled; then as fractions of the slide.
+        const w = ((size.w / size.dpiX) * 72 * (num(a.sx) ?? 100_000)) / 100_000 / slideW;
+        const h = ((size.h / size.dpiY) * 72 * (num(a.sy) ?? 100_000)) / 100_000 / slideH;
+        if (!(w > 0 && h > 0)) continue;
+        // The corner, edge middle or centre a tile is aligned to (tl, t, tr, l, ctr, r, bl, b, br).
+        const algn = a.algn ?? 'tl';
+        const ax = ['tr', 'r', 'br'].includes(algn)
+          ? 1 - w
+          : ['t', 'ctr', 'b'].includes(algn)
+            ? (1 - w) / 2
+            : 0;
+        const ay = ['bl', 'b', 'br'].includes(algn)
+          ? 1 - h
+          : ['l', 'ctr', 'r'].includes(algn)
+            ? (1 - h) / 2
+            : 0;
+        const flip = a.flip === 'x' || a.flip === 'y' || a.flip === 'xy' ? a.flip : 'none';
+        bg.tile = {
+          w,
+          h,
+          x: ax + (num(a.tx) ?? 0) / EMU_PER_PT / slideW,
+          y: ay + (num(a.ty) ?? 0) / EMU_PER_PT / slideH,
+          flip,
+        };
+      } else {
+        const rect = insetsOf(path(fill, 'a:stretch', 'a:fillRect'));
+        const crop = insetsOf(child(fill, 'a:srcRect'));
+        if (!rect && !crop) continue;
+        if (rect) bg.rect = rect;
+        if (crop) bg.crop = crop;
+      }
+      out.push(bg);
+    } catch (e) {
+      notes.push(`${order[i]} background: ${(e as Error).message}`);
+    }
+  }
+  return out;
+}
+
+/** A path from directory `dir` to `to` (both zip paths), as a relationship target. */
+function relativePath(dir: string, to: string): string {
+  const a = dir.split('/').filter(Boolean);
+  const b = to.split('/');
+  let i = 0;
+  while (i < a.length && i < b.length - 1 && a[i] === b[i]) i++;
+  return [...a.slice(i).map(() => '..'), ...b.slice(i)].join('/');
+}
+
+/** The top-level fills of a theme's `a:bgFillStyleLst`, as XML. */
+function backgroundStyles(theme: string): string[] {
+  const at = theme.indexOf('<a:bgFillStyleLst>');
+  const end = at < 0 ? -1 : theme.indexOf('</a:bgFillStyleLst>', at);
+  if (end < 0) return [];
+  const list = theme.slice(at + 18, end);
+  const out: string[] = [];
+  const re = /<a:(\w+)\b[^>]*?(\/)?>/g;
+  for (let m = re.exec(list); m; m = re.exec(list)) {
+    if (m[2]) {
+      out.push(m[0]);
+      continue;
+    }
+    // A fill does not hold a fill of its own kind.
+    const close = list.indexOf(`</a:${m[1]}>`, re.lastIndex);
+    if (close < 0) break;
+    const stop = close + m[1]!.length + 5;
+    out.push(list.slice(m.index, stop));
+    re.lastIndex = stop;
+  }
+  return out;
+}
+
+/**
+ * A background that refers to a picture fill of its theme (`p:bgRef` idx 1001 and up: the theme's
+ * background fill styles) is drawn by pptx-preview as a plain colour. Writes the picture fill into the part
+ * (`p:bgPr`) with a relationship to the theme's picture, so pptx-preview draws it.
+ */
+async function themeBackgrounds(
+  zip: JSZip,
+  notes: string[],
+  read: (name: string) => Promise<string | undefined>,
+): Promise<boolean> {
+  let changed = false;
+  // Most themes have no picture among their background styles: then nothing is read.
+  let pictures = false;
+  for (const t of Object.keys(zip.files).filter((n) => /^ppt\/theme\/[^/]+\.xml$/.test(n))) {
+    const xml = await read(t);
+    if (xml && backgroundStyles(xml).some((f) => f.startsWith('<a:blipFill'))) pictures = true;
+  }
+  if (!pictures) return false;
+  const themes = new Map<string, Promise<string | undefined>>();
+  const themeOf = (master: string) => {
+    let t = themes.get(master);
+    if (!t) {
+      t = relTarget(zip, master, 'theme');
+      themes.set(master, t);
+    }
+    return t;
+  };
+  for (const name of Object.keys(zip.files).filter((n) => PART_RE.test(n))) {
+    try {
+      if (!/<p:bgRef[^>]*\sidx="1\d\d\d"/.test((await partHead(zip, name)) ?? '')) continue;
+      const xml = await read(name);
+      const at = xml?.indexOf('<p:bgRef') ?? -1;
+      if (!xml || at < 0) continue;
+      const idx = num(/^<p:bgRef[^>]*\sidx="(\d+)"/.exec(xml.slice(at, at + 200))?.[1]);
+      if (idx === undefined || idx < 1001) continue;
+      let master: string | undefined = name;
+      if (name.startsWith('ppt/slides/')) master = await relTarget(zip, name, 'slideLayout');
+      if (master && !master.startsWith('ppt/slideMasters/'))
+        master = await relTarget(zip, master, 'slideMaster');
+      const themePart = master && (await themeOf(master));
+      const theme = themePart && (await read(themePart));
+      if (!themePart || !theme) continue;
+      const fill = backgroundStyles(theme)[idx - 1001];
+      if (!fill?.startsWith('<a:blipFill')) continue;
+      const id = /\sr:embed="([^"]*)"/.exec(fill)?.[1];
+      const media = id ? await relById(themePart, id, read) : undefined;
+      if (!media || !zip.file(media)) continue;
+      const gt = xml.indexOf('>', at);
+      const end = gt < 0 || xml[gt - 1] === '/' ? gt : xml.indexOf('</p:bgRef>', gt);
+      if (end < 0) continue;
+      const stop = end === gt ? gt + 1 : end + 10;
+      const slash = name.lastIndexOf('/');
+      const relsPath = `${name.slice(0, slash)}/_rels/${name.slice(slash + 1)}.rels`;
+      const rels =
+        (await read(relsPath)) ??
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
+      let rid = 'rIdOrdoBg';
+      for (let i = 2; rels.includes(`Id="${rid}"`); i++) rid = `rIdOrdoBg${i}`;
+      const close = rels.lastIndexOf('</Relationships>');
+      if (close < 0) continue;
+      const rel = `<Relationship Id="${rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${relativePath(name.slice(0, slash), media)}"/>`;
+      zip.file(relsPath, rels.slice(0, close) + rel + rels.slice(close));
+      const own = fill.replace(/\sr:embed="[^"]*"/, () => ` r:embed="${rid}"`);
+      zip.file(name, `${xml.slice(0, at)}<p:bgPr>${own}<a:effectLst/></p:bgPr>${xml.slice(stop)}`);
+      changed = true;
+    } catch (e) {
+      notes.push(`${name} theme background: ${(e as Error).message}`);
+    }
+  }
+  return changed;
 }
 
 /** Picture types pptx-preview loads (by extension), when their part name starts with `image`. */

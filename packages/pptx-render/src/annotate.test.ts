@@ -1,8 +1,10 @@
+import { crc32, deflateSync } from 'node:zlib';
 import JSZip from 'jszip';
 import { describe, expect, it } from 'vitest';
 import {
   annotatePptx,
   completeGroupTransforms,
+  pictureSize,
   placeOrphanPlaceholders,
   placeSlides,
   previewOrder,
@@ -27,7 +29,7 @@ const sp = (opts: { ph?: string; spPr?: string; style?: string; body: string; ls
 const shadow = (dist: number, dir: number, color = '<a:srgbClr val="000000"/>') =>
   `<a:effectLst><a:outerShdw blurRad="25400" dist="${dist}" dir="${dir}">${color}</a:outerShdw></a:effectLst>`;
 
-async function deck(slideBody: string, extra: Record<string, string> = {}): Promise<Uint8Array> {
+async function deck(slideBody: string, extra: Record<string, string | Uint8Array> = {}): Promise<Uint8Array> {
   const z = new JSZip();
   z.file(
     'ppt/presentation.xml',
@@ -88,6 +90,35 @@ const types = (slides: string[]) =>
     )
     .join('') +
   '</Types>';
+
+/** A real PNG of w x h grey pixels, with a resolution (pixels per inch) when one is given. */
+function png(w: number, h: number, dpi?: number): Uint8Array {
+  const chunk = (type: string, data: Uint8Array) => {
+    const b = Buffer.alloc(12 + data.length);
+    b.writeUInt32BE(data.length, 0);
+    b.write(type, 4, 'latin1');
+    Buffer.from(data).copy(b, 8);
+    b.writeUInt32BE(crc32(b.subarray(4, 8 + data.length)), 8 + data.length);
+    return b;
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr.set([8, 0, 0, 0, 0], 8);
+  const phys = Buffer.alloc(9);
+  phys.writeUInt32BE(Math.round((dpi ?? 0) / 0.0254), 0);
+  phys.writeUInt32BE(Math.round((dpi ?? 0) / 0.0254), 4);
+  phys[8] = 1;
+  const rows = Buffer.alloc((w + 1) * h, 0x80);
+  for (let y = 0; y < h; y++) rows[y * (w + 1)] = 0;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    ...(dpi ? [chunk('pHYs', phys)] : []),
+    chunk('IDAT', deflateSync(rows)),
+    chunk('IEND', new Uint8Array()),
+  ]);
+}
 
 /** The marked text runs of slide 1 with their styles, in document order. */
 async function marked(bytes: Uint8Array, runs: unknown[]): Promise<[string, unknown][]> {
@@ -314,6 +345,166 @@ describe('annotatePptx', () => {
       // A tenth of the shorter side.
       { slide: 0, x: 1, y: 10, w: 200, h: 100, shape: 'roundRect', radius: 10 },
     ]);
+  });
+
+  it('places background pictures as PowerPoint does: tiled, cropped, in a fill rectangle, inherited', async () => {
+    const twoRels = (first: string, target: string) =>
+      rels(first, target).replace(
+        '</Relationships>',
+        `<Relationship Id="rId2" Type="${REL}/image" Target="../media/image1.png"/></Relationships>`,
+      );
+    const withBg = (root: string, bg: string, spTree = '<p:spTree/>') =>
+      `<?xml version="1.0"?><p:${root} ${NS}><p:cSld><p:bg>${bg}</p:bg>${spTree}</p:cSld></p:${root}>`;
+    const blip = (inner: string, blipInner = '') =>
+      `<p:bgPr><a:blipFill dpi="0" rotWithShape="1"><a:blip r:embed="rId2">${blipInner}</a:blip>${inner}</a:blipFill><a:effectLst/></p:bgPr>`;
+    // 960 x 540 points; a 150 x 100 picture at 300 pixels per inch is 36 x 24 points.
+    const slideTile = withBg(
+      'sld',
+      blip('<a:srcRect/><a:tile tx="127000" ty="-254000" sx="50000" sy="200000" flip="xy" algn="ctr"/>'),
+    );
+    const a = await annotatePptx(
+      await deck('', {
+        'ppt/slides/slide1.xml': slideTile,
+        'ppt/slides/_rels/slide1.xml.rels': twoRels('slideLayout', '../slideLayouts/slideLayout1.xml'),
+        'ppt/media/image1.png': png(150, 100, 300),
+        '[Content_Types].xml': types(['slide1']),
+      }),
+    );
+    const w = 18 / 960;
+    const h = 48 / 540;
+    expect(a.backgrounds).toHaveLength(1);
+    const t = a.backgrounds[0]!.tile!;
+    expect(t.flip).toBe('xy');
+    expect(t.w).toBeCloseTo(w, 9);
+    expect(t.h).toBeCloseTo(h, 9);
+    // Centred, then moved 10 points right and 20 up.
+    expect(t.x).toBeCloseTo((1 - w) / 2 + 10 / 960, 9);
+    expect(t.y).toBeCloseTo((1 - h) / 2 - 20 / 540, 9);
+
+    // The slide has no background: its layout's, stretched into a fill rectangle and cropped; a picture
+    // without a stated resolution tiles at 96 pixels per inch.
+    const layout = (bg: string) => withBg('sldLayout', bg);
+    const inherited = await annotatePptx(
+      await deck('', {
+        'ppt/slideLayouts/slideLayout1.xml': layout(
+          blip(
+            '<a:srcRect l="10000" r="-20000"/><a:stretch><a:fillRect t="34000" b="11000"/></a:stretch>',
+            '<a:alphaModFix amt="46000"/>',
+          ),
+        ),
+        'ppt/slideLayouts/_rels/slideLayout1.xml.rels': twoRels(
+          'slideMaster',
+          '../slideMasters/slideMaster1.xml',
+        ),
+        'ppt/media/image1.png': png(96, 48),
+        '[Content_Types].xml': types(['slide1']),
+      }),
+    );
+    expect(inherited.backgrounds).toEqual([
+      { slide: 0, rect: { l: 0, t: 0.34, r: 0, b: 0.11 }, crop: { l: 0.1, t: 0, r: -0.2, b: 0 } },
+    ]);
+
+    // From the master, tiled at the picture's own size; a plainly stretched picture needs nothing; a
+    // slide's own colour hides the picture behind it.
+    const master = (await JSZip.loadAsync(await deck(''))).file('ppt/slideMasters/slideMaster1.xml')!;
+    const masterXml = (await master.async('string')).replace(
+      '<p:cSld>',
+      `<p:cSld><p:bg>${blip('<a:tile/>')}</p:bg>`,
+    );
+    const fromMaster = (slide: string) =>
+      deck('', {
+        'ppt/slides/slide1.xml': slide,
+        'ppt/slideMasters/slideMaster1.xml': masterXml,
+        'ppt/slideMasters/_rels/slideMaster1.xml.rels': twoRels('theme', '../theme/theme1.xml'),
+        'ppt/media/image1.png': png(96, 48),
+        '[Content_Types].xml': types(['slide1']),
+      });
+    const tiled = await annotatePptx(await fromMaster(withBg('sld', '').replace('<p:bg></p:bg>', '')));
+    expect(tiled.backgrounds).toEqual([
+      { slide: 0, tile: { w: 72 / 960, h: 36 / 540, x: 0, y: 0, flip: 'none' } },
+    ]);
+    const coloured = withBg('sld', '<p:bgPr><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></p:bgPr>');
+    expect((await annotatePptx(await fromMaster(coloured))).backgrounds).toEqual([]);
+    const stretched = await annotatePptx(
+      await deck('', {
+        'ppt/slides/slide1.xml': withBg('sld', blip('<a:srcRect/><a:stretch><a:fillRect/></a:stretch>')),
+        'ppt/slides/_rels/slide1.xml.rels': twoRels('slideLayout', '../slideLayouts/slideLayout1.xml'),
+        'ppt/media/image1.png': png(96, 48),
+        '[Content_Types].xml': types(['slide1']),
+      }),
+    );
+    expect(stretched.backgrounds).toEqual([]);
+  });
+
+  it("writes a theme's picture background into the part that refers to it, which pptx-preview then draws", async () => {
+    const base = await JSZip.loadAsync(await deck(''));
+    const theme = (await base.file('ppt/theme/theme1.xml')!.async('string')).replace(
+      '</a:effectStyleLst>',
+      '</a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill>' +
+        '<a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill>' +
+        '<a:blipFill><a:blip r:embed="rId5"/><a:tile sx="50000" sy="50000"/></a:blipFill></a:bgFillStyleLst>',
+    );
+    const master = (await base.file('ppt/slideMasters/slideMaster1.xml')!.async('string')).replace(
+      '<p:cSld>',
+      '<p:cSld><p:bg><p:bgRef idx="1003"><a:schemeClr val="bg2"/></p:bgRef></p:bg>',
+    );
+    const layout = (idx: number) =>
+      `<?xml version="1.0"?><p:sldLayout ${NS}><p:cSld><p:bg><p:bgRef idx="${idx}"/></p:bg><p:spTree/></p:cSld></p:sldLayout>`;
+    const a = await annotatePptx(
+      await deck('', {
+        'ppt/theme/theme1.xml': theme,
+        'ppt/theme/_rels/theme1.xml.rels': rels('image', '../media/image1.png').replace('rId1', 'rId5'),
+        'ppt/media/image1.png': png(96, 48),
+        'ppt/slideMasters/slideMaster1.xml': master,
+        // A gradient stays as pptx-preview draws it.
+        'ppt/slideLayouts/slideLayout2.xml': layout(1002),
+        'ppt/slideLayouts/_rels/slideLayout2.xml.rels': rels(
+          'slideMaster',
+          '../slideMasters/slideMaster1.xml',
+        ),
+        '[Content_Types].xml': types(['slide1']),
+      }),
+    );
+    const z = await JSZip.loadAsync(a.bytes);
+    const m = await z.file('ppt/slideMasters/slideMaster1.xml')!.async('string');
+    expect(m).toContain(
+      '<p:bg><p:bgPr><a:blipFill><a:blip r:embed="rIdOrdoBg"/><a:tile sx="50000" sy="50000"/></a:blipFill><a:effectLst/></p:bgPr></p:bg>',
+    );
+    expect(await z.file('ppt/slideMasters/_rels/slideMaster1.xml.rels')!.async('string')).toContain(
+      '<Relationship Id="rIdOrdoBg" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/>',
+    );
+    expect(await z.file('ppt/slideLayouts/slideLayout2.xml')!.async('string')).toContain(
+      '<p:bgRef idx="1002"/>',
+    );
+    // The slide shows its master's background, now a tiled picture.
+    expect(a.backgrounds).toEqual([
+      { slide: 0, tile: { w: 36 / 960, h: 18 / 540, x: 0, y: 0, flip: 'none' } },
+    ]);
+  });
+
+  it('reads the pixel size and resolution of PNG, JPEG, GIF and BMP pictures', () => {
+    expect(pictureSize(png(150, 100, 300))).toEqual({ w: 150, h: 100, dpiX: 300, dpiY: 300 });
+    expect(pictureSize(png(3, 2))).toEqual({ w: 3, h: 2, dpiX: 96, dpiY: 96 });
+    // JFIF at 75 dots per inch, then a baseline frame of 128 x 64.
+    const jpeg = new Uint8Array([
+      0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 1, 0, 75, 0, 75, 0, 0, 0xff, 0xc0, 0,
+      11, 8, 0, 64, 0, 128, 1, 1, 0x11, 0,
+    ]);
+    expect(pictureSize(jpeg)).toEqual({ w: 128, h: 64, dpiX: 75, dpiY: 75 });
+    expect(pictureSize(new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 5, 0, 7, 0]))).toEqual({
+      w: 5,
+      h: 7,
+      dpiX: 96,
+      dpiY: 96,
+    });
+    const bmp = new Uint8Array(54);
+    bmp.set([0x42, 0x4d]);
+    new DataView(bmp.buffer).setInt32(18, 10, true);
+    new DataView(bmp.buffer).setInt32(22, -20, true);
+    expect(pictureSize(bmp)).toEqual({ w: 10, h: 20, dpiX: 96, dpiY: 96 });
+    expect(pictureSize(new Uint8Array([1, 2, 3]))).toBeUndefined();
+    // A JPEG whose segments run past the end has no size.
+    expect(pictureSize(jpeg.subarray(0, 24))).toBeUndefined();
   });
 
   it('renames pictures pptx-preview would not load, and every relationship to them', async () => {

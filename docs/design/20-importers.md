@@ -189,6 +189,17 @@ which ordo owns and can keep fixing:
 - **Pictures** in an ellipse or a rounded rectangle are clipped to it (pptx-preview draws every picture as
   a rectangle). A slide background picture is stretched over the slide: pptx-preview writes its size
   without units, which CSS rejects, and the picture sat at its own size in the corner.
+- **Background pictures** (`p:bg`, of the slide, else its layout, else its master) are placed as
+  PowerPoint places them; pptx-preview ignores everything but the picture and its transparency. A tiled
+  picture (`a:tile`) is repeated at its own size (pixels at the resolution its PNG, JPEG or BMP header
+  states, else 96 per inch), scaled by sx/sy, from the aligned corner moved by tx/ty, and mirrored every
+  other tile for `flip` (the page draws the mirrored unit on a canvas). A stretched one fills its fill
+  rectangle (`a:fillRect` insets, which may be negative) and shows only its crop (`a:srcRect`). The
+  annotation computes these as fractions of the slide (`backgrounds`) and the page sets the CSS
+  background size, position and repeat. A background that refers to a picture among the theme's
+  background styles (`p:bgRef` idx 1001 and up) is drawn by pptx-preview as a flat colour: the picture
+  fill is written into the part, with a relationship to the theme's picture. Not corrected: a crop of a
+  tiled picture, the theme's gradient background styles, duotone and other colour changes of the picture.
 - **Drawing** (`chromium.ts`). The hub starts headless Chromium (`ORDO_CHROMIUM`) and drives it over the
   DevTools protocol on a pipe (no Playwright or Puppeteer at run time): a harness page beside the deck loads
   the unmodified pptx-preview bundle, draws every slide at 1920x1080, and each slide is captured on its own,

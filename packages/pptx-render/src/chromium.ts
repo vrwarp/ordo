@@ -6,7 +6,7 @@ import type { Readable, Writable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
 import { type Annotation, annotatePptx } from './annotate.ts';
 import { fontFallbacks } from './fonts.ts';
-import { type PageArgs, type PageResult, pageMain, takeMarkers } from './page.ts';
+import { type PageArgs, type PageResult, pageMain, placeBackground, takeMarkers } from './page.ts';
 
 export type PreviewOptions = {
   /** Chromium (or Chrome) executable. */
@@ -113,6 +113,7 @@ async function render(
     paras: ann?.paras ?? [],
     bodies: ann?.bodies ?? [],
     pictures: ann?.pictures ?? [],
+    backgrounds: ann?.backgrounds ?? [],
     fallbacks,
     slideWidthPt: ann?.slideWidthPt ?? 720,
     fixes,
@@ -126,8 +127,8 @@ async function render(
     await page.navigate(pathToFileURL(join(workDir, 'index.html')).href);
     const res = await page.evaluate<PageResult>(
       // esbuild (tsx, the hub bundle) may wrap named functions in __name(): define it in the page.
-      // `takeMarkers` is declared first, under the name pageMain's body calls it by.
-      `var __name = (f) => f; ${takeMarkers.toString()}; (${pageMain.toString()})(${JSON.stringify(args)})`,
+      // `takeMarkers` and `placeBackground` are declared first, under the names pageMain's body calls them by.
+      `var __name = (f) => f; ${takeMarkers.toString()}; ${placeBackground.toString()}; (${pageMain.toString()})(${JSON.stringify(args)})`,
     );
     notes.push(...res.errors.map((e) => `page: ${e}`));
     if (!res.slides.length) throw new Error('pptx-preview rendered no slides');

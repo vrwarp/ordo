@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import JSZip from 'jszip';
 import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
 import { annotatePptx } from './annotate.ts';
@@ -92,6 +93,51 @@ describe.skipIf(!chromium)('renderWithPptxPreview (headless Chromium)', () => {
     expect(raw.styled).toBe(0);
     expect(fixed.styled).toBe(2);
     expect((await readFile(fixed.pages[0]!)).equals(await readFile(raw.pages[0]!))).toBe(false);
+  }, 120_000);
+
+  it('tiles, mirrors, crops and insets slide background pictures as PowerPoint does', async () => {
+    // A 4 x 2 picture with no stated resolution: 3 x 1.5 points.
+    const picture =
+      'image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAIAAADwyuo0AAAAGElEQVR4nGNgcGD478AAJf87/Gdw+A8hAWfMCfmGTu6kAAAAAElFTkSuQmCC';
+    const p = new pptxgen();
+    p.layout = 'LAYOUT_16x9';
+    p.addSlide().background = { data: picture };
+    p.addSlide().background = { data: picture };
+    const z = await JSZip.loadAsync((await p.write({ outputType: 'nodebuffer' })) as Buffer);
+    const stretch = '<a:srcRect/><a:stretch><a:fillRect/></a:stretch>';
+    const edit = async (name: string, to: string) =>
+      z.file(name, (await z.file(name)!.async('string')).replace(stretch, to));
+    // Ten times its size, mirrored both ways, from the top left corner.
+    await edit(
+      'ppt/slides/slide1.xml',
+      '<a:tile tx="0" ty="0" sx="1000000" sy="1000000" flip="xy" algn="tl"/>',
+    );
+    // Its right half, stretched over the lower half of the slide.
+    await edit(
+      'ppt/slides/slide2.xml',
+      '<a:srcRect l="50000"/><a:stretch><a:fillRect t="50000"/></a:stretch>',
+    );
+    const dir = await work();
+    const input = join(dir, 'in.pptx');
+    await writeFile(input, await z.generateAsync({ type: 'nodebuffer' }));
+    const r = await renderWithPptxPreview(input, join(dir, 'out'), {
+      chromium: chromium!,
+      timeoutMs: 60_000,
+      width: 480,
+      height: 270,
+      dumpSlides: [1, 2],
+    });
+    expect(r.notes.filter((n) => n.startsWith('page:'))).toEqual([]);
+    const style = (n: number) => /class="slide-background" style="([^"]*)"/.exec(r.dom?.[n] ?? '')?.[1] ?? '';
+    // 20 x 10 pixels a tile (30 x 15 points, at 480 pixels for 720); the repeating unit holds four mirrored tiles.
+    expect(style(1)).toMatch(/background-repeat: repeat;/);
+    expect(style(1)).toMatch(/background-size: 40px 20px;/);
+    expect(style(1)).toMatch(/background-position: 0px 0px;/);
+    expect(style(1)).toMatch(/background-image: url\(&quot;data:image\/png/);
+    expect(style(2)).toMatch(/background-repeat: no-repeat;/);
+    expect(style(2)).toMatch(/background-size: 960px 135px;/);
+    expect(style(2)).toMatch(/background-position: -480px 135px;/);
+    expect(style(2)).toMatch(/clip-path: inset\(50% 0% 0%( 0%)?\);/);
   }, 120_000);
 
   it('takes the annotation from the caller when given one (the hub runs it on a worker)', async () => {

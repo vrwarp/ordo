@@ -1,4 +1,4 @@
-import type { BodyStyle, ParaStyle, PictureClip, RunStyle } from './annotate.ts';
+import type { BackgroundFill, BodyStyle, ParaStyle, PictureClip, RunStyle } from './annotate.ts';
 
 /** What the page needs to render one deck. Plain data: it is sent into the browser as JSON. */
 export type PageArgs = {
@@ -14,6 +14,8 @@ export type PageArgs = {
   bodies: BodyStyle[];
   /** Pictures to clip to their shape (pptx-preview draws every picture as a rectangle). */
   pictures: PictureClip[];
+  /** Slide background pictures tiled, cropped or placed in a fill rectangle (pptx-preview stretches them). */
+  backgrounds: BackgroundFill[];
   /** Typeface → the installed family the system substitutes for it (fontconfig), when it is missing. */
   fallbacks: Record<string, string>;
   /** Slide width in points, to convert the shadow offsets (points) into pptx-preview's slide units. */
@@ -503,6 +505,19 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
       if (!st.backgroundPosition || /^0(px)? 0(px)?$/.test(st.backgroundPosition))
         st.backgroundSize = '100% 100%';
     }
+  // Where PowerPoint puts a background picture that is tiled, cropped or in a fill rectangle.
+  if (args.fixes && args.backgrounds?.length) {
+    const wrappers = Array.from(root.querySelectorAll('.pptx-preview-slide-wrapper'));
+    for (const fill of args.backgrounds) {
+      const bg = wrappers[fill.slide]?.querySelector('.slide-background') as HTMLElement | null;
+      if (!bg?.style.backgroundImage || bg.style.backgroundImage.includes('undefined')) continue;
+      try {
+        await placeBackground(bg, fill);
+      } catch (e) {
+        errors.push(`background of slide ${fill.slide + 1}: ${(e as Error).message}`);
+      }
+    }
+  }
 
   // Wait for what is still loading: pictures, fonts and (with a short grace) charts.
   await Promise.all(
@@ -518,4 +533,77 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
     return { x: r.left + window.scrollX, y: r.top + window.scrollY, width: r.width, height: r.height };
   });
   return { slides, styled, unstyled, errors, charts };
+}
+
+/**
+ * Places a background picture (pptx-preview's `.slide-background` box, the size of the slide) as `fill`
+ * says: tiles of the picture's own size from an aligned corner, mirrored every other tile when asked; or
+ * stretched over its fill rectangle, cropped. Lengths in `fill` are fractions of the slide. Runs inside the
+ * browser next to `pageMain`, like `takeMarkers`: it refers to nothing outside its own body.
+ */
+export async function placeBackground(bg: HTMLElement, fill: BackgroundFill): Promise<void> {
+  const W = bg.clientWidth;
+  const H = bg.clientHeight;
+  const st = bg.style;
+  const px = (v: number) => `${v.toFixed(3)}px`;
+  if (fill.tile) {
+    const t = fill.tile;
+    const w = t.w * W;
+    const h = t.h * H;
+    if (!(w > 0.5 && h > 0.5)) return;
+    let tw = w;
+    let th = h;
+    if (t.flip !== 'none') {
+      // One tile and its mirror images side by side make the repeating unit.
+      const url = /url\(["']?(.*?)["']?\)$/.exec(st.backgroundImage)?.[1];
+      if (url) {
+        const img = new Image();
+        img.src = url;
+        await img.decode();
+        const fx = t.flip !== 'y';
+        const fy = t.flip !== 'x';
+        // Drawn at the tile's size on screen (at least one pixel), and no larger than the slide's.
+        const cw = Math.max(1, Math.round(Math.min(w, W)));
+        const ch = Math.max(1, Math.round(Math.min(h, H)));
+        const canvas = document.createElement('canvas');
+        canvas.width = cw * (fx ? 2 : 1);
+        canvas.height = ch * (fy ? 2 : 1);
+        const g = canvas.getContext('2d');
+        if (g) {
+          for (const [mx, my] of [
+            [0, 0],
+            [1, 0],
+            [0, 1],
+            [1, 1],
+          ] as const) {
+            if ((mx && !fx) || (my && !fy)) continue;
+            g.setTransform(mx ? -1 : 1, 0, 0, my ? -1 : 1, mx ? 2 * cw : 0, my ? 2 * ch : 0);
+            g.drawImage(img, 0, 0, cw, ch);
+          }
+          st.backgroundImage = `url(${canvas.toDataURL()})`;
+          if (fx) tw = 2 * w;
+          if (fy) th = 2 * h;
+        }
+      }
+    }
+    st.backgroundRepeat = 'repeat';
+    st.backgroundSize = `${px(tw)} ${px(th)}`;
+    st.backgroundPosition = `${px(t.x * W)} ${px(t.y * H)}`;
+    return;
+  }
+  const r = fill.rect ?? { l: 0, t: 0, r: 0, b: 0 };
+  const c = fill.crop ?? { l: 0, t: 0, r: 0, b: 0 };
+  const rw = W * (1 - r.l - r.r);
+  const rh = H * (1 - r.t - r.b);
+  const iw = rw / (1 - c.l - c.r);
+  const ih = rh / (1 - c.t - c.b);
+  if (!(rw > 0 && rh > 0 && iw > 0 && ih > 0 && Number.isFinite(iw) && Number.isFinite(ih))) return;
+  st.backgroundRepeat = 'no-repeat';
+  st.backgroundSize = `${px(iw)} ${px(ih)}`;
+  st.backgroundPosition = `${px(W * r.l - c.l * iw)} ${px(H * r.t - c.t * ih)}`;
+  // What the crop leaves out stays out: only the fill rectangle shows the picture.
+  if (c.l > 0 || c.t > 0 || c.r > 0 || c.b > 0) {
+    const pct = (v: number) => `${(Math.max(0, v) * 100).toFixed(3)}%`;
+    st.clipPath = `inset(${pct(r.t)} ${pct(r.r)} ${pct(r.b)} ${pct(r.l)})`;
+  }
 }
