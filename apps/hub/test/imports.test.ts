@@ -225,6 +225,8 @@ describe('documents', () => {
     const pptx = fixtures.pptx(fx);
     if (!pptx) return; // python-pptx unavailable: nothing to generate a deck with
     const fd = new FormData();
+    // 'Pictures (LibreOffice)': the route's default is the native import (design/27 §2).
+    fd.append('renderer', 'libreoffice');
     fd.append('file', new Blob([readFileSync(pptx)]), 'Deck.pptx');
     const job = await ed.json<Job>('/import/document', { method: 'POST', body: fd });
     await hub.jobs.idle();

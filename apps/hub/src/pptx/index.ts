@@ -22,8 +22,16 @@ export class PptxImports {
     return enqueuePptx(this.deps.jobs, PPTX_JOBS.native, { hash, name, options });
   }
 
-  /** Queue 'Show PowerPoint picture' for a presentation (the route refuses it while it is locked). */
-  queueReference(presentationId: string, hash: string, by?: string): Job {
-    return enqueuePptx(this.deps.jobs, PPTX_JOBS.reference, { presentationId, hash, ...(by ? { by } : {}) });
+  /**
+   * Queue 'Show PowerPoint picture' for a presentation (the route refuses it while it is locked).
+   * `showPicture`: the slides switched to the picture (`PptxReferencePayload.showPicture`); absent: all.
+   */
+  queueReference(presentationId: string, hash: string, by?: string, showPicture?: string[]): Job {
+    return enqueuePptx(this.deps.jobs, PPTX_JOBS.reference, {
+      presentationId,
+      hash,
+      ...(by ? { by } : {}),
+      ...(showPicture ? { showPicture } : {}),
+    });
   }
 }

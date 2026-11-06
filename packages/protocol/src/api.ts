@@ -138,7 +138,11 @@ export type GoogleFontFamily = { family: string; category?: string; variants?: s
 /** POST /fonts/google { family } -> Job */
 /** POST /import/pro7 (multipart zip "file", or JSON { path }) -> Job */
 /** POST /import/songselect (multipart "file" or JSON { text, title? }) -> Presentation */
-/** POST /import/document (multipart pptx/pdf "file") -> Job whose result is { presentationId } */
+/**
+ * POST /import/document (multipart pptx/pdf "file"; optional fields "renderer" native|libreoffice|pptx-preview,
+ * native by default, and the native import's "extendBackgrounds", "transitionSounds" 1|0) -> Job: 'pptx-native'
+ * (editable slides, design/27) or 'document' (page pictures), whose result has { presentationId }.
+ */
 /** POST /presentations/:id/slides/:slideId/make-editable -> Presentation */
 /** GET /files/:hash -> bytes (range supported). Output/stage need ?token= or header. */
 /** POST /outputs/:id/token/rotate -> Output (with token) */

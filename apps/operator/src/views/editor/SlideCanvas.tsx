@@ -16,6 +16,7 @@ import { useCoarsePointer } from '../../components/pointer.ts';
 import { stillHash } from '../../services/thumbs.ts';
 import { change, selectObject, useEditor } from './editorStore.ts';
 import { updateObject } from './ops.ts';
+import { useOriginalOver } from './original.ts';
 import { snapBox } from './snapping.ts';
 import { objectToolsSpot, rotaterAngle } from './touchGeometry.ts';
 
@@ -251,6 +252,9 @@ export function SlideCanvas(props: {
       : undefined;
   const bg = imageFor(stillHash(props.backgroundMediaId ? props.media(props.backgroundMediaId) : undefined));
   const imported = slide.imported ? imageFor(stillHash(props.media(slide.imported.imageMediaId))) : undefined;
+  // 'Show original' (PptxSlideCard): the PowerPoint picture over the slide, to compare; it takes the pointer.
+  const originalId = useOriginalOver(slide);
+  const original = originalId ? imageFor(stillHash(props.media(originalId))) : undefined;
   const othersFor = useMemo(
     () => (id: string) => slide.objects.filter((o) => o.id !== id).map((o) => o.box),
     [slide.objects],
@@ -337,6 +341,26 @@ export function SlideCanvas(props: {
             anchorStroke="#3b82f6"
           />
         </Layer>
+        {original && (
+          <Layer scaleX={scale} scaleY={scale}>
+            <Shape
+              name="original"
+              sceneFunc={(context) => {
+                const ctx = context._context as CanvasRenderingContext2D;
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+                const full = { x: 0, y: 0, w: LOGICAL_WIDTH, h: LOGICAL_HEIGHT, rotation: 0 };
+                drawImageFit(ctx, original, full, 1, 'contain');
+              }}
+              hitFunc={(context, shape) => {
+                context.beginPath();
+                context.rect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+                context.closePath();
+                context.fillStrokeShape(shape);
+              }}
+            />
+          </Layer>
+        )}
       </Stage>
       {toolsAt && (
         <div
