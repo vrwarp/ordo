@@ -163,17 +163,44 @@ converter cannot read is a note, never an abort. Uses only `@ordo/pptx-scene`'s 
 
 Contracts: `tierOf(features): { tier, reasons }`, `slideFeatures(ctx): Set<string>`,
 `featuresOf(root, prefix, out)`, `classifySlide(ctx, elements, background): Classification`,
-`FALLBACK_FEATURES`, `TIER_BLOCKERS`. Feature names are the census's (design/27 "Why this design"):
-group, table, chart, smartart, ole, altcontent, connector, custGeom, gradFill, pattFill, video, vert, warp,
-3d, glow, reflection, softEdge, innerShdw, recolor, lum, artistic, bullet, rtl, superSub, tile, math, ink,
-mixedRuns, preset:other, pic:&lt;ext&gt;, crop, shadow, outline; decorations as `deco:<feature>`. Tiers:
-fallback when any of `FALLBACK_FEATURES`; else the first of T1-T4 whose `TIER_BLOCKERS` the slide avoids;
-else T5. Reasons are the features that block the tier below.
+`FALLBACK_FEATURES`, `TIER_BLOCKERS`; also `elementSupport(ctx, element, node)`, `refineSupport(ctx,
+elements)`, `artRange(elements)`, `slideCost`, `boundsOf`, `overlaps`, `MAX_SLIDE_OBJECTS` (150) and
+`MAX_SLIDE_PICTURES` (12). `Classification.art` (`ArtRange` in `ir.ts`) is set on hybrid slides.
 
-To do: the attribute features (`vert` other than horz, a real `prstTxWarp`, `rtl="1"`, a non-zero
-`baseline`, `a:srcRect` with a side set, a preset other than rect/roundRect/ellipse/line, `pic:<ext>` of
-emf/wmf/tif/tiff/wdp/hdp/bmp blips through the relationships), mixedRuns (explicit `a:rPr` that differ
-other than in lang, altLang, dirty, err, noProof, smtClean, kern, bmk), shadow (`a:outerShdw` in an
-`a:effectLst`), outline (`a:ln` in an `a:rPr`); per-element support; the slide class (native, hybrid
-with the art z-range, picture); size budgets (§3.4) later. Exit: the T1 share of shown worship slides is
-within ±3 points of the census (30.9 %).
+**Tiers** (the census of design/27 "Why this design"). Feature names: group, table, chart, smartart, ole,
+altcontent, connector, custGeom, gradFill, pattFill, video, vert, warp, 3d, glow, reflection, softEdge,
+innerShdw, recolor, lum, artistic, bullet, rtl, superSub, tile, math, ink, mixedRuns, preset:other,
+pic:&lt;ext&gt;, crop, shadow, outline. The slide's own shape tree (both `mc:AlternateContent` branches) gives
+all of them; the decorations it shows (non-placeholder layout shapes unless the slide has
+`showMasterSp="0"`, master shapes unless the layout has it too) give the `featuresOf` ones as
+`deco:<feature>` (cached per layout and master). Backgrounds are not part of the census. Tiers: fallback
+when any of `FALLBACK_FEATURES`; else the first of T1-T4 whose `TIER_BLOCKERS` the slide avoids; else T5.
+Reasons are the features that block the tier below; artistic, shadow and outline block nothing.
+
+The rules follow the census script, except where its regular expressions missed their own rule: mixedRuns
+compares the explicit run properties (attributes other than lang, altLang, dirty, err, noProof, smtClean,
+kern, bmk, in any order, plus child elements) of runs that have text, so a run without `a:rPr` equals one
+with neutral attributes only and whitespace inside the tag does not count; `crop` needs a non-zero side;
+`outline` is an `a:ln` inside an `a:rPr`; slides whose relationship ids do not start with `rId` are counted.
+
+**Support** per element (§5): the reader's verdict (walk: presets, fills; sheared children) merged with
+residual (chart, table, SmartArt, OLE, other graphic frames, maths, a bevel with a size or an extrusion,
+a warp other than `textNoShape`, text that is vertical, `numCol` > 1 or `anchorCtr` through the bodyPr
+chain, `.wdp`/`.hdp` pictures) and approx (reflection, inner shadow, soft edge on a picture, EMF/WMF
+waiting for conversion). The XML of an element is `ShapeElement.node` when the walk keeps it, else found
+by source and `cNvPr id` (alternate-content branches merged).
+
+**Class**: native without residual elements; hybrid with them: the art range [Rmin, Rmax] holds every
+residual and every other element of the range that an art element above it overlaps (top down; hidden
+elements and play videos never), with its bounding box; picture when the objects (a shape with fill or
+line and text counts two, the background and the art one each) exceed 150 or the distinct pictures exceed
+12 after the split. Reasons add `art:<residual reason>` and `budget:objects` / `budget:pictures`.
+
+Measured (shown worship slides, cumulative T1 / T1-T2 / T1-T3 / T1-T4 / T1-T5): on the census's own 280
+decks 31.9 / 73.2 / 87.7 / 92.5 / 95.8 % (census 30.9 / 73.3 / 87.6 / 92.5 / 95.8 %, n 4,922 against
+4,897); on the 268 worship decks of `validate/scores.jsonl` 21.5 / 52.7 / 81.0 / 87.4 / 92.7 % (the census
+script gives 20.3 / 52.7 / 81.0 / 87.4 / 92.7 % on the same decks: the set has more design templates).
+
+Still to do: the 64 KB slide JSON budget and the 4,096 path points (§3.4, M3/M6, once emission measures
+them); kerning and unknown transitions as approx (slide-level, M8); `artText` from `ArtRange.elements`
+(emission, M3).
