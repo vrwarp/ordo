@@ -1122,6 +1122,51 @@ describe('merged shapes (one object for z-adjacent shapes of one look)', () => {
     expect(MAX_PATH_CHARS).toBe(40_000);
   });
 
+  it('keeps a chain one path in the merged object: its pieces carry cont, and it is open only as a whole', () => {
+    // A traced outline stored as a chain (r1-custgeom-nest-bound): the outline is cut between two of its
+    // commands, so the second piece goes on without a move and holds the outline's close and the hole.
+    const chained = (tail: string): ShapeElement => ({
+      ...piece(7, 3, 0, 0, 0),
+      custom: {
+        paths: [
+          { d: 'M 0 0 L 10000 0 L 10000 10000', w: 10_000, h: 10_000 },
+          {
+            d: `L 0 10000 Z M 2000 2000 L 8000 2000 L 8000 8000 L 2000 8000${tail}`,
+            w: 10_000,
+            h: 10_000,
+            cont: true,
+          },
+        ],
+        points: 10,
+        text: [0, 0, 1, 1],
+        sites: [],
+        notes: [],
+      },
+    });
+    const a = shapePiece(chained(' Z'), s)!;
+    expect(a.paths.map((p) => p.cont)).toEqual([undefined, true]);
+    // The cut is not an open end: the chain closes every sub-path.
+    expect(a.open).toBe(false);
+    // An unclosed hole at the chain's end is.
+    expect(shapePiece(chained(''), s)!.open).toBe(true);
+    const b = piece(8, 4, 2 * IN, 0, 0);
+    const pb = shapePiece(b, s)!;
+    const box = { x: 0, y: 0, cx: 3 * IN, cy: IN };
+    const paths = mergedPaths(
+      [
+        { xf: chained(' Z').xf, piece: a },
+        { xf: b.xf, piece: pb },
+      ],
+      box,
+      s,
+    );
+    expect(paths.map((p) => p.cont)).toEqual([undefined, true, undefined]);
+    // The renderer joins the chain back into one path (one even-odd fill: the hole stays a hole).
+    const built = storedGeometry({ paths }, box.cx * s, box.cy * s)!;
+    expect(built.paths).toHaveLength(2);
+    expect(built.paths[0]!.cmds.filter((c) => c === CMD_MOVE)).toHaveLength(2);
+  });
+
   it('reads presets at the box and notes open outlines', () => {
     const shape = (geom: string): ShapeElement => ({
       kind: 'shape',

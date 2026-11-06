@@ -380,9 +380,12 @@ only tables (`budget:table`) and SmartArt drawings (`budget:smartart`) were ever
   and strokes path after path as separate shapes are drawn, and each path keeps its fill mode, so the
   object looks as the shapes do (in the harness, merged and apart differ in a few dozen anti-aliased edge
   pixels of a slide). The one order it changes is an open outline, which a geometry strokes after all its
-  paths: a shape with a fill and a line merges only when every stroked sub-path is closed by Z. Its legacy
-  shape is a `line` with the fill, as a thin custom geometry's: an older build draws no filled union
-  rectangle, only the line's midline when the shapes have an outline.
+  paths: a shape with a fill and a line merges only when every stroked sub-path is closed by Z. A traced
+  outline stored as a chain (`cont`; see the long paths of the geometry section) stays a chain in the object,
+  its later pieces marked `cont`, so the renderer joins them into the one path they were cut from; its open
+  ends are worked out over the chain, not where it was cut. Its legacy shape is a `line` with the fill, as
+  a thin custom geometry's: an older build draws no filled union rectangle, only the line's midline when
+  the shapes have an outline.
 - **Then elements without text go to the art** (`fitShapes`, reason `budget:shapes`, `art:budget:shapes`):
   shown pictures (not play videos) and shapes without text, not in a SmartArt drawing. First the fewest of
   the layout's and master's decorations, bottom first (a binary search: the art stays at the bottom and the

@@ -723,6 +723,8 @@ interface UnitPath {
   pts: number[];
   fill: GeomPath['fill'];
   stroke: boolean;
+  /** It continues the path before it (a chain's later piece, `ShapeGeom.paths[].cont`). */
+  cont?: boolean;
 }
 
 /** Coordinate pairs each path command takes. */
@@ -777,7 +779,13 @@ function buildPiece(e: ShapeElement, s: number): ShapePiece | undefined {
       const kx = p.w > 0 ? 1 / p.w : 0;
       const ky = p.h > 0 ? 1 / p.h : 0;
       const pts = parsed.pts.map((v, i) => v * (i % 2 === 0 ? kx : ky));
-      paths.push({ cmds: parsed.cmds, pts, fill: p.fill ?? 'norm', stroke: p.stroke !== false });
+      paths.push({
+        cmds: parsed.cmds,
+        pts,
+        fill: p.fill ?? 'norm',
+        stroke: p.stroke !== false,
+        ...(p.cont && paths.length ? { cont: true } : {}),
+      });
     }
   } else {
     if (e.geom === 'custom' || !hasPreset(e.geom)) return undefined;
@@ -812,20 +820,27 @@ function buildPiece(e: ShapeElement, s: number): ShapePiece | undefined {
   let y0 = Number.POSITIVE_INFINITY;
   let x1 = Number.NEGATIVE_INFINITY;
   let y1 = Number.NEGATIVE_INFINITY;
-  for (const p of paths) {
+  // A sub-path with a segment that no Z closes (one ending at its start counts as open: stricter than
+  // the drawer's tolerance, which depends on the box). A chain's pieces are one path: a sub-path cut
+  // between two pieces goes on in the next one, and the chain is stroked with its first piece's flag.
+  let segments = 0;
+  let stroke = false;
+  for (let k = 0; k < paths.length; k++) {
+    const p = paths[k]!;
     cmds = Math.max(cmds, p.cmds.length);
     coords = Math.max(coords, p.pts.length);
-    // A sub-path with a segment that no Z closes (one ending at its start counts as open: stricter than
-    // the drawer's tolerance, which depends on the box).
-    let segments = 0;
+    if (!p.cont) stroke = p.stroke;
     for (const c of p.cmds) {
       if (c === 'M') {
-        if (segments > 0 && p.stroke) open = true;
+        if (segments > 0 && stroke) open = true;
         segments = 0;
       } else if (c === 'Z') segments = 0;
       else segments++;
     }
-    if (segments > 0 && p.stroke) open = true;
+    if (!paths[k + 1]?.cont) {
+      if (segments > 0 && stroke) open = true;
+      segments = 0;
+    }
     for (let i = 0; i + 1 < p.pts.length; i += 2) {
       const [x, y] = apply(e.xf, p.pts[i]!, p.pts[i + 1]!);
       if (x < x0) x0 = x;
@@ -892,6 +907,7 @@ export function mergedPaths(
         h: H,
         ...(p.fill !== 'norm' ? { fill: p.fill } : {}),
         ...(p.stroke ? {} : { stroke: false }),
+        ...(p.cont ? { cont: true } : {}),
       });
     }
   return out;
