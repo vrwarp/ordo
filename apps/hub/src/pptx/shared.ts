@@ -6,6 +6,7 @@
  * Every map in a payload is an array of pairs (design/27 §12 "Prototype safety"): job payloads are JSON and
  * their keys come from deck strings (part names). Part names are at most `PPTX_LIMITS.partName` characters.
  */
+import type { SceneFontFile } from './faces.ts';
 import type { ExtractedText, ImageObject } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import type { ArtInfo, ConvertResult, SlideClass } from '@ordo/pptx-scene';
@@ -268,6 +269,11 @@ export type SceneTaskInput = {
    * (`ParseOptions.mediaKind`; pptxgenjs writes sounds under `a:videoFile`).
    */
   mediaKinds?: [string, 'video' | 'audio'][];
+  /**
+   * The library's font faces, read by the worker when a table's text is measured (`faces.ts`; design/27
+   * §15 M6: a row grows to its text). Absent: widths are estimated.
+   */
+  fonts?: SceneFontFile[];
 };
 export type SceneTaskOutput = {
   result: ConvertResult;

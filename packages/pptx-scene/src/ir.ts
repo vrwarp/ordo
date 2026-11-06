@@ -418,7 +418,51 @@ export interface ResidualElement extends ElementBase {
   adj?: [string, number][];
 }
 
-export type Element = ShapeElement | PictureElement | ResidualElement;
+/**
+ * A table (`a:tbl` in a `p:graphicFrame`, M6; `tables.ts`): a grid of cells, each with its fill and text,
+ * and the lines along the grid. Geometry is in table space: `xf` maps the whole grid (the sum of `cols`
+ * by the sum of `rows`) to the slide. A table read as residual is a `ResidualElement` ('table').
+ */
+export interface TableElement extends ElementBase {
+  kind: 'table';
+  /** Column widths and row heights in EMU; rows are as tall as their text needs (`tables.ts`). */
+  cols: Emu[];
+  rows: Emu[];
+  /** The fill behind every cell (`a:tblPr`'s own fill, else the style's `a:tblBg`). */
+  background?: Fill;
+  /** The cells drawn, row by row: each merge once, at its first cell. */
+  cells: TableCell[];
+  /** The lines along the grid, consecutive pieces of the same look joined. */
+  lines: TableLine[];
+  /** The ordo objects the table emits (`classify.ts` `slideCost`). */
+  objects: number;
+}
+
+/** One drawn cell of a table: a merge counts once. */
+export interface TableCell {
+  row: number;
+  col: number;
+  /** Rows and columns it spans (`rowSpan`, `gridSpan`), at least 1, inside the grid. */
+  rows: number;
+  cols: number;
+  /** Its fill, the table style and the cell's own resolved (none: the background shows). */
+  fill: Fill;
+  /** Its text: margins as `insets`, `anchor`; shrinks to fit (`autofit`); no visible text is an empty box. */
+  text: TextBody;
+}
+
+/** A border line along the grid: a row edge (`h`, edge `at` from column edge `from` to `to`) or a column edge. */
+export interface TableLine {
+  dir: 'h' | 'v';
+  /** The row edge (0 = top) of an `h` line, the column edge (0 = left) of a `v` line. */
+  at: number;
+  /** Where it starts and ends, in edges across it. */
+  from: number;
+  to: number;
+  line: Line;
+}
+
+export type Element = ShapeElement | PictureElement | ResidualElement | TableElement;
 
 // ── Slides and the deck ─────────────────────────────────────────────────────────────────────────────────
 

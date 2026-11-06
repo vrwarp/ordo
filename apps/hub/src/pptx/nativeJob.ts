@@ -76,6 +76,7 @@ import { errorMessage } from '../errors.ts';
 import type { JobCtx, JobHandler } from '../jobs.ts';
 import { baseName } from '../media/service.ts';
 import { type CpuPool, cpuPool, transferables, WorkerStartError } from '../pool.ts';
+import { sceneFontFiles } from './faces.ts';
 import { type ClipFile, ClipImport, spillClips } from './clips.ts';
 import { type DeckXml, readDeckXml, spillDeckParts } from './deckParts.ts';
 import { displayNeeds, PictureBudget, type PictureItem, storePictures } from './pictures.ts';
@@ -515,6 +516,8 @@ class NativeImport {
     for (const [k, v] of parts) if (!own.has(k) && !NOTES_PART.test(k)) shared.set(k, v);
     const n = listed.length;
     const step = this.limits.batchSlides;
+    // Table rows grow to their text, measured with the library's faces (read by the worker as needed).
+    const fonts = sceneFontFiles(this.deps.lib.listFonts(), (p) => this.deps.store.abs(p));
     for (let from = 0; from < n; from += step) {
       this.checkCancelled();
       const to = Math.min(n, from + step);
@@ -548,7 +551,7 @@ class NativeImport {
       }
       try {
         const r = await this.scene(
-          { parts: batch, pictureSizes, range: { from, to }, options: this.options, mediaKinds },
+          { parts: batch, pictureSizes, range: { from, to }, options: this.options, mediaKinds, fonts },
           transferables(mine),
         );
         // Every batch must list the deck as the scan did, or its indexes would name other slides.

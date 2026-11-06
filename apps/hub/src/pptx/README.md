@@ -24,6 +24,7 @@ POST /import/document  (423 while live, ≤ 1 GiB, zip + .pptx sniff, stored by 
      2 pool 'pptx-scene' (sceneTask.ts → convertDeck), batches ≤ 150 slides (slide parts transferred, shared
        parts copied), 2 min per batch, ≤ 15 min of pool time per import                                        [B, A]
        clip parts (SceneScan.clips, ≤ 50) spilled after the pictures, sniffed: the batches get their kinds      [w2 A]
+       the library's font files listed (faces.ts, ≤ 2,000): a batch reads one when a table row is measured    [M6]
      3 classification and size budgets (@ordo/domain planImportSizes): over budget → picture class (logged)    [B]
      3b clips ─► clipForFile (hash + trim, trims baked), media job not queued yet; placeholders replaced     [w2 A]
      4 any hybrid/picture/metafile slide: enqueue heavy 'pptx-lo' now, before any clip job                     [B]
@@ -58,6 +59,7 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 | `index.ts`          | `PptxImports`: registers the jobs, `queueNative`, `queueReference` (`imports.pptx`)        | shared |
 | `nativeJob.ts`      | The light `pptx-native` job, steps 1-6                                                     | B      |
 | `sceneTask.ts`      | Worker side of `pptx-scene`: one batch through `convertDeck` (working pass-through)        | B      |
+| `faces.ts`          | The library's faces for `pptx-scene` (M6 tables: rows grow to their text), read on demand  | M6     |
 | `report.ts`         | `PptxNativeResult` for the import card, `source.log`, `logSafe`                            | B      |
 | `mediaParts.ts`     | `mediaForFile`: the generalised `mediaFor`, through the media hash index; `clipForFile`    | C      |
 | `clips.ts`          | `spillClips` (spill and sniff), `ClipImport` (store clips, replace their placeholders)     | w2 A   |

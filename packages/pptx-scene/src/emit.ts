@@ -52,6 +52,8 @@
  * - **Video and sound** (`media.ts`): the first slide video plays in its poster's box (`ImageObject.play`),
  *   the first slide sound is `Slide.audio`, a looping muted full-slide video is the slide's motion background
  *   (`backgroundMediaId`); clips carry `pptxmedia:clip<n>` placeholders, listed in `EmittedSlide.clips`.
+ * - **Tables** (M6, `tables.ts` `emitTable`): locked grid shapes (background, cell fills, lines) and one rich
+ *   `TextObject` per cell, in one group; a table classed residual emits nothing (LibreOffice's art).
  * - **Lyric box** (design/27 §4 "Church mappings"): the slide's own body placeholder with the most
  *   characters; else the largest other text by characters × area (not title, date, footer, slide number);
  *   the title only when it is the only text. On a bilingual slide (the two boxes with the most text in
@@ -102,12 +104,14 @@ import type {
   Shadow,
   ShapeElement,
   SlideScene,
+  TableElement,
   TextBody,
 } from './ir.ts';
 import { EMU_PER_PT } from './ir.ts';
 import { noteList } from './log.ts';
 import { scriptClasses } from './fontmap.ts';
 import { richText } from './richtext.ts';
+import { emitTable } from './tables.ts';
 
 /** The prefix of placeholder media ids. */
 export const MEDIA_PREFIX = 'pptxmedia:';
@@ -560,7 +564,41 @@ function emitElement(ctx: EmitCtx, e: Element, out: SlideObject[], texts: Emitte
     emitPicture(ctx, e, out);
     return;
   }
+  if (e.kind === 'table') {
+    emitTableOf(ctx, e, out);
+    return;
+  }
   emitShape(ctx, e, out, texts);
+}
+
+/**
+ * A table (`tables.ts`): its cells' text is rich text in the slide's budget like any other (written plain
+ * past it), drawn with the harness's LibreOffice policies when asked; the legacy text emission has no
+ * table of its own and writes the same cells.
+ */
+function emitTableOf(ctx: EmitCtx, e: TableElement, out: SlideObject[]): void {
+  const texts = emitTable(
+    {
+      frame: ctx.frame,
+      newId: ctx.newId,
+      log: ctx.log,
+      color: legacyColor,
+      cellText: (body) =>
+        richText(body, {
+          frame: ctx.frame,
+          log: ctx.log,
+          ...(ctx.lo ? { lo: true } : {}),
+          ...(ctx.textBytes > MAX_SLIDE_BYTES ? { plain: true } : {}),
+        }),
+    },
+    e,
+    out,
+  );
+  for (const o of texts) {
+    if (ctx.textBytes > MAX_SLIDE_BYTES) break;
+    ctx.textBytes += utf8Bytes(JSON.stringify(o));
+    if (ctx.textBytes > MAX_SLIDE_BYTES) ctx.log(SLIDE_BUDGET_NOTE);
+  }
 }
 
 function emitPicture(ctx: EmitCtx, e: PictureElement, out: SlideObject[]): void {

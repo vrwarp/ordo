@@ -22,6 +22,7 @@ import { readNotes } from '@ordo/pptx-scene/notes.ts';
 import { openPackage, type Package, relType } from '@ordo/pptx-scene/opc.ts';
 import { extensionOf, METAFILE_EXTENSIONS } from '@ordo/pptx-scene/picture.ts';
 import { readSlideTransition, showLoops } from '@ordo/pptx-scene/transition.ts';
+import { libraryFaces } from './faces.ts';
 import {
   PPTX_LIMITS,
   type SceneScan,
@@ -41,6 +42,7 @@ export function sceneTask(input: SceneTaskInput): SceneTaskOutput {
     range: input.range,
     pictureSize: (part) => sizes.get(part),
     mediaKind: (part) => kinds.get(part),
+    ...(input.fonts?.length ? { fontFace: libraryFaces(input.fonts) } : {}),
     extendBackgrounds: input.options.extendBackgrounds ?? true,
     transitionSounds: input.options.transitionSounds ?? false,
     newId,

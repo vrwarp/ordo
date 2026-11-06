@@ -299,7 +299,10 @@ export const ObjectOrigin = z.object({
   shapeId: z.number().int().min(0).max(2_147_483_647).optional(),
   /** 'title' | 'body' | 'body:2' | 'subTitle' ... */
   ph: z.string().max(40).optional(),
-  /** title|body|text|picture|shape|bg|deco|poster|cell|art (a string: the list can grow) */
+  /**
+   * title|body|text|picture|shape|bg|deco|poster|cell|grid|art (a string: the list can grow). cell: a
+   * table cell's text; grid: a table's locked fills and lines.
+   */
   role: z.string().max(20).optional(),
   /** A flattened group or a shape+text pair: selected together. */
   group: z.number().int().min(0).max(100_000).optional(),

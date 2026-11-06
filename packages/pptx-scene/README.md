@@ -154,6 +154,73 @@ scored both times): with this converter alone, whose renderer still ignores the 
 LibreOffice and whose extra objects pass the renderer's 200-object clamp in the harness, and one table slide
 by 0.014). Tier means with both: T1 0.945, T2 0.846, T3 0.873. The sermon decks stay 0.953.
 
+## M6 wave 2: tables (`tables.ts`, `tablestyles.ts`, `metrics.ts`)
+
+A table (`a:tbl` in a `p:graphicFrame`, design/27 §15 M6, §11 "Mapping") becomes one editable rich
+`TextObject` per cell (role `cell`) over locked grid shapes (role `grid`: the table's background, the cell
+fills, the lines), all sharing the table's `origin.group` (the top-level group's when the table is nested).
+Only today's shape fields are written (solid fills, a gradient's first stop; lines as `line` shapes, dashed
+ones solid), so an older build draws the table as this one does. IR: `TableElement` (`ir.ts`); the walk
+reads it through `readTable`, `emit.ts` writes it through `emitTable`.
+- **Residual.** A table of more than `MAX_TABLE_CELLS` (60) grid cells, or with vertical cell text, stays a
+  `ResidualElement` ('table'): LibreOffice draws it into the art. So does a native table that would take its
+  slide past the 150 objects of design/27 §5 (`classify.ts` `fitTables`, the table with the most objects
+  first, reason `budget:table`), so the slide becomes hybrid, not picture; the art's text then holds the
+  table's cells (`hybrid.ts`).
+- **Grid and merges.** Column widths from `a:tblGrid`, one `a:tc` per grid column; `gridSpan`/`rowSpan`
+  merge (cut at the grid), the cells they cover (`hMerge`, `vMerge`) are not drawn; a short row's missing
+  cells are empty cells.
+- **Styles.** `a:tableStyleId` names a style of `ppt/tableStyles.xml` (indexed once per deck), else one of
+  PowerPoint's 74 built-in styles (`tablestyles.ts`, a port of LibreOffice's
+  `oox/source/drawingml/table/predefined-table-styles.cxx` under the MPL 2.0, kept in its own file with its
+  header; it returns the `a:tblStyle` element PowerPoint would have written, so both are read by the same
+  code). Two changes from LibreOffice's table, where it differs from PowerPoint's own definitions: every line
+  is 1 pt (LibreOffice leaves most widths at 0, which draws nothing) and the first/last row and column are
+  bold (LibreOffice: Light Style 1 only). Parts apply in `CT_TableStyle` order, later ones overriding: whole
+  table, row bands (`bandRow`, from the first body row), column bands, last column, first column, last
+  row, first row, corner cells. Fills (`a:fill`, `a:fillRef`), the text style (`a:tcTxStyle`: `b`, `i`, a
+  colour, `a:font`/`a:fontRef` typefaces; in the cell text's chain after the cell's own list style, before
+  `defaultTextStyle`: `readTextBody`'s new `styled` argument), and lines by region (a part's
+  `left`/`right`/`top`/`bottom` are its region's outline, `insideH`/`insideV` the edges inside it). The table's
+  own fill (`a:tblPr`), else the style's `a:tblBg`, is drawn behind the cells.
+- **Lines.** A cell's `a:lnL`/`a:lnR`/`a:lnT`/`a:lnB` override the style's line property by property (as
+  LibreOffice merges them); where two cells give a shared edge different lines the wider wins, the upper or
+  left one on a tie, a line beats none (LibreOffice's `TableLayouter`). No line inside a merge. Consecutive
+  pieces of one look are one object, stretched over the lines they meet so corners close. Diagonal lines are
+  not drawn (noted, the table approx, reason `tableDiagonal`).
+- **Cells.** Margins `marL`/`marR` (91,440) and `marT`/`marB` (45,720 EMU) become the text's `insets`,
+  `anchor` its `valign`; the text wraps and shrinks to fit (`autofit: 'shrink'`, no stored scale) when the
+  drawing finds it overflows. An empty cell is an empty text object (to type into) in its end mark's style.
+- **Rows grow** to their text: a row is as tall as its stored `h` or its tallest cell's text plus margins,
+  whichever is more (a merge's extra height goes to its last row). The text is measured in the office line
+  model with the advances of the faces the fonts draw it with (`ParseOptions.fontFace`: the run's family,
+  its metric substitute, its script's fallback, ordo's default face; `metrics.ts` reads `cmap`, `hmtx`,
+  `hhea` and `head` from a TrueType/OpenType file or a collection's face, bounded), greedy breaking at
+  spaces and around East Asian characters; a family with no face is measured with conservative estimated
+  widths (noted). A cell's lines are spaced by its face's line height (`FaceMetrics.lineHeight`, `hhea`
+  ascender less descender: Carlito 1.22, Liberation Sans 1.12 of the size), a proportional spacing scaled
+  by it over the office model's 1.2: measured with a probe deck, LibreOffice 24.2 sets a cell's lines of
+  Liberation Sans 1.115 apart and Carlito's 1.215-1.225 (6 to 20 pt), and PowerPoint's new rows of 18 pt
+  Calibri are 29.2 pt (22 pt and the margins).
+- **Callers.** The hub's `pptx-scene` task gets the library's face files (`apps/hub/src/pptx/faces.ts`,
+  WOFF and WOFF2 through `fonts/sfnt.ts` `metricTables`), read only when a table asks for a family; the
+  fidelity harness gives fontconfig's file of each family (`tools/pptx-fidelity/src/faces.ts`), the face its
+  page draws with.
+
+Measured (`--engine native --lo-compat`, the validation suite's 30 worship decks with tables, LibreOffice
+24.2 pictures; deck means with LibreOffice's policies / ordo's): tables 0.605 / 0.602 against 0.535 / 0.533
+with tables residual (pptx-preview 0.51), tableMerge 0.431 / 0.431 against 0.351 (pptx-preview 0.36); with
+LibreOffice's pixels pasted into each hybrid slide's art box (the harness draws no art) 0.723 and 0.638.
+Most of the remaining gap is dense charts of 6-9 pt text, where a line wrapped one character apart or rows
+1-2 % off move every row below: design/27 §15 M6 "As built".
+
+Tests: `tables.test.ts` (grid and objects, groups, merges, the deck's and built-in styles, flags,
+backgrounds, line precedence and merging, diagonals, row growth with a fixed-advance face, line heights,
+paragraph spacing, estimated widths, the substitute chain, the residual and budget rules, the 74 built-in
+styles), `metrics.test.ts` (crafted fonts: format 4 and 12 cmaps, collections, truncated and hostile files),
+`apps/hub/test/pptx-faces.test.ts`.
+
+## Module map
 
 | File            | What                                                                                                              | Owner  |
 | --------------- | ----------------------------------------------------------------------------------------------------------------- | ------ |
@@ -178,6 +245,8 @@ by 0.014). Tier means with both: T1 0.945, T2 0.846, T3 0.873. The sermon decks 
 | `transition.ts` | `readTransition`, `readSlideTransition` (a slide's tail only), `showLoops` (`p:showPr loop`)                      | M3 B   |
 | `timing.ts`     | `readSlideTiming`: the `p:timing` mapping of clips, transition and animation sounds; `gainDbOf`                   | M3b A  |
 | `media.ts`      | `readMediaRef` (a poster's clip, trim, kind), `emitMedia` (play, slide sound, motion background), `EmittedClip`   | M3b A  |
+| `tables.ts`     | `readTable`, `emitTable`, `Measure`: tables (M6); `tablestyles.ts`: the built-in styles (LibreOffice's, MPL 2.0)  | M6b C  |
+| `metrics.ts`    | `sfntMetrics`, `metricsOfTables`, `FaceSource`: advances and line heights from font files, bounded                | M6b C  |
 | `ir.ts`         | The scene IR (types only)                                                                                         | shared |
 | `context.ts`    | `SlideCtx`, `slideContext`                                                                                        | shared |
 | `log.ts`        | `clean`, `noteList`                                                                                               | shared |

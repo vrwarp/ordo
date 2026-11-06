@@ -18,6 +18,8 @@
  *   (`boxAffine`), as LibreOffice places it: PowerPoint has no shear (ungrouping turns every child back into
  *   a box and a rotation). A child the plain composed affine would shear (rotated in a group scaled
  *   unevenly) is still marked residual (design/27 §4), and drawn so in M1.
+ * - Graphic frames are residual (charts, SmartArt, OLE), except tables, which `tables.ts` reads (M6): each
+ *   table's objects form a group of their own, or join the top-level group they are in.
  *
  * Owned by work item C (inherit-emit).
  */
@@ -42,6 +44,7 @@ import type { Affine, Element, ElementBase, Fill, Line, ShapeElement, Support } 
 import { chooseAlternate } from './markup.ts';
 import { customPaths, knownPreset, MAX_SLIDE_PATH_POINTS, placeConnectors, readCxnRef } from './geom.ts';
 import { blipReader, blipReaderOf, readPicture } from './picture.ts';
+import { readTable } from './tables.ts';
 import { readShadow, readTextBody, textChars } from './text.ts';
 import { child, num, path, type XNode } from './xml.ts';
 
@@ -318,6 +321,12 @@ export function walkTree(
       }
       case 'p:graphicFrame': {
         const what = graphicKind(path(el, 'a:graphic', 'a:graphicData')?.attrs.uri ?? '');
+        if (what === 'table') {
+          // Drawn natively (M6, `tables.ts`): its objects are one group, the top-level group's when nested.
+          const own = { ...base, group: group ?? ++st.groups };
+          st.out.push(readTable(ctx, el, own, (cx, cy) => boxAffine(map, { ...place, cx, cy })));
+          break;
+        }
         st.out.push({ ...base, kind: 'residual', what, support: 'residual', reasons: [what] });
         break;
       }

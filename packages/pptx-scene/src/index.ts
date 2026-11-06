@@ -24,6 +24,7 @@ import type { DeckScene, Frame, SectionInfo, SlideScene } from './ir.ts';
 import { clean, type Log, noteList } from './log.ts';
 import { openPackage, type PartSource } from './opc.ts';
 import { readSlideSounds } from './media.ts';
+import type { FaceMetrics, FaceSource } from './metrics.ts';
 import type { PictureHeader } from './picture.ts';
 import { readSlideTiming } from './timing.ts';
 import { walkSlide } from './walk.ts';
@@ -37,6 +38,13 @@ export type { EmittedClip } from './media.ts';
 export { type PictureHeader, pictureSize } from './picture.ts';
 export * from './ir.ts';
 export type { Log } from './log.ts';
+export {
+  type FaceMetrics,
+  type FaceSource,
+  metricsOfTables,
+  type SfntTables,
+  sfntMetrics,
+} from './metrics.ts';
 export type { Package, PartSource, Rel } from './opc.ts';
 export type { Theme } from './theme.ts';
 
@@ -65,6 +73,36 @@ export interface ParseOptions {
    * element and the slide's timing decide.
    */
   mediaKind?: (part: string) => 'video' | 'audio' | undefined;
+  /**
+   * The font face of a family in a weight and slant, as the caller's fonts would draw it (M6 tables: a row is
+   * as tall as its text, measured with the faces' advances; `metrics.ts` `sfntMetrics` reads a font file).
+   * Asked at most once per family, weight and slant, and for at most `MAX_FACE_LOOKUPS` of them per call; a
+   * family it has no face for is undefined, and its text is measured with estimated widths (noted).
+   */
+  fontFace?: FaceSource;
+}
+
+/** Families, weights and slants `ParseOptions.fontFace` is asked for per call (a deck can name thousands). */
+export const MAX_FACE_LOOKUPS = 256;
+
+/** `ParseOptions.fontFace` asked once per family, weight and slant (case-insensitive), its answer checked. */
+function faceSources(get: FaceSource | undefined): FaceSource | undefined {
+  if (!get) return undefined;
+  const known = new Map<string, FaceMetrics | undefined>();
+  return (family, bold, italic) => {
+    const key = `${family.trim().toLowerCase()}|${bold ? 1 : 0}|${italic ? 1 : 0}`;
+    if (known.has(key)) return known.get(key);
+    if (known.size >= MAX_FACE_LOOKUPS) return undefined;
+    let v: FaceMetrics | undefined;
+    try {
+      const got = get(family, bold, italic);
+      v = got && typeof got.advance === 'function' ? got : undefined;
+    } catch {
+      v = undefined; // a face the caller cannot read is missing
+    }
+    known.set(key, v);
+    return v;
+  };
 }
 
 /** `ParseOptions.mediaKind` asked once per part, its answer checked. */
@@ -143,6 +181,7 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
   const frame = frameOf(deck.size.cx, deck.size.cy);
   const pictureSize = pictureSizes(opts.pictureSize);
   const mediaKind = mediaKinds(opts.mediaKind);
+  const fontFace = faceSources(opts.fontFace);
   const range = opts.range;
   const refs = range ? deck.slides.filter((r) => r.index >= range.from && r.index < range.to) : deck.slides;
   const readSlide = (ref: SlideRef): SlideScene => {
@@ -158,6 +197,7 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
       const ctx = slideContext(pkg, deck, frame, ref, slideLog, {
         ...(pictureSize ? { pictureSize } : {}),
         ...(mediaKind ? { mediaKind } : {}),
+        ...(fontFace ? { fontFace } : {}),
       });
       // Clip timing is read before the shape tree, which attaches it to each poster (`media.ts`).
       ctx.timing = readSlideTiming(ctx.slide);
