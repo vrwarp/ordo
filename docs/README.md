@@ -71,6 +71,7 @@ an ADR.
 | [review-2026-11-05-pro7.md](review-2026-11-05-pro7.md)                       | The ProPresenter importer against files ProPresenter wrote: dropped pictures, wrong playlist links, 20 fixes         |
 | [design/25-isolation-and-hardening.md](design/25-isolation-and-hardening.md) | Worker isolation, supervision, validation and quarantine; phased plan                                                |
 | [design/26-pages-demo.md](design/26-pages-demo.md)                           | The GitHub Pages demo: the apps with a service-worker hub, ProPresenter import in the browser                        |
+| [design/27-pptx-native-renderer.md](design/27-pptx-native-renderer.md)     | Native PowerPoint slides: editable ordo objects, own text engine, video in place, LibreOffice per-slide fallback     |
 
 ## Glossary
 
