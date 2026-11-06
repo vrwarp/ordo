@@ -104,6 +104,8 @@ export interface PictureFill {
   alpha?: number;
   /** Recolouring or effects on the blip (duotone, clrChange, grayscl, biLevel, lum, …): their element names. */
   effects?: string[];
+  /** The picture's size in pixels, read from its header when the part's bytes were present (not spilled). */
+  px?: { w: number; h: number };
 }
 
 export interface Line {
@@ -245,6 +247,11 @@ export interface ShapeElement extends ElementBase {
   text?: TextBody;
   /** The XML node, for later milestones (custom geometry, effects). Do not keep it past emission. */
   node?: XNode;
+  /**
+   * Custom geometry only: the share of the box its paths fill (0-1, curves taken by their end points),
+   * when every point could be read. M1 draws the legacy rect only when most of the box is filled.
+   */
+  coverage?: number;
 }
 
 /** A `p:pic` (or a picture placeholder filled with one). */
@@ -256,6 +263,8 @@ export interface PictureElement extends ElementBase {
   line?: Line;
   /** Media the picture is the poster of (`a:videoFile`, `a:audioFile`, `p14:media`): M5. */
   media?: { kind: 'video' | 'audio'; part?: string; external?: string };
+  /** `a:avLst` guide values of the clip geometry (a roundRect's corner), as `ShapeElement.adj`. */
+  adj?: [string, number][];
 }
 
 /** Something ordo does not draw natively (chart, table, SmartArt, OLE, maths, ink, 3D, …). */

@@ -1,15 +1,37 @@
 /**
  * Pictures: `p:pic` and every `a:blipFill` (design/27 §4 "Pictures").
  *
- * Owned by work item C (inherit-emit). The scaffold resolves the blip's part and reads srcRect, fillRect,
- * tile and alphaModFix. Still to do: `svgBlip` → its PNG fallback, `a14:imgProps` layers drawn as is,
- * recolour effects listed for M3, metafiles (EMF/WMF) noted for LibreOffice, external (linked) pictures
- * logged with their host, video/audio posters (M5).
+ * - The blip's part is resolved through the relationships of the part that holds the XML (slide, layout,
+ *   master or theme). `a:blip r:embed` is the raster: an `asvg:svgBlip` beside it is ignored (its PNG
+ *   fallback is drawn) and an `a14:imgProps` layer is PowerPoint's already-corrected result, drawn as is.
+ * - Linked (External) pictures are never fetched: logged with their host only.
+ * - EMF/WMF are residual (LibreOffice converts them in M3); other formats a browser cannot decode are noted.
+ * - When a picture part's bytes are present (not spilled), its pixel size is read from the header (PNG,
+ *   JPEG, GIF, BMP, WebP), so a background whose aspect differs from the slide is not cover-fitted.
+ * - Video and audio posters (`a:videoFile`, `a:audioFile`, `p14:media`) keep their poster; the media is
+ *   recorded for M5.
+ *
+ * Owned by work item C (inherit-emit).
  */
 import type { BlipReader } from './color.ts';
 import { partOf, type SlideCtx, type Source } from './context.ts';
-import type { Insets, PictureElement, PictureFill } from './ir.ts';
-import { child, num, type XNode } from './xml.ts';
+import { chainOf, geometryOf } from './inherit.ts';
+import type { ElementBase, Insets, PictureElement, PictureFill, ResidualElement } from './ir.ts';
+import { externalHost } from './opc.ts';
+import { child, num, path, type XNode } from './xml.ts';
+
+/** Picture formats LibreOffice converts (M3): drawn by nothing in a browser, residual until then. */
+export const METAFILE_EXTENSIONS: ReadonlySet<string> = new Set(['emf', 'wmf', 'emz', 'wmz', 'pict', 'pct']);
+/** Raster formats a browser does not decode: picture preparation converts them (M3). */
+export const PREPARED_EXTENSIONS: ReadonlySet<string> = new Set(['tif', 'tiff', 'wdp', 'hdp', 'jxr']);
+
+/** Blip children that are not recolouring or effects. */
+const NOT_EFFECTS = new Set(['#text', 'a:alphaModFix', 'a:extLst']);
+
+/** A blip effect that changes nothing: `<a:lum/>` without brightness or contrast (PowerPoint writes it often). */
+function noOp(fx: XNode): boolean {
+  return fx.name === 'a:lum' && !num(fx.attrs.bright) && !num(fx.attrs.contrast);
+}
 
 /** `a:srcRect`/`a:fillRect` fractions; undefined when absent or all zero. */
 export function readInsets(n: XNode | undefined): Insets | undefined {
@@ -22,14 +44,25 @@ export function readInsets(n: XNode | undefined): Insets | undefined {
   return out.l || out.t || out.r || out.b ? out : undefined;
 }
 
+/** The lower-case extension of a part name ('' when none). */
+export function extensionOf(part: string): string {
+  const slash = part.lastIndexOf('/');
+  const dot = part.lastIndexOf('.');
+  return dot > slash ? part.slice(dot + 1).toLowerCase() : '';
+}
+
 /** An `a:blipFill` of the part `source` as a picture fill, or undefined when its picture is missing. */
 export function readBlipFill(ctx: SlideCtx, blipFill: XNode, source: string): PictureFill | undefined {
   const blip = child(blipFill, 'a:blip');
-  const id = blip?.attrs['r:embed'];
+  const id = blip?.attrs['r:embed'] ?? blip?.attrs['r:link'];
   if (!blip || !id) return undefined;
   const rel = ctx.pkg.rel(source, id);
   if (!rel || rel.external || !ctx.pkg.has(rel.target)) {
-    ctx.log(rel?.external ? 'a linked picture was not imported' : 'a picture part is missing');
+    ctx.log(
+      rel?.external
+        ? `a linked picture (${externalHost(rel.target)}) was not imported`
+        : 'a picture part is missing',
+    );
     return undefined;
   }
   const out: PictureFill = { part: rel.target };
@@ -44,37 +77,133 @@ export function readBlipFill(ctx: SlideCtx, blipFill: XNode, source: string): Pi
       ty: num(tile.attrs.ty) ?? 0,
       sx: (num(tile.attrs.sx) ?? 100_000) / 100_000,
       sy: (num(tile.attrs.sy) ?? 100_000) / 100_000,
-      flip: tile.attrs.flip ?? 'none',
-      algn: tile.attrs.algn ?? 'tl',
+      flip: (tile.attrs.flip ?? 'none').slice(0, 10),
+      algn: (tile.attrs.algn ?? 'tl').slice(0, 10),
     };
   const alpha = num(child(blip, 'a:alphaModFix')?.attrs.amt);
   if (alpha !== undefined) out.alpha = Math.min(1, Math.max(0, alpha / 100_000));
-  const effects = blip.children
-    .filter((c) => c.name !== '#text' && c.name !== 'a:alphaModFix')
-    .map((c) => c.name);
-  if (effects.length) out.effects = effects;
+  const effects = blip.children.filter((c) => !NOT_EFFECTS.has(c.name) && !noOp(c)).map((c) => c.name);
+  if (effects.length) out.effects = effects.slice(0, 16);
+  const bytes = ctx.pkg.bytes(rel.target);
+  const px = bytes?.length ? pictureSize(bytes) : undefined;
+  if (px) out.px = px;
   return out;
 }
 
 /**
  * A `p:pic` as a picture element, given the fields every element shares (placement, identity, chain), or
- * undefined when its picture cannot be found (logged).
+ * undefined when its picture cannot be found (logged). A metafile is a residual element (M3 converts it).
  */
 export function readPicture(
   ctx: SlideCtx,
   el: XNode,
-  base: Omit<PictureElement, 'kind' | 'picture' | 'geom'>,
-): PictureElement | undefined {
+  base: ElementBase,
+): PictureElement | ResidualElement | undefined {
   const source = partOf(ctx, base.from);
   const blipFill = child(el, 'p:blipFill');
   const picture = blipFill && source !== undefined ? readBlipFill(ctx, blipFill, source) : undefined;
   if (!picture) return undefined;
-  const geom = child(child(el, 'p:spPr'), 'a:prstGeom')?.attrs.prst ?? 'rect';
-  return { ...base, kind: 'picture', picture, geom };
+  const ext = extensionOf(picture.part);
+  if (METAFILE_EXTENSIONS.has(ext)) {
+    ctx.log(`a ${ext} picture is not drawn yet (LibreOffice converts it in M3)`);
+    return { ...base, kind: 'residual', what: 'metafile', support: 'residual', reasons: [`pic:${ext}`] };
+  }
+  // A picture placeholder takes its clip geometry from the layout or master when it has none.
+  const { geom, adj } = geometryOf(chainOf(ctx, el, base.from));
+  const out: PictureElement = { ...base, kind: 'picture', picture, geom, ...(adj ? { adj } : {}) };
+  const reasons: string[] = [];
+  if (PREPARED_EXTENSIONS.has(ext)) reasons.push(`pic:${ext}`);
+  if (geom !== 'rect' && geom !== 'roundRect' && geom !== 'ellipse')
+    reasons.push(`mask:${geom.slice(0, 30)}`);
+  if (picture.effects?.length) reasons.push('recolor');
+  if (reasons.length) {
+    out.support = 'approx';
+    out.reasons = reasons;
+  }
+  const media = mediaOf(ctx, el, source!);
+  if (media) out.media = media;
+  return out;
+}
+
+/** The video or audio a picture is the poster of (`a:videoFile`, `a:audioFile`, `p14:media`): M5. */
+function mediaOf(ctx: SlideCtx, el: XNode, source: string): PictureElement['media'] {
+  const nvPr = path(el, 'p:nvPicPr', 'p:nvPr');
+  if (!nvPr) return undefined;
+  const video = child(nvPr, 'a:videoFile');
+  const audio = child(nvPr, 'a:audioFile') ?? child(nvPr, 'a:wavAudioFile');
+  let media: XNode | undefined;
+  for (const ext of path(nvPr, 'p:extLst')?.children ?? [])
+    media ??= ext.children.find((c) => c.name === 'p14:media');
+  if (!video && !audio && !media) return undefined;
+  const out: NonNullable<PictureElement['media']> = { kind: video ? 'video' : audio ? 'audio' : 'video' };
+  const rid = media?.attrs['r:embed'] ?? (video ?? audio)?.attrs['r:link'];
+  const rel = rid === undefined ? undefined : ctx.pkg.rel(source, rid);
+  if (rel?.external) out.external = externalHost(rel.target);
+  else if (rel) out.part = rel.target;
+  return out;
 }
 
 /** A blip reader for fills of the given source part (`color.ts` `readFill`). */
 export function blipReader(ctx: SlideCtx, from: Source): BlipReader {
   const source = partOf(ctx, from);
   return (blipFill) => (source === undefined ? undefined : readBlipFill(ctx, blipFill, source));
+}
+
+/** A blip reader for fills in another part (a theme's bgFillStyleLst). */
+export function blipReaderOf(ctx: SlideCtx, source: string | undefined): BlipReader {
+  return (blipFill) => (source === undefined ? undefined : readBlipFill(ctx, blipFill, source));
+}
+
+/** JPEG markers read before giving up on finding the frame header. */
+const MAX_JPEG_MARKERS = 4_096;
+/** Picture sides are bounded (design/27 §12: prepared pictures ≤ 8,192 px; headers can say anything). */
+const MAX_SIDE_PX = 1_000_000;
+
+/** A picture's pixel size from its header (PNG, JPEG, GIF, BMP, WebP), or undefined. */
+export function pictureSize(b: Uint8Array): { w: number; h: number } | undefined {
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const ok = (o: number, n: number) => o >= 0 && o + n <= b.length;
+  const size = (w: number, h: number) =>
+    w > 0 && h > 0 && w <= MAX_SIDE_PX && h <= MAX_SIDE_PX ? { w, h } : undefined;
+  if (ok(0, 24) && dv.getUint32(0) === 0x89504e47) return size(dv.getUint32(16), dv.getUint32(20));
+  if (ok(0, 4) && dv.getUint16(0) === 0xffd8) {
+    let o = 2;
+    for (let n = 0; ok(o, 4) && n < MAX_JPEG_MARKERS; n++) {
+      if (b[o] !== 0xff) return undefined;
+      const m = b[o + 1]!;
+      if (m === 0xff) {
+        o++; // fill byte
+        continue;
+      }
+      if (m === 0xd8 || m === 0x01 || (m >= 0xd0 && m <= 0xd7)) {
+        o += 2;
+        continue;
+      }
+      const len = dv.getUint16(o + 2);
+      if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc)
+        return ok(o + 5, 4) ? size(dv.getUint16(o + 7), dv.getUint16(o + 5)) : undefined;
+      if (len < 2) return undefined;
+      o += 2 + len;
+    }
+    return undefined;
+  }
+  if (ok(0, 10) && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46)
+    return size(dv.getUint16(6, true), dv.getUint16(8, true));
+  if (ok(0, 26) && b[0] === 0x42 && b[1] === 0x4d)
+    return size(Math.abs(dv.getInt32(18, true)), Math.abs(dv.getInt32(22, true)));
+  if (ok(0, 30) && dv.getUint32(0) === 0x52494646 && dv.getUint32(8) === 0x57454250) {
+    const chunk = dv.getUint32(12);
+    if (chunk === 0x56503820 && b[23] === 0x9d && b[24] === 0x01 && b[25] === 0x2a)
+      return size(dv.getUint16(26, true) & 0x3fff, dv.getUint16(28, true) & 0x3fff); // VP8
+    if (chunk === 0x5650384c && b[20] === 0x2f) {
+      const bits = dv.getUint32(21, true); // VP8L: 14 bits each, minus one
+      return size((bits & 0x3fff) + 1, ((bits >>> 14) & 0x3fff) + 1);
+    }
+    if (chunk === 0x56503858) {
+      const w = 1 + (b[24]! | (b[25]! << 8) | (b[26]! << 16)); // VP8X: 24 bits each, minus one
+      const h = 1 + (b[27]! | (b[28]! << 8) | (b[29]! << 16));
+      return size(w, h);
+    }
+  }
+  return undefined;
 }

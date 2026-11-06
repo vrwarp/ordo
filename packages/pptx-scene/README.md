@@ -167,27 +167,62 @@ To do: LibreOffice rounds alpha to whole percents (the parser does not); theme p
 ### C: inherit-emit (`inherit.ts`, `walk.ts`, `text.ts`, `picture.ts`, `background.ts`, `emit.ts`)
 
 Contracts:
-- `inherit.ts`: `PhRef`, `Chain`, `placeholderOf`, `nvOf`, `spPrOf`, `masterClass`, `isTitle`,
-  `layoutPlaceholder`, `masterPlaceholder`, `chainOf`, `nodes`, `inheritedXfrm`, `bodyPrChain`, `listLevel`,
-  `paraChain`, `firstAttr`, `firstChildOf`.
+- `inherit.ts`: `PhRef`, `Chain`, `placeholderOf`, `nvOf`, `spPrOf`, `masterClass`, `isTitle`, `isFooter`,
+  `FOOTER_TYPES`, `layoutPlaceholder`, `masterPlaceholder`, `chainOf`, `nodes`, `spPrChain`, `styleOf`,
+  `geometryOf`, `inheritedXfrm`, `bodyPrChain`, `listLevel`, `paraChain`, `paraChainParts` (local list
+  styles vs txStyles/defaultTextStyle, where a `p:style/a:fontRef` sits), `firstAttr`, `firstChildOf`,
+  `firstOfAny`.
 - `walkSlide(ctx): Element[]` bottom first (master decorations, layout decorations, own shapes), groups
-  flattened with `group`; `walkTree`, `readXfrm`, `M1_PRESETS`, `MAX_GROUP_DEPTH`, `MAX_SHAPES_PER_SLIDE`.
-- `readTextBody(ctx, chain): TextBody | undefined`, `runStyle`, `plainText`.
-- `readBlipFill(ctx, blipFill, source)`, `readPicture(ctx, el, base)`, `blipReader(ctx, from)`, `readInsets`.
+  flattened with `group`; `walkTree(ctx, tree, from, map, group, depth, st, inherit?)` (`GroupInherit`:
+  `fill` for `a:grpFill`, `sheared`), `boxAffine`, `alternateBranch`, `UNDERSTOOD_PREFIXES`, `pathCoverage`,
+  `readXfrm`, `M1_PRESETS`, `MAX_GROUP_DEPTH`, `MAX_SHAPES_PER_SLIDE`.
+- `readTextBody(ctx, chain): TextBody | undefined`, `runStyle`, `readShadow`, `plainText`, `textChars`.
+- `readBlipFill(ctx, blipFill, source)`, `readPicture(ctx, el, base)` (a `PictureElement`, or a
+  `ResidualElement` for a metafile), `blipReader(ctx, from)`, `blipReaderOf(ctx, part)`, `readInsets`,
+  `pictureSize`, `extensionOf`.
 - `readBackground(ctx): Background`.
 - `emitDeck(scene, opts): EmitResult` (`slides: EmittedSlide[]` with `slide` (an ordo `Slide` that
   `Slide.parse` returns unchanged), `index`, `shown`, `hidden`, `classification`, `digest`, `notes`, `ms`;
-  `media: {id, part}[]`; `slideRect`; `notes`), `EmitOptions` (`newId`, `mediaId`, `extendBackgrounds`),
-  `MEDIA_PREFIX`, `digestOf`. Only today's objects plus `ImageObject.crop` (after D).
+  `media: {id, part}[]`; `slideRect`; `notes`), `EmitOptions` (`newId`, `mediaId`, `extendBackgrounds`,
+  `crop`), `CroppedImage`, `MEDIA_PREFIX`, `digestOf`, `legacyColor`, `legacyText`, `dominant`,
+  `placePicture`, `insetBox`.
+- Shared additions: `SlideCtx.themePart` (theme picture fills), `PictureFill.px` (header-sniffed pixel
+  size), `PictureElement.adj`, `ShapeElement.coverage`.
 
-M1 scope (design/27 §15 M1): placeholder xfrm/bodyPr inheritance; the first run's style through the chain
-(`defaultTextStyle` for non-placeholders, not otherStyle): size, colour, bold, italic, Latin font through
-the theme; algn → align; anchor → valign; insets → padding; outline w/2; outer shadow; lnSpcPct →
-lineHeight; master/layout shapes with `showMasterSp`; solid and stretched-picture backgrounds;
-rect/roundRect/ellipse/line; `p:pic` stretch; groups by offset and scale; `mc:AlternateContent` (first
-understood Choice, else Fallback); placeholders without a position; empty placeholders not drawn. Write
-`crop` from `PictureFill.crop` (srcRect fractions, negatives kept) once D's schema field exists; until then
-the IR carries it. Legacy values per §3.2 (gradients as their first stop, etc.).
+Done (design/27 §4, §15 M1):
+- Placeholders: layout by idx, else type (placeholders inside layout groups found); master by type class;
+  xfrm, bodyPr and shape properties (geometry, fill, line, effects) own → layout → master; no position
+  anywhere: footers not drawn, others the whole slide; empty slide placeholders (prompt text only) not drawn.
+- Run style through the whole chain (own rPr, shape lstStyle, layout and master placeholder lstStyles,
+  `p:style/a:fontRef` colour and major/minor font, master txStyles for placeholders, `defaultTextStyle` for
+  everything else, never otherStyle): size, fill, bold, italic, underline, strike, caps, spacing, baseline,
+  Latin/EA/CS/sym typefaces through the theme (+mj for titles, +mn otherwise), outline (`a:ln`), outer
+  shadow, highlight, lang. Paragraphs: algn, level, marL/indent, rtl, spcBef/spcAft/lnSpc, the nearest
+  bullet setting (buNone wins). Bodies: insets, anchor, wrap, normAutofit/spAutoFit, vert, numCol,
+  anchorCtr, warp.
+- Walk: `showMasterSp` on the slide (both) and the layout (the master's); `mc:AlternateContent` first
+  understood Choice (p14, p15) else Fallback; style references (fillRef, lnRef, effectRef with phClr);
+  `useBgFill` with a solid background; `a:grpFill`; groups by offset, scale, rotation and flips, a child's
+  own box scaled along the group's axes (`boxAffine`, no shear; a child the composed affine would shear is
+  marked residual and still drawn); graphic frames residual; ≤ 32 group levels, ≤ 5,000 shapes.
+- Pictures: blip part through the holding part's relationships (theme parts too), srcRect, fillRect,
+  tile, alphaModFix, recolour effects (an empty `a:lum` is not one), header-sniffed size, metafiles
+  residual, TIFF/WDP noted, linked pictures logged with their host only, video/audio posters recorded.
+- Emission: legacy objects per §3.2 (text in its dominant run's style; padding the smallest inset with the
+  rest folded into the box; ellipse/roundRect text rectangles; wrap="none" widened; vert turned a quarter;
+  lineHeight 1.2 × lnSpcPct minus lnSpcReduction, or the exact pitch; stored fontScale applied; outline
+  w/2; hollow text; run or unfilled-shape shadow; gradients as their first stop, patterns blended; lines and
+  connectors as straight segments at any angle; roundRect radius from adj; ellipse and roundRect picture
+  clips as `radius`; picture outlines as stroke-only shapes; custom geometry as its rect only when it fills
+  half its box); backgrounds (16:9 plain picture of the slide's aspect → `backgroundMediaId`, other pictures
+  a bottom image over the slide area, colours a bottom rect over the frame or the slide area, none white);
+  the lyric box of §4 "Church mappings" (not the bilingual rule); ≤ 1,000 objects.
+- `crop`: written from srcRect (and fillRect clipping) when `EmitOptions.crop` is set. Off by default until
+  work item D's schema field is merged: the integrator turns it on (default or in the harness).
+
+Left for later milestones: rich runs and paragraphs (M2: dominant style only today), bullets and numbering
+drawn (M2; read into the IR), shape text rectangles of other presets and custom paths (M6), the bilingual
+lyric rule, picture masks/flips/adjust (M3), arrowheads and dashes (M6), tiles pre-tiled (M3), media (M5).
 
 ### D: image-crop (`packages/domain/src/schemas.ts`, `packages/renderer/src/clamp.ts`, `text2d.ts`, `golden/`)
 
