@@ -177,7 +177,7 @@ Source: a census of 4,897 shown slides of worship decks in the local validation 
 | `index.ts` | `parseDeck(src, opts): DeckScene`; `emitSlides(scene, opts): EmitResult`. |
 | `packages/domain/src/readable.ts` (M2) | `readableText(o)`: `TextObject.text` with automatic numbers and bullets written as text, for the stage, bands, labels and search. `textScripts(text)` for the font scan. |
 | `packages/domain/src/size.ts` (M3) | JSON size estimates for slides, presentations and resolved playlists (§3.4). |
-| `packages/renderer/src/text/` (M2) | `itemize.ts`, `breaks.ts` (UAX#14 via npm `linebreak` 2.0.0, MIT; `Intl.Segmenter`), `bidi.ts` (npm `bidi-js` 1.1.0, MIT), `measure.ts`, `lines.ts`, `office.ts` (LibreOffice line model and autofit, ported from `pptx-render/src/page.ts:202-426`), `bullets.ts` (port of `annotate.ts` `autoNumber`), `paint.ts`, `rich.ts`, `fonts.ts` (the resolver, §10). |
+| `packages/renderer/src/text/` (M2) | `itemize.ts`, `breaks.ts` (UAX#14 via npm `linebreak` 1.1.0, MIT; 2.0.0 was days old when chosen; `Intl.Segmenter`), `bidi.ts` (npm `bidi-js` 1.1.0, MIT), `measure.ts`, `lines.ts`, `office.ts` (LibreOffice line model and autofit, ported from `pptx-render/src/page.ts:202-426`), `bullets.ts` (port of `annotate.ts` `autoNumber`), `paint.ts`, `rich.ts`, `fonts.ts` (the resolver, §10). |
 | `packages/renderer/src/content.ts` (M3) | `slideContent()`, the one fallback rule (§5). |
 | `packages/renderer/src/scene.ts` (M5) | Video split and the plane encoding (§7.2). |
 | `packages/renderer/src/geom/` (M6) | `presets.gen.ts` (compiled from POI), `eval.ts` (guide evaluator), `arc.ts`, `path.ts`. |

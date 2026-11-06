@@ -14,7 +14,9 @@
     "golden": "tsx golden/run.ts"
   },
   "dependencies": {
-    "@ordo/domain": "workspace:*"
+    "@ordo/domain": "workspace:*",
+    "bidi-js": "1.1.0",
+    "linebreak": "1.1.0"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.74"
