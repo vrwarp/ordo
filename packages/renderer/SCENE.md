@@ -28,8 +28,11 @@ Change these only together with every item that uses them.
 | The render worker passes `SRC_SCENE` content from the asset port through to the engine | `apps/output/src/render.worker.ts` |
 | `IngestOpts.trim` (type only) | `apps/hub/src/media/service.ts` |
 
-Nothing produces the new fields yet, so behaviour is unchanged: the compositors draw an `SRC_SCENE` stack's
-base as a bitmap until items B and C land, and every seam below is a stub with today's behaviour.
+All eight items are merged on `m5/integrate` and every seam is filled: the editor (H) writes `play` and
+`Slide.audio`, cue expansion and the reducer (A) put the clip on the media layer with its `objectId`, the
+planner and the link (D) arm it on every output and tag the slide job with its slot and generation, the
+asset worker (E) answers `SRC_SCENE`, the engine presents frames by media time (F) and both compositors
+draw the scene (B, C). The end-to-end check is `e2e/slide-media.spec.ts`.
 
 ### The plane (16 floats)
 
@@ -82,8 +85,8 @@ Device loss re-uploads base and over. The compositor golden of §14.5 (SwiftShad
 masks, crops, rotation, crossfade midpoints, stale generation and no frame show the poster).
 Done: `pnpm --filter @ordo/renderer golden:compositor` (`golden/compositor-run.ts`, CI) draws 19 cases with
 two real engines and compares WebGPU with Canvas 2D (40 per channel, 0.4 %) and with the CPU reference of
-`planeSample` (8, 0.05 %). Until item C lands, the cases that need a scene's video or over skip the Canvas 2D
-comparison (the run says so); once it lands, CI should pass `--require-2d`.
+`planeSample` (8, 0.05 %). The WebGPU side passes `allowFallbackAdapter` (SwiftShader is a fallback adapter),
+and the run fails if the Canvas 2D compositor draws no scene video.
 
 **(C) canvas-scene.** `packages/renderer/src/canvas2d.ts`: per scene stack `drawImage(base)`; when the video
 is present `save`, `setTransform(planeForward(plane))`, `clip(mask Path2D)` (built in the offer handler, not
@@ -125,8 +128,8 @@ Contract: `ToRender 'vframe'` gains `startedAt?` and `loopMs?`, which the host f
 transport while the element plays (`vframeClock`), and `setVideoFrame(slot, frame, gen, startedAt, loopMs)`.
 Uploads: `Compositor.drainUploads?(f, all)`; the engine calls it with false before `draw` (what the frame
 samples) and with true after the submit (armed content). `GpuCompositor.draw` no longer uploads, so a test
-that drives a compositor by hand calls `drainUploads` before `draw` (item B's `gpu.scene.test.ts` does not
-yet; its upload helper keeps the name `ensureUploaded(l, idx, stack)`, which `drainUploads` calls).
+that drives a compositor by hand calls `drainUploads` before `draw`, as `gpu.scene.test.ts` does (`drawn`);
+`drainUploads` calls the scene-aware `ensureUploaded(l, idx, stack)`, which uploads base and over.
 
 **(G) hub-media.** `apps/hub/src/store.ts` (`sniff`/`EXT_KIND`: ASF `30 26 B2 75 8E 66 CF 11` for WMV/WMA,
 MPEG-PS `00 00 01 BA`, AIFF `FORM....AIFF`), `media/service.ts` and `media/ffmpeg.ts` (`IngestOpts.trim` cut

@@ -170,6 +170,13 @@ function show(f: FrameInputs, layer: number, c: StackContent<ImageBitmap>, gpu?:
   ls.tick(0, 16);
 }
 
+/** One engine frame (engine.ts drawFrame): uploads for the draw, the draw, then the armed stacks' uploads. */
+function drawn(c: GpuCompositor, f: FrameInputs): void {
+  c.drainUploads(f, false);
+  c.draw(f);
+  c.drainUploads(f, true);
+}
+
 const flags = (dev: FakeDevice, layer: number, plane = U_PLANE_A) =>
   dev.uniform[layer * SLOT_FLOATS + plane + PLANE_FLAGS];
 
@@ -252,9 +259,9 @@ describe('WebGPU scene compositor', () => {
     expect(c.overBytes).toBe(2 * W * H * 4);
     c.prepare(SLIDE, scene('T', true));
     const allocated = dev.textures.length;
-    c.draw(f);
+    drawn(c, f);
     show(f, SLIDE, scene('T', true), c);
-    c.draw(f);
+    drawn(c, f);
     expect(dev.textures.length).toBe(allocated);
     // Base and over of each scene were uploaded into its stack's textures (S went to stack 1, T to 0).
     expect(dev.copies.map((x) => [(x.source as { name: string }).name, (x.texture as Tex).label])).toEqual([
@@ -270,7 +277,7 @@ describe('WebGPU scene compositor', () => {
     const f = inputs();
     show(f, SLIDE, scene('S', true, 2, 5), c);
     // No frame: base and over draw, the placeholder frame satisfies the binding.
-    c.draw(f);
+    drawn(c, f);
     expect(flags(dev, SLIDE)).toBe(PLANE_HAS_OVER);
     let [pipe, res] = dev.draws.at(-1)!;
     expect(pipe).toBe('single-v');
@@ -279,7 +286,7 @@ describe('WebGPU scene compositor', () => {
     const a = frame('clip-a');
     f.video.frames[2] = a as unknown as VideoFrame;
     f.video.gen[2] = 5;
-    c.draw(f);
+    drawn(c, f);
     expect(flags(dev, SLIDE)).toBe(PLANE_HAS_OVER | PLANE_VIDEO);
     [pipe, res] = dev.draws.at(-1)!;
     expect((res[4] as { ext: Frame }).ext).toBe(a);
@@ -289,12 +296,12 @@ describe('WebGPU scene compositor', () => {
     expect(dev.uniform[base + U_P + 1]).toBe(1);
     // The slot reloaded with another clip (a new generation): the poster in base shows instead.
     f.video.gen[2] = 6;
-    c.draw(f);
+    drawn(c, f);
     expect(flags(dev, SLIDE)).toBe(PLANE_HAS_OVER);
     expect((dev.draws.at(-1)![1][4] as { ext: { name: string } }).ext.name).toBe('placeholder');
     // No over: the over bit stays off and the transparent texture is bound.
     show(f, SLIDE, scene('N', false, 2, 6), c);
-    c.draw(f);
+    drawn(c, f);
     expect(flags(dev, SLIDE)).toBe(PLANE_VIDEO);
     expect(((dev.draws.at(-1)![1][3] as View).tex as Tex).label).toBe('transparent-1x1');
   });
@@ -304,8 +311,8 @@ describe('WebGPU scene compositor', () => {
     const f = inputs();
     show(f, LAYER_INDEX.background, { key: 'bg', kind: SRC_BITMAP, bitmap: bitmap('bg') }, c);
     const groups = dev.bindGroups.length;
-    c.draw(f);
-    c.draw(f);
+    drawn(c, f);
+    drawn(c, f);
     expect(dev.bindGroups.length).toBe(groups);
     expect(dev.imports).toHaveLength(0);
     expect(dev.draws.map((d) => d[0])).toEqual(['single-t', 'single-t']);
@@ -315,7 +322,7 @@ describe('WebGPU scene compositor', () => {
     f.video.gen[2] = 5;
     show(f, SLIDE, scene('S', false, 2, 5), c);
     show(f, LAYER_INDEX.media, { key: 'm', kind: SRC_VIDEO, videoSlot: 2, fit: 1 }, c);
-    c.draw(f);
+    drawn(c, f);
     expect(dev.imports).toEqual([a]);
   });
 
@@ -335,7 +342,7 @@ describe('WebGPU scene compositor', () => {
     f.video.gen[2] = 1;
     f.video.frames[3] = frame('b') as unknown as VideoFrame;
     f.video.gen[3] = 3; // stale: B shows its poster
-    c.draw(f);
+    drawn(c, f);
     const slideDraws = dev.draws.filter((d) => d[0].startsWith('pair') || d[0].startsWith('single'));
     expect(slideDraws).toHaveLength(1);
     const [pipe, res] = slideDraws[0]!;
@@ -430,7 +437,7 @@ describe('RenderEngine and Compositor.prepare', () => {
     await vi.waitFor(() => expect(e.kind).toBe('webgpu'), { timeout: 2000 });
     await vi.waitFor(() => expect(gpu.overBytes).toBe(2 * W * H * 4), { timeout: 2000 });
     const before = dev.textures.length;
-    gpu.draw((e as unknown as { inputs: FrameInputs }).inputs);
+    drawn(gpu, (e as unknown as { inputs: FrameInputs }).inputs);
     expect(dev.textures.length).toBe(before);
     const names = dev.copies.map((x) => (x.source as { name: string }).name).sort();
     expect(names).toEqual(['S-base', 'S-over', 'T-base']);

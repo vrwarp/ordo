@@ -58,6 +58,16 @@ With `ORDO_E2E_REAL_GPU=1`, for a run on a real GPU without the SwiftShader flag
 (17 ms) between outputs and 50 ms after the scheduled time. Lateness against the key press itself is not
 asserted end to end; the soak test reports late flips per output from the outputs' own counters.
 
+`e2e/slide-media.spec.ts` covers video and sound playing in place in a slide (design/27 §14.12) on two
+outputs: Audience 1 on WebGPU (`?renderer=webgpu`) and the audio master, Audience 2 on Canvas 2D. It probes
+the pixels of a turned, rounded clip box under a title band (clip inside the mask, backdrop outside it, the
+title over the clip, the clip moving), asserts the slide flip and the clip's start skew between the outputs
+with the bounds above, checks that the next slide's clip is preloaded paused on both, that after Clear
+media a clip loaded into the cleared slot never shows in the live slide (its poster does), click start with
+F8 and Shift+F8 pressed in the operator, onEnd 'advance', a slide sound over 3 shown slides of a 4-slide
+loop, music that does not restart when its loop wraps, and a clip still transcoding at Go live (degraded
+note, poster).
+
 ## Chaos tests
 
 The design/25 faults are injected into the real apps by Playwright specs (`e2e/chaos-*.spec.ts`, the

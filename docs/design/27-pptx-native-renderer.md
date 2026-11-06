@@ -1168,7 +1168,7 @@ The current JSZip text path takes 1.17 s per 100 slides.
 11. **Migration.**
     - The legacy repair job on a stored deck with a hidden slide (LibreOffice and pptx-preview variants): stage, labels and search show the right slide's text.
     - Re-import of made-editable slides replaces the page picture and matching boxes and keeps user objects.
-12. **e2e.** Import → goLive → two outputs (slide pixels, in-slide video at its z, F8, onEnd advance, skew) → stage text and notes → lower-third and stream text → search and cue labels. Also: Clear media during an in-slide video and then arm the next slide's clip; the live slide shows its poster, never the next clip.
+12. **e2e.** Import → goLive → two outputs (slide pixels, in-slide video at its z, F8, onEnd advance, skew) → stage text and notes → lower-third and stream text → search and cue labels. Also: Clear media during an in-slide video and then arm the next slide's clip; the live slide shows its poster, never the next clip. The authored-slide half (no import) is `e2e/slide-media.spec.ts` (M5 wave 1).
 13. **Perf.** The raster bench moves into `packages/renderer/bench` with rich slides at 1080p and 4K. A 30-minute 4K soak with slide videos on a reference venue GPU runs before media ships. The hub budgets are measured once on a reference NAS in M3.
 
 ## 15. Milestones

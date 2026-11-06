@@ -16,6 +16,7 @@ export type OutputRec = {
   lookId: string;
   token?: string;
   enabled: boolean;
+  audioMaster?: boolean;
 };
 
 /** An authenticated API client on the operator origin. */

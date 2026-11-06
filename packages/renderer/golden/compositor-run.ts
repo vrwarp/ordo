@@ -14,9 +14,8 @@ import type { Limits, RunResult } from './compositor-page.ts';
  * by the tighter bound of LIMITS, or when a probe (the poster showing for a stale generation or a slot
  * without a frame) fails.
  *
- *   pnpm --filter @ordo/renderer golden:compositor                 compare
- *   pnpm --filter @ordo/renderer golden:compositor --require-2d    also fail while Canvas 2D draws no scenes
- *   pnpm --filter @ordo/renderer golden:compositor --images        write every case's images
+ *   pnpm --filter @ordo/renderer golden:compositor             compare
+ *   pnpm --filter @ordo/renderer golden:compositor --images    write every case's images
  *
  * WebGPU runs on SwiftShader: `--enable-unsafe-webgpu --use-angle=swiftshader` plus Vulkan SwiftShader
  * (`--use-vulkan=swiftshader --enable-features=Vulkan`, the set of design/23); with the ANGLE flags alone
@@ -27,7 +26,6 @@ import type { Limits, RunResult } from './compositor-page.ts';
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../../..');
 const outDir = join(root, 'test-results/compositor-golden');
-const requireCanvas2d = process.argv.includes('--require-2d');
 const allImages = process.argv.includes('--images');
 const LIMITS: Limits = {
   // WebGPU against Canvas 2D: per channel 0..255, and the fraction of pixels allowed over it (design/27).
@@ -116,9 +114,7 @@ async function main(): Promise<number> {
   if (r.error) console.error(`golden:compositor: ${r.error}`);
   console.log(
     `golden:compositor: compositor ${r.gpuKind}, ${r.size.width}x${r.size.height}, over textures ${(r.overBytes / 1e6).toFixed(2)} MB; ` +
-      (r.canvas2dScenes
-        ? 'Canvas 2D draws scenes'
-        : 'Canvas 2D draws only scene bases (SCENE.md item C): scene cases compared with the reference only'),
+      (r.canvas2dScenes ? 'Canvas 2D draws scenes' : 'Canvas 2D draws no scene video'),
   );
   let failures = r.ok ? 0 : r.results.length ? 0 : 1;
   for (const c of r.results) {
@@ -137,8 +133,8 @@ async function main(): Promise<number> {
         writeFileSync(join(outDir, `${c.name}.${k}.png`), Buffer.from(b64, 'base64'));
     }
   }
-  if (requireCanvas2d && !r.canvas2dScenes) {
-    console.error('golden:compositor: --require-2d, but the Canvas 2D compositor draws no scene video');
+  if (!r.canvas2dScenes) {
+    console.error('golden:compositor: the Canvas 2D compositor draws no scene video');
     failures++;
   }
   if (failures) console.error(`golden:compositor: ${failures} failure(s); images in ${outDir}`);

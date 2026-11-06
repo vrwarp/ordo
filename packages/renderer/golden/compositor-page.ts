@@ -22,10 +22,7 @@ import {
  * and WebGPU against Canvas 2D. Cases cover scene stacks with synthetic VideoFrames made from canvases
  * (masks, crops, rotation, flips, an over), crossfade midpoints of every source pair, a stale generation
  * and a slot without a frame (both show the poster, never black), and the legacy bitmap and video paths.
- *
- * While the Canvas 2D compositor draws only a scene's base (until its scene drawing lands, SCENE.md item
- * C), `canvas2dScenes` is false and the cases that need a scene's video or over skip the Canvas 2D
- * comparison; the runner fails on that with --require-2d.
+ * `canvas2dScenes` probes that the Canvas 2D compositor draws a scene's video; the runner fails without it.
  */
 
 const W = 640;
@@ -405,6 +402,8 @@ class Side {
         height: H,
         testPixel: false,
         forceCanvas2d: !gpu,
+        // SwiftShader is a fallback adapter, which an output treats as Canvas 2D (design/27 §7.2).
+        allowFallbackAdapter: gpu,
         clear: CLEAR,
         clockOffset: 0,
         gpuRetryMs: 0,
@@ -641,7 +640,7 @@ export type CaseResult = {
   name: string;
   ok: boolean;
   gpuVsRef: Diff;
-  /** null: skipped (the Canvas 2D compositor does not draw scenes yet). */
+  /** null: skipped (the Canvas 2D compositor drew no scene video in the `canvas2dScenes` probe). */
   gpuVs2d: Diff | null;
   probes: { what: string; ok: boolean; got: number[]; want: number[] }[];
   error?: string;

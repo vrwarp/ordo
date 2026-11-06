@@ -13,7 +13,8 @@ import { liveState, media, resolved } from './fixtures.test-util.ts';
 /**
  * Test fixtures for clips playing inside their slides (design/27 §7.2): the fixture playlist plus a
  * 'clips' deck. c1 plays 'vid' in object v1, c2 plays 'vid2' in v2 (click start, hidden while not
- * playing), c3 has no clip, c4 plays 'vid' in v4. The media layer is filled by hand, as the reducer will.
+ * playing), c3 has no clip, c4 plays 'vid' in v4. The media layer is filled by hand, as the reducer does
+ * (apps/output/src/link-core.scene.test.ts checks that they agree).
  */
 
 const title: Slide['objects'][number] = {

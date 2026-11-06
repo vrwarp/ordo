@@ -1,9 +1,16 @@
 import { HubConnection, OutputLink } from '@ordo/client';
-import { LOOK_STAGE, type LiveState, playingObject } from '@ordo/domain';
+import { LOOK_MAIN, LOOK_STAGE, type LiveState } from '@ordo/domain';
+import { checkInvariants, reduce } from '@ordo/live-state';
 import type { OutputConfigRes } from '@ordo/protocol';
-import { type AssetJob, SRC_VIDEO, type ToAsset, type ToRender } from '@ordo/renderer';
+import { type AssetJob, SRC_VIDEO, type ToAsset, type ToRender, planFrame } from '@ordo/renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { clipLive, cueOf } from '../../../packages/renderer/src/fixtures.scene.test-util.ts';
+import {
+  clipCues,
+  clipLive,
+  cueOf,
+  withClips,
+} from '../../../packages/renderer/src/fixtures.scene.test-util.ts';
+import { liveState } from '../../../packages/renderer/src/fixtures.test-util.ts';
 import type { LinkToMain, MediaCommand } from './host-protocol.ts';
 import { LinkCore, type SlotMirror } from './link-core.ts';
 import { MemoryStreamStore } from './opfs.ts';
@@ -14,36 +21,7 @@ import { MemoryStreamStore } from './opfs.ts';
  * slide job carries the slot and its load generation at once, a scene drawn for another slot or
  * generation is drawn again in place, and the picture leaves the renderer (`vclear`) when the media layer
  * clears or while a clip hidden when stopped is not playing.
- *
- * The reducer's slide branch is item A's; until it lands, `reduce` is wrapped here to fill the media layer
- * from the slide's playing object as design/27 §8 "Reducer" says (the link plans the armed cue with it).
  */
-vi.mock('@ordo/live-state', async (importOriginal) => {
-  const real = await importOriginal<typeof import('@ordo/live-state')>();
-  const reduce: typeof real.reduce = (s, e) => {
-    const out = real.reduce(s, e);
-    if (e.k !== 'go') return out;
-    const cue = out.cues[e.cueIndex];
-    const p = cue?.presentationId ? out.resolved?.presentations[cue.presentationId] : undefined;
-    const slide = p?.sections.flatMap((x) => x.slides).find((x) => x.id === cue?.slideId);
-    const o = slide ? playingObject(slide) : undefined;
-    if (cue?.kind !== 'slide' || !o || !out.resolved?.media[o.play.mediaId]) return out;
-    const content = {
-      kind: 'media' as const,
-      cueIndex: e.cueIndex,
-      mediaId: o.play.mediaId,
-      mediaKind: 'video' as const,
-      objectId: o.id,
-      loop: !!o.play.loop,
-      onEnd: o.play.onEnd ?? 'hold',
-      state: o.play.start === 'click' ? ('paused' as const) : ('playing' as const),
-      startedAt: e.at,
-      positionMs: 0,
-    };
-    return { ...out, layers: { ...out.layers, media: { content, at: e.at, seq: out.seq } } };
-  };
-  return { ...real, reduce };
-});
 
 const config = (audioMaster: boolean, lookId = 'look-main'): OutputConfigRes =>
   ({
@@ -378,5 +356,46 @@ describe('link worker: a clip playing inside its slide', () => {
     expect(again).toHaveLength(2);
     expect(again[1]).toMatchObject({ refresh: true, video: { objectId: 'v4', slot: x.slot, gen: zl!.gen } });
     t.close();
+  });
+});
+
+describe('reducer, planner and link: a clip playing inside its slide', () => {
+  /** GO to slide `slideId` of the clips deck from the c3 slide (no clip), with the real reducer. */
+  const goTo = (slideId: string, at = 1000) => {
+    const from = reduce(liveState({ resolved: withClips, cues: clipCues, seq: 1 }), {
+      k: 'go',
+      cueIndex: cueOf('c3'),
+      at: at - 500,
+    });
+    return reduce(from, { k: 'go', cueIndex: cueOf(slideId), at });
+  };
+
+  it("the reducer's slide branch fills the media layer the planner draws inside the slide", () => {
+    const s = goTo('c1');
+    expect(checkInvariants(s)).toEqual([]);
+    expect(s.layers.media.content).toEqual(clipLive('c1').layers.media.content);
+    const p = planFrame(s, LOOK_MAIN);
+    expect(p.media.key).toBe('');
+    expect(p.media.desc).toMatchObject({ key: key('c1'), inSlide: { objectId: 'v1' }, state: 'playing' });
+    expect(p.slide.desc?.video).toEqual({ objectId: 'v1', mediaId: 'vid', hash: 'd2' });
+  });
+
+  it('a click-start clip hidden while stopped goes live paused, hidden, and plays on F8', () => {
+    const s = goTo('c2');
+    expect(s.layers.media.content).toMatchObject({ objectId: 'v2', mediaId: 'vid2', state: 'paused' });
+    const p = planFrame(s, LOOK_MAIN);
+    expect(p.media.desc?.inSlide).toEqual({ objectId: 'v2', showWhenStopped: false });
+    const played = reduce(s, { k: 'media.play', at: 2000 });
+    expect(planFrame(played, LOOK_MAIN).media.desc).toMatchObject({
+      inSlide: { objectId: 'v2', showWhenStopped: false },
+      state: 'playing',
+      startedAt: 2000,
+    });
+  });
+
+  it('a slide without a clip clears the clip of the slide before it', () => {
+    const s = reduce(goTo('c1'), { k: 'go', cueIndex: cueOf('c3'), at: 3000 });
+    expect(s.layers.media.content).toBeNull();
+    expect(planFrame(s, LOOK_MAIN).media.desc).toBeNull();
   });
 });

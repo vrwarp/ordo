@@ -1,4 +1,4 @@
-import { type Compositor, type FrameInputs, MAX_VIDEO_SLOTS } from './compositor.ts';
+import { type Compositor, type FrameInputs, sceneVideoPresent } from './compositor.ts';
 import {
   MASK_ELLIPSE,
   MASK_ROUND,
@@ -208,24 +208,8 @@ export class Canvas2DCompositor implements Compositor {
     /* @hot */
     if (s.kind === SRC_EMPTY) return false;
     if (s.kind === SRC_BITMAP) return s.bitmap !== null;
-    if (s.kind === SRC_SCENE) return s.bitmap !== null || s.over !== null || this.videoOn(s, f);
+    if (s.kind === SRC_SCENE) return s.bitmap !== null || s.over !== null || sceneVideoPresent(s, f.video);
     return s.videoSlot >= 0 && f.video.frames[s.videoSlot] != null;
-  }
-
-  /**
-   * Whether a scene draws its video this frame: its slot holds a frame loaded under the stack's generation
-   * (design/27 §7.2). Otherwise the poster in its base shows, never another clip that reuses the slot.
-   */
-  private videoOn(s: Stack<ImageBitmap>, f: FrameInputs): boolean {
-    /* @hot */
-    const slot = s.videoSlot;
-    return (
-      slot >= 0 &&
-      slot < MAX_VIDEO_SLOTS &&
-      s.videoGen >= 0 &&
-      f.video.frames[slot] != null &&
-      f.video.gen[slot] === s.videoGen
-    );
   }
 
   /** Whether a stack is more than one draw (a scene with two of base, video and over). */
@@ -235,7 +219,7 @@ export class Canvas2DCompositor implements Compositor {
     let n = 0;
     if (s.bitmap) n++;
     if (s.over) n++;
-    if (n < 2 && this.videoOn(s, f) && s.plane[PLANE_OPACITY]! > 0) n++;
+    if (n < 2 && sceneVideoPresent(s, f.video) && s.plane[PLANE_OPACITY]! > 0) n++;
     return n > 1;
   }
 
@@ -247,7 +231,7 @@ export class Canvas2DCompositor implements Compositor {
     }
     if (s.kind === SRC_SCENE) {
       if (s.bitmap) ctx.drawImage(s.bitmap, 0, 0, this.width, this.height);
-      if (this.videoOn(s, f)) this.drawPlane(ctx, s.plane, f.video.frames[s.videoSlot]!);
+      if (sceneVideoPresent(s, f.video)) this.drawPlane(ctx, s.plane, f.video.frames[s.videoSlot]!);
       if (s.over) ctx.drawImage(s.over, 0, 0, this.width, this.height);
       return;
     }
