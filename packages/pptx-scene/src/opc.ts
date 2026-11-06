@@ -25,14 +25,26 @@ export type PartSource = Map<string, Uint8Array>;
 export const MAX_XML_PART_BYTES = 8 * 1024 * 1024;
 /** A relationship target longer than this is ignored (real ones are a few dozen characters). */
 export const MAX_TARGET_CHARS = 2_048;
+/**
+ * An internal target whose resolved part name is longer than this is ignored: part names reach media ids,
+ * job payloads and notes, which design/27 §12 bounds to 512 characters.
+ */
+export const MAX_PART_NAME_CHARS = 512;
 /** External targets noted per package; the rest are counted in one note. */
 export const MAX_EXTERNAL_NOTES = 20;
 /**
- * Parsed parts are kept while the text they came from totals at most this many characters (least recently
- * used dropped first; the newest is always kept). A parsed tree takes several times its text, and a slide is
- * read only while it is converted, but layouts, masters and themes are read for every slide.
+ * What a parsed tree is charged against the cache per element, in bytes: a node with its attribute map and
+ * child array retains about 280 bytes in V8, much more than its markup, so a budget in characters alone
+ * lets a deck within the §12 part budgets keep gigabytes alive.
  */
-export const XML_CACHE_CHARS = 16 * 1024 * 1024;
+export const XML_NODE_BYTES = 300;
+/**
+ * Parsed parts are kept while their estimated size (text characters + `XML_NODE_BYTES` per element) totals
+ * at most this (least recently used dropped first; the newest is always kept). Layouts, masters, themes and
+ * relationships are read for every slide; a slide is read once and is not kept (`Package.xml` `keep`). Two
+ * parts at the §12 tag limit fit, so a slide's layout and master are not parsed again for every slide.
+ */
+export const XML_CACHE_BYTES = 192 * 1024 * 1024;
 
 /** The content type of a slide part. */
 export const SLIDE_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.presentationml.slide+xml';
@@ -58,9 +70,10 @@ export interface Package {
   /**
    * The root element of an XML part, read as Transitional with the usual prefixes and alternate content
    * resolved (`markup.ts`), parsed once and cached; undefined when the part is missing. Throws when it is over
-   * budget or malformed (the caller quarantines the slide that needs it).
+   * budget or malformed (the caller quarantines the slide that needs it). With `keep: false` a part that is
+   * not cached yet is parsed without being cached (a slide, read once).
    */
-  xml(name: string): XNode | undefined;
+  xml(name: string, opts?: { keep?: boolean }): XNode | undefined;
   /** The relationships of a part ('' for the package's own `_rels/.rels`), in document order. */
   rels(source: string): Rel[];
   rel(source: string, id: string): Rel | undefined;
@@ -76,8 +89,8 @@ export interface Package {
 }
 
 export interface PackageOptions {
-  /** Characters of XML text whose parsed trees are kept (default `XML_CACHE_CHARS`). */
-  cacheChars?: number;
+  /** Estimated bytes of parsed trees kept (default `XML_CACHE_BYTES`; see `XML_NODE_BYTES`). */
+  cacheBytes?: number;
 }
 
 /** The last segment of a relationship type URI: 'slideLayout', 'image', 'officeDocument', … */
@@ -197,11 +210,24 @@ export function relIdOf(el: XNode | undefined, local = 'id'): string | undefined
 
 interface Cached {
   value: XNode | Error | undefined;
-  chars: number;
+  /** The estimated size charged against the cache. */
+  cost: number;
+}
+
+/** Elements of a parsed tree (iterative: the tree is bounded by the parser, not by the stack). */
+function elementCount(root: XNode | undefined): number {
+  let n = 0;
+  const stack = root ? [root] : [];
+  while (stack.length) {
+    const x = stack.pop()!;
+    n++;
+    for (const c of x.children) stack.push(c);
+  }
+  return n;
 }
 
 export function openPackage(src: PartSource, log: Log = () => {}, opts: PackageOptions = {}): Package {
-  const cacheChars = opts.cacheChars ?? XML_CACHE_CHARS;
+  const cacheBytes = opts.cacheBytes ?? XML_CACHE_BYTES;
   const lower = new Map<string, string>();
   for (const name of src.keys()) {
     const k = name.toLowerCase();
@@ -228,11 +254,11 @@ export function openPackage(src: PartSource, log: Log = () => {}, opts: PackageO
   let strictNoted = false;
   const remember = (real: string, entry: Cached) => {
     cache.set(real, entry);
-    cached += entry.chars;
+    cached += entry.cost;
     for (const [k, v] of cache) {
-      if (cached <= cacheChars || k === real) break;
+      if (cached <= cacheBytes || k === real) break;
       cache.delete(k);
-      cached -= v.chars;
+      cached -= v.cost;
     }
   };
   const parse = (real: string): Cached => {
@@ -249,12 +275,12 @@ export function openPackage(src: PartSource, log: Log = () => {}, opts: PackageO
         }
         normalizePart(root, { strict, percents: strict && isPercentPart(real) });
       }
-      return { value: root, chars };
+      return { value: root, cost: chars + XML_NODE_BYTES * elementCount(root) };
     } catch (e) {
-      return { value: e instanceof Error ? e : new Error(String(e)), chars };
+      return { value: e instanceof Error ? e : new Error(String(e)), cost: chars };
     }
   };
-  const xml = (name: string): XNode | undefined => {
+  const xml = (name: string, o: { keep?: boolean } = {}): XNode | undefined => {
     const real = find(name);
     if (real === undefined) return undefined;
     let entry = cache.get(real);
@@ -263,7 +289,7 @@ export function openPackage(src: PartSource, log: Log = () => {}, opts: PackageO
       cache.set(real, entry);
     } else {
       entry = parse(real);
-      remember(real, entry);
+      if (o.keep !== false) remember(real, entry);
     }
     if (entry.value instanceof Error) throw entry.value;
     return entry.value;
@@ -307,6 +333,10 @@ export function openPackage(src: PartSource, log: Log = () => {}, opts: PackageO
       if (external) noteExternal(type, raw);
       const target = external ? raw : resolveTarget(source, raw);
       if (target === undefined) continue;
+      if (!external && target.length > MAX_PART_NAME_CHARS) {
+        long++;
+        continue;
+      }
       const rel: Rel = { id, type, target: external ? target : (find(target) ?? target), external };
       r.list.push(rel);
       r.byId.set(id, rel);

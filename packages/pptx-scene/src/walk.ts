@@ -395,16 +395,35 @@ function shadowOf(ctx: SlideCtx, c: Chain): ShapeElement['shadow'] {
 
 /** Points read per custom geometry for its coverage (design/27 §12: ≤ 4,096 path points per path). */
 const MAX_COVERAGE_POINTS = 4_096;
+/**
+ * Elements (sub-paths, commands with or without points, and their children) read per custom geometry
+ * (design/27 §12: 64k path points per slide), so commands without points are bounded too.
+ */
+const MAX_COVERAGE_STEPS = 65_536;
+
+/** The coverage of each `a:custGeom` read so far: an inherited one is rated for every inheriting shape. */
+const coverageCache = new WeakMap<XNode, number | undefined>();
 
 /**
  * The share of its box an `a:custGeom` fills: the shoelace area of each sub-path (curves by their end
  * points), summed and capped at 1, over the path's own size. Undefined when a point is not a number (a guide
- * name) or a path has no size.
+ * name), a path has no size, or the paths hold more than `MAX_COVERAGE_POINTS` points or
+ * `MAX_COVERAGE_STEPS` elements in all. Memoised per node.
  */
 export function pathCoverage(geom: XNode | undefined): number | undefined {
+  if (!geom) return undefined;
+  if (coverageCache.has(geom)) return coverageCache.get(geom);
+  const v = coverageOf(geom);
+  coverageCache.set(geom, v);
+  return v;
+}
+
+function coverageOf(geom: XNode): number | undefined {
   let total = 0;
   let points = 0;
+  let steps = 0;
   for (const p of child(geom, 'a:pathLst')?.children ?? []) {
+    if (++steps > MAX_COVERAGE_STEPS) return undefined;
     if (p.name !== 'a:path') continue;
     if (p.attrs.fill === 'none') continue;
     const w = num(p.attrs.w);
@@ -421,13 +440,16 @@ export function pathCoverage(geom: XNode | undefined): number | undefined {
       first = last = undefined;
     };
     for (const c of p.children) {
+      // Every command counts, with or without points, and so does every child of one.
+      steps += 1 + c.children.length;
+      if (steps > MAX_COVERAGE_STEPS) return undefined;
       if (c.name === 'a:close') {
         close();
         continue;
       }
       if (c.name === 'a:moveTo') close();
-      const pts = c.children.filter((n) => n.name === 'a:pt');
-      const pt = pts[pts.length - 1];
+      let pt: XNode | undefined;
+      for (const n of c.children) if (n.name === 'a:pt') pt = n;
       if (!pt) {
         if (c.name === 'a:arcTo') return undefined;
         continue;

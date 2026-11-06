@@ -410,10 +410,43 @@ describe('element support (design/27 §5)', () => {
     expect(s.classification).toMatchObject({ tier: 'T2', class: 'picture' });
   });
 
-  it('rates an element of alternate content by both branches', () => {
+  it('rates an element of alternate content by the branch Package.xml keeps', () => {
     const math = textBox(2, para(run('x') + '<a14:m><m:oMathPara/></a14:m>'));
     const plain = textBox(2, para(run('x = 1')));
     expect(support(alternate(math, plain))).toEqual([['residual', ['math']]]);
+  });
+});
+
+describe('bounded work on hostile decks', () => {
+  /** A shape with `n` extension elements, all of one `cNvPr id`. */
+  const huge = (id: number, n: number) =>
+    `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name=""/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:extLst>` +
+    '<a:ext uri="x"/>'.repeat(n) +
+    '</a:extLst></p:spPr></p:sp>';
+  const frame = (id: number) =>
+    `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name=""/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>` +
+    `<p:xfrm><a:off x="0" y="0"/><a:ext cx="10" cy="10"/></p:xfrm><a:graphic><a:graphicData uri="x"/></a:graphic></p:graphicFrame>`;
+  const frames = Array.from({ length: 2_000 }, () => frame(7)).join('');
+
+  it('rates thousands of elements sharing an id with a huge shape once per node, not once per element', () => {
+    const t0 = performance.now();
+    const deck = parseDeck(buildDeck({ slides: [{ shapes: huge(7, 100_000) + frames }] }));
+    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(deck.slides[0]!.error).toBeUndefined();
+    expect(deck.slides[0]!.elements).toHaveLength(2_000);
+  });
+
+  it('rates layout decorations sharing an id with a huge layout shape once per deck, not once per slide', () => {
+    const t0 = performance.now();
+    const deck = parseDeck(
+      buildDeck({
+        layouts: [{ shapes: huge(7, 100_000) + frames }],
+        slides: Array.from({ length: 20 }, () => ({})),
+      }),
+    );
+    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(deck.slides.every((s) => s.elements.length === 2_000)).toBe(true);
+    expect(deck.slides[19]!.elements[0]).toMatchObject({ support: 'residual', reasons: ['graphicFrame'] });
   });
 });
 

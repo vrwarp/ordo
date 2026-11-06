@@ -256,7 +256,8 @@ export function readDeck(pkg: Package): DeckInfo {
 
 /** Follow a slide to its layout, master and theme. Throws when the slide part cannot be read. */
 export function slideParts(pkg: Package, part: string): SlideParts {
-  const slide = pkg.xml(part);
+  // A slide is read once: its tree is not cached (layouts, masters and themes are).
+  const slide = pkg.xml(part, { keep: false });
   if (!slide) throw new Error(`${clean(part)} is missing`);
   if (slide.name !== 'p:sld') throw new Error(`${clean(part)} is not a slide`);
   const out: SlideParts = { slide };

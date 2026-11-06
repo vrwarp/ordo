@@ -7,15 +7,17 @@ import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   convertDeck,
+  convertDeckIsolated,
   familiesOf,
   NativeRenderer,
   picturesNeeded,
   renameFamilies,
   sniffPicture,
+  spilledPictureSize,
   spillPart,
 } from './native.ts';
 import { dataUri, testPicture } from './png.ts';
-import { type DeckScore, featureRows, nativeStats } from './report.ts';
+import { beatsBlack, type DeckScore, featureRows, nativeStats } from './report.ts';
 
 const dirs: string[] = [];
 afterAll(() => Promise.all(dirs.map((d) => rm(d, { recursive: true, force: true }))));
@@ -167,6 +169,26 @@ describe('convertDeck', () => {
     expect(d.notes.join('\n')).toMatch(/converter failed/);
     expect(JSON.parse(await readFile(join(dir, 'slides.json'), 'utf8')).error).toBe(d.error);
   });
+
+  it('reads the pixel size of a spilled picture from its header', async () => {
+    const dir = await work();
+    const file = join(dir, 'p.png');
+    await writeFile(file, testPicture(320, 180));
+    expect(spilledPictureSize(file)).toEqual({ w: 320, h: 180 });
+    expect(spilledPictureSize(join(dir, 'missing.png'))).toBeUndefined();
+    expect(spilledPictureSize(undefined)).toBeUndefined();
+  });
+
+  it('isolates a conversion: one that runs out of time is a note, its spill folder removed', async () => {
+    const dir = await work();
+    await mkdir(join(dir, '.parts'));
+    const d = await convertDeckIsolated(await deck('LAYOUT_16x9'), dir, { timeoutMs: 1 });
+    expect(d.error).toBeTruthy();
+    expect(d.slides).toEqual([]);
+    expect(d.notes[0]).toMatch(/^converter failed: /);
+    expect(existsSync(join(dir, '.parts'))).toBe(false);
+    expect(JSON.parse(await readFile(join(dir, 'slides.json'), 'utf8')).error).toBe(d.error);
+  });
 });
 
 /** A Chromium to drive: ORDO_TEST_CHROMIUM, else Playwright's when it is installed. */
@@ -249,5 +271,12 @@ describe('report numbers', () => {
     expect(t1.native).toBeCloseTo(0.9);
     expect(st.tiers.map((t) => t.key)).toEqual(['T1', 'T2']);
     expect(featureRows(decks)).toEqual([{ key: 'kern', count: 1, share: 1, native: 0.9 }]);
+  });
+
+  it('counts a native picture that matches the page as beating black, even when black ties it', () => {
+    expect(beatsBlack({ n: 1, nativeSsim: 1, blackSsim: 1 })).toBe(true);
+    expect(beatsBlack({ n: 1, nativeSsim: 0.6, blackSsim: 0.6 })).toBe(false);
+    expect(beatsBlack({ n: 1, nativeSsim: 0.61, blackSsim: 0.6 })).toBe(true);
+    expect(beatsBlack({ n: 1, blackSsim: 0.6 })).toBe(false);
   });
 });

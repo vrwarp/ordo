@@ -20,7 +20,7 @@
  * Every walk here is iterative and linear in the size of the parsed tree; deck strings are only compared,
  * never used as plain-object keys.
  */
-import { rootOf, type SlideCtx, type Source } from './context.ts';
+import { rootOf, type SlideCtx } from './context.ts';
 import { bodyPrChain, chainOf, firstAttr, firstChildOf, nvOf } from './inherit.ts';
 import type {
   ArtRange,
@@ -32,7 +32,11 @@ import type {
   Support,
   Tier,
 } from './ir.ts';
+import { clean } from './log.ts';
 import { child, num, path, textOf, type XNode } from './xml.ts';
+
+/** Reasons are short words; one built from a deck string is cleaned and cut to this (design/27 §12 "Logs"). */
+const MAX_REASON_CHARS = 60;
 
 // ── Census features and tiers ───────────────────────────────────────────────────────────────────────────
 
@@ -335,8 +339,9 @@ const decoCache = new WeakMap<XNode, readonly string[]>();
 
 /**
  * The `deco:` features of the decorations of a layout or master: its non-placeholder shapes (a placeholder
- * anywhere in a shape makes it a template), shapes inside alternate content included (both branches, as the
- * census reads them). Only the features of `featuresOf` are checked.
+ * anywhere in a shape makes it a template), shapes inside alternate content included (the one branch
+ * `Package.xml` keeps, `markup.ts`; the census script read both). Only the features of `featuresOf` are
+ * checked.
  */
 function decoFeatures(root: XNode | undefined): readonly string[] {
   if (!root) return [];
@@ -358,7 +363,8 @@ function decoFeatures(root: XNode | undefined): readonly string[] {
 }
 
 /**
- * The census features of a slide: its own shape tree (both branches of `mc:AlternateContent`), plus the
+ * The census features of a slide: its own shape tree (the branch of `mc:AlternateContent` `Package.xml`
+ * keeps), plus the
  * `deco:` features of the decorations it shows: the layout's unless the slide has `showMasterSp="0"`, and
  * the master's unless the layout has it too.
  */
@@ -414,6 +420,42 @@ export function elementSupport(
   return { support, reasons: [...residual, ...approx] };
 }
 
+/** What a subtree holds that §5 rates, whatever element it is read for (one walk per node per deck). */
+interface NodeMarks {
+  residual: string[];
+  approx: string[];
+  /** An `a:softEdge` somewhere: approx only on a picture. */
+  softEdge: boolean;
+}
+
+/**
+ * The marks of each XML node rated so far. Layout and master decorations are rated on every slide that
+ * shows them, and up to `MAX_CANDIDATES` nodes per element: without the cache, a huge shared node would be
+ * walked once per element of every slide.
+ */
+const marksCache = new WeakMap<XNode, NodeMarks>();
+
+function marksOf(node: XNode): NodeMarks {
+  let m = marksCache.get(node);
+  if (m) return m;
+  const residual = new Set<string>();
+  const approx = new Set<string>();
+  let softEdge = false;
+  const stack = [node];
+  while (stack.length) {
+    const n = stack.pop()!;
+    if (n.name === 'a14:m' || n.name.startsWith('m:oMath')) residual.add('math');
+    else if (n.name === 'a:sp3d' && isReal3d(n)) residual.add('3d');
+    else if (n.name === 'a:reflection') approx.add('reflection');
+    else if (n.name === 'a:innerShdw') approx.add('innerShdw');
+    else if (n.name === 'a:softEdge') softEdge = true;
+    pushChildren(stack, n);
+  }
+  m = { residual: [...residual], approx: [...approx], softEdge };
+  marksCache.set(node, m);
+  return m;
+}
+
 /** The §5 reasons that make an element residual, and those that make it approx (each de-duplicated). */
 function supportReasons(
   ctx: SlideCtx,
@@ -429,16 +471,10 @@ function supportReasons(
   if (ext === 'wdp' || ext === 'hdp') residual.push(`pic:${ext}`);
   if (ext === 'emf' || ext === 'wmf') approx.push('metafile');
   if (node) {
-    const stack = [node];
-    while (stack.length) {
-      const n = stack.pop()!;
-      if (n.name === 'a14:m' || n.name.startsWith('m:oMath')) residual.push('math');
-      else if (n.name === 'a:sp3d' && isReal3d(n)) residual.push('3d');
-      else if (n.name === 'a:reflection') approx.push('reflection');
-      else if (n.name === 'a:innerShdw') approx.push('innerShdw');
-      else if (n.name === 'a:softEdge' && part !== undefined) approx.push('softEdge');
-      pushChildren(stack, n);
-    }
+    const marks = marksOf(node);
+    residual.push(...marks.residual);
+    approx.push(...marks.approx);
+    if (marks.softEdge && part !== undefined) approx.push('softEdge');
     if (e.kind === 'shape' && e.text) {
       const body = bodyPrChain(chainOf(ctx, node, e.from));
       const vert = e.text.vert ?? firstAttr(body, 'vert');
@@ -455,62 +491,76 @@ function supportReasons(
 
 /** Elements of a shape tree that the walk can turn into IR elements. */
 const LEAF_ELEMENTS: ReadonlySet<string> = new Set(['p:sp', 'p:cxnSp', 'p:pic', 'p:graphicFrame']);
-/** What each IR element kind can have been read from. */
-const KIND_ELEMENTS: Record<Element['kind'], ReadonlySet<string> | undefined> = {
-  shape: new Set(['p:sp', 'p:cxnSp']),
-  picture: new Set(['p:pic']),
-  residual: undefined,
-};
+/** What each IR element kind can have been read from (a residual element: any leaf). */
+const KIND_OF_LEAF: Readonly<Record<string, 'shape' | 'picture' | undefined>> = Object.assign(
+  Object.create(null),
+  { 'p:sp': 'shape', 'p:cxnSp': 'shape', 'p:pic': 'picture' },
+);
 
 /**
- * XML elements an IR element is rated by at most: the branches of alternate content share an id, and a
- * damaged deck that gives thousands of shapes one id must not make the rating quadratic.
+ * XML elements an IR element is rated by at most: alternate content kept one branch, but a damaged deck can
+ * give thousands of shapes one id, and the rating must not become quadratic.
  */
 const MAX_CANDIDATES = 4;
 
-/** The shape-tree elements of the slide, its layout and master by source and `cNvPr id`, document order. */
-function nodeIndex(ctx: SlideCtx): Map<string, XNode[]> {
-  const out = new Map<string, XNode[]>();
-  for (const from of ['slide', 'layout', 'master'] as Source[]) {
-    const stack = [...(path(rootOf(ctx, from), 'p:cSld', 'p:spTree')?.children ?? [])].reverse();
-    while (stack.length) {
-      const el = stack.pop()!;
-      if (LEAF_ELEMENTS.has(el.name)) {
-        const id = num(child(nvOf(el), 'p:cNvPr')?.attrs.id) ?? 0;
-        const key = `${from} ${id}`;
-        const list = out.get(key);
-        if (list) list.push(el);
-        else out.set(key, [el]);
-      } else if (
-        el.name === 'p:grpSp' ||
-        el.name === 'mc:AlternateContent' ||
-        el.name === 'mc:Choice' ||
-        el.name === 'mc:Fallback'
-      )
-        for (let i = el.children.length - 1; i >= 0; i--) stack.push(el.children[i]!);
-    }
+/** Candidate nodes of one `cNvPr id` in one part, per IR element kind, each list capped when it is built. */
+interface Candidates {
+  shape: XNode[];
+  picture: XNode[];
+  any: XNode[];
+}
+
+/** A shape's `cNvPr id` as `walk.ts` stores it in `ElementBase.shapeId`. */
+function shapeIdOf(el: XNode): number {
+  const v = num(child(nvOf(el), 'p:cNvPr')?.attrs.id);
+  return v !== undefined && Number.isFinite(v) ? Math.max(0, Math.min(2_147_483_647, Math.floor(v))) : 0;
+}
+
+/** The candidates of a part's shape tree by `cNvPr id`, document order; built once per part per deck. */
+const candidateCache = new WeakMap<XNode, Map<number, Candidates>>();
+
+function candidatesOf(root: XNode | undefined): Map<number, Candidates> | undefined {
+  if (!root) return undefined;
+  let out = candidateCache.get(root);
+  if (out) return out;
+  out = new Map();
+  const stack = [...(path(root, 'p:cSld', 'p:spTree')?.children ?? [])].reverse();
+  while (stack.length) {
+    const el = stack.pop()!;
+    if (LEAF_ELEMENTS.has(el.name)) {
+      const id = shapeIdOf(el);
+      let c = out.get(id);
+      if (!c) out.set(id, (c = { shape: [], picture: [], any: [] }));
+      const kind = KIND_OF_LEAF[el.name];
+      if (kind && c[kind].length < MAX_CANDIDATES) c[kind].push(el);
+      if (c.any.length < MAX_CANDIDATES) c.any.push(el);
+    } else if (
+      el.name === 'p:grpSp' ||
+      el.name === 'mc:AlternateContent' || // `Package.xml` left it one branch
+      el.name === 'mc:Choice' ||
+      el.name === 'mc:Fallback'
+    )
+      for (let i = el.children.length - 1; i >= 0; i--) stack.push(el.children[i]!);
   }
+  candidateCache.set(root, out);
   return out;
 }
 
 /**
  * Set each element's support and reasons: the worse of the reader's verdict and `elementSupport`, reasons
  * merged. The XML is the shape's `node` when the reader kept it, else the elements of the same source and
- * `cNvPr id` that the kind can be read from (the first `MAX_CANDIDATES`); both branches of alternate content
- * are candidates and their verdicts are merged, so an element is never rated better than either branch.
+ * `cNvPr id` that the kind can be read from (the first `MAX_CANDIDATES`; `Package.xml` keeps one branch of
+ * alternate content, so these are shapes that really share an id). Their verdicts are merged, so an element
+ * is never rated better than any of them. Each node's subtree is walked once per deck (`marksOf`).
  * Returns, per element, the reasons that make it residual (empty for the others).
  */
 export function refineSupport(ctx: SlideCtx, elements: Element[]): string[][] {
-  let index: Map<string, XNode[]> | undefined;
   return elements.map((e) => {
     let nodes: XNode[] = [];
     if (e.kind === 'shape' && e.node) nodes = [e.node];
     else {
-      index ??= nodeIndex(ctx);
-      const allowed = KIND_ELEMENTS[e.kind];
-      nodes = (index.get(`${e.from} ${e.shapeId}`) ?? [])
-        .filter((n) => !allowed || allowed.has(n.name))
-        .slice(0, MAX_CANDIDATES);
+      const c = candidatesOf(rootOf(ctx, e.from))?.get(e.shapeId);
+      if (c) nodes = e.kind === 'residual' ? c.any : c[e.kind];
     }
     const residual: string[] = [];
     const approx: string[] = [];
@@ -528,7 +578,7 @@ export function refineSupport(ctx: SlideCtx, elements: Element[]): string[][] {
         : e.support === 'approx' || approx.length
           ? 'approx'
           : 'native';
-    const reasons = [...new Set([...own, ...residual, ...approx])];
+    const reasons = [...new Set([...own, ...residual, ...approx].map((r) => clean(r, MAX_REASON_CHARS)))];
     e.support = support;
     if (reasons.length) e.reasons = reasons;
     return support === 'residual' ? [...new Set(residual)] : [];
@@ -662,7 +712,7 @@ export function classifySlide(ctx: SlideCtx, elements: Element[], background: Ba
   return {
     tier,
     class: cls,
-    reasons: [...reasons, ...[...new Set(why)].sort(), ...over],
+    reasons: [...reasons, ...[...new Set(why)].sort(), ...over].map((r) => clean(r, MAX_REASON_CHARS)),
     ...(art && cls === 'hybrid' ? { art } : {}),
   };
 }

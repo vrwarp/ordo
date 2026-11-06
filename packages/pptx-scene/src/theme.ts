@@ -9,8 +9,9 @@
  * - Format scheme: the fill, line, effect and background-fill style lists, kept raw because their `phClr`
  *   is resolved only when a style reference (`p:style`, `p:bgRef`) uses an entry (`color.ts` `styleEntry`).
  *
- * Deck strings are bounded: typefaces are cut to `MAX_TYPEFACE` characters, at most `MAX_SCRIPT_FONTS`
- * script entries are read per font collection, and every map keyed by deck strings is a `Map`.
+ * Deck strings are bounded: typefaces lose control characters and are cut to `MAX_TYPEFACE` characters
+ * (`typefaceName`), at most `MAX_SCRIPT_FONTS` script entries are read per font collection, and every map
+ * keyed by deck strings is a `Map`.
  */
 import { type ColorCtx, colorIn, hexRgba, parseHex, styleEntry } from './color.ts';
 import type { Rgba } from './ir.ts';
@@ -76,7 +77,18 @@ const OFFICE: Record<(typeof SCHEME_COLORS)[number], number> = {
   folHlink: 0x954f72,
 };
 
-const typeface = (n: XNode | undefined) => (n?.attrs.typeface ?? '').slice(0, MAX_TYPEFACE);
+/**
+ * A typeface as a deck string: C0 and C1 control characters (a form feed is a CSS newline, which makes a
+ * Canvas font shorthand invalid) and line separators removed, trimmed, cut to `MAX_TYPEFACE`.
+ */
+export function typefaceName(v: string | undefined): string {
+  return v ? v.replace(CONTROL, '').trim().slice(0, MAX_TYPEFACE) : '';
+}
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: removing them is the point
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
+
+const typeface = (n: XNode | undefined) => typefaceName(n?.attrs.typeface);
 
 function fontSet(n: XNode | undefined, latin: string): FontSet {
   const scripts = new Map<string, string>();
@@ -97,8 +109,18 @@ function fontSet(n: XNode | undefined, latin: string): FontSet {
 
 const elements = (n: XNode | undefined) => (n ? n.children.filter((c) => c.name !== '#text') : []);
 
-/** Read a theme part's root (`a:theme`); a missing theme gives Office's defaults. */
+/** Themes read so far, by root: a theme is read for every slide that uses it. */
+const themeCache = new WeakMap<XNode, Theme>();
+
+/** Read a theme part's root (`a:theme`); a missing theme gives Office's defaults. Memoised per root. */
 export function readTheme(root: XNode | undefined): Theme {
+  if (!root) return readThemeOnce(undefined);
+  let t = themeCache.get(root);
+  if (!t) themeCache.set(root, (t = readThemeOnce(root)));
+  return t;
+}
+
+function readThemeOnce(root: XNode | undefined): Theme {
   const el = child(root, 'a:themeElements');
   const scheme = child(el, 'a:clrScheme');
   const defaults = new Map<string, Rgba>(SCHEME_COLORS.map((n) => [n, hexRgba(OFFICE[n])]));
@@ -128,10 +150,11 @@ export function readTheme(root: XNode | undefined): Theme {
 export function themeFont(theme: Theme, typeface: string | undefined, script?: string): string | undefined {
   if (!typeface) return undefined;
   if (typeface.length !== 6 || typeface[0] !== '+' || typeface[3] !== '-')
-    return typeface.slice(0, MAX_TYPEFACE);
+    return typefaceName(typeface) || undefined;
   const who = typeface.slice(1, 3);
   const kind = typeface.slice(4);
-  if ((who !== 'mj' && who !== 'mn') || (kind !== 'lt' && kind !== 'ea' && kind !== 'cs')) return typeface;
+  if ((who !== 'mj' && who !== 'mn') || (kind !== 'lt' && kind !== 'ea' && kind !== 'cs'))
+    return typefaceName(typeface) || undefined;
   const set = who === 'mj' ? theme.major : theme.minor;
   const face =
     kind === 'lt' ? set.latin : (kind === 'ea' ? set.ea : set.cs) || (script ? set.scripts.get(script) : '');

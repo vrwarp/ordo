@@ -83,13 +83,20 @@ export function clampBox(b: unknown, dflt: Box = { x: 0, y: 0, w: W, h: H, rotat
 }
 
 const FONT_FAMILY_MAX = 200;
+/**
+ * Removed from font families: quotes and backslashes (the family is quoted in the font shorthand) and every
+ * control character (a form feed is a CSS newline: the shorthand would not parse and Canvas would keep the
+ * previous font).
+ */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: removing them is the point
+const FONT_FAMILY_UNSAFE = /["\\\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
 
 export function clampStyle(s: unknown, dflt: TextStyle = DEFAULT_STYLE): TextStyle {
   if (!s || typeof s !== 'object') return dflt;
   const x = s as Partial<TextStyle>;
   const family =
     typeof x.fontFamily === 'string' && x.fontFamily.trim()
-      ? x.fontFamily.slice(0, FONT_FAMILY_MAX).replace(/["\\\n\r]/g, '')
+      ? x.fontFamily.slice(0, FONT_FAMILY_MAX).replace(FONT_FAMILY_UNSAFE, '')
       : dflt.fontFamily;
   const out: TextStyle = {
     fontFamily: family,

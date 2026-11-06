@@ -3,8 +3,8 @@
  *
  * M1 emits today's objects only (`TextObject`, `ImageObject`, `ShapeObject`), plus `ImageObject.crop`
  * (design/27 §3.1; on unless `EmitOptions.crop` is false).
- * Pictures carry placeholder media ids, `pptxmedia:<part>` by default, which the harness (and later the
- * hub) maps to real media.
+ * Pictures carry placeholder media ids, `pptxmedia:<n>` by default (numbered in first-use order; the part
+ * each stands for is listed in `EmitResult.media`), which the harness (and later the hub) maps to real media.
  *
  * - **Placement.** Every element's affine is mapped to the 1920x1080 logical canvas (`frame.ts`: contain-
  *   fit, 4:3 decks centred). Boxes keep their rotation; flips of symmetric shapes need nothing, a flipped
@@ -24,13 +24,19 @@
  * - **Shapes**: rect, roundRect (radius from its `adj`), ellipse; lines and connectors as one `line` object
  *   per straight segment at any angle. Other presets are drawn as the nearest of these (noted). Fills as
  *   their legacy colour: solid; a gradient's first stop; a pattern's blend. A picture fill is an image.
+ * - **Paragraph margins** fold into the text box, as `padding` does: the box is narrowed on the paragraphs'
+ *   start side by the margin all of their text keeps clear of (`marL`; for a paragraph without a bullet,
+ *   the first line's `marL + indent` when that is less), since a legacy `TextObject` has one left edge.
  * - **Pictures** (`p:pic` and picture fills) are stretched images. `a:fillRect` folds into the box (clipped
  *   to the shape) and, with `crop`, into the crop together with `a:srcRect`. roundRect and ellipse clips
  *   become `radius` (an ellipse is exact for a circle); a picture outline is a stroke-only shape above it.
- * - **Backgrounds**: a plain stretched picture whose aspect matches a 16:9 slide → `backgroundMediaId`;
- *   any other picture → a bottom image over the slide area; solid, gradient and pattern → a bottom rect over
- *   the whole 1920x1080 frame (`extendBackgrounds`, default) or the slide area; none → white, as
- *   PowerPoint shows it.
+ *   An unrotated picture reaching past ±2× the canvas (the render clamp, design/27 §12) is cut there and
+ *   the cut folded into the crop, so the clamp never squeezes it.
+ * - **Backgrounds**: a plain stretched picture whose aspect is known and matches a 16:9 slide →
+ *   `backgroundMediaId` (drawn cover-fit); any other picture, one of unknown size included (a spilled part
+ *   without `ParseOptions.pictureSize`) → a bottom image stretched over the slide area, on white; solid,
+ *   gradient and pattern → a bottom rect over the whole 1920x1080 frame (`extendBackgrounds`, default) or
+ *   the slide area; none → white, as PowerPoint shows it.
  * - **Lyric box** (design/27 §4 "Church mappings"): the slide's own body placeholder with the most
  *   characters; else the largest other text by characters × area (not title, date, footer, slide number);
  *   the title only when it is the only text.
@@ -80,6 +86,10 @@ export const MAX_OBJECTS = 1_000;
 export const SINGLE_LINE = 1.2;
 /** Logical coordinates are bounded by the schema (`coord`). */
 const MAX_COORD = 100_000;
+/** The render clamp keeps box edges within ±2× the logical canvas (`@ordo/renderer` `CLAMP.boxFactor`). */
+const CANVAS_W = 1_920;
+const CANVAS_H = 1_080;
+const BOX_FACTOR = 2;
 /** How far a `wrap="none"` box grows on the side its alignment extends to, in logical px. */
 const NO_WRAP_GROWTH = 1_920;
 /**
@@ -99,7 +109,10 @@ const WHITE: OrdoRgba = { r: 255, g: 255, b: 255, a: 1 };
 export interface EmitOptions {
   /** A new id for each slide and object; default: deterministic `pptx-<n>`. */
   newId?: () => string;
-  /** The media id of a picture part; default `pptxmedia:<part>`. */
+  /**
+   * The media id of a picture part; default `pptxmedia:<n>`, numbered from 1 in first-use order (part names
+   * can be long; a slide's ids must stay within the schema's 200 characters).
+   */
   mediaId?: (part: string) => string;
   /** Solid backgrounds cover the whole 1920x1080 frame instead of the slide area (default true). */
   extendBackgrounds?: boolean;
@@ -152,7 +165,7 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
   let n = 0;
   const newId = opts.newId ?? (() => `pptx-${++n}`);
   const media = new Map<string, string>();
-  const mediaId = opts.mediaId ?? ((part: string) => MEDIA_PREFIX + part);
+  const mediaId = opts.mediaId ?? (() => `${MEDIA_PREFIX}${media.size + 1}`);
   const slides = scene.slides.map((s) => {
     const t0 = performance.now();
     const { notes, log } = noteList();
@@ -252,7 +265,8 @@ function emitBackground(ctx: EmitCtx, s: SlideScene, slide: Slide): void {
     const p = fill.picture;
     const slideAspect = ctx.frame.cx / ctx.frame.cy;
     const sixteenNine = Math.abs(slideAspect - 16 / 9) < (16 / 9) * 0.01;
-    const sameAspect = !p.px || Math.abs(p.px.w / p.px.h - slideAspect) <= slideAspect * 0.01;
+    // An unknown size is not taken for the slide's aspect: cover-fitting a 4:3 photo would cut it.
+    const sameAspect = p.px !== undefined && Math.abs(p.px.w / p.px.h - slideAspect) <= slideAspect * 0.01;
     const plain = !p.crop && !p.fillRect && !p.tile && p.alpha === undefined && !p.effects?.length;
     if (sixteenNine && sameAspect && plain) {
       slide.backgroundMediaId = mediaOf(ctx, p.part);
@@ -482,7 +496,17 @@ function pictureObject(
   const placed = placePicture(ctx.crop ? p : { ...p, crop: undefined });
   if (!placed) return undefined;
   const [x0, y0, x1, y1] = placed.rect;
-  const box = boxOf(ctx, multiply(xf, [x1 - x0, 0, 0, y1 - y0, x0, y0]));
+  let box = boxPx(ctx.frame, multiply(xf, [x1 - x0, 0, 0, y1 - y0, x0, y0]));
+  let crop = ctx.crop ? placed.crop : undefined;
+  if (outsideClamp(box)) {
+    if (box.rotation === 0 && geom === 'rect' && ctx.crop) {
+      const cut = cutToClamp(box, crop);
+      if (!cut) return undefined;
+      box = cut.box;
+      crop = cut.crop;
+    } else ctx.log('a picture reaching far past the slide is drawn squeezed into the render bounds');
+  }
+  box = clampBox(box);
   const o: CroppedImage = {
     id: ctx.newId(),
     type: 'image',
@@ -494,11 +518,41 @@ function pictureObject(
   };
   if (geom === 'roundRect') o.radius = cornerRadius(box, adj);
   else if (geom === 'ellipse') o.radius = bound(Math.min(box.w, box.h) / 2, 0, MAX_COORD);
-  if (ctx.crop && placed.crop) {
+  if (crop) {
     const c = (v: number) => bound(v, -1, 1);
-    o.crop = { l: c(placed.crop.l), t: c(placed.crop.t), r: c(placed.crop.r), b: c(placed.crop.b) };
+    o.crop = { l: c(crop.l), t: c(crop.t), r: c(crop.r), b: c(crop.b) };
   } else if (!ctx.crop && p.crop) ctx.log('a cropped picture is drawn uncropped');
   return o;
+}
+
+/** Whether a box reaches past the render clamp's bounds (±2× the canvas), where it would be squeezed. */
+function outsideClamp(b: Box): boolean {
+  const W = BOX_FACTOR * CANVAS_W;
+  const H = BOX_FACTOR * CANVAS_H;
+  return b.x < -W || b.y < -H || b.x + b.w > W || b.y + b.h > H;
+}
+
+/**
+ * An unrotated picture box cut to the render clamp's bounds, the part cut off folded into its crop (shares
+ * of the source, `ImageObject.crop`). Undefined when nothing of it is left inside.
+ */
+export function cutToClamp(box: Box, crop: Insets | undefined): { box: Box; crop?: Insets } | undefined {
+  const W = BOX_FACTOR * CANVAS_W;
+  const H = BOX_FACTOR * CANVAS_H;
+  const c = crop ?? { l: 0, t: 0, r: 0, b: 0 };
+  const axis = (at: number, len: number, lo: number, hi: number, cl: number, cr: number) => {
+    const a = Math.max(at, lo);
+    const b = Math.min(at + len, hi);
+    if (!(len > 0) || !(b > a)) return undefined;
+    const used = 1 - cl - cr; // the source's share the box shows
+    return { at: a, len: b - a, cl: cl + ((a - at) / len) * used, cr: cr + ((at + len - b) / len) * used };
+  };
+  const x = axis(box.x, box.w, -W, W, c.l, c.r);
+  const y = axis(box.y, box.h, -H, H, c.t, c.b);
+  if (!x || !y) return undefined;
+  const out = { l: x.cl, t: y.cl, r: x.cr, b: y.cr };
+  const any = [out.l, out.t, out.r, out.b].some((v) => Math.abs(v) > 1e-9);
+  return { box: { x: x.at, y: y.at, w: x.len, h: y.len, rotation: 0 }, ...(any ? { crop: out } : {}) };
 }
 
 function mediaOf(ctx: EmitCtx, part: string): string {
@@ -623,6 +677,8 @@ function textObject(
   const b = lenPx(f, ins.b);
   const pad = Math.min(l, t, r, b);
   box = insetBox(box, l - pad, t - pad, r - pad, b - pad);
+  const margin = marginOf(body);
+  if (margin.l || margin.r) box = insetBox(box, lenPx(f, margin.l), 0, lenPx(f, margin.r), 0);
   const para = dom.para;
   const align =
     para.align === 'center' || para.align === 'distribute'
@@ -684,6 +740,27 @@ function textObject(
   }
   if (st.caps === 'small') ctx.log('small caps are drawn as capitals (M2)');
   return { id: ctx.newId(), type: 'text', box: clampBox(box), text, style, opacity: 1 };
+}
+
+/**
+ * The paragraph margin to fold into a legacy text box, in EMU, on the start side of the paragraphs: the
+ * least that every paragraph with text keeps clear of (`marL`, or the first line's `marL + indent` when a
+ * paragraph has no bullet and that is less; bullets are not drawn in M1, so text starts at `marL`). Left
+ * for left-to-right paragraphs, right for right-to-left ones; none when they are mixed.
+ */
+export function marginOf(body: TextBody): { l: number; r: number } {
+  let least = Number.POSITIVE_INFINITY;
+  let ltr = false;
+  let rtl = false;
+  for (const p of body.paras) {
+    if (!p.runs.some((r) => r.kind !== 'break' && r.text.trim())) continue;
+    const m = p.bullet ? p.marL : Math.min(p.marL, p.marL + p.indent);
+    least = Math.min(least, Math.max(0, m));
+    if (p.rtl) rtl = true;
+    else ltr = true;
+  }
+  if (!Number.isFinite(least) || least <= 0 || (ltr && rtl)) return { l: 0, r: 0 };
+  return rtl ? { l: 0, r: least } : { l: least, r: 0 };
 }
 
 /** `TextStyle.lineHeight` (a multiple of the font size) from the paragraph's line spacing. */

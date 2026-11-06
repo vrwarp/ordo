@@ -14,7 +14,7 @@
  * Owned by work item C (inherit-emit).
  */
 import type { SlideCtx, Source } from './context.ts';
-import { child, path, type XNode } from './xml.ts';
+import { child, firstChild, path, type XNode } from './xml.ts';
 
 /** A placeholder reference (`p:ph`). OOXML's default type is 'obj' (a body placeholder). */
 export interface PhRef {
@@ -162,6 +162,20 @@ export function spPrChain(c: Chain): XNode[] {
   return out;
 }
 
+/** Guide values read per preset (real presets have at most 8 adjustments). */
+const MAX_GUIDES = 10;
+/** Children of an `a:avLst` looked at for those guides (a deck can give it any number of others). */
+const MAX_GUIDE_SCAN = 64;
+
+/**
+ * A preset name as a deck string that reaches notes and reasons: letters and digits only (every
+ * `ST_ShapeType` value is), at most 40 characters; anything else is 'other'.
+ */
+export function presetName(v: string | undefined): string {
+  if (v === undefined) return 'rect';
+  return /^[A-Za-z0-9]{1,40}$/.test(v) ? v : 'other';
+}
+
 /** The nearest preset or custom geometry along the chain, with its guide values. */
 export function geometryOf(c: Chain): { geom: string; adj?: [string, number][] } {
   for (const n of nodes(c)) {
@@ -169,14 +183,16 @@ export function geometryOf(c: Chain): { geom: string; adj?: [string, number][] }
     const prst = child(spPr, 'a:prstGeom');
     if (prst) {
       const adj: [string, number][] = [];
-      for (const gd of child(prst, 'a:avLst')?.children ?? []) {
-        if (gd.name !== 'a:gd' || adj.length >= 10) continue;
+      const gds = child(prst, 'a:avLst')?.children ?? [];
+      for (let i = 0; i < gds.length && i < MAX_GUIDE_SCAN && adj.length < MAX_GUIDES; i++) {
+        const gd = gds[i]!;
+        if (gd.name !== 'a:gd') continue;
         const m = /^val\s+(-?\d+(?:\.\d+)?)$/.exec((gd.attrs.fmla ?? '').slice(0, 40).trim());
         const v = m ? Number(m[1]) : Number.NaN;
         if (gd.attrs.name && Number.isFinite(v))
           adj.push([gd.attrs.name.slice(0, 16), Math.max(-MAX_ADJ, Math.min(MAX_ADJ, v))]);
       }
-      const geom = (prst.attrs.prst ?? 'rect').slice(0, 40);
+      const geom = presetName(prst.attrs.prst);
       return adj.length ? { geom, adj } : { geom };
     }
     if (child(spPr, 'a:custGeom')) return { geom: 'custom' };
@@ -267,14 +283,18 @@ export function firstChildOf(chain: readonly (XNode | undefined)[], name: string
   return undefined;
 }
 
-/** The first child named any of `names` along `chain` (the nearest node that has one decides). */
+/**
+ * The first child named any of `names` along `chain` (the nearest node that has one decides). Looked up
+ * through the node's name index (`xml.ts` `firstChild`): chains hold shared layout, master and presentation
+ * nodes, read once per paragraph.
+ */
 export function firstOfAny(
   chain: readonly (XNode | undefined)[],
   names: readonly string[],
 ): XNode | undefined {
   for (const n of chain) {
-    if (!n) continue;
-    for (const c of n.children) if (names.includes(c.name)) return c;
+    const c = firstChild(n, names);
+    if (c) return c;
   }
   return undefined;
 }

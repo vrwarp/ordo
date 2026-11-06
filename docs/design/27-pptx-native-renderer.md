@@ -172,7 +172,7 @@ Source: a census of 4,897 shown slides of worship decks in the local validation 
 | `inherit.ts` | Placeholder matching; xfrm/bodyPr chain; list-style chain (§4). |
 | `text.ts`, `walk.ts`, `picture.ts`, `background.ts`, `media.ts`, `timing.ts`, `notes.ts` | Shape-tree walk, text bodies, pictures, backgrounds, embedded media, `p:timing`/transitions, notes. |
 | `classify.ts` | Per-element `native / approx / residual`, slide class, art z-range, tier T1-T5 and reasons, size budgets (§3.4). |
-| `emit.ts` | IR → ordo objects with `pptxmedia:<part>` placeholder ids, plus a per-slide digest. |
+| `emit.ts` | IR → ordo objects with `pptxmedia:<n>` placeholder ids (numbered in first-use order, the part of each listed in `EmitResult.media`, so a long part name never makes an id the schema refuses), plus a per-slide digest. |
 | `rendercopy.ts` (M3) | The minimal deck for LibreOffice (§5). Replaces the main-thread `pptxForRendering`. |
 | `index.ts` | `parseDeck(src, opts): DeckScene`; `emitSlides(scene, opts): EmitResult`. |
 | `packages/domain/src/readable.ts` (M2) | `readableText(o)`: `TextObject.text` with automatic numbers and bullets written as text, for the stage, bands, labels and search. `textScripts(text)` for the font scan. |
@@ -196,7 +196,7 @@ POST /import/document  (423 while live, ≤1 GiB, zip+.pptx sniff, stored by SHA
        ≤50 clips, ≤20 fonts); embeddings, vbaProject, customXml skipped; .proPlaylist nesting off
      2 pool 'pptx-scene' (batches ≤150 slides; slide parts transferred, shared masters/layouts/themes/presentation
        copied into each batch; 2 min per batch, ≤15 min of pool time per import; 512 MB heap)
-       ─► DeckScene + emitted objects ('pptxmedia:<part>' ids)
+       ─► DeckScene + emitted objects ('pptxmedia:<n>' ids, each with its part)
      3 classification and size budgets (§3.4): slides over budget become picture class (logged)
      4 if any slide is hybrid/picture or has a metafile: enqueue heavy job 'pptx-lo' now, before any clip job
      5 pictures ─► prepare (header check, downscale to display need, convert) ─► addReadyPicture;
@@ -525,7 +525,7 @@ Whole presentations travel in goLive (to every client, into the journal, snapsho
 **Master and layout decorations** are drawn under the slide's own shapes unless `showMasterSp="0"` (on the slide or the layout). They become objects with `role:'deco'`: unlocked, deletable per slide, and covered in bulk by 'Apply to similar'.
 
 **Backgrounds.** Looked up on the slide, else the layout, else the master. `bgRef ≥ 1001` means `bgFillStyleLst[idx−1001]` with phClr.
-- A picture background (stretched, aspect within 1% of the slide, no crop, tile, recolour or alpha) on a 16:9 deck → `Slide.backgroundMediaId`. It is promoted to `Presentation.backgroundMediaId` when every slide shares it (the pro7 pattern, `pro7.ts:838-857`), so the existing pickers swap it.
+- A picture background (stretched, aspect within 1% of the slide, no crop, tile, recolour or alpha) on a 16:9 deck → `Slide.backgroundMediaId`. The aspect must be known: a spilled picture's size is read from the first bytes of its file (`ParseOptions.pictureSize`), and a picture of unknown size stays a bottom image stretched over the slide on white. It is promoted to `Presentation.backgroundMediaId` when every slide shares it (the pro7 pattern, `pro7.ts:838-857`), so the existing pickers swap it.
 - Any other picture background → a bottom `ImageObject{role:'bg'}`. The background layer is cover-fit while PowerPoint pillarboxes 4:3.
 - Solid or gradient → a bottom rect `ShapeObject{role:'bg'}` over the slide area. With the import option 'Extend plain backgrounds to 16:9' (on by default), it covers the whole 1920x1080 frame instead.
 - Tiled → pre-tiled into a picture at slide size.
@@ -1245,6 +1245,9 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
 - **Fonts:** bundled fonts and the Dockerfile; script fallbacks sent to every output through output-config fonts; CJK by text scan; `Font.unicodeRange` and Google Fonts subsets.
 - **Sizes:** §3.4 budgets in the importer, `previewSlice`, the resolved-playlist warning and the local adopt check, snapshot size in health.
 - **Route:** `renderer=native` is the default; ImportTab offers 'Editable (recommended)' / 'Pictures (LibreOffice)'.
+- **Wiring left from M1** (M1 changed nothing under `apps/`): the editor's `SlideCanvas` image node passes
+  `o.crop` to `drawImageFit`, and 'Replace image' drops the old picture's crop, so the editor shows the
+  `ImageObject.crop` every other drawer already honours (§3.2 "Each field is wired everywhere it is read").
 - **Fix-now and migration:**
   - `previewMedia`;
   - uniform mapping, shown index and `textAligned` for new picture textBoxes;

@@ -12,6 +12,7 @@ import {
   styleLine,
   type Theme,
   themeFont,
+  typefaceName,
 } from './theme.ts';
 import { parseXml, rootOf, type XNode } from './xml.ts';
 
@@ -229,5 +230,23 @@ describe('style references', () => {
     expect(styleLine(t, ref('<a:lnRef idx="0"/>'), ctx)).toBeUndefined();
     expect(styleEffect(t, ref('<a:effectRef idx="3"/>'), ctx)?.effect.name).toBe('a:effectStyle');
     expect(styleEffect(t, ref('<a:effectRef idx="9"/>'), ctx)).toBeUndefined();
+  });
+});
+
+describe('typeface names', () => {
+  it('lose control characters (a form feed would break the Canvas font shorthand) and are cut', () => {
+    expect(typefaceName('Arial\f')).toBe('Arial');
+    expect(typefaceName(' A\u0000r\u0085i al ')).toBe('Arial');
+    expect(typefaceName('x'.repeat(MAX_TYPEFACE + 10))).toHaveLength(MAX_TYPEFACE);
+    expect(typefaceName(undefined)).toBe('');
+    const t = theme(themePart('', fontCollection('majorFont', 'Big\fFace', '', '')));
+    expect(t.major.latin).toBe('BigFace');
+    expect(themeFont(t, 'Plain\u000b')).toBe('Plain');
+    expect(themeFont(t, '+x\f-lt')).toBe('+x-lt');
+  });
+
+  it('reads a theme once per root', () => {
+    const root = parse(themePart(''));
+    expect(readTheme(root)).toBe(readTheme(root));
   });
 });

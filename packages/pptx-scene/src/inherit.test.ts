@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { type SlideCtx, slideContext } from './context.ts';
 import { readDeck } from './deck.ts';
 import { frameOf } from './frame.ts';
+import { parseDeck } from './index.ts';
+import type { ShapeElement } from './ir.ts';
 import {
   bodyPrChain,
   chainOf,
@@ -17,6 +19,7 @@ import {
   paraChain,
   paraChainParts,
   placeholderOf,
+  presetName,
   spPrChain,
 } from './inherit.ts';
 import { openPackage } from './opc.ts';
@@ -245,5 +248,61 @@ describe('paragraph-property chain', () => {
     const parts = paraChainParts(ctx, chainOf(ctx, title!, 'slide'), 0);
     expect(parts.local).toEqual([]);
     expect(parts.styles).toHaveLength(3);
+  });
+});
+
+describe('bounded work on shared nodes', () => {
+  /** A slide body placeholder inheriting everything from the layout's placeholder `idx="1"`. */
+  const slidePh = (i: number) =>
+    `<p:sp><p:nvSpPr><p:cNvPr id="${10 + i}" name=""/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>` +
+    '<p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:t>x</a:t></a:r></a:p></p:txBody></p:sp>';
+  const layoutPh = (spPr: string) =>
+    '<p:sp><p:nvSpPr><p:cNvPr id="2" name=""/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>' +
+    `<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>${spPr}</p:spPr></p:sp>`;
+  const inheriting = (spPr: string) =>
+    parseDeck(
+      buildDeck({
+        layouts: [{ shapes: layoutPh(spPr) }],
+        slides: [{ shapes: Array.from({ length: 1_000 }, (_, i) => slidePh(i)).join('') }],
+      }),
+    ).slides[0]!;
+
+  it('looks up a bullet in a 150,000-child defaultTextStyle level through its index, once per paragraph', () => {
+    const dts = `<a:lvl1pPr>${'<a:x/>'.repeat(150_000)}<a:buChar char="»"/></a:lvl1pPr>`;
+    const txt = body(Array.from({ length: 2_000 }, () => para(run('x'))).join(''));
+    const t0 = performance.now();
+    const shape = sp({ id: 2, x: 0, y: 0, cx: 914_400, cy: 914_400, txBody: txt });
+    const s = parseDeck(buildDeck({ defaultTextStyle: dts, slides: [{ shapes: shape }] })).slides[0]!;
+    expect(performance.now() - t0).toBeLessThan(5_000);
+    const text = (s.elements[0] as ShapeElement).text!;
+    expect(text.paras).toHaveLength(2_000);
+    expect(text.paras[1_999]!.bullet).toMatchObject({ kind: 'char', char: '»' });
+  });
+
+  it('reads an inherited 150,000-command custom geometry once, not once per inheriting shape', () => {
+    const path = `<a:custGeom><a:pathLst><a:path w="10" h="10">${'<a:close/>'.repeat(150_000)}</a:path></a:pathLst></a:custGeom>`;
+    const t0 = performance.now();
+    const s = inheriting(path);
+    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(s.elements).toHaveLength(1_000);
+    expect(s.elements[999]).toMatchObject({ kind: 'shape', geom: 'custom' });
+    expect((s.elements[999] as ShapeElement).coverage).toBeUndefined(); // over the bound: not rated
+  });
+
+  it('stops reading an inherited 150,000-child avLst after the guides it keeps', () => {
+    const geom = `<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 5000"/>${'<a:x/>'.repeat(150_000)}</a:avLst></a:prstGeom>`;
+    const t0 = performance.now();
+    const s = inheriting(geom);
+    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(s.elements[999]).toMatchObject({ geom: 'roundRect', adj: [['adj', 5_000]] });
+  });
+});
+
+describe('preset names', () => {
+  it('keeps letters and digits only, so a deck cannot put control characters in notes and reasons', () => {
+    expect(presetName('star5')).toBe('star5');
+    expect(presetName(undefined)).toBe('rect');
+    expect(presetName('star5\n12:00:00 [error] forged\r\u001b[31m')).toBe('other');
+    expect(presetName('x'.repeat(41))).toBe('other');
   });
 });

@@ -27,7 +27,7 @@ import {
   paraChainParts,
 } from './inherit.ts';
 import type { Bullet, Fill, Line, Para, Run, RunStyle, Shadow, Spacing, TextBody } from './ir.ts';
-import { themeFont } from './theme.ts';
+import { themeFont, typefaceName } from './theme.ts';
 import { child, num, textOf, type XNode } from './xml.ts';
 
 /** PowerPoint's default text size when nothing in the chain sets one. */
@@ -228,7 +228,7 @@ export function runStyle(
   }
   const face = (kind: 'latin' | 'ea' | 'cs' | 'sym') => {
     for (const n of props) {
-      const t = child(n, `a:${kind}`)?.attrs.typeface?.trim();
+      const t = typefaceName(child(n, `a:${kind}`)?.attrs.typeface);
       if (t) return t;
     }
     return undefined;

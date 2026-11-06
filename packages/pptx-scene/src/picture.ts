@@ -6,8 +6,9 @@
  *   fallback is drawn) and an `a14:imgProps` layer is PowerPoint's already-corrected result, drawn as is.
  * - Linked (External) pictures are never fetched: logged with their host only.
  * - EMF/WMF are residual (LibreOffice converts them in M3); other formats a browser cannot decode are noted.
- * - When a picture part's bytes are present (not spilled), its pixel size is read from the header (PNG,
- *   JPEG, GIF, BMP, WebP), so a background whose aspect differs from the slide is not cover-fitted.
+ * - A picture's pixel size is read from its header (PNG, JPEG, GIF, BMP, WebP) when its bytes are present,
+ *   else asked of the caller (`SlideCtx.pictureSize`, for parts spilled to disk), so a background whose
+ *   aspect differs from the slide is not cover-fitted.
  * - Video and audio posters (`a:videoFile`, `a:audioFile`, `p14:media`) keep their poster; the media is
  *   recorded for M5.
  *
@@ -82,11 +83,30 @@ export function readBlipFill(ctx: SlideCtx, blipFill: XNode, source: string): Pi
     };
   const alpha = num(child(blip, 'a:alphaModFix')?.attrs.amt);
   if (alpha !== undefined) out.alpha = Math.min(1, Math.max(0, alpha / 100_000));
-  const effects = blip.children.filter((c) => !NOT_EFFECTS.has(c.name) && !noOp(c)).map((c) => c.name);
-  if (effects.length) out.effects = effects.slice(0, 16);
+  const effects = effectsOf(blip);
+  if (effects.length) out.effects = effects;
   const bytes = ctx.pkg.bytes(rel.target);
-  const px = bytes?.length ? pictureSize(bytes) : undefined;
+  const px = bytes?.length ? pictureSize(bytes) : ctx.pictureSize?.(rel.target);
   if (px) out.px = px;
+  return out;
+}
+
+/** Effects kept per blip (names only). */
+const MAX_EFFECTS = 16;
+/** The effects of each blip read so far: an inherited picture fill is read for every inheriting shape. */
+const effectsCache = new WeakMap<XNode, string[]>();
+
+/** The recolouring and effect elements of a blip, in order (at most `MAX_EFFECTS`). Memoised per node. */
+function effectsOf(blip: XNode): string[] {
+  let out = effectsCache.get(blip);
+  if (out) return out;
+  out = [];
+  for (const c of blip.children) {
+    if (NOT_EFFECTS.has(c.name) || noOp(c)) continue;
+    out.push(c.name.slice(0, 40));
+    if (out.length >= MAX_EFFECTS) break;
+  }
+  effectsCache.set(blip, out);
   return out;
 }
 

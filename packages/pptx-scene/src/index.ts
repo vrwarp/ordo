@@ -2,7 +2,7 @@
  * @ordo/pptx-scene: PowerPoint decks as ordinary ordo slides (design/27).
  *
  *   const scene = parseDeck(parts);          // untrusted deck → hub-internal scene IR
- *   const out = emitSlides(scene, { ... });  // IR → ordo Slides with `pptxmedia:<part>` picture ids
+ *   const out = emitSlides(scene, { ... });  // IR → ordo Slides with `pptxmedia:<n>` picture ids
  *
  * Pure TypeScript: no DOM, no zip, no fs, no runtime dependency. The input is the deck's parts by name
  * (`extractZip`'s `files`); media parts may be empty (spilled to disk), only their names are used.
@@ -23,6 +23,7 @@ export type { SlideCtx, Source } from './context.ts';
 export type { DeckInfo, SlideRef } from './deck.ts';
 export type { EmitOptions, EmitResult, EmittedSlide } from './emit.ts';
 export { MEDIA_PREFIX } from './emit.ts';
+export { pictureSize } from './picture.ts';
 export * from './ir.ts';
 export type { Log } from './log.ts';
 export type { Package, PartSource, Rel } from './opc.ts';
@@ -31,6 +32,38 @@ export type { Theme } from './theme.ts';
 export interface ParseOptions {
   /** Receives deck-level notes as they happen (they are also in `DeckScene.notes`). */
   log?: Log;
+  /**
+   * The pixel size of a picture part whose bytes are not in `src` (spilled to disk), e.g. from its first
+   * bytes on disk. Asked at most once per part; sides outside 1..1,000,000 count as unknown. Without it a
+   * spilled picture's size is unknown, and a background picture of unknown size is drawn as a stretched
+   * image over the slide rather than as the slide background (design/27 §4 "Backgrounds").
+   */
+  pictureSize?: (part: string) => { w: number; h: number } | undefined;
+}
+
+/** Picture sides a caller's size may have (`picture.ts` reads headers to the same bound). */
+const MAX_PICTURE_SIDE = 1_000_000;
+
+/** `ParseOptions.pictureSize` asked once per part, its answer checked. */
+function pictureSizes(
+  get: ParseOptions['pictureSize'],
+): ((part: string) => { w: number; h: number } | undefined) | undefined {
+  if (!get) return undefined;
+  const known = new Map<string, { w: number; h: number } | undefined>();
+  return (part) => {
+    if (known.has(part)) return known.get(part);
+    let v: { w: number; h: number } | undefined;
+    try {
+      const got = get(part);
+      const ok = (n: unknown): n is number =>
+        typeof n === 'number' && Number.isFinite(n) && n >= 1 && n <= MAX_PICTURE_SIDE;
+      if (got && ok(got.w) && ok(got.h)) v = { w: got.w, h: got.h };
+    } catch {
+      v = undefined; // a size the caller cannot read is unknown
+    }
+    known.set(part, v);
+    return v;
+  };
 }
 
 /**
@@ -46,6 +79,7 @@ export function parseDeck(src: PartSource, opts: ParseOptions = {}): DeckScene {
   const pkg = openPackage(src, log);
   const deck = readDeck(pkg);
   const frame = frameOf(deck.size.cx, deck.size.cy);
+  const pictureSize = pictureSizes(opts.pictureSize);
   const slides: SlideScene[] = deck.slides.map((ref) => {
     const t0 = performance.now();
     const { notes, log: slideLog } = noteList();
@@ -56,16 +90,17 @@ export function parseDeck(src: PartSource, opts: ParseOptions = {}): DeckScene {
       part: ref.part,
     };
     try {
-      const ctx = slideContext(pkg, deck, frame, ref, slideLog);
+      const ctx = slideContext(pkg, deck, frame, ref, slideLog, pictureSize ? { pictureSize } : {});
       const elements = walkSlide(ctx);
       const background = readBackground(ctx);
+      const classification = classifySlide(ctx, elements, background);
       return {
         ...base,
         layoutPart: ctx.layoutPart,
         masterPart: ctx.masterPart,
         background,
         elements,
-        classification: classifySlide(ctx, elements, background),
+        classification,
         notes,
         ms: performance.now() - t0,
       };

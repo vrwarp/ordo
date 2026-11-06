@@ -6,11 +6,14 @@ import {
   decodeText,
   externalHost,
   MAX_EXTERNAL_NOTES,
+  MAX_PART_NAME_CHARS,
   openPackage,
   type PartSource,
   relIdOf,
   relsPartOf,
   resolveTarget,
+  XML_CACHE_BYTES,
+  XML_NODE_BYTES,
 } from './opc.ts';
 import { body, buildDeck, grpSp, imageRel, para, pic, run, scheme, solid, solidBg, sp } from './test-util.ts';
 
@@ -205,6 +208,32 @@ describe('openPackage', () => {
     expect(pkg.partsOfType(`${CT}.slide+xml`)).toEqual(['ppt/slides/slide1.xml', 'ppt/slides/slide2.xml']);
   });
 
+  it('charges parsed trees by their elements, not only by their text', () => {
+    // Two parts of 1,000 empty elements: about 4,000 characters, but 300 KB of estimated tree each.
+    const parts = new Map([
+      ['a.xml', enc(`<a>${'<b/>'.repeat(999)}</a>`)],
+      ['b.xml', enc(`<a>${'<b/>'.repeat(999)}</a>`)],
+    ]);
+    const tight = openPackage(parts, undefined, { cacheBytes: 1_500 * XML_NODE_BYTES });
+    const a = tight.xml('a.xml');
+    tight.xml('b.xml'); // over the budget: a dropped
+    expect(tight.xml('a.xml')).not.toBe(a);
+    const roomy = openPackage(parts, undefined, { cacheBytes: 2_100 * XML_NODE_BYTES });
+    const a2 = roomy.xml('a.xml');
+    roomy.xml('b.xml');
+    expect(roomy.xml('a.xml')).toBe(a2);
+    // The default budget holds two parts at the tag limit, a slide's layout and master.
+    expect(XML_CACHE_BYTES).toBeGreaterThanOrEqual(2 * (8 * 1024 * 1024 + 250_000 * XML_NODE_BYTES));
+  });
+
+  it('parses a part read with keep: false without caching it, but answers from the cache when it is there', () => {
+    const pkg = openPackage(new Map([['a.xml', enc('<a/>')]]));
+    const once = pkg.xml('a.xml', { keep: false });
+    expect(pkg.xml('a.xml', { keep: false })).not.toBe(once);
+    const kept = pkg.xml('a.xml');
+    expect(pkg.xml('a.xml', { keep: false })).toBe(kept);
+  });
+
   it('keeps parsed parts within its cache budget, least recently used dropped first', () => {
     const pkg = openPackage(
       new Map([
@@ -213,7 +242,7 @@ describe('openPackage', () => {
         ['c.xml', enc('<!DOCTYPE c><c/>')],
       ]),
       undefined,
-      { cacheChars: 150 },
+      { cacheBytes: 1_000 },
     );
     const a = pkg.xml('a.xml');
     expect(pkg.xml('a.xml')).toBe(a);
@@ -259,6 +288,31 @@ describe('openPackage', () => {
       log,
     );
     expect(pkg.rels('a.xml')).toEqual([]);
+    expect(notes[0]).toMatch(/too long/);
+  });
+
+  it('ignores internal targets whose part names are longer than 512 characters', () => {
+    const long = `${'x'.repeat(MAX_PART_NAME_CHARS)}.png`;
+    const ok = `${'x'.repeat(MAX_PART_NAME_CHARS - 20)}.png`;
+    const { notes, log } = noteList();
+    const pkg = openPackage(
+      new Map([
+        ['a.xml', enc('<x/>')],
+        [long, enc('')],
+        [ok, enc('')],
+        [
+          '_rels/a.xml.rels',
+          enc(
+            rels(
+              `<Relationship Id="r1" Type="${NS.r}/image" Target="${long}"/>` +
+                `<Relationship Id="r2" Type="${NS.r}/image" Target="${ok}"/>`,
+            ),
+          ),
+        ],
+      ]),
+      log,
+    );
+    expect(pkg.rels('a.xml').map((r) => r.id)).toEqual(['r2']);
     expect(notes[0]).toMatch(/too long/);
   });
 });

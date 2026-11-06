@@ -3,9 +3,11 @@
  * drawn by `@ordo/renderer`, as the hub and the outputs will draw it.
  *
  * - `convertDeck` reads the deck with `extractZip` (XML in memory within the hub's budgets, everything else
- *   spilled to disk), runs `parseDeck` and `emitSlides`, and writes `slides.json` plus the pictures the
- *   slides use, under generated names (a part name never becomes a path). It never throws: a deck the
- *   converter cannot read is a note.
+ *   spilled to disk), runs `parseDeck` (picture sizes read from the spilled files' headers) and
+ *   `emitSlides`, and writes `slides.json` plus the pictures the slides use, under generated names (a part
+ *   name never becomes a path). It never throws: a deck the converter cannot read is a note.
+ * - `convertDeckIsolated` runs it in a worker thread with a heap limit and a timeout, as the hub's CPU pool
+ *   will (design/27 §12): a deck that exhausts either is a note, and the run goes on.
  * - `NativeRenderer` loads `native-page.ts` (bundled with esbuild) in headless Chromium, registers the host
  *   fonts fontconfig gives for every family the slides ask for (as `pptx-render/src/fonts.ts` and
  *   LibreOffice do) under internal names, and draws every shown slide with `drawSlide2D`: a 1920x1080
@@ -14,13 +16,22 @@
  * The deck is untrusted: the page fetches only from the harness's own origin, which answers from a fixed
  * table of generated names, and every other request is refused.
  */
+import { closeSync, openSync, readSync } from 'node:fs';
 import { copyFile, mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Slide } from '@ordo/domain';
 import { extractZip } from '@ordo/importers/zip-stream.ts';
-import { type EmitResult, emitSlides, parseDeck, type SlideClass, type Tier } from '@ordo/pptx-scene';
+import { Worker } from 'node:worker_threads';
+import {
+  type EmitResult,
+  emitSlides,
+  parseDeck,
+  pictureSize,
+  type SlideClass,
+  type Tier,
+} from '@ordo/pptx-scene';
 import type { Browser, Page } from '@playwright/test';
 import { run } from '../../../apps/hub/src/media/tools.ts';
 import type { NativePage, PageFont, PageMedia, RenderResult } from './native-page.ts';
@@ -37,6 +48,12 @@ export const MAX_PICTURES = 2_000;
 const ORIGIN = 'https://ordo-native.invalid';
 /** One slide's draw and timings may take this long before the page is replaced. */
 const SLIDE_TIMEOUT_MS = 60_000;
+/** One deck's conversion in its worker: heap and time (design/27 §12: the pool's 512 MB heap). */
+export const CONVERT_HEAP_MB = 512;
+export const CONVERT_TIMEOUT_MS = 300_000;
+/** Bytes of a spilled picture read for its pixel size (a JPEG's frame header can follow large metadata). */
+const SIZE_HEAD_BYTES = 64 * 1024;
+const SIZE_HEAD_MAX_BYTES = 1024 * 1024;
 
 export type NativeSlide = {
   index: number;
@@ -116,6 +133,31 @@ async function head(file: string): Promise<Uint8Array> {
 
 const extOf = (part: string) => /\.([a-z0-9]{1,8})$/i.exec(part)?.[1]?.toLowerCase() ?? '';
 
+/** The first `n` bytes of a file, synchronously (`parseDeck` asks for picture sizes while it runs). */
+function headSync(file: string, n: number): Uint8Array {
+  const fd = openSync(file, 'r');
+  try {
+    const b = new Uint8Array(n);
+    const got = readSync(fd, b, 0, n, 0);
+    return b.subarray(0, got);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** The pixel size of a spilled picture from its header (64 KB, or up to 1 MB for a JPEG). */
+export function spilledPictureSize(file: string | undefined): { w: number; h: number } | undefined {
+  if (!file) return undefined;
+  try {
+    const b = headSync(file, SIZE_HEAD_BYTES);
+    const px = pictureSize(b);
+    if (px || b.length < SIZE_HEAD_BYTES || b[0] !== 0xff || b[1] !== 0xd8) return px;
+    return pictureSize(headSync(file, SIZE_HEAD_MAX_BYTES));
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Convert one deck into `dir` (which must exist): `slides.json` and `media/`. Never throws; a deck that
  * cannot be read comes back with `error` and no slides.
@@ -153,7 +195,9 @@ export async function convertDeck(deckFile: string, dir: string): Promise<Native
     out.embeddedFonts = [...zip.files.keys()].some((k) => k.toLowerCase().startsWith('ppt/fonts/'));
 
     t0 = performance.now();
-    const scene = parseDeck(zip.files);
+    const scene = parseDeck(zip.files, {
+      pictureSize: (part) => spilledPictureSize(zip.onDisk.get(part) ?? findCaseless(zip.onDisk, part)),
+    });
     out.parseMs = performance.now() - t0;
     t0 = performance.now();
     const emitted: EmitResult = emitSlides(scene);
@@ -215,6 +259,103 @@ export async function convertDeck(deckFile: string, dir: string): Promise<Native
   } finally {
     await rm(parts, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
+  await writeFile(join(dir, 'slides.json'), JSON.stringify(out));
+  return out;
+}
+
+/** The conversion worker, kept between decks (warm, as the hub's pool workers are) until one fails. */
+let pool: { worker: Worker; heapMb: number } | undefined;
+/** Conversions run one at a time. */
+let queue: Promise<unknown> = Promise.resolve();
+
+function spawnWorker(heapMb: number): Worker {
+  const worker = new Worker(new URL('./convert-worker.ts', import.meta.url), {
+    resourceLimits: { maxOldGenerationSizeMb: heapMb },
+  });
+  worker.unref(); // an idle worker does not keep the run alive
+  return worker;
+}
+
+/**
+ * `convertDeck` in a worker thread with a heap limit and a timeout. Never throws: a deck whose conversion
+ * runs out of memory or time, or whose worker fails, comes back with `error` and no slides (and its
+ * `slides.json` says so); that worker is replaced for the next deck. The worker is kept between decks
+ * otherwise, and loads its TypeScript through the loader the harness runs under (tsx, which workers
+ * inherit).
+ */
+export function convertDeckIsolated(
+  deckFile: string,
+  dir: string,
+  limits: { heapMb?: number; timeoutMs?: number } = {},
+): Promise<NativeDeck> {
+  const run = queue.then(() => convertInWorker(deckFile, dir, limits));
+  queue = run.catch(() => undefined);
+  return run;
+}
+
+async function convertInWorker(
+  deckFile: string,
+  dir: string,
+  limits: { heapMb?: number; timeoutMs?: number },
+): Promise<NativeDeck> {
+  const heapMb = limits.heapMb ?? CONVERT_HEAP_MB;
+  const timeoutMs = limits.timeoutMs ?? CONVERT_TIMEOUT_MS;
+  const result = await new Promise<NativeDeck | string>((settle) => {
+    try {
+      if (pool && pool.heapMb !== heapMb) {
+        void pool.worker.terminate();
+        pool = undefined;
+      }
+      pool ??= { worker: spawnWorker(heapMb), heapMb };
+    } catch (e) {
+      settle(errorText(e));
+      return;
+    }
+    const { worker } = pool;
+    let done = false;
+    const finish = (v: NativeDeck | string, broken: boolean) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      worker.off('message', onMessage);
+      worker.off('error', onError);
+      worker.off('exit', onExit);
+      if (broken) {
+        if (pool?.worker === worker) pool = undefined;
+        void worker.terminate();
+      } else worker.unref();
+      settle(v);
+    };
+    const onMessage = (m: NativeDeck) => finish(m, false);
+    const onError = (e: Error) =>
+      finish(
+        (e as { code?: string }).code === 'ERR_WORKER_OUT_OF_MEMORY' ? 'out of memory' : errorText(e),
+        true,
+      );
+    const onExit = (code: number) => finish(`the converter exited (${code})`, true);
+    const timer = setTimeout(
+      () => finish(`timed out after ${Math.round(timeoutMs / 1000)} s`, true),
+      timeoutMs,
+    );
+    worker.on('message', onMessage);
+    worker.on('error', onError);
+    worker.on('exit', onExit);
+    worker.ref();
+    worker.postMessage({ deckFile, dir });
+  });
+  if (typeof result !== 'string') return result;
+  await rm(join(dir, '.parts'), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  const out: NativeDeck = {
+    slides: [],
+    slideRect: { x: 0, y: 0, w: 1920, h: 1080 },
+    media: [],
+    notes: [`converter failed: ${result}`],
+    embeddedFonts: false,
+    extractMs: 0,
+    parseMs: 0,
+    emitMs: 0,
+    error: result,
+  };
   await writeFile(join(dir, 'slides.json'), JSON.stringify(out));
   return out;
 }

@@ -34,6 +34,11 @@ export interface SlideCtx {
   color: ColorCtx;
   /** This slide's notes (approximations, skipped content). */
   log: Log;
+  /**
+   * The pixel size of a picture part whose bytes are not in the package (spilled to disk), when the caller
+   * can tell (`ParseOptions.pictureSize`). Undefined: unknown.
+   */
+  pictureSize?: (part: string) => { w: number; h: number } | undefined;
 }
 
 /** Where an element comes from in the inheritance chain. */
@@ -50,7 +55,14 @@ export function rootOf(ctx: SlideCtx, from: Source): XNode | undefined {
 }
 
 /** Read a slide's parts and build its context. Throws when the slide part itself cannot be read. */
-export function slideContext(pkg: Package, deck: DeckInfo, frame: Frame, ref: SlideRef, log: Log): SlideCtx {
+export function slideContext(
+  pkg: Package,
+  deck: DeckInfo,
+  frame: Frame,
+  ref: SlideRef,
+  log: Log,
+  extra: Pick<SlideCtx, 'pictureSize'> = {},
+): SlideCtx {
   const parts = slideParts(pkg, ref.part);
   const theme = readTheme(parts.theme);
   return {
@@ -73,5 +85,6 @@ export function slideContext(pkg: Package, deck: DeckInfo, frame: Frame, ref: Sl
       child(parts.layout, 'p:clrMapOvr'),
     ),
     log,
+    ...(extra.pictureSize ? { pictureSize: extra.pictureSize } : {}),
   };
 }

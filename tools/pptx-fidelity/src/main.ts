@@ -33,7 +33,7 @@ import { renderWithPptxPreview } from '@ordo/pptx-render';
 import { pdfToPngs, pptxToPdf } from '../../../apps/hub/src/media/ffmpeg.ts';
 import { run } from '../../../apps/hub/src/media/tools.ts';
 import { buildCorpus } from './corpus.ts';
-import { convertDeck, NativeRenderer, type RenderedDeck } from './native.ts';
+import { convertDeckIsolated, NativeRenderer, type RenderedDeck } from './native.ts';
 import { png } from './png.ts';
 import { type DeckScore, mean, nativeStats, type SlideScore, type Summary, writeReport } from './report.ts';
 
@@ -121,7 +121,10 @@ async function decksIn(paths: string[]): Promise<{ file: string; name: string }[
     if ((await stat(p)).isDirectory()) await walk(p, '');
     else out.push({ file: p, name: basename(p) });
   }
-  return out;
+  // A link whose deck is gone is not a deck the converter failed on: it is left out of the run and its means.
+  const missing = out.filter((d) => !existsSync(d.file));
+  for (const d of missing) console.log(`skipped ${d.name}: the deck file is missing`);
+  return out.filter((d) => existsSync(d.file));
 }
 
 async function pngsIn(dir: string): Promise<string[]> {
@@ -329,7 +332,7 @@ async function nativeColumn(
   const nd = join(dir, 'native');
   await rm(nd, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   await mkdir(nd, { recursive: true });
-  const conv = await convertDeck(deck, nd);
+  const conv = await convertDeckIsolated(deck, nd);
   const notes = [...conv.notes];
   const shown = conv.slides.filter((s) => s.shown !== undefined).sort((a, b) => a.shown! - b.shown!);
   let drawn: RenderedDeck = { slides: [], notes: [], ms: 0 };

@@ -62,7 +62,7 @@ describe('parseDeck → emitSlides', () => {
 
     const out = emitSlides(scene);
     expect(out.slideRect).toEqual({ x: 0, y: 0, w: 1920, h: 1080 });
-    expect(out.media).toEqual([{ id: `${MEDIA_PREFIX}ppt/media/image1.png`, part: 'ppt/media/image1.png' }]);
+    expect(out.media).toEqual([{ id: `${MEDIA_PREFIX}1`, part: 'ppt/media/image1.png' }]);
     const e = out.slides[0]!;
     expect(e.shown).toBe(0);
     expect(e.hidden).toBe(false);
@@ -97,7 +97,7 @@ describe('parseDeck → emitSlides', () => {
     expect(text!.type === 'text' && text!.style.padding).toBeCloseTo((45_720 / PT) * 2);
     expect(image).toMatchObject({
       type: 'image',
-      mediaId: `${MEDIA_PREFIX}ppt/media/image1.png`,
+      mediaId: `${MEDIA_PREFIX}1`,
       fit: 'stretch',
     });
     expect(image!.box.x).toBeCloseTo(1008);

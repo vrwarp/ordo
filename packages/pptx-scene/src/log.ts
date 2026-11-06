@@ -17,12 +17,19 @@ export function clean(s: string, max = 200): string {
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
-/** A bounded, de-duplicated list of notes with a `log` function that appends to it. */
+/** Longest note kept: each deck string in it is cut to 200 characters before it is composed. */
+export const MAX_NOTE_CHARS = 400;
+
+/**
+ * A bounded, de-duplicated list of notes with a `log` function that appends to it. Every note goes through
+ * `clean` as well, so a deck string that reached one without it still cannot break a log line.
+ */
 export function noteList(max = MAX_NOTES): { notes: string[]; log: Log } {
   const notes: string[] = [];
   const seen = new Set<string>();
   let dropped = 0;
-  const log: Log = (msg) => {
+  const log: Log = (raw) => {
+    const msg = clean(raw, MAX_NOTE_CHARS);
     if (seen.has(msg)) return;
     if (notes.length < max - 1) {
       seen.add(msg);

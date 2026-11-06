@@ -1,6 +1,14 @@
 import { type ImageObject, type ShapeObject, Slide, type SlideObject, type TextObject } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
-import { type EmitOptions, insetBox, legacyColor, overWhite, placePicture } from './emit.ts';
+import {
+  cutToClamp,
+  type EmitOptions,
+  insetBox,
+  legacyColor,
+  marginOf,
+  overWhite,
+  placePicture,
+} from './emit.ts';
 import { emitSlides, parseDeck } from './index.ts';
 import type { DeckScene, ShapeElement } from './ir.ts';
 import {
@@ -224,6 +232,35 @@ describe('text', () => {
     expect(b!.style.shadow).toBeUndefined();
     expect(c!.style.shadow!.dx).toBeCloseTo(0);
     expect(c!.style.shadow).toMatchObject({ dy: 4, blur: 0, color: RED });
+  });
+
+  it('folds the common left margin of the paragraphs into the box (bullets are not drawn in M1)', () => {
+    const bullet = '<a:buChar char="•"/>';
+    const p = (text: string, pPr: string, children = '') =>
+      `<a:p><a:pPr ${pPr}>${children}</a:pPr>${run(text)}</a:p>`;
+    const one = (paras: string) =>
+      textIn(
+        emitOne({ slides: [{ shapes: tb(body(paras, 'lIns="0" tIns="0" rIns="0" bIns="0"')) }] }).objects,
+      )[0]!;
+    // A bulleted level: text at marL (0.5 in); a level below at 1 in: the least is folded.
+    const bulleted = one(
+      p('a', `marL="${IN / 2}" indent="-${IN / 2}"`, bullet) +
+        p('b', `lvl="1" marL="${IN}" indent="-${IN / 2}"`, bullet),
+    );
+    expect(bulleted.box.x).toBeCloseTo(PX + PX / 2);
+    expect(bulleted.box.w).toBeCloseTo(4 * PX - PX / 2);
+    // Without a bullet a hanging first line starts at marL + indent; a first-line indent keeps marL.
+    expect(one(p('a', `marL="${IN / 2}" indent="-${IN / 4}"`)).box.x).toBeCloseTo(PX + PX / 4);
+    expect(one(p('a', `marL="${IN / 2}" indent="${IN / 4}"`)).box.x).toBeCloseTo(PX + PX / 2);
+    // Right-to-left paragraphs fold it on the right; mixed directions fold nothing.
+    const rtl = one(p('a', `marL="${IN / 2}" rtl="1"`));
+    expect(rtl.box.x).toBeCloseTo(PX);
+    expect(rtl.box.w).toBeCloseTo(4 * PX - PX / 2);
+    expect(one(p('a', `marL="${IN / 2}" rtl="1"`) + p('b', `marL="${IN / 2}"`)).box.w).toBeCloseTo(4 * PX);
+    const empty = { l: 0, t: 0, r: 0, b: 0 };
+    expect(
+      marginOf({ paras: [], insets: empty, anchor: 'top', wrap: true, autofit: { kind: 'none' } }),
+    ).toEqual({ l: 0, r: 0 });
   });
 
   it('widens a wrap="none" box on the side its alignment grows into', () => {
@@ -491,13 +528,42 @@ describe('pictures', () => {
     const [img] = content(objects) as ImageObject[];
     expect(img).toMatchObject({
       type: 'image',
-      mediaId: 'pptxmedia:ppt/media/photo.png',
+      mediaId: 'pptxmedia:1',
       fit: 'stretch',
       opacity: 0.5,
       radius: 0,
     });
     expect(img!.box).toMatchObject({ x: PX, y: 0, w: 2 * PX, h: PX });
-    expect(out.media).toEqual([{ id: 'pptxmedia:ppt/media/photo.png', part: 'ppt/media/photo.png' }]);
+    expect(out.media).toEqual([{ id: 'pptxmedia:1', part: 'ppt/media/photo.png' }]);
+  });
+
+  it('numbers media ids, so a long part name still gives a slide Slide.parse accepts', () => {
+    const name = `${'x'.repeat(400)}.png`;
+    const { slide, out } = emitOne({
+      slides: [
+        { rels: [imageRel('rId2', name)], shapes: pic({ id: 2, x: 0, y: 0, cx: IN, cy: IN, rId: 'rId2' }) },
+      ],
+    });
+    expect((slide.objects[1] as ImageObject).mediaId).toBe('pptxmedia:1');
+    expect(out.media).toEqual([{ id: 'pptxmedia:1', part: `ppt/media/${name}` }]);
+    expect(Slide.safeParse(slide).success).toBe(true);
+  });
+
+  it('cuts a picture reaching past twice the canvas and folds the cut into its crop', () => {
+    // 40 in wide from x = -40 in: -5,760 to 0 px, 1,440 px of it outside the clamp's -3,840.
+    const far = pic({ id: 2, x: -40 * IN, y: 0, cx: 40 * IN, cy: IN, rId: 'rId2', srcRect: 'l="10000"' });
+    const { objects } = emitOne({ slides: [{ rels, shapes: far }] });
+    const img = objects[1] as ImageObject;
+    expect(img.box.x).toBeCloseTo(-3_840);
+    expect(img.box.w).toBeCloseTo(3_840);
+    // A third of the box is cut: the crop's left share grows by a third of the 90 % the box showed.
+    expect(img.crop!.l).toBeCloseTo(0.1 + (1_920 / 5_760) * 0.9);
+    expect(img.crop!.r).toBeCloseTo(0);
+    expect(cutToClamp({ x: 4_000, y: 0, w: 100, h: 100, rotation: 0 }, undefined)).toBeUndefined();
+    expect(cutToClamp({ x: -100, y: -2_200, w: 200, h: 4_400, rotation: 0 }, undefined)).toEqual({
+      box: { x: -100, y: -2_160, w: 200, h: 4_320, rotation: 0 },
+      crop: { l: 0, t: 40 / 4_400, r: 0, b: 40 / 4_400 },
+    });
   });
 
   it('writes no crop with crop: false (the legacy value) and notes it', () => {
@@ -590,7 +656,7 @@ describe('backgrounds', () => {
       slides: [{ rels, bg: pictureBg('rId2') }],
       media: { 'ppt/media/bg.png': pngHeader(1280, 720) },
     });
-    expect(slide.backgroundMediaId).toBe('pptxmedia:ppt/media/bg.png');
+    expect(slide.backgroundMediaId).toBe('pptxmedia:1');
     expect(slide.objects).toEqual([]);
   });
 
@@ -612,6 +678,40 @@ describe('backgrounds', () => {
       expect(o.box.x).toBeCloseTo(240);
       expect(o.box.w).toBeCloseTo(1440);
     }
+  });
+
+  it('does not take a picture of unknown size (spilled, no size given) for the slide background', () => {
+    const spilled = { 'ppt/media/bg.png': new Uint8Array(0) }; // extractZip's empty entry for a spilled part
+    const { slide, objects } = emitOne({ slides: [{ rels, bg: pictureBg('rId2') }], media: spilled });
+    expect(slide.backgroundMediaId).toBeUndefined();
+    expect(objects[0]).toMatchObject({ type: 'shape', fill: { r: 255, g: 255, b: 255, a: 1 } });
+    expect(objects[1]).toMatchObject({
+      type: 'image',
+      fit: 'stretch',
+      box: { x: 0, y: 0, w: 1920, h: 1080 },
+    });
+    // The caller can read the size from the spilled file (ParseOptions.pictureSize), asked once per part.
+    const parts = buildDeck({
+      slides: [
+        { rels, bg: pictureBg('rId2') },
+        { rels, bg: pictureBg('rId2') },
+      ],
+      media: spilled,
+    });
+    const asked: string[] = [];
+    const sized = (w: number, h: number) =>
+      emitSlides(
+        parseDeck(parts, {
+          pictureSize: (part) => {
+            asked.push(part);
+            return { w, h };
+          },
+        }),
+      ).slides;
+    expect(sized(1920, 1080).map((x) => x.slide.backgroundMediaId)).toEqual(['pptxmedia:1', 'pptxmedia:1']);
+    expect(asked).toEqual(['ppt/media/bg.png']);
+    expect(sized(1024, 768)[0]!.slide.backgroundMediaId).toBeUndefined();
+    expect(sized(Number.NaN, 1080)[0]!.slide.backgroundMediaId).toBeUndefined();
   });
 
   it('lays a translucent background picture on white, as PowerPoint does', () => {
@@ -772,6 +872,34 @@ describe('robustness', () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(out.media.map((m) => m.part)).toEqual(['ppt/media/b.png', 'ppt/media/a.png']);
     expect(out.slides[0]!.digest).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('keeps control characters of deck strings out of notes, reasons and font families', () => {
+    const forged = 'star5&#10;12:00:00 [error] forged&#13;&#27;[31m';
+    const shape = sp({ id: 2, x: 0, y: 0, cx: IN, cy: IN, fill: solid('FF0000') }).replace(
+      'prst="rect"',
+      `prst="${forged}"`,
+    );
+    const text = sp({
+      id: 3,
+      x: 0,
+      y: 0,
+      cx: IN,
+      cy: IN,
+      txBody: body(para(run('x', '', '<a:latin typeface="Arial&#12;"/>'))),
+    });
+    const scene = parseDeck(buildDeck({ slides: [{ shapes: shape + text }] }));
+    const out = emitSlides(scene).slides[0]!;
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: looking for them is the point
+    const control = /[\u0000-\u001f\u007f-\u009f]/;
+    const strings = [
+      ...out.notes,
+      ...out.classification.reasons,
+      ...scene.slides[0]!.elements.flatMap((e) => e.reasons ?? []),
+    ];
+    expect(strings.some((x) => /preset:other/.test(x))).toBe(true);
+    for (const x of strings) expect(x).not.toMatch(control);
+    expect(textIn(out.slide.objects)[0]!.style.fontFamily).toBe('Arial');
   });
 
   it('writes nothing but the slide id for a quarantined slide', () => {

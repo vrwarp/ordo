@@ -465,6 +465,23 @@ describe('custom geometry coverage', () => {
     expect(pathCoverage(undefined)).toBeUndefined();
   });
 
+  it('rates a detailed silhouette of 4,000 curves, but not 4,097 points or 65,537 elements', () => {
+    // A thin band of 4,000 cubic curves: 16,000 elements, 4,000 end points.
+    const band = (n: number) =>
+      `<a:path w="4000" h="100"><a:moveTo>${pt(0, 0)}</a:moveTo>${Array.from(
+        { length: n },
+        (_, i) => `<a:cubicBezTo>${pt(i, 0)}${pt(i + 1, 0)}${pt(i + 1, 0)}</a:cubicBezTo>`,
+      ).join('')}<a:lnTo>${pt(n, 5)}</a:lnTo><a:lnTo>${pt(0, 5)}</a:lnTo><a:close/></a:path>`;
+    expect(pathCoverage(geom(band(4_000)))).toBeCloseTo(0.05);
+    expect(pathCoverage(geom(band(4_100)))).toBeUndefined();
+    const closes = `<a:path w="10" h="10"><a:moveTo>${pt(0, 0)}</a:moveTo>${'<a:close/>'.repeat(70_000)}</a:path>`;
+    const t0 = performance.now();
+    const many = geom(closes);
+    expect(pathCoverage(many)).toBeUndefined();
+    expect(pathCoverage(many)).toBeUndefined(); // memoised
+    expect(performance.now() - t0).toBeLessThan(5_000);
+  });
+
   it('records the coverage on custom shapes', () => {
     const s = slideOf({
       slides: [

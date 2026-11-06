@@ -138,9 +138,20 @@ function groupRows(slides: Counted[], keysOf: (s: SlideScore) => string[], order
   return rows;
 }
 
+/** A native picture this close to LibreOffice's page matches it, even where black matches it as well. */
+export const MATCH_SSIM = 0.999;
+
+/**
+ * Whether a slide's native picture beats an all-black frame: it scores higher, or it matches the page (an
+ * all-black page drawn all black ties with black at 1.000, and that is not a loss).
+ */
+export function beatsBlack(s: SlideScore): boolean {
+  return s.nativeSsim !== undefined && (s.nativeSsim > s.blackSsim! || s.nativeSsim >= MATCH_SSIM);
+}
+
 function beats(scored: SlideScore[]): number {
   const b = scored.filter((s) => s.blackSsim !== undefined);
-  return b.length ? b.filter((s) => s.nativeSsim! > s.blackSsim!).length / b.length : 0;
+  return b.length ? b.filter(beatsBlack).length / b.length : 0;
 }
 
 /**
