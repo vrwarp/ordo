@@ -4,9 +4,22 @@ The rich text engine of design/27 §6, used by every drawer: the outputs' asset 
 thumbnail worker and Konva editor, look bands and the stage's readable text. Read design/27 Decisions 5-6,
 §3 (stored model), §6 (this engine), §10 (fonts), §11 (what editing needs) and §14 items 4, 7 and 9 first.
 
-Status: **scaffold** (M2 wave 1). The pipeline runs end to end for plain left-to-right text: greedy word wrap,
-both line models, one style or many, emergency breaks, valign and left/centre/right alignment. Every stage
-has its final signature and a minimal body; the sections below say who builds what.
+Status: **M2 wave 1 integrated.** Every stage below is built (items A-E) and runs end to end in every
+drawer: UAX#14 breaks with the no-break-space rule, UAX#9 bidi, cluster-safe cuts and Arabic joiners,
+both line models, autofit, bullets and numbering, the paint passes and the font resolver. The renderer
+goldens (`pnpm --filter @ordo/renderer golden`) draw the rich cases of design/27 §14 item 4 through it and
+check that line breaks are identical at 320, 960, 1920 and 3840 px wide; `pnpm --filter @ordo/renderer
+bench` times layout and raster. The converter's rich emission (M2, `packages/pptx-scene`) is a later wave.
+
+Integration decisions (wave 1):
+- `Piece.script` uses the domain's `FALLBACK_SCRIPTS` (every code `textScripts` reports and
+  `SCRIPT_FALLBACK_FONTS` is keyed by, Greek and Cyrillic included), so a piece asks the resolver for the
+  same face the goLive font scan ships.
+- A soft paragraph is hidden with the paragraph it continues in painting too (`hiddenParas`), as itemize
+  resolves it.
+- A paragraph whose first line is empty and whose soft lines have text draws its bullet on that first line,
+  as PowerPoint does and as `readableText` labels it.
+- Bands through the engine shrink with B's autofit search (`bandObject` sets `autofit: 'shrink'`).
 
 ## Pipeline
 
@@ -31,8 +44,9 @@ measurers (`canvasMeasurer`, `measurerFor`, `WidthCache`).
 
 - **Logical px only.** Layout never sees the device scale. Widths are measured at the logical font size and
   positions are logical, so 960, 1920 and 3840 wide outputs, the editor and thumbnails break identically.
-  Painting draws under `ctx.scale(scale)` composed with the caller's transform (thumbnails translate first,
-  the editor will add devicePixelRatio), not `setTransform`.
+  Painting draws under `ctx.scale(scale)` composed with the caller's transform (thumbnails translate first;
+  the editor passes stage scale × devicePixelRatio in `scale`, since canvas shadows ignore the transform),
+  not `setTransform`.
 - **Offsets are UTF-16 offsets into `TextObject.text`**, the canonical text. Case mapping and joiners are
   applied to the drawn string only (`segText`), never to offsets.
 - **Inputs are clamped.** `layoutRich` and `paintRich` take `clampObject` output: runs sorted,
@@ -111,7 +125,8 @@ Steps 1-4 of §6. **Done** (M2 wave 1); tests in `itemize.test.ts`, `breaks.test
 - `prepare(it)`: resolves 'auto' over the whole soft-break chain, so `PreparedPara.bidi.level` is the
   paragraph's direction: **use it, not `ParaStyle.dir`, for where lines start (B)**. Pieces are cut at
   style runs, levels, break opportunities, and between two fallback scripts (Han and kana count as one);
-  `Piece.script` is the first fallback script in the piece, as `textScripts` names it. A style cut inside a
+  `Piece.script` is the first fallback script in the piece, as `textScripts` names it (`scriptOf` reads the
+  domain's `FALLBACK_SCRIPTS`). A style cut inside a
   cluster moves to the cluster's end; `PreparedPara.movedCuts` counts them.
 - `segText(text, start, end, caps)`: U+200D on a side where the cut splits two joining letters (Arabic,
   Syriac, N'Ko, Mongolian, Adlam, by ArabicShaping joining types: none after alef, dal or waw). It applies at
@@ -149,7 +164,7 @@ Decisions the other items rely on:
   or lowered run. An empty line takes the larger of F and its end mark.
 - **Soft paragraphs continue the paragraph before them**: its alignment, indents, spacing, line spacing,
   main size and direction; no bullet, no space between them. The converter may write `{ soft: true }` only;
-  the editor's paragraph strip edits the paragraph a soft one continues. Item A: `prepare` should give a soft
+  the editor's paragraph strip edits the paragraph a soft one continues. `prepare` (A) gives a soft
   paragraph its paragraph's base direction.
 - **`align` is visual** (left is left in a right-to-left paragraph); RTL changes the start edge: where
   indents and the bullet are, and where the last line of a justified paragraph goes.
@@ -180,9 +195,8 @@ Step 11 of §6 and `readableText` (§1, §3.2). **Done.**
   run's), weight and slant of the first run.
 - Uses: `firstText` (cue labels, lyric-only and next-slide bands through `lyricTextFor`, editor previews,
   slide thumbnails), the stage's `slideText`, operator search.
-- Open for B: lines.ts draws a bullet only when the paragraph's first piece list is non-empty, so a paragraph
-  whose first line is empty and whose soft line has text gets its label in `readableText` but no drawn bullet
-  (PowerPoint draws it on the empty first line).
+- A paragraph whose first line is empty and whose soft line has text gets its label in `readableText` and its
+  bullet drawn on the empty first line (lines.ts, integration).
 
 ### D. paint-dispatch: `paint.ts`, `rich.ts`, the `text2d.ts` dispatch, bands, the editor
 
@@ -207,8 +221,9 @@ Paint passes and the dispatch of §6. **Done** (wave 1):
   the font generation (`apps/operator/src/views/editor/textRaster.ts`); legacy text stays at 1:1. Plain
   text edits go through `editText` (`packages/domain/src/textEdit.ts`, with `replaceText` and `joinText`
   for slide split and merge).
-- To do: the M6 gradient over the box; an effect sprite cache for large blurs (§7.5) once the raster
-  bench shows the need. Until B's autofit search lands, bands through the engine keep their full size.
+- To do: the M6 gradient over the box; an effect sprite cache for large blurs (§7.5). The raster bench
+  shows the need: the default lyric style's shadow (blur 12) costs about 7 ms of a 1920 raster and 20 ms
+  of a 3840 one, in drawText and in the engine alike.
 
 ### E. fonts: `fonts.ts` and the three drawers
 

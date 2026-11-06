@@ -131,13 +131,23 @@ tasks, late flips, GPU losses, video dropped frames; pass or fail. The rehearsal
 
 `pnpm --filter @ordo/renderer golden` bundles `packages/renderer/golden/page.ts` with
 esbuild, runs it in headless Chromium through Playwright, renders known slides (authored
-main slide, lyric slides on every look, lower third, stream key, props, image fits) through
-the output rasterizer on an `OffscreenCanvas`, and compares each to
-`golden/expected/<case>.png`: a pixel differs when any channel is more than 40 apart, and a
-case fails when more than 0.4 % of its pixels differ. Text uses DejaVu Sans injected from
-the system (recorded in `expected/meta.json`) so the result does not depend on installed
-fonts; on a machine without it the run is skipped. `--update` rewrites the expected images;
-a failing case writes `<case>.actual.png` next to the expected one.
+main slide, lyric slides on every look, lower third, stream key, props, image fits, and the
+rich text cases of design/27 §14 item 4 in `golden/rich-cases.ts`) through the output
+rasterizer on an `OffscreenCanvas`, and compares each to `golden/expected/<case>.png`: a
+pixel differs when any channel is more than 40 apart, and a case fails when more than 0.4 %
+of its pixels differ. The legacy cases are drawn a second time with the font resolver
+installed (design/27 §10) against the same images, and the line-break invariance check
+draws every rich case at 320, 960, 1920 and 3840 px wide and fails unless the drawn strings,
+logical positions and fonts are identical.
+
+Text uses faces injected from the system so the result does not depend on installed fonts:
+DejaVu Sans ('Golden': Latin, Hebrew, Arabic), FreeSerif ('Golden Serif': Tamil) and
+IPAGothic ('Golden CJK'). `expected/meta.json` lists the files (path and SHA-256) the
+expected images were made with, and a comparison loads exactly those, so another font on
+the machine cannot change the run. When one is missing the run is skipped; in CI (`CI` set,
+or `--strict`) a skip, or a case without an expected image, fails the run. `--update`
+rewrites the expected images; a failing case writes `<case>.actual.png` next to the
+expected one.
 
 ## CI
 

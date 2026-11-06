@@ -221,8 +221,9 @@ function buildPlan(o: TextObject, l: RichLayout): PaintPlan {
   // Lines far outside the clamp region are never visible (drawText culls them the same way).
   const lo = -CLAMP.boxFactor * LOGICAL_HEIGHT;
   const hi = CLAMP.boxFactor * LOGICAL_HEIGHT;
+  const hidden = hiddenParas(o);
   const lines = l.lines.filter(
-    (line) => !o.paras?.[line.para]?.hidden && line.top + line.height >= lo && line.top <= hi,
+    (line) => !hidden[line.para] && line.top + line.height >= lo && line.top <= hi,
   );
   const plan: PaintPlan = { box: null, highlights: [], glyphs: [], decorations: [], bullets: [], glow: null };
   if (style.fill && o.text.trim()) {
@@ -307,6 +308,21 @@ function buildPlan(o: TextObject, l: RichLayout): PaintPlan {
       plan.bullets.push({ text: b.text, x: b.x, y: line.baseline, font: b.font, color: css(b.color) });
   }
   return plan;
+}
+
+/**
+ * Whether each paragraph is hidden (the M8 split reveal), as itemize.ts resolves it: its own `hidden`, else,
+ * for a soft paragraph (a line break inside one PowerPoint paragraph), the hidden state of the paragraph it
+ * continues.
+ */
+export function hiddenParas(o: TextObject): boolean[] {
+  const out: boolean[] = [];
+  const paras = o.paras ?? [];
+  for (let i = 0; i < paras.length; i++) {
+    const p = paras[i];
+    out.push(p?.hidden ?? (i > 0 && p?.soft === true ? out[i - 1]! : false));
+  }
+  return out;
 }
 
 /**

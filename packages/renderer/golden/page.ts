@@ -8,15 +8,23 @@ import {
   type Slide,
   type TextStyle,
 } from '@ordo/domain';
-import { fillColor } from '../src/text2d.ts';
 import { type PropsModel, propBox } from '../src/props.ts';
 import { rasterImage, rasterLowerThird, rasterProps, rasterSlide } from '../src/raster.ts';
+import { type Ctx2D, drawText, fillColor } from '../src/text2d.ts';
+import { type FontFile, FontResolver, LEGACY_FONT_ENV, installFontEnv } from '../src/text/fonts.ts';
+import { RICH_STYLE_KEYS } from '../src/text/rich.ts';
+import { RICH_CASES, invarianceObjects } from './rich-cases.ts';
 
 /**
- * Browser side of the golden-image test (design/14, design/23): renders known slides through the same
- * rasterizer the outputs use, on an OffscreenCanvas in headless Chromium, and compares them to the
- * committed PNGs. Text uses a font the runner injects ('Golden'), so the result does not depend on the
- * fonts installed on the machine.
+ * Browser side of the golden-image test (design/14, design/23, design/27 §14 item 4): renders known slides
+ * through the same rasterizer the outputs use, on an OffscreenCanvas in headless Chromium, and compares them
+ * to the committed PNGs. Text uses faces the runner injects ('Golden', 'Golden Serif', 'Golden CJK'), so the
+ * result does not depend on the fonts installed on the machine.
+ *
+ * The legacy cases draw with no font resolver installed (`LEGACY_FONT_ENV`, the font strings drawers built
+ * before design/27), exactly as when their PNGs were made; `render(name, 'resolver')` draws them again with
+ * the resolver, as every drawer now does, against the same PNG. The rich cases (rich-cases.ts) always draw
+ * with the resolver, which registers every face under an internal family name (design/27 §10).
  */
 
 const W = 960;
@@ -133,7 +141,7 @@ function gradient(): OffscreenCanvas {
 
 const noImages = () => undefined;
 
-export const CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2D) => void> = {
+export const LEGACY_CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2D) => void> = {
   'main-authored': (ctx) => {
     fillColor(ctx, LOOK_MAIN.clearColor, W, H);
     rasterSlide(ctx, authored, reFont(LOOK_MAIN), SCALE, noImages, { isSong: false });
@@ -187,11 +195,122 @@ export const CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2D) => v
   },
 };
 
+export const CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2D) => void> = {
+  ...LEGACY_CASES,
+  ...RICH_CASES,
+};
+
+/** The faces the runner injects: each family is also registered directly under its own name. */
+type GoldenFace = {
+  family: string;
+  weight: number;
+  style: 'normal' | 'italic';
+  base64: string;
+  hash: string;
+};
+
+const resolver = new FontResolver({
+  set: document.fonts,
+  data: async (f) => {
+    const b = faceBytes.get(f.hash);
+    if (!b) throw new Error(`no face ${f.hash}`);
+    return b.slice(0);
+  },
+});
+const faceBytes = new Map<string, ArrayBuffer>();
+
+/** Draw `draw` with the resolver installed, or with no resolver (the legacy font strings). */
+function withEnv(env: 'legacy' | 'resolver', draw: () => void): void {
+  installFontEnv(env === 'resolver' ? resolver : LEGACY_FONT_ENV);
+  try {
+    draw();
+  } finally {
+    installFontEnv(LEGACY_FONT_ENV);
+  }
+}
+
+/** A 2D context that records every fillText and strokeText call (text and position as drawn). */
+function recording(ctx: OffscreenCanvasRenderingContext2D): { ctx: Ctx2D; calls: string[] } {
+  const calls: string[] = [];
+  const proxy = new Proxy(ctx, {
+    get(t, k) {
+      if (k === 'fillText' || k === 'strokeText')
+        return (s: string, x: number, y: number) => {
+          calls.push(`${k === 'fillText' ? 'f' : 's'}|${s}|${x}|${y}|${t.font}|${t.direction}`);
+          t[k](s, x, y);
+        };
+      const v = Reflect.get(t, k, t);
+      return typeof v === 'function' ? v.bind(t) : v;
+    },
+    set(t, k, v) {
+      return Reflect.set(t, k, v, t);
+    },
+  });
+  return { ctx: proxy as unknown as Ctx2D, calls };
+}
+
+export type Invariance = {
+  /** Objects × box widths checked, each drawn at every width in `widths`. */
+  configs: number;
+  widths: number[];
+  /** Rich configurations whose drawn text (strings, logical positions, fonts) differs between the widths. */
+  richDiffer: string[];
+  /** Legacy `drawText` of the same text and box: configurations whose line breaks differ (for comparison). */
+  legacyDiffer: number;
+  /** Lines drawn by the rich engine over all configurations at one width. */
+  richLines: number;
+};
+
+/**
+ * The line-break invariance check (design/27 §6 "Determinism", §14 item 4): every rich golden text object,
+ * at several box widths, drawn through `rasterSlide` into canvases 960, 1920 and 3840 px wide (and a 320 px
+ * thumbnail) must draw the same strings at the same logical positions in the same fonts. Each draw gets a
+ * fresh copy of the object, so nothing is reused from the layout memo; the width cache is shared, as it is
+ * in a drawer.
+ */
+function invariance(): Invariance {
+  const widths = [320, 960, 1920, 3840];
+  const canvases = widths.map((w) => new OffscreenCanvas(w, Math.round((w * 9) / 16)).getContext('2d')!);
+  const richDiffer: string[] = [];
+  let legacyDiffer = 0;
+  let configs = 0;
+  let richLines = 0;
+  withEnv('resolver', () => {
+    for (const o of invarianceObjects())
+      for (const f of [1, 0.85, 0.7, 0.55]) {
+        configs++;
+        const box = { ...o.box, w: Math.round(o.box.w * f) };
+        const drawn = canvases.map((c, i) => {
+          const copy = JSON.parse(JSON.stringify({ ...o, box }));
+          const rec = recording(c);
+          c.clearRect(0, 0, c.canvas.width, c.canvas.height);
+          rasterSlide(rec.ctx, { id: 'inv', objects: [copy] }, LOOK_MAIN, widths[i]! / 1920, () => undefined);
+          return rec.calls.join('\n');
+        });
+        if (drawn.some((d) => d !== drawn[0])) richDiffer.push(`${o.id} at ${box.w} px`);
+        richLines += new Set(drawn[0]!.split('\n').map((l) => l.split('|')[3])).size;
+        // Legacy drawText of the same text and box: its lines are measured at the device size.
+        const lines = canvases.map((c, i) => {
+          const rec = recording(c);
+          const scale = widths[i]! / 1920;
+          const st: Record<string, unknown> = { ...o.style, outline: undefined, shadow: undefined };
+          for (const k of RICH_STYLE_KEYS) delete st[k];
+          drawText(rec.ctx, o.text, st as TextStyle, box, scale);
+          return rec.calls.map((l) => l.split('|')[1]).join('\n');
+        });
+        if (lines.some((l) => l !== lines[0])) legacyDiffer++;
+      }
+  });
+  return { configs, widths, richDiffer, legacyDiffer, richLines };
+}
+
 type Golden = {
   size: { width: number; height: number };
   names(): string[];
-  fonts(files: { weight: number; style: 'normal' | 'italic'; base64: string }[]): Promise<number>;
-  render(name: string): Promise<string>;
+  legacyNames(): string[];
+  fonts(files: GoldenFace[]): Promise<number>;
+  render(name: string, env?: 'legacy' | 'resolver'): Promise<string>;
+  invariance(): Invariance;
   diff(
     name: string,
     expectedBase64: string,
@@ -201,7 +320,7 @@ type Golden = {
 
 const last = new Map<string, ImageData>();
 
-function b64ToBytes(b64: string): Uint8Array {
+function b64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
@@ -218,23 +337,30 @@ async function blobToBase64(b: Blob): Promise<string> {
 const golden: Golden = {
   size: { width: W, height: H },
   names: () => Object.keys(CASES),
+  legacyNames: () => Object.keys(LEGACY_CASES),
   async fonts(files) {
     let n = 0;
+    const list: FontFile[] = [];
     for (const f of files) {
-      const face = new FontFace(FONT, b64ToBytes(f.base64), { weight: String(f.weight), style: f.style });
+      const bytes = b64ToBytes(f.base64);
+      const face = new FontFace(f.family, bytes, { weight: String(f.weight), style: f.style });
       await face.load();
       document.fonts.add(face);
+      faceBytes.set(f.hash, bytes.buffer);
+      list.push({ family: f.family, weight: f.weight, style: f.style, hash: f.hash });
       n++;
     }
+    const synced = await resolver.sync(list);
+    if (synced.failed.length) throw new Error(`resolver: ${synced.failed.join('; ')}`);
     return n;
   },
-  async render(name) {
+  async render(name, env) {
     const draw = CASES[name];
     if (!draw) throw new Error(`unknown case ${name}`);
     const c = new OffscreenCanvas(W, H);
     const ctx = c.getContext('2d')!;
     ctx.clearRect(0, 0, W, H);
-    draw(ctx);
+    withEnv(env ?? (name in LEGACY_CASES ? 'legacy' : 'resolver'), () => draw(ctx));
     last.set(name, ctx.getImageData(0, 0, W, H));
     return blobToBase64(await c.convertToBlob({ type: 'image/png' }));
   },
@@ -257,6 +383,7 @@ const golden: Golden = {
     }
     return { differing, total: act.length / 4, maxDelta };
   },
+  invariance,
 };
 
 (window as unknown as { __golden: Golden }).__golden = golden;

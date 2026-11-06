@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_LYRIC_STYLE, type Rgba, type TextObject, type TextStyle, rgbaCss } from '@ordo/domain';
 import { LEGACY_FONT_ENV } from './fonts.ts';
-import { DECORATION_THICKNESS, STRIKE_RISE, UNDERLINE_OFFSET, paintPlan, paintRich } from './paint.ts';
+import { itemize } from './itemize.ts';
+import {
+  DECORATION_THICKNESS,
+  STRIKE_RISE,
+  UNDERLINE_OFFSET,
+  hiddenParas,
+  paintPlan,
+  paintRich,
+} from './paint.ts';
 import { clampTextObject, layoutRich } from './rich.ts';
 import { type CtxOp, recordingCtx, testMeasurer } from './test-util.ts';
 import type { RichLayout, Seg } from './types.ts';
@@ -200,6 +208,22 @@ describe('paintRich', () => {
     const ctx = recordingCtx();
     paintRich(ctx, hidden, b, 1, LEGACY_FONT_ENV);
     expect(ctx.ops.filter((d) => d.op === 'fillText').map((d) => d.args[0])).toEqual(['two']);
+  });
+
+  it('hides a soft paragraph with the paragraph it continues, as itemize resolves it', () => {
+    const m = testMeasurer();
+    const o = obj(
+      'one\ntwo\nthree\nfour',
+      {},
+      {
+        paras: [{ hidden: true }, { soft: true }, null, { soft: true, hidden: true }],
+      },
+    );
+    expect(hiddenParas(o)).toEqual([true, true, false, true]);
+    expect(itemize(o).paras.map((p) => p.style.hidden)).toEqual([true, true, false, true]);
+    const ctx = recordingCtx();
+    paintRich(ctx, o, layoutRich(m, o, LEGACY_FONT_ENV), 1, LEGACY_FONT_ENV);
+    expect(ctx.ops.filter((d) => d.op === 'fillText').map((d) => d.args[0])).toEqual(['three']);
   });
 
   it('draws the same logical geometry at every scale, from one cached plan', () => {

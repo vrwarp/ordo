@@ -4,7 +4,7 @@ import { LEGACY_FONT_ENV } from './fonts.ts';
 import { itemize } from './itemize.ts';
 import { layoutBox } from './lines.ts';
 import { FIT_SLACK_PX } from './office.ts';
-import { clampTextObject, drawRichText } from './rich.ts';
+import { clampTextObject, drawRichText, layoutRich } from './rich.ts';
 import { prepare } from './segments.ts';
 import { recordingCtx, testMeasurer } from './test-util.ts';
 import type { BulletSpec, RichLayout } from './types.ts';
@@ -166,6 +166,19 @@ describe('bullets', () => {
     expect(l.lines.map((x) => x.bullet?.text ?? null)).toEqual(['•', null, '–', null]);
     expect(l.lines[2]!.bullet!.sizePx).toBe(10);
     expect(l.lines[2]!.x).toBe(5);
+  });
+
+  it('are drawn on an empty first line when a soft line of the paragraph has text', () => {
+    const o = obj('\nabc\n\nd', {}, { paras: [null, { soft: true }, null, null] });
+    const l = layout(o, { bullets: [bullet('1.'), null, null, bullet('2.')] });
+    expect(l.lines.map((x) => x.bullet?.text ?? null)).toEqual(['1.', null, null, '2.']);
+  });
+
+  it('come from the domain labels end to end: an empty paragraph gets none and does not count', () => {
+    const num = { bullet: { auto: 'arabicPeriod' } };
+    const o = obj('a\n\nb\n\nc', {}, { paras: [num, num, num, num, { ...num, soft: true }] });
+    const l = layoutRich(testMeasurer({ em: 0.5 }), o, LEGACY_FONT_ENV);
+    expect(l.lines.map((x) => x.bullet?.text ?? null)).toEqual(['1.', null, '2.', '3.', null]);
   });
 });
 

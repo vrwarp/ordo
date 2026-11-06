@@ -304,8 +304,15 @@ function flowParas(
   let y = 0;
   // The paragraph a soft paragraph continues: its style, main size and direction.
   let hard: Continued | null = null;
+  // Whether a paragraph or the soft paragraphs continuing it have text: its bullet is drawn on its first
+  // line even when that line is empty and the text follows a line break (domain paraLabels counts it).
+  const chainText: boolean[] = new Array(prepared.length).fill(false);
+  for (let i = prepared.length - 1; i >= 0; i--)
+    chainText[i] =
+      prepared[i]!.pieces.length > 0 ||
+      (i + 1 < prepared.length && prepared[i + 1]!.para.soft && chainText[i + 1]!);
 
-  for (const pp of prepared) {
+  for (const [pi, pp] of prepared.entries()) {
     const para = pp.para;
     const runs = para.runs;
     const main = runs.find((r) => !r.style.baseline) ?? runs[0];
@@ -319,7 +326,7 @@ function flowParas(
     if (!cont) hard = { style: ps, F, rtl };
 
     const queue = pp.pieces.map((p) => measure(p, runs[p.sr]!));
-    const spec = !para.soft && queue.length ? (bullets[para.index] ?? null) : null;
+    const spec = !para.soft && chainText[pi] ? (bullets[para.index] ?? null) : null;
     const other = Math.max(0, ps.indentPx);
     const x0 = para.soft ? other : Math.max(0, ps.indentPx + ps.firstLinePx);
     let bullet: LaidLine['bullet'];

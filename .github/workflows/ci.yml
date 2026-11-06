@@ -46,8 +46,11 @@ jobs:
         run: pnpm e2e
         env:
           ORDO_CI: "1"
+      # The faces the golden images were drawn with (golden/expected/meta.json); a missing one fails the run.
+      - name: Fonts of the golden images
+        run: sudo apt-get install -y --no-install-recommends fonts-dejavu-core fonts-freefont-ttf fonts-ipafont-gothic
       - name: Golden images of the text rasterizer
-        run: pnpm --filter @ordo/renderer golden
+        run: pnpm --filter @ordo/renderer golden --strict
       - name: Late-loaded fonts take effect without a worker restart
         run: pnpm --filter @ordo/renderer late-font
       - uses: actions/upload-artifact@v4

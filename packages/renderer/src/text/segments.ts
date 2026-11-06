@@ -1,3 +1,5 @@
+import { FALLBACK_SCRIPTS } from '@ordo/domain';
+
 import { bidiParagraph, firstStrong } from './bidi.ts';
 import { breakOpportunities, graphemeBoundaries, isBreakSpace } from './breaks.ts';
 import type { BidiPara, ItemPara, Itemized, Piece, PreparedPara, RunStyle } from './types.ts';
@@ -126,29 +128,31 @@ function boundaryAtOrAfter(bounds: readonly number[], at: number, end: number): 
 
 // ---- Scripts that need a fallback face ----
 
-/** ISO 15924 codes in the order of `textScripts` (packages/domain/src/readable.ts), which they match. */
-const SCRIPT_CODES = [
-  'Hebr',
-  'Arab',
-  'Deva',
-  'Taml',
-  'Thai',
-  'Mymr',
-  'Hani',
-  'Hira',
-  'Kana',
-  'Hang',
-] as const;
-const SCRIPT_RE =
-  /(\p{Script=Hebrew})|(\p{Script=Arabic})|(\p{Script=Devanagari})|(\p{Script=Tamil})|(\p{Script=Thai})|(\p{Script=Myanmar})|(\p{Script=Han})|(\p{Script=Hiragana})|(\p{Script=Katakana})|(\p{Script=Hangul})/u;
+/**
+ * The scripts that need a fallback face: the domain's `FALLBACK_SCRIPTS`, the codes `textScripts` reports
+ * and `SCRIPT_FALLBACK_FONTS` is keyed by, so a piece asks the font resolver for the face the goLive font
+ * scan shipped. Every one of them starts at U+0370 (Greek) or later.
+ */
+const SCRIPT_CODES = FALLBACK_SCRIPTS.map(([code]) => code);
+const SCRIPT_RE = new RegExp(FALLBACK_SCRIPTS.map(([, re]) => `(${re.source})`).join('|'), 'u');
+/** Below this code unit no character belongs to a fallback script. */
+const FIRST_SCRIPT_UNIT = 0x0370;
+/** `scriptOf` by code point: text repeats its letters, and the alternation above is long. */
+const scriptCache = new Map<number, string>();
 
 /** The fallback script of one character ('' for every other script, Common and Inherited). */
 export function scriptOf(ch: string): string {
-  if (ch.charCodeAt(0) < 0x0590) return '';
-  const m = SCRIPT_RE.exec(ch);
-  if (!m) return '';
-  for (let g = 1; g < m.length; g++) if (m[g] !== undefined) return SCRIPT_CODES[g - 1]!;
-  return '';
+  if (ch.charCodeAt(0) < FIRST_SCRIPT_UNIT) return '';
+  const cp = ch.codePointAt(0)!;
+  let s = scriptCache.get(cp);
+  if (s === undefined) {
+    s = '';
+    const m = SCRIPT_RE.exec(String.fromCodePoint(cp));
+    if (m) for (let g = 1; g < m.length; g++) if (m[g] !== undefined) s = SCRIPT_CODES[g - 1]!;
+    if (scriptCache.size >= 4096) scriptCache.clear();
+    scriptCache.set(cp, s);
+  }
+  return s;
 }
 
 /** Han, Hiragana and Katakana share one face (Noto CJK): never cut between them. */
@@ -162,7 +166,7 @@ function scriptCut(text: string, at: number, end: number): { end: number; script
   let script = '';
   for (let i = at; i < end; ) {
     const c = text.charCodeAt(i);
-    if (c < 0x0590) {
+    if (c < FIRST_SCRIPT_UNIT) {
       i++;
       continue;
     }

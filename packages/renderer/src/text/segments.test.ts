@@ -2,6 +2,8 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_LYRIC_STYLE,
+  FALLBACK_SCRIPTS,
+  SCRIPT_FALLBACK_FONTS,
   type TextObject,
   type TextRun,
   type TextStyle,
@@ -12,6 +14,39 @@ import { itemize } from './itemize.ts';
 import { clampTextObject, layoutRich } from './rich.ts';
 import { breakOpportunities, graphemeBoundaries } from './breaks.ts';
 import { joinsAcross, joiningType, prepare, scriptOf, segText } from './segments.ts';
+
+/** One letter of each fallback script. */
+const SAMPLES: Record<string, string> = {
+  Hebr: 'ש',
+  Arab: 'س',
+  Syrc: 'ܐ',
+  Thaa: 'ހ',
+  Nkoo: 'ߊ',
+  Deva: 'क',
+  Beng: 'ক',
+  Guru: 'ਕ',
+  Gujr: 'ક',
+  Orya: 'କ',
+  Taml: 'க',
+  Telu: 'క',
+  Knda: 'ಕ',
+  Mlym: 'ക',
+  Sinh: 'ක',
+  Thai: 'ก',
+  Laoo: 'ກ',
+  Mymr: 'က',
+  Khmr: 'ក',
+  Tibt: 'ཀ',
+  Ethi: 'ሀ',
+  Armn: 'Ա',
+  Geor: 'ა',
+  Grek: 'Ω',
+  Cyrl: 'Ж',
+  Hani: '漢',
+  Hira: 'ひ',
+  Kana: 'カ',
+  Hang: '한',
+};
 import { testMeasurer } from './test-util.ts';
 import type { PreparedPara } from './types.ts';
 
@@ -279,6 +314,20 @@ describe('fallback scripts', () => {
     expect(scriptOf('a')).toBe('');
     expect(scriptOf('ש')).toBe('Hebr');
     expect(scriptOf('ー')).toBe(''); // Common: takes its neighbours' script
+  });
+
+  it('uses every code of the domain FALLBACK_SCRIPTS, the keys of SCRIPT_FALLBACK_FONTS included', () => {
+    for (const [code, re] of FALLBACK_SCRIPTS) {
+      const sample = SAMPLES[code];
+      expect(sample, code).toBeDefined();
+      expect(re.test(sample!), code).toBe(true);
+      expect(scriptOf(sample!), code).toBe(code);
+    }
+    for (const code of Object.keys(SCRIPT_FALLBACK_FONTS)) expect(SAMPLES[code], code).toBeDefined();
+    expect(scriptOf('é')).toBe('');
+    expect(scriptOf('\u{0301}')).toBe(''); // Inherited
+    const pp = prepared(obj('Alpha Ωμέγα Мир'))[0]!;
+    expect(pp.pieces.map((p) => p.script)).toEqual(['', 'Grek', 'Cyrl']);
   });
 
   it('keeps Han and kana in one piece when no break separates them', () => {
