@@ -1,138 +1,138 @@
 {
- "createdAt": "2026-11-06T09:27:59.518Z",
- "chromium": "/opt/pw-browsers/chromium-1243/chrome-linux64/chrome",
- "decks": [
-  {
-   "name": "corpus-typography",
-   "nativeSsim": 0.9586302,
-   "perSlide": [
+  "createdAt": "2026-11-06T09:27:59.518Z",
+  "chromium": "/opt/pw-browsers/chromium-1243/chrome-linux64/chrome",
+  "decks": [
     {
-     "n": 1,
-     "nativeSsim": 0.992364
+      "name": "corpus-typography",
+      "nativeSsim": 0.9586302,
+      "perSlide": [
+        {
+          "n": 1,
+          "nativeSsim": 0.992364
+        },
+        {
+          "n": 2,
+          "nativeSsim": 0.897006
+        },
+        {
+          "n": 3,
+          "nativeSsim": 0.995636
+        },
+        {
+          "n": 4,
+          "nativeSsim": 0.907888
+        },
+        {
+          "n": 5,
+          "nativeSsim": 0.993475
+        },
+        {
+          "n": 6,
+          "nativeSsim": 0.982942
+        },
+        {
+          "n": 7,
+          "nativeSsim": 0.9684
+        },
+        {
+          "n": 8,
+          "nativeSsim": 0.947547
+        },
+        {
+          "n": 9,
+          "nativeSsim": 0.919893
+        },
+        {
+          "n": 10,
+          "nativeSsim": 0.981151
+        }
+      ]
     },
     {
-     "n": 2,
-     "nativeSsim": 0.897006
+      "name": "corpus-shapes",
+      "nativeSsim": 0.9912126666666667,
+      "perSlide": [
+        {
+          "n": 1,
+          "nativeSsim": 0.986137
+        },
+        {
+          "n": 2,
+          "nativeSsim": 0.990156
+        },
+        {
+          "n": 3,
+          "nativeSsim": 0.997345
+        }
+      ]
     },
     {
-     "n": 3,
-     "nativeSsim": 0.995636
+      "name": "corpus-pictures",
+      "nativeSsim": 0.9607296666666668,
+      "perSlide": [
+        {
+          "n": 1,
+          "nativeSsim": 0.963751
+        },
+        {
+          "n": 2,
+          "nativeSsim": 0.983021
+        },
+        {
+          "n": 3,
+          "nativeSsim": 0.935417
+        }
+      ]
     },
     {
-     "n": 4,
-     "nativeSsim": 0.907888
+      "name": "corpus-tables-charts",
+      "nativeSsim": 0.8594040000000001,
+      "perSlide": [
+        {
+          "n": 1,
+          "nativeSsim": 0.861389
+        },
+        {
+          "n": 2,
+          "nativeSsim": 0.857419
+        }
+      ]
     },
     {
-     "n": 5,
-     "nativeSsim": 0.993475
+      "name": "corpus-media",
+      "nativeSsim": 0.8207092500000001,
+      "perSlide": [
+        {
+          "n": 1,
+          "nativeSsim": 0.993745
+        },
+        {
+          "n": 2,
+          "nativeSsim": 0.554347
+        },
+        {
+          "n": 3,
+          "nativeSsim": 0.992668
+        },
+        {
+          "n": 4,
+          "nativeSsim": 0.742077
+        }
+      ]
     },
     {
-     "n": 6,
-     "nativeSsim": 0.982942
-    },
-    {
-     "n": 7,
-     "nativeSsim": 0.9684
-    },
-    {
-     "n": 8,
-     "nativeSsim": 0.947547
-    },
-    {
-     "n": 9,
-     "nativeSsim": 0.919893
-    },
-    {
-     "n": 10,
-     "nativeSsim": 0.981151
+      "name": "corpus-placement-4x3",
+      "nativeSsim": 0.9986645000000001,
+      "perSlide": [
+        {
+          "n": 1,
+          "nativeSsim": 0.999774
+        },
+        {
+          "n": 2,
+          "nativeSsim": 0.997555
+        }
+      ]
     }
-   ]
-  },
-  {
-   "name": "corpus-shapes",
-   "nativeSsim": 0.9912126666666667,
-   "perSlide": [
-    {
-     "n": 1,
-     "nativeSsim": 0.986137
-    },
-    {
-     "n": 2,
-     "nativeSsim": 0.990156
-    },
-    {
-     "n": 3,
-     "nativeSsim": 0.997345
-    }
-   ]
-  },
-  {
-   "name": "corpus-pictures",
-   "nativeSsim": 0.9607296666666668,
-   "perSlide": [
-    {
-     "n": 1,
-     "nativeSsim": 0.963751
-    },
-    {
-     "n": 2,
-     "nativeSsim": 0.983021
-    },
-    {
-     "n": 3,
-     "nativeSsim": 0.935417
-    }
-   ]
-  },
-  {
-   "name": "corpus-tables-charts",
-   "nativeSsim": 0.8594040000000001,
-   "perSlide": [
-    {
-     "n": 1,
-     "nativeSsim": 0.861389
-    },
-    {
-     "n": 2,
-     "nativeSsim": 0.857419
-    }
-   ]
-  },
-  {
-   "name": "corpus-media",
-   "nativeSsim": 0.8207092500000001,
-   "perSlide": [
-    {
-     "n": 1,
-     "nativeSsim": 0.993745
-    },
-    {
-     "n": 2,
-     "nativeSsim": 0.554347
-    },
-    {
-     "n": 3,
-     "nativeSsim": 0.992668
-    },
-    {
-     "n": 4,
-     "nativeSsim": 0.742077
-    }
-   ]
-  },
-  {
-   "name": "corpus-placement-4x3",
-   "nativeSsim": 0.9986645000000001,
-   "perSlide": [
-    {
-     "n": 1,
-     "nativeSsim": 0.999774
-    },
-    {
-     "n": 2,
-     "nativeSsim": 0.997555
-    }
-   ]
-  }
- ]
+  ]
 }

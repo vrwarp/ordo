@@ -1,4 +1,6 @@
 import type { Slide } from '@ordo/domain';
+import { currentFontEnv, type FontFile, FontResolver, installFontEnv } from '@ordo/renderer/text/fonts.ts';
+import type { FaceRequest } from '@ordo/renderer/text/types.ts';
 import { drawImageFit, drawSlide2D, fillColor } from '@ordo/renderer/text2d.ts';
 
 /**
@@ -10,12 +12,19 @@ import { drawImageFit, drawSlide2D, fillColor } from '@ordo/renderer/text2d.ts';
  * the deck's slide rectangle, so a 4:3 deck compares with LibreOffice's 4:3 page like for like. The slide is
  * then drawn again at 1920 and 3840 px for the raster timings.
  *
+ * Fonts go through the renderer's `FontResolver`, installed as the page's font environment as the asset and
+ * thumbnail workers install theirs (design/27 §10): each family's faces are registered under an internal
+ * name never resolved before, and font strings are built from loaded faces only (the exact family, its
+ * `fallbackFonts`, the script fallback, ordo's default face, the generic chain). The slides keep the deck's
+ * family names. `fonts.ts` decides which faces this machine gives each family.
+ *
  * Pictures and fonts come from the harness's own origin (`native.ts` answers every request; nothing else
  * is fetched). Pictures are decoded once per deck, scaled down to what the deck shows of them (the hub's
  * picture preparation does the same, design/27 §4), and kept in a bounded cache.
  */
 
-export type PageFont = { family: string; weight: number; style: 'normal' | 'italic'; url: string };
+/** A face to register: the resolver's `FontFile`, read from `url`. */
+export type PageFont = FontFile & { url: string };
 
 export type PageMedia = {
   id: string;
@@ -29,7 +38,7 @@ export type RenderJob = {
   slide: Slide;
   /** The deck's slide area in logical px (1920x1080). */
   rect: { x: number; y: number; w: number; h: number };
-  /** Timed draws at each width (the median is reported); 0 skips the timing. */
+  /** Timed draws at each width (the median is reported); 0 skips the timing (both times are then 0). */
   repeats: number;
 };
 
@@ -46,7 +55,10 @@ export type RenderResult = {
 };
 
 export type NativePage = {
-  fonts(list: PageFont[]): Promise<{ loaded: number; failed: string[] }>;
+  /** Register the deck's faces with the page's resolver (`FontResolver.sync`). */
+  fonts(list: PageFont[]): Promise<{ loaded: number; failed: string[]; generation: number }>;
+  /** The CSS font the installed font environment gives each request (what text is drawn with). */
+  font(reqs: FaceRequest[]): string[];
   media(list: PageMedia[]): void;
   render(job: RenderJob): Promise<RenderResult>;
 };
@@ -162,6 +174,30 @@ async function blobToBase64(b: Blob): Promise<string> {
 
 const canvases = new Map<number, OffscreenCanvasRenderingContext2D>();
 
+/** Font files by hash: each is fetched once per sync, and every face made from it gets its own copy. */
+const fontUrls = new Map<string, string>();
+const fontBytes = new Map<string, Promise<ArrayBuffer>>();
+
+const resolver = new FontResolver({
+  set: document.fonts,
+  async data(f) {
+    let got = fontBytes.get(f.hash);
+    if (!got) {
+      const url = fontUrls.get(f.hash);
+      if (!url) throw new Error('no such font file');
+      got = fetch(url).then((r) => {
+        if (!r.ok) throw new Error(`font file ${r.status}`);
+        return r.arrayBuffer();
+      });
+      // A failed read is not kept: the resolver's retry reads again.
+      got.catch(() => fontBytes.delete(f.hash));
+      fontBytes.set(f.hash, got);
+    }
+    return (await got).slice(0);
+  },
+});
+installFontEnv(resolver);
+
 function context(width: number): OffscreenCanvasRenderingContext2D {
   let ctx = canvases.get(width);
   if (!ctx) {
@@ -176,24 +212,14 @@ function context(width: number): OffscreenCanvasRenderingContext2D {
 
 const page: NativePage = {
   async fonts(list) {
-    let loaded = 0;
-    const failed: string[] = [];
-    for (const f of list) {
-      try {
-        const res = await fetch(f.url);
-        if (!res.ok) throw new Error(String(res.status));
-        const face = new FontFace(f.family, await res.arrayBuffer(), {
-          weight: String(f.weight),
-          style: f.style,
-        });
-        await face.load();
-        document.fonts.add(face);
-        loaded++;
-      } catch {
-        failed.push(f.url);
-      }
-    }
-    return { loaded, failed };
+    for (const f of list) if (!fontUrls.has(f.hash)) fontUrls.set(f.hash, f.url);
+    const got = await resolver.sync(list.map(({ url: _, ...f }) => f));
+    // The faces hold their own copies; a retry reads its file again.
+    fontBytes.clear();
+    return { loaded: got.loaded, failed: got.failed, generation: resolver.generation };
+  },
+  font(reqs) {
+    return reqs.map((r) => currentFontEnv().font(r));
   },
   media(list) {
     for (const d of cache.values()) d.bmp?.close();
@@ -214,8 +240,8 @@ const page: NativePage = {
     const crop = new OffscreenCanvas(w, h);
     crop.getContext('2d')!.drawImage(ctx.canvas, x, y, w, h, 0, 0, w, h);
     const png = await blobToBase64(await crop.convertToBlob({ type: 'image/png' }));
-    const ms1920 = timed(ctx, job.slide, 1920, pictures, job.repeats);
-    const ms3840 = timed(context(3840), job.slide, 3840, pictures, job.repeats);
+    const ms1920 = job.repeats ? timed(ctx, job.slide, 1920, pictures, job.repeats) : 0;
+    const ms3840 = job.repeats ? timed(context(3840), job.slide, 3840, pictures, job.repeats) : 0;
     return { png, width: w, height: h, ms1920, ms3840, missing };
   },
 };

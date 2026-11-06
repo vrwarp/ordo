@@ -1,4 +1,7 @@
 import { writeFile } from 'node:fs/promises';
+import { COMPAT_RULE_TEXT, COMPAT_RULES, type CompatRule } from './compat.ts';
+import { M2_FEATURE_TARGETS, TEXT_FEATURES } from './features.ts';
+import type { ScriptFace } from './fonts.ts';
 
 export type SlideScore = {
   n: number;
@@ -11,7 +14,15 @@ export type SlideScore = {
   rawPpv?: string;
   // native (design/27 §14.1)
   native?: string;
+  /** Native SSIM as drawn: with `--lo-compat`, the slide drawn as LibreOffice would. */
   nativeSsim?: number;
+  /** With `--lo-compat`, on a slide a policy rule changes: the slide drawn as ordo does, and its SSIM. */
+  nativePolicy?: string;
+  policySsim?: number;
+  /** LibreOffice policy rules that change how the slide is drawn (`compat.ts`), whether applied or not. */
+  compat?: string[];
+  /** Text features of the slide's own XML (`features.ts`). */
+  textFeatures?: string[];
   /** An all-black frame scored the same way: the floor native has to beat. */
   blackSsim?: number;
   tier?: string;
@@ -36,6 +47,10 @@ export type DeckScore = {
   /** Shown slides the native converter emitted, and their mean SSIM over LibreOffice's pages. */
   nativeSlides?: number;
   nativeSsim?: number;
+  /** With `--lo-compat`: the mean with every slide drawn as ordo does. */
+  nativePolicySsim?: number;
+  /** Text features of any slide (and the presentation part), as the suite's inventory reads a deck. */
+  textFeatures?: string[];
   /** The whole native column for this deck (convert, fonts, draw), and the converter alone, in ms. */
   nativeMs?: number;
   convertMs?: number;
@@ -53,13 +68,21 @@ export type Summary = {
   createdAt: string;
   chromium?: string;
   engines?: string[];
-  /** The native column was drawn with `--lo-compat` (LibreOffice's policies, design/27 §14.1). */
-  loCompat?: boolean;
   /** Mean pptx-preview SSIM over decks. */
   mean?: number;
-  /** Mean native SSIM over decks without embedded fonts, and over every deck. */
+  /** Mean native SSIM over decks without embedded fonts, and over every deck (as drawn). */
   nativeMean?: number;
   nativeMeanAll?: number;
+  /** Native slides drawn as LibreOffice would where the policies differ (`--lo-compat`). */
+  loCompat?: boolean;
+  /** With `--lo-compat`: `nativeMean` with every slide drawn as ordo does. */
+  nativePolicyMean?: number;
+  /** The native column's tables (`nativeTables`): all decks, and worship decks when a manifest says. */
+  native?: { all: NativeTables; worship?: NativeTables };
+  /** How this machine served each script fallback family (`fonts.ts`). */
+  scriptFallbacks?: ScriptFace[];
+  /** `--slides`: only these slides were scored. */
+  slides?: { deck?: string; slides: number[] }[];
   decks: DeckScore[];
 };
 
@@ -92,11 +115,46 @@ export type NativeStats = {
   beatsBlack: number;
   meanNative: number;
   meanPpv?: number;
+  /** With `--lo-compat`: the mean with every slide drawn as ordo does. */
+  meanPolicy?: number;
   convertMs: { p50: number; p95: number };
   rasterMs: { '1920': { p50: number; p95: number }; '3840': { p50: number; p95: number } };
   tiers: GroupRow[];
+  /** T1 and T2 together (the M2 exit compares them with pptx-preview). */
+  t1t2?: GroupRow;
   classes: GroupRow[];
   reasons: GroupRow[];
+};
+
+/** One tier's slides with a text feature. */
+export type TierCell = { count: number; native: number; ppv?: number };
+
+/** A text feature (`features.ts`) over the shown slides that have it, per tier, and over decks. */
+export type TextFeatureRow = GroupRow & {
+  /** By tier, in tier order: count and means of the slides with the feature. */
+  tiers: Record<string, TierCell>;
+  /** With `--lo-compat`: the mean with those slides drawn as ordo does. */
+  policy?: number;
+  /** Decks with the feature anywhere (left out: embedded fonts), and their mean deck SSIM. */
+  decks: number;
+  deckNative: number;
+  deckPpv?: number;
+  /** pptx-preview's mean on the suite's worship decks: the M2 exit target (`M2_FEATURE_TARGETS`). */
+  target?: number;
+};
+
+/** A LibreOffice policy rule (`compat.ts`) over the shown slides it changes. */
+export type PolicyRow = GroupRow & {
+  key: CompatRule;
+  text: string;
+  /** With `--lo-compat`: the same slides drawn as ordo does (`native` is then LibreOffice's way). */
+  policy?: number;
+};
+
+export type NativeTables = {
+  stats: NativeStats;
+  textFeatures: TextFeatureRow[];
+  policy: PolicyRow[];
 };
 
 const TIER_ORDER = ['T1', 'T2', 'T3', 'T4', 'T5', 'fallback'];
@@ -164,6 +222,7 @@ export function nativeStats(decks: DeckScore[]): NativeStats {
   const slides = shownSlides(decks);
   const scored = scoredOf(slides);
   const ppv = scored.filter((s) => s.ssim !== undefined);
+  const t1t2 = groupRows(slides, (s) => (s.tier === 'T1' || s.tier === 'T2' ? ['T1+T2'] : []));
   const raster = (w: '1920' | '3840') => {
     const xs = slides.flatMap((x) => (x.s.rasterMs ? [x.s.rasterMs[w]] : []));
     return { p50: quantile(xs, 0.5), p95: quantile(xs, 0.95) };
@@ -175,12 +234,92 @@ export function nativeStats(decks: DeckScore[]): NativeStats {
     beatsBlack: beats(scored),
     meanNative: mean(scored.map((s) => s.nativeSsim!)),
     ...(ppv.length ? { meanPpv: mean(ppv.map((s) => s.ssim!)) } : {}),
+    ...(scored.some((s) => s.policySsim !== undefined) ? { meanPolicy: mean(scored.map(policyOf)) } : {}),
     convertMs: { p50: quantile(conv, 0.5), p95: quantile(conv, 0.95) },
     rasterMs: { '1920': raster('1920'), '3840': raster('3840') },
     tiers: groupRows(slides, (s) => [s.tier!], TIER_ORDER),
+    ...(t1t2[0] ? { t1t2: t1t2[0] } : {}),
     classes: groupRows(slides, (s) => [s.class ?? '?'], ['native', 'hybrid', 'picture', '?']),
     reasons: groupRows(slides, (s) => (s.reasons?.length ? s.reasons : ['(none)'])),
   };
+}
+
+/** A slide's score as ordo draws it: its policy drawing's under `--lo-compat`, else the one drawn. */
+const policyOf = (s: SlideScore) => s.policySsim ?? s.nativeSsim!;
+
+/**
+ * Each text feature (`TEXT_FEATURES` order, only those present) over the shown slides that have it: counts
+ * and shares over every such slide, means over those that count (no embedded fonts), per tier as well; and
+ * over the decks that have it anywhere, as the suite's numbers (and the M2 targets) were taken.
+ */
+export function textFeatureRows(decks: DeckScore[]): TextFeatureRow[] {
+  const slides = shownSlides(decks);
+  const counted = decks.filter((d) => !d.embeddedFonts && d.nativeSsim !== undefined);
+  return TEXT_FEATURES.flatMap((f): TextFeatureRow[] => {
+    const g = slides.filter((x) => x.s.textFeatures?.includes(f));
+    const dg = counted.filter((d) => d.textFeatures?.includes(f));
+    if (!g.length && !dg.length) return [];
+    const scored = scoredOf(g);
+    const ppv = scored.filter((s) => s.ssim !== undefined);
+    const tiers: Record<string, TierCell> = {};
+    for (const t of TIER_ORDER) {
+      const tg = g.filter((x) => x.s.tier === t);
+      if (!tg.length) continue;
+      const ts = scoredOf(tg);
+      const tp = ts.filter((s) => s.ssim !== undefined);
+      tiers[t] = {
+        count: tg.length,
+        native: mean(ts.map((s) => s.nativeSsim!)),
+        ...(tp.length ? { ppv: mean(tp.map((s) => s.ssim!)) } : {}),
+      };
+    }
+    const dppv = dg.filter((d) => d.ssim !== undefined);
+    const target = M2_FEATURE_TARGETS[f];
+    return [
+      {
+        key: f,
+        count: g.length,
+        share: slides.length ? g.length / slides.length : 0,
+        native: mean(scored.map((s) => s.nativeSsim!)),
+        ...(ppv.length ? { ppv: mean(ppv.map((s) => s.ssim!)) } : {}),
+        ...(scored.length ? { beatsBlack: beats(scored) } : {}),
+        ...(scored.some((s) => s.policySsim !== undefined) ? { policy: mean(scored.map(policyOf)) } : {}),
+        tiers,
+        decks: dg.length,
+        deckNative: mean(dg.map((d) => d.nativeSsim!)),
+        ...(dppv.length ? { deckPpv: mean(dppv.map((d) => d.ssim!)) } : {}),
+        ...(target !== undefined ? { target } : {}),
+      },
+    ];
+  });
+}
+
+/** Each LibreOffice policy rule over the shown slides it changes (whether the run applied it or not). */
+export function policyRows(decks: DeckScore[]): PolicyRow[] {
+  const slides = shownSlides(decks);
+  return COMPAT_RULES.flatMap((rule): PolicyRow[] => {
+    const g = slides.filter((x) => x.s.compat?.includes(rule));
+    if (!g.length) return [];
+    const scored = scoredOf(g);
+    const ppv = scored.filter((s) => s.ssim !== undefined);
+    return [
+      {
+        key: rule,
+        text: COMPAT_RULE_TEXT[rule],
+        count: g.length,
+        share: slides.length ? g.length / slides.length : 0,
+        native: mean(scored.map((s) => s.nativeSsim!)),
+        ...(ppv.length ? { ppv: mean(ppv.map((s) => s.ssim!)) } : {}),
+        ...(scored.length ? { beatsBlack: beats(scored) } : {}),
+        ...(scored.some((s) => s.policySsim !== undefined) ? { policy: mean(scored.map(policyOf)) } : {}),
+      },
+    ];
+  });
+}
+
+/** The native column's tables over `decks`, as `summary.json` keeps them. */
+export function nativeTables(decks: DeckScore[]): NativeTables {
+  return { stats: nativeStats(decks), textFeatures: textFeatureRows(decks), policy: policyRows(decks) };
 }
 
 /** Mean native SSIM per manifest feature, over decks (decks with embedded fonts left out). */
@@ -224,16 +363,105 @@ function table(title: string, unit: string, rows: GroupRow[], ppv: boolean): str
   return `<div><h3>${esc(title)}</h3><table>${head}${body}</table></div>`;
 }
 
-function statsHtml(title: string, decks: DeckScore[]): string {
+/** Text features: slides, means, per-tier means, and the deck-level means the M2 targets are. */
+function textFeatureTable(rows: TextFeatureRow[], ppv: boolean): string {
+  if (!rows.length) return '';
+  const tiers = TIER_ORDER.filter((t) => rows.some((r) => r.tiers[t]));
+  const policy = rows.some((r) => r.policy !== undefined);
+  const cell = (c: TierCell | undefined) =>
+    c ? `${f3(c.native)}${ppv && c.ppv !== undefined ? ` / ${f3(c.ppv)}` : ''} (${c.count})` : '';
+  const head =
+    '<tr><th>feature</th><th>slides</th><th>share</th><th>native</th>' +
+    (ppv ? '<th>pptx-preview</th>' : '') +
+    (policy ? "<th>ordo's policies</th>" : '') +
+    '<th>beats black</th>' +
+    tiers.map((t) => `<th>${esc(t)}</th>`).join('') +
+    `<th>decks</th><th>deck native</th>${ppv ? '<th>deck pptx-preview</th>' : ''}<th>M2 target</th></tr>`;
+  const body = rows
+    .map(
+      (r) =>
+        // A feature only some deck has (its slides left out by --slides, or not scored) has no slide means.
+        `<tr><td>${esc(r.key)}</td><td>${r.count}</td><td>${pct(r.share)}</td><td>${r.beatsBlack !== undefined ? f3(r.native) : ''}</td>` +
+        (ppv ? `<td>${f3(r.ppv)}</td>` : '') +
+        (policy ? `<td>${f3(r.policy)}</td>` : '') +
+        `<td>${pct(r.beatsBlack)}</td>` +
+        tiers.map((t) => `<td>${cell(r.tiers[t])}</td>`).join('') +
+        `<td>${r.decks}</td><td>${r.decks ? f3(r.deckNative) : ''}</td>${ppv ? `<td>${f3(r.deckPpv)}</td>` : ''}<td>${f3(r.target)}</td></tr>`,
+    )
+    .join('');
+  return (
+    `<div><h3>Text features (slide XML; per tier: native${ppv ? ' / pptx-preview' : ''} (slides))</h3>` +
+    `<table>${head}${body}</table></div>`
+  );
+}
+
+/** LibreOffice policy rules: the slides each changes, and their means drawn either way. */
+function policyTable(rows: PolicyRow[], ppv: boolean, loCompat: boolean): string {
+  if (!rows.length) return '';
+  const policy = rows.some((r) => r.policy !== undefined);
+  const head =
+    `<tr><th>rule</th><th>slides</th><th>share</th><th>${loCompat ? "native (LibreOffice's way)" : 'native'}</th>` +
+    (policy ? "<th>ordo's way</th><th>gain</th>" : '') +
+    `${ppv ? '<th>pptx-preview</th>' : ''}<th class="text">what LibreOffice does</th></tr>`;
+  const body = rows
+    .map(
+      (r) =>
+        `<tr><td>${esc(r.key)}</td><td>${r.count}</td><td>${pct(r.share)}</td><td>${f3(r.native)}</td>` +
+        (policy
+          ? `<td>${f3(r.policy)}</td><td>${r.policy !== undefined ? signed(r.native - r.policy) : ''}</td>`
+          : '') +
+        `${ppv ? `<td>${f3(r.ppv)}</td>` : ''}<td class="text">${esc(r.text)}</td></tr>`,
+    )
+    .join('');
+  const note = loCompat
+    ? 'Drawn as LibreOffice would (--lo-compat); "ordo\'s way" is the same slides as ordo draws them.'
+    : 'Drawn as ordo does; --lo-compat draws these slides as LibreOffice would and reports both.';
+  return `<div><h3>LibreOffice policy rules (${esc(note)})</h3><table>${head}${body}</table></div>`;
+}
+
+const signed = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(3)}`;
+
+function statsHtml(title: string, decks: DeckScore[], loCompat: boolean): string {
   const st = nativeStats(decks);
   if (!st.slides) return '';
   const ppv = st.meanPpv !== undefined;
   const r = st.rasterMs;
+  const t = st.t1t2;
   return (
     `<h2>${esc(title)}</h2>` +
-    `<p>${st.slides} shown slides, ${st.scored} scored · native ${f3(st.meanNative)}${ppv ? ` · pptx-preview ${f3(st.meanPpv)}` : ''} · beats an all-black frame on ${pct(st.beatsBlack)} · convert p50 ${ms(st.convertMs.p50)} ms, p95 ${ms(st.convertMs.p95)} ms · raster 1920 p50 ${ms(r['1920'].p50)} ms, p95 ${ms(r['1920'].p95)} ms · 3840 p50 ${ms(r['3840'].p50)} ms, p95 ${ms(r['3840'].p95)} ms</p>` +
-    `<div class="tables">${table('Tiers', 'tier', st.tiers, ppv)}${table('Classes', 'class', st.classes, ppv)}${table('Reasons (classifier features), worst first', 'reason', st.reasons, ppv)}</div>`
+    `<p>${st.slides} shown slides, ${st.scored} scored · native ${f3(st.meanNative)}${st.meanPolicy !== undefined ? ` (ordo's policies ${f3(st.meanPolicy)})` : ''}${ppv ? ` · pptx-preview ${f3(st.meanPpv)}` : ''} · beats an all-black frame on ${pct(st.beatsBlack)}${t ? ` · T1+T2 ${t.count} slides: native ${f3(t.native)}${t.ppv !== undefined ? `, pptx-preview ${f3(t.ppv)}` : ''}` : ''} · convert p50 ${ms(st.convertMs.p50)} ms, p95 ${ms(st.convertMs.p95)} ms · raster 1920 p50 ${ms(r['1920'].p50)} ms, p95 ${ms(r['1920'].p95)} ms · 3840 p50 ${ms(r['3840'].p50)} ms, p95 ${ms(r['3840'].p95)} ms</p>` +
+    `<div class="tables">${table('Tiers', 'tier', st.tiers, ppv)}${table('Classes', 'class', st.classes, ppv)}${table('Reasons (classifier features), worst first', 'reason', st.reasons, ppv)}</div>` +
+    `<div class="tables">${textFeatureTable(textFeatureRows(decks), ppv)}</div>` +
+    `<div class="tables">${policyTable(policyRows(decks), ppv, loCompat)}</div>`
   );
+}
+
+/** The script fallback faces the run used, and which were stand-ins. */
+function fontsHtml(faces: ScriptFace[] | undefined): string {
+  if (!faces?.length) return '';
+  const items = faces.map(
+    (f) =>
+      `${esc(f.family)} (${esc(f.scripts.join(', '))}): ${
+        f.served === 'missing'
+          ? "not installed, the browser's fallback draws it"
+          : `${esc(f.host ?? '')}${f.served === 'stand-in' ? ' standing in' : ''}`
+      }`,
+  );
+  return `<p class="notes">Script fallbacks of the text on this machine: ${items.join('; ')}.</p>`;
+}
+
+/** What the run was asked for besides the decks: `--lo-compat`, `--slides`. */
+function runHtml(s: Summary): string {
+  const parts: string[] = [];
+  if (s.loCompat)
+    parts.push(
+      `Native slides drawn as LibreOffice would where the policies differ (--lo-compat): ${COMPAT_RULES.map((r) => `${r}: ${COMPAT_RULE_TEXT[r]}`).join('; ')}. The means with ordo's own policies are given next to them.`,
+    );
+  if (s.slides?.length)
+    parts.push(
+      `Only some slides were scored (--slides): ${s.slides.map((x) => `${x.deck ? `${x.deck}: ` : ''}${x.slides.join(', ')}`).join('; ')}.`,
+    );
+  return parts.map((p) => `<p class="notes">${esc(p)}</p>`).join('');
 }
 
 /**
@@ -258,12 +486,15 @@ export async function writeReport(file: string, s: Summary): Promise<void> {
           const head = [
             `Slide ${p.n}`,
             p.nativeSsim !== undefined ? `native ${f3(p.nativeSsim)}` : '',
+            p.policySsim !== undefined ? `ordo's policies ${f3(p.policySsim)}` : '',
             p.blackSsim !== undefined ? `black ${f3(p.blackSsim)}` : '',
             p.ssim !== undefined ? `pptx-preview ${f3(p.ssim)}` : '',
             p.raw !== undefined ? `unmodified ${f3(p.raw)}` : '',
             p.tier
               ? `${p.tier} ${p.class ?? ''}${p.reasons?.length ? ` (${p.reasons.join(', ')})` : ''}`
               : '',
+            p.textFeatures?.length ? `text: ${p.textFeatures.join(', ')}` : '',
+            p.compat?.length ? `LibreOffice policies: ${p.compat.join(', ')}` : '',
             p.convertMs !== undefined ? `convert ${ms(p.convertMs)} ms` : '',
             p.rasterMs ? `raster ${ms(p.rasterMs['1920'])} / ${ms(p.rasterMs['3840'])} ms` : '',
           ]
@@ -274,7 +505,15 @@ export async function writeReport(file: string, s: Summary): Promise<void> {
             img(p.libreoffice, 'LibreOffice (ground truth)') +
             (d.ppvSlides !== undefined ? img(p.ppv, 'pptx-preview + ordo') : '') +
             (p.raw !== undefined ? img(p.rawPpv, 'pptx-preview unmodified') : '') +
-            (d.nativeSlides !== undefined ? img(p.native, 'native (pptx-scene + drawSlide2D)') : '') +
+            (d.nativeSlides !== undefined
+              ? img(
+                  p.native,
+                  p.nativePolicy
+                    ? 'native, drawn as LibreOffice would (--lo-compat)'
+                    : 'native (pptx-scene + drawSlide2D)',
+                )
+              : '') +
+            (p.nativePolicy ? img(p.nativePolicy, 'native, drawn as ordo does') : '') +
             '</div></section>'
           );
         })
@@ -287,6 +526,8 @@ export async function writeReport(file: string, s: Summary): Promise<void> {
         `<b>${esc(d.name)}</b>`,
         `${d.slides} slides`,
         d.nativeSsim !== undefined ? `native ${f3(d.nativeSsim)}` : '',
+        d.nativePolicySsim !== undefined ? `ordo's policies ${f3(d.nativePolicySsim)}` : '',
+        d.textFeatures?.length ? `text: ${d.textFeatures.join(', ')}` : '',
         d.ssim !== undefined
           ? `pptx-preview ${f3(d.ssim)}${d.rawSsim !== undefined ? ` (unmodified ${f3(d.rawSsim)})` : ''}`
           : '',
@@ -306,16 +547,20 @@ export async function writeReport(file: string, s: Summary): Promise<void> {
     const worship = s.decks.filter((d) => d.worship);
     const left = s.decks.filter((d) => d.embeddedFonts).length;
     native =
-      (worship.length ? statsHtml(`Native, worship decks (${worship.length})`, worship) : '') +
-      statsHtml(`Native, all decks (${s.decks.length})`, s.decks) +
+      (worship.length
+        ? statsHtml(`Native, worship decks (${worship.length})`, worship, s.loCompat === true)
+        : '') +
+      statsHtml(`Native, all decks (${s.decks.length})`, s.decks, s.loCompat === true) +
       (worship.length
         ? `<div class="tables">${table('Manifest features, worship decks, worst first', 'feature', featureRows(worship), hasPpv)}</div>`
         : '') +
       `<div class="tables">${table('Manifest features, all decks, worst first', 'feature', featureRows(s.decks), hasPpv)}</div>` +
-      (left ? `<p class="notes">${left} deck(s) with embedded fonts are left out of the means.</p>` : '');
+      (left ? `<p class="notes">${left} deck(s) with embedded fonts are left out of the means.</p>` : '') +
+      fontsHtml(s.scriptFallbacks);
   }
   const means = [
-    s.nativeMean !== undefined ? `native${s.loCompat ? ' (lo-compat)' : ''} ${f3(s.nativeMean)}` : '',
+    s.nativeMean !== undefined ? `native ${f3(s.nativeMean)}` : '',
+    s.nativePolicyMean !== undefined ? `native with ordo's policies ${f3(s.nativePolicyMean)}` : '',
     s.mean !== undefined ? `pptx-preview ${f3(s.mean)}` : '',
   ]
     .filter(Boolean)
@@ -335,10 +580,10 @@ h3{font-size:14px;margin:16px 0 6px}
 .tables{display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start}
 table{border-collapse:collapse;font-variant-numeric:tabular-nums}
 th,td{border-bottom:1px solid var(--line);padding:2px 8px;text-align:right}
-th:first-child,td:first-child{text-align:left}
+th:first-child,td:first-child,.text{text-align:left}
 </style>
 <h1>PowerPoint fidelity</h1>
-<p>Renderers scored against LibreOffice, slide by slide: SSIM of greyscale pictures at 960×540, 1 = identical.${means ? ` Mean ${means}.` : ''} ${esc(s.createdAt)}</p>
+<p>Renderers scored against LibreOffice, slide by slide: SSIM of greyscale pictures at 960×540, 1 = identical.${means ? ` Mean ${means}.` : ''} ${esc(s.createdAt)}</p>${runHtml(s)}
 ${native}${body}</html>`;
   await writeFile(file, html);
 }

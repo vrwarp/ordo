@@ -5,13 +5,12 @@ import { join } from 'node:path';
 import type { Slide } from '@ordo/domain';
 import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
+import { familiesOf } from './fonts.ts';
 import {
   convertDeck,
   convertDeckIsolated,
-  familiesOf,
   NativeRenderer,
   picturesNeeded,
-  renameFamilies,
   sniffPicture,
   spilledPictureSize,
   spillPart,
@@ -54,6 +53,25 @@ async function deck(layout: 'LAYOUT_16x9' | 'LAYOUT_4x3'): Promise<string> {
   return file;
 }
 
+/** A deck for text features and policies: outlined text with a verse number, plain text, Hebrew. */
+async function textDeck(): Promise<string> {
+  const p = new pptxgen();
+  p.layout = 'LAYOUT_16x9';
+  p.addSlide().addText(
+    [
+      { text: '16', options: { superscript: true } },
+      { text: ' For God so loved the world', options: {} },
+    ],
+    { x: 0.5, y: 0.5, w: 9, h: 1.5, fontSize: 40, color: 'FFFFFF', outline: { size: 1.5, color: '000000' } },
+  );
+  p.addSlide().addText('How sweet the sound', { x: 1, y: 1, w: 6, h: 1, fontSize: 32 });
+  p.addSlide().addText('שלום עולם', { x: 1, y: 1, w: 6, h: 1, fontSize: 32, rtlMode: true });
+  const dir = await work();
+  const file = join(dir, 'text.pptx');
+  await writeFile(file, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
+  return file;
+}
+
 const slide = (objects: Slide['objects'], extra: Partial<Slide> = {}): Slide => ({
   id: 's',
   objects,
@@ -82,8 +100,8 @@ describe('native column helpers', () => {
     expect(sniffPicture(new Uint8Array())).toBeUndefined();
   });
 
-  it('finds and renames every fontFamily, keys like __proto__ staying plain keys', () => {
-    const style = { fontFamily: ' Calibri ', fontWeight: 700 };
+  it('finds every fontFamily and fallback family, keys like __proto__ staying plain keys', () => {
+    const style = { fontFamily: ' Calibri ', fontWeight: 700, fallbackFonts: ['Carlito', ' ', 7] };
     const s = JSON.parse(
       JSON.stringify(
         slide([
@@ -94,17 +112,11 @@ describe('native column helpers', () => {
             text: 'x',
             style,
             opacity: 1,
-          } as Slide['objects'][number],
+          } as unknown as Slide['objects'][number],
         ]),
       ).replace('"opacity":1', '"opacity":1,"__proto__":{"fontFamily":"Evil"}'),
     ) as Slide;
-    expect([...familiesOf([s])].sort()).toEqual(['Calibri', 'Evil']);
-    const renamed = renameFamilies(s, new Map([['Calibri', 'ordo-native-1']]));
-    const o = renamed.objects[0] as unknown as Record<string, unknown> & { style: { fontFamily: string } };
-    expect(o.style.fontFamily).toBe('ordo-native-1');
-    expect(Object.getPrototypeOf(o)).toBe(Object.prototype);
-    expect(Object.hasOwn(o, '__proto__')).toBe(true);
-    expect(s.objects[0]!.type === 'text' && s.objects[0]!.style.fontFamily).toBe(' Calibri ');
+    expect([...familiesOf([s])].sort()).toEqual(['Calibri', 'Carlito', 'Evil']);
   });
 
   it('sizes each picture by its widest and tallest use at 3840 px', () => {
@@ -157,6 +169,27 @@ describe('convertDeck', () => {
     expect(
       json.slides[0]!.slide.objects.some((o) => o.type === 'image' && o.mediaId === d.media[0]!.id),
     ).toBe(true);
+  });
+
+  it("records each slide's text features and the LibreOffice policies that change it", async () => {
+    const file = await textDeck();
+    const dir = await work();
+    const d = await convertDeck(file, dir);
+    expect(d.slides.map((s) => s.textFeatures)).toEqual([
+      ['superSub', 'mixedRuns'],
+      [],
+      ['rtl', 'rtlScriptText'],
+    ]);
+    expect(d.textFeatures).toEqual(['superSub', 'rtl', 'rtlScriptText', 'mixedRuns']);
+    expect(d.slides.map((s) => s.compat)).toEqual([['textOutline'], [], []]);
+    // Without --lo-compat only the rules are kept.
+    expect(d.slides.some((s) => s.compatSlide)).toBe(false);
+    const lo = await convertDeck(file, await work(), { loCompat: true });
+    const [first, second] = lo.slides;
+    const outlined = (s: Slide) => s.objects.some((o) => o.type === 'text' && o.style.outline);
+    expect(outlined(first!.slide)).toBe(true);
+    expect(outlined(first!.compatSlide!)).toBe(false);
+    expect(second!.compatSlide).toBeUndefined();
   });
 
   it('turns a deck it cannot read into a note', async () => {
@@ -217,7 +250,7 @@ describe.skipIf(!chromium)('NativeRenderer (headless Chromium)', () => {
       ] as const) {
         const dir = await work();
         const d = await convertDeck(await deck(layout), dir);
-        const drawn = await r.renderDeck(d, dir, 1);
+        const drawn = await r.renderDeck(d, dir, { repeats: 1 });
         expect(drawn.notes).toEqual([]);
         expect(drawn.slides.map((s) => [s.shown, s.png, s.error])).toEqual([
           [0, 'slide-0001.png', undefined],
@@ -233,7 +266,64 @@ describe.skipIf(!chromium)('NativeRenderer (headless Chromium)', () => {
           expect(s.rasterMs!['1920']).toBeGreaterThan(0);
           expect(s.rasterMs!['3840']).toBeGreaterThan(0);
         }
+        expect(drawn.fonts!.loaded).toBe(drawn.fonts!.offered);
+        expect(drawn.fonts!.loaded).toBeGreaterThan(0);
       }
+    } finally {
+      await r.close();
+    }
+  }, 120_000);
+
+  it('draws the slides asked for, both ways under --lo-compat, through the font resolver', async () => {
+    const r = await NativeRenderer.start(chromium!);
+    try {
+      const dir = await work();
+      const d = await convertDeck(await textDeck(), dir, { loCompat: true });
+      const req = {
+        family: 'Calibri',
+        fallbacks: [],
+        weight: 400,
+        italic: false,
+        smallCaps: false,
+        sizePx: 20,
+      };
+      const drawn = await r.renderDeck(d, dir, {
+        repeats: 0,
+        only: new Set([0, 2]),
+        loCompat: true,
+        standIns: true,
+        probe: [
+          { ...req, script: '' },
+          { ...req, script: 'Hebr' },
+        ],
+      });
+      expect(drawn.notes).toEqual([]);
+      expect(drawn.slides.map((s) => [s.shown, s.png, s.policyPng, s.rasterMs])).toEqual([
+        [0, 'slide-0001.png', 'slide-0001.policy.png', undefined],
+        [2, 'slide-0003.png', undefined, undefined],
+      ]);
+      expect((await readdir(dir)).filter((f) => f.endsWith('.png')).sort()).toEqual([
+        'slide-0001.png',
+        'slide-0001.policy.png',
+        'slide-0003.png',
+      ]);
+      // Outlined and plain letters differ: the two pictures of the first slide are not the same.
+      expect(
+        (await readFile(join(dir, 'slide-0001.png'))).equals(
+          await readFile(join(dir, 'slide-0001.policy.png')),
+        ),
+      ).toBe(false);
+      // Calibri resolves to an internal name (fontconfig's face), never to its own name; Hebrew text adds
+      // the script fallback (a stand-in where it is not installed) after it.
+      const [latin, hebrew] = drawn.probes!;
+      expect(latin).toMatch(/^400 20px "o[0-9a-f]{8}", /);
+      expect(latin).not.toContain('"Calibri"');
+      const stack = (css: string) => css.slice('400 20px '.length).split(', ');
+      expect(stack(hebrew!)).toHaveLength(stack(latin!).length + 1);
+      expect(stack(hebrew!)[0]).toBe(stack(latin!)[0]);
+      expect(r.scriptFallbacks().find((f) => f.family === 'Noto Sans Hebrew')?.served).toMatch(
+        /^(installed|stand-in)$/,
+      );
     } finally {
       await r.close();
     }
