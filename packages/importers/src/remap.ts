@@ -1,5 +1,11 @@
 import { PRO7_MEDIA_PREFIX } from './pro7.ts';
 
+/**
+ * The placeholder prefix of the native PowerPoint import (`@ordo/pptx-scene` `MEDIA_PREFIX`; design/27 §1
+ * `emit.ts`): `pptxmedia:<n>`, mapped to stored media by the hub's `pptx-native` job.
+ */
+export const PPTX_MEDIA_PREFIX = 'pptxmedia:';
+
 /** Fields that hold media ids anywhere in presentations, slides, objects and playlist items. */
 const MEDIA_FIELDS = new Set([
   'mediaId',
@@ -10,7 +16,7 @@ const MEDIA_FIELDS = new Set([
 ]);
 
 function isPlaceholder(v: unknown): v is string {
-  return typeof v === 'string' && v.startsWith(PRO7_MEDIA_PREFIX);
+  return typeof v === 'string' && (v.startsWith(PRO7_MEDIA_PREFIX) || v.startsWith(PPTX_MEDIA_PREFIX));
 }
 
 function walk(value: unknown, map: Map<string, string>): unknown {
@@ -50,7 +56,8 @@ function walk(value: unknown, map: Map<string, string>): unknown {
 }
 
 /**
- * Deep-copy `obj`, replacing placeholder media ids (`pro7media:<path>`) with real media ids from `map`.
+ * Deep-copy `obj`, replacing placeholder media ids (`pro7media:<path>`, `pptxmedia:<n>`) with real media ids
+ * from `map`.
  * Placeholders missing from the map are removed: optional fields (`backgroundMediaId`) are dropped and
  * image objects or media playlist items that need them are removed from their arrays.
  */

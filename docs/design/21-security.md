@@ -58,6 +58,15 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
   name, never executed. ffmpeg, LibreOffice and pdftoppm run with a timeout, a memory
   limit, and no network.
 - Import zips: path traversal rejected; member count and total size capped.
+- PowerPoint decks for the native import (design/27 §12) are parsed only on the CPU pool (512 MB heap,
+  2 minutes per batch of slides, 15 minutes per import), never on the event loop; when the pool cannot start
+  the deck goes to the LibreOffice picture import. Zip reading skips what is never read (embeddings,
+  `vbaProject.bin`, custom XML, document properties), keeps XML parts within 8 MB each and 64 MB in all,
+  extracts only referenced pictures (≤ 2,000, ≤ 1 GiB) under generated names, and expands no nested zip.
+  A part or slide that cannot be read makes that slide a picture slide, never the deck.
+- Deck-derived strings (titles, file names, section and part names, hosts) reach a job log line or
+  `source.log` only with control characters and line breaks removed and cut to 200 characters, so a deck
+  cannot forge `[warn]`/`[error]` lines or a log line's time stamp.
 
 ## Secrets and logs
 

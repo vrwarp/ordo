@@ -163,6 +163,34 @@ payload (`PptxImportOptions`).
 - Tests: a synthetic deck through the job (createHub) with a hidden slide, notes, sections, a transition, a
   picture; resume after a crash between steps; a fuzz deck gives a clean failure or picture fallback.
 
+Done (B), and what the other items rely on:
+- **Scan, then batches.** The first `pptx-scene` call has `scan: true` and an empty range: deck facts, the
+  picture parts the listed slides, layouts, masters and themes relate to (only those are spilled, in a
+  second pass over the zip), metafiles per slide, speaker notes (read once: notes parts never go to a
+  batch) and the loop flag (`SceneScan`). Each batch gets the shared parts (copied), its own slide and
+  relationship parts (given their own buffers and transferred), and every other listed slide as a stub
+  `<p:sld show>` root built from the scan's list, so `readDeck` in the batch lists the deck exactly as the
+  scan did; a batch whose list differs is treated as failed. `SceneTaskOutput.extras` carries each slide's
+  transition and timing (`transition.ts` `readSlideTransition`: only the part's tail after `p:cSld` is
+  parsed, under the slide's own root tag, so a slide is not parsed twice).
+- **Parts.** Non-XML parts and XML parts over 8 MB are empty placeholders, so relationships resolve and a
+  slide whose part was too large is quarantined (picture class) instead of disappearing from the list.
+- **Version 1 and `pptx-lo`.** The presentation id is chosen and recorded before the save. `pptx-lo` is
+  queued right after `lib.savePresentation`, in the same synchronous step: it cannot start before version 1
+  exists, and `PptxLoSlide.digest` is version 1's stored `Slide.pptx.digest`. M5 must queue the deck's clip
+  jobs after this step to keep LibreOffice ahead of them. `PptxLoSlide.metafiles` lists the metafile parts a
+  slide (its own, its layout's, its master's) relates to, with no object ids (metafiles are not emitted
+  as objects; item D places the converted pictures). `art` is passed through from `EmittedSlide.art` (D).
+- **Pictures** go through `displayNeeds`, `preparePicture` and `addReadyPicture` (C); until C lands they
+  throw and every image object is dropped with a warning (`apps/hub/test/pptx-standins.ts` stands in for
+  them in tests only when the real function throws its 'not implemented yet' error). A background picture
+  whose stored media has alpha is laid on white as a bottom image instead of `backgroundMediaId`.
+- **Fallback.** `WorkerStartError` on the scan queues the `document` job and returns `PptxNativeFallback`
+  (`done.fallbackJobId` keeps a re-run from queueing it twice).
+- **Budgets.** `planImportSizes` gets each slide's stored size (with placeholder ids) and the mean compact
+  size; speaker notes are capped at 1 MB per presentation (`NOTES_TOTAL_BYTES`), the rest cut to 200
+  characters, logged.
+
 ### C: pictures
 
 Files: `pictures.ts`, `mediaParts.ts`; `media/ffmpeg.ts` (prepare helpers), `media/service.ts`

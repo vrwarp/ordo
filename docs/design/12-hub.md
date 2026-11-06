@@ -232,9 +232,19 @@ The Docker image includes `ffmpeg`, `poppler-utils`, LibreOffice (`libreoffice-i
 with a minimal font set plus the venue's uploaded fonts mounted so PPTX renders use them) and headless
 Chromium for the pptx-preview PowerPoint renderer (design/20 "PPTX and PDF").
 
+The native PowerPoint import (`pptx-native`, light; [design/27](27-pptx-native-renderer.md) §2) reads the
+deck's XML into memory within its caps, parses and converts it on the CPU pool (a scan call, then batches
+of at most 150 slides, 2 minutes each and 15 minutes of pool time per import), stores the pictures the
+slides use, and saves version 1 of the presentation. In the same synchronous step it queues the heavy
+`pptx-lo` follow-up for the slides that wait for LibreOffice, so that job never starts before version 1
+exists and is queued before any clip job of the deck. When the CPU pool cannot start, the deck goes to the
+`document` job (LibreOffice pictures) instead: a deck is never parsed on the event loop.
+
 Import jobs are resumable: `pro7-import` records every media id, presentation id and
 playlist id it wrote in its job payload and skips them when the job is re-queued after a
-crash or restart; `document` records the stored page images the same way. ProPresenter
+crash or restart; `document` records the stored page images the same way; `pptx-native` records
+[picture part, media id] pairs and the presentation id it chose before saving, so a re-run reuses the
+stored pictures and never saves a second presentation. ProPresenter
 presentations and playlists are saved under their ProPresenter UUIDs, so importing the same
 library twice updates the earlier copies instead of duplicating them. `POST /import/pro7`
 and `POST /import/document` answer 423 while a playlist is live. `tmp/` is wiped at
