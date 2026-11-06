@@ -196,6 +196,21 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
 - Property panel bound to the selected object's schema.
 - Saves via `PUT /presentations/:id` with `rev`; 409 shows the reload dialog.
 - Disabled with a banner when the presentation is referenced by the live playlist.
+- Media playing in place (design/27 §8, §11 item 14; `views/editor/MediaPanels.tsx`, pure ops in
+  `mediaOps.ts`, one undo step each). '+ Video' (touch: Add → Video…) adds an ImageObject whose `mediaId`
+  is the video, so every drawer shows its poster, with `play` {start automatically, no loop, hold the last
+  frame}, sized to the video and centred. Its Object panel has a Video section: Start (automatically, or on
+  click: live paused at 0, F8 plays it), Loop, At the end (hold the last frame, rewind to the poster, go to
+  the next slide), Volume (dB, default the media's gain), Mute, Hide while not playing, Replace video (the
+  object then shows the new video's poster) and Use poster only. A slide plays one video, the lowest object
+  with `play`: the panel of any other names the one that plays and offers 'Play this one instead', which
+  removes `play` from the others. A picture whose media is a video offers 'Play the video in the slide'.
+  The Slide panel's Sound section picks an audio file for `Slide.audio` (Start, Loop, Volume, Mute, Plays
+  across N slides) and says that it stops playlist audio that is playing. Both panels say when the clip is
+  missing, still processing or failed (the slide then shows its poster or stays silent). Picture pickers
+  list, open and upload images only (a dropped file of another kind is not uploaded); the canvas marks an
+  object with `play` with a ▶ badge; the slide grid tags slides with `video` / `audio` (amber when the clip
+  will not play).
 
 ### Touch
 
@@ -212,7 +227,7 @@ off the slide), `touch-action: none` on the stage, and pinch suppressed rather t
 already fitted to its pane, numeric fields and the nudge toolbar cover fine work, and a two-finger
 gesture must not also move an object. A double-tap on a text box focuses its text field (inside the
 gesture, so the keyboard opens). On a coarse pointer the editor toolbar is one row: Library, title,
-Save, Undo, Redo, an Add menu (Text, Image, Rectangle, Ellipse, Line), an Arrange menu (front, forward,
+Save, Undo, Redo, an Add menu (Text, Image, Video, Rectangle, Ellipse, Line), an Arrange menu (front, forward,
 backward, back, duplicate, delete) and History (`components/Menu.tsx`: 44 px items, closed by a tap
 outside or Escape, nothing on hover). While an object is selected its keyboard-only actions (nudge with a
 1/10/50 px step, edit text, deselect) float in a bar just above or below it, clear of its anchors and

@@ -5,6 +5,7 @@ import { TextStyleEditor } from '../../components/TextStyleEditor.tsx';
 import { useLibrary } from '../../state/library.ts';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { change, useEditor } from './editorStore.ts';
+import { VideoPanel } from './MediaPanels.tsx';
 import { getSlide, markOverride, updateObject, updateSlide } from './ops.ts';
 
 /** Property panel for the selected object: every TextStyle, ImageObject and ShapeObject field (prd/03). */
@@ -42,7 +43,9 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
               ? 'Lyric text box'
               : 'Text box'
             : o.type === 'image'
-              ? 'Image'
+              ? o.play
+                ? 'Video'
+                : 'Image'
               : `Shape (${o.shape})`}
         </b>
         {o.type === 'text' && !isLyric && (
@@ -104,7 +107,7 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
       )}
       {o.type === 'image' && (
         <section className="col">
-          <h4>Image</h4>
+          <h4>{o.play ? 'Poster' : 'Image'}</h4>
           <div className="row">
             <span className="grow ellipsis small">
               {media.find((m) => m.id === o.mediaId)?.name ?? 'Missing media'}
@@ -127,8 +130,8 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
           />
           {picking && (
             <MediaPickerDialog
-              title="Choose an image"
-              kinds={['image', 'video']}
+              title={o.play ? 'Choose a poster image' : 'Choose an image'}
+              kinds={['image']}
               onClose={() => setPicking(false)}
               onPick={(m) => {
                 set((x) => ({ ...x, mediaId: m.id }) as SlideObject);
@@ -137,6 +140,9 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
             />
           )}
         </section>
+      )}
+      {o.type === 'image' && slide && (
+        <VideoPanel o={o} slide={slide} media={(id) => media.find((m) => m.id === id)} readOnly={readOnly} />
       )}
       {o.type === 'shape' && (
         <section className="col">

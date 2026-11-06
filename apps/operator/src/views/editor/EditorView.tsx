@@ -7,8 +7,10 @@ import { useLockedIds, useMediaLookup } from '../../hooks.ts';
 import { useProfile } from '../../lib/capabilities.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useSession } from '../../state/session.ts';
+import { toast } from '../../state/toasts.ts';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { LookPreviews } from './LookPreviews.tsx';
+import { addVideo } from './mediaOps.ts';
 import {
   change,
   currentObject,
@@ -94,6 +96,7 @@ export function EditorView({ id }: { id: string }) {
   const [tab, setTab] = useState<'object' | 'slide' | 'presentation'>('slide');
   const [revisions, setRevisions] = useState(false);
   const [imagePick, setImagePick] = useState(false);
+  const [videoPick, setVideoPick] = useState(false);
   const [dismissedRev, setDismissedRev] = useState(0);
   const [step, setStep] = useState<(typeof STEPS)[number]>(10);
   // Look previews: open by default on a touch device in landscape, collapsed in narrow portrait and on
@@ -308,6 +311,7 @@ export function EditorView({ id }: { id: string }) {
             items={[
               { label: 'Text', onSelect: () => add(newText(theme)) },
               { label: 'Image…', name: 'Image', onSelect: () => setImagePick(true) },
+              { label: 'Video…', name: 'Video', onSelect: () => setVideoPick(true) },
               { label: 'Rectangle', name: 'Rect', onSelect: () => add(newShape('rect')) },
               { label: 'Ellipse', onSelect: () => add(newShape('ellipse')) },
               { label: 'Line', onSelect: () => add(newShape('line')) },
@@ -361,6 +365,14 @@ export function EditorView({ id }: { id: string }) {
           </button>
           <button type="button" disabled={readOnly || !slide} onClick={() => setImagePick(true)}>
             + Image
+          </button>
+          <button
+            type="button"
+            disabled={readOnly || !slide}
+            onClick={() => setVideoPick(true)}
+            title="Add a video that plays in the slide"
+          >
+            + Video
           </button>
           <button type="button" disabled={readOnly || !slide} onClick={() => add(newShape('rect'))}>
             + Rect
@@ -529,6 +541,30 @@ export function EditorView({ id }: { id: string }) {
               }),
             );
             setImagePick(false);
+          }}
+        />
+      )}
+      {videoPick && (
+        <MediaPickerDialog
+          title="Add a video to the slide"
+          kinds={['video']}
+          onClose={() => setVideoPick(false)}
+          onPick={(m) => {
+            setVideoPick(false);
+            if (!slide || readOnly) return;
+            let added: ReturnType<typeof addVideo> | undefined;
+            change((q) => {
+              added = addVideo(q, slide.id, m);
+              return added.p;
+            });
+            if (!added?.id) return;
+            selectObject(added.id);
+            if (added.playing)
+              toast(
+                `This slide already plays “${media(added.playing.play.mediaId)?.name ?? 'a video'}”. A slide plays one video, so the new one shows its poster: choose Play this one instead in its Video options to switch.`,
+                'warn',
+                10000,
+              );
           }}
         />
       )}

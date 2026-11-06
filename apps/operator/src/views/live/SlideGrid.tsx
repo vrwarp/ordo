@@ -2,6 +2,7 @@ import type { Cue } from '@ordo/domain';
 import { useMemo } from 'react';
 import { armDot, waitingForLive } from '../../lib/health.ts';
 import { groupCues, sectionGoTarget } from '../../lib/sections.ts';
+import { slideMediaTags } from '../../lib/slideMedia.ts';
 import { controller } from '../../services/controller.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
@@ -124,11 +125,14 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem: nu
             >
               {g.cues.map((c) => {
                 const marks = marksFor(c);
-                if (c.kind === 'slide')
+                if (c.kind === 'slide') {
+                  const slide = slideOf(c);
+                  // A slide that plays a video in place or its own sound says so (design/27 §11 item 14).
+                  const tags = slideMediaTags(slide, op.media);
                   return (
                     <SlideThumb
                       key={c.index}
-                      slide={slideOf(c)}
+                      slide={slide}
                       isSong={isSong}
                       bgMediaId={c.backgroundMediaId}
                       media={op.media}
@@ -138,8 +142,18 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem: nu
                       width={thumbSize}
                       onClick={() => onClick(c)}
                       onDoubleClick={() => onDouble(c)}
+                      footer={
+                        tags.length > 0
+                          ? tags.map((t) => (
+                              <span key={t.kind} className={t.notice ? 'tag amber' : 'tag'} title={t.title}>
+                                {t.kind}
+                              </span>
+                            ))
+                          : undefined
+                      }
                     />
                   );
+                }
                 return (
                   <SlideThumb
                     key={c.index}

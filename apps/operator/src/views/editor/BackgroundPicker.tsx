@@ -2,11 +2,16 @@ import { fileUrl } from '@ordo/client';
 import type { Media } from '@ordo/domain';
 import { useMemo, useState } from 'react';
 import { Dialog } from '../../components/Dialog.tsx';
+import { filesForKinds, kindsText, mediaAccept } from '../../lib/mediaKinds.ts';
 import { stillHash } from '../../services/thumbs.ts';
 import { useLibrary } from '../../state/library.ts';
+import { toast } from '../../state/toasts.ts';
 import { DropZone, MEDIA_ACCEPT, uploadFiles, UploadProgress } from '../library/MediaTab.tsx';
 
-/** Pick a media item (backgrounds first) with poster thumbnails; upload new ones inline (prd/05). */
+/**
+ * Pick a media item (backgrounds first) with poster thumbnails; upload new ones inline (prd/05). With `kinds`
+ * it lists, opens and uploads only those kinds: an image picker takes images only (design/27 §11 item 6).
+ */
 export function MediaPickerDialog(props: {
   title: string;
   onPick: (m: Media) => void;
@@ -46,9 +51,22 @@ export function MediaPickerDialog(props: {
           )}
         </div>
         <DropZone
-          accept={MEDIA_ACCEPT}
-          label="Drop files to upload (they appear below; videos are usable once processed)"
-          onFiles={(f) => void uploadFiles(f, { isBackground: !!props.backgroundsFirst })}
+          accept={props.kinds ? mediaAccept(props.kinds) : MEDIA_ACCEPT}
+          label={
+            !props.kinds || props.kinds.includes('video')
+              ? 'Drop files to upload (they appear below; videos are usable once processed)'
+              : `Drop ${kindsText(props.kinds)} to upload (they appear below)`
+          }
+          onFiles={(f) => {
+            const { ok, rejected } = props.kinds ? filesForKinds(f, props.kinds) : { ok: f, rejected: [] };
+            if (rejected.length && props.kinds)
+              toast(
+                `Only ${kindsText(props.kinds)} can be chosen here: ${rejected.map((x) => x.name).join(', ')} not uploaded.`,
+                'warn',
+                8000,
+              );
+            if (ok.length) void uploadFiles(ok, { isBackground: !!props.backgroundsFirst });
+          }}
         />
         <UploadProgress />
         <div
