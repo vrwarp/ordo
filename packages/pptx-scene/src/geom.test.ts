@@ -4,7 +4,15 @@ import { presetGeometry } from '@ordo/renderer/geom/path.ts';
 import { describe, expect, it } from 'vitest';
 import type { EmitOptions } from './emit.ts';
 import { apply } from './frame.ts';
-import { MAX_PATH_CHARS, MAX_SLIDE_PATH_POINTS, nearestDash, replaceEnds } from './geom.ts';
+import {
+  MAX_PATH_CHARS,
+  MAX_SLIDE_PATH_POINTS,
+  mergedChars,
+  mergedPaths,
+  nearestDash,
+  replaceEnds,
+  shapePiece,
+} from './geom.ts';
 import { emitSlides, parseDeck } from './index.ts';
 import type { ShapeElement } from './ir.ts';
 import { drawingXml, dspSp, smartArtFrame, smartArtRels, withSmartArt } from './smartart.test-util.ts';
@@ -888,5 +896,134 @@ describe('an older build (design/27 §3.2, §14.7)', () => {
     expect(route).toMatchObject({ type: 'shape', shape: 'line', stroke: { width: 2 } });
     expect(route!.box.w).toBeCloseTo(PX * Math.SQRT2);
     expect(image).toMatchObject({ type: 'image', fit: 'stretch' });
+  });
+});
+
+describe('merged shapes (one object for z-adjacent shapes of one look)', () => {
+  const s = 1920 / 12_192_000;
+  /** A custom shape of `points` pseudo-random points in a 10,000 space, turned by `rot` degrees. */
+  const piece = (seed: number, points: number, x: number, y: number, rot: number): ShapeElement => {
+    let d = 'M 0 0';
+    let v = seed;
+    const next = () => {
+      v = (v * 48_271) % 2_147_483_647;
+      return (v % 12_000) - 1_000; // a little past the space on both sides
+    };
+    for (let i = 1; i < points; i++)
+      d +=
+        i % 3 ? ` L ${next()} ${next()}` : ` C ${next()} ${next()} ${next()} ${next()} ${next()} ${next()}`;
+    const a = (rot * Math.PI) / 180;
+    const w = 0.7 * IN;
+    const h = 0.4 * IN;
+    return {
+      kind: 'shape',
+      shapeId: seed,
+      name: '',
+      xf: [w * Math.cos(a), w * Math.sin(a), -h * Math.sin(a), h * Math.cos(a), x, y],
+      from: 'layout',
+      support: 'native',
+      geom: 'custom',
+      fill: { kind: 'solid', color: RED },
+      custom: {
+        paths: [{ d: `${d} Z`, w: 10_000, h: 10_000 }],
+        points,
+        text: [0, 0, 1, 1],
+        sites: [],
+        notes: [],
+      },
+    };
+  };
+
+  it('writes no path string longer than its bound, and the bound is close', () => {
+    for (let k = 1; k < 40; k++) {
+      const list = [
+        piece(k, 50 + k * 37, (k % 7) * IN, (k % 3) * IN, k * 13),
+        piece(k + 99, 20 + k, -k * 0.1 * IN, 0, -k),
+      ];
+      const ps = list.map((e) => shapePiece(e, s)!);
+      const xs = list.flatMap((e) => [
+        e.xf[4],
+        e.xf[4] + e.xf[0],
+        e.xf[4] + e.xf[2],
+        e.xf[4] + e.xf[0] + e.xf[2],
+      ]);
+      const ys = list.flatMap((e) => [
+        e.xf[5],
+        e.xf[5] + e.xf[1],
+        e.xf[5] + e.xf[3],
+        e.xf[5] + e.xf[1] + e.xf[3],
+      ]);
+      const box = {
+        x: Math.min(...xs),
+        y: Math.min(...ys),
+        cx: Math.max(...xs) - Math.min(...xs),
+        cy: Math.max(...ys) - Math.min(...ys),
+      };
+      const x0 = Math.min(...ps.map((p) => p.extent.x));
+      const y0 = Math.min(...ps.map((p) => p.extent.y));
+      const extent = {
+        x: x0,
+        y: y0,
+        cx: Math.max(...ps.map((p) => p.extent.x + p.extent.cx)) - x0,
+        cy: Math.max(...ps.map((p) => p.extent.y + p.extent.cy)) - y0,
+      };
+      const bound = mergedChars(
+        box,
+        extent,
+        Math.max(...ps.map((p) => p.cmds)),
+        Math.max(...ps.map((p) => p.coords)),
+        s,
+      );
+      const paths = mergedPaths(
+        list.map((e, i) => ({ xf: e.xf, piece: ps[i]! })),
+        box,
+        s,
+      );
+      const longest = Math.max(...paths.map((p) => p.d.length));
+      expect(longest).toBeLessThanOrEqual(bound);
+      expect(longest).toBeGreaterThan(bound * 0.6);
+      // Every point lands where the shape's own affine puts it, in px from the box's corner.
+      const first = list[0]!.custom!.paths[0]!.d.split(' ');
+      const written = paths[0]!.d.split(' ');
+      const [u, v] = [Number(first[1]) / 10_000, Number(first[2]) / 10_000];
+      const [X, Y] = apply(list[0]!.xf, u, v);
+      expect(Math.abs(Number(written[1]) - (X - box.x) * s)).toBeLessThan(0.01);
+      expect(Math.abs(Number(written[2]) - (Y - box.y) * s)).toBeLessThan(0.01);
+    }
+    expect(mergedChars({ x: 0, y: 0, cx: 1, cy: 1 }, { x: 0, y: 0, cx: 1e30, cy: 1 }, 1, 2, s)).toBe(
+      Infinity,
+    );
+    expect(MAX_PATH_CHARS).toBe(40_000);
+  });
+
+  it('reads presets at the box and notes open outlines', () => {
+    const shape = (geom: string): ShapeElement => ({
+      kind: 'shape',
+      shapeId: 1,
+      name: '',
+      xf: [IN, 0, 0, IN / 2, 0, 0],
+      from: 'layout',
+      support: 'native',
+      geom,
+      fill: { kind: 'solid', color: RED },
+    });
+    const rect = shapePiece(shape('rect'), s)!;
+    expect(rect.paths).toEqual([
+      { cmds: 'MLLLZ', pts: [0, 0, 1, 0, 1, 1, 0, 1], fill: 'norm', stroke: true },
+    ]);
+    expect(rect.open).toBe(false);
+    expect(rect.extent).toEqual({ x: 0, y: 0, cx: IN, cy: IN / 2 });
+    // arc's outline is open; an unknown preset or a custom geometry past the bounds is no piece.
+    expect(shapePiece(shape('arc'), s)!.open).toBe(true);
+    expect(shapePiece(shape('nonsense'), s)).toBeUndefined();
+    expect(
+      shapePiece(
+        {
+          ...shape('custom'),
+          custom: { paths: [], points: 0, text: [0, 0, 1, 1], sites: [], notes: [], over: true },
+        },
+        s,
+      ),
+    ).toBeUndefined();
   });
 });

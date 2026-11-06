@@ -58,6 +58,9 @@
  *   (`backgroundMediaId`); clips carry `pptxmedia:clip<n>` placeholders, listed in `EmittedSlide.clips`.
  * - **Tables** (M6, `tables.ts` `emitTable`): locked grid shapes (background, cell fills, lines) and one rich
  *   `TextObject` per cell, in one group; a table classed residual emits nothing (LibreOffice's art).
+ * - **The object budget** (M6, `classify.ts`): on a slide past it, a run of z-adjacent shapes of one look
+ *   (`ShapeElement.merge`) is one shape object of all their paths (`emitMerged`), and an element the budget
+ *   sent to the art ('budget:shapes') emits nothing, as a residual table.
  * - **Lyric box** (design/27 §4 "Church mappings"): the slide's own body placeholder with the most
  *   characters; else the largest other text by characters × area (not title, date, footer, slide number);
  *   the title only when it is the only text. On a bilingual slide (the two boxes with the most text in
@@ -77,14 +80,18 @@ import type {
 import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD } from '@ordo/renderer/geom/ops.ts';
 import { apply, boxPx, decompose, lenPx, multiply, ptPx, slideRect } from './frame.ts';
 import { bakeKey, bakeOf, type PictureBake } from './bake.ts';
+import { boundsOf, unionBox } from './classify.ts';
 import {
   adjPairs,
   dashOf,
   endsOf,
   gradientOf,
   knownPreset,
+  mergedPaths,
   pictureFillPlacement,
   presetRoute,
+  type ShapePiece,
+  shapePiece,
   textRectOf,
   transformedPaths,
 } from './geom.ts';
@@ -104,6 +111,7 @@ import type {
   Para,
   PictureElement,
   PictureFill,
+  RectEmu,
   Rgba,
   RunStyle,
   Shadow,
@@ -379,13 +387,24 @@ function emitSlide(ctx: EmitCtx, s: SlideScene, spans: [number, number][] = []):
   if (s.error) return slide;
   emitBackground(ctx, s, slide);
   const texts: Emitted[] = [];
-  for (const e of s.elements) {
+  // Runs of shapes of one look (`classify.ts` `shapeRuns`): one object, emitted at the run's first element.
+  const runs = new Map<number, ShapeElement[]>();
+  s.elements.forEach((e) => {
+    if (e.kind !== 'shape' || e.merge === undefined || e.hidden) return;
+    const run = runs.get(e.merge) ?? [];
+    run.push(e);
+    runs.set(e.merge, run);
+  });
+  s.elements.forEach((e, i) => {
     const at = objects.length;
-    if (!e.hidden) emitElement(ctx, e, objects, texts);
+    if (e.kind === 'shape' && e.merge !== undefined && !e.hidden) {
+      const run = runs.get(i);
+      if (e.merge === i && run) emitMerged(ctx, run, objects, texts);
+    } else if (!e.hidden && !pastBudget(e)) emitElement(ctx, e, objects, texts);
     // M6: a SmartArt drawing's objects are a locked group with editable text (`smartart.ts`).
     if (e.diagram !== undefined) lockDiagram(e, objects, at);
     spans.push([at, objects.length]);
-  }
+  });
   const media = emitMedia(ctx, s, slide, spans);
   ctx.clips?.push(...media.clips);
   if (media.remove.size) leaveOut(ctx, slide, spans, media.remove);
@@ -397,6 +416,15 @@ function emitSlide(ctx: EmitCtx, s: SlideScene, spans: [number, number][] = []):
   const lyric = lyricOf(texts.filter((t) => objects.includes(t.o) && t.e.diagram === undefined));
   if (lyric) slide.lyricObjectId = lyric.id;
   return slide;
+}
+
+/**
+ * An element the object budget sent to the art (`classify.ts` `fitShapes`, 'budget:shapes'): like a residual
+ * table it emits nothing, so version 1 stays within the budget (and the render clamp's 200 objects) with the
+ * slide's own text drawn, until the art replaces what it draws.
+ */
+function pastBudget(e: Element): boolean {
+  return e.support === 'residual' && e.reasons?.includes('budget:shapes') === true;
 }
 
 /**
@@ -805,6 +833,45 @@ function emitShape(ctx: EmitCtx, e: ShapeElement, out: SlideObject[], texts: Emi
       texts.push({ o: t, e, area: box.w * box.h });
     }
   }
+}
+
+/**
+ * A run of z-adjacent shapes of one look as one object (M6, `classify.ts` `shapeRuns`, only on a slide over
+ * the object budget): each shape's paths in z-order, its rotation and flips in their points, in the union of
+ * their boxes (unrotated), with their common fill and line. Drawn path by path as the shapes are, it looks as
+ * they do. Its legacy shape is a line, as a thin custom geometry's is: an older build draws no filled union
+ * rectangle, only the line's midline when the shapes have an outline. A run whose geometry cannot be read
+ * again is emitted shape by shape.
+ */
+function emitMerged(ctx: EmitCtx, run: ShapeElement[], out: SlideObject[], texts: Emitted[]): void {
+  const f = ctx.frame;
+  const list: { xf: Affine; piece: ShapePiece }[] = [];
+  let box: RectEmu | undefined;
+  for (const e of run) {
+    const piece = shapePiece(e, f.s);
+    if (!piece) {
+      for (const each of run) emitShape(ctx, each, out, texts);
+      return;
+    }
+    list.push({ xf: e.xf, piece });
+    box = box ? unionBox(box, boundsOf(e)) : boundsOf(e);
+  }
+  const first = run[0];
+  if (!first || !box) return;
+  const o = shape(
+    ctx,
+    { x: f.x0 + box.x * f.s, y: f.y0 + box.y * f.s, w: box.cx * f.s, h: box.cy * f.s, rotation: 0 },
+    'line',
+    legacyColor(first.fill),
+  );
+  const stroke = first.line ? legacyColor(first.line.fill) : undefined;
+  if (first.line && stroke) {
+    o.stroke = { width: strokeWidth(ctx, first.line.width), color: stroke };
+    const dash = dashOf(first.line, ctx.log);
+    if (dash) o.dash = dash;
+  }
+  o.geom = { paths: mergedPaths(list, box, f.s) };
+  out.push(o);
 }
 
 function lineObject(

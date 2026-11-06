@@ -331,6 +331,12 @@ export interface ShapeElement extends ElementBase {
   softEdge?: Emu;
   /** A connector's ends glued to shapes (`a:stCxn`, `a:endCxn`; M6): their `cNvPr id` and site index. */
   cxn?: { start?: CxnRef; end?: CxnRef };
+  /**
+   * Drawn with the z-adjacent text-less shapes of the same look as one object (M6, `classify.ts`
+   * `shapeRuns`, set only on a slide over the object budget): the index in `SlideScene.elements` of the run's
+   * first (lowest) element, which emits the merged object; the others emit nothing.
+   */
+  merge?: number;
 }
 
 /** One end of a connector glued to a shape's connection site. */

@@ -281,6 +281,59 @@ design/27 §4 "Pictures", §5 "Element support", §15 M6 ("SmartArt from its dra
   offsets, limits, emitted placeholders for pictures, tiled shape fills and tiled backgrounds, numbering
   across slides), `picture.test.ts` (recolour reading, header resolutions).
 
+## M6: the object budget (`classify.ts` `shapeRuns`, `fitShapes`; `emit.ts`; `geom.ts` `shapePiece`)
+
+design/27 §5 "picture", §15 M6 ("no slide goes above 150 objects without becoming hybrid"). Traced
+decorations and icon grids are hundreds of z-adjacent, text-less custom-geometry pieces of a few fills, and
+the converter emits one object per shape, so such slides passed `MAX_SLIDE_OBJECTS` and were picture class:
+only tables (`budget:table`) and SmartArt drawings (`budget:smartart`) were ever split off to the art.
+- **Shapes of one look are one object** (`shapeRuns`, only on a slide that passes the budget with every
+  shape apart; `slideCost(…, frame)` counts it so, and tables and drawings go to the art only when that is
+  not enough). A run is consecutive shown shapes without text, of the slide's verdict native, in one
+  top-level group or among one layout's or master's decorations (the slide's own ungrouped shapes stay
+  apart), with the same opaque solid fill (or none) and the same opaque solid line (or none, not both),
+  no arrowheads, no shadow, glow or soft edge, a known preset or custom geometry within the bounds, inside
+  the render clamp's bounds, none in the art; at most 8 paths together (`GEOM_LIMITS.paths`), each path
+  string within 40,000 characters once written in the run's box (`mergedChars`, a bound from the number
+  of coordinates and the farthest point). The object (`emit.ts` `emitMerged`, at the run's first element,
+  `ShapeElement.merge`) is a `ShapeObject` whose `geom.paths` are every piece's paths in z-order, each
+  piece's rotation and flips in its points (`geom.ts` `shapePiece`, `mergedPaths`: a custom geometry's
+  stored paths, else its preset built at its box), in the union of their boxes, unrotated. `drawGeom` fills
+  and strokes path after path as separate shapes are drawn, and each path keeps its fill mode, so the
+  object looks as the shapes do (in the harness, merged and apart differ in a few dozen anti-aliased edge
+  pixels of a slide). The one order it changes is an open outline, which a geometry strokes after all its
+  paths: a shape with a fill and a line merges only when every stroked sub-path is closed by Z. Its legacy
+  shape is a `line` with the fill, as a thin custom geometry's: an older build draws no filled union
+  rectangle, only the line's midline when the shapes have an outline.
+- **Then elements without text go to the art** (`fitShapes`, reason `budget:shapes`, `art:budget:shapes`):
+  shown pictures (not play videos) and shapes without text, not in a SmartArt drawing. First the fewest of
+  the layout's and master's decorations, bottom first (a binary search: the art stays at the bottom and the
+  slide's text native above it); then the costliest z-contiguous run of such elements in one top-level
+  group, and once no group has one, of ungrouped elements (a run ends at any other shown element, one in
+  the art, and where the source or group changes), costed with its shapes merged, several at a time while
+  the estimate stays over the budget. A slide still over the budget with every such element in the art
+  (checked first) keeps no mark and is a picture. The SmartArt rule runs again after it, so a drawing the
+  art now overlaps goes whole. Such an element emits nothing in version 1, as a residual table does, so
+  version 1 stays within the budget (and the render clamp's 200 objects) with the slide's text drawn; the
+  render copy prints it into the art.
+- Measured on the 44 shown worship slides of shards 0-2 that were picture class for `budget:objects` (the
+  census, 12 decks; 150-784 objects): 10 native (their runs merged), 6 hybrid for residuals they already
+  had (sheared group children, custom geometry past the bounds, a table) with their runs merged, 27 hybrid
+  with `art:budget:shapes`, and one picture for its 64 KB of text formatting; every native and hybrid one
+  within 150 objects in version 2 (at most 150), and its version 1 too unless residual shapes it already
+  had are drawn there. Against LibreOffice 24.2 (`--engine native --lo-compat`, the native column): the 10
+  native slides 0.964 → 0.981 (before, the renderer's 200-object clamp cut their top objects in the
+  harness); the 33 hybrid ones 0.833 → 0.913 without the art, 0.989 with LibreOffice's pixels pasted into
+  the art box (an estimate of version 2). The other 161 slides of those decks are unchanged, and so is every
+  other slide of the shards and the sermon decks (the emitted objects' digests, ids and media numbers
+  aside). The sermon decks stay 0.955; shard 0 goes 0.843 → 0.842, all of it the one picture slide, whose
+  version 1 now leaves out what went to the art (the hub draws it with LibreOffice). Conversion time over
+  the shards is unchanged (29.4 s).
+- Tests: `classify.test.ts` (runs: what ends one, the path and string bounds; the decorations first, the
+  costliest group first, nothing marked on a slide its text alone keeps over the budget), `emit.test.ts`
+  (merged and apart put every point in the same place, the outline and dash kept, version 1 without the
+  art's elements), `geom.test.ts` (the string bound against what is written, presets and open outlines).
+
 ## Module map
 
 | File            | What                                                                                                              | Owner  |
@@ -806,7 +859,9 @@ walk.
 residual and every other element of the range that an art element above it overlaps (top down; hidden
 elements and play videos never), with its bounding box; picture when the objects (a shape with fill or
 line and text counts two, the background and the art one each) exceed 150 or the distinct pictures exceed
-12 after the split. Reasons add `art:<residual reason>` and `budget:objects` / `budget:pictures`.
+12 after the split. Reasons add `art:<residual reason>` and `budget:objects` / `budget:pictures`. Over 150
+objects, shapes of one look are merged and tables, SmartArt drawings and elements without text go to the
+art first (M6, "the object budget" above).
 
 Measured (shown worship slides, cumulative T1 / T1-T2 / T1-T3 / T1-T4 / T1-T5): on the census's own 280
 decks 31.9 / 73.2 / 87.7 / 92.5 / 95.8 % (census 30.9 / 73.3 / 87.6 / 92.5 / 95.8 %, n 4,922 against
