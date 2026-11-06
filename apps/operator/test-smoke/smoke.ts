@@ -16,7 +16,9 @@ import {
   DEFAULT_LOOKS,
   DEFAULT_SURFACES,
   DEFAULT_THEME,
+  Media,
   parseLyrics,
+  Presentation,
   songFromParsed,
 } from '@ordo/domain';
 
@@ -36,6 +38,65 @@ const song = songFromParsed(
     linesPerSlide: 2,
   },
 );
+// Media playing in place (design/27 §8): a video, a picture and a sound, and slides that use them.
+const file = (hash: string, mime: string) => ({ hash, bytes: 1, mime, path: hash });
+const media = [
+  Media.parse({
+    id: 'm-clip',
+    name: 'Welcome clip',
+    kind: 'video',
+    original: file('clip-o', 'video/mp4'),
+    delivery: file('clip-d', 'video/mp4'),
+    poster: file('clip-p', 'image/jpeg'),
+    state: 'ready',
+    width: 1280,
+    height: 720,
+    durationMs: 5000,
+  }),
+  Media.parse({
+    id: 'm-photo',
+    name: 'Sunrise photo',
+    kind: 'image',
+    original: file('photo', 'image/jpeg'),
+    state: 'ready',
+  }),
+  Media.parse({
+    id: 'm-song',
+    name: 'Walk-in music',
+    kind: 'audio',
+    original: file('song', 'audio/mp4'),
+    state: 'ready',
+  }),
+];
+const news = Presentation.parse({
+  id: 'news',
+  title: 'Announcements',
+  kind: 'slides',
+  sections: [
+    {
+      id: 'news-s',
+      label: 'News',
+      short: 'N',
+      slides: [
+        {
+          id: 'news-1',
+          objects: [
+            {
+              id: 'news-v',
+              type: 'image',
+              box: { x: 320, y: 180, w: 1280, h: 720, rotation: 0 },
+              mediaId: 'm-clip',
+              play: { mediaId: 'm-clip', start: 'auto', loop: false, onEnd: 'hold' },
+            },
+          ],
+          audio: { mediaId: 'm-song', slides: 2 },
+        },
+        { id: 'news-2', objects: [] },
+      ],
+    },
+  ],
+  arrangements: [{ id: 'news-a', name: 'Default', sectionIds: ['news-s'] }],
+});
 const playlist = {
   id: 'pl1',
   rev: 1,
@@ -43,6 +104,7 @@ const playlist = {
   items: [
     { id: 'it1', kind: 'presentation', presentationId: song.id },
     { id: 'it2', kind: 'timer', timer: { kind: 'countdownTo', timeOfDay: '10:00' } },
+    { id: 'it3', kind: 'presentation', presentationId: news.id },
   ],
 };
 const settings = {
@@ -76,9 +138,9 @@ const settings = {
 };
 const snapshot = {
   seq: 1,
-  presentations: [song],
+  presentations: [song, news],
   playlists: [playlist],
-  media: [],
+  media,
   fonts: [],
   themes: [DEFAULT_THEME],
   folders: [],
@@ -89,6 +151,7 @@ function apiResponse(path: string, method: string): unknown {
   if (path === '/auth/me') return { role: 'operate', setupRequired: false, version: '0.1.0', domain: '' };
   if (path === '/library/snapshot') return snapshot;
   if (path === `/presentations/${song.id}`) return song;
+  if (path === `/presentations/${news.id}`) return news;
   if (path.endsWith('/revisions')) return [{ rev: 1, savedAt: new Date().toISOString(), title: song.title }];
   if (path === '/settings') return settings;
   if (path === '/backup/list') return { files: ['ordo-2026-11-01.db'] };
@@ -184,10 +247,46 @@ async function main() {
   if (box) await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   await page.waitForTimeout(300);
   await page.screenshot({ path: fileURLToPath(new URL('./editor.png', import.meta.url)) });
+  // Media playing in place (design/27 §11 item 14): add a video to a slide and set its options, give the
+  // slide a sound; picture pickers list images only.
+  const props = page.locator('.props');
+  await page.getByRole('button', { name: '+ Video' }).click();
+  let dialog = page.getByRole('dialog');
+  await dialog.getByText('Welcome clip').waitFor();
+  if (await dialog.getByText('Sunrise photo').count()) errors.push('the video picker lists a picture');
+  await dialog.getByText('Welcome clip').click();
+  await props.getByRole('heading', { name: 'Video' }).waitFor();
+  await props.getByLabel('Start').selectOption('click');
+  await props.getByText('Play (F8) starts it').waitFor();
+  await props.getByLabel('Hide while not playing').check();
+  await props.getByRole('option', { name: 'Rewind and hide the video' }).waitFor({ state: 'attached' });
+  await props.getByRole('button', { name: 'Replace', exact: true }).click();
+  dialog = page.getByRole('dialog');
+  await dialog.getByText('Sunrise photo').waitFor();
+  if (await dialog.getByText('Welcome clip').count()) errors.push('the poster picker lists a video');
+  await dialog.getByRole('button', { name: 'Close' }).click();
+  await page.getByRole('button', { name: 'Slide', exact: true }).click();
+  const sound = props.getByRole('region', { name: 'Sound' });
+  await sound.getByRole('button', { name: 'Choose' }).click();
+  dialog = page.getByRole('dialog');
+  await dialog.getByText('Walk-in music').click();
+  await sound.getByLabel('Plays across (slides)').fill('3');
+  await sound.getByLabel('Plays across (slides)').press('Enter');
+  await sound.getByLabel('Loop').check();
+  await page.screenshot({ path: fileURLToPath(new URL('./editor-media.png', import.meta.url)) });
+  // Undo takes back the last edit only.
+  await page.getByTitle('Ctrl+Z').click();
+  if (await sound.getByLabel('Loop').isChecked()) errors.push('undo did not take back the sound loop');
   await page.evaluate(() => {
     location.hash = '#/live';
   });
   await page.waitForSelector('.topbar');
+  // The slide grid tags the announcement slide that plays a video and a sound.
+  await page.locator('.pl-item', { hasText: 'Announcements' }).click();
+  await page.locator('.thumb .tag', { hasText: 'audio' }).waitFor();
+  // Thumbnails use content-visibility: read the DOM text, not the rendered text.
+  const tags = await page.locator('.thumb .cap .tag').allTextContents();
+  if (tags.join(',') !== 'video,audio') errors.push(`slide tags: ${tags.join(',')}`);
   await page.screenshot({ path: fileURLToPath(new URL('./live.png', import.meta.url)) });
   await browser.close();
   server.close();

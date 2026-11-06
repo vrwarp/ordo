@@ -7,11 +7,16 @@ import { useLibrary } from '../../state/library.ts';
 import { errorText, toast } from '../../state/toasts.ts';
 import { BackgroundPicker } from './BackgroundPicker.tsx';
 import { change, replaceBase, save, useEditor } from './editorStore.ts';
+import { SlideSoundPanel } from './MediaPanels.tsx';
 import { resetSlideToTheme, themeOf, updateSlide } from './ops.ts';
 
-/** Slide-level properties: lyric box, background override, loop duration, notes, theme overrides, import. */
+/**
+ * Slide-level properties: lyric box, background override, the slide's own sound, loop duration, notes, theme
+ * overrides, import.
+ */
 export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentation; readOnly: boolean }) {
   const themes = useLibrary((s) => s.data.themes);
+  const media = useLibrary((s) => s.data.media);
   const dirty = useEditor((s) => s.dirty);
   const [busy, setBusy] = useState(false);
   const set = (fn: (s: Slide) => Slide, key?: string) =>
@@ -66,6 +71,7 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
           onChange={(backgroundMediaId) => set((s) => ({ ...s, backgroundMediaId }))}
         />
       </label>
+      <SlideSoundPanel slide={slide} media={(id) => media.find((m) => m.id === id)} readOnly={readOnly} />
       {p.kind === 'loop' && (
         <NumberField
           label="Duration (seconds)"
