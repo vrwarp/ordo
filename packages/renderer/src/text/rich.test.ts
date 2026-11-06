@@ -6,7 +6,7 @@ import { FontResolver, LEGACY_FONT_ENV } from './fonts.ts';
 import { itemize } from './itemize.ts';
 import { WidthCache, canvasMeasurer } from './measure.ts';
 import { officeLine } from './office.ts';
-import { clampTextObject, isRichText, layoutRich } from './rich.ts';
+import { clampTextObject, drawRichText, isRichText, layoutRich, storedFitHolds } from './rich.ts';
 import { recordingCtx, testMeasurer } from './test-util.ts';
 import type { ParaStyle, RichLayout } from './types.ts';
 
@@ -175,6 +175,88 @@ describe('office line model', () => {
     expect(officeLine(40, para({ lineSpacing: 1.5 }), 1)).toEqual({ height: 72, ascent: 64 });
     expect(officeLine(40, para({ lineSpacing: 0.8 }), 1).ascent).toBeCloseTo(Math.min(40, 0.8 * 38.4), 9);
     expect(officeLine(40, para({ lineSpacingPx: 60 }), 0.9)).toEqual({ height: 54, ascent: 40 + 54 - 48 });
+  });
+});
+
+describe("PowerPoint's stored autofit scale and the face drawing the box", () => {
+  // Fits at full size (one 20 px line in a 200x100 box); PowerPoint stored 50 % for its own face's widths.
+  const stored = (family: string, fallbackFonts?: string[]) =>
+    obj('aaa bbb', {
+      fontFamily: family,
+      autofit: 'shrink',
+      fitScale: { font: 0.5, spacing: 1 },
+      ...(fallbackFonts ? { fallbackFonts } : {}),
+    });
+  /** The drawn size of every line's segments. */
+  const sizes = (l: RichLayout) => l.lines.map((line) => [...new Set(line.segs.map((seg) => seg.sizePx))]);
+
+  it('keeps the scale while the box is drawn with its own face or a metric-compatible one', () => {
+    const env = new FontResolver();
+    env.loaded({ family: 'Aptos', internal: 'o000aaaa' });
+    env.loaded({ family: 'Carlito', internal: 'o000bbbb' });
+    for (const o of [stored('Aptos'), stored('Calibri', ['Carlito'])]) {
+      expect(storedFitHolds(o, env)).toBe(true);
+      const l = layoutRich(m(), o, env);
+      expect([l.fontScale, l.spacingScale]).toEqual([0.5, 1]);
+      expect(sizes(l)).toEqual([[10]]);
+    }
+    // An environment that cannot tell (no metricMatch) keeps it too.
+    expect(layoutRich(m(), stored('Aptos'), LEGACY_FONT_ENV).fontScale).toBe(0.5);
+  });
+
+  it('fits the box again from full size, as LibreOffice does, when another face draws it', () => {
+    const env = new FontResolver();
+    env.loaded({ family: 'Carlito', internal: 'o000bbbb' });
+    env.loaded({ family: 'Corbel', internal: 'o000cccc', substitute: true });
+    // Aptos not loaded (ordo's default face draws), Calibri Light drawn with its nearest face, Corbel
+    // drawn with a stand-in registered under its name.
+    for (const o of [stored('Aptos'), stored('Calibri Light', ['Carlito']), stored('Corbel')]) {
+      expect(storedFitHolds(o, env)).toBe(false);
+      const l = layoutRich(m(), o, env);
+      expect([l.fontScale, l.spacingScale]).toEqual([1, 1]);
+      expect(sizes(l)).toEqual([[20]]);
+      // The object itself keeps the stored scale: uploading the family brings it back.
+      expect(o.style.fitScale).toEqual({ font: 0.5, spacing: 1 });
+    }
+  });
+
+  it('may end above the stored scale, and shrinks like LibreOffice when the text does not fit', () => {
+    const env = new FontResolver();
+    // 20 px per character at full size: two words a line, four 48 px lines in a 100 px box. PowerPoint's
+    // 10 % fits too, but LibreOffice's search ends far above it.
+    const text = 'aaaa bbbb cccc dddd eeee ffff gggg hhhh';
+    const style = { fontFamily: 'Aptos', fontSizePx: 40, autofit: 'shrink', lineModel: 'office' } as const;
+    const o = obj(text, { ...style, fitScale: { font: 0.1, spacing: 1 } });
+    const fresh = obj(text, style);
+    const l = layoutRich(m(), o, env);
+    expect(l.fontScale).toBeGreaterThan(0.1);
+    expect(l.fontScale).toBeLessThan(1);
+    expect(l.overflow).toBe(false);
+    // Exactly what a box without a stored scale gets.
+    const f = layoutRich(m(), fresh, env);
+    expect([l.fontScale, l.spacingScale]).toEqual([f.fontScale, f.spacingScale]);
+    expect(lineTexts(o, l)).toEqual(lineTexts(fresh, f));
+    expect(layoutRich(m(), o, LEGACY_FONT_ENV).fontScale).toBe(0.1);
+  });
+
+  it('follows the font generation: the family loading brings the stored scale back', () => {
+    const env = new FontResolver();
+    const o = stored('Aptos');
+    const mm = m();
+    const before = layoutRich(mm, o, env);
+    expect(before.fontScale).toBe(1);
+    expect(layoutRich(mm, o, env)).toBe(before);
+    env.loaded({ family: 'Aptos', internal: 'o000dddd' });
+    const after = layoutRich(mm, o, env);
+    expect(after.fontScale).toBe(0.5);
+    // Drawing paints the layout it lays out, at the refitted size.
+    const ctx = recordingCtx(0.5);
+    const other = new FontResolver();
+    const drawn = drawRichText(ctx, o, 1, other);
+    expect(drawn.fontScale).toBe(1);
+    const fonts = ctx.ops.filter((op) => op.op === 'fillText').map((op) => op.font);
+    expect(fonts.length).toBeGreaterThan(0);
+    for (const f of fonts) expect(f).toContain(' 20px ');
   });
 });
 

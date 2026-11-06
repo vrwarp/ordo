@@ -1,11 +1,15 @@
 import { existsSync } from 'node:fs';
 import type { Slide, TextObject } from '@ordo/domain';
+import { substituteOf } from '@ordo/pptx-scene/fontmap.ts';
+import { metricCompatible } from '@ordo/renderer/text/fonts.ts';
 import { describe, expect, it } from 'vitest';
 import {
+  familyNames,
   fcFamily,
   fcMatch,
   hostFamilies,
   hostFonts,
+  isStandIn,
   SCRIPT_LANG,
   SCRIPT_RANGE,
   scriptFallbackPlan,
@@ -74,6 +78,35 @@ describe('script fallbacks', () => {
   });
 });
 
+describe('stand-in faces', () => {
+  it("reads fontconfig's family lists", () => {
+    expect(familyNames('Inter,Inter Medium')).toEqual(['Inter', 'Inter Medium']);
+    expect(familyNames('A\\,B, C,')).toEqual(['A,B', 'C']);
+    expect(familyNames('')).toEqual([]);
+  });
+
+  it('flags a face of another family unless one of its names is the family or a metric-compatible one', () => {
+    const host = (...names: string[]) => ({ family: names[0] ?? '', names });
+    expect(isStandIn('Aptos', host('Inter'))).toBe(true);
+    expect(isStandIn('Calibri Light', host('Carlito'))).toBe(true);
+    expect(isStandIn('Calibri', host('Carlito'))).toBe(false);
+    expect(isStandIn('Times New Roman', host('Liberation Serif'))).toBe(false);
+    expect(isStandIn('Inter Medium', host('Inter', 'Inter Medium'))).toBe(false);
+    expect(isStandIn('aptos', { family: 'Aptos', names: [] })).toBe(false);
+  });
+
+  it("agrees with the converter's substitutes: all metric-compatible but Calibri Light's", () => {
+    const families = ['Calibri', 'Cambria', 'Arial', 'Helvetica', 'Arial Narrow', 'Times New Roman', 'Times'];
+    for (const f of [...families, 'Courier New', 'Courier', 'Georgia']) {
+      const sub = substituteOf(f);
+      expect(sub, f).toBeTruthy();
+      expect(metricCompatible(f, sub!), f).toBe(true);
+    }
+    expect(substituteOf('Calibri Light')).toBe('Carlito');
+    expect(metricCompatible('Calibri Light', 'Carlito')).toBe(false);
+  });
+});
+
 const fontconfig = existsSync('/usr/bin/fc-match') && (await fcMatch('sans')) !== undefined;
 
 describe.skipIf(!fontconfig)("hostFonts (this machine's fontconfig)", () => {
@@ -114,6 +147,20 @@ describe.skipIf(!fontconfig)("hostFonts (this machine's fontconfig)", () => {
     const served = stood.scripts.find((s) => s.family === 'Noto Sans Hebrew')!;
     expect(served.served).toBe(installed ? 'installed' : 'stand-in');
     expect(served.file).toBe(face.file);
+  });
+
+  it("flags fontconfig's face for a family it lacks, unless it is a metric clone", async () => {
+    const got = await hostFonts([slide(text('Amazing grace', { fontFamily: 'Aptos' }), text('Grace'))]);
+    for (const family of ['Aptos', 'Calibri']) {
+      const host = (await fcMatch(fcFamily(family)))!;
+      const faces = got.fonts.filter((f) => f.family === family);
+      expect(faces.length, family).toBeGreaterThan(0);
+      const flagged = !host.names.some((n) => metricCompatible(family, n));
+      for (const f of faces)
+        expect(f.substitute === true, `${family} drawn with ${host.family}`).toBe(flagged);
+    }
+    // ordo's default face is its own.
+    expect(got.fonts.filter((f) => f.family === 'Inter').every((f) => f.substitute === undefined)).toBe(true);
   });
 
   it('adds the CJK fallbacks when the text has CJK', async () => {
