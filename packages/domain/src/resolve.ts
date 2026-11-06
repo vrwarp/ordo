@@ -48,6 +48,41 @@ export function slideMediaIds(slide: Pick<Slide, 'objects' | 'audio'>): string[]
   return out;
 }
 
+/**
+ * A slide that plays a media item in place (design/27 §8): its clip (`video`), an ImageObject's poster that is
+ * its own clip (`poster`: the editor's 'Add video to slide' shows the clip's poster frame) or its sound.
+ */
+export type SlidePlay = { presentationId: string; slideId: string; role: 'video' | 'poster' | 'sound' };
+
+/**
+ * Every media reference of a playlist's items and slides. `play` is set for what a slide plays in place:
+ * the ids of `slideMediaIds`, and an ImageObject's poster when that is its own clip.
+ */
+function visitPlaylistMedia(
+  playlist: Playlist,
+  presentations: Record<string, Presentation>,
+  visit: (id: string | undefined, play?: SlidePlay) => void,
+): void {
+  for (const item of playlist.items) {
+    if (item.kind === 'media') visit(item.mediaId);
+    if (item.kind !== 'presentation') continue;
+    visit(item.backgroundMediaId);
+    const p = presentations[item.presentationId];
+    if (!p) continue;
+    visit(p.backgroundMediaId);
+    for (const sec of p.sections)
+      for (const sl of sec.slides) {
+        visit(sl.backgroundMediaId);
+        visit(sl.imported?.imageMediaId);
+        const at = (role: SlidePlay['role']): SlidePlay => ({ presentationId: p.id, slideId: sl.id, role });
+        for (const o of sl.objects)
+          if (o.type === 'image') visit(o.mediaId, o.play?.mediaId === o.mediaId ? at('poster') : undefined);
+        visit(playingObject(sl)?.play.mediaId, at('video'));
+        visit(sl.audio?.mediaId, at('sound'));
+      }
+  }
+}
+
 /** Every media id referenced by a playlist and its presentations, plus look holding slides and the logo. */
 export function referencedMediaIds(
   playlist: Playlist,
@@ -57,24 +92,38 @@ export function referencedMediaIds(
 ): Set<string> {
   const ids = new Set<string>();
   const add = (id?: string) => id && ids.add(id);
-  for (const item of playlist.items) {
-    if (item.kind === 'media') add(item.mediaId);
-    if (item.kind === 'presentation') {
-      add(item.backgroundMediaId);
-      const p = presentations[item.presentationId];
-      if (!p) continue;
-      add(p.backgroundMediaId);
-      for (const sec of p.sections)
-        for (const sl of sec.slides) {
-          add(sl.backgroundMediaId);
-          add(sl.imported?.imageMediaId);
-          for (const o of sl.objects) if (o.type === 'image') add(o.mediaId);
-        }
-    }
-  }
+  visitPlaylistMedia(playlist, presentations, add);
   for (const l of looks) add(l.holdingMediaId);
   add(logoMediaId);
   return ids;
+}
+
+/**
+ * Media that slides only play in place (`slideMediaIds`, and a play object's poster when it is the clip
+ * itself), each with the slides that play it. These are optional at goLive (design/27 §8 "Domain"): a clip
+ * still processing or failed is left out and its slide shows the poster. An id that anything else in the
+ * playlist draws or plays stays required and is not listed.
+ */
+export function slideOnlyMedia(
+  playlist: Playlist,
+  presentations: Record<string, Presentation>,
+): Map<string, SlidePlay[]> {
+  const required = new Set<string>();
+  const played = new Map<string, SlidePlay[]>();
+  visitPlaylistMedia(playlist, presentations, (id, play) => {
+    if (!id) return;
+    if (!play) {
+      required.add(id);
+      return;
+    }
+    const list = played.get(id) ?? [];
+    // One entry per slide (a presentation in the playlist twice is listed once); its poster comes first.
+    if (!list.some((x) => x.slideId === play.slideId && x.presentationId === play.presentationId))
+      list.push(play);
+    played.set(id, list);
+  });
+  for (const id of required) played.delete(id);
+  return played;
 }
 
 /** Font families used by any text style in the presentations or looks. */

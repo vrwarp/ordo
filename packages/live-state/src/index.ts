@@ -184,7 +184,13 @@ function goTo(s: LiveState, index: number, at: number): LiveState {
   if (!cue) return s;
   const seq = s.seq;
   const next = s.cues[index + 1] ? index + 1 : undefined;
-  let out: LiveState = { ...s, live: index, armed: next, black: false };
+  let out: LiveState = {
+    ...s,
+    live: index,
+    armed: next,
+    black: false,
+    audio: keepSlideAudio(s.audio, index, at, seq),
+  };
   switch (cue.kind) {
     case 'slide': {
       const layers = { ...out.layers };
@@ -279,31 +285,89 @@ function goTo(s: LiveState, index: number, at: number): LiveState {
 }
 
 /**
- * M5 (A, packages/renderer/SCENE.md): the media layer as slide cue `index` goes live, with the slide's own
- * video from the cue (design/27 §8 "Reducer"). Stub: cleared, as for every slide until then.
+ * The media layer as slide cue `index` goes live (design/27 §8 "Reducer"): the slide's own video in its
+ * object's box, restarted on every entry as PowerPoint does, paused at 0 for a click start (F8 plays it). It
+ * changes with the slide's transition, so the outgoing clip plays on through the fade. A slide without one
+ * clears the layer, as every slide always has.
  */
 function slideMediaLayer(
   media: LayerState<MediaContent>,
-  _cue: Cue,
-  _index: number,
+  cue: Cue,
+  index: number,
   at: number,
   seq: number,
 ): LayerState<MediaContent> {
-  return media.content ? { content: null, at, seq } : media;
+  if (cue.mediaObjectId && cue.mediaId && cue.mediaKind === 'video') {
+    return {
+      content: {
+        kind: 'media',
+        cueIndex: index,
+        mediaId: cue.mediaId,
+        mediaKind: 'video',
+        objectId: cue.mediaObjectId,
+        loop: !!cue.loop,
+        onEnd: cue.onEnd ?? 'hold',
+        state: cue.mediaStart === 'click' ? 'paused' : 'playing',
+        startedAt: at,
+        positionMs: 0,
+      },
+      at,
+      seq,
+      transition: cue.transition,
+    };
+  }
+  if (!media.content) return media;
+  return media.content.objectId
+    ? { content: null, at, seq, transition: cue.transition }
+    : { content: null, at, seq };
 }
 
 /**
- * M5 (A): the audio slot as slide cue `index` goes live: the slide's own sound, kept while a slide-owned
- * sound still plays, cleared once the live cue leaves [cueIndex, untilCue] (design/27 §8). Stub: unchanged.
+ * The audio slot as slide cue `index` goes live (design/27 §8): the slide's own sound replaces what plays
+ * (a playlist audio cue included), paused at 0 for a click start. A slide-owned sound that is still playing
+ * from this very cue is never restarted, so a loop that wraps back to its slide, or an operator stepping
+ * back to it, keeps the music running. Without a sound of its own the slot is left as it is: playlist audio
+ * plays on under slides (`keepSlideAudio` has already stopped a slide sound whose range was left).
  */
 function slideAudioLayer(
   audio: LayerState<AudioContent>,
-  _cue: Cue,
-  _index: number,
-  _at: number,
-  _seq: number,
+  cue: Cue,
+  index: number,
+  at: number,
+  seq: number,
 ): LayerState<AudioContent> {
-  return audio;
+  const sound = cue.slideAudio;
+  if (!sound) return audio;
+  const a = audio.content;
+  if (a?.slideOwned && a.cueIndex === index && a.mediaId === sound.mediaId && a.state === 'playing')
+    return audio;
+  return {
+    content: {
+      cueIndex: index,
+      mediaId: sound.mediaId,
+      loop: sound.loop,
+      state: sound.start === 'click' ? 'paused' : 'playing',
+      startedAt: at,
+      positionMs: 0,
+      ...(sound.gainDb !== undefined ? { gainDb: sound.gainDb } : {}),
+      slideOwned: true,
+      untilCue: Math.max(index, sound.untilCue),
+    },
+    at,
+    seq,
+  };
+}
+
+/** A slide's own sound stops once the live cue leaves [its cue, untilCue] (design/27 §8). */
+function keepSlideAudio(
+  audio: LayerState<AudioContent>,
+  index: number,
+  at: number,
+  seq: number,
+): LayerState<AudioContent> {
+  const a = audio.content;
+  if (!a?.slideOwned) return audio;
+  return index >= a.cueIndex && index <= (a.untilCue ?? a.cueIndex) ? audio : { content: null, at, seq };
 }
 
 function applyAction(s: LiveState, action: ActionId, at: number): LiveState {
@@ -346,6 +410,17 @@ function clear(
         layers: { background: empty, slide: empty, lowerThird: empty, media: empty },
         props: { logo: false, countdownTimerId: undefined, at, seq },
         audio: empty,
+      };
+    case 'slide':
+      // The slide's own video and sound go with it (design/27 §8).
+      return {
+        ...s,
+        layers: {
+          ...s.layers,
+          slide: empty,
+          media: s.layers.media.content?.objectId ? empty : s.layers.media,
+        },
+        audio: s.audio.content?.slideOwned ? empty : s.audio,
       };
     default:
       return { ...s, layers: { ...s.layers, [layer]: empty } };
