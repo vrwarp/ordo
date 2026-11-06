@@ -178,6 +178,22 @@ Files: `pictures.ts`, `mediaParts.ts`; `media/ffmpeg.ts` (prepare helpers), `med
   (M5 extracts them; not this wave).
 - Tests: a 48 MP synthetic photo is prepared to its need; dedup across two imports; a lying header is refused.
 
+Done (`apps/hub/test/pptx-pictures.test.ts`):
+- `pictures.ts`: `pictureHeader(head, { complete? })` and `readPictureHeader(path)` (bounded reads;
+  `PictureHeader.format` adds `svg`, `emf`, `wmf`; optional `orientation`, `orientationAt`, `partial`,
+  `convert`; pictures are drawn as stored, so an EXIF orientation is removed, never applied),
+  `isMetafile`, `displayNeeds(slides, media, sizeOf?)` (backgrounds count as the cover-fit frame; with sizes
+  the box height counts too), `targetSize`, `preparePicture` (throws `PictureError`; `route: 'metafile'`
+  for SVG/EMF/WMF), `PictureBudget` (6,000 MP decoded per import), `addReadyPicture`, `findPrepared`,
+  `pictureFor` (an item prepared earlier from the same source part that fits the need, else prepare and
+  store) and `storePictures` (a whole import's pictures with resume pairs: `done`, `save`).
+- `mediaParts.ts`: `MediaHashes` (the index), `findMedia`, `mediaForFile`, `wholeFile`.
+- `db.ts` migration 8 `media-hashes`: `media_hashes (hash, role, media_id)`, backfilled from `media`, kept
+  by triggers on `media` (`content` rows); `source` rows written by `addReadyPicture`.
+- `media/ffmpeg.ts`: `pictureFile` (forced demuxer, `-max_pixels`, `-lowres`, `-noautorotate`, first frame,
+  Lanczos, PNG RGB/RGBA or JPEG `-q:v 2`, metadata dropped).
+- `imports.ts`: the ProPresenter import's media go through `mediaForFile`.
+
 ### D: LibreOffice
 
 Files: `fallback.ts`, `renderCopyTask.ts`, `art.ts`; `packages/pptx-scene/src/rendercopy.ts` and a new

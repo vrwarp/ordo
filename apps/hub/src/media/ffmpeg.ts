@@ -414,3 +414,61 @@ export function gifInfo(b: Uint8Array): {
   }
   return { frames, transparent, width, height };
 }
+
+/** The ffmpeg demuxer of each still-picture format: a checked picture is read only as what its header says. */
+const PICTURE_DEMUXER = {
+  png: 'png_pipe',
+  jpeg: 'jpeg_pipe',
+  gif: 'gif',
+  webp: 'webp_pipe',
+  bmp: 'bmp_pipe',
+  tiff: 'tiff_pipe',
+} as const;
+export type PictureInputFormat = keyof typeof PICTURE_DEMUXER;
+
+export type PictureFileOpts = TOpts & {
+  /** The format the picture's header was checked as (its demuxer is forced). */
+  input: PictureInputFormat;
+  /** The exact output size. */
+  width: number;
+  height: number;
+  output: 'png' | 'jpg';
+  /** PNG only: RGBA, else RGB (8 bits either way). */
+  alpha: boolean;
+  /**
+   * The size its header claims (of the frame decoded): the decoder refuses a larger picture (`-max_pixels`,
+   * with the margin its aligned buffers need), whatever the data says.
+   */
+  decoded: { width: number; height: number };
+  /** JPEG only: decode at 1/2^lowres of the stored size (1-3), when the output is at least that small. */
+  lowres?: number;
+  /** Place the decoded frame at (x, y) on a transparent canvas of this size first (an animated WebP's frame). */
+  canvas?: { width: number; height: number; x: number; y: number };
+};
+
+/**
+ * One still picture of exactly `width` x `height` for a ready media item (design/27 §4 "Picture
+ * preparation"): the first frame or page, the default image of an animated PNG, the pixels as stored (an
+ * EXIF orientation is not applied: PowerPoint ignores it), Lanczos scaling, 8-bit PNG (RGBA with alpha) or
+ * JPEG at the quality uploads get, metadata dropped.
+ */
+export async function pictureFile(input: string, output: string, o: PictureFileOpts): Promise<void> {
+  const vf: string[] = [];
+  if (o.canvas)
+    vf.push(
+      'format=rgba',
+      `pad=${o.canvas.width}:${o.canvas.height}:${o.canvas.x}:${o.canvas.y}:color=0x00000000`,
+    );
+  vf.push(`scale=${o.width}:${o.height}:flags=lanczos`);
+  if (o.output === 'png') vf.push(o.alpha ? 'format=rgba' : 'format=rgb24');
+  const aligned = (n: number) => Math.ceil(Math.max(1, n) / 32) * 32 + 32;
+  const maxPixels = aligned(o.decoded.width) * aligned(o.decoded.height);
+  const args = [...BASE, ...IN_SAFE, '-max_pixels', String(maxPixels)];
+  if (o.input === 'jpeg' && o.lowres) args.push('-lowres', String(o.lowres));
+  // Newer ffmpeg turns a picture by its EXIF orientation itself, older ones do not: the stored pixels, always.
+  args.push('-noautorotate', '-f', PICTURE_DEMUXER[o.input], '-i', input, '-map', '0:v:0', '-frames:v', '1');
+  args.push('-vf', vf.join(','), '-map_metadata', '-1');
+  if (o.output === 'png') args.push('-c:v', 'png');
+  else args.push('-c:v', 'mjpeg', '-q:v', '2');
+  await run('ffmpeg', [...args, '-f', 'image2', output], o);
+}

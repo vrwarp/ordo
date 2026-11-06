@@ -511,6 +511,9 @@ Whole presentations travel in goLive (to every client, into the journal, snapsho
   - The display need is the widest use of the part in the deck: the box width at 3840 px ÷ the visible crop fraction, capped at 8,192 px.
   - A source more than 1.25× its need is downscaled by ffmpeg: JPEG q90 when opaque, PNG or lossless WebP with alpha. This is the same rule the hub already applies to uploaded images over 3840 px, which a ready-picture path would otherwise bypass.
   - TIFF and BMP become PNG. Animated GIF, APNG and animated WebP become a first-frame PNG (logged).
+  - Pictures are drawn as stored. PowerPoint ignores a JPEG's EXIF orientation (the boxes of tagged photos in
+    the worship set have the stored aspect) and browsers apply it, so preparation removes it: the tag is set
+    to 1 in a kept copy, and conversions do not turn the picture.
   - The original stays in the stored deck, so a re-import can use it.
   - Pictures are stored with alpha through `addReadyPicture` (ready, no job), deduplicated by SHA-256 of the prepared bytes plus the source part's hash.
 

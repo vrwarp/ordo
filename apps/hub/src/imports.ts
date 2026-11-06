@@ -1,7 +1,4 @@
-import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import { copyFile, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
-import { pipeline } from 'node:stream/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import {
   DEFAULT_THEME,
@@ -30,6 +27,7 @@ import { fitPage, pdfToPngs, pptxToPdf } from './media/ffmpeg.ts';
 import { baseName, type MediaService } from './media/service.ts';
 import { cpuPool, transferables, WorkerStartError } from './pool.ts';
 import { PptxImports } from './pptx/index.ts';
+import { mediaForFile } from './pptx/mediaParts.ts';
 import type { Store } from './store.ts';
 
 export type Pro7Result = {
@@ -307,7 +305,11 @@ export class ImportService {
           } else {
             throw new Error('file not in the import');
           }
-          const id = await this.mediaFor(tmp, m.path, m.background === true);
+          const id = await mediaForFile(this.pptx.deps, tmp, {
+            name: m.path,
+            tags: ['pro7'],
+            background: m.background === true,
+          });
           map.set(m.key, id);
           done.media[m.key] = id;
           save();
@@ -395,29 +397,6 @@ export class ImportService {
       : this.lib.playlists.insert(p);
     this.lib.emit([{ kind: 'playlist', id: saved.id, rev: saved.rev, entity: saved }]);
     return saved;
-  }
-
-  /** Reuse an existing media item with the same original content, else ingest a new one. */
-  private async mediaFor(tmp: string, path: string, background: boolean): Promise<string> {
-    // Hashed as a stream: a service video can be larger than Node reads into one buffer.
-    const h = createHash('sha256');
-    await pipeline(createReadStream(tmp), h);
-    const hash = h.digest('hex');
-    const bytes = (await stat(tmp)).size;
-    const existing = this.lib.media.list().find((m) => m.original.hash === hash);
-    if (existing) {
-      await rm(tmp, { force: true });
-      if (background && !existing.isBackground) {
-        const updated = this.lib.media.update(existing.id, { ...existing, isBackground: true });
-        this.lib.emit([{ kind: 'media', id: updated.id, rev: updated.rev, entity: updated }]);
-      }
-      return existing.id;
-    }
-    const m = await this.media.ingest({ path: tmp, hash, bytes }, path, {
-      tags: ['pro7'],
-      isBackground: background,
-    });
-    return m.id;
   }
 
   /** The real extractor runs on the CPU pool; an injected one (tests) runs inline. */

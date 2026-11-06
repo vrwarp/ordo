@@ -112,6 +112,43 @@ CREATE TABLE IF NOT EXISTS live_snapshot_prev (
 CREATE TABLE IF NOT EXISTS job_attempts (job_id TEXT PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0);
 `,
   },
+  {
+    version: 8,
+    name: 'media-hashes',
+    // The SHA-256 media hash index (design/27 §4; apps/hub/src/pptx/mediaParts.ts): imports find media with
+    // the same content without scanning every media row. 'content' rows hold each item's original file hash,
+    // kept by the triggers whichever code path writes `media` and backfilled here for existing libraries;
+    // 'source' rows the hash of the deck part a prepared picture was made from. JSON is read only after
+    // json_valid (a malformed row is skipped, never an error inside a trigger).
+    sql: `
+CREATE TABLE IF NOT EXISTS media_hashes (
+  hash TEXT NOT NULL, role TEXT NOT NULL, media_id TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY (hash, role, media_id));
+CREATE INDEX IF NOT EXISTS media_hashes_media ON media_hashes(media_id);
+INSERT OR IGNORE INTO media_hashes (hash, role, media_id, created_at)
+  SELECT h, 'content', id, created_at FROM (
+    SELECT id, created_at, CASE WHEN json_valid(json) THEN json_extract(json, '$.original.hash') END AS h
+    FROM media)
+  WHERE typeof(h) = 'text';
+CREATE TRIGGER IF NOT EXISTS media_hashes_insert AFTER INSERT ON media BEGIN
+  INSERT OR IGNORE INTO media_hashes (hash, role, media_id, created_at)
+    SELECT h, 'content', NEW.id, NEW.created_at
+    FROM (SELECT CASE WHEN json_valid(NEW.json) THEN json_extract(NEW.json, '$.original.hash') END AS h)
+    WHERE typeof(h) = 'text';
+END;
+CREATE TRIGGER IF NOT EXISTS media_hashes_update AFTER UPDATE OF json ON media BEGIN
+  DELETE FROM media_hashes WHERE media_id = NEW.id AND role = 'content'
+    AND hash IS NOT (CASE WHEN json_valid(NEW.json) THEN json_extract(NEW.json, '$.original.hash') END);
+  INSERT OR IGNORE INTO media_hashes (hash, role, media_id, created_at)
+    SELECT h, 'content', NEW.id, NEW.created_at
+    FROM (SELECT CASE WHEN json_valid(NEW.json) THEN json_extract(NEW.json, '$.original.hash') END AS h)
+    WHERE typeof(h) = 'text';
+END;
+CREATE TRIGGER IF NOT EXISTS media_hashes_delete AFTER DELETE ON media BEGIN
+  DELETE FROM media_hashes WHERE media_id = OLD.id;
+END;
+`,
+  },
 ];
 
 /**

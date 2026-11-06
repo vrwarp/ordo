@@ -263,6 +263,42 @@ for this: the `media` deck of the fidelity corpus, and LibreOffice's own test do
 pptx`: `video-loop-mute`, `tdf106867`, `bnc591147`, `narration`, `tdf44223`, `tdf148478_transitionMusic`,
 `animation-sound-*`), which are real-world decks attached to bug reports.
 
+### Pictures of the native import
+
+The native import stores each picture part its slides use once, prepared for how it is shown (design/27 §4,
+`apps/hub/src/pptx/pictures.ts`):
+
+- The header is read from the file's bytes, never its name, with bounded reads: PNG, JPEG, GIF and WebP are
+  read; BMP and TIFF are converted; SVG, EMF and WMF go to LibreOffice in the `pptx-lo` follow-up. Anything
+  else is refused and its objects left out: an unknown format, a malformed header (a PNG header with a bad
+  checksum, a WebP canvas that disagrees with its image, a JPEG scan before its frame header) or a picture
+  over 16,384 px a side (over 100 MP for formats other than JPEG).
+- The display need is the part's widest use in the deck on a 3840-px output: the box width divided by the
+  share of the picture the crop leaves visible (with the picture's size known, the box height counts too); a
+  slide background is the whole frame, cover-fit. It is kept within 128-8,192 px.
+- A picture more than 1.25 times its need, or over 8,192 px a side or 40 MP, is downscaled by ffmpeg
+  (Lanczos): JPEG when opaque, PNG with alpha. BMP and TIFF become PNG; an animated GIF, APNG or animated
+  WebP keeps its first frame and a multi-page TIFF its first page (noted in the job log). Any other picture
+  is kept byte for byte (a hard link to the extracted part).
+- Pictures are drawn as stored. PowerPoint ignores a JPEG's EXIF orientation and lays the picture out with
+  its stored pixels (the boxes of real decks' tagged photos have the stored aspect), while browsers apply it,
+  so preparation removes it: a kept JPEG is a copy with the tag set to 1, a conversion leaves it out (ffmpeg
+  runs with `-noautorotate`), and a PNG or WebP with EXIF metadata is converted.
+- ffmpeg reads a picture only through the demuxer of the format its header was checked as and decodes no
+  more pixels than the header claimed (`-max_pixels`), so a header that lies about the size fails instead of
+  allocating; a JPEG decodes at 1/2, 1/4 or 1/8 of its size when that is still large enough. One import
+  decodes at most 6,000 MP; past that, pictures clients read as they are stay unscaled and the others are
+  left out.
+- Prepared pictures become ready image media (tag `pptx`, no media job) through `addReadyPicture`, which
+  accepts only a still PNG, JPEG, GIF or WebP whose header matches the size it claims, within 8,192 px a side
+  and 40 MP.
+- The media hash index (`media_hashes`, design/12 "Storage") finds an item with the same prepared bytes, or
+  one prepared from the same source part at a size that fits the need, so importing the same deck again, or
+  another deck with the same pictures, stores nothing new. The job records [part, media id] pairs in its
+  payload as it goes, so a re-queued job skips them.
+
+The ProPresenter import finds media with the same content through the same index (`mediaForFile`).
+
 ### Fidelity
 
 `tools/pptx-fidelity` draws decks with both renderers and scores pptx-preview against LibreOffice slide by
