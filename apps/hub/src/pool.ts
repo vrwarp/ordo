@@ -24,6 +24,8 @@ import type { FontFace } from './fonts/sfnt.ts';
 import type {
   ArtTaskInput,
   ArtTaskOutput,
+  BakeTaskInput,
+  BakeTaskOutput,
   RenderCopyTaskInput,
   RenderCopyTaskOutput,
   SceneTaskInput,
@@ -45,6 +47,8 @@ export type CpuTasks = {
   'pptx-render-copy': { input: RenderCopyTaskInput; output: RenderCopyTaskOutput };
   /** One art slide's transparent picture from its white and black pages (design/27 §5, `pptx/art.ts`). */
   'pptx-art': { input: ArtTaskInput; output: ArtTaskOutput };
+  /** A recoloured picture or a tiled fill, derived at import (design/27 §4, M6; `pptx/bakeTask.ts`). */
+  'pptx-bake': { input: BakeTaskInput; output: BakeTaskOutput };
 };
 export type CpuTaskKind = keyof CpuTasks;
 
@@ -56,6 +60,7 @@ export const TASK_TIMEOUT_MS: Record<CpuTaskKind, number> = {
   'pptx-scene': 2 * 60_000,
   'pptx-render-copy': 2 * 60_000,
   'pptx-art': 60_000,
+  'pptx-bake': 60_000,
 };
 const IDLE_MS = 30_000;
 /**

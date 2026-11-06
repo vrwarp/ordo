@@ -82,6 +82,66 @@ Embedded video and sound play in place (design/27 §4 "Media", §8 "p:timing map
   `clipKey`), listed in `EmittedSlide.clips` with linked and missing clips; objects left out keep the art's
   and the metafiles' places (`leaveOut` remaps the element spans).
 
+## M6 wave 2, item D: SmartArt and baked pictures (`smartart.ts`, `bake.ts`)
+
+design/27 §4 "Pictures", §5 "Element support", §15 M6 ("SmartArt from its drawing cache as a locked group",
+"Recolour and tile bakes"):
+- **SmartArt** (`smartart.ts`, called by the walk for a graphic frame of the diagram URI): the frame's
+  `dgm:relIds r:dm` names the data model, whose `dgm:extLst` holds `dsp:dataModelExt relId`, a relationship of
+  the part holding the frame to PowerPoint's drawing of it (`diagramDrawing`, `ppt/diagrams/drawingN.xml`).
+  Without one the frame stays residual ('smartart'). The drawing's `dsp:` shape elements are PresentationML's
+  vocabulary: a copy of its tree with them named `p:` (DrawingML children shared, made once per drawing)
+  goes through `walkTree`, so geometry, fills, lines, effects, style references and text are read as any
+  shape's, with the drawing part's relationships for picture fills. The coordinates are the frame's at scale
+  1 (a `dsp:grpSpPr` child space maps them like a group's; its own offset is not used: LibreOffice places
+  such a drawing at that offset on the slide, PowerPoint in its frame). A node's text goes in PowerPoint's own text
+  rectangle (`dsp:txXfrm`): the shape is emitted without it and the text as a frameless rect there, turned
+  by the shape's rotation plus the rectangle's; a shape showing nothing keeps casting its shadow on it. The
+  colour of every `a:fontRef` is the colours part's `node0` text colour (the last of its `dgm:txFillClrLst`),
+  as LibreOffice applies it (`PPTShapeGroupContext::applyFontRefColor`): drawing caches often name the node's
+  fill colour there, white text on white nodes. Each element gets `ElementBase.diagram` (a number per frame),
+  the frame's `cNvPr id` and the frame's flattened group, and keeps its renamed node (`ShapeElement.node`),
+  so classification rates it by its own XML, never by a slide shape sharing its id (drawing shapes all have
+  id 0). Bounded as any shape tree (5,000 shapes a slide, groups 32 deep), and per package: a drawing can be
+  named from every slide, so past `DIAGRAM_NODE_BUDGET` (2,000,000) elements of drawings read in one batch,
+  further SmartArt stays residual (noted).
+- **Emission** (`lockDiagram`): every object of a drawing gets `origin { src: 'pptx', shapeId: <frame>, role:
+  'diagram', group }` and all but text objects `locked` (move, resize, delete and z-order only); the text
+  stays editable, and is never the lyric box.
+- **Classification** (`classify.ts` `wholeDiagrams`, after `refineSupport`): a drawing is native or in the
+  art as a whole. One with a residual element (a real 3D bevel, vertical text …), or one the art range takes
+  an element of, goes to the art entirely ('art:smartart'); then, while the slide passes 150 objects, the
+  native drawing with the most objects goes too ('art:budget:smartart'), so the slide is hybrid, not
+  picture. The render copy names a drawing once, by its frame (`hybrid.ts` `elementRefs`), so LibreOffice
+  prints the whole frame, and keeps the drawing's relationship the data model names (`rendercopy.ts`,
+  `modelDrawingRelId`), so LibreOffice prints PowerPoint's drawing rather than laying the diagram out itself. The census tier is unchanged (SmartArt is still a fallback feature: the tier
+  measures feature use).
+- **Baked pictures** (`bake.ts`): a blip's duotone, clrChange, grayscl, biLevel and lum (PowerPoint's
+  recolour presets are these) are read with their colours resolved (`PictureFill.recolor`; `picture.ts`),
+  and such a picture is native (any other blip effect, a blur say, keeps it approx). A tiled picture fill
+  (`a:tile`) of a shape or a background becomes one picture of the whole box: the tile grid as shares of the
+  box (`tileBakeOf`: the picture's size at its header's resolution, `PictureHeader.dpi` from PNG `pHYs` or
+  JPEG JFIF, else 96 dpi, times `sx`/`sy`, its corner by `algn` then `tx`/`ty`, every other tile mirrored by
+  `flip`, `a:srcRect` the part one tile shows); a tile of unknown size stays stretched. `alphaModFix` stays
+  the image's `opacity`. Each distinct part and recipe gets one placeholder `pptxmedia:bake<n>`
+  (`BAKE_PREFIX`, numbered across a `convertDeck` call, `EmitOptions.bakeId`), listed in `EmitResult.media`
+  with its `bake`; an importer that cannot bake one maps it to the source part's picture. Metafiles are not
+  baked (LibreOffice converts them). An older build draws a baked picture as the ordinary picture it is.
+- **Pixels** (`applyBake`, the hub's `pptx-bake` pool task and the harness): colour effects in document
+  order with LibreOffice's arithmetic (luminance (76·R + 151·G + 29·B) / 256; biLevel's 50 % is 128;
+  duotone linear from the first colour to the second; clrChange within a per-channel tolerance by the
+  source's format, JPEG 15, PNG and TIFF 1, BMP 0, else 9, giving `clrTo`'s colour and alpha; lum as
+  PowerPoint's brightness and contrast, half the brightness before the contrast and half after), then the
+  tiles, nearest-sampled from a source decoded at the tile's size (`tileSourceSize`). Bounded: 8,192 px a
+  side and 16 MP for the source and the output (`BAKE_LIMITS`).
+- Tests: `smartart.test.ts` (crafted decks of `smartart.test-util.ts`: placement, text rectangles and their
+  rotation, the node text colour, picture fills through the drawing part, residual without a drawing, the
+  whole-drawing rule for a 3D shape and for an overlap inside the art range, the object budget, ids shared
+  with slide shapes, a layout's SmartArt, hostile drawings: 6,000 shapes, 40 nested groups, one large
+  drawing named from 40 slides, under 5 s), `bake.test.ts` (each effect's pixels, tile geometry, flips and
+  offsets, limits, emitted placeholders for pictures, tiled shape fills and tiled backgrounds, numbering
+  across slides), `picture.test.ts` (recolour reading, header resolutions).
+
 ## Module map
 
 | File            | What                                                                                                              | Owner  |
@@ -106,6 +166,8 @@ Embedded video and sound play in place (design/27 §4 "Media", §8 "p:timing map
 | `transition.ts` | `readTransition`, `readSlideTransition` (a slide's tail only), `showLoops` (`p:showPr loop`)                      | M3 B   |
 | `timing.ts`     | `readSlideTiming`: the `p:timing` mapping of clips, transition and animation sounds; `gainDbOf`                   | M3b A  |
 | `media.ts`      | `readMediaRef` (a poster's clip, trim, kind), `emitMedia` (play, slide sound, motion background), `EmittedClip`   | M3b A  |
+| `smartart.ts`   | SmartArt from its drawing cache: `readSmartArt` (the drawing's shapes through the walk), `lockDiagram`            | M6b D  |
+| `bake.ts`       | Baked pictures: `PictureBake` recipes (`bakeOf`, `tileBakeOf`), `applyBake` (recolour and tile pixels)           | M6b D  |
 | `ir.ts`         | The scene IR (types only)                                                                                         | shared |
 | `context.ts`    | `SlideCtx`, `slideContext`                                                                                        | shared |
 | `log.ts`        | `clean`, `noteList`                                                                                               | shared |

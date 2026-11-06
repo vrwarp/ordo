@@ -513,6 +513,7 @@ As built in M3 (`packages/domain/src/size.ts`):
 - `crop` from srcRect (negative values allowed). fillRect insets fold into the box and the crop.
 - `mask` from prstGeom/custGeom; flips; `alphaModFix` → opacity; `a:lum` → `adjust`.
 - duotone, clrChange, grayscl and biLevel are baked at import into a derived PNG (a new deduplicated Media, still replaceable).
+  - *As built (M6 wave 2):* so are `a:lum` brightness and contrast, so PowerPoint's recolour presets (grayscale, sepia, washout, black and white, the accent duotones) all are. The converter reads the effects in document order with their colours resolved and lists each distinct part and recipe once as a `pptxmedia:bake<n>` placeholder with its recipe (`@ordo/pptx-scene` `bake.ts`); the hub decodes the source with ffmpeg to RGBA at the picture's prepared size, applies the recipe in pool task `pptx-bake` with LibreOffice's arithmetic (luminance, thresholds, the colour change's tolerance by format, PowerPoint's brightness and contrast) and stores the result as a ready picture, deduplicated by the source's hash and the recipe (`apps/hub/src/pptx/bakes.ts`). `alphaModFix` stays the image's `opacity`. Any other blip effect (a blur) keeps the picture approx, drawn without it; a picture that cannot be baked is drawn as it is, with a warning.
 - `a14:imgProps/a14:imgLayer`: the blip is PowerPoint's already-corrected result (verified on 20 slides of real sermon decks), so it is drawn as is. `.wdp` layers are ignored.
 - `svgBlip` uses its PNG fallback; raw SVG is never used.
 - EMF/WMF are converted to PNG by LibreOffice in the follow-up job (the slide is `pending`).
@@ -542,6 +543,7 @@ As built in M3 (`packages/domain/src/size.ts`):
 - Any other picture background → a bottom `ImageObject{role:'bg'}`. The background layer is cover-fit while PowerPoint pillarboxes 4:3.
 - Solid or gradient → a bottom rect `ShapeObject{role:'bg'}` over the slide area. With the import option 'Extend plain backgrounds to 16:9' (on by default), it covers the whole 1920x1080 frame instead.
 - Tiled → pre-tiled into a picture at slide size.
+  - *As built (M6 wave 2):* with the tiled picture fills of shapes, through the same bake: one picture over the whole box at its display need, the tile the picture's size at its header's stated resolution (PNG `pHYs`, JPEG JFIF; else 96 dpi) times `sx`/`sy`, its corner by `algn` and `tx`/`ty`, every other tile mirrored by `flip`, `a:srcRect` the part one tile shows. A tile of unknown size is drawn stretched, as before.
 - 4:3 decks otherwise keep their 240 px bars empty, so the playlist or presentation background, or black, shows through. `source.native.slideRect` records the slide area for the editor's guide.
 - A background is never baked into an art picture (§5).
 
@@ -579,6 +581,7 @@ As built in M3 (`packages/domain/src/size.ts`):
 - **Residual:**
   - a chart (`a:graphicData uri` …/chart);
   - SmartArt without `ppt/diagrams/drawingN.xml` (with it, the shapes are drawn natively as a locked group with editable text);
+    *as built (M6 wave 2, `pptx-scene` `smartart.ts`):* the drawing is the one the data model's `dsp:dataModelExt` names; its `dsp:` shapes are read through the ordinary shape walk at the frame's coordinates, each node's text in PowerPoint's text rectangle (`dsp:txXfrm`) and in the colours part's node text colour (LibreOffice's rule); a drawing is native or in the art as a whole (a residual shape in it, an art element above part of it inside the art range, or the 150-object budget sends all of it), and the render copy keeps its frame;
   - OLE;
   - maths;
   - ink;
@@ -1540,6 +1543,31 @@ Also:
 - The tables and tableMerge feature means are ≥ 0.75 (pptx-preview: 0.51 and 0.36).
 - No slide goes above 150 objects without becoming hybrid.
 - Fuzz covers guide formulas and paths.
+
+*As built (M6 wave 2, item D: SmartArt and baked pictures; `pptx-scene` `smartart.ts`, `bake.ts`, hub `bakes.ts`):*
+- SmartArt with a drawing cache is a locked group (origin role 'diagram', the frame's group; text unlocked,
+  never the lyric box), read through the ordinary shape walk, so it gets every preset, fill, line, effect and
+  text rule the walk has; a drawing goes native or into the art whole, and over the 150-object budget it is
+  the drawing that goes to the art. The render copy keeps the drawing with its frame. Per batch at most
+  2,000,000 elements of drawings are read (a shared drawing named from every slide), the rest left residual.
+- Recolour and tile bakes as §4 says; `pptx-bake` decodes nothing itself (ffmpeg does, at the bake's size)
+  and is bounded at 8,192 px a side and 16 MP in and out, 60 s, and the import's decode budget. No schema
+  field is added: a baked picture is an ordinary media item, so an older build draws it too.
+- Measured with the native column against LibreOffice's cached pictures, each slide before and after
+  (`--engine native`, the selected worship shard decks that have SmartArt, recolouring or tiles: 329
+  slides). Shard 0 (203 slides): mean 0.810 → 0.840, 45 slides up and 2 down by more than 0.002 (by 0.007
+  at most: two slides of one layout's grayscale picture with raised contrast at 20 % opacity, where
+  LibreOffice's result differs slightly from the baked one).
+  Shard 2 (126 slides): 0.870 → 0.875, 11 up, 1 down (−0.010: ribbon presets drawn as their rects until
+  the converter's presets are merged; in a trial merge with them the slide scores 0.942). By feature on
+  the slide itself: SmartArt 13 slides 0.750 → 0.835 (7 native, the rest hybrid for 3D bevels, drawn
+  natively in version 1 until the art replaces them), recolouring 16 slides 0.726 → 0.900, tiles 34
+  slides 0.695 → 0.779. On the 45 decks of the validation suite with any of the three (621 slides,
+  LibreOffice rendering them fresh): 0.839 → 0.872, 98 slides up and 3 down; SmartArt 32 slides 0.839 →
+  0.921 (native: 0 → 23), recolouring 74 slides 0.655 → 0.875, tiles 16 slides 0.665 → 0.800. The one
+  large drop (0.868 → 0.787) is a library's test file whose drawing states its own offset of 0:
+  LibreOffice then places the drawing at the slide's corner, where PowerPoint, and ordo, keep it in its
+  frame. The 73 sermon slides do not change (0.953).
 
 **Parallel.**
 - ∥ geom-gen and evaluator (with POI-semantics unit tests);

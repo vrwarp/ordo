@@ -39,6 +39,7 @@ import {
 } from '@ordo/pptx-scene';
 import type { FaceRequest } from '@ordo/renderer/text/types.ts';
 import type { Browser, Page } from '@playwright/test';
+import { bakePicture } from './bake.ts';
 import { type CompatRule, compatRules, drawingKey } from './compat.ts';
 import { deckTextFeatures, textFeatures } from './features.ts';
 import { hostFonts, type ScriptFace } from './fonts.ts';
@@ -288,7 +289,34 @@ export async function convertDeck(
     const media = join(dir, 'media');
     await mkdir(media, { recursive: true });
     const skipped = new Map<string, number>();
+    // Baked pictures first (M6, `bake.ts`): they read their source part before it is moved into place.
+    const widest = new Map<string, number>();
+    for (const s of out.slides)
+      for (const o of s.slide.objects ?? [])
+        if (o.type === 'image') widest.set(o.mediaId, Math.max(widest.get(o.mediaId) ?? 0, o.box.w));
     for (const [k, m] of emitted.media.entries()) {
+      if (!m.bake) continue;
+      const entry: NativeMedia = { id: m.id, part: m.part };
+      out.media.push(entry);
+      const src = fileOf(m.part);
+      const type = src ? sniffPicture(await head(src)) : undefined;
+      const size = src ? spilledPictureSize(src) : undefined;
+      if (!src || !type || !size) {
+        note(`a baked picture's source is missing or unreadable: ${clean(m.part)}`);
+        continue;
+      }
+      const name = `media/${k + 1}.png`;
+      try {
+        const w = widest.get(m.id);
+        await bakePicture(src, type, size, m.bake, w ? { w, h: 0 } : undefined, join(dir, name));
+        entry.file = name;
+        entry.type = 'png';
+      } catch (e) {
+        note(`a picture could not be baked (${clean(m.part)}): ${errorText(e)}`);
+      }
+    }
+    for (const [k, m] of emitted.media.entries()) {
+      if (m.bake) continue;
       const entry: NativeMedia = { id: m.id, part: m.part };
       out.media.push(entry);
       const src = fileOf(m.part);

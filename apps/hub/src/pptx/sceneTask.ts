@@ -8,7 +8,8 @@
  *
  * - **Scan** (`input.scan`, the import's first call, no slide converted): the deck facts of `convertDeck`
  *   (slide list, frame, sections) and what the job needs before the batches: the picture parts the listed
- *   slides, their layouts, masters and themes relate to (the job spills only those), the metafiles each slide
+ *   slides, their layouts, masters and themes relate to, their SmartArt drawings' included (the job spills
+ *   only those), the metafiles each slide
  *   may show (LibreOffice converts them), speaker notes (`notes.ts`, read once here so no batch needs the
  *   notes parts), the show's loop flag and the clip parts of the listed slides (`clips.ts` spills and sniffs
  *   them before the batches, which emit `ImageObject.play` and `Slide.audio` with the sniffed kinds).
@@ -90,12 +91,21 @@ export function clipParts(pkg: Package, listed: readonly SlideRef[]): { clips: s
 /** What the job needs of the whole deck before its batches (see the module comment). */
 export function scanDeck(pkg: Package, listed: readonly SlideRef[]): SceneScan {
   const images = new Map<string, Images>();
-  /** The image relationships of one part, by kind (cached: layouts and masters are shared). */
-  const imagesOf = (part: string): Images => {
+  /**
+   * The image relationships of one part, by kind (cached: layouts and masters are shared), with those of the
+   * SmartArt drawings it relates to (M6: their shapes are drawn natively, `smartart.ts`).
+   */
+  const imagesOf = (part: string, drawings = true): Images => {
     let v = images.get(part);
     if (v) return v;
     v = { pictures: [], metafiles: [] };
     for (const r of pkg.rels(part)) {
+      if (drawings && !r.external && relType(r.type) === 'diagramDrawing' && pkg.has(r.target)) {
+        const d = imagesOf(pkg.find(r.target) ?? r.target, false);
+        v.pictures.push(...d.pictures);
+        v.metafiles.push(...d.metafiles);
+        continue;
+      }
       if (r.external || relType(r.type) !== 'image' || !pkg.has(r.target)) continue;
       const stored = pkg.find(r.target) ?? r.target;
       const ext = extensionOf(stored);

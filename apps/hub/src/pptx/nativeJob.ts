@@ -69,6 +69,7 @@ import {
   type SlideClass,
   type SlideRef,
 } from '@ordo/pptx-scene';
+import type { PictureBake } from '@ordo/pptx-scene/bake.ts';
 import { digestOf, SLIDE_BUDGET_NOTE } from '@ordo/pptx-scene/emit.ts';
 import { relsPartOf } from '@ordo/pptx-scene/opc.ts';
 import type { Job } from '@ordo/protocol';
@@ -78,6 +79,7 @@ import { baseName } from '../media/service.ts';
 import { type CpuPool, cpuPool, transferables, WorkerStartError } from '../pool.ts';
 import { type ClipFile, ClipImport, spillClips } from './clips.ts';
 import { type DeckXml, readDeckXml, spillDeckParts } from './deckParts.ts';
+import { type BakeItem, bakeMapKey, storeBakes } from './bakes.ts';
 import { displayNeeds, PictureBudget, type PictureItem, storePictures } from './pictures.ts';
 import { ImportLog, importResult, logSafe, missingFonts } from './report.ts';
 import {
@@ -244,6 +246,8 @@ class NativeImport {
   private clipIds = new Set<string>();
   /** The clips this run created (`ClipImport.created`). */
   private clipsCreated: string[] = [];
+  /** Baked pictures by their key in the drafts' part maps (M6, `bakes.ts`): source part and recipe. */
+  private readonly bakes = new Map<string, { part: string; bake: PictureBake }>();
 
   constructor(
     private readonly deps: PptxDeps,
@@ -556,7 +560,10 @@ class NativeImport {
           r.result.listed.length === n &&
           r.result.listed.every((x, i) => x.part === listed[i]!.part && x.shown === listed[i]!.shown);
         if (!same) throw new Error('the batch read the slide list differently');
-        const media = new Map(r.result.media.map((m) => [m.id, m.part]));
+        // A baked picture stands in the part map under its own key (M6, `bakes.ts`).
+        const media = new Map(
+          r.result.media.map((m) => [m.id, m.bake ? this.bakeKeyOf(m.part, m.bake) : m.part]),
+        );
         const extras = new Map((r.extras ?? []).map((e) => [e.index, e]));
         for (const s of r.result.slides) out.set(s.index, { s, media, extra: extras.get(s.index) });
       } catch (e) {
@@ -569,6 +576,13 @@ class NativeImport {
       this.ctx.progress(0.1 + (0.5 * to) / n);
     }
     return out;
+  }
+
+  /** The key a bake stands under in the part maps (`bakes.ts`), recorded with its part and recipe. */
+  private bakeKeyOf(part: string, bake: PictureBake): string {
+    const key = bakeMapKey(part, bake);
+    this.bakes.set(key, { part, bake });
+    return key;
   }
 
   /** Step 3: one draft per listed slide with its class, notes, hidden flag, transition and timing. */
@@ -710,7 +724,11 @@ class NativeImport {
       list.push(d.slide);
       byBatch.set(d.media, list);
     }
-    const sizeOf = (part: string) => sizes.get(part);
+    // A recoloured picture's need is measured with its source's size; a tile fills its box.
+    const sizeOf = (key: string) => {
+      const b = this.bakes.get(key);
+      return b ? (b.bake.tile ? undefined : sizes.get(b.part)) : sizes.get(key);
+    };
     for (const [media, slides] of byBatch) {
       if (!media.size) continue;
       const used = usedPlaceholders(slides);
@@ -728,18 +746,39 @@ class NativeImport {
       for (const [part, px] of got) needs.set(part, Math.max(px, needs.get(part) ?? 0));
     }
     const items: PictureItem[] = [];
+    const bakeItems: BakeItem[] = [];
     for (const [part, need] of needs) {
-      const file = spilled.get(part);
-      if (file) items.push({ part, file, need });
+      const b = this.bakes.get(part);
+      const file = spilled.get(b ? b.part : part);
+      if (b && file) bakeItems.push({ key: part, part: b.part, file, bake: b.bake, need });
+      else if (file) items.push({ part, file, need });
       else if (!this.done.media.some(([p]) => p === part))
-        this.warn('picture', `a picture is missing from the deck (${logSafe(part)})`);
+        this.warn('picture', `a picture is missing from the deck (${logSafe(b ? b.part : part)})`);
     }
-    if (!items.length) return new Map(this.done.media.filter(([, id]) => this.deps.lib.media.get(id)));
+    // M6: recoloured pictures and tiled fills, baked; one that cannot be shows its source picture as it is.
+    const budget = new PictureBudget();
+    const baked = await this.storeBakes(bakeItems, budget);
+    for (const [key] of baked.failed) {
+      const b = bakeItems.find((i) => i.key === key)!;
+      const plain = items.find((i) => i.part === b.part);
+      if (plain) plain.need = Math.max(plain.need, b.need);
+      else items.push({ part: b.part, file: b.file, need: b.need });
+    }
+    const withBakes = (m: Map<string, string>) => {
+      for (const [key, id] of baked.media) m.set(key, id);
+      for (const [key] of baked.failed) {
+        const id = m.get(bakeItems.find((i) => i.key === key)!.part);
+        if (id) m.set(key, id);
+      }
+      return m;
+    };
+    if (!items.length)
+      return withBakes(new Map(this.done.media.filter(([, id]) => this.deps.lib.media.get(id))));
     const res = await storePictures(this.deps, items, {
       dir: this.scratch,
       timeoutMs: this.deps.cfg.timeouts.light,
       signal: this.ctx.signal,
-      budget: new PictureBudget(),
+      budget,
       done: this.done.media,
       save: this.save,
       saveEveryMs: SAVE_EVERY_MS,
@@ -760,7 +799,32 @@ class NativeImport {
     this.ctx.log(
       `${res.media.size} of ${items.length} picture(s) stored (${res.prepared} prepared, ${res.reused} found already, ${res.resumed} resumed)`,
     );
-    return res.media;
+    return withBakes(res.media);
+  }
+
+  /** Step 4, baked pictures (M6, `bakes.ts`): each stored once, with resume pairs in `done.media`. */
+  private async storeBakes(items: BakeItem[], budget: PictureBudget) {
+    if (!items.length) return { media: new Map<string, string>(), failed: [] as [string, string][] };
+    const res = await storeBakes(this.deps, this.pool, items, {
+      dir: this.scratch,
+      timeoutMs: this.deps.cfg.timeouts.light,
+      signal: this.ctx.signal,
+      budget,
+      done: this.done.media,
+      save: this.save,
+      name: (part) =>
+        `${this.title} – ${baseName(logSafe(part.slice(part.lastIndexOf('/') + 1), 100))}`.slice(0, 200),
+      tags: ['pptx'],
+      log: (msg) => {
+        if (msg.startsWith('[warn] ')) this.warn('picture', logSafe(msg.slice(7), 400));
+        else this.log.add('info', msg);
+      },
+    });
+    if (this.ctx.signal.aborted) throw new Cancelled();
+    this.ctx.log(
+      `${res.media.size} of ${items.length} baked picture(s) stored (${res.baked} baked, ${res.reused} found already)`,
+    );
+    return res;
   }
 
   /** Steps 5-6: remap, assemble, sanitize, digest, save version 1 and queue the LibreOffice follow-up. */

@@ -34,7 +34,11 @@
  *   to the shape) and, with `crop`, into the crop together with `a:srcRect`. roundRect and ellipse clips
  *   become `radius` (an ellipse is exact for a circle); a picture outline is a stroke-only shape above it.
  *   An unrotated picture reaching past ±2× the canvas (the render clamp, design/27 §12) is cut there and
- *   the cut folded into the crop, so the clamp never squeezes it.
+ *   the cut folded into the crop, so the clamp never squeezes it. A recoloured picture (duotone, clrChange,
+ *   grayscl, biLevel, lum) and a tiled fill (one picture over the whole box) are baked (M6, `bake.ts`): their
+ *   placeholder is `pptxmedia:bake<n>`, one per part and recipe, listed in `EmitResult.media` with it.
+ * - **SmartArt** drawn from its drawing cache (M6, `smartart.ts`): its objects are a locked group (origin
+ *   role 'diagram'; text objects unlocked), and its text is never the lyric box.
  * - **Backgrounds**: a plain stretched picture known to be opaque whose aspect is known and matches a 16:9
  *   slide → `backgroundMediaId` (drawn cover-fit, on black); any other picture, one that may be transparent
  *   or of unknown size or alpha included (a spilled part without `ParseOptions.pictureSize`) → a bottom
@@ -60,6 +64,7 @@ import type {
   TextObject,
 } from '@ordo/domain';
 import { apply, boxPx, decompose, lenPx, multiply, ptPx, slideRect } from './frame.ts';
+import { bakeKey, bakeOf, type PictureBake } from './bake.ts';
 import { artInfo } from './hybrid.ts';
 import { isFooter, isTitle, masterClass } from './inherit.ts';
 import { type EmittedClip, emitMedia } from './media.ts';
@@ -84,12 +89,19 @@ import type {
 import { EMU_PER_PT } from './ir.ts';
 import { noteList } from './log.ts';
 import { scriptClasses } from './fontmap.ts';
+import { BAKED_EFFECTS, extensionOf, METAFILE_EXTENSIONS } from './picture.ts';
 import { richText } from './richtext.ts';
+import { lockDiagram } from './smartart.ts';
 
 /** The prefix of placeholder media ids. */
 export const MEDIA_PREFIX = 'pptxmedia:';
 /** The prefix of clip placeholders (`media.ts`): `pptxmedia:clip<n>`, one per clip part and trim. */
 export const CLIP_PREFIX = `${MEDIA_PREFIX}clip`;
+/**
+ * The prefix of baked pictures' placeholders (M6, `bake.ts`): `pptxmedia:bake<n>`, one per picture part and
+ * recipe, listed in `EmitResult.media` with their `bake`.
+ */
+export const BAKE_PREFIX = `${MEDIA_PREFIX}bake`;
 /** Longest text an ordo `TextObject` holds (`@ordo/domain` MAX.text). */
 export const MAX_TEXT = 20_000;
 /** Stored font sizes in logical px (design/27 §4 "Sizes"). */
@@ -145,6 +157,11 @@ export interface EmitOptions {
   clipId?: (key: string) => string;
   /** 'Import transition sounds' (default false): a slide's transition sound becomes its sound. */
   transitionSounds?: boolean;
+  /**
+   * The placeholder id of a baked picture (M6, `bake.ts`), by its source part and recipe; default
+   * `pptxmedia:bake<n>`, numbered from 1 in first-use order. Asked once per part and recipe.
+   */
+  bakeId?: (part: string, bake: PictureBake) => string;
   /** Solid backgrounds cover the whole 1920x1080 frame instead of the slide area (default true). */
   extendBackgrounds?: boolean;
   /**
@@ -208,8 +225,12 @@ export const METAFILE_MEDIA = 'pptxmedia:metafile';
 
 export interface EmitResult {
   slides: EmittedSlide[];
-  /** Every picture part the objects reference, with its media id, in first-use order. */
-  media: { id: string; part: string }[];
+  /**
+   * Every picture part the objects reference, with its media id, in first-use order; then each baked picture
+   * (M6, `BAKE_PREFIX` ids): its source part and the recipe that derives it (`bake.ts`). An importer that
+   * cannot bake one maps it to the source part's picture (drawn without its effects or tiles).
+   */
+  media: { id: string; part: string; bake?: PictureBake }[];
   /** The deck's area in 1920x1080 logical px (`source.native.slideRect`). */
   slideRect: { x: number; y: number; w: number; h: number };
   notes: string[];
@@ -225,6 +246,8 @@ interface EmitCtx {
   rich: boolean;
   lo: boolean;
   media: Map<string, string>;
+  /** The placeholder id of a baked picture (M6); undefined: nothing is baked. */
+  bake?: (part: string, bake: PictureBake) => string;
   log: (msg: string) => void;
   /** Metafile pictures set aside, with the index in the slide's objects where each would go. */
   metafiles?: { part: string; object: ImageObject; at: number }[];
@@ -250,6 +273,20 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
     }
     return id;
   };
+  const bakes = new Map<string, { id: string; part: string; bake: PictureBake }>();
+  const bake = (part: string, recipe: PictureBake) => {
+    const key = bakeKey(part, recipe);
+    let b = bakes.get(key);
+    if (!b) {
+      b = {
+        id: opts.bakeId ? opts.bakeId(part, recipe) : `${BAKE_PREFIX}${bakes.size + 1}`,
+        part,
+        bake: recipe,
+      };
+      bakes.set(key, b);
+    }
+    return b.id;
+  };
   const slides = scene.slides.map((s) => {
     const t0 = performance.now();
     const { notes, log } = noteList();
@@ -263,6 +300,7 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       rich: opts.richText ?? true,
       lo: opts.loCompat === true,
       media,
+      bake,
       log,
       textBytes: 0,
       clipId,
@@ -295,7 +333,10 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
   });
   return {
     slides,
-    media: [...media].map(([part, id]) => ({ id, part })),
+    media: [
+      ...[...media].map(([part, id]) => ({ id, part })),
+      ...[...bakes.values()].map((b) => ({ id: b.id, part: b.part, bake: b.bake })),
+    ],
     slideRect: slideRect(scene.frame),
     notes: [...scene.notes],
   };
@@ -318,6 +359,8 @@ function emitSlide(ctx: EmitCtx, s: SlideScene, spans: [number, number][] = []):
   for (const e of s.elements) {
     const at = objects.length;
     if (!e.hidden) emitElement(ctx, e, objects, texts);
+    // M6: a SmartArt drawing's objects are a locked group with editable text (`smartart.ts`).
+    if (e.diagram !== undefined) lockDiagram(e, objects, at);
     spans.push([at, objects.length]);
   }
   const media = emitMedia(ctx, s, slide, spans);
@@ -327,7 +370,8 @@ function emitSlide(ctx: EmitCtx, s: SlideScene, spans: [number, number][] = []):
     ctx.log(`more than ${MAX_OBJECTS} objects: the top ones are not drawn`);
     objects.length = MAX_OBJECTS;
   }
-  const lyric = lyricOf(texts.filter((t) => objects.includes(t.o)));
+  // A SmartArt node's text is a fragment of a diagram, never the lyric box.
+  const lyric = lyricOf(texts.filter((t) => objects.includes(t.o) && t.e.diagram === undefined));
   if (lyric) slide.lyricObjectId = lyric.id;
   return slide;
 }
@@ -492,13 +536,14 @@ function emitBackground(ctx: EmitCtx, s: SlideScene, slide: Slide): void {
       slide.backgroundMediaId = mediaOf(ctx, p.part);
       return;
     }
-    if (p.tile) ctx.log('a tiled background is drawn stretched (M3 pre-tiles it)');
-    if (p.effects?.length) ctx.log('a recoloured background picture is drawn without its recolouring');
+    if (p.tile && !(p.px && ctx.bake)) ctx.log('a tiled background of unknown size is drawn stretched');
+    if (p.effects?.some((name) => !BAKED_EFFECTS.has(name)))
+      ctx.log('a background picture is drawn without some of its effects');
     // PowerPoint and LibreOffice lay the background on white: a translucent picture, its transparent pixels
     // and the parts of the slide it leaves uncovered show white, not the frame's black.
     slide.objects.push(shape(ctx, rect, 'rect', WHITE));
     const unit: Affine = [ctx.frame.cx, 0, 0, ctx.frame.cy, 0, 0];
-    const img = pictureObject(ctx, unit, p.tile ? { ...p, crop: undefined, fillRect: undefined } : p);
+    const img = pictureObject(ctx, unit, p);
     if (img) slide.objects.push(img);
     return;
   }
@@ -522,7 +567,7 @@ function emitElement(ctx: EmitCtx, e: Element, out: SlideObject[], texts: Emitte
     if (e.picture) {
       // A metafile: the object it becomes once converted, set aside (its part stays out of `EmitResult.media`).
       const object = pictureObject(
-        { ...ctx, media: new Map(), mediaId: () => METAFILE_MEDIA },
+        { ...ctx, media: new Map(), mediaId: () => METAFILE_MEDIA, bake: undefined },
         e.xf,
         e.picture,
         e.geom,
@@ -545,7 +590,8 @@ function emitPicture(ctx: EmitCtx, e: PictureElement, out: SlideObject[]): void 
   if (decompose(e.xf).flipH) ctx.log('a flipped picture is drawn unflipped (M3)');
   if (e.reasons?.some((r) => r.startsWith('mask:')))
     ctx.log(`a picture clipped to ${e.geom} is drawn as a rect (M3)`);
-  if (e.picture.effects?.length) ctx.log('a recoloured picture is drawn without its recolouring (M3)');
+  if (e.picture.effects?.some((name) => !BAKED_EFFECTS.has(name)))
+    ctx.log('a picture is drawn without some of its effects');
   const img = pictureObject(ctx, e.xf, e.picture, e.geom, e.adj);
   if (img) out.push(img);
   const stroke = e.line ? legacyColor(e.line.fill) : undefined;
@@ -724,6 +770,10 @@ function pictureObject(
   geom = 'rect',
   adj?: [string, number][],
 ): CroppedImage | undefined {
+  // M6: a tiled fill becomes one picture of the whole box, the tiles baked into it (`bake.ts`): its stretch
+  // rectangle does not apply and its crop is the tile's. Without the picture's size it is drawn stretched.
+  const bake = pictureBake(ctx, xf, p);
+  if (p.tile) p = { ...p, crop: undefined, fillRect: undefined };
   const placed = placePicture(ctx.crop ? p : { ...p, crop: undefined });
   if (!placed) return undefined;
   const [x0, y0, x1, y1] = placed.rect;
@@ -742,7 +792,7 @@ function pictureObject(
     id: ctx.newId(),
     type: 'image',
     box,
-    mediaId: mediaOf(ctx, p.part),
+    mediaId: bake && ctx.bake ? ctx.bake(p.part, bake) : mediaOf(ctx, p.part),
     fit: 'stretch',
     opacity: bound(p.alpha ?? 1, 0, 1),
     radius: 0,
@@ -784,6 +834,17 @@ export function cutToClamp(box: Box, crop: Insets | undefined): { box: Box; crop
   const out = { l: x.cl, t: y.cl, r: x.cr, b: y.cr };
   const any = [out.l, out.t, out.r, out.b].some((v) => Math.abs(v) > 1e-9);
   return { box: { x: x.at, y: y.at, w: x.len, h: y.len, rotation: 0 }, ...(any ? { crop: out } : {}) };
+}
+
+/**
+ * The bake of a picture used in the unit square of `xf` (M6, `bake.ts`): its colour effects, and its tile grid
+ * when it is a tiled fill whose size is known (over the whole box). None for a metafile (LibreOffice converts
+ * it as the deck draws it) or when the emitter keeps no bakes.
+ */
+function pictureBake(ctx: EmitCtx, xf: Affine, p: PictureFill): PictureBake | undefined {
+  if (!ctx.bake || METAFILE_EXTENSIONS.has(extensionOf(p.part))) return undefined;
+  const d = decompose(xf);
+  return bakeOf(p, { w: d.w, h: d.h });
 }
 
 function mediaOf(ctx: EmitCtx, part: string): string {

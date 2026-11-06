@@ -691,6 +691,78 @@ export function slideCost(
   return { objects, pictures: pictures.size + (art ? 1 : 0) };
 }
 
+/** No background: `slideCost` of some elements alone. */
+const NO_BACKGROUND: Background = { fill: { kind: 'none' }, from: 'none' };
+
+/**
+ * SmartArt drawings stay whole (M6, `smartart.ts`): one is drawn natively, or by LibreOffice into the art,
+ * never partly both. A drawing with a residual element (3D, vertical text …), or one the art takes an element
+ * of (an overlap with a residual above it), goes to the art entirely ('smartart'); then, while the slide's
+ * objects pass `MAX_SLIDE_OBJECTS`, the native drawing with the most objects goes too ('budget:smartart'),
+ * so the slide is hybrid rather than picture (design/27 §15 M6). `residual` (per element, `refineSupport`)
+ * gets the reasons.
+ */
+export function wholeDiagrams(
+  ctx: SlideCtx,
+  elements: Element[],
+  background: Background,
+  residual: string[][],
+): void {
+  // By source and number: a layout's drawings are numbered in its own walk, shared by every slide.
+  const members = new Map<string, number[]>();
+  elements.forEach((e, i) => {
+    if (e.diagram === undefined) return;
+    const key = `${e.from}:${e.diagram}`;
+    const list = members.get(key) ?? [];
+    list.push(i);
+    members.set(key, list);
+  });
+  if (!members.size) return;
+  const toArt = (list: number[], why: string) => {
+    for (const i of list) {
+      const e = elements[i]!;
+      if (e.support === 'residual') continue;
+      e.support = 'residual';
+      e.reasons = [...new Set([...(e.reasons ?? []), why])];
+      residual[i] = [...residual[i]!, why];
+    }
+  };
+  // Each pass sends at least one more drawing to the art, so this ends within the number of drawings.
+  for (let pass = 0; pass <= members.size; pass++) {
+    const art = artRange(elements);
+    const inArt = new Set(art?.elements);
+    let moved = false;
+    for (const list of members.values()) {
+      const shown = list.filter((i) => !elements[i]!.hidden);
+      const some = shown.some((i) => elements[i]!.support === 'residual' || inArt.has(i));
+      const all = shown.every((i) => elements[i]!.support === 'residual');
+      if (some && !all) {
+        toArt(shown, 'smartart');
+        moved = true;
+      }
+    }
+    if (moved) continue;
+    if (slideCost(elements, background, art).objects <= MAX_SLIDE_OBJECTS) return;
+    let worst: number[] | undefined;
+    let most = 0;
+    for (const list of members.values()) {
+      if (list.every((i) => elements[i]!.support === 'residual')) continue;
+      const n = slideCost(
+        list.map((i) => elements[i]!),
+        NO_BACKGROUND,
+        undefined,
+      ).objects;
+      if (n > most) {
+        most = n;
+        worst = list;
+      }
+    }
+    if (!worst) return;
+    ctx.log(`a SmartArt graphic of ${most} objects passes the slide's budget: LibreOffice draws it`);
+    toArt(worst, 'budget:smartart');
+  }
+}
+
 /**
  * Tier, class and reasons of a slide that was read. Sets each element's `support` and `reasons` first
  * (`refineSupport`). Reasons: the tier's (features that keep the slide out of the tier below), then
@@ -699,6 +771,7 @@ export function slideCost(
 export function classifySlide(ctx: SlideCtx, elements: Element[], background: Background): Classification {
   const { tier, reasons } = tierOf(slideFeatures(ctx));
   const residual = refineSupport(ctx, elements);
+  wholeDiagrams(ctx, elements, background, residual);
   const art = artRange(elements);
   const why: string[] = [];
   for (const i of art?.elements ?? []) for (const r of residual[i]!) why.push(`art:${r}`);

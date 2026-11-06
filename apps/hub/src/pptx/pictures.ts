@@ -748,7 +748,7 @@ const FORMAT_NAME: { readonly [f: string]: string } = {
 };
 
 /** The checks every source passes before anything decodes it; throws a `PictureError`. */
-function checkSource(h: PictureHeader | undefined): asserts h is PictureHeader {
+export function checkSource(h: PictureHeader | undefined): asserts h is PictureHeader {
   const L = PICTURE_LIMITS;
   if (!h) throw new PictureError('not a picture ordo reads (unknown or malformed header)');
   if (isMetafile(h))
