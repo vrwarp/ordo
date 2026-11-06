@@ -1,6 +1,9 @@
 import type { LayerStack } from './stacks.ts';
 
-/** Video frames by slot, owned by the engine. `version[slot]` bumps on every new frame. */
+/**
+ * The video frame each slot presents this frame (chosen by the engine's FrameRing, frame-ring.ts, which owns
+ * and closes them). `version[slot]` bumps whenever the presented frame changes.
+ */
 export type VideoFrames = {
   frames: (VideoFrame | null)[];
   version: Int32Array;
@@ -29,6 +32,13 @@ export interface Compositor {
   readonly width: number;
   readonly height: number;
   draw(f: FrameInputs): void;
+  /**
+   * Upload the content of stacks that changed since their last upload, outside `draw` (design/27 §7.3).
+   * `all` false: only what the next `draw` samples (each layer's live stack, and its outgoing stack while
+   * fading); true: every stack, the armed ones too. The engine calls it with false before each draw and
+   * with true after the draw's submit. Compositors that draw bitmaps directly (Canvas 2D) have none.
+   */
+  drainUploads?(f: FrameInputs, all: boolean): void;
   /** Forget uploaded textures (after a rebuild everything is re-uploaded from the stacks' bitmaps). */
   destroy(): void;
 }

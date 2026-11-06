@@ -45,8 +45,13 @@ export type ToRender =
       cueIndex?: number;
     }
   | { t: 'flip'; layer: number; key: string; at: number; fadeMs: number; cueIndex?: number }
-  /** A presented frame of a slot, tagged with the link's slot generation it was loaded under (`load`). */
-  | { t: 'vframe'; slot: number; frame: VideoFrame; gen: number }
+  /**
+   * A presented frame of a slot, tagged with the link's slot generation it was loaded under (`load`). While
+   * the element plays, `startedAt` is the hub time of its media time 0 (its transport's) and `loopMs` the
+   * clip length when it loops: the renderer presents the newest frame due by that clock (design/27 §7.2,
+   * frame-ring.ts). Without them (paused, not started) the newest frame shows.
+   */
+  | { t: 'vframe'; slot: number; frame: VideoFrame; gen: number; startedAt?: number; loopMs?: number }
   | { t: 'vclear'; slot: number }
   /** Period of the small frame copies sent back to the main thread (0 disables). */
   | { t: 'snapshot'; everyMs: number; width: number; height: number }

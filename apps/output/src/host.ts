@@ -12,6 +12,7 @@ import {
 } from '@ordo/client';
 import { API_PREFIX } from '@ordo/protocol';
 import type { FromRender, ToAsset, ToRender } from '@ordo/renderer';
+import { vframeClock } from '@ordo/renderer/frame-ring.ts';
 import { Diagnostics } from './diagnostics.ts';
 import type {
   AudioCommand,
@@ -111,6 +112,11 @@ export class OutputHost {
   private slots: MediaSlot[] = [];
   /** The link's generation of each slot's current load (`load.gen`); its video frames carry it. */
   private slotGens = new Int32Array(6).fill(-1);
+  /**
+   * The hub time of media time 0 of each slot's transport while it is 'playing' (`apply`; NaN otherwise):
+   * the clock its video frames are presented by (design/27 §7.2 frame selection).
+   */
+  private slotStarts = new Float64Array(6).fill(Number.NaN);
   private engine?: AudioEngine;
   private engineStarted = false;
   private master = false;
@@ -181,7 +187,16 @@ export class OutputHost {
         fileUrl: (h) => this.pendingBlob.get(h)?.url ?? `${API_PREFIX}/files/${h}`,
         onFrame: video
           ? (slot, frame) =>
-              this.toRender({ t: 'vframe', slot, frame, gen: this.slotGens[slot] ?? -1 }, [frame])
+              this.toRender(
+                {
+                  t: 'vframe',
+                  slot,
+                  frame,
+                  gen: this.slotGens[slot] ?? -1,
+                  ...vframeClock(this.slots[slot]!.el, this.slotStarts[slot] ?? Number.NaN),
+                },
+                [frame],
+              )
           : undefined,
         onEnded: (s) => this.mediaEvent({ k: 'ended', slot: s.id, key: s.key }),
         onError: (s, e) => this.mediaEvent({ k: 'error', slot: s.id, key: s.key, error: e }),
@@ -577,6 +592,7 @@ export class OutputHost {
     switch (c.k) {
       case 'load': {
         const already = slot.key === c.key && slot.ready;
+        if (slot.key !== c.key) this.slotStarts[c.slot] = Number.NaN;
         this.slotGens[c.slot] = c.gen;
         this.pendingBlob.set(c.hash, { blob: c.blob, url: c.url });
         slot
@@ -594,6 +610,7 @@ export class OutputHost {
         return;
       }
       case 'apply':
+        this.slotStarts[c.slot] = c.transport.state === 'playing' ? c.transport.startedAt : Number.NaN;
         slot.apply(c.transport);
         return;
       case 'pauseAt':
@@ -606,6 +623,7 @@ export class OutputHost {
         this.routeAudio(slot, c.master, c.audio);
         return;
       case 'unload':
+        this.slotStarts[c.slot] = Number.NaN;
         slot.unload();
         return;
     }

@@ -423,6 +423,7 @@ AudioContent += { untilCue?: number; slideOwned?: boolean };
 // apps/output host protocol
 MediaCommand 'load' += { gen: number };   // the link's slot generation (SlotMirror.gen)
 ToRender 'vframe' += { gen: number };
+ToRender 'vframe' += { startedAt?: number; loopMs?: number };  // while playing: the clock frames are presented by (§7.2)
 
 // packages/renderer/src/stacks.ts, messages.ts, plan.ts
 export const SRC_SCENE = 3;
@@ -758,6 +759,9 @@ A slide whose playing `ImageObject` (`play`) is on the media layer becomes a **s
 - **Generations stop a reused slot from showing the wrong clip.** The host's `load` command carries `gen`, and every `vframe` is tagged with the generation it was loaded under. The engine keeps `frameGen[slot]` in a pre-allocated Int32Array. The compositors set the plane's "video present" bit only while `frameGen[slot] === stack.videoGen`. After Clear media, or when a playlist media cue takes the media layer, the slot can be reloaded with another clip, and the live slide then simply shows its poster. When the media layer clears, the link also sends the existing `vclear` (`render.worker.ts:166-168`, no sender today).
 - In lyric-only and hidden slide modes the boxed video is not drawn, but its sound still plays on the master. `inSlide` is not set, and the master arms the clip for sound as today.
 - **Frame selection.** `vframe` keeps a 2-deep ring per slot and presents the newest frame whose timestamp is ≤ the expected media time (hubNow − startedAt, modulo the duration when looping). This fixes the design/14:217-218 mismatch.
+  - Built as `FrameRing` (`packages/renderer/src/frame-ring.ts`). The host adds the clock to each `vframe` while the element plays: `startedAt` from the slot's 'playing' transport and `loopMs` from the element's duration when it loops. The expected time is taken on the vsync being drawn (hubNow + frameMs/2 − startedAt, the half-frame rule of flips).
+  - The newest frame shows without a clock (paused, not started), with one frame, or when it is more than 250 ms from the expected time (the host's own seek threshold): a seek the clock has not caught up with never freezes the picture. The older frame shows only while the newest is early and the older comes before it within that window, so a frame from before a seek, a loop's wrap or a reload never shows.
+  - Frames are closed when a newer one evicts them, when a frame of another generation arrives, on `vclear` and when the engine stops.
 - **Fallback adapter.** An output whose adapter reports `isFallbackAdapter` (SwiftShader) is treated as Canvas 2D.
 
 **WebGPU.**
@@ -784,6 +788,7 @@ The exact `'lighter'` crossfade (`canvas2d.ts:60-85`) is unchanged.
 `copyExternalImageToTexture` runs inside `drawLayer` today, in the rAF frame (`gpu.ts:337-338, 415-435`), and its 4K cost on a real GPU is unmeasured.
 
 - **M5:** uploads leave `draw()`. `offer` queues them, and the frame loop drains the queue after `submit`.
+  - Built as `Compositor.drainUploads(f, all)`; the queue is the stacks whose `version` differs from the uploaded one. Before each draw the frame loop uploads only what that draw samples (live stacks, and outgoing ones while fading): content flipped on the frame it changed, such as content promoted from the queue or a `refresh` of the live copy. After the submit it uploads the rest, which is armed content for a coming flip.
 - **M7:** the queue is tuned from venue measurements. Uploads go in strips (`copyExternalImageToTexture` with an origin; at most one quarter-frame, about 8 MB at 4K, per frame). A stack is not flippable before its upload completes; `LayerStack` already holds the previous content for late content (`stacks.ts:133-170`). Arming normally happens a full cue ahead.
 - **M7 tight sprites:** the asset worker sends the bounding box of the drawn content plus its offset. The GPU clears the layer texture with a render pass and copies into the sub-rect. Canvas 2D draws at the offset. On 16:9 decks the photo is on the background layer, so the slide layer usually holds only text and this removes most of the clear, transfer and upload.
 

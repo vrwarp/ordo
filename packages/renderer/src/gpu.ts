@@ -342,8 +342,6 @@ export class GpuCompositor implements Compositor {
     const outIdx = 1 - liveIdx;
     const live = ls.stacks[liveIdx]!;
     const out = ls.stacks[outIdx]!;
-    this.ensureUploaded(l, liveIdx, live);
-    this.ensureUploaded(l, outIdx, out);
     const liveOn = this.hasSource(live, f);
     const outOn = ls.fading && this.hasSource(out, f);
     if (!liveOn && !outOn) return;
@@ -419,6 +417,17 @@ export class GpuCompositor implements Compositor {
     // M5 (B, SCENE.md): a scene draws its base as a bitmap until the scene pipelines land.
     if (s.kind === SRC_BITMAP || s.kind === SRC_SCENE) return s.bitmap !== null;
     return s.videoSlot >= 0 && s.videoSlot < MAX_VIDEO_SLOTS && f.video.frames[s.videoSlot] != null;
+  }
+
+  /** See Compositor.drainUploads: `draw` samples only textures uploaded here. */
+  drainUploads(f: FrameInputs, all: boolean): void {
+    /* @hot */
+    for (let l = 0; l < f.layers.length && l < this.layerCount; l++) {
+      const ls = f.layers[l]!;
+      const liveIdx = ls.live;
+      this.ensureUploaded(l, liveIdx, ls.stacks[liveIdx]!);
+      if (all || ls.fading) this.ensureUploaded(l, 1 - liveIdx, ls.stacks[1 - liveIdx]!);
+    }
   }
 
   /** Upload a stack's bitmap into its texture when its content changed (arm time, not every frame). */

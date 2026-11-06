@@ -102,6 +102,14 @@ ImageObjects draw their Media's poster on outputs: `slideImages` (link-core) map
 **(F) frames-uploads.** `packages/renderer/src/engine.ts`: a 2-deep frame ring per slot presenting the newest
 frame whose timestamp is at most the expected media time (hubNow − startedAt, modulo the duration when
 looping); uploads leave `draw()`: `offer` queues them and the frame loop drains the queue after submit.
+Done. Frames: `FrameRing` (`frame-ring.ts`), owned by the engine (`RenderEngine.videoRing`), writes the
+presented frame of each slot into `VideoFrames` before every draw, so the compositors read `f.video` as before.
+Contract: `ToRender 'vframe'` gains `startedAt?` and `loopMs?`, which the host fills from the slot's 'playing'
+transport while the element plays (`vframeClock`), and `setVideoFrame(slot, frame, gen, startedAt, loopMs)`.
+Uploads: `Compositor.drainUploads?(f, all)`; the engine calls it with false before `draw` (what the frame
+samples) and with true after the submit (armed content). `GpuCompositor.draw` no longer uploads, so a test
+that drives a compositor by hand calls `drainUploads` before `draw` (item B's `gpu.scene.test.ts` does not
+yet; its upload helper keeps the name `ensureUploaded(l, idx, stack)`, which `drainUploads` calls).
 
 **(G) hub-media.** `apps/hub/src/store.ts` (`sniff`/`EXT_KIND`: ASF `30 26 B2 75 8E 66 CF 11` for WMV/WMA,
 MPEG-PS `00 00 01 BA`, AIFF `FORM....AIFF`), `media/service.ts` and `media/ffmpeg.ts` (`IngestOpts.trim` cut
