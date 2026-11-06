@@ -54,7 +54,7 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 | `fallback.ts`       | `pptx-lo` and `pptx-reference` jobs, `sofficeToPdf` (hardened)                             | D      |
 | `renderCopyTask.ts` | Worker side of `pptx-render-copy`: `buildRenderCopy` + spilled media → .pptx               | D      |
 | `art.ts`            | Worker side of `pptx-art`: white/black alpha and bounding-box crop                         | D      |
-| `textRepair.ts`     | `pptx-text-repair` job, `pagesOf`                                                          | G      |
+| `textRepair.ts`     | `pptx-text-repair` job, `pagesOf`, `readDeckText`, `slideBoxes`, `queueTextRepair`         | G      |
 | `reimport.ts`       | 'Re-import from PowerPoint' (M4, not this wave)                                            | M4     |
 
 Contracts already in place (the scaffold):
@@ -250,6 +250,29 @@ Files: `textRepair.ts`; `packages/domain/src/cues.ts` (`firstText`'s fallback on
   'Replace image' drops the old picture's crop.
 - Tests: a legacy picture deck with a hidden slide: after the repair, stage text, labels and search match each
   slide.
+
+Done (`apps/hub/test/pptx-repair.test.ts`, `cues.imported.test.ts`, `model.imported.test.ts`,
+`apps/operator/test/mediaUse.test.ts`):
+- `textRepair.ts`: `readDeckText` (XML parts in memory within the §12 caps, media spilled and dropped,
+  `pptx-scene` batches of 150 on the pool, never inline) and `slideBoxes` (an `EmittedSlide`'s text objects
+  plus `art.text` as `ExtractedText`, so D can build version 2's picture-class boxes with it); `pagesOf`
+  (-1 for a page no listed slide is known for: a repeated listing, past the end); `repairCandidates` (SQL
+  prefilter, deck still stored); the job, resumable through `done`, one revision per presentation by
+  `pptx-text-repair`, written against the copy read just before the save.
+- `textAligned` is a tri-state: absent = unchecked (a candidate), `true` = aligned, `false` = the repair
+  could not read the deck (boxes kept for 'Make editable', ignored by readers, not retried at every start).
+- Trigger: `PptxImports.queueTextRepair()` (one repair queued or running at a time; nothing once the
+  library is repaired), called by `ImportService`'s constructor at every start. Presentations found
+  live-locked are retried by `retryAfterService`: an unref'd 60 s check that queues the repair again once
+  one of them is unlocked (End service), since `jobs.ts` has no delayed start yet (item D).
+- `@ordo/domain` `importedText(slide)`: the one fallback rule (aligned boxes joined bottom first, else
+  `artText` on hybrid/picture slides, ≤ 20,000 characters); `firstText` (cue labels, thumbnails, lyric-only
+  bands), stage `slideText` and the operator's search use it only when the slide has no text of its own.
+- 'Pictures (LibreOffice)': `documentJob` reads its text through `readDeckText` + `pagesOf`, so new picture
+  imports are born aligned (`extractPptxText` is no longer used by the hub job).
+- `DELETE /media/:id`: 409 `media_in_use` with `presentations` and a message naming them, unless `?force=1`
+  (`presentationsUsingMedia`: any JSON string equal to the id); MediaTab confirms with the names from its
+  library copy and retries with `force` after the user agrees.
 
 ### H: import UI and route
 

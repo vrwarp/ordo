@@ -101,13 +101,16 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
 ## PPTX and PDF
 
 Hub jobs ([design/12](12-hub.md)) render pages to PNG and create a `slides`
-presentation with one image slide per page. For PPTX, `pptx-text` reads
-`ppt/slides/slide<N>.xml` with `fast-xml-parser`: for each `p:sp` with a `p:txBody`,
-collect `a:t` runs per paragraph and the `a:xfrm` offset and extent (EMU; 914400 EMU per
-inch; slide size from `ppt/presentation.xml` `p:sldSz`) scaled to the 1920x1080 logical
-canvas. Font size from `a:rPr sz` (hundredths of a point) scaled by the slide's height
-ratio. Result is stored as `Slide.imported.textBoxes` and used by the editor's "make
-editable" command. `PptxGenJS` writes PPTX only: it is used for test decks (the fidelity corpus, the
+presentation with one image slide per page. For PPTX, the text is read by `@ordo/pptx-scene` on
+the CPU pool (`apps/hub/src/pptx/textRepair.ts` `readDeckText`): each slide's text objects, placed
+with the same uniform contain mapping as the page picture (a 4:3 deck sits between empty bars), and
+given to the page that shows that slide (`pagesOf`: LibreOffice prints shown slides only; for
+pptx-preview, shown slides when the page count equals the shown count, else every listed slide).
+Result is stored as `Slide.imported.textBoxes` with `textAligned`; the editor's "make editable"
+command uses them, and labels, the stage and search fall back to them on a slide without text of its
+own (design/27 §11). Imports made before M3 matched boxes by list index, so after a hidden slide they
+held another slide's text: the one-shot `pptx-text-repair` job re-keys them, and until then no reader
+trusts them. `PptxGenJS` writes PPTX only: it is used for test decks (the fidelity corpus, the
 render tests), never for import.
 
 Before LibreOffice converts a PPTX, `pptxForRendering` removes the outline (`<a:ln>` in a
