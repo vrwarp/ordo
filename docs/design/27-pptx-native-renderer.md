@@ -506,7 +506,7 @@ As built in M3 (`packages/domain/src/size.ts`):
 - Body properties: insets (defaults 7.2/3.6 pt) → `insets`; anchor → `valign`; `wrap="none"` → `wrap:false`.
 - Autofit: `normAutofit` → `autofit:'shrink'` plus `fitScale` from fontScale/lnSpcReduction of the shape's own `a:bodyPr` (an inherited `normAutofit` keeps the policy, but its scale was fitted to the layout's prompt text, so the box shrinks from full size). `spAutoFit` keeps the stored (already grown) xfrm; the editor warns when later edits overflow it (§11).
 - Text in non-rect presets uses the preset's text rect from the POI table (M6). Before M6, rect/roundRect/ellipse text rects are computed directly; other presets are 'approx'.
-- `vert ≠ horz`, `numCol > 1` and `anchorCtr` are residual until M8.
+- `vert ≠ horz`, `numCol > 1` and `anchorCtr` are residual until M8; `anchorCtr` only when it moves text, not when every paragraph that draws something is centred (a centred line keeps its place whatever the width of the centred block).
 
 **Shapes with text.** A shape that has a fill or line *and* text becomes a `ShapeObject` plus a `TextObject` sharing `origin.group`. The editor selects, moves and transforms them as one group (§11).
 
