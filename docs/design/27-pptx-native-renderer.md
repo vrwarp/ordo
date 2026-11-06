@@ -1431,6 +1431,18 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   `PropsRule.notes`; `ApiFailure.details`; the re-import route and job stubs; `e2e/editorhelpers.ts`. The
   converter now writes `ObjectOrigin` (shape id, placeholder, role, group: a flattened group or a shape with
   its text), which M3 had left out and groups, 'Apply to similar' and the re-import need.
+- **As built, item A (text ops):** `ops/text.ts` through `actions.ts`, one undo step each: `formatRange`
+  (splits the runs at the range ends and normalises them: sorted, non-overlapping, equal neighbours merged,
+  empty runs dropped; a change past 2,000 runs is refused), `resizeRange`, `selectionStyle` (fields
+  resolved as the engine resolves them), `setParas`, `selectionParas`, `refitText` (the only op that clears
+  `fitScale`) and `themedRuns` (structural run fields and `paras` kept; `VISUAL_RUN_FIELDS` and
+  `style.fitScale` dropped unless the slide overrides them). The theme override paths for runs are
+  `runs.<field>` per visual field and `runs` for all of them, marked by `formatSelection` and
+  `resizeSelection` on a themed lyric object (`runOverrides`, `textOnSlide`). The domain `editText` needed
+  no fix: it keeps `fitScale`, and the engine fits smaller only when the edited text overflows. Tests:
+  `apps/operator/test/textOps.test.ts` (the fit rule through `layoutRich` with a fixed-width measurer),
+  `textOps.fuzz.test.ts` (10,000 random sequences of `editText`, `formatRange`, `resizeRange` and
+  `setParas`), `e2e/editor-text.spec.ts`.
 - **As built, item B (groups and locked objects):** `ops/group.ts` (the group ops, `clickSelection`, the group
   box and the member transform: centres by the group's affine, sizes by its scale along each member's axes,
   rotation turned with the group; a locked member keeps its rotation and locked art its aspect) through
@@ -1440,6 +1452,16 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   'Select the group' and 'Ungroup', the group box editor with 'Turn by'); Delete, Ctrl+D, arrows, z-order
   and Ungroup on the selection. Tests: `apps/operator/test/groupOps.test.ts` (properties and 200-step undo),
   `e2e/editor-group.spec.ts`, `e2e/ipad/group.spec.ts`.
+- **As built, item C (format UI):** `FormatBar.tsx` (the 'Text format' toolbar over the text field: font,
+  Size − / +, Bold, Italic, Underline, Strikethrough, Superscript, Subscript, Caps, Clear formatting, the
+  deck's colours first, a highlight; letter spacing, outline, shadow and language behind 'More'),
+  `ParagraphStrip.tsx` (align, list with bullets or numbers and 'Start at', level, indent, spacing, line
+  spacing, direction), `TextStyleEditor`'s `box` options (four insets, wrap, 'Shrink text to fit' with
+  'Re-fit text', the line model, direction, 'Fallback font'), `CanvasGuides.tsx` with `textFit.ts` (the
+  dashed red edge of a box whose text does not fit, laid out as the drawers lay it out, the panel's note,
+  and the area of a deck that is not 16:9) and `formatControls.tsx` (the shared toggles, radio groups and
+  the text field's refocusing). Each component is a store-bound wrapper and a props-only view. Tests:
+  `apps/operator/test/formatUi.test.ts`, `e2e/editor-format.spec.ts`.
 - **As built, item D (pictures):** `ImageObject.flipH`, `flipV` and `mask` (a `ShapeGeom`) in the schema,
   `clampObject` (`clampMask`: a preset and 10 adjust pairs) and `drawImageFit` (mirrored about the box's
   centre inside the rotation, then cut by an ellipse or a rounded-rect clip, `pictureCut` reading masks as
@@ -1470,7 +1492,7 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   `ObjectSlideOps.tsx` ('Apply to similar boxes…', 'Use as background'), the slide list's dimmed hidden
   slides, 'New slide like this' and 'Hidden'. Tests: `apps/operator/test/slideOps.test.ts` (find and replace
   property: text, run invariants and every character's style outside the matches; no distortion across
-  aspects, run once item D's `replacePicture` is in), `e2e/editor-slides.spec.ts`.
+  aspects through item D's `replacePicture`), `e2e/editor-slides.spec.ts`.
 - **As built, item F (PowerPoint card and re-import):** `apps/hub/src/pptx/reimport.ts` (`planReimport`,
   `mergeReimport` pure; the light `pptx-reimport` job). The job runs the native job's steps 1-5 without the
   save (`nativeJob.ts` `buildNative`, only the deck slides a one-slide request needs: `NativeJobEnv.only`)
@@ -1524,6 +1546,19 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   nothing takes the other whole, edits to different slides always merge, the merge is the same whichever
   side is mine), `mergeSave.test.ts` (the save flow against a fake hub, the dialog);
   `e2e/editor-merge.spec.ts` (two editor pages, port 8908).
+- **As built, the integration** (`m4/integrate`): the eight items merged in the order A-H, the scaffold's
+  stub expectations replaced by the items' own tests (`apps/operator/test/m4-scaffold.test.ts` keeps the
+  wiring and the ops' identity when they change nothing), item E's re-crop tests run on item D's
+  `replacePicture`, the 200-step undo test covers typing, formats, sizes, paragraph styles and group
+  transforms, and the specs follow item B's fieldset sections. `window.__ordo.editor` (the scaffold's
+  `inspect.ts`) is added to the diagnostics object rather than spread into a new one, which had frozen
+  the `persistence` and `capabilities` getters (the iPad storage spec caught it). The golden case `edited-slide` (a slide as
+  the editor leaves an imported church slide: a shape+text pair, a retyped bold red date in a box that keeps
+  its stored fit, raised verse numbers, verses numbered from 17, a right-to-left Hebrew line, a turned
+  caption, a cropped picture and a cropped, masked and mirrored one) is drawn by the thumbnail worker's
+  `drawSlide2D`, by the outputs' `rasterSlide` with prepared pictures (`edited-slide-output`) and by the
+  editor canvas's text rasters and node transforms (`edited-slide-editor`), all against one PNG
+  (`SAME_AS`). Every exit item below is a Playwright spec ending in `saveAndReload`.
 
 **Files.** `apps/operator/src/views/editor/ops.ts`, `ObjectPanel.tsx`, `SlidePanel.tsx`, `SlidesPanel.tsx`, `PresentationPanel.tsx`, `SlideCanvas.tsx`, `EditorView.tsx`, `editorStore.ts`; `apps/operator/src/components/TextStyleEditor.tsx`, new `FormatBar.tsx`, `ParagraphStrip.tsx`, `CropControl.tsx`; `apps/hub/src/pptx/reimport.ts`, `routes.ts`; `apps/stage/src/model.ts`, `view.ts`; `packages/domain/src/schemas.ts` (`PropsRule.notes`); `packages/client/src/api.ts`.
 

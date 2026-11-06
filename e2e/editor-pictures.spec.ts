@@ -175,7 +175,8 @@ test('crop the church photo numerically and with the handles, mask, flip and rep
     await expect(panel.getByLabel('Left')).toHaveValue(String(Math.round(now.crop!.r * 1000) / 10));
 
     // ---- Replace with a portrait picture: cover-cropped to the box, undistorted; mask and flip kept.
-    const image = page.locator('section', { has: page.locator('h4', { hasText: /^Image$/ }) });
+    // The Object panel's image section (a fieldset, so a locked picture disables it at once).
+    const image = page.locator('fieldset', { has: page.locator('h4', { hasText: /^Image$/ }) });
     await image.getByRole('button', { name: 'Replace', exact: true }).click();
     await page.getByRole('dialog').locator('.thumb', { hasText: 'portrait-3x5' }).click();
     await expect.poll(async () => (await photoNow(page, 3, photo.id)).mediaId).toBe(tall.id);

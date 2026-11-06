@@ -1,8 +1,8 @@
 /**
- * M4 scaffold (apps/operator/src/views/editor/M4.md): every M4 op exists with its contract, returns its input
- * itself while it is a stub (so the editor records no undo step for it), and is wired into the editor store;
- * the selection contract; the component stubs mount and draw nothing. Each item replaces its stub
- * expectations here with real tests as it builds its ops (as M3's `pptx-scaffold.test.ts` did).
+ * M4 scaffold (apps/operator/src/views/editor/M4.md), with every item built: each M4 op keeps its contract
+ * and returns its input itself when it changes nothing (so the editor records no undo step for it), and is
+ * wired into the editor store; the selection contract; the mounted components. Each item's own tests
+ * (textOps, groupOps, formatUi, pictureOps, slideOps, pptxCard, stageNotes, merge) test what it does.
  */
 import { ApiFailure } from '@ordo/client';
 import { DEFAULT_THEME, type ImageObject, type Presentation, type TextObject } from '@ordo/domain';
@@ -100,7 +100,7 @@ const deck = (): Presentation => ({
   archived: false,
 });
 
-describe('the M4 ops (stubs keep their input)', () => {
+describe('the M4 ops keep their input when they change nothing', () => {
   const p = deck();
   const t = announcement();
   const size = { id: 'other', width: 1000, height: 1000 };
@@ -267,7 +267,7 @@ describe('the selection (design/27 §11 item 5)', () => {
   });
 });
 
-describe('the component stubs', () => {
+describe('the mounted components', () => {
   it('item C: the format bar and the paragraph strip mount; the guides draw nothing on an empty 16:9 slide', () => {
     // formatUi.test.ts tests them.
     const range = { start: 0, end: 4 };

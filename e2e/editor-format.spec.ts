@@ -33,7 +33,7 @@ import { VERSE_TEXT } from './pptxdecks.ts';
  * - shrink to fit (the box options: the overflow edge on the canvas and the panel's note, then 'Shrink text
  *   to fit');
  * and the 4:3 guide of a deck that is not 16:9. The bar and the strip apply item A's ops (`formatRange`,
- * `setParas`): those steps pass once both items are merged. Port 8903.
+ * `setParas`). Port 8903.
  */
 const PORT = M4_PORT + 3;
 const OUT = 'test-results/editor-format';

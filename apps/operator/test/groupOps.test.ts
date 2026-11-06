@@ -575,16 +575,23 @@ describe('the selection actions (one undo step each)', () => {
     expect(ids(draft())).not.toContain('art');
   });
 
-  it('200 undo steps across rich text edits and group transforms, and redo all of them', () => {
+  it('200 undo steps across rich text edits (typing, formats, sizes, paragraphs) and group transforms, and redo all of them', () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const states: Presentation[] = [draft()];
     for (let i = 0; i < 200; i++) {
       vi.advanceTimersByTime(1000);
-      if (i % 2 === 0) {
+      const flip = Math.floor(i / 8) % 2 === 0;
+      if (i % 8 === 0) {
         const t = obj(draft(), 'tx') as TextObject;
         // A typo fix inside the bold word: its run follows the edit.
         actions.typeText('tx', `${t.text.slice(0, 3)}${i % 10}${t.text.slice(4)}`, 4);
+      } else if (i % 8 === 2) {
+        actions.formatSelection('tx', 0, 6, { fontStyle: flip ? 'italic' : 'normal' });
+      } else if (i % 8 === 4) {
+        actions.resizeSelection('tx', 7, 12, flip ? 1.25 : 0.8);
+      } else if (i % 8 === 6) {
+        actions.setParagraphs('tx', 0, 0, { align: flip ? 'left' : 'right' });
       } else {
         selectObjects(['sh', 'tx'], 'tx');
         const from = groupBox(currentObjects())!;
@@ -753,8 +760,18 @@ describe('the Object panel on a selection', () => {
     expect(html).not.toContain('data-group-note');
     expect(html.match(/<textarea[^>]*>/)![0]).not.toContain('disabled');
     expect(text(html)).toContain('Rotation');
-    expect(html).not.toMatch(/<fieldset[^>]*disabled/);
-    expect(inputs(html).filter((i) => i.includes('disabled'))).toEqual([]);
+    // The format bar waits for a selection (a caret disables it) and the paragraph strip's Level − and
+    // Indent − wait for a level or an indent to take away (formatUi.test.ts); the object's own fields are
+    // all editable.
+    const bar = html.indexOf('role="toolbar"');
+    const strip = html.indexOf('aria-label="Paragraph"');
+    const fields =
+      html.slice(0, bar) +
+      html.slice(html.indexOf('<textarea'), strip) +
+      html.slice(html.indexOf('<section>', strip));
+    expect(html).toContain('Select text to format it.');
+    expect(fields).not.toMatch(/<fieldset[^>]*disabled/);
+    expect(inputs(fields).filter((i) => i.includes('disabled'))).toEqual([]);
     // The live lock still makes everything read-only, the box included.
     const live = renderToStaticMarkup(createElement(ObjectPanel, { o: pairText(), readOnly: true }));
     expect(live.match(/<textarea[^>]*>/)![0]).toContain('disabled');

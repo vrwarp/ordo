@@ -36,6 +36,9 @@ export function inspectEditor(): EditorInspect {
 }
 
 if (typeof window !== 'undefined') {
+  // Added to the object that is there, never spread into a new one: a spread would read the getters other
+  // modules put there (`capabilities`, `persistence`) once, and keep their first values for good.
   const w = window as unknown as { __ordo?: Record<string, unknown> };
-  w.__ordo = { ...(w.__ordo ?? {}), editor: inspectEditor };
+  w.__ordo ??= {};
+  w.__ordo.editor = inspectEditor;
 }

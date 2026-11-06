@@ -362,12 +362,6 @@ const SERIES = { id: 'series', width: 1920, height: 1080 };
 const SQUARE = { id: 'square', width: 1000, height: 1000 };
 const PORTRAIT = { id: 'portrait', width: 1080, height: 1920 };
 
-/** Whether item D's picture replace is in (its stub returns its input): the re-crop tests need it. */
-const pictureReplaceBuilt = (() => {
-  const probe = image('probe', 'old');
-  return replacePicture(probe, SQUARE) !== probe;
-})();
-
 describe('slideBackground and the slides using it', () => {
   const p = deck(
     [
@@ -529,62 +523,56 @@ describe('replaceBackground: role bg pictures go through the picture replace rul
     expect(obj(one, 's2', 'b2')).toEqual(replacePicture(obj<ImageObject>(p, 's2', 'b2'), SERIES));
   });
 
-  it.runIf(pictureReplaceBuilt)(
-    'a picture of another aspect is cover-cropped to the box, never distorted',
-    () => {
-      const q = replaceBackground(p, 's1', SERIES, 'all');
-      for (const id of ['b1', 'b2'] as const) {
-        const o = obj<ImageObject>(q, id === 'b1' ? 's1' : 's2', id);
-        expect(o.mediaId).toBe('series');
-        const c = o.crop ?? { l: 0, t: 0, r: 0, b: 0 };
-        const shown = ((1 - c.l - c.r) * SERIES.width) / ((1 - c.t - c.b) * SERIES.height);
-        expect(shown).toBeCloseTo(area.w / area.h, 6);
-      }
-      expect(slidesUsingBackground(q, 'series')).toEqual(['s1', 's2']);
-    },
-  );
+  it('a picture of another aspect is cover-cropped to the box, never distorted', () => {
+    const q = replaceBackground(p, 's1', SERIES, 'all');
+    for (const id of ['b1', 'b2'] as const) {
+      const o = obj<ImageObject>(q, id === 'b1' ? 's1' : 's2', id);
+      expect(o.mediaId).toBe('series');
+      const c = o.crop ?? { l: 0, t: 0, r: 0, b: 0 };
+      const shown = ((1 - c.l - c.r) * SERIES.width) / ((1 - c.t - c.b) * SERIES.height);
+      expect(shown).toBeCloseTo(area.w / area.h, 6);
+    }
+    expect(slidesUsingBackground(q, 'series')).toEqual(['s1', 's2']);
+  });
 
-  it.runIf(pictureReplaceBuilt)(
-    'property: no distortion across aspects, on every slide using the picture',
-    () => {
-      fc.assert(
-        fc.property(
-          fc.integer({ min: 50, max: 1920 }),
-          fc.integer({ min: 50, max: 1080 }),
-          fc.integer({ min: 10, max: 8000 }),
-          fc.integer({ min: 10, max: 8000 }),
-          fc.constantFrom<'slide' | 'all'>('slide', 'all'),
-          (w, h, mw, mh, scope) => {
-            // Pictures up to 20 times wider or taller than the box (a crop keeps at least 1% of a picture).
-            const ratio = mw / mh / (w / h);
-            fc.pre(ratio <= 20 && ratio >= 1 / 20);
-            const box = { x: 0, y: 0, w, h, rotation: 0 };
-            const q = deck([
-              slide('s1', [image('b1', 'old', { origin: bg, box })]),
-              slide('s2', [image('b2', 'old', { origin: bg, box })]),
-            ]);
-            const media = { id: 'new', width: mw, height: mh };
-            const r = replaceBackground(q, 's1', media, scope);
-            for (const [s, id] of [
-              ['s1', 'b1'],
-              ['s2', 'b2'],
-            ] as const) {
-              const o = obj<ImageObject>(r, s, id);
-              if (scope === 'slide' && s === 's2') {
-                expect(o.mediaId).toBe('old');
-                continue;
-              }
-              expect(o.mediaId).toBe('new');
-              const c = o.crop ?? { l: 0, t: 0, r: 0, b: 0 };
-              const shown = ((1 - c.l - c.r) * mw) / ((1 - c.t - c.b) * mh);
-              expect(Math.abs(shown / (w / h) - 1)).toBeLessThan(1e-3);
+  it('property: no distortion across aspects, on every slide using the picture', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 50, max: 1920 }),
+        fc.integer({ min: 50, max: 1080 }),
+        fc.integer({ min: 10, max: 8000 }),
+        fc.integer({ min: 10, max: 8000 }),
+        fc.constantFrom<'slide' | 'all'>('slide', 'all'),
+        (w, h, mw, mh, scope) => {
+          // Pictures up to 20 times wider or taller than the box (a crop keeps at least 1% of a picture).
+          const ratio = mw / mh / (w / h);
+          fc.pre(ratio <= 20 && ratio >= 1 / 20);
+          const box = { x: 0, y: 0, w, h, rotation: 0 };
+          const q = deck([
+            slide('s1', [image('b1', 'old', { origin: bg, box })]),
+            slide('s2', [image('b2', 'old', { origin: bg, box })]),
+          ]);
+          const media = { id: 'new', width: mw, height: mh };
+          const r = replaceBackground(q, 's1', media, scope);
+          for (const [s, id] of [
+            ['s1', 'b1'],
+            ['s2', 'b2'],
+          ] as const) {
+            const o = obj<ImageObject>(r, s, id);
+            if (scope === 'slide' && s === 's2') {
+              expect(o.mediaId).toBe('old');
+              continue;
             }
-          },
-        ),
-        { numRuns: 500 },
-      );
-    },
-  );
+            expect(o.mediaId).toBe('new');
+            const c = o.crop ?? { l: 0, t: 0, r: 0, b: 0 };
+            const shown = ((1 - c.l - c.r) * mw) / ((1 - c.t - c.b) * mh);
+            expect(Math.abs(shown / (w / h) - 1)).toBeLessThan(1e-3);
+          }
+        },
+      ),
+      { numRuns: 500 },
+    );
+  });
 });
 
 // ---- similar boxes -------------------------------------------------------------------------------------
