@@ -32,6 +32,7 @@ export const RICH_STYLE_KEYS = [
   'fallbackFonts',
   'underline',
   'glow',
+  'paint',
 ] as const satisfies readonly (keyof TextStyle)[];
 
 /**

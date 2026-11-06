@@ -1,7 +1,15 @@
-import { LOGICAL_HEIGHT, type Rgba, type Shadow, type TextObject, rgbaCss } from '@ordo/domain';
+import {
+  type Gradient,
+  LOGICAL_HEIGHT,
+  type Rgba,
+  type Shadow,
+  type TextObject,
+  rgbaCss,
+} from '@ordo/domain';
 
 import { CLAMP, num } from '../clamp.ts';
 import { type Ctx2D, roundRect, setLang, setLetterSpacing, withRotation } from '../ctx.ts';
+import { gradientStyle } from '../geom/paint.ts';
 import { resolveRunStyle } from './itemize.ts';
 import { insetsOf } from './lines.ts';
 import { segText } from './segments.ts';
@@ -23,7 +31,8 @@ import type { FontEnv, RichLayout, RunStyle } from './types.ts';
  *    underlines and strikes included;
  * 3. glow (`style.glow`): the glyphs blurred with `shadowBlur` = radius and zero offset;
  * 4. outline: `strokeText` at 2 × width with round joins, under the fill (ordo's `width = w/2` semantics);
- * 5. fill: solid (the gradient over the box is M6);
+ * 5. fill: solid, or the box's gradient (`style.paint`, M6) for runs without their own colour: one gradient
+ *    over the box in logical px (geom/paint.ts; a radial one as a circle to the farthest corner);
  * 6. underline and strike: F/18 thick, underline centred F/10 below the baseline, strike F/4 above it,
  *    F being the segment's drawn size; no descender skipping, as LibreOffice;
  * 7. bullets and numbers: their fill. A bullet takes its paragraph's first run's shadow and outline (else
@@ -60,6 +69,8 @@ type Glyphs = {
   spacing: number;
   /** Fill colour (pass 5). */
   fill: string;
+  /** Filled with the box's gradient instead (`style.paint`, a run without its own colour). */
+  grad?: true;
   /** The colour that casts the shadow: the outline's, else the fill's (as `drawText`). */
   cast: string;
   shadow: Shadow | null;
@@ -89,6 +100,8 @@ export type PaintPlan = {
   /** Bullets and numbers, with their paragraph's first run's effects. */
   bullets: Glyphs[];
   glow: { radius: number; color: string; fill: string } | null;
+  /** The box's gradient text paint (`style.paint`), or null. */
+  paint: Gradient | null;
 };
 
 const plans = new WeakMap<RichLayout, { o: TextObject; plan: PaintPlan }>();
@@ -171,9 +184,14 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
       }
     }
     // 5. Fill.
+    let grad: ReturnType<typeof gradientStyle> | undefined;
     for (const g of plan.glyphs) {
       state.text(g);
-      state.fill(g.fill);
+      if (g.grad && plan.paint) {
+        const b = o.box;
+        grad ??= gradientStyle(ctx, plan.paint, b.w, b.h, 0, { x0: b.x, y0: b.y });
+        state.paint(grad as CanvasGradient);
+      } else state.fill(g.fill);
       ctx.fillText(g.text, g.x, g.y);
     }
     // 6. Underline and strike.
@@ -227,7 +245,15 @@ function buildPlan(o: TextObject, l: RichLayout): PaintPlan {
   const lines = l.lines.filter(
     (line) => !hidden[line.para] && line.top + line.height >= lo && line.top <= hi,
   );
-  const plan: PaintPlan = { box: null, highlights: [], glyphs: [], decorations: [], bullets: [], glow: null };
+  const plan: PaintPlan = {
+    box: null,
+    highlights: [],
+    glyphs: [],
+    decorations: [],
+    bullets: [],
+    glow: null,
+    paint: style.paint ?? null,
+  };
   if (style.fill && o.text.trim()) {
     const ins = insetsOf(style);
     const ink = l.ink;
@@ -287,7 +313,9 @@ function buildPlan(o: TextObject, l: RichLayout): PaintPlan {
         marks.add(plan.decorations, 's', i, x0, x1, y - STRIKE_RISE * F - t / 2, t, css(st.color), shadow);
       const text = segText(o.text, s.start, s.end, st.caps);
       if (!text.trim()) return;
+      const grad = plan.paint !== null && (s.run < 0 || o.runs?.[s.run]?.color === undefined);
       plan.glyphs.push({
+        ...(grad ? { grad: true as const } : {}),
         text,
         x: s.x,
         y,
@@ -438,5 +466,11 @@ class TextState {
       this.ctx.fillStyle = color;
       this.#fill = color;
     }
+  }
+
+  /** A gradient fill; the next `fill` assigns its colour again. */
+  paint(style: CanvasGradient): void {
+    this.ctx.fillStyle = style;
+    this.#fill = '';
   }
 }

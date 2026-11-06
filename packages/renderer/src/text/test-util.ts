@@ -44,6 +44,26 @@ export function testMeasurer(
   return out;
 }
 
+/** A gradient a `RecordingCtx` made: its kind, its arguments and its colour stops. */
+export type RecordedGradient = {
+  kind: 'linear' | 'radial';
+  args: number[];
+  stops: [number, string][];
+  addColorStop(at: number, color: string): void;
+};
+
+function recordedGradient(kind: 'linear' | 'radial', args: number[]): RecordedGradient {
+  const g: RecordedGradient = {
+    kind,
+    args,
+    stops: [],
+    addColorStop(at, color) {
+      g.stops.push([at, color]);
+    },
+  };
+  return g;
+}
+
 /** One recorded call on a `RecordingCtx`. */
 export type CtxOp = {
   op: string;
@@ -133,6 +153,14 @@ export function recordingCtx(em = 0.5): RecordingCtx {
     setTransform: (a: number, b: number, c: number, d: number, e: number, f: number) => {
       m = [a, b, c, d, e, f];
     },
+    transform: (a: number, b: number, c: number, d: number, e: number, f: number) => mul(a, b, c, d, e, f),
+    getTransform: () => {
+      const [a, b, c, d, e, f] = m as [number, number, number, number, number, number];
+      return { a, b, c, d, e, f };
+    },
+    setLineDash: record('setLineDash'),
+    createLinearGradient: (...args: number[]) => recordedGradient('linear', args),
+    createRadialGradient: (...args: number[]) => recordedGradient('radial', args),
     measureText: (text: string) => {
       const size = Number(/(\d+(?:\.\d+)?)px/.exec(String(state.font))?.[1] ?? 10);
       const spacing = Number.parseFloat(String(state.letterSpacing)) || 0;

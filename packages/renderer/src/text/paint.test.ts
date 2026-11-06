@@ -11,7 +11,7 @@ import {
   paintRich,
 } from './paint.ts';
 import { clampTextObject, layoutRich } from './rich.ts';
-import { type CtxOp, recordingCtx, testMeasurer } from './test-util.ts';
+import { type CtxOp, type RecordedGradient, recordingCtx, testMeasurer } from './test-util.ts';
 import type { RichLayout, Seg } from './types.ts';
 
 /** design/27 §6 "Paint passes": order, effects and scale handling on a recording context. */
@@ -302,5 +302,35 @@ describe('paintRich', () => {
     const [a, b, c, d, e, g] = f.transform;
     expect([a, b, c, d].map((v) => Math.round(v! * 1e9) / 1e9)).toEqual([0, 2, -2, 0]);
     expect([e, g].map((v) => Math.round(v!))).toEqual([300, -100]); // about (100, 50) logical, × 2
+  });
+});
+
+describe('gradient text (TextStyle.paint, M6)', () => {
+  it('fills runs without their own colour with one gradient over the box, the others in their colour', () => {
+    const paint = {
+      kind: 'linear' as const,
+      angle: 0,
+      stops: [
+        { at: 0, color: RED },
+        { at: 1, color: NAVY },
+      ],
+    };
+    const o = obj('ab cd', { paint }, { runs: [{ start: 3, end: 5, color: YELLOW }] });
+    const layout = oneLine();
+    layout.lines[0]!.segs[0]!.run = -1;
+    layout.lines[0]!.segs[1]!.run = 0;
+    const ctx = recordingCtx();
+    paintRich(ctx, o, layout, 1, LEGACY_FONT_ENV);
+    const fills = ctx.ops.filter((d) => d.op === 'fillText' && d.args[0] !== '•');
+    const g = fills[0]!.fillStyle as RecordedGradient;
+    // The box is (100, 50) 400 x 100: a 0° gradient runs across it at its middle.
+    expect(g.kind).toBe('linear');
+    expect(g.args).toEqual([100, 100, 500, 100]);
+    expect(g.stops).toEqual([
+      [0, rgbaCss(RED)],
+      [1, rgbaCss(NAVY)],
+    ]);
+    expect(fills[1]!.fillStyle).toBe(rgbaCss(YELLOW));
+    expect(paintPlan(o, layout).paint).toEqual(paint);
   });
 });

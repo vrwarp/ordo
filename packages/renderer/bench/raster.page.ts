@@ -157,6 +157,79 @@ export const LYRIC_LEGACY: Slide = {
   lyricObjectId: 'lyric',
 };
 
+/**
+ * A slide of PowerPoint shapes as the converter writes them (design/27 §15 M6): a gradient background, a
+ * panel with a soft outer shadow under the sermon text, a glowing star, a soft-edged picture-like block,
+ * arrows and dashes. Its first raster composes the effect sprites; later ones copy them from the cache.
+ */
+export const SHAPES: Slide = {
+  id: 'shapes',
+  objects: [
+    {
+      id: 'bg',
+      type: 'shape',
+      box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+      shape: 'rect',
+      fill: { r: 20, g: 30, b: 50, a: 1 },
+      opacity: 1,
+      radius: 0,
+      gradient: {
+        kind: 'linear',
+        angle: 90,
+        stops: [
+          { at: 0, color: { r: 20, g: 30, b: 50, a: 1 } },
+          { at: 1, color: { r: 60, g: 20, b: 70, a: 1 } },
+        ],
+      },
+    },
+    {
+      id: 'panel',
+      type: 'shape',
+      box: { x: 100, y: 120, w: 1720, h: 840, rotation: 0 },
+      shape: 'rect',
+      fill: { r: 255, g: 255, b: 255, a: 0.92 },
+      opacity: 1,
+      radius: 0,
+      geom: { preset: 'roundRect', adj: [['adj', 6000]] },
+      shadow: { dx: 0, dy: 12, blur: 40, color: { r: 0, g: 0, b: 0, a: 0.5 } },
+    },
+    {
+      id: 'star',
+      type: 'shape',
+      box: { x: 1600, y: 40, w: 220, h: 220, rotation: 10 },
+      shape: 'rect',
+      fill: GOLD,
+      opacity: 1,
+      radius: 0,
+      geom: { preset: 'star5' },
+      glow: { radius: 30, color: { r: 255, g: 220, b: 80, a: 0.6 } },
+    },
+    {
+      id: 'soft',
+      type: 'shape',
+      box: { x: 160, y: 640, w: 600, h: 280, rotation: 0 },
+      shape: 'rect',
+      fill: { r: 80, g: 140, b: 200, a: 1 },
+      opacity: 1,
+      radius: 0,
+      softEdge: 24,
+    },
+    {
+      id: 'arrow',
+      type: 'shape',
+      box: { x: 840, y: 700, w: 800, h: 160, rotation: 0 },
+      shape: 'line',
+      stroke: { width: 6, color: { r: 20, g: 30, b: 50, a: 1 } },
+      opacity: 1,
+      radius: 0,
+      geom: { preset: 'curvedConnector3' },
+      dash: 'dash',
+      ends: { tail: { type: 'triangle', w: 'lg', len: 'lg' } },
+    },
+    ...SERMON.objects.filter((o) => o.type === 'text'),
+  ],
+};
+
 export type Stats = { n: number; p50: number; p95: number; max: number; mean: number };
 export type BenchReport = {
   context: string;
@@ -216,6 +289,7 @@ export async function bench(
   const report: BenchReport = { context, slides: [] };
   for (const [name, slide] of [
     ['sermon (rich)', SERMON],
+    ['shapes with effects (M6)', SHAPES],
     ['autofit search (rich)', AUTOFIT],
     ['6-line lyric (rich)', LYRIC_RICH],
     ['6-line lyric (legacy)', LYRIC_LEGACY],
