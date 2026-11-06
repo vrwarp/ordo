@@ -292,7 +292,10 @@ layer is visible, else the look's holding image, as the outputs do. The Previews
 (`#/previews/<presentation>/<slide>`) picks a presentation, steps through its slides in a strip, and
 shows every look full width. Uploaded and Google fonts reach the worker as `FontFace`s in
 `self.fonts`, which WebKit supports in workers (verified in Playwright WebKit: an uploaded face loads
-and changes the measured width in an `OffscreenCanvas`).
+and changes the measured width in an `OffscreenCanvas`). The worker, the editor canvas and the look
+previews resolve families through the same font resolver as the outputs (design/27 §10): faces under
+internal names, so a face that loads late is used by the next draw; the worker then tells its client,
+which drops the cached thumbnails, and the editor redraws.
 
 ### Installable web app and lifecycle
 

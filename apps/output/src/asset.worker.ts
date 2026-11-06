@@ -8,10 +8,12 @@ import {
   DEFAULT_BITMAP_BUDGET,
   FALLBACK_FAMILIES,
   type FontLoad,
+  FontResolver,
   type FromAsset,
   SRC_BITMAP,
   type ToAsset,
   downscaleFor,
+  installFontEnv,
   jobFontFamilies,
   rasterImage,
   rasterLowerThird,
@@ -39,8 +41,6 @@ startHeartbeat(scope);
 let port: MessagePort | null = null;
 /** Jobs arrive and results go back here. */
 let linkPort: MessagePort | null = null;
-/** Families of every font file loaded so far (lower-case). */
-const loadedFamilies = new Set<string>();
 let width = 1920;
 let height = 1080;
 let token = '';
@@ -52,7 +52,21 @@ const store = new OpfsStore();
 // Decoded images by hash: LRU bounded by bytes (256 MiB) rather than count, so a photo-heavy service
 // cannot pin a gigabyte of bitmaps (review item 26). Each image is reduced to the output size on decode.
 const images = new BitmapCache<ImageBitmap>(DEFAULT_BITMAP_BUDGET, 64);
-const loadedFonts = new Set<string>();
+
+// Fonts (design/27 §10): every face under a fresh internal family name, so a face that loads late (a retry,
+// a font added during the service) is used by the next draw without restarting this worker. Text of every
+// kind resolves families through it.
+const fonts = new FontResolver({
+  set: scope.fonts,
+  data: async (f) => (await readFile(f.hash)).blob.arrayBuffer(),
+});
+installFontEnv(fonts);
+// A retry that loaded a face: tell the link, which draws again the slides that fell back for it.
+fonts.onChange((c) => {
+  if (!c.late) return;
+  const { loaded, failed } = fonts.stats();
+  post({ t: 'fonts', loaded, failed, ready: c.families });
+});
 
 let chain: Promise<void> = Promise.resolve();
 function enqueue(fn: () => Promise<void>): void {
@@ -133,28 +147,9 @@ async function image(hash: string): Promise<ImageBitmap> {
   return bmp;
 }
 
-async function loadFonts(fonts: FontLoad[]): Promise<void> {
-  const failed: string[] = [];
-  let loaded = 0;
-  const set = scope.fonts;
-  for (const f of fonts) {
-    if (loadedFonts.has(f.hash)) {
-      loaded++;
-      continue;
-    }
-    try {
-      const buf = await (await readFile(f.hash)).blob.arrayBuffer();
-      const face = new FontFace(f.family, buf, { weight: String(f.weight), style: f.style });
-      await face.load();
-      set?.add(face);
-      loadedFonts.add(f.hash);
-      loadedFamilies.add(f.family.trim().toLowerCase());
-      loaded++;
-    } catch (err) {
-      failed.push(`${f.family} ${f.weight}${f.style === 'italic' ? 'i' : ''}: ${(err as Error).message}`);
-    }
-  }
-  post({ t: 'fonts', loaded, failed });
+async function loadFonts(list: FontLoad[]): Promise<void> {
+  const r = await fonts.sync(list);
+  post({ t: 'fonts', loaded: r.loaded, failed: r.failed, ready: r.ready.length ? r.ready : undefined });
 }
 
 function surface(): OffscreenCanvasRenderingContext2D {
@@ -206,7 +201,9 @@ async function preload(
 }
 
 function fontFallbacks(job: AssetJob): string[] | undefined {
-  const missing = jobFontFamilies(job).filter((f) => !loadedFamilies.has(f) && !FALLBACK_FAMILIES.has(f));
+  const missing = jobFontFamilies(job, { fallbacks: false }).filter(
+    (f) => !fonts.isLoaded(f) && !FALLBACK_FAMILIES.has(f),
+  );
   return missing.length ? missing : undefined;
 }
 

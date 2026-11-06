@@ -135,9 +135,12 @@ export function renderSlideThumbnail(
   return canvas.transferToImageBitmap();
 }
 
-/** Families every output can draw without a loaded font file (the rasterizer's fallback chain). */
+/**
+ * Families every output can draw without a loaded font file: system and generic families of the fallback
+ * chain. Inter is not one of them (design/27 §10): it is ordo's default font but ships like any other face
+ * (uploaded to the library, or bundled with the hub), so an output without it reports the fallback.
+ */
 export const FALLBACK_FAMILIES: ReadonlySet<string> = new Set([
-  'inter',
   'segoe ui',
   'arial',
   'helvetica',
@@ -147,23 +150,38 @@ export const FALLBACK_FAMILIES: ReadonlySet<string> = new Set([
   'system-ui',
 ]);
 
-/** Every font family a raster job draws text with (clamped, deduplicated, lower-cased). */
-export function jobFontFamilies(job: AssetJob): string[] {
+/**
+ * Every font family a raster job draws text with (clamped, deduplicated, lower-cased): each text style's
+ * family and `fallbackFonts`, and for text objects also their runs' and bullets' families. With
+ * `fallbacks: false`, only the families text asks for (what the asset worker reports when not loaded: a
+ * missing fallback face matters only through them).
+ */
+export function jobFontFamilies(job: AssetJob, opts: { fallbacks?: boolean } = {}): string[] {
+  const withFallbacks = opts.fallbacks ?? true;
   const out = new Set<string>();
-  const add = (s: { fontFamily?: unknown } | undefined) => {
-    if (s && typeof s.fontFamily === 'string' && s.fontFamily.trim())
-      out.add(s.fontFamily.trim().toLowerCase().slice(0, 200));
+  const add = (family: unknown) => {
+    if (typeof family === 'string' && family.trim()) out.add(family.trim().toLowerCase().slice(0, 200));
+  };
+  const addStyle = (s: { fontFamily?: unknown; fallbackFonts?: unknown } | undefined) => {
+    if (!s) return;
+    add(s.fontFamily);
+    if (withFallbacks && Array.isArray(s.fallbackFonts)) for (const f of s.fallbackFonts) add(f);
   };
   const look = clampLook(job.kind === 'image' ? undefined : job.look);
   const rule = look.layers.slide;
   if (job.kind === 'slide') {
     if (rule.mode === 'authored')
-      for (const o of clampSlide(job.slide).objects) if (o.type === 'text' && o.text.trim()) add(o.style);
+      for (const o of clampSlide(job.slide).objects) {
+        if (o.type !== 'text' || !o.text.trim()) continue;
+        addStyle(o.style);
+        for (const r of o.runs ?? []) add(r.fontFamily);
+        for (const p of o.paras ?? []) add(p?.bullet?.fontFamily);
+      }
     if (rule.mode === 'lyricOnly') {
-      add(rule.style);
-      if (rule.nextSlide && job.nextSlide) add(rule.nextSlide.style);
+      addStyle(rule.style);
+      if (rule.nextSlide && job.nextSlide) addStyle(rule.nextSlide.style);
     }
-  } else if (job.kind === 'lowerThird') add(lowerThirdStyle(look).style);
-  else if (job.kind === 'props') for (const it of job.model.items ?? []) add(it.style);
+  } else if (job.kind === 'lowerThird') addStyle(lowerThirdStyle(look).style);
+  else if (job.kind === 'props') for (const it of job.model.items ?? []) addStyle(it.style);
   return [...out];
 }

@@ -74,6 +74,11 @@ class Thumbs {
     this.worker = w;
     w.onmessage = (ev: MessageEvent<ThumbOut>) => {
       if (isControl(ev.data) || this.worker !== w) return;
+      // A font that failed at first has loaded: thumbnails drawn before used a fallback for it.
+      if (ev.data.t === 'fonts') {
+        this.invalidate();
+        return;
+      }
       const p = this.waiting.get(ev.data.id);
       if (!p) return;
       this.waiting.delete(ev.data.id);
@@ -124,6 +129,7 @@ class Thumbs {
       family: f.family,
       weight: f.weight,
       style: f.style,
+      hash: f.file.hash,
       url: fileUrl(f.file.hash),
     }));
     const key = JSON.stringify(list);
@@ -136,6 +142,11 @@ class Thumbs {
     this.fontMsg = msg;
     this.ensure()?.postMessage(msg);
     // Fonts changed: drop cached thumbnails so text re-renders with the right faces.
+    this.invalidate();
+  }
+
+  /** Drop every cached thumbnail: the next request of each draws it again. */
+  private invalidate(): void {
     for (const url of this.cache.values()) URL.revokeObjectURL(url);
     this.cache.clear();
     this.version++;

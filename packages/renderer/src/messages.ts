@@ -159,7 +159,16 @@ export type FromAsset =
       /** `missing`: the hub answered 404/410 for the file (retried slowly, logged once). */
       cause?: 'unavailable' | 'invalid' | 'missing';
     }
-  | { t: 'fonts'; loaded: number; failed: string[] };
+  | {
+      t: 'fonts';
+      loaded: number;
+      failed: string[];
+      /**
+       * Families (lower-case) whose faces became available with this message, after a font was added or a
+       * failed load was retried: slides drawn in a fallback font for them are drawn again.
+       */
+      ready?: string[];
+    };
 
 export function fontLoads(fonts: Font[]): FontLoad[] {
   return fonts.map((f) => ({ family: f.family, weight: f.weight, style: f.style, hash: f.file.hash }));

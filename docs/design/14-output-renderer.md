@@ -194,7 +194,11 @@ Arm sequence for a cue (asset worker, then render worker):
    fill, padding, word wrap to the box, alignment, outline via `strokeText`, shadow via
    canvas shadow properties, then `transferToImageBitmap`. Fonts come from the service
    cache and are loaded into the worker's `FontFaceSet` at manifest time, so arm never
-   waits on a font.
+   waits on a font. The font resolver (design/27 §10) registers each family's faces under
+   an internal name never resolved before, so a face that loads late (a failed read
+   retried with backoff, a font added during the service) is used by the next draw
+   without restarting the worker; the worker then reports the family `ready` and the link
+   draws again in place the held slides that fell back for it.
 3. For images, `createImageBitmap` from the OPFS blob (cached bitmaps by hash and size
    are reused).
 4. Post bitmaps to the render worker, which uploads them into pre-allocated texture
@@ -319,7 +323,8 @@ distinct images per slide, finite numbers everywhere, unknown objects dropped; l
 the main look. `planFrame`/`planPreview` carry clamped copies (memoised by identity) and the rasterizer
 re-applies the cheap clamps and culls lines far outside the canvas. The asset worker bounds the decoded
 image bytes per cue (192 MiB) and reports text in a font family that is not loaded
-(`health.fontFallbacks`). Property tests (`plan.fuzz.test.ts`) feed random slides and looks within and
+(`health.fontFallbacks`; run, bullet and fallback fonts count, and so does Inter, which ships like any
+other face). Property tests (`plan.fuzz.test.ts`) feed random slides and looks within and
 far beyond the clamps: never throws, output within bounds.
 
 Arm failures are classified (review 2026-11-04 item 3). A deterministic failure (the image does not

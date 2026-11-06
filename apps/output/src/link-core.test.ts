@@ -481,6 +481,72 @@ describe('link worker core', () => {
     t.close();
   });
 
+  it('a slide drawn in a fallback font is drawn again, in place, once the font is ready (design/27 §10)', async () => {
+    const t = setup();
+    await t.core.start();
+    t.hub.emit('state', stateMsg(slideLive(0)));
+    await tick(30);
+    const job = t.toAsset.find((m) => m.t === 'job' && m.job.kind === 'slide' && m.job.cueIndex === 0);
+    expect(job).toBeDefined();
+    const key = job!.t === 'job' ? job!.job.key : '';
+    t.asset.port2.postMessage({
+      t: 'done',
+      layer: 1,
+      key,
+      ms: 1,
+      fontFallbacks: ['open sans'],
+    } satisfies FromAsset);
+    await tick(20);
+    expect(t.core.buildHealth().fontFallbacks).toEqual(['open sans']);
+    // Another family becoming ready changes nothing.
+    t.toAsset.length = 0;
+    t.asset.port2.postMessage({ t: 'fonts', loaded: 1, failed: [], ready: ['lato'] } satisfies FromAsset);
+    await tick(20);
+    expect(t.toAsset.some((m) => m.t === 'job' && m.job.key === key)).toBe(false);
+    // The family it fell back for: the held slide is drawn again as a refresh (no flip).
+    t.asset.port2.postMessage({
+      t: 'fonts',
+      loaded: 2,
+      failed: [],
+      ready: ['open sans'],
+    } satisfies FromAsset);
+    await tick(30);
+    const again = t.toAsset.find((m) => m.t === 'job' && m.job.kind === 'slide' && m.job.key === key);
+    expect(again!.t === 'job' && again!.job.kind === 'slide' ? again!.job.refresh : undefined).toBe(true);
+    expect(t.toRender.filter((m) => m.t === 'flip' && m.key === key)).toHaveLength(1);
+    expect(t.core.buildHealth().fontFallbacks).toBeUndefined();
+    t.close();
+  });
+
+  it('asks the asset worker to retry failed fonts after a complete cache fill', async () => {
+    const t = setup({ fetchNetwork: async () => new Blob([new Uint8Array(10)]) });
+    await t.core.start();
+    const font = {
+      id: 'f1',
+      family: 'Open Sans',
+      weight: 400,
+      style: 'normal' as const,
+      file: { hash: 'font1', bytes: 10, mime: 'font/ttf', path: 'fonts/font1.ttf' },
+      source: 'upload' as const,
+    };
+    t.hub.emit('state', stateMsg({ ...slideLive(0), resolved: { ...liveState().resolved!, fonts: [font] } }));
+    await tick(30);
+    const fontsMsgs = () => t.toAsset.filter((m) => m.t === 'fonts').length;
+    expect(fontsMsgs()).toBe(1);
+    t.asset.port2.postMessage({
+      t: 'fonts',
+      loaded: 0,
+      failed: ['Open Sans 400: file unavailable'],
+    } satisfies FromAsset);
+    await tick(20);
+    const c = t.core as unknown as { manifestSig: string; ensureFiles(): void };
+    c.manifestSig = '';
+    c.ensureFiles();
+    await tick(60);
+    expect(fontsMsgs()).toBe(2);
+    t.close();
+  });
+
   it('a file the hub does not have (HTTP 404) is retried slowly, counted, and said once (review F1)', async () => {
     let fetches = 0;
     const t = setup({

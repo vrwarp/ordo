@@ -235,8 +235,11 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
     media[id] = m;
   }
   if (missing.length) throw new GoLiveRejection(`Cannot go live: ${missing.slice(0, 5).join('; ')}`);
-  const families = referencedFontFamilies(Object.values(presentations), looks);
-  const fonts: Font[] = inputs.fonts().filter((f) => families.has(f.family));
+  // Family names match case-insensitively, as in CSS and the drawers' font resolver.
+  const families = new Set(
+    [...referencedFontFamilies(Object.values(presentations), looks)].map((f) => f.trim().toLowerCase()),
+  );
+  const fonts: Font[] = inputs.fonts().filter((f) => families.has(f.family.trim().toLowerCase()));
   const files = manifestFiles(Object.values(media), fonts);
   const parts = [`${playlist.id}:${playlist.rev}`];
   for (const p of Object.values(presentations)) parts.push(`${p.id}:${p.rev}`);

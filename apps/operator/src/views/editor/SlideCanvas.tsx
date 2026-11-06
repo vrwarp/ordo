@@ -13,6 +13,7 @@ import type Konva from 'konva';
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Layer, Line, Rect, Shape, Stage, Transformer } from 'react-konva';
 import { useCoarsePointer } from '../../components/pointer.ts';
+import { onFontsChanged } from '../../services/fonts.ts';
 import { stillHash } from '../../services/thumbs.ts';
 import { change, selectObject, useEditor } from './editorStore.ts';
 import { updateObject } from './ops.ts';
@@ -43,9 +44,12 @@ function useImageTick(): number {
     imageListeners.add(fn);
     const fonts = typeof document !== 'undefined' ? document.fonts : undefined;
     fonts?.addEventListener?.('loadingdone', fn);
+    // Canvas text resolves through the page's font resolver: redraw once its faces change.
+    const offFonts = onFontsChanged(fn);
     return () => {
       imageListeners.delete(fn);
       fonts?.removeEventListener?.('loadingdone', fn);
+      offFonts();
     };
   }, []);
   return n;

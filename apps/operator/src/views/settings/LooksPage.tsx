@@ -22,6 +22,7 @@ import {
   TransitionEditor,
 } from '../../components/fields.tsx';
 import { TextStyleEditor } from '../../components/TextStyleEditor.tsx';
+import { useFontGeneration } from '../../services/fonts.ts';
 import { BackgroundPicker } from '../editor/BackgroundPicker.tsx';
 import { SaveBar, useSettingsDraft } from './useSettingsDraft.tsx';
 
@@ -36,6 +37,8 @@ const SAMPLE = songFromParsed(
 
 function LookPreview({ look }: { look: Look }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const fontGen = useFontGeneration();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: redraw when the canvas fonts change
   useEffect(() => {
     const c = ref.current;
     const ctx = c?.getContext('2d');
@@ -52,7 +55,7 @@ function LookPreview({ look }: { look: Look }) {
     const s0 = SAMPLE.sections[0]!.slides[0]!;
     const s1 = SAMPLE.sections[1]!.slides[0]!;
     drawSlide2D(ctx, s0, { scale: c.width / 1920, look, isSong: true, nextSlide: s1 });
-  }, [look]);
+  }, [look, fontGen]);
   return (
     <canvas
       ref={ref}
