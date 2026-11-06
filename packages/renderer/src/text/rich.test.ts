@@ -147,7 +147,11 @@ describe("the 'ordo' line model", () => {
       ['God', 1, 30],
     ]);
     expect(segs[0]!.shift).toBeCloseTo(-6, 9);
-    expect(l.lines[0]!.height).toBe(20); // F = the first run without a baseline shift
+    // F: the paragraph's main run, raised by a larger unshifted run on the line ('God'), never by a
+    // raised or lowered one.
+    expect(l.lines[0]!.height).toBe(30);
+    const raised = obj('17 For', {}, { runs: [{ start: 0, end: 2, baseline: 0.3, sizeScale: 3 }] });
+    expect(layoutRich(m(), raised, LEGACY_FONT_ENV).lines[0]!.height).toBe(20);
   });
 });
 
