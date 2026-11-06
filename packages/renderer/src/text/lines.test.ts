@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_LYRIC_STYLE, type TextObject, type TextStyle } from '@ordo/domain';
+import { DEFAULT_LYRIC_STYLE, type TextObject, type TextPara, type TextStyle } from '@ordo/domain';
 import { LEGACY_FONT_ENV } from './fonts.ts';
 import { itemize } from './itemize.ts';
 import { layoutBox } from './lines.ts';
@@ -366,6 +366,53 @@ describe('trailing whitespace and line ends (LibreOffice 24.2, measured)', () =>
     expect(layout(obj('ab\n', {}, { paras: [null, { soft: true }] })).lines.map((x) => x.height)).toEqual([
       20, 20,
     ]);
+  });
+
+  describe('in the office model, the empty line a trailing a:br makes is single spaced', () => {
+    // 20 px text: single spacing is 24 px. LibreOffice 24.2 (40 pt Liberation Sans, measured): the trailing
+    // line is 96 px at 80 %, 90 %, 100 % and 150 %, and 80 px at an exact 40 pt.
+    const office = (text: string, paras: (TextPara | null)[], style: Partial<TextStyle> = {}) =>
+      obj(text, { lineModel: 'office', lineHeight: 1.2, ...style }, { paras });
+    /** Line heights, rounded to a millionth of a px. */
+    const heights = (o: TextObject) => layout(o).lines.map((x) => Math.round(x.height * 1e6) / 1e6);
+
+    it('whatever the proportional spacing, while exact spacing still applies', () => {
+      expect(heights(office('ab\n', [{ lineSpacing: 0.9 }, { soft: true }]))).toEqual([21.6, 24]);
+      expect(heights(office('ab\n', [{ lineSpacing: 0.8 }, { soft: true }]))).toEqual([19.2, 24]);
+      expect(heights(office('ab\n', [{ lineSpacing: 1.5 }, { soft: true }]))).toEqual([36, 24]);
+      expect(heights(office('ab\n', [{ lineSpacingPx: 40 }, { soft: true }]))).toEqual([40, 40]);
+      expect(heights(office('ab\n', [{ lineSpacingPx: 16 }, { soft: true }]))).toEqual([16, 16]);
+      // The box's spacing, for paragraphs without their own, is proportional spacing too.
+      expect(heights(office('ab\n', [null, { soft: true }], { lineHeight: 0.9 * 1.2 }))[1]).toBe(24);
+      // Single spacing puts the baseline F below the line's top.
+      const l = layout(office('ab\n', [{ lineSpacing: 1.5 }, { soft: true }]));
+      expect(l.lines[1]!.baseline - l.lines[1]!.top).toBe(20);
+    });
+
+    it('before another paragraph too, and the autofit spacing scale leaves it alone', () => {
+      const paras = [{ lineSpacing: 0.9 }, { soft: true }, { lineSpacing: 0.9 }];
+      expect(heights(office('ab\n\ncd', paras))).toEqual([21.6, 24, 21.6]);
+      const p15 = [{ lineSpacing: 1.5 }, { soft: true }, { lineSpacing: 1.5 }];
+      expect(heights(office('ab\n\ncd', p15))).toEqual([36, 24, 36]);
+      // A stored spacing scale that still fits shrinks proportional and exact spacing, not single spacing.
+      const fit = { autofit: 'shrink' as const, fitScale: { font: 1, spacing: 0.8 } };
+      const k = layout(office('ab\n', [{ lineSpacing: 0.9 }, { soft: true }], fit));
+      expect(k.spacingScale).toBe(0.8);
+      expect(k.lines[0]!.height).toBeCloseTo(21.6 * 0.8, 9);
+      expect(k.lines[1]!.height).toBe(24);
+      expect(heights(office('ab\n', [{ lineSpacingPx: 40 }, { soft: true }], fit))).toEqual([32, 32]);
+    });
+
+    it('but an empty line between two a:br and an empty paragraph keep the paragraph spacing', () => {
+      const p9 = { lineSpacing: 0.9 };
+      expect(heights(office('ab\n\ncd', [p9, { soft: true }, { soft: true }]))).toEqual([21.6, 21.6, 21.6]);
+      expect(heights(office('ab\n\ncd', [p9, p9, p9]))).toEqual([21.6, 21.6, 21.6]);
+      // Two trailing a:br: the first empty line is a middle one, the last a trailing one.
+      expect(heights(office('ab\n\n', [p9, { soft: true }, { soft: true }]))).toEqual([21.6, 21.6, 24]);
+      // The 'ordo' line model is unchanged: p × 1.2F on every line.
+      const ordo = obj('ab\n', { lineHeight: 1.2 }, { paras: [p9, { soft: true }] });
+      expect(heights(ordo)).toEqual([21.6, 21.6]);
+    });
   });
 });
 

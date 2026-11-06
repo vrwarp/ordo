@@ -692,7 +692,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
    - Proportional p ≠ 1: h = 1.2F·p·k, where k is the autofit spacing scale. The baseline is F + (h − 1.2F) when p > 1, else min(F, 0.8h).
    - Exact spacing P: h = P·k.
    - spcBef/spcAft are scaled by k and not drawn before the first paragraph or after the last.
-   - An empty paragraph takes its end-mark size; a trailing `a:br` adds a line as tall as the paragraph's end mark (measured in LibreOffice 24.2), whatever the size of the text before it.
+   - An empty paragraph takes its end-mark size; a trailing `a:br` (one that ends a paragraph, the last or one before another paragraph) adds a line as tall as the paragraph's end mark, whatever the size of the text before it, at single spacing: proportional spacing (and with it k) does not apply to it, exact spacing does. An empty line between two `a:br` and an empty paragraph keep the paragraph's spacing. Measured in LibreOffice 24.2: a 40 pt trailing line is 96 px at 80, 90 and 150 %, 80 px at an exact 40 pt.
    - Superscript and subscript are drawn at 0.58 × size (at least 4 px), shifted by baseline × size, without growing the line.
 8. **Align.**
    - justify spreads extra space over the inter-segment spaces of non-last lines; distribute also justifies the last line;

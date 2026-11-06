@@ -77,8 +77,12 @@ import type {
  *
  * Soft paragraphs continue the paragraph before them: no bullet, no space between them, and that
  * paragraph's style (alignment, indents, spacing, line spacing, main size and direction). A trailing a:br
- * (an empty soft paragraph) makes a line as tall as its own end mark (the run covering its '\n', or for the
- * last paragraph the '\n' before it), not the paragraph's main size: LibreOffice 24.2, measured.
+ * (an empty soft paragraph that no soft paragraph follows) makes a line as tall as its own end mark (the
+ * run covering its '\n', or for the last paragraph the '\n' before it), not the paragraph's main size, and
+ * in the office model at single spacing: the paragraph's proportional spacing does not apply to it (so
+ * neither does the spacing scale k, which leaves single spacing alone), its exact spacing does, as on any
+ * line. An empty line between two a:br and an empty paragraph keep the paragraph's spacing. LibreOffice
+ * 24.2, measured: at 90 % a 40 pt trailing line is 96 px high, not 86.4.
  *
  * Anchor and insets: `valign` places the laid-out text in the box less its insets (`style.insets`, else
  * `padding` on every side); text taller than that overflows equally (middle), downwards (top) or upwards
@@ -645,8 +649,15 @@ function flowParas(
       if (!items.length)
         for (const r of runs) if (!r.style.baseline) lineF = Math.max(lineF, size(r.style.sizePx, fit));
       if (!(lineF > 0)) lineF = F;
+      // That line, when it ends its paragraph (no soft paragraph follows), is single spaced in the office
+      // model whatever the paragraph's proportional spacing, so the spacing scale leaves it alone too; exact
+      // spacing still applies. An empty line between two a:br and an empty paragraph keep the paragraph's
+      // spacing. LibreOffice 24.2, measured.
+      const trailingBr = office && !items.length && para.soft && !prepared[pi + 1]?.para.soft;
       const metrics = office
-        ? officeLine(lineF, ps, k, style.lineHeight)
+        ? trailingBr
+          ? officeLine(lineF, ps.lineSpacingPx === null ? { ...ps, lineSpacing: 1 } : ps, k, OFFICE_SINGLE)
+          : officeLine(lineF, ps, k, style.lineHeight)
         : ordoLine(lineF, ps, style.lineHeight);
       if (linear) {
         y += metrics.height;
