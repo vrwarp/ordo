@@ -4,7 +4,7 @@
  * `pptx-native` job, CPU pool and media jobs.
  */
 import { mkdirSync, rmSync } from 'node:fs';
-import { copyFile, readFile } from 'node:fs/promises';
+import { copyFile, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   DEFAULT_GENERAL,
@@ -41,6 +41,8 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type JobCtx, MAX_JOB_ATTEMPTS } from '../src/jobs.ts';
 import { volumeGainDb } from '../src/media/service.ts';
+import { spillClips } from '../src/pptx/clips.ts';
+import { spillDeckParts } from '../src/pptx/deckParts.ts';
 import { nativeJob } from '../src/pptx/nativeJob.ts';
 import { PPTX_LIMITS, type PptxNativePayload, type PptxNativeResult } from '../src/pptx/shared.ts';
 import { ffmpeg, fixtures } from './fixtures.ts';
@@ -123,6 +125,10 @@ beforeAll(async () => {
     'orphan.wav': ffmpeg(m, 'orphan.wav', ['-f', 'lavfi', '-i', 'sine=frequency=530:duration=0.5']),
     'given-up.wav': ffmpeg(m, 'given-up.wav', ['-f', 'lavfi', '-i', 'sine=frequency=550:duration=0.5']),
     'hash.mp4': av('hash.mp4', 1, ['-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p']),
+    // Two seconds: bytes no other clip has (hash.mp4 is the same encode at one second).
+    'collide.mp4': av('collide.mp4', 2, ['-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p']),
+    'no-deck.wav': ffmpeg(m, 'no-deck.wav', ['-f', 'lavfi', '-i', 'sine=frequency=570:duration=0.5']),
+    'no-scratch.wav': ffmpeg(m, 'no-scratch.wav', ['-f', 'lavfi', '-i', 'sine=frequency=590:duration=0.5']),
   };
   for (const [k, f] of Object.entries(files)) bytes[k] = await readFile(f);
   bytes['garbage.mp4'] = new TextEncoder().encode('this is not a video at all, only text');
@@ -784,5 +790,141 @@ describe('pptx-native: clips the bytes or the deck could mislead (review)', () =
     expect(hub.jobs.get(jobId).state).toBe('failed');
     expect(mediaJobs(m.id)).toHaveLength(1);
     expect((await settled([m.id]))[0]!.state).toBe('ready');
+  }, 60_000);
+});
+
+describe('pptx-native: clips beside the pictures, and resumed attempts (re-review)', () => {
+  it("never overwrites or takes away a picture's spilled file: a clip part of a picture's extension, a part both", async () => {
+    // Both spills name their files entry-N<part extension> from 1: in one folder, the clip media1.png would
+    // overwrite the picture image1.png, and renaming the clip both.png would take the picture both.png away.
+    const deck = await zipDeck(
+      new Map([
+        ['ppt/media/image1.png', bytes['poster.png']!],
+        ['ppt/media/media1.png', bytes['collide.mp4']!],
+        ['ppt/media/both.png', bytes['poster.png']!],
+      ]),
+      dir,
+      'collide-parts.pptx',
+    );
+    const scratch = await hub.store.tmpDir();
+    const signal = new AbortController().signal;
+    try {
+      const pictures = await spillDeckParts(
+        deck,
+        scratch,
+        ['ppt/media/image1.png', 'ppt/media/both.png'],
+        signal,
+      );
+      const clips = await spillClips(
+        deck,
+        scratch,
+        ['ppt/media/media1.png', 'ppt/media/both.png'],
+        PPTX_LIMITS.spillBytes,
+        signal,
+      );
+      expect(pictures.files.size).toBe(2);
+      for (const file of pictures.files.values())
+        expect(Buffer.compare(await readFile(file), Buffer.from(bytes['poster.png']!))).toBe(0);
+      const video = clips.files.get('ppt/media/media1.png')!;
+      expect(video.kind).toBe('video');
+      expect(Buffer.compare(await readFile(video.file), Buffer.from(bytes['collide.mp4']!))).toBe(0);
+      expect(clips.files.get('ppt/media/both.png')).toMatchObject({ file: expect.any(String) });
+      expect(clips.files.get('ppt/media/both.png')!.kind).toBeUndefined();
+      // No clip file is a picture's, and the pictures' folder holds only the pictures and the clips' folder.
+      const pictureFiles = new Set(pictures.files.values());
+      for (const c of clips.files.values()) expect(pictureFiles.has(c.file)).toBe(false);
+      expect((await readdir(scratch)).filter((f) => !f.startsWith('clips-')).sort()).toEqual(
+        [...pictureFiles].map((f) => f.slice(scratch.length + 1)).sort(),
+      );
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+
+    // Through the job: the poster's part and a clip part of the same extension, and a clip named by the
+    // poster's own part. Both posters are stored, the first clip plays, the second is no video.
+    const parts = deckOf(
+      [
+        clipSlide([
+          { id: 4, kind: 'video', file: 'collide.mp4', part: 'collide.png', timing: { start: 'auto' } },
+        ]),
+        clipSlide([
+          { id: 4, kind: 'video', file: 'poster.png', part: 'poster.png', timing: { start: 'auto' } },
+        ]),
+      ],
+      { 'collide.png': 'collide.mp4' },
+    );
+    const { p, job } = await importDeck(parts, 'Collide.pptx');
+    const [s1, s2] = slidesOf(p) as [Slide, Slide];
+    for (const s of [s1, s2]) {
+      const [poster] = images(s);
+      expect(poster).toBeDefined();
+      expect(hub.lib.media.must(poster!.mediaId)).toMatchObject({ kind: 'image', state: 'ready' });
+    }
+    expect(hub.lib.media.must(playOf(s1)!.mediaId)).toMatchObject({
+      kind: 'video',
+      name: 'Collide – slide 1 video',
+    });
+    expect(playOf(s2)).toBeUndefined();
+    const log = job.log.join('\n');
+    expect(log).not.toContain('a picture could not be imported');
+    expect(log).toContain('[warn] slide 2: the video could not be imported (not a video or sound file)');
+    await settled([playOf(s1)!.mediaId]);
+  }, 120_000);
+
+  it('a resumed attempt that fails before its run starts (the deck gone, no scratch folder) queues the stored clips', async () => {
+    const deps = hub.imports.pptx.deps;
+    const proxy = <T extends object>(target: T, key: string, v: unknown): T =>
+      new Proxy(target, {
+        get(t, k) {
+          if (k === key) return v;
+          const x = Reflect.get(t, k, t);
+          return typeof x === 'function' ? x.bind(t) : x;
+        },
+      });
+    const ctxOf = (payload: PptxNativePayload) => {
+      const ctx: JobCtx<PptxNativePayload> = {
+        id: 'direct',
+        payload,
+        signal: new AbortController().signal,
+        log: () => {},
+        progress: () => {},
+        setPayload: (pl) => {
+          ctx.payload = pl;
+        },
+      };
+      return ctx;
+    };
+    const failing = proxy(deps.lib, 'savePresentation', () => {
+      throw new Error('stopped');
+    });
+    const cases: { file: string; resumed: Partial<typeof deps>; error: RegExp }[] = [
+      {
+        file: 'no-deck.wav',
+        resumed: { lib: proxy(deps.lib, 'getFile', () => undefined) },
+        error: /deck is missing/,
+      },
+      {
+        file: 'no-scratch.wav',
+        resumed: { store: proxy(deps.store, 'tmpDir', () => Promise.reject(new Error('no scratch folder'))) },
+        error: /no scratch folder/,
+      },
+    ];
+    for (const c of cases) {
+      const parts = deckOf([clipSlide([{ id: 4, kind: 'audio', file: c.file, timing: { start: 'auto' } }])], {
+        [c.file]: c.file,
+      });
+      const hash = await storeDeck(hub, await zipDeck(parts, dir, `${c.file}.pptx`));
+      // Attempt 1 dies after storing the clip (nothing of the process runs after it: no queue).
+      const ctx1 = ctxOf({ hash, name: `${c.file}.pptx` });
+      const dead = proxy(deps.media, 'queue', () => undefined);
+      await expect(nativeJob({ ...deps, lib: failing, media: dead })(ctx1)).rejects.toThrow(/stopped/);
+      const id = ctx1.payload.done!.clips![0]![1];
+      expect(hub.lib.media.must(id).state).toBe('uploaded');
+      expect(mediaJobs(id)).toHaveLength(0);
+      // Attempt 2 stops before NativeImport runs: the clip of attempt 1 is queued all the same.
+      await expect(nativeJob({ ...deps, ...c.resumed })(ctxOf(ctx1.payload))).rejects.toThrow(c.error);
+      expect(mediaJobs(id), c.file).toHaveLength(1);
+      expect((await settled([id]))[0]!.state).toBe('ready');
+    }
   }, 60_000);
 });

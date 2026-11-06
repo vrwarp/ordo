@@ -205,20 +205,28 @@ async function runNative(
   const save = () => ctx.setPayload({ ...pl, done: { ...done, media: [...done.media] } });
   if (done.fallbackJobId)
     return { fallback: 'libreoffice', jobId: done.fallbackJobId, reason: 'the CPU pool could not start' };
-  if (done.presentationId) {
-    const saved = deps.lib.presentations.get(done.presentationId);
-    if (saved) return resumedResult(deps, ctx, saved, done, save);
-  }
-  const file = deps.lib.getFile(pl.hash);
-  if (!file) throw new Error('The uploaded deck is missing');
-  done.presentationId ??= newId();
-  save();
-  const job = new NativeImport(deps, pool, limits, ctx, done, save);
-  const scratch = await deps.store.tmpDir();
   try {
-    return await job.run(deps.store.abs(file.path), scratch);
-  } finally {
-    await rm(scratch, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    if (done.presentationId) {
+      const saved = deps.lib.presentations.get(done.presentationId);
+      if (saved) return resumedResult(deps, ctx, saved, done, save);
+    }
+    const file = deps.lib.getFile(pl.hash);
+    if (!file) throw new Error('The uploaded deck is missing');
+    done.presentationId ??= newId();
+    save();
+    const job = new NativeImport(deps, pool, limits, ctx, done, save);
+    const scratch = await deps.store.tmpDir();
+    try {
+      return await job.run(deps.store.abs(file.path), scratch);
+    } finally {
+      await rm(scratch, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  } catch (e) {
+    // Every way a run stops before version 1 (the deck gone, no scratch folder, a failed step, a cancel):
+    // the clips an earlier attempt stored (the resume pairs) get their media jobs, never left waiting for
+    // one. `MediaService.queue` leaves a clip already queued or processed alone.
+    queueStoredClips(deps, done);
+    throw e;
   }
 }
 
@@ -279,10 +287,9 @@ class NativeImport {
     try {
       return await this.steps(deck, scratch);
     } catch (e) {
-      // Clips stored without their media job (queued with version 1): never left waiting for it, those of an
-      // earlier attempt (the resume pairs) included.
+      // Clips stored without their media job (queued with version 1): never left waiting for it. Those of an
+      // earlier attempt (the resume pairs) are queued by `runNative`, whatever stops the run.
       for (const id of this.clipsCreated) this.deps.media.queue(id);
-      queueStoredClips(this.deps, this.done);
       throw e;
     }
   }

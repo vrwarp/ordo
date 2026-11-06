@@ -198,7 +198,10 @@ Done (B), and what the other items rely on:
   `EmittedSlide.metafiles` (the metafiles the slide draws, set aside by the converter, item D), and `art` is
   `EmittedSlide.art`.
 - **Pictures** go through `displayNeeds` (with the spilled pictures' sizes) and `storePictures` (C): one
-  decode budget per import, the media hash index, resume pairs in `PptxNativeProgress.media`. The converter
+  decode budget per import, the media hash index, resume pairs in `PptxNativeProgress.media`. A picture
+  that cannot be stored or downscaled is logged by its part and ordo's own reason ('BMP picture could not
+  be converted', 'it could not be stored'); the tool's or the file system's message behind it, which can
+  name a scratch path, goes to the hub's log only (`PictureError.detail`), as a clip's does. The converter
   already keeps a background picture with alpha as a bottom image on white (A); the job does the same for a
   stored picture with alpha whose header did not tell.
 - **Fallback.** `WorkerStartError` on the scan queues the `document` job and returns `PptxNativeFallback`
@@ -485,14 +488,17 @@ scope). The converter side is `@ordo/pptx-scene` `media.ts` and `timing.ts` (its
     last use. Keys keep their part beside them (a part name may hold '#').
   - The sniff decides only that a video element holds a sound (pptxgenjs); a sound element is never made a
     video by it (an audio-only MP4 of brand isom, or a WMA whose stream list follows long metadata, sniffs
-    as video). `readHead` reads an ASF header object whole, up to 64 KB. Spilled clips are renamed
-    `clip-N.<sniffed extension>`, and ffprobe runs with `-protocol_whitelist file,pipe` like ffmpeg.
+    as video). `readHead` reads an ASF header object whole, up to 64 KB. Clips are spilled into a folder
+    of their own (every spill names its files `entry-N<part extension>` from 1, so beside the pictures a
+    clip could overwrite a picture's file, or its rename take away a part that is both), renamed
+    `clip-N.<sniffed extension>` there, and ffprobe runs with `-protocol_whitelist file,pipe` like ffmpeg.
 - **Queued after LibreOffice, never awaited.** `IngestOpts.queue: false` stores the item without its media
   job; the job queues every clip it uses (`MediaService.queue`: only an 'uploaded' item with no media job
   queued or running) in the transaction that saves version 1, right after `pptx-lo`, each created at least a
   millisecond after the job before it (`JobQueue.enqueue` `after`: jobs of a class start by creation time,
   and ids are random within a millisecond). An import that fails after storing clips queues them anyway,
-  those of an earlier attempt (the resume pairs) included, and so does the kind's give-up when a job is
+  those of an earlier attempt (the resume pairs) included, whatever stops the attempt, before its run
+  starts too (the uploaded deck gone, no scratch folder), and so does the kind's give-up when a job is
   abandoned after repeated crashes (`queueStoredClips`). `JobQueue.active` looks a job up by its payload
   field in SQLite (`jobs_kind_state` index, migration 9), with no row cap.
 - **What a slide gets.** `ImageObject.play` on the first slide video's poster, `Slide.audio` for the first

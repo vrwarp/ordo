@@ -5,7 +5,7 @@
  * imports, resume pairs, the ProPresenter path through `mediaForFile`, and migration 8 on an existing library.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { deflateSync } from 'node:zlib';
@@ -765,6 +765,62 @@ describe('ready pictures and the media hash index', () => {
     expect(third).toMatchObject({ resumed: 1, reused: 2, prepared: 0 });
     expect(hub.lib.media.list().length).toBe(count + 1);
     expect([...third.media.values()]).toEqual([...second.media.values()]);
+  });
+
+  it("logs a picture that fails by its part and ordo's own reason; the message behind it goes to the hub's log", async () => {
+    // Sources made first, with the real ffmpeg; then an ffmpeg that fails naming every path it was given,
+    // as a real one does for a file it cannot open.
+    const bmp = pic.bmp();
+    const big = ffmpeg(fx, 'unscaled.png', lavfi('color=c=teal:s=3000x2000'));
+    const bin = join(fx, 'failing-bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'ffmpeg'), '#!/bin/sh\necho "Error opening input file $*" >&2\nexit 1\n');
+    chmodSync(join(bin, 'ffmpeg'), 0o755);
+    const hubLog: { err: string; msg: string }[] = [];
+    const log = { warn: (o: { err: string }, msg: string) => hubLog.push({ err: o.err, msg }) };
+    const lines: string[] = [];
+    const items = [
+      { part: 'ppt/media/gone.png', file: join(dir, 'never-spilled.png'), need: 3840 },
+      { part: 'ppt/media/image1.bmp', file: bmp, need: 3840 },
+      { part: 'ppt/media/image2.png', file: big, need: 400 },
+    ];
+    await hub.jobs.idle();
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    let res: Awaited<ReturnType<typeof storePictures>>;
+    try {
+      res = await storePictures({ ...deps, log: log as unknown as PptxDeps['log'] }, items, {
+        ...opts(),
+        done: [],
+        save: () => {},
+        name: (part) => part,
+        tags: ['pptx'],
+        log: (msg) => lines.push(msg),
+      });
+    } finally {
+      process.env.PATH = path;
+    }
+    expect(res.failed).toEqual([
+      ['ppt/media/gone.png', 'it could not be stored'],
+      ['ppt/media/image1.bmp', 'BMP picture could not be converted'],
+    ]);
+    // The picture clients read as it is stays, unscaled, with a note that names no file.
+    expect([...res.media.keys()]).toEqual(['ppt/media/image2.png']);
+    expect(lines).toEqual([
+      '[warn] ppt/media/gone.png: it could not be stored',
+      '[warn] ppt/media/image1.bmp: BMP picture could not be converted',
+      'ppt/media/image2.png: kept as it is: it could not be downscaled',
+    ]);
+    for (const l of lines) for (const scratch of [dir, fx]) expect(l).not.toContain(scratch);
+    // The hub's log has what happened, paths and all.
+    expect(hubLog.map((h) => h.msg)).toEqual([
+      'pptx picture not stored',
+      'pptx picture not stored',
+      'pptx picture kept unscaled',
+    ]);
+    expect(hubLog[0]!.err).toContain('never-spilled.png');
+    expect(hubLog[1]!.err).toMatch(/ffmpeg exited with 1: Error opening input file .*opaque\.bmp/);
+    expect(hubLog[2]!.err).toContain('unscaled.png');
   });
 
   it('mediaForFile reuses an item with the same content and ingests anything else', async () => {

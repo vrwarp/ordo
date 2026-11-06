@@ -3,8 +3,9 @@
  * and sounds become media items that play in place, or the slide's motion background.
  *
  * 1. **Spill and sniff** (`spillClips`, after the pictures): the scan's clip parts (`SceneScan.clips`, at
- *    most `PPTX_LIMITS.clips`) are spilled within what the pictures left of the spill budget, and each is
- *    sniffed (`store.ts` `sniff`): video or sound, which the batches use (`SceneTaskInput.mediaKinds`).
+ *    most `PPTX_LIMITS.clips`) are spilled within what the pictures left of the spill budget, into a folder
+ *    of their own, and each is sniffed (`store.ts` `sniff`): video or sound, which the batches use
+ *    (`SceneTaskInput.mediaKinds`).
  * 2. **Ingest** (`ClipImport.apply`, before the pictures, so a failed motion background's poster is prepared
  *    like any picture): one media item per part and trim (`clipKey`), through the media hash index
  *    (`clipForFile`: hash plus trim, a failed item never reused), tagged `pptx`, named
@@ -25,7 +26,7 @@
  *
  * Resume pairs [`clipKey`, media id] (`PptxNativeProgress.clips`) make a re-run reuse what it stored.
  */
-import { copyFile, link, rename } from 'node:fs/promises';
+import { copyFile, link, mkdtemp, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ImageObject, Slide } from '@ordo/domain';
 import { CLIP_PREFIX, type EmittedClip } from '@ordo/pptx-scene';
@@ -44,7 +45,10 @@ export type ClipFile = { file: string; kind?: 'video' | 'audio' };
 
 /**
  * Step 1: the scan's clip parts spilled within `bytesLeft` of the spill budget and sniffed: [part, file and
- * kind]; `skipped` counts parts past the limits.
+ * kind]; `skipped` counts parts past the limits. The files go in a new folder under `dir`: every spill names
+ * its files `entry-N<part's extension>` from 1 (`extractZip`), so clips spilled beside the pictures would
+ * overwrite a picture whose part has the same extension, and the rename below would take away the picture
+ * of a part that is both a picture and a clip.
  */
 export async function spillClips(
   deck: string,
@@ -54,7 +58,8 @@ export async function spillClips(
   signal: AbortSignal,
 ): Promise<{ files: Map<string, ClipFile>; skipped: number }> {
   if (!parts.length) return { files: new Map(), skipped: 0 };
-  const spilled = await spillDeckParts(deck, dir, parts, signal, {
+  const own = await mkdtemp(join(dir, 'clips-'));
+  const spilled = await spillDeckParts(deck, own, parts, signal, {
     parts: PPTX_LIMITS.clips,
     bytes: bytesLeft,
   });
@@ -68,7 +73,7 @@ export async function spillClips(
       if (s?.kind === 'video' || s?.kind === 'audio') kind = s.kind;
       // Named by what the bytes are, never by the part (a part named *.m3u8 or *.sdp must not pick
       // ffprobe's demuxer when the clip's length is probed).
-      const named = join(dir, `clip-${++n}.${kind ? s!.ext : 'bin'}`);
+      const named = join(own, `clip-${++n}.${kind ? s!.ext : 'bin'}`);
       await rename(spilledFile, named);
       file = named;
     } catch {

@@ -15,7 +15,9 @@
  *   (`mediaParts.ts`): by the prepared bytes, and by the source part's hash with a size that fits the need,
  *   so a second import of the same deck prepares nothing. The original stays in the stored deck;
  * - `storePictures` runs a whole import's pictures with resume pairs [part, media id] that the job persists
- *   (`ctx.setPayload`), so a re-queued job neither prepares nor stores a picture twice.
+ *   (`ctx.setPayload`), so a re-queued job neither prepares nor stores a picture twice. What it logs for the
+ *   job log and the import log names the part and ordo's own reason only: a tool's or the file system's
+ *   message can name a scratch path, so it goes to the hub's log (`PictureError.detail`), as a clip's does.
  *
  * Every picture is untrusted: headers are read with bounded reads (`PICTURE_LIMITS.scanBytes`), ffmpeg reads
  * a picture only through its checked format's demuxer and decodes within the pixels its header claimed.
@@ -25,6 +27,7 @@ import { join } from 'node:path';
 import type { Media, Slide } from '@ordo/domain';
 import { newId } from '@ordo/domain';
 import { type PictureInputFormat, pictureFile } from '../media/ffmpeg.ts';
+import { errorMessage } from '../errors.ts';
 import { DECODE_LIMITS } from '../media/service.ts';
 import { hashFile } from '../store.ts';
 import { findMedia, MediaHashes } from './mediaParts.ts';
@@ -105,11 +108,16 @@ export function isMetafile(h: PictureHeader): boolean {
   return METAFILE_FORMATS.has(h.format);
 }
 
-/** A picture that is not prepared: refused (unknown, malformed, over a limit) or a metafile for LibreOffice. */
+/**
+ * A picture that is not prepared: refused (unknown, malformed, over a limit) or a metafile for LibreOffice.
+ * `message` is ordo's own reason, which a job log may show; `detail` is the tool's or the file system's
+ * message behind it, which can name a scratch path: for the hub's log only.
+ */
 export class PictureError extends Error {
   constructor(
     message: string,
     readonly route: 'refused' | 'metafile' = 'refused',
+    readonly detail?: string,
   ) {
     super(message);
   }
@@ -717,6 +725,11 @@ export type PrepareOptions = {
   signal: AbortSignal;
   /** Shared by the pictures of one import (default: a budget of its own). */
   budget?: PictureBudget;
+  /**
+   * Where the message behind a picture kept unscaled goes (the tool's or the file system's: it can name a
+   * scratch path, so it is never one of the picture's notes). Default: nowhere.
+   */
+  detail?: (message: string) => void;
 };
 
 const READY_FORMATS: ReadonlySet<PictureHeader['format']> = new Set(['png', 'jpeg', 'webp']);
@@ -971,10 +984,18 @@ async function prepareChecked(
   } catch (e) {
     if (out.path) await rm(out.path, { force: true });
     if (opts.signal.aborted) throw e;
-    const why = (e as Error).message.slice(0, 300);
+    // ordo's own reasons may reach a job log; a tool's or the file system's message, which can name the
+    // scratch folder, travels as the detail for the hub's log.
+    const own = e instanceof PictureError ? e.message : undefined;
+    const detail = e instanceof PictureError ? e.detail : errorMessage(e).slice(0, 300);
     // Only the downscale failed: a picture clients read as it is stays, unscaled.
-    if (passable) return keep(`it could not be downscaled (${why})`);
-    throw e instanceof PictureError ? e : new PictureError(`${name} picture could not be converted: ${why}`);
+    if (passable) {
+      if (detail) opts.detail?.(detail);
+      return keep(`it could not be downscaled${own ? ` (${own})` : ''}`);
+    }
+    throw e instanceof PictureError
+      ? e
+      : new PictureError(`${name} picture could not be converted`, 'refused', detail);
   } finally {
     for (const f of scratch) await rm(f, { force: true });
   }
@@ -1180,12 +1201,15 @@ export async function storePictures(
         if (resumed.delete(item.part)) res.resumed++;
         continue;
       }
+      // The hub's log: a tool's or the file system's message, which can name a scratch path.
+      const hubLog = (err: string, msg: string) => deps.log.warn({ part: item.part, err }, msg);
       try {
         const got = await pictureFor(deps, item.file, item.need, {
           ...opts,
           budget,
           name: opts.name(item.part),
           tags: opts.tags,
+          detail: (err) => hubLog(err, 'pptx picture kept unscaled'),
         });
         res.media.set(item.part, got.media.id);
         opts.done.push([item.part, got.media.id]);
@@ -1197,7 +1221,10 @@ export async function storePictures(
         if (opts.signal.aborted) throw e;
         if (e instanceof PictureError && e.route === 'metafile') res.metafiles.push(item.part);
         else {
-          const why = (e as Error).message.slice(0, 300);
+          // The job log and the import log get the part and ordo's own reason only, as a clip's failure does.
+          const detail = e instanceof PictureError ? e.detail : errorMessage(e);
+          if (detail) hubLog(detail.slice(0, 2_000), 'pptx picture not stored');
+          const why = e instanceof PictureError ? e.message.slice(0, 300) : 'it could not be stored';
           res.failed.push([item.part, why]);
           opts.log(`[warn] ${item.part}: ${why}`);
         }

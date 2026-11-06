@@ -3,9 +3,9 @@
  * M3 item B): crafted decks are zipped, stored like an upload and imported by the `pptx-native` job on the
  * real CPU pool, with item C's picture preparation.
  */
-import { mkdirSync, rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { Presentation, type Slide, slideContent } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import { digestOf } from '@ordo/pptx-scene/emit.ts';
@@ -653,4 +653,57 @@ describe('pptx-native: pool batches, budgets and fallbacks', () => {
     expect(ownMedia()).toHaveLength(mediaCount);
     expect(hub.lib.presentations.list()).toHaveLength(presCount);
   });
+});
+
+describe('pptx-native: picture failures in the logs (re-review)', () => {
+  it('names a picture that fails by its part and the reason, never a scratch path, in the job log and the import log', async () => {
+    const media = join(dir, 'media');
+    const lavfi = (c: string) => ['-f', 'lavfi', '-i', c, '-frames:v', '1'];
+    const bmp = await readFile(ffmpeg(media, 'fails.bmp', lavfi('color=c=olive:s=64x48')));
+    // Far larger than its one-inch box needs: downscaled, or kept as it is when that fails.
+    const large = await readFile(ffmpeg(media, 'unscaled.png', lavfi('color=c=teal:s=3000x2000')));
+    const spec: DeckSpec = {
+      slides: [
+        {
+          shapes:
+            pic({ id: 2, x: IN, y: IN, cx: 2 * IN, cy: 1.5 * IN, rId: 'rId2' }) +
+            pic({ id: 3, x: 4 * IN, y: IN, cx: IN, cy: (2 * IN) / 3, rId: 'rId3' }) +
+            textBox(4, 'Offering', 4),
+          rels: [imageRel('rId2', 'image1.bmp'), imageRel('rId3', 'image2.png')],
+        },
+      ],
+      media: { 'ppt/media/image1.bmp': bmp, 'ppt/media/image2.png': large },
+    };
+    // An ffmpeg that fails naming every path it was given, as a real one does for a file it cannot open.
+    const bin = join(dir, 'failing-bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'ffmpeg'), '#!/bin/sh\necho "Error opening input file $*" >&2\nexit 1\n');
+    chmodSync(join(bin, 'ffmpeg'), 0o755);
+    const scratchRoot = dirname(await hub.store.tmpDir());
+    // The last test of the file: LibreOffice follow-ups of earlier imports may still run meanwhile.
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    let imported: Awaited<ReturnType<typeof importDeck>>;
+    try {
+      imported = await importDeck(buildDeck(spec), 'Pictures fail.pptx');
+    } finally {
+      process.env.PATH = path;
+    }
+    const { job, p } = imported;
+    const jobLog = job.log.join('\n');
+    const importLog = p.source!.log!;
+    for (const log of [jobLog, importLog])
+      expect(log).toContain(
+        '[warn] a picture could not be imported: ppt/media/image1.bmp: BMP picture could not be converted',
+      );
+    expect(importLog).toContain('ppt/media/image2.png: kept as it is: it could not be downscaled');
+    for (const log of [jobLog, importLog]) {
+      expect(log).not.toContain(scratchRoot);
+      expect(log).not.toContain('entry-');
+      expect(log).not.toContain('Error opening input file');
+    }
+    // The picture that could not be converted is left out; the one kept as it is stays.
+    const [s1] = slidesOf(p) as [Slide];
+    expect(s1.objects.filter((o) => o.type === 'image')).toHaveLength(1);
+  }, 60_000);
 });
