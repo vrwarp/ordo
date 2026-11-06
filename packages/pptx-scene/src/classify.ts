@@ -15,7 +15,9 @@
  *
  * **Class**: native without residual elements; hybrid with them, the residuals and what they overlap baked
  * into one art picture over the range [Rmin, Rmax]; picture when the objects or pictures left after the
- * split exceed the slide budgets (or the slide could not be read, `index.ts`).
+ * split exceed the slide budgets (or the slide could not be read, `index.ts`). A table read natively
+ * (`tables.ts`, M6) counts the objects it emits; tables that would take the slide past the object budget go
+ * to the art first (`budget:table`), so the slide becomes hybrid rather than picture.
  *
  * Every walk here is iterative and linear in the size of the parsed tree; deck strings are only compared,
  * never used as plain-object keys.
@@ -560,7 +562,7 @@ export function refineSupport(ctx: SlideCtx, elements: Element[]): string[][] {
     if (e.kind === 'shape' && e.node) nodes = [e.node];
     else {
       const c = candidatesOf(rootOf(ctx, e.from))?.get(e.shapeId);
-      if (c) nodes = e.kind === 'residual' ? c.any : c[e.kind];
+      if (c) nodes = e.kind === 'residual' || e.kind === 'table' ? c.any : c[e.kind];
     }
     const residual: string[] = [];
     const approx: string[] = [];
@@ -686,9 +688,34 @@ export function slideCost(
     const part = picturePart(e);
     if (part !== undefined) pictures.add(part);
     if (e.kind === 'picture') objects++;
+    else if (e.kind === 'table') objects += e.objects;
     else objects += (e.fill.kind !== 'none' || e.line ? 1 : 0) + (e.text ? 1 : 0);
   });
   return { objects, pictures: pictures.size + (art ? 1 : 0) };
+}
+
+/**
+ * Tables over the object budget go to the art (M6, design/27 §15: no slide passes `MAX_SLIDE_OBJECTS`
+ * without becoming hybrid): while the slide would pass it, its native table with the most objects is made
+ * residual ('budget:table'), LibreOffice drawing it. `residual` (per element, `refineSupport`) gets the
+ * reason.
+ */
+function fitTables(ctx: SlideCtx, elements: Element[], background: Background, residual: string[][]): void {
+  for (;;) {
+    if (slideCost(elements, background, artRange(elements)).objects <= MAX_SLIDE_OBJECTS) return;
+    let worst = -1;
+    elements.forEach((e, i) => {
+      if (e.kind !== 'table' || e.hidden || e.support === 'residual') return;
+      const w = elements[worst];
+      if (worst < 0 || (w?.kind === 'table' && e.objects > w.objects)) worst = i;
+    });
+    const e = elements[worst];
+    if (e?.kind !== 'table') return;
+    ctx.log(`a table of ${e.objects} objects passes the slide's budget: LibreOffice draws it`);
+    e.support = 'residual';
+    e.reasons = [...(e.reasons ?? []), 'budget:table'];
+    residual[worst] = ['budget:table'];
+  }
 }
 
 /**
@@ -699,6 +726,7 @@ export function slideCost(
 export function classifySlide(ctx: SlideCtx, elements: Element[], background: Background): Classification {
   const { tier, reasons } = tierOf(slideFeatures(ctx));
   const residual = refineSupport(ctx, elements);
+  fitTables(ctx, elements, background, residual);
   const art = artRange(elements);
   const why: string[] = [];
   for (const i of art?.elements ?? []) for (const r of residual[i]!) why.push(`art:${r}`);

@@ -39,6 +39,7 @@ import {
 } from '@ordo/pptx-scene';
 import type { FaceRequest } from '@ordo/renderer/text/types.ts';
 import type { Browser, Page } from '@playwright/test';
+import { hostFace } from './faces.ts';
 import { type CompatRule, compatRules, drawingKey } from './compat.ts';
 import { deckTextFeatures, textFeatures } from './features.ts';
 import { hostFonts, type ScriptFace } from './fonts.ts';
@@ -234,7 +235,11 @@ export async function convertDeck(
     t0 = performance.now();
     const spilled = caseless(zip.onDisk);
     const fileOf = (part: string) => zip.onDisk.get(part) ?? spilled.get(part.toLowerCase());
-    const scene = parseDeck(zip.files, { pictureSize: (part) => spilledPictureSize(fileOf(part)) });
+    const scene = parseDeck(zip.files, {
+      pictureSize: (part) => spilledPictureSize(fileOf(part)),
+      // Table rows grow to their text measured with the faces the page draws it with.
+      fontFace: hostFace,
+    });
     out.parseMs = performance.now() - t0;
     t0 = performance.now();
     const emitted: EmitResult = emitSlides(scene);

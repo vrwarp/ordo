@@ -237,7 +237,7 @@ export const ObjectOrigin = z.object({
   src: z.string().max(16),                                          // 'pptx'
   shapeId: z.number().int().min(0).max(2_147_483_647).optional(),   // p:cNvPr id
   ph: z.string().max(40).optional(),                                // 'title' | 'body' | 'body:2' | 'subTitle' …
-  role: z.string().max(20).optional(),  // title|body|text|picture|shape|bg|deco|poster|cell|art (string: can grow)
+  role: z.string().max(20).optional(),  // title|body|text|picture|shape|bg|deco|poster|cell|grid|art (string: can grow)
   group: z.number().int().min(0).max(100_000).optional(),           // flattened group or shape+text pair: selected together
 });
 const common = { origin: ObjectOrigin.optional(), locked: z.boolean().optional() }; // locked: move/resize/delete/z only
@@ -585,7 +585,7 @@ As built in M3 (`packages/domain/src/size.ts`):
   - sp3d with a non-zero bevel or extrusion (a no-op scene3d/sp3d is ignored);
   - a real `prstTxWarp` (not textNoShape);
   - vertical text (until M8);
-  - tables (until M6);
+  - tables (until M6; since M6 only those of more than 60 cells, with vertical cell text, or past the slide's object budget);
   - a metafile that fails conversion.
 - **Approx** (drawn natively, logged): reflection, inner shadow, soft edge on pictures before M8, kerning differences, unknown transitions.
 - Everything else is native.
@@ -1528,6 +1528,30 @@ Also:
   - merges;
   - built-in table styles (port of LibreOffice `predefined-table-styles.cxx` as a separate MPL-2.0 file);
   - tables over 60 cells stay residual.
+  - *As built (M6 wave 2, `packages/pptx-scene/src/tables.ts`, `tablestyles.ts`, `metrics.ts`; README "M6 wave
+    2: tables"):* cell fills, the table background and the lines are locked `ShapeObject`s of today's fields
+    (role `grid`), each cell a rich `TextObject` (role `cell`; an empty cell an empty one), all in the table's
+    `origin.group`. Style parts apply in `CT_TableStyle` order, lines by part region; a cell's own lines merge
+    property by property and the wider of two neighbours' wins (LibreOffice's rules). The 74 built-in styles
+    draw every line 1 pt and bold heads, as PowerPoint defines them (LibreOffice's table leaves most widths
+    at 0 and makes only Light Style 1 bold). Diagonal lines are not drawn (noted). A table with vertical cell
+    text stays residual (until M8), and so does a table that would take its slide past 150 objects
+    (`budget:table`, the slide hybrid). Rows grow to their text measured with the faces' advances
+    (`ParseOptions.fontFace`: the hub's library files, `apps/hub/src/pptx/faces.ts`; fontconfig's in the
+    harness), estimated widths when a family has none (noted). A cell's lines are spaced by its face's line
+    height (`hhea` ascender less descender), not the office model's 1.2: measured with a probe deck,
+    LibreOffice 24.2 sets cell lines of Carlito 1.215-1.225 × the size apart (6-20 pt), of Liberation Sans
+    1.115, and PowerPoint's new rows of 18 pt Calibri are 29.2 pt (22 pt of line and 7.2 pt of margins).
+  - *Measured* (`--engine native --lo-compat`, the 30 worship decks of the validation suite with the `tables`
+    feature, 14 of them `tableMerge`, LibreOffice 24.2 pictures; deck means with LibreOffice's policies / ordo's):
+    tables 0.605 / 0.602 (residual tables, the previous converter: 0.535 / 0.533; pptx-preview 0.51),
+    tableMerge 0.431 / 0.431 (0.351; pptx-preview 0.36). 29 slides draw their tables natively, 13 are hybrid
+    (7 decks of Bible-chart tables of 72-135 cells, and budget), 2 are picture class (their cells' text passes
+    64 KB). The harness does not draw a hybrid slide's art; with LibreOffice's pixels pasted into each art
+    box (an estimate of version 2) the means are 0.723 and 0.638, short of the exit's 0.75: the native tables
+    of these decks are dense charts of 6-9 pt text, where a line wrapped one character apart or rows 1-2 %
+    taller than LibreOffice's move every row below and the slide's SSIM falls to 0.15-0.48 though the drawing
+    matches LibreOffice's to the eye.
 - SmartArt from its drawing cache as a locked group.
 - Recolour and tile bakes.
 - Editor shape fields.

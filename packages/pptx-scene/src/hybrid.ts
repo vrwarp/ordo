@@ -12,7 +12,8 @@
  *   the emitted objects.
  * - `replaces`: the objects of the non-residual elements the art bakes in (residuals emit nothing). Version 1
  *   draws them natively until the art arrives.
- * - `text`: the text of the text bodies inside the art (`Slide.pptx.artText`, search and labels only).
+ * - `text`: the text of the text bodies inside the art, a table's cells included (`Slide.pptx.artText`,
+ *   search and labels only).
  *
  * Pure: indexes and ids only.
  */
@@ -77,7 +78,11 @@ export function artInfo(
     if (e?.kind === 'shape') {
       const t = bodyText(e.text);
       if (t) texts.push(t);
-    }
+    } else if (e?.kind === 'table')
+      for (const c of e.cells) {
+        const t = bodyText(c.text);
+        if (t) texts.push(t);
+      }
   }
   const at = Math.min(objects.length, spans[art.from]?.[0] ?? objects.length);
   const gone = new Set(replaces);

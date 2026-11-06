@@ -73,13 +73,17 @@ const clamp = (v: number, lo: number, hi: number) =>
 const emu = (v: number | undefined, dflt: number) => clamp(v ?? dflt, 0, MAX_EMU);
 const BLACK = { r: 0, g: 0, b: 0, a: 1 };
 
-/** A shape's text body with inheritance resolved, or undefined when it has none. */
-export function readTextBody(ctx: SlideCtx, c: Chain): TextBody | undefined {
+/**
+ * A shape's text body with inheritance resolved, or undefined when it has none. `styled` (a table cell's
+ * text style, `tables.ts`) is an `a:pPr` whose `a:defRPr` takes the place of the shape's `p:style/a:fontRef`
+ * in the chain: after the body's own list style, before the presentation's defaults.
+ */
+export function readTextBody(ctx: SlideCtx, c: Chain, styled?: XNode): TextBody | undefined {
   const txBody = child(c.own, 'p:txBody');
   if (!txBody) return undefined;
   const body = bodyPrChain(c);
   const ins = (k: string, d: number) => emu(num(firstAttr(body, k)), d);
-  const fontRef = fontRefNode(ctx, c);
+  const fontRef = styled ?? fontRefNode(ctx, c);
   const paras: Para[] = [];
   for (const p of txBody.children) if (p.name === 'a:p') paras.push(readPara(ctx, c, p, fontRef));
   const out: TextBody = {

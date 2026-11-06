@@ -613,3 +613,133 @@ export function timingXml(media: MediaTimingSpec[], extra = ''): string {
     .join('');
   return `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>${main}${nodes}${triggers}${extra}</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`;
 }
+
+// ── Tables (M6, `tables.ts`) ──────────────────────────────────────────────────────────────────────────────
+
+const NS_TABLE = 'http://schemas.openxmlformats.org/drawingml/2006/table';
+
+/**
+ * An `a:tc`: its text as one run per paragraph (`\n` splits them; `rPr` attributes and `rPrChildren` of each
+ * run, `pPr` attributes of each paragraph), `tcPr` attributes of its cell properties, `attrs` its own.
+ */
+export function tc(
+  text = '',
+  o: { tcPr?: string; attrs?: string; rPr?: string; rPrChildren?: string; pPr?: string } = {},
+): string {
+  const paras = text
+    .split('\n')
+    .map((t) => (t ? para(run(t, o.rPr ?? '', o.rPrChildren ?? ''), o.pPr) : para('', o.pPr)))
+    .join('');
+  return `<a:tc${o.attrs ? ` ${o.attrs}` : ''}><a:txBody><a:bodyPr/><a:lstStyle/>${paras}</a:txBody><a:tcPr${o.tcPr ?? ''}/></a:tc>`;
+}
+
+/** An `a:tc` with child elements in its `a:tcPr` (lines, fill): `tcPrAttrs` then `inner`. */
+export function tcWith(
+  text: string,
+  inner: string,
+  o: { tcPrAttrs?: string; attrs?: string; rPr?: string } = {},
+): string {
+  const paras = text
+    .split('\n')
+    .map((t) => (t ? para(run(t, o.rPr ?? '')) : para('')))
+    .join('');
+  return `<a:tc${o.attrs ? ` ${o.attrs}` : ''}><a:txBody><a:bodyPr/><a:lstStyle/>${paras}</a:txBody><a:tcPr${o.tcPrAttrs ?? ''}>${inner}</a:tcPr></a:tc>`;
+}
+
+/** A `p:graphicFrame` holding a table: column widths, rows of a height and `tc(...)` cells, `a:tblPr` inside. */
+export function tableFrame(o: {
+  id: number;
+  x: number;
+  y: number;
+  cols: number[];
+  rows: { h: number; cells: string[] }[];
+  tblPr?: string;
+}): string {
+  const cx = o.cols.reduce((s, w) => s + w, 0);
+  const cy = o.rows.reduce((s, r) => s + r.h, 0);
+  return (
+    `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${o.id}" name="Table ${o.id}"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr>` +
+    `<p:xfrm><a:off x="${o.x}" y="${o.y}"/><a:ext cx="${cx}" cy="${cy}"/></p:xfrm>` +
+    `<a:graphic><a:graphicData uri="${NS_TABLE}"><a:tbl>${o.tblPr ?? '<a:tblPr/>'}<a:tblGrid>${o.cols
+      .map((w) => `<a:gridCol w="${w}"/>`)
+      .join('')}</a:tblGrid>${o.rows
+      .map((r) => `<a:tr h="${r.h}">${r.cells.join('')}</a:tr>`)
+      .join('')}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>`
+  );
+}
+
+/** Add `ppt/tableStyles.xml` (`a:tblStyleLst` holding `styles`) with the presentation's relationship to it. */
+export function withTableStyles(parts: PartSource, styles: string): PartSource {
+  const relsName = 'ppt/_rels/presentation.xml.rels';
+  parts.set(
+    relsName,
+    new TextEncoder().encode(
+      partText(parts, relsName).replace(
+        '</Relationships>',
+        `<Relationship Id="rIdTs" Type="${relTypeUri('tableStyles')}" Target="tableStyles.xml"/></Relationships>`,
+      ),
+    ),
+  );
+  return withPart(
+    parts,
+    'ppt/tableStyles.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<a:tblStyleLst xmlns:a="${NS_A}" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}">${styles}</a:tblStyleLst>`,
+    'application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml',
+  );
+}
+
+/**
+ * A minimal TrueType font: `head` (units per em), `hhea`, `hmtx` and a `cmap` (format 4, or 12 with
+ * `format: 12`) mapping each character of `advances` to its own glyph with that advance in font units.
+ * Glyph 0 is .notdef. Enough for `metrics.ts`; nothing draws with it.
+ */
+export function sfntFont(
+  advances: Record<string, number>,
+  o: { upm?: number; format?: 4 | 12; notdef?: number } = {},
+): Uint8Array {
+  const upm = o.upm ?? 1000;
+  const chars = Object.keys(advances)
+    .map((c) => c.codePointAt(0)!)
+    .sort((a, b) => a - b);
+  const glyphOf = new Map(chars.map((cp, i) => [cp, i + 1]));
+  const u16 = (v: number) => [(v >> 8) & 0xff, v & 0xff];
+  const u32 = (v: number) => [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff];
+  const head = new Array(54).fill(0);
+  head.splice(18, 2, ...u16(upm));
+  const hhea = new Array(36).fill(0);
+  hhea.splice(34, 2, ...u16(chars.length + 1));
+  const hmtx = [...u16(o.notdef ?? 500), 0, 0];
+  for (const cp of chars) hmtx.push(...u16(advances[String.fromCodePoint(cp)]!), 0, 0);
+  let sub: number[];
+  if (o.format === 12) {
+    sub = [...u16(12), 0, 0, ...u32(16 + chars.length * 12), 0, 0, 0, 0, ...u32(chars.length)];
+    for (const cp of chars) sub.push(...u32(cp), ...u32(cp), ...u32(glyphOf.get(cp)!));
+  } else {
+    // One segment per character (idDelta maps it to its glyph), then the closing 0xFFFF segment.
+    const segs = [...chars.map((cp) => [cp, cp, (glyphOf.get(cp)! - cp) & 0xffff]), [0xffff, 0xffff, 1]];
+    const n = segs.length;
+    sub = [...u16(4), ...u16(16 + n * 8), 0, 0, ...u16(n * 2), 0, 0, 0, 0, 0, 0];
+    for (const s of segs) sub.push(...u16(s[1]!));
+    sub.push(0, 0);
+    for (const s of segs) sub.push(...u16(s[0]!));
+    for (const s of segs) sub.push(...u16(s[2]!));
+    for (const _ of segs) sub.push(0, 0);
+  }
+  const cmap = [...u16(0), ...u16(1), ...u16(3), ...u16(o.format === 12 ? 10 : 1), ...u32(12), ...sub];
+  const tables: [string, number[]][] = [
+    ['cmap', cmap],
+    ['head', head],
+    ['hhea', hhea],
+    ['hmtx', hmtx],
+  ];
+  const out = [...u32(0x00010000), ...u16(tables.length), 0, 0, 0, 0, 0, 0];
+  let off = 12 + tables.length * 16;
+  const body: number[] = [];
+  for (const [tag, data] of tables) {
+    out.push(...[...tag].map((c) => c.charCodeAt(0)), 0, 0, 0, 0, ...u32(off), ...u32(data.length));
+    body.push(...data);
+    while (body.length % 4) body.push(0);
+    off = 12 + tables.length * 16 + body.length;
+  }
+  return Uint8Array.from([...out, ...body]);
+}

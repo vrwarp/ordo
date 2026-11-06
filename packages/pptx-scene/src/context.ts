@@ -6,6 +6,7 @@ import { type ColorCtx, colorContext } from './color.ts';
 import { type DeckInfo, type SlideRef, slideParts } from './deck.ts';
 import type { Frame } from './ir.ts';
 import type { Log } from './log.ts';
+import type { FaceSource } from './metrics.ts';
 import type { Package } from './opc.ts';
 import { readTheme, type Theme } from './theme.ts';
 import type { SlideTiming } from './timing.ts';
@@ -48,6 +49,11 @@ export interface SlideCtx {
   mediaKind?: (part: string) => 'video' | 'audio' | undefined;
   /** The slide's `p:timing` and transition sound (`timing.ts`), read before its shape tree. */
   timing?: SlideTiming;
+  /**
+   * The font faces text is measured with when the caller has them (`ParseOptions.fontFace`, M6 tables: a
+   * row grows to its text). Undefined: widths are estimated.
+   */
+  fontFace?: FaceSource;
 }
 
 /** Where an element comes from in the inheritance chain. */
@@ -70,7 +76,7 @@ export function slideContext(
   frame: Frame,
   ref: SlideRef,
   log: Log,
-  extra: Pick<SlideCtx, 'pictureSize' | 'mediaKind'> = {},
+  extra: Pick<SlideCtx, 'pictureSize' | 'mediaKind' | 'fontFace'> = {},
 ): SlideCtx {
   const parts = slideParts(pkg, ref.part);
   const theme = readTheme(parts.theme);
@@ -96,5 +102,6 @@ export function slideContext(
     log,
     ...(extra.pictureSize ? { pictureSize: extra.pictureSize } : {}),
     ...(extra.mediaKind ? { mediaKind: extra.mediaKind } : {}),
+    ...(extra.fontFace ? { fontFace: extra.fontFace } : {}),
   };
 }
