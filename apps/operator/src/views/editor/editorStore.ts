@@ -18,7 +18,13 @@ export type EditorState = {
   base?: Presentation;
   draft?: Presentation;
   slideId?: string;
+  /** The primary selected object: the one the Object panel edits (M4 item B: `Selection.primary`). */
   objectId?: string;
+  /**
+   * Every selected object, in the slide's z order (a group selected by a click, members added with Shift):
+   * empty with no selection, `[objectId]` for one object. Always contains `objectId` when it is set.
+   */
+  objectIds: string[];
   dirty: boolean;
   saving: boolean;
   /** The hub refused the save with 409 (changed elsewhere). */
@@ -30,6 +36,7 @@ export type EditorState = {
 };
 
 export const useEditor = create<EditorState>(() => ({
+  objectIds: [],
   dirty: false,
   saving: false,
   conflict: false,
@@ -57,6 +64,7 @@ export function openPresentation(p: Presentation): void {
     draft: p,
     slideId: keepSlide ?? firstSlideId(p),
     objectId: undefined,
+    objectIds: [],
     dirty: false,
     saving: false,
     conflict: false,
@@ -108,16 +116,35 @@ function fixSelection(): void {
   const s = useEditor.getState();
   if (!s.draft) return;
   const slide = getSlide(s.draft, s.slideId);
-  if (!slide) useEditor.setState({ slideId: firstSlideId(s.draft), objectId: undefined });
-  else if (s.objectId && !slide.objects.some((o) => o.id === s.objectId))
-    useEditor.setState({ objectId: undefined });
+  if (!slide) {
+    useEditor.setState({ slideId: firstSlideId(s.draft), objectId: undefined, objectIds: [] });
+    return;
+  }
+  // A state set with `objectId` alone (older callers) selects that one object.
+  const sel = s.objectIds.length ? s.objectIds : s.objectId ? [s.objectId] : [];
+  const ids = sel.filter((id) => slide.objects.some((o) => o.id === id));
+  const primary = s.objectId && ids.includes(s.objectId) ? s.objectId : ids[0];
+  if (primary !== s.objectId || ids.length !== s.objectIds.length)
+    useEditor.setState({ objectId: primary, objectIds: ids });
 }
 
 export function selectSlide(slideId: string | undefined): void {
-  useEditor.setState({ slideId, objectId: undefined });
+  useEditor.setState({ slideId, objectId: undefined, objectIds: [] });
 }
+/** Select one object (or none): it is the whole selection. */
 export function selectObject(objectId: string | undefined): void {
-  useEditor.setState({ objectId });
+  useEditor.setState({ objectId, objectIds: objectId ? [objectId] : [] });
+}
+/**
+ * Select several objects (a group, design/27 §11 item 5): `ids` kept in the open slide's z order, `primary`
+ * (default: the first of `ids`) the one the Object panel edits. Ids not on the open slide are left out.
+ */
+export function selectObjects(ids: readonly string[], primary?: string): void {
+  const slide = currentSlide();
+  const want = new Set(ids);
+  const ordered = slide ? slide.objects.filter((o) => want.has(o.id)).map((o) => o.id) : [];
+  const first = primary && ordered.includes(primary) ? primary : ids.find((id) => ordered.includes(id));
+  useEditor.setState({ objectId: first, objectIds: ordered });
 }
 
 export function currentSlide() {
@@ -128,6 +155,13 @@ export function currentSlide() {
 export function currentObject(): SlideObject | undefined {
   const s = useEditor.getState();
   return currentSlide()?.objects.find((o) => o.id === s.objectId);
+}
+
+/** Every selected object of the open slide, in z order. */
+export function currentObjects(): SlideObject[] {
+  const s = useEditor.getState();
+  const ids = new Set(s.objectIds);
+  return currentSlide()?.objects.filter((o) => ids.has(o.id)) ?? [];
 }
 
 /**
@@ -208,9 +242,10 @@ export async function adoptJobSaves(): Promise<'adopted' | 'other' | 'none'> {
   if (cur.id !== s.id || cur.base !== s.base || !cur.draft || cur.saving) return 'none';
   upsertLocal('presentations', latest);
   if (!cur.dirty) {
-    const objectId = cur.objectId;
+    const { objectId, objectIds } = cur;
     openPresentation(latest);
-    if (objectId && currentSlide()?.objects.some((o) => o.id === objectId)) useEditor.setState({ objectId });
+    const kept = objectIds.filter((id) => currentSlide()?.objects.some((o) => o.id === id));
+    if (kept.length) selectObjects(kept, objectId);
     return 'adopted';
   }
   useEditor.setState({ base: latest, draft: rebaseOnJobs(cur.base!, cur.draft, latest) });

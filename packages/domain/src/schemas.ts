@@ -633,6 +633,11 @@ export const PropsRule = z.object({
    */
   mediaRemaining: z.boolean().optional(),
   style: bounded(z.record(z.string().max(100), PropBox), 100).default({}),
+  /**
+   * Stage look: show the live slide's notes (`Slide.notes`) for the preacher, drawn in `style['notes']`
+   * (design/27 §11 item 13). Optional so stored looks need no migration; absent means off.
+   */
+  notes: z.boolean().optional(),
 });
 export type PropsRule = z.infer<typeof PropsRule>;
 

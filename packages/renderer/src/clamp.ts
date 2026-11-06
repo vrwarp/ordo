@@ -699,6 +699,7 @@ export function clampLook(look: unknown): Look {
     style,
   };
   if (typeof pr.mediaRemaining === 'boolean') props.mediaRemaining = pr.mediaRemaining;
+  if (typeof pr.notes === 'boolean') props.notes = pr.notes;
   const tr = l.transition as Look['transition'] | undefined;
   const transition: Look['transition'] =
     tr && typeof tr === 'object' && (tr.kind === 'cut' || tr.kind === 'crossfade')

@@ -450,8 +450,10 @@ The M2 exit criteria stay met:
   ms at 1920 and 137-144 ms at 3840 on the sermon slides, 73 / 109 ms and 86 / 112 ms on the shards.
 
 Not done: hyperlink colours (PowerPoint draws linked runs in the theme's hlink colour), symbol-font
-characters inside the text itself (`a:sym`), `origin` and the `role: 'translation'` of the second
-language box (M3, with the rest of `ObjectOrigin`), vertical text (residual until M8).
+characters inside the text itself (`a:sym`), the `role: 'translation'` of the second language box, vertical
+text (residual until M8). `ObjectOrigin` is written since the M4 scaffold (`emit.ts` `originOf`: shape id,
+placeholder, role, and the group of a flattened group or of a shape and its text), except by the M1
+emission (`richText: false`).
 
 ### D: image-crop (`packages/domain/src/schemas.ts`, `packages/renderer/src/clamp.ts`, `text2d.ts`, `golden/`)
 

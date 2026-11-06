@@ -3,9 +3,10 @@
  * jobs and queues them. One instance per process, owned by `ImportService` (`imports.pptx`).
  */
 import type { Presentation } from '@ordo/domain';
-import type { Job } from '@ordo/protocol';
+import type { Job, PptxReimportReq } from '@ordo/protocol';
 import { loJob, queueFollowUp, referenceJob } from './fallback.ts';
 import { nativeJob, queueStoredClips } from './nativeJob.ts';
+import { queueReimport, reimportJob } from './reimport.ts';
 import {
   enqueuePptx,
   PPTX_JOBS,
@@ -26,6 +27,7 @@ export class PptxImports {
     jobs.register(PPTX_JOBS.lo, loJob(deps));
     jobs.register(PPTX_JOBS.reference, referenceJob(deps));
     jobs.register(PPTX_JOBS.textRepair, textRepairJob(deps));
+    jobs.register(PPTX_JOBS.reimport, reimportJob(deps));
   }
 
   /** Queue the native import of a stored deck (`POST /import/document` with `renderer=native`). */
@@ -95,6 +97,14 @@ export class PptxImports {
    */
   queueTextRepair(): Job | undefined {
     return queueTextRepair(this.deps);
+  }
+
+  /**
+   * Queue 'Re-import from PowerPoint' for a presentation (M4 item F, `reimport.ts`; the route refuses it
+   * while the presentation is locked or has no stored deck).
+   */
+  queueReimport(presentationId: string, hash: string, req: PptxReimportReq, by?: string): Job {
+    return queueReimport(this.deps, presentationId, hash, req, by);
   }
 }
 

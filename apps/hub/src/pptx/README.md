@@ -66,7 +66,7 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 | `renderCopyTask.ts` | Worker side of `pptx-render-copy`: `buildRenderCopy` + spilled media → .pptx               | D      |
 | `art.ts`            | Worker side of `pptx-art`: white/black alpha and bounding-box crop                         | D      |
 | `textRepair.ts`     | `pptx-text-repair` job, `pagesOf`, `readDeckText`, `slideBoxes`, `queueTextRepair`         | G      |
-| `reimport.ts`       | 'Re-import from PowerPoint' (M4, not this wave)                                            | M4     |
+| `reimport.ts`       | 'Re-import from PowerPoint': plan, merge and job (M4 stubs; operator editor/M4.md)         | M4 F   |
 
 Contracts already in place (the scaffold):
 - `@ordo/domain`: `Slide.pptx` (`SlidePptx`: fileId, index, shown, class, version, digest, pending, notes,

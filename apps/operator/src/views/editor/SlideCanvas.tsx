@@ -15,7 +15,9 @@ import { Layer, Line, Rect, Shape, Stage, Transformer } from 'react-konva';
 import { useCoarsePointer } from '../../components/pointer.ts';
 import { onFontsChanged } from '../../services/fonts.ts';
 import { stillHash } from '../../services/thumbs.ts';
+import { CanvasGuides, type SlideRect } from './CanvasGuides.tsx';
 import { canvasContent } from './canvasContent.ts';
+import { CropHandles } from './CropControl.tsx';
 import { change, selectObject, useEditor } from './editorStore.ts';
 import { updateObject } from './ops.ts';
 import { useOriginalOver } from './original.ts';
@@ -235,6 +237,8 @@ export function SlideCanvas(props: {
   onEditText?: (objectId: string) => void;
   /** Touch: tools for the selected object, floated just above or below it (objectToolsSpot). */
   objectTools?: ReactNode;
+  /** The deck's area of an imported deck that is not 16:9 (`source.native.slideRect`): the 4:3 guide. */
+  slideRect?: SlideRect;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const coarse = useCoarsePointer();
@@ -388,6 +392,8 @@ export function SlideCanvas(props: {
               listening={false}
             />
           ))}
+          <CanvasGuides objects={drawn.objects} slideRect={props.slideRect} scale={scale} />
+          <CropHandles objects={drawn.objects} scale={scale} readOnly={props.readOnly} />
           <Transformer
             ref={tr}
             rotateEnabled

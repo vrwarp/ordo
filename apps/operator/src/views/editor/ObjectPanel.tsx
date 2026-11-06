@@ -1,12 +1,17 @@
-import { editText, nearColor, type SlideObject, type TextStyle } from '@ordo/domain';
-import { useState } from 'react';
+import { nearColor, type SlideObject, type TextStyle } from '@ordo/domain';
+import { useEffect, useState } from 'react';
 import { BoxEditor, Check, ColorField, NumberField, Select } from '../../components/fields.tsx';
 import { TextStyleEditor } from '../../components/TextStyleEditor.tsx';
 import { useLibrary } from '../../state/library.ts';
+import { typeText } from './actions.ts';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
+import { CropControl } from './CropControl.tsx';
 import { change, useEditor } from './editorStore.ts';
+import { FormatBar } from './FormatBar.tsx';
 import { VideoPanel } from './MediaPanels.tsx';
 import { getSlide, markOverride, updateObject, updateSlide } from './ops.ts';
+import type { TextRange } from './ops/text.ts';
+import { ParagraphStrip } from './ParagraphStrip.tsx';
 
 /** Property panel for the selected object: every TextStyle, ImageObject and ShapeObject field (prd/03). */
 export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean }) {
@@ -15,6 +20,10 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
   const looks = useLibrary((s) => s.data.settings.looks);
   const media = useLibrary((s) => s.data.media);
   const [picking, setPicking] = useState(false);
+  // The text field's selection, for the format bar and the paragraph strip (M4 item C).
+  const [range, setRange] = useState<TextRange>({ start: 0, end: 0 });
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new object starts with a caret at its start
+  useEffect(() => setRange({ start: 0, end: 0 }), [o.id]);
   const slide = getSlide(draft, slideId);
   const isLyric =
     slide?.lyricObjectId === o.id ||
@@ -61,18 +70,25 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
       </div>
       {o.type === 'text' && (
         <>
+          <FormatBar o={o} range={clampRange(range, o.text.length)} readOnly={readOnly} />
           <textarea
             rows={5}
             value={o.text}
             disabled={readOnly}
             id="ordo-text-editor"
+            aria-label="Text"
+            onSelect={(e) =>
+              setRange({ start: e.currentTarget.selectionStart, end: e.currentTarget.selectionEnd })
+            }
             onChange={(e) => {
               // Runs and paragraph styles follow the edit (design/27 §11): a typo fix keeps the formatting.
               const next = e.target.value;
               const caret = e.target.selectionEnd;
-              set((x) => (x.type === 'text' ? editText(x, next, caret) : x), `text:${o.id}`);
+              setRange({ start: e.target.selectionStart, end: caret });
+              if (!readOnly) typeText(o.id, next, caret);
             }}
           />
+          <ParagraphStrip o={o} range={clampRange(range, o.text.length)} readOnly={readOnly} />
           {keyClash && (
             <div className="banner small">
               This text colour is close to a look's key colour; it may be keyed out on the stream.
@@ -133,6 +149,7 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
             min={0}
             onChange={(radius) => set((x) => ({ ...x, radius }) as SlideObject)}
           />
+          <CropControl o={o} readOnly={readOnly} />
           {picking && (
             <MediaPickerDialog
               title={o.play ? 'Choose a poster image' : 'Choose an image'}
@@ -217,4 +234,10 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
       )}
     </div>
   );
+}
+
+/** A selection kept inside the text (the text can shrink under it: undo, another editor's change). */
+function clampRange(r: TextRange, len: number): TextRange {
+  const start = Math.max(0, Math.min(len, r.start));
+  return { start, end: Math.max(start, Math.min(len, r.end)) };
 }

@@ -1425,6 +1425,12 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
 - `applyTheme` keeps structural run formatting.
 - Stage notes region and stage direction.
 - Optional: three-way merge on 409.
+- **As built, the scaffold** (`apps/operator/src/views/editor/M4.md`, which assigns the eight items): the ops
+  as typed stubs in `views/editor/ops/` (one module per item), applied through `actions.ts`; the multi-object
+  selection in the editor store; `FormatBar`, `ParagraphStrip`, `CropControl` and the canvas guides mounted;
+  `PropsRule.notes`; `ApiFailure.details`; the re-import route and job stubs; `e2e/editorhelpers.ts`. The
+  converter now writes `ObjectOrigin` (shape id, placeholder, role, group: a flattened group or a shape with
+  its text), which M3 had left out and groups, 'Apply to similar' and the re-import need.
 
 **Files.** `apps/operator/src/views/editor/ops.ts`, `ObjectPanel.tsx`, `SlidePanel.tsx`, `SlidesPanel.tsx`, `PresentationPanel.tsx`, `SlideCanvas.tsx`, `EditorView.tsx`, `editorStore.ts`; `apps/operator/src/components/TextStyleEditor.tsx`, new `FormatBar.tsx`, `ParagraphStrip.tsx`, `CropControl.tsx`; `apps/hub/src/pptx/reimport.ts`, `routes.ts`; `apps/stage/src/model.ts`, `view.ts`; `packages/domain/src/schemas.ts` (`PropsRule.notes`); `packages/client/src/api.ts`.
 

@@ -16,6 +16,7 @@ import {
   type Theme,
 } from '@ordo/domain';
 import { moveItem } from '../../lib/arrangement.ts';
+import { themedRuns } from './ops/text.ts';
 
 /** Pure presentation editing operations used by the editor. Each returns a new presentation. */
 
@@ -354,7 +355,11 @@ function themedLyric(o: TextObject, theme: Theme, overrides: string[]): TextObje
   for (const k of ['outline', 'shadow', 'fill'] as const) {
     if (!(k in theme.text) && !overrides.includes(`style.${k}`)) delete style[k];
   }
-  return { ...o, box: overrides.includes('box') ? o.box : { ...theme.lyricBox }, style };
+  // Runs keep their structural formatting (verse superscripts, emphasis) through a theme (M4 item A).
+  return themedRuns(
+    { ...o, box: overrides.includes('box') ? o.box : { ...theme.lyricBox }, style },
+    overrides,
+  );
 }
 
 /** Apply a theme: every slide's lyric box takes the theme's geometry and style except overridden properties. */

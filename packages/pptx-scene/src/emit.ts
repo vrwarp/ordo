@@ -48,11 +48,16 @@
  *   characters; else the largest other text by characters × area (not title, date, footer, slide number);
  *   the title only when it is the only text. On a bilingual slide (the two boxes with the most text in
  *   different languages, of comparable length) the first of them in reading order.
+ * - **Origin** (`ObjectOrigin`, design/27 §3.1; since the M4 scaffold): every object carries the shape it came
+ *   from, its placeholder, its role and its group (`originOf`), so the editor selects a flattened group or a
+ *   shape with its text together, restyles similar boxes, and a re-import tells imported objects from the
+ *   operator's own. The M1 emission (`richText: false`) writes none.
  *
  * Owned by work item C (inherit-emit).
  */
 import type {
   ImageObject,
+  ObjectOrigin,
   Rgba as OrdoRgba,
   ShapeObject,
   Slide,
@@ -314,13 +319,27 @@ function emitSlide(ctx: EmitCtx, s: SlideScene, spans: [number, number][] = []):
   const slide: Slide = { id: ctx.newId(), objects };
   if (s.error) return slide;
   emitBackground(ctx, s, slide);
+  // Where each object came from (`originOf`); the M1 emission (`richText: false`) writes only the fields of
+  // the release before design/27, as it always did.
+  const marks = ctx.rich;
+  if (marks) for (const o of objects) o.origin = { src: ORIGIN_SRC, role: 'bg' };
   const texts: Emitted[] = [];
+  // Pairs (a shape and its text, a picture and its outline) get group numbers past the deck's groups.
+  let pairs = 0;
+  for (const e of s.elements) pairs = Math.max(pairs, e.group ?? 0);
   for (const e of s.elements) {
     const at = objects.length;
+    const mf = ctx.metafiles?.length ?? 0;
     if (!e.hidden) emitElement(ctx, e, objects, texts);
     spans.push([at, objects.length]);
+    if (!marks) continue;
+    const made = objects.length - at;
+    const group = e.group ?? (made > 1 && pairs < MAX_GROUP ? ++pairs : undefined);
+    for (let i = at; i < objects.length; i++) objects[i]!.origin = originOf(e, objects[i]!, group);
+    for (const m of ctx.metafiles?.slice(mf) ?? []) m.object.origin = originOf(e, m.object, e.group);
   }
   const media = emitMedia(ctx, s, slide, spans);
+  for (const o of objects) if (o.type === 'image' && o.play && o.origin) o.origin.role = 'poster';
   ctx.clips?.push(...media.clips);
   if (media.remove.size) leaveOut(ctx, slide, spans, media.remove);
   if (objects.length > MAX_OBJECTS) {
@@ -513,6 +532,46 @@ export function overWhite(c: OrdoRgba): OrdoRgba {
   const a = bound(c.a, 0, 1);
   const mix = (v: number) => Math.round(v * a + 255 * (1 - a));
   return { r: mix(c.r), g: mix(c.g), b: mix(c.b), a: 1 };
+}
+
+// ── Origin ──────────────────────────────────────────────────────────────────────────────────────────────
+
+/** `ObjectOrigin.src` of every object the converter writes. */
+const ORIGIN_SRC = 'pptx';
+/** `ObjectOrigin.group` is at most 100,000 (the schema's bound). */
+const MAX_GROUP = 100_000;
+
+/**
+ * Where an object came from (design/27 §3.1 `ObjectOrigin`; the editor groups, locks, restyles similar
+ * boxes and re-imports by it): the shape's `p:cNvPr` id, its placeholder (`title`, `body:1`, ...: the type and
+ * idx, letters and digits only, since both are deck strings), its role, and the flattened group or shape and
+ * text pair it belongs to. Roles: `bg` (the background), `deco` (a layout or master decoration), `title` and
+ * `body` (placeholder text), `text` (other text), `picture`, `poster` (a picture that plays a video, set
+ * after `emitMedia`), `shape`; the hub adds `art`.
+ */
+function originOf(e: Element, o: SlideObject, group: number | undefined): ObjectOrigin {
+  const out: ObjectOrigin = { src: ORIGIN_SRC, role: roleOf(e, o) };
+  if (Number.isInteger(e.shapeId) && e.shapeId > 0) out.shapeId = Math.min(2_147_483_647, e.shapeId);
+  const ph = phKey(e.ph);
+  if (ph) out.ph = ph;
+  if (group !== undefined && Number.isInteger(group) && group >= 0) out.group = Math.min(MAX_GROUP, group);
+  return out;
+}
+
+function roleOf(e: Element, o: SlideObject): string {
+  if (e.from !== 'slide') return 'deco';
+  if (o.type === 'image') return 'picture';
+  if (o.type === 'shape') return 'shape';
+  if (!e.ph) return 'text';
+  return e.ph.type === 'title' || e.ph.type === 'ctrTitle' ? 'title' : 'body';
+}
+
+/** A placeholder as `ObjectOrigin.ph`: its type, and `:idx` when it has one; at most 40 characters. */
+function phKey(ph: Element['ph']): string | undefined {
+  if (!ph) return undefined;
+  const type = ph.type.replace(/[^A-Za-z]/g, '').slice(0, 24) || 'obj';
+  const idx = ph.idx?.replace(/[^0-9]/g, '').slice(0, 10);
+  return idx ? `${type}:${idx}` : type;
 }
 
 // ── Elements ────────────────────────────────────────────────────────────────────────────────────────────

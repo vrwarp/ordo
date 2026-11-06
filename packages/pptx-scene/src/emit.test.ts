@@ -1119,3 +1119,75 @@ it('reports point sizes at 2 px per point on both standard sizes', () => {
     expect(PT).toBe(12_700);
   }
 });
+
+describe('origin (design/27 §3.1 ObjectOrigin; M4 scaffold)', () => {
+  it('marks every object with its shape, placeholder, role and group; a shape and its text are a pair', () => {
+    const { objects } = emitOne({
+      slides: [
+        {
+          bg: solidBg('FFFFFF'),
+          rels: [imageRel('rId2', 'photo.png')],
+          shapes:
+            sp({
+              id: 2,
+              ph: 'type="title"',
+              x: IN,
+              y: 0,
+              cx: 8 * IN,
+              cy: IN,
+              txBody: body(para(run('Welcome'))),
+            }) +
+            sp({
+              id: 3,
+              geom: 'roundRect',
+              x: IN,
+              y: 2 * IN,
+              cx: 3 * IN,
+              cy: IN,
+              fill: solid('1F4E79'),
+              txBody: body(para(run('Coffee in the hall'))),
+            }) +
+            grpSp(
+              { id: 10, x: 5 * IN, y: 2 * IN, cx: 2 * IN, cy: IN },
+              sp({ id: 4, x: 5 * IN, y: 2 * IN, cx: IN, cy: IN, fill: solid('FF0000') }) +
+                sp({ id: 5, x: 6 * IN, y: 2 * IN, cx: IN, cy: IN, fill: solid('00FF00') }),
+            ) +
+            pic({ id: 6, x: 8 * IN, y: 2 * IN, cx: 2 * IN, cy: IN, rId: 'rId2' }),
+        },
+      ],
+    });
+    const of = (o: SlideObject) => o.origin;
+    expect(of(objects[0]!)).toEqual({ src: 'pptx', role: 'bg' });
+    const title = objects.find((o) => o.type === 'text' && o.text === 'Welcome')!;
+    expect(of(title)).toEqual({ src: 'pptx', role: 'title', shapeId: 2, ph: 'title' });
+    const pairText = objects.find((o) => o.type === 'text' && o.text === 'Coffee in the hall')!;
+    const pairShape = objects.find((o) => o.type === 'shape' && o.origin?.shapeId === 3)!;
+    expect(of(pairText)).toMatchObject({ role: 'text', shapeId: 3 });
+    expect(of(pairShape)).toMatchObject({ role: 'shape', shapeId: 3 });
+    expect(of(pairText)!.group).toBeDefined();
+    expect(of(pairShape)!.group).toBe(of(pairText)!.group);
+    const red = objects.find((o) => o.origin?.shapeId === 4)!;
+    const green = objects.find((o) => o.origin?.shapeId === 5)!;
+    expect(of(red)!.group).toBeDefined();
+    expect(of(green)!.group).toBe(of(red)!.group);
+    expect(of(red)!.group).not.toBe(of(pairText)!.group);
+    const img = objects.find((o) => o.type === 'image')!;
+    expect(of(img)).toEqual({ src: 'pptx', role: 'picture', shapeId: 6 });
+  });
+
+  it('keeps deck strings out of the placeholder key and writes nothing with the M1 emission', () => {
+    const hostile = sp({
+      id: 2,
+      ph: 'type="body&lt;script&gt;" idx="1x2"',
+      x: IN,
+      y: IN,
+      cx: 4 * IN,
+      cy: IN,
+      txBody: body(para(run('Body'))),
+    });
+    const { objects } = emitOne({ slides: [{ shapes: hostile }] });
+    expect(textIn(objects)[0]!.origin).toMatchObject({ role: 'body', ph: 'bodyscript:12' });
+    const legacy = emitOne({ slides: [{ shapes: hostile }] }, LEGACY);
+    expect(legacy.objects.every((o) => o.origin === undefined)).toBe(true);
+  });
+});

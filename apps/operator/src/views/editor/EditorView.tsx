@@ -23,6 +23,8 @@ import {
   undo,
   useEditor,
 } from './editorStore.ts';
+// `window.__ordo.editor`, read by the end-to-end specs (e2e/editorhelpers.ts).
+import './inspect.ts';
 import { ObjectPanel } from './ObjectPanel.tsx';
 import {
   addObject,
@@ -496,6 +498,7 @@ export function EditorView({ id }: { id: string }) {
             readOnly={readOnly}
             onEditText={editText}
             objectTools={objectTools}
+            slideRect={p.source?.native?.slideRect}
           />
         ) : (
           <div className="center muted">Add a slide to start.</div>

@@ -59,6 +59,16 @@ describe('render-plan clamps', () => {
     expect(l.transition).toEqual(LOOK_MAIN.transition);
     expect(clampLook(l)).toBe(l);
   });
+
+  it("keeps a stage look's notes region flag only when it is a boolean (design/27 §11 item 13)", () => {
+    const props = (p: Record<string, unknown>) =>
+      clampLook({ ...LOOK_MAIN, layers: { ...LOOK_MAIN.layers, props: { ...LOOK_MAIN.layers.props, ...p } } })
+        .layers.props;
+    expect(props({ notes: true }).notes).toBe(true);
+    expect(props({ notes: false }).notes).toBe(false);
+    expect('notes' in props({})).toBe(false);
+    expect('notes' in props({ notes: 'yes' })).toBe(false);
+  });
 });
 
 describe('rich text clamps (design/27 §3.2)', () => {

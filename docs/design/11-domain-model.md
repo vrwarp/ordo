@@ -249,6 +249,8 @@ type PropsRule = {
   clock: boolean;
   messages: boolean;
   elapsed: boolean;
+  mediaRemaining?: boolean /* stage: remaining time of the live video; absent follows `elapsed` */;
+  notes?: boolean /* stage: the live slide's notes for the preacher, in style['notes'] (design/27 §11) */;
   style: Record<string, TextStyle & { box: Box }>;
 };
 type Transition = { kind: 'cut' } | { kind: 'crossfade'; ms: number };

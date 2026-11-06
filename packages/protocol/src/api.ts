@@ -165,6 +165,72 @@ export type OutputConfigRes = {
   fonts: Font[];
 };
 
+/**
+ * 'Re-import from PowerPoint' (design/27 §11 "Round trip and migration", M4 item F; the hub's
+ * `pptx/reimport.ts`): the native import is run again on the presentation's stored deck and merged into it as
+ * a new revision. Refused while the presentation is live-locked (423) and when it has no stored deck (400
+ * `no_pptx`).
+ *
+ * POST /presentations/:id/pptx-reimport  PptxReimportReq -> 202 Job (kind 'pptx-reimport', light; its result
+ *   is a PptxReimportResult)
+ * GET  /presentations/:id/pptx-reimport  -> PptxReimportPlan (what a re-import would do; nothing is written)
+ */
+export type PptxReimportReq = {
+  /** Only these slides (ids): 'Make editable' or 'Reset slide' on one slide. Absent: every slide. */
+  slideIds?: string[];
+  /**
+   * Slides regenerated even though they were edited ('Reset slide from PowerPoint'): their imported objects
+   * are replaced; the operator's own objects (no `origin`) stay, on top.
+   */
+  reset?: string[];
+  /** Made-editable slides the dialog was told to keep as they are. */
+  keep?: string[];
+};
+
+/**
+ * How a re-import treats a slide of the presentation (design/27 §11):
+ * - 'native': a slide of a native import; regenerated while its objects still match `Slide.pptx.digest`;
+ * - 'page': a legacy picture slide (`imported`); replaced by the native slide;
+ * - 'made-editable': a legacy slide made editable (its bottom object the page picture); its page picture
+ *   and the text boxes equal to extracted text are replaced, unless kept;
+ * - 'other': any other slide (typed in ordo, or one the deck no longer has); kept as it is.
+ */
+export type PptxReimportKind = 'native' | 'page' | 'made-editable' | 'other';
+
+/** What a re-import does to one slide. */
+export type PptxReimportAction = 'regenerate' | 'keep-edited' | 'replace' | 'keep';
+
+export type PptxReimportPlanSlide = {
+  slideId: string;
+  /** 1-based position in the presentation's authoring order (as the editor numbers slides). */
+  number: number;
+  kind: PptxReimportKind;
+  action: PptxReimportAction;
+  /** Objects the operator added in ordo (no `origin`, or on top of a legacy page), kept on top. */
+  userObjects: number;
+};
+
+export type PptxReimportPlan = {
+  presentationId: string;
+  /** The stored deck (`Presentation.source.fileId`). */
+  fileId: string;
+  slides: PptxReimportPlanSlide[];
+};
+
+/** The `pptx-reimport` job's result (read defensively by the operator, as every job result is). */
+export type PptxReimportResult = {
+  presentationId: string;
+  /** The revision the re-import saved; absent when it changed nothing (nothing is saved then). */
+  rev?: number;
+  regenerated: number;
+  /** Edited native slides left as they are (their objects no longer match the digest). */
+  keptEdited: number;
+  /** Legacy page and made-editable slides replaced by native slides. */
+  replaced: number;
+  /** Objects the operator added, kept on top of their slides. */
+  userObjects: number;
+};
+
 export const ROUTES = {
   outputConfig: '/output/config',
   me: '/auth/me',
