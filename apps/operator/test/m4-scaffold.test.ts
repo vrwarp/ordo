@@ -111,14 +111,16 @@ describe('the M4 ops (stubs keep their input)', () => {
   const i = picture();
   const size = { id: 'other', width: 1000, height: 1000 };
 
-  it('text ops (item A)', () => {
-    expect(formatRange(t, 0, 7, { fontStyle: 'italic' })).toBe(t);
-    expect(resizeRange(t, 0, 7, 1.1)).toBe(t);
-    expect(setParas(t, 0, 0, { align: 'right' })).toBe(t);
-    expect(refitText(t)).toBe(t);
-    expect(themedRuns(t, [])).toBe(t);
-    expect(selectionStyle(t, 11, 24)).toEqual({ style: {}, mixed: [] });
-    expect(selectionParas(t, 0, 0)).toEqual({ para: {}, mixed: [] });
+  it('text ops (item A, built: textOps.test.ts) keep their input when they change nothing', () => {
+    expect(formatRange(t, 3, 3, { fontStyle: 'italic' })).toBe(t);
+    expect(formatRange(t, 11, 24, { fontWeight: 700 })).toBe(t);
+    expect(resizeRange(t, 0, 7, 1)).toBe(t);
+    expect(setParas(t, 0, 0, { align: 'center' })).toBe(t);
+    const refitted = refitText(t);
+    expect(refitText(refitted)).toBe(refitted);
+    expect(themedRuns(t, ['runs', 'style.fitScale'])).toBe(t);
+    expect(selectionStyle(t, 11, 24)).toMatchObject({ style: { fontWeight: 700 }, mixed: [] });
+    expect(selectionParas(t, 0, 0)).toMatchObject({ para: { align: 'center' }, mixed: [] });
   });
 
   it('group ops (item B)', () => {
@@ -179,11 +181,11 @@ describe('text op contracts already in place', () => {
     expect(parasTouched(o, 15, 99)).toEqual({ first: 3, last: 3 });
   });
 
-  it('applyTheme still keeps the lyric runs (themedRuns is a stub)', () => {
+  it("applyTheme keeps the lyric runs' structural formatting and paragraph styles (themedRuns)", () => {
     const p = deck();
     const themed = applyTheme(p, DEFAULT_THEME);
     const t = getSlide(themed, 's1')!.objects[0] as TextObject;
-    expect(t.runs).toEqual(announcement().runs);
+    expect(t.runs).toEqual([{ start: 11, end: 24, fontWeight: 700 }]);
     expect(t.paras).toEqual(announcement().paras);
   });
 
@@ -221,9 +223,10 @@ describe('the actions (store wiring)', () => {
 
   it('an op that changes nothing records no undo step and no unsaved change', () => {
     const before = useEditor.getState().draft;
-    actions.formatSelection('t1', 0, 7, { fontStyle: 'italic' });
-    actions.setParagraphs('t1', 0, 0, { align: 'right' });
-    actions.refit('t1');
+    actions.formatSelection('t1', 11, 24, { fontWeight: 700 });
+    actions.resizeSelection('t1', 0, 7, 1);
+    actions.setParagraphs('t1', 0, 0, { align: 'center' });
+    actions.refit('i1');
     actions.cropPicture('i1', { l: 0.1, t: 0, r: 0, b: 0 });
     actions.maskPicture('i1', { preset: 'ellipse' });
     actions.flipPicture('i1', { flipV: true });
