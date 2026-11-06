@@ -82,6 +82,8 @@ export type Fill =
       angle?: number;
       /** `a:path path` (circle, rect, shape) for path gradients. */
       path?: string;
+      /** `a:path/a:fillToRect`: the focus rectangle as insets of the box (fractions, ±1). */
+      focus?: Insets;
     }
   | { kind: 'picture'; picture: PictureFill }
   | { kind: 'pattern'; preset: string; fg: Rgba; bg: Rgba }

@@ -64,6 +64,8 @@ export interface PartSpec {
   bg?: string;
   attrs?: string;
   rels?: RelSpec[];
+  /** Layouts only: children of `p:sldLayout` after `p:cSld`, e.g. a `p:clrMapOvr` (default: masterClrMapping). */
+  after?: string;
 }
 
 export interface DeckSpec {
@@ -220,7 +222,7 @@ export function buildDeck(spec: DeckSpec): PartSource {
     overrides.push(`<Override PartName="/${name}" ContentType="${CT}.slideLayout+xml"/>`);
     put(
       name,
-      `${head}<p:sldLayout ${NS}${l.attrs ? ` ${l.attrs}` : ''}>${cSld(l.shapes, l.bg)}<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>`,
+      `${head}<p:sldLayout ${NS}${l.attrs ? ` ${l.attrs}` : ''}>${cSld(l.shapes, l.bg)}${l.after ?? '<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>'}</p:sldLayout>`,
     );
   });
 

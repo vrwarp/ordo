@@ -25,7 +25,10 @@ export interface SlideCtx {
   /** `p:sldMaster`. */
   master?: XNode;
   theme: Theme;
-  /** Master clrMap with the slide's clrMapOvr: used for the slide's own, inherited and background colours. */
+  /**
+   * Master clrMap with the layout's and then the slide's clrMapOvr: used for the slide's own, inherited and
+   * background colours.
+   */
   color: ColorCtx;
   /** This slide's notes (approximations, skipped content). */
   log: Log;
@@ -60,7 +63,12 @@ export function slideContext(pkg: Package, deck: DeckInfo, frame: Frame, ref: Sl
     masterPart: parts.masterPart,
     master: parts.master,
     theme,
-    color: colorContext(theme, child(parts.master, 'p:clrMap'), child(parts.slide, 'p:clrMapOvr')),
+    color: colorContext(
+      theme,
+      child(parts.master, 'p:clrMap'),
+      child(parts.slide, 'p:clrMapOvr'),
+      child(parts.layout, 'p:clrMapOvr'),
+    ),
     log,
   };
 }
