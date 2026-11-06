@@ -1431,6 +1431,27 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   `PropsRule.notes`; `ApiFailure.details`; the re-import route and job stubs; `e2e/editorhelpers.ts`. The
   converter now writes `ObjectOrigin` (shape id, placeholder, role, group: a flattened group or a shape with
   its text), which M3 had left out and groups, 'Apply to similar' and the re-import need.
+- **As built, item F (PowerPoint card and re-import):** `apps/hub/src/pptx/reimport.ts` (`planReimport`,
+  `mergeReimport` pure; the light `pptx-reimport` job). The job runs the native job's steps 1-5 without the
+  save (`nativeJob.ts` `buildNative`, only the deck slides a one-slide request needs: `NativeJobEnv.only`)
+  and merges into the presentation as it is when the conversion ends, saving one revision with its
+  `pptx-lo` (earlier follow-ups' art, page and metafile pictures of the same slide and deck elements reused,
+  `earlierWork`) and the clips' media jobs. Rules beyond §11: "unedited" means `digest` matches the objects,
+  or the objects with an `origin` (objects added in ordo are kept on top and are not an edit); a slide the
+  same converter would write again with its LibreOffice work done is left alone, so a re-import that changes
+  nothing saves nothing; slide-level settings (timing, transition, hidden, sound, background, the reference
+  picture) stay, on a legacy slide only where the operator set them; a legacy page whose deck slide is a
+  picture again stays; a made-editable slide is placed by its picture's name ('<title> – N', the picture
+  import's page) else by the deck slide whose text its boxes repeat (whitespace folded); a legacy deck
+  converted whole gets its one background back as the presentation's; the presentation becomes a native
+  import (`source.native` counted over its slides, the fresh `source.log` on a whole re-import). The job
+  defers while live and while a `pptx-lo` of the presentation is queued or running. 'Make editable' on a
+  legacy page with a stored deck is that job (`imports.ts` `makeEditableNative`, 202). Editors take the
+  revision over (`PPTX_JOB_SAVERS`). Operator: `PptxSlideCard.tsx` (edited state, fonts to upload, 'Show the
+  PowerPoint picture on the screens' with the digest warning, 'Reset slide from PowerPoint'),
+  `PptxReport.tsx` (the import report and the re-import dialog), `pptxJobs.ts` (follow and take over).
+  Tests: `apps/hub/test/pptx-reimport.test.ts`, `apps/operator/test/pptxCard.test.ts`,
+  `e2e/editor-reimport.spec.ts`.
 
 **Files.** `apps/operator/src/views/editor/ops.ts`, `ObjectPanel.tsx`, `SlidePanel.tsx`, `SlidesPanel.tsx`, `PresentationPanel.tsx`, `SlideCanvas.tsx`, `EditorView.tsx`, `editorStore.ts`; `apps/operator/src/components/TextStyleEditor.tsx`, new `FormatBar.tsx`, `ParagraphStrip.tsx`, `CropControl.tsx`; `apps/hub/src/pptx/reimport.ts`, `routes.ts`; `apps/stage/src/model.ts`, `view.ts`; `packages/domain/src/schemas.ts` (`PropsRule.notes`); `packages/client/src/api.ts`.
 

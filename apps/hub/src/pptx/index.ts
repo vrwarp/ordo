@@ -6,7 +6,7 @@ import type { Presentation } from '@ordo/domain';
 import type { Job, PptxReimportReq } from '@ordo/protocol';
 import { loJob, queueFollowUp, referenceJob } from './fallback.ts';
 import { nativeJob, queueStoredClips } from './nativeJob.ts';
-import { queueReimport, reimportJob } from './reimport.ts';
+import { importOptionsOf, queueReimport, reimportJob } from './reimport.ts';
 import {
   enqueuePptx,
   PPTX_JOBS,
@@ -14,6 +14,7 @@ import {
   type PptxImportOptions,
   type PptxNativePayload,
   type PptxReferencePayload,
+  type PptxReimportPayload,
 } from './shared.ts';
 import { queueTextRepair, textRepairJob } from './textRepair.ts';
 
@@ -27,7 +28,10 @@ export class PptxImports {
     jobs.register(PPTX_JOBS.lo, loJob(deps));
     jobs.register(PPTX_JOBS.reference, referenceJob(deps));
     jobs.register(PPTX_JOBS.textRepair, textRepairJob(deps));
-    jobs.register(PPTX_JOBS.reimport, reimportJob(deps));
+    // Abandoned after repeated crashes: the clips its conversion stored still get their media jobs.
+    jobs.register(PPTX_JOBS.reimport, reimportJob(deps), (payload: PptxReimportPayload) =>
+      queueStoredClips(deps, payload?.done),
+    );
   }
 
   /** Queue the native import of a stored deck (`POST /import/document` with `renderer=native`). */
@@ -101,11 +105,36 @@ export class PptxImports {
 
   /**
    * Queue 'Re-import from PowerPoint' for a presentation (M4 item F, `reimport.ts`; the route refuses it
-   * while the presentation is locked or has no stored deck).
+   * while the presentation is locked or has no stored deck), with the options of its first import when the
+   * queue still has that job. The same request while one is queued or running gets that job: repeated
+   * clicks never stack conversions.
    */
   queueReimport(presentationId: string, hash: string, req: PptxReimportReq, by?: string): Job {
-    return queueReimport(this.deps, presentationId, hash, req, by);
+    const { jobs, lib } = this.deps;
+    const active = lib.db
+      .prepare(
+        `SELECT id, payload FROM jobs WHERE kind = ? AND state IN ('queued', 'running')
+         AND json_extract(payload, '$.presentationId') = ? AND json_extract(payload, '$.hash') = ?
+         ORDER BY created_at, id`,
+      )
+      .all(PPTX_JOBS.reimport, presentationId, hash) as { id: string; payload: string }[];
+    const ask = requestKey(req);
+    for (const r of active) {
+      try {
+        if (requestKey(JSON.parse(r.payload) as PptxReimportPayload) === ask) return jobs.get(r.id);
+      } catch {
+        /* a payload that is not JSON is not this request */
+      }
+    }
+    const options = importOptionsOf(this.deps, presentationId, hash);
+    return queueReimport(this.deps, presentationId, hash, req, by, options);
   }
+}
+
+/** A re-import request compared by what it asks (the order of the ids does not matter). */
+function requestKey(r: Pick<PptxReimportReq, 'slideIds' | 'reset' | 'keep'>): string {
+  const ids = (v: unknown) => (Array.isArray(v) ? [...new Set(v.map(String))].sort() : null);
+  return JSON.stringify([ids(r.slideIds), ids(r.reset), ids(r.keep)]);
 }
 
 /** Slides a reference job switches, merged: absent (every slide) wins; ids at most the route's 5,000. */

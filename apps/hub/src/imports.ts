@@ -18,6 +18,7 @@ import * as realImporters from '@ordo/importers';
 import type { Pro7ImportOptions, Pro7PresRef } from '@ordo/importers';
 import { type Annotation, annotatePptx, renderWithPptxPreview } from '@ordo/pptx-render';
 import { extractZip, ZIP_MAX_IN_MEMORY_BYTES } from '@ordo/importers/zip-stream.ts';
+import type { Job } from '@ordo/protocol';
 import type { Logger } from 'pino';
 import type { HubConfig } from './config.ts';
 import { badRequest, errorMessage, forbidden } from './errors.ts';
@@ -569,6 +570,22 @@ export class ImportService {
       // Retries: a renderer's helper processes can still be letting go of files for a moment.
       await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
+  }
+
+  /**
+   * 'Make editable' on a legacy PowerPoint page (design/27 §11 "'Make editable' … runs the native converter
+   * for that page, which removes the doubled text"; M4 item F): while the presentation's deck is stored, the
+   * page is re-imported natively (`pptx-reimport` with `slideIds: [slideId]`), its id, notes and the objects
+   * added over the page kept. The job to follow; undefined when the slide is not such a page (a PDF page, a
+   * slide rebuilt natively, a deck no longer stored): `makeEditable` lays text boxes over the picture then.
+   */
+  makeEditableNative(presentationId: string, slideId: string, by?: string): Job | undefined {
+    const p = this.lib.presentations.must(presentationId);
+    const fileId = p.source?.kind === 'pptx' ? p.source.fileId : undefined;
+    if (!fileId || !this.lib.getFile(fileId)) return undefined;
+    const slide = p.sections.flatMap((s) => s.slides).find((sl) => sl.id === slideId);
+    if (!slide?.imported || slide.pptx || slide.imported.fileId !== fileId) return undefined;
+    return this.pptx.queueReimport(presentationId, fileId, { slideIds: [slideId] }, by);
   }
 
   /** Turn an imported page's extracted text boxes into editable text objects over the page image. */

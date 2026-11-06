@@ -273,7 +273,7 @@ LibreOffice follow-up as it waits, runs, finishes or fails, fonts to upload "for
 to the Fonts tab), the slides whose import approximated something (`Slide.pptx.notes`, numbered as in the
 editor) and the import's notes. Job results are read defensively (`lib/pptxImport.ts`): another hub version
 or a failed job shows less, never breaks the card, and deck text is only ever shown as text. Follow-up jobs
-(`pptx-lo`, `pptx-reference`, the text repair) are not listed as imports.
+(`pptx-lo`, `pptx-reference`, the text repair, the re-import) are not listed as imports.
 
 In the editor, a slide imported natively has a 'From PowerPoint' card in the Slide panel
 (`PptxSlideCard.tsx`): its class, what was approximated, LibreOffice work still pending, and 'Show
@@ -287,6 +287,39 @@ instead'. The canvas, the thumbnails, the look previews and 'Send to preview' dr
 do (design/27 §5 "One rule for every drawer", `slideContent`): a slide set to show its PowerPoint picture
 shows that picture and only the objects added in ordo (the imported objects, marked by `origin`, are
 neither drawn nor selectable on the canvas), and a picture slide its page picture under its objects.
+
+The card also (M4, design/27 §11 item 12) says when the slide was edited in ordo since the import (its
+imported objects no longer match `Slide.pptx.digest`; objects added in ordo do not count), names the fonts
+of its text the hub cannot draw with their own widths (neither the family nor a metric-compatible fallback
+of the box, such as Carlito for Calibri, is a library font) with 'Upload font' (the Fonts tab), and offers:
+- 'Show the PowerPoint picture on the screens' (`Slide.pptx.show`, one undo step through `actions.ts`
+  `setSlideShows`, saved with the presentation): on an edited slide a confirmation first says that the
+  picture shows the slide as imported, without the edits (objects added in ordo still draw over it); with
+  no picture yet it saves unsaved edits and asks the hub for the pictures with this slide switched
+  (`showPicture: [slide]`), then takes the job's revision over.
+- 'Reset slide from PowerPoint', for an edited slide or one LibreOffice could not draw: after a
+  confirmation it saves unsaved edits and runs the hub's re-import of that slide (`pptx-reimport` with
+  `{ slideIds, reset }`), its progress in the card (a live region); the slide gets the deck's objects back,
+  keeping its id, notes, timing, background and the objects added in ordo on top. History keeps the slide
+  as it was.
+
+'Make editable' on a legacy PowerPoint page (a picture import from before M3) rebuilds the page from the
+stored deck: the hub reroutes it to the re-import of that slide (202 and the job), the editor follows the
+job and takes it over, and the page becomes the native slide with the objects added over it on top and its
+notes. A PDF page, or a deck no longer stored, keeps today's text boxes over the page picture.
+
+The Presentation panel of a PowerPoint presentation ends with its import report (`PptxReport.tsx`): the
+slides per class (`source.native`) or, for a legacy import, that its slides are pictures; legacy pages
+left; hidden and edited slides; slides waiting for LibreOffice or that it could not draw; the fonts to
+upload; the approximated slides (each a button that opens the slide); and the import log (`source.log`,
+the newest 200 lines, warnings tagged), all deck text shown as text. 'Re-import from PowerPoint…' opens a
+dialog with the hub's plan (`GET /presentations/:id/pptx-reimport`, nothing written): slides rebuilt,
+picture slides made editable, edited slides kept, other slides kept, and what is always kept; slides made
+editable by an older build are listed, each with 'Slide N: keep as it is'. 'Re-import' saves unsaved edits
+first, queues the job and closes the dialog (focus goes back to the button, or to the report while the job
+runs); the report shows its progress, and when it is done the editor takes its revision over like a
+PowerPoint follow-up's (`PPTX_JOB_SAVERS` includes 'pptx-reimport': an unsaved edit of a slide stays, every
+other slide shows the re-import) and says what changed. Nothing runs while the presentation is live.
 
 ## Service checklist
 

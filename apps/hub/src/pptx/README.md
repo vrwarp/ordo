@@ -38,6 +38,8 @@ POST /import/document  (423 while live, ≤ 1 GiB, zip + .pptx sniff, stored by 
  PUT /presentations/:id or a restored revision with slides pending again ─► queueFollowUp (fallback.ts)
  heavy job 'pptx-reference' ('Show PowerPoint picture': every slide, hidden ones too, into Slide.pptx.refMediaId)          [D]
  light job 'pptx-text-repair' (legacy imported.textBoxes, once)                                                [G]
+ light job 'pptx-reimport' ('Re-import from PowerPoint', reimport.ts): steps 1-5 again (buildNative), merged
+     into the stored presentation, one revision, then 'pptx-lo' as above; 'Make editable' on a legacy page  [M4 F]
  goLive ─► resolvePlaylist: bundled and script-fallback fonts, CJK faces by text scan [E]; > 12 MiB warning [F]
  operator: ImportTab and import card [H]; previewSlice and the adopt check [F]; MediaTab and gated text [G]
 ```
@@ -66,7 +68,7 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 | `renderCopyTask.ts` | Worker side of `pptx-render-copy`: `buildRenderCopy` + spilled media → .pptx               | D      |
 | `art.ts`            | Worker side of `pptx-art`: white/black alpha and bounding-box crop                         | D      |
 | `textRepair.ts`     | `pptx-text-repair` job, `pagesOf`, `readDeckText`, `slideBoxes`, `queueTextRepair`         | G      |
-| `reimport.ts`       | 'Re-import from PowerPoint': plan, merge and job (M4 stubs; operator editor/M4.md)         | M4 F   |
+| `reimport.ts`       | 'Re-import from PowerPoint': plan, merge and the `pptx-reimport` job (M4; editor/M4.md)    | M4 F   |
 
 Contracts already in place (the scaffold):
 - `@ordo/domain`: `Slide.pptx` (`SlidePptx`: fileId, index, shown, class, version, digest, pending, notes,

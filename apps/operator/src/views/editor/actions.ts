@@ -30,8 +30,11 @@ import {
   ungroup,
   useAsBackground,
   withObject,
+  withSlide,
 } from './ops/index.ts';
 import type { ZOrder } from './ops.ts';
+// F: the PowerPoint card's slide ops (pure, beside the card's other readers).
+import { showObjects, showPicture } from '../../lib/pptxImport.ts';
 
 /*
  * The M4 ops wired into the editor store (M4.md): each action applies one op to the open presentation through
@@ -170,6 +173,16 @@ export function flipPicture(objectId: string, flip: PictureFlip): void {
 /** 'Replace' a picture (aspect-preserving re-crop). */
 export function replacePictureWith(objectId: string, media: PictureSize): void {
   onImage(objectId, (o) => replacePicture(o, media));
+}
+
+// ---- F: the PowerPoint card ---------------------------------------------------------------------------
+
+/**
+ * 'Show the PowerPoint picture on the screens' / 'Show the objects instead' (`Slide.pptx.show`; the picture
+ * must exist, `refMediaId`). The re-import and the reference pictures are hub jobs (`pptxJobs.ts`).
+ */
+export function setSlideShows(slideId: string, what: 'picture' | 'objects'): void {
+  change((p) => withSlide(p, slideId, what === 'picture' ? showPicture : showObjects));
 }
 
 // ---- E: slide and presentation ops -------------------------------------------------------------------

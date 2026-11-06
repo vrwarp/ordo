@@ -143,7 +143,10 @@ export type GoogleFontFamily = { family: string; category?: string; variants?: s
  * native by default, and the native import's "extendBackgrounds", "transitionSounds" 1|0) -> Job: 'pptx-native'
  * (editable slides, design/27) or 'document' (page pictures), whose result has { presentationId }.
  */
-/** POST /presentations/:id/slides/:slideId/make-editable -> Presentation */
+/**
+ * POST /presentations/:id/slides/:slideId/make-editable -> Presentation (text boxes over the page picture), or
+ * 202 Job 'pptx-reimport' for a legacy PowerPoint page whose deck is stored (rebuilt natively, design/27 §11)
+ */
 /** GET /files/:hash -> bytes (range supported). Output/stage need ?token= or header. */
 /** POST /outputs/:id/token/rotate -> Output (with token) */
 /** POST /actions { id, arg? } (operate) -> LiveAck-like { seq } ; the HTTP bridge for surfaces and tests. */
