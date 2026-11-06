@@ -270,6 +270,10 @@ export interface TextBody {
   /** `vert` when not horizontal (residual until M8). */
   vert?: string;
   numCol?: number;
+  /**
+   * `anchorCtr` along the bodyPr chain: true when it moves text (residual until M8), false when it changes
+   * nothing because every paragraph that draws something is centred (`text.ts`); absent when not set.
+   */
   anchorCtr?: boolean;
   /** `a:prstTxWarp prst` when not `textNoShape` (residual). */
   warp?: string;

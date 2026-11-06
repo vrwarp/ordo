@@ -334,4 +334,55 @@ describe('body properties', () => {
     expect(b!.autofit).toEqual({ kind: 'shape' });
     expect(c!.warp).toBe('textArchUp');
   });
+
+  it('records anchorCtr as moving text only when a paragraph that draws something is not centred', () => {
+    const ctr = 'algn="ctr"';
+    const shapes = [
+      // Every paragraph centred, an empty and a blank one left-aligned: centring the block changes nothing.
+      body(
+        para(run('Centred'), ctr) + para('') + para(run('   ')) + para(run('Also centred'), ctr),
+        'anchorCtr="1"',
+      ),
+      // A left-aligned line moves to the middle of the box with the block.
+      body(para(run('Centred'), ctr) + para(run('Left')), 'anchorCtr="1"'),
+      body(para(run('Right'), 'algn="r"'), 'anchorCtr="true"'),
+      body(para(run('Justified'), 'algn="just"'), 'anchorCtr="1"'),
+      // Blank text shows when it is underlined or bulleted, and a field shows the value PowerPoint fills in.
+      body(para(run('Centred'), ctr) + para(run('  ', 'u="sng"')), 'anchorCtr="1"'),
+      body(
+        para(run('Centred'), ctr) + `<a:p><a:pPr><a:buChar char="•"/></a:pPr>${run(' ')}</a:p>`,
+        'anchorCtr="1"',
+      ),
+      body(
+        para(run('Centred'), ctr) + para('<a:fld id="{1}" type="slidenum"><a:t></a:t></a:fld>'),
+        'anchorCtr="1"',
+      ),
+      // In columns the block can be narrower than the columns, so centred text can move too.
+      body(para(run('Centred'), ctr), 'anchorCtr="1" numCol="2"'),
+      body(para(run('Centred'), ctr), 'anchorCtr="0"'),
+      body(para(run('Left'))),
+    ];
+    const got = bodies({ slides: [{ shapes: shapes.map((b, i) => box(b, { id: i + 2 })).join('') }] });
+    expect(got.map((t) => t.anchorCtr)).toEqual([false, ...Array(7).fill(true), undefined, undefined]);
+  });
+
+  it('reads anchorCtr through the bodyPr chain and judges it by the slide’s own paragraphs', () => {
+    const layouts = [
+      {
+        shapes: sp({ id: 2, ph: 'type="body" idx="1"', txBody: body(para(run('Prompt')), 'anchorCtr="1"') }),
+      },
+    ];
+    const [centred, left] = bodies({
+      layouts,
+      slides: [
+        {
+          shapes:
+            sp({ id: 2, ph: 'idx="1"', txBody: body(para(run('Centred'), 'algn="ctr"')) }) +
+            sp({ id: 3, ph: 'idx="1"', txBody: body(para(run('Left'))) }),
+        },
+      ],
+    });
+    expect(centred!.anchorCtr).toBe(false);
+    expect(left!.anchorCtr).toBe(true);
+  });
 });

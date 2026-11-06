@@ -796,7 +796,8 @@ with neutral attributes only and whitespace inside the tag does not count; `crop
 **Support** per element (§5): the reader's verdict (walk: presets, fills; sheared children) merged with
 residual (chart, table, SmartArt, OLE, other graphic frames, maths, a bevel with a size or an extrusion,
 a warp other than `textNoShape`, text that is vertical, `numCol` > 1 or `anchorCtr` through the bodyPr
-chain, `.wdp`/`.hdp` pictures) and approx (reflection, inner shadow, soft edge on a picture, EMF/WMF
+chain when it moves text (not when every paragraph that draws something is centred, `text.ts`),
+`.wdp`/`.hdp` pictures) and approx (reflection, inner shadow, soft edge on a picture, EMF/WMF
 waiting for conversion). The XML of an element is `ShapeElement.node` when the walk keeps it, else found
 by source and `cNvPr id` (at most 4 candidates per kind, indexed once per part); each node's subtree is
 rated once per deck (`marksOf`), so a huge layout shape sharing an id with thousands of elements costs one

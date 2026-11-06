@@ -335,6 +335,10 @@ describe('element support (design/27 §5)', () => {
     expect(support(textBox(2, para(run('Text')), 'vert="vert270"'))).toEqual([['residual', ['vert']]]);
     expect(support(textBox(2, para(run('Text')), 'numCol="2"'))).toEqual([['residual', ['numCol']]]);
     expect(support(textBox(2, para(run('Text')), 'anchorCtr="1"'))).toEqual([['residual', ['anchorCtr']]]);
+    // Centring the block of centred lines changes nothing (`text.ts`), so the XML attribute is not consulted.
+    expect(support(textBox(2, para(run('Text'), 'algn="ctr"') + para(''), 'anchorCtr="1"'))).toEqual([
+      ['native', []],
+    ]);
     expect(support(textBoxWith(2, '<a:prstTxWarp prst="textWave1"><a:avLst/></a:prstTxWarp>'))).toEqual([
       ['residual', ['warp']],
     ]);
