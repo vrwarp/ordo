@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_THEME, parseLyrics, songFromParsed, type Theme } from '@ordo/domain';
+import { DEFAULT_THEME, parseLyrics, type Slide, songFromParsed, type Theme } from '@ordo/domain';
 import { snapBox } from '../src/views/editor/snapping.ts';
 import { History } from '../src/views/editor/history.ts';
+import { MAX_TEXT_CANVAS, TEXT_MARGIN, textDensity, textRasterKey } from '../src/views/editor/textRaster.ts';
 import {
   addSection,
   applyTheme,
@@ -109,5 +110,57 @@ describe('slide ops', () => {
     expect(objs[1]!.box.x).toBe(lyr.box.x + 20);
     const back = reorderObject(d.p, s0.id, d.id!, 'back');
     expect(back.sections[0]!.slides[0]!.objects[0]!.id).toBe(d.id);
+  });
+});
+
+describe('rich text in the editor (design/27 §7.4, §11)', () => {
+  /** The song's first slide with its lyric made rich: a bold 'b' and a level per paragraph. */
+  const richSong = () => {
+    const p = song();
+    const s0 = p.sections[0]!.slides[0]!;
+    const lyr = lyricObject(s0)!;
+    expect(lyr.text).toBe('a\nb\nc\nd');
+    return {
+      p: updateObject(p, s0.id, lyr.id, (o) => ({
+        ...o,
+        runs: [{ start: 2, end: 3, fontWeight: 900 }],
+        paras: [{ level: 1 }, { level: 2 }, { level: 3 }, { level: 4 }],
+      })),
+      id: s0.id,
+    };
+  };
+  const rich = (s: Slide) => {
+    const o = lyricObject(s)!;
+    return [o.text, o.runs?.map((r) => [r.start, r.end]), o.paras?.map((x) => x?.level)];
+  };
+
+  it('splits and merges slides with their runs and paragraph styles', () => {
+    const { p, id } = richSong();
+    const split = splitSlide(p, id);
+    expect(split.sections[0]!.slides.slice(0, 2).map(rich)).toEqual([
+      ['a\nb', [[2, 3]], [1, 2]],
+      ['c\nd', [], [3, 4]],
+    ]);
+    const merged = mergeWithNext(split, id);
+    expect(rich(merged.sections[0]!.slides[0]!)).toEqual(['a\nb\nc\nd', [[2, 3]], [1, 2, 3, 4]]);
+  });
+
+  it('keeps a legacy lyric legacy through a split and a merge', () => {
+    const p = song();
+    const s0 = p.sections[0]!.slides[0]!;
+    const merged = mergeWithNext(splitSlide(p, s0.id), s0.id);
+    const o = lyricObject(merged.sections[0]!.slides[0]!)!;
+    expect('runs' in o || 'paras' in o).toBe(false);
+  });
+
+  it('rasterizes rich text at the screen density and legacy text at 1:1', () => {
+    const lyr = lyricObject(song().sections[0]!.slides[0]!)!;
+    expect(textDensity(lyr, 2)).toBe(1);
+    const r = { ...lyr, runs: [] };
+    expect(textDensity(r, 2)).toBe(2);
+    expect(textDensity(r, Number.NaN)).toBe(1);
+    const huge = { ...r, box: { ...r.box, w: 3840 } };
+    expect((3840 + 2 * TEXT_MARGIN) * textDensity(huge, 4)).toBeLessThanOrEqual(MAX_TEXT_CANVAS);
+    expect(textRasterKey(r, 3, 2)).not.toBe(textRasterKey(r, 3, 1));
   });
 });

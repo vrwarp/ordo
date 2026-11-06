@@ -1,9 +1,12 @@
 import {
   type Box,
   DEFAULT_THEME,
+  editText,
   type ImageObject,
+  joinText,
   newId,
   type Presentation,
+  replaceText,
   type Section,
   type ShapeObject,
   type Slide,
@@ -164,17 +167,19 @@ export function splitSlide(p: Presentation, slideId: string, atLine?: number): P
   const lines = lyric.text.split('\n');
   if (lines.length < 2) return p;
   const cut = Math.max(1, Math.min(lines.length - 1, atLine ?? Math.ceil(lines.length / 2)));
-  const first = lines.slice(0, cut).join('\n');
-  const second = lines.slice(cut).join('\n');
+  // Cut at the line break: runs and paragraph styles go with their lines (design/27 §11).
+  const at = lines.slice(0, cut).join('\n').length;
+  const first = replaceText(lyric, at, lyric.text.length, '');
   const a: Slide = {
     ...slide,
-    objects: slide.objects.map((o) => (o.id === lyric.id ? { ...lyric, text: first } : o)),
+    objects: slide.objects.map((o) => (o.id === lyric.id ? first : o)),
   };
   const bBase = cloneSlide(slide);
   const bLyric = lyricObject(bBase)!;
+  const second = replaceText(bLyric, 0, at + 1, '');
   const b: Slide = {
     ...bBase,
-    objects: bBase.objects.map((o) => (o.id === bLyric.id ? { ...bLyric, text: second } : o)),
+    objects: bBase.objects.map((o) => (o.id === bLyric.id ? second : o)),
   };
   return mapSection(p, pos.si, (sec) => {
     const slides = [...sec.slides];
@@ -195,7 +200,9 @@ export function mergeWithNext(p: Presentation, slideId: string): Presentation {
   const lb = lyricObject(b);
   if (!la) return p;
   const text = [la.text, lb?.text ?? ''].filter((t) => t.trim()).join('\n');
-  const merged: Slide = { ...a, objects: a.objects.map((o) => (o.id === la.id ? { ...la, text } : o)) };
+  // Both texts kept: the next slide's runs and paragraph styles move after this one's (design/27 §11).
+  const joined = lb && la.text.trim() && lb.text.trim() ? joinText(la, lb) : editText(la, text);
+  const merged: Slide = { ...a, objects: a.objects.map((o) => (o.id === la.id ? joined : o)) };
   return mapSection(p, pos.si, (s) => {
     const slides = [...s.slides];
     slides.splice(pos.i, 2, merged);

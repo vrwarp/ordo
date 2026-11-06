@@ -59,7 +59,8 @@ Public surface (`index.ts`, re-exported by `@ordo/renderer`): `Measurer`, `Seg`,
   signature from data already in the pipeline, not by reordering stages.
 - `test-util.ts`: `testMeasurer({ em, advance })` (fixed advance per code point, joiners zero wide,
   `calls` and `texts` recorded) and `recordingCtx()` (a fake 2D context that records draw calls with the
-  font, fill and transform in effect). Add helpers; do not change existing behaviour.
+  font, fill and transform in effect, and the rest of the state in `state`: direction, alignment, lang,
+  spacing, alpha, shadow, stroke). Add helpers; do not change existing behaviour.
 - `clamp.ts`, `packages/domain/src/schemas.ts`, `packages/importers/src/sanitize.ts`: the scaffold wired every
   M2 field. A stage that needs a different bound changes the clamp and its property test together.
 
@@ -142,19 +143,29 @@ Step 11 of §6 and `readableText` (§1, §3.2).
 
 ### D. paint-dispatch: `paint.ts`, `rich.ts`, the `text2d.ts` dispatch, bands, the editor
 
-Paint passes and the dispatch of §6.
-- `paintRich`: passes 1 (fill box and highlight), 2 (shadows, run else box), 3 (glow: `shadowBlur`, zero
-  offset), 4 (outline, 2× width, round joins), 5 (fill), 6 (underline and strike: F/18 thick, underline at
-  baseline + 0.1F), 7 (bullets); hidden paragraphs laid out, not painted; caches. Canvas shadows ignore the
-  transform: multiply offsets and blur by `scale`.
-- The legacy `ctx.direction` rule in `drawText`: per paragraph, only when it has a strong RTL character
-  (first strong wins), so LTR text and every golden stay unchanged.
-- Bands (`drawSlide2D` lyric-only and next-slide bands, `rasterLowerThird`): when the source object is rich
-  or the text has strong RTL characters, lay out `readableText` (C) through `layoutRich` with the look's
-  style and the object's `paras` directions.
-- `apps/operator/src/views/editor/SlideCanvas.tsx`: already calls `drawTextObject`; draw rich text at
-  scale × devicePixelRatio into the cached canvas, keyed by the font generation.
-- Tests: paint order on `recordingCtx`, hidden paragraphs, bands with Hebrew.
+Paint passes and the dispatch of §6. **Done** (wave 1):
+- `paintRich`: passes 1 (fill box, run highlights 0.9F above to 0.3F below the baseline), 2 (shadows, run
+  else box, underlines and strikes cast them too), 3 (glow: the glyphs in the glow colour with `shadowBlur`
+  = radius, zero offset), 4 (outline, 2× width, round joins), 5 (fill), 6 (underline centred 0.1F below,
+  strike 0.25F above the baseline, F/18 thick, F the segment's drawn size, merged across neighbouring
+  segments and stopped at the hanging whitespace: `[line.x, line.x + line.w]`), 7 (bullets, left to
+  right). Hidden paragraphs are laid out, not painted. Canvas shadows ignore the transform, so offsets and
+  blur are multiplied by `scale`: `scale` is the whole device density, never folded into the context.
+- Cache: `paintPlan(o, l)` (drawn strings, resolved styles, CSS colours, merged rectangles) memoised by
+  layout identity; context state is assigned only when it changes.
+- The legacy `ctx.direction` rule in `drawText` (`paragraphDirections`): only paragraphs with a strong RTL
+  character are measured and drawn in their first strong direction, with `textAlign 'left'` for the whole
+  block; LTR-only text assigns neither, and the goldens stay at max delta 0.
+- Bands: `drawBandText` (lyric-only and next-slide bands in `drawSlide2D`, `rasterLowerThird`) and
+  `bandObject` (rich.ts): when the source is rich, the text has a strong RTL character or the look's style
+  has a rich field, `readableText(src)` goes through `layoutRich` in the look's style with
+  `autofit: 'shrink'` and the source paragraphs' `rtl` (else its box `direction`).
+- Editor: `SlideCanvas` draws rich text at stage scale × devicePixelRatio into the cached canvas, keyed by
+  the font generation (`apps/operator/src/views/editor/textRaster.ts`); legacy text stays at 1:1. Plain
+  text edits go through `editText` (`packages/domain/src/textEdit.ts`, with `replaceText` and `joinText`
+  for slide split and merge).
+- To do: the M6 gradient over the box; an effect sprite cache for large blurs (§7.5) once the raster
+  bench shows the need. Until B's autofit search lands, bands through the engine keep their full size.
 
 ### E. fonts: `fonts.ts` and the three drawers
 

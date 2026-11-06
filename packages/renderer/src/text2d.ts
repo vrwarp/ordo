@@ -8,12 +8,14 @@ import {
   type TextObject,
   type TextStyle,
   firstText,
+  readableText,
   rgbaCss,
 } from '@ordo/domain';
 
 import { CLAMP, clampBox, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
 import { type Ctx2D, roundRect, setLetterSpacing, withRotation } from './ctx.ts';
-import { drawRichText, isRichText } from './text/rich.ts';
+import { firstStrong, hasStrongRtl } from './text/bidi.ts';
+import { bandObject, drawRichText, isRichStyle, isRichText } from './text/rich.ts';
 
 export type { Ctx2D } from './ctx.ts';
 export type ImageLookup = (mediaId: string) => CanvasImageSource | undefined;
@@ -26,39 +28,75 @@ export function fontString(style: TextStyle, scale: number, sizeOverride?: numbe
 /** Greedy word wrap. Paragraphs are separated by \n. Long words are broken by characters. */
 export function wrapLines(ctx: Pick<Ctx2D, 'measureText'>, text: string, maxWidth: number): string[] {
   const out: string[] = [];
-  for (const para of text.split('\n')) {
-    const words = para.split(/\s+/).filter(Boolean);
-    if (!words.length) {
-      out.push('');
-      continue;
-    }
-    let line = '';
-    for (const w of words) {
-      const candidate = line ? `${line} ${w}` : w;
-      if (ctx.measureText(candidate).width <= maxWidth || !line) {
-        if (!line && ctx.measureText(w).width > maxWidth) {
-          // break an over-long word
-          let chunk = '';
-          for (const ch of w) {
-            if (ctx.measureText(chunk + ch).width > maxWidth && chunk) {
-              out.push(chunk);
-              chunk = ch;
-            } else chunk += ch;
-          }
-          line = chunk;
-        } else line = candidate;
-      } else {
-        out.push(line);
-        line = w;
-      }
-    }
-    out.push(line);
-  }
+  for (const para of text.split('\n')) wrapParagraph(ctx, para, maxWidth, out);
   return out;
 }
 
+/** The lines of one paragraph, appended to `out`. */
+function wrapParagraph(ctx: Pick<Ctx2D, 'measureText'>, para: string, maxWidth: number, out: string[]): void {
+  const words = para.split(/\s+/).filter(Boolean);
+  if (!words.length) {
+    out.push('');
+    return;
+  }
+  let line = '';
+  for (const w of words) {
+    const candidate = line ? `${line} ${w}` : w;
+    if (ctx.measureText(candidate).width <= maxWidth || !line) {
+      if (!line && ctx.measureText(w).width > maxWidth) {
+        // break an over-long word
+        let chunk = '';
+        for (const ch of w) {
+          if (ctx.measureText(chunk + ch).width > maxWidth && chunk) {
+            out.push(chunk);
+            chunk = ch;
+          } else chunk += ch;
+        }
+        line = chunk;
+      } else line = candidate;
+    } else {
+      out.push(line);
+      line = w;
+    }
+  }
+  out.push(line);
+}
+
+/**
+ * The direction `drawText` sets for each paragraph (design/27 §6 "Bands, stage and readable text"): the
+ * direction of its first strong character, only for a paragraph that has a strong right-to-left character;
+ * null for the others, which keep the context's direction. Null when no paragraph has one, so left-to-right
+ * text is laid out and drawn exactly as before.
+ */
+export function paragraphDirections(text: string): ('ltr' | 'rtl' | null)[] | null {
+  if (!hasStrongRtl(text)) return null;
+  return text.split('\n').map((p) => (hasStrongRtl(p) ? (firstStrong(p) ?? 'rtl') : null));
+}
+
+/** `wrapLines` with each paragraph measured in its direction, and the direction of every line. */
+function wrapDirected(
+  ctx: Ctx2D,
+  text: string,
+  maxWidth: number,
+  dirs: readonly ('ltr' | 'rtl' | null)[],
+): { lines: string[]; dirs: ('ltr' | 'rtl' | null)[] } {
+  const dir0 = ctx.direction;
+  const lines: string[] = [];
+  const out: ('ltr' | 'rtl' | null)[] = [];
+  text.split('\n').forEach((para, i) => {
+    const d = dirs[i] ?? null;
+    ctx.direction = d ?? dir0;
+    const n = lines.length;
+    wrapParagraph(ctx, para, maxWidth, lines);
+    for (let k = n; k < lines.length; k++) out.push(d);
+  });
+  ctx.direction = dir0;
+  return { lines, dirs: out };
+}
+
 export type TextLayout = {
-  lines: { text: string; x: number; y: number; width: number }[];
+  /** `dir` is set on lines of paragraphs with a strong right-to-left character (`paragraphDirections`). */
+  lines: { text: string; x: number; y: number; width: number; dir?: 'ltr' | 'rtl' }[];
   fontSize: number;
   lineHeightPx: number;
   block: { x: number; y: number; w: number; h: number };
@@ -93,11 +131,14 @@ export function layoutText(
   const innerH = Math.max(1, bh - 2 * pad);
   let size = style.fontSizePx;
   let lines: string[] = [];
+  let lineDirs: ('ltr' | 'rtl' | null)[] | null = null;
   let lh = 0;
+  const dirs = paragraphDirections(text);
   for (;;) {
     ctx.font = fontString(style, scale, size);
     setLetterSpacing(ctx, style.letterSpacing * scale);
-    lines = wrapLines(ctx, text, innerW);
+    if (dirs) ({ lines, dirs: lineDirs } = wrapDirected(ctx, text, innerW, dirs));
+    else lines = wrapLines(ctx, text, innerW);
     lh = size * scale * style.lineHeight;
     if (!fit || lines.length * lh <= innerH || size <= Math.max(CLAMP.minFontPx, style.fontSizePx * minScale))
       break;
@@ -112,16 +153,20 @@ export function layoutText(
   const lo = -CLAMP.boxFactor * LOGICAL_HEIGHT * scale;
   const hi = CLAMP.boxFactor * LOGICAL_HEIGHT * scale;
   const laid: TextLayout['lines'] = [];
+  const dir0 = lineDirs ? ctx.direction : undefined;
   for (let i = 0; i < lines.length; i++) {
     const y = y0 + i * lh;
     if (y < lo || y > hi) continue;
     const t = lines[i]!;
+    const dir = lineDirs?.[i];
+    if (lineDirs) ctx.direction = dir ?? dir0!;
     const width = ctx.measureText(t).width;
     let x = bx + pad;
     if (style.align === 'center') x = bx + pad + (innerW - width) / 2;
     else if (style.align === 'right') x = bx + pad + innerW - width;
-    laid.push({ text: t, x, y, width });
+    laid.push(dir ? { text: t, x, y, width, dir } : { text: t, x, y, width });
   }
+  if (lineDirs) ctx.direction = dir0!;
   const maxW = laid.reduce((m, l) => Math.max(m, l.width), 0);
   let blockX = bx + pad;
   if (style.align === 'center') blockX = bx + pad + (innerW - maxW) / 2;
@@ -151,8 +196,17 @@ export function drawText(
   ctx.save();
   ctx.globalAlpha = num(opts.opacity, 0, 1, 1);
   const layout = layoutText(ctx, text, style, box, scale, opts.fit ?? false);
+  // Lines of right-to-left paragraphs are drawn in their direction, left-aligned at their x like every line.
+  const directed = layout.lines.some((l) => l.dir);
+  const dir0 = directed ? ctx.direction : undefined;
+  const lineDir = directed
+    ? (l: TextLayout['lines'][number]) => {
+        ctx.direction = l.dir ?? dir0!;
+      }
+    : undefined;
   withRotation(ctx, box, scale, () => {
     ctx.textBaseline = 'alphabetic';
+    if (directed) ctx.textAlign = 'left';
     const ascent = layout.fontSize * scale * 0.8;
     const offsetY = (layout.lineHeightPx - layout.fontSize * scale) / 2 + ascent;
     if (style.fill && text.trim()) {
@@ -174,7 +228,10 @@ export function drawText(
       ctx.shadowOffsetX = style.shadow.dx * scale;
       ctx.shadowOffsetY = style.shadow.dy * scale;
       ctx.fillStyle = rgbaCss(style.outline?.color ?? style.color);
-      for (const l of layout.lines) ctx.fillText(l.text, l.x, l.y + offsetY);
+      for (const l of layout.lines) {
+        lineDir?.(l);
+        ctx.fillText(l.text, l.x, l.y + offsetY);
+      }
       ctx.restore();
     }
     if (style.outline && style.outline.width > 0) {
@@ -182,10 +239,16 @@ export function drawText(
       ctx.miterLimit = 2;
       ctx.lineWidth = style.outline.width * 2 * scale;
       ctx.strokeStyle = rgbaCss(style.outline.color);
-      for (const l of layout.lines) ctx.strokeText(l.text, l.x, l.y + offsetY);
+      for (const l of layout.lines) {
+        lineDir?.(l);
+        ctx.strokeText(l.text, l.x, l.y + offsetY);
+      }
     }
     ctx.fillStyle = rgbaCss(style.color);
-    for (const l of layout.lines) ctx.fillText(l.text, l.x, l.y + offsetY);
+    for (const l of layout.lines) {
+      lineDir?.(l);
+      ctx.fillText(l.text, l.x, l.y + offsetY);
+    }
   });
   ctx.restore();
   return layout;
@@ -284,6 +347,40 @@ export type SlideDrawOptions = {
   skipImported?: boolean;
 };
 
+/**
+ * Draw a look band (the lyric-only and next-slide bands, the lower third): `drawText` shrunk to fit, as
+ * always, unless the source object is rich, the text has a strong right-to-left character or the look's
+ * style has a rich field. Then the source's readable text (`readableText`, numbers and bullets written as
+ * text) goes through the rich engine in the look's style, with the source paragraphs' directions
+ * (design/27 §6 "Bands, stage and readable text").
+ */
+export function drawBandText(
+  ctx: Ctx2D,
+  text: string,
+  style: TextStyle,
+  band: Box,
+  scale: number,
+  src?: TextObject,
+): void {
+  const clamped = clampStyle(style);
+  text = clampText(text);
+  if ((src && isRichText(src)) || isRichStyle(clamped) || hasStrongRtl(text))
+    drawRichText(ctx, bandObject(src ? readableText(src) : text, clamped, clampBox(band), src), scale);
+  else drawText(ctx, text, style, band, scale, { fit: true });
+}
+
+/** The text object a lyric-only band shows `text` of: the one `firstText` reads, when it holds that text. */
+export function bandSource(slide: Slide, text: string): TextObject | undefined {
+  let o: SlideObject | undefined;
+  if (slide.lyricObjectId) {
+    o = slide.objects.find((x) => x.id === slide.lyricObjectId);
+    if (o?.type !== 'text' || !o.text) o = undefined;
+  }
+  o ??= slide.objects.find((x) => x.type === 'text');
+  if (o?.type !== 'text') return undefined;
+  return o.text === text || readableText(o) === text ? o : undefined;
+}
+
 /** The text a lyric-only look shows for a slide, or null when the look shows nothing for it. */
 export function lyricTextFor(slide: Slide, look: Look | undefined, isSong: boolean): string | null {
   const rule = look?.layers.slide;
@@ -313,10 +410,10 @@ export function drawSlide2D(ctx: Ctx2D, rawSlide: Slide, opts: SlideDrawOptions)
     return;
   }
   const text = lyricTextFor(slide, look, opts.isSong ?? true);
-  if (text) drawText(ctx, text, rule.style, rule.band, scale, { fit: true });
+  if (text) drawBandText(ctx, text, rule.style, rule.band, scale, bandSource(slide, text));
   if (rule.nextSlide && next) {
     const nt = lyricTextFor(next, look, opts.isSong ?? true);
-    if (nt) drawText(ctx, nt, rule.nextSlide.style, rule.nextSlide.band, scale, { fit: true });
+    if (nt) drawBandText(ctx, nt, rule.nextSlide.style, rule.nextSlide.band, scale, bandSource(next, nt));
   }
 }
 

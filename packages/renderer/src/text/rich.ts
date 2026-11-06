@@ -1,6 +1,6 @@
-import type { TextObject, TextStyle } from '@ordo/domain';
+import type { Box, TextObject, TextPara, TextStyle } from '@ordo/domain';
 
-import { clampObject, num } from '../clamp.ts';
+import { CLAMP, clampObject, num } from '../clamp.ts';
 import type { Ctx2D } from '../ctx.ts';
 import { paraBullets } from './bullets.ts';
 import { currentFontEnv } from './fonts.ts';
@@ -40,10 +40,43 @@ export const RICH_STYLE_KEYS = [
  * without any of them are drawn by `drawText` exactly as before these fields existed.
  */
 export function isRichText(o: TextObject): boolean {
-  if (o.runs !== undefined || o.paras !== undefined) return true;
-  const s = o.style as Partial<Record<(typeof RICH_STYLE_KEYS)[number], unknown>>;
+  return o.runs !== undefined || o.paras !== undefined || isRichStyle(o.style);
+}
+
+/** Whether a style has a field only the rich engine draws (a look's band style can, too). */
+export function isRichStyle(style: TextStyle): boolean {
+  const s = style as Partial<Record<(typeof RICH_STYLE_KEYS)[number], unknown>>;
   for (const k of RICH_STYLE_KEYS) if (s[k] !== undefined) return true;
   return false;
+}
+
+/**
+ * The text object a look band lays out through the rich engine (design/27 §6 "Bands"): `text` (the source's
+ * readable text) in the look's `style` and `band`, shrunk to fit as `drawText`'s bands are, with the
+ * direction of each of the source object's paragraphs (its `paras[i].rtl`, else its box `direction`), so a
+ * Hebrew verse stays right to left in a lyric-only band whatever the look says.
+ */
+export function bandObject(text: string, style: TextStyle, band: Box, src?: TextObject): TextObject {
+  const o: TextObject = {
+    id: 'band',
+    type: 'text',
+    box: band,
+    text,
+    style: { ...style, autofit: style.autofit ?? 'shrink' },
+    opacity: 1,
+  };
+  if (!src) return o;
+  const dflt = src.style.direction === 'rtl' ? true : src.style.direction === 'ltr' ? false : undefined;
+  const paras: (TextPara | null)[] = [];
+  let count = 1;
+  for (let i = text.indexOf('\n'); i >= 0 && count < CLAMP.maxParas; i = text.indexOf('\n', i + 1)) count++;
+  for (let i = 0; i < count; i++) {
+    const rtl = src.paras?.[i]?.rtl ?? dflt;
+    paras.push(rtl === undefined ? null : { rtl });
+  }
+  while (paras.length && paras[paras.length - 1] === null) paras.pop();
+  if (paras.length) o.paras = paras;
+  return o;
 }
 
 const layouts = new WeakMap<
