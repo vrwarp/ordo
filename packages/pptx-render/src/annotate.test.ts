@@ -236,6 +236,23 @@ describe('annotatePptx', () => {
     expect(xml).toContain('<a:t/>');
   });
 
+  it('gives table cell paragraphs their cell margins, with the defaults', async () => {
+    const cell = (tcPr: string, text: string) =>
+      `<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p>${run(text)}</a:p></a:txBody>${tcPr}</a:tc>`;
+    const body =
+      '<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="9" name="T"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>' +
+      '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tr h="100">' +
+      cell('<a:tcPr marL="68580" marR="12700" marT="0" marB="0" anchor="ctr"/>', 'Own') +
+      cell('<a:tcPr/>', 'Default') +
+      `</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>${sp({ body: `<a:p>${run('Box')}</a:p>` })}`;
+    const a = await annotatePptx(await deck(body));
+    const xml = await (await JSZip.loadAsync(a.bytes)).file('ppt/slides/slide1.xml')!.async('string');
+    const cells: Record<string, unknown> = {};
+    for (const t of xml.matchAll(/<a:t>([^<]*)<\/a:t>/g))
+      cells[t[1]!.slice(9)] = a.paras[a.runs[decodeMarker(t[1]!)!]!.p!]!.cell;
+    expect(cells).toEqual({ Own: [5.4, 0, 1, 0], Default: [7.2, 3.6, 7.2, 3.6], Box: undefined });
+  });
+
   it('resolves line spacing and text box margins with their inheritance and defaults', async () => {
     const body =
       // Layout placeholder idx 1 sets nothing for spacing; the master body style says 90 %.

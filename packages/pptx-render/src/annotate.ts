@@ -84,6 +84,12 @@ export type ParaStyle = {
    */
   marL?: number;
   indent?: number;
+  /**
+   * The margins in points (left, top, right, bottom) of the table cell the paragraph is in (`a:tcPr`
+   * `marL`/`marT`/`marR`/`marB`, PowerPoint's defaults when unset): pptx-preview rounds them down, takes
+   * a point off left and right, and uses 5 and 3 points when they are unset.
+   */
+  cell?: [number, number, number, number];
 };
 
 export type Spacing = { pt: number } | { em: number };
@@ -407,6 +413,8 @@ type ShapeCtx = {
   grouped?: boolean;
   /** The automatic numbers of the text box being walked. */
   numbering?: Numbering;
+  /** The table cell being walked: its margins in points (see `ParaStyle.cell`). */
+  cell?: [number, number, number, number];
 };
 
 /**
@@ -2411,6 +2419,19 @@ function walk(
         walk(c, part, inner, undefined, undefined, acc);
         break;
       }
+      case 'a:tc': {
+        const tcPr = child(c, 'a:tcPr');
+        const mar = (attr: string, dflt: number) =>
+          Math.max(0, Math.min(4000, (num(tcPr?.attrs[attr]) ?? dflt) / EMU_PER_PT));
+        const cell: [number, number, number, number] = [
+          mar('marL', EMU_INSET_LR),
+          mar('marT', EMU_INSET_TB),
+          mar('marR', EMU_INSET_LR),
+          mar('marB', EMU_INSET_TB),
+        ];
+        walk(c, part, { ...shape, cell }, undefined, undefined, acc);
+        break;
+      }
       case 'a:txBody':
         walk(
           c,
@@ -2442,6 +2463,7 @@ function walk(
           const indent = pt('indent');
           if (marL) ps.marL = marL;
           if (indent) ps.indent = indent;
+          if (shape.cell) ps.cell = shape.cell;
           ps.end = runStyle(part, shape, para, child(c, 'a:endParaRPr'));
           delete ps.end.shadows;
           delete ps.end.gradient;

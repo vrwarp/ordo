@@ -209,6 +209,13 @@ which ordo owns and can keep fixing:
   a ten-step search on the font scale, moved by whether the text fits at full spacing, trying 100, 90 and
   80 % spacing at each step and keeping the tightest fit; font sizes are rounded to whole points. Boxes
   within about half a percent of fitting can still come out one step apart.
+- **Tables.** LibreOffice makes a row as tall as its stored height or its tallest cell's text plus the
+  cell's margins, and draws cell lines centred on the grid. pptx-preview's collapsed HTML borders and the
+  browser's 1 px cell padding added their widths to every row, so dense tables ran off the slide: the page
+  removes both and draws each cell's lines on an overlay centred on its edges. pptx-preview rounds the
+  margins down, takes a point off left and right and uses 5 and 3 points when they are unset; the side
+  table gives a cell's paragraphs its exact margins (`tcPr` `marL`/`marT`/`marR`/`marB`, PowerPoint's
+  7.2 and 3.6 points by default). Cell text uses the line model above.
 - **Video and audio.** pptx-preview lays a live `<video controls>` over a video's poster picture (and an
   audio player over a sound's icon), so the browser's play bar ended up in the slide picture. The players
   are removed and the poster stays, as PowerPoint and LibreOffice draw a stopped video. The media itself
@@ -270,7 +277,7 @@ Where LibreOffice is known to differ from PowerPoint, ordo follows PowerPoint an
 LibreOffice does not draw a run's own text shadow (PowerPoint's "Text Shadow" button), ordo does.
 
 Known gaps: pptx-preview's charts (ECharts) misread some chart data (pptxgenjs's multi-level category
-labels; values drawn far too small), tables are drawn by pptx-preview as they are, and photographs score
+labels; values drawn far too small), table text can still wrap differently, and photographs score
 lower than their look suggests because the two renderers scale pictures with different filters.
 
 ```

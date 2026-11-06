@@ -484,6 +484,47 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
     }
   }
 
+  // Tables. LibreOffice makes a row as tall as its stored height or its tallest cell's text and margins,
+  // and draws each cell's lines centred on the grid; pptx-preview's collapsed HTML borders and the
+  // browser's 1 px cell padding add their widths to every row, so a dense table drifts off the slide.
+  // Each cell's lines are drawn on an overlay centred on its edges instead, taking no room.
+  if (args.fixes)
+    for (const td of Array.from(root.querySelectorAll('td')) as HTMLElement[]) {
+      const cs = getComputedStyle(td);
+      const side = (s: 'Top' | 'Right' | 'Bottom' | 'Left') => ({
+        w: Number.parseFloat(cs.getPropertyValue(`border-${s.toLowerCase()}-width`)) || 0,
+        line: `${cs.getPropertyValue(`border-${s.toLowerCase()}-style`)} ${cs.getPropertyValue(`border-${s.toLowerCase()}-color`)}`,
+        s,
+      });
+      const sides = (['Top', 'Right', 'Bottom', 'Left'] as const).map(side);
+      td.style.padding = '0';
+      td.style.position = 'relative';
+      // pptx-preview takes a point off a cell's left and right margins after rounding them down: give it
+      // back (cells with text get their exact margins below).
+      const text = td.querySelector(':scope > .text-wrapper') as HTMLElement | null;
+      if (text)
+        for (const p of ['padding-left', 'padding-right'])
+          text.style.setProperty(p, `${(Number.parseFloat(text.style.getPropertyValue(p)) || 0) + 1}px`);
+      if (!sides.some((x) => x.w > 0)) continue;
+      const lines = document.createElement('div');
+      lines.style.position = 'absolute';
+      lines.style.pointerEvents = 'none';
+      for (const x of sides) {
+        lines.style.setProperty(x.s.toLowerCase(), `${(-x.w / 2).toFixed(2)}px`);
+        if (x.w > 0) lines.style.setProperty(`border-${x.s.toLowerCase()}`, `${x.w}px ${x.line}`);
+      }
+      td.style.border = 'none';
+      td.append(lines);
+    }
+  // A cell with text gets its exact margins.
+  if (args.fixes)
+    for (const e of loose) {
+      const text = e.para.cell ? (e.p.closest('td > .text-wrapper') as HTMLElement | null) : null;
+      if (!text) continue;
+      const s = scale(e.p);
+      text.style.padding = [1, 2, 3, 0].map((i) => `${(e.para.cell![i]! * s).toFixed(2)}px`).join(' ');
+    }
+
   // Measurements are taken on screen: undo rotations and flips around text while it is laid out (they
   // are put back below), or a turned box would be measured along the wrong axis.
   const turned: [HTMLElement, string][] = [];
