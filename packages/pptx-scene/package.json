@@ -12,8 +12,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"
   },
-  "dependencies": {},
-  "devDependencies": {
+  "dependencies": {
     "@ordo/domain": "workspace:*"
   }
 }
