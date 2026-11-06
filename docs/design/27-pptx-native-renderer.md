@@ -668,15 +668,15 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
 - Advances at device size can differ from the reference × scale by a fraction of a pixel. That residue stays inside a segment and never moves a break.
 
 **Pipeline**
-1. **Itemize.** Paragraphs are the `\n` pieces; `soft` continues the previous paragraph. Style runs are runs ∩ paragraphs.
-2. **Bidi.** UAX#9 per paragraph (bidi-js), run only when strong RTL characters exist or a direction is set. The base direction comes from `paras[i].rtl`, else `style.direction`, else `auto` (first strong character).
+1. **Itemize.** Paragraphs are the `\n` pieces; `soft` continues the previous paragraph and takes its style, overriding only what its own `paras[i]` sets. Style runs are runs ∩ paragraphs. An empty paragraph's end mark is the run covering its `\n`; the last paragraph, which has none, takes the run covering the `\n` before it.
+2. **Bidi.** UAX#9 per paragraph (bidi-js), run only when strong RTL characters exist or a direction is set. The base direction comes from `paras[i].rtl`, else `style.direction`, else `auto` (first strong character of the whole soft-break chain, which is one PowerPoint paragraph). bidi-js classifies UTF-16 units, so astral characters are passed as two BMP characters of their class.
 3. **Breaks.**
-   - UAX#14 opportunities over the logical text. U+00A0, U+202F and U+2060 never break, which fixes the verified 'Dieu !' split.
+   - UAX#14 opportunities over the logical text. U+00A0, U+202F and U+2060 (also U+2007, U+2011 and U+FEFF) never break on either side, even after a space, which fixes the verified 'Dieu !' split.
    - SA scripts (Thai, Lao, Khmer, Myanmar) break at `Intl.Segmenter` word boundaries; CJK follows the ID/CL/NS classes.
-   - Emergency breaks fall only on grapheme boundaries (`Intl.Segmenter` grapheme), so Tamil 'க்ஷி' stays whole.
-4. **Segments.** A segment is a maximal substring with one style run, one bidi level and no break opportunity inside.
-   - A style boundary *inside* a word of a joining script (Arabic, Syriac, N'Ko, Mongolian) is drawn with U+200D on both sides of the cut, which keeps medial and final forms. Widths are measured the same way.
-   - Inside an Indic syllable cluster, the cut moves to the cluster end (logged).
+   - Emergency breaks fall only between clusters: `Intl.Segmenter` graphemes joined across a conjunct-forming virama, so Tamil 'க்ஷி' stays whole. Graphemes alone do not keep it whole: UAX#29 GB9c joins conjuncts in six Indic scripts only, not Tamil, Kannada or Sinhala.
+4. **Segments.** A segment is a maximal substring with one style run, one bidi level and no break opportunity inside. It is also cut between two scripts that need different fallback faces (Han and kana count as one), so each segment asks for one.
+   - A style boundary *inside* a word of a joining script (Arabic, Syriac, N'Ko, Mongolian, Adlam) is drawn with U+200D on both sides of the cut when the letters on both sides join (by their ArabicShaping joining types: none after alef, dal or waw), which keeps medial and final forms. Widths are measured the same way.
+   - Inside a cluster (an Indic syllable cluster, a letter with its marks, an emoji sequence), the cut moves to the cluster end (counted in `PreparedPara.movedCuts`).
 5. **Measure.** `measureText` with `ctx.font` set to the resolved internal-name stack (§10), and `ctx.direction`, `ctx.lang` and `ctx.letterSpacing` set per segment. The trailing spacing Canvas adds after the last character is subtracted. Widths go into an LRU cache (20,000 entries, key `font|dir|lang|spacing|text`). `measureText` and `fillText` always see the same string in the same state.
 6. **Lines.** Greedy fill.
    - Available width = box − insets − marL − first-line indent; a hanging bullet sits in the negative indent and its box is at least −indent wide.

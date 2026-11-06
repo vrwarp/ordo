@@ -84,26 +84,39 @@ Each item owns its files; edits elsewhere are listed with the item. Every item a
 files with `testMeasurer` and keeps `rich.test.ts`, `rich.fuzz.test.ts`, the clamp, sanitize and compatibility
 tests and the goldens passing.
 
-### A. breaks-bidi: `itemize.ts`, `breaks.ts`, `bidi.ts`, `segments.ts`
+### A. breaks-bidi: `itemize.ts`, `breaks.ts`, `bidi.ts`, `segments.ts`, `vendor.d.ts`
 
-Steps 1-4 of §6.
-- `itemize(o)`: done for paragraphs and runs ∩ paragraphs; refine the end-mark style of empty paragraphs
-  (PowerPoint's endParaRPr: the run covering the '\n'), `soft` handling.
-- `breakOpportunities(text, start, end, lang)`: UAX#14 with npm `linebreak` 1.1.0 (add a `vendor.d.ts`
-  module declaration for it and for `bidi-js`); U+00A0, U+202F and U+2060 never break ('Dieu !'); SA scripts
-  (Thai, Lao, Khmer, Myanmar) at `Intl.Segmenter` word boundaries for `lang`; CJK by ID/CL/NS.
-- `graphemeBoundaries(text, start, end)`: `Intl.Segmenter` graphemes, so Tamil 'க்ஷி' stays whole.
-- `bidiParagraph(text, start, end, dir)`: UAX#9 with npm `bidi-js` 1.1.0, only when the paragraph has a
-  strong RTL character or `dir` is 'ltr'/'rtl'; base direction `paras[i].rtl`, else `style.direction`, else
-  the first strong character. Return `levels: null` on the all-LTR fast path. `hasStrongRtl` and
-  `firstStrong` get the exact Bidi_Class R/AL ranges (D's legacy direction rule uses them).
-- `prepare(it)`: pieces = maximal substrings with one style run, one level, no break opportunity inside;
-  `trail`, `breakAfter` and `script` (the ISO 15924 code when a script fallback face is needed, matching
-  `textScripts` in the domain).
-- `segText(text, start, end, caps)`: U+200D on both sides of a style cut inside a joining-script word
-  (Arabic, Syriac, N'Ko, Mongolian); the Indic cluster rule (move the cut to the cluster end, logged).
-- Tests: the 'Dieu !' NBSP, Thai and CJK breaks, the Tamil grapheme, the Arabic ZWJ split (the measured
-  string has the joiners), mixed-direction levels, `visualOrder`.
+Steps 1-4 of §6. **Done** (M2 wave 1); tests in `itemize.test.ts`, `breaks.test.ts`, `bidi.test.ts`,
+`segments.test.ts` and `vendor.test.ts` (the browser bundle).
+- `itemize(o)`: a soft paragraph takes the style of the paragraph it continues and overrides only what its
+  own `paras[i]` sets (`resolveParaStyle(style, p, base)`). An empty paragraph's end mark is the run covering
+  its '\n'; the last paragraph, which has none, takes the run covering the '\n' before it.
+- `breakOpportunities(text, start, end, lang)`: UAX#14 (`linebreak` 1.1.0, typed in `vendor.d.ts`, which
+  `breaks.ts` references so every app that compiles the renderer gets it); no break on either side of
+  U+00A0, U+202F, U+2060, U+2007, U+2011, U+FEFF (`isGlue`), even after a space; SA runs (Thai, Lao, Khmer,
+  Myanmar) at `Intl.Segmenter` word boundaries, never before a mark, ๆ or ฯ; CJK by UAX#14's classes.
+  `isBreakSpace` (the trailing whitespace that hangs) is space, tab and the breaking space separators
+  (U+1680, U+2000-U+200A except U+2007, U+205F, U+3000).
+- `graphemeBoundaries(text, start, end)`: clusters, i.e. `Intl.Segmenter` graphemes joined across a
+  conjunct-forming virama. Graphemes alone split Tamil 'க்ஷி' (UAX#29 GB9c covers six Indic scripts only);
+  Tamil's pulli joins only in க்ஷ and ஸ்ர, Sinhala's al-lakuna only before a ZWJ. Without `Intl.Segmenter`:
+  code points with marks, joiners, emoji modifiers and tags attached, and no SA dictionary breaks.
+- `bidiParagraph(text, start, end, dir)`: bidi-js 1.1.0 (its own types), only for a right-to-left base or a
+  paragraph with R/AL or RLE/RLO/RLI; astral characters go in as two BMP characters of their class (bidi-js
+  classifies UTF-16 units). `levels` is null when uniform. `hasStrongRtl` uses the exact R/AL classes
+  (generated from bidi-js's data, unassigned defaults included); `firstStrong` follows UAX#9 P2 (isolates
+  skipped).
+- `prepare(it)`: resolves 'auto' over the whole soft-break chain, so `PreparedPara.bidi.level` is the
+  paragraph's direction: **use it, not `ParaStyle.dir`, for where lines start (B)**. Pieces are cut at
+  style runs, levels, break opportunities, and between two fallback scripts (Han and kana count as one);
+  `Piece.script` is the first fallback script in the piece, as `textScripts` names it. A style cut inside a
+  cluster moves to the cluster's end; `PreparedPara.movedCuts` counts them.
+- `segText(text, start, end, caps)`: U+200D on a side where the cut splits two joining letters (Arabic,
+  Syriac, N'Ko, Mongolian, Adlam, by ArabicShaping joining types: none after alef, dal or waw). It applies at
+  any cut, an emergency break included, so a measured and a drawn string always agree.
+- Known gaps: Mandaic, Manichaean, Psalter Pahlavi and Sogdian are not joined at cuts; a mandatory break
+  inside a paragraph (U+2028, a lone CR) is an ordinary opportunity (`Piece` has no flag for it); `caps:
+  'all'` maps case without the run's language (Turkish dotted i).
 
 ### B. lines-office: `measure.ts`, `lines.ts`, `office.ts`
 
