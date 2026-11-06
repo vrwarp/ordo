@@ -46,8 +46,10 @@ describe('UAX#14 break opportunities', () => {
     expect(lines('Gloire à Dieu\u{202F}!')).toEqual(['Gloire ', 'à ', 'Dieu\u{202F}!']);
     expect(lines('«\u{00A0}Alléluia\u{00A0}» !')).toEqual(['«\u{00A0}Alléluia\u{00A0}» !']);
     expect(lines('word\u{2060}word')).toEqual(['word\u{2060}word']);
-    // UAX#14 alone would break between a space and a following no-break space (LB18).
-    expect(lines('x \u{00A0}y')).toEqual(['x \u{00A0}y']);
+    // After a breaking space a line may end before a no-break space (UAX#14 LB18), as LibreOffice breaks
+    // ". \u00A0" (two spaces after a full stop, pasted): the no-break space starts the next line.
+    expect(lines('x \u{00A0}y')).toEqual(['x ', '\u{00A0}y']);
+    expect(lines('son. \u{00A0}They')).toEqual(['son. ', '\u{00A0}They']);
     expect(lines('10\u{202F}000 people')).toEqual(['10\u{202F}000 ', 'people']);
   });
 

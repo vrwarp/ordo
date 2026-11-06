@@ -169,8 +169,25 @@ export interface Run {
 export type Spacing = { pts: number } | { pct: number };
 
 export type Bullet =
-  | { kind: 'char'; char: string; font?: string; color?: Rgba; sizePct?: number }
-  | { kind: 'auto'; scheme: string; startAt: number; font?: string; color?: Rgba; sizePct?: number }
+  | {
+      kind: 'char';
+      char: string;
+      font?: string;
+      color?: Rgba;
+      sizePct?: number;
+      /** `a:buSzPts`: the bullet's size in points (M2). */
+      sizePt?: number;
+    }
+  | {
+      kind: 'auto';
+      scheme: string;
+      startAt: number;
+      font?: string;
+      color?: Rgba;
+      sizePct?: number;
+      /** `a:buSzPts`: the bullet's size in points (M2). */
+      sizePt?: number;
+    }
   | { kind: 'picture' };
 
 export interface Para {
@@ -189,6 +206,8 @@ export interface Para {
   rtl: boolean;
   /** The end-of-paragraph mark's properties (`a:endParaRPr`), resolved: an empty paragraph's size. */
   end: RunStyle;
+  /** The nearest bullet setting is an explicit `a:buNone` (`bullet` is then undefined). M2. */
+  bulletNone?: boolean;
 }
 
 export interface TextBody {
@@ -201,7 +220,13 @@ export interface TextBody {
   autofit:
     | { kind: 'none' }
     | { kind: 'shape' }
-    | { kind: 'shrink'; fontScale: number; lnSpcReduction: number };
+    | {
+        kind: 'shrink';
+        fontScale: number;
+        lnSpcReduction: number;
+        /** The shape's own `a:bodyPr` says so, not a layout or master placeholder's (M2). */
+        own?: boolean;
+      };
   /** `vert` when not horizontal (residual until M8). */
   vert?: string;
   numCol?: number;

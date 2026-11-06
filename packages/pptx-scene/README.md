@@ -44,6 +44,8 @@ const out = emitSlides(scene, { mediaId }); // ordo Slides; pictures as 'pptxmed
 | `picture.ts`    | `p:pic` and every `a:blipFill`                                                                                    | C      |
 | `background.ts` | Slide → layout → master background                                                                                | C      |
 | `emit.ts`       | IR → ordo objects, media placeholders, digest                                                                     | C      |
+| `richtext.ts`   | A text body as rich ordo text: runs, paragraph styles, office box fields (M2)                                     | C (M2) |
+| `fontmap.ts`    | Script class of each character (Latin, East Asian, complex), substitutes and fallback families (M2)               | C (M2) |
 | `classify.ts`   | Census tiers T1-T5, reasons, slide class                                                                          | F      |
 | `ir.ts`         | The scene IR (types only)                                                                                         | shared |
 | `context.ts`    | `SlideCtx`, `slideContext`                                                                                        | shared |
@@ -234,9 +236,67 @@ Done (design/27 §4, §15 M1):
 - `crop`: written from srcRect (and fillRect clipping) by default, now that `ImageObject.crop` is in the
   schema; `EmitOptions.crop: false` writes the legacy uncropped picture and notes it.
 
-Left for later milestones: rich runs and paragraphs (M2: dominant style only today), bullets and numbering
-drawn (M2; read into the IR), shape text rectangles of other presets and custom paths (M6), the bilingual
-lyric rule, picture masks/flips/adjust (M3), arrowheads and dashes (M6), tiles pre-tiled (M3), media (M5).
+Left for later milestones: shape text rectangles of other presets and custom paths (M6), picture
+masks/flips/adjust (M3), arrowheads and dashes (M6), tiles pre-tiled (M3), media (M5).
+
+### M2 wave 2: rich emission (`richtext.ts`, `fontmap.ts`; `text.ts`, `emit.ts`)
+
+Contracts: `richText(body, { frame, shapeShadow?, log }): RichText | undefined` (`text`, `style`, `runs?`,
+`paras?`); `EmitOptions.richText` (default true; false writes M1's legacy text, what the importer writes
+while the schema ships one release ahead of it, design/27 §3.2); `EmitOptions.loCompat` (the harness's `--lo-compat` only: LibreOffice's text policies, `RichOptions.lo`);
+`charClass`, `scriptClasses`, `substituteOf`, `scriptFallbacks`, `fallbackFonts`, `MAX_FALLBACK_FONTS`. IR
+additions: `Para.bulletNone` (the nearest bullet setting is `a:buNone`), `Bullet.sizePt` (`a:buSzPts`),
+`TextBody.autofit.own` (the shape's own `a:bodyPr` asks for shrink-to-fit); `runStyle` resolves an empty
+theme ea/cs typeface through the theme's font for the run language's script.
+
+Done (design/27 §3.1, §3.2, §4 "Text bodies", §6, §11 "Mapping"):
+- **Text**: paragraphs joined by '\n', each `a:br` a '\n' starting a `{ soft: true }` paragraph; tabs and
+  other control characters in `a:t` become spaces (one per UTF-16 unit, so `paras[i]` stays paragraph i);
+  at most 20,000 characters, runs and paragraph styles cut with it.
+- **Box style**: the dominant run (most visible characters) and the paragraph holding most of the text give
+  the legacy values an older build draws (family, weight, slant, size, colour, letter spacing, outline,
+  shadow, caps as uppercase, align, lineHeight, `padding` = the smallest inset); beside them `lineModel:
+  'office'`, `insets`, `wrap: false`, `autofit: 'shrink'` with PowerPoint's stored `fitScale` (font =
+  fontScale, spacing = 1 − lnSpcReduction; sizes unscaled), `direction` (PowerPoint paragraphs are left to
+  right unless `rtl="1"`), `lang`, `underline` and `fallbackFonts`. The box is the shape's text rectangle:
+  insets, margins and `wrap="none"` no longer fold into it.
+- **Runs**: whatever differs from the box, merged while unchanged: family per script (a run's Latin,
+  East Asian or complex-script typeface by LibreOffice's block table, weak characters taking the script
+  before them), weight, slant, `sizeScale`, colour (gradient as its first stop until M6, hollow text
+  transparent), highlight, underline, strike, caps, letter spacing, `baseline`, outline and shadow (null
+  where only the box has one), language (primary subtag). The '\n' ending an empty paragraph carries its end
+  mark; the a:br before an empty last line carries the paragraph's end mark.
+- **Paragraphs**: align (justify, distribute) where it differs from the box, level, marL/indent, space
+  before/after (points, or a share of the main run), line spacing where it differs from the box's
+  `lineHeight`, rtl where it differs from the box direction, and the nearest bullet: Wingdings and Symbol
+  characters mapped with `@ordo/domain` `symbolFontChar` (drawn in the text's font), other `buFont`s kept,
+  automatic numbers with scheme and `startAt` (`(17)` verse numbers), `buClr`, `buSzPct`/`buSzPts`, a
+  picture bullet as '•', `a:buNone` as null.
+- **Fallback families** (`fontmap.ts`, at most 8): the box family's metric substitute (Carlito, Caladea,
+  Liberation, Gelasio), the East Asian and complex-script families the text uses with theirs, the other run
+  families' substitutes, then ordo's bundled script fallback for every script present (Han by language).
+- **Lyric box**: on a bilingual slide (the two boxes with the most text in different languages, of
+  comparable length) the first in reading order, as design/27 §4 says.
+- The pure domain modules `bullets.ts`, `defaults.ts` and `readable.ts` are the only values imported from
+  `@ordo/domain` (`purity.test.ts` checks that they import nothing else at run time); `@ordo/domain` is a
+  dependency now.
+- Tests: `richtext.test.ts` (crafted decks for each rule: verse superscripts, Wingdings and Symbol bullets,
+  `(17)` numbering from startAt, mixed runs, Arabic right to left, a:br, end marks, normAutofit with a
+  stored scale, scripts and fallbacks, the previous release's schema) and the lyric rules in `emit.test.ts`.
+
+Measured (`--engine native --lo-compat`, LibreOffice 24.2 pictures, mean SSIM per deck; pptx-preview from
+the validation suite's scores): the sermon decks 0.825 (M1) → 0.944, every deck above pptx-preview (0.927
+mean); without `--lo-compat` 0.932, one deck 0.05 below where PowerPoint's stored shrink scale fits ordo's
+box and LibreOffice re-fits smaller. Worship shard 0: 0.693 → 0.795 (pptx-preview 0.765), shard 2: 0.719 →
+0.832 (0.765); on decks made only of T1 and T2 slides 0.840 and 0.831 against pptx-preview's 0.827 and
+0.791. Shard 2's feature decks (pptx-preview on the same decks): lnSpcPct 0.782 (0.578), normAutofitScaled
+0.780 (0.544), rtl 0.846 (0.835), rtlScriptText 0.889 (0.852), superSub 0.648 (0.558). Two decks of one
+template lose 0.04 against M1: LibreOffice draws their (glowing) text at about 55 % of its size, which no
+ordo rule explains yet.
+
+Not done: hyperlink colours (PowerPoint draws linked runs in the theme's hlink colour), symbol-font
+characters inside the text itself (`a:sym`), `origin` and the `role: 'translation'` of the second
+language box (M3, with the rest of `ObjectOrigin`), vertical text (residual until M8).
 
 ### D: image-crop (`packages/domain/src/schemas.ts`, `packages/renderer/src/clamp.ts`, `text2d.ts`, `golden/`)
 
@@ -321,8 +381,14 @@ Done:
   (`--engine native --corpus`); real and third-party decks keep their baselines outside the repository.
   Check a change with `--engine native --corpus --baseline tools/pptx-fidelity/native-baseline.json`.
 
-To do: `--lo-compat` (design/27 §14.1) and the committed probe corpus with its CI gate (§14.2) belong to later
-milestones.
+- **`--lo-compat`** (M2, design/27 §14.1): the native column's text written with LibreOffice 24.2's policies
+  where ordo's follow PowerPoint (`EmitOptions.loCompat`, passed through `convertDeck`): shrink-to-fit only
+  for a shape's own `normAutofit` (LibreOffice ignores one inherited from a layout or master placeholder,
+  measured) and re-fitted from full size instead of PowerPoint's stored scale; no run shadows (the shadow
+  an unfilled shape casts stays); no outline on filled text (the copy LibreOffice draws has them stripped).
+  `summary.json` and the report say `loCompat`; compare runs of the same mode.
+
+To do: the committed probe corpus with its CI gate (§14.2) belongs to a later milestone.
 
 ### F: classify (`classify.ts`)
 

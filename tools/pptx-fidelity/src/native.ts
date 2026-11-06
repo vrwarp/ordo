@@ -158,11 +158,25 @@ export function spilledPictureSize(file: string | undefined): { w: number; h: nu
   }
 }
 
+/** How a deck is converted. */
+export type ConvertOptions = {
+  /**
+   * `--lo-compat` (design/27 §14.1): text written with LibreOffice's policies where they differ from
+   * PowerPoint's (`EmitOptions.loCompat` of `@ordo/pptx-scene`): shrink-to-fit only for a shape's own
+   * normAutofit and re-fitted from full size, no run shadows, no outline on filled text.
+   */
+  loCompat?: boolean;
+};
+
 /**
  * Convert one deck into `dir` (which must exist): `slides.json` and `media/`. Never throws; a deck that
  * cannot be read comes back with `error` and no slides.
  */
-export async function convertDeck(deckFile: string, dir: string): Promise<NativeDeck> {
+export async function convertDeck(
+  deckFile: string,
+  dir: string,
+  opts: ConvertOptions = {},
+): Promise<NativeDeck> {
   const out: NativeDeck = {
     slides: [],
     slideRect: { x: 0, y: 0, w: 1920, h: 1080 },
@@ -200,7 +214,7 @@ export async function convertDeck(deckFile: string, dir: string): Promise<Native
     });
     out.parseMs = performance.now() - t0;
     t0 = performance.now();
-    const emitted: EmitResult = emitSlides(scene);
+    const emitted: EmitResult = emitSlides(scene, opts.loCompat ? { loCompat: true } : {});
     out.emitMs = performance.now() - t0;
     out.slideRect = emitted.slideRect;
     for (const n of [...scene.notes, ...emitted.notes]) note(n);
@@ -287,8 +301,9 @@ export function convertDeckIsolated(
   deckFile: string,
   dir: string,
   limits: { heapMb?: number; timeoutMs?: number } = {},
+  opts: ConvertOptions = {},
 ): Promise<NativeDeck> {
-  const run = queue.then(() => convertInWorker(deckFile, dir, limits));
+  const run = queue.then(() => convertInWorker(deckFile, dir, limits, opts));
   queue = run.catch(() => undefined);
   return run;
 }
@@ -297,6 +312,7 @@ async function convertInWorker(
   deckFile: string,
   dir: string,
   limits: { heapMb?: number; timeoutMs?: number },
+  opts: ConvertOptions,
 ): Promise<NativeDeck> {
   const heapMb = limits.heapMb ?? CONVERT_HEAP_MB;
   const timeoutMs = limits.timeoutMs ?? CONVERT_TIMEOUT_MS;
@@ -341,7 +357,7 @@ async function convertInWorker(
     worker.on('error', onError);
     worker.on('exit', onExit);
     worker.ref();
-    worker.postMessage({ deckFile, dir });
+    worker.postMessage({ deckFile, dir, opts });
   });
   if (typeof result !== 'string') return result;
   await rm(join(dir, '.parts'), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });

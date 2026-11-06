@@ -5,7 +5,7 @@
  *
  *   pnpm --filter @ordo/pptx-fidelity start -- [--engine ppv|native|both] [--no-ppv] [--corpus]
  *        [--out DIR] [--chromium PATH] [--raw] [--fresh-lo] [--manifest FILE] [--baseline FILE]
- *        [--max-drop 0.02] [deck.pptx | dir]...
+ *        [--max-drop 0.02] [--lo-compat] [deck.pptx | dir]...
  *
  * Folders are searched with their subfolders for .pptx/.pptm/.ppsx/.potx decks; a deck any renderer cannot
  * draw is recorded in its notes and the run goes on.
@@ -21,6 +21,10 @@
  * --baseline    compare with an earlier summary.json or native-baseline.json and print the change per
  *               deck; with the native engine, a worship deck (every deck without --manifest) whose native
  *               SSIM drops by more than --max-drop (default 0.02) fails the run
+ * --lo-compat   write the native column's text with LibreOffice's policies where ordo follows PowerPoint
+ *               (design/27 §14.1, `EmitOptions.loCompat`): shrink-to-fit only for a shape's own normAutofit,
+ *               re-fitted from full size; no run shadows; no outline on filled text. summary.json records
+ *               it; compare runs of the same mode
  *
  * Real decks stay outside the repository: pass their paths. The score is SSIM of greyscale pictures at
  * 960x540 (1 = identical), computed by ffmpeg. A native run also writes <out>/native-baseline.json.
@@ -33,7 +37,7 @@ import { renderWithPptxPreview } from '@ordo/pptx-render';
 import { pdfToPngs, pptxToPdf } from '../../../apps/hub/src/media/ffmpeg.ts';
 import { run } from '../../../apps/hub/src/media/tools.ts';
 import { buildCorpus } from './corpus.ts';
-import { convertDeckIsolated, NativeRenderer, type RenderedDeck } from './native.ts';
+import { type ConvertOptions, convertDeckIsolated, NativeRenderer, type RenderedDeck } from './native.ts';
 import { png } from './png.ts';
 import { type DeckScore, mean, nativeStats, type SlideScore, type Summary, writeReport } from './report.ts';
 
@@ -49,6 +53,7 @@ type Args = {
   baseline?: string;
   manifest?: string;
   maxDrop: number;
+  loCompat: boolean;
   decks: string[];
 };
 
@@ -60,6 +65,7 @@ function parseArgs(argv: string[]): Args {
     freshLo: false,
     engines: new Set(['ppv']),
     maxDrop: 0.02,
+    loCompat: false,
     decks: [],
   };
   let noPpv = false;
@@ -73,6 +79,7 @@ function parseArgs(argv: string[]): Args {
     else if (v === '--baseline') a.baseline = argv[++i];
     else if (v === '--manifest') a.manifest = argv[++i];
     else if (v === '--no-ppv') noPpv = true;
+    else if (v === '--lo-compat') a.loCompat = true;
     else if (v === '--max-drop') {
       a.maxDrop = Number(argv[++i]);
       if (!(a.maxDrop >= 0)) throw new Error('--max-drop takes a number ≥ 0');
@@ -327,12 +334,13 @@ async function nativeColumn(
   out: string,
   lo: string[],
   renderer: () => Promise<NativeRenderer>,
+  convert: ConvertOptions,
 ): Promise<{ fields: Partial<DeckScore>; perSlide: SlideScore[] }> {
   const t0 = performance.now();
   const nd = join(dir, 'native');
   await rm(nd, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   await mkdir(nd, { recursive: true });
-  const conv = await convertDeckIsolated(deck, nd);
+  const conv = await convertDeckIsolated(deck, nd, {}, convert);
   const notes = [...conv.notes];
   const shown = conv.slides.filter((s) => s.shown !== undefined).sort((a, b) => a.shown! - b.shown!);
   let drawn: RenderedDeck = { slides: [], notes: [], ms: 0 };
@@ -456,6 +464,7 @@ async function main(): Promise<void> {
       createdAt: new Date().toISOString(),
       chromium,
       engines: [...a.engines],
+      ...(a.loCompat ? { loCompat: true } : {}),
       ...(ppv.length ? { mean: mean(ppv.map((s) => s.ssim!)) } : {}),
       ...(nat.length
         ? {
@@ -534,7 +543,7 @@ async function main(): Promise<void> {
       if (nativeOn) {
         // Whatever the converter or the page does with this deck, the run goes on.
         try {
-          const n = await nativeColumn(deck, dir, out, lo, renderer);
+          const n = await nativeColumn(deck, dir, out, lo, renderer, a.loCompat ? { loCompat: true } : {});
           Object.assign(s, n.fields);
           s.perSlide = mergeSlides(s.perSlide, n.perSlide);
         } catch (e) {
@@ -583,7 +592,9 @@ async function main(): Promise<void> {
   await writeReport(join(out, 'report.html'), summary);
   const means = [
     summary.mean !== undefined ? `pptx-preview ${summary.mean.toFixed(3)}` : '',
-    summary.nativeMean !== undefined ? `native ${summary.nativeMean.toFixed(3)}` : '',
+    summary.nativeMean !== undefined
+      ? `native${a.loCompat ? ' (lo-compat)' : ''} ${summary.nativeMean.toFixed(3)}`
+      : '',
   ].filter(Boolean);
   console.log(
     `\nmean ssim ${means.join(', ') || '-'} over ${scores.length} deck(s); report: ${join(out, 'report.html')}`,

@@ -325,6 +325,50 @@ describe('soft paragraphs', () => {
   });
 });
 
+describe('trailing whitespace and line ends (LibreOffice 24.2, measured)', () => {
+  it('aligns the whitespace at the end of a paragraph or before an a:br, and hangs it at a wrap', () => {
+    // 'ab ' centred in 100: the space is text (30 wide), so the line starts at 35, not 40.
+    const centred = layout(obj('ab \nab', { align: 'center' }, box(100)));
+    expect(centred.lines.map((x) => [x.x, x.w])).toEqual([
+      [35, 30],
+      [40, 20],
+    ]);
+    const right = layout(
+      obj('ab  \nab ', { align: 'right' }, { ...box(100), paras: [null, { soft: true }] }),
+    );
+    expect(right.lines.map((x) => [x.x, x.w])).toEqual([
+      [60, 40],
+      [70, 30],
+    ]);
+    // At a wrap the space hangs: 'aaa ' then 'bbb', both 30 wide, centred.
+    const wrapped = layout(obj('aaa bbb', { align: 'center' }, box(55)));
+    expect(wrapped.lines.map((x) => [x.x, x.w])).toEqual([
+      [12.5, 30],
+      [12.5, 30],
+    ]);
+    // A right-to-left paragraph's aligned whitespace sits at its visual left, inside the line.
+    const o = obj('ab ', { align: 'right' }, box(100));
+    const rtl = layout(o, { rtl: [true] });
+    expect(rtl.lines[0]).toMatchObject({ x: 70, w: 30 });
+    expect(segTexts(o, rtl, 0)).toEqual([['ab ', 70]]);
+  });
+
+  it("makes the empty line after a trailing a:br as tall as its end mark, not the paragraph's size", () => {
+    // 20 px text; the last '\n' (the a:br before the empty last line) carries a 10 px end mark.
+    const o = obj(
+      'ab\n',
+      {},
+      { paras: [null, { soft: true }], runs: [{ start: 2, end: 3, sizeScale: 0.5 }] },
+    );
+    const l = layout(o);
+    expect(l.lines.map((x) => x.height)).toEqual([20, 10]);
+    // Without a smaller end mark it is a full line.
+    expect(layout(obj('ab\n', {}, { paras: [null, { soft: true }] })).lines.map((x) => x.height)).toEqual([
+      20, 20,
+    ]);
+  });
+});
+
 describe('logical layout', () => {
   it('breaks and places lines identically at any output scale', () => {
     const o = obj('For God so loved the world that he gave', { align: 'center', wrap: true }, box(150));

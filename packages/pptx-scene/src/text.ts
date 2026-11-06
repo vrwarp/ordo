@@ -27,8 +27,8 @@ import {
   paraChainParts,
 } from './inherit.ts';
 import type { Bullet, Fill, Line, Para, Run, RunStyle, Shadow, Spacing, TextBody } from './ir.ts';
-import { themeFont, typefaceName } from './theme.ts';
-import { child, num, textOf, type XNode } from './xml.ts';
+import { langScript, themeFont, typefaceName } from './theme.ts';
+import { child, num, path, textOf, type XNode } from './xml.ts';
 
 /** PowerPoint's default text size when nothing in the chain sets one. */
 export const DEFAULT_SIZE_PT = 18;
@@ -61,6 +61,8 @@ const ANCHOR: Record<string, TextBody['anchor']> = Object.assign(Object.create(n
 });
 
 const BULLETS = ['a:buNone', 'a:buChar', 'a:buAutoNum', 'a:buBlip'] as const;
+/** Theme script tags written with the East Asian font (`langScript`); the others use the complex-script one. */
+const EA_SCRIPTS: ReadonlySet<string> = new Set(['Jpan', 'Hang', 'Hans', 'Hant', 'Yiii']);
 const FITS = ['a:normAutofit', 'a:spAutoFit', 'a:noAutofit'] as const;
 
 const on = (v: string | undefined) => v === '1' || v === 'true';
@@ -88,7 +90,7 @@ export function readTextBody(ctx: SlideCtx, c: Chain): TextBody | undefined {
     },
     anchor: ANCHOR[firstAttr(body, 'anchor') ?? 't'] ?? 'top',
     wrap: firstAttr(body, 'wrap') !== 'none',
-    autofit: autofitOf(firstOfAny(body, FITS)),
+    autofit: autofitOf(firstOfAny(body, FITS), path(c.own, 'p:txBody', 'a:bodyPr')),
   };
   const vert = firstAttr(body, 'vert');
   if (vert !== undefined && vert !== 'horz') out.vert = vert;
@@ -100,12 +102,13 @@ export function readTextBody(ctx: SlideCtx, c: Chain): TextBody | undefined {
   return out;
 }
 
-function autofitOf(fit: XNode | undefined): TextBody['autofit'] {
+function autofitOf(fit: XNode | undefined, ownBodyPr: XNode | undefined): TextBody['autofit'] {
   if (fit?.name === 'a:spAutoFit') return { kind: 'shape' };
   if (fit?.name !== 'a:normAutofit') return { kind: 'none' };
   const fontScale = clamp((num(fit.attrs.fontScale) ?? 100_000) / 100_000, 0.01, 1);
   const lnSpcReduction = clamp((num(fit.attrs.lnSpcReduction) ?? 0) / 100_000, 0, 0.9);
-  return { kind: 'shrink', fontScale, lnSpcReduction };
+  const own = ownBodyPr !== undefined && firstOfAny([ownBodyPr], FITS) === fit;
+  return { kind: 'shrink', fontScale, lnSpcReduction, ...(own ? { own } : {}) };
 }
 
 /**
@@ -171,6 +174,7 @@ function readPara(ctx: SlideCtx, c: Chain, p: XNode, fontRef: XNode | undefined)
   if (line) out.lineSpacing = line;
   const bullet = bulletOf(ctx, chain);
   if (bullet) out.bullet = bullet;
+  else if (firstOfAny(chain, BULLETS)?.name === 'a:buNone') out.bulletNone = true;
   return out;
 }
 
@@ -189,7 +193,7 @@ function bulletOf(ctx: SlideCtx, chain: readonly (XNode | undefined)[]): Bullet 
   const b = firstOfAny(chain, BULLETS);
   if (!b || b.name === 'a:buNone') return undefined;
   if (b.name === 'a:buBlip') return { kind: 'picture' };
-  const extra: { font?: string; color?: Para['end']['highlight']; sizePct?: number } = {};
+  const extra: { font?: string; color?: Para['end']['highlight']; sizePct?: number; sizePt?: number } = {};
   const font = firstOfAny(chain, ['a:buFont', 'a:buFontTx']);
   const face = font?.name === 'a:buFont' ? themeFont(ctx.theme, font.attrs.typeface) : undefined;
   if (face) extra.font = face;
@@ -199,6 +203,8 @@ function bulletOf(ctx: SlideCtx, chain: readonly (XNode | undefined)[]): Bullet 
   const sz = firstOfAny(chain, ['a:buSzPct', 'a:buSzPts', 'a:buSzTx']);
   const pct = sz?.name === 'a:buSzPct' ? num(sz.attrs.val) : undefined;
   if (pct !== undefined) extra.sizePct = clamp(pct / 100_000, 0.25, 4);
+  const pts = sz?.name === 'a:buSzPts' ? num(sz.attrs.val) : undefined;
+  if (pts !== undefined) extra.sizePt = clamp(pts / 100, MIN_SIZE_PT, MAX_SIZE_PT);
   if (b.name === 'a:buAutoNum')
     return {
       kind: 'auto',
@@ -248,11 +254,15 @@ export function runStyle(
     spacingPt: clamp((num(firstAttr(props, 'spc')) ?? 0) / 100, -4_000, 4_000),
     caps: cap === 'all' ? 'all' : cap === 'small' ? 'small' : 'none',
   };
+  const lang = firstAttr(props, 'lang');
+  // An empty ea or cs typeface of the theme takes the theme's font for the run language's script.
+  const script = langScript(lang);
+  const asian = script !== undefined && EA_SCRIPTS.has(script);
   const latin = themeFont(ctx.theme, face('latin') ?? `${theme}-lt`);
   if (latin) out.latin = latin;
-  const ea = themeFont(ctx.theme, face('ea') ?? `${theme}-ea`);
+  const ea = themeFont(ctx.theme, face('ea') ?? `${theme}-ea`, asian ? script : undefined);
   if (ea) out.ea = ea;
-  const cs = themeFont(ctx.theme, face('cs') ?? `${theme}-cs`);
+  const cs = themeFont(ctx.theme, face('cs') ?? `${theme}-cs`, asian ? undefined : script);
   if (cs) out.cs = cs;
   const sym = themeFont(ctx.theme, face('sym'));
   if (sym) out.sym = sym;
@@ -260,7 +270,6 @@ export function runStyle(
   if (outline) out.outline = outline;
   const shadow = readShadow(child(firstChildOf(props, 'a:effectLst'), 'a:outerShdw'), ctx.color);
   if (shadow) out.shadow = shadow;
-  const lang = firstAttr(props, 'lang');
   if (lang) out.lang = lang.slice(0, 35);
   const highlight = colorIn(firstChildOf(props, 'a:highlight'), ctx.color);
   if (highlight) out.highlight = highlight;

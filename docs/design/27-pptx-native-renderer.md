@@ -672,7 +672,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
 1. **Itemize.** Paragraphs are the `\n` pieces; `soft` continues the previous paragraph: it takes its style, spacing and direction, overriding only what its own `paras[i]` sets, and has no bullet and no space between them. Style runs are runs ∩ paragraphs. An empty paragraph's end mark is the run covering its `\n`; the last paragraph, which has none, takes the run covering the `\n` before it.
 2. **Bidi.** UAX#9 per paragraph (bidi-js), run only when strong RTL characters exist or a direction is set. The base direction comes from `paras[i].rtl`, else `style.direction`, else `auto` (first strong character of the whole soft-break chain, which is one PowerPoint paragraph). bidi-js classifies UTF-16 units, so astral characters are passed as two BMP characters of their class.
 3. **Breaks.**
-   - UAX#14 opportunities over the logical text. U+00A0, U+202F and U+2060 (also U+2007, U+2011 and U+FEFF) never break on either side, even after a space, which fixes the verified 'Dieu !' split.
+   - UAX#14 opportunities over the logical text. U+00A0, U+202F and U+2060 (also U+2007, U+2011 and U+FEFF) never break on either side, which fixes the verified 'Dieu !' split. After a breaking space a line may still end before one (UAX#14 LB18), as LibreOffice breaks the ". \u00A0" that text pasted with two spaces after a full stop stores.
    - SA scripts (Thai, Lao, Khmer, Myanmar) break at `Intl.Segmenter` word boundaries; CJK follows the ID/CL/NS classes.
    - Emergency breaks fall only between clusters: `Intl.Segmenter` graphemes joined across a conjunct-forming virama, so Tamil 'க்ஷி' stays whole. Graphemes alone do not keep it whole: UAX#29 GB9c joins conjuncts in six Indic scripts only, not Tamil, Kannada or Sinhala.
    - An emergency break costs what its line holds, never what is left of the word: the cut is found by galloping from the piece's start (1, 2, 4, ... clusters, then a bisection), cluster boundaries are found only that far (one list per piece serves every line and autofit step), and the rest of the word is carried unmeasured until it may fit. A 10,000-letter word in a narrow box is laid out in linear time (`rich.fuzz.test.ts`).
@@ -682,7 +682,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
 5. **Measure.** `measureText` with `ctx.font` set to the resolved internal-name stack (§10), and `ctx.direction`, `ctx.lang` and `ctx.letterSpacing` set per segment. The trailing spacing Canvas adds after the last character is subtracted. Widths go into an LRU cache (20,000 entries, key `font|dir|lang|spacing|text`) for strings of at most 256 UTF-16 units, so a hostile word never leaves megabytes of keys in a worker. `measureText` and `fillText` always see the same string in the same state.
 6. **Lines.** Greedy fill.
    - Available width = box − insets − marL − first-line indent; a hanging bullet sits in the negative indent and its box is at least −indent wide.
-   - Trailing spaces hang.
+   - Trailing spaces hang at a wrap. At the end of a paragraph or before an `a:br` they are text and are aligned with the rest (LibreOffice 24.2 and PowerPoint: centred "Amen " sits half a space left of "Amen").
    - `wrap:false` never wraps; a line grows from its alignment (centre both ways, right leftwards, left rightwards).
    - A right-to-left paragraph mirrors its start: indents and the bullet are on the right and its trailing space hangs on the left. `align` stays visual.
    - Then UAX#9 L2 visual reordering between segments. The browser orders glyphs within a segment.
@@ -692,7 +692,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
    - Proportional p ≠ 1: h = 1.2F·p·k, where k is the autofit spacing scale. The baseline is F + (h − 1.2F) when p > 1, else min(F, 0.8h).
    - Exact spacing P: h = P·k.
    - spcBef/spcAft are scaled by k and not drawn before the first paragraph or after the last.
-   - An empty paragraph takes its end-mark size; a trailing `a:br` adds a line.
+   - An empty paragraph takes its end-mark size; a trailing `a:br` adds a line as tall as the paragraph's end mark (measured in LibreOffice 24.2), whatever the size of the text before it.
    - Superscript and subscript are drawn at 0.58 × size (at least 4 px), shifted by baseline × size, without growing the line.
 8. **Align.**
    - justify spreads extra space over the inter-segment spaces of non-last lines; distribute also justifies the last line;
@@ -1141,6 +1141,7 @@ The current JSZip text path takes 1.17 s per 100 slides.
    - `summary.json` gains, per slide: `nativeSsim`, tier, class, reasons, `convertMs`, `rasterMs` at 1920/3840. The report gains a native column and per-tier and per-feature (manifest `features`, worship-high first) means.
    - `--no-ppv` skips pptx-preview. `--baseline` gates regressions: no worship deck drops by more than 0.02.
    - `--lo-compat` (harness only) draws like LibreOffice where the policies differ: no run shadows, hollow outlined text, re-fit instead of the stored scale. Policy rules are reported separately, so progress is not hidden.
+     - *As built (M2):* the converter writes the text with LibreOffice 24.2's policies (`EmitOptions.loCompat`, never set by the hub): no run shadows (an unfilled shape's shadow on its text stays), no outline on filled text (the reference pictures come from the copy that strips them, so hollow letters never appear in them), shrink-to-fit re-fitted from full size, and only for a shape's own `normAutofit` (LibreOffice ignores one inherited from a layout or master placeholder; measured with a probe deck).
    - Decks with embedded fonts are excluded from means; LibreOffice 24.2 ignores them (it drew Inter).
 2. **Committed probe decks.** Synthetic generators, as in `corpus.ts`, one per verified rule:
    - tint/shade (#454545);
