@@ -11,12 +11,38 @@ the operator on the stage screen (token in URL like an output). No WebGPU, no me
 | Top right | Elapsed timer when running (label and `mm:ss`), countdown to service when active                                                                                                     |
 | Centre    | Current slide lyric text, large, with the section label; next slide text below at 60 % size and reduced opacity (the slide Next goes to: hidden slides are skipped, design/27 §9). Non-song slides show their first text box (a picture slide its own extracted text, design/27 §11) or the presentation title |
 | Bottom    | Operator message, high contrast, with a 1 s fade in and out; multiple messages stack newest first                                                                                    |
+| Notes     | When the Stage look's `PropsRule.notes` is on: the live slide's `Slide.notes` for the preacher, in `style['notes']`, else a box under the next-slide band (below)                        |
 
 Layout values come from the Stage look's `PropsRule.style` boxes so the operator can
 adjust sizes without code. Fonts load from the service cache through the Cache API.
 
 Slide text is shown as people read it (`readableText`, design/27 §3.2): automatic verse
 numbers and bullets of imported text boxes are written in front of their paragraphs.
+
+**Direction** (design/27 §6 "Bands, stage and readable text", M4). The current and next text, the notes
+and each operator message are drawn paragraph by paragraph: every `\n` piece of the text (a soft line of a
+PowerPoint paragraph too) is its own block with `dir="auto"` and `unicode-bidi: plaintext`
+(`App.tsx` `Paragraphs`, `model.ts` `stageParagraphs`). Each paragraph takes its direction from its own
+first strong character, whatever the look's style says: a Hebrew or Arabic line reads right to left with
+its punctuation at its left end, next to an English line that reads left to right, and a line with no
+strong character is left to right. Alignment stays the look's (`left` is left in a right-to-left line, as
+on the outputs). The explicit paragraph directions of the slide (`paras[i].rtl`) are not applied here.
+
+**Notes region** (design/27 §11 item 13, M4). A stage look with `PropsRule.notes` (optional, absent is
+off) shows the displayed slide's `Slide.notes`:
+- **Box.** `props.style['notes']` (a `PropBox`), else `defaultNotes`: under the lower lyric band (the
+  next-slide band in the Stage look), as wide as it, down to 16 px above the bottom, at least two lines high
+  (it then rises over that band's bottom edge), in 32 px light text on a faint card. Either way the box is
+  cut clear of the current lyrics band (`clearOf`: the largest part below, above, left or right of it that
+  holds a line), so the notes never cover the current lyric; a box with no such part shows no notes. It is
+  drawn under the lyrics in the stacking order too.
+- **Text.** The view carries the notes tidied (line ends, trailing spaces, runs of blank lines) and cut to
+  4,000 characters at a word with '…' (`cutNotes`; `Slide.notes` holds up to 200,000, and only the first
+  16,000 are read per view). Long notes are cut to the box, never shrunk: the start stays in view for any
+  vertical alignment (`justify-content: safe …`) and the last line fades out when something is cut.
+- Notes show for every slide that has them, non-song slides included when the look shows no non-song
+  text; a slide without notes, or a cleared slide layer, shows no notes box.
+- The look editor's 'Stage screen' card turns them on and sets their box and text (design/15 "Settings").
 
 ## Behaviour
 

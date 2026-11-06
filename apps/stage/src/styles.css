@@ -42,6 +42,22 @@ body,
   overflow-wrap: break-word;
 }
 
+/* Paragraphs (App.tsx Paragraphs): each its own block taking its direction from its content (dir="auto",
+   design/27 §6). The '\n' between the blocks is collapsed; an empty paragraph keeps its line. */
+.lyrics,
+.notes-text {
+  white-space: normal;
+}
+
+.para {
+  white-space: pre-wrap;
+  unicode-bidi: plaintext;
+}
+
+.para:empty::before {
+  content: "\200b";
+}
+
 .kicker {
   display: flex;
   align-items: baseline;
@@ -59,6 +75,20 @@ body,
 
 .next .lyrics {
   opacity: 0.95;
+}
+
+/* The preacher's notes: cut to their box (never shrunk), the last line faded when something is cut. */
+.notes-clip {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overflow-wrap: break-word;
+}
+
+.notes-clip[data-cut="1"] {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent);
 }
 
 .prop {
@@ -90,6 +120,7 @@ body,
   flex: none;
   white-space: pre-wrap;
   overflow-wrap: break-word;
+  unicode-bidi: plaintext;
   transition-property: opacity;
   transition-timing-function: ease;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);

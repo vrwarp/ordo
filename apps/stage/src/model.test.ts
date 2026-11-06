@@ -11,23 +11,33 @@ import {
   songFromParsed,
 } from '@ordo/domain';
 import { initialState, reduce } from '@ordo/live-state';
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import {
   activeMessages,
+  clearOf,
   countdownDisplay,
   currentText,
+  cutNotes,
+  defaultNotes,
   elapsedDisplay,
   FrameStats,
   mediaRemainingDisplay,
   flipDelay,
   nextExpiry,
+  NOTES_MAX,
   nextText,
+  notesText,
+  overlaps,
   reconcileMessages,
   resolveStageLook,
   slideText,
+  stageFontFamilies,
   stageLayout,
+  stageParagraphs,
   textCss,
 } from './model.ts';
+import { buildView } from './view.ts';
 
 function song(): Presentation {
   return songFromParsed(
@@ -530,5 +540,264 @@ describe('textCss', () => {
       textTransform: 'uppercase',
       borderRadius: '8px',
     });
+  });
+});
+
+// ---- M4 item G (design/27 §11 item 13, §6 "Bands, stage and readable text") ----------------------------
+
+const box = (x: number, y: number, w: number, h: number) => ({ x, y, w, h, rotation: 0 });
+
+/** The stage look with the notes region on, optionally with a `style['notes']` box. */
+function notesLook(styled?: { x: number; y: number; w: number; h: number; rotation: number }): Look {
+  const props = LOOK_STAGE.layers.props;
+  const notes = styled ? { ...defaultNotes('Inter', undefined, undefined), box: styled } : undefined;
+  return {
+    ...LOOK_STAGE,
+    layers: {
+      ...LOOK_STAGE.layers,
+      props: { ...props, notes: true, style: notes ? { ...props.style, notes } : props.style },
+    },
+  };
+}
+
+/** A sermon presentation: a slide with notes, one without, one with notes and an English and a Hebrew line. */
+function sermon(notes: (string | undefined)[]): Presentation {
+  return {
+    id: 'sermon',
+    rev: 1,
+    title: 'Sermon',
+    kind: 'slides',
+    meta: { tags: [] },
+    sections: [
+      {
+        id: 'ss',
+        label: 'Slides',
+        short: 'S',
+        slides: notes.map((n, i) => ({
+          id: `s${i}`,
+          objects: [
+            {
+              id: `t${i}`,
+              type: 'text' as const,
+              text: i === 2 ? 'Peace be with you\nשלום עליכם!' : `Point ${i + 1}`,
+              box: box(0, 0, 100, 100),
+              style: LOOK_MAIN as never,
+              opacity: 1,
+            },
+          ],
+          ...(n === undefined ? {} : { notes: n }),
+        })),
+      },
+    ],
+    arrangements: [],
+    archived: false,
+  };
+}
+
+function liveSermon(notes: (string | undefined)[]): LiveState {
+  const p = sermon(notes);
+  const resolved: ResolvedPlaylist = {
+    playlist: {
+      id: 'pl',
+      rev: 1,
+      name: 'Sunday',
+      items: [{ id: 'i1', kind: 'presentation', presentationId: p.id }],
+    },
+    presentations: { [p.id]: p },
+    media: {},
+    fonts: [],
+    looks: DEFAULT_LOOKS,
+    files: [],
+    manifestId: 'm',
+  };
+  const s = reduce(initialState(), { k: 'goLive', resolved });
+  return reduce(s, { k: 'go', cueIndex: 0, at: 1000 });
+}
+
+const view = (state: LiveState, look: Look) =>
+  buildView({
+    state,
+    ready: true,
+    shown: state.layers.slide.content,
+    layout: stageLayout(look),
+    general: { timeZone: 'UTC', clock24h: true },
+    bus: 'hub',
+    now: 2000,
+    clockOffset: 0,
+    clockFallback: false,
+  });
+
+describe('the notes region (PropsRule.notes)', () => {
+  it('is off unless the look turns it on, as stored looks have it', () => {
+    expect(stageLayout(LOOK_STAGE).notes).toBeNull();
+    expect(stageLayout(notesLook()).notes).not.toBeNull();
+    const off = notesLook();
+    off.layers.props.notes = false;
+    expect(stageLayout(off).notes).toBeNull();
+  });
+
+  it('sits under the next-slide band by default, at least two lines high, clear of the current lyrics', () => {
+    const l = stageLayout(notesLook());
+    const n = l.notes!;
+    const next = l.next!.box;
+    // The stage look's next band ends at 960: the notes take the rest of the screen above a margin.
+    expect(n.box.x).toBe(next.x);
+    expect(n.box.w).toBe(next.w);
+    expect(n.box.y + n.box.h).toBe(1080 - 16);
+    expect(n.box.h).toBeGreaterThanOrEqual(2 * n.fontSizePx * n.lineHeight + 2 * n.padding);
+    expect(n.box.y).toBeGreaterThanOrEqual(next.y + next.h - n.box.h);
+    expect(overlaps(n.box, l.current!.box)).toBe(false);
+    // Smaller than the lyrics, top aligned so long notes are cut at their end, never at their start.
+    expect(n.fontSizePx).toBeLessThan(l.next!.style.fontSizePx);
+    expect(n.valign).toBe('top');
+    expect(stageFontFamilies(l).has(n.fontFamily)).toBe(true);
+  });
+
+  it('goes under the current band when the look has no next-slide band', () => {
+    const look = notesLook();
+    const rule = look.layers.slide;
+    if (rule.mode !== 'lyricOnly') throw new Error('stage look');
+    look.layers.slide = { ...rule, nextSlide: undefined };
+    const l = stageLayout(look);
+    expect(l.notes!.box.y).toBe(rule.band.y + rule.band.h + 12);
+    expect(l.notes!.box.y + l.notes!.box.h).toBe(1064);
+  });
+
+  it('uses the look’s own box, cut so that it never covers the current lyrics', () => {
+    // Clear of the lyrics (current band 60,140 1800x520): kept as it is.
+    expect(stageLayout(notesLook(box(60, 700, 900, 300))).notes!.box).toEqual(box(60, 700, 900, 300));
+    // Over the lyrics' bottom: only the part below them is kept.
+    expect(stageLayout(notesLook(box(60, 600, 1800, 400))).notes!.box).toEqual(box(60, 660, 1800, 340));
+    // Over their top right: the larger free part (above them) wins; the strip on the right is too narrow.
+    expect(stageLayout(notesLook(box(1000, 0, 920, 700))).notes!.box).toEqual(box(1000, 0, 920, 140));
+    // Inside the lyrics: no notes at all rather than notes over the lyrics.
+    expect(stageLayout(notesLook(box(100, 200, 800, 300))).notes).toBeNull();
+  });
+
+  it('never overlaps the current lyrics and stays inside the box the look gives (property)', () => {
+    const cur = stageLayout(LOOK_STAGE).current!.box;
+    fc.assert(
+      fc.property(
+        fc.integer({ min: -200, max: 2000 }),
+        fc.integer({ min: -200, max: 1200 }),
+        fc.integer({ min: 1, max: 2200 }),
+        fc.integer({ min: 1, max: 1300 }),
+        (x, y, w, h) => {
+          const n = stageLayout(notesLook(box(x, y, w, h))).notes;
+          if (!n) return;
+          expect(overlaps(n.box, cur)).toBe(false);
+          expect(n.box.x).toBeGreaterThanOrEqual(x);
+          expect(n.box.y).toBeGreaterThanOrEqual(y);
+          expect(n.box.x + n.box.w).toBeLessThanOrEqual(x + w);
+          expect(n.box.y + n.box.h).toBeLessThanOrEqual(y + h);
+          // A box that had to be cut keeps at least one line.
+          if (overlaps(box(x, y, w, h), cur))
+            expect(n.box.h).toBeGreaterThanOrEqual(n.fontSizePx * n.lineHeight);
+        },
+      ),
+      { numRuns: 2000 },
+    );
+  });
+
+  it('clearOf keeps a box that only touches, and drops parts smaller than asked', () => {
+    const a = box(0, 0, 100, 100);
+    expect(clearOf(box(0, 100, 100, 50), a, 10, 10)).toEqual(box(0, 100, 100, 50));
+    expect(clearOf(box(0, 90, 100, 15), a, 10, 10)).toBeNull();
+    expect(clearOf(box(0, 90, 100, 15), a, 10, 5)).toEqual(box(0, 100, 100, 5));
+    expect(clearOf(box(0, 0, 10, 10), undefined, 10, 10)).toEqual(box(0, 0, 10, 10));
+  });
+});
+
+describe('the notes the stage shows', () => {
+  it('are the displayed slide’s notes, following the live slide', () => {
+    let s = liveSermon(['Greet the guests.', undefined, 'Pray for the Smiths.']);
+    const look = notesLook();
+    expect(view(s, look).notes).toBe('Greet the guests.');
+    s = reduce(s, { k: 'next', at: 2000 });
+    expect(view(s, look).notes).toBeNull();
+    s = reduce(s, { k: 'next', at: 3000 });
+    expect(view(s, look).notes).toBe('Pray for the Smiths.');
+    expect(notesText(s, s.layers.slide.content)).toBe('Pray for the Smiths.');
+    // Not in the view when the look shows none, nor when the slide layer is cleared.
+    expect(view(s, LOOK_STAGE).notes).toBeNull();
+    const c = reduce(s, { k: 'clear', layer: 'slide', at: 4000 });
+    expect(view(c, look).notes).toBeNull();
+  });
+
+  it('show for non-song slides when the look shows no non-song text', () => {
+    const s = liveSermon(['Ask for volunteers.']);
+    const look = notesLook();
+    const rule = look.layers.slide;
+    if (rule.mode !== 'lyricOnly') throw new Error('stage look');
+    look.layers.slide = { ...rule, nonSong: 'none' };
+    const v = view(s, look);
+    expect(v.current).toBeNull();
+    expect(v.notes).toBe('Ask for volunteers.');
+  });
+
+  it('are tidied: line ends, trailing spaces and runs of blank lines', () => {
+    expect(cutNotes('  One  \r\nTwo\r\r\n\n\n\nThree \t\n')).toBe('One\nTwo\n\nThree');
+    expect(cutNotes('   \n\n ')).toBeNull();
+    expect(cutNotes(undefined)).toBeNull();
+    expect(cutNotes(42)).toBeNull();
+  });
+
+  it('are cut to a bound at a word, with an ellipsis, however long they are', () => {
+    const words = Array.from({ length: 60_000 }, (_, i) => `word${i}`).join(' ');
+    const t = cutNotes(words)!;
+    expect(t.length).toBeLessThanOrEqual(NOTES_MAX + 1);
+    expect(t.endsWith('…')).toBe(true);
+    expect(words.startsWith(t.slice(0, -1))).toBe(true);
+    expect(words[t.length - 1]).toBe(' ');
+    // A note of 200,000 characters costs no more than a long one.
+    const huge = 'x'.repeat(200_000);
+    const started = performance.now();
+    for (let i = 0; i < 100; i++) cutNotes(huge);
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(cutNotes(huge)!.length).toBe(NOTES_MAX + 1);
+    // Never inside a surrogate pair.
+    const emoji = 'a'.repeat(NOTES_MAX - 1) + '🙏'.repeat(4);
+    const e = cutNotes(emoji)!;
+    expect(e).toBe(`${'a'.repeat(NOTES_MAX - 1)}…`);
+    // Long only in blank space read: the cut is still marked.
+    expect(cutNotes(`Amen${' \n'.repeat(NOTES_MAX * 3)}and more`)).toBe('Amen…');
+  });
+});
+
+describe('stage text direction (design/27 §6)', () => {
+  it('splits text into its paragraphs as readableText keeps them, verse numbers in front', () => {
+    const verse = { bullet: { auto: 'arabicPeriod', startAt: 16 } };
+    const text = slideText({
+      id: 's',
+      objects: [
+        {
+          id: 'b',
+          type: 'text',
+          text: 'For God so loved the world\nבְּרֵאשִׁית בָּרָא אֱלֹהִים.\n\nAmen',
+          box: box(0, 0, 1, 1),
+          style: LOOK_MAIN as never,
+          opacity: 1,
+          paras: [verse, verse, null, null],
+        },
+      ],
+    });
+    expect(stageParagraphs(text)).toEqual([
+      '16.\u{a0}For God so loved the world',
+      '17.\u{a0}בְּרֵאשִׁית בָּרָא אֱלֹהִים.',
+      '',
+      'Amen',
+    ]);
+    expect(stageParagraphs('')).toEqual(['']);
+  });
+
+  it('carries the current, next and notes text paragraph by paragraph, a Hebrew line included', () => {
+    let s = liveSermon(['One', 'Two', 'שלום\nPeace']);
+    s = reduce(s, { k: 'go', cueIndex: 1, at: 2000 });
+    const v = view(s, notesLook());
+    expect(stageParagraphs(v.next!.text)).toEqual(['Peace be with you', 'שלום עליכם!']);
+    s = reduce(s, { k: 'next', at: 3000 });
+    const w = view(s, notesLook());
+    expect(stageParagraphs(w.current!.text)).toEqual(['Peace be with you', 'שלום עליכם!']);
+    expect(stageParagraphs(w.notes!)).toEqual(['שלום', 'Peace']);
   });
 });
