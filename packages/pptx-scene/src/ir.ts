@@ -293,6 +293,26 @@ export interface Classification {
   class: SlideClass;
   /** The features that keep the slide out of a lower tier, and anything that made it hybrid or picture. */
   reasons: string[];
+  /** Hybrid slides: the art range and what the art holds (design/27 §5 "Slide class"). Added by F. */
+  art?: ArtRange;
+}
+
+/**
+ * The art of a hybrid slide (design/27 §5): one locked, transparent LibreOffice picture placed in the
+ * z-order at `from`. Indexes are into `SlideScene.elements` (bottom first).
+ */
+export interface ArtRange {
+  /** Rmin and Rmax: the lowest and the highest residual element. */
+  from: number;
+  to: number;
+  /**
+   * The elements baked into the art, bottom first: every residual, and every other element of the range
+   * that overlaps an art element above it. Other elements of the range stay native, just above the art;
+   * play videos are never in the art.
+   */
+  elements: number[];
+  /** The bounding box of those elements in slide EMU: the art's box. */
+  box: RectEmu;
 }
 
 export interface SlideScene {
