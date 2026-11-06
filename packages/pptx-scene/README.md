@@ -255,8 +255,9 @@ design/27 §4 "Pictures", §5 "Element support", §15 M6 ("SmartArt from its dra
   `modelDrawingRelId`), so LibreOffice prints PowerPoint's drawing rather than laying the diagram out itself. The census tier is unchanged (SmartArt is still a fallback feature: the tier
   measures feature use).
 - **Baked pictures** (`bake.ts`): a blip's duotone, clrChange, grayscl, biLevel and lum (PowerPoint's
-  recolour presets are these) are read with their colours resolved (`PictureFill.recolor`; `picture.ts`),
-  and such a picture is native (any other blip effect, a blur say, keeps it approx). A tiled picture fill
+  recolour presets are these) are read with their colours resolved (`PictureFill.recolor`; `picture.ts`) in
+  the fill's own colour context (a theme fill's `phClr` is its reference's colour: Office 2007's paper
+  texture is a tile duotoned in `bg1`), and such a picture is native (any other blip effect, a blur say, keeps it approx). A tiled picture fill
   (`a:tile`) of a shape or a background becomes one picture of the whole box: the tile grid as shares of the
   box (`tileBakeOf`: the picture's size at its header's resolution, `PictureHeader.dpi` from PNG `pHYs` or
   JPEG JFIF, else 96 dpi, times `sx`/`sy`, its corner by `algn` then `tx`/`ty`, every other tile mirrored by
