@@ -58,7 +58,8 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
           arrangementPos,
           slideId: slide.id,
           slideIndexInSection,
-          backgroundMediaId: slide.backgroundMediaId ?? item.backgroundMediaId ?? p.backgroundMediaId,
+          backgroundMediaId:
+            slideBackground(slide, resolved.media) ?? item.backgroundMediaId ?? p.backgroundMediaId,
           ...(slide.clearBackground && !slide.backgroundMediaId ? { clearBackground: true } : {}),
           transition: item.transition ?? slide.transition ?? p.transition,
           autoAdvanceMs: p.kind === 'loop' ? loopDelay(slide.durationMs, p.loop?.defaultSlideMs) : undefined,
@@ -106,6 +107,15 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
     }
   });
   return cues;
+}
+
+/**
+ * The slide's own background, unless it is a PowerPoint slide's that goLive left out (a motion background
+ * still transcoding or failed, design/27 §8): then the item's or the presentation's shows.
+ */
+function slideBackground(slide: Slide, media: ResolvedPlaylist['media']): string | undefined {
+  const id = slide.backgroundMediaId;
+  return id && slide.pptx && !media[id] ? undefined : id;
 }
 
 /**

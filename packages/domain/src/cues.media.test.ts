@@ -295,6 +295,50 @@ describe('media slides play are referenced and optional at goLive', () => {
     ]);
   });
 
+  it("a PowerPoint slide's motion background still processing goes live without it, the presentation's showing", () => {
+    const pptx = { fileId: 'deck', index: 0, class: 'native' as const, version: 1 };
+    const imported = deck(
+      'd',
+      [
+        [
+          slide('a', [], { backgroundMediaId: 'loop', pptx }),
+          slide('b', [], { backgroundMediaId: 'pic', pptx: { ...pptx, index: 1 } }),
+        ],
+      ],
+      { backgroundMediaId: 'wall' },
+    );
+    const lib = [
+      { ...clip, id: 'loop', state: 'processing' as const },
+      media('pic', 'image'),
+      media('wall', 'image'),
+    ];
+    const r = resolvePlaylist(inputs(lib, playlist('d'), imported), 'pl', { digest: localDigest });
+    expect(Object.keys(r.media).sort()).toEqual(['pic', 'wall']);
+    expect(r.degraded?.map((d) => d.reason)).toEqual([
+      '"Media clip" (slide background) is still processing; the slide shows without it; Go live again once it is ready',
+    ]);
+    const cues = expandCues(r);
+    expect(cues.map((c) => c.backgroundMediaId)).toEqual(['wall', 'pic']);
+    // Ready, it is the slide's background like any other.
+    const ready = resolvePlaylist(
+      inputs(
+        [{ ...clip, id: 'loop' }, media('pic', 'image'), media('wall', 'image')],
+        playlist('d'),
+        imported,
+      ),
+      'pl',
+      {
+        digest: localDigest,
+      },
+    );
+    expect(expandCues(ready)[0]?.backgroundMediaId).toBe('loop');
+    // A slide of ordo's own keeps its background required.
+    const own = deck('d', [[slide('a', [], { backgroundMediaId: 'loop' })]]);
+    expect(() => resolvePlaylist(inputs(lib, playlist('d'), own), 'pl', { digest: localDigest })).toThrow(
+      /still processing/,
+    );
+  });
+
   it('a clip that something else also draws or plays stays required', () => {
     const lib = [{ ...clip, state: 'processing' as const }, song, media('pic', 'image')];
     expect(() =>

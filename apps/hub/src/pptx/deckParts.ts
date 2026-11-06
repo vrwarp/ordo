@@ -68,19 +68,23 @@ export async function readDeckXml(deck: string, dir: string, signal: AbortSignal
 /**
  * The parts of `wanted` (picture parts a pool task found referenced) spilled under generated names in `dir`,
  * at most `PPTX_LIMITS.pictures` of them and `PPTX_LIMITS.spillBytes` in all: [part, file] in `files`; parts
- * past the budget are counted in `skippedCount`.
+ * past the budget are counted in `skippedCount`. `limits` lowers both (the import's clips get what its
+ * pictures left of the budget, at most `PPTX_LIMITS.clips` of them).
  */
 export async function spillDeckParts(
   deck: string,
   dir: string,
   wanted: Iterable<string>,
   signal: AbortSignal,
+  limits: { parts?: number; bytes?: number } = {},
 ): Promise<{ files: Map<string, string>; skippedCount: number }> {
   const want = new Set<string>();
+  const maxParts = Math.min(limits.parts ?? PPTX_LIMITS.pictures, PPTX_LIMITS.pictures);
+  const maxBytes = Math.max(0, Math.min(limits.bytes ?? PPTX_LIMITS.spillBytes, PPTX_LIMITS.spillBytes));
   let over = 0;
   for (const p of wanted) {
     if (want.has(p)) continue;
-    if (want.size < PPTX_LIMITS.pictures) want.add(p);
+    if (want.size < maxParts) want.add(p);
     else over++;
   }
   if (!want.size) return { files: new Map(), skippedCount: over };
@@ -90,7 +94,7 @@ export async function spillDeckParts(
     distinct: true,
     spill: () => true,
     skip: (path) => !want.has(path),
-    maxSpillBytes: PPTX_LIMITS.spillBytes,
+    maxSpillBytes: maxBytes,
     signal,
   });
   return { files: zip.onDisk, skippedCount: zip.skippedCount + over };

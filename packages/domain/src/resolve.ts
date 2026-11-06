@@ -52,9 +52,15 @@ export function slideMediaIds(slide: Pick<Slide, 'objects' | 'audio'>): string[]
 
 /**
  * A slide that plays a media item in place (design/27 §8): its clip (`video`), an ImageObject's poster that is
- * its own clip (`poster`: the editor's 'Add video to slide' shows the clip's poster frame) or its sound.
+ * its own clip (`poster`: the editor's 'Add video to slide' shows the clip's poster frame), its sound, or the
+ * background of a PowerPoint slide (`background`: the importer makes a looping, muted full-slide video the
+ * slide's motion background, and a clip may still be transcoding when the service goes live).
  */
-export type SlidePlay = { presentationId: string; slideId: string; role: 'video' | 'poster' | 'sound' };
+export type SlidePlay = {
+  presentationId: string;
+  slideId: string;
+  role: 'video' | 'poster' | 'sound' | 'background';
+};
 
 /**
  * Every media reference of a playlist's items and slides. `play` is set for what a slide plays in place:
@@ -74,9 +80,9 @@ function visitPlaylistMedia(
     visit(p.backgroundMediaId);
     for (const sec of p.sections)
       for (const sl of sec.slides) {
-        visit(sl.backgroundMediaId);
-        visit(sl.imported?.imageMediaId);
         const at = (role: SlidePlay['role']): SlidePlay => ({ presentationId: p.id, slideId: sl.id, role });
+        visit(sl.backgroundMediaId, sl.pptx ? at('background') : undefined);
+        visit(sl.imported?.imageMediaId);
         for (const o of sl.objects)
           if (o.type === 'image') visit(o.mediaId, o.play?.mediaId === o.mediaId ? at('poster') : undefined);
         visit(playingObject(sl)?.play.mediaId, at('video'));
@@ -101,8 +107,8 @@ export function referencedMediaIds(
 }
 
 /**
- * Media that slides only play in place (`slideMediaIds`, and a play object's poster when it is the clip
- * itself), each with the slides that play it. These are optional at goLive (design/27 §8 "Domain"): a clip
+ * Media that slides only play in place (`slideMediaIds`, a play object's poster when it is the clip itself,
+ * and a PowerPoint slide's own background), each with the slides that play it. These are optional at goLive (design/27 §8 "Domain"): a clip
  * still processing or failed is left out and its slide shows the poster. An id that anything else in the
  * playlist draws or plays stays required and is not listed.
  */

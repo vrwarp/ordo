@@ -879,6 +879,27 @@ A scene is several draws, so it is composed at full alpha before it is weighted:
 - `numSld` → `slides`;
 - only the first video and the first sound per slide play; others keep their posters (logged).
 
+*As built (M3 wave 2, `packages/pptx-scene/src/media.ts`, `timing.ts`; `apps/hub/src/pptx/clips.ts`):*
+- 'Rewind after playing' is the media node's `fill="remove"` (`fill="hold"` holds the last frame). A play
+  effect counts when it plays (`playFrom(…)`, `play`, `togglePause`); pause and stop effects do not. A clip
+  nothing in the timing starts is a click (PowerPoint shows its play controls); an automatic start wins over a
+  trigger that also toggles the clip, as PowerPoint writes "Automatically".
+- `p14:trim end` is how much is cut from the end of the clip, not where the kept part ends (verified on real
+  decks: `end="6458.3125"` on a 146.458 s sound keeps 140 s), so the hub probes a trimmed clip's duration
+  before it ingests it.
+- Muted for the motion background is `mute="1"` or `vol="0"` (a real deck mutes its loop with the volume).
+  The promotion also needs a 16:9 deck, an automatic, looping video whose box is the slide (each edge within
+  2.5 %, unturned, uncropped, unmasked, opaque, its poster at the slide's aspect when known) with nothing of
+  the slide's own below it; what it covers is left out. It stays the slide's background, never the
+  presentation's, and goLive treats a PowerPoint slide's own background as optional like its clips
+  (`SlidePlay.role` 'background'; `expandCues` shows the item's or the presentation's instead), so a motion
+  background still transcoding never refuses the service.
+- The hub sniffs each clip part before the batches (`SceneTaskInput.mediaKinds`), so the converter decides
+  video or sound by the bytes. Clips are stored with `IngestOpts.queue: false` and their media jobs queued in
+  the transaction that saves version 1, right after `pptx-lo` (`JobQueue.enqueue` `after`: jobs start in
+  creation order, and ids are random within a millisecond). Clip placeholders are `pptxmedia:clip<n>`, one per
+  part and trim, listed in `EmittedSlide.clips`.
+
 ## 9. Builds, transitions and hidden slides
 
 - **Final state.** Every slide draws its final state, as LibreOffice and pptx-preview do. Exit, emphasis and motion effects are dropped (logged).
@@ -1309,6 +1330,9 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   - video ImageObjects draw their poster on outputs;
   - MediaTab hides `pptx`/`document` media; reference-aware delete confirmation.
 - Hub budgets measured on a reference NAS.
+- **As built in wave 2, item A (clips):** clip and poster extraction with the `p:timing` mapping, trims baked,
+  motion backgrounds, linked and failed clips as posters with `[warn]` lines (§8 "As built";
+  apps/hub/src/pptx/README.md "Wave 2, item A").
 - **As built in wave 1** (apps/hub/src/pptx/README.md): everything above except rich text emission and clip extraction (with M2 and M5), `slideContent()` in every drawer, hidden-cue navigation (hidden slides give no cue until then), and flips, ellipse/roundRect masks and recolouring of pictures (wave 2; drawn unflipped, as rects and without the recolouring, each noted on the slide). Every read of a stored deck spills only referenced pictures and refuses overlapping zip entries; a LibreOffice run that fails is retried, then the slides it could not draw are marked `Slide.pptx.failed`; a save that brings back pending slides queues the follow-up again.
 
 **Files.**
