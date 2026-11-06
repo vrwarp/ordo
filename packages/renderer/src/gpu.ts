@@ -558,8 +558,8 @@ export class GpuCompositor implements Compositor {
       if (ka === K_T && kb === K_T) pass.setBindGroup(0, this.bgPairTT[l]![outIdx]!);
       else {
         const dd = this.dynPair[l]![ka * 3 + kb]!;
-        const next = this.bindSource(dd.entries, 2, out, outIdx, l, f);
-        this.bindSource(dd.entries, next, live, liveIdx, l, f);
+        const next = this.bindSource(dd.entries, 2, ka, out, outIdx, l, f);
+        this.bindSource(dd.entries, next, kb, live, liveIdx, l, f);
         pass.setBindGroup(0, this.device.createBindGroup(dd.desc));
       }
       pass.draw(3);
@@ -576,27 +576,32 @@ export class GpuCompositor implements Compositor {
     if (k === K_T) pass.setBindGroup(0, this.bgSingle[l]![sIdx]!);
     else {
       const dd = this.dynSingle[l]![k]!;
-      this.bindSource(dd.entries, 2, s, sIdx, l, f);
+      this.bindSource(dd.entries, 2, k, s, sIdx, l, f);
       pass.setBindGroup(0, this.device.createBindGroup(dd.desc));
     }
     pass.draw(3);
   }
 
-  /** Point the bind group entries of one source, from entry `at`, at its resources; returns the next. */
+  /**
+   * Point the bind group entries of one source, from entry `at`, at its resources; returns the next.
+   * `k` is the kind kindOf gave the source this frame, the kind its pipeline was chosen by: the entries
+   * follow it, not the stack's content kind (a scene showing only its poster binds one texture, t).
+   */
   private bindSource(
     e: GPUBindGroupEntry[],
     at: number,
+    k: number,
     s: Stack<ImageBitmap>,
     idx: number,
     l: number,
     f: FrameInputs,
   ): number {
     /* @hot */
-    if (s.kind === SRC_VIDEO) {
+    if (k === K_E) {
       e[at]!.resource = this.extFor(s.videoSlot, f);
       return at + 1;
     }
-    if (s.kind === SRC_SCENE) {
+    if (k === K_V) {
       e[at]!.resource = s.bitmap ? this.textureViews[l]![idx]! : this.clearView;
       const ov = this.overViews[l];
       e[at + 1]!.resource = s.over && ov ? ov[idx]! : this.clearView;
@@ -605,6 +610,7 @@ export class GpuCompositor implements Compositor {
         : this.importExt(PLACEHOLDER, this.placeholder!);
       return at + 3;
     }
+    // A bitmap, or a scene's base: both are uploaded into the stack's texture.
     e[at]!.resource = this.textureViews[l]![idx]!;
     return at + 1;
   }

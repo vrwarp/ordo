@@ -41,7 +41,8 @@ export type SlideDesc = {
   /**
    * The slide's video plays in place, in the box of ImageObject `objectId` (design/27 §7.2): set when the
    * media layer's desc is `inSlide` for this slide. `w` x `h` is the clip's delivered size (Media.width,
-   * height) when known: the plane fits the video with it, never with the poster's.
+   * height) when known: the plane fits the video with it, never with the poster's. The hub delivers square
+   * pixels (anamorphic sources resampled at ingest), so it is the shape on screen.
    */
   video?: { objectId: string; mediaId: string; hash: string; w?: number; h?: number };
 };

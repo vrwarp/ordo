@@ -396,6 +396,42 @@ describe('WebGPU scene compositor', () => {
     expect((res[7] as { ext: { name: string } }).ext.name).toBe('placeholder');
   });
 
+  for (const order of ['poster out, clip in', 'clip out, poster in'] as const) {
+    it(`crossfades a poster-only scene with a scene showing its frame through one t source (${order})`, async () => {
+      // GO from a playing clip slide to one whose clip still loads (or back, after onEnd 'black'): the
+      // poster-only side draws as a bitmap, so the pair pipeline binds one texture view for it.
+      const { c, dev } = await compositor();
+      const f = inputs();
+      const clip = frame('clip');
+      f.video.frames[2] = clip as unknown as VideoFrame;
+      f.video.gen[2] = 5;
+      const playing = scene('V', false, 2, 5);
+      const poster = scene('P', false, 3, 9); // slot 3 holds no frame
+      const posterOut = order === 'poster out, clip in';
+      show(f, SLIDE, posterOut ? poster : playing, c);
+      drawn(c, f);
+      const ls = f.layers[SLIDE]!;
+      const next = posterOut ? playing : poster;
+      c.prepare(SLIDE, next);
+      ls.offer(next);
+      ls.requestFlip(next.key, 1000, 1000, 0);
+      ls.tick(1000, 16);
+      f.now = 1500;
+      const draws = dev.draws.length;
+      expect(() => drawn(c, f)).not.toThrow();
+      expect(dev.draws).toHaveLength(draws + 1);
+      const [pipe, res] = dev.draws.at(-1)!;
+      expect(pipe).toBe(posterOut ? 'pair-tv' : 'pair-vt');
+      expect(res).toHaveLength(6);
+      const outIdx = 1 - ls.live;
+      const posterIdx = posterOut ? outIdx : ls.live;
+      const t = res[posterOut ? 2 : 5] as View;
+      expect(t.tex.label).toBe(`layer${SLIDE}-stack${posterIdx}`);
+      expect((res[posterOut ? 5 : 4] as { ext: Frame }).ext).toBe(clip);
+      expect(flags(dev, SLIDE, posterOut ? U_PLANE_B : U_PLANE_A)).toBe(PLANE_VIDEO);
+    });
+  }
+
   it('releases the over textures and the placeholder frame on destroy', async () => {
     const { c, dev } = await compositor();
     c.prepare(SLIDE, scene('S', true));
@@ -404,6 +440,123 @@ describe('WebGPU scene compositor', () => {
     expect(dev.textures.every((t) => t.destroyed)).toBe(true);
     expect(placeholder.closed).toBe(true);
   });
+});
+
+/**
+ * Every source a stack can hold, by the kind it draws as this frame (t: one texture, e: one external
+ * texture, v: base, over and video). Each side of a crossfade has its own slot and generation.
+ */
+type Src = {
+  name: string;
+  kind: 't' | 'e' | 'v';
+  type: 'bitmap' | 'video' | 'scene';
+  base?: boolean;
+  over?: boolean;
+  /** What the source's video slot holds: a frame of its generation, of another one, or nothing. */
+  frame: 'current' | 'stale' | 'none';
+};
+const SOURCES: Src[] = [
+  { name: 'bitmap', kind: 't', type: 'bitmap', frame: 'none' },
+  { name: 'video', kind: 'e', type: 'video', frame: 'current' },
+  { name: 'poster-only scene', kind: 't', type: 'scene', base: true, frame: 'none' },
+  { name: 'poster-only scene with a stale frame', kind: 't', type: 'scene', base: true, frame: 'stale' },
+  { name: 'scene with its frame', kind: 'v', type: 'scene', base: true, frame: 'current' },
+  { name: 'scene with an over', kind: 'v', type: 'scene', base: true, over: true, frame: 'none' },
+  {
+    name: 'scene with its frame and an over',
+    kind: 'v',
+    type: 'scene',
+    base: true,
+    over: true,
+    frame: 'current',
+  },
+  { name: 'scene without a base, with its frame', kind: 'v', type: 'scene', frame: 'current' },
+  { name: 'scene with only an over', kind: 'v', type: 'scene', over: true, frame: 'none' },
+];
+
+type Side = 'out' | 'live';
+
+/** Put `src` in its side's video slot and return its content. */
+function place(f: FrameInputs, src: Src, side: Side): StackContent<ImageBitmap> {
+  const slot = side === 'out' ? 2 : 3;
+  const gen = side === 'out' ? 5 : 7;
+  f.video.frames[slot] = src.frame === 'none' ? null : (frame(`${side}-clip`) as unknown as VideoFrame);
+  f.video.gen[slot] = src.frame === 'current' ? gen : src.frame === 'stale' ? gen - 1 : -1;
+  if (src.type === 'bitmap') return { key: side, kind: SRC_BITMAP, bitmap: bitmap(side) };
+  if (src.type === 'video') return { key: side, kind: SRC_VIDEO, videoSlot: slot, fit: 1 };
+  const s = scene(side, src.over === true, slot, gen);
+  if (!src.base) s.bitmap = null;
+  return s;
+}
+
+/** The resources one source must bind, in order, from stack `idx`. */
+function bound(src: Src, side: Side, idx: number): string[] {
+  const clip = `ext:${side}-clip`;
+  const clear = 'transparent-1x1';
+  if (src.kind === 't') return [`layer${SLIDE}-stack${idx}`];
+  if (src.kind === 'e') return [clip];
+  return [
+    src.base ? `layer${SLIDE}-stack${idx}` : clear,
+    src.over ? `layer${SLIDE}-over${idx}` : clear,
+    src.frame === 'current' ? clip : 'ext:placeholder',
+  ];
+}
+
+const planeFlags = (src: Src) =>
+  (src.over ? PLANE_HAS_OVER : 0) | (src.frame === 'current' ? PLANE_VIDEO : 0);
+
+/** Name a bound resource of the fake device. */
+function named(r: unknown): string {
+  const x = r as { tex?: Tex; ext?: { name: string }; sampler?: boolean; buffer?: unknown };
+  if (x.tex) return x.tex.label;
+  if (x.ext) return `ext:${x.ext.name}`;
+  if (x.sampler) return 'sampler';
+  if (x.buffer) return 'uniform';
+  return '?';
+}
+
+describe('WebGPU source kinds: every stack binds exactly the entries its pipeline declares', () => {
+  for (const src of SOURCES)
+    it(`draws a ${src.name} alone with single-${src.kind}`, async () => {
+      const { c, dev } = await compositor();
+      const f = inputs();
+      show(f, SLIDE, place(f, src, 'live'), c);
+      expect(() => drawn(c, f)).not.toThrow();
+      expect(dev.draws).toHaveLength(1);
+      const [pipe, res] = dev.draws[0]!;
+      expect(pipe).toBe(`single-${src.kind}`);
+      expect(res.map(named)).toEqual(['uniform', 'sampler', ...bound(src, 'live', f.layers[SLIDE]!.live)]);
+      if (src.kind === 'v') expect(flags(dev, SLIDE)).toBe(planeFlags(src));
+    });
+
+  for (const a of SOURCES)
+    for (const b of SOURCES)
+      it(`crossfades a ${a.name} out and a ${b.name} in with pair-${a.kind}${b.kind}`, async () => {
+        const { c, dev } = await compositor();
+        const f = inputs();
+        const out = place(f, a, 'out');
+        show(f, SLIDE, out, c);
+        const live = place(f, b, 'live');
+        const ls = f.layers[SLIDE]!;
+        c.prepare(SLIDE, live);
+        ls.offer(live);
+        ls.requestFlip(live.key, 1000, 1000, 0);
+        ls.tick(1000, 16);
+        f.now = 1500;
+        expect(ls.fading).toBe(true);
+        expect(() => drawn(c, f)).not.toThrow();
+        expect(dev.draws).toHaveLength(1);
+        const [pipe, res] = dev.draws[0]!;
+        expect(pipe).toBe(`pair-${a.kind}${b.kind}`);
+        expect(res.map(named)).toEqual([
+          'uniform',
+          'sampler',
+          ...bound(a, 'out', 1 - ls.live),
+          ...bound(b, 'live', ls.live),
+        ]);
+        if (a.kind === 'v') expect(flags(dev, SLIDE, U_PLANE_A)).toBe(planeFlags(a));
+        if (b.kind === 'v') expect(flags(dev, SLIDE, U_PLANE_B)).toBe(planeFlags(b));
+      });
 });
 
 describe('RenderEngine and Compositor.prepare', () => {

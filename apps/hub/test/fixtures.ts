@@ -89,6 +89,18 @@ export const fixtures = {
   aiff: (d: string) => ffmpeg(d, 'tone.aiff', ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=1']),
   avi: (d: string) =>
     ffmpeg(d, 'old.avi', [...TEST_AV, '-c:v', 'msmpeg4v2', '-c:a', 'pcm_s16le', '-shortest']),
+  /** A DVD-style anamorphic clip: 720x480 coded, sample aspect ratio 32:27, so 16:9 on screen. */
+  anamorphic: (d: string) =>
+    ffmpeg(d, 'anamorphic.vob', [
+      ...['-f', 'lavfi', '-i', 'testsrc2=size=720x480:rate=25:duration=1,setsar=32/27'],
+      ...['-c:v', 'mpeg2video', '-f', 'vob'],
+    ]),
+  /** The same ratio with alpha (WebM stores it as a display width, a whole number: 432 * 32 / 27 = 512). */
+  anamorphicAlpha: (d: string) =>
+    ffmpeg(d, 'anamorphic-alpha.webm', [
+      ...['-f', 'lavfi', '-i', 'testsrc2=size=432x288:rate=25:duration=0.5,format=yuva420p,setsar=32/27'],
+      ...['-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p', '-auto-alt-ref', '0'],
+    ]),
   /** 2 s WMV: black and silent for 1 s, then white with a tone (trim tests can tell the halves apart). */
   halves: (d: string) =>
     ffmpeg(d, 'halves.wmv', [

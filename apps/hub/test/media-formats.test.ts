@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { Media, MediaTrim } from '@ordo/domain';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { measureLoudness, trimArgs } from '../src/media/ffmpeg.ts';
+import { measureLoudness, probe, trimArgs } from '../src/media/ffmpeg.ts';
 import { keptMs, normTrim, sameTrim, volumeGainDb } from '../src/media/service.ts';
 import { extensionAgrees, hashFile, type Sniffed, sniff } from '../src/store.ts';
 import { fixtures } from './fixtures.ts';
@@ -155,6 +155,29 @@ describe('ingesting old formats', () => {
     expect(m).toMatchObject({ kind: 'video', state: 'ready' });
     expect(m.audio).toBeUndefined();
     expect(jobLog(m)).not.toContain('loudness');
+  });
+
+  it('delivers anamorphic clips (DVD, DV, some WMV) with square pixels at their display size', async () => {
+    // The renderer fits an in-slide video at Media.width/height: that must be the shape on screen
+    // (16:9 here), not the coded 720x480 (3:2), or the picture is squeezed.
+    const sixteenNine = (w = 0, h = 1) => Math.abs(w / h - 16 / 9);
+    for (const [path, mime] of [
+      [fixtures.anamorphic(fx), 'video/mp4'],
+      [fixtures.anamorphicAlpha(fx), 'video/webm'],
+    ] as const) {
+      const src = await probe(path, 10_000);
+      expect(src.video?.sample_aspect_ratio).toBe('32:27');
+      const m = await uploaded(path);
+      expect(m).toMatchObject({ kind: 'video', state: 'ready', height: src.video?.height });
+      expect(m.delivery?.mime).toBe(mime);
+      expect(sixteenNine(m.width, m.height)).toBeLessThan(0.01);
+      expect(jobLog(m)).toContain(`${src.video?.width}x${src.video?.height} (SAR 32:27)`);
+      const out = await probe(hub.store.abs(m.delivery!.path), 10_000);
+      expect(out.video).toMatchObject({ width: m.width, height: m.height, sample_aspect_ratio: '1:1' });
+      const poster = await probe(hub.store.abs(m.poster!.path), 10_000);
+      expect(sixteenNine(poster.video?.width, poster.video?.height)).toBeLessThan(0.01);
+      expect(poster.video?.sample_aspect_ratio ?? '1:1').toBe('1:1');
+    }
   });
 
   it('measures over the first audio stream, within a trim', async () => {

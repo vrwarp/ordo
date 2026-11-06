@@ -403,8 +403,11 @@ export class MediaService {
   ): Promise<Media> {
     const t = this.cfg.timeouts;
     const v = info.video!;
+    // Anamorphic sources are delivered at their display size with square pixels (ffmpeg.ts SQUARE_PIXELS).
+    const sar = v.sample_aspect_ratio;
+    const anamorphic = sar && sar !== '1:1' && sar !== '0:1' ? ` (SAR ${sar})` : '';
     ctx.log(
-      `video ${v.codec_name} ${v.width}x${v.height} @ ${v.fps?.toFixed(2) ?? '?'} fps${alpha ? ' with alpha' : ''}${info.audio ? ', audio' : ''}`,
+      `video ${v.codec_name} ${v.width}x${v.height}${anamorphic} @ ${v.fps?.toFixed(2) ?? '?'} fps${alpha ? ' with alpha' : ''}${info.audio ? ', audio' : ''}`,
     );
     const ext = alpha ? 'webm' : 'mp4';
     const out = this.store.tmpPath(ext);

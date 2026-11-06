@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { APP_VERSION } from './index.ts';
 
@@ -19,12 +19,14 @@ import { APP_VERSION } from './index.ts';
  */
 const RECORDED = {
   version: '0.2.0',
-  digest: '43d9344dd6a3c11a0581cdfc4d91d108c189e96bcac70c91517f590c91b1f68c',
+  digest: 'a38b7f0a1b0ab92f9c3ae9eee54f20717156236130eb7f4b90597f5d0809fbc1',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */
 const SHARED = [
   'packages/live-state/src/index.ts',
+  'packages/live-state/src/actions.ts',
+  'packages/live-state/src/invariants.ts',
   'packages/domain/src/cues.ts',
   'packages/domain/src/live.ts',
   'packages/domain/src/schemas.ts',
@@ -58,6 +60,13 @@ describe('APP_VERSION', () => {
       { version: APP_VERSION, digest: now },
       `The shared client sources changed (digest ${now}). If a client would compute anything differently, bump APP_VERSION in packages/protocol/src/index.ts; then record the version and digest in RECORDED (see the comment above it).`,
     ).toEqual(RECORDED);
+  });
+
+  it('fingerprints every live-state source, not only its index (actions, invariants)', () => {
+    const dir = new URL('../../live-state/src/', import.meta.url);
+    for (const name of readdirSync(dir))
+      if (name.endsWith('.ts') && !name.endsWith('.test.ts'))
+        expect(SHARED).toContain(`packages/live-state/src/${name}`);
   });
 
   it('ignores comments and layout', () => {

@@ -8,6 +8,8 @@ export type ProbeStream = {
   codec_name?: string;
   width?: number;
   height?: number;
+  /** "num:den"; "1:1" for square pixels, "0:1" or absent when unknown (taken as square). */
+  sample_aspect_ratio?: string;
   pix_fmt?: string;
   r_frame_rate?: string;
   avg_frame_rate?: string;
@@ -66,6 +68,16 @@ export async function probe(file: string, timeoutMs: number): Promise<ProbeInfo>
 const FIT_1080 =
   "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2";
 
+/**
+ * Square pixels, before a fit. Anamorphic sources (DVD MPEG-PS, DV, some WMV) store a coded size and a
+ * sample aspect ratio that stretches it on screen (720x480 at 32:27 is 16:9). Media.width/height is probed
+ * from the delivery and the renderer fits an in-slide video at it, so the delivery is resampled to its
+ * display size with square pixels; an unknown ratio (0:1) counts as square, and square sources pass.
+ */
+const SQUARE_PIXELS = 'scale=iw*sar:ih,setsar=1';
+/** After a fit: its rounding to even sizes leaves the ratio a hair off 1:1 (852x480 at 853:852). */
+const SQUARE_AFTER_FIT = 'setsar=1';
+
 function progressParser(durationMs: number | undefined, onProgress?: (f: number) => void) {
   let buf = '';
   return (chunk: string) => {
@@ -107,7 +119,7 @@ export async function transcodeH264(
   info: ProbeInfo,
   o: TOpts & { noAudio?: boolean; trim?: Trim },
 ): Promise<void> {
-  const vf = [FIT_1080];
+  const vf = [SQUARE_PIXELS, FIT_1080, SQUARE_AFTER_FIT];
   if ((info.video?.fps ?? 0) > 60.5) vf.push('fps=60');
   vf.push('format=yuv420p');
   const audio =
@@ -166,7 +178,7 @@ export async function transcodeVp9Alpha(
   // The native VP8/VP9 decoders drop the alpha side channel; libvpx keeps it.
   if (info.video?.codec_name === 'vp9') dec.push('-c:v', 'libvpx-vp9');
   else if (info.video?.codec_name === 'vp8') dec.push('-c:v', 'libvpx');
-  const vf = [FIT_1080];
+  const vf = [SQUARE_PIXELS, FIT_1080, SQUARE_AFTER_FIT];
   if ((info.video?.fps ?? 0) > 60.5) vf.push('fps=60');
   vf.push('format=yuva420p');
   const audio =
@@ -217,7 +229,7 @@ export async function transcodeVp9Alpha(
   );
 }
 
-/** 640x360 (fit) JPEG poster at 1 s or the midpoint of short clips. */
+/** 640x360 (fit) JPEG poster with square pixels at 1 s or the midpoint of short clips. */
 export async function poster(input: string, output: string, info: ProbeInfo, o: TOpts): Promise<void> {
   const t = info.durationMs ? Math.min(1, info.durationMs / 2000) : 0;
   const dec = info.video?.codec_name === 'vp9' && info.video.hasAlpha ? ['-c:v', 'libvpx-vp9'] : [];
@@ -234,7 +246,7 @@ export async function poster(input: string, output: string, info: ProbeInfo, o: 
       '-frames:v',
       '1',
       '-vf',
-      'scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2',
+      `${SQUARE_PIXELS},scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2,${SQUARE_AFTER_FIT}`,
       '-q:v',
       '3',
       output,

@@ -320,6 +320,18 @@ export const CASES: Record<string, Case> = {
     ],
     progress: 0.6,
   },
+  // A scene with no frame of its generation and no over draws as a bitmap (t) against a scene showing its
+  // clip (v): GO from a slide whose clip still loads, or back to one after onEnd 'black' or Clear media.
+  'fade-poster-scene': {
+    layers: [bg, slide(sc(S.round, 2, 1), sc(S.stretch, 3, 9))],
+    frames: [[2, clipB, 1]],
+    progress: 0.5,
+  },
+  'fade-scene-poster': {
+    layers: [bg, slide(sc(S.padded, 3, 4), sc(S.contain, 2, 5))],
+    frames: [[2, clipA, 5]],
+    progress: 0.5,
+  },
   'scene-fade-in': {
     layers: [bg, slide(sc(S.over), undefined, true)],
     frames: [[2, clipB, 1]],
