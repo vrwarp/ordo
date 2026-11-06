@@ -198,6 +198,22 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
 - Editing a text box's plain text keeps its formatting: `editText` (`@ordo/domain`) shifts, trims and
   splits the runs and paragraph styles with the change, placed by the textarea's caret; splitting and
   merging slides cut and join them with the lines (design/27 §11).
+- Text ops (M4; `views/editor/ops/text.ts`, applied through `actions.ts`, one undo step each, nothing
+  recorded when nothing changes): `formatRange` formats the textarea's selection (runs split, normalised,
+  equal neighbours merged, at most 2,000, values bounded as the schema bounds them; Clear formatting
+  removes every run field), `resizeRange` scales its sizes relative to the box size (an effective
+  2-1,000 px; back to the box size drops the override), `setParas` styles the whole PowerPoint paragraphs
+  it touches (a soft line inherits the change; exact and proportional line spacing replace each other),
+  `selectionStyle` / `selectionParas` give the format bar and the paragraph strip their values (resolved
+  as the engine resolves them, mixed fields listed), and `refitText` is 'Re-fit text'. A text edit never
+  touches the box style, so PowerPoint's stored fit scale (`fitScale`) holds while the text fits and the
+  engine fits smaller when it does not; only 'Re-fit text' clears it.
+- Themes keep the lyric runs' structure (`themedRuns`): applying one drops each run's face, colour, size,
+  letter spacing, outline, shadow and highlight, keeps weight, italics, underline, strike, caps, language
+  and the verse superscripts (`baseline`) and paragraph styles, and drops the stored fit scale (the theme's
+  box is fitted again). Formatting the lyric object of a themed presentation marks the slide's override
+  `runs.<field>` (`runs.color`, `runs.sizeScale`, ...; `runs` keeps every one), so the next theme keeps it,
+  as `style.<field>` keeps a box style field.
 - Property panel bound to the selected object's schema.
 - Pictures are drawn with their crop (`ImageObject.crop`), as every other drawer draws them; 'Replace'
   drops the old picture's crop, which does not fit the new one (design/27 §15 M3).

@@ -22,14 +22,17 @@ import {
   replacePicture,
   resizeRange,
   type RunPatch,
+  runOverrides,
   setCrop,
   setFlip,
   setMask,
   setParas,
+  textOnSlide,
   transformGroup,
   ungroup,
   useAsBackground,
   withObject,
+  withSlide,
 } from './ops/index.ts';
 import type { ZOrder } from './ops.ts';
 
@@ -71,14 +74,31 @@ export function typeText(objectId: string, next: string, caret?: number): void {
   onText(objectId, (o) => editText(o, next, caret), `text:${objectId}`);
 }
 
+/**
+ * A format op on a text object of the open slide (locked objects left alone). On the lyric object of a
+ * presentation with a theme it also marks the theme override paths `overrides` on the slide (`runs.color`,
+ * `runs.sizeScale`, ...: ops/text.ts `runOverrides`), so the next theme keeps what the volunteer formatted
+ * (design/27 §11 "Themes"), as the Object panel marks `style.*` for the box style.
+ */
+function onFormat(objectId: string, fn: (o: TextObject) => TextObject, overrides: string[], key?: string) {
+  const slideId = openSlide();
+  if (!slideId) return;
+  change((p) => withSlide(p, slideId, (s) => textOnSlide(s, objectId, fn, p.themeId ? overrides : [])), key);
+}
+
 /** The format bar: format the selection `[start, end)` of a text object. */
 export function formatSelection(objectId: string, start: number, end: number, patch: RunPatch): void {
-  onText(objectId, (o) => formatRange(o, start, end, patch));
+  onFormat(objectId, (o) => formatRange(o, start, end, patch), runOverrides(patch));
 }
 
 /** The format bar's Size ±: scale the selection's sizes (repeated clicks coalesce). */
 export function resizeSelection(objectId: string, start: number, end: number, factor: number): void {
-  onText(objectId, (o) => resizeRange(o, start, end, factor), `size:${objectId}`);
+  onFormat(
+    objectId,
+    (o) => resizeRange(o, start, end, factor),
+    runOverrides({ sizeScale: factor }),
+    `size:${objectId}`,
+  );
 }
 
 /**
