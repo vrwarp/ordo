@@ -398,7 +398,7 @@ export class ImportService {
     await pipeline(createReadStream(tmp), h);
     const hash = h.digest('hex');
     const bytes = (await stat(tmp)).size;
-    const existing = this.lib.media.list().find((m) => m.original.hash === hash);
+    const existing = this.media.findClip(hash); // untrimmed: a trimmed clip of the same file is another item
     if (existing) {
       await rm(tmp, { force: true });
       if (background && !existing.isBackground) {

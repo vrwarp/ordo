@@ -18,16 +18,18 @@
 
 - Upload through the operator app (drag and drop, multiple files) or through the editor
   when placing an image or background.
-- Accepted: MP4 (H.264, HEVC where the hub can decode), MOV, WebM (VP9, AV1), JPEG, PNG,
-  GIF (still or animated), WAV, MP3, AAC, FLAC, OGG.
+- Accepted: MP4 (H.264, HEVC where the hub can decode), MOV, WebM (VP9, AV1), AVI, WMV,
+  MPEG-1/2 program streams (.mpg, .vob), JPEG, PNG, GIF (still or animated), WAV, MP3, AAC,
+  FLAC, OGG, WMA, AIFF. The older formats are common in church archives and PowerPoint decks.
 - The hub transcodes every video into one delivery format (H.264 High at the output's
   resolution, 1080p60 maximum, AAC stereo audio) and generates a poster frame and a loop
   preview. Alpha WebM is stored as-is and delivered as VP9 with alpha; it is not required
   at this venue and is a best-effort path.
 - Animated GIFs are converted to a looping H.264 video (opaque) or VP9 alpha video
   (transparent). Still GIFs become PNG.
-- Audio files are normalised to a delivery format (AAC 256 kbps stereo) and loudness
-  measured so the audio engine can apply a per-item gain.
+- Audio files are normalised to a delivery format (AAC 256 kbps stereo). Audio files and
+  video soundtracks are loudness measured so the audio engine plays them at one level
+  (design/18 "Gain staging").
 - Media have a name, tags, duration, loop flag, and a "background" flag for use in the
   background picker.
 - The media detail view shows the transcoding state. A media item is not selectable in

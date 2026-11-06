@@ -271,6 +271,16 @@ export type FileRef = z.infer<typeof FileRef>;
 export const MediaKind = z.enum(['video', 'image', 'audio']);
 export type MediaKind = z.infer<typeof MediaKind>;
 
+/**
+ * The part of the original a media item keeps, baked into its delivery at ingest (PowerPoint's trim,
+ * design/27 §8 "Hub"). Two items made from the same file with different trims are different clips.
+ */
+export const MediaTrim = z.object({
+  startMs: z.number().int().min(0).max(MAX.ms),
+  endMs: z.number().int().min(0).max(MAX.ms),
+});
+export type MediaTrim = z.infer<typeof MediaTrim>;
+
 export const Media = z.object({
   id: Id,
   rev: z.number().int().min(0).default(1),
@@ -299,6 +309,7 @@ export const Media = z.object({
       loudnessLufs: z.number().min(-200).max(100).optional(),
     })
     .optional(),
+  trim: MediaTrim.optional(),
   createdAt: z.string().max(100).optional(),
   updatedAt: z.string().max(100).optional(),
 });

@@ -120,7 +120,8 @@ type Media = {
   hasAlpha?: boolean;
   loop: boolean;
   isBackground: boolean;
-  audio?: { pairId?: Id; gainDb: number; loudnessLufs?: number };
+  audio?: { pairId?: Id; gainDb: number; loudnessLufs?: number }; // loudness: audio files and video soundtracks
+  trim?: { startMs: number; endMs: number }; // kept part of the original, baked into delivery; imports dedup on hash + trim
 };
 type FileRef = { hash: string; bytes: number; mime: string; path: string }; // hash = sha256, content addressed
 
