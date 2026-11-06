@@ -88,6 +88,32 @@ describe('sanitize: runs and paragraph styles are cut with the text', () => {
     expect(cutText(textObject('a\nb\nc', [], [null, null, null, null]), 3).paras).toEqual([null, null]);
   });
 
+  it('keeps at most 16 distinct run and bullet families and 64 size scales per object', () => {
+    const runs: TextRun[] = Array.from({ length: 2000 }, (_, i) => ({
+      start: i * 5,
+      end: i * 5 + 4,
+      fontFamily: `Family ${i}`,
+      sizeScale: 0.5 + i / 2000,
+    }));
+    const o = cutText(
+      {
+        id: 't',
+        type: 'text',
+        box: { x: 0, y: 0, w: 100, h: 100, rotation: 0 },
+        text: 'x'.repeat(10_000),
+        style: DEFAULT_LYRIC_STYLE,
+        opacity: 1,
+        runs,
+        paras: [{ bullet: { char: '•', fontFamily: 'Bullet Face' } }],
+      },
+      IMPORT_LIMITS.text,
+    );
+    expect(new Set(o.runs!.map((r) => r.fontFamily).filter(Boolean)).size).toBe(IMPORT_LIMITS.runFamilies);
+    expect('fontFamily' in o.runs![16]!).toBe(false);
+    expect(new Set(o.runs!.map((r) => r.sizeScale)).size).toBe(IMPORT_LIMITS.sizeScales);
+    expect(o.paras![0]!.bullet).toEqual({ char: '•' });
+  });
+
   it('bounds run sizes and keeps legacy objects as they were', () => {
     const p: Presentation = {
       id: 'p',

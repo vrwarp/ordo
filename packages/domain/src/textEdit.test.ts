@@ -6,6 +6,8 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_LYRIC_STYLE } from './defaults.ts';
 import type { TextObject, TextPara, TextRun } from './schemas.ts';
+import { paraLabels } from './bullets.ts';
+import { readableText } from './readable.ts';
 import { editText, joinText, replaceText } from './textEdit.ts';
 
 function obj(text: string, runs?: TextRun[], paras?: (TextPara | null)[]): TextObject {
@@ -35,7 +37,7 @@ describe('editText', () => {
     expect(editText(o, o.text)).toBe(o);
   });
 
-  it('gives typed text the style of the character before it, or after it at offset 0', () => {
+  it('gives typed text the style of the character before it, or of the first character at a paragraph start', () => {
     const o = obj('ab cd', [bold(0, 2), { start: 3, end: 5, color: { r: 1, g: 2, b: 3, a: 1 } }]);
     expect(spans(editText(o, 'abX cd', 3))).toEqual([
       [0, 3],
@@ -57,12 +59,53 @@ describe('editText', () => {
       [1, 2],
       [2, 4],
     ]);
-    // 'X' replaces 'bcdefg' and takes the style before it ('a': none); only the last run's 'h' is left.
-    expect(spans(editText(o, 'aXh', 2))).toEqual([[2, 3]]);
+    // 'X' replaces 'bcdefg' and takes the style of what it replaces ('b': the first run); the last run
+    // keeps its 'h'.
+    expect(spans(editText(o, 'aXh', 2))).toEqual([
+      [1, 2],
+      [2, 3],
+    ]);
     expect(spans(editText(o, 'abXh', 3))).toEqual([
       [1, 3],
       [3, 4],
     ]); // after 'b', 'X' extends the first run
+  });
+
+  it('keeps the formatting of retyped text: a date, a bold word, a verse number', () => {
+    const red = { r: 255, g: 0, b: 0, a: 1 };
+    // Select 'Sunday' (bold, at offset 0) and type 'M', then 'o': both keystrokes stay bold.
+    let e = editText(obj('Sunday, 5 May', [bold(0, 6)]), 'M, 5 May', 1);
+    e = editText(e, 'Mo, 5 May', 2);
+    expect(e.runs).toEqual([bold(0, 2)]);
+    // A one-shot change of a bold word mid-line, and a bold date that grows.
+    expect(editText(obj('Join us on Sunday at 10', [bold(11, 17)]), 'Join us on Monday at 10').runs).toEqual([
+      bold(11, 17),
+    ]);
+    expect(editText(obj('Service 5 May', [bold(8, 13)]), 'Service 12 May').runs).toEqual([bold(8, 14)]);
+    // A raised, gold verse number at a paragraph start, retyped keystroke by keystroke.
+    const verse: TextRun = { start: 17, end: 19, baseline: 0.3, color: { r: 255, g: 200, b: 0, a: 1 } };
+    e = editText(obj('For God so loved\n17For God sent', [verse]), 'For God so loved\n2For God sent', 18);
+    e = editText(e, 'For God so loved\n20For God sent', 19);
+    expect(e.runs).toEqual([{ ...verse, end: 19 }]);
+    expect(editText(obj('8And\n9For', [{ ...verse, start: 5, end: 6 }]), '8And\n10For').runs).toEqual([
+      { ...verse, start: 5, end: 7 },
+    ]);
+    // Typed at the start of a later red line: red, not the previous line's style.
+    const lines = obj('Title\nBody text', [bold(0, 5), { start: 6, end: 15, color: red }]);
+    expect(editText(lines, 'Title\nNew Body text', 10).runs).toEqual([
+      bold(0, 5),
+      { start: 6, end: 19, color: red },
+    ]);
+  });
+
+  it('gives text typed into an empty paragraph its end mark', () => {
+    // The run over the '\n' that ends the empty paragraph sizes its line (itemize): typed text keeps it.
+    const big: TextRun = { start: 2, end: 3, sizeScale: 2 };
+    expect(editText(obj('a\n\nb', [big]), 'a\nX\nb', 3).runs).toEqual([{ ...big, end: 4 }]);
+    // The last paragraph has no '\n' of its own: the one before it.
+    expect(editText(obj('a\n', [{ start: 1, end: 2, sizeScale: 2 }]), 'a\nX', 3).runs).toEqual([
+      { start: 1, end: 3, sizeScale: 2 },
+    ]);
   });
 
   it('keeps the box style, so a stored fit scale survives an edit', () => {
@@ -95,6 +138,37 @@ describe('editText', () => {
     expect(
       levels(editText(obj('a\n\nb', undefined, [{ level: 1 }, { level: 2 }, { level: 3 }]), 'a\nb')),
     ).toEqual([1, 3]); // an empty line deleted
+  });
+
+  it('keeps a paragraph whole when its first line is deleted and the rest are soft lines', () => {
+    const num = { bullet: { auto: 'arabicPeriod' } };
+    const o = obj('Intro\nAlpha\nalpha two\nBeta', undefined, [null, num, { soft: true }, num]);
+    const e = editText(o, 'Intro\nalpha two\nBeta');
+    expect(e.paras).toEqual([null, num, num]);
+    expect(paraLabels(e)).toEqual([null, '1.', '2.']);
+    expect(readableText(e)).toBe('Intro\n1.\u00a0alpha two\n2.\u00a0Beta');
+    // A stanza of a:br lines: deleting its first line leaves the rest one stanza with its spacing.
+    const stanza = obj('one\ntwo\nthree', undefined, [{ spaceBeforePx: 30 }, { soft: true }, { soft: true }]);
+    expect(editText(stanza, 'two\nthree').paras).toEqual([{ spaceBeforePx: 30 }, { soft: true }]);
+    // Deleting a soft line in the middle keeps the chain.
+    expect(editText(stanza, 'one\nthree').paras).toEqual([{ spaceBeforePx: 30 }, { soft: true }]);
+  });
+
+  it('starts a new paragraph at an Enter after a soft line', () => {
+    const o = obj('Verse one line a\nline b', undefined, [{ spaceBeforePx: 30 }, { soft: true }]);
+    expect(editText(o, 'Verse one line a\nline b\nVerse two', 30).paras).toEqual([
+      { spaceBeforePx: 30 },
+      { soft: true },
+      { spaceBeforePx: 30 },
+    ]);
+    // In the middle of a soft line that sets its own alignment: the text after the caret starts a
+    // paragraph in the chain's style with that alignment.
+    const own = obj('a\nbc', undefined, [{ level: 2 }, { soft: true, align: 'right' }]);
+    expect(editText(own, 'a\nb\nc', 4).paras).toEqual([
+      { level: 2 },
+      { soft: true, align: 'right' },
+      { level: 2, align: 'right' },
+    ]);
   });
 
   it('pads and trims paragraph styles: missing and trailing null entries are the box defaults', () => {
@@ -178,6 +252,18 @@ function styleAt(o: TextObject, i: number): number {
   return o.runs?.find((r) => r.start <= i && i < r.end)?.fontWeight ?? 0;
 }
 
+/**
+ * The style typed text takes: the first replaced character's; at a paragraph start, the paragraph's first
+ * character or, for an empty one, its end mark; else the character before.
+ */
+function ownerStyle(o: TextObject, start: number, end: number): number {
+  const t = o.text;
+  if (end > start) return styleAt(o, start);
+  if (start === 0 || t[start - 1] === '\n')
+    return start < t.length ? styleAt(o, start) : start > 0 ? styleAt(o, start - 1) : 0;
+  return styleAt(o, start - 1);
+}
+
 describe('edit properties', () => {
   it('10,000 random edits keep runs sorted, non-overlapping and in range', () => {
     fc.assert(
@@ -204,7 +290,7 @@ describe('edit properties', () => {
           const delta = insert.length - (end - start);
           for (let i = 0; i < start; i++) expect(styleAt(e, i)).toBe(styleAt(o, i));
           for (let i = end; i < o.text.length; i++) expect(styleAt(e, i + delta)).toBe(styleAt(o, i));
-          const owner = start > 0 ? styleAt(o, start - 1) : end < o.text.length ? styleAt(o, end) : 0;
+          const owner = ownerStyle(o, start, end);
           for (let i = start; i < start + insert.length; i++) expect(styleAt(e, i)).toBe(owner);
           // Paragraph styles before the change stay; those after it move with their paragraphs.
           const k = o.text.slice(0, start).split('\n').length - 1;
@@ -217,6 +303,38 @@ describe('edit properties', () => {
           expectWellFormed(e);
         },
       ),
+      { numRuns: 3000 },
+    );
+  });
+
+  it('keeps PowerPoint paragraphs whole: soft lines never start a paragraph after an Enter or a deleted line', () => {
+    const softRich = str(30).chain((text) =>
+      fc.tuple(
+        fc.constant(text),
+        fc.array(
+          fc.option(fc.record({ level: fc.integer({ min: 0, max: 8 }), soft: fc.boolean() }), { nil: null }),
+          { maxLength: text.split('\n').length },
+        ),
+        fc.nat(text.length),
+      ),
+    );
+    fc.assert(
+      fc.property(softRich, ([text, paras, at]) => {
+        const o = obj(text, undefined, paras);
+        const isSoft = (x: TextObject, i: number) => i > 0 && x.paras?.[i]?.soft === true;
+        // An Enter anywhere: the paragraph after it is a new paragraph, never a soft line.
+        const k = text.slice(0, at).split('\n').length - 1;
+        expect(isSoft(replaceText(o, at, at, '\n'), k + 1)).toBe(false);
+        // Deleting paragraph k whole (with its '\n') when the next one is soft: the rest of that paragraph
+        // keeps k's place, soft only when k itself was a soft line.
+        const starts = [0];
+        for (let i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1)) starts.push(i + 1);
+        if (k + 1 < starts.length && isSoft(o, k + 1)) {
+          const e = replaceText(o, starts[k]!, starts[k + 1]!, '');
+          expect(isSoft(e, k)).toBe(isSoft(o, k));
+          if (!isSoft(o, k)) expect(e.paras?.[k] ?? null).toEqual(o.paras?.[k] ?? null);
+        }
+      }),
       { numRuns: 3000 },
     );
   });

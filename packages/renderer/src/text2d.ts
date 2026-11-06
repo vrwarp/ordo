@@ -17,7 +17,7 @@ import { CLAMP, clampBox, clampLook, clampSlide, clampStyle, clampText, num } fr
 import { type Ctx2D, roundRect, setLetterSpacing, withRotation } from './ctx.ts';
 import { firstStrong, hasStrongRtl } from './text/bidi.ts';
 import { LEGACY_FONT_ENV, currentFontEnv } from './text/fonts.ts';
-import { bandObject, drawRichText, isRichStyle, isRichText } from './text/rich.ts';
+import { BAND_MIN_FONT_SCALE, bandObject, drawRichText, isRichStyle, isRichText } from './text/rich.ts';
 
 export type { Ctx2D } from './ctx.ts';
 export type ImageLookup = (mediaId: string) => CanvasImageSource | undefined;
@@ -391,7 +391,15 @@ export function drawBandText(
   const clamped = clampStyle(style);
   text = clampText(text);
   if ((src && isRichText(src)) || isRichStyle(clamped) || hasStrongRtl(text))
-    drawRichText(ctx, bandObject(src ? readableText(src) : text, clamped, clampBox(band), src), scale);
+    drawRichText(
+      ctx,
+      bandObject(src ? readableText(src) : text, clamped, clampBox(band), src),
+      scale,
+      undefined,
+      {
+        minFontScale: BAND_MIN_FONT_SCALE,
+      },
+    );
   else drawText(ctx, text, style, band, scale, { fit: true });
 }
 

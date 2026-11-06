@@ -8,7 +8,10 @@ import {
   type TextObject,
 } from '@ordo/domain';
 import { rasterLowerThird } from './raster.ts';
-import { bandObject } from './text/rich.ts';
+import { LEGACY_FONT_ENV } from './text/fonts.ts';
+import { itemize } from './text/itemize.ts';
+import { BAND_MIN_FONT_SCALE, bandObject, clampTextObject, layoutRich } from './text/rich.ts';
+import { prepare } from './text/segments.ts';
 import {
   bandSource,
   drawObject,
@@ -18,7 +21,7 @@ import {
   paragraphDirections,
   wrapLines,
 } from './text2d.ts';
-import { recordingCtx } from './text/test-util.ts';
+import { recordingCtx, testMeasurer } from './text/test-util.ts';
 
 function fakeCtx() {
   // Every glyph is 10px wide at any font; enough to test wrapping and alignment maths.
@@ -171,6 +174,33 @@ describe('look bands (design/27 §6)', () => {
       style: { ...DEFAULT_LYRIC_STYLE, direction: 'rtl' },
     });
     expect(ltrBox.paras).toEqual([{ rtl: true }, { rtl: true }]);
+  });
+
+  it('keeps a soft line in its paragraph’s direction, as the slide lays it out', () => {
+    const band = LOOK_LOWER_THIRD.layers.slide.mode === 'lyricOnly' ? LOOK_LOWER_THIRD.layers.slide : null;
+    const src = lyric('שלום לכם\nAmen אמן', { paras: [{ rtl: true }, { soft: true }] })
+      .objects[0] as TextObject;
+    const o = bandObject(src.text, band!.style, band!.band, src);
+    expect(o.paras).toEqual([{ rtl: true }, { soft: true }]);
+    const levels = (x: TextObject) => prepare(itemize(clampTextObject(x))).map((p) => p.bidi.level);
+    expect(levels(o)).toEqual(levels(src));
+    expect(levels(o)).toEqual([1, 1]);
+    // An 'auto' paragraph resolves over its soft lines in the band too.
+    const auto = { ...src, paras: [null, { soft: true }], text: 'Amen\nשלום' };
+    expect(levels(bandObject(auto.text, band!.style, band!.band, auto))).toEqual(levels(auto));
+  });
+
+  it('shrinks a band through the rich engine no further than drawText does (half size)', () => {
+    const style = { ...DEFAULT_LYRIC_STYLE, fontSizePx: 64 };
+    const band = { x: 160, y: 820, w: 1600, h: 200, rotation: 0 };
+    const legacy = layoutText(fakeCtx(), 'word '.repeat(400), style, band, 1, true);
+    const o = clampTextObject(bandObject('שלום '.repeat(400), style, band));
+    const rich = layoutRich(testMeasurer(), o, LEGACY_FONT_ENV, { minFontScale: BAND_MIN_FONT_SCALE });
+    expect(legacy.fontSize).toBe(32);
+    expect(rich.fontScale).toBe(0.5);
+    expect(rich.overflow).toBe(true);
+    // A box that is not a band keeps LibreOffice's search, down to 1 %.
+    expect(layoutRich(testMeasurer(), o, LEGACY_FONT_ENV).fontScale).toBeLessThan(0.5);
   });
 
   it('finds the band source only when it holds the band text', () => {

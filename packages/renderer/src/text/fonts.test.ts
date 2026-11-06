@@ -21,9 +21,10 @@ import type { FaceRequest } from './types.ts';
 type Face = FaceLike & { name: string; desc: FontFaceDescriptors; data: ArrayBuffer | string };
 
 /** A fake face set, clock, timers and file store: what a drawer's FontHost provides. */
-function fakeHost(opts: { failData?: Set<string>; failParse?: Set<string> } = {}) {
+function fakeHost(opts: { failData?: Set<string>; failParse?: Set<string>; hang?: Set<string> } = {}) {
   const failData = opts.failData ?? new Set<string>();
   const failParse = opts.failParse ?? new Set<string>();
+  const hang = opts.hang ?? new Set<string>();
   const set = new Set<Face>();
   let now = 1000;
   const timers: { at: number; fn: () => void; cancelled: boolean }[] = [];
@@ -35,6 +36,7 @@ function fakeHost(opts: { failData?: Set<string>; failParse?: Set<string> } = {}
     },
     async data(f: FontFile) {
       reads.push(f.hash);
+      if (hang.has(f.hash)) return new Promise<ArrayBuffer>(() => undefined); // a half-open fetch
       if (failData.has(f.hash)) throw new Error('file unavailable');
       return f.hash.startsWith('url:') ? f.hash.slice(4) : new TextEncoder().encode(f.hash).buffer;
     },
@@ -62,6 +64,7 @@ function fakeHost(opts: { failData?: Set<string>; failParse?: Set<string> } = {}
     reads,
     failData,
     failParse,
+    hang,
     /** Names in the face set, with how many faces each. */
     names: () => {
       const m = new Map<string, number>();
@@ -216,9 +219,10 @@ describe('FontResolver', () => {
     const partial = r.nameOf('Roboto')!;
     expect(partial).toBe(internalFamilyName('', 'Roboto', ['reg|400|normal|']));
     expect(changes).toEqual([{ families: ['roboto'], late: false }]);
-    // Still failing at the first retry (2 s): backs off to 4 s.
+    // Still failing at the first retry (2 s): backs off to 4 s. A retry reads the broken face alone.
     await h.advance(2000);
     expect(h.reads.filter((x) => x === 'bold')).toHaveLength(2);
+    expect(h.reads.filter((x) => x === 'reg')).toHaveLength(1);
     await h.advance(2000);
     expect(h.reads.filter((x) => x === 'bold')).toHaveLength(2);
     // The file arrives; the next retry registers both faces under a new name.
@@ -232,6 +236,35 @@ describe('FontResolver', () => {
     expect([...h.names()]).toEqual([[full, 2]]);
     expect(r.stats()).toEqual({ loaded: 2, failed: [] });
     expect(h.pending()).toBe(0);
+  });
+
+  it('times out a stalled read, and a sync never waits for a background retry', async () => {
+    const h = fakeHost({ failData: new Set(['b']) });
+    const r = new FontResolver(h.host);
+    const changes: { families: string[]; late: boolean }[] = [];
+    r.onChange((c) => changes.push(c));
+    expect((await r.sync([face('Big', 'a'), face('Big', 'b', 700)])).loaded).toBe(1);
+    // The retry of 'b' (2 s later) reads a file that never answers.
+    h.failData.clear();
+    h.hang.add('b');
+    await h.advance(2000);
+    let settled = false;
+    const next = r.sync([face('Big', 'a'), face('Big', 'b', 700), face('Big', 'c', 900)]).then((res) => {
+      settled = true;
+      return res;
+    });
+    await h.advance(0);
+    expect(settled).toBe(true); // the state as it is: 'b' and 'c' not loaded yet
+    expect((await next).loaded).toBe(1);
+    // The stalled read fails after 15 s; the queued round then loads 'c', announced as a late change.
+    await h.advance(15_000);
+    expect(r.stats().failed).toEqual(['Big 700: reading the font timed out after 15 s']);
+    expect(r.stats().loaded).toBe(2);
+    expect(changes.at(-1)).toEqual({ families: ['big'], late: true });
+    // Once the file answers, the next retry loads it.
+    h.hang.clear();
+    await h.advance(4000);
+    expect(r.stats()).toEqual({ loaded: 3, failed: [] });
   });
 
   it('retries failed faces at once on the next sync, and drops faces that fail to parse', async () => {
@@ -386,7 +419,11 @@ describe('families a job draws with', () => {
       },
       opacity: 1,
       runs: [{ start: 0, end: 2, fontFamily: 'Georgia', baseline: 0.3 }],
-      paras: [{ bullet: { char: '•', fontFamily: 'Arial' } }, null],
+      // A Wingdings bullet is drawn mapped in its run's family: never a family the job asks for.
+      paras: [
+        { bullet: { char: '•', fontFamily: 'Arial' } },
+        { bullet: { char: '§', fontFamily: 'Wingdings' } },
+      ],
     };
     const job: AssetJob = {
       kind: 'slide',

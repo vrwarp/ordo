@@ -658,7 +658,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
 
 **Bands, stage and readable text.**
 - Lyric-only bands and the next-slide band draw `readableText` of the lyric object in the look's style.
-- When the source object is rich (or the text contains strong RTL characters), the band goes through `layoutRich` with the look's style and the object's `paras` direction.
+- When the source object is rich (or the text contains strong RTL characters), the band goes through `layoutRich` with the look's style and the object's `paras` direction; a soft line stays soft, so it takes its paragraph's direction as on the slide. It shrinks no further than half size, as `drawText`'s bands do, so a Hebrew lyric shrinks like a Latin one.
 - Legacy `drawText` sets `ctx.direction` per paragraph only when that paragraph contains a strong RTL character (first strong character wins). LTR text, and so every existing golden, is unchanged.
 - The stage renders text with CSS `unicode-bidi: plaintext`, so each paragraph takes its direction from its content whatever the stage look's style says.
 
@@ -675,10 +675,11 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
    - UAX#14 opportunities over the logical text. U+00A0, U+202F and U+2060 (also U+2007, U+2011 and U+FEFF) never break on either side, even after a space, which fixes the verified 'Dieu !' split.
    - SA scripts (Thai, Lao, Khmer, Myanmar) break at `Intl.Segmenter` word boundaries; CJK follows the ID/CL/NS classes.
    - Emergency breaks fall only between clusters: `Intl.Segmenter` graphemes joined across a conjunct-forming virama, so Tamil 'க்ஷி' stays whole. Graphemes alone do not keep it whole: UAX#29 GB9c joins conjuncts in six Indic scripts only, not Tamil, Kannada or Sinhala.
+   - An emergency break costs what its line holds, never what is left of the word: the cut is found by galloping from the piece's start (1, 2, 4, ... clusters, then a bisection), cluster boundaries are found only that far (one list per piece serves every line and autofit step), and the rest of the word is carried unmeasured until it may fit. A 10,000-letter word in a narrow box is laid out in linear time (`rich.fuzz.test.ts`).
 4. **Segments.** A segment is a maximal substring with one style run, one bidi level and no break opportunity inside. It is also cut between two scripts that need different fallback faces (Han and kana count as one), so each segment asks for one.
    - A style boundary *inside* a word of a joining script (Arabic, Syriac, N'Ko, Mongolian, Adlam) is drawn with U+200D on both sides of the cut when the letters on both sides join (by their ArabicShaping joining types: none after alef, dal or waw), which keeps medial and final forms. Widths are measured the same way.
    - Inside a cluster (an Indic syllable cluster, a letter with its marks, an emoji sequence), the cut moves to the cluster end (counted in `PreparedPara.movedCuts`).
-5. **Measure.** `measureText` with `ctx.font` set to the resolved internal-name stack (§10), and `ctx.direction`, `ctx.lang` and `ctx.letterSpacing` set per segment. The trailing spacing Canvas adds after the last character is subtracted. Widths go into an LRU cache (20,000 entries, key `font|dir|lang|spacing|text`). `measureText` and `fillText` always see the same string in the same state.
+5. **Measure.** `measureText` with `ctx.font` set to the resolved internal-name stack (§10), and `ctx.direction`, `ctx.lang` and `ctx.letterSpacing` set per segment. The trailing spacing Canvas adds after the last character is subtracted. Widths go into an LRU cache (20,000 entries, key `font|dir|lang|spacing|text`) for strings of at most 256 UTF-16 units, so a hostile word never leaves megabytes of keys in a worker. `measureText` and `fillText` always see the same string in the same state.
 6. **Lines.** Greedy fill.
    - Available width = box − insets − marL − first-line indent; a hanging bullet sits in the negative indent and its box is at least −indent wide.
    - Trailing spaces hang.
@@ -692,7 +693,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
    - Exact spacing P: h = P·k.
    - spcBef/spcAft are scaled by k and not drawn before the first paragraph or after the last.
    - An empty paragraph takes its end-mark size; a trailing `a:br` adds a line.
-   - Superscript and subscript are drawn at 0.58 × size, shifted by baseline × size, without growing the line.
+   - Superscript and subscript are drawn at 0.58 × size (at least 4 px), shifted by baseline × size, without growing the line.
 8. **Align.**
    - justify spreads extra space over the inter-segment spaces of non-last lines; distribute also justifies the last line;
    - there is no kashida (a known gap for Arabic);
@@ -708,6 +709,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
     - Character bullets use their own font and size. Wingdings/Symbol PUA codes are mapped to Unicode at import (0x6C→●, 0x6E→■, 0xA7→▪, 0xD8→➢, 0xFC→✓, 0x71→❑, 0x76→❖, Symbol 0xB7→•; U+F0xx offset stripped).
     - Automatic numbers keep a counter per level, keyed by type:startAt (`annotate.ts:2122-2137`). Labels: arabic, roman, alpha and circled ①-⑳, in period, ParenR, ParenBoth and plain forms; `(17)` for verse numbers. The same counter code serves `readableText`.
     - An empty paragraph draws no bullet and does not advance the counter.
+    - A bullet is drawn at `sizePct` × F within 4-1,000 px, in its paragraph's direction and its first run's language, so a Hebrew or Arabic number reads as the band's `readableText` writes it ('.1' for '1.' in a right-to-left paragraph). It takes the first run's shadow, outline and glow (passes 2-4) and its colour, as PowerPoint gives it the first run's character formatting.
 
 **Paint passes.** In today's order, under the scale transform:
 1. text fill box (`style.fill`) and highlight;
@@ -891,7 +893,8 @@ The exact `'lighter'` crossfade (`canvas2d.ts:60-85`) is unchanged.
 *As built (M2, `packages/renderer/src/text/fonts.ts`):*
 - The original family name enters a stack only while its faces have not loaded, and the generic step is ordo's default face (Inter, once shipped) followed by today's chain `"Inter", "Segoe UI", Arial, sans-serif`, so an object whose family has not loaded draws as it did before the resolver.
 - No internal name is handed out twice: a face set that comes back gets a salted name.
-- A face that fails is left out of its family's round, which loads without it; it is retried with backoff (2 s doubling to 5 min), at once on the next sync, and after each complete cache fill of the output. Families a later list leaves out keep their faces (content on screen may use them) but are no longer retried.
+- A face that fails is left out of its family's round, which loads without it; it is retried with backoff (2 s doubling to 5 min), at once on the next sync, and after each complete cache fill of the output. A retry loads the failed face alone first, so a broken face in a 51-face family costs one read per retry, not 51. Families a later list leaves out keep their faces (content on screen may use them) but are no longer retried.
+- Reading and parsing a face time out after 15 s, and a sync never waits for a background retry already running (its result is announced as a late change), so a half-open read cannot hold up the asset worker's job queue.
 - When faces become available, the asset worker reports their families `ready`, and the link draws again in place the held slides that fell back for them. The thumbnail worker's client drops its cached thumbnails; the editor redraws.
 - goLive matches family names case-insensitively, as CSS and the resolver do.
 - `'inter'` left `FALLBACK_FAMILIES` in M2: until M3 bundles Inter, an output whose library has no Inter reports it as a fallback.
@@ -961,7 +964,8 @@ The extensions, in priority order (M4 unless noted):
 
 1. **Fix text without losing formatting.**
    - The textarea stays.
-   - `editText(obj, next)` diffs the common prefix and suffix. Inserted text takes the style of the character before it (or after it at offset 0). Runs inside a deleted range are trimmed. Paragraph styles are inserted or removed with the `\n` count; a new line copies the style of the paragraph it splits.
+   - `editText(obj, next)` diffs the common prefix and suffix. Text that replaces a selection takes the style of the text it replaces (its first character), so a retyped bold date or raised verse number stays bold or raised. Text typed at a paragraph's start takes the style of that paragraph's first character, or in an empty paragraph its end mark; anywhere else, the style of the character before it. Runs inside a deleted range are trimmed. Paragraph styles are inserted or removed with the `\n` count; a new line copies the style of the paragraph it splits.
+   - Soft paragraphs (a:br lines) stay lines of their PowerPoint paragraph: deleting a paragraph's first line leaves its remaining soft lines that paragraph's style (bullet, number, indents, spacing), and a line split off a soft line by Enter takes the paragraph's style without `soft`, so Enter always starts a new paragraph or stanza.
    - It keeps `fitScale` while the edited text still fits at that scale. A one-character fix therefore never changes the text size; overflowing text shrinks (§6 step 10). 'Re-fit text' in TextStyleEditor clears `fitScale` on request.
    - This is what makes a typo fix or a date change safe in the 20-27% of real worship text bodies that mix styles.
 2. **Format a selection.** A bar over the textarea: Bold, Italic, Underline, colour (swatches from the deck's theme colours), Size ±, Superscript (verse numbers), Clear formatting.
@@ -1068,6 +1072,7 @@ The extensions, in priority order (M4 unless noted):
 
 **Numbers.** Every number is finite and clamped:
 - slide side 1-51,206,400 EMU; logical coordinates ±100,000; box span ±2× the canvas; font 1-4,000 pt in the parser, 4-1,000 px stored;
+- per text object at most 16 distinct run and bullet families and 64 distinct size scales (`FontBudget` in `clamp.ts`, the same in `sanitizePresentation`): later families take the box's, later scales the nearest kept one. Each new family name costs the browser a platform font lookup (about 1 ms in Chromium), so 2,000 runs with 2,000 families would cost seconds per object. Family names lose every control character (a form feed is a CSS newline that voids the whole `ctx.font` assignment);
 - adj ±1e7; ≤ 256 guides per shape; ≤ 4,096 path points per path and 64k per slide; ≤ 16 gradient stops;
 - colour maths clamped to 0..1; NaN and Infinity become 0.
 

@@ -102,15 +102,20 @@ describe('paintRich', () => {
       if (!shadowless(d)) return d.op === 'fillText' ? 'shadow' : 'shadow-line';
       return d.op === 'fillText' ? 'fill' : 'line';
     });
+    // The bullet takes its paragraph's first run's effects (here the box's): its shadow, glow and outline
+    // are drawn with the text's, its fill last.
     expect(seq).toEqual([
       'box',
       'highlight',
       'shadow',
       'shadow',
+      'bullet',
       'shadow-line',
       'shadow-line',
       'glow',
       'glow',
+      'bullet',
+      'outline',
       'outline',
       'outline',
       'fill',
@@ -118,6 +123,13 @@ describe('paintRich', () => {
       'line',
       'line',
       'bullet',
+    ]);
+    const bullets = ctx.ops.filter((d) => d.args[0] === '•');
+    expect(bullets.map((d) => [d.op, d.state.shadowBlur])).toEqual([
+      ['fillText', 10],
+      ['fillText', 16],
+      ['strokeText', 0],
+      ['fillText', 0],
     ]);
     // Everything is drawn in logical px under the scale; canvas shadows ignore it, so they are scaled.
     for (const d of draws(ctx.ops)) expect(d.transform).toEqual([2, 0, 0, 2, 0, 0]);
@@ -170,11 +182,13 @@ describe('paintRich', () => {
     );
     const l = oneLine();
     l.lines[0]!.segs[1]!.run = 1;
+    l.lines[0]!.bullet!.run = 0; // the paragraph's first run: its shadow, not the box's
     const ctx = recordingCtx();
     paintRich(ctx, o, l, 1, LEGACY_FONT_ENV);
     const shadowed = ctx.ops.filter((d) => d.op === 'fillText' && !shadowless(d));
     expect(shadowed.map((d) => [d.args[0], d.state.shadowColor, d.state.shadowBlur])).toEqual([
       ['ab ', rgbaCss(RED), 2],
+      ['•', rgbaCss(RED), 2],
     ]);
   });
 
@@ -194,6 +208,25 @@ describe('paintRich', () => {
       ['•', 'ltr', 'inherit', '0px'],
     ]);
     for (const d of fills) expect(d.state.textAlign).toBe('left');
+  });
+
+  it('measures and draws a right-to-left paragraph’s number in its direction and language', () => {
+    const m = testMeasurer();
+    const o = obj(
+      'שלום',
+      { align: 'right' },
+      {
+        runs: [{ start: 0, end: 4, lang: 'he' }],
+        paras: [{ rtl: true, bullet: { auto: 'arabicPeriod' } }],
+      },
+    );
+    const l = layoutRich(m, o, LEGACY_FONT_ENV);
+    expect(l.lines[0]!.bullet).toMatchObject({ text: '1.', dir: 'rtl', lang: 'he', run: 0 });
+    expect(m.texts).toContain('1.');
+    const ctx = recordingCtx();
+    paintRich(ctx, o, l, 1, LEGACY_FONT_ENV);
+    const num = ctx.ops.find((d) => d.op === 'fillText' && d.args[0] === '1.')!;
+    expect([num.state.direction, num.state.lang, num.state.textAlign]).toEqual(['rtl', 'he', 'left']);
   });
 
   it('lays out hidden paragraphs but never paints them, so revealed lines do not move', () => {

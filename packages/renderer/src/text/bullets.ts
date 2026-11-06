@@ -17,8 +17,9 @@ import type { BulletSpec, Itemized } from './types.ts';
  *   `paraLabels` for a symbol-font bullet stored unmapped).
  * This file adds what drawing needs: the font (the bullet's own family, else the paragraph's first run's;
  * a symbol font's mapped character is drawn in the run's family), the size (`sizePct` × the paragraph's
- * main size, applied by lines.ts) and the colour (its own, else the first run's). Weight and slant are the
- * first run's, as PowerPoint draws them.
+ * main size, applied by lines.ts) and the colour (its own, else the first run's). Weight, slant, language,
+ * shadow and outline are the first run's, as PowerPoint draws them; the label is drawn in the paragraph's
+ * direction, so a right-to-left number reads as its paragraph does.
  */
 
 /** Each paragraph's bullet (index = paragraph index), or null. */
@@ -28,7 +29,8 @@ export function paraBullets(o: TextObject, it: Itemized): (BulletSpec | null)[] 
     const text = labels[p.index];
     const b = p.style.bullet;
     if (!text || !b) return null;
-    const first = p.runs[0]!.style;
+    const sr = p.runs[0]!;
+    const first = sr.style;
     return {
       text,
       family: b.fontFamily && !isSymbolFont(b.fontFamily) ? b.fontFamily : first.family,
@@ -37,6 +39,8 @@ export function paraBullets(o: TextObject, it: Itemized): (BulletSpec | null)[] 
       italic: first.italic,
       sizePct: b.sizePct ?? 1,
       color: b.color ?? first.color,
+      lang: first.lang,
+      run: sr.run,
     };
   });
 }

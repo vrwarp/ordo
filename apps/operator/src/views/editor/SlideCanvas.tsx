@@ -8,7 +8,7 @@ import {
   type SlideObject,
   type TextObject,
 } from '@ordo/domain';
-import { drawImageFit, drawObject, drawTextObject } from '@ordo/renderer';
+import { drawImageFit, drawObject, drawTextObject, isRichText } from '@ordo/renderer';
 import type Konva from 'konva';
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Layer, Line, Rect, Shape, Stage, Transformer } from 'react-konva';
@@ -60,9 +60,15 @@ function useImageTick(): number {
 const MARGIN = TEXT_MARGIN;
 type TextRaster = { key: string; canvas: HTMLCanvasElement; density: number };
 const textCache = new WeakMap<TextObject, TextRaster>();
+/** A rich object as its raster draws it: unrotated (Konva rotates the node), memoised per stored object. */
+const unrotated = new WeakMap<TextObject, TextObject>();
 /**
  * `o` drawn into its cached canvas: rich objects through the rich engine at `screen` density (stage scale ×
  * devicePixelRatio), legacy ones through drawText at 1:1 exactly as before (design/27 §6, §7.4).
+ *
+ * A rich object is drawn as itself (or one unrotated copy kept per object) under a translation, never as a
+ * new object per raster: the engine memoises its clamp and layout by object identity, so a new density (a
+ * window resize, a zoom) only paints again, and never lays out again on the main thread.
  */
 function textCanvas(o: TextObject, tick: number, screen: number): TextRaster {
   const density = textDensity(o, screen);
@@ -74,7 +80,22 @@ function textCanvas(o: TextObject, tick: number, screen: number): TextRaster {
   c.height = Math.max(1, Math.ceil((o.box.h + 2 * MARGIN) * density));
   const ctx = c.getContext('2d')!;
   ctx.clearRect(0, 0, c.width, c.height);
-  drawTextObject(ctx, { ...o, box: { x: MARGIN, y: MARGIN, w: o.box.w, h: o.box.h, rotation: 0 } }, density);
+  if (isRichText(o)) {
+    let local = o.box.rotation ? unrotated.get(o) : o;
+    if (!local) {
+      local = { ...o, box: { ...o.box, rotation: 0 } };
+      unrotated.set(o, local);
+    }
+    ctx.save();
+    ctx.translate((MARGIN - o.box.x) * density, (MARGIN - o.box.y) * density);
+    drawTextObject(ctx, local, density);
+    ctx.restore();
+  } else
+    drawTextObject(
+      ctx,
+      { ...o, box: { x: MARGIN, y: MARGIN, w: o.box.w, h: o.box.h, rotation: 0 } },
+      density,
+    );
   const out = { key, canvas: c, density };
   textCache.set(o, out);
   return out;

@@ -200,11 +200,14 @@ async function preload(
   return { lookup: (id) => out.get(id), skipped, missing };
 }
 
+/** Missing families a 'done' message reports: as many as the link keeps (FromAsset, protocol health). */
+const MAX_FONT_FALLBACKS = 20;
+
 function fontFallbacks(job: AssetJob): string[] | undefined {
   const missing = jobFontFamilies(job, { fallbacks: false }).filter(
     (f) => !fonts.isLoaded(f) && !FALLBACK_FAMILIES.has(f),
   );
-  return missing.length ? missing : undefined;
+  return missing.length ? missing.slice(0, MAX_FONT_FALLBACKS) : undefined;
 }
 
 async function run(job: AssetJob): Promise<void> {

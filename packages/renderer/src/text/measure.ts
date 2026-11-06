@@ -6,7 +6,9 @@ import type { Measurer } from './types.ts';
  *
  * `measureText` at logical size with `ctx.font` set to the resolved font string and `ctx.direction`,
  * `ctx.lang` and `ctx.letterSpacing` set per segment, exactly the state paint.ts draws the same string in.
- * Widths go into an LRU of 20,000 entries keyed `font|dir|lang|spacing|text`.
+ * Widths go into an LRU of 20,000 entries keyed `font|dir|lang|spacing|text`, for strings of at most
+ * `MAX_CACHED_TEXT` units: words and the prefixes of an emergency break, never the whole of a hostile
+ * 10,000-letter word, whose keys would keep megabytes alive in a worker for the rest of the session.
  *
  * What Chromium (153, DOM and OffscreenCanvas contexts alike) does, probed with DejaVu Sans:
  * - `letterSpacing` is added after every grapheme cluster, the last one included ('abcd' at 5 px: +20;
@@ -20,6 +22,8 @@ import type { Measurer } from './types.ts';
 
 /** Entries of the width cache (design/27 §6). */
 export const WIDTH_CACHE_SIZE = 20_000;
+/** Longest string (UTF-16 units) whose width the shared cache keeps: about 10 MB of keys at most. */
+export const MAX_CACHED_TEXT = 256;
 
 /** A least-recently-used map of measured widths. */
 export class WidthCache {
@@ -62,8 +66,8 @@ export function canvasMeasurer(ctx: MeasureCtx, cache = new WidthCache(), isolat
   return {
     width(font, dir, lang, spacingPx, text) {
       if (!text) return 0;
-      const key = `${font}|${dir}|${lang}|${spacingPx}|${text}`;
-      const hit = cache.get(key);
+      const key = text.length <= MAX_CACHED_TEXT ? `${font}|${dir}|${lang}|${spacingPx}|${text}` : '';
+      const hit = key ? cache.get(key) : undefined;
       if (hit !== undefined) return hit;
       if (isolate) ctx.save?.();
       ctx.font = font;
@@ -74,7 +78,7 @@ export function canvasMeasurer(ctx: MeasureCtx, cache = new WidthCache(), isolat
       if (isolate) ctx.restore?.();
       if (spacingPx) w -= spacingPx;
       if (!Number.isFinite(w)) w = 0;
-      cache.set(key, w);
+      if (key) cache.set(key, w);
       return w;
     },
   };
@@ -107,14 +111,23 @@ export function measurerFor(ctx: MeasureCtx): Measurer {
  * (lines.ts) measures each string once, whatever the shared cache evicts meanwhile.
  */
 export function memoMeasurer(m: Measurer): Measurer {
-  const memo = new Map<string, number>();
+  // Keyed by the state, then the text: no key string is built per call (an emergency break of a long word
+  // asks for a width on every line of every autofit step).
+  type ByLang = Map<string, Map<number, Map<string, number>>>;
+  const memo = new Map<string, { ltr: ByLang; rtl: ByLang }>();
   return {
     width(font, dir, lang, spacingPx, text) {
-      const key = `${font}|${dir}|${lang}|${spacingPx}|${text}`;
-      let w = memo.get(key);
+      let byDir = memo.get(font);
+      if (!byDir) memo.set(font, (byDir = { ltr: new Map(), rtl: new Map() }));
+      const byLang = dir === 'rtl' ? byDir.rtl : byDir.ltr;
+      let bySpacing = byLang.get(lang);
+      if (!bySpacing) byLang.set(lang, (bySpacing = new Map()));
+      let byText = bySpacing.get(spacingPx);
+      if (!byText) bySpacing.set(spacingPx, (byText = new Map()));
+      let w = byText.get(text);
       if (w === undefined) {
         w = m.width(font, dir, lang, spacingPx, text);
-        memo.set(key, w);
+        byText.set(text, w);
       }
       return w;
     },

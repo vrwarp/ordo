@@ -50,11 +50,19 @@ export function isRichStyle(style: TextStyle): boolean {
   return false;
 }
 
+/** The smallest autofit font scale of a look band: drawText's `minScale`, so bands shrink alike in either engine. */
+export const BAND_MIN_FONT_SCALE = 0.5;
+
+/** Layout options: the autofit floor (`BAND_MIN_FONT_SCALE` for bands). */
+export type RichLayoutOptions = { minFontScale?: number };
+
 /**
  * The text object a look band lays out through the rich engine (design/27 §6 "Bands"): `text` (the source's
- * readable text) in the look's `style` and `band`, shrunk to fit as `drawText`'s bands are, with the
- * direction of each of the source object's paragraphs (its `paras[i].rtl`, else its box `direction`), so a
- * Hebrew verse stays right to left in a lyric-only band whatever the look says.
+ * readable text) in the look's `style` and `band`, shrunk to fit as `drawText`'s bands are (lay it out with
+ * `minFontScale: BAND_MIN_FONT_SCALE`), with the direction of each of the source object's paragraphs (its
+ * `paras[i].rtl`, else its box `direction`), so a Hebrew verse stays right to left in a lyric-only band
+ * whatever the look says. A soft line (a:br) stays soft, so it takes its paragraph's direction, resolved
+ * over the whole paragraph as on the slide.
  */
 export function bandObject(text: string, style: TextStyle, band: Box, src?: TextObject): TextObject {
   const o: TextObject = {
@@ -71,8 +79,13 @@ export function bandObject(text: string, style: TextStyle, band: Box, src?: Text
   let count = 1;
   for (let i = text.indexOf('\n'); i >= 0 && count < CLAMP.maxParas; i = text.indexOf('\n', i + 1)) count++;
   for (let i = 0; i < count; i++) {
-    const rtl = src.paras?.[i]?.rtl ?? dflt;
-    paras.push(rtl === undefined ? null : { rtl });
+    const p = src.paras?.[i];
+    if (i > 0 && p?.soft === true)
+      paras.push(p.rtl === undefined ? { soft: true } : { soft: true, rtl: p.rtl });
+    else {
+      const rtl = p?.rtl ?? dflt;
+      paras.push(rtl === undefined ? null : { rtl });
+    }
   }
   while (paras.length && paras[paras.length - 1] === null) paras.pop();
   if (paras.length) o.paras = paras;
@@ -81,21 +94,23 @@ export function bandObject(text: string, style: TextStyle, band: Box, src?: Text
 
 const layouts = new WeakMap<
   TextObject,
-  { m: Measurer; env: FontEnv; generation: number; layout: RichLayout }
+  { m: Measurer; env: FontEnv; generation: number; min: number | undefined; layout: RichLayout }
 >();
 
 /**
- * Lay out a clamped text object (`clampObject` output) in logical px. Pure: the same object, measurer and
- * font generation give the same layout, memoised by object identity.
+ * Lay out a clamped text object (`clampObject` output) in logical px. Pure: the same object, measurer,
+ * font generation and options give the same layout, memoised by object identity.
  */
-export function layoutRich(m: Measurer, o: TextObject, env: FontEnv): RichLayout {
+export function layoutRich(m: Measurer, o: TextObject, env: FontEnv, opts?: RichLayoutOptions): RichLayout {
+  const min = opts?.minFontScale;
   const hit = layouts.get(o);
-  if (hit && hit.m === m && hit.env === env && hit.generation === env.generation) return hit.layout;
+  if (hit && hit.m === m && hit.env === env && hit.generation === env.generation && hit.min === min)
+    return hit.layout;
   const it = itemize(o);
   const prepared = prepare(it);
   const bullets = paraBullets(o, it);
-  const layout = layoutBox(m, o, prepared, bullets, env);
-  layouts.set(o, { m, env, generation: env.generation, layout });
+  const layout = layoutBox(m, o, prepared, bullets, env, min);
+  layouts.set(o, { m, env, generation: env.generation, min, layout });
   return layout;
 }
 
@@ -112,9 +127,15 @@ export function clampTextObject(o: TextObject): TextObject {
 }
 
 /** Draw a text object through the rich engine at `scale` device px per logical px. */
-export function drawRichText(ctx: Ctx2D, o: TextObject, scale: number, env = currentFontEnv()): RichLayout {
+export function drawRichText(
+  ctx: Ctx2D,
+  o: TextObject,
+  scale: number,
+  env = currentFontEnv(),
+  opts?: RichLayoutOptions,
+): RichLayout {
   const c = clampTextObject(o);
-  const layout = layoutRich(measurerFor(ctx), c, env);
+  const layout = layoutRich(measurerFor(ctx), c, env, opts);
   paintRich(ctx, c, layout, num(scale, 0.01, 8, 1), env);
   return layout;
 }

@@ -184,6 +184,11 @@ export class LinkCore {
   private held: HeldKeys[] = [];
   private heldSet = new Set<string>();
   private inflight = new Set<string>();
+  /**
+   * Asset jobs sent and not answered, in the order sent: the asset worker runs them in order, so the first
+   * is the one it was drawing when it stopped answering.
+   */
+  private assetInflight = new Set<string>();
   private delivered = new Map<string, number>();
   /** Arm errors by key; the key is not tried again before `until`. */
   private errors = new Map<string, { error: string; at: number; until: number }>();
@@ -504,6 +509,17 @@ export class LinkCore {
     this.assetPort = asset;
     render.onmessage = (ev: MessageEvent<FromRender>) => this.onRender(ev.data);
     asset.onmessage = (ev: MessageEvent<FromAsset>) => this.onAsset(ev.data);
+    // An asset worker restarted while drawing a job (it missed its heartbeat): that job counts as an arm
+    // failure, so a slide whose content blocks the worker is quarantined after a few restarts instead of
+    // being sent again until the supervisor gives the worker up for the rest of the service.
+    if (assetChanged && !firstStart) {
+      const stuck = this.assetInflight.values().next().value;
+      if (stuck !== undefined) {
+        this.diagLog(`asset worker restarted while drawing ${stuck.slice(0, 60)}`);
+        this.armFailed(stuck, 'the asset worker stopped answering while drawing it');
+      }
+    }
+    this.assetInflight.clear();
     // Content travelling through the old channels is lost: forget what was in flight and arm again.
     this.inflight.clear();
     for (const s of this.slots) if (s.waiter) this.inflight.add(s.waiter.key);
@@ -1006,6 +1022,8 @@ export class LinkCore {
   private job(job: AssetJob): void {
     if (!this.assetPort) return;
     this.inflight.add(job.key);
+    this.assetInflight.delete(job.key);
+    this.assetInflight.add(job.key);
     this.postAsset({ t: 'job', job });
   }
 
@@ -1726,6 +1744,7 @@ export class LinkCore {
     switch (m.t) {
       case 'done':
         this.inflight.delete(m.key);
+        this.assetInflight.delete(m.key);
         this.delivered.set(m.key, Date.now());
         this.errors.delete(m.key);
         this.unavailable.delete(m.key);
@@ -1754,6 +1773,7 @@ export class LinkCore {
         return;
       case 'error': {
         this.inflight.delete(m.key);
+        this.assetInflight.delete(m.key);
         if (m.cause !== 'missing') this.diagLog(`arm ${m.key.slice(0, 60)}: ${m.error}`);
         const unavailable = m.cause === 'unavailable' || m.cause === 'missing';
         this.armFailed(m.key, m.error, m.cause === 'missing' ? 'missing' : unavailable);

@@ -7,6 +7,7 @@ import {
   type Rgba,
   type Slide,
   type TextStyle,
+  isSymbolFont,
 } from '@ordo/domain';
 import { clampLook, clampSlide } from './clamp.ts';
 import type { AssetJob } from './messages.ts';
@@ -160,7 +161,8 @@ export const FALLBACK_FAMILIES: ReadonlySet<string> = new Set([
 
 /**
  * Every font family a raster job draws text with (clamped, deduplicated, lower-cased): each text style's
- * family and `fallbackFonts`, and for text objects also their runs' and bullets' families. With
+ * family and `fallbackFonts`, and for text objects also their runs' and bullets' families (not a symbol
+ * font's: its bullet is drawn mapped, in the run's family). With
  * `fallbacks: false`, only the families text asks for (what the asset worker reports when not loaded: a
  * missing fallback face matters only through them).
  */
@@ -183,7 +185,11 @@ export function jobFontFamilies(job: AssetJob, opts: { fallbacks?: boolean } = {
         if (o.type !== 'text' || !o.text.trim()) continue;
         addStyle(o.style);
         for (const r of o.runs ?? []) add(r.fontFamily);
-        for (const p of o.paras ?? []) add(p?.bullet?.fontFamily);
+        // A symbol-font bullet (Wingdings, Symbol) is drawn mapped, in its run's family (bullets.ts).
+        for (const p of o.paras ?? []) {
+          const f = p?.bullet?.fontFamily;
+          if (f && !isSymbolFont(f)) add(f);
+        }
       }
     if (rule.mode === 'lyricOnly') {
       addStyle(rule.style);

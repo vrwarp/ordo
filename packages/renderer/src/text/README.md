@@ -19,7 +19,20 @@ Integration decisions (wave 1):
   resolves it.
 - A paragraph whose first line is empty and whose soft lines have text draws its bullet on that first line,
   as PowerPoint does and as `readableText` labels it.
-- Bands through the engine shrink with B's autofit search (`bandObject` sets `autofit: 'shrink'`).
+- Bands through the engine shrink with B's autofit search (`bandObject` sets `autofit: 'shrink'`), never
+  below half size (`BAND_MIN_FONT_SCALE`, drawText's `minScale`, through `layoutRich`'s `minFontScale`), and
+  keep soft lines soft, so a soft line takes its paragraph's direction as on the slide.
+
+Bounds (review of wave 1; `rich.fuzz.test.ts` and `clamp.test.ts` keep them):
+- An emergency break costs what its line holds (lines.ts header): galloping cut search, cluster boundaries
+  found only as far as asked and shared by every line and autofit step of a piece, the rest of the word
+  carried unmeasured (`Measured.lazy`) until it may fit, and the autofit search computing heights only.
+  A 10,000-letter word in a 0-200 px box measures about n characters per layout, not n²/line.
+- `WidthCache` keeps strings of at most 256 units; `memoMeasurer` (one layout) keys by state, then text.
+- At most 16 distinct run and bullet families and 64 size scales per object (`FontBudget`, clamp.ts and
+  sanitize.ts), so no object costs more platform font lookups than a slide of ordinary text; family names
+  lose every C0 and C1 control character.
+- Bullets are drawn within 4-1,000 px; raised and lowered runs at no less than 4 px.
 
 ## Pipeline
 
@@ -192,7 +205,8 @@ Step 11 of §6 and `readableText` (§1, §3.2). **Done.**
   from them). `textScripts(text)` reports the `FALLBACK_SCRIPTS` codes (ISO 15924) present; `FaceRequest.script`
   should use the same table.
 - `paraBullets(o, it)`: font (own family, else the first run's), `sizePct`, colour (own, else the first
-  run's), weight and slant of the first run.
+  run's), weight, slant, language and run (for its shadow and outline) of the first run. lines.ts measures
+  the label in the paragraph's direction, so a right-to-left number reads as `readableText` writes it.
 - Uses: `firstText` (cue labels, lyric-only and next-slide bands through `lyricTextFor`, editor previews,
   slide thumbnails), the stage's `slideText`, operator search.
 - A paragraph whose first line is empty and whose soft line has text gets its label in `readableText` and its
@@ -205,8 +219,8 @@ Paint passes and the dispatch of §6. **Done** (wave 1):
   else box, underlines and strikes cast them too), 3 (glow: the glyphs in the glow colour with `shadowBlur`
   = radius, zero offset), 4 (outline, 2× width, round joins), 5 (fill), 6 (underline centred 0.1F below,
   strike 0.25F above the baseline, F/18 thick, F the segment's drawn size, merged across neighbouring
-  segments and stopped at the hanging whitespace: `[line.x, line.x + line.w]`), 7 (bullets, left to
-  right). Hidden paragraphs are laid out, not painted. Canvas shadows ignore the transform, so offsets and
+  segments and stopped at the hanging whitespace: `[line.x, line.x + line.w]`), 7 (bullets, in their
+  paragraph's direction; they take the first run's shadow, outline and glow in passes 2-4). Hidden paragraphs are laid out, not painted. Canvas shadows ignore the transform, so offsets and
   blur are multiplied by `scale`: `scale` is the whole device density, never folded into the context.
 - Cache: `paintPlan(o, l)` (drawn strings, resolved styles, CSS colours, merged rectangles) memoised by
   layout identity; context state is assigned only when it changes.
@@ -218,9 +232,12 @@ Paint passes and the dispatch of §6. **Done** (wave 1):
   has a rich field, `readableText(src)` goes through `layoutRich` in the look's style with
   `autofit: 'shrink'` and the source paragraphs' `rtl` (else its box `direction`).
 - Editor: `SlideCanvas` draws rich text at stage scale × devicePixelRatio into the cached canvas, keyed by
-  the font generation (`apps/operator/src/views/editor/textRaster.ts`); legacy text stays at 1:1. Plain
-  text edits go through `editText` (`packages/domain/src/textEdit.ts`, with `replaceText` and `joinText`
-  for slide split and merge).
+  the font generation (`apps/operator/src/views/editor/textRaster.ts`); legacy text stays at 1:1. It draws
+  the stored object itself under a translation (an unrotated copy kept per object), so a new density only
+  paints again: the clamp and layout memos hold. Plain text edits go through `editText`
+  (`packages/domain/src/textEdit.ts`, with `replaceText` and `joinText` for slide split and merge):
+  retyped text keeps the style of what it replaces, text typed at a paragraph start the paragraph's (an
+  empty one's end mark), and soft lines stay lines of their paragraph (design/27 §11 item 1).
 - To do: the M6 gradient over the box; an effect sprite cache for large blurs (§7.5). The raster bench
   shows the need: the default lyric style's shadow (blur 12) costs about 7 ms of a 1920 raster and 20 ms
   of a 3840 one, in drawText and in the engine alike.
@@ -234,7 +251,9 @@ Paint passes and the dispatch of §6. **Done** (wave 1):
   strings once its faces of that round have loaded and been added; `generation` changes then and
   `onChange` fires (`late` when a retry, not a sync, loaded it). A face that cannot be read or parsed is
   left out of its family's round and retried with backoff (2 s doubling to 5 min) and at once on the next
-  `sync`; families a later list leaves out keep their faces but are no longer retried. `loaded({family,
+  `sync`; a retry loads the failed face alone first (one read), and only then the family again. Reads and
+  parses time out (`FontHost.timeoutMs`, 15 s) and `sync` never waits for a background retry. Families a
+  later list leaves out keep their faces but are no longer retried. `loaded({family,
   internal})` announces faces registered elsewhere.
 - `font(req)`: loaded internal names only, in order: the exact face, `fallbackFonts`, the script fallback
   for `FaceRequest.script` (`SCRIPT_FALLBACK_FONTS` in `@ordo/domain`), then the original family name while
@@ -250,7 +269,8 @@ Paint passes and the dispatch of §6. **Done** (wave 1):
   and its client drops cached thumbnails.
 - `'inter'` is no longer in `FALLBACK_FAMILIES`: an output without a shipped Inter reports it.
 - `referencedFontFamilies` (domain; goLive matches family names case-insensitively) and `jobFontFamilies`
-  (`raster.ts`) cover run fonts, bullet fonts and `fallbackFonts`.
+  (`raster.ts`) cover run fonts, bullet fonts (not symbol fonts: their bullets are drawn mapped, in the run's
+  family) and `fallbackFonts`; the asset worker reports at most 20 missing families per job.
 - Tests: `fonts.test.ts` (names, stacks, retries, rounds, the layout memo following the generation), the
   domain's `resolve.test.ts`, the link's late-font refresh, and `pnpm --filter @ordo/renderer late-font`: in
   headless Chromium, in a worker and on a page, text drawn before its face loaded (after a failed read and a

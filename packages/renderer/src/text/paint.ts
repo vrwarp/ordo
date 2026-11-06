@@ -26,7 +26,9 @@ import type { FontEnv, RichLayout, RunStyle } from './types.ts';
  * 5. fill: solid (the gradient over the box is M6);
  * 6. underline and strike: F/18 thick, underline centred F/10 below the baseline, strike F/4 above it,
  *    F being the segment's drawn size; no descender skipping, as LibreOffice;
- * 7. bullets and numbers.
+ * 7. bullets and numbers: their fill. A bullet takes its paragraph's first run's shadow and outline (else
+ *    the box's) and the glow in passes 2-4, as PowerPoint gives it the first run's character formatting, so a
+ *    white number keeps its shadow on a light background.
  * Lines of hidden paragraphs (the M8 split reveal) are laid out but never painted.
  *
  * Caches: everything that does not depend on the device scale (drawn strings with case mapping, resolved
@@ -75,8 +77,6 @@ type Rect = {
   shadowColor: string;
 };
 
-type Bullet = { text: string; x: number; y: number; font: string; color: string };
-
 /** What `paintRich` draws for one layout, independent of the device scale. */
 export type PaintPlan = {
   /** The text fill box (logical px), or null. */
@@ -86,7 +86,8 @@ export type PaintPlan = {
   glyphs: Glyphs[];
   /** Underlines and strikes. */
   decorations: Rect[];
-  bullets: Bullet[];
+  /** Bullets and numbers, with their paragraph's first run's effects. */
+  bullets: Glyphs[];
   glow: { radius: number; color: string; fill: string } | null;
 };
 
@@ -113,8 +114,9 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
       state.fill(r.color);
       ctx.fillRect(r.x, r.y, r.w, r.h);
     }
-    // 2. Shadows: the casting glyphs and decorations, one shadow setting per run of equal shadows.
-    if (plan.glyphs.some((g) => g.shadow) || plan.decorations.some((d) => d.shadow)) {
+    // 2. Shadows: the casting glyphs, bullets and decorations, one shadow setting per run of equal shadows.
+    const cast = [...plan.glyphs, ...plan.bullets];
+    if (cast.some((g) => g.shadow) || plan.decorations.some((d) => d.shadow)) {
       ctx.save();
       let cur: Shadow | null = null;
       const use = (s: Shadow, color: string) => {
@@ -125,7 +127,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
         ctx.shadowOffsetX = s.dx * scale;
         ctx.shadowOffsetY = s.dy * scale;
       };
-      for (const g of plan.glyphs) {
+      for (const g of cast) {
         if (!g.shadow) continue;
         use(g.shadow, g.shadowColor);
         state.text(g);
@@ -142,14 +144,14 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
       state.reset();
     }
     // 3. Glow: the glyphs in the glow colour, blurred around themselves.
-    if (plan.glow && plan.glyphs.length) {
+    if (plan.glow && cast.length) {
       ctx.save();
       ctx.shadowColor = plan.glow.color;
       ctx.shadowBlur = plan.glow.radius * scale;
       ctx.shadowOffsetX = 0;
       ctx.shadowOffsetY = 0;
       state.fill(plan.glow.fill);
-      for (const g of plan.glyphs) {
+      for (const g of cast) {
         state.text(g);
         ctx.fillText(g.text, g.x, g.y);
       }
@@ -157,10 +159,10 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
       state.reset();
     }
     // 4. Outline.
-    if (plan.glyphs.some((g) => g.outline)) {
+    if (cast.some((g) => g.outline)) {
       ctx.lineJoin = 'round';
       ctx.miterLimit = 2;
-      for (const g of plan.glyphs) {
+      for (const g of cast) {
         if (!g.outline) continue;
         state.text(g);
         ctx.lineWidth = g.outline.width * 2;
@@ -179,10 +181,10 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
       state.fill(d.color);
       ctx.fillRect(d.x, d.y, d.w, d.h);
     }
-    // 7. Bullets: left to right, no spacing, the bullet's own font and colour.
+    // 7. Bullets: in the paragraph's direction, no spacing, the bullet's own font and colour.
     for (const b of plan.bullets) {
-      state.text({ font: b.font, dir: 'ltr', lang: '', spacing: 0 });
-      state.fill(b.color);
+      state.text(b);
+      state.fill(b.fill);
       ctx.fillText(b.text, b.x, b.y);
     }
   });
@@ -304,8 +306,27 @@ function buildPlan(o: TextObject, l: RichLayout): PaintPlan {
       });
     });
     const b = line.bullet;
-    if (b?.text.trim())
-      plan.bullets.push({ text: b.text, x: b.x, y: line.baseline, font: b.font, color: css(b.color) });
+    if (b?.text.trim()) {
+      const st = styleOf(b.run ?? -1);
+      const fill = css(b.color);
+      plan.bullets.push({
+        text: b.text,
+        x: b.x,
+        y: line.baseline,
+        font: b.font,
+        dir: b.dir ?? 'ltr',
+        lang: b.lang ?? '',
+        spacing: 0,
+        fill,
+        cast: st.outline ? css(st.outline.color) : fill,
+        shadow: st.shadow,
+        shadowColor: st.shadow ? css(st.shadow.color) : '',
+        outline:
+          st.outline && st.outline.width > 0
+            ? { width: st.outline.width, color: css(st.outline.color) }
+            : null,
+      });
+    }
   }
   return plan;
 }

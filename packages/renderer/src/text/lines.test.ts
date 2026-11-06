@@ -45,6 +45,8 @@ const bullet = (text: string): BulletSpec => ({
   italic: false,
   sizePct: 1,
   color: WHITE,
+  lang: '',
+  run: -1,
 });
 
 /**

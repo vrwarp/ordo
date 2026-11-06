@@ -40,8 +40,14 @@ import type {
  *   sits at the first line's start in a box at least -indent wide (a hanging bullet), and the text follows
  *   the box. Available width = inner width - that start.
  * - Pieces fill a line while they fit; a word (pieces with no break between them) that does not fit goes to
- *   the next line; one wider than a whole line is cut between graphemes (an emergency break). Trailing
+ *   the next line; one wider than a whole line is cut between clusters (an emergency break). Trailing
  *   whitespace hangs: it never counts against the width.
+ * - An emergency break costs work in proportion to the line it fills, never to the rest of the word: the cut
+ *   is found by galloping from the piece's start (prefixes of 1, 2, 4, ... clusters, then a bisection of the
+ *   last window), cluster boundaries are found only as far as that reaches, and the rest of the piece is
+ *   carried unmeasured (`Measured.lazy`, its width estimated) until it may fit a line. So a 10,000-letter
+ *   word in a narrow box costs about as much as the lines it makes, in every drawer and in every step of
+ *   the autofit search.
  * - `wrap: false` never breaks a line.
  * - Right-to-left paragraphs (bidi level 1) mirror the start: indents and the bullet are on the right, the
  *   pieces run from the right (UAX#9 L2 between pieces, `visualOrder`), and the hanging whitespace is on
@@ -61,8 +67,9 @@ import type {
  *   pitch `p × 1.2F` (the same meaning as in the office model), `lineSpacingPx` the exact pitch.
  * - 'office': `officeLine` (office.ts), with the box's `lineHeight` / 1.2 as the proportion of paragraphs
  *   that set none.
- * Raised and lowered runs are drawn at 0.58 × their size, shifted by baseline × size, and never grow the
- * line. Space before and after a paragraph are not drawn before the first or after the last; in the office
+ * Raised and lowered runs are drawn at 0.58 × their size (at least 4 px), shifted by baseline × size, and
+ * never grow the line. A bullet is drawn at `sizePct` × F within 4-1,000 px, in the paragraph's direction
+ * and its first run's language (an Arabic or Hebrew number reads as its paragraph does: '.1' for '1.'). Space before and after a paragraph are not drawn before the first or after the last; in the office
  * model they are scaled by the autofit spacing scale k, as are proportional and exact spacing.
  *
  * Soft paragraphs continue the paragraph before them: no bullet, no space between them, and that
@@ -124,10 +131,75 @@ type Measured = {
   a: number;
   /** Trailing whitespace units: where justification adds space. */
   spaces: number;
+  /**
+   * The rest of an emergency break, not measured yet: `w`, `t` and `a` are estimates (the cut piece's width
+   * less the part on the line). It is measured once it may fit a line, and never placed unmeasured.
+   */
+  lazy?: boolean;
+  /**
+   * The cluster boundaries of the piece this one was cut from, from index `base` on (the boundaries inside
+   * this piece): every line of an emergency break reads the same list instead of finding them again.
+   */
+  cuts?: { list: ClusterCuts; base: number };
 };
+
+/** The drawn size of a run `sz` px after autofit: 0.58 × for a raised or lowered run, at least 4 px. */
+function drawnPx(sz: number, baseline: number): number {
+  return baseline ? Math.max(CLAMP.minFontPx, sz * SCRIPT_SCALE) : sz;
+}
+
+/** A bullet's size: `sizePct` × the paragraph's main size, within the render bounds (4-1,000 px). */
+function bulletPx(F: number, sizePct: number): number {
+  return Math.min(CLAMP.maxFontPx, Math.max(CLAMP.minFontPx, F * sizePct));
+}
+
+/** Units of a cluster window: boundaries are found this far at least, then twice as far each time. */
+const CLUSTER_WINDOW = 32;
+
+/**
+ * Cluster boundaries inside [start, end) (breaks.ts `graphemeBoundaries`), found only as far as they are
+ * asked for, in windows that double from the last boundary found (so finding all of them is linear in the
+ * piece). A boundary at a window's end is not trusted until the next window (a mark or a joiner may
+ * follow), and no window ends inside a surrogate pair. Boundaries never depend on the font size: one list
+ * serves every line and every autofit step of a piece.
+ */
+class ClusterCuts {
+  readonly #cuts: number[] = [];
+  #scanned: number;
+  constructor(
+    readonly text: string,
+    readonly start: number,
+    readonly end: number,
+  ) {
+    this.#scanned = start;
+  }
+
+  /** The k-th boundary, or undefined when there are no more than k (then `count` is exact). */
+  at(k: number): number | undefined {
+    const cuts = this.#cuts;
+    while (cuts.length <= k && this.#scanned < this.end) {
+      const from = cuts.length ? cuts[cuts.length - 1]! : this.start;
+      const s = this.#scanned;
+      let to = Math.min(this.end, s + Math.max(CLUSTER_WINDOW, s - this.start));
+      const c = this.text.charCodeAt(to - 1);
+      if (to < this.end && c >= 0xd800 && c <= 0xdbff) to++;
+      for (const b of graphemeBoundaries(this.text, from, to)) cuts.push(b);
+      this.#scanned = to;
+    }
+    return cuts[k];
+  }
+
+  /** Boundaries found so far. */
+  get count(): number {
+    return this.#cuts.length;
+  }
+}
 
 /** A piece's widths at the autofit search's reference scale: the linear widths are scaled from them. */
 type BaseWidths = WeakMap<Piece, { w: number; t: number; refPx: number; sw: number; st: number }>;
+
+/** What one layout keeps across its autofit steps: reference widths and cluster boundaries per piece. */
+type Shared = { bases: BaseWidths; clusters: WeakMap<Piece, ClusterCuts> };
 
 type Flowed = {
   /** Lines relative to the inner box's top-left corner. */
@@ -142,13 +214,17 @@ type Continued = { style: ParaStyle; F: number; rtl: boolean };
 
 const EPS = 1e-6;
 
-/** Lay out prepared paragraphs in the object's box: absolute logical coordinates (§6). */
+/**
+ * Lay out prepared paragraphs in the object's box: absolute logical coordinates (§6). Autofit never goes
+ * below `minFontScale` (look bands: 0.5, as drawText's).
+ */
 export function layoutBox(
   m: Measurer,
   o: TextObject,
   prepared: PreparedPara[],
   bullets: readonly (BulletSpec | null)[],
   env: FontEnv,
+  minFontScale?: number,
 ): RichLayout {
   const style = o.style;
   const box = o.box;
@@ -157,11 +233,11 @@ export function layoutBox(
   const innerH = Math.max(1, box.h - ins.t - ins.b);
   // One layout measures each string once, whatever the shared cache evicts during the autofit search.
   const mm = memoMeasurer(m);
-  const bases: BaseWidths = new WeakMap();
+  const shared: Shared = { bases: new WeakMap(), clusters: new WeakMap() };
   let exact: { fit: FitScale; flowed: Flowed } | null = null;
   const flowExact = (fit: FitScale): Flowed => {
     if (exact && exact.fit.font === fit.font && exact.fit.spacing === fit.spacing) return exact.flowed;
-    const flowed = flowParas(mm, o, prepared, bullets, env, innerW, fit);
+    const flowed = flowParas(mm, o, prepared, bullets, env, innerW, fit, shared);
     exact = { fit, flowed };
     return flowed;
   };
@@ -169,8 +245,9 @@ export function layoutBox(
     style,
     innerH,
     (f) => flowExact(f).height,
-    (f, ref) => flowParas(mm, o, prepared, bullets, env, innerW, f, { ref, bases }).height,
+    (f, ref) => flowParas(mm, o, prepared, bullets, env, innerW, f, shared, ref).height,
     style.lineModel === 'office' ? FIT_SPACINGS : FIT_SPACINGS.slice(0, 1),
+    minFontScale,
   );
   const laid = flowExact(fit);
   let y0 = box.y + ins.t;
@@ -211,8 +288,8 @@ export function layoutBox(
 
 /**
  * Lines of every paragraph at one autofit scale, relative to the inner box's top-left corner. With
- * `linear`, widths are not measured at `fit` but scaled linearly from their measure at `linear.ref` (the
- * autofit search: only heights are used, and segments carry no font string).
+ * `linear` (a reference scale), widths are not measured at `fit` but scaled linearly from their measure at
+ * `linear`, and only `height` is computed (the autofit search: `lines` is empty).
  */
 function flowParas(
   m: Measurer,
@@ -222,7 +299,8 @@ function flowParas(
   env: FontEnv,
   innerW: number,
   fit: FitScale,
-  linear?: { ref: FitScale; bases: BaseWidths },
+  shared: Shared,
+  linear?: FitScale,
 ): Flowed {
   const text = o.text;
   const style = o.style;
@@ -230,28 +308,41 @@ function flowParas(
   const wrap = style.wrap !== false;
   const k = office ? fit.spacing : 1;
   // The spacing scale never changes a width: only a different font scale needs the linear estimate.
-  const base = linear && linear.ref.font !== fit.font ? linear.ref : null;
+  const base = linear && linear.font !== fit.font ? linear : null;
   const size = (px: number, f: FitScale) => fitSize(px, f.font, office);
-  const face = (st: RunStyle, script: string, sizePx: number): FaceRequest => ({
-    family: st.family,
-    fallbacks: st.fallbacks,
-    weight: st.weight,
-    italic: st.italic,
-    smallCaps: st.caps === 'small',
-    sizePx,
-    script,
-  });
+  // Font strings by run style, size and script: an emergency break asks for the same one on every line.
+  const fonts = new Map<RunStyle, Map<number, Map<string, string>>>();
+  const fontOf = (st: RunStyle, script: string, sizePx: number): string => {
+    let bySize = fonts.get(st);
+    if (!bySize) fonts.set(st, (bySize = new Map()));
+    let byScript = bySize.get(sizePx);
+    if (!byScript) bySize.set(sizePx, (byScript = new Map()));
+    let font = byScript.get(script);
+    if (font === undefined) {
+      font = env.font({
+        family: st.family,
+        fallbacks: st.fallbacks,
+        weight: st.weight,
+        italic: st.italic,
+        smallCaps: st.caps === 'small',
+        sizePx,
+        script,
+      });
+      byScript.set(script, font);
+    }
+    return font;
+  };
   /** Width of `s` drawn in run style `st`, measured at the scale `f`. */
   const measureAt = (st: RunStyle, script: string, dir: 'ltr' | 'rtl', s: string, f: FitScale): number => {
-    const px = size(st.sizePx, f) * (st.baseline ? SCRIPT_SCALE : 1);
-    return m.width(env.font(face(st, script, px)), dir, st.lang, st.letterSpacing, s);
+    const px = drawnPx(size(st.sizePx, f), st.baseline);
+    return m.width(fontOf(st, script, px), dir, st.lang, st.letterSpacing, s);
   };
   /** Width of `s` drawn in run style `st` at the layout's size: measured, or scaled from `base`. */
   const widthOf = (st: RunStyle, script: string, dir: 'ltr' | 'rtl', s: string): number => {
     if (!base) return measureAt(st, script, dir, s, fit);
-    const q = st.baseline ? SCRIPT_SCALE : 1;
     const w = measureAt(st, script, dir, s, base);
-    return linearWidth(w, size(st.sizePx, base) * q, size(st.sizePx, fit) * q, st.letterSpacing, s);
+    const ref = drawnPx(size(st.sizePx, base), st.baseline);
+    return linearWidth(w, ref, drawnPx(size(st.sizePx, fit), st.baseline), st.letterSpacing, s);
   };
   /** A piece's drawn string and its width without the trailing whitespace, measured at `f`. */
   const pieceWidths = (piece: Piece, st: RunStyle, f: FitScale): { w: number; t: number } => {
@@ -265,21 +356,22 @@ function flowParas(
           : measureAt(st, piece.script, dir, segText(text, piece.start, piece.trail, st.caps), f);
     return { w, t };
   };
-  const measure = (piece: Piece, sr: StyleRun): Measured => {
+  /** `piece` measured; `keep` keeps its reference widths for the next search step (the prepared pieces). */
+  const measure = (piece: Piece, sr: StyleRun, keep = true): Measured => {
     const st = sr.style;
     const sz = size(st.sizePx, fit);
-    const sizePx = st.baseline ? sz * SCRIPT_SCALE : sz;
+    const sizePx = drawnPx(sz, st.baseline);
     let w: number;
     let t: number;
-    if (base && linear) {
+    if (base) {
       // The search lays out the same pieces up to 30 times: their reference widths are kept per piece.
-      let b = linear.bases.get(piece);
+      let b = shared.bases.get(piece);
       if (!b) {
         const gaps = (e: number) =>
           st.letterSpacing ? st.letterSpacing * spacingGaps(segText(text, piece.start, e, st.caps)) : 0;
-        const refPx = size(st.sizePx, base) * (st.baseline ? SCRIPT_SCALE : 1);
+        const refPx = drawnPx(size(st.sizePx, base), st.baseline);
         b = { ...pieceWidths(piece, st, base), refPx, sw: gaps(piece.end), st: gaps(piece.trail) };
-        linear.bases.set(piece, b);
+        if (keep) shared.bases.set(piece, b);
       }
       w = scaleWidth(b.w, b.refPx, sizePx, b.sw);
       t = scaleWidth(b.t, b.refPx, sizePx, b.st);
@@ -288,7 +380,7 @@ function flowParas(
       piece,
       style: st,
       run: sr.run,
-      font: base ? '' : env.font(face(st, piece.script, sizePx)),
+      font: base ? '' : fontOf(st, piece.script, sizePx),
       size: sz,
       sizePx,
       shift: -st.baseline * sz,
@@ -333,7 +425,7 @@ function flowParas(
     let bulletW = 0;
     let bulletBox = 0;
     if (spec) {
-      const bpx = F * spec.sizePct;
+      const bpx = bulletPx(F, spec.sizePct);
       const req: FaceRequest = {
         family: spec.family,
         fallbacks: spec.fallbacks,
@@ -344,13 +436,23 @@ function flowParas(
         script: '',
       };
       const font = env.font(req);
+      const dir = rtl ? 'rtl' : 'ltr';
       if (base && main) {
-        const rpx = size(main.style.sizePx, base) * spec.sizePct;
-        const w = m.width(env.font({ ...req, sizePx: rpx }), 'ltr', '', 0, spec.text);
+        const rpx = bulletPx(size(main.style.sizePx, base), spec.sizePct);
+        const w = m.width(env.font({ ...req, sizePx: rpx }), dir, spec.lang, 0, spec.text);
         bulletW = linearWidth(w, rpx, bpx, 0, spec.text);
-      } else bulletW = m.width(font, 'ltr', '', 0, spec.text);
+      } else bulletW = m.width(font, dir, spec.lang, 0, spec.text);
       bulletBox = Math.max(bulletW, other - x0);
-      bullet = { text: spec.text, x: 0, font, sizePx: bpx, color: spec.color };
+      bullet = {
+        text: spec.text,
+        x: 0,
+        font,
+        sizePx: bpx,
+        color: spec.color,
+        dir,
+        lang: spec.lang,
+        run: spec.run,
+      };
     }
     const startX = (n: number) => (n === 0 ? x0 + bulletBox : other);
     const avail = (n: number) => Math.max(1, innerW - startX(n));
@@ -368,37 +470,120 @@ function flowParas(
       cur = [];
       adv = 0;
     };
-    const splitPiece = (c: Measured, room: number, force: boolean): [Piece, Piece] | null => {
+    /**
+     * Where an emergency break cuts piece `c` to fit `room`: after the most clusters that fit (the first
+     * cluster when nothing fits and `force`), by galloping from the piece's start and bisecting the last
+     * window, so the strings measured are at most about twice the line. `all`: every cut inside the piece
+     * fits (the whole piece was not measured).
+     */
+    const splitPiece = (
+      c: Measured,
+      room: number,
+      force: boolean,
+    ): { head: Piece; tail: Piece; all: boolean; cuts: { list: ClusterCuts; base: number } } | null => {
       const p = c.piece;
-      const cuts = graphemeBoundaries(text, p.start, p.end);
-      const dir = p.level % 2 ? 'rtl' : 'ltr';
-      const width = (end: number) =>
-        widthOf(c.style, p.script, dir, segText(text, p.start, end, c.style.caps));
-      let lo = 0;
-      let hi = cuts.length - 1;
-      let best = -1;
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        if (width(cuts[mid]!) <= room + EPS) {
-          best = mid;
-          lo = mid + 1;
-        } else hi = mid - 1;
+      let view = c.cuts;
+      if (!view) {
+        let list = shared.clusters.get(p);
+        if (!list) {
+          list = new ClusterCuts(text, p.start, p.end);
+          shared.clusters.set(p, list);
+        }
+        view = { list, base: 0 };
       }
-      if (best < 0 && !force) return null;
-      const at = cuts[Math.max(0, best)];
+      const { list, base: b0 } = view;
+      const cuts = { at: (k: number) => list.at(b0 + k), count: () => list.count - b0 };
+      const dir = p.level % 2 ? 'rtl' : 'ltr';
+      const fits = (k: number) =>
+        widthOf(c.style, p.script, dir, segText(text, p.start, cuts.at(k)!, c.style.caps)) <= room + EPS;
+      let lo = -1; // the last cut known to fit
+      let hi: number; // the first cut known not to fit, or the number of cuts
+      for (let k = 0, step = 1; ; ) {
+        if (cuts.at(k) === undefined) {
+          hi = cuts.count();
+          break;
+        }
+        if (!fits(k)) {
+          hi = k;
+          break;
+        }
+        lo = k;
+        k += step;
+        step *= 2;
+      }
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (fits(mid)) lo = mid;
+        else hi = mid;
+      }
+      if (lo < 0 && !force) return null;
+      const at = cuts.at(Math.max(0, lo));
       if (at === undefined) return null;
-      return [
-        { ...p, end: at, trail: Math.min(at, Math.max(p.start, p.trail)), breakAfter: false },
-        { ...p, start: at, trail: Math.max(at, p.trail) },
-      ];
+      return {
+        head: { ...p, end: at, trail: Math.min(at, Math.max(p.start, p.trail)), breakAfter: false },
+        tail: { ...p, start: at, trail: Math.max(at, p.trail) },
+        all: lo >= 0 && cuts.at(lo + 1) === undefined,
+        cuts: { list, base: b0 + Math.max(0, lo) + 1 },
+      };
+    };
+    /** The rest of `c` after an emergency break put `head` on the line: estimated, measured later. */
+    const rest = (
+      c: Measured,
+      head: Measured,
+      tail: Piece,
+      cuts: { list: ClusterCuts; base: number },
+    ): Measured => {
+      const w = Math.max(0, c.w - head.a);
+      const t = tail.trail <= tail.start ? 0 : Math.max(0, w - (c.w - c.t));
+      return {
+        ...c,
+        piece: tail,
+        w,
+        t,
+        a: w + c.style.letterSpacing,
+        spaces: Math.max(0, tail.end - Math.max(tail.start, tail.trail)),
+        lazy: true,
+        cuts,
+      };
     };
     let i = 0;
+    // The word being placed: pieces i..j (j has a break after it, or is the last), and its width (each
+    // piece's advance, the last one's without its trailing whitespace), kept in step as pieces leave it.
+    let j = -1;
+    let word = 0;
+    const share = (q: number) => (q === j ? queue[q]!.t : queue[q]!.a);
+    const take = (q: number) => {
+      word -= share(q);
+      push(queue[q]!);
+    };
+    const replace = (q: number, c: Measured) => {
+      word -= share(q);
+      queue[q] = c;
+      word += share(q);
+    };
     while (i < queue.length) {
       const room = avail(broken.length);
-      let j = i;
-      while (j < queue.length - 1 && !queue[j]!.piece.breakAfter) j++;
-      let word = queue[j]!.t;
-      for (let q = i; q < j; q++) word += queue[q]!.a;
+      if (i > j) {
+        j = i;
+        while (j < queue.length - 1 && !queue[j]!.piece.breakAfter) j++;
+        word = 0;
+        for (let q = i; q <= j; q++) word += share(q);
+      }
+      const head = queue[i]!;
+      if (head.lazy) {
+        // The rest of an emergency break, on a line of its own (`cur` is empty): cut another line's worth
+        // off it, or measure it once all of it may fit.
+        const sr = runs[head.piece.sr]!;
+        const cut = splitPiece(head, room, true);
+        if (!cut || cut.all) replace(i, { ...measure(head.piece, sr, false), cuts: head.cuts });
+        else {
+          const h = measure(cut.head, sr, false);
+          push(h);
+          replace(i, rest(head, h, cut.tail, cut.cuts));
+          endLine();
+        }
+        continue;
+      }
       if (!wrap || adv + word <= room + EPS) {
         for (let q = i; q <= j; q++) push(queue[q]!);
         i = j + 1;
@@ -410,23 +595,36 @@ function flowParas(
       }
       // The word alone is wider than the line: whole pieces while they fit, then an emergency break.
       let q = i;
-      while (q <= j && adv + queue[q]!.t <= room + EPS) push(queue[q++]!);
+      while (q <= j && adv + queue[q]!.t <= room + EPS) take(q++);
       if (q <= j) {
         const c = queue[q]!;
-        const split = splitPiece(c, room - adv, cur.length === 0);
+        const cut = splitPiece(c, room - adv, cur.length === 0);
         const sr = runs[c.piece.sr]!;
-        if (split) {
-          push(measure(split[0], sr));
-          queue[q] = measure(split[1], sr);
-        } else if (!cur.length) push(queue[q++]!); // one grapheme wider than the line: it overflows
+        if (cut) {
+          const h = measure(cut.head, sr, false);
+          push(h);
+          replace(q, rest(c, h, cut.tail, cut.cuts));
+        } else if (!cur.length) take(q++); // one cluster wider than the line: it overflows
       }
       endLine();
       i = q;
     }
     if (cur.length || !broken.length) endLine();
 
-    // Placing: alignment, visual order, line metrics.
+    // Placing: line metrics, then (not for the autofit search, which needs heights only) alignment and
+    // visual order.
     broken.forEach((items, n) => {
+      let lineF = F;
+      for (const c of items) if (!c.style.baseline && c.size > lineF) lineF = c.size;
+      if (!items.length)
+        for (const r of runs) if (!r.style.baseline) lineF = Math.max(lineF, size(r.style.sizePx, fit));
+      const metrics = office
+        ? officeLine(lineF, ps, k, style.lineHeight)
+        : ordoLine(lineF, ps, style.lineHeight);
+      if (linear) {
+        y += metrics.height;
+        return;
+      }
       const lineStart = startX(n);
       const A = innerW - lineStart;
       const L = rtl ? 0 : lineStart;
@@ -466,13 +664,6 @@ function flowParas(
         sx += isTail ? c.t : c.a;
         if (!odd) sx += gap;
       }
-      let lineF = F;
-      for (const c of items) if (!c.style.baseline && c.size > lineF) lineF = c.size;
-      if (!items.length)
-        for (const r of runs) if (!r.style.baseline) lineF = Math.max(lineF, size(r.style.sizePx, fit));
-      const metrics = office
-        ? officeLine(lineF, ps, k, style.lineHeight)
-        : ordoLine(lineF, ps, style.lineHeight);
       const line: LaidLine = {
         para: para.index,
         top: y,

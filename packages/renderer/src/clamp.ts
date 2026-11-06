@@ -44,6 +44,13 @@ export const CLAMP = {
   /** Paragraph styles one text object draws (the schema allows 5,000; later paragraphs take the box's). */
   maxParas: 1000,
   maxFallbackFonts: 8,
+  /**
+   * Distinct run and bullet font families one text object draws in: the browser pays a platform font lookup
+   * for each family name it has not seen (about 1 ms in Chromium), so later ones take the box family.
+   */
+  maxRunFamilies: 16,
+  /** Distinct run size scales one text object draws in: later ones take the nearest of these. */
+  maxSizeScales: 64,
   /** Paragraph indents and spacing, in logical px. */
   maxIndentPx: LOGICAL_WIDTH,
 } as const;
@@ -94,10 +101,65 @@ export function clampBox(b: unknown, dflt: Box = { x: 0, y: 0, w: W, h: H, rotat
 
 const FONT_FAMILY_MAX = 200;
 
+/**
+ * `v` without what would break a CSS font string: quotes, backslashes and every C0 and C1 control character
+ * (a form feed is a CSS newline too: the browser would ignore the whole `ctx.font` assignment and keep the
+ * previous font, so widths would depend on drawing order).
+ */
+function familyChars(v: string): string {
+  let out = '';
+  for (let i = 0; i < v.length; i++) {
+    const c = v.charCodeAt(i);
+    if (c < 0x20 || (c >= 0x7f && c <= 0x9f) || c === 0x22 || c === 0x5c) continue;
+    out += v[i];
+  }
+  return out;
+}
+
 /** A family name safe inside a CSS font string, or '' when there is none. */
 export function clampFamily(v: unknown): string {
   if (typeof v !== 'string' || !v.trim()) return '';
-  return v.slice(0, FONT_FAMILY_MAX).replace(/["\\\n\r]/g, '');
+  const f = familyChars(v.slice(0, FONT_FAMILY_MAX));
+  return f.trim() ? f : '';
+}
+
+/**
+ * The distinct fonts one text object may ask for (`maxRunFamilies` families, `maxSizeScales` size scales),
+ * shared by its runs and its bullets, so that no object costs more font lookups than a slide of ordinary
+ * text: a schema-valid object of 2,000 runs could otherwise name 2,000 families.
+ */
+export class FontBudget {
+  readonly #families = new Set<string>();
+  readonly #scales = new Set<number>();
+  constructor(
+    readonly maxFamilies: number = CLAMP.maxRunFamilies,
+    readonly maxScales: number = CLAMP.maxSizeScales,
+  ) {}
+
+  /** `family` when it is within the budget, else '' (the run or bullet takes the box's or run's family). */
+  family(family: string): string {
+    const k = family.trim().toLowerCase();
+    if (!k || this.#families.has(k)) return family;
+    if (this.#families.size >= this.maxFamilies) return '';
+    this.#families.add(k);
+    return family;
+  }
+
+  /** `scale` when it is within the budget, else the nearest scale already kept. */
+  scale(scale: number): number {
+    if (this.#scales.has(scale) || this.#scales.size < this.maxScales) {
+      this.#scales.add(scale);
+      return scale;
+    }
+    let best = scale;
+    let d = Number.POSITIVE_INFINITY;
+    for (const s of this.#scales)
+      if (Math.abs(s - scale) < d) {
+        d = Math.abs(s - scale);
+        best = s;
+      }
+    return best;
+  }
 }
 
 /** A BCP 47 language tag, or '' (only letters, digits and hyphens survive). */
@@ -124,10 +186,7 @@ function clampOutline(v: Partial<NonNullable<TextStyle['outline']>>): NonNullabl
 export function clampStyle(s: unknown, dflt: TextStyle = DEFAULT_STYLE): TextStyle {
   if (!s || typeof s !== 'object') return dflt;
   const x = s as Partial<TextStyle>;
-  const family =
-    typeof x.fontFamily === 'string' && x.fontFamily.trim()
-      ? x.fontFamily.slice(0, FONT_FAMILY_MAX).replace(/["\\\n\r]/g, '')
-      : dflt.fontFamily;
+  const family = clampFamily(x.fontFamily) || dflt.fontFamily;
   const out: TextStyle = {
     fontFamily: family,
     fontWeight: Math.round(num(x.fontWeight, 1, 1000, dflt.fontWeight)),
@@ -193,9 +252,15 @@ export function runFontPx(style: TextStyle, run: Pick<TextRun, 'sizeScale'> | un
 /**
  * Style runs over a text of `len` UTF-16 units: a run must start at or after the previous kept run's end
  * and before `len` (unsorted, overlapping, empty and out-of-range runs are dropped); its end is clamped to
- * `len`. Sizes are bounded so the box size × `sizeScale` stays within 4-1,000 px.
+ * `len`. Sizes are bounded so the box size × `sizeScale` stays within 4-1,000 px. Families and size scales
+ * beyond the object's `FontBudget` take the box family and the nearest kept scale.
  */
-export function clampRuns(runs: unknown, len: number, fontSizePx: number): TextRun[] {
+export function clampRuns(
+  runs: unknown,
+  len: number,
+  fontSizePx: number,
+  budget: FontBudget = new FontBudget(),
+): TextRun[] {
   if (!Array.isArray(runs)) return [];
   const out: TextRun[] = [];
   let at = 0;
@@ -207,17 +272,14 @@ export function clampRuns(runs: unknown, len: number, fontSizePx: number): TextR
     if (!Number.isInteger(r.end) || start < at || start >= len || r.end <= start) continue;
     const end = Math.min(r.end, len);
     const run: TextRun = { start, end };
-    const family = clampFamily(r.fontFamily);
+    const family = budget.family(clampFamily(r.fontFamily));
     if (family) run.fontFamily = family;
     if (r.fontWeight !== undefined) run.fontWeight = Math.round(num(r.fontWeight, 1, 1000, 400));
     if (r.fontStyle !== undefined) run.fontStyle = r.fontStyle === 'italic' ? 'italic' : 'normal';
     if (r.sizeScale !== undefined) {
       const fs = clampFontSize(fontSizePx);
-      run.sizeScale = num(
-        r.sizeScale,
-        Math.max(0.01, CLAMP.minFontPx / fs),
-        Math.min(50, CLAMP.maxFontPx / fs),
-        1,
+      run.sizeScale = budget.scale(
+        num(r.sizeScale, Math.max(0.01, CLAMP.minFontPx / fs), Math.min(50, CLAMP.maxFontPx / fs), 1),
       );
     }
     if (r.color !== undefined) run.color = clampColor(r.color);
@@ -247,7 +309,7 @@ const PARA_ALIGN: readonly NonNullable<TextPara['align']>[] = [
   'distribute',
 ];
 
-function clampPara(v: unknown): TextPara | null {
+function clampPara(v: unknown, budget: FontBudget): TextPara | null {
   if (!v || typeof v !== 'object') return null;
   const p = v as Partial<TextPara>;
   const out: TextPara = {};
@@ -274,7 +336,7 @@ function clampPara(v: unknown): TextPara | null {
     }
     if (typeof b.auto === 'string') bullet.auto = b.auto.slice(0, 40).replace(/[^A-Za-z]/g, '');
     if (b.startAt !== undefined) bullet.startAt = Math.round(num(b.startAt, 1, 32_767, 1));
-    const family = clampFamily(b.fontFamily);
+    const family = budget.family(clampFamily(b.fontFamily));
     if (family) bullet.fontFamily = family;
     if (b.color !== undefined) bullet.color = clampColor(b.color);
     if (b.sizePct !== undefined) bullet.sizePct = num(b.sizePct, 0.1, 4, 1);
@@ -285,14 +347,21 @@ function clampPara(v: unknown): TextPara | null {
   return out;
 }
 
-/** Paragraph styles of `text`: at most one per paragraph and at most `maxParas`; garbage entries become null. */
-export function clampParas(paras: unknown, text: string): (TextPara | null)[] {
+/**
+ * Paragraph styles of `text`: at most one per paragraph and at most `maxParas`; garbage entries become null.
+ * Bullet families beyond the object's `FontBudget` are dropped (the bullet takes its first run's family).
+ */
+export function clampParas(
+  paras: unknown,
+  text: string,
+  budget: FontBudget = new FontBudget(),
+): (TextPara | null)[] {
   if (!Array.isArray(paras)) return [];
   let count = 1;
   for (let i = text.indexOf('\n'); i >= 0 && count < CLAMP.maxParas; i = text.indexOf('\n', i + 1)) count++;
   const n = Math.min(paras.length, count, CLAMP.maxParas);
   const out: (TextPara | null)[] = new Array(n);
-  for (let i = 0; i < n; i++) out[i] = clampPara(paras[i]);
+  for (let i = 0; i < n; i++) out[i] = clampPara(paras[i], budget);
   return out;
 }
 
@@ -344,8 +413,9 @@ export function clampObject(o: unknown): SlideObject | undefined {
     const text = clampText(t.text);
     const style = clampStyle(t.style);
     const out: TextObject = { id, type: 'text', box, text, style, opacity };
-    if (Array.isArray(t.runs)) out.runs = clampRuns(t.runs, text.length, style.fontSizePx);
-    if (Array.isArray(t.paras)) out.paras = clampParas(t.paras, text);
+    const budget = new FontBudget();
+    if (Array.isArray(t.runs)) out.runs = clampRuns(t.runs, text.length, style.fontSizePx, budget);
+    if (Array.isArray(t.paras)) out.paras = clampParas(t.paras, text, budget);
     return clampCommon(x, out);
   }
   if (x.type === 'image') {

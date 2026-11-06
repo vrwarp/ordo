@@ -62,8 +62,21 @@ export type LaidLine = {
   segs: Seg[];
   /** Justification: extra px after each inter-segment space (already included in the segments' x). */
   extraPerSpace: number;
-  /** The paragraph's bullet or number, on its first line only. `x` is the left edge of `text`. */
-  bullet?: { text: string; x: number; font: string; sizePx: number; color: Rgba };
+  /**
+   * The paragraph's bullet or number, on its first line only. `x` is the left edge of `text`, drawn in the
+   * paragraph's direction `dir` and its first run's `lang`; `run` is that run (index into the clamped
+   * `runs`, -1 the box style), whose shadow and outline the bullet takes.
+   */
+  bullet?: {
+    text: string;
+    x: number;
+    font: string;
+    sizePx: number;
+    color: Rgba;
+    dir?: 'ltr' | 'rtl';
+    lang?: string;
+    run?: number;
+  };
 };
 
 export type RichLayout = {
@@ -223,4 +236,8 @@ export type BulletSpec = {
   /** × the paragraph's main size F (after autofit). */
   sizePct: number;
   color: Rgba;
+  /** The paragraph's first run's language: the label is measured and drawn in it. */
+  lang: string;
+  /** The paragraph's first run (index into `TextObject.runs`, -1 the box style): shadow and outline. */
+  run: number;
 };

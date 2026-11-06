@@ -1,9 +1,8 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import type { TextObject } from '@ordo/domain';
+import { DEFAULT_LYRIC_STYLE, type TextObject } from '@ordo/domain';
 import { CLAMP } from '../clamp.ts';
 import { LEGACY_FONT_ENV } from './fonts.ts';
-import { SCRIPT_SCALE } from './office.ts';
 import { paintRich } from './paint.ts';
 import { clampTextObject, layoutRich } from './rich.ts';
 import { recordingCtx, testMeasurer } from './test-util.ts';
@@ -208,8 +207,12 @@ describe('rich text engine fuzz', () => {
             expect(s.end).toBeLessThanOrEqual(o.text.length);
             expect(s.run).toBeLessThan(o.runs?.length ?? 0);
             for (const v of [s.x, s.w, s.sizePx, s.shift]) expect(finite(v)).toBe(true);
-            expect(s.sizePx).toBeGreaterThanOrEqual(CLAMP.minFontPx * SCRIPT_SCALE - 1e-9);
+            expect(s.sizePx).toBeGreaterThanOrEqual(CLAMP.minFontPx - 1e-9);
             expect(s.sizePx).toBeLessThanOrEqual(CLAMP.maxFontPx);
+          }
+          if (line.bullet) {
+            expect(line.bullet.sizePx).toBeGreaterThanOrEqual(CLAMP.minFontPx);
+            expect(line.bullet.sizePx).toBeLessThanOrEqual(CLAMP.maxFontPx);
           }
         }
         const ctx = recordingCtx();
@@ -227,4 +230,56 @@ describe('rich text engine fuzz', () => {
       { numRuns: 100 },
     );
   });
+});
+
+/** n pseudo-random lower-case letters: one unbreakable word whose prefixes are all distinct. */
+function longWord(n: number): string {
+  let x = 7;
+  let out = '';
+  for (let i = 0; i < n; i++) {
+    x = (x * 1103515245 + 12345) & 0x7fffffff;
+    out += String.fromCharCode(97 + (x % 26));
+  }
+  return out;
+}
+
+describe('emergency breaks cost what their lines hold (design/25)', () => {
+  // A word wider than its line is cut line by line; each line must cost about what it holds, not what is
+  // left of the word, in every autofit step: otherwise one schema-valid object blocks a drawer for seconds.
+  const texts: [string, (n: number) => string][] = [
+    ['latin', longWord],
+    ['arabic', (n) => 'مرحبا'.repeat(n / 5)],
+    ['tamil', (n) => 'க்ஷி'.repeat(n / 4)],
+  ];
+  const fits = [{}, { autofit: 'shrink' }, { autofit: 'shrink', lineModel: 'office' }] as const;
+  const measured = (text: string, w: number, extra: object) => {
+    const m = testMeasurer();
+    const o = clampTextObject({
+      id: 'w',
+      type: 'text',
+      box: { x: 0, y: 0, w, h: 300, rotation: 0 },
+      text,
+      style: { ...DEFAULT_LYRIC_STYLE, padding: 0, fontSizePx: 72, ...extra },
+      opacity: 1,
+      paras: [],
+    } as TextObject);
+    const l = layoutRich(m, o, LEGACY_FONT_ENV);
+    let chars = 0;
+    for (const t of m.texts) chars += t.length;
+    return { chars, lines: l.lines.length };
+  };
+
+  for (const [name, make] of texts)
+    for (const extra of fits)
+      it(`${name} ${JSON.stringify(extra)}: measured characters grow linearly with a 10,000-character word`, () => {
+        for (const w of [0, 50, 200]) {
+          const small = measured(make(2500), w, extra);
+          const big = measured(make(10_000), w, extra);
+          // Quadratic work would be 16 times; linear is 4 (a few more lines fit the box in the search).
+          expect(big.chars / small.chars).toBeLessThan(6);
+          // Without autofit, one layout: at most 2 × n × log2(n) characters measured.
+          if (!('autofit' in extra)) expect(big.chars).toBeLessThan(2 * 10_000 * Math.log2(10_000));
+          expect(big.lines).toBeGreaterThan(0);
+        }
+      });
 });

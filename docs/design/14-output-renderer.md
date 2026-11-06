@@ -338,7 +338,8 @@ other face). Property tests (`plan.fuzz.test.ts`) feed random slides and looks w
 far beyond the clamps: never throws, output within bounds.
 
 Arm failures are classified (review 2026-11-04 item 3). A deterministic failure (the image does not
-decode, the raster throws, the cached video does not play) counts toward quarantine: a slide, image or
+decode, the raster throws, the cached video does not play, the asset worker stops answering while it
+draws the key and is restarted) counts toward quarantine: a slide, image or
 media key whose arm fails that way three times within a minute (`ErrorBudget`) is quarantined for the
 rest of the service: never flipped to (the layer shows nothing), never retried, listed in
 `health.quarantined`; a new service (or End service) lifts it. A quarantined key stays required, so the

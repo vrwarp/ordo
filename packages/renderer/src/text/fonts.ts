@@ -20,7 +20,12 @@ import type { FaceRequest, FontEnv } from './types.ts';
  *   original family name (last resort: the asset worker reports it), ordo's default face (Inter, once
  *   shipped) and today's generic chain.
  * - A face whose file cannot be read or parsed is retried with backoff (2 s doubling to 5 min) and at once on
- *   the next `sync`; the rest of its family loads without it meanwhile.
+ *   the next `sync`; the rest of its family loads without it meanwhile. A retry loads the failed face alone
+ *   first (one read, not the whole family's), and only when it loads is the family registered again with it.
+ * - Reading and parsing a face time out (15 s: a half-open fetch to a NAS that restarted counts as a
+ *   failure), and `sync` never waits for a background retry already running: it reports the state as it is,
+ *   and the retry's result is announced through `onChange` as a late change. So a stalled file can never
+ *   hold up the asset worker's job queue, which runs `sync` in order with the raster jobs.
  * - The legacy `fontString` (text2d.ts) uses the installed resolver too, so legacy and rich objects resolve
  *   families identically in every drawer; with no resolver installed (`LEGACY_FONT_ENV`) it is byte for byte
  *   today's string.
@@ -109,6 +114,8 @@ export type FontHost = {
   now?(): number;
   /** Retry backoff of a face that failed: first delay, doubling up to max. */
   retry?: { firstMs: number; maxMs: number };
+  /** Reading a face's file, and parsing it, each fail after this long (default 15 s). */
+  timeoutMs?: number;
 };
 
 /** A change of the resolved faces: these families (lower-case) draw differently from now on. */
@@ -140,6 +147,9 @@ export function internalFamilyName(scope: string, family: string, keys: readonly
 const familyKey = (scope: string, family: string) => `${scope}\u0000${family.trim().toLowerCase()}`;
 
 const DEFAULT_RETRY = { firstMs: 2000, maxMs: 300_000 };
+const DEFAULT_TIMEOUT_MS = 15_000;
+/** The family name of a face loaded only to see whether it loads (never added to a face set). */
+const PROBE_NAME = 'o-probe';
 
 function defaultFace(name: string, data: ArrayBuffer | string, descriptors: FontFaceDescriptors): FaceLike {
   if (typeof FontFace === 'undefined') throw new Error('FontFace is not available here');
@@ -167,6 +177,8 @@ type Family = {
   cancel: (() => void) | null;
   /** Loading rounds run one after another per family. */
   chain: Promise<void>;
+  /** A background retry round is queued or running: `sync` does not wait for it. */
+  retrying: boolean;
 };
 
 /** How many wanted faces of `families` are loaded, and why each other one is not. */
@@ -210,8 +222,9 @@ export class FontResolver implements FontEnv {
    * Register the drawer's faces: the whole list it should have (the output's config and service fonts, the
    * library). A listed family whose face set changed loads again under a fresh name; failed faces are tried
    * again now. Families absent from the list keep their faces (content still on screen may use them) but
-   * are no longer retried. Resolves once this round of loads has settled; retries continue in the
-   * background and are announced through `onChange`.
+   * are no longer retried. Resolves once this round of loads has settled (each read and parse is bounded
+   * by the host's timeout); a family busy with a background retry is not waited for. Retries continue in
+   * the background and are announced through `onChange`.
    */
   async sync(files: readonly FontFile[]): Promise<FontSyncResult> {
     const groups = new Map<string, FontFile[]>();
@@ -245,6 +258,7 @@ export class FontResolver implements FontEnv {
           failed: new Map(),
           cancel: null,
           chain: Promise.resolve(),
+          retrying: false,
         };
         this.#families.set(key, fam);
       }
@@ -253,7 +267,10 @@ export class FontResolver implements FontEnv {
         if (fam.want.has(k)) x.next = now;
         else fam.failed.delete(k);
       }
-      rounds.push(this.#enqueue(fam, ready));
+      // Behind a background retry (whose read may hang until its timeout) the round runs later and is
+      // announced as a late change; this sync reports the state as it is.
+      if (fam.retrying) void this.#enqueue(fam);
+      else rounds.push(this.#enqueue(fam, ready));
     }
     await Promise.all(rounds);
     return { ...report([...groups.keys()].map((k) => this.#families.get(k)!)), ready: [...ready] };
@@ -276,6 +293,7 @@ export class FontResolver implements FontEnv {
         failed: new Map(),
         cancel: null,
         chain: Promise.resolve(),
+        retrying: false,
       };
       this.#families.set(key, fam);
     }
@@ -377,22 +395,39 @@ export class FontResolver implements FontEnv {
    * them, so a family never waits for its broken face.
    */
   async #round(fam: Family, ready: Set<string> | undefined): Promise<void> {
+    // Files read in this round: a face is read once even when the round tries again without a broken one.
+    const read = new Map<string, ArrayBuffer | string>();
     for (let guard = 0; guard <= fam.want.size && !this.#disposed; guard++) {
       const now = this.#now();
       const target = [...fam.want.entries()].filter(([k]) => (fam.failed.get(k)?.next ?? 0) <= now);
       if (!target.length) break;
       const keys = target.map(([k]) => k).sort();
-      if (
-        fam.active &&
-        fam.active.keys.length === keys.length &&
-        fam.active.keys.every((k, i) => k === keys[i])
-      )
-        break;
+      const active = fam.active;
+      if (active && active.keys.length === keys.length && active.keys.every((k, i) => k === keys[i])) break;
+      // A family that already draws loads its new and retried faces alone first, under a name never added
+      // to the face set: a face that fails again costs its own read, not the whole family's.
+      const fresh = active ? target.filter(([k]) => !active.keys.includes(k)) : [];
+      if (fresh.length && fresh.length < target.length) {
+        const probed = await Promise.all(
+          fresh.map(([k, f]) => this.#loadFace(PROBE_NAME, k, f, read.get(k))),
+        );
+        if (this.#disposed) return;
+        let failed = 0;
+        for (const r of probed) {
+          if (r.face && r.data !== undefined) read.set(r.key, r.data);
+          else {
+            failed++;
+            this.#fail(fam, r.key, r.error);
+          }
+        }
+        if (failed) continue;
+      }
       const name = this.#freshName(fam, keys);
-      const results = await Promise.all(target.map(([k, f]) => this.#loadFace(name, k, f)));
+      const results = await Promise.all(target.map(([k, f]) => this.#loadFace(name, k, f, read.get(k))));
       if (this.#disposed) return;
       let bad = 0;
       for (const r of results) {
+        if (r.face && r.data !== undefined) read.set(r.key, r.data);
         if (r.face) continue;
         bad++;
         this.#fail(fam, r.key, r.error);
@@ -404,23 +439,44 @@ export class FontResolver implements FontEnv {
     this.#schedule(fam);
   }
 
+  /** Load one face under `name` from its file (or from `data` already read), each step bounded in time. */
   async #loadFace(
     name: string,
     key: string,
     file: FontFile,
-  ): Promise<{ key: string; file: FontFile; face?: FaceLike; error: string }> {
+    known?: ArrayBuffer | string,
+  ): Promise<{ key: string; file: FontFile; face?: FaceLike; data?: ArrayBuffer | string; error: string }> {
     try {
       const host = this.#host;
       if (!host?.set) throw new Error('no font face set here');
-      const data = await host.data(file);
+      const data = known ?? (await this.#timed(host.data(file), 'reading the font'));
       const descriptors: FontFaceDescriptors = { weight: String(file.weight), style: file.style };
       if (file.unicodeRange) descriptors.unicodeRange = file.unicodeRange;
       const face = (host.face ?? defaultFace)(name, data, descriptors);
-      await face.load();
-      return { key, file, face, error: '' };
+      await this.#timed(face.load(), 'loading the font');
+      return { key, file, face, data, error: '' };
     } catch (err) {
       return { key, file, error: String((err as Error)?.message ?? err).slice(0, 200) || 'failed' };
     }
+  }
+
+  /** `p`, or a rejection after the host's timeout. */
+  #timed<T>(p: Promise<T>, what: string): Promise<T> {
+    const ms = this.#host?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const timer = this.#host?.timer ?? defaultTimer;
+    return new Promise<T>((resolve, reject) => {
+      const cancel = timer(() => reject(new Error(`${what} timed out after ${Math.round(ms / 1000)} s`)), ms);
+      p.then(
+        (v) => {
+          cancel();
+          resolve(v);
+        },
+        (e) => {
+          cancel();
+          reject(e);
+        },
+      );
+    });
   }
 
   #fail(fam: Family, key: string, error: string): void {
@@ -475,7 +531,10 @@ export class FontResolver implements FontEnv {
     fam.cancel = timer(
       () => {
         fam.cancel = null;
-        void this.#enqueue(fam);
+        fam.retrying = true;
+        void this.#enqueue(fam).finally(() => {
+          fam.retrying = false;
+        });
       },
       Math.max(0, due - this.#now()),
     );

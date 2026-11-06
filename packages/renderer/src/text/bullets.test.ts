@@ -75,6 +75,8 @@ describe('paraBullets', () => {
       italic: true,
       sizePct: 1,
       color: red,
+      lang: '',
+      run: 0,
     });
     expect(b).toMatchObject({
       text: '–',

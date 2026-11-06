@@ -61,6 +61,9 @@ function cutPieces(text: string, para: ItemPara, bidi: BidiPara): PreparedPara {
   const levels = bidi.levels;
   const ps = para.start;
   let b = 0;
+  // The end of the run of equal levels holding `at`: found once per run, not once per piece (a run cut
+  // into one-letter pieces by alternating scripts would be scanned again for every piece).
+  let levelEnd = ps;
   for (const sp of spans) {
     let at = sp.start;
     while (at < sp.end) {
@@ -68,12 +71,13 @@ function cutPieces(text: string, para: ItemPara, bidi: BidiPara): PreparedPara {
       const brk = b < breaks.length ? breaks[b]! : Number.POSITIVE_INFINITY;
       let end = Math.min(sp.end, brk);
       const level = levels ? levels[at - ps]! : bidi.level;
-      if (levels)
-        for (let k = at + 1; k < end; k++)
-          if (levels[k - ps] !== level) {
-            end = k;
-            break;
-          }
+      if (levels) {
+        if (at >= levelEnd) {
+          levelEnd = at + 1;
+          while (levelEnd < para.end && levels[levelEnd - ps] === level) levelEnd++;
+        }
+        end = Math.min(end, levelEnd);
+      }
       const sc = scriptCut(text, at, end);
       end = sc.end;
       let trail = end;
@@ -309,8 +313,21 @@ function inRanges(cp: number, ranges: readonly (readonly [number, number])[]): b
 const TRANSPARENT = /[\p{Mn}\p{Me}\p{Cf}]/u;
 const LETTER = /\p{L}/u;
 
+/** `joiningType` by code point: every measured string of a cut asks for it, and text repeats its letters. */
+const joiningCache = new Map<number, JoiningType>();
+
 /** The joining type of a code point, for Arabic, Syriac, N'Ko, Mongolian and Adlam (other scripts: U or T). */
 export function joiningType(cp: number): JoiningType {
+  let t = joiningCache.get(cp);
+  if (t === undefined) {
+    t = joiningTypeOf(cp);
+    if (joiningCache.size >= 4096) joiningCache.clear();
+    joiningCache.set(cp, t);
+  }
+  return t;
+}
+
+function joiningTypeOf(cp: number): JoiningType {
   if (cp === 0x200d) return 'C';
   if (cp === 0x200c) return 'U';
   const joining =

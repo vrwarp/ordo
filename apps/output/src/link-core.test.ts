@@ -177,6 +177,39 @@ describe('link worker core', () => {
     t.close();
   });
 
+  it('quarantines a slide whose drawing keeps restarting the asset worker', async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ['setInterval', 'Date'] });
+    const t = setup();
+    await t.core.start();
+    t.hub.emit('state', stateMsg(slideLive(0)));
+    await tick();
+    const job = t.toAsset.find((m) => m.t === 'job' && m.job.kind === 'slide' && m.job.cueIndex === 0);
+    const key = job?.t === 'job' ? job.job.key : '';
+    expect(key).not.toBe('');
+    const channels: MessageChannel[] = [];
+    for (let gen = 1; gen <= 3; gen++) {
+      // The worker missed its heartbeat while drawing the slide: the supervisor restarted it.
+      const render = new MessageChannel();
+      const asset = new MessageChannel();
+      asset.port2.onmessage = (e) => t.toAsset.push(e.data);
+      channels.push(render, asset);
+      t.toAsset.length = 0;
+      t.core.onPorts(render.port1, asset.port1, { link: 0, render: 0, asset: gen });
+      vi.setSystemTime(Date.now() + 3100); // past the retry wait: the slide is armed again
+      t.core.sync();
+      await tick(20);
+      if (gen < 3) expect(t.toAsset.some((m) => m.t === 'job' && m.job.key === key)).toBe(true);
+    }
+    expect((t.core.introspect() as { quarantined: string[] }).quarantined).toEqual([key]);
+    expect(t.toAsset.some((m) => m.t === 'job' && m.job.key === key)).toBe(false);
+    for (const c of channels) {
+      c.port1.close();
+      c.port2.close();
+    }
+    t.close();
+  });
+
   it('measures main-thread stalls from the host ticks', async () => {
     const t = setup();
     t.core.onTick();

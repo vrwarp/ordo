@@ -37,7 +37,45 @@ export const IMPORT_LIMITS = {
   runs: 2000,
   paras: 5000,
   fallbackFonts: 8,
+  /** Distinct run and bullet families, and run size scales, of one text object (the render plan's bounds). */
+  runFamilies: 16,
+  sizeScales: 64,
 } as const;
+
+/**
+ * The distinct fonts one text object may name, shared by its runs and bullets (the render plan's
+ * `FontBudget`): families past `runFamilies` are dropped (the box's or the first run's is used), size scales
+ * past `sizeScales` take the nearest one kept. Each new family or size costs a drawer a font lookup.
+ */
+export type FontBudget = { family(f: string): string; scale(s: number): number };
+
+export function fontBudget(): FontBudget {
+  const families = new Set<string>();
+  const scales = new Set<number>();
+  return {
+    family(f) {
+      const k = f.trim().toLowerCase();
+      if (!k || families.has(k)) return f;
+      if (families.size >= IMPORT_LIMITS.runFamilies) return '';
+      families.add(k);
+      return f;
+    },
+    scale(v) {
+      if (scales.has(v) || scales.size < IMPORT_LIMITS.sizeScales) {
+        scales.add(v);
+        return v;
+      }
+      let best = v;
+      let d = Number.POSITIVE_INFINITY;
+      for (const x of scales)
+        if (Math.abs(x - v) < d) {
+          d = Math.abs(x - v);
+          best = x;
+        }
+      return best;
+    },
+  };
+}
 
 export function finite(v: unknown, def: number, lo = -Number.MAX_VALUE, hi = Number.MAX_VALUE): number {
   const n = typeof v === 'number' && Number.isFinite(v) ? v : def;
@@ -130,9 +168,14 @@ export function clampStyle(s: TextStyle): TextStyle {
  * Cut style runs to a text of `len` UTF-16 units, as the text was cut: a run whose start is at or past the
  * cut is dropped and its end is clamped. Runs that are empty, unsorted or overlap an earlier run are dropped
  * too, and numbers are bounded: `sizeScale` keeps the run's size (`fontSizePx` × it) within the import's
- * font size limits.
+ * font size limits, and families and size scales stay within the object's `FontBudget`.
  */
-export function cutRuns(runs: readonly TextRun[], len: number, fontSizePx = 64): TextRun[] {
+export function cutRuns(
+  runs: readonly TextRun[],
+  len: number,
+  fontSizePx = 64,
+  budget: FontBudget = fontBudget(),
+): TextRun[] {
   const fs = finite(fontSizePx, 64, IMPORT_LIMITS.fontSizeMin, IMPORT_LIMITS.fontSizeMax);
   const minScale = Math.max(0.01, IMPORT_LIMITS.fontSizeMin / fs);
   const maxScale = Math.min(50, IMPORT_LIMITS.fontSizeMax / fs);
@@ -143,9 +186,13 @@ export function cutRuns(runs: readonly TextRun[], len: number, fontSizePx = 64):
     if (!Number.isInteger(r.start) || !Number.isInteger(r.end)) continue;
     if (r.start < at || r.start >= len || r.end <= r.start) continue;
     const run: TextRun = { ...r, end: Math.min(r.end, len) };
-    if (r.fontFamily !== undefined) run.fontFamily = clipText(r.fontFamily, IMPORT_LIMITS.fontFamily);
+    if (r.fontFamily !== undefined) {
+      const family = budget.family(clipText(r.fontFamily, IMPORT_LIMITS.fontFamily));
+      if (family) run.fontFamily = family;
+      else delete run.fontFamily;
+    }
     if (r.fontWeight !== undefined) run.fontWeight = finite(r.fontWeight, 400, 100, 900);
-    if (r.sizeScale !== undefined) run.sizeScale = finite(r.sizeScale, 1, minScale, maxScale);
+    if (r.sizeScale !== undefined) run.sizeScale = budget.scale(finite(r.sizeScale, 1, minScale, maxScale));
     if (r.color) run.color = clampColor(r.color);
     if (r.highlight) run.highlight = clampColor(r.highlight);
     if (r.baseline !== undefined) run.baseline = finite(r.baseline, 0, -1, 1);
@@ -166,8 +213,15 @@ export function cutRuns(runs: readonly TextRun[], len: number, fontSizePx = 64):
   return out;
 }
 
-/** Paragraph styles for `text`: at most one per paragraph (extra ones are dropped), numbers bounded. */
-export function cutParas(paras: readonly (TextPara | null)[], text: string): (TextPara | null)[] {
+/**
+ * Paragraph styles for `text`: at most one per paragraph (extra ones are dropped), numbers bounded, bullet
+ * families within the object's `FontBudget`.
+ */
+export function cutParas(
+  paras: readonly (TextPara | null)[],
+  text: string,
+  budget: FontBudget = fontBudget(),
+): (TextPara | null)[] {
   let count = 1;
   for (let i = text.indexOf('\n'); i >= 0 && count < IMPORT_LIMITS.paras; i = text.indexOf('\n', i + 1))
     count++;
@@ -191,7 +245,11 @@ export function cutParas(paras: readonly (TextPara | null)[], text: string): (Te
       }
       if (b.auto !== undefined) b.auto = clipText(b.auto, 40);
       if (b.startAt !== undefined) b.startAt = Math.round(finite(b.startAt, 1, 1, 32_767));
-      if (b.fontFamily !== undefined) b.fontFamily = clipText(b.fontFamily, IMPORT_LIMITS.fontFamily);
+      if (b.fontFamily !== undefined) {
+        const family = budget.family(clipText(b.fontFamily, IMPORT_LIMITS.fontFamily));
+        if (family) b.fontFamily = family;
+        else delete b.fontFamily;
+      }
       if (b.color) b.color = clampColor(b.color);
       if (b.sizePct !== undefined) b.sizePct = finite(b.sizePct, 1, 0.1, 4);
       out.bullet = b;
@@ -204,8 +262,9 @@ export function cutParas(paras: readonly (TextPara | null)[], text: string): (Te
 export function cutText(o: TextObject, max: number): TextObject {
   const text = clipText(o.text, max);
   const out: TextObject = { ...o, text };
-  if (o.runs) out.runs = cutRuns(o.runs, text.length, o.style.fontSizePx);
-  if (o.paras) out.paras = cutParas(o.paras, text);
+  const budget = fontBudget();
+  if (o.runs) out.runs = cutRuns(o.runs, text.length, o.style.fontSizePx, budget);
+  if (o.paras) out.paras = cutParas(o.paras, text, budget);
   return out;
 }
 

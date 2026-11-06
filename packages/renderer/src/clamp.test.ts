@@ -4,6 +4,7 @@ import { DEFAULT_LYRIC_STYLE, LOOK_MAIN, type Slide, type TextObject } from '@or
 import {
   CLAMP,
   clampBox,
+  clampFamily,
   clampLook,
   clampObject,
   clampParas,
@@ -117,6 +118,47 @@ describe('rich text clamps (design/27 §3.2)', () => {
       ),
       { numRuns: 300 },
     );
+  });
+
+  it('keeps at most 16 distinct run and bullet families and 64 size scales per object', () => {
+    const runs = Array.from({ length: 2000 }, (_, i) => ({
+      start: i * 5,
+      end: i * 5 + 4,
+      fontFamily: `Family ${i}`,
+      sizeScale: 0.5 + i / 2000,
+    }));
+    const o = clampObject({
+      id: 't',
+      type: 'text',
+      box: { x: 0, y: 0, w: 100, h: 100, rotation: 0 },
+      text: 'x'.repeat(10_000),
+      style: DEFAULT_LYRIC_STYLE,
+      opacity: 1,
+      runs,
+      paras: [{ bullet: { char: '•', fontFamily: 'Bullet Face' } }],
+    }) as TextObject;
+    const families = new Set(o.runs!.map((r) => r.fontFamily).filter((f) => f !== undefined));
+    expect(families.size).toBe(CLAMP.maxRunFamilies);
+    expect(o.runs![16]!.fontFamily).toBeUndefined(); // the box family
+    expect(new Set(o.runs!.map((r) => r.sizeScale)).size).toBe(CLAMP.maxSizeScales);
+    expect(o.runs![1999]!.sizeScale).toBe(o.runs![63]!.sizeScale); // the nearest kept scale
+    expect(o.paras![0]!.bullet).toEqual({ char: '•' }); // over the budget: the first run's family
+    // Case does not make a family distinct.
+    const same = clampRuns(
+      Array.from({ length: 40 }, (_, i) => ({ start: i, end: i + 1, fontFamily: i % 2 ? 'ARIAL' : 'arial' })),
+      40,
+      72,
+    );
+    expect(same.every((r) => r.fontFamily !== undefined)).toBe(true);
+  });
+
+  it('strips every control character from family names, so a font string stays valid', () => {
+    expect(clampFamily('A\fB\u0000C\u0085D"E\\F\nG\tH')).toBe('ABCDEFGH');
+    expect(clampFamily('\u0001\u0002')).toBe('');
+    expect(clampStyle({ ...DEFAULT_LYRIC_STYLE, fontFamily: '\u000c' }).fontFamily).toBe(
+      clampStyle({}).fontFamily,
+    );
+    expect(clampStyle({ ...DEFAULT_LYRIC_STYLE, fontFamily: 'Open\fSans' }).fontFamily).toBe('OpenSans');
   });
 
   it('caps paragraph styles at the paragraphs and at maxParas', () => {

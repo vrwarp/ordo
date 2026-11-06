@@ -4,11 +4,18 @@ import type { TextObject, TextPara, TextRun } from './schemas.ts';
  * Editing the plain text of a text object without losing its formatting (design/27 §11 item 1). `runs`
  * annotate `text` by UTF-16 offsets and `paras[i]` styles the i-th '\n' piece, so every change to the text
  * shifts, trims or splits them in the same step:
- * - inserted text takes the style of the character before it (or after it, at offset 0);
+ * - text that replaces a selection takes the style of the text it replaces (its first character), so
+ *   retyping a bold date or a raised verse number keeps it bold or raised; text typed at a paragraph's
+ *   start takes the style of that paragraph's first character, or in an empty paragraph its end mark (the
+ *   run itemize sizes the empty line by); anywhere else, the style of the character before it;
  * - runs inside a deleted range are trimmed, and dropped when nothing of them is left;
  * - paragraph styles are inserted or removed with the '\n' count: a new line copies the style of the
  *   paragraph it splits, and paragraphs merged by a deletion keep the first one's style, unless that one
  *   was deleted whole (deleting a line keeps the next line's style);
+ * - a soft paragraph (PowerPoint's a:br) is a line of the paragraph before it: deleting the first line of
+ *   a paragraph whose next line is soft leaves that line the paragraph's style (its bullet, indents and
+ *   spacing), and a new line split from a soft line takes its paragraph's style without `soft`, so Enter
+ *   always starts a new paragraph;
  * - the box style is untouched, so `fitScale` is kept: the engine keeps it while the text still fits
  *   (§6 step 10) and only 'Re-fit text' clears it.
  * An object without `runs` and `paras` gets its new text and nothing else, so a legacy object never turns
@@ -139,11 +146,10 @@ function validRuns(runs: readonly TextRun[], len: number): TextRun[] {
 function shiftRuns(runs: readonly TextRun[], old: string, p: number, q: number, ins: number): TextRun[] {
   const valid = validRuns(runs, old.length);
   const delta = ins - (q - p);
-  // The run whose style inserted text takes: the one over the character before it, else (at offset 0) the
-  // one over the first character after the deleted range.
+  // The run whose style the inserted text takes (the rules at the top of this file).
   let owner = -1;
   if (ins > 0) {
-    const at = p > 0 ? p - 1 : q < old.length ? q : -1;
+    const at = ownerOffset(old, p, q);
     if (at >= 0) owner = valid.findIndex((r) => r.start <= at && at < r.end);
   }
   const out: TextRun[] = [];
@@ -163,6 +169,17 @@ function shiftRuns(runs: readonly TextRun[], old: string, p: number, q: number, 
   return out;
 }
 
+/**
+ * The offset of `old` whose run styles text inserted in place of [p, q): the first replaced character; at a
+ * paragraph's start its first character, or for an empty paragraph its end mark (the '\n' ending it, else
+ * for the last paragraph the '\n' before it, as itemize.ts `endMark`); else the character before. -1: none.
+ */
+function ownerOffset(old: string, p: number, q: number): number {
+  if (q > p) return p;
+  if (paraStart(old, p)) return p < old.length ? p : p - 1;
+  return p - 1;
+}
+
 /** Paragraph styles after text[p, q) of `old` is replaced by `insert`. */
 function shiftParas(
   paras: readonly (TextPara | null)[],
@@ -176,20 +193,39 @@ function shiftParas(
   if (!removed && !added) return paras as (TextPara | null)[];
   const k = newlines(old, 0, p); // the paragraph the change starts in
   const at = (i: number) => paras[i] ?? null;
-  const copy = (s: TextPara | null) => (s ? { ...s } : null);
+  const soft = (i: number) => i > 0 && at(i)?.soft === true;
   const first = at(k);
   const last = at(k + removed);
   let pieces: (TextPara | null)[];
   if (!added) {
     // Paragraphs k..k+removed become one. It keeps paragraph k's style unless paragraph k was deleted whole
-    // (the deletion starts at its start and nothing is typed in its place).
-    pieces = [paraStart(old, p) && !insert ? last : first];
+    // (the deletion starts at its start and nothing is typed in its place): then paragraph k+removed's, or
+    // when that one is a soft line, the style of the paragraph it is a line of when that paragraph was
+    // deleted too (its first line went, the rest of it stays one paragraph with its bullet and indents).
+    let keep = first;
+    if (paraStart(old, p) && !insert) {
+      keep = last;
+      if (soft(k + removed)) {
+        let h = k + removed - 1;
+        while (h > k && soft(h)) h--;
+        keep = at(h);
+      }
+    }
+    pieces = [keep];
   } else {
-    // The first piece keeps paragraph k's start, new lines copy the paragraph they split, the last piece
-    // ends with paragraph k+removed's end.
+    // The first piece keeps paragraph k's start, new lines copy the paragraph they split (a soft line's
+    // paragraph, without `soft`), the last piece ends with paragraph k+removed's end.
+    let h = k;
+    while (soft(h)) h--;
+    const split = (): TextPara | null => {
+      const { soft: _, ...own } = first ?? {};
+      const { soft: __, ...base } = h === k ? {} : (at(h) ?? {});
+      const s = { ...base, ...own };
+      return first || h !== k ? s : null;
+    };
     pieces = [first];
-    for (let i = 1; i < added; i++) pieces.push(copy(first));
-    pieces.push(removed ? last : copy(first));
+    for (let i = 1; i < added; i++) pieces.push(split());
+    pieces.push(removed ? last : split());
   }
   if (paras.length <= k && pieces.every((x) => x === null)) return paras as (TextPara | null)[];
   const head = Array.from({ length: Math.min(k, MAX_PARAS) }, (_, i) => at(i));

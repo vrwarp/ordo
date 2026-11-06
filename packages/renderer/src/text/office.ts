@@ -46,7 +46,7 @@ const FIT_STEPS = 10;
 /** The font scale is rounded to a tenth of a point of the shape's default size, 18 pt for PowerPoint. */
 const FIT_OBJECT_PT = 18;
 /** The smallest font scale the schema stores (`fitScale.font`). */
-const MIN_FONT_SCALE = 0.01;
+export const MIN_FONT_SCALE = 0.01;
 
 /** Shrink-to-fit scales. */
 export type FitScale = { font: number; spacing: number };
@@ -145,6 +145,7 @@ export function searchFit(
  * - The stored `fitScale` (else full size) while the text fits at it.
  * - Else LibreOffice's search from full size, never larger than the stored font scale: a larger result is
  *   brought down to the stored scale with the widest spacing that fits there.
+ * - Never below `minFont` (look bands pass drawText's 0.5, so they shrink alike whatever the script).
  */
 export function autofit(
   style: TextStyle,
@@ -152,6 +153,7 @@ export function autofit(
   exactHeight: (fit: FitScale) => number,
   linearHeight: (fit: FitScale, ref: FitScale) => number,
   spacings: readonly number[] = FIT_SPACINGS,
+  minFont = MIN_FONT_SCALE,
 ): FitScale {
   if (style.autofit !== 'shrink') return NO_FIT;
   const stored = style.fitScale
@@ -172,5 +174,5 @@ export function autofit(
       }
     found = { font: stored.font, spacing };
   }
-  return { font: Math.max(MIN_FONT_SCALE, found.font), spacing: found.spacing };
+  return { font: Math.max(MIN_FONT_SCALE, minFont, found.font), spacing: found.spacing };
 }
