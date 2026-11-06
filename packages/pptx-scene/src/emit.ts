@@ -9,7 +9,7 @@
  *
  * - **Placement.** Every element's affine is mapped to the 1920x1080 logical canvas (`frame.ts`: contain-
  *   fit, 4:3 decks centred). Boxes keep their rotation; flips of symmetric shapes need nothing, a flipped
- *   picture is drawn unflipped (M3) and noted.
+ *   picture is written with `flipH` (a vertical flip is a horizontal one turned half a turn, `decompose`).
  * - **Rich text** (default): one `TextObject` per body, `richtext.ts`, its box the shape's text rectangle
  *   (the preset's, turned a quarter for vertical text); insets and margins are written, not folded.
  * - **Legacy text** (`richText: false`): one `TextObject` per body in its dominant run's style (most
@@ -601,7 +601,6 @@ function emitElement(ctx: EmitCtx, e: Element, out: SlideObject[], texts: Emitte
 }
 
 function emitPicture(ctx: EmitCtx, e: PictureElement, out: SlideObject[]): void {
-  if (decompose(e.xf).flipH) ctx.log('a flipped picture is drawn unflipped (M3)');
   if (e.reasons?.some((r) => r.startsWith('mask:')))
     ctx.log(`a picture clipped to ${e.geom} is drawn as a rect (M3)`);
   if (e.picture.effects?.length) ctx.log('a recoloured picture is drawn without its recolouring (M3)');
@@ -786,14 +785,18 @@ function pictureObject(
   const placed = placePicture(ctx.crop ? p : { ...p, crop: undefined });
   if (!placed) return undefined;
   const [x0, y0, x1, y1] = placed.rect;
-  let box = boxPx(ctx.frame, multiply(xf, [x1 - x0, 0, 0, y1 - y0, x0, y0]));
+  const m = multiply(xf, [x1 - x0, 0, 0, y1 - y0, x0, y0]);
+  let box = boxPx(ctx.frame, m);
+  // A mirrored picture: `flipH` about the box's centre (the box's rotation carries a vertical flip).
+  const flipH = decompose(m).flipH;
   let crop = ctx.crop ? placed.crop : undefined;
   if (outsideClamp(box)) {
     if (box.rotation === 0 && geom === 'rect' && ctx.crop) {
-      const cut = cutToClamp(box, crop);
+      // The crop names the source's sides; a mirrored box cuts its left side from the source's right.
+      const cut = cutToClamp(box, flipH ? mirrorX(crop) : crop);
       if (!cut) return undefined;
       box = cut.box;
-      crop = cut.crop;
+      crop = flipH ? mirrorX(cut.crop) : cut.crop;
     } else ctx.log('a picture reaching far past the slide is drawn squeezed into the render bounds');
   }
   box = clampBox(box);
@@ -806,13 +809,30 @@ function pictureObject(
     opacity: bound(p.alpha ?? 1, 0, 1),
     radius: 0,
   };
-  if (geom === 'roundRect') o.radius = cornerRadius(box, adj);
-  else if (geom === 'ellipse') o.radius = bound(Math.min(box.w, box.h) / 2, 0, MAX_COORD);
+  // The mask, with the legacy `radius` an older build draws beside it (design/27 §3.2).
+  if (geom === 'roundRect') {
+    o.radius = cornerRadius(box, adj);
+    o.mask = adj?.some(([n]) => n === 'adj')
+      ? {
+          preset: 'roundRect',
+          adj: [['adj', Math.min(50_000, Math.max(0, adjOf(adj, 'adj', ROUND_RECT_ADJ)))]],
+        }
+      : { preset: 'roundRect' };
+  } else if (geom === 'ellipse') {
+    o.radius = bound(Math.min(box.w, box.h) / 2, 0, MAX_COORD);
+    o.mask = { preset: 'ellipse' };
+  }
+  if (flipH) o.flipH = true;
   if (crop) {
     const c = (v: number) => bound(v, -1, 1);
     o.crop = { l: c(crop.l), t: c(crop.t), r: c(crop.r), b: c(crop.b) };
   } else if (!ctx.crop && p.crop) ctx.log('a cropped picture is drawn uncropped');
   return o;
+}
+
+/** A crop with its left and right shares swapped (the crop of a mirrored picture seen from its box). */
+function mirrorX(c: Insets | undefined): Insets | undefined {
+  return c && { l: c.r, t: c.t, r: c.l, b: c.b };
 }
 
 /** Whether a box reaches past the render clamp's bounds (±2× the canvas), where it would be squeezed. */

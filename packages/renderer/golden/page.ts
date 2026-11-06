@@ -1,5 +1,7 @@
 import {
+  type Box,
   DEFAULT_LYRIC_STYLE,
+  type ImageObject,
   LOOK_LOWER_THIRD,
   LOOK_MAIN,
   LOOK_STAGE,
@@ -11,7 +13,7 @@ import {
 import { type PictureTarget, preparePicture } from '../src/picture.ts';
 import { type PropsModel, propBox } from '../src/props.ts';
 import { rasterImage, rasterLowerThird, rasterProps, rasterSlide } from '../src/raster.ts';
-import { type Ctx2D, drawText, fillColor } from '../src/text2d.ts';
+import { type Ctx2D, drawImageFit, drawObject, drawText, fillColor } from '../src/text2d.ts';
 import { type FontFile, FontResolver, LEGACY_FONT_ENV, installFontEnv } from '../src/text/fonts.ts';
 import { RICH_STYLE_KEYS } from '../src/text/rich.ts';
 import { CONTENT_CASES } from './content-cases.ts';
@@ -242,6 +244,109 @@ let quadrantsImage: OffscreenCanvas | undefined;
 const cropImages = (id: string) => (id === 'quadrants' ? (quadrantsImage ??= quadrants()) : undefined);
 
 /**
+ * Pictures with masks and flips (design/27 §3.1 `ImageObject.mask`, `flipH`, `flipV`; M4 item D), with crops,
+ * rotation, radius and opacity: an ellipse, rounded rects (their own corner and the default), mirrors on
+ * either axis and both. The quadrants tell the sides apart, so a mirror shows. Each box is outlined.
+ */
+const shaped: Slide = (() => {
+  const box = (x: number, y: number, rotation = 0) => ({ x, y, w: 560, h: 420, rotation });
+  const boxes = [
+    box(60, 60),
+    box(680, 60),
+    box(1300, 60, 12),
+    box(60, 600, -10),
+    box(680, 600),
+    box(1300, 600),
+  ];
+  const image = (id: string, b: Box, fit: 'contain' | 'cover' | 'stretch', extra: Partial<ImageObject>) =>
+    ({
+      id,
+      type: 'image',
+      box: b,
+      mediaId: 'quadrants',
+      fit,
+      opacity: 1,
+      radius: 0,
+      ...extra,
+    }) as ImageObject;
+  return {
+    id: 'shape',
+    objects: [
+      {
+        id: 'backdrop',
+        type: 'shape',
+        box: { x: 40, y: 40, w: 1840, h: 1000, rotation: 0 },
+        shape: 'rect',
+        fill: { r: 30, g: 90, b: 110, a: 1 },
+        opacity: 1,
+        radius: 0,
+      },
+      // An ellipse, stretched; the radius beside it is the legacy value and is not drawn.
+      image('ellipse', boxes[0]!, 'stretch', { mask: { preset: 'ellipse' }, radius: 200 }),
+      // A rounded rect with its own corner, cropped, cover-fitted and mirrored left to right.
+      image('round', boxes[1]!, 'cover', {
+        mask: { preset: 'roundRect', adj: [['adj', 30_000]] },
+        crop: { l: 0.1, t: 0, r: 0.2, b: 0.1 },
+        flipH: true,
+      }),
+      // Mirrored top to bottom, rotated, contain-fitted with a crop and round corners (no mask).
+      image('upside', boxes[2]!, 'contain', { flipV: true, crop: { l: 0, t: 0.25, r: 0, b: 0 }, radius: 40 }),
+      // Both mirrors, an ellipse, padded on two sides, rotated and translucent.
+      image('both', boxes[3]!, 'stretch', {
+        flipH: true,
+        flipV: true,
+        mask: { preset: 'ellipse' },
+        crop: { l: -0.2, t: 0, r: 0, b: -0.2 },
+        opacity: 0.8,
+      }),
+      // A plain mirror, stretched.
+      image('mirror', boxes[4]!, 'stretch', { flipH: true }),
+      // The default rounded rect, contain-fitted, padded on the left.
+      image('rounddefault', boxes[5]!, 'contain', {
+        mask: { preset: 'roundRect' },
+        crop: { l: -0.25, t: 0, r: 0, b: 0 },
+      }),
+      ...boxes.map((b, i) => ({
+        id: `frame${i}`,
+        type: 'shape' as const,
+        box: b,
+        shape: 'rect' as const,
+        stroke: { width: 4, color: { r: 255, g: 255, b: 255, a: 0.7 } },
+        opacity: 1,
+        radius: 0,
+      })),
+    ],
+  };
+})();
+
+/**
+ * The editor's canvas (`SlideCanvas`): each object a Konva node at its box centre, turned by the box's
+ * rotation, drawing itself in its unrotated local box at scale 1 inside the stage's scaled layer; a picture
+ * through `drawImageFit` with its flips and mask, the others through `drawObject`.
+ */
+function editorDraw(
+  ctx: Ctx2D,
+  slide: Slide,
+  scale: number,
+  images: (id: string) => CanvasImageSource | undefined,
+) {
+  for (const o of slide.objects) {
+    const b = o.box;
+    const local = { x: 0, y: 0, w: b.w, h: b.h, rotation: 0 };
+    ctx.save();
+    ctx.scale(scale, scale);
+    ctx.translate(b.x + b.w / 2, b.y + b.h / 2);
+    ctx.rotate(((b.rotation ?? 0) * Math.PI) / 180);
+    ctx.translate(-b.w / 2, -b.h / 2);
+    if (o.type === 'image') {
+      const img = images(o.mediaId);
+      if (img) drawImageFit(ctx, img, local, 1, o.fit, o.opacity, o.radius, o.crop, undefined, o);
+    } else drawObject(ctx, { ...o, box: local }, 1);
+    ctx.restore();
+  }
+}
+
+/**
  * The output's asset worker's lookup (design/27 §7.1): each unrotated picture prepared once at its device
  * rectangle and copied 1:1; rotated and round-cornered ones from the source. Drawing the crop slide with it
  * must look like drawing it from the source, so its expected PNG is `image-crop.png`.
@@ -323,7 +428,30 @@ export const CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2D) => v
     fillColor(ctx, LOOK_MAIN.clearColor, W, H);
     rasterSlide(ctx, cropped, LOOK_MAIN, SCALE, preparedImages, { isSong: false });
   },
+  // Masks and flips as the thumbnails draw them (the source lookup), as the outputs do (prepared pictures)
+  // and as the editor does: the three must agree (SAME_AS).
+  'image-shape': (ctx) => {
+    fillColor(ctx, LOOK_MAIN.clearColor, W, H);
+    rasterSlide(ctx, shaped, LOOK_MAIN, SCALE, cropImages, { isSong: false });
+  },
+  'image-shape-prepared': (ctx) => {
+    fillColor(ctx, LOOK_MAIN.clearColor, W, H);
+    rasterSlide(ctx, shaped, LOOK_MAIN, SCALE, preparedImages, { isSong: false });
+  },
+  'image-shape-editor': (ctx) => {
+    fillColor(ctx, LOOK_MAIN.clearColor, W, H);
+    editorDraw(ctx, shaped, SCALE, cropImages);
+  },
   ...CONTENT_CASES,
+};
+
+/**
+ * Cases compared with another case's PNG rather than one of their own: the same slide drawn by another
+ * drawer, which must look the same within the tolerance.
+ */
+export const SAME_AS: Record<string, string> = {
+  'image-shape-prepared': 'image-shape',
+  'image-shape-editor': 'image-shape',
 };
 
 /** The faces the runner injects: each family is also registered directly under its own name. */
@@ -434,6 +562,7 @@ type Golden = {
   size: { width: number; height: number };
   names(): string[];
   legacyNames(): string[];
+  sameAs(): Record<string, string>;
   fonts(files: GoldenFace[]): Promise<number>;
   render(name: string, env?: 'legacy' | 'resolver'): Promise<string>;
   invariance(): Invariance;
@@ -464,6 +593,7 @@ const golden: Golden = {
   size: { width: W, height: H },
   names: () => Object.keys(CASES),
   legacyNames: () => Object.keys(LEGACY_CASES),
+  sameAs: () => SAME_AS,
   async fonts(files) {
     let n = 0;
     const list: FontFile[] = [];

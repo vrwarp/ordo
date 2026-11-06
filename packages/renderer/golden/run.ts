@@ -165,13 +165,21 @@ async function main(): Promise<number> {
     console.log(`golden: ${loaded} font faces loaded (${fontList.join(', ')}); ${await browser.version()}`);
     const names = await page.evaluate(() => window.__golden.names());
     const legacy = new Set(await page.evaluate(() => window.__golden.legacyNames()));
+    const sameAs = await page.evaluate(() => window.__golden.sameAs());
     if (!names.length) return skip('no cases');
     mkdirSync(expectedDir, { recursive: true });
     let created = 0;
     for (const name of names) {
       const png = await page.evaluate((n) => window.__golden.render(n), name);
-      const file = join(expectedDir, `${name}.png`);
-      if (update || !existsSync(file)) {
+      // A case drawn by another drawer is compared with its original's PNG and never writes one.
+      const alias = sameAs[name];
+      const file = join(expectedDir, `${alias ?? name}.png`);
+      if (alias && !existsSync(file)) {
+        failures++;
+        console.error(`  ${name}: MISMATCH (no ${alias}.png to compare with)`);
+        continue;
+      }
+      if (!alias && (update || !existsSync(file))) {
         writeFileSync(file, Buffer.from(png, 'base64'));
         console.log(`  ${name}: ${update ? 'updated' : 'created (no expected image yet)'}`);
         if (!update) {
@@ -243,6 +251,7 @@ declare global {
     __golden: {
       names(): string[];
       legacyNames(): string[];
+      sameAs(): Record<string, string>;
       fonts(
         files: { family: string; weight: number; style: 'normal' | 'italic'; base64: string; hash: string }[],
       ): Promise<number>;

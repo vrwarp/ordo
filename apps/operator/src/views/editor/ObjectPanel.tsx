@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { BoxEditor, Check, ColorField, NumberField, Select } from '../../components/fields.tsx';
 import { TextStyleEditor } from '../../components/TextStyleEditor.tsx';
 import { useLibrary } from '../../state/library.ts';
-import { typeText } from './actions.ts';
+import { replacePictureWith, typeText } from './actions.ts';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { CropControl } from './CropControl.tsx';
 import { change, useEditor } from './editorStore.ts';
@@ -143,12 +143,14 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
             options={['contain', 'cover', 'stretch'] as const}
             onChange={(fit) => set((x) => ({ ...x, fit }) as SlideObject)}
           />
-          <NumberField
-            label="Corner radius"
-            value={o.radius}
-            min={0}
-            onChange={(radius) => set((x) => ({ ...x, radius }) as SlideObject)}
-          />
+          {!o.mask?.preset && (
+            <NumberField
+              label="Corner radius"
+              value={o.radius}
+              min={0}
+              onChange={(radius) => set((x) => ({ ...x, radius }) as SlideObject)}
+            />
+          )}
           <CropControl o={o} readOnly={readOnly} />
           {picking && (
             <MediaPickerDialog
@@ -156,12 +158,8 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
               kinds={['image']}
               onClose={() => setPicking(false)}
               onPick={(m) => {
-                // The old picture's crop does not fit the new one: it is dropped (design/27 §15 M3).
-                set((x) => {
-                  if (x.type !== 'image') return x;
-                  const { crop: _crop, ...rest } = x;
-                  return { ...rest, mediaId: m.id };
-                });
+                // Re-cropped to the box, never distorted; the mask, flips and the rest stay (design/27 §11).
+                if (!readOnly) replacePictureWith(o.id, m);
                 setPicking(false);
               }}
             />

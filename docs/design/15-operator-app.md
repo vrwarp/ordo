@@ -199,8 +199,28 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
   splits the runs and paragraph styles with the change, placed by the textarea's caret; splitting and
   merging slides cut and join them with the lines (design/27 §11).
 - Property panel bound to the selected object's schema.
-- Pictures are drawn with their crop (`ImageObject.crop`), as every other drawer draws them; 'Replace'
-  drops the old picture's crop, which does not fit the new one (design/27 §15 M3).
+- Pictures are drawn with their crop, flips and mask (`ImageObject.crop`, `flipH`, `flipV`, `mask`) by the
+  same `drawImageFit` every other drawer uses (design/27 §11 item 6; M4 item D, `CropControl.tsx`, pure ops
+  in `ops/pictures.ts`, one undo step each, the crop fields coalescing per picture). The Object panel's
+  image section has:
+  - Crop: Left, Right, Top and Bottom as percentages of the picture, named as seen on the slide (a
+    mirrored picture's Left is its source's right share), each kept short of its opposite side; a negative
+    share leaves that side empty. 'Reset crop' shows the whole picture. A stretched picture whose cropped
+    part is not the shape of its box (a 4:3 photo stretched over a 16:9 box) says so and offers 'Keep
+    proportions': the largest part of it with the box's aspect, centred where it is.
+  - 'Crop on the slide' (`aria-pressed`): the whole picture is drawn faintly around its box; dragging it
+    (or the box) moves the picture behind the box, the arrow keys move it by 1 px (Shift: 10), and eight
+    handles (30 px under a finger) scale it at its own aspect about the opposite corner or side, so the
+    handles never distort it. The box stays; the selection's Transformer is hidden meanwhile. Enter or
+    Escape, a click on another object or on the slide, or the button again ends it. Every handle has its
+    numeric field.
+  - Mask (a radio group): None, Ellipse, Rounded with its 'Corner size' (% of the shorter side). 'Corner
+    radius' is hidden under a mask, which draws the corners; removing a mask also drops a radius that was
+    only the importer's stand-in for it. Flip horizontal and Flip vertical are toggle buttons.
+  - 'Replace' keeps the look, not the crop numbers: a stretched picture is cover-cropped to its box,
+    centred on the old crop's centre, so a picture of another aspect is never distorted; a contained or
+    covered one keeps its fit and drops the crop. Box, mask, flips, opacity, radius and a video's clip stay.
+  - All of these are read-only on locked art and while the presentation is locked.
 - Saves via `PUT /presentations/:id` with `rev`; 409 shows the reload dialog.
 - Disabled with a banner when the presentation is referenced by the live playlist.
 - Media playing in place (design/27 §8, §11 item 14; `views/editor/MediaPanels.tsx`, pure ops in

@@ -17,7 +17,15 @@ import {
 import { CLAMP, clampBox, clampCrop, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
 import { drawableContent } from './content.ts';
 import { type Ctx2D, roundRect, setLetterSpacing, withRotation } from './ctx.ts';
-import { type PictureTarget, paintPicture, pictureFit, pictureTarget, preparedKey } from './picture.ts';
+import {
+  type PictureShape,
+  type PictureTarget,
+  paintPicture,
+  pictureCut,
+  pictureFit,
+  pictureTarget,
+  preparedKey,
+} from './picture.ts';
 import { firstStrong, hasStrongRtl } from './text/bidi.ts';
 import { LEGACY_FONT_ENV, currentFontEnv } from './text/fonts.ts';
 import { BAND_MIN_FONT_SCALE, bandObject, drawRichText, isRichStyle, isRichText } from './text/rich.ts';
@@ -297,11 +305,17 @@ export function drawText(
  * 9-argument `drawImage`; a crop that leaves nothing draws nothing. Without a crop the picture is drawn
  * exactly as before crops existed.
  *
+ * `shape` (an `ImageObject`'s `flipH`, `flipV` and `mask`, design/27 §3.1) mirrors the picture about the
+ * box's centre before the rotation, mask included, and cuts it to the mask (`pictureCut`: an ellipse or a
+ * rounded rect; `radius` applies only without a mask). The editor's image node passes the same fields, so
+ * the editor, the thumbnails and the outputs cut and mirror a picture alike.
+ *
  * `target` is the `pictureTarget` the caller asked its image lookup for. When `img` is a bitmap
  * `preparePicture` made for that target (same key: size, sub-pixel offset, fit and crop), it already holds
  * what the box shows at
  * device size: it is copied 1:1 at the target's whole-pixel origin, with no resampling and no clip
- * (design/27 §7.1). Any other image is drawn as the source, as above.
+ * (design/27 §7.1). Any other image is drawn as the source, as above. A masked or flipped picture has no
+ * target (`pictureTarget`), so it is always drawn from its source.
  */
 export function drawImageFit(
   ctx: Ctx2D,
@@ -313,6 +327,7 @@ export function drawImageFit(
   radius = 0,
   crop?: ImageCrop,
   target?: PictureTarget,
+  shape?: PictureShape,
 ): void {
   opacity = num(opacity, 0, 1, 1);
   if (target && preparedKey(img) === target.key) {
@@ -323,7 +338,7 @@ export function drawImageFit(
     return;
   }
   box = clampBox(box);
-  radius = num(radius, 0, CLAMP.maxRadius, 0);
+  const cut = pictureCut({ radius, mask: shape?.mask }, box.w, box.h);
   const c = clampCrop(crop);
   const bx = box.x * scale;
   const by = box.y * scale;
@@ -332,7 +347,17 @@ export function drawImageFit(
   ctx.save();
   ctx.globalAlpha = opacity;
   withRotation(ctx, box, scale, () => {
-    roundRect(ctx, bx, by, bw, bh, radius * scale);
+    const flipH = shape?.flipH === true;
+    const flipV = shape?.flipV === true;
+    if (flipH || flipV) {
+      ctx.translate(bx + bw / 2, by + bh / 2);
+      ctx.scale(flipH ? -1 : 1, flipV ? -1 : 1);
+      ctx.translate(-(bx + bw / 2), -(by + bh / 2));
+    }
+    if (cut.kind === 'ellipse') {
+      ctx.beginPath();
+      ctx.ellipse(bx + bw / 2, by + bh / 2, Math.abs(bw) / 2, Math.abs(bh) / 2, 0, 0, Math.PI * 2);
+    } else roundRect(ctx, bx, by, bw, bh, cut.radius * scale);
     ctx.clip();
     paintPicture(ctx, img, bx, by, bw, bh, pictureFit(fit), c);
   });
@@ -382,7 +407,7 @@ export function drawObject(ctx: Ctx2D, o: SlideObject, scale: number, images?: I
   else {
     const target = pictureTarget(o, scale);
     const img = images?.(o.mediaId, target);
-    if (img) drawImageFit(ctx, img, o.box, scale, o.fit, o.opacity, o.radius, o.crop, target);
+    if (img) drawImageFit(ctx, img, o.box, scale, o.fit, o.opacity, o.radius, o.crop, target, o);
   }
 }
 

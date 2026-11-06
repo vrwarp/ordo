@@ -1,6 +1,6 @@
-import { type Box, type ImageCrop, LOGICAL_HEIGHT, LOGICAL_WIDTH } from '@ordo/domain';
+import { type Box, type ImageCrop, LOGICAL_HEIGHT, LOGICAL_WIDTH, type ShapeGeom } from '@ordo/domain';
 
-import { CLAMP, clampBox, clampCrop, num } from './clamp.ts';
+import { CLAMP, clampBox, clampCrop, clampMask, num } from './clamp.ts';
 import type { Ctx2D } from './ctx.ts';
 
 /**
@@ -26,14 +26,51 @@ import type { Ctx2D } from './ctx.ts';
  * the 924 slides of worship shard 0 against LibreOffice, by up to 0.024 SSIM, against 24 slides by at
  * most 0.005 with the exact position.
  *
- * A rotated picture and one with round corners keep being drawn from the source through the transform and
- * the clip path (`drawImageFit`).
+ * A rotated picture and one with round corners, a mask or a flip keep being drawn from the source through
+ * the transform and the clip path (`drawImageFit`).
  */
 
 export type PictureFit = 'contain' | 'cover' | 'stretch';
 
+/**
+ * How a picture is cut and mirrored in its box (design/27 §3.1 `ImageObject.mask`, `flipH`, `flipV`):
+ * mirrored about the box's centre before the box's rotation, mask included.
+ */
+export type PictureShape = { mask?: ShapeGeom; flipH?: boolean; flipV?: boolean };
+
 /** What a picture's pixels depend on besides its source: an `ImageObject`, or a frame-filling picture. */
-export type PictureDraw = { box: Box; fit: PictureFit; crop?: ImageCrop; radius?: number };
+export type PictureDraw = { box: Box; fit: PictureFit; crop?: ImageCrop; radius?: number } & PictureShape;
+
+/** OOXML roundRect's default `adj`: the corner radius in 1/100,000 of the shorter side. */
+export const ROUND_RECT_ADJ = 16_667;
+
+/**
+ * The outline a picture is cut to in its `w` x `h` box (logical px), as every drawer cuts it (the 2D
+ * drawers, the editor and the video plane, `scene.ts`): an 'ellipse' mask is the box's ellipse; a
+ * 'roundRect' mask is a rect with corners of its 'adj' share (0..50,000) of the shorter side; another
+ * preset is the box itself until M6 draws presets; without a preset the box with `radius` corners.
+ */
+export function pictureCut(
+  o: { radius?: number; mask?: ShapeGeom },
+  w: number,
+  h: number,
+): { kind: 'rect' | 'ellipse'; radius: number } {
+  const mask = clampMask(o.mask);
+  if (mask?.preset === 'ellipse') return { kind: 'ellipse', radius: 0 };
+  if (mask?.preset === 'roundRect') {
+    let adj = ROUND_RECT_ADJ;
+    for (const [name, v] of mask.adj ?? []) if (name === 'adj') adj = num(v, 0, 50_000, ROUND_RECT_ADJ);
+    const side = Math.min(Math.abs(w), Math.abs(h));
+    return { kind: 'rect', radius: Number.isFinite(side) ? (side * adj) / 100_000 : 0 };
+  }
+  if (mask?.preset !== undefined) return { kind: 'rect', radius: 0 };
+  return { kind: 'rect', radius: num(o.radius, 0, CLAMP.maxRadius, 0) };
+}
+
+/** Whether a picture is cut or mirrored beyond its box and `radius` (it is then drawn from its source). */
+export function isShapedPicture(o: PictureShape): boolean {
+  return o.flipH === true || o.flipV === true || clampMask(o.mask)?.preset !== undefined;
+}
 
 /**
  * The device pixels a picture is prepared for and copied to: the box's device rectangle widened to whole
@@ -71,15 +108,15 @@ export function pictureFit(fit: unknown): PictureFit {
 
 /**
  * The device pixels a picture is prepared for at `scale` (device px per logical px): undefined for a rotated
- * box, round corners (a clip path), an empty box, one entirely off the canvas or one over
- * `MAX_PREPARED_PIXELS`. Those are drawn from the source as before. Edges within 1e-6 px of a pixel boundary
+ * box, round corners, a mask or a flip (a clip path and a mirror), an empty box, one entirely off the canvas
+ * or one over `MAX_PREPARED_PIXELS`. Those are drawn from the source as before. Edges within 1e-6 px of a pixel boundary
  * are taken as on it, so float noise never widens a box by a pixel.
  */
 export function pictureTarget(o: PictureDraw, scale: number): PictureTarget | undefined {
   if (!(Number.isFinite(scale) && scale > 0)) return undefined;
   const box = clampBox(o.box);
   if (box.rotation) return undefined;
-  if (num(o.radius, 0, CLAMP.maxRadius, 0) > 0) return undefined;
+  if (num(o.radius, 0, CLAMP.maxRadius, 0) > 0 || isShapedPicture(o)) return undefined;
   const snap = (v: number) => (Math.abs(v - Math.round(v)) < 1e-6 ? Math.round(v) : v);
   const x0 = snap(box.x * scale);
   const y0 = snap(box.y * scale);
