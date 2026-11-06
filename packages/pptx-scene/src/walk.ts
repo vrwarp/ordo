@@ -18,8 +18,10 @@
  *   (`boxAffine`), as LibreOffice places it: PowerPoint has no shear (ungrouping turns every child back into
  *   a box and a rotation). A child the plain composed affine would shear (rotated in a group scaled
  *   unevenly) is still marked residual (design/27 §4), and drawn so in M1.
- * - Graphic frames are residual (charts, SmartArt, OLE), except tables, which `tables.ts` reads (M6): each
- *   table's objects form a group of their own, or join the top-level group they are in.
+ * - Graphic frames are residual (charts, OLE), except tables, which `tables.ts` reads (M6): each table's
+ *   objects form a group of their own, or join the top-level group they are in; and SmartArt whose deck
+ *   holds PowerPoint's drawing of it (M6, `smartart.ts`): its shapes are read like these, as the frame's
+ *   own group.
  *
  * Owned by work item C (inherit-emit).
  */
@@ -44,6 +46,7 @@ import type { Affine, Element, ElementBase, Fill, Line, ShapeElement, Support } 
 import { chooseAlternate } from './markup.ts';
 import { customPaths, knownPreset, MAX_SLIDE_PATH_POINTS, placeConnectors, readCxnRef } from './geom.ts';
 import { blipReader, blipReaderOf, readPicture } from './picture.ts';
+import { readSmartArt, type Walker } from './smartart.ts';
 import { readTable } from './tables.ts';
 import { readShadow, readTextBody, textChars } from './text.ts';
 import { child, num, path, type XNode } from './xml.ts';
@@ -77,6 +80,8 @@ export interface WalkState {
   background?: Fill;
   /** Custom geometry points so far (design/27 §12: 64k per slide; M6). */
   points?: number;
+  /** SmartArt drawings read so far (M6, `smartart.ts`: `ElementBase.diagram` numbers them). */
+  diagrams?: number;
 }
 
 const shows = (n: XNode | undefined) => n?.attrs.showMasterSp !== '0' && n?.attrs.showMasterSp !== 'false';
@@ -327,6 +332,11 @@ export function walkTree(
           st.out.push(readTable(ctx, el, own, (cx, cy) => boxAffine(map, { ...place, cx, cy })));
           break;
         }
+        // M6: SmartArt with PowerPoint's drawing of it is drawn natively (`smartart.ts`), its own group.
+        if (what === 'smartart' && depth < MAX_GROUP_DEPTH) {
+          const own = group ?? ++st.groups;
+          if (readSmartArt(ctx, el, from, xf, place, base, own, depth, st, WALKER)) break;
+        }
         st.out.push({ ...base, kind: 'residual', what, support: 'residual', reasons: [what] });
         break;
       }
@@ -339,6 +349,9 @@ export function walkTree(
       }
   }
 }
+
+/** What `smartart.ts` reads a drawing's shapes with. */
+const WALKER: Walker = { walkTree, readXfrm, boxAffine };
 
 function idxOf(idx: string | undefined): { idx?: string } {
   return idx === undefined ? {} : { idx: idx.slice(0, 20) };

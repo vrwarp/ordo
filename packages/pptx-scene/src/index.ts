@@ -11,7 +11,9 @@ import { classifySlide } from './classify.ts';
 import { slideContext } from './context.ts';
 import { type DeckInfo, readDeck, type SlideRef } from './deck.ts';
 import { readBackground } from './background.ts';
+import { bakeKey, type PictureBake } from './bake.ts';
 import {
+  BAKE_PREFIX,
   CLIP_PREFIX,
   type EmitOptions,
   type EmitResult,
@@ -25,7 +27,7 @@ import { clean, type Log, noteList } from './log.ts';
 import { openPackage, type PartSource } from './opc.ts';
 import { readSlideSounds } from './media.ts';
 import type { FaceMetrics, FaceSource } from './metrics.ts';
-import type { PictureHeader } from './picture.ts';
+import { MAX_DPI, MIN_DPI, type PictureHeader } from './picture.ts';
 import { readSlideTiming } from './timing.ts';
 import { walkSlide } from './walk.ts';
 
@@ -33,7 +35,8 @@ export type { BlipReader, ColorCtx } from './color.ts';
 export type { SlideCtx, Source } from './context.ts';
 export type { DeckInfo, SlideRef } from './deck.ts';
 export type { EmitOptions, EmitResult, EmittedSlide } from './emit.ts';
-export { CLIP_PREFIX, MEDIA_PREFIX } from './emit.ts';
+export { BAKE_PREFIX, CLIP_PREFIX, MEDIA_PREFIX } from './emit.ts';
+export type { BakeRaster, PictureBake, TileBake } from './bake.ts';
 export type { EmittedClip } from './media.ts';
 export { type PictureHeader, pictureSize } from './picture.ts';
 export * from './ir.ts';
@@ -139,8 +142,14 @@ function pictureSizes(
       const got = get(part);
       const ok = (n: unknown): n is number =>
         typeof n === 'number' && Number.isFinite(n) && n >= 1 && n <= MAX_PICTURE_SIDE;
-      if (got && ok(got.w) && ok(got.h))
+      if (got && ok(got.w) && ok(got.h)) {
         v = { w: got.w, h: got.h, ...(typeof got.alpha === 'boolean' ? { alpha: got.alpha } : {}) };
+        // M6: a stated resolution sizes tiles (`bake.ts`).
+        const dpi = got.dpi;
+        const okDpi = (n: unknown): n is number =>
+          typeof n === 'number' && Number.isFinite(n) && n >= MIN_DPI && n <= MAX_DPI;
+        if (dpi && okDpi(dpi.x) && okDpi(dpi.y)) v.dpi = { x: dpi.x, y: dpi.y };
+      }
     } catch {
       v = undefined; // a size the caller cannot read is unknown
     }
@@ -278,14 +287,28 @@ export function convertDeck(src: PartSource, opts: ConvertOptions = {}): Convert
     }
     return id;
   };
+  // Baked pictures numbered across the call too (one per part and recipe, M6).
+  const bakes = new Map<string, { id: string; part: string; bake: PictureBake }>();
+  const bakeId = (part: string, bake: PictureBake) => {
+    const key = bakeKey(part, bake);
+    let b = bakes.get(key);
+    if (!b) {
+      b = { id: opts.bakeId ? opts.bakeId(part, bake) : `${BAKE_PREFIX}${bakes.size + 1}`, part, bake };
+      bakes.set(key, b);
+    }
+    return b.id;
+  };
   const slides: EmittedSlide[] = [];
   for (const ref of r.refs) {
     const scene: DeckScene = { frame: r.frame, slides: [r.readSlide(ref)], sections: [], notes: [] };
-    slides.push(emitDeck(scene, { ...opts, newId, mediaId, clipId }).slides[0]!);
+    slides.push(emitDeck(scene, { ...opts, newId, mediaId, clipId, bakeId }).slides[0]!);
   }
   return {
     slides,
-    media: [...media].map(([part, id]) => ({ id, part })),
+    media: [
+      ...[...media].map(([part, id]) => ({ id, part })),
+      ...[...bakes.values()].map((b) => ({ id: b.id, part: b.part, bake: b.bake })),
+    ],
     slideRect: slideRect(r.frame),
     notes: [...r.notes],
     frame: r.frame,

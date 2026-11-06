@@ -111,10 +111,33 @@ export interface PictureFill {
   /**
    * The picture's size in pixels, read from its header when the part's bytes were present (not spilled),
    * else given by the caller. `alpha` (M3): the picture may have transparent pixels (an alpha channel or a
-   * transparent colour); undefined when the header did not tell.
+   * transparent colour); undefined when the header did not tell. `dpi` (M6): the resolution its header
+   * states (PNG `pHYs`, JPEG JFIF), which sizes a tile; undefined when it states none.
    */
-  px?: { w: number; h: number; alpha?: boolean };
+  px?: { w: number; h: number; alpha?: boolean; dpi?: { x: number; y: number } };
+  /**
+   * The blip's colour effects ordo bakes into a derived picture (M6, `bake.ts`), in document order, colours
+   * resolved: what `effects` names that a bake reproduces. Effects it does not reproduce stay in `effects`
+   * only (the picture is approx).
+   */
+  recolor?: Recolor[];
 }
+
+/**
+ * One colour effect of a blip (`a:blip` children, ECMA-376 §20.1.8), as the bake applies it (M6, `bake.ts`).
+ * Colours are resolved; shares are 0-1.
+ */
+export type Recolor =
+  /** `a:grayscl`: every pixel its luminance. */
+  | { kind: 'grayscale' }
+  /** `a:biLevel thresh`: white where the luminance reaches `threshold`, else black. */
+  | { kind: 'biLevel'; threshold: number }
+  /** `a:duotone`: the luminance mapped from the first colour (black) to the second (white). */
+  | { kind: 'duotone'; dark: Rgba; light: Rgba }
+  /** `a:clrChange`: pixels of colour `from` (within a tolerance) become `to`, its alpha included. */
+  | { kind: 'clrChange'; from: Rgba; to: Rgba }
+  /** `a:lum bright contrast`: brightness and contrast, -1..1 each. */
+  | { kind: 'lum'; bright: number; contrast: number };
 
 export interface Line {
   /** Line width in EMU (`a:ln w`; 12,700 = 1 pt). */
@@ -274,6 +297,12 @@ export interface ElementBase {
   support: Support;
   /** Why the element is approximated or residual (short words, e.g. 'gradFill', 'preset:star5'). */
   reasons?: string[];
+  /**
+   * Part of a SmartArt drawing drawn natively (M6, `smartart.ts`): every element of one graphic frame's
+   * drawing has the same number (one per frame among the elements of its `from`, from 1), and the frame's
+   * `shapeId`. The elements are a locked group and are drawn natively or by LibreOffice as a whole.
+   */
+  diagram?: number;
 }
 
 /** A `p:sp` or `p:cxnSp`: geometry with a fill and a line, and maybe text. */

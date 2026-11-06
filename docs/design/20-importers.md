@@ -181,7 +181,17 @@ objects instead of page pictures. The light `pptx-native` job (`apps/hub/src/ppt
   `source.native` (counts, the deck's area in the frame) with `source.log`;
 - lays a background picture with transparency on white (a bottom image) rather than using it as the slide
   background, and makes one background shared by every slide the presentation's background; with 'Extend
-  plain backgrounds to 16:9' (on by default) a plain background covers the whole frame of a 4:3 deck.
+  plain backgrounds to 16:9' (on by default) a plain background covers the whole frame of a 4:3 deck;
+- draws SmartArt from PowerPoint's own drawing of it (`ppt/diagrams/drawingN.xml`, named by the data
+  model's `dsp:dataModelExt`) as a locked group of ordinary shapes and pictures whose text stays editable,
+  each node's text in PowerPoint's text rectangle (`dsp:txXfrm`) and in the colours part's node text colour
+  (as LibreOffice takes it); a drawing with a residual shape (3D, vertical text) goes to the art whole, and
+  SmartArt without a drawing stays for LibreOffice;
+- bakes recoloured pictures (duotone, colour change, grayscale, black and white, brightness and contrast:
+  PowerPoint's recolour presets) and tiled picture fills (shapes and backgrounds, tiles sized by the
+  picture's stated resolution, else 96 per inch) into new prepared pictures, so they are drawn as PowerPoint
+  shows them by every build; transparency (`alphaModFix`) stays the image's opacity, and a picture that
+  cannot be baked is shown as it is, with a warning.
 
 Hybrid slides (a chart, SmartArt without a drawing, OLE, 3D, …) and picture slides then wait for the heavy
 `pptx-lo` follow-up, which adds LibreOffice art or page pictures as version 2.

@@ -56,6 +56,24 @@ export function png(
   ]);
 }
 
+/** A PNG of an RGBA raster (8 bits, straight alpha), rows unfiltered: the harness's baked pictures. */
+export function rasterPng(img: { width: number; height: number; data: Uint8Array }): Buffer {
+  const { width: w, height: h, data } = img;
+  const raw = Buffer.alloc((w * 4 + 1) * h);
+  for (let y = 0; y < h; y++) raw.set(data.subarray(y * w * 4, (y + 1) * w * 4), y * (w * 4 + 1) + 1);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', deflateSync(raw, { level: 3 })),
+    chunk('IEND', new Uint8Array()),
+  ]);
+}
+
 /** A colourful test picture: a diagonal gradient, a grid, and a disc (so crops and fits are visible). */
 export function testPicture(w: number, h: number, hue = 0): Buffer {
   return png(w, h, (x, y) => {

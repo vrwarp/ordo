@@ -10,6 +10,7 @@ import type { SceneFontFile } from './faces.ts';
 import type { ExtractedText, ImageObject } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import type { ArtInfo, ConvertResult, SlideClass } from '@ordo/pptx-scene';
+import type { PictureBake } from '@ordo/pptx-scene/bake.ts';
 import { MAX_XML_PART_BYTES } from '@ordo/pptx-scene/opc.ts';
 import type { RenderCopyPage } from '@ordo/pptx-scene/rendercopy.ts';
 import type { Logger } from 'pino';
@@ -381,6 +382,28 @@ export type ArtTaskOutput = {
   empty: boolean;
   /** With `ArtTaskInput.encode`: `image` as a PNG (RGBA, 8 bits). */
   png?: Uint8Array;
+};
+
+/**
+ * `pptx-bake` (M6, `bakeTask.ts`): a picture derived at import, a recoloured picture or a tiled fill
+ * (`@ordo/pptx-scene` `bake.ts`). The source is decoded by ffmpeg before the task, at the size the bake needs.
+ */
+export type BakeTaskInput = {
+  /** The source picture, RGBA (`channels` 4), straight alpha. */
+  source: RasterImage;
+  bake: PictureBake;
+  /** A tile's output size (the box at its display need); without a tile the output is the source's size. */
+  out?: { width: number; height: number };
+  /** The source's format (`clrChange`'s tolerance depends on it): png, jpeg, gif, webp, bmp, tiff. */
+  format: string;
+};
+export type BakeTaskOutput = {
+  /** The derived picture as a PNG (RGBA, or RGB when every pixel is opaque). */
+  png: Uint8Array;
+  width: number;
+  height: number;
+  /** Some pixel is not opaque. */
+  alpha: boolean;
 };
 
 /** A stub's error: the work item that will implement it (README.md). */

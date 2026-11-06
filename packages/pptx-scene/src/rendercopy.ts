@@ -34,6 +34,7 @@ import type { ElementRef, RectEmu } from './ir.ts';
 import { clean, noteList } from './log.ts';
 import { NS, USUAL_PREFIX } from './markup.ts';
 import { openPackage, type Package, type PartSource, type Rel, relType, SLIDE_CONTENT_TYPE } from './opc.ts';
+import { modelDrawingRelId } from './smartart.ts';
 import { child, num, path, type XNode } from './xml.ts';
 
 /** One printed page of the render copy. */
@@ -723,6 +724,13 @@ function writePage(
   b.put(name, writeXml(edited), SLIDE_CONTENT_TYPE);
   // Only what the page still uses: a removed element's picture or clip is not copied.
   const used = relIdsIn(edited);
+  // A kept SmartArt's drawing is named by its data model, not the slide (M6, `smartart.ts`): LibreOffice
+  // prints the drawing PowerPoint made rather than laying the diagram out itself.
+  for (const r of b.pkg.rels(ref.part))
+    if (used.has(r.id) && relType(r.type) === 'diagramData') {
+      const id = modelDrawingRelId(b.pkg, r.target);
+      if (id) used.add(id);
+    }
   const rels = [
     ...b.keptRels(ref.part, (r) => used.has(r.id) || relType(r.type) === 'slideLayout'),
     ...extraRels,

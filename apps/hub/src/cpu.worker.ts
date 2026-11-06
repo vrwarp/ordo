@@ -9,9 +9,10 @@ import { extractPptxText, importPro7, type Pro7ImportOptions } from '@ordo/impor
 import { annotatePptx } from '@ordo/pptx-render/annotate.ts';
 import { readFontFace } from './fonts/sfnt.ts';
 import { artTask } from './pptx/art.ts';
+import { bakeTask } from './pptx/bakeTask.ts';
 import { renderCopyTask } from './pptx/renderCopyTask.ts';
 import { sceneTask } from './pptx/sceneTask.ts';
-import type { ArtTaskInput, RenderCopyTaskInput, SceneTaskInput } from './pptx/shared.ts';
+import type { ArtTaskInput, BakeTaskInput, RenderCopyTaskInput, SceneTaskInput } from './pptx/shared.ts';
 
 type Req = { id: number; kind: string; input: Record<string, unknown>; __ordo?: unknown };
 
@@ -34,6 +35,8 @@ async function handle(m: Req): Promise<unknown> {
       return renderCopyTask(m.input as unknown as RenderCopyTaskInput);
     case 'pptx-art':
       return artTask(m.input as unknown as ArtTaskInput);
+    case 'pptx-bake':
+      return bakeTask(m.input as unknown as BakeTaskInput);
     default:
       throw new Error(`unknown task ${m.kind}`);
   }

@@ -67,6 +67,8 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 | `fallback.ts`       | `pptx-lo` and `pptx-reference` jobs, `sofficeToPdf` (hardened)                             | D      |
 | `renderCopyTask.ts` | Worker side of `pptx-render-copy`: `buildRenderCopy` + spilled media → .pptx               | D      |
 | `art.ts`            | Worker side of `pptx-art`: white/black alpha and bounding-box crop                         | D      |
+| `bakes.ts`          | `storeBakes`: recoloured pictures and tiled fills baked into new ready pictures (M6)       | M6b D  |
+| `bakeTask.ts`       | Worker side of `pptx-bake`: `@ordo/pptx-scene` `applyBake`, PNG encoding (M6)              | M6b D  |
 | `textRepair.ts`     | `pptx-text-repair` job, `pagesOf`, `readDeckText`, `slideBoxes`, `queueTextRepair`         | G      |
 | `reimport.ts`       | 'Re-import from PowerPoint' (M4, not this wave)                                            | M4     |
 
@@ -86,7 +88,7 @@ Contracts already in place (the scaffold):
   `ParseOptions.range`; `ElementRef` and `ArtInfo` (`ir.ts`); `EmittedSlide.art?: ArtInfo`;
   `rendercopy.ts` (`RenderCopyPage`, `RenderCopyResult`, `buildRenderCopy`).
 - Hub: the pool tasks `pptx-scene`, `pptx-render-copy`, `pptx-art` (`pool.ts` `CpuTasks`, timeouts
-  2 min / 2 min / 60 s; `cpu.worker.ts`); the job kinds `pptx-native` (light), `pptx-lo` (heavy),
+  2 min / 2 min / 60 s; `cpu.worker.ts`), and since M6 `pptx-bake` (60 s, `bakes.ts`); the job kinds `pptx-native` (light), `pptx-lo` (heavy),
   `pptx-reference` (heavy), `pptx-text-repair` (light), registered by `PptxImports`, which `ImportService`
   owns as `imports.pptx` with the live-lock check (`locked(presentationId)`) from `hub.ts` / `libproc.ts`;
   `@ordo/pptx-scene` is a hub dependency. `apps/hub/test/pptx-scaffold.test.ts` checks the wiring; every
@@ -556,6 +558,35 @@ What wires items A-C together:
   (`slideOnlyMedia` roles 'background', 'video', 'poster', 'sound', 'picture').
 - End to end (design/27 §14.12): `e2e/pptx-native.spec.ts` and `e2e/pptx-media.spec.ts` on synthetic
   probe decks (`e2e/pptxdecks.ts`), through the upload route on a hub with the bundled fonts.
+
+## M6 wave 2, item D: SmartArt and baked pictures (m6b/smartart-pictures)
+
+SmartArt with PowerPoint's drawing of it is converted natively by `@ordo/pptx-scene` (`smartart.ts`, its
+README): a locked group with editable text, nothing for the hub to do but spill the drawing's pictures
+(`sceneTask.ts` `scanDeck` follows each part's `diagramDrawing` relationships to their images). Recoloured
+pictures and tiled picture fills come out of the converter as placeholders `pptxmedia:bake<n>` with a recipe
+(`EmitResult.media` entries with `bake`), which step 4 turns into new prepared pictures (`bakes.ts`):
+- **Keys.** A bake stands in the job's part maps under `bakeMapKey(part, bake)` (`BAKE_KEY_PREFIX`, a NUL no
+  part name holds), so the drafts' maps, `saveVersion1`'s remap and the resume pairs (`PptxNativeProgress.media`)
+  carry bakes and parts alike, unchanged.
+- **Size.** A recoloured picture is made at the size the source is prepared at for the bake's own display need
+  (`targetSize`, measured with the source's size); a tiled fill at its box's need (3840 px wide), its height by
+  the box's aspect; both within `BAKE_LIMITS` (8,192 px a side, 16 MP).
+- **Steps.** Header check (`checkSource`; an animated WebP is not baked), the import's decode budget (shared
+  with the pictures), ffmpeg to raw RGBA at the size the bake reads (`pictureFile` `output: 'rgba'`: the
+  demuxer forced, `-max_pixels` from the header), pool task `pptx-bake` (60 s; `bakeTask.ts` applies the
+  recipe and encodes the PNG in the worker, RGB when every pixel is opaque), an opaque bake of a JPEG stored as
+  a JPEG, `addReadyPicture` (tag `pptx`).
+- **Dedup.** The baked item's `source` hash is SHA-256 of the source's hash and the recipe (`bakeHash`): a
+  re-import finds it without decoding; content hashes dedup as for every prepared picture. One part with one
+  recipe is one item, whatever boxes it fills.
+- **Failure.** A bake that fails (refused header, decode, pool, budget) logs `[warn] <part>: …; it is drawn
+  without its effects or tiles` and its placeholder gets the source part's plain picture (prepared then if
+  nothing else used it).
+- Tests: `apps/hub/test/pptx-bakes.test.ts` (the pool task on generated rasters; a deck with a duotone PNG,
+  a tiled shape fill of a generated checker, a grayscale JPEG and a SmartArt node filled with it, through the
+  real job: pixels, sizes, JPEG kept, one item per part and recipe, a re-import storing nothing new; an
+  animated WebP that is not baked shows its first frame with the warning).
 
 ## Not in this wave
 
