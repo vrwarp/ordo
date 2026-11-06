@@ -206,7 +206,7 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
   with `play`: the panel of any other names the one that plays and offers 'Play this one instead', which
   removes `play` from the others. A picture whose media is a video offers 'Play the video in the slide'.
   The Slide panel's Sound section picks an audio file for `Slide.audio` (Start, Loop, Volume, Mute, Plays
-  across N slides) and says that it stops playlist audio that is playing. Both panels say when the clip is
+  across N slides) and says that it stops playlist audio that is playing when it starts (as the slide goes live, or on F8 for an on-click sound). Both panels say when the clip is
   missing, still processing or failed (the slide then shows its poster or stays silent). Picture pickers
   list, open and upload images only (a dropped file of another kind is not uploaded); the canvas marks an
   object with `play` with a ▶ badge; the slide grid tags slides with `video` / `audio` (amber when the clip

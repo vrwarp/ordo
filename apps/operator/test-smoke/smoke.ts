@@ -21,6 +21,7 @@ import {
   Presentation,
   songFromParsed,
 } from '@ordo/domain';
+import { APP_VERSION } from '@ordo/protocol';
 
 const dist = fileURLToPath(new URL('../dist/', import.meta.url));
 const MIME: Record<string, string> = {
@@ -148,7 +149,7 @@ const snapshot = {
 };
 
 function apiResponse(path: string, method: string): unknown {
-  if (path === '/auth/me') return { role: 'operate', setupRequired: false, version: '0.1.0', domain: '' };
+  if (path === '/auth/me') return { role: 'operate', setupRequired: false, version: APP_VERSION, domain: '' };
   if (path === '/library/snapshot') return snapshot;
   if (path === `/presentations/${song.id}`) return song;
   if (path === `/presentations/${news.id}`) return news;

@@ -56,6 +56,18 @@ frame then shrinks to the fitted picture on that axis (exact for rect masks, app
 ones; an ellipse keeps the box frame). Known limitation: a clip with alpha shows the poster in base through
 its transparent parts.
 
+The plane fits the video with the clip's own size (the delivery's `Media.width` x `height`, carried by
+`SlideDesc.video` and the job's `video.w`/`h`), never with the poster's: the operator may give a playing
+object any poster picture, of another aspect. The poster's size is used only when the clip's is unknown, and
+the clip is stretched over the box only when neither is known. `encodePlane` refuses (returns false, a plane
+that draws nothing) a box under `MIN_PLANE_BOX` (1e-3 logical px) and any plane with a non-finite float, so
+untrusted geometry never reaches the WebGPU uniform as Infinity or NaN.
+
+A playing object below full opacity keeps its poster out of base, as `showWhenStopped: false` does: the
+video is mixed over base at that opacity (`c = video·w + base·(1 − w)`), so a poster in base would show its
+still frame through the moving picture. While such a clip has no frame (loading, after Clear media) nothing
+shows in its box; its slot's paused frame shows while it is stopped.
+
 ### The split
 
 `splitScene(objects, playIndex, { showWhenStopped, bounds })`: base = the objects below the playing one, the
@@ -109,14 +121,14 @@ playing), `host.ts`, `media.ts`, `host-protocol.ts`, `render.worker.ts`, `engine
 
 **(E) asset-scene.** `apps/output/src/asset.worker.ts` (`sceneParts` stub): with `job.video`, find the object,
 `splitScene` with measured text bounds, draw base and over (null when empty), `encodePlane` at the output
-scale with the poster's size, answer `SRC_SCENE` with `videoSlot`/`videoGen` from the job. Video
+scale with the clip's size, answer `SRC_SCENE` with `videoSlot`/`videoGen` from the job. Video
 ImageObjects draw their Media's poster on outputs: `slideImages` (link-core) maps a video to
 `stillFile(m)`; the operator thumbnail worker does the same.
 Done: `rasterScene` and `sceneSlides` in `scene-raster.ts` (the worker's `sceneParts` calls them on its
 surface, `transferToImageBitmap` as the take); text is measured with `layoutText`, and text using rich
 text fields that can draw past it (M2 runs, paragraph styles, the office line model, insets, no wrapping)
-counts as covering the whole frame until the measure uses the M2 layout. The plane uses the drawn poster's size; without a poster
-the clip is stretched until the slide is drawn again with it. The operator's `stillHash` is `stillFile`.
+counts as covering the whole frame until the measure uses the M2 layout. The plane uses the clip's size from
+the job (the drawn poster's size only when the clip's is unknown). The operator's `stillHash` is `stillFile`.
 Pixels: `scene-raster.browser.test.ts` (headless Chromium, skipped without one).
 
 **(F) frames-uploads.** `packages/renderer/src/engine.ts`: a 2-deep frame ring per slot presenting the newest

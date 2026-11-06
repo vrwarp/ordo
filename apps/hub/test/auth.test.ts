@@ -1,3 +1,4 @@
+import { APP_VERSION } from '@ordo/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { checkRouteAccess } from '../src/hub.ts';
 import { ipInCidr } from '../src/net.ts';
@@ -22,7 +23,11 @@ describe('auth', () => {
   it('runs first-run setup once, then logs in with either PIN', async () => {
     hub = await startHub({ devPin: undefined });
     const anon = client(hub.url);
-    expect(await anon.json('/auth/me')).toMatchObject({ role: null, setupRequired: true, version: '0.1.0' });
+    expect(await anon.json('/auth/me')).toMatchObject({
+      role: null,
+      setupRequired: true,
+      version: APP_VERSION,
+    });
     expect((await anon.fetch('/auth/pin', { method: 'POST', json: { pin: '123456' } })).status).toBe(409);
     const weak = await anon.fetch('/auth/setup', {
       method: 'POST',

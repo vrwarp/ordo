@@ -18,6 +18,8 @@ export type RenderTelemetry = {
   /** The slide cue the frame shows (-1 none) and the hub time of the frame that first drew it. */
   slideCue?: number;
   slideFlipAt?: number;
+  /** GPU memory of the compositor's layer and scene textures, MB (design/27 §13 budget); absent on 2D. */
+  gpuMB?: number;
 };
 
 export const EMPTY_TELEMETRY: RenderTelemetry = {
@@ -66,6 +68,7 @@ export type HealthReport = {
   mediaDurationMs?: number;
   error?: string;
   appVersion?: string;
+  gpuMB?: number;
 };
 
 export type ArmStatus = { ok: boolean; pending: string[]; error?: string };
@@ -113,6 +116,7 @@ export function buildHealth(i: HealthInputs): HealthReport {
     mediaDurationMs: i.mediaDurationMs === undefined ? undefined : Math.round(i.mediaDurationMs),
     error,
     appVersion: i.appVersion,
+    ...(i.render.gpuMB !== undefined ? { gpuMB: i.render.gpuMB } : {}),
   };
 }
 

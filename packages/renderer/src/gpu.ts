@@ -225,12 +225,6 @@ export function pipelineSources(): string[] {
 /** Mutable bind group descriptor whose source entries are swapped per draw (video and scenes). */
 type DynDesc = { desc: GPUBindGroupDescriptor; entries: GPUBindGroupEntry[] };
 
-/** Source kind index of a stack (t for bitmaps). */
-function kindOf(s: Stack<ImageBitmap>): number {
-  /* @hot */
-  return s.kind === SRC_VIDEO ? K_E : s.kind === SRC_SCENE ? K_V : K_T;
-}
-
 export type GpuInit = {
   canvas: OffscreenCanvas;
   width: number;
@@ -501,6 +495,11 @@ export class GpuCompositor implements Compositor {
     this.overBytes += 2 * this.width * this.height * 4;
   }
 
+  /** See Compositor.gpuBytes: two layer textures per layer, plus the over textures allocated. */
+  gpuBytes(): number {
+    return this.textures.length * 2 * this.width * this.height * 4 + this.overBytes;
+  }
+
   draw(f: FrameInputs): void {
     /* @hot */
     this.frameNo++;
@@ -547,14 +546,14 @@ export class GpuCompositor implements Compositor {
     const u = this.uniformData;
     const base = l * UNIFORM_SLOT_FLOATS;
     if (liveOn && outOn) {
+      const ka = this.kindOf(out, l, f);
+      const kb = this.kindOf(live, l, f);
       this.writeRect(out, f, base + U_RECT_A);
       this.writeRect(live, f, base + U_RECT_B);
-      if (out.kind === SRC_SCENE) this.writePlane(out, f, l, base + U_PLANE_A);
-      if (live.kind === SRC_SCENE) this.writePlane(live, f, l, base + U_PLANE_B);
+      if (ka === K_V) this.writePlane(out, f, l, base + U_PLANE_A);
+      if (kb === K_V) this.writePlane(live, f, l, base + U_PLANE_B);
       u[base + U_P] = w;
       u[base + U_P + 1] = 1;
-      const ka = kindOf(out);
-      const kb = kindOf(live);
       pass.setPipeline(this.pair[ka * 3 + kb]!);
       if (ka === K_T && kb === K_T) pass.setBindGroup(0, this.bgPairTT[l]![outIdx]!);
       else {
@@ -568,11 +567,11 @@ export class GpuCompositor implements Compositor {
     }
     const s = liveOn ? live : out;
     const sIdx = liveOn ? liveIdx : outIdx;
+    const k = this.kindOf(s, l, f);
     this.writeRect(s, f, base + U_RECT_A);
-    if (s.kind === SRC_SCENE) this.writePlane(s, f, l, base + U_PLANE_A);
+    if (k === K_V) this.writePlane(s, f, l, base + U_PLANE_A);
     u[base + U_P] = 1;
     u[base + U_P + 1] = liveOn ? w : 1 - w;
-    const k = kindOf(s);
     pass.setPipeline(this.single[k]!);
     if (k === K_T) pass.setBindGroup(0, this.bgSingle[l]![sIdx]!);
     else {
@@ -653,6 +652,20 @@ export class GpuCompositor implements Compositor {
       this.extFrame[i] = this.frameNo;
     }
     return this.ext[i]!;
+  }
+
+  /**
+   * Source kind index of a stack this frame (t for bitmaps). A scene that shows only its base (no frame of
+   * its generation, no over bound: the poster after onEnd 'black', Clear media, 'Hide while not playing'
+   * or while the clip loads) draws as a bitmap: its base is the stack's texture, so the static t bind
+   * groups serve it, with no placeholder import and no bind group per frame (design/27 §13).
+   */
+  private kindOf(s: Stack<ImageBitmap>, l: number, f: FrameInputs): number {
+    /* @hot */
+    if (s.kind === SRC_VIDEO) return K_E;
+    if (s.kind !== SRC_SCENE) return K_T;
+    if (s.bitmap === null || sceneVideoPresent(s, f.video)) return K_V;
+    return s.over !== null && this.overViews[l] !== null ? K_V : K_T;
   }
 
   private hasSource(s: Stack<ImageBitmap>, f: FrameInputs): boolean {

@@ -225,7 +225,7 @@ function take(): ImageBitmap {
  * A slide job with `video` (design/27 §7.2, SCENE.md item E): the base (objects up to the playing one,
  * with its poster, and the upper ones that stay clear of the video) and the over (upper objects that
  * overlap it), split by `splitScene` with measured text bounds, and the plane from the object's box, crop,
- * flips, rotation, mask and opacity at this output's scale with the poster's size. Undefined when the
+ * flips, rotation, mask and opacity at this output's scale with the clip's size. Undefined when the
  * slide is not a scene (a lyric-only or hidden look, the object is gone): it is then one bitmap with the
  * poster, as before.
  */
@@ -237,7 +237,7 @@ function sceneParts(
 ): (SceneParts & { base: ImageBitmap }) | undefined {
   const v = job.video;
   if (!v) return undefined;
-  const opts = { nextSlide: job.nextSlide, isSong: job.isSong };
+  const opts = { nextSlide: job.nextSlide, isSong: job.isSong, clip: { w: v.w, h: v.h } };
   const s = rasterScene(c, take, job.slide, job.look, scale, lookup, v.objectId, opts);
   return s && { base: s.base, over: s.over, plane: s.plane, videoSlot: v.slot, videoGen: v.gen };
 }

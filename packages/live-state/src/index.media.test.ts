@@ -9,7 +9,7 @@ import type {
   Slide,
   SlideObject,
 } from '@ordo/domain';
-import { autoAdvance, initialState, reduce, reduceAll } from './index.ts';
+import { autoAdvance, initialState, mediaPlayTarget, pendingSlideSound, reduce, reduceAll } from './index.ts';
 import { checkInvariants } from './invariants.ts';
 
 /** A slide's own video and sound in the reducer (design/27 §8 "Reducer", §14.8). */
@@ -280,22 +280,51 @@ describe('a slide sound plays across shown slides', () => {
     expect(s.live).toBe(11); // wrapped twice
   });
 
-  it('click start: goes live paused; F8 plays it when the slide has no video', () => {
+  it('click start: waits for F8, which starts it when the slide has no video', () => {
     let s = live(go(8, 100));
-    expect(sound(s)).toMatchObject({ mediaId: 'jingle', state: 'paused', slideOwned: true, untilCue: 8 });
+    expect(sound(s)).toBeNull();
+    expect(pendingSlideSound(s)).toMatchObject({ cueIndex: 8, sound: { mediaId: 'jingle', start: 'click' } });
+    expect(mediaPlayTarget(s)).toBe('slideSound');
     s = reduce(s, { k: 'media.play', at: 300 });
-    expect(sound(s)).toMatchObject({ state: 'playing', startedAt: 300 });
+    expect(sound(s)).toMatchObject({
+      mediaId: 'jingle',
+      state: 'playing',
+      startedAt: 300,
+      positionMs: 0,
+      slideOwned: true,
+      untilCue: 8,
+    });
+    expect(pendingSlideSound(s)).toBeUndefined();
+    // F8 then pauses and resumes it like any audio.
+    s = reduce(s, { k: 'media.play', at: 500 });
+    expect(sound(s)).toMatchObject({ state: 'paused', positionMs: 200 });
+    expect(checkInvariants(s)).toEqual([]);
   });
 
-  it('playlist audio plays on under slides; a slide sound replaces it', () => {
+  it('playlist audio plays on under slides; an autoplay slide sound replaces it at once', () => {
     let s = live(go(6, 100), go(7, 200));
     expect(sound(s)).toMatchObject({ mediaId: 'bed', cueIndex: 6 });
     expect(sound(s)?.slideOwned).toBeUndefined();
-    s = reduce(s, go(8, 300));
-    expect(sound(s)).toMatchObject({ mediaId: 'jingle', slideOwned: true });
+    s = live(go(6, 100), go(2, 300));
+    expect(sound(s)).toMatchObject({ mediaId: 'song', slideOwned: true, state: 'playing' });
     // The playlist audio does not come back when the slide sound stops.
-    s = reduce(s, go(7, 400));
+    s = reduce(s, go(5, 400));
     expect(sound(s)).toBeNull();
+  });
+
+  it('a click-start slide sound leaves playlist audio playing until F8 starts it', () => {
+    let s = live(go(6, 100), go(7, 200));
+    const bed = s.audio;
+    s = reduce(s, go(8, 300));
+    expect(s.audio).toBe(bed);
+    s = reduce(s, { k: 'media.play', at: 400 });
+    expect(sound(s)).toMatchObject({ mediaId: 'jingle', slideOwned: true, state: 'playing', startedAt: 400 });
+    expect(s.audio.at).toBe(400);
+    s = reduce(s, go(7, 500));
+    expect(sound(s)).toBeNull();
+    // Leaving the slide without pressing F8 keeps the playlist audio.
+    s = live(go(6, 100), go(7, 200), go(8, 300), go(7, 400));
+    expect(s.audio).toEqual(bed);
   });
 
   it('a slide video and the playlist audio play together', () => {
@@ -359,5 +388,152 @@ describe('invariants with slide media (property)', () => {
       'audio references unknown media nope',
       "slide sound nope is not cue 2's sound",
     ]);
+  });
+});
+
+/**
+ * Cues:
+ *   0 media 'bed' (playlist audio, loops)
+ *   1 mix/a
+ *   2 mix/b  video 'clip' (autoplay) + sound 'sfx' (click)
+ *   3 mix/c  video 'clip2' (click) + sound 'sfx' (click)
+ *   4 mix/d  sound 'sfx' (click)
+ *   5..10 song, arranged V C V C C... : V = v1 (sound 'music' across 4 shown slides), v2; C = c1
+ *         5 v1 (until 8), 6 v2, 7 c1, 8 v1 (until 11), 9 v2, 10 c1, 11 c1
+ */
+function mixed(): ResolvedPlaylist {
+  const base = fixture();
+  const mix = deck('mix', [
+    slide('a'),
+    slide('b', [video('vb', 'clip')], { audio: { mediaId: 'sfx', start: 'click' } }),
+    slide('c', [video('vc', 'clip2', { start: 'click' })], { audio: { mediaId: 'sfx', start: 'click' } }),
+    slide('d', [], { audio: { mediaId: 'sfx', start: 'click' } }),
+  ]);
+  const song: Presentation = {
+    ...deck('song', []),
+    sections: [
+      {
+        id: 'V',
+        label: 'V',
+        short: 'V',
+        slides: [slide('v1', [], { audio: { mediaId: 'music', slides: 4 } }), slide('v2')],
+      },
+      { id: 'C', label: 'C', short: 'C', slides: [slide('c1')] },
+    ],
+    arrangements: [{ id: 'arr', name: 'A', sectionIds: ['V', 'C', 'V', 'C', 'C'] }],
+  };
+  return {
+    ...base,
+    playlist: {
+      ...base.playlist,
+      items: [
+        { id: 'i0', kind: 'media', mediaId: 'bed', loop: true },
+        { id: 'i1', kind: 'presentation', presentationId: 'mix' },
+        { id: 'i2', kind: 'presentation', presentationId: 'song', arrangementId: 'arr' },
+      ],
+    },
+    presentations: { mix, song },
+    media: { ...base.media, sfx: media('sfx', 'audio') },
+  };
+}
+const liveMixed = (...events: LiveEvent[]): LiveState =>
+  reduceAll(reduce(initialState(), { k: 'goLive', resolved: mixed() }), events);
+
+describe('F8 on a slide with a video and a click-start sound', () => {
+  it('autoplay video: F8 starts the sound first, then toggles the video', () => {
+    let s = liveMixed(go(0, 100), go(2, 200));
+    expect(s.layers.media.content).toMatchObject({ objectId: 'vb', state: 'playing' });
+    expect(sound(s)?.mediaId).toBe('bed');
+    expect(mediaPlayTarget(s)).toBe('slideSound');
+    s = reduce(s, { k: 'media.play', at: 500 });
+    expect(sound(s)).toMatchObject({ mediaId: 'sfx', state: 'playing', startedAt: 500, slideOwned: true });
+    expect(s.layers.media.content?.state).toBe('playing');
+    expect(mediaPlayTarget(s)).toBe('video');
+    s = reduce(s, { k: 'media.play', at: 900 });
+    expect(s.layers.media.content?.state).toBe('paused');
+    expect(sound(s)?.state).toBe('playing');
+    s = reduce(s, { k: 'media.restart', at: 1200 });
+    expect(s.layers.media.content).toMatchObject({ state: 'playing', startedAt: 1200 });
+    expect(checkInvariants(s)).toEqual([]);
+  });
+
+  it('click video: F8 plays the video first, then starts the sound', () => {
+    let s = liveMixed(go(3, 200));
+    expect(s.layers.media.content).toMatchObject({ objectId: 'vc', state: 'paused' });
+    expect(mediaPlayTarget(s)).toBe('video');
+    s = reduce(s, { k: 'media.play', at: 500 });
+    expect(s.layers.media.content).toMatchObject({ state: 'playing', startedAt: 500 });
+    expect(sound(s)).toBeNull();
+    s = reduce(s, { k: 'media.play', at: 800 });
+    expect(sound(s)).toMatchObject({ mediaId: 'sfx', state: 'playing', startedAt: 800 });
+    expect(s.layers.media.content?.state).toBe('playing');
+  });
+
+  it('Shift+F8 starts a waiting sound on a slide without a video', () => {
+    let s = liveMixed(go(0, 100), go(4, 200));
+    expect(sound(s)?.mediaId).toBe('bed');
+    s = reduce(s, { k: 'media.restart', at: 300 });
+    expect(sound(s)).toMatchObject({ mediaId: 'sfx', state: 'playing', startedAt: 300 });
+  });
+
+  it('a cleared slide has no waiting sound', () => {
+    const s = liveMixed(go(4, 200), { k: 'clear', layer: 'slide', at: 300 });
+    expect(pendingSlideSound(s)).toBeUndefined();
+    expect(mediaPlayTarget(s)).toBeUndefined();
+  });
+});
+
+describe('a slide repeated by an arrangement inside its own sound range', () => {
+  it('keeps the sound playing and extends its range', () => {
+    let s = liveMixed(go(5, 1000));
+    expect(s.cues[5]?.slideAudio).toMatchObject({ mediaId: 'music', untilCue: 8 });
+    expect(s.cues[8]?.slideAudio).toMatchObject({ mediaId: 'music', untilCue: 11 });
+    const playing = sound(s);
+    expect(playing).toMatchObject({ cueIndex: 5, untilCue: 8, startedAt: 1000 });
+    s = reduceAll(s, [go(6, 2000), go(7, 3000), go(8, 4000)]);
+    expect(sound(s)).toEqual({ ...playing, untilCue: 11 });
+    s = reduceAll(s, [go(9, 5000), go(10, 6000), go(11, 7000)]);
+    expect(sound(s)).toMatchObject({ cueIndex: 5, startedAt: 1000, untilCue: 11 });
+    expect(checkInvariants(s)).toEqual([]);
+    // Jumping straight to the repeat starts it there.
+    s = liveMixed(go(8, 1000));
+    expect(sound(s)).toMatchObject({ cueIndex: 8, startedAt: 1000, untilCue: 11 });
+  });
+
+  it('restarts a sound that is no longer playing', () => {
+    let s = liveMixed(go(5, 1000), go(6, 2000), { k: 'media.pause', at: 2500 }, go(8, 4000));
+    expect(sound(s)).toMatchObject({ cueIndex: 8, state: 'playing', startedAt: 4000 });
+    s = liveMixed(go(5, 1000), go(9, 2000));
+    expect(sound(s)).toBeNull();
+  });
+});
+
+describe('invariants with mixed slide media (property)', () => {
+  it('hold after any sequence of events', () => {
+    const r = mixed();
+    const at = fc.integer({ min: 0, max: 1e7 });
+    const ev: fc.Arbitrary<LiveEvent> = fc.oneof(
+      at.map((a) => ({ k: 'next' as const, at: a })),
+      at.map((a) => ({ k: 'prev' as const, at: a })),
+      fc.record({ cueIndex: fc.integer({ min: 0, max: 12 }), at }).map((x) => ({ k: 'go' as const, ...x })),
+      fc.constantFrom('slide', 'media', 'audio').map((layer) => ({ k: 'clear' as const, layer, at: 5 })),
+      fc
+        .record({ cueIndex: fc.integer({ min: 0, max: 12 }), at })
+        .map((x) => ({ k: 'audio.ended' as const, ...x })),
+      at.map((a) => ({ k: 'media.play' as const, at: a })),
+      at.map((a) => ({ k: 'media.pause' as const, at: a })),
+      at.map((a) => ({ k: 'media.restart' as const, at: a })),
+    );
+    fc.assert(
+      fc.property(fc.array(ev, { maxLength: 60 }), (events) => {
+        let s = reduce(initialState(), { k: 'goLive', resolved: r });
+        for (const e of events) {
+          s = reduce(s, e);
+          const v = checkInvariants(s);
+          if (v.length) throw new Error(`${e.k}: ${v.join('; ')}`);
+        }
+      }),
+      { numRuns: 200 },
+    );
   });
 });

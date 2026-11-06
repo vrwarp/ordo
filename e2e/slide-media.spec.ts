@@ -29,7 +29,8 @@ import { type Pixels, decodePng } from './png.ts';
  * - "Loop A" [4-7]: a 4-slide loop whose first slide's sound plays across 3 shown slides.
  * - "Loop B" [8-11]: a 4-slide loop whose first slide's music plays across all 4 (it must not restart when
  *   the loop wraps).
- * - "Late" [12]: a slide whose clip is still transcoding at Go live; its poster is a picture.
+ * - "Late" [12]: a slide whose clip is still transcoding at Go live; its poster is a picture. [13]: a slide
+ *   whose clip failed to process (a truncated mp4); its poster is the same picture.
  */
 
 /** design/23: one frame between outputs on a real GPU (ORDO_E2E_REAL_GPU=1), 100 ms under SwiftShader. */
@@ -82,6 +83,13 @@ function clip(name: string, video: string, secs: number, freq: number): string {
   return out;
 }
 
+/** The first `bytes` of a clip: an mp4 the hub accepts (ftyp) whose processing fails (no moov). */
+function truncated(name: string, from: string, bytes: number): string {
+  const out = `${DIR}/${name}.mp4`;
+  writeFileSync(out, readFileSync(from).subarray(0, bytes));
+  return out;
+}
+
 function makeFixtures() {
   mkdirSync(DIR, { recursive: true });
   const tone = (name: string, freq: number, secs: number) => {
@@ -93,9 +101,11 @@ function makeFixtures() {
   ffmpeg(['-f', 'lavfi', '-i', 'color=c=0xff8000:s=640x360', '-frames:v', '1', poster]);
   return {
     sweep: clip('sweep', 'color=c=red:s=640x360:r=30:d=6,hue=h=30*t', 6, 330),
-    magenta: clip('magenta', 'color=c=magenta:s=640x360:r=30:d=2', 2, 550),
+    // 5 s: F8, the checks of its play and Shift+F8 all happen before its end, even on a loaded machine.
+    magenta: clip('magenta', 'color=c=magenta:s=640x360:r=30:d=5', 5, 550),
     blue: clip('blue', 'color=c=blue:s=640x360:r=30:d=3', 3, 660),
     late: clip('late', 'color=c=white:s=640x360:r=30:d=2', 2, 770),
+    broken: truncated('broken', clip('whole', 'color=c=white:s=640x360:r=30:d=1', 1, 990), 4096),
     blocker: clip('blocker', 'testsrc2=s=1280x720:r=30:d=12', 12, 880),
     tone: tone('tone', 440, 20),
     music: tone('music', 523, 30),
@@ -327,6 +337,13 @@ test.describe('video and sound playing in place in a slide', () => {
     const loopA = await loopDeck('Loop A', tone.id, 3);
     const loopB = await loopDeck('Loop B', music.id, 4);
 
+    // A clip that failed: processed (and failed) before the queue is blocked below.
+    const broken = await postMedia(api, fx.broken, 'video/mp4');
+    await expect
+      .poll(async () => (await json<{ state: string }>(api.get(`media/${broken.id}`))).state, {
+        timeout: 60_000,
+      })
+      .toBe('failed');
     // A clip still transcoding at Go live: queued behind a longer one on the heavy (concurrency 1) queue.
     await postMedia(api, fx.blocker, 'video/mp4');
     const late = await postMedia(api, fx.late, 'video/mp4');
@@ -346,6 +363,13 @@ test.describe('video and sound playing in place in a slide', () => {
                   objects: [
                     backdrop('bg5'),
                     { ...video('clip5', late.id, { start: 'auto' }, FULL), mediaId: poster.id },
+                  ],
+                },
+                {
+                  id: 'failed-slide',
+                  objects: [
+                    backdrop('bg6'),
+                    { ...video('clip6', broken.id, { start: 'auto' }, FULL), mediaId: poster.id },
                   ],
                 },
               ],
@@ -370,8 +394,11 @@ test.describe('video and sound playing in place in a slide', () => {
     await goLive(api, pl.id);
 
     // ---- Go live: the late clip is left out with a degraded note; nothing is refused.
-    const lateNote = (await live(api)).resolved?.degraded?.find((d) => d.slideId === 'late-slide');
+    const degraded = (await live(api)).resolved?.degraded ?? [];
+    const lateNote = degraded.find((d) => d.slideId === 'late-slide');
     expect(lateNote?.reason).toMatch(/still processing; showing its poster; Go live again once it is ready/);
+    const failedNote = degraded.find((d) => d.slideId === 'failed-slide');
+    expect(failedNote?.reason).toMatch(/failed; showing its poster/);
 
     const outs = await outputs(api);
     const a1 = outs.find((o) => o.hostIndex === 1 && o.kind !== 'stage')!;
@@ -576,7 +603,7 @@ test.describe('video and sound playing in place in a slide', () => {
     await expect
       .poll(async () => (await slotOf(gpu, magentaKey))?.t ?? 9, { timeout: 5_000 })
       .toBeLessThan(before - 0.3);
-    // The clip ends about 2 s after the restart; onEnd 'advance' moves the service to [2].
+    // The clip ends about 5 s after the restart; onEnd 'advance' moves the service to [2].
     await expect.poll(async () => (await live(api)).live, { timeout: 15_000 }).toBe(2);
     await expect.poll(async () => (await live(api)).layers.media.content).toBeNull();
 
@@ -665,6 +692,21 @@ test.describe('video and sound playing in place in a slide', () => {
         .poll(async () => isOrange(at(await frame(p), [960, 540])), {
           timeout: 15_000,
           message: `${name}: the late clip's poster`,
+        })
+        .toBe(true);
+    }
+
+    // ---- [13] the clip that failed: its slide shows the poster and plays nothing.
+    await go(api, 13);
+    await expect.poll(async () => (await live(api)).live).toBe(13);
+    expect((await live(api)).layers.media.content).toBeNull();
+    for (const p of both) {
+      const name = p === gpu ? 'WebGPU' : 'Canvas 2D';
+      await expect.poll(() => cueOn(p), { timeout: 20_000 }).toBe(13);
+      await expect
+        .poll(async () => isOrange(at(await frame(p), [960, 540])), {
+          timeout: 15_000,
+          message: `${name}: the failed clip's poster`,
         })
         .toBe(true);
     }

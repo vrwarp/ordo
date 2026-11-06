@@ -137,9 +137,14 @@ function pictureSize(img: CanvasImageSource | undefined): [number, number] {
 
 /**
  * Plan the scene of a slide whose ImageObject `objectId` plays its clip in place, drawn at `scale` (device
- * px per logical px) with `look`. `ctx` measures text (nothing is drawn). The plane is encoded with the
- * poster's size (`images(object.mediaId)`, the picture base shows), so the video lands exactly on its
- * poster; without a poster the clip is stretched to the box until the slide is drawn again with it.
+ * px per logical px) with `look`. `ctx` measures text (nothing is drawn). The plane fits the video with the
+ * clip's own size (`clip`, the delivery's Media.width x height): the poster may be any picture the operator
+ * chose, of another aspect. Only when the clip's size is unknown is the poster's size used
+ * (`images(object.mediaId)`), and without either the clip is stretched to the box.
+ *
+ * A play object drawn below full opacity leaves its poster out of base, as 'Hide while not playing' does:
+ * the video is mixed over base at that opacity, so a poster in base would show through the moving picture
+ * (SCENE.md). Its slot's paused frame still shows while it is stopped.
  *
  * Undefined when the slide is not a scene and stays one bitmap: the look does not draw the slide as
  * authored (lyric-only, hidden), the object is not an image of the drawable slide, or nothing of the video
@@ -152,18 +157,22 @@ export function sceneSlides(
   scale: number,
   images: ImageLookup,
   objectId: string,
+  clip: { w?: number; h?: number } = {},
 ): SceneSlides | undefined {
   if (look && clampLook(look).layers.slide.mode !== 'authored') return undefined;
   const s = clampSlide(slide);
   const index = s.objects.findIndex((o) => o.type === 'image' && o.id === objectId);
   const play = s.objects[index] as ImageObject | undefined;
   if (!play) return undefined;
+  const translucent = num(play.opacity, 0, 1, 1) < 1;
   const split = splitScene(s.objects, index, {
-    showWhenStopped: play.play?.showWhenStopped,
+    showWhenStopped: translucent ? false : play.play?.showWhenStopped,
     bounds: (o: SlideObject) => (o.type === 'text' ? textBounds(ctx, o, scale) : objectBounds(o)),
   });
   const plane = new Float32Array(PLANE_FLOATS);
-  const [w, h] = pictureSize(images(play.mediaId));
+  const cw = num(clip.w, 0, 1e6, 0);
+  const ch = num(clip.h, 0, 1e6, 0);
+  const [w, h] = cw > 0 && ch > 0 ? [cw, ch] : pictureSize(images(play.mediaId));
   if (!encodePlane(play as PlaneSource, num(scale, 0.01, 8, 1), w, h, plane, split.over.length > 0))
     return undefined;
   return {
@@ -187,9 +196,9 @@ export function rasterScene<B>(
   scale: number,
   images: ImageLookup,
   objectId: string,
-  opts: { nextSlide?: Slide; isSong?: boolean } = {},
+  opts: { nextSlide?: Slide; isSong?: boolean; clip?: { w?: number; h?: number } } = {},
 ): { base: B; over: B | null; plane: Float32Array } | undefined {
-  const scene = sceneSlides(ctx, slide, look, scale, images, objectId);
+  const scene = sceneSlides(ctx, slide, look, scale, images, objectId, opts.clip);
   if (!scene) return undefined;
   rasterSlide(ctx, scene.base, look, scale, images, opts);
   const base = take();

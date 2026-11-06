@@ -40,9 +40,10 @@ export type SlideDesc = {
   isSong: boolean;
   /**
    * The slide's video plays in place, in the box of ImageObject `objectId` (design/27 §7.2): set when the
-   * media layer's desc is `inSlide` for this slide.
+   * media layer's desc is `inSlide` for this slide. `w` x `h` is the clip's delivered size (Media.width,
+   * height) when known: the plane fits the video with it, never with the poster's.
    */
-  video?: { objectId: string; mediaId: string; hash: string };
+  video?: { objectId: string; mediaId: string; hash: string; w?: number; h?: number };
 };
 
 export type LowerThirdDesc = { layer: 'lowerThird'; key: string; text: string };
@@ -295,8 +296,10 @@ export function planFrame(state: LiveState, rawLook: Look, opts: PlanOptions = {
       const cue = state.cues[c.cueIndex];
       const key = `md|${c.cueIndex}|${m.id}|${f.hash}`;
       const inSlide = c.objectId ? inSlideFor(c, m, plan.slide.desc, look) : undefined;
-      if (inSlide && plan.slide.desc)
-        plan.slide.desc.video = { objectId: inSlide.objectId, mediaId: m.id, hash: f.hash };
+      if (inSlide && plan.slide.desc) {
+        const size = (m.width ?? 0) > 0 && (m.height ?? 0) > 0 ? { w: m.width, h: m.height } : {};
+        plan.slide.desc.video = { objectId: inSlide.objectId, mediaId: m.id, hash: f.hash, ...size };
+      }
       plan.media = {
         // A slide's own clip never draws full-frame on the media layer: the slide layer plays it in its box
         // (inSlide), or, in lyric-only and hidden slide modes, nothing draws it and the audio master plays

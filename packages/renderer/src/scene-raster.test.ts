@@ -9,7 +9,7 @@ import {
   type TextStyle,
 } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
-import { PLANE_FLAGS, PLANE_FLOATS, PLANE_HAS_OVER, PLANE_UV, planeSample } from './scene.ts';
+import { PLANE_FLAGS, PLANE_FLOATS, PLANE_HAS_OVER, PLANE_OPACITY, PLANE_UV, planeSample } from './scene.ts';
 import { rasterScene, sceneSlides, textBounds } from './scene-raster.ts';
 import type { Ctx2D } from './text2d.ts';
 
@@ -177,9 +177,47 @@ describe('sceneSlides', () => {
     expect(sample(s.plane, 0.5 * 520, 262.5).w).toBe(1);
   });
 
-  it('stretches the clip over the box while its poster is missing', () => {
+  it('stretches the clip over the box while both its size and its poster are unknown', () => {
     const s = sceneSlides(fakeCtx(), slide(objects), LOOK_MAIN, SCALE, () => undefined, 'vid')!;
     expect([...s.plane.slice(PLANE_UV, PLANE_UV + 4)]).toEqual([0, 0, 1, 1]);
+  });
+
+  it("fits the video with the clip's own size, not a poster of another aspect", () => {
+    // The 4:3 poster stands for a custom poster on a 16:9 clip in a 16:9 box: the clip fills the box.
+    const s = sceneSlides(fakeCtx(), slide(objects), LOOK_MAIN, SCALE, images, 'vid', { w: 1920, h: 1080 })!;
+    expect([...s.plane.slice(PLANE_UV, PLANE_UV + 4)].map((x) => +x.toFixed(6))).toEqual([0, 0, 1, 1]);
+    const left = sample(s.plane, 0.5 * 410, 262.5);
+    expect(left.w).toBe(1);
+    expect(left.u).toBeCloseTo(10 / 800, 5);
+    // A 4:3 clip in the same box is pillarboxed whatever the poster: 'contain' keeps its aspect.
+    const narrow = sceneSlides(fakeCtx(), slide(objects), LOOK_MAIN, SCALE, () => undefined, 'vid', {
+      w: 640,
+      h: 480,
+    })!;
+    expect(narrow.plane[PLANE_UV]).toBeCloseTo(-1 / 6, 5);
+    expect(narrow.plane[PLANE_UV + 2]).toBeCloseTo(7 / 6, 5);
+    // With no poster at all the clip's size still fits it, never stretched over the box.
+    const bare = sceneSlides(fakeCtx(), slide(objects), LOOK_MAIN, SCALE, () => undefined, 'vid', {
+      w: 1920,
+      h: 1080,
+    })!;
+    expect([...bare.plane]).toEqual([...s.plane]);
+    // An unusable size falls back to the poster's.
+    const bad = sceneSlides(fakeCtx(), slide(objects), LOOK_MAIN, SCALE, images, 'vid', {
+      w: Number.NaN,
+      h: 0,
+    })!;
+    expect(bad.plane[PLANE_UV]).toBeCloseTo(-1 / 6, 5);
+  });
+
+  it('leaves the poster out of base when the playing object is translucent', () => {
+    const o = [...objects];
+    o[1] = { ...(video() as Extract<SlideObject, { type: 'image' }>), opacity: 0.5 };
+    const s = sceneSlides(fakeCtx(), slide(o), LOOK_MAIN, SCALE, images, 'vid')!;
+    expect(ids(s.base)).toEqual(['bg', 'footer', 'badge']);
+    expect(s.plane[PLANE_OPACITY]).toBeCloseTo(0.5, 6);
+    // Mixed over base at its opacity, the video shows over what is under the object, no poster through it.
+    expect(sample(s.plane, 400, 262.5).w).toBeCloseTo(0.5, 6);
   });
 
   it('leaves the poster out of base when the clip is hidden while stopped', () => {

@@ -52,6 +52,13 @@ export const MASK_ROUND = 2;
 export const PLANE_HAS_OVER = 1;
 export const PLANE_VIDEO = 2;
 
+/**
+ * The smallest box side (logical px) and scale a plane is encoded for. A box this small draws nothing at
+ * any output size, and below it the inverse affine's 1/w terms overflow Float32.
+ */
+export const MIN_PLANE_BOX = 1e-3;
+const MIN_PLANE_SCALE = 1e-3;
+
 /** OOXML roundRect's default `adj` (design/27 §3.1 ShapeGeom). */
 const ROUND_RECT_ADJ = 16_667;
 
@@ -85,7 +92,9 @@ function fin(v: unknown, lo: number, hi: number, dflt: number): number {
  * Write the plane of `src` drawn at `scale` (device px per logical px) into `out` (PLANE_FLOATS floats).
  * `srcW` x `srcH` is the clip's size, or its poster's (same aspect), for fit 'contain' and 'cover'; 0 when
  * unknown, which draws as 'stretch'. Returns false, with a plane that draws nothing (opacity 0), when
- * nothing of the video can show (empty box, a crop that leaves nothing).
+ * nothing of the video can show (a box under MIN_PLANE_BOX logical px, a crop that leaves nothing) or when
+ * any float would not be finite: the WebGPU shader evaluates the plane at every pixel of the layer, and
+ * WGSL leaves non-finite arithmetic indeterminate, so such a plane must never reach a uniform.
  */
 export function encodePlane(
   src: PlaneSource,
@@ -101,7 +110,7 @@ export function encodePlane(
   const w = fin(box?.w, 0, 1e6, 0);
   const h = fin(box?.h, 0, 1e6, 0);
   const s = fin(scale, 0, 1e3, 0);
-  if (!(w > 0 && h > 0 && s > 0)) return false;
+  if (!(w >= MIN_PLANE_BOX && h >= MIN_PLANE_BOX && s >= MIN_PLANE_SCALE)) return false;
   const bx = fin(box.x, -1e6, 1e6, 0);
   const by = fin(box.y, -1e6, 1e6, 0);
   const c = src.crop;
@@ -203,6 +212,12 @@ export function encodePlane(
   out[PLANE_RADII + 1] = ry;
   out[PLANE_OPACITY] = fin(src.opacity, 0, 1, 1);
   out[PLANE_AA] = 1;
+  for (let i = 0; i < PLANE_FLOATS; i++)
+    if (!Number.isFinite(out[i]!)) {
+      out.fill(0);
+      if (hasOver) out[PLANE_FLAGS] = PLANE_HAS_OVER;
+      return false;
+    }
   return true;
 }
 

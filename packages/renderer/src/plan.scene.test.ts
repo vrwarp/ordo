@@ -50,6 +50,25 @@ describe('planner: a clip playing inside its slide', () => {
     expect(o?.type === 'image' ? o.play?.mediaId : undefined).toBe('vid');
   });
 
+  it("carries the clip's own size, which the plane is fitted with whatever the poster", () => {
+    const sized: ResolvedPlaylist = {
+      ...withClips,
+      media: { ...withClips.media, vid: { ...media.vid!, width: 1280, height: 720 } },
+    };
+    const p = planFrame({ ...clipLive('c1'), resolved: sized }, LOOK_MAIN);
+    expect(p.slide.desc?.video).toEqual({ objectId: 'v1', mediaId: 'vid', hash: 'd2', w: 1280, h: 720 });
+    // A size it does not know is left out (the asset worker then uses the poster's).
+    const half: ResolvedPlaylist = {
+      ...withClips,
+      media: { ...withClips.media, vid: { ...media.vid!, width: 1280, height: 0 } },
+    };
+    expect(planFrame({ ...clipLive('c1'), resolved: half }, LOOK_MAIN).slide.desc?.video).toEqual({
+      objectId: 'v1',
+      mediaId: 'vid',
+      hash: 'd2',
+    });
+  });
+
   it("carries the object's 'Hide while not playing'", () => {
     const p = planFrame(clipLive('c2', { state: 'paused' }), LOOK_MAIN);
     expect(p.media.desc?.inSlide).toEqual({ objectId: 'v2', showWhenStopped: false });

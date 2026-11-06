@@ -124,10 +124,11 @@ export type AssetJob =
       refresh?: boolean;
       /**
        * The slide's video plays in the box of ImageObject `objectId` from media slot `slot`, loaded under
-       * slot generation `gen` (design/27 §7.2): the worker answers SRC_SCENE. Absent: a plain bitmap, the
-       * poster included.
+       * slot generation `gen` (design/27 §7.2): the worker answers SRC_SCENE. `w` x `h` is the clip's own
+       * size, which the plane fits the video with (the poster's size only when it is unknown). Absent: a
+       * plain bitmap, the poster included.
        */
-      video?: { objectId: string; slot: number; gen: number };
+      video?: { objectId: string; slot: number; gen: number; w?: number; h?: number };
     }
   | { kind: 'image'; layer: number; key: string; hash: string; fit: 'contain' | 'cover'; cueIndex?: number }
   | { kind: 'lowerThird'; layer: number; key: string; text: string; look: Look }

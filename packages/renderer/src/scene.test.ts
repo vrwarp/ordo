@@ -4,6 +4,7 @@ import {
   MASK_ELLIPSE,
   MASK_RECT,
   MASK_ROUND,
+  MIN_PLANE_BOX,
   PLANE_AA,
   PLANE_FLAGS,
   PLANE_FLOATS,
@@ -180,6 +181,25 @@ describe('encodePlane', () => {
       expect(p[PLANE_OPACITY]).toBe(0);
       expect(sample(p, 50, 50).w).toBe(0);
     }
+  });
+
+  it('never writes a non-finite float: a tiny box or scale from untrusted data draws nothing', () => {
+    for (const [src, scale] of [
+      [{ box: box(900, 300, 1e-300, 300) }, 1],
+      [{ box: box(900, 300, 300, 1e-37), radius: 4 }, 1],
+      [{ box: box(900, 300, MIN_PLANE_BOX / 2, 300) }, 1],
+      [{ box: box(900, 300, 300, 300) }, 1e-300],
+    ] as const) {
+      const { p, ok } = plane(src, scale, 0, 0, true);
+      expect(ok).toBe(false);
+      expect([...p].every(Number.isFinite)).toBe(true);
+      expect(p[PLANE_OPACITY]).toBe(0);
+      expect(p[PLANE_FLAGS]).toBe(PLANE_HAS_OVER);
+    }
+    // The smallest box it encodes is finite.
+    const { p, ok } = plane({ box: box(1e6, -1e6, MIN_PLANE_BOX, MIN_PLANE_BOX, 45), radius: 1 }, 1e-3);
+    expect(ok).toBe(true);
+    expect([...p].every(Number.isFinite)).toBe(true);
   });
 });
 

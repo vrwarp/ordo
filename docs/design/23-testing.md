@@ -65,8 +65,8 @@ title over the clip, the clip moving), asserts the slide flip and the clip's sta
 with the bounds above, checks that the next slide's clip is preloaded paused on both, that after Clear
 media a clip loaded into the cleared slot never shows in the live slide (its poster does), click start with
 F8 and Shift+F8 pressed in the operator, onEnd 'advance', a slide sound over 3 shown slides of a 4-slide
-loop, music that does not restart when its loop wraps, and a clip still transcoding at Go live (degraded
-note, poster).
+loop, music that does not restart when its loop wraps, a clip still transcoding at Go live and a clip
+whose processing failed (degraded notes, posters).
 
 ## Chaos tests
 

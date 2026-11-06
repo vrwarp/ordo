@@ -1,6 +1,6 @@
 import { HubConnection, OutputLink } from '@ordo/client';
-import { LOOK_MAIN, LOOK_STAGE, type LiveState } from '@ordo/domain';
-import { checkInvariants, reduce } from '@ordo/live-state';
+import { LOOK_MAIN, LOOK_STAGE, type LiveState, type ResolvedPlaylist } from '@ordo/domain';
+import { checkInvariants, initialState, reduce } from '@ordo/live-state';
 import type { OutputConfigRes } from '@ordo/protocol';
 import { type AssetJob, SRC_VIDEO, type ToAsset, type ToRender, planFrame } from '@ordo/renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,7 +10,7 @@ import {
   cueOf,
   withClips,
 } from '../../../packages/renderer/src/fixtures.scene.test-util.ts';
-import { liveState } from '../../../packages/renderer/src/fixtures.test-util.ts';
+import { liveState, media } from '../../../packages/renderer/src/fixtures.test-util.ts';
 import type { LinkToMain, MediaCommand } from './host-protocol.ts';
 import { LinkCore, type SlotMirror } from './link-core.ts';
 import { MemoryStreamStore } from './opfs.ts';
@@ -151,6 +151,26 @@ describe('link worker: a clip playing inside its slide', () => {
     expect(t.slideJobs(cueOf('c1'))).toHaveLength(1);
     expect((t.core.introspect() as { scenes: Record<string, string> }).scenes).toEqual({
       [jobs[0]!.key]: `${load!.slot}|${load!.gen}`,
+    });
+    t.close();
+  });
+
+  it("the slide job carries the clip's own size for the plane", async () => {
+    const t = setup();
+    await t.core.start();
+    t.core.applyConfig(config(false));
+    const sized = {
+      ...withClips,
+      media: { ...withClips.media, vid: { ...withClips.media.vid!, width: 1280, height: 720 } },
+    };
+    await t.state({ ...clipLive('c1'), resolved: sized });
+    const load = t.cmds('load').find((c) => c.key === key('c1'))!;
+    expect(t.slideJobs(cueOf('c1'))[0]?.video).toEqual({
+      objectId: 'v1',
+      slot: load.slot,
+      gen: load.gen,
+      w: 1280,
+      h: 720,
     });
     t.close();
   });
@@ -397,5 +417,214 @@ describe('reducer, planner and link: a clip playing inside its slide', () => {
     const s = reduce(goTo('c1'), { k: 'go', cueIndex: cueOf('c3'), at: 3000 });
     expect(s.layers.media.content).toBeNull();
     expect(planFrame(s, LOOK_MAIN).media.desc).toBeNull();
+  });
+});
+
+describe('link worker: a slide sound that starts on click', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setInterval'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Cue 0: playlist audio 'bed'; cue 1: a slide whose sound 'sfx' starts on click.
+  const sfx = {
+    ...media.vid!,
+    id: 'sfx',
+    kind: 'audio' as const,
+    delivery: { hash: 'a7', bytes: 10, mime: 'audio/mp4', path: 'files/a7' },
+  };
+  const bed = { ...sfx, id: 'bed', delivery: { ...sfx.delivery, hash: 'a8', path: 'files/a8' } };
+  const r: ResolvedPlaylist = {
+    ...withClips,
+    playlist: {
+      ...withClips.playlist,
+      items: [
+        { id: 'b', kind: 'media', mediaId: 'bed', loop: true },
+        { id: 's', kind: 'presentation', presentationId: 'snd' },
+      ],
+    },
+    presentations: {
+      snd: {
+        ...withClips.presentations.clips!,
+        id: 'snd',
+        sections: [
+          {
+            id: 's',
+            label: 'S',
+            short: 'S',
+            slides: [{ id: 'x', objects: [], audio: { mediaId: 'sfx', start: 'click' } }],
+          },
+        ],
+      },
+    },
+    media: { ...withClips.media, sfx, bed },
+  };
+
+  it('the audio master preloads it paused while the playlist audio plays on, and F8 plays it', async () => {
+    const t = setup();
+    await t.core.start();
+    t.core.applyConfig(config(true));
+    const now = Date.now();
+    let s = reduce(initialState(), { k: 'goLive', resolved: r });
+    s = reduce(s, { k: 'go', cueIndex: 0, at: now });
+    s = reduce(s, { k: 'go', cueIndex: 1, at: now + 100 });
+    expect(s.audio.content?.mediaId).toBe('bed');
+    await t.state(s);
+    const bedLoad = t.cmds('load').find((c) => c.key === 'au|0|bed|a8');
+    const sfxLoad = t.cmds('load').find((c) => c.key === 'au|1|sfx|a7');
+    expect(bedLoad && sfxLoad).toBeTruthy();
+    expect(sfxLoad!.slot).not.toBe(bedLoad!.slot);
+    for (const l of [bedLoad!, sfxLoad!]) t.core.onMediaEvent({ k: 'loaded', slot: l.slot, key: l.key });
+    await tick();
+    // Only the playlist audio plays; the waiting sound gets no transport yet.
+    expect(
+      t
+        .cmds('apply')
+        .filter((c) => c.slot === bedLoad!.slot)
+        .at(-1)?.transport.state,
+    ).toBe('playing');
+    expect(t.cmds('apply').some((c) => c.slot === sfxLoad!.slot)).toBe(false);
+    const loads = t.cmds('load').length;
+    s = reduce(s, { k: 'media.play', at: now + 400 });
+    await t.state(s);
+    expect(t.cmds('load')).toHaveLength(loads); // already loaded
+    expect(
+      t
+        .cmds('apply')
+        .filter((c) => c.slot === sfxLoad!.slot)
+        .at(-1)?.transport,
+    ).toMatchObject({
+      state: 'playing',
+      startedAt: now + 400,
+    });
+    t.close();
+  });
+});
+
+describe('link worker: GO then a quick Prev between two clip slides', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setInterval'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const clipSlide = (id: string, objectId: string, clip: string) => ({
+    id,
+    objects: [
+      {
+        id: objectId,
+        type: 'image' as const,
+        box: { x: 480, y: 270, w: 960, h: 540, rotation: 0 },
+        mediaId: 'hold',
+        play: { mediaId: clip },
+        fit: 'cover' as const,
+        opacity: 1,
+        radius: 0,
+      },
+    ],
+  });
+  const r: ResolvedPlaylist = {
+    ...withClips,
+    playlist: { ...withClips.playlist, items: [{ id: 'x', kind: 'presentation', presentationId: 'two' }] },
+    presentations: {
+      two: {
+        ...withClips.presentations.clips!,
+        id: 'two',
+        transition: { kind: 'crossfade', ms: 200 },
+        sections: [
+          {
+            id: 's',
+            label: 'M',
+            short: 'M',
+            slides: [clipSlide('a', 'oa', 'vid'), clipSlide('b', 'ob', 'vid2'), clipSlide('c', 'oc', 'vid')],
+          },
+        ],
+      },
+    },
+  };
+
+  it('the clip just left keeps playing through the fade back, keeps its picture, then rewinds to its first frame', async () => {
+    const t = setup();
+    await t.core.start();
+    t.core.applyConfig(config(false));
+    const now = Date.now();
+    let s = reduce(initialState(), { k: 'goLive', resolved: r });
+    s = reduce(s, { k: 'go', cueIndex: 0, at: now });
+    await t.state(s);
+    for (const l of t.cmds('load')) t.core.onMediaEvent({ k: 'loaded', slot: l.slot, key: l.key });
+    await tick();
+    const b = t.cmds('load').find((c) => c.key === 'md|1|vid2|d3')!;
+    expect(b).toBeTruthy();
+    s = reduce(s, { k: 'go', cueIndex: 1, at: now + 50 }); // b's clip plays
+    await t.state(s);
+    expect(
+      t
+        .cmds('apply')
+        .filter((c) => c.slot === b.slot)
+        .at(-1)?.transport.state,
+    ).toBe('playing');
+    const before = t.posts.length;
+    s = reduce(s, { k: 'prev', at: now + 100 }); // during the 200 ms crossfade: a live again, b armed
+    await t.state(s);
+    const onB = () =>
+      t.posts
+        .slice(before)
+        .flatMap((p) => (p.t === 'media' && 'slot' in p.cmd && p.cmd.slot === b.slot ? [p.cmd] : []));
+    // Not frozen at once, and its picture never leaves the renderer: it is the outgoing side and armed.
+    expect(onB().map((c) => c.k)).not.toContain('holdPaused');
+    expect(onB().some((c) => c.k === 'vclear')).toBe(false);
+    expect(onB().find((c) => c.k === 'pauseAt')).toMatchObject({ at: now + 300 });
+    // When the fade ends it is sought back to its first frame, paused, for the next GO.
+    await tick(Math.max(0, now + 300 - Date.now()) + 60);
+    expect(
+      onB()
+        .filter((c) => c.k === 'apply')
+        .at(-1),
+    ).toMatchObject({
+      k: 'apply',
+      transport: { state: 'paused', positionMs: 0 },
+    });
+    // Later syncs, once it is no longer busy fading out, hold it paused there.
+    await tick(Math.max(0, now + 400 - Date.now()) + 30);
+    const n = onB().length;
+    t.core.sync();
+    expect(
+      onB()
+        .slice(n)
+        .map((c) => c.k),
+    ).toEqual(['holdPaused']);
+    // GO to b again plays it from its start.
+    s = reduce(s, { k: 'go', cueIndex: 1, at: now + 1000 });
+    await t.state(s);
+    expect(
+      onB()
+        .filter((c) => c.k === 'apply')
+        .at(-1),
+    ).toMatchObject({
+      transport: { state: 'playing', startedAt: now + 1000, positionMs: 0 },
+    });
+    t.close();
+  });
+
+  it('a clip that played and is armed again after its fade is sought back at once', async () => {
+    const t = setup();
+    await t.core.start();
+    t.core.applyConfig(config(false));
+    const now = Date.now();
+    let s = reduce(initialState(), { k: 'goLive', resolved: r });
+    s = reduce(s, { k: 'go', cueIndex: 1, at: now - 5000 }); // b played and its fade is long over
+    await t.state(s);
+    for (const l of t.cmds('load')) t.core.onMediaEvent({ k: 'loaded', slot: l.slot, key: l.key });
+    await tick();
+    const b = t.cmds('load').find((c) => c.key === 'md|1|vid2|d3')!;
+    s = reduce(s, { k: 'go', cueIndex: 0, at: now - 4000 }); // back to a, 4 s ago: b is armed
+    await t.state(s);
+    await tick(20);
+    const applies = t.cmds('apply').filter((c) => c.slot === b.slot);
+    expect(applies.at(-1)?.transport).toMatchObject({ state: 'paused', positionMs: 0 });
+    t.close();
   });
 });

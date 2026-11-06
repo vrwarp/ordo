@@ -173,7 +173,7 @@ export function VideoPanel(props: {
 
 /**
  * The slide's own sound (design/27 §11 item 14): choose or replace it, start, loop, volume, mute and how many
- * shown slides it plays across. It replaces playlist audio that is playing when the slide starts it.
+ * shown slides it plays across. It replaces playlist audio that is playing when it starts (at once, or on F8).
  */
 export function SlideSoundPanel(props: {
   slide: Slide;
@@ -250,8 +250,8 @@ export function SlideSoundPanel(props: {
           />
           <span className="muted small">
             Counts the shown slides of this presentation in the playlist, this one first. Going back to this
-            slide while the sound plays does not restart it. When the slide starts its sound, playlist audio
-            that is playing stops.
+            slide while the sound plays does not restart it. When the sound starts (as the slide goes live, or
+            on F8 when it starts on click), playlist audio that is playing stops.
           </span>
         </>
       )}

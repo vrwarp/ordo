@@ -249,6 +249,7 @@ describe('WebGPU scene compositor', () => {
     // Two textures per layer plus the 1x1 transparent texture, and nothing for overs yet.
     expect(startup).toBe(LAYERS.length * 2 + 1);
     expect(c.overBytes).toBe(0);
+    expect(c.gpuBytes()).toBe(LAYERS.length * 2 * W * H * 4);
     c.prepare(SLIDE, scene('plain', false));
     c.prepare(SLIDE, { key: 'b', kind: SRC_BITMAP, bitmap: bitmap('b') });
     expect(dev.textures.length).toBe(startup);
@@ -257,6 +258,7 @@ describe('WebGPU scene compositor', () => {
     expect(dev.textures.length).toBe(startup + 2);
     expect(dev.textures.slice(startup).map((t) => t.label)).toEqual(['layer1-over0', 'layer1-over1']);
     expect(c.overBytes).toBe(2 * W * H * 4);
+    expect(c.gpuBytes()).toBe((LAYERS.length + 1) * 2 * W * H * 4);
     c.prepare(SLIDE, scene('T', true));
     const allocated = dev.textures.length;
     drawn(c, f);
@@ -324,6 +326,42 @@ describe('WebGPU scene compositor', () => {
     show(f, LAYER_INDEX.media, { key: 'm', kind: SRC_VIDEO, videoSlot: 2, fit: 1 }, c);
     drawn(c, f);
     expect(dev.imports).toEqual([a]);
+  });
+
+  it('draws a scene that shows only its poster as a bitmap: no import and no bind group per frame', async () => {
+    const { c, dev } = await compositor();
+    const f = inputs();
+    show(f, SLIDE, scene('P', false, 2, 5), c);
+    const groups = dev.bindGroups.length;
+    drawn(c, f);
+    drawn(c, f);
+    // No frame of its generation and no over: the base through the static single-t bind group.
+    expect(dev.draws.map((d) => d[0])).toEqual(['single-t', 'single-t']);
+    expect(dev.bindGroups.length).toBe(groups);
+    expect(dev.imports).toHaveLength(0);
+    expect(((dev.draws.at(-1)![1][2] as View).tex as Tex).label).toBe('layer1-stack1');
+    // A stale generation still shows only the poster.
+    f.video.frames[2] = frame('other') as unknown as VideoFrame;
+    f.video.gen[2] = 4;
+    drawn(c, f);
+    expect(dev.draws.at(-1)![0]).toBe('single-t');
+    expect(dev.imports).toHaveLength(0);
+    // Its own frame: the scene pipeline and the frame, through the plane.
+    f.video.gen[2] = 5;
+    drawn(c, f);
+    expect(dev.draws.at(-1)![0]).toBe('single-v');
+    expect(flags(dev, SLIDE)).toBe(PLANE_VIDEO);
+    // Fading to a bitmap while it shows only its poster: the static pair-tt bind group.
+    f.video.gen[2] = 6;
+    const ls = f.layers[SLIDE]!;
+    ls.offer({ key: 'B', kind: SRC_BITMAP, bitmap: bitmap('B') });
+    ls.requestFlip('B', 1000, 1000, 0);
+    ls.tick(1000, 16);
+    f.now = 1500;
+    const before = dev.bindGroups.length;
+    drawn(c, f);
+    expect(dev.draws.at(-1)![0]).toBe('pair-tt');
+    expect(dev.bindGroups.length).toBe(before);
   });
 
   it('crossfades two scenes in one pass with both planes and the pair-vv pipeline', async () => {
@@ -405,6 +443,15 @@ describe('RenderEngine and Compositor.prepare', () => {
     );
     return { e, lose: (r: string) => lost?.(r) };
   }
+
+  it("reports the compositor's GPU memory in telemetry as gpuMB", async () => {
+    const r = new Recorder();
+    const { e } = engine([r]);
+    await e.start();
+    expect(e.telemetry()).not.toHaveProperty('gpuMB');
+    (r as Compositor).gpuBytes = () => 398_163_456;
+    expect(e.telemetry().gpuMB).toBe(398.2);
+  });
 
   it('hands every offer to the compositor before the layer holds it', async () => {
     const r = new Recorder();

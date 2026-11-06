@@ -69,6 +69,19 @@ describe('health aggregation', () => {
     });
     expect(h.armedOk).toBeUndefined();
     expect(h.error).toBeUndefined();
+    expect(h).not.toHaveProperty('gpuMB');
+  });
+
+  it("carries the compositor's GPU memory (design/27 §13)", () => {
+    const h = buildHealth({
+      render: { ...EMPTY_TELEMETRY, compositor: 'webgpu', gpuMB: 398.2 },
+      mainLongTasks: 0,
+      arm: { ok: true, pending: [] },
+      cache: { ready: 0, total: 0 },
+      videoDropped: 0,
+      errors: [],
+    });
+    expect(h.gpuMB).toBe(398.2);
   });
 });
 

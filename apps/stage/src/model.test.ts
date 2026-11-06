@@ -311,6 +311,59 @@ describe('video remaining time', () => {
     // A clock behind the hub (now before startedAt) shows the full length rather than more than it.
     expect(mediaRemainingDisplay(s, 9_000)?.value).toBe('00:10');
   });
+
+  it("counts down a slide's own video playing in its box, from F8 for a click start (design/27 §8)", () => {
+    const base = withVideo(20_000);
+    const deck: Presentation = {
+      id: 'talk',
+      rev: 1,
+      title: 'Talk',
+      kind: 'slides',
+      meta: { tags: [] },
+      sections: [
+        {
+          id: 's',
+          label: 'S',
+          short: 'S',
+          slides: [
+            {
+              id: 'clip',
+              objects: [
+                {
+                  id: 'box',
+                  type: 'image',
+                  box: { x: 100, y: 100, w: 800, h: 450, rotation: 0 },
+                  mediaId: 'vid',
+                  fit: 'contain',
+                  opacity: 1,
+                  radius: 0,
+                  play: { mediaId: 'vid', start: 'click' },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      arrangements: [],
+      archived: false,
+    };
+    const resolved: ResolvedPlaylist = {
+      ...base.resolved!,
+      playlist: {
+        id: 'pl',
+        rev: 1,
+        name: 'x',
+        items: [{ id: 't', kind: 'presentation', presentationId: 'talk' }],
+      },
+      presentations: { talk: deck },
+    };
+    let s = reduce(initialState(), { k: 'goLive', resolved });
+    s = reduce(s, { k: 'go', cueIndex: 0, at: 10_000 });
+    expect(s.layers.media.content).toMatchObject({ objectId: 'box', state: 'paused' });
+    expect(mediaRemainingDisplay(s, 15_000)).toMatchObject({ value: '00:20', running: false });
+    s = reduce(s, { k: 'media.play', at: 16_000 });
+    expect(mediaRemainingDisplay(s, 21_000)).toMatchObject({ value: '00:15', running: true });
+  });
 });
 
 describe('messages', () => {

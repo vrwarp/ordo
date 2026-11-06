@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import type { Socket } from 'node:net';
 import { type LiveState, newId, type Output, type Playlist, type Presentation } from '@ordo/domain';
 import { readZip, remapMediaIds } from '@ordo/importers';
-import type { Job, LibrarySnapshot, LibrarySnapshotDelta } from '@ordo/protocol';
+import { APP_VERSION, type Job, type LibrarySnapshot, type LibrarySnapshotDelta } from '@ordo/protocol';
 import JSZip from 'jszip';
 import WebSocket from 'ws';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -197,7 +197,9 @@ async function stuckSocket(base: string, cookie: string): Promise<Socket> {
     req.on('upgrade', (_res, socket) => {
       socket.on('error', () => {});
       // Say hello (a masked text frame), then stop reading: the server's close frame is never answered.
-      const payload = Buffer.from(JSON.stringify({ t: 'hello', v: 1, role: 'operate', appVersion: '0.1.0' }));
+      const payload = Buffer.from(
+        JSON.stringify({ t: 'hello', v: 1, role: 'operate', appVersion: APP_VERSION }),
+      );
       const mask = randomBytes(4);
       const frame = Buffer.alloc(2 + 4 + payload.length);
       frame[0] = 0x81;

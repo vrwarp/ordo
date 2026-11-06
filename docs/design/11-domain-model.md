@@ -298,10 +298,14 @@ the audio slot as `slideOwned` until the live cue leaves `[cueIndex, untilCue]`.
 - `expandCues` sets these fields only for media in `resolved.media`. `untilCue` is the cue
   reached after `slides` shown slides of the same playlist item (the slide itself counts as
   the first, hidden slides do not), else the item's last cue.
-- A click start goes live paused at 0, and F8 plays it. Entering a slide restarts its video;
-  a slide-owned sound still playing from that same cue is never restarted, so a loop that
-  wraps back to it keeps the music running.
-- A slide's sound replaces playlist audio, which otherwise plays on under slides.
+- A click-start video goes live paused at 0, and F8 plays it. A click-start sound waits for
+  F8 (`pendingSlideSound`) without touching the audio slot; F8 starts it, after a waiting
+  click video (`mediaPlayTarget`). Entering a slide restarts its video; a slide-owned sound
+  of the same media still playing with the entered cue inside its range is never restarted,
+  so a loop that wraps back to it, or an arrangement that repeats the slide, keeps the music
+  running.
+- A slide's sound replaces playlist audio once it starts (an autoplay sound when its slide
+  goes live, a click-start one on F8); playlist audio otherwise plays on under slides.
   `clear('slide')` also clears the slide's video and sound. onEnd works as for media cues,
   because `cueIndex` is the slide's own cue.
 - At goLive these clips and sounds are optional: one that is missing, still processing or

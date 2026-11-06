@@ -7,7 +7,7 @@ import {
   type Presentation,
   type ResolvedPlaylist,
 } from '@ordo/domain';
-import { LiveSummaryRes } from '@ordo/protocol';
+import { APP_VERSION, LiveSummaryRes } from '@ordo/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { liveSummary } from '../src/routes.ts';
 import {
@@ -234,7 +234,7 @@ describe('WebSocket live flow', () => {
     const out = hub.lib.getSetting('outputs')[0]!;
     const a = await connectWs(hub.url, { cookie: op.cookie });
     const w = await a.next(byType('welcome'));
-    expect(w).toMatchObject({ role: 'operate', seq: 0, appVersion: '0.1.0' });
+    expect(w).toMatchObject({ role: 'operate', seq: 0, appVersion: APP_VERSION });
     expect(typeof w.hubMs).toBe('number');
     expect((await a.next(byType('live.state'))).seq).toBe(0);
     const o = await connectWs(hub.url, { token: out.token, hello: { role: 'output', outputId: out.id } });

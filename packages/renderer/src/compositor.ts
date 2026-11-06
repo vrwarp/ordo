@@ -47,6 +47,11 @@ export interface Compositor {
    * content needs (WebGPU: a scene's `over` textures, design/27 §7.2), never on a flip or in `draw`.
    */
   prepare?(layer: number, c: StackContent<ImageBitmap>): void;
+  /**
+   * GPU memory the compositor holds for layer content (layer textures plus scene over textures), in bytes,
+   * reported as health `gpuMB` (design/27 §13). Canvas 2D holds none.
+   */
+  gpuBytes?(): number;
 }
 
 export const MAX_VIDEO_SLOTS = 4;

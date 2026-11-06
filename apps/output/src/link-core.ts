@@ -12,10 +12,11 @@ import {
   playableFile,
   stillFile,
 } from '@ordo/domain';
-import { checkInvariants, reduce } from '@ordo/live-state';
+import { checkInvariants, reduce, startSlideSound } from '@ordo/live-state';
 import { APP_VERSION, type OutputConfigRes, type OutputHealth, ROUTES } from '@ordo/protocol';
 import {
   type AssetJob,
+  type AudioDesc,
   DroppedFrames,
   EMPTY_TELEMETRY,
   FIT_CONTAIN,
@@ -154,6 +155,8 @@ export class SlotMirror {
   /** The current load streams from the hub (no complete copy in the service cache). */
   streamed = false;
   gen = 0;
+  /** The current load was told to play since it loaded: it is off its first frame. */
+  played = false;
   waiter?: { key: string; promise: Promise<void>; resolve: () => void; reject: (e: Error) => void };
   constructor(readonly id: number) {}
 }
@@ -204,6 +207,8 @@ export class LinkCore {
   private flips: { key: string; at: number; fadeMs: number; cue: number }[] = [];
   private livePlan?: FramePlan;
   private armedPlan?: FramePlan;
+  /** The live slide's click-start sound that waits for F8, preloaded by the audio master. */
+  private waitingSound?: AudioDesc;
   private clearSent = '';
 
   // Quarantine (design/25): keys that failed too often are skipped for the rest of the service.
@@ -852,8 +857,19 @@ export class LinkCore {
         armed = undefined;
       }
     }
+    // The live slide's click-start sound waits for F8 (design/27 §8): the audio master preloads it, paused.
+    let waitingSound: AudioDesc | undefined;
+    const started = state.mode === 'live' && !this.preview ? startSlideSound(state, 0) : undefined;
+    if (started) {
+      try {
+        waitingSound = planFrame(started, look, planOpts).audio.desc ?? undefined;
+      } catch {
+        waitingSound = undefined;
+      }
+    }
     this.livePlan = live;
     this.armedPlan = armed;
+    this.waitingSound = waitingSound;
     // Before anything is armed: a video that just left keeps its slot until its fade ends, and the clips
     // playing inside the live and armed slides get their slots (the slide jobs below carry them).
     this.markOutgoing(live);
@@ -1011,12 +1027,15 @@ export class LinkCore {
   private slideVideo(
     d: SlideDesc,
     plan: FramePlan,
-  ): { objectId: string; slot: number; gen: number } | undefined {
+  ): { objectId: string; slot: number; gen: number; w?: number; h?: number } | undefined {
     const md = plan.media.desc;
-    if (!d.video || md?.kind !== 'video' || !md.inSlide || md.cueIndex !== d.cueIndex) return undefined;
+    const v = d.video;
+    if (!v || md?.kind !== 'video' || !md.inSlide || md.cueIndex !== d.cueIndex) return undefined;
     this.armInSlide(md);
     const slot = this.inSlideSlot(md);
-    return slot ? { objectId: d.video.objectId, slot: slot.id, gen: slot.gen } : undefined;
+    if (!slot) return undefined;
+    const size = v.w && v.h ? { w: v.w, h: v.h } : {};
+    return { objectId: v.objectId, slot: slot.id, gen: slot.gen, ...size };
   }
 
   /**
@@ -1083,6 +1102,7 @@ export class LinkCore {
       slot.ready = false;
       slot.error = undefined;
     }
+    slot.played = false;
     slot.key = key;
     slot.hash = hash;
     // Any earlier waiter on this slot was superseded (like MediaSlot.load: resolves, the caller re-checks).
@@ -1181,6 +1201,7 @@ export class LinkCore {
     };
     add(this.livePlan);
     add(this.armedPlan);
+    if (pair === this.auPair && this.waitingSound) keys.push(this.waitingSound.key);
     return keys;
   }
 
@@ -1233,7 +1254,11 @@ export class LinkCore {
         const pauseAt = live.media.at + Math.max(fadeMs, live.black ? 520 : 0);
         this.pauseAt(old, pauseAt);
         old.busyUntil = Math.max(now, live.media.at) + fadeMs + 100;
-        if (this.prevMdInSlide) this.media({ k: 'vclear', slot: old.id, key: old.key, at: pauseAt });
+        // GO then a quick Prev: the clip that left is the armed one again. Its picture stays (it is the
+        // outgoing side of the fade, and armed), and it goes back to its first frame when the fade ends.
+        const armedMd = this.armedPlan?.media.desc;
+        if (armedMd && old.key === armedMd.key) this.rewindAt(old, old.key, armedMd.loop, pauseAt);
+        else if (this.prevMdInSlide) this.media({ k: 'vclear', slot: old.id, key: old.key, at: pauseAt });
       }
       this.prevMdLive = mdKey;
     }
@@ -1272,13 +1297,39 @@ export class LinkCore {
         positionMs: md.positionMs,
         loop: md.loop,
       });
+      if (mdSlot.ready && md.state === 'playing') mdSlot.played = true;
       if (hiddenWhileStopped(md)) this.media({ k: 'vclear', slot: mdSlot.id, key: md.key });
     }
-    // Armed media video stays paused on its first frame.
+    // Armed media video stays paused on its first frame. One that played (it was live: GO then Prev) is
+    // sought back to it; while it still fades out as the outgoing side, markOutgoing does that at the fade
+    // end, so the fade never shows it frozen or jumping.
     const amd = armed?.media.desc?.kind === 'video' ? armed.media.desc : undefined;
     const amSlot = amd && amd.key !== mdKey ? this.mdPair.find(amd.key) : undefined;
-    if (amSlot?.ready) this.media({ k: 'holdPaused', slot: amSlot.id });
+    if (amd && amSlot?.ready && amSlot.busyUntil <= clock.now()) {
+      if (amSlot.played) this.rewindAt(amSlot, amSlot.key, amd.loop);
+      else this.media({ k: 'holdPaused', slot: amSlot.id });
+    }
     if (amd && amSlot && hiddenWhileStopped(amd)) this.media({ k: 'vclear', slot: amSlot.id, key: amd.key });
+  }
+
+  /**
+   * Pause the media slot holding `key` on its first frame (`apply` paused at 0 seeks there, and the
+   * renderer gets that frame), at hub time `at` or now, unless by then it is live again or holds another
+   * clip.
+   */
+  private rewindAt(slot: SlotMirror, key: string, loop: boolean, at?: number): void {
+    const run = () => {
+      if (slot.key !== key || !slot.ready || this.livePlan?.media.desc?.key === key) return;
+      slot.played = false;
+      this.media({
+        k: 'apply',
+        slot: slot.id,
+        transport: { state: 'paused', startedAt: 0, positionMs: 0, loop },
+      });
+    };
+    const delay = at === undefined ? 0 : at - clock.now();
+    if (delay > 2) setTimeout(run, delay);
+    else run();
   }
 
   private routeAudio(slot: SlotMirror, a: AudioRoute): void {
@@ -1299,7 +1350,12 @@ export class LinkCore {
       this.prevAuLive = key;
     }
     const protect = this.protectedKeys(this.auPair);
-    const want = [a, armed?.audio.desc && armed.audio.desc.key !== key ? armed.audio.desc : undefined];
+    const waiting = this.waitingSound && this.waitingSound.key !== key ? this.waitingSound : undefined;
+    const want = [
+      a,
+      waiting,
+      armed?.audio.desc && armed.audio.desc.key !== key ? armed.audio.desc : undefined,
+    ];
     for (const d of want) {
       if (!d || this.auPair.find(d.key) || this.inflight.has(d.key) || this.errorBlocks(d.key)) continue;
       const slot = this.auPair.pick(d.key, protect, clock.now());
@@ -2093,6 +2149,7 @@ export class LinkCore {
       look: `${this.look.name} [${this.look.id}]`,
       bus: this.link.bus,
       compositor: this.compositor + (this.renderNote ? ` — ${this.renderNote}` : ''),
+      gpuMB: h.gpuMB,
       resolution: `${this.width}x${this.height}`,
       fps: h.fps,
       presented: h.presented,

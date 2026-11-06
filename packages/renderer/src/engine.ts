@@ -442,6 +442,7 @@ export class RenderEngine {
   telemetry(): RenderTelemetry {
     let late = 0;
     for (const l of this.layers) late += l.lateFlips;
+    const gpuBytes = this.compositor?.gpuBytes?.();
     return {
       presented: this.clock.presented,
       missed: this.clock.missed,
@@ -455,6 +456,7 @@ export class RenderEngine {
       error: this.error,
       slideCue: this.markerLive,
       slideFlipAt: this.markerFlipAt,
+      ...(gpuBytes !== undefined ? { gpuMB: Math.round(gpuBytes / 1e5) / 10 } : {}),
     };
   }
 

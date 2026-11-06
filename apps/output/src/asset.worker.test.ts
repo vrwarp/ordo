@@ -13,6 +13,7 @@ import {
   PLANE_FLAGS,
   PLANE_FLOATS,
   PLANE_HAS_OVER,
+  PLANE_UV,
   SRC_BITMAP,
   SRC_SCENE,
   planeSample,
@@ -217,6 +218,15 @@ describe('asset worker: slide jobs whose video plays in its box', () => {
     expect(s[0]).toBeCloseTo(0.5, 5);
     expect(s[1]).toBeCloseTo(0.5, 5);
     expect(s[2]).toBe(1);
+  });
+
+  it("fits the video with the clip's size from the job, not the poster's", async () => {
+    // The poster is 4:3 (400x300); a 16:9 clip fills the 16:9 box, a 4:3 one is pillarboxed.
+    const wide = (await run(slideJob({ video: { objectId: 'vid', slot: 2, gen: 7, w: 1920, h: 1080 } }))).msg;
+    expect(wide!.plane![PLANE_UV]).toBeCloseTo(0, 5);
+    expect(wide!.plane![PLANE_UV + 2]).toBeCloseTo(1, 5);
+    const poster = (await run(slideJob())).msg;
+    expect(poster!.plane![PLANE_UV]).toBeCloseTo(-1 / 6, 5);
   });
 
   it('sends no over when nothing above the video overlaps it', async () => {
