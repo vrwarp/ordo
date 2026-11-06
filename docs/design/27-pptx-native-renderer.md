@@ -644,6 +644,8 @@ export type Seg = { start: number; end: number; x: number; w: number; run: numbe
 export type LaidLine = { para: number; top: number; baseline: number; height: number; x: number; w: number; segs: Seg[];
   extraPerSpace: number; bullet?: { text: string; x: number; font: string; sizePx: number; color: Rgba } };
 export type RichLayout = { lines: LaidLine[]; fontScale: number; spacingScale: number; overflow: boolean; ink: Box };
+export interface FontEnv { font(req: FaceRequest): string; readonly generation: number }  // §10; a new generation re-lays out
+// FaceRequest = { family, fallbacks, weight, italic, smallCaps, sizePx, script }; packages/renderer/src/text/README.md
 export function layoutRich(m: Measurer, o: TextObject, env: FontEnv): RichLayout;       // logical px, pure, memoised
 export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: number, env: FontEnv): void;
 ```
@@ -661,7 +663,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
 
 **Determinism.**
 - Layout always runs at logical scale: `measureText` at the logical font size, positions in logical px.
-- Painting applies `ctx.setTransform(scale, 0, 0, scale, 0, 0)` and draws each segment at its reference x.
+- Painting applies `ctx.scale(scale, scale)` on top of the caller's transform (thumbnails translate first, the editor adds devicePixelRatio) and draws each segment at its reference x.
 - Line breaks, autofit results and positions are therefore identical at 960, 1920 and 3840 wide, in the editor and in thumbnails. Today they are not: `text2d.ts:84-101` measures at device scale.
 - Advances at device size can differ from the reference × scale by a fraction of a pixel. That residue stays inside a segment and never moves a break.
 

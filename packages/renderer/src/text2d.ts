@@ -5,14 +5,17 @@ import {
   type Rgba,
   type Slide,
   type SlideObject,
+  type TextObject,
   type TextStyle,
   firstText,
   rgbaCss,
 } from '@ordo/domain';
 
 import { CLAMP, clampBox, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
+import { type Ctx2D, roundRect, setLetterSpacing, withRotation } from './ctx.ts';
+import { drawRichText, isRichText } from './text/rich.ts';
 
-export type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+export type { Ctx2D } from './ctx.ts';
 export type ImageLookup = (mediaId: string) => CanvasImageSource | undefined;
 
 export function fontString(style: TextStyle, scale: number, sizeOverride?: number): string {
@@ -133,32 +136,6 @@ export function layoutText(
   };
 }
 
-function setLetterSpacing(ctx: Ctx2D, px: number): void {
-  const c = ctx as Ctx2D & { letterSpacing?: string };
-  if ('letterSpacing' in c) c.letterSpacing = `${px}px`;
-}
-
-function roundRect(ctx: Ctx2D, x: number, y: number, w: number, h: number, r: number): void {
-  ctx.beginPath();
-  if (r > 0 && 'roundRect' in ctx) (ctx as CanvasRenderingContext2D).roundRect(x, y, w, h, r);
-  else ctx.rect(x, y, w, h);
-}
-
-function withRotation(ctx: Ctx2D, box: Box, scale: number, draw: () => void): void {
-  if (!box.rotation) {
-    draw();
-    return;
-  }
-  const cx = (box.x + box.w / 2) * scale;
-  const cy = (box.y + box.h / 2) * scale;
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.rotate((box.rotation * Math.PI) / 180);
-  ctx.translate(-cx, -cy);
-  draw();
-  ctx.restore();
-}
-
 /** Draw one text block: fill, shadow, outline, then the glyphs. */
 export function drawText(
   ctx: Ctx2D,
@@ -277,8 +254,17 @@ export function drawShape(ctx: Ctx2D, o: Extract<SlideObject, { type: 'shape' }>
   ctx.restore();
 }
 
+/**
+ * Draw a text object: through the rich text engine (design/27 §6) when it has runs, paragraph styles or any
+ * rich style field, else through `drawText` exactly as before those fields existed.
+ */
+export function drawTextObject(ctx: Ctx2D, o: TextObject, scale: number): void {
+  if (isRichText(o)) drawRichText(ctx, o, scale);
+  else drawText(ctx, o.text, o.style, o.box, scale, { opacity: o.opacity });
+}
+
 export function drawObject(ctx: Ctx2D, o: SlideObject, scale: number, images?: ImageLookup): void {
-  if (o.type === 'text') drawText(ctx, o.text, o.style, o.box, scale, { opacity: o.opacity });
+  if (o.type === 'text') drawTextObject(ctx, o, scale);
   else if (o.type === 'shape') drawShape(ctx, o, scale);
   else {
     const img = images?.(o.mediaId);

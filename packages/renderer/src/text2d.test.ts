@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_LYRIC_STYLE } from '@ordo/domain';
-import { layoutText, wrapLines } from './text2d.ts';
+import { DEFAULT_LYRIC_STYLE, type TextObject } from '@ordo/domain';
+import { drawObject, layoutText, wrapLines } from './text2d.ts';
+import { recordingCtx } from './text/test-util.ts';
 
 function fakeCtx() {
   // Every glyph is 10px wide at any font; enough to test wrapping and alignment maths.
@@ -28,5 +29,38 @@ describe('text layout', () => {
     const fitted = layoutText(ctx, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', style, box, 1, true);
     expect(fitted.fontSize).toBeLessThan(100);
     expect(fitted.fontSize).toBeGreaterThanOrEqual(50);
+  });
+});
+
+describe('text object dispatch (design/27 §6)', () => {
+  const legacy: TextObject = {
+    id: 't',
+    type: 'text',
+    box: { x: 100, y: 100, w: 800, h: 300, rotation: 0 },
+    text: 'Amazing grace',
+    style: { ...DEFAULT_LYRIC_STYLE, fontSizePx: 60 },
+    opacity: 1,
+  };
+
+  it('draws a legacy object through drawText at device size', () => {
+    const ctx = recordingCtx();
+    drawObject(ctx, legacy, 0.5);
+    const fills = ctx.ops.filter((o) => o.op === 'fillText');
+    expect(fills.length).toBeGreaterThan(0);
+    for (const f of fills) {
+      expect(f.font).toContain(' 30px "Inter"');
+      expect(f.transform).toEqual([1, 0, 0, 1, 0, 0]);
+    }
+  });
+
+  it('draws an object with a rich field through the rich engine, in logical px under the scale', () => {
+    const ctx = recordingCtx();
+    drawObject(ctx, { ...legacy, runs: [{ start: 0, end: 7, fontWeight: 400 }] }, 0.5);
+    const fills = ctx.ops.filter((o) => o.op === 'fillText');
+    expect(fills.map((f) => f.args[0])).toContain('Amazing');
+    for (const f of fills) {
+      expect(f.font).toContain(' 60px "Inter"');
+      expect(f.transform).toEqual([0.5, 0, 0, 0.5, 0, 0]);
+    }
   });
 });

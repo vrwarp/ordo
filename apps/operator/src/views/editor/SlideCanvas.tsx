@@ -8,7 +8,7 @@ import {
   type SlideObject,
   type TextObject,
 } from '@ordo/domain';
-import { drawImageFit, drawObject, drawText } from '@ordo/renderer';
+import { drawImageFit, drawObject, drawTextObject } from '@ordo/renderer';
 import type Konva from 'konva';
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Layer, Line, Rect, Shape, Stage, Transformer } from 'react-konva';
@@ -63,9 +63,8 @@ function textCanvas(o: TextObject, tick: number): HTMLCanvasElement {
   c.height = Math.max(1, Math.ceil(o.box.h + 2 * MARGIN));
   const ctx = c.getContext('2d')!;
   ctx.clearRect(0, 0, c.width, c.height);
-  drawText(ctx, o.text, o.style, { x: MARGIN, y: MARGIN, w: o.box.w, h: o.box.h, rotation: 0 }, 1, {
-    opacity: o.opacity,
-  });
+  // Rich objects go through the rich engine, legacy ones through drawText exactly as before (design/27 §6).
+  drawTextObject(ctx, { ...o, box: { x: MARGIN, y: MARGIN, w: o.box.w, h: o.box.h, rotation: 0 } }, 1);
   textCache.set(o, { key, canvas: c });
   return c;
 }

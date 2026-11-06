@@ -42,6 +42,19 @@ export const Box = z.object({
 });
 export type Box = z.infer<typeof Box>;
 
+/** A drop shadow: offset, blur and colour (TextStyle, runs, and later shapes and pictures). */
+export const Shadow = z.object({ dx: coord, dy: coord, blur: length, color: Rgba });
+export type Shadow = z.infer<typeof Shadow>;
+/** A glow around text (a blurred copy with no offset). */
+export const Glow = z.object({ radius: length, color: Rgba });
+export type Glow = z.infer<typeof Glow>;
+
+/*
+ * Rich text and PowerPoint fields (design/27 §3). Every new field is optional and bounded, and enums inside
+ * new fields use .catch(default), so a value a later release adds degrades instead of failing
+ * Slide.safeParse in this one. An older build strips them all and draws the legacy values beside them.
+ */
+
 export const TextStyle = z.object({
   fontFamily: z.string().max(300),
   fontWeight: z.number().min(0).max(1000).default(400),
@@ -54,12 +67,117 @@ export const TextStyle = z.object({
   letterSpacing: z.number().min(-1000).max(1000).default(0),
   padding: coord.default(0),
   outline: z.object({ width: length, color: Rgba }).optional(),
-  shadow: z.object({ dx: coord, dy: coord, blur: length, color: Rgba }).optional(),
+  shadow: Shadow.optional(),
   fill: z.object({ color: Rgba, radius: length.default(0) }).optional(),
   /** Applied when drawn; the text itself keeps its authored casing (ProPresenter's ALL CAPS). */
   transform: z.enum(['none', 'uppercase']).default('none'),
+  /** How lines are spaced: ordo's (`lineHeight` × size) or LibreOffice/PowerPoint's (design/27 §6). */
+  lineModel: z.enum(['ordo', 'office']).catch('ordo').optional(),
+  /** Space between the box and the text on each side; replaces `padding` when present. */
+  insets: z.object({ l: length, t: length, r: length, b: length }).optional(),
+  /** false: lines never wrap (PowerPoint wrap="none"); they grow from their alignment. */
+  wrap: z.boolean().optional(),
+  /** shrink: smaller text and spacing until the text fits the box. */
+  autofit: z.enum(['none', 'shrink']).catch('none').optional(),
+  /**
+   * The shrink scale in use: PowerPoint's stored normAutofit, or the last fit. Kept by edits while the text
+   * still fits at it (design/27 §11).
+   */
+  fitScale: z.object({ font: z.number().min(0.01).max(1), spacing: z.number().min(0).max(1) }).optional(),
+  /** Justify every paragraph of the box (`align` is never widened). */
+  justify: z.boolean().optional(),
+  /** Base direction of paragraphs that set none; auto takes it from the first strong character. */
+  direction: z.enum(['ltr', 'rtl', 'auto']).catch('auto').optional(),
+  /** BCP 47 language tag (line breaking, shaping, hyphenation). */
+  lang: z.string().max(35).optional(),
+  /** Families tried after `fontFamily`: metric substitute, east Asian/complex-script fonts, script fallbacks. */
+  fallbackFonts: z.array(z.string().max(300)).max(8).optional(),
+  underline: z.boolean().optional(),
+  glow: Glow.optional(),
 });
 export type TextStyle = z.infer<typeof TextStyle>;
+
+/**
+ * A sparse style annotation over `TextObject.text`, by UTF-16 offsets [start, end). Runs are sorted and do
+ * not overlap; text outside every run takes the box style. Unset fields take the box style too.
+ */
+export const TextRun = z.object({
+  start: z.number().int().min(0).max(MAX.text),
+  end: z.number().int().min(0).max(MAX.text),
+  fontFamily: z.string().max(300).optional(),
+  fontWeight: z.number().min(0).max(1000).optional(),
+  fontStyle: z.enum(['normal', 'italic']).catch('normal').optional(),
+  /** × style.fontSizePx, so the box size (and a theme) scales every run. */
+  sizeScale: z.number().min(0.01).max(50).optional(),
+  color: Rgba.optional(),
+  highlight: Rgba.optional(),
+  underline: z.boolean().optional(),
+  strike: z.boolean().optional(),
+  /** Raised (+) or lowered (-) by this share of the size: OOXML baseline/100000; +0.3 = superscript. */
+  baseline: z.number().min(-1).max(1).optional(),
+  letterSpacing: z.number().min(-1000).max(1000).optional(),
+  caps: z.enum(['none', 'all', 'small']).catch('none').optional(),
+  /** null = no outline here, whatever the box style says. */
+  outline: z.object({ width: length, color: Rgba }).nullable().optional(),
+  /** null = no shadow here, whatever the box style says. */
+  shadow: Shadow.nullable().optional(),
+  lang: z.string().max(35).optional(),
+});
+export type TextRun = z.infer<typeof TextRun>;
+
+/** Style of paragraph i, the i-th piece of `text.split('\n')`. A null entry takes the box defaults. */
+export const TextPara = z.object({
+  align: z.enum(['left', 'center', 'right', 'justify', 'distribute']).catch('left').optional(),
+  /** PowerPoint a:br: a line break that continues the previous paragraph (no bullet, no space before). */
+  soft: z.boolean().optional(),
+  level: z.number().int().min(0).max(8).optional(),
+  /** Left margin of the paragraph's lines (marL). */
+  indentPx: coord.optional(),
+  /** Extra indent of the first line (indent); negative = a hanging bullet. */
+  firstLinePx: coord.optional(),
+  spaceBeforePx: length.optional(),
+  spaceAfterPx: length.optional(),
+  /** × single spacing (single = 1.2 × size in the office model). */
+  lineSpacing: z.number().min(0).max(13.2).optional(),
+  /** Exact line pitch. */
+  lineSpacingPx: length.optional(),
+  /** null = explicitly no bullet (PowerPoint buNone). */
+  bullet: z
+    .object({
+      /** Unicode (Wingdings and Symbol codes are mapped at import). */
+      char: z.string().min(1).max(8).optional(),
+      /** OOXML autonumber scheme: 'arabicPeriod', 'arabicParenBoth', ...; unknown → arabicPeriod. */
+      auto: z.string().max(40).optional(),
+      startAt: z.number().int().min(1).max(32_767).optional(),
+      fontFamily: z.string().max(300).optional(),
+      color: Rgba.optional(),
+      sizePct: z.number().min(0.1).max(4).optional(),
+    })
+    .nullable()
+    .optional(),
+  rtl: z.boolean().optional(),
+  /** Laid out but not drawn (a split reveal keeps revealed lines in place). */
+  hidden: z.boolean().optional(),
+});
+export type TextPara = z.infer<typeof TextPara>;
+
+/** Where an object came from (an imported PowerPoint shape), for grouping, re-import and 'apply to similar'. */
+export const ObjectOrigin = z.object({
+  /** 'pptx' */
+  src: z.string().max(16),
+  /** p:cNvPr id */
+  shapeId: z.number().int().min(0).max(2_147_483_647).optional(),
+  /** 'title' | 'body' | 'body:2' | 'subTitle' ... */
+  ph: z.string().max(40).optional(),
+  /** title|body|text|picture|shape|bg|deco|poster|cell|art (a string: the list can grow) */
+  role: z.string().max(20).optional(),
+  /** A flattened group or a shape+text pair: selected together. */
+  group: z.number().int().min(0).max(100_000).optional(),
+});
+export type ObjectOrigin = z.infer<typeof ObjectOrigin>;
+
+/** Fields every slide object has. `locked`: move, resize, delete and z-order only. */
+const common = { origin: ObjectOrigin.optional(), locked: z.boolean().optional() };
 
 export const TextObject = z.object({
   id: Id,
@@ -68,6 +186,9 @@ export const TextObject = z.object({
   text: z.string().max(MAX.text),
   style: TextStyle,
   opacity: z.number().min(0).max(1).default(1),
+  runs: z.array(TextRun).max(2000).optional(),
+  paras: z.array(TextPara.nullable()).max(5000).optional(),
+  ...common,
 });
 export type TextObject = z.infer<typeof TextObject>;
 
@@ -79,6 +200,7 @@ export const ImageObject = z.object({
   fit: z.enum(['contain', 'cover', 'stretch']).default('contain'),
   opacity: z.number().min(0).max(1).default(1),
   radius: length.default(0),
+  ...common,
 });
 export type ImageObject = z.infer<typeof ImageObject>;
 
@@ -91,6 +213,7 @@ export const ShapeObject = z.object({
   stroke: z.object({ width: length, color: Rgba }).optional(),
   opacity: z.number().min(0).max(1).default(1),
   radius: length.default(0),
+  ...common,
 });
 export type ShapeObject = z.infer<typeof ShapeObject>;
 
