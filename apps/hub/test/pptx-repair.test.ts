@@ -379,6 +379,8 @@ describe("'Pictures (LibreOffice)' import: boxes keyed by the slide each page sh
   it('gives page 2 the third slide’s text after a hidden slide, in the page’s own frame', async () => {
     const fd = new FormData();
     fd.append('file', new Blob([(await hiddenSlideDeck()) as Uint8Array<ArrayBuffer>]), 'Hidden.pptx');
+    // The picture import is a choice since editable slides became the default (item H).
+    fd.append('renderer', 'libreoffice');
     const job = await ed.json<Job>('/import/document', { method: 'POST', body: fd });
     await hub.jobs.idle();
     const done = hub.jobs.get(job.id);

@@ -35,6 +35,7 @@
  */
 import { open, rm } from 'node:fs/promises';
 import {
+  compactSlideBytes,
   type ImageObject,
   newId,
   planImportSizes,
@@ -55,6 +56,7 @@ import {
   type ArtInfo,
   type EmittedSlide,
   MEDIA_PREFIX,
+  type PictureHeader,
   pictureSize,
   type SectionInfo,
   type SlideClass,
@@ -67,7 +69,7 @@ import type { DocPayload } from '../imports.ts';
 import type { JobCtx, JobHandler } from '../jobs.ts';
 import { baseName } from '../media/service.ts';
 import { type CpuPool, cpuPool, transferables, WorkerStartError } from '../pool.ts';
-import { addReadyPicture, displayNeeds, preparePicture } from './pictures.ts';
+import { displayNeeds, PictureBudget, type PictureItem, storePictures } from './pictures.ts';
 import { ImportLog, importResult, logSafe, missingFonts } from './report.ts';
 import {
   CONVERTER_VERSION,
@@ -125,6 +127,8 @@ const SLIDE_NOTES = 16;
 const JOB_LOG_LINES = 20;
 /** The text of a picture-class slide kept for search (`MAX.text` of `@ordo/domain`). */
 const ART_TEXT_CHARS = 20_000;
+/** That text on a deck too large for its budget even with every slide compact (§3.4). */
+const COMPACT_TEXT_CHARS = 200;
 /** How often the picture resume pairs are written while pictures are stored. */
 const SAVE_EVERY_MS = 1_000;
 
@@ -155,8 +159,11 @@ type Draft = {
   artText?: string;
   /** Made picture class by the size budgets (§3.4). */
   compact?: boolean;
-  /** Metafile pictures the slide may show, converted by LibreOffice. */
-  metafiles?: string[];
+  /**
+   * Metafile pictures version 1 leaves out (`EmittedSlide.metafiles`, item D): LibreOffice converts each part
+   * and the follow-up puts the object back just under `before`.
+   */
+  metafiles?: { part: string; object: ImageObject; before?: string }[];
 };
 
 class Cancelled extends Error {
@@ -275,7 +282,7 @@ class NativeImport {
 
     // 2b. Referenced pictures spilled, their sizes read.
     const spilled = await this.spillPictures(deck, scratch, scan);
-    const pictureSizes: [string, { w: number; h: number }][] = [];
+    const pictureSizes: [string, PictureHeader][] = [];
     for (const [part, path] of spilled) {
       const px = await spilledSize(path);
       if (px) pictureSizes.push([part, px]);
@@ -293,7 +300,7 @@ class NativeImport {
     const compact = this.budget(drafts);
 
     // 4. Pictures.
-    const stored = await this.pictures(drafts, spilled);
+    const stored = await this.pictures(drafts, spilled, new Map(pictureSizes));
     ctx.progress(0.95);
 
     // 5-6. Version 1.
@@ -401,7 +408,7 @@ class NativeImport {
   private async convert(
     parts: Map<string, Uint8Array>,
     listed: readonly SlideRef[],
-    pictureSizes: [string, { w: number; h: number }][],
+    pictureSizes: [string, PictureHeader][],
   ): Promise<Map<number, { s: EmittedSlide; media: Map<string, string>; extra?: SceneSlideExtra }>> {
     const out = new Map<number, { s: EmittedSlide; media: Map<string, string>; extra?: SceneSlideExtra }>();
     const own = new Set<string>();
@@ -476,7 +483,6 @@ class NativeImport {
     scan: SceneScan,
   ): Draft[] {
     const notes = new Map(scan.notes);
-    const metafiles = new Map(scan.metafiles);
     let notesBytes = 0;
     let notesCut = 0;
     const drafts = listed.map((ref) => {
@@ -519,7 +525,8 @@ class NativeImport {
         d.notes.push(x.note);
         this.log.add('info', `${label}: ${x.note}`);
       }
-      const mf = metafiles.get(ref.index);
+      // The metafiles the slide draws, set aside by the converter (item D): LibreOffice converts them.
+      const mf = c?.s.metafiles;
       if (mf?.length && d.cls !== 'picture') {
         d.metafiles = mf;
         d.notes.push(`${mf.length} metafile picture(s) wait for LibreOffice`);
@@ -535,44 +542,64 @@ class NativeImport {
     return drafts;
   }
 
-  /** Step 3: the §3.4 budgets. Returns how many slides were made compact. */
+  /** Step 3: the §3.4 budgets (`planImportSizes`, item F). Returns how many slides were made compact. */
   private budget(drafts: Draft[]): number {
-    const sizes = drafts.map((d) => slideBytes(record(d, 'x'.repeat(16))));
-    const compactSizes = drafts.map((d) => slideBytes(record(compactCopy(d), 'x'.repeat(16))));
-    const mean = Math.ceil(compactSizes.reduce((a, b) => a + b, 0) / Math.max(1, compactSizes.length));
-    const plan = planImportSizes(sizes, Math.max(512, mean));
+    const stored = drafts.map((d) => record(d, DIGEST_STANDIN));
+    const sizes = stored.map((sl) => slideBytes(sl));
+    // Each slide's compact size with version 2's page picture and text boxes (`compactSlideBytes`).
+    const plan = planImportSizes(
+      sizes,
+      stored.map((sl) => compactSlideBytes(sl)),
+    );
     let compact = 0;
-    let firstClosed: number | undefined;
     drafts.forEach((d, i) => {
-      if (!plan.compact[i] || d.cls === 'picture') return;
+      const why = plan.reasons[i];
+      if (!why || d.cls === 'picture') return;
       compact++;
-      const over = sizes[i]! > SIZE_BUDGETS.slideMax;
-      if (over)
+      if (why === 'slide')
         this.warn(
           'budget',
           `slide ${i + 1} is over ${SIZE_BUDGETS.slideMax / 1024} KB: shown as a LibreOffice picture`,
         );
-      else firstClosed ??= i;
       d.compact = true;
       d.notes.push(
-        over
+        why === 'slide'
           ? 'over the slide size budget: a LibreOffice picture'
           : 'compact: the presentation reached its size budget',
       );
       toPicture(d);
     });
-    if (firstClosed !== undefined)
+    if (plan.tailFrom >= 0)
       this.warn(
         'budget',
-        `the presentation reached its size budget (${SIZE_BUDGETS.presentationMax / 1024 ** 2} MiB): slide ${firstClosed + 1} and later are compact LibreOffice pictures`,
+        `the presentation reached its size budget (${SIZE_BUDGETS.presentationMax / 1024 ** 2} MiB): slide ${plan.tailFrom + 1} and later are compact LibreOffice pictures`,
       );
+    if (!plan.fits) {
+      // Even compact the slides are over the budget (their text): the text kept for search is cut.
+      let cut = 0;
+      for (const d of drafts) {
+        if (d.cls !== 'picture' || !d.artText || d.artText.length <= COMPACT_TEXT_CHARS) continue;
+        d.artText = cutText(d.artText, COMPACT_TEXT_CHARS);
+        cut++;
+      }
+      this.warn(
+        'budget',
+        `the deck is over ${SIZE_BUDGETS.presentationMax / 1024 ** 2} MiB even with every slide compact: the text ${cut} picture slide(s) keep for search was cut to ${COMPACT_TEXT_CHARS} characters`,
+      );
+    }
     return compact;
   }
 
-  /** Step 4: every picture the kept slides use, prepared and stored once; part → media id. */
-  private async pictures(drafts: Draft[], spilled: Map<string, string>): Promise<Map<string, string>> {
-    const stored = new Map<string, string>();
-    for (const [part, id] of this.done.media) if (this.deps.lib.media.get(id)) stored.set(part, id);
+  /**
+   * Step 4: every picture the kept slides use, prepared to its display need and stored once (`storePictures`,
+   * item C: deduplicated through the media hash index, one decode budget per import, resume pairs in
+   * `done.media`); part → media id.
+   */
+  private async pictures(
+    drafts: Draft[],
+    spilled: Map<string, string>,
+    sizes: Map<string, PictureHeader>,
+  ): Promise<Map<string, string>> {
     // The display need of each part: its widest use, over every batch (placeholders are per batch).
     const needs = new Map<string, number>();
     const byBatch = new Map<Map<string, string>, Slide[]>();
@@ -581,6 +608,7 @@ class NativeImport {
       list.push(d.slide);
       byBatch.set(d.media, list);
     }
+    const sizeOf = (part: string) => sizes.get(part);
     for (const [media, slides] of byBatch) {
       if (!media.size) continue;
       const used = usedPlaceholders(slides);
@@ -588,60 +616,49 @@ class NativeImport {
       if (!list.length) continue;
       let got: Map<string, number>;
       try {
-        got = displayNeeds(slides, list);
+        got = displayNeeds(slides, list, sizeOf);
       } catch (e) {
         // Without a measured need every picture is prepared for the widest output.
         this.warn('picture', `picture sizes could not be measured (${logSafe(errorMessage(e))})`);
         got = new Map(list.map((m) => [m.part, DEFAULT_NEED_PX]));
       }
-      // A part the measure leaves out (a background) is prepared for the widest output.
       for (const m of list) if (!got.has(m.part)) got.set(m.part, DEFAULT_NEED_PX);
       for (const [part, px] of got) needs.set(part, Math.max(px, needs.get(part) ?? 0));
     }
-    const parts = [...needs.keys()];
-    let n = 0;
-    let lastSave = Date.now();
-    for (const part of parts) {
-      this.checkCancelled();
-      n++;
-      this.ctx.progress(0.6 + (0.35 * n) / Math.max(1, parts.length));
-      if (stored.has(part)) continue;
+    const items: PictureItem[] = [];
+    for (const [part, need] of needs) {
       const file = spilled.get(part);
-      if (!file) {
+      if (file) items.push({ part, file, need });
+      else if (!this.done.media.some(([p]) => p === part))
         this.warn('picture', `a picture is missing from the deck (${logSafe(part)})`);
-        continue;
-      }
-      try {
-        const prepared = await preparePicture(file, needs.get(part)!, {
-          dir: this.scratch,
-          timeoutMs: this.deps.cfg.timeouts.light,
-          signal: this.ctx.signal,
-        });
-        for (const note of prepared.notes) this.log.add('info', `${logSafe(part)}: ${logSafe(note)}`);
-        const m = await addReadyPicture(this.deps, prepared, {
-          name: `${this.title} – ${baseName(logSafe(part.slice(part.lastIndexOf('/') + 1), 100))}`.slice(
-            0,
-            200,
-          ),
-          tags: ['pptx'],
-        });
-        stored.set(part, m.id);
-        this.done.media.push([part, m.id]);
-        if (Date.now() - lastSave > SAVE_EVERY_MS) {
-          this.save();
-          lastSave = Date.now();
-        }
-      } catch (e) {
-        this.checkCancelled();
-        this.warn(
-          'picture',
-          `a picture could not be imported (${logSafe(part)}): ${logSafe(errorMessage(e))}`,
-        );
-      }
     }
+    if (!items.length) return new Map(this.done.media.filter(([, id]) => this.deps.lib.media.get(id)));
+    const res = await storePictures(this.deps, items, {
+      dir: this.scratch,
+      timeoutMs: this.deps.cfg.timeouts.light,
+      signal: this.ctx.signal,
+      budget: new PictureBudget(),
+      done: this.done.media,
+      save: this.save,
+      saveEveryMs: SAVE_EVERY_MS,
+      name: (part) =>
+        `${this.title} – ${baseName(logSafe(part.slice(part.lastIndexOf('/') + 1), 100))}`.slice(0, 200),
+      tags: ['pptx'],
+      log: (msg) => {
+        if (msg.startsWith('[warn] '))
+          this.warn('picture', `a picture could not be imported: ${msg.slice(7)}`);
+        else this.log.add('info', msg);
+      },
+      progress: (n, of) => this.ctx.progress(0.6 + (0.35 * n) / Math.max(1, of)),
+    });
+    if (this.ctx.signal.aborted) throw new Cancelled();
+    for (const part of res.metafiles)
+      this.warn('picture', `${logSafe(part)} is a metafile under another name: not imported`);
     this.save();
-    if (parts.length) this.ctx.log(`${stored.size} of ${parts.length} picture(s) stored`);
-    return stored;
+    this.ctx.log(
+      `${res.media.size} of ${items.length} picture(s) stored (${res.prepared} prepared, ${res.reused} found already, ${res.resumed} resumed)`,
+    );
+    return res.media;
   }
 
   /** Steps 5-6: remap, assemble, sanitize, digest, save version 1 and queue the LibreOffice follow-up. */
@@ -855,6 +872,13 @@ function textOfObjects(objects: readonly SlideObject[]): string {
   return out.join('\n').slice(0, ART_TEXT_CHARS);
 }
 
+/** `s` cut to at most `n` UTF-16 units, never inside a surrogate pair. */
+function cutText(s: string, n: number): string {
+  if (s.length <= n) return s;
+  const c = s.charCodeAt(n - 1);
+  return s.slice(0, c >= 0xd800 && c <= 0xdbff ? n - 1 : n);
+}
+
 /** Make a draft picture class: no objects, its text kept for search (version 2 adds the page picture). */
 function toPicture(d: Draft): void {
   const text = textOfObjects(d.slide.objects);
@@ -869,12 +893,8 @@ function toPicture(d: Draft): void {
   else delete d.artText;
 }
 
-/** A draft's compact form, for its size estimate. */
-function compactCopy(d: Draft): Draft {
-  const c: Draft = { ...d, slide: { ...d.slide, objects: [...d.slide.objects] }, notes: [...d.notes] };
-  toPicture(c);
-  return c;
-}
+/** A stand-in for `Slide.pptx.digest` in size estimates: as long as `digestOf`'s. */
+const DIGEST_STANDIN = 'x'.repeat(16);
 
 /** The slide as it will be stored, with a stand-in digest (for its size). */
 function record(d: Draft, digest: string): Slide {
@@ -973,9 +993,7 @@ function loSlides(drafts: readonly Draft[], slides: readonly Slide[]): PptxLoSli
       ...(sl.pptx.shown !== undefined ? { shown: sl.pptx.shown } : {}),
       class: sl.pptx.class,
       ...(d?.art && sl.pptx.class === 'hybrid' ? { art: d.art } : {}),
-      ...(d?.metafiles?.length && sl.pptx.class !== 'picture'
-        ? { metafiles: d.metafiles.map((m): [string, string[]] => [m, []]) }
-        : {}),
+      ...(d?.metafiles?.length && sl.pptx.class !== 'picture' ? { metafileObjects: d.metafiles } : {}),
       digest: sl.pptx.digest ?? '',
     });
   }

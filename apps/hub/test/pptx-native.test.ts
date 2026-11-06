@@ -1,7 +1,7 @@
 /**
  * The native PowerPoint import through the real job path (design/27 §2, §5 "Two-phase save", §11, §12;
  * M3 item B): crafted decks are zipped, stored like an upload and imported by the `pptx-native` job on the
- * real CPU pool. Item C's picture functions run through `pptx-standins.ts` while they are stubs.
+ * real CPU pool, with item C's picture preparation.
  */
 import { mkdirSync, rmSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -25,7 +25,7 @@ import {
   solidBg,
   sp,
 } from '@ordo/pptx-scene/test-util.ts';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { JobCtx, JobQueue } from '../src/jobs.ts';
 import { CpuPool, WorkerStartError } from '../src/pool.ts';
 import { type NativeJobEnv, nativeJob } from '../src/pptx/nativeJob.ts';
@@ -40,11 +40,6 @@ import {
 import { ffmpeg } from './fixtures.ts';
 import { startHub, type TestHub, tempDir } from './helpers.ts';
 import { slidesOf, storeDeck, waitJob, zipDeck } from './pptx-helpers.ts';
-
-vi.mock('../src/pptx/pictures.ts', async (importOriginal) => {
-  const { pictureStandIns } = await import('./pptx-standins.ts');
-  return pictureStandIns(await importOriginal());
-});
 
 const IN = 914_400;
 const enc = new TextEncoder();
@@ -285,7 +280,8 @@ describe('pptx-native: backgrounds', () => {
       box: full,
     });
     expect(image).toMatchObject({ type: 'image', fit: 'stretch', box: full });
-    expect(s.pptx!.notes).toContain('a background picture with transparency is drawn on white');
+    // The converter lays it on white itself (item A: the PNG header tells the alpha), so the job's own
+    // backstop for a stored picture with alpha has nothing to add.
     expect(s.pptx!.digest).toBe(digestOf(s.objects));
   });
 
@@ -598,7 +594,9 @@ describe('pptx-native: pool batches, budgets and fallbacks', () => {
     const mediaId = imageOf(r1.presentationId);
     expect(first.payload.done!.media).toEqual([['ppt/media/image1.png', mediaId]]);
     expect(first.payload.done!.presentationId).toBe(r1.presentationId);
-    const mediaCount = hub.lib.media.list().length;
+    // This deck's media only: the LibreOffice follow-ups of earlier imports store theirs in the background.
+    const ownMedia = () => hub.lib.media.list().filter((m) => m.name.startsWith('Resume'));
+    const mediaCount = ownMedia().length;
     const presCount = hub.lib.presentations.list().length;
 
     // Re-queued after version 1 was saved: nothing is saved again.
@@ -613,7 +611,7 @@ describe('pptx-native: pool batches, budgets and fallbacks', () => {
     const resumed = await runHandler(first.payload, { pool });
     expect((resumed.out as PptxNativeResult).presentationId).toBe(r1.presentationId);
     expect(imageOf(r1.presentationId)).toBe(mediaId);
-    expect(hub.lib.media.list()).toHaveLength(mediaCount);
+    expect(ownMedia()).toHaveLength(mediaCount);
     expect(hub.lib.presentations.list()).toHaveLength(presCount);
   });
 });

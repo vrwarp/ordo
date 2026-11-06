@@ -746,12 +746,17 @@ export function referenceJob(deps: PptxDeps): JobHandler<PptxReferencePayload> {
     const p = deps.lib.presentations.get(pl.presentationId);
     if (!p) return { presentationId: pl.presentationId, deleted: true };
     if (deps.locked(p.id)) deferWhileLocked(ctx, 'the slides are updated');
+    // Every slide gets its picture; only those `showPicture` names (all when absent) switch to it.
+    const switched = pl.showPicture ? new Set(pl.showPicture) : undefined;
     let shown = 0;
+    let pictures = 0;
     const sections = p.sections.map((sec) => ({
       ...sec,
       slides: sec.slides.map((sl) => {
         const id = sl.pptx?.fileId === pl.hash ? done.get(sl.pptx.index) : undefined;
         if (!id || !sl.pptx) return sl;
+        pictures++;
+        if (switched && !switched.has(sl.id)) return { ...sl, pptx: { ...sl.pptx, refMediaId: id } };
         shown++;
         return { ...sl, pptx: { ...sl.pptx, refMediaId: id, show: 'picture' as const } };
       }),
@@ -761,8 +766,8 @@ export function referenceJob(deps: PptxDeps): JobHandler<PptxReferencePayload> {
       { expectedRev: p.rev, by: pl.by ?? 'pptx-reference' },
     );
     deps.lib.emit([{ kind: 'presentation', id: saved.id, rev: saved.rev, entity: saved }]);
-    ctx.log(`${shown} slide(s) show the PowerPoint picture`);
-    return { presentationId: saved.id, rev: saved.rev, slides: shown };
+    ctx.log(`${pictures} PowerPoint picture(s); ${shown} slide(s) show the picture`);
+    return { presentationId: saved.id, rev: saved.rev, slides: shown, pictures };
   };
 }
 

@@ -3,12 +3,12 @@
  * `pptx-lo` follow-up on a crafted deck, the deferral while the presentation is live and 'Show PowerPoint
  * picture'. Needs soffice, pdftoppm and ffmpeg on the PATH (CI installs them); skipped without soffice.
  *
- * Version 1 is built here the way the native job saves it (item B), and pictures are stored through a
- * stand-in for item C's `addReadyPicture`.
+ * Version 1 is built here the way the native job saves it (item B); pictures are stored by item C's
+ * `addReadyPicture`. `pptx-integrate.test.ts` runs the same follow-up after the native job itself.
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { type ImageObject, type Media, newId, type Playlist, Presentation, type Slide } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import { convertDeck } from '@ordo/pptx-scene';
@@ -30,41 +30,10 @@ import {
   withPart,
 } from '@ordo/pptx-scene/test-util.ts';
 import JSZip from 'jszip';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PPTX_MIME } from '../src/imports.ts';
-import { PPTX_JOBS, type PptxDeps, type PptxLoSlide } from '../src/pptx/shared.ts';
+import { PPTX_JOBS, type PptxLoSlide } from '../src/pptx/shared.ts';
 import { EDIT_PIN, login, OPERATE_PIN, startHub, type TestHub, tempDir } from './helpers.ts';
-
-// Item C's `addReadyPicture` is a stub on this branch: store the picture as a ready image.
-vi.mock('../src/pptx/pictures.ts', async (load) => {
-  const real = await load<typeof import('../src/pptx/pictures.ts')>();
-  return {
-    ...real,
-    addReadyPicture: async (
-      deps: PptxDeps,
-      p: { path: string; ext: string; mime: string; width: number; height: number; hasAlpha: boolean },
-      o: { name: string; tags: string[] },
-    ): Promise<Media> => {
-      const original = await deps.store.put(p.path, { ext: p.ext, mime: p.mime });
-      const m = deps.lib.media.insert({
-        id: newId(),
-        rev: 1,
-        name: o.name,
-        tags: o.tags,
-        kind: 'image',
-        original,
-        state: 'ready',
-        width: p.width,
-        height: p.height,
-        hasAlpha: p.hasAlpha,
-        loop: false,
-        isBackground: false,
-      });
-      deps.lib.emit([{ kind: 'media', id: m.id, rev: m.rev, entity: m }]);
-      return m;
-    },
-  };
-});
 
 function has(tool: string, flag: string): boolean {
   try {
@@ -155,6 +124,8 @@ function pixels(hub: TestHub, media: Media): { w: number; h: number; at(x: numbe
     out,
   ]);
   const b = readFileSync(out);
+  // A 4K page is 32 MB of pixels: never left behind.
+  rmSync(dirname(out), { recursive: true, force: true });
   const w = media.width!;
   const h = media.height!;
   return { w, h, at: (x, y) => [...b.subarray((y * w + x) * 4, (y * w + x) * 4 + 4)] };
@@ -432,7 +403,9 @@ describe.skipIf(!tools)('pptx-lo through LibreOffice', () => {
     expect(v3[1]!.pptx?.refMediaId).toBeUndefined(); // hidden
     const pic = hub.lib.media.must(v3[0]!.pptx!.refMediaId!);
     expect([pic.width, pic.height]).toEqual([3840, 2160]);
-    expect(v3[2]!.pptx!.refMediaId).not.toBe(v3[3]!.pptx!.refMediaId);
+    expect(v3[2]!.pptx!.refMediaId).not.toBe(v3[0]!.pptx!.refMediaId);
+    // Slides 3 and 4 are the same slide: their pictures are the same bytes, stored once (item C's index).
+    expect(v3[3]!.pptx!.refMediaId).toBe(v3[2]!.pptx!.refMediaId);
   }, 120_000);
 
   it('converts a metafile picture to a transparent PNG and puts it back in its place', async () => {
@@ -528,6 +501,8 @@ describe.skipIf(!tools)('pptx-lo through LibreOffice', () => {
     const ed = await login(hub.url, EDIT_PIN);
     const fd = new FormData();
     fd.append('file', new Blob([await zip.generateAsync({ type: 'arraybuffer' })]), 'Giving.pptx');
+    // The picture import is a choice since editable slides became the default (item H).
+    fd.append('renderer', 'libreoffice');
     const job = await ed.json<Job>('/import/document', { method: 'POST', body: fd });
     await hub.jobs.idle();
     const done = hub.jobs.get(job.id);

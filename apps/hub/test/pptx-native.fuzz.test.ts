@@ -10,15 +10,10 @@ import { Presentation } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import { body, buildDeck, NS_A, NS_P, NS_R, para, partText, run, sp } from '@ordo/pptx-scene/test-util.ts';
 import JSZip from 'jszip';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PptxNativeResult } from '../src/pptx/shared.ts';
 import { startHub, type TestHub, tempDir } from './helpers.ts';
 import { slidesOf, storeDeck, waitJob, zipDeck } from './pptx-helpers.ts';
-
-vi.mock('../src/pptx/pictures.ts', async (importOriginal) => {
-  const { pictureStandIns } = await import('./pptx-standins.ts');
-  return pictureStandIns(await importOriginal());
-});
 
 const IN = 914_400;
 const enc = new TextEncoder();

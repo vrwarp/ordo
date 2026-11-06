@@ -1,6 +1,6 @@
 /**
  * Helpers for the native PowerPoint import tests (design/27 M3): crafted decks zipped and stored like an
- * upload, and jobs awaited. Item C's picture stand-ins are in `pptx-standins.ts`.
+ * upload, and jobs awaited.
  */
 import { copyFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';

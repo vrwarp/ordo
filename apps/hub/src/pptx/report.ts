@@ -5,6 +5,7 @@
  * characters, so a deck cannot forge `[warn]`/`[error]` lines or the 'HH:MM:SS msg' format.
  */
 import { clean } from '@ordo/pptx-scene/log.ts';
+import { BUNDLED_FACES, bundledSubstitute } from '../fonts/bundled.ts';
 import type { PptxNativeResult } from './shared.ts';
 
 /** A deck-derived string made safe for a job log line or `source.log`. */
@@ -46,29 +47,15 @@ export function importResult(input: {
 
 /**
  * Families every output can draw with exact line breaks before any upload: ordo's default font, generic
- * families, and the faces with a metric-compatible substitute (design/27 §10; M3 item E bundles the
- * substitutes, and its table supersedes this one).
+ * families, the bundled faces and the Office faces with a bundled metric-compatible substitute (design/27
+ * §10, `fonts/bundled.ts`).
  */
-const COVERED: ReadonlySet<string> = new Set([
-  'inter',
-  'sans-serif',
-  'serif',
-  'monospace',
-  'system-ui',
-  'calibri',
-  'carlito',
-  'cambria',
-  'caladea',
-  'arial',
-  'helvetica',
-  'liberation sans',
-  'times new roman',
-  'times',
-  'liberation serif',
-  'courier new',
-  'courier',
-  'liberation mono',
-]);
+const GENERIC: ReadonlySet<string> = new Set(['sans-serif', 'serif', 'monospace', 'system-ui']);
+const BUNDLED: ReadonlySet<string> = new Set(BUNDLED_FACES.map((f) => f.family.toLowerCase()));
+
+function covered(k: string): boolean {
+  return GENERIC.has(k) || BUNDLED.has(k) || bundledSubstitute(k) !== undefined;
+}
 
 /**
  * The families a deck's text uses that neither the library's fonts nor a metric-compatible substitute
@@ -85,7 +72,7 @@ export function missingFonts(used: Iterable<string>, library: Iterable<string>):
     const k = f.toLowerCase();
     if (!f || seen.has(k)) continue;
     seen.add(k);
-    if (have.has(k) || COVERED.has(k)) continue;
+    if (have.has(k) || covered(k)) continue;
     out.push(f);
     if (out.length >= RESULT_FONTS) break;
   }

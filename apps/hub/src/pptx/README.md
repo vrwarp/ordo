@@ -70,13 +70,13 @@ Contracts already in place (the scaffold):
 - `@ordo/pptx-scene`: `convertDeck(src, { range, pictureSize, newId, mediaId, extendBackgrounds, crop })`
   → `ConvertResult` (`EmitResult` + `frame`, `sections` by `SlideRef.index`, `listed`: every slide of the deck);
   `ParseOptions.range`; `ElementRef` and `ArtInfo` (`ir.ts`); `EmittedSlide.art?: ArtInfo`;
-  `rendercopy.ts` (`RenderCopyPage`, `RenderCopyResult`, `buildRenderCopy`, a stub).
+  `rendercopy.ts` (`RenderCopyPage`, `RenderCopyResult`, `buildRenderCopy`).
 - Hub: the pool tasks `pptx-scene`, `pptx-render-copy`, `pptx-art` (`pool.ts` `CpuTasks`, timeouts
   2 min / 2 min / 60 s; `cpu.worker.ts`); the job kinds `pptx-native` (light), `pptx-lo` (heavy),
   `pptx-reference` (heavy), `pptx-text-repair` (light), registered by `PptxImports`, which `ImportService`
   owns as `imports.pptx` with the live-lock check (`locked(presentationId)`) from `hub.ts` / `libproc.ts`;
-  `@ordo/pptx-scene` is a hub dependency. Stubs throw `notYet(item, what)`; `apps/hub/test/pptx-scaffold.test.ts`
-  checks the wiring (replace its stub expectations as you implement).
+  `@ordo/pptx-scene` is a hub dependency. `apps/hub/test/pptx-scaffold.test.ts` checks the wiring; every
+  stub is implemented (m3/integrate), and `pptx-integrate.test.ts` runs the items together.
 
 ## Rules for the parallel items
 
@@ -178,18 +178,20 @@ Done (B), and what the other items rely on:
 - **Version 1 and `pptx-lo`.** The presentation id is chosen and recorded before the save. `pptx-lo` is
   queued right after `lib.savePresentation`, in the same synchronous step: it cannot start before version 1
   exists, and `PptxLoSlide.digest` is version 1's stored `Slide.pptx.digest`. M5 must queue the deck's clip
-  jobs after this step to keep LibreOffice ahead of them. `PptxLoSlide.metafiles` lists the metafile parts a
-  slide (its own, its layout's, its master's) relates to, with no object ids (metafiles are not emitted
-  as objects; item D places the converted pictures). `art` is passed through from `EmittedSlide.art` (D).
-- **Pictures** go through `displayNeeds`, `preparePicture` and `addReadyPicture` (C); until C lands they
-  throw and every image object is dropped with a warning (`apps/hub/test/pptx-standins.ts` stands in for
-  them in tests only when the real function throws its 'not implemented yet' error). A background picture
-  whose stored media has alpha is laid on white as a bottom image instead of `backgroundMediaId`.
+  jobs after this step to keep LibreOffice ahead of them. `PptxLoSlide.metafileObjects` is
+  `EmittedSlide.metafiles` (the metafiles the slide draws, set aside by the converter, item D), and `art` is
+  `EmittedSlide.art`.
+- **Pictures** go through `displayNeeds` (with the spilled pictures' sizes) and `storePictures` (C): one
+  decode budget per import, the media hash index, resume pairs in `PptxNativeProgress.media`. The converter
+  already keeps a background picture with alpha as a bottom image on white (A); the job does the same for a
+  stored picture with alpha whose header did not tell.
 - **Fallback.** `WorkerStartError` on the scan queues the `document` job and returns `PptxNativeFallback`
   (`done.fallbackJobId` keeps a re-run from queueing it twice).
-- **Budgets.** `planImportSizes` gets each slide's stored size (with placeholder ids) and the mean compact
-  size; speaker notes are capped at 1 MB per presentation (`NOTES_TOTAL_BYTES`), the rest cut to 200
-  characters, logged.
+- **Budgets.** `planImportSizes` (F) gets each slide's stored size (with placeholder ids) and its own compact
+  size with version 2's page picture and text boxes (`compactSlideBytes`); the tail it makes compact is
+  logged from its first slide. A deck over the budget even when every slide is compact keeps 200 characters
+  of each picture slide's text for search. Speaker notes are capped at 1 MB per presentation
+  (`NOTES_TOTAL_BYTES`), the rest cut to 200 characters, logged.
 
 ### C: pictures
 
@@ -379,8 +381,29 @@ Files: `routes.ts` (`POST /import/document`: `renderer=native` the default; `ext
     takes `refMediaId` of every slide over from the saved presentation. D's route has to read that body
     (strict, ≤ 5,000 ids) and pass it to `queueReference(id, hash, by, showPicture)`; D's job has to set
     `show: 'picture'` only on the slides `PptxReferencePayload.showPicture` names (every slide when absent).
-    Until then the job switches every slide to its picture, and the editor's card offers 'Show the objects
-    instead' on each.
+    Wired in the integration: the route reads `{ showPicture? }` (strict, ≤ 5,000 ids) and the job gives
+    every slide its `refMediaId` but switches only those.
+
+## Integration (m3/integrate)
+
+The items merged in the order A-H; what wires them together:
+- B ↔ A: the spilled pictures' sizes carry the header's alpha (`PictureHeader` of `@ordo/pptx-scene`), so the
+  converter promotes only an opaque background to `backgroundMediaId`.
+- B ↔ C: `storePictures` replaces B's own prepare-and-store loop; the picture stand-ins are gone.
+- B ↔ D: metafile objects travel as `PptxLoSlide.metafileObjects`; the scan's per-slide metafile list is no
+  longer what the follow-up converts.
+- B ↔ E: `missingFonts` counts a family as covered when a bundled face is it or substitutes for it
+  (`BUNDLED_FACES`, `bundledSubstitute`).
+- B ↔ F: the refined `planImportSizes` (see B's budgets above).
+- D ↔ H: `showPicture` (above). Tests that import pictures through `POST /import/document` now ask for
+  `renderer=libreoffice`, since editable slides are the default.
+- `apps/hub/test/pptx-integrate.test.ts`: a chart over a photo through the route (an edit made while the
+  follow-up waits survives; version 2 adds the transparent art in its place), a metafile through both jobs,
+  a 4:3 deck aligned with LibreOffice on native, hybrid and picture slides, a hidden slide's notes, pictures
+  and text, two 2,000-slide decks within 4 MiB with every preview under 1 MiB, and the previous release's
+  schema (`@ordo/domain/schemas.prev.test-util.ts`) reading what was saved.
+- The art's `locked` and `origin` are kept once M2's schema (`ObjectOrigin`, `locked`) is merged; until then
+  `Slide.parse` strips them and the art is an ordinary picture, as in an older build.
 
 ## Not in this wave
 

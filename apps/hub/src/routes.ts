@@ -102,6 +102,13 @@ const SongselectBody = z
   .object({ text: z.string().max(1_000_000), title: z.string().max(300).optional() })
   .strict();
 const LiveEventsBody = z.object({ id: z.string().max(200).optional(), event: z.unknown() }).strict();
+/**
+ * 'Show PowerPoint picture' (`PptxReferencePayload.showPicture`): the slides switched to the picture once it
+ * is stored; absent: every slide. The editor's 'Show original' sends `[]` (pictures only, nothing switched).
+ */
+const PptxReferenceBody = z
+  .object({ showPicture: z.array(z.string().min(1).max(200)).max(5_000).optional() })
+  .strict();
 
 /**
  * What `POST /import/document` does with a PowerPoint (design/27 §2, §3.2): 'native' (the default) imports
@@ -473,7 +480,8 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const fileId = p.source?.kind === 'pptx' ? p.source.fileId : undefined;
     if (!fileId || !lib.getFile(fileId))
       throw badRequest('This presentation has no stored PowerPoint file', 'no_pptx');
-    return reply.code(202).send(hub.imports.pptx.queueReference(id, fileId, by(req)));
+    const body = validate(PptxReferenceBody, req.body ?? {});
+    return reply.code(202).send(hub.imports.pptx.queueReference(id, fileId, by(req), body.showPicture));
   });
 
   // playlists
