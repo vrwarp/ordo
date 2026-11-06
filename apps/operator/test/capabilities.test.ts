@@ -207,6 +207,20 @@ describe('look previews', () => {
     expect(slideAndNext(arranged, all[0]!.id)).toMatchObject({ slide: all[0], next: all[1] });
   });
 
+  it('the next slide skips hidden slides, as Next does (design/27 §9)', () => {
+    const all = flatSlides(song);
+    const withHidden = {
+      ...song,
+      sections: [
+        { ...song.sections[0]!, slides: [all[0]!, { ...all[0]!, id: 'h', hidden: true }] },
+        song.sections[1]!,
+      ],
+    };
+    expect(slideAndNext(withHidden, all[0]!.id)).toMatchObject({ slide: all[0], next: all[1] });
+    // A hidden slide still previews, followed by the next shown one.
+    expect(slideAndNext(withHidden, 'h')).toMatchObject({ slide: { id: 'h' }, next: all[1] });
+  });
+
   it('a look shows the slide background only when its background layer is visible', () => {
     const p = { ...song, backgroundMediaId: 'bg' };
     const slide = flatSlides(p)[0]!;

@@ -19,6 +19,9 @@ export function checkInvariants(s: LiveState): string[] {
     if (s.mode === 'live' && !s.resolved) v.push('live state has no resolved playlist');
     s.cues.forEach((c, i) => {
       if (c?.index !== i) v.push(`cue at ${i} has index ${c?.index}`);
+      // Only a PowerPoint slide is hidden (design/27 §9); navigation reads nothing else as hidden.
+      if (c?.hidden !== undefined && (c.hidden !== true || c.kind !== 'slide'))
+        v.push(`cue ${i} is flagged hidden but is not a hidden slide`);
     });
     const inRange = (x: number | undefined, what: string) => {
       if (x !== undefined && (!Number.isInteger(x) || x < 0 || x >= n))

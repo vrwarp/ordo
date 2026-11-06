@@ -9,7 +9,7 @@ the operator on the stage screen (token in URL like an output). No WebGPU, no me
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Top left  | Clock, 24 h or 12 h per settings, updated every second                                                                                                                               |
 | Top right | Elapsed timer when running (label and `mm:ss`), countdown to service when active                                                                                                     |
-| Centre    | Current slide lyric text, large, with the section label; next slide text below at 60 % size and reduced opacity. Non-song slides show their first text box (a picture slide its own extracted text, design/27 §11) or the presentation title |
+| Centre    | Current slide lyric text, large, with the section label; next slide text below at 60 % size and reduced opacity (the slide Next goes to: hidden slides are skipped, design/27 §9). Non-song slides show their first text box (a picture slide its own extracted text, design/27 §11) or the presentation title |
 | Bottom    | Operator message, high contrast, with a 1 s fade in and out; multiple messages stack newest first                                                                                    |
 
 Layout values come from the Stage look's `PropsRule.style` boxes so the operator can

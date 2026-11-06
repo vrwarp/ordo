@@ -8,6 +8,7 @@ import {
   type Rgba,
   type Slide,
   type Transition,
+  nextShownCue,
   playableFile,
 } from '@ordo/domain';
 import { clampLook, clampSlide, clampText } from './clamp.ts';
@@ -247,7 +248,9 @@ export function planFrame(state: LiveState, rawLook: Look, opts: PlanOptions = {
       const isSong = found.presentation.kind === 'song';
       let nextSlide: Slide | undefined;
       if (look.layers.slide.mode === 'lyricOnly' && look.layers.slide.nextSlide) {
-        const nc = state.cues[c.cueIndex + 1];
+        // The slide Next goes to: hidden slides are skipped (design/27 §9).
+        const ni = nextShownCue(state.cues, c.cueIndex);
+        const nc = ni === undefined ? undefined : state.cues[ni];
         if (nc?.kind === 'slide' && nc.presentationId && nc.slideId) {
           const ns = findSlide(resolved?.presentations, nc.presentationId, nc.slideId)?.slide;
           nextSlide = ns ? clampSlide(ns) : undefined;
@@ -400,8 +403,11 @@ export function planPreview(
   };
   if (!slide) return { ...plan, idle: true };
   const isSong = presentation.kind === 'song';
+  // The next slide as Next goes: hidden slides are skipped (design/27 §9).
   const rawNext =
-    look.layers.slide.mode === 'lyricOnly' && look.layers.slide.nextSlide ? slides[idx + 1] : undefined;
+    look.layers.slide.mode === 'lyricOnly' && look.layers.slide.nextSlide
+      ? slides.slice(idx + 1).find((s) => s.hidden !== true)
+      : undefined;
   const nextSlide = rawNext ? clampSlide(rawNext) : undefined;
   if (slideVisible(look, slide, isSong, nextSlide)) {
     const key = `pv|${presentation.id}|${presentation.rev}|${sig}|${slide.id}|${nextSlide?.id ?? ''}`;

@@ -64,7 +64,11 @@ function SlideItem(props: {
         </span>
       ) : null}
       {props.slide.hidden ? (
-        <span className="tag" title="Hidden in PowerPoint: left out of the service" data-hidden-slide>
+        <span
+          className="tag"
+          title="Hidden: Next skips it during the service; a click in the slide grid shows it"
+          data-hidden-slide
+        >
           Hidden
         </span>
       ) : null}

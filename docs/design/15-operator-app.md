@@ -145,7 +145,7 @@ reducer events. Keyboard, Stream Deck and MIDI dispatch the same actions.
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `TopBar`       | Connection, WAN, cache, output dots, clock, Launch and Relaunch                                                                                        |
 | `PlaylistPane` | Virtualized list; drag to reorder when not live                                                                                                        |
-| `SlideGrid`    | Sections as headed groups following the arrangement; thumbnails from the thumbnail worker; live and armed markers; click to select, double-click to GO |
+| `SlideGrid`    | Sections as headed groups following the arrangement; thumbnails from the thumbnail worker; live and armed markers; click to select, double-click to GO; hidden PowerPoint slides dimmed with a `hidden` tag and still clickable (design/27 §9) |
 | `ProgramView`  | One `<video>` per output fed by WebRTC; health overlay                                                                                                 |
 | `StageTools`   | Message box, recent messages, timers                                                                                                                   |
 | `LayerBar`     | Five chips with clear buttons; media transport and remaining time; audio meters                                                                        |

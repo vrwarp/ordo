@@ -70,8 +70,8 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 
 Contracts already in place (the scaffold):
 - `@ordo/domain`: `Slide.pptx` (`SlidePptx`: fileId, index, shown, class, version, digest, pending, notes,
-  artText, refMediaId, show; `failed` since the review round), `Slide.hidden` (no cue until M5's navigation),
-  `Slide.transition` (cues use it since the review round), `Slide.imported.textAligned`,
+  artText, refMediaId, show; `failed` since the review round), `Slide.hidden` (a flagged cue that navigation
+  skips, since wave 2), `Slide.transition` (cues use it since the review round), `Slide.imported.textAligned`,
   `Presentation.source.native` (`PptxNativeSource`), `Font.unicodeRange`;
   bounded by `sanitizePresentation` (`@ordo/importers`) and kept by `clampSlide` (`@ordo/renderer`:
   `clampPptx` keeps what drawers read, `clampTransition`). `size.ts`: `SIZE_BUDGETS`, `jsonBytes`,
@@ -445,8 +445,9 @@ The items merged in the order A-H; what wires them together:
   (`adoptJobSaves`, `rebaseOnJobs`: per slide against its base) instead of announcing them as someone
   else's; `withReferences` keeps the draft's revision; a duplicated slide drops `digest` and, unless it is a
   picture slide, `pending`.
-- Hidden slides stay out of the service (`expandCues` skips them, as LibreOffice's pictures did) until M5's
-  navigation flags and skips their cues; the editor tags them and can unhide one; the card counts them.
+- Hidden slides give flagged cues (wave 2: `Cue.hidden`; Next, Prev, auto-advance and onEnd advance skip
+  them, a click in the slide grid shows them, design/27 §9); the editor tags them and can unhide one; the
+  card counts them.
   `expandCues` uses `item ?? slide ?? presentation` transitions.
 - Converter notes say what happens ('drawn by LibreOffice as a picture', 'converted by LibreOffice'); the
   card no longer calls the art locked. `missingFonts` counts only families the library has (no drawer uses
@@ -499,8 +500,8 @@ scope). The converter side is `@ordo/pptx-scene` `media.ts` and `timing.ts` (its
 ## Not in this wave
 
 Waiting for M2's second wave and M5 to merge: rich text emission (runs and paragraphs) from the converter; `slideContent()` in every drawer
-(`refMediaId` and `show: 'picture'` are drawn by nothing yet); hidden-cue navigation in the reducer (hidden
-slides give no cue until then); the art's `locked`/`origin` (M2's schema); bundled substitutes in drawers
+(`refMediaId` and `show: 'picture'` are drawn by nothing yet); the art's `locked`/`origin` (M2's schema);
+bundled substitutes in drawers
 (M2's font resolver); video posters on outputs. M3 wave 2: flipped pictures (drawn unflipped), ellipse and
 roundRect picture masks (drawn as rects), recoloured pictures (drawn without the recolouring), all noted on
 the slide. Hub budgets measured on a reference NAS. 'Re-import from PowerPoint' (M4). A copy of a hybrid

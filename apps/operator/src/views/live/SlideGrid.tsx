@@ -1,4 +1,4 @@
-import type { Cue } from '@ordo/domain';
+import { type Cue, isHiddenCue } from '@ordo/domain';
 import { useMemo } from 'react';
 import { armDot, waitingForLive } from '../../lib/health.ts';
 import { groupCues, sectionGoTarget } from '../../lib/sections.ts';
@@ -10,6 +10,9 @@ import { setUi, useUi } from '../../state/ui.ts';
 import { itemTitle } from './PlaylistPane.tsx';
 import { SlideThumb, type ThumbMarks } from './SlideThumb.tsx';
 import type { OperatorPlaylist } from './useOperatorPlaylist.ts';
+
+/** What the tag of a hidden slide says to a pointer or a screen reader. */
+const HIDDEN_TITLE = 'Hidden slide: Next skips it; click it to show it';
 
 export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem: number }) {
   const state = useLive((s) => s.state);
@@ -129,6 +132,8 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem: nu
                   const slide = slideOf(c);
                   // A slide that plays a video in place or its own sound says so (design/27 §11 item 14).
                   const tags = slideMediaTags(slide, op.media);
+                  // A hidden slide (design/27 §9) is dimmed and tagged, and a click still shows it.
+                  const hidden = isHiddenCue(c);
                   return (
                     <SlideThumb
                       key={c.index}
@@ -140,16 +145,24 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem: nu
                       number={(c.slideIndexInSection ?? 0) + 1}
                       marks={marks}
                       width={thumbSize}
+                      hidden={hidden}
                       onClick={() => onClick(c)}
                       onDoubleClick={() => onDouble(c)}
                       footer={
-                        tags.length > 0
-                          ? tags.map((t) => (
+                        tags.length > 0 || hidden ? (
+                          <>
+                            {hidden && (
+                              <span className="tag" title={HIDDEN_TITLE} data-hidden-slide>
+                                hidden
+                              </span>
+                            )}
+                            {tags.map((t) => (
                               <span key={t.kind} className={t.notice ? 'tag amber' : 'tag'} title={t.title}>
                                 {t.kind}
                               </span>
-                            ))
-                          : undefined
+                            ))}
+                          </>
+                        ) : undefined
                       }
                     />
                   );

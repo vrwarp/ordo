@@ -93,6 +93,42 @@ describe('deck view', () => {
     expect(v.liveSectionPos).toBe(1);
   });
 
+  it('lists the items Next item goes to, past one whose slides are all hidden (design/27 §9)', () => {
+    const deck = (id: string, hidden: boolean): Presentation => ({
+      id,
+      rev: 1,
+      title: `Deck ${id}`,
+      kind: 'slides',
+      meta: { tags: [] },
+      sections: [{ id: `${id}s`, label: 'S', short: 'S', slides: [{ id: `${id}1`, objects: [], hidden }] }],
+      arrangements: [],
+      archived: false,
+    });
+    const decks = [deck('a', false), deck('b', true), deck('c', false), deck('d', false), deck('e', false)];
+    let s = reduce(initialState(), {
+      k: 'goLive',
+      resolved: {
+        playlist: {
+          id: 'pl',
+          rev: 1,
+          name: 'x',
+          items: decks.map((p, i) => ({ id: `i${i}`, kind: 'presentation' as const, presentationId: p.id })),
+        },
+        presentations: Object.fromEntries(decks.map((p) => [p.id, p])),
+        media: {},
+        fonts: [],
+        looks: [],
+        files: [],
+        manifestId: 'm',
+      },
+    });
+    s = reduce(s, { k: 'go', cueIndex: 0, at: 1 });
+    const v = deckView(s, true);
+    expect(v.nextItems).toEqual(['Deck c', 'Deck d', 'Deck e']);
+    // "Next 1" presses Next item once and lands on the item it names.
+    expect(s.cues[reduce(s, { k: 'nextItem', at: 2 }).live!]?.presentationId).toBe('c');
+  });
+
   it("lights the play key for F8's target: a waiting click sound, then the slide video, then the audio", () => {
     const file = { hash: 'h', bytes: 1, mime: 'x', path: 'p' };
     const media = (id: string, kind: Media['kind']): Media => ({

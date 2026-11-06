@@ -389,7 +389,7 @@ export function rebaseOnJobs(base: Presentation, draft: Presentation, latest: Pr
   return out as Presentation;
 }
 
-/** The hidden slides of a presentation (`Slide.hidden`): kept in the editor, left out of the service. */
+/** The hidden slides of a presentation (`Slide.hidden`): Next skips their cues, a click shows them. */
 export function hiddenCount(p: Pick<Presentation, 'sections'>): number {
   let n = 0;
   for (const sec of p.sections) for (const sl of sec.slides) if (sl.hidden) n++;

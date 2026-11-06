@@ -24,6 +24,8 @@ export const SlideThumb = memo(function SlideThumb(props: {
   number?: number;
   marks: ThumbMarks;
   width: number;
+  /** A hidden slide (design/27 §9): drawn dimmed; Next skips it, a click still shows it. */
+  hidden?: boolean;
   onClick?: () => void;
   onDoubleClick?: () => void;
   footer?: React.ReactNode;
@@ -35,7 +37,7 @@ export const SlideThumb = memo(function SlideThumb(props: {
     { isSong: props.isSong, bg, media: props.media, look: props.look, width: props.width >= 260 ? 480 : 320 },
     visible,
   );
-  const cls = `thumb ${props.marks.live ? 'live' : ''} ${props.marks.armed && !props.marks.live ? 'armed' : ''}`;
+  const cls = `thumb ${props.marks.live ? 'live' : ''} ${props.marks.armed && !props.marks.live ? 'armed' : ''}${props.hidden ? ' hidden-slide' : ''}`;
   return (
     <div
       ref={ref}

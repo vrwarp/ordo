@@ -176,14 +176,34 @@ describe('expandCues: a slide sound plays across shown slides', () => {
     expect(cues.map((c) => c.slideAudio?.untilCue)).toEqual([1, undefined, 3, undefined]);
   });
 
-  // Until hidden cues are flagged and skipped by navigation (design/27 §9, M3 wave 2), a hidden slide has no
-  // cue at all; the sound still spans its shown slides. Wave 2 brings back the hidden cue inside the range.
-  it('does not count hidden slides, which have no cue yet', () => {
-    const hidden = { hidden: true } as Partial<Slide>;
+  // A hidden slide's cue is flagged and skipped by Next (design/27 §9): the sound spans its shown slides, and
+  // the hidden cue inside that range stays reachable (a click on it keeps the sound playing).
+  it('does not count hidden slides (M3), which stay reachable inside the range', () => {
+    const hidden: Partial<Slide> = { hidden: true };
     const p = deck('d', [[slide('a', [], withSound(2)), slide('h', [], hidden), slide('b'), slide('c')]]);
     const cues = expandCues({ playlist: playlist('d'), presentations: byId(p), media: byId(song) });
-    expect(cues.map((c) => c.slideId)).toEqual(['a', 'b', 'c']);
-    expect(cues[0]?.slideAudio?.untilCue).toBe(1);
+    expect(cues.map((c) => [c.slideId, c.hidden])).toEqual([
+      ['a', undefined],
+      ['h', true],
+      ['b', undefined],
+      ['c', undefined],
+    ]);
+    expect(cues[0]?.slideAudio?.untilCue).toBe(2);
+  });
+
+  it("counts from a hidden slide's own sound, and runs to the item's end past trailing hidden slides", () => {
+    const hidden: Partial<Slide> = { hidden: true };
+    const p = deck('d', [
+      [
+        slide('h', [], { ...hidden, ...withSound(2) }),
+        slide('a'),
+        slide('b', [], withSound(9)),
+        slide('h2', [], hidden),
+      ],
+    ]);
+    const cues = expandCues({ playlist: playlist('d'), presentations: byId(p), media: byId(song) });
+    expect(cues[0]).toMatchObject({ hidden: true, slideAudio: { untilCue: 1 } });
+    expect(cues[2]?.slideAudio?.untilCue).toBe(3);
   });
 
   it('click start, loop, gain and mute; a video soundtrack plays too; an image does not', () => {
