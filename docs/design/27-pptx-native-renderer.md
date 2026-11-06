@@ -403,7 +403,8 @@ export const SlideSound = z.object({                     // M5: one sound per sl
   - runs that are unsorted, overlapping or out of range are dropped;
   - paras are capped at 1,000 (render) against 5,000 (schema);
   - path strings are re-tokenised (only `MLCQZ` plus numbers) before `new Path2D`;
-  - every effective font size (`fontSizePx × sizeScale`, after autofit) is clamped to 4-1,000 px, the same bound as `IMPORT_LIMITS` (the parser's 1-4,000 pt clamp applies only before conversion).
+  - a box's font size (`fontSizePx`) is clamped to 4-1,000 px, and every run's effective size (`fontSizePx × sizeScale`, after autofit) to 2-1,000 px, the same bounds as `IMPORT_LIMITS` (`fontSizeMin`, `runFontSizeMin`; the parser's 1-4,000 pt clamp applies only before conversion). Raised and lowered runs and bullets are still drawn at no less than 4 px (§6).
+    - Why 2 px for runs (`CLAMP.minRunFontPx`): it is 1 pt, PowerPoint's smallest size, on both standard deck sizes, and the office model's rounding never goes below it either. Dense verse decks separate list items with 1 pt paragraphs (`<a:rPr sz="100"/>` on a space), which PowerPoint and LibreOffice draw 2.4 px tall; at the 4 px floor each was 4.8 px and every line below it moved 2.4 px further per spacer (a list pitch of 21.4 px against LibreOffice's 19.1). With the run floor at 2 px (measured against LibreOffice's pictures, `--lo-compat`), four slides of worship shards 0 and 2 rose, from 0.342, 0.344, 0.292 and 0.544 to 0.764, 0.464, 0.388 and 0.563 (shard means 0.795 → 0.801 and 0.832 → 0.834); no other slide moved by more than 0.001 and none fell, and the sermon decks did not change. Box sizes keep 4 px, so legacy text, bands and an older build draw as before.
 - **`PptxRenderer` is not widened.** "native" exists only as a route form field and in the job payload. Native imports are recorded in `source.native`, so an older build never resets presentation settings through quarantine.
 
 ### 3.3 Runtime types (TypeScript only, all optional, so old snapshots and journals stay valid)
@@ -488,7 +489,7 @@ Whole presentations travel in goLive (to every client, into the journal, snapsho
 **Text bodies** → one `TextObject` per body, `style.lineModel = 'office'`:
 - `style` is the dominant run's values (most characters). Other runs become sparse `runs`.
 - Paragraphs become `paras`: align (incl. justify and distribute), level, marL/indent, spacing (spcPts in 1/100 pt; spcPct as a share of F), line spacing, bullets, rtl. `a:br` becomes `\n` with `soft: true`. `a:tab` becomes a space (logged once per deck; Canvas draws tabs as spaces).
-- Sizes: px = pt × 12700 × s, clamped to 1-4,000 pt in the parser and to 4-1,000 px when stored.
+- Sizes: px = pt × 12700 × s, clamped to 1-4,000 pt in the parser and when stored to 4-1,000 px for the box size and 2-1,000 px for a run (§3.2). A run's `sizeScale` is its real size over the box's, never raised to the box floor: a 1 pt spacer under 7 pt text is 2/14.
 - Text outline: `a:ln w` → `outline.width = w/2`, because ordo strokes 2× under the fill. An outline without a solid fill is not drawn. Hollow text (noFill) becomes alpha 0 plus the outline.
 - Run text shadows and coloured outlines are drawn as PowerPoint draws them.
 - `cap="all"` → `caps` (applied at draw time, so offsets stay valid). Fields keep their stored `a:t` text (logged). Hyperlinks are dropped (logged).
@@ -1086,7 +1087,7 @@ The extensions, in priority order (M4 unless noted):
 - Job payload maps are arrays of pairs, with part names ≤ 512 characters; `adj` is an array of pairs.
 
 **Numbers.** Every number is finite and clamped:
-- slide side 1-51,206,400 EMU; logical coordinates ±100,000; box span ±2× the canvas; font 1-4,000 pt in the parser, 4-1,000 px stored;
+- slide side 1-51,206,400 EMU; logical coordinates ±100,000; box span ±2× the canvas; font 1-4,000 pt in the parser, 4-1,000 px stored for a box and 2-1,000 px for a run;
 - per text object at most 16 distinct run and bullet families and 64 distinct size scales (`FontBudget` in `clamp.ts`, the same in `sanitizePresentation`): later families take the box's, later scales the nearest kept one. Each new family name costs the browser a platform font lookup (about 1 ms in Chromium), so 2,000 runs with 2,000 families would cost seconds per object. Family names lose every control character (a form feed is a CSS newline that voids the whole `ctx.font` assignment). A family is keyed by that cleaned name, trimmed and lower-cased, and every name with the key takes the spelling first kept, so names differing in case, surrounding spaces, quotes or control characters neither take more places nor make more font strings;
 - adj ±1e7; ≤ 256 guides per shape; ≤ 4,096 path points per path and 64k per slide; ≤ 16 gradient stops;
 - colour maths clamped to 0..1; NaN and Infinity become 0.
@@ -1109,7 +1110,7 @@ The extensions, in priority order (M4 unless noted):
 
 **Saving.** Everything goes through `sanitizePresentation` (which now cuts runs and paras with the text) and the validating `lib.savePresentation`.
 
-**Rendering.** `clamp.ts` re-bounds every new field: runs ≤ 2,000 (sorted, in range, else dropped), paras ≤ 1,000, path strings re-tokenised, stops ≤ 16, effect sizes ≤ `maxEffectPx`, effective font sizes 4-1,000 px. Unknown values fall back to defaults; nothing throws.
+**Rendering.** `clamp.ts` re-bounds every new field: runs ≤ 2,000 (sorted, in range, else dropped), paras ≤ 1,000, path strings re-tokenised, stops ≤ 16, effect sizes ≤ `maxEffectPx`, font sizes 4-1,000 px for boxes and 2-1,000 px for runs. Unknown values fall back to defaults; nothing throws.
 
 ## 13. Performance budgets
 

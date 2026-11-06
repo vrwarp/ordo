@@ -110,14 +110,33 @@ describe('rich text clamps (design/27 §3.2)', () => {
             expect(r.end).toBeLessThanOrEqual(len);
             at = r.end;
             const px = style.fontSizePx * (r.sizeScale ?? 1);
-            expect(px).toBeGreaterThanOrEqual(CLAMP.minFontPx - 1e-9);
+            expect(px).toBeGreaterThanOrEqual(CLAMP.minRunFontPx - 1e-9);
             expect(px).toBeLessThanOrEqual(CLAMP.maxFontPx + 1e-9);
-            expect(runFontPx(style, r, 0.001)).toBe(CLAMP.minFontPx);
+            expect(runFontPx(style, r, 0.001)).toBe(CLAMP.minRunFontPx);
           }
         },
       ),
       { numRuns: 300 },
     );
+  });
+
+  it('keeps a 1 pt run at 2 px: runs are floored at minRunFontPx, box sizes still at minFontPx', () => {
+    // PowerPoint's 1 pt spacer paragraph (sz="100", 2 px) between 7 pt (14 px) verse lines.
+    const o = clampObject({
+      ...text(1, 'a\n \nb'),
+      style: { ...DEFAULT_LYRIC_STYLE, fontSizePx: 14 },
+      runs: [{ start: 2, end: 3, sizeScale: 2 / 14 }],
+    }) as TextObject;
+    expect(CLAMP.minRunFontPx).toBe(2);
+    expect(o.runs).toEqual([{ start: 2, end: 3, sizeScale: 2 / 14 }]);
+    expect(runFontPx(o.style, o.runs![0])).toBeCloseTo(2, 12);
+    // Below 1 pt the run is floored at 2 px, never at the 4 px of box sizes.
+    const tiny = clampRuns([{ start: 0, end: 1, sizeScale: 0.05 }], 1, 14);
+    expect(tiny[0]!.sizeScale).toBeCloseTo(2 / 14, 12);
+    expect(runFontPx(o.style, { sizeScale: 0.05 })).toBe(2);
+    expect(runFontPx(o.style, o.runs![0], 0.5)).toBe(2);
+    // The box size, which legacy drawText, bands and an older build draw, keeps its 4 px floor.
+    expect(clampStyle({ ...DEFAULT_LYRIC_STYLE, fontSizePx: 2 }).fontSizePx).toBe(CLAMP.minFontPx);
   });
 
   it('keeps at most 16 distinct run and bullet families and 64 size scales per object', () => {

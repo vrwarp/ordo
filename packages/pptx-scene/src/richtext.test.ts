@@ -214,6 +214,21 @@ describe('runs', () => {
     ]);
   });
 
+  it("writes a 1 pt spacer paragraph's real size scale, below the 4 px floor of box sizes", () => {
+    // Dense verse decks separate list items with sz="100" paragraphs: 2 px under 7 pt (14 px) lines.
+    const t = one(
+      body(
+        para(run('Matthew 28:1', 'sz="700"')) +
+          para(run(' ', 'sz="100"')) +
+          para(run('Mark 16:2', 'sz="700"')),
+      ),
+    );
+    expect(t.text).toBe('Matthew 28:1\n \nMark 16:2');
+    expect(t.style.fontSizePx).toBe(14);
+    // The run covers the space and the '\n' after it (its paragraph's end), at 2/14 of the box size.
+    expect(t.runs).toEqual([{ start: 13, end: 15, sizeScale: 0.142857 }]);
+  });
+
   it('cuts runs and paragraphs with the text at 20,000 characters', () => {
     const long = 'x'.repeat(MAX_TEXT - 3);
     const {

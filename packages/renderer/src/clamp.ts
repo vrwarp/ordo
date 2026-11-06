@@ -28,7 +28,15 @@ export const CLAMP = {
   /** Box edges lie within ±2× the logical canvas. */
   boxFactor: 2,
   maxTextChars: 10_000,
+  /** Font sizes of boxes, legacy text and bands; raised and lowered runs and bullets are drawn no smaller. */
   minFontPx: 4,
+  /**
+   * The smallest effective size of a rich-text run (box size × `sizeScale` × autofit): 1 pt, PowerPoint's
+   * smallest size, which both standard deck sizes map to 2 px. Dense decks separate list items with 1 pt
+   * paragraphs, which PowerPoint and LibreOffice draw 1.2 × 2 = 2.4 px tall; `minFontPx` would make each
+   * twice that and move everything below it.
+   */
+  minRunFontPx: 2,
   maxFontPx: 1000,
   maxObjects: 200,
   /** Distinct images one slide may draw (each is decoded and held while the slide rasterizes). */
@@ -255,16 +263,24 @@ function clampRichStyle(x: Partial<TextStyle>, out: TextStyle): void {
     };
 }
 
-/** Effective font size of a run: the box size × the run's scale × the fit scale, within 4-1,000 px. */
+/**
+ * Effective font size of a run: the box size × the run's scale × the fit scale, within 2-1,000 px
+ * (`minRunFontPx`: a 1 pt run keeps its size).
+ */
 export function runFontPx(style: TextStyle, run: Pick<TextRun, 'sizeScale'> | undefined, fit = 1): number {
-  return clampFontSize(style.fontSizePx * (run?.sizeScale ?? 1) * fit, style.fontSizePx);
+  return num(
+    style.fontSizePx * (run?.sizeScale ?? 1) * fit,
+    CLAMP.minRunFontPx,
+    CLAMP.maxFontPx,
+    style.fontSizePx,
+  );
 }
 
 /**
  * Style runs over a text of `len` UTF-16 units: a run must start at or after the previous kept run's end
  * and before `len` (unsorted, overlapping, empty and out-of-range runs are dropped); its end is clamped to
- * `len`. Sizes are bounded so the box size × `sizeScale` stays within 4-1,000 px. Families and size scales
- * beyond the object's `FontBudget` take the box family and the nearest kept scale.
+ * `len`. Sizes are bounded so the box size × `sizeScale` stays within 2-1,000 px (`minRunFontPx`). Families
+ * and size scales beyond the object's `FontBudget` take the box family and the nearest kept scale.
  */
 export function clampRuns(
   runs: unknown,
@@ -290,7 +306,7 @@ export function clampRuns(
     if (r.sizeScale !== undefined) {
       const fs = clampFontSize(fontSizePx);
       run.sizeScale = budget.scale(
-        num(r.sizeScale, Math.max(0.01, CLAMP.minFontPx / fs), Math.min(50, CLAMP.maxFontPx / fs), 1),
+        num(r.sizeScale, Math.max(0.01, CLAMP.minRunFontPx / fs), Math.min(50, CLAMP.maxFontPx / fs), 1),
       );
     }
     if (r.color !== undefined) run.color = clampColor(r.color);
