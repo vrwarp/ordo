@@ -6,12 +6,18 @@
  */
 import { clean } from '@ordo/pptx-scene/log.ts';
 import type { PptxNativeResult } from './shared.ts';
-import { notYet } from './shared.ts';
 
 /** A deck-derived string made safe for a job log line or `source.log`. */
 export function logSafe(s: string, max = 200): string {
   return clean(s, max);
 }
+
+/** Notes the import card shows; `source.log` keeps every line. */
+export const RESULT_NOTES = 20;
+/** Missing families the import card names. */
+export const RESULT_FONTS = 20;
+/** `Presentation.source.log` is at most this long (`MAX.long` of `@ordo/domain`). */
+export const SOURCE_LOG_CHARS = 200_000;
 
 /** The import card's numbers and notes from what the job saved and logged. */
 export function importResult(input: {
@@ -23,6 +29,92 @@ export function importResult(input: {
   missingFonts: readonly string[];
   notes: readonly string[];
 }): PptxNativeResult {
-  void input;
-  throw notYet('B', 'importResult');
+  const count = (c: 'native' | 'hybrid' | 'picture') => input.classes.filter((k) => k === c).length;
+  return {
+    presentationId: input.presentationId,
+    slides: input.classes.length,
+    native: count('native'),
+    hybrid: count('hybrid'),
+    picture: count('picture'),
+    compact: input.compact,
+    pending: input.pending,
+    ...(input.loJobId ? { loJobId: input.loJobId } : {}),
+    missingFonts: input.missingFonts.slice(0, RESULT_FONTS).map((f) => logSafe(f, 100)),
+    notes: input.notes.slice(0, RESULT_NOTES).map((n) => logSafe(n, 300)),
+  };
+}
+
+/**
+ * Families every output can draw with exact line breaks before any upload: ordo's default font, generic
+ * families, and the faces with a metric-compatible substitute (design/27 §10; M3 item E bundles the
+ * substitutes, and its table supersedes this one).
+ */
+const COVERED: ReadonlySet<string> = new Set([
+  'inter',
+  'sans-serif',
+  'serif',
+  'monospace',
+  'system-ui',
+  'calibri',
+  'carlito',
+  'cambria',
+  'caladea',
+  'arial',
+  'helvetica',
+  'liberation sans',
+  'times new roman',
+  'times',
+  'liberation serif',
+  'courier new',
+  'courier',
+  'liberation mono',
+]);
+
+/**
+ * The families a deck's text uses that neither the library's fonts nor a metric-compatible substitute
+ * cover: the import card offers an upload ("Upload Century Gothic for exact line breaks"). In first-use
+ * order, each once (case-insensitive), cleaned for display.
+ */
+export function missingFonts(used: Iterable<string>, library: Iterable<string>): string[] {
+  const have = new Set<string>();
+  for (const f of library) have.add(f.trim().toLowerCase());
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of used) {
+    const f = logSafe(raw, 100);
+    const k = f.toLowerCase();
+    if (!f || seen.has(k)) continue;
+    seen.add(k);
+    if (have.has(k) || COVERED.has(k)) continue;
+    out.push(f);
+    if (out.length >= RESULT_FONTS) break;
+  }
+  return out;
+}
+
+/** `source.log` lines, each sanitised, the whole bounded (the last line says how many were left out). */
+export class ImportLog {
+  private lines: string[] = [];
+  private chars = 0;
+  private dropped = 0;
+
+  /** Add a line: `msg` is composed by the job, with every deck string already through `logSafe`. */
+  add(level: 'info' | 'warn', msg: string): void {
+    const line = `${level === 'warn' ? '[warn] ' : ''}${logSafe(msg, 400)}`;
+    if (this.chars + line.length + 1 > SOURCE_LOG_CHARS - 100) {
+      this.dropped++;
+      return;
+    }
+    this.lines.push(line);
+    this.chars += line.length + 1;
+  }
+
+  /** The warnings, in order (the import card's notes). */
+  warnings(): string[] {
+    return this.lines.filter((l) => l.startsWith('[warn] ')).map((l) => l.slice(7));
+  }
+
+  toString(): string {
+    return [...this.lines, ...(this.dropped ? [`… ${this.dropped} more line(s)`] : [])].join('\n');
+  }
 }

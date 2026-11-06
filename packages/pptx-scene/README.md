@@ -81,6 +81,8 @@ Hardening after the M1 re-review (M3 item A; each case a crafted deck under the 
 | `background.ts` | Slide → layout → master background                                                                                | C      |
 | `emit.ts`       | IR → ordo objects, media placeholders, digest                                                                     | C      |
 | `classify.ts`   | Census tiers T1-T5, reasons, slide class                                                                          | F      |
+| `notes.ts`      | `readNotes`: a slide's speaker notes (notesSlide body placeholders), bounded                                      | M3 B   |
+| `transition.ts` | `readTransition`, `readSlideTransition` (a slide's tail only), `showLoops` (`p:showPr loop`)                      | M3 B   |
 | `ir.ts`         | The scene IR (types only)                                                                                         | shared |
 | `context.ts`    | `SlideCtx`, `slideContext`                                                                                        | shared |
 | `log.ts`        | `clean`, `noteList`                                                                                               | shared |

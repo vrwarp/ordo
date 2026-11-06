@@ -84,10 +84,15 @@ export const PPTX_JOBS = {
 export type PptxNativeProgress = {
   /** Picture parts already stored: [source part, media id] pairs. */
   media: [string, string][];
-  /** Set once version 1 is saved: a re-run never saves a second presentation. */
+  /**
+   * The presentation's id, chosen before version 1 is saved (it exists once saved): a re-run saves under the
+   * same id or finds it saved, never a second presentation.
+   */
   presentationId?: string;
   /** The follow-up job, once enqueued. */
   loJobId?: string;
+  /** The `document` job the deck went to when the CPU pool could not start (`PptxNativeFallback`). */
+  fallbackJobId?: string;
 };
 
 export type PptxNativePayload = {
@@ -115,6 +120,17 @@ export type PptxNativeResult = {
   missingFonts: string[];
   /** The first notes of the import, sanitised; `source.log` keeps them all. */
   notes: string[];
+};
+
+/**
+ * The `pptx-native` result when the CPU pool cannot start (design/27 §12 "Process"): the deck is never parsed
+ * on the event loop; the whole deck went to the LibreOffice picture import (`document` job) instead.
+ */
+export type PptxNativeFallback = {
+  fallback: 'libreoffice';
+  /** The `document` job that imports the deck as pictures. */
+  jobId: string;
+  reason: string;
 };
 
 /** One slide of the LibreOffice follow-up, as version 1 left it. */
@@ -205,12 +221,49 @@ export type SceneTaskInput = {
   /** The batch: `SlideRef.index` in [from, to). */
   range: { from: number; to: number };
   options: PptxImportOptions;
+  /**
+   * The import's first call (`range` empty): also read what the job needs before the batches and no batch
+   * reads (`SceneTaskOutput.scan`): referenced pictures, metafiles, notes, the show's loop flag.
+   */
+  scan?: boolean;
 };
 export type SceneTaskOutput = {
   result: ConvertResult;
   /** Time in the task, and the worker's heap after it (the §13 budgets). */
   ms: number;
   heapMb: number;
+  /** With `SceneTaskInput.scan`. */
+  scan?: SceneScan;
+  /** Per converted slide, what `convertDeck` does not read (`transition.ts`). */
+  extras?: SceneSlideExtra[];
+};
+
+/** What the first `pptx-scene` call reads for the whole deck (`sceneTask.ts`). */
+export type SceneScan = {
+  /**
+   * Picture parts (image relationships, metafiles and SVG left out) of the listed slides, their layouts,
+   * masters and themes: what the job spills and prepares. Stored part names, at most `PPTX_LIMITS.pictures`.
+   */
+  pictures: string[];
+  /** Picture parts referenced past `PPTX_LIMITS.pictures` (logged, not extracted). */
+  picturesOver: number;
+  /** Metafile pictures (EMF, WMF) each slide may show (its own, its layout's, its master's): [index, parts]. */
+  metafiles: [number, string[]][];
+  /** Speaker notes (`notes.ts`): [`SlideRef.index`, text]. */
+  notes: [number, string][];
+  /** `p:showPr loop`: the show loops until Esc. */
+  loop: boolean;
+};
+
+/** A slide's transition and timing (`transition.ts`). */
+export type SceneSlideExtra = {
+  /** `SlideRef.index`. */
+  index: number;
+  transition?: { kind: 'cut' } | { kind: 'crossfade'; ms: number };
+  /** `advTm`. */
+  advanceMs?: number;
+  /** What was approximated. */
+  note?: string;
 };
 
 /** `pptx-render-copy`: the minimal deck LibreOffice prints, written to `out` (item D, `renderCopyTask.ts`). */

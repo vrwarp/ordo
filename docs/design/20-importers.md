@@ -118,6 +118,34 @@ shadow stay; text meant to be hollow (`<a:noFill/>`) keeps its outline. The job 
 the runs changed. Fonts the deck uses must be installed on the hub, or LibreOffice
 substitutes them.
 
+### Native import (editable slides)
+
+The native import ([design/27](27-pptx-native-renderer.md), M3) turns a deck into ordinary, editable ordo
+objects instead of page pictures. The light `pptx-native` job (`apps/hub/src/pptx/nativeJob.ts`):
+
+- reads the XML and relationship parts (each ≤ 8 MB, ≤ 64 MB in all; a larger part makes its slide a
+  picture slide) and only the pictures the slides, their layouts, masters and themes relate to (≤ 2,000,
+  ≤ 1 GiB, under generated names); embeddings, macros, custom XML, document properties and printer settings
+  are skipped;
+- parses and converts on the CPU pool with `@ordo/pptx-scene`: a scan (slide list, sections, referenced
+  pictures, metafiles, speaker notes, the show's loop flag), then batches of at most 150 slides. A batch that
+  fails or runs out of the import's pool time leaves its slides as picture slides, never the deck;
+- applies the size budgets of design/27 §3.4: a slide over 64 KB, and every slide once the presentation
+  passes 3 MiB, becomes a compact picture slide (logged, counted in the job result);
+- stores the pictures (prepared to their display need, deduplicated) and saves version 1: every slide's
+  native objects, `Slide.pptx` provenance (deck, place, class, converter version, the digest of the objects
+  as stored, `pending` while LibreOffice work remains), speaker notes, `p14` sections in order with a Default
+  arrangement, hidden slides flagged (`Slide.hidden`), transitions (fade and dissolve a crossfade with the
+  deck's duration, a transition without an effect a cut, any other effect a crossfade, noted), `advTm` as
+  `durationMs` (a looping show with every shown slide timed becomes a loop presentation), the lyric box, and
+  `source.native` (counts, the deck's area in the frame) with `source.log`;
+- lays a background picture with transparency on white (a bottom image) rather than using it as the slide
+  background, and makes one background shared by every slide the presentation's background; with 'Extend
+  plain backgrounds to 16:9' (on by default) a plain background covers the whole frame of a 4:3 deck.
+
+Hybrid slides (a chart, SmartArt without a drawing, OLE, 3D, …) and picture slides then wait for the heavy
+`pptx-lo` follow-up, which adds LibreOffice art or page pictures as version 2.
+
 ### Two renderers: LibreOffice and pptx-preview
 
 The import screen asks what draws a PowerPoint's slides: LibreOffice (the default) or pptx-preview
