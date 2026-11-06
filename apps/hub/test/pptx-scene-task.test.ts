@@ -135,13 +135,25 @@ describe('import report', () => {
     expect(r.notes[0]).toBe('note 0 [error] forged');
   });
 
-  it('names the fonts neither the library nor a metric-compatible substitute covers', () => {
+  it('names the fonts the library does not have (no drawer uses a bundled substitute yet)', () => {
     expect(
       missingFonts(
-        ['Calibri', 'Century Gothic', 'Tahoma', 'century gothic', 'Arial', 'Open Sans', 'Inter', ''],
+        [
+          'Calibri',
+          'Century Gothic',
+          'Tahoma',
+          'century gothic',
+          'Arial',
+          'Open Sans',
+          'Inter',
+          'sans-serif',
+          '',
+        ],
         ['Open Sans'],
       ),
-    ).toEqual(['Century Gothic', 'Tahoma']);
+    ).toEqual(['Calibri', 'Century Gothic', 'Tahoma', 'Arial', 'Inter']);
+    // The bundled faces count once the hub has registered them (ORDO_FONTS_DIR), as library rows.
+    expect(missingFonts(['Calibri', 'Carlito', 'Inter'], ['Carlito', 'Inter'])).toEqual(['Calibri']);
   });
 
   it('keeps source.log bounded and one line per entry', () => {

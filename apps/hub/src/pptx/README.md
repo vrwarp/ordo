@@ -9,15 +9,18 @@ pool tasks, pictures, LibreOffice and repair.
 
 Every deck is untrusted input (design/27 §12): it is parsed only on the CPU pool, never on the event loop;
 nothing in a deck is fetched, executed or used as a path; deck strings reach logs only through `logSafe`.
+Every read of a stored deck goes through `deckParts.ts` (XML in memory within the caps, only referenced
+pictures spilled, overlapping zip entries refused), and LibreOffice sees only the worker-built render copy:
+when the copy cannot be built (no pool, a deck past the caps) the job fails, it never converts the upload.
 
 ## Flow (design/27 §2)
 
 ```
 POST /import/document  (423 while live, ≤ 1 GiB, zip + .pptx sniff, stored by SHA-256; renderer=native default) [H]
  └─ imports.pptx.queueNative ─► light job 'pptx-native' (nativeJob.ts)                                         [B]
-     1 extractZip(store.abs(deck), skip filter): XML parts in memory (≤ 8 MB each, ≤ 64 MB), referenced media
-       and fonts spilled under generated names (≤ 1 GiB; ≤ 2,000 pictures, 50 clips, 20 fonts); embeddings,
-       vbaProject, customXml skipped; no nested zips                                                           [B]
+     1 readDeckXml (deckParts.ts): XML parts in memory (≤ 8 MB each, ≤ 64 MB), other parts placeholders; after
+       the scan spillDeckParts writes only the referenced pictures under generated names (≤ 1 GiB, ≤ 2,000);
+       embeddings, vbaProject, customXml skipped; no nested zips; overlapping entries refused; no pool: fail [B]
      2 pool 'pptx-scene' (sceneTask.ts → convertDeck), batches ≤ 150 slides (slide parts transferred, shared
        parts copied), 2 min per batch, ≤ 15 min of pool time per import                                        [B, A]
      3 classification and size budgets (@ordo/domain planImportSizes): over budget → picture class (logged)    [B]
@@ -25,8 +28,11 @@ POST /import/document  (423 while live, ≤ 1 GiB, zip + .pptx sniff, stored by 
      5 pictures ─► preparePicture ─► addReadyPicture; dedup through the media hash index; resume pairs        [C]
      6 remap placeholders, Slide.pptx/hidden/transition/notes, sections, sanitize, save ── version 1          [B]
  heavy job 'pptx-lo' (fallback.ts; deferred while live-locked)                                                 [D]
-     pool 'pptx-render-copy' ─► soffice once ─► pdftoppm -r 288 -f k -l k ─► pool 'pptx-art'
-     ─► addReadyPicture ─► patch slides whose digest is unchanged ── version 2
+     readDeckXml ─► pool 'pptx-render-copy' plan (the pictures the copy keeps) ─► spillDeckParts
+     ─► pool 'pptx-render-copy' ─► soffice once ─► pdftoppm -r 288 -f k -l k ─► pool 'pptx-art'
+     ─► addReadyPicture ─► patch slides (per object on an edited one) ── version 2; a failed run is tried
+     again twice (deferred), then the slides are marked pptx.failed (card and goLive report them)
+ PUT /presentations/:id or a restored revision with slides pending again ─► queueFollowUp (fallback.ts)
  heavy job 'pptx-reference' ('Show PowerPoint picture': every shown slide into Slide.pptx.refMediaId)          [D]
  light job 'pptx-text-repair' (legacy imported.textBoxes, once)                                                [G]
  goLive ─► resolvePlaylist: bundled and script-fallback fonts, CJK faces by text scan [E]; > 12 MiB warning [F]
@@ -45,6 +51,7 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 | File                | What                                                                                       | Owner  |
 | ------------------- | ------------------------------------------------------------------------------------------ | ------ |
 | `shared.ts`         | Job kinds, payloads, results, classes; pool task types; `PPTX_LIMITS`; `PptxDeps`; version | shared |
+| `deckParts.ts`      | `readDeckXml`, `spillDeckParts`: every bounded read of a stored deck                       | review |
 | `index.ts`          | `PptxImports`: registers the jobs, `queueNative`, `queueReference` (`imports.pptx`)        | shared |
 | `nativeJob.ts`      | The light `pptx-native` job, steps 1-6                                                     | B      |
 | `sceneTask.ts`      | Worker side of `pptx-scene`: one batch through `convertDeck` (working pass-through)        | B      |
@@ -59,8 +66,9 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 
 Contracts already in place (the scaffold):
 - `@ordo/domain`: `Slide.pptx` (`SlidePptx`: fileId, index, shown, class, version, digest, pending, notes,
-  artText, refMediaId, show), `Slide.hidden`, `Slide.transition` (schema only: cues and navigation are a later
-  wave), `Slide.imported.textAligned`, `Presentation.source.native` (`PptxNativeSource`), `Font.unicodeRange`;
+  artText, refMediaId, show; `failed` since the review round), `Slide.hidden` (no cue until M5's navigation),
+  `Slide.transition` (cues use it since the review round), `Slide.imported.textAligned`,
+  `Presentation.source.native` (`PptxNativeSource`), `Font.unicodeRange`;
   bounded by `sanitizePresentation` (`@ordo/importers`) and kept by `clampSlide` (`@ordo/renderer`:
   `clampPptx` keeps what drawers read, `clampTransition`). `size.ts`: `SIZE_BUDGETS`, `jsonBytes`,
   `slideBytes`, `presentationBytes`, `resolvedBytes`, `planImportSizes`. `PptxRenderer` is not widened:
@@ -145,7 +153,8 @@ payload (`PptxImportOptions`).
   embeddings, `vbaProject.bin`, `customXml` skipped) and no nesting; entry names never become paths.
 - `pptx-scene` batches of ≤ 150 slides (`range`), shared parts copied and slide parts transferred, within the
   15-minute import budget; a batch that fails or times out makes its slides picture class, never the deck;
-  "the pool cannot start" falls back to the whole-deck LibreOffice path (never inline parsing).
+  "the pool cannot start" fails the import cleanly (never inline parsing, never the upload to LibreOffice;
+  it first fell back to the picture import, which the review round found needs the pool too).
 - Two-phase save: version 1 as described above; `Slide.pptx` from `EmittedSlide` (index, shown, class,
   version, notes ≤ 16, `artText` from `EmittedSlide.art.text`, `pending`), `digest` = pptx-scene `digestOf`
   over the objects exactly as stored (after remap, sanitize and `Slide.parse`); `Slide.hidden`; the deck's
@@ -392,8 +401,8 @@ The items merged in the order A-H; what wires them together:
 - B ↔ C: `storePictures` replaces B's own prepare-and-store loop; the picture stand-ins are gone.
 - B ↔ D: metafile objects travel as `PptxLoSlide.metafileObjects`; the scan's per-slide metafile list is no
   longer what the follow-up converts.
-- B ↔ E: `missingFonts` counts a family as covered when a bundled face is it or substitutes for it
-  (`BUNDLED_FACES`, `bundledSubstitute`).
+- B ↔ E: `missingFonts` first counted a family as covered when a bundled face substituted for it; the
+  review round counts only library families until a drawer uses substitutes (below).
 - B ↔ F: the refined `planImportSizes` (see B's budgets above).
 - D ↔ H: `showPicture` (above). Tests that import pictures through `POST /import/document` now ask for
   `renderer=libreoffice`, since editable slides are the default.
@@ -405,9 +414,54 @@ The items merged in the order A-H; what wires them together:
 - The art's `locked` and `origin` are kept once M2's schema (`ObjectOrigin`, `locked`) is merged; until then
   `Slide.parse` strips them and the art is an ordinary picture, as in an older build.
 
+### Review fixes (repair round)
+
+- Fail closed: the 'Pictures (LibreOffice)' import fails when its render copy cannot be built (and with a
+  `logSafe` message); the native import fails cleanly when the CPU pool cannot start, instead of queueing
+  that picture import (which needs the pool for its copy too). `PptxNativeFallback` stays for old payloads.
+- Bounded reads (`deckParts.ts`): the follow-up, reference pictures and the picture import spill only the
+  pictures a plan call (`RenderCopyTaskInput.plan`) says the copy keeps, within 1 GiB and 2,000 pictures;
+  `readDeckText` writes nothing; every pptx zip read sets `extractZip`'s `distinct` (overlapping entries
+  refused). `transferables` never transfers an empty buffer (the shared placeholder).
+- Pictures: a picture is kept as it is only within `plausibleBytes` (its pixels at 4 bytes plus 1 MiB, at
+  most 64 MiB); a larger one is re-encoded (trailing data and metadata dropped); `storeReady` refuses one.
+- `queueReference` joins a queued request for the same presentation (slides to switch merged) and returns a
+  running one asking the same: at most one waits per presentation. Reference revisions are saved by
+  `pptx-reference`, so editors recognise them.
+- Follow-up: a whole-run failure is retried twice (`LO_RETRIES`, `JobDeferred` with backoff); after that, and
+  for a page or art that fails alone, the slide keeps version 1 with `Slide.pptx.failed` (schema, additive),
+  counted in the result (`failed`) and on the card (amber or red), and named by goLive. Version 1, the
+  follow-up and the resume point are written in one transaction. `PptxLoSlide.replaced` (per-object
+  digests) lets an edited hybrid slide lose only the objects still as version 1 wrote them, the art in its
+  place; converted metafiles always go under their object. Waiting picture slides the plan does not name
+  (duplicates) get their page.
+- `queueFollowUp`: a save (PUT, restore) that brings back `pending` slides while no follow-up is queued or
+  running queues one, planned as the last follow-ups planned and reusing what they stored, so a version-1
+  draft saved over version 2 gets its art back without LibreOffice. The operator takes job revisions over
+  (`adoptJobSaves`, `rebaseOnJobs`: per slide against its base) instead of announcing them as someone
+  else's; `withReferences` keeps the draft's revision; a duplicated slide drops `digest` and, unless it is a
+  picture slide, `pending`.
+- Hidden slides stay out of the service (`expandCues` skips them, as LibreOffice's pictures did) until M5's
+  navigation flags and skips their cues; the editor tags them and can unhide one; the card counts them.
+  `expandCues` uses `item ?? slide ?? presentation` transitions.
+- Converter notes say what happens ('drawn by LibreOffice as a picture', 'converted by LibreOffice'); the
+  card no longer calls the art locked. `missingFonts` counts only families the library has (no drawer uses
+  a substitute until M2's resolver). `outputFonts` keeps a CJK family a theme or stored presentation names
+  (`Library.namesFontFamily`). The text repair takes a pptx-preview import's page count from its job when
+  kept, else marks a page it cannot place for certain `textAligned: false` (`storedPagesOf`).
+- `apps/hub/test/pptx-integrate-review.test.ts` covers each of these.
+- Merging with M5 (which rewrote `expandCues`' slide loop): `cues.ts` conflicts in that loop only. Port the
+  two changes into M5's form: `.filter((x) => !x.slide.hidden)` right after its `flatMap` (before
+  `soundEnds`, so a slide's sound counts shown slides), and `slide.transition` in its `transition:` line.
+  `imports.ts` conflicts as it did before the review round.
+
 ## Not in this wave
 
 Waiting for M2's second wave and M5 to merge: rich text emission (runs and paragraphs) from the converter; clip extraction
-(`pptx-scene` `media.ts`, `timing.ts`, `ImageObject.play`, `Slide.audio`); `slideContent()` in every drawer;
-hidden-cue navigation in the reducer and `item ?? slide ?? presentation` in `expandCues`; video posters on
-outputs. Hub budgets measured on a reference NAS. 'Re-import from PowerPoint' (M4).
+(`pptx-scene` `media.ts`, `timing.ts`, `ImageObject.play`, `Slide.audio`); `slideContent()` in every drawer
+(`refMediaId` and `show: 'picture'` are drawn by nothing yet); hidden-cue navigation in the reducer (hidden
+slides give no cue until then); the art's `locked`/`origin` (M2's schema); bundled substitutes in drawers
+(M2's font resolver); video posters on outputs. M3 wave 2: flipped pictures (drawn unflipped), ellipse and
+roundRect picture masks (drawn as rects), recoloured pictures (drawn without the recolouring), all noted on
+the slide. Hub budgets measured on a reference NAS. 'Re-import from PowerPoint' (M4). A copy of a hybrid
+slide made before LibreOffice finished keeps no art.

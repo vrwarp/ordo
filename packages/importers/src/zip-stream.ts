@@ -64,6 +64,11 @@ export type ExtractOptions = {
    * `skipped` ('budget') instead of being written; later, smaller entries may still fit.
    */
   maxSpillBytes?: number;
+  /**
+   * Refuse a zip whose entries' data overlap (a local header and its compressed data within another
+   * entry's): a few KB could otherwise name one large stream many times. Untrusted decks set it.
+   */
+  distinct?: boolean;
 };
 
 type Entry = {
@@ -246,6 +251,7 @@ async function extractInto(
     const cd = await centralDirectory(fh, size);
     if (cd.entries > ZIP_MAX_ENTRIES) throw new Error(`zip has more than ${ZIP_MAX_ENTRIES} entries`);
     const entries = parseCentral(await readAt(fh, cd.offset, cd.length), cd.entries);
+    if (opts.distinct) assertDistinct(entries);
     for (const e of entries) {
       if (opts.signal?.aborted) throw new Error('cancelled');
       if (e.name.endsWith('/')) continue;
@@ -338,6 +344,18 @@ async function extractInto(
   }
   out.inMemoryBytes = budget.inMemory;
   out.entries = budget.entries;
+}
+
+/**
+ * Throw when two entries' data overlap: each entry takes at least its 30-byte local header and its compressed
+ * size from its offset (names, extra fields and data descriptors only add to that).
+ */
+function assertDistinct(entries: readonly Entry[]): void {
+  const spans = entries
+    .map((e) => [e.localHeaderOffset, e.localHeaderOffset + 30 + e.compressedSize] as const)
+    .sort((a, b) => a[0] - b[0]);
+  for (let i = 1; i < spans.length; i++)
+    if (spans[i]![0] < spans[i - 1]![1]) throw new Error('zip entries overlap: the archive is malformed');
 }
 
 function skipEntry(out: ExtractedZip, path: string, bytes: number, reason: 'size' | 'budget'): void {

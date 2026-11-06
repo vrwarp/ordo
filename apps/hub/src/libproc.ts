@@ -165,7 +165,7 @@ export async function createLibraryProcess(
     return {
       settings,
       // What outputs receive through their config: every face but the CJK fallbacks (design/27 §10).
-      fonts: outputFonts(lib.listFonts(), settings.looks),
+      fonts: outputFonts(lib.listFonts(), settings.looks, (f) => lib.namesFontFamily(f)),
       logo: logoId ? lib.media.get(logoId) : undefined,
       // Everything up to this library sequence is in this copy (the live proxy's read-your-writes barrier).
       seq: lib.seq(),

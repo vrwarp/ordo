@@ -2,7 +2,7 @@
  * The light `pptx-native` job (design/27 §2 steps 1-6, §5 "Two-phase save"; M3 item B): an untrusted .pptx
  * into an editable ordo presentation, version 1, before any LibreOffice process starts.
  *
- * 1. `extractZip(store.abs(deck))` with the skip filter and caps of §12 (`PPTX_LIMITS`): XML and
+ * 1. `readDeckXml(store.abs(deck))` (`deckParts.ts`) with the skip filter and caps of §12 (`PPTX_LIMITS`): XML and
  *    relationship parts in memory (≤ 8 MB each, ≤ 64 MB in all; a larger part is left out and its slide
  *    becomes picture class); every other part an empty placeholder, so relationships resolve; embeddings,
  *    `vbaProject.bin`, `customXml`, `docProps` and printer settings skipped; no nested zips. Entry names never
@@ -13,8 +13,9 @@
  *    the slides in batches of `PPTX_LIMITS.batchSlides`: a batch's slide parts are transferred, the shared
  *    parts copied (notes parts stay behind: the scan read them). Each batch has the pool's 2-minute timeout;
  *    past `PPTX_LIMITS.importPoolMs` of pool time the remaining slides are picture class, as are the slides
- *    of a batch that fails. A pool that cannot start sends the whole deck to the LibreOffice picture import
- *    (the `document` job): the deck is never parsed on the event loop.
+ *    of a batch that fails. A pool that cannot start fails the import with a clean message: the deck is never
+ *    parsed on the event loop, and LibreOffice never sees a deck as uploaded (its render copy needs the pool
+ *    too). Every zip read refuses overlapping entries (`deckParts.ts`).
  * 3. Classification and the §3.4 size budgets (`@ordo/domain` `planImportSizes`): a slide over 64 KB, and
  *    every slide once the presentation passes 3 MiB, becomes compact picture class, logged and counted.
  * 4. Pictures prepared and stored (`pictures.ts`, item C) for the slides that keep their objects, recorded
@@ -51,7 +52,6 @@ import {
 } from '@ordo/domain';
 import { remapMediaIds } from '@ordo/importers';
 import { sanitizePresentation } from '@ordo/importers/sanitize.ts';
-import { extractZip } from '@ordo/importers/zip-stream.ts';
 import {
   type ArtInfo,
   type EmittedSlide,
@@ -65,10 +65,10 @@ import {
 import { digestOf } from '@ordo/pptx-scene/emit.ts';
 import { relsPartOf } from '@ordo/pptx-scene/opc.ts';
 import { errorMessage } from '../errors.ts';
-import type { DocPayload } from '../imports.ts';
 import type { JobCtx, JobHandler } from '../jobs.ts';
 import { baseName } from '../media/service.ts';
 import { type CpuPool, cpuPool, transferables, WorkerStartError } from '../pool.ts';
+import { type DeckXml, readDeckXml, spillDeckParts } from './deckParts.ts';
 import { displayNeeds, PictureBudget, type PictureItem, storePictures } from './pictures.ts';
 import { ImportLog, importResult, logSafe, missingFonts } from './report.ts';
 import {
@@ -105,13 +105,6 @@ export function nativeJob(deps: PptxDeps, env: NativeJobEnv = {}): JobHandler<Pp
 
 type Limits = { batchSlides: number; importPoolMs: number };
 
-/** Parts never read: OLE payloads, macros, custom XML, document properties and printer settings (§12). */
-const SKIPPED_PART =
-  /^(customXml\/|docProps\/|ppt\/embeddings\/|ppt\/printerSettings\/|ppt\/vbaProject\.bin$)/i;
-/** XML and relationship parts, kept in memory within the caps. */
-const XML_PART = /\.(xml|rels)$/i;
-/** Embedded fonts (M8: decoded on the pool; not read by this import). */
-const FONT_PART = /^ppt\/fonts\//i;
 /** Parts read once by the scan and never by a batch. */
 const NOTES_PART = /^ppt\/(notesSlides|notesMasters)\//i;
 /** A spilled picture's first bytes read for its size (a JPEG's frame header can follow large metadata). */
@@ -132,7 +125,6 @@ const COMPACT_TEXT_CHARS = 200;
 /** How often the picture resume pairs are written while pictures are stored. */
 const SAVE_EVERY_MS = 1_000;
 
-const EMPTY = new Uint8Array(0);
 /**
  * Another batch's slide, as a batch sees it: the root alone with its show flag, so every batch lists the deck
  * exactly as the scan did (indexes and shown places), without the other slides' content. No deck bytes.
@@ -249,7 +241,7 @@ class NativeImport {
     }
   }
 
-  async run(deck: string, scratch: string): Promise<PptxNativeResult | PptxNativeFallback> {
+  async run(deck: string, scratch: string): Promise<PptxNativeResult> {
     const { ctx } = this;
     const t0 = performance.now();
     this.scratch = scratch;
@@ -270,7 +262,7 @@ class NativeImport {
       });
     } catch (e) {
       this.checkCancelled();
-      if (e instanceof WorkerStartError) return this.fallBack(e.message);
+      if (e instanceof WorkerStartError) this.noPool(e.message);
       throw new Error(`The deck could not be read: ${logSafe(errorMessage(e))}`);
     }
     const scan = first.scan!;
@@ -319,40 +311,22 @@ class NativeImport {
     return result;
   }
 
-  /** The `document` job (LibreOffice pictures) for a pool that cannot start. */
-  private fallBack(reason: string): PptxNativeFallback {
-    const payload: DocPayload = { hash: this.ctx.payload.hash, name: this.ctx.payload.name, ext: 'pptx' };
-    const job = this.deps.jobs.enqueue('document', payload, 'heavy');
-    this.done.fallbackJobId = job.id;
-    this.save();
-    const why = logSafe(reason);
-    this.ctx.log(
-      `[warn] the CPU pool cannot start (${why}): the slides are imported as LibreOffice pictures`,
+  /**
+   * A pool that cannot start fails the import (design/27 §12): the deck is never parsed on the event loop,
+   * and LibreOffice never sees a deck as uploaded, so there is nothing safe to fall back to (the picture
+   * import needs the pool for its render copy too). Nothing was saved; the import can be tried again.
+   */
+  private noPool(reason: string): never {
+    throw new Error(
+      `The hub could not start a conversion worker (${logSafe(reason)}): the deck was not imported. Try again in a moment.`,
     );
-    return { fallback: 'libreoffice', jobId: job.id, reason: why };
   }
 
-  /** Step 1: the deck's XML parts within the caps; other parts as empty placeholders. */
+  /** Step 1: the deck's XML parts within the caps; other parts as empty placeholders (`readDeckXml`). */
   private async readXml(deck: string, scratch: string): Promise<Map<string, Uint8Array>> {
-    const placeholders: string[] = [];
-    let fonts = 0;
-    let zip: Awaited<ReturnType<typeof extractZip>>;
+    let xml: DeckXml;
     try {
-      zip = await extractZip(deck, {
-        dir: scratch,
-        nested: false,
-        spill: () => false,
-        maxEntryBytes: PPTX_LIMITS.xmlPartBytes,
-        maxInMemoryBytes: PPTX_LIMITS.xmlTotalBytes,
-        signal: this.ctx.signal,
-        skip: (path) => {
-          if (SKIPPED_PART.test(path)) return true;
-          if (XML_PART.test(path) && !FONT_PART.test(path)) return false;
-          if (FONT_PART.test(path)) fonts++;
-          placeholders.push(path);
-          return true;
-        },
-      });
+      xml = await readDeckXml(deck, scratch, this.ctx.signal);
     } catch (e) {
       this.checkCancelled();
       const msg = errorMessage(e);
@@ -362,15 +336,12 @@ class NativeImport {
         );
       throw new Error(`The file is not a readable PowerPoint deck: ${logSafe(msg)}`);
     }
-    const parts = zip.files;
-    for (const s of zip.skipped) {
-      this.warn('part', `${logSafe(s.path)} is over ${PPTX_LIMITS.xmlPartBytes / 1024 ** 2} MB: not read`);
-      // Kept as an empty part: a slide that needs it is quarantined (picture class), never dropped.
-      placeholders.push(s.path);
-    }
-    if (fonts) this.log.add('info', `${fonts} embedded font part(s) not used (embedded fonts come later)`);
-    for (const p of placeholders) if (!parts.has(p)) parts.set(p, EMPTY);
-    return parts;
+    // Kept as empty parts: a slide that needs one is quarantined (picture class), never dropped.
+    for (const path of xml.oversized)
+      this.warn('part', `${logSafe(path)} is over ${PPTX_LIMITS.xmlPartBytes / 1024 ** 2} MB: not read`);
+    if (xml.fonts)
+      this.log.add('info', `${xml.fonts} embedded font part(s) not used (embedded fonts come later)`);
+    return xml.parts;
   }
 
   /** Step 2b: the referenced pictures spilled under generated names, within the spill budget. */
@@ -381,27 +352,19 @@ class NativeImport {
         `${scan.picturesOver} picture(s) past the ${PPTX_LIMITS.pictures} a deck may hold are not imported`,
       );
     if (!scan.pictures.length) return new Map();
-    const wanted = new Set(scan.pictures);
-    let zip: Awaited<ReturnType<typeof extractZip>>;
+    let spilled: Awaited<ReturnType<typeof spillDeckParts>>;
     try {
-      zip = await extractZip(deck, {
-        dir: scratch,
-        nested: false,
-        spill: () => true,
-        skip: (path) => !wanted.has(path),
-        maxSpillBytes: PPTX_LIMITS.spillBytes,
-        signal: this.ctx.signal,
-      });
+      spilled = await spillDeckParts(deck, scratch, scan.pictures, this.ctx.signal);
     } catch (e) {
       this.checkCancelled();
       throw new Error(`The deck's pictures could not be read: ${logSafe(errorMessage(e))}`);
     }
-    if (zip.skippedCount)
+    if (spilled.skippedCount)
       this.warn(
         'picture',
-        `${zip.skippedCount} picture(s) past the ${PPTX_LIMITS.spillBytes / 1024 ** 3} GiB an import may extract are not imported`,
+        `${spilled.skippedCount} picture(s) past the ${PPTX_LIMITS.spillBytes / 1024 ** 3} GiB an import may extract are not imported`,
       );
-    return zip.onDisk;
+    return spilled.files;
   }
 
   /** Step 2c: every slide through the pool in batches; a failed batch's slides are left out (picture class). */
@@ -769,20 +732,25 @@ class NativeImport {
     for (const f of fonts) this.log.add('info', `font not available: ${f}`);
     parsed.source.log = this.log.toString();
 
-    // Version 1 and its follow-up in one synchronous step: the follow-up cannot start before the save.
-    const saved = deps.lib.savePresentation(parsed, { create: true, by: 'pptx-import' });
+    // Version 1, its follow-up and the resume point in one transaction: the follow-up cannot start before
+    // the save, and a process that dies in between leaves neither (a re-run imports again), never a version 1
+    // whose follow-up lost its art and metafile plans.
     let loJobId: string | undefined;
-    if (lo.length) {
-      const job = enqueuePptx(deps.jobs, PPTX_JOBS.lo, {
-        presentationId: saved.id,
-        hash,
-        version: CONVERTER_VERSION,
-        slides: lo,
-      });
-      loJobId = job.id;
-      this.done.loJobId = loJobId;
-    }
-    this.save();
+    const saved = deps.lib.db.transaction(() => {
+      const v1 = deps.lib.savePresentation(parsed, { create: true, by: 'pptx-import' });
+      if (lo.length) {
+        const job = enqueuePptx(deps.jobs, PPTX_JOBS.lo, {
+          presentationId: v1.id,
+          hash,
+          version: CONVERTER_VERSION,
+          slides: lo,
+        });
+        loJobId = job.id;
+        this.done.loJobId = loJobId;
+      }
+      this.save();
+      return v1;
+    })();
     deps.lib.emit([{ kind: 'presentation', id: saved.id, rev: saved.rev, entity: saved }]);
     return importResult({
       presentationId: saved.id,
@@ -796,7 +764,11 @@ class NativeImport {
   }
 }
 
-/** A job re-run after version 1 was saved: its result, and the follow-up if it was not queued yet. */
+/**
+ * A job re-run after version 1 was saved: its result. Version 1, its follow-up and `done.loJobId` are written
+ * in one transaction, so the follow-up exists; a payload from before that (no `loJobId`) gets one planned from
+ * the stored slides.
+ */
 function resumedResult(
   deps: PptxDeps,
   ctx: JobCtx<PptxNativePayload>,
@@ -995,9 +967,16 @@ function loSlides(drafts: readonly Draft[], slides: readonly Slide[]): PptxLoSli
       ...(d?.art && sl.pptx.class === 'hybrid' ? { art: d.art } : {}),
       ...(d?.metafiles?.length && sl.pptx.class !== 'picture' ? { metafileObjects: d.metafiles } : {}),
       digest: sl.pptx.digest ?? '',
+      ...(d?.art && sl.pptx.class === 'hybrid' ? { replaced: replacedOf(sl, d.art) } : {}),
     });
   }
   return out;
+}
+
+/** Version 1's objects the art replaces, each with its own digest (`PptxLoSlide.replaced`). */
+function replacedOf(slide: Slide, art: ArtInfo): [string, string][] {
+  const want = new Set(art.replaces);
+  return slide.objects.filter((o) => want.has(o.id)).map((o) => [o.id, digestOf([o])]);
 }
 
 /** The families the slides' text asks for, in first-use order. */

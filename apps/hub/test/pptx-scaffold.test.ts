@@ -21,7 +21,9 @@ describe('pptx jobs', () => {
         return { id: 'j', kind } as never;
       },
     } as unknown as JobQueue;
-    const pptx = new PptxImports({ jobs, locked: () => false } as unknown as PptxDeps);
+    // No reference job is active (`queueReference` joins an active one: pptx-integrate-review.test.ts).
+    const lib = { db: { prepare: () => ({ all: () => [] }) } };
+    const pptx = new PptxImports({ jobs, lib, locked: () => false } as unknown as PptxDeps);
     expect(registered.sort()).toEqual(Object.values(PPTX_JOBS).sort());
     pptx.queueNative('hash', 'Sunday.pptx', { extendBackgrounds: false });
     pptx.queueReference('p1', 'hash');

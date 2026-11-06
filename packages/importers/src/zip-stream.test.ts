@@ -197,6 +197,28 @@ describe('extractZip filters and caps (design/27 §12)', () => {
     ]);
   });
 
+  it('refuses entries whose data overlap with distinct: true (one stream named many times)', async () => {
+    // A JSZip of one stored entry, then a second central record pointing at the same local header.
+    const file = await write('overlap.zip', (z) => z.file('a.xml', Buffer.alloc(4000, 0x41)), {
+      compression: 'STORE',
+    });
+    const buf = readFileSync(file);
+    const eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+    const cdStart = buf.readUInt32LE(eocd + 16);
+    const record = Buffer.from(buf.subarray(cdStart, eocd));
+    const copy = Buffer.from(record);
+    copy.write('b', 46, 'latin1');
+    const end = Buffer.from(buf.subarray(eocd));
+    end.writeUInt16LE(2, 8);
+    end.writeUInt16LE(2, 10);
+    end.writeUInt32LE(record.length * 2, 12);
+    writeFileSync(file, Buffer.concat([buf.subarray(0, cdStart), record, copy, end]));
+    const opts = { dir: mkdtempSync(join(dir, 'overlap-')), spill: () => false };
+    // Without the flag (ProPresenter libraries) it reads both names.
+    expect([...(await extractZip(file, opts)).files.keys()].sort()).toEqual(['a.xml', 'b.xml']);
+    await expect(extractZip(file, { ...opts, distinct: true })).rejects.toThrow(/zip entries overlap/);
+  });
+
   it('reads a nested bundle as an ordinary entry with nested: false', async () => {
     const inner = new JSZip();
     inner.file('Inner.pro', Buffer.from('inner-doc'));

@@ -27,9 +27,21 @@ const HEAD_BYTES = 64 * 1024;
 const MAX_TEXT_BOXES = 1_000;
 
 export async function renderCopyTask(input: RenderCopyTaskInput): Promise<RenderCopyTaskOutput> {
+  const pages = input.allShown ? shownPages(input.parts) : input.pages;
+  if (input.plan) {
+    // Which pictures the copy keeps (their sizes do not change which): the job spills only those.
+    const plan = buildRenderCopy(input.parts, pages);
+    return {
+      pages: plan.pages,
+      bytes: 0,
+      outlines: plan.outlines,
+      notes: [],
+      slideSize: plan.slideSize,
+      need: [...new Set(plan.media.map(([, part]) => part))],
+    };
+  }
   const files = new Map(input.media);
   const heads = new Map<string, Uint8Array>();
-  const pages = input.allShown ? shownPages(input.parts) : input.pages;
   for (const page of pages)
     if (page.mode === 'picture' && files.has(page.part) && !heads.has(page.part))
       heads.set(page.part, await head(files.get(page.part)!));

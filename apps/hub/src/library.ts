@@ -428,6 +428,18 @@ export class Library {
     return this.savePresentation({ ...old, id, rev: cur.rev }, { expectedRev: cur.rev, by });
   }
 
+  /**
+   * Whether a theme or a stored presentation names this font family in a text style (`"fontFamily":"…"` in
+   * its JSON, case-insensitive): one indexed-free scan per table, for the few CJK fallback families only.
+   */
+  namesFontFamily(family: string): boolean {
+    const like = `%"fontFamily":${JSON.stringify(family).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    for (const table of ['themes', 'presentations'])
+      if (this.db.prepare(`SELECT 1 FROM ${table} WHERE json LIKE ? ESCAPE '\\' LIMIT 1`).get(like))
+        return true;
+    return false;
+  }
+
   // ---- files (content store index) ----
   addFile(f: FileRow): void {
     this.db

@@ -63,6 +63,11 @@ function SlideItem(props: {
           ●<span className="touch-label">Overrides theme</span>
         </span>
       ) : null}
+      {props.slide.hidden ? (
+        <span className="tag" title="Hidden in PowerPoint: left out of the service" data-hidden-slide>
+          Hidden
+        </span>
+      ) : null}
     </div>
   );
 }

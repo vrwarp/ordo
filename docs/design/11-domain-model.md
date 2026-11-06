@@ -42,6 +42,7 @@ type SlidePptx = {
   version: number; // converter version
   digest?: string; // of the objects the converter wrote: "unedited" while they still match
   pending?: boolean; // LibreOffice work for this slide still to come
+  failed?: boolean; // LibreOffice could not draw (part of) it: shows version 1, named by goLive
   notes?: string[]; // what was approximated (≤ 16)
   artText?: string; // text baked into the art or page picture (search and labels only)
   refMediaId?: Id; // LibreOffice picture of the whole slide, on demand
@@ -65,7 +66,8 @@ type Slide = {
   durationMs?: number; // for loop presentations
   notes?: string;
   overrides?: string[]; // paths of theme properties overridden
-  hidden?: boolean; // a hidden PowerPoint slide: its cue is flagged; Next/Prev/auto-advance skip it (design/27 §9)
+  hidden?: boolean; // a hidden PowerPoint slide (design/27 §9): kept in the editor, gives no cue (left out of
+  // the service, as LibreOffice's pictures were) until M5's navigation flags its cue and Next/Prev skip it
   transition?: Transition; // the slide's own: a cue uses item ?? slide ?? presentation (design/27 §9)
   pptx?: SlidePptx; // PowerPoint provenance, never drawable content (design/27 §3.1)
   // imported.textAligned?: boolean: true when the text boxes are keyed by shown slide, so text readers

@@ -309,12 +309,17 @@ export class CpuPool {
   }
 }
 
-/** Buffers that own their whole ArrayBuffer can be transferred instead of copied. */
+/**
+ * Buffers that own their whole ArrayBuffer can be transferred instead of copied. Empty ones never are: they
+ * cost nothing to copy, and a shared empty placeholder (`deckParts.ts`) must not be detached for every
+ * later user.
+ */
 export function transferables(bufs: Iterable<Uint8Array>): ArrayBuffer[] {
   const out: ArrayBuffer[] = [];
   const seen = new Set<ArrayBuffer>();
   for (const b of bufs)
     if (
+      b.byteLength > 0 &&
       b.byteOffset === 0 &&
       b.byteLength === b.buffer.byteLength &&
       b.buffer instanceof ArrayBuffer &&

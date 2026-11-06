@@ -289,13 +289,26 @@ export function localDigest(parts: string[]): string {
 export const PENDING_SLIDE_REASON =
   'PowerPoint slide still being drawn by LibreOffice: its chart, art or page picture is missing until then';
 
-/** Slides of a native PowerPoint import that still wait for LibreOffice (`Slide.pptx.pending`). */
+/** The reason a slide LibreOffice could not draw (`Slide.pptx.failed`) is listed in `degraded`. */
+export const FAILED_SLIDE_REASON =
+  'PowerPoint slide LibreOffice could not draw: its chart, art or page picture is missing';
+
+/**
+ * Slides of a native PowerPoint import that still wait for LibreOffice (`Slide.pptx.pending`) or that it
+ * could not draw (`Slide.pptx.failed`).
+ */
 function pendingSlides(resolved: ResolvedPlaylist): GoLiveProblem[] {
   const out: GoLiveProblem[] = [];
+  const flagged = (s: Slide) => (s.pptx?.pending || s.pptx?.failed) && !s.hidden;
+  // A hidden slide gives no cue (`expandCues`): there is no cue to report it at.
   for (const p of Object.values(resolved.presentations))
     for (const sec of p.sections)
       for (const s of sec.slides)
-        if (s.pptx?.pending && out.length < DEGRADED_MAX)
-          out.push({ presentationId: p.id, slideId: s.id, reason: PENDING_SLIDE_REASON });
+        if (flagged(s) && out.length < DEGRADED_MAX)
+          out.push({
+            presentationId: p.id,
+            slideId: s.id,
+            reason: s.pptx?.pending ? PENDING_SLIDE_REASON : FAILED_SLIDE_REASON,
+          });
   return out;
 }

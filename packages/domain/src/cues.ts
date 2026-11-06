@@ -31,6 +31,9 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
       const sections = arrangedSections(p, item.arrangementId);
       sections.forEach((section, arrangementPos) => {
         section.slides.forEach((slide, slideIndexInSection) => {
+          // A hidden PowerPoint slide stays out of the service, as LibreOffice's pictures left it out, until
+          // M5's navigation flags its cue and skips it (design/27 §9).
+          if (slide.hidden) return;
           const text = firstText(slide);
           cues.push({
             index: cues.length,
@@ -50,7 +53,7 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
             slideIndexInSection,
             backgroundMediaId: slide.backgroundMediaId ?? item.backgroundMediaId ?? p.backgroundMediaId,
             ...(slide.clearBackground && !slide.backgroundMediaId ? { clearBackground: true } : {}),
-            transition: item.transition ?? p.transition,
+            transition: item.transition ?? slide.transition ?? p.transition,
             autoAdvanceMs:
               p.kind === 'loop' ? loopDelay(slide.durationMs, p.loop?.defaultSlideMs) : undefined,
           });

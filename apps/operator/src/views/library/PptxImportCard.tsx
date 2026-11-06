@@ -4,6 +4,7 @@ import { useState } from 'react';
 import {
   approximatedSlides,
   classCounts,
+  hiddenCount,
   loStatus,
   type NativeImportFallback,
   type NativeImportResult,
@@ -135,6 +136,7 @@ function NativeSummary(props: {
   const r = props.result;
   const lo = loStatus(r.pending, props.lo);
   const approx = props.presentation ? approximatedSlides(props.presentation) : { slides: [], more: 0 };
+  const hidden = props.presentation ? hiddenCount(props.presentation) : 0;
   return (
     <div className="col" style={{ gap: 6 }}>
       <div className="row wrap" style={{ gap: 6 }}>
@@ -155,13 +157,18 @@ function NativeSummary(props: {
       </div>
       {r.hybrid > 0 && (
         <span className="muted small">
-          Partly pictures: what ordo cannot edit (a chart, SmartArt, 3D or WordArt) is a locked picture drawn
-          by LibreOffice; the rest of the slide is editable.
+          Partly pictures: what ordo cannot edit (a chart, SmartArt, 3D or WordArt) is a picture drawn by
+          LibreOffice; the rest of the slide is editable.
         </span>
       )}
       {r.picture > 0 && (
         <span className="muted small">
           Pictures: ordo could not rebuild these slides, so they show a picture of the PowerPoint slide.
+        </span>
+      )}
+      {hidden > 0 && (
+        <span className="muted small" data-hidden-count>
+          {plural(hidden, 'hidden slide')}: kept in the editor and left out of the service, as in PowerPoint.
         </span>
       )}
       {r.compact > 0 && (

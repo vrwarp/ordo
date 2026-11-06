@@ -177,7 +177,9 @@ describe('queueReference', () => {
         return { id: 'j' } as never;
       },
     } as unknown as JobQueue;
-    const pptx = new PptxImports({ jobs, locked: () => false } as unknown as PptxDeps);
+    // No reference job is active (`queueReference` joins an active one: pptx-integrate-review.test.ts).
+    const lib = { db: { prepare: () => ({ all: () => [] }) } };
+    const pptx = new PptxImports({ jobs, lib, locked: () => false } as unknown as PptxDeps);
     pptx.queueReference('p1', 'h');
     pptx.queueReference('p1', 'h', 'edit@1', []);
     pptx.queueReference('p1', 'h', undefined, ['s1']);

@@ -77,6 +77,17 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
           onChange={(v) => set((s) => ({ ...s, durationMs: Math.round(v * 1000) }))}
         />
       )}
+      {(slide.hidden || slide.pptx) && (
+        <label className="check" data-hidden-toggle>
+          <input
+            type="checkbox"
+            checked={!!slide.hidden}
+            disabled={readOnly}
+            onChange={(e) => set((s) => ({ ...s, hidden: e.target.checked || undefined }))}
+          />
+          Hidden: left out of the service (as in PowerPoint)
+        </label>
+      )}
       <TextField
         label="Notes"
         multiline

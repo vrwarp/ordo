@@ -20,12 +20,12 @@ import { existsSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ExtractedText, newId, type Presentation, type PptxRenderer, type Slide } from '@ordo/domain';
-import { extractZip } from '@ordo/importers/zip-stream.ts';
 import type { EmittedSlide, SlideRef } from '@ordo/pptx-scene';
 import type { Job } from '@ordo/protocol';
 import { errorMessage } from '../errors.ts';
 import type { JobCtx, JobHandler } from '../jobs.ts';
 import { cpuPool, WorkerStartError } from '../pool.ts';
+import { readDeckXml } from './deckParts.ts';
 import { logSafe } from './report.ts';
 import type { PptxDeps, TextRepairPayload } from './shared.ts';
 import { enqueuePptx, PPTX_JOBS, PPTX_LIMITS } from './shared.ts';
@@ -43,8 +43,6 @@ const MAX_BOXES = 1000;
 const MAX_BOX_TEXT = 20_000;
 /** Decks whose text one repair run keeps (each is text only: a few hundred KB at most). */
 const DECK_CACHE = 4;
-/** Parts that stay in memory for the parser: XML and relationships; media and fonts are only names. */
-const XML_PART = /\.(xml|rels)$/i;
 
 /** What the job reports. */
 export type TextRepairResult = {
@@ -86,6 +84,30 @@ export function pagesOf(
   return out;
 }
 
+/** A page `storedPagesOf` cannot place for certain: its text is not trusted (`textAligned: false`). */
+export const AMBIGUOUS_PAGE = -2;
+
+/**
+ * `pagesOf` for a stored legacy import, whose page count is known only as the highest page it still holds (a
+ * volunteer may have deleted the last slides). LibreOffice pages count shown slides whatever the count. A
+ * pptx-preview import printed either the shown slides or every listed slide (builds differ), and the
+ * original count told which: with more pages left than shown slides, every listed slide; otherwise both
+ * readings are possible, and a page where they name different slides is `AMBIGUOUS_PAGE`.
+ */
+export function storedPagesOf(
+  renderer: PptxRenderer | undefined,
+  listed: readonly { index: number; hidden: boolean; shown?: number }[],
+  highestPage: number,
+): number[] {
+  if (renderer !== 'pptx-preview') return pagesOf(renderer, listed, highestPage);
+  let shownCount = 0;
+  for (const r of listed)
+    if (!r.hidden && r.shown !== undefined) shownCount = Math.max(shownCount, r.shown + 1);
+  const byShown = pagesOf('libreoffice', listed, highestPage);
+  if (byShown.length > shownCount) return pagesOf('pptx-preview', listed, highestPage);
+  return byShown.map((slide, k) => (slide === (listed[k]?.index ?? -1) ? slide : AMBIGUOUS_PAGE));
+}
+
 /** A deck's text as `readDeckText` reads it. */
 export type DeckText = {
   /** Every slide the deck lists, in order (`convertDeck`'s `listed`). */
@@ -118,25 +140,19 @@ export function slideBoxes(s: Pick<EmittedSlide, 'slide' | 'art'>): ExtractedTex
 
 /**
  * Read a stored deck's text with pptx-scene on the CPU pool (the deck is untrusted: never on the event
- * loop, never inline when the pool cannot start). Only XML and relationship parts are read into memory
- * (each ≤ 8 MB, ≤ 64 MB in all); every other part is spilled under a generated name into a folder under
- * `scratch` and removed at once, since the parser needs only its name. Batches of 150 slides, each with the
- * pool's timeout, within the import's 15 minutes of pool time.
+ * loop, never inline when the pool cannot start). Only XML and relationship parts are read, into memory
+ * (each ≤ 8 MB, ≤ 64 MB in all, `readDeckXml`); every other part is an empty placeholder, since the parser
+ * needs only its name: nothing is written to disk. Batches of 150 slides, each with the pool's timeout,
+ * within the import's 15 minutes of pool time.
  */
 export async function readDeckText(deck: string, scratch: string, signal: AbortSignal): Promise<DeckText> {
-  const spill = join(scratch, `text-${newId()}`);
-  await mkdir(spill, { recursive: true });
+  const dir = join(scratch, `text-${newId()}`);
+  await mkdir(dir, { recursive: true });
   let parts: Map<string, Uint8Array>;
   try {
-    const zip = await extractZip(deck, {
-      dir: spill,
-      spill: (path, size) => !XML_PART.test(path) || size > PPTX_LIMITS.xmlPartBytes,
-      maxInMemoryBytes: PPTX_LIMITS.xmlTotalBytes,
-      signal,
-    });
-    parts = zip.files;
+    parts = (await readDeckXml(deck, dir, signal)).parts;
   } finally {
-    await rm(spill, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true });
   }
   const t0 = Date.now();
   const batch = PPTX_LIMITS.batchSlides;
@@ -293,6 +309,24 @@ export function textRepairJob(deps: PptxDeps): JobHandler<TextRepairPayload> {
   };
 }
 
+/** The page count the picture import of a presentation recorded in its job result, while the job is kept. */
+function recordedPageCount(deps: Pick<PptxDeps, 'lib'>, presentationId: string): number | undefined {
+  try {
+    const row = deps.lib.db
+      .prepare(
+        `SELECT result FROM jobs WHERE kind = 'document' AND state = 'done'
+         AND json_extract(result, '$.presentationId') = ? LIMIT 1`,
+      )
+      .get(presentationId) as { result: string | null } | undefined;
+    const pages = row?.result ? (JSON.parse(row.result) as { pages?: unknown }).pages : undefined;
+    return typeof pages === 'number' && Number.isInteger(pages) && pages >= 0 && pages <= MAX_PAGES
+      ? pages
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function repairOne(
   deps: PptxDeps,
   id: string,
@@ -304,7 +338,7 @@ async function repairOne(
   if (!p || !needsTextRepair(p)) return 'skipped';
   if (deps.locked(id)) return 'deferred';
   const title = `“${logSafe(p.title, 80)}”`;
-  // The decks its pages come from, each with the highest page still held (pptx-preview's page count).
+  // The decks its pages come from, each with the highest page still held (`storedPagesOf`).
   const decks = new Map<string, number>();
   for (const imp of legacyPages(p)) decks.set(imp.fileId, Math.max(decks.get(imp.fileId) ?? 0, imp.page));
   const texts = new Map<string, DeckPages>();
@@ -321,7 +355,13 @@ async function repairOne(
         if (cache.size >= DECK_CACHE) cache.delete(cache.keys().next().value!);
         cache.set(hash, t);
       }
-      texts.set(hash, { pages: pagesOf(p.source?.renderer, t.listed, pageCount), boxes: t.boxes });
+      // The import's own page count when its job is still recorded (30 days), else what the pages tell.
+      const recorded = hash === p.source?.fileId ? recordedPageCount(deps, p.id) : undefined;
+      const pages =
+        recorded !== undefined
+          ? pagesOf(p.source?.renderer, t.listed, recorded)
+          : storedPagesOf(p.source?.renderer, t.listed, pageCount);
+      texts.set(hash, { pages, boxes: t.boxes });
     } catch (e) {
       // A pool that cannot start, or a cancel, stops the job: it runs again at the next start.
       if (ctx.signal.aborted || e instanceof WorkerStartError) throw e;
@@ -342,12 +382,13 @@ async function repairOne(
       const imp = sl.imported;
       const t = imp && imp.textAligned === undefined ? texts.get(imp.fileId) : undefined;
       if (!imp || !t) return sl;
-      if (t === 'failed') {
+      const slide = t === 'failed' ? undefined : t.pages[imp.page - 1];
+      if (t === 'failed' || slide === AMBIGUOUS_PAGE) {
+        // Unread, or a page that cannot be placed for certain: readers ignore its boxes.
         unread++;
         return { ...sl, imported: { ...imp, textAligned: false } };
       }
       aligned++;
-      const slide = t.pages[imp.page - 1];
       const boxes = slide !== undefined && slide >= 0 ? (t.boxes.get(slide) ?? []) : [];
       const { textBoxes: _legacy, ...rest } = imp;
       return {

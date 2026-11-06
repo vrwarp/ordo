@@ -443,6 +443,8 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const p = validate(PresentationBody, { ...body, id });
     const saved = lib.savePresentation(p, { expectedRev: body.rev, by: by(req) });
     lib.emit([{ kind: 'presentation', id, rev: saved.rev, entity: saved }]);
+    // Slides of a native PowerPoint import still waiting for LibreOffice get their follow-up back.
+    hub.imports.pptx.followUp(saved);
     return saved;
   });
   route('DELETE', '/presentations/:id', 'edit', async (req, reply) => {
@@ -465,6 +467,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     assertPresentationUnlocked(id);
     const saved = lib.restoreRevision(id, Number(params(req).rev), by(req));
     lib.emit([{ kind: 'presentation', id, rev: saved.rev, entity: saved }]);
+    hub.imports.pptx.followUp(saved);
     return saved;
   });
   route('POST', '/presentations/:id/slides/:slideId/make-editable', 'edit', async (req) => {

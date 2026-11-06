@@ -5,7 +5,6 @@
  * characters, so a deck cannot forge `[warn]`/`[error]` lines or the 'HH:MM:SS msg' format.
  */
 import { clean } from '@ordo/pptx-scene/log.ts';
-import { BUNDLED_FACES, bundledSubstitute } from '../fonts/bundled.ts';
 import type { PptxNativeResult } from './shared.ts';
 
 /** A deck-derived string made safe for a job log line or `source.log`. */
@@ -45,22 +44,19 @@ export function importResult(input: {
   };
 }
 
-/**
- * Families every output can draw with exact line breaks before any upload: ordo's default font, generic
- * families, the bundled faces and the Office faces with a bundled metric-compatible substitute (design/27
- * §10, `fonts/bundled.ts`).
- */
+/** Generic families: every output draws them as they are. */
 const GENERIC: ReadonlySet<string> = new Set(['sans-serif', 'serif', 'monospace', 'system-ui']);
-const BUNDLED: ReadonlySet<string> = new Set(BUNDLED_FACES.map((f) => f.family.toLowerCase()));
 
 function covered(k: string): boolean {
-  return GENERIC.has(k) || BUNDLED.has(k) || bundledSubstitute(k) !== undefined;
+  return GENERIC.has(k);
 }
 
 /**
- * The families a deck's text uses that neither the library's fonts nor a metric-compatible substitute
- * cover: the import card offers an upload ("Upload Century Gothic for exact line breaks"). In first-use
- * order, each once (case-insensitive), cleaned for display.
+ * The families a deck's text uses that the library's fonts do not cover: the import card offers an upload
+ * ("Upload Century Gothic for exact line breaks"). In first-use order, each once (case-insensitive), cleaned
+ * for display. A bundled metric-compatible substitute (Calibri → Carlito, design/27 §10, `fonts/bundled.ts`)
+ * does not count yet: no drawer of this build uses substitutes (M2's font resolver does), so an output
+ * without the family draws it in the default font, and the card says so.
  */
 export function missingFonts(used: Iterable<string>, library: Iterable<string>): string[] {
   const have = new Set<string>();

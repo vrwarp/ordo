@@ -181,11 +181,25 @@ export function bundledSubstitute(family: string): string | undefined {
  * The fonts an output receives through its config, whatever the playlist (design/27 §10): every library
  * face (so Inter, the substitutes and the script fallbacks are cached on every output, which never falls back
  * to its operating system's fonts glyph by glyph) except the CJK fallback families, which goLive ships only
- * with text that needs them, unless a look's text style names them.
+ * with text that needs them, unless something names them: a look's text style, or (`namedElsewhere`, the
+ * library's themes and stored presentations) a congregation that picked one for its songs, whose preview
+ * must draw with it too.
  */
-export function outputFonts(fonts: readonly Font[], looks: readonly Look[] = []): Font[] {
+export function outputFonts(
+  fonts: readonly Font[],
+  looks: readonly Look[] = [],
+  namedElsewhere: (family: string) => boolean = () => false,
+): Font[] {
   const named = new Set([...referencedFontFamilies([], [...looks])].map((f) => f.trim().toLowerCase()));
-  return fonts.filter((f) => !isOnDemandFontFamily(f.family) || named.has(f.family.trim().toLowerCase()));
+  const asked = new Map<string, boolean>();
+  const keep = (family: string) => {
+    const k = family.trim().toLowerCase();
+    if (named.has(k)) return true;
+    let v = asked.get(k);
+    if (v === undefined) asked.set(k, (v = namedElsewhere(family.trim())));
+    return v;
+  };
+  return fonts.filter((f) => !isOnDemandFontFamily(f.family) || keep(f.family));
 }
 
 /** Largest bundled file read (the upload limit). */

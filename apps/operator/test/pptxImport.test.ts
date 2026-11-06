@@ -10,7 +10,10 @@ import {
   importJobTitle,
   isImportJob,
   lastLogLine,
+  hiddenCount,
   loStatus,
+  onlyJobSaves,
+  rebaseOnJobs,
   PPTX_EXTEND_KEY,
   PPTX_IMPORT_KEY,
   readImportChoice,
@@ -206,6 +209,18 @@ describe('the native import result', () => {
     expect(loStatus(1, job({ state: 'failed' }))?.text).toBe(
       'LibreOffice could not finish 1 slide: it shows only its editable parts.',
     );
+    // A follow-up that ended with slides it could not draw is not green.
+    const partly = loStatus(3, job({ state: 'done', result: { failed: 1 } }));
+    expect(partly).toMatchObject({ tone: 'amber' });
+    expect(partly?.text).toMatch(/^LibreOffice could not draw 1 slide: it shows only what ordo rebuilt/);
+    expect(loStatus(2, job({ state: 'done', result: { failed: 2 } }))).toMatchObject({ tone: 'red' });
+    expect(loStatus(2, job({ state: 'done', result: { failed: 'x' } }))).toMatchObject({ tone: 'green' });
+  });
+
+  it('counts hidden slides', () => {
+    expect(
+      hiddenCount(pres([[slide('a'), slide('b', { hidden: true })], [slide('c', { hidden: true })]])),
+    ).toBe(2);
   });
 
   it('reads the newest log line without its time', () => {
@@ -257,7 +272,8 @@ describe('the editor PowerPoint card', () => {
       2,
     );
     const out = withReferences(draft, latest);
-    expect(out.rev).toBe(2);
+    // Its own revision: a save still meets the hub's check (someone else may have saved too).
+    expect(out.rev).toBe(1);
     const [a, n] = out.sections[0]!.slides;
     expect(a).toMatchObject({ notes: 'my edit', pptx: { refMediaId: 'r0' } });
     expect(a!.pptx!.show).toBeUndefined();
@@ -271,6 +287,52 @@ describe('the editor PowerPoint card', () => {
       latest,
     );
     expect(other.sections[0]!.slides[0]!.pptx!.refMediaId).toBeUndefined();
+  });
+});
+
+describe("taking the PowerPoint jobs' revisions over", () => {
+  it('knows when only PowerPoint jobs saved since a revision', () => {
+    const revs = [
+      { rev: 4, savedBy: 'pptx-reference' },
+      { rev: 3, savedBy: 'pptx-lo' },
+      { rev: 2, savedBy: 'edit@10.0.0.2' },
+      { rev: 1, savedBy: 'pptx-import' },
+    ];
+    expect(onlyJobSaves(revs, 2, 4)).toBe(true);
+    expect(onlyJobSaves(revs, 2, 3)).toBe(true);
+    expect(onlyJobSaves(revs, 1, 4)).toBe(false);
+    expect(onlyJobSaves(revs, 4, 4)).toBe(false);
+    // A revision missing from the list (pruned) is not assumed to be a job's.
+    expect(onlyJobSaves([{ rev: 4, savedBy: 'pptx-lo' }], 2, 4)).toBe(false);
+    expect(onlyJobSaves([{ rev: 3 }], 2, 3)).toBe(false);
+  });
+
+  it('moves a draft onto version 2: unchanged slides take it, edited ones keep the edit', () => {
+    const v1hybrid = slide('h', {
+      objects: [],
+      pptx: pptx({ class: 'hybrid', pending: true, digest: 'd1' }),
+    });
+    const base = pres([[v1hybrid, slide('t', { notes: 'x', pptx: pptx({ index: 1, shown: 1 }) })]], 2);
+    // The volunteer fixed a typo on slide t; slide h is untouched.
+    const draft = pres([[v1hybrid, { ...base.sections[0]!.slides[1]!, notes: 'fixed' }, slide('new')]], 2);
+    const v2hybrid = slide('h', { objects: [], pptx: pptx({ class: 'hybrid', digest: 'd2' }) });
+    const latest: Presentation = {
+      ...pres(
+        [[v2hybrid, slide('t', { notes: 'x', pptx: pptx({ index: 1, shown: 1, refMediaId: 'r1' }) })]],
+        4,
+      ),
+      title: 'Sunday (renamed by nobody)',
+    };
+    const out = rebaseOnJobs(base, draft, latest);
+    expect(out.rev).toBe(4);
+    const [h, t, n] = out.sections[0]!.slides;
+    expect(h).toBe(v2hybrid);
+    expect(h!.pptx!.pending).toBeUndefined();
+    expect(t).toMatchObject({ notes: 'fixed', pptx: { refMediaId: 'r1' } });
+    expect(n).toEqual(slide('new'));
+    // A field the draft did not change follows the latest version; one it changed keeps the edit.
+    expect(out.title).toBe('Sunday (renamed by nobody)');
+    expect(rebaseOnJobs(base, { ...draft, title: 'Mine' }, latest).title).toBe('Mine');
   });
 });
 

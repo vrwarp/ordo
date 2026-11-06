@@ -477,14 +477,17 @@ export class ImportService {
           } catch (e) {
             if (ctx.signal.aborted) throw e;
             // A church needs its slides more than it needs this renderer: draw them the usual way.
-            ctx.log(`[warn] pptx-preview failed (${errorMessage(e)}); rendering with LibreOffice instead`);
+            ctx.log(
+              `[warn] pptx-preview failed (${logSafe(errorMessage(e))}); rendering with LibreOffice instead`,
+            );
             renderer = 'libreoffice';
           }
           ctx.progress(0.3);
         }
         if (!pages) {
           // The worker-built render copy (design/27 §5): every shown slide, External relationships, macros
-          // and OLE binaries gone, outlines stripped. Without the pool the deck goes to LibreOffice as it is.
+          // and OLE binaries gone, outlines stripped. It fails closed: LibreOffice never sees a deck as
+          // uploaded (design/21), so a copy that cannot be built (no pool, a deck past the caps) fails the job.
           try {
             const r = await renderCopyForDocument(input, dir, ctx.signal);
             for (const n of r.notes.slice(0, 20)) ctx.log(`[warn] ${logSafe(n)}`);
@@ -493,7 +496,10 @@ export class ImportService {
                 `text outlines removed from ${r.outlines} run(s): LibreOffice draws an outline on filled text as hollow letters`,
               );
           } catch (e) {
-            ctx.log(`[warn] could not prepare the slides for LibreOffice: ${errorMessage(e)}`);
+            if (ctx.signal.aborted) throw e;
+            throw new Error(
+              `The slides could not be prepared for LibreOffice, so the deck was not converted: ${logSafe(errorMessage(e))}`,
+            );
           }
           ctx.log('converting with LibreOffice');
           pdf = await sofficeToPdf(input, dir, { timeoutMs: t.soffice, signal: ctx.signal });

@@ -16,9 +16,11 @@ import type { JobCtx } from '../src/jobs.ts';
 import { PPTX_MIME } from '../src/imports.ts';
 import type { PptxDeps, TextRepairPayload } from '../src/pptx/shared.ts';
 import {
+  AMBIGUOUS_PAGE,
   pagesOf,
   REPAIR_RETRY_MS,
   slideBoxes,
+  storedPagesOf,
   TEXT_REPAIR_BY,
   type TextRepairResult,
   textRepairJob,
@@ -141,6 +143,20 @@ describe('pagesOf', () => {
     expect(pagesOf(undefined, listed, Number.NaN)).toEqual([]);
     expect(pagesOf(undefined, [], 1e9)).toHaveLength(100_000);
   });
+  it('does not guess a pptx-preview page when slides may have been deleted (the original count is unknown)', () => {
+    // LibreOffice pages count shown slides whatever the count.
+    expect(storedPagesOf('libreoffice', listed, 1)).toEqual([0]);
+    // More pages left than shown slides: every listed slide was drawn.
+    expect(storedPagesOf('pptx-preview', listed, 3)).toEqual([0, 1, 2]);
+    // Two pages left: the shown slides, or every slide with the last page deleted. Page 1 is slide 0 either
+    // way; page 2 is slide 2 or the hidden slide 1, so it is not trusted.
+    expect(storedPagesOf('pptx-preview', listed, 2)).toEqual([0, AMBIGUOUS_PAGE]);
+    expect(storedPagesOf('pptx-preview', listed, 1)).toEqual([0]);
+    // Without hidden slides both readings agree.
+    expect(storedPagesOf('pptx-preview', [listed[0]!, { index: 1, hidden: false, shown: 1 }], 2)).toEqual([
+      0, 1,
+    ]);
+  });
 });
 
 describe('slideBoxes', () => {
@@ -186,6 +202,25 @@ describe('legacy text repair (design/27 §11)', () => {
       legacyDeck('Sermon (pptx-preview)', deck, ['Welcome home', 'Prayer requests'], 'pptx-preview'),
       { create: true },
     );
+    // Its import job is still recorded: the page count (2) is the import's own, not a guess.
+    const now = new Date().toISOString();
+    hub.lib.db
+      .prepare(
+        `INSERT INTO jobs (id, kind, class, state, progress, payload, log, result, created_at, updated_at)
+         VALUES (?, 'document', 'heavy', 'done', 1, '{}', '[]', ?, ?, ?)`,
+      )
+      .run(newId(), JSON.stringify({ presentationId: ppvShown.id, pages: 2 }), now, now);
+    // The same import without its job, and an older one that drew every slide, each with its last page deleted:
+    // two pages could be either; the second is left untrusted rather than given another slide's text.
+    const ppvUnknown = hub.lib.savePresentation(
+      legacyDeck(
+        'Sermon (pptx-preview, job gone)',
+        deck,
+        ['Welcome home', 'Prayer requests'],
+        'pptx-preview',
+      ),
+      { create: true },
+    );
     // An older pptx-preview drew every listed slide, the hidden one too.
     const ppvListed = hub.lib.savePresentation(
       legacyDeck(
@@ -212,11 +247,15 @@ describe('legacy text repair (design/27 §11)', () => {
     const done = hub.jobs.get(job!.id);
     expect(done.error).toBeUndefined();
     expect(done.result).toEqual({
-      repaired: 3,
+      repaired: 4,
       skipped: 0,
       failed: 0,
       deferred: 0,
     } satisfies TextRepairResult);
+    const unknown = hub.lib.presentations.must(ppvUnknown.id).sections[0]!.slides;
+    expect(unknown.map((s) => s.imported?.textAligned)).toEqual([true, false]);
+    expect(unknown[0]!.imported!.textBoxes!.map((b) => b.text)).toEqual(['Welcome home']);
+    expect(readers(hub.lib.presentations.must(ppvUnknown.id)).stage).toEqual(['Welcome home', '']);
 
     const after = (p: Presentation) => hub.lib.presentations.must(p.id);
     const expected: [Presentation, string[]][] = [

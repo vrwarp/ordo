@@ -547,7 +547,7 @@ describe('pptx-native: pool batches, budgets and fallbacks', () => {
     expect(lines.filter((l) => /were not converted: the import used its/.test(l))).toHaveLength(2);
   });
 
-  it('sends the deck to the LibreOffice picture import when the pool cannot start, never parsing inline', async () => {
+  it('fails cleanly when the pool cannot start: never parsed inline, never sent to LibreOffice as uploaded', async () => {
     const hash = await stored(deckOf(2));
     const queued: [string, unknown, string][] = [];
     const jobs = {
@@ -559,18 +559,12 @@ describe('pptx-native: pool batches, budgets and fallbacks', () => {
     const deps = { ...hub.imports.pptx.deps, jobs };
     const noPool = { run: () => Promise.reject(new WorkerStartError('cpu worker exited with code 1')) };
     const before = hub.lib.presentations.list().length;
-    const { out, payload } = await runHandler({ hash, name: 'Two.pptx' }, { pool: noPool as never }, deps);
-    expect(out).toEqual({
-      fallback: 'libreoffice',
-      jobId: 'doc-job',
-      reason: 'cpu worker exited with code 1',
-    });
-    expect(queued).toEqual([['document', { hash, name: 'Two.pptx', ext: 'pptx' }, 'heavy']]);
+    await expect(runHandler({ hash, name: 'Two.pptx' }, { pool: noPool as never }, deps)).rejects.toThrow(
+      /could not start a conversion worker \(cpu worker exited with code 1\): the deck was not imported/,
+    );
+    // No picture import of the deck as it is (its render copy needs the pool too), nothing saved.
+    expect(queued).toEqual([]);
     expect(hub.lib.presentations.list()).toHaveLength(before);
-    // A re-run does not queue it twice.
-    const again = await runHandler(payload, { pool: noPool as never }, deps);
-    expect(again.out).toMatchObject({ fallback: 'libreoffice', jobId: 'doc-job' });
-    expect(queued).toHaveLength(1);
   });
 
   it('resumes: stored pictures are reused, and a saved version 1 is never saved twice', async () => {

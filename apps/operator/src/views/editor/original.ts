@@ -6,7 +6,9 @@
  *
  * When a slide has no picture yet, turning it on asks the hub for them (`pptx-reference`, one LibreOffice
  * run for every shown slide; `showPicture: []` so no slide switches to its picture) and follows the job:
- * when it is done the editor takes the pictures over (`withReferences`), unsaved edits included.
+ * when it is done the editor takes the job's revision over (`adoptJobSaves`, unsaved edits kept). When
+ * someone else saved meanwhile, only the pictures go into the draft (`withReferences`) and the next save
+ * meets the usual conflict dialog.
  */
 import { api } from '@ordo/client';
 import type { Presentation, Slide } from '@ordo/domain';
@@ -15,7 +17,7 @@ import { create } from 'zustand';
 import { originalMediaId, withReferences } from '../../lib/pptxImport.ts';
 import { upsertLocal } from '../../state/library.ts';
 import { errorText, toast } from '../../state/toasts.ts';
-import { replaceBase, save, useEditor } from './editorStore.ts';
+import { adoptJobSaves, replaceBase, save, useEditor } from './editorStore.ts';
 
 /** The reference job of a presentation, as far as the editor followed it. */
 export type ReferenceJob = {
@@ -100,18 +102,24 @@ function track(pid: string, j: Pick<Job, 'id' | 'state' | 'progress' | 'error'>)
   }));
 }
 
-/** Take the pictures the job stored into the open editor: the whole presentation when nothing is unsaved. */
+/**
+ * Take the pictures the job stored into the open editor: its revision when only PowerPoint jobs saved since
+ * the editor's base (`adoptJobSaves`); else, with unsaved edits, only the pictures, into the draft, which
+ * keeps its revision (its next save meets the conflict dialog).
+ */
 async function takeOver(pid: string): Promise<void> {
+  if (useEditor.getState().id !== pid) {
+    upsertLocal('presentations', await api<Presentation>(`/presentations/${pid}`));
+    return;
+  }
+  if ((await adoptJobSaves()) !== 'other') return;
   const latest = await api<Presentation>(`/presentations/${pid}`);
   upsertLocal('presentations', latest);
   const s = useEditor.getState();
-  if (s.id !== pid || !s.draft || !s.base) return;
-  if (!s.dirty) {
-    replaceBase(latest);
-    return;
-  }
-  // Unsaved edits stay: the job changed only the slides' pictures, which the draft takes over.
-  useEditor.setState({ base: latest, draft: withReferences(s.draft, latest) });
+  if (s.id !== pid || !s.draft) return;
+  // Nothing unsaved: the latest version as it is. Unsaved edits: they keep their revision and get the pictures.
+  if (!s.dirty) replaceBase(latest);
+  else useEditor.setState({ draft: withReferences(s.draft, latest) });
 }
 
 /**

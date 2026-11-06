@@ -20,7 +20,7 @@
  * Every picture is untrusted: headers are read with bounded reads (`PICTURE_LIMITS.scanBytes`), ffmpeg reads
  * a picture only through its checked format's demuxer and decodes within the pixels its header claimed.
  */
-import { copyFile, link, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, link, open, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Media, Slide } from '@ordo/domain';
 import { newId } from '@ordo/domain';
@@ -51,7 +51,19 @@ export const PICTURE_LIMITS = {
   animatedBytes: 64 * 1024 * 1024,
   /** Bytes a header check may read in all (JPEG segments, PNG chunks, GIF blocks before the frame data). */
   scanBytes: 16 * 1024 * 1024,
+  /**
+   * A picture kept as it is (or stored ready) may hold its pixels at 4 bytes each plus this much (metadata,
+   * colour profiles), and never more than `maxBytes`; anything larger is re-encoded, which drops trailing
+   * data and metadata, so a deck cannot ship padding to every screen.
+   */
+  slackBytes: 1024 * 1024,
+  maxBytes: 64 * 1024 * 1024,
 } as const;
+
+/** The most bytes a stored picture of `width` x `height` px may have (`PICTURE_LIMITS.slackBytes`). */
+export function plausibleBytes(width: number, height: number): number {
+  return Math.min(PICTURE_LIMITS.maxBytes, width * height * 4 + PICTURE_LIMITS.slackBytes);
+}
 
 /** The logical canvas width the slide geometry is in. */
 const LOGICAL_WIDTH = 1920;
@@ -835,8 +847,10 @@ async function prepareChecked(
   const target = targetSize(shown.width, shown.height, needPx);
   const notes: string[] = [];
   const name = FORMAT_NAME[h.format] ?? h.format;
-  // Clients read it as it is, and it is within the prepared limits: it may stay unscaled.
+  const bytes = (await stat(src)).size;
+  // Clients read it as it is, and it is within the prepared limits (pixels and bytes): it may stay unscaled.
   const passable =
+    bytes <= plausibleBytes(shown.width, shown.height) &&
     READY_FORMATS.has(h.format) &&
     !h.animated &&
     !h.partial &&
@@ -863,6 +877,8 @@ async function prepareChecked(
     };
   };
   if (!target.scaled && passable) return keep();
+  if (READY_FORMATS.has(h.format) && bytes > plausibleBytes(shown.width, shown.height))
+    notes.push(`re-encoded: ${bytes} bytes is more than a ${shown.width}x${shown.height} picture holds`);
 
   // JPEG decodes at 1/2, 1/4 or 1/8 when the output is still no larger: less memory and time.
   let lowres = 0;
@@ -996,7 +1012,9 @@ async function storeReady(
           ? `${h.width}x${h.height}, not the ${picture.width}x${picture.height} it claims`
           : Math.max(h.width, h.height) > L.side || h.width * h.height > L.megapixels * 1e6
             ? `${h.width}x${h.height} is over ${L.side} px a side or ${L.megapixels} MP`
-            : undefined;
+            : (await stat(picture.path)).size > plausibleBytes(h.width, h.height)
+              ? `more bytes than a ${h.width}x${h.height} picture holds`
+              : undefined;
   if (why || !h) {
     await rm(picture.path, { force: true });
     throw new PictureError(`prepared picture refused: ${why}`);

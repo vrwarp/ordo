@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_GENERAL, DEFAULT_LOOKS } from './defaults.ts';
-import { localDigest, PENDING_SLIDE_REASON, resolvePlaylist } from './goLive.ts';
+import { expandCues } from './cues.ts';
+import { FAILED_SLIDE_REASON, localDigest, PENDING_SLIDE_REASON, resolvePlaylist } from './goLive.ts';
 import { Presentation } from './schemas.ts';
 
 /**
@@ -79,5 +80,54 @@ describe('resolvePlaylist: slides waiting for LibreOffice', () => {
       { digest: localDigest },
     );
     expect(again.degraded).toBeUndefined();
+  });
+
+  const resolve = (p: Presentation) =>
+    resolvePlaylist(
+      {
+        playlist: {
+          id: 'pl',
+          rev: 1,
+          name: 'Sunday',
+          items: [{ id: 'i', kind: 'presentation', presentationId: 'deck' }],
+        },
+        presentation: () => p,
+        media: () => undefined,
+        fonts: () => [],
+        looks: DEFAULT_LOOKS,
+        general: DEFAULT_GENERAL,
+      },
+      'pl',
+      { digest: localDigest },
+    );
+
+  it('names a slide LibreOffice could not draw, at its cue', () => {
+    const failed = structuredClone(deck);
+    const b = failed.sections[0]!.slides[1]!;
+    delete b.pptx!.pending;
+    b.pptx!.failed = true;
+    expect(resolve(failed).degraded).toEqual([
+      { cueIndex: 1, presentationId: 'deck', slideId: 'b', reason: FAILED_SLIDE_REASON },
+    ]);
+  });
+
+  it('leaves a hidden slide out of the service, and out of the degraded list', () => {
+    const hidden = structuredClone(deck);
+    hidden.sections[0]!.slides[1]!.hidden = true;
+    const r = resolve(hidden);
+    expect(expandCues(r).map((c) => c.slideId)).toEqual(['a', 'c']);
+    expect(r.degraded).toBeUndefined();
+  });
+
+  it("gives a slide's own transition to its cue, under the playlist item's", () => {
+    const t = structuredClone(deck);
+    t.sections[0]!.slides[0]!.transition = { kind: 'cut' };
+    t.transition = { kind: 'crossfade', ms: 400 };
+    const cues = expandCues(resolve(t));
+    expect(cues.map((c) => c.transition)).toEqual([
+      { kind: 'cut' },
+      { kind: 'crossfade', ms: 400 },
+      { kind: 'crossfade', ms: 400 },
+    ]);
   });
 });

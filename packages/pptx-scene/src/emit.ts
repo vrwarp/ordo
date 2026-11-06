@@ -342,7 +342,7 @@ function emitElement(ctx: EmitCtx, e: Element, out: SlideObject[], texts: Emitte
       if (object) ctx.metafiles?.push({ part: e.picture.part, object, at: out.length });
       return;
     }
-    ctx.log(`${e.what} not drawn (LibreOffice art comes in M3)`);
+    ctx.log(`${e.what} drawn by LibreOffice as a picture`);
     return;
   }
   if (e.kind === 'picture') {

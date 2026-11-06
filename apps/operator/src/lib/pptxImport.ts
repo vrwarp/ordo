@@ -205,13 +205,27 @@ export function lastLogLine(job: Pick<Job, 'log'> | undefined): string | undefin
   return texts([line.replace(/^\d\d:\d\d:\d\d /, '')], 1, 200)[0];
 }
 
+/** Slides the LibreOffice follow-up could not draw (`failed` of a `pptx-lo` result), 0 when unknown. */
+export function loFailed(lo: Pick<Job, 'result'> | undefined): number {
+  return isObj(lo?.result) ? count(lo.result.failed) : 0;
+}
+
 /** What the card says about the LibreOffice follow-up of an import. */
 export function loStatus(
   pending: number,
-  lo: Pick<Job, 'state' | 'progress' | 'log' | 'error'> | undefined,
+  lo: Pick<Job, 'state' | 'progress' | 'log' | 'error' | 'result'> | undefined,
 ): { tone: 'amber' | 'green' | 'red'; text: string; detail?: string } | undefined {
   if (!pending) return undefined;
   const what = plural(pending, 'slide');
+  const failed = lo?.state === 'done' ? Math.min(pending, loFailed(lo)) : 0;
+  if (failed)
+    return {
+      tone: failed === pending ? 'red' : 'amber',
+      text:
+        `LibreOffice could not draw ${plural(failed, 'slide')}: ${failed === 1 ? 'it shows' : 'they show'} only ` +
+        `what ordo rebuilt. Re-import the deck to try again.`,
+      detail: lastLogLine(lo as Pick<Job, 'log'>),
+    };
   if (!lo || lo.state === 'queued')
     return {
       tone: 'amber',
@@ -244,7 +258,7 @@ export function slideClassText(cls: SlideClass): {
     return {
       label: 'Partly a picture',
       tone: 'amber',
-      text: 'What ordo cannot edit (a chart, SmartArt, 3D or WordArt) is a locked picture drawn by LibreOffice. Everything else is editable.',
+      text: 'What ordo cannot edit (a chart, SmartArt, 3D or WordArt) is a picture drawn by LibreOffice. Everything else is editable.',
     };
   if (cls === 'picture')
     return {
@@ -285,28 +299,99 @@ export function showObjects(slide: Slide): Slide {
 }
 
 /**
- * `draft` with the reference pictures (and picture settings) of `latest`, slide by slide: the
- * `pptx-reference` job changes nothing else, so an editor with unsaved edits takes them over instead of
- * meeting a conflict on its next save. Slides the draft no longer has, or that are not from a PowerPoint,
- * are left alone.
+ * `draft` with the reference pictures (and picture settings) of `latest`, slide by slide; nothing else, and
+ * its own `rev` (a save still meets the hub's revision check). Slides the draft no longer has, or that are
+ * not from a PowerPoint, are left alone.
  */
 export function withReferences(draft: Presentation, latest: Presentation): Presentation {
   const refs = new Map<string, NonNullable<Slide['pptx']>>();
   for (const sec of latest.sections)
     for (const sl of sec.slides) if (sl.pptx?.refMediaId) refs.set(sl.id, sl.pptx);
-  if (!refs.size) return { ...draft, rev: latest.rev };
+  if (!refs.size) return draft;
   return {
     ...draft,
-    rev: latest.rev,
     sections: draft.sections.map((sec) => ({
       ...sec,
       slides: sec.slides.map((sl) => {
         const r = refs.get(sl.id);
-        if (!r || !sl.pptx || sl.pptx.fileId !== r.fileId) return sl;
-        const pptx = { ...sl.pptx, refMediaId: r.refMediaId };
-        if (r.show) pptx.show = r.show;
-        return { ...sl, pptx };
+        return r ? withReference(sl, r) : sl;
       }),
     })),
   };
+}
+
+function withReference(sl: Slide, r: NonNullable<Slide['pptx']>): Slide {
+  if (!sl.pptx || sl.pptx.fileId !== r.fileId || !r.refMediaId) return sl;
+  const pptx = { ...sl.pptx, refMediaId: r.refMediaId };
+  if (r.show) pptx.show = r.show;
+  return { ...sl, pptx };
+}
+
+/** `savedBy` of the revisions the hub's PowerPoint jobs save (version 2, reference pictures, text repair). */
+export const PPTX_JOB_SAVERS: ReadonlySet<string> = new Set([
+  'pptx-lo',
+  'pptx-reference',
+  'pptx-text-repair',
+]);
+
+/**
+ * Whether every revision after `since` up to `upTo` was saved by a PowerPoint job, at least one: an editor
+ * then takes them over (`rebaseOnJobs`) instead of calling them someone else's.
+ */
+export function onlyJobSaves(
+  revisions: readonly { rev: number; savedBy?: string }[],
+  since: number,
+  upTo: number,
+): boolean {
+  if (!(upTo > since) || upTo - since > 1_000) return false;
+  const newer = revisions.filter((r) => r.rev > since && r.rev <= upTo);
+  const revs = new Set(newer.map((r) => r.rev));
+  // Every revision in between must be listed (the hub keeps the newest 50 at least).
+  for (let r = since + 1; r <= upTo; r++) if (!revs.has(r)) return false;
+  return newer.length > 0 && newer.every((r) => !!r.savedBy && PPTX_JOB_SAVERS.has(r.savedBy));
+}
+
+const same = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * The editor's draft moved onto `latest` when only PowerPoint jobs saved since `base` (version 2 of an import,
+ * reference pictures, the text repair): a three-way merge, slide by slide. A slide the draft has not changed
+ * from `base` becomes `latest`'s (art, page pictures, `pending` cleared); a slide it changed keeps the
+ * volunteer's edit and takes only the reference picture (the hub's follow-up gives a still-`pending` slide
+ * its art when it is saved). Presentation fields follow the same rule; the draft's sections and slide order
+ * stay. The result carries `latest.rev`, so the next save does not overwrite the jobs' work.
+ */
+export function rebaseOnJobs(base: Presentation, draft: Presentation, latest: Presentation): Presentation {
+  const slidesOf = (p: Presentation) => new Map(p.sections.flatMap((s) => s.slides.map((sl) => [sl.id, sl])));
+  const before = slidesOf(base);
+  const after = slidesOf(latest);
+  const out: Record<string, unknown> = { ...draft };
+  for (const k of new Set([...Object.keys(draft), ...Object.keys(latest)])) {
+    if (k === 'sections' || k === 'rev') continue;
+    const d = (draft as Record<string, unknown>)[k];
+    if (same(d, (base as Record<string, unknown>)[k])) {
+      const l = (latest as Record<string, unknown>)[k];
+      if (l === undefined) delete out[k];
+      else out[k] = l;
+    }
+  }
+  out.rev = latest.rev;
+  out.sections = draft.sections.map((sec) => ({
+    ...sec,
+    slides: sec.slides.map((sl) => {
+      const l = after.get(sl.id);
+      if (!l) return sl;
+      const b = before.get(sl.id);
+      if (b && same(sl, b)) return l;
+      return l.pptx ? withReference(sl, l.pptx) : sl;
+    }),
+  }));
+  return out as Presentation;
+}
+
+/** The hidden slides of a presentation (`Slide.hidden`): kept in the editor, left out of the service. */
+export function hiddenCount(p: Pick<Presentation, 'sections'>): number {
+  let n = 0;
+  for (const sec of p.sections) for (const sl of sec.slides) if (sl.hidden) n++;
+  return n;
 }

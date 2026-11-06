@@ -117,7 +117,8 @@ terminates its worker and the next task gets a fresh one. Each worker has its ow
 generation, 64 MB young): a runaway parse fails within seconds inside its worker, with "… needs more
 memory than an import may use (512 MB) …", instead of growing the library process towards the container's
 memory limit. Only a worker that cannot start at all falls
-back to inline parsing; a worker that dies while working fails that task.
+back to inline parsing (never for a PowerPoint deck: that import fails instead, design/27 §12); a worker
+that dies while working fails that task.
 
 ## HTTP API
 
@@ -254,8 +255,13 @@ deck's XML into memory within its caps, parses and converts it on the CPU pool (
 of at most 150 slides, 2 minutes each and 15 minutes of pool time per import), stores the pictures the
 slides use, and saves version 1 of the presentation. In the same synchronous step it queues the heavy
 `pptx-lo` follow-up for the slides that wait for LibreOffice, so that job never starts before version 1
-exists and is queued before any clip job of the deck. When the CPU pool cannot start, the deck goes to the
-`document` job (LibreOffice pictures) instead: a deck is never parsed on the event loop.
+exists and is queued before any clip job of the deck; version 1, that job and the import's resume point are
+written in one transaction. When the CPU pool cannot start, the import fails cleanly: a deck is never parsed
+on the event loop, and never handed to LibreOffice as uploaded. The follow-up retries a LibreOffice run that
+fails (twice, deferred with backoff), then marks the slides it could not draw (`Slide.pptx.failed`, named by
+goLive). A save from the editor (or a restored revision) that brings back slides still `pending` while no
+follow-up is queued or running queues one, planned as the last one was and reusing its pictures.
+`POST /presentations/:id/pptx-reference` joins a reference job already waiting for the presentation.
 
 Import jobs are resumable: `pro7-import` records every media id, presentation id and
 playlist id it wrote in its job payload and skips them when the job is re-queued after a

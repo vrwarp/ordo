@@ -125,7 +125,8 @@ around filled text: it substitutes hollow letters, which with the usual drop sha
 broken text (white outlined headlines, common in sermon decks). The fill and shadow stay; text
 meant to be hollow (`<a:noFill/>`) keeps its outline. The job log counts the runs changed.
 soffice runs hardened (design/21: address-space cap, no network, process-group timeout). When
-the pool cannot start, the deck is converted as it is, with a warning. Fonts the deck uses must
+the copy cannot be built (the pool cannot start, the deck passes the caps), the import fails: LibreOffice
+never converts a deck as uploaded. Fonts the deck uses must
 be installed on the hub, or LibreOffice substitutes them.
 
 ### LibreOffice in the native import (design/27 §5)

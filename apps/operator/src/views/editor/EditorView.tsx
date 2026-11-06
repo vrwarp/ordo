@@ -10,6 +10,7 @@ import { useSession } from '../../state/session.ts';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { LookPreviews } from './LookPreviews.tsx';
 import {
+  adoptJobSaves,
   change,
   currentObject,
   loadPresentation,
@@ -95,6 +96,27 @@ export function EditorView({ id }: { id: string }) {
   const [revisions, setRevisions] = useState(false);
   const [imagePick, setImagePick] = useState(false);
   const [dismissedRev, setDismissedRev] = useState(0);
+  // The newest revision found saved by someone else (not only by the hub's PowerPoint jobs): the banner's.
+  const [otherRev, setOtherRev] = useState(0);
+  const libRev = libP?.rev ?? 0;
+  const baseRev = ed.base?.rev ?? 0;
+  // A revision saved only by a PowerPoint job (version 2 of an import, reference pictures, the text repair)
+  // is taken over, unsaved edits kept, instead of being announced as someone else's.
+  useEffect(() => {
+    if (!libRev || !baseRev || libRev <= baseRev || ed.saving) return;
+    let gone = false;
+    void adoptJobSaves().then(
+      (r) => {
+        if (!gone && r === 'other') setOtherRev(libRev);
+      },
+      () => {
+        if (!gone) setOtherRev(libRev);
+      },
+    );
+    return () => {
+      gone = true;
+    };
+  }, [libRev, baseRev, ed.saving]);
   const [step, setStep] = useState<(typeof STEPS)[number]>(10);
   // Look previews: open by default on a touch device in landscape, collapsed in narrow portrait and on
   // the desktop (where the slide canvas keeps its full height until someone opens them).
@@ -210,7 +232,12 @@ export function EditorView({ id }: { id: string }) {
   if (!p) return <div className="center muted">Loading…</div>;
   const theme = themeOf(p, themes);
   const changedElsewhere =
-    !!libP && !!ed.base && libP.rev > ed.base.rev && !ed.saving && libP.rev !== dismissedRev;
+    !!libP &&
+    !!ed.base &&
+    libP.rev > ed.base.rev &&
+    !ed.saving &&
+    otherRev >= libP.rev &&
+    libP.rev !== dismissedRev;
   const z = (zz: ZOrder) => obj && slide && change((q) => reorderObject(q, slide.id, obj.id, zz));
   const add = (o: Parameters<typeof addObject>[2]) => {
     if (!slide || readOnly) return;

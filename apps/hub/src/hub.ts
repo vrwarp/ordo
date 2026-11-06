@@ -204,7 +204,7 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
         audio: s.audio,
         general: s.general,
         logo,
-        fonts: outputFonts(lib.listFonts(), s.looks),
+        fonts: outputFonts(lib.listFonts(), s.looks, (f) => lib.namesFontFamily(f)),
       };
     },
   });

@@ -154,6 +154,11 @@ export type PptxLoSlide = {
    * converted picture as their `mediaId` instead.
    */
   metafileObjects?: { part: string; object: ImageObject; before?: string }[];
+  /**
+   * Version 1's objects of `ArtInfo.replaces`, each with `digestOf([object])`: [id, digest] pairs. On a slide
+   * edited meanwhile the art still replaces those that are exactly as they were.
+   */
+  replaced?: [string, string][];
 };
 
 export type PptxLoPayload = {
@@ -164,6 +169,11 @@ export type PptxLoPayload = {
   slides: PptxLoSlide[];
   /** Times the job found the presentation live-locked and deferred itself (the backoff step). */
   deferrals?: number;
+  /**
+   * Times LibreOffice (or the pool) failed for the whole copy and the job tried again later
+   * (`LO_RETRIES`); past them the slides are marked `failed`.
+   */
+  retries?: number;
   /** Pictures already stored by an earlier attempt: [`<slideId>:<what>`, media id] pairs. */
   done?: [string, string][];
   /**
@@ -176,6 +186,7 @@ export type PptxLoPayload = {
 export type PptxReferencePayload = {
   presentationId: string;
   hash: string;
+  /** Who asked (logged; the revision is saved by `pptx-reference`, which editors take over). */
   by?: string;
   /**
    * The slides (ids) switched to the picture (`Slide.pptx.show: 'picture'`) once it is stored. Absent: every
@@ -299,6 +310,11 @@ export type RenderCopyTaskInput = {
   texts?: number[];
   /** Print every shown slide whole, in order, instead of `pages` (the 'Pictures (LibreOffice)' import). */
   allShown?: boolean;
+  /**
+   * Only plan the copy: write nothing and answer `need`, the picture parts it keeps, so the job spills only
+   * those (`extractDeck`). `media` is ignored; the parts are copied to the worker, not transferred.
+   */
+  plan?: boolean;
 };
 export type RenderCopyTaskOutput = {
   pages: RenderCopyPage[];
@@ -309,6 +325,8 @@ export type RenderCopyTaskOutput = {
   slideSize?: { cx: number; cy: number };
   /** Text boxes of `RenderCopyTaskInput.texts` (uniform contain mapping, logical px): [index, boxes]. */
   texts?: [number, ExtractedText[]][];
+  /** With `RenderCopyTaskInput.plan`: the deck's picture parts the copy keeps, each once. */
+  need?: string[];
 };
 
 /** Pixels: rows top to bottom, `channels` bytes per pixel (RGB or RGBA, straight alpha). */

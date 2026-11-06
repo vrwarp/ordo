@@ -153,7 +153,7 @@ describe('p:pic', () => {
       support: 'approx',
       reasons: ['metafile'],
     });
-    expect(s.notes.join(' ')).toMatch(/emf picture is not drawn/);
+    expect(s.notes.join(' ')).toMatch(/emf picture is converted by LibreOffice/);
   });
 
   it('logs a linked picture with its host only and a missing part, and draws neither', () => {

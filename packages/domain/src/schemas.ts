@@ -160,6 +160,8 @@ export const SlidePptx = z.object({
   digest: z.string().max(100).optional(),
   /** LibreOffice work for this slide (art, metafiles, page picture) is still to come. */
   pending: z.boolean().optional(),
+  /** LibreOffice could not draw (part of) this slide: it shows what version 1 had; goLive names it. */
+  failed: z.boolean().optional(),
   /** What was approximated or left out, shown in the editor. */
   notes: z.array(z.string().max(200)).max(16).optional(),
   /** Text of the text bodies baked into the art or page picture: search and labels only. */
@@ -184,7 +186,10 @@ export const Slide = z.object({
   durationMs: z.number().min(0).max(MAX.ms).optional(),
   notes: z.string().max(MAX.long).optional(),
   overrides: z.array(z.string().max(200)).max(1000).optional(),
-  /** A hidden PowerPoint slide: its cue is flagged, and Next, Prev and auto-advance skip it (design/27 §9). */
+  /**
+   * A hidden PowerPoint slide (design/27 §9): kept in the editor, left out of the service (it gives no cue)
+   * until the cue flag and Next/Prev skipping arrive with M5's navigation.
+   */
   hidden: z.boolean().optional(),
   /** The slide's own transition: a cue uses `item ?? slide ?? presentation` (design/27 §9). */
   transition: Transition.optional().catch(undefined),

@@ -346,7 +346,7 @@ export const SlideSound = z.object({                     // M5: one sound per sl
   slides: z.number().int().min(1).max(999).optional(),   // numSld: plays across N shown slides of the same item
 });
 // Slide
-  hidden: z.boolean().optional(),                        // M3: cue flagged hidden; Next/Prev/auto-advance skip it
+  hidden: z.boolean().optional(),                        // M3: cue flagged hidden; Next/Prev/auto-advance skip it (wave 1: no cue yet, as §15 M3 says)
   transition: Transition.optional().catch(undefined),    // M3: cue transition = item ?? slide ?? presentation
   audio: SlideSound.optional(),                          // M5
   pptx: z.object({                                       // M3: provenance only, never drawable content
@@ -1054,7 +1054,7 @@ The extensions, in priority order (M4 unless noted):
 
 **Process**
 - Parse only on the CPU pool: 512 MB heap, 2 minutes per batch of ≤150 slides, at most 15 minutes of pool time per import (beyond it, the remaining slides become picture class, or the import fails cleanly when nothing is saved yet), termination on timeout.
-- If the pool cannot start, use the whole-deck LibreOffice path. Never parse inline on the event loop (which `extractPptx` and `pptxForRendering` do today).
+- If the pool cannot start, the import fails with a clean message (nothing is saved; it can be tried again). Never parse inline on the event loop (which `extractPptx` and `pptxForRendering` did), and never hand the upload to LibreOffice instead: its render copy needs the pool too, and LibreOffice never sees a deck as uploaded (§5).
 
 **Zip** (`extractZip` semantics)
 - Trust the central directory only.
@@ -1277,6 +1277,7 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   - video ImageObjects draw their poster on outputs;
   - MediaTab hides `pptx`/`document` media; reference-aware delete confirmation.
 - Hub budgets measured on a reference NAS.
+- **As built in wave 1** (apps/hub/src/pptx/README.md): everything above except rich text emission and clip extraction (with M2 and M5), `slideContent()` in every drawer, hidden-cue navigation (hidden slides give no cue until then), and flips, ellipse/roundRect masks and recolouring of pictures (wave 2; drawn unflipped, as rects and without the recolouring, each noted on the slide). Every read of a stored deck spills only referenced pictures and refuses overlapping zip entries; a LibreOffice run that fails is retried, then the slides it could not draw are marked `Slide.pptx.failed`; a save that brings back pending slides queues the follow-up again.
 
 **Files.**
 - `apps/hub/src/pptx/*`, `imports.ts`, `routes.ts`, `pool.ts`, `cpu.worker.ts`, `jobs.ts`, `media/service.ts`, `media/ffmpeg.ts`, `library.ts`, `db.ts`, `fonts/bundled.ts`, `fonts/google.ts`; `Dockerfile`.
@@ -1525,7 +1526,7 @@ The `PptxRenderer` enum values stay forever, so stored presentations validate. A
 
 **Kept:**
 - the LibreOffice tools: `pptxToPdf`, `pdfToPngs` (gains page ranges and 288 dpi), `fitPage`, `addReadyImage`, used for fallbacks, art, references and metafiles;
-- the whole-deck LibreOffice path, for PDF and as the safety net when the pool cannot start;
+- the whole-deck LibreOffice path, for PDF and the 'Pictures (LibreOffice)' option, always through the worker-built render copy (it fails closed when the copy cannot be built);
 - `tools/pptx-fidelity` (`ssim()`, corpus builder, report), extended;
 - `extractZip` and its limits, `sanitizePresentation` (extended for runs and paras), `remapMediaIds` (generalised prefix), `mediaFor` (generalised: tags, names, hash index);
 - the static-slide output path (`SRC_BITMAP`, the 7 existing pipelines, `LayerStack` flips and exact crossfades);

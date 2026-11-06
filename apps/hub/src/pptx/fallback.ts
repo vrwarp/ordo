@@ -14,8 +14,16 @@
  * 4. pool task `pptx-art` per art slide and per metafile; picture-class pages at the slide's aspect,
  *    stored unpadded;
  * 5. `addReadyPicture`, then a patch of each slide whose objects still match its `Slide.pptx.digest`: the
- *    art replaces `ArtInfo.replaces` just under `ArtInfo.before`. A slide edited meanwhile gets the art as an
- *    extra locked object on top, with a note. `pending` is cleared; version 2 is one new revision.
+ *    art replaces `ArtInfo.replaces` just under `ArtInfo.before`. On a slide edited meanwhile it replaces
+ *    only the objects still exactly as version 1 wrote them (`PptxLoSlide.replaced`), with a note for the
+ *    others. `pending` is cleared; version 2 is one new revision.
+ * 6. A whole run that fails (soffice killed or timed out, the pool, the disk) is tried again later
+ *    (`LO_RETRIES`, deferred with backoff); after the last attempt, and for a page or art that fails on its
+ *    own, the slide keeps version 1 marked `Slide.pptx.failed`, which the import card and goLive report.
+ *
+ * `queueFollowUp`: a save from the editor that brings back slides still `pending` (a version-1 draft saved
+ * over version 2, a restored revision) while no follow-up is queued or running gets one, planned from the
+ * stored slides and what earlier follow-ups planned and stored, so LibreOffice is not run again for them.
  *
  * `pptx-reference` ('Show PowerPoint picture', refused by the route while the presentation is locked):
  * every shown slide once into `Slide.pptx.refMediaId`, and `show: 'picture'`.
@@ -39,19 +47,22 @@ import {
   Slide,
   type SlideObject,
 } from '@ordo/domain';
-import { extractZip } from '@ordo/importers/zip-stream.ts';
 import { digestOf } from '@ordo/pptx-scene/emit.ts';
 import { PAGE_BACKGROUNDS, type PageBackground, type RenderCopyPage } from '@ordo/pptx-scene/rendercopy.ts';
 import { errorMessage } from '../errors.ts';
+import type { Job } from '@ordo/protocol';
 import { JobDeferred, type JobCtx, type JobHandler } from '../jobs.ts';
 import { pdfPage } from '../media/ffmpeg.ts';
 import { run } from '../media/tools.ts';
 import { cpuPool, transferables } from '../pool.ts';
 import { readPpm } from './art.ts';
+import { readDeckXml, spillDeckParts } from './deckParts.ts';
 import { addReadyPicture, type PreparedPicture } from './pictures.ts';
 import { logSafe } from './report.ts';
 import {
-  PPTX_LIMITS,
+  CONVERTER_VERSION,
+  enqueuePptx,
+  PPTX_JOBS,
   type PptxDeps,
   type PptxLoPayload,
   type PptxLoSlide,
@@ -75,6 +86,11 @@ export const PAGE_SCALE = 2;
 export const SECOND: PageBackground = 'yellow';
 /** Notes kept on a slide (`SlidePptx.notes`). */
 const SLIDE_NOTES = 16;
+/**
+ * Later attempts of a follow-up whose whole LibreOffice run failed (soffice killed or timed out, the pool, the
+ * disk): deferred with `deferDelay` backoff. Past them the slides are marked `failed`.
+ */
+export const LO_RETRIES = 2;
 
 type Box = { x: number; y: number; w: number; h: number };
 
@@ -180,22 +196,34 @@ export async function sofficeToPdf(
 // ── The stored deck ─────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * The stored deck's parts for the render copy: XML and relationships in memory (≤ 8 MB each, ≤ 64 MB in
- * all), everything else spilled under generated names in `dir`.
+ * The stored deck's parts for a render copy of `copy.pages` (or of every shown slide): the XML in memory
+ * (`readDeckXml`: ≤ 8 MB a part, ≤ 64 MB in all, every other part a placeholder), then a plan call on the
+ * pool names the pictures that copy keeps, and only those are spilled under generated names in `dir`
+ * (`spillDeckParts`: ≤ 2,000, ≤ 1 GiB). Unreferenced parts, media payloads and fonts are never written.
  */
 export async function extractDeck(
   file: string,
   dir: string,
   signal: AbortSignal,
-): Promise<{ parts: Map<string, Uint8Array>; media: [string, string][] }> {
+  copy: { pages: RenderCopyPage[]; allShown?: boolean },
+): Promise<{ parts: Map<string, Uint8Array>; media: [string, string][]; over: number }> {
   await mkdir(dir, { recursive: true });
-  const z = await extractZip(file, {
-    dir,
-    spill: (path, size) => !/\.(xml|rels)$/i.test(path) || size > PPTX_LIMITS.xmlPartBytes,
-    maxInMemoryBytes: PPTX_LIMITS.xmlTotalBytes,
-    signal,
-  });
-  return { parts: z.files, media: [...z.onDisk] };
+  const xml = await readDeckXml(file, dir, signal);
+  // Copied, not transferred: the parts stay here for the copy itself.
+  const plan = await cpuPool().run(
+    'pptx-render-copy',
+    {
+      parts: xml.parts,
+      media: [],
+      pages: copy.pages,
+      out: '',
+      plan: true,
+      ...(copy.allShown ? { allShown: true } : {}),
+    },
+    { signal },
+  );
+  const spilled = await spillDeckParts(file, dir, plan.need ?? [], signal);
+  return { parts: xml.parts, media: [...spilled.files], over: spilled.skippedCount };
 }
 
 /** The page size in px for a slide size in EMU: the slide contain-fitted in 1920x1080, times `PAGE_SCALE`. */
@@ -293,8 +321,11 @@ function insertUnder(
 
 /**
  * Version 2 of one slide (pure): the art, the page picture and the converted metafiles added to the slide as
- * it is now. Objects are replaced only while the slide is unedited (its objects still match `lo.digest`); an
- * edited slide keeps every object and gets the art on top, with a note. `pending` is cleared.
+ * it is now. On an unedited slide (its objects still match `lo.digest`) the art replaces `ArtInfo.replaces`
+ * just under `ArtInfo.before`. On an edited one it replaces only the objects still exactly as version 1 wrote
+ * them (`lo.replaced`), in the same place; edited or deleted ones stay as they are and are noted, since the
+ * art still shows them as they were (without `lo.replaced`, an older plan: the art goes on top, noted).
+ * `pending` is cleared; `failed` is set when part of the work failed (`work.failed`).
  */
 export function patchSlide(slide: Slide, lo: PptxLoSlide, work: SlideWork, hash: string): Slide {
   const unedited = !!lo.digest && digestOf(slide.objects) === lo.digest;
@@ -303,14 +334,25 @@ export function patchSlide(slide: Slide, lo: PptxLoSlide, work: SlideWork, hash:
   let lyricObjectId = slide.lyricObjectId;
   if (work.art && lo.art) {
     const art = artObject(work.art.mediaId, work.art.box);
-    if (unedited) {
-      const gone = new Set(lo.art.replaces);
+    if (unedited || lo.replaced) {
+      const v1 = new Map(lo.replaced ?? []);
+      const same = (id: string) => {
+        if (unedited) return true;
+        const o = objects.find((x) => x.id === id);
+        return !!o && v1.get(id) === digestOf([o]);
+      };
+      const gone = new Set(lo.art.replaces.filter(same));
+      const changed = lo.art.replaces.length - gone.size;
       let at = lo.art.before === undefined ? -1 : objects.findIndex((o) => o.id === lo.art!.before);
       if (at < 0) at = lo.art.before === undefined ? objects.length : Math.min(objects.length, lo.art.at);
       const below = objects.slice(0, at).filter((o) => !gone.has(o.id));
       const above = objects.slice(at).filter((o) => !gone.has(o.id));
       objects = [...below, art, ...above];
       if (lyricObjectId && gone.has(lyricObjectId)) lyricObjectId = undefined;
+      if (changed)
+        notes.push(
+          `edited since the import: the PowerPoint art still shows ${changed} edited or deleted object(s) as they were`,
+        );
     } else {
       objects.push(art);
       notes.push('edited since the import: the PowerPoint art was added on top');
@@ -322,12 +364,8 @@ export function patchSlide(slide: Slide, lo: PptxLoSlide, work: SlideWork, hash:
     if (!id) continue;
     const o = { ...m.object, id: m.object.id || newId(), mediaId: id };
     if (objects.some((x) => x.id === o.id)) o.id = newId();
-    if (unedited) insertUnder(objects, o, m.before);
-    else {
-      objects.push(o);
-      if (!notes.some((n) => n.startsWith('edited')))
-        notes.push('edited since the import: a converted picture was added on top');
-    }
+    // Version 1 left it out, so nothing draws it twice: under `before` while that object is there, else on top.
+    insertUnder(objects, o, m.before);
   }
   for (const [part, ids] of lo.metafiles ?? []) {
     const id = work.metafiles?.get(part);
@@ -351,6 +389,8 @@ export function patchSlide(slide: Slide, lo: PptxLoSlide, work: SlideWork, hash:
   if (slide.pptx) {
     const pptx = { ...slide.pptx };
     delete pptx.pending;
+    if (work.failed?.length) pptx.failed = true;
+    else delete pptx.failed;
     const all = [...(pptx.notes ?? []), ...notes.map((n) => logSafe(n))];
     if (all.length) pptx.notes = all.slice(-SLIDE_NOTES);
     next.pptx = pptx;
@@ -410,7 +450,8 @@ async function printCopy(
   if (!file) throw new Error('The PowerPoint file is no longer stored');
   const dir = await deps.store.tmpDir();
   try {
-    const deck = await extractDeck(deps.store.abs(file.path), join(dir, 'deck'), ctx.signal);
+    const deck = await extractDeck(deps.store.abs(file.path), join(dir, 'deck'), ctx.signal, { pages });
+    if (deck.over) ctx.log(`[warn] ${deck.over} picture(s) past what a copy may extract are left out`);
     const copy = await cpuPool().run(
       'pptx-render-copy',
       {
@@ -461,11 +502,29 @@ export function loJob(deps: PptxDeps): JobHandler<PptxLoPayload> {
     );
     const slides = pl.slides.filter((s) => waiting.has(s.slideId));
     const title = p0.title;
+    // Waiting slides of this deck the plan does not name (a picture slide duplicated before this ran): a page
+    // picture needs only the deck slide; anything else cannot be planned here and is reported.
+    const planned = new Set(pl.slides.map((s) => s.slideId));
+    const unplanned = new Set<string>();
+    for (const sec of p0.sections)
+      for (const sl of sec.slides) {
+        if (!sl.pptx?.pending || sl.pptx.fileId !== pl.hash || planned.has(sl.id)) continue;
+        slides.push({
+          slideId: sl.id,
+          index: sl.pptx.index,
+          ...(sl.pptx.shown !== undefined ? { shown: sl.pptx.shown } : {}),
+          class: sl.pptx.class,
+          digest: sl.pptx.digest ?? '',
+        });
+        if (sl.pptx.class !== 'picture') unplanned.add(sl.id);
+      }
 
     // What is still to make: art pairs, page pictures, metafile pairs (each part once).
     const pages: RenderCopyPage[] = [];
     const plans: Plan[] = [];
     const parts = new Set<string>();
+    /** The page printing each deck slide whole (a duplicated slide shares it). */
+    const whole = new Map<number, number>();
     for (const s of slides) {
       if (s.class === 'hybrid' && s.art?.elements.length && !done.has(`${s.slideId}:art`)) {
         const keep = s.art.elements;
@@ -474,8 +533,13 @@ export function loJob(deps: PptxDeps): JobHandler<PptxLoPayload> {
         plans.push({ kind: 'art', slide: s, white: pages.length - 2, black: pages.length - 1 });
       }
       if (s.class === 'picture' && !done.has(`${s.slideId}:page`)) {
-        pages.push({ index: s.index, mode: 'whole' });
-        plans.push({ kind: 'page', slide: s, page: pages.length - 1 });
+        let page = whole.get(s.index);
+        if (page === undefined) {
+          pages.push({ index: s.index, mode: 'whole' });
+          page = pages.length - 1;
+          whole.set(s.index, page);
+        }
+        plans.push({ kind: 'page', slide: s, page });
       }
       for (const part of [
         ...(s.metafiles ?? []).map(([m]) => m),
@@ -491,6 +555,7 @@ export function loJob(deps: PptxDeps): JobHandler<PptxLoPayload> {
     const texts = slides.filter((s) => s.class === 'picture').map((s) => s.index);
     const failed = new Map<string, string[]>();
     const fail = (slideId: string, why: string) => failed.set(slideId, [...(failed.get(slideId) ?? []), why]);
+    for (const id of unplanned) fail(id, 'copied before LibreOffice finished: its PowerPoint art is missing');
     let textBoxes = new Map<number, ExtractedText[]>();
 
     if (pages.length || texts.length) {
@@ -608,8 +673,19 @@ export function loJob(deps: PptxDeps): JobHandler<PptxLoPayload> {
         });
       } catch (e) {
         if (ctx.signal.aborted) throw e;
-        // LibreOffice or the pool failed for the whole copy: the slides keep version 1, without `pending`.
-        ctx.log(`[warn] LibreOffice could not draw the slides: ${logSafe(errorMessage(e))}`);
+        // LibreOffice or the pool failed for the whole copy: tried again later (what is stored stays), then
+        // the slides keep version 1, marked `failed`, which the card and goLive report.
+        const why = logSafe(errorMessage(e));
+        const n = ctx.payload.retries ?? 0;
+        if (n < LO_RETRIES) {
+          ctx.setPayload({ ...ctx.payload, done: [...done], placed: [...placed], retries: n + 1 });
+          const ms = deferDelay(n);
+          throw new JobDeferred(
+            ms,
+            `[warn] LibreOffice could not draw the slides (${why}): trying again in ${Math.round(ms / 1000)} s`,
+          );
+        }
+        ctx.log(`[warn] LibreOffice could not draw the slides after ${n + 1} attempts: ${why}`);
         for (const s of slides) fail(s.slideId, 'LibreOffice could not draw this slide');
       }
     }
@@ -622,7 +698,7 @@ export function loJob(deps: PptxDeps): JobHandler<PptxLoPayload> {
     let patched = 0;
     let budget = presentationBytes(p);
     let boxesLeftOut = 0;
-    const counts = { art: 0, pages: 0, metafiles: 0, edited: 0 };
+    const counts = { art: 0, pages: 0, metafiles: 0, edited: 0, failed: 0 };
     const sections = p.sections.map((sec) => ({
       ...sec,
       slides: sec.slides.map((sl) => {
@@ -660,6 +736,7 @@ export function loJob(deps: PptxDeps): JobHandler<PptxLoPayload> {
           if (work.page) counts.pages++;
           counts.metafiles += mf.size;
           if (lo.digest && digestOf(sl.objects) !== lo.digest) counts.edited++;
+          if (next.pptx?.failed) counts.failed++;
           return next;
         } catch (e) {
           ctx.log(`[warn] slide ${lo.index + 1} could not be updated: ${logSafe(errorMessage(e))}`);
@@ -682,10 +759,75 @@ export function loJob(deps: PptxDeps): JobHandler<PptxLoPayload> {
     deps.lib.emit([{ kind: 'presentation', id: saved.id, rev: saved.rev, entity: saved }]);
     ctx.log(
       `version 2: ${counts.art} art picture(s), ${counts.pages} page picture(s), ${counts.metafiles} converted picture(s)` +
-        (counts.edited ? `, ${counts.edited} slide(s) edited meanwhile (art added on top)` : ''),
+        (counts.edited ? `, ${counts.edited} slide(s) edited meanwhile` : '') +
+        (counts.failed ? `; LibreOffice could not draw ${counts.failed} slide(s)` : ''),
     );
     return { presentationId: saved.id, rev: saved.rev, ...counts };
   };
+}
+
+/** Follow-ups of one presentation read when planning a new one (newest first). */
+const FOLLOW_UP_HISTORY = 20;
+
+/**
+ * Queue a follow-up for the slides of a native import still `pending` after a save from outside the pptx
+ * jobs (see the module comment), when none is queued or running for the presentation. Each slide is planned
+ * as the newest earlier follow-up planned it (its art, metafiles, version 1's digest), else from the stored
+ * slide (a picture-class page needs nothing else); the pictures those follow-ups stored and the library
+ * still has are reused. Undefined when there is nothing to do.
+ */
+export function queueFollowUp(deps: PptxDeps, p: Presentation): Job | undefined {
+  const hash = p.source?.kind === 'pptx' && p.source.native ? p.source.fileId : undefined;
+  if (!hash) return undefined;
+  const pending = p.sections.flatMap((s) =>
+    s.slides.filter((sl) => sl.pptx?.pending && sl.pptx.fileId === hash),
+  );
+  if (!pending.length || !deps.lib.getFile(hash)) return undefined;
+  const rows = deps.lib.db
+    .prepare(
+      `SELECT state, payload FROM jobs WHERE kind = ? AND json_extract(payload, '$.presentationId') = ?
+       ORDER BY created_at DESC, id DESC LIMIT ${FOLLOW_UP_HISTORY}`,
+    )
+    .all(PPTX_JOBS.lo, p.id) as { state: string; payload: string }[];
+  if (rows.some((r) => r.state === 'queued' || r.state === 'running')) return undefined;
+  const plans = new Map<string, PptxLoSlide>();
+  const done = new Map<string, string>();
+  const placed = new Map<string, Box>();
+  for (const r of rows) {
+    let pl: Partial<PptxLoPayload>;
+    try {
+      pl = JSON.parse(r.payload) as Partial<PptxLoPayload>;
+    } catch {
+      continue;
+    }
+    if (pl.hash !== hash) continue;
+    for (const s of Array.isArray(pl.slides) ? pl.slides : [])
+      if (!plans.has(s.slideId)) plans.set(s.slideId, s);
+    for (const [k, v] of Array.isArray(pl.done) ? pl.done : []) if (!done.has(k)) done.set(k, v);
+    for (const [k, v] of Array.isArray(pl.placed) ? pl.placed : []) if (!placed.has(k)) placed.set(k, v);
+  }
+  const slides: PptxLoSlide[] = pending.map(
+    (sl) =>
+      plans.get(sl.id) ?? {
+        slideId: sl.id,
+        index: sl.pptx!.index,
+        ...(sl.pptx!.shown !== undefined ? { shown: sl.pptx!.shown } : {}),
+        class: sl.pptx!.class,
+        digest: sl.pptx!.digest ?? '',
+      },
+  );
+  const ids = new Set(slides.map((s) => s.slideId));
+  const mine = (k: string) => k.startsWith('mf:') || ids.has(k.slice(0, k.lastIndexOf(':')));
+  const reuse = [...done].filter(([k, id]) => mine(k) && (id === '' || deps.lib.media.get(id)));
+  const where = [...placed].filter(([k]) => reuse.some(([d]) => d === k));
+  return enqueuePptx(deps.jobs, PPTX_JOBS.lo, {
+    presentationId: p.id,
+    hash,
+    version: CONVERTER_VERSION,
+    slides,
+    ...(reuse.length ? { done: reuse } : {}),
+    ...(where.length ? { placed: where } : {}),
+  });
 }
 
 /** Whether the copy printed `got` for the page asked as `want` (same slide, mode and background or part). */
@@ -763,10 +905,13 @@ export function referenceJob(deps: PptxDeps): JobHandler<PptxReferencePayload> {
     }));
     const saved = deps.lib.savePresentation(
       { ...p, sections },
-      { expectedRev: p.rev, by: pl.by ?? 'pptx-reference' },
+      // Saved as the job (an editor takes a PowerPoint job's revision over, `adoptJobSaves`); who asked is logged.
+      { expectedRev: p.rev, by: 'pptx-reference' },
     );
     deps.lib.emit([{ kind: 'presentation', id: saved.id, rev: saved.rev, entity: saved }]);
-    ctx.log(`${pictures} PowerPoint picture(s); ${shown} slide(s) show the picture`);
+    ctx.log(
+      `${pictures} PowerPoint picture(s); ${shown} slide(s) show the picture${pl.by ? ` (asked by ${logSafe(pl.by, 100)})` : ''}`,
+    );
     return { presentationId: saved.id, rev: saved.rev, slides: shown, pictures };
   };
 }
@@ -777,7 +922,7 @@ export function referenceJob(deps: PptxDeps): JobHandler<PptxReferencePayload> {
  * The 'Pictures (LibreOffice)' import's input: the worker-built render copy of every shown slide, written
  * over `deck` (design/27 §5 "Render copy"; it replaces `pptxForRendering`). Returns what the copy did, for
  * the job log. Throws when the pool cannot run it (`WorkerStartError`) or the deck cannot be read: the
- * caller then converts the deck as it is.
+ * caller then fails the import, since LibreOffice never sees a deck as uploaded (design/21).
  */
 export async function renderCopyForDocument(
   deck: string,
@@ -786,7 +931,7 @@ export async function renderCopyForDocument(
 ): Promise<{ pages: number; outlines: number; notes: string[] }> {
   const partsDir = join(dir, 'deck-parts');
   try {
-    const d = await extractDeck(deck, partsDir, signal);
+    const d = await extractDeck(deck, partsDir, signal, { pages: [], allShown: true });
     const out = join(dir, 'render-copy.pptx');
     const copy = await cpuPool().run(
       'pptx-render-copy',
@@ -795,7 +940,10 @@ export async function renderCopyForDocument(
     );
     await rm(deck, { force: true });
     await rename(out, deck);
-    return { pages: copy.pages.length, outlines: copy.outlines, notes: copy.notes };
+    const notes = d.over
+      ? [...copy.notes, `${d.over} picture(s) past what a copy may extract are left out`]
+      : copy.notes;
+    return { pages: copy.pages.length, outlines: copy.outlines, notes };
   } finally {
     await rm(partsDir, { recursive: true, force: true });
   }
