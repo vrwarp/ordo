@@ -11,7 +11,8 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "golden": "tsx golden/run.ts"
+    "golden": "tsx golden/run.ts",
+    "golden:compositor": "tsx golden/compositor-run.ts"
   },
   "dependencies": {
     "@ordo/domain": "workspace:*",

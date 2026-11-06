@@ -22,6 +22,7 @@ Change these only together with every item that uses them.
 | `SRC_SCENE = 3`; `Stack.over`, `Stack.plane` (pre-allocated, copied with `set()`), `Stack.videoGen`; `StackContent.over/plane/videoGen`; `LayerStack` carries and releases them | `packages/renderer/src/stacks.ts` |
 | Plane encoding (`encodePlane`, `planeForward`, `planeSample` reference) and the base/over split (`splitScene`, `objectBounds`, `rotatedBounds`) | `packages/renderer/src/scene.ts` |
 | `VideoFrames.gen` (frameGen per slot); `RenderEngine.setVideoFrame(slot, frame, gen)` | `compositor.ts`, `engine.ts` |
+| `sceneVideoPresent(stack, video)`: the one "video present" rule (a frame of the stack's generation, `videoGen >= 0`); `Compositor.prepare?(layer, content)`: called by the engine for every offer before the layer takes it and for every held stack after a compositor is (re)built, where per-content resources are made (WebGPU over textures; Canvas 2D mask paths) | `compositor.ts`, `engine.ts` (item B) |
 | `ToRender 'vframe'.gen`; `AssetToRender` scene fields; `AssetJob 'slide'.video`; `SlideDesc.video`; `MediaDesc.inSlide` | `messages.ts`, `plan.ts` |
 | `MediaCommand 'load'.gen`: the link sends `SlotMirror.gen`, the host tags every `vframe` of that load with it, the render worker stores it | `apps/output/src/host-protocol.ts`, `link-core.ts`, `host.ts`, `render.worker.ts` |
 | The render worker passes `SRC_SCENE` content from the asset port through to the engine | `apps/output/src/render.worker.ts` |
@@ -79,6 +80,10 @@ stay `mix(a, b, t) · opacity`; over textures allocated in the offer path on the
 bindings; the video-present bit from `f.video.gen`; `drawLayer`/`writeRect`/`writePlane` `/* @hot */`.
 Device loss re-uploads base and over. The compositor golden of §14.5 (SwiftShader WebGPU against Canvas 2D:
 masks, crops, rotation, crossfade midpoints, stale generation and no frame show the poster).
+Done: `pnpm --filter @ordo/renderer golden:compositor` (`golden/compositor-run.ts`, CI) draws 19 cases with
+two real engines and compares WebGPU with Canvas 2D (40 per channel, 0.4 %) and with the CPU reference of
+`planeSample` (8, 0.05 %). Until item C lands, the cases that need a scene's video or over skip the Canvas 2D
+comparison (the run says so); once it lands, CI should pass `--require-2d`.
 
 **(C) canvas-scene.** `packages/renderer/src/canvas2d.ts`: per scene stack `drawImage(base)`; when the video
 is present `save`, `setTransform(planeForward(plane))`, `clip(mask Path2D)` (built in the offer handler, not

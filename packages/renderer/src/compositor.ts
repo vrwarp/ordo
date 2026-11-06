@@ -1,4 +1,4 @@
-import type { LayerStack } from './stacks.ts';
+import type { LayerStack, Stack, StackContent } from './stacks.ts';
 
 /** Video frames by slot, owned by the engine. `version[slot]` bumps on every new frame. */
 export type VideoFrames = {
@@ -31,6 +31,29 @@ export interface Compositor {
   draw(f: FrameInputs): void;
   /** Forget uploaded textures (after a rebuild everything is re-uploaded from the stacks' bitmaps). */
   destroy(): void;
+  /**
+   * Called by the engine with every content offered to `layer`, before the layer stack takes it, and with
+   * every stack the layers hold once the compositor is created or rebuilt: the place to allocate what the
+   * content needs (WebGPU: a scene's `over` textures, design/27 §7.2), never on a flip or in `draw`.
+   */
+  prepare?(layer: number, c: StackContent<ImageBitmap>): void;
 }
 
 export const MAX_VIDEO_SLOTS = 4;
+
+/**
+ * Whether a scene stack draws its video this frame (design/27 §7.2): its slot holds a frame loaded under
+ * the stack's generation. A stack without a known generation (videoGen < 0) never shows a frame, so a
+ * reused slot cannot show another clip in the slide; its poster in the base shows instead.
+ */
+export function sceneVideoPresent(s: Stack<unknown>, v: VideoFrames): boolean {
+  /* @hot */
+  const slot = s.videoSlot;
+  return (
+    slot >= 0 &&
+    slot < MAX_VIDEO_SLOTS &&
+    s.videoGen >= 0 &&
+    v.frames[slot] != null &&
+    v.gen[slot] === s.videoGen
+  );
+}

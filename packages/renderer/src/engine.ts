@@ -204,6 +204,7 @@ export class RenderEngine {
         ls.stacks[0].version++;
         ls.stacks[1].version++;
       }
+      this.prepareHeld(gpu);
       gpu.draw(this.inputs);
       const old = this.compositor;
       this.compositor = gpu;
@@ -248,6 +249,7 @@ export class RenderEngine {
         });
         this.kind = 'webgpu';
         this.error = undefined;
+        this.prepareHeld(this.compositor);
         return { kind: 'webgpu' };
       } catch (err) {
         note = `WebGPU unavailable, using Canvas 2D: ${(err as Error).message}`;
@@ -262,7 +264,21 @@ export class RenderEngine {
     this.compositor = new Canvas2DCompositor(this.opts.canvas, this.opts.width, this.opts.height);
     this.kind = '2d';
     if (note) this.error = note;
+    this.prepareHeld(this.compositor);
     return { kind: '2d', note };
+  }
+
+  /**
+   * Hand a new or rebuilt compositor every stack the layers hold (`Compositor.prepare`), so what it
+   * allocates per content (a scene's over textures) exists before the re-upload, as after an offer.
+   */
+  private prepareHeld(c: Compositor): void {
+    if (!c.prepare) return;
+    for (let l = 0; l < this.layers.length; l++) {
+      const ls = this.layers[l]!;
+      for (const s of ls.stacks) if (s.key !== '') c.prepare(l, s);
+      if (ls.hasQueued && ls.queued.key !== '') c.prepare(l, ls.queued);
+    }
   }
 
   /**
@@ -337,6 +353,7 @@ export class RenderEngine {
       if (c.over) c.over.close();
       return;
     }
+    this.compositor?.prepare?.(layer, c);
     ls.offer(c);
   }
 
