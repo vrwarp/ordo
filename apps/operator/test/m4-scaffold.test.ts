@@ -284,14 +284,20 @@ describe('the selection (design/27 §11 item 5)', () => {
 
 describe('the component stubs', () => {
   it('mount and draw nothing yet', () => {
-    const range = { start: 0, end: 4 };
-    for (const el of [
-      createElement(FormatBar, { o: announcement(), range, readOnly: false }),
-      createElement(ParagraphStrip, { o: announcement(), range, readOnly: false }),
-      createElement(CropControl, { o: picture(), readOnly: false }),
-    ])
+    for (const el of [createElement(CropControl, { o: picture(), readOnly: false })])
       expect(renderToStaticMarkup(el)).toBe('');
     expect(CropHandles({ objects: [], scale: 0.5, readOnly: false })).toBeNull();
+  });
+
+  it('item C: the format bar and the paragraph strip mount; the guides draw nothing on an empty 16:9 slide', () => {
+    // formatUi.test.ts tests them.
+    const range = { start: 0, end: 4 };
+    expect(
+      renderToStaticMarkup(createElement(FormatBar, { o: announcement(), range, readOnly: false })),
+    ).toContain('aria-label="Text format"');
+    expect(
+      renderToStaticMarkup(createElement(ParagraphStrip, { o: announcement(), range, readOnly: false })),
+    ).toContain('aria-label="Paragraph"');
     expect(CanvasGuides({ objects: [], scale: 0.5 })).toBeNull();
   });
 });

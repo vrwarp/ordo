@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { Check, ColorField, NumberField, Select } from '../../components/fields.tsx';
 import { TextStyleEditor } from '../../components/TextStyleEditor.tsx';
 import { useLibrary } from '../../state/library.ts';
-import { typeText } from './actions.ts';
+import { refit, typeText } from './actions.ts';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { CropControl } from './CropControl.tsx';
 import { change, useEditor } from './editorStore.ts';
@@ -14,6 +14,7 @@ import { getSlide, markOverride, updateObject, updateSlide } from './ops.ts';
 import { isLocked } from './ops/group.ts';
 import type { TextRange } from './ops/text.ts';
 import { ParagraphStrip } from './ParagraphStrip.tsx';
+import { fitMessage } from './textFit.ts';
 
 /** Property panel for the selected object: every TextStyle, ImageObject and ShapeObject field (prd/03). */
 export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readOnly: boolean }) {
@@ -126,8 +127,17 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
       {o.type === 'text' && (
         <fieldset disabled={readOnly} style={SECTION}>
           <h4>Text style</h4>
+          <div role="status">
+            {fitMessage(o) && (
+              <div className="banner small" style={{ marginBottom: 8 }}>
+                {fitMessage(o)}
+              </div>
+            )}
+          </div>
           <TextStyleEditor
             value={o.style}
+            box
+            onRefit={readOnly ? undefined : () => refit(o.id)}
             marks={themed ? marks : undefined}
             onChange={(style: TextStyle, key) =>
               set(
