@@ -70,17 +70,75 @@ export interface WalkState {
   background?: Fill;
 }
 
-/** Every element drawn on the slide, bottom first: master decorations, layout decorations, own shapes. */
+const shows = (n: XNode | undefined) => n?.attrs.showMasterSp !== '0' && n?.attrs.showMasterSp !== 'false';
+const treeOf = (n: XNode | undefined) => path(n, 'p:cSld', 'p:spTree');
+
+/**
+ * Every element drawn on the slide, bottom first: master decorations, layout decorations, own shapes. The
+ * decorations are walked once per layout and colour map and shared by every slide that shows them (each
+ * slide gets shallow copies, which classification may mark), so their cost does not grow with the slides.
+ */
 export function walkSlide(ctx: SlideCtx): Element[] {
   const st: WalkState = { out: [], count: 0, groups: 0 };
-  const shows = (n: XNode | undefined) => n?.attrs.showMasterSp !== '0' && n?.attrs.showMasterSp !== 'false';
-  const tree = (n: XNode | undefined) => path(n, 'p:cSld', 'p:spTree');
-  if (shows(ctx.slide)) {
-    if (shows(ctx.layout)) walkTree(ctx, tree(ctx.master), 'master', IDENTITY, undefined, 0, st);
-    walkTree(ctx, tree(ctx.layout), 'layout', IDENTITY, undefined, 0, st);
-  }
-  walkTree(ctx, tree(ctx.slide), 'slide', IDENTITY, undefined, 0, st);
+  if (shows(ctx.slide)) decorations(ctx, st);
+  walkTree(ctx, treeOf(ctx.slide), 'slide', IDENTITY, undefined, 0, st);
   return st.out;
+}
+
+/** The master's and layout's decorations as one slide's walk leaves them, with the notes it logged. */
+interface Decorations {
+  out: Element[];
+  count: number;
+  groups: number;
+  notes: string[];
+}
+
+/**
+ * Decorations by layout root and colour map. `null`: they read the slide's own background (`useBgFill`),
+ * so they are walked for every slide.
+ */
+const decorationCache = new WeakMap<XNode, Map<string, Decorations | null>>();
+
+function decorations(ctx: SlideCtx, st: WalkState): void {
+  const walk = (c: SlideCtx) => {
+    if (shows(ctx.layout)) walkTree(c, treeOf(ctx.master), 'master', IDENTITY, undefined, 0, st);
+    walkTree(c, treeOf(ctx.layout), 'layout', IDENTITY, undefined, 0, st);
+  };
+  if (!ctx.layout) {
+    walk(ctx);
+    return;
+  }
+  // What the walk of a layout and its master depends on besides them (deck-wide facts aside): the colours.
+  const key = [...ctx.color.map.values()].join(' ');
+  let byKey = decorationCache.get(ctx.layout);
+  if (!byKey) decorationCache.set(ctx.layout, (byKey = new Map()));
+  const known = byKey.get(key);
+  if (known === null) {
+    walk(ctx);
+    return;
+  }
+  if (known) {
+    for (const note of known.notes) ctx.log(note);
+    for (const e of known.out) st.out.push({ ...e });
+    st.count = known.count;
+    st.groups = known.groups;
+    return;
+  }
+  const notes: string[] = [];
+  walk({
+    ...ctx,
+    log: (msg) => {
+      notes.push(msg);
+      ctx.log(msg);
+    },
+  });
+  if (st.background !== undefined) {
+    byKey.set(key, null);
+    return;
+  }
+  // Kept as walked; this slide and the next ones get copies.
+  byKey.set(key, { out: st.out.slice(), count: st.count, groups: st.groups, notes });
+  for (let i = 0; i < st.out.length; i++) st.out[i] = { ...st.out[i]! };
 }
 
 /** An `a:xfrm` (or `p:xfrm`) read; missing values are 0 (off) and 0 (ext). */

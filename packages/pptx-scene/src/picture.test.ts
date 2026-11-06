@@ -26,22 +26,78 @@ describe('readInsets', () => {
 
 describe('pictureSize', () => {
   it('reads PNG, JPEG, GIF, BMP and WebP headers', () => {
-    expect(pictureSize(pngHeader(1920, 1080))).toEqual({ w: 1920, h: 1080 });
+    expect(pictureSize(pngHeader(1920, 1080))).toEqual({ w: 1920, h: 1080, alpha: true });
     const jpeg = Uint8Array.from([
       0xff, 0xd8, 0xff, 0xe0, 0, 4, 0, 0, 0xff, 0xc0, 0, 11, 8, 0x01, 0xe0, 0x02, 0x80, 3,
     ]);
-    expect(pictureSize(jpeg)).toEqual({ w: 640, h: 480 });
+    expect(pictureSize(jpeg)).toEqual({ w: 640, h: 480, alpha: false });
     const gif = Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x20, 0, 0x10, 0]);
-    expect(pictureSize(gif)).toEqual({ w: 32, h: 16 });
+    expect(pictureSize(gif)).toEqual({ w: 32, h: 16 }); // too short to tell transparency
     const bmp = new Uint8Array(30);
     bmp.set([0x42, 0x4d]);
     new DataView(bmp.buffer).setInt32(18, 300, true);
     new DataView(bmp.buffer).setInt32(22, -200, true);
-    expect(pictureSize(bmp)).toEqual({ w: 300, h: 200 });
+    new DataView(bmp.buffer).setUint16(28, 24, true);
+    expect(pictureSize(bmp)).toEqual({ w: 300, h: 200, alpha: false });
     const webp = new Uint8Array(30);
     webp.set([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x58]);
     webp.set([99, 0, 0, 49, 0, 0], 24); // 100 x 50
-    expect(pictureSize(webp)).toEqual({ w: 100, h: 50 });
+    expect(pictureSize(webp)).toEqual({ w: 100, h: 50, alpha: false });
+  });
+
+  it('tells whether a picture may be transparent, from its header only', () => {
+    const alpha = (b: Uint8Array) => pictureSize(b)?.alpha;
+    // PNG: an alpha channel; else a tRNS chunk before the image data; unknown when the bytes end first.
+    expect(alpha(pngHeader(8, 8))).toBe(true);
+    const rgb = pngHeader(8, 8, true);
+    expect(alpha(rgb)).toBe(false);
+    const chunk = (type: string, len = 0) => [0, 0, 0, len, ...[...type].map((c) => c.charCodeAt(0))];
+    const withChunks = (...cs: number[][]) => Uint8Array.from([...rgb.subarray(0, 33), ...cs.flat()]);
+    expect(alpha(withChunks([...chunk('gAMA', 4), 0, 0, 0, 0, 0, 0, 0, 0], chunk('tRNS')))).toBe(true);
+    expect(alpha(withChunks([...chunk('gAMA', 4), 0, 0, 0, 0, 0, 0, 0, 0], chunk('IDAT')))).toBe(false);
+    expect(alpha(rgb.subarray(0, 33))).toBeUndefined();
+    // Endless chunks before the image data: bounded, unknown.
+    expect(
+      alpha(withChunks(...Array.from({ length: 300 }, () => [...chunk('tEXt'), 0, 0, 0, 0]))),
+    ).toBeUndefined();
+    // GIF: the transparent flag of the first frame's graphic control extension.
+    const gif = (gce: number[]) =>
+      Uint8Array.from([
+        0x47,
+        0x49,
+        0x46,
+        0x38,
+        0x39,
+        0x61,
+        8,
+        0,
+        8,
+        0,
+        0x80,
+        0,
+        0,
+        ...new Array(6).fill(0),
+        ...gce,
+      ]);
+    expect(alpha(gif([0x21, 0xf9, 4, 1, 0, 0, 0, 0, 0x2c]))).toBe(true);
+    expect(alpha(gif([0x21, 0xf9, 4, 0, 0, 0, 0, 0, 0x2c]))).toBe(false);
+    expect(alpha(gif([0x21, 0xfe, 2, 0x41, 0x42, 0, 0x2c]))).toBe(false); // a comment, then the image
+    // BMP: 32 bits a pixel may carry alpha. WebP: VP8L's alpha_is_used, VP8X's alpha flag.
+    const bmp = new Uint8Array(30);
+    bmp.set([0x42, 0x4d]);
+    new DataView(bmp.buffer).setInt32(18, 2, true);
+    new DataView(bmp.buffer).setInt32(22, 2, true);
+    new DataView(bmp.buffer).setUint16(28, 32, true);
+    expect(alpha(bmp)).toBe(true);
+    const vp8x = new Uint8Array(30);
+    vp8x.set([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x58]);
+    vp8x[20] = 0x10;
+    expect(alpha(vp8x)).toBe(true);
+    const vp8l = new Uint8Array(30);
+    vp8l.set([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x4c]);
+    vp8l[20] = 0x2f;
+    new DataView(vp8l.buffer).setUint32(21, (1 << 28) | (9 << 14) | 9, true);
+    expect(pictureSize(vp8l)).toEqual({ w: 10, h: 10, alpha: true });
   });
 
   it('returns undefined for empty, truncated or unknown bytes, and stops on a broken JPEG', () => {
@@ -70,7 +126,7 @@ describe('p:pic', () => {
       part: 'ppt/media/image1.png',
       crop: { l: 0.1, t: 0, r: -0.2, b: 0 },
       alpha: 0.4,
-      px: { w: 400, h: 300 },
+      px: { w: 400, h: 300, alpha: true },
     });
   });
 

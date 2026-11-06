@@ -78,11 +78,30 @@ const OFFICE: Record<(typeof SCHEME_COLORS)[number], number> = {
 };
 
 /**
- * A typeface as a deck string: C0 and C1 control characters (a form feed is a CSS newline, which makes a
- * Canvas font shorthand invalid) and line separators removed, trimmed, cut to `MAX_TYPEFACE`.
+ * Characters of a typeface attribute looked at: the rest is cut before anything else reads it. Generous, so
+ * that a name padded with control characters or spaces still keeps its `MAX_TYPEFACE`, and small, so that a
+ * deck string of millions of characters in a shared style node costs every run that inherits it nothing.
+ */
+export const TYPEFACE_SCAN = 1_024;
+/** Distinct typefaces remembered by `typefaceName` before the memo starts over (real decks use a dozen). */
+const TYPEFACE_MEMO = 4_096;
+const typefaces = new Map<string, string>();
+
+/**
+ * A typeface as a deck string: cut to `TYPEFACE_SCAN` characters first, then C0 and C1 control characters
+ * (a form feed is a CSS newline, which makes a Canvas font shorthand invalid) and line separators removed,
+ * trimmed, cut to `MAX_TYPEFACE`. Memoised per (cut) string: every run asks for its typefaces again.
  */
 export function typefaceName(v: string | undefined): string {
-  return v ? v.replace(CONTROL, '').trim().slice(0, MAX_TYPEFACE) : '';
+  if (!v) return '';
+  const cut = v.length > TYPEFACE_SCAN ? v.slice(0, TYPEFACE_SCAN) : v;
+  let out = typefaces.get(cut);
+  if (out === undefined) {
+    out = cut.replace(CONTROL, '').trim().slice(0, MAX_TYPEFACE);
+    if (typefaces.size >= TYPEFACE_MEMO) typefaces.clear();
+    typefaces.set(cut, out);
+  }
+  return out;
 }
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: removing them is the point

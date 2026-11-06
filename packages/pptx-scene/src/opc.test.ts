@@ -30,6 +30,15 @@ function within<T>(ms: number, f: () => T): T {
   return v;
 }
 
+/** A part source that counts how often each part's bytes are read (an XML part's are read once per parse). */
+class CountingSource extends Map<string, Uint8Array> {
+  reads = new Map<string, number>();
+  override get(name: string): Uint8Array | undefined {
+    this.reads.set(name, (this.reads.get(name) ?? 0) + 1);
+    return super.get(name);
+  }
+}
+
 /** A copy of `parts` with every XML and relationships part passed through `f`. */
 function mapXml(parts: PartSource, f: (name: string, xml: string) => string): PartSource {
   const out: PartSource = new Map();
@@ -222,8 +231,56 @@ describe('openPackage', () => {
     const a2 = roomy.xml('a.xml');
     roomy.xml('b.xml');
     expect(roomy.xml('a.xml')).toBe(a2);
-    // The default budget holds two parts at the tag limit, a slide's layout and master.
-    expect(XML_CACHE_BYTES).toBeGreaterThanOrEqual(2 * (8 * 1024 * 1024 + 250_000 * XML_NODE_BYTES));
+    // The default budget holds a slide's working set: its layout, master and theme, each at the tag limit.
+    expect(XML_CACHE_BYTES).toBeGreaterThanOrEqual(3 * (8 * 1024 * 1024 + 250_000 * XML_NODE_BYTES));
+  });
+
+  it('never evicts pinned parts; the others go least recently used first', () => {
+    const big = (root: string) => enc(`<${root}>${'<b/>'.repeat(999)}</${root}>`);
+    const parts = new Map([
+      ['l.xml', big('l')],
+      ['m.xml', big('m')],
+      ['o.xml', big('o')],
+      ['p.xml', big('p')],
+    ]);
+    // Room for one tree: pinned ones stay over the budget, unpinned ones go when another comes.
+    const pkg = openPackage(parts, undefined, { cacheBytes: 1_100 * XML_NODE_BYTES });
+    pkg.pin(['L.XML', 'm.xml']); // found without case
+    const l = pkg.xml('l.xml');
+    const m = pkg.xml('m.xml');
+    const o = pkg.xml('o.xml');
+    expect(pkg.xml('l.xml')).toBe(l);
+    expect(pkg.xml('m.xml')).toBe(m);
+    expect(pkg.xml('o.xml')).toBe(o); // the newest is kept
+    pkg.pin(['m.xml']); // l is not pinned any more
+    pkg.xml('p.xml'); // over the budget: l and o go, m stays
+    expect(pkg.xml('m.xml')).toBe(m);
+    expect(pkg.xml('l.xml')).not.toBe(l);
+    expect(pkg.xml('o.xml')).not.toBe(o);
+  });
+
+  it("holds a slide's relationships only while it is the slide being read, and indexes them by type", () => {
+    const parts = new CountingSource([
+      ['s1.xml', enc('<p:sld/>')],
+      ['s2.xml', enc('<p:sld/>')],
+      ['_rels/s1.xml.rels', enc(rels(`<Relationship Id="r1" Type="${NS.r}/slideLayout" Target="l.xml"/>`))],
+      ['_rels/s2.xml.rels', enc(rels(`<Relationship Id="r1" Type="${NS.r}/slideLayout" Target="l.xml"/>`))],
+      ['_rels/l.xml.rels', enc(rels(`<Relationship Id="r1" Type="${NS.r}/slideMaster" Target="m.xml"/>`))],
+      ['l.xml', enc('<p:sldLayout/>')],
+    ]);
+    const pkg = openPackage(parts);
+    pkg.xml('s1.xml', { keep: false });
+    expect(pkg.relOfType('s1.xml', 'slideLayout')?.target).toBe('l.xml');
+    expect(pkg.rel('s1.xml', 'r1')?.target).toBe('l.xml');
+    expect(pkg.relOfType('l.xml', `${NS.r}/slideMaster`)?.target).toBe('m.xml');
+    expect(parts.reads.get('_rels/s1.xml.rels')).toBe(1);
+    pkg.xml('s2.xml', { keep: false });
+    pkg.rels('s2.xml');
+    pkg.rels('l.xml');
+    pkg.rels('s1.xml'); // no longer the slide being read: its list was not kept
+    expect(parts.reads.get('_rels/s1.xml.rels')).toBe(2);
+    expect(parts.reads.get('_rels/s2.xml.rels')).toBe(1);
+    expect(parts.reads.get('_rels/l.xml.rels')).toBe(1);
   });
 
   it('parses a part read with keep: false without caching it, but answers from the cache when it is there', () => {
@@ -501,6 +558,54 @@ describe('hostile packages', () => {
     expect(scene.slides[1]!.layoutPart).toBe('ppt/slideLayouts/slideLayout1.xml');
     expect(scene.slides[1]!.masterPart).toBeUndefined();
     expect(notes).toContain('ppt/slides/slide1.xml is not a p:sldLayout part: not used');
+  });
+
+  it("parses a slide's layout, master and theme once when each is near the tag limit", () => {
+    // design/27 §12: a slide reads its layout, master and theme; at the tag limit each is charged about
+    // 70 MB, together more than the 192 MB the cache had, which then parsed all three again for every slide.
+    const slides = 6;
+    const built = buildDeck({ slides: Array.from({ length: slides }, () => ({})) });
+    const junk = (n: number) => `<p:extLst><p:ext uri="x">${'<a:y/>'.repeat(n)}</p:ext></p:extLst>`;
+    const shared = {
+      layout: 'ppt/slideLayouts/slideLayout1.xml',
+      master: 'ppt/slideMasters/slideMaster1.xml',
+      theme: 'ppt/theme/theme1.xml',
+    };
+    const parts = new CountingSource(
+      mapXml(built, (name, xml) => {
+        if (name === shared.layout || name === shared.master)
+          return xml.replace('</p:cSld>', `</p:cSld>${junk(235_000)}`);
+        if (name === shared.theme)
+          return xml.replace(
+            '</a:theme>',
+            `<a:extLst><a:ext uri="x">${'<a:y/>'.repeat(235_000)}</a:ext></a:extLst></a:theme>`,
+          );
+        return xml;
+      }),
+    );
+    const scene = within(5000, () => parseDeck(parts));
+    expect(scene.slides.map((s) => s.error)).toEqual(new Array(slides).fill(undefined));
+    expect(scene.slides.every((s) => s.layoutPart === shared.layout && s.masterPart === shared.master)).toBe(
+      true,
+    );
+    for (const part of Object.values(shared)) expect(parts.reads.get(part)).toBe(1);
+    // Each slide's relationships were read once, for that slide.
+    expect(parts.reads.get('ppt/slides/_rels/slide1.xml.rels')).toBe(1);
+  });
+
+  it('finds the one relationship a slide needs among 150,000 others without reading them again', () => {
+    const pad = Array.from(
+      { length: 150_000 },
+      (_, k) => `<Relationship Id="j${k}" Type="x" Target="z"/>`,
+    ).join('');
+    // Each slide asks its layout for its master and the master for its theme: once a scan of 150,000 each.
+    const parts = mapXml(buildDeck({ slides: Array.from({ length: 1_000 }, () => ({})) }), (name, xml) =>
+      name.includes('slideLayout1.xml.rels') || name.includes('slideMaster1.xml.rels')
+        ? xml.replace(/(<Relationships[^>]*>)/, `$1${pad}`)
+        : xml,
+    );
+    const scene = within(5000, () => parseDeck(parts));
+    expect(scene.slides.every((s) => s.masterPart === 'ppt/slideMasters/slideMaster1.xml')).toBe(true);
   });
 
   it('copes with 10,000 media parts and relationships', () => {

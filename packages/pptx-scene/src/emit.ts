@@ -32,9 +32,10 @@
  *   become `radius` (an ellipse is exact for a circle); a picture outline is a stroke-only shape above it.
  *   An unrotated picture reaching past ±2× the canvas (the render clamp, design/27 §12) is cut there and
  *   the cut folded into the crop, so the clamp never squeezes it.
- * - **Backgrounds**: a plain stretched picture whose aspect is known and matches a 16:9 slide →
- *   `backgroundMediaId` (drawn cover-fit); any other picture, one of unknown size included (a spilled part
- *   without `ParseOptions.pictureSize`) → a bottom image stretched over the slide area, on white; solid,
+ * - **Backgrounds**: a plain stretched picture known to be opaque whose aspect is known and matches a 16:9
+ *   slide → `backgroundMediaId` (drawn cover-fit, on black); any other picture, one that may be transparent
+ *   or of unknown size or alpha included (a spilled part without `ParseOptions.pictureSize`) → a bottom
+ *   image stretched over the slide area, on white; solid,
  *   gradient and pattern → a bottom rect over the whole 1920x1080 frame (`extendBackgrounds`, default) or
  *   the slide area; none → white, as PowerPoint shows it.
  * - **Lyric box** (design/27 §4 "Church mappings"): the slide's own body placeholder with the most
@@ -271,7 +272,8 @@ function emitBackground(ctx: EmitCtx, s: SlideScene, slide: Slide): void {
     // An unknown size is not taken for the slide's aspect: cover-fitting a 4:3 photo would cut it.
     const sameAspect = p.px !== undefined && Math.abs(p.px.w / p.px.h - slideAspect) <= slideAspect * 0.01;
     const plain = !p.crop && !p.fillRect && !p.tile && p.alpha === undefined && !p.effects?.length;
-    if (sixteenNine && sameAspect && plain) {
+    // The slide background is drawn on black: a picture that may be transparent stays on white.
+    if (sixteenNine && sameAspect && plain && p.px?.alpha === false) {
       slide.backgroundMediaId = mediaOf(ctx, p.part);
       return;
     }

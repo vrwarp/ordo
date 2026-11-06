@@ -651,13 +651,43 @@ describe('pictures', () => {
 describe('backgrounds', () => {
   const rels = [imageRel('rId2', 'bg.png')];
 
-  it('uses a plain stretched picture of the slide aspect as the 16:9 slide background', () => {
+  it('uses a plain stretched opaque picture of the slide aspect as the 16:9 slide background', () => {
     const { slide } = emitOne({
       slides: [{ rels, bg: pictureBg('rId2') }],
-      media: { 'ppt/media/bg.png': pngHeader(1280, 720) },
+      media: { 'ppt/media/bg.png': pngHeader(1280, 720, true) },
     });
     expect(slide.backgroundMediaId).toBe('pptxmedia:1');
     expect(slide.objects).toEqual([]);
+  });
+
+  it('keeps a background picture that may be transparent as a bottom image on white', () => {
+    // The slide background is drawn cover-fit on black; PowerPoint lays a transparent background on white.
+    const white = { type: 'shape', shape: 'rect', fill: { r: 255, g: 255, b: 255, a: 1 } };
+    const tRNS = Uint8Array.from([
+      ...pngHeader(1280, 720, true).subarray(0, 33),
+      0,
+      0,
+      0,
+      0,
+      0x74,
+      0x52,
+      0x4e,
+      0x53,
+    ]);
+    const unknown = pngHeader(1280, 720, true).subarray(0, 33); // RGB, but the bytes end before the image data
+    for (const media of [pngHeader(1280, 720), tRNS, unknown]) {
+      const { slide, objects } = emitOne({
+        slides: [{ rels, bg: pictureBg('rId2') }],
+        media: { 'ppt/media/bg.png': media },
+      });
+      expect(slide.backgroundMediaId).toBeUndefined();
+      expect(objects[0]).toMatchObject({ ...white, box: { x: 0, y: 0, w: 1920, h: 1080 } });
+      expect(objects[1]).toMatchObject({
+        type: 'image',
+        fit: 'stretch',
+        box: { x: 0, y: 0, w: 1920, h: 1080 },
+      });
+    }
   });
 
   it('draws a picture of another aspect, or on a 4:3 slide, as a bottom image over white on the slide area', () => {
@@ -699,25 +729,31 @@ describe('backgrounds', () => {
       media: spilled,
     });
     const asked: string[] = [];
-    const sized = (w: number, h: number) =>
+    const sized = (w: number, h: number, alpha?: boolean) =>
       emitSlides(
         parseDeck(parts, {
           pictureSize: (part) => {
             asked.push(part);
-            return { w, h };
+            return { w, h, ...(alpha !== undefined ? { alpha } : {}) };
           },
         }),
       ).slides;
-    expect(sized(1920, 1080).map((x) => x.slide.backgroundMediaId)).toEqual(['pptxmedia:1', 'pptxmedia:1']);
+    expect(sized(1920, 1080, false).map((x) => x.slide.backgroundMediaId)).toEqual([
+      'pptxmedia:1',
+      'pptxmedia:1',
+    ]);
     expect(asked).toEqual(['ppt/media/bg.png']);
-    expect(sized(1024, 768)[0]!.slide.backgroundMediaId).toBeUndefined();
-    expect(sized(Number.NaN, 1080)[0]!.slide.backgroundMediaId).toBeUndefined();
+    expect(sized(1024, 768, false)[0]!.slide.backgroundMediaId).toBeUndefined();
+    expect(sized(Number.NaN, 1080, false)[0]!.slide.backgroundMediaId).toBeUndefined();
+    // A caller that cannot tell whether the picture is opaque keeps it on white.
+    expect(sized(1920, 1080, true)[0]!.slide.backgroundMediaId).toBeUndefined();
+    expect(sized(1920, 1080)[0]!.slide.backgroundMediaId).toBeUndefined();
   });
 
   it('lays a translucent background picture on white, as PowerPoint does', () => {
     const { slide, objects } = emitOne({
       slides: [{ rels, bg: pictureBg('rId2').replace('/>', '><a:alphaModFix amt="45000"/></a:blip>') }],
-      media: { 'ppt/media/bg.png': pngHeader(1280, 720) },
+      media: { 'ppt/media/bg.png': pngHeader(1280, 720, true) },
     });
     expect(slide.backgroundMediaId).toBeUndefined();
     expect(objects[0]).toMatchObject({ type: 'shape', fill: { r: 255, g: 255, b: 255, a: 1 } });

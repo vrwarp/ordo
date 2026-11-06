@@ -342,8 +342,15 @@ export function textOf(n: XNode | undefined): string {
   return s;
 }
 
+/**
+ * The longest numeric attribute `num` reads (real ones have a dozen characters). A longer value is not a
+ * number: `Number` would read every character of it, and shared style nodes are read once per run.
+ */
+export const MAX_NUM_CHARS = 64;
+
+/** A numeric attribute: finite, else undefined (missing, malformed, or longer than `MAX_NUM_CHARS`). */
 export function num(v: string | undefined): number | undefined {
-  if (v === undefined) return undefined;
+  if (v === undefined || v.length > MAX_NUM_CHARS) return undefined;
   const n = Number(v);
   return Number.isFinite(n) ? n : undefined;
 }

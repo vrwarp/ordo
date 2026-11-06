@@ -12,6 +12,7 @@ import {
   styleLine,
   type Theme,
   themeFont,
+  TYPEFACE_SCAN,
   typefaceName,
 } from './theme.ts';
 import { parseXml, rootOf, type XNode } from './xml.ts';
@@ -248,5 +249,23 @@ describe('typeface names', () => {
   it('reads a theme once per root', () => {
     const root = parse(themePart(''));
     expect(readTheme(root)).toBe(readTheme(root));
+  });
+
+  it(`are cut to ${TYPEFACE_SCAN} characters before anything reads them, so a huge one costs nothing per run`, () => {
+    // Control characters within the scanned part still make room for the name after them.
+    const padded = `${'\u0007'.repeat(500)}Gentium`;
+    expect(typefaceName(padded)).toBe('Gentium');
+    const huge = `${'F'.repeat(7_000_000)}`;
+    expect(typefaceName(huge)).toBe('F'.repeat(MAX_TYPEFACE));
+    expect(typefaceName(`${'\u0007'.repeat(TYPEFACE_SCAN)}Lost`)).toBe('');
+    // Every run of a slide asks again: 10,000 asks for a 7M-character name, and as many theme resolutions
+    // of it, take a few milliseconds (they took 2 ms each when the whole name was cleaned on every call).
+    const t = theme(themePart(''));
+    const t0 = performance.now();
+    for (let i = 0; i < 10_000; i++) {
+      typefaceName(huge);
+      themeFont(t, huge, 'Jpan');
+    }
+    expect(performance.now() - t0).toBeLessThan(1_000);
   });
 });
