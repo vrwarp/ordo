@@ -175,7 +175,7 @@ Source: a census of 4,897 shown slides of worship decks in the local validation 
 | `emit.ts` | IR → ordo objects with `pptxmedia:<part>` placeholder ids, plus a per-slide digest. |
 | `rendercopy.ts` (M3) | The minimal deck for LibreOffice (§5). Replaces the main-thread `pptxForRendering`. |
 | `index.ts` | `parseDeck(src, opts): DeckScene`; `emitSlides(scene, opts): EmitResult`. |
-| `packages/domain/src/readable.ts` (M2) | `readableText(o)`: `TextObject.text` with automatic numbers and bullets written as text, for the stage, bands, labels and search. `textScripts(text)` for the font scan. |
+| `packages/domain/src/readable.ts`, `bullets.ts` (M2) | `readableText(o)`: `TextObject.text` with automatic numbers and bullets written as text, for the stage, bands, labels and search. `textScripts(text)` for the font scan. `bullets.ts`: `paraLabels(o)` and the number counter (port of `annotate.ts` `autoNumber`) that the renderer's bullets draw too, and the Wingdings/Symbol table (`symbolFontChar`) for the converter. |
 | `packages/domain/src/size.ts` (M3) | JSON size estimates for slides, presentations and resolved playlists (§3.4). |
 | `packages/renderer/src/text/` (M2) | `itemize.ts`, `breaks.ts` (UAX#14 via npm `linebreak` 1.1.0, MIT; 2.0.0 was days old when chosen; `Intl.Segmenter`), `bidi.ts` (npm `bidi-js` 1.1.0, MIT), `measure.ts`, `lines.ts`, `office.ts` (LibreOffice line model and autofit, ported from `pptx-render/src/page.ts:202-426`), `bullets.ts` (port of `annotate.ts` `autoNumber`), `paint.ts`, `rich.ts`, `fonts.ts` (the resolver, §10). |
 | `packages/renderer/src/content.ts` (M3) | `slideContent()`, the one fallback rule (§5). |
@@ -1215,7 +1215,7 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
 - The converter emits runs, paras, bullets (symbol mapping), superscripts, rtl/lang, autofit with `fitScale`, insets, wrap, `lyricObjectId` and `fallbackFonts` (including script fallbacks).
 - Golden skip-trap fix.
 
-**Files.** `packages/domain/src/schemas.ts`, `resolve.ts`, `readable.ts`, `cues.ts`; `packages/importers/src/sanitize.ts`; `packages/renderer/src/text/*`, `text2d.ts`, `clamp.ts`, `raster.ts`, `golden/page.ts`, `golden/run.ts`; `apps/output/src/asset.worker.ts`, `link-core.ts`; `apps/operator/src/workers/thumb.worker.ts`, `services/fonts.ts`, `lib/search.ts`, `views/editor/SlideCanvas.tsx`; `packages/pptx-scene/src/text.ts`, `emit.ts`; root `package.json` (linebreak, bidi-js).
+**Files.** `packages/domain/src/schemas.ts`, `resolve.ts`, `readable.ts`, `bullets.ts`, `cues.ts`; `packages/importers/src/sanitize.ts`; `packages/renderer/src/text/*`, `text2d.ts`, `clamp.ts`, `raster.ts`, `golden/page.ts`, `golden/run.ts`; `apps/output/src/asset.worker.ts`, `link-core.ts`; `apps/operator/src/workers/thumb.worker.ts`, `services/fonts.ts`, `lib/search.ts`, `views/editor/SlideCanvas.tsx`; `packages/pptx-scene/src/text.ts`, `emit.ts`; root `package.json` (linebreak, bidi-js).
 
 **Exit.**
 - Legacy goldens are byte-identical, and the new rich goldens pass, including the Hebrew band.

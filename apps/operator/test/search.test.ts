@@ -43,6 +43,27 @@ describe('search index', () => {
     expect(idx.search('motion').map((d) => d.id)).toEqual(['m1']);
   });
 
+  it('finds automatic verse and list numbers as people read them', () => {
+    const p = song('Reading', 'placeholder');
+    const slide = p.sections[0]!.slides[0]!;
+    const body = slide.objects.find((o) => o.type === 'text')!;
+    const numbered = {
+      ...body,
+      text: 'For God so loved the world\nFor God did not send his Son',
+      paras: [
+        { bullet: { auto: 'arabicParenBoth', startAt: 16 } },
+        { bullet: { auto: 'arabicParenBoth', startAt: 16 } },
+      ],
+    };
+    const q: Presentation = {
+      ...p,
+      sections: [{ ...p.sections[0]!, slides: [{ ...slide, objects: [numbered] }] }],
+    };
+    const idx = new SearchIndex();
+    idx.update([q, song('Other', 'For God so loved')], []);
+    expect(idx.search('17 for god').map((d) => d.id)).toEqual([q.id]);
+  });
+
   it('answers in under 100 ms for 5,000 presentations', () => {
     const words = ['grace', 'love', 'light', 'king', 'holy', 'praise', 'glory', 'faith', 'hope', 'mercy'];
     const list: Presentation[] = [];

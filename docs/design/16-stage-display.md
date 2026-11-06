@@ -15,6 +15,9 @@ the operator on the stage screen (token in URL like an output). No WebGPU, no me
 Layout values come from the Stage look's `PropsRule.style` boxes so the operator can
 adjust sizes without code. Fonts load from the service cache through the Cache API.
 
+Slide text is shown as people read it (`readableText`, design/27 §3.2): automatic verse
+numbers and bullets of imported text boxes are written in front of their paragraphs.
+
 ## Behaviour
 
 - Applies `live.delta` with the shared reducer (in the link worker, below); the page renders the view model derived from `LiveState`.

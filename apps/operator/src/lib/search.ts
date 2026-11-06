@@ -1,4 +1,4 @@
-import type { Media, Presentation } from '@ordo/domain';
+import { type Media, type Presentation, readableText } from '@ordo/domain';
 
 /** Lowercase, strip diacritics and punctuation, collapse whitespace. */
 export function normalize(s: string): string {
@@ -33,7 +33,9 @@ export function presentationDoc(p: Presentation): SearchDoc {
   if (hit) return hit;
   const parts: string[] = [p.title, p.meta.ccli ?? '', p.meta.author ?? '', ...(p.meta.tags ?? [])];
   for (const sec of p.sections) {
-    for (const sl of sec.slides) for (const o of sl.objects) if (o.type === 'text') parts.push(o.text);
+    // As people read it: verse numbers and list numbers are searchable.
+    for (const sl of sec.slides)
+      for (const o of sl.objects) if (o.type === 'text') parts.push(readableText(o));
   }
   const doc: SearchDoc = {
     id: p.id,

@@ -1,5 +1,6 @@
 import type { Cue, ResolvedPlaylist } from './live.ts';
-import type { Arrangement, Presentation, Section } from './schemas.ts';
+import { readableText } from './readable.ts';
+import type { Arrangement, Presentation, Section, TextObject } from './schemas.ts';
 
 /** The arrangement used by a playlist item: the named one, else the first, else authoring order. */
 export function arrangementFor(p: Presentation, arrangementId?: string): Arrangement {
@@ -99,16 +100,20 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
   return cues;
 }
 
+/**
+ * The text a slide is known by (cue labels, lyric-only bands, thumbnails): its lyric object, else its
+ * first text box, as people read it (`readableText`: automatic numbers and bullets written as text).
+ */
 export function firstText(slide: {
-  objects: { type: string; text?: string; id: string }[];
+  objects: { type: string; text?: string; id: string; paras?: TextObject['paras'] }[];
   lyricObjectId?: string;
 }): string {
   if (slide.lyricObjectId) {
     const o = slide.objects.find((x) => x.id === slide.lyricObjectId);
-    if (o && o.type === 'text' && o.text) return o.text;
+    if (o && o.type === 'text' && o.text) return readableText({ text: o.text, paras: o.paras });
   }
   const t = slide.objects.find((x) => x.type === 'text');
-  return t?.text ?? '';
+  return t?.text ? readableText({ text: t.text, paras: t.paras }) : '';
 }
 
 /** Auto-advance delay of a loop slide, bounded to [0.5 s, 1 h] whatever the stored values. */
