@@ -13,6 +13,7 @@ import {
   Section,
   Slide,
 } from './schemas.ts';
+import { resolvedBytes, resolvedSizeWarning } from './size.ts';
 
 /**
  * Turning a playlist into the frozen copy a goLive carries (design/25 "quarantine"). Shared by the hub
@@ -252,6 +253,9 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
     files,
     manifestId: opts.digest(parts),
   };
+  // Too large for an operator takeover's hand-back (design/27 §3.4): live with a warning.
+  const sizeWarning = resolvedSizeWarning(resolvedBytes(resolved));
+  if (sizeWarning) problems.push({ reason: sizeWarning });
   if (problems.length) {
     resolved.degraded = degradedEntries(resolved, problems);
     for (const d of resolved.degraded)

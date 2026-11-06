@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  jsonBytes,
   type LiveEvent,
   type LiveState,
   parseLyrics,
   type ResolvedPlaylist,
+  SIZE_BUDGETS,
   songFromParsed,
 } from '@ordo/domain';
 import { initialState, reduce } from '@ordo/live-state';
@@ -592,5 +594,153 @@ describe('LiveCore going live without the hub (held service, design/17)', () => 
     h.core.onWelcome();
     h.core.onState(initialState());
     expect(h.core.authority).toBe('fallback');
+  });
+});
+
+describe('LiveCore hand-back size (design/27 §3.4)', () => {
+  const MiB = 1024 * 1024;
+  /** A live service of one imported presentation: `slides` slides of `chars` characters each. */
+  function bigResolved(slides: number, chars: number): ResolvedPlaylist {
+    const text = 'y'.repeat(chars);
+    const style = {
+      fontFamily: 'Calibri',
+      fontWeight: 400,
+      fontStyle: 'normal' as const,
+      fontSizePx: 40,
+      color: { r: 255, g: 255, b: 255, a: 1 },
+      align: 'left' as const,
+      valign: 'top' as const,
+      lineHeight: 1.2,
+      letterSpacing: 0,
+      padding: 0,
+      transform: 'none' as const,
+    };
+    return {
+      playlist: {
+        id: 'pl',
+        rev: 1,
+        name: 'Big',
+        items: [{ id: 'i0', kind: 'presentation', presentationId: 'big' }],
+      },
+      presentations: {
+        big: {
+          id: 'big',
+          rev: 1,
+          title: 'Imported deck',
+          kind: 'slides',
+          meta: { tags: [] },
+          sections: [
+            {
+              id: 'sec',
+              label: 'Deck',
+              short: '',
+              slides: Array.from({ length: slides }, (_, i) => ({
+                id: `sl${i}`,
+                objects: [
+                  {
+                    id: `t${i}`,
+                    type: 'text',
+                    box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+                    text,
+                    style,
+                    opacity: 1,
+                  },
+                ],
+              })),
+            },
+          ],
+          arrangements: [],
+          archived: false,
+        },
+      },
+      media: {},
+      fonts: [],
+      looks: [],
+      files: [],
+      manifestId: 'm',
+    };
+  }
+  /** The hub went away during the service; this PC took over and moved on; the hub is back. */
+  function tookOver(r: ResolvedPlaylist, extra: Partial<LiveCoreDeps> = {}) {
+    const h = harness(undefined, extra);
+    h.core.onStatus(true);
+    const hub = reduce(initialState(), { k: 'goLive', resolved: r });
+    h.core.onState(hub);
+    h.core.onStatus(false);
+    h.setHub(false);
+    h.fire(5000);
+    h.core.submit({ k: 'next', at: 100 });
+    h.setHub(true);
+    h.core.onStatus(true);
+    h.core.onWelcome();
+    return { h, hub };
+  }
+
+  it('hands a 13 MiB service back to the hub as usual', () => {
+    const r = bigResolved(700, 19_500);
+    expect(jsonBytes(r)).toBeGreaterThan(13 * MiB);
+    expect(jsonBytes(r)).toBeLessThan(14 * MiB);
+    const { h, hub } = tookOver(r);
+    h.core.onState(hub);
+    expect(h.sent.at(-1)).toMatchObject({ t: 'live.adopt' });
+    expect(h.notices.some((n) => n.kind === 'adopt-too-large')).toBe(false);
+  });
+
+  it('refuses a hand-back over 15 MiB locally, holds the service, and ends the hub copy after End service', () => {
+    const r = bigResolved(820, 19_500);
+    const { h, hub } = tookOver(r);
+    h.core.onState(hub);
+    // Never sent: the hub would close the socket, and the operator would reconnect and try again.
+    expect(h.sent.some((m) => m.t === 'live.adopt')).toBe(false);
+    const n = h.notices.at(-1) as Extract<LiveNotice, { kind: 'adopt-too-large' }>;
+    expect(n).toMatchObject({ kind: 'adopt-too-large', max: SIZE_BUDGETS.adoptMax });
+    expect(n.bytes).toBeGreaterThan(SIZE_BUDGETS.adoptMax);
+    expect(n.bytes).toBeLessThan(SIZE_BUDGETS.socketMax);
+    expect(h.core.authority).toBe('fallback');
+    expect(h.core.held).toBe(true);
+    expect(h.core.reconcile).toBeNull();
+    expect(h.core.staleOnHub).toBe('pl');
+    expect(h.fb.hold).toBe(true);
+    // Meanwhile the hub's states change nothing: no dialog, no second notice, the service runs here.
+    h.core.onState(hub);
+    expect(h.notices.filter((x) => x.kind === 'adopt-too-large')).toHaveLength(1);
+    expect(h.notices.some((x) => x.kind === 'conflict' || x.kind === 'hub-back-held')).toBe(false);
+    h.core.submit({ k: 'next', at: 300 });
+    expect(h.core.view.live).toBe(1);
+    // End service: the hub still shows its old copy, so it is ended there with this PC's idle state.
+    h.core.submit({ k: 'endService', at: 400 });
+    expect(h.sent.at(-1)).toEqual({ t: 'live.resync' });
+    h.core.onState(hub);
+    const adopt = h.sent.at(-1) as Extract<HubOut, { t: 'live.adopt' }>;
+    expect(adopt).toMatchObject({ t: 'live.adopt', force: true });
+    expect(adopt.state.mode).toBe('idle');
+    expect(jsonBytes(adopt)).toBeLessThan(64 * 1024);
+    expect(h.core.staleOnHub).toBeUndefined();
+    h.core.onState({ ...adopt.state, seq: hub.seq + 10 });
+    expect(h.core.authority).toBe('hub');
+    expect(h.fb.hold).toBe(false);
+  });
+
+  it('after End service follows a hub that went on to another playlist, and resumes the marker after a restart', () => {
+    // A small limit stands in for a large service.
+    const { h } = tookOver(resolved(), { adoptMaxBytes: 1000 });
+    h.core.onState(liveHub());
+    expect(h.core.held).toBe(true);
+    h.core.submit({ k: 'endService', at: 400 });
+    const other = reduce(initialState(), { k: 'goLive', resolved: resolved('other', 'Other service') });
+    h.core.onState(other);
+    expect(h.core.authority).toBe('hub');
+    expect(h.core.view.resolved?.playlist.name).toBe('Other service');
+    expect(h.sent.some((m) => m.t === 'live.adopt')).toBe(false);
+    // A core restart during such a hold keeps the marker, so End service still ends the hub's copy.
+    const seed = reduce(initialState(), { k: 'goLive', resolved: resolved() });
+    const g = harness(seed);
+    g.core.resumeHeld('pl');
+    expect(g.core.staleOnHub).toBe('pl');
+    g.core.onStatus(true);
+    g.core.onWelcome();
+    g.core.submit({ k: 'endService', at: 5 });
+    g.core.onState(liveHub());
+    expect(g.sent.at(-1)).toMatchObject({ t: 'live.adopt', force: true, state: { mode: 'idle' } });
   });
 });

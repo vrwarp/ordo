@@ -446,6 +446,12 @@ Whole presentations travel in goLive (to every client, into the journal, snapsho
 | Library snapshot | its size is reported in hub health; a test keeps a year of weekly 17-slide sermon decks under 6 MB. A summary-only snapshot (bodies fetched on open) is the follow-up if a venue passes 32 MB; it is not part of this design. | health, test |
 | Revisions | unchanged policy (50 or 30 days); a 1 MB presentation edited often costs ≤ 50 MB, noted in design/12 | docs |
 
+As built in M3 (`packages/domain/src/size.ts`):
+- `planImportSizes(sizes, compact, reserve)` keeps 256 KiB of the 4 MiB for the presentation's own fields, sections, arrangement and `source.log`, and returns the reason per compact slide ('slide' over 64 KB, 'presentation' for the tail) and the tail's first slide: the tail is contiguous, "slide n and later". `compactSlide` is the version-1 compact form (no objects, `pending`, the text in `artText`); `compactSlideBytes` adds version 2's page picture and text boxes, so a compact slide counts its text twice. A 2,000-slide deck of 300-character slides keeps about 200 editable slides that way; if version 2 dropped `artText` once aligned text boxes carry the text, it would keep about 800.
+- `previewSlice` also sends the slide after the previewed one, for the next-slide band. The operator refuses a preview over 15 MiB, warns on save above 4 MiB and refuses above 32 MiB.
+- Above 15 MiB the operator never sends `live.adopt`: it holds the service to End service and then ends the hub's older copy with its idle state (design/17 "Hub returns"). A 13 MiB playlist gets the warning and still hands back; §14.10's two checks are separate thresholds.
+- Hub health reports `librarySnapshotBytes` (design/12 "Logging and diagnostics"). A year of weekly synthetic sermon decks (52 × 17 slides through the converter, 5 pictures each) measures 1.5 MB.
+
 ## 4. Parser and converter rules
 
 **Order and identity**

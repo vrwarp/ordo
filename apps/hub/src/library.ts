@@ -553,7 +553,35 @@ export class Library {
       settings: opts.withTokens ? settings : stripTokens(settings),
     };
   }
+
+  /**
+   * The size of a full library snapshot (`GET /library/snapshot`, every presentation to every operator) in
+   * bytes, summed from the stored JSON without parsing an entity: hub health reports it (design/27 §3.4).
+   * It matches `JSON.stringify(snapshot())` to within a few bytes per entity.
+   */
+  snapshotStats(): { snapshotBytes: number; presentations: number } {
+    let bytes = `{"seq":${this.seq()},"settings":{}}`.length;
+    let presentations = 0;
+    for (const table of SNAPSHOT_TABLES) {
+      const r = this.db
+        .prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(CAST(json AS BLOB))), 0) AS b FROM ${table}`)
+        .get() as { n: number; b: number };
+      // `,"<table>":[...]` with a comma between entities.
+      bytes += r.b + Math.max(0, r.n - 1) + table.length + 6;
+      if (table === 'presentations') presentations = r.n;
+    }
+    const s = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(CAST(json AS BLOB)) + LENGTH(key) + 3), 0) AS b FROM settings`,
+      )
+      .get() as { n: number; b: number };
+    bytes += s.b + Math.max(0, s.n - 1);
+    return { snapshotBytes: bytes, presentations };
+  }
 }
+
+/** The entity tables a library snapshot lists in full. */
+const SNAPSHOT_TABLES = ['presentations', 'playlists', 'media', 'fonts', 'themes', 'folders'] as const;
 
 export function stripTokens(s: Settings): Settings {
   return { ...s, outputs: s.outputs.map(({ token: _t, ...o }) => o) };

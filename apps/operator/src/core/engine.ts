@@ -10,6 +10,7 @@ import {
   type ClientMessageBody,
 } from '@ordo/client';
 import {
+  formatBytes,
   type LiveCommand,
   type LiveEvent,
   type LiveState,
@@ -79,6 +80,8 @@ export type CoreSnapshot = {
   at: number;
   /** A service this PC started without the hub (resumed as the authority whatever its age). */
   held?: boolean;
+  /** A held service the hub has an older copy of: its playlist (`LiveCore.staleOnHub`, design/27 §3.4). */
+  staleOnHub?: string;
 };
 
 const OFFLINE_KEY = 'ordo.offline';
@@ -242,7 +245,7 @@ export class CoreEngine {
     if (seed && snap?.held && this.now() - snap.at < RESUME_HELD_MS) {
       // A service this PC started without the hub: the hub never had it, so take it back.
       this.log('warn', 'core restarted during a service started from this PC: resuming it');
-      this.core.resumeHeld();
+      this.core.resumeHeld(snap.staleOnHub);
     } else if (seed && snap?.held) {
       this.log('warn', 'a service started from this PC was left running too long ago: following the hub');
     } else if (seed && snap?.authority === 'fallback' && this.now() - snap.at < RESUME_AUTHORITY_MS) {
@@ -285,6 +288,7 @@ export class CoreEngine {
           aids: Array.isArray(s.aids) ? s.aids.filter((a) => typeof a === 'string') : [],
           at: Number(s.at) || 0,
           held: s.held === true && s.authority === 'fallback',
+          ...(typeof s.staleOnHub === 'string' ? { staleOnHub: s.staleOnHub.slice(0, 200) } : {}),
         };
       if (s) this.log('warn', 'stored core state failed validation; starting from the hub');
       const legacy = await withTimeout(this.store.get<LiveState>(LEGACY_LIVE_KEY), 1000);
@@ -954,6 +958,7 @@ export class CoreEngine {
       aids: this.processed.slice(-PROCESSED_MAX),
       at: this.now(),
       held: c.held || undefined,
+      staleOnHub: c.held ? c.staleOnHub : undefined,
     };
   }
 
@@ -1132,6 +1137,20 @@ export class CoreEngine {
           'ok',
           8000,
         );
+        void this.persist();
+        return;
+      case 'adopt-too-large':
+        this.log(
+          'warn',
+          `hand-back refused locally: the live state is ${formatBytes(n.bytes)}, over ${formatBytes(n.max)}; the service stays on this PC until End service`,
+        );
+        this.toast(
+          `The hub is back, but this service is too large to hand back to it (${formatBytes(n.bytes)}). It keeps running from this PC until End service; the hub takes over after that.`,
+          'warn',
+          12_000,
+        );
+        // A conflict dialog that led here has nothing left to decide.
+        this.post({ t: 'ui', e: { k: 'conflict' } });
         void this.persist();
         return;
     }

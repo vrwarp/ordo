@@ -123,6 +123,14 @@ from the audio master output.
    (no visible change: it equals what they have) and switch back to the hub bus.
 3. If the hub was restarted and is `idle`, the operator sends `adopt` as well; the hub
    accepts because it has no live session.
+
+   The operator measures `adopt` first (design/27 §3.4). The hub closes a socket whose
+   message is over 16 MiB, so above 15 MiB it is never sent: the operator keeps the service
+   and holds it to End service, exactly like a service it started without the hub (below),
+   and says so. At End service it ends the hub's older copy of the same playlist by adopting
+   its own idle state (a few hundred bytes); a hub that went on to another playlist is
+   followed. A goLive above 12 MiB carries a `degraded` warning so the operator knows
+   before the service.
 4. If the hub has a different live playlist (another operator went live meanwhile), the
    operator shows a conflict dialog: keep local (adopt with `force`) or take the hub's.
 
