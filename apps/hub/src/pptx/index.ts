@@ -6,7 +6,7 @@ import type { Job } from '@ordo/protocol';
 import { loJob, referenceJob } from './fallback.ts';
 import { nativeJob } from './nativeJob.ts';
 import { enqueuePptx, PPTX_JOBS, type PptxDeps, type PptxImportOptions } from './shared.ts';
-import { textRepairJob } from './textRepair.ts';
+import { queueTextRepair, textRepairJob } from './textRepair.ts';
 
 export class PptxImports {
   constructor(readonly deps: PptxDeps) {
@@ -25,5 +25,13 @@ export class PptxImports {
   /** Queue 'Show PowerPoint picture' for a presentation (the route refuses it while it is locked). */
   queueReference(presentationId: string, hash: string, by?: string): Job {
     return enqueuePptx(this.deps.jobs, PPTX_JOBS.reference, { presentationId, hash, ...(by ? { by } : {}) });
+  }
+
+  /**
+   * The one-shot repair of legacy PowerPoint text boxes (design/27 §11): queued when a stored presentation
+   * still needs it and no repair is queued or running; undefined otherwise (`textRepair.ts`).
+   */
+  queueTextRepair(): Job | undefined {
+    return queueTextRepair(this.deps);
   }
 }

@@ -113,7 +113,7 @@ function ObjectNode(props: {
           ctx.drawImage(textCanvas(o, tick), -MARGIN, -MARGIN);
         } else if (o.type === 'image') {
           const img = imageFor(stillHash(props.media(o.mediaId)));
-          if (img) drawImageFit(ctx, img, local(b), 1, o.fit, o.opacity, o.radius);
+          if (img) drawImageFit(ctx, img, local(b), 1, o.fit, o.opacity, o.radius, o.crop);
           else {
             ctx.fillStyle = '#333';
             ctx.fillRect(0, 0, b.w, b.h);

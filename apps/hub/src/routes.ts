@@ -588,6 +588,11 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const id = params(req).id!;
     if (live.locks().media.has(id)) throw locked('This media is used by the live playlist');
     const m = lib.media.must(id);
+    // A missing picture refuses goLive (design/27 §11 item 15): media that stored presentations use is
+    // deleted only with `?force=1`, which the operator sends once the user has confirmed.
+    const users = presentationsUsingMedia(lib, id);
+    if (users.length && !isForced(req.query))
+      throw new HttpError(409, 'media_in_use', mediaInUseMessage(m.name, users), { presentations: users });
     lib.media.delete(id);
     lib.emit([{ kind: 'media', id, deleted: true }]);
     for (const h of [m.original.hash, m.delivery?.hash, m.poster?.hash]) await hub.store.release(h);
@@ -938,4 +943,41 @@ export async function cleanupStaleUploads(hub: Pick<Ctx, 'lib' | 'store' | 'cfg'
   for (const f of await readdir(tmp).catch(() => [] as string[]))
     await rm(join(tmp, f), { recursive: true, force: true });
   return orphans;
+}
+
+/**
+ * The stored presentations that name a media item (backgrounds, pictures, imported pages, reference
+ * pictures, clips): any JSON string equal to its id, so fields added later are covered too. Prefiltered in
+ * SQL, title order, at most `limit`.
+ */
+export function presentationsUsingMedia(
+  lib: Library,
+  mediaId: string,
+  limit = 1000,
+): { id: string; title: string }[] {
+  const quoted = JSON.stringify(mediaId);
+  const like = `%${quoted.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  const rows = lib.db
+    .prepare(`SELECT id, title, json FROM presentations WHERE json LIKE ? ESCAPE '\\' ORDER BY title, id`)
+    .all(like) as { id: string; title: string; json: string }[];
+  const out: { id: string; title: string }[] = [];
+  for (const r of rows) {
+    if (!r.json.includes(quoted)) continue;
+    out.push({ id: r.id, title: r.title });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/** What the operator shows before deleting media that presentations use. */
+function mediaInUseMessage(name: string, users: { title: string }[]): string {
+  const shown = users.slice(0, 5).map((u) => `“${u.title}”`);
+  const more = users.length > shown.length ? ` and ${users.length - shown.length} more` : '';
+  const what = users.length === 1 ? 'the presentation' : `${users.length} presentations:`;
+  return `“${name}” is used by ${what} ${shown.join(', ')}${more}. Without it they cannot go live until it is replaced.`;
+}
+
+function isForced(query: unknown): boolean {
+  const v = query && typeof query === 'object' ? (query as Record<string, unknown>).force : undefined;
+  return v === '1' || v === 'true';
 }

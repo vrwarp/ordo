@@ -194,6 +194,8 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
 - Canvas-based editor with `react-konva` for selection, transforms and guides; the
   visual preview inside the editor uses the shared rasterizer for text so WYSIWYG holds.
 - Property panel bound to the selected object's schema.
+- Pictures are drawn with their crop (`ImageObject.crop`), as every other drawer draws them; 'Replace'
+  drops the old picture's crop, which does not fit the new one (design/27 §15 M3).
 - Saves via `PUT /presentations/:id` with `rev`; 409 shows the reload dialog.
 - Disabled with a banner when the presentation is referenced by the live playlist.
 
@@ -224,6 +226,14 @@ Controls are 44 px with 16 px inputs (no focus zoom); in portrait the editor's p
 playlist's add panel move under the main pane. File pickers are a plain button to the native picker
 (Files, Photos): photos arrive as JPEG because Safari transcodes HEIC when the accept list does not name
 it (the hub does not accept HEIC), videos as MOV or MP4.
+
+## Media library
+
+The Media tab hides the pictures imports make for presentations (pages tagged `document`, native-import
+pictures tagged `pptx`) unless 'Show presentation pictures' is ticked (design/27 §11 item 15). Deleting
+media that stored presentations use names them in the confirmation first, since a missing picture refuses
+goLive: the hub answers such a `DELETE /media/:id` with 409 `media_in_use` (the titles in its message)
+unless it carries `?force=1`, which the tab sends once the user has confirmed.
 
 ## Settings
 

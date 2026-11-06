@@ -68,8 +68,9 @@ type Slide = {
   hidden?: boolean; // a hidden PowerPoint slide: its cue is flagged; Next/Prev/auto-advance skip it (design/27 §9)
   transition?: Transition; // the slide's own: a cue uses item ?? slide ?? presentation (design/27 §9)
   pptx?: SlidePptx; // PowerPoint provenance, never drawable content (design/27 §3.1)
-  // imported.textAligned?: boolean: the text boxes are keyed by shown slide, so text readers may fall back
-  // to them (design/27 §11); legacy boxes, matched by list index, are not trusted.
+  // imported.textAligned?: boolean: true when the text boxes are keyed by shown slide, so text readers
+  // (labels, stage, search: `importedText`) may fall back to them (design/27 §11); false when the legacy
+  // repair could not read the deck; absent on legacy boxes, matched by list index, which are not trusted.
   imported?: { fileId: Id; page: number; imageMediaId: Id; textBoxes?: ExtractedText[] };
 };
 

@@ -30,6 +30,7 @@ import { renderCopyForDocument, sofficeToPdf } from './pptx/fallback.ts';
 import { PptxImports } from './pptx/index.ts';
 import { mediaForFile } from './pptx/mediaParts.ts';
 import { logSafe } from './pptx/report.ts';
+import { type DeckText, pagesOf, readDeckText } from './pptx/textRepair.ts';
 import type { Store } from './store.ts';
 
 export type Pro7Result = {
@@ -116,6 +117,13 @@ export class ImportService {
     jobs.register<Pro7Payload>('pro7-import', (ctx) => this.pro7Job(ctx));
     jobs.register<DocPayload>('document', (ctx) => this.documentJob(ctx));
     this.pptx = new PptxImports({ lib, store, jobs, media, cfg, log, locked });
+    // Legacy PowerPoint text boxes are re-keyed once, in the background (design/27 §11): checked at every
+    // start, it queues nothing once the library is repaired.
+    try {
+      this.pptx.queueTextRepair();
+    } catch (e) {
+      log.warn({ err: errorMessage(e) }, 'the PowerPoint text repair could not be queued');
+    }
   }
 
   theme(p?: { themeId?: string }): Theme {
@@ -401,19 +409,6 @@ export class ImportService {
     return saved;
   }
 
-  /** The real extractor runs on the CPU pool; an injected one (tests) runs inline. */
-  private async extractPptx(buf: Uint8Array, signal: AbortSignal): Promise<PptxText> {
-    const extract = this.imp.extractPptxText!;
-    if (extract !== (realImporters as unknown as Importers).extractPptxText) return extract(buf);
-    try {
-      return await extractPptxTextInWorker(buf, signal);
-    } catch (e) {
-      if (!(e instanceof WorkerStartError)) throw e;
-      this.log.warn({ err: e.message }, 'cpu worker unavailable; extracting PPTX text on the main thread');
-      return extract(buf);
-    }
-  }
-
   /**
    * The deck's annotation for pptx-preview runs on the CPU pool (a crafted deck must not hold the event
    * loop); on the main thread only when no worker can start.
@@ -452,21 +447,19 @@ export class ImportService {
     const dir = await this.store.tmpDir();
     try {
       let pdf = this.store.abs(file.path);
-      let text: PptxText | undefined;
+      let text: DeckText | undefined;
       let pages: string[] | undefined;
       if (ext === 'pptx') {
         const input = join(dir, 'slides.pptx');
         await copyFile(pdf, input);
-        if (this.imp.extractPptxText) {
-          try {
-            text = await this.extractPptx(await readFile(input), ctx.signal);
-            ctx.log(`extracted text from ${text.slides.length} slide(s)`);
-            for (const s of (text.skipped ?? []).slice(0, 20))
-              ctx.log(`[warn] slide ${s.index}: text not read (${s.reason})`);
-          } catch (e) {
-            ctx.log(`[warn] text extraction failed: ${errorMessage(e)}`);
-          }
-        } else ctx.log('[warn] PPTX text extraction is not available');
+        try {
+          // pptx-scene on the CPU pool; each page gets the text of the slide it shows (design/27 §11).
+          text = await readDeckText(input, dir, ctx.signal);
+          ctx.log(`read the text of ${text.listed.length} slide(s)`);
+        } catch (e) {
+          if (ctx.signal.aborted) throw e;
+          ctx.log(`[warn] text extraction failed: ${logSafe(errorMessage(e))}`);
+        }
         if (renderer === 'pptx-preview') {
           ctx.log('rendering with pptx-preview');
           try {
@@ -517,6 +510,8 @@ export class ImportService {
       if (!pages.length) throw new Error('The document has no pages');
       ctx.log(`${pages.length} page(s)`);
       const title = baseName(name);
+      // The listed slide each page shows: LibreOffice leaves hidden slides out (design/27 §11).
+      const shows = text ? pagesOf(renderer, text.listed, pages.length) : undefined;
       const slides: Slide[] = [];
       for (let i = 0; i < pages.length; i++) {
         if (ctx.signal.aborted) throw new Error('cancelled');
@@ -533,7 +528,8 @@ export class ImportService {
           done[i + 1] = m.id;
           ctx.setPayload({ ...ctx.payload, done });
         }
-        const boxes = text?.slides.find((s) => s.index === i + 1)?.boxes;
+        const shown = shows?.[i];
+        const boxes = shown !== undefined && shown >= 0 ? text?.boxes.get(shown) : undefined;
         slides.push({
           id: newId(),
           objects: [],
@@ -542,6 +538,8 @@ export class ImportService {
             page: i + 1,
             imageMediaId,
             ...(boxes?.length ? { textBoxes: boxes } : {}),
+            // This page's own text, in the page's frame (uniform contain mapping): readers may use it.
+            ...(text ? { textAligned: true } : {}),
           },
         });
         ctx.progress(0.3 + (0.65 * (i + 1)) / pages.length);

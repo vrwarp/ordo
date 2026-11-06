@@ -102,7 +102,14 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
 export function firstText(slide: {
   objects: { type: string; text?: string; id: string }[];
   lyricObjectId?: string;
+  imported?: ImportedTextSource['imported'];
+  pptx?: ImportedTextSource['pptx'];
 }): string {
+  // A slide whose text is only in a picture: the picture's own text (design/27 §11), never a neighbour's.
+  if (!slide.objects.some((x) => x.type === 'text' && x.text)) {
+    const t = importedText(slide);
+    if (t) return t;
+  }
   if (slide.lyricObjectId) {
     const o = slide.objects.find((x) => x.id === slide.lyricObjectId);
     if (o && o.type === 'text' && o.text) return o.text;
@@ -169,4 +176,46 @@ export function sectionsOfItem(
     }
   }
   return out;
+}
+
+/** What `importedText` reads of a slide: structural, so stored, clamped and resolved slides all fit. */
+export type ImportedTextSource = {
+  imported?: { textBoxes?: readonly { text: string }[]; textAligned?: boolean };
+  pptx?: { class?: string; artText?: string };
+};
+
+/** Longest fallback text: the schema's bound on one text. */
+const MAX_IMPORTED_TEXT = 20_000;
+
+/**
+ * The text a slide shows only inside a picture (design/27 §11 "Round trip and migration"), which cue
+ * labels, lyric-only bands, the stage and search fall back to when the slide has no text of its own:
+ * - an imported page's text boxes, only once they are known to be that page's (`imported.textAligned`).
+ *   Legacy boxes were matched by list index and hold another slide's text after a hidden slide;
+ * - else the text baked into a hybrid or picture slide's PowerPoint art (`pptx.artText`).
+ * Boxes are joined with newlines, bottom first, cut at 20,000 characters; '' when there is none.
+ */
+export function importedText(slide: ImportedTextSource): string {
+  const imp = slide.imported;
+  if (imp && imp.textAligned === true && Array.isArray(imp.textBoxes)) {
+    let out = '';
+    for (const b of imp.textBoxes) {
+      const t = typeof b?.text === 'string' ? b.text.trim() : '';
+      if (!t) continue;
+      out = out ? `${out}\n${t}` : t;
+      if (out.length >= MAX_IMPORTED_TEXT) return cutText(out, MAX_IMPORTED_TEXT);
+    }
+    if (out) return out;
+  }
+  const p = slide.pptx;
+  if (p && (p.class === 'hybrid' || p.class === 'picture') && typeof p.artText === 'string')
+    return cutText(p.artText.trim(), MAX_IMPORTED_TEXT);
+  return '';
+}
+
+/** `s` cut to `n` code units without splitting a surrogate pair. */
+function cutText(s: string, n: number): string {
+  if (s.length <= n) return s;
+  const c = s.charCodeAt(n - 1);
+  return s.slice(0, c >= 0xd800 && c <= 0xdbff ? n - 1 : n);
 }

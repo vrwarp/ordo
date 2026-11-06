@@ -1,4 +1,4 @@
-import { api, fileUrl } from '@ordo/client';
+import { ApiFailure, api, fileUrl } from '@ordo/client';
 import { formatDuration, type Media } from '@ordo/domain';
 import { PreviewPlayer } from '@ordo/audio';
 import { useMemo, useRef, useState } from 'react';
@@ -6,6 +6,7 @@ import { confirmDialog } from '../../components/Confirm.tsx';
 import { Dialog } from '../../components/Dialog.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
 import { useLockedIds } from '../../hooks.ts';
+import { isPresentationPicture, mediaInUseText, presentationsUsing } from '../../lib/mediaUse.ts';
 import { stillHash } from '../../services/thumbs.ts';
 import { uploadMedia } from '../../services/upload.ts';
 import { removeLocal, upsertLocal, useLibrary } from '../../state/library.ts';
@@ -196,6 +197,8 @@ export function MediaTab() {
   const [q, setQ] = useState('');
   const [kind, setKind] = useState<'' | Media['kind']>('');
   const [bgOnly, setBgOnly] = useState(false);
+  // Pictures imports made for presentations (pages, PowerPoint pictures) stay out of the list by default.
+  const [showPictures, setShowPictures] = useState(false);
   const [asBackground, setAsBackground] = useState(false);
   const [previewing, setPreviewing] = useState<Media>();
   const [playing, setPlaying] = useState<string>();
@@ -205,8 +208,14 @@ export function MediaTab() {
     () =>
       docs
         .map((d) => byId.get(d.id)!)
-        .filter((m) => m && (!kind || m.kind === kind) && (!bgOnly || m.isBackground)),
-    [docs, kind, bgOnly, byId],
+        .filter(
+          (m) =>
+            m &&
+            (!kind || m.kind === kind) &&
+            (!bgOnly || m.isBackground) &&
+            (showPictures || !isPresentationPicture(m)),
+        ),
+    [docs, kind, bgOnly, showPictures, byId],
   );
   const patch = async (m: Media, p: Record<string, unknown>) => {
     try {
@@ -216,9 +225,20 @@ export function MediaTab() {
     }
   };
   const del = async (m: Media) => {
-    if (!(await confirmDialog('Delete media', `Delete “${m.name}”?`, 'Delete', true))) return;
+    // Media that presentations use: the confirmation names them (a missing picture refuses goLive).
+    const users = presentationsUsing(m.id, lib.presentations);
+    const ask = users.length ? mediaInUseText(m.name, users) : `Delete “${m.name}”?`;
+    if (!(await confirmDialog('Delete media', ask, 'Delete', true))) return;
+    const remove = (force: boolean) => api(`/media/${m.id}${force ? '?force=1' : ''}`, { method: 'DELETE' });
     try {
-      await api(`/media/${m.id}`, { method: 'DELETE' });
+      try {
+        await remove(users.length > 0);
+      } catch (e) {
+        // The hub knows of a use this library copy has not seen yet: ask again with its list.
+        if (!(e instanceof ApiFailure && e.code === 'media_in_use')) throw e;
+        if (!(await confirmDialog('Delete media', `${e.message} Delete it anyway?`, 'Delete', true))) return;
+        await remove(true);
+      }
       removeLocal('media', m.id);
     } catch (e) {
       toast(`Could not delete: ${errorText(e)}`, 'error');
@@ -258,6 +278,14 @@ export function MediaTab() {
           <label className="check">
             <input type="checkbox" checked={bgOnly} onChange={(e) => setBgOnly(e.target.checked)} />{' '}
             Backgrounds only
+          </label>
+          <label className="check" title="Pages and pictures that imports made for presentations">
+            <input
+              type="checkbox"
+              checked={showPictures}
+              onChange={(e) => setShowPictures(e.target.checked)}
+            />{' '}
+            Show presentation pictures
           </label>
         </div>
         <div className="row">
