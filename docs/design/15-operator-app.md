@@ -203,6 +203,33 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
   drops the old picture's crop, which does not fit the new one (design/27 §15 M3).
 - Saves via `PUT /presentations/:id` with `rev`; 409 shows the reload dialog.
 - Disabled with a banner when the presentation is referenced by the live playlist.
+- Formatting text (M4; `views/editor/FormatBar.tsx` and `ParagraphStrip.tsx` around the text field,
+  applying `ops/text.ts` through `actions.ts`, one undo step each). The 'Text format' toolbar over the
+  field formats its selection: font, Size − / +, Bold, Italic, Underline, Strikethrough, Superscript and
+  Subscript (verse numbers), Caps, Clear formatting, the text colour (swatches of the deck's colours first:
+  the applied theme's text colour, then the colours its text and shapes use, most used first; then the
+  Office theme's) and a highlight; letter spacing, outline, shadow and language are behind 'More'. Pressed
+  states and values show the selection (`aria-pressed="mixed"` and 'Mixed' where it differs), a value equal
+  to the box's removes the override, and with a caret the bar is disabled ('Select text to format it.').
+  Ctrl+B / Ctrl+I / Ctrl+U work in the field; a button gives the field its focus and selection back, and a
+  pointer never takes them away. The 'Paragraph' strip under the field styles the PowerPoint paragraphs the
+  selection touches: Align and Direction (Auto, Left to right, Right to left) as radio groups, List (bullets
+  • ● ■ ▪ ➢ ✓, numbers 1. (1) 1) a. i. with 'Start at'; a list started on paragraphs without an indent gets
+  a hanging one wide enough for its labels), Level and Indent − / + (each paragraph from its own value),
+  space before and after, and line spacing (as the box, a multiple of single, or exactly). Number fields
+  apply as they are typed, coalesced into one undo step per field. Every control is a design-system
+  button or field (44 px under a finger).
+- Text box options (TextStyleEditor's `box`, in the Object panel only; themes and looks keep their editor):
+  Shrink text to fit with 'Re-fit text' (clears PowerPoint's stored fit scale, so the text is fitted again
+  from full size), Wrap lines, the four insets in place of Padding (the padding keeps the smallest, the
+  closest value for an older build), Direction, the line spacing model (ordo or PowerPoint) and a fallback
+  font for a second script.
+- Guides (`CanvasGuides.tsx`, `textFit.ts`): a text box whose text does not fit, laid out as the drawers lay
+  it out (the rich engine's `overflow`, a shrink-to-fit box only past its smallest fit; legacy text whose
+  lines are taller than the box), has a dashed red edge on the canvas, and the Object panel says "Text does
+  not fit: turn on Shrink text to fit or enlarge the box" (a box already shrinking: enlarge it or shorten
+  the text). An imported deck that is not 16:9 (`source.native.slideRect`) has its area outlined and the
+  bars outside it shaded, so text stays inside what PowerPoint showed.
 - Media playing in place (design/27 §8, §11 item 14; `views/editor/MediaPanels.tsx`, pure ops in
   `mediaOps.ts`, one undo step each). '+ Video' (touch: Add → Video…) adds an ImageObject whose `mediaId`
   is the video, so every drawer shows its poster, with `play` {start automatically, no loop, hold the last
