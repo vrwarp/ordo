@@ -173,10 +173,13 @@ slide drawn as one bitmap, with and without the clip playing.
 every rAF (render worker, via requestAnimationFrame on the OffscreenCanvas's worker scope):
   now = hubNow()
   if pendingFlip && now + frameMs/2 >= pendingFlip.at: swapStacks(); pendingFlip = null
-  for each video source with a new VideoFrame: importExternalTexture (zero copy)
+  for each video slot: present the newest frame due at now + frameMs/2 (frame selection, below)
+  upload the bitmaps this frame samples that changed (live stacks, outgoing ones while fading)
+  for each video source drawn: importExternalTexture (zero copy)
   encode one render pass: for each layer in [background, slide, lowerThird, media, props]:
      draw layer A (outgoing) and layer B (incoming) with crossfade weight t, if transitioning
   submit
+  upload the rest that changed (content armed for a coming flip), after the submit
   record presented++, and missed += max(0, round((now - lastFrameAt)/frameMs) - 1)
 ```
 
@@ -216,7 +219,13 @@ Arm sequence for a cue (asset worker, then render worker):
 3. For images, `createImageBitmap` from the OPFS blob (cached bitmaps by hash and size
    are reused).
 4. Post bitmaps to the render worker, which uploads them into pre-allocated texture
-   slots (`copyExternalImageToTexture`) and writes the quad list for the stack.
+   slots (`copyExternalImageToTexture`) and writes the quad list for the stack. Uploads
+   never run inside the compositor's `draw` (design/27 §7.3): the frame loop uploads armed
+   content right after the next frame's submit, so a later flip finds it uploaded;
+   content that is drawn on the very frame it changed (a flip onto content
+   promoted from the queue, a `refresh` of the live copy) is uploaded just before that
+   draw. A stack is uploaded once per content (`Stack.version`), and again only after a
+   device loss.
 5. For video (background or media cue), the main thread creates a `<video>` for the
    armed asset from the OPFS file (`URL.createObjectURL(file)`), preloads to the first
    frame (`preload=auto`, wait for `canplaythrough` and one `requestVideoFrameCallback`),
@@ -232,8 +241,20 @@ Memory bound: at most two stacks per layer, and one playing plus one armed video
 
 - On GO the main thread calls `video.play()` at the scheduled time (it is already decoded
   to its first frame, so the first frame is presented on the GO frame).
-- `requestVideoFrameCallback` posts each new frame; the render worker presents the
-  latest frame whose `mediaTime` is at or before now, and silently drops late ones.
+- `requestVideoFrameCallback` posts each new frame (`vframe`, `timestamp` = `mediaTime`),
+  tagged with the slot's load generation and, while the element plays, its clock: the
+  transport's `startedAt` (hub time of media time 0) and the clip length when it loops.
+  The render worker keeps the two newest frames per slot (`FrameRing`,
+  `packages/renderer/src/frame-ring.ts`) and before each draw presents the newest frame whose
+  timestamp is at or before the media time due on the vsync being drawn,
+  `now + frameMs/2 − startedAt` (modulo the length when looping; the half-frame rule of
+  flips). An element a little ahead of hub time is held back to the hub's frame; one
+  behind shows its newest frame, and older (late) frames are dropped. Without a clock
+  (paused, not started), with one frame only, or when the newest frame is more than
+  250 ms from the expected time (a seek the clock has not caught up with), the newest
+  frame shows; an older frame is never shown across a seek, a loop's wrap or a reload.
+  Frames are closed when evicted by a newer one, when a frame of another generation
+  arrives, on `vclear` and when the engine stops (unit tests count every open and close).
 - The audio-master output routes the video element through the audio engine
   ([design/18](18-audio-engine.md)); other outputs mute their copies.
 - Looping uses the `loop` attribute; `ended` on a non-looping cue sends `media.ended` to

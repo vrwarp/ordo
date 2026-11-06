@@ -175,7 +175,7 @@ function handle(m: ToRender): void {
       e.flip(m.layer, m.key, m.at, m.fadeMs, m.cueIndex);
       return;
     case 'vframe':
-      e.setVideoFrame(m.slot, m.frame, m.gen);
+      e.setVideoFrame(m.slot, m.frame, m.gen, m.startedAt, m.loopMs);
       return;
     case 'vclear':
       e.setVideoFrame(m.slot, null);

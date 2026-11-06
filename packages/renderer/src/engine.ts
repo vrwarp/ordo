@@ -1,6 +1,7 @@
 import type { Rgba } from '@ordo/domain';
 import { Canvas2DCompositor } from './canvas2d.ts';
 import { type Compositor, type FrameInputs, MAX_VIDEO_SLOTS, type VideoFrames } from './compositor.ts';
+import { FrameRing } from './frame-ring.ts';
 import { type GpuInit, createGpuCompositor } from './gpu.ts';
 import type { RenderTelemetry } from './health.ts';
 import type { HeldKeys } from './messages.ts';
@@ -92,6 +93,8 @@ export class RenderEngine {
     version: new Int32Array(MAX_VIDEO_SLOTS),
     gen: new Int32Array(MAX_VIDEO_SLOTS).fill(-1),
   };
+  /** The two newest frames of each slot; presents one per slot into `video` before each draw. */
+  readonly videoRing = new FrameRing(this.video);
   readonly clock = new FrameClock(600);
   private compositor: Compositor | null = null;
   private inputs: FrameInputs;
@@ -243,7 +246,7 @@ export class RenderEngine {
         ls.stacks[1].version++;
       }
       this.prepareHeld(gpu);
-      gpu.draw(this.inputs);
+      this.drawFrame(gpu);
       const old = this.compositor;
       this.compositor = gpu;
       this.opts.canvas = canvas;
@@ -407,17 +410,15 @@ export class RenderEngine {
     }
   }
 
-  /** The newest frame of a slot, tagged with the slot generation it was loaded under (`vframe`). */
-  setVideoFrame(slot: number, frame: VideoFrame | null, gen = -1): void {
-    if (slot < 0 || slot >= MAX_VIDEO_SLOTS) {
-      frame?.close();
-      return;
-    }
-    const prev = this.video.frames[slot];
-    if (prev && prev !== frame) prev.close();
-    this.video.frames[slot] = frame;
-    this.video.gen[slot] = frame ? gen : -1;
-    this.video.version[slot]!++;
+  /**
+   * A frame of a slot (`vframe`), tagged with the slot generation it was loaded under and, while its element
+   * plays, the hub time of media time 0 (`startedAt`, NaN: none) and the clip length when it loops: the
+   * slot keeps its two newest frames and presents the one due (frame-ring.ts). `null` clears the slot
+   * (`vclear`). The engine owns the frame from here and closes it.
+   */
+  setVideoFrame(slot: number, frame: VideoFrame | null, gen = -1, startedAt = Number.NaN, loopMs = 0): void {
+    if (frame) this.videoRing.push(slot, frame, gen, startedAt, loopMs, this.hubNow(), this.clock.frameMs);
+    else this.videoRing.clear(slot);
   }
 
   setSnapshot(everyMs: number, width: number, height: number): void {
@@ -457,8 +458,10 @@ export class RenderEngine {
     };
   }
 
+  /** Stop the frame loop and close the video frames held. */
   stop(): void {
     this.running = false;
+    this.videoRing.release();
   }
 
   private onFrame(ts: number): void {
@@ -478,11 +481,12 @@ export class RenderEngine {
       this.markerLive = this.markerCue;
       this.markerFlipAt = now;
     }
+    this.videoRing.select(now, frameMs);
     if (this.opts.testPixel) this.updateTestPixel();
     const c = this.compositor;
     if (!c) return; // rebuilding after device loss; the main thread shows the last frame copy
     try {
-      c.draw(this.inputs);
+      this.drawFrame(c);
     } catch (err) {
       this.error = `draw failed: ${(err as Error).message}`; // alloc-ok (error path)
       return;
@@ -511,6 +515,18 @@ export class RenderEngine {
         createImageBitmap(this.opts.canvas, this.snapOpts).then(this.onSnapDone, this.onSnapFail);
       }
     }
+  }
+
+  /**
+   * Draw one frame on `c`. Texture uploads stay out of `draw` (design/27 §7.3): what this frame samples is
+   * uploaded just before it, the rest (content armed for a coming flip) after its submit, off the frame's
+   * critical path.
+   */
+  private drawFrame(c: Compositor): void {
+    /* @hot */
+    c.drainUploads?.(this.inputs, false);
+    c.draw(this.inputs);
+    c.drainUploads?.(this.inputs, true);
   }
 
   private updateTestPixel(): void {
