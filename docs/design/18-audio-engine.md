@@ -42,6 +42,14 @@ MediaElementSource (audio cue) ──────────────┤
   with loop and the item's gain. Decoded ahead on arm like video.
 - Gain staging: item gain (dB) plus loudness normalisation to −16 LUFS from the hub's
   measurement, plus master.
+- The hub measures audio files and, since M5 of design/27, video soundtracks: the
+  integrated loudness of the first audio stream over the part the delivery keeps (a trim
+  is baked in at ingest), stored as `Media.audio.loudnessLufs`. **Product change:** every
+  video ingested from then on plays its sound normalised to −16 LUFS like an audio cue
+  (±12 dB at most), whether a media cue, a video in a slide or a PowerPoint clip; before,
+  video sound played at its file level. Videos already in the library keep playing
+  unnormalised until they are processed again (Retry). A video whose measurement fails
+  still becomes ready and plays unnormalised; its job log says why.
 
 ## Preview
 

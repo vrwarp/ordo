@@ -86,15 +86,26 @@ type TOpts = {
   durationMs?: number;
   onProgress?: (f: number) => void;
 };
+/** The kept part of a source, in its own timeline (Media.trim). */
+export type Trim = { startMs: number; endMs: number };
 const BASE = ['-hide_banner', '-nostdin', '-y', '-loglevel', 'error'];
 const IN_SAFE = ['-protocol_whitelist', 'file,pipe'];
+
+/**
+ * Input options that read only [startMs, endMs] of the source, placed before its `-i`. Transcoding after an
+ * input seek is frame accurate (ffmpeg decodes from the keyframe before and drops what precedes the start),
+ * and the output starts at 0, so the trim is baked into the delivery.
+ */
+export function trimArgs(t: Trim | undefined): string[] {
+  return t ? ['-ss', (t.startMs / 1000).toFixed(3), '-to', (t.endMs / 1000).toFixed(3)] : [];
+}
 
 /** H.264 High MP4, fit within 1920x1080, fps capped at 60, AAC 256k stereo, faststart. */
 export async function transcodeH264(
   input: string,
   output: string,
   info: ProbeInfo,
-  o: TOpts & { noAudio?: boolean },
+  o: TOpts & { noAudio?: boolean; trim?: Trim },
 ): Promise<void> {
   const vf = [FIT_1080];
   if ((info.video?.fps ?? 0) > 60.5) vf.push('fps=60');
@@ -106,6 +117,7 @@ export async function transcodeH264(
     [
       ...BASE,
       ...IN_SAFE,
+      ...trimArgs(o.trim),
       '-i',
       input,
       '-map',
@@ -148,7 +160,7 @@ export async function transcodeVp9Alpha(
   input: string,
   output: string,
   info: ProbeInfo,
-  o: TOpts & { noAudio?: boolean },
+  o: TOpts & { noAudio?: boolean; trim?: Trim },
 ): Promise<void> {
   const dec: string[] = [];
   // The native VP8/VP9 decoders drop the alpha side channel; libvpx keeps it.
@@ -164,6 +176,7 @@ export async function transcodeVp9Alpha(
     [
       ...BASE,
       ...IN_SAFE,
+      ...trimArgs(o.trim),
       ...dec,
       '-i',
       input,
@@ -256,16 +269,25 @@ export async function downscaleImage(
   await run('ffmpeg', [...args, output], o);
 }
 
-/** Integrated loudness (LUFS) from ffmpeg's loudnorm measurement pass. */
-export async function measureLoudness(input: string, o: TOpts): Promise<number | undefined> {
+/**
+ * Integrated loudness (LUFS) from ffmpeg's loudnorm measurement pass, over the first audio stream (the one
+ * the delivery keeps) of the kept part of an audio file or a video's soundtrack.
+ */
+export async function measureLoudness(
+  input: string,
+  o: TOpts & { trim?: Trim },
+): Promise<number | undefined> {
   const r = await run(
     'ffmpeg',
     [
       '-hide_banner',
       '-nostdin',
       ...IN_SAFE,
+      ...trimArgs(o.trim),
       '-i',
       input,
+      '-map',
+      '0:a:0',
       '-vn',
       '-af',
       'loudnorm=print_format=json',
@@ -273,7 +295,7 @@ export async function measureLoudness(input: string, o: TOpts): Promise<number |
       'null',
       '-',
     ],
-    { ...o, keepStdout: false },
+    { timeoutMs: o.timeoutMs, signal: o.signal, keepStdout: false },
   );
   const m = /\{[^{}]*"input_i"[^{}]*\}/s.exec(r.stderr);
   if (!m) return undefined;
@@ -282,12 +304,17 @@ export async function measureLoudness(input: string, o: TOpts): Promise<number |
 }
 
 /** AAC 256k stereo in MP4 (m4a). */
-export async function transcodeAudio(input: string, output: string, o: TOpts): Promise<void> {
+export async function transcodeAudio(
+  input: string,
+  output: string,
+  o: TOpts & { trim?: Trim },
+): Promise<void> {
   await run(
     'ffmpeg',
     [
       ...BASE,
       ...IN_SAFE,
+      ...trimArgs(o.trim),
       '-i',
       input,
       '-map',

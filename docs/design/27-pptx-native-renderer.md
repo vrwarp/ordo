@@ -842,12 +842,12 @@ A scene is several draws, so it is composed at full alpha before it is weighted:
 - An `ImageObject` whose `mediaId` is a *video* Media (Pro7 video fills, earlier editor picks) draws that Media's poster on outputs, as thumbnails and the editor already do: `slideImages` maps a video to `poster.hash`, which the manifest already ships. Today outputs draw nothing for it (`asset.worker.ts:199-203`, `link-core.ts:982-995`). It plays only once it has `play`; `play.mediaId` may be the same video.
 
 **Hub.**
-- `sniff`/`EXT_KIND` gain ASF (GUID `30 26 B2 75 8E 66 CF 11`, WMV/WMA), MPEG-PS (`00 00 01 BA`) and AIFF (`FORM....AIFF`).
+- `sniff`/`EXT_KIND` gain ASF (GUID `30 26 B2 75 8E 66 CF 11`, WMV/WMA), MPEG-PS (`00 00 01 BA`) and AIFF (`FORM....AIFF`, also `AIFC`). An ASF file is a WMA when its header lists audio streams only (a video when the head cannot tell: the media job turns an audio-only file into an audio item).
 - Clips are ingested with `checkExtension:false`, tags `['pptx']` and the name `<deck title> – slide N video`, **never awaited** (heavy concurrency 1), after `pptx-lo` is enqueued.
-- **Trims are baked.** `p14:trim` becomes `IngestOpts.trim {startMs, endMs}`. The media job cuts the delivery (`-ss`/`-to` before the H.264/AAC transcode), so loops, onEnd, the stage's remaining time and `media.ended` need no trim logic. Deduplication keys on hash plus trim.
+- **Trims are baked.** `p14:trim` becomes `IngestOpts.trim {startMs, endMs}`. The media job cuts the delivery (`-ss`/`-to` before the H.264/AAC transcode), so loops, onEnd, the stage's remaining time and `media.ended` need no trim logic. The item records it as the optional `Media.trim`, and deduplication keys on hash plus trim (`MediaService.findClip`, `ingestOnce`), so one file used whole and trimmed gives two clips.
 - A clip that fails gives `[warn]`, and its object stays a poster.
 - Video soundtracks get `measureLoudness` like audio files. This changes the playback level of every newly ingested video, not only PowerPoint clips, and is recorded as a product change in design/18 and in the release notes.
-- `gainDb = 20·log10(vol/100000)`, clamped to −100; mute → `muted`.
+- `gainDb = 20·log10(vol/100000)`, clamped to −100 (`volumeGainDb`, which also caps it at 0 dB); mute → `muted`.
 
 **p:timing mapping.**
 - autoplay = a `presetClass="mediacall"` cTn with `afterEffect`/`withEffect` in mainSeq before the first click;
