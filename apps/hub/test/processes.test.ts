@@ -88,6 +88,17 @@ describe('supervisor', () => {
     expect(file.processes.every((p) => typeof p.pid === 'number')).toBe(true);
   });
 
+  it('relays the library size to the live process, and again to a restarted one', async () => {
+    const { cap, sup: s } = make({ FIXTURE_STATS: '1' });
+    await s.start();
+    const seen = () => cap.lines.filter((l) => /"child":"live".*"msg":"stats 4242"/.test(l)).length;
+    await until(() => seen() === 1, 5000, 'stats relayed to live');
+    const live = s.status().find((p) => p.name === 'live')!;
+    process.kill(live.pid!, 'SIGKILL');
+    await until(() => seen() === 2, 8000, 'stats replayed to the restarted live process');
+    expect(s.status().find((p) => p.name === 'live')!.restarts).toBe(1);
+  });
+
   it('restarts a crashing child within its budget, then leaves it down and reports', async () => {
     const gaveUp: string[] = [];
     const { cap, sup: s } = make(
@@ -315,6 +326,12 @@ describe('two-process hub', () => {
       stdio: ['ignore', 'ignore', 'inherit'],
     });
     await until(async () => (await health())?.library === 'up', 30_000, 'hub up');
+    // Health reports the library snapshot's size (design/27 §3.4), measured by the library process.
+    await until(
+      async () => ((await health())?.librarySnapshotBytes as number) > 0,
+      10_000,
+      'library size in health',
+    );
 
     // Through the proxy: log in, create a playlist; then go live in the live process.
     const op = await login(base, '111111');
@@ -365,6 +382,12 @@ describe('two-process hub', () => {
     process.kill(pids().live, 'SIGKILL');
     await sleep(100);
     await until(async () => (await health())?.mode === 'live', 20_000, 'live process back');
+    // The restarted live process was given the library's size again.
+    await until(
+      async () => ((await health())?.librarySnapshotBytes as number) > 0,
+      5000,
+      'library size after restart',
+    );
     const st = await op.json<{ seq: number; state: { live: number; mode: string } }>('/live');
     expect(st.seq).toBe(2);
     expect(st.state.live).toBe(before.state.live);

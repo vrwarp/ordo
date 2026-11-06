@@ -28,6 +28,7 @@ import { createHttpApp, HEADER_INTERNAL, withTimeout } from './http.ts';
 import type { ChildState, LocksMsg, ProcessStatus } from './ipc.ts';
 import type { Change } from './library.ts';
 import { type LiveContext, LibraryLink } from './librarylink.ts';
+import type { LibraryStats } from './libstats.ts';
 import { LiveService } from './live.ts';
 import { createLogger, LogRing } from './log.ts';
 import { createProxy, type Proxy as HubProxy } from './proxy.ts';
@@ -158,6 +159,8 @@ export type LiveProcess = {
   setStatus(p: ProcessStatus[]): void;
   /** Library changes relayed by the supervisor; `seq` is the library sequence after them. */
   onLibraryChanges(changes: Change[], seq?: number): void;
+  /** The library's size, relayed by the supervisor for `GET /health` (design/27 §3.4). */
+  setLibraryStats(s: LibraryStats): void;
   /** Resolves once changes up to `seq` were applied (context refreshed, delta broadcast), or after a bound. */
   libraryApplied(seq: number): Promise<void>;
   locks(): LocksMsg;
@@ -215,6 +218,7 @@ export async function createLiveProcess(
   const live = new LiveService(liveDb, link, log, { snapshotIntervalMs: cfg.snapshotIntervalMs });
   const statics = new StaticApps(cfg.appsDir, cfg.domain);
   let status: ProcessStatus[] = [];
+  let libraryStats: LibraryStats | undefined;
 
   // Files the live process serves itself, recomputed when the live playlist or the context changes.
   let filesKey: [unknown, unknown] = [undefined, undefined];
@@ -368,6 +372,7 @@ export async function createLiveProcess(
     healthExtra: () => ({
       library: link.state,
       processes: status.map((p) => ({ name: p.name, state: p.state, restarts: p.restarts })),
+      librarySnapshotBytes: libraryStats?.snapshotBytes,
     }),
   });
   app.route({
@@ -458,6 +463,9 @@ export async function createLiveProcess(
     log,
     url,
     setLibrary: (u, state) => link.setLibrary(u, state),
+    setLibraryStats(s) {
+      libraryStats = s;
+    },
     setStatus(p) {
       status = p;
     },

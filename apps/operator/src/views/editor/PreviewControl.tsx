@@ -2,6 +2,7 @@ import type { Presentation } from '@ordo/domain';
 import { useState } from 'react';
 import { useMediaLookup } from '../../hooks.ts';
 import { previewBlockedReason, previewMedia, previewTargets } from '../../lib/preview.ts';
+import { previewMessage } from '../../lib/sizes.ts';
 import { controller } from '../../services/controller.ts';
 import { log } from '../../services/log.ts';
 import { useLibrary } from '../../state/library.ts';
@@ -11,7 +12,8 @@ import { toast } from '../../state/toasts.ts';
 /**
  * "Send to preview" (prd/03): render the selected slide of the draft on one idle output. The hub relays
  * the `preview` message to that output; the output honours it only while no playlist is live and clears
- * it on the next live state. Disabled while a playlist is live.
+ * it on the next live state. Disabled while a playlist is live. Only the slide's section travels, with the
+ * presentation-level fields (`previewSlice`, design/27 §3.4): a large imported deck never nears the socket cap.
  */
 export function PreviewControl({ p, slideId }: { p: Presentation; slideId?: string }) {
   const outputs = useLibrary((s) => s.data.settings.outputs);
@@ -26,13 +28,17 @@ export function PreviewControl({ p, slideId }: { p: Presentation; slideId?: stri
   const chosen = targets.find((t) => t.id === target) ?? targets[0];
   const send = (clear: boolean) => {
     if (!chosen) return;
-    const ok = ctl.hub.send({
-      t: 'preview',
-      to: chosen.id,
-      ...(clear
-        ? { clear: true }
-        : { presentation: { ...p, media: previewMedia(p, slideId, media) }, slideId }),
-    } as never);
+    let msg: object = { t: 'preview', to: chosen.id, clear: true };
+    if (!clear) {
+      const built = previewMessage(chosen.id, p, slideId, previewMedia(p, slideId, media));
+      if (!built.ok) {
+        toast(built.reason, 'warn');
+        log('warn', `preview not sent: ${built.reason}`);
+        return;
+      }
+      msg = built.message;
+    }
+    const ok = ctl.hub.send(msg as never);
     if (!ok) {
       toast('Not connected to the hub; preview needs the hub.', 'warn');
       return;

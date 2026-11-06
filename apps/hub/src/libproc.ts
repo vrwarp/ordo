@@ -26,6 +26,7 @@ import { ImportService } from './imports.ts';
 import type { LocksMsg, ProcessStatus } from './ipc.ts';
 import { JobQueue } from './jobs.ts';
 import { type Change, Library } from './library.ts';
+import { type LibraryStats, LibraryStatsCache } from './libstats.ts';
 import { createLogger, LogRing } from './log.ts';
 import { MediaService } from './media/service.ts';
 import { cpuPool } from './pool.ts';
@@ -53,6 +54,9 @@ export function mediaIdsIn(value: unknown, out = new Set<string>(), depth = 0): 
   return out;
 }
 
+/** How long after a library change its size is measured for hub health (changes in between share it). */
+const STATS_DELAY_MS = 3000;
+
 export type LibraryProcess = {
   app: FastifyInstance;
   cfg: HubConfig;
@@ -69,7 +73,12 @@ export type LibraryProcess = {
 
 export async function createLibraryProcess(
   overrides: Partial<HubConfig>,
-  opts: { secret: string; onChanges?: (changes: Change[], seq: number) => void },
+  opts: {
+    secret: string;
+    onChanges?: (changes: Change[], seq: number) => void;
+    /** The library's size for hub health (design/27 §3.4): at start, then after changes, every few seconds. */
+    onStats?: (s: LibraryStats) => void;
+  },
 ): Promise<LibraryProcess> {
   const cfg: HubConfig = { ...loadConfig(process.env), ...overrides };
   mkdirSync(cfg.dataDir, { recursive: true });
@@ -99,6 +108,7 @@ export async function createLibraryProcess(
     mode: () => locks.mode,
   };
   let liveUrl: string | undefined;
+  const libStats = new LibraryStatsCache(lib, log, { minIntervalMs: 0 });
   let status: ProcessStatus[] = [];
 
   const http = await createHttpApp({ cfg, log, auth: () => auth, behindLiveProxy: { secret: opts.secret } });
@@ -134,7 +144,7 @@ export async function createLibraryProcess(
         clearTimeout(t);
       }
     },
-    diagExtra: () => ({ processes: status, cpuPool: cpuPool().stats() }),
+    diagExtra: () => ({ processes: status, cpuPool: cpuPool().stats(), library: libStats.get() }),
   };
   registerLibraryApi(app, ctx);
   // Read-your-writes through the live process: every answer to a write carries the library sequence after
@@ -191,6 +201,22 @@ export async function createLibraryProcess(
   registerApiNotFound(app);
 
   lib.onChange((changes, seq) => opts.onChanges?.(changes, seq));
+  // Measured STATS_DELAY_MS after a change that is not only job progress, so an import or an editing session
+  // costs one measurement every few seconds (a summed SQL scan of the stored JSON, no parsing).
+  let statsTimer: NodeJS.Timeout | undefined;
+  const reportStats = () => {
+    statsTimer = undefined;
+    try {
+      opts.onStats?.(libStats.get());
+    } catch (e) {
+      log.warn({ err: errorMessage(e) }, 'library size measurement failed');
+    }
+  };
+  lib.onChange((changes) => {
+    if (!opts.onStats || statsTimer || changes.every((c) => c.kind === 'job')) return;
+    statsTimer = setTimeout(reportStats, STATS_DELAY_MS);
+    statsTimer.unref();
+  });
   lib.onChange((changes) => {
     if (cfg.scheduleBackups && changes.some((c) => c.kind === 'settings' && c.id === 'general'))
       backups.schedule();
@@ -207,6 +233,7 @@ export async function createLibraryProcess(
   const addr = app.server.address();
   const url = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`;
   log.info({ url, data: cfg.dataDir }, 'library process listening');
+  reportStats();
 
   return {
     app,
@@ -226,6 +253,7 @@ export async function createLibraryProcess(
       status = p;
     },
     async close() {
+      if (statsTimer) clearTimeout(statsTimer);
       backups.stop();
       await withTimeout(jobs.stop(), 1500, () => log.warn('jobs did not stop in time'));
       await withTimeout(app.close(), 1000, () => log.warn('http server did not close in time'));

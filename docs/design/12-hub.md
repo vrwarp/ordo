@@ -47,9 +47,11 @@ so a restart that hangs is noticed in seconds. A
 child whose supervisor vanishes while it is still starting exits at once rather than linger holding the
 port. Past the budget a failed library process stays down (`/health` reports `library: failed`,
 the service keeps running, library calls answer 503), and a failed live process ends the supervisor with
-exit code 1 so the container's restart policy takes over. The supervisor relays three things and replays
+exit code 1 so the container's restart policy takes over. The supervisor relays four things and replays
 the last of each to a restarted child: the library's address (to the live process), the live process's
-edit locks and mode (to the library), and library changes (to the live process, which broadcasts them).
+edit locks and mode (to the library), library changes (to the live process, which broadcasts them), and
+the library's size (`stats`, to the live process, for `GET /health`; the library process measures it at
+start and 3 s after a change that is not only job progress).
 `<data>/supervisor.json` holds pids, states and restart counts. SIGTERM: both children get SIGTERM,
 SIGKILL after 5 s. If the supervisor itself is killed, the live process writes its snapshot and exits at
 once (like a crash: no goodbyes), the library process stops its jobs (re-queued on the next start).
@@ -314,8 +316,13 @@ Pino JSON logs to stdout (Docker captures); each line carries `proc` (`superviso
 A ring buffer of the last 2,000 lines per process is exported by `/diagnostics/export` (`logs.ndjson`
 from the library process, `logs-live.ndjson` from the live process) together with the last 500 journal
 events, settings without secrets, the health table, the process states and restart counts, restore
-warnings, the goLive quarantine list, socket limit closures and the CPU pool counters. `GET /health`
-adds `library` (the library process state as the live process sees it) and `processes`.
+warnings, the goLive quarantine list, socket limit closures, the CPU pool counters and the library's size.
+`GET /health` adds `library` (the library process state as the live process sees it), `processes` and
+`librarySnapshotBytes`: the size of a full `GET /library/snapshot`, which every operator downloads
+(design/27 §3.4). It is summed from the stored JSON in SQL (no entity is parsed; within a few bytes per
+entity of the real answer), at most every few seconds; past 32 MiB the hub logs once that the library
+needs archiving, or the summary-only snapshot that design/27 leaves as a follow-up. A year of weekly
+17-slide imported sermon decks measures about 1.5 MB (the test keeps it under 6 MB).
 
 ## Bad data at the boundary
 
@@ -325,9 +332,10 @@ Design/25's table, as implemented in the hub:
   (string lengths, array sizes, numeric ranges). Entities may echo the server's `rev`, `createdAt` and
   `updatedAt`. The domain schemas carry generous bounds (ids 200 chars, text 20,000, 1,000 objects per
   slide, 5,000 slides per section, coordinates ±100,000, colours 0..255 and alpha 0..1, durations a day).
-- **WebSocket from clients**: 64 KiB per message (an operator's `live.adopt` and `preview` up to 16 MiB),
-  a token bucket of 50 messages refilled at 50/s per socket. A socket that breaks a limit gets
-  `bye too-large` or `bye rate-limited` and close 1008; others are unaffected.
+- **WebSocket from clients**: 64 KiB per message (an operator's `live.adopt` and `preview` up to 16 MiB;
+  the operator never sends either above 15 MiB, and a preview carries only the previewed slide's section,
+  design/27 §3.4), a token bucket of 50 messages refilled at 50/s per socket. A socket that breaks a
+  limit gets `bye too-large` or `bye rate-limited` and close 1008; others are unaffected.
 - **goLive**: every presentation is validated against the schema. A slide that fails is replaced by an
   empty slide with the same id, a presentation whose own fields are broken keeps its valid sections, one
   that cannot be read becomes empty, an invalid playlist item is skipped. The service still goes live and
@@ -341,6 +349,21 @@ Design/25's table, as implemented in the hub:
   keeps its valid fields; an invalid look or output is dropped from the list); writes check exactly one
   enabled audio master, unique `out<k>` host indices, unique look ids, and that every output's look exists.
 - **Journal and snapshots**: validated restore (Storage).
+
+## Sizes
+
+Imported PowerPoint slides are about ten times larger than picture slides, so every path that carries a
+whole presentation has a budget (design/27 §3.4, `packages/domain/src/size.ts`):
+
+- A native import stays within 4 MiB: a slide over 64 KB, and every slide once the presentation passes its
+  budget, becomes compact picture class (logged, counted on the import card).
+- A resolved playlist over 12 MiB goes live with a `degraded` warning (`cueIndex` -1): too large for an
+  operator takeover, whose hand-back the operator never sends above 15 MiB (design/17 "Hub returns").
+- `preview` carries only the previewed slide's section; the editor warns on save above 4 MiB and refuses
+  above the 32 MiB body limit.
+- Revisions are full copies (design/11 "Revisions"): an imported presentation of 1 MB edited often costs
+  up to 50 MB of revision rows.
+- `GET /health` reports the library snapshot's size (Logging and diagnostics).
 
 ## Configuration
 

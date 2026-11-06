@@ -2,6 +2,7 @@ import { api, ApiFailure } from '@ordo/client';
 import type { Presentation, SlideObject } from '@ordo/domain';
 import { create } from 'zustand';
 import { deviceProfile } from '../../lib/capabilities.ts';
+import { saveSizeCheck } from '../../lib/sizes.ts';
 import { upsertLocal } from '../../state/library.ts';
 import { currentRole } from '../../state/session.ts';
 import { errorText, toast } from '../../state/toasts.ts';
@@ -36,6 +37,8 @@ export const useEditor = create<EditorState>(() => ({
 }));
 
 const history = new History<Presentation>(200, 800);
+/** Presentations already warned about this session for passing the 4 MiB budget (design/27 §3.4). */
+const warnedLarge = new Set<string>();
 
 function firstSlideId(p: Presentation): string | undefined {
   for (const s of p.sections) if (s.slides[0]) return s.slides[0].id;
@@ -125,10 +128,19 @@ export function currentObject(): SlideObject | undefined {
   return currentSlide()?.objects.find((o) => o.id === s.objectId);
 }
 
-/** Save with the base rev. 409 opens the reload dialog; 423 means locked by the live playlist. */
+/**
+ * Save with the base rev. 409 opens the reload dialog; 423 means locked by the live playlist. A presentation
+ * over the 4 MiB budget saves with a warning (once per session); one over the hub's 32 MiB body limit is
+ * refused here with the reason (design/27 §3.4).
+ */
 export async function save(force = false): Promise<boolean> {
   const s = useEditor.getState();
   if (!s.draft || !s.base || s.saving) return false;
+  const size = saveSizeCheck(s.draft);
+  if (size.refuse) {
+    toast(`Could not save: ${size.refuse}`, 'error');
+    return false;
+  }
   useEditor.setState({ saving: true });
   try {
     let rev = s.base.rev;
@@ -148,6 +160,10 @@ export async function save(force = false): Promise<boolean> {
       saving: false,
       conflict: false,
     });
+    if (size.warn && !warnedLarge.has(saved.id)) {
+      warnedLarge.add(saved.id);
+      toast(size.warn, 'warn');
+    }
     return true;
   } catch (e) {
     useEditor.setState({ saving: false });

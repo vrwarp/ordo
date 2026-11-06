@@ -304,6 +304,13 @@ library snapshot size in hub health.
 - Tests: a 2,000-slide synthetic deck stays within 4 MiB (the tail compact, logged); preview of the largest
   slide's section < 1 MiB; a 13 MiB resolved playlist gets the warning and the operator refuses adopt; a year
   of weekly 17-slide decks keeps the library snapshot under 6 MB.
+- Built: `planImportSizes(sizes, compact, reserve = IMPORT_RESERVE_BYTES)` (256 KiB kept for the presentation's
+  own fields and `source.log`; returns `reasons`, `tail`, `tailFrom`, `oversized`, `fits` besides `compact` and
+  `total`); `compactSlide(slide, artText?)` (the version-1 compact form) and `compactSlideBytes(slide)` (plus
+  version 2's page picture and text boxes): B can pass `slides.map(compactSlideBytes)` as the per-slide
+  compact sizes. `previewSlice`, `resolvedSizeWarning`, `formatBytes`. Health: `librarySnapshotBytes`
+  (`libstats.ts`, relayed by the supervisor as `stats`). The operator holds a service whose hand-back is over
+  15 MiB to End service (`LiveCore.staleOnHub`).
 
 ### G: repair and media hygiene
 
