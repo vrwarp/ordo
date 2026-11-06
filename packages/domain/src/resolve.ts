@@ -1,5 +1,5 @@
 import type { ManifestFile } from './live.ts';
-import type { FileRef, Font, Look, Media, Playlist, Presentation } from './schemas.ts';
+import type { FileRef, Font, Look, Media, Playlist, Presentation, TextStyle } from './schemas.ts';
 
 /** The file an output plays or draws for a media item. */
 export function playableFile(m: Media): FileRef | undefined {
@@ -35,19 +35,35 @@ export function referencedMediaIds(
   return ids;
 }
 
-/** Font families used by any text style in the presentations or looks. */
+/**
+ * Font families used by any text in the presentations or looks: every text style's family and
+ * `fallbackFonts`, and for text objects also their runs' and bullets' families (design/27 §10), so goLive
+ * ships them and outputs cache them before the service.
+ */
 export function referencedFontFamilies(presentations: Presentation[], looks: Look[]): Set<string> {
   const fam = new Set<string>();
+  const add = (f: string | undefined) => {
+    if (f) fam.add(f);
+  };
+  const addStyle = (s: TextStyle) => {
+    add(s.fontFamily);
+    for (const f of s.fallbackFonts ?? []) add(f);
+  };
   for (const p of presentations)
     for (const sec of p.sections)
       for (const sl of sec.slides)
-        for (const o of sl.objects) if (o.type === 'text') fam.add(o.style.fontFamily);
+        for (const o of sl.objects) {
+          if (o.type !== 'text') continue;
+          addStyle(o.style);
+          for (const r of o.runs ?? []) add(r.fontFamily);
+          for (const para of o.paras ?? []) add(para?.bullet?.fontFamily);
+        }
   for (const l of looks) {
     if (l.layers.slide.mode === 'lyricOnly') {
-      fam.add(l.layers.slide.style.fontFamily);
-      if (l.layers.slide.nextSlide) fam.add(l.layers.slide.nextSlide.style.fontFamily);
+      addStyle(l.layers.slide.style);
+      if (l.layers.slide.nextSlide) addStyle(l.layers.slide.nextSlide.style);
     }
-    for (const s of Object.values(l.layers.props.style)) fam.add(s.fontFamily);
+    for (const s of Object.values(l.layers.props.style)) addStyle(s);
   }
   return fam;
 }

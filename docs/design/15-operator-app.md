@@ -193,6 +193,11 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
 
 - Canvas-based editor with `react-konva` for selection, transforms and guides; the
   visual preview inside the editor uses the shared rasterizer for text so WYSIWYG holds.
+  Rich text objects (design/27) are drawn by the rich engine into their cached canvas at the stage
+  scale × `devicePixelRatio` (keyed by the font generation), legacy ones at 1:1 as before.
+- Editing a text box's plain text keeps its formatting: `editText` (`@ordo/domain`) shifts, trims and
+  splits the runs and paragraph styles with the change, placed by the textarea's caret; splitting and
+  merging slides cut and join them with the lines (design/27 §11).
 - Property panel bound to the selected object's schema.
 - Saves via `PUT /presentations/:id` with `rev`; 409 shows the reload dialog.
 - Disabled with a banner when the presentation is referenced by the live playlist.
@@ -292,7 +297,10 @@ layer is visible, else the look's holding image, as the outputs do. The Previews
 (`#/previews/<presentation>/<slide>`) picks a presentation, steps through its slides in a strip, and
 shows every look full width. Uploaded and Google fonts reach the worker as `FontFace`s in
 `self.fonts`, which WebKit supports in workers (verified in Playwright WebKit: an uploaded face loads
-and changes the measured width in an `OffscreenCanvas`).
+and changes the measured width in an `OffscreenCanvas`). The worker, the editor canvas and the look
+previews resolve families through the same font resolver as the outputs (design/27 §10): faces under
+internal names, so a face that loads late is used by the next draw; the worker then tells its client,
+which drops the cached thumbnails, and the editor redraws.
 
 ### Installable web app and lifecycle
 

@@ -6,57 +6,123 @@ import {
   type Rgba,
   type Slide,
   type SlideObject,
+  type TextObject,
   type TextStyle,
   firstText,
+  readableText,
   rgbaCss,
+  textScripts,
 } from '@ordo/domain';
 
 import { CLAMP, clampBox, clampCrop, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
+import { type Ctx2D, roundRect, setLetterSpacing, withRotation } from './ctx.ts';
+import { firstStrong, hasStrongRtl } from './text/bidi.ts';
+import { LEGACY_FONT_ENV, currentFontEnv } from './text/fonts.ts';
+import { BAND_MIN_FONT_SCALE, bandObject, drawRichText, isRichStyle, isRichText } from './text/rich.ts';
 
-export type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+export type { Ctx2D } from './ctx.ts';
 export type ImageLookup = (mediaId: string) => CanvasImageSource | undefined;
 
-export function fontString(style: TextStyle, scale: number, sizeOverride?: number): string {
+/**
+ * The CSS font of legacy text. With a font resolver installed (design/27 §10: the asset worker, the thumbnail
+ * worker, the editor page) the family resolves through it like rich text does, with `script`'s fallback
+ * face; with none it is exactly the string drawers used before the resolver.
+ */
+export function fontString(style: TextStyle, scale: number, sizeOverride?: number, script = ''): string {
   const size = (sizeOverride ?? style.fontSizePx) * scale;
-  return `${style.fontStyle === 'italic' ? 'italic ' : ''}${style.fontWeight} ${size}px "${style.fontFamily}", "Inter", "Segoe UI", Arial, sans-serif`;
+  const env = currentFontEnv();
+  if (env === LEGACY_FONT_ENV)
+    return `${style.fontStyle === 'italic' ? 'italic ' : ''}${style.fontWeight} ${size}px "${style.fontFamily}", "Inter", "Segoe UI", Arial, sans-serif`;
+  return env.font({
+    family: style.fontFamily,
+    fallbacks: style.fallbackFonts ?? [],
+    weight: style.fontWeight,
+    italic: style.fontStyle === 'italic',
+    smallCaps: false,
+    sizePx: size,
+    script,
+  });
+}
+
+/** The script whose fallback face legacy text asks the resolver for: the first of `textScripts`, else ''. */
+function legacyScript(text: string): string {
+  if (currentFontEnv() === LEGACY_FONT_ENV) return '';
+  for (const s of textScripts(text)) return s;
+  return '';
 }
 
 /** Greedy word wrap. Paragraphs are separated by \n. Long words are broken by characters. */
 export function wrapLines(ctx: Pick<Ctx2D, 'measureText'>, text: string, maxWidth: number): string[] {
   const out: string[] = [];
-  for (const para of text.split('\n')) {
-    const words = para.split(/\s+/).filter(Boolean);
-    if (!words.length) {
-      out.push('');
-      continue;
-    }
-    let line = '';
-    for (const w of words) {
-      const candidate = line ? `${line} ${w}` : w;
-      if (ctx.measureText(candidate).width <= maxWidth || !line) {
-        if (!line && ctx.measureText(w).width > maxWidth) {
-          // break an over-long word
-          let chunk = '';
-          for (const ch of w) {
-            if (ctx.measureText(chunk + ch).width > maxWidth && chunk) {
-              out.push(chunk);
-              chunk = ch;
-            } else chunk += ch;
-          }
-          line = chunk;
-        } else line = candidate;
-      } else {
-        out.push(line);
-        line = w;
-      }
-    }
-    out.push(line);
-  }
+  for (const para of text.split('\n')) wrapParagraph(ctx, para, maxWidth, out);
   return out;
 }
 
+/** The lines of one paragraph, appended to `out`. */
+function wrapParagraph(ctx: Pick<Ctx2D, 'measureText'>, para: string, maxWidth: number, out: string[]): void {
+  const words = para.split(/\s+/).filter(Boolean);
+  if (!words.length) {
+    out.push('');
+    return;
+  }
+  let line = '';
+  for (const w of words) {
+    const candidate = line ? `${line} ${w}` : w;
+    if (ctx.measureText(candidate).width <= maxWidth || !line) {
+      if (!line && ctx.measureText(w).width > maxWidth) {
+        // break an over-long word
+        let chunk = '';
+        for (const ch of w) {
+          if (ctx.measureText(chunk + ch).width > maxWidth && chunk) {
+            out.push(chunk);
+            chunk = ch;
+          } else chunk += ch;
+        }
+        line = chunk;
+      } else line = candidate;
+    } else {
+      out.push(line);
+      line = w;
+    }
+  }
+  out.push(line);
+}
+
+/**
+ * The direction `drawText` sets for each paragraph (design/27 §6 "Bands, stage and readable text"): the
+ * direction of its first strong character, only for a paragraph that has a strong right-to-left character;
+ * null for the others, which keep the context's direction. Null when no paragraph has one, so left-to-right
+ * text is laid out and drawn exactly as before.
+ */
+export function paragraphDirections(text: string): ('ltr' | 'rtl' | null)[] | null {
+  if (!hasStrongRtl(text)) return null;
+  return text.split('\n').map((p) => (hasStrongRtl(p) ? (firstStrong(p) ?? 'rtl') : null));
+}
+
+/** `wrapLines` with each paragraph measured in its direction, and the direction of every line. */
+function wrapDirected(
+  ctx: Ctx2D,
+  text: string,
+  maxWidth: number,
+  dirs: readonly ('ltr' | 'rtl' | null)[],
+): { lines: string[]; dirs: ('ltr' | 'rtl' | null)[] } {
+  const dir0 = ctx.direction;
+  const lines: string[] = [];
+  const out: ('ltr' | 'rtl' | null)[] = [];
+  text.split('\n').forEach((para, i) => {
+    const d = dirs[i] ?? null;
+    ctx.direction = d ?? dir0;
+    const n = lines.length;
+    wrapParagraph(ctx, para, maxWidth, lines);
+    for (let k = n; k < lines.length; k++) out.push(d);
+  });
+  ctx.direction = dir0;
+  return { lines, dirs: out };
+}
+
 export type TextLayout = {
-  lines: { text: string; x: number; y: number; width: number }[];
+  /** `dir` is set on lines of paragraphs with a strong right-to-left character (`paragraphDirections`). */
+  lines: { text: string; x: number; y: number; width: number; dir?: 'ltr' | 'rtl' }[];
   fontSize: number;
   lineHeightPx: number;
   block: { x: number; y: number; w: number; h: number };
@@ -91,11 +157,15 @@ export function layoutText(
   const innerH = Math.max(1, bh - 2 * pad);
   let size = style.fontSizePx;
   let lines: string[] = [];
+  let lineDirs: ('ltr' | 'rtl' | null)[] | null = null;
   let lh = 0;
+  const dirs = paragraphDirections(text);
+  const script = legacyScript(text);
   for (;;) {
-    ctx.font = fontString(style, scale, size);
+    ctx.font = fontString(style, scale, size, script);
     setLetterSpacing(ctx, style.letterSpacing * scale);
-    lines = wrapLines(ctx, text, innerW);
+    if (dirs) ({ lines, dirs: lineDirs } = wrapDirected(ctx, text, innerW, dirs));
+    else lines = wrapLines(ctx, text, innerW);
     lh = size * scale * style.lineHeight;
     if (!fit || lines.length * lh <= innerH || size <= Math.max(CLAMP.minFontPx, style.fontSizePx * minScale))
       break;
@@ -110,16 +180,20 @@ export function layoutText(
   const lo = -CLAMP.boxFactor * LOGICAL_HEIGHT * scale;
   const hi = CLAMP.boxFactor * LOGICAL_HEIGHT * scale;
   const laid: TextLayout['lines'] = [];
+  const dir0 = lineDirs ? ctx.direction : undefined;
   for (let i = 0; i < lines.length; i++) {
     const y = y0 + i * lh;
     if (y < lo || y > hi) continue;
     const t = lines[i]!;
+    const dir = lineDirs?.[i];
+    if (lineDirs) ctx.direction = dir ?? dir0!;
     const width = ctx.measureText(t).width;
     let x = bx + pad;
     if (style.align === 'center') x = bx + pad + (innerW - width) / 2;
     else if (style.align === 'right') x = bx + pad + innerW - width;
-    laid.push({ text: t, x, y, width });
+    laid.push(dir ? { text: t, x, y, width, dir } : { text: t, x, y, width });
   }
+  if (lineDirs) ctx.direction = dir0!;
   const maxW = laid.reduce((m, l) => Math.max(m, l.width), 0);
   let blockX = bx + pad;
   if (style.align === 'center') blockX = bx + pad + (innerW - maxW) / 2;
@@ -132,32 +206,6 @@ export function layoutText(
     lineHeightPx: lh,
     block: { x: blockX - pad, y: top, w: maxW + 2 * pad, h: Math.max(0, bottom - top) },
   };
-}
-
-function setLetterSpacing(ctx: Ctx2D, px: number): void {
-  const c = ctx as Ctx2D & { letterSpacing?: string };
-  if ('letterSpacing' in c) c.letterSpacing = `${px}px`;
-}
-
-function roundRect(ctx: Ctx2D, x: number, y: number, w: number, h: number, r: number): void {
-  ctx.beginPath();
-  if (r > 0 && 'roundRect' in ctx) (ctx as CanvasRenderingContext2D).roundRect(x, y, w, h, r);
-  else ctx.rect(x, y, w, h);
-}
-
-function withRotation(ctx: Ctx2D, box: Box, scale: number, draw: () => void): void {
-  if (!box.rotation) {
-    draw();
-    return;
-  }
-  const cx = (box.x + box.w / 2) * scale;
-  const cy = (box.y + box.h / 2) * scale;
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.rotate((box.rotation * Math.PI) / 180);
-  ctx.translate(-cx, -cy);
-  draw();
-  ctx.restore();
 }
 
 /** Draw one text block: fill, shadow, outline, then the glyphs. */
@@ -175,8 +223,17 @@ export function drawText(
   ctx.save();
   ctx.globalAlpha = num(opts.opacity, 0, 1, 1);
   const layout = layoutText(ctx, text, style, box, scale, opts.fit ?? false);
+  // Lines of right-to-left paragraphs are drawn in their direction, left-aligned at their x like every line.
+  const directed = layout.lines.some((l) => l.dir);
+  const dir0 = directed ? ctx.direction : undefined;
+  const lineDir = directed
+    ? (l: TextLayout['lines'][number]) => {
+        ctx.direction = l.dir ?? dir0!;
+      }
+    : undefined;
   withRotation(ctx, box, scale, () => {
     ctx.textBaseline = 'alphabetic';
+    if (directed) ctx.textAlign = 'left';
     const ascent = layout.fontSize * scale * 0.8;
     const offsetY = (layout.lineHeightPx - layout.fontSize * scale) / 2 + ascent;
     if (style.fill && text.trim()) {
@@ -198,7 +255,10 @@ export function drawText(
       ctx.shadowOffsetX = style.shadow.dx * scale;
       ctx.shadowOffsetY = style.shadow.dy * scale;
       ctx.fillStyle = rgbaCss(style.outline?.color ?? style.color);
-      for (const l of layout.lines) ctx.fillText(l.text, l.x, l.y + offsetY);
+      for (const l of layout.lines) {
+        lineDir?.(l);
+        ctx.fillText(l.text, l.x, l.y + offsetY);
+      }
       ctx.restore();
     }
     if (style.outline && style.outline.width > 0) {
@@ -206,10 +266,16 @@ export function drawText(
       ctx.miterLimit = 2;
       ctx.lineWidth = style.outline.width * 2 * scale;
       ctx.strokeStyle = rgbaCss(style.outline.color);
-      for (const l of layout.lines) ctx.strokeText(l.text, l.x, l.y + offsetY);
+      for (const l of layout.lines) {
+        lineDir?.(l);
+        ctx.strokeText(l.text, l.x, l.y + offsetY);
+      }
     }
     ctx.fillStyle = rgbaCss(style.color);
-    for (const l of layout.lines) ctx.fillText(l.text, l.x, l.y + offsetY);
+    for (const l of layout.lines) {
+      lineDir?.(l);
+      ctx.fillText(l.text, l.x, l.y + offsetY);
+    }
   });
   ctx.restore();
   return layout;
@@ -325,8 +391,17 @@ export function drawShape(ctx: Ctx2D, o: Extract<SlideObject, { type: 'shape' }>
   ctx.restore();
 }
 
+/**
+ * Draw a text object: through the rich text engine (design/27 §6) when it has runs, paragraph styles or any
+ * rich style field, else through `drawText` exactly as before those fields existed.
+ */
+export function drawTextObject(ctx: Ctx2D, o: TextObject, scale: number): void {
+  if (isRichText(o)) drawRichText(ctx, o, scale);
+  else drawText(ctx, o.text, o.style, o.box, scale, { opacity: o.opacity });
+}
+
 export function drawObject(ctx: Ctx2D, o: SlideObject, scale: number, images?: ImageLookup): void {
-  if (o.type === 'text') drawText(ctx, o.text, o.style, o.box, scale, { opacity: o.opacity });
+  if (o.type === 'text') drawTextObject(ctx, o, scale);
   else if (o.type === 'shape') drawShape(ctx, o, scale);
   else {
     const img = images?.(o.mediaId);
@@ -345,6 +420,48 @@ export type SlideDrawOptions = {
   /** Draw the slide's imported page image (an image slide) even if hidden under objects. */
   skipImported?: boolean;
 };
+
+/**
+ * Draw a look band (the lyric-only and next-slide bands, the lower third): `drawText` shrunk to fit, as
+ * always, unless the source object is rich, the text has a strong right-to-left character or the look's
+ * style has a rich field. Then the source's readable text (`readableText`, numbers and bullets written as
+ * text) goes through the rich engine in the look's style, with the source paragraphs' directions
+ * (design/27 §6 "Bands, stage and readable text").
+ */
+export function drawBandText(
+  ctx: Ctx2D,
+  text: string,
+  style: TextStyle,
+  band: Box,
+  scale: number,
+  src?: TextObject,
+): void {
+  const clamped = clampStyle(style);
+  text = clampText(text);
+  if ((src && isRichText(src)) || isRichStyle(clamped) || hasStrongRtl(text))
+    drawRichText(
+      ctx,
+      bandObject(src ? readableText(src) : text, clamped, clampBox(band), src),
+      scale,
+      undefined,
+      {
+        minFontScale: BAND_MIN_FONT_SCALE,
+      },
+    );
+  else drawText(ctx, text, style, band, scale, { fit: true });
+}
+
+/** The text object a lyric-only band shows `text` of: the one `firstText` reads, when it holds that text. */
+export function bandSource(slide: Slide, text: string): TextObject | undefined {
+  let o: SlideObject | undefined;
+  if (slide.lyricObjectId) {
+    o = slide.objects.find((x) => x.id === slide.lyricObjectId);
+    if (o?.type !== 'text' || !o.text) o = undefined;
+  }
+  o ??= slide.objects.find((x) => x.type === 'text');
+  if (o?.type !== 'text') return undefined;
+  return o.text === text || readableText(o) === text ? o : undefined;
+}
 
 /** The text a lyric-only look shows for a slide, or null when the look shows nothing for it. */
 export function lyricTextFor(slide: Slide, look: Look | undefined, isSong: boolean): string | null {
@@ -375,10 +492,10 @@ export function drawSlide2D(ctx: Ctx2D, rawSlide: Slide, opts: SlideDrawOptions)
     return;
   }
   const text = lyricTextFor(slide, look, opts.isSong ?? true);
-  if (text) drawText(ctx, text, rule.style, rule.band, scale, { fit: true });
+  if (text) drawBandText(ctx, text, rule.style, rule.band, scale, bandSource(slide, text));
   if (rule.nextSlide && next) {
     const nt = lyricTextFor(next, look, opts.isSong ?? true);
-    if (nt) drawText(ctx, nt, rule.nextSlide.style, rule.nextSlide.band, scale, { fit: true });
+    if (nt) drawBandText(ctx, nt, rule.nextSlide.style, rule.nextSlide.band, scale, bandSource(next, nt));
   }
 }
 

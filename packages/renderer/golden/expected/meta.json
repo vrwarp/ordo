@@ -1,5 +1,34 @@
 {
-  "fonts": "DejaVuSans-Bold.ttf,DejaVuSans.ttf",
+  "fonts": [
+    {
+      "family": "Golden",
+      "weight": 700,
+      "style": "normal",
+      "file": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+      "sha256": "5c1247acef7f2b8522a31742c76d6adcb5569bacc0be7ceaa4dc39dd252ce895"
+    },
+    {
+      "family": "Golden",
+      "weight": 400,
+      "style": "normal",
+      "file": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+      "sha256": "ae7b7855e115a5966d8b1b3f80f254ccc117ec86f9965e202ee2940453837280"
+    },
+    {
+      "family": "Golden Serif",
+      "weight": 400,
+      "style": "normal",
+      "file": "/usr/share/fonts/truetype/freefont/FreeSerif.ttf",
+      "sha256": "c57bf5de095af4e070c2acb5bce634316409ed4203b5098f4fdadb691dc7b3d2"
+    },
+    {
+      "family": "Golden CJK",
+      "weight": 400,
+      "style": "normal",
+      "file": "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
+      "sha256": "503af4a8b84d1079b8e2e358dc7f7a7fb8cb7a1f212f35eaef6782dbfc75a55e"
+    }
+  ],
   "chromium": "153.0.8010.12",
   "tolerance": 40,
   "maxDifferingFraction": 0.004

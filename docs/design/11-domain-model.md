@@ -42,7 +42,18 @@ type Slide = {
 
 type SlideObject = TextObject | ImageObject | ShapeObject;
 type Box = { x: number; y: number; w: number; h: number; rotation: number }; // 0..1920 x 0..1080 logical
-type TextObject = { id: Id; type: 'text'; box: Box; text: string; style: TextStyle; opacity: number };
+type TextObject = {
+  id: Id;
+  type: 'text';
+  box: Box;
+  text: string;
+  style: TextStyle;
+  opacity: number;
+  runs?: TextRun[]; // sparse styles over `text` (UTF-16 offsets), sorted, non-overlapping (design/27 §3.1)
+  paras?: (TextPara | null)[]; // paragraph styles: paras[i] ↔ text.split('\n')[i]; bullets, numbering, spacing
+  // `text` stays canonical (no bullets or numbers in it); what people read (cue labels, stage, bands,
+  // search) is readableText(o), which writes each paragraph's label ('(17)', '•') in front of it.
+};
 type TextStyle = {
   fontFamily: string;
   fontWeight: number;
@@ -57,6 +68,9 @@ type TextStyle = {
   outline?: { width: number; color: Rgba };
   shadow?: { dx: number; dy: number; blur: number; color: Rgba };
   fill?: { color: Rgba; radius: number };
+  // Rich text (design/27 §3.1), all optional: lineModel 'ordo' | 'office', insets (replace padding), wrap,
+  // autofit 'none' | 'shrink' with fitScale, justify, direction 'ltr' | 'rtl' | 'auto', lang, fallbackFonts,
+  // underline, glow. A text object with runs, paras or any of these is drawn by the rich text engine.
 };
 type ImageObject = {
   id: Id;
@@ -80,6 +94,9 @@ type ShapeObject = {
   opacity: number;
   radius: number;
 };
+
+// Every object may also carry origin?: { src; shapeId?; ph?; role?; group? } (where an imported PowerPoint
+// shape came from) and locked?: boolean (move, resize, delete and z-order only), design/27 §3.1.
 
 type Arrangement = { id: Id; name: string; sectionIds: Id[] };
 

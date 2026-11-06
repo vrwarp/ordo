@@ -184,6 +184,11 @@ export class LinkCore {
   private held: HeldKeys[] = [];
   private heldSet = new Set<string>();
   private inflight = new Set<string>();
+  /**
+   * Asset jobs sent and not answered, in the order sent: the asset worker runs them in order, so the first
+   * is the one it was drawing when it stopped answering.
+   */
+  private assetInflight = new Set<string>();
   private delivered = new Map<string, number>();
   /** Arm errors by key; the key is not tried again before `until`. */
   private errors = new Map<string, { error: string; at: number; until: number }>();
@@ -215,6 +220,13 @@ export class LinkCore {
   private quarantine = new Map<string, string>();
   private quarantineService = '';
   private fontFallbacks = new Set<string>();
+  /**
+   * Slide keys drawn in a fallback font, with the families (lower-case) that were not loaded: drawn again
+   * once the asset worker reports those families ready (a font added during the service, a retried load).
+   */
+  private fontFallbackKeys = new Map<string, string[]>();
+  /** The asset worker's last font report had failures: the next complete cache fill asks it to retry. */
+  private fontsFailed = false;
   private cacheRepairs = 0;
 
   // Media (mirrors of the host's slots)
@@ -497,6 +509,17 @@ export class LinkCore {
     this.assetPort = asset;
     render.onmessage = (ev: MessageEvent<FromRender>) => this.onRender(ev.data);
     asset.onmessage = (ev: MessageEvent<FromAsset>) => this.onAsset(ev.data);
+    // An asset worker restarted while drawing a job (it missed its heartbeat): that job counts as an arm
+    // failure, so a slide whose content blocks the worker is quarantined after a few restarts instead of
+    // being sent again until the supervisor gives the worker up for the rest of the service.
+    if (assetChanged && !firstStart) {
+      const stuck = this.assetInflight.values().next().value;
+      if (stuck !== undefined) {
+        this.diagLog(`asset worker restarted while drawing ${stuck.slice(0, 60)}`);
+        this.armFailed(stuck, 'the asset worker stopped answering while drawing it');
+      }
+    }
+    this.assetInflight.clear();
     // Content travelling through the old channels is lost: forget what was in flight and arm again.
     this.inflight.clear();
     for (const s of this.slots) if (s.waiter) this.inflight.add(s.waiter.key);
@@ -732,6 +755,7 @@ export class LinkCore {
         this.diagLog(`quarantine lifted for a new service (${this.quarantine.size} keys)`);
       this.quarantine.clear();
       this.fontFallbacks.clear();
+      this.fontFallbackKeys.clear();
       this.unavailable.clear();
       this.missingImages.clear();
       this.refreshKeys.clear();
@@ -998,6 +1022,8 @@ export class LinkCore {
   private job(job: AssetJob): void {
     if (!this.assetPort) return;
     this.inflight.add(job.key);
+    this.assetInflight.delete(job.key);
+    this.assetInflight.add(job.key);
     this.postAsset({ t: 'job', job });
   }
 
@@ -1469,6 +1495,11 @@ export class LinkCore {
         }
     }
     await this.rearmMissing();
+    // A font the asset worker could not read may be in the cache now: it retries the failed ones at once.
+    if (!failed && this.fontsFailed) {
+      this.fontsSig = '';
+      this.ensureFiles();
+    }
     this.requestSync();
   }
 
@@ -1681,6 +1712,7 @@ export class LinkCore {
           if (now - t > 250 && !this.heldSet.has(k)) this.delivered.delete(k);
         // A slide the renderer no longer holds needs no re-draw for its late images.
         for (const k of this.missingImages.keys()) if (!this.has(k)) this.missingImages.delete(k);
+        for (const k of this.fontFallbackKeys.keys()) if (!this.has(k)) this.fontFallbackKeys.delete(k);
         for (const k of this.refreshKeys) if (!this.has(k)) this.refreshKeys.delete(k);
         this.requestSync();
         this.queueView();
@@ -1712,6 +1744,7 @@ export class LinkCore {
     switch (m.t) {
       case 'done':
         this.inflight.delete(m.key);
+        this.assetInflight.delete(m.key);
         this.delivered.set(m.key, Date.now());
         this.errors.delete(m.key);
         this.unavailable.delete(m.key);
@@ -1721,6 +1754,10 @@ export class LinkCore {
             this.diagLog(`font "${f}" is not loaded: drawn in the fallback font`);
           }
         }
+        // Only slide keys can be drawn again in place (`refresh`).
+        if (m.fontFallbacks?.length && m.key.startsWith('sl|'))
+          this.fontFallbackKeys.set(m.key, m.fontFallbacks.slice(0, 20));
+        else this.fontFallbackKeys.delete(m.key);
         if (m.skippedImages)
           this.diagLog(`${m.key.slice(0, 60)}: ${m.skippedImages} image(s) over the cue budget`);
         if (m.missingImages?.length) {
@@ -1736,6 +1773,7 @@ export class LinkCore {
         return;
       case 'error': {
         this.inflight.delete(m.key);
+        this.assetInflight.delete(m.key);
         if (m.cause !== 'missing') this.diagLog(`arm ${m.key.slice(0, 60)}: ${m.error}`);
         const unavailable = m.cause === 'unavailable' || m.cause === 'missing';
         this.armFailed(m.key, m.error, m.cause === 'missing' ? 'missing' : unavailable);
@@ -1745,9 +1783,31 @@ export class LinkCore {
         return;
       }
       case 'fonts':
-        this.diagLog(`fonts loaded: ${m.loaded}${m.failed.length ? `, failed: ${m.failed.join(', ')}` : ''}`);
+        this.diagLog(
+          `fonts loaded: ${m.loaded}${m.failed.length ? `, failed: ${m.failed.join(', ')}` : ''}${m.ready?.length ? `; ready: ${m.ready.join(', ')}` : ''}`,
+        );
+        this.fontsFailed = m.failed.length > 0;
+        if (m.ready?.length) this.fontsReady(m.ready);
         return;
     }
+  }
+
+  /**
+   * Families became available in the asset worker (design/27 §10): they no longer count as fallbacks, and
+   * slides the renderer holds that were drawn without them are drawn again in place.
+   */
+  private fontsReady(families: string[]): void {
+    const ready = new Set(families);
+    for (const f of ready) this.fontFallbacks.delete(f);
+    let changed = false;
+    for (const [key, missing] of this.fontFallbackKeys) {
+      if (!missing.some((f) => ready.has(f))) continue;
+      this.fontFallbackKeys.delete(key);
+      if (!this.has(key)) continue;
+      this.refreshKeys.add(key);
+      changed = true;
+    }
+    if (changed) this.requestSync();
   }
 
   private clockOffset(): number {

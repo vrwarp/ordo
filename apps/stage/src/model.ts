@@ -12,6 +12,7 @@ import {
   type Look,
   nextTimeOfDay,
   type PropBox,
+  readableText,
   type Rgba,
   type Slide,
   type SlideContent,
@@ -162,12 +163,15 @@ export function resolveStageLook(lookId: string | undefined, ...sources: (Look[]
   return LOOK_STAGE;
 }
 
-/** The lyric text of a slide: its lyric object, else its first text box. */
+/**
+ * The lyric text of a slide: its lyric object, else its first text box, as people read it (automatic
+ * numbers and bullets written as text, so verse numbers show on the stage too).
+ */
 export function slideText(slide: Slide | undefined): string {
   if (!slide) return '';
   const lyric = slide.lyricObjectId ? slide.objects.find((o) => o.id === slide.lyricObjectId) : undefined;
-  if (lyric?.type === 'text' && lyric.text.trim()) return lyric.text;
-  for (const o of slide.objects) if (o.type === 'text' && o.text.trim()) return o.text;
+  if (lyric?.type === 'text' && lyric.text.trim()) return readableText(lyric);
+  for (const o of slide.objects) if (o.type === 'text' && o.text.trim()) return readableText(o);
   if (slide.scripture) return slide.scripture.text;
   return '';
 }

@@ -8,3 +8,6 @@ export * from './time.ts';
 export * from './color.ts';
 export * from './resolve.ts';
 export * from './goLive.ts';
+export * from './bullets.ts';
+export * from './readable.ts';
+export * from './textEdit.ts';

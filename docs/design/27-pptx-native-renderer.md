@@ -175,7 +175,7 @@ Source: a census of 4,897 shown slides of worship decks in the local validation 
 | `emit.ts` | IR → ordo objects with `pptxmedia:<n>` placeholder ids (numbered in first-use order, the part of each listed in `EmitResult.media`, so a long part name never makes an id the schema refuses), plus a per-slide digest. |
 | `rendercopy.ts` (M3) | The minimal deck for LibreOffice (§5). Replaces the main-thread `pptxForRendering`. |
 | `index.ts` | `parseDeck(src, opts): DeckScene`; `emitSlides(scene, opts): EmitResult`. |
-| `packages/domain/src/readable.ts` (M2) | `readableText(o)`: `TextObject.text` with automatic numbers and bullets written as text, for the stage, bands, labels and search. `textScripts(text)` for the font scan. |
+| `packages/domain/src/readable.ts`, `bullets.ts` (M2) | `readableText(o)`: `TextObject.text` with automatic numbers and bullets written as text, for the stage, bands, labels and search. `textScripts(text)` for the font scan. `bullets.ts`: `paraLabels(o)` and the number counter (port of `annotate.ts` `autoNumber`) that the renderer's bullets draw too, and the Wingdings/Symbol table (`symbolFontChar`) for the converter. |
 | `packages/domain/src/size.ts` (M3) | JSON size estimates for slides, presentations and resolved playlists (§3.4). |
 | `packages/renderer/src/text/` (M2) | `itemize.ts`, `breaks.ts` (UAX#14 via npm `linebreak` 1.1.0, MIT; 2.0.0 was days old when chosen; `Intl.Segmenter`), `bidi.ts` (npm `bidi-js` 1.1.0, MIT), `measure.ts`, `lines.ts`, `office.ts` (LibreOffice line model and autofit, ported from `pptx-render/src/page.ts:202-426`), `bullets.ts` (port of `annotate.ts` `autoNumber`), `paint.ts`, `rich.ts`, `fonts.ts` (the resolver, §10). |
 | `packages/renderer/src/content.ts` (M3) | `slideContent()`, the one fallback rule (§5). |
@@ -644,6 +644,8 @@ export type Seg = { start: number; end: number; x: number; w: number; run: numbe
 export type LaidLine = { para: number; top: number; baseline: number; height: number; x: number; w: number; segs: Seg[];
   extraPerSpace: number; bullet?: { text: string; x: number; font: string; sizePx: number; color: Rgba } };
 export type RichLayout = { lines: LaidLine[]; fontScale: number; spacingScale: number; overflow: boolean; ink: Box };
+export interface FontEnv { font(req: FaceRequest): string; readonly generation: number }  // §10; a new generation re-lays out
+// FaceRequest = { family, fallbacks, weight, italic, smallCaps, sizePx, script }; packages/renderer/src/text/README.md
 export function layoutRich(m: Measurer, o: TextObject, env: FontEnv): RichLayout;       // logical px, pure, memoised
 export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: number, env: FontEnv): void;
 ```
@@ -651,44 +653,47 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
 **Dispatch.**
 - `drawObject` sends a TextObject to the rich engine when it has `runs`, `paras` or any new style field. Otherwise legacy `drawText` runs **byte for byte as today**; the existing goldens guard it.
 - The rich engine's `'ordo'` line model reproduces `drawText`'s vertical metrics: pitch `lineHeight × size`, baseline at `(pitch − size)/2 + 0.8 × size` (`text2d.ts:178-180`). Turning on RTL or shrink-to-fit for an existing box therefore does not move its lines vertically.
+- In both models a paragraph's `lineSpacing` is a multiple of single spacing (1.2 × F) and `lineSpacingPx` the pitch; a paragraph with neither takes the box's `lineHeight`.
 - `'office'` uses LibreOffice's model.
 
 **Bands, stage and readable text.**
 - Lyric-only bands and the next-slide band draw `readableText` of the lyric object in the look's style.
-- When the source object is rich (or the text contains strong RTL characters), the band goes through `layoutRich` with the look's style and the object's `paras` direction.
+- When the source object is rich (or the text contains strong RTL characters), the band goes through `layoutRich` with the look's style and the object's `paras` direction; a soft line stays soft, so it takes its paragraph's direction as on the slide. It shrinks no further than half size, as `drawText`'s bands do, so a Hebrew lyric shrinks like a Latin one.
 - Legacy `drawText` sets `ctx.direction` per paragraph only when that paragraph contains a strong RTL character (first strong character wins). LTR text, and so every existing golden, is unchanged.
 - The stage renders text with CSS `unicode-bidi: plaintext`, so each paragraph takes its direction from its content whatever the stage look's style says.
 
 **Determinism.**
 - Layout always runs at logical scale: `measureText` at the logical font size, positions in logical px.
-- Painting applies `ctx.setTransform(scale, 0, 0, scale, 0, 0)` and draws each segment at its reference x.
+- Painting applies `ctx.scale(scale, scale)` on top of the caller's transform (thumbnails translate first, the editor adds devicePixelRatio) and draws each segment at its reference x.
 - Line breaks, autofit results and positions are therefore identical at 960, 1920 and 3840 wide, in the editor and in thumbnails. Today they are not: `text2d.ts:84-101` measures at device scale.
 - Advances at device size can differ from the reference × scale by a fraction of a pixel. That residue stays inside a segment and never moves a break.
 
 **Pipeline**
-1. **Itemize.** Paragraphs are the `\n` pieces; `soft` continues the previous paragraph. Style runs are runs ∩ paragraphs.
-2. **Bidi.** UAX#9 per paragraph (bidi-js), run only when strong RTL characters exist or a direction is set. The base direction comes from `paras[i].rtl`, else `style.direction`, else `auto` (first strong character).
+1. **Itemize.** Paragraphs are the `\n` pieces; `soft` continues the previous paragraph: it takes its style, spacing and direction, overriding only what its own `paras[i]` sets, and has no bullet and no space between them. Style runs are runs ∩ paragraphs. An empty paragraph's end mark is the run covering its `\n`; the last paragraph, which has none, takes the run covering the `\n` before it.
+2. **Bidi.** UAX#9 per paragraph (bidi-js), run only when strong RTL characters exist or a direction is set. The base direction comes from `paras[i].rtl`, else `style.direction`, else `auto` (first strong character of the whole soft-break chain, which is one PowerPoint paragraph). bidi-js classifies UTF-16 units, so astral characters are passed as two BMP characters of their class.
 3. **Breaks.**
-   - UAX#14 opportunities over the logical text. U+00A0, U+202F and U+2060 never break, which fixes the verified 'Dieu !' split.
+   - UAX#14 opportunities over the logical text. U+00A0, U+202F and U+2060 (also U+2007, U+2011 and U+FEFF) never break on either side, even after a space, which fixes the verified 'Dieu !' split.
    - SA scripts (Thai, Lao, Khmer, Myanmar) break at `Intl.Segmenter` word boundaries; CJK follows the ID/CL/NS classes.
-   - Emergency breaks fall only on grapheme boundaries (`Intl.Segmenter` grapheme), so Tamil 'க்ஷி' stays whole.
-4. **Segments.** A segment is a maximal substring with one style run, one bidi level and no break opportunity inside.
-   - A style boundary *inside* a word of a joining script (Arabic, Syriac, N'Ko, Mongolian) is drawn with U+200D on both sides of the cut, which keeps medial and final forms. Widths are measured the same way.
-   - Inside an Indic syllable cluster, the cut moves to the cluster end (logged).
-5. **Measure.** `measureText` with `ctx.font` set to the resolved internal-name stack (§10), and `ctx.direction`, `ctx.lang` and `ctx.letterSpacing` set per segment. The trailing spacing Canvas adds after the last character is subtracted. Widths go into an LRU cache (20,000 entries, key `font|dir|lang|spacing|text`). `measureText` and `fillText` always see the same string in the same state.
+   - Emergency breaks fall only between clusters: `Intl.Segmenter` graphemes joined across a conjunct-forming virama, so Tamil 'க்ஷி' stays whole. Graphemes alone do not keep it whole: UAX#29 GB9c joins conjuncts in six Indic scripts only, not Tamil, Kannada or Sinhala.
+   - An emergency break costs what its line holds, never what is left of the word: the cut is found by galloping from the piece's start (1, 2, 4, ... clusters, then a bisection), cluster boundaries are found only that far (one list per piece serves every line and autofit step), and the rest of the word is carried unmeasured until it may fit. A 10,000-letter word in a narrow box is laid out in linear time (`rich.fuzz.test.ts`).
+4. **Segments.** A segment is a maximal substring with one style run, one bidi level and no break opportunity inside. It is also cut between two scripts that need different fallback faces (Han and kana count as one), so each segment asks for one.
+   - A style boundary *inside* a word of a joining script (Arabic, Syriac, N'Ko, Mongolian, Adlam) is drawn with U+200D on both sides of the cut when the letters on both sides join (by their ArabicShaping joining types: none after alef, dal or waw), which keeps medial and final forms. Widths are measured the same way.
+   - Inside a cluster (an Indic syllable cluster, a letter with its marks, an emoji sequence), the cut moves to the cluster end (counted in `PreparedPara.movedCuts`).
+5. **Measure.** `measureText` with `ctx.font` set to the resolved internal-name stack (§10), and `ctx.direction`, `ctx.lang` and `ctx.letterSpacing` set per segment. The trailing spacing Canvas adds after the last character is subtracted. Widths go into an LRU cache (20,000 entries, key `font|dir|lang|spacing|text`) for strings of at most 256 UTF-16 units, so a hostile word never leaves megabytes of keys in a worker. `measureText` and `fillText` always see the same string in the same state.
 6. **Lines.** Greedy fill.
    - Available width = box − insets − marL − first-line indent; a hanging bullet sits in the negative indent and its box is at least −indent wide.
    - Trailing spaces hang.
    - `wrap:false` never wraps; a line grows from its alignment (centre both ways, right leftwards, left rightwards).
+   - A right-to-left paragraph mirrors its start: indents and the bullet are on the right and its trailing space hangs on the left. `align` stays visual.
    - Then UAX#9 L2 visual reordering between segments. The browser orders glyphs within a segment.
 7. **Line model `'office'`** (LibreOffice, measured in the pptx-render commits; `page.ts:202-353`).
-   - F = the size of the paragraph's main run: its first run without a baseline shift, else its first run, else the end mark, after autofit.
+   - F = the size of the paragraph's main run: its first run without a baseline shift, else its first run, else the end mark, after autofit. A larger unshifted run raises F for its own line (LibreOffice sizes each line by its portions), so lines never overlap.
    - Single spacing: pitch 1.2F, first baseline F below the line top.
    - Proportional p ≠ 1: h = 1.2F·p·k, where k is the autofit spacing scale. The baseline is F + (h − 1.2F) when p > 1, else min(F, 0.8h).
    - Exact spacing P: h = P·k.
    - spcBef/spcAft are scaled by k and not drawn before the first paragraph or after the last.
    - An empty paragraph takes its end-mark size; a trailing `a:br` adds a line.
-   - Superscript and subscript are drawn at 0.58 × size, shifted by baseline × size, without growing the line.
+   - Superscript and subscript are drawn at 0.58 × size (at least 4 px), shifted by baseline × size, without growing the line.
 8. **Align.**
    - justify spreads extra space over the inter-segment spaces of non-last lines; distribute also justifies the last line;
    - there is no kashida (a known gap for Arabic);
@@ -698,11 +703,13 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
     - Use `fitScale` while the text fits at that scale.
     - Otherwise run LibreOffice's search (`page.ts:355-402`): 10 bisection steps on the font %, quantised `floor(18·mid/100·10)/10/18·100`, spacing tries 100/90/80%, 0.5 mm slack, run size `max(1, round(round(pt)·font%))`. Because the text overflows at the stored scale, the result can only be smaller, so an edit never makes text jump larger.
     - During the search, widths scale linearly from one measure at the base size. Only the final size is re-measured.
+    - Points are 2 logical px (both standard deck sizes). The `'ordo'` model scales run sizes exactly and has no spacing scale.
     - Text edits keep `fitScale`; only 'Re-fit text' clears it (§11).
 11. **Bullets.**
     - Character bullets use their own font and size. Wingdings/Symbol PUA codes are mapped to Unicode at import (0x6C→●, 0x6E→■, 0xA7→▪, 0xD8→➢, 0xFC→✓, 0x71→❑, 0x76→❖, Symbol 0xB7→•; U+F0xx offset stripped).
     - Automatic numbers keep a counter per level, keyed by type:startAt (`annotate.ts:2122-2137`). Labels: arabic, roman, alpha and circled ①-⑳, in period, ParenR, ParenBoth and plain forms; `(17)` for verse numbers. The same counter code serves `readableText`.
     - An empty paragraph draws no bullet and does not advance the counter.
+    - A bullet is drawn at `sizePct` × F within 4-1,000 px, in its paragraph's direction and its first run's language, so a Hebrew or Arabic number reads as the band's `readableText` writes it ('.1' for '1.' in a right-to-left paragraph). It takes the first run's shadow, outline and glow (passes 2-4) and its colour, as PowerPoint gives it the first run's character formatting.
 
 **Paint passes.** In today's order, under the scale transform:
 1. text fill box (`style.fill`) and highlight;
@@ -880,8 +887,18 @@ The exact `'lighter'` crossfade (`canvas2d.ts:60-85`) is unchanged.
   4. the original family name (last resort, reported; the editor's PowerPoint card asks for an upload);
   5. a generic family.
 - The legacy `fontString` uses the same resolver when one is installed.
-- The asset worker calls `self.fonts.check` per segment and reports text that no shipped face covers in `health.fontFallbacks`, with its script.
+- The asset worker reports text that no shipped face covers in `health.fontFallbacks`, with its script (M3, with the script fallbacks). `self.fonts.check` cannot do it: it says whether the matching faces have loaded, not whether one has the glyphs. The text is measured with the shipped stack before two different generic families instead; the widths differ where a glyph falls through.
 - Remove `'inter'` from `FALLBACK_FAMILIES` (`raster.ts:139-148`) and bundle Inter, so the default font is shipped like any other.
+
+*As built (M2, `packages/renderer/src/text/fonts.ts`):*
+- The original family name enters a stack only while its faces have not loaded, and the generic step is ordo's default face (Inter, once shipped) followed by today's chain `"Inter", "Segoe UI", Arial, sans-serif`, so an object whose family has not loaded draws as it did before the resolver.
+- No internal name is handed out twice: a face set that comes back gets a salted name.
+- A face that fails is left out of its family's round, which loads without it; it is retried with backoff (2 s doubling to 5 min), at once on the next sync, and after each complete cache fill of the output. A retry loads the failed face alone first, so a broken face in a 51-face family costs one read per retry, not 51. Families a later list leaves out keep their faces (content on screen may use them) but are no longer retried.
+- Reading and parsing a face time out after 15 s, and a sync never waits for a background retry already running (its result is announced as a late change), so a half-open read cannot hold up the asset worker's job queue.
+- When faces become available, the asset worker reports their families `ready`, and the link draws again in place the held slides that fell back for them. The thumbnail worker's client drops its cached thumbnails; the editor redraws.
+- goLive matches family names case-insensitively, as CSS and the resolver do.
+- `'inter'` left `FALLBACK_FAMILIES` in M2: until M3 bundles Inter, an output whose library has no Inter reports it as a fallback.
+- `pnpm --filter @ordo/renderer late-font` checks in headless Chromium, in a worker and on a page, that text drawn before its face loaded is drawn with that face on the next draw. In the worker it also re-runs the probe: a family measured before its face was added keeps its fallback width (on a page it takes the face).
 
 **Bundled substitutes and script fallbacks (M3).**
 - The hub registers a fixed list of OFL/Apache faces installed by the Dockerfile as `Font{source:'bundled'}` (the value exists and is unused, `schemas.ts:272`), idempotently by hash:
@@ -947,7 +964,8 @@ The extensions, in priority order (M4 unless noted):
 
 1. **Fix text without losing formatting.**
    - The textarea stays.
-   - `editText(obj, next)` diffs the common prefix and suffix. Inserted text takes the style of the character before it (or after it at offset 0). Runs inside a deleted range are trimmed. Paragraph styles are inserted or removed with the `\n` count; a new line copies the style of the paragraph it splits.
+   - `editText(obj, next)` diffs the common prefix and suffix. Text that replaces a selection takes the style of the text it replaces (its first character), so a retyped bold date or raised verse number stays bold or raised. Text typed at a paragraph's start takes the style of that paragraph's first character, or in an empty paragraph its end mark; anywhere else, the style of the character before it. Runs inside a deleted range are trimmed. Paragraph styles are inserted or removed with the `\n` count; a new line copies the style of the paragraph it splits.
+   - Soft paragraphs (a:br lines) stay lines of their PowerPoint paragraph: deleting a paragraph's first line leaves its remaining soft lines that paragraph's style (bullet, number, indents, spacing), and a line split off a soft line by Enter takes the paragraph's style without `soft`, so Enter always starts a new paragraph or stanza.
    - It keeps `fitScale` while the edited text still fits at that scale. A one-character fix therefore never changes the text size; overflowing text shrinks (§6 step 10). 'Re-fit text' in TextStyleEditor clears `fitScale` on request.
    - This is what makes a typo fix or a date change safe in the 20-27% of real worship text bodies that mix styles.
 2. **Format a selection.** A bar over the textarea: Bold, Italic, Underline, colour (swatches from the deck's theme colours), Size ±, Superscript (verse numbers), Clear formatting.
@@ -1054,6 +1072,7 @@ The extensions, in priority order (M4 unless noted):
 
 **Numbers.** Every number is finite and clamped:
 - slide side 1-51,206,400 EMU; logical coordinates ±100,000; box span ±2× the canvas; font 1-4,000 pt in the parser, 4-1,000 px stored;
+- per text object at most 16 distinct run and bullet families and 64 distinct size scales (`FontBudget` in `clamp.ts`, the same in `sanitizePresentation`): later families take the box's, later scales the nearest kept one. Each new family name costs the browser a platform font lookup (about 1 ms in Chromium), so 2,000 runs with 2,000 families would cost seconds per object. Family names lose every control character (a form feed is a CSS newline that voids the whole `ctx.font` assignment);
 - adj ±1e7; ≤ 256 guides per shape; ≤ 4,096 path points per path and 64k per slide; ≤ 16 gradient stops;
 - colour maths clamped to 0..1; NaN and Infinity become 0.
 
@@ -1210,7 +1229,7 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
 - The converter emits runs, paras, bullets (symbol mapping), superscripts, rtl/lang, autofit with `fitScale`, insets, wrap, `lyricObjectId` and `fallbackFonts` (including script fallbacks).
 - Golden skip-trap fix.
 
-**Files.** `packages/domain/src/schemas.ts`, `resolve.ts`, `readable.ts`, `cues.ts`; `packages/importers/src/sanitize.ts`; `packages/renderer/src/text/*`, `text2d.ts`, `clamp.ts`, `raster.ts`, `golden/page.ts`, `golden/run.ts`; `apps/output/src/asset.worker.ts`, `link-core.ts`; `apps/operator/src/workers/thumb.worker.ts`, `services/fonts.ts`, `lib/search.ts`, `views/editor/SlideCanvas.tsx`; `packages/pptx-scene/src/text.ts`, `emit.ts`; root `package.json` (linebreak, bidi-js).
+**Files.** `packages/domain/src/schemas.ts`, `resolve.ts`, `readable.ts`, `bullets.ts`, `cues.ts`; `packages/importers/src/sanitize.ts`; `packages/renderer/src/text/*`, `text2d.ts`, `clamp.ts`, `raster.ts`, `golden/page.ts`, `golden/run.ts`; `apps/output/src/asset.worker.ts`, `link-core.ts`; `apps/operator/src/workers/thumb.worker.ts`, `services/fonts.ts`, `lib/search.ts`, `views/editor/SlideCanvas.tsx`; `packages/pptx-scene/src/text.ts`, `emit.ts`; root `package.json` (linebreak, bidi-js).
 
 **Exit.**
 - Legacy goldens are byte-identical, and the new rich goldens pass, including the Hebrew band.

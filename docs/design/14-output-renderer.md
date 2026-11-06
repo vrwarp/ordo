@@ -194,7 +194,11 @@ Arm sequence for a cue (asset worker, then render worker):
    fill, padding, word wrap to the box, alignment, outline via `strokeText`, shadow via
    canvas shadow properties, then `transferToImageBitmap`. Fonts come from the service
    cache and are loaded into the worker's `FontFaceSet` at manifest time, so arm never
-   waits on a font.
+   waits on a font. The font resolver (design/27 §10) registers each family's faces under
+   an internal name never resolved before, so a face that loads late (a failed read
+   retried with backoff, a font added during the service) is used by the next draw
+   without restarting the worker; the worker then reports the family `ready` and the link
+   draws again in place the held slides that fell back for it.
 3. For images, `createImageBitmap` from the OPFS blob (cached bitmaps by hash and size
    are reused).
 4. Post bitmaps to the render worker, which uploads them into pre-allocated texture
@@ -233,6 +237,16 @@ occupies; the render worker composites it like any image. Word wrap uses canvas
 `measureText` with a greedy algorithm; outline is `strokeText` under `fillText`; shadow
 uses canvas shadow properties on a separate pass to avoid outlining the shadow. The same
 rasterizer runs in the operator's thumbnail worker so previews match outputs.
+
+Text objects with runs, paragraph styles or a rich style field go through ordo's text engine
+(`packages/renderer/src/text`, design/27 §6): laid out in logical px whatever the output size, then
+painted under the scale transform in the same pass order (fill box and highlights, shadows, glow,
+outline, fill, underline and strike, bullets). Every other text object is drawn by `drawText` as above,
+byte for byte, except that a paragraph containing a strong right-to-left character is measured and drawn
+with `ctx.direction` set to its first strong character's direction. Lyric-only, next-slide and
+lower-third bands go through the engine when the source object is rich, the text has a strong
+right-to-left character or the look's style has a rich field: the source's readable text in the look's
+style, shrunk to fit, with the source paragraphs' directions.
 
 A hidden DOM text layer exists for a diagnostics overlay (Ctrl+Shift+D) only.
 
@@ -319,11 +333,13 @@ distinct images per slide, finite numbers everywhere, unknown objects dropped; l
 the main look. `planFrame`/`planPreview` carry clamped copies (memoised by identity) and the rasterizer
 re-applies the cheap clamps and culls lines far outside the canvas. The asset worker bounds the decoded
 image bytes per cue (192 MiB) and reports text in a font family that is not loaded
-(`health.fontFallbacks`). Property tests (`plan.fuzz.test.ts`) feed random slides and looks within and
+(`health.fontFallbacks`; run, bullet and fallback fonts count, and so does Inter, which ships like any
+other face). Property tests (`plan.fuzz.test.ts`) feed random slides and looks within and
 far beyond the clamps: never throws, output within bounds.
 
 Arm failures are classified (review 2026-11-04 item 3). A deterministic failure (the image does not
-decode, the raster throws, the cached video does not play) counts toward quarantine: a slide, image or
+decode, the raster throws, the cached video does not play, the asset worker stops answering while it
+draws the key and is restarted) counts toward quarantine: a slide, image or
 media key whose arm fails that way three times within a minute (`ErrorBudget`) is quarantined for the
 rest of the service: never flipped to (the layer shows nothing), never retried, listed in
 `health.quarantined`; a new service (or End service) lifts it. A quarantined key stays required, so the
