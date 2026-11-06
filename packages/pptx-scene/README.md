@@ -284,6 +284,16 @@ Done (design/27 §3.1, §3.2, §4 "Text bodies", §6, §11 "Mapping"):
   `(17)` numbering from startAt, mixed runs, Arabic right to left, a:br, end marks, normAutofit with a
   stored scale, scripts and fallbacks, the previous release's schema) and the lyric rules in `emit.test.ts`.
 
+Measured (`--engine native --lo-compat`, LibreOffice 24.2 pictures, mean SSIM per deck; pptx-preview from
+the validation suite's scores): the sermon decks 0.825 (M1) → 0.944, every deck above pptx-preview (0.927
+mean); without `--lo-compat` 0.932, one deck 0.05 below where PowerPoint's stored shrink scale fits ordo's
+box and LibreOffice re-fits smaller. Worship shard 0: 0.693 → 0.795 (pptx-preview 0.765), shard 2: 0.719 →
+0.832 (0.765); on decks made only of T1 and T2 slides 0.840 and 0.831 against pptx-preview's 0.827 and
+0.791. Shard 2's feature decks (pptx-preview on the same decks): lnSpcPct 0.782 (0.578), normAutofitScaled
+0.780 (0.544), rtl 0.846 (0.835), rtlScriptText 0.889 (0.852), superSub 0.648 (0.558). Two decks of one
+template lose 0.04 against M1: LibreOffice draws their (glowing) text at about 55 % of its size, which no
+ordo rule explains yet.
+
 Not done: hyperlink colours (PowerPoint draws linked runs in the theme's hlink colour), symbol-font
 characters inside the text itself (`a:sym`), `origin` and the `role: 'translation'` of the second
 language box (M3, with the rest of `ObjectOrigin`), vertical text (residual until M8).
