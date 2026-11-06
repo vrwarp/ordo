@@ -182,7 +182,7 @@ export type Itemized = {
 
 /** UAX#9 result for one paragraph (bidi.ts). */
 export type BidiPara = {
-  /** Paragraph embedding level: 0 = LTR, 1 = RTL. */
+  /** Paragraph embedding level, 'auto' resolved: 0 = LTR, 1 = RTL (where its lines start, §6 step 8). */
   level: 0 | 1;
   /** Level per UTF-16 unit of the paragraph (index = offset - para.start), or null when every unit is at `level`. */
   levels: Uint8Array | null;
@@ -209,6 +209,8 @@ export type PreparedPara = {
   bidi: BidiPara;
   /** Logical order. Empty for an empty paragraph. */
   pieces: Piece[];
+  /** Style cuts that fell inside a cluster and moved to its end (§6 step 4), for the drawers to report. */
+  movedCuts?: number;
 };
 
 /** A paragraph's bullet or number before layout (bullets.ts); lines.ts sizes and places it. */

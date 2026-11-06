@@ -28,16 +28,44 @@ const n = (lo: number, hi: number) =>
 const int = (lo: number, hi: number) =>
   fc.oneof({ weight: 4, arbitrary: fc.integer({ min: lo, max: hi }) }, { weight: 1, arbitrary: wild });
 const color = fc.record({ r: n(0, 255), g: n(0, 255), b: n(0, 255), a: n(0, 1) });
+// Pieces that exercise every rule of breaks, bidi and segments: no-break spaces, SA scripts, conjuncts,
+// joining letters, explicit embeddings and isolates, astral characters and lone surrogates.
+const pieces = [
+  'word',
+  ' ',
+  '\n',
+  '\u{00A0}',
+  'שָׁלוֹם',
+  'مرحبا',
+  'க்ஷி',
+  '漢字',
+  '😀',
+  '\t',
+  'x'.repeat(60),
+  'ภาษาไทย',
+  'မြန်မာ',
+  '\u{202F}',
+  '\u{2060}',
+  '\u{202E}',
+  '\u{202C}',
+  '\u{2067}',
+  '\u{2069}',
+  'e\u{0301}',
+  'ب\u{0640}ب',
+  '\u{200D}',
+  '١٢٣',
+  '𞤀𞤁',
+  'a-b',
+  '「」、。',
+  String.fromCharCode(0xd800),
+  String.fromCharCode(0xdc00),
+  '\u{2028}',
+  '\r',
+];
 const text = fc.oneof(
   fc.string({ maxLength: 120 }),
-  fc
-    .array(
-      fc.constantFrom('word', ' ', '\n', ' ', 'שָׁלוֹם', 'مرحبا', 'க்ஷி', '漢字', '😀', '\t', 'x'.repeat(60)),
-      {
-        maxLength: 80,
-      },
-    )
-    .map((a) => a.join('')),
+  fc.string({ unit: 'binary', maxLength: 60 }),
+  fc.array(fc.constantFrom(...pieces), { maxLength: 80 }).map((a) => a.join('')),
   fc.nat({ max: 3000 }).map((k) => 'word '.repeat(Math.ceil(k / 5)).slice(0, k)),
 );
 const run = fc.record(
