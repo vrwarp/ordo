@@ -188,10 +188,16 @@ real render engines draw the same layer stacks, one with the WebGPU compositor a
 2D, and a CPU reference composes them with `planeSample` (`packages/renderer/src/scene.ts`). Cases
 cover scene stacks (a video in its box with masks, crops, rotation, flips and an over), crossfade
 midpoints of every source pair, a stale slot generation and a slot without a frame (both must show
-the poster, never black), and the legacy bitmap and video paths. WebGPU must match Canvas 2D within
+the poster, never black), the legacy bitmap and video paths, and since M7 tight sprites at their
+offsets, crossfades between a full-frame and a tight layer, scenes with a tight base and over,
+opaque layers (the replace pipeline, a layer that hides everything under it), and strip uploads:
+with a budget of 24 rows a frame, every frame while new content uploads must be the previous
+picture whole and the flip must wait for the last strip. WebGPU must match Canvas 2D within
 40 per channel on all but 0.4 % of the pixels and the reference within 8 on all but 0.05 %.
 Failing cases write their three images to `test-results/compositor-golden/` (`--images` writes
-every case).
+every case). `sprite.browser.test.ts` (vitest, headless Chromium) draws bands, rich and legacy
+text, shapes, the lower third, props and scene parts as tight sprites and full-frame and requires
+each sprite placed at its offset to be the full-frame picture.
 
 ## CI
 

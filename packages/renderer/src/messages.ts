@@ -72,13 +72,20 @@ export type AssetToRender = {
   key: string;
   /** SRC_BITMAP, or SRC_SCENE for a slide whose video plays in its box (design/27 §7.2). */
   kind: number;
-  /** The picture; for SRC_SCENE the base. */
+  /** The picture; for SRC_SCENE the base. Full-frame, or a tight sprite at `x`, `y` (design/27 §7.3). */
   bitmap: ImageBitmap;
+  /** Device px offset of a tight `bitmap` in the frame (absent: 0, a full-frame bitmap). */
+  x?: number;
+  y?: number;
+  /** The full-frame `bitmap` is opaque: drawn without blending, hiding the layers under it (StackContent). */
+  opaque?: boolean;
   cueIndex?: number;
   /** A fresh copy of content the renderer may already show (a slide re-drawn with an image that arrived). */
   refresh?: boolean;
-  /** SRC_SCENE: objects above the video that overlap it, if any. */
+  /** SRC_SCENE: objects above the video that overlap it, if any (full-frame, or tight at overX, overY). */
   over?: ImageBitmap | null;
+  overX?: number;
+  overY?: number;
   /** SRC_SCENE: the video plane (PLANE_FLOATS floats, scene.ts). */
   plane?: Float32Array;
   /** SRC_SCENE: the media slot playing the clip, and the slot generation it was loaded under. */

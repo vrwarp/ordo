@@ -175,21 +175,39 @@ without the clip playing, from source and from prepared pictures.
 ```
 every rAF (render worker, via requestAnimationFrame on the OffscreenCanvas's worker scope):
   now = hubNow()
-  if pendingFlip && now + frameMs/2 >= pendingFlip.at: swapStacks(); pendingFlip = null
+  for each layer: if pendingFlip && now + frameMs/2 >= pendingFlip.at && armed is ready: swap; pendingFlip = null
+  upload, within this frame's budget, the content of flips due now that is not ready; tick those layers again
   for each video slot: present the newest frame due at now + frameMs/2 (frame selection, below)
-  upload the bitmaps this frame samples that changed (live stacks, outgoing ones while fading)
+  upload what this frame samples that changed (a refresh of the live copy, content after a device loss)
   for each video source drawn: importExternalTexture (zero copy)
-  encode one render pass: for each layer in [background, slide, lowerThird, media, props]:
-     draw layer A (outgoing) and layer B (incoming) with crossfade weight t, if transitioning
+  encode one render pass, from the top-most opaque full-frame layer at full weight (else from the
+  background): for each layer in [background, slide, lowerThird, media, props]:
+     scissor to what its sources cover; draw layer A (outgoing) and B (incoming) with crossfade weight t
   submit
-  upload the rest that changed (content armed for a coming flip), after the submit
+  upload the rest that changed (content armed for a coming flip) in strips, within the frame's budget
   record presented++, and missed += max(0, round((now - lastFrameAt)/frameMs) - 1)
 ```
 
 - Every buffer, bind group, pipeline and sampler is created at startup or at arm time.
-  The loop body creates no JS objects; state lives in pre-allocated typed arrays.
-- All pipeline variants (opaque texture, alpha texture, external video texture, solid
-  colour, crossfade pairs) are compiled at startup, before the window reports ready.
+  The loop body creates no JS objects; state lives in pre-allocated typed arrays (hot-lint).
+- All 14 pipelines (single sources t, e, v; the nine crossfade pairs; the test-pixel solid; the
+  unblended single t for an opaque layer, `replace-t`) are compiled at startup, before the window
+  reports ready.
+- Every draw is a fullscreen triangle cut by a scissor rect to what its sources can cover (a tight
+  sprite's rect, a contained video's fitted rect, a scene's base and over rects and its video's
+  frame, the union of both sides of a crossfade), so a lyric band costs fragments for its band only.
+- Uploads (design/27 §7.3) never run in `draw` and never stall a frame: what a frame samples is
+  uploaded before it in full (a `refresh` of the live copy, which is on screen and must not tear);
+  armed content after the frame's submit, in horizontal strips (`copyExternalImageToTexture` with a
+  source and destination origin), the content a pending flip waits for first, at most a quarter of a
+  frame's bytes per frame (`UPLOAD_FRAME_SHARE`) and no further strip once the frame's copies took
+  4 ms of the render worker's CPU time (`UPLOAD_BUDGET_MS`). A stack is `ready` once its last strip
+  is in; a flip to content that is not ready waits (counted as a late flip) and the previous picture
+  stays whole, since strips only ever go into the armed stack's texture. Content armed a cue ahead
+  is uploaded long before its GO; content that arrives on its flip's frame and fits the budget is
+  uploaded right after the tick and flips on time. On a device loss the rebuilt compositor uploads
+  the live stacks whole before its first draw and the armed ones in strips again
+  (`LayerStack.resetUploads`). Canvas 2D draws bitmaps directly: it has no uploads and no gating.
 - `missed` is derived from rAF gaps. The frame period is learned from the median of the
   first 16 gaps (so a 30 Hz or 50 Hz display is not counted as missed frames) and tracked
   with an EMA of on-time gaps; a sustained run of gaps at twice the period means the
@@ -203,20 +221,33 @@ every rAF (render worker, via requestAnimationFrame on the OffscreenCanvas's wor
 
 ## Layer stacks and arming
 
-A layer stack is the fully prepared set of GPU resources for one cue under this output's
-look: textures for every object, the video source for a background or media, the layout
-of quads, and the transition parameters. The renderer holds exactly two stacks per
-layer: `live` and `armed`. Arming builds the `armed` stack; GO swaps pointers at the
-scheduled frame and begins the crossfade; the old `live` becomes free for the next arm.
+A layer stack is what one layer shows for one cue under this output's look: one bitmap (a
+picture of everything the layer draws: ADR 0013), a video slot, or a scene (a base bitmap, the
+slot's video through a plane and an over bitmap, design/27 §7.2), plus the transition. A bitmap
+is full-frame or a tight sprite: the bounding box of what was drawn and its offset in the frame
+(design/27 §7.3). WebGPU keeps two output-sized textures per layer (one per stack, plus two
+over textures once a scene with an over is offered) and uploads each stack's bitmaps into its
+texture at their offsets; nothing is allocated per object. The renderer holds exactly two
+stacks per layer: `live` and `armed`. Arming builds the `armed` stack; GO swaps pointers at the
+scheduled frame, once the armed stack is uploaded, and begins the crossfade; the old `live`
+becomes free for the next arm.
 
 Arm sequence for a cue (asset worker, then render worker):
 
 1. Resolve the cue under the look: which objects are drawn and with which style
    (`authored` draws every object; `lyricOnly` builds a synthetic text object from the
    lyric box text and the look's band and style, plus the next slide's text if configured).
-2. For each text object, rasterize to an `OffscreenCanvas` 2D at output resolution:
-   fill, padding, word wrap to the box, alignment, outline via `strokeText`, shadow via
-   canvas shadow properties, then `transferToImageBitmap`. Fonts come from the service
+2. Rasterize the layer, every object of it in z order, onto the asset worker's CPU-backed
+   `OffscreenCanvas` 2D at output resolution (text: fill, padding, word wrap to the box,
+   alignment, outline via `strokeText`, shadow via canvas shadow properties; rich text
+   through the text engine), then `transferToImageBitmap`. The canvas is the size of what
+   the layer reaches (`slideReach` and the other reaches of `sprite.ts`: each object as its
+   drawer lays it out, its effects and one em of glyph overhang, turned with its box), cut
+   to the frame and drawn at that offset; when that is most of the frame (over 80 %), or
+   unknown (a slide's PowerPoint picture, an object with fields the reach does not know, a
+   logo), the canvas is the frame. A drawing that touches the sprite's edge ring is drawn
+   again full-frame, so a sprite never cuts what is drawn (`drawSprite`). Text is measured
+   on the canvas shrunk to 1x1, so a sprite never pays for a full-frame backing. Fonts come from the service
    cache and are loaded into the worker's `FontFaceSet` at manifest time, so arm never
    waits on a font. The font resolver (design/27 §10) registers each family's faces under
    an internal name never resolved before, so a face that loads late (a failed read
@@ -226,14 +257,14 @@ Arm sequence for a cue (asset worker, then render worker):
 3. For images, `createImageBitmap` from the OPFS blob (cached bitmaps by hash and size
    are reused). A picture a slide draws unrotated is resampled once into an sRGB bitmap
    of its device rectangle and copied 1:1 (design/27 §7.1).
-4. Post bitmaps to the render worker, which uploads them into pre-allocated texture
-   slots (`copyExternalImageToTexture`) and writes the quad list for the stack. Uploads
-   never run inside the compositor's `draw` (design/27 §7.3): the frame loop uploads armed
-   content right after the next frame's submit, so a later flip finds it uploaded;
-   content that is drawn on the very frame it changed (a flip onto content
-   promoted from the queue, a `refresh` of the live copy) is uploaded just before that
-   draw. A stack is uploaded once per content (`Stack.version`), and again only after a
-   device loss.
+4. Post the bitmap (and its offset; `opaque` for a full-frame bitmap known to have no
+   transparency: a cover-fitted JPEG or PNG without alpha, read from the file's header, or
+   the props logo over an opaque clear colour) to the render worker, which uploads it into
+   its stack's layer texture (`copyExternalImageToTexture`, a sub-rect copy at the
+   sprite's offset) in strips, outside `draw` (Frame loop above). A stack is uploaded once
+   per content (`Stack.version`), and again only after a device loss. An opaque layer at
+   full weight is written without blending and hides everything under it: neither the
+   clear nor the lower layers are drawn (WebGPU `replace-t`, Canvas 2D `'copy'`).
 5. For video (background or media cue), the main thread creates a `<video>` for the
    armed asset from the OPFS file (`URL.createObjectURL(file)`), preloads to the first
    frame (`preload=auto`, wait for `canplaythrough` and one `requestVideoFrameCallback`),
@@ -275,8 +306,11 @@ Memory bound: at most two stacks per layer, and one playing plus one armed video
 Text is rasterized at arm time (ADR 0004). Golden images of the rasterizer and every
 look live in `packages/renderer/golden/` (`pnpm --filter @ordo/renderer golden`, see
 design/23). The rasterizer is in `packages/renderer` and
-runs in the asset worker. Its output for a text object is a bitmap and the box it
-occupies; the render worker composites it like any image. Word wrap uses canvas
+runs in the asset worker. Its output for a layer is one bitmap, full-frame or the tight
+sprite of what the layer reaches, at its offset; the render worker composites it like any
+image. `sprite.browser.test.ts` draws bands, rich and legacy text, shapes, the lower third,
+props and scene parts both ways in headless Chromium and checks that each sprite at its
+offset is the full-frame picture. Word wrap uses canvas
 `measureText` with a greedy algorithm; outline is `strokeText` under `fillText`; shadow
 uses canvas shadow properties on a separate pass to avoid outlining the shadow. The same
 rasterizer runs in the operator's thumbnail worker so previews match outputs.
@@ -332,13 +366,17 @@ The look is loaded at startup, on every hub `welcome` (a restarted live process 
 settings delta) and on a `library.delta` that changes settings, fonts or media. Fetches may overlap; an
 answer older than one already applied is dropped, so a slow stale answer never overwrites a newer
 config (review 2026-11-04 items 4 and 21). Lyric-only looks typeset the lyric
-text into the band at arm time; the band is a `Box` in logical 1920x1080 space; outputs
-at other resolutions scale by the logical-to-device transform in the vertex shader.
+text into the band at arm time; the band is a `Box` in logical 1920x1080 space, and the
+asset worker rasterizes it at the output's device resolution (`scale = width / 1920`), so
+nothing is scaled on the GPU: the compositors copy every bitmap 1:1.
 
 ## Props and timers
 
-Clock, countdown and elapsed timers are rasterized once per second by the asset worker
-into a small texture; the render worker swaps the texture atomically. Messages are
+Clock, countdown and elapsed timers are rasterized once per second by the asset worker,
+as a tight sprite of the props it draws (the logo covers the frame: full-frame, opaque over
+an opaque clear colour); the render worker swaps the layer's content atomically on the
+second's flip, and a sprite that fits the frame's upload budget flips on its frame. Props in
+opposite corners make one box over most of the frame, which stays full-frame. Messages are
 rasterized on send. This keeps the frame loop free of text work. The stage look also
 renders the live video's remaining time (`videoRemaining`, prd/04) as a prop.
 
@@ -355,7 +393,7 @@ not a renderer-only change and is left for the domain model.
 ## Startup and recovery
 
 1. Read the output id and token from the URL, open the WebSocket, send `hello`.
-2. Create the WebGPU device, compile all pipelines, allocate buffers and texture slots.
+2. Create the WebGPU device, compile all pipelines, allocate buffers and the layer textures.
 3. Load the manifest; fill OPFS; load fonts; report `cache.progress`. The fill waits for the
    first live state (hub or the cached one); it never prunes on an idle manifest, and a
    complete live fill prunes only files that none of the recently filled manifests used
@@ -427,4 +465,42 @@ download disagrees with the manifest's size is kept once and its size remembered
 
 `videoDropped` comes from `video.getVideoPlaybackQuality().droppedVideoFrames`. Additive fields:
 `mainThreadStallMs`, `workers [{name, generation, restarts, lastReason, gaveUp}]`, `quarantined
-{count, items}`, `fontFallbacks`, `cacheRepairs`, `busTransport` ('port' | 'window').
+{count, items}`, `fontFallbacks`, `cacheRepairs`, `busTransport` ('port' | 'window'), `gpuMB`. The
+render worker's telemetry (`__ordo.telemetry()`) also has `uploadMs`: the longest per-frame upload
+time over the last 128 frames that uploaded, in ms of the render worker's CPU time in the copies
+(not GPU time, which the venue measurement below records); it is not in the hub's health yet.
+
+## Venue measurements
+
+This container has no GPU: WebGPU runs on SwiftShader, which checks correctness (the compositor
+golden, the e2e specs) but measures the CPU, not a venue GPU. GPU numbers come from the venue
+measurement, run on each reference machine (the Windows 11 presentation PC with its iGPU, a
+discrete GPU, a Mac) by the procedure in `packages/renderer/bench/gpu-venue.ts`
+(`pnpm --filter @ordo/renderer bench:gpu -- --channel chrome --out venue-<machine>.json`, Chrome
+visible on the venue display): per size, uploads at once and in strips (CPU and GPU ms per frame,
+frames per upload), compositing five full-frame layers against sprites and the opaque replace path
+(GPU ms per frame from timestamp queries), and a live run of the engine (missed frames, late flips,
+rAF interval, `uploadMs`). Record each machine's results here. The M7 exit: uploads at most 4 ms per
+frame at 4K with the default strips, GPU time per frame at most 4 ms at 4K on the iGPU.
+
+| Machine | Size | Upload, one copy / strips (GPU ms per frame) | Compose 5 full / sprites (GPU ms) | Live: missed, late flips |
+|---|---|---|---|---|
+| (to be measured on the venue PC) | 3840x2160 | | | |
+
+CPU-side costs measured here (2026-11-06, Chromium 153 headless, 4 shared cores at a load average of
+7 to 10, CPU canvas: read the ratios, not the absolute times): `bench:sprites` (the asset worker's raster) and `bench:gpu
+--swiftshader` (the render worker's CPU time in the copies).
+
+| Measurement | 1920x1080 | 3840x2160 |
+|---|---|---|
+| Lyric-only band (legacy text), full-frame / sprite, p50 | 3.3 / 1.5 ms | 12.2 / 4.5 ms |
+| Lyric-only band (rich source), full-frame / sprite, p50 | 4.1 / 2.4 ms | 25.4 / 16.2 ms |
+| Lower third, full-frame / sprite, p50 | 3.2 / 1.1 ms | 11.8 / 3.4 ms |
+| Authored title (rich), full-frame / sprite, p50 | 3.6 / 2.2 ms | 18.1 / 12.6 ms |
+| Bytes uploaded, band sprite against a full frame | 2.8 / 8.3 MB | 11.2 / 33.2 MB |
+| Canvas 2D frame of five layers, full-frame / sprites, p50 | 4.2 / 2.4 ms | 26.5 / 14.0 ms |
+| Render worker CPU per frame uploading a full frame, one copy / default strips, p50 (max) | 1.9 (3.6) / 0.4 (1.0) ms | 8.7 (12.7) / 1.7 (4.1) ms |
+
+A slide that covers most of the frame (a six-line authored lyric) is drawn full-frame and costs the
+same either way. The legacy rows include the layout memo (`layoutText` per context, keyed by every
+input and the font generation): the sprite's reach lays the text out once and the draw reuses it.

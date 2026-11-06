@@ -62,8 +62,15 @@ const context = {
   unconfigure: () => undefined,
 } as unknown as GPUCanvasContext;
 
+/**
+ * The real compositor on the fake device. These tests check where uploads happen, so the budget is
+ * unlimited (0) and every upload is one copy; gpu.sprites.test.ts covers strips within a budget.
+ */
 async function fakeGpu(dev = new FakeDevice()): Promise<{ gpu: GpuCompositor; dev: FakeDevice }> {
-  const gpu = new GpuCompositor(dev as unknown as GPUDevice, context, 'rgba8unorm', W, H, LAYERS.length);
+  const gpu = new GpuCompositor(dev as unknown as GPUDevice, context, 'rgba8unorm', W, H, LAYERS.length, {
+    bytes: 0,
+    ms: 0,
+  });
   await gpu.compile();
   return { gpu, dev };
 }

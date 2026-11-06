@@ -23,16 +23,31 @@ export const SRC_VIDEO = 2;
  */
 export const SRC_SCENE = 3;
 
-/** How a video is fitted to the frame (bitmaps are always full-frame). */
+/** How a video is fitted to the frame. */
 export const FIT_COVER = 0;
 export const FIT_CONTAIN = 1;
 
-/** Content offered to a layer: a prepared bitmap, a video slot, a scene, or nothing. */
+/**
+ * Content offered to a layer: a prepared bitmap, a video slot, a scene, or nothing.
+ *
+ * A bitmap is either full-frame (the output's size, at 0, 0) or a tight sprite (design/27 §7.3): the
+ * bounding box of what was drawn, at device px offset `x`, `y` in the frame; outside it the layer is
+ * transparent. A scene's base and over are each one or the other.
+ */
 export type StackContent<B> = {
   key: string;
   kind: number;
   /** SRC_BITMAP: the picture; SRC_SCENE: the base. */
   bitmap?: B | null;
+  /** Device px offset of `bitmap` in the frame (whole pixels, >= 0; default 0). */
+  x?: number;
+  y?: number;
+  /**
+   * `bitmap` is full-frame and opaque (every pixel's alpha is 1): the compositors draw it without blending
+   * (WebGPU: the replace pipeline; Canvas 2D: 'copy') and skip the clear and the layers under it while it
+   * shows at full weight.
+   */
+  opaque?: boolean;
   /** SRC_VIDEO: the video; SRC_SCENE: the video played through `plane`. */
   videoSlot?: number;
   fit?: number;
@@ -41,6 +56,9 @@ export type StackContent<B> = {
   refresh?: boolean;
   /** SRC_SCENE: objects above the video that overlap it (null when there are none). */
   over?: B | null;
+  /** SRC_SCENE: device px offset of `over` in the frame (default 0). */
+  overX?: number;
+  overY?: number;
   /** SRC_SCENE: the video plane (PLANE_FLOATS floats, scene.ts), copied into the stack's own array. */
   plane?: Float32Array;
   /** SRC_SCENE: the slot generation the clip was loaded under; frames of another generation are not shown. */
@@ -52,15 +70,27 @@ export class Stack<B> {
   key = '';
   kind = SRC_EMPTY;
   bitmap: B | null = null;
+  /** See StackContent: the offset of `bitmap` (a tight sprite) and whether it is full-frame and opaque. */
+  x = 0;
+  y = 0;
+  opaque = false;
   videoSlot = -1;
   fit = FIT_COVER;
   cueIndex = -1;
   /** SRC_SCENE: see StackContent. `plane` is pre-allocated and overwritten with set(), never replaced. */
   over: B | null = null;
+  overX = 0;
+  overY = 0;
   readonly plane = new Float32Array(PLANE_FLOATS);
   videoGen = -1;
   /** Bumped whenever the content changes so the compositor knows to re-upload. */
   version = 0;
+  /**
+   * The compositor can draw this content (WebGPU: its bitmaps are uploaded completely). Content that needs
+   * an upload starts not ready on a compositor that uploads (`LayerStack.gated`), and a flip to it waits
+   * until the compositor sets this (design/27 §7.3 strip uploads): the previous content stays meanwhile.
+   */
+  ready = true;
 }
 
 /**
@@ -92,6 +122,11 @@ export class LayerStack<B> {
   flips = 0;
   /** Set whenever held keys change; the owner reports and clears it outside the frame loop. */
   dirty = false;
+  /**
+   * The compositor uploads content before it can draw it (WebGPU), so content with bitmaps is not `ready`
+   * until it says so; false (Canvas 2D, tests) makes all content ready at once. Set by the engine.
+   */
+  gated = false;
 
   constructor(private release: (b: B) => void = () => undefined) {}
 
@@ -175,6 +210,9 @@ export class LayerStack<B> {
       // swap back; a new fade starts below from the current frame.
       this.fading = false;
     }
+    // Not uploaded completely yet (strip uploads): hold the previous content; the flip happens on the first
+    // frame after the upload completes (a late flip, as for content that arrives late).
+    if (!this.armedStack.ready) return false;
     this.live = 1 - this.live;
     this.flipPending = false;
     this.flips++;
@@ -222,13 +260,19 @@ export class LayerStack<B> {
     a.key = q.key;
     a.kind = q.kind;
     a.bitmap = q.bitmap;
+    a.x = q.x;
+    a.y = q.y;
+    a.opaque = q.opaque;
     a.videoSlot = q.videoSlot;
     a.fit = q.fit;
     a.cueIndex = q.cueIndex;
     a.over = q.over;
+    a.overX = q.overX;
+    a.overY = q.overY;
     a.plane.set(q.plane);
     a.videoGen = q.videoGen;
     a.version++;
+    a.ready = !this.gated || !holdsBitmaps(a);
     q.bitmap = null;
     q.over = null;
     q.key = '';
@@ -244,11 +288,17 @@ export class LayerStack<B> {
     s.over = null;
     s.key = '';
     s.kind = SRC_EMPTY;
+    s.x = 0;
+    s.y = 0;
+    s.opaque = false;
+    s.overX = 0;
+    s.overY = 0;
     s.videoSlot = -1;
     s.cueIndex = -1;
     s.plane.fill(0);
     s.videoGen = -1;
     s.version++;
+    s.ready = true;
   }
 
   private assign(s: Stack<B>, c: StackContent<B>): void {
@@ -257,15 +307,44 @@ export class LayerStack<B> {
     s.key = c.key;
     s.kind = c.key === '' ? SRC_EMPTY : c.kind;
     s.bitmap = c.bitmap ?? null;
+    s.x = offset(c.x);
+    s.y = offset(c.y);
+    s.opaque = c.opaque === true && s.kind === SRC_BITMAP && s.x === 0 && s.y === 0;
     s.videoSlot = c.videoSlot ?? -1;
     s.fit = c.fit ?? FIT_COVER;
     s.cueIndex = c.cueIndex ?? -1;
     s.over = c.over ?? null;
+    s.overX = offset(c.overX);
+    s.overY = offset(c.overY);
     if (c.plane && c.plane.length === PLANE_FLOATS) s.plane.set(c.plane);
     else s.plane.fill(0);
     s.videoGen = c.videoGen ?? -1;
     s.version++;
+    s.ready = !this.gated || !holdsBitmaps(s);
   }
+
+  /**
+   * After a compositor is created or rebuilt (device loss): every stack is uploaded again, so content with
+   * bitmaps is not ready until the new compositor has uploaded it, when it uploads (`gated`).
+   */
+  resetUploads(gated: boolean): void {
+    this.gated = gated;
+    for (const s of [this.stacks[0], this.stacks[1], this.queued]) {
+      s.version++;
+      s.ready = !gated || !holdsBitmaps(s);
+    }
+  }
+}
+
+/** Whether a stack holds bitmaps a compositor uploads (a picture, or a scene's base or over). */
+export function holdsBitmaps(s: Stack<unknown>): boolean {
+  /* @hot */
+  return (s.kind === SRC_BITMAP || s.kind === SRC_SCENE) && (s.bitmap !== null || s.over !== null);
+}
+
+/** A sprite offset: whole device px, at least 0, finite (bounded so an offset can never overflow a rect). */
+function offset(v: number | undefined): number {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.min(Math.round(v), 1 << 16) : 0;
 }
 
 /** Rect (x, y, w, h in device px) of a source of size sw x sh fitted into a dw x dh frame. */

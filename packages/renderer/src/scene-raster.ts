@@ -20,6 +20,7 @@ import {
   rotatedBounds,
   splitScene,
 } from './scene.ts';
+import { type DrawnSprite, drawSprite, slideReach, spriteRect } from './sprite.ts';
 import { type Ctx2D, type ImageLookup, layoutText } from './text2d.ts';
 
 /**
@@ -221,4 +222,38 @@ export function rasterScene<B>(
     over = take();
   }
   return { base, over, plane: scene.plane };
+}
+
+/**
+ * `rasterScene` with tight parts (design/27 §7.3, M7): base and over are each drawn as a tight sprite of
+ * what they reach (`slideReach`, `drawSprite`), or full-frame when that saves nothing (a base with the
+ * slide's PowerPoint picture). `ctx` measures text; `surface(w, h)` returns a cleared context of that size
+ * and `take()` its picture. Undefined, with nothing drawn, when the slide is not a scene.
+ */
+export function rasterSceneSprites<B>(
+  ctx: Ctx2D,
+  surface: (w: number, h: number) => Ctx2D,
+  take: () => B,
+  frame: { width: number; height: number },
+  slide: Slide,
+  look: Look,
+  scale: number,
+  images: ImageLookup,
+  objectId: string,
+  opts: { nextSlide?: Slide; isSong?: boolean; clip?: { w?: number; h?: number } } = {},
+): { base: DrawnSprite<B>; over: DrawnSprite<B> | null; plane: Float32Array } | undefined {
+  const scene = sceneSlides(ctx, slide, look, scale, images, objectId, opts.clip);
+  if (!scene) return undefined;
+  const o = { nextSlide: opts.nextSlide, isSong: opts.isSong };
+  const part = (s: Slide) =>
+    drawSprite(
+      surface,
+      take,
+      frame.width,
+      frame.height,
+      spriteRect(slideReach(ctx, s, { scale, look, ...o }), scale, frame.width, frame.height),
+      (c) => rasterSlide(c, s, look, scale, images, o),
+    );
+  const base = part(scene.base);
+  return { base, over: scene.over ? part(scene.over) : null, plane: scene.plane };
 }

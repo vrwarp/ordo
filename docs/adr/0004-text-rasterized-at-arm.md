@@ -22,7 +22,11 @@ else. The same rasterizer runs in the operator for thumbnails.
 
 ## Consequences
 
-- Memory: a 1920x1080 RGBA bitmap per text box per armed stack; bounded by two stacks per
-  layer.
+- Memory: one RGBA bitmap per layer per stack (two stacks per layer), not one per text box: the
+  asset worker draws every object of a layer into one picture at the output's device resolution
+  (ADR 0013). Since M7 (design/27 §7.3) that picture is the tight sprite of what the layer draws, at
+  its offset, wherever that is under 80 % of the frame: a lyric band at 4K is about 11 MB instead of
+  33 MB to draw, transfer and upload, and its draw is scissored to its rect. On WebGPU each stack
+  also holds an output-sized layer texture (two per layer, 331.8 MB for five layers at 4K).
 - Sub-pixel text animation is not available (none is required).
 - A DOM text layer remains only for diagnostics.

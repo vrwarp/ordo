@@ -207,7 +207,7 @@ afterEach(() => {
 });
 
 describe('WebGPU scene compositor', () => {
-  it('compiles 13 pipelines (t e v, the 9 pairs, solid) before it is ready, with a 192-byte uniform', async () => {
+  it('compiles 14 pipelines (t e v, the 9 pairs, solid, replace-t) before it is ready, with a 224-byte uniform', async () => {
     const { dev } = await compositor();
     expect(PIPELINES).toEqual([
       'single-t',
@@ -223,24 +223,27 @@ describe('WebGPU scene compositor', () => {
       'pair-ve',
       'pair-vv',
       'solid',
+      'replace-t',
     ]);
     expect(dev.pipelines).toEqual(PIPELINES);
-    expect(UNIFORM_SIZE).toBe(192);
+    expect(UNIFORM_SIZE).toBe(224);
     expect(dev.bufferBindings.length).toBeGreaterThan(0);
     for (const b of dev.bufferBindings) {
-      expect(b.size).toBe(192);
+      expect(b.size).toBe(224);
       expect((b.offset ?? 0) % 256).toBe(0);
-      expect((b.offset ?? 0) + 192).toBeLessThanOrEqual(6 * 256);
+      expect((b.offset ?? 0) + 224).toBeLessThanOrEqual(6 * 256);
     }
     // Every scene pipeline declares base, over and video for each scene source; vv stays within the
     // default 16 sampled textures per stage (an external texture counts 4).
     const src = pipelineSources();
     const vv = src[PIPELINES.indexOf('pair-vv')]!;
-    expect(vv.match(/texture_external/g)).toHaveLength(2);
-    expect(vv.match(/texture_2d<f32>/g)).toHaveLength(4);
+    expect(vv.match(/var \w+: texture_external/g)).toHaveLength(2);
+    expect(vv.match(/var \w+: texture_2d<f32>/g)).toHaveLength(4);
     expect(vv).toContain('@binding(7) var srcB_video');
     expect(src[PIPELINES.indexOf('single-t')]).not.toContain('planeSample');
     expect(src[PIPELINES.indexOf('single-v')]).toContain('struct U');
+    // The replace pipeline is single-t's shader; only its blend state differs (no blending).
+    expect(src[PIPELINES.indexOf('replace-t')]).toBe(src[PIPELINES.indexOf('single-t')]);
   });
 
   it('allocates two over textures when the first scene with an over is offered, never in draw', async () => {
