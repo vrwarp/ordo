@@ -114,6 +114,43 @@ describe('sanitize: runs and paragraph styles are cut with the text', () => {
     expect(o.paras![0]!.bullet).toEqual({ char: '•' });
   });
 
+  it('keys a family by its cleaned name, as the render plan does, and stores one spelling of it', () => {
+    // Sixteen names the render plan reads as one family (quotes, backslashes, control characters, case and
+    // surrounding spaces): they take one place in the budget, so the next family is still kept.
+    const variants = [
+      'Arial',
+      '"Arial"',
+      'Ar\u0001ial',
+      'Ari\u0085al',
+      'Ari\\al',
+      'Arial ',
+      ' arial ',
+      'ARIAL',
+      '\tArial',
+      'Ar\u000cial',
+      'Arial\u0000',
+      'aRiAl',
+      'Arial  ',
+      'Ar"ial',
+      '\u007fArial',
+      'ArIaL',
+    ];
+    const runs: TextRun[] = [...variants, 'Georgia', 'Georgia '].map((f, i) => ({
+      start: i,
+      end: i + 1,
+      fontFamily: f,
+    }));
+    const o = cutText(
+      textObject('x'.repeat(40), runs, [{ bullet: { char: '•', fontFamily: '"georgia"' } }]),
+      IMPORT_LIMITS.text,
+    );
+    expect(o.runs!.map((r) => r.fontFamily)).toEqual([...variants.map(() => 'Arial'), 'Georgia', 'Georgia']);
+    expect(o.paras![0]!.bullet).toEqual({ char: '•', fontFamily: 'Georgia' });
+    // A name that is nothing but what the render plan removes is no family.
+    const none = cutText(textObject('xy', [{ start: 0, end: 1, fontFamily: '\u0001"\\ ' }], []), 10);
+    expect('fontFamily' in none.runs![0]!).toBe(false);
+  });
+
   it('bounds run sizes and keeps legacy objects as they were', () => {
     const p: Presentation = {
       id: 'p',

@@ -184,6 +184,54 @@ describe('bullets', () => {
   });
 });
 
+describe('emergency breaks', () => {
+  const lineTexts = (o: TextObject, l: RichLayout) =>
+    l.lines.map((line) => line.segs.map((s) => o.text.slice(s.start, s.end)).join(''));
+
+  it('hang the trailing whitespace of a cut word on its last line', () => {
+    // The rest of the cut word ('aa' and four spaces) is carried unmeasured until it may fit a line: its
+    // whitespace hangs there as it does on any line, and never starts the next one.
+    const o = obj('aaaaaaaaaa    bb', {}, box(40));
+    const l = layout(o);
+    expect(lineTexts(o, l)).toEqual(['aaaa', 'aaaa', 'aa    ', 'bb']);
+    expect(l.lines.map((x) => [x.x, x.w])).toEqual([
+      [0, 40],
+      [0, 40],
+      [0, 20],
+      [0, 20],
+    ]);
+    // Right-aligned, the hanging whitespace stays out of the line's width.
+    const r = obj('aaaaaaaaaa    bb', { align: 'right' }, box(40));
+    expect(layout(r).lines[2]).toMatchObject({ x: 20, w: 20 });
+  });
+
+  it('hang the whitespace after a single cluster wider than the line', () => {
+    const o = obj('aaaaaW   bb', {}, box(40));
+    const wide = layoutBox(
+      testMeasurer({ advance: (ch, px) => (ch === 'W' ? 3 * px : px / 2) }),
+      o,
+      prepare(itemize(o)),
+      [],
+      LEGACY_FONT_ENV,
+    );
+    expect(lineTexts(o, wide)).toEqual(['aaaa', 'a', 'W   ', 'bb']);
+  });
+
+  it('cut a word the same way whatever its trailing whitespace', () => {
+    for (const n of [1, 2, 5, 40]) {
+      const o = obj(`${'a'.repeat(23)}${' '.repeat(n)}bb`, {}, box(50));
+      expect(lineTexts(o, layout(o))).toEqual([
+        'aaaaa',
+        'aaaaa',
+        'aaaaa',
+        'aaaaa',
+        `aaa${' '.repeat(n)}`,
+        'bb',
+      ]);
+    }
+  });
+});
+
 describe('wrap: false', () => {
   it('never breaks and grows from the alignment', () => {
     const left = layout(obj('aaa bbb ccc', { wrap: false, align: 'left' }, box(60)));

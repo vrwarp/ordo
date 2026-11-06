@@ -152,6 +152,36 @@ describe('rich text clamps (design/27 §3.2)', () => {
     expect(same.every((r) => r.fontFamily !== undefined)).toBe(true);
   });
 
+  it('keys a family by its cleaned name and keeps one spelling of it, so variants never make a font', () => {
+    // Case, surrounding spaces, quotes and control characters: one family, one CSS name, one font lookup.
+    const variants = (k: number) =>
+      [
+        `${' '.repeat(k % 7)}Zq${' '.repeat(k % 5)}`,
+        k % 2 ? 'ZQ' : 'zq',
+        `"Z\u0001q${'\u0085'.repeat(k % 3)}"`,
+        `Z\\q\t`,
+      ][k % 4]!;
+    const runs = Array.from({ length: 2000 }, (_, k) => ({
+      start: k,
+      end: k + 1,
+      fontFamily: k < 1000 ? variants(k) : `Family ${k % 20}`,
+    }));
+    const out = clampRuns(runs, 2000, 72);
+    const families = new Set(out.map((r) => r.fontFamily));
+    expect(out.slice(0, 1000).every((r) => r.fontFamily === 'Zq')).toBe(true);
+    // The variants took one place in the budget: fifteen more families fit, and none of them twice.
+    expect(families.size).toBe(1 + (CLAMP.maxRunFamilies - 1) + 1); // 'Zq', 15 families, undefined
+    expect(out[1000 + 15]!.fontFamily).toBeUndefined();
+    // Bullets share the budget and take the spelling a run already has.
+    const o = clampObject({
+      ...text(0, 'ab'),
+      runs: [{ start: 0, end: 1, fontFamily: ' Wingdings ' }],
+      paras: [{ bullet: { char: '§', fontFamily: 'WINGDINGS\u0000' } }],
+    }) as TextObject;
+    expect(o.runs![0]!.fontFamily).toBe('Wingdings');
+    expect(o.paras![0]!.bullet!.fontFamily).toBe('Wingdings');
+  });
+
   it('strips every control character from family names, so a font string stays valid', () => {
     expect(clampFamily('A\fB\u0000C\u0085D"E\\F\nG\tH')).toBe('ABCDEFGH');
     expect(clampFamily('\u0001\u0002')).toBe('');
