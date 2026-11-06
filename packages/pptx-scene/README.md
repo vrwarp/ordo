@@ -162,8 +162,9 @@ fills, the lines), all sharing the table's `origin.group` (the top-level group's
 Only today's shape fields are written (solid fills, a gradient's first stop; lines as `line` shapes, dashed
 ones solid), so an older build draws the table as this one does. IR: `TableElement` (`ir.ts`); the walk
 reads it through `readTable`, `emit.ts` writes it through `emitTable`.
-- **Residual.** A table of more than `MAX_TABLE_CELLS` (60) grid cells, or with vertical cell text, stays a
-  `ResidualElement` ('table'): LibreOffice draws it into the art. So does a native table that would take its
+- **Residual.** A table of more than `MAX_TABLE_CELLS` (60) drawn cells (a merge counts once, the cells it
+  covers not at all; R1), or with vertical cell text, stays a `ResidualElement` ('table'): LibreOffice draws
+  it into the art; one of more than `MAX_TABLE_GRID` (4,096) grid cells is not read at all. So does a native table that would take its
   slide past the 150 objects of design/27 §5 (`classify.ts` `fitTables`, the table with the most objects
   first, reason `budget:table`), so the slide becomes hybrid, not picture; the art's text then holds the
   table's cells (`hybrid.ts`).
@@ -192,18 +193,21 @@ reads it through `readTable`, `emit.ts` writes it through `emitTable`.
   `anchor` its `valign`; the text wraps and shrinks to fit (`autofit: 'shrink'`, no stored scale) when the
   drawing finds it overflows. An empty cell is an empty text object (to type into) in its end mark's style.
 - **Rows grow** to their text: a row is as tall as its stored `h` or its tallest cell's text plus margins,
-  whichever is more (a merge's extra height goes to its last row). The text is measured in the office line
-  model with the advances of the faces the fonts draw it with (`ParseOptions.fontFace`: the run's family,
-  its metric substitute, its script's fallback, ordo's default face; `metrics.ts` reads `cmap`, `hmtx`,
-  `hhea` and `head` from a TrueType/OpenType file or a collection's face, bounded), greedy breaking at
-  spaces and around East Asian characters; a family with no face is measured with conservative estimated
-  widths (noted). A cell's lines are spaced by its face's line height (`FaceMetrics.lineHeight`, `hhea`
+  whichever is more (a merge's extra height goes to its last row; an empty cell is one line of its end
+  mark). The text is measured in the office line model with the advances and pair kerning of the faces the
+  fonts draw it with (`ParseOptions.fontFace`: the run's family, its metric substitute, its script's
+  fallback, ordo's default face; `metrics.ts` reads `cmap`, `hmtx`, `hhea`, `head`, `OS/2` and `GPOS` or
+  the legacy `kern` table from a TrueType/OpenType file or a collection's face, bounded), breaking as the
+  renderer breaks: greedily at spaces and around East Asian characters, a word kerned between the
+  characters of one run as the renderer measures a piece, cut only when it is still wider than the line
+  kerned; a family with no face is measured with conservative estimated widths (noted). A cell's lines are spaced by its face's line height (`FaceMetrics.lineHeight`, `hhea`
   ascender less descender: Carlito 1.22, Liberation Sans 1.12 of the size), a proportional spacing scaled
   by it over the office model's 1.2: measured with a probe deck, LibreOffice 24.2 sets a cell's lines of
   Liberation Sans 1.115 apart and Carlito's 1.215-1.225 (6 to 20 pt), and PowerPoint's new rows of 18 pt
   Calibri are 29.2 pt (22 pt and the margins).
 - **Callers.** The hub's `pptx-scene` task gets the library's face files (`apps/hub/src/pptx/faces.ts`,
-  WOFF and WOFF2 through `fonts/sfnt.ts` `metricTables`), read only when a table asks for a family; the
+  WOFF and WOFF2 through `fonts/sfnt.ts` `metricTables`, which leaves out an `OS/2`, `GPOS` or `kern` past
+  its 4 MB table limit), read only when a table asks for a family; the
   fidelity harness gives fontconfig's file of each family (`tools/pptx-fidelity/src/faces.ts`), the face its
   page draws with.
 
@@ -219,6 +223,63 @@ backgrounds, line precedence and merging, diagonals, row growth with a fixed-adv
 paragraph spacing, estimated widths, the substitute chain, the residual and budget rules, the 74 built-in
 styles), `metrics.test.ts` (crafted fonts: format 4 and 12 cmaps, collections, truncated and hostile files),
 `apps/hub/test/pptx-faces.test.ts`.
+
+### Fidelity round 1: rows as LibreOffice sizes them (`tables.ts` `LoLines`, `metrics.ts` kerning)
+
+The converter's rows disagreed with both the drawing and LibreOffice's, and on dense 6-9 pt charts each
+error moved every row below it (cells are mostly centred). Three changes:
+- **Kerning in the measure.** `FaceMetrics.kern(left, right)`: `GPOS` PairPos formats 1 and 2 of the
+  'kern' feature of the 'latn' (else 'DFLT') default language system, Extension lookups unwrapped, lookups
+  in index order, a subtable that does not apply passing to the next (HarfBuzz's rules), else, in a font
+  without `GPOS`, the legacy table's horizontal format 0 pairs. Checked against Chromium's `measureText`
+  on Carlito, Liberation Sans and DejaVu Sans words: equal to 0.01 px at 100 px, but for ligatures (`ff`),
+  which the measure does not model and which only narrow. `Measure` kerns within one run between break
+  opportunities, as the renderer measures a piece, so an 18 pt bold word of 124.29 pt of advances (123.88
+  kerned) in a 124.11 pt column stays on its line in the measure too.
+- **LibreOffice's rows** (`TableElement.lo`, for the harness's `--lo-compat` only, compat rule
+  `cellRows`; the hub keeps ordo's rows). LibreOffice 24.2 sizes a row (`Cell::getMinimumHeight`) by its
+  cells' text height in 1/100 mm, plus 1/100 mm, plus the margins, with the draw outliner's line spacing,
+  and measured with the table probe deck (`tools/pptx-fidelity/src/table-probe.ts`, `LO_PROBE_ROWS`) that
+  spacing is one of two (`LoLines`): 'font', the face's ascent and descent at the 600 dpi reference device
+  (the font's pixel height rounded, then ascent and descent rounded: Carlito 1.215-1.229 × the size), or
+  'independent', 1.2 × the font height truncated (`ImplCalculateFontIndependentLineSpacing`), for any face.
+  The second holds after a text shape that grew to its text (its own `a:spAutoFit`, with text) earlier on
+  the same slide: that shape leaves the shared outliner in font-independent mode (a group's child counts; a
+  title without its own `a:spAutoFit`, `a:normAutofit`, a shape after the table, a layout's shape, a
+  picture or an empty box do not; the next slide starts afresh). The probe's 324 rows, both modes, three
+  faces, 6-18 pt, spacers, space after, 107 % spacing and soft breaks, match within 0.16 pt (the PDF page
+  is the slide at 0.99897). LibreOffice draws the cells' text with the face's line heights all the same,
+  so text in an 'independent' row runs into the cell's margins (`spill`, written as smaller insets on the
+  anchor's side), and it sets each line's baseline at the face's ascent, where ordo's office model puts it
+  the size plus the extra spacing below the line's top (0.07 × the size lower for Carlito): `lift` moves
+  the text up by the mean difference of the two layouts' baselines from the anchor. And LibreOffice lays
+  text out at the font's whole-pixel size at its reference device (`loSizePt`: 14 pt is 117 px, 0.27 %
+  wider; 9.5 pt 79 px, 0.17 % narrower; measured on one line at 4.5-18 pt, within 0.15 % but 0.35 % at
+  5 pt), so under the policy the cells are measured and drawn at that size: a 14 pt header of 899.2 pt kerned
+  in a 916 pt cell wraps there as in LibreOffice.
+- **Drawn cells.** `MAX_TABLE_CELLS` counts the cells drawn, after merges (the 666 chart: 90 grid cells,
+  24 drawn); `MAX_TABLE_GRID` bounds the grid read.
+
+Measured (`--engine native --lo-compat`, the 28 decks of the validation suite's 30 table decks without
+embedded fonts, LibreOffice 24.2 pictures; LibreOffice's policies / ordo's): tables 0.591 → 0.738 / 0.588
+→ 0.596, tableMerge (14) 0.432 → 0.627 / 0.432 → 0.449. Single-slide charts: depression 0.228 → 0.859,
+jesus-and-stephen 0.149 → 0.894, what-does-a-seal 0.377 → 0.839 (ordo's 0.624), ten-commandments 0.434 →
+0.800, 2-corinthians 0.683 → 0.811, 666 0.259 → 0.476 (now native); no deck falls. The pixel-size rule
+costs one deck what the rows gave it (colossians 0.409 → 0.490 without it, 0.434 with it: 5 pt cells where
+LibreOffice is 0.35 % narrower than the rule says, so one line wraps that LibreOffice keeps). Worship shard
+0 (924 slides): 0.843 → 0.863 / 0.840 → 0.840, 12 table slides up, none down; the sermon decks do not
+change (0.955 / 0.953). Still residual: the
+charts of 79 and 90 drawn cells (with a cap of 200 they draw natively at 0.46 and 0.82, but pass the 64 KB
+of text formatting and become picture class, so the cap stays until `fitTables` budgets text too).
+
+Tests: `metrics.test.ts` (crafted `GPOS` format 1, format 2 and Extension kerning, scripts and features,
+the legacy table, vertical metrics, every byte of a `GPOS` corrupted, truncations), `tables.test.ts`
+(kerned words kept and cut, no kerning across runs, empty cells, LibreOffice's line heights and ascents,
+both modes and what triggers them, proportional and exact spacing, the policy's boxes, margins and lift,
+drawn cells, the grid bound), `tools/pptx-fidelity/src/table-probe.test.ts` (the probe deck, and the
+converter's LibreOffice rows against `LO_PROBE_ROWS` when this machine has Carlito and Liberation Sans),
+`apps/hub/test/pptx-faces.test.ts` (kerning and vertical metrics through TTF and WOFF, an oversized `GPOS`
+left out).
 
 ## M6 wave 2, item D: SmartArt and baked pictures (`smartart.ts`, `bake.ts`)
 
@@ -360,7 +421,7 @@ only tables (`budget:table`) and SmartArt drawings (`budget:smartart`) were ever
 | `timing.ts`     | `readSlideTiming`: the `p:timing` mapping of clips, transition and animation sounds; `gainDbOf`                   | M3b A  |
 | `media.ts`      | `readMediaRef` (a poster's clip, trim, kind), `emitMedia` (play, slide sound, motion background), `EmittedClip`   | M3b A  |
 | `tables.ts`     | `readTable`, `emitTable`, `Measure`: tables (M6); `tablestyles.ts`: the built-in styles (LibreOffice's, MPL 2.0)  | M6b C  |
-| `metrics.ts`    | `sfntMetrics`, `metricsOfTables`, `FaceSource`: advances and line heights from font files, bounded                | M6b C  |
+| `metrics.ts`    | `sfntMetrics`, `metricsOfTables`, `FaceSource`: advances, pair kerning, line heights from font files, bounded     | M6b C  |
 | `smartart.ts`   | SmartArt from its drawing cache: `readSmartArt` (the drawing's shapes through the walk), `lockDiagram`            | M6b D  |
 | `bake.ts`       | Baked pictures: `PictureBake` recipes (`bakeOf`, `tileBakeOf`), `applyBake` (recolour and tile pixels)            | M6b D  |
 | `ir.ts`         | The scene IR (types only)                                                                                         | shared |

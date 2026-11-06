@@ -1,8 +1,11 @@
 /**
  * The converter's font faces in the harness (`ParseOptions.fontFace`, design/27 §15 M6 tables): the face
  * file fontconfig gives each family, as the page registers it to draw the slides (`fonts.ts`), so a table row
- * grows exactly as far as the text drawn there needs. Synchronous (the converter is): `fc-match` runs once
- * per family, weight and slant and the file is read once per path, both memoised for the worker's life.
+ * grows exactly as far as the text drawn there needs. The whole file is read (`sfntMetrics`), so the measure
+ * has the face's pair kerning (`GPOS`, else `kern`) and the vertical metrics LibreOffice's row rule uses
+ * (`FaceMetrics.ascent`, `descent`; the probe deck, `table-probe.ts`, was measured with these files).
+ * Synchronous (the converter is): `fc-match` runs once per family, weight and slant and the file is read
+ * once per path, both memoised for the worker's life.
  */
 import { spawnSync } from 'node:child_process';
 import { readFileSync, statSync } from 'node:fs';

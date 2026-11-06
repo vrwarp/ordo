@@ -739,14 +739,38 @@ export function withTableStyles(parts: PartSource, styles: string): PartSource {
   );
 }
 
+/** Pair kerning for `sfntFont` (R1): `[left, right, x advance in font units]` per pair. */
+export interface KernSpec {
+  pairs: [string, string, number][];
+  /**
+   * How it is stored: `GPOS` PairPos format 1 (pairs), format 2 (`classes`: each character's class on its
+   * side, the pair values per class pair), either wrapped in an Extension lookup, or the legacy `kern`
+   * table. Default 'pairs'.
+   */
+  table?: 'pairs' | 'classes' | 'extension' | 'legacy';
+  /** The script the `GPOS` 'kern' feature is under (default 'latn'). */
+  script?: string;
+  /** The feature's tag (default 'kern'). */
+  feature?: string;
+}
+
 /**
  * A minimal TrueType font: `head` (units per em), `hhea`, `hmtx` and a `cmap` (format 4, or 12 with
  * `format: 12`) mapping each character of `advances` to its own glyph with that advance in font units.
- * Glyph 0 is .notdef. Enough for `metrics.ts`; nothing draws with it.
+ * Glyph 0 is .notdef. Enough for `metrics.ts`; nothing draws with it. With `kern` it has pair kerning
+ * (`GPOS`, or a legacy `kern` table), with `vertical` an `hhea` ascender and descender, with `os2` an
+ * `OS/2` table's typo and win metrics.
  */
 export function sfntFont(
   advances: Record<string, number>,
-  o: { upm?: number; format?: 4 | 12; notdef?: number } = {},
+  o: {
+    upm?: number;
+    format?: 4 | 12;
+    notdef?: number;
+    kern?: KernSpec;
+    vertical?: { ascender: number; descender: number };
+    os2?: { typo: [number, number]; win: [number, number]; useTypo?: boolean };
+  } = {},
 ): Uint8Array {
   const upm = o.upm ?? 1000;
   const chars = Object.keys(advances)
@@ -759,6 +783,8 @@ export function sfntFont(
   head.splice(18, 2, ...u16(upm));
   const hhea = new Array(36).fill(0);
   hhea.splice(34, 2, ...u16(chars.length + 1));
+  if (o.vertical)
+    hhea.splice(4, 4, ...u16(o.vertical.ascender & 0xffff), ...u16(o.vertical.descender & 0xffff));
   const hmtx = [...u16(o.notdef ?? 500), 0, 0];
   for (const cp of chars) hmtx.push(...u16(advances[String.fromCodePoint(cp)]!), 0, 0);
   let sub: number[];
@@ -783,6 +809,20 @@ export function sfntFont(
     ['hhea', hhea],
     ['hmtx', hmtx],
   ];
+  if (o.os2) {
+    const os2 = new Array(78).fill(0);
+    os2.splice(62, 2, ...u16(o.os2.useTypo ? 0x80 : 0));
+    os2.splice(68, 4, ...u16(o.os2.typo[0] & 0xffff), ...u16(o.os2.typo[1] & 0xffff));
+    os2.splice(74, 4, ...u16(o.os2.win[0]), ...u16(o.os2.win[1]));
+    tables.push(['OS/2', os2]);
+  }
+  if (o.kern) {
+    const glyph = (c: string) => glyphOf.get(c.codePointAt(0)!) ?? 0;
+    const pairs = o.kern.pairs.map(([a, b, v]) => [glyph(a), glyph(b), v] as const);
+    if (o.kern.table === 'legacy') tables.push(['kern', legacyKern(pairs)]);
+    else tables.push(['GPOS', gpos(pairs, o.kern)]);
+    tables.sort((a, b) => (a[0] < b[0] ? -1 : 1));
+  }
   const out = [...u32(0x00010000), ...u16(tables.length), 0, 0, 0, 0, 0, 0];
   let off = 12 + tables.length * 16;
   const body: number[] = [];
@@ -793,4 +833,111 @@ export function sfntFont(
     off = 12 + tables.length * 16 + body.length;
   }
   return Uint8Array.from([...out, ...body]);
+}
+
+const be16 = (v: number) => [(v >> 8) & 0xff, v & 0xff];
+const be32 = (v: number) => [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff];
+
+/** A legacy `kern` table (version 0, one horizontal format 0 subtable) of glyph pairs. */
+function legacyKern(pairs: readonly (readonly [number, number, number])[]): number[] {
+  const sorted = [...pairs].sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+  const body = [...be16(sorted.length), 0, 0, 0, 0, 0, 0];
+  for (const [a, b, v] of sorted) body.push(...be16(a), ...be16(b), ...be16(v & 0xffff));
+  return [...be16(0), ...be16(1), ...be16(0), ...be16(6 + body.length), ...be16(0x0001), ...body];
+}
+
+/** A `GPOS` table with one 'kern' feature of one pair-adjustment lookup (see `KernSpec`). */
+function gpos(pairs: readonly (readonly [number, number, number])[], spec: KernSpec): number[] {
+  const firsts = [...new Set(pairs.map((p) => p[0]))].sort((a, b) => a - b);
+  const coverage = [...be16(1), ...be16(firsts.length), ...firsts.flatMap(be16)];
+  let sub: number[];
+  if (spec.table === 'classes') {
+    // Each glyph its own class on each side (class 0: every other glyph).
+    const seconds = [...new Set(pairs.map((p) => p[1]))].sort((a, b) => a - b);
+    const classDef = (gs: number[]) => [
+      ...be16(2),
+      ...be16(gs.length),
+      ...gs.flatMap((g, i) => [...be16(g), ...be16(g), ...be16(i + 1)]),
+    ];
+    const c1 = classDef(firsts);
+    const c2 = classDef(seconds);
+    const n1 = firsts.length + 1;
+    const n2 = seconds.length + 1;
+    const records: number[] = [];
+    for (let i = 0; i < n1; i++)
+      for (let j = 0; j < n2; j++) {
+        const hit = pairs.find((p) => p[0] === firsts[i - 1] && p[1] === seconds[j - 1]);
+        records.push(...be16((hit?.[2] ?? 0) & 0xffff));
+      }
+    const head = 16 + records.length;
+    sub = [
+      ...be16(2),
+      ...be16(head + c1.length + c2.length),
+      ...be16(0x0004),
+      ...be16(0),
+      ...be16(head),
+      ...be16(head + c1.length),
+      ...be16(n1),
+      ...be16(n2),
+      ...records,
+      ...c1,
+      ...c2,
+      ...coverage,
+    ];
+  } else {
+    const sets = firsts.map((f) => {
+      const ps = pairs.filter((p) => p[0] === f).sort((p, q) => p[1] - q[1]);
+      return [...be16(ps.length), ...ps.flatMap((p) => [...be16(p[1]), ...be16(p[2] & 0xffff)])];
+    });
+    const head = 10 + firsts.length * 2;
+    const offsets: number[] = [];
+    let at = head;
+    for (const set of sets) {
+      offsets.push(at);
+      at += set.length;
+    }
+    sub = [
+      ...be16(1),
+      ...be16(at),
+      ...be16(0x0004),
+      ...be16(0),
+      ...be16(firsts.length),
+      ...offsets.flatMap(be16),
+      ...sets.flat(),
+      ...coverage,
+    ];
+  }
+  // An Extension lookup (type 9) points at the pair subtable with a 32-bit offset.
+  const ext = spec.table === 'extension';
+  const lookup = [...be16(ext ? 9 : 2), ...be16(0), ...be16(1), ...be16(8)];
+  const subtable = ext ? [...be16(1), ...be16(2), ...be32(8), ...sub] : sub;
+  const lookupList = [...be16(1), ...be16(4), ...lookup, ...subtable];
+  const feature = [...be16(0), ...be16(1), ...be16(0)];
+  const featureList = [
+    ...be16(1),
+    ...[...(spec.feature ?? 'kern')].map((c) => c.charCodeAt(0)),
+    ...be16(8),
+    ...feature,
+  ];
+  const langSys = [...be16(0), ...be16(0xffff), ...be16(1), ...be16(0)];
+  const script = [...be16(4), ...be16(0), ...langSys];
+  const scriptList = [
+    ...be16(1),
+    ...[...(spec.script ?? 'latn')].map((c) => c.charCodeAt(0)),
+    ...be16(8),
+    ...script,
+  ];
+  const at1 = 10;
+  const at2 = at1 + scriptList.length;
+  const at3 = at2 + featureList.length;
+  return [
+    ...be16(1),
+    ...be16(0),
+    ...be16(at1),
+    ...be16(at2),
+    ...be16(at3),
+    ...scriptList,
+    ...featureList,
+    ...lookupList,
+  ];
 }

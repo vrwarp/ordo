@@ -1,6 +1,16 @@
 import type { Slide, TextObject } from '@ordo/domain';
 import { type DeckScene, emitSlides, parseDeck } from '@ordo/pptx-scene';
-import { body, buildDeck, type DeckSpec, para, run, solid, sp } from '@ordo/pptx-scene/test-util.ts';
+import {
+  body,
+  buildDeck,
+  type DeckSpec,
+  para,
+  run,
+  solid,
+  sp,
+  tableFrame,
+  tc,
+} from '@ordo/pptx-scene/test-util.ts';
 import { describe, expect, it } from 'vitest';
 import { compatRules, drawingKey } from './compat.ts';
 
@@ -93,6 +103,35 @@ describe('compatRules', () => {
     const hit = compatRules(scene);
     for (const [k, s] of ordo.entries())
       expect(drawingKey(lo[k]!) !== drawingKey(s), `slide ${k}`).toBe(hit.has(k));
+  });
+
+  it("names cellRows on a slide whose table LibreOffice sizes otherwise, and draws it LibreOffice's way", () => {
+    const table = tableFrame({
+      id: 4,
+      x: 914_400,
+      y: 914_400,
+      cols: [3 * 914_400],
+      rows: [{ h: 0, cells: [tc('One line\nand another', { rPr: 'sz="1400"', tcPr: ' anchor="ctr"' })] }],
+    });
+    const scene = parseDeck(buildDeck({ slides: [{ shapes: table }] }), {
+      fontFace: () => ({
+        advance: () => 0.5,
+        lineHeight: 2500 / 2048,
+        ascent: 1950 / 2048,
+        descent: 550 / 2048,
+      }),
+    });
+    expect([...compatRules(scene)].map(([i, h]) => [i, [...h]])).toEqual([[0, ['cellRows']]]);
+    const cell = (lo: boolean) =>
+      texts(emitSlides(scene, lo ? { loCompat: true } : {}).slides[0]!.slide).find(
+        (t) => t.origin?.role === 'cell',
+      )!;
+    // Two lines of 14 pt: ordo's rows at the face's 1.2207 × the size; LibreOffice's at its 600 dpi metrics
+    // (601/100 mm a line, 14 pt being 117 px), its text at 14.04 pt and moved up to the face's ascent.
+    expect(cell(false).box.h).toBeCloseTo(2 * (2500 / 2048) * 28 + 14.4, 6);
+    expect(cell(true).box.h).toBeCloseTo(((2 * 601 + 255) * 360) / 6350, 6);
+    expect(cell(true).style.fontSizePx).toBeCloseTo(28.08, 6);
+    expect(cell(true).style.insets!.t).toBeLessThan(cell(false).style.insets!.t);
   });
 
   it('leaves a scene with nothing to change without rules', () => {

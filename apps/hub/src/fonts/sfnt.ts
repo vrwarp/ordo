@@ -101,19 +101,31 @@ export function fontTables(buf: Uint8Array): Map<string, Buffer> {
 
 /**
  * The tables text is measured with (`head`, `hhea`, `hmtx`, `cmap`; `@ordo/pptx-scene` `metricsOfTables`,
- * design/27 §15 M6 tables), from the same formats. A WOFF2 `hmtx` stored transformed is left out (its
- * advances are not in the table's own layout), so such a face measures as missing.
+ * design/27 §15 M6 tables), from the same formats, and when present and within the table limit `OS/2`
+ * (LibreOffice's fallback ascent and descent), `GPOS` and `kern` (pair kerning, M6 R1): one of those past
+ * the limit is left out, and the face is measured without it. A WOFF2 `hmtx` stored transformed is left out
+ * (its advances are not in the table's own layout), so such a face measures as missing.
  */
 export function metricTables(buf: Uint8Array): Map<string, Buffer> {
-  return tablesOf(buf, new Set(['head', 'hhea', 'hmtx', 'cmap']), new Set(['hmtx']));
+  return tablesOf(
+    buf,
+    new Set(['head', 'hhea', 'hmtx', 'cmap', 'OS/2', 'GPOS', 'kern']),
+    new Set(['hmtx']),
+    new Set(['OS/2', 'GPOS', 'kern']),
+  );
 }
 
-/** The tables of `want` (WOFF2 tables of `plainOnly` only when stored without a transform). */
+/**
+ * The tables of `want` (WOFF2 tables of `plainOnly` only when stored without a transform). A table of
+ * `optional` over `FONT_LIMITS.maxTableBytes` is left out; any other one throws.
+ */
 function tablesOf(
   buf: Uint8Array,
   want: ReadonlySet<string>,
   plainOnly?: ReadonlySet<string>,
+  optional?: ReadonlySet<string>,
 ): Map<string, Buffer> {
+  const big = (t: string, len: number) => len > FONT_LIMITS.maxTableBytes && optional?.has(t) === true;
   const b = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
   const out = new Map<string, Buffer>();
   const sig = tag(b, 0);
@@ -127,6 +139,7 @@ function tablesOf(
       const off = b.readUInt32BE(e + 4);
       const comp = b.readUInt32BE(e + 8);
       const orig = b.readUInt32BE(e + 12);
+      if (big(t, Math.max(orig, comp))) continue;
       checkTable(t, Math.max(orig, comp));
       const data = b.subarray(off, off + comp);
       out.set(t, comp < orig ? inflateSync(data, { maxOutputLength: orig }) : Buffer.from(data));
@@ -167,13 +180,13 @@ function tablesOf(
     const total = entries.reduce((n, e) => n + e.length, 0);
     if (total > FONT_LIMITS.maxWoff2Bytes)
       throw new Error(`font tables total ${total} bytes; the limit is ${FONT_LIMITS.maxWoff2Bytes}`);
-    for (const e of entries) if (want.has(e.tag)) checkTable(e.tag, e.length);
+    for (const e of entries) if (want.has(e.tag) && !big(e.tag, e.length)) checkTable(e.tag, e.length);
     const data = brotliDecompressSync(b.subarray(p, p + totalCompressed), {
       maxOutputLength: Math.max(1, total),
     });
     let off = 0;
     for (const e of entries) {
-      if (want.has(e.tag) && !(e.transformed && plainOnly?.has(e.tag)))
+      if (want.has(e.tag) && !(e.transformed && plainOnly?.has(e.tag)) && !big(e.tag, e.length))
         out.set(e.tag, data.subarray(off, off + e.length));
       off += e.length;
     }
@@ -188,6 +201,7 @@ function tablesOf(
     if (!want.has(t)) continue;
     const off = b.readUInt32BE(e + 8);
     const len = b.readUInt32BE(e + 12);
+    if (big(t, len)) continue;
     checkTable(t, len);
     out.set(t, b.subarray(off, off + len));
   }

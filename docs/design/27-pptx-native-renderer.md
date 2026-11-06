@@ -1559,6 +1559,31 @@ Also:
     of these decks are dense charts of 6-9 pt text, where a line wrapped one character apart or rows 1-2 %
     taller than LibreOffice's move every row below and the slide's SSIM falls to 0.15-0.48 though the drawing
     matches LibreOffice's to the eye.
+  - *Fidelity round 1 (rows; `pptx-scene` `tables.ts` `LoLines`, `metrics.ts` kerning; README "Fidelity
+    round 1"):* the row measure now breaks as the renderer does, with the faces' pair kerning (`GPOS`
+    PairPos of the 'kern' feature, else the legacy `kern` table; equal to Chromium's `measureText` but for
+    ligatures), so a word that fits once kerned is never cut, and an empty cell is one line of its end
+    mark. `MAX_TABLE_CELLS` (60) counts drawn cells, merges once; `MAX_TABLE_GRID` (4,096) bounds the grid
+    read. For the harness's LibreOffice policy only (compat rule `cellRows`), the rows are LibreOffice
+    24.2's, measured with a committed probe deck (`tools/pptx-fidelity/src/table-probe.ts`, 324 rows within
+    0.16 pt): a row is its text in 1/100 mm, plus 1/100 mm, plus the margins, its lines at the face's ascent
+    and descent at the 600 dpi reference device (pixel height rounded, then each rounded), or at 1.2 × the
+    font height (font-independent line spacing, any face) once a text shape with its own `a:spAutoFit` and
+    text came earlier on the slide, which leaves the shared outliner in that mode; LibreOffice still draws
+    the lines at the face's height, so such text runs into the cell margins, each baseline at the face's
+    ascent (ordo's office model puts it 0.07 × the size lower for Carlito), and its text at the font's
+    whole-pixel size at the reference device (14 pt 0.27 % wider, 9.5 pt 0.17 % narrower: what decides a
+    line that fits by a fraction of a point). PowerPoint's rows are not known to follow these, so the hub
+    keeps the faces' line heights (PowerPoint's 18 pt row is 22 pt of line).
+  - *Measured after round 1* (the same 28 decks without embedded fonts; LibreOffice's policies / ordo's):
+    tables 0.591 → 0.738 / 0.588 → 0.596, tableMerge 0.432 → 0.627 / 0.432 → 0.449. The single-slide charts
+    that drifted (depression 0.228 → 0.859, jesus-and-stephen 0.149 → 0.894, what-does-a-seal 0.377 →
+    0.839, ten-commandments 0.434 → 0.800) now match LibreOffice's rows within a pixel, and no deck falls
+    (colossians would reach 0.490 without the pixel-size rule and gets 0.434 with it: 5 pt cells where
+    LibreOffice is 0.35 % narrower than the rule). Worship shard 0: 0.843 → 0.863 (ordo's policies 0.840
+    either way), 12 table slides up, none down; the sermon decks do not change (0.955). The charts of
+    79 and 90 drawn cells stay residual: drawn natively they reach 0.46 and 0.82 but pass 64 KB of text
+    formatting (picture class), so the cap waits until `fitTables` budgets text as well as objects.
 - SmartArt from its drawing cache as a locked group.
 - Recolour and tile bakes.
 - Editor shape fields.
@@ -1622,7 +1647,7 @@ Also:
   - Presets: 186 of 187 at SSIM ≥ 0.95 (mean 0.9959); funnel 0.928 is listed (LibreOffice reads `2da` as 2). Met.
   - T1-T3: 81.8 % of the 2,713 shown worship slides of shards 0-2 (census); 2,120 of their 2,220 are native (95.5 %). The rest: 43 picture class (most over 150 objects, below), 39 hybrid T3 slides (custom geometry past the bounds, sheared group children), 14 hybrid for `anchorCtr` text, 4 picture class for 64 KB of text or 12 pictures. Not all native.
   - T3 mean 0.842 → 0.908 (493 slides); on the 418 with corrected pptx-preview scores 0.912 against pptx-preview's 0.760. Met. T1 0.940 → 0.947 and T2 0.880 → 0.889: no regression; all 1,822 slides 0.867 → 0.900, 658 up and 9 down (5 by more than 0.02: three picture-class slides of one template, which the hub draws with LibreOffice, one dense table, one flipped Designer freeform LibreOffice does not show). The sermon decks stay 0.955 (pptx-preview 0.927).
-  - Tables: the 30 worship decks with tables 0.612, tableMerge (14) 0.432 (pptx-preview 0.51 and 0.36). Not met; see the tables note above. The suite's tables-charts-smartart decks (35, LibreOffice rendering them fresh) average 0.932: tables (20 decks) 0.952, tableMerge (5) 0.950, SmartArt (5) 0.913, charts (14) 0.919.
+  - Tables: the 30 worship decks with tables 0.612, tableMerge (14) 0.432 (pptx-preview 0.51 and 0.36). Not met; see the tables note above. After fidelity round 1 (rows as LibreOffice sizes them): 0.738 and 0.627 on the 28 decks without embedded fonts (before: 0.591, 0.432); both still short of 0.75. The suite's tables-charts-smartart decks (35, LibreOffice rendering them fresh) average 0.932: tables (20 decks) 0.952, tableMerge (5) 0.950, SmartArt (5) 0.913, charts (14) 0.919.
   - Objects: no native slide has more than 150 objects (at most 125). Tables and SmartArt over the budget go to the art; 42 slides of plain shapes over it (150-730 objects, mostly traced decorations) are still picture class, not hybrid, as they were before M6 (45). Not met.
     - *Fidelity round 1:* met. Shapes of one look are merged and plain shapes and pictures go to the art over the budget (§5 "picture"): of the 44 such slides 10 are native, 33 hybrid, and one is a picture for its 64 KB of text formatting.
   - Fuzz: guide formulas, presets, paths and stored path strings (`geom/geom.fuzz.test.ts`), hostile custom geometry, font files and SmartArt drawings in the converter's tests. Met.

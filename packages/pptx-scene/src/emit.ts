@@ -656,6 +656,7 @@ function emitTableOf(ctx: EmitCtx, e: TableElement, out: SlideObject[]): void {
       newId: ctx.newId,
       log: ctx.log,
       color: legacyColor,
+      ...(ctx.lo ? { lo: true } : {}),
       cellText: (body) =>
         richText(body, {
           frame: ctx.frame,
