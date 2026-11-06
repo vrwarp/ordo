@@ -19,7 +19,13 @@
  * - legacy picture slides (`imported`) become the native slide; made-editable slides (no `imported`, in a
  *   pptx-sourced presentation, the bottom object a full-frame ImageObject whose media is tagged 'document')
  *   lose that page picture and every text object whose text equals an extracted box, unless in `keep`, so
- *   no content is doubled. A legacy slide whose deck slide converts to a picture again stays as it is;
+ *   no content is doubled. A made-editable slide with a text box on an extracted box's place but with
+ *   another text (the volunteer corrected it) is kept as it is and counted as edited, unless in `reset`
+ *   (then the box is replaced too): the rebuild would bring the deck's old wording back. A legacy slide whose
+ *   deck slide converts to a picture again stays as it is;
+ * - the lyric box the volunteer chose stays chosen (an imported one mapped to the fresh object of the same
+ *   PowerPoint shape), and the digest covers only the import's objects (`digest.ts`), so objects added in
+ *   ordo never make a slide edited, before or after a re-import;
  * - any other slide is kept as it is;
  * - pictures go through `storePictures` (prepared, deduplicated by hash), hybrid and picture slides queue
  *   the `pptx-lo` follow-up as the first import does, reusing the art, page and metafile pictures earlier
@@ -33,13 +39,17 @@
  * (`apps/hub/test/pptx-reimport.test.ts`).
  */
 import {
+  type Box,
+  formatBytes,
   type ImageObject,
   type Presentation,
   Presentation as PresentationSchema,
+  presentationBytes,
+  SIZE_BUDGETS,
   Slide,
   type SlideObject,
+  slideBytes,
 } from '@ordo/domain';
-import { digestOf } from '@ordo/pptx-scene/emit.ts';
 import type {
   Job,
   PptxReimportAction,
@@ -50,6 +60,7 @@ import type {
   PptxReimportResult,
 } from '@ordo/protocol';
 import { errorMessage, HttpError, notFound } from '../errors.ts';
+import { digestMatches, importDigest } from './digest.ts';
 import { type JobCtx, JobDeferred, type JobHandler } from '../jobs.ts';
 import { deferDelay } from './fallback.ts';
 import { buildNative, type NativeBuild, type NativeJobEnv } from './nativeJob.ts';
@@ -82,13 +93,11 @@ export function deckOf(p: Pick<Presentation, 'source'>): string | undefined {
 
 /**
  * Whether a native slide's imported objects are as the hub last wrote them (`Slide.pptx.digest`, over the
- * objects exactly as stored): all of them, or those with an `origin` (objects added in ordo since are kept
- * on top by a re-import and do not count as an edit). A slide without a digest (a copy) counts as edited.
+ * objects with an `origin`, `digest.ts`): objects added in ordo, before or after a re-import kept them on
+ * top, never count as an edit. A slide without a digest (a copy) counts as edited.
  */
 export function unedited(slide: Pick<Slide, 'objects' | 'pptx'>): boolean {
-  const d = slide.pptx?.digest;
-  if (!d) return false;
-  return digestOf(slide.objects) === d || digestOf(slide.objects.filter((o) => o.origin)) === d;
+  return digestMatches(slide.objects, slide.pptx?.digest);
 }
 
 /** How far a made-editable slide's page picture may be from the full 1920x1080 frame. */
@@ -189,8 +198,12 @@ export type FreshDeck = {
     /** The converted slide, its media ids already the library's (`storePictures`). */
     slide: Slide;
   }[];
-  /** Extracted text boxes per deck slide, for the made-editable rule (text objects equal to one are replaced). */
-  texts?: { index: number; texts: string[] }[];
+  /**
+   * Extracted text boxes per deck slide, for the made-editable rule (text objects equal to one are replaced),
+   * with where each box is (`boxes`, the 1920x1080 contain frame the old 'Make editable' laid its text boxes
+   * in): a text object on one of them whose text differs is the volunteer's correction of it.
+   */
+  texts?: { index: number; texts: string[]; boxes?: { text: string; box: Box }[] }[];
   /**
    * Every slide the deck lists (also those not converted): the page rule of legacy slides. Absent: the
    * slides above.
@@ -217,7 +230,10 @@ export function freshOf(b: NativeBuild, whole: boolean): FreshDeck {
         ...(sl.pptx!.shown !== undefined ? { shown: sl.pptx!.shown } : {}),
         slide: sl,
       })),
-    texts: [...b.texts].map(([index, texts]) => ({ index, texts })),
+    texts: [...b.texts].map(([index, texts]) => {
+      const boxes = b.textBoxes.get(index);
+      return { index, texts, ...(boxes?.length ? { boxes } : {}) };
+    }),
     listed: b.listed.map((r) => ({
       index: r.index,
       hidden: r.hidden,
@@ -242,6 +258,26 @@ export function pageFromName(name: string | undefined): number | undefined {
 
 /** Text compared as a volunteer reads it: whitespace runs as one space, trimmed. */
 const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+/** How much two boxes must overlap (intersection over union) for a text object to sit on an extracted box. */
+const SAME_PLACE = 0.6;
+
+/** Whether box `a` is where box `b` is: they overlap by at least `SAME_PLACE` of their union. */
+export function samePlace(a: Box, b: Box): boolean {
+  const r = (x: Box) => {
+    const x0 = Math.min(x.x, x.x + x.w);
+    const y0 = Math.min(x.y, x.y + x.h);
+    return { x0, y0, x1: x0 + Math.abs(x.w), y1: y0 + Math.abs(x.h) };
+  };
+  const p = r(a);
+  const q = r(b);
+  const w = Math.min(p.x1, q.x1) - Math.max(p.x0, q.x0);
+  const h = Math.min(p.y1, q.y1) - Math.max(p.y0, q.y0);
+  if (!(w > 0 && h > 0)) return false;
+  const inter = w * h;
+  const union = (p.x1 - p.x0) * (p.y1 - p.y0) + (q.x1 - q.x0) * (q.y1 - q.y0) - inter;
+  return union > 0 && inter / union >= SAME_PLACE;
+}
 
 /**
  * The deck slide (`SlideRef.index`) each slide of `p` comes from, for the kinds that have one: a native
@@ -301,7 +337,18 @@ function byText(sl: Slide, texts: Map<number, string[]>): number | undefined {
   return most && !tie ? best : undefined;
 }
 
-/** A slide compared without its object ids (fresh ones differ every run) and its digest. */
+/** JSON with every object's keys sorted: two slides built in another field order compare equal. */
+function sortedKeys(_k: string, v: unknown): unknown {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return v;
+  const o = v as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.keys(o)
+      .sort()
+      .map((k) => [k, o[k]]),
+  );
+}
+
+/** A slide compared without its object ids (fresh ones differ every run), its digest and its field order. */
 function shape(sl: Slide): string {
   const ids = new Map(sl.objects.map((o, i) => [o.id, `#${i}`]));
   const objects = sl.objects.map((o) => ({ ...o, id: ids.get(o.id) }));
@@ -311,7 +358,7 @@ function shape(sl: Slide): string {
     const { digest: _d, ...pptx } = sl.pptx;
     out.pptx = pptx;
   }
-  return JSON.stringify(out);
+  return JSON.stringify(out, sortedKeys);
 }
 
 /** Slide-level settings a re-import keeps from the stored slide (design/27 §11). */
@@ -326,6 +373,43 @@ const KEPT = [
 ] as const;
 
 /**
+ * The fresh object that is the stored slide's imported object `o`: the same PowerPoint shape (`shapeId`,
+ * with the same type and role, and placeholder when both have one), else the one at the same place among
+ * the imported objects of its type. Undefined when nothing matches.
+ */
+function sameImported(o: SlideObject, cur: Slide, f: Slide): SlideObject | undefined {
+  const og = o.origin;
+  if (!og) return undefined;
+  const fresh = f.objects.filter((x) => x.origin && x.type === o.type);
+  if (og.shapeId !== undefined) {
+    const hits = fresh.filter(
+      (x) =>
+        x.origin!.shapeId === og.shapeId &&
+        x.origin!.role === og.role &&
+        (og.ph === undefined || x.origin!.ph === undefined || x.origin!.ph === og.ph),
+    );
+    if (hits.length === 1) return hits[0];
+  }
+  const mine = cur.objects.filter((x) => x.origin && x.type === o.type);
+  const k = mine.indexOf(o);
+  return k >= 0 && mine.length === fresh.length ? fresh[k] : undefined;
+}
+
+/**
+ * The lyric box of the rebuilt slide: the volunteer's choice ('Make lyric box') kept, an object added in
+ * ordo as it is, an imported one mapped to the fresh object it now is (`sameImported`); the converter's
+ * choice when the slide had none or its choice has no match. A slide setting like notes: it stays through
+ * a re-import and a 'Reset slide' alike, and stage, lower thirds, the stream key and search keep following it.
+ */
+function lyricOf(cur: Slide, f: Slide, keep: SlideObject[]): string | undefined {
+  const id = cur.lyricObjectId;
+  if (!id) return f.lyricObjectId;
+  if (keep.some((o) => o.id === id)) return id;
+  const o = cur.objects.find((x) => x.id === id);
+  return (o && sameImported(o, cur, f)?.id) ?? f.lyricObjectId;
+}
+
+/**
  * The stored slide `cur` rebuilt from the fresh slide `f`: its objects, then `keep` on top; the slide-level
  * settings by the rules at the top of this file. Undefined when the result is not a valid slide.
  */
@@ -337,8 +421,7 @@ function rebuild(
   background: string | undefined,
 ): Slide | undefined {
   const next: Slide = { id: cur.id, objects: [...f.objects, ...keep] };
-  const lyric =
-    cur.lyricObjectId && keep.some((o) => o.id === cur.lyricObjectId) ? cur.lyricObjectId : f.lyricObjectId;
+  const lyric = lyricOf(cur, f, keep);
   if (lyric) next.lyricObjectId = lyric;
   const set = next as Record<string, unknown>;
   for (const k of KEPT) {
@@ -359,8 +442,9 @@ function rebuild(
   }
   const parsed = Slide.safeParse(next);
   if (!parsed.success) return undefined;
-  // The digest of the objects exactly as stored, the operator's kept on top included: what the hub wrote.
-  if (parsed.data.pptx) parsed.data.pptx.digest = digestOf(parsed.data.objects);
+  // The digest of the import's objects (those with an origin, `digest.ts`): the operator's kept on top are
+  // left out, so moving, editing or deleting them later does not make the slide edited.
+  if (parsed.data.pptx) parsed.data.pptx.digest = importDigest(parsed.data.objects);
   return parsed.data;
 }
 
@@ -403,6 +487,7 @@ export function mergeReimport(
   const sets = requestSets(req);
   const byIndex = new Map(fresh.slides.map((s) => [s.index, s]));
   const texts = new Map((fresh.texts ?? []).map((t) => [t.index, t.texts]));
+  const places = new Map((fresh.texts ?? []).map((t) => [t.index, t.boxes ?? []]));
   const listed =
     fresh.listed ??
     fresh.slides.map((s) => ({ index: s.index, hidden: s.shown === undefined, shown: s.shown }));
@@ -446,9 +531,23 @@ export function mergeReimport(
       } else if (kind === 'page') keep = [...sl.objects];
       else {
         const deckTexts = new Set((texts.get(f.index) ?? []).map(norm));
-        keep = sl.objects
+        const at = places.get(f.index) ?? [];
+        // The made-editable text boxes: those repeating the deck's text, and those on an extracted box with
+        // another text, which the volunteer corrected (a typo fixed, a date changed).
+        const fromImport = (o: SlideObject) =>
+          o.type === 'text' &&
+          o.origin === undefined &&
+          (deckTexts.has(norm(o.text)) || at.some((b) => samePlace(o.box, b.box)));
+        const corrected = sl.objects
           .slice(1)
-          .filter((o) => o.type !== 'text' || o.origin !== undefined || !deckTexts.has(norm(o.text)));
+          .some((o) => fromImport(o) && o.type === 'text' && !deckTexts.has(norm(o.text)));
+        // The rebuilt slide would show the deck's old wording; keeping the box on top would show both. The
+        // slide stays as it is (an edited slide), unless the request resets it.
+        if (corrected && !sets.reset.has(sl.id)) {
+          counts.keptEdited++;
+          continue;
+        }
+        keep = sl.objects.slice(1).filter((o) => !fromImport(o));
       }
       let background = sl.backgroundMediaId;
       if (legacy && !background) {
@@ -701,6 +800,24 @@ function scopeOf(
   };
 }
 
+/**
+ * The bytes of the stored slides a re-import keeps as they are, for the size budget of the slides it builds
+ * (`NativeJobEnv.reserve`, design/27 §3.4): a re-import of some slides ('Make editable' on a page, 'Reset
+ * slide') keeps every other slide; a whole one keeps the slides that do not come from the deck (the deck's
+ * own are all converted and counted by the build, the edited ones' stored copies standing in for them).
+ */
+export function keptBytes(p: Presentation, plan: PptxReimportPlan, scoped: boolean): number {
+  const action = new Map(plan.slides.map((s) => [s.slideId, s]));
+  let n = 0;
+  for (const sec of p.sections)
+    for (const sl of sec.slides) {
+      const a = action.get(sl.id);
+      const rebuilt = a?.action === 'regenerate' || a?.action === 'replace';
+      if (scoped ? !rebuilt : a?.kind === 'other') n += slideBytes(sl);
+    }
+  return n;
+}
+
 const zero = (presentationId: string, keptEdited = 0): PptxReimportResult => ({
   presentationId,
   regenerated: 0,
@@ -763,7 +880,11 @@ export function reimportJob(deps: PptxDeps, env: NativeJobEnv = {}): JobHandler<
     };
     let build: NativeBuild;
     try {
-      build = await buildNative(deps, nctx, { ...env, only: scopeOf(p0, req, tags, names) });
+      build = await buildNative(deps, nctx, {
+        ...env,
+        only: scopeOf(p0, req, tags, names),
+        reserve: keptBytes(p0, plan, !!req.slideIds),
+      });
     } catch (e) {
       if (ctx.signal.aborted) throw e;
       throw new Error(`The PowerPoint file could not be converted again: ${logSafe(errorMessage(e), 300)}`);
@@ -795,6 +916,11 @@ export function reimportJob(deps: PptxDeps, env: NativeJobEnv = {}): JobHandler<
         return { presentationId: cur.id, ...m.counts } satisfies PptxReimportResult;
       }
       const parsed = PresentationSchema.parse(m.p);
+      const bytes = presentationBytes(parsed);
+      if (bytes > SIZE_BUDGETS.presentationMax)
+        ctx.log(
+          `[warn] the presentation is ${formatBytes(bytes)} after the re-import, over its ${formatBytes(SIZE_BUDGETS.presentationMax)} budget: going live and snapshots may be slow`,
+        );
       let loJobId: string | undefined;
       try {
         const saved = deps.lib.db.transaction(() => {

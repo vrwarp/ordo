@@ -175,6 +175,7 @@ export function SlideBackgroundSection({
           }
           kinds={['image', 'video']}
           backgroundsFirst
+          needsSize
           onClose={() => setPicking(false)}
           onPick={(m) => {
             setPicking(false);
@@ -240,6 +241,7 @@ export function ReplaceOnAllSlides({ p, readOnly }: { p: Presentation; readOnly:
           title={`Replace the background on ${plural(count, 'slide')}`}
           kinds={['image', 'video']}
           backgroundsFirst
+          needsSize
           onClose={() => setPicking(false)}
           onPick={(m) => {
             setPicking(false);

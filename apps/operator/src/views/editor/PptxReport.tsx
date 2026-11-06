@@ -356,7 +356,9 @@ export function ReimportDialogView(props: {
                 <legend>Slides made editable before</legend>
                 <span className="muted">
                   Their page picture and the text boxes that repeat the PowerPoint text are replaced by the
-                  rebuilt slide; anything else on them stays on top. Keep a slide to leave it as it is.
+                  rebuilt slide; anything else on them, the text boxes you added included, stays on top. A
+                  slide whose text you corrected in ordo stays as it is, so the old wording does not come
+                  back. Keep a slide to leave it as it is.
                 </span>
                 {sum.madeEditable.map((s) => (
                   <Check

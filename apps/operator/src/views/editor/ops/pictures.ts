@@ -202,12 +202,21 @@ export function coverCrop(
  * 'Replace' keeps the look, not the crop numbers (design/27 §11 item 6): the new picture is cover-cropped to
  * the box's aspect and centred on the old crop's centre (clamped to the picture), so a picture of another
  * aspect is never distorted. Box, mask, flip, opacity, radius, stroke and shadow are kept. A picture with
- * `fit: 'contain' | 'cover'` keeps its fit and drops the crop. A video's poster (`play`) keeps its clip.
- * The Object panel's 'Replace' and `replaceBackground` (item E) use it.
+ * `fit: 'contain' | 'cover'` keeps its fit and drops the crop. A stretched picture replaced by one whose size
+ * is not known yet gets `fit: 'cover'`. A video's poster (`play`) keeps its clip. The Object panel's
+ * 'Replace' and `replaceBackground` (item E) use it.
  */
 export function replacePicture(o: ImageObject, next: PictureSize): ImageObject {
   if (o.locked || !next.id) return o;
-  const crop = o.fit === 'contain' || o.fit === 'cover' ? undefined : coverCrop(o, next);
+  const fitted = o.fit === 'contain' || o.fit === 'cover';
+  if (!fitted && !(finite(next.width) > 0 && finite(next.height) > 0)) {
+    // The size is not known yet (an upload the hub has not read): a stretch would distort it, so the new
+    // picture covers the box instead (the pickers only offer pictures with a size; this is the safety net).
+    if (next.id === o.mediaId) return o;
+    const { crop: _old, ...rest } = o;
+    return { ...rest, mediaId: next.id, fit: 'cover' };
+  }
+  const crop = fitted ? undefined : coverCrop(o, next);
   if (next.id === o.mediaId) return withCrop(o, crop);
   const { crop: _old, ...rest } = o;
   return crop ? { ...rest, mediaId: next.id, crop } : { ...rest, mediaId: next.id };

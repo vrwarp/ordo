@@ -9,8 +9,26 @@ import { toast } from '../../state/toasts.ts';
 import { DropZone, MEDIA_ACCEPT, uploadFiles, UploadProgress } from '../library/MediaTab.tsx';
 
 /**
+ * Why a media item cannot be chosen yet in a picker that needs its size (`needsSize`: 'Replace' and the
+ * background replace crop the new picture to the box from its width and height, so one the hub has not read
+ * yet would be stretched): undefined when it can be.
+ */
+export function notChoosable(
+  m: Pick<Media, 'state' | 'width' | 'height'>,
+  needsSize: boolean,
+): string | undefined {
+  if (!needsSize) return undefined;
+  if (m.state === 'failed') return 'It could not be processed.';
+  if (!(m.width && m.width > 0 && m.height && m.height > 0))
+    return 'Still being processed: it can be chosen when it is ready.';
+  return undefined;
+}
+
+/**
  * Pick a media item (backgrounds first) with poster thumbnails; upload new ones inline (prd/05). With `kinds`
  * it lists, opens and uploads only those kinds: an image picker takes images only (design/27 §11 item 6).
+ * With `needsSize` an item whose size is not known yet (just uploaded, still processing) is listed but cannot
+ * be chosen until it is (`notChoosable`). Each thumbnail is a button named by the media name.
  */
 export function MediaPickerDialog(props: {
   title: string;
@@ -18,6 +36,7 @@ export function MediaPickerDialog(props: {
   onClose: () => void;
   kinds?: Media['kind'][];
   backgroundsFirst?: boolean;
+  needsSize?: boolean;
 }) {
   const media = useLibrary((s) => s.data.media);
   const [q, setQ] = useState('');
@@ -80,14 +99,24 @@ export function MediaPickerDialog(props: {
         >
           {list.map((m) => {
             const h = stillHash(m);
+            const blocked = notChoosable(m, !!props.needsSize);
             return (
-              <div key={m.id} className="thumb" onClick={() => props.onPick(m)} title={m.name}>
+              <button
+                key={m.id}
+                type="button"
+                className="thumb"
+                style={THUMB_BUTTON}
+                disabled={!!blocked}
+                aria-label={m.state === 'ready' ? m.name : `${m.name} (${m.state})`}
+                title={blocked ? `${m.name}: ${blocked}` : m.name}
+                onClick={() => props.onPick(m)}
+              >
                 <div className="img" style={{ backgroundImage: h ? `url(${fileUrl(h)})` : undefined }} />
                 <div className="cap">
                   <span className="ellipsis grow">{m.name}</span>
                   {m.state !== 'ready' && <span className="tag amber">{m.state}</span>}
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>
@@ -96,6 +125,17 @@ export function MediaPickerDialog(props: {
     </Dialog>
   );
 }
+
+/** A thumbnail as a button: the thumbnail's own look (styles.css `.thumb`), not a button's padding and height. */
+const THUMB_BUTTON = {
+  display: 'block',
+  width: '100%',
+  padding: 0,
+  minHeight: 0,
+  textAlign: 'left',
+  font: 'inherit',
+  color: 'inherit',
+} as const;
 
 export function BackgroundPicker(props: {
   value?: string;

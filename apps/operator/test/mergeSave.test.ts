@@ -11,6 +11,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConflictDialogView } from '../src/views/editor/ConflictDialog.tsx';
 import {
+  adoptJobSaves,
   change,
   openPresentation,
   redo,
@@ -66,12 +67,15 @@ class FakeHub {
   puts: { rev: number; body: Presentation }[] = [];
   /** Run before each PUT is answered (someone else saving meanwhile). */
   beforePut?: (hub: FakeHub) => void;
+  /** Who saved each revision (`RevisionInfo.savedBy`), 'operator' unless a job saved it. */
+  savedBy: Record<number, string> = {};
   constructor(p: Presentation) {
     this.stored = JSON.parse(JSON.stringify(p));
   }
   /** Someone else saves: their change on top of what is stored, one revision more. */
-  saveOther(fn: (p: Presentation) => Presentation): void {
+  saveOther(fn: (p: Presentation) => Presentation, by?: string): void {
     this.stored = JSON.parse(JSON.stringify({ ...fn(this.stored), rev: this.stored.rev + 1 }));
+    if (by) this.savedBy[this.stored.rev] = by;
   }
   fetch = async (url: string, init?: RequestInit): Promise<Response> => {
     const path = url.slice(API_PREFIX.length);
@@ -100,7 +104,7 @@ class FakeHub {
         Array.from({ length: this.stored.rev }, (_, i) => ({
           rev: i + 1,
           savedAt: '2026-11-06T09:00:00Z',
-          savedBy: 'operator',
+          savedBy: this.savedBy[i + 1] ?? 'operator',
           title: 'Sunday',
         })),
       );
@@ -246,6 +250,61 @@ describe('save on 409', () => {
     });
     openPresentation(deck());
     expect(useEditor.getState()).toMatchObject({ conflict: false, mergeConflicts: [] });
+  });
+});
+
+describe('taking over a PowerPoint job’s revision with unsaved edits', () => {
+  it('an undo after a re-import was taken over keeps the re-import, and so does the next save', async () => {
+    change((p) => setText(p, 's1', 't1', 'Welcome!'));
+    change((p) => setText(p, 's3', 'song', 'Amazing grace!!'));
+    // The re-import saves revision 5: slide 2 rebuilt from PowerPoint.
+    hub.saveOther((p) => setText(p, 's2', 'date', 'REBUILT FROM POWERPOINT'), 'pptx-reimport');
+    expect(await adoptJobSaves()).toBe('adopted');
+    let d = useEditor.getState().draft;
+    expect([textOf(d, 's1'), textOf(d, 's2'), textOf(d, 's3')]).toEqual([
+      'Welcome!',
+      'REBUILT FROM POWERPOINT',
+      'Amazing grace!!',
+    ]);
+    undo();
+    d = useEditor.getState().draft;
+    expect([textOf(d, 's1'), textOf(d, 's2'), textOf(d, 's3')]).toEqual([
+      'Welcome!',
+      'REBUILT FROM POWERPOINT',
+      'Amazing grace',
+    ]);
+    expect(await save()).toBe(true);
+    expect(hub.stored.rev).toBe(6);
+    expect(textOf(hub.stored, 's2')).toBe('REBUILT FROM POWERPOINT');
+    // Both undone: the job's revision as it was saved; redo brings the edits back on top of it.
+    undo();
+    d = useEditor.getState().draft;
+    expect([textOf(d, 's1'), textOf(d, 's2')]).toEqual(['Welcome', 'REBUILT FROM POWERPOINT']);
+    redo();
+    expect(textOf(useEditor.getState().draft, 's1')).toBe('Welcome!');
+  });
+
+  it('a follow-up’s revision (LibreOffice) is taken slide by slide, and undo moves with it too', async () => {
+    change((p) => setText(p, 's1', 't1', 'Welcome!'));
+    hub.saveOther((p) => setText(p, 's2', 'date', 'ART FROM LIBREOFFICE'), 'pptx-lo');
+    expect(await adoptJobSaves()).toBe('adopted');
+    undo();
+    const d = useEditor.getState().draft;
+    expect([textOf(d, 's1'), textOf(d, 's2')]).toEqual(['Welcome', 'ART FROM LIBREOFFICE']);
+    expect(d?.rev).toBe(5);
+  });
+
+  it('a slide the re-import rebuilt that the volunteer also changed is not dropped either way', async () => {
+    change((p) => setText(p, 's2', 'date', 'Potluck on Sunday 19 May'));
+    hub.saveOther((p) => setText(p, 's2', 'date', 'REBUILT FROM POWERPOINT'), 'pptx-reimport');
+    // Not taken over silently: the editor keeps the volunteer's version, and the save asks.
+    expect(await adoptJobSaves()).toBe('other');
+    expect(textOf(useEditor.getState().draft, 's2')).toBe('Potluck on Sunday 19 May');
+    expect(await save()).toBe(false);
+    expect(useEditor.getState().mergeConflicts.map((c) => c.what)).toEqual([
+      'Slide 2: both changed the text box “Potluck on Sunday 12 May”',
+    ]);
+    expect(textOf(hub.stored, 's2')).toBe('REBUILT FROM POWERPOINT');
   });
 });
 

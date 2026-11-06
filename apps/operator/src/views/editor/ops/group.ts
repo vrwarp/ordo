@@ -293,6 +293,9 @@ function freshGroup(taken: Set<number>): number {
   return MAX_GROUP;
 }
 
+/** The schema's bound on a slide's objects (`Slide.objects`). */
+export const MAX_OBJECTS = 1000;
+
 /**
  * Duplicate `ids` as one block placed right above the topmost of them, offset by 20 px, with fresh ids; the
  * copies of a group share a new `origin.group` number, so the copy is a group of its own. `ids`: the copies,
@@ -311,6 +314,9 @@ export function duplicateObjects(
     const want = new Set(ids);
     const originals = s.objects.filter((o) => want.has(o.id));
     if (!originals.length) return s;
+    // A slide holds at most `MAX_OBJECTS` objects (the schema's bound): a copy past it is refused, as the
+    // hub would refuse the save.
+    if (s.objects.length + originals.length > MAX_OBJECTS) return s;
     const top = s.objects.indexOf(originals[originals.length - 1]!);
     const taken = new Set<number>();
     for (const o of s.objects) if (o.origin?.group !== undefined) taken.add(o.origin.group);

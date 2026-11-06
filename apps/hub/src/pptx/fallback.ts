@@ -48,6 +48,7 @@ import {
   type SlideObject,
 } from '@ordo/domain';
 import { digestOf } from '@ordo/pptx-scene/emit.ts';
+import { digestMatches, importDigest } from './digest.ts';
 import { PAGE_BACKGROUNDS, type PageBackground, type RenderCopyPage } from '@ordo/pptx-scene/rendercopy.ts';
 import { errorMessage } from '../errors.ts';
 import type { Job } from '@ordo/protocol';
@@ -328,7 +329,9 @@ function insertUnder(
  * `pending` is cleared; `failed` is set when part of the work failed (`work.failed`).
  */
 export function patchSlide(slide: Slide, lo: PptxLoSlide, work: SlideWork, hash: string): Slide {
-  const unedited = !!lo.digest && digestOf(slide.objects) === lo.digest;
+  // Unedited: the import's objects (those with an origin) as the plan's digest has them; objects added in
+  // ordo meanwhile do not count (`digest.ts`).
+  const unedited = digestMatches(slide.objects, lo.digest);
   let objects = [...slide.objects];
   const notes: string[] = [];
   let lyricObjectId = slide.lyricObjectId;
@@ -396,8 +399,9 @@ export function patchSlide(slide: Slide, lo: PptxLoSlide, work: SlideWork, hash:
     next.pptx = pptx;
   }
   const parsed = Slide.parse(next);
-  // An unedited slide stays unedited: its digest follows what the converter wrote.
-  if (unedited && parsed.pptx) parsed.pptx.digest = digestOf(parsed.objects);
+  // An unedited slide stays unedited: its digest follows what the converter wrote (the objects with an
+  // origin: the art and metafiles carry one, objects added in ordo do not).
+  if (unedited && parsed.pptx) parsed.pptx.digest = importDigest(parsed.objects);
   return parsed;
 }
 
@@ -735,7 +739,7 @@ export function loJob(deps: PptxDeps): JobHandler<PptxLoPayload> {
           if (work.art) counts.art++;
           if (work.page) counts.pages++;
           counts.metafiles += mf.size;
-          if (lo.digest && digestOf(sl.objects) !== lo.digest) counts.edited++;
+          if (lo.digest && !digestMatches(sl.objects, lo.digest)) counts.edited++;
           if (next.pptx?.failed) counts.failed++;
           return next;
         } catch (e) {

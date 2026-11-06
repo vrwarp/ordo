@@ -21,6 +21,10 @@ import { type PictureSize, replacePicture } from './pictures.ts';
 
 /** The schema's bound on a text object's text (`MAX.text`): a replacement that would pass it is not made. */
 export const MAX_TEXT = 20_000;
+/** The schema's bound on a text object's paragraph styles (`TextObject.paras`). */
+export const MAX_PARAS = 5000;
+/** The schema's bound on a section's slides (`Section.slides`): 'New slide like this' stops there. */
+export const MAX_SECTION_SLIDES = 5000;
 
 /** Find options: `case` matches case; `wholeWord` matches only whole words (Unicode letters and digits). */
 export type FindOptions = { case?: boolean; wholeWord?: boolean };
@@ -114,12 +118,37 @@ export function findText(
   return out;
 }
 
+const isHigh = (c: number) => c >= 0xd800 && c <= 0xdbff;
+const isLow = (c: number) => c >= 0xdc00 && c <= 0xdfff;
+/** Whether offset `i` of `s` is not inside a surrogate pair. */
+const boundary = (s: string, i: number) =>
+  i <= 0 || i >= s.length || !(isHigh(s.charCodeAt(i - 1)) && isLow(s.charCodeAt(i)));
+
+/**
+ * What of `m` really changes into `r`: their common start and end trimmed (never inside a surrogate pair),
+ * as `[k, m.length - j)` of `m` becoming `r.slice(k, r.length - j)`. Typing the change in the text field
+ * (`editText`'s prefix and suffix) changes the same characters, so both keep the same styles.
+ */
+export function changedPart(m: string, r: string): { k: number; j: number } {
+  const max = Math.min(m.length, r.length);
+  let k = 0;
+  while (k < max && m.charCodeAt(k) === r.charCodeAt(k)) k++;
+  if (!boundary(m, k) || !boundary(r, k)) k--;
+  let j = 0;
+  while (j < max - k && m.charCodeAt(m.length - 1 - j) === r.charCodeAt(r.length - 1 - j)) j++;
+  while (j > 0 && (!boundary(m, m.length - j) || !boundary(r, r.length - j))) j--;
+  return { k, j };
+}
+
 /**
  * `o` with every match of `find` replaced by `repl`, from the last to the first so the offsets stay valid.
- * Each match is replaced as the text field replaces a selection (`replaceText`, the rule `editText` applies):
- * the replacement takes the style of the first character it replaces, so a bold red date stays bold and
- * red; runs and paragraph styles shift with the text and the box style (its `fitScale` too) is untouched.
- * A match already equal to `repl` is left alone; a result past `MAX_TEXT` is refused (`o` and 0).
+ * Each match is replaced as typing the same change in the text field would (the rule `editText` applies):
+ * only the part of the match that differs from `repl` is replaced (`changedPart`: 'on Sunday' → 'on
+ * Saturday' replaces 'un' with 'atur'), and that part takes the style of the first character it replaces,
+ * so a bold red date stays bold and red and the words around it keep their own style; an insertion takes
+ * the style of the text before it. Runs and paragraph styles shift with the text and the box style (its
+ * `fitScale` too) is untouched. A match already equal to `repl` is left alone; a result past `MAX_TEXT` is
+ * refused (`o` and 0).
  */
 function replaceIn(
   o: TextObject,
@@ -136,8 +165,10 @@ function replaceIn(
   let n = 0;
   for (let i = ms.length - 1; i >= 0; i--) {
     const [a, b] = ms[i]!;
-    if (cur.text.slice(a, b) === repl) continue;
-    cur = replaceText(cur, a, b, repl);
+    const m = cur.text.slice(a, b);
+    if (m === repl) continue;
+    const { k, j } = changedPart(m, repl);
+    cur = replaceText(cur, a + k, b - j, repl.slice(k, repl.length - j));
     n++;
   }
   return { o: cur, n };
@@ -145,8 +176,8 @@ function replaceIn(
 
 /**
  * Find and replace across the presentation (design/27 §11 item 8): every match of `findText` replaced by
- * `repl` through the text ops' `editText` rule, so formatting stays (the replacement takes the style of the
- * text it replaces: a bold date stays bold). One change, one undo step; `replaced` counts the matches that
+ * `repl` as typing the change would replace it (`editText`'s rule), so formatting stays (the changed part
+ * takes the style of the text it replaces: a bold date stays bold, the plain words around it stay plain). One change, one undo step; `replaced` counts the matches that
  * changed (a match already equal to `repl` is not counted). Locked objects are left alone, and an object
  * whose text would pass the schema's bound (`MAX_TEXT`) keeps its text.
  */
@@ -491,7 +522,9 @@ function takeParas(target: TextObject, src: TextObject): (TextPara | null)[] | u
   }
   const out: (TextPara | null)[] = [];
   let headLevel = 0;
-  const count = paraCount(target.text);
+  // The schema keeps at most `MAX_PARAS` paragraph styles (as `setParas` writes them): the paragraphs past
+  // them keep none.
+  const count = Math.min(paraCount(target.text), MAX_PARAS);
   for (let i = 0; i < count; i++) {
     const tp = target.paras?.[i] ?? null;
     const soft = i > 0 && tp?.soft === true;
@@ -618,11 +651,17 @@ function clearedText(o: SlideObject): SlideObject {
  * style and first run's formatting (`typedStyle`), so a new verse or announcement is typed in the same look.
  * Notes are not copied, nor what described the old text: its scripture reference, its hidden flag, and its
  * PowerPoint picture (`pptx.refMediaId`, `show`), which would show the old slide over the new one. Pictures,
- * shapes and locked objects stay. `id`: the new slide (the editor selects it).
+ * shapes and locked objects stay. `id`: the new slide (the editor selects it). A section already holding
+ * `MAX_SECTION_SLIDES` slides gets none (`full`).
  */
-export function newSlideLike(p: Presentation, slideId: string): { p: Presentation; id?: string } {
+export function newSlideLike(
+  p: Presentation,
+  slideId: string,
+): { p: Presentation; id?: string; full?: true } {
   const pos = findSlide(p, slideId);
   if (!pos) return { p };
+  // A section holds at most `MAX_SECTION_SLIDES` slides (the schema's bound): the hub would refuse the save.
+  if (p.sections[pos.si]!.slides.length >= MAX_SECTION_SLIDES) return { p, full: true };
   const copy = cloneSlide(p.sections[pos.si]!.slides[pos.i]!);
   const { notes: _notes, hidden: _hidden, scripture: _scripture, ...rest } = copy;
   const slide: Slide = { ...rest, objects: copy.objects.map(clearedText) };
@@ -640,21 +679,24 @@ export function newSlideLike(p: Presentation, slideId: string): { p: Presentatio
 
 // ---- use as background ---------------------------------------------------------------------------------
 
-/** The 1920x1080 frame, the slide area of a 16:9 deck. */
+/** The 1920x1080 frame, the whole screen (and the slide area of a 16:9 deck). */
 const FRAME = { x: 0, y: 0, w: 1920, h: 1080 };
 /** How far (px) a picture may fall short of the slide's edges and still count as covering it. */
 const COVER_TOLERANCE = 2;
 
 /**
  * Whether `o` is a picture that 'Use as background' takes: an unlocked ImageObject that does not play a
- * video, unrotated, whose box covers the slide area (`source.native.slideRect` of an imported deck that is
- * not 16:9, else the 1920x1080 frame).
+ * video, unrotated, whose box covers the whole 1920x1080 frame. A background is drawn cover-fit over the
+ * whole frame, so on an imported deck that is not 16:9 a picture covering only its slide area
+ * (`source.native.slideRect`, a 4:3 deck's pillarboxed area) is not offered: as a background it would grow
+ * into the bars and lose a quarter of its height, and the slide would no longer look like the others. It
+ * stays a picture, which 'Replace background' replaces without distortion all the same.
  */
-export function coversSlide(p: Presentation, o: SlideObject): o is ImageObject {
+export function coversSlide(_p: Presentation, o: SlideObject): o is ImageObject {
   if (o.type !== 'image' || o.locked || o.play) return false;
   const turn = ((o.box.rotation % 360) + 360) % 360;
   if (Math.min(turn, 360 - turn) > 0.01) return false;
-  const r = p.source?.native?.slideRect ?? FRAME;
+  const r = FRAME;
   const x0 = Math.min(o.box.x, o.box.x + o.box.w);
   const x1 = Math.max(o.box.x, o.box.x + o.box.w);
   const y0 = Math.min(o.box.y, o.box.y + o.box.h);

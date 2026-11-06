@@ -16,13 +16,18 @@ import { groupBox, groupMembers, hasGroup, isLocked, keepsAspect } from './ops/g
 const BARE = { border: 0, margin: 0, padding: 0, minWidth: 0 } as const;
 
 /** A short name for an object in the panel's lists: its kind, and the start of its text. */
-export function objectLabel(o: SlideObject): string {
+export function objectLabel(o: SlideObject, opts: { inSentence?: boolean } = {}): string {
+  // In a sentence the kind word is lowercased ('the text “…”'); the volunteer's own text and the name
+  // PowerPoint keep their letters.
+  const kind = (w: string) => (opts.inSentence ? w.toLowerCase() : w);
   if (o.type === 'text') {
     const t = o.text.replace(/\s+/g, ' ').trim();
-    return t ? `Text “${t.length > 28 ? `${t.slice(0, 28)}…` : t}”` : 'Text (empty)';
+    return t ? `${kind('Text')} “${t.length > 28 ? `${t.slice(0, 28)}…` : t}”` : kind('Text (empty)');
   }
-  if (o.type === 'image') return o.play ? 'Video' : isLocked(o) ? 'PowerPoint art' : 'Picture';
-  return o.shape === 'line' ? 'Line' : `Shape (${o.shape === 'rect' ? 'rectangle' : 'ellipse'})`;
+  if (o.type === 'image') return o.play ? kind('Video') : isLocked(o) ? 'PowerPoint art' : kind('Picture');
+  return o.shape === 'line'
+    ? kind('Line')
+    : `${kind('Shape')} (${o.shape === 'rect' ? 'rectangle' : 'ellipse'})`;
 }
 
 /**
@@ -97,8 +102,9 @@ export function GroupNoteView(props: {
       <div className="banner blue small col" style={{ gap: 6 }} {...box}>
         <span>
           {selected.length} objects selected{grouped ? ', a group from PowerPoint' : ''}: they move, resize,
-          delete and duplicate together. The fields below edit the {objectLabel(primary).toLowerCase()} only;
-          Alt-click an object (a long press on touch) to select it alone.
+          delete and duplicate together. The fields below edit the{' '}
+          {objectLabel(primary, { inSentence: true })} only; Alt-click an object (a long press on touch) to
+          select it alone.
         </span>
         <div className="row wrap">
           <Select

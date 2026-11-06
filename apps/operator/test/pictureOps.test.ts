@@ -215,9 +215,17 @@ describe('replacePicture (design/27 §11 item 6)', () => {
     }
   });
 
-  it('takes a picture of unknown size as the box aspect, and the same picture back as itself', () => {
+  it('covers the box with a picture of unknown size (never stretched), and takes the same picture back as itself', () => {
+    // An upload the hub has not read yet: no crop can be worked out, so it covers the box instead of being
+    // stretched over it.
     expect(replacePicture(photo({ crop: { l: 0.2, t: 0, r: 0, b: 0 } }), { id: 'n' })).toEqual(
-      photo({ mediaId: 'n' }),
+      photo({ mediaId: 'n', fit: 'cover' }),
+    );
+    const unknown = photo({ crop: { l: 0.2, t: 0, r: 0, b: 0 } });
+    expect(replacePicture(unknown, { id: 'photo' })).toBe(unknown);
+    // A contained or covered picture keeps its fit either way.
+    expect(replacePicture(photo({ fit: 'contain' }), { id: 'n' })).toEqual(
+      photo({ fit: 'contain', mediaId: 'n' }),
     );
     const same = photo({ crop: { l: 0.25, t: 0, r: 0.25, b: 0 } });
     // Its crop already shows 800x450 of a 1600x450 picture: nothing changes.

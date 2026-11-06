@@ -100,7 +100,9 @@ export function Radios<T extends string>(props: {
     else if (e.key === 'Home') j = 0;
     else if (e.key === 'End') j = n - 1;
     if (j === undefined) return;
+    // The arrows are the group's own: the editor's nudge must not also move the selected box.
     e.preventDefault();
+    e.stopPropagation();
     refs.current[j]?.focus();
     props.onChange(props.options[j]!.value);
   };

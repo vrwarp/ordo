@@ -49,6 +49,7 @@ import {
   hasGroup,
   isLocked,
   keepsAspect,
+  MAX_OBJECTS,
   moveObjects,
   reorderObjects,
   transformGroup,
@@ -322,6 +323,33 @@ describe('the group ops', () => {
     expect(copies.map((o) => o.locked)).toEqual([undefined, true]);
     expect(copies.every((o) => o.origin?.group === undefined)).toBe(true);
     expect(duplicateObjects(p, 's1', ['gone'])).toEqual({ p, ids: [] });
+  });
+
+  it('duplicateObjects refuses a copy past the 1,000 objects a slide holds (the hub would refuse the save)', () => {
+    const p = deck();
+    const s = getSlide(p, 's1')!;
+    const cells = Array.from(
+      { length: 600 },
+      (_, i): ShapeObject => ({ ...pairShape(), id: `c${i}`, origin: { src: 'pptx', group: 9 } }),
+    );
+    const big: Presentation = {
+      ...p,
+      sections: [{ ...p.sections[0]!, slides: [{ ...s, objects: cells }] }],
+    };
+    expect(
+      duplicateObjects(
+        big,
+        's1',
+        cells.map((o) => o.id),
+      ),
+    ).toEqual({ p: big, ids: [] });
+    // Up to the bound it copies.
+    const r = duplicateObjects(
+      big,
+      's1',
+      cells.slice(0, MAX_OBJECTS - 600).map((o) => o.id),
+    );
+    expect(objs(r.p)).toHaveLength(MAX_OBJECTS);
   });
 
   it('duplicateObjects finds a free group number when the top one is taken', () => {
@@ -639,6 +667,10 @@ describe('the Object panel on a selection', () => {
     expect(objectLabel(pairShape())).toBe('Shape (rectangle)');
     expect(objectLabel(art())).toBe('PowerPoint art');
     expect(objectLabel(photo())).toBe('Picture');
+    // In a sentence only the kind word is lowercased: the volunteer's text keeps its letters.
+    expect(objectLabel(pairText(), { inSentence: true })).toBe('text “Coffee after the service”');
+    expect(objectLabel(art(), { inSentence: true })).toBe('PowerPoint art');
+    expect(objectLabel(pairShape(), { inSentence: true })).toBe('shape (rectangle)');
   });
 
   it('the group note: what moves together, Select one (Alt-click), Ungroup', () => {

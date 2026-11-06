@@ -238,7 +238,10 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
     covered one keeps its fit and drops the crop. Box, mask, flips, opacity, radius and a video's clip stay.
   - All of these are read-only on locked art and while the presentation is locked.
 - Saves via `PUT /presentations/:id` with `rev`. On 409 a revision only the PowerPoint jobs saved is taken
-  over (`adoptJobSaves`); else the version that won (the 409 body's `current`) is merged with the draft by
+  over (`adoptJobSaves`, also as soon as the library shows it: unsaved edits are kept, a follow-up's slides
+  taken slide by slide, a re-import's through the three-way merge below, so a slide the volunteer changed
+  while the re-import rebuilt it is a conflict, not a silent loss; the undo and redo steps move with the
+  draft, so an undo never takes the job's work back out); else the version that won (the 409 body's `current`) is merged with the draft by
   a three-way merge over the base (`views/editor/merge.ts`, design/27 §11 item 17): edits to different
   slides, or to different boxes of one slide, are combined, the draft becomes the merge on their revision
   (undo and redo move with it, so an undo never takes their work out) and saves again, with a toast. Where
@@ -247,6 +250,12 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
   'Save mine anyway'; Cancel has the focus, which goes back where it was when the dialog closes. The
   'Someone else saved' banner says that saving combines the two.
 - Disabled with a banner when the presentation is referenced by the live playlist.
+- The editor's shortcuts follow the focus (`views/editor/editorKeys.ts`): an open dialog keeps every key
+  (Delete on its Close button never deletes the object behind it, Enter presses its buttons); a field keeps
+  its own keys (Ctrl+S still saves); a focused button, link, radio or menu item keeps Enter, Space, the
+  arrows (a radio group moves between its choices without nudging the box) and Delete, and only the Ctrl
+  commands (undo, redo, duplicate, find) apply; with the focus on the slide canvas or the page, Delete, the
+  arrow nudges, Enter (edit the text) and Escape (drop the selection) apply too.
 - Groups and locked objects (design/27 §11 item 5 and "Locked objects"; pure ops in `views/editor/ops/group.ts`,
   the panel's parts in `GroupPanel.tsx`). The selection is a set of objects with a primary one, which the
   Object panel edits. A click on an object of a group (`origin.group`: a flattened PowerPoint group, or a
@@ -273,7 +282,9 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
   states and values show the selection (`aria-pressed="mixed"` and 'Mixed' where it differs), a value equal
   to the box's removes the override, and with a caret the bar is disabled ('Select text to format it.').
   Ctrl+B / Ctrl+I / Ctrl+U work in the field; a button gives the field its focus and selection back, and a
-  pointer never takes them away. The 'Paragraph' strip under the field styles the PowerPoint paragraphs the
+  pointer never takes them away. Ctrl+Z and Ctrl+Y (Ctrl+Shift+Z) in the field are the editor's undo and
+  redo, not the field's own (which knows nothing of a Bold), so Bold then Ctrl+Z takes the Bold back; the
+  caret stays where it was. The 'Paragraph' strip under the field styles the PowerPoint paragraphs the
   selection touches: Align and Direction (Auto, Left to right, Right to left) as radio groups, List (bullets
   • ● ■ ▪ ➢ ✓, numbers 1. (1) 1) a. i. with 'Start at'; a list started on paragraphs without an indent gets
   a hanging one wide enough for its labels), Level and Indent − / + (each paragraph from its own value),
@@ -298,8 +309,10 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
   the count ('3 matches on 2 slides', a polite live region) and every match listed by slide number with the
   text around it before anything is replaced, hidden slides included and tagged, locked objects left out; a
   listed match opens its slide with the match selected in the text field; Replace all replaces every match
-  as the text field replaces a selection, so the replacement keeps the formatting of the text it replaces (a
-  bold red date stays bold and red; the box style and its stored fit are untouched). The slide list dims a
+  as typing the same change in the text field would: only the part of the match that differs is replaced
+  and takes the formatting of the text it replaces (a bold red date stays bold and red, the plain words a
+  match also covers stay plain; the box style and its stored fit are untouched). A match on a slide that
+  shows its PowerPoint picture on the screens is marked, since the change does not show there. The slide list dims a
   hidden slide (its number and picture; the Hidden tag stays readable), and the selected slide's actions
   have 'New slide like this' (a copy right after it with its text cleared, keeping each box's style, its
   first paragraph's style and the formatting of a run over its whole first paragraph, without notes, the
@@ -315,7 +328,12 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
   placeholder (or layout shape) offers 'Apply to similar boxes…' in the Object panel, confirmed with the
   count ('Apply to 12 boxes on 12 slides?'): the similar boxes take its style and paragraph styles by level,
   keeping their text and runs (a themed lyric box marks the style fields it now overrides). A picture that
-  covers the slide offers 'Use as background', which moves it to the slide's `backgroundMediaId`.
+  covers the whole screen offers 'Use as background', which moves it to the slide's `backgroundMediaId`
+  (on a 4:3 deck a picture covering only the slide area stays a picture: a background is drawn over the
+  whole screen and would lose a quarter of its height). The pickers of 'Replace' and the background replace
+  list a picture still being processed but let it be chosen only once its size is known (a stretched
+  picture replaced by one of unknown size would be distorted; `replacePicture` gives such a picture
+  `fit: 'cover'` as a safety net); each thumbnail is a button named by the media name.
 - Media playing in place (design/27 §8, §11 item 14; `views/editor/MediaPanels.tsx`, pure ops in
   `mediaOps.ts`, one undo step each). '+ Video' (touch: Add → Video…) adds an ImageObject whose `mediaId`
   is the video, so every drawer shows its poster, with `play` {start automatically, no loop, hold the last

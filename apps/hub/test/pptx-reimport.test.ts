@@ -41,6 +41,7 @@ import {
   earlierWork,
   type FreshDeck,
   importOptionsOf,
+  keptBytes,
   type MediaTags,
   mergeReimport,
   pageFromName,
@@ -48,8 +49,10 @@ import {
   queueReimport,
   REIMPORT_BY,
   reimportKinds,
+  samePlace,
   unedited,
 } from '../src/pptx/reimport.ts';
+import { patchSlide } from '../src/pptx/fallback.ts';
 import { PPTX_JOB_CLASS, PPTX_JOBS, type PptxLoSlide } from '../src/pptx/shared.ts';
 import { ffmpeg } from './fixtures.ts';
 import {
@@ -269,7 +272,8 @@ describe('the merge', () => {
       transition: { kind: 'cut' },
       lyricObjectId: 'A',
     });
-    expect(a!.pptx!.digest).toBe(digestOf(a!.objects));
+    // The digest covers the import's objects only: the one added in ordo is left out (`digest.ts`).
+    expect(a!.pptx!.digest).toBe(digestOf(a!.objects.filter((o) => o.origin)));
     expect(unedited(a!)).toBe(true);
     expect(b).toBe(s1);
     expect(c).toBe(typed);
@@ -412,6 +416,178 @@ describe('the merge', () => {
     const lone = Slide.parse({ id: newId(), objects: [image('bottom', 'pg'), text('t', 'Elsewhere')] });
     const other = mergeReimport(presentation([[lone]]), f, {}, tagged);
     expect(other.counts.replaced).toBe(0);
+  });
+
+  it('keeps a made-editable slide whose text box the volunteer corrected, instead of doubling its text', () => {
+    const tagged = tagsOf({ pg: ['document'] });
+    const at = (y: number) => ({ x: 100, y, w: 1200, h: 150, rotation: 0 });
+    // The old 'Make editable': the page picture at the bottom, the extracted boxes on top; the volunteer
+    // then fixed the date ('12 May' in the deck), the reason the slide was made editable.
+    const made = Slide.parse({
+      id: newId(),
+      objects: [
+        image('page', 'pg'),
+        text('t1', 'Potluck on Sunday', { box: at(100) }),
+        text('t2', 'Sunday 26 May, after the service', { box: { ...at(300), x: 104, w: 1190 } }),
+        text('mine', 'Bring a dish', { box: at(700) }),
+      ],
+    });
+    const p = presentation([[made]]);
+    const f = fresh([
+      [
+        0,
+        [
+          text('A', 'Potluck on Sunday', { box: at(100) }),
+          text('B', 'Sunday 12 May, after the service', { box: at(300) }),
+        ],
+      ],
+    ]);
+    f.texts = [
+      {
+        index: 0,
+        texts: ['Potluck on Sunday', 'Sunday 12 May, after the service'],
+        boxes: [
+          { text: 'Potluck on Sunday', box: at(100) },
+          { text: 'Sunday 12 May, after the service', box: at(300) },
+        ],
+      },
+    ];
+    const names = (id: string) => (id === 'pg' ? 'Sunday – 1' : undefined);
+    const m = mergeReimport(p, f, {}, tagged, names);
+    // Kept as it is: the rebuild would bring '12 May' back, and keeping the box on top would show both.
+    expect(m.p).toBe(p);
+    expect(m.counts).toEqual({ regenerated: 0, keptEdited: 1, replaced: 0, userObjects: 0 });
+    // Reset: the slide is rebuilt and the corrected box goes with the page picture (nothing doubled); the
+    // box the volunteer added elsewhere stays on top.
+    const r = mergeReimport(p, f, { reset: [made.id] }, tagged, names);
+    const texts = slidesIn(r.p)[0]!.objects.map((o) => (o.type === 'text' ? o.text : o.id));
+    expect(texts).toEqual(['Potluck on Sunday', 'Sunday 12 May, after the service', 'Bring a dish']);
+    expect(r.counts).toMatchObject({ replaced: 1, userObjects: 1 });
+    // Unedited boxes (the deck's text at the deck's place) are replaced as before.
+    const plain = Slide.parse({
+      id: newId(),
+      objects: [image('page', 'pg'), text('t1', 'Potluck on Sunday', { box: at(100) })],
+    });
+    const q = mergeReimport(presentation([[plain]]), f, {}, tagged, names);
+    expect(q.counts).toMatchObject({ replaced: 1, keptEdited: 0, userObjects: 0 });
+    expect(samePlace(at(300), { ...at(300), x: 104, w: 1190 })).toBe(true);
+    expect(samePlace(at(300), at(700))).toBe(false);
+  });
+
+  it('objects added in ordo never make a slide edited, before or after a re-import kept them on top', () => {
+    const user = shape('mine', { fill: { r: 255, g: 0, b: 0, a: 1 } });
+    const s0 = native(0, [text('a', 'Welcome', { origin: PPTX })]);
+    s0.objects.push(user);
+    expect(unedited(s0)).toBe(true);
+    const f = fresh([[0, [text('A', 'Welcome!')]]]);
+    const after = slidesIn(mergeReimport(presentation([[s0]]), f, {}, noTags).p)[0]!;
+    expect(after.objects.map((o) => o.id)).toEqual(['A', 'mine']);
+    expect(unedited(after)).toBe(true);
+    // The volunteer moves or deletes their own shape: still unedited, so the next re-import rebuilds it.
+    const moved: Slide = {
+      ...after,
+      objects: after.objects.map((o) => (o.id === 'mine' ? { ...o, box: { ...o.box, x: 400 } } : o)),
+    };
+    const deleted: Slide = { ...after, objects: after.objects.filter((o) => o.id !== 'mine') };
+    expect(unedited(moved)).toBe(true);
+    expect(unedited(deleted)).toBe(true);
+    expect(planReimport(presentation([[moved]]), {}, noTags).slides[0]!.action).toBe('regenerate');
+    const again = mergeReimport(presentation([[moved]]), fresh([[0, [text('A2', 'Welcome!!')]]]), {}, noTags);
+    expect(slidesIn(again.p)[0]!.objects.map((o) => o.id)).toEqual(['A2', 'mine']);
+    // An edit of an imported object still counts.
+    const typed: Slide = {
+      ...after,
+      objects: after.objects.map((o) =>
+        o.id === 'A' ? { ...o, text: 'Welcome, friends' } : o,
+      ) as SlideObject[],
+    };
+    expect(unedited(typed)).toBe(false);
+  });
+
+  it('keeps the lyric box the volunteer chose, mapped to the fresh object of the same shape', () => {
+    const s0 = native(0, [
+      text('title', 'Amazing grace', { origin: { src: 'pptx', shapeId: 2, role: 'title' } }),
+      text('body', 'How sweet the sound', { origin: { src: 'pptx', shapeId: 3, role: 'body' } }),
+    ]);
+    const picked: Slide = { ...s0, lyricObjectId: 'body' };
+    expect(unedited(picked)).toBe(true);
+    const f = fresh([
+      [
+        0,
+        [
+          text('T', 'Amazing grace', { origin: { src: 'pptx', shapeId: 2, role: 'title' } }),
+          text('B', 'How sweet the sound!', { origin: { src: 'pptx', shapeId: 3, role: 'body' } }),
+        ],
+      ],
+    ]);
+    const m = mergeReimport(presentation([[picked]]), f, {}, noTags);
+    expect(slidesIn(m.p)[0]!.lyricObjectId).toBe('B');
+    // 'Reset slide' keeps it too; without shape ids it goes by order among the imported text boxes.
+    const r = mergeReimport(presentation([[picked]]), f, { reset: [picked.id] }, noTags);
+    expect(slidesIn(r.p)[0]!.lyricObjectId).toBe('B');
+    const bare = native(0, [
+      text('t', 'Amazing grace', { origin: PPTX }),
+      text('b', 'How sweet', { origin: PPTX }),
+    ]);
+    const f2 = fresh([[0, [text('T', 'Amazing grace'), text('B', 'How sweet the sound')]]]);
+    const m2 = mergeReimport(presentation([[{ ...bare, lyricObjectId: 'b' }]]), f2, {}, noTags);
+    expect(slidesIn(m2.p)[0]!.lyricObjectId).toBe('B');
+    // A converter that writes the slide again as it is: nothing changes (the choice is not an edit).
+    const same = native(0, [
+      text('T', 'Amazing grace', { origin: { src: 'pptx', shapeId: 2, role: 'title' } }),
+      text('B', 'How sweet the sound!', { origin: { src: 'pptx', shapeId: 3, role: 'body' } }),
+    ]);
+    const chosen = { ...same, lyricObjectId: 'B' };
+    const p3 = presentation([[chosen]]);
+    const f3 = fresh([
+      [
+        0,
+        [
+          text('T2', 'Amazing grace', { origin: { src: 'pptx', shapeId: 2, role: 'title' } }),
+          text('B2', 'How sweet the sound!', { origin: { src: 'pptx', shapeId: 3, role: 'body' } }),
+        ],
+      ],
+    ]);
+    expect(mergeReimport(p3, f3, {}, noTags).p).toBe(p3);
+  });
+
+  it('a LibreOffice patch keeps a slide with an object added in ordo unedited', () => {
+    const chart = text('chart-text', 'Q3 giving', { origin: PPTX });
+    const v1 = native(
+      0,
+      [text('title', 'Giving', { origin: PPTX }), chart],
+      {},
+      { class: 'hybrid', pending: true },
+    );
+    const withMine: Slide = { ...v1, objects: [...v1.objects, shape('mine')] };
+    expect(unedited(withMine)).toBe(true);
+    const lo = {
+      slideId: v1.id,
+      index: 0,
+      shown: 0,
+      class: 'hybrid' as const,
+      digest: v1.pptx!.digest!,
+      art: { elements: [], box: BOX, at: 1, replaces: ['chart-text'], text: 'Q3 giving' },
+      replaced: [['chart-text', digestOf([chart])]] as [string, string][],
+    } as PptxLoSlide;
+    const patched = patchSlide(withMine, lo, { art: { mediaId: 'art-1', box: BOX } }, DECK);
+    expect(patched.objects.map((o) => o.id)).not.toContain('chart-text');
+    expect(patched.objects.map((o) => o.id)).toContain('mine');
+    expect(unedited(patched)).toBe(true);
+    expect(planReimport(presentation([[patched]]), {}, noTags).slides[0]!.action).toBe('regenerate');
+  });
+
+  it('counts the bytes of the slides a re-import keeps for the size budget of those it builds', () => {
+    const big = native(0, [text('a', 'x'.repeat(5000), { origin: PPTX })]);
+    const pg = page(2);
+    const mine = Slide.parse({ id: newId(), objects: [text('m', 'y'.repeat(3000))] });
+    const p = presentation([[big, pg, mine]]);
+    const bytes = (sl: Slide) => Buffer.byteLength(JSON.stringify(sl));
+    // 'Make editable' on the page: every other slide stays and shares the budget.
+    const one = planReimport(p, { slideIds: [pg.id] }, noTags);
+    expect(keptBytes(p, one, true)).toBe(bytes(big) + bytes(mine));
+    // A whole re-import converts every deck slide: only the slides not from the deck are kept.
+    expect(keptBytes(p, planReimport(p, {}, noTags), false)).toBe(bytes(mine));
   });
 
   it('places legacy pages and made-editable pictures on deck slides', () => {

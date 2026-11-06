@@ -1,4 +1,4 @@
-import type { Presentation } from '@ordo/domain';
+import { type Presentation, slideContent } from '@ordo/domain';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Dialog } from '../../components/Dialog.tsx';
 import { findAndReplace } from './actions.ts';
@@ -26,7 +26,31 @@ export type FindRow = TextMatch & {
   match: string;
   after: string;
   hidden: boolean;
+  /**
+   * The slide shows its PowerPoint picture on the screens ('Show the PowerPoint picture') and the match is in
+   * an imported box the picture stands in for: a change to it does not show there.
+   */
+  unseen: boolean;
 };
+
+/** The slides of `matches` whose matched box the screens do not draw (they show the PowerPoint picture). */
+export function unseenSlides(p: Presentation, matches: readonly TextMatch[]): number {
+  const want = new Map<string, Set<string>>();
+  for (const m of matches) {
+    let ids = want.get(m.slideId);
+    if (!ids) want.set(m.slideId, (ids = new Set()));
+    ids.add(m.objectId);
+  }
+  let n = 0;
+  for (const sec of p.sections)
+    for (const s of sec.slides) {
+      const ids = want.get(s.id);
+      if (!ids) continue;
+      const drawn = new Set(slideContent(s).objects.map((o) => o.id));
+      if ([...ids].some((id) => !drawn.has(id))) n++;
+    }
+  return n;
+}
 
 /** The text around a match, cut to `CONTEXT` characters, line breaks shown as ' ⏎ '. */
 function context(t: string, start: number, end: number): Pick<FindRow, 'before' | 'match' | 'after'> {
@@ -42,23 +66,50 @@ function context(t: string, start: number, end: number): Pick<FindRow, 'before' 
 
 /** The dialog's rows for `matches` of `p` (at most `LIST_LIMIT`). */
 export function findRows(p: Presentation, matches: readonly TextMatch[]): FindRow[] {
-  const numbers = new Map<string, { n: number; hidden: boolean; texts: Map<string, string> }>();
+  const numbers = new Map<
+    string,
+    { n: number; hidden: boolean; texts: Map<string, string>; drawn: Set<string> }
+  >();
   let n = 0;
   for (const sec of p.sections)
     for (const s of sec.slides) {
       n++;
       const texts = new Map<string, string>();
       for (const o of s.objects) if (o.type === 'text') texts.set(o.id, o.text);
-      numbers.set(s.id, { n, hidden: !!s.hidden, texts });
+      const drawn = new Set(slideContent(s).objects.map((o) => o.id));
+      numbers.set(s.id, { n, hidden: !!s.hidden, texts, drawn });
     }
   const rows: FindRow[] = [];
   for (const m of matches.slice(0, LIST_LIMIT)) {
     const info = numbers.get(m.slideId);
     const t = info?.texts.get(m.objectId);
     if (!info || t === undefined) continue;
-    rows.push({ ...m, slide: info.n, hidden: info.hidden, ...context(t, m.start, m.end) });
+    rows.push({
+      ...m,
+      slide: info.n,
+      hidden: info.hidden,
+      unseen: !info.drawn.has(m.objectId),
+      ...context(t, m.start, m.end),
+    });
   }
   return rows;
+}
+
+/** What Replace all says: how many it replaced, and on how many slides the screens will not show it. */
+export function replacedMessage(n: number, slides: number, unseen: number): string {
+  if (!n) return 'Nothing was replaced.';
+  const s = (k: number) => `${k} slide${k === 1 ? '' : 's'}`;
+  const which =
+    unseen === slides
+      ? slides === 1
+        ? 'That slide shows its PowerPoint picture'
+        : 'Those slides show their PowerPoint pictures'
+      : `${unseen} of those slides ${unseen === 1 ? 'shows its PowerPoint picture' : 'show their PowerPoint pictures'}`;
+  const hidden =
+    unseen > 0
+      ? ` ${which} on the screens, so the change does not show there ('Show the objects instead' on the PowerPoint card shows it).`
+      : '';
+  return `Replaced ${n} match${n === 1 ? '' : 'es'} on ${s(slides)}.${hidden} Undo puts them back.`;
 }
 
 /** '3 matches on 2 slides', 'No matches', or what to do first. */
@@ -189,6 +240,14 @@ export function FindReplaceView(props: FindReplaceViewProps) {
                   {r.after}
                 </span>
                 {r.hidden && <span className="tag">Hidden</span>}
+                {r.unseen && (
+                  <span
+                    className="tag amber"
+                    title="This slide shows its PowerPoint picture on the screens: the change does not show there."
+                  >
+                    Shown as the PowerPoint picture
+                  </span>
+                )}
               </li>
             ))}
           </ul>
@@ -248,12 +307,9 @@ export function FindReplaceDialog({ readOnly, onClose }: { readOnly: boolean; on
       onReplace={() => {
         if (readOnly) return;
         const slides = new Set(matches.map((m) => m.slideId)).size;
+        const unseen = unseenSlides(draft, matches);
         const n = findAndReplace(find, repl, opts);
-        setDone(
-          n
-            ? `Replaced ${n} match${n === 1 ? '' : 'es'} on ${slides} slide${slides === 1 ? '' : 's'}. Undo puts them back.`
-            : 'Nothing was replaced.',
-        );
+        setDone(replacedMessage(n, slides, unseen));
       }}
       onGo={(r) => {
         restore.current = false;

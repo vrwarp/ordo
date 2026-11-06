@@ -290,9 +290,14 @@ function mergeTheirs(
 
 /**
  * When only the hub's PowerPoint jobs saved the open presentation since it was opened (`onlyJobSaves`: its
- * LibreOffice follow-up, reference pictures, the text repair), take their revision over: the whole of it when
- * nothing is unsaved, else slide by slide (`rebaseOnJobs`), unsaved edits kept. 'other' when someone else
- * saved (the usual banner and conflict dialog apply); 'none' when there is nothing newer or the editor moved on.
+ * LibreOffice follow-up, reference pictures, the text repair, a re-import), take their revision over: the
+ * whole of it when nothing is unsaved, else with the unsaved edits kept. The follow-ups' revisions are taken
+ * slide by slide (`rebaseOnJobs`); a re-import's, which rebuilds whole slides, through the three-way merge
+ * (`merge.ts`), so a slide the volunteer changed while the re-import rebuilt it is a conflict ('other': the
+ * banner and, at the next save, the conflict dialog say so) instead of the rebuild being dropped silently.
+ * The undo and redo steps move with the draft, so an undo never takes the job's work back out. 'other' when
+ * someone else saved (the usual banner and conflict dialog apply); 'none' when there is nothing newer or the
+ * editor moved on.
  */
 export async function adoptJobSaves(): Promise<'adopted' | 'other' | 'none'> {
   const s = useEditor.getState();
@@ -313,7 +318,25 @@ export async function adoptJobSaves(): Promise<'adopted' | 'other' | 'none'> {
     if (kept.length) selectObjects(kept, objectId);
     return 'adopted';
   }
-  useEditor.setState({ base: latest, draft: rebaseOnJobs(cur.base!, cur.draft, latest) });
+  const oldBase = cur.base!;
+  const reimported = revisions.some(
+    (r) => r.rev > oldBase.rev && r.rev <= latest.rev && r.savedBy === 'pptx-reimport',
+  );
+  let draft: Presentation;
+  let move: (snapshot: Presentation) => Presentation | undefined;
+  if (reimported) {
+    const merge = prepareMerge(oldBase, latest);
+    const r = merge(cur.draft, true);
+    if (!r.merged) return 'other';
+    draft = r.merged;
+    move = (snapshot) => merge(snapshot).merged;
+  } else {
+    draft = rebaseOnJobs(oldBase, cur.draft, latest);
+    move = (snapshot) => rebaseOnJobs(oldBase, snapshot, latest);
+  }
+  history.rebase(move);
+  useEditor.setState({ base: latest, draft, canUndo: history.canUndo, canRedo: history.canRedo });
+  fixSelection();
   return 'adopted';
 }
 

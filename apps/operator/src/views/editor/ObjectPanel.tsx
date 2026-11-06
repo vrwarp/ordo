@@ -7,7 +7,8 @@ import { useLibrary } from '../../state/library.ts';
 import { refit, replacePictureWith, typeText } from './actions.ts';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { CropControl } from './CropControl.tsx';
-import { change, useEditor } from './editorStore.ts';
+import { change, redo, undo, useEditor } from './editorStore.ts';
+import { historyKey } from './editorKeys.ts';
 import { FormatBar } from './FormatBar.tsx';
 import { GroupNote, LockedNote, SelectionBox } from './GroupPanel.tsx';
 import { VideoPanel } from './MediaPanels.tsx';
@@ -90,6 +91,28 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
             onSelect={(e) =>
               setRange({ start: e.currentTarget.selectionStart, end: e.currentTarget.selectionEnd })
             }
+            onKeyDown={(e) => {
+              // Ctrl+Z and Ctrl+Y here are the editor's undo and redo, not the field's own: the field's
+              // undo knows nothing of a Bold or a colour and would take typed letters back instead. Typing
+              // is one undo step per pause, so the editor's undo covers the text too.
+              const step = historyKey(e);
+              if (!step) return;
+              e.preventDefault();
+              e.stopPropagation();
+              if (readOnly) return;
+              const el = e.currentTarget;
+              const at = { start: el.selectionStart, end: el.selectionEnd };
+              (step === 'undo' ? undo : redo)();
+              // The field shows the restored text on the next render: the caret stays where it was.
+              requestAnimationFrame(() => {
+                const f = document.getElementById('ordo-text-editor');
+                if (!(f instanceof HTMLTextAreaElement)) return;
+                const n = f.value.length;
+                const r = { start: Math.min(at.start, n), end: Math.min(at.end, n) };
+                f.setSelectionRange(r.start, r.end);
+                setRange(r);
+              });
+            }}
             onChange={(e) => {
               // Runs and paragraph styles follow the edit (design/27 §11): a typo fix keeps the formatting.
               const next = e.target.value;
@@ -180,6 +203,7 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
             <MediaPickerDialog
               title={o.play ? 'Choose a poster image' : 'Choose an image'}
               kinds={['image']}
+              needsSize={o.fit !== 'contain' && o.fit !== 'cover'}
               onClose={() => setPicking(false)}
               onPick={(m) => {
                 // Re-cropped to the box, never distorted; the mask, flips and the rest stay (design/27 §11).

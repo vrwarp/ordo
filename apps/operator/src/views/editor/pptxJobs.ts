@@ -63,20 +63,27 @@ function track(
 
 /**
  * Take the job's revision into the open editor: as a PowerPoint job's when only such jobs saved since its
- * base; else, when nothing is unsaved, the latest version as it is (with unsaved edits, the editor's banner
- * says a newer version exists and the next save meets the conflict dialog).
+ * base (unsaved edits merged in, `adoptJobSaves`); else, when nothing is unsaved, the latest version as it is.
+ * False when unsaved edits kept it out (a slide the re-import rebuilt was also changed meanwhile, or someone
+ * else saved): the editor's banner says a newer version exists and the next save meets the conflict dialog.
  */
-async function takeOver(pid: string): Promise<void> {
+async function takeOver(pid: string): Promise<boolean> {
   if (useEditor.getState().id !== pid) {
     upsertLocal('presentations', await api<Presentation>(`/presentations/${pid}`));
-    return;
+    return true;
   }
-  if ((await adoptJobSaves()) !== 'other') return;
+  if ((await adoptJobSaves()) !== 'other') return true;
   const latest = await api<Presentation>(`/presentations/${pid}`);
   upsertLocal('presentations', latest);
   const s = useEditor.getState();
-  if (s.id === pid && !s.dirty) replaceBase(latest);
+  if (s.id !== pid || s.dirty) return false;
+  replaceBase(latest);
+  return true;
 }
+
+/** The toast when unsaved edits kept a re-import's revision out of the editor. */
+export const REIMPORT_HELD =
+  'You changed slides the re-import rebuilt meanwhile: the editor still shows your version. Save to choose which to keep.';
 
 /** Follow a re-import job the hub queued (the request's answer, or 'Make editable''s), then take it over. */
 export function followReimport(
@@ -96,14 +103,16 @@ export function followReimport(
         return;
       }
       const r = readReimportResult(j.result);
+      let taken = true;
       try {
-        if (r?.rev) await takeOver(pid);
+        if (r?.rev) taken = await takeOver(pid);
       } catch (e) {
         toast(`The re-import is done; reload the presentation to see it (${errorText(e)}).`, 'warn');
         return;
       }
       const m = reimportMessage(what, r);
-      toast(m.text, m.tone, 8000);
+      if (taken) toast(m.text, m.tone, 8000);
+      else toast(`${m.text} ${REIMPORT_HELD}`, 'warn', 12_000);
     },
   });
 }

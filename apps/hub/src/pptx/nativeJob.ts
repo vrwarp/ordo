@@ -42,7 +42,9 @@
  */
 import { open, rm, stat } from 'node:fs/promises';
 import {
+  type Box,
   compactSlideBytes,
+  IMPORT_RESERVE_BYTES,
   type ImageObject,
   newId,
   planImportSizes,
@@ -78,6 +80,7 @@ import { baseName } from '../media/service.ts';
 import { type CpuPool, cpuPool, transferables, WorkerStartError } from '../pool.ts';
 import { type ClipFile, ClipImport, spillClips } from './clips.ts';
 import { type DeckXml, readDeckXml, spillDeckParts } from './deckParts.ts';
+import { importDigest } from './digest.ts';
 import { displayNeeds, PictureBudget, type PictureItem, storePictures } from './pictures.ts';
 import { ImportLog, importResult, logSafe, missingFonts } from './report.ts';
 import {
@@ -108,6 +111,12 @@ export type NativeJobEnv = {
    * converted, and only those slides' pictures and clips are stored.
    */
   only?: (listed: readonly SlideRef[]) => ReadonlySet<number> | undefined;
+  /**
+   * A re-import: the bytes of the stored slides it keeps as they are, which share the presentation's size
+   * budget with the slides it builds (§3.4): added to `planImportSizes`' reserve, so the new slides go compact
+   * where the merged presentation would pass it.
+   */
+  reserve?: number;
 };
 
 /**
@@ -129,6 +138,12 @@ export type NativeBuild = {
    * `SlideRef.index`, read before any slide became a picture: what a legacy page's text boxes were made of.
    */
   texts: Map<number, string[]>;
+  /**
+   * Where those text bodies are, in the 1920x1080 contain frame a legacy page's text boxes used (what the old
+   * 'Make editable' laid its text boxes at): a re-import tells a made-editable box the volunteer corrected
+   * from one added in ordo by its place.
+   */
+  textBoxes: Map<number, { text: string; box: Box }[]>;
   /** The clips the built slides play (their media jobs are queued with the save) and every clip stored. */
   clipIds: Set<string>;
   clipsCreated: string[];
@@ -158,7 +173,7 @@ export async function buildNative(
     if (!done.presentationId) throw new Error('no presentation to build for');
     const file = deps.lib.getFile(pl.hash);
     if (!file) throw new Error('The PowerPoint file is no longer stored');
-    const job = new NativeImport(deps, env.pool ?? cpuPool(), limits, ctx, done, save, env.only);
+    const job = new NativeImport(deps, env.pool ?? cpuPool(), limits, ctx, done, save, env.only, env.reserve);
     const scratch = await deps.store.tmpDir();
     try {
       return await job.buildOnly(deps.store.abs(file.path), scratch);
@@ -320,6 +335,7 @@ class NativeImport {
     private readonly done: PptxNativeProgress,
     private readonly save: () => void,
     private readonly only?: NativeJobEnv['only'],
+    private readonly reserve = 0,
   ) {
     this.options = ctx.payload.options ?? {};
     // The upload's file name: one line, like every other string that reaches a list or a log.
@@ -433,6 +449,7 @@ class NativeImport {
       `converted in ${Math.round(this.poolMs)} ms of pool time, worker heap ${Math.round(this.heapMb)} MB`,
     );
     const texts = new Map([...converted].map(([index, c]) => [index, bodyTexts(c.s)]));
+    const textBoxes = new Map([...converted].map(([index, c]) => [index, bodyBoxes(c.s)]));
 
     // 3. Drafts, classes and the size budgets.
     const drafts = this.drafts(want ? listed.filter((r) => want.has(r.index)) : listed, converted, scan);
@@ -448,7 +465,7 @@ class NativeImport {
 
     // 5. Version 1, assembled (`saveVersion1` saves it).
     const built = this.assemble(drafts, stored, first.result.sections, first.result.slideRect, scan);
-    return { ...built, listed: [...listed], texts, compact };
+    return { ...built, listed: [...listed], texts, textBoxes, compact };
   }
 
   /**
@@ -727,6 +744,8 @@ class NativeImport {
     const plan = planImportSizes(
       sizes,
       stored.map((sl) => compactSlideBytes(sl)),
+      // A re-import's kept slides take their part of the budget (`NativeJobEnv.reserve`).
+      IMPORT_RESERVE_BYTES + (Number.isFinite(this.reserve) && this.reserve > 0 ? this.reserve : 0),
     );
     let compact = 0;
     drafts.forEach((d, i) => {
@@ -847,7 +866,7 @@ class NativeImport {
     sectionInfo: SectionInfo[],
     slideRect: { x: number; y: number; w: number; h: number },
     scan: SceneScan,
-  ): Omit<NativeBuild, 'listed' | 'texts' | 'compact'> {
+  ): Omit<NativeBuild, 'listed' | 'texts' | 'textBoxes' | 'compact'> {
     const { deps, ctx } = this;
     const hash = ctx.payload.hash;
     // Remap each slide with its own batch's placeholders.
@@ -921,9 +940,10 @@ class NativeImport {
         return again.success ? again.data : Slide.parse({ id: sl.id, objects: [], pptx: d.slide.pptx });
       });
     const parsed = Presentation.parse(p);
-    // The digest of the objects exactly as stored: the "unedited" test of the follow-up and re-import.
+    // The digest of the import's objects (every object here has an origin, `imported`): the "unedited" test
+    // of the follow-up and re-import (`digest.ts`).
     const slides = parsed.sections.flatMap((s) => s.slides);
-    for (const sl of slides) if (sl.pptx) sl.pptx.digest = digestOf(sl.objects);
+    for (const sl of slides) if (sl.pptx) sl.pptx.digest = importDigest(sl.objects);
     const classes = slides.map((sl) => sl.pptx?.class ?? 'native');
     const counts = {
       native: classes.filter((c) => c === 'native').length,
@@ -1083,6 +1103,15 @@ function bodyTexts(s: Pick<EmittedSlide, 'slide' | 'art'>): string[] {
   const out: string[] = [];
   for (const o of s.slide.objects) if (o.type === 'text' && o.text.trim()) out.push(o.text);
   if (s.art?.text?.trim()) out.push(s.art.text);
+  return out;
+}
+
+/** `bodyTexts` with where each body is (the art's text at the art's box). */
+function bodyBoxes(s: Pick<EmittedSlide, 'slide' | 'art'>): { text: string; box: Box }[] {
+  const out: { text: string; box: Box }[] = [];
+  for (const o of s.slide.objects)
+    if (o.type === 'text' && o.text.trim()) out.push({ text: o.text, box: o.box });
+  if (s.art?.text?.trim()) out.push({ text: s.art.text, box: { ...s.art.box, rotation: 0 } });
   return out;
 }
 

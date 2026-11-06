@@ -6,6 +6,7 @@
  */
 import {
   DEFAULT_THEME,
+  editText,
   type ImageObject,
   Presentation,
   type ShapeObject,
@@ -27,6 +28,8 @@ import {
   findRows,
   LIST_LIMIT,
   matchSummary,
+  replacedMessage,
+  unseenSlides,
 } from '../src/views/editor/FindReplaceDialog.tsx';
 import { ObjectSlideOpsView, similarQuestion } from '../src/views/editor/ObjectSlideOps.tsx';
 import { HIDDEN_DIM, HideSlideToggle } from '../src/views/editor/SlidesPanel.tsx';
@@ -40,11 +43,14 @@ import {
 import { getSlide } from '../src/views/editor/ops.ts';
 import {
   applyStyleToSimilar,
+  changedPart,
   coversSlide,
   deckBackground,
   findReplace,
   findText,
   hideSlide,
+  MAX_PARAS,
+  MAX_SECTION_SLIDES,
   MAX_TEXT,
   matchesIn,
   newSlideLike,
@@ -326,17 +332,41 @@ describe('findReplace keeps formatting (design/27 §11 item 8)', () => {
           if (k < ms.length && i >= ms[k]![0]) continue;
           expect(charStyle(t, i + shift)).toEqual(charStyle(o, i));
         }
-        // Each non-empty replacement takes the style of the first character it replaced.
-        shift = 0;
-        for (const [a, b] of ms) {
-          if (c.repl && c.text.slice(a, b) !== c.repl)
-            for (let j = 0; j < c.repl.length; j++)
-              expect(charStyle(t, a + shift + j)).toEqual(charStyle(o, a));
-          shift += c.repl.length - (b - a);
+        // The same runs and paragraph styles as typing each change in the text field (last match first, the
+        // caret after the typed replacement): a replacement keeps the style of each character it keeps.
+        let typed: TextObject = o;
+        for (let i = ms.length - 1; i >= 0; i--) {
+          const [a, b] = ms[i]!;
+          typed = editText(typed, typed.text.slice(0, a) + c.repl + typed.text.slice(b), a + c.repl.length);
         }
+        expect(t.text).toBe(typed.text);
+        expect(t.runs).toEqual(typed.runs);
+        expect(t.paras).toEqual(typed.paras);
       }),
-      { numRuns: 2000 },
+      { numRuns: 4000 },
     );
+  });
+
+  it('only the part that differs is replaced: the words around a bold red date keep their own style', () => {
+    const p = deck([slide('s1', [announcement()])]);
+    // The match runs past the date into plain words: "in the hall" stays plain.
+    const hall = obj<TextObject>(findReplace(p, '12 May in the hall', '19 May in the hall').p, 's1', 't1');
+    expect(hall.runs).toEqual([{ start: 17, end: 30, fontWeight: 700, color: RED }]);
+    // The match starts in plain words: 'Saturday' takes the bold red of 'Sunday' (what it replaces).
+    const sat = obj<TextObject>(findReplace(p, 'on Sunday', 'on Saturday').p, 's1', 't1');
+    expect(sat.text.slice(0, 26)).toBe('Potluck lunch on Saturday ');
+    expect(sat.runs).toEqual([{ start: 17, end: 32, fontWeight: 700, color: RED }]);
+    // Both are what typing the same change gives.
+    const typed = editText(announcement(), sat.text, 'Potluck lunch on Satur'.length);
+    expect(typed.runs).toEqual(sat.runs);
+  });
+
+  it('changedPart trims the common start and end, never inside a surrogate pair', () => {
+    expect(changedPart('on Sunday', 'on Saturday')).toEqual({ k: 4, j: 3 });
+    expect(changedPart('12 May', '19 May')).toEqual({ k: 1, j: 4 });
+    expect(changedPart('ab', 'abab')).toEqual({ k: 2, j: 0 });
+    // '😀' and '😃' share their high surrogate: the whole pair is replaced.
+    expect(changedPart('x😀', 'x😃')).toEqual({ k: 1, j: 0 });
   });
 });
 
@@ -708,6 +738,29 @@ describe("similarObjects and 'Apply to similar boxes' (design/27 §11 item 10)",
 
 // ---- new slide like this -------------------------------------------------------------------------------
 
+describe('the slide ops keep the schema bounds', () => {
+  it("'Apply to similar boxes' onto a box of more than 5,000 paragraphs writes at most 5,000 styles", () => {
+    const src = text('src', 'Verse', { origin: { src: 'pptx', ph: 'body' }, paras: [{ align: 'left' }] });
+    const dst = text('dst', 'a\n'.repeat(5_500), { origin: { src: 'pptx', ph: 'body' } });
+    const p = deck([slide('s1', [src]), slide('s2', [dst])]);
+    const r = applyStyleToSimilar(p, 's1', 'src');
+    expect(r.changed).toBe(1);
+    expect(obj<TextObject>(r.p, 's2', 'dst').paras).toHaveLength(MAX_PARAS);
+    expect(Presentation.safeParse(r.p).success).toBe(true);
+  });
+
+  it("'New slide like this' adds none to a section of 5,000 slides", () => {
+    const p = deck([slide('s1', [text('t1', 'Verse 1')])]);
+    const many = Array.from({ length: MAX_SECTION_SLIDES }, (_, i) => slide(`x${i}`));
+    const full: Presentation = {
+      ...p,
+      sections: [{ ...p.sections[0]!, slides: many }, ...p.sections.slice(1)],
+    };
+    expect(newSlideLike(full, 'x0')).toEqual({ p: full, full: true });
+    expect(newSlideLike(p, 's1').id).toBeDefined();
+  });
+});
+
 describe("'New slide like this' (design/27 §11 item 11)", () => {
   const verse = text('v', '16 For God so loved the world\n17 For God sent not his Son', {
     runs: [
@@ -815,7 +868,7 @@ describe("'Use as background' (design/27 §11 item 6)", () => {
     });
   });
 
-  it('only for an unlocked, unrotated picture covering the slide area (that of a 4:3 deck)', () => {
+  it('only for an unlocked, unrotated picture covering the whole frame (also on a 4:3 deck)', () => {
     const p = deck([
       slide('s1', [image('small', 'a', { box: { x: 0, y: 0, w: 1920, h: 1000, rotation: 0 } })]),
     ]);
@@ -831,15 +884,19 @@ describe("'Use as background' (design/27 §11 item 6)", () => {
       false,
     );
     const area = { x: 240, y: 0, w: 1440, h: 1080 };
-    const four3 = deck([slide('s1')], {
+    const four3 = deck([slide('s1', [f({ box: { ...area, rotation: 0 } })])], {
       source: {
         kind: 'pptx',
         fileId: 'f',
         native: { version: 1, slides: 1, native: 1, hybrid: 0, picture: 0, slideRect: area },
       },
     });
-    expect(coversSlide(four3, f({ box: { ...area, rotation: 0 } }))).toBe(true);
+    // On a 4:3 deck a picture covering only the slide area stays a picture: as a background (cover-fit over
+    // the whole frame) it would grow into the bars and lose a quarter of its height.
+    expect(coversSlide(four3, f({ box: { ...area, rotation: 0 } }))).toBe(false);
+    expect(coversSlide(four3, f({}))).toBe(true);
     expect(coversSlide(p, f({ box: { ...area, rotation: 0 } }))).toBe(false);
+    expect(useAsBackground(four3, 's1', 'i')).toBe(four3);
   });
 });
 
@@ -1002,6 +1059,50 @@ describe('the Find and replace dialog', () => {
     expect(out).toContain('<span class="tag">Hidden</span>');
     expect(out).toMatch(/aria-label="Open slide 3: [^"]*12 May"/);
     expect(out).toMatch(/<button type="button" class="primary">Replace all<\/button>/);
+  });
+
+  it('marks a match the screens do not show: its slide shows the PowerPoint picture', () => {
+    const imported = text('t9', 'Potluck on Sunday 12 May', { origin: { src: 'pptx', shapeId: 4 } });
+    const mine = text('t10', 'Also 12 May');
+    const q = deck([
+      slide('s1', [imported, mine], {
+        pptx: { fileId: 'f', index: 0, class: 'native', version: 1, refMediaId: 'ref', show: 'picture' },
+      }),
+      slide('s2', [text('t2', 'See you on 12 May')]),
+    ]);
+    const matches = findText(q, '12 May');
+    expect(findRows(q, matches).map((r) => [r.objectId, r.unseen])).toEqual([
+      ['t9', true],
+      ['t10', false],
+      ['t2', false],
+    ]);
+    expect(unseenSlides(q, matches)).toBe(1);
+    const out = html(
+      createElement(FindReplaceView, {
+        find: '12 May',
+        repl: '19 May',
+        opts: {},
+        rows: findRows(q, matches),
+        total: matches.length,
+        summary: matchSummary('12 May', matches),
+        readOnly: false,
+        onFind: noop,
+        onRepl: noop,
+        onOpts: noop,
+        onReplace: noop,
+        onGo: noop,
+        onClose: noop,
+      }),
+    );
+    expect(out.match(/Shown as the PowerPoint picture/g)).toHaveLength(1);
+    expect(replacedMessage(3, 2, 1)).toBe(
+      "Replaced 3 matches on 2 slides. 1 of those slides shows its PowerPoint picture on the screens, so the change does not show there ('Show the objects instead' on the PowerPoint card shows it). Undo puts them back.",
+    );
+    expect(replacedMessage(1, 1, 1)).toContain(
+      'Replaced 1 match on 1 slide. That slide shows its PowerPoint picture',
+    );
+    expect(replacedMessage(2, 2, 0)).toBe('Replaced 2 matches on 2 slides. Undo puts them back.');
+    expect(replacedMessage(0, 0, 0)).toBe('Nothing was replaced.');
   });
 
   it('Replace all is disabled with nothing found or while the presentation is locked', () => {

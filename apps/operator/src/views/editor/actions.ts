@@ -13,6 +13,8 @@ import {
   formatRange,
   groupBox,
   hideSlide,
+  MAX_OBJECTS,
+  MAX_SECTION_SLIDES,
   moveObjects,
   newSlideLike,
   type ParaPatch,
@@ -41,6 +43,7 @@ import {
 import type { ZOrder } from './ops.ts';
 // F: the PowerPoint card's slide ops (pure, beside the card's other readers).
 import { showObjects, showPicture } from '../../lib/pptxImport.ts';
+import { toast } from '../../state/toasts.ts';
 
 /*
  * The M4 ops wired into the editor store (M4.md): each action applies one op to the open presentation through
@@ -175,12 +178,16 @@ export function deleteSelection(): void {
 export function duplicateSelection(): void {
   const { objectIds, objectId } = useEditor.getState();
   let copies: string[] = [];
+  let tried = false;
   onSelection((p, slideId, ids) => {
+    tried = true;
     const r = duplicateObjects(p, slideId, ids);
     copies = r.ids;
     return r.p;
   });
   if (copies.length) selectObjects(copies, objectId ? copies[objectIds.indexOf(objectId)] : undefined);
+  else if (tried && currentObjects().length)
+    toast(`A slide holds at most ${MAX_OBJECTS} objects: the copy was not made.`, 'warn');
 }
 
 /** Z-order the selection as one block. */
@@ -271,12 +278,16 @@ export function applyToSimilar(objectId: string): number {
 /** 'New slide like this'; the new slide is opened. */
 export function addSlideLike(slideId: string): void {
   let id: string | undefined;
+  let full = false;
   change((p) => {
     const r = newSlideLike(p, slideId);
     id = r.id;
+    full = !!r.full;
     return r.p;
   });
   if (id) selectSlide(id);
+  else if (full)
+    toast(`A section holds at most ${MAX_SECTION_SLIDES} slides: the new slide was not added.`, 'warn');
 }
 
 /** 'Use as background' for a full-slide picture of the open slide; the picture, now gone, is deselected. */

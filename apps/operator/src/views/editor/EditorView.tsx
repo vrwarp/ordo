@@ -17,6 +17,7 @@ import {
 } from './actions.ts';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { ConflictDialog } from './ConflictDialog.tsx';
+import { historyKey, keyPlace } from './editorKeys.ts';
 import { LookPreviews } from './LookPreviews.tsx';
 import { addVideo } from './mediaOps.ts';
 import {
@@ -69,11 +70,6 @@ function storedLooksOpen(): boolean | null {
   } catch {
     return null;
   }
-}
-
-function isTyping(e: KeyboardEvent): boolean {
-  const t = e.target as HTMLElement | null;
-  return !!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
 }
 
 /** The full slide editor (prd/03, design/15). */
@@ -149,26 +145,27 @@ export function EditorView({ id }: { id: string }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // A control that handled the key itself (a radio group's arrows, a menu's Escape) keeps it.
+      if (e.defaultPrevented) return;
       const ctrl = e.ctrlKey || e.metaKey;
+      // Where the focus is decides which shortcuts apply (editorKeys.ts): a dialog keeps every key, a field
+      // its own keys, a button Enter, Space, the arrows and Delete; the slide canvas gets them all.
+      const place = keyPlace(e.target);
       if (ctrl && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        if (!readOnly) void save();
+        if (!readOnly && place !== 'dialog') void save();
         return;
       }
-      if (isTyping(e)) return;
+      if (place === 'field' || place === 'dialog') return;
       if (ctrl && e.key.toLowerCase() === 'f') {
         e.preventDefault();
         setFinding(true);
         return;
       }
-      if (ctrl && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+      const step = historyKey(e);
+      if (step) {
         e.preventDefault();
-        if (!readOnly) undo();
-        return;
-      }
-      if (ctrl && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) {
-        e.preventDefault();
-        if (!readOnly) redo();
+        if (!readOnly) (step === 'undo' ? undo : redo)();
         return;
       }
       const st = useEditor.getState();
@@ -180,15 +177,14 @@ export function EditorView({ id }: { id: string }) {
         duplicateSelection();
         return;
       }
+      if (place !== 'canvas' || ctrl || e.altKey) return;
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
         deleteSelection();
         return;
       }
-      const step = e.shiftKey ? 10 : 1;
-      const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[
-        e.key
-      ];
+      const by = e.shiftKey ? 10 : 1;
+      const d = { ArrowLeft: [-by, 0], ArrowRight: [by, 0], ArrowUp: [0, -by], ArrowDown: [0, by] }[e.key];
       if (d) {
         e.preventDefault();
         nudge(d[0]!, d[1]!);

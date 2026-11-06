@@ -1106,8 +1106,8 @@ The extensions, in priority order (M4 unless noted):
 
 - **Round trip.** There is no PPTX export. The deck stays stored (`fileReferenced`, `library.ts:446-452`). Inheritance is frozen at import: a changed PowerPoint master means a re-import.
 - **Re-import.** 'Re-import from PowerPoint' (a hub job on the stored deck; refused while the presentation is locked):
-  - regenerates only slides whose objects still match `pptx.digest`;
-  - keeps slide ids, sections, arrangements, notes, durations, per-slide backgrounds and the operator's own objects (those without `origin`, kept on top);
+  - regenerates only slides whose objects still match `pptx.digest`. The digest covers the import's objects only (those with an `origin`): the native import, the re-import and the LibreOffice patch all write it that way (`apps/hub/src/pptx/digest.ts`), so an object added in ordo never makes a slide edited, before or after a re-import kept it;
+  - keeps slide ids, sections, arrangements, notes, durations, per-slide backgrounds, the lyric box the volunteer chose (an imported one mapped to the fresh object of the same PowerPoint shape) and the operator's own objects (those without `origin`, kept on top);
   - saves a new revision that History can restore.
 - **No data migration.** Today's picture slides (`imported`) and made-editable slides render exactly as before.
 - **Legacy text repair (M3).** The fix-now text fallback must not show another slide's text, so it is gated:
@@ -1119,7 +1119,7 @@ The extensions, in priority order (M4 unless noted):
   - It skips presentations that are locked (retried after End service) or whose deck is gone. Those keep today's behaviour: no text fallback.
 - **'Re-import as editable'** is opt-in for legacy PowerPoint presentations. Slides are matched with the same page rule as the repair job. Legacy slides are handled by kind:
   - **page slides** (`imported` present): replaced by the native slide; objects the user added on top are kept on top;
-  - **made-editable slides** (no `imported`; in a pptx-sourced presentation; the bottom object is a full-frame ImageObject whose media is tagged 'document'): that page picture and every text object whose text equals an extracted box are replaced by the native slide. Other objects are kept on top. The dialog lists these slides, and the user can keep any of them unchanged;
+  - **made-editable slides** (no `imported`; in a pptx-sourced presentation; the bottom object is a full-frame ImageObject whose media is tagged 'document'): that page picture and every text object whose text equals an extracted box are replaced by the native slide. Other objects are kept on top. A text object at an extracted box's place (overlapping it by 60 % of their union) with another text is the volunteer's correction of that box: the slide is kept as it is and counted as edited (the rebuild would bring the deck's old wording back, and keeping the box would show both), unless the request resets it. The dialog lists these slides, and the user can keep any of them unchanged;
   - **any other slide:** kept as it is.
 
   Slide ids, sections, arrangements, notes (unless empty), durations and per-slide backgrounds are kept. The result is one new revision.
@@ -1498,8 +1498,11 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   save (`nativeJob.ts` `buildNative`, only the deck slides a one-slide request needs: `NativeJobEnv.only`)
   and merges into the presentation as it is when the conversion ends, saving one revision with its
   `pptx-lo` (earlier follow-ups' art, page and metafile pictures of the same slide and deck elements reused,
-  `earlierWork`) and the clips' media jobs. Rules beyond §11: "unedited" means `digest` matches the objects,
-  or the objects with an `origin` (objects added in ordo are kept on top and are not an edit); a slide the
+  `earlierWork`) and the clips' media jobs. A re-import of some slides budgets them with the slides it keeps
+  (`NativeJobEnv.reserve`, `keptBytes`), so they go compact where the merged presentation would pass §3.4's
+  budget, and the job logs a warning when it is still over. Rules beyond §11: "unedited" means `digest`
+  matches the objects with an `origin`, or (a digest stored before that rule) all the objects (objects
+  added in ordo are kept on top and are not an edit); a slide the
   same converter would write again with its LibreOffice work done is left alone, so a re-import that changes
   nothing saves nothing; slide-level settings (timing, transition, hidden, sound, background, the reference
   picture) stay, on a legacy slide only where the operator set them; a legacy page whose deck slide is a
@@ -1559,6 +1562,17 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   `drawSlide2D`, by the outputs' `rasterSlide` with prepared pictures (`edited-slide-output`) and by the
   editor canvas's text rasters and node transforms (`edited-slide-editor`), all against one PNG
   (`SAME_AS`). Every exit item below is a Playwright spec ending in `saveAndReload`.
+- **As built, the review round:** the editor's shortcuts follow the focus (`editorKeys.ts`: a dialog keeps
+  every key, a button or radio its Enter, arrows and Delete, the canvas gets them all), and Ctrl+Z / Ctrl+Y
+  in the text field are the editor's undo and redo (`e2e/editor-keys.spec.ts`, port 8909); taking a job's
+  revision over moves the undo steps with the draft, a re-import's through the three-way merge; Find and
+  replace changes only the part of each match that differs (typing's rule) and marks matches the screens
+  do not show; the picture pickers of Replace and the background replace wait for a picture's size (and
+  `replacePicture` covers instead of stretching without one); 'Use as background' needs a picture covering
+  the whole frame; the slide ops stay within the schema's bounds. In the hub, "unedited" is the digest of
+  the objects with an origin everywhere (`digest.ts`), a re-import keeps the chosen lyric box, keeps a
+  made-editable slide whose box the volunteer corrected, and budgets the slides it builds with those it
+  keeps.
 
 **Files.** `apps/operator/src/views/editor/ops.ts`, `ObjectPanel.tsx`, `SlidePanel.tsx`, `SlidesPanel.tsx`, `PresentationPanel.tsx`, `SlideCanvas.tsx`, `EditorView.tsx`, `editorStore.ts`; `apps/operator/src/components/TextStyleEditor.tsx`, new `FormatBar.tsx`, `ParagraphStrip.tsx`, `CropControl.tsx`; `apps/hub/src/pptx/reimport.ts`, `routes.ts`; `apps/stage/src/model.ts`, `view.ts`; `packages/domain/src/schemas.ts` (`PropsRule.notes`); `packages/client/src/api.ts`.
 
