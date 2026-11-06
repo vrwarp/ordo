@@ -1,6 +1,6 @@
 import { nearColor, type SlideObject, type TextStyle } from '@ordo/domain';
 import { useEffect, useState } from 'react';
-import { BoxEditor, Check, ColorField, NumberField, Select } from '../../components/fields.tsx';
+import { Check, ColorField, NumberField, Select } from '../../components/fields.tsx';
 import { TextStyleEditor } from '../../components/TextStyleEditor.tsx';
 import { useLibrary } from '../../state/library.ts';
 import { typeText } from './actions.ts';
@@ -8,13 +8,19 @@ import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { CropControl } from './CropControl.tsx';
 import { change, useEditor } from './editorStore.ts';
 import { FormatBar } from './FormatBar.tsx';
+import { GroupNote, LockedNote, SelectionBox } from './GroupPanel.tsx';
 import { VideoPanel } from './MediaPanels.tsx';
 import { getSlide, markOverride, updateObject, updateSlide } from './ops.ts';
+import { isLocked } from './ops/group.ts';
 import type { TextRange } from './ops/text.ts';
 import { ParagraphStrip } from './ParagraphStrip.tsx';
 
 /** Property panel for the selected object: every TextStyle, ImageObject and ShapeObject field (prd/03). */
-export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean }) {
+export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readOnly: boolean }) {
+  // A locked object (PowerPoint art, SmartArt, table grids): its box only; every other field is read-only
+  // (design/27 §11 "Locked objects"). `readOnly` below covers both.
+  const locked = isLocked(o);
+  const readOnly = liveLocked || locked;
   const slideId = useEditor((s) => s.slideId)!;
   const draft = useEditor((s) => s.draft)!;
   const looks = useLibrary((s) => s.data.settings.looks);
@@ -30,7 +36,7 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
     (!slide?.lyricObjectId && slide?.objects.find((x) => x.type === 'text')?.id === o.id);
   const themed = isLyric && !!draft.themeId;
   const set = (fn: (x: SlideObject) => SlideObject, key?: string, overridePath?: string) => {
-    if (readOnly) return;
+    if (liveLocked || (locked && overridePath !== 'box')) return;
     change((p) => {
       let q = updateObject(p, slideId, o.id, fn);
       if (themed && overridePath) q = updateSlide(q, slideId, (s) => markOverride(s, overridePath));
@@ -68,6 +74,8 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
           </button>
         )}
       </div>
+      <LockedNote o={o} />
+      <GroupNote o={o} readOnly={liveLocked} />
       {o.type === 'text' && (
         <>
           <FormatBar o={o} range={clampRange(range, o.text.length)} readOnly={readOnly} />
@@ -100,7 +108,11 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
         <h4>
           Position and size{marks.has('box') && <span className="override-mark"> ● overrides theme</span>}
         </h4>
-        <BoxEditor value={o.box} onChange={(box) => set((x) => ({ ...x, box }), undefined, 'box')} />
+        <SelectionBox
+          o={o}
+          readOnly={liveLocked}
+          onChange={(box) => set((x) => ({ ...x, box }), undefined, 'box')}
+        />
       </section>
       <NumberField
         label="Opacity"
@@ -108,10 +120,11 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
         min={0}
         max={1}
         step={0.05}
+        disabled={readOnly}
         onChange={(opacity) => set((x) => ({ ...x, opacity }))}
       />
       {o.type === 'text' && (
-        <section>
+        <fieldset disabled={readOnly} style={SECTION}>
           <h4>Text style</h4>
           <TextStyleEditor
             value={o.style}
@@ -124,10 +137,10 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
               )
             }
           />
-        </section>
+        </fieldset>
       )}
       {o.type === 'image' && (
-        <section className="col">
+        <fieldset className="col" disabled={readOnly} style={SECTION}>
           <h4>{o.play ? 'Poster' : 'Image'}</h4>
           <div className="row">
             <span className="grow ellipsis small">
@@ -166,13 +179,13 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
               }}
             />
           )}
-        </section>
+        </fieldset>
       )}
       {o.type === 'image' && slide && (
         <VideoPanel o={o} slide={slide} media={(id) => media.find((m) => m.id === id)} readOnly={readOnly} />
       )}
       {o.type === 'shape' && (
-        <section className="col">
+        <fieldset className="col" disabled={readOnly} style={SECTION}>
           <h4>Shape</h4>
           <Select
             label="Shape"
@@ -230,11 +243,23 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
               onChange={(radius) => set((x) => ({ ...x, radius }) as SlideObject)}
             />
           )}
-        </section>
+        </fieldset>
       )}
     </div>
   );
 }
+
+/**
+ * A panel section as a fieldset, so a locked object (or the live lock) disables every field in it at once;
+ * drawn as `.props section` is.
+ */
+const SECTION = {
+  border: 0,
+  borderBottom: '1px solid var(--line)',
+  margin: 0,
+  padding: '8px 0 12px',
+  minWidth: 0,
+} as const;
 
 /** A selection kept inside the text (the text can shrink under it: undo, another editor's change). */
 function clampRange(r: TextRange, len: number): TextRange {
