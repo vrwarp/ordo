@@ -1094,7 +1094,7 @@ The extensions, in priority order (M4 unless noted):
     - one playing video per slide is enforced: the panel says which object plays.
 15. **Media library hygiene (M3).** MediaTab hides media tagged `pptx` or `document` unless 'Show presentation pictures' is ticked. Deleting a media item that stored presentations reference asks for confirmation and names them, because a missing picture refuses goLive.
 16. **Later (M8):** 'Split reveal into slides'; 'Convert to song' (lyric objects → sections and arrangement, kind song) with a 'Re-flow lyrics' op using the stored but unused `linesPerSlide`; preset adjust handles from the compiled `ahLst`; a bilingual band that also shows the `role:'translation'` box.
-17. **Optional (M4):** a three-way merge per slide on 409 (base = `ed.base`, mine = draft, theirs = the 409 body's `current` once `ApiFailure` keeps it, `packages/client/src/api.ts:35-39`), so two volunteers editing different slides, or a volunteer and the version-2 patch, do not overwrite each other.
+17. **Optional (M4):** a three-way merge per slide on 409 (base = `ed.base`, mine = draft, theirs = the 409 body's `current` once `ApiFailure` keeps it, `packages/client/src/api.ts:35-39`), so two volunteers editing different slides, or a volunteer and the version-2 patch, do not overwrite each other. Built in M4 (item H, `views/editor/merge.ts`): slide and object level, the rules in §15 M4 "As built, item H".
 
 **Locked objects** show 'From PowerPoint (not editable)'. The Transformer allows move and resize (aspect kept for art). Delete and z-order work; text and geometry fields are read-only.
 
@@ -1431,6 +1431,28 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   `PropsRule.notes`; `ApiFailure.details`; the re-import route and job stubs; `e2e/editorhelpers.ts`. The
   converter now writes `ObjectOrigin` (shape id, placeholder, role, group: a flattened group or a shape with
   its text), which M3 had left out and groups, 'Apply to similar' and the re-import need.
+- **As built, item H (three-way merge on 409):** `views/editor/merge.ts` `mergeThreeWay` (and `prepareMerge`,
+  which remembers what theirs changed for several drafts). JSON content is compared (key order and keys
+  holding `undefined` do not count). A value only one side changed takes that side; both changed differently
+  is a conflict. Presentation fields per field (`meta` and `source` inside, `meta.tags` as a set); sections
+  by id (name, short name, chords); slides by id, whole when one side changed them, else per field (`pptx`
+  inside, `overrides` as a set) and object by object, objects whole; a slide or object deleted on one side
+  goes unless the other changed it, a slide one side put in a section the other deleted is a conflict;
+  orders (sections, each section's slides, each slide's objects, arrangements) follow the side that
+  reordered them, both reordering differently is a conflict, additions follow their neighbour (mine after
+  theirs at one place); arrangements per field, their sections by diff3 (two sections added at once both
+  stay), entries of deleted sections dropped; a lyric box that went is cleared; duplicate ids or a result
+  the schema refuses are not merged. `editorStore.ts` `save()`: on 409 `adoptJobSaves` first (unchanged),
+  else the 409 body's `current` (`theirsOf`) is merged with the draft, the draft becomes the merge on theirs'
+  revision, its undo and redo steps move onto theirs too (`History.rebase`; a step that cannot move ends
+  the stack there) and it saves again, up to three merges per save ('Saved together with the changes someone
+  else saved meanwhile.'); a draft theirs already holds is not saved again. Conflicts open
+  `ConflictDialog.tsx` with what overlaps by slide number ('Slide 2: both changed the text box
+  “Potluck on Sunday 12 May”'), Cancel focused, 'Reload theirs (discard mine)' and 'Save mine anyway'
+  (which never merges). Tests: `apps/operator/test/merge.test.ts` (rules and properties: a side that changed
+  nothing takes the other whole, edits to different slides always merge, the merge is the same whichever
+  side is mine), `mergeSave.test.ts` (the save flow against a fake hub, the dialog);
+  `e2e/editor-merge.spec.ts` (two editor pages, port 8908).
 
 **Files.** `apps/operator/src/views/editor/ops.ts`, `ObjectPanel.tsx`, `SlidePanel.tsx`, `SlidesPanel.tsx`, `PresentationPanel.tsx`, `SlideCanvas.tsx`, `EditorView.tsx`, `editorStore.ts`; `apps/operator/src/components/TextStyleEditor.tsx`, new `FormatBar.tsx`, `ParagraphStrip.tsx`, `CropControl.tsx`; `apps/hub/src/pptx/reimport.ts`, `routes.ts`; `apps/stage/src/model.ts`, `view.ts`; `packages/domain/src/schemas.ts` (`PropsRule.notes`); `packages/client/src/api.ts`.
 

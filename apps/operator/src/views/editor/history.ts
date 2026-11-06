@@ -52,4 +52,25 @@ export class History<T> {
     this.future = [];
     this.lastKey = undefined;
   }
+
+  /**
+   * Move every snapshot with `fn` (the editor's draft was merged onto someone else's save, so its undo and
+   * redo steps move with it and never take their work back out). A snapshot `fn` cannot move (undefined)
+   * ends its stack: it and every step past it are dropped. The next push starts a new step.
+   */
+  rebase(fn: (snapshot: T) => T | undefined): void {
+    const move = (stack: T[]) => {
+      const out: T[] = [];
+      // Nearest step first (the end of each stack), so a step that cannot move cuts off only those beyond it.
+      for (let i = stack.length - 1; i >= 0; i--) {
+        const moved = fn(stack[i]!);
+        if (moved === undefined) break;
+        out.push(moved);
+      }
+      return out.reverse();
+    };
+    this.past = move(this.past);
+    this.future = move(this.future);
+    this.lastKey = undefined;
+  }
 }

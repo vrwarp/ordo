@@ -201,7 +201,15 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
 - Property panel bound to the selected object's schema.
 - Pictures are drawn with their crop (`ImageObject.crop`), as every other drawer draws them; 'Replace'
   drops the old picture's crop, which does not fit the new one (design/27 §15 M3).
-- Saves via `PUT /presentations/:id` with `rev`; 409 shows the reload dialog.
+- Saves via `PUT /presentations/:id` with `rev`. On 409 a revision only the PowerPoint jobs saved is taken
+  over (`adoptJobSaves`); else the version that won (the 409 body's `current`) is merged with the draft by
+  a three-way merge over the base (`views/editor/merge.ts`, design/27 §11 item 17): edits to different
+  slides, or to different boxes of one slide, are combined, the draft becomes the merge on their revision
+  (undo and redo move with it, so an undo never takes their work out) and saves again, with a toast. Where
+  both changed the same box, slide field or presentation field differently, the conflict dialog
+  (`ConflictDialog.tsx`) lists what overlaps by slide number and keeps 'Reload theirs (discard mine)' and
+  'Save mine anyway'; Cancel has the focus, which goes back where it was when the dialog closes. The
+  'Someone else saved' banner says that saving combines the two.
 - Disabled with a banner when the presentation is referenced by the live playlist.
 - Media playing in place (design/27 §8, §11 item 14; `views/editor/MediaPanels.tsx`, pure ops in
   `mediaOps.ts`, one undo step each). '+ Video' (touch: Add → Video…) adds an ImageObject whose `mediaId`

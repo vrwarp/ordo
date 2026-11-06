@@ -5,10 +5,11 @@ import { create } from 'zustand';
 import { deviceProfile } from '../../lib/capabilities.ts';
 import { onlyJobSaves, rebaseOnJobs } from '../../lib/pptxImport.ts';
 import { saveSizeCheck } from '../../lib/sizes.ts';
-import { upsertLocal } from '../../state/library.ts';
+import { upsertLocal, useLibrary } from '../../state/library.ts';
 import { currentRole } from '../../state/session.ts';
 import { errorText, toast } from '../../state/toasts.ts';
 import { History } from './history.ts';
+import { type MergeConflict, prepareMerge, same, theirsOf } from './merge.ts';
 import { getSlide } from './ops.ts';
 import type { Guides } from './snapping.ts';
 
@@ -29,6 +30,11 @@ export type EditorState = {
   saving: boolean;
   /** The hub refused the save with 409 (changed elsewhere). */
   conflict: boolean;
+  /**
+   * What the last 409's three-way merge could not combine (M4 item H; the conflict dialog lists it): empty when
+   * there was nothing to merge (no version in the answer, or 'Save mine anyway').
+   */
+  mergeConflicts: MergeConflict[];
   guides: Guides;
   canUndo: boolean;
   canRedo: boolean;
@@ -40,6 +46,7 @@ export const useEditor = create<EditorState>(() => ({
   dirty: false,
   saving: false,
   conflict: false,
+  mergeConflicts: [],
   guides: { x: [], y: [] },
   canUndo: false,
   canRedo: false,
@@ -68,6 +75,7 @@ export function openPresentation(p: Presentation): void {
     dirty: false,
     saving: false,
     conflict: false,
+    mergeConflicts: [],
     canUndo: false,
     canRedo: false,
     loadError: undefined,
@@ -164,12 +172,18 @@ export function currentObjects(): SlideObject[] {
   return currentSlide()?.objects.filter((o) => ids.has(o.id)) ?? [];
 }
 
+/** A save merges someone else's version at most this many times before it shows the conflict dialog. */
+const MAX_MERGES = 3;
+
 /**
- * Save with the base rev. 409 opens the reload dialog; 423 means locked by the live playlist. A presentation
+ * Save with the base rev. On 409 the editor first takes over a revision only the PowerPoint jobs saved
+ * (`adoptJobSaves`), else merges the version that won (`mergeTheirs`) and saves again (a second 409 merges
+ * again, `MAX_MERGES` at most), else opens the conflict dialog with what could not be merged. `force` ('Save
+ * mine anyway') saves over theirs without merging. 423 means locked by the live playlist. A presentation
  * over the 4 MiB budget saves with a warning (once per session); one over the hub's 32 MiB body limit is
- * refused here with the reason (design/27 §3.4).
+ * refused here with the reason (design/27 §3.4). `merges` counts the merges this save made.
  */
-export async function save(force = false, adopted = false): Promise<boolean> {
+export async function save(force = false, adopted = false, merges = 0): Promise<boolean> {
   const s = useEditor.getState();
   if (!s.draft || !s.base || s.saving) return false;
   const size = saveSizeCheck(s.draft);
@@ -195,6 +209,7 @@ export async function save(force = false, adopted = false): Promise<boolean> {
       dirty: stillDirty,
       saving: false,
       conflict: false,
+      mergeConflicts: [],
     });
     if (size.warn && !warnedLarge.has(saved.id)) {
       warnedLarge.add(saved.id);
@@ -207,8 +222,16 @@ export async function save(force = false, adopted = false): Promise<boolean> {
       // Saved meanwhile only by the hub's PowerPoint jobs (version 2 of an import): take their work over and
       // save again, instead of offering to overwrite it.
       if (!force && !adopted && (await adoptJobSaves().catch(() => 'other')) === 'adopted')
-        return save(false, true);
-      useEditor.setState({ conflict: true });
+        return save(false, true, merges);
+      // Saved by someone else: their version merged with the draft and saved again (design/27 §11 item 17).
+      const merged = force || merges >= MAX_MERGES ? undefined : mergeTheirs(s, theirsOf(e));
+      if (merged === 'same') return true;
+      if (merged === 'merged') {
+        const ok = await save(false, adopted, merges + 1);
+        if (ok && merges === 0) toast('Saved together with the changes someone else saved meanwhile.', 'ok');
+        return ok;
+      }
+      useEditor.setState({ conflict: true, mergeConflicts: merged ?? [] });
       return false;
     }
     if (e instanceof ApiFailure && e.status === 423)
@@ -221,6 +244,48 @@ export async function save(force = false, adopted = false): Promise<boolean> {
     else toast(`Could not save: ${errorText(e)}`, 'error');
     return false;
   }
+}
+
+const content = (p: Presentation) => {
+  const { rev: _rev, createdAt: _c, updatedAt: _u, ...rest } = p;
+  return rest;
+};
+
+/**
+ * Merge `theirs` (the version that won a 409, `theirsOf`) with the draft over the base (M4 item H, `merge.ts`).
+ * Merged: the draft becomes the merge on theirs' revision, its undo and redo steps move onto theirs too, and
+ * the caller saves again ('merged'); 'same' when theirs already holds every change of the draft (nothing is
+ * left to save). The conflicts when it cannot merge; undefined when there is nothing to merge with, or the
+ * editor moved on since the save began (`start`).
+ */
+function mergeTheirs(
+  start: EditorState,
+  theirs: Presentation | undefined,
+): 'merged' | 'same' | MergeConflict[] | undefined {
+  const cur = useEditor.getState();
+  const { base, draft } = cur;
+  if (!theirs || !base || !draft || cur.saving || cur.id !== start.id || base !== start.base)
+    return undefined;
+  if (theirs.id !== base.id || theirs.rev <= base.rev) return undefined;
+  const merge = prepareMerge(base, theirs);
+  const r = merge(draft, true);
+  if (!r.merged) return r.conflicts;
+  const nothingLeft = same(content(r.merged), content(theirs));
+  history.rebase((snapshot) => merge(snapshot).merged);
+  useEditor.setState({
+    base: theirs,
+    draft: nothingLeft ? theirs : r.merged,
+    dirty: !nothingLeft,
+    conflict: false,
+    mergeConflicts: [],
+    canUndo: history.canUndo,
+    canRedo: history.canRedo,
+  });
+  fixSelection();
+  // Nothing to save: the library takes theirs over (unless it already holds a newer one).
+  const lib = useLibrary.getState().data.presentations.find((x) => x.id === theirs.id);
+  if (nothingLeft && (!lib || lib.rev < theirs.rev)) upsertLocal('presentations', theirs);
+  return nothingLeft ? 'same' : 'merged';
 }
 
 /**
