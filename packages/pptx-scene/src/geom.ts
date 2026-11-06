@@ -470,7 +470,7 @@ function preset(name: string, w: number, h: number, adj: readonly [string, numbe
  */
 export function textRectOf(e: Element): [number, number, number, number] {
   const whole: [number, number, number, number] = [0, 0, 1, 1];
-  if (e.kind === 'residual') return whole;
+  if (e.kind === 'residual' || e.kind === 'table') return whole;
   if (e.custom) return e.custom.text;
   if (e.geom === 'rect' || !hasPreset(e.geom)) return whole;
   const p = decompose(e.xf);
@@ -481,7 +481,7 @@ export function textRectOf(e: Element): [number, number, number, number] {
 
 /** The connection sites of an element's geometry, as fractions of its box. */
 export function sitesOf(e: Element): { x: number; y: number; angle: number }[] {
-  if (e.kind === 'residual') return [];
+  if (e.kind === 'residual' || e.kind === 'table') return [];
   if (e.custom) return e.custom.sites;
   const p = decompose(e.xf);
   const g = preset(e.geom, p.w, p.h, e.adj) ?? preset('rect', p.w, p.h, undefined);
@@ -854,17 +854,21 @@ export function replaceEnds(xf: Affine, start: [number, number], end: [number, n
  * part (by `cNvPr id`, the first such element) and one of its connection sites moves there. A connector whose
  * ends are where its stored geometry has them already (within 1 % of its length) is left exactly as stored:
  * PowerPoint keeps a routed elbow in a near-zero extent with a huge adjust value (a 1 EMU wide bentConnector3
- * at adj1 −24,700,009), which re-placing would flatten.
+ * at adj1 −24,700,009), which re-placing would flatten. SmartArt drawings (`smartart.ts`) and tables
+ * (`tables.ts`) are no glue targets, and a drawing's own connectors stay as drawn: their elements carry their
+ * graphic frame's id, not a shape's of their own, and a table's rows grow to their text when drawn, so an end
+ * glued to either keeps its stored geometry, as it did while both were residual.
  */
 export function placeConnectors(elements: Element[]): void {
   let byId: Map<string, Element> | undefined;
   for (const e of elements) {
-    if (e.kind !== 'shape' || !e.cxn || (!e.cxn.start && !e.cxn.end)) continue;
+    if (e.kind !== 'shape' || !e.cxn || (!e.cxn.start && !e.cxn.end) || e.diagram !== undefined) continue;
     if (!byId) {
       byId = new Map();
       for (const t of elements) {
         const key = `${t.from} ${t.shapeId}`;
-        if (t.kind !== 'residual' && !byId.has(key)) byId.set(key, t);
+        if (t.kind === 'residual' || t.kind === 'table' || t.diagram !== undefined || byId.has(key)) continue;
+        byId.set(key, t);
       }
     }
     const at = (ref: { id: number; idx: number } | undefined) => {

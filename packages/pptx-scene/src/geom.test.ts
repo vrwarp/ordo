@@ -7,6 +7,7 @@ import { apply } from './frame.ts';
 import { MAX_PATH_CHARS, MAX_SLIDE_PATH_POINTS, nearestDash, replaceEnds } from './geom.ts';
 import { emitSlides, parseDeck } from './index.ts';
 import type { ShapeElement } from './ir.ts';
+import { drawingXml, dspSp, smartArtFrame, smartArtRels, withSmartArt } from './smartart.test-util.ts';
 import {
   body,
   buildDeck,
@@ -20,6 +21,8 @@ import {
   run,
   solid,
   sp,
+  tableFrame,
+  tc,
   themeXml,
 } from './test-util.ts';
 
@@ -673,6 +676,37 @@ describe('connectors (cxnSp glued to connection sites)', () => {
     const [a, b, c, d] = e.xf;
     expect(Math.hypot(a, b)).toBeCloseTo(1);
     expect(Math.hypot(c, d)).toBeCloseTo(2 * IN);
+  });
+
+  it('leaves ends glued to a table or a SmartArt graphic as stored (neither is a glue target)', () => {
+    // The drawing's shapes carry their frame's id 7; the table's rows may grow past its frame (id 8).
+    const parts = buildDeck({
+      slides: [
+        {
+          rels: smartArtRels(1),
+          shapes:
+            smartArtFrame({ id: 7, x: 0, y: 0, cx: 2 * IN, cy: IN, dmId: 'rIdDm1' }) +
+            tableFrame({ id: 8, x: 0, y: 2 * IN, cols: [2 * IN], rows: [{ h: IN, cells: [tc('Cell')] }] }) +
+            cxnSp({ id: 4, x: 3 * IN, y: 0, cx: IN, cy: IN, start: { id: 7, idx: 2 } }) +
+            cxnSp({ id: 5, x: 3 * IN, y: 2 * IN, cx: IN, cy: IN, end: { id: 8, idx: 0 } }),
+        },
+      ],
+    });
+    withSmartArt(parts, 1, drawingXml(dspSp({ x: 0, y: 0, cx: 2 * IN, cy: IN })));
+    const els = parseDeck(parts).slides[0]!.elements;
+    expect(els.some((e) => e.kind === 'table')).toBe(true);
+    expect(els.some((e) => e.diagram === 1 && e.kind === 'shape')).toBe(true);
+    const connectors = els.filter((e): e is ShapeElement => e.kind === 'shape' && e.cxn !== undefined);
+    expect(connectors.map((e) => [apply(e.xf, 0, 0), apply(e.xf, 1, 1)])).toEqual([
+      [
+        [3 * IN, 0],
+        [4 * IN, IN],
+      ],
+      [
+        [3 * IN, 2 * IN],
+        [4 * IN, 3 * IN],
+      ],
+    ]);
   });
 
   it('keeps the connector’s frame and flips when its ends move', () => {
