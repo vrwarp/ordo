@@ -390,6 +390,9 @@ importers:
 
   tools/pptx-fidelity:
     dependencies:
+      '@ordo/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@ordo/importers':
         specifier: workspace:*
         version: link:../../packages/importers
@@ -399,6 +402,9 @@ importers:
       '@ordo/pptx-scene':
         specifier: workspace:*
         version: link:../../packages/pptx-scene
+      '@ordo/renderer':
+        specifier: workspace:*
+        version: link:../../packages/renderer
       pptxgenjs:
         specifier: 4.0.1
         version: 4.0.1
