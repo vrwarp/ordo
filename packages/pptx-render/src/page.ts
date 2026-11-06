@@ -1,4 +1,11 @@
-import type { BackgroundFill, BodyStyle, ParaStyle, PictureClip, RunStyle } from './annotate.ts';
+import type {
+  BackgroundFill,
+  BodyStyle,
+  HiddenMasterShapes,
+  ParaStyle,
+  PictureClip,
+  RunStyle,
+} from './annotate.ts';
 
 /** What the page needs to render one deck. Plain data: it is sent into the browser as JSON. */
 export type PageArgs = {
@@ -16,6 +23,8 @@ export type PageArgs = {
   pictures: PictureClip[];
   /** Slide background pictures tiled, cropped or placed in a fill rectangle (pptx-preview stretches them). */
   backgrounds: BackgroundFill[];
+  /** Slides that hide their master's (and layout's) shapes (pptx-preview draws them all the same). */
+  hiddenMasterShapes: HiddenMasterShapes[];
   /** Typeface → the installed family the system substitutes for it (fontconfig), when it is missing. */
   fallbacks: Record<string, string>;
   /** Slide width in points, to convert the shadow offsets (points) into pptx-preview's slide units. */
@@ -587,6 +596,16 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
               : `inset(0 round ${((pic.radius ?? 0) * s).toFixed(2)}px)`;
         break;
       }
+    }
+  }
+
+  // "Hide background graphics" (`showMasterSp="0"`): pptx-preview draws the master's and the layout's
+  // shapes in their own boxes under every slide all the same. Take them away (the background stays).
+  if (args.fixes && args.hiddenMasterShapes.length) {
+    const wrappers = Array.from(root.querySelectorAll('.pptx-preview-slide-wrapper'));
+    for (const h of args.hiddenMasterShapes) {
+      const sel = h.layout ? '.slide-master-wrapper, .slide-layout-wrapper' : '.slide-master-wrapper';
+      for (const el of Array.from(wrappers[h.slide]?.querySelectorAll(sel) ?? [])) el.remove();
     }
   }
 

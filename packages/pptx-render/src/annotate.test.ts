@@ -586,6 +586,33 @@ describe('annotatePptx', () => {
     ]);
   });
 
+  it('lists the slides that hide their master and layout shapes, by the slide pptx-preview draws', async () => {
+    const slide = (attrs: string) =>
+      `<?xml version="1.0"?><p:sld ${NS}${attrs}><p:cSld><p:spTree/></p:cSld></p:sld>`;
+    const hidingLayout = `<?xml version="1.0"?><p:sldLayout ${NS} showMasterSp="0"><p:cSld><p:spTree/></p:cSld></p:sldLayout>`;
+    const a = await annotatePptx(
+      await deck('', {
+        '[Content_Types].xml': types(['slide1', 'slide2', 'slide3', 'slide10']),
+        'ppt/slides/slide1.xml': slide(' showMasterSp="0"'),
+        'ppt/slides/slide2.xml': slide(''),
+        'ppt/slides/_rels/slide2.xml.rels': rels('slideLayout', '../slideLayouts/slideLayout1.xml'),
+        'ppt/slides/slide3.xml': slide(''),
+        'ppt/slides/_rels/slide3.xml.rels': rels('slideLayout', '../slideLayouts/slideLayout2.xml'),
+        'ppt/slideLayouts/slideLayout2.xml': hidingLayout,
+        'ppt/slideLayouts/_rels/slideLayout2.xml.rels': rels(
+          'slideMaster',
+          '../slideMasters/slideMaster1.xml',
+        ),
+        'ppt/slides/slide10.xml': slide(' show="1" showMasterSp="false"'),
+      }),
+    );
+    expect(a.hiddenMasterShapes).toEqual([
+      { slide: 0, layout: true },
+      { slide: 2, layout: false },
+      { slide: 3, layout: true },
+    ]);
+  });
+
   it('renames pictures pptx-preview would not load, and every relationship to them', async () => {
     const rel = (target: string) =>
       `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/slideLayout" Target="../slideLayouts/slideLayout1.xml"/><Relationship Id="rId2" Type="${REL}/image" Target="${target}"/><Relationship Id="rId3" Type="${REL}/hyperlink" Target="https://example.org/media/Slide-1-image-1.png" TargetMode="External"/></Relationships>`;

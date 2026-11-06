@@ -199,8 +199,8 @@ which ordo owns and can keep fixing:
   audio player over a sound's icon), so the browser's play bar ended up in the slide picture. The players
   are removed and the poster stays, as PowerPoint and LibreOffice draw a stopped video. The media itself
   is not imported (by either renderer): see "Embedded media" below.
-- **Pictures** in an ellipse or a rounded rectangle are clipped to it (pptx-preview draws every picture as
-  a rectangle). A slide background picture is stretched over the slide: pptx-preview writes its size
+- **Pictures** in an ellipse, a rounded rectangle or a custom outline (`a:custGeom`: lines and Béziers;
+  arcs are not drawn) are clipped to it (pptx-preview draws every picture as a rectangle). A slide background picture is stretched over the slide: pptx-preview writes its size
   without units, which CSS rejects, and the picture sat at its own size in the corner.
 - **Background pictures** (`p:bg`, of the slide, else its layout, else its master) are placed as
   PowerPoint places them; pptx-preview ignores everything but the picture and its transparency. A tiled
@@ -213,6 +213,12 @@ which ordo owns and can keep fixing:
   background styles (`p:bgRef` idx 1001 and up) is drawn by pptx-preview as a flat colour: the picture
   fill is written into the part, with a relationship to the theme's picture. Not corrected: a crop of a
   tiled picture, the theme's gradient background styles, duotone and other colour changes of the picture.
+- **A slide's own colour mapping** (`p:clrMapOvr`, a dark slide in a light deck: bg1 → dk1, tx1 → lt1) is
+  ignored by pptx-preview, which maps scheme colours through the master only: such a slide is pointed to a
+  copy of its layout and master whose `p:clrMap` is the slide's mapping.
+- **"Hide background graphics"** (`showMasterSp="0"` on a slide, or on its layout for the master's shapes)
+  is ignored by pptx-preview, which draws the master's and layout's shapes under every slide in their own
+  boxes: those boxes are removed from such slides.
 - **Drawing** (`chromium.ts`). The hub starts headless Chromium (`ORDO_CHROMIUM`) and drives it over the
   DevTools protocol on a pipe (no Playwright or Puppeteer at run time): a harness page beside the deck loads
   the unmodified pptx-preview bundle, draws every slide at 1920x1080, and each slide is captured on its own,

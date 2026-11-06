@@ -114,6 +114,7 @@ async function render(
     bodies: ann?.bodies ?? [],
     pictures: ann?.pictures ?? [],
     backgrounds: ann?.backgrounds ?? [],
+    hiddenMasterShapes: ann?.hiddenMasterShapes ?? [],
     fallbacks,
     slideWidthPt: ann?.slideWidthPt ?? 720,
     fixes,

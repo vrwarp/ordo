@@ -142,6 +142,45 @@ export type BackgroundFill = {
    */
   tile?: { w: number; h: number; x: number; y: number; flip: 'none' | 'x' | 'y' | 'xy' };
 };
+export type HiddenMasterShapes = { slide: number; layout: boolean };
+
+const HIDES_MASTER_SHAPES = /^<p:(sld|sldLayout)\b[^>]*\sshowMasterSp="(0|false)"/;
+
+/** The start tag of a part's root element (after the XML declaration and comments). */
+function rootTag(xml: string): string {
+  return /<p:[A-Za-z]+\b[^>]*>/.exec(xml)?.[0] ?? '';
+}
+
+/**
+ * pptx-preview draws the shapes of a slide's master and layout under every slide, ignoring
+ * `showMasterSp="0"` ("hide background graphics"): on a slide with its own full-slide picture, the
+ * master's frame and ornaments are drawn over it. Lists the slides that hide them, for the page.
+ */
+async function masterShapesHidden(
+  zip: JSZip,
+  order: string[],
+  read: (name: string) => Promise<string | undefined>,
+): Promise<HiddenMasterShapes[]> {
+  const out: HiddenMasterShapes[] = [];
+  const layouts = new Map<string, boolean>();
+  for (let i = 0; i < order.length; i++) {
+    const xml = await read(order[i]!);
+    if (xml === undefined) continue;
+    if (HIDES_MASTER_SHAPES.test(rootTag(xml))) {
+      out.push({ slide: i, layout: true });
+      continue;
+    }
+    const layout = await relTarget(zip, order[i]!, 'slideLayout');
+    if (!layout) continue;
+    let hides = layouts.get(layout);
+    if (hides === undefined) {
+      hides = HIDES_MASTER_SHAPES.test(rootTag((await read(layout)) ?? ''));
+      layouts.set(layout, hides);
+    }
+    if (hides) out.push({ slide: i, layout: false });
+  }
+  return out;
+}
 
 /** Most points of a custom outline a picture is clipped to. */
 const MAX_PATH_POINTS = 4096;
@@ -191,6 +230,11 @@ export type Annotation = {
   pictures: PictureClip[];
   /** Slide background pictures tiled, cropped or placed in a fill rectangle. */
   backgrounds: BackgroundFill[];
+  /**
+   * Slides (positions among those pptx-preview draws) that hide the shapes of their master and layout
+   * (`showMasterSp="0"` on the slide, `layout` true) or of their master only (on the layout).
+   */
+  hiddenMasterShapes: HiddenMasterShapes[];
   /**
    * For each slide pptx-preview draws, in its order (it ignores the presentation's order and sorts slides by
    * the number in their part name), its place in the presentation's order of shown slides, or -1 for a
@@ -619,6 +663,7 @@ export async function annotatePptx(
   if (await renameMedia(zip, notes, readLater)) changed = true;
   const pictures = await pictureClips(drawn, readLater, notes);
   const backgrounds = await backgroundFills(zip, drawn, readLater, notes, slideWidthPt, slideHeightPt);
+  const hiddenMasterShapes = await masterShapesHidden(zip, drawn, readLater);
   if (await stripColorProfiles(zip, notes, MAX_MEDIA_BYTES, signal)) changed = true;
   if (await titleCharts(zip, notes, readLater)) changed = true;
   signal?.throwIfAborted();
@@ -636,6 +681,7 @@ export async function annotatePptx(
     bodies,
     pictures,
     backgrounds,
+    hiddenMasterShapes,
     slideOrder,
     families: [...families].sort(),
     slideWidthPt,
