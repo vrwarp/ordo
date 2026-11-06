@@ -257,7 +257,10 @@ Done (design/27 §3.1, §3.2, §4 "Text bodies", §6, §11 "Mapping"):
   the legacy values an older build draws (family, weight, slant, size, colour, letter spacing, outline,
   shadow, caps as uppercase, align, lineHeight, `padding` = the smallest inset); beside them `lineModel:
   'office'`, `insets`, `wrap: false`, `autofit: 'shrink'` with PowerPoint's stored `fitScale` (font =
-  fontScale, spacing = 1 − lnSpcReduction; sizes unscaled), `direction` (PowerPoint paragraphs are left to
+  fontScale, spacing = 1 − lnSpcReduction, from the shape's own `a:bodyPr` only: a layout's or master's
+  scale was fitted to their prompt text, so an inherited `normAutofit` shrinks from full size; sizes
+  unscaled; the engine subtracts the reduction from every paragraph's proportional spacing as PowerPoint
+  does), `direction` (PowerPoint paragraphs are left to
   right unless `rtl="1"`), `lang`, `underline` and `fallbackFonts`. The box is the shape's text rectangle:
   insets, margins and `wrap="none"` no longer fold into it.
 - **Runs**: whatever differs from the box, merged while unchanged: family per script (a run's Latin,
@@ -265,18 +268,27 @@ Done (design/27 §3.1, §3.2, §4 "Text bodies", §6, §11 "Mapping"):
   before them), weight, slant, `sizeScale`, colour (gradient as its first stop until M6, hollow text
   transparent), highlight, underline, strike, caps, letter spacing, `baseline`, outline and shadow (null
   where only the box has one), language (primary subtag). The '\n' ending an empty paragraph carries its end
-  mark; the a:br before an empty last line carries the paragraph's end mark.
+  mark; the a:br before an empty last line carries the paragraph's end mark. Known limit: when the line
+  before an empty last paragraph is empty too, its '\n' ends both and carries the last paragraph's end mark
+  (the schema has no field for it), so that line is sized by it rather than by its own.
 - **Paragraphs**: align (justify, distribute) where it differs from the box, level, marL/indent, space
-  before/after (points, or a share of the main run), line spacing where it differs from the box's
-  `lineHeight`, rtl where it differs from the box direction, and the nearest bullet: Wingdings and Symbol
-  characters mapped with `@ordo/domain` `symbolFontChar` (drawn in the text's font), other `buFont`s kept,
+  before/after (points, or a share of the paragraph's largest run, as LibreOffice takes it), line spacing where it differs from the box's
+  `lineHeight`, rtl where it differs from the box direction, and the nearest bullet: Wingdings, Wingdings
+  2 and 3, Webdings and Symbol characters mapped with `@ordo/domain` `symbolFontChar` (drawn in the text's
+  font; an unknown code, another symbol font's or any private-use character is '•'), other `buFont`s kept,
   automatic numbers with scheme and `startAt` (`(17)` verse numbers), `buClr`, `buSzPct`/`buSzPts`, a
   picture bullet as '•', `a:buNone` as null.
 - **Fallback families** (`fontmap.ts`, at most 8): the box family's metric substitute (Carlito, Caladea,
   Liberation, Gelasio), the East Asian and complex-script families the text uses with theirs, the other run
   families' substitutes, then ordo's bundled script fallback for every script present (Han by language).
 - **Lyric box**: on a bilingual slide (the two boxes with the most text in different languages, of
-  comparable length) the first in reading order, as design/27 §4 says.
+  comparable length) the first in reading order, as design/27 §4 says. Lengths weigh a Han, Kana or Hangul
+  character as 2.5 Latin ones, so a Korean or Chinese line and its English translation compare; languages
+  compare like with like (different script classes, or two different primary subtags when both boxes
+  carry one).
+- **Slide budget**: once a slide's rich text objects pass 64 KB of JSON (design/27 §3.4), its further text
+  is written without runs and paragraph styles and the slide is classed picture (noted), so layouts that
+  repeat thousands of formatted runs on every slide never build megabytes the hub would discard.
 - The pure domain modules `bullets.ts`, `defaults.ts` and `readable.ts` are the only values imported from
   `@ordo/domain` (`purity.test.ts` checks that they import nothing else at run time); `@ordo/domain` is a
   dependency now.
@@ -345,6 +357,33 @@ criterion of design/27 §15 is now met:
   stored scale. The rest: a Google Slides deck whose Arabic face is wider than LibreOffice's and one with
   embedded fonts, both within 0.01 of pptx-preview, and a page of very small verse references (0.464,
   pptx-preview 0.545).
+
+Repair round, measured the same way after the review's fixes (PowerPoint's stored lnSpcReduction
+subtracted from every paragraph's proportional spacing, single spacing included; a stored scale taken
+from the shape's own `a:bodyPr` only; Wingdings 2, Wingdings 3 and Webdings bullets mapped; percentage
+gaps sized by the paragraph's largest run; the bilingual rule weighing wide scripts; the 64 KB text
+budget per slide; pictures cut to the canvas, decoded once per file and pinned while a cue draws them).
+The M2 exit criteria stay met:
+- Sermon decks: unchanged, 0.955 / 0.953 against pptx-preview's 0.927, every deck above it by 0.012 to
+  0.063; 72 of 73 slides native class.
+- Worship shards 0 and 2: T1+T2 slides 0.908 / 0.896 (round 1: 0.908 / 0.897) against 0.859; shard 0
+  0.920 / 0.915 against 0.883, shard 2 0.897 / 0.880 against 0.838. Drawn as LibreOffice draws them, 7
+  slides rose and 4 fell by more than 0.002; one fell by more than 0.01: a T2 slide of five columns of
+  densely coloured runs (0.471 → 0.341), which passes the 64 KB budget (85 KB with three of its boxes
+  formatted), so its last two boxes are written plain and it is classed picture, as the hub classes it.
+  With ordo's policies, 12 rose and 40 fell: 29 slides whose PowerPoint scale is kept, which now fits
+  single-spaced text with its line spacing reduced, as PowerPoint draws it, where LibreOffice fits again
+  from full size and leaves single spacing alone (by up to 0.35, on slides where the reduced lines end
+  well above LibreOffice's); seven where a layout's scale is no longer applied to the slide's text; four
+  others by at most 0.13 (the slide above among them).
+- Text features, deck means (pptx-preview; target): superSub 0.661 / 0.654 (0.616; 0.61), lnSpcPct 0.800 /
+  0.800 (0.743; 0.75), normAutofitScaled 0.850 / 0.840 (0.762; 0.77), rtl 0.800 / 0.799 (0.685; 0.71),
+  rtlScriptText 0.688 / 0.688 (0.645; 0.66). Per slide every feature stays above pptx-preview on the same
+  slides; normAutofitScaled with ordo's policies 0.715 (round 1: 0.722; pptx-preview 0.668).
+- Raster p95 on the sermon slides, ordo's drawings (two runs): 4.0-4.1 ms at 1920 and 23.3-24.1 ms at
+  3840, within 8 and 30 ms. The harness now also reports the cold time, what an output pays on a slide
+  change when its cache lacks the slide's pictures (decode and preparation plus the first draw): p95 67
+  ms at 1920 and 137-144 ms at 3840 on the sermon slides, 73 / 109 ms and 86 / 112 ms on the shards.
 
 Not done: hyperlink colours (PowerPoint draws linked runs in the theme's hlink colour), symbol-font
 characters inside the text itself (`a:sym`), `origin` and the `role: 'translation'` of the second

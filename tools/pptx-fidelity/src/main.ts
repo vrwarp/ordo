@@ -373,6 +373,7 @@ async function nativeColumn(
       if (s.compat.length) score.compat = s.compat;
     }
     if (r?.rasterMs) score.rasterMs = r.rasterMs;
+    if (r?.coldMs) score.coldMs = r.coldMs;
     perSlide.push(score);
   }
   await blacks.save();
@@ -615,7 +616,7 @@ async function main(): Promise<void> {
       `native: ${st.slides} shown slides, beats black on ${(st.beatsBlack * 100).toFixed(1)}%; ${tiers.join(', ')}`,
     );
     console.log(
-      `native raster p95 ${st.rasterMs['1920'].p95.toFixed(1)} ms at 1920, ${st.rasterMs['3840'].p95.toFixed(1)} ms at 3840; convert p95 ${st.convertMs.p95.toFixed(2)} ms per slide`,
+      `native raster p95 ${st.rasterMs['1920'].p95.toFixed(1)} ms at 1920, ${st.rasterMs['3840'].p95.toFixed(1)} ms at 3840 (cold, pictures prepared + first draw: ${st.coldMs['1920'].p95.toFixed(1)} / ${st.coldMs['3840'].p95.toFixed(1)} ms); convert p95 ${st.convertMs.p95.toFixed(2)} ms per slide`,
     );
     const rows = (summary.native?.all.textFeatures ?? []).filter((r) => r.beatsBlack !== undefined);
     if (rows.length)

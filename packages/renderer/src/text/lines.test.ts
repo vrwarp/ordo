@@ -394,12 +394,24 @@ describe('trailing whitespace and line ends (LibreOffice 24.2, measured)', () =>
       expect(heights(office('ab\n\ncd', paras))).toEqual([21.6, 24, 21.6]);
       const p15 = [{ lineSpacing: 1.5 }, { soft: true }, { lineSpacing: 1.5 }];
       expect(heights(office('ab\n\ncd', p15))).toEqual([36, 24, 36]);
-      // A stored spacing scale that still fits shrinks proportional and exact spacing, not single spacing.
+      // LibreOffice's spacing scale (the search's) shrinks proportional and exact spacing, not single
+      // spacing: in 41 px the 21.6 + 24 px of the text do not fit, 0.9 x 21.6 + 24 do (0.5 mm of slack).
+      const shrink = { lineModel: 'office' as const, lineHeight: 1.2, autofit: 'shrink' as const };
+      const paras9 = [{ lineSpacing: 0.9 }, { soft: true }];
+      const search = layout(obj('ab\n', shrink, { paras: paras9, ...box(200, 41) }));
+      expect(search.spacingScale).toBe(0.9);
+      expect(search.lines[0]!.height).toBeCloseTo(21.6 * 0.9, 9);
+      expect(search.lines[1]!.height).toBe(24);
+    });
+
+    it("at PowerPoint's stored scale, its lnSpcReduction is subtracted from every line's proportion", () => {
+      // OOXML normAutofit/@lnSpcReduction: 90 % less 20 % is 70 %, and single spacing (the trailing line)
+      // is 80 %. Exact spacing is scaled.
       const fit = { autofit: 'shrink' as const, fitScale: { font: 1, spacing: 0.8 } };
       const k = layout(office('ab\n', [{ lineSpacing: 0.9 }, { soft: true }], fit));
       expect(k.spacingScale).toBe(0.8);
-      expect(k.lines[0]!.height).toBeCloseTo(21.6 * 0.8, 9);
-      expect(k.lines[1]!.height).toBe(24);
+      expect(k.lines[0]!.height).toBeCloseTo(24 * 0.7, 9);
+      expect(k.lines[1]!.height).toBeCloseTo(24 * 0.8, 9);
       expect(heights(office('ab\n', [{ lineSpacingPx: 40 }, { soft: true }], fit))).toEqual([32, 32]);
     });
 
@@ -426,5 +438,43 @@ describe('logical layout', () => {
     });
     expect(draws[0]!.length).toBeGreaterThan(3);
     for (const d of draws) expect(d).toEqual(draws[0]);
+  });
+});
+
+describe("PowerPoint's stored lnSpcReduction", () => {
+  // 15 single-spaced 20 px paragraphs (24 px each, 360 px) in a 300 px box: PowerPoint stored 100 % font and
+  // a 20 % line spacing reduction, which it draws as 80 % spacing (19.2 px each, 288 px), so it fits there.
+  const text = Array.from({ length: 15 }, (_, i) => `line ${i}`).join('\n');
+  const style = {
+    lineModel: 'office' as const,
+    lineHeight: 1.2,
+    autofit: 'shrink' as const,
+    fitScale: { font: 1, spacing: 0.8 },
+  };
+
+  it('keeps the stored scale for single-spaced text, subtracting the reduction from single spacing', () => {
+    const l = layout(obj(text, style, box(400, 300)));
+    expect([l.fontScale, l.spacingScale, l.overflow]).toEqual([1, 0.8, false]);
+    for (const line of l.lines) expect(line.height).toBeCloseTo(19.2, 9);
+    expect(l.lines[14]!.top - l.lines[0]!.top).toBeCloseTo(14 * 19.2, 6);
+  });
+
+  it('subtracts it from proportional spacing (90 % less 20 % is 70 %), while the search multiplies', () => {
+    const paras = Array.from({ length: 15 }, () => ({ lineSpacing: 0.9 }));
+    const l = layout(obj(text, style, { paras, ...box(400, 300) }));
+    expect([l.fontScale, l.spacingScale]).toEqual([1, 0.8]);
+    for (const line of l.lines) expect(line.height).toBeCloseTo(24 * 0.7, 9);
+    // Without a stored scale the same box is fitted by LibreOffice's search, whose spacing scale k
+    // multiplies (0.9 x k) and leaves single spacing alone.
+    const { fitScale: _, ...searched } = style;
+    const s = layout(obj(text, searched, { paras, ...box(400, 300) }));
+    const F = s.lines[0]!.segs[0]!.sizePx;
+    expect(s.lines[0]!.height).toBeCloseTo(1.2 * F * 0.9 * s.spacingScale, 9);
+  });
+
+  it('is not applied when the stored scale no longer fits: the search runs from full size', () => {
+    const l = layout(obj(`${text}\nmore\nmore\nmore`, style, box(400, 300)));
+    expect(l.fontScale).toBeLessThan(1);
+    expect(l.overflow).toBe(false);
   });
 });

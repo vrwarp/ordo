@@ -285,6 +285,21 @@ describe('paragraphs', () => {
     ]);
   });
 
+  it("sizes a percentage gap by the paragraph's largest run, as LibreOffice does", () => {
+    const gap = '<a:pPr><a:spcBef><a:spcPct val="200000"/></a:spcBef></a:pPr>';
+    const t = one(
+      body(
+        para(run('Top of the box with most of the words', 'sz="2000"')) +
+          `<a:p>${gap}${run('small ', 'sz="1000"')}${run('BIG', 'sz="4000"')}</a:p>` +
+          `<a:p>${gap}${run('BIG ', 'sz="4000"')}${run('small', 'sz="1000"')}</a:p>` +
+          // An empty paragraph: its end mark.
+          `<a:p>${gap}<a:endParaRPr lang="en-US" sz="3000"/></a:p>`,
+      ),
+    );
+    // 200 % of 40 pt (80 px) whichever run comes first; the empty one 200 % of its 30 pt end mark.
+    expect(t.paras!.slice(1).map((p) => p?.spaceBeforePx)).toEqual([160, 160, 120]);
+  });
+
   it('writes the box line spacing from the main paragraph and single spacing where another differs', () => {
     const t = one(
       body(
@@ -320,6 +335,33 @@ describe('paragraphs', () => {
       null,
     ]);
     expect(t.paras![0]).toMatchObject({ indentPx: 54, firstLinePx: -54 });
+  });
+
+  it('maps Office theme bullets in Wingdings 2, Wingdings 3 and Webdings, and never keeps a private-use one', () => {
+    const p = (text: string, font: string, ch: string) =>
+      `<a:p><a:pPr marL="342900" indent="-342900"><a:buFont typeface="${font}"/><a:buChar char="${ch}"/></a:pPr>${run(text)}</a:p>`;
+    const t = one(
+      body(
+        p('circle', 'Wingdings 2', '\u{f097}') +
+          p('triangle', 'Wingdings 3', '\u{f075}') +
+          p('small triangle', 'Wingdings 3', '\u{f07d}') +
+          p('web', 'Webdings', '\u{f034}') +
+          p('unknown code', 'Wingdings 3', '\u{f0ad}') +
+          p('icon font', 'Segoe MDL2 Assets', '\u{e700}') +
+          p('another symbol font', 'Monotype Sorts', 'u'),
+      ),
+    );
+    expect((t.paras ?? []).map((x) => x?.bullet)).toEqual([
+      { char: '\u{25cf}' },
+      { char: '\u{25b6}' },
+      { char: '\u{25b8}' },
+      { char: '\u{25b8}' },
+      { char: '\u{2022}' },
+      { char: '\u{2022}' },
+      { char: '\u{2022}' },
+    ]);
+    // The labels people read are the same characters.
+    expect(readableText(t).split('\n')[0]).toMatch(/^\u{25cf}\s+circle$/u);
   });
 
   it('numbers verses from startAt: (17), (18) in readable text', () => {

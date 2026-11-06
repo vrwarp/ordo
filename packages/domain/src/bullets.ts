@@ -87,27 +87,162 @@ export const SYMBOL_TO_UNICODE: ReadonlyMap<number, string> = new Map([
   [0xe0, '\u{25ca}'], // lozenge
 ]);
 
+/*
+ * Wingdings 2, Wingdings 3 and Webdings (the bullets of Office themes: 15 of 174 worship decks name Wingdings
+ * 2 or 3 in their masters). The codes LibreOffice's unotools fontcvt tables map to a standard character are
+ * taken from them; the shapes they map into OpenSymbol's private-use area (the circles and squares Office
+ * themes use as bullets among them) were identified from OpenSymbol's glyphs and are written as the nearest
+ * common geometric shape, which every output font chain draws. Codes in neither are drawn as '•'.
+ */
+
+/** Wingdings 2 code (U+F0xx offset stripped) → Unicode. */
+export const WINGDINGS_2_TO_UNICODE: ReadonlyMap<number, string> = new Map([
+  [0x3f, '\u{261e}'], // white right pointing index
+  [0x41, '\u{261b}'], // black right pointing index
+  [0x43, '\u{261e}'],
+  [0x45, '\u{261b}'],
+  [0x4f, '\u{2717}'], // ballot x
+  [0x50, '\u{2713}'], // check mark
+  [0x51, '\u{2612}'], // ballot box with x
+  [0x52, '\u{2611}'], // ballot box with check
+  [0x53, '\u{2612}'],
+  [0x54, '\u{2612}'],
+  [0x69, '\u{24ea}'], // circled digit zero
+  ...letters(0x6a, '①②③④⑤⑥⑦⑧⑨⑩'),
+  [0x74, '\u{24ff}'], // negative circled digit zero
+  ...letters(0x75, '➊➋➌➍➎➏➐➑➒➓'),
+  [0x80, '\u{2609}'], // sun
+  [0x81, '\u{25cb}'], // white circle
+  [0x82, '\u{263d}'], // first quarter moon
+  [0x83, '\u{263e}'], // last quarter moon
+  [0x85, '\u{2020}'], // dagger (a thin cross)
+  [0x86, '\u{271d}'], // latin cross
+  [0x96, '\u{2022}'], // black slightly small circle
+  [0x97, '\u{25cf}'], // black circle
+  [0x98, '\u{2b24}'], // black large circle
+  [0x99, '\u{25cb}'], // white circles, light to heavy
+  [0x9a, '\u{25cb}'],
+  [0x9b, '\u{25cb}'],
+  [0x9c, '\u{25c9}'], // fisheye
+  [0x9d, '\u{25ce}'], // bullseye
+  [0x9e, '\u{25aa}'], // black squares, tiny to large
+  [0x9f, '\u{25aa}'],
+  [0xa0, '\u{25aa}'],
+  [0xa1, '\u{25a0}'],
+  [0xa2, '\u{25a0}'],
+  [0xa3, '\u{25a1}'], // white square
+  [0xab, '\u{2b29}'], // black small diamond
+  [0xac, '\u{25c6}'], // black diamond
+  [0xae, '\u{25c6}'],
+  [0xb6, '\u{2b27}'], // black medium lozenge
+  [0xb7, '\u{29eb}'], // black lozenge
+  [0xba, '\u{25d6}'], // left half black circle
+  [0xbb, '\u{25d7}'], // right half black circle
+  [0xbf, '\u{25c6}'],
+  [0xcc, '\u{271a}'], // heavy greek cross
+  [0xf8, '\u{203b}'], // reference mark
+  [0xf9, '\u{2042}'], // asterism
+]);
+
+/** Wingdings 3 code (U+F0xx offset stripped) → Unicode: arrows and triangles. */
+export const WINGDINGS_3_TO_UNICODE: ReadonlyMap<number, string> = new Map([
+  [0x25, '\u{2196}'],
+  [0x27, '\u{2199}'],
+  [0x2f, '\u{21de}'],
+  [0x30, '\u{21df}'],
+  [0x34, '\u{21e2}'],
+  [0x35, '\u{21e1}'],
+  [0x36, '\u{21e3}'],
+  [0x37, '\u{21af}'],
+  [0x38, '\u{21b5}'],
+  [0x44, '\u{21c4}'],
+  [0x45, '\u{21c5}'],
+  [0x48, '\u{21c7}'],
+  [0x49, '\u{21c9}'],
+  [0x4a, '\u{21c8}'],
+  [0x4b, '\u{21ca}'],
+  [0x4c, '\u{21b6}'],
+  [0x4d, '\u{21b7}'],
+  [0x50, '\u{21bb}'],
+  [0x51, '\u{21ba}'],
+  [0x53, '\u{2324}'],
+  [0x54, '\u{2303}'],
+  [0x55, '\u{2325}'],
+  [0x56, '\u{2334}'],
+  [0x58, '\u{21ea}'],
+  ...letters(0x70, '▲▼△▽◀▶◁▷◣◢◤◥◂▸▴'),
+  [0x80, '\u{25be}'], // black down-pointing small triangle
+  ...letters(0xc5, '⬅➡⬆⬇'),
+  ...letters(0xd1, '←→↑↓↖↗↙↘⬅➡⬆⬇⬉⬈⬋⬊⇦⇨⇧⇩'),
+]);
+
+/** Webdings code (U+F0xx offset stripped) → Unicode: the shapes a bullet may use. */
+export const WEBDINGS_TO_UNICODE: ReadonlyMap<number, string> = new Map([
+  ...letters(0x33, '◂▸▴▾'),
+  [0x3c, '\u{25a0}'], // black square
+  [0x3d, '\u{25cf}'], // black circle
+  [0x51, '\u{2713}'], // check mark
+  [0x67, '\u{25a0}'],
+  [0x6e, '\u{25cf}'],
+]);
+
+/** Other symbol-encoded fonts: no table, so each of their codes is drawn as '•'. */
+const OTHER_SYMBOL_FONTS: ReadonlySet<string> = new Set([
+  'marlett',
+  'mt extra',
+  'monotype sorts',
+  'monotype sorts 2',
+  'zapf dingbats',
+  'zapfdingbats',
+  'itc zapf dingbats',
+  'bookshelf symbol 7',
+  'ms reference specialty',
+  'ms outlook',
+]);
+
+const NO_TABLE: ReadonlyMap<number, string> = new Map();
+
 function letters(first: number, chars: string): [number, string][] {
   return [...chars].map((ch, i) => [first + i, ch]);
 }
 
-/** The mapping table of a symbol font family ('Wingdings', 'Symbol', any case), else null. */
+/** The mapping table of a symbol font family (any case), an empty one for other symbol fonts, else null. */
 function symbolTable(fontFamily: string | undefined): ReadonlyMap<number, string> | null {
   const f = fontFamily?.trim().toLowerCase();
-  return f === 'wingdings' ? WINGDINGS_TO_UNICODE : f === 'symbol' ? SYMBOL_TO_UNICODE : null;
+  if (!f) return null;
+  switch (f) {
+    case 'wingdings':
+      return WINGDINGS_TO_UNICODE;
+    case 'wingdings 2':
+      return WINGDINGS_2_TO_UNICODE;
+    case 'wingdings 3':
+      return WINGDINGS_3_TO_UNICODE;
+    case 'webdings':
+      return WEBDINGS_TO_UNICODE;
+    case 'symbol':
+      return SYMBOL_TO_UNICODE;
+    default:
+      return OTHER_SYMBOL_FONTS.has(f) ? NO_TABLE : null;
+  }
 }
 
-/** Whether `fontFamily` is a symbol font whose codes `symbolFontChar` maps to Unicode. */
+/** Whether `fontFamily` is a symbol font, whose codes `symbolFontChar` maps to Unicode. */
 export function isSymbolFont(fontFamily: string | undefined): boolean {
   return symbolTable(fontFamily) !== null;
 }
 
+/** Whether `c` is a private-use code point (U+E000-U+F8FF): nothing an output font draws. */
+export function isPrivateUse(c: number): boolean {
+  return c >= 0xe000 && c <= 0xf8ff;
+}
+
 /**
- * A bullet character of a Wingdings or Symbol font as Unicode text (design/27 §6 step 11), or null when
- * `fontFamily` is neither. Private-use codes U+F020-U+F0FF lose their U+F000 offset first. A code the
- * table does not know becomes '•' (a Symbol code below 0x7F is its ASCII character); characters above
- * U+00FF are already Unicode and stay. The result is meant to be drawn in the text's font, not the
- * symbol font.
+ * A bullet character of a symbol font (Wingdings, Wingdings 2 and 3, Webdings, Symbol and the other
+ * symbol-encoded fonts) as Unicode text (design/27 §6 step 11), or null when `fontFamily` is none of them.
+ * Private-use codes U+F020-U+F0FF lose their U+F000 offset first. A code the table does not know becomes
+ * '•' (a Symbol code below 0x7F is its ASCII character), as does any other private-use character;
+ * characters above U+00FF are already Unicode and stay. The result is meant to be drawn in the text's
+ * font, not the symbol font.
  */
 export function symbolFontChar(fontFamily: string | undefined, char: string): string | null {
   const table = symbolTable(fontFamily);
@@ -116,7 +251,7 @@ export function symbolFontChar(fontFamily: string | undefined, char: string): st
   for (const ch of char) {
     let c = ch.codePointAt(0)!;
     if (c >= 0xf020 && c <= 0xf0ff) c -= 0xf000;
-    if (c > 0xff) out += ch;
+    if (c > 0xff) out += isPrivateUse(c) ? '\u{2022}' : ch;
     else if (c === 0x20) out += ' ';
     else if (c > 0x20) {
       const mapped = table.get(c);

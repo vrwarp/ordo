@@ -85,6 +85,27 @@ describe('decoded image cache byte budget (review item 26)', () => {
     expect(c.size).toBe(2);
     expect(c.has('a')).toBe(false);
   });
+
+  it('never evicts or prunes a pinned entry, and trims back to the limits once unpinned', () => {
+    const c = new BitmapCache<Bmp>(100 * MB, 2);
+    const held = [new Bmp(1, 1), new Bmp(1, 1), new Bmp(1, 1)];
+    held.forEach((b, i) => {
+      c.set(`k${i}`, b);
+      c.pin(`k${i}`);
+    });
+    // Over the count, but everything is pinned: nothing a draw holds is closed.
+    expect(c.size).toBe(3);
+    expect(held.some((b) => b.closed)).toBe(false);
+    expect(c.prune(new Set())).toBe(0);
+    // An unpinned insert evicts only unpinned entries (here: none older than itself).
+    const extra = new Bmp(1, 1);
+    c.set('x', extra);
+    expect(held.some((b) => b.closed)).toBe(false);
+    c.unpinAll();
+    expect(c.size).toBe(2);
+    expect(held[0]!.closed && held[1]!.closed).toBe(true);
+    expect(c.has('x')).toBe(true);
+  });
 });
 
 describe('downscale to the output size', () => {

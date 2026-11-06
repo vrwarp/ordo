@@ -4,21 +4,17 @@ import {
   type AssetJob,
   type AssetToRender,
   BitmapCache,
-  CLAMP,
   DEFAULT_BITMAP_BUDGET,
   FALLBACK_FAMILIES,
   type FontLoad,
   FontResolver,
   type FromAsset,
-  type PictureTarget,
+  type ImageLookup,
   SRC_BITMAP,
   type SlidePicture,
   type ToAsset,
-  bitmapBytes,
-  downscaleFor,
   installFontEnv,
   jobFontFamilies,
-  pictureKey,
   preparePicture,
   rasterImage,
   rasterLowerThird,
@@ -27,6 +23,7 @@ import {
   slidePictures,
 } from '@ordo/renderer';
 import { LOGICAL_WIDTH } from '@ordo/domain';
+import { type PictureDecoder, preloadPictures, sourcePicture } from './pictures.ts';
 
 /**
  * Asset worker: OPFS reads, image decoding, font loading and text rasterization at output resolution.
@@ -58,6 +55,7 @@ const store = new OpfsStore();
 // Decoded images by hash and target size (`pictureKey`): LRU bounded by bytes (256 MiB) rather than count,
 // so a photo-heavy service cannot pin a gigabyte of bitmaps (review item 26). A picture a slide draws
 // unrotated is kept at its displayed device size (design/27 §7.1); any other is reduced to the output size.
+// What a cue's draw holds is pinned from its preload until the draw is done (pictures.ts).
 const images = new BitmapCache<ImageBitmap>(DEFAULT_BITMAP_BUDGET, 64);
 
 // Fonts (design/27 §10): every face under a fresh internal family name, so a face that loads late (a retry,
@@ -126,49 +124,27 @@ async function readFile(hash: string): Promise<{ blob: Blob; source: 'opfs' | 'n
 }
 
 /**
- * A decoded picture. With a target (`pictureTarget`), the part of it the box shows resampled once into an
- * sRGB bitmap of the target's device size, upscaling included, which the slide copies 1:1 (design/27 §7.1:
- * resampling and colour conversion on every draw cost 4-50 ms per full-slide picture). Without one, the
- * source, reduced so that it still covers the output without upscaling.
+ * The worker's picture decoder (pictures.ts): a file read from OPFS or the hub and decoded at its own size
+ * (colour profile kept); a target resampled once into an sRGB bitmap of its device size, upscaling
+ * included, which the slide copies 1:1 (design/27 §7.1: resampling and colour conversion on every draw
+ * cost 4-50 ms per full-slide picture); a source reduced with high quality.
  */
-async function image(hash: string, target?: PictureTarget): Promise<ImageBitmap> {
-  const key = pictureKey(hash, target);
-  const hit = images.get(key);
-  if (hit) return hit;
-  const { blob, source } = await readFile(hash);
-  let bmp: ImageBitmap;
-  try {
-    bmp = await createImageBitmap(blob);
-  } catch (err) {
-    throw new DecodeError(
-      `image ${hash.slice(0, 8)} could not be decoded: ${(err as Error).message}`,
-      hash,
-      source,
-    );
-  }
-  if (target) {
-    const ready = preparePicture(bmp, target);
-    if (ready) {
-      bmp.close();
-      images.set(key, ready);
-      return ready;
+const decoder: PictureDecoder<ImageBitmap> = {
+  async decode(hash) {
+    const { blob, source } = await readFile(hash);
+    try {
+      return await createImageBitmap(blob);
+    } catch (err) {
+      throw new DecodeError(
+        `image ${hash.slice(0, 8)} could not be decoded: ${(err as Error).message}`,
+        hash,
+        source,
+      );
     }
-    // No canvas to prepare it on: the source below, which the slide draws as before.
-  }
-  // Large images are reduced so that they still cover the output without upscaling (1x, not 2x).
-  const down = downscaleFor(bmp.width, bmp.height, width, height);
-  if (down) {
-    const scaled = await createImageBitmap(bmp, {
-      resizeWidth: down.width,
-      resizeHeight: down.height,
-      resizeQuality: 'high',
-    });
-    bmp.close();
-    bmp = scaled;
-  }
-  images.set(key, bmp);
-  return bmp;
-}
+  },
+  prepare: (src, t) => preparePicture(src, t),
+  reduce: (src, w, h) => createImageBitmap(src, { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' }),
+};
 
 async function loadFonts(list: FontLoad[]): Promise<void> {
   const r = await fonts.sync(list);
@@ -190,62 +166,21 @@ function surface(): OffscreenCanvasRenderingContext2D {
 }
 
 /**
- * Decode the images one cue draws, within the cue's bitmap budget (design/25 clamps): at most
- * `maxImagesPerSlide` images and `maxCueBitmapBytes` of decoded pixels; the rest are skipped. `uses` are the
- * pictures the draw asks for (`slidePictures`): each is prepared at its target, and the source is decoded
- * for a use without one. An image no use names (a next slide's, a logo) is decoded as the source.
+ * Decode and prepare the images one cue draws (pictures.ts): one decode per file, within the cue's bitmap
+ * budget (design/25 clamps), every bitmap the draw holds pinned until `release`. `uses` are the pictures
+ * the draw asks for (`slidePictures`); without them every image is decoded as its source.
  */
 async function preload(
   map: Record<string, string>,
   uses?: readonly SlidePicture[],
-): Promise<{
-  lookup: (id: string, target?: PictureTarget) => ImageBitmap | undefined;
-  skipped: number;
-  missing: string[];
-}> {
-  // What the draw asks for, by media id: a target per prepared size, undefined for the source.
-  const wanted = new Map<string, Map<string, PictureTarget | undefined>>();
-  for (const u of uses ?? []) {
-    let w = wanted.get(u.mediaId);
-    if (!w) wanted.set(u.mediaId, (w = new Map()));
-    w.set(u.target?.key ?? '', u.target);
-  }
-  // Bitmaps by `pictureKey(mediaId, target)`, and the media ids that have one.
-  const out = new Map<string, ImageBitmap>();
-  const decoded = new Set<string>();
-  let bytes = 0;
-  let skipped = 0;
+): Promise<{ lookup: ImageLookup; skipped: number; missing: string[]; release: () => void }> {
+  const pre = await preloadPictures(images, decoder, map, uses, { w: width, h: height });
+  // Drawn without the image. One whose file is not there yet is reported so the link re-draws the slide
+  // once the file arrives; a corrupt one is not (it would be missing again every time).
   const missing: string[] = [];
-  for (const [mediaId, hash] of Object.entries(map)) {
-    if (decoded.size >= CLAMP.maxImagesPerSlide) {
-      skipped++;
-      continue;
-    }
-    for (const target of wanted.get(mediaId)?.values() ?? [undefined]) {
-      try {
-        const bmp = await image(hash, target);
-        const b = bitmapBytes(bmp);
-        if (bytes + b > CLAMP.maxCueBitmapBytes) {
-          skipped++;
-          continue;
-        }
-        bytes += b;
-        out.set(pictureKey(mediaId, target), bmp);
-        decoded.add(mediaId);
-      } catch (err) {
-        // Drawn without the image. One whose file is not there yet is reported so the link re-draws the
-        // slide once the file arrives; a corrupt one is not (it would be missing again every time).
-        if (err instanceof UnavailableError && !missing.includes(hash)) missing.push(hash);
-        break;
-      }
-    }
-  }
-  // A target nothing prepared falls back to a decoded source, which the drawers draw as before.
-  return {
-    lookup: (id, target) => (target && out.get(pictureKey(id, target))) || out.get(id),
-    skipped,
-    missing,
-  };
+  for (const f of pre.failed)
+    if (f.error instanceof UnavailableError && !missing.includes(f.hash)) missing.push(f.hash);
+  return { lookup: pre.lookup, skipped: pre.skipped, missing, release: pre.release };
 }
 
 /** Missing families a 'done' message reports: as many as the link keeps (FromAsset, protocol health). */
@@ -268,13 +203,17 @@ async function run(job: AssetJob): Promise<void> {
       const pre = await preload(job.images, slidePictures(job.slide, { scale, look: job.look }));
       skipped = pre.skipped;
       missing = pre.missing;
-      const c = surface();
-      rasterSlide(c, job.slide, job.look, scale, pre.lookup, {
-        nextSlide: job.nextSlide,
-        isSong: job.isSong,
-      });
+      try {
+        const c = surface();
+        rasterSlide(c, job.slide, job.look, scale, pre.lookup, {
+          nextSlide: job.nextSlide,
+          isSong: job.isSong,
+        });
+      } finally {
+        pre.release();
+      }
     } else if (job.kind === 'image') {
-      const img = await image(job.hash);
+      const img = await sourcePicture(images, decoder, job.hash, { w: width, h: height });
       const c = surface();
       rasterImage(c, img, job.fit, scale);
     } else if (job.kind === 'lowerThird') {
@@ -282,8 +221,12 @@ async function run(job: AssetJob): Promise<void> {
       rasterLowerThird(c, job.text, job.look, scale);
     } else {
       const pre = await preload(job.images);
-      const c = surface();
-      rasterProps(c, job.model, scale, pre.lookup, job.look.clearColor);
+      try {
+        const c = surface();
+        rasterProps(c, job.model, scale, pre.lookup, job.look.clearColor);
+      } finally {
+        pre.release();
+      }
     }
     const bitmap = canvas!.transferToImageBitmap();
     const cueIndex = job.kind === 'slide' ? job.cueIndex : job.kind === 'image' ? job.cueIndex : undefined;

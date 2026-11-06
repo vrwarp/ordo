@@ -138,7 +138,9 @@ Steps 1-4 of §6. **Done** (M2 wave 1); tests in `itemize.test.ts`, `breaks.test
 `segments.test.ts` and `vendor.test.ts` (the browser bundle).
 - `itemize(o)`: a soft paragraph takes the style of the paragraph it continues and overrides only what its
   own `paras[i]` sets (`resolveParaStyle(style, p, base)`). An empty paragraph's end mark is the run covering
-  its '\n'; the last paragraph, which has none, takes the run covering the '\n' before it.
+  its '\n'; the last paragraph, which has none, takes the run covering the '\n' before it. When the line
+  before it is empty too, that '\n' ends both, so the two empty lines share one end mark (the converter
+  writes the last paragraph's): a known limit, as the schema has no field for the last paragraph's own.
 - `breakOpportunities(text, start, end, lang)`: UAX#14 (`linebreak` 1.1.0, typed in `vendor.d.ts`, which
   `breaks.ts` references so every app that compiles the renderer gets it); no break on either side of
   U+00A0, U+202F, U+2060, U+2007, U+2011, U+FEFF (`isGlue`), except after a breaking space (UAX#14 LB18,
@@ -186,7 +188,13 @@ Steps 5-10 of §6. Status: **done** (M2 wave 1); the rules are in each file's he
 - `office.ts`: `officeLine` (page.ts's measured formulas), `officeFontPx` (editeng's rounding to whole
   points), `fitFactor` (0.5 mm slack), `searchFit` (page.ts `fitBox`'s search, literally) and `autofit`:
   the stored `fitScale` while the text fits at it, else the search from full size with widths scaled
-  linearly from the layout at the stored scale, never above the stored font scale. A stored scale that
+  linearly from the layout at the stored scale, never above the stored font scale. At the stored scale
+  its spacing is drawn as PowerPoint draws lnSpcReduction (OOXML subtracts it from every paragraph's
+  proportional spacing, single spacing included: 100 % less 20 % is 80 %, 90 % is 70 %); the search's
+  spacing scale is LibreOffice's k, which multiplies and leaves single spacing alone. Exact spacing and
+  space before and after are scaled by either. The search lays each scale out once, and a body LibreOffice's
+  k cannot change (single spaced, no space between paragraphs) once per font scale: at most 11 layouts
+  instead of 31, with the same result (a body of 5,000 a:br lines with autofit: 472 → 165 ms). A stored scale that
   does not hold for the face drawing the box never reaches it (`storedFitHolds` in rich.ts, Contracts).
 
 Decisions the other items rely on:

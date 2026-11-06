@@ -474,6 +474,8 @@ export type RenderedSlide = {
   width?: number;
   height?: number;
   rasterMs?: { '1920': number; '3840': number };
+  /** Preparing the pictures the cache lacks plus the first draw, in ms (`RenderResult.cold1920`). */
+  coldMs?: { '1920': number; '3840': number };
   error?: string;
 };
 
@@ -663,7 +665,12 @@ export class NativeRenderer {
             png: `${base}.png`,
             width: r.width,
             height: r.height,
-            ...(repeats ? { rasterMs: { '1920': round2(r.ms1920), '3840': round2(r.ms3840) } } : {}),
+            ...(repeats
+              ? {
+                  rasterMs: { '1920': round2(r.ms1920), '3840': round2(r.ms3840) },
+                  coldMs: { '1920': round2(r.cold1920), '3840': round2(r.cold3840) },
+                }
+              : {}),
           });
           if (compat) {
             await draw(s.slide, `${base}.policy.png`, 0);

@@ -25,10 +25,11 @@
  *   paragraph, when empty, takes the '\n' before it (`itemize.ts`).
  * - **Paragraphs** (§4, §6): alignment (justify and distribute included) where it differs from the box,
  *   level, `marL` → `indentPx`, `indent` → `firstLinePx` (negative: a hanging bullet), space before and
- *   after (points, or a share of the paragraph's main run size), line spacing (a percentage as a multiple
+ *   after (points, or a share of the paragraph's largest run size, as LibreOffice takes it), line spacing (a percentage as a multiple
  *   of single spacing, points as an exact pitch) wherever it differs from the box's `lineHeight`, the
- *   nearest bullet setting (a Wingdings or Symbol character mapped to Unicode with `@ordo/domain`
- *   `symbolFontChar` and drawn in the text's font, automatic numbers with their scheme and `startAt`,
+ *   nearest bullet setting (a Wingdings, Wingdings 2 or 3, Webdings or Symbol character mapped to Unicode
+ *   with `@ordo/domain` `symbolFontChar` and drawn in the text's font, '•' for an unknown code, another
+ *   symbol font's or any other private-use character; automatic numbers with their scheme and `startAt`,
  *   `buFont`, `buClr`, `buSzPct`/`buSzPts`, `a:buNone` as null) and the direction where it differs from the
  *   box. A null entry is a paragraph with the box's defaults; trailing nulls are left out.
  *
@@ -37,7 +38,7 @@
  * `Slide.parse` accepts the object as it is.
  */
 import type { Rgba as OrdoRgba, TextPara, TextRun, TextStyle } from '@ordo/domain';
-import { isSymbolFont, symbolFontChar } from '@ordo/domain/bullets.ts';
+import { isPrivateUse, isSymbolFont, symbolFontChar } from '@ordo/domain/bullets.ts';
 import { fallbackFonts, type ScriptClass, scriptClasses } from './fontmap.ts';
 import { lenPx, ptPx } from './frame.ts';
 import type { Bullet, Fill, Frame, Para, RunStyle, Shadow, TextBody } from './ir.ts';
@@ -71,6 +72,11 @@ export interface RichOptions {
    * filled text (the copy LibreOffice draws has them stripped).
    */
   lo?: boolean;
+  /**
+   * The text and its box style only, without runs and paragraph styles: what `emit.ts` writes once a slide
+   * has passed its JSON budget (design/27 §3.4; the slide is classed picture).
+   */
+  plain?: boolean;
 }
 
 /** A body as the text fields of a `TextObject` (the box and id are the caller's). */
@@ -172,6 +178,18 @@ export function richText(body: TextBody, opts: RichOptions): RichText | undefine
   if (lang) style.lang = lang;
   if (st.underline) style.underline = true;
 
+  // Families tried after each run's own: substitutes, the East Asian and complex-script faces, scripts.
+  const byClass = (cls: ScriptClass) => familiesBy(pieces, text, (p) => p.cls === cls);
+  const withFallbacks = (bullets: string[]) => {
+    const all = [...familiesBy(pieces, text, () => true), ...bullets];
+    const fallbacks = fallbackFonts(family, byClass('ea'), byClass('cs'), all, text, lang);
+    if (fallbacks.length) style.fallbackFonts = fallbacks;
+  };
+  if (opts.plain) {
+    withFallbacks([]);
+    return { text, style };
+  }
+
   // Runs: what differs from the box, merged while it stays the same.
   const ctx: DiffCtx = {
     f,
@@ -228,17 +246,7 @@ export function richText(body: TextBody, opts: RichOptions): RichText | undefine
     out = out.slice(0, MAX_PARAS);
   }
 
-  // Families tried after each run's own: substitutes, the East Asian and complex-script faces, scripts.
-  const byClass = (cls: ScriptClass) => familiesBy(pieces, text, (p) => p.cls === cls);
-  const fallbacks = fallbackFonts(
-    family,
-    byClass('ea'),
-    byClass('cs'),
-    [...familiesBy(pieces, text, () => true), ...bulletFamilies(out)],
-    text,
-    lang,
-  );
-  if (fallbacks.length) style.fallbackFonts = fallbacks;
+  withFallbacks(bulletFamilies(out));
   return {
     text,
     style,
@@ -582,8 +590,11 @@ function paraStyle(p: OrdoPara, box: TextStyle, f: Frame, log: Log): TextPara | 
   const indent = bound(lenPx(f, ir.indent), -MAX_COORD, MAX_COORD);
   if (indent) out.firstLinePx = indent;
   const mainPt = mainSize(ir);
+  // A percentage gap is a share of the paragraph's largest run, as LibreOffice sizes it (oox
+  // TextParagraph::insertAt takes the largest character height).
+  const gapPt = largestSize(ir);
   const space = (s: Para['spaceBefore']) =>
-    s === undefined ? 0 : bound('pts' in s ? ptPx(f, s.pts) : s.pct * ptPx(f, mainPt), 0, MAX_COORD);
+    s === undefined ? 0 : bound('pts' in s ? ptPx(f, s.pts) : s.pct * ptPx(f, gapPt), 0, MAX_COORD);
   const before = space(ir.spaceBefore);
   if (before) out.spaceBeforePx = before;
   const after = space(ir.spaceAfter);
@@ -612,6 +623,14 @@ function mainSize(p: Para): number {
   return first ?? p.end.sizePt;
 }
 
+/** A paragraph's largest run size in points (its a:br marks aside), else its end mark's for an empty one. */
+function largestSize(p: Para): number {
+  let most: number | undefined;
+  for (const r of p.runs)
+    if (r.kind !== 'break' && r.text && (most === undefined || r.style.sizePt > most)) most = r.style.sizePt;
+  return most ?? p.end.sizePt;
+}
+
 /** `TextPara.bullet` from the IR's: undefined (none set), null (`a:buNone`) or the bullet. */
 function bulletOf(
   b: Bullet | undefined,
@@ -627,10 +646,14 @@ function bulletOf(
   const out: NonNullable<TextPara['bullet']> = {};
   if (b.kind === 'char') {
     const mapped = isSymbolFont(b.font) ? symbolFontChar(b.font, b.char) : null;
+    // A private-use character of any other font (an icon font, a symbol font ordo has no table for) is
+    // nothing an output font draws: '•' in the text's font, as for an unknown symbol code.
+    const pua = mapped === null && [...b.char].some((c) => isPrivateUse(c.codePointAt(0)!));
+    const text = mapped ?? (pua ? PICTURE_BULLET : b.char);
     // biome-ignore lint/suspicious/noControlCharactersInRegex: a bullet is never a control character
-    const ch = (mapped ?? b.char).replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 8);
+    const ch = text.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 8);
     out.char = ch || PICTURE_BULLET;
-    if (b.font && mapped === null) out.fontFamily = b.font.slice(0, 300);
+    if (b.font && mapped === null && !pua) out.fontFamily = b.font.slice(0, 300);
   } else {
     out.auto = b.scheme.slice(0, 40);
     if (b.startAt !== 1) out.startAt = Math.min(32_767, Math.max(1, Math.floor(b.startAt)));

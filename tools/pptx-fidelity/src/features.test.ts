@@ -47,6 +47,25 @@ describe('textFeatures', () => {
     expect(performance.now() - t0).toBeLessThan(2000);
   });
 
+  it('stays linear on unclosed autofit and run property tags (a part of 2 MB each)', () => {
+    const cases = [
+      '<a:normAutofit '.repeat(140_000),
+      `<p:txBody><a:r>${'<a:rPr '.repeat(280_000)}<a:t>x</a:t></a:r><a:r><a:rPr b="1"><a:t>y</a:t></a:r></p:txBody>`,
+      `<p:txBody><a:r><a:rPr b="1">${'<a:latin '.repeat(200_000)}<a:t>x</a:t></a:r></p:txBody>`,
+    ];
+    for (const hostile of cases) {
+      const t0 = performance.now();
+      textFeatures(hostile);
+      expect(performance.now() - t0).toBeLessThan(2000);
+    }
+    // Still found where a tag is whole, and only on its own attributes.
+    expect(textFeatures('<a:normAutofit lnSpcReduction="10000"/><a:t>fontScale=</a:t>')).toEqual([]);
+    expect(textFeatures('<a:normAutofit fontScale="90000" lnSpcReduction="10000"/>')).toEqual([
+      'normAutofitScaled',
+    ]);
+    expect(textFeatures('<a:normAutofitX fontScale="1"/>')).toEqual([]);
+  });
+
   it('gives a deck the union of its slides and its presentation part, in order', () => {
     expect(deckTextFeatures([['rtl'], ['superSub'], []], ['bulletsAuto'])).toEqual([
       'superSub',

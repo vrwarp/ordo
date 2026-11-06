@@ -1,4 +1,4 @@
-import type { Box, ImageCrop } from '@ordo/domain';
+import { type Box, type ImageCrop, LOGICAL_HEIGHT, LOGICAL_WIDTH } from '@ordo/domain';
 
 import { CLAMP, clampBox, clampCrop, num } from './clamp.ts';
 import type { Ctx2D } from './ctx.ts';
@@ -11,7 +11,14 @@ import type { Ctx2D } from './ctx.ts';
  * full-slide photo costs 4-5 ms at 1920 and 17-23 ms at 3840 that way (46 ms with a profile), against
  * 0.7 and 2.7 ms for a 1:1 copy. So the decoders (the output's asset worker, the fidelity harness) resample
  * the visible part of each picture once into an sRGB bitmap covering the box's device rectangle in whole
- * pixels, upscaling included, and the drawers copy it 1:1 there.
+ * pixels, upscaling included, and the drawers copy it 1:1 there. Only the part of the box on the canvas
+ * (the logical 1920x1080 frame at the drawing scale) is prepared, so a prepared bitmap is never larger
+ * than the output, however far a picture overflows the slide.
+ *
+ * The bitmap is the device size even where that enlarges the source (a small tile stretched over the
+ * slide), not min(native, device): enlarging on every draw is what costs the 4-5 ms per full-slide picture
+ * above. The decoders bound the bytes per cue instead and draw the source when a prepared bitmap would not
+ * fit (`apps/output` pictures.ts).
  *
  * Inside the bitmap the picture keeps its exact sub-pixel position and size, so it lands where the source
  * path puts it. Rounding the box to whole pixels (as LibreOffice's `DrawTransformedBitmapEx` does, after
@@ -30,8 +37,8 @@ export type PictureDraw = { box: Box; fit: PictureFit; crop?: ImageCrop; radius?
 
 /**
  * The device pixels a picture is prepared for and copied to: the box's device rectangle widened to whole
- * pixels (`x`, `y` and the size `w` x `h`), the box inside them, and the fit and crop the pixels are made
- * with.
+ * pixels and cut to the canvas (`x`, `y` and the size `w` x `h`), the box relative to them (an overflowing
+ * box starts left of or above them), and the fit and crop the pixels are made with.
  */
 export type PictureTarget = {
   x: number;
@@ -47,9 +54,9 @@ export type PictureTarget = {
   bw: number;
   bh: number;
   /**
-   * Identifies the prepared pixels for one source: size, sub-pixel offset, fit and crop, not the whole-pixel
-   * position (the same box moved by whole pixels shares them). Decoders key their caches by the file and
-   * this.
+   * Identifies the prepared pixels for one source: size, offset of the box in them, fit and crop, not the
+   * whole-pixel position (the same box moved by whole pixels, inside the canvas, shares them). Decoders key
+   * their caches by the file and this.
    */
   key: string;
 };
@@ -64,9 +71,9 @@ export function pictureFit(fit: unknown): PictureFit {
 
 /**
  * The device pixels a picture is prepared for at `scale` (device px per logical px): undefined for a rotated
- * box, round corners (a clip path), an empty box or one over `MAX_PREPARED_PIXELS`. Those are drawn from
- * the source as before. Edges within 1e-6 px of a pixel boundary are taken as on it, so float noise never
- * widens a box by a pixel.
+ * box, round corners (a clip path), an empty box, one entirely off the canvas or one over
+ * `MAX_PREPARED_PIXELS`. Those are drawn from the source as before. Edges within 1e-6 px of a pixel boundary
+ * are taken as on it, so float noise never widens a box by a pixel.
  */
 export function pictureTarget(o: PictureDraw, scale: number): PictureTarget | undefined {
   if (!(Number.isFinite(scale) && scale > 0)) return undefined;
@@ -78,10 +85,13 @@ export function pictureTarget(o: PictureDraw, scale: number): PictureTarget | un
   const y0 = snap(box.y * scale);
   const x1 = snap((box.x + box.w) * scale);
   const y1 = snap((box.y + box.h) * scale);
-  const x = Math.floor(x0);
-  const y = Math.floor(y0);
-  const w = Math.ceil(x1) - x;
-  const h = Math.ceil(y1) - y;
+  // The canvas: the logical frame at this scale, in whole pixels.
+  const cw = Math.ceil(snap(LOGICAL_WIDTH * scale));
+  const ch = Math.ceil(snap(LOGICAL_HEIGHT * scale));
+  const x = Math.max(0, Math.floor(x0));
+  const y = Math.max(0, Math.floor(y0));
+  const w = Math.min(cw, Math.ceil(x1)) - x;
+  const h = Math.min(ch, Math.ceil(y1)) - y;
   if (!(w >= 1 && h >= 1 && x1 > x0 && y1 > y0) || w * h > MAX_PREPARED_PIXELS) return undefined;
   const bx = x0 - x;
   const by = y0 - y;

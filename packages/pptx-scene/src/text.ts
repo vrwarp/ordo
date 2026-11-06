@@ -11,7 +11,9 @@
  * - Paragraph properties: the nearest value along the paragraph's own pPr and its chain; the nearest
  *   `a:buNone`/`a:buChar`/`a:buAutoNum`/`a:buBlip` decides the bullet.
  * - Body properties: each attribute from the nearest `a:bodyPr` along own → layout → master; the nearest
- *   body that says how text fits decides (a stored `normAutofit` scale is only ever on the shape itself).
+ *   body that says how text fits decides the policy, but a stored `normAutofit` scale (fontScale,
+ *   lnSpcReduction) is taken from the shape's own `a:bodyPr` only: a layout's or master's was computed for
+ *   their prompt text, not the slide's (LibreOffice ignores an inherited autofit altogether).
  *
  * Owned by work item C (inherit-emit).
  */
@@ -102,13 +104,18 @@ export function readTextBody(ctx: SlideCtx, c: Chain): TextBody | undefined {
   return out;
 }
 
+/**
+ * How a body's text fits: the nearest fit element decides the policy; the stored scale of a `normAutofit`
+ * counts only on the shape's own `a:bodyPr` (an inherited one shrinks from full size).
+ */
 function autofitOf(fit: XNode | undefined, ownBodyPr: XNode | undefined): TextBody['autofit'] {
   if (fit?.name === 'a:spAutoFit') return { kind: 'shape' };
   if (fit?.name !== 'a:normAutofit') return { kind: 'none' };
+  const own = ownBodyPr !== undefined && firstOfAny([ownBodyPr], FITS) === fit;
+  if (!own) return { kind: 'shrink', fontScale: 1, lnSpcReduction: 0 };
   const fontScale = clamp((num(fit.attrs.fontScale) ?? 100_000) / 100_000, 0.01, 1);
   const lnSpcReduction = clamp((num(fit.attrs.lnSpcReduction) ?? 0) / 100_000, 0, 0.9);
-  const own = ownBodyPr !== undefined && firstOfAny([ownBodyPr], FITS) === fit;
-  return { kind: 'shrink', fontScale, lnSpcReduction, ...(own ? { own } : {}) };
+  return { kind: 'shrink', fontScale, lnSpcReduction, own };
 }
 
 /**

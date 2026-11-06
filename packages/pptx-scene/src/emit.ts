@@ -88,6 +88,13 @@ export const MIN_FONT_PX = 4;
 export const MAX_FONT_PX = 1_000;
 /** Objects one ordo slide holds (`Slide.objects` in `@ordo/domain`). */
 export const MAX_OBJECTS = 1_000;
+/**
+ * A slide's JSON budget (design/27 §3.4: hard 64 KB, else picture class). Rich text formatting (runs and
+ * paragraph styles) is written while the slide's text objects stay within it; past it, the slide's further
+ * text is written without its formatting and the slide is classed picture, so a deck whose layouts repeat
+ * thousands of formatted runs on every slide never builds megabytes the hub would discard.
+ */
+export const MAX_SLIDE_BYTES = 64 * 1024;
 /** Single line spacing in the office line model: 1.2 × the font size (`pptx-render/src/page.ts`). */
 export const SINGLE_LINE = 1.2;
 /** Logical coordinates are bounded by the schema (`coord`). */
@@ -181,6 +188,8 @@ interface EmitCtx {
   lo: boolean;
   media: Map<string, string>;
   log: (msg: string) => void;
+  /** UTF-8 bytes of the slide's rich text objects so far (`MAX_SLIDE_BYTES`). */
+  textBytes: number;
 }
 
 export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
@@ -202,14 +211,16 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       lo: opts.loCompat === true,
       media,
       log,
+      textBytes: 0,
     };
     const slide = emitSlide(ctx, s);
+    const over = ctx.textBytes > MAX_SLIDE_BYTES;
     return {
       index: s.index,
       ...(s.shown !== undefined ? { shown: s.shown } : {}),
       hidden: s.hidden,
       slide,
-      classification: s.classification,
+      classification: over ? overBudget(s.classification) : s.classification,
       digest: digestOf(slide.objects),
       notes,
       ms: performance.now() - t0,
@@ -254,59 +265,115 @@ function visibleChars(s: string): number {
   return n;
 }
 
+/** A lyric box candidate with its visible characters counted once. */
+interface Candidate {
+  t: Emitted;
+  chars: number;
+}
+
 function lyricOf(texts: Emitted[]): TextObject | undefined {
-  const own = texts.filter((t) => t.e.from === 'slide' && visibleChars(t.o.text) > 0);
-  const best = (list: Emitted[], score: (t: Emitted) => number) => {
-    let top: Emitted | undefined;
+  const own: Candidate[] = [];
+  for (const t of texts) {
+    if (t.e.from !== 'slide') continue;
+    const chars = visibleChars(t.o.text);
+    if (chars > 0) own.push({ t, chars });
+  }
+  const best = (list: Candidate[], score: (c: Candidate) => number) => {
+    let top: Candidate | undefined;
     let topScore = Number.NEGATIVE_INFINITY;
-    for (const t of list) {
-      const v = score(t);
+    for (const c of list) {
+      const v = score(c);
       if (v > topScore) {
-        top = t;
+        top = c;
         topScore = v;
       }
     }
-    return top?.o;
+    return top?.t.o;
   };
-  const chars = (t: Emitted) => visibleChars(t.o.text);
-  const body = own.filter((t) => t.e.ph && masterClass(t.e.ph.type) === 'body');
-  if (body.length) return bilingual(body, chars) ?? best(body, chars);
-  const other = own.filter((t) => !isTitle(t.e.ph) && !isFooter(t.e.ph));
-  if (other.length) return bilingual(other, chars) ?? best(other, (t) => chars(t) * Math.max(1, t.area));
+  const chars = (c: Candidate) => c.chars;
+  const body = own.filter((c) => c.t.e.ph && masterClass(c.t.e.ph.type) === 'body');
+  if (body.length) return bilingual(body) ?? best(body, chars);
+  const other = own.filter((c) => !isTitle(c.t.e.ph) && !isFooter(c.t.e.ph));
+  if (other.length) return bilingual(other) ?? best(other, (c) => c.chars * Math.max(1, c.t.area));
   return best(
-    own.filter((t) => isTitle(t.e.ph)),
+    own.filter((c) => isTitle(c.t.e.ph)),
     chars,
   );
 }
 
 /** Two candidate boxes count as one per language when the smaller holds at least this share of the text. */
 const BILINGUAL_SHARE = 0.5;
+/**
+ * What a Han, Kana or Hangul character weighs against a Latin one when comparing lengths: the same line in
+ * Korean, Chinese or Japanese takes a quarter to a half of the characters it takes in English.
+ */
+const WIDE_SCRIPT_WEIGHT = 2.5;
+const WIDE_SCRIPT = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 
 /**
- * A bilingual slide (design/27 §4 "Church mappings"): when the two candidates with the most text are in
- * different languages (their dominant run's language, else their script) and of comparable length, the
- * lyric box is the first of them in reading order: the left one of two side by side, else the upper one.
+ * A bilingual slide (design/27 §4 "Church mappings"): when the two candidates with the most text (Han, Kana
+ * and Hangul weighed as `WIDE_SCRIPT_WEIGHT` Latin characters) are in different languages and of
+ * comparable length, the lyric box is the first of them in reading order: the left one of two side by side,
+ * else the upper one.
  */
-function bilingual(list: Emitted[], chars: (t: Emitted) => number): TextObject | undefined {
+function bilingual(list: Candidate[]): TextObject | undefined {
   if (list.length < 2) return undefined;
-  const [a, b] = [...list].sort((x, y) => chars(y) - chars(x));
-  if (!a || !b || chars(b) < BILINGUAL_SHARE * chars(a) || languageOf(a.o) === languageOf(b.o))
-    return undefined;
-  const A = a.o.box;
-  const B = b.o.box;
+  const weighed = list.map((c) => ({ c, n: textWeight(c.t.o.text) })).sort((x, y) => y.n - x.n);
+  const [a, b] = weighed;
+  if (!a || !b || b.n < BILINGUAL_SHARE * a.n || sameLanguage(a.c.t.o, b.c.t.o)) return undefined;
+  const A = a.c.t.o.box;
+  const B = b.c.t.o.box;
   const overlap = Math.min(A.y + A.h, B.y + B.h) - Math.max(A.y, B.y);
   const sideBySide = overlap > 0.5 * Math.min(A.h, B.h);
   const aFirst = sideBySide ? A.x <= B.x : A.y <= B.y;
-  return (aFirst ? a : b).o;
+  return (aFirst ? a : b).c.t.o;
 }
 
-/** A text object's language: its box language's primary subtag, else the script most of its text is in. */
-function languageOf(o: TextObject): string {
-  const lang = o.style.lang?.split('-')[0]?.toLowerCase();
-  if (lang) return lang;
+/** The length of a text for comparing two languages: visible characters, wide scripts weighed more. */
+function textWeight(s: string): number {
+  let n = 0;
+  for (const ch of s) if (ch.trim()) n += WIDE_SCRIPT.test(ch) ? WIDE_SCRIPT_WEIGHT : 1;
+  return n;
+}
+
+/**
+ * Whether two text objects are in the same language, comparing like with like: they differ when most of
+ * their text is in different script classes (Latin, East Asian, complex), or when both carry a language
+ * and the primary subtags differ. A box without a language is taken to match one with it in its script.
+ */
+function sameLanguage(a: TextObject, b: TextObject): boolean {
+  if (scriptClassOf(a.text) !== scriptClassOf(b.text)) return false;
+  const la = primaryLang(a);
+  const lb = primaryLang(b);
+  return !la || !lb || la === lb;
+}
+
+function primaryLang(o: TextObject): string {
+  return o.style.lang?.split('-')[0]?.toLowerCase() ?? '';
+}
+
+/** The script class most of a text's visible characters are in (fontmap.ts `scriptClasses`). */
+function scriptClassOf(text: string): 'latin' | 'ea' | 'cs' {
   const n = { latin: 0, ea: 0, cs: 0 };
-  for (const c of scriptClasses(o.text)) n[c]++;
+  const classes = scriptClasses(text);
+  for (let i = 0; i < classes.length; i++) if (text.charCodeAt(i) > 0x20) n[classes[i]!]++;
   return n.ea > n.latin && n.ea >= n.cs ? 'ea' : n.cs > n.latin ? 'cs' : 'latin';
+}
+
+/** A slide over `MAX_SLIDE_BYTES`: picture class (design/27 §3.4), with why. */
+function overBudget(c: Classification): Classification {
+  const reason = `more than ${MAX_SLIDE_BYTES / 1024} KB of text formatting`;
+  return { ...c, class: 'picture', reasons: [...c.reasons.filter((r) => r !== reason), reason] };
+}
+
+/** UTF-8 length of `s`. */
+function utf8Bytes(s: string): number {
+  let n = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c >= 0xd800 && c <= 0xdbff ? 2 : 3; // a pair counts 2 + 2
+  }
+  return n;
 }
 
 // ── Backgrounds ─────────────────────────────────────────────────────────────────────────────────────────
@@ -808,11 +875,14 @@ function richTextObject(
   shapeVisible: boolean,
 ): TextObject | undefined {
   const body = e.text!;
+  // Past the slide's budget the text is written without runs and paragraph styles (picture class anyway).
+  const over = ctx.textBytes > MAX_SLIDE_BYTES;
   const rich = richText(body, {
     frame: ctx.frame,
     ...(shapeVisible || !e.shadow ? {} : { shapeShadow: e.shadow }),
     log: ctx.log,
     ...(ctx.lo ? { lo: true } : {}),
+    ...(over ? { plain: true } : {}),
   });
   if (!rich) return undefined;
   let box = textRect(e, shapeBox);
@@ -835,6 +905,13 @@ function richTextObject(
   };
   if (rich.runs) o.runs = rich.runs;
   if (rich.paras) o.paras = rich.paras;
+  if (!over) {
+    ctx.textBytes += utf8Bytes(JSON.stringify(o));
+    if (ctx.textBytes > MAX_SLIDE_BYTES)
+      ctx.log(
+        `the slide has more than ${MAX_SLIDE_BYTES / 1024} KB of text formatting: its further text is written without it (picture class)`,
+      );
+  }
   return o;
 }
 

@@ -18,6 +18,11 @@ import type { ItemPara, Itemized, ParaStyle, RunStyle, StyleRun } from './types.
  * makes the empty line's height: the run covering the '\n' that ends it; for the last paragraph, which
  * has none, the run covering the '\n' before it (the line typed Enter on, or the a:br of a trailing
  * break); else the box style.
+ *
+ * A known limit of that rule: when the line before an empty last paragraph is empty too (an empty
+ * paragraph, or the empty line after a trailing a:br), one '\n' ends both, so both lines take one end mark
+ * (the converter gives it the last paragraph's): text ending in two empty lines of different sizes draws
+ * the first at the second's size. The schema has no field for the last paragraph's own end mark.
  */
 
 /** The style of `run` over the box style (`run` undefined: the box style itself). */

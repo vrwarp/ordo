@@ -19,7 +19,9 @@ import {
  * Each slide is drawn as the operator's thumbnail worker draws it: black, the slide's background picture
  * cover-fit, then the real `drawSlide2D` of `@ordo/renderer`. The picture is taken at 1920x1080 and cut to
  * the deck's slide rectangle, so a 4:3 deck compares with LibreOffice's 4:3 page like for like. The slide is
- * then drawn again at 1920 and 3840 px for the raster timings.
+ * then drawn again at 1920 and 3840 px for the raster timings: warm (the median of repeated draws, pictures
+ * prepared) and cold (preparing the pictures the cache lacks plus the first draw, as an output pays it on a
+ * slide change).
  *
  * Fonts go through the renderer's `FontResolver`, installed as the page's font environment as the asset and
  * thumbnail workers install theirs (design/27 §10): each family's faces are registered under an internal
@@ -29,8 +31,9 @@ import {
  *
  * Pictures and fonts come from the harness's own origin (`native.ts` answers every request; nothing else
  * is fetched). Each picture a slide draws unrotated is prepared as the output's asset worker prepares it
- * (design/27 §7.1): resampled once from the decoded file into an sRGB bitmap of its device rectangle, at
- * 1920 and at 3840 wide, before the slide is drawn or timed, so the timed draws copy it 1:1. A picture
+ * (design/27 §7.1): resampled once from the decoded file into an sRGB bitmap of its device rectangle (cut
+ * to the canvas), at 1920 and then at 3840 wide, before the slide is drawn at that width, so the warm draws
+ * copy it 1:1; the cold time includes that preparation. A picture
  * drawn from its source (rotated, round corners) is decoded scaled down to what the deck shows of it (the
  * hub's picture preparation does the same, design/27 §4). Both are kept in a bounded cache.
  */
@@ -59,9 +62,15 @@ export type RenderResult = {
   png: string;
   width: number;
   height: number;
-  /** Median draw time in ms (draw and flush) at 1920 and 3840 px wide. */
+  /** Median draw time in ms (draw and flush) at 1920 and 3840 px wide: pictures prepared (warm). */
   ms1920: number;
   ms3840: number;
+  /**
+   * The cold time at each width, in ms: preparing the pictures the deck's cache lacks (decode and resample,
+   * what the output's asset worker pays inside the slide job on a cache miss) plus the first draw and flush.
+   */
+  cold1920: number;
+  cold3840: number;
   /** Media ids the slide uses that could not be decoded. */
   missing: string[];
 };
@@ -79,8 +88,6 @@ export type NativePage = {
 const CACHE_PIXELS = 128_000_000;
 /** A source is scaled down when it is more than this much larger than its largest use (as the hub does). */
 const OVERSIZE = 1.25;
-/** The widths each slide is drawn at: the scored picture and the timings. */
-const WIDTHS = [1920, 3840] as const;
 /** The slide's background picture: the whole frame, cover-fitted (`thumb.worker.ts`). */
 const BACKGROUND = { box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 }, fit: 'cover' } as const;
 
@@ -149,10 +156,10 @@ async function source(full: ImageBitmap, m: PageMedia): Promise<ImageBitmap | un
   }
 }
 
-/** The pictures a slide's draws ask for at every width: the background's, then `slidePictures`. */
-function usesOf(slide: Slide): SlidePicture[] {
+/** The pictures a slide's draws ask for at these widths: the background's, then `slidePictures`. */
+function usesOf(slide: Slide, widths: readonly number[]): SlidePicture[] {
   const out: SlidePicture[] = [];
-  for (const width of WIDTHS) {
+  for (const width of widths) {
     const scale = width / 1920;
     if (slide.backgroundMediaId)
       out.push({ mediaId: slide.backgroundMediaId, target: pictureTarget(BACKGROUND, scale) });
@@ -165,9 +172,9 @@ function usesOf(slide: Slide): SlidePicture[] {
  * Decode and prepare what a slide draws (outside the timed draws), and the lookup the draws use. Each
  * file is decoded once for all of the slide's targets it lacks; ids that fail are listed in `missing`.
  */
-async function picturesOf(slide: Slide, missing: string[]): Promise<ImageLookup> {
+async function picturesOf(slide: Slide, missing: string[], widths: readonly number[]): Promise<ImageLookup> {
   const wants = new Map<string, { targets: Map<string, PictureTarget>; source: boolean }>();
-  for (const u of usesOf(slide)) {
+  for (const u of usesOf(slide, widths)) {
     let w = wants.get(u.mediaId);
     if (!w) wants.set(u.mediaId, (w = { targets: new Map(), source: false }));
     if (u.target) w.targets.set(u.target.key, u.target);
@@ -197,7 +204,7 @@ async function picturesOf(slide: Slide, missing: string[]): Promise<ImageLookup>
     }
     const keys = [...w.targets.values()].map((t) => pictureKey(id, t));
     if (w.source) keys.push(id);
-    if (keys.some((k) => cache.has(k) && !cache.get(k)!.bmp)) missing.push(id);
+    if (keys.some((k) => cache.has(k) && !cache.get(k)!.bmp) && !missing.includes(id)) missing.push(id);
   }
   return (id, t) => (t && cache.get(pictureKey(id, t))?.bmp) || cache.get(id)?.bmp;
 }
@@ -303,9 +310,13 @@ const page: NativePage = {
   },
   async render(job) {
     const missing: string[] = [];
-    const images = await picturesOf(job.slide, missing);
+    // Cold at 1920: the pictures the cache lacks, then the first draw and flush.
+    const t0 = performance.now();
+    const images = await picturesOf(job.slide, missing, [1920]);
     const ctx = context(1920);
     draw(ctx, job.slide, 1920, images);
+    ctx.getImageData(0, 0, 1, 1);
+    const cold1920 = performance.now() - t0;
     const x = Math.max(0, Math.min(1919, Math.round(job.rect.x)));
     const y = Math.max(0, Math.min(1079, Math.round(job.rect.y)));
     const w = Math.max(1, Math.min(1920 - x, Math.round(job.rect.w)));
@@ -314,8 +325,18 @@ const page: NativePage = {
     crop.getContext('2d')!.drawImage(ctx.canvas, x, y, w, h, 0, 0, w, h);
     const png = await blobToBase64(await crop.convertToBlob({ type: 'image/png' }));
     const ms1920 = job.repeats ? timed(ctx, job.slide, 1920, images, job.repeats) : 0;
-    const ms3840 = job.repeats ? timed(context(3840), job.slide, 3840, images, job.repeats) : 0;
-    return { png, width: w, height: h, ms1920, ms3840, missing };
+    let ms3840 = 0;
+    let cold3840 = 0;
+    if (job.repeats) {
+      const t1 = performance.now();
+      const big = await picturesOf(job.slide, missing, [3840]);
+      const ctx4 = context(3840);
+      draw(ctx4, job.slide, 3840, big);
+      ctx4.getImageData(0, 0, 1, 1);
+      cold3840 = performance.now() - t1;
+      ms3840 = timed(ctx4, job.slide, 3840, big, job.repeats);
+    }
+    return { png, width: w, height: h, ms1920, ms3840, cold1920, cold3840, missing };
   },
 };
 

@@ -7,6 +7,10 @@ import {
   paraLabels,
   SYMBOL_TO_UNICODE,
   symbolFontChar,
+  WEBDINGS_TO_UNICODE,
+  WINGDINGS_2_TO_UNICODE,
+  WINGDINGS_3_TO_UNICODE,
+  isPrivateUse,
   WINGDINGS_TO_UNICODE,
 } from './bullets.ts';
 import type { TextPara } from './schemas.ts';
@@ -177,6 +181,33 @@ describe('paraLabels: counting as PowerPoint and LibreOffice do (annotate.ts bul
 });
 
 describe('character bullets', () => {
+  it('maps the Wingdings 2, Wingdings 3 and Webdings bullets of Office themes', () => {
+    // The codes the worship decks' masters use, as LibreOffice draws them (or the nearest common shape).
+    expect(symbolFontChar('Wingdings 2', '\u{f097}')).toBe('\u{25cf}');
+    expect(symbolFontChar('Wingdings 2', '\u{f096}')).toBe('\u{2022}');
+    expect(symbolFontChar('Wingdings 2', '\u{f09a}')).toBe('\u{25cb}');
+    expect(symbolFontChar('Wingdings 2', '\u{f0a0}')).toBe('\u{25aa}');
+    expect(symbolFontChar('Wingdings 2', '?')).toBe('\u{261e}');
+    expect(symbolFontChar('Wingdings 3', '\u{f075}')).toBe('\u{25b6}');
+    expect(symbolFontChar('Wingdings 3', '\u{f07d}')).toBe('\u{25b8}');
+    expect(symbolFontChar('Wingdings 3', '\u{f070}')).toBe('\u{25b2}');
+    expect(symbolFontChar('Webdings', '\u{f034}')).toBe('\u{25b8}');
+    expect(symbolFontChar(' webdings ', '=')).toBe('\u{25cf}');
+    // Unknown codes, and any code of another symbol font, are a bullet, never a private-use character.
+    expect(symbolFontChar('Wingdings 3', '\u{f0ad}')).toBe('\u{2022}');
+    expect(symbolFontChar('Marlett', 'h')).toBe('\u{2022}');
+    expect(symbolFontChar('Wingdings', '\u{e123}')).toBe('\u{2022}');
+    expect(isSymbolFont('Wingdings 2')).toBe(true);
+    expect(isSymbolFont('Monotype Sorts')).toBe(true);
+    for (const t of [WINGDINGS_2_TO_UNICODE, WINGDINGS_3_TO_UNICODE, WEBDINGS_TO_UNICODE])
+      for (const [code, ch] of t) {
+        expect(code).toBeGreaterThan(0x20);
+        expect(code).toBeLessThanOrEqual(0xff);
+        expect([...ch]).toHaveLength(1);
+        expect(isPrivateUse(ch.codePointAt(0)!)).toBe(false);
+      }
+  });
+
   it('maps the Wingdings and Symbol bullets of design/27 §6 to Unicode', () => {
     const w = (code: number) => symbolFontChar('Wingdings', String.fromCharCode(code));
     expect([0x6c, 0x6e, 0xa7, 0xd8, 0xfc, 0x71, 0x76].map(w)).toEqual([
@@ -203,7 +234,6 @@ describe('character bullets', () => {
     expect(symbolFontChar('Wingdings', '\u{f020}')).toBe(' ');
     expect(symbolFontChar('Arial', '\u{a7}')).toBeNull();
     expect(symbolFontChar(undefined, '\u{a7}')).toBeNull();
-    expect(symbolFontChar('Wingdings 2', '\u{a7}')).toBeNull();
     expect(isSymbolFont('Wingdings')).toBe(true);
     expect(isSymbolFont('Calibri')).toBe(false);
     for (const [code, ch] of [...WINGDINGS_TO_UNICODE, ...SYMBOL_TO_UNICODE]) {

@@ -124,10 +124,38 @@ describe('pictureTarget: the device pixels a picture is prepared for (design/27 
     expect(pictureTarget({ box: box(0, 0, 400, 300), fit: 'stretch', radius: 12 }, 1)).toBeUndefined();
     expect(pictureTarget({ box: box(10.2, 0, 0, 300), fit: 'stretch' }, 1)).toBeUndefined();
     expect(pictureTarget({ box: box(0, 0, 400, 300), fit: 'stretch' }, Number.NaN)).toBeUndefined();
-    // The whole frame at 4K is 8.3 MP; twice the frame at 4K is 33 MP, over the 16 MP cap.
+    // The whole frame at 4K is 8.3 MP, under the 16 MP cap.
     expect(pictureTarget({ box: box(0, 0, 1920, 1080), fit: 'stretch' }, 2)).toBeDefined();
-    expect(pictureTarget({ box: box(-960, -540, 3840, 2160), fit: 'stretch' }, 2)).toBeUndefined();
     expect(3840 * 2160).toBeLessThanOrEqual(MAX_PREPARED_PIXELS);
+    // Entirely off the canvas: nothing to prepare.
+    expect(pictureTarget({ box: box(1920, 0, 400, 300), fit: 'stretch' }, 1)).toBeUndefined();
+    expect(pictureTarget({ box: box(-400, -300, 400, 300), fit: 'stretch' }, 1)).toBeUndefined();
+  });
+
+  it('prepares only the part of the box on the canvas, keeping the box where it is', () => {
+    // A full-bleed photo overflowing the slide on every side: at most the output's pixels (8.3 MB at 1920),
+    // not its 3920x2280 box (35.8 MB).
+    const t = pictureTarget({ box: box(-1000, -600, 3920, 2280), fit: 'cover' }, 1)!;
+    expect([t.x, t.y, t.w, t.h]).toEqual([0, 0, 1920, 1080]);
+    expect([t.bx, t.by, t.bw, t.bh]).toEqual([-1000, -600, 3920, 2280]);
+    const t2 = pictureTarget({ box: box(-960, -540, 3840, 2160), fit: 'stretch' }, 2)!;
+    expect([t2.x, t2.y, t2.w, t2.h, t2.bx, t2.by]).toEqual([0, 0, 3840, 2160, -1920, -1080]);
+    // A box over the right edge: cut there, its sub-pixel offset kept.
+    const r = pictureTarget({ box: box(1800.5, 100, 400, 300), fit: 'cover' }, 1)!;
+    expect([r.x, r.y, r.w, r.h, r.bx, r.bw]).toEqual([1800, 100, 120, 300, 0.5, 400]);
+    // The cut is part of the key: the same box elsewhere is other pixels.
+    expect(r.key).not.toBe(pictureTarget({ box: box(800.5, 100, 400, 300), fit: 'cover' }, 1)!.key);
+  });
+
+  it('draws the visible part of an overflowing picture where the unprepared path draws it', () => {
+    const made = stubOffscreen();
+    const t = pictureTarget({ box: box(-100, -50, 400, 300), fit: 'stretch' }, 1)!;
+    expect([t.x, t.y, t.w, t.h]).toEqual([0, 0, 300, 250]);
+    preparePicture(source(400, 300), t);
+    expect([made[0]!.w, made[0]!.h]).toEqual([300, 250]);
+    const calls = made[0]!.rec.calls;
+    expect(calls.find((o) => o.op === 'rect')?.args).toEqual([-100, -50, 400, 300]);
+    expect(calls.find((o) => o.op === 'drawImage')?.args).toEqual([-100, -50, 400, 300]);
   });
 });
 

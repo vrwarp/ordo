@@ -11,8 +11,10 @@ import {
   SCRIPT_SCALE,
   autofit,
   fitFactor,
+  lineProportion,
   officeFontPx,
   officeLine,
+  spacingReduction,
 } from './office.ts';
 import { segText } from './segments.ts';
 import type {
@@ -73,15 +75,17 @@ import type {
  * Raised and lowered runs are drawn at 0.58 × their size (at least 4 px), shifted by baseline × size, and
  * never grow the line. A bullet is drawn at `sizePct` × F within 4-1,000 px, in the paragraph's direction
  * and its first run's language (an Arabic or Hebrew number reads as its paragraph does: '.1' for '1.'). Space before and after a paragraph are not drawn before the first or after the last; in the office
- * model they are scaled by the autofit spacing scale k, as are proportional and exact spacing.
+ * model they are scaled by the autofit spacing scale k, as are proportional and exact spacing; at
+ * PowerPoint's stored scale its lnSpcReduction is subtracted from proportional spacing instead, single
+ * spacing included (office.ts `officeLine`).
  *
  * Soft paragraphs continue the paragraph before them: no bullet, no space between them, and that
  * paragraph's style (alignment, indents, spacing, line spacing, main size and direction). A trailing a:br
  * (an empty soft paragraph that no soft paragraph follows) makes a line as tall as its own end mark (the
  * run covering its '\n', or for the last paragraph the '\n' before it), not the paragraph's main size, and
  * in the office model at single spacing: the paragraph's proportional spacing does not apply to it (so
- * neither does the spacing scale k, which leaves single spacing alone), its exact spacing does, as on any
- * line. An empty line between two a:br and an empty paragraph keep the paragraph's spacing. LibreOffice
+ * neither does the spacing scale k, which leaves single spacing alone; PowerPoint's stored reduction, which
+ * applies to single spacing too, does), its exact spacing does, as on any line. An empty line between two a:br and an empty paragraph keep the paragraph's spacing. LibreOffice
  * 24.2, measured: at 90 % a 40 pt trailing line is 96 px high, not 86.4.
  *
  * Anchor and insets: `valign` places the laid-out text in the box less its insets (`style.insets`, else
@@ -225,7 +229,8 @@ const EPS = 1e-6;
 
 /**
  * Lay out prepared paragraphs in the object's box: absolute logical coordinates (§6). Autofit never goes
- * below `minFontScale` (look bands: 0.5, as drawText's).
+ * below `minFontScale` (look bands: 0.5, as drawText's). `fixed` lays the text out at exactly that scale
+ * instead of fitting it (tests compare the search with LibreOffice's at given scales).
  */
 export function layoutBox(
   m: Measurer,
@@ -234,6 +239,7 @@ export function layoutBox(
   bullets: readonly (BulletSpec | null)[],
   env: FontEnv,
   minFontScale?: number,
+  fixed?: FitScale,
 ): RichLayout {
   const style = o.style;
   const box = o.box;
@@ -245,19 +251,28 @@ export function layoutBox(
   const shared: Shared = { bases: new WeakMap(), clusters: new WeakMap() };
   let exact: { fit: FitScale; flowed: Flowed } | null = null;
   const flowExact = (fit: FitScale): Flowed => {
-    if (exact && exact.fit.font === fit.font && exact.fit.spacing === fit.spacing) return exact.flowed;
+    if (
+      exact &&
+      exact.fit.font === fit.font &&
+      exact.fit.spacing === fit.spacing &&
+      exact.fit.stored === fit.stored
+    )
+      return exact.flowed;
     const flowed = flowParas(mm, o, prepared, bullets, env, innerW, fit, shared);
     exact = { fit, flowed };
     return flowed;
   };
-  const fit = autofit(
-    style,
-    innerH,
-    (f) => flowExact(f).height,
-    (f, ref) => flowParas(mm, o, prepared, bullets, env, innerW, f, shared, ref).height,
-    style.lineModel === 'office' ? FIT_SPACINGS : FIT_SPACINGS.slice(0, 1),
-    minFontScale,
-  );
+  const fit =
+    fixed ??
+    autofit(
+      style,
+      innerH,
+      (f) => flowExact(f).height,
+      (f, ref) => flowParas(mm, o, prepared, bullets, env, innerW, f, shared, ref).height,
+      style.lineModel === 'office' ? FIT_SPACINGS : FIT_SPACINGS.slice(0, 1),
+      minFontScale,
+      spacingFree(prepared, style.lineHeight),
+    );
   const laid = flowExact(fit);
   let y0 = box.y + ins.t;
   if (style.valign === 'middle') y0 += (innerH - laid.height) / 2;
@@ -296,6 +311,25 @@ export function layoutBox(
 }
 
 /**
+ * Whether LibreOffice's spacing scale k changes nothing in these paragraphs: every hard paragraph single
+ * spaced (no proportional spacing but 100 %, no exact spacing) and no space between paragraphs. Soft
+ * paragraphs take their paragraph's style; the empty line of a trailing a:br is single spaced anyway.
+ */
+function spacingFree(prepared: readonly PreparedPara[], lineHeight: number): boolean {
+  let prevAfter = 0;
+  let first = true;
+  for (const pp of prepared) {
+    if (pp.para.soft) continue;
+    const ps = pp.para.style;
+    if (ps.lineSpacingPx !== null || lineProportion(ps, lineHeight) !== 1) return false;
+    if (!first && prevAfter + ps.spaceBeforePx !== 0) return false;
+    prevAfter = ps.spaceAfterPx;
+    first = false;
+  }
+  return true;
+}
+
+/**
  * Lines of every paragraph at one autofit scale, relative to the inner box's top-left corner. With
  * `linear` (a reference scale), widths are not measured at `fit` but scaled linearly from their measure at
  * `linear`, and only `height` is computed (the autofit search: `lines` is empty).
@@ -316,6 +350,8 @@ function flowParas(
   const office = style.lineModel === 'office';
   const wrap = style.wrap !== false;
   const k = office ? fit.spacing : 1;
+  // At PowerPoint's stored scale its lnSpcReduction is subtracted from proportional spacing (office.ts).
+  const reduce = office ? spacingReduction(fit) : 0;
   // The spacing scale never changes a width: only a different font scale needs the linear estimate.
   const base = linear && linear.font !== fit.font ? linear : null;
   const size = (px: number, f: FitScale) => fitSize(px, f.font, office);
@@ -657,8 +693,14 @@ function flowParas(
       const trailingBr = office && !items.length && para.soft && !prepared[pi + 1]?.para.soft;
       const metrics = office
         ? trailingBr
-          ? officeLine(lineF, ps.lineSpacingPx === null ? { ...ps, lineSpacing: 1 } : ps, k, OFFICE_SINGLE)
-          : officeLine(lineF, ps, k, style.lineHeight)
+          ? officeLine(
+              lineF,
+              ps.lineSpacingPx === null ? { ...ps, lineSpacing: 1 } : ps,
+              k,
+              OFFICE_SINGLE,
+              reduce,
+            )
+          : officeLine(lineF, ps, k, style.lineHeight, reduce)
         : ordoLine(lineF, ps, style.lineHeight);
       if (linear) {
         y += metrics.height;

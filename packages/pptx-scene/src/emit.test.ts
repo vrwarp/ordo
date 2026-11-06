@@ -5,6 +5,7 @@ import {
   type EmitOptions,
   insetBox,
   legacyColor,
+  MAX_SLIDE_BYTES,
   marginOf,
   overWhite,
   placePicture,
@@ -791,6 +792,31 @@ describe('placement', () => {
     expect(insetBox({ x: 0, y: 0, w: 10, h: 10, rotation: 0 }, 20, 0, 20, 0).w).toBe(0);
   });
 
+  it('writes formatting within the slide budget, then plain text, and classes the slide picture', () => {
+    // 40 boxes of 300 differently coloured runs each: far past 64 KB of formatting.
+    const colors = ['FF0000', '00FF00'];
+    const runs = Array.from({ length: 300 }, (_, i) => run(`w${i} `, '', solid(colors[i % 2]!))).join('');
+    const box = (id: number) => sp({ id, x: 0, y: 0, cx: IN, cy: IN, txBody: body(para(runs)) });
+    const boxes = Array.from({ length: 40 }, (_, i) => box(i + 2)).join('');
+    const out = emitSlides(parseDeck(buildDeck({ slides: [{ shapes: boxes }] })));
+    const s = out.slides[0]!;
+    const texts = s.slide.objects.filter((o): o is TextObject => o.type === 'text');
+    expect(texts).toHaveLength(40);
+    const formatted = texts.filter((t) => t.runs);
+    expect(formatted.length).toBeGreaterThan(0);
+    expect(formatted.length).toBeLessThan(10);
+    // The rest keep their text and box style.
+    expect(texts.at(-1)!.text).toBe(texts[0]!.text);
+    expect(texts.at(-1)!.runs).toBeUndefined();
+    expect(JSON.stringify(s.slide).length).toBeLessThan(MAX_SLIDE_BYTES + 40 * 2_000);
+    expect(s.classification.class).toBe('picture');
+    expect(s.classification.reasons.join(' ')).toMatch(/KB of text formatting/);
+    expect(s.notes.join(' ')).toMatch(/KB of text formatting/);
+    // A slide within the budget is untouched.
+    const small = emitSlides(parseDeck(buildDeck({ slides: [{ shapes: box(2) }] })));
+    expect(small.slides[0]!.classification.class).not.toBe('picture');
+  });
+
   it('caps a slide at 1,000 objects', () => {
     const many = sp({ id: 2, x: 0, y: 0, cx: IN, cy: IN, fill: solid('FF0000') }).repeat(1_100);
     const { objects, notes } = emitOne({ slides: [{ shapes: many }] });
@@ -874,6 +900,54 @@ describe('lyric box', () => {
           lang(3, 'Gracia', 'es-ES', 0, IN, 'type="body" idx="2"'),
       ),
     ).toBe('Amazing grace how sweet the sound');
+  });
+
+  it('weighs Han, Kana and Hangul against Latin text, so a parallel translation is bilingual', () => {
+    const box = (id: number, text: string, rPr: string, y: number) =>
+      sp({
+        id,
+        x: 0,
+        y,
+        cx: 10 * IN,
+        cy: 2 * IN,
+        ph: `type="body" idx="${id}"`,
+        txBody: body(para(run(text, rPr))),
+      });
+    const lyric = (shapes: string) => {
+      const { slide } = emitOne({ slides: [{ shapes }] });
+      return (slide.objects.find((o) => o.id === slide.lyricObjectId) as TextObject).text;
+    };
+    const en = 'Amazing grace, how sweet the sound that saved a wretch like me';
+    // Korean above (16 visible characters) and its English line below (52): the upper box, in reading order.
+    const ko = '나 같은 죄인 살리신 주 은혜 놀라워';
+    expect(lyric(box(2, ko, 'lang="ko-KR"', IN) + box(3, en, '', 4 * IN))).toBe(ko);
+    const zh = '奇异恩典，何等甘甜，我罪已得赦免';
+    expect(lyric(box(2, zh, 'lang="zh-CN"', IN) + box(3, en, '', 4 * IN))).toBe(zh);
+  });
+
+  it('compares like with like: a box without a language matches one with it in the same script', () => {
+    const side = (id: number, x: number, text: string, rPr: string) =>
+      sp({
+        id,
+        x,
+        y: IN,
+        cx: 5 * IN,
+        cy: 2 * IN,
+        ph: `type="body" idx="${id}"`,
+        txBody: body(para(run(text, rPr))),
+      });
+    const { slide } = emitOne({
+      slides: [
+        {
+          shapes:
+            side(2, 0, 'Amazing grace how sweet', '') +
+            side(3, 6 * IN, 'Amazing grace how sweet the sound', 'lang="en-GB"'),
+        },
+      ],
+    });
+    // Not a bilingual slide: the larger box, not the left one.
+    const lyric = slide.objects.find((o) => o.id === slide.lyricObjectId) as TextObject;
+    expect(lyric.text).toBe('Amazing grace how sweet the sound');
   });
 
   it('ignores decoration text', () => {

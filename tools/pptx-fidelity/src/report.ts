@@ -32,6 +32,8 @@ export type SlideScore = {
   convertMs?: number;
   /** Median `drawSlide2D` time (draw and flush) at 1920 and 3840 px wide, in ms. */
   rasterMs?: { '1920': number; '3840': number };
+  /** Cold: preparing the pictures the deck's cache lacks plus the first draw, in ms. */
+  coldMs?: { '1920': number; '3840': number };
 };
 
 export type DeckScore = {
@@ -119,6 +121,8 @@ export type NativeStats = {
   meanPolicy?: number;
   convertMs: { p50: number; p95: number };
   rasterMs: { '1920': { p50: number; p95: number }; '3840': { p50: number; p95: number } };
+  /** Cold times (`SlideScore.coldMs`): what an output pays on a slide change, decode included. */
+  coldMs: { '1920': { p50: number; p95: number }; '3840': { p50: number; p95: number } };
   tiers: GroupRow[];
   /** T1 and T2 together (the M2 exit compares them with pptx-preview). */
   t1t2?: GroupRow;
@@ -223,10 +227,18 @@ export function nativeStats(decks: DeckScore[]): NativeStats {
   const scored = scoredOf(slides);
   const ppv = scored.filter((s) => s.ssim !== undefined);
   const t1t2 = groupRows(slides, (s) => (s.tier === 'T1' || s.tier === 'T2' ? ['T1+T2'] : []));
-  const raster = (w: '1920' | '3840') => {
-    const xs = slides.flatMap((x) => (x.s.rasterMs ? [x.s.rasterMs[w]] : []));
+  const raster = (
+    w: '1920' | '3840',
+    of: (s: SlideScore) => { '1920': number; '3840': number } | undefined,
+  ) => {
+    const xs = slides.flatMap((x) => {
+      const t = of(x.s);
+      return t ? [t[w]] : [];
+    });
     return { p50: quantile(xs, 0.5), p95: quantile(xs, 0.95) };
   };
+  const warm = (s: SlideScore) => s.rasterMs;
+  const cold = (s: SlideScore) => s.coldMs;
   const conv = slides.flatMap((x) => (x.s.convertMs !== undefined ? [x.s.convertMs] : []));
   return {
     slides: slides.length,
@@ -236,7 +248,8 @@ export function nativeStats(decks: DeckScore[]): NativeStats {
     ...(ppv.length ? { meanPpv: mean(ppv.map((s) => s.ssim!)) } : {}),
     ...(scored.some((s) => s.policySsim !== undefined) ? { meanPolicy: mean(scored.map(policyOf)) } : {}),
     convertMs: { p50: quantile(conv, 0.5), p95: quantile(conv, 0.95) },
-    rasterMs: { '1920': raster('1920'), '3840': raster('3840') },
+    rasterMs: { '1920': raster('1920', warm), '3840': raster('3840', warm) },
+    coldMs: { '1920': raster('1920', cold), '3840': raster('3840', cold) },
     tiers: groupRows(slides, (s) => [s.tier!], TIER_ORDER),
     ...(t1t2[0] ? { t1t2: t1t2[0] } : {}),
     classes: groupRows(slides, (s) => [s.class ?? '?'], ['native', 'hybrid', 'picture', '?']),
@@ -429,7 +442,7 @@ function statsHtml(title: string, decks: DeckScore[], loCompat: boolean): string
   const t = st.t1t2;
   return (
     `<h2>${esc(title)}</h2>` +
-    `<p>${st.slides} shown slides, ${st.scored} scored · native ${f3(st.meanNative)}${st.meanPolicy !== undefined ? ` (ordo's policies ${f3(st.meanPolicy)})` : ''}${ppv ? ` · pptx-preview ${f3(st.meanPpv)}` : ''} · beats an all-black frame on ${pct(st.beatsBlack)}${t ? ` · T1+T2 ${t.count} slides: native ${f3(t.native)}${t.ppv !== undefined ? `, pptx-preview ${f3(t.ppv)}` : ''}` : ''} · convert p50 ${ms(st.convertMs.p50)} ms, p95 ${ms(st.convertMs.p95)} ms · raster 1920 p50 ${ms(r['1920'].p50)} ms, p95 ${ms(r['1920'].p95)} ms · 3840 p50 ${ms(r['3840'].p50)} ms, p95 ${ms(r['3840'].p95)} ms</p>` +
+    `<p>${st.slides} shown slides, ${st.scored} scored · native ${f3(st.meanNative)}${st.meanPolicy !== undefined ? ` (ordo's policies ${f3(st.meanPolicy)})` : ''}${ppv ? ` · pptx-preview ${f3(st.meanPpv)}` : ''} · beats an all-black frame on ${pct(st.beatsBlack)}${t ? ` · T1+T2 ${t.count} slides: native ${f3(t.native)}${t.ppv !== undefined ? `, pptx-preview ${f3(t.ppv)}` : ''}` : ''} · convert p50 ${ms(st.convertMs.p50)} ms, p95 ${ms(st.convertMs.p95)} ms · raster 1920 p50 ${ms(r['1920'].p50)} ms, p95 ${ms(r['1920'].p95)} ms · 3840 p50 ${ms(r['3840'].p50)} ms, p95 ${ms(r['3840'].p95)} ms · cold (pictures prepared + first draw) p95 ${ms(st.coldMs['1920'].p95)} / ${ms(st.coldMs['3840'].p95)} ms</p>` +
     `<div class="tables">${table('Tiers', 'tier', st.tiers, ppv)}${table('Classes', 'class', st.classes, ppv)}${table('Reasons (classifier features), worst first', 'reason', st.reasons, ppv)}</div>` +
     `<div class="tables">${textFeatureTable(textFeatureRows(decks), ppv)}</div>` +
     `<div class="tables">${policyTable(policyRows(decks), ppv, loCompat)}</div>`
@@ -497,6 +510,7 @@ export async function writeReport(file: string, s: Summary): Promise<void> {
             p.compat?.length ? `LibreOffice policies: ${p.compat.join(', ')}` : '',
             p.convertMs !== undefined ? `convert ${ms(p.convertMs)} ms` : '',
             p.rasterMs ? `raster ${ms(p.rasterMs['1920'])} / ${ms(p.rasterMs['3840'])} ms` : '',
+            p.coldMs ? `cold ${ms(p.coldMs['1920'])} / ${ms(p.coldMs['3840'])} ms` : '',
           ]
             .filter(Boolean)
             .join(' · ');
