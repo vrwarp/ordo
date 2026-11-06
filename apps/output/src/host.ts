@@ -39,6 +39,8 @@ export type HostOptions = {
   height: number;
   testMode: boolean;
   forceCanvas2d: boolean;
+  /** WebGPU even on a software adapter (`?renderer=webgpu`, tests). */
+  allowFallbackAdapter?: boolean;
 };
 
 const RELOAD_KEY = 'ordo.output.reloads';
@@ -348,6 +350,7 @@ export class OutputHost {
       height: this.opts.height,
       testPixel: this.opts.testMode,
       forceCanvas2d: this.opts.forceCanvas2d,
+      allowFallbackAdapter: this.opts.allowFallbackAdapter,
       clear: { r: 0, g: 0, b: 0, a: 1 },
       clockOffset: this.hubOffset,
     };

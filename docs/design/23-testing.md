@@ -13,11 +13,13 @@
 ## The compositor under test
 
 Chromium is launched with `--enable-unsafe-webgpu --use-angle=swiftshader --use-vulkan=swiftshader
---enable-features=Vulkan`. With Vulkan SwiftShader the WebGPU device survives in headless Chromium, so the
-outputs run the real WebGPU compositor (health reports `compositor: 'webgpu'`, no device loss) rather than
-the Canvas 2D fallback. Frame timing under software Vulkan is not meaningful (missed frames are expected);
-correctness of flips, looks, holds and chaos recovery is. Lateness bounds are asserted only with
-`ORDO_E2E_REAL_GPU=1`.
+--enable-features=Vulkan`. With Vulkan SwiftShader the WebGPU device survives in headless Chromium.
+SwiftShader is a software adapter (`GPUAdapterInfo.isFallbackAdapter`), which an output treats as no
+WebGPU (design/27 §7.2): an output window gets the Canvas 2D compositor unless its URL has
+`?renderer=webgpu`, which keeps the real WebGPU compositor (health reports `compositor: 'webgpu'`, no
+device loss); `?renderer=2d` forces Canvas 2D on any machine. Frame timing under software Vulkan is not
+meaningful (missed frames are expected); correctness of flips, looks, holds and chaos recovery is.
+Lateness bounds are asserted only with `ORDO_E2E_REAL_GPU=1`.
 
 ## Multi-origin in tests
 

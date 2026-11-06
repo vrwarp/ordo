@@ -245,9 +245,13 @@ Key-colour looks fade text over the key colour; the clear colour never fades.
 ## Compositor selection and canvas swaps
 
 WebGPU is tried first; when it is unavailable the Canvas 2D compositor draws the same
-stacks. A canvas keeps its first context kind, so every switch between the two needs a
-fresh canvas: the worker asks the main thread (`needCanvas`), draws on the new one, and the
-main thread puts it on screen only when the worker reports `ready` or `restored` on it.
+stacks. A software adapter (`isFallbackAdapter`, SwiftShader) counts as unavailable
+(design/27 §7.2): the engine probes the adapter before it binds the canvas, so this fallback
+needs no fresh canvas. The output URL's `?renderer=webgpu` keeps WebGPU on such an adapter
+(tests); `?renderer=2d` forces Canvas 2D. A canvas keeps its first context kind, so every
+switch between the two needs a fresh canvas: the worker asks the main thread (`needCanvas`),
+draws on the new one, and the main thread puts it on screen only when the worker reports
+`ready` or `restored` on it.
 After a fallback to Canvas 2D the worker retries WebGPU on a slow timer (60 s, doubling to
 15 min) on a fresh canvas while Canvas 2D keeps drawing; the first frame is drawn into the
 new compositor before the swap, and a failed retry hands the canvas back (`canvasUnused`).
