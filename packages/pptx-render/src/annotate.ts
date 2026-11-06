@@ -52,6 +52,11 @@ export type ParaStyle = {
   spcAft?: Spacing;
   /** The paragraph's end mark (`a:endParaRPr`): what an empty paragraph's height comes from. */
   end?: RunStyle;
+  /**
+   * Alignment (`algn`, inherited; left when nothing says). pptx-preview knows only l/ctr/r/dist and centres
+   * justified text (`just`), common on scripture slides.
+   */
+  align?: 'l' | 'ctr' | 'r' | 'just' | 'dist' | 'justLow' | 'thaiDist';
 };
 
 export type Spacing = { pt: number } | { em: number };
@@ -1097,9 +1102,13 @@ function spacing(nodes: XNode[], name: string): Spacing | undefined {
   return undefined;
 }
 
+const ALIGNS = new Set(['l', 'ctr', 'r', 'just', 'dist', 'justLow', 'thaiDist']);
+
 function paraStyle(part: PartCtx, shape: ShapeCtx, para: ParaCtx): ParaStyle {
   const st: ParaStyle = {};
   const nodes = paraChain(part, shape, para);
+  const algn = nodes.map((n) => n.attrs.algn).find((a) => a !== undefined && ALIGNS.has(a));
+  st.align = (algn ?? 'l') as NonNullable<ParaStyle['align']>;
   const bef = spacing(nodes, 'a:spcBef');
   if (bef) st.spcBef = bef;
   const aft = spacing(nodes, 'a:spcAft');

@@ -230,7 +230,7 @@ describe('annotatePptx', () => {
     const by: Record<string, { p?: number; b?: number; size?: number; spc?: number }> = {};
     for (const m of xml.matchAll(/<a:t>([^<]*)<\/a:t>/g)) by[m[1]!.slice(9)] = a.runs[decodeMarker(m[1]!)!]!;
     const para = (i: number) => {
-      const { end: _end, ...rest } = a.paras[i]!;
+      const { end: _end, align: _align, ...rest } = a.paras[i]!;
       return rest;
     };
     expect(para(by.Inherited!.p!)).toEqual({ lnSpcPct: 90_000 });
@@ -250,6 +250,19 @@ describe('annotatePptx', () => {
     // Every paragraph of the box, the empty one too; its height comes from its end mark.
     expect(shrunk.paras).toHaveLength(3);
     expect(a.paras[shrunk.paras[2]!]!.end?.size).toBe(20);
+  });
+
+  it('resolves paragraph alignment through the list styles, justified included, left by default', async () => {
+    const body =
+      sp({ body: `<a:p><a:pPr algn="just"/>${run('Justified')}</a:p>` }) +
+      sp({ lstStyle: '<a:lvl1pPr algn="ctr"/>', body: `<a:p>${run('Centred')}</a:p>` }) +
+      sp({ body: `<a:p>${run('Plain')}</a:p>` });
+    const a = await annotatePptx(await deck(body));
+    const xml = await (await JSZip.loadAsync(a.bytes)).file('ppt/slides/slide1.xml')!.async('string');
+    const align: Record<string, unknown> = {};
+    for (const t of xml.matchAll(/<a:t>([^<]*)<\/a:t>/g))
+      align[t[1]!.slice(9)] = a.paras[a.runs[decodeMarker(t[1]!)!]!.p!]!.align;
+    expect(align).toEqual({ Justified: 'just', Centred: 'ctr', Plain: 'l' });
   });
 
   it("gives a text box its exact size: its own, its layout placeholder's, none in a group", async () => {

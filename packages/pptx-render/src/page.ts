@@ -285,6 +285,13 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
     const family = mainStyle ? stackFor(mainStyle) : undefined;
     if (family) e.p.style.fontFamily = family;
     e.p.style.fontSize = `${px.toFixed(2)}px`;
+    // Alignment as the deck says (pptx-preview centres justified text): justified lines fill the width
+    // except the last; distributed ones fill it too.
+    if (e.para.align) {
+      const a = e.para.align;
+      e.p.style.textAlign = a === 'ctr' ? 'center' : a === 'r' ? 'right' : a === 'l' ? 'left' : 'justify';
+      e.p.style.textAlignLast = a === 'dist' || a === 'thaiDist' ? 'justify' : '';
+    }
     if (!e.runs.length) {
       // An empty paragraph is as tall as its end mark's font (pptx-preview draws a fixed 18 px space).
       for (const span of Array.from(e.p.querySelectorAll('span')) as HTMLElement[]) {
