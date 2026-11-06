@@ -194,8 +194,14 @@ async function main(): Promise<void> {
   if (!decks.length) throw new Error('no decks: pass .pptx files or folders, or --corpus');
 
   const scores: DeckScore[] = [];
+  // Letters of any script stay (decks named only in Burmese or Arabic would all be "_"), and each name is
+  // unique in the run: a deck's folder keeps its LibreOffice pictures for the next run to reuse.
+  const taken = new Set<string>();
   for (const { file: deck, name: given } of decks) {
-    const name = given.replace(DECK_RE, '').replace(/[^\w.-]+/g, '_');
+    const base = given.replace(DECK_RE, '').replace(/[^\p{L}\p{M}\p{N}_.-]+/gu, '_');
+    let name = base;
+    for (let i = 2; taken.has(name.toLowerCase()); i++) name = `${base}_${i}`;
+    taken.add(name.toLowerCase());
     const dir = join(out, name);
     const loDir = join(dir, 'libreoffice');
     let lo = await pngsIn(loDir);
