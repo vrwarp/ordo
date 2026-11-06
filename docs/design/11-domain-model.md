@@ -294,6 +294,17 @@ A slide cue can carry its own media (design/27 §8): the playing ImageObject's c
 (`mediaObjectId`, `mediaStart`, `mediaShowWhenStopped` with the cue's media fields) goes on
 the media layer with `objectId`, and `Slide.audio` (`slideAudio` with `untilCue`) goes in
 the audio slot as `slideOwned` until the live cue leaves `[cueIndex, untilCue]`.
+- `expandCues` sets these fields only for media in `resolved.media`. `untilCue` is the cue
+  reached after `slides` shown slides of the same playlist item (the slide itself counts as
+  the first, hidden slides do not), else the item's last cue.
+- A click start goes live paused at 0, and F8 plays it. Entering a slide restarts its video;
+  a slide-owned sound still playing from that same cue is never restarted, so a loop that
+  wraps back to it keeps the music running.
+- A slide's sound replaces playlist audio, which otherwise plays on under slides.
+  `clear('slide')` also clears the slide's video and sound. onEnd works as for media cues,
+  because `cueIndex` is the slide's own cue.
+- At goLive these clips and sounds are optional: one that is missing, still processing or
+  failed is left out with a `degraded` note, and the slide shows its poster.
 
 ## Identifiers and content addressing
 

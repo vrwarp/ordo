@@ -38,12 +38,35 @@ export function checkInvariants(s: LiveState): string[] {
       inRange(media.cueIndex, 'media layer cue');
       if (s.resolved && !s.resolved.media[media.mediaId])
         v.push(`media layer references unknown media ${media.mediaId}`);
+      // A slide's own video (design/27 §8) plays in the box of the slide the slide layer shows.
+      if (media.objectId !== undefined) {
+        const c = s.cues[media.cueIndex];
+        if (c && (c.mediaObjectId !== media.objectId || c.mediaId !== media.mediaId))
+          v.push(`media layer object ${media.objectId} is not cue ${media.cueIndex}'s video`);
+        if (slide?.cueIndex !== media.cueIndex)
+          v.push(`media layer plays in cue ${media.cueIndex} but the slide layer shows ${slide?.cueIndex}`);
+      }
     }
     const bg = s.layers?.background?.content;
     if (bg && s.resolved && !s.resolved.media[bg.mediaId])
       v.push(`background references unknown media ${bg.mediaId}`);
     const audio = s.audio?.content;
-    if (audio) inRange(audio.cueIndex, 'audio cue');
+    if (audio) {
+      inRange(audio.cueIndex, 'audio cue');
+      if (s.resolved && !s.resolved.media[audio.mediaId])
+        v.push(`audio references unknown media ${audio.mediaId}`);
+      // A slide's own sound plays only while the live cue is within [its cue, untilCue].
+      if (audio.slideOwned) {
+        const until = audio.untilCue ?? audio.cueIndex;
+        inRange(until, 'slide sound until cue');
+        if (until < audio.cueIndex)
+          v.push(`slide sound until cue ${until} is before its cue ${audio.cueIndex}`);
+        if (s.cues[audio.cueIndex]?.slideAudio?.mediaId !== audio.mediaId)
+          v.push(`slide sound ${audio.mediaId} is not cue ${audio.cueIndex}'s sound`);
+        if (s.live === undefined || s.live < audio.cueIndex || s.live > until)
+          v.push(`slide sound of cue ${audio.cueIndex} plays while cue ${s.live} is live`);
+      }
+    }
     for (const [name, layer] of Object.entries(s.layers ?? {})) {
       if (!layer || !Number.isFinite(layer.at)) v.push(`layer ${name} has no finite at`);
       else if (layer.seq > s.seq) v.push(`layer ${name} seq ${layer.seq} is ahead of state seq ${s.seq}`);

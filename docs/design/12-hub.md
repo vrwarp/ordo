@@ -301,7 +301,9 @@ Design/25's table, as implemented in the hub:
   that cannot be read becomes empty, an invalid playlist item is skipped. The service still goes live and
   `resolved.degraded: { cueIndex, reason, presentationId?, slideId? }[]` lists what was quarantined (one
   entry per affected cue, `cueIndex` -1 when nothing shows it); the operator displays it. Missing
-  presentations and media that is not ready still refuse the goLive.
+  presentations and media that is not ready still refuse the goLive, except the clips and sounds that
+  slides play in place (design/27 §8): those are left out with a `degraded` note at each cue of their
+  slide, and the slide shows its poster.
 - **Files**: images up to 16384×16384, video and audio up to 4 h, video up to 8K (7680×4320), GIFs up to
   20,000 frames, font files up to 256 tables, 4 MiB per table read, 64 MiB of WOFF2 table data. A file
   beyond a limit fails its media job with the reason and is not retried automatically.

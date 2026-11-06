@@ -1,7 +1,13 @@
 import { expandCues } from './cues.ts';
 import { newId } from './ids.ts';
 import type { ResolvedPlaylist } from './live.ts';
-import { manifestFiles, referencedFontFamilies, referencedMediaIds } from './resolve.ts';
+import {
+  type SlidePlay,
+  manifestFiles,
+  referencedFontFamilies,
+  referencedMediaIds,
+  slideOnlyMedia,
+} from './resolve.ts';
 import {
   type Font,
   type GeneralSettings,
@@ -195,7 +201,8 @@ export type ResolveOptions = {
 /**
  * Resolve a playlist into the frozen copy a goLive carries. Every presentation is validated against the
  * schema; what fails is quarantined and listed in `degraded`, and the service still goes live. Missing
- * presentations and media that is not ready still refuse the goLive. Throws GoLiveRejection.
+ * presentations and media that is not ready still refuse the goLive, except the clips and sounds slides play
+ * in place: those are left out with a `degraded` note and the slide shows its poster. Throws GoLiveRejection.
  */
 export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: string, opts: ResolveOptions) {
   if (!inputs) throw new GoLiveRejection(`Playlist ${playlistId} not found`);
@@ -219,17 +226,18 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
   const optional = new Set<string>(
     [...looks.map((l) => l.holdingMediaId ?? ''), logoId ?? ''].filter(Boolean),
   );
+  const slideOnly = slideOnlyMedia(playlist, presentations);
   const media: Record<string, Media> = {};
   const missing: string[] = [];
   for (const id of referencedMediaIds(playlist, presentations, looks, logoId)) {
     const m = inputs.media(id);
-    if (!m) {
-      if (!optional.has(id)) missing.push(`media ${id} is missing`);
-      continue;
-    }
-    if (m.state !== 'ready') {
-      if (optional.has(id)) continue;
-      missing.push(`"${m.name}" is ${m.state === 'failed' ? 'failed' : 'still processing'}`);
+    const plays = slideOnly.get(id);
+    if (m?.state !== 'ready') {
+      // What a slide plays in place never refuses the service: the slide shows its poster (design/27 §8).
+      if (plays) for (const play of plays) problems.push(unplayable(play, id, m));
+      else if (optional.has(id)) continue;
+      else if (!m) missing.push(`media ${id} is missing`);
+      else missing.push(`"${m.name}" is ${m.state === 'failed' ? 'failed' : 'still processing'}`);
       continue;
     }
     media[id] = m;
@@ -258,6 +266,19 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
       opts.warn?.('goLive: content quarantined', { cueIndex: d.cueIndex, reason: d.reason });
   }
   return resolved;
+}
+
+/** The degraded note of a slide whose clip or sound is not ready, so the slide goes live without it. */
+function unplayable(play: SlidePlay, id: string, m: Media | undefined): GoLiveProblem {
+  const what = play.role === 'sound' ? 'slide sound' : 'slide video';
+  const name = m ? `"${m.name.slice(0, 200)}" (${what})` : `${what} ${id.slice(0, 200)}`;
+  const shown = play.role === 'video' ? 'showing its poster' : 'the slide shows without it';
+  const reason = !m
+    ? `${name} is missing; ${shown}`
+    : m.state === 'failed'
+      ? `${name} failed; ${shown}`
+      : `${name} is still processing; ${shown}; Go live again once it is ready`;
+  return { presentationId: play.presentationId, slideId: play.slideId, reason };
 }
 
 /**
