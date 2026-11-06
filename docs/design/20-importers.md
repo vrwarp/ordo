@@ -189,6 +189,20 @@ which ordo owns and can keep fixing:
   the box grows from its alignment, both ways when centred, leftwards when right-aligned, as in PowerPoint
   and LibreOffice (CSS lets it run out on the right). pptx-preview ignores animations, so text that builds
   in (`p:bldP`) is drawn in its final state, as LibreOffice draws it.
+- **Bullets and numbers.** pptx-preview merges bullet settings from anywhere up the chain, so a nearer
+  `a:buNone` (a template's layout or slide turning off the master's bullet) does not stop it drawing one,
+  and it numbers every list 1., 2., 3. whatever `startAt` and the format say (scripture slides number
+  verses with automatic numbers starting at the verse: "(17)", "(18)"). The annotator resolves each
+  paragraph's bullet from the nearest setting in its chain and counts automatic numbers along the text box
+  as PowerPoint and LibreOffice do (from `startAt`, per level, continued past empty paragraphs and deeper
+  levels, ended by a shallower paragraph or one of the level without a number); the page removes the
+  bullet pptx-preview drew where none applies and writes the number's label, colours it (`a:buClr`), and
+  hangs it in the paragraph's indent (`marL`, negative `indent`) with every line of text at the margin.
+- **Group coordinates.** pptx-preview guesses the unit of a grouped shape's offset: an x within 20,000 of
+  zero is read as twentieths of a point, offset and size alike, so a text box at its group's origin (common
+  in Google Slides decks) is drawn hundreds of times too large and its text lands off the slide. The
+  annotator moves such a group's child coordinate space (its `a:chOff` and its children's offsets, by the
+  same amount), which changes nothing in the picture.
 - **Shrink on overflow.** PowerPoint stores the scale it found with its own fonts (`normAutofit`); with
   substitutes the text may not fit. LibreOffice ignores the stored scale and re-fits the text from full
   size, and the page does the same with LibreOffice's procedure (`SdrTextObj::autoFitTextForCompatibility`):

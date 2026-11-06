@@ -425,6 +425,65 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
     });
   };
 
+  /**
+   * Bullets and numbers as the deck's nearest bullet setting says. pptx-preview prepends one unmarked span
+   * to the paragraph for a bullet it merged in from anywhere along the chain (an `a:buNone` nearer by does
+   * not stop it), and numbers every list 1, 2, 3 in a few formats.
+   */
+  const fixBullet = (e: Entry) => {
+    const b = e.para.bullet;
+    if (!b || !e.runs.length) return;
+    const marked = new Set(e.runs.map(([el]) => el));
+    const first = e.p.firstElementChild as HTMLElement | null;
+    let span =
+      first && first.tagName === 'SPAN' && !marked.has(first) && !first.contains(e.runs[0]![0])
+        ? first
+        : null;
+    if ('none' in b) {
+      span?.remove();
+      return;
+    }
+    if (!span && 'num' in b) {
+      // pptx-preview drew no number: add one as it draws them, in the first run's size and colour.
+      const run = e.runs[0]![0];
+      span = document.createElement('span');
+      span.style.fontSize = run.style.fontSize;
+      span.style.color = getComputedStyle(run).color;
+      span.style.marginRight = '10px';
+      e.p.insertBefore(span, e.p.firstChild);
+    }
+    if (!span) return;
+    if ('num' in b) span.textContent = b.num;
+    if (b.color) span.style.color = b.color;
+    // A hanging indent: the bullet sits in it, the text starts at the margin (or after a wider bullet).
+    const indent = e.para.indent ?? 0;
+    if (indent < 0 && (e.para.marL ?? 0) + indent >= 0) {
+      span.style.display = 'inline-block';
+      span.style.minWidth = `${(-indent * scale(e.p)).toFixed(2)}px`;
+      span.style.marginRight = '0';
+      span.style.textIndent = '0';
+    }
+  };
+  /** Margins and first-line indents (pptx-preview indents every line by both). */
+  const indentPara = (e: Entry) => {
+    const { marL = 0, indent = 0 } = e.para;
+    if (!marL && !indent) return;
+    const s = scale(e.p);
+    e.p.style.paddingLeft = `${(Math.max(0, marL) * s).toFixed(2)}px`;
+    e.p.style.textIndent = `${(Math.max(-marL, indent) * s).toFixed(2)}px`;
+  };
+  if (args.fixes) {
+    for (const { body, entries } of boxes.values())
+      for (const e of entries) {
+        fixBullet(e);
+        if (!body.vertical) indentPara(e);
+      }
+    for (const e of loose) {
+      fixBullet(e);
+      indentPara(e);
+    }
+  }
+
   // Measurements are taken on screen: undo rotations and flips around text while it is laid out (they
   // are put back below), or a turned box would be measured along the wrong axis.
   const turned: [HTMLElement, string][] = [];

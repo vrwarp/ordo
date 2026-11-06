@@ -69,6 +69,21 @@ export type ParaStyle = {
    * justified text (`just`), common on scripture slides.
    */
   align?: 'l' | 'ctr' | 'r' | 'just' | 'dist' | 'justLow' | 'thaiDist';
+  /**
+   * The paragraph's bullet as the nearest bullet setting of its chain decides: `none` when that is
+   * `a:buNone` (or nothing sets one), so the bullet pptx-preview merged in from further up is removed; the
+   * label of an automatic number (`a:buAutoNum`, counted from `startAt` along the box, as PowerPoint and
+   * LibreOffice do; pptx-preview always counts from 1 and knows few formats); `char` for a character
+   * bullet, which pptx-preview draws itself. Absent when the paragraph is empty (no bullet is drawn).
+   */
+  bullet?: { none: true } | { num: string; color?: string } | { char: true; color?: string };
+  /**
+   * Left margin and first-line indent in points (`marL`, `indent`, inherited): a negative indent hangs the
+   * bullet or number in the margin, the text of every line starting at the margin. pptx-preview puts every
+   * line at the margin plus the indent.
+   */
+  marL?: number;
+  indent?: number;
 };
 
 export type Spacing = { pt: number } | { em: number };
@@ -390,6 +405,8 @@ type ShapeCtx = {
   /** Its preset geometry (`a:prstGeom prst`), if it has one. */
   prst?: string;
   grouped?: boolean;
+  /** The automatic numbers of the text box being walked. */
+  numbering?: Numbering;
 };
 
 /**
@@ -588,9 +605,10 @@ export async function annotatePptx(
   }
   for (const name of names) {
     if (full) break;
-    const xml = await read(name);
-    if (xml === undefined || !xml.includes('<a:t')) continue;
-    const tags = startTags(xml, 'a:t');
+    const raw = await read(name);
+    if (raw === undefined || !raw.includes('<a:t')) continue;
+    let xml = raw;
+    let tags = startTags(xml, 'a:t');
     if (texts + tags.length > MAX_TEXTS) {
       notes.push(`more than ${MAX_TEXTS} text elements; ${name} and the parts after it are left unmarked`);
       break;
@@ -602,6 +620,11 @@ export async function annotatePptx(
     } catch (e) {
       notes.push(`${name}: ${(e as Error).message}`);
       continue;
+    }
+    const moved = moveGroupOrigins(xml, root);
+    if (moved !== xml) {
+      xml = moved;
+      tags = startTags(xml, 'a:t');
     }
     const ctx: PartCtx = { kind: 'slide', defaultTextStyle };
     if (name.startsWith('ppt/slideMasters/')) {
@@ -643,7 +666,7 @@ export async function annotatePptx(
       if (st.latin) families.add(st.latin);
       if (st.ea) families.add(st.ea);
     }
-    if (last > 0) {
+    if (last > 0 || xml !== raw) {
       zip.file(name, out + xml.slice(last));
       changed = true;
     }
@@ -1963,6 +1986,179 @@ function paraStyle(part: PartCtx, shape: ShapeCtx, para: ParaCtx): ParaStyle {
   return st;
 }
 
+/**
+ * pptx-preview guesses the unit of a grouped shape's offset: an x of at most 20000 in magnitude is taken
+ * for twentieths of a point, and the shape's offset and size are read in that unit (`$n`/`Jn` in its
+ * source): a text box at the group's origin, common in Google Slides decks, is drawn hundreds of times too
+ * large and its text lands off the slide. The group's own child origin (`a:chOff`) is guessed the same way
+ * for x and y. Moving a group's child coordinates (its `a:chOff` and its children's `a:off` by the same
+ * amount) changes nothing in the picture and takes every value out of the misread range. Returns the part
+ * rewritten, or the same string when no group needs it (or the tags cannot be matched to the tree).
+ */
+export function moveGroupOrigins(xml: string, root: XNode | undefined): string {
+  if (!root || !xml.includes('<p:grpSp')) return xml;
+  const LIMIT = 20_000;
+  const shifts = new Map<XNode, { dx: number; dy: number }>();
+  const offOf = (c: XNode): XNode | undefined =>
+    c.name === 'p:grpSp'
+      ? path(c, 'p:grpSpPr', 'a:xfrm', 'a:off')
+      : c.name === 'p:graphicFrame'
+        ? path(c, 'p:xfrm', 'a:off')
+        : path(c, 'p:spPr', 'a:xfrm', 'a:off');
+  const offs: XNode[] = [];
+  const visit = (n: XNode) => {
+    if (n.name === 'a:off' || n.name === 'a:chOff') offs.push(n);
+    if (n.name === 'p:grpSp') {
+      const chOff = path(n, 'p:grpSpPr', 'a:xfrm', 'a:chOff');
+      const cx = num(chOff?.attrs.x);
+      const cy = num(chOff?.attrs.y);
+      if (chOff && cx !== undefined && cy !== undefined) {
+        const kids = n.children
+          .filter((c) => /^p:(sp|pic|cxnSp|grpSp|graphicFrame)$/.test(c.name))
+          .map(offOf)
+          .filter((o): o is XNode => o !== undefined && num(o.attrs.x) !== undefined);
+        const xs = [cx, ...kids.map((o) => num(o.attrs.x)!)];
+        const dx = xs.some((x) => Math.abs(x) <= LIMIT) ? LIMIT + 1 - xs.reduce((a, b) => Math.min(a, b)) : 0;
+        const dy = Math.abs(cy) <= LIMIT ? LIMIT + 1 - cy : 0;
+        if (dx || dy) {
+          shifts.set(chOff, { dx, dy });
+          for (const o of kids) shifts.set(o, { dx, dy });
+        }
+      }
+    }
+    for (const c of n.children) visit(c);
+  };
+  visit(root);
+  if (!shifts.size) return xml;
+  // The tree's `a:off` and `a:chOff` elements in document order are the part's tags in document order.
+  const tags = [...startTags(xml, 'a:off'), ...startTags(xml, 'a:chOff')].sort((a, b) => a[0] - b[0]);
+  if (tags.length !== offs.length) return xml;
+  let out = '';
+  let last = 0;
+  tags.forEach(([start, end], i) => {
+    const n = offs[i]!;
+    const sh = shifts.get(n);
+    if (!sh) return;
+    const x = num(n.attrs.x);
+    const y = num(n.attrs.y);
+    let tag = xml.slice(start, end);
+    if (x !== undefined && sh.dx) tag = tag.replace(/(\sx=)("|')[^"']*\2/, `$1"${x + sh.dx}"`);
+    if (y !== undefined && sh.dy) tag = tag.replace(/(\sy=)("|')[^"']*\2/, `$1"${y + sh.dy}"`);
+    out += xml.slice(last, start) + tag;
+    last = end;
+  });
+  return out + xml.slice(last);
+}
+
+/** The automatic numbers counted so far in a text box, by level: the format, its start and the last number. */
+type Numbering = ({ key: string; n: number } | undefined)[];
+
+const BULLET_COLORS = ['a:buClr', 'a:buClrTx'] as const;
+
+const BULLETS = ['a:buNone', 'a:buChar', 'a:buAutoNum', 'a:buBlip'] as const;
+
+/** Whether a paragraph has any text (an empty one draws no bullet and does not count in a numbering). */
+function hasText(p: XNode): boolean {
+  return p.children.some(
+    (r) => (r.name === 'a:r' || r.name === 'a:fld') && (child(r, 'a:t')?.children.length ?? 0) > 0,
+  );
+}
+
+/**
+ * A paragraph's bullet: the nearest bullet setting along its chain decides. Automatic numbers continue
+ * from the box's previous numbered paragraph of the same level and format; a paragraph of that level
+ * without one, or a shallower one, ends the sequence.
+ */
+function bulletOf(
+  chain: XNode[],
+  lvl: number,
+  text: boolean,
+  numbering: Numbering | undefined,
+): ParaStyle['bullet'] {
+  if (!text) return undefined;
+  let b: XNode | undefined;
+  for (const n of chain) {
+    b = firstChild(n, BULLETS);
+    if (b) break;
+  }
+  if (numbering) numbering.length = Math.min(numbering.length, lvl + 1);
+  if (!b || b.name === 'a:buNone') {
+    if (numbering) numbering[lvl] = undefined;
+    return { none: true };
+  }
+  if (b.name !== 'a:buAutoNum') {
+    if (numbering) numbering[lvl] = undefined;
+    return { char: true };
+  }
+  const type = b.attrs.type ?? 'arabicPeriod';
+  const start = Math.max(1, Math.min(32_767, num(b.attrs.startAt) ?? 1));
+  const key = `${type}:${start}`;
+  const prev = numbering?.[lvl];
+  const n = prev && prev.key === key ? prev.n + 1 : start;
+  if (numbering) numbering[lvl] = { key, n };
+  return { num: autoNumber(type, n) };
+}
+
+/** The label of automatic number `n` in an OOXML format (`ST_TextAutonumberScheme`). */
+export function autoNumber(type: string, n: number): string {
+  const m = /^(arabic|romanUc|romanLc|alphaUc|alphaLc)(Period|ParenR|ParenBoth|Plain|Minus)$/.exec(type);
+  if (!m) {
+    if (type === 'circleNumDbPlain' || type === 'circleNumWdBlackPlain' || type === 'circleNumWdWhitePlain')
+      return n >= 1 && n <= 20 ? String.fromCodePoint(0x2460 + n - 1) : String(n);
+    return `${n}.`;
+  }
+  const [, kind, punct] = m;
+  let v: string;
+  if (kind === 'arabic') v = String(n);
+  else if (kind!.startsWith('roman')) {
+    v = roman(n);
+    if (kind === 'romanLc') v = v.toLowerCase();
+  } else {
+    // a..z, then aa..zz, then aaa...: the letter repeated, as PowerPoint and LibreOffice count.
+    const letter = String.fromCharCode(97 + ((n - 1) % 26));
+    v = letter.repeat(Math.floor((n - 1) / 26) + 1);
+    if (kind === 'alphaUc') v = v.toUpperCase();
+  }
+  switch (punct) {
+    case 'Period':
+      return `${v}.`;
+    case 'ParenR':
+      return `${v})`;
+    case 'ParenBoth':
+      return `(${v})`;
+    case 'Minus':
+      return `- ${v} -`;
+    default:
+      return v;
+  }
+}
+
+function roman(n: number): string {
+  if (n < 1 || n > 3999) return String(n);
+  const table: [number, string][] = [
+    [1000, 'M'],
+    [900, 'CM'],
+    [500, 'D'],
+    [400, 'CD'],
+    [100, 'C'],
+    [90, 'XC'],
+    [50, 'L'],
+    [40, 'XL'],
+    [10, 'X'],
+    [9, 'IX'],
+    [5, 'V'],
+    [4, 'IV'],
+    [1, 'I'],
+  ];
+  let out = '';
+  for (const [v, s] of table)
+    while (n >= v) {
+      out += s;
+      n -= v;
+    }
+  return out;
+}
+
 const FIT = ['a:normAutofit', 'a:spAutoFit', 'a:noAutofit'] as const;
 
 /** Margins of a text box: its own `a:bodyPr`, then the layout's and master's placeholder, then defaults. */
@@ -2175,7 +2371,12 @@ function walk(
       case 'p:txBody': {
         // A shape's text box: its margins come from its body properties (table cells have their own).
         const bodyPr = child(c, 'a:bodyPr');
-        const inner: ShapeCtx = { ...shape, lstStyle: child(c, 'a:lstStyle') ?? shape.lstStyle, bodyPr };
+        const inner: ShapeCtx = {
+          ...shape,
+          lstStyle: child(c, 'a:lstStyle') ?? shape.lstStyle,
+          bodyPr,
+          numbering: [],
+        };
         if (acc.bodies.length < MAX_BODIES) {
           acc.bodies.push(bodyStyle(part, shape, bodyPr));
           inner.body = acc.bodies.length - 1;
@@ -2187,7 +2388,7 @@ function walk(
         walk(
           c,
           part,
-          { ...shape, lstStyle: child(c, 'a:lstStyle') ?? shape.lstStyle },
+          { ...shape, lstStyle: child(c, 'a:lstStyle') ?? shape.lstStyle, numbering: [] },
           undefined,
           undefined,
           acc,
@@ -2198,6 +2399,22 @@ function walk(
         const para: ParaCtx = { lvl: Math.max(0, Math.min(8, num(pPr?.attrs.lvl) ?? 0)), pPr, index: -1 };
         if (acc.paras.length < MAX_PARAS) {
           const ps = paraStyle(part, shape, para);
+          const chain = paraChain(part, shape, para);
+          const bullet = bulletOf(chain, para.lvl, hasText(c), shape.numbering);
+          if (bullet && !('none' in bullet)) {
+            const clr = chain.map((n) => firstChild(n, BULLET_COLORS)).find((x) => x);
+            const color = clr?.name === 'a:buClr' ? colorOf(clr, part) : undefined;
+            if (color) bullet.color = color;
+          }
+          if (bullet) ps.bullet = bullet;
+          const pt = (attr: string) => {
+            const v = num(chain.map((n) => n.attrs[attr]).find((x) => x !== undefined));
+            return v === undefined ? undefined : Math.max(-4000, Math.min(4000, v / EMU_PER_PT));
+          };
+          const marL = pt('marL');
+          const indent = pt('indent');
+          if (marL) ps.marL = marL;
+          if (indent) ps.indent = indent;
           ps.end = runStyle(part, shape, para, child(c, 'a:endParaRPr'));
           delete ps.end.shadows;
           delete ps.end.gradient;

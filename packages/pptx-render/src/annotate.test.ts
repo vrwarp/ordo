@@ -6,6 +6,8 @@ import {
   completeGroupTransforms,
   pictureSize,
   placeOrphanPlaceholders,
+  autoNumber,
+  moveGroupOrigins,
   placeSlides,
   previewOrder,
   strictToTransitional,
@@ -267,7 +269,7 @@ describe('annotatePptx', () => {
     const by: Record<string, { p?: number; b?: number; size?: number; spc?: number }> = {};
     for (const m of xml.matchAll(/<a:t>([^<]*)<\/a:t>/g)) by[m[1]!.slice(9)] = a.runs[decodeMarker(m[1]!)!]!;
     const para = (i: number) => {
-      const { end: _end, align: _align, ...rest } = a.paras[i]!;
+      const { end: _end, align: _align, bullet: _bullet, ...rest } = a.paras[i]!;
       return rest;
     };
     expect(para(by.Inherited!.p!)).toEqual({ lnSpcPct: 90_000 });
@@ -356,6 +358,112 @@ describe('annotatePptx', () => {
     const nowrap = a.runs.map((r) => (r.b === undefined ? undefined : a.bodies[r.b]!.nowrap));
     expect(nowrap.filter((n) => n)).toHaveLength(2);
     expect(a.bodies[a.runs.find((r) => r.gradient)!.b!]!.nowrap).toBeUndefined();
+  });
+
+  it('resolves bullets through the chain and counts automatic numbers from startAt, by level', async () => {
+    const num = (type: string, at = '') => `<a:buAutoNum type="${type}"${at ? ` startAt="${at}"` : ''}/>`;
+    const p = (text: string, pPr = '') => `<a:p>${pPr ? `<a:pPr${pPr}</a:pPr>` : ''}${run(text)}</a:p>`;
+    const body =
+      // Verses numbered (17), (18)... with an empty paragraph between that neither counts nor breaks.
+      sp({
+        body:
+          p('V17', `>${num('arabicParenBoth', '17')}`) +
+          '<a:p><a:pPr>' +
+          num('arabicParenBoth', '17') +
+          '</a:pPr><a:endParaRPr/></a:p>' +
+          p('V18', `>${num('arabicParenBoth', '17')}`) +
+          p('Sub-a', ` lvl="1">${num('alphaLcParenR')}`) +
+          p('Sub-b', ` lvl="1">${num('alphaLcParenR')}`) +
+          p('V19', `>${num('arabicParenBoth', '17')}`) +
+          p('Sub-a again', ` lvl="1">${num('alphaLcParenR')}`) +
+          p('Unnumbered', '><a:buNone/>') +
+          p('Restart', `>${num('romanUcPeriod', '4')}`),
+      }) +
+      // The layout's list says no bullet, nearer than the master's character bullet.
+      sp({ ph: '<p:ph idx="1"/>', body: p('Layout none') }) +
+      // A bullet character the slide sets itself; nothing anywhere for a plain text box.
+      sp({ body: p('Char', '><a:buChar char="•"/>') + p('Plain') });
+    const z = await JSZip.loadAsync(await deck(body));
+    const master = await z.file('ppt/slideMasters/slideMaster1.xml')!.async('string');
+    z.file(
+      'ppt/slideMasters/slideMaster1.xml',
+      master.replace('<p:bodyStyle><a:lvl1pPr>', '<p:bodyStyle><a:lvl1pPr><a:buChar char="■"/>'),
+    );
+    const layout = await z.file('ppt/slideLayouts/slideLayout1.xml')!.async('string');
+    z.file('ppt/slideLayouts/slideLayout1.xml', layout.replace('<a:lvl1pPr>', '<a:lvl1pPr><a:buNone/>'));
+    const a = await annotatePptx(await z.generateAsync({ type: 'uint8array' }));
+    const xml = await (await JSZip.loadAsync(a.bytes)).file('ppt/slides/slide1.xml')!.async('string');
+    const bullets: Record<string, unknown> = {};
+    for (const t of xml.matchAll(/<a:t>([^<]*)<\/a:t>/g))
+      bullets[t[1]!.slice(9)] = a.paras[a.runs[decodeMarker(t[1]!)!]!.p!]!.bullet;
+    expect(bullets).toEqual({
+      V17: { num: '(17)' },
+      V18: { num: '(18)' },
+      'Sub-a': { num: 'a)' },
+      'Sub-b': { num: 'b)' },
+      V19: { num: '(19)' },
+      'Sub-a again': { num: 'a)' },
+      Unnumbered: { none: true },
+      Restart: { num: 'IV.' },
+      'Layout none': { none: true },
+      Char: { char: true },
+      Plain: { none: true },
+    });
+    expect(autoNumber('alphaUcPeriod', 28)).toBe('BB.');
+    expect(autoNumber('romanLcParenBoth', 14)).toBe('(xiv)');
+    expect(autoNumber('arabicPlain', 3)).toBe('3');
+    expect(autoNumber('circleNumDbPlain', 2)).toBe('\u2461');
+    expect(autoNumber('hebrew2Minus', 2)).toBe('2.');
+  });
+
+  it('moves group origins out of the range pptx-preview reads as twentieths of a point', async () => {
+    const xfrm = (x: number, y: number, ch = '') =>
+      `<a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="9342300" cy="3213300"/>${ch}</a:xfrm>`;
+    const group = (ch: [number, number], kids: string) =>
+      `<p:grpSp><p:nvGrpSpPr><p:cNvPr id="9" name="G"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr>${xfrm(
+        2820321,
+        1725369,
+        `<a:chOff x="${ch[0]}" y="${ch[1]}"/><a:chExt cx="9342300" cy="4575366"/>`,
+      )}</p:grpSpPr>${kids}</p:grpSp>`;
+    // A Google Slides group: its title at the group's origin, a caption below it.
+    const body =
+      group(
+        [0, 0],
+        sp({ spPr: xfrm(0, 0), body: `<a:p>${run('Title')}</a:p>` }) +
+          sp({ spPr: xfrm(1053187, 3568941), body: `<a:p>${run('Caption')}</a:p>` }),
+      ) +
+      // A group whose coordinates pptx-preview reads right is left alone.
+      group([914400, 914400], sp({ spPr: xfrm(914400, 1828800), body: `<a:p>${run('Fine')}</a:p>` }));
+    const a = await annotatePptx(await deck(body));
+    const xml = await (await JSZip.loadAsync(a.bytes)).file('ppt/slides/slide1.xml')!.async('string');
+    const offs = [...xml.matchAll(/<a:(off|chOff) x="(-?\d+)" y="(-?\d+)"\/>/g)].map((m) => [
+      m[1],
+      Number(m[2]),
+      Number(m[3]),
+    ]);
+    // x and y moved by 20001: every child keeps its place relative to the origin.
+    expect(offs).toEqual([
+      ['off', 2820321, 1725369],
+      ['chOff', 20001, 20001],
+      ['off', 20001, 20001],
+      ['off', 1073188, 3588942],
+      ['off', 2820321, 1725369],
+      ['chOff', 914400, 914400],
+      ['off', 914400, 1828800],
+    ]);
+    // The runs are still marked.
+    expect([...xml.matchAll(/<a:t>([^<]*)<\/a:t>/g)].map((m) => m[1]!.slice(9))).toEqual([
+      'Title',
+      'Caption',
+      'Fine',
+    ]);
+    // Nothing to move, or tags the tree does not match: the part as it is.
+    const plain = `<p:spTree ${NS}>${body.slice(body.lastIndexOf('<p:grpSp>'))}</p:spTree>`;
+    expect(moveGroupOrigins(plain, rootOf(parseXml(plain, 'x')))).toBe(plain);
+    const first = `<p:spTree ${NS}>${body.slice(0, body.lastIndexOf('<p:grpSp>'))}</p:spTree>`;
+    expect(moveGroupOrigins(`${first}<a:off x="0" y="0"/>`, rootOf(parseXml(first, 'x')))).toBe(
+      `${first}<a:off x="0" y="0"/>`,
+    );
   });
 
   it("gives a text box its exact size: its own, its layout placeholder's, none in a group", async () => {
@@ -824,7 +932,8 @@ describe('annotatePptx', () => {
     );
     expect(a.notes).toEqual(['ppt/slides/slide1.xml: group transforms completed']);
     const slide = await (await JSZip.loadAsync(a.bytes)).file('ppt/slides/slide1.xml')!.async('string');
-    expect(slide).toContain('<a:chOff x="0" y="0"/><a:chExt cx="9" cy="9"/>');
+    // The child space it gets starts at 0, which pptx-preview would read as points: it is moved on.
+    expect(slide).toContain('<a:chOff x="20001" y="20001"/><a:chExt cx="9" cy="9"/>');
     expect((await marked(a.bytes, a.runs)).map(([t]) => t)).toEqual(['In a group']);
   });
 
