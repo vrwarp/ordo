@@ -53,6 +53,8 @@ export type Summary = {
   createdAt: string;
   chromium?: string;
   engines?: string[];
+  /** The native column was drawn with `--lo-compat` (LibreOffice's policies, design/27 §14.1). */
+  loCompat?: boolean;
   /** Mean pptx-preview SSIM over decks. */
   mean?: number;
   /** Mean native SSIM over decks without embedded fonts, and over every deck. */
@@ -313,7 +315,7 @@ export async function writeReport(file: string, s: Summary): Promise<void> {
       (left ? `<p class="notes">${left} deck(s) with embedded fonts are left out of the means.</p>` : '');
   }
   const means = [
-    s.nativeMean !== undefined ? `native ${f3(s.nativeMean)}` : '',
+    s.nativeMean !== undefined ? `native${s.loCompat ? ' (lo-compat)' : ''} ${f3(s.nativeMean)}` : '',
     s.mean !== undefined ? `pptx-preview ${f3(s.mean)}` : '',
   ]
     .filter(Boolean)

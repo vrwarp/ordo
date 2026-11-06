@@ -371,8 +371,14 @@ Done:
   (`--engine native --corpus`); real and third-party decks keep their baselines outside the repository.
   Check a change with `--engine native --corpus --baseline tools/pptx-fidelity/native-baseline.json`.
 
-To do: `--lo-compat` (design/27 §14.1) and the committed probe corpus with its CI gate (§14.2) belong to later
-milestones.
+- **`--lo-compat`** (M2, design/27 §14.1): the native column's text written with LibreOffice 24.2's policies
+  where ordo's follow PowerPoint (`EmitOptions.loCompat`, passed through `convertDeck`): shrink-to-fit only
+  for a shape's own `normAutofit` (LibreOffice ignores one inherited from a layout or master placeholder,
+  measured) and re-fitted from full size instead of PowerPoint's stored scale; no run shadows (the shadow
+  an unfilled shape casts stays); no outline on filled text (the copy LibreOffice draws has them stripped).
+  `summary.json` and the report say `loCompat`; compare runs of the same mode.
+
+To do: the committed probe corpus with its CI gate (§14.2) belongs to a later milestone.
 
 ### F: classify (`classify.ts`)
 

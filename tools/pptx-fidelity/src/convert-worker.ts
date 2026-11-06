@@ -4,8 +4,8 @@
  * one worker, not the run.
  */
 import { parentPort } from 'node:worker_threads';
-import { convertDeck } from './native.ts';
+import { type ConvertOptions, convertDeck } from './native.ts';
 
-parentPort?.on('message', (job: { deckFile: string; dir: string }) => {
-  void convertDeck(job.deckFile, job.dir).then((out) => parentPort?.postMessage(out));
+parentPort?.on('message', (job: { deckFile: string; dir: string; opts?: ConvertOptions }) => {
+  void convertDeck(job.deckFile, job.dir, job.opts).then((out) => parentPort?.postMessage(out));
 });
