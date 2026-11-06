@@ -22,7 +22,13 @@ else. The same rasterizer runs in the operator for thumbnails.
 
 ## Consequences
 
-- Memory: a 1920x1080 RGBA bitmap per text box per armed stack; bounded by two stacks per
-  layer.
+- Memory: one output-size RGBA bitmap per layer per stack, the whole layer of the cue drawn
+  into it (ADR 0013; 8.3 MB at 1080p, 33 MB at 4K); bounded by two stacks per layer plus a
+  queued one.
+- Arm time is the asset worker's: its jobs run in raster lanes (design/27 §7.5, design/14
+  "Asset worker: raster lanes and picture decoding"). Props go first, then the live cue's
+  layers, the armed cue's and the pictures of the cue after it, in short turns, so a slide
+  that decodes large photos never delays the once-a-second props flip; superseded jobs are
+  cancelled.
 - Sub-pixel text animation is not available (none is required).
 - A DOM text layer remains only for diagnostics.

@@ -148,12 +148,39 @@ export type AssetJob =
       images: Record<string, string>;
     };
 
+/**
+ * Which cue a job draws for (design/27 §7.5 raster lanes): the live cue's layers go ahead of the armed
+ * cue's. Props always go first. Absent: armed.
+ */
+export type JobRole = 'live' | 'armed';
+
+/**
+ * Bulk work for later (design/27 §7.5): the pictures of the cue after the armed one, prepared into the
+ * asset worker's cache so that arming it after the next GO only draws. `slide` (with `nextSlide` and `look`)
+ * names the targets as the slide job will ask for them; `sources` are files drawn as their source (a
+ * background or media image cue). Nothing is sent to the renderer.
+ */
+export type WarmJob = {
+  key: string;
+  slide?: Slide;
+  nextSlide?: Slide;
+  look: Look;
+  images: Record<string, string>;
+  sources?: string[];
+};
+
 export type ToAsset =
   | { t: 'init'; port?: MessagePort; width: number; height: number; token: string; apiPrefix: string }
   /** (main → asset) New channel ends after a (re)start: bitmaps go to `render`, jobs arrive on `link`. */
   | { t: 'ports'; render: MessagePort; link: MessagePort }
   | { t: 'fonts'; fonts: FontLoad[] }
-  | { t: 'job'; job: AssetJob }
+  | { t: 'job'; job: AssetJob; role?: JobRole }
+  | { t: 'warm'; warm: WarmJob }
+  /**
+   * Jobs (and warm jobs) that were superseded: a queued one is dropped, a running one stops at its next step
+   * and sends nothing. The link has already forgotten them (no answer comes).
+   */
+  | { t: 'cancel'; keys: string[] }
   | { t: 'resize'; width: number; height: number }
   /** Drop cached image bitmaps not in `keep` (manifest changed). */
   | { t: 'prune'; keep: string[] };
@@ -174,6 +201,24 @@ export type FromAsset =
        * slide was drawn without them. The link re-plans the key once such a file arrives.
        */
       missingImages?: string[];
+      /**
+       * The raster lane the job ran in and its timing there (design/27 §7.5): the time it waited (queue,
+       * fonts, turns), the time its synchronous slices ran on the worker's thread, and the longest slice.
+       */
+      lane?: 'interactive' | 'bulk';
+      waitMs?: number;
+      rasterMs?: number;
+      longestMs?: number;
+    }
+  /** A warm job is done (its pictures are in the cache): its lane timing and the decodes it made. */
+  | {
+      t: 'warmed';
+      key: string;
+      ms: number;
+      waitMs: number;
+      rasterMs: number;
+      longestMs: number;
+      decodes: number;
     }
   | {
       t: 'error';

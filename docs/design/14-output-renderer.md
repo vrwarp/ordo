@@ -12,7 +12,7 @@ The window follows design/25: a main thread that hosts and three supervised work
 | Main (host)   | The `<canvas>` (control transferred) and the 2D hold canvas, the `<video>`/`<audio>` elements and `requestVideoFrameCallback` → `VideoFrame` transfer, the audio engine, fullscreen, Wake Lock, keys, the diagnostics overlay, the program-view `RTCPeerConnection`, the opener's port offers, the supervisor | Networking, state, storage, planning, decoding, text, anything a worker can do  |
 | Link worker   | WebSocket and clock sync, the live mirror and reducer, the fallback-bus client, OPFS service-cache fill (streamed) and pruning, IndexedDB persistence, cue planning and arm orchestration, props scheduling, health assembly, preview, ended-event queueing                                                   | Touching the DOM; it drives the host's media elements with commands             |
 | Render worker | WebGPU device, `OffscreenCanvas`, the frame loop, layer stacks, transitions, uniform buffers                                                                                                                                                                                                                  | Fetching, decoding, allocation inside the loop                                  |
-| Asset worker  | OPFS reads, `createImageBitmap`, font loading (`self.fonts`), text rasterization to a software-backed `OffscreenCanvas` 2D                                                                                                                                                                                    | Touching the GPU device except to upload prepared bitmaps via the render worker |
+| Asset worker  | OPFS reads, picture decoding (`createImageBitmap`, `ImageDecoder` for scaled JPEG decodes), font loading (`self.fonts`), layer rasterization to a software-backed `OffscreenCanvas` 2D, in raster lanes                                                                                                       | Touching the GPU device except to upload prepared bitmaps via the render worker |
 
 Topology. The host creates the three workers and three `MessageChannel`s (asset↔render, link↔render,
 link↔asset) and hands the ends over with a `ports` message (`packages/renderer/src/messages.ts`), again
@@ -170,6 +170,72 @@ empty box leaves the slide one bitmap with its poster. Covered by `scene-raster.
 `planeSample` and over in headless Chromium and compares them with the slide drawn as one bitmap, with and
 without the clip playing, from source and from prepared pictures.
 
+## Asset worker: raster lanes and picture decoding
+
+The asset worker's jobs run in raster lanes (`apps/output/src/lanes.ts`, design/27 §7.5), so a slide that
+decodes two large photos never holds up the props layer, which flips on every second:
+
+- **Ranks.** Props first, then the live cue's layers, then the armed cue's (the *interactive* lane), then
+  bulk work (the *bulk* lane): the pictures of the cue after the armed one (`warm`), prepared into the
+  cache so that arming it after the next GO only draws. The link marks each job `live` or `armed`.
+- **Chains.** Each layer is a chain: its jobs run one at a time, live before armed, because a layer's
+  content must reach the renderer in the order its stacks expect (`LayerStack.offer`). Jobs of different
+  layers run side by side, so one waiting for a file read or a decode (both off the thread) never holds up
+  another. A bulk job starts only while no interactive job is queued or running, so its decodes never
+  compete with theirs for the cores.
+- **Turns.** Synchronous work (preparing a picture, drawing and taking the layer) runs in slices, each in a
+  task of its own once it is the most urgent waiting slice; the messages that arrived meanwhile are handled
+  first. A picture over 2 MiB-pixels (a 4K frame) is prepared in bands of whole rows
+  (`preparePictureSteps`, byte for byte the one-pass bitmap), so the longest slice is a band, the first
+  of which also builds the source's mipmaps, or the layer's own draw. Nothing interrupts a running slice.
+- **Cancellation.** After each plan, the link cancels the jobs no live or armed layer, props or warm job
+  needs any more (the armed cue changed before its job ran, a props second passed): a queued job is dropped,
+  a running one stops at its next slice, unpins and closes what it holds, and sends nothing. The link
+  forgets them at once; a key needed again later is simply sent again, and a slide waiting for a late image
+  keeps waiting for it.
+- **Pins are counted** (`BitmapCache.pin`/`unpin`): jobs run side by side, and one's release must not unpin
+  what another still draws. A cache insert never replaces an entry a draw holds; a target another job
+  prepared meanwhile is taken, not made again.
+- **Timing.** Each `done` (and `warmed`) carries its lane, the time it waited (queue, fonts, turns), the
+  time its slices ran on the thread and its longest slice; the link keeps per-lane p50/p95 over the last 128
+  jobs and the number cancelled (`__ordo.telemetry().lanes`, the diagnostics view's `rasterLanes`).
+- **Surface.** The worker's surface is transparent once its picture is taken, so it is cleared only when a
+  draw failed before taking it (0.2 ms at 1080p, 1.1 ms at 4K saved per job). Drawing the first opaque
+  layer with `'copy'` saved nothing on this software surface (it cost 0.4-1.5 ms more), so it is not done.
+
+**Crop-aware decode** (`apps/output/src/decode.ts`). The hub prepares pictures for a 3840 px output
+(design/27 §4), so a 1080p output decodes four times what it shows. When every use of a JPEG in a job
+shows it at half its size or less, the worker decodes it with WebCodecs' `ImageDecoder` at the next eighth
+at or above that size (JPEG scales by 1/8 to 8/8 in its inverse DCT: a cheaper decode, not a resample),
+keeps only the visible crop with a margin when that is at most half of it, and lays every target out from
+where that part lies in the whole picture (`PictureFrom`, `paintPictureFrom`). Chromium may pick an eighth
+below the size asked for, so the eighth itself is asked for and a smaller frame is refused. Everything else
+decodes the whole file as before: PNG, GIF and WebP, a JPEG with an EXIF orientation, uses that need five
+eighths or more (a 4K output, mostly), a page that is not a secure context (no `ImageDecoder`; the venue
+serves HTTPS) and any failure of the scaled path. Measured in headless Chromium 153 on this 4-core
+container (`pnpm --filter @ordo/output bench:lanes`), one full-frame cover photo for a 1080p output: a
+3840x2160 JPEG 107 to 48 ms, its longest task 35 to 11 ms; a 6000x4000 JPEG 176 to 128 ms, longest task 46
+to 22 ms. The markers of `asset.lanes.browser.test.ts` land within 0.15 px of the whole-file decode, mean
+difference 0.7-1.0 of 255 (PSNR 41-50 dB; Chromium's two JPEG paths differ about that much at full size).
+
+**Measured** (headless Chromium 153, software canvas, this 4-core container under load; `bench:lanes`, 7
+runs per size, a slide with a 6000x4000 and a 4000x3000 photo and text, nothing cached, a props job sent 2
+to 200 ms after it): the props bitmap reached the renderer 5.2 ms p50 (9.6 max) after it was sent at 1080p
+and 25.6 ms p50 (35.5 max) at 4K, against the link's 150 ms lead: never late. The slide took 183 ms (1080p)
+and 404 ms (4K) to the renderer, 18 and 116 ms of it on the thread, longest slice 15 and 41 ms. The asset
+worker before M7 (one chain, `--baseline`) delivered the same props 269 ms p50 (1080p) and 299 ms p50 (4K)
+after sending: 5 of 7 and 7 of 7 flips more than a frame late. `asset.lanes.browser.test.ts` checks the
+deadline at 4K in CI.
+
+**Measuring on a venue machine.** The asset worker's costs are CPU costs (a software canvas on purpose), so
+they are measured on the venue's presentation PC itself, with its own Chrome: on the PC (Windows: a
+checkout with Node and pnpm, `pnpm install`), run
+`pnpm --filter @ordo/output bench:lanes --chrome "C:\Program Files\Google\Chrome\Application\chrome.exe" --headed --runs 9 --json lanes.json`
+with the machine on mains power and nothing else running, once at the start of a service day and once after
+an hour of a running service (thermal state). Record the Chrome version, CPU, the props p50/max per size and
+the decode table in this section. `--check` fails if any props bitmap is more than a frame late. GPU
+figures (uploads, frame time) belong to the render worker and are measured separately.
+
 ## Frame loop
 
 ```
@@ -214,18 +280,25 @@ Arm sequence for a cue (asset worker, then render worker):
 1. Resolve the cue under the look: which objects are drawn and with which style
    (`authored` draws every object; `lyricOnly` builds a synthetic text object from the
    lyric box text and the look's band and style, plus the next slide's text if configured).
-2. For each text object, rasterize to an `OffscreenCanvas` 2D at output resolution:
-   fill, padding, word wrap to the box, alignment, outline via `strokeText`, shadow via
-   canvas shadow properties, then `transferToImageBitmap`. Fonts come from the service
-   cache and are loaded into the worker's `FontFaceSet` at manifest time, so arm never
-   waits on a font. The font resolver (design/27 §10) registers each family's faces under
-   an internal name never resolved before, so a face that loads late (a failed read
-   retried with backoff, a font added during the service) is used by the next draw
-   without restarting the worker; the worker then reports the family `ready` and the link
-   draws again in place the held slides that fell back for it.
-3. For images, `createImageBitmap` from the OPFS blob (cached bitmaps by hash and size
-   are reused). A picture a slide draws unrotated is resampled once into an sRGB bitmap
-   of its device rectangle and copied 1:1 (design/27 §7.1).
+2. The link sends one job per layer that the renderer does not hold, marked `live` or
+   `armed` (and, for the cue after the armed one, a `warm` job that only prepares its
+   pictures); the asset worker runs them in its raster lanes ("Asset worker: raster lanes
+   and picture decoding" below). A job draws the whole layer of the cue under the look into
+   one software-backed `OffscreenCanvas` 2D at output resolution (ADR 0013) and takes it with
+   `transferToImageBitmap`: text through the shared drawers (fill, padding, wrap, alignment,
+   outline, shadow, the rich text engine), shapes and pictures in z order. Fonts come from
+   the service cache and are loaded into the worker's `FontFaceSet` at manifest time; a job
+   waits for the font loads sent before it, so arm never draws a fallback for a face that
+   was on its way. The font resolver (design/27 §10) registers each family's faces under an
+   internal name never resolved before, so a face that loads late (a failed read retried with
+   backoff, a font added during the service) is used by the next draw without restarting the
+   worker; the worker then reports the family `ready` and the link draws again in place the
+   held slides that fell back for it.
+3. Pictures are read from OPFS (or the hub) and decoded off the worker's thread; a picture a
+   slide draws unrotated is resampled once into an sRGB bitmap of its device rectangle and
+   copied 1:1 (design/27 §7.1), from a decode of only the part and scale its uses show where
+   that is cheaper (crop-aware decode, below). Decoded pictures are kept in a 256 MiB LRU by
+   file and target size, pinned while a draw holds them.
 4. Post bitmaps to the render worker, which uploads them into pre-allocated texture
    slots (`copyExternalImageToTexture`) and writes the quad list for the stack. Uploads
    never run inside the compositor's `draw` (design/27 §7.3): the frame loop uploads armed
@@ -338,9 +411,12 @@ at other resolutions scale by the logical-to-device transform in the vertex shad
 ## Props and timers
 
 Clock, countdown and elapsed timers are rasterized once per second by the asset worker
-into a small texture; the render worker swaps the texture atomically. Messages are
+into the props layer's bitmap; the render worker swaps it atomically. Messages are
 rasterized on send. This keeps the frame loop free of text work. The stage look also
-renders the live video's remaining time (`videoRemaining`, prd/04) as a prop.
+renders the live video's remaining time (`videoRemaining`, prd/04) as a prop. Props jobs
+go first in the asset worker's raster lanes, so a slide that decodes meanwhile delays a
+props bitmap by at most one slice (above); a props job of an earlier second still waiting
+is cancelled by the next one.
 
 The per-second tick wakes 150 ms before each whole second, rasterizes that second's text
 and flips exactly on the boundary. Every other evaluation of the props model (state
