@@ -26,12 +26,14 @@ Integration decisions (wave 1):
 Bounds (review of wave 1; `rich.fuzz.test.ts` and `clamp.test.ts` keep them):
 - An emergency break costs what its line holds (lines.ts header): galloping cut search, cluster boundaries
   found only as far as asked and shared by every line and autofit step of a piece, the rest of the word
-  carried unmeasured (`Measured.lazy`) until it may fit, and the autofit search computing heights only.
+  carried unmeasured (`Measured.lazy`) until it may fit (its trailing whitespace hangs there as on any line:
+  a cut never lands in it), and the autofit search computing heights only.
   A 10,000-letter word in a 0-200 px box measures about n characters per layout, not n²/line.
 - `WidthCache` keeps strings of at most 256 units; `memoMeasurer` (one layout) keys by state, then text.
 - At most 16 distinct run and bullet families and 64 size scales per object (`FontBudget`, clamp.ts and
   sanitize.ts), so no object costs more platform font lookups than a slide of ordinary text; family names
-  lose every C0 and C1 control character.
+  lose every C0 and C1 control character, and a family is keyed by its cleaned name (trimmed, lower-cased)
+  and keeps the spelling first seen, so case, spaces, quotes and controls never make another font string.
 - Bullets are drawn within 4-1,000 px; raised and lowered runs at no less than 4 px.
 
 ## Pipeline
@@ -240,7 +242,10 @@ Paint passes and the dispatch of §6. **Done** (wave 1):
   empty one's end mark), and soft lines stay lines of their paragraph (design/27 §11 item 1).
 - To do: the M6 gradient over the box; an effect sprite cache for large blurs (§7.5). The raster bench
   shows the need: the default lyric style's shadow (blur 12) costs about 7 ms of a 1920 raster and 20 ms
-  of a 3840 one, in drawText and in the engine alike.
+  of a 3840 one, in drawText and in the engine alike. A cache keyed by object and scale only speeds a
+  repeated raster of the same object (the bench's per-job figure); a newly armed cue always misses it, so
+  its first raster (about 12 ms at 1920, 8 ms without the shadow) needs a cheaper blur as well. A sprite of
+  pass 2 also has to carry the caller's transform, the opacity and the font generation in its key.
 
 ### E. fonts: `fonts.ts` and the three drawers
 

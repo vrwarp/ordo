@@ -1072,7 +1072,7 @@ The extensions, in priority order (M4 unless noted):
 
 **Numbers.** Every number is finite and clamped:
 - slide side 1-51,206,400 EMU; logical coordinates ±100,000; box span ±2× the canvas; font 1-4,000 pt in the parser, 4-1,000 px stored;
-- per text object at most 16 distinct run and bullet families and 64 distinct size scales (`FontBudget` in `clamp.ts`, the same in `sanitizePresentation`): later families take the box's, later scales the nearest kept one. Each new family name costs the browser a platform font lookup (about 1 ms in Chromium), so 2,000 runs with 2,000 families would cost seconds per object. Family names lose every control character (a form feed is a CSS newline that voids the whole `ctx.font` assignment);
+- per text object at most 16 distinct run and bullet families and 64 distinct size scales (`FontBudget` in `clamp.ts`, the same in `sanitizePresentation`): later families take the box's, later scales the nearest kept one. Each new family name costs the browser a platform font lookup (about 1 ms in Chromium), so 2,000 runs with 2,000 families would cost seconds per object. Family names lose every control character (a form feed is a CSS newline that voids the whole `ctx.font` assignment). A family is keyed by that cleaned name, trimmed and lower-cased, and every name with the key takes the spelling first kept, so names differing in case, surrounding spaces, quotes or control characters neither take more places nor make more font strings;
 - adj ±1e7; ≤ 256 guides per shape; ≤ 4,096 path points per path and 64k per slide; ≤ 16 gradient stops;
 - colour maths clamped to 0..1; NaN and Infinity become 0.
 

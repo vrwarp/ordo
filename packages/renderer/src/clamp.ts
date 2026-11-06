@@ -131,20 +131,29 @@ export function clampFamily(v: unknown): string {
  * text: a schema-valid object of 2,000 runs could otherwise name 2,000 families.
  */
 export class FontBudget {
-  readonly #families = new Set<string>();
+  /** The spelling kept for each family, by key: the first one seen. */
+  readonly #families = new Map<string, string>();
   readonly #scales = new Set<number>();
   constructor(
     readonly maxFamilies: number = CLAMP.maxRunFamilies,
     readonly maxScales: number = CLAMP.maxSizeScales,
   ) {}
 
-  /** `family` when it is within the budget, else '' (the run or bullet takes the box's or run's family). */
-  family(family: string): string {
-    const k = family.trim().toLowerCase();
-    if (!k || this.#families.has(k)) return family;
+  /**
+   * The family `v` names, clamped (`clampFamily`), when it is within the budget, else '' (the run or bullet
+   * takes the box's or run's family). A family is keyed by its clamped name, trimmed and lower-cased, and
+   * every name with that key gets the spelling first kept: names differing in case, surrounding spaces,
+   * quotes or control characters are one family and one CSS name, so they cannot multiply font lookups.
+   */
+  family(v: unknown): string {
+    const f = clampFamily(v).trim();
+    const k = f.toLowerCase();
+    if (!k) return '';
+    const kept = this.#families.get(k);
+    if (kept !== undefined) return kept;
     if (this.#families.size >= this.maxFamilies) return '';
-    this.#families.add(k);
-    return family;
+    this.#families.set(k, f);
+    return f;
   }
 
   /** `scale` when it is within the budget, else the nearest scale already kept. */
@@ -274,7 +283,7 @@ export function clampRuns(
     if (!Number.isInteger(r.end) || start < at || start >= len || r.end <= start) continue;
     const end = Math.min(r.end, len);
     const run: TextRun = { start, end };
-    const family = budget.family(clampFamily(r.fontFamily));
+    const family = budget.family(r.fontFamily);
     if (family) run.fontFamily = family;
     if (r.fontWeight !== undefined) run.fontWeight = Math.round(num(r.fontWeight, 1, 1000, 400));
     if (r.fontStyle !== undefined) run.fontStyle = r.fontStyle === 'italic' ? 'italic' : 'normal';
@@ -338,7 +347,7 @@ function clampPara(v: unknown, budget: FontBudget): TextPara | null {
     }
     if (typeof b.auto === 'string') bullet.auto = b.auto.slice(0, 40).replace(/[^A-Za-z]/g, '');
     if (b.startAt !== undefined) bullet.startAt = Math.round(num(b.startAt, 1, 32_767, 1));
-    const family = budget.family(clampFamily(b.fontFamily));
+    const family = budget.family(b.fontFamily);
     if (family) bullet.fontFamily = family;
     if (b.color !== undefined) bullet.color = clampColor(b.color);
     if (b.sizePct !== undefined) bullet.sizePct = num(b.sizePct, 0.1, 4, 1);

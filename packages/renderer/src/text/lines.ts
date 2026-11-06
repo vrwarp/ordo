@@ -47,7 +47,8 @@ import type {
  *   last window), cluster boundaries are found only as far as that reaches, and the rest of the piece is
  *   carried unmeasured (`Measured.lazy`, its width estimated) until it may fit a line. So a 10,000-letter
  *   word in a narrow box costs about as much as the lines it makes, in every drawer and in every step of
- *   the autofit search.
+ *   the autofit search. The cut search measures a cut in the trailing whitespace without it, so that
+ *   whitespace hangs on the word's last line as on any other and is never cut off onto the next one.
  * - `wrap: false` never breaks a line.
  * - Right-to-left paragraphs (bidi level 1) mirror the start: indents and the bullet are on the right, the
  *   pieces run from the right (UAX#9 L2 between pieces, `visualOrder`), and the hanging whitespace is on
@@ -474,13 +475,18 @@ function flowParas(
      * Where an emergency break cuts piece `c` to fit `room`: after the most clusters that fit (the first
      * cluster when nothing fits and `force`), by galloping from the piece's start and bisecting the last
      * window, so the strings measured are at most about twice the line. `all`: every cut inside the piece
-     * fits (the whole piece was not measured).
+     * fits (the whole piece was not measured). Trailing whitespace hangs: a cut inside it fits when the
+     * text before it does, and `'whole'` says the piece's text fits (or is one cluster wider than the line,
+     * when `force`) with its whitespace hanging, so it is never cut and never starts the next line.
      */
     const splitPiece = (
       c: Measured,
       room: number,
       force: boolean,
-    ): { head: Piece; tail: Piece; all: boolean; cuts: { list: ClusterCuts; base: number } } | null => {
+    ):
+      | { head: Piece; tail: Piece; all: boolean; cuts: { list: ClusterCuts; base: number } }
+      | 'whole'
+      | null => {
       const p = c.piece;
       let view = c.cuts;
       if (!view) {
@@ -494,12 +500,20 @@ function flowParas(
       const { list, base: b0 } = view;
       const cuts = { at: (k: number) => list.at(b0 + k), count: () => list.count - b0 };
       const dir = p.level % 2 ? 'rtl' : 'ltr';
-      const fits = (k: number) =>
-        widthOf(c.style, p.script, dir, segText(text, p.start, cuts.at(k)!, c.style.caps)) <= room + EPS;
+      // Where the trailing whitespace starts: a cut at or after it measures the text before it only.
+      const hang = Math.max(p.start, p.trail);
+      const fits = (k: number) => {
+        const end = Math.min(cuts.at(k)!, hang);
+        return (
+          end <= p.start ||
+          widthOf(c.style, p.script, dir, segText(text, p.start, end, c.style.caps)) <= room + EPS
+        );
+      };
       let lo = -1; // the last cut known to fit
       let hi: number; // the first cut known not to fit, or the number of cuts
       for (let k = 0, step = 1; ; ) {
-        if (cuts.at(k) === undefined) {
+        const at = cuts.at(k);
+        if (at === undefined) {
           hi = cuts.count();
           break;
         }
@@ -507,21 +521,27 @@ function flowParas(
           hi = k;
           break;
         }
+        // Every later cut is in the whitespace too, and fits: the clusters there need not be found.
+        if (at >= hang) return 'whole';
         lo = k;
         k += step;
         step *= 2;
       }
       while (hi - lo > 1) {
         const mid = (lo + hi) >> 1;
-        if (fits(mid)) lo = mid;
-        else hi = mid;
+        if (!fits(mid)) hi = mid;
+        else if (cuts.at(mid)! >= hang) return 'whole';
+        else lo = mid;
       }
       if (lo < 0 && !force) return null;
       const at = cuts.at(Math.max(0, lo));
       if (at === undefined) return null;
+      // Forced: the first cluster is wider than the line, and only whitespace follows it.
+      if (at >= hang) return 'whole';
       return {
-        head: { ...p, end: at, trail: Math.min(at, Math.max(p.start, p.trail)), breakAfter: false },
-        tail: { ...p, start: at, trail: Math.max(at, p.trail) },
+        // The cut is before the whitespace: the head has none, the tail keeps all of it.
+        head: { ...p, end: at, trail: at, breakAfter: false },
+        tail: { ...p, start: at },
         all: lo >= 0 && cuts.at(lo + 1) === undefined,
         cuts: { list, base: b0 + Math.max(0, lo) + 1 },
       };
@@ -575,7 +595,8 @@ function flowParas(
         // off it, or measure it once all of it may fit.
         const sr = runs[head.piece.sr]!;
         const cut = splitPiece(head, room, true);
-        if (!cut || cut.all) replace(i, { ...measure(head.piece, sr, false), cuts: head.cuts });
+        if (!cut || cut === 'whole' || cut.all)
+          replace(i, { ...measure(head.piece, sr, false), cuts: head.cuts });
         else {
           const h = measure(cut.head, sr, false);
           push(h);
@@ -600,11 +621,11 @@ function flowParas(
         const c = queue[q]!;
         const cut = splitPiece(c, room - adv, cur.length === 0);
         const sr = runs[c.piece.sr]!;
-        if (cut) {
+        if (cut && cut !== 'whole') {
           const h = measure(cut.head, sr, false);
           push(h);
           replace(q, rest(c, h, cut.tail, cut.cuts));
-        } else if (!cur.length) take(q++); // one cluster wider than the line: it overflows
+        } else if (cut || !cur.length) take(q++); // one cluster wider than the line overflows; whitespace hangs
       }
       endLine();
       i = q;
