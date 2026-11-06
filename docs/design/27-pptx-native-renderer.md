@@ -730,7 +730,16 @@ Hidden paragraphs (M8) are laid out but not painted, so revealed lines never mov
 
 - **Unchanged path.** The asset worker draws `slideContent(slide)` with the shared drawers onto its CPU-backed (`willReadFrequently`) OffscreenCanvas at `scale = width/1920`, and transfers one full-frame `SRC_BITMAP`. The compositors do not change.
 - **Rasterized at device resolution:** text, vectors, gradients, effects and pictures (crop via the 9-argument `drawImage`, mask via a clip path, flip via the transform, `adjust` via `ctx.filter`).
-- **Decode target.** A picture is decoded at min(native size, displayed device size ÷ visible crop fraction, 16 MP). The decode cache is keyed by hash and target size. Today a picture is decoded just large enough to cover the output (`bitmap-cache.ts:18-28`), which blurs a tightly cropped photo at 4K. Import-time preparation (§4) already bounds the source.
+- **Decode target.** A picture is prepared at its displayed device size, upscaling included, and converted to sRGB once.
+  - The target (`pictureTarget`, `packages/renderer/src/picture.ts`) is the box's device rectangle widened to whole pixels, at most 16 MP. A 128 px tile stretched over the slide is prepared at the slide's size.
+  - The decoder resamples the visible crop once from the decoded file (fit and crop applied) into a CPU-backed sRGB OffscreenCanvas and keeps `transferToImageBitmap()` of it (`preparePicture`). The colour profile of a JPEG that has one is therefore applied once.
+  - The picture keeps its exact sub-pixel position and size inside that bitmap, as the source path draws it. Rounding the box to whole pixels was measured too; LibreOffice's `DrawTransformedBitmapEx` rounds that way, but only after quantising positions to 1/100 mm. Moving pictures by up to half a pixel lowered 141 of the 924 slides of worship shard 0 against LibreOffice, by up to 0.024 SSIM. With the exact position, 24 slides were lower, by at most 0.005.
+  - Smoothing is `imageSmoothingQuality` 'medium' (bilinear, mipmapped when reducing), the closest to LibreOffice's bitmap scaling (bilinear when enlarging, area-averaging when reducing). Over the sermon decks and worship shard 0 it scored higher than 'high' (bicubic when enlarging) on 58 slides and lower on 3, by at most 0.0007; 'low' scored lower in the mean.
+  - `drawImageFit` copies a bitmap prepared for exactly that target 1:1 at the target's origin, with no resampling and no clip. The image lookup receives the target, and `slidePictures` lists what `drawSlide2D` will ask for, so a decoder prepares before the synchronous draw.
+  - A rotated picture, one with round corners and one over 16 MP keep the source path: decoded to cover the output (`downscaleFor`) and drawn through the transform and the clip.
+  - The decode cache is keyed by hash and target (`pictureKey`). A full-slide picture takes 8.3 MB at 1080p and 33 MB at 4K, within the 256 MiB LRU.
+  - Why: Chromium's rasterizer resamples a picture drawn at any other size on every draw, and converts a picture that kept its colour profile on every draw. A full-slide picture cost 4.4-5.2 ms at 1920 and 17-23 ms at 3840 that way (12.8 and 46 ms with a profile), against 0.7 and 2.7 ms for a 1:1 copy. Before, a picture was decoded just large enough to cover the output and redrawn at the box's size on every draw. Harness raster p95 (median of 3 draws, Chromium's software rasterizer): on the 73 sermon slides from 10.5 to 3.4 ms at 1920 and from 44.3 to 12.4 ms at 3840; on the 924 slides of worship shard 0 from 15.6 to 5.2 ms and from 49.9 to 21.2 ms. Mean native SSIM rose slightly on both (0.9438 to 0.9439, 0.7947 to 0.7954).
+  - Import-time preparation (§4) already bounds the source. The thumbnail worker draws from 640 px sources and can follow later.
 - **Art and page pictures** are made at 3840 px density instead of 1920x1080, so they are no longer upscaled on 4K outputs.
 - **Clear.** A first draw that is opaque and covers the frame uses `globalCompositeOperation = 'copy'`, which skips the clear (11.4 ms at 4K, measured).
 
@@ -809,7 +818,7 @@ The exact `'lighter'` crossfade (`canvas2d.ts:60-85`) is unchanged.
 ### 7.5 Caches and queues
 
 **Asset worker**
-- the decoded-picture LRU (256 MiB, unchanged; keyed by hash and target size);
+- the decoded-picture LRU (256 MiB, unchanged; keyed by hash and target size, `pictureKey`, §7.1);
 - the measure LRU;
 - the layout memo per object identity, box and font generation;
 - an effect sprite cache (large blurred shadows, glows; key fnv(object JSON) × scale, ≤ 64 MiB).

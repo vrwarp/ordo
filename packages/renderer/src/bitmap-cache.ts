@@ -1,6 +1,6 @@
 /**
  * Decoded-image cache of the asset worker, bounded by bytes rather than count (review item 26), and the
- * downscale rule that keeps any decoded image at or under the output size. Pure, so both are unit tested.
+ * downscale rule that keeps a decoded source at or under the output size. Pure, so both are unit tested.
  */
 
 export type Sized = { width: number; height: number; close(): void };
@@ -27,7 +27,21 @@ export function downscaleFor(
   return { width: Math.max(1, Math.round(w * scale)), height: Math.max(1, Math.round(h * scale)) };
 }
 
-/** LRU by last use; eviction closes the bitmap. */
+/**
+ * Key of a decoded picture: the file's hash, plus `@` and the target's key for one prepared at a device
+ * size (`preparePicture`, design/27 §7.1), so one file prepared for several sizes holds several entries.
+ */
+export function pictureKey(hash: string, target?: { key: string }): string {
+  return target ? `${hash}@${target.key}` : hash;
+}
+
+/** The file hash of a `pictureKey`. */
+export function pictureKeyHash(key: string): string {
+  const at = key.indexOf('@');
+  return at < 0 ? key : key.slice(0, at);
+}
+
+/** LRU by last use; eviction closes the bitmap. Keys are `pictureKey`s. */
 export class BitmapCache<B extends Sized> {
   private map = new Map<string, B>();
   bytes = 0;
@@ -69,11 +83,11 @@ export class BitmapCache<B extends Sized> {
     }
   }
 
-  /** Drop every entry not in `keep`. */
+  /** Drop every entry whose file hash (`pictureKeyHash`) is not in `keep`. */
   prune(keep: ReadonlySet<string>): number {
     let n = 0;
     for (const [k, b] of [...this.map]) {
-      if (keep.has(k)) continue;
+      if (keep.has(pictureKeyHash(k))) continue;
       this.evict(k, b);
       n++;
     }

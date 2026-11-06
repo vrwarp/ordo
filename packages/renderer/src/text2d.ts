@@ -16,12 +16,18 @@ import {
 
 import { CLAMP, clampBox, clampCrop, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
 import { type Ctx2D, roundRect, setLetterSpacing, withRotation } from './ctx.ts';
+import { type PictureTarget, paintPicture, pictureFit, pictureTarget, preparedKey } from './picture.ts';
 import { firstStrong, hasStrongRtl } from './text/bidi.ts';
 import { LEGACY_FONT_ENV, currentFontEnv } from './text/fonts.ts';
 import { BAND_MIN_FONT_SCALE, bandObject, drawRichText, isRichStyle, isRichText } from './text/rich.ts';
 
 export type { Ctx2D } from './ctx.ts';
-export type ImageLookup = (mediaId: string) => CanvasImageSource | undefined;
+/**
+ * Decoded pictures by media id. The drawers pass the `pictureTarget` each picture is drawn at (undefined
+ * for one drawn from its source: rotated, round corners, oversized). Given a target, a lookup returns the
+ * source or a bitmap `preparePicture` made for a target with the same key; a lookup may ignore targets.
+ */
+export type ImageLookup = (mediaId: string, target?: PictureTarget) => CanvasImageSource | undefined;
 
 /**
  * The CSS font of legacy text. With a font resolver installed (design/27 §10: the asset worker, the thumbnail
@@ -289,6 +295,12 @@ export function drawText(
  * lands smaller in the box. Only the part of the cropped rect that lies on the picture is drawn, with the
  * 9-argument `drawImage`; a crop that leaves nothing draws nothing. Without a crop the picture is drawn
  * exactly as before crops existed.
+ *
+ * `target` is the `pictureTarget` the caller asked its image lookup for. When `img` is a bitmap
+ * `preparePicture` made for that target (same key: size, sub-pixel offset, fit and crop), it already holds
+ * what the box shows at
+ * device size: it is copied 1:1 at the target's whole-pixel origin, with no resampling and no clip
+ * (design/27 §7.1). Any other image is drawn as the source, as above.
  */
 export function drawImageFit(
   ctx: Ctx2D,
@@ -299,66 +311,29 @@ export function drawImageFit(
   opacity = 1,
   radius = 0,
   crop?: ImageCrop,
+  target?: PictureTarget,
 ): void {
-  box = clampBox(box);
   opacity = num(opacity, 0, 1, 1);
+  if (target && preparedKey(img) === target.key) {
+    ctx.save();
+    ctx.globalAlpha = opacity;
+    ctx.drawImage(img, target.x, target.y);
+    ctx.restore();
+    return;
+  }
+  box = clampBox(box);
   radius = num(radius, 0, CLAMP.maxRadius, 0);
   const c = clampCrop(crop);
-  const iw = (img as { width: number }).width || (img as HTMLVideoElement).videoWidth || 1;
-  const ih = (img as { height: number }).height || (img as HTMLVideoElement).videoHeight || 1;
-  // The cropped rect in picture pixels; it reaches past the picture where a share is negative.
-  let sx = 0;
-  let sy = 0;
-  let sw = iw;
-  let sh = ih;
-  if (c) {
-    sx = c.l * iw;
-    sy = c.t * ih;
-    sw = (1 - c.l - c.r) * iw;
-    sh = (1 - c.t - c.b) * ih;
-    if (!(sw > 0 && sh > 0)) return;
-  }
   const bx = box.x * scale;
   const by = box.y * scale;
   const bw = box.w * scale;
   const bh = box.h * scale;
-  let dw = bw;
-  let dh = bh;
-  if (fit !== 'stretch') {
-    const s = fit === 'contain' ? Math.min(bw / sw, bh / sh) : Math.max(bw / sw, bh / sh);
-    dw = sw * s;
-    dh = sh * s;
-  }
-  const dx = bx + (bw - dw) / 2;
-  const dy = by + (bh - dh) / 2;
   ctx.save();
   ctx.globalAlpha = opacity;
   withRotation(ctx, box, scale, () => {
     roundRect(ctx, bx, by, bw, bh, radius * scale);
     ctx.clip();
-    if (!c) {
-      ctx.drawImage(img, dx, dy, dw, dh);
-      return;
-    }
-    // The part of the cropped rect that lies on the picture, and where it lands; the rest stays clear.
-    const x0 = Math.max(sx, 0);
-    const y0 = Math.max(sy, 0);
-    const x1 = Math.min(sx + sw, iw);
-    const y1 = Math.min(sy + sh, ih);
-    if (!(x1 > x0 && y1 > y0)) return;
-    const kx = dw / sw;
-    const ky = dh / sh;
-    ctx.drawImage(
-      img,
-      x0,
-      y0,
-      x1 - x0,
-      y1 - y0,
-      dx + (x0 - sx) * kx,
-      dy + (y0 - sy) * ky,
-      (x1 - x0) * kx,
-      (y1 - y0) * ky,
-    );
+    paintPicture(ctx, img, bx, by, bw, bh, pictureFit(fit), c);
   });
   ctx.restore();
 }
@@ -404,8 +379,9 @@ export function drawObject(ctx: Ctx2D, o: SlideObject, scale: number, images?: I
   if (o.type === 'text') drawTextObject(ctx, o, scale);
   else if (o.type === 'shape') drawShape(ctx, o, scale);
   else {
-    const img = images?.(o.mediaId);
-    if (img) drawImageFit(ctx, img, o.box, scale, o.fit, o.opacity, o.radius, o.crop);
+    const target = pictureTarget(o, scale);
+    const img = images?.(o.mediaId, target);
+    if (img) drawImageFit(ctx, img, o.box, scale, o.fit, o.opacity, o.radius, o.crop, target);
   }
 }
 
@@ -472,6 +448,33 @@ export function lyricTextFor(slide: Slide, look: Look | undefined, isSong: boole
   return t.trim() ? t : null;
 }
 
+/** An imported slide's page picture: the whole frame, contain-fitted. */
+const IMPORTED_PAGE = { box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 }, fit: 'contain' } as const;
+
+/** A picture `drawSlide2D` draws: its media id and the target it asks the image lookup for. */
+export type SlidePicture = { mediaId: string; target?: PictureTarget };
+
+/**
+ * The pictures `drawSlide2D` draws for these options, in drawing order, each with the `pictureTarget` it
+ * passes to the image lookup: what a decoder prepares before the (synchronous) draw. Nothing in the
+ * lyric-only and hidden modes, which draw text bands only.
+ */
+export function slidePictures(
+  rawSlide: Slide,
+  opts: Pick<SlideDrawOptions, 'scale' | 'look' | 'skipImported'>,
+): SlidePicture[] {
+  const look = opts.look ? clampLook(opts.look) : undefined;
+  if ((look?.layers.slide.mode ?? 'authored') !== 'authored') return [];
+  const slide = clampSlide(rawSlide);
+  const scale = num(opts.scale, 0.01, 8, 1);
+  const out: SlidePicture[] = [];
+  if (slide.imported && !opts.skipImported)
+    out.push({ mediaId: slide.imported.imageMediaId, target: pictureTarget(IMPORTED_PAGE, scale) });
+  for (const o of slide.objects)
+    if (o.type === 'image') out.push({ mediaId: o.mediaId, target: pictureTarget(o, scale) });
+  return out;
+}
+
 /**
  * Draw the Slide layer of a slide as a look renders it, on a transparent canvas. Backgrounds are not
  * drawn here (they are their own layer).
@@ -485,8 +488,9 @@ export function drawSlide2D(ctx: Ctx2D, rawSlide: Slide, opts: SlideDrawOptions)
   if (rule.mode === 'hidden') return;
   if (rule.mode === 'authored') {
     if (slide.imported && !opts.skipImported) {
-      const img = opts.images?.(slide.imported.imageMediaId);
-      if (img) drawImageFit(ctx, img, { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 }, scale, 'contain');
+      const target = pictureTarget(IMPORTED_PAGE, scale);
+      const img = opts.images?.(slide.imported.imageMediaId, target);
+      if (img) drawImageFit(ctx, img, IMPORTED_PAGE.box, scale, 'contain', 1, 0, undefined, target);
     }
     for (const o of slide.objects) drawObject(ctx, o, scale, opts.images);
     return;
