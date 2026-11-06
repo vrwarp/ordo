@@ -1,4 +1,11 @@
-import type { LiveCommand, LiveEvent, LiveState, ResolvedPlaylist } from '@ordo/domain';
+import {
+  jsonBytes,
+  type LiveCommand,
+  type LiveEvent,
+  type LiveState,
+  type ResolvedPlaylist,
+  SIZE_BUDGETS,
+} from '@ordo/domain';
 import { autoAdvance, initialState, OptimisticState, reduce } from '@ordo/live-state';
 import type { LiveAck, LiveDeltaMsg } from '@ordo/protocol';
 
@@ -18,6 +25,10 @@ import type { LiveAck, LiveDeltaMsg } from '@ordo/protocol';
  * holds that service to its end: a hub that comes back is neither handed the service nor followed, and
  * the output windows are told to ignore it (`hold`). After End service the authority returns to the hub
  * as soon as it answers.
+ *
+ * Size (design/27 §3.4): a `live.adopt` larger than `adoptMax` is never sent (the hub would close the
+ * socket, and the operator reconnect and try again). The service is then held like one started here, until
+ * End service; the hub's older copy of it is ended then with this PC's idle state.
  */
 
 export type LiveNotice =
@@ -29,7 +40,9 @@ export type LiveNotice =
   | { kind: 'unavailable'; reason: string; command: LiveCommand }
   | { kind: 'local-live'; playlist: string }
   | { kind: 'hub-back-held' }
-  | { kind: 'held-ended'; hubConnected: boolean };
+  | { kind: 'held-ended'; hubConnected: boolean }
+  /** Handing the service back was refused locally: its state is `bytes`, more than `max` (design/27 §3.4). */
+  | { kind: 'adopt-too-large'; bytes: number; max: number };
 
 export type HubOut =
   | { t: 'live.event'; id: string; event: LiveCommand }
@@ -60,6 +73,8 @@ export type LiveCoreDeps = {
   resolveLocal?(playlistId: string): ResolvedPlaylist;
   graceMs?: number;
   adoptTimeoutMs?: number;
+  /** A `live.adopt` above this is refused locally (default `SIZE_BUDGETS.adoptMax`, design/27 §3.4). */
+  adoptMaxBytes?: number;
   /** Clock for pending-command ageing (default Date.now). */
   now?: () => number;
 };
@@ -85,6 +100,12 @@ export class LiveCore {
   reconcile: Reconcile = null;
   /** This PC started the live service without the hub and holds it until End service. */
   held = false;
+  /**
+   * The playlist of a service held because handing it back was too large (design/27 §3.4): the hub has it
+   * too, at an older position. After End service the hub's copy is ended by adopting this PC's idle state,
+   * unless the hub has gone on to another playlist meanwhile.
+   */
+  staleOnHub?: string;
   private heldNoticeGiven = false;
   /**
    * A held service ended and the authority has not yet returned to the hub: whatever the hub holds when it
@@ -314,8 +335,9 @@ export class LiveCore {
    * Resume a held service after a core restart: authority at once, windows told to keep holding. The
    * state is the persisted one (the hub never had it).
    */
-  resumeHeld(): void {
+  resumeHeld(staleOnHub?: string): void {
     this.held = true;
+    this.staleOnHub = staleOnHub;
     this.afterHeld = false;
     this.heldNoticeGiven = false;
     this.activateFallback({ hold: true, quiet: true });
@@ -437,6 +459,13 @@ export class LiveCore {
     if (this.afterHeld) {
       this.afterHeld = false;
       this.replay = [];
+      const stale = this.staleOnHub;
+      this.staleOnHub = undefined;
+      if (stale && hub.mode === 'live' && hub.resolved?.playlist.id === stale && local.mode !== 'live') {
+        // The hub still shows the service this PC ran to its end: end it there too (a small, idle state).
+        this.adopt(true);
+        return;
+      }
       this.leaveFallback(hub);
       return;
     }
@@ -497,9 +526,17 @@ export class LiveCore {
   }
 
   private adopt(force: boolean): void {
+    const msg: HubOut = { t: 'live.adopt', state: this.local, force: force || undefined };
+    const max = this.deps.adoptMaxBytes ?? SIZE_BUDGETS.adoptMax;
+    // Only a live state can be large (an idle one is a few hundred bytes).
+    const bytes = this.local.mode === 'live' ? jsonBytes(msg) : 0;
+    if (bytes > max) {
+      this.holdTooLarge(bytes, max);
+      return;
+    }
     this.reconcile = 'adopting';
     this.replay = [];
-    this.deps.sendHub({ t: 'live.adopt', state: this.local, force: force || undefined });
+    this.deps.sendHub(msg);
     if (this.adoptTimer) this.deps.clearTimer(this.adoptTimer);
     this.adoptTimer = this.deps.setTimer(() => {
       this.adoptTimer = undefined;
@@ -509,6 +546,25 @@ export class LiveCore {
         this.deps.sendHub({ t: 'live.resync' });
       }
     }, this.deps.adoptTimeoutMs ?? 5000);
+    this.deps.onChange();
+  }
+
+  /**
+   * The hand-back is too large for the socket: keep the service on this PC until End service, as if it had
+   * started here (the windows ignore the hub meanwhile), and remember that the hub has an older copy.
+   */
+  private holdTooLarge(bytes: number, max: number): void {
+    if (this.adoptTimer) this.deps.clearTimer(this.adoptTimer);
+    this.adoptTimer = undefined;
+    this.reconcile = null;
+    this.replay = [];
+    this.conflictHubState = undefined;
+    this.held = true;
+    this.afterHeld = false;
+    this.heldNoticeGiven = true;
+    this.staleOnHub = this.local.resolved?.playlist.id;
+    this.deps.fallback.setHold?.(true);
+    this.deps.onNotice({ kind: 'adopt-too-large', bytes, max });
     this.deps.onChange();
   }
 

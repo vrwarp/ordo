@@ -1,7 +1,10 @@
 import { api, ApiFailure } from '@ordo/client';
 import type { Presentation, SlideObject } from '@ordo/domain';
+import type { RevisionInfo } from '@ordo/protocol';
 import { create } from 'zustand';
 import { deviceProfile } from '../../lib/capabilities.ts';
+import { onlyJobSaves, rebaseOnJobs } from '../../lib/pptxImport.ts';
+import { saveSizeCheck } from '../../lib/sizes.ts';
 import { upsertLocal } from '../../state/library.ts';
 import { currentRole } from '../../state/session.ts';
 import { errorText, toast } from '../../state/toasts.ts';
@@ -36,6 +39,8 @@ export const useEditor = create<EditorState>(() => ({
 }));
 
 const history = new History<Presentation>(200, 800);
+/** Presentations already warned about this session for passing the 4 MiB budget (design/27 §3.4). */
+const warnedLarge = new Set<string>();
 
 function firstSlideId(p: Presentation): string | undefined {
   for (const s of p.sections) if (s.slides[0]) return s.slides[0].id;
@@ -125,10 +130,19 @@ export function currentObject(): SlideObject | undefined {
   return currentSlide()?.objects.find((o) => o.id === s.objectId);
 }
 
-/** Save with the base rev. 409 opens the reload dialog; 423 means locked by the live playlist. */
-export async function save(force = false): Promise<boolean> {
+/**
+ * Save with the base rev. 409 opens the reload dialog; 423 means locked by the live playlist. A presentation
+ * over the 4 MiB budget saves with a warning (once per session); one over the hub's 32 MiB body limit is
+ * refused here with the reason (design/27 §3.4).
+ */
+export async function save(force = false, adopted = false): Promise<boolean> {
   const s = useEditor.getState();
   if (!s.draft || !s.base || s.saving) return false;
+  const size = saveSizeCheck(s.draft);
+  if (size.refuse) {
+    toast(`Could not save: ${size.refuse}`, 'error');
+    return false;
+  }
   useEditor.setState({ saving: true });
   try {
     let rev = s.base.rev;
@@ -148,10 +162,18 @@ export async function save(force = false): Promise<boolean> {
       saving: false,
       conflict: false,
     });
+    if (size.warn && !warnedLarge.has(saved.id)) {
+      warnedLarge.add(saved.id);
+      toast(size.warn, 'warn');
+    }
     return true;
   } catch (e) {
     useEditor.setState({ saving: false });
     if (e instanceof ApiFailure && e.status === 409) {
+      // Saved meanwhile only by the hub's PowerPoint jobs (version 2 of an import): take their work over and
+      // save again, instead of offering to overwrite it.
+      if (!force && !adopted && (await adoptJobSaves().catch(() => 'other')) === 'adopted')
+        return save(false, true);
       useEditor.setState({ conflict: true });
       return false;
     }
@@ -165,6 +187,34 @@ export async function save(force = false): Promise<boolean> {
     else toast(`Could not save: ${errorText(e)}`, 'error');
     return false;
   }
+}
+
+/**
+ * When only the hub's PowerPoint jobs saved the open presentation since it was opened (`onlyJobSaves`: its
+ * LibreOffice follow-up, reference pictures, the text repair), take their revision over: the whole of it when
+ * nothing is unsaved, else slide by slide (`rebaseOnJobs`), unsaved edits kept. 'other' when someone else
+ * saved (the usual banner and conflict dialog apply); 'none' when there is nothing newer or the editor moved on.
+ */
+export async function adoptJobSaves(): Promise<'adopted' | 'other' | 'none'> {
+  const s = useEditor.getState();
+  if (!s.id || !s.base || !s.draft) return 'none';
+  const [latest, revisions] = await Promise.all([
+    api<Presentation>(`/presentations/${s.id}`),
+    api<RevisionInfo[]>(`/presentations/${s.id}/revisions`),
+  ]);
+  if (latest.rev <= s.base.rev) return 'none';
+  if (!onlyJobSaves(revisions, s.base.rev, latest.rev)) return 'other';
+  const cur = useEditor.getState();
+  if (cur.id !== s.id || cur.base !== s.base || !cur.draft || cur.saving) return 'none';
+  upsertLocal('presentations', latest);
+  if (!cur.dirty) {
+    const objectId = cur.objectId;
+    openPresentation(latest);
+    if (objectId && currentSlide()?.objects.some((o) => o.id === objectId)) useEditor.setState({ objectId });
+    return 'adopted';
+  }
+  useEditor.setState({ base: latest, draft: rebaseOnJobs(cur.base!, cur.draft, latest) });
+  return 'adopted';
 }
 
 /** Discard local changes and load the latest version from the hub. */

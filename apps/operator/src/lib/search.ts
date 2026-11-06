@@ -1,5 +1,7 @@
 import { type Media, type Presentation, readableText } from '@ordo/domain';
 
+import { importedText } from '@ordo/domain';
+
 /** Lowercase, strip diacritics and punctuation, collapse whitespace. */
 export function normalize(s: string): string {
   return s
@@ -37,6 +39,8 @@ export function presentationDoc(p: Presentation): SearchDoc {
     for (const sl of sec.slides)
       for (const o of sl.objects) if (o.type === 'text') parts.push(readableText(o));
   }
+  // Picture slides: the text of the picture, once it is known to be that slide's (design/27 §11).
+  for (const sec of p.sections) for (const sl of sec.slides) parts.push(importedText(sl));
   const doc: SearchDoc = {
     id: p.id,
     kind: 'presentation',

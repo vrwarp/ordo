@@ -1,5 +1,6 @@
 export * from './schemas.ts';
 export * from './live.ts';
+export * from './size.ts';
 export * from './cues.ts';
 export * from './ids.ts';
 export * from './lyrics.ts';

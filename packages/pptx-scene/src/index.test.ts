@@ -1,6 +1,6 @@
 import { Slide } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
-import { emitSlides, MEDIA_PREFIX, parseDeck } from './index.ts';
+import { convertDeck, emitSlides, MEDIA_PREFIX, parseDeck } from './index.ts';
 import {
   body,
   buildDeck,
@@ -126,7 +126,7 @@ describe('parseDeck → emitSlides', () => {
     const scene = parseDeck(
       buildDeck({
         slides: [{ bg: pictureBg('rId2'), rels: [imageRel('rId2', 'photo.png')] }],
-        media: { 'ppt/media/photo.png': pngHeader(1920, 1080) },
+        media: { 'ppt/media/photo.png': pngHeader(1920, 1080, true) },
       }),
     );
     const out = emitSlides(scene, { mediaId: (part) => `m-${part.split('/').pop()}` });
@@ -165,5 +165,112 @@ describe('parseDeck → emitSlides', () => {
 
   it('throws only when the deck has no presentation part', () => {
     expect(() => parseDeck(new Map())).toThrow(/presentation/);
+  });
+});
+
+describe('convertDeck (the hub pool task entry, M3)', () => {
+  const box = (id: number, color: string) => sp({ id, x: IN, y: IN, cx: IN, cy: IN, fill: solid(color) });
+  const deck = () =>
+    buildDeck({
+      slides: [
+        { shapes: box(2, 'FF0000') },
+        { hidden: true, shapes: box(2, '00FF00') },
+        { shapes: box(2, '0000FF') },
+      ],
+    });
+
+  it('converts the whole deck like parseDeck and emitSlides, with the slide list', () => {
+    const all = convertDeck(deck());
+    const twoStep = emitSlides(parseDeck(deck()));
+    expect(all.slides.map((s) => s.slide)).toEqual(twoStep.slides.map((s) => s.slide));
+    expect(all.listed.map((r) => [r.index, r.hidden, r.shown])).toEqual([
+      [0, false, 0],
+      [1, true, undefined],
+      [2, false, 1],
+    ]);
+    expect(all.frame.cx).toBeGreaterThan(0);
+  });
+
+  it('emits each slide as it reads it, giving what the two steps give: ids, pictures, notes', () => {
+    // Pictures shared between slides and with the layout, a hidden slide, a deck note (an external target).
+    const parts = buildDeck({
+      layouts: [
+        {
+          shapes: pic({ id: 9, x: 0, y: 0, cx: IN, cy: IN, rId: 'rId2' }),
+          rels: [imageRel('rId2', 'logo.png')],
+        },
+      ],
+      slides: [
+        {
+          rels: [
+            imageRel('rId2', 'a.png'),
+            { id: 'rId3', type: 'hyperlink', target: 'https://x.example/', external: true },
+          ],
+          shapes: pic({ id: 2, x: IN, y: IN, cx: IN, cy: IN, rId: 'rId2' }),
+        },
+        {
+          hidden: true,
+          rels: [imageRel('rId2', 'b.png')],
+          shapes: pic({ id: 2, x: IN, y: IN, cx: IN, cy: IN, rId: 'rId2' }),
+        },
+        {
+          rels: [imageRel('rId2', 'a.png')],
+          shapes: pic({ id: 2, x: IN, y: IN, cx: IN, cy: IN, rId: 'rId2' }),
+        },
+      ],
+    });
+    const asked: string[] = [];
+    const mediaId = (part: string) => {
+      asked.push(part);
+      return `m-${part.split('/').pop()}`;
+    };
+    for (const opts of [{}, { mediaId }]) {
+      const one = convertDeck(parts, opts);
+      const two = emitSlides(parseDeck(parts), opts);
+      const strip = (r: typeof two) => ({ ...r, slides: r.slides.map(({ ms: _, ...s }) => s) });
+      expect(
+        strip({ slides: one.slides, media: one.media, slideRect: one.slideRect, notes: one.notes }),
+      ).toEqual(strip(two));
+    }
+    expect(convertDeck(parts).media.map((m) => [m.id, m.part.split('/').pop()])).toEqual([
+      [`${MEDIA_PREFIX}1`, 'logo.png'],
+      [`${MEDIA_PREFIX}2`, 'a.png'],
+      [`${MEDIA_PREFIX}3`, 'b.png'],
+    ]);
+    // A caller's media ids are asked once per part and call, in first-use order.
+    expect(asked).toEqual([...asked.slice(0, 3), ...asked.slice(0, 3)]);
+    expect(asked.slice(0, 3).map((p) => p.split('/').pop())).toEqual(['logo.png', 'a.png', 'b.png']);
+  });
+
+  it('emits slide k before it reads slide k + 1, so one slide is held as IR at a time', () => {
+    // Spilled pictures: their size is asked of the caller as each slide is read; ids are asked as it is emitted.
+    const slides = [1, 2, 3].map((k) => ({
+      rels: [imageRel('rId2', `p${k}.png`)],
+      shapes: pic({ id: 2, x: IN, y: IN, cx: IN, cy: IN, rId: 'rId2' }),
+    }));
+    const media = Object.fromEntries([1, 2, 3].map((k) => [`ppt/media/p${k}.png`, new Uint8Array(0)]));
+    const events: string[] = [];
+    convertDeck(buildDeck({ slides, media }), {
+      pictureSize: (part) => {
+        events.push(`read ${part.split('/').pop()}`);
+        return undefined;
+      },
+      newId: () => {
+        events.push('emit');
+        return `id${events.length}`;
+      },
+    });
+    const order = events.filter((e, i) => e !== 'emit' || events[i - 1] !== 'emit');
+    expect(order).toEqual(['read p1.png', 'emit', 'read p2.png', 'emit', 'read p3.png', 'emit']);
+  });
+
+  it('converts only the slides of a range, keeping deck facts whole', () => {
+    const batch = convertDeck(deck(), { range: { from: 1, to: 3 } });
+    expect(batch.slides.map((s) => [s.index, s.hidden, s.shown])).toEqual([
+      [1, true, undefined],
+      [2, false, 1],
+    ]);
+    expect(batch.listed).toHaveLength(3);
+    expect(convertDeck(deck(), { range: { from: 3, to: 9 } }).slides).toEqual([]);
   });
 });

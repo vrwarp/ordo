@@ -1,12 +1,22 @@
 import { api, upload } from '@ordo/client';
-import type { PptxRenderer, Presentation } from '@ordo/domain';
+import type { Presentation } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import { useEffect, useState } from 'react';
+import {
+  documentFields,
+  importJobTitle,
+  isImportJob,
+  PPTX_NATIVE_JOB,
+  type PptxImportChoice,
+  readImportChoice,
+  writeImportChoice,
+} from '../../lib/pptxImport.ts';
 import { jobResultPresentationId, useJob } from '../../services/jobs.ts';
 import { upsertLocal, useLibrary } from '../../state/library.ts';
 import { errorText, toast } from '../../state/toasts.ts';
 import { navigate } from '../../useRoute.ts';
 import { DropZone } from './MediaTab.tsx';
+import { JobProgress, PptxImportCard } from './PptxImportCard.tsx';
 
 export function JobCard({ id, title }: { id: string; title: string }) {
   const job = useJob(id);
@@ -21,10 +31,12 @@ export function JobCard({ id, title }: { id: string; title: string }) {
           {state}
         </span>
       </div>
-      <div className="progress">
-        <i style={{ width: `${Math.round((job?.progress ?? 0) * 100)}%` }} />
-      </div>
-      {job?.error && <div className="banner red small">{job.error}</div>}
+      <JobProgress value={job?.progress ?? 0} label="Import progress" />
+      {job?.error && (
+        <div className="banner red small" role="alert">
+          {job.error}
+        </div>
+      )}
       <div className="row">
         {pid && (
           <button type="button" className="small primary" onClick={() => navigate({ name: 'edit', id: pid })}>
@@ -32,7 +44,12 @@ export function JobCard({ id, title }: { id: string; title: string }) {
           </button>
         )}
         {job?.log.length ? (
-          <button type="button" className="small" onClick={() => setShowLog(!showLog)}>
+          <button
+            type="button"
+            className="small"
+            aria-expanded={showLog}
+            onClick={() => setShowLog(!showLog)}
+          >
             {showLog ? 'Hide log' : `Log (${job.log.length} lines)`}
           </button>
         ) : null}
@@ -42,23 +59,88 @@ export function JobCard({ id, title }: { id: string; title: string }) {
   );
 }
 
-type Started = { id: string; title: string };
+type Started = { id: string; kind: string; title: string };
 
-/** ProPresenter 7, SongSelect and PPTX/PDF imports with job progress and logs (prd/05, design/20). */
-/** The PowerPoint renderer this device last chose (a convenience; the hub defaults to LibreOffice). */
-const RENDERER_KEY = 'ordo.pptxRenderer';
-
-function storedRenderer(): PptxRenderer {
-  try {
-    return localStorage.getItem(RENDERER_KEY) === 'pptx-preview' ? 'pptx-preview' : 'libreoffice';
-  } catch {
-    return 'libreoffice';
-  }
+/** An import job's card: the PowerPoint import card for a native import, the plain job card otherwise. */
+function ImportJobCard({ id, kind, title }: Started) {
+  return kind === PPTX_NATIVE_JOB ? (
+    <PptxImportCard id={id} title={title} />
+  ) : (
+    <JobCard id={id} title={title} />
+  );
 }
 
+const storage = () => (typeof localStorage === 'undefined' ? undefined : localStorage);
+
+/**
+ * How PowerPoint files are imported (design/27 §2, M3): 'Editable (recommended)', the native import, or
+ * 'Pictures (LibreOffice)'; 'Extend plain backgrounds to 16:9' for the native import. Remembered per device.
+ */
+export function PptxImportChoices(props: {
+  value: PptxImportChoice;
+  onChange: (c: PptxImportChoice) => void;
+}) {
+  const c = props.value;
+  const set = (patch: Partial<PptxImportChoice>) => props.onChange({ ...c, ...patch });
+  return (
+    <fieldset className="col" style={{ gap: 6, border: 0, margin: 0, padding: 0 }} data-pptx-import-mode>
+      <legend className="small" style={{ padding: 0, marginBottom: 4, color: 'var(--fg2)' }}>
+        PowerPoint slides
+      </legend>
+      <label className="check" style={{ alignItems: 'flex-start' }}>
+        <input
+          type="radio"
+          name="pptx-import-mode"
+          value="native"
+          checked={c.mode === 'native'}
+          onChange={() => set({ mode: 'native' })}
+        />
+        <span className="col" style={{ gap: 2 }}>
+          <span>Editable (recommended)</span>
+          <span className="muted small">
+            Text, pictures and shapes become objects you can edit. What ordo cannot draw (a chart, SmartArt,
+            3D) becomes a picture on its slide.
+          </span>
+        </span>
+      </label>
+      <label className="check" style={{ alignItems: 'flex-start' }}>
+        <input
+          type="radio"
+          name="pptx-import-mode"
+          value="libreoffice"
+          checked={c.mode === 'libreoffice'}
+          onChange={() => set({ mode: 'libreoffice' })}
+        />
+        <span className="col" style={{ gap: 2 }}>
+          <span>Pictures (LibreOffice)</span>
+          <span className="muted small">
+            Each slide becomes one picture, as LibreOffice draws it. Its text can be made editable later,
+            slide by slide.
+          </span>
+        </span>
+      </label>
+      <label className="check" style={{ alignItems: 'flex-start' }}>
+        <input
+          type="checkbox"
+          checked={c.extendBackgrounds}
+          disabled={c.mode !== 'native'}
+          onChange={(e) => set({ extendBackgrounds: e.target.checked })}
+        />
+        <span className="col" style={{ gap: 2 }}>
+          <span>Extend plain backgrounds to 16:9</span>
+          <span className="muted small">
+            A 4:3 slide's plain background colour fills the whole screen instead of leaving black bars.
+          </span>
+        </span>
+      </label>
+    </fieldset>
+  );
+}
+
+/** ProPresenter 7, SongSelect and PPTX/PDF imports with job progress and logs (prd/05, design/20). */
 export function ImportTab() {
   const [jobs, setJobs] = useState<Started[]>([]);
-  const [renderer, setRenderer] = useState<PptxRenderer>(storedRenderer);
+  const [choice, setChoice] = useState<PptxImportChoice>(() => readImportChoice(storage()));
   const [recent, setRecent] = useState<Job[]>([]);
   const [nasPath, setNasPath] = useState('');
   const [pasted, setPasted] = useState('');
@@ -67,16 +149,10 @@ export function ImportTab() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional dependency list
   useEffect(() => {
     void api<Job[] | { jobs: Job[] }>('/jobs')
-      .then((r) =>
-        setRecent(
-          (Array.isArray(r) ? r : r.jobs)
-            .filter((j) => /pro7|document|pdf|pptx|import/.test(j.kind))
-            .slice(0, 10),
-        ),
-      )
+      .then((r) => setRecent((Array.isArray(r) ? r : r.jobs).filter((j) => isImportJob(j.kind)).slice(0, 10)))
       .catch(() => undefined);
   }, [jobMap]);
-  const started = (job: Job, title: string) => setJobs((j) => [{ id: job.id, title }, ...j]);
+  const started = (job: Job, title: string) => setJobs((j) => [{ id: job.id, kind: job.kind, title }, ...j]);
 
   const pro7Zip = async (files: File[]) => {
     for (const f of files) {
@@ -129,7 +205,7 @@ export function ImportTab() {
   const documents = async (files: File[]) => {
     for (const f of files) {
       const fd = new FormData();
-      if (/\.pptx$/i.test(f.name)) fd.append('renderer', renderer);
+      for (const [k, v] of documentFields(f.name, choice)) fd.append(k, v);
       fd.append('file', f, f.name);
       try {
         setProgress(0);
@@ -200,28 +276,16 @@ export function ImportTab() {
           <div className="card col">
             <h3>PowerPoint and PDF</h3>
             <span className="muted small">
-              Each page becomes an image slide at 1920×1080. PowerPoint slides can later be made editable in
-              the editor (text boxes are approximate; fonts may differ).
+              PowerPoint slides become slides you can edit, or one picture each if you prefer. PDF pages
+              become picture slides at 1920×1080.
             </span>
-            <label className="row small" style={{ gap: 8 }}>
-              PowerPoint drawn by
-              <select
-                data-pptx-renderer
-                value={renderer}
-                onChange={(e) => {
-                  const v = e.target.value as PptxRenderer;
-                  setRenderer(v);
-                  try {
-                    localStorage.setItem(RENDERER_KEY, v);
-                  } catch {
-                    /* storage unavailable: the choice lasts this visit */
-                  }
-                }}
-              >
-                <option value="libreoffice">LibreOffice</option>
-                <option value="pptx-preview">pptx-preview (experimental)</option>
-              </select>
-            </label>
+            <PptxImportChoices
+              value={choice}
+              onChange={(c) => {
+                setChoice(c);
+                writeImportChoice(storage(), c);
+              }}
+            />
             <DropZone
               accept=".pptx,.pdf"
               touchAccept=".pptx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation"
@@ -230,21 +294,17 @@ export function ImportTab() {
               onFiles={(f) => void documents(f)}
             />
           </div>
-          {progress !== undefined && (
-            <div className="progress">
-              <i style={{ width: `${Math.round(progress * 100)}%` }} />
-            </div>
-          )}
+          {progress !== undefined && <JobProgress value={progress} label="Upload progress" />}
         </div>
         <div className="col">
           <h3>Import jobs</h3>
           {jobs.map((j) => (
-            <JobCard key={j.id} id={j.id} title={j.title} />
+            <ImportJobCard key={j.id} {...j} />
           ))}
           {recent
             .filter((r) => !jobs.some((j) => j.id === r.id))
             .map((r) => (
-              <JobCard key={r.id} id={r.id} title={`${r.kind} · ${new Date(r.createdAt).toLocaleString()}`} />
+              <ImportJobCard key={r.id} id={r.id} kind={r.kind} title={importJobTitle(r)} />
             ))}
           {!jobs.length && !recent.length && <span className="muted">No imports yet.</span>}
         </div>

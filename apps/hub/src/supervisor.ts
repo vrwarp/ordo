@@ -27,7 +27,15 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Logger } from 'pino';
-import type { ChildName, ChildState, FromChild, LocksMsg, ProcessStatus, ToChild } from './ipc.ts';
+import type {
+  ChildName,
+  ChildState,
+  FromChild,
+  LibraryStatsMsg,
+  LocksMsg,
+  ProcessStatus,
+  ToChild,
+} from './ipc.ts';
 
 export const BUDGET = { max: 5, windowMs: 60_000 };
 /** Delay before restart n (1-based) within the budget window; all under a second. */
@@ -89,6 +97,8 @@ export class Supervisor {
   readonly secret = randomBytes(24).toString('base64url');
   private children: Record<ChildName, Child>;
   private locks?: LocksMsg;
+  /** The library's last size report, replayed to a restarted live process (its health shows it). */
+  private stats?: LibraryStatsMsg;
   private stopping = false;
   private watchdog?: NodeJS.Timeout;
 
@@ -197,6 +207,7 @@ export class Supervisor {
         } else {
           this.send('library', { t: 'live', url: live.url, state: 'up' });
           this.send('live', { t: 'library', url: lib.url, state: lib.status.state });
+          if (this.stats) this.send('live', this.stats);
         }
         this.publish();
         return;
@@ -212,6 +223,11 @@ export class Supervisor {
         return;
       case 'log':
         this.opts.log[m.level]({ child: c.name }, m.msg);
+        return;
+      case 'stats':
+        if (c.name !== 'library') return;
+        this.stats = m;
+        this.send('live', m);
         return;
     }
   }

@@ -1,7 +1,4 @@
-import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import { copyFile, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
-import { pipeline } from 'node:stream/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import {
   DEFAULT_THEME,
@@ -26,9 +23,14 @@ import type { HubConfig } from './config.ts';
 import { badRequest, errorMessage, forbidden } from './errors.ts';
 import type { JobCtx, JobQueue } from './jobs.ts';
 import type { Library } from './library.ts';
-import { fitPage, pdfToPngs, pptxToPdf } from './media/ffmpeg.ts';
+import { fitPage, pdfToPngs } from './media/ffmpeg.ts';
 import { baseName, type MediaService } from './media/service.ts';
 import { cpuPool, transferables, WorkerStartError } from './pool.ts';
+import { renderCopyForDocument, sofficeToPdf } from './pptx/fallback.ts';
+import { PptxImports } from './pptx/index.ts';
+import { mediaForFile } from './pptx/mediaParts.ts';
+import { logSafe } from './pptx/report.ts';
+import { type DeckText, pagesOf, readDeckText } from './pptx/textRepair.ts';
 import type { Store } from './store.ts';
 
 export type Pro7Result = {
@@ -98,7 +100,10 @@ type ImportFiles = { files: Map<string, Uint8Array>; onDisk: Map<string, string>
 
 export class ImportService {
   private imp: Importers;
+  /** The native PowerPoint import and its follow-up jobs (design/27, `pptx/`). */
+  readonly pptx: PptxImports;
 
+  /** `locked`: whether a presentation is frozen in the live session (ADR 0007); imports never write it then. */
   constructor(
     private lib: Library,
     private store: Store,
@@ -106,10 +111,19 @@ export class ImportService {
     private media: MediaService,
     private cfg: HubConfig,
     private log: Logger,
+    locked: (presentationId: string) => boolean,
   ) {
     this.imp = (cfg.importers as Importers | undefined) ?? (realImporters as unknown as Importers);
     jobs.register<Pro7Payload>('pro7-import', (ctx) => this.pro7Job(ctx));
     jobs.register<DocPayload>('document', (ctx) => this.documentJob(ctx));
+    this.pptx = new PptxImports({ lib, store, jobs, media, cfg, log, locked });
+    // Legacy PowerPoint text boxes are re-keyed once, in the background (design/27 §11): checked at every
+    // start, it queues nothing once the library is repaired.
+    try {
+      this.pptx.queueTextRepair();
+    } catch (e) {
+      log.warn({ err: errorMessage(e) }, 'the PowerPoint text repair could not be queued');
+    }
   }
 
   theme(p?: { themeId?: string }): Theme {
@@ -301,7 +315,11 @@ export class ImportService {
           } else {
             throw new Error('file not in the import');
           }
-          const id = await this.mediaFor(tmp, m.path, m.background === true);
+          const id = await mediaForFile(this.pptx.deps, tmp, {
+            name: m.path,
+            tags: ['pro7'],
+            background: m.background === true,
+          });
           map.set(m.key, id);
           done.media[m.key] = id;
           save();
@@ -391,42 +409,6 @@ export class ImportService {
     return saved;
   }
 
-  /** Reuse an existing media item with the same original content, else ingest a new one. */
-  private async mediaFor(tmp: string, path: string, background: boolean): Promise<string> {
-    // Hashed as a stream: a service video can be larger than Node reads into one buffer.
-    const h = createHash('sha256');
-    await pipeline(createReadStream(tmp), h);
-    const hash = h.digest('hex');
-    const bytes = (await stat(tmp)).size;
-    const existing = this.media.findClip(hash); // untrimmed: a trimmed clip of the same file is another item
-    if (existing) {
-      await rm(tmp, { force: true });
-      if (background && !existing.isBackground) {
-        const updated = this.lib.media.update(existing.id, { ...existing, isBackground: true });
-        this.lib.emit([{ kind: 'media', id: updated.id, rev: updated.rev, entity: updated }]);
-      }
-      return existing.id;
-    }
-    const m = await this.media.ingest({ path: tmp, hash, bytes }, path, {
-      tags: ['pro7'],
-      isBackground: background,
-    });
-    return m.id;
-  }
-
-  /** The real extractor runs on the CPU pool; an injected one (tests) runs inline. */
-  private async extractPptx(buf: Uint8Array, signal: AbortSignal): Promise<PptxText> {
-    const extract = this.imp.extractPptxText!;
-    if (extract !== (realImporters as unknown as Importers).extractPptxText) return extract(buf);
-    try {
-      return await extractPptxTextInWorker(buf, signal);
-    } catch (e) {
-      if (!(e instanceof WorkerStartError)) throw e;
-      this.log.warn({ err: e.message }, 'cpu worker unavailable; extracting PPTX text on the main thread');
-      return extract(buf);
-    }
-  }
-
   /**
    * The deck's annotation for pptx-preview runs on the CPU pool (a crafted deck must not hold the event
    * loop); on the main thread only when no worker can start.
@@ -465,21 +447,19 @@ export class ImportService {
     const dir = await this.store.tmpDir();
     try {
       let pdf = this.store.abs(file.path);
-      let text: PptxText | undefined;
+      let text: DeckText | undefined;
       let pages: string[] | undefined;
       if (ext === 'pptx') {
         const input = join(dir, 'slides.pptx');
         await copyFile(pdf, input);
-        if (this.imp.extractPptxText) {
-          try {
-            text = await this.extractPptx(await readFile(input), ctx.signal);
-            ctx.log(`extracted text from ${text.slides.length} slide(s)`);
-            for (const s of (text.skipped ?? []).slice(0, 20))
-              ctx.log(`[warn] slide ${s.index}: text not read (${s.reason})`);
-          } catch (e) {
-            ctx.log(`[warn] text extraction failed: ${errorMessage(e)}`);
-          }
-        } else ctx.log('[warn] PPTX text extraction is not available');
+        try {
+          // pptx-scene on the CPU pool; each page gets the text of the slide it shows (design/27 §11).
+          text = await readDeckText(input, dir, ctx.signal);
+          ctx.log(`read the text of ${text.listed.length} slide(s)`);
+        } catch (e) {
+          if (ctx.signal.aborted) throw e;
+          ctx.log(`[warn] text extraction failed: ${logSafe(errorMessage(e))}`);
+        }
         if (renderer === 'pptx-preview') {
           ctx.log('rendering with pptx-preview');
           try {
@@ -497,27 +477,32 @@ export class ImportService {
           } catch (e) {
             if (ctx.signal.aborted) throw e;
             // A church needs its slides more than it needs this renderer: draw them the usual way.
-            ctx.log(`[warn] pptx-preview failed (${errorMessage(e)}); rendering with LibreOffice instead`);
+            ctx.log(
+              `[warn] pptx-preview failed (${logSafe(errorMessage(e))}); rendering with LibreOffice instead`,
+            );
             renderer = 'libreoffice';
           }
           ctx.progress(0.3);
         }
-        if (!pages && this.imp.pptxForRendering) {
+        if (!pages) {
+          // The worker-built render copy (design/27 §5): every shown slide, External relationships, macros
+          // and OLE binaries gone, outlines stripped. It fails closed: LibreOffice never sees a deck as
+          // uploaded (design/21), so a copy that cannot be built (no pool, a deck past the caps) fails the job.
           try {
-            const r = await this.imp.pptxForRendering(await readFile(input));
-            if (r.outlines) {
-              await writeFile(input, r.bytes);
+            const r = await renderCopyForDocument(input, dir, ctx.signal);
+            for (const n of r.notes.slice(0, 20)) ctx.log(`[warn] ${logSafe(n)}`);
+            if (r.outlines)
               ctx.log(
                 `text outlines removed from ${r.outlines} run(s): LibreOffice draws an outline on filled text as hollow letters`,
               );
-            }
           } catch (e) {
-            ctx.log(`[warn] could not prepare the slides for LibreOffice: ${errorMessage(e)}`);
+            if (ctx.signal.aborted) throw e;
+            throw new Error(
+              `The slides could not be prepared for LibreOffice, so the deck was not converted: ${logSafe(errorMessage(e))}`,
+            );
           }
-        }
-        if (!pages) {
           ctx.log('converting with LibreOffice');
-          pdf = await pptxToPdf(input, dir, { timeoutMs: t.soffice, signal: ctx.signal });
+          pdf = await sofficeToPdf(input, dir, { timeoutMs: t.soffice, signal: ctx.signal });
           ctx.progress(0.3);
         }
       }
@@ -531,6 +516,8 @@ export class ImportService {
       if (!pages.length) throw new Error('The document has no pages');
       ctx.log(`${pages.length} page(s)`);
       const title = baseName(name);
+      // The listed slide each page shows: LibreOffice leaves hidden slides out (design/27 §11).
+      const shows = text ? pagesOf(renderer, text.listed, pages.length) : undefined;
       const slides: Slide[] = [];
       for (let i = 0; i < pages.length; i++) {
         if (ctx.signal.aborted) throw new Error('cancelled');
@@ -547,7 +534,8 @@ export class ImportService {
           done[i + 1] = m.id;
           ctx.setPayload({ ...ctx.payload, done });
         }
-        const boxes = text?.slides.find((s) => s.index === i + 1)?.boxes;
+        const shown = shows?.[i];
+        const boxes = shown !== undefined && shown >= 0 ? text?.boxes.get(shown) : undefined;
         slides.push({
           id: newId(),
           objects: [],
@@ -556,6 +544,8 @@ export class ImportService {
             page: i + 1,
             imageMediaId,
             ...(boxes?.length ? { textBoxes: boxes } : {}),
+            // This page's own text, in the page's frame (uniform contain mapping): readers may use it.
+            ...(text ? { textAligned: true } : {}),
           },
         });
         ctx.progress(0.3 + (0.65 * (i + 1)) / pages.length);

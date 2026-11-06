@@ -9,6 +9,7 @@ import { BackgroundPicker } from './BackgroundPicker.tsx';
 import { change, replaceBase, save, useEditor } from './editorStore.ts';
 import { SlideSoundPanel } from './MediaPanels.tsx';
 import { resetSlideToTheme, themeOf, updateSlide } from './ops.ts';
+import { PptxSlideCard } from './PptxSlideCard.tsx';
 
 /**
  * Slide-level properties: lyric box, background override, the slide's own sound, loop duration, notes, theme
@@ -82,6 +83,17 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
           onChange={(v) => set((s) => ({ ...s, durationMs: Math.round(v * 1000) }))}
         />
       )}
+      {(slide.hidden || slide.pptx) && (
+        <label className="check" data-hidden-toggle>
+          <input
+            type="checkbox"
+            checked={!!slide.hidden}
+            disabled={readOnly}
+            onChange={(e) => set((s) => ({ ...s, hidden: e.target.checked || undefined }))}
+          />
+          Hidden: left out of the service (as in PowerPoint)
+        </label>
+      )}
       <TextField
         label="Notes"
         multiline
@@ -105,6 +117,7 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
           </button>
         </div>
       )}
+      <PptxSlideCard slide={slide} p={p} readOnly={readOnly} />
       {slide.imported && (
         <div className="card col small">
           <span>

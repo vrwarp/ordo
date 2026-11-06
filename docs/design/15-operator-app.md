@@ -199,6 +199,8 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
   splits the runs and paragraph styles with the change, placed by the textarea's caret; splitting and
   merging slides cut and join them with the lines (design/27 §11).
 - Property panel bound to the selected object's schema.
+- Pictures are drawn with their crop (`ImageObject.crop`), as every other drawer draws them; 'Replace'
+  drops the old picture's crop, which does not fit the new one (design/27 §15 M3).
 - Saves via `PUT /presentations/:id` with `rev`; 409 shows the reload dialog.
 - Disabled with a banner when the presentation is referenced by the live playlist.
 - Media playing in place (design/27 §8, §11 item 14; `views/editor/MediaPanels.tsx`, pure ops in
@@ -245,11 +247,43 @@ playlist's add panel move under the main pane. File pickers are a plain button t
 (Files, Photos): photos arrive as JPEG because Safari transcodes HEIC when the accept list does not name
 it (the hub does not accept HEIC), videos as MOV or MP4.
 
+## Media library
+
+The Media tab hides the pictures imports make for presentations (pages tagged `document`, native-import
+pictures tagged `pptx`) unless 'Show presentation pictures' is ticked (design/27 §11 item 15). Deleting
+media that stored presentations use names them in the confirmation first, since a missing picture refuses
+goLive: the hub answers such a `DELETE /media/:id` with 409 `media_in_use` (the titles in its message)
+unless it carries `?force=1`, which the tab sends once the user has confirmed.
+
 ## Settings
 
 Outputs and looks, audio devices and pairs, key map, Stream Deck pages, MIDI mappings,
 PINs, output tokens, backups, diagnostics export. Each page is a form over the matching
 `/settings/*` resource.
+
+## PowerPoint imports
+
+The import screen (`views/library/ImportTab.tsx`) asks how a PowerPoint is imported
+([design/27](27-pptx-native-renderer.md) §2, M3): 'Editable (recommended)', the native import, or 'Pictures
+(LibreOffice)', plus 'Extend plain backgrounds to 16:9' for the native import; radio buttons and a check box
+inside their labels, remembered per device (`ordo.pptxImport`, `ordo.pptxExtendBackgrounds`; the hub
+defaults to editable). A PDF is always pictures. A native import's card (`PptxImportCard.tsx`) shows the
+slides per class (editable, partly a picture, picture), slides made compact to fit the size budget, the
+LibreOffice follow-up as it waits, runs, finishes or fails, fonts to upload "for exact line breaks" (a link
+to the Fonts tab), the slides whose import approximated something (`Slide.pptx.notes`, numbered as in the
+editor) and the import's notes. Job results are read defensively (`lib/pptxImport.ts`): another hub version
+or a failed job shows less, never breaks the card, and deck text is only ever shown as text. Follow-up jobs
+(`pptx-lo`, `pptx-reference`, the text repair) are not listed as imports.
+
+In the editor, a slide imported natively has a 'From PowerPoint' card in the Slide panel
+(`PptxSlideCard.tsx`): its class, what was approximated, LibreOffice work still pending, and 'Show
+original', which lays the PowerPoint picture of the slide (`Slide.pptx.refMediaId`) over the canvas so a
+volunteer can compare; the canvas takes the pointer meanwhile. It is a view of the editor and changes
+nothing stored. When there are no pictures yet, turning it on saves unsaved edits, asks the hub for them
+(`POST /presentations/:id/pptx-reference` with `{ showPicture: [] }`: no slide switches to its picture) and
+follows the job; when it is done the editor takes the pictures over, keeping edits made meanwhile. A slide
+set to show its PowerPoint picture on the screens (`Slide.pptx.show`) says so, with 'Show the objects
+instead'.
 
 ## Service checklist
 

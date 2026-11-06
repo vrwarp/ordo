@@ -125,7 +125,7 @@ function slideRoot(pkg: Package, part: string): XNode | undefined {
     (b.length > 4096 ? rootTag(decodeText(b.subarray(0, SLIDE_HEAD_BYTES))) : undefined);
   if (head) return head;
   try {
-    return pkg.xml(part);
+    return pkg.xml(part, { keep: false }); // read again with the slide; never kept
   } catch {
     return undefined; // unreadable: quarantined when the slide is read
   }
@@ -254,16 +254,22 @@ export function readDeck(pkg: Package): DeckInfo {
   };
 }
 
-/** Follow a slide to its layout, master and theme. Throws when the slide part cannot be read. */
+/**
+ * Follow a slide to its layout, master and theme. Throws when the slide part cannot be read. The slide is
+ * read once and not cached; its layout, master and theme are cached and pinned (`Package.pin`) as they are
+ * found, so nothing read for this slide evicts them and the next slide that shares them finds them parsed.
+ */
 export function slideParts(pkg: Package, part: string): SlideParts {
-  // A slide is read once: its tree is not cached (layouts, masters and themes are).
   const slide = pkg.xml(part, { keep: false });
   if (!slide) throw new Error(`${clean(part)} is missing`);
   if (slide.name !== 'p:sld') throw new Error(`${clean(part)} is not a slide`);
   const out: SlideParts = { slide };
+  const pinned: string[] = [];
   /** A related part with the expected root element; anything else (a cycle, a wrong type) is not used. */
   const read = (p: string | undefined, root: string): XNode | undefined => {
     if (p === undefined) return undefined;
+    pinned.push(p);
+    pkg.pin(pinned);
     try {
       const n = pkg.xml(p);
       if (n && n.name !== root) {

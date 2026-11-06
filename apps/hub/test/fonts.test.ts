@@ -189,8 +189,13 @@ describe('fonts API', () => {
     expect(searchGoogleFonts('').length).toBeGreaterThan(40);
     expect(searchGoogleFonts('serif').some((f) => f.family === 'Lora')).toBe(true);
     expect(cssUrls('Open Sans')[0]).toMatch(/family=Open\+Sans:ital,wght@0,300;.*1,800/);
+    // Every unicode-range subset is a face of its own (design/27 §10).
     const faces = parseFontCss(FAKE_CSS);
-    expect(faces.find((f) => f.style === 'normal' && f.weights[0] === 400)?.url).toMatch(/latin400/);
+    const regular = faces.filter((f) => f.style === 'normal' && f.weights[0] === 400);
+    expect(regular.map((f) => [f.url.replace(/.*\//, ''), f.unicodeRange, f.subset])).toEqual([
+      ['ext400.woff2', 'U+100-2BA', 'latin-ext'],
+      ['latin400.woff2', 'U+0-FF,U+131', 'latin'],
+    ]);
     expect(faces.filter((f) => f.style === 'italic').map((f) => f.weights[0])).toEqual([300, 400, 500]);
   });
 
@@ -203,13 +208,14 @@ describe('fonts API', () => {
     expect(done.state).toBe('done');
     const css = requested.find((r) => r.url.includes('100..900'));
     expect(css?.ua).toMatch(/Chrome\/\d+/);
-    expect(requested.filter((r) => r.url.includes('gstatic')).length).toBe(2);
+    expect(requested.filter((r) => r.url.includes('gstatic')).length).toBe(3);
     const fonts = (await ed.json<Font[]>('/fonts')).filter((f) => f.family === 'Test Sans');
-    expect(fonts.map((f) => `${f.style}${f.weight}`).sort()).toEqual([
-      'italic300',
-      'italic400',
-      'italic500',
-      'normal400',
+    expect(fonts.map((f) => `${f.style}${f.weight} ${f.unicodeRange}`).sort()).toEqual([
+      'italic300 U+0-FF',
+      'italic400 U+0-FF',
+      'italic500 U+0-FF',
+      'normal400 U+0-FF,U+131',
+      'normal400 U+100-2BA',
     ]);
     expect(fonts.every((f) => f.source === 'google' && f.file.mime === 'font/woff2')).toBe(true);
     // Unknown family → failed job with a readable error.

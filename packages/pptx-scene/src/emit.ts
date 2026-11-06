@@ -32,9 +32,10 @@
  *   become `radius` (an ellipse is exact for a circle); a picture outline is a stroke-only shape above it.
  *   An unrotated picture reaching past ±2× the canvas (the render clamp, design/27 §12) is cut there and
  *   the cut folded into the crop, so the clamp never squeezes it.
- * - **Backgrounds**: a plain stretched picture whose aspect is known and matches a 16:9 slide →
- *   `backgroundMediaId` (drawn cover-fit); any other picture, one of unknown size included (a spilled part
- *   without `ParseOptions.pictureSize`) → a bottom image stretched over the slide area, on white; solid,
+ * - **Backgrounds**: a plain stretched picture known to be opaque whose aspect is known and matches a 16:9
+ *   slide → `backgroundMediaId` (drawn cover-fit, on black); any other picture, one that may be transparent
+ *   or of unknown size or alpha included (a spilled part without `ParseOptions.pictureSize`) → a bottom
+ *   image stretched over the slide area, on white; solid,
  *   gradient and pattern → a bottom rect over the whole 1920x1080 frame (`extendBackgrounds`, default) or
  *   the slide area; none → white, as PowerPoint shows it.
  * - **Lyric box** (design/27 §4 "Church mappings"): the slide's own body placeholder with the most
@@ -52,9 +53,11 @@ import type {
   TextObject,
 } from '@ordo/domain';
 import { apply, boxPx, decompose, lenPx, multiply, ptPx, slideRect } from './frame.ts';
+import { artInfo } from './hybrid.ts';
 import { isFooter, isTitle, masterClass } from './inherit.ts';
 import type {
   Affine,
+  ArtInfo,
   Classification,
   DeckScene,
   Element,
@@ -139,7 +142,18 @@ export interface EmittedSlide {
   notes: string[];
   /** Time spent emitting this slide, in ms. */
   ms: number;
+  /** Hybrid slides: what the art holds, for the LibreOffice follow-up (M3 item D). */
+  art?: ArtInfo;
+  /**
+   * Metafile pictures, left out of `slide` until LibreOffice converts them (M3 item D): each as the image
+   * object it becomes (`mediaId` `METAFILE_MEDIA`, replaced by the converted picture's) and the object it
+   * goes just under (absent: on top). The shape of the hub's `PptxLoSlide.metafileObjects`.
+   */
+  metafiles?: { part: string; object: ImageObject; before?: string }[];
 }
+
+/** The placeholder media id of a metafile's object until it is converted (`EmittedSlide.metafiles`). */
+export const METAFILE_MEDIA = 'pptxmedia:metafile';
 
 export interface EmitResult {
   slides: EmittedSlide[];
@@ -159,6 +173,8 @@ interface EmitCtx {
   crop: boolean;
   media: Map<string, string>;
   log: (msg: string) => void;
+  /** Metafile pictures set aside, with the index in the slide's objects where each would go. */
+  metafiles?: { part: string; object: ImageObject; at: number }[];
 }
 
 export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
@@ -179,7 +195,14 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       media,
       log,
     };
-    const slide = emitSlide(ctx, s);
+    const spans: [number, number][] = [];
+    ctx.metafiles = [];
+    const slide = emitSlide(ctx, s, spans);
+    const art = artInfo(s, scene.frame, spans, slide.objects);
+    const metafiles = ctx.metafiles.map(({ part, object, at }) => {
+      const before = slide.objects[at]?.id;
+      return { part, object, ...(before !== undefined ? { before } : {}) };
+    });
     return {
       index: s.index,
       ...(s.shown !== undefined ? { shown: s.shown } : {}),
@@ -189,6 +212,8 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       digest: digestOf(slide.objects),
       notes,
       ms: performance.now() - t0,
+      ...(art ? { art } : {}),
+      ...(metafiles.length ? { metafiles } : {}),
     };
   });
   return {
@@ -206,13 +231,18 @@ interface Emitted {
   area: number;
 }
 
-function emitSlide(ctx: EmitCtx, s: SlideScene): Slide {
+/** `spans` receives, per element, the range of `objects` it emitted (the art of a hybrid slide, `hybrid.ts`). */
+function emitSlide(ctx: EmitCtx, s: SlideScene, spans: [number, number][] = []): Slide {
   const objects: SlideObject[] = [];
   const slide: Slide = { id: ctx.newId(), objects };
   if (s.error) return slide;
   emitBackground(ctx, s, slide);
   const texts: Emitted[] = [];
-  for (const e of s.elements) if (!e.hidden) emitElement(ctx, e, objects, texts);
+  for (const e of s.elements) {
+    const at = objects.length;
+    if (!e.hidden) emitElement(ctx, e, objects, texts);
+    spans.push([at, objects.length]);
+  }
   if (objects.length > MAX_OBJECTS) {
     ctx.log(`more than ${MAX_OBJECTS} objects: the top ones are not drawn`);
     objects.length = MAX_OBJECTS;
@@ -268,7 +298,8 @@ function emitBackground(ctx: EmitCtx, s: SlideScene, slide: Slide): void {
     // An unknown size is not taken for the slide's aspect: cover-fitting a 4:3 photo would cut it.
     const sameAspect = p.px !== undefined && Math.abs(p.px.w / p.px.h - slideAspect) <= slideAspect * 0.01;
     const plain = !p.crop && !p.fillRect && !p.tile && p.alpha === undefined && !p.effects?.length;
-    if (sixteenNine && sameAspect && plain) {
+    // The slide background is drawn on black: a picture that may be transparent stays on white.
+    if (sixteenNine && sameAspect && plain && p.px?.alpha === false) {
       slide.backgroundMediaId = mediaOf(ctx, p.part);
       return;
     }
@@ -299,7 +330,19 @@ export function overWhite(c: OrdoRgba): OrdoRgba {
 
 function emitElement(ctx: EmitCtx, e: Element, out: SlideObject[], texts: Emitted[]): void {
   if (e.kind === 'residual') {
-    ctx.log(`${e.what} not drawn (LibreOffice art comes in M3)`);
+    if (e.picture) {
+      // A metafile: the object it becomes once converted, set aside (its part stays out of `EmitResult.media`).
+      const object = pictureObject(
+        { ...ctx, media: new Map(), mediaId: () => METAFILE_MEDIA },
+        e.xf,
+        e.picture,
+        e.geom,
+        e.adj,
+      );
+      if (object) ctx.metafiles?.push({ part: e.picture.part, object, at: out.length });
+      return;
+    }
+    ctx.log(`${e.what} drawn by LibreOffice as a picture`);
     return;
   }
   if (e.kind === 'picture') {

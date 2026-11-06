@@ -19,6 +19,7 @@ import {
   Section,
   Slide,
 } from './schemas.ts';
+import { resolvedBytes, resolvedSizeWarning } from './size.ts';
 
 /**
  * Turning a playlist into the frozen copy a goLive carries (design/25 "quarantine"). Shared by the hub
@@ -263,6 +264,11 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
     files,
     manifestId: opts.digest(parts),
   };
+  // Too large for an operator takeover's hand-back (design/27 §3.4): live with a warning.
+  const sizeWarning = resolvedSizeWarning(resolvedBytes(resolved));
+  if (sizeWarning) problems.push({ reason: sizeWarning });
+  // Slides whose LibreOffice art or page picture is still being made go live as they are (design/27 §5).
+  problems.push(...pendingSlides(resolved));
   if (problems.length) {
     resolved.degraded = degradedEntries(resolved, problems);
     for (const d of resolved.degraded)
@@ -301,4 +307,32 @@ export function localDigest(parts: string[]): string {
     for (let l = 0; l < lanes.length; l++) lanes[l] = Math.imul(lanes[l]! ^ 0x1f, 0x01000193) >>> 0;
   }
   return `pc${lanes.map((x) => x.toString(16).padStart(8, '0')).join('')}`.slice(0, 26);
+}
+
+/** The reason a slide waiting for the LibreOffice follow-up of a PowerPoint import is listed in `degraded`. */
+export const PENDING_SLIDE_REASON =
+  'PowerPoint slide still being drawn by LibreOffice: its chart, art or page picture is missing until then';
+
+/** The reason a slide LibreOffice could not draw (`Slide.pptx.failed`) is listed in `degraded`. */
+export const FAILED_SLIDE_REASON =
+  'PowerPoint slide LibreOffice could not draw: its chart, art or page picture is missing';
+
+/**
+ * Slides of a native PowerPoint import that still wait for LibreOffice (`Slide.pptx.pending`) or that it
+ * could not draw (`Slide.pptx.failed`).
+ */
+function pendingSlides(resolved: ResolvedPlaylist): GoLiveProblem[] {
+  const out: GoLiveProblem[] = [];
+  const flagged = (s: Slide) => (s.pptx?.pending || s.pptx?.failed) && !s.hidden;
+  // A hidden slide gives no cue (`expandCues`): there is no cue to report it at.
+  for (const p of Object.values(resolved.presentations))
+    for (const sec of p.sections)
+      for (const s of sec.slides)
+        if (flagged(s) && out.length < DEGRADED_MAX)
+          out.push({
+            presentationId: p.id,
+            slideId: s.id,
+            reason: s.pptx?.pending ? PENDING_SLIDE_REASON : FAILED_SLIDE_REASON,
+          });
+  return out;
 }

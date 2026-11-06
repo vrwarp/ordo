@@ -5,7 +5,12 @@
  * never held in memory. Nothing of the archive itself is loaded into memory.
  *
  * Supports stored and deflated entries, zip64 archives (over 4 GB or 65,535 entries) and nested
- * `.proPlaylist` bundles, which are expanded under `<bundle path>/` like `readZip` does.
+ * `.proPlaylist` bundles, which are expanded under `<bundle path>/` like `readZip` does (`nested: false`
+ * turns that off: a PowerPoint deck never nests a zip that should be read).
+ *
+ * Callers reading an untrusted document (design/27 §12) also leave out what they never read (`skip`), cap
+ * every entry kept in memory (`maxEntryBytes`) and the bytes spilled in all (`maxSpillBytes`): an entry over
+ * either cap is listed in `skipped` and never read, so one oversized part cannot fail the whole archive.
  */
 import { createReadStream, createWriteStream } from 'node:fs';
 import { type FileHandle, open, readFile, rm } from 'node:fs/promises';
@@ -24,7 +29,16 @@ export type ExtractedZip = {
   onDisk: Map<string, string>;
   inMemoryBytes: number;
   entries: number;
+  /**
+   * Entries left out by `maxEntryBytes` ('size') or `maxSpillBytes` ('budget'), never read; at most
+   * `MAX_SKIPPED_LISTED` are listed, `skippedCount` counts them all. Entries `skip` leaves out are not listed.
+   */
+  skipped: { path: string; bytes: number; reason: 'size' | 'budget' }[];
+  skippedCount: number;
 };
+
+/** Entries listed in `ExtractedZip.skipped` (the rest are only counted). */
+export const MAX_SKIPPED_LISTED = 1_000;
 
 export type ExtractOptions = {
   /** Directory that receives spilled entries (must exist). */
@@ -33,6 +47,28 @@ export type ExtractOptions = {
   spill: (path: string, uncompressedSize: number) => boolean;
   maxInMemoryBytes?: number;
   signal?: AbortSignal;
+  /**
+   * Return true to leave this entry out entirely: it is neither read nor returned, and its compression
+   * method and flags do not matter. Called before `spill`, with the normalized path and the declared size.
+   */
+  skip?: (path: string, uncompressedSize: number) => boolean;
+  /** Expand nested `.proPlaylist`/`.probundle` zips (default true); false reads them as ordinary entries. */
+  nested?: boolean;
+  /**
+   * The largest entry kept in memory (its declared size, which inflation never exceeds). A larger entry the
+   * caller does not spill is listed in `skipped` ('size') instead of being read.
+   */
+  maxEntryBytes?: number;
+  /**
+   * Bytes spilled to disk in all (declared sizes). An entry that would pass the budget is listed in
+   * `skipped` ('budget') instead of being written; later, smaller entries may still fit.
+   */
+  maxSpillBytes?: number;
+  /**
+   * Refuse a zip whose entries' data overlap (a local header and its compressed data within another
+   * entry's): a few KB could otherwise name one large stream many times. Untrusted decks set it.
+   */
+  distinct?: boolean;
 };
 
 type Entry = {
@@ -189,7 +225,7 @@ async function dataOffset(fh: FileHandle, e: Entry): Promise<number> {
   return e.localHeaderOffset + 30 + h.readUInt16LE(26) + h.readUInt16LE(28);
 }
 
-type Budget = { entries: number; bytes: number; inMemory: number; nested: number };
+type Budget = { entries: number; bytes: number; inMemory: number; nested: number; spilled: number };
 
 async function* limited(src: AsyncIterable<Buffer>, max: number, name: string): AsyncGenerator<Buffer> {
   let n = 0;
@@ -215,19 +251,38 @@ async function extractInto(
     const cd = await centralDirectory(fh, size);
     if (cd.entries > ZIP_MAX_ENTRIES) throw new Error(`zip has more than ${ZIP_MAX_ENTRIES} entries`);
     const entries = parseCentral(await readAt(fh, cd.offset, cd.length), cd.entries);
+    if (opts.distinct) assertDistinct(entries);
     for (const e of entries) {
       if (opts.signal?.aborted) throw new Error('cancelled');
       if (e.name.endsWith('/')) continue;
       const path = safeEntryPath(e.name);
       if (!path || isJunk(path)) continue;
+      const full = prefix ? `${prefix}/${path}` : path;
+      if (opts.skip?.(full, e.uncompressedSize)) {
+        budget.entries++;
+        if (budget.entries > ZIP_MAX_ENTRIES) throw new Error(`zip has more than ${ZIP_MAX_ENTRIES} entries`);
+        continue;
+      }
       if (e.flags & 0x1) throw new Error(`zip entry ${e.name} is encrypted`);
       if (e.method !== 0 && e.method !== 8)
         throw new Error(`zip entry ${e.name} uses an unsupported compression method (${e.method})`);
       budget.entries++;
       if (budget.entries > ZIP_MAX_ENTRIES) throw new Error(`zip has more than ${ZIP_MAX_ENTRIES} entries`);
+      const nested = (opts.nested ?? true) && depth < 2 && /\.(proplaylist|probundle)$/i.test(path);
+      const spill = nested || opts.spill(full, e.uncompressedSize);
+      if (spill && !nested && opts.maxSpillBytes !== undefined) {
+        if (budget.spilled + e.uncompressedSize > opts.maxSpillBytes) {
+          skipEntry(out, full, e.uncompressedSize, 'budget');
+          continue;
+        }
+        budget.spilled += e.uncompressedSize;
+      }
+      if (!spill && opts.maxEntryBytes !== undefined && e.uncompressedSize > opts.maxEntryBytes) {
+        skipEntry(out, full, e.uncompressedSize, 'size');
+        continue;
+      }
       budget.bytes += e.uncompressedSize;
       if (budget.bytes > ZIP_MAX_TOTAL_BYTES) throw new Error('zip expands beyond 8 GB');
-      const full = prefix ? `${prefix}/${path}` : path;
       const start = await dataOffset(fh, e);
       if (start + e.compressedSize > size) throw new Error(`zip entry ${e.name} is out of range`);
       // An error thrown by `limited` reaches pipeline's caller as a bare AbortError when the sink is an
@@ -252,8 +307,6 @@ async function extractInto(
           throw own ?? err;
         }
       };
-      const nested = depth < 2 && /\.(proplaylist|probundle)$/i.test(path);
-      const spill = nested || opts.spill(full, e.uncompressedSize);
       if (spill) {
         const dest = join(opts.dir, `${nested ? 'bundle' : 'entry'}-${++budget.nested}${extOf(path)}`);
         await read(createWriteStream(dest));
@@ -293,6 +346,23 @@ async function extractInto(
   out.entries = budget.entries;
 }
 
+/**
+ * Throw when two entries' data overlap: each entry takes at least its 30-byte local header and its compressed
+ * size from its offset (names, extra fields and data descriptors only add to that).
+ */
+function assertDistinct(entries: readonly Entry[]): void {
+  const spans = entries
+    .map((e) => [e.localHeaderOffset, e.localHeaderOffset + 30 + e.compressedSize] as const)
+    .sort((a, b) => a[0] - b[0]);
+  for (let i = 1; i < spans.length; i++)
+    if (spans[i]![0] < spans[i - 1]![1]) throw new Error('zip entries overlap: the archive is malformed');
+}
+
+function skipEntry(out: ExtractedZip, path: string, bytes: number, reason: 'size' | 'budget'): void {
+  out.skippedCount++;
+  if (out.skipped.length < MAX_SKIPPED_LISTED) out.skipped.push({ path, bytes, reason });
+}
+
 function tooBig(max: number): Error {
   return new Error(
     `The zip holds more than ${Math.round(max / 1024 ** 2)} MB of documents; import large libraries from a folder instead`,
@@ -320,7 +390,14 @@ async function isZipFile(path: string): Promise<boolean> {
  * in memory (bounded by `maxInMemoryBytes`, default 256 MB). Same path rules and limits as `readZip`.
  */
 export async function extractZip(zipPath: string, opts: ExtractOptions): Promise<ExtractedZip> {
-  const out: ExtractedZip = { files: new Map(), onDisk: new Map(), inMemoryBytes: 0, entries: 0 };
-  await extractInto(zipPath, '', out, opts, { entries: 0, bytes: 0, inMemory: 0, nested: 0 }, 0);
+  const out: ExtractedZip = {
+    files: new Map(),
+    onDisk: new Map(),
+    inMemoryBytes: 0,
+    entries: 0,
+    skipped: [],
+    skippedCount: 0,
+  };
+  await extractInto(zipPath, '', out, opts, { entries: 0, bytes: 0, inMemory: 0, nested: 0, spilled: 0 }, 0);
   return out;
 }

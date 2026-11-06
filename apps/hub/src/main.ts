@@ -74,7 +74,11 @@ async function runChild(name: string): Promise<void> {
     const { createLibraryProcess } = await import('./libproc.ts');
     const p = await createLibraryProcess(
       {},
-      { secret, onChanges: (changes, seq) => sendToParent({ t: 'changes', changes, seq }) },
+      {
+        secret,
+        onChanges: (changes, seq) => sendToParent({ t: 'changes', changes, seq }),
+        onStats: (library) => sendToParent({ t: 'stats', library }),
+      },
     );
     if (process.env.ORDO_LIVE_URL) p.setLiveUrl(process.env.ORDO_LIVE_URL);
     try {
@@ -111,6 +115,7 @@ async function runChild(name: string): Promise<void> {
     if (m.t === 'library') p.setLibrary(m.url, m.state);
     else if (m.t === 'changes') p.onLibraryChanges(m.changes, m.seq);
     else if (m.t === 'status') p.setStatus(m.processes);
+    else if (m.t === 'stats') p.setLibraryStats(m.library);
   });
   onSignals(
     () => p.close(),

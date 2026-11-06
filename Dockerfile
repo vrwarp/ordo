@@ -27,10 +27,16 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 FROM node:22-bookworm-slim AS runtime
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="ordo-hub" org.opencontainers.image.version=$VERSION
+# Fonts (design/27 §10): metric-compatible substitutes (Carlito, Caladea, Liberation), the Noto script
+# fallbacks and Inter. The hub registers them as bundled library fonts (ORDO_FONTS_DIR) and LibreOffice draws
+# with the same files. All are SIL OFL 1.1 (apps/hub/src/fonts/LICENSES.md); their packages' copyright files
+# stay in /usr/share/doc.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ffmpeg poppler-utils libreoffice-impress chromium fonts-dejavu fonts-liberation2 tini ca-certificates \
- && rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/*
+      ffmpeg poppler-utils libreoffice-impress chromium tini ca-certificates \
+      fonts-dejavu fonts-liberation2 fonts-crosextra-carlito fonts-crosextra-caladea fonts-noto-core fonts-inter \
+ && rm -rf /var/lib/apt/lists/* /usr/share/man/* \
+ && find /usr/share/doc -mindepth 1 -maxdepth 1 ! -name 'fonts-*' -exec rm -rf {} +
 WORKDIR /app
 COPY --from=build --chown=node:node /out/hub/node_modules /app/apps/hub/node_modules
 COPY --from=build --chown=node:node /src/apps/hub/package.json /app/apps/hub/package.json
@@ -45,7 +51,8 @@ ENV NODE_ENV=production \
     ORDO_PORT=8080 \
     ORDO_HOST=0.0.0.0 \
     ORDO_IMPORT_ROOTS=/data/import:/import \
-    ORDO_CHROMIUM=/usr/bin/chromium
+    ORDO_CHROMIUM=/usr/bin/chromium \
+    ORDO_FONTS_DIR=/usr/share/fonts
 USER node
 VOLUME ["/data"]
 EXPOSE 8080

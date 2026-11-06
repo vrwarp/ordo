@@ -26,6 +26,42 @@ const out = emitSlides(scene, { mediaId }); // ordo Slides; pictures as 'pptxmed
   the name index (`firstChild`, `firstOfAny`), loops over a node's children stop at their bound, and what is
   read from a shared node (support marks, path coverage, blip effects, themes, candidate shapes by id) is
   cached per node for the deck. Parsed trees are cached by estimated size (`XML_CACHE_BYTES`), slides not at all.
+  What a run, paragraph or shape does with a deck string from a shared node is bounded too: numbers longer
+  than `MAX_NUM_CHARS` are not numbers, typefaces are cut to `TYPEFACE_SCAN` before they are cleaned
+  (memoised), a bullet keeps its first character.
+
+## M3: the hub's entry point (`convertDeck`) and hardening
+
+`convertDeck(src, { range, pictureSize, newId, mediaId, extendBackgrounds, crop })` is the hub's
+`pptx-scene` pool task: the slides of one batch (`range`, by `SlideRef.index`) parsed and emitted, with the
+deck facts a batch needs (`frame`, `sections`, `listed`). It gives exactly what `emitSlides(parseDeck(src,
+opts), opts)` gives, but emits each slide as soon as it is read, so one slide's IR is alive at a time.
+
+Hardening after the M1 re-review (M3 item A; each case a crafted deck under the §14.3 bound of 5 s,
+`limits.test.ts`, `opc.test.ts`):
+- **Shared strings.** A 7M-character typeface, bullet font or bullet character and a 7M-digit size in
+  `defaultTextStyle` cost each of thousands of runs or paragraphs nothing: `typefaceName` cuts to
+  `TYPEFACE_SCAN` (1,024) before its regular expression runs and memoises per string (4,096 entries), so
+  `themeFont` and every run's typefaces are lookups; `num` refuses values over 64 characters; a bullet's
+  character is its first code point.
+- **Shared nodes.** A gradient's stop list is scanned for at most `MAX_GRADIENT_SCAN` (64) children, so an
+  inherited gradient with 200,000 other children costs each shape and run nothing; a colour map is read by
+  its 12 names, not by its attributes (a master `p:clrMap` with 600,000 attributes, read per slide).
+- **Decorations** (`walk.ts`): the master's and layout's shapes are walked once per layout and colour map
+  and shared by every slide that shows them (each slide gets shallow copies, which classification marks;
+  their notes are logged on every slide); decorations that read the slide's own background (`useBgFill`)
+  are walked per slide. A layout decoration of 60,000 runs under 300 slides is read once.
+- **Cache** (`opc.ts`): `XML_CACHE_BYTES` is 256 MB, a slide's working set (its layout, master and theme
+  each at the tag limit); `slideParts` pins the parts it finds (`Package.pin`), so nothing read for a
+  slide evicts them; a slide's relationships are held only while it is read, and `.rels` and content-type
+  trees are never kept (their lists are, charged `REL_BYTES` each). A deck whose layout, master and theme
+  are each near the tag limit parses each once. Relationship lists are indexed by type once
+  (`relOfType` no longer scans a layout's 150,000 relationships per slide).
+- **Backgrounds.** `pictureSize` also tells whether a picture may be transparent (`PictureHeader.alpha`: a
+  PNG alpha channel or `tRNS`, a GIF's transparent colour, a 32-bit BMP, WebP's alpha flag; JPEG never;
+  undefined when the bytes end first), carried in `PictureFill.px.alpha` and asked of the caller through
+  `ParseOptions.pictureSize`. Only a picture known to be opaque becomes `backgroundMediaId` (drawn
+  cover-fit on black); one that may be transparent stays the bottom image on white, as PowerPoint draws it.
 
 ## Module map
 
@@ -45,6 +81,8 @@ const out = emitSlides(scene, { mediaId }); // ordo Slides; pictures as 'pptxmed
 | `background.ts` | Slide → layout → master background                                                                                | C      |
 | `emit.ts`       | IR → ordo objects, media placeholders, digest                                                                     | C      |
 | `classify.ts`   | Census tiers T1-T5, reasons, slide class                                                                          | F      |
+| `notes.ts`      | `readNotes`: a slide's speaker notes (notesSlide body placeholders), bounded                                      | M3 B   |
+| `transition.ts` | `readTransition`, `readSlideTransition` (a slide's tail only), `showLoops` (`p:showPr loop`)                      | M3 B   |
 | `ir.ts`         | The scene IR (types only)                                                                                         | shared |
 | `context.ts`    | `SlideCtx`, `slideContext`                                                                                        | shared |
 | `log.ts`        | `clean`, `noteList`                                                                                               | shared |
@@ -84,7 +122,8 @@ Contracts:
   parts identical (it matched fast-xml-parser on 26,980 real parts, apart from top-level whitespace,
   merged CDATA and decoded numeric references).
 - `openPackage(src, log?, opts?): Package` with `find`, `has`, `bytes`, `text`, `xml`, `rels`, `rel`,
-  `relOfType` (a short type name or a full URI, Strict or Transitional), `contentType`, `partsOfType`, `log`.
+  `relOfType` (a short type name or a full URI, Strict or Transitional), `contentType`, `partsOfType`, `log`,
+  `pin` (M3: the parts the slide being read inherits from, never evicted while pinned).
   `find` folds case: the first of names that differ only by case is the part, however a name is spelled.
   `xml(name, { keep }?)` returns the cached root, undefined when the part is missing, and throws when it is
   over budget or malformed; `keep: false` parses a part not cached yet without caching it (`slideParts`
@@ -107,9 +146,10 @@ Contracts:
 
 Done (design/27 §1, §4 "Order and identity", "Alternate content", §12):
 - **Package.** Parts found without case (first of a clash) and under percent-decoded names; text by BOM,
-  else the declared encoding, else UTF-8; parsed trees cached within an estimated 192 MB (characters plus
-  `XML_NODE_BYTES` = 300 per element, about what V8 retains; LRU; two parts at the tag limit fit, so a
-  slide's layout and master stay parsed), slide parts never cached. Content-type
+  else the declared encoding, else UTF-8; parsed trees cached within an estimated 256 MB (characters plus
+  `XML_NODE_BYTES` = 300 per element, about what V8 retains; LRU; a slide's layout, master and theme at the
+  tag limit fit, and are pinned while the slide is read), slide parts and their relationships never
+  cached. Content-type
   overrides naming missing parts ignored. Relationship targets: fragment dropped, percent-decoded, `.`/`..`
   applied never above the root, leading `/` the root; a duplicate `Id` keeps the first; targets over 2,048
   characters, and internal ones resolving to part names over 512 (`MAX_PART_NAME_CHARS`, §12), ignored; `TargetMode="External"` never resolved or fetched, noted as `external <type> target
@@ -141,9 +181,9 @@ Contracts:
 - `readTheme(root): Theme` (`colors`, `major`/`minor` `FontSet` with `scripts`, `fills`, `lines`, `effects`,
   `bgFills`), `themeFont(theme, typeface, script?)`, `langScript(lang)`, `styleFont(theme, fontRef, ctx)`,
   `styleLine(theme, lnRef, ctx)`, `styleEffect(theme, effectRef, ctx)`, `parseHex`, `hexRgba` (defined in
-  `color.ts`, re-exported), `SCHEME_COLORS`, `MAX_TYPEFACE`, `MAX_SCRIPT_FONTS`, `typefaceName` (control
-  characters removed: a form feed in a family breaks the Canvas font shorthand). `readTheme` is memoised
-  per root.
+  `color.ts`, re-exported), `SCHEME_COLORS`, `MAX_TYPEFACE`, `MAX_SCRIPT_FONTS`, `typefaceName` (cut to
+  `TYPEFACE_SCAN` first, then control characters removed: a form feed in a family breaks the Canvas font
+  shorthand; memoised per string). `readTheme` is memoised per root.
 - `colorContext(theme, clrMap, clrMapOvr?, layoutClrMapOvr?): ColorCtx` (master map, then the layout's
   override, then the slide's, attribute by attribute), `withPhClr`, `colorIn(parent, ctx)`,
   `readColor(el, ctx)`, `applyModifiers(c, el)`, `readFill(parent, ctx, blip?)`, `fillOf(el, ctx, blip?)`,
@@ -197,7 +237,7 @@ Contracts:
   `crop`), `CroppedImage`, `MEDIA_PREFIX`, `digestOf`, `legacyColor`, `legacyText`, `dominant`,
   `placePicture`, `insetBox`, `marginOf`, `cutToClamp`. Media ids are `pptxmedia:<n>` (first-use order).
 - Shared additions: `SlideCtx.themePart` (theme picture fills), `PictureFill.px` (header-sniffed pixel
-  size, or `SlideCtx.pictureSize` for a spilled part), `PictureElement.adj`, `ShapeElement.coverage`;
+  size and, since M3, `alpha`, or `SlideCtx.pictureSize` for a spilled part), `PictureElement.adj`, `ShapeElement.coverage`;
   `ParseOptions.pictureSize(part)` (asked once per part, checked) and `pictureSize` exported from the index.
 
 Done (design/27 §4, §15 M1):
@@ -227,8 +267,8 @@ Done (design/27 §4, §15 M1):
   clips as `radius`; picture outlines as stroke-only shapes; custom geometry as its rect only when it fills
   half its box; the paragraphs' common start margin folded into the text box, since bullets are not drawn;
   an unrotated picture past ±2× the canvas cut there with the cut folded into its crop); backgrounds (16:9
-  plain picture of a known size and the slide's aspect → `backgroundMediaId`, other pictures, unknown sizes
-  included, a bottom image on a white rect over the slide area, colours a bottom rect over the frame or the slide area
+  plain picture known to be opaque, of a known size and the slide's aspect → `backgroundMediaId`, other
+  pictures, unknown sizes or alpha included, a bottom image on a white rect over the slide area, colours a bottom rect over the frame or the slide area
   composited on white, none white: PowerPoint lays every background on white);
   the lyric box of §4 "Church mappings" (not the bilingual rule); ≤ 1,000 objects.
 - `crop`: written from srcRect (and fillRect clipping) by default, now that `ImageObject.crop` is in the
@@ -285,7 +325,9 @@ Done:
   `both` draws both columns, and `--no-ppv` removes pptx-preview from either.
 - **Converting** (`convertDeck`, run by `convertDeckIsolated` in a worker thread with a 512 MB heap and a
   5-minute timeout per deck, kept warm between decks as the hub's pool workers are: a deck that exhausts
-  either is a note, and the worker is replaced). A deck link whose file is gone is skipped with a line in
+  either is a note, and the worker is replaced; the worker loads its TypeScript through tsx's loader, as
+  the hub's pool does, so it converts under a test runner too). Spilled parts are found through an index of
+  their names built once per deck. A deck link whose file is gone is skipped with a line in
   the log, not scored as a failed conversion. XML and `.rels` parts of 8 MB or less stay in
   memory, up to 64 MB in all; every other part is spilled, and `parseDeck` gets the pixel size of a spilled
   picture from its first bytes (`spilledPictureSize`). Only the pictures the slides use are kept, under generated names

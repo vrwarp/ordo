@@ -78,6 +78,9 @@ importers:
       '@ordo/pptx-render':
         specifier: workspace:*
         version: link:../../packages/pptx-render
+      '@ordo/pptx-scene':
+        specifier: workspace:*
+        version: link:../../packages/pptx-scene
       '@ordo/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

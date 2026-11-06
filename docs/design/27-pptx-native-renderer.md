@@ -205,9 +205,9 @@ POST /import/document  (423 while live, ≤1 GiB, zip+.pptx sniff, stored by SHA
      6 remap placeholders, sanitizePresentation, lib.savePresentation ── version 1 (native objects for every
        slide; slides waiting for LibreOffice carry pptx.pending)
  heavy job 'pptx-lo' (re-queued with backoff while the presentation is live-locked)
-     pool 'pptx-render-copy' ─► soffice once (each art slide twice: forced white and forced black background;
+     pool 'pptx-render-copy' ─► soffice once (each art slide twice: forced white and forced yellow background;
      picture-class slides once) ─► pdftoppm -r 288 -f k -l k per needed page ─► pool 'pptx-art'
-     (alpha = 1 − max(white − black)/255, colour = black/alpha, bounding-box crop) ─► PNG ─► addReadyPicture
+     (alpha from the two pages, colour un-blended, bounding-box crop) ─► PNG ─► addReadyPicture
      ─► patch slides whose digest is unchanged ── version 2
  goLive ─► resolvePlaylist: referencedMediaIds (+play clips, slide audio, posters, refMediaId; those optional)
         ─► referencedFontFamilies (+run, bullet and fallback fonts; CJK faces when the text has CJK)
@@ -346,7 +346,7 @@ export const SlideSound = z.object({                     // M5: one sound per sl
   slides: z.number().int().min(1).max(999).optional(),   // numSld: plays across N shown slides of the same item
 });
 // Slide
-  hidden: z.boolean().optional(),                        // M3: cue flagged hidden; Next/Prev/auto-advance skip it
+  hidden: z.boolean().optional(),                        // M3: cue flagged hidden; Next/Prev/auto-advance skip it (wave 1: no cue yet, as §15 M3 says)
   transition: Transition.optional().catch(undefined),    // M3: cue transition = item ?? slide ?? presentation
   audio: SlideSound.optional(),                          // M5
   pptx: z.object({                                       // M3: provenance only, never drawable content
@@ -448,6 +448,12 @@ Whole presentations travel in goLive (to every client, into the journal, snapsho
 | Library snapshot | its size is reported in hub health; a test keeps a year of weekly 17-slide sermon decks under 6 MB. A summary-only snapshot (bodies fetched on open) is the follow-up if a venue passes 32 MB; it is not part of this design. | health, test |
 | Revisions | unchanged policy (50 or 30 days); a 1 MB presentation edited often costs ≤ 50 MB, noted in design/12 | docs |
 
+As built in M3 (`packages/domain/src/size.ts`):
+- `planImportSizes(sizes, compact, reserve)` keeps 256 KiB of the 4 MiB for the presentation's own fields, sections, arrangement and `source.log`, and returns the reason per compact slide ('slide' over 64 KB, 'presentation' for the tail) and the tail's first slide: the tail is contiguous, "slide n and later". `compactSlide` is the version-1 compact form (no objects, `pending`, the text in `artText`); `compactSlideBytes` adds version 2's page picture and text boxes, so a compact slide counts its text twice. A 2,000-slide deck of 300-character slides keeps about 200 editable slides that way; if version 2 dropped `artText` once aligned text boxes carry the text, it would keep about 800.
+- `previewSlice` also sends the slide after the previewed one, for the next-slide band. The operator refuses a preview over 15 MiB, warns on save above 4 MiB and refuses above 32 MiB.
+- Above 15 MiB the operator never sends `live.adopt`: it holds the service to End service and then ends the hub's older copy with its idle state (design/17 "Hub returns"). A 13 MiB playlist gets the warning and still hands back; §14.10's two checks are separate thresholds.
+- Hub health reports `librarySnapshotBytes` (design/12 "Logging and diagnostics"). A year of weekly synthetic sermon decks (52 × 17 slides through the converter, 5 pictures each) measures 1.5 MB.
+
 ## 4. Parser and converter rules
 
 **Order and identity**
@@ -513,6 +519,9 @@ Whole presentations travel in goLive (to every client, into the journal, snapsho
   - The display need is the widest use of the part in the deck: the box width at 3840 px ÷ the visible crop fraction, capped at 8,192 px.
   - A source more than 1.25× its need is downscaled by ffmpeg: JPEG q90 when opaque, PNG or lossless WebP with alpha. This is the same rule the hub already applies to uploaded images over 3840 px, which a ready-picture path would otherwise bypass.
   - TIFF and BMP become PNG. Animated GIF, APNG and animated WebP become a first-frame PNG (logged).
+  - Pictures are drawn as stored. PowerPoint ignores a JPEG's EXIF orientation (the boxes of tagged photos in
+    the worship set have the stored aspect) and browsers apply it, so preparation removes it: the tag is set
+    to 1 in a kept copy, and conversions do not turn the picture.
   - The original stays in the stored deck, so a re-import can use it.
   - Pictures are stored with alpha through `addReadyPicture` (ready, no job), deduplicated by SHA-256 of the prepared bytes plus the source part's hash.
 
@@ -609,13 +618,13 @@ It is used by `drawSlide2D`, `slideVisible` (`plan.ts:138-144`), both `slideImag
   1. builds the render copy on the pool (`pptx-render-copy`);
   2. runs soffice **once**;
   3. runs `pdftoppm -r 288 -f k -l k` per needed page (page k = the k-th slide in the render copy, so hidden slides cannot shift pages);
-  4. runs pool task `pptx-art`: for each art slide, from its white and black pages, alpha = 1 − max(white − black)/255 and colour = black/alpha, cropped to the art's bounding box. Picture-class pages are contain-fitted at the slide's aspect, 3840 px wide at 16:9;
+  4. runs pool task `pptx-art`: for each art slide, from its two pages, alpha and colour, cropped to the art's bounding box. Over white and black that would be alpha = 1 − max(white − black)/255 and colour = black/alpha; the second page is yellow (#FFFF00) instead, because LibreOffice draws text of automatic colour white on any background of luminance 156 or less (verified in M3 with a probe deck: automatic black text came back white over black), so alpha = 1 − (white − yellow)/255 in the blue channel and colour = (yellow − (1 − alpha)·yellow background)/alpha. Picture-class pages are contain-fitted at the slide's aspect, 3840 px wide at 16:9;
   5. `addReadyPicture`;
   6. converts metafiles to PNG;
   7. patches only the slides whose objects still match `pptx.digest`: the art object replaces the art-range objects. A slide someone edited meanwhile gets the art as an extra locked object at the end, plus a note, and keeps the operator's objects.
 
 **Render copy** (built in the worker, linear tag scans, part budgets):
-- only the needed slides in `sldIdLst`; every art slide appears twice, once with its background forced to white and once to black (slide, layout and master backgrounds overridden, master shapes hidden);
+- only the needed slides in `sldIdLst`; every art slide appears twice, once with its background forced to white and once to yellow (step 4; slide, layout and master backgrounds overridden, master shapes hidden);
 - on art slides, every element outside the art and every native element inside the range is removed, so only the art's own elements are printed;
 - on picture-class slides, nothing is removed except media payloads;
 - media payload relationships are removed (posters stay);
@@ -931,7 +940,20 @@ A scene is several draws, so it is composed at full alpha before it is weighted:
 - `referencedFontFamilies` and `jobFontFamilies` include run fonts, bullet fonts and `fallbackFonts`, so goLive ships them by exact family and outputs pre-cache them in OPFS.
 - Font loads that fail are retried with backoff instead of only being logged.
 
+**As built in M3** (`apps/hub/src/fonts/bundled.ts`, licences in `apps/hub/src/fonts/LICENSES.md`):
+- The image installs `fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter` (bookworm, all SIL OFL 1.1) and keeps their copyright files. `ORDO_FONTS_DIR` (the image sets `/usr/share/fonts`) is where the hub looks; unset, nothing is registered.
+- Faces: Inter, Carlito, Caladea, Liberation Sans, Serif and Mono and Noto Sans in regular, italic, bold and bold italic; the Noto script faces in regular and bold.
+- Registration runs at every start. An unchanged file changes nothing. A changed file (a newer image) replaces the row's file. A face the library already has from an upload or Google Fonts (same family, weight, style and range) is left alone. Bundled rows no longer listed are removed. Bundled rows cannot be deleted (409).
+- The Hebrew, Arabic, Devanagari, Tamil, Thai and Myanmar faces carry their script's `unicodeRange`, so a script fallback listed before a deck's own family never draws its Latin text. Noto Sans has no range, because people also pick it for Latin text.
+- Liberation Sans Narrow is not bundled: only Liberation 1.x has it, under the GPL with a font exception.
+- The output-config fonts are every library face except the CJK fallback families (`isOnDemandFontFamily`: the Han, Kana and Hangul entries of `SCRIPT_FALLBACK_FONTS`), unless a look's text style names one.
+- The goLive scan adds `SCRIPT_FALLBACK_FONTS` of every script in the presentations' text objects (`scriptFontFamilies` in `resolve.ts`), so a manifest also carries the bundled face of each script it uses. Han in a text with Kana or Hangul counts as Japanese or Korean. Han alone names every CJK family, and goLive ships those the venue added.
+
 **Google Fonts.** `parseFontCss` (`google.ts:72-84`) keeps every unicode-range subset. Each subset is a Font row with `unicodeRange`, which the three drawers pass to `FontFace`. A bilingual deck's Hebrew or Arabic family therefore arrives with its script, and subsets of one family, weight and style no longer collide.
+- As built in M3: the range is stored normalised (sorted, merged, at most 4,000 characters, coarsened by merging the closest neighbours when longer).
+- A family keeps at most 400 faces. CJK families come in about a hundred slices per weight, so above that only the weights nearest 400 and 700 are kept.
+- A download replaces the family's earlier Google faces, including the Latin-only faces of downloads made before subsets were kept.
+- `FontLoad.unicodeRange` carries the range to the asset worker.
 
 **Non-metric families.** Century Gothic, Tahoma, Aptos, Gill Sans and Trebuchet are named in the import card: "Upload Century Gothic for exact line breaks". Uploading the real font fixes it automatically, because the family stays first in the stack.
 
@@ -1063,7 +1085,7 @@ The extensions, in priority order (M4 unless noted):
 
 **Process**
 - Parse only on the CPU pool: 512 MB heap, 2 minutes per batch of ≤150 slides, at most 15 minutes of pool time per import (beyond it, the remaining slides become picture class, or the import fails cleanly when nothing is saved yet), termination on timeout.
-- If the pool cannot start, use the whole-deck LibreOffice path. Never parse inline on the event loop (which `extractPptx` and `pptxForRendering` do today).
+- If the pool cannot start, the import fails with a clean message (nothing is saved; it can be tried again). Never parse inline on the event loop (which `extractPptx` and `pptxForRendering` did), and never hand the upload to LibreOffice instead: its render copy needs the pool too, and LibreOffice never sees a deck as uploaded (§5).
 
 **Zip** (`extractZip` semantics)
 - Trust the central directory only.
@@ -1214,7 +1236,7 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
 **Exit.**
 - The run completes on the 5 sermon decks and on at least one worship-high validate shard (90+ decks) with cached LibreOffice pictures, and nothing aborts it; a deck the converter cannot read is a note.
 - `summary.json` has native SSIM, tier, reasons, `convertMs` and `rasterMs` (1920/3840) for every LibreOffice-drawn slide.
-- Native beats an all-black frame on ≥ 95% of slides.
+- Native beats an all-black frame on ≥ 95% of slides: its SSIM against LibreOffice's page is higher than an all-black frame's, or it matches the page at ≥ 0.999 (`tools/pptx-fidelity` `report.ts` `beatsBlack`), so an all-black page drawn all black is not a loss.
 - The 5 sermon decks: every slide renders, and mean native SSIM ≥ 0.80 is recorded next to pptx-preview's.
 - The T1 share of shown worship slides is within ±3 points of the census (30.9%).
 - A synthetic 4:3 deck places its boxes within 2 px of LibreOffice's page.
@@ -1287,6 +1309,7 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   - video ImageObjects draw their poster on outputs;
   - MediaTab hides `pptx`/`document` media; reference-aware delete confirmation.
 - Hub budgets measured on a reference NAS.
+- **As built in wave 1** (apps/hub/src/pptx/README.md): everything above except rich text emission and clip extraction (with M2 and M5), `slideContent()` in every drawer, hidden-cue navigation (hidden slides give no cue until then), and flips, ellipse/roundRect masks and recolouring of pictures (wave 2; drawn unflipped, as rects and without the recolouring, each noted on the slide). Every read of a stored deck spills only referenced pictures and refuses overlapping zip entries; a LibreOffice run that fails is retried, then the slides it could not draw are marked `Slide.pptx.failed`; a save that brings back pending slides queues the follow-up again.
 
 **Files.**
 - `apps/hub/src/pptx/*`, `imports.ts`, `routes.ts`, `pool.ts`, `cpu.worker.ts`, `jobs.ts`, `media/service.ts`, `media/ffmpeg.ts`, `library.ts`, `db.ts`, `fonts/bundled.ts`, `fonts/google.ts`; `Dockerfile`.
@@ -1535,7 +1558,7 @@ The `PptxRenderer` enum values stay forever, so stored presentations validate. A
 
 **Kept:**
 - the LibreOffice tools: `pptxToPdf`, `pdfToPngs` (gains page ranges and 288 dpi), `fitPage`, `addReadyImage`, used for fallbacks, art, references and metafiles;
-- the whole-deck LibreOffice path, for PDF and as the safety net when the pool cannot start;
+- the whole-deck LibreOffice path, for PDF and the 'Pictures (LibreOffice)' option, always through the worker-built render copy (it fails closed when the copy cannot be built);
 - `tools/pptx-fidelity` (`ssim()`, corpus builder, report), extended;
 - `extractZip` and its limits, `sanitizePresentation` (extended for runs and paras), `remapMediaIds` (generalised prefix), `mediaFor` (generalised: tags, names, hash index);
 - the static-slide output path (`SRC_BITMAP`, the 7 existing pipelines, `LayerStack` flips and exact crossfades);

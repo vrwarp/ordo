@@ -318,7 +318,9 @@ While no playlist is live, the hub relays the operator's `preview` message to on
 presentation's background when the look shows backgrounds and the media is known (the
 message may embed the media records as `presentation.media`), else the look's holding
 slide. `clear` returns the output to idle. The message is ignored while a playlist is live
-and a GO live discards any preview.
+and a GO live discards any preview. The operator sends only the previewed slide's section
+with the presentation-level fields (`previewSlice`, design/27 §3.4): the slide after it
+travels too for the next-slide band, and a section over 1 MiB is cut to those two slides.
 
 ## Looks
 

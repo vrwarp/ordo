@@ -9,13 +9,14 @@
  */
 import { classifySlide } from './classify.ts';
 import { slideContext } from './context.ts';
-import { readDeck } from './deck.ts';
+import { type DeckInfo, readDeck, type SlideRef } from './deck.ts';
 import { readBackground } from './background.ts';
-import { type EmitOptions, type EmitResult, emitDeck } from './emit.ts';
-import { frameOf } from './frame.ts';
-import type { DeckScene, SlideScene } from './ir.ts';
+import { type EmitOptions, type EmitResult, type EmittedSlide, emitDeck, MEDIA_PREFIX } from './emit.ts';
+import { frameOf, slideRect } from './frame.ts';
+import type { DeckScene, Frame, SectionInfo, SlideScene } from './ir.ts';
 import { clean, type Log, noteList } from './log.ts';
 import { openPackage, type PartSource } from './opc.ts';
+import type { PictureHeader } from './picture.ts';
 import { walkSlide } from './walk.ts';
 
 export type { BlipReader, ColorCtx } from './color.ts';
@@ -23,7 +24,7 @@ export type { SlideCtx, Source } from './context.ts';
 export type { DeckInfo, SlideRef } from './deck.ts';
 export type { EmitOptions, EmitResult, EmittedSlide } from './emit.ts';
 export { MEDIA_PREFIX } from './emit.ts';
-export { pictureSize } from './picture.ts';
+export { type PictureHeader, pictureSize } from './picture.ts';
 export * from './ir.ts';
 export type { Log } from './log.ts';
 export type { Package, PartSource, Rel } from './opc.ts';
@@ -36,9 +37,16 @@ export interface ParseOptions {
    * The pixel size of a picture part whose bytes are not in `src` (spilled to disk), e.g. from its first
    * bytes on disk. Asked at most once per part; sides outside 1..1,000,000 count as unknown. Without it a
    * spilled picture's size is unknown, and a background picture of unknown size is drawn as a stretched
-   * image over the slide rather than as the slide background (design/27 §4 "Backgrounds").
+   * image over the slide rather than as the slide background (design/27 §4 "Backgrounds"). `pictureSize`
+   * (exported) reads both from a header, `alpha` included: only a background known to be opaque becomes
+   * the slide background.
    */
-  pictureSize?: (part: string) => { w: number; h: number } | undefined;
+  pictureSize?: (part: string) => PictureHeader | undefined;
+  /**
+   * Read only the slides whose place in the deck's order (`SlideRef.index`) is in [from, to): one batch of
+   * the hub's pool task (design/27 §2). Deck facts (frame, sections, notes) are read whole either way.
+   */
+  range?: { from: number; to: number };
 }
 
 /** Picture sides a caller's size may have (`picture.ts` reads headers to the same bound). */
@@ -47,17 +55,18 @@ const MAX_PICTURE_SIDE = 1_000_000;
 /** `ParseOptions.pictureSize` asked once per part, its answer checked. */
 function pictureSizes(
   get: ParseOptions['pictureSize'],
-): ((part: string) => { w: number; h: number } | undefined) | undefined {
+): ((part: string) => PictureHeader | undefined) | undefined {
   if (!get) return undefined;
-  const known = new Map<string, { w: number; h: number } | undefined>();
+  const known = new Map<string, PictureHeader | undefined>();
   return (part) => {
     if (known.has(part)) return known.get(part);
-    let v: { w: number; h: number } | undefined;
+    let v: PictureHeader | undefined;
     try {
       const got = get(part);
       const ok = (n: unknown): n is number =>
         typeof n === 'number' && Number.isFinite(n) && n >= 1 && n <= MAX_PICTURE_SIDE;
-      if (got && ok(got.w) && ok(got.h)) v = { w: got.w, h: got.h };
+      if (got && ok(got.w) && ok(got.h))
+        v = { w: got.w, h: got.h, ...(typeof got.alpha === 'boolean' ? { alpha: got.alpha } : {}) };
     } catch {
       v = undefined; // a size the caller cannot read is unknown
     }
@@ -71,6 +80,23 @@ function pictureSizes(
  * quarantined as class 'picture'). Throws only when the deck has no readable presentation part.
  */
 export function parseDeck(src: PartSource, opts: ParseOptions = {}): DeckScene {
+  const r = openScene(src, opts);
+  const slides = r.refs.map(r.readSlide);
+  return { frame: r.frame, slides, sections: r.deck.sections, notes: r.notes };
+}
+
+/** A deck opened for reading: its facts, the slides to read, and a reader for one slide. */
+interface SceneReader {
+  deck: DeckInfo;
+  frame: Frame;
+  /** The slides of the range (all of them without one), in order. */
+  refs: SlideRef[];
+  readSlide: (ref: SlideRef) => SlideScene;
+  /** Deck-level notes so far (the list grows as slides are read). */
+  notes: string[];
+}
+
+function openScene(src: PartSource, opts: ParseOptions): SceneReader {
   const deckNotes = noteList();
   const log: Log = (msg) => {
     deckNotes.log(msg);
@@ -80,7 +106,9 @@ export function parseDeck(src: PartSource, opts: ParseOptions = {}): DeckScene {
   const deck = readDeck(pkg);
   const frame = frameOf(deck.size.cx, deck.size.cy);
   const pictureSize = pictureSizes(opts.pictureSize);
-  const slides: SlideScene[] = deck.slides.map((ref) => {
+  const range = opts.range;
+  const refs = range ? deck.slides.filter((r) => r.index >= range.from && r.index < range.to) : deck.slides;
+  const readSlide = (ref: SlideRef): SlideScene => {
     const t0 = performance.now();
     const { notes, log: slideLog } = noteList();
     const base = {
@@ -116,11 +144,59 @@ export function parseDeck(src: PartSource, opts: ParseOptions = {}): DeckScene {
         ms: performance.now() - t0,
       };
     }
-  });
-  return { frame, slides, sections: deck.sections, notes: deckNotes.notes };
+  };
+  return { deck, frame, refs, readSlide, notes: deckNotes.notes };
 }
 
 /** Turn a scene into ordo slides (see `EmitOptions`). Pure: the same scene and options give the same slides. */
 export function emitSlides(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
   return emitDeck(scene, opts);
+}
+
+export interface ConvertOptions extends ParseOptions, EmitOptions {}
+
+/** `convertDeck`'s answer: the emitted slides of the range, with the deck facts a batch caller needs. */
+export interface ConvertResult extends EmitResult {
+  frame: Frame;
+  /** Sections over the whole deck, by `SlideRef.index`. */
+  sections: SectionInfo[];
+  /** Every slide the deck lists, in order (all batches): part, hidden flag and shown index. */
+  listed: SlideRef[];
+}
+
+/**
+ * Parse and emit in one call, the entry point of the hub's `pptx-scene` pool task (design/27 §2, M3). With
+ * `range`, only that batch of slides is converted; media ids (`pptxmedia:<n>`) and default object ids are
+ * numbered per call, so a batch caller maps them through `EmitResult.media` or passes `mediaId`/`newId`.
+ * Each slide is emitted as soon as it is read, so one slide's IR is alive at a time (design/27 §12: a batch
+ * of 150 slides within the pool's heap); the result is what `emitSlides(parseDeck(src, opts), opts)` gives.
+ */
+export function convertDeck(src: PartSource, opts: ConvertOptions = {}): ConvertResult {
+  const r = openScene(src, opts);
+  // Ids numbered across the slides of the call, as `emitDeck` numbers them over a whole scene.
+  let n = 0;
+  const newId = opts.newId ?? (() => `pptx-${++n}`);
+  const media = new Map<string, string>();
+  const mediaId = (part: string) => {
+    let id = media.get(part);
+    if (id === undefined) {
+      id = opts.mediaId ? opts.mediaId(part) : `${MEDIA_PREFIX}${media.size + 1}`;
+      media.set(part, id);
+    }
+    return id;
+  };
+  const slides: EmittedSlide[] = [];
+  for (const ref of r.refs) {
+    const scene: DeckScene = { frame: r.frame, slides: [r.readSlide(ref)], sections: [], notes: [] };
+    slides.push(emitDeck(scene, { ...opts, newId, mediaId }).slides[0]!);
+  }
+  return {
+    slides,
+    media: [...media].map(([part, id]) => ({ id, part })),
+    slideRect: slideRect(r.frame),
+    notes: [...r.notes],
+    frame: r.frame,
+    sections: r.deck.sections,
+    listed: r.deck.slides,
+  };
 }

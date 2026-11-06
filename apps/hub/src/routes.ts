@@ -13,7 +13,6 @@ import {
   newId,
   type Output,
   Playlist,
-  PptxRenderer,
   Presentation,
   Theme,
 } from '@ordo/domain';
@@ -49,6 +48,7 @@ import type { MediaService } from './media/service.ts';
 import type { Store } from './store.ts';
 import { searchGoogleFonts } from './fonts/google.ts';
 import { PPTX_MIME } from './imports.ts';
+import type { PptxImportOptions } from './pptx/shared.ts';
 import { sendFile } from './send.ts';
 import { extOf, MAX_UPLOAD_BYTES, readHead, sniff } from './store.ts';
 import { validate } from './validate.ts';
@@ -102,6 +102,42 @@ const SongselectBody = z
   .object({ text: z.string().max(1_000_000), title: z.string().max(300).optional() })
   .strict();
 const LiveEventsBody = z.object({ id: z.string().max(200).optional(), event: z.unknown() }).strict();
+/**
+ * 'Show PowerPoint picture' (`PptxReferencePayload.showPicture`): the slides switched to the picture once it
+ * is stored; absent: every slide. The editor's 'Show original' sends `[]` (pictures only, nothing switched).
+ */
+const PptxReferenceBody = z
+  .object({ showPicture: z.array(z.string().min(1).max(200)).max(5_000).optional() })
+  .strict();
+
+/**
+ * What `POST /import/document` does with a PowerPoint (design/27 §2, §3.2): 'native' (the default) imports
+ * editable slides (`pptx-native`); 'libreoffice' and 'pptx-preview' (accepted until design/27 M8 retires it)
+ * import one picture per slide (`document`). 'native' exists only in this form field and the job payload:
+ * the stored `PptxRenderer` is not widened, and native imports record `source.native` instead.
+ */
+export const DocumentImportRenderer = z.enum(['native', 'libreoffice', 'pptx-preview']);
+export type DocumentImportForm = {
+  renderer: z.infer<typeof DocumentImportRenderer>;
+  /** The native import's options; only the fields that were sent. */
+  options: PptxImportOptions;
+};
+
+/** `POST /import/document`'s form fields; an unknown value is refused (400), absent fields are defaults. */
+export function documentImportForm(fields: Readonly<Record<string, string>>): DocumentImportForm {
+  const own = (k: string) => (Object.hasOwn(fields, k) ? fields[k] : undefined);
+  const renderer = DocumentImportRenderer.safeParse(own('renderer') || 'native');
+  if (!renderer.success) throw badRequest('renderer must be native, libreoffice or pptx-preview');
+  const options: PptxImportOptions = {};
+  for (const key of ['extendBackgrounds', 'transitionSounds'] as const) {
+    const v = own(key);
+    if (v === undefined || v === '') continue;
+    if (v === '1' || v === 'true' || v === 'on') options[key] = true;
+    else if (v === '0' || v === 'false' || v === 'off') options[key] = false;
+    else throw badRequest(`${key} must be 1 or 0`);
+  }
+  return { renderer: renderer.data, options };
+}
 
 /** The live service as the library side sees it: edit locks and the mode (from IPC in the library process). */
 export type LiveView = {
@@ -407,6 +443,8 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const p = validate(PresentationBody, { ...body, id });
     const saved = lib.savePresentation(p, { expectedRev: body.rev, by: by(req) });
     lib.emit([{ kind: 'presentation', id, rev: saved.rev, entity: saved }]);
+    // Slides of a native PowerPoint import still waiting for LibreOffice get their follow-up back.
+    hub.imports.pptx.followUp(saved);
     return saved;
   });
   route('DELETE', '/presentations/:id', 'edit', async (req, reply) => {
@@ -429,12 +467,24 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     assertPresentationUnlocked(id);
     const saved = lib.restoreRevision(id, Number(params(req).rev), by(req));
     lib.emit([{ kind: 'presentation', id, rev: saved.rev, entity: saved }]);
+    hub.imports.pptx.followUp(saved);
     return saved;
   });
   route('POST', '/presentations/:id/slides/:slideId/make-editable', 'edit', async (req) => {
     const id = params(req).id!;
     assertPresentationUnlocked(id);
     return hub.imports.makeEditable(id, params(req).slideId!, by(req));
+  });
+  // 'Show PowerPoint picture' (design/27 §5 "Operator fallback"): LibreOffice pictures of every shown slide.
+  route('POST', '/presentations/:id/pptx-reference', 'edit', async (req, reply) => {
+    const id = params(req).id!;
+    assertPresentationUnlocked(id);
+    const p = lib.presentations.must(id);
+    const fileId = p.source?.kind === 'pptx' ? p.source.fileId : undefined;
+    if (!fileId || !lib.getFile(fileId))
+      throw badRequest('This presentation has no stored PowerPoint file', 'no_pptx');
+    const body = validate(PptxReferenceBody, req.body ?? {});
+    return reply.code(202).send(hub.imports.pptx.queueReference(id, fileId, by(req), body.showPicture));
   });
 
   // playlists
@@ -578,6 +628,11 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const id = params(req).id!;
     if (live.locks().media.has(id)) throw locked('This media is used by the live playlist');
     const m = lib.media.must(id);
+    // A missing picture refuses goLive (design/27 §11 item 15): media that stored presentations use is
+    // deleted only with `?force=1`, which the operator sends once the user has confirmed.
+    const users = presentationsUsingMedia(lib, id);
+    if (users.length && !isForced(req.query))
+      throw new HttpError(409, 'media_in_use', mediaInUseMessage(m.name, users), { presentations: users });
     lib.media.delete(id);
     lib.emit([{ kind: 'media', id, deleted: true }]);
     for (const h of [m.original.hash, m.delivery?.hash, m.poster?.hash]) await hub.store.release(h);
@@ -739,11 +794,13 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const { files, fields } = await readMultipart(hub, req, { maxFiles: 1, limit: 1024 ** 3 });
     const f = files[0];
     if (!f) throw badRequest('No document');
-    // What draws a PowerPoint's slides (an optional form field; LibreOffice unless pptx-preview is asked).
-    const renderer = PptxRenderer.safeParse(fields.renderer ?? 'libreoffice');
-    if (!renderer.success) {
+    // How a PowerPoint is imported (optional form fields): editable slides unless pictures are asked for.
+    let form: DocumentImportForm;
+    try {
+      form = documentImportForm(fields);
+    } catch (e) {
       await rm(f.path, { force: true });
-      throw badRequest('renderer must be libreoffice or pptx-preview');
+      throw e;
     }
     const s = sniff(await readHead(f.path));
     const ext = extOf(f.filename);
@@ -760,7 +817,11 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
       hash: f.hash,
       bytes: f.bytes,
     });
-    return reply.code(202).send(hub.imports.queueDocument(ref.hash, f.filename, kind, renderer.data));
+    if (kind === 'pptx' && form.renderer === 'native')
+      return reply.code(202).send(hub.imports.pptx.queueNative(ref.hash, f.filename, form.options));
+    // A PDF is always pictures: the PowerPoint choice does not apply to it.
+    const renderer = form.renderer === 'native' ? 'libreoffice' : form.renderer;
+    return reply.code(202).send(hub.imports.queueDocument(ref.hash, f.filename, kind, renderer));
   });
 
   // ---------------- jobs ----------------
@@ -928,4 +989,41 @@ export async function cleanupStaleUploads(hub: Pick<Ctx, 'lib' | 'store' | 'cfg'
   for (const f of await readdir(tmp).catch(() => [] as string[]))
     await rm(join(tmp, f), { recursive: true, force: true });
   return orphans;
+}
+
+/**
+ * The stored presentations that name a media item (backgrounds, pictures, imported pages, reference
+ * pictures, clips): any JSON string equal to its id, so fields added later are covered too. Prefiltered in
+ * SQL, title order, at most `limit`.
+ */
+export function presentationsUsingMedia(
+  lib: Library,
+  mediaId: string,
+  limit = 1000,
+): { id: string; title: string }[] {
+  const quoted = JSON.stringify(mediaId);
+  const like = `%${quoted.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  const rows = lib.db
+    .prepare(`SELECT id, title, json FROM presentations WHERE json LIKE ? ESCAPE '\\' ORDER BY title, id`)
+    .all(like) as { id: string; title: string; json: string }[];
+  const out: { id: string; title: string }[] = [];
+  for (const r of rows) {
+    if (!r.json.includes(quoted)) continue;
+    out.push({ id: r.id, title: r.title });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/** What the operator shows before deleting media that presentations use. */
+function mediaInUseMessage(name: string, users: { title: string }[]): string {
+  const shown = users.slice(0, 5).map((u) => `“${u.title}”`);
+  const more = users.length > shown.length ? ` and ${users.length - shown.length} more` : '';
+  const what = users.length === 1 ? 'the presentation' : `${users.length} presentations:`;
+  return `“${name}” is used by ${what} ${shown.join(', ')}${more}. Without it they cannot go live until it is replaced.`;
+}
+
+function isForced(query: unknown): boolean {
+  const v = query && typeof query === 'object' ? (query as Record<string, unknown>).force : undefined;
+  return v === '1' || v === 'true';
 }

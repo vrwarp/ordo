@@ -47,9 +47,11 @@ so a restart that hangs is noticed in seconds. A
 child whose supervisor vanishes while it is still starting exits at once rather than linger holding the
 port. Past the budget a failed library process stays down (`/health` reports `library: failed`,
 the service keeps running, library calls answer 503), and a failed live process ends the supervisor with
-exit code 1 so the container's restart policy takes over. The supervisor relays three things and replays
+exit code 1 so the container's restart policy takes over. The supervisor relays four things and replays
 the last of each to a restarted child: the library's address (to the live process), the live process's
-edit locks and mode (to the library), and library changes (to the live process, which broadcasts them).
+edit locks and mode (to the library), library changes (to the live process, which broadcasts them), and
+the library's size (`stats`, to the live process, for `GET /health`; the library process measures it at
+start and 3 s after a change that is not only job progress).
 `<data>/supervisor.json` holds pids, states and restart counts. SIGTERM: both children get SIGTERM,
 SIGKILL after 5 s. If the supervisor itself is killed, the live process writes its snapshot and exits at
 once (like a crash: no goodbyes), the library process stops its jobs (re-queued on the next start).
@@ -115,7 +117,8 @@ terminates its worker and the next task gets a fresh one. Each worker has its ow
 generation, 64 MB young): a runaway parse fails within seconds inside its worker, with "… needs more
 memory than an import may use (512 MB) …", instead of growing the library process towards the container's
 memory limit. Only a worker that cannot start at all falls
-back to inline parsing; a worker that dies while working fails that task.
+back to inline parsing (never for a PowerPoint deck: that import fails instead, design/27 §12); a worker
+that dies while working fails that task.
 
 ## HTTP API
 
@@ -131,11 +134,12 @@ All under `https://hub.<venue>.synology.me/api/v1`. JSON bodies validated with t
 | `GET /presentations/:id/revisions`, `POST /presentations/:id/restore/:rev`                                             | edit                                                 | Version history                                                                                                                                                            |
 | `GET                                                                                                                   | POST                                                 | PUT                                                                                                                                                                        | DELETE /playlists[/:id]`     | edit | CRUD; live playlist returns 423 Locked on PUT        |
 | `POST /media` (multipart, resumable via `Upload-Offset`)                                                               | edit                                                 | Upload; returns media in `uploaded` state                                                                                                                                  |
-| `GET /media/:id`, `PUT /media/:id`, `DELETE /media/:id`                                                                | edit                                                 | Metadata                                                                                                                                                                   |
+| `GET /media/:id`, `PUT /media/:id`, `DELETE /media/:id`                                                                | edit                                                 | Metadata; `DELETE` of media that stored presentations use answers 409 `media_in_use` naming them, unless `?force=1`                                                     |
 | `GET /files/:hash`                                                                                                     | output token or any role                             | Content-addressed file delivery with long cache headers and range support                                                                                                  |
 | `POST /fonts/upload`, `POST /fonts/google { family }`, `GET /fonts`                                                    | edit                                                 | Fonts                                                                                                                                                                      |
-| `POST /import/pro7` (zip or NAS path), `POST /import/songselect` (file or text), `POST /import/document` (pptx or pdf) | edit                                                 | Import jobs; return a job id                                                                                                                                               |
+| `POST /import/pro7` (zip or NAS path), `POST /import/songselect` (file or text), `POST /import/document` (pptx or pdf) | edit                                                 | Import jobs; return a job id. `document`: form field `renderer`, `native` by default (editable slides, `pptx-native`, design/27), `libreoffice` or `pptx-preview` (page pictures); native options `extendBackgrounds`, `transitionSounds` (`1`/`0`) |
 | `GET /jobs/:id`                                                                                                        | edit                                                 | Job state and log                                                                                                                                                          |
+| `POST /presentations/:id/pptx-reference`                                                                               | edit                                                 | 'Show PowerPoint picture': queues `pptx-reference` (design/27 §5); body `{ showPicture? }` (slide ids switched to the picture, ≤ 5,000; absent: all); 423 while live                                                                      |
 | `GET                                                                                                                   | PUT /settings/{looks,outputs,audio,keymap,surfaces}` | operate                                                                                                                                                                    | Settings                     |
 | `POST /outputs/:id/token/rotate`                                                                                       | operate                                              | New output token                                                                                                                                                           |
 | `GET /live`                                                                                                            | operate, output                                      | Current live state (full)                                                                                                                                                  |
@@ -184,7 +188,10 @@ bounded, so the process exits within about 2 s even with a frozen client; `main.
 SQLite file at `/data/ordo.db`, WAL mode, `synchronous=NORMAL`. Tables: `presentations`,
 `presentation_revisions`, `playlists`, `media`, `files`, `fonts`, `themes`, `looks`,
 `outputs`, `settings`, `sessions`, `auth_attempts`, `jobs`, `job_attempts`, `library_changes`,
-`uploads`. Migrations with a simple numbered-SQL runner; every migration is idempotent and tested.
+`uploads`, `media_hashes` (the SHA-256 media hash index: imports find media with the same content without
+scanning `media`; its `content` rows are kept by triggers on `media`, its `source` rows record the deck
+part a prepared picture was made from, design/20 "Pictures of the native import"). Migrations with a
+simple numbered-SQL runner; every migration is idempotent and tested.
 
 `/data/live.db` (live process only): `live_journal (seq, at, cmd_id, kind, event_json)`,
 `live_snapshot (singleton)`, `live_snapshot_prev` (the two snapshots before it) and `live_kv` (the cached
@@ -205,6 +212,14 @@ a state that passes the same checks; an operator state offered by `live.adopt` m
 already: then it fails for good with "Stopped 3 times while this job was running", and a media item it
 was processing is marked failed. A clean shutdown does not count as an attempt.
 
+**Jobs that wait for the live lock**: a job that must not write a presentation while it is in the live
+playlist (ADR 0007), such as the PowerPoint follow-ups `pptx-lo` and `pptx-reference`, throws `JobDeferred`
+instead of running: it goes back to `queued` with a log line ("waiting: the presentation is live …") and
+is not started again before its delay (30 s, doubling per deferral to 15 min; kept in the payload). A
+deferral is not a crashed attempt. The delay lives in the process only: after a restart the job runs at
+once and defers itself again if the presentation is still live. Work a job finished before deferring
+(stored pictures) is a resume pair in its payload, so LibreOffice does not run twice for it.
+
 Files under `/data/media/<hh>/<hash>.<ext>`, `/data/fonts/`, `/data/uploads/` (temporary),
 `/data/backups/`.
 
@@ -223,18 +238,36 @@ resumes them.
 | `poster`          | ffmpeg frame at 1 s, 640x360 JPEG                                                                                                                                                                                                                                                                                                             | poster                                      |
 | `audio`           | ffmpeg loudnorm measurement (also of video soundtracks), AAC 256k delivery                                                                                                                                                                                                                                                                    | delivery and LUFS                           |
 | `pdf-render`      | `pdftoppm -r 144 -png` then scale to 1920x1080                                                                                                                                                                                                                                                                                                | one PNG media per page                      |
-| `pptx-render`     | `soffice --headless --convert-to pdf` then `pdf-render`                                                                                                                                                                                                                                                                                       | PNGs                                        |
-| `pptx-text`       | unzip `ppt/slides/slideN.xml`, read `<a:t>` runs and `<a:off>/<a:ext>` in EMU, convert to logical px                                                                                                                                                                                                                                          | ExtractedText[] per slide                   |
+| `pptx-render`     | the render copy (pool task `pptx-render-copy`: shown slides only, External targets, macros and OLE binaries removed, outlines stripped), then `soffice --headless --convert-to pdf` hardened (design/21), then `pdf-render`                                                                                                                   | PNGs                                        |
+| `pptx-text`       | part of `document`: `@ordo/pptx-scene` on the CPU pool (task `pptx-scene`, 150 slides per task; XML parts only in memory, media spilled and dropped), each slide's text objects in the page's 1920x1080 frame (uniform contain mapping), keyed by the slide each page shows (`pagesOf`: LibreOffice leaves hidden slides out)                | ExtractedText[] per page, `textAligned`     |
+| `pptx-text-repair` | one-shot, queued at start-up while a stored legacy picture import has unchecked pages (boxes matched by list index before M3): re-reads the stored deck as `pptx-text` does, one revision per presentation; live-locked ones retried after End service, decks gone skipped (design/27 §11)                                                   | re-keyed `textBoxes`, `textAligned`         |
+| `pptx-lo`         | heavy, after a native import (design/27 §5): render copy (art slides twice over forced white and yellow, picture-class slides, metafiles), soffice once, `pdftoppm -f k -l k` at 2 px per logical px, pool task `pptx-art` (alpha from the two pages, colour un-blended, cropped)                                                 | transparent art, page and metafile pictures; version 2 of the presentation (one revision) |
+| `pptx-reference`  | heavy, 'Show PowerPoint picture': render copy of every shown slide, soffice once, `pdftoppm` per page                                                                                                                                                                                                                                         | `Slide.pptx.refMediaId`, `show: picture`    |
 | `pro7-import`     | `packages/importers` (protobuf decode) in a `worker_threads` worker, 500 documents per task so the worker's 512 MB heap bounds a task, not the library (the playlists are a last task against the index of every document decoded); zip uploads are streamed from disk, media entries spilled to `tmp/`, documents capped at 256 MB in memory | presentations, playlists, media uploads     |
-| `font-google`     | fetch the family's CSS from Google Fonts with a desktop UA, download referenced woff2 files, store as `Font` rows                                                                                                                                                                                                                             | fonts                                       |
+| `font-google`     | fetch the family's CSS from Google Fonts with a desktop UA, download referenced woff2 files, store each unicode-range subset as a `Font` row with `unicodeRange` (at most 400 per family; then only the weights nearest 400 and 700), and drop the family's earlier Google faces                                                              | fonts                                       |
 
 The Docker image includes `ffmpeg`, `poppler-utils`, LibreOffice (`libreoffice-impress`
 with a minimal font set plus the venue's uploaded fonts mounted so PPTX renders use them) and headless
 Chromium for the pptx-preview PowerPoint renderer (design/20 "PPTX and PDF").
 
+The native PowerPoint import (`pptx-native`, light; [design/27](27-pptx-native-renderer.md) §2) reads the
+deck's XML into memory within its caps, parses and converts it on the CPU pool (a scan call, then batches
+of at most 150 slides, 2 minutes each and 15 minutes of pool time per import), stores the pictures the
+slides use, and saves version 1 of the presentation. In the same synchronous step it queues the heavy
+`pptx-lo` follow-up for the slides that wait for LibreOffice, so that job never starts before version 1
+exists and is queued before any clip job of the deck; version 1, that job and the import's resume point are
+written in one transaction. When the CPU pool cannot start, the import fails cleanly: a deck is never parsed
+on the event loop, and never handed to LibreOffice as uploaded. The follow-up retries a LibreOffice run that
+fails (twice, deferred with backoff), then marks the slides it could not draw (`Slide.pptx.failed`, named by
+goLive). A save from the editor (or a restored revision) that brings back slides still `pending` while no
+follow-up is queued or running queues one, planned as the last one was and reusing its pictures.
+`POST /presentations/:id/pptx-reference` joins a reference job already waiting for the presentation.
+
 Import jobs are resumable: `pro7-import` records every media id, presentation id and
 playlist id it wrote in its job payload and skips them when the job is re-queued after a
-crash or restart; `document` records the stored page images the same way. ProPresenter
+crash or restart; `document` records the stored page images the same way; `pptx-native` records
+[picture part, media id] pairs and the presentation id it chose before saving, so a re-run reuses the
+stored pictures and never saves a second presentation. ProPresenter
 presentations and playlists are saved under their ProPresenter UUIDs, so importing the same
 library twice updates the earlier copies instead of duplicating them. `POST /import/pro7`
 and `POST /import/document` answer 423 while a playlist is live. `tmp/` is wiped at
@@ -247,6 +280,14 @@ images), every media item's delivery and poster, every font referenced by any te
 or look, the logo, holding slides, and the look definitions. It writes
 `{ seq, files: [{ hash, bytes, mime }], presentations: [...], looks: [...] }` and
 announces it. The manifest is immutable for the live session.
+
+Fonts on outputs (design/27 §10): the image installs the metric-compatible substitutes (Carlito, Caladea,
+Liberation), the Noto script fallbacks and Inter from Debian packages. At every start the library process
+registers them from `ORDO_FONTS_DIR` as `Font` rows with `source: 'bundled'`
+(`apps/hub/src/fonts/bundled.ts`). It works idempotently by SHA-256, and the venue's own faces of the same
+family, weight and style win. Every output receives every library font through `GET /output/config`
+whatever the playlist, except the CJK fallback families. The manifest adds the script fallback families
+of every script in the presentations' text, so CJK faces ship only with Han, Kana or Hangul text.
 
 ## Auth
 
@@ -282,8 +323,13 @@ Pino JSON logs to stdout (Docker captures); each line carries `proc` (`superviso
 A ring buffer of the last 2,000 lines per process is exported by `/diagnostics/export` (`logs.ndjson`
 from the library process, `logs-live.ndjson` from the live process) together with the last 500 journal
 events, settings without secrets, the health table, the process states and restart counts, restore
-warnings, the goLive quarantine list, socket limit closures and the CPU pool counters. `GET /health`
-adds `library` (the library process state as the live process sees it) and `processes`.
+warnings, the goLive quarantine list, socket limit closures, the CPU pool counters and the library's size.
+`GET /health` adds `library` (the library process state as the live process sees it), `processes` and
+`librarySnapshotBytes`: the size of a full `GET /library/snapshot`, which every operator downloads
+(design/27 §3.4). It is summed from the stored JSON in SQL (no entity is parsed; within a few bytes per
+entity of the real answer), at most every few seconds; past 32 MiB the hub logs once that the library
+needs archiving, or the summary-only snapshot that design/27 leaves as a follow-up. A year of weekly
+17-slide imported sermon decks measures about 1.5 MB (the test keeps it under 6 MB).
 
 ## Bad data at the boundary
 
@@ -293,9 +339,10 @@ Design/25's table, as implemented in the hub:
   (string lengths, array sizes, numeric ranges). Entities may echo the server's `rev`, `createdAt` and
   `updatedAt`. The domain schemas carry generous bounds (ids 200 chars, text 20,000, 1,000 objects per
   slide, 5,000 slides per section, coordinates ±100,000, colours 0..255 and alpha 0..1, durations a day).
-- **WebSocket from clients**: 64 KiB per message (an operator's `live.adopt` and `preview` up to 16 MiB),
-  a token bucket of 50 messages refilled at 50/s per socket. A socket that breaks a limit gets
-  `bye too-large` or `bye rate-limited` and close 1008; others are unaffected.
+- **WebSocket from clients**: 64 KiB per message (an operator's `live.adopt` and `preview` up to 16 MiB;
+  the operator never sends either above 15 MiB, and a preview carries only the previewed slide's section,
+  design/27 §3.4), a token bucket of 50 messages refilled at 50/s per socket. A socket that breaks a
+  limit gets `bye too-large` or `bye rate-limited` and close 1008; others are unaffected.
 - **goLive**: every presentation is validated against the schema. A slide that fails is replaced by an
   empty slide with the same id, a presentation whose own fields are broken keeps its valid sections, one
   that cannot be read becomes empty, an invalid playlist item is skipped. The service still goes live and
@@ -311,6 +358,21 @@ Design/25's table, as implemented in the hub:
   keeps its valid fields; an invalid look or output is dropped from the list); writes check exactly one
   enabled audio master, unique `out<k>` host indices, unique look ids, and that every output's look exists.
 - **Journal and snapshots**: validated restore (Storage).
+
+## Sizes
+
+Imported PowerPoint slides are about ten times larger than picture slides, so every path that carries a
+whole presentation has a budget (design/27 §3.4, `packages/domain/src/size.ts`):
+
+- A native import stays within 4 MiB: a slide over 64 KB, and every slide once the presentation passes its
+  budget, becomes compact picture class (logged, counted on the import card).
+- A resolved playlist over 12 MiB goes live with a `degraded` warning (`cueIndex` -1): too large for an
+  operator takeover, whose hand-back the operator never sends above 15 MiB (design/17 "Hub returns").
+- `preview` carries only the previewed slide's section; the editor warns on save above 4 MiB and refuses
+  above the 32 MiB body limit.
+- Revisions are full copies (design/11 "Revisions"): an imported presentation of 1 MB edited often costs
+  up to 50 MB of revision rows.
+- `GET /health` reports the library snapshot's size (Logging and diagnostics).
 
 ## Configuration
 

@@ -16,7 +16,7 @@ export {
   type Pro7PresRef,
 } from './pro7.ts';
 export { PRO7_PROTO_VERSION, pro7Root, pro7Type, decodeAs } from './proto.ts';
-export { remapMediaIds } from './remap.ts';
+export { PPTX_MEDIA_PREFIX, remapMediaIds } from './remap.ts';
 export { extractPptxText, type PptxText, pptxForRendering } from './pptx.ts';
 export { parseSongFile } from './songselect.ts';
 export { parseRtf, splitFontName, type RtfResult } from './rtf.ts';

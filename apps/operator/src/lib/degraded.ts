@@ -3,7 +3,10 @@ import type { Cue, ResolvedPlaylist } from '@ordo/domain';
 export type DegradedSummary = {
   /** Whole-service warnings (cueIndex -1): a cached copy, a skipped item, an unreadable presentation. */
   service: string[];
-  /** Cues whose slide was replaced by an empty slide, with a label the operator recognises. */
+  /**
+   * Cues whose slide was replaced by an empty slide, or is incomplete (a PowerPoint slide LibreOffice is still
+   * drawing), with a label the operator recognises.
+   */
   cues: { cueIndex: number; label: string; reason: string }[];
 };
 

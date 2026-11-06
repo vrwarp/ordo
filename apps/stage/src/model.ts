@@ -7,6 +7,7 @@ import {
   type Cue,
   formatDuration,
   type GeneralSettings,
+  importedText,
   LOOK_STAGE,
   type LiveState,
   type Look,
@@ -173,7 +174,8 @@ export function slideText(slide: Slide | undefined): string {
   if (lyric?.type === 'text' && lyric.text.trim()) return readableText(lyric);
   for (const o of slide.objects) if (o.type === 'text' && o.text.trim()) return readableText(o);
   if (slide.scripture) return slide.scripture.text;
-  return '';
+  // A picture slide: the picture's own text, once it is known to be this slide's (design/27 §11).
+  return importedText(slide);
 }
 
 function findSlide(

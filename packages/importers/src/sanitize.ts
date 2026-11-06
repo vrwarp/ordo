@@ -317,6 +317,7 @@ export function sanitizePresentation(p: Presentation): Presentation {
           );
         else delete sl.durationMs;
       }
+      sanitizePptxSlide(sl);
     }
   }
   const ids = new Set(p.sections.map((s) => s.id));
@@ -324,7 +325,80 @@ export function sanitizePresentation(p: Presentation): Presentation {
     a.name = clipText(a.name, IMPORT_LIMITS.name) || 'Arrangement';
     a.sectionIds = a.sectionIds.filter((id) => ids.has(id));
   }
+  if (p.source?.native) p.source.native = sanitizeNativeSource(p.source.native);
   return p;
+}
+
+type PptxSlide = Presentation['sections'][number]['slides'][number];
+type NativeSource = NonNullable<NonNullable<Presentation['source']>['native']>;
+
+const int = (v: unknown, def: number, lo: number, hi: number) => Math.round(finite(v, def, lo, hi));
+// biome-ignore lint/suspicious/noControlCharactersInRegex: removing them is the point
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
+/** A deck-derived line (a note): control characters and line breaks become spaces, cut to `max`. */
+const oneLine = (s: unknown, max: number) =>
+  clipText((typeof s === 'string' ? s.slice(0, 4 * max) : '').replace(CONTROL, ' ').trim(), max);
+
+/**
+ * Bound a slide's PowerPoint fields in place (design/27 §3.1, §12): the provenance record (`pptx`), the
+ * hidden flag, the slide transition and `imported.textAligned`. Unknown enum values become the defaults, as
+ * the schema's `.catch` does.
+ */
+function sanitizePptxSlide(sl: PptxSlide): void {
+  if (sl.hidden !== undefined && sl.hidden !== true) delete sl.hidden;
+  if (sl.transition) {
+    const t = sl.transition;
+    if (t.kind === 'crossfade') sl.transition = { kind: 'crossfade', ms: int(t.ms, 700, 0, 10_000) };
+    else if (t.kind === 'cut') sl.transition = { kind: 'cut' };
+    else delete sl.transition;
+  }
+  if (sl.imported && sl.imported.textAligned !== undefined && sl.imported.textAligned !== true)
+    delete sl.imported.textAligned;
+  const x = sl.pptx;
+  if (!x) return;
+  const out: NonNullable<PptxSlide['pptx']> = {
+    fileId: clipText(x.fileId, IMPORT_LIMITS.name),
+    index: int(x.index, 0, 0, 100_000),
+    class: x.class === 'hybrid' || x.class === 'picture' ? x.class : 'native',
+    version: int(x.version, 1, 1, 1_000_000),
+  };
+  if (x.shown !== undefined) out.shown = int(x.shown, 0, 0, 100_000);
+  if (x.digest !== undefined) out.digest = clipText(x.digest, 100);
+  if (x.pending === true) out.pending = true;
+  if (Array.isArray(x.notes)) {
+    const notes = x.notes
+      .slice(0, 16)
+      .map((n) => oneLine(n, 200))
+      .filter(Boolean);
+    if (notes.length) out.notes = notes;
+  }
+  if (x.artText) out.artText = clipText(x.artText, IMPORT_LIMITS.text);
+  if (x.refMediaId) out.refMediaId = clipText(x.refMediaId, IMPORT_LIMITS.name);
+  if (x.show !== undefined) out.show = x.show === 'picture' ? 'picture' : 'objects';
+  sl.pptx = out;
+}
+
+/** Bound `Presentation.source.native` (counts and the deck's area in the 1920x1080 frame). */
+function sanitizeNativeSource(n: NativeSource): NativeSource {
+  const count = (v: unknown) => int(v, 0, 0, 100_000);
+  const out: NativeSource = {
+    version: int(n.version, 1, 1, 1_000_000),
+    slides: count(n.slides),
+    native: count(n.native),
+    hybrid: count(n.hybrid),
+    picture: count(n.picture),
+  };
+  if (n.slideRect) {
+    const W = LOGICAL_WIDTH * IMPORT_LIMITS.boxSpan;
+    const H = LOGICAL_HEIGHT * IMPORT_LIMITS.boxSpan;
+    out.slideRect = {
+      x: finite(n.slideRect.x, 0, -W, W),
+      y: finite(n.slideRect.y, 0, -H, H),
+      w: finite(n.slideRect.w, LOGICAL_WIDTH, 0, 2 * W),
+      h: finite(n.slideRect.h, LOGICAL_HEIGHT, 0, 2 * H),
+    };
+  }
+  return out;
 }
 
 /** Bound a text box extracted from a PowerPoint slide. */

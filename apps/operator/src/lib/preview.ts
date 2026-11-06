@@ -28,8 +28,9 @@ export function previewBlockedReason(state: LiveState, targets: PreviewTarget[])
 }
 
 /**
- * Media records the previewed slide needs (presentation and slide backgrounds, image objects), so the
- * output can resolve them without the hub's resolved playlist. Unknown ids are skipped.
+ * Media records the previewed slide needs (presentation and slide backgrounds, image objects, an imported
+ * page's picture and a PowerPoint slide's reference picture), so the output can resolve them without the
+ * hub's resolved playlist. Unknown ids are skipped.
  */
 export function previewMedia(
   p: Presentation,
@@ -43,6 +44,9 @@ export function previewMedia(
       if (slideId && sl.id !== slideId) continue;
       if (sl.backgroundMediaId) ids.add(sl.backgroundMediaId);
       for (const o of sl.objects) if (o.type === 'image') ids.add(o.mediaId);
+      // A picture slide draws its page (design/27 §11 "Fix-now"); 'Show PowerPoint picture' its reference.
+      if (sl.imported?.imageMediaId) ids.add(sl.imported.imageMediaId);
+      if (sl.pptx?.show === 'picture' && sl.pptx.refMediaId) ids.add(sl.pptx.refMediaId);
     }
   const out: Media[] = [];
   for (const id of ids) {

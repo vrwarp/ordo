@@ -101,28 +101,98 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
 ## PPTX and PDF
 
 Hub jobs ([design/12](12-hub.md)) render pages to PNG and create a `slides`
-presentation with one image slide per page. For PPTX, `pptx-text` reads
-`ppt/slides/slide<N>.xml` with `fast-xml-parser`: for each `p:sp` with a `p:txBody`,
-collect `a:t` runs per paragraph and the `a:xfrm` offset and extent (EMU; 914400 EMU per
-inch; slide size from `ppt/presentation.xml` `p:sldSz`) scaled to the 1920x1080 logical
-canvas. Font size from `a:rPr sz` (hundredths of a point) scaled by the slide's height
-ratio. Result is stored as `Slide.imported.textBoxes` and used by the editor's "make
-editable" command. `PptxGenJS` writes PPTX only: it is used for test decks (the fidelity corpus, the
+presentation with one image slide per page. For PPTX, the text is read by `@ordo/pptx-scene` on
+the CPU pool (`apps/hub/src/pptx/textRepair.ts` `readDeckText`): each slide's text objects, placed
+with the same uniform contain mapping as the page picture (a 4:3 deck sits between empty bars), and
+given to the page that shows that slide (`pagesOf`: LibreOffice prints shown slides only; for
+pptx-preview, shown slides when the page count equals the shown count, else every listed slide).
+Result is stored as `Slide.imported.textBoxes` with `textAligned`; the editor's "make editable"
+command uses them, and labels, the stage and search fall back to them on a slide without text of its
+own (design/27 §11). Imports made before M3 matched boxes by list index, so after a hidden slide they
+held another slide's text: the one-shot `pptx-text-repair` job re-keys them, and until then no reader
+trusts them. `PptxGenJS` writes PPTX only: it is used for test decks (the fidelity corpus, the
 render tests), never for import.
 
-Before LibreOffice converts a PPTX, `pptxForRendering` removes the outline (`<a:ln>` in a
-run's properties) from filled text in slides, layouts and masters. LibreOffice cannot draw a
-coloured outline around filled text: it substitutes hollow letters, which with the usual drop
-shadow read as broken text (white outlined headlines, common in sermon decks). The fill and
-shadow stay; text meant to be hollow (`<a:noFill/>`) keeps its outline. The job log counts
-the runs changed. Fonts the deck uses must be installed on the hub, or LibreOffice
-substitutes them.
+LibreOffice never converts the uploaded deck itself: a CPU-pool task (`pptx-render-copy`,
+`@ordo/pptx-scene` `rendercopy.ts`, design/27 §5) writes a render copy of the slides to print,
+every shown slide for this import. Every hidden slide is left out (a page is a shown slide, so
+the page index is the shown index), every part is written again from the bounded parser's
+tree under a generated name, and External relationships, macros, OLE binaries, embedded
+packages and fonts, media payloads (posters stay), notes and comments are left out; fields
+keep their stored text. The copy also removes the outline (`<a:ln>` in a run's properties)
+from filled text in slides, layouts and masters. LibreOffice cannot draw a coloured outline
+around filled text: it substitutes hollow letters, which with the usual drop shadow read as
+broken text (white outlined headlines, common in sermon decks). The fill and shadow stay; text
+meant to be hollow (`<a:noFill/>`) keeps its outline. The job log counts the runs changed.
+soffice runs hardened (design/21: address-space cap, no network, process-group timeout). When
+the copy cannot be built (the pool cannot start, the deck passes the caps), the import fails: LibreOffice
+never converts a deck as uploaded. Fonts the deck uses must
+be installed on the hub, or LibreOffice substitutes them.
+
+### LibreOffice in the native import (design/27 §5)
+
+The native import (`renderer=native`) draws every slide with ordo's own objects; LibreOffice has
+three roles beside it, each a heavy job that runs after version 1 is saved and never writes a
+presentation while it is live-locked (it re-queues itself with backoff, 30 s doubling to 15 min):
+
+- `pptx-lo`, queued by the import before any clip job: one render copy and one soffice run for
+  everything the deck needs. A hybrid slide's art (charts, tables, SmartArt, OLE, maths, 3D,
+  WordArt warps, vertical text) is printed twice, alone, over a forced white and a forced yellow
+  background (not black: LibreOffice draws text of automatic colour white on any background of
+  luminance 156 or less, so automatic black text would come back white); `pdftoppm` renders both
+  pages at 2 px per logical px (3840 x 2160 at 16:9) and the `pptx-art` pool task takes alpha =
+  1 − (white − yellow)/255 in the blue channel, where the two differ by 255, and colour =
+  (yellow − (1 − alpha)·background)/alpha (over white and black this is design/27's
+  alpha = 1 − max(white − black)/255, colour = black/alpha), cut to the art's box and cropped to
+  what it drew. The result is one locked, transparent image at
+  the art's place in the z-order, over the native background and pictures. A metafile (EMF,
+  WMF) is printed the same way alone at its own aspect and comes back as a transparent PNG in
+  its object's place. A picture-class slide gets its page picture, unpadded, with text boxes
+  keyed by the slide (`imported.textAligned`). Version 2 is one revision: a slide whose objects
+  still match `Slide.pptx.digest` has its art range replaced; a slide edited meanwhile keeps
+  every object and gets the art on top, with a note in `Slide.pptx.notes`.
+- `pptx-reference` ('Show PowerPoint picture', `POST /presentations/:id/pptx-reference`, 423
+  while the presentation is live): every shown slide once into `Slide.pptx.refMediaId`, shown
+  instead of the objects (`show: 'picture'`).
+- The fidelity reference of `tools/pptx-fidelity`.
+
+### Native import (editable slides)
+
+The native import ([design/27](27-pptx-native-renderer.md), M3) turns a deck into ordinary, editable ordo
+objects instead of page pictures. The light `pptx-native` job (`apps/hub/src/pptx/nativeJob.ts`):
+
+- reads the XML and relationship parts (each ≤ 8 MB, ≤ 64 MB in all; a larger part makes its slide a
+  picture slide) and only the pictures the slides, their layouts, masters and themes relate to (≤ 2,000,
+  ≤ 1 GiB, under generated names); embeddings, macros, custom XML, document properties and printer settings
+  are skipped;
+- parses and converts on the CPU pool with `@ordo/pptx-scene`: a scan (slide list, sections, referenced
+  pictures, metafiles, speaker notes, the show's loop flag), then batches of at most 150 slides. A batch that
+  fails or runs out of the import's pool time leaves its slides as picture slides, never the deck;
+- applies the size budgets of design/27 §3.4: a slide over 64 KB, and every slide once the presentation
+  passes 3 MiB, becomes a compact picture slide (logged, counted in the job result);
+- stores the pictures (prepared to their display need, deduplicated) and saves version 1: every slide's
+  native objects, `Slide.pptx` provenance (deck, place, class, converter version, the digest of the objects
+  as stored, `pending` while LibreOffice work remains), speaker notes, `p14` sections in order with a Default
+  arrangement, hidden slides flagged (`Slide.hidden`), transitions (fade and dissolve a crossfade with the
+  deck's duration, a transition without an effect a cut, any other effect a crossfade, noted), `advTm` as
+  `durationMs` (a looping show with every shown slide timed becomes a loop presentation), the lyric box, and
+  `source.native` (counts, the deck's area in the frame) with `source.log`;
+- lays a background picture with transparency on white (a bottom image) rather than using it as the slide
+  background, and makes one background shared by every slide the presentation's background; with 'Extend
+  plain backgrounds to 16:9' (on by default) a plain background covers the whole frame of a 4:3 deck.
+
+Hybrid slides (a chart, SmartArt without a drawing, OLE, 3D, …) and picture slides then wait for the heavy
+`pptx-lo` follow-up, which adds LibreOffice art or page pictures as version 2.
 
 ### Two renderers: LibreOffice and pptx-preview
 
-The import screen asks what draws a PowerPoint's slides: LibreOffice (the default) or pptx-preview
-(experimental). The choice is a form field on `POST /import/document` (`renderer`), stays in the job payload
-and is recorded on the presentation (`source.renderer`).
+The import screen asks how to import a PowerPoint: 'Editable (recommended)', the native import of
+[design/27](27-pptx-native-renderer.md) (`renderer=native`, the route's default, with 'Extend plain backgrounds
+to 16:9' as `extendBackgrounds`), or 'Pictures (LibreOffice)' (`renderer=libreoffice`). pptx-preview
+(experimental) is no longer offered there; the route still takes `renderer=pptx-preview` until design/27 M8
+retires it. The choice is a form field on `POST /import/document`, stays in the job payload and, for the
+picture imports, is recorded on the presentation (`source.renderer`). 'native' is never stored there (the
+`PptxRenderer` enum is not widened): a native import records `source.native` instead.
 
 pptx-preview is an npm library that draws a deck as HTML in a browser. Its npm package is free to use,
 commercial use included, but it ships minified, and its author's terms forbid publishing modified source,
@@ -175,7 +245,7 @@ which ordo owns and can keep fixing:
   box paints it; a shadow under gradient text is a drop shadow of the painted glyphs. Hollow text
   (`a:noFill`), which pptx-preview filled black, shows only its outline (`a:ln`, 0.75 pt by default) or
   nothing. pptx-preview draws no text outlines on filled text either, matching what LibreOffice draws once
-  `pptxForRendering` has removed them. WordArt warps (`a:prstTxWarp`) are not drawn.
+  the render copy has removed them. WordArt warps (`a:prstTxWarp`) are not drawn.
 - **Paragraphs and text boxes.** Through the markers, and the side table's list of a text box's paragraphs
   (pptx-preview draws one block per paragraph, empty ones included), the page sets the box's margins and
   anchor, each paragraph's spacing, and its line height, as LibreOffice's text engine computes them
@@ -262,6 +332,42 @@ them: the slide picture shows the video's poster or the sound's icon, and the cl
 for this: the `media` deck of the fidelity corpus, and LibreOffice's own test documents (`sd/qa/unit/data/
 pptx`: `video-loop-mute`, `tdf106867`, `bnc591147`, `narration`, `tdf44223`, `tdf148478_transitionMusic`,
 `animation-sound-*`), which are real-world decks attached to bug reports.
+
+### Pictures of the native import
+
+The native import stores each picture part its slides use once, prepared for how it is shown (design/27 §4,
+`apps/hub/src/pptx/pictures.ts`):
+
+- The header is read from the file's bytes, never its name, with bounded reads: PNG, JPEG, GIF and WebP are
+  read; BMP and TIFF are converted; SVG, EMF and WMF go to LibreOffice in the `pptx-lo` follow-up. Anything
+  else is refused and its objects left out: an unknown format, a malformed header (a PNG header with a bad
+  checksum, a WebP canvas that disagrees with its image, a JPEG scan before its frame header) or a picture
+  over 16,384 px a side (over 100 MP for formats other than JPEG).
+- The display need is the part's widest use in the deck on a 3840-px output: the box width divided by the
+  share of the picture the crop leaves visible (with the picture's size known, the box height counts too); a
+  slide background is the whole frame, cover-fit. It is kept within 128-8,192 px.
+- A picture more than 1.25 times its need, or over 8,192 px a side or 40 MP, is downscaled by ffmpeg
+  (Lanczos): JPEG when opaque, PNG with alpha. BMP and TIFF become PNG; an animated GIF, APNG or animated
+  WebP keeps its first frame and a multi-page TIFF its first page (noted in the job log). Any other picture
+  is kept byte for byte (a hard link to the extracted part).
+- Pictures are drawn as stored. PowerPoint ignores a JPEG's EXIF orientation and lays the picture out with
+  its stored pixels (the boxes of real decks' tagged photos have the stored aspect), while browsers apply it,
+  so preparation removes it: a kept JPEG is a copy with the tag set to 1, a conversion leaves it out (ffmpeg
+  runs with `-noautorotate`), and a PNG or WebP with EXIF metadata is converted.
+- ffmpeg reads a picture only through the demuxer of the format its header was checked as and decodes no
+  more pixels than the header claimed (`-max_pixels`), so a header that lies about the size fails instead of
+  allocating; a JPEG decodes at 1/2, 1/4 or 1/8 of its size when that is still large enough. One import
+  decodes at most 6,000 MP; past that, pictures clients read as they are stay unscaled and the others are
+  left out.
+- Prepared pictures become ready image media (tag `pptx`, no media job) through `addReadyPicture`, which
+  accepts only a still PNG, JPEG, GIF or WebP whose header matches the size it claims, within 8,192 px a side
+  and 40 MP.
+- The media hash index (`media_hashes`, design/12 "Storage") finds an item with the same prepared bytes, or
+  one prepared from the same source part at a size that fits the need, so importing the same deck again, or
+  another deck with the same pictures, stores nothing new. The job records [part, media id] pairs in its
+  payload as it goes, so a re-queued job skips them.
+
+The ProPresenter import finds media with the same content through the same index (`mediaForFile`).
 
 ### Fidelity
 

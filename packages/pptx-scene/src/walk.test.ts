@@ -496,3 +496,67 @@ describe('custom geometry coverage', () => {
     expect(s.elements[0]).toMatchObject({ geom: 'custom', coverage: 0.5 });
   });
 });
+
+describe('shared decorations (M3 hardening)', () => {
+  const tx1 = `<a:solidFill>${scheme('tx1')}</a:solidFill>`;
+  const deco = sp({ id: 9, x: 0, y: 0, cx: IN, cy: IN, fill: tx1, txBody: body(para(run('Church'))) });
+  const linked = pic({ id: 10, x: IN, y: 0, cx: IN, cy: IN, rId: 'rId9' });
+  const ext = { id: 'rId9', type: 'image', target: 'https://cdn.example.org/logo.png', external: true };
+  const box = grpSp(
+    { id: 20, x: 0, y: 0, cx: IN, cy: IN },
+    sp({ id: 21, x: 0, y: 0, cx: IN, cy: IN, fill: solid('00FF00') }),
+  );
+
+  it('walks a layout and its master once and gives each slide its own copies, notes and group numbers', () => {
+    const scene = parseDeck(
+      buildDeck({
+        master: { shapes: box },
+        layouts: [{ shapes: deco + linked, rels: [ext] }],
+        slides: [{ shapes: box }, { shapes: box }],
+      }),
+    );
+    const [a, b] = scene.slides;
+    const text = (s: SlideScene) => (s.elements.find((e) => e.shapeId === 9) as ShapeElement).text;
+    // One walk: the slides share what was read, but not the elements themselves (classification marks them).
+    expect(text(b!)).toBe(text(a!));
+    expect(b!.elements[0]).not.toBe(a!.elements[0]);
+    expect(b!.elements.map((e) => [e.from, e.shapeId, e.group])).toEqual(
+      a!.elements.map((e) => [e.from, e.shapeId, e.group]),
+    );
+    // The master's group is 1; each slide's own group comes after it.
+    expect(a!.elements.map((e) => e.group)).toEqual([1, undefined, 2]);
+    for (const s of [a!, b!])
+      expect(s.notes).toContain('a linked picture (cdn.example.org) was not imported');
+  });
+
+  it("walks them again for a slide whose colour map differs, and per slide when they use the slide's background", () => {
+    const ovr =
+      '<p:clrMapOvr><a:overrideClrMapping bg1="dk1" tx1="lt1" bg2="dk2" tx2="lt2" accent1="accent1" ' +
+      'accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" ' +
+      'hlink="hlink" folHlink="folHlink"/></p:clrMapOvr>';
+    const bgFilled = sp({ id: 11, x: 0, y: IN, cx: IN, cy: IN }).replace('<p:sp>', '<p:sp useBgFill="1">');
+    const scene = parseDeck(
+      buildDeck({
+        layouts: [{ shapes: deco + bgFilled }],
+        slides: [
+          { bg: solidBg('FF0000') },
+          { bg: solidBg('0000FF') },
+          { bg: solidBg('FF0000'), after: ovr },
+          { bg: solidBg('FF0000') },
+        ],
+      }),
+    );
+    const fills = scene.slides.map((s) =>
+      s.elements.map((e) => {
+        const f = (e as ShapeElement).fill;
+        return f.kind === 'solid' ? `${f.color.r},${f.color.g},${f.color.b}` : f.kind;
+      }),
+    );
+    expect(fills).toEqual([
+      ['0,0,0', '255,0,0'],
+      ['0,0,0', '0,0,255'],
+      ['255,255,255', '255,0,0'],
+      ['0,0,0', '255,0,0'],
+    ]);
+  });
+});

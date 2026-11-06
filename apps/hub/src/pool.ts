@@ -1,7 +1,8 @@
 /**
  * Worker-thread pool for CPU-bound parsing in the library process (design/25 "Hub"): ProPresenter decode
- * (including its RTF), PPTX XML text extraction, the pptx-preview annotation of a deck and font table
- * parsing never run on the event loop that answers HTTP requests.
+ * (including its RTF), PPTX XML text extraction, the pptx-preview annotation of a deck, font table parsing
+ * and the native PowerPoint import's tasks (design/27: parse and emit, render copy, art pixels) never run
+ * on the event loop that answers HTTP requests.
  *
  * - Workers start lazily, are `unref`'d (an idle pool never keeps the process alive) and exit after
  *   IDLE_MS without work.
@@ -20,6 +21,14 @@ import { Worker } from 'node:worker_threads';
 import type { Annotation } from '@ordo/pptx-render/annotate.ts';
 import type { Pro7ImportOptions, Pro7Result, PptxText } from './imports.ts';
 import type { FontFace } from './fonts/sfnt.ts';
+import type {
+  ArtTaskInput,
+  ArtTaskOutput,
+  RenderCopyTaskInput,
+  RenderCopyTaskOutput,
+  SceneTaskInput,
+  SceneTaskOutput,
+} from './pptx/shared.ts';
 
 /** The worker could not be started (no worker file, unsupported flags): the caller may run inline. */
 export class WorkerStartError extends Error {}
@@ -30,6 +39,12 @@ export type CpuTasks = {
   /** A deck's annotation for pptx-preview (`annotatePptx`: run markers, styles, repaired parts). */
   'pptx-annotate': { input: { buf: Uint8Array }; output: Annotation };
   font: { input: { buf: Uint8Array }; output: FontFace };
+  /** One batch of a native PowerPoint import: parse and emit (design/27 §2 step 2, `pptx/sceneTask.ts`). */
+  'pptx-scene': { input: SceneTaskInput; output: SceneTaskOutput };
+  /** The minimal deck LibreOffice prints for the follow-up (design/27 §5, `pptx/renderCopyTask.ts`). */
+  'pptx-render-copy': { input: RenderCopyTaskInput; output: RenderCopyTaskOutput };
+  /** One art slide's transparent picture from its white and black pages (design/27 §5, `pptx/art.ts`). */
+  'pptx-art': { input: ArtTaskInput; output: ArtTaskOutput };
 };
 export type CpuTaskKind = keyof CpuTasks;
 
@@ -38,6 +53,9 @@ export const TASK_TIMEOUT_MS: Record<CpuTaskKind, number> = {
   pptx: 2 * 60_000,
   'pptx-annotate': 2 * 60_000,
   font: 15_000,
+  'pptx-scene': 2 * 60_000,
+  'pptx-render-copy': 2 * 60_000,
+  'pptx-art': 60_000,
 };
 const IDLE_MS = 30_000;
 /**
@@ -291,12 +309,17 @@ export class CpuPool {
   }
 }
 
-/** Buffers that own their whole ArrayBuffer can be transferred instead of copied. */
+/**
+ * Buffers that own their whole ArrayBuffer can be transferred instead of copied. Empty ones never are: they
+ * cost nothing to copy, and a shared empty placeholder (`deckParts.ts`) must not be detached for every
+ * later user.
+ */
 export function transferables(bufs: Iterable<Uint8Array>): ArrayBuffer[] {
   const out: ArrayBuffer[] = [];
   const seen = new Set<ArrayBuffer>();
   for (const b of bufs)
     if (
+      b.byteLength > 0 &&
       b.byteOffset === 0 &&
       b.byteLength === b.buffer.byteLength &&
       b.buffer instanceof ArrayBuffer &&

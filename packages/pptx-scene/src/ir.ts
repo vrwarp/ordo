@@ -104,8 +104,12 @@ export interface PictureFill {
   alpha?: number;
   /** Recolouring or effects on the blip (duotone, clrChange, grayscl, biLevel, lum, …): their element names. */
   effects?: string[];
-  /** The picture's size in pixels, read from its header when the part's bytes were present (not spilled). */
-  px?: { w: number; h: number };
+  /**
+   * The picture's size in pixels, read from its header when the part's bytes were present (not spilled),
+   * else given by the caller. `alpha` (M3): the picture may have transparent pixels (an alpha channel or a
+   * transparent colour); undefined when the header did not tell.
+   */
+  px?: { w: number; h: number; alpha?: boolean };
 }
 
 export interface Line {
@@ -272,6 +276,13 @@ export interface ResidualElement extends ElementBase {
   kind: 'residual';
   /** 'chart', 'table', 'smartart', 'ole', 'math', 'ink', 'graphicFrame', 'shear', … */
   what: string;
+  /**
+   * A metafile (`what` 'metafile'): its picture and clip geometry, so the emitter can describe the image
+   * object it becomes once LibreOffice has converted it (M3 item D, `EmittedSlide.metafiles`).
+   */
+  picture?: PictureFill;
+  geom?: string;
+  adj?: [string, number][];
 }
 
 export type Element = ShapeElement | PictureElement | ResidualElement;
@@ -340,7 +351,10 @@ export interface SlideScene {
 /** A `p14:sectionLst` section. */
 export interface SectionInfo {
   name: string;
-  /** Indexes into `DeckScene.slides`. */
+  /**
+   * The slides' places in the deck's order (`SlideScene.index`). Without `ParseOptions.range` these are also
+   * indexes into `DeckScene.slides`.
+   */
   slides: number[];
 }
 
@@ -350,4 +364,41 @@ export interface DeckScene {
   sections: SectionInfo[];
   /** Deck-level notes (sanitised log lines). */
   notes: string[];
+}
+
+// ── Hub follow-up (M3) ──────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * An element named so that a later step finds it again in the deck without the IR: the render copy keeps
+ * exactly the art's elements, the version-2 patch knows what the art replaces (design/27 §5).
+ */
+export interface ElementRef {
+  from: ElementBase['from'];
+  /** `p:cNvPr id`. */
+  shapeId: number;
+  /** Ids repeat in real decks: the place among the elements of `from` with this id, bottom first, from 0. */
+  nth: number;
+}
+
+/**
+ * What a hybrid slide's art holds once the slide is emitted (design/27 §5 "Slide class"): everything the
+ * LibreOffice follow-up needs, without the IR. Added by M3 item D (`hybrid.ts`).
+ */
+export interface ArtInfo {
+  /** The elements baked into the art: every residual and the overlapped elements of the range, bottom first. */
+  elements: ElementRef[];
+  /** The art object's box in logical px (the elements' bounding box). */
+  box: { x: number; y: number; w: number; h: number };
+  /** Where the art object goes in `Slide.objects` in version 2. */
+  at: number;
+  /** Ids of the version-1 objects the art replaces (the non-residual elements it bakes in). */
+  replaces: string[];
+  /** Text of the text bodies baked into the art (`Slide.pptx.artText`, search only). */
+  text: string;
+  /**
+   * The object the art goes just under in version 2 (the first object at or after `at` that it does not
+   * replace); absent when the art goes on top. Found by id, so objects added or left out below it by the
+   * import do not move the art.
+   */
+  before?: string;
 }

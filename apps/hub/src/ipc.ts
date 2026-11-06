@@ -4,6 +4,7 @@
  * and replays it to a restarted child, so a restart never misses the locks or the library address.
  */
 import type { Change } from './library.ts';
+import type { LibraryStats } from './libstats.ts';
 
 export type ChildName = 'live' | 'library';
 
@@ -36,7 +37,9 @@ export type FromChild =
   | LocksMsg
   /** `seq`: the library sequence after these changes (the live process's read-your-writes barrier). */
   | { t: 'changes'; changes: Change[]; seq?: number }
-  | { t: 'log'; level: 'info' | 'warn' | 'error'; msg: string };
+  | { t: 'log'; level: 'info' | 'warn' | 'error'; msg: string }
+  /** The library's size for hub health (design/27 §3.4), after changes, at most every few seconds. */
+  | LibraryStatsMsg;
 
 /** Supervisor -> child. */
 export type ToChild =
@@ -45,7 +48,11 @@ export type ToChild =
   | LocksMsg
   | { t: 'changes'; changes: Change[]; seq?: number }
   | { t: 'status'; processes: ProcessStatus[] }
-  | { t: 'shutdown' };
+  | { t: 'shutdown' }
+  | LibraryStatsMsg;
+
+/** Library process -> supervisor -> live process (cached and replayed to a restarted live process). */
+export type LibraryStatsMsg = { t: 'stats'; library: LibraryStats };
 
 export const HEARTBEAT_MS = 500;
 

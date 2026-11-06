@@ -176,11 +176,14 @@ describe('expandCues: a slide sound plays across shown slides', () => {
     expect(cues.map((c) => c.slideAudio?.untilCue)).toEqual([1, undefined, 3, undefined]);
   });
 
-  it('does not count hidden slides (M3), which stay reachable inside the range', () => {
+  // Until hidden cues are flagged and skipped by navigation (design/27 §9, M3 wave 2), a hidden slide has no
+  // cue at all; the sound still spans its shown slides. Wave 2 brings back the hidden cue inside the range.
+  it('does not count hidden slides, which have no cue yet', () => {
     const hidden = { hidden: true } as Partial<Slide>;
     const p = deck('d', [[slide('a', [], withSound(2)), slide('h', [], hidden), slide('b'), slide('c')]]);
     const cues = expandCues({ playlist: playlist('d'), presentations: byId(p), media: byId(song) });
-    expect(cues[0]?.slideAudio?.untilCue).toBe(2);
+    expect(cues.map((c) => c.slideId)).toEqual(['a', 'b', 'c']);
+    expect(cues[0]?.slideAudio?.untilCue).toBe(1);
   });
 
   it('click start, loop, gain and mute; a video soundtrack plays too; an image does not', () => {

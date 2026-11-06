@@ -139,7 +139,12 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
               kinds={['image']}
               onClose={() => setPicking(false)}
               onPick={(m) => {
-                set((x) => ({ ...x, mediaId: m.id }) as SlideObject);
+                // The old picture's crop does not fit the new one: it is dropped (design/27 §15 M3).
+                set((x) => {
+                  if (x.type !== 'image') return x;
+                  const { crop: _crop, ...rest } = x;
+                  return { ...rest, mediaId: m.id };
+                });
                 setPicking(false);
               }}
             />

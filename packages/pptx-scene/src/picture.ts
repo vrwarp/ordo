@@ -125,12 +125,21 @@ export function readPicture(
   const picture = blipFill && source !== undefined ? readBlipFill(ctx, blipFill, source) : undefined;
   if (!picture) return undefined;
   const ext = extensionOf(picture.part);
-  if (METAFILE_EXTENSIONS.has(ext)) {
-    ctx.log(`a ${ext} picture is not drawn yet (LibreOffice converts it in M3)`);
-    return { ...base, kind: 'residual', what: 'metafile', support: 'approx', reasons: ['metafile'] };
-  }
   // A picture placeholder takes its clip geometry from the layout or master when it has none.
   const { geom, adj } = geometryOf(chainOf(ctx, el, base.from));
+  if (METAFILE_EXTENSIONS.has(ext)) {
+    ctx.log(`a ${ext} picture is converted by LibreOffice`);
+    return {
+      ...base,
+      kind: 'residual',
+      what: 'metafile',
+      support: 'approx',
+      reasons: ['metafile'],
+      picture,
+      geom,
+      ...(adj ? { adj } : {}),
+    };
+  }
   const out: PictureElement = { ...base, kind: 'picture', picture, geom, ...(adj ? { adj } : {}) };
   const reasons: string[] = [];
   if (PREPARED_EXTENSIONS.has(ext)) reasons.push(`pic:${ext}`);
@@ -177,16 +186,34 @@ export function blipReaderOf(ctx: SlideCtx, source: string | undefined): BlipRea
 
 /** JPEG markers read before giving up on finding the frame header. */
 const MAX_JPEG_MARKERS = 4_096;
+/** PNG chunks, or GIF blocks, read before the image data while looking for transparency. */
+const MAX_HEADER_CHUNKS = 256;
 /** Picture sides are bounded (design/27 §12: prepared pictures ≤ 8,192 px; headers can say anything). */
 const MAX_SIDE_PX = 1_000_000;
 
-/** A picture's pixel size from its header (PNG, JPEG, GIF, BMP, WebP), or undefined. */
-export function pictureSize(b: Uint8Array): { w: number; h: number } | undefined {
+/**
+ * A picture's header facts: its pixel size, and `alpha`, whether it may have transparent pixels (an alpha
+ * channel or a transparent colour; undefined when the bytes given end before the header tells).
+ */
+export interface PictureHeader {
+  w: number;
+  h: number;
+  alpha?: boolean;
+}
+
+/**
+ * A picture's pixel size from its header (PNG, JPEG, GIF, BMP, WebP), with whether it may be transparent
+ * (`PictureHeader.alpha`), or undefined.
+ */
+export function pictureSize(b: Uint8Array): PictureHeader | undefined {
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
   const ok = (o: number, n: number) => o >= 0 && o + n <= b.length;
-  const size = (w: number, h: number) =>
-    w > 0 && h > 0 && w <= MAX_SIDE_PX && h <= MAX_SIDE_PX ? { w, h } : undefined;
-  if (ok(0, 24) && dv.getUint32(0) === 0x89504e47) return size(dv.getUint32(16), dv.getUint32(20));
+  const size = (w: number, h: number, alpha: boolean | undefined): PictureHeader | undefined =>
+    w > 0 && h > 0 && w <= MAX_SIDE_PX && h <= MAX_SIDE_PX
+      ? { w, h, ...(alpha !== undefined ? { alpha } : {}) }
+      : undefined;
+  if (ok(0, 24) && dv.getUint32(0) === 0x89504e47)
+    return size(dv.getUint32(16), dv.getUint32(20), pngAlpha(b, dv));
   if (ok(0, 4) && dv.getUint16(0) === 0xffd8) {
     let o = 2;
     for (let n = 0; ok(o, 4) && n < MAX_JPEG_MARKERS; n++) {
@@ -202,29 +229,72 @@ export function pictureSize(b: Uint8Array): { w: number; h: number } | undefined
       }
       const len = dv.getUint16(o + 2);
       if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc)
-        return ok(o + 5, 4) ? size(dv.getUint16(o + 7), dv.getUint16(o + 5)) : undefined;
+        return ok(o + 5, 4) ? size(dv.getUint16(o + 7), dv.getUint16(o + 5), false) : undefined;
       if (len < 2) return undefined;
       o += 2 + len;
     }
     return undefined;
   }
   if (ok(0, 10) && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46)
-    return size(dv.getUint16(6, true), dv.getUint16(8, true));
+    return size(dv.getUint16(6, true), dv.getUint16(8, true), gifAlpha(b));
   if (ok(0, 26) && b[0] === 0x42 && b[1] === 0x4d)
-    return size(Math.abs(dv.getInt32(18, true)), Math.abs(dv.getInt32(22, true)));
+    return size(
+      Math.abs(dv.getInt32(18, true)),
+      Math.abs(dv.getInt32(22, true)),
+      ok(28, 2) ? dv.getUint16(28, true) === 32 : undefined, // 32 bits a pixel may carry alpha
+    );
   if (ok(0, 30) && dv.getUint32(0) === 0x52494646 && dv.getUint32(8) === 0x57454250) {
     const chunk = dv.getUint32(12);
     if (chunk === 0x56503820 && b[23] === 0x9d && b[24] === 0x01 && b[25] === 0x2a)
-      return size(dv.getUint16(26, true) & 0x3fff, dv.getUint16(28, true) & 0x3fff); // VP8
+      return size(dv.getUint16(26, true) & 0x3fff, dv.getUint16(28, true) & 0x3fff, false); // VP8
     if (chunk === 0x5650384c && b[20] === 0x2f) {
-      const bits = dv.getUint32(21, true); // VP8L: 14 bits each, minus one
-      return size((bits & 0x3fff) + 1, ((bits >>> 14) & 0x3fff) + 1);
+      const bits = dv.getUint32(21, true); // VP8L: 14 bits each, minus one, then alpha_is_used
+      return size((bits & 0x3fff) + 1, ((bits >>> 14) & 0x3fff) + 1, ((bits >>> 28) & 1) === 1);
     }
     if (chunk === 0x56503858) {
       const w = 1 + (b[24]! | (b[25]! << 8) | (b[26]! << 16)); // VP8X: 24 bits each, minus one
       const h = 1 + (b[27]! | (b[28]! << 8) | (b[29]! << 16));
-      return size(w, h);
+      return size(w, h, (b[20]! & 0x10) !== 0); // the alpha flag
     }
+  }
+  return undefined;
+}
+
+/**
+ * Whether a PNG may be transparent: an alpha channel (grey or colour with alpha), else a `tRNS` chunk before
+ * the image data. Undefined when the bytes end, or too many chunks come, before `IDAT`.
+ */
+function pngAlpha(b: Uint8Array, dv: DataView): boolean | undefined {
+  if (b.length < 26) return undefined;
+  const colorType = b[25]!;
+  if (colorType === 4 || colorType === 6) return true;
+  let o = 33; // after the signature and IHDR
+  for (let n = 0; n < MAX_HEADER_CHUNKS && o + 8 <= b.length; n++) {
+    const type = dv.getUint32(o + 4);
+    if (type === 0x49444154) return false; // IDAT
+    if (type === 0x74524e53) return true; // tRNS
+    o += 12 + dv.getUint32(o);
+  }
+  return undefined;
+}
+
+/**
+ * Whether a GIF's first frame may be transparent: its graphic control extension sets the transparent
+ * colour flag. Undefined when the bytes end, or too many blocks come, before the first image.
+ */
+function gifAlpha(b: Uint8Array): boolean | undefined {
+  if (b.length < 13) return undefined;
+  const flags = b[10]!;
+  let o = 13 + (flags & 0x80 ? 3 * (2 << (flags & 7)) : 0); // after the global colour table
+  for (let n = 0; n < MAX_HEADER_CHUNKS && o < b.length; n++) {
+    const block = b[o]!;
+    if (block === 0x2c || block === 0x3b) return false; // an image, or the end
+    if (block !== 0x21 || o + 2 > b.length) return undefined;
+    if (b[o + 1] === 0xf9) return o + 3 < b.length ? (b[o + 3]! & 1) === 1 : undefined;
+    o += 2; // an extension: skip its sub-blocks
+    for (let k = 0; k < MAX_HEADER_CHUNKS && o < b.length && b[o] !== 0; k++) o += 1 + b[o]!;
+    if (b[o] !== 0) return undefined;
+    o++;
   }
   return undefined;
 }

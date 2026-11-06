@@ -103,12 +103,20 @@ export function cloneSlide(s: Slide): Slide {
     idMap.set(o.id, id);
     return { ...structuredClone(o), id };
   });
-  return {
+  const clone: Slide = {
     ...structuredClone(s),
     id: newId(),
     objects,
     lyricObjectId: s.lyricObjectId ? idMap.get(s.lyricObjectId) : undefined,
   };
+  if (clone.pptx) {
+    // A copy is not the slide the PowerPoint follow-up planned, and its objects are not version 1's: only a
+    // picture slide's page (drawn from the deck slide alone) still comes to it; art does not.
+    const { digest: _digest, ...pptx } = clone.pptx;
+    if (pptx.class !== 'picture') delete pptx.pending;
+    clone.pptx = pptx;
+  }
+  return clone;
 }
 
 export function duplicateSlide(p: Presentation, slideId: string): Presentation {

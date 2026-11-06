@@ -1,11 +1,13 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Slide } from '@ordo/domain';
 import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
+  caseless,
   convertDeck,
   convertDeckIsolated,
   familiesOf,
@@ -170,25 +172,56 @@ describe('convertDeck', () => {
     expect(JSON.parse(await readFile(join(dir, 'slides.json'), 'utf8')).error).toBe(d.error);
   });
 
-  it('reads the pixel size of a spilled picture from its header', async () => {
+  it('reads the pixel size of a spilled picture from its header, and whether it may be transparent', async () => {
     const dir = await work();
     const file = join(dir, 'p.png');
     await writeFile(file, testPicture(320, 180));
-    expect(spilledPictureSize(file)).toEqual({ w: 320, h: 180 });
+    expect(spilledPictureSize(file)).toMatchObject({ w: 320, h: 180 });
+    expect(typeof spilledPictureSize(file)?.alpha).toBe('boolean');
     expect(spilledPictureSize(join(dir, 'missing.png'))).toBeUndefined();
     expect(spilledPictureSize(undefined)).toBeUndefined();
   });
 
-  it('isolates a conversion: one that runs out of time is a note, its spill folder removed', async () => {
-    const dir = await work();
-    await mkdir(join(dir, '.parts'));
-    const d = await convertDeckIsolated(await deck('LAYOUT_16x9'), dir, { timeoutMs: 1 });
-    expect(d.error).toBeTruthy();
-    expect(d.slides).toEqual([]);
-    expect(d.notes[0]).toMatch(/^converter failed: /);
-    expect(existsSync(join(dir, '.parts'))).toBe(false);
-    expect(JSON.parse(await readFile(join(dir, 'slides.json'), 'utf8')).error).toBe(d.error);
+  it('finds spilled parts without case, the first of a clash winning, from an index built once', () => {
+    const index = caseless(
+      new Map([
+        ['ppt/media/Image1.PNG', '/spill/1'],
+        ['ppt/media/image1.png', '/spill/2'],
+      ]),
+    );
+    expect(index.get('ppt/media/image1.png')).toBe('/spill/1');
+    expect(index.size).toBe(1);
   });
+
+  it('converts a deck in its worker thread', async () => {
+    const dir = await work();
+    const d = await convertDeckIsolated(await deck('LAYOUT_16x9'), dir, { timeoutMs: 60_000 });
+    expect(d.error).toBeUndefined();
+    expect(d.slides).toHaveLength(3);
+  }, 90_000);
+
+  it.skipIf(process.platform === 'win32')(
+    'isolates a conversion: one that never ends times out, is a note, and its spill folder is removed',
+    async () => {
+      // A named pipe nobody writes: opening the deck blocks for good, so the conversion provably hangs.
+      const dir = await work();
+      const fifo = join(dir, 'hangs.pptx');
+      execFileSync('mkfifo', [fifo]);
+      await mkdir(join(dir, '.parts'));
+      const d = await convertDeckIsolated(fifo, dir, { timeoutMs: 2_000 });
+      expect(d.error).toBe('timed out after 2 s');
+      expect(d.slides).toEqual([]);
+      expect(d.notes).toEqual(['converter failed: timed out after 2 s']);
+      expect(existsSync(join(dir, '.parts'))).toBe(false);
+      expect(JSON.parse(await readFile(join(dir, 'slides.json'), 'utf8')).error).toBe(d.error);
+      // Release the blocked open (it holds a thread of the process's I/O pool), then the next deck converts
+      // in a fresh worker.
+      await (await open(fifo, 'w')).close();
+      const next = await convertDeckIsolated(await deck('LAYOUT_16x9'), await work(), { timeoutMs: 60_000 });
+      expect(next.slides).toHaveLength(3);
+    },
+    90_000,
+  );
 });
 
 /** A Chromium to drive: ORDO_TEST_CHROMIUM, else Playwright's when it is installed. */

@@ -133,3 +133,105 @@ describe('extractZip errors (review 2026-11-04 finding 24)', () => {
     }
   });
 });
+
+describe('extractZip filters and caps (design/27 §12)', () => {
+  it('leaves out skipped entries without reading them, whatever their method or flags', async () => {
+    const file = await write('deck.zip', (z) => {
+      z.file('ppt/slides/slide1.xml', Buffer.from('<p:sld/>'));
+      z.file('ppt/embeddings/oleObject1.bin', Buffer.alloc(4096, 3));
+      z.file('ppt/vbaProject.bin', Buffer.alloc(1024, 4));
+      z.file('customXml/item1.xml', Buffer.from('<x/>'));
+    });
+    // Mark the embedding as encrypted with an unknown method: skipped, it does not fail the archive.
+    const buf = readFileSync(file);
+    const cd = buf.indexOf(Buffer.from('ppt/embeddings/oleObject1.bin')) - 46;
+    buf.writeUInt16LE(buf.readUInt16LE(cd + 8) | 1, cd + 8);
+    buf.writeUInt16LE(99, cd + 10);
+    writeFileSync(file, buf);
+    const seen: string[] = [];
+    const r = await extractZip(file, {
+      dir: mkdtempSync(join(dir, 'skip-')),
+      spill: () => false,
+      skip: (p, size) => {
+        seen.push(`${p}:${size}`);
+        return !p.startsWith('ppt/slides/');
+      },
+    });
+    expect([...r.files.keys()]).toEqual(['ppt/slides/slide1.xml']);
+    expect(seen).toContain('ppt/embeddings/oleObject1.bin:4096');
+    expect(r.entries).toBe(4);
+    expect(r.skipped).toEqual([]);
+  });
+
+  it('lists entries over the per-entry cap and past the spill budget instead of reading them', async () => {
+    const file = await write('caps.zip', (z) => {
+      z.file('ppt/slides/slide1.xml', Buffer.alloc(100, 0x41));
+      z.file('ppt/slides/slide2.xml', Buffer.alloc(5000, 0x41));
+      z.file('ppt/media/image1.png', Buffer.alloc(3000, 1));
+      z.file('ppt/media/image2.png', Buffer.alloc(3000, 2));
+      z.file('ppt/media/image3.png', Buffer.alloc(1000, 3));
+    });
+    const out = mkdtempSync(join(dir, 'caps-'));
+    const r = await extractZip(file, {
+      dir: out,
+      spill: (p) => p.startsWith('ppt/media/'),
+      maxEntryBytes: 1000,
+      maxSpillBytes: 4500,
+    });
+    expect([...r.files.keys()].sort()).toEqual([
+      'ppt/media/image1.png',
+      'ppt/media/image3.png',
+      'ppt/slides/slide1.xml',
+    ]);
+    expect(r.skipped).toEqual([
+      { path: 'ppt/slides/slide2.xml', bytes: 5000, reason: 'size' },
+      { path: 'ppt/media/image2.png', bytes: 3000, reason: 'budget' },
+    ]);
+    expect(r.skippedCount).toBe(2);
+    expect(r.inMemoryBytes).toBe(100);
+    // Spilled entries go under generated names: an entry name never becomes a path.
+    for (const p of r.onDisk.values()) expect(p.startsWith(out)).toBe(true);
+    expect([...r.onDisk.values()].map((p) => p.slice(out.length + 1)).sort()).toEqual([
+      'entry-1.png',
+      'entry-2.png',
+    ]);
+  });
+
+  it('refuses entries whose data overlap with distinct: true (one stream named many times)', async () => {
+    // A JSZip of one stored entry, then a second central record pointing at the same local header.
+    const file = await write('overlap.zip', (z) => z.file('a.xml', Buffer.alloc(4000, 0x41)), {
+      compression: 'STORE',
+    });
+    const buf = readFileSync(file);
+    const eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+    const cdStart = buf.readUInt32LE(eocd + 16);
+    const record = Buffer.from(buf.subarray(cdStart, eocd));
+    const copy = Buffer.from(record);
+    copy.write('b', 46, 'latin1');
+    const end = Buffer.from(buf.subarray(eocd));
+    end.writeUInt16LE(2, 8);
+    end.writeUInt16LE(2, 10);
+    end.writeUInt32LE(record.length * 2, 12);
+    writeFileSync(file, Buffer.concat([buf.subarray(0, cdStart), record, copy, end]));
+    const opts = { dir: mkdtempSync(join(dir, 'overlap-')), spill: () => false };
+    // Without the flag (ProPresenter libraries) it reads both names.
+    expect([...(await extractZip(file, opts)).files.keys()].sort()).toEqual(['a.xml', 'b.xml']);
+    await expect(extractZip(file, { ...opts, distinct: true })).rejects.toThrow(/zip entries overlap/);
+  });
+
+  it('reads a nested bundle as an ordinary entry with nested: false', async () => {
+    const inner = new JSZip();
+    inner.file('Inner.pro', Buffer.from('inner-doc'));
+    const bundle = await inner.generateAsync({ type: 'nodebuffer' });
+    const file = await write('nested.zip', (z) => {
+      z.file('Sunday.proPlaylist', bundle);
+    });
+    const r = await extractZip(file, {
+      dir: mkdtempSync(join(dir, 'nested-')),
+      spill: () => false,
+      nested: false,
+    });
+    expect([...r.files.keys()]).toEqual(['Sunday.proPlaylist']);
+    expect(Buffer.from(r.files.get('Sunday.proPlaylist')!).equals(bundle)).toBe(true);
+  });
+});

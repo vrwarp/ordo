@@ -428,6 +428,18 @@ export class Library {
     return this.savePresentation({ ...old, id, rev: cur.rev }, { expectedRev: cur.rev, by });
   }
 
+  /**
+   * Whether a theme or a stored presentation names this font family in a text style (`"fontFamily":"…"` in
+   * its JSON, case-insensitive): one indexed-free scan per table, for the few CJK fallback families only.
+   */
+  namesFontFamily(family: string): boolean {
+    const like = `%"fontFamily":${JSON.stringify(family).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    for (const table of ['themes', 'presentations'])
+      if (this.db.prepare(`SELECT 1 FROM ${table} WHERE json LIKE ? ESCAPE '\\' LIMIT 1`).get(like))
+        return true;
+    return false;
+  }
+
   // ---- files (content store index) ----
   addFile(f: FileRow): void {
     this.db
@@ -464,11 +476,17 @@ export class Library {
     const r = this.db.prepare(`SELECT json FROM fonts WHERE id = ?`).get(id) as { json: string } | undefined;
     return r ? (JSON.parse(r.json) as Font) : undefined;
   }
-  /** Insert or replace the face with the same family/weight/style. */
+  /**
+   * Insert or replace the face with the same family/weight/style and unicode-range: the subsets of one
+   * Google family, weight and style are separate faces (design/27 §10).
+   */
   upsertFont(f: Omit<Font, 'id'> & { id?: string }): Font {
-    const existing = this.db
-      .prepare(`SELECT id FROM fonts WHERE family = ? AND weight = ? AND style = ?`)
-      .get(f.family, f.weight, f.style) as { id: string } | undefined;
+    const range = f.unicodeRange ?? '';
+    const existing = (
+      this.db
+        .prepare(`SELECT id, json FROM fonts WHERE family = ? AND weight = ? AND style = ?`)
+        .all(f.family, f.weight, f.style) as { id: string; json: string }[]
+    ).find((r) => ((JSON.parse(r.json) as Font).unicodeRange ?? '') === range);
     const font = validate(Font, { ...f, id: existing?.id ?? f.id ?? newId() });
     this.db
       .prepare(
@@ -553,7 +571,35 @@ export class Library {
       settings: opts.withTokens ? settings : stripTokens(settings),
     };
   }
+
+  /**
+   * The size of a full library snapshot (`GET /library/snapshot`, every presentation to every operator) in
+   * bytes, summed from the stored JSON without parsing an entity: hub health reports it (design/27 §3.4).
+   * It matches `JSON.stringify(snapshot())` to within a few bytes per entity.
+   */
+  snapshotStats(): { snapshotBytes: number; presentations: number } {
+    let bytes = `{"seq":${this.seq()},"settings":{}}`.length;
+    let presentations = 0;
+    for (const table of SNAPSHOT_TABLES) {
+      const r = this.db
+        .prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(CAST(json AS BLOB))), 0) AS b FROM ${table}`)
+        .get() as { n: number; b: number };
+      // `,"<table>":[...]` with a comma between entities.
+      bytes += r.b + Math.max(0, r.n - 1) + table.length + 6;
+      if (table === 'presentations') presentations = r.n;
+    }
+    const s = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(CAST(json AS BLOB)) + LENGTH(key) + 3), 0) AS b FROM settings`,
+      )
+      .get() as { n: number; b: number };
+    bytes += s.b + Math.max(0, s.n - 1);
+    return { snapshotBytes: bytes, presentations };
+  }
 }
+
+/** The entity tables a library snapshot lists in full. */
+const SNAPSHOT_TABLES = ['presentations', 'playlists', 'media', 'fonts', 'themes', 'folders'] as const;
 
 export function stripTokens(s: Settings): Settings {
   return { ...s, outputs: s.outputs.map(({ token: _t, ...o }) => o) };
