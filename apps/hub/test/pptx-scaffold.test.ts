@@ -1,6 +1,7 @@
 /**
  * M3 scaffold (apps/hub/src/pptx/README.md): the pptx jobs are registered on their classes and the pool
- * tasks reach the worker. Items B-D replace the stub expectations as they implement them.
+ * tasks reach the worker. Items B-D replace the stub expectations as they implement them (D: the render copy
+ * and art tasks, `pptx-libreoffice.test.ts`).
  */
 import { buildDeck, solid, sp } from '@ordo/pptx-scene/test-util.ts';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -56,13 +57,14 @@ describe('pptx pool tasks', () => {
     expect(out.heapMb).toBeGreaterThan(0);
   });
 
-  it('pptx-render-copy and pptx-art reach their stubs', async () => {
+  it('pptx-render-copy refuses a deck without a presentation, and pptx-art a bad page', async () => {
     await expect(
       pool.run('pptx-render-copy', { parts: new Map(), media: [], pages: [], out: '/nonexistent/copy.pptx' }),
-    ).rejects.toThrow(/not implemented yet \(M3 item D\)/);
+    ).rejects.toThrow(/no presentation part/);
     const img = { width: 1, height: 1, channels: 4 as const, data: new Uint8Array(4) };
+    const big = { width: 2, height: 1, channels: 4 as const, data: new Uint8Array(8) };
     await expect(
-      pool.run('pptx-art', { white: img, black: img, box: { x: 0, y: 0, w: 1, h: 1 } }),
-    ).rejects.toThrow(/not implemented yet \(M3 item D\)/);
+      pool.run('pptx-art', { white: img, black: big, box: { x: 0, y: 0, w: 1, h: 1 } }),
+    ).rejects.toThrow(/differ in size/);
   });
 });

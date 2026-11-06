@@ -205,9 +205,9 @@ POST /import/document  (423 while live, ≤1 GiB, zip+.pptx sniff, stored by SHA
      6 remap placeholders, sanitizePresentation, lib.savePresentation ── version 1 (native objects for every
        slide; slides waiting for LibreOffice carry pptx.pending)
  heavy job 'pptx-lo' (re-queued with backoff while the presentation is live-locked)
-     pool 'pptx-render-copy' ─► soffice once (each art slide twice: forced white and forced black background;
+     pool 'pptx-render-copy' ─► soffice once (each art slide twice: forced white and forced yellow background;
      picture-class slides once) ─► pdftoppm -r 288 -f k -l k per needed page ─► pool 'pptx-art'
-     (alpha = 1 − max(white − black)/255, colour = black/alpha, bounding-box crop) ─► PNG ─► addReadyPicture
+     (alpha from the two pages, colour un-blended, bounding-box crop) ─► PNG ─► addReadyPicture
      ─► patch slides whose digest is unchanged ── version 2
  goLive ─► resolvePlaylist: referencedMediaIds (+play clips, slide audio, posters, refMediaId; those optional)
         ─► referencedFontFamilies (+run, bullet and fallback fonts; CJK faces when the text has CJK)
@@ -610,13 +610,13 @@ It is used by `drawSlide2D`, `slideVisible` (`plan.ts:138-144`), both `slideImag
   1. builds the render copy on the pool (`pptx-render-copy`);
   2. runs soffice **once**;
   3. runs `pdftoppm -r 288 -f k -l k` per needed page (page k = the k-th slide in the render copy, so hidden slides cannot shift pages);
-  4. runs pool task `pptx-art`: for each art slide, from its white and black pages, alpha = 1 − max(white − black)/255 and colour = black/alpha, cropped to the art's bounding box. Picture-class pages are contain-fitted at the slide's aspect, 3840 px wide at 16:9;
+  4. runs pool task `pptx-art`: for each art slide, from its two pages, alpha and colour, cropped to the art's bounding box. Over white and black that would be alpha = 1 − max(white − black)/255 and colour = black/alpha; the second page is yellow (#FFFF00) instead, because LibreOffice draws text of automatic colour white on any background of luminance 156 or less (verified in M3 with a probe deck: automatic black text came back white over black), so alpha = 1 − (white − yellow)/255 in the blue channel and colour = (yellow − (1 − alpha)·yellow background)/alpha. Picture-class pages are contain-fitted at the slide's aspect, 3840 px wide at 16:9;
   5. `addReadyPicture`;
   6. converts metafiles to PNG;
   7. patches only the slides whose objects still match `pptx.digest`: the art object replaces the art-range objects. A slide someone edited meanwhile gets the art as an extra locked object at the end, plus a note, and keeps the operator's objects.
 
 **Render copy** (built in the worker, linear tag scans, part budgets):
-- only the needed slides in `sldIdLst`; every art slide appears twice, once with its background forced to white and once to black (slide, layout and master backgrounds overridden, master shapes hidden);
+- only the needed slides in `sldIdLst`; every art slide appears twice, once with its background forced to white and once to yellow (step 4; slide, layout and master backgrounds overridden, master shapes hidden);
 - on art slides, every element outside the art and every native element inside the range is removed, so only the art's own elements are printed;
 - on picture-class slides, nothing is removed except media payloads;
 - media payload relationships are removed (posters stay);

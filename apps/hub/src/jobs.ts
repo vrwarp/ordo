@@ -31,6 +31,21 @@ type JobRow = {
 };
 
 const MAX_LOG = 500;
+
+/**
+ * Thrown by a handler that cannot run yet (a pptx follow-up while its presentation is live-locked, ADR 0007):
+ * the job goes back to the queue and is not started again for `delayMs`. It is not a failure and does not
+ * count as a crashed attempt. The delay lives in this process only: after a restart the job runs at once and
+ * defers itself again if it still has to.
+ */
+export class JobDeferred extends Error {
+  constructor(
+    readonly delayMs: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 /**
  * A job that was running when its process died is re-queued; after this many starts it fails for good
  * (design/25: a file that crashes the decoder is marked and never retried in a loop).
@@ -62,6 +77,9 @@ export class JobQueue {
   private stopped = true;
   private lastNotify = new Map<string, number>();
   private idleWaiters: (() => void)[] = [];
+  /** Deferred jobs (JobDeferred): not started before this time (ms since the epoch). */
+  private notBefore = new Map<string, number>();
+  private wake: NodeJS.Timeout | undefined;
 
   constructor(
     private db: DB,
@@ -143,11 +161,24 @@ export class JobQueue {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    clearTimeout(this.wake);
     for (const r of this.running.values()) r.ctrl.abort();
     await Promise.allSettled([...this.running.values()].map((r) => r.done));
   }
 
-  /** Resolves when nothing is queued or running (tests). */
+  /** Jobs deferred by their handler (`JobDeferred`), with the time each may start again. */
+  deferred(): { id: string; notBefore: number }[] {
+    return [...this.notBefore].map(([id, notBefore]) => ({ id, notBefore }));
+  }
+
+  /** Let a deferred job start at the next chance (tests; End service could call it too). */
+  undefer(id?: string): void {
+    if (id === undefined) this.notBefore.clear();
+    else this.notBefore.delete(id);
+    queueMicrotask(() => this.pump());
+  }
+
+  /** Resolves when nothing is queued or running (tests). Deferred jobs do not count as queued. */
   idle(): Promise<void> {
     if (!this.running.size && !this.nextQueued('heavy') && !this.nextQueued('light'))
       return Promise.resolve();
@@ -156,10 +187,27 @@ export class JobQueue {
 
   private nextQueued(cls: JobClass): JobRow | undefined {
     const busy = [...this.running.keys()];
+    const now = Date.now();
+    const waiting = (id: string) => (this.notBefore.get(id) ?? 0) > now;
     const rows = this.db
-      .prepare(`SELECT * FROM jobs WHERE state = 'queued' AND class = ? ORDER BY created_at, id LIMIT 20`)
+      .prepare(
+        `SELECT * FROM jobs WHERE state = 'queued' AND class = ? ORDER BY created_at, id LIMIT ${20 + this.notBefore.size}`,
+      )
       .all(cls) as JobRow[];
-    return rows.find((r) => !busy.includes(r.id));
+    return rows.find((r) => !busy.includes(r.id) && !waiting(r.id));
+  }
+
+  /** Pump again when the earliest deferred job may start. */
+  private schedule(): void {
+    clearTimeout(this.wake);
+    this.wake = undefined;
+    if (this.stopped || !this.notBefore.size) return;
+    const now = Date.now();
+    for (const [id, t] of this.notBefore) if (t <= now) this.notBefore.delete(id);
+    if (!this.notBefore.size) return;
+    const next = Math.min(...this.notBefore.values());
+    this.wake = setTimeout(() => this.pump(), Math.max(0, next - now) + 5);
+    this.wake.unref();
   }
 
   private pump(): void {
@@ -173,6 +221,7 @@ export class JobQueue {
         active++;
       }
     }
+    this.schedule();
     if (!this.running.size && this.idleWaiters.length) {
       const w = this.idleWaiters.splice(0);
       for (const f of w) f();
@@ -235,7 +284,16 @@ export class JobQueue {
           log: JSON.stringify(logLines),
         });
       } catch (e) {
-        if (ctrl.signal.aborted && this.stopped) {
+        if (e instanceof JobDeferred && !this.stopped) {
+          // Not a crashed attempt: back to the queue, not started again before its time.
+          this.db
+            .prepare(`UPDATE job_attempts SET attempts = MAX(0, attempts - 1) WHERE job_id = ?`)
+            .run(row.id);
+          const delay = Math.max(0, Math.min(24 * 3600_000, e.delayMs));
+          this.notBefore.set(row.id, Date.now() + delay);
+          logLines.push(`${new Date().toISOString().slice(11, 19)} ${e.message}`);
+          this.update(row.id, { state: 'queued', log: JSON.stringify(logLines) });
+        } else if (ctrl.signal.aborted && this.stopped) {
           // Shutdown: leave it queued so the next start resumes it. A clean stop is not a crashed attempt.
           this.db
             .prepare(`UPDATE job_attempts SET attempts = MAX(0, attempts - 1) WHERE job_id = ?`)
