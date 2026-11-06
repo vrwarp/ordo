@@ -120,21 +120,42 @@ Steps 1-4 of §6. **Done** (M2 wave 1); tests in `itemize.test.ts`, `breaks.test
 
 ### B. lines-office: `measure.ts`, `lines.ts`, `office.ts`
 
-Steps 5-10 of §6.
-- `canvasMeasurer`/`measurerFor`: done (LRU of 20,000, trailing spacing subtracted); check `ctx.lang` and
-  `letterSpacing` support and what Chromium returns for spaced text.
-- `layoutBox`: hanging bullets (the bullet box at least -indent wide, text at marL), justify and distribute
-  (`extraPerSpace` over inter-piece spaces of non-last lines; distribute also the last), right-to-left
-  paragraphs starting at the right and the trailing space hanging on the visual left, `wrap: false` growth
-  from the alignment, the 'ordo' meaning of `lineSpacing`/`lineSpacingPx` (scaffold: `× lineHeight × F` and
-  exact pitch), soft paragraphs.
-- `office.ts`: `officeLine` has page.ts's formulas; port `fitBox` into `autofit`: keep `fitScale` while
-  the text fits at it, else LibreOffice's search (10 bisection steps, `floor(18·mid/100·10)/10/18·100`,
-  spacing 100/90/80 %, 0.5 mm slack, run sizes `max(1, round(round(pt)·font%))`), linear widths during the
-  search and one re-measure at the end; the result is never larger than the stored scale. Space before and
-  after are scaled by `k` and not drawn before the first or after the last paragraph.
-- Tests: page.ts parity cases (line spacing, autofit sizes, superscript), autofit never growing past the
-  stored scale, edits keeping `fitScale` while the text still fits.
+Steps 5-10 of §6. Status: **done** (M2 wave 1); the rules are in each file's header comment.
+- `measure.ts`: `canvasMeasurer` (LRU of 20,000, trailing letter spacing subtracted, a non-finite width is
+  0), `memoMeasurer` (one layout measures each string once), `linearWidth`/`scaleWidth` (the autofit search).
+  Chromium 153, probed: `letterSpacing` is added after every grapheme cluster, the last included; `ctx.lang`
+  exists on DOM and Offscreen contexts; advances scale exactly with the size; kerning applies only within a
+  measured string.
+- `lines.ts` `layoutBox`: greedy lines (first line at marL + indent, others at marL, both ≥ 0), hanging
+  bullets in a box at least -indent wide, trailing whitespace hanging, emergency breaks between graphemes,
+  `wrap: false` growing from its alignment; justify and distribute (`extraPerSpace` per trailing whitespace
+  unit of every piece but a line's last); right-to-left paragraphs mirrored (indents and bullet on the right,
+  pieces from the right, hanging whitespace on the left); valign over the box less its insets; `overflow`
+  by the fit test below or by a line outside the inner width; `ink` includes bullets.
+- `office.ts`: `officeLine` (page.ts's measured formulas), `officeFontPx` (editeng's rounding to whole
+  points), `fitFactor` (0.5 mm slack), `searchFit` (page.ts `fitBox`'s search, literally) and `autofit`:
+  the stored `fitScale` while the text fits at it, else the search from full size with widths scaled
+  linearly from the layout at the stored scale, never above the stored font scale.
+
+Decisions the other items rely on:
+- **Line spacing means the same in both models.** `paras[i].lineSpacing` is a multiple of single spacing
+  (1.2 × F); `lineSpacingPx` is the exact pitch; a paragraph without either takes the box's `lineHeight`
+  (a multiple of F: in the office model, proportion `lineHeight / 1.2`, single when that is 1). Zero is
+  single. The converter writes a paragraph's spacing whenever it differs from the box's `lineHeight`.
+- **F is per line**: the paragraph's main run (§6 step 7), raised by a larger unshifted run on the same
+  line, as LibreOffice sizes each line by its own portions (and page.ts's CSS strut did); never by a raised
+  or lowered run. An empty line takes the larger of F and its end mark.
+- **Soft paragraphs continue the paragraph before them**: its alignment, indents, spacing, line spacing,
+  main size and direction; no bullet, no space between them. The converter may write `{ soft: true }` only;
+  the editor's paragraph strip edits the paragraph a soft one continues. Item A: `prepare` should give a soft
+  paragraph its paragraph's base direction.
+- **`align` is visual** (left is left in a right-to-left paragraph); RTL changes the start edge: where
+  indents and the bullet are, and where the last line of a justified paragraph goes.
+- **Points**: 2 logical px per point (`PX_PER_PT`, both standard deck sizes).
+- **Run sizes under autofit**: rounded to whole points in the office model, exact in 'ordo'; the 'ordo'
+  model has no spacing scale (the search tries 100 % only and reports spacing 1).
+- Tests: `lines.test.ts`, `office.test.ts` (page.ts parity: the line model numbers, the search on random
+  heights and on laid-out text, the stored scale kept and never exceeded, linear widths), `measure.test.ts`.
 
 ### C. bullets-readable: `bullets.ts`, `packages/domain/src/readable.ts` and their uses
 

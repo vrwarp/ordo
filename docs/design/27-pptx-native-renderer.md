@@ -653,6 +653,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
 **Dispatch.**
 - `drawObject` sends a TextObject to the rich engine when it has `runs`, `paras` or any new style field. Otherwise legacy `drawText` runs **byte for byte as today**; the existing goldens guard it.
 - The rich engine's `'ordo'` line model reproduces `drawText`'s vertical metrics: pitch `lineHeight × size`, baseline at `(pitch − size)/2 + 0.8 × size` (`text2d.ts:178-180`). Turning on RTL or shrink-to-fit for an existing box therefore does not move its lines vertically.
+- In both models a paragraph's `lineSpacing` is a multiple of single spacing (1.2 × F) and `lineSpacingPx` the pitch; a paragraph with neither takes the box's `lineHeight`.
 - `'office'` uses LibreOffice's model.
 
 **Bands, stage and readable text.**
@@ -668,7 +669,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
 - Advances at device size can differ from the reference × scale by a fraction of a pixel. That residue stays inside a segment and never moves a break.
 
 **Pipeline**
-1. **Itemize.** Paragraphs are the `\n` pieces; `soft` continues the previous paragraph and takes its style, overriding only what its own `paras[i]` sets. Style runs are runs ∩ paragraphs. An empty paragraph's end mark is the run covering its `\n`; the last paragraph, which has none, takes the run covering the `\n` before it.
+1. **Itemize.** Paragraphs are the `\n` pieces; `soft` continues the previous paragraph: it takes its style, spacing and direction, overriding only what its own `paras[i]` sets, and has no bullet and no space between them. Style runs are runs ∩ paragraphs. An empty paragraph's end mark is the run covering its `\n`; the last paragraph, which has none, takes the run covering the `\n` before it.
 2. **Bidi.** UAX#9 per paragraph (bidi-js), run only when strong RTL characters exist or a direction is set. The base direction comes from `paras[i].rtl`, else `style.direction`, else `auto` (first strong character of the whole soft-break chain, which is one PowerPoint paragraph). bidi-js classifies UTF-16 units, so astral characters are passed as two BMP characters of their class.
 3. **Breaks.**
    - UAX#14 opportunities over the logical text. U+00A0, U+202F and U+2060 (also U+2007, U+2011 and U+FEFF) never break on either side, even after a space, which fixes the verified 'Dieu !' split.
@@ -682,9 +683,10 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
    - Available width = box − insets − marL − first-line indent; a hanging bullet sits in the negative indent and its box is at least −indent wide.
    - Trailing spaces hang.
    - `wrap:false` never wraps; a line grows from its alignment (centre both ways, right leftwards, left rightwards).
+   - A right-to-left paragraph mirrors its start: indents and the bullet are on the right and its trailing space hangs on the left. `align` stays visual.
    - Then UAX#9 L2 visual reordering between segments. The browser orders glyphs within a segment.
 7. **Line model `'office'`** (LibreOffice, measured in the pptx-render commits; `page.ts:202-353`).
-   - F = the size of the paragraph's main run: its first run without a baseline shift, else its first run, else the end mark, after autofit.
+   - F = the size of the paragraph's main run: its first run without a baseline shift, else its first run, else the end mark, after autofit. A larger unshifted run raises F for its own line (LibreOffice sizes each line by its portions), so lines never overlap.
    - Single spacing: pitch 1.2F, first baseline F below the line top.
    - Proportional p ≠ 1: h = 1.2F·p·k, where k is the autofit spacing scale. The baseline is F + (h − 1.2F) when p > 1, else min(F, 0.8h).
    - Exact spacing P: h = P·k.
@@ -700,6 +702,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
     - Use `fitScale` while the text fits at that scale.
     - Otherwise run LibreOffice's search (`page.ts:355-402`): 10 bisection steps on the font %, quantised `floor(18·mid/100·10)/10/18·100`, spacing tries 100/90/80%, 0.5 mm slack, run size `max(1, round(round(pt)·font%))`. Because the text overflows at the stored scale, the result can only be smaller, so an edit never makes text jump larger.
     - During the search, widths scale linearly from one measure at the base size. Only the final size is re-measured.
+    - Points are 2 logical px (both standard deck sizes). The `'ordo'` model scales run sizes exactly and has no spacing scale.
     - Text edits keep `fitScale`; only 'Re-fit text' clears it (§11).
 11. **Bullets.**
     - Character bullets use their own font and size. Wingdings/Symbol PUA codes are mapped to Unicode at import (0x6C→●, 0x6E→■, 0xA7→▪, 0xD8→➢, 0xFC→✓, 0x71→❑, 0x76→❖, Symbol 0xB7→•; U+F0xx offset stripped).
