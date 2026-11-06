@@ -149,6 +149,24 @@ key is drawn again at most every 2 s, so a cached file the worker still cannot r
 image that fails to decode is not reported as missing (it would be missing every time); it is drawn
 without, like before. Covered by `link-core.test.ts` and the chaos spec's withheld-image test.
 
+## Video pictures and video inside a slide (asset worker)
+
+An `ImageObject` whose media is a video draws that media's poster ([design/27](27-pptx-native-renderer.md)
+§8): the link's `slideImages` maps every picture a slide draws through `stillFile` (an image itself, a
+video's poster), as the operator's thumbnail worker does, and a preview also caches the posters of its
+media. The manifest already ships posters.
+
+A slide job that carries `video` (design/27 §7.2) is answered with `SRC_SCENE` under its unchanged key.
+`rasterScene` (`packages/renderer/src/scene-raster.ts`) splits the objects around the playing one with
+`splitScene`, measuring text with the drawer's own layout so that text overflowing its box into the video
+goes over it; draws the base (with the poster unless the clip is hidden while stopped), transfers it, draws
+the over on the same surface when anything is over the video, and encodes the plane at the output's scale
+with the poster's size, so the clip lands exactly on its poster. A look that does not draw the slide as
+authored, an object that is gone or an empty box leaves the slide one bitmap with its poster. Covered by
+`scene-raster.test.ts` and `asset.worker.test.ts` (fakes) and `scene-raster.browser.test.ts`, which
+recomposes base, the clip through `planeSample` and over in headless Chromium and compares them with the
+slide drawn as one bitmap, with and without the clip playing.
+
 ## Frame loop
 
 ```

@@ -10,6 +10,7 @@ import {
   type Presentation,
   type Slide,
   playableFile,
+  stillFile,
 } from '@ordo/domain';
 import { checkInvariants, reduce } from '@ordo/live-state';
 import { APP_VERSION, type OutputConfigRes, type OutputHealth, ROUTES } from '@ordo/protocol';
@@ -1042,12 +1043,16 @@ export class LinkCore {
     return slot && (slot.ready || slot.waiter) ? slot : undefined;
   }
 
+  /**
+   * mediaId -> file hash of every picture the slides draw: an image itself, a video's poster (an
+   * ImageObject whose media is a video shows its poster, as thumbnails and the editor do; design/27 §8).
+   */
   private slideImages(...slides: (Slide | undefined)[]): Record<string, string> {
     const out: Record<string, string> = {};
     const add = (id?: string) => {
       if (!id) return;
       const m = this.mediaById(id);
-      const f = m ? playableFile(m) : undefined;
+      const f = m ? stillFile(m) : undefined;
       if (f) out[id] = f.hash;
     };
     for (const s of slides) {
@@ -1420,10 +1425,9 @@ export class LinkCore {
     const state = this.state();
     const files = new Map<string, ManifestFile>();
     for (const f of state.resolved?.files ?? []) files.set(f.hash, f);
-    for (const m of this.preview?.media ?? []) {
-      const f = playableFile(m);
-      if (f) files.set(f.hash, { hash: f.hash, bytes: f.bytes, mime: f.mime });
-    }
+    for (const m of this.preview?.media ?? [])
+      for (const f of [playableFile(m), m.poster])
+        if (f) files.set(f.hash, { hash: f.hash, bytes: f.bytes, mime: f.mime });
     const fonts = new Map<string, Font>();
     for (const f of [...(this.config?.fonts ?? []), ...(state.resolved?.fonts ?? [])])
       fonts.set(f.file.hash, f);
