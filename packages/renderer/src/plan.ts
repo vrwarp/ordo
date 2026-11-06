@@ -2,6 +2,7 @@ import {
   type LiveState,
   type Look,
   type Media,
+  type MediaContent,
   type MediaOnEnd,
   type Presentation,
   type Rgba,
@@ -37,6 +38,13 @@ export type SlideDesc = {
   slide: Slide;
   nextSlide?: Slide;
   isSong: boolean;
+  /**
+   * The slide's video plays in place, in the box of ImageObject `objectId` (design/27 §7.2): set when the
+   * media layer's desc is `inSlide` for this slide. `w` x `h` is the clip's delivered size (Media.width,
+   * height) when known: the plane fits the video with it, never with the poster's. The hub delivers square
+   * pixels (anamorphic sources resampled at ingest), so it is the shape on screen.
+   */
+  video?: { objectId: string; mediaId: string; hash: string; w?: number; h?: number };
 };
 
 export type LowerThirdDesc = { layer: 'lowerThird'; key: string; text: string };
@@ -56,6 +64,13 @@ export type MediaDesc = {
   positionMs: number;
   durationMs?: number;
   audio: { pairId?: string; gainDb?: number; loudnessLufs?: number };
+  /**
+   * The video plays inside the live slide, in ImageObject `objectId` (design/27 §7.2). The media layer's
+   * key is then '' (the slide layer draws it as a scene) and this desc is kept for arming, transport,
+   * audio and `media.ended`. `showWhenStopped: false` is the object's "Hide while not playing": no frame
+   * of the clip shows while the reducer's state is not 'playing' (and its poster is not in the base).
+   */
+  inSlide?: { objectId: string; showWhenStopped?: false };
 };
 
 export type AudioDesc = {
@@ -144,6 +159,26 @@ export function slideVisible(look: Look, slide: Slide, isSong: boolean, nextSlid
 }
 
 const EMPTY = <D>(at = 0): LayerPlan<D> => ({ key: '', desc: null, at, fadeMs: 0 });
+
+/**
+ * Whether a slide's own clip (media content with `objectId`) plays inside the slide this output draws
+ * (design/27 §7.2 "Arming and slot ownership"): the look draws authored slides, the slide layer shows the
+ * clip's own cue, and that slide still has the playing ImageObject. Otherwise (lyric-only or hidden slide
+ * modes, another slide on the slide layer) nothing draws the clip.
+ */
+function inSlideFor(
+  c: MediaContent,
+  m: Media,
+  slide: SlideDesc | null,
+  look: Look,
+): MediaDesc['inSlide'] | undefined {
+  if (!c.objectId || look.layers.slide.mode !== 'authored') return undefined;
+  if (c.mediaKind !== 'video' || m.kind !== 'video') return undefined;
+  if (!slide || slide.cueIndex !== c.cueIndex) return undefined;
+  const o = slide.slide.objects.find((x) => x.id === c.objectId);
+  if (o?.type !== 'image' || !o.play || o.play.mediaId !== c.mediaId) return undefined;
+  return o.play.showWhenStopped === false ? { objectId: o.id, showWhenStopped: false } : { objectId: o.id };
+}
 
 /**
  * Plan every layer of `state` under `look`. Slides and looks are clamped on the way in (design/25): the
@@ -261,8 +296,16 @@ export function planFrame(state: LiveState, rawLook: Look, opts: PlanOptions = {
     if (c && m && f) {
       const cue = state.cues[c.cueIndex];
       const key = `md|${c.cueIndex}|${m.id}|${f.hash}`;
+      const inSlide = c.objectId ? inSlideFor(c, m, plan.slide.desc, look) : undefined;
+      if (inSlide && plan.slide.desc) {
+        const size = (m.width ?? 0) > 0 && (m.height ?? 0) > 0 ? { w: m.width, h: m.height } : {};
+        plan.slide.desc.video = { objectId: inSlide.objectId, mediaId: m.id, hash: f.hash, ...size };
+      }
       plan.media = {
-        key: look.layers.media.visible ? key : '',
+        // A slide's own clip never draws full-frame on the media layer: the slide layer plays it in its box
+        // (inSlide), or, in lyric-only and hidden slide modes, nothing draws it and the audio master plays
+        // its sound as for a media layer this look hides.
+        key: look.layers.media.visible && !c.objectId ? key : '',
         desc: {
           layer: 'media',
           key,
@@ -282,6 +325,7 @@ export function planFrame(state: LiveState, rawLook: Look, opts: PlanOptions = {
             gainDb: cue?.audio?.gainDb ?? m.audio?.gainDb,
             loudnessLufs: m.audio?.loudnessLufs,
           },
+          ...(inSlide ? { inSlide } : {}),
         },
         at: ls.at,
         fadeMs,

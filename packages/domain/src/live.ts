@@ -79,6 +79,16 @@ export type Cue = {
   action?: ActionId;
   /** Loop presentations auto-advance after this many ms. */
   autoAdvanceMs?: number;
+  /*
+   * A slide cue's own media (design/27 §3.3, §8), set by expandCues only for media in `resolved.media`.
+   * The playing video also fills mediaId, mediaKind 'video', loop, onEnd and audio above.
+   */
+  /** The ImageObject that plays `mediaId` in its box. */
+  mediaObjectId?: string;
+  mediaStart?: 'auto' | 'click';
+  mediaShowWhenStopped?: boolean;
+  /** The slide's sound; it plays on until the live cue leaves [this cue, untilCue]. */
+  slideAudio?: { mediaId: string; start: 'auto' | 'click'; loop: boolean; gainDb?: number; untilCue: number };
 };
 
 export type SlideContent = { kind: 'slide'; cueIndex: number; presentationId: Id; slideId: Id };
@@ -95,6 +105,8 @@ export type MediaContent = {
   startedAt: number;
   /** Position in ms when paused or ended. */
   positionMs: number;
+  /** A slide cue's video: the ImageObject of slide `cueIndex` it plays in (design/27 §7.2). */
+  objectId?: string;
 };
 export type LowerThirdContent = { kind: 'lowerThird'; text: string };
 export type AudioContent = {
@@ -106,6 +118,9 @@ export type AudioContent = {
   positionMs: number;
   pairId?: Id;
   gainDb?: number;
+  /** A slide's own sound (design/27 §8): cleared once the live cue leaves [cueIndex, untilCue]. */
+  slideOwned?: boolean;
+  untilCue?: number;
 };
 
 /** A layer always exists; `at` is the hub time its current content (or emptiness) takes effect. */

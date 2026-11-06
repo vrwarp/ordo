@@ -4,7 +4,7 @@ import { LiveCommand, LiveEvent, type LiveState, type ResolvedPlaylist, Id } fro
 export const PROTOCOL_VERSION = 1;
 
 /** Version of the hub and the browser apps, deployed together from one image. A mismatch on hello means a stale tab. */
-export const APP_VERSION = '0.1.0';
+export const APP_VERSION = '0.2.0';
 
 export const Role = z.enum(['operate', 'edit', 'output', 'stage']);
 export type Role = z.infer<typeof Role>;
@@ -34,6 +34,8 @@ export const OutputHealth = z.object({
   recentLog: z.array(z.string().max(300)).max(50).optional(),
   /** Which compositor is drawing: webgpu or 2d. */
   compositor: z.enum(['webgpu', '2d']).optional(),
+  /** MB of GPU memory in the compositor's layer and scene textures (design/27 §13: ≤ 400 at 4K). */
+  gpuMB: z.number().min(0).max(1e6).optional(),
   /** Ms since the main thread last ran the watchdog tick, as measured by the output's link worker. */
   mainThreadStallMs: z.number().optional(),
   /** Supervised workers of the window (design/25): restarts and give-ups per worker. */

@@ -29,12 +29,18 @@ const slideArb = fc.record({
         text: fc.string({ unit: 'binary', maxLength: 120 }),
       }),
       fc.record({ id: ID, type: fc.constant('image'), mediaId: ID }),
+      // A video playing in place (design/27 §8).
+      fc.record({ id: ID, type: fc.constant('image'), mediaId: ID, play: fc.record({ mediaId: ID }) }),
     ),
     { maxLength: 3 },
   ),
   lyricObjectId: fc.option(ID, { nil: undefined }),
   durationMs: fc.option(num, { nil: undefined }),
   backgroundMediaId: fc.option(ID, { nil: undefined }),
+  audio: fc.option(fc.record({ mediaId: ID, slides: fc.option(num, { nil: undefined }) }), {
+    nil: undefined,
+  }),
+  hidden: fc.option(fc.boolean(), { nil: undefined }),
 });
 
 const presentationArb = (id: string) =>
@@ -91,7 +97,7 @@ const resolvedArb = fc
     a: presentationArb('a'),
     b: presentationArb('b'),
     present: fc.subarray(['a', 'b']),
-    mediaKinds: fc.subarray(['c', 'd']),
+    mediaKinds: fc.subarray(['c', 'd', 'e']),
   })
   .map(({ items, a, b, present, mediaKinds }) => {
     const presentations: Record<string, Presentation> = {};
@@ -102,7 +108,7 @@ const resolvedArb = fc
       media[id] = {
         id,
         name: `m-${id}`,
-        kind: id === 'c' ? 'video' : 'image',
+        kind: id === 'c' ? 'video' : id === 'e' ? 'audio' : 'image',
         loop: false,
       } as unknown as Media;
     const playlist = { id: 'pl', rev: 1, name: 'p', items } as unknown as Playlist;
@@ -134,6 +140,17 @@ describe('expandCues / arrangedSections (fuzz)', () => {
             if (c.autoAdvanceMs !== undefined) {
               expect(Number.isFinite(c.autoAdvanceMs)).toBe(true);
               expect(c.autoAdvanceMs).toBeGreaterThanOrEqual(500);
+            }
+            // A slide's own media is a known video, and its sound stops within its own playlist item.
+            if (c.mediaId !== undefined) {
+              expect(r.media[c.mediaId]?.kind).toBe('video');
+              expect(c.mediaObjectId).toBeDefined();
+            }
+            if (c.slideAudio) {
+              expect(r.media[c.slideAudio.mediaId]).toBeDefined();
+              expect(Number.isInteger(c.slideAudio.untilCue)).toBe(true);
+              expect(c.slideAudio.untilCue).toBeGreaterThanOrEqual(c.index);
+              expect(cues[c.slideAudio.untilCue]?.itemIndex).toBe(c.itemIndex);
             }
           }
           if (c.kind === 'media') expect(r.media[c.mediaId!]).toBeDefined();

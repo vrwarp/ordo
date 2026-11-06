@@ -7,7 +7,8 @@ import { type WakeSentinel, WakeLockKeeper } from './wakelock.ts';
 /**
  * Output window entry: the thin main thread (design/25). URL: `?output=<id>&token=<token>` (plus `&out=K`
  * in path mode). Test hooks: `?test=1` writes the live slide cue index into the top-left pixel and exposes
- * `__ordo.chaos`; `?renderer=2d` forces the Canvas 2D compositor; `?res=1280x720` overrides the render
+ * `__ordo.chaos`; `?renderer=2d` forces the Canvas 2D compositor and `?renderer=webgpu` keeps WebGPU on a
+ * software adapter (SwiftShader), which otherwise gets Canvas 2D; `?res=1280x720` overrides the render
  * resolution. Everything that is not DOM runs in the link worker (link.worker.ts).
  */
 
@@ -45,6 +46,7 @@ const host = new OutputHost({
   height,
   testMode,
   forceCanvas2d: q.get('renderer') === '2d',
+  allowFallbackAdapter: q.get('renderer') === 'webgpu',
 });
 
 declare global {

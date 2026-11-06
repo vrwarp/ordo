@@ -143,6 +143,7 @@ export function OutputLogs() {
               <span className="muted">
                 {h?.connected ? `${lines.length} lines` : 'not connected'}
                 {h?.compositor ? `, ${h.compositor} compositor` : ''}
+                {h?.gpuMB !== undefined ? `, ${h.gpuMB} MB GPU` : ''}
                 {h?.mainThreadStallMs !== undefined && h.mainThreadStallMs > STALL_REPORT_MS
                   ? `, main thread stalled ${Math.round(h.mainThreadStallMs)} ms`
                   : ''}

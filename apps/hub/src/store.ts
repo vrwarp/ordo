@@ -17,6 +17,31 @@ export type Sniffed = {
   kind: 'video' | 'image' | 'audio' | 'font' | 'pdf' | 'zip';
 };
 
+/*
+ * ASF (WMV, WMA) GUIDs as stored, the first three fields little-endian: the header object
+ * 75B22630-668E-11CF-A6D9-00AA0062CE6C, and the stream types of a stream properties object,
+ * ASF_Video_Media BC19EFC0-5B4D-11CF-A8FD-00805F5C442B and
+ * ASF_Audio_Media F8699E40-5B4D-11CF-A8FD-00805F5C442B.
+ */
+const ASF_HEADER = [
+  0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11, 0xa6, 0xd9, 0x00, 0xaa, 0x00, 0x62, 0xce, 0x6c,
+];
+const ASF_VIDEO = [
+  0xc0, 0xef, 0x19, 0xbc, 0x4d, 0x5b, 0xcf, 0x11, 0xa8, 0xfd, 0x00, 0x80, 0x5f, 0x5c, 0x44, 0x2b,
+];
+const ASF_AUDIO = [
+  0x40, 0x9e, 0x69, 0xf8, 0x4d, 0x5b, 0xcf, 0x11, 0xa8, 0xfd, 0x00, 0x80, 0x5f, 0x5c, 0x44, 0x2b,
+];
+
+/** Whether `pat` occurs in `b` at or after `from`. */
+function contains(b: Uint8Array, pat: readonly number[], from = 0): boolean {
+  outer: for (let i = from; i + pat.length <= b.length; i++) {
+    for (let j = 0; j < pat.length; j++) if (b[i + j] !== pat[j]) continue outer;
+    return true;
+  }
+  return false;
+}
+
 /** Identify a file from its first bytes. Returns undefined for anything ordo does not accept. */
 export function sniff(b: Uint8Array): Sniffed | undefined {
   const at = (o: number, s: string) => [...s].every((c, i) => b[o + i] === c.charCodeAt(0));
@@ -28,6 +53,20 @@ export function sniff(b: Uint8Array): Sniffed | undefined {
   if (at(0, 'RIFF') && at(8, 'WEBP')) return { ext: 'webp', mime: 'image/webp', kind: 'image' };
   if (at(0, 'RIFF') && at(8, 'WAVE')) return { ext: 'wav', mime: 'audio/wav', kind: 'audio' };
   if (at(0, 'RIFF') && at(8, 'AVI ')) return { ext: 'avi', mime: 'video/x-msvideo', kind: 'video' };
+  // ASF (WMV, WMA), MPEG program streams and AIFF: old church clips and PowerPoint media
+  // (design/27 §8 "Hub"). ffmpeg decodes them; the delivery is the usual MP4 or m4a.
+  if (ASF_HEADER.every((x, i) => b[i] === x)) {
+    // The header object lists every stream before any data. A WMA has audio streams only; when the
+    // head is too short to tell (large metadata), call it video: transform() makes an audio-only file
+    // an audio item.
+    if (contains(b, ASF_VIDEO, 30)) return { ext: 'wmv', mime: 'video/x-ms-wmv', kind: 'video' };
+    if (contains(b, ASF_AUDIO, 30)) return { ext: 'wma', mime: 'audio/x-ms-wma', kind: 'audio' };
+    return { ext: 'asf', mime: 'video/x-ms-asf', kind: 'video' };
+  }
+  if (u(0) === 0 && u(1) === 0 && u(2) === 1 && u(3) === 0xba)
+    return { ext: 'mpg', mime: 'video/mpeg', kind: 'video' }; // MPEG-1/2 program stream pack header
+  if (at(0, 'FORM') && (at(8, 'AIFF') || at(8, 'AIFC')))
+    return { ext: 'aiff', mime: 'audio/aiff', kind: 'audio' };
   if (at(4, 'ftyp')) {
     const brand = String.fromCharCode(u(8), u(9), u(10), u(11));
     if (brand === 'qt  ') return { ext: 'mov', mime: 'video/quicktime', kind: 'video' };
@@ -66,6 +105,11 @@ const EXT_KIND: Record<string, Sniffed['kind']> = {
   webm: 'video',
   mkv: 'video',
   avi: 'video',
+  wmv: 'video',
+  asf: 'video',
+  mpg: 'video',
+  mpeg: 'video',
+  vob: 'video',
   jpg: 'image',
   jpeg: 'image',
   png: 'image',
@@ -80,6 +124,10 @@ const EXT_KIND: Record<string, Sniffed['kind']> = {
   ogg: 'audio',
   oga: 'audio',
   opus: 'audio',
+  wma: 'audio',
+  aif: 'audio',
+  aiff: 'audio',
+  aifc: 'audio',
   ttf: 'font',
   otf: 'font',
   woff: 'font',
@@ -89,6 +137,9 @@ const EXT_KIND: Record<string, Sniffed['kind']> = {
   zip: 'zip',
   pro: 'zip',
 };
+
+/** Extensions of the ASF container (sniffed as wmv, wma or asf). */
+const ASF_EXT = new Set(['wmv', 'wma', 'asf']);
 
 export function extOf(name: string): string {
   const m = /\.([A-Za-z0-9]{1,8})$/.exec(name);
@@ -108,6 +159,8 @@ export function extensionAgrees(name: string, s: Sniffed): boolean {
   if (k === 'audio' && s.kind === 'video' && ext === 'ogg') return true;
   if (k === 'video' && s.kind === 'audio' && ext === 'ogg') return true;
   if (k === 'video' && s.kind === 'audio' && (ext === 'mp4' || ext === 'm4v')) return true;
+  // One ASF container holds WMV or WMA, and its head may not say which streams it has.
+  if (ASF_EXT.has(ext) && ASF_EXT.has(s.ext)) return true;
   return false;
 }
 

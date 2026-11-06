@@ -1,4 +1,5 @@
 import { itemStarts, type LiveState, sectionsOfItem } from '@ordo/domain';
+import { mediaPlayTarget } from '@ordo/live-state';
 import type { DeckView } from '@ordo/surfaces';
 
 /** What the Stream Deck shows, derived from live state. */
@@ -20,13 +21,21 @@ export function deckView(s: LiveState, connected: boolean, masterDb?: number): D
     nextItems.push(label);
     if (nextItems.length >= 3) break;
   }
+  // The play/pause key shows what F8 acts on, as the LayerBar does (design/27 §8): a waiting click-start
+  // sound comes before a playing video, so the key offers Play (sub-label 'sound') until it starts.
+  const target = mediaPlayTarget(s);
+  const mediaPlaying =
+    target === 'video'
+      ? s.layers.media.content?.state === 'playing'
+      : target === 'audio' && s.audio.content?.state === 'playing';
   return {
     sections: secs.map((x) => ({ short: x.short, label: x.label, pos: x.pos })),
     liveSectionPos: liveCue?.arrangementPos,
     nextItems,
     black: s.black,
     logo: s.props.logo,
-    mediaPlaying: s.layers.media.content?.state === 'playing' || s.audio.content?.state === 'playing',
+    mediaPlaying,
+    ...(target === 'slideSound' ? { slideSoundWaiting: true } : {}),
     liveLabel: liveCue?.label,
     connected,
     masterDb,

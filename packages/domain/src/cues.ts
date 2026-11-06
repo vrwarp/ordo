@@ -1,6 +1,7 @@
 import type { Cue, ResolvedPlaylist } from './live.ts';
 import { readableText } from './readable.ts';
-import type { Arrangement, Presentation, Section, TextObject } from './schemas.ts';
+import { playingObject } from './resolve.ts';
+import type { Arrangement, Presentation, Section, Slide, TextObject } from './schemas.ts';
 
 /** The arrangement used by a playlist item: the named one, else the first, else authoring order. */
 export function arrangementFor(p: Presentation, arrangementId?: string): Arrangement {
@@ -30,31 +31,39 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
       const p = resolved.presentations[item.presentationId];
       if (!p) return;
       const sections = arrangedSections(p, item.arrangementId);
-      sections.forEach((section, arrangementPos) => {
-        section.slides.forEach((slide, slideIndexInSection) => {
-          const text = firstText(slide);
-          cues.push({
-            index: cues.length,
-            itemId: item.id,
-            itemIndex,
-            kind: 'slide',
-            label: truncate(
-              text ? text.replace(/\n/g, ' / ') : `${section.label} ${slideIndexInSection + 1}`,
-              60,
-            ),
-            presentationId: p.id,
-            sectionId: section.id,
-            sectionLabel: section.label,
-            sectionShort: section.short,
-            arrangementPos,
-            slideId: slide.id,
-            slideIndexInSection,
-            backgroundMediaId: slide.backgroundMediaId ?? item.backgroundMediaId ?? p.backgroundMediaId,
-            ...(slide.clearBackground && !slide.backgroundMediaId ? { clearBackground: true } : {}),
-            transition: item.transition ?? p.transition,
-            autoAdvanceMs:
-              p.kind === 'loop' ? loopDelay(slide.durationMs, p.loop?.defaultSlideMs) : undefined,
-          });
+      const slides = sections.flatMap((section, arrangementPos) =>
+        section.slides.map((slide, slideIndexInSection) => ({
+          section,
+          arrangementPos,
+          slide,
+          slideIndexInSection,
+        })),
+      );
+      const first = cues.length;
+      const until = soundEnds(slides.map((x) => x.slide));
+      slides.forEach(({ section, arrangementPos, slide, slideIndexInSection }, k) => {
+        const text = firstText(slide);
+        cues.push({
+          index: cues.length,
+          itemId: item.id,
+          itemIndex,
+          kind: 'slide',
+          label: truncate(
+            text ? text.replace(/\n/g, ' / ') : `${section.label} ${slideIndexInSection + 1}`,
+            60,
+          ),
+          presentationId: p.id,
+          sectionId: section.id,
+          sectionLabel: section.label,
+          sectionShort: section.short,
+          arrangementPos,
+          slideId: slide.id,
+          slideIndexInSection,
+          backgroundMediaId: slide.backgroundMediaId ?? item.backgroundMediaId ?? p.backgroundMediaId,
+          ...(slide.clearBackground && !slide.backgroundMediaId ? { clearBackground: true } : {}),
+          transition: item.transition ?? p.transition,
+          autoAdvanceMs: p.kind === 'loop' ? loopDelay(slide.durationMs, p.loop?.defaultSlideMs) : undefined,
+          ...slideCueMedia(slide, resolved.media, first + until(k)),
         });
       });
     } else if (item.kind === 'media') {
@@ -98,6 +107,77 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
     }
   });
   return cues;
+}
+
+/**
+ * A muted clip or sound still plays, so its transport and the stage's remaining time work as usual, at the
+ * schema's gain floor, which is silent.
+ */
+const MUTED_DB = -100;
+
+/**
+ * A slide cue's own media (design/27 §8 "Domain"), only for media present in `media`, so the live state never
+ * references media the outputs do not have:
+ * - the playing object's clip (the first ImageObject with `play`, in z order), a video: mediaId,
+ *   mediaKind 'video', loop, onEnd, audio, mediaObjectId, mediaStart, mediaShowWhenStopped;
+ * - the slide's sound (an audio file, or a video's soundtrack): slideAudio, playing on until cue `untilCue`.
+ */
+function slideCueMedia(slide: Slide, media: ResolvedPlaylist['media'], untilCue: number): Partial<Cue> {
+  const out: Partial<Cue> = {};
+  const obj = playingObject(slide);
+  const clip = obj ? media[obj.play.mediaId] : undefined;
+  if (obj && clip?.kind === 'video') {
+    const play = obj.play;
+    const gainDb = play.muted ? MUTED_DB : play.gainDb;
+    out.mediaId = play.mediaId;
+    out.mediaKind = 'video';
+    out.loop = play.loop ?? clip.loop;
+    out.onEnd = play.onEnd ?? 'hold';
+    if (gainDb !== undefined) out.audio = { gainDb };
+    out.mediaObjectId = obj.id;
+    out.mediaStart = play.start ?? 'auto';
+    out.mediaShowWhenStopped = play.showWhenStopped ?? true;
+  }
+  const sound = slide.audio;
+  const track = sound ? media[sound.mediaId] : undefined;
+  if (sound && (track?.kind === 'audio' || track?.kind === 'video')) {
+    const gainDb = sound.muted ? MUTED_DB : sound.gainDb;
+    out.slideAudio = {
+      mediaId: sound.mediaId,
+      start: sound.start ?? 'auto',
+      loop: !!(sound.loop ?? track.loop),
+      ...(gainDb !== undefined ? { gainDb } : {}),
+      untilCue,
+    };
+  }
+  return out;
+}
+
+/**
+ * For each slide of a playlist item, the position of the last slide its sound plays on: the slide reached
+ * after `audio.slides` shown slides (the slide itself is the first; hidden slides do not count), else the
+ * item's last slide. Without `slides`, a sound plays on its own slide only.
+ */
+function soundEnds(slides: Slide[]): (k: number) => number {
+  // Hidden slides are M3's (`Slide.hidden`); read structurally until that field lands.
+  const shown: number[] = [];
+  slides.forEach((s, k) => {
+    if ((s as { hidden?: unknown }).hidden !== true) shown.push(k);
+  });
+  return (k) => {
+    const n = slides[k]?.audio?.slides;
+    const count = typeof n === 'number' && Number.isFinite(n) ? Math.min(999, Math.floor(n)) : 1;
+    if (count <= 1) return k;
+    // The first shown slide after k, then count - 2 more.
+    let lo = 0;
+    let hi = shown.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (shown[mid]! <= k) lo = mid + 1;
+      else hi = mid;
+    }
+    return shown[lo + count - 2] ?? slides.length - 1;
+  };
 }
 
 /**

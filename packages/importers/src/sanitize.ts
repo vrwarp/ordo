@@ -303,6 +303,7 @@ export function sanitizePresentation(p: Presentation): Presentation {
     sec.short = clipText(sec.short, IMPORT_LIMITS.short) || sec.label.slice(0, 1).toUpperCase();
     for (const sl of sec.slides) {
       sl.objects = sl.objects.map(clampObject);
+      sanitizeSlideMedia(sl);
       if (sl.notes !== undefined) sl.notes = clipText(sl.notes, IMPORT_LIMITS.notes);
       if (sl.durationMs !== undefined) {
         if (Number.isFinite(sl.durationMs) && sl.durationMs > 0)
@@ -332,4 +333,24 @@ export function sanitizeExtracted(t: ExtractedText): ExtractedText {
   if (t.fontSizePx !== undefined && Number.isFinite(t.fontSizePx) && t.fontSizePx > 0)
     out.fontSizePx = finite(t.fontSizePx, 64, IMPORT_LIMITS.fontSizeMin, IMPORT_LIMITS.fontSizeMax);
   return out;
+}
+
+type ImportedSlide = Presentation['sections'][number]['slides'][number];
+
+/**
+ * Bound a slide's media in place (design/27 §3.1): the `play` of its image objects and its `audio`. Unknown
+ * enum values are left to the schema's `.catch`; numbers are brought within the schema's bounds.
+ */
+function sanitizeSlideMedia(sl: ImportedSlide): void {
+  for (const o of sl.objects) {
+    if (o.type !== 'image' || !o.play) continue;
+    o.play = { ...o.play, mediaId: clipText(o.play.mediaId, IMPORT_LIMITS.name) };
+    if (o.play.gainDb !== undefined) o.play.gainDb = finite(o.play.gainDb, 0, -100, 100);
+  }
+  if (sl.audio) {
+    const a = { ...sl.audio, mediaId: clipText(sl.audio.mediaId, IMPORT_LIMITS.name) };
+    if (a.gainDb !== undefined) a.gainDb = finite(a.gainDb, 0, -100, 100);
+    if (a.slides !== undefined) a.slides = Math.round(finite(a.slides, 1, 1, 999));
+    sl.audio = a;
+  }
 }

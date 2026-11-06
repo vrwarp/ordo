@@ -8,6 +8,8 @@ export type ProbeStream = {
   codec_name?: string;
   width?: number;
   height?: number;
+  /** "num:den"; "1:1" for square pixels, "0:1" or absent when unknown (taken as square). */
+  sample_aspect_ratio?: string;
   pix_fmt?: string;
   r_frame_rate?: string;
   avg_frame_rate?: string;
@@ -66,6 +68,16 @@ export async function probe(file: string, timeoutMs: number): Promise<ProbeInfo>
 const FIT_1080 =
   "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2";
 
+/**
+ * Square pixels, before a fit. Anamorphic sources (DVD MPEG-PS, DV, some WMV) store a coded size and a
+ * sample aspect ratio that stretches it on screen (720x480 at 32:27 is 16:9). Media.width/height is probed
+ * from the delivery and the renderer fits an in-slide video at it, so the delivery is resampled to its
+ * display size with square pixels; an unknown ratio (0:1) counts as square, and square sources pass.
+ */
+const SQUARE_PIXELS = 'scale=iw*sar:ih,setsar=1';
+/** After a fit: its rounding to even sizes leaves the ratio a hair off 1:1 (852x480 at 853:852). */
+const SQUARE_AFTER_FIT = 'setsar=1';
+
 function progressParser(durationMs: number | undefined, onProgress?: (f: number) => void) {
   let buf = '';
   return (chunk: string) => {
@@ -86,17 +98,28 @@ type TOpts = {
   durationMs?: number;
   onProgress?: (f: number) => void;
 };
+/** The kept part of a source, in its own timeline (Media.trim). */
+export type Trim = { startMs: number; endMs: number };
 const BASE = ['-hide_banner', '-nostdin', '-y', '-loglevel', 'error'];
 const IN_SAFE = ['-protocol_whitelist', 'file,pipe'];
+
+/**
+ * Input options that read only [startMs, endMs] of the source, placed before its `-i`. Transcoding after an
+ * input seek is frame accurate (ffmpeg decodes from the keyframe before and drops what precedes the start),
+ * and the output starts at 0, so the trim is baked into the delivery.
+ */
+export function trimArgs(t: Trim | undefined): string[] {
+  return t ? ['-ss', (t.startMs / 1000).toFixed(3), '-to', (t.endMs / 1000).toFixed(3)] : [];
+}
 
 /** H.264 High MP4, fit within 1920x1080, fps capped at 60, AAC 256k stereo, faststart. */
 export async function transcodeH264(
   input: string,
   output: string,
   info: ProbeInfo,
-  o: TOpts & { noAudio?: boolean },
+  o: TOpts & { noAudio?: boolean; trim?: Trim },
 ): Promise<void> {
-  const vf = [FIT_1080];
+  const vf = [SQUARE_PIXELS, FIT_1080, SQUARE_AFTER_FIT];
   if ((info.video?.fps ?? 0) > 60.5) vf.push('fps=60');
   vf.push('format=yuv420p');
   const audio =
@@ -106,6 +129,7 @@ export async function transcodeH264(
     [
       ...BASE,
       ...IN_SAFE,
+      ...trimArgs(o.trim),
       '-i',
       input,
       '-map',
@@ -148,13 +172,13 @@ export async function transcodeVp9Alpha(
   input: string,
   output: string,
   info: ProbeInfo,
-  o: TOpts & { noAudio?: boolean },
+  o: TOpts & { noAudio?: boolean; trim?: Trim },
 ): Promise<void> {
   const dec: string[] = [];
   // The native VP8/VP9 decoders drop the alpha side channel; libvpx keeps it.
   if (info.video?.codec_name === 'vp9') dec.push('-c:v', 'libvpx-vp9');
   else if (info.video?.codec_name === 'vp8') dec.push('-c:v', 'libvpx');
-  const vf = [FIT_1080];
+  const vf = [SQUARE_PIXELS, FIT_1080, SQUARE_AFTER_FIT];
   if ((info.video?.fps ?? 0) > 60.5) vf.push('fps=60');
   vf.push('format=yuva420p');
   const audio =
@@ -164,6 +188,7 @@ export async function transcodeVp9Alpha(
     [
       ...BASE,
       ...IN_SAFE,
+      ...trimArgs(o.trim),
       ...dec,
       '-i',
       input,
@@ -204,7 +229,7 @@ export async function transcodeVp9Alpha(
   );
 }
 
-/** 640x360 (fit) JPEG poster at 1 s or the midpoint of short clips. */
+/** 640x360 (fit) JPEG poster with square pixels at 1 s or the midpoint of short clips. */
 export async function poster(input: string, output: string, info: ProbeInfo, o: TOpts): Promise<void> {
   const t = info.durationMs ? Math.min(1, info.durationMs / 2000) : 0;
   const dec = info.video?.codec_name === 'vp9' && info.video.hasAlpha ? ['-c:v', 'libvpx-vp9'] : [];
@@ -221,7 +246,7 @@ export async function poster(input: string, output: string, info: ProbeInfo, o: 
       '-frames:v',
       '1',
       '-vf',
-      'scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2',
+      `${SQUARE_PIXELS},scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2,${SQUARE_AFTER_FIT}`,
       '-q:v',
       '3',
       output,
@@ -256,16 +281,25 @@ export async function downscaleImage(
   await run('ffmpeg', [...args, output], o);
 }
 
-/** Integrated loudness (LUFS) from ffmpeg's loudnorm measurement pass. */
-export async function measureLoudness(input: string, o: TOpts): Promise<number | undefined> {
+/**
+ * Integrated loudness (LUFS) from ffmpeg's loudnorm measurement pass, over the first audio stream (the one
+ * the delivery keeps) of the kept part of an audio file or a video's soundtrack.
+ */
+export async function measureLoudness(
+  input: string,
+  o: TOpts & { trim?: Trim },
+): Promise<number | undefined> {
   const r = await run(
     'ffmpeg',
     [
       '-hide_banner',
       '-nostdin',
       ...IN_SAFE,
+      ...trimArgs(o.trim),
       '-i',
       input,
+      '-map',
+      '0:a:0',
       '-vn',
       '-af',
       'loudnorm=print_format=json',
@@ -273,7 +307,7 @@ export async function measureLoudness(input: string, o: TOpts): Promise<number |
       'null',
       '-',
     ],
-    { ...o, keepStdout: false },
+    { timeoutMs: o.timeoutMs, signal: o.signal, keepStdout: false },
   );
   const m = /\{[^{}]*"input_i"[^{}]*\}/s.exec(r.stderr);
   if (!m) return undefined;
@@ -282,12 +316,17 @@ export async function measureLoudness(input: string, o: TOpts): Promise<number |
 }
 
 /** AAC 256k stereo in MP4 (m4a). */
-export async function transcodeAudio(input: string, output: string, o: TOpts): Promise<void> {
+export async function transcodeAudio(
+  input: string,
+  output: string,
+  o: TOpts & { trim?: Trim },
+): Promise<void> {
   await run(
     'ffmpeg',
     [
       ...BASE,
       ...IN_SAFE,
+      ...trimArgs(o.trim),
       '-i',
       input,
       '-map',

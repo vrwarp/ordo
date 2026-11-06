@@ -1,5 +1,5 @@
 import { fileUrl, isControl, type Supervisor } from '@ordo/client';
-import type { Font, Look, Media, Slide } from '@ordo/domain';
+import { type Font, type Look, type Media, type Slide, stillFile } from '@ordo/domain';
 import { useEffect, useState } from 'react';
 import type { ThumbIn, ThumbJob, ThumbOut } from '../workers/thumb.worker.ts';
 
@@ -24,12 +24,12 @@ function slideHash(s: Slide): string {
   return h;
 }
 
-/** The file hash a media item shows as a still: the image itself, or a video's poster. */
+/**
+ * The file hash a media item shows as a still: the image itself, or a video's poster. The same file an
+ * output draws for it (`stillFile`, design/27 §8), so thumbnails match the outputs.
+ */
 export function stillHash(m: Media | undefined): string | undefined {
-  if (!m) return undefined;
-  if (m.kind === 'image') return (m.delivery ?? m.original).hash;
-  if (m.kind === 'video') return m.poster?.hash;
-  return undefined;
+  return m ? stillFile(m)?.hash : undefined;
 }
 
 type Pending = { resolve: (url: string | undefined) => void };

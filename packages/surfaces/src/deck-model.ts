@@ -7,7 +7,10 @@ export type DeckView = {
   nextItems: string[];
   black: boolean;
   logo: boolean;
+  /** Whether the play/pause key's target (F8's, live-state mediaPlayTarget) is playing. */
   mediaPlaying: boolean;
+  /** The live slide's click-start sound waits for the play key, which starts it before anything else. */
+  slideSoundWaiting?: boolean;
   liveLabel?: string;
   connected: boolean;
   masterDb?: number;
@@ -344,6 +347,7 @@ export function keyFace(
     case 'mediaPlayPause':
       label = view.mediaPlaying ? 'Pause' : (key.label ?? 'Play');
       if (view.mediaPlaying) face = { ...face, ring: '#d0a8ff' };
+      if (view.slideSoundWaiting) sub = 'sound';
       break;
     case 'audioMasterUp':
     case 'audioMasterDown':

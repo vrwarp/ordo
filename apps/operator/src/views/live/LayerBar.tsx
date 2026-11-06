@@ -1,4 +1,5 @@
 import { formatDuration } from '@ordo/domain';
+import { mediaPlayTarget, pendingSlideSound } from '@ordo/live-state';
 import type { OutputHealthEntry } from '@ordo/protocol';
 import { useMemo } from 'react';
 import { useHubNow } from '../../hooks.ts';
@@ -52,7 +53,12 @@ export function LayerBar({ op }: { op: OperatorPlaylist }) {
   const mediaRec = mediaC ? op.media(mediaC.mediaId) : audioC ? op.media(audioC.mediaId) : undefined;
   const master = masterHealth(health, outputs.find((o) => o.audioMaster)?.id);
   const t = mediaTimes(s, now, mediaRec?.durationMs, master);
-  const playing = mediaC?.state === 'playing' || (!mediaC && audioC?.state === 'playing');
+  // F8's target (design/27 §8): a slide's click-start sound waits for it, before a playing video.
+  const target = mediaPlayTarget(s);
+  const waiting = target === 'slideSound' ? pendingSlideSound(s) : undefined;
+  const waitingName = waiting ? (op.media(waiting.sound.mediaId)?.name ?? 'slide sound') : undefined;
+  const playing =
+    target === 'video' ? mediaC?.state === 'playing' : target === 'audio' && audioC?.state === 'playing';
   const muted = audio.masterDb <= MUTE_DB + 1;
   const props: string[] = [];
   if (s.props.logo) props.push('Logo');
@@ -110,15 +116,15 @@ export function LayerBar({ op }: { op: OperatorPlaylist }) {
         <div className="row" style={{ gap: 4 }}>
           <button
             type="button"
-            disabled={!mediaC && !audioC}
+            disabled={!target}
             onClick={() => dispatch({ id: 'mediaPlayPause' })}
-            title="F8"
+            title={waitingName ? `F8: start ${waitingName}` : 'F8'}
           >
             {playing ? '❚❚' : '▶'}
           </button>
           <button
             type="button"
-            disabled={!mediaC && !audioC}
+            disabled={!mediaC && !audioC && !waiting}
             onClick={() => dispatch({ id: 'mediaRestart' })}
             title="Shift+F8"
           >
@@ -128,6 +134,11 @@ export function LayerBar({ op }: { op: OperatorPlaylist }) {
             <button type="button" className="small" onClick={() => ctl?.clear('audio')}>
               Stop audio
             </button>
+          )}
+          {waitingName && (
+            <span className="small muted" title="This slide's sound starts on click">
+              F8: {waitingName}
+            </span>
           )}
         </div>
         <span className="mono small" title="Elapsed / remaining">

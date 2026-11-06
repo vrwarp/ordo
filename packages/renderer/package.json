@@ -13,7 +13,8 @@
     "typecheck": "tsc -p tsconfig.json",
     "golden": "tsx golden/run.ts",
     "late-font": "tsx golden/late-font.ts",
-    "bench": "tsx bench/raster.ts"
+    "bench": "tsx bench/raster.ts",
+    "golden:compositor": "tsx golden/compositor-run.ts"
   },
   "dependencies": {
     "@ordo/domain": "workspace:*",

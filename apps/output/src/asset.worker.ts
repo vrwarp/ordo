@@ -11,6 +11,7 @@ import {
   FontResolver,
   type FromAsset,
   SRC_BITMAP,
+  SRC_SCENE,
   type ToAsset,
   downscaleFor,
   installFontEnv,
@@ -18,13 +19,15 @@ import {
   rasterImage,
   rasterLowerThird,
   rasterProps,
+  rasterScene,
   rasterSlide,
 } from '@ordo/renderer';
 import { LOGICAL_WIDTH } from '@ordo/domain';
 
 /**
  * Asset worker: OPFS reads, image decoding, font loading and text rasterization at output resolution.
- * Each job produces one full-frame ImageBitmap that goes straight to the render worker. Jobs arrive from
+ * Each job produces one full-frame ImageBitmap that goes straight to the render worker (a slide whose video
+ * plays in its box: a scene, a base and an optional over bitmap with the video's plane). Jobs arrive from
  * the link worker on a port and results go back on it (design/25); the main thread only sends `init` and
  * the channel ends (`ports`). Supervised: heartbeat every 250 ms.
  */
@@ -210,21 +213,53 @@ function fontFallbacks(job: AssetJob): string[] | undefined {
   return missing.length ? missing.slice(0, MAX_FONT_FALLBACKS) : undefined;
 }
 
+/** What an SRC_SCENE answer carries besides its base bitmap (design/27 §7.2). */
+type SceneParts = { over: ImageBitmap | null; plane: Float32Array; videoSlot: number; videoGen: number };
+
+/** The surface's picture; the surface is left transparent for the next draw. */
+function take(): ImageBitmap {
+  return canvas!.transferToImageBitmap();
+}
+
+/**
+ * A slide job with `video` (design/27 §7.2, SCENE.md item E): the base (objects up to the playing one,
+ * with its poster, and the upper ones that stay clear of the video) and the over (upper objects that
+ * overlap it), split by `splitScene` with measured text bounds, and the plane from the object's box, crop,
+ * flips, rotation, mask and opacity at this output's scale with the clip's size. Undefined when the
+ * slide is not a scene (a lyric-only or hidden look, the object is gone): it is then one bitmap with the
+ * poster, as before.
+ */
+function sceneParts(
+  job: Extract<AssetJob, { kind: 'slide' }>,
+  c: OffscreenCanvasRenderingContext2D,
+  scale: number,
+  lookup: (id: string) => ImageBitmap | undefined,
+): (SceneParts & { base: ImageBitmap }) | undefined {
+  const v = job.video;
+  if (!v) return undefined;
+  const opts = { nextSlide: job.nextSlide, isSong: job.isSong, clip: { w: v.w, h: v.h } };
+  const s = rasterScene(c, take, job.slide, job.look, scale, lookup, v.objectId, opts);
+  return s && { base: s.base, over: s.over, plane: s.plane, videoSlot: v.slot, videoGen: v.gen };
+}
+
 async function run(job: AssetJob): Promise<void> {
   const t0 = performance.now();
   const scale = width / LOGICAL_WIDTH;
   let skipped = 0;
   let missing: string[] = [];
+  let scene: (SceneParts & { base: ImageBitmap }) | undefined;
   try {
     if (job.kind === 'slide') {
       const pre = await preload(job.images);
       skipped = pre.skipped;
       missing = pre.missing;
       const c = surface();
-      rasterSlide(c, job.slide, job.look, scale, pre.lookup, {
-        nextSlide: job.nextSlide,
-        isSong: job.isSong,
-      });
+      scene = sceneParts(job, c, scale, pre.lookup);
+      if (!scene)
+        rasterSlide(c, job.slide, job.look, scale, pre.lookup, {
+          nextSlide: job.nextSlide,
+          isSong: job.isSong,
+        });
     } else if (job.kind === 'image') {
       const img = await image(job.hash);
       const c = surface();
@@ -237,22 +272,29 @@ async function run(job: AssetJob): Promise<void> {
       const c = surface();
       rasterProps(c, job.model, scale, pre.lookup, job.look.clearColor);
     }
-    const bitmap = canvas!.transferToImageBitmap();
+    const bitmap = scene ? scene.base : take();
     const cueIndex = job.kind === 'slide' ? job.cueIndex : job.kind === 'image' ? job.cueIndex : undefined;
     const msg: AssetToRender = {
       t: 'content',
       layer: job.layer,
       key: job.key,
-      kind: SRC_BITMAP,
+      kind: scene ? SRC_SCENE : SRC_BITMAP,
       bitmap,
       cueIndex,
       refresh: job.kind === 'slide' ? job.refresh : undefined,
     };
+    if (scene) {
+      msg.over = scene.over;
+      msg.plane = scene.plane;
+      msg.videoSlot = scene.videoSlot;
+      msg.videoGen = scene.videoGen;
+    }
     if (!port) {
       bitmap.close();
+      scene?.over?.close();
       throw new UnavailableError('render port not connected');
     }
-    port.postMessage(msg, [bitmap]);
+    port.postMessage(msg, scene?.over ? [bitmap, scene.over] : [bitmap]);
     post({
       t: 'done',
       layer: job.layer,

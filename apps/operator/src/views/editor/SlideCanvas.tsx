@@ -113,6 +113,27 @@ function local(box: Box): Box {
   return { x: 0, y: 0, w: box.w, h: box.h, rotation: 0 };
 }
 
+/** The ▶ badge of an object that plays a video in its box (design/27 §7.4), in its bottom-left corner. */
+export function drawPlayBadge(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+  const r = Math.max(8, Math.min(40, Math.min(w, h) * 0.12));
+  const cx = Math.min(r * 1.4, w / 2);
+  const cy = Math.max(h - r * 1.4, h / 2);
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.moveTo(cx - r * 0.35, cy - r * 0.5);
+  ctx.lineTo(cx + r * 0.55, cy);
+  ctx.lineTo(cx - r * 0.35, cy + r * 0.5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
 function ObjectNode(props: {
   o: SlideObject;
   slideId: string;
@@ -152,6 +173,7 @@ function ObjectNode(props: {
             ctx.fillStyle = '#333';
             ctx.fillRect(0, 0, b.w, b.h);
           }
+          if (o.play) drawPlayBadge(ctx, b.w, b.h);
         } else drawObject(ctx, { ...o, box: local(b) }, 1);
       }}
       hitFunc={(context, shape) => {

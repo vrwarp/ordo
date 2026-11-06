@@ -479,7 +479,8 @@ const slideMemo = new WeakMap<object, Slide>();
 
 /**
  * A drawable copy of `slide`: at most 200 objects, each clamped; unknown objects dropped; at most
- * `maxImagesPerSlide` distinct images (further image objects are dropped). Never throws.
+ * `maxImagesPerSlide` distinct images (further image objects are dropped). An image object keeps its
+ * clamped `play`, and the slide its clamped `audio` (design/27 §3.1). Never throws.
  */
 export function clampSlide(slide: unknown): Slide {
   if (slide && typeof slide === 'object') {
@@ -491,7 +492,7 @@ export function clampSlide(slide: unknown): Slide {
   const images = new Set<string>();
   const src = Array.isArray(s.objects) ? s.objects : [];
   for (let i = 0; i < src.length && objects.length < CLAMP.maxObjects; i++) {
-    const o = clampObject(src[i]);
+    const o = withPlay(clampObject(src[i]), src[i]);
     if (!o) continue;
     if (o.type === 'image') {
       if (!images.has(o.mediaId) && images.size >= CLAMP.maxImagesPerSlide) continue;
@@ -503,6 +504,8 @@ export function clampSlide(slide: unknown): Slide {
   if (typeof s.lyricObjectId === 'string') out.lyricObjectId = s.lyricObjectId.slice(0, 200);
   if (typeof s.backgroundMediaId === 'string') out.backgroundMediaId = s.backgroundMediaId.slice(0, 200);
   if (s.clearBackground === true) out.clearBackground = true;
+  const audio = clampSlideSound(s.audio);
+  if (audio) out.audio = audio;
   if (s.imported && typeof s.imported === 'object' && typeof s.imported.imageMediaId === 'string') {
     const imp = s.imported;
     out.imported = {
@@ -525,6 +528,53 @@ export function clampSlide(slide: unknown): Slide {
 /** Whether clamping changed anything that would be drawn (for reporting). */
 export function slideWasClamped(raw: Slide, clamped: Slide): boolean {
   return !Array.isArray(raw?.objects) || raw.objects.length !== clamped.objects.length;
+}
+
+type Play = NonNullable<Extract<SlideObject, { type: 'image' }>['play']>;
+type SlideSound = NonNullable<Slide['audio']>;
+
+/** Mirrors the schema's `.catch('auto')`: a start that is present but unknown is 'auto'. */
+function mediaStart(v: unknown): 'auto' | 'click' {
+  return v === 'click' ? 'click' : 'auto';
+}
+
+/** `ImageObject.play` with known enums and bounded numbers (design/27 §3.1); undefined when unusable. */
+export function clampPlay(p: unknown): Play | undefined {
+  if (!p || typeof p !== 'object') return undefined;
+  const x = p as Partial<Record<keyof Play, unknown>>;
+  const mediaId = str(x.mediaId);
+  if (!mediaId) return undefined;
+  const out: Play = { mediaId };
+  if (x.start !== undefined) out.start = mediaStart(x.start);
+  if (typeof x.loop === 'boolean') out.loop = x.loop;
+  if (x.onEnd !== undefined) out.onEnd = x.onEnd === 'black' || x.onEnd === 'advance' ? x.onEnd : 'hold';
+  if (x.gainDb !== undefined) out.gainDb = num(x.gainDb, -100, 100, 0);
+  if (typeof x.muted === 'boolean') out.muted = x.muted;
+  if (typeof x.showWhenStopped === 'boolean') out.showWhenStopped = x.showWhenStopped;
+  return out;
+}
+
+/** `Slide.audio` with known enums and bounded numbers (design/27 §3.1); undefined when unusable. */
+export function clampSlideSound(a: unknown): SlideSound | undefined {
+  if (!a || typeof a !== 'object') return undefined;
+  const x = a as Partial<Record<keyof SlideSound, unknown>>;
+  const mediaId = str(x.mediaId);
+  if (!mediaId) return undefined;
+  const out: SlideSound = { mediaId };
+  if (x.start !== undefined) out.start = mediaStart(x.start);
+  if (typeof x.loop === 'boolean') out.loop = x.loop;
+  if (x.gainDb !== undefined) out.gainDb = num(x.gainDb, -100, 100, 0);
+  if (typeof x.muted === 'boolean') out.muted = x.muted;
+  if (x.slides !== undefined) out.slides = Math.round(num(x.slides, 1, 999, 1));
+  return out;
+}
+
+/** A clamped image object with the clamped `play` of its raw source (other objects pass through). */
+function withPlay(o: SlideObject | undefined, raw: unknown): SlideObject | undefined {
+  if (o?.type !== 'image') return o;
+  const play = clampPlay((raw as { play?: unknown }).play);
+  if (play) o.play = play;
+  return o;
 }
 
 const lookMemo = new WeakMap<object, Look>();

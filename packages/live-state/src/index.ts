@@ -1,8 +1,10 @@
 import {
+  type AudioContent,
   type Cue,
   type LayerState,
   type LiveEvent,
   type LiveState,
+  type MediaContent,
   type ActionId,
   expandCues,
   itemStarts,
@@ -182,7 +184,13 @@ function goTo(s: LiveState, index: number, at: number): LiveState {
   if (!cue) return s;
   const seq = s.seq;
   const next = s.cues[index + 1] ? index + 1 : undefined;
-  let out: LiveState = { ...s, live: index, armed: next, black: false };
+  let out: LiveState = {
+    ...s,
+    live: index,
+    armed: next,
+    black: false,
+    audio: keepSlideAudio(s.audio, index, at, seq),
+  };
   switch (cue.kind) {
     case 'slide': {
       const layers = { ...out.layers };
@@ -210,8 +218,13 @@ function goTo(s: LiveState, index: number, at: number): LiveState {
           transition: cue.transition,
         };
       }
-      if (layers.media.content) layers.media = { content: null, at, seq };
-      out = { ...out, layers, props: out.props.logo ? { ...out.props, logo: false, at, seq } : out.props };
+      layers.media = slideMediaLayer(layers.media, cue, index, at, seq);
+      out = {
+        ...out,
+        layers,
+        audio: slideAudioLayer(out.audio, cue, index, at, seq),
+        props: out.props.logo ? { ...out.props, logo: false, at, seq } : out.props,
+      };
       return out;
     }
     case 'media': {
@@ -271,6 +284,151 @@ function goTo(s: LiveState, index: number, at: number): LiveState {
   }
 }
 
+/**
+ * The media layer as slide cue `index` goes live (design/27 §8 "Reducer"): the slide's own video in its
+ * object's box, restarted on every entry as PowerPoint does, paused at 0 for a click start (F8 plays it). It
+ * changes with the slide's transition, so the outgoing clip plays on through the fade. A slide without one
+ * clears the layer, as every slide always has.
+ */
+function slideMediaLayer(
+  media: LayerState<MediaContent>,
+  cue: Cue,
+  index: number,
+  at: number,
+  seq: number,
+): LayerState<MediaContent> {
+  if (cue.mediaObjectId && cue.mediaId && cue.mediaKind === 'video') {
+    return {
+      content: {
+        kind: 'media',
+        cueIndex: index,
+        mediaId: cue.mediaId,
+        mediaKind: 'video',
+        objectId: cue.mediaObjectId,
+        loop: !!cue.loop,
+        onEnd: cue.onEnd ?? 'hold',
+        state: cue.mediaStart === 'click' ? 'paused' : 'playing',
+        startedAt: at,
+        positionMs: 0,
+      },
+      at,
+      seq,
+      transition: cue.transition,
+    };
+  }
+  if (!media.content) return media;
+  return media.content.objectId
+    ? { content: null, at, seq, transition: cue.transition }
+    : { content: null, at, seq };
+}
+
+/**
+ * The audio slot as slide cue `index` goes live (design/27 §8 "Reducer"):
+ * - A slide-owned sound with the same media that is still playing, with `index` inside its
+ *   `[cueIndex, untilCue]`, plays on: a loop that wraps back to its slide, an operator stepping back, or an
+ *   arrangement that repeats the slide inside the range never restarts it. Its range grows to cover the
+ *   repeat's own range.
+ * - An autoplay sound replaces what plays (a playlist audio cue included).
+ * - A click-start sound waits for F8 (`pendingSlideSound`) and leaves the slot as it is, so playlist audio
+ *   or another slide's sound plays on until F8 starts it.
+ * Without a sound of its own the slot is left as it is: playlist audio plays on under slides
+ * (`keepSlideAudio` has already stopped a slide sound whose range was left).
+ */
+function slideAudioLayer(
+  audio: LayerState<AudioContent>,
+  cue: Cue,
+  index: number,
+  at: number,
+  seq: number,
+): LayerState<AudioContent> {
+  const sound = cue.slideAudio;
+  if (!sound) return audio;
+  const a = audio.content;
+  if (
+    a?.slideOwned &&
+    a.mediaId === sound.mediaId &&
+    a.state === 'playing' &&
+    index >= a.cueIndex &&
+    index <= (a.untilCue ?? a.cueIndex)
+  ) {
+    const until = Math.max(a.untilCue ?? a.cueIndex, sound.untilCue);
+    return until === a.untilCue ? audio : { ...audio, content: { ...a, untilCue: until } };
+  }
+  if (sound.start === 'click') return audio;
+  return { content: slideSound(sound, index, at), at, seq };
+}
+
+/** A slide's own sound starting at `at` from cue `index`. */
+function slideSound(sound: NonNullable<Cue['slideAudio']>, index: number, at: number): AudioContent {
+  return {
+    cueIndex: index,
+    mediaId: sound.mediaId,
+    loop: sound.loop,
+    state: 'playing',
+    startedAt: at,
+    positionMs: 0,
+    ...(sound.gainDb !== undefined ? { gainDb: sound.gainDb } : {}),
+    slideOwned: true,
+    untilCue: Math.max(index, sound.untilCue),
+  };
+}
+
+/**
+ * The live slide's click-start sound while it waits for F8 (design/27 §8): the slide layer shows the live
+ * slide cue, its sound starts on click, and the audio slot does not hold it (not started yet, stopped, or
+ * ended). A slide-owned sound of the same media still in range counts as started.
+ */
+export function pendingSlideSound(
+  s: LiveState,
+): { cueIndex: number; sound: NonNullable<Cue['slideAudio']> } | undefined {
+  const index = s.live;
+  if (index === undefined || s.layers.slide.content?.cueIndex !== index) return undefined;
+  const sound = s.cues[index]?.slideAudio;
+  if (sound?.start !== 'click') return undefined;
+  const a = s.audio.content;
+  if (
+    a?.slideOwned &&
+    a.mediaId === sound.mediaId &&
+    index >= a.cueIndex &&
+    index <= (a.untilCue ?? a.cueIndex)
+  )
+    return undefined;
+  return { cueIndex: index, sound };
+}
+
+/** `s` with the live slide's waiting click-start sound started at `at`, or undefined when none waits. */
+export function startSlideSound(s: LiveState, at: number): LiveState | undefined {
+  const pending = pendingSlideSound(s);
+  if (!pending) return undefined;
+  return { ...s, audio: { content: slideSound(pending.sound, pending.cueIndex, at), at, seq: s.seq } };
+}
+
+/**
+ * What F8 (`media.play`) acts on (design/27 §8): the live slide's waiting click-start sound, unless the
+ * media layer's video is paused (a click-start video waiting for its click, or one the operator paused),
+ * which F8 plays first; else the media layer's video; else the audio slot. Shift+F8 (`media.restart`)
+ * restarts the video when there is one, else starts the waiting sound, else restarts the audio slot.
+ */
+export function mediaPlayTarget(s: LiveState): 'video' | 'slideSound' | 'audio' | undefined {
+  const m = s.layers.media.content;
+  const video = m?.mediaKind === 'video' ? m : undefined;
+  if (video?.state !== 'paused' && pendingSlideSound(s)) return 'slideSound';
+  if (video) return 'video';
+  return s.audio.content ? 'audio' : undefined;
+}
+
+/** A slide's own sound stops once the live cue leaves [its cue, untilCue] (design/27 §8). */
+function keepSlideAudio(
+  audio: LayerState<AudioContent>,
+  index: number,
+  at: number,
+  seq: number,
+): LayerState<AudioContent> {
+  const a = audio.content;
+  if (!a?.slideOwned) return audio;
+  return index >= a.cueIndex && index <= (a.untilCue ?? a.cueIndex) ? audio : { content: null, at, seq };
+}
+
 function applyAction(s: LiveState, action: ActionId, at: number): LiveState {
   switch (action) {
     case 'clearSlide':
@@ -312,6 +470,17 @@ function clear(
         props: { logo: false, countdownTimerId: undefined, at, seq },
         audio: empty,
       };
+    case 'slide':
+      // The slide's own video and sound go with it (design/27 §8).
+      return {
+        ...s,
+        layers: {
+          ...s.layers,
+          slide: empty,
+          media: s.layers.media.content?.objectId ? empty : s.layers.media,
+        },
+        audio: s.audio.content?.slideOwned ? empty : s.audio,
+      };
     default:
       return { ...s, layers: { ...s.layers, [layer]: empty } };
   }
@@ -324,17 +493,22 @@ function mediaTransport(
 ): LiveState {
   const seq = s.seq;
   const m = s.layers.media.content;
-  if (m && m.mediaKind === 'video') {
-    let c = m;
-    if (k === 'media.restart' || (k === 'media.play' && m.state === 'ended'))
-      c = { ...m, state: 'playing', startedAt: at, positionMs: 0 };
-    else if (k === 'media.play' && m.state === 'paused')
-      c = { ...m, state: 'playing', startedAt: at - m.positionMs };
-    else if (k === 'media.pause' && m.state === 'playing')
-      c = { ...m, state: 'paused', positionMs: at - m.startedAt };
-    else if (k === 'media.play' && m.state === 'playing')
-      c = { ...m, state: 'paused', positionMs: at - m.startedAt };
-    if (c === m) return s;
+  const video = m?.mediaKind === 'video' ? m : undefined;
+  if ((k === 'media.play' && mediaPlayTarget(s) === 'slideSound') || (k === 'media.restart' && !video)) {
+    const started = startSlideSound(s, at);
+    if (started) return started;
+  }
+  if (video) {
+    let c = video;
+    if (k === 'media.restart' || (k === 'media.play' && video.state === 'ended'))
+      c = { ...video, state: 'playing', startedAt: at, positionMs: 0 };
+    else if (k === 'media.play' && video.state === 'paused')
+      c = { ...video, state: 'playing', startedAt: at - video.positionMs };
+    else if (k === 'media.pause' && video.state === 'playing')
+      c = { ...video, state: 'paused', positionMs: at - video.startedAt };
+    else if (k === 'media.play' && video.state === 'playing')
+      c = { ...video, state: 'paused', positionMs: at - video.startedAt };
+    if (c === video) return s;
     return { ...s, layers: { ...s.layers, media: { content: c, at, seq } } };
   }
   const a = s.audio.content;

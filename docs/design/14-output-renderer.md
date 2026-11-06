@@ -18,10 +18,10 @@ Topology. The host creates the three workers and three `MessageChannel`s (asset�
 link↔asset) and hands the ends over with a `ports` message (`packages/renderer/src/messages.ts`), again
 after any worker restart. Arming runs link → asset → render (jobs, bitmaps, flips) without the main
 thread. The host ⇄ link protocol is `apps/output/src/host-protocol.ts`: the link sends media commands
-(`load {slot, key, blob|url}`, `apply {transport}`, `pauseAt`, `holdPaused`, `route`, `unload`), audio
-commands (`config`, `fadeOut`), `clock`, `title`, `rtc` signalling, `fatal`, `close`, `reload`,
-`restartWorker`, `portRequest`, `mediaAck`, and a `view` (telemetry, introspection, diagnostics, log)
-that the host caches so `window.__ordo.telemetry()`/`state()` stay synchronous. The host sends `tick`
+(`load {slot, key, blob|url, gen}`, `apply {transport}`, `pauseAt`, `holdPaused`, `route`, `vclear`,
+`unload`), audio commands (`config`, `fadeOut`), `clock`, `title`, `rtc` signalling, `fatal`, `close`,
+`reload`, `restartWorker`, `portRequest`, `mediaAck`, and a `view` (telemetry, introspection, diagnostics,
+log) that the host caches so `window.__ordo.telemetry()`/`state()` stay synchronous. The host sends `tick`
 (250 ms), `host` status (500 ms, and at once to every new link generation: media slots with their key,
 `ended`, `paused`, position, duration and error; audio meters, long tasks, worker stats, painting, a
 refused reload), numbered media events (`loaded`, `loadError`, `ended`, `error`), opener-closed, bus
@@ -149,16 +149,37 @@ key is drawn again at most every 2 s, so a cached file the worker still cannot r
 image that fails to decode is not reported as missing (it would be missing every time); it is drawn
 without, like before. Covered by `link-core.test.ts` and the chaos spec's withheld-image test.
 
+## Video pictures and video inside a slide (asset worker)
+
+An `ImageObject` whose media is a video draws that media's poster ([design/27](27-pptx-native-renderer.md)
+§8): the link's `slideImages` maps every picture a slide draws through `stillFile` (an image itself, a
+video's poster), as the operator's thumbnail worker does, and a preview also caches the posters of its
+media. The manifest already ships posters.
+
+A slide job that carries `video` (design/27 §7.2) is answered with `SRC_SCENE` under its unchanged key.
+`rasterScene` (`packages/renderer/src/scene-raster.ts`) splits the objects around the playing one with
+`splitScene`, measuring text with the drawer's own layout so that text overflowing its box into the video
+goes over it; draws the base (with the poster unless the clip is hidden while stopped), transfers it, draws
+the over on the same surface when anything is over the video, and encodes the plane at the output's scale
+with the poster's size, so the clip lands exactly on its poster. A look that does not draw the slide as
+authored, an object that is gone or an empty box leaves the slide one bitmap with its poster. Covered by
+`scene-raster.test.ts` and `asset.worker.test.ts` (fakes) and `scene-raster.browser.test.ts`, which
+recomposes base, the clip through `planeSample` and over in headless Chromium and compares them with the
+slide drawn as one bitmap, with and without the clip playing.
+
 ## Frame loop
 
 ```
 every rAF (render worker, via requestAnimationFrame on the OffscreenCanvas's worker scope):
   now = hubNow()
   if pendingFlip && now + frameMs/2 >= pendingFlip.at: swapStacks(); pendingFlip = null
-  for each video source with a new VideoFrame: importExternalTexture (zero copy)
+  for each video slot: present the newest frame due at now + frameMs/2 (frame selection, below)
+  upload the bitmaps this frame samples that changed (live stacks, outgoing ones while fading)
+  for each video source drawn: importExternalTexture (zero copy)
   encode one render pass: for each layer in [background, slide, lowerThird, media, props]:
      draw layer A (outgoing) and layer B (incoming) with crossfade weight t, if transitioning
   submit
+  upload the rest that changed (content armed for a coming flip), after the submit
   record presented++, and missed += max(0, round((now - lastFrameAt)/frameMs) - 1)
 ```
 
@@ -202,7 +223,13 @@ Arm sequence for a cue (asset worker, then render worker):
 3. For images, `createImageBitmap` from the OPFS blob (cached bitmaps by hash and size
    are reused).
 4. Post bitmaps to the render worker, which uploads them into pre-allocated texture
-   slots (`copyExternalImageToTexture`) and writes the quad list for the stack.
+   slots (`copyExternalImageToTexture`) and writes the quad list for the stack. Uploads
+   never run inside the compositor's `draw` (design/27 §7.3): the frame loop uploads armed
+   content right after the next frame's submit, so a later flip finds it uploaded;
+   content that is drawn on the very frame it changed (a flip onto content
+   promoted from the queue, a `refresh` of the live copy) is uploaded just before that
+   draw. A stack is uploaded once per content (`Stack.version`), and again only after a
+   device loss.
 5. For video (background or media cue), the main thread creates a `<video>` for the
    armed asset from the OPFS file (`URL.createObjectURL(file)`), preloads to the first
    frame (`preload=auto`, wait for `canplaythrough` and one `requestVideoFrameCallback`),
@@ -218,8 +245,20 @@ Memory bound: at most two stacks per layer, and one playing plus one armed video
 
 - On GO the main thread calls `video.play()` at the scheduled time (it is already decoded
   to its first frame, so the first frame is presented on the GO frame).
-- `requestVideoFrameCallback` posts each new frame; the render worker presents the
-  latest frame whose `mediaTime` is at or before now, and silently drops late ones.
+- `requestVideoFrameCallback` posts each new frame (`vframe`, `timestamp` = `mediaTime`),
+  tagged with the slot's load generation and, while the element plays, its clock: the
+  transport's `startedAt` (hub time of media time 0) and the clip length when it loops.
+  The render worker keeps the two newest frames per slot (`FrameRing`,
+  `packages/renderer/src/frame-ring.ts`) and before each draw presents the newest frame whose
+  timestamp is at or before the media time due on the vsync being drawn,
+  `now + frameMs/2 − startedAt` (modulo the length when looping; the half-frame rule of
+  flips). An element a little ahead of hub time is held back to the hub's frame; one
+  behind shows its newest frame, and older (late) frames are dropped. Without a clock
+  (paused, not started), with one frame only, or when the newest frame is more than
+  250 ms from the expected time (a seek the clock has not caught up with), the newest
+  frame shows; an older frame is never shown across a seek, a loop's wrap or a reload.
+  Frames are closed when evicted by a newer one, when a frame of another generation
+  arrives, on `vclear` and when the engine stops (unit tests count every open and close).
 - The audio-master output routes the video element through the audio engine
   ([design/18](18-audio-engine.md)); other outputs mute their copies.
 - Looping uses the `loop` attribute; `ended` on a non-looping cue sends `media.ended` to
@@ -259,9 +298,13 @@ Key-colour looks fade text over the key colour; the clear colour never fades.
 ## Compositor selection and canvas swaps
 
 WebGPU is tried first; when it is unavailable the Canvas 2D compositor draws the same
-stacks. A canvas keeps its first context kind, so every switch between the two needs a
-fresh canvas: the worker asks the main thread (`needCanvas`), draws on the new one, and the
-main thread puts it on screen only when the worker reports `ready` or `restored` on it.
+stacks. A software adapter (`isFallbackAdapter`, SwiftShader) counts as unavailable
+(design/27 §7.2): the engine probes the adapter before it binds the canvas, so this fallback
+needs no fresh canvas. The output URL's `?renderer=webgpu` keeps WebGPU on such an adapter
+(tests); `?renderer=2d` forces Canvas 2D. A canvas keeps its first context kind, so every
+switch between the two needs a fresh canvas: the worker asks the main thread (`needCanvas`),
+draws on the new one, and the main thread puts it on screen only when the worker reports
+`ready` or `restored` on it.
 After a fallback to Canvas 2D the worker retries WebGPU on a slow timer (60 s, doubling to
 15 min) on a fresh canvas while Canvas 2D keeps drawing; the first frame is drawn into the
 new compositor before the swap, and a failed retry hands the canvas back (`canvasUnused`).

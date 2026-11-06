@@ -13,11 +13,13 @@
 ## The compositor under test
 
 Chromium is launched with `--enable-unsafe-webgpu --use-angle=swiftshader --use-vulkan=swiftshader
---enable-features=Vulkan`. With Vulkan SwiftShader the WebGPU device survives in headless Chromium, so the
-outputs run the real WebGPU compositor (health reports `compositor: 'webgpu'`, no device loss) rather than
-the Canvas 2D fallback. Frame timing under software Vulkan is not meaningful (missed frames are expected);
-correctness of flips, looks, holds and chaos recovery is. Lateness bounds are asserted only with
-`ORDO_E2E_REAL_GPU=1`.
+--enable-features=Vulkan`. With Vulkan SwiftShader the WebGPU device survives in headless Chromium.
+SwiftShader is a software adapter (`GPUAdapterInfo.isFallbackAdapter`), which an output treats as no
+WebGPU (design/27 §7.2): an output window gets the Canvas 2D compositor unless its URL has
+`?renderer=webgpu`, which keeps the real WebGPU compositor (health reports `compositor: 'webgpu'`, no
+device loss); `?renderer=2d` forces Canvas 2D on any machine. Frame timing under software Vulkan is not
+meaningful (missed frames are expected); correctness of flips, looks, holds and chaos recovery is.
+Lateness bounds are asserted only with `ORDO_E2E_REAL_GPU=1`.
 
 ## Multi-origin in tests
 
@@ -55,6 +57,16 @@ rendering on a shared machine gives irregular frames (measured here: skew 0.3 to
 With `ORDO_E2E_REAL_GPU=1`, for a run on a real GPU without the SwiftShader flag, the bounds are one frame
 (17 ms) between outputs and 50 ms after the scheduled time. Lateness against the key press itself is not
 asserted end to end; the soak test reports late flips per output from the outputs' own counters.
+
+`e2e/slide-media.spec.ts` covers video and sound playing in place in a slide (design/27 §14.12) on two
+outputs: Audience 1 on WebGPU (`?renderer=webgpu`) and the audio master, Audience 2 on Canvas 2D. It probes
+the pixels of a turned, rounded clip box under a title band (clip inside the mask, backdrop outside it, the
+title over the clip, the clip moving), asserts the slide flip and the clip's start skew between the outputs
+with the bounds above, checks that the next slide's clip is preloaded paused on both, that after Clear
+media a clip loaded into the cleared slot never shows in the live slide (its poster does), click start with
+F8 and Shift+F8 pressed in the operator, onEnd 'advance', a slide sound over 3 shown slides of a 4-slide
+loop, music that does not restart when its loop wraps, a clip still transcoding at Go live and a clip
+whose processing failed (degraded notes, posters).
 
 ## Chaos tests
 
@@ -148,6 +160,17 @@ the machine cannot change the run. When one is missing the run is skipped; in CI
 or `--strict`) a skip, or a case without an expected image, fails the run. `--update`
 rewrites the expected images; a failing case writes `<case>.actual.png` next to the
 expected one.
+
+`pnpm --filter @ordo/renderer golden:compositor` is the compositor golden (design/27 §14.5). It has
+no expected images: in a worker in headless Chromium (WebGPU on SwiftShader, the flags above), two
+real render engines draw the same layer stacks, one with the WebGPU compositor and one with Canvas
+2D, and a CPU reference composes them with `planeSample` (`packages/renderer/src/scene.ts`). Cases
+cover scene stacks (a video in its box with masks, crops, rotation, flips and an over), crossfade
+midpoints of every source pair, a stale slot generation and a slot without a frame (both must show
+the poster, never black), and the legacy bitmap and video paths. WebGPU must match Canvas 2D within
+40 per channel on all but 0.4 % of the pixels and the reference within 8 on all but 0.05 %.
+Failing cases write their three images to `test-results/compositor-golden/` (`--images` writes
+every case).
 
 ## CI
 

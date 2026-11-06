@@ -422,7 +422,9 @@ AudioContent += { untilCue?: number; slideOwned?: boolean };
 
 // apps/output host protocol
 MediaCommand 'load' += { gen: number };   // the link's slot generation (SlotMirror.gen)
+MediaCommand += { k: 'vclear'; slot: number; key: string; at?: number };  // the host sends ToRender 'vclear'
 ToRender 'vframe' += { gen: number };
+ToRender 'vframe' += { startedAt?: number; loopMs?: number };  // while playing: the clock frames are presented by (§7.2)
 
 // packages/renderer/src/stacks.ts, messages.ts, plan.ts
 export const SRC_SCENE = 3;
@@ -430,7 +432,7 @@ Stack<B> += { over: B | null; plane: Float32Array /* 16, pre-allocated, copied w
 StackContent<B> += { over?: B | null; plane?: Float32Array; videoGen?: number };  // SRC_SCENE also uses videoSlot
 AssetJob 'slide' += { video?: { objectId: string; slot: number; gen: number } };
 SlideDesc += { video?: { objectId: string; mediaId: string; hash: string } };
-MediaDesc += { inSlide?: { objectId: string } };
+MediaDesc += { inSlide?: { objectId: string; showWhenStopped?: false } };
 ```
 
 ### 3.4 Size budgets
@@ -536,7 +538,7 @@ Whole presentations travel in goLive (to every client, into the journal, snapsho
 - **Video:** the poster blip becomes the `ImageObject` and the clip becomes `play`. Videos are never baked into an art picture.
 - **Full-slide video at the bottom of the z-order, looping and muted:** `backgroundMediaId` (a motion background).
 - **`<p:video fullScrn="1">`:** the play box becomes the slide rect with the poster contain-fitted.
-- **Audio** (any audio file or narration): `Slide.audio`. Transition sounds and animation sounds are skipped by default (import option 'Import transition sounds'). They are short effects, and a slide sound replaces running playlist audio. The audio icon is dropped unless `showWhenStopped` is set and it is on-slide.
+- **Audio** (any audio file or narration): `Slide.audio`. Transition sounds and animation sounds are skipped by default (import option 'Import transition sounds'). They are short effects, and a slide sound replaces running playlist audio once it starts (at once for an autoplay sound, on F8 for a click-start one; §8). The audio icon is dropped unless `showWhenStopped` is set and it is on-slide.
 - **Kind** is decided by sniffing the bytes, not the element: pptxgenjs writes audio under `a:videoFile`.
 - **Linked External clips:** `[warn] slide N: linked video (<host>) not imported`, never fetched. Their poster stays as an ImageObject.
 
@@ -738,8 +740,8 @@ Hidden paragraphs (M8) are laid out but not painted, so revealed lines never mov
 
 A slide whose playing `ImageObject` (`play`) is on the media layer becomes a **scene stack** on the slide layer. Static slides never pay for it.
 
-- **base** (full-frame bitmap): objects 0..k, where k is the play object, drawn with its poster. The poster therefore shows whenever the slot has no frame: not loaded, onEnd 'black', or a slot taken by another clip. With `showWhenStopped: false`, the poster is left out of base.
-- **video plane:** an mdPair slot (2-3, below `MAX_VIDEO_SLOTS = 4`), placed at the play object's box.
+- **base** (full-frame bitmap): objects 0..k, where k is the play object, drawn with its poster. The poster therefore shows whenever the slot has no frame: not loaded, onEnd 'black', or a slot taken by another clip. With `showWhenStopped: false`, or a play object below full opacity (the video is mixed over base at that opacity, so the poster would show through it), the poster is left out of base.
+- **video plane:** an mdPair slot (2-3, below `MAX_VIDEO_SLOTS = 4`), placed at the play object's box and fitted with the clip's own size (`Media.width` x `height`, in `SlideDesc.video` and the job's `video.w`/`h`), not the poster's: a custom poster may have another aspect. A plane whose box is under 1e-3 logical px or that would hold a non-finite float is not encoded (the slide stays one bitmap).
 - **over** (full-frame bitmap, usually absent): objects above k that *intersect* the video box, for example a title over a video. Upper objects that do not overlap the box go into base.
 - **plane** (16 floats, pre-allocated and copied with `set()`):
 
@@ -761,10 +763,15 @@ A slide whose playing `ImageObject` (`play`) is on the media layer becomes a **s
 
   The media layer key becomes `''` and its desc is kept, so the reducer's transport, audio routing on the master and `media.ended` keep working.
 - **Every output arms the clip.** `syncVideos` arms an `inSlide` clip on every output, not only on the master. It uses the media desc key (`md|cueIndex|mediaId|hash`) in the mdPair, muted unless the output is the audio master, with a new `render: false` flag so `armVideo` never posts `SRC_VIDEO` content for it. Transport (`apply`), `route` and `holdPaused` then find the slot by the desc key exactly as for a media video. `protectedKeys` already protects desc keys.
-- **The slide job does not wait for the video.** `ensureContent` for the slide layer picks the slot synchronously (the same `pair.pick` that `armVideo` uses) and posts the slide AssetJob at once with `video:{objectId, slot, gen}`, where `gen` is the slot's load generation (`SlotMirror.gen`). It never waits for 'loaded', so a slow clip never delays the slide flip. When no slot is free (both busy fading), the job is posted without video (poster only) and re-posted with `refresh` once a slot is armed. The asset worker answers `SRC_SCENE {bitmap: base, over, plane, videoSlot, videoGen}` under the unchanged slide key.
-- **Generations stop a reused slot from showing the wrong clip.** The host's `load` command carries `gen`, and every `vframe` is tagged with the generation it was loaded under. The engine keeps `frameGen[slot]` in a pre-allocated Int32Array. The compositors set the plane's "video present" bit only while `frameGen[slot] === stack.videoGen`. After Clear media, or when a playlist media cue takes the media layer, the slot can be reloaded with another clip, and the live slide then simply shows its poster. When the media layer clears, the link also sends the existing `vclear` (`render.worker.ts:166-168`, no sender today).
+- **The slide job does not wait for the video.** `ensureContent` for the slide layer picks the slot synchronously (the same `pair.pick` that `armVideo` uses) and posts the slide AssetJob at once with `video:{objectId, slot, gen, w?, h?}`, where `gen` is the slot's load generation (`SlotMirror.gen`). It never waits for 'loaded', so a slow clip never delays the slide flip. When no slot is free (both busy fading), the job is posted without video (poster only) and re-posted with `refresh` once a slot is armed. The asset worker answers `SRC_SCENE {bitmap: base, over, plane, videoSlot, videoGen}` under the unchanged slide key.
+- **Generations stop a reused slot from showing the wrong clip.** The host's `load` command carries `gen`, and every `vframe` is tagged with the generation it was loaded under. The engine keeps `frameGen[slot]` in a pre-allocated Int32Array. The compositors set the plane's "video present" bit only while `frameGen[slot] === stack.videoGen`. After Clear media, or when a playlist media cue takes the media layer, the slot can be reloaded with another clip, and the live slide then simply shows its poster. When the media layer clears, the link also sends `vclear` for the slot, at the hub time the clip pauses (when the media layer's fade ends, or the slide's when the slide leaves with it). It goes through the host as the `vclear` media command: the host sends the renderer's existing `vclear` (`render.worker.ts`) on the channel its frames travel, so it lands after every frame already sent, and it delivers no frame of that key again until it plays or another key loads.
+- **Outgoing slots first.** Each sync marks the live videos that just left (`pauseAt`, `busyUntil`) before anything is armed, so the next slide's clip never takes the slot of a clip still fading out with its slide; it waits, its slide is drawn with the poster, and is drawn again in place once the slot frees.
+- **Re-entry (GO then a quick Prev).** The clip of the slide just left is then the armed clip. It plays on as the outgoing side of the fade (no `holdPaused` while its slot is busy fading), keeps its picture (no `vclear` for an outgoing key that is armed), and when the fade ends the link sends `apply` paused at 0, which seeks it back to its first frame for the next GO. Any armed clip that played since it loaded (`SlotMirror.played`) is sought back the same way instead of `holdPaused`, so a GO never plays on from where it stopped (the host only seeks a playing clip more than 250 ms off).
 - In lyric-only and hidden slide modes the boxed video is not drawn, but its sound still plays on the master. `inSlide` is not set, and the master arms the clip for sound as today.
 - **Frame selection.** `vframe` keeps a 2-deep ring per slot and presents the newest frame whose timestamp is ≤ the expected media time (hubNow − startedAt, modulo the duration when looping). This fixes the design/14:217-218 mismatch.
+  - Built as `FrameRing` (`packages/renderer/src/frame-ring.ts`). The host adds the clock to each `vframe` while the element plays: `startedAt` from the slot's 'playing' transport and `loopMs` from the element's duration when it loops. The expected time is taken on the vsync being drawn (hubNow + frameMs/2 − startedAt, the half-frame rule of flips).
+  - The newest frame shows without a clock (paused, not started), with one frame, or when it is more than 250 ms from the expected time (the host's own seek threshold): a seek the clock has not caught up with never freezes the picture. The older frame shows only while the newest is early and the older comes before it within that window, so a frame from before a seek, a loop's wrap or a reload never shows.
+  - Frames are closed when a newer one evicts them, when a frame of another generation arrives, on `vclear` and when the engine stops.
 - **Fallback adapter.** An output whose adapter reports `isFallbackAdapter` (SwiftShader) is treated as Canvas 2D.
 
 **WebGPU.**
@@ -777,12 +784,14 @@ A slide whose playing `ImageObject` (`play`) is on the media layer becomes a **s
 - **Hot path.** `drawLayer`, `writeRect` and `writePlane` are `/* @hot */` and allocation-free (hot-lint). The generation check is an integer compare.
 - **Device loss** re-uploads base and over from the retained bitmaps (`engine.ts:293-297`).
 
-**Canvas 2D compositor**, per stack, into the existing scratch canvas when crossfading:
+**Canvas 2D compositor**, per stack:
 1. `drawImage(base)`;
-2. when the video is present: `save` → `setTransform(device affine)` → `clip(mask Path2D built in the offer handler)` → 9-argument `drawImage(VideoFrame, crop…)` → `restore`;
+2. when the video is present: `save` → `setTransform(device affine)` → 9-argument `drawImage(VideoFrame, crop…)` of the visible part of the UV rect → `restore`. An upright plane (no turn or a quarter turn, flips allowed) with a rect mask needs nothing more; its edges snap to whole pixels, as Chromium draws every upright image;
 3. `drawImage(over)`.
 
-The exact `'lighter'` crossfade (`canvas2d.ts:60-85`) is unchanged.
+Masks and turned edges are cut with fills, not `clip`: Chromium 153 anti-aliases neither a 2D clip on an `OffscreenCanvas` nor the edges of a drawn `VideoFrame`, even turned (measured), while fills are anti-aliased. The video is drawn into a frame-sized mask canvas within its whole-pixel bounds (a turned plane is first drawn 1.5 px larger, so the pixels its edge half covers have video under them), kept with `'destination-in'` where the visible rect (turned planes) and the mask `Path2D` (ellipse; rounded rect with its straight sides pushed outside the frame, so a frame edge is cut once) cover it, and that rect is copied to the target. Mask paths, the mask canvas and a scene canvas are made in the offer handler (`Canvas2DCompositor.prepare`, `Compositor.prepare`), never per frame; the two canvases cost 8 MB each at 1080p (33 MB at 4K) once a scene, or a masked or turned scene, is offered.
+
+A scene is several draws, so it is composed at full alpha before it is weighted: in the scene canvas during a crossfade, then mixed like any source, or in the existing scratch canvas when it fades alone. The exact `'lighter'` crossfade (`canvas2d.ts:60-85`) is otherwise unchanged. `golden/canvas-scene-run.ts` checks these pixels against the `planeSample` reference in headless Chromium.
 
 **Later (when the data asks for it).** Per-element animation (fly, wipe, zoom) needs more than one item per stack. It will render the stack into its layer texture, which is already `RENDER_ATTACHMENT`, with an instanced quad pipeline, and keep the pair pipelines for exact crossfades. The plane table is the extension point. It is not part of this design's milestones.
 
@@ -791,6 +800,7 @@ The exact `'lighter'` crossfade (`canvas2d.ts:60-85`) is unchanged.
 `copyExternalImageToTexture` runs inside `drawLayer` today, in the rAF frame (`gpu.ts:337-338, 415-435`), and its 4K cost on a real GPU is unmeasured.
 
 - **M5:** uploads leave `draw()`. `offer` queues them, and the frame loop drains the queue after `submit`.
+  - Built as `Compositor.drainUploads(f, all)`; the queue is the stacks whose `version` differs from the uploaded one. Before each draw the frame loop uploads only what that draw samples (live stacks, and outgoing ones while fading): content flipped on the frame it changed, such as content promoted from the queue or a `refresh` of the live copy. After the submit it uploads the rest, which is armed content for a coming flip.
 - **M7:** the queue is tuned from venue measurements. Uploads go in strips (`copyExternalImageToTexture` with an origin; at most one quarter-frame, about 8 MB at 4K, per frame). A stack is not flippable before its upload completes; `LayerStack` already holds the previous content for late content (`stacks.ts:133-170`). Arming normally happens a full cue ahead.
 - **M7 tight sprites:** the asset worker sends the bounding box of the drawn content plus its offset. The GPU clears the layer texture with a render pass and copies into the sub-rect. Canvas 2D draws at the offset. On 16:9 decks the photo is on the background layer, so the slide layer usually holds only text and this removes most of the clear, transfer and upload.
 
@@ -827,25 +837,28 @@ The exact `'lighter'` crossfade (`canvas2d.ts:60-85`) is unchanged.
 
 **Reducer** (`goTo` slide branch, pure; replaces the unconditional clear at `index.ts:213`):
 - **Video:** `layers.media = {kind:'media', cueIndex: index, mediaId, mediaKind:'video', objectId, loop, onEnd, state: start === 'click' ? 'paused' : 'playing', startedAt: at, positionMs: 0}`. With no video, the media layer is cleared as today. Re-entering a slide restarts its video, as PowerPoint does.
-- **Audio:** `state.audio` is set the same way, with `slideOwned: true` and `untilCue`.
-  - **A slide-owned sound that is still playing is never restarted:** when `audio.content` is slide-owned with the same `cueIndex` and `mediaId` and state 'playing', the slide branch leaves it untouched. An announcement loop that wraps back to slide 1, or an operator stepping back, therefore keeps the music running.
+- **Audio:** an autoplay sound sets `state.audio` the same way (state 'playing'), with `slideOwned: true` and `untilCue`.
+  - **A slide-owned sound that is still playing is never restarted:** when `audio.content` is slide-owned with the same `mediaId`, state 'playing', and the entered index inside its `[cueIndex, untilCue]`, the slide branch keeps it playing. An announcement loop that wraps back to slide 1, an operator stepping back, or an arrangement that repeats the slide inside the range therefore keeps the music running. A repeat extends `untilCue` to the repeat's own range; `cueIndex` and the transport stay.
   - Slide-owned audio is cleared when the live index leaves `[audio.cueIndex, untilCue]`.
-  - Playlist audio cues keep playing under slides as today. A slide's own autoplay sound replaces them; the importer and the editor warn about this, and transition sounds are not imported by default.
+  - Playlist audio cues keep playing under slides as today. A slide's own autoplay sound replaces them when the slide goes live; the importer and the editor warn about this, and transition sounds are not imported by default.
+  - **A click-start sound waits for F8.** Entering its slide leaves the audio slot as it is, so playlist audio (walk-in music) or another slide's sound in range plays on. `pendingSlideSound(state)` names the waiting sound: the live slide cue's click-start sound while the slide layer shows that cue and the audio slot does not hold it. F8 starts it (state 'playing' at the F8's `at`), replacing what plays. Every client derives this from the cues, so `LiveState` carries no new field; the audio master preloads the waiting sound paused.
+- **One click target per slide** (`mediaPlayTarget`): F8 (`media.play`) acts on the waiting click-start sound, unless the media layer's video is paused (a click-start video waiting for its click, or one the operator paused), which F8 plays first. Otherwise it toggles the media layer's video, else the audio slot. So a click video with a click sound takes F8 for the video, then F8 for the sound, as PowerPoint's click sequence does; an autoplay video with a click sound takes F8 for the sound, then F8 toggles the video. Shift+F8 restarts the video when there is one, else starts the waiting sound, else restarts the audio slot. The LayerBar's play button follows the same target and names the waiting sound.
 - `clear('slide')` also clears slide-owned media.
 - F8, Shift+F8, Clear media, onEnd (hold, black, advance), the stage's remaining time, the LayerBar, Stream Deck and MIDI, and the hub's `media.ended` checks work unchanged, because `cueIndex` is the slide's own cue. onEnd 'advance' goes to the next non-hidden cue.
 
 **Output.**
 - The armed plan preloads the next slide's clip, paused on its first frame (`link-core.ts:836-842, 1180-1183`), on every output (§7.2).
-- With `showWhenStopped: false`, the link sends `vclear` for the slot whenever the reducer's state is not 'playing', and the base has no poster, so nothing shows until the clip plays.
+- With `showWhenStopped: false`, the link sends `vclear` for the slot whenever the reducer's state is not 'playing' (also for the armed clip, and before its load reaches the host, so not even its first frame shows), and the base has no poster, so nothing shows until the clip plays.
 - An `ImageObject` whose `mediaId` is a *video* Media (Pro7 video fills, earlier editor picks) draws that Media's poster on outputs, as thumbnails and the editor already do: `slideImages` maps a video to `poster.hash`, which the manifest already ships. Today outputs draw nothing for it (`asset.worker.ts:199-203`, `link-core.ts:982-995`). It plays only once it has `play`; `play.mediaId` may be the same video.
 
 **Hub.**
-- `sniff`/`EXT_KIND` gain ASF (GUID `30 26 B2 75 8E 66 CF 11`, WMV/WMA), MPEG-PS (`00 00 01 BA`) and AIFF (`FORM....AIFF`).
+- `sniff`/`EXT_KIND` gain ASF (GUID `30 26 B2 75 8E 66 CF 11`, WMV/WMA), MPEG-PS (`00 00 01 BA`) and AIFF (`FORM....AIFF`, also `AIFC`). An ASF file is a WMA when its header lists audio streams only (a video when the head cannot tell: the media job turns an audio-only file into an audio item).
 - Clips are ingested with `checkExtension:false`, tags `['pptx']` and the name `<deck title> – slide N video`, **never awaited** (heavy concurrency 1), after `pptx-lo` is enqueued.
-- **Trims are baked.** `p14:trim` becomes `IngestOpts.trim {startMs, endMs}`. The media job cuts the delivery (`-ss`/`-to` before the H.264/AAC transcode), so loops, onEnd, the stage's remaining time and `media.ended` need no trim logic. Deduplication keys on hash plus trim.
+- **Trims are baked.** `p14:trim` becomes `IngestOpts.trim {startMs, endMs}`. The media job cuts the delivery (`-ss`/`-to` before the H.264/AAC transcode), so loops, onEnd, the stage's remaining time and `media.ended` need no trim logic. The item records it as the optional `Media.trim`, and deduplication keys on hash plus trim (`MediaService.findClip`, `ingestOnce`), so one file used whole and trimmed gives two clips.
+- **Square pixels.** Anamorphic sources (DVD MPEG-PS, DV, some WMV: 720x480 at 32:27 is 16:9) are resampled to their display size at ingest (`scale=iw*sar:ih,setsar=1` before the fit, in the H.264 and VP9 paths and the poster). `Media.width`/`height`, probed from the delivery, is then the shape on screen, which the plane fits the clip with (§7.2); otherwise the picture is squeezed.
 - A clip that fails gives `[warn]`, and its object stays a poster.
 - Video soundtracks get `measureLoudness` like audio files. This changes the playback level of every newly ingested video, not only PowerPoint clips, and is recorded as a product change in design/18 and in the release notes.
-- `gainDb = 20·log10(vol/100000)`, clamped to −100; mute → `muted`.
+- `gainDb = 20·log10(vol/100000)`, clamped to −100 (`volumeGainDb`, which also caps it at 0 dB); mute → `muted`.
 
 **p:timing mapping.**
 - autoplay = a `presetClass="mediacall"` cTn with `afterEffect`/`withEffect` in mainSeq before the first click;
@@ -1124,7 +1137,7 @@ The current JSZip text path takes 1.17 s per 100 slides.
 | Rich layout | ≤ 1 ms warm, ≤ 5 ms cold per 400 characters; autofit ≤ 12 layouts | unit bench |
 | Render worker | zero missed vsync; no task ≥ 50 ms; nothing allocates or compiles on GO; static slides add 0 draws; in-slide video adds 1 external texture + 1 bind group per frame, same single pass per layer | hot-lint, soak, e2e |
 | Uploads | ≤ 4 ms per frame at 4K on the reference venue GPU (M7) | health `uploadMs` |
-| GPU memory at 4K | static slides +0; +66 MB only once a scene needs `over`; total ≤ 400 MB | health `gpuMB` |
+| GPU memory at 4K | static slides +0; +66 MB only once a scene needs `over`; total ≤ 400 MB (5 layers: 331.8 MB of layer textures + 66.4 MB of over = 398.2 MB) | health `gpuMB` (reported since M5: layer and over textures; the alarm on the budget is M7) |
 | GPU time per frame | ≤ 4 ms at 4K on a venue iGPU (timestamp-query where available) | M7 measurement |
 | Editor | rich box re-layout + redraw ≤ 8 ms for 1,000 characters; thumbnail ≤ 15 ms at 640 px; opening a 17-slide sermon deck decodes no picture larger than its prepared size | unit bench, M4 e2e |
 | Sync | in-slide video start skew within design/23 bounds (17 ms real GPU, 100 ms SwiftShader) | e2e |
@@ -1164,7 +1177,7 @@ The current JSZip text path takes 1.17 s per 100 slides.
    - New cases: runs, verse superscripts, justify, bullets and numbering, autofit, Hebrew and Arabic, mixed bidi, the Arabic ZWJ style split, a Tamil grapheme break, CJK, 'Dieu !' NBSP, crop with negative padding, mask, flip, a Hebrew lyric-only band (punctuation at the left end), presets (M6).
    - A line-break invariance test at 960/1920/3840.
    - **The skip trap is fixed:** `meta.fonts` is built from the files actually used, and CI fails on a skip (`run.ts:60-74`).
-5. **Compositor golden (M5).** WebGPU under `--enable-unsafe-webgpu --use-angle=swiftshader` (the minimal set verified to import external textures in a worker) against the Canvas 2D compositor, pixel by pixel: scene stacks with a synthetic `VideoFrame` from a canvas, masks, crops, rotation, crossfade midpoints, a stale generation (poster shows), and no frame (poster shows, never black). Tolerance 40 per channel, ≤ 0.4%.
+5. **Compositor golden (M5).** WebGPU under `--enable-unsafe-webgpu --use-angle=swiftshader` (the minimal set verified to import external textures in a worker) against the Canvas 2D compositor, pixel by pixel: scene stacks with a synthetic `VideoFrame` from a canvas, masks, crops, rotation, crossfade midpoints, a stale generation (poster shows), and no frame (poster shows, never black). Tolerance 40 per channel, ≤ 0.4%. Built as `golden/compositor-run.ts`; it also compares WebGPU with the `planeSample` reference within a tighter bound, and it adds `--use-vulkan=swiftshader --enable-features=Vulkan` (design/23), because with the ANGLE flags alone Chromium 1243 loses the device at its first pipeline.
 6. **Preset golden (M6).** All 187 presets with default adjustments, `@ordo/renderer/geom` against LibreOffice (a probe deck through soffice); the evaluator is unit-tested against POI semantics.
 7. **Schema compatibility.**
    - The previous release's schema parses new slides (stripped), and the stripped slides draw non-empty.
@@ -1178,7 +1191,7 @@ The current JSZip text path takes 1.17 s per 100 slides.
 11. **Migration.**
     - The legacy repair job on a stored deck with a hidden slide (LibreOffice and pptx-preview variants): stage, labels and search show the right slide's text.
     - Re-import of made-editable slides replaces the page picture and matching boxes and keeps user objects.
-12. **e2e.** Import → goLive → two outputs (slide pixels, in-slide video at its z, F8, onEnd advance, skew) → stage text and notes → lower-third and stream text → search and cue labels. Also: Clear media during an in-slide video and then arm the next slide's clip; the live slide shows its poster, never the next clip.
+12. **e2e.** Import → goLive → two outputs (slide pixels, in-slide video at its z, F8, onEnd advance, skew) → stage text and notes → lower-third and stream text → search and cue labels. Also: Clear media during an in-slide video and then arm the next slide's clip; the live slide shows its poster, never the next clip. The authored-slide half (no import) is `e2e/slide-media.spec.ts` (M5 wave 1).
 13. **Perf.** The raster bench moves into `packages/renderer/bench` with rich slides at 1080p and 4K. A 30-minute 4K soak with slide videos on a reference venue GPU runs before media ships. The hub budgets are measured once on a reference NAS in M3.
 
 ## 15. Milestones
@@ -1458,7 +1471,7 @@ Also:
 - Interactive and bulk raster lanes.
 - Crop-aware decode; opaque-first `copy`.
 - Strip uploads with a per-frame budget.
-- Health gains `rasterMs` p50/p95, `uploadMs`, `gpuMB` and font coverage misses.
+- Health gains `rasterMs` p50/p95, `uploadMs` and font coverage misses, and an alarm when `gpuMB` (reported since M5) passes the budget.
 - Measurements on venue GPUs (Windows iGPU, discrete, macOS) at 1080p and 4K, recorded in design/14.
 - Per-element art fragments: when the residuals of a hybrid slide are separable, the single art object of M3 (which spans the art z-range) is split into one locked fragment per residual at its own z, from the same white/black double render. Non-residual elements between residuals then become native, so chart slides keep editable pictures and text between their residuals.
 - Refresh the stale design/14 sections and ADR 0004/0005/0013.
@@ -1543,7 +1556,7 @@ The `PptxRenderer` enum values stay forever, so stored presentations validate. A
 - **Rewriting text risks regressions** in songs and authored slides. The legacy path stays byte-identical behind the goldens (RTL paragraphs excepted, which were wrong before), whose skip trap must be fixed first (M2).
 - **Schema growth across versions.** After a rollback, the next save loses formatting, media and hidden flags. Mitigations: schema one release ahead of the importer, release notes, the compatibility test.
 - **WebGPU on venue GPUs is unverified.** Only SwiftShader was tested here. Driver behaviour of `importExternalTexture` with the scene shader, 13-pipeline compile time, 4K upload cost and +66 MB for `over` on iGPUs are unknowns. Mitigations: Canvas 2D parity, the compositor golden, M7 measurements, and treating fallback adapters as Canvas 2D.
-- **Media readiness on Sunday.** Clips transcode on the heavy queue behind other jobs. They show posters with a degraded note; including a clip that became ready later needs another Go live. One video and one sound per slide; extra clips become posters. A slide's autoplay sound replaces playlist music. There is no drift correction for long boxed videos (only the 0.25 s start seek).
+- **Media readiness on Sunday.** Clips transcode on the heavy queue behind other jobs. They show posters with a degraded note; including a clip that became ready later needs another Go live. One video and one sound per slide; extra clips become posters. A slide's autoplay sound replaces playlist music (a click-start one does so when F8 starts it). There is no drift correction for long boxed videos (only the 0.25 s start seek).
 - **Reducer change.** A slide cue now starts media and audio, and hidden cues change what Next does. Every client ships the change together (ADR 0006).
 - **Hybrid art is not editable.** Its z-range is flattened until M7's per-residual fragments, but backgrounds, videos and everything outside the range stay native. Picture mode hides edits; it is guarded by the digest, but can confuse.
 - **Hub hardware.** A NAS is several times slower than the dev container. LibreOffice at 288 dpi and picture preparation can take minutes on large decks. They run in jobs, off the live process, and never during a write to a live presentation.

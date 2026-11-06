@@ -284,6 +284,13 @@ describe('keyFace', () => {
   });
   it('reflects state on action keys', () => {
     expect(keyFace({ action: { id: 'mediaPlayPause' }, label: 'Play' }, view).label).toBe('Pause');
+    expect(
+      keyFace(
+        { action: { id: 'mediaPlayPause' }, label: 'Play' },
+        { ...view, mediaPlaying: false, slideSoundWaiting: true },
+      ),
+    ).toMatchObject({ label: 'Play', sub: 'sound' });
+    expect(keyFace({ action: { id: 'mediaPlayPause' }, label: 'Play' }, view).sub).toBeUndefined();
     expect(keyFace({ action: { id: 'logo' }, label: 'Logo' }, view)).toMatchObject({
       sub: 'on',
       fg: '#000000',

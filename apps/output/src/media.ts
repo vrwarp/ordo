@@ -13,6 +13,8 @@ export type MediaHost = {
   getBlob: (hash: string) => Promise<Blob | undefined>;
   fileUrl: (hash: string) => string;
   onFrame?: (slot: number, frame: VideoFrame) => void;
+  /** The slot's picture must leave the renderer (`vclear`), after every frame already delivered. */
+  onClearFrame?: (slot: number) => void;
   onEnded?: (slot: MediaSlot) => void;
   onError?: (slot: MediaSlot, error: string) => void;
   log?: (msg: string) => void;
@@ -37,6 +39,13 @@ export class MediaSlot {
   error?: string;
   private timers: ReturnType<typeof setTimeout>[] = [];
   private rvfc?: number;
+  /**
+   * Frames of this key are not delivered (design/27 §7.2: an in-slide clip cleared from its slide, or
+   * hidden while not playing), until it plays again or another key loads.
+   */
+  private hiddenKey = '';
+  /** A frame was delivered since the renderer's copy was last cleared. */
+  private frameOut = false;
 
   constructor(
     readonly id: number,
@@ -77,6 +86,8 @@ export class MediaSlot {
   load(key: string, hash: string, loop: boolean, muted: boolean): Promise<void> {
     if (this.key === key && this.loading) return this.loading;
     this.clearTimers();
+    // A hide sent for this key before its load reached the slot still holds; any other is lifted.
+    if (key !== this.hiddenKey) this.hiddenKey = '';
     this.key = key;
     this.hash = hash;
     this.ready = false;
@@ -132,6 +143,7 @@ export class MediaSlot {
     this.gen++;
     this.key = '';
     this.hash = '';
+    this.hiddenKey = '';
     this.ready = false;
     this.loading = undefined;
     this.transportSig = '';
@@ -152,6 +164,7 @@ export class MediaSlot {
     if (sig === this.transportSig || !this.ready) return;
     this.transportSig = sig;
     this.clearTimers();
+    if (t.state === 'playing') this.hiddenKey = '';
     this.el.loop = t.loop;
     const el = this.el;
     if (t.state === 'playing') {
@@ -197,6 +210,24 @@ export class MediaSlot {
     });
   }
 
+  /**
+   * Take the slot's picture out of the renderer (design/27 §7.2 `vclear`): at hub time `at` (now when
+   * absent) the renderer's frame is cleared, ordered after every frame already delivered, and no frame of
+   * `key` is delivered again until it plays (`apply` playing) or another key loads. A later load, `apply`
+   * or `pauseAt` cancels a pending one. The key may name a load that has not reached the slot yet.
+   */
+  hideFrames(key: string, at?: number): void {
+    const run = () => {
+      this.hiddenKey = key;
+      if (!this.frameOut) return;
+      this.frameOut = false;
+      this.host.onClearFrame?.(this.id);
+    };
+    const delay = at === undefined ? 0 : at - this.host.hubNow();
+    if (delay > 2) this.timers.push(setTimeout(run, delay));
+    else run();
+  }
+
   /** Post the current frame again (a restarted render worker has none for a paused video). */
   resendFrame(): void {
     if (this.ready && this.isVideo) this.sendFrame();
@@ -205,11 +236,21 @@ export class MediaSlot {
   private sendFrame(): void {
     const v = this.el as HTMLVideoElement;
     if (!this.host.onFrame || v.readyState < 2 || !v.videoWidth) return;
+    if (this.key && this.key === this.hiddenKey) return;
     try {
-      this.host.onFrame(this.id, new VideoFrame(v, { timestamp: Math.round(v.currentTime * 1e6) }));
+      this.deliver(new VideoFrame(v, { timestamp: Math.round(v.currentTime * 1e6) }));
     } catch {
       /* frame not available yet */
     }
+  }
+
+  private deliver(frame: VideoFrame): void {
+    if (!this.host.onFrame || (this.key && this.key === this.hiddenKey)) {
+      frame.close();
+      return;
+    }
+    this.frameOut = true;
+    this.host.onFrame(this.id, frame);
   }
 
   private startFrameLoop(gen: number): void {
@@ -227,9 +268,9 @@ export class MediaSlot {
     }
     const cb = (_now: number, meta: { mediaTime: number }) => {
       if (gen !== this.gen) return;
-      if (this.host.onFrame && v.videoWidth) {
+      if (this.host.onFrame && v.videoWidth && !(this.key && this.key === this.hiddenKey)) {
         try {
-          this.host.onFrame(this.id, new VideoFrame(v, { timestamp: Math.round(meta.mediaTime * 1e6) }));
+          this.deliver(new VideoFrame(v, { timestamp: Math.round(meta.mediaTime * 1e6) }));
         } catch {
           /* skip */
         }

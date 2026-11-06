@@ -1,6 +1,7 @@
 import type { Rgba } from '@ordo/domain';
 import { Canvas2DCompositor } from './canvas2d.ts';
 import { type Compositor, type FrameInputs, MAX_VIDEO_SLOTS, type VideoFrames } from './compositor.ts';
+import { FrameRing } from './frame-ring.ts';
 import { type GpuInit, createGpuCompositor } from './gpu.ts';
 import type { RenderTelemetry } from './health.ts';
 import type { HeldKeys } from './messages.ts';
@@ -34,6 +35,8 @@ export type EngineHost = {
   canvasUnused?: () => void;
   /** Override of the WebGPU compositor factory (tests). */
   createGpu?: (init: GpuInit) => Promise<Compositor>;
+  /** Override of the adapter probe that finds software adapters (tests); see `isFallbackAdapter`. */
+  probeAdapter?: () => Promise<unknown>;
   setTimeout?: (fn: () => void, ms: number) => unknown;
 };
 
@@ -43,6 +46,11 @@ export type EngineOptions = {
   height: number;
   testPixel: boolean;
   forceCanvas2d?: boolean;
+  /**
+   * Use WebGPU even on a software adapter (`isFallbackAdapter`, SwiftShader), which otherwise gets Canvas 2D
+   * (design/27 §7.2). For tests that exercise the WebGPU compositor in headless Chromium.
+   */
+  allowFallbackAdapter?: boolean;
   clear: Rgba;
   clockOffset: number;
   /**
@@ -58,6 +66,24 @@ export const SNAP_MIN_MS = 140;
 /** A new or rebuilt compositor is not copied before it has drawn this long. */
 export const SNAP_SETTLE_MS = 1000;
 
+/** Whether a WebGPU adapter is a software fallback (`GPUAdapterInfo.isFallbackAdapter`, or the older flag). */
+export function isFallbackAdapter(adapter: unknown): boolean {
+  if (!adapter || typeof adapter !== 'object') return false;
+  const a = adapter as { isFallbackAdapter?: unknown; info?: { isFallbackAdapter?: unknown } };
+  return a.info?.isFallbackAdapter === true || a.isFallbackAdapter === true;
+}
+
+/** The adapter createGpuCompositor would get, or null without WebGPU. Never binds a canvas. */
+async function probeAdapter(): Promise<GPUAdapter | null> {
+  const gpu = (globalThis.navigator as (Navigator & { gpu?: GPU }) | undefined)?.gpu;
+  if (!gpu) return null;
+  try {
+    return await gpu.requestAdapter({ powerPreference: 'high-performance' });
+  } catch {
+    return null;
+  }
+}
+
 export class RenderEngine {
   readonly layers: LayerStack<ImageBitmap>[] = LAYERS.map(
     () => new LayerStack<ImageBitmap>((b) => b.close()),
@@ -65,7 +91,10 @@ export class RenderEngine {
   readonly video: VideoFrames = {
     frames: Array.from({ length: MAX_VIDEO_SLOTS }, () => null),
     version: new Int32Array(MAX_VIDEO_SLOTS),
+    gen: new Int32Array(MAX_VIDEO_SLOTS).fill(-1),
   };
+  /** The two newest frames of each slot; presents one per slot into `video` before each draw. */
+  readonly videoRing = new FrameRing(this.video);
   readonly clock = new FrameClock(600);
   private compositor: Compositor | null = null;
   private inputs: FrameInputs;
@@ -173,6 +202,18 @@ export class RenderEngine {
   }
 
   /**
+   * A software adapter (`isFallbackAdapter`, SwiftShader) is treated as no WebGPU (design/27 §7.2): it runs
+   * the WebGPU pipelines on the CPU, and in headless Chromium its device is lost several times right after
+   * start (design/14). Probed before the canvas is bound, so Canvas 2D keeps the canvas; the slow retry
+   * probes again. `allowFallbackAdapter` (`?renderer=webgpu`) uses it anyway.
+   */
+  private async refuseFallbackAdapter(): Promise<void> {
+    if (this.opts.allowFallbackAdapter) return;
+    const adapter = await (this.host.probeAdapter ?? probeAdapter)();
+    if (isFallbackAdapter(adapter)) throw new Error('the adapter is a software fallback (isFallbackAdapter)');
+  }
+
+  /**
    * Try WebGPU again on a fresh canvas while Canvas 2D keeps drawing (review item 27). The first frame
    * is drawn into the new compositor before the swap, so the main thread can show the new canvas
    * without a blank frame; on failure the 2D compositor is untouched and the canvas is given back.
@@ -183,6 +224,7 @@ export class RenderEngine {
     this.gpuRetries++;
     let canvas: OffscreenCanvas | undefined;
     try {
+      await this.refuseFallbackAdapter();
       canvas = await this.host.requestCanvas!();
       const gpu = await (this.host.createGpu ?? createGpuCompositor)({
         canvas,
@@ -203,7 +245,8 @@ export class RenderEngine {
         ls.stacks[0].version++;
         ls.stacks[1].version++;
       }
-      gpu.draw(this.inputs);
+      this.prepareHeld(gpu);
+      this.drawFrame(gpu);
       const old = this.compositor;
       this.compositor = gpu;
       this.opts.canvas = canvas;
@@ -232,6 +275,7 @@ export class RenderEngine {
     let note: string | undefined;
     if (!this.opts.forceCanvas2d && !this.gpuDisabled) {
       try {
+        await this.refuseFallbackAdapter();
         this.compositor = await (this.host.createGpu ?? createGpuCompositor)({
           canvas: this.opts.canvas,
           width: this.opts.width,
@@ -247,6 +291,7 @@ export class RenderEngine {
         });
         this.kind = 'webgpu';
         this.error = undefined;
+        this.prepareHeld(this.compositor);
         return { kind: 'webgpu' };
       } catch (err) {
         note = `WebGPU unavailable, using Canvas 2D: ${(err as Error).message}`;
@@ -261,7 +306,21 @@ export class RenderEngine {
     this.compositor = new Canvas2DCompositor(this.opts.canvas, this.opts.width, this.opts.height);
     this.kind = '2d';
     if (note) this.error = note;
+    this.prepareHeld(this.compositor);
     return { kind: '2d', note };
+  }
+
+  /**
+   * Hand a new or rebuilt compositor every stack the layers hold (`Compositor.prepare`), so what it
+   * allocates per content (a scene's over textures) exists before the re-upload, as after an offer.
+   */
+  private prepareHeld(c: Compositor): void {
+    if (!c.prepare) return;
+    for (let l = 0; l < this.layers.length; l++) {
+      const ls = this.layers[l]!;
+      for (const s of ls.stacks) if (s.key !== '') c.prepare(l, s);
+      if (ls.hasQueued && ls.queued.key !== '') c.prepare(l, ls.queued);
+    }
   }
 
   /**
@@ -333,8 +392,10 @@ export class RenderEngine {
     const ls = this.layers[layer];
     if (!ls) {
       if (c.bitmap) c.bitmap.close();
+      if (c.over) c.over.close();
       return;
     }
+    this.compositor?.prepare?.(layer, c);
     ls.offer(c);
   }
 
@@ -349,15 +410,15 @@ export class RenderEngine {
     }
   }
 
-  setVideoFrame(slot: number, frame: VideoFrame | null): void {
-    if (slot < 0 || slot >= MAX_VIDEO_SLOTS) {
-      frame?.close();
-      return;
-    }
-    const prev = this.video.frames[slot];
-    if (prev && prev !== frame) prev.close();
-    this.video.frames[slot] = frame;
-    this.video.version[slot]!++;
+  /**
+   * A frame of a slot (`vframe`), tagged with the slot generation it was loaded under and, while its element
+   * plays, the hub time of media time 0 (`startedAt`, NaN: none) and the clip length when it loops: the
+   * slot keeps its two newest frames and presents the one due (frame-ring.ts). `null` clears the slot
+   * (`vclear`). The engine owns the frame from here and closes it.
+   */
+  setVideoFrame(slot: number, frame: VideoFrame | null, gen = -1, startedAt = Number.NaN, loopMs = 0): void {
+    if (frame) this.videoRing.push(slot, frame, gen, startedAt, loopMs, this.hubNow(), this.clock.frameMs);
+    else this.videoRing.clear(slot);
   }
 
   setSnapshot(everyMs: number, width: number, height: number): void {
@@ -381,6 +442,7 @@ export class RenderEngine {
   telemetry(): RenderTelemetry {
     let late = 0;
     for (const l of this.layers) late += l.lateFlips;
+    const gpuBytes = this.compositor?.gpuBytes?.();
     return {
       presented: this.clock.presented,
       missed: this.clock.missed,
@@ -394,11 +456,14 @@ export class RenderEngine {
       error: this.error,
       slideCue: this.markerLive,
       slideFlipAt: this.markerFlipAt,
+      ...(gpuBytes !== undefined ? { gpuMB: Math.round(gpuBytes / 1e5) / 10 } : {}),
     };
   }
 
+  /** Stop the frame loop and close the video frames held. */
   stop(): void {
     this.running = false;
+    this.videoRing.release();
   }
 
   private onFrame(ts: number): void {
@@ -418,11 +483,12 @@ export class RenderEngine {
       this.markerLive = this.markerCue;
       this.markerFlipAt = now;
     }
+    this.videoRing.select(now, frameMs);
     if (this.opts.testPixel) this.updateTestPixel();
     const c = this.compositor;
     if (!c) return; // rebuilding after device loss; the main thread shows the last frame copy
     try {
-      c.draw(this.inputs);
+      this.drawFrame(c);
     } catch (err) {
       this.error = `draw failed: ${(err as Error).message}`; // alloc-ok (error path)
       return;
@@ -451,6 +517,18 @@ export class RenderEngine {
         createImageBitmap(this.opts.canvas, this.snapOpts).then(this.onSnapDone, this.onSnapFail);
       }
     }
+  }
+
+  /**
+   * Draw one frame on `c`. Texture uploads stay out of `draw` (design/27 §7.3): what this frame samples is
+   * uploaded just before it, the rest (content armed for a coming flip) after its submit, off the frame's
+   * critical path.
+   */
+  private drawFrame(c: Compositor): void {
+    /* @hot */
+    c.drainUploads?.(this.inputs, false);
+    c.draw(this.inputs);
+    c.drainUploads?.(this.inputs, true);
   }
 
   private updateTestPixel(): void {

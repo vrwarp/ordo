@@ -91,6 +91,15 @@ hub and surfaces a warning. Details in [design/17](17-offline-and-degraded.md).
 mismatch means a stale tab: the hub replies `bye { reason: 'version' }` and the app
 reloads itself.
 
+`APP_VERSION` (`packages/protocol/src/index.ts`) is what `hello` carries, and that reload
+is the only guard against a tab left open across an upgrade. Every client runs the hub's
+reducer, cue expansion, schemas and planner on the same states, so any change to what they
+compute from the same state, event, message or stored document bumps it (M5 wave 1 went to
+0.2.0: the slide's own video on the media layer and slide-owned audio).
+`packages/protocol/src/version.test.ts` fingerprints those shared sources (comments and
+layout ignored) and fails until the change records its digest, with a new version when the
+meaning changed.
+
 ## Program view signalling
 
 Operator sends `rtc.signal` to each output with an SDP offer for a receive-only video

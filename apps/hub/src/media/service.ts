@@ -1,12 +1,12 @@
 import { readFile, rm, writeFile } from 'node:fs/promises';
-import type { Media } from '@ordo/domain';
+import type { Media, MediaTrim } from '@ordo/domain';
 import { newId } from '@ordo/domain';
 import type { Logger } from 'pino';
 import type { HubConfig } from '../config.ts';
 import { errorMessage, HttpError } from '../errors.ts';
 import type { JobCtx, JobQueue } from '../jobs.ts';
 import type { Library } from '../library.ts';
-import { extensionAgrees, extOf, readHead, type Sniffed, sniff, type Store } from '../store.ts';
+import { extensionAgrees, extOf, hashFile, readHead, type Sniffed, sniff, type Store } from '../store.ts';
 import {
   downscaleImage,
   firstFramePng,
@@ -63,7 +63,52 @@ export type IngestOpts = {
   tags?: string[];
   loop?: boolean;
   checkExtension?: boolean;
+  /**
+   * Keep only [startMs, endMs] of a video or audio source (PowerPoint's p14:trim, design/27 §8 "Hub"). It is
+   * baked into the delivery, so loops, onEnd, the stage's remaining time and media.ended need no trim logic,
+   * and recorded as Media.trim. Normalised by normTrim; images ignore it.
+   */
+  trim?: MediaTrim;
 };
+
+/**
+ * A trim in whole milliseconds within the decode limit, or undefined when it keeps nothing (end at or before
+ * start, or not a number): such a trim is ignored and the whole source is kept.
+ */
+export function normTrim(t: MediaTrim | undefined): MediaTrim | undefined {
+  if (!t) return undefined;
+  const startMs = Math.max(0, Math.round(t.startMs));
+  const endMs = Math.min(DECODE_LIMITS.durationMs, Math.round(t.endMs));
+  return Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs
+    ? { startMs, endMs }
+    : undefined;
+}
+
+/** Same kept part: both untrimmed, or the same start and end. */
+export function sameTrim(a: MediaTrim | undefined, b: MediaTrim | undefined): boolean {
+  return a === undefined || b === undefined ? a === b : a.startMs === b.startMs && a.endMs === b.endMs;
+}
+
+/** How long the kept part of a source lasts. */
+export function keptMs(durationMs: number | undefined, t: MediaTrim | undefined): number | undefined {
+  if (!t || durationMs === undefined) return durationMs;
+  return Math.max(0, Math.min(durationMs, t.endMs) - t.startMs);
+}
+
+/**
+ * PowerPoint's media volume (`p:cMediaNode vol`, 100000 = 100 %) as a gain: 20·log10(vol/100000) dB,
+ * clamped to −100 (silent) .. 0, to 0.01 dB (design/27 §8 "Hub"). A missing or non-numeric volume is 100 %.
+ */
+export function volumeGainDb(vol: number | undefined): number {
+  if (vol === undefined || Number.isNaN(vol)) return 0;
+  if (vol <= 0) return -100;
+  const db = Math.round(2000 * Math.log10(vol / 100_000)) / 100;
+  return Math.min(0, Math.max(-100, db)) || 0;
+}
+
+function seconds(ms: number): string {
+  return `${(ms / 1000).toFixed(3).replace(/\.?0+$/, '')} s`;
+}
 
 export function baseName(name: string): string {
   const b = name.split(/[\\/]/).pop() ?? name;
@@ -124,6 +169,7 @@ export class MediaService {
       bytes: file.bytes,
     });
     const kind = s.kind as Media['kind'];
+    const trim = kind === 'image' ? undefined : normTrim(opts.trim);
     const media = this.lib.media.insert({
       id: newId(),
       rev: 1,
@@ -135,6 +181,7 @@ export class MediaService {
       loop: opts.loop ?? false,
       isBackground: opts.isBackground ?? false,
       ...(kind === 'audio' ? { audio: { gainDb: 0 } } : {}),
+      ...(trim ? { trim } : {}),
     });
     this.lib.emit([{ kind: 'media', id: media.id, rev: media.rev, entity: media }]);
     const heavy = kind === 'video' || s.ext === 'gif';
@@ -146,6 +193,42 @@ export class MediaService {
     const tmp = this.store.tmpPath(extOf(name));
     await writeFile(tmp, buf);
     return this.ingest({ path: tmp }, name, opts);
+  }
+
+  /**
+   * The media item made from these original bytes with this trim (none: the untrimmed one), if any. Imports
+   * deduplicate on both, so one file used whole and trimmed gives two clips (design/27 §8 "Hub"). An image
+   * (GIFs included) ignores trims, so it matches whatever the trim.
+   */
+  findClip(hash: string, trim?: MediaTrim): Media | undefined {
+    const t = normTrim(trim);
+    return this.lib.media
+      .list()
+      .find(
+        (m) =>
+          m.original.hash === hash && (m.original.mime.startsWith('image/') || sameTrim(normTrim(m.trim), t)),
+      );
+  }
+
+  /**
+   * `ingest`, unless the same bytes with the same trim are already a media item (in any state, as imports
+   * reuse them): that item is returned and the file removed. A re-queued import therefore reuses its clips.
+   */
+  async ingestOnce(
+    file: { path: string; hash?: string; bytes?: number },
+    name: string,
+    opts: IngestOpts = {},
+  ): Promise<{ media: Media; reused: boolean }> {
+    const { hash, bytes } =
+      file.hash && file.bytes !== undefined
+        ? { hash: file.hash, bytes: file.bytes }
+        : await hashFile(file.path);
+    const existing = this.findClip(hash, opts.trim);
+    if (existing) {
+      await rm(file.path, { force: true });
+      return { media: existing, reused: true };
+    }
+    return { media: await this.ingest({ path: file.path, hash, bytes }, name, opts), reused: false };
   }
 
   /** A ready image media item from a file we produced ourselves (document pages). */
@@ -231,10 +314,19 @@ export class MediaService {
     const input = this.store.abs(m.original.path);
     const info = await probe(input, t.probe);
     checkDecodeLimits(m.kind, info);
+    const trim = m.kind === 'image' ? undefined : normTrim(m.trim);
+    if (trim) {
+      if (info.durationMs !== undefined && trim.startMs >= info.durationMs)
+        throw new Error(
+          `The clip is trimmed to start at ${seconds(trim.startMs)}, after its end (${seconds(info.durationMs)})`,
+        );
+      ctx.log(`keeping ${seconds(trim.startMs)} to ${seconds(trim.endMs)} of the source`);
+    }
     const opts = {
       signal: ctx.signal,
-      durationMs: info.durationMs,
+      durationMs: keptMs(info.durationMs, trim),
       onProgress: (f: number) => ctx.progress(f * 0.9),
+      trim,
     };
 
     if (m.original.mime === 'image/gif') {
@@ -276,14 +368,15 @@ export class MediaService {
 
     if (info.audio) {
       ctx.log('measuring loudness');
-      const lufs = await measureLoudness(input, { timeoutMs: t.light * 4, signal: ctx.signal });
+      const lufs = await measureLoudness(input, { timeoutMs: t.light * 4, signal: ctx.signal, trim });
       ctx.progress(0.3);
       const out = this.store.tmpPath('m4a');
       await transcodeAudio(input, out, {
         timeoutMs: t.transcode,
         signal: ctx.signal,
-        durationMs: info.durationMs,
+        durationMs: opts.durationMs,
         onProgress: (f) => ctx.progress(0.3 + f * 0.65),
+        trim,
       });
       const delivery = await this.store.put(out, { ext: 'm4a', mime: 'audio/mp4' });
       ctx.log(`loudness ${lufs ?? '?'} LUFS`);
@@ -291,7 +384,7 @@ export class MediaService {
         ...m,
         kind: 'audio',
         delivery,
-        durationMs: info.durationMs,
+        durationMs: opts.durationMs,
         width: undefined,
         height: undefined,
         audio: { gainDb: m.audio?.gainDb ?? 0, pairId: m.audio?.pairId, loudnessLufs: lufs },
@@ -306,12 +399,15 @@ export class MediaService {
     info: Awaited<ReturnType<typeof probe>>,
     alpha: boolean,
     ctx: JobCtx<unknown>,
-    opts: { signal: AbortSignal; durationMs?: number; onProgress: (f: number) => void },
+    opts: { signal: AbortSignal; durationMs?: number; onProgress: (f: number) => void; trim?: MediaTrim },
   ): Promise<Media> {
     const t = this.cfg.timeouts;
     const v = info.video!;
+    // Anamorphic sources are delivered at their display size with square pixels (ffmpeg.ts SQUARE_PIXELS).
+    const sar = v.sample_aspect_ratio;
+    const anamorphic = sar && sar !== '1:1' && sar !== '0:1' ? ` (SAR ${sar})` : '';
     ctx.log(
-      `video ${v.codec_name} ${v.width}x${v.height} @ ${v.fps?.toFixed(2) ?? '?'} fps${alpha ? ' with alpha' : ''}${info.audio ? ', audio' : ''}`,
+      `video ${v.codec_name} ${v.width}x${v.height}${anamorphic} @ ${v.fps?.toFixed(2) ?? '?'} fps${alpha ? ' with alpha' : ''}${info.audio ? ', audio' : ''}`,
     );
     const ext = alpha ? 'webm' : 'mp4';
     const out = this.store.tmpPath(ext);
@@ -337,15 +433,32 @@ export class MediaService {
       if (ctx.signal.aborted) throw e;
       ctx.log(`poster failed: ${errorMessage(e)}`);
     }
+    // The soundtrack is measured like an audio file, so the engine normalises it to the same level
+    // (design/18 "Gain staging"). Without a measurement it plays unnormalised, as before.
+    let audio = m.audio;
+    if (info.audio) {
+      ctx.log('measuring loudness');
+      let lufs: number | undefined;
+      try {
+        lufs = await measureLoudness(input, { timeoutMs: t.light * 4, signal: ctx.signal, trim: opts.trim });
+      } catch (e) {
+        if (ctx.signal.aborted) throw e;
+        ctx.log(`loudness not measured: ${errorMessage(e)}`);
+      }
+      ctx.log(`loudness ${lufs ?? '?'} LUFS`);
+      audio = { gainDb: m.audio?.gainDb ?? 0, pairId: m.audio?.pairId, loudnessLufs: lufs };
+    }
+    ctx.progress(0.98);
     return {
       ...m,
       kind: 'video',
       delivery,
       poster: posterRef,
-      durationMs: outInfo.durationMs ?? info.durationMs,
+      durationMs: outInfo.durationMs ?? opts.durationMs,
       width: outInfo.video?.width,
       height: outInfo.video?.height,
       hasAlpha: alpha,
+      audio,
     };
   }
 }

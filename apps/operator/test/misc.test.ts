@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { initialState, reduce } from '@ordo/live-state';
+import { initialState, reduce, reduceAll } from '@ordo/live-state';
 import type { OutputHealthEntry } from '@ordo/protocol';
-import { parseLyrics, songFromParsed } from '@ordo/domain';
+import { keyFace } from '@ordo/surfaces';
+import { type Media, type Presentation, type SlideObject, parseLyrics, songFromParsed } from '@ordo/domain';
 import { DoublePressGuard } from '../src/lib/confirm.ts';
 import { allowedForRole, parseRoute, routeHash } from '../src/lib/route.ts';
 import { armDot, cacheSummary, outputDot } from '../src/lib/health.ts';
@@ -90,6 +91,99 @@ describe('deck view', () => {
     const v = deckView(s, true);
     expect(v.sections.map((x) => x.short)).toEqual(['V1', 'C']);
     expect(v.liveSectionPos).toBe(1);
+  });
+
+  it("lights the play key for F8's target: a waiting click sound, then the slide video, then the audio", () => {
+    const file = { hash: 'h', bytes: 1, mime: 'x', path: 'p' };
+    const media = (id: string, kind: Media['kind']): Media => ({
+      id,
+      rev: 1,
+      name: id,
+      tags: [],
+      kind,
+      original: file,
+      delivery: file,
+      state: 'ready',
+      loop: false,
+      isBackground: false,
+    });
+    const clip = {
+      id: 'v',
+      type: 'image',
+      box: { x: 100, y: 100, w: 800, h: 450, rotation: 0 },
+      mediaId: 'clip',
+      fit: 'contain',
+      opacity: 1,
+      radius: 0,
+      play: { mediaId: 'clip' },
+    } as SlideObject;
+    const mix: Presentation = {
+      id: 'mix',
+      rev: 1,
+      title: 'Mix',
+      kind: 'slides',
+      meta: { tags: [] },
+      sections: [
+        {
+          id: 's',
+          label: 'S',
+          short: 'S',
+          // b: an autoplay video and a sound that starts on click.
+          slides: [
+            { id: 'a', objects: [] },
+            { id: 'b', objects: [clip], audio: { mediaId: 'sfx', start: 'click' } },
+          ],
+        },
+      ],
+      arrangements: [],
+      archived: false,
+    };
+    const resolved = {
+      playlist: {
+        id: 'pl',
+        rev: 1,
+        name: 'x',
+        items: [
+          { id: 'i0', kind: 'media' as const, mediaId: 'bed', loop: true },
+          { id: 'i1', kind: 'presentation' as const, presentationId: 'mix' },
+        ],
+      },
+      presentations: { mix },
+      media: { bed: media('bed', 'audio'), clip: media('clip', 'video'), sfx: media('sfx', 'audio') },
+      fonts: [],
+      looks: [],
+      files: [],
+      manifestId: 'm',
+    };
+    const play = { action: { id: 'mediaPlayPause' as const }, label: 'Play' };
+    // Cue 0: the playlist audio plays; F8 pauses it.
+    let s = reduceAll(initialState(), [
+      { k: 'goLive', resolved },
+      { k: 'go', cueIndex: 0, at: 100 },
+    ]);
+    let v = deckView(s, true);
+    expect(v.mediaPlaying).toBe(true);
+    expect(v.slideSoundWaiting).toBeUndefined();
+    // Cue 2: the video plays and the click sound waits; F8 starts the sound, so the key offers Play.
+    s = reduce(s, { k: 'go', cueIndex: 2, at: 200 });
+    expect(s.layers.media.content?.state).toBe('playing');
+    v = deckView(s, true);
+    expect(v.mediaPlaying).toBe(false);
+    expect(v.slideSoundWaiting).toBe(true);
+    expect(keyFace(play, v)).toMatchObject({ label: 'Play', sub: 'sound' });
+    // F8 started the sound: the next F8 pauses the video.
+    s = reduce(s, { k: 'media.play', at: 500 });
+    expect(s.audio.content).toMatchObject({ mediaId: 'sfx', state: 'playing' });
+    v = deckView(s, true);
+    expect(v.mediaPlaying).toBe(true);
+    expect(v.slideSoundWaiting).toBeUndefined();
+    expect(keyFace(play, v)).toMatchObject({ label: 'Pause' });
+    expect(keyFace(play, v).sub).toBeUndefined();
+    // The video paused while the sound plays on: F8 resumes the video, so the key offers Play.
+    s = reduce(s, { k: 'media.play', at: 900 });
+    expect(s.layers.media.content?.state).toBe('paused');
+    expect(s.audio.content?.state).toBe('playing');
+    expect(deckView(s, true).mediaPlaying).toBe(false);
   });
 });
 
