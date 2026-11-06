@@ -10,7 +10,7 @@
  *
  * **Support** (`native` / `approx` / `residual`) is per element: the reader's own verdict (`walk.ts`: since M6
  * every preset of the table, custom geometry, gradients and line styles are native; a preset the table does
- * not know and a pattern fill are approx; custom geometry past the bounds and sheared group children are
+ * not know, a pattern fill and sheared group children are approx; custom geometry past the bounds is
  * residual) combined with the rules of §5 (charts, the tables and SmartArt the walk leaves residual, OLE, maths,
  * real 3D, WordArt warps, vertical and multi-column text, HD Photo pictures are residual;
  * reflections, inner shadows, soft edges on pictures and metafiles waiting for conversion are approx).
@@ -410,7 +410,8 @@ function picturePart(e: Element): string | undefined {
  *
  * - residual: chart, table, SmartArt, OLE, other graphic frames, maths, a real 3D bevel or extrusion,
  *   a WordArt warp (not `textNoShape`), text that is vertical, in columns or `anchorCtr` (until M8), an
- *   HD Photo picture (`pic:wdp`, `pic:hdp`); a sheared group child is the reader's verdict (`walk.ts`);
+ *   HD Photo picture (`pic:wdp`, `pic:hdp`); custom geometry past the bounds is the reader's verdict
+ *   (`walk.ts`), as a sheared group child's approx is;
  * - approx: reflection, inner shadow, a soft edge on a picture, a metafile (converted by LibreOffice in the
  *   follow-up job);
  * - everything else native. The element's own `support` (the reader's verdict) is not part of this.

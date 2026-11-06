@@ -270,20 +270,85 @@ function fmt(v: number, dec: number): string {
   return Object.is(r, -0) ? '0' : String(r);
 }
 
-/** A built path as `M L Q C Z` with coordinates times (`kx`, `ky`). */
-function pathString(p: GeomPath, kx: number, ky: number, dec: number): string {
-  const out: string[] = [];
+/** The letter and coordinate pairs of a built command. */
+function cmdShape(op: number): { letter: string; pairs: number } {
+  if (op === CMD_MOVE) return { letter: 'M', pairs: 1 };
+  if (op === CMD_LINE) return { letter: 'L', pairs: 1 };
+  if (op === CMD_QUAD) return { letter: 'Q', pairs: 2 };
+  if (op === CMD_CUBIC) return { letter: 'C', pairs: 3 };
+  return { letter: 'Z', pairs: 0 };
+}
+
+/**
+ * Each command of a built path as `M L Q C Z` text with coordinates times (`kx`, `ky`) at `dec` decimals, and
+ * its points as the render clamp counts them (a pair each, 1 for a close).
+ */
+function commandStrings(p: GeomPath, kx: number, ky: number, dec: number): { s: string; n: number }[] {
+  const out: { s: string; n: number }[] = [];
   let at = 0;
   for (const op of p.cmds) {
-    const pairs = op === CMD_QUAD ? 2 : op === CMD_CUBIC ? 3 : op === CMD_CLOSE ? 0 : 1;
-    const letter =
-      op === CMD_MOVE ? 'M' : op === CMD_LINE ? 'L' : op === CMD_QUAD ? 'Q' : op === CMD_CUBIC ? 'C' : 'Z';
+    const { letter, pairs } = cmdShape(op);
     let s = letter;
     for (let j = 0; j < pairs; j++, at += 2)
       s += ` ${fmt(p.pts[at]! * kx, dec)} ${fmt(p.pts[at + 1]! * ky, dec)}`;
-    out.push(s);
+    out.push({ s, n: pairs || 1 });
   }
-  return out.join(' ');
+  return out;
+}
+
+/** A built path as `M L Q C Z` with coordinates times (`kx`, `ky`). */
+function pathString(p: GeomPath, kx: number, ky: number, dec: number): string {
+  return commandStrings(p, kx, ky, dec)
+    .map((c) => c.s)
+    .join(' ');
+}
+
+/**
+ * A built path as a chain of path strings (`ShapeGeom.paths[].cont`: the pieces are drawn as the one path
+ * they were cut from), each at most `GEOM_LIMITS.points` points and `MAX_PATH_CHARS` characters, at `dec`
+ * decimals. Pieces are cut where a sub-path starts, so that each holds whole sub-paths; a sub-path longer
+ * than a piece is cut between two of its commands, and the next piece goes on from where it stopped (its
+ * first command is not a moveTo). Undefined when it takes more than `room` pieces.
+ */
+function chainStrings(p: GeomPath, kx: number, ky: number, dec: number, room: number): string[] | undefined {
+  const out: string[] = [];
+  let piece: string[] = [];
+  let chars = 0;
+  let points = 0;
+  const fits = (n: number, len: number) =>
+    points + n <= GEOM_LIMITS.points && chars + (piece.length ? 1 : 0) + len <= MAX_PATH_CHARS;
+  const flush = () => {
+    if (piece.length) out.push(piece.join(' '));
+    piece = [];
+    chars = 0;
+    points = 0;
+  };
+  const cmds = commandStrings(p, kx, ky, dec);
+  for (let i = 0; i < cmds.length; ) {
+    // The sub-path from command i: its points and length.
+    let j = i + 1;
+    while (j < cmds.length && p.cmds[j] !== CMD_MOVE) j++;
+    let n = 0;
+    let len = -1;
+    for (let k = i; k < j; k++) {
+      n += cmds[k]!.n;
+      len += cmds[k]!.s.length + 1;
+    }
+    // A sub-path that fits a piece of its own starts one when it does not fit this one.
+    const whole = n <= GEOM_LIMITS.points && len <= MAX_PATH_CHARS;
+    if (whole && !fits(n, len)) flush();
+    for (let k = i; k < j; k++) {
+      const c = cmds[k]!;
+      if (!fits(c.n, c.s.length)) flush();
+      if (out.length >= room) return undefined;
+      chars += (piece.length ? 1 : 0) + c.s.length;
+      points += c.n;
+      piece.push(c.s);
+    }
+    i = j;
+  }
+  flush();
+  return out.length <= room ? out : undefined;
 }
 
 /** Decimals that keep a coordinate within about 1/20,000 of its space. */
@@ -300,6 +365,12 @@ function spaceSide(v: number): number {
 /**
  * A custom geometry built for a box of `w` x `h` EMU (`s`: logical px per EMU): paths in their own spaces
  * (the deck's `w`/`h`, else the box in logical px), the text rectangle and sites as fractions of the box.
+ * A deck path is stored as one path when it fits the schema (at most `GEOM_LIMITS.points` points and
+ * `MAX_PATH_CHARS` characters, with fewer decimals if need be: every build draws it so). Past that it is
+ * cut at its sub-paths' starts: into parts whose bounding boxes are disjoint when it can be (each filled on
+ * its own draws what the even-odd rule draws together, in every build), else, as a traced outline holding
+ * all its holes must be, into a chain of pieces drawn as one path (`cont`; `chainStrings`). Past the paths
+ * a geometry keeps, it is over the bounds.
  */
 export function customPaths(node: XNode, w: number, h: number, s: number): CustomPaths {
   const { geom, of, notes, lost } = compiledOf(node);
@@ -334,40 +405,51 @@ export function customPaths(node: XNode, w: number, h: number, s: number): Custo
       };
     } else joined.push({ path, pw, ph });
   }
-  // A joined path past the render clamp's points is split at its sub-paths, when no sub-path of one part
-  // overlaps one of another (filled apart, they draw what the even-odd rule draws together); else, or past
-  // the paths a geometry keeps, it is not drawn natively.
+  // A joined path past the render clamp's points is split at its sub-paths when no sub-path of one part
+  // overlaps one of another (filled apart, they draw what the even-odd rule draws together); else it is
+  // stored as a chain below.
   const parts: typeof joined = [];
   for (const j of joined) {
-    if (pointCount(j.path) <= GEOM_LIMITS.points) parts.push(j);
-    else {
-      const split = splitPath(j.path);
-      if (split) for (const path of split) parts.push({ ...j, path });
-      else {
-        over = true;
-        parts.push(j);
-      }
-    }
+    const split = pointCount(j.path) > GEOM_LIMITS.points ? splitPath(j.path) : undefined;
+    if (split) for (const path of split) parts.push({ ...j, path });
+    else parts.push(j);
   }
-  if (parts.length > GEOM_LIMITS.paths) over = true;
-  for (const { path, pw, ph } of parts.slice(0, GEOM_LIMITS.paths)) {
+  for (let k = 0; k < parts.length; k++) {
+    const { path, pw, ph } = parts[k]!;
+    // Every part after this one needs a path of its own.
+    const room = GEOM_LIMITS.paths - out.length - (parts.length - k - 1);
+    if (room < 1) {
+      over = true;
+      break;
+    }
     // An axis in the box's own units is written in logical px (`s` px per EMU), with its space.
     const kx = pw ? 1 : s;
     const ky = ph ? 1 : s;
     const W = spaceSide(pw || bw * s);
     const H = spaceSide(ph || bh * s);
-    let dec = decimalsFor(W, H);
-    let d = pathString(path, kx, ky, dec);
-    while (d.length > MAX_PATH_CHARS && dec > 0) d = pathString(path, kx, ky, --dec);
-    if (d.length > MAX_PATH_CHARS) over = true;
+    const dec0 = decimalsFor(W, H);
+    let pieces: string[] | undefined;
+    if (pointCount(path) <= GEOM_LIMITS.points) {
+      let dec = dec0;
+      let d = pathString(path, kx, ky, dec);
+      while (d.length > MAX_PATH_CHARS && dec > 0) d = pathString(path, kx, ky, --dec);
+      if (d.length <= MAX_PATH_CHARS) pieces = [d];
+    }
+    for (let dec = dec0; !pieces && dec >= 0; dec--) pieces = chainStrings(path, kx, ky, dec, room);
+    if (!pieces) {
+      over = true;
+      pieces = [''];
+    }
     points += pointCount(path);
-    out.push({
-      d: d.length > MAX_PATH_CHARS ? '' : d,
-      w: W,
-      h: H,
-      ...(path.fill !== 'norm' ? { fill: path.fill } : {}),
-      ...(path.stroke ? {} : { stroke: false }),
-    });
+    for (let i = 0; i < pieces.length; i++)
+      out.push({
+        d: pieces[i]!,
+        w: W,
+        h: H,
+        ...(path.fill !== 'norm' ? { fill: path.fill } : {}),
+        ...(path.stroke ? {} : { stroke: false }),
+        ...(i > 0 ? { cont: true } : {}),
+      });
   }
   const fx = (x: number) => (bw > 0 ? x / bw : 0);
   const fy = (y: number) => (bh > 0 ? y / bh : 0);
@@ -406,7 +488,7 @@ export function splitPath(path: GeomPath): GeomPath[] | undefined {
     if (op === CMD_MOVE || subs.length === 0)
       subs.push({ c0: i, c1: i, p0: at, p1: at, box: [Infinity, Infinity, -Infinity, -Infinity] });
     const sub = subs[subs.length - 1]!;
-    const pairs = op === CMD_QUAD ? 2 : op === CMD_CUBIC ? 3 : op === CMD_CLOSE ? 0 : 1;
+    const pairs = cmdShape(op).pairs;
     for (let j = 0; j < pairs; j++, at += 2) {
       const x = path.pts[at]!;
       const y = path.pts[at + 1]!;
@@ -553,8 +635,9 @@ export function pictureFillPlacement(m: Affine): { xf: Affine; t: Affine } {
 
 /**
  * A stored geometry (`ShapeGeom`) as paths after the unit-square affine `t`, in a `w2` x `h2` box: a preset
- * built at its own box of `w` x `h` logical px, stored paths in their own spaces. Undefined when it has neither
- * (or a preset the table does not know).
+ * built at its own box of `w` x `h` logical px, stored paths in their own spaces (a chain's pieces stay
+ * pieces, `cont` kept). Undefined when it has neither (or a preset the table does not know), or when a stored
+ * path's string would pass `MAX_PATH_CHARS` at every precision.
  */
 export function transformedPaths(
   g: { preset?: string; adj?: readonly (readonly [string, number])[]; paths?: CustomPaths['paths'] },
@@ -588,7 +671,16 @@ export function transformedPaths(
     });
   }
   if (!g.paths?.length) return undefined;
-  return g.paths.map((p) => ({ ...p, d: transformPathData(p.d, p.w, p.h, map, dec), w: W, h: H }));
+  const out: CustomPaths['paths'] = [];
+  for (const p of g.paths) {
+    // Within the schema's characters as `customPaths` writes them: fewer decimals if need be, else none.
+    let k = dec;
+    let d = transformPathData(p.d, p.w, p.h, map, k);
+    while (d.length > MAX_PATH_CHARS && k > 0) d = transformPathData(p.d, p.w, p.h, map, --k);
+    if (d.length > MAX_PATH_CHARS) return undefined;
+    out.push({ ...p, d, w: W, h: H });
+  }
+  return out;
 }
 
 /** A path string (`M L Q C Z` and numbers, as `pathString` writes it) in a `w` x `h` space through `map`. */

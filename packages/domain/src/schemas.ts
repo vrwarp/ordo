@@ -128,6 +128,11 @@ export type PathFillMode = z.infer<typeof PathFillMode>;
  * Each path's `d` uses only M, L, C, Q and Z with numbers (the render plan re-tokenises it, at most 4,096
  * points per path) in the path's own space `w` x `h`, scaled to the box; a side of 0 means the box's own
  * logical px on that axis.
+ * `cont` (M6): the path continues the one before it, so the two are drawn as one path (one even-odd fill,
+ * stroked together; the first path's fill mode and stroke flag): a traced outline whose holes all sit
+ * inside it, too long for one path, is stored in pieces cut at its sub-paths' starts. A build without
+ * `cont` fills each piece on its own (holes filled where a piece has no outline); `cont` on the first
+ * path means nothing.
  */
 export const ShapeGeom = z.object({
   preset: z.string().max(40).optional(),
@@ -143,6 +148,7 @@ export const ShapeGeom = z.object({
         h: z.number().min(0).max(1e9),
         fill: PathFillMode.catch('norm').optional(),
         stroke: z.boolean().optional(),
+        cont: z.boolean().optional().catch(undefined),
       }),
     )
     .max(8)

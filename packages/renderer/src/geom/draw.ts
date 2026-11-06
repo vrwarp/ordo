@@ -189,10 +189,19 @@ export function geomPath2D(path: GeomPath): Path2D {
 export const GEOM_CLIP_RULE: CanvasFillRule = 'nonzero';
 
 /**
- * Sub-paths of one path above which `traceUnionPath` no longer works out nesting (each sub-path's first point
- * is tested against every other one): they are all traced one way round, as filled outlines without holes.
+ * Sub-paths of one path above which `traceUnionPath` no longer works out nesting (each pair's bounding boxes
+ * are compared): they are all traced one way round, as filled outlines without holes. A traced decoration is
+ * one outline holding a few hundred holes, often stored in pieces (`ShapeGeom.paths[].cont`) that arrive here
+ * joined into one path.
  */
-export const UNION_NESTING_LIMIT = 64;
+export const UNION_NESTING_LIMIT = 2_048;
+
+/**
+ * Polygon edges `traceUnionPath` tests at most to work out nesting (each sub-path's first point against the
+ * flattened sub-paths whose bounding boxes hold it): past it, nesting is not worked out (as past
+ * UNION_NESTING_LIMIT), so a hostile path costs a few milliseconds at most.
+ */
+export const UNION_NESTING_WORK = 4_000_000;
 
 /** A sub-path: its segments' points (start, controls, end per segment), flattened for area and containment. */
 interface UnionSub {
@@ -200,6 +209,8 @@ interface UnionSub {
   readonly segs: { op: number; p: number[] }[];
   readonly flat: number[];
   readonly area: number;
+  /** Bounding box of `flat`: min x, min y, max x, max y. */
+  readonly box: readonly [number, number, number, number];
 }
 
 const FLAT_STEPS = 8;
@@ -215,11 +226,21 @@ function unionSubs(path: GeomPath): UnionSub[] {
   const end = (): void => {
     if (segs.length) {
       let area = 0;
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
       for (let i = 0, n = flat.length; i < n; i += 2) {
         const j = (i + 2) % n;
-        area += flat[i]! * flat[j + 1]! - flat[j]! * flat[i + 1]!;
+        const x = flat[i]!;
+        const y = flat[i + 1]!;
+        area += x * flat[j + 1]! - flat[j]! * y;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
       }
-      out.push({ segs, flat, area: area / 2 });
+      out.push({ segs, flat, area: area / 2, box: [x0, y0, x1, y1] });
     }
     segs = [];
     flat = [];
@@ -309,35 +330,68 @@ function traceSub(sink: PathSink, sub: UnionSub, reverse: boolean): void {
 }
 
 /**
+ * How many of `subs` other than each one contain its first point (its nesting depth), or undefined past
+ * UNION_NESTING_LIMIT sub-paths or UNION_NESTING_WORK edges tested. A sub-path is tested only against those
+ * whose bounding boxes hold the point.
+ */
+function nestingDepths(subs: readonly UnionSub[]): number[] | undefined {
+  if (subs.length > UNION_NESTING_LIMIT) return undefined;
+  const depths: number[] = [];
+  let work = 0;
+  for (let i = 0; i < subs.length; i++) {
+    const s = subs[i]!;
+    const x = s.flat[0]!;
+    const y = s.flat[1]!;
+    let depth = 0;
+    for (let j = 0; j < subs.length; j++) {
+      if (j === i) continue;
+      const o = subs[j]!;
+      const b = o.box;
+      if (x < b[0] || x > b[2] || y < b[1] || y > b[3]) continue;
+      work += o.flat.length / 2;
+      if (work > UNION_NESTING_WORK) return undefined;
+      if (inside(o.flat, x, y)) depth++;
+    }
+    depths.push(depth);
+  }
+  return depths;
+}
+
+/**
  * Traces a path so that its non-zero fill is its even-odd fill (GEOM_FILL_RULE) with winding 0 or 1: each
  * closed sub-path is turned to wind positively when an even number of the path's other sub-paths contain its
  * first point, negatively (a hole) when an odd number do. Paths traced so into one sink fill (GEOM_CLIP_RULE)
  * as the union of their even-odd regions: overlapping paths add up instead of cancelling. Exact for sub-paths
- * that do not cross themselves or each other (every preset); crossing ones fill as non-zero would.
+ * that do not cross themselves or each other (every preset); crossing ones fill as non-zero would. A stored
+ * geometry's pieces (`cont`) arrive joined (`storedGeometry`), so holes in one piece of an outline stored in
+ * another are holes here too.
  */
 export function traceUnionPath(sink: PathSink, path: GeomPath): void {
   const subs = unionSubs(path);
-  const nest = subs.length <= UNION_NESTING_LIMIT;
+  const depths = nestingDepths(subs);
   for (let i = 0; i < subs.length; i++) {
     const s = subs[i]!;
-    let depth = 0;
-    if (nest)
-      for (let j = 0; j < subs.length; j++)
-        if (j !== i && inside(subs[j]!.flat, s.flat[0]!, s.flat[1]!)) depth++;
-    const want = depth % 2 === 0 ? 1 : -1;
+    const want = (depths?.[i] ?? 0) % 2 === 0 ? 1 : -1;
     traceSub(sink, s, Math.sign(s.area) === -want);
   }
 }
+
+const UNION_CACHE = new WeakMap<BuiltGeom, Path2D>();
 
 /**
  * One Path2D of the union of a geometry's filled paths (fill ≠ none), each with its holes (the even-odd rule),
  * for cutting a picture to the shape: fill it, or clip to it, with GEOM_CLIP_RULE (`traceUnionPath`). The
  * paths of a preset such as smileyFace overlap (its eyes are a second, darker path over the face): one even-odd
- * path of both would cut the eyes out of the picture.
+ * path of both would cut the eyes out of the picture. Made once per built geometry (a stored one is memoised
+ * per box); never change the Path2D it returns.
  */
 export function geomFillPath2D(built: BuiltGeom): Path2D {
-  const p = new Path2D();
-  for (const path of built.paths) if (path.fill !== 'none') traceUnionPath(p, path);
+  let p = UNION_CACHE.get(built);
+  if (p === undefined) {
+    p = new Path2D();
+    for (const path of built.paths) if (path.fill !== 'none') traceUnionPath(p, path);
+    UNION_CACHE.set(built, p);
+  }
   return p;
 }
 

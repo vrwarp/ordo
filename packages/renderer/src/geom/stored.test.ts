@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { traceUnionPath } from './draw.ts';
+import { traceUnionPath, UNION_NESTING_LIMIT, UNION_NESTING_WORK } from './draw.ts';
 import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE } from './ops.ts';
 import { presetGeometry } from './path.ts';
 import { RecPath } from './path2d.test-util.ts';
@@ -54,6 +54,38 @@ describe('storedGeometry', () => {
   it('never draws a stored string as it is: only re-tokenised M L Q C Z', () => {
     const g = storedGeometry({ paths: [{ d: 'M 0 0 L 5 5 A 1 1 0 0 1 9 9 L 7 7', w: 0, h: 0 }] }, 10, 10)!;
     expect(g.paths[0]!.cmds).toEqual([CMD_MOVE, CMD_LINE]);
+  });
+
+  it('joins a path marked cont to the one before it: one path, in the first piece’s fill and stroke', () => {
+    const g = storedGeometry(
+      {
+        paths: [
+          { d: 'M 0 0 L 10 0 L 10 10 L 0 10 Z', w: 10, h: 10, fill: 'darken', stroke: false },
+          // A hole, stored in a piece of its own; then the rest of an outline cut between two commands.
+          { d: 'M 2 2 L 2 8 L 8 8 Z M 0 20 L 5 20', w: 10, h: 10, fill: 'norm', cont: true },
+          { d: 'L 5 25 Z', w: 20, h: 20, cont: true },
+          { d: 'M 0 0 L 1 1', w: 1, h: 1 },
+        ],
+      },
+      100,
+      100,
+    )!;
+    expect(g.paths).toHaveLength(2);
+    expect(g.paths[0]).toEqual({
+      cmds: [
+        ...[CMD_MOVE, CMD_LINE, CMD_LINE, CMD_LINE, CMD_CLOSE],
+        ...[CMD_MOVE, CMD_LINE, CMD_LINE, CMD_CLOSE, CMD_MOVE, CMD_LINE],
+        ...[CMD_LINE, CMD_CLOSE],
+      ],
+      // Each piece scaled from its own space.
+      pts: [0, 0, 100, 0, 100, 100, 0, 100, 20, 20, 20, 80, 80, 80, 0, 200, 50, 200, 25, 125],
+      fill: 'darken',
+      stroke: false,
+    });
+    expect(g.paths[1]!.pts).toEqual([0, 0, 100, 100]);
+    // cont on the first path means nothing.
+    const first = storedGeometry({ paths: [{ d: 'M 0 0 L 1 1', w: 1, h: 1, cont: true }] }, 10, 10)!;
+    expect(first.paths).toHaveLength(1);
   });
 
   it('memoises per geometry object and box', () => {
@@ -130,6 +162,36 @@ describe('traceUnionPath', () => {
     expect(p.ops[0]).toMatch(/^M /);
     expect(p.ops.at(-1)).toBe('Z');
     expect(p.ops).toHaveLength(4);
+  });
+
+  it('works out the nesting of an outline holding hundreds of holes, within a bound of work', () => {
+    // An outline with 300 holes (a traced decoration): every hole winds against the outline.
+    const holes = Array.from({ length: 300 }, (_, i) => {
+      const x = 10 + (i % 20) * 49;
+      const y = 10 + Math.floor(i / 20) * 49;
+      return square(x, x + 20).map((v, k) => (k % 2 ? v - x + y : v));
+    });
+    const p = new RecPath();
+    traceUnionPath(p, rings(square(0, 1000), ...holes));
+    const a = areas(p);
+    expect(a[0]).toBe(1);
+    expect(a.slice(1).every((v) => v === -1)).toBe(true);
+    expect(a).toHaveLength(301);
+    // Past UNION_NESTING_WORK edges tested, nesting is not worked out: every sub-path is an outline.
+    const big = Array.from({ length: 1 + Math.ceil(UNION_NESTING_WORK / 4_000) }, (_, i) =>
+      i === 0
+        ? Array.from({ length: 4_000 }, (_, k) => [
+            500 + 500 * Math.cos((2 * Math.PI * k) / 4_000),
+            500 + 500 * Math.sin((2 * Math.PI * k) / 4_000),
+          ]).flat()
+        : square(400 + (i % 100), 401 + (i % 100)),
+    );
+    expect(big.length).toBeLessThanOrEqual(UNION_NESTING_LIMIT);
+    const t0 = performance.now();
+    const q = new RecPath();
+    traceUnionPath(q, rings(...big));
+    expect(performance.now() - t0).toBeLessThan(1_000);
+    expect(new Set(areas(q))).toEqual(new Set([1]));
   });
 
   it('keeps the overlapping paths of smileyFace a union (its eyes inside its face)', () => {

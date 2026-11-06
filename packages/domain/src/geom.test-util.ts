@@ -49,7 +49,11 @@ export function geomSlide(): Slide {
         opacity: 1,
         radius: 0,
         geom: {
-          paths: [{ d: 'M 0 0 C 30 0 70 100 100 100', w: 100, h: 100, fill: 'none', stroke: true }],
+          paths: [
+            { d: 'M 0 0 C 30 0 70 100 100 100', w: 100, h: 100, fill: 'none', stroke: true },
+            // The same path's second piece (stored apart when one path is too long).
+            { d: 'M 0 100 L 40 60', w: 100, h: 100, fill: 'none', stroke: true, cont: true },
+          ],
         },
         ends: { head: { type: 'oval', w: 'sm', len: 'sm' }, tail: { type: 'triangle', w: 'lg', len: 'med' } },
         flipV: true,

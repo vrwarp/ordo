@@ -1,9 +1,10 @@
 import fc from 'fast-check';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { cleanPathData, PATH_DATA_LIMITS, parsePathData, pathDataPoints, type ShapeGeom } from '@ordo/domain';
 import { clampGeom } from '../clamp.ts';
 import { geomBounds } from '../shape.ts';
 import { compileGeom, type GeomSource, newGeomNotes } from './compile.ts';
+import { geomFillPath2D } from './draw.ts';
 import { withEnds } from './ends.ts';
 import { evalGuideLists, evalGuides } from './eval.ts';
 import { GEOM_LIMITS, PATH_FILLS } from './ops.ts';
@@ -15,6 +16,7 @@ import {
   PRESET_GEOMS,
   presetGeometry,
 } from './index.ts';
+import { RecPath } from './path2d.test-util.ts';
 import { storedGeometry } from './stored.ts';
 
 /**
@@ -116,15 +118,23 @@ const adjPairs = fc.array(fc.tuple(name, fc.oneof(fc.double(), fc.constantFrom(N
   maxLength: 4,
 });
 
-function expectBuilt(paths: readonly GeomPath[]): void {
+/**
+ * Built paths within the bounds: at most GEOM_LIMITS.paths, each of at most `points` points (a stored
+ * geometry's `cont` pieces join into one path of all their points), every coordinate finite within
+ * COORD_LIMIT.
+ */
+function expectBuilt(paths: readonly GeomPath[], points: number = GEOM_LIMITS.points): void {
   expect(paths.length).toBeLessThanOrEqual(GEOM_LIMITS.paths);
+  let all = 0;
   for (const p of paths) {
-    expect(p.pts.length / 2).toBeLessThanOrEqual(GEOM_LIMITS.points);
+    all += p.pts.length / 2;
+    expect(p.pts.length / 2).toBeLessThanOrEqual(points);
     for (const v of p.pts) {
       expect(Number.isFinite(v)).toBe(true);
       expect(Math.abs(v)).toBeLessThanOrEqual(COORD_LIMIT);
     }
   }
+  expect(all).toBeLessThanOrEqual(GEOM_LIMITS.paths * GEOM_LIMITS.points);
 }
 
 describe('geometry fuzz (design/27 §12, §15 M6)', () => {
@@ -241,6 +251,7 @@ describe('geometry fuzz (design/27 §12, §15 M6)', () => {
           h: fc.oneof(side, fc.anything()),
           fill: fc.oneof(fc.constantFrom(...PATH_FILLS), fc.anything()),
           stroke: fc.anything(),
+          cont: fc.oneof(fc.boolean(), fc.anything()),
         }),
         { maxLength: 12 },
       ),
@@ -254,10 +265,13 @@ describe('geometry fuzz (design/27 §12, §15 M6)', () => {
         const c = clampGeom(g);
         if (c) {
           expect((c.paths ?? []).length).toBeLessThanOrEqual(PATH_DATA_LIMITS.paths);
-          for (const p of c.paths ?? []) expect(cleanPathData(p.d)).toBe(p.d);
+          for (const p of c.paths ?? []) {
+            expect(cleanPathData(p.d)).toBe(p.d);
+            expect(p.cont === undefined || p.cont === true).toBe(true);
+          }
         }
         const built = storedGeometry(c, w, h) ?? storedGeometry(g as ShapeGeom, w, h);
-        if (built) expectBuilt(built.paths);
+        if (built) expectBuilt(built.paths, GEOM_LIMITS.paths * GEOM_LIMITS.points);
         for (const p of built?.paths ?? []) {
           const e = withEnds(p, {
             head: { kind: 'triangle', width: 9, length: 9, line: 3 },
@@ -269,6 +283,96 @@ describe('geometry fuzz (design/27 §12, §15 M6)', () => {
       }),
       { numRuns: 300 },
     );
+  });
+
+  // A path of whole commands (M L Q C Z with small integers), up to a few hundred of them.
+  const command = fc.oneof(
+    fc.tuple(
+      fc.constantFrom('M', 'L'),
+      fc.array(fc.integer({ min: -50, max: 150 }), { minLength: 2, maxLength: 2 }),
+    ),
+    fc.tuple(fc.constant('Q'), fc.array(fc.integer({ min: -50, max: 150 }), { minLength: 4, maxLength: 4 })),
+    fc.tuple(fc.constant('C'), fc.array(fc.integer({ min: -50, max: 150 }), { minLength: 6, maxLength: 6 })),
+    fc.tuple(fc.constant('Z'), fc.constant([] as number[])),
+  );
+  const commands = fc.array(command, { minLength: 1, maxLength: 300 });
+  const fillMode = fc.constantFrom(...PATH_FILLS);
+
+  it('draws a cont chain as the one path it was cut from, wherever it is cut', () => {
+    vi.stubGlobal('Path2D', RecPath);
+    try {
+      fc.assert(
+        fc.property(
+          commands,
+          fc.array(fc.nat(), { maxLength: 7 }),
+          fillMode,
+          fc.boolean(),
+          side,
+          side,
+          (cmds, at, fill, stroke, w, h) => {
+            const text = cmds.map(([c, n]) => [c, ...n].join(' '));
+            // Cut between commands (anywhere: at a sub-path's start or inside one), at most 8 pieces.
+            const cuts = [...new Set(at.map((i) => 1 + (i % Math.max(1, text.length - 1))))]
+              .filter((i) => i < text.length)
+              .sort((a, b) => a - b);
+            const bounds = [0, ...cuts, text.length];
+            const pieces = bounds.slice(1).map((end, i) => text.slice(bounds[i], end).join(' '));
+            const one = { paths: [{ d: text.join(' '), w: 100, h: 100, fill, stroke }] };
+            const chain = {
+              paths: pieces.map((d, i) => ({
+                d,
+                w: 100,
+                h: 100,
+                // A later piece's own fill and stroke are the first's (the converter writes the same).
+                ...(i > 0 ? { cont: true, fill: 'none' as const, stroke: !stroke } : { fill, stroke }),
+              })),
+            };
+            const clamped = clampGeom(chain)!;
+            expect(clamped.paths!.slice(1).every((p) => p.cont === true)).toBe(true);
+            const a = storedGeometry(clampGeom(one)!, w, h)!;
+            const b = storedGeometry(clamped, w, h)!;
+            expect(b.paths).toHaveLength(1);
+            expect(b.paths[0]).toEqual(a.paths[0]);
+            expect((geomFillPath2D(b) as unknown as RecPath).ops).toEqual(
+              (geomFillPath2D(a) as unknown as RecPath).ops,
+            );
+          },
+        ),
+        { numRuns: 300 },
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('bounds a chain of 8 full pieces: one path of 32,760 points, its union traced quickly', () => {
+    vi.stubGlobal('Path2D', RecPath);
+    try {
+      // 8 pieces of 819 small squares each (M L L L Z: 4,095 points a piece).
+      const piece = (k: number) =>
+        Array.from({ length: 819 }, (_, i) => {
+          const x = (i % 40) * 10 + k;
+          const y = Math.floor(i / 40) * 10;
+          return `M ${x} ${y} L ${x + 5} ${y} L ${x + 5} ${y + 5} L ${x} ${y + 5} Z`;
+        }).join(' ');
+      const g = clampGeom({
+        paths: Array.from({ length: 8 }, (_, k) => ({
+          d: piece(k),
+          w: 0,
+          h: 0,
+          ...(k ? { cont: true } : {}),
+        })),
+      })!;
+      const t0 = performance.now();
+      const built = storedGeometry(g, 500, 500)!;
+      expect(built.paths).toHaveLength(1);
+      expectBuilt(built.paths, GEOM_LIMITS.paths * GEOM_LIMITS.points);
+      const union = geomFillPath2D(built) as unknown as RecPath;
+      expect(union.ops.filter((op) => op === 'Z')).toHaveLength(8 * 819);
+      expect(performance.now() - t0).toBeLessThan(2_000);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('parses a 10,000-point path string to 4,096 points quickly', () => {

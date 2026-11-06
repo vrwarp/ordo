@@ -218,7 +218,8 @@ export function sanitizeGradient(g: Gradient): Gradient | undefined {
 /**
  * A stored geometry within the schema's bounds (design/27 §3.1, §12): the preset name cut to 40, at most 10
  * finite adjust pairs, at most 8 paths, each re-tokenised to M L Q C Z and numbers (`cleanPathData`, at most
- * 4,096 points) and dropped when nothing is left of it. Undefined when neither a preset nor a path is left.
+ * 4,096 points) and dropped when nothing is left of it, `cont` kept only when true. Undefined when neither a
+ * preset nor a path is left.
  */
 export function sanitizeGeom(g: ShapeGeom): ShapeGeom | undefined {
   if (!g || typeof g !== 'object') return undefined;
@@ -238,11 +239,13 @@ export function sanitizeGeom(g: ShapeGeom): ShapeGeom | undefined {
       if (!p || typeof p !== 'object') continue;
       const d = cleanPathData(p.d);
       if (!d) continue;
+      const { cont, ...rest } = p;
       paths.push({
-        ...p,
+        ...rest,
         d,
         w: finite(p.w, 0, 0, PATH_DATA_LIMITS.coord),
         h: finite(p.h, 0, 0, PATH_DATA_LIMITS.coord),
+        ...(cont === true ? { cont: true } : {}),
       });
     }
     if (paths.length) out.paths = paths;

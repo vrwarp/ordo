@@ -42,7 +42,12 @@ describe('M6 shape, picture and gradient text fields', () => {
       dash: 'squiggle',
       ends: { head: { type: 'harpoon', w: 'xl', len: 'huge' } },
       gradient: { ...star.gradient!, kind: 'conic' },
-      geom: { paths: [{ d: 'M 0 0 L 1 1', w: 1, h: 1, fill: 'shimmer' }] },
+      geom: {
+        paths: [
+          { d: 'M 0 0 L 1 1', w: 1, h: 1, fill: 'shimmer' },
+          { d: 'L 1 0 Z', w: 1, h: 1, cont: 'yes' },
+        ],
+      },
     };
     const r = ShapeObject.safeParse(odd);
     expect(r.success).toBe(true);
@@ -50,6 +55,9 @@ describe('M6 shape, picture and gradient text fields', () => {
     expect(r.data!.ends!.head).toEqual({ type: 'none', w: 'med', len: 'med' });
     expect(r.data!.gradient!.kind).toBe('linear');
     expect(r.data!.geom!.paths![0]!.fill).toBe('norm');
+    // A cont that is not a boolean is dropped, not a failed slide.
+    expect(r.data!.geom!.paths![1]!.cont).toBeUndefined();
+    expect(ShapeGeom.parse({ paths: [{ d: 'Z', w: 1, h: 1, cont: true }] }).paths![0]!.cont).toBe(true);
   });
 
   it('refuses unbounded geometry and gradients at the boundary', () => {

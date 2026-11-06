@@ -124,13 +124,19 @@ differences below.
   stored adjust pairs, so a resized shape keeps its corners; else the paths, each `d` re-tokenised by
   `parsePathData` (`@ordo/domain` `pathdata.ts`: absolute M L Q C Z and plain decimals, ≤ 4,096 points) and
   scaled from its own w x h space to the box (a side of 0: the box's units); else nothing, and the caller draws
-  the legacy shape. Memoised per geometry object and box size.
+  the legacy shape. A path marked `cont` is appended to the one before it, so the pieces of one long path (a
+  traced outline holding all its holes, stored in pieces of 4,096 points and 40,000 characters by the
+  converter, cut at sub-paths or between two commands) are one built path again: one even-odd fill, holes
+  and all, stroked together, in the first piece's fill mode and stroke flag (at most 8 x 4,096 points). Memoised
+  per geometry object and box size.
 - **Union clip** (`draw.ts` `geomFillPath2D`, `traceUnionPath`). The filled paths of a geometry as one Path2D whose
   non-zero fill (`GEOM_CLIP_RULE`) is the union of each path's even-odd region: every closed sub-path is turned
   to wind positively when an even number of the path's other sub-paths contain its first point and negatively
   when an odd number do, so holes stay holes while overlapping paths (smileyFace's eyes over its face) add up
-  instead of cancelling. Exact for sub-paths that cross neither themselves nor each other (every preset); past
-  `UNION_NESTING_LIMIT` (64) sub-paths in one path, nesting is not worked out.
+  instead of cancelling. Exact for sub-paths that cross neither themselves nor each other (every preset). A
+  sub-path's first point is tested only against the sub-paths whose bounding boxes hold it; past
+  `UNION_NESTING_LIMIT` (2,048) sub-paths in one path, or `UNION_NESTING_WORK` (4M) polygon edges tested,
+  nesting is not worked out (every sub-path an outline). Made once per built geometry.
 - **Strokes.** `GeomStroke` may carry a dash pattern (box units) and line ends: open paths are stroked cut back
   for their markers, which are filled in the stroke's paint without the dashes. Sizes, shapes and placement
   follow LibreOffice (oox `lclPushMarkerProperties`, drawinglayer `PolygonStrokeArrowPrimitive2D`; design/27

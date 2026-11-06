@@ -27,6 +27,9 @@ import { fillColor } from '../src/text2d.ts';
  *   whose eyes are a second filled path, heart) and to stored paths, flipped, rotated and translucent,
  *   from the source and from bitmaps prepared at their targets (the asset worker's lookup).
  * - 'rich-gradient-text': gradient text (`TextStyle.paint`), linear and radial, with a run of its own colour.
+ * - 'shape-chains': an outline with 100 holes stored as one path in pieces (`ShapeGeom.paths[].cont`), cut at
+ *   sub-paths and inside the outline: filled, stroked, with a gradient, casting a shadow, and as picture
+ *   masks; the holes stay holes in each.
  */
 
 const W = 960;
@@ -502,6 +505,81 @@ const gradientText: Slide = {
   ],
 };
 
+/** A circle of `n` cubic segments as path commands (M, C..., Z), in a 1000 x 1000 space. */
+function ring(cx: number, cy: number, r: number, n: number): string[] {
+  const k = (4 / 3) * Math.tan(Math.PI / (2 * n)) * r;
+  const at = (a: number) => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+  const f = (v: number) => String(Math.round(v * 100) / 100);
+  const out = [`M ${at(0).map(f).join(' ')}`];
+  for (let i = 0; i < n; i++) {
+    const a0 = (2 * Math.PI * i) / n;
+    const a1 = (2 * Math.PI * (i + 1)) / n;
+    const [x0, y0] = at(a0) as [number, number];
+    const [x1, y1] = at(a1) as [number, number];
+    const c1 = [x0 - k * Math.sin(a0), y0 + k * Math.cos(a0)];
+    const c2 = [x1 + k * Math.sin(a1), y1 - k * Math.cos(a1)];
+    out.push(`C ${[...c1, ...c2, x1, y1].map(f).join(' ')}`);
+  }
+  out.push('Z');
+  return out;
+}
+
+/** 100 holes on a 10 x 10 grid inside the outline: more than the 64 sub-paths nesting once stopped at. */
+const holes = Array.from({ length: 100 }, (_, i) =>
+  ring(200 + (i % 10) * 66.7, 200 + Math.floor(i / 10) * 66.7, 22, 8),
+);
+const outlineCmds = ring(500, 500, 480, 24);
+/** A traced outline and its holes as one path stored in pieces (`cont`), as the converter stores a long one. */
+function chained(cut: 'subpaths' | 'inside'): NonNullable<Shape['geom']>['paths'] {
+  const piece = (cmds: string[], cont: boolean) => ({
+    d: cmds.join(' '),
+    w: 1000,
+    h: 1000,
+    ...(cont ? { cont } : {}),
+  });
+  if (cut === 'subpaths')
+    return [
+      piece([...outlineCmds, ...holes.slice(0, 50).flat()], false),
+      piece(holes.slice(50).flat(), true),
+    ];
+  // Cut inside the outline: the second piece goes on from where the first stopped (no move).
+  return [
+    piece([...holes.slice(0, 40).flat(), ...outlineCmds.slice(0, 13)], false),
+    piece(outlineCmds.slice(13), true),
+    piece(holes.slice(40).flat(), true),
+  ];
+}
+
+const chains: Slide = {
+  id: 'shape-chains',
+  objects: [
+    backdrop('bg', rgba(40, 44, 52)),
+    shape('pieces', cell(0), {
+      geom: { paths: chained('subpaths') },
+      fill: GOLD,
+      stroke: { width: 3, color: WHITE },
+    }),
+    shape('inside', cell(1), {
+      geom: { paths: chained('inside') },
+      fill: TEAL,
+      stroke: { width: 3, color: NAVY },
+    }),
+    shape('gradient', cell(2), {
+      geom: { paths: chained('subpaths') },
+      gradient: { kind: 'linear', angle: 45, stops: sunset },
+      fill: GOLD,
+    }),
+    // The shadow is cast by the union path (`geomFillPath2D`): its holes are holes too.
+    shape('shadow', cell(3), {
+      geom: { paths: chained('inside') },
+      fill: RED,
+      shadow: { dx: 16, dy: 16, blur: 8, color: rgba(0, 0, 0, 0.8) },
+    }),
+    image('mask', cell(4), { mask: { paths: chained('subpaths') } }),
+    image('maskInside', { ...cell(5), rotation: 10 }, { mask: { paths: chained('inside') }, flipH: true }),
+  ],
+};
+
 const draw =
   (slide: Slide, images: (id: string, t?: PictureTarget) => CanvasImageSource | undefined) =>
   (ctx: OffscreenCanvasRenderingContext2D) => {
@@ -518,4 +596,5 @@ export const SHAPE_CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2D
   'image-mask': draw(masks, pictures),
   'image-mask-prepared': draw(masks, preparedPictures),
   'rich-gradient-text': draw(gradientText, none),
+  'shape-chains': draw(chains, pictures),
 };

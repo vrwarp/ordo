@@ -792,7 +792,7 @@ function emitShape(ctx: EmitCtx, e: ShapeElement, out: SlideObject[], texts: Emi
     else if (e.geom === 'flowChartTerminator') o.radius = Math.min(box.w, box.h) / 2;
     styleShape(ctx, o, e, geom);
     const approx = (e.reasons ?? []).filter(
-      (r) => r !== 'vert' && r !== 'warp' && r !== 'numCol' && r !== 'pattFill',
+      (r) => r !== 'vert' && r !== 'warp' && r !== 'numCol' && r !== 'pattFill' && r !== 'shear',
     );
     if (approx.length) ctx.log(`${approx.join(', ')} drawn as ${kind}`);
     if (e.fill.kind === 'pattern') ctx.log('a pattern fill is drawn as its blended colour');
