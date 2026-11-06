@@ -29,6 +29,7 @@ import {
   solid,
   solidBg,
   sp,
+  xfrm,
 } from './test-util.ts';
 
 const IN = 914_400;
@@ -653,6 +654,72 @@ describe('pictures', () => {
     expect(img!.type).toBe('image');
     expect(stroke).toMatchObject({ type: 'shape', shape: 'rect', stroke: { width: 4, color: RED } });
     expect(stroke).not.toHaveProperty('fill');
+  });
+
+  it('masks ellipse and roundRect pictures (M4), with the legacy radius beside the mask', () => {
+    const round = pic({ id: 3, x: 3 * IN, y: 0, cx: 2 * IN, cy: IN, rId: 'rId2', geom: 'roundRect' }).replace(
+      '<a:avLst/>',
+      '<a:avLst><a:gd name="adj" fmla="val 30000"/></a:avLst>',
+    );
+    const { objects, notes } = emitOne({
+      slides: [
+        {
+          rels,
+          shapes:
+            pic({ id: 2, x: 0, y: 0, cx: 2 * IN, cy: IN, rId: 'rId2', geom: 'ellipse' }) +
+            round +
+            pic({ id: 4, x: 0, y: 2 * IN, cx: IN, cy: IN, rId: 'rId2', geom: 'roundRect' }) +
+            pic({ id: 5, x: 3 * IN, y: 2 * IN, cx: IN, cy: IN, rId: 'rId2' }),
+        },
+      ],
+    });
+    const [ell, rr, dflt, plain] = content(objects) as ImageObject[];
+    expect(ell!.mask).toEqual({ preset: 'ellipse' });
+    expect(ell!.radius).toBeCloseTo(PX / 2);
+    expect(rr!.mask).toEqual({ preset: 'roundRect', adj: [['adj', 30_000]] });
+    expect(rr!.radius).toBeCloseTo(PX * 0.3);
+    expect(dflt!.mask).toEqual({ preset: 'roundRect' });
+    expect(plain).not.toHaveProperty('mask');
+    expect(notes.join('\n')).not.toMatch(/clipped to/);
+  });
+
+  it('writes flipped pictures with flipH (a vertical flip turned half a turn), crop unchanged', () => {
+    const flipped = (id: number, x: number, o: { flipH?: boolean; flipV?: boolean }) =>
+      pic({ id, x, y: 0, cx: 2 * IN, cy: IN, rId: 'rId2', srcRect: 'l="25000"' }).replace(
+        /<a:xfrm>.*?<\/a:xfrm>/,
+        xfrm(x, 0, 2 * IN, IN, o),
+      );
+    const { objects, notes } = emitOne({
+      slides: [
+        {
+          rels,
+          shapes:
+            flipped(2, 0, { flipH: true }) + flipped(3, 3 * IN, { flipV: true }) + flipped(4, 6 * IN, {}),
+        },
+      ],
+    });
+    const [h, v, none] = content(objects) as ImageObject[];
+    expect(h).toMatchObject({ flipH: true, box: { x: 0, y: 0, w: 2 * PX, h: PX, rotation: 0 } });
+    expect(h!.crop).toEqual({ l: 0.25, t: 0, r: 0, b: 0 });
+    expect(v!.flipH).toBe(true);
+    expect(v!.box.rotation).toBeCloseTo(180);
+    expect(v!.box).toMatchObject({ x: 3 * PX, y: 0 });
+    expect(none).not.toHaveProperty('flipH');
+    expect(notes.join('\n')).not.toMatch(/flipped/);
+  });
+
+  it('cuts a mirrored picture reaching past the render bounds on the side its box shows', () => {
+    // 20 inches wide from x = 0: the box is cut on the right, which shows the source's left.
+    const wide = pic({ id: 2, x: 0, y: 0, cx: 40 * IN, cy: IN, rId: 'rId2' }).replace(
+      /<a:xfrm>.*?<\/a:xfrm>/,
+      xfrm(0, 0, 40 * IN, IN, { flipH: true }),
+    );
+    const { objects } = emitOne({ slides: [{ rels, shapes: wide }] });
+    const [img] = content(objects) as ImageObject[];
+    expect(img!.flipH).toBe(true);
+    expect(img!.box.x + img!.box.w).toBeCloseTo(2 * 1920);
+    expect(img!.crop!.r).toBeCloseTo(0);
+    expect(img!.crop!.l).toBeCloseTo(1 - (2 * 1920) / (40 * PX));
   });
 
   it('draws a picture-filled shape as an image', () => {

@@ -1372,7 +1372,7 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
 - **As built in wave 2, item B (one fallback rule):** `slideContent()` in every drawer (§5 "As built").
 - **As built in wave 2, item C (hidden slides):** flagged cues that sequential navigation skips and a click shows (§9 "As built").
 - **Wave 2 end to end** (§14.12): a probe deck imported through the route draws on an output at 1080p (WebGPU) and at 4K (Canvas 2D) as the harness's native page draws it (SSIM 1.000 and 0.999 on three slides); the stage, the Lobby and Stream looks (set to show non-song text), cue labels and search show the slide text with its verse numbers; Next and Prev skip the hidden slide and a double-click in the grid shows it. The verse numbers are the text's own digits, raised by runs since M2's second wave: a band whose source is rich text is laid out by the rich engine in the look's style (§6 "Bands, stage and readable text"), so the verse the Lobby and Stream bands are compared with is typed in ordo the same way, its numbers raised.
-- **As built in wave 1** (apps/hub/src/pptx/README.md): everything above except rich text emission and clip extraction (with M2 and M5), `slideContent()` in every drawer (wave 2), hidden-cue navigation (wave 2; hidden slides gave no cue until then), and flips, ellipse/roundRect masks and recolouring of pictures (wave 2; drawn unflipped, as rects and without the recolouring, each noted on the slide). Every read of a stored deck spills only referenced pictures and refuses overlapping zip entries; a LibreOffice run that fails is retried, then the slides it could not draw are marked `Slide.pptx.failed`; a save that brings back pending slides queues the follow-up again.
+- **As built in wave 1** (apps/hub/src/pptx/README.md): everything above except rich text emission and clip extraction (with M2 and M5), `slideContent()` in every drawer (wave 2), hidden-cue navigation (wave 2; hidden slides gave no cue until then), and flips, ellipse/roundRect masks and recolouring of pictures (wave 2; drawn unflipped, as rects and without the recolouring, each noted on the slide; flips and those masks are written and drawn since M4 item D). Every read of a stored deck spills only referenced pictures and refuses overlapping zip entries; a LibreOffice run that fails is retried, then the slides it could not draw are marked `Slide.pptx.failed`; a save that brings back pending slides queues the follow-up again.
 
 **Files.**
 - `apps/hub/src/pptx/*`, `imports.ts`, `routes.ts`, `pool.ts`, `cpu.worker.ts`, `jobs.ts`, `media/service.ts`, `media/ffmpeg.ts`, `library.ts`, `db.ts`, `fonts/bundled.ts`, `fonts/google.ts`; `Dockerfile`.
@@ -1440,6 +1440,17 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   'Select the group' and 'Ungroup', the group box editor with 'Turn by'); Delete, Ctrl+D, arrows, z-order
   and Ungroup on the selection. Tests: `apps/operator/test/groupOps.test.ts` (properties and 200-step undo),
   `e2e/editor-group.spec.ts`, `e2e/ipad/group.spec.ts`.
+- **As built, item D (pictures):** `ImageObject.flipH`, `flipV` and `mask` (a `ShapeGeom`) in the schema,
+  `clampObject` (`clampMask`: a preset and 10 adjust pairs) and `drawImageFit` (mirrored about the box's
+  centre inside the rotation, then cut by an ellipse or a rounded-rect clip, `pictureCut` reading masks as
+  the video plane does; another preset is the box until M6). A masked or flipped picture has no prepared
+  target, so the outputs draw it from its source. The converter writes `flipH` (a vertical flip is a
+  horizontal one turned half a turn) and ellipse/roundRect masks beside the legacy `radius`, and no longer
+  notes them. Goldens `image-shape` (the thumbnails' path), `image-shape-prepared` (the outputs' lookup)
+  and `image-shape-editor` (the editor's Konva node transform) compare with one PNG (`SAME_AS`). Ops
+  `setCrop`, `setMask`, `setFlip`, `replacePicture` (with `coverCrop`); the Object panel's crop fields,
+  'Keep proportions', 'Crop on the slide' (handles that move and scale the picture at its aspect behind the
+  fixed box, `cropGeometry.ts`), mask and flips (design/15 "Editor"); `e2e/editor-pictures.spec.ts`.
 
 **Files.** `apps/operator/src/views/editor/ops.ts`, `ObjectPanel.tsx`, `SlidePanel.tsx`, `SlidesPanel.tsx`, `PresentationPanel.tsx`, `SlideCanvas.tsx`, `EditorView.tsx`, `editorStore.ts`; `apps/operator/src/components/TextStyleEditor.tsx`, new `FormatBar.tsx`, `ParagraphStrip.tsx`, `CropControl.tsx`; `apps/hub/src/pptx/reimport.ts`, `routes.ts`; `apps/stage/src/model.ts`, `view.ts`; `packages/domain/src/schemas.ts` (`PropsRule.notes`); `packages/client/src/api.ts`.
 

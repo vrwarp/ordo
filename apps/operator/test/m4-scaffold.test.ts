@@ -12,7 +12,6 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { readReimportPlan, readReimportResult } from '../src/lib/pptxReimport.ts';
 import * as actions from '../src/views/editor/actions.ts';
 import { CanvasGuides } from '../src/views/editor/CanvasGuides.tsx';
-import { CropControl, CropHandles } from '../src/views/editor/CropControl.tsx';
 import {
   currentObjects,
   openPresentation,
@@ -43,14 +42,10 @@ import {
   refitText,
   reorderObjects,
   replaceBackground,
-  replacePicture,
   resizeRange,
   RUN_FIELDS,
   selectionParas,
   selectionStyle,
-  setCrop,
-  setFlip,
-  setMask,
   setParas,
   similarObjects,
   themedRuns,
@@ -108,7 +103,6 @@ const deck = (): Presentation => ({
 describe('the M4 ops (stubs keep their input)', () => {
   const p = deck();
   const t = announcement();
-  const i = picture();
   const size = { id: 'other', width: 1000, height: 1000 };
 
   it('text ops (item A, built: textOps.test.ts) keep their input when they change nothing', () => {
@@ -135,12 +129,7 @@ describe('the M4 ops (stubs keep their input)', () => {
     expect(isLocked({})).toBe(false);
   });
 
-  it('picture ops (item D)', () => {
-    expect(setCrop(i, { l: 0.1, t: 0, r: 0, b: 0 })).toBe(i);
-    expect(setMask(i, { preset: 'ellipse' })).toBe(i);
-    expect(setFlip(i, { flipH: true })).toBe(i);
-    expect(replacePicture(i, size)).toBe(i);
-  });
+  // Picture ops (item D): built, tested in pictureOps.test.ts.
 
   it('slide ops (item E)', () => {
     expect(findText(p, 'Sunday')).toEqual([]);
@@ -227,10 +216,6 @@ describe('the actions (store wiring)', () => {
     actions.resizeSelection('t1', 0, 7, 1);
     actions.setParagraphs('t1', 0, 0, { align: 'center' });
     actions.refit('i1');
-    actions.cropPicture('i1', { l: 0.1, t: 0, r: 0, b: 0 });
-    actions.maskPicture('i1', { preset: 'ellipse' });
-    actions.flipPicture('i1', { flipV: true });
-    actions.replacePictureWith('i1', { id: 'other', width: 10, height: 10 });
     actions.setSlideHidden('s2', true);
     actions.replaceBackgroundWith('s1', { id: 'other' }, 'slide');
     actions.pictureToBackground('i1');
@@ -283,12 +268,6 @@ describe('the selection (design/27 §11 item 5)', () => {
 });
 
 describe('the component stubs', () => {
-  it('mount and draw nothing yet', () => {
-    for (const el of [createElement(CropControl, { o: picture(), readOnly: false })])
-      expect(renderToStaticMarkup(el)).toBe('');
-    expect(CropHandles({ objects: [], scale: 0.5, readOnly: false })).toBeNull();
-  });
-
   it('item C: the format bar and the paragraph strip mount; the guides draw nothing on an empty 16:9 slide', () => {
     // formatUi.test.ts tests them.
     const range = { start: 0, end: 4 };

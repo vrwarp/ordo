@@ -139,6 +139,14 @@ type ImageObject = {
   // Share of the picture cut from each side (-1..1) before `fit`; a negative share pads with
   // transparency (PowerPoint a:srcRect, design/27 §3.1).
   crop?: { l: number; t: number; r: number; b: number };
+  // Mirrored about the box's centre before the box's rotation, crop and mask included (the crop keeps
+  // naming the source's sides). Older builds draw the picture unflipped.
+  flipH?: boolean;
+  flipV?: boolean;
+  // Cut to a geometry (ShapeGeom: preset, adj pairs, paths); 'ellipse' and 'roundRect' (adj: the corner in
+  // 1/100,000 of the shorter side) are drawn, any other geometry draws the picture uncut until M6. `radius`
+  // applies only without a mask; the importer writes it beside one as the legacy value (design/27 §3.2).
+  mask?: { preset?: string; adj?: [string, number][]; paths?: { d: string; w: number; h: number }[] };
 };
 type ShapeObject = {
   id: Id;

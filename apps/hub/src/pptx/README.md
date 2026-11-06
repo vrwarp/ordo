@@ -558,7 +558,7 @@ What wires items A-C together:
 ## Not in this wave
 
 Waiting for M2's second wave to merge: rich text emission (runs and paragraphs) from the converter; bundled
-substitutes in drawers (M2's font resolver). Later in M3 wave 2: flipped pictures (drawn unflipped), ellipse and
-roundRect picture masks (drawn as rects), recoloured pictures (drawn without the recolouring), all noted on
-the slide. Hub budgets measured on a reference NAS. 'Re-import from PowerPoint' (M4). A copy of a hybrid
+substitutes in drawers (M2's font resolver). Later in M3 wave 2: recoloured pictures (drawn without the
+recolouring), noted on the slide; flipped pictures and ellipse and roundRect picture masks are written and
+drawn since M4 item D. Hub budgets measured on a reference NAS. 'Re-import from PowerPoint' (M4). A copy of a hybrid
 slide made before LibreOffice finished keeps no art.
