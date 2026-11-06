@@ -1182,7 +1182,7 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
 **Exit.**
 - The run completes on the 5 sermon decks and on at least one worship-high validate shard (90+ decks) with cached LibreOffice pictures, and nothing aborts it; a deck the converter cannot read is a note.
 - `summary.json` has native SSIM, tier, reasons, `convertMs` and `rasterMs` (1920/3840) for every LibreOffice-drawn slide.
-- Native beats an all-black frame on ≥ 95% of slides.
+- Native beats an all-black frame on ≥ 95% of slides: its SSIM against LibreOffice's page is higher than an all-black frame's, or it matches the page at ≥ 0.999 (`tools/pptx-fidelity` `report.ts` `beatsBlack`), so an all-black page drawn all black is not a loss.
 - The 5 sermon decks: every slide renders, and mean native SSIM ≥ 0.80 is recorded next to pptx-preview's.
 - The T1 share of shown worship slides is within ±3 points of the census (30.9%).
 - A synthetic 4:3 deck places its boxes within 2 px of LibreOffice's page.

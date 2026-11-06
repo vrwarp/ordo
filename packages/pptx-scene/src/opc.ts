@@ -10,7 +10,11 @@
  * - **Relationships** resolve inside the package only: fragment dropped, percent-decoded, `.`/`..` applied
  *   (never above the root), a leading `/` meaning the root, matched to a stored part without case. A
  *   duplicate `Id` keeps the first. `TargetMode="External"` targets are never resolved or fetched; each is
- *   noted with its host only.
+ *   noted with its host only. Each part's list is indexed by id and by type once.
+ * - **Cache** (design/27 §12, §13): parsed shared parts and relationship lists are kept within an estimated
+ *   budget sized for a slide's working set, least recently used dropped first; the parts the current slide
+ *   inherits from are pinned (`pin`), so nothing read for a slide evicts its own layout, master or theme.
+ *   A slide's tree and relationships are never kept past it, so a hostile slide cannot evict shared parts.
  *
  * Owned by work item A (reading).
  */
@@ -38,13 +42,17 @@ export const MAX_EXTERNAL_NOTES = 20;
  * lets a deck within the §12 part budgets keep gigabytes alive.
  */
 export const XML_NODE_BYTES = 300;
+/** What one relationship of a kept list is charged against the cache (its object, strings and indexes). */
+export const REL_BYTES = 300;
 /**
- * Parsed parts are kept while their estimated size (text characters + `XML_NODE_BYTES` per element) totals
- * at most this (least recently used dropped first; the newest is always kept). Layouts, masters, themes and
- * relationships are read for every slide; a slide is read once and is not kept (`Package.xml` `keep`). Two
- * parts at the §12 tag limit fit, so a slide's layout and master are not parsed again for every slide.
+ * Parsed parts and relationship lists are kept while their estimated size (text characters +
+ * `XML_NODE_BYTES` per element, `REL_BYTES` per relationship) totals at most this: least recently used dropped
+ * first, the newest and the pinned ones (`Package.pin`: the current slide's layout, master and theme, and
+ * their relationships) never. Sized for the working set of a slide: its layout, master and theme each at the
+ * §12 tag limit fit, so a deck whose shared parts are that large still parses each of them once. A slide's
+ * own tree (`Package.xml` `keep: false`) and relationships are never kept past it.
  */
-export const XML_CACHE_BYTES = 192 * 1024 * 1024;
+export const XML_CACHE_BYTES = 256 * 1024 * 1024;
 
 /** The content type of a slide part. */
 export const SLIDE_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.presentationml.slide+xml';
@@ -79,13 +87,19 @@ export interface Package {
   rel(source: string, id: string): Rel | undefined;
   /**
    * The first internal relationship of `source` of a type: a short name compared with `relType`
-   * ('slideLayout', 'theme', …) or a full type URI (Strict or Transitional).
+   * ('slideLayout', 'theme', …) or a full type URI (Strict or Transitional). Indexed once per part.
    */
   relOfType(source: string, type: string): Rel | undefined;
   contentType(name: string): string | undefined;
   /** Parts named by a content-type `Override` of this type (without case), in document order. */
   partsOfType(contentType: string): string[];
   log: Log;
+  /**
+   * Pin these parts (and their relationship lists) in the cache, replacing the parts pinned before: the
+   * shared parts the slide being read inherits from (`slideParts` pins its layout, master and theme as it
+   * finds them), which nothing read for that slide may evict.
+   */
+  pin(parts: readonly (string | undefined)[]): void;
 }
 
 export interface PackageOptions {
@@ -214,6 +228,17 @@ interface Cached {
   cost: number;
 }
 
+/** One part's relationships: in document order, and indexed by id and by type (first of each). */
+interface RelList {
+  list: Rel[];
+  byId: Map<string, Rel>;
+  /** Internal relationships by short type name (`relType`) and by full Transitional URI. */
+  byType: Map<string, Rel>;
+}
+
+/** A cache entry: a parsed part, or a part's relationships. `part` is the stored name it belongs to. */
+type Entry = { part: string; cost: number } & ({ tree: Cached } | { rels: RelList });
+
 /** Elements of a parsed tree (iterative: the tree is bounded by the parser, not by the stack). */
 function elementCount(root: XNode | undefined): number {
   let n = 0;
@@ -249,17 +274,33 @@ export function openPackage(src: PartSource, log: Log = () => {}, opts: PackageO
     return decodeText(b);
   };
 
-  const cache = new Map<string, Cached>();
+  // One LRU over parsed parts (key `x` + part) and relationship lists (key `r` + part), oldest first.
+  const cache = new Map<string, Entry>();
   let cached = 0;
+  /** Stored names of the pinned parts: never evicted (`Package.pin`). */
+  let pinned = new Set<string>();
+  /** The last part read with `keep: false` (a slide): its relationships are held only until the next one. */
+  let transient: string | undefined;
+  let transientRels: { part: string; rels: RelList } | undefined;
   let strictNoted = false;
-  const remember = (real: string, entry: Cached) => {
-    cache.set(real, entry);
+  const remember = (key: string, entry: Entry) => {
+    cache.set(key, entry);
     cached += entry.cost;
+    if (cached <= cacheBytes) return;
     for (const [k, v] of cache) {
-      if (cached <= cacheBytes || k === real) break;
+      if (cached <= cacheBytes) break;
+      if (k === key || pinned.has(v.part)) continue;
       cache.delete(k);
       cached -= v.cost;
     }
+  };
+  const lookup = (key: string): Entry | undefined => {
+    const e = cache.get(key);
+    if (e) {
+      cache.delete(key); // most recently used last
+      cache.set(key, e);
+    }
+    return e;
   };
   const parse = (real: string): Cached => {
     let chars = 0;
@@ -280,19 +321,28 @@ export function openPackage(src: PartSource, log: Log = () => {}, opts: PackageO
       return { value: e instanceof Error ? e : new Error(String(e)), cost: chars };
     }
   };
-  const xml = (name: string, o: { keep?: boolean } = {}): XNode | undefined => {
-    const real = find(name);
-    if (real === undefined) return undefined;
-    let entry = cache.get(real);
-    if (entry) {
-      cache.delete(real); // most recently used last
-      cache.set(real, entry);
-    } else {
+  /** A part's tree: from the cache, else parsed and kept (`keep`), else parsed for this caller only. */
+  const tree = (real: string, keep: boolean): XNode | undefined => {
+    const hit = lookup(`x${real}`);
+    let entry: Cached;
+    if (hit && 'tree' in hit) entry = hit.tree;
+    else {
       entry = parse(real);
-      if (o.keep !== false) remember(real, entry);
+      if (keep) remember(`x${real}`, { part: real, cost: entry.cost, tree: entry });
     }
     if (entry.value instanceof Error) throw entry.value;
     return entry.value;
+  };
+  const xml = (name: string, o: { keep?: boolean } = {}): XNode | undefined => {
+    const real = find(name);
+    if (real === undefined) return undefined;
+    if (o.keep === false) transient = real;
+    return tree(real, o.keep !== false);
+  };
+  /** A part read once for what is derived from it (relationships, content types): never kept. */
+  const once = (name: string): XNode | undefined => {
+    const real = find(name);
+    return real === undefined ? undefined : tree(real, false);
   };
 
   const externals = new Set<string>();
@@ -306,15 +356,12 @@ export function openPackage(src: PartSource, log: Log = () => {}, opts: PackageO
     } else if (++moreExternals === 1) log('more external targets are not listed');
   };
 
-  const relsCache = new Map<string, { list: Rel[]; byId: Map<string, Rel> }>();
-  const relsOf = (source: string) => {
-    let r = relsCache.get(source);
-    if (r) return r;
-    r = { list: [], byId: new Map() };
-    relsCache.set(source, r);
+  /** Read a part's relationships (its `.rels` tree is parsed for this and not kept). */
+  const readRels = (source: string): RelList => {
+    const r: RelList = { list: [], byId: new Map(), byType: new Map() };
     let root: XNode | undefined;
     try {
-      root = xml(relsPartOf(source));
+      root = once(relsPartOf(source));
     } catch (e) {
       log(`${clean(relsPartOf(source))} could not be read: ${clean((e as Error).message)}`);
     }
@@ -340,9 +387,28 @@ export function openPackage(src: PartSource, log: Log = () => {}, opts: PackageO
       const rel: Rel = { id, type, target: external ? target : (find(target) ?? target), external };
       r.list.push(rel);
       r.byId.set(id, rel);
+      if (!external) {
+        // `type` is Transitional already (`markup.ts`); keyed by its full URI and by its last segment.
+        const short = `s${relType(type)}`;
+        if (!r.byType.has(short)) r.byType.set(short, rel);
+        if (!r.byType.has(`u${type}`)) r.byType.set(`u${type}`, rel);
+      }
     }
     if (long) log(`${clean(relsPartOf(source))}: ${long} relationship target(s) too long, ignored`);
     return r;
+  };
+  const relsOf = (source: string): RelList => {
+    if (source === transient) {
+      // The slide being read: held until the next slide, never in the cache.
+      if (transientRels?.part !== source) transientRels = { part: source, rels: readRels(source) };
+      return transientRels.rels;
+    }
+    const hit = lookup(`r${source}`);
+    if (hit && 'rels' in hit) return hit.rels;
+    const rels = readRels(source);
+    const part = find(source) ?? source;
+    remember(`r${source}`, { part, cost: REL_BYTES * (rels.list.length + 1), rels });
+    return rels;
   };
 
   let types: { defaults: Map<string, string>; overrides: Map<string, string> } | undefined;
@@ -351,7 +417,7 @@ export function openPackage(src: PartSource, log: Log = () => {}, opts: PackageO
     types = { defaults: new Map(), overrides: new Map() };
     let root: XNode | undefined;
     try {
-      root = xml('[Content_Types].xml');
+      root = once('[Content_Types].xml');
     } catch (e) {
       log(`[Content_Types].xml could not be read: ${clean((e as Error).message)}`);
     }
@@ -382,12 +448,8 @@ export function openPackage(src: PartSource, log: Log = () => {}, opts: PackageO
     xml,
     rels: (source) => relsOf(source).list,
     rel: (source, id) => relsOf(source).byId.get(id),
-    relOfType: (source, type) => {
-      const full = type.includes('/') ? transitionalUri(type) : undefined;
-      return relsOf(source).list.find(
-        (r) => !r.external && (full === undefined ? relType(r.type) === type : r.type === full),
-      );
-    },
+    relOfType: (source, type) =>
+      relsOf(source).byType.get(type.includes('/') ? `u${transitionalUri(type)}` : `s${type}`),
     contentType: (name) => {
       const real = find(name);
       if (real === undefined) return undefined;
@@ -404,5 +466,12 @@ export function openPackage(src: PartSource, log: Log = () => {}, opts: PackageO
       return out;
     },
     log,
+    pin: (parts) => {
+      pinned = new Set();
+      for (const p of parts) {
+        const real = p === undefined ? undefined : find(p);
+        if (real !== undefined) pinned.add(real);
+      }
+    },
   };
 }

@@ -197,8 +197,11 @@ export type SceneTaskInput = {
    * relationships resolve. A batch's own slide parts are transferred, the shared parts copied.
    */
   parts: Map<string, Uint8Array>;
-  /** Pixel sizes of spilled pictures, read from their first bytes: [part, size] pairs. */
-  pictureSizes: [string, { w: number; h: number }][];
+  /**
+   * Pixel sizes of spilled pictures, read from their first bytes (`@ordo/pptx-scene` `pictureSize`): [part,
+   * size] pairs. Keep `alpha`: only a background known to be opaque becomes the slide background.
+   */
+  pictureSizes: [string, { w: number; h: number; alpha?: boolean }][];
   /** The batch: `SlideRef.index` in [from, to). */
   range: { from: number; to: number };
   options: PptxImportOptions;

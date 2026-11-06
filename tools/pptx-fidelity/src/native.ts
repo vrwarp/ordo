@@ -28,6 +28,7 @@ import {
   type EmitResult,
   emitSlides,
   parseDeck,
+  type PictureHeader,
   pictureSize,
   type SlideClass,
   type Tier,
@@ -145,8 +146,11 @@ function headSync(file: string, n: number): Uint8Array {
   }
 }
 
-/** The pixel size of a spilled picture from its header (64 KB, or up to 1 MB for a JPEG). */
-export function spilledPictureSize(file: string | undefined): { w: number; h: number } | undefined {
+/**
+ * The pixel size of a spilled picture from its header (64 KB, or up to 1 MB for a JPEG), and whether it may
+ * be transparent (`PictureHeader.alpha`: a background that may be is laid on white, not cover-fitted).
+ */
+export function spilledPictureSize(file: string | undefined): PictureHeader | undefined {
   if (!file) return undefined;
   try {
     const b = headSync(file, SIZE_HEAD_BYTES);
@@ -195,9 +199,9 @@ export async function convertDeck(deckFile: string, dir: string): Promise<Native
     out.embeddedFonts = [...zip.files.keys()].some((k) => k.toLowerCase().startsWith('ppt/fonts/'));
 
     t0 = performance.now();
-    const scene = parseDeck(zip.files, {
-      pictureSize: (part) => spilledPictureSize(zip.onDisk.get(part) ?? findCaseless(zip.onDisk, part)),
-    });
+    const spilled = caseless(zip.onDisk);
+    const fileOf = (part: string) => zip.onDisk.get(part) ?? spilled.get(part.toLowerCase());
+    const scene = parseDeck(zip.files, { pictureSize: (part) => spilledPictureSize(fileOf(part)) });
     out.parseMs = performance.now() - t0;
     t0 = performance.now();
     const emitted: EmitResult = emitSlides(scene);
@@ -226,7 +230,7 @@ export async function convertDeck(deckFile: string, dir: string): Promise<Native
     for (const [k, m] of emitted.media.entries()) {
       const entry: NativeMedia = { id: m.id, part: m.part };
       out.media.push(entry);
-      const src = zip.onDisk.get(m.part) ?? findCaseless(zip.onDisk, m.part);
+      const src = fileOf(m.part);
       if (!src) {
         note(`picture part missing from the deck: ${clean(m.part)}`);
         continue;
@@ -268,8 +272,16 @@ let pool: { worker: Worker; heapMb: number } | undefined;
 /** Conversions run one at a time. */
 let queue: Promise<unknown> = Promise.resolve();
 
+/** The tsx ESM loader as a file URL: the worker runs from TypeScript source (as `apps/hub/src/pool.ts`'s). */
+function tsxLoaderUrl(): string {
+  const pkg = createRequire(import.meta.url).resolve('tsx/package.json');
+  return pathToFileURL(join(dirname(pkg), 'dist', 'loader.mjs')).href;
+}
+
 function spawnWorker(heapMb: number): Worker {
   const worker = new Worker(new URL('./convert-worker.ts', import.meta.url), {
+    // Its own loader, not the parent's flags: under a test runner they do not load TypeScript.
+    execArgv: ['--import', tsxLoaderUrl()],
     resourceLimits: { maxOldGenerationSizeMb: heapMb },
   });
   worker.unref(); // an idle worker does not keep the run alive
@@ -280,8 +292,7 @@ function spawnWorker(heapMb: number): Worker {
  * `convertDeck` in a worker thread with a heap limit and a timeout. Never throws: a deck whose conversion
  * runs out of memory or time, or whose worker fails, comes back with `error` and no slides (and its
  * `slides.json` says so); that worker is replaced for the next deck. The worker is kept between decks
- * otherwise, and loads its TypeScript through the loader the harness runs under (tsx, which workers
- * inherit).
+ * otherwise, and loads its TypeScript through tsx's loader.
  */
 export function convertDeckIsolated(
   deckFile: string,
@@ -360,10 +371,17 @@ async function convertInWorker(
   return out;
 }
 
-function findCaseless(m: Map<string, string>, name: string): string | undefined {
-  const want = name.toLowerCase();
-  for (const [k, v] of m) if (k.toLowerCase() === want) return v;
-  return undefined;
+/**
+ * Spilled files by lower-case part name, the first of a case clash winning (as `@ordo/pptx-scene` finds
+ * parts): built once per deck, so a deck of thousands of pictures is not scanned once per picture.
+ */
+export function caseless(onDisk: ReadonlyMap<string, string>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [k, v] of onDisk) {
+    const low = k.toLowerCase();
+    if (!out.has(low)) out.set(low, v);
+  }
+  return out;
 }
 
 // ── Fonts ────────────────────────────────────────────────────────────────────────────────────────────────

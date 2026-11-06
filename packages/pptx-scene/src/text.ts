@@ -206,7 +206,7 @@ function bulletOf(ctx: SlideCtx, chain: readonly (XNode | undefined)[]): Bullet 
       startAt: clamp(Math.floor(num(b.attrs.startAt) ?? 1), 1, 32_767),
       ...extra,
     };
-  const ch = [...(b.attrs.char ?? '•')].slice(0, 1).join('') || '•';
+  const ch = String.fromCodePoint((b.attrs.char || '•').codePointAt(0)!); // the first character only
   return { kind: 'char', char: ch, ...extra };
 }
 

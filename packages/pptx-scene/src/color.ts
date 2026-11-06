@@ -46,6 +46,11 @@ export type BlipReader = (blipFill: XNode) => PictureFill | undefined;
 export const MAX_MODIFIERS = 32;
 /** Gradient stops read per gradient (design/27 §12). */
 export const MAX_GRADIENT_STOPS = 16;
+/**
+ * Children of an `a:gsLst` looked at for those stops (it holds only `a:gs`, and whitespace between them):
+ * a shared gradient is read for every inheriting shape and run, and a deck can give its list any children.
+ */
+export const MAX_GRADIENT_SCAN = 4 * MAX_GRADIENT_STOPS;
 
 export function hexRgba(hex: number, a = 1): Rgba {
   return { r: (hex >> 16) & 0xff, g: (hex >> 8) & 0xff, b: hex & 0xff, a };
@@ -95,7 +100,12 @@ const DEFAULT_MAP: ReadonlyArray<[string, string]> = [
 /** Apply a colour mapping element's attributes (`p:clrMap`, `a:overrideClrMapping`) to `map`. */
 function applyMapping(map: Map<string, string>, el: XNode | undefined): void {
   if (!el) return;
-  for (const [k, v] of Object.entries(el.attrs)) if (map.has(k) && SCHEME_NAMES.has(v)) map.set(k, v);
+  // The map's own keys are looked up, not the element's attributes: a master's map is read for every slide,
+  // and a deck can give it any number of attributes.
+  for (const [k] of DEFAULT_MAP) {
+    const v = el.attrs[k];
+    if (v !== undefined && SCHEME_NAMES.has(v)) map.set(k, v);
+  }
 }
 
 /**
@@ -590,7 +600,9 @@ const frac = (v: string | undefined, lo = -1) => limit(intOf(v) / MAX, lo, 1);
 /** `a:gradFill`: up to `MAX_GRADIENT_STOPS` stops sorted by position; one stop is a solid fill. */
 function gradientOf(el: XNode, ctx: ColorCtx): Fill {
   const stops: GradientStop[] = [];
-  for (const gs of child(el, 'a:gsLst')?.children ?? []) {
+  const list = child(el, 'a:gsLst')?.children ?? [];
+  for (let i = 0; i < list.length && i < MAX_GRADIENT_SCAN; i++) {
+    const gs = list[i]!;
     if (gs.name !== 'a:gs') continue;
     if (stops.length >= MAX_GRADIENT_STOPS) break;
     const color = colorIn(gs, ctx);

@@ -104,8 +104,12 @@ export interface PictureFill {
   alpha?: number;
   /** Recolouring or effects on the blip (duotone, clrChange, grayscl, biLevel, lum, …): their element names. */
   effects?: string[];
-  /** The picture's size in pixels, read from its header when the part's bytes were present (not spilled). */
-  px?: { w: number; h: number };
+  /**
+   * The picture's size in pixels, read from its header when the part's bytes were present (not spilled),
+   * else given by the caller. `alpha` (M3): the picture may have transparent pixels (an alpha channel or a
+   * transparent colour); undefined when the header did not tell.
+   */
+  px?: { w: number; h: number; alpha?: boolean };
 }
 
 export interface Line {

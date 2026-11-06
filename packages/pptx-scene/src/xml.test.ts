@@ -3,7 +3,9 @@ import {
   child,
   children,
   decodeEntities,
+  MAX_NUM_CHARS,
   MAX_TAGS_PER_PART,
+  num,
   parseXml,
   rootOf,
   rootTag,
@@ -143,5 +145,21 @@ describe('rootTag', () => {
     expect(rootTag('<!-- never closed')).toBeUndefined();
     expect(rootTag('text only')).toBeUndefined();
     expect(rootTag('< x/>')).toBeUndefined();
+  });
+});
+
+describe('num', () => {
+  it(`reads finite numbers of at most ${MAX_NUM_CHARS} characters`, () => {
+    expect(num('12700')).toBe(12_700);
+    expect(num(' -2.5e3 ')).toBe(-2_500);
+    expect(num('1e400')).toBeUndefined();
+    expect(num('x')).toBeUndefined();
+    expect(num(undefined)).toBeUndefined();
+    expect(num(`${'0'.repeat(MAX_NUM_CHARS - 1)}7`)).toBe(7);
+    // A longer value is not read at all: a 7M-digit size in a shared style is asked for by every run.
+    const huge = '1'.repeat(7_000_000);
+    const t0 = performance.now();
+    for (let i = 0; i < 10_000; i++) expect(num(huge)).toBeUndefined();
+    expect(performance.now() - t0).toBeLessThan(1_000);
   });
 });
