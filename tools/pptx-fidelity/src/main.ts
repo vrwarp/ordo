@@ -245,6 +245,11 @@ async function main(): Promise<void> {
       })),
     };
     scores.push(s);
+    // The scores so far, after every deck: a long run that is stopped still leaves its results.
+    await writeFile(
+      join(out, 'summary.partial.json'),
+      JSON.stringify({ createdAt: new Date().toISOString(), chromium, decks: scores }),
+    );
     const rawText = s.rawSsim !== undefined ? `  unmodified ${s.rawSsim.toFixed(3)}` : '';
     console.log(
       `${name.padEnd(40)} ${String(s.slides).padStart(3)} slides  ssim ${s.ssim.toFixed(3)}${rawText}  ${s.ms} ms`,
