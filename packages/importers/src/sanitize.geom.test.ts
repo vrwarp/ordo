@@ -82,6 +82,18 @@ describe('sanitizePresentation and the M6 fields', () => {
     expect(t.style.paint!.stops.map((x) => x.at)).toEqual([0, 1]);
   });
 
+  it('keeps cont (a path stored in pieces) only when it is true', () => {
+    const g = sanitizeGeom({
+      paths: [
+        { d: 'M 0 0 L 9 0 L 9 9 Z', w: 9, h: 9 },
+        { d: 'M 2 2 L 2 7 L 7 7 Z', w: 9, h: 9, cont: true },
+        { d: 'M 0 0 L 1 1', w: 1, h: 1, cont: 'yes' as never },
+      ],
+    })!;
+    expect(g.paths!.map((p) => p.cont)).toEqual([undefined, true, undefined]);
+    expect(g.paths![2]).not.toHaveProperty('cont');
+  });
+
   it('drops a geometry, gradient or mask with nothing usable left', () => {
     expect(sanitizeGeom({ paths: [{ d: 'garbage', w: 1, h: 1 }] })).toBeUndefined();
     expect(sanitizeGradient({ kind: 'linear', stops: [{ at: 0, color: white }] } as never)).toBeUndefined();

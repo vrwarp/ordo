@@ -321,8 +321,8 @@ const PATH_FILL_MODES: readonly PathFillMode[] = [
 /**
  * A stored geometry (design/27 §3.1 `ShapeGeom`, §12): a preset name of letters and digits (at most 40), at
  * most 10 finite adjust pairs, at most 8 paths, each path string re-tokenised (`cleanPathData`: only M L Q C Z
- * and numbers, at most 4,096 points) with its space within 0..1e9. Unknown fill modes are 'norm' (the
- * schema's .catch). Undefined when nothing usable is left.
+ * and numbers, at most 4,096 points) with its space within 0..1e9, `cont` kept when true (the stored pieces
+ * of one path). Unknown fill modes are 'norm' (the schema's .catch). Undefined when nothing usable is left.
  */
 export function clampGeom(g: unknown): ShapeGeom | undefined {
   if (!g || typeof g !== 'object' || Array.isArray(g)) return undefined;
@@ -357,6 +357,7 @@ export function clampGeom(g: unknown): ShapeGeom | undefined {
       if (p.fill !== undefined)
         path.fill = PATH_FILL_MODES.includes(p.fill as PathFillMode) ? (p.fill as PathFillMode) : 'norm';
       if (typeof p.stroke === 'boolean') path.stroke = p.stroke;
+      if (p.cont === true) path.cont = true;
       paths.push(path);
     }
     if (paths.length) out.paths = paths;

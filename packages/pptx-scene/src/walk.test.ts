@@ -33,8 +33,8 @@ function slideOf(spec: DeckSpec, i = 0): SlideScene {
 function placed(e: Element) {
   const p = decompose(e.xf);
   return {
-    x: Math.round(p.cx - p.w / 2),
-    y: Math.round(p.cy - p.h / 2),
+    x: Math.round(p.cx - p.w / 2) + 0,
+    y: Math.round(p.cy - p.h / 2) + 0,
     cx: Math.round(p.w),
     cy: Math.round(p.h),
     rot: Math.round(p.rot * 1000) / 1000,
@@ -319,26 +319,88 @@ describe('groups', () => {
     expect([a!.group, b!.group, c!.group]).toEqual([1, 2, undefined]);
   });
 
-  it('scales the own box of a rotated child in an unevenly scaled group, and marks it residual', () => {
-    // A child rotated 45° inside a group scaled 2:1 would be sheared by the composed affine; PowerPoint and
-    // LibreOffice scale its box (2 in x 1 in) and rotate that.
+  it('scales the own box of a rotated child in an unevenly scaled group as LibreOffice does (approx)', () => {
+    // A child rotated 30° inside a group scaled 2:1 would be sheared by the composed affine; PowerPoint and
+    // LibreOffice scale its box (2 in x 1 in) and rotate that. From 45° up to 135° the scales swap: the box
+    // grows along the axis it shows on the slide (LibreOffice's `lcl_doSpecialMSOWidthHeightToggle`).
     const s = slideOf({
       slides: [
         {
           shapes: grpSp(
             { id: 10, x: 0, y: 0, cx: 2 * IN, cy: IN, chX: 0, chY: 0, chCx: IN, chCy: IN },
-            rect(2, 0, 'FF0000', { rot: 45 }) + rect(3, 0, '00FF00', { rot: 90 }),
+            rect(2, 0, 'FF0000', { rot: 30 }) +
+              rect(3, 0, '00FF00', { rot: 90 }) +
+              rect(4, 0, '0000FF', { rot: 45 }) +
+              rect(5, 0, '0000FF', { rot: 135 }) +
+              rect(6, 0, '0000FF', { rot: 250 }),
           ),
         },
       ],
     });
-    const [a, b] = s.elements;
-    expect(a).toMatchObject({ kind: 'shape', support: 'residual', reasons: ['shear'] });
-    expect(placed(a!)).toEqual({ x: 0, y: 0, cx: 2 * IN, cy: IN, rot: 45 });
+    const [a, b, c, d, e] = s.elements;
+    expect(a).toMatchObject({ kind: 'shape', support: 'approx', reasons: ['shear'] });
+    expect(placed(a!)).toEqual({ x: 0, y: 0, cx: 2 * IN, cy: IN, rot: 30 });
     expect(decompose(a!.xf).sheared).toBe(false);
-    // A quarter turn is not sheared either way; its own box is still scaled along the group's axes.
+    // A quarter turn is not sheared either way; its own box takes the scales swapped (1 in x 2 in).
     expect(b).toMatchObject({ kind: 'shape', support: 'native' });
-    expect(placed(b!)).toMatchObject({ cx: 2 * IN, cy: IN, rot: 90 });
+    expect(placed(b!)).toMatchObject({ x: IN / 2, y: -IN / 2, cx: IN, cy: 2 * IN, rot: 90 });
+    expect(placed(c!)).toMatchObject({ cx: IN, cy: 2 * IN, rot: 45 });
+    expect(c).toMatchObject({ support: 'approx', reasons: ['shear'] });
+    expect(placed(d!)).toMatchObject({ cx: 2 * IN, cy: IN, rot: 135 });
+    expect(placed(e!)).toMatchObject({ cx: IN, cy: 2 * IN });
+    for (const x of [c, d, e]) expect(decompose(x!.xf).sheared).toBe(false);
+    expect(s.notes).toContain(
+      'a shape turned in an unevenly scaled group is placed as LibreOffice places it',
+    );
+  });
+
+  it('swaps the scales of a turned child in a mirrored group too, with no further half turn', () => {
+    // LibreOffice 24.2 (measured with a probe deck): a mirrored group scales the box as an unmirrored one,
+    // and the child keeps its own turn, mirrored with the group.
+    const g = (flipH: boolean) =>
+      slideOf({
+        slides: [
+          {
+            shapes: grpSp(
+              { id: 10, x: 0, y: 0, cx: 2 * IN, cy: IN, chX: 0, chY: 0, chCx: IN, chCy: IN, flipH },
+              rect(2, 0, 'FF0000', { rot: 60 }),
+            ),
+          },
+        ],
+      }).elements[0]!;
+    const plain = decompose(g(false).xf);
+    const mirrored = decompose(g(true).xf);
+    expect([Math.round(plain.w), Math.round(plain.h)]).toEqual([IN, 2 * IN]);
+    expect([Math.round(mirrored.w), Math.round(mirrored.h)]).toEqual([IN, 2 * IN]);
+    // Each point of the box is the unmirrored one's mirrored about the group's centre (x = 1 in).
+    for (const [u, v] of [
+      [0, 0],
+      [1, 0],
+      [0, 1],
+    ] as const) {
+      const [x, y] = apply(g(false).xf, u, v);
+      const [mx, my] = apply(g(true).xf, u, v);
+      expect(mx).toBeCloseTo(2 * IN - x, 3);
+      expect(my).toBeCloseTo(y, 3);
+    }
+  });
+
+  it('keeps a residual child of a sheared group residual, with the shear among its reasons', () => {
+    const chart =
+      '<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="7" name="Chart"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>' +
+      '<p:xfrm rot="1800000"><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></p:xfrm>' +
+      '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"/></a:graphic></p:graphicFrame>';
+    const s = slideOf({
+      slides: [
+        {
+          shapes: grpSp(
+            { id: 10, x: 0, y: 0, cx: 2 * IN, cy: IN, chX: 0, chY: 0, chCx: IN, chCy: IN },
+            chart,
+          ),
+        },
+      ],
+    });
+    expect(s.elements[0]).toMatchObject({ support: 'residual', reasons: ['chart', 'shear'] });
   });
 
   it('places a box like the composed affine when the scale is even or the box is not rotated', () => {

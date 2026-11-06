@@ -36,6 +36,18 @@ describe('clampGeom', () => {
     expect(g).toEqual({ paths: [{ d: 'M 0 0 L 10 0', w: 0, h: 1e9, fill: 'norm' }] });
   });
 
+  it('keeps cont (the next piece of the path before it) only when it is true', () => {
+    const g = clampGeom({
+      paths: [
+        { d: 'M 0 0 L 10 0', w: 0, h: 0, cont: 'yes' },
+        { d: 'L 10 10 Z', w: 0, h: 0, cont: true },
+        { d: 'M 1 1 L 2 2', w: 0, h: 0, cont: 1 },
+      ],
+    })!;
+    expect(g.paths!.map((p) => p.cont)).toEqual([undefined, true, undefined]);
+    expect(g.paths![0]).not.toHaveProperty('cont');
+  });
+
   it('keeps at most 8 paths and 4,096 points per path', () => {
     const d = `M 0 0 ${'L 1 1 '.repeat(5000)}`;
     const g = clampGeom({ paths: Array(12).fill({ d, w: 1, h: 1 }) })!;
@@ -197,6 +209,8 @@ describe('clampObject: shapes and pictures', () => {
     const c = clampSlide(s);
     expect(c.objects.map((o) => o.type)).toEqual(['shape', 'shape', 'image', 'text']);
     expect(c.objects[0]).toMatchObject({ geom: s.objects[0]!.type === 'shape' ? s.objects[0]!.geom : {} });
-    expect(c.objects[1]).toMatchObject({ geom: { paths: [{ d: 'M 0 0 C 30 0 70 100 100 100' }] } });
+    expect(c.objects[1]).toMatchObject({
+      geom: { paths: [{ d: 'M 0 0 C 30 0 70 100 100 100' }, { d: 'M 0 100 L 40 60', cont: true }] },
+    });
   });
 });

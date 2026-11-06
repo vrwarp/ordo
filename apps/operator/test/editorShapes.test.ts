@@ -257,6 +257,11 @@ describe('line: dash and arrowheads', () => {
     expect(hasOpenOutline(path('M0 0 L100 100'))).toBe(true);
     expect(hasOpenOutline(path('M0 0 L100 0 L100 100 Z'))).toBe(false);
     expect(hasOpenOutline(path('M0 0 L100 100', false))).toBe(false);
+    // A closed outline stored in pieces (`cont`, cut inside a sub-path) is read whole.
+    const pieces = (...ds: string[]) =>
+      shape({ geom: { paths: ds.map((d, i) => ({ d, w: 100, h: 100, ...(i ? { cont: true } : {}) })) } });
+    expect(hasOpenOutline(pieces('M0 0 L100 0', 'L100 100 Z'))).toBe(false);
+    expect(hasOpenOutline(pieces('M0 0 L100 0', 'L100 100'))).toBe(true);
     // An imported arrowhead stays editable on any outline.
     expect(hasOpenOutline(shape({ ends: { tail: { type: 'arrow' } } }))).toBe(true);
   });
@@ -333,6 +338,11 @@ describe('geometry: read-only, the preset with its adjust values', () => {
       },
     });
     expect(geomInfo(free)).toEqual({ kind: 'custom', paths: 2 });
+    // The pieces of one path (`cont`) are one path.
+    const chained = shape({
+      geom: { paths: [free.geom!.paths![0]!, { ...free.geom!.paths![1]!, cont: true }] },
+    });
+    expect(geomInfo(chained)).toEqual({ kind: 'custom', paths: 1 });
     expect(shapeName(free)).toBe('freeform');
     const unknownWithPaths = shape({ geom: { preset: 'notAShape', paths: free.geom!.paths } });
     expect(geomInfo(unknownWithPaths)?.kind).toBe('custom');

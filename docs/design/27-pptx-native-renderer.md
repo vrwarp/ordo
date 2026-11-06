@@ -256,6 +256,7 @@ export const ShapeGeom = z.object({                       // M3: ellipse/roundRe
     w: z.number().min(0).max(1e9), h: z.number().min(0).max(1e9),  // the path's own space, scaled to the box
     fill: z.enum(['norm', 'none', 'lighten', 'lightenLess', 'darken', 'darkenLess']).catch('norm').optional(),
     stroke: z.boolean().optional(),
+    cont: z.boolean().optional().catch(undefined),        // M6: continues the path before it (one path in pieces)
   })).max(8).optional(),
 });
 
@@ -534,7 +535,8 @@ As built in M3 (`packages/domain/src/size.ts`):
 - child box → scaled chExt→ext and translated, then the group's rotation and flips about its centre;
 - a missing off/chOff means the origin; ext and chExt substitute for each other;
 - depth ≤ 32;
-- a sheared child is residual.
+- a child's own box is scaled along the group's axes, then turned, so it is never sheared; turned by 45° up to 135° (or 225° up to 315°) it takes the scales the other way round, as LibreOffice imports it and says MSO draws it (M6 wave 2 round 1, measured with a probe deck);
+- a child the composed affine would shear is approx (`shear`): placed so, not left to the art.
 
 **Master and layout decorations** are drawn under the slide's own shapes unless `showMasterSp="0"` (on the slide or the layout). They become objects with `role:'deco'`: unlocked, deletable per slide, and covered in bulk by 'Apply to similar'.
 
@@ -1169,7 +1171,7 @@ The extensions, in priority order (M4 unless noted):
 **Numbers.** Every number is finite and clamped:
 - slide side 1-51,206,400 EMU; logical coordinates ±100,000; box span ±2× the canvas; font 1-4,000 pt in the parser, 4-1,000 px stored for a box and 2-1,000 px for a run;
 - per text object at most 16 distinct run and bullet families and 64 distinct size scales (`FontBudget` in `clamp.ts`, the same in `sanitizePresentation`): later families take the box's, later scales the nearest kept one. Each new family name costs the browser a platform font lookup (about 1 ms in Chromium), so 2,000 runs with 2,000 families would cost seconds per object. Family names lose every control character (a form feed is a CSS newline that voids the whole `ctx.font` assignment). A family is keyed by that cleaned name, trimmed and lower-cased, and every name with the key takes the spelling first kept, so names differing in case, surrounding spaces, quotes or control characters neither take more places nor make more font strings;
-- adj ±1e7; ≤ 256 guides per shape; ≤ 4,096 path points per path and 64k per slide; ≤ 16 gradient stops;
+- adj ±1e7; ≤ 256 guides per shape; ≤ 4,096 path points per stored path (8 stored paths; a `cont` chain draws as one path of at most 8 × 4,096) and 64k per slide; ≤ 16 gradient stops;
 - colour maths clamped to 0..1; NaN and Infinity become 0.
 
 **Relationships.**
@@ -1651,6 +1653,15 @@ Also:
   - Objects: no native slide has more than 150 objects (at most 125). Tables and SmartArt over the budget go to the art; 42 slides of plain shapes over it (150-730 objects, mostly traced decorations) are still picture class, not hybrid, as they were before M6 (45). Not met.
     - *Fidelity round 1:* met. Shapes of one look are merged and plain shapes and pictures go to the art over the budget (§5 "picture"): of the 44 such slides 10 are native, 33 hybrid, and one is a picture for its 64 KB of text formatting.
   - Fuzz: guide formulas, presets, paths and stored path strings (`geom/geom.fuzz.test.ts`), hostile custom geometry, font files and SmartArt drawings in the converter's tests. Met.
+
+*Round 1 (M6 wave 2, traced decorations and turned group children):*
+- **Long custom paths in pieces.** A Google-Slides-traced decoration is one outline holding 40-300 holes, 4,200-8,300 points in 7-digit EMU (100-140 KB of path text); every sub-path nests in the outline, so neither the bounding-box split nor any containment split brings a path under 4,096 points, and its outline alone can pass 40,000 characters. Such a path is now a chain (`ShapeGeom.paths[].cont`): pieces of at most 4,096 points and 40,000 characters, cut where a sub-path starts, or between two commands of a sub-path longer than a piece; the renderer (`stored.ts`) joins a `cont` path to the one before it, so the pieces fill as the one even-odd path they were cut from and stroke together. A geometry keeps at most 8 stored paths; a chain that needs more is over the bounds as before. `traceUnionPath` (masks, effect silhouettes) works out the nesting of up to 2,048 sub-paths, testing a point only against the sub-paths whose bounding boxes hold it, within 4M edges. An M6 build without `cont` fills each piece on its own (holes filled where a piece has no outline); a pre-M6 build draws the legacy rect.
+- **Turned children of scaled groups** (`walk.ts` `boxAffine`): a child turned by 45° up to 135°, or 225° up to 315°, scales its width by the group's vertical scale and its height by the horizontal one (LibreOffice's `lcl_doSpecialMSOWidthHeightToggle`). A probe deck of turned rects, stars, arrows and a custGeom in groups scaled 2.5:1 and 1:3, rotated, mirrored and nested scores 0.9987-0.9996 against LibreOffice 24.2 (0.886-0.931 before). Children the composed affine would shear are approx (`shear`), no longer residual.
+- **Measured** (`--engine native --lo-compat`, LibreOffice 24.2 pictures, per slide against the merged wave):
+  - The three evidence decks (worship templates of shard 0 and 2; 69 slides): 0.871 → 0.940, 41 up and none down; 32 slides hybrid → native, 2 hybrid → picture class for the 150-object budget (their art no longer absorbs the decorations). The template whose layouts carry 4,200- and 6,600-point decorations 0.912 → 0.968 (of its 13 `art:custGeom` slides, 12 native, 1 picture class; two keep a warp); the one whose 8,300-point silhouette is turned in scaled groups 0.758 → 0.923 (18 slides native, one stays hybrid for a warp); the one with a turned border in scaled groups 0.926 → 0.932 (its three sheared slides 0.939 → 0.960, 0.936 → 0.970, 0.668 → 0.750).
+  - Shard 0 (918 slides scored both times): 0.899 → 0.904, deck mean 0.842 → 0.845, 36 up and none down; 32 hybrid → native, 1 hybrid → picture. The sermon decks do not move (0.955). The other decks with turned children in scaled groups: 5 slides hybrid → native within ±0.001, and one slide hybrid → picture for the object budget (0.763 → 0.770).
+  - Raster p95 at 3840 on the evidence decks 34.8 → 44.0 ms (the decorations are drawn now); converting the silhouette template takes 7 % longer.
+- **Not solved: the slide JSON budget.** The converter does not count path text against §3.4's 64 KB (only text formatting), and the hub's `planImportSizes` makes a slide over it a compact LibreOffice picture. A traced decoration is 100-140 KB of path text on its own, and a layout repeats it on every slide that shows it: these slides are native in the converter and compact pictures in the hub (the first template's slides were over 64 KB before this round too; the silhouette template's were 26-65 KB as hybrid slides and are 160-1,000 KB now).
 
 ### M7: 4K performance pass and per-element art (about 2 weeks)
 

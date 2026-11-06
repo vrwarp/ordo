@@ -12,7 +12,11 @@
  */
 
 export const PATH_DATA_LIMITS = {
-  /** Points per path: M, L and Z count 1, Q 2, C 3 (the geometry engine's GEOM_LIMITS.points). */
+  /**
+   * Points per path: M, L and Z count 1, Q 2, C 3 (the geometry engine's GEOM_LIMITS.points). A path
+   * continued by the next ones (`ShapeGeom.paths[i].cont`) is drawn as one path of all their points, at most
+   * `paths` x `points`; each stored piece keeps this bound.
+   */
   points: 4096,
   /** Paths per geometry (ShapeGeom.paths). */
   paths: 8,

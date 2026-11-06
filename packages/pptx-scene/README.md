@@ -98,11 +98,18 @@ values an older build draws (§3.2: `shape` rect, ellipse or line, `fill` a grad
   space (the deck's `w`/`h`, else the shape's box in logical px; written with about 1/20,000 of the space
   as precision, coarser until it fits the schema's 40,000 characters), arcs already cubic. A long deck path
   is compiled in chunks at its sub-paths (the compiler counts an arc as a full turn's 12 points) and stored
-  whole when its real points fit 4,096; past that it is split into stored paths only where no sub-path of one
-  part overlaps one of another (even-odd holes stay with their outlines). What the compiler replaced by 0 is
-  noted (`custom geometry: …`) and still drawn. Native while within the bounds (8 paths, 4,096 points a path,
-  64k points a slide); past them residual (`custGeom`, the LibreOffice art). A thin custom geometry's legacy
-  is a `line`, which draws no fill, as M1 drew nothing for it.
+  whole when its real points fit 4,096 and its string 40,000 characters; past that it is split into stored
+  paths where no sub-path of one part overlaps one of another (even-odd holes stay with their outlines, and
+  every build fills the parts apart as one), else stored as a chain (`ShapeGeom.paths[].cont`, M6 wave 2
+  round 1): pieces of at most 4,096 points and 40,000 characters, cut where a sub-path starts, or between
+  two commands of a sub-path longer than a piece, each later piece marked `cont`, which the renderer joins
+  into the one path they were cut from (one even-odd fill). That is the traced decoration of Google Slides
+  templates: one outline holding 40-300 holes, 4,200-8,300 points in 7-digit EMU, which no split can hold.
+  An M6 build without `cont` fills each piece apart (holes filled), a pre-M6 build draws the legacy rect.
+  What the compiler replaced by 0 is noted (`custom geometry: …`) and still drawn. Native while within the
+  bounds (8 stored paths, 4,096 points a sub-path, 64k points a slide); past them residual (`custGeom`, the
+  LibreOffice art). A thin custom geometry's legacy is a `line`, which draws no fill, as M1 drew nothing for
+  it.
 - **Gradients** (`a:gradFill`): `gradient` with the stops (≤ 16, laid on white for backgrounds); linear with
   `angle` and `scaled` as written (`rotWithShape="0"`: turned back by the shape's rotation), path gradients
   radial from the centre of `a:fillToRect` (`rect` and `shape` paths noted as radial). Background gradients
@@ -136,8 +143,18 @@ values an older build draws (§3.2: `shape` rect, ellipse or line, `fill` a grad
   curved connectors one `line` object whose box's midline runs from the route's start to its end (an older
   build draws that straight line) with the preset's route in that box as `geom.paths` (fill none).
 - **Classification**: every preset of the table, custom geometry within the bounds, gradients and line styles
-  are native (no reason); approx: unknown presets (`preset:<name>`, `mask:<name>`), pattern fills; residual:
-  custom geometry past the bounds. Census tiers are unchanged (they count feature use, not support).
+  are native (no reason); approx: unknown presets (`preset:<name>`, `mask:<name>`), pattern fills, group
+  children the composed affine would shear (`shear`); residual: custom geometry past the bounds. Census tiers
+  are unchanged (they count feature use, not support).
+- **Turned children of scaled groups** (`walk.ts` `boxAffine`): a child's box is scaled along the group's
+  axes, then turned, so it is never sheared; a box turned by 45° up to 135° (or 225° up to 315°) takes the
+  scales the other way round (its width the group's vertical scale), as LibreOffice imports it (oox
+  `lcl_doSpecialMSOWidthHeightToggle`: "MSO acts strange in that case"). A probe deck (rect, star5,
+  rightArrow and a custGeom, turned -40° to 145°, in groups scaled 2.5:1 and 1:3, rotated, mirrored either
+  way and both, nested) scores 0.9987-0.9996 against LibreOffice 24.2 (0.886-0.931 with the scales never
+  swapped). LibreOffice's newer source also turns a swapped box in a mirrored group a further half turn;
+  24.2 does not, and neither does `boxAffine`. Such children are approx (`shear`), not residual: PowerPoint's
+  own placement is LibreOffice's claim, not measured here.
 
 Measured (the census over worship shards 0-2 of `validate/sample4`, 2,713 shown slides, and the five sermon
 decks; tiers are features, so unchanged): T1 22.8 %, T1-T2 54.4 %, T1-T3 81.8 %, T1-T4 86.8 %, T1-T5 92.4 %.
@@ -597,7 +614,8 @@ Done (design/27 §4, §15 M1):
   `chooseAlternate` (the branch `Package.xml` keeps: the first Choice of a14, p14 or p15, else Fallback); style references (fillRef, lnRef, effectRef with phClr);
   `useBgFill` with a solid background; `a:grpFill`; groups by offset, scale, rotation and flips, a child's
   own box scaled along the group's axes (`boxAffine`, no shear; a child the composed affine would shear is
-  marked residual and still drawn); graphic frames residual; ≤ 32 group levels, ≤ 5,000 shapes.
+  marked residual and still drawn; since M6 wave 2 it is approx, placed as LibreOffice places it, below);
+  graphic frames residual; ≤ 32 group levels, ≤ 5,000 shapes.
 - Pictures: blip part through the holding part's relationships (theme parts too), srcRect, fillRect,
   tile, alphaModFix, recolour effects (an empty `a:lum` is not one), header-sniffed size, metafiles
   residual elements rated approx (not drawn before M3 converts them; design/27 §5), TIFF/WDP noted, linked pictures logged with their host only, video/audio posters recorded.
@@ -907,7 +925,8 @@ kern, bmk, in any order, plus child elements) of runs that have text, so a run w
 with neutral attributes only and whitespace inside the tag does not count; `crop` needs a non-zero side;
 `outline` is an `a:ln` inside an `a:rPr`; slides whose relationship ids do not start with `rId` are counted.
 
-**Support** per element (§5): the reader's verdict (walk: presets, fills; sheared children) merged with
+**Support** per element (§5): the reader's verdict (walk: presets, fills, custom geometry past the bounds;
+sheared children approx) merged with
 residual (chart, table, SmartArt, OLE, other graphic frames, maths, a bevel with a size or an extrusion,
 a warp other than `textNoShape`, text that is vertical, `numCol` > 1 or `anchorCtr` through the bodyPr
 chain, `.wdp`/`.hdp` pictures) and approx (reflection, inner shadow, soft edge on a picture, EMF/WMF
@@ -931,6 +950,7 @@ script gives 20.3 / 52.7 / 81.0 / 87.4 / 92.7 % on the same decks: the set has m
 After the M1 merge (one alternate-content branch, repeated listings shown as LibreOffice pages), the census
 decks give 32.2 / 73.4 / 87.8 / 92.5 / 95.8 % over 4,941 shown slides.
 
-Still to do: the 64 KB slide JSON budget and the 4,096 path points (§3.4, M3/M6, once emission measures
-them); kerning and unknown transitions as approx (slide-level, M8); `artText` from `ArtRange.elements`
+Still to do: the 64 KB slide JSON budget for path data (§3.4: the converter counts text formatting only;
+the hub's `planImportSizes` makes a slide whose stored paths pass it a compact picture, and a traced
+decoration of 6,500 points in 7-digit EMU is 100 KB of path text on its own); kerning and unknown transitions as approx (slide-level, M8); `artText` from `ArtRange.elements`
 (emission, M3).

@@ -263,11 +263,15 @@ export function hasOpenOutline(o: ShapeObject): boolean {
     return !!built?.paths.some((p) => p.stroke && geomPathOpen(p, tol));
   }
   if (g.paths?.length) {
-    return g.paths.some((p) => {
-      if (p.stroke === false) return false;
+    const paths = g.paths;
+    return paths.some((p, i) => {
+      // A path stored in pieces (`cont`) is one outline, read whole with its first piece.
+      if (p.stroke === false || (i > 0 && p.cont)) return false;
       let open = openPaths.get(p);
       if (open === undefined) {
-        open = typeof p.d === 'string' && openPathData(p.d);
+        let d = typeof p.d === 'string' ? p.d : '';
+        for (let j = i + 1; j < paths.length && paths[j]!.cont; j++) d += ` ${paths[j]!.d}`;
+        open = openPathData(d);
         openPaths.set(p, open);
       }
       return open;
@@ -333,7 +337,7 @@ export function geomInfo(o: ShapeObject): GeomInfo | undefined {
       unused: adj.filter(([n]) => !names.includes(n)).map(([n, v]): [string, number] => [n, v]),
     };
   }
-  if (g.paths?.length) return { kind: 'custom', paths: g.paths.length };
+  if (g.paths?.length) return { kind: 'custom', paths: g.paths.filter((p, i) => i === 0 || !p.cont).length };
   return { kind: 'unknown', name: g.preset ?? '' };
 }
 

@@ -348,7 +348,8 @@ export interface CxnRef {
 /**
  * A custom geometry (`a:custGeom`) built for one shape (M6, `geom.ts`): each path as an SVG-like string in its
  * own space (the deck's `w`/`h`, else the shape's box in logical px), the text rectangle and connection
- * sites in unit-square fractions of the box.
+ * sites in unit-square fractions of the box. A path too long for one string is a chain: its later pieces
+ * have `cont` (`ShapeGeom.paths[].cont`: drawn as one path with the pieces before them).
  */
 export interface CustomPaths {
   paths: {
@@ -357,6 +358,7 @@ export interface CustomPaths {
     h: number;
     fill?: 'norm' | 'none' | 'lighten' | 'lightenLess' | 'darken' | 'darkenLess';
     stroke?: boolean;
+    cont?: boolean;
   }[];
   /** Points of all paths (an arc counts its cubic segments' points). */
   points: number;

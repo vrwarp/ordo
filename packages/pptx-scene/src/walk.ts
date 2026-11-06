@@ -16,8 +16,9 @@
  *   rotation and flips about its centre; a missing offset is the origin, ext and chExt substitute for each
  *   other; depth ≤ 32. A child's own box is scaled along the group's axes before its own rotation
  *   (`boxAffine`), as LibreOffice places it: PowerPoint has no shear (ungrouping turns every child back into
- *   a box and a rotation). A child the plain composed affine would shear (rotated in a group scaled
- *   unevenly) is still marked residual (design/27 §4), and drawn so in M1.
+ *   a box and a rotation), and a box turned by 45° up to 135° (or 225° up to 315°) takes the scales the
+ *   other way round. A child the plain composed affine would shear (rotated in a group scaled unevenly) is
+ *   approx (reason 'shear'): placed as LibreOffice 24.2 places it, measured with a probe deck.
  * - Graphic frames are residual (charts, OLE), except tables, which `tables.ts` reads (M6): each table's
  *   objects form a group of their own, or join the top-level group they are in; and SmartArt whose deck
  *   holds PowerPoint's drawing of it (M6, `smartart.ts`): its shapes are read like these, as the frame's
@@ -187,19 +188,33 @@ export function alternateBranch(ac: XNode): XNode | undefined {
   return chooseAlternate(ac);
 }
 
+/** How far a group's scale may be from 1 and still count as none (`boxAffine`). */
+const UNSCALED = 1e-9;
+
 /**
  * The unit-square affine of an `a:xfrm` box in a tree whose coordinates `map` takes to the slide: the box's
  * centre goes through `map`, its sides are scaled by `map`'s own axis scales, then its rotation and flips
  * apply, then `map`'s rotation and flips. The same as `map ∘ xfrmAffine(x)` unless the box is rotated in a
  * tree scaled unevenly, where that would shear it.
+ *
+ * A box turned by 45° up to 135°, or 225° up to 315°, in a scaled tree has the scales swapped: its width
+ * takes the tree's vertical scale and its height the horizontal one, so that it grows along the axis it
+ * shows on the slide. That is how LibreOffice imports it, saying MSO does the same (oox
+ * `Shape::createAndInsert`, `lcl_doSpecialMSOWidthHeightToggle`); a probe deck of turned children in
+ * unevenly scaled, rotated, mirrored and nested groups draws as LibreOffice 24.2 draws it. (LibreOffice's
+ * newer source also turns a swapped box in a mirrored tree a further half turn; 24.2 does not.)
  */
 export function boxAffine(map: Affine, x: Xfrm): Affine {
   const sx = Math.hypot(map[0], map[1]);
   const sy = Math.hypot(map[2], map[3]);
   if (!(sx > 0 && sy > 0 && Number.isFinite(sx) && Number.isFinite(sy))) return multiply(map, xfrmAffine(x));
   const [cx, cy] = apply(map, x.x + x.cx / 2, x.y + x.cy / 2);
-  const w = x.cx * sx;
-  const h = x.cy * sy;
+  const deg = Math.trunc(x.rot);
+  const swap =
+    (Math.abs(sx - 1) > UNSCALED || Math.abs(sy - 1) > UNSCALED) &&
+    ((deg >= 45 && deg < 135) || (deg >= 225 && deg < 315));
+  const w = x.cx * (swap ? sy : sx);
+  const h = x.cy * (swap ? sx : sy);
   // The box about the origin, then map's rotation and flips (its columns made unit length).
   const local = xfrmAffine({ ...x, x: -w / 2, y: -h / 2, cx: w, cy: h });
   const m = multiply([map[0] / sx, map[1] / sx, map[2] / sy, map[3] / sy, 0, 0], local);
@@ -210,7 +225,7 @@ export function boxAffine(map: Affine, x: Xfrm): Affine {
 export interface GroupInherit {
   /** What `a:grpFill` stands for. */
   fill?: Fill;
-  /** The group itself would be sheared: its children are placed approximately (marked residual). */
+  /** The group itself would be sheared: its children are placed as LibreOffice places them (approx). */
   sheared?: boolean;
 }
 
@@ -357,12 +372,16 @@ export function walkTree(
         break;
       }
     }
-    if (sheared && el.name !== 'p:grpSp')
+    // A child the composed affine would shear is placed by `boxAffine`, as LibreOffice places it; whether
+    // PowerPoint places every such child so is not measured: approx.
+    if (sheared && el.name !== 'p:grpSp' && st.out.length > at) {
+      ctx.log('a shape turned in an unevenly scaled group is placed as LibreOffice places it');
       for (let i = at; i < st.out.length; i++) {
         const e = st.out[i]!;
-        e.support = 'residual';
+        if (e.support === 'native') e.support = 'approx';
         e.reasons = [...(e.reasons ?? []).filter((r) => r !== 'shear'), 'shear'];
       }
+    }
   }
 }
 

@@ -18,7 +18,10 @@ import { type BuiltGeom, COORD_LIMIT, type GeomPath, presetGeometry } from './pa
  *   shape keeps its corners);
  * - else the stored paths: each `d` re-tokenised by `parsePathData` (M L Q C Z and numbers, at most 4,096
  *   points; the string itself never reaches a Path2D), scaled from its own w x h space to the box (a side of 0
- *   is the box's own units), with its fill mode and stroke flag; the text rect is the box;
+ *   is the box's own units), with its fill mode and stroke flag; a path marked `cont` is appended to the one
+ *   before it (its pieces become the one path they were cut from: one even-odd fill, holes and all, in the
+ *   first piece's fill mode and stroke flag; at most GEOM_LIMITS.paths x GEOM_LIMITS.points points); the
+ *   text rect is the box;
  * - else undefined: the caller draws the legacy shape (`legacyGeometry`).
  * Results are memoised per geometry object and box size.
  */
@@ -75,7 +78,18 @@ export function storedGeometry(g: ShapeGeom | undefined, w: number, h: number): 
     built = presetGeometry(g.preset, bw, bh, adj as [string, number][] | undefined);
   }
   if (!built && Array.isArray(g.paths) && g.paths.length) {
-    const paths = g.paths.slice(0, GEOM_LIMITS.paths).map((p) => storedPath(p, bw, bh));
+    const paths: GeomPath[] = [];
+    for (const p of g.paths.slice(0, GEOM_LIMITS.paths)) {
+      const path = storedPath(p, bw, bh);
+      const prev = paths[paths.length - 1];
+      if (p?.cont === true && prev)
+        paths[paths.length - 1] = {
+          ...prev,
+          cmds: prev.cmds.concat(path.cmds),
+          pts: prev.pts.concat(path.pts),
+        };
+      else paths.push(path);
+    }
     built = { w: bw, h: bh, paths, text: { l: 0, t: 0, r: bw, b: bh }, sites: [] };
   }
   memo.set(g, { w: bw, h: bh, built });

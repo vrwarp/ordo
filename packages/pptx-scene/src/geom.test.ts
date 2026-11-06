@@ -1,6 +1,8 @@
 import { type ImageObject, type ShapeObject, Slide, type SlideObject, type TextObject } from '@ordo/domain';
 import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
+import { CMD_CLOSE, CMD_MOVE } from '@ordo/renderer/geom/ops.ts';
 import { presetGeometry } from '@ordo/renderer/geom/path.ts';
+import { storedGeometry } from '@ordo/renderer/geom/stored.ts';
 import { describe, expect, it } from 'vitest';
 import type { EmitOptions } from './emit.ts';
 import { apply } from './frame.ts';
@@ -77,6 +79,37 @@ const Z = '<a:close/>';
 
 /** The numbers of a path string. */
 const numbers = (d: string) => (d.match(/-?\d+(\.\d+)?(e-?\d+)?/g) ?? []).map(Number);
+
+/**
+ * A traced decoration as Google Slides writes it: one outline with 49 holes inside it (6,582 points), in a
+ * space of 7-digit EMU coordinates. Neither a bounding-box split nor one string can hold it, and the outline
+ * alone passes 40,000 characters.
+ */
+const TRACED_W = 2_334_080;
+const TRACED_H = 3_165_466;
+const TRACED = (() => {
+  const W = TRACED_W;
+  const H = TRACED_H;
+  const r = (v: number) => Math.round(v);
+  const cubicRing = (cx: number, cy: number, rx: number, ry: number, n: number) => {
+    const at = (i: number): [number, number] => {
+      const a = (2 * Math.PI * i) / n;
+      return [r(cx + rx * Math.cos(a)), r(cy + ry * Math.sin(a))];
+    };
+    let out = `<a:moveTo>${pt(...at(0))}</a:moveTo>`;
+    for (let i = 0; i < n; i++)
+      out += `<a:cubicBezTo>${pt(...at(i + 1 / 3))}${pt(...at(i + 2 / 3))}${pt(...at(i + 1))}</a:cubicBezTo>`;
+    return out;
+  };
+  // The outline: 1,327 cubic segments and 2 lines (3,985 points with its move and close).
+  let d = cubicRing(W / 2, H / 2, W * 0.48, H * 0.48, 1_327);
+  d += `${L(r(W * 0.98), r(H / 2) + 1)}${L(r(W * 0.98), r(H / 2))}${Z}`;
+  // 49 holes of 17 cubic segments (53 points each) on a 7 x 7 grid well inside it.
+  for (let i = 0; i < 49; i++)
+    d +=
+      cubicRing(W * (0.3 + 0.066 * (i % 7)), H * (0.3 + 0.066 * Math.floor(i / 7)), W / 60, H / 60, 17) + Z;
+  return `<a:path w="${W}" h="${H}">${d}</a:path>`;
+})();
 
 describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
   it('writes each path in its own space with arcs as cubics, fill modes, stroke flags, text rect and sites', () => {
@@ -163,13 +196,56 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     const [path] = shapes(objects)[0]!.geom!.paths!;
     expect(shapes(objects)[0]!.geom!.paths).toHaveLength(1); // one path: its sub-paths share the fill rule
     expect(path!.d.replace(/[-\d. ]/g, '')).toBe('MC'.repeat(400));
-    // Past the render clamp's points once built, the joined path is LibreOffice's.
+    // Past the render clamp's points once built, with every sub-path overlapping the others, the joined
+    // path is a chain of two pieces cut at a sub-path's start, drawn as one path.
     let lines = '';
     for (let i = 0; i < 1_100; i++) lines += `${M(i % 10, 0)}${L(1, 1)}${L(2, 2)}${L(3, 3)}`;
     const big = emitOne({
       slides: [{ shapes: custom(2, { paths: `<a:path w="10" h="10">${lines}</a:path>` }) }],
     });
-    expect(big.scene.slides[0]!.elements[0]).toMatchObject({ support: 'residual', custom: { over: true } });
+    expect(big.scene.slides[0]!.elements[0]!.support).toBe('native');
+    const chain = shapes(big.objects)[0]!.geom!.paths!;
+    expect(chain.map((p) => p.cont)).toEqual([undefined, true]);
+    expect(chain.map((p) => (p.d.match(/[ML]/g) ?? []).length)).toEqual([4_096, 304]);
+    expect(chain.every((p) => p.d.startsWith('M '))).toBe(true);
+    expect(chain.map((p) => p.d).join(' ')).toBe(
+      (lines.match(/<a:pt x="\d+" y="\d+"\/>/g) ?? [])
+        .map((t, i) => `${i % 4 ? 'L' : 'M'} ${numbers(t).join(' ')}`)
+        .join(' '),
+    );
+  });
+
+  it('stores a traced outline holding all its holes as a chain: 6,582 points, 49 holes (cont)', () => {
+    // The outline alone passes 40,000 characters, so it is cut between two of its commands too.
+    const { scene, objects } = emitOne({ slides: [{ shapes: custom(2, { paths: TRACED }) }] });
+    const e = scene.slides[0]!.elements[0] as ShapeElement;
+    expect(e.support).toBe('native');
+    expect(e.custom!.over).toBeUndefined();
+    expect(e.custom!.points).toBe(6_582);
+    const chain = shapes(objects)[0]!.geom!.paths!;
+    expect(chain.length).toBeGreaterThan(2);
+    expect(chain.length).toBeLessThanOrEqual(8);
+    expect(chain[0]!.cont).toBeUndefined();
+    expect(chain.slice(1).every((p) => p.cont === true)).toBe(true);
+    const pointsOf = (s: string) => (s.match(/[MLZ]/g) ?? []).length + 3 * (s.match(/C/g) ?? []).length;
+    for (const p of chain) {
+      expect(p).toMatchObject({ w: TRACED_W, h: TRACED_H });
+      expect(p.d.length).toBeLessThanOrEqual(MAX_PATH_CHARS);
+      expect(pointsOf(p.d)).toBeLessThanOrEqual(4_096);
+    }
+    // The outline goes on in the second piece without a move: one sub-path, cut between two commands.
+    expect(chain[1]!.d.startsWith('C ')).toBe(true);
+    // Joined, the pieces are the path: 50 sub-paths, all its points.
+    const whole = chain.map((p) => p.d).join(' ');
+    expect((whole.match(/M/g) ?? []).length).toBe(50);
+    expect(pointsOf(whole)).toBe(6_582);
+    // The renderer draws them as that one path (one even-odd fill: the holes stay holes).
+    const built = storedGeometry(shapes(objects)[0]!.geom, 300, 400)!;
+    expect(built.paths).toHaveLength(1);
+    expect(built.paths[0]!.cmds.filter((c) => c === CMD_MOVE)).toHaveLength(50);
+    expect(built.paths[0]!.cmds.filter((c) => c === CMD_CLOSE)).toHaveLength(50);
+    // An older M6 build fills each piece on its own; a pre-M6 build draws the legacy rectangle.
+    expect(shapes(objects)[0]).toMatchObject({ shape: 'rect', fill: RED });
   });
 
   it('splits a path past the render clamp at sub-paths that do not overlap', () => {
@@ -186,11 +262,22 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     expect(paths.every((p) => points(p.d) <= 4_096)).toBe(true);
   });
 
-  it('leaves a path whose string passes the schema bound at every precision to LibreOffice', () => {
-    let far = M(0, 0);
-    for (let i = 0; i < 3_000; i++) far += L(123_456_789.5 + i, 987_654_321.25 - i);
-    const geom = { paths: `<a:path w="1000000000" h="1000000000">${far}${Z}</a:path>` };
-    const { scene } = emitOne({ slides: [{ shapes: custom(2, geom) }] });
+  it('chains a path whose string passes the schema bound, and leaves one past 8 pieces to LibreOffice', () => {
+    const far = (n: number) => {
+      let out = M(0, 0);
+      for (let i = 0; i < n; i++) out += L(123_456_789.5 + i, 987_654_321.25 - i);
+      return out;
+    };
+    const space = 'w="1000000000" h="1000000000"';
+    // 3,001 points of about 22 characters each: two pieces at every decimal the space keeps.
+    const two = emitOne({
+      slides: [{ shapes: custom(2, { paths: `<a:path ${space}>${far(3_000)}${Z}</a:path>` }) }],
+    });
+    expect(two.scene.slides[0]!.elements[0]!.support).toBe('native');
+    expect(shapes(two.objects)[0]!.geom!.paths!.map((p) => p.cont)).toEqual([undefined, true]);
+    // Four sub-paths of 4,000 points: about 350,000 characters, past 8 pieces of 40,000.
+    const many = `<a:path ${space}>${[0, 1, 2, 3].map(() => far(3_999) + Z).join('')}</a:path>`;
+    const { scene } = emitOne({ slides: [{ shapes: custom(2, { paths: many }) }] });
     const e = scene.slides[0]!.elements[0] as ShapeElement;
     expect(e.custom!.over).toBe(true);
     expect(e.support).toBe('residual');
@@ -759,6 +846,45 @@ describe('pictures (ImageObject.mask, flips, outlines)', () => {
     expect(c!.mask).toEqual({ paths: [{ d: 'M 1 0 L 2 2 L 0 2 Z', w: 2, h: 2 }] });
     expect(e).toMatchObject({ mask: { preset: 'ellipse' }, flipH: true, radius: PX / 2 });
     expect(notes.join(' ')).not.toMatch(/clipped to|unflipped/);
+  });
+
+  it('clips a picture to a traced outline stored as a chain, also when the mask is carried into its box', () => {
+    const traced = pic({ id: 3, x: 0, y: 0, cx: IN, cy: IN, rId: 'rId2' }).replace(
+      '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>',
+      custGeom({ paths: TRACED }),
+    );
+    // A shape's picture fill turned 100°: its geometry is carried into the picture's turned box as paths.
+    const blip =
+      '<a:blipFill rotWithShape="1"><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>';
+    const filled = sp({
+      id: 4,
+      x: 0,
+      y: 0,
+      cx: 2 * IN,
+      cy: IN,
+      rot: 100,
+      geom: 'none',
+      fill: custGeom({ paths: TRACED }) + blip,
+    });
+    const { objects } = emitOne({ slides: [{ shapes: traced + filled, rels }] });
+    const [a, b] = images(objects);
+    for (const img of [a, b]) {
+      const chain = img!.mask!.paths!;
+      expect(chain.length).toBeGreaterThan(2);
+      expect(chain[0]!.cont).toBeUndefined();
+      expect(chain.slice(1).every((p) => p.cont === true)).toBe(true);
+      expect(chain.every((p) => p.d.length <= MAX_PATH_CHARS)).toBe(true);
+      expect(
+        (
+          chain
+            .map((p) => p.d)
+            .join(' ')
+            .match(/M/g) ?? []
+        ).length,
+      ).toBe(50);
+    }
+    // Carried into the box: in the box's own px, not the deck's space.
+    expect(b!.mask!.paths![0]!.w).toBeCloseTo(b!.box.w, 3);
   });
 
   it('never mirrors a shape’s picture fill and squares it to the nearest quarter turn, as LibreOffice draws it', () => {
