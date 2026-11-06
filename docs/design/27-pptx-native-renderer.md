@@ -901,7 +901,20 @@ The exact `'lighter'` crossfade (`canvas2d.ts:60-85`) is unchanged.
 - `referencedFontFamilies` and `jobFontFamilies` include run fonts, bullet fonts and `fallbackFonts`, so goLive ships them by exact family and outputs pre-cache them in OPFS.
 - Font loads that fail are retried with backoff instead of only being logged.
 
+**As built in M3** (`apps/hub/src/fonts/bundled.ts`, licences in `apps/hub/src/fonts/LICENSES.md`):
+- The image installs `fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter` (bookworm, all SIL OFL 1.1) and keeps their copyright files. `ORDO_FONTS_DIR` (the image sets `/usr/share/fonts`) is where the hub looks; unset, nothing is registered.
+- Faces: Inter, Carlito, Caladea, Liberation Sans, Serif and Mono and Noto Sans in regular, italic, bold and bold italic; the Noto script faces in regular and bold.
+- Registration runs at every start. An unchanged file changes nothing. A changed file (a newer image) replaces the row's file. A face the library already has from an upload or Google Fonts (same family, weight, style and range) is left alone. Bundled rows no longer listed are removed. Bundled rows cannot be deleted (409).
+- The Hebrew, Arabic, Devanagari, Tamil, Thai and Myanmar faces carry their script's `unicodeRange`, so a script fallback listed before a deck's own family never draws its Latin text. Noto Sans has no range, because people also pick it for Latin text.
+- Liberation Sans Narrow is not bundled: only Liberation 1.x has it, under the GPL with a font exception.
+- The output-config fonts are every library face except the CJK fallback families (`isOnDemandFontFamily`: the Han, Kana and Hangul entries of `SCRIPT_FALLBACK_FONTS`), unless a look's text style names one.
+- The goLive scan adds `SCRIPT_FALLBACK_FONTS` of every script in the presentations' text objects (`scriptFontFamilies` in `resolve.ts`), so a manifest also carries the bundled face of each script it uses. Han in a text with Kana or Hangul counts as Japanese or Korean. Han alone names every CJK family, and goLive ships those the venue added.
+
 **Google Fonts.** `parseFontCss` (`google.ts:72-84`) keeps every unicode-range subset. Each subset is a Font row with `unicodeRange`, which the three drawers pass to `FontFace`. A bilingual deck's Hebrew or Arabic family therefore arrives with its script, and subsets of one family, weight and style no longer collide.
+- As built in M3: the range is stored normalised (sorted, merged, at most 4,000 characters, coarsened by merging the closest neighbours when longer).
+- A family keeps at most 400 faces. CJK families come in about a hundred slices per weight, so above that only the weights nearest 400 and 700 are kept.
+- A download replaces the family's earlier Google faces, including the Latin-only faces of downloads made before subsets were kept.
+- `FontLoad.unicodeRange` carries the range to the asset worker.
 
 **Non-metric families.** Century Gothic, Tahoma, Aptos, Gill Sans and Trebuchet are named in the import card: "Upload Century Gothic for exact line breaks". Uploading the real font fixes it automatically, because the family stays first in the stack.
 

@@ -89,7 +89,14 @@ export type FromRender =
   | { t: 'canvasUnused' };
 
 // ---- main -> asset ----
-export type FontLoad = { family: string; weight: number; style: 'normal' | 'italic'; hash: string };
+export type FontLoad = {
+  family: string;
+  weight: number;
+  style: 'normal' | 'italic';
+  hash: string;
+  /** `Font.unicodeRange`: the CSS unicode-range of a subset or script face, for its FontFace (design/27 §10). */
+  unicodeRange?: string;
+};
 
 export type AssetJob =
   | {
@@ -162,5 +169,11 @@ export type FromAsset =
   | { t: 'fonts'; loaded: number; failed: string[] };
 
 export function fontLoads(fonts: Font[]): FontLoad[] {
-  return fonts.map((f) => ({ family: f.family, weight: f.weight, style: f.style, hash: f.file.hash }));
+  return fonts.map((f) => ({
+    family: f.family,
+    weight: f.weight,
+    style: f.style,
+    hash: f.file.hash,
+    ...(f.unicodeRange ? { unicodeRange: f.unicodeRange } : {}),
+  }));
 }

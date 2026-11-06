@@ -5,7 +5,7 @@
  * the editor a second, never the service.
  *
  * Internal endpoints for the live process (`/internal/*`, secret required):
- * - GET /internal/context: every setting (with output tokens), fonts, the logo media.
+ * - GET /internal/context: every setting (with output tokens), the output-config fonts, the logo media.
  * - GET /internal/golive/:playlistId: the stored playlist, its stored presentations (unvalidated: the live
  *   process validates and quarantines), the media they reference, fonts, looks and general settings.
  */
@@ -18,6 +18,7 @@ import { Backups } from './backup.ts';
 import { type HubConfig, loadConfig } from './config.ts';
 import { type DB, openDb } from './db.ts';
 import { errorMessage, notFound } from './errors.ts';
+import { outputFonts } from './fonts/bundled.ts';
 import { FontService } from './fonts/service.ts';
 import { venueTimeZone } from './hub.ts';
 import { createHttpApp, HEADER_INTERNAL, HEADER_LIBRARY_SEQ, withTimeout } from './http.ts';
@@ -153,7 +154,8 @@ export async function createLibraryProcess(
     const logoId = settings.general.logoMediaId;
     return {
       settings,
-      fonts: lib.listFonts(),
+      // What outputs receive through their config: every face but the CJK fallbacks (design/27 §10).
+      fonts: outputFonts(lib.listFonts(), settings.looks),
       logo: logoId ? lib.media.get(logoId) : undefined,
       // Everything up to this library sequence is in this copy (the live proxy's read-your-writes barrier).
       seq: lib.seq(),

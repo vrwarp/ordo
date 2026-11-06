@@ -15,6 +15,27 @@ export const KEY_GREEN: Rgba = { r: 0, g: 255, b: 0, a: 1 };
 
 export const DEFAULT_FONT = 'Inter';
 
+/**
+ * Script fallback families (design/27 §10) by ISO 15924 code, the codes `textScripts` reports: the faces
+ * ordo bundles for every output (M3) and, for Han, Kana and Hangul, the Noto CJK families shipped when the
+ * text needs them. The drawers' font resolver tries them, when loaded, after a run's own family and its
+ * `fallbackFonts`, for text in that script.
+ */
+export const SCRIPT_FALLBACK_FONTS: Readonly<Record<string, readonly string[]>> = {
+  Grek: ['Noto Sans'],
+  Cyrl: ['Noto Sans'],
+  Hebr: ['Noto Sans Hebrew'],
+  Arab: ['Noto Naskh Arabic'],
+  Deva: ['Noto Sans Devanagari'],
+  Taml: ['Noto Sans Tamil'],
+  Thai: ['Noto Sans Thai'],
+  Mymr: ['Noto Sans Myanmar'],
+  Hani: ['Noto Sans SC', 'Noto Sans TC', 'Noto Sans JP', 'Noto Sans KR'],
+  Hira: ['Noto Sans JP'],
+  Kana: ['Noto Sans JP'],
+  Hang: ['Noto Sans KR'],
+};
+
 export const DEFAULT_LYRIC_STYLE: TextStyle = {
   fontFamily: DEFAULT_FONT,
   fontWeight: 700,

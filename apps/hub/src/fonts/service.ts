@@ -7,6 +7,7 @@ import type { JobCtx, JobQueue } from '../jobs.ts';
 import type { Library } from '../library.ts';
 import { cpuPool, WorkerStartError } from '../pool.ts';
 import { extOf, readHead, sniff, type Store } from '../store.ts';
+import { type BundledResult, registerBundledFonts } from './bundled.ts';
 import { fetchFamilyCss, parseFontCss } from './google.ts';
 import { type FontFace, faceFromFilename, readFontFace } from './sfnt.ts';
 
@@ -29,6 +30,12 @@ async function parseFontFace(buf: Uint8Array): Promise<FontFace> {
 }
 
 export class FontService {
+  /**
+   * The registration of the bundled fonts started with the service (fonts/bundled.ts): undefined without
+   * `cfg.fontsDir`, or when it failed (logged). Never rejects.
+   */
+  readonly bundled: Promise<BundledResult | undefined>;
+
   constructor(
     private lib: Library,
     private store: Store,
@@ -37,6 +44,15 @@ export class FontService {
     private log: Logger,
   ) {
     jobs.register<{ family: string }>('font-google', (ctx) => this.googleJob(ctx));
+    this.bundled = cfg.fontsDir ? this.registerBundled(cfg.fontsDir) : Promise.resolve(undefined);
+  }
+
+  /** Register the bundled faces installed below `dir` (idempotent; see fonts/bundled.ts). Never rejects. */
+  registerBundled(dir: string): Promise<BundledResult | undefined> {
+    return registerBundledFonts(dir, { lib: this.lib, store: this.store, log: this.log }).catch((e) => {
+      this.log.error({ dir, err: (e as Error).message }, 'bundled fonts not registered');
+      return undefined;
+    });
   }
 
   /**
@@ -88,6 +104,9 @@ export class FontService {
   }
 
   async remove(id: string): Promise<Font | undefined> {
+    // Bundled faces come back at the next start and outputs rely on them (design/27 §10): not deletable.
+    if (this.lib.getFont(id)?.source === 'bundled')
+      throw new HttpError(409, 'bundled_font', 'This font is bundled with ordo and cannot be deleted');
     const f = this.lib.deleteFont(id);
     if (!f) return undefined;
     this.lib.emit([{ kind: 'font', id, deleted: true }]);
@@ -109,6 +128,7 @@ export class FontService {
     ctx.log(`${faces.length} face(s) for ${faces[0]!.family}`);
     const byUrl = new Map<string, Awaited<ReturnType<Store['putBytes']>>>();
     const out: string[] = [];
+    const family = faces[0]!.family;
     let i = 0;
     for (const f of faces) {
       if (ctx.signal.aborted) throw new Error('cancelled');
@@ -131,12 +151,31 @@ export class FontService {
         style: f.style,
         file: ref,
         source: 'google',
+        ...(f.unicodeRange ? { unicodeRange: f.unicodeRange } : {}),
       });
       this.lib.emit([{ kind: 'font', id: font.id, entity: font }]);
       out.push(font.id);
       ctx.progress(++i / faces.length);
     }
-    ctx.log(`stored ${out.length} face(s), ${byUrl.size} file(s)`);
+    const removed = await this.dropStaleGoogle(family, new Set(out));
+    ctx.log(
+      `stored ${out.length} face(s), ${byUrl.size} file(s)${removed ? `; removed ${removed} earlier face(s)` : ''}`,
+    );
     return { fonts: out };
+  }
+
+  /**
+   * Remove the family's Google faces this download did not write: the latin-only faces of downloads made
+   * before subsets were kept, and subsets Google no longer serves (design/27 §10).
+   */
+  private async dropStaleGoogle(family: string, keep: Set<string>): Promise<number> {
+    const stale = this.lib
+      .listFonts()
+      .filter((f) => f.source === 'google' && f.family === family && !keep.has(f.id));
+    if (!stale.length) return 0;
+    for (const f of stale) this.lib.deleteFont(f.id);
+    this.lib.emit(stale.map((f) => ({ kind: 'font' as const, id: f.id, deleted: true })));
+    for (const h of new Set(stale.map((f) => f.file.hash))) await this.store.release(h);
+    return stale.length;
   }
 }

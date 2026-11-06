@@ -49,13 +49,81 @@ export type ParsedFace = {
   weights: number[];
   url: string;
   subset?: string;
+  /** CSS unicode-range of the subset (normalised, `normalizeUnicodeRange`); absent: the whole font. */
+  unicodeRange?: string;
 };
 
-/** Parse @font-face blocks; keep one block (the latin subset) per style and weight. */
+/** Bounds of one Google family (design/27 §10). */
+export const GOOGLE_LIMITS = {
+  /** Faces (subset × weight × style) stored per family; above it, fewer weights are kept. */
+  faces: 400,
+  /** Characters of the CSS answer parsed. */
+  cssChars: 8 * 1024 * 1024,
+  /** Characters of a stored unicode-range (the `Font.unicodeRange` bound). */
+  rangeChars: 4000,
+};
+
+const MAX_CODE_POINT = 0x10ffff;
+
+/**
+ * A CSS `unicode-range` as ordo stores it (`Font.unicodeRange`): its ranges sorted and merged, in upper-case
+ * hex, comma-separated without spaces (`U+0-FF,U+131,U+2000-206F`). Malformed tokens are dropped; wildcards
+ * (`U+4??`) become ranges. Above `max` characters the closest neighbouring ranges are merged until it fits:
+ * a wider range only lets the browser try the face for characters it may lack, and it then falls back to
+ * the next face. Undefined (no range: the face covers everything) for nothing usable, for the whole code
+ * space, or when not even one range fits `max`.
+ */
+export function normalizeUnicodeRange(raw: string, max = GOOGLE_LIMITS.rangeChars): string | undefined {
+  const ranges: [number, number][] = [];
+  for (const tok of raw.slice(0, 200_000).split(',')) {
+    const m = /^\s*u\+([0-9a-f?]{1,6})(?:-([0-9a-f]{1,6}))?\s*$/i.exec(tok);
+    if (!m) continue;
+    const a = m[1]!;
+    if (a.includes('?') && m[2]) continue;
+    if (/\?[0-9a-f]/i.test(a)) continue; // wildcards only at the end
+    const lo = Number.parseInt(a.replace(/\?/g, '0'), 16);
+    const hi = m[2] ? Number.parseInt(m[2], 16) : Number.parseInt(a.replace(/\?/g, 'f'), 16);
+    if (!(lo <= hi) || lo > MAX_CODE_POINT) continue;
+    ranges.push([lo, Math.min(hi, MAX_CODE_POINT)]);
+  }
+  if (!ranges.length) return undefined;
+  ranges.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  const merged: [number, number][] = [];
+  for (const r of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && r[0] <= last[1] + 1) last[1] = Math.max(last[1], r[1]);
+    else merged.push([r[0], r[1]]);
+  }
+  if (merged.length === 1 && merged[0]![0] === 0 && merged[0]![1] === MAX_CODE_POINT) return undefined;
+  const hex = (n: number) => n.toString(16).toUpperCase();
+  const token = ([lo, hi]: [number, number]) => (lo === hi ? `U+${hex(lo)}` : `U+${hex(lo)}-${hex(hi)}`);
+  const text = () => merged.map(token).join(',');
+  let out = text();
+  while (out.length > max && merged.length > 1) {
+    // Merge the neighbours with the smallest gap; a few at a time keeps this near-linear on long lists.
+    const over = out.length - max;
+    const gaps = merged.slice(1).map((r, i) => [r[0] - merged[i]![1], i] as const);
+    gaps.sort((x, y) => x[0] - y[0]);
+    const take = new Set(gaps.slice(0, Math.max(1, Math.ceil(over / 16))).map(([, i]) => i));
+    for (let i = merged.length - 2; i >= 0; i--)
+      if (take.has(i)) merged.splice(i, 2, [merged[i]![0], merged[i + 1]![1]]);
+    out = text();
+  }
+  return out.length <= max ? out : undefined;
+}
+
+/**
+ * Parse @font-face blocks: every unicode-range subset of every style and weight is its own face (design/27
+ * §10), so a bilingual deck's Hebrew or Arabic family arrives with its script and subsets of one family,
+ * weight and style do not replace each other. A weight range (variable font) gives one face per hundred.
+ * Above `GOOGLE_LIMITS.faces` (CJK families come in about a hundred slices per weight) only the weights
+ * nearest 400 and 700 are kept, then only the one nearest 400.
+ */
 export function parseFontCss(css: string): ParsedFace[] {
   const re = /(?:\/\*\s*([\w-]+)\s*\*\/\s*)?@font-face\s*\{([^}]*)\}/g;
-  const all: ParsedFace[] = [];
-  for (let m = re.exec(css); m; m = re.exec(css)) {
+  const text = css.slice(0, GOOGLE_LIMITS.cssChars);
+  const out = new Map<string, ParsedFace>();
+  for (let m = re.exec(text); m; m = re.exec(text)) {
     const body = m[2]!;
     const prop = (name: string) => new RegExp(`${name}\\s*:\\s*([^;]+);?`, 'i').exec(body)?.[1]?.trim();
     const family = prop('font-family')?.replace(/^['"]|['"]$/g, '');
@@ -66,22 +134,46 @@ export function parseFontCss(css: string): ParsedFace[] {
     let weights: number[];
     if (wRaw.length >= 2 && Number.isFinite(wRaw[0]) && Number.isFinite(wRaw[1])) {
       weights = [];
-      for (let w = Math.ceil(wRaw[0]! / 100) * 100; w <= wRaw[1]!; w += 100) weights.push(w);
-    } else weights = [Number.isFinite(wRaw[0]) ? wRaw[0]! : 400];
-    const range = prop('unicode-range') ?? '';
-    const subset = m[1] ?? (/U\+0000-00FF/i.test(range) ? 'latin' : undefined);
-    all.push({ family, style, weights, url, subset });
-  }
-  // Choose per (style, weight): latin, else a block without unicode-range, else the first.
-  const chosen = new Map<string, ParsedFace>();
-  const rank = (f: ParsedFace) => (f.subset === 'latin' ? 2 : f.subset === undefined ? 1 : 0);
-  for (const f of all)
-    for (const w of f.weights) {
-      const key = `${f.style}:${w}`;
-      const cur = chosen.get(key);
-      if (!cur || rank(f) > rank(cur)) chosen.set(key, { ...f, weights: [w] });
+      for (let w = Math.ceil(wRaw[0]! / 100) * 100; w <= Math.min(wRaw[1]!, 1000); w += 100) weights.push(w);
+    } else weights = [Number.isFinite(wRaw[0]) ? Math.min(Math.max(wRaw[0]!, 1), 1000) : 400];
+    const range = prop('unicode-range');
+    const unicodeRange = range ? normalizeUnicodeRange(range) : undefined;
+    const subset = m[1] ?? (/^U\+0-FF(,|$)/.test(unicodeRange ?? '') ? 'latin' : undefined);
+    for (const w of weights) {
+      const key = `${style}:${w}:${url}`;
+      if (!out.has(key)) out.set(key, { family, style, weights: [w], url, subset, unicodeRange });
     }
-  return [...chosen.values()];
+  }
+  return limitFaces([...out.values()], GOOGLE_LIMITS.faces);
+}
+
+/** Keep at most `max` faces: fewer weights first (nearest 400 and 700 per style, then nearest 400). */
+function limitFaces(faces: ParsedFace[], max: number): ParsedFace[] {
+  let kept = faces;
+  for (const [targets, styles] of [
+    [
+      [400, 700],
+      ['normal', 'italic'],
+    ],
+    [[400, 700], ['normal']],
+    [[400], ['normal']],
+  ] as const) {
+    if (kept.length <= max) return kept;
+    const keep = new Set<string>();
+    for (const style of styles) {
+      const ws = [...new Set(kept.filter((f) => f.style === style).map((f) => f.weights[0]!))];
+      for (const t of targets) {
+        const near = ws.reduce<number | undefined>(
+          (best, w) => (best === undefined || Math.abs(w - t) < Math.abs(best - t) ? w : best),
+          undefined,
+        );
+        if (near !== undefined) keep.add(`${style}:${near}`);
+      }
+    }
+    const next = kept.filter((f) => keep.has(`${f.style}:${f.weights[0]}`));
+    if (next.length) kept = next;
+  }
+  return kept.slice(0, max);
 }
 
 export async function fetchFamilyCss(

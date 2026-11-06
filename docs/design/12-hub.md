@@ -226,7 +226,7 @@ resumes them.
 | `pptx-render`     | `soffice --headless --convert-to pdf` then `pdf-render`                                                                                                                                                                                                                                                                                       | PNGs                                        |
 | `pptx-text`       | unzip `ppt/slides/slideN.xml`, read `<a:t>` runs and `<a:off>/<a:ext>` in EMU, convert to logical px                                                                                                                                                                                                                                          | ExtractedText[] per slide                   |
 | `pro7-import`     | `packages/importers` (protobuf decode) in a `worker_threads` worker, 500 documents per task so the worker's 512 MB heap bounds a task, not the library (the playlists are a last task against the index of every document decoded); zip uploads are streamed from disk, media entries spilled to `tmp/`, documents capped at 256 MB in memory | presentations, playlists, media uploads     |
-| `font-google`     | fetch the family's CSS from Google Fonts with a desktop UA, download referenced woff2 files, store as `Font` rows                                                                                                                                                                                                                             | fonts                                       |
+| `font-google`     | fetch the family's CSS from Google Fonts with a desktop UA, download referenced woff2 files, store each unicode-range subset as a `Font` row with `unicodeRange` (at most 400 per family; then only the weights nearest 400 and 700), and drop the family's earlier Google faces                                                              | fonts                                       |
 
 The Docker image includes `ffmpeg`, `poppler-utils`, LibreOffice (`libreoffice-impress`
 with a minimal font set plus the venue's uploaded fonts mounted so PPTX renders use them) and headless
@@ -247,6 +247,14 @@ images), every media item's delivery and poster, every font referenced by any te
 or look, the logo, holding slides, and the look definitions. It writes
 `{ seq, files: [{ hash, bytes, mime }], presentations: [...], looks: [...] }` and
 announces it. The manifest is immutable for the live session.
+
+Fonts on outputs (design/27 §10): the image installs the metric-compatible substitutes (Carlito, Caladea,
+Liberation), the Noto script fallbacks and Inter from Debian packages. At every start the library process
+registers them from `ORDO_FONTS_DIR` as `Font` rows with `source: 'bundled'`
+(`apps/hub/src/fonts/bundled.ts`). It works idempotently by SHA-256, and the venue's own faces of the same
+family, weight and style win. Every output receives every library font through `GET /output/config`
+whatever the playlist, except the CJK fallback families. The manifest adds the script fallback families
+of every script in the presentations' text, so CJK faces ship only with Han, Kana or Hangul text.
 
 ## Auth
 
