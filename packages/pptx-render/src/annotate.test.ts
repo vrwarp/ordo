@@ -683,6 +683,22 @@ describe('annotatePptx', () => {
       '<a:schemeClr val="bg2"></a:schemeClr>',
     );
     expect(withPlaceholderColor('<a:schemeClr val="phClr"/>', 'two<a:b/>')).toBeUndefined();
+    // A picture the theme recolours stays as pptx-preview draws it (a flat colour): it ignores duotone.
+    const toned = await annotatePptx(
+      await deck('', {
+        'ppt/theme/theme1.xml': theme.replace(
+          '<a:blip r:embed="rId5"/>',
+          '<a:blip r:embed="rId5"><a:duotone><a:schemeClr val="phClr"/><a:prstClr val="white"/></a:duotone></a:blip>',
+        ),
+        'ppt/theme/_rels/theme1.xml.rels': rels('image', '../media/image1.png').replace('rId1', 'rId5'),
+        'ppt/media/image1.png': png(96, 48),
+        'ppt/slideMasters/slideMaster1.xml': master,
+        '[Content_Types].xml': types(['slide1']),
+      }),
+    );
+    expect(
+      await (await JSZip.loadAsync(toned.bytes)).file('ppt/slideMasters/slideMaster1.xml')!.async('string'),
+    ).toContain('<p:bgRef idx="1003"><a:schemeClr val="bg2"/></p:bgRef>');
     // The slide shows its master's background, now a tiled picture.
     expect(a.backgrounds).toEqual([
       { slide: 0, tile: { w: 36 / 960, h: 18 / 540, x: 0, y: 0, flip: 'none' } },

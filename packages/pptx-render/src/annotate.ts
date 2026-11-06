@@ -1168,6 +1168,9 @@ async function themeBackgrounds(
         continue;
       }
       if (!fill?.startsWith('<a:blipFill')) continue;
+      // A picture the theme recolours (a dither recoloured to near white, say) is worse drawn as it is
+      // than the flat colour pptx-preview draws: pptx-preview ignores the recolouring.
+      if (/<a:(duotone|clrChange|clrRepl|grayscl|biLevel)\b/.test(fill)) continue;
       const id = /\sr:embed="([^"]*)"/.exec(fill)?.[1];
       const media = id ? await relById(themePart, id, read) : undefined;
       if (!media || !zip.file(media)) continue;

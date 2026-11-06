@@ -235,7 +235,7 @@ which ordo owns and can keep fixing:
   fill is written into the part, with a relationship to the theme's picture; a gradient among them (Office
   2007 and 2010 themes) is written in with the reference's colour in place of the placeholder colour
   (`phClr`), the placeholder's own tint or shade following it. Not corrected: a crop of a tiled picture,
-  duotone and other colour changes of the picture.
+  duotone and other colour changes of the picture (a theme picture with one is left as the flat colour pptx-preview draws).
 - **A slide's own colour mapping** (`p:clrMapOvr`, a dark slide in a light deck: bg1 → dk1, tx1 → lt1) is
   ignored by pptx-preview, which maps scheme colours through the master only: such a slide is pointed to a
   copy of its layout and master whose `p:clrMap` is the slide's mapping.
