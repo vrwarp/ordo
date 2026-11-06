@@ -122,8 +122,9 @@ Steps 1-4 of §6. **Done** (M2 wave 1); tests in `itemize.test.ts`, `breaks.test
   its '\n'; the last paragraph, which has none, takes the run covering the '\n' before it.
 - `breakOpportunities(text, start, end, lang)`: UAX#14 (`linebreak` 1.1.0, typed in `vendor.d.ts`, which
   `breaks.ts` references so every app that compiles the renderer gets it); no break on either side of
-  U+00A0, U+202F, U+2060, U+2007, U+2011, U+FEFF (`isGlue`), even after a space; SA runs (Thai, Lao, Khmer,
-  Myanmar) at `Intl.Segmenter` word boundaries, never before a mark, ๆ or ฯ; CJK by UAX#14's classes.
+  U+00A0, U+202F, U+2060, U+2007, U+2011, U+FEFF (`isGlue`), except after a breaking space (UAX#14 LB18,
+  as LibreOffice breaks ". \u00A0"); SA runs (Thai, Lao, Khmer, Myanmar) at `Intl.Segmenter` word
+  boundaries, never before a mark, ๆ or ฯ; CJK by UAX#14's classes.
   `isBreakSpace` (the trailing whitespace that hangs) is space, tab and the breaking space separators
   (U+1680, U+2000-U+200A except U+2007, U+205F, U+3000).
 - `graphemeBoundaries(text, start, end)`: clusters, i.e. `Intl.Segmenter` graphemes joined across a
