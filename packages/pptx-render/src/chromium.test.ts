@@ -140,6 +140,78 @@ describe.skipIf(!chromium)('renderWithPptxPreview (headless Chromium)', () => {
     expect(style(2)).toMatch(/clip-path: inset\(50% 0% 0%( 0%)?\);/);
   }, 120_000);
 
+  it('paints gradient text, colours from list styles, and lines that do not wrap', async () => {
+    const p = new pptxgen();
+    p.layout = 'LAYOUT_16x9';
+    const s = p.addSlide();
+    s.addText('Glory', { x: 1, y: 0.5, w: 4, h: 1, fontSize: 40, color: 'FF0000' });
+    // Wider than its box and centred: it grows both ways, as in PowerPoint and LibreOffice.
+    s.addText('Amazing grace how sweet the sound', {
+      x: 4,
+      y: 2.5,
+      w: 2,
+      h: 1,
+      fontSize: 28,
+      color: '000000',
+      align: 'center',
+      wrap: false,
+    });
+    s.addText('Hosanna', { x: 1, y: 4, w: 4, h: 1, fontSize: 40, color: '00FF00' });
+    s.addText('Holy', { x: 6, y: 4, w: 3, h: 1, fontSize: 40, color: 'FFFFFF' });
+    const z = await JSZip.loadAsync((await p.write({ outputType: 'nodebuffer' })) as Buffer);
+    let xml = await z.file('ppt/slides/slide1.xml')!.async('string');
+    xml = xml.replace(
+      '<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>',
+      '<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FFC000"/></a:gs><a:gs pos="100000"><a:srgbClr val="C00000"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill>',
+    );
+    // Holy is hollow: a 2 pt outline and no fill.
+    xml = xml.replace(
+      '<a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>',
+      '<a:ln w="25400"><a:solidFill><a:srgbClr val="C00000"/></a:solidFill></a:ln><a:noFill/>',
+    );
+    // Hosanna's colour comes from its shape's list style.
+    const at = xml.indexOf('Hosanna');
+    const head = xml.slice(0, at);
+    const cut = head.lastIndexOf('<a:lstStyle/>');
+    xml =
+      head.slice(0, cut) +
+      '<a:lstStyle><a:lvl1pPr><a:defRPr><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></a:defRPr></a:lvl1pPr></a:lstStyle>' +
+      head
+        .slice(cut + '<a:lstStyle/>'.length)
+        .replace('<a:solidFill><a:srgbClr val="00FF00"/></a:solidFill>', '') +
+      xml.slice(at);
+    z.file('ppt/slides/slide1.xml', xml);
+    const dir = await work();
+    const input = join(dir, 'in.pptx');
+    await writeFile(input, await z.generateAsync({ type: 'uint8array' }));
+    const out = await renderWithPptxPreview(input, join(dir, 'out'), {
+      chromium: chromium!,
+      timeoutMs: 60_000,
+      dumpSlides: [1],
+    });
+    const html = out.dom![1]!;
+    const tag = (text: string, name: string) => {
+      const i = html.indexOf(text);
+      return html.slice(html.lastIndexOf(`<${name}`, i), i);
+    };
+    // The box paints the gradient through its text, which is itself transparent.
+    const box = html.slice(html.lastIndexOf('class="text-wrapper"', html.indexOf('Glory')) - 200);
+    const boxStyle = box.slice(0, box.indexOf('Glory'));
+    expect(boxStyle).toContain('background-image: linear-gradient(90deg, rgb(255, 192, 0) 0%');
+    expect(boxStyle).toContain('background-clip: text');
+    expect(tag('Glory', 'span')).toContain('color: transparent');
+    const line = tag('Amazing grace', 'p');
+    expect(line).toContain('white-space: nowrap');
+    // 2 inches (144 px) less 14.4 px of margins, for a line about 415 px wide: half of the rest each side.
+    const left = Number(/margin: 0px 0px 0px (-[\d.]+)px/.exec(line)?.[1]);
+    const width = Number(/width: ([\d.]+)px/.exec(line)?.[1]);
+    expect(width).toBeGreaterThan(300);
+    expect(left).toBeCloseTo((129.6 - width) / 2, 0);
+    expect(tag('Hosanna', 'span')).toContain('color: rgb(0, 0, 255)');
+    expect(tag('Holy', 'span')).toContain('-webkit-text-stroke: 2px rgb(192, 0, 0)');
+    expect(tag('Holy', 'span')).toContain('-webkit-text-fill-color: transparent');
+  }, 120_000);
+
   it('takes the annotation from the caller when given one (the hub runs it on a worker)', async () => {
     const input = await deck(1);
     const dir = await work();

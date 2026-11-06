@@ -143,6 +143,8 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
   let unstyled = 0;
   /** Marked runs by paragraph element, in document order. */
   const runsOf = new Map<HTMLElement, [HTMLElement, RunStyle][]>();
+  /** Runs with a gradient fill, painted once the text is laid out. */
+  const gradients: [HTMLElement, RunStyle][] = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const found: Text[] = [];
   for (let n = walker.nextNode(); n; n = walker.nextNode())
@@ -168,6 +170,17 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
       el.style.textShadow = st.shadows
         .map((sh) => `${sh.dx * s}px ${sh.dy * s}px ${sh.blur * s}px ${sh.color}`)
         .join(', ');
+    if (st.color) el.style.color = st.color;
+    if (st.hollow) {
+      el.style.color = 'transparent';
+      el.style.setProperty('-webkit-text-fill-color', 'transparent');
+      if (st.hollow.color)
+        el.style.setProperty(
+          '-webkit-text-stroke',
+          `${(st.hollow.width * s).toFixed(2)}px ${st.hollow.color}`,
+        );
+    }
+    if (st.gradient) gradients.push([el, st]);
     const p = el.closest('p') as HTMLElement | null;
     if (p) {
       const list = runsOf.get(p);
@@ -413,6 +426,35 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
         el.style.transform = 'none';
       }
 
+  /** A box whose lines do not wrap (`wrap="none"`): each paragraph is one line per line break. */
+  const unwrap = (entries: Entry[]) => {
+    for (const e of entries) {
+      e.p.style.whiteSpace = 'nowrap';
+      for (const [el] of e.runs) el.style.whiteSpace = 'pre';
+    }
+  };
+  /**
+   * A line wider than its box: CSS lets it run out on the right whatever the alignment; PowerPoint and
+   * LibreOffice grow the box from its alignment (both sides when centred, leftwards when right-aligned).
+   */
+  const overhang = (entries: Entry[]) => {
+    const widths = entries.map((e) => {
+      const range = document.createRange();
+      range.selectNodeContents(e.p);
+      return range.getBoundingClientRect().width / zoom(e.p);
+    });
+    entries.forEach((e, i) => {
+      const room = e.p.clientWidth;
+      const w = widths[i]!;
+      if (!(w > room + 0.5)) return;
+      const align = getComputedStyle(e.p).textAlign;
+      const share = align === 'center' ? 0.5 : align === 'right' || align === 'end' ? 1 : 0;
+      if (!share) return;
+      e.p.style.width = `${w.toFixed(2)}px`;
+      e.p.style.marginLeft = `${((room - w) * share).toFixed(2)}px`;
+    });
+  };
+
   const placed: [Entry, number][] = [];
   for (const [box, { body, entries }] of boxes) {
     if (body.vertical) continue; // vertical text: pptx-preview's layout stands
@@ -420,7 +462,9 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
       // A shape whose text area is inset (an arrow, a callout): keep pptx-preview's text rectangle and
       // the deck's stored shrink scale, and lay out only the paragraphs in it.
       const font = body.autofit?.fontScale || 1;
+      if (body.nowrap) unwrap(entries);
       for (const e of entries) placed.push([e, layoutPara(e, font, 1)]);
+      if (body.nowrap) overhang(entries);
       continue;
     }
     const s = scale(box);
@@ -439,6 +483,7 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
       if (last?.nodeName !== 'BR') continue;
       const hold = document.createElement('span');
       hold.textContent = '\u200b';
+      hold.dataset.ordoHold = '';
       const end = e.para.end;
       const family = end ? stackFor(end) : undefined;
       if (family) hold.style.fontFamily = family;
@@ -460,12 +505,65 @@ export async function pageMain(args: PageArgs): Promise<PageResult> {
       box.style.bottom = '';
       box.style.transform = 'translateY(-50%)';
     }
+    if (body.nowrap) unwrap(entries);
     const chosen = body.autofit ? fitBox(box, body, entries) : { font: 1, spacing: 1 };
     for (const e of entries) placed.push([e, layoutPara(e, chosen.font, chosen.spacing)]);
+    if (body.nowrap) overhang(entries);
   }
   for (const e of loose) placed.push([e, layoutPara(e, 1, 1)]);
   placeBaselines(placed);
   for (const [el, transform] of turned) el.style.transform = transform;
+
+  // Gradient text. PowerPoint spreads a gradient over the whole text box, not each run: when every marked
+  // run of a box has the same one, the box paints it through its text; otherwise each run paints its own.
+  // A shadow under a gradient is a drop shadow of the painted text (a text-shadow would cover it).
+  const shadowFilter = (st: RunStyle, s: number) =>
+    (st.shadows ?? [])
+      .map((sh) => `drop-shadow(${sh.dx * s}px ${sh.dy * s}px ${sh.blur * s}px ${sh.color})`)
+      .join(' ');
+  const paint = (el: HTMLElement, gradient: string) => {
+    el.style.backgroundImage = gradient;
+    el.style.setProperty('-webkit-background-clip', 'text');
+    el.style.backgroundClip = 'text';
+  };
+  const clear = (el: HTMLElement) => {
+    el.style.color = 'transparent';
+    el.style.setProperty('-webkit-text-fill-color', 'transparent');
+    el.style.textShadow = 'none';
+  };
+  const byBox = new Map<HTMLElement, [HTMLElement, RunStyle][]>();
+  for (const [el, st] of gradients) {
+    const box = (el.closest('.text-wrapper') as HTMLElement | null) ?? el;
+    const list = byBox.get(box);
+    if (list) list.push([el, st]);
+    else byBox.set(box, [[el, st]]);
+  }
+  // Marked runs per box, counted once (a deck can have tens of thousands of runs).
+  const counts = new Map<HTMLElement, number>();
+  if (byBox.size)
+    for (const runs of runsOf.values())
+      for (const [el] of runs) {
+        if (el.dataset.ordoHold !== undefined) continue; // a paragraph's end mark holds no text
+        const box = el.closest('.text-wrapper') as HTMLElement | null;
+        if (box && byBox.has(box)) counts.set(box, (counts.get(box) ?? 0) + 1);
+      }
+  for (const [box, list] of byBox) {
+    const one = list[0]![1].gradient!;
+    const whole = box !== list[0]![0] && counts.get(box) === list.length;
+    if (whole && list.every(([, st]) => st.gradient === one)) {
+      paint(box, one);
+      const f = shadowFilter(list[0]![1], scale(box));
+      if (f) box.style.filter = f;
+      for (const [el] of list) clear(el);
+      continue;
+    }
+    for (const [el, st] of list) {
+      paint(el, st.gradient!);
+      clear(el);
+      const f = shadowFilter(st, scale(el));
+      if (f) el.style.filter = f;
+    }
+  }
 
   // Pictures in an ellipse or a rounded rectangle. pptx-preview puts each slide's shapes straight into its
   // slide wrapper, a picture as a positioned box holding a cropping box, at whole points: find it there.

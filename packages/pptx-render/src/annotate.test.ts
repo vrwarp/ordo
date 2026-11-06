@@ -302,6 +302,62 @@ describe('annotatePptx', () => {
     expect(align).toEqual({ Justified: 'just', Centred: 'ctr', Plain: 'l' });
   });
 
+  it('carries gradient text, colours from list styles and boxes whose lines do not wrap', async () => {
+    const stops =
+      '<a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst>';
+    const linear = `<a:gradFill>${stops}<a:lin ang="5400000" scaled="0"/></a:gradFill>`;
+    const radial = `<a:gradFill>${stops}<a:path path="circle"><a:fillToRect l="100000" t="0" r="0" b="100000"/></a:path></a:gradFill>`;
+    const solid = (hex: string) => `<a:solidFill><a:srgbClr val="${hex}"/></a:solidFill>`;
+    const body =
+      sp({ body: `<a:p>${run('Linear', linear)}${run('Radial', radial)}</a:p>` }) +
+      sp({
+        lstStyle: `<a:lvl1pPr><a:defRPr>${linear}</a:defRPr></a:lvl1pPr>`,
+        body: `<a:p>${run('Inherits')}${run('Solid', solid('00FF00'))}</a:p>`,
+      }) +
+      sp({
+        lstStyle: `<a:lvl1pPr><a:defRPr>${solid('0000FF')}</a:defRPr></a:lvl1pPr>`,
+        body: `<a:p>${run('Listed')}${run('Own', solid('00FF00'))}</a:p>`,
+      }).replace('<a:bodyPr/>', '<a:bodyPr wrap="none"/>') +
+      sp({ ph: '<p:ph idx="1"/>', body: `<a:p>${run('Mastered')}</a:p>` }) +
+      sp({
+        body: `<a:p>${run('Hollow', `<a:ln w="25400">${solid('FFFFFF')}</a:ln><a:noFill/>`)}${run('Unseen', '<a:noFill/>')}</a:p>`,
+      });
+    const z = await JSZip.loadAsync(await deck(body));
+    const master = await z.file('ppt/slideMasters/slideMaster1.xml')!.async('string');
+    // The master's body style colours placeholder text: pptx-preview reads that one itself.
+    z.file(
+      'ppt/slideMasters/slideMaster1.xml',
+      master.replace(
+        '<p:bodyStyle><a:lvl1pPr><a:defRPr>',
+        `<p:bodyStyle><a:lvl1pPr><a:defRPr>${solid('00FF00')}`,
+      ),
+    );
+    const a = await annotatePptx(await z.generateAsync({ type: 'uint8array' }));
+    const by = Object.fromEntries(await marked(a.bytes, a.runs)) as Record<
+      string,
+      { gradient?: string; color?: string; hollow?: unknown }
+    >;
+    // DrawingML's 90 degrees runs top to bottom, CSS's 180.
+    const down = 'linear-gradient(180deg, rgba(255,0,0,1) 0%, rgba(0,0,255,1) 100%)';
+    expect(by.Linear!.gradient).toBe(down);
+    // A path gradient radiates from the centre of its fill rectangle: here the top-right corner.
+    expect(by.Radial!.gradient).toBe(
+      'radial-gradient(circle farthest-corner at 100% 0%, rgba(255,0,0,1) 0%, rgba(0,0,255,1) 100%)',
+    );
+    expect(by.Inherits).toEqual({ latin: 'Aptos', ea: 'SimSun', gradient: down });
+    expect(by.Solid!.gradient).toBeUndefined();
+    expect(by.Listed!.color).toBe('rgba(0,0,255,1)');
+    expect(by.Own!.color).toBeUndefined();
+    expect(by.Mastered!.color).toBeUndefined();
+    // Hollow text: its outline only (2 pt of white), or nothing at all.
+    expect(by.Hollow!.hollow).toEqual({ width: 2, color: 'rgba(255,255,255,1)' });
+    expect(by.Unseen!.hollow).toEqual({ width: 0 });
+    expect(by.Listed!.hollow).toBeUndefined();
+    const nowrap = a.runs.map((r) => (r.b === undefined ? undefined : a.bodies[r.b]!.nowrap));
+    expect(nowrap.filter((n) => n)).toHaveLength(2);
+    expect(a.bodies[a.runs.find((r) => r.gradient)!.b!]!.nowrap).toBeUndefined();
+  });
+
   it("gives a text box its exact size: its own, its layout placeholder's, none in a group", async () => {
     const xfrm = (cx: number, cy: number) =>
       `<a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>`;

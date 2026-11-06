@@ -166,7 +166,16 @@ which ordo owns and can keep fixing:
   LibreOffice does; Chromium would otherwise fall back to its serif default); the size (pptx-preview
   shrinks some faces to 85 %) and character spacing (it condenses Latin text by 4 % and ignores `spc`);
   superscripts and subscripts (`baseline`, ignored); kept runs of spaces; underlines that do not skip
-  descenders; and the run's own shadow over the one an unfilled shape casts.
+  descenders; and the run's own shadow over the one an unfilled shape casts. Text coloured by its shape's
+  own list style or its placeholders' (`a:defRPr` fills below the master's text styles, which pptx-preview
+  does read) gets that colour; pptx-preview drew it black. Gradient text (`a:gradFill` in a run's properties
+  or inherited), which pptx-preview also drew black, is painted through the glyphs (`background-clip: text`):
+  linear gradients at their angle, path gradients as radial ones from the centre of their fill rectangle.
+  PowerPoint spreads one gradient over the whole text box, so when every run of a box has the same one the
+  box paints it; a shadow under gradient text is a drop shadow of the painted glyphs. Hollow text
+  (`a:noFill`), which pptx-preview filled black, shows only its outline (`a:ln`, 0.75 pt by default) or
+  nothing. pptx-preview draws no text outlines on filled text either, matching what LibreOffice draws once
+  `pptxForRendering` has removed them. WordArt warps (`a:prstTxWarp`) are not drawn.
 - **Paragraphs and text boxes.** Through the markers, and the side table's list of a text box's paragraphs
   (pptx-preview draws one block per paragraph, empty ones included), the page sets the box's margins and
   anchor, each paragraph's spacing, and its line height, as LibreOffice's text engine computes them
@@ -175,7 +184,11 @@ which ordo owns and can keep fixing:
   adds or removes space above the line, below 100 % caps the ascent at 80 % of the line; space before
   the first paragraph and after the last is not drawn; a percentage of space is a share of the font
   size. CSS splits leading above and below the line, so each paragraph is then moved until its first
-  baseline is where LibreOffice puts it (a zero-size probe measures where Chromium put it).
+  baseline is where LibreOffice puts it (a zero-size probe measures where Chromium put it). A box whose
+  lines do not wrap (`wrap="none"`, which pptx-preview ignores) keeps each line whole, and a line wider than
+  the box grows from its alignment, both ways when centred, leftwards when right-aligned, as in PowerPoint
+  and LibreOffice (CSS lets it run out on the right). pptx-preview ignores animations, so text that builds
+  in (`p:bldP`) is drawn in its final state, as LibreOffice draws it.
 - **Shrink on overflow.** PowerPoint stores the scale it found with its own fonts (`normAutofit`); with
   substitutes the text may not fit. LibreOffice ignores the stored scale and re-fits the text from full
   size, and the page does the same with LibreOffice's procedure (`SdrTextObj::autoFitTextForCompatibility`):

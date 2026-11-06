@@ -30,6 +30,18 @@ export type RunStyle = {
   baseline?: number;
   /** Shadows drawn behind the glyphs, in points of the slide, topmost first. */
   shadows?: TextShadow[];
+  /**
+   * A gradient text fill (`a:gradFill` in the run's properties, or inherited), as a CSS gradient over the
+   * run's text box. pptx-preview ignores it and draws the text black.
+   */
+  gradient?: string;
+  /** The text colour a list style gives the run (only when the run sets none itself). */
+  color?: string;
+  /**
+   * Hollow text (`a:noFill`): only its outline is drawn (`a:ln`, width in points), or nothing when it has
+   * none. pptx-preview fills it black.
+   */
+  hollow?: { width: number; color?: string };
   /** The run's paragraph (index into `Annotation.paras`). */
   p?: number;
   /** The run's text box (index into `Annotation.bodies`). */
@@ -73,6 +85,11 @@ export type BodyStyle = {
   autofit?: { fontScale: number; lnSpcReduction: number };
   /** Vertical text (`vert`): not re-fitted or re-placed, pptx-preview's layout is kept. */
   vertical?: boolean;
+  /**
+   * Lines do not wrap (`wrap="none"`): the box grows sideways from its paragraphs' alignment. pptx-preview
+   * wraps them at the box's width.
+   */
+  nowrap?: boolean;
   /**
    * A preset shape whose text area is not the whole shape (arrows, callouts, diamonds...): pptx-preview's
    * text rectangle and its stored shrink scale are kept.
@@ -298,10 +315,30 @@ type ShapeCtx = {
  * A paragraph being walked: its level and properties, its index in the paragraph table (-1 when it is not
  * described), and, computed on first use and shared by its runs, its property chain and what runs inherit.
  */
-type ParaCtx = { lvl: number; pPr?: XNode; index: number; chain?: XNode[]; inherited?: Inherited };
+type ParaCtx = {
+  lvl: number;
+  pPr?: XNode;
+  index: number;
+  chain?: XNode[];
+  /** How many of `chain`'s nodes come before the master's text styles (the paragraph's and shape's own). */
+  local?: number;
+  inherited?: Inherited;
+};
 
 /** Run properties a paragraph's runs inherit (the first value along its chain), as written. */
-type Inherited = { latin?: string; ea?: string; sz?: string; spc?: string; baseline?: string };
+type Inherited = {
+  latin?: string;
+  ea?: string;
+  sz?: string;
+  spc?: string;
+  baseline?: string;
+  /** The nearest fill a list style gives text (`a:solidFill`, `a:gradFill`, `a:noFill`...). */
+  fill?: XNode;
+  /** `fill` comes from the paragraph, the shape's list style or its placeholders', not the master's styles. */
+  localFill?: boolean;
+  /** The nearest text outline (`a:ln`). */
+  ln?: XNode;
+};
 
 /**
  * What a walk collects: one entry per `a:t`, and the paragraph and text box tables runs point to. The walk
@@ -1637,6 +1674,7 @@ function paraChain(part: PartCtx, shape: ShapeCtx, para: ParaCtx): XNode[] {
   const m = part.master;
   const mt = ph ? masterType(ph.type) : 'other';
   const tx = mt === 'title' ? m?.txStyles.title : mt === 'body' ? m?.txStyles.body : m?.txStyles.other;
+  para.local = out.length;
   out.push(...lvlPPr(tx, lvl));
   out.push(...lvlPPr(part.defaultTextStyle, lvl));
   para.chain = out;
@@ -1650,10 +1688,16 @@ function paraChain(part: PartCtx, shape: ShapeCtx, para: ParaCtx): XNode[] {
 function inheritedOf(part: PartCtx, shape: ShapeCtx, para: ParaCtx): Inherited {
   if (para.inherited) return para.inherited;
   const defs: XNode[] = [];
-  for (const n of paraChain(part, shape, para)) {
+  let fill: XNode | undefined;
+  let localFill = false;
+  paraChain(part, shape, para).forEach((n, i) => {
     const d = child(n, 'a:defRPr');
-    if (d) defs.push(d);
-  }
+    if (!d) return;
+    defs.push(d);
+    if (fill) return;
+    fill = firstChild(d, FILLS);
+    localFill = i < (para.local ?? 0);
+  });
   const first = (pick: (n: XNode) => string | undefined) => {
     for (const n of defs) {
       const v = pick(n);
@@ -1668,6 +1712,12 @@ function inheritedOf(part: PartCtx, shape: ShapeCtx, para: ParaCtx): Inherited {
     spc: first((n) => n.attrs.spc),
     baseline: first((n) => n.attrs.baseline),
   };
+  const ln = defs.map((n) => child(n, 'a:ln')).find((c) => c);
+  if (ln) para.inherited.ln = ln;
+  if (fill) {
+    para.inherited.fill = fill;
+    if (localFill) para.inherited.localFill = true;
+  }
   return para.inherited;
 }
 
@@ -1743,6 +1793,7 @@ function bodyStyle(part: PartCtx, shape: ShapeCtx, bodyPr: XNode | undefined): B
       ? { w: cx / EMU_PER_PT, h: cy / EMU_PER_PT }
       : undefined;
   const anchor = anchorAttr === 'ctr' || anchorAttr === 'b' ? anchorAttr : 't';
+  const wrap = nodes.map((n) => n.attrs.wrap).find((v) => v !== undefined);
   // The nearest body that says how text fits decides; the stored scale is only ever on the shape itself.
   const fit = nodes.map((n) => firstChild(n, FIT)).find((c) => c);
   const fraction = (v: string | undefined, dflt: number) =>
@@ -1766,6 +1817,7 @@ function bodyStyle(part: PartCtx, shape: ShapeCtx, bodyPr: XNode | undefined): B
     ...(autofit ? { autofit } : {}),
     ...(size ? { size } : {}),
     ...(vert && vert !== 'horz' ? { vertical: true } : {}),
+    ...(wrap === 'none' ? { nowrap: true } : {}),
     ...(shape.prst && !FULL_TEXT_AREA.has(shape.prst) ? { shaped: true } : {}),
   };
 }
@@ -1811,7 +1863,61 @@ function runStyle(part: PartCtx, shape: ShapeCtx, para: ParaCtx, rPr: XNode | un
   const shadows = [own ? shadowOf(child(own, 'a:outerShdw'), part, undefined) : undefined, shape.shadow];
   const list = shadows.filter((x): x is TextShadow => x !== undefined);
   if (list.length) st.shadows = list;
+  // The run's own fill decides (a solid fill or none overrides an inherited gradient).
+  const ownFill = firstChild(rPr, FILLS);
+  const fill = ownFill ?? inh.fill;
+  if (fill?.name === 'a:gradFill') {
+    const gradient = gradientOf(fill, part);
+    if (gradient) st.gradient = gradient;
+  }
+  // A colour from the shape's own list style (or its placeholders'): pptx-preview reads the master's text
+  // styles but not these, and draws such text black.
+  if (!ownFill && inh.localFill && fill?.name === 'a:solidFill') {
+    const color = colorOf(fill, part);
+    if (color) st.color = color;
+  }
+  if (fill?.name === 'a:noFill') {
+    // PowerPoint's default text outline is 0.75 pt; an outline without a solid fill is not drawn.
+    const ln = child(rPr, 'a:ln') ?? inh.ln;
+    const color = colorOf(child(ln, 'a:solidFill'), part);
+    const width = Math.max(0, Math.min(100, (num(ln?.attrs.w) ?? 9525) / EMU_PER_PT));
+    st.hollow = color ? { width: Math.round(width * 100) / 100, color } : { width: 0 };
+  }
   return st;
+}
+
+const FILLS = ['a:noFill', 'a:solidFill', 'a:gradFill', 'a:blipFill', 'a:pattFill', 'a:grpFill'] as const;
+
+/**
+ * A DrawingML gradient as a CSS one. Linear (`a:lin ang`: degrees clockwise from left-to-right, CSS's 0
+ * is bottom-to-top); path gradients (`a:path`: circle, rect, shape) radiate from the centre of
+ * `a:fillToRect`, stop 0 at the centre, and are drawn as radial gradients. Undefined when no stop has a
+ * colour.
+ */
+function gradientOf(grad: XNode, part: PartCtx): string | undefined {
+  const stops: [number, string][] = [];
+  for (const gs of child(grad, 'a:gsLst')?.children ?? []) {
+    if (gs.name !== 'a:gs' || stops.length >= 16) continue;
+    const color = colorOf(gs, part);
+    const pos = num(gs.attrs.pos);
+    if (color && pos !== undefined) stops.push([Math.max(0, Math.min(100, pos / 1000)), color]);
+  }
+  if (!stops.length) return undefined;
+  stops.sort((a, b) => a[0] - b[0]);
+  if (stops.length === 1) stops.push([100, stops[0]![1]]);
+  const list = stops.map(([pos, c]) => `${c} ${Math.round(pos * 100) / 100}%`).join(', ');
+  const path = child(grad, 'a:path');
+  if (path) {
+    const r = child(path, 'a:fillToRect');
+    const f = (v: string | undefined) => Math.max(-100, Math.min(100, (num(v) ?? 0) / 1000));
+    const cx = (f(r?.attrs.l) + (100 - f(r?.attrs.r))) / 2;
+    const cy = (f(r?.attrs.t) + (100 - f(r?.attrs.b))) / 2;
+    const shape = path.attrs.path === 'circle' ? 'circle' : 'ellipse';
+    const at = `${Math.round(cx * 100) / 100}% ${Math.round(cy * 100) / 100}%`;
+    return `radial-gradient(${shape} farthest-corner at ${at}, ${list})`;
+  }
+  const ang = ((num(child(grad, 'a:lin')?.attrs.ang) ?? 0) / 60_000) % 360;
+  return `linear-gradient(${Math.round((ang + 90) * 100) / 100}deg, ${list})`;
 }
 
 /**
@@ -1888,6 +1994,9 @@ function walk(
           const ps = paraStyle(part, shape, para);
           ps.end = runStyle(part, shape, para, child(c, 'a:endParaRPr'));
           delete ps.end.shadows;
+          delete ps.end.gradient;
+          delete ps.end.color;
+          delete ps.end.hollow;
           acc.paras.push(ps);
           para.index = acc.paras.length - 1;
         }
