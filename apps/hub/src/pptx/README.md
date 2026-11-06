@@ -509,6 +509,28 @@ own background on white gets `role: 'bg'`; `artObject` already had `role: 'art'`
 and the digest. goLive ships the pictures each slide draws (`referencedMediaIds`), the reference picture
 optional with a `degraded` note.
 
+## Wave 2, item C: hidden slides (m3b/hidden-nav)
+
+Hidden slides give flagged cues (`Cue.hidden`): Next, Prev, auto-advance, onEnd advance, Next item and the
+armed cue skip them; a GO with the cue's index (a double-click in the slide grid, goToSlide, a Stream Deck
+slide key) shows them (design/27 §9 "As built"). A slide sound's `slides` still counts shown slides only.
+
+## Wave 2: integration (m3b/integrate)
+
+What wires items A-C together:
+- A with B: a motion background that cannot be imported puts its poster back at the bottom of the slide
+  marked `origin: { src: 'pptx', role: 'bg' }` (`clips.ts` `unplace`), like every object the job writes, so a
+  slide set to show its PowerPoint picture leaves it out and the background pickers find it. Test:
+  `pptx-clips.test.ts` "clips and the one fallback rule".
+- A with C: a hidden slide inside a sound's `numSld` range keeps its cue; the sound spans the shown slides
+  (`soundEnds`) and plays on through the hidden cue when a click shows it.
+- B with C: the lyric-only next band and the look previews take the next slide Next goes to; an imported
+  play object under a reference picture is not drawn, and its sound still plays.
+- goLive: a PowerPoint slide's own background, its clips and its reference picture are optional
+  (`slideOnlyMedia` roles 'background', 'video', 'poster', 'sound', 'picture').
+- End to end (design/27 §14.12): `e2e/pptx-native.spec.ts` and `e2e/pptx-media.spec.ts` on synthetic
+  probe decks (`e2e/pptxdecks.ts`), through the upload route on a hub with the bundled fonts.
+
 ## Not in this wave
 
 Waiting for M2's second wave to merge: rich text emission (runs and paragraphs) from the converter; bundled

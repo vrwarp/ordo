@@ -141,14 +141,14 @@ reducer events. Keyboard, Stream Deck and MIDI dispatch the same actions.
 
 ## Operator view components
 
-| Component      | Notes                                                                                                                                                  |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `TopBar`       | Connection, WAN, cache, output dots, clock, Launch and Relaunch                                                                                        |
-| `PlaylistPane` | Virtualized list; drag to reorder when not live                                                                                                        |
+| Component      | Notes                                                                                                                                                                                                                                          |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TopBar`       | Connection, WAN, cache, output dots, clock, Launch and Relaunch                                                                                                                                                                                |
+| `PlaylistPane` | Virtualized list; drag to reorder when not live                                                                                                                                                                                                |
 | `SlideGrid`    | Sections as headed groups following the arrangement; thumbnails from the thumbnail worker; live and armed markers; click to select, double-click to GO; hidden PowerPoint slides dimmed with a `hidden` tag and still clickable (design/27 §9) |
-| `ProgramView`  | One `<video>` per output fed by WebRTC; health overlay                                                                                                 |
-| `StageTools`   | Message box, recent messages, timers                                                                                                                   |
-| `LayerBar`     | Five chips with clear buttons; media transport and remaining time; audio meters                                                                        |
+| `ProgramView`  | One `<video>` per output fed by WebRTC; health overlay                                                                                                                                                                                         |
+| `StageTools`   | Message box, recent messages, timers                                                                                                                                                                                                           |
+| `LayerBar`     | Five chips with clear buttons; media transport and remaining time; audio meters                                                                                                                                                                |
 
 Thumbnails: a supervised worker runs the shared text rasterizer and a 2D compositor at 320x180,
 cached by (slide rev, look). The main thread never rasterizes; a restarted thumbnail worker gets the

@@ -268,7 +268,11 @@ function unplace(s: ClipSlide, c: EmittedClip): void {
     if (sl.audio?.mediaId === c.id) delete sl.audio;
   } else if (c.role === 'background' && sl.backgroundMediaId === c.id) {
     delete sl.backgroundMediaId;
-    if (!s.picture && c.poster) sl.objects.unshift({ ...c.poster });
+    // Marked as the import's background (`origin`, design/27 §3.1), as every object the job writes is: a
+    // slide set to show its PowerPoint picture leaves it out (`slideContent`), and the background pickers
+    // find it.
+    if (!s.picture && c.poster)
+      sl.objects.unshift({ ...c.poster, origin: { ...(c.poster.origin ?? { src: 'pptx' }), role: 'bg' } });
   }
 }
 

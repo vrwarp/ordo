@@ -15,6 +15,7 @@ import {
   type Presentation,
   resolvePlaylist,
   type Slide,
+  slideContent,
 } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import {
@@ -516,5 +517,69 @@ describe('pptx-native: transition sounds and resume', () => {
     const [pair] = ctx.payload.done!.clips!;
     expect(hub.lib.media.must(pair![1]).name).toBe('Failing – slide 1 sound');
     expect(mediaJobs(pair![1])).toHaveLength(1);
+  }, 60_000);
+});
+
+describe('pptx-native: clips and the one fallback rule (M3 wave 2 items A and B)', () => {
+  it("marks every object a clip leaves as the import's: a slide showing its PowerPoint picture hides them", async () => {
+    const full = { x: 0, y: 0, cx: W, cy: H };
+    const title = sp({
+      id: 20,
+      x: IN,
+      y: IN,
+      cx: 8 * IN,
+      cy: IN,
+      ph: 'title',
+      txBody: body(para(run('Announcements'))),
+    });
+    const parts = deckOf(
+      [
+        // 1. A boxed autoplay clip under a title: the poster carries `play`.
+        clipSlide(
+          [{ id: 4, kind: 'video', file: 'clip.mp4', part: 'boxed.mp4', timing: { start: 'auto' } }],
+          title,
+        ),
+        // 2. A looping, muted full-slide video that cannot be imported (not a video): its poster goes back
+        //    at the bottom as the slide's background.
+        clipSlide(
+          [
+            {
+              id: 4,
+              kind: 'video',
+              file: 'garbage.mp4',
+              part: 'motion.mp4',
+              box: full,
+              timing: { start: 'auto', loop: true, mute: true },
+            },
+          ],
+          title,
+        ),
+      ],
+      { 'boxed.mp4': 'clip.mp4', 'motion.mp4': 'garbage.mp4' },
+    );
+    const { p } = await importDeck(parts, 'Fallback.pptx');
+    const [s1, s2] = slidesOf(p) as [Slide, Slide];
+    expect(playOf(s1)).toBeDefined();
+    expect(s2.backgroundMediaId).toBeUndefined();
+    const bottom = s2.objects[0]!;
+    expect(bottom).toMatchObject({ type: 'image', origin: { src: 'pptx', role: 'bg' } });
+    expect((bottom as ImageObject).play).toBeUndefined();
+    for (const s of [s1, s2]) {
+      expect(s.objects.every((o) => o.origin?.src === 'pptx')).toBe(true);
+      // 'Show PowerPoint picture': the reference picture and only the operator's own objects are drawn.
+      const mine = {
+        id: 'mine',
+        type: 'shape',
+        box: { x: 0, y: 0, w: 10, h: 10, rotation: 0 },
+        shape: 'rect',
+      };
+      const shown = slideContent({
+        ...s,
+        objects: [...s.objects, mine as never],
+        pptx: { ...s.pptx!, refMediaId: 'ref', show: 'picture' },
+      });
+      expect(shown.pictureMediaId).toBe('ref');
+      expect(shown.objects.map((o) => o.id)).toEqual(['mine']);
+    }
   }, 60_000);
 });
