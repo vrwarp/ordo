@@ -157,7 +157,8 @@ Steps 5-10 of §6. Status: **done** (M2 wave 1); the rules are in each file's he
   exists on DOM and Offscreen contexts; advances scale exactly with the size; kerning applies only within a
   measured string.
 - `lines.ts` `layoutBox`: greedy lines (first line at marL + indent, others at marL, both ≥ 0), hanging
-  bullets in a box at least -indent wide, trailing whitespace hanging, emergency breaks between graphemes,
+  bullets in a box at least -indent wide, trailing whitespace hanging at a wrap (aligned with the text at a
+  paragraph end or an a:br, as LibreOffice and PowerPoint align it), emergency breaks between graphemes,
   `wrap: false` growing from its alignment; justify and distribute (`extraPerSpace` per trailing whitespace
   unit of every piece but a line's last); right-to-left paragraphs mirrored (indents and bullet on the right,
   pieces from the right, hanging whitespace on the left); valign over the box less its insets; `overflow`

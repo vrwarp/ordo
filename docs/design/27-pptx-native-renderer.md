@@ -682,7 +682,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
 5. **Measure.** `measureText` with `ctx.font` set to the resolved internal-name stack (§10), and `ctx.direction`, `ctx.lang` and `ctx.letterSpacing` set per segment. The trailing spacing Canvas adds after the last character is subtracted. Widths go into an LRU cache (20,000 entries, key `font|dir|lang|spacing|text`) for strings of at most 256 UTF-16 units, so a hostile word never leaves megabytes of keys in a worker. `measureText` and `fillText` always see the same string in the same state.
 6. **Lines.** Greedy fill.
    - Available width = box − insets − marL − first-line indent; a hanging bullet sits in the negative indent and its box is at least −indent wide.
-   - Trailing spaces hang.
+   - Trailing spaces hang at a wrap. At the end of a paragraph or before an `a:br` they are text and are aligned with the rest (LibreOffice 24.2 and PowerPoint: centred "Amen " sits half a space left of "Amen").
    - `wrap:false` never wraps; a line grows from its alignment (centre both ways, right leftwards, left rightwards).
    - A right-to-left paragraph mirrors its start: indents and the bullet are on the right and its trailing space hangs on the left. `align` stays visual.
    - Then UAX#9 L2 visual reordering between segments. The browser orders glyphs within a segment.
@@ -692,7 +692,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
    - Proportional p ≠ 1: h = 1.2F·p·k, where k is the autofit spacing scale. The baseline is F + (h − 1.2F) when p > 1, else min(F, 0.8h).
    - Exact spacing P: h = P·k.
    - spcBef/spcAft are scaled by k and not drawn before the first paragraph or after the last.
-   - An empty paragraph takes its end-mark size; a trailing `a:br` adds a line.
+   - An empty paragraph takes its end-mark size; a trailing `a:br` adds a line as tall as the paragraph's end mark (measured in LibreOffice 24.2), whatever the size of the text before it.
    - Superscript and subscript are drawn at 0.58 × size (at least 4 px), shifted by baseline × size, without growing the line.
 8. **Align.**
    - justify spreads extra space over the inter-segment spaces of non-last lines; distribute also justifies the last line;

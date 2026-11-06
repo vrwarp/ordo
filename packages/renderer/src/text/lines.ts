@@ -41,7 +41,9 @@ import type {
  *   the box. Available width = inner width - that start.
  * - Pieces fill a line while they fit; a word (pieces with no break between them) that does not fit goes to
  *   the next line; one wider than a whole line is cut between clusters (an emergency break). Trailing
- *   whitespace hangs: it never counts against the width.
+ *   whitespace never counts against the width. At a wrap it hangs, outside the alignment too; at the end of
+ *   a paragraph or before an a:br it is text and is aligned with the rest, as LibreOffice and PowerPoint
+ *   align it (centred "Amen " sits half a space left of centred "Amen").
  * - An emergency break costs work in proportion to the line it fills, never to the rest of the word: the cut
  *   is found by galloping from the piece's start (prefixes of 1, 2, 4, ... clusters, then a bisection of the
  *   last window), cluster boundaries are found only as far as that reaches, and the rest of the piece is
@@ -74,7 +76,8 @@ import type {
  *
  * Soft paragraphs continue the paragraph before them: no bullet, no space between them, and that
  * paragraph's style (alignment, indents, spacing, line spacing, main size and direction). A trailing a:br
- * (an empty soft paragraph) makes a line as tall as the paragraph's, or its end mark's when larger.
+ * (an empty soft paragraph) makes a line as tall as its own end mark (the run covering its '\n', or for the
+ * last paragraph the '\n' before it), not the paragraph's main size: LibreOffice 24.2, measured.
  *
  * Anchor and insets: `valign` places the laid-out text in the box less its insets (`style.insets`, else
  * `padding` on every side); text taller than that overflows equally (middle), downwards (top) or upwards
@@ -614,10 +617,13 @@ function flowParas(
     // Placing: line metrics, then (not for the autofit search, which needs heights only) alignment and
     // visual order.
     broken.forEach((items, n) => {
-      let lineF = F;
+      // An empty line after an a:br (an empty soft paragraph) is as tall as its own end mark, not as the
+      // paragraph it continues (LibreOffice 24.2, measured): a small endParaRPr makes a short last line.
+      let lineF = !items.length && para.soft ? 0 : F;
       for (const c of items) if (!c.style.baseline && c.size > lineF) lineF = c.size;
       if (!items.length)
         for (const r of runs) if (!r.style.baseline) lineF = Math.max(lineF, size(r.style.sizePx, fit));
+      if (!(lineF > 0)) lineF = F;
       const metrics = office
         ? officeLine(lineF, ps, k, style.lineHeight)
         : ordoLine(lineF, ps, style.lineHeight);
@@ -629,12 +635,14 @@ function flowParas(
       const A = innerW - lineStart;
       const L = rtl ? 0 : lineStart;
       const tail = items[items.length - 1];
+      // The paragraph's last line ends at its end or at an a:br: its trailing whitespace is text, aligned
+      // with the rest, as LibreOffice and PowerPoint align it. Only whitespace at a wrap hangs.
+      const last = n === broken.length - 1;
       let lineW = 0;
       for (const c of items) lineW += c.a;
-      if (tail) lineW += tail.t - tail.a;
+      if (tail) lineW += (last ? tail.w : tail.t) - tail.a;
       let spaces = 0;
       for (let q = 0; q < items.length - 1; q++) spaces += items[q]!.spaces;
-      const last = n === broken.length - 1;
       const spread = ps.align === 'distribute' || (ps.align === 'justify' && !last);
       const extra = spread && spaces > 0 && A > lineW ? (A - lineW) / spaces : 0;
       const contentW = lineW + extra * spaces;
@@ -653,7 +661,7 @@ function flowParas(
         segs.push({
           start: c.piece.start,
           end: c.piece.end,
-          x: isTail && odd ? sx - (c.w - c.t) : sx,
+          x: isTail && odd && !last ? sx - (c.w - c.t) : sx,
           w: c.w,
           run: c.run,
           level: c.piece.level,
