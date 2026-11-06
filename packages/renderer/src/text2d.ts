@@ -10,19 +10,44 @@ import {
   firstText,
   readableText,
   rgbaCss,
+  textScripts,
 } from '@ordo/domain';
 
 import { CLAMP, clampBox, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
 import { type Ctx2D, roundRect, setLetterSpacing, withRotation } from './ctx.ts';
 import { firstStrong, hasStrongRtl } from './text/bidi.ts';
+import { LEGACY_FONT_ENV, currentFontEnv } from './text/fonts.ts';
 import { bandObject, drawRichText, isRichStyle, isRichText } from './text/rich.ts';
 
 export type { Ctx2D } from './ctx.ts';
 export type ImageLookup = (mediaId: string) => CanvasImageSource | undefined;
 
-export function fontString(style: TextStyle, scale: number, sizeOverride?: number): string {
+/**
+ * The CSS font of legacy text. With a font resolver installed (design/27 §10: the asset worker, the thumbnail
+ * worker, the editor page) the family resolves through it like rich text does, with `script`'s fallback
+ * face; with none it is exactly the string drawers used before the resolver.
+ */
+export function fontString(style: TextStyle, scale: number, sizeOverride?: number, script = ''): string {
   const size = (sizeOverride ?? style.fontSizePx) * scale;
-  return `${style.fontStyle === 'italic' ? 'italic ' : ''}${style.fontWeight} ${size}px "${style.fontFamily}", "Inter", "Segoe UI", Arial, sans-serif`;
+  const env = currentFontEnv();
+  if (env === LEGACY_FONT_ENV)
+    return `${style.fontStyle === 'italic' ? 'italic ' : ''}${style.fontWeight} ${size}px "${style.fontFamily}", "Inter", "Segoe UI", Arial, sans-serif`;
+  return env.font({
+    family: style.fontFamily,
+    fallbacks: style.fallbackFonts ?? [],
+    weight: style.fontWeight,
+    italic: style.fontStyle === 'italic',
+    smallCaps: false,
+    sizePx: size,
+    script,
+  });
+}
+
+/** The script whose fallback face legacy text asks the resolver for: the first of `textScripts`, else ''. */
+function legacyScript(text: string): string {
+  if (currentFontEnv() === LEGACY_FONT_ENV) return '';
+  for (const s of textScripts(text)) return s;
+  return '';
 }
 
 /** Greedy word wrap. Paragraphs are separated by \n. Long words are broken by characters. */
@@ -134,8 +159,9 @@ export function layoutText(
   let lineDirs: ('ltr' | 'rtl' | null)[] | null = null;
   let lh = 0;
   const dirs = paragraphDirections(text);
+  const script = legacyScript(text);
   for (;;) {
-    ctx.font = fontString(style, scale, size);
+    ctx.font = fontString(style, scale, size, script);
     setLetterSpacing(ctx, style.letterSpacing * scale);
     if (dirs) ({ lines, dirs: lineDirs } = wrapDirected(ctx, text, innerW, dirs));
     else lines = wrapLines(ctx, text, innerW);

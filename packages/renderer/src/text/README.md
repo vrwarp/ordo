@@ -23,8 +23,9 @@ drawRichText(ctx, o, scale)                                   rich.ts      clamp
 
 Public surface (`index.ts`, re-exported by `@ordo/renderer`): `Measurer`, `Seg`, `LaidLine`, `RichLayout`,
 `FontEnv`, `FaceRequest`, `layoutRich`, `paintRich`, `isRichText`, `drawRichText`, `clampTextObject`,
-`RICH_STYLE_KEYS`, the font environment (`LEGACY_FONT_ENV`, `FontResolver`, `installFontEnv`,
-`currentFontEnv`) and the measurers (`canvasMeasurer`, `measurerFor`, `WidthCache`).
+`RICH_STYLE_KEYS`, the font environment (`LEGACY_FONT_ENV`, `FontResolver` and its `FontFile`, `FontHost`,
+`FontChange` and `FontSyncResult` types, `internalFamilyName`, `installFontEnv`, `currentFontEnv`) and the
+measurers (`canvasMeasurer`, `measurerFor`, `WidthCache`).
 
 ## Rules every stage keeps
 
@@ -211,19 +212,35 @@ Paint passes and the dispatch of §6. **Done** (wave 1):
 
 ### E. fonts: `fonts.ts` and the three drawers
 
-§10 resolver.
-- `FontResolver`: register faces as `FontFace('o' + hash8(scope + family + sorted face hashes), buffer,
-  {weight, style, unicodeRange})`; a family enters font strings only once loaded and bumps `generation`;
-  order: exact face, `fallbackFonts`, the bundled script fallback for `FaceRequest.script`, the original
-  name (reported), a generic family. The legacy `fontString` (text2d.ts) uses the installed resolver.
-- Install it in `apps/output/src/asset.worker.ts`, `apps/operator/src/workers/thumb.worker.ts` and the
-  editor (`apps/operator/src/services/fonts.ts`); retry failed loads with backoff (`link-core.ts`
-  `fontsSig` path); report uncovered text per script through `self.fonts.check` in `health.fontFallbacks`;
-  take `'inter'` out of `FALLBACK_FAMILIES` once Inter is bundled.
-- `referencedFontFamilies` (`packages/domain/src/resolve.ts`) and `jobFontFamilies` (`raster.ts`) cover run
-  fonts, bullet fonts and `fallbackFonts`.
-- Until a resolver is installed, `LEGACY_FONT_ENV` builds font strings from family names and its generation
-  never changes: a font that loads after a rich object was first laid out is not picked up by the layout
-  memo or the width cache (keyed by the font string). The internal names and generations fix both.
-- Tests: a late-loaded font takes effect (new generation, new internal name) without a restart; families
-  from runs, bullets and fallbacks are referenced.
+§10 resolver. **Built** (M2 wave 1).
+- `FontResolver(host)`: `sync(files)` registers each listed family's faces as `FontFace('o' +
+  hash8(scope + family + sorted face keys), data, {weight, style, unicodeRange})`, all faces of a family
+  under one name, and no name twice (a face set that comes back gets a salted name). A family enters font
+  strings once its faces of that round have loaded and been added; `generation` changes then and
+  `onChange` fires (`late` when a retry, not a sync, loaded it). A face that cannot be read or parsed is
+  left out of its family's round and retried with backoff (2 s doubling to 5 min) and at once on the next
+  `sync`; families a later list leaves out keep their faces but are no longer retried. `loaded({family,
+  internal})` announces faces registered elsewhere.
+- `font(req)`: loaded internal names only, in order: the exact face, `fallbackFonts`, the script fallback
+  for `FaceRequest.script` (`SCRIPT_FALLBACK_FONTS` in `@ordo/domain`), then the original family name while
+  its faces have not loaded (the asset worker reports it), ordo's default face (Inter, once shipped) and
+  today's generic chain `"Inter", "Segoe UI", Arial, sans-serif`. An object whose family has not loaded
+  therefore draws exactly as before. The legacy `fontString` (text2d.ts) resolves through the installed
+  resolver, with the first `textScripts` script of the text; with none installed it is byte for byte today's.
+- Installed in `apps/output/src/asset.worker.ts`, `apps/operator/src/workers/thumb.worker.ts` and on the
+  operator page (`apps/operator/src/services/fonts.ts`: the editor canvas and look previews, which redraw on
+  `onFontsChanged` / `useFontGeneration`). When faces become available the asset worker posts their families
+  as `ready`; the link (`link-core.ts`) draws again in place the held slides that fell back for them and,
+  after a complete cache fill, asks for a retry of fonts that failed. The thumbnail worker posts late loads
+  and its client drops cached thumbnails.
+- `'inter'` is no longer in `FALLBACK_FAMILIES`: an output without a shipped Inter reports it.
+- `referencedFontFamilies` (domain; goLive matches family names case-insensitively) and `jobFontFamilies`
+  (`raster.ts`) cover run fonts, bullet fonts and `fallbackFonts`.
+- Tests: `fonts.test.ts` (names, stacks, retries, rounds, the layout memo following the generation), the
+  domain's `resolve.test.ts`, the link's late-font refresh, and `pnpm --filter @ordo/renderer late-font`: in
+  headless Chromium, in a worker and on a page, text drawn before its face loaded (after a failed read and a
+  retry; through a later sync) is drawn with the face on the next draw, with the face's widths and pixels.
+- Not built: the per-script coverage report. `FontFaceSet.check` says whether the matching faces have
+  loaded, not whether one has the glyphs, so it cannot find text no shipped face covers; M3, which ships the
+  script fallbacks, measures the text with the shipped stack before two different generic families instead
+  (the widths differ where a glyph falls through).

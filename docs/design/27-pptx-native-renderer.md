@@ -885,8 +885,17 @@ The exact `'lighter'` crossfade (`canvas2d.ts:60-85`) is unchanged.
   4. the original family name (last resort, reported; the editor's PowerPoint card asks for an upload);
   5. a generic family.
 - The legacy `fontString` uses the same resolver when one is installed.
-- The asset worker calls `self.fonts.check` per segment and reports text that no shipped face covers in `health.fontFallbacks`, with its script.
+- The asset worker reports text that no shipped face covers in `health.fontFallbacks`, with its script (M3, with the script fallbacks). `self.fonts.check` cannot do it: it says whether the matching faces have loaded, not whether one has the glyphs. The text is measured with the shipped stack before two different generic families instead; the widths differ where a glyph falls through.
 - Remove `'inter'` from `FALLBACK_FAMILIES` (`raster.ts:139-148`) and bundle Inter, so the default font is shipped like any other.
+
+*As built (M2, `packages/renderer/src/text/fonts.ts`):*
+- The original family name enters a stack only while its faces have not loaded, and the generic step is ordo's default face (Inter, once shipped) followed by today's chain `"Inter", "Segoe UI", Arial, sans-serif`, so an object whose family has not loaded draws as it did before the resolver.
+- No internal name is handed out twice: a face set that comes back gets a salted name.
+- A face that fails is left out of its family's round, which loads without it; it is retried with backoff (2 s doubling to 5 min), at once on the next sync, and after each complete cache fill of the output. Families a later list leaves out keep their faces (content on screen may use them) but are no longer retried.
+- When faces become available, the asset worker reports their families `ready`, and the link draws again in place the held slides that fell back for them. The thumbnail worker's client drops its cached thumbnails; the editor redraws.
+- goLive matches family names case-insensitively, as CSS and the resolver do.
+- `'inter'` left `FALLBACK_FAMILIES` in M2: until M3 bundles Inter, an output whose library has no Inter reports it as a fallback.
+- `pnpm --filter @ordo/renderer late-font` checks in headless Chromium, in a worker and on a page, that text drawn before its face loaded is drawn with that face on the next draw. In the worker it also re-runs the probe: a family measured before its face was added keeps its fallback width (on a page it takes the face).
 
 **Bundled substitutes and script fallbacks (M3).**
 - The hub registers a fixed list of OFL/Apache faces installed by the Dockerfile as `Font{source:'bundled'}` (the value exists and is unused, `schemas.ts:272`), idempotently by hash:

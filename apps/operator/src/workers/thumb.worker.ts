@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import type { Look, Rgba, Slide } from '@ordo/domain';
 import { isControl, startHeartbeat } from '@ordo/client';
-import { drawImageFit, drawSlide2D, fillColor } from '@ordo/renderer';
+import { FontResolver, drawImageFit, drawSlide2D, fillColor, installFontEnv } from '@ordo/renderer';
 
 /** Thumbnail worker (design/15): the shared 2D rasterizer on an OffscreenCanvas; the main thread never rasterizes. */
 
@@ -20,17 +20,27 @@ export type ThumbJob = {
   /** Look previews: the following slide, for a look that shows it (the stage look). */
   nextSlide?: Slide;
 };
-export type ThumbIn =
-  | { t: 'fonts'; fonts: { family: string; weight: number; style: string; url: string }[] }
-  | { t: 'render'; id: number; job: ThumbJob };
-export type ThumbOut = { t: 'done'; id: number; blob?: Blob; error?: string };
+export type ThumbFont = {
+  family: string;
+  weight: number;
+  style: 'normal' | 'italic';
+  /** The file's hash: read from the service-file cache when it is there. */
+  hash: string;
+  url: string;
+};
+export type ThumbIn = { t: 'fonts'; fonts: ThumbFont[] } | { t: 'render'; id: number; job: ThumbJob };
+export type ThumbOut =
+  | { t: 'done'; id: number; blob?: Blob; error?: string }
+  /** A font failed at first and has loaded since: thumbnails drawn before used a fallback for it. */
+  | { t: 'fonts'; families: string[] };
 
 const scope = self as unknown as DedicatedWorkerGlobalScope & { fonts?: FontFaceSet };
 const bitmaps = new Map<string, Promise<ImageBitmap | undefined>>();
-const loadedFonts = new Set<string>();
 let fontsReady: Promise<unknown> = Promise.resolve();
+/** Where each font file is fetched from when the service-file cache does not have it. */
+const fontUrls = new Map<string, string>();
 
-async function fileBlob(hash: string): Promise<Blob | undefined> {
+async function fileBlob(hash: string, url = `/api/v1/files/${hash}`): Promise<Blob | undefined> {
   try {
     const c = await caches.open('ordo-files');
     const hit = await c.match(`/__ordo_cache/${hash}`);
@@ -39,7 +49,7 @@ async function fileBlob(hash: string): Promise<Blob | undefined> {
     /* no Cache API */
   }
   try {
-    const r = await fetch(`/api/v1/files/${hash}`, { credentials: 'same-origin' });
+    const r = await fetch(url, { credentials: 'same-origin' });
     if (r.ok) return await r.blob();
   } catch {
     /* offline */
@@ -75,6 +85,21 @@ function bitmap(hash: string): Promise<ImageBitmap | undefined> {
   }
   return p;
 }
+
+// Fonts (design/27 §10): the same resolver as the outputs, so thumbnails break lines like them and a font
+// that loads late (a retried failure) is used without restarting this worker.
+const fonts = new FontResolver({
+  set: scope.fonts,
+  async data(f) {
+    const b = await fileBlob(f.hash, fontUrls.get(f.hash));
+    if (!b) throw new Error('file unavailable');
+    return b.arrayBuffer();
+  },
+});
+installFontEnv(fonts);
+fonts.onChange((c) => {
+  if (c.late) scope.postMessage({ t: 'fonts', families: c.families } satisfies ThumbOut);
+});
 
 async function render(job: ThumbJob): Promise<Blob> {
   await fontsReady;
@@ -115,20 +140,8 @@ scope.onmessage = (ev: MessageEvent<ThumbIn>) => {
   const m = ev.data;
   if (!m || isControl(m)) return;
   if (m.t === 'fonts') {
-    const loads: Promise<unknown>[] = [];
-    for (const f of m.fonts) {
-      const key = `${f.family}|${f.weight}|${f.style}|${f.url}`;
-      if (loadedFonts.has(key) || !scope.fonts) continue;
-      loadedFonts.add(key);
-      try {
-        const face = new FontFace(f.family, `url(${f.url})`, { weight: String(f.weight), style: f.style });
-        scope.fonts.add(face);
-        loads.push(face.load().catch(() => undefined));
-      } catch {
-        /* bad font */
-      }
-    }
-    fontsReady = Promise.allSettled([fontsReady, ...loads]);
+    for (const f of m.fonts) fontUrls.set(f.hash, f.url);
+    fontsReady = Promise.allSettled([fontsReady, fonts.sync(m.fonts)]);
     return;
   }
   render(m.job).then(
