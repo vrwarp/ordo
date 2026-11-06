@@ -133,6 +133,102 @@ function gradient(): OffscreenCanvas {
 
 const noImages = () => undefined;
 
+/** A picture whose sides tell apart: four coloured quadrants, a white frame and a white disc in the centre. */
+function quadrants(): OffscreenCanvas {
+  const c = new OffscreenCanvas(800, 600);
+  const ctx = c.getContext('2d')!;
+  const q: [string, number, number][] = [
+    ['#d83a3a', 0, 0],
+    ['#2fa84f', 400, 0],
+    ['#2f6fd8', 0, 300],
+    ['#e8c020', 400, 300],
+  ];
+  for (const [color, x, y] of q) {
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, 400, 300);
+  }
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 24;
+  ctx.strokeRect(12, 12, 776, 576);
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(400, 300, 90, 0, Math.PI * 2);
+  ctx.fill();
+  return c;
+}
+
+/**
+ * `ImageObject.crop` (design/27 §3.1): positive shares cut, negative shares pad with transparency (the
+ * backdrop shows through), under every `fit`, with rotation, radius and opacity; one crop leaves nothing.
+ * Each box is outlined above its picture.
+ */
+const cropped: Slide = (() => {
+  const box = (x: number, y: number, rotation = 0) => ({ x, y, w: 560, h: 420, rotation });
+  const frame = (id: string, b: ReturnType<typeof box>) => ({
+    id,
+    type: 'shape' as const,
+    box: b,
+    shape: 'rect' as const,
+    stroke: { width: 4, color: { r: 255, g: 255, b: 255, a: 0.7 } },
+    opacity: 1,
+    radius: 0,
+  });
+  const image = (
+    id: string,
+    b: ReturnType<typeof box>,
+    fit: 'contain' | 'cover' | 'stretch',
+    crop: { l: number; t: number; r: number; b: number },
+    extra: { opacity?: number; radius?: number } = {},
+  ) => ({
+    id,
+    type: 'image' as const,
+    box: b,
+    mediaId: 'quadrants',
+    fit,
+    opacity: extra.opacity ?? 1,
+    radius: extra.radius ?? 0,
+    crop,
+  });
+  const boxes = [
+    box(60, 60),
+    box(680, 60),
+    box(1300, 60, 12),
+    box(60, 600),
+    box(680, 600, -10),
+    box(1300, 600),
+  ];
+  return {
+    id: 'crop',
+    objects: [
+      {
+        id: 'backdrop',
+        type: 'shape',
+        box: { x: 40, y: 40, w: 1840, h: 1000, rotation: 0 },
+        shape: 'rect',
+        fill: { r: 120, g: 30, b: 120, a: 1 },
+        opacity: 1,
+        radius: 0,
+      },
+      // Cut from the left, top and bottom, stretched.
+      image('cut', boxes[0]!, 'stretch', { l: 0.25, t: 0.1, r: 0, b: 0.2 }),
+      // Padded left, right and top, stretched: the picture is smaller and lower in its box.
+      image('pad', boxes[1]!, 'stretch', { l: -0.25, t: -0.2, r: -0.25, b: 0 }),
+      // The green quadrant alone, contain-fitted, rotated, with round corners.
+      image('quarter', boxes[2]!, 'contain', { l: 0.5, t: 0, r: 0, b: 0.5 }, { radius: 48 }),
+      // Padded on the left and cut on the other sides, cover-fitted.
+      image('cover', boxes[3]!, 'cover', { l: -0.5, t: 0.25, r: 0.25, b: 0.25 }),
+      // Padded on every side, contain-fitted, rotated, translucent.
+      image('inset', boxes[4]!, 'contain', { l: -0.5, t: -0.5, r: -0.5, b: -0.5 }, { opacity: 0.8 }),
+      // Cuts more than the whole width: nothing is drawn.
+      image('none', boxes[5]!, 'stretch', { l: 0.6, t: 0, r: 0.5, b: 0 }),
+      ...boxes.map((b, i) => frame(`frame${i}`, b)),
+    ],
+  };
+})();
+
+let quadrantsImage: OffscreenCanvas | undefined;
+const cropImages = (id: string) => (id === 'quadrants' ? (quadrantsImage ??= quadrants()) : undefined);
+
 export const CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2D) => void> = {
   'main-authored': (ctx) => {
     fillColor(ctx, LOOK_MAIN.clearColor, W, H);
@@ -184,6 +280,10 @@ export const CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2D) => v
   'image-contain': (ctx) => {
     fillColor(ctx, { r: 40, g: 40, b: 40, a: 1 }, W, H);
     rasterImage(ctx, gradient(), 'contain', SCALE);
+  },
+  'image-crop': (ctx) => {
+    fillColor(ctx, LOOK_MAIN.clearColor, W, H);
+    rasterSlide(ctx, cropped, LOOK_MAIN, SCALE, cropImages, { isSong: false });
   },
 };
 

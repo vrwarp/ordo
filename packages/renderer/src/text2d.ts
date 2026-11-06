@@ -1,5 +1,6 @@
 import {
   type Box,
+  type ImageCrop,
   LOGICAL_HEIGHT,
   type Look,
   type Rgba,
@@ -10,7 +11,7 @@ import {
   rgbaCss,
 } from '@ordo/domain';
 
-import { CLAMP, clampBox, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
+import { CLAMP, clampBox, clampCrop, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
 
 export type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 export type ImageLookup = (mediaId: string) => CanvasImageSource | undefined;
@@ -214,6 +215,15 @@ export function drawText(
   return layout;
 }
 
+/**
+ * Draw a picture in `box` as `fit` says, clipped to the box (with `radius` corners) and rotated with it.
+ *
+ * `crop` (`ImageObject.crop`) first cuts a share of the picture from each side; `fit` then places what is
+ * left. A negative share extends the picture past that side with transparency, so the picture itself
+ * lands smaller in the box. Only the part of the cropped rect that lies on the picture is drawn, with the
+ * 9-argument `drawImage`; a crop that leaves nothing draws nothing. Without a crop the picture is drawn
+ * exactly as before crops existed.
+ */
 export function drawImageFit(
   ctx: Ctx2D,
   img: CanvasImageSource,
@@ -222,12 +232,26 @@ export function drawImageFit(
   fit: 'contain' | 'cover' | 'stretch',
   opacity = 1,
   radius = 0,
+  crop?: ImageCrop,
 ): void {
   box = clampBox(box);
   opacity = num(opacity, 0, 1, 1);
   radius = num(radius, 0, CLAMP.maxRadius, 0);
+  const c = clampCrop(crop);
   const iw = (img as { width: number }).width || (img as HTMLVideoElement).videoWidth || 1;
   const ih = (img as { height: number }).height || (img as HTMLVideoElement).videoHeight || 1;
+  // The cropped rect in picture pixels; it reaches past the picture where a share is negative.
+  let sx = 0;
+  let sy = 0;
+  let sw = iw;
+  let sh = ih;
+  if (c) {
+    sx = c.l * iw;
+    sy = c.t * ih;
+    sw = (1 - c.l - c.r) * iw;
+    sh = (1 - c.t - c.b) * ih;
+    if (!(sw > 0 && sh > 0)) return;
+  }
   const bx = box.x * scale;
   const by = box.y * scale;
   const bw = box.w * scale;
@@ -235,16 +259,40 @@ export function drawImageFit(
   let dw = bw;
   let dh = bh;
   if (fit !== 'stretch') {
-    const s = fit === 'contain' ? Math.min(bw / iw, bh / ih) : Math.max(bw / iw, bh / ih);
-    dw = iw * s;
-    dh = ih * s;
+    const s = fit === 'contain' ? Math.min(bw / sw, bh / sh) : Math.max(bw / sw, bh / sh);
+    dw = sw * s;
+    dh = sh * s;
   }
+  const dx = bx + (bw - dw) / 2;
+  const dy = by + (bh - dh) / 2;
   ctx.save();
   ctx.globalAlpha = opacity;
   withRotation(ctx, box, scale, () => {
     roundRect(ctx, bx, by, bw, bh, radius * scale);
     ctx.clip();
-    ctx.drawImage(img, bx + (bw - dw) / 2, by + (bh - dh) / 2, dw, dh);
+    if (!c) {
+      ctx.drawImage(img, dx, dy, dw, dh);
+      return;
+    }
+    // The part of the cropped rect that lies on the picture, and where it lands; the rest stays clear.
+    const x0 = Math.max(sx, 0);
+    const y0 = Math.max(sy, 0);
+    const x1 = Math.min(sx + sw, iw);
+    const y1 = Math.min(sy + sh, ih);
+    if (!(x1 > x0 && y1 > y0)) return;
+    const kx = dw / sw;
+    const ky = dh / sh;
+    ctx.drawImage(
+      img,
+      x0,
+      y0,
+      x1 - x0,
+      y1 - y0,
+      dx + (x0 - sx) * kx,
+      dy + (y0 - sy) * ky,
+      (x1 - x0) * kx,
+      (y1 - y0) * ky,
+    );
   });
   ctx.restore();
 }
@@ -282,7 +330,7 @@ export function drawObject(ctx: Ctx2D, o: SlideObject, scale: number, images?: I
   else if (o.type === 'shape') drawShape(ctx, o, scale);
   else {
     const img = images?.(o.mediaId);
-    if (img) drawImageFit(ctx, img, o.box, scale, o.fit, o.opacity, o.radius);
+    if (img) drawImageFit(ctx, img, o.box, scale, o.fit, o.opacity, o.radius, o.crop);
   }
 }
 

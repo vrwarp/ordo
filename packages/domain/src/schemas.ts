@@ -71,6 +71,17 @@ export const TextObject = z.object({
 });
 export type TextObject = z.infer<typeof TextObject>;
 
+/** A signed share of a length, -1..1 (design/27 §3.1). */
+const frac = z.number().min(-1).max(1);
+
+/**
+ * The share of the source picture cut from each side (PowerPoint's `a:srcRect`/100,000), applied before
+ * `fit`: what is left is the picture `fit` places in the box. A negative share extends the picture past
+ * that side instead, and the extension draws transparent (design/27 §3.1).
+ */
+export const ImageCrop = z.object({ l: frac, t: frac, r: frac, b: frac });
+export type ImageCrop = z.infer<typeof ImageCrop>;
+
 export const ImageObject = z.object({
   id: Id,
   type: z.literal('image'),
@@ -79,6 +90,8 @@ export const ImageObject = z.object({
   fit: z.enum(['contain', 'cover', 'stretch']).default('contain'),
   opacity: z.number().min(0).max(1).default(1),
   radius: length.default(0),
+  /** Absent in older builds, which strip it and draw the whole picture (design/27 §3.2). */
+  crop: ImageCrop.optional(),
 });
 export type ImageObject = z.infer<typeof ImageObject>;
 

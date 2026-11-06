@@ -1,5 +1,6 @@
 import {
   type Box,
+  type ImageCrop,
   LOGICAL_HEIGHT,
   LOGICAL_WIDTH,
   LOOK_MAIN,
@@ -141,6 +142,23 @@ function str(v: unknown, max = 200): string {
   return typeof v === 'string' ? v.slice(0, max) : '';
 }
 
+/**
+ * `ImageObject.crop` with every share finite and within -1..1 (a malformed share counts as 0). Undefined
+ * when absent, not an object, or cutting nothing. A crop that leaves nothing visible is kept: it draws
+ * nothing (`drawImageFit`).
+ */
+export function clampCrop(c: unknown): ImageCrop | undefined {
+  if (!c || typeof c !== 'object') return undefined;
+  const x = c as Partial<ImageCrop>;
+  const out: ImageCrop = {
+    l: num(x.l, -1, 1, 0),
+    t: num(x.t, -1, 1, 0),
+    r: num(x.r, -1, 1, 0),
+    b: num(x.b, -1, 1, 0),
+  };
+  return out.l || out.t || out.r || out.b ? out : undefined;
+}
+
 export function clampObject(o: unknown): SlideObject | undefined {
   if (!o || typeof o !== 'object') return undefined;
   const x = o as Partial<SlideObject> & { type?: unknown };
@@ -156,7 +174,18 @@ export function clampObject(o: unknown): SlideObject | undefined {
     const mediaId = str(i.mediaId);
     if (!mediaId) return undefined;
     const fit = i.fit === 'cover' || i.fit === 'stretch' ? i.fit : 'contain';
-    return { id, type: 'image', box, mediaId, fit, opacity, radius: num(i.radius, 0, CLAMP.maxRadius, 0) };
+    const out: Extract<SlideObject, { type: 'image' }> = {
+      id,
+      type: 'image',
+      box,
+      mediaId,
+      fit,
+      opacity,
+      radius: num(i.radius, 0, CLAMP.maxRadius, 0),
+    };
+    const crop = clampCrop(i.crop);
+    if (crop) out.crop = crop;
+    return out;
   }
   if (x.type === 'shape') {
     const s = x as Partial<Extract<SlideObject, { type: 'shape' }>>;
