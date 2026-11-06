@@ -24,6 +24,8 @@ export type RenderInit = {
   testPixel: boolean;
   /** Skip WebGPU (tests, diagnostics). */
   forceCanvas2d?: boolean;
+  /** Use WebGPU even on a software adapter, which otherwise gets Canvas 2D (tests; EngineOptions). */
+  allowFallbackAdapter?: boolean;
   /** Port from the asset worker (bitmaps arrive here). Deprecated: ports now arrive with `ports`. */
   assetPort?: MessagePort;
   clear: Rgba;

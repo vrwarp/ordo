@@ -34,6 +34,8 @@ export type EngineHost = {
   canvasUnused?: () => void;
   /** Override of the WebGPU compositor factory (tests). */
   createGpu?: (init: GpuInit) => Promise<Compositor>;
+  /** Override of the adapter probe that finds software adapters (tests); see `isFallbackAdapter`. */
+  probeAdapter?: () => Promise<unknown>;
   setTimeout?: (fn: () => void, ms: number) => unknown;
 };
 
@@ -43,6 +45,11 @@ export type EngineOptions = {
   height: number;
   testPixel: boolean;
   forceCanvas2d?: boolean;
+  /**
+   * Use WebGPU even on a software adapter (`isFallbackAdapter`, SwiftShader), which otherwise gets Canvas 2D
+   * (design/27 §7.2). For tests that exercise the WebGPU compositor in headless Chromium.
+   */
+  allowFallbackAdapter?: boolean;
   clear: Rgba;
   clockOffset: number;
   /**
@@ -57,6 +64,24 @@ export const GPU_RETRY_MAX_MS = 15 * 60_000;
 export const SNAP_MIN_MS = 140;
 /** A new or rebuilt compositor is not copied before it has drawn this long. */
 export const SNAP_SETTLE_MS = 1000;
+
+/** Whether a WebGPU adapter is a software fallback (`GPUAdapterInfo.isFallbackAdapter`, or the older flag). */
+export function isFallbackAdapter(adapter: unknown): boolean {
+  if (!adapter || typeof adapter !== 'object') return false;
+  const a = adapter as { isFallbackAdapter?: unknown; info?: { isFallbackAdapter?: unknown } };
+  return a.info?.isFallbackAdapter === true || a.isFallbackAdapter === true;
+}
+
+/** The adapter createGpuCompositor would get, or null without WebGPU. Never binds a canvas. */
+async function probeAdapter(): Promise<GPUAdapter | null> {
+  const gpu = (globalThis.navigator as (Navigator & { gpu?: GPU }) | undefined)?.gpu;
+  if (!gpu) return null;
+  try {
+    return await gpu.requestAdapter({ powerPreference: 'high-performance' });
+  } catch {
+    return null;
+  }
+}
 
 export class RenderEngine {
   readonly layers: LayerStack<ImageBitmap>[] = LAYERS.map(
@@ -174,6 +199,18 @@ export class RenderEngine {
   }
 
   /**
+   * A software adapter (`isFallbackAdapter`, SwiftShader) is treated as no WebGPU (design/27 §7.2): it runs
+   * the WebGPU pipelines on the CPU, and in headless Chromium its device is lost several times right after
+   * start (design/14). Probed before the canvas is bound, so Canvas 2D keeps the canvas; the slow retry
+   * probes again. `allowFallbackAdapter` (`?renderer=webgpu`) uses it anyway.
+   */
+  private async refuseFallbackAdapter(): Promise<void> {
+    if (this.opts.allowFallbackAdapter) return;
+    const adapter = await (this.host.probeAdapter ?? probeAdapter)();
+    if (isFallbackAdapter(adapter)) throw new Error('the adapter is a software fallback (isFallbackAdapter)');
+  }
+
+  /**
    * Try WebGPU again on a fresh canvas while Canvas 2D keeps drawing (review item 27). The first frame
    * is drawn into the new compositor before the swap, so the main thread can show the new canvas
    * without a blank frame; on failure the 2D compositor is untouched and the canvas is given back.
@@ -184,6 +221,7 @@ export class RenderEngine {
     this.gpuRetries++;
     let canvas: OffscreenCanvas | undefined;
     try {
+      await this.refuseFallbackAdapter();
       canvas = await this.host.requestCanvas!();
       const gpu = await (this.host.createGpu ?? createGpuCompositor)({
         canvas,
@@ -234,6 +272,7 @@ export class RenderEngine {
     let note: string | undefined;
     if (!this.opts.forceCanvas2d && !this.gpuDisabled) {
       try {
+        await this.refuseFallbackAdapter();
         this.compositor = await (this.host.createGpu ?? createGpuCompositor)({
           canvas: this.opts.canvas,
           width: this.opts.width,

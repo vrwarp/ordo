@@ -770,12 +770,14 @@ A slide whose playing `ImageObject` (`play`) is on the media layer becomes a **s
 - **Hot path.** `drawLayer`, `writeRect` and `writePlane` are `/* @hot */` and allocation-free (hot-lint). The generation check is an integer compare.
 - **Device loss** re-uploads base and over from the retained bitmaps (`engine.ts:293-297`).
 
-**Canvas 2D compositor**, per stack, into the existing scratch canvas when crossfading:
+**Canvas 2D compositor**, per stack:
 1. `drawImage(base)`;
-2. when the video is present: `save` → `setTransform(device affine)` → `clip(mask Path2D built in the offer handler)` → 9-argument `drawImage(VideoFrame, crop…)` → `restore`;
+2. when the video is present: `save` → `setTransform(device affine)` → 9-argument `drawImage(VideoFrame, crop…)` of the visible part of the UV rect → `restore`. An upright plane (no turn or a quarter turn, flips allowed) with a rect mask needs nothing more; its edges snap to whole pixels, as Chromium draws every upright image;
 3. `drawImage(over)`.
 
-The exact `'lighter'` crossfade (`canvas2d.ts:60-85`) is unchanged.
+Masks and turned edges are cut with fills, not `clip`: Chromium 153 anti-aliases neither a 2D clip on an `OffscreenCanvas` nor the edges of a drawn `VideoFrame`, even turned (measured), while fills are anti-aliased. The video is drawn into a frame-sized mask canvas within its whole-pixel bounds (a turned plane is first drawn 1.5 px larger, so the pixels its edge half covers have video under them), kept with `'destination-in'` where the visible rect (turned planes) and the mask `Path2D` (ellipse; rounded rect with its straight sides pushed outside the frame, so a frame edge is cut once) cover it, and that rect is copied to the target. Mask paths, the mask canvas and a scene canvas are made in the offer handler (`Canvas2DCompositor.prepare`, `Compositor.prepare`), never per frame; the two canvases cost 8 MB each at 1080p (33 MB at 4K) once a scene, or a masked or turned scene, is offered.
+
+A scene is several draws, so it is composed at full alpha before it is weighted: in the scene canvas during a crossfade, then mixed like any source, or in the existing scratch canvas when it fades alone. The exact `'lighter'` crossfade (`canvas2d.ts:60-85`) is otherwise unchanged. `golden/canvas-scene-run.ts` checks these pixels against the `planeSample` reference in headless Chromium.
 
 **Later (when the data asks for it).** Per-element animation (fly, wipe, zoom) needs more than one item per stack. It will render the stack into its layer texture, which is already `RENDER_ATTACHMENT`, with an instanced quad pipeline, and keep the pair pipelines for exact crossfades. The plane table is the extension point. It is not part of this design's milestones.
 

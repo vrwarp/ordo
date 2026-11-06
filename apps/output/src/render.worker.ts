@@ -64,6 +64,7 @@ async function init(m: Extract<ToRender, { t: 'init' }>): Promise<void> {
       height: m.height,
       testPixel: m.testPixel,
       forceCanvas2d: m.forceCanvas2d,
+      allowFallbackAdapter: m.allowFallbackAdapter,
       clear: m.clear,
       clockOffset: m.clockOffset,
     },

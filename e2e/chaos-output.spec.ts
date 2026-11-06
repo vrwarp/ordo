@@ -469,12 +469,13 @@ test('the output survives killed workers, a corrupt cache file and a malformed d
 
     await test.step('(d) GPU device-loss rebuilds after a reload never uncover a white or black canvas', async () => {
       // This container's software WebGPU loses its device right after start (several times, then the
-      // engine switches to Canvas 2D on a fresh canvas): reload without ?renderer=2d to get those rebuilds.
+      // engine switches to Canvas 2D on a fresh canvas): reload with ?renderer=webgpu (a software adapter
+      // otherwise gets Canvas 2D at once) to get those rebuilds.
       await o.bringToFront();
       const [cx, cy] = await centreXY(o);
       const ref = (await twoPixels(o, cx, cy))[1];
       expect(markerCue((await twoPixels(o, cx, cy))[0])).toBe(1);
-      await o.goto(o.url().replace('&renderer=2d', ''));
+      await o.goto(o.url().replace('&renderer=2d', '&renderer=webgpu'));
       const t0 = Date.now();
       const samples: {
         t: number;

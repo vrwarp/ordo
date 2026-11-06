@@ -89,6 +89,12 @@ comparison (the run says so); once it lands, CI should pass `--require-2d`.
 is present `save`, `setTransform(planeForward(plane))`, `clip(mask Path2D)` (built in the offer handler, not
 per frame), 9-argument `drawImage(frame, crop…)` in frame units, `restore`; then `drawImage(over)`. The exact
 'lighter' crossfade is unchanged.
+Done, with one change: masks and turned edges are cut with `'destination-in'` fills in a mask canvas, since
+Chromium anti-aliases neither an OffscreenCanvas clip nor a VideoFrame's edges (design/27 §7.2). Mask paths
+and canvases are made in `Canvas2DCompositor.prepare` (item B's `Compositor.prepare` hook). Scenes are
+composed at full alpha before a fade weights them. Pixels: `npx tsx packages/renderer/golden/canvas-scene-run.ts`
+(20 cases against `planeSample`). Fallback adapters get Canvas 2D (`engine.ts`; `?renderer=webgpu` and
+`EngineOptions.allowFallbackAdapter` keep WebGPU for tests).
 
 **(D) link-arming.** `packages/renderer/src/plan.ts` (`MediaDesc.inSlide` when the media content has
 `objectId`, its cue is the slide layer's cue and the look's slide mode is `authored`: media key '' with the
