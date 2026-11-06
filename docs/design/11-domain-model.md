@@ -22,11 +22,39 @@ type Presentation = {
   sections: Section[];
   arrangements: Arrangement[]; // arrangements[0] is the default (authoring order)
   loop?: { defaultSlideMs: number };
-  source?: { kind: 'pro7' | 'songselect' | 'pptx' | 'pdf' | 'manual'; fileId?: Id; log?: string };
+  source?: {
+    kind: 'pro7' | 'songselect' | 'pptx' | 'pdf' | 'manual';
+    fileId?: Id;
+    log?: string;
+    native?: PptxNativeSource; // set by the native PowerPoint import (design/27 §3.1)
+  };
   archived: boolean;
 };
 
 type Section = { id: Id; label: string; short: string; slides: Slide[] };
+
+// Where an imported PowerPoint slide came from. Enums degrade to their defaults when unknown.
+type SlidePptx = {
+  fileId: Id; // the stored deck (SHA-256)
+  index: number; // place in p:sldIdLst, hidden slides counted
+  shown?: number; // place among shown slides (the LibreOffice page); absent when hidden
+  class: 'native' | 'hybrid' | 'picture';
+  version: number; // converter version
+  digest?: string; // of the objects the converter wrote: "unedited" while they still match
+  pending?: boolean; // LibreOffice work for this slide still to come
+  notes?: string[]; // what was approximated (≤ 16)
+  artText?: string; // text baked into the art or page picture (search and labels only)
+  refMediaId?: Id; // LibreOffice picture of the whole slide, on demand
+  show?: 'objects' | 'picture';
+};
+type PptxNativeSource = {
+  version: number;
+  slides: number;
+  native: number;
+  hybrid: number;
+  picture: number;
+  slideRect?: { x: number; y: number; w: number; h: number }; // the deck's area in 1920x1080
+};
 
 type Slide = {
   id: Id;
@@ -37,6 +65,11 @@ type Slide = {
   durationMs?: number; // for loop presentations
   notes?: string;
   overrides?: string[]; // paths of theme properties overridden
+  hidden?: boolean; // a hidden PowerPoint slide: its cue is flagged; Next/Prev/auto-advance skip it (design/27 §9)
+  transition?: Transition; // the slide's own: a cue uses item ?? slide ?? presentation (design/27 §9)
+  pptx?: SlidePptx; // PowerPoint provenance, never drawable content (design/27 §3.1)
+  // imported.textAligned?: boolean: the text boxes are keyed by shown slide, so text readers may fall back
+  // to them (design/27 §11); legacy boxes, matched by list index, are not trusted.
   imported?: { fileId: Id; page: number; imageMediaId: Id; textBoxes?: ExtractedText[] };
 };
 
@@ -113,7 +146,8 @@ type Font = {
   weight: number;
   style: 'normal' | 'italic';
   file: FileRef;
-  source: 'upload' | 'google';
+  source: 'upload' | 'google' | 'bundled';
+  unicodeRange?: string; // CSS unicode-range of a subset face (Google Fonts subsets, design/27 §10)
 };
 
 // Playlists

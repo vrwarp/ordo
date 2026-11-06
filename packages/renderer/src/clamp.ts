@@ -254,9 +254,49 @@ export function clampSlide(slide: unknown): Slide {
         box: clampBox(t?.box),
         fontSizePx: t?.fontSizePx === undefined ? undefined : clampFontSize(t.fontSizePx),
       }));
+    if (imp.textAligned === true) out.imported.textAligned = true;
   }
+  if (s.hidden === true) out.hidden = true;
+  const transition = clampTransition(s.transition);
+  if (transition) out.transition = transition;
+  const pptx = clampPptx(s.pptx);
+  if (pptx) out.pptx = pptx;
   if (slide && typeof slide === 'object') slideMemo.set(slide, out);
   slideMemo.set(out, out);
+  return out;
+}
+
+type SlideTransition = NonNullable<Slide['transition']>;
+type SlidePptx = NonNullable<Slide['pptx']>;
+
+/** A slide's own transition (design/27 §9): a cut, or a crossfade of 0-10 s; undefined when unusable. */
+export function clampTransition(t: unknown): SlideTransition | undefined {
+  if (!t || typeof t !== 'object') return undefined;
+  const x = t as { kind?: unknown; ms?: unknown };
+  if (x.kind === 'cut') return { kind: 'cut' };
+  if (x.kind === 'crossfade') return { kind: 'crossfade', ms: num(x.ms, 0, 10_000, 300) };
+  return undefined;
+}
+
+/**
+ * What drawers read of `Slide.pptx` (design/27 §5 "One rule for every drawer": `show` and `refMediaId`),
+ * with the required provenance bounded. Notes, `artText` and the digest are not drawn and are dropped;
+ * unknown enum values fall back to the defaults, as the schema's `.catch` does. Undefined when absent.
+ */
+export function clampPptx(p: unknown): SlidePptx | undefined {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return undefined;
+  const x = p as Partial<Record<keyof SlidePptx, unknown>>;
+  const out: SlidePptx = {
+    fileId: str(x.fileId),
+    index: Math.round(num(x.index, 0, 100_000, 0)),
+    class: x.class === 'hybrid' || x.class === 'picture' ? x.class : 'native',
+    version: Math.round(num(x.version, 1, 1_000_000, 1)),
+  };
+  if (x.shown !== undefined) out.shown = Math.round(num(x.shown, 0, 100_000, 0));
+  if (x.pending === true) out.pending = true;
+  const ref = str(x.refMediaId);
+  if (ref) out.refMediaId = ref;
+  if (x.show === 'picture') out.show = 'picture';
   return out;
 }
 

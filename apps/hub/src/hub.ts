@@ -105,7 +105,9 @@ export async function createHub(overrides: Partial<HubConfig> = {}): Promise<Hub
   const jobs = new JobQueue(db, log, cfg.jobs, (job) => lib.emit([{ kind: 'job', id: job.id, entity: job }]));
   const media = new MediaService(lib, store, jobs, cfg, log);
   const fonts = new FontService(lib, store, jobs, cfg, log);
-  const imports = new ImportService(lib, store, jobs, media, cfg, log);
+  const imports = new ImportService(lib, store, jobs, media, cfg, log, (id) =>
+    live.locks().presentations.has(id),
+  );
   const live = new LiveService(db, librarySource(lib), log, { snapshotIntervalMs: cfg.snapshotIntervalMs });
   const timeZone = () => venueTimeZone(lib.getSetting('general').timeZone, cfg.timeZone);
   const backups = new Backups(db, lib, { dataDir: cfg.dataDir, timeZone }, log);

@@ -134,6 +134,43 @@ export const ScriptureSlideSource = z.object({
 });
 export type ScriptureSlideSource = z.infer<typeof ScriptureSlideSource>;
 
+export const Transition = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('cut') }),
+  z.object({ kind: z.literal('crossfade'), ms: z.number().min(0).max(10000) }),
+]);
+export type Transition = z.infer<typeof Transition>;
+
+/**
+ * Where a slide came from in a PowerPoint deck (design/27 §3.1, M3): provenance only, never drawable
+ * content. `artText` is the one exception, kept for search and labels. Enums use .catch(default), so a value
+ * a later release adds degrades instead of failing Slide.safeParse.
+ */
+export const SlidePptx = z.object({
+  /** The stored deck: its SHA-256, the `files` row (`Presentation.source.fileId`). */
+  fileId: Id,
+  /** Position in the deck's slide order (`p:sldIdLst`), hidden slides counted. */
+  index: z.number().int().min(0).max(100_000),
+  /** Position among the shown slides (the LibreOffice page); absent for a hidden slide. */
+  shown: z.number().int().min(0).max(100_000).optional(),
+  /** native: every element is an ordo object; hybrid: plus one locked art picture; picture: a page picture. */
+  class: z.enum(['native', 'hybrid', 'picture']).catch('native'),
+  /** The converter version that wrote the slide. */
+  version: z.number().int().min(1).max(1_000_000),
+  /** Digest of the objects the converter wrote: the slide is unedited while its objects still match it. */
+  digest: z.string().max(100).optional(),
+  /** LibreOffice work for this slide (art, metafiles, page picture) is still to come. */
+  pending: z.boolean().optional(),
+  /** What was approximated or left out, shown in the editor. */
+  notes: z.array(z.string().max(200)).max(16).optional(),
+  /** Text of the text bodies baked into the art or page picture: search and labels only. */
+  artText: z.string().max(MAX.text).optional(),
+  /** LibreOffice picture of the whole slide, made on demand ('Show PowerPoint picture'). */
+  refMediaId: Id.optional(),
+  /** What every drawer shows: the objects (default) or the reference picture (`refMediaId`). */
+  show: z.enum(['objects', 'picture']).catch('objects').optional(),
+});
+export type SlidePptx = z.infer<typeof SlidePptx>;
+
 export const Slide = z.object({
   id: Id,
   objects: z.array(SlideObject).max(1000).default([]),
@@ -147,12 +184,22 @@ export const Slide = z.object({
   durationMs: z.number().min(0).max(MAX.ms).optional(),
   notes: z.string().max(MAX.long).optional(),
   overrides: z.array(z.string().max(200)).max(1000).optional(),
+  /** A hidden PowerPoint slide: its cue is flagged, and Next, Prev and auto-advance skip it (design/27 §9). */
+  hidden: z.boolean().optional(),
+  /** The slide's own transition: a cue uses `item ?? slide ?? presentation` (design/27 §9). */
+  transition: Transition.optional().catch(undefined),
+  pptx: SlidePptx.optional(),
   imported: z
     .object({
       fileId: Id,
       page: z.number().int().min(0).max(100_000),
       imageMediaId: Id,
       textBoxes: z.array(ExtractedText).max(1000).optional(),
+      /**
+       * The text boxes are this page's (keyed by shown slide, uniform mapping): text readers may fall back
+       * to them (design/27 §11). Legacy boxes, matched by list index, are not trusted.
+       */
+      textAligned: z.boolean().optional(),
     })
     .optional(),
   scripture: ScriptureSlideSource.optional(),
@@ -172,18 +219,24 @@ export type Section = z.infer<typeof Section>;
 export const Arrangement = z.object({ id: Id, name: name(), sectionIds: z.array(Id).max(10_000) });
 export type Arrangement = z.infer<typeof Arrangement>;
 
-export const Transition = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('cut') }),
-  z.object({ kind: z.literal('crossfade'), ms: z.number().min(0).max(10000) }),
-]);
-export type Transition = z.infer<typeof Transition>;
-
 export const PresentationKind = z.enum(['song', 'slides', 'loop']);
 export type PresentationKind = z.infer<typeof PresentationKind>;
 
 /** What draws a PowerPoint's slides into pictures on import (design/20 "PPTX and PDF"). */
 export const PptxRenderer = z.enum(['libreoffice', 'pptx-preview']);
 export type PptxRenderer = z.infer<typeof PptxRenderer>;
+
+/** What a native PowerPoint import made of the deck (design/27 §3.1, M3): converter version and class counts. */
+export const PptxNativeSource = z.object({
+  version: z.number().int().min(1).max(1_000_000),
+  slides: z.number().int().min(0).max(100_000),
+  native: z.number().int().min(0).max(100_000),
+  hybrid: z.number().int().min(0).max(100_000),
+  picture: z.number().int().min(0).max(100_000),
+  /** The deck's area in the 1920x1080 frame (a 4:3 deck leaves bars), the editor's guide. */
+  slideRect: z.object({ x: coord, y: coord, w: length, h: length }).optional(),
+});
+export type PptxNativeSource = z.infer<typeof PptxNativeSource>;
 
 export const Presentation = z.object({
   id: Id,
@@ -215,6 +268,8 @@ export const Presentation = z.object({
       /** What drew a PowerPoint's slide pictures (design/20 "PPTX and PDF"). */
       renderer: PptxRenderer.optional(),
       log: z.string().max(MAX.long).optional(),
+      /** Set by the native PowerPoint import; `renderer` stays unset (it is never widened, design/27 §3.2). */
+      native: PptxNativeSource.optional(),
     })
     .optional(),
   archived: z.boolean().default(false),
@@ -283,6 +338,8 @@ export const Font = z.object({
   style: z.enum(['normal', 'italic']),
   file: FileRef,
   source: z.enum(['upload', 'google', 'bundled']),
+  /** CSS `unicode-range` of a subset face (a Google Fonts subset), passed to `FontFace` (design/27 §10). */
+  unicodeRange: z.string().max(4000).optional(),
 });
 export type Font = z.infer<typeof Font>;
 

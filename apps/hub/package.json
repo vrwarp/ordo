@@ -14,6 +14,7 @@
     "@ordo/importers": "workspace:*",
     "@ordo/live-state": "workspace:*",
     "@ordo/pptx-render": "workspace:*",
+    "@ordo/pptx-scene": "workspace:*",
     "@ordo/protocol": "workspace:*",
     "@fastify/cookie": "^11.1.5",
     "@fastify/multipart": "^10.1.7",

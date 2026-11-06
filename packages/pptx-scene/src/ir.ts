@@ -340,7 +340,10 @@ export interface SlideScene {
 /** A `p14:sectionLst` section. */
 export interface SectionInfo {
   name: string;
-  /** Indexes into `DeckScene.slides`. */
+  /**
+   * The slides' places in the deck's order (`SlideScene.index`). Without `ParseOptions.range` these are also
+   * indexes into `DeckScene.slides`.
+   */
   slides: number[];
 }
 
@@ -350,4 +353,35 @@ export interface DeckScene {
   sections: SectionInfo[];
   /** Deck-level notes (sanitised log lines). */
   notes: string[];
+}
+
+// ── Hub follow-up (M3) ──────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * An element named so that a later step finds it again in the deck without the IR: the render copy keeps
+ * exactly the art's elements, the version-2 patch knows what the art replaces (design/27 §5).
+ */
+export interface ElementRef {
+  from: ElementBase['from'];
+  /** `p:cNvPr id`. */
+  shapeId: number;
+  /** Ids repeat in real decks: the place among the elements of `from` with this id, bottom first, from 0. */
+  nth: number;
+}
+
+/**
+ * What a hybrid slide's art holds once the slide is emitted (design/27 §5 "Slide class"): everything the
+ * LibreOffice follow-up needs, without the IR. Added by M3 item D (`hybrid.ts`).
+ */
+export interface ArtInfo {
+  /** The elements baked into the art: every residual and the overlapped elements of the range, bottom first. */
+  elements: ElementRef[];
+  /** The art object's box in logical px (the elements' bounding box). */
+  box: { x: number; y: number; w: number; h: number };
+  /** Where the art object goes in `Slide.objects` in version 2. */
+  at: number;
+  /** Ids of the version-1 objects the art replaces (the non-residual elements it bakes in). */
+  replaces: string[];
+  /** Text of the text bodies baked into the art (`Slide.pptx.artText`, search only). */
+  text: string;
 }

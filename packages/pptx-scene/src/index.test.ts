@@ -1,6 +1,6 @@
 import { Slide } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
-import { emitSlides, MEDIA_PREFIX, parseDeck } from './index.ts';
+import { convertDeck, emitSlides, MEDIA_PREFIX, parseDeck } from './index.ts';
 import {
   body,
   buildDeck,
@@ -165,5 +165,39 @@ describe('parseDeck → emitSlides', () => {
 
   it('throws only when the deck has no presentation part', () => {
     expect(() => parseDeck(new Map())).toThrow(/presentation/);
+  });
+});
+
+describe('convertDeck (the hub pool task entry, M3)', () => {
+  const box = (id: number, color: string) => sp({ id, x: IN, y: IN, cx: IN, cy: IN, fill: solid(color) });
+  const deck = () =>
+    buildDeck({
+      slides: [
+        { shapes: box(2, 'FF0000') },
+        { hidden: true, shapes: box(2, '00FF00') },
+        { shapes: box(2, '0000FF') },
+      ],
+    });
+
+  it('converts the whole deck like parseDeck and emitSlides, with the slide list', () => {
+    const all = convertDeck(deck());
+    const twoStep = emitSlides(parseDeck(deck()));
+    expect(all.slides.map((s) => s.slide)).toEqual(twoStep.slides.map((s) => s.slide));
+    expect(all.listed.map((r) => [r.index, r.hidden, r.shown])).toEqual([
+      [0, false, 0],
+      [1, true, undefined],
+      [2, false, 1],
+    ]);
+    expect(all.frame.cx).toBeGreaterThan(0);
+  });
+
+  it('converts only the slides of a range, keeping deck facts whole', () => {
+    const batch = convertDeck(deck(), { range: { from: 1, to: 3 } });
+    expect(batch.slides.map((s) => [s.index, s.hidden, s.shown])).toEqual([
+      [1, true, undefined],
+      [2, false, 1],
+    ]);
+    expect(batch.listed).toHaveLength(3);
+    expect(convertDeck(deck(), { range: { from: 3, to: 9 } }).slides).toEqual([]);
   });
 });

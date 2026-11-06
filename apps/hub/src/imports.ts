@@ -29,6 +29,7 @@ import type { Library } from './library.ts';
 import { fitPage, pdfToPngs, pptxToPdf } from './media/ffmpeg.ts';
 import { baseName, type MediaService } from './media/service.ts';
 import { cpuPool, transferables, WorkerStartError } from './pool.ts';
+import { PptxImports } from './pptx/index.ts';
 import type { Store } from './store.ts';
 
 export type Pro7Result = {
@@ -98,7 +99,10 @@ type ImportFiles = { files: Map<string, Uint8Array>; onDisk: Map<string, string>
 
 export class ImportService {
   private imp: Importers;
+  /** The native PowerPoint import and its follow-up jobs (design/27, `pptx/`). */
+  readonly pptx: PptxImports;
 
+  /** `locked`: whether a presentation is frozen in the live session (ADR 0007); imports never write it then. */
   constructor(
     private lib: Library,
     private store: Store,
@@ -106,10 +110,12 @@ export class ImportService {
     private media: MediaService,
     private cfg: HubConfig,
     private log: Logger,
+    locked: (presentationId: string) => boolean,
   ) {
     this.imp = (cfg.importers as Importers | undefined) ?? (realImporters as unknown as Importers);
     jobs.register<Pro7Payload>('pro7-import', (ctx) => this.pro7Job(ctx));
     jobs.register<DocPayload>('document', (ctx) => this.documentJob(ctx));
+    this.pptx = new PptxImports({ lib, store, jobs, media, cfg, log, locked });
   }
 
   theme(p?: { themeId?: string }): Theme {

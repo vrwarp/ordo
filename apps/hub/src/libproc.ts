@@ -84,7 +84,9 @@ export async function createLibraryProcess(
   const jobs = new JobQueue(db, log, cfg.jobs, (job) => lib.emit([{ kind: 'job', id: job.id, entity: job }]));
   const media = new MediaService(lib, store, jobs, cfg, log);
   const fonts = new FontService(lib, store, jobs, cfg, log);
-  const imports = new ImportService(lib, store, jobs, media, cfg, log);
+  const imports = new ImportService(lib, store, jobs, media, cfg, log, (id) =>
+    liveView.locks().presentations.has(id),
+  );
   const timeZone = () => venueTimeZone(lib.getSetting('general').timeZone, cfg.timeZone);
   const backups = new Backups(db, lib, { dataDir: cfg.dataDir, timeZone }, log);
 

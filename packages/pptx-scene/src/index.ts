@@ -9,11 +9,11 @@
  */
 import { classifySlide } from './classify.ts';
 import { slideContext } from './context.ts';
-import { readDeck } from './deck.ts';
+import { type DeckInfo, readDeck, type SlideRef } from './deck.ts';
 import { readBackground } from './background.ts';
 import { type EmitOptions, type EmitResult, emitDeck } from './emit.ts';
 import { frameOf } from './frame.ts';
-import type { DeckScene, SlideScene } from './ir.ts';
+import type { DeckScene, Frame, SectionInfo, SlideScene } from './ir.ts';
 import { clean, type Log, noteList } from './log.ts';
 import { openPackage, type PartSource } from './opc.ts';
 import { walkSlide } from './walk.ts';
@@ -39,6 +39,11 @@ export interface ParseOptions {
    * image over the slide rather than as the slide background (design/27 §4 "Backgrounds").
    */
   pictureSize?: (part: string) => { w: number; h: number } | undefined;
+  /**
+   * Read only the slides whose place in the deck's order (`SlideRef.index`) is in [from, to): one batch of
+   * the hub's pool task (design/27 §2). Deck facts (frame, sections, notes) are read whole either way.
+   */
+  range?: { from: number; to: number };
 }
 
 /** Picture sides a caller's size may have (`picture.ts` reads headers to the same bound). */
@@ -71,6 +76,10 @@ function pictureSizes(
  * quarantined as class 'picture'). Throws only when the deck has no readable presentation part.
  */
 export function parseDeck(src: PartSource, opts: ParseOptions = {}): DeckScene {
+  return readScene(src, opts).scene;
+}
+
+function readScene(src: PartSource, opts: ParseOptions): { scene: DeckScene; deck: DeckInfo } {
   const deckNotes = noteList();
   const log: Log = (msg) => {
     deckNotes.log(msg);
@@ -80,7 +89,9 @@ export function parseDeck(src: PartSource, opts: ParseOptions = {}): DeckScene {
   const deck = readDeck(pkg);
   const frame = frameOf(deck.size.cx, deck.size.cy);
   const pictureSize = pictureSizes(opts.pictureSize);
-  const slides: SlideScene[] = deck.slides.map((ref) => {
+  const range = opts.range;
+  const refs = range ? deck.slides.filter((r) => r.index >= range.from && r.index < range.to) : deck.slides;
+  const slides: SlideScene[] = refs.map((ref) => {
     const t0 = performance.now();
     const { notes, log: slideLog } = noteList();
     const base = {
@@ -117,10 +128,33 @@ export function parseDeck(src: PartSource, opts: ParseOptions = {}): DeckScene {
       };
     }
   });
-  return { frame, slides, sections: deck.sections, notes: deckNotes.notes };
+  return { scene: { frame, slides, sections: deck.sections, notes: deckNotes.notes }, deck };
 }
 
 /** Turn a scene into ordo slides (see `EmitOptions`). Pure: the same scene and options give the same slides. */
 export function emitSlides(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
   return emitDeck(scene, opts);
+}
+
+export interface ConvertOptions extends ParseOptions, EmitOptions {}
+
+/** `convertDeck`'s answer: the emitted slides of the range, with the deck facts a batch caller needs. */
+export interface ConvertResult extends EmitResult {
+  frame: Frame;
+  /** Sections over the whole deck, by `SlideRef.index`. */
+  sections: SectionInfo[];
+  /** Every slide the deck lists, in order (all batches): part, hidden flag and shown index. */
+  listed: SlideRef[];
+}
+
+/**
+ * Parse and emit in one call, the entry point of the hub's `pptx-scene` pool task (design/27 §2, M3). With
+ * `range`, only that batch of slides is converted; media ids (`pptxmedia:<n>`) and default object ids are
+ * numbered per call, so a batch caller maps them through `EmitResult.media` or passes `mediaId`/`newId`.
+ * The IR is not returned: M3 item A keeps only one slide's IR alive at a time behind this signature.
+ */
+export function convertDeck(src: PartSource, opts: ConvertOptions = {}): ConvertResult {
+  const { scene, deck } = readScene(src, opts);
+  const out = emitDeck(scene, opts);
+  return { ...out, frame: scene.frame, sections: scene.sections, listed: deck.slides };
 }

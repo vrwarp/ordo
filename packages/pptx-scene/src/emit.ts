@@ -55,6 +55,7 @@ import { apply, boxPx, decompose, lenPx, multiply, ptPx, slideRect } from './fra
 import { isFooter, isTitle, masterClass } from './inherit.ts';
 import type {
   Affine,
+  ArtInfo,
   Classification,
   DeckScene,
   Element,
@@ -139,6 +140,8 @@ export interface EmittedSlide {
   notes: string[];
   /** Time spent emitting this slide, in ms. */
   ms: number;
+  /** Hybrid slides: what the art holds, for the LibreOffice follow-up (M3 item D). */
+  art?: ArtInfo;
 }
 
 export interface EmitResult {
