@@ -315,6 +315,37 @@ drawn with LibreOffice's policies / with ordo's; pptx-preview with ordo's correc
 - `--baseline` against M1's native scores flags one deck per shard (−0.044 each): the two decks of the
   template above.
 
+Round 1, measured the same way after four renderer fixes were merged (PowerPoint's stored fit scale kept
+only for the face it was fitted with, design/27 §6 step 10 and §10; the line of a trailing a:br single
+spaced; pictures prepared once at their device size, §7.1; 1 pt runs kept at 2 px, §3.2). Every M2 exit
+criterion of design/27 §15 is now met:
+- Sermon decks: 0.955 / 0.953 (round 0: 0.944 / 0.932) against pptx-preview's 0.927, every deck above
+  pptx-preview with both policies, by 0.012 to 0.063. The three slides whose face is substituted went
+  from 0.734, 0.594 and 0.594 to 0.956, 0.899 and 0.899 with ordo's policies, and five slides of another
+  deck that end paragraphs with a:br from 0.73-0.90 to 0.96-0.98. 72 of 73 slides native class (the 3D
+  slide hybrid).
+- Worship shards 0 and 2: T1+T2 slides (1,014; 1,003 native class, 11 hybrid for `anchorCtr` until
+  M8) 0.908 / 0.897 (round 0: 0.906 / 0.895) against 0.859 on the same slides; shard 0 0.920 / 0.915
+  against 0.883, shard 2 0.897 / 0.881 against 0.838. Shard means 0.802 / 0.799 and 0.834 / 0.827
+  (round 0: 0.795 / 0.792 and 0.832 / 0.824). Of 1,999 slides compared with round 0, 283 rose by more
+  than 0.002 and 10 fell, one by more than 0.01: a Tamil slide (0.638 → 0.597) whose face is
+  substituted, so it is now fitted from full size as LibreOffice fits it, a drawing that scored 0.597 in
+  round 0 as well (its `--lo-compat` picture), where PowerPoint's stored scale scored 0.638.
+- Text features, deck means (pptx-preview; target): superSub 0.661 / 0.654 (0.616; 0.61), lnSpcPct 0.800 /
+  0.799 (0.743; 0.75), normAutofitScaled 0.850 / 0.840 (0.762; 0.77), rtl 0.800 / 0.799 (0.685; 0.71),
+  rtlScriptText 0.688 / 0.688 (0.645; 0.66).
+- Raster p95 on the sermon slides, ordo's drawings (a run without `--lo-compat`, twice): 4.1 ms at 1920
+  and 23.9-24.4 ms at 3840 (round 0: 10.2 and 45.4), within the budget of 8 and 30 ms. The slowest are
+  slides with shadowed text (the effect sprite cache of design/27 §7.5), up to 29.7 ms at 3840; drawn as
+  LibreOffice draws them, without run shadows, the p95 is 3.9 and 14.1 ms.
+- The 25 lowest T1+T2 slides with ordo's policies (0.31-0.47) come from seven decks. Ten are two decks of
+  one template whose theme background (`bgRef` 1002, a gradient) is drawn flat until M6 (pptx-preview
+  0.42-0.63). Seven are one deck where ordo keeps PowerPoint's stored scale on a metric-compatible face
+  and LibreOffice fits again (0.76-0.91 drawn with LibreOffice's policies), four a deck with an inherited
+  stored scale. The rest: a Google Slides deck whose Arabic face is wider than LibreOffice's and one with
+  embedded fonts, both within 0.01 of pptx-preview, and a page of very small verse references (0.464,
+  pptx-preview 0.545).
+
 Not done: hyperlink colours (PowerPoint draws linked runs in the theme's hlink colour), symbol-font
 characters inside the text itself (`a:sym`), `origin` and the `role: 'translation'` of the second
 language box (M3, with the rest of `ObjectOrigin`), vertical text (residual until M8).
