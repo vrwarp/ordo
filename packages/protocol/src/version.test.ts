@@ -19,7 +19,7 @@ import { APP_VERSION } from './index.ts';
  */
 const RECORDED = {
   version: '0.2.0',
-  digest: '3ba029a264fa6450da8ce3bdacd44de9a9bbeda686ec6ea6676e1e2ce4820a8e',
+  digest: '7841c21067fb9bfb6c84af249f108cc7ee75e396d96aac36593474f170e83121',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */
@@ -27,6 +27,7 @@ const SHARED = [
   'packages/live-state/src/index.ts',
   'packages/live-state/src/actions.ts',
   'packages/live-state/src/invariants.ts',
+  'packages/domain/src/content.ts',
   'packages/domain/src/cues.ts',
   'packages/domain/src/live.ts',
   'packages/domain/src/schemas.ts',

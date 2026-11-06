@@ -1,5 +1,5 @@
 import { fileUrl, isControl, type Supervisor } from '@ordo/client';
-import { type Font, type Look, type Media, type Slide, stillFile } from '@ordo/domain';
+import { type Font, type Look, type Media, type Slide, drawnMediaIds, stillFile } from '@ordo/domain';
 import { useEffect, useState } from 'react';
 import type { ThumbIn, ThumbJob, ThumbOut } from '../workers/thumb.worker.ts';
 
@@ -217,17 +217,16 @@ class Thumbs {
 
 export const thumbs = new Thumbs();
 
-/** Media-id to hash map for a slide's images. */
+/**
+ * Media-id to hash map for the pictures a slide draws (`drawnMediaIds`, the outputs' rule of design/27 §5):
+ * its PowerPoint reference picture or imported page, then its image objects (only the operator's own on a
+ * reference picture), a video by its poster.
+ */
 export function slideImages(slide: Slide, media: (id: string) => Media | undefined): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const o of slide.objects) {
-    if (o.type !== 'image') continue;
-    const h = stillHash(media(o.mediaId));
-    if (h) out[o.mediaId] = h;
-  }
-  if (slide.imported) {
-    const h = stillHash(media(slide.imported.imageMediaId));
-    if (h) out[slide.imported.imageMediaId] = h;
+  for (const id of drawnMediaIds(slide)) {
+    const h = stillHash(media(id));
+    if (h) out[id] = h;
   }
   return out;
 }

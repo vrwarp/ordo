@@ -13,6 +13,7 @@ import { rasterImage, rasterLowerThird, rasterProps, rasterSlide } from '../src/
 import { type Ctx2D, drawText, fillColor } from '../src/text2d.ts';
 import { type FontFile, FontResolver, LEGACY_FONT_ENV, installFontEnv } from '../src/text/fonts.ts';
 import { RICH_STYLE_KEYS } from '../src/text/rich.ts';
+import { CONTENT_CASES } from './content-cases.ts';
 import { RICH_CASES, invarianceObjects } from './rich-cases.ts';
 
 /**
@@ -23,8 +24,10 @@ import { RICH_CASES, invarianceObjects } from './rich-cases.ts';
  *
  * The legacy cases draw with no font resolver installed (`LEGACY_FONT_ENV`, the font strings drawers built
  * before design/27), exactly as when their PNGs were made; `render(name, 'resolver')` draws them again with
- * the resolver, as every drawer now does, against the same PNG. The rich cases (rich-cases.ts) always draw
- * with the resolver, which registers every face under an internal family name (design/27 §10).
+ * the resolver, as every drawer now does, against the same PNG. The rich cases (rich-cases.ts) and the
+ * PowerPoint slide cases of the one fallback rule (content-cases.ts: a hybrid slide, a slide showing its
+ * PowerPoint picture) always draw with the resolver, which registers every face under an internal family
+ * name (design/27 §10).
  */
 
 const W = 960;
@@ -298,6 +301,7 @@ export const LEGACY_CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2
 export const CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2D) => void> = {
   ...LEGACY_CASES,
   ...RICH_CASES,
+  ...CONTENT_CASES,
 };
 
 /** The faces the runner injects: each family is also registered directly under its own name. */

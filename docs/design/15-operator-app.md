@@ -283,7 +283,10 @@ nothing stored. When there are no pictures yet, turning it on saves unsaved edit
 (`POST /presentations/:id/pptx-reference` with `{ showPicture: [] }`: no slide switches to its picture) and
 follows the job; when it is done the editor takes the pictures over, keeping edits made meanwhile. A slide
 set to show its PowerPoint picture on the screens (`Slide.pptx.show`) says so, with 'Show the objects
-instead'.
+instead'. The canvas, the thumbnails, the look previews and 'Send to preview' draw a slide as the outputs
+do (design/27 §5 "One rule for every drawer", `slideContent`): a slide set to show its PowerPoint picture
+shows that picture and only the objects added in ordo (the imported objects, marked by `origin`, are
+neither drawn nor selectable on the canvas), and a picture slide its page picture under its objects.
 
 ## Service checklist
 

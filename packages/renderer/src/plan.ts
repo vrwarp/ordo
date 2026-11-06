@@ -11,6 +11,7 @@ import {
   playableFile,
 } from '@ordo/domain';
 import { clampLook, clampSlide, clampText } from './clamp.ts';
+import { drawableContent } from './content.ts';
 import { lyricTextFor } from './text2d.ts';
 
 /**
@@ -149,11 +150,17 @@ export function lookSignature(look: Look, width = 0, height = 0): string {
   return `${look.id}.${(h >>> 0).toString(36)}.${width}x${height}`;
 }
 
-/** Whether the look draws anything on the slide layer for this slide. */
+/**
+ * Whether the look draws anything on the slide layer for this slide: as authored, its picture or objects
+ * (`slideContent`, design/27 §5).
+ */
 export function slideVisible(look: Look, slide: Slide, isSong: boolean, nextSlide?: Slide): boolean {
   const rule = look.layers.slide;
   if (rule.mode === 'hidden') return false;
-  if (rule.mode === 'authored') return slide.objects.length > 0 || !!slide.imported;
+  if (rule.mode === 'authored') {
+    const drawn = drawableContent(slide);
+    return drawn.objects.length > 0 || !!drawn.pictureMediaId;
+  }
   if (lyricTextFor(slide, look, isSong) !== null) return true;
   return !!(rule.nextSlide && nextSlide && lyricTextFor(nextSlide, look, isSong) !== null);
 }
@@ -163,8 +170,9 @@ const EMPTY = <D>(at = 0): LayerPlan<D> => ({ key: '', desc: null, at, fadeMs: 0
 /**
  * Whether a slide's own clip (media content with `objectId`) plays inside the slide this output draws
  * (design/27 §7.2 "Arming and slot ownership"): the look draws authored slides, the slide layer shows the
- * clip's own cue, and that slide still has the playing ImageObject. Otherwise (lyric-only or hidden slide
- * modes, another slide on the slide layer) nothing draws the clip.
+ * clip's own cue, and that slide still draws the playing ImageObject. Otherwise (lyric-only or hidden slide
+ * modes, another slide on the slide layer, an imported object under the slide's PowerPoint picture) nothing
+ * draws the clip.
  */
 function inSlideFor(
   c: MediaContent,
@@ -175,7 +183,7 @@ function inSlideFor(
   if (!c.objectId || look.layers.slide.mode !== 'authored') return undefined;
   if (c.mediaKind !== 'video' || m.kind !== 'video') return undefined;
   if (!slide || slide.cueIndex !== c.cueIndex) return undefined;
-  const o = slide.slide.objects.find((x) => x.id === c.objectId);
+  const o = drawableContent(slide.slide).objects.find((x) => x.id === c.objectId);
   if (o?.type !== 'image' || !o.play || o.play.mediaId !== c.mediaId) return undefined;
   return o.play.showWhenStopped === false ? { objectId: o.id, showWhenStopped: false } : { objectId: o.id };
 }

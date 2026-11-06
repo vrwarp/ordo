@@ -362,6 +362,8 @@ describe.skipIf(!tools)('a chart over a photo background (design/27 §15 M3 exit
     expect([after.objects[0]!.id, after.objects[2]!.id]).toEqual(s.objects.map((x) => x.id));
     const img = after.objects[1] as ImageObject;
     expect(img.box.x).toBeCloseTo(IN * (1920 / 12_192_000), 3);
+    // Marked as the import's, like every object it wrote: hidden under a PowerPoint picture (design/27 §5).
+    expect(after.objects.map((x) => x.origin?.src)).toEqual(['pptx', 'pptx', 'pptx']);
     const m = hub.lib.media.must(img.mediaId);
     expect(m).toMatchObject({ hasAlpha: true, state: 'ready' });
     const px = pixels(m);

@@ -15,6 +15,7 @@ import {
 } from '@ordo/domain';
 
 import { CLAMP, clampBox, clampCrop, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
+import { drawableContent } from './content.ts';
 import { type Ctx2D, roundRect, setLetterSpacing, withRotation } from './ctx.ts';
 import { firstStrong, hasStrongRtl } from './text/bidi.ts';
 import { LEGACY_FONT_ENV, currentFontEnv } from './text/fonts.ts';
@@ -417,8 +418,6 @@ export type SlideDrawOptions = {
   nextSlide?: Slide;
   /** Whether the slide belongs to a song (lyric-only looks treat non-song slides per `nonSong`). */
   isSong?: boolean;
-  /** Draw the slide's imported page image (an image slide) even if hidden under objects. */
-  skipImported?: boolean;
 };
 
 /**
@@ -474,7 +473,10 @@ export function lyricTextFor(slide: Slide, look: Look | undefined, isSong: boole
 
 /**
  * Draw the Slide layer of a slide as a look renders it, on a transparent canvas. Backgrounds are not
- * drawn here (they are their own layer).
+ * drawn here (they are their own layer). A look that draws slides as authored draws what `slideContent`
+ * says (design/27 §5): the slide's picture contain-fitted (its PowerPoint reference picture, or an imported
+ * page), then its objects (only the operator's own on a reference picture). Lyric-only looks read the
+ * slide's text, whichever way it is drawn.
  */
 export function drawSlide2D(ctx: Ctx2D, rawSlide: Slide, opts: SlideDrawOptions): void {
   const slide = clampSlide(rawSlide);
@@ -484,11 +486,12 @@ export function drawSlide2D(ctx: Ctx2D, rawSlide: Slide, opts: SlideDrawOptions)
   const rule = look?.layers.slide ?? { mode: 'authored' as const };
   if (rule.mode === 'hidden') return;
   if (rule.mode === 'authored') {
-    if (slide.imported && !opts.skipImported) {
-      const img = opts.images?.(slide.imported.imageMediaId);
+    const drawn = drawableContent(slide);
+    if (drawn.pictureMediaId) {
+      const img = opts.images?.(drawn.pictureMediaId);
       if (img) drawImageFit(ctx, img, { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 }, scale, 'contain');
     }
-    for (const o of slide.objects) drawObject(ctx, o, scale, opts.images);
+    for (const o of drawn.objects) drawObject(ctx, o, scale, opts.images);
     return;
   }
   const text = lyricTextFor(slide, look, opts.isSong ?? true);

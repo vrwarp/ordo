@@ -178,7 +178,7 @@ Source: a census of 4,897 shown slides of worship decks in the local validation 
 | `packages/domain/src/readable.ts`, `bullets.ts` (M2) | `readableText(o)`: `TextObject.text` with automatic numbers and bullets written as text, for the stage, bands, labels and search. `textScripts(text)` for the font scan. `bullets.ts`: `paraLabels(o)` and the number counter (port of `annotate.ts` `autoNumber`) that the renderer's bullets draw too, and the Wingdings/Symbol table (`symbolFontChar`) for the converter. |
 | `packages/domain/src/size.ts` (M3) | JSON size estimates for slides, presentations and resolved playlists (§3.4). |
 | `packages/renderer/src/text/` (M2) | `itemize.ts`, `breaks.ts` (UAX#14 via npm `linebreak` 1.1.0, MIT; 2.0.0 was days old when chosen; `Intl.Segmenter`), `bidi.ts` (npm `bidi-js` 1.1.0, MIT), `measure.ts`, `lines.ts`, `office.ts` (LibreOffice line model and autofit, ported from `pptx-render/src/page.ts:202-426`), `bullets.ts` (port of `annotate.ts` `autoNumber`), `paint.ts`, `rich.ts`, `fonts.ts` (the resolver, §10). |
-| `packages/renderer/src/content.ts` (M3) | `slideContent()`, the one fallback rule (§5). |
+| `packages/renderer/src/content.ts` (M3) | `slideContent()`, the one fallback rule (§5). As built, the rule itself is `packages/domain/src/content.ts` (`slideContent`, `drawnMediaIds`), so `referencedMediaIds` follows it too; the renderer's module re-exports it and adds `drawableContent` (the rule over the clamped slide, memoised). |
 | `packages/renderer/src/scene.ts` (M5) | Video split and the plane encoding (§7.2). |
 | `packages/renderer/src/geom/` (M6) | `presets.gen.ts` (compiled from POI), `eval.ts` (guide evaluator), `arc.ts`, `path.ts`. |
 | `third_party/poi-presets/`, `tools/geom-gen/` (M6) | Vendored POI 5.2.5 `presetShapeDefinitions.xml` (Apache-2.0) with two documented fixes, and the generator. |
@@ -606,6 +606,12 @@ The budgets keep slides inside the render clamps (200 objects, 16 images, 192 Mi
 - otherwise: `imported?.imageMediaId` plus all objects.
 
 It is used by `drawSlide2D`, `slideVisible` (`plan.ts:138-144`), both `slideImages` copies, `SlideCanvas`, `previewMedia` and `referencedMediaIds`, where `refMediaId` is optional like holding slides and the logo. It replaces the unused `skipImported` hook (`text2d.ts:298, 322`). The picture is decoded only when shown, which matters for the 16-image and 192 MiB budgets.
+
+As built (M3 wave 2):
+- The rule is `slideContent(slide): { pictureMediaId?, reference, objects }` in `@ordo/domain` (`content.ts`), with `drawnMediaIds(slide)` (the picture, then the image objects drawn, once each). `@ordo/renderer` re-exports both and adds `drawableContent(slide)`, the rule over the clamped slide, memoised per slide.
+- Drawers: `drawSlide2D` (as authored; lyric-only bands still read the slide's own text), the scene split (`sceneSlides`: the split is over the drawn objects, base starts with the picture; an imported play object under a reference picture is no scene), the planner (`slideVisible`; the in-slide video only for a drawn play object, so an imported clip under a reference picture is not drawn and its sound still plays on the audio master, as in lyric-only looks), `jobFontFamilies`, the thumbnail worker, look previews (`lookPreviewJob`), the editor canvas (`canvasContent`: only the drawn objects are selectable) and `previewMedia`.
+- Media: both `slideImages` copies, `previewMedia` and `referencedMediaIds` name the pictures drawn, so a goLive ships the reference picture and the operator's pictures, not the imported pictures it hides. A reference picture that is missing or not ready never refuses the service: it is left out with a `degraded` note at the slide ("the slide shows only the objects added in ordo"). The render clamp's 16-picture budget counts only drawn pictures, and keeps the hidden objects, whose text bands and the stage still read.
+- `origin` is what tells the import's objects from the operator's: the native job marks every object it writes (converted objects, metafiles put back by version 2, the job's own background on white; the art already was) with at least `{ src: 'pptx' }`, keeping an origin the converter wrote.
 
 **Two-phase save.**
 - Version 1 has native objects for every slide.
@@ -1309,7 +1315,7 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   - video ImageObjects draw their poster on outputs;
   - MediaTab hides `pptx`/`document` media; reference-aware delete confirmation.
 - Hub budgets measured on a reference NAS.
-- **As built in wave 1** (apps/hub/src/pptx/README.md): everything above except rich text emission and clip extraction (with M2 and M5), `slideContent()` in every drawer, hidden-cue navigation (hidden slides give no cue until then), and flips, ellipse/roundRect masks and recolouring of pictures (wave 2; drawn unflipped, as rects and without the recolouring, each noted on the slide). Every read of a stored deck spills only referenced pictures and refuses overlapping zip entries; a LibreOffice run that fails is retried, then the slides it could not draw are marked `Slide.pptx.failed`; a save that brings back pending slides queues the follow-up again.
+- **As built in wave 1** (apps/hub/src/pptx/README.md): everything above except rich text emission and clip extraction (with M2 and M5), `slideContent()` in every drawer (wave 2, §5 "As built"), hidden-cue navigation (hidden slides give no cue until then), and flips, ellipse/roundRect masks and recolouring of pictures (wave 2; drawn unflipped, as rects and without the recolouring, each noted on the slide). Every read of a stored deck spills only referenced pictures and refuses overlapping zip entries; a LibreOffice run that fails is retried, then the slides it could not draw are marked `Slide.pptx.failed`; a save that brings back pending slides queues the follow-up again.
 
 **Files.**
 - `apps/hub/src/pptx/*`, `imports.ts`, `routes.ts`, `pool.ts`, `cpu.worker.ts`, `jobs.ts`, `media/service.ts`, `media/ffmpeg.ts`, `library.ts`, `db.ts`, `fonts/bundled.ts`, `fonts/google.ts`; `Dockerfile`.
