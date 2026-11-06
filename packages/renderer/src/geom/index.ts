@@ -1,8 +1,10 @@
 /*
  * DrawingML shape geometry (design/27 §1 geom/, §15 M6; README.md here): the preset table compiled from
- * POI, the compiler for a deck's custGeom and the guide evaluator. Not yet re-exported by `@ordo/renderer`:
- * the drawers and the converter take it up in the next wave (`@ordo/renderer/geom/index.ts` until then).
+ * POI, the compiler for a deck's custGeom, the guide evaluator, the path builder and the Canvas 2D drawer.
+ * `@ordo/renderer` re-exports the drawing API (presetGeometry, customGeometry, buildGeom, drawGeom and their
+ * types); the compiler and evaluator are here for the converter and tools.
  */
+export { ARC_MAX_SEGMENTS, arcParamAngle, arcToCubics } from './arc.ts';
 export {
   asciiTrim,
   builtinSlot,
@@ -31,5 +33,32 @@ export {
   guideValues,
   writeBuiltins,
 } from './eval.ts';
+export {
+  drawGeom,
+  FILL_BRIGHTNESS,
+  GEOM_FILL_RULE,
+  type GeomFill,
+  geomFillPath2D,
+  geomPath2D,
+  type GeomStroke,
+  type GeomStyle,
+  type PathSink,
+  shadeRgba,
+  traceGeomPath,
+} from './draw.ts';
 export * from './ops.ts';
+export {
+  type BuiltGeom,
+  buildGeom,
+  COORD_LIMIT,
+  type CustomGeom,
+  customGeometry,
+  type GeomPath,
+  type GeomRect,
+  type GeomSite,
+  hasPreset,
+  pathData,
+  pathPoints,
+  presetGeometry,
+} from './path.ts';
 export { PRESET_GEOMS } from './presets.gen.ts';

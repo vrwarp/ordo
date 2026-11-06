@@ -3,19 +3,30 @@
 The preset and custom geometry engine of design/27 §1 (`geom/`), §3.1 (`ShapeGeom`) and §15 M6: what a
 PowerPoint `a:prstGeom` or `a:custGeom` means, as numbers. Read design/27 §3.1, §12 (bounds) and §14 item 6 first.
 
-Status: **M6 wave 1, self-contained.** The preset table, the compiler and the guide evaluator are built and
-tested; nothing outside this folder uses them yet. The next wave adds `arc.ts` and `path.ts` (arcTo with POI's
-visual-angle rule, the path builder, fill modes) and wires geometry into `ShapeObject` drawing, the schema, the
-converter and the editor.
+Status: **M6 wave 1, self-contained.** The preset table, the compiler, the guide evaluator, the path builder
+(arcTo with POI's visual-angle rule, path spaces, fill modes) and the Canvas 2D drawer are built and tested;
+`@ordo/renderer` exports the drawing API, and nothing draws with it yet. The next wave wires geometry into
+`ShapeObject` drawing, the schema, the converter and the editor.
+
+```ts
+const g = presetGeometry('star5', w, h, [['adj', 25000]]); // undefined for an unknown name: draw the rect
+ctx.translate(x, y); // box space: 0..w, 0..h (rotate and flip around it as the box says)
+drawGeom(ctx, g, fill, { color, width }); // fill: an Rgba, or (brightness) => gradient for shaded paths
+const deck = customGeometry(custGeomStrings, w, h); // a:custGeom; deck.notes says what was dropped
+```
 
 | File              | Contents                                                                                                                                                                                            |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ops.ts`          | The compiled form (`CompiledGeom`, `CompiledPath`): the 17 operators and their op codes, the 40 built-in guides in slot order, path commands, fill modes, handle encoding and `GEOM_LIMITS`.        |
 | `compile.ts`      | `compileGeom(GeomSource)`: geometry given as strings (a preset read by `tools/geom-gen`, a custGeom read by the converter) → `CompiledGeom`, with `GeomNotes` for what it replaced by 0 or dropped. |
 | `eval.ts`         | `evalGuides(geom, box, adj)`: every slot's value at a box; `guideSlot`/`guideValue`/`guideValues` by name; `evalGuideLists` for a custGeom's avLst/gdLst given as `[name, fmla]` pairs.             |
+| `arc.ts`          | `arcToCubics`: an arcTo from the current point as at most four cubic segments (POI's visual-angle rule, Arc2D's segments); `arcParamAngle`, the visual-to-parametric angle.                         |
+| `path.ts`         | `buildGeom(geom, w, h, adj)`: sub-paths in box space with fill mode and stroke flag, the text rect, the connection sites; `presetGeometry`, `customGeometry`, `pathData`.                           |
+| `draw.ts`         | `drawGeom(ctx, built, fill, stroke)`: Canvas 2D, Path2D per path, LibreOffice's order, even-odd rule and shades (`shadeRgba`); `geomFillPath2D` for picture clips.                                  |
 | `presets.gen.ts`  | Generated (`pnpm --filter @ordo/geom-gen gen`, never edited): the 187 presets of `third_party/poi-presets` as `PRESET_GEOMS`, with the two fixes of its README.                                     |
 | `poi-guides.json` | Reference values from POI 5.2.5 itself for the dozen presets of the spot checks (`tools/geom-gen/poi/GuideDump.java`).                                                                              |
-| `index.ts`        | The public surface (`@ordo/renderer/geom/index.ts`; not yet re-exported by `@ordo/renderer`).                                                                                                       |
+| `poi-paths.json`  | POI 5.2.5's own paths (segments, text rect, sites) for the dozen presets and for arcs in every quadrant and path spaces (`tools/geom-gen/poi/PathDump.java`).                                       |
+| `index.ts`        | The geometry surface (`@ordo/renderer/geom/index.ts`, for the converter and tools); `@ordo/renderer` re-exports its drawing API.                                                                    |
 
 ## The compiled form
 
@@ -71,3 +82,35 @@ bounded values stays finite. Name maps are `Map`s, so `__proto__` and `construct
 Units are the caller's (the converter can evaluate in EMU, a drawer in px). The preset formulas scale with the
 box, except where rounding decides a branch: circularArrow tests the sign of a value that is 0 in exact arithmetic
 (`q13`, about 1e-9 at a 1000x600 box), so two box sizes of the same shape can take different branches, in POI too.
+
+## Paths: POI's builder, LibreOffice's drawing
+
+`path.ts` builds what POI's `DrawSimpleShape.computeOutlines` builds, checked segment by segment: `path.test.ts`
+compares the dozen presets above (33 boxes and adjustments) and 17 arcs (every quadrant, both directions, sweeps
+over a full turn, chained arcs, a non-uniform path space) with POI's own Path2D (`poi-paths.json`), within 1e-9 of
+the box; when this was written all 187 presets at three boxes matched POI to 2e-15 of the box, apart from the
+differences below.
+
+- **Path spaces.** A path with `w`/`h` is built in that space and scaled to the box; its guides are evaluated at a
+  box of that size (POI), so `wd2` in a 21600-wide path is 10800. The presets' w/h paths read only constants and
+  angles. The text rect and the sites are evaluated at the box.
+- **arcTo.** The current point is where the ellipse is at the _visual_ angle stAng; each angle becomes the
+  parametric angle with tan t = (wR/hR)·tan θ in θ's quadrant, and the arc is ⌈|sweep|/90°⌉ cubic segments with
+  Arc2D's control points (at most 4, 12 points). Unlike POI: a sweep is clamped to ±360° (MSO, LibreOffice
+  tdf#122323; the same arc); a multiple of 90° converts exactly (POI rounds tan 90° and splits a quarter turn of an
+  ellipse flatter than about 1:4 in two segments, within 1e-4 of the box of ours); two zero radii draw nothing
+  (POI computes NaN: roundRect at adj 0, round2DiagRect); one zero radius draws the flat ellipse's segment; a
+  negative radius draws nothing (as POI).
+- **Commands.** Two moveTos in a row keep the second, a close with nothing open is dropped (Java's Path2D); a
+  lnTo, quadBezTo or cubicBezTo with no current point starts a sub-path as Canvas does, an arcTo with none is
+  skipped (LibreOffice), where POI throws.
+- **Drawing** (`draw.ts`) follows LibreOffice, the fidelity reference: paths in order, each filled then stroked (POI
+  fills all, then strokes all); the even-odd rule; fill="none" unfilled, stroke="false" unstroked; lighten,
+  lightenLess, darken and darkenLess blend the fill per channel towards white or black by 40 % and 20 %, truncated
+  (`GetColorData`), strokes unshaded. A gradient or picture fill is a painter called with each path's brightness.
+  `draw.browser.test.ts` checks the shades, the even-odd hole, stroke-only paths and the clip path with Chromium.
+
+Bounds: at most 8 paths and 4,096 points per path after arcs become segments (the compiler counts an arcTo as 12),
+checked again by the builder for a `CompiledGeom` from elsewhere (an operand slot out of range reads 0, an unknown
+command ends its path). Every coordinate is finite within ±1e9 (`COORD_LIMIT`), the box is clamped to 0..1e9, and
+nothing recurses; a geometry at the bounds builds in milliseconds.

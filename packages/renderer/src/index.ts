@@ -15,3 +15,18 @@ export type { Compositor, FrameInputs, VideoFrames } from './compositor.ts';
 export { MAX_VIDEO_SLOTS } from './compositor.ts';
 export * from './clamp.ts';
 export * from './text/index.ts';
+export {
+  type BuiltGeom,
+  buildGeom,
+  type CustomGeom,
+  customGeometry,
+  drawGeom,
+  type GeomFill,
+  type GeomPath,
+  type GeomRect,
+  type GeomSite,
+  type GeomSource,
+  type GeomStroke,
+  hasPreset,
+  presetGeometry,
+} from './geom/index.ts';

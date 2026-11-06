@@ -32,13 +32,18 @@ then the guides, so the evaluator and the path builder never look a name up.
 ## POI reference values
 
 `poi/GuideDump.java` prints the guide values POI 5.2.5 itself computes; it produced
-`packages/renderer/src/geom/poi-guides.json`, the reference of the evaluator's POI spot checks. It is not part of
-any build. To run it (Java 11 or later, POI and log4j-api jars from Maven Central):
+`packages/renderer/src/geom/poi-guides.json`, the reference of the evaluator's POI spot checks. `poi/PathDump.java`
+prints the paths POI builds (java.awt.geom segments in box coordinates, the text rect and the connection sites) for
+a preset at a box or for a moveTo followed by arcTo commands; it produced `packages/renderer/src/geom/poi-paths.json`,
+the reference of the path builder's POI checks (the case lines are the `case` fields there). Neither is part of
+any build. To run them (Java 11 or later, POI and log4j-api jars from Maven Central):
 
 ```
-javac -cp poi-5.2.5.jar:log4j-api-2.21.1.jar -d /tmp/guidedump tools/geom-gen/poi/GuideDump.java
-echo 'star5 0 0 1828800 914400 adj=25000' | java -cp /tmp/guidedump:poi-5.2.5.jar:log4j-api-2.21.1.jar \
+javac -cp poi-5.2.5.jar:log4j-api-2.21.1.jar -d /tmp/poidump tools/geom-gen/poi/GuideDump.java tools/geom-gen/poi/PathDump.java
+echo 'star5 0 0 1828800 914400 adj=25000' | java -cp /tmp/poidump:poi-5.2.5.jar:log4j-api-2.21.1.jar \
   org.apache.poi.sl.draw.geom.GuideDump
+printf 'preset can 300 200 adj=10000\narc 1000 1000 -1 -1 500 500 300 150 2700000 5400000\n' | \
+  java -cp /tmp/poidump:poi-5.2.5.jar:log4j-api-2.21.1.jar org.apache.poi.sl.draw.geom.PathDump
 ```
 
 When the evaluator was written, all 187 presets at three boxes (11,730 guide values) agreed with POI to within
