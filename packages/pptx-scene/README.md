@@ -31,8 +31,8 @@ const out = emitSlides(scene, { mediaId }); // ordo Slides; pictures as 'pptxmed
 | `markup.ts`     | Every part as one dialect: Strict → Transitional, the usual prefixes, one branch of `mc:AlternateContent`         | A      |
 | `deck.ts`       | `readDeck`: slide size, order, hidden flags, shown index, defaultTextStyle, sections; `slideParts`                | A      |
 | `frame.ts`      | EMU → 1920x1080 contain map, affine transforms, `boxPx`                                                           | A      |
-| `theme.ts`      | `readTheme`: colour, font and format schemes; `themeFont`                                                         | B      |
-| `color.ts`      | `ColorCtx`, colour elements and modifiers, `readFill`, `styleFill`                                                | B      |
+| `theme.ts`      | `readTheme`: colour, font and format schemes; `themeFont`, `langScript`, style font/line/effect references        | B      |
+| `color.ts`      | `ColorCtx`, colour maps, colour elements and modifiers, fills, `styleEntry`, `styleFill`                          | B      |
 | `inherit.ts`    | Placeholder matching, xfrm/bodyPr chain, paragraph-property chain                                                 | C      |
 | `walk.ts`       | Shape-tree walk: decorations, groups flattened, shapes                                                            | C      |
 | `text.ts`       | Text bodies: paragraphs, runs, run styles through the chain                                                       | C      |
@@ -130,19 +130,39 @@ The `v` (VML) Choice is not read, unlike LibreOffice: its Fallback is usually an
 ### B: theme-colour (`theme.ts`, `color.ts`)
 
 Contracts:
-- `readTheme(root): Theme` (`colors`, `major`/`minor` `FontSet`, `fills`, `lines`, `effects`, `bgFills`),
-  `themeFont(theme, typeface)`, `parseHex`, `hexRgba`, `SCHEME_COLORS`.
-- `colorContext(theme, clrMap, clrMapOvr?): ColorCtx`, `withPhClr`, `colorIn(parent, ctx)`,
+- `readTheme(root): Theme` (`colors`, `major`/`minor` `FontSet` with `scripts`, `fills`, `lines`, `effects`,
+  `bgFills`), `themeFont(theme, typeface, script?)`, `langScript(lang)`, `styleFont(theme, fontRef, ctx)`,
+  `styleLine(theme, lnRef, ctx)`, `styleEffect(theme, effectRef, ctx)`, `parseHex`, `hexRgba` (defined in
+  `color.ts`, re-exported), `SCHEME_COLORS`, `MAX_TYPEFACE`, `MAX_SCRIPT_FONTS`.
+- `colorContext(theme, clrMap, clrMapOvr?, layoutClrMapOvr?): ColorCtx` (master map, then the layout's
+  override, then the slide's, attribute by attribute), `withPhClr`, `colorIn(parent, ctx)`,
   `readColor(el, ctx)`, `applyModifiers(c, el)`, `readFill(parent, ctx, blip?)`, `fillOf(el, ctx, blip?)`,
-  `styleFill(theme, ref, ctx, blip?)`, `PRESET_COLORS`. `readFill` returns undefined when the parent sets no
-  fill (inherit), `{ kind: 'none' }` for `a:noFill`. Picture fills go through the `BlipReader` callback.
+  `styleEntry(theme, ref, ctx)` (any `a:fillRef`/`a:bgRef`/`a:lnRef`/`a:effectRef` with its phClr context),
+  `styleFill(theme, ref, ctx, blip?)`, `PRESET_COLORS`, `MAX_MODIFIERS`, `MAX_GRADIENT_STOPS`. `readFill`
+  returns undefined when the parent sets no fill (inherit), `{ kind: 'none' }` for `a:noFill`. Picture fills
+  go through the `BlipReader` callback.
 
-To do (design/27 §4 "Colours", "Fonts"): the full prstClr table, sysClr, scrgbClr (gamma-encoded), hslClr;
-modifiers in document order: tint/shade on linear values with γ 2.3 (black + tint 95 % = #454545), lumMod,
-lumOff, satMod, satOff, hueMod, hueOff, alpha, alphaMod, alphaOff, and the rest LibreOffice applies;
-`phClr` with its own modifiers after the reference's colour; gradient and pattern fills (`Fill` kinds
-`gradient`, `pattern`); per-script theme fonts and `+mj-cs`/`+mn-cs`; every result clamped (NaN → 0).
-Tests with probe values (LibreOffice's) for each modifier.
+Done (design/27 §4 "Colours", "Fonts"):
+- Every colour element: srgbClr, schemeClr through the map (phClr = the reference's colour, its alpha kept),
+  sysClr (`lastClr`, else LibreOffice's palette), prstClr (all 190 ECMA-376 names), scrgbClr (linear,
+  gamma-encoded), hslClr.
+- Every modifier in document order with LibreOffice's integer arithmetic: tint, shade, inv, gamma,
+  invGamma and red/green/blue(Mod/Off) on linear values (γ 2.3: black + tint 95 % = #454545); hue, sat,
+  lum (Mod/Off) and comp in HSL; gray; alpha, alphaMod, alphaOff. Values are clamped as LibreOffice clamps
+  them (hueOff clamps at 0 and 360°, it does not wrap); NaN and Infinity read as 0; at most 32 modifiers.
+- Gradients (stops sorted, ≤ 16, `angle` or `path` with `focus`; one stop is solid, none is no fill) and
+  patterns (`preset` from `ST_PresetPatternVal`, fg/bg defaulting to black/white).
+- Theme colours through `color.ts` (any element; a missing entry keeps Office's), per-script theme fonts,
+  `+mj-cs`/`+mn-cs`, and the script font for an empty ea/cs typeface (`themeFont(…, langScript(lang))`).
+- `color.test.ts` holds 122 probe values read from LibreOffice 24.2 and checks the parser against them
+  through `parseDeck`; `ORDO_LO_PROBE=1 npx vitest run packages/pptx-scene/src/color.test.ts` renders the
+  same probe deck with soffice and pdftoppm and checks the table. The parser differs from LibreOffice on
+  purpose in four rules, listed in `DIFFERENT`: sysClr uses `lastClr`; prstClr has ECMA-376's names and
+  values; phClr keeps the reference's alpha; the slide's clrMapOvr also colours master shapes and the
+  inherited background (LibreOffice applies only the layout's override there).
+
+To do: LibreOffice rounds alpha to whole percents (the parser does not); theme picture fills
+(bgFillStyleLst `a:blipFill`) need the theme part's relationships (C's `background.ts`).
 
 ### C: inherit-emit (`inherit.ts`, `walk.ts`, `text.ts`, `picture.ts`, `background.ts`, `emit.ts`)
 
