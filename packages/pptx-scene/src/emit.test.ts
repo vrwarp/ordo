@@ -500,17 +500,20 @@ describe('pictures', () => {
     expect(out.media).toEqual([{ id: 'pptxmedia:ppt/media/photo.png', part: 'ppt/media/photo.png' }]);
   });
 
-  it('writes no crop by default (the legacy value) and notes it', () => {
-    const { objects, notes } = emitOne({
-      slides: [
-        { rels, shapes: pic({ id: 2, x: 0, y: 0, cx: IN, cy: IN, rId: 'rId2', srcRect: 'l="10000"' }) },
-      ],
-    });
-    expect(content(objects)[0]).not.toHaveProperty('crop');
-    expect(notes.join(' ')).toMatch(/drawn uncropped/);
+  it('writes no crop with crop: false (the legacy value) and notes it', () => {
+    const scene = parseDeck(
+      buildDeck({
+        slides: [
+          { rels, shapes: pic({ id: 2, x: 0, y: 0, cx: IN, cy: IN, rId: 'rId2', srcRect: 'l="10000"' }) },
+        ],
+      }),
+    );
+    const out = emitSlides(scene, { crop: false }).slides[0]!;
+    expect(out.slide.objects[1]).not.toHaveProperty('crop');
+    expect(out.notes.join(' ')).toMatch(/drawn uncropped/);
   });
 
-  it('writes crop from srcRect when asked, negative values kept', () => {
+  it('writes crop from srcRect by default, negative values kept, and Slide.parse keeps it', () => {
     const scene = parseDeck(
       buildDeck({
         slides: [
@@ -529,10 +532,10 @@ describe('pictures', () => {
         ],
       }),
     );
-    const img = emitSlides(scene, { crop: true }).slides[0]!.slide.objects[1] as ImageObject & {
-      crop?: unknown;
-    };
+    const slide = emitSlides(scene).slides[0]!.slide;
+    const img = slide.objects[1] as ImageObject;
     expect(img.crop).toEqual({ l: 0.1, t: -0.05, r: 0.2, b: 0 });
+    expect((Slide.parse(slide).objects[1] as ImageObject).crop).toEqual(img.crop);
   });
 
   it('folds fillRect into the box, and into the crop where the box clips it', () => {

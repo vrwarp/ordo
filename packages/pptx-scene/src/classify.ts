@@ -422,7 +422,8 @@ function supportReasons(
 ): { residual: string[]; approx: string[] } {
   const residual: string[] = [];
   const approx: string[] = [];
-  if (e.kind === 'residual') residual.push(e.what);
+  // A metafile waits for conversion (approx); every other residual element is residual.
+  if (e.kind === 'residual') (e.what === 'metafile' ? approx : residual).push(e.what);
   const part = picturePart(e);
   const ext = part === undefined ? '' : extOf(part);
   if (ext === 'wdp' || ext === 'hdp') residual.push(`pic:${ext}`);

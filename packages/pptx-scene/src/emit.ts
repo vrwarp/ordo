@@ -1,8 +1,8 @@
 /**
  * IR → ordo objects (design/27 §1 `emit.ts`, §3.2 "The importer always writes the closest legacy values").
  *
- * M1 emits today's objects only (`TextObject`, `ImageObject`, `ShapeObject`), plus `ImageObject.crop` when
- * `EmitOptions.crop` is set (work item D adds the schema field; until then `Slide.parse` would strip it).
+ * M1 emits today's objects only (`TextObject`, `ImageObject`, `ShapeObject`), plus `ImageObject.crop`
+ * (design/27 §3.1; on unless `EmitOptions.crop` is false).
  * Pictures carry placeholder media ids, `pptxmedia:<part>` by default, which the harness (and later the
  * hub) maps to real media.
  *
@@ -105,14 +105,14 @@ export interface EmitOptions {
   extendBackgrounds?: boolean;
   /**
    * Write `ImageObject.crop` (design/27 §3.1: `a:srcRect` fractions, negative values pad with transparency)
-   * and fold `a:fillRect` into it. Default false until the schema has the field (work item D): without it
-   * `Slide.parse` strips the key. Without crop, pictures are stretched and uncropped (the legacy value).
+   * and fold `a:fillRect` into it. Default true. With false, pictures are stretched and uncropped (the
+   * legacy value an older build draws), and each cropped picture is noted.
    */
   crop?: boolean;
 }
 
-/** An image object with the crop of design/27 §3.1 (`@ordo/domain` gains the field with work item D). */
-export type CroppedImage = ImageObject & { crop?: Insets };
+/** An image object with the crop of design/27 §3.1 (now `ImageObject.crop` in `@ordo/domain`). */
+export type CroppedImage = ImageObject;
 
 export interface EmittedSlide {
   index: number;
@@ -162,7 +162,7 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       newId,
       mediaId,
       extend: opts.extendBackgrounds ?? true,
-      crop: opts.crop ?? false,
+      crop: opts.crop ?? true,
       media,
       log,
     };

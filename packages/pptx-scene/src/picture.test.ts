@@ -87,11 +87,16 @@ describe('p:pic', () => {
     expect(b!.picture.px).toBeUndefined(); // spilled: no bytes
   });
 
-  it('reads a metafile as residual', () => {
+  it('reads a metafile as a residual element with approx support (converted in M3)', () => {
     const s = picturesOf(p(), [imageRel('rId2', 'image1.emf')], {
       'ppt/media/image1.emf': new Uint8Array(4),
     });
-    expect(s.elements[0]).toMatchObject({ kind: 'residual', what: 'metafile', reasons: ['pic:emf'] });
+    expect(s.elements[0]).toMatchObject({
+      kind: 'residual',
+      what: 'metafile',
+      support: 'approx',
+      reasons: ['metafile'],
+    });
     expect(s.notes.join(' ')).toMatch(/emf picture is not drawn/);
   });
 

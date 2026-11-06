@@ -92,7 +92,8 @@ export function readBlipFill(ctx: SlideCtx, blipFill: XNode, source: string): Pi
 
 /**
  * A `p:pic` as a picture element, given the fields every element shares (placement, identity, chain), or
- * undefined when its picture cannot be found (logged). A metafile is a residual element (M3 converts it).
+ * undefined when its picture cannot be found (logged). A metafile is a residual element, since nothing draws
+ * it before M3 converts it, but its support is approx (design/27 §5: residual only when conversion fails).
  */
 export function readPicture(
   ctx: SlideCtx,
@@ -106,7 +107,7 @@ export function readPicture(
   const ext = extensionOf(picture.part);
   if (METAFILE_EXTENSIONS.has(ext)) {
     ctx.log(`a ${ext} picture is not drawn yet (LibreOffice converts it in M3)`);
-    return { ...base, kind: 'residual', what: 'metafile', support: 'residual', reasons: [`pic:${ext}`] };
+    return { ...base, kind: 'residual', what: 'metafile', support: 'approx', reasons: ['metafile'] };
   }
   // A picture placeholder takes its clip geometry from the layout or master when it has none.
   const { geom, adj } = geometryOf(chainOf(ctx, el, base.from));
