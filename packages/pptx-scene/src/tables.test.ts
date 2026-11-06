@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { convertDeck, parseDeck } from './index.ts';
 import type { TableElement } from './ir.ts';
 import type { FaceSource } from './metrics.ts';
-import { MAX_TABLE_CELLS } from './tables.ts';
+import { loAscent, loLineHeight, MAX_TABLE_CELLS, MAX_TABLE_GRID } from './tables.ts';
 import { PREDEFINED_TABLE_STYLE_IDS, predefinedTableStyle } from './tablestyles.ts';
 import {
   body,
@@ -34,11 +34,14 @@ const table = (o: Partial<Table> & Pick<Table, 'cols' | 'rows'>): string =>
 /** Convert one slide; it must be an ordinary ordo slide. */
 function convert(
   shapes: string,
-  opts: { styles?: string; fontFace?: FaceSource; deck?: Partial<DeckSpec> } = {},
+  opts: { styles?: string; fontFace?: FaceSource; deck?: Partial<DeckSpec>; loCompat?: boolean } = {},
 ) {
   let parts = buildDeck({ slides: [{ shapes }], ...opts.deck });
   if (opts.styles !== undefined) parts = withTableStyles(parts, opts.styles);
-  const out = convertDeck(parts, { fontFace: opts.fontFace ?? HALF_EM });
+  const out = convertDeck(parts, {
+    fontFace: opts.fontFace ?? HALF_EM,
+    ...(opts.loCompat ? { loCompat: true } : {}),
+  });
   const s = out.slides[0]!;
   expect(Slide.parse(s.slide)).toEqual(s.slide);
   const objects = s.slide.objects.slice(1); // the background first
@@ -386,7 +389,161 @@ describe('tables: rows grow to their text', () => {
   });
 });
 
+describe('tables: kerning in the measure (R1)', () => {
+  // Half an em a character, and A and V kerned a tenth of an em closer in either order.
+  const kerned: FaceSource = () => ({
+    advance: () => 0.5,
+    kern: (a, b) => ((a === 0x41 && b === 0x56) || (a === 0x56 && b === 0x41) ? -0.1 : 0),
+  });
+
+  it('keeps a word on its line when it fits once kerned, as the renderer measures it', () => {
+    // 2 in less the margins is 259.2 px. 15 characters are 270 px of advances, 219.6 px kerned: one line.
+    const word = 'AVAVAVAVAVAVAVA';
+    const { texts } = convert(table({ cols: [2 * IN], rows: [{ h: 0, cells: [tc(word)] }] }), {
+      fontFace: kerned,
+    });
+    expect(texts[0]!.box.h).toBeCloseTo(1.2 * 36 + 14.4, 6);
+    // Without kerning the same word is cut onto a second line.
+    const plain = convert(table({ cols: [2 * IN], rows: [{ h: 0, cells: [tc(word)] }] }));
+    expect(plain.texts[0]!.box.h).toBeCloseTo(2 * 1.2 * 36 + 14.4, 6);
+  });
+
+  it('cuts a word only when it is still wider than the line once kerned', () => {
+    // 20 characters: 360 px of advances, 291.6 px kerned, wider than 259.2 px.
+    const { texts } = convert(table({ cols: [2 * IN], rows: [{ h: 0, cells: [tc('AV'.repeat(10))] }] }), {
+      fontFace: kerned,
+    });
+    expect(texts[0]!.box.h).toBeCloseTo(2 * 1.2 * 36 + 14.4, 6);
+  });
+
+  it('kerns within one run only, never across a change of style', () => {
+    // 11 + 6 characters: 306 px of advances, 252 px kerned within the runs, 248.4 px if the pair at the run
+    // boundary were kerned too. The renderer measures each run apart, so 250 px of room is two lines.
+    const two = `<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p>${run('AVAVAVAVAVA')}${run('VAVAVA', 'b="1"')}</a:p></a:txBody><a:tcPr/></a:tc>`;
+    const col = Math.round((250 + 28.8) * 6350);
+    const { texts } = convert(table({ cols: [col], rows: [{ h: 0, cells: [two] }] }), { fontFace: kerned });
+    expect(texts[0]!.box.h).toBeCloseTo(2 * 1.2 * 36 + 14.4, 6);
+    const one = `<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p>${run('AVAVAVAVAVAVAVAVA')}</a:p></a:txBody><a:tcPr/></a:tc>`;
+    expect(
+      convert(table({ cols: [col], rows: [{ h: 0, cells: [one] }] }), { fontFace: kerned }).texts[0]!.box.h,
+    ).toBeCloseTo(1.2 * 36 + 14.4, 6);
+  });
+
+  it('measures an empty cell as one line of its end mark', () => {
+    const { texts } = convert(
+      table({ cols: [IN, IN], rows: [{ h: 0, cells: [tc(''), tc('', { rPr: 'sz="2400"' })] }] }),
+    );
+    // The default 18 pt end mark: one line of 1.2 × 36 px and the margins.
+    expect(texts[0]!.box.h).toBeCloseTo(1.2 * 36 + 14.4, 6);
+  });
+});
+
+describe("tables: LibreOffice's rows (R1, the harness's cellRows rule)", () => {
+  // Carlito's metrics: 2,500 of 2,048 units of line, 1,950 above the baseline and 550 below.
+  const carlito: FaceSource = () => ({
+    advance: () => 0.5,
+    lineHeight: 2500 / 2048,
+    ascent: 1950 / 2048,
+    descent: 550 / 2048,
+  });
+  const MM = 360; // EMU per 1/100 mm
+  const autogrow = (text = 'Title', fit = '<a:spAutoFit/>') =>
+    `<p:sp><p:nvSpPr><p:cNvPr id="3" name="T"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${IN}" cy="${IN / 2}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>` +
+    `<p:txBody><a:bodyPr wrap="square">${fit}</a:bodyPr><a:lstStyle/>${text ? para(run(text)) : '<a:p/>'}</p:txBody></p:sp>`;
+  const tableOf = (shapes: string) => {
+    const scene = parseDeck(buildDeck({ slides: [{ shapes }] }), { fontFace: carlito });
+    return scene.slides[0]!.elements.find((e): e is TableElement => e.kind === 'table')!;
+  };
+  const one = (pPr?: string) =>
+    table({
+      cols: [4 * IN],
+      rows: [{ h: 0, cells: [tc('one line', { tcPr: ' anchor="ctr"', ...(pPr ? { pPr } : {}) })] }],
+    });
+
+  it("sizes a line at the face's ascent and descent at a 600 dpi reference device", () => {
+    // 18 pt is 635/100 mm, 150 px at 600 dpi: ascent 143 px and descent 40 px, 605 and 169/100 mm.
+    expect(loLineHeight(18, carlito('', false, false), 'font')).toBe(774);
+    expect(loAscent(18, carlito('', false, false), 'font')).toBe(605);
+    // Font-independent: 1.2 × 635, truncated; the ascent is the font height.
+    expect(loLineHeight(18, undefined, 'independent')).toBe(762);
+    expect(loAscent(18, carlito('', false, false), 'independent')).toBe(635);
+    const t = tableOf(one());
+    expect(t.lo?.lines).toBe('font');
+    // The line, LibreOffice's extra 1/100 mm, and the two margins of 127/100 mm.
+    expect(t.lo?.rows).toEqual([(774 + 1 + 254) * MM]);
+    // ordo's own row: 1.2207 × 36 px and the margins.
+    expect(t.rows[0]! / 6350).toBeCloseTo((2500 / 2048) * 36 + 14.4, 6);
+  });
+
+  it('uses font-independent spacing after a text shape that grows to its text, on the same slide', () => {
+    expect(tableOf(autogrow() + one()).lo?.rows).toEqual([(762 + 1 + 254) * MM]);
+    expect(tableOf(autogrow() + one()).lo?.lines).toBe('independent');
+    // Not after one without text, without its own a:spAutoFit, or when the shape comes after the table.
+    expect(tableOf(autogrow('') + one()).lo?.lines).toBe('font');
+    expect(tableOf(autogrow('Title', '<a:normAutofit/>') + one()).lo?.lines).toBe('font');
+    expect(tableOf(one() + autogrow()).lo?.lines).toBe('font');
+  });
+
+  it('scales a line by its proportional spacing, truncated, and keeps exact spacing', () => {
+    const pct = tableOf(one('<a:pPr><a:lnSpc><a:spcPct val="107000"/></a:lnSpc></a:pPr>'));
+    expect(pct.lo?.rows).toEqual([(Math.trunc(774 * 1.07) + 255) * MM]);
+    const pts = tableOf(one('<a:pPr><a:lnSpc><a:spcPts val="2000"/></a:lnSpc></a:pPr>'));
+    expect(pts.lo?.rows).toEqual([(706 + 255) * MM]); // 20 pt is 705.6/100 mm
+  });
+
+  it("draws the table with LibreOffice's rows under loCompat: text into the margins and at the face's ascent", () => {
+    const shapes =
+      autogrow() +
+      table({
+        cols: [4 * IN],
+        rows: [{ h: 0, cells: [tc('a\nb\nc\nd\ne', { tcPr: ' anchor="ctr"' })] }],
+      });
+    const ordo = convert(shapes, { fontFace: carlito });
+    const lo = convert(shapes, { fontFace: carlito, loCompat: true });
+    const ours = ordo.texts.find((t) => t.origin?.role === 'cell')!;
+    const theirs = lo.texts.find((t) => t.origin?.role === 'cell')!;
+    // Five lines of 762/100 mm, the extra 1/100 mm and the margins.
+    expect(theirs.box.h).toBeCloseTo(((5 * 762 + 255) * MM) / 6350, 6);
+    expect(ours.box.h).toBeCloseTo(5 * (2500 / 2048) * 36 + 14.4, 6);
+    // The drawn text is taller than LibreOffice's row by the difference, centred into both margins, and
+    // moved up to where LibreOffice puts the baselines; the box's text area is as tall as the text.
+    const ins = theirs.style.insets!;
+    expect(ins.t + ins.b).toBeCloseTo(theirs.box.h - 5 * (2500 / 2048) * 36, 1);
+    expect(ins.t).toBeLessThan(ins.b);
+    // ordo's own drawing keeps the cell's margins.
+    for (const [k, v] of Object.entries({ l: 14.4, t: 7.2, r: 14.4, b: 7.2 }))
+      expect(ours.style.insets![k as 'l']).toBeCloseTo(v, 9);
+  });
+});
+
 describe('tables: what stays residual', () => {
+  it('counts drawn cells: a merge is one cell, the cells it covers none', () => {
+    // 7 × 9 = 63 grid cells, but the first row is one merge of four and five cells: 60 drawn.
+    const rows = Array.from({ length: 7 }, (_, r) => ({
+      h: IN / 4,
+      cells: Array.from({ length: 9 }, (_, c) =>
+        r === 0 && c === 0
+          ? tc('x', { attrs: 'gridSpan="4"' })
+          : r === 0 && c < 4
+            ? tc('', { attrs: 'hMerge="1"' })
+            : tc('x'),
+      ),
+    }));
+    const { s, texts } = convert(table({ cols: Array(9).fill(IN / 2), rows }));
+    expect(s.classification.class).toBe('native');
+    expect(texts).toHaveLength(60);
+  });
+
+  it(`reads no table of more than ${MAX_TABLE_GRID} grid cells`, () => {
+    const rows = Array.from({ length: 65 }, () => ({
+      h: 12_700,
+      cells: [tc('x', { attrs: `gridSpan="64"` })],
+    }));
+    const { s, texts } = convert(table({ cols: Array(64).fill(IN / 8), rows }));
+    expect(texts).toHaveLength(0);
+    expect(s.notes.some((n) => n.startsWith(`a table of ${65 * 64} grid cells`))).toBe(true);
+  });
+
   it(`leaves a table of more than ${MAX_TABLE_CELLS} cells to LibreOffice (hybrid)`, () => {
     const rows = Array.from({ length: 7 }, () => ({
       h: IN / 4,

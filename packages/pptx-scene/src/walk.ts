@@ -82,6 +82,11 @@ export interface WalkState {
   points?: number;
   /** SmartArt drawings read so far (M6, `smartart.ts`: `ElementBase.diagram` numbers them). */
   diagrams?: number;
+  /**
+   * A shape of the slide's own tree with text and its own `a:spAutoFit` was read: LibreOffice sizes the
+   * rows of the tables after it with font-independent line spacing (`tables.ts` `TableReadOptions`).
+   */
+  autogrow?: boolean;
 }
 
 const shows = (n: XNode | undefined) => n?.attrs.showMasterSp !== '0' && n?.attrs.showMasterSp !== 'false';
@@ -276,6 +281,13 @@ export function walkTree(
       case 'p:cxnSp': {
         const shape = readShape(ctx, el, base, chain, st, groupFill);
         if (shape) st.out.push(shape);
+        if (
+          from === 'slide' &&
+          shape?.kind === 'shape' &&
+          textChars(shape.text) > 0 &&
+          child(path(el, 'p:txBody', 'a:bodyPr'), 'a:spAutoFit')
+        )
+          st.autogrow = true;
         break;
       }
       case 'p:pic': {
@@ -329,7 +341,11 @@ export function walkTree(
         if (what === 'table') {
           // Drawn natively (M6, `tables.ts`): its objects are one group, the top-level group's when nested.
           const own = { ...base, group: group ?? ++st.groups };
-          st.out.push(readTable(ctx, el, own, (cx, cy) => boxAffine(map, { ...place, cx, cy })));
+          st.out.push(
+            readTable(ctx, el, own, (cx, cy) => boxAffine(map, { ...place, cx, cy }), {
+              ...(st.autogrow ? { afterAutogrow: true } : {}),
+            }),
+          );
           break;
         }
         // M6: SmartArt with PowerPoint's drawing of it is drawn natively (`smartart.ts`), its own group.

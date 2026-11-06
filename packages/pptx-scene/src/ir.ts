@@ -465,6 +465,14 @@ export interface TableElement extends ElementBase {
   lines: TableLine[];
   /** The ordo objects the table emits (`classify.ts` `slideCost`). */
   objects: number;
+  /**
+   * The rows as LibreOffice 24.2 sizes them, when they differ from `rows` (R1, `tables.ts` `LoLines`): for
+   * the fidelity harness's LibreOffice policy only (`EmitOptions.loCompat`, compat rule `cellRows`). `xf`
+   * is the table's affine at their height; per cell (in `cells` order) `spill`, how much taller than its
+   * box the text is drawn (it then runs into the cell's margins, as LibreOffice draws it), and `lift`, how
+   * far above ordo's office line model LibreOffice draws its lines (at the face's ascent).
+   */
+  lo?: { rows: Emu[]; xf: Affine; spill: Emu[]; lift: Emu[]; lines: 'independent' | 'font' };
 }
 
 /** One drawn cell of a table: a merge counts once. */

@@ -9,6 +9,7 @@ import { deflateSync } from 'node:zlib';
 import type { Font } from '@ordo/domain';
 import { buildDeck, sfntFont, tableFrame, tc } from '@ordo/pptx-scene/test-util.ts';
 import { afterAll, describe, expect, it } from 'vitest';
+import { metricTables } from '../src/fonts/sfnt.ts';
 import { FACE_LIMITS, libraryFaces, type SceneFontFile, sceneFontFiles } from '../src/pptx/faces.ts';
 import { sceneTask } from '../src/pptx/sceneTask.ts';
 
@@ -105,6 +106,38 @@ describe('libraryFaces', () => {
     expect(found).toBe(many.length);
     expect(faces('Broken', false, false)).toBeUndefined();
     expect(faces('Gone', false, false)).toBeUndefined();
+  });
+
+  it("reads pair kerning and LibreOffice's vertical metrics from TTF and WOFF faces (R1)", () => {
+    const kerned = sfntFont(
+      { A: 600, V: 600 },
+      { kern: { pairs: [['A', 'V', -80]] }, vertical: { ascender: 800, descender: -200 } },
+    );
+    const faces = libraryFaces([
+      ['Kern Sans', 400, false, file('k.ttf', kerned)],
+      ['Kern Sans', 700, false, file('k.woff', toWoff(kerned))],
+    ]);
+    for (const bold of [false, true]) {
+      const f = faces('Kern Sans', bold, false)!;
+      expect(f.kern?.(0x41, 0x56)).toBeCloseTo(-0.08, 9);
+      expect([f.ascent, f.descent]).toEqual([0.8, 0.2]);
+    }
+  });
+
+  it('leaves out a kerning table past the table limit and measures the face without it', () => {
+    const bytes = sfntFont({ A: 600, V: 600 }, { kern: { pairs: [['A', 'V', -80]] } });
+    const view = new DataView(bytes.buffer);
+    for (let i = 0; i < view.getUint16(4); i++) {
+      const e = 12 + i * 16;
+      if (String.fromCharCode(...bytes.subarray(e, e + 4)) === 'GPOS')
+        view.setUint32(e + 12, 5 * 1024 * 1024);
+    }
+    const tables = metricTables(bytes);
+    expect(tables.has('GPOS')).toBe(false);
+    expect(tables.has('hmtx')).toBe(true);
+    const f = libraryFaces([['Big Kern', 400, false, file('big.ttf', bytes)]])('Big Kern', false, false)!;
+    expect(f.advance(0x41)).toBe(0.6);
+    expect(f.kern).toBeUndefined();
   });
 
   it("lists the library's fonts for the task", () => {
