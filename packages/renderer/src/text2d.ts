@@ -17,7 +17,20 @@ import {
 import { CLAMP, clampBox, clampCrop, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
 import { drawableContent } from './content.ts';
 import { type Ctx2D, roundRect, setLetterSpacing, withRotation } from './ctx.ts';
-import { type PictureTarget, paintPicture, pictureFit, pictureTarget, preparedKey } from './picture.ts';
+import {
+  type PictureShape,
+  type PictureTarget,
+  paintPicture,
+  paintShapedPicture,
+  pictureFit,
+  pictureShape,
+  pictureTarget,
+  preparedKey,
+} from './picture.ts';
+import { EFFECT_MAX_PIXELS } from './effects.ts';
+import { GEOM_CLIP_RULE, geomFillPath2D } from './geom/draw.ts';
+import { storedGeometry } from './geom/stored.ts';
+import { drawGeomShape, hasShapeExtras, placeBox } from './shape.ts';
 import { firstStrong, hasStrongRtl } from './text/bidi.ts';
 import { LEGACY_FONT_ENV, currentFontEnv } from './text/fonts.ts';
 import { BAND_MIN_FONT_SCALE, bandObject, drawRichText, isRichStyle, isRichText } from './text/rich.ts';
@@ -302,6 +315,12 @@ export function drawText(
  * what the box shows at
  * device size: it is copied 1:1 at the target's whole-pixel origin, with no resampling and no clip
  * (design/27 §7.1). Any other image is drawn as the source, as above.
+ *
+ * `shape` (the image object: `mask`, `flipH`, `flipV`, design/27 §3.1) mirrors the picture about the box's
+ * centre and cuts it to the mask's filled paths instead of the box and `radius`: drawn into a sprite of its
+ * device bounds and cut there by an anti-aliased 'destination-in' fill (`paintShapedPicture`), then copied at
+ * the opacity; without OffscreenCanvas, or past EFFECT_MAX_PIXELS, through a clip of the mask. A prepared
+ * bitmap already holds the cut picture. Without a mask or flips the picture is drawn exactly as before.
  */
 export function drawImageFit(
   ctx: Ctx2D,
@@ -313,6 +332,7 @@ export function drawImageFit(
   radius = 0,
   crop?: ImageCrop,
   target?: PictureTarget,
+  shape?: PictureShape,
 ): void {
   opacity = num(opacity, 0, 1, 1);
   if (target && preparedKey(img) === target.key) {
@@ -320,6 +340,21 @@ export function drawImageFit(
     ctx.globalAlpha = opacity;
     ctx.drawImage(img, target.x, target.y);
     ctx.restore();
+    return;
+  }
+  const shaped = shape ? pictureShape(shape) : undefined;
+  if (shaped) {
+    drawShapedPicture(
+      ctx,
+      img,
+      clampBox(box),
+      num(scale, 0.01, 8, 1),
+      pictureFit(fit),
+      opacity,
+      radius,
+      crop,
+      shaped,
+    );
     return;
   }
   box = clampBox(box);
@@ -339,7 +374,77 @@ export function drawImageFit(
   ctx.restore();
 }
 
+/** A masked or flipped picture from its source (`drawImageFit` with a `shape`). */
+function drawShapedPicture(
+  ctx: Ctx2D,
+  img: CanvasImageSource,
+  box: Box,
+  scale: number,
+  fit: 'contain' | 'cover' | 'stretch',
+  opacity: number,
+  radius: number,
+  crop: ImageCrop | undefined,
+  shape: PictureShape,
+): void {
+  const c = clampCrop(crop);
+  const sized = { ...shape, w: box.w, h: box.h };
+  ctx.save();
+  placeBox(ctx, box, scale);
+  if (shape.mask && typeof OffscreenCanvas !== 'undefined' && typeof ctx.getTransform === 'function') {
+    const m = ctx.getTransform();
+    const xs = [m.e, m.a * box.w + m.e, m.c * box.h + m.e, m.a * box.w + m.c * box.h + m.e];
+    const ys = [m.f, m.b * box.w + m.f, m.d * box.h + m.f, m.b * box.w + m.d * box.h + m.f];
+    const canvas = ctx.canvas as { width?: number; height?: number } | undefined;
+    const cw = canvas?.width ?? 0;
+    const ch = canvas?.height ?? 0;
+    const X = Math.max(0, Math.floor(Math.min(...xs)));
+    const Y = Math.max(0, Math.floor(Math.min(...ys)));
+    const W = Math.min(cw || Number.POSITIVE_INFINITY, Math.ceil(Math.max(...xs))) - X;
+    const H = Math.min(ch || Number.POSITIVE_INFINITY, Math.ceil(Math.max(...ys))) - Y;
+    if (!(W >= 1 && H >= 1)) {
+      ctx.restore();
+      return;
+    }
+    if (W * H <= EFFECT_MAX_PIXELS && [m.a, m.b, m.c, m.d, m.e, m.f].every(Number.isFinite)) {
+      const sprite = new OffscreenCanvas(W, H).getContext('2d', { willReadFrequently: true });
+      if (sprite) {
+        sprite.imageSmoothingQuality = 'medium';
+        sprite.setTransform(m.a, m.b, m.c, m.d, m.e - X, m.f - Y);
+        paintShapedPicture(sprite, img, 0, 0, box.w, box.h, fit, c, sized);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.globalAlpha = opacity;
+        ctx.drawImage(sprite.canvas, X, Y);
+        ctx.restore();
+        return;
+      }
+    }
+  }
+  // A clip (not anti-aliased on an OffscreenCanvas): the mask's union, else the box with its corners.
+  ctx.globalAlpha = opacity;
+  const built = shape.mask ? storedGeometry(shape.mask, box.w, box.h) : undefined;
+  if (built) {
+    // The mask is mirrored with the picture: clip in the mirrored box, then mirror back (a flip about the
+    // centre undoes itself), since paintShapedPicture mirrors the picture again.
+    ctx.translate(box.w / 2, box.h / 2);
+    ctx.scale(shape.flipH ? -1 : 1, shape.flipV ? -1 : 1);
+    ctx.translate(-box.w / 2, -box.h / 2);
+    ctx.clip(geomFillPath2D(built), GEOM_CLIP_RULE);
+    ctx.translate(box.w / 2, box.h / 2);
+    ctx.scale(shape.flipH ? -1 : 1, shape.flipV ? -1 : 1);
+    ctx.translate(-box.w / 2, -box.h / 2);
+  } else {
+    roundRect(ctx, 0, 0, box.w, box.h, num(radius, 0, CLAMP.maxRadius, 0));
+    ctx.clip();
+  }
+  paintShapedPicture(ctx, img, 0, 0, box.w, box.h, fit, c, { ...sized, mask: undefined });
+  ctx.restore();
+}
+
 export function drawShape(ctx: Ctx2D, o: Extract<SlideObject, { type: 'shape' }>, scale: number): void {
+  if (hasShapeExtras(o)) {
+    drawGeomShape(ctx, o, scale);
+    return;
+  }
   const box = clampBox(o.box);
   ctx.save();
   ctx.globalAlpha = num(o.opacity, 0, 1, 1);
@@ -382,7 +487,7 @@ export function drawObject(ctx: Ctx2D, o: SlideObject, scale: number, images?: I
   else {
     const target = pictureTarget(o, scale);
     const img = images?.(o.mediaId, target);
-    if (img) drawImageFit(ctx, img, o.box, scale, o.fit, o.opacity, o.radius, o.crop, target);
+    if (img) drawImageFit(ctx, img, o.box, scale, o.fit, o.opacity, o.radius, o.crop, target, o);
   }
 }
 

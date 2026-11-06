@@ -1,8 +1,7 @@
 /*
  * DrawingML shape geometry (design/27 §1 geom/, §15 M6; README.md here): the preset table compiled from
- * POI, the compiler for a deck's custGeom, the guide evaluator, the path builder and the Canvas 2D drawer.
- * `@ordo/renderer` re-exports the drawing API (presetGeometry, customGeometry, buildGeom, drawGeom and their
- * types); the compiler and evaluator are here for the converter and tools.
+ * POI, the compiler for a deck's custGeom, the guide evaluator, the path builder, the Canvas 2D drawer, line
+ * ends, gradients and stored geometries (ShapeGeom). `@ordo/renderer` re-exports all of it.
  */
 export { ARC_MAX_SEGMENTS, arcParamAngle, arcToCubics } from './arc.ts';
 export {
@@ -37,17 +36,35 @@ export {
   CLOSED_TOLERANCE,
   drawGeom,
   FILL_BRIGHTNESS,
+  GEOM_CLIP_RULE,
   GEOM_FILL_RULE,
   type GeomFill,
   geomFillPath2D,
   geomPath2D,
   geomPathOpen,
+  type GeomSpacePaint,
   type GeomStroke,
   type GeomStyle,
   type PathSink,
   shadeRgba,
   traceGeomPath,
+  traceUnionPath,
+  UNION_NESTING_LIMIT,
 } from './draw.ts';
+export {
+  ARROW_MIN_BASE,
+  type ArrowKind,
+  type ArrowSize,
+  arrowCentred,
+  arrowFor,
+  arrowReach,
+  type EndedPath,
+  type GeomArrow,
+  type GeomEnds,
+  withEnds,
+} from './ends.ts';
+export { gradientStyle } from './paint.ts';
+export { legacyGeometry, storedGeometry, storedPath } from './stored.ts';
 export * from './ops.ts';
 export {
   type BuiltGeom,

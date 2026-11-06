@@ -125,7 +125,28 @@ type TextStyle = {
   fill?: { color: Rgba; radius: number };
   // Rich text (design/27 §3.1), all optional: lineModel 'ordo' | 'office', insets (replace padding), wrap,
   // autofit 'none' | 'shrink' with fitScale, justify, direction 'ltr' | 'rtl' | 'auto', lang, fallbackFonts,
-  // underline, glow. A text object with runs, paras or any of these is drawn by the rich text engine.
+  // underline, glow, paint (M6: a Gradient for gradient text). A text object with runs, paras or any of these
+  // is drawn by the rich text engine.
+};
+// M6 (design/27 §3.1): a geometry and a gradient, shared by shapes, picture masks and gradient text.
+type ShapeGeom = {
+  preset?: string; // a PowerPoint preset by name (187), evaluated at draw time
+  adj?: [string, number][]; // its adjust values, as pairs
+  // A custGeom's evaluated paths: only M L C Q Z and numbers (re-tokenised before drawing, ≤ 4,096 points),
+  // in their own w x h space scaled to the box; ≤ 8.
+  paths?: {
+    d: string;
+    w: number;
+    h: number;
+    fill?: 'norm' | 'none' | 'lighten' | 'lightenLess' | 'darken' | 'darkenLess';
+    stroke?: boolean;
+  }[];
+};
+type Gradient = {
+  kind: 'linear' | 'radial';
+  angle?: number; // degrees clockwise from left→right (OOXML a:lin ang); scaled?: boolean
+  stops: { at: number; color: Rgba }[]; // 2..16, sorted
+  center?: { x: number; y: number }; // radial focus in box fractions (default the centre)
 };
 type ImageObject = {
   id: Id;
@@ -139,16 +160,45 @@ type ImageObject = {
   // Share of the picture cut from each side (-1..1) before `fit`; a negative share pads with
   // transparency (PowerPoint a:srcRect, design/27 §3.1).
   crop?: { l: number; t: number; r: number; b: number };
+  flipH?: boolean; // M6: mirrored about the box centre, mask included
+  flipV?: boolean;
+  mask?: ShapeGeom; // M6: cut to the geometry (the union of its filled paths); replaces radius
 };
 type ShapeObject = {
   id: Id;
   type: 'shape';
   box: Box;
-  shape: 'rect' | 'ellipse' | 'line';
+  shape: 'rect' | 'ellipse' | 'line'; // what an older build draws, with fill as a solid colour
   fill?: Rgba;
   stroke?: { width: number; color: Rgba };
   opacity: number;
   radius: number;
+  // M6 (design/27 §3.1), all optional; a shape with any of them is drawn through the geometry engine.
+  geom?: ShapeGeom;
+  gradient?: Gradient; // instead of fill
+  dash?:
+    | 'solid'
+    | 'dot'
+    | 'dash'
+    | 'dashDot'
+    | 'longDash'
+    | 'longDashDot'
+    | 'longDashDotDot'
+    | 'sysDot'
+    | 'sysDash'
+    | 'sysDashDot'
+    | 'sysDashDotDot';
+  ends?: { head?: ArrowEnd; tail?: ArrowEnd }; // arrowheads at an open path's start and end
+  flipH?: boolean;
+  flipV?: boolean;
+  shadow?: { dx: number; dy: number; blur: number; color: Rgba }; // outer shadow
+  glow?: { radius: number; color: Rgba };
+  softEdge?: number; // logical px
+};
+type ArrowEnd = {
+  type: 'none' | 'triangle' | 'stealth' | 'arrow' | 'oval' | 'diamond';
+  w?: 'sm' | 'med' | 'lg';
+  len?: 'sm' | 'med' | 'lg';
 };
 
 // Every object may also carry origin?: { src; shapeId?; ph?; role?; group? } (where an imported PowerPoint

@@ -7,15 +7,19 @@
 import {
   type Box,
   type ExtractedText,
+  type Gradient,
   LOGICAL_HEIGHT,
   LOGICAL_WIDTH,
+  PATH_DATA_LIMITS,
   type Presentation,
   type Rgba,
+  type ShapeGeom,
   type SlideObject,
   type TextObject,
   type TextPara,
   type TextRun,
   type TextStyle,
+  cleanPathData,
 } from '@ordo/domain';
 
 export const IMPORT_LIMITS = {
@@ -184,6 +188,92 @@ export function clampStyle(s: TextStyle): TextStyle {
       .map((f) => clipText(f, IMPORT_LIMITS.fontFamily))
       .filter((f) => f.trim() !== '');
   if (s.glow) out.glow = { radius: finite(s.glow.radius, 0, 0, 500), color: clampColor(s.glow.color) };
+  if (s.paint) {
+    const paint = sanitizeGradient(s.paint);
+    if (paint) out.paint = paint;
+    else delete out.paint;
+  }
+  return out;
+}
+
+/**
+ * A gradient within the schema's bounds (design/27 §3.1): at most 16 stops sorted by position, each within
+ * 0..1, the angle and centre bounded. Undefined with fewer than two stops (the solid colour beside it stays).
+ * The kind is left to the schema's .catch.
+ */
+export function sanitizeGradient(g: Gradient): Gradient | undefined {
+  if (!g || !Array.isArray(g.stops)) return undefined;
+  const stops = g.stops
+    .filter((st) => st && typeof st === 'object')
+    .slice(0, 16)
+    .map((st) => ({ at: finite(st.at, 0, 0, 1), color: clampColor(st.color) }))
+    .sort((a, b) => a.at - b.at);
+  if (stops.length < 2) return undefined;
+  const out: Gradient = { ...g, stops };
+  if (g.angle !== undefined) out.angle = finite(g.angle, 0, -36_000, 36_000);
+  if (g.center) out.center = { x: finite(g.center.x, 0.5, -1, 1), y: finite(g.center.y, 0.5, -1, 1) };
+  return out;
+}
+
+/**
+ * A stored geometry within the schema's bounds (design/27 §3.1, §12): the preset name cut to 40, at most 10
+ * finite adjust pairs, at most 8 paths, each re-tokenised to M L Q C Z and numbers (`cleanPathData`, at most
+ * 4,096 points) and dropped when nothing is left of it. Undefined when neither a preset nor a path is left.
+ */
+export function sanitizeGeom(g: ShapeGeom): ShapeGeom | undefined {
+  if (!g || typeof g !== 'object') return undefined;
+  const out: ShapeGeom = {};
+  if (typeof g.preset === 'string' && g.preset) out.preset = clipText(g.preset, 40);
+  if (Array.isArray(g.adj)) {
+    const adj = g.adj
+      .filter((p) => Array.isArray(p) && typeof p[0] === 'string' && Number.isFinite(p[1]))
+      .slice(0, 10)
+      .map(([n, v]): [string, number] => [clipText(n, 16), finite(v, 0, -1e7, 1e7)]);
+    if (adj.length) out.adj = adj;
+  }
+  if (Array.isArray(g.paths)) {
+    const paths: NonNullable<ShapeGeom['paths']> = [];
+    for (const p of g.paths) {
+      if (paths.length >= PATH_DATA_LIMITS.paths) break;
+      if (!p || typeof p !== 'object') continue;
+      const d = cleanPathData(p.d);
+      if (!d) continue;
+      paths.push({
+        ...p,
+        d,
+        w: finite(p.w, 0, 0, PATH_DATA_LIMITS.coord),
+        h: finite(p.h, 0, 0, PATH_DATA_LIMITS.coord),
+      });
+    }
+    if (paths.length) out.paths = paths;
+  }
+  return out.preset || out.paths ? out : undefined;
+}
+
+type ShapeObj = Extract<SlideObject, { type: 'shape' }>;
+
+/** A shape's M6 fields within the schema's bounds (design/27 §3.1); enums are left to the schema's .catch. */
+function sanitizeShape(o: ShapeObj): ShapeObj {
+  const out: ShapeObj = { ...o };
+  if (o.geom) {
+    const geom = sanitizeGeom(o.geom);
+    if (geom) out.geom = geom;
+    else delete out.geom;
+  }
+  if (o.gradient) {
+    const gradient = sanitizeGradient(o.gradient);
+    if (gradient) out.gradient = gradient;
+    else delete out.gradient;
+  }
+  if (o.shadow)
+    out.shadow = {
+      dx: finite(o.shadow.dx, 0, -500, 500),
+      dy: finite(o.shadow.dy, 0, -500, 500),
+      blur: finite(o.shadow.blur, 0, 0, 500),
+      color: clampColor(o.shadow.color),
+    };
+  if (o.glow) out.glow = { radius: finite(o.glow.radius, 0, 0, 500), color: clampColor(o.glow.color) };
+  if (o.softEdge !== undefined) out.softEdge = finite(o.softEdge, 0, 0, 500);
   return out;
 }
 
@@ -307,9 +397,14 @@ function clampObject(o: SlideObject): SlideObject {
         b: finite(c.b, 0, -1, 1),
       };
     } else delete out.crop;
+    if (o.mask) {
+      const mask = sanitizeGeom(o.mask);
+      if (mask) out.mask = mask;
+      else delete out.mask;
+    }
     return out;
   }
-  return { ...o, box, opacity, radius: finite(o.radius, 0, 0, 1000) };
+  return { ...sanitizeShape(o), box, opacity, radius: finite(o.radius, 0, 0, 1000) };
 }
 
 /** Bound every field of an imported presentation in place and return it. */

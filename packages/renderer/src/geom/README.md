@@ -3,10 +3,11 @@
 The preset and custom geometry engine of design/27 §1 (`geom/`), §3.1 (`ShapeGeom`) and §15 M6: what a
 PowerPoint `a:prstGeom` or `a:custGeom` means, as numbers. Read design/27 §3.1, §12 (bounds) and §14 item 6 first.
 
-Status: **M6 wave 1, self-contained.** The preset table, the compiler, the guide evaluator, the path builder
-(arcTo with POI's visual-angle rule, path spaces, fill modes) and the Canvas 2D drawer are built and tested, and
-the preset golden compares them with LibreOffice; `@ordo/renderer` exports the drawing API, and nothing draws with it yet. The next wave wires geometry into
-`ShapeObject` drawing, the schema, the converter and the editor.
+Status: **M6 wave 2.** The preset table, the compiler, the guide evaluator, the path builder (arcTo with POI's
+visual-angle rule, path spaces, fill modes) and the Canvas 2D drawer are built and tested, and the preset golden
+compares them with LibreOffice (wave 1). Wave 2 draws real slides with them: stored geometries
+(`ShapeObject.geom`, `ImageObject.mask`), gradients, dashes, line ends, the shapes and their effects
+(`../shape.ts`, `../effects.ts`) and picture masks (`../picture.ts`); `@ordo/renderer` re-exports all of it.
 
 ```ts
 const g = presetGeometry('star5', w, h, [['adj', 25000]]); // undefined for an unknown name: draw the rect
@@ -23,6 +24,9 @@ const deck = customGeometry(custGeomStrings, w, h); // a:custGeom; deck.notes sa
 | `arc.ts`          | `arcToCubics`: an arcTo from the current point as at most four cubic segments (POI's visual-angle rule, Arc2D's segments); `arcParamAngle`, the visual-to-parametric angle.                         |
 | `path.ts`         | `buildGeom(geom, w, h, adj)`: sub-paths in box space with fill mode and stroke flag, the text rect, the connection sites; `presetGeometry`, `customGeometry`, `pathData`.                           |
 | `draw.ts`         | `drawGeom(ctx, built, fill, stroke)`: Canvas 2D, Path2D per path, LibreOffice's order, even-odd rule and shades (`shadeRgba`); `geomFillPath2D` for picture clips.                                  |
+| `ends.ts`         | Line ends: `arrowFor` (LibreOffice's marker sizes), `withEnds` (the shaft cut back and the marker polygons of every open sub-path).                                                                 |
+| `paint.ts`        | `gradientStyle`: a `Gradient` over a box (OOXML angle and `scaled`, radial focus to the farthest corner on an ellipse of the box), each stop shaded for a path's brightness.                        |
+| `stored.ts`       | `storedGeometry`: a `ShapeGeom` at a box (a preset by name, else its re-tokenised paths); `legacyGeometry`: the legacy rect, roundRect, ellipse and line as geometries.                             |
 | `presets.gen.ts`  | Generated (`pnpm --filter @ordo/geom-gen gen`, never edited): the 187 presets of `third_party/poi-presets` as `PRESET_GEOMS`, with the two fixes of its README.                                     |
 | `poi-guides.json` | Reference values from POI 5.2.5 itself for the dozen presets of the spot checks (`tools/geom-gen/poi/GuideDump.java`).                                                                              |
 | `poi-paths.json`  | POI 5.2.5's own paths (segments, text rect, sites) for the dozen presets and for arcs in every quadrant and path spaces (`tools/geom-gen/poi/PathDump.java`).                                       |
@@ -113,6 +117,27 @@ differences below.
   (`GetColorData`), strokes unshaded. A gradient or picture fill is a painter called with each path's brightness.
   `draw.browser.test.ts` checks the shades, the even-odd hole, stroke-only paths, open outlines over the fill and
   the clip path with Chromium.
+
+## Stored geometries, paint and line ends (M6 wave 2)
+
+- **Stored geometry** (`stored.ts`, design/27 §3.1 `ShapeGeom`). A known preset is evaluated at the box with the
+  stored adjust pairs, so a resized shape keeps its corners; else the paths, each `d` re-tokenised by
+  `parsePathData` (`@ordo/domain` `pathdata.ts`: absolute M L Q C Z and plain decimals, ≤ 4,096 points) and
+  scaled from its own w x h space to the box (a side of 0: the box's units); else nothing, and the caller draws
+  the legacy shape. Memoised per geometry object and box size.
+- **Union clip** (`draw.ts` `geomFillPath2D`, `traceUnionPath`). The filled paths of a geometry as one Path2D whose
+  non-zero fill (`GEOM_CLIP_RULE`) is the union of each path's even-odd region: every closed sub-path is turned
+  to wind positively when an even number of the path's other sub-paths contain its first point and negatively
+  when an odd number do, so holes stay holes while overlapping paths (smileyFace's eyes over its face) add up
+  instead of cancelling. Exact for sub-paths that cross neither themselves nor each other (every preset); past
+  `UNION_NESTING_LIMIT` (64) sub-paths in one path, nesting is not worked out.
+- **Strokes.** `GeomStroke` may carry a dash pattern (box units) and line ends: open paths are stroked cut back
+  for their markers, which are filled in the stroke's paint without the dashes. Sizes, shapes and placement
+  follow LibreOffice (oox `lclPushMarkerProperties`, drawinglayer `PolygonStrokeArrowPrimitive2D`; design/27
+  §15 M6 "As built").
+- **Paint** (`paint.ts`). A fill painter may return a `GeomSpacePaint`: a style defined in its own space and the
+  affine to box space, so an elliptical radial gradient is a circle in a squeezed space; the path is mapped into
+  that space for the fill (`Path2D.addPath`).
 
 ## Preset golden
 

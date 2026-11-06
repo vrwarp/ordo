@@ -170,7 +170,7 @@ function ObjectNode(props: {
           ctx.drawImage(t.canvas, -MARGIN, -MARGIN, t.canvas.width / t.density, t.canvas.height / t.density);
         } else if (o.type === 'image') {
           const img = imageFor(stillHash(props.media(o.mediaId)));
-          if (img) drawImageFit(ctx, img, local(b), 1, o.fit, o.opacity, o.radius, o.crop);
+          if (img) drawImageFit(ctx, img, local(b), 1, o.fit, o.opacity, o.radius, o.crop, undefined, o);
           else {
             ctx.fillStyle = '#333';
             ctx.fillRect(0, 0, b.w, b.h);

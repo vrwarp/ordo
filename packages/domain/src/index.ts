@@ -13,3 +13,4 @@ export * from './goLive.ts';
 export * from './bullets.ts';
 export * from './readable.ts';
 export * from './textEdit.ts';
+export * from './pathdata.ts';

@@ -1,18 +1,26 @@
 import {
+  type ArrowEnd,
   type Box,
+  type Glow,
+  type Gradient,
   type ImageCrop,
   LOGICAL_HEIGHT,
   LOGICAL_WIDTH,
   LOOK_MAIN,
+  type LineDash,
   type Look,
   type ObjectOrigin,
+  PATH_DATA_LIMITS,
+  type PathFillMode,
   type Rgba,
+  type ShapeGeom,
   type Slide,
   type SlideObject,
   type TextObject,
   type TextPara,
   type TextRun,
   type TextStyle,
+  cleanPathData,
   fromImport,
   referencePicture,
 } from '@ordo/domain';
@@ -64,6 +72,10 @@ export const CLAMP = {
   maxSizeScales: 64,
   /** Paragraph indents and spacing, in logical px. */
   maxIndentPx: LOGICAL_WIDTH,
+  /** Stops of one gradient (design/27 §12). */
+  maxGradientStops: 16,
+  /** Adjust value pairs of one stored geometry (the schema's bound). */
+  maxGeomAdjust: 10,
 } as const;
 
 const W = LOGICAL_WIDTH;
@@ -258,11 +270,169 @@ function clampRichStyle(x: Partial<TextStyle>, out: TextStyle): void {
       .map(clampFamily)
       .filter((f) => f !== '');
   if (typeof x.underline === 'boolean') out.underline = x.underline;
-  if (x.glow && typeof x.glow === 'object')
-    out.glow = {
-      radius: num(x.glow.radius, 0, CLAMP.maxEffectPx, 0),
-      color: clampColor(x.glow.color, { r: 0, g: 0, b: 0, a: 1 }),
-    };
+  if (x.glow && typeof x.glow === 'object') out.glow = clampGlow(x.glow);
+  const paint = clampGradient(x.paint);
+  if (paint) out.paint = paint;
+}
+
+function clampGlow(v: Partial<Glow>): Glow {
+  return {
+    radius: num(v.radius, 0, CLAMP.maxEffectPx, 0),
+    color: clampColor(v.color, { r: 0, g: 0, b: 0, a: 1 }),
+  };
+}
+
+/**
+ * A gradient (design/27 §3.1 `Gradient`) with known kind, bounded angle and centre, and 2-16 stops sorted by
+ * position (stable), each within 0..1. Undefined when absent or with fewer than two usable stops: the caller
+ * then paints its solid colour.
+ */
+export function clampGradient(g: unknown): Gradient | undefined {
+  if (!g || typeof g !== 'object' || Array.isArray(g)) return undefined;
+  const x = g as Partial<Record<keyof Gradient, unknown>>;
+  if (!Array.isArray(x.stops)) return undefined;
+  const stops: Gradient['stops'] = [];
+  for (let i = 0; i < x.stops.length && stops.length < CLAMP.maxGradientStops; i++) {
+    const s = x.stops[i] as { at?: unknown; color?: unknown } | null | undefined;
+    if (!s || typeof s !== 'object') continue;
+    stops.push({ at: num(s.at, 0, 1, 0), color: clampColor(s.color, { r: 0, g: 0, b: 0, a: 1 }) });
+  }
+  if (stops.length < 2) return undefined;
+  stops.sort((a, b) => a.at - b.at);
+  const out: Gradient = { kind: x.kind === 'radial' ? 'radial' : 'linear', stops };
+  if (x.angle !== undefined) out.angle = num(x.angle, -36_000, 36_000, 0);
+  if (typeof x.scaled === 'boolean') out.scaled = x.scaled;
+  if (x.center && typeof x.center === 'object') {
+    const c = x.center as { x?: unknown; y?: unknown };
+    out.center = { x: num(c.x, -1, 1, 0.5), y: num(c.y, -1, 1, 0.5) };
+  }
+  return out;
+}
+
+const PATH_FILL_MODES: readonly PathFillMode[] = [
+  'norm',
+  'none',
+  'lighten',
+  'lightenLess',
+  'darken',
+  'darkenLess',
+];
+
+/**
+ * A stored geometry (design/27 §3.1 `ShapeGeom`, §12): a preset name of letters and digits (at most 40), at
+ * most 10 finite adjust pairs, at most 8 paths, each path string re-tokenised (`cleanPathData`: only M L Q C Z
+ * and numbers, at most 4,096 points) with its space within 0..1e9. Unknown fill modes are 'norm' (the
+ * schema's .catch). Undefined when nothing usable is left.
+ */
+export function clampGeom(g: unknown): ShapeGeom | undefined {
+  if (!g || typeof g !== 'object' || Array.isArray(g)) return undefined;
+  const x = g as Partial<Record<keyof ShapeGeom, unknown>>;
+  const out: ShapeGeom = {};
+  if (typeof x.preset === 'string') {
+    const preset = x.preset.slice(0, 40).replace(/[^A-Za-z0-9]/g, '');
+    if (preset) out.preset = preset;
+  }
+  if (Array.isArray(x.adj)) {
+    const adj: [string, number][] = [];
+    for (let i = 0; i < x.adj.length && adj.length < CLAMP.maxGeomAdjust; i++) {
+      const p = x.adj[i];
+      if (!Array.isArray(p) || typeof p[0] !== 'string' || typeof p[1] !== 'number') continue;
+      if (!Number.isFinite(p[1])) continue;
+      adj.push([p[0].slice(0, 16), num(p[1], -1e7, 1e7, 0)]);
+    }
+    if (adj.length) out.adj = adj;
+  }
+  if (Array.isArray(x.paths)) {
+    const paths: NonNullable<ShapeGeom['paths']> = [];
+    for (let i = 0; i < x.paths.length && paths.length < PATH_DATA_LIMITS.paths; i++) {
+      const p = x.paths[i] as Partial<Record<string, unknown>> | null | undefined;
+      if (!p || typeof p !== 'object') continue;
+      const d = cleanPathData(p.d);
+      if (!d) continue;
+      const path: NonNullable<ShapeGeom['paths']>[number] = {
+        d,
+        w: num(p.w, 0, PATH_DATA_LIMITS.coord, 0),
+        h: num(p.h, 0, PATH_DATA_LIMITS.coord, 0),
+      };
+      if (p.fill !== undefined)
+        path.fill = PATH_FILL_MODES.includes(p.fill as PathFillMode) ? (p.fill as PathFillMode) : 'norm';
+      if (typeof p.stroke === 'boolean') path.stroke = p.stroke;
+      paths.push(path);
+    }
+    if (paths.length) out.paths = paths;
+  }
+  return out.preset || out.paths ? out : undefined;
+}
+
+const LINE_DASHES: readonly LineDash[] = [
+  'solid',
+  'dot',
+  'dash',
+  'dashDot',
+  'longDash',
+  'longDashDot',
+  'longDashDotDot',
+  'sysDot',
+  'sysDash',
+  'sysDashDot',
+  'sysDashDotDot',
+];
+const ARROW_TYPES: readonly ArrowEnd['type'][] = ['none', 'triangle', 'stealth', 'arrow', 'oval', 'diamond'];
+const ARROW_SIZES: readonly NonNullable<ArrowEnd['w']>[] = ['sm', 'med', 'lg'];
+
+/** An arrowhead with known type and sizes (the schema's .catch defaults); undefined for none or garbage. */
+function clampArrowEnd(v: unknown): ArrowEnd | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const x = v as Partial<Record<keyof ArrowEnd, unknown>>;
+  const type = ARROW_TYPES.includes(x.type as ArrowEnd['type']) ? (x.type as ArrowEnd['type']) : 'none';
+  if (type === 'none') return undefined;
+  const out: ArrowEnd = { type };
+  const size = (s: unknown) => (ARROW_SIZES.includes(s as 'med') ? (s as 'med') : 'med');
+  if (x.w !== undefined) out.w = size(x.w);
+  if (x.len !== undefined) out.len = size(x.len);
+  return out;
+}
+
+type ShapeObj = Extract<SlideObject, { type: 'shape' }>;
+type ImageObj = Extract<SlideObject, { type: 'image' }>;
+
+/**
+ * The M6 drawing fields of a shape (design/27 §3.1), each only when present and usable, so a legacy shape
+ * clamps to exactly the fields it had and draws through the legacy path.
+ */
+function clampShapeExtras(s: Partial<ShapeObj>, out: ShapeObj): void {
+  const geom = clampGeom(s.geom);
+  if (geom) out.geom = geom;
+  const gradient = clampGradient(s.gradient);
+  if (gradient) out.gradient = gradient;
+  if (s.dash !== undefined) {
+    const dash = LINE_DASHES.includes(s.dash) ? s.dash : 'solid';
+    if (dash !== 'solid') out.dash = dash;
+  }
+  if (s.ends && typeof s.ends === 'object') {
+    const head = clampArrowEnd(s.ends.head);
+    const tail = clampArrowEnd(s.ends.tail);
+    if (head || tail) out.ends = { ...(head ? { head } : {}), ...(tail ? { tail } : {}) };
+  }
+  if (s.flipH === true) out.flipH = true;
+  if (s.flipV === true) out.flipV = true;
+  if (s.shadow && typeof s.shadow === 'object') out.shadow = clampShadow(s.shadow);
+  if (s.glow && typeof s.glow === 'object') {
+    const glow = clampGlow(s.glow);
+    if (glow.radius > 0) out.glow = glow;
+  }
+  if (s.softEdge !== undefined) {
+    const soft = num(s.softEdge, 0, CLAMP.maxEffectPx, 0);
+    if (soft > 0) out.softEdge = soft;
+  }
+}
+
+/** A picture's mask and flips (design/27 §3.1), each only when present and usable. */
+function clampImageExtras(i: Partial<ImageObj>, out: ImageObj): void {
+  if (i.flipH === true) out.flipH = true;
+  if (i.flipV === true) out.flipV = true;
+  const mask = clampGeom(i.mask);
+  if (mask) out.mask = mask;
 }
 
 /**
@@ -481,6 +651,7 @@ export function clampObject(o: unknown): SlideObject | undefined {
     };
     const crop = clampCrop(i.crop);
     if (crop) out.crop = crop;
+    clampImageExtras(i, out);
     return clampCommon(x, out);
   }
   if (x.type === 'shape') {
@@ -497,6 +668,7 @@ export function clampObject(o: unknown): SlideObject | undefined {
     if (s.fill) out.fill = clampColor(s.fill);
     if (s.stroke && typeof s.stroke === 'object')
       out.stroke = { width: num(s.stroke.width, 0, CLAMP.maxEffectPx, 1), color: clampColor(s.stroke.color) };
+    clampShapeExtras(s, out);
     return clampCommon(x, out);
   }
   return undefined;

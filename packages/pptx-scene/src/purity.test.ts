@@ -7,9 +7,9 @@ import { describe, expect, it } from 'vitest';
  * on the hub's CPU pool and in Node alike. Code outside tests imports only its own modules, types from
  * `@ordo/domain`, and the few domain modules that are plain tables and functions shared with the renderer
  * (the Wingdings/Symbol bullet table, the script fallback families and the script scan, design/27 §1 and
- * §10), which import nothing at run time but each other.
+ * §10; the stored path data tokeniser, §3.1), which import nothing at run time but each other.
  */
-const PURE_DOMAIN = ['bullets.ts', 'defaults.ts', 'readable.ts'];
+const PURE_DOMAIN = ['bullets.ts', 'defaults.ts', 'pathdata.ts', 'readable.ts'];
 const IMPORT = /^\s*(import|export)\s+(type\s+)?[^'"]*?from\s+'([^']+)'/gm;
 const IMPURE = /\brequire\(|\bimport\(|\bprocess\.|\bdocument\.|\bwindow\.|\bfetch\(/;
 

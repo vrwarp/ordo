@@ -1,5 +1,7 @@
 import type { Box, SlideObject } from '@ordo/domain';
 
+import { shapeGeometry, shapeReach } from './shape.ts';
+
 /**
  * Scene stack: a video playing inside its slide (design/27 §7.2; work split in ../SCENE.md).
  *
@@ -353,7 +355,10 @@ type Effects = {
   stroke?: { width?: number } | null;
 };
 
-/** How far an object's effects (shadow, outline, glow, stroke) can reach past its box, logical px. */
+/**
+ * How far an object's effects (shadow, outline, glow, stroke) can reach past its box, logical px; for a
+ * shape drawn through its geometry also the geometry's own overflow (a callout's tail) and its arrowheads.
+ */
 function effectMargin(o: SlideObject): number {
   const e = o as unknown as Effects;
   const style = o.type === 'text' ? (o.style as unknown as Effects) : undefined;
@@ -370,6 +375,7 @@ function effectMargin(o: SlideObject): number {
     if (x.glow) m = Math.max(m, 2 * fin(x.glow.radius, 0, 1e4, 0));
     if (x.stroke) m = Math.max(m, fin(x.stroke.width, 0, 1e4, 0));
   }
+  if (o.type === 'shape' && (o.geom || o.ends)) m += shapeReach(o, shapeGeometry(o));
   return m;
 }
 

@@ -1,0 +1,377 @@
+import { type Glow, type Shadow, rgbaCss } from '@ordo/domain';
+
+import type { Ctx2D } from './ctx.ts';
+
+/*
+ * Shape effects (design/27 §7.5 "effect sprite cache", §15 M6): an outer shadow, a glow and a soft edge, drawn
+ * as LibreOffice draws them (drawinglayer ShadowPrimitive2D, GlowPrimitive2D and SoftEdgePrimitive2D with
+ * `ProcessAndBlurAlphaMask`, whose blur is a stack blur: a triangular kernel of radius r, whose standard
+ * deviation is r/√6):
+ * - shadow: the shape's alpha blurred by the shadow's `blur` (σ = blur/√6), in its colour, offset by dx, dy;
+ * - glow: the shape's silhouette grown by radius/2, blurred by radius/2, in the glow's colour and alpha;
+ * - soft edge: the shape's alpha times its silhouette shrunk by `softEdge` and blurred by it.
+ * They stack as in LibreOffice: shadow under glow under the shape, each at the object's opacity.
+ *
+ * Each blurred layer is the silhouette drawn into a canvas, blurred by a Canvas shadow of a copy drawn outside
+ * the canvas (only the shadow lands; every engine anti-aliases and blurs it, unlike `ctx.filter`, which Safari
+ * lacks). A blur is smooth, so its layer is made at a reduced resolution (as LibreOffice computes its blurs
+ * within 250,000 px and 1,000 px a side): 1/k of the device size with k = σ/2 (σ in device px, k between 1
+ * and BLUR_MAX_REDUCTION, more for a layer past BLUR_MAX_PIXELS), enlarged with smoothing into the final
+ * sprite, over which the shape is drawn as vectors. A soft-edged shape is drawn into a full-resolution sprite
+ * first and its alpha multiplied by the (reduced, blurred) eroded silhouette. Making a full-slide shadow at 4K
+ * blurs a few hundred thousand pixels instead of eight million.
+ *
+ * Sprites are cached by the caller's key and the device transform (`EFFECT_CACHE_BYTES`, LRU): a master
+ * decoration with a shadow is drawn on every slide of a deck, and a slide is drawn again for every look and
+ * refresh. With no OffscreenCanvas (Node) or a sprite past EFFECT_MAX_PIXELS nothing is drawn here: the caller
+ * draws the shape without its effects.
+ */
+
+/** Device pixels of one effect sprite at most (the 16 MP of a prepared picture). */
+export const EFFECT_MAX_PIXELS = 16_000_000;
+/** Bytes of cached effect sprites (design/27 §7.5: ≤ 64 MiB). */
+export const EFFECT_CACHE_BYTES = 64 * 1024 * 1024;
+/** σ of a stack blur of radius r, over r (a triangular kernel's √(r²/6)). */
+export const STACK_BLUR_SIGMA = 1 / Math.sqrt(6);
+/** The largest resolution reduction of a blurred layer (its σ is kept at 2 px or more). */
+export const BLUR_MAX_REDUCTION = 8;
+/** Pixels of one reduced blur layer at most (LibreOffice: 250,000). */
+export const BLUR_MAX_PIXELS = 1_000_000;
+
+/** A box-space rectangle. */
+export interface Bounds {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/** What the effect sprites draw of a shape, in box space under `transform`. */
+export interface EffectSource {
+  /** Box space → device px (the caller's transform, its scale, the box's rotation and flips). */
+  readonly transform: DOMMatrix;
+  /** Device px per logical px, for blur sizes (Canvas shadows are not transformed). */
+  readonly scale: number;
+  /** What the shape covers in box space, strokes and markers included. */
+  readonly bounds: Bounds;
+  /** Draws the shape at full alpha (fills, strokes, markers) under the context's transform. */
+  readonly draw: (c: Ctx2D) => void;
+  /** The union of the filled paths (non-zero rule), for the glow's and the soft edge's silhouette. */
+  readonly fill?: Path2D;
+  /** The stroked paths and the line width (box units), for the silhouette of the outline. */
+  readonly strokes?: readonly Path2D[];
+  readonly lineWidth: number;
+  readonly shadow?: Shadow;
+  readonly glow?: Glow;
+  /** Logical px. */
+  readonly softEdge?: number;
+  /** Cache key of everything drawn but the transform; undefined: not cached. */
+  readonly key?: string;
+}
+
+/** A sprite and where it goes: device px x, y, size w x h (it may be smaller: it is enlarged to that). */
+type Sprite = { canvas: OffscreenCanvas; x: number; y: number; w: number; h: number; bytes: number };
+
+const cache = new Map<string, Sprite>();
+let cacheBytes = 0;
+
+/** Forget every cached effect sprite (tests, and memory pressure). */
+export function clearEffectCache(): void {
+  cache.clear();
+  cacheBytes = 0;
+}
+
+/** Bytes the effect cache holds. */
+export function effectCacheBytes(): number {
+  return cacheBytes;
+}
+
+function cached(key: string | undefined): Sprite | undefined {
+  if (key === undefined) return undefined;
+  const hit = cache.get(key);
+  if (hit) {
+    cache.delete(key);
+    cache.set(key, hit);
+  }
+  return hit;
+}
+
+function remember(key: string | undefined, s: Sprite): void {
+  if (key === undefined || s.bytes > EFFECT_CACHE_BYTES / 2) return;
+  const old = cache.get(key);
+  if (old) {
+    cache.delete(key);
+    cacheBytes -= old.bytes;
+  }
+  while (cacheBytes + s.bytes > EFFECT_CACHE_BYTES && cache.size) {
+    const [k, v] = cache.entries().next().value as [string, Sprite];
+    cache.delete(k);
+    cacheBytes -= v.bytes;
+  }
+  cache.set(key, s);
+  cacheBytes += s.bytes;
+}
+
+function sprite(w: number, h: number): OffscreenCanvasRenderingContext2D | undefined {
+  if (typeof OffscreenCanvas === 'undefined') return undefined;
+  const c = new OffscreenCanvas(w, h);
+  return c.getContext('2d', { willReadFrequently: true }) ?? undefined;
+}
+
+/** The device bounds of a box-space rectangle under `m`. */
+function deviceBounds(m: DOMMatrix, b: Bounds): Bounds {
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (const [x, y] of [
+    [b.x0, b.y0],
+    [b.x1, b.y0],
+    [b.x0, b.y1],
+    [b.x1, b.y1],
+  ] as const) {
+    xs.push(m.a * x + m.c * y + m.e);
+    ys.push(m.b * x + m.d * y + m.f);
+  }
+  return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
+}
+
+/** Draws `img` blurred by a Canvas shadow only (the image itself lands outside `c`): σ device px, `color`. */
+function shadowOnly(
+  c: OffscreenCanvasRenderingContext2D,
+  img: OffscreenCanvas,
+  color: string,
+  sigma: number,
+): void {
+  const far = img.width + c.canvas.width + 64;
+  c.save();
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.shadowColor = color;
+  c.shadowBlur = Math.max(0, 2 * sigma);
+  c.shadowOffsetX = far;
+  c.shadowOffsetY = 0;
+  c.drawImage(img, -far, 0);
+  c.restore();
+}
+
+/** The silhouette of the shape in `c` (opaque), grown by `grow` box units. */
+function silhouette(c: OffscreenCanvasRenderingContext2D, src: EffectSource, grow: number): void {
+  c.fillStyle = '#000';
+  c.strokeStyle = '#000';
+  c.lineJoin = 'round';
+  c.lineCap = 'round';
+  if (src.fill) {
+    c.fill(src.fill, 'nonzero');
+    if (grow > 0) {
+      c.lineWidth = 2 * grow;
+      c.stroke(src.fill);
+    }
+  }
+  if (src.strokes?.length && src.lineWidth > 0) {
+    c.lineWidth = src.lineWidth + 2 * grow;
+    for (const p of src.strokes) c.stroke(p);
+  }
+}
+
+/**
+ * The soft edge's mask in `c`: the silhouette shrunk by `e` box units. An outline at least 2e wide is kept
+ * thinner (its outer edge moves in by e); else the fill shrinks by what is left of e past the outline.
+ */
+function eroded(c: OffscreenCanvasRenderingContext2D, src: EffectSource, e: number): void {
+  c.fillStyle = '#000';
+  c.strokeStyle = '#000';
+  c.lineJoin = 'round';
+  c.lineCap = 'round';
+  const stroked = !!src.strokes?.length && src.lineWidth > 0;
+  if (stroked && src.lineWidth / 2 >= e) {
+    if (src.fill) c.fill(src.fill, 'nonzero');
+    if (src.lineWidth - 2 * e > 0) {
+      c.lineWidth = src.lineWidth - 2 * e;
+      for (const p of src.strokes!) c.stroke(p);
+    }
+    return;
+  }
+  if (!src.fill) return;
+  c.fill(src.fill, 'nonzero');
+  const rest = e - (stroked ? src.lineWidth / 2 : 0);
+  c.globalCompositeOperation = 'destination-out';
+  c.lineWidth = 2 * rest;
+  c.stroke(src.fill);
+  c.globalCompositeOperation = 'source-over';
+}
+
+/** Integer device rect cut to the canvas (keeping `reach` past its edges), or undefined when empty. */
+function region(b: Bounds, cw: number, ch: number, reach: number) {
+  let { x0, y0, x1, y1 } = b;
+  if (cw > 0 && ch > 0) {
+    x0 = Math.max(x0, -reach);
+    y0 = Math.max(y0, -reach);
+    x1 = Math.min(x1, cw + reach);
+    y1 = Math.min(y1, ch + reach);
+  }
+  const X = Math.floor(x0);
+  const Y = Math.floor(y0);
+  const W = Math.ceil(x1) - X;
+  const H = Math.ceil(y1) - Y;
+  return W >= 1 && H >= 1 && Number.isFinite(W + H) ? { X, Y, W, H } : undefined;
+}
+
+/**
+ * A blurred layer: `paint` draws the silhouette (under the transform given) into a sprite of the device rect
+ * `r` at 1/k resolution, blurred by σ device px in `color`; the silhouette is moved by (dx, dy) device px.
+ */
+function blurLayer(
+  m: DOMMatrix,
+  r: { X: number; Y: number; W: number; H: number },
+  sigma: number,
+  dx: number,
+  dy: number,
+  color: string,
+  paint: (c: OffscreenCanvasRenderingContext2D) => void,
+): Sprite | undefined {
+  let k = Math.min(BLUR_MAX_REDUCTION, Math.max(1, sigma / 2));
+  k = Math.max(k, Math.sqrt((r.W * r.H) / BLUR_MAX_PIXELS));
+  const w = Math.max(1, Math.ceil(r.W / k));
+  const h = Math.max(1, Math.ceil(r.H / k));
+  const a = sprite(w, h);
+  const b = sprite(w, h);
+  if (!a || !b) return undefined;
+  a.setTransform(m.a / k, m.b / k, m.c / k, m.d / k, (m.e + dx - r.X) / k, (m.f + dy - r.Y) / k);
+  paint(a);
+  shadowOnly(b, a.canvas, color, sigma / k);
+  return { canvas: b.canvas, x: r.X, y: r.Y, w: w * k, h: h * k, bytes: w * h * 4 };
+}
+
+/**
+ * Draws a shape with its effects on `ctx` (whose transform the source's `transform` already is), at `opacity`.
+ * The layers (reduced blurs) and the shape are composed once into a full-resolution sprite of their device
+ * bounds, cached, and copied 1:1: a cached shadow costs one copy per draw, not a resampling of each layer.
+ * False when it could not (no OffscreenCanvas, a sprite past EFFECT_MAX_PIXELS, a non-finite transform):
+ * the caller then draws the shape without its effects.
+ */
+export function drawEffected(ctx: Ctx2D, src: EffectSource, opacity: number): boolean {
+  if (typeof OffscreenCanvas === 'undefined') return false;
+  const m = src.transform;
+  if (![m.a, m.b, m.c, m.d, m.e, m.f].every(Number.isFinite)) return false;
+  const s = Number.isFinite(src.scale) && src.scale > 0 ? src.scale : 1;
+  const content = deviceBounds(m, src.bounds);
+  const canvas = ctx.canvas as { width?: number; height?: number } | undefined;
+  const cw = canvas?.width ?? 0;
+  const ch = canvas?.height ?? 0;
+
+  // The device rects of the layers and of the shape, and the one the final sprite covers.
+  const sh = src.shadow && src.shadow.color.a > 0 ? src.shadow : undefined;
+  const shadowSigma = sh ? sh.blur * STACK_BLUR_SIGMA * s : 0;
+  const shadowReach = 3 * shadowSigma + 2;
+  const sdx = sh ? sh.dx * s : 0;
+  const sdy = sh ? sh.dy * s : 0;
+  const gl = src.glow && src.glow.radius > 0 && src.glow.color.a > 0 ? src.glow : undefined;
+  const glowSigma = gl ? (gl.radius / 2) * STACK_BLUR_SIGMA * s : 0;
+  const glowReach = gl ? (gl.radius / 2) * s + 3 * glowSigma + 2 : 0;
+  const all: Bounds = { ...content };
+  if (sh) {
+    all.x0 = Math.min(all.x0, content.x0 + sdx - shadowReach);
+    all.y0 = Math.min(all.y0, content.y0 + sdy - shadowReach);
+    all.x1 = Math.max(all.x1, content.x1 + sdx + shadowReach);
+    all.y1 = Math.max(all.y1, content.y1 + sdy + shadowReach);
+  }
+  if (gl) {
+    all.x0 = Math.min(all.x0, content.x0 - glowReach);
+    all.y0 = Math.min(all.y0, content.y0 - glowReach);
+    all.x1 = Math.max(all.x1, content.x1 + glowReach);
+    all.y1 = Math.max(all.y1, content.y1 + glowReach);
+  }
+  // What blurs onto the canvas from just outside it is kept: a layer is cut at its own reach past the edges.
+  const r = region(all, cw, ch, Math.max(shadowReach + Math.max(Math.abs(sdx), Math.abs(sdy)), glowReach));
+  if (!r) return true;
+  if (r.W * r.H > EFFECT_MAX_PIXELS) return false;
+  const key =
+    src.key === undefined
+      ? undefined
+      : `${src.key}|${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f}|${r.X} ${r.Y} ${r.W} ${r.H}`;
+  let out = cached(key);
+  if (!out) {
+    const f = sprite(r.W, r.H);
+    if (!f) return false;
+    f.imageSmoothingEnabled = true;
+    f.imageSmoothingQuality = 'medium';
+    const place = (c: OffscreenCanvasRenderingContext2D, layer: Sprite) => {
+      c.save();
+      c.setTransform(1, 0, 0, 1, 0, 0);
+      c.drawImage(layer.canvas, layer.x - r.X, layer.y - r.Y, layer.w, layer.h);
+      c.restore();
+    };
+    if (sh) {
+      const layer = blurLayer(m, r, shadowSigma, sdx, sdy, rgbaCss(sh.color), (c) => {
+        src.draw(c);
+        if (src.softEdge) softened(c, src, m, s);
+      });
+      if (!layer) return false;
+      place(f, layer);
+    }
+    if (gl) {
+      const layer = blurLayer(m, r, glowSigma, 0, 0, rgbaCss(gl.color), (c) =>
+        silhouette(c, src, gl.radius / 2),
+      );
+      if (!layer) return false;
+      place(f, layer);
+    }
+    if (src.softEdge && src.softEdge > 0) {
+      const c = sprite(r.W, r.H);
+      if (!c) return false;
+      c.setTransform(m.a, m.b, m.c, m.d, m.e - r.X, m.f - r.Y);
+      src.draw(c);
+      softened(c, src, m, s, r);
+      f.drawImage(c.canvas, 0, 0);
+    } else {
+      f.save();
+      f.setTransform(m.a, m.b, m.c, m.d, m.e - r.X, m.f - r.Y);
+      src.draw(f);
+      f.restore();
+    }
+    out = { canvas: f.canvas, x: r.X, y: r.Y, w: r.W, h: r.H, bytes: r.W * r.H * 4 };
+    remember(key, out);
+  }
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha *= opacity;
+  ctx.drawImage(out.canvas, out.x, out.y);
+  ctx.restore();
+  return true;
+}
+
+/**
+ * Multiplies the alpha of what `c` holds (the shape, drawn under its transform) by the soft edge's mask: the
+ * silhouette shrunk by `softEdge` and blurred by it, made at a reduced resolution. `r` is the device rect `c`
+ * covers (undefined: `c` is a reduced blur sprite, whose own transform maps box space).
+ */
+function softened(
+  c: OffscreenCanvasRenderingContext2D,
+  src: EffectSource,
+  m: DOMMatrix,
+  s: number,
+  r?: { X: number; Y: number; W: number; H: number },
+): void {
+  const e = src.softEdge ?? 0;
+  if (!(e > 0)) return;
+  const t = c.getTransform();
+  const W = c.canvas.width;
+  const H = c.canvas.height;
+  // The device px per sprite px of `c`: 1 for the body, k for a reduced layer.
+  const k = r ? 1 : Math.hypot(m.a, m.b) / Math.max(1e-12, Math.hypot(t.a, t.b));
+  const sigma = (e * STACK_BLUR_SIGMA * s) / k;
+  const q = Math.min(BLUR_MAX_REDUCTION, Math.max(1, sigma / 2));
+  const w = Math.max(1, Math.ceil(W / q));
+  const h = Math.max(1, Math.ceil(H / q));
+  const mask = sprite(w, h);
+  const blurred = sprite(w, h);
+  if (!mask || !blurred) return;
+  mask.setTransform(t.a / q, t.b / q, t.c / q, t.d / q, t.e / q, t.f / q);
+  eroded(mask, src, e);
+  shadowOnly(blurred, mask.canvas, '#000', sigma / q);
+  c.save();
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.globalCompositeOperation = 'destination-in';
+  c.imageSmoothingEnabled = true;
+  c.imageSmoothingQuality = 'medium';
+  c.drawImage(blurred.canvas, 0, 0, w * q, h * q);
+  c.restore();
+}
