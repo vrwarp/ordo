@@ -2,13 +2,14 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Slide } from '@ordo/domain';
+import type { Slide, TextObject } from '@ordo/domain';
 import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
-import { familiesOf } from './fonts.ts';
+import { familiesOf, fcFamily, fcMatch, isStandIn } from './fonts.ts';
 import {
   convertDeck,
   convertDeckIsolated,
+  type NativeDeck,
   NativeRenderer,
   picturesNeeded,
   sniffPicture,
@@ -324,6 +325,82 @@ describe.skipIf(!chromium)('NativeRenderer (headless Chromium)', () => {
       expect(r.scriptFallbacks().find((f) => f.family === 'Noto Sans Hebrew')?.served).toMatch(
         /^(installed|stand-in)$/,
       );
+    } finally {
+      await r.close();
+    }
+  }, 120_000);
+
+  it("keeps PowerPoint's stored autofit scale only for a family drawn in its own widths", async () => {
+    // Each slide is drawn with PowerPoint's stored 50 % (ordo's way) and without it (LibreOffice's way); the
+    // short text fits at full size, so the two pictures are the same exactly when the stored scale is
+    // dropped, which is when fontconfig's face for the family is a stand-in of other widths.
+    const box = (fontFamily: string, fit: boolean, fallbackFonts?: string[]): Slide => {
+      const o: TextObject = {
+        id: 't',
+        type: 'text',
+        box: { x: 100, y: 100, w: 1400, h: 600, rotation: 0 },
+        text: 'Amazing grace, how sweet the sound',
+        style: {
+          fontFamily,
+          fontWeight: 400,
+          fontStyle: 'normal',
+          fontSizePx: 80,
+          color: { r: 255, g: 255, b: 255, a: 1 },
+          align: 'left',
+          valign: 'top',
+          lineHeight: 1.2,
+          letterSpacing: 0,
+          padding: 0,
+          transform: 'none',
+          lineModel: 'office',
+          autofit: 'shrink',
+          ...(fit ? { fitScale: { font: 0.5, spacing: 1 } } : {}),
+          ...(fallbackFonts ? { fallbackFonts } : {}),
+        },
+        opacity: 1,
+      };
+      return slide([o]);
+    };
+    const cases = [
+      { family: 'Aptos', fallbacks: undefined },
+      { family: 'Calibri', fallbacks: ['Carlito'] },
+    ];
+    const deck: NativeDeck = {
+      slides: cases.map((c, i) => ({
+        index: i,
+        shown: i,
+        hidden: false,
+        tier: 'T1',
+        class: 'native',
+        reasons: [],
+        convertMs: 0,
+        notes: [],
+        slide: box(c.family, true, c.fallbacks),
+        compatSlide: box(c.family, false, c.fallbacks),
+        textFeatures: [],
+        compat: ['refit'],
+      })),
+      slideRect: { x: 0, y: 0, w: 1920, h: 1080 },
+      media: [],
+      notes: [],
+      embeddedFonts: false,
+      textFeatures: [],
+      extractMs: 0,
+      parseMs: 0,
+      emitMs: 0,
+    };
+    const r = await NativeRenderer.start(chromium!);
+    try {
+      const dir = await work();
+      const drawn = await r.renderDeck(deck, dir, { repeats: 0, loCompat: true });
+      expect(drawn.notes).toEqual([]);
+      for (const [i, c] of cases.entries()) {
+        const host = (await fcMatch(fcFamily(c.family)))!;
+        const n = String(i + 1).padStart(4, '0');
+        const ordo = await readFile(join(dir, `slide-${n}.png`));
+        const lo = await readFile(join(dir, `slide-${n}.policy.png`));
+        expect(ordo.equals(lo), `${c.family} drawn with ${host.family}`).toBe(isStandIn(c.family, host));
+      }
     } finally {
       await r.close();
     }

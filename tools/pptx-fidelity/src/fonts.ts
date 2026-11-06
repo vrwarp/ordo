@@ -20,14 +20,28 @@
  * - Faces are named by the SHA-256 of their file (`FontFile.hash`) and registered by the page's resolver
  *   under internal names it has never resolved ('o' + hash8), exactly as the drawers register library fonts.
  *   The slides keep the deck's own family names.
+ * - A face fontconfig gives for another family is flagged `substitute` unless one of its family names is
+ *   the requested family or a metric-compatible one (`metricCompatible` of `@ordo/renderer`: Carlito for
+ *   Calibri, Liberation Serif for Times New Roman). Inter drawing Aptos is drawn under Aptos's name, as
+ *   LibreOffice draws it, but the resolver knows it is not Aptos, so PowerPoint's stored autofit scale,
+ *   computed with Aptos's widths, is not kept for it (design/27 §6 step 10), as an output without Aptos
+ *   does not keep it either.
  */
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { DEFAULT_FONT, readableText, SCRIPT_FALLBACK_FONTS, type Slide, textScripts } from '@ordo/domain';
+import { metricCompatible } from '@ordo/renderer/text/fonts.ts';
 import { run } from '../../../apps/hub/src/media/tools.ts';
 
-/** A face file as fontconfig resolves a pattern. */
-export type HostFace = { file: string; index: number; family: string; bold: boolean; italic: boolean };
+/** A face file as fontconfig resolves a pattern: its first family name (`family`) and all of them. */
+export type HostFace = {
+  file: string;
+  index: number;
+  family: string;
+  names: string[];
+  bold: boolean;
+  italic: boolean;
+};
 
 /** A face for the page's resolver: a renderer `FontFile` plus the file it is read from. */
 export type HarnessFont = {
@@ -37,6 +51,8 @@ export type HarnessFont = {
   /** SHA-256 of the file. */
   hash: string;
   unicodeRange?: string;
+  /** Another family's face with other widths, registered under `family` (`FontFile.substitute`). */
+  substitute?: boolean;
   file: string;
 };
 
@@ -106,16 +122,18 @@ export function fcMatch(pattern: string, bold = false, italic = false): Promise<
   if (!got) {
     got = (async () => {
       try {
-        const r = await run('fc-match', ['-f', '%{file}\t%{index}\t%{weight}\t%{slant}\t%{family[0]}', k], {
-          timeoutMs: 10_000,
-          allowFail: true,
-        });
-        const [file, index, weight, slant, family] = r.stdout.split('\t');
+        const r = await run(
+          'fc-match',
+          ['-f', '%{file}\t%{index}\t%{weight}\t%{slant}\t%{family[0]}\t%{family}', k],
+          { timeoutMs: 10_000, allowFail: true },
+        );
+        const [file, index, weight, slant, family, names] = r.stdout.split('\t');
         if (r.code !== 0 || !file) return undefined;
         return {
           file,
           index: Number(index) || 0,
           family: family ?? '',
+          names: familyNames(names ?? ''),
           bold: Number(weight) >= 180, // fontconfig: semibold 180, bold 200
           italic: Number(slant) >= 100, // italic 100, oblique 110
         };
@@ -128,6 +146,23 @@ export function fcMatch(pattern: string, bold = false, italic = false): Promise<
   return got;
 }
 
+/** fontconfig's family names of a face: comma-separated, `\` escapes. */
+export function familyNames(list: string): string[] {
+  return list
+    .split(/(?<!\\),/)
+    .map((n) => n.replace(/\\(.)/g, '$1').trim())
+    .filter((n) => n);
+}
+
+/**
+ * Whether fontconfig's face for `family` is another family's with other widths: none of its names is the
+ * family or a metric-compatible one.
+ */
+export function isStandIn(family: string, face: Pick<HostFace, 'family' | 'names'>): boolean {
+  const names = face.names.length ? face.names : [face.family];
+  return !names.some((n) => metricCompatible(family, n));
+}
+
 let installed: Promise<Set<string>> | undefined;
 
 /** The families installed here, lower case (`fc-list`: each face's names, comma-separated, `\` escapes). */
@@ -136,11 +171,7 @@ export function hostFamilies(): Promise<Set<string>> {
     const out = new Set<string>();
     try {
       const r = await run('fc-list', [':', 'family'], { timeoutMs: 20_000, allowFail: true });
-      for (const line of r.stdout.split('\n'))
-        for (const name of line.split(/(?<!\\),/)) {
-          const n = key(name.replace(/\\(.)/g, '$1'));
-          if (n) out.add(n);
-        }
+      for (const line of r.stdout.split('\n')) for (const name of familyNames(line)) out.add(key(name));
     } catch {
       /* no fontconfig: nothing is installed as far as the harness knows */
     }
@@ -221,8 +252,12 @@ async function facesFor(
 ): Promise<{ regular?: HostFace; faces: Face[] }> {
   const regular = await fcMatch(pattern);
   if (!regular) return { faces: [] };
-  const range = unicodeRange ? { unicodeRange } : {};
-  const faces: Face[] = [{ family, weight: 400, style: 'normal', file: regular.file, ...range }];
+  // Every face of the family shares the range and the flag: the variants are files of the same family.
+  const shared = {
+    ...(unicodeRange ? { unicodeRange } : {}),
+    ...(isStandIn(family, regular) ? { substitute: true } : {}),
+  };
+  const faces: Face[] = [{ family, weight: 400, style: 'normal', file: regular.file, ...shared }];
   const used = new Set([regular.file]);
   for (const [bold, italic] of [
     [true, false],
@@ -238,7 +273,7 @@ async function facesFor(
       weight: bold ? 700 : 400,
       style: italic ? 'italic' : 'normal',
       file: f.file,
-      ...range,
+      ...shared,
     });
   }
   if (regular.index > 0) notes.push(`font ${clip(family)}: face ${regular.index} of a collection`);

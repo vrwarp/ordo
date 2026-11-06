@@ -15,7 +15,9 @@
  *   hub's render copy does, design/27 §5), so the picture shows the fill alone. Hollow text (no fill) keeps
  *   its outline, in both.
  * - `refit`: LibreOffice ignores PowerPoint's stored `normAutofit` scale and fits the text again from full
- *   size; ordo keeps the stored scale while the text fits at it.
+ *   size; ordo keeps the stored scale while the text fits at it, where the box is drawn with the face
+ *   PowerPoint fitted it with or a metric clone (design/27 §6 step 10). A box drawn with a stand-in (Aptos
+ *   with Inter here) is fitted again in both drawings, so the rule changes nothing there.
  * - `inheritedFit`: LibreOffice applies only a shape's own `normAutofit`; one inherited from a layout or
  *   master placeholder is ignored (measured with a probe deck), so such text is not shrunk at all.
  *

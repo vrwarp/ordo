@@ -40,6 +40,7 @@ Bounds (review of wave 1; `rich.fuzz.test.ts` and `clamp.test.ts` keep them):
 
 ```
 TextObject (clamped)                                         rich.ts  layoutRich(m, o, env)  memo: object, m, env.generation
+  (o without style.fitScale unless storedFitHolds(o, env))
   1 itemize(o)            → Itemized {paras: ItemPara[]}      itemize.ts   paragraphs, runs ∩ paragraphs, resolved styles
   2-4 prepare(it)         → PreparedPara[] {bidi, pieces}     segments.ts  bidi.ts (UAX#9), breaks.ts (UAX#14), pieces
   11 paraBullets(o, it)   → (BulletSpec | null)[]             bullets.ts   labels from @ordo/domain paraLabels
@@ -51,9 +52,10 @@ drawRichText(ctx, o, scale)                                   rich.ts      clamp
 
 Public surface (`index.ts`, re-exported by `@ordo/renderer`): `Measurer`, `Seg`, `LaidLine`, `RichLayout`,
 `FontEnv`, `FaceRequest`, `layoutRich`, `paintRich`, `isRichText`, `drawRichText`, `clampTextObject`,
-`RICH_STYLE_KEYS`, the font environment (`LEGACY_FONT_ENV`, `FontResolver` and its `FontFile`, `FontHost`,
-`FontChange` and `FontSyncResult` types, `internalFamilyName`, `installFontEnv`, `currentFontEnv`) and the
-measurers (`canvasMeasurer`, `measurerFor`, `WidthCache`).
+`RICH_STYLE_KEYS`, `storedFitHolds`, the font environment (`LEGACY_FONT_ENV`, `FontResolver` and its
+`FontFile`, `FontHost`, `FontChange` and `FontSyncResult` types, `internalFamilyName`, `installFontEnv`,
+`currentFontEnv`, `METRIC_FAMILIES`, `metricCompatible`) and the measurers (`canvasMeasurer`, `measurerFor`,
+`WidthCache`).
 
 ## Rules every stage keeps
 
@@ -102,6 +104,19 @@ advances by `w + letterSpacing` (lines.ts `Measured.a`).
 
 `FontEnv.font(req)` returns the CSS font string for `ctx.font` at `req.sizePx` (logical). `generation`
 changes whenever the face set changes; layouts memoised under another generation are recomputed.
+
+`FontEnv.metricMatch(family, fallbacks)` (optional) says whether text in `family` is drawn with the family's
+own face or a metric-compatible one. **PowerPoint's stored autofit scale is kept only then** (design/27 §6
+step 10): PowerPoint computed `fitScale` with the family's own widths, and a face of other widths breaks
+the lines elsewhere. Aptos has no metric substitute, so a box PowerPoint shrank to 92.5 % at 90 % spacing
+for Aptos is drawn with Inter; Inter is wider, the text still fits at that scale, but every line breaks
+differently from PowerPoint and from LibreOffice, which fits again from full size (37 pt at 100 % spacing
+instead of 41 pt at 90 %). So `layoutRich` lays out a box whose family is not matched without its stored
+scale (`storedFitHolds`; the object keeps it), and office.ts fits it from full size as LibreOffice does.
+Metric-compatible faces (Carlito for Calibri, Liberation for Arial, Times New Roman and Courier New,
+Caladea for Cambria, Gelasio for Georgia: `METRIC_FAMILIES`) keep PowerPoint's scale, which is what
+PowerPoint draws there. Uploading the real family brings the stored scale back (the generation changes).
+An environment without `metricMatch` (`LEGACY_FONT_ENV`, tests) keeps the stored scale.
 
 `Seg.shift` is positive downwards (a superscript is negative): `-baseline × size`, where size is the run's
 size after autofit; the drawn `sizePx` of a raised or lowered run is `0.58 × size`, and it never grows the
@@ -169,7 +184,8 @@ Steps 5-10 of §6. Status: **done** (M2 wave 1); the rules are in each file's he
 - `office.ts`: `officeLine` (page.ts's measured formulas), `officeFontPx` (editeng's rounding to whole
   points), `fitFactor` (0.5 mm slack), `searchFit` (page.ts `fitBox`'s search, literally) and `autofit`:
   the stored `fitScale` while the text fits at it, else the search from full size with widths scaled
-  linearly from the layout at the stored scale, never above the stored font scale.
+  linearly from the layout at the stored scale, never above the stored font scale. A stored scale that
+  does not hold for the face drawing the box never reaches it (`storedFitHolds` in rich.ts, Contracts).
 
 Decisions the other items rely on:
 - **Line spacing means the same in both models.** `paras[i].lineSpacing` is a multiple of single spacing
@@ -262,6 +278,11 @@ Paint passes and the dispatch of §6. **Done** (wave 1):
   parses time out (`FontHost.timeoutMs`, 15 s) and `sync` never waits for a background retry. Families a
   later list leaves out keep their faces but are no longer retried. `loaded({family,
   internal})` announces faces registered elsewhere.
+- `metricMatch(family, fallbacks)`: the family's own faces when loaded, unless every one is a stand-in
+  (`FontFile.substitute`: another family's face registered under its name, as the fidelity harness
+  registers fontconfig's choice); else the first loaded fallback, when `metricCompatible` with the family
+  (the converter lists the box family's metric substitute first); else false (ordo's default face draws).
+  A stand-in is part of the face key, so a family whose flag changes loads again.
 - `font(req)`: loaded internal names only, in order: the exact face, `fallbackFonts`, the script fallback
   for `FaceRequest.script` (`SCRIPT_FALLBACK_FONTS` in `@ordo/domain`), then the original family name while
   its faces have not loaded (the asset worker reports it), ordo's default face (Inter, once shipped) and

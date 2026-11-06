@@ -18,7 +18,10 @@ import type { ParaStyle } from './types.ts';
  * Space before and after (k-scaled), the main size F and raised runs are applied by lines.ts.
  *
  * Autofit (`autofit`): ordo keeps the stored `fitScale` while the text fits at it, so an edit never makes
- * text jump in size (§11). When it does not fit, LibreOffice's search (`searchFit`,
+ * text jump in size (§11). The stored scale is PowerPoint's, computed with the box family's own widths: it
+ * reaches `autofit` only while the box is drawn with that face or a metric-compatible one (rich.ts
+ * `storedFitHolds`); a box drawn with another face (Aptos with Inter) comes without it and is fitted from
+ * full size, as LibreOffice fits every box. When it does not fit, LibreOffice's search (`searchFit`,
  * SdrTextObj::autoFitTextForCompatibility) runs from full size: ten bisection steps on the font %,
  * quantised to tenths of the 18 pt object size, moved by whether the text fits at full spacing, trying
  * 100, 90 and 80 % spacing at each step and keeping the tightest fit, with 0.5 mm of slack. Run sizes are
@@ -142,7 +145,8 @@ export function searchFit(
  * at `ref`. `spacings` are the spacing scales the search tries (the 'ordo' model has no spacing scale: 100
  * only).
  * - Not 'shrink': no scaling.
- * - The stored `fitScale` (else full size) while the text fits at it.
+ * - The stored `fitScale` (else full size) while the text fits at it. The caller leaves out a stored scale
+ *   that does not hold for the faces drawing the box (rich.ts `storedFitHolds`).
  * - Else LibreOffice's search from full size, never larger than the stored font scale: a larger result is
  *   brought down to the stored scale with the widest spacing that fits there.
  * - Never below `minFont` (look bands pass drawText's 0.5, so they shrink alike whatever the script).

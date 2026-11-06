@@ -34,7 +34,74 @@ import type { FaceRequest, FontEnv } from './types.ts';
  * in the output-config fonts they load like any other and their families appear in the stacks above. They
  * should carry their script's `unicodeRange`, so a script fallback never draws Latin text ahead of the
  * original family name.
+ *
+ * `metricMatch(family, fallbacks)` says whether the face that draws a family's text is the family's own or
+ * a metric-compatible one (`METRIC_FAMILIES`): the family's faces when they have loaded and are not a
+ * stand-in (`FontFile.substitute`), else the first loaded `fallbackFonts` entry when it is a metric
+ * substitute of the family. Only then does PowerPoint's stored autofit scale hold (design/27 §6 step 10):
+ * PowerPoint computed it with the family's own widths, and a face of other widths (Aptos drawn with Inter)
+ * breaks the lines elsewhere, so the box is fitted again from full size, as LibreOffice fits it.
  */
+
+/**
+ * Families whose faces have the same advance widths: one draws another's text without moving a line break
+ * (fontconfig's 30-metric-aliases.conf, the bundled substitutes of design/27 §10). Calibri Light is not
+ * Calibri's: Carlito stands in for it only as the nearest face.
+ */
+export const METRIC_FAMILIES: readonly (readonly string[])[] = [
+  [
+    'Arial',
+    'Helvetica',
+    'Liberation Sans',
+    'Arimo',
+    'Albany',
+    'Albany AMT',
+    'Nimbus Sans',
+    'Nimbus Sans L',
+    'TeX Gyre Heros',
+  ],
+  ['Arial Narrow', 'Helvetica Narrow', 'Liberation Sans Narrow', 'Nimbus Sans Narrow', 'TeX Gyre Heros Cn'],
+  [
+    'Times New Roman',
+    'Times',
+    'Liberation Serif',
+    'Tinos',
+    'Thorndale',
+    'Thorndale AMT',
+    'Nimbus Roman',
+    'Nimbus Roman No9 L',
+    'TeX Gyre Termes',
+  ],
+  [
+    'Courier New',
+    'Courier',
+    'Liberation Mono',
+    'Cousine',
+    'Cumberland',
+    'Cumberland AMT',
+    'Nimbus Mono PS',
+    'Nimbus Mono L',
+    'TeX Gyre Cursor',
+  ],
+  ['Calibri', 'Carlito'],
+  ['Cambria', 'Caladea'],
+  ['Georgia', 'Gelasio'],
+];
+
+const metricGroup = new Map<string, number>();
+METRIC_FAMILIES.forEach((g, i) => {
+  for (const f of g) metricGroup.set(f.toLowerCase(), i);
+});
+
+/** Whether a face of family `face` draws text of family `family` with the same widths (case-insensitive). */
+export function metricCompatible(family: string, face: string): boolean {
+  const a = family.trim().toLowerCase();
+  const b = face.trim().toLowerCase();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const g = metricGroup.get(a);
+  return g !== undefined && g === metricGroup.get(b);
+}
 
 /** Today's generic chain after the requested family (`fontString` in text2d.ts). */
 const LEGACY_TAIL = ['"Inter"', '"Segoe UI"', 'Arial', 'sans-serif'] as const;
@@ -95,6 +162,13 @@ export type FontFile = {
   unicodeRange?: string;
   /** A deck-embedded face: only that presentation's objects use it (M8). '' or absent: the library. */
   scope?: string;
+  /**
+   * Another family's face registered under `family`, with other widths: a stand-in such as fontconfig's
+   * face for a family the machine lacks (the fidelity harness). Text in the family draws with it, but
+   * PowerPoint's stored autofit scale for the family no longer holds (`metricMatch`). A metric-compatible
+   * stand-in (Carlito for Calibri) is not a substitute in this sense.
+   */
+  substitute?: boolean;
 };
 
 /** What a face needs to be once created: a FontFace, or a test double. */
@@ -134,9 +208,9 @@ export type FontSyncResult = {
   ready: string[];
 };
 
-/** The identity of a face within its family: its file and its descriptors. */
+/** The identity of a face within its family: its file, its descriptors and whether it is a stand-in. */
 export function faceKey(f: FontFile): string {
-  return `${f.hash}|${f.weight}|${f.style}|${f.unicodeRange ?? ''}`;
+  return `${f.hash}|${f.weight}|${f.style}|${f.unicodeRange ?? ''}${f.substitute === true ? '|substitute' : ''}`;
 }
 
 /** 'o' + hash8 of the scope, the family and its sorted face keys: the base of a family's internal name. */
@@ -161,7 +235,14 @@ function defaultTimer(fn: () => void, ms: number): () => void {
   return () => clearTimeout(t);
 }
 
-type Active = { name: string; keys: string[]; files: FontFile[]; faces: FaceLike[] };
+type Active = {
+  name: string;
+  keys: string[];
+  files: FontFile[];
+  faces: FaceLike[];
+  /** Every face is a stand-in (`FontFile.substitute`): the family's text is not drawn in its own widths. */
+  substitute: boolean;
+};
 
 type Family = {
   key: string;
@@ -278,9 +359,9 @@ export class FontResolver implements FontEnv {
 
   /**
    * Announce faces registered elsewhere under `internal` (a name never resolved before): the family resolves
-   * to it from now on.
+   * to it from now on. `substitute`: they are another family's faces (`FontFile.substitute`).
    */
-  loaded(f: { family: string; internal: string; scope?: string }): void {
+  loaded(f: { family: string; internal: string; scope?: string; substitute?: boolean }): void {
     const key = familyKey(f.scope ?? '', f.family);
     let fam = this.#families.get(key);
     if (!fam) {
@@ -297,7 +378,7 @@ export class FontResolver implements FontEnv {
       };
       this.#families.set(key, fam);
     }
-    fam.active = { name: f.internal, keys: [], files: [], faces: [] };
+    fam.active = { name: f.internal, keys: [], files: [], faces: [], substitute: f.substitute === true };
     this.#used.add(f.internal);
     this.#changed([fam.family.toLowerCase()], false);
   }
@@ -356,9 +437,29 @@ export class FontResolver implements FontEnv {
     return cssFont(req, out.join(', '));
   }
 
-  #name(family: string, scope: string): string | undefined {
+  /**
+   * Whether text asked for in `family` with these fallbacks is drawn with the family's own face or a
+   * metric-compatible one (`FontEnv.metricMatch`). The face drawing it is the first loaded one of the stack
+   * `font` builds: the family's own faces, else the first loaded fallback (the converter lists the box
+   * family's metric substitute first), else ordo's default face, which is no family's metric match.
+   */
+  metricMatch(family: string, fallbacks: readonly string[]): boolean {
+    const own = this.#active(family, '');
+    if (own) return !own.substitute;
+    for (const f of fallbacks) {
+      const got = this.#active(f, '');
+      if (got) return !got.substitute && metricCompatible(family, f);
+    }
+    return false;
+  }
+
+  #active(family: string, scope: string): Active | undefined {
     if (typeof family !== 'string' || !family) return undefined;
-    return this.#families.get(familyKey(scope, family))?.active?.name;
+    return this.#families.get(familyKey(scope, family))?.active ?? undefined;
+  }
+
+  #name(family: string, scope: string): string | undefined {
+    return this.#active(family, scope)?.name;
   }
 
   #now(): number {
@@ -505,6 +606,7 @@ export class FontResolver implements FontEnv {
       keys: loaded.map((r) => r.key).sort(),
       files: loaded.map((r) => r.file),
       faces: loaded.map((r) => r.face),
+      substitute: loaded.length > 0 && loaded.every((r) => r.file.substitute === true),
     };
     // The old name is never used again: its faces only cost memory now.
     for (const f of old?.faces ?? []) {
