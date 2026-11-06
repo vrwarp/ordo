@@ -3,16 +3,17 @@
  *
  * Owned by work item C (inherit-emit). The scaffold walks master and layout decorations (honouring
  * `showMasterSp`) then the slide's own shapes, flattening groups through their child space, and reads
- * shapes (preset, solid fill and line, style references) and pictures, and takes `mc:Fallback` of
- * `mc:AlternateContent`. Still to do: the first understood `mc:Choice` (else the Fallback; never both),
- * placeholders without a position, empty placeholders, sheared children as residual, effects (outer
- * shadow), lines and connectors at any angle.
+ * shapes (preset, solid fill and line, style references) and pictures, and reads the one branch of an
+ * `mc:AlternateContent` that `Package.xml` keeps (`markup.ts`). Still to do: placeholders without a
+ * position, empty placeholders, sheared children as residual, effects (outer shadow), lines and connectors
+ * at any angle.
  */
 import { readFill, styleFill, withPhClr, colorIn } from './color.ts';
 import type { SlideCtx, Source } from './context.ts';
 import { childSpace, IDENTITY, multiply, xfrmAffine, type Xfrm } from './frame.ts';
 import { chainOf, inheritedXfrm, nvOf, spPrOf } from './inherit.ts';
 import type { Affine, Element, ElementBase, Fill, Line, ShapeElement, Support } from './ir.ts';
+import { chooseAlternate } from './markup.ts';
 import { blipReader, readPicture } from './picture.ts';
 import { plainText, readTextBody } from './text.ts';
 import { child, num, path, type XNode } from './xml.ts';
@@ -82,8 +83,8 @@ export function walkTree(
 ): void {
   for (const el of tree?.children ?? []) {
     if (el.name === 'mc:AlternateContent') {
-      // Scaffold: the Fallback only (work item C picks the first mc:Choice it understands, never both).
-      walkTree(ctx, child(el, 'mc:Fallback'), from, map, group, depth + 1, st);
+      // The branch `Package.xml` kept (design/27 §4: the first understood Choice, else the Fallback).
+      walkTree(ctx, chooseAlternate(el), from, map, group, depth + 1, st);
       continue;
     }
     if (el.name === '#text' || !nvOf(el)) continue;

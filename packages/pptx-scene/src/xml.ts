@@ -295,6 +295,40 @@ export function path(n: XNode | undefined, ...names: string[]): XNode | undefine
   return cur;
 }
 
+/**
+ * The root element's start tag (its name and attributes, as written, no children) from the head of a part,
+ * without parsing the rest: the XML declaration, processing instructions, comments and text before it are
+ * skipped. Undefined when the head holds no complete start tag, or a declaration (`<!DOCTYPE`) or an end tag
+ * comes first. Linear in the head's length.
+ */
+export function rootTag(head: string): XNode | undefined {
+  let i = 0;
+  for (;;) {
+    const lt = head.indexOf('<', i);
+    if (lt < 0) return undefined;
+    const c1 = head.charCodeAt(lt + 1);
+    if (c1 === 0x3f) {
+      const end = head.indexOf('?>', lt + 2);
+      if (end < 0) return undefined;
+      i = end + 2;
+    } else if (c1 === 0x21) {
+      if (!head.startsWith('<!--', lt)) return undefined;
+      const end = head.indexOf('-->', lt + 4);
+      if (end < 0) return undefined;
+      i = end + 3;
+    } else {
+      if (c1 === 0x2f) return undefined;
+      const gt = tagEnd(head, lt + 1);
+      if (gt < 0) return undefined;
+      try {
+        return readTag(head.slice(lt + 1, head.charCodeAt(gt - 1) === 0x2f ? gt - 1 : gt), 'root');
+      } catch {
+        return undefined;
+      }
+    }
+  }
+}
+
 /** The root element of a parsed part: the first element (not text, a declaration or another `<?...?>`). */
 export function rootOf(nodes: XNode[]): XNode | undefined {
   return nodes.find((n) => n.name !== '#text' && !n.name.startsWith('?') && !n.name.startsWith('!'));
