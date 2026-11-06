@@ -3,6 +3,7 @@ packages:
   - packages/*
   - tools/soak
   - tools/pptx-fidelity
+  - tools/geom-gen
 onlyBuiltDependencies:
   - better-sqlite3
   - esbuild

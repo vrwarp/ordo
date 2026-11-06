@@ -180,7 +180,7 @@ Source: a census of 4,897 shown slides of worship decks in the local validation 
 | `packages/renderer/src/text/` (M2) | `itemize.ts`, `breaks.ts` (UAX#14 via npm `linebreak` 1.1.0, MIT; 2.0.0 was days old when chosen; `Intl.Segmenter`), `bidi.ts` (npm `bidi-js` 1.1.0, MIT), `measure.ts`, `lines.ts`, `office.ts` (LibreOffice line model and autofit, ported from `pptx-render/src/page.ts:202-426`), `bullets.ts` (port of `annotate.ts` `autoNumber`), `paint.ts`, `rich.ts`, `fonts.ts` (the resolver, §10). |
 | `packages/renderer/src/content.ts` (M3) | `slideContent()`, the one fallback rule (§5). |
 | `packages/renderer/src/scene.ts` (M5) | Video split and the plane encoding (§7.2). |
-| `packages/renderer/src/geom/` (M6) | `presets.gen.ts` (compiled from POI), `eval.ts` (guide evaluator), `arc.ts`, `path.ts`. |
+| `packages/renderer/src/geom/` (M6) | `presets.gen.ts` (compiled from POI by `tools/geom-gen`), `ops.ts` (the compiled form: op codes and value slots), `compile.ts` (a preset or a custGeom as strings → the compiled form, bounded), `eval.ts` (guide evaluator), `arc.ts`, `path.ts`. |
 | `third_party/poi-presets/`, `tools/geom-gen/` (M6) | Vendored POI 5.2.5 `presetShapeDefinitions.xml` (Apache-2.0) with two documented fixes, and the generator. |
 | `apps/hub/src/pptx/` (M3) | `nativeJob.ts`; `mediaParts.ts` (generalised `mediaFor`); `pictures.ts` (picture preparation, §4); `fallback.ts` (LibreOffice follow-up); `art.ts` (pool task `pptx-art`: white/black alpha and bounding-box crop); `report.ts`; `textRepair.ts` (legacy textBoxes repair, §11); `reimport.ts` (M4). |
 | `apps/hub/src/fonts/bundled.ts` (M3) | Registers the bundled substitutes and script fallbacks. |
