@@ -28,6 +28,7 @@ const out = emitSlides(scene, { mediaId }); // ordo Slides; pictures as 'pptxmed
 | --------------- | ----------------------------------------------------------------------------------------------------------------- | ------ |
 | `xml.ts`        | Bounded XML reader (moved from pptx-render; no DTD: `<!DOCTYPE` refused, null-prototype `attrs`) and node helpers | A      |
 | `opc.ts`        | `PartSource`, `openPackage`: part lookup, decoding, cached parsing, content types, relationships                  | A      |
+| `markup.ts`     | Every part as one dialect: Strict → Transitional, the usual prefixes, one branch of `mc:AlternateContent`         | A      |
 | `deck.ts`       | `readDeck`: slide size, order, hidden flags, shown index, defaultTextStyle, sections; `slideParts`                | A      |
 | `frame.ts`      | EMU → 1920x1080 contain map, affine transforms, `boxPx`                                                           | A      |
 | `theme.ts`      | `readTheme`: colour, font and format schemes; `themeFont`                                                         | B      |
@@ -69,30 +70,62 @@ colours as `Rgba` (channels 0-255, alpha 0-1, the shape of `@ordo/domain` `Rgba`
   pptx-scene → ../../../pptx-scene`, `tools/pptx-fidelity/node_modules/@ordo/pptx-scene →
   ../../../../packages/pptx-scene`, `packages/pptx-scene/node_modules/@ordo/domain → ../../../domain`).
 
-### A: reading (`xml.ts`, `opc.ts`, `deck.ts`, `frame.ts`)
+### A: reading (`xml.ts`, `opc.ts`, `markup.ts`, `deck.ts`, `frame.ts`)
 
 Contracts:
-- `xml.ts`: `XNode`, `parseXml(xml, part): XNode[]`, `rootOf`, `child`, `children`, `firstChild`, `path`,
-  `textOf`, `num`, `startTags`, `countUpTo`, `decodeEntities`, `MAX_TAGS_PER_PART`, `XML_MAX_DEPTH`.
+- `xml.ts`: `XNode`, `parseXml(xml, part): XNode[]`, `rootOf`, `rootTag`, `child`, `children`, `firstChild`,
+  `path`, `textOf`, `num`, `startTags`, `countUpTo`, `decodeEntities`, `MAX_TAGS_PER_PART`, `XML_MAX_DEPTH`.
   `pptx-render/src/annotate.ts` imports it as `@ordo/pptx-scene/xml.ts`: keep its output for well-formed
   parts identical (it matched fast-xml-parser on 26,980 real parts, apart from top-level whitespace,
   merged CDATA and decoded numeric references).
-- `openPackage(src, log?): Package` with `find`, `has`, `bytes`, `text`, `xml`, `rels`, `rel`, `relOfType`,
-  `contentType`, `log`. `xml(name)` returns the cached root, undefined when the part is missing, and throws
-  when it is over budget or malformed. `Rel.target` is resolved, normalised and the stored part name.
-  `relType(uri)`, `relsPartOf`, `resolveTarget`, `externalHost`, `MAX_XML_PART_BYTES`.
-- `readDeck(pkg): DeckInfo` (`size`, `slides: SlideRef[]` with `index`, `part`, `hidden`, `shown`,
-  `defaultTextStyle`, `sections`, `embeddedFonts`); `slideParts(pkg, part): SlideParts`.
+- `openPackage(src, log?, opts?): Package` with `find`, `has`, `bytes`, `text`, `xml`, `rels`, `rel`,
+  `relOfType` (a short type name or a full URI, Strict or Transitional), `contentType`, `partsOfType`, `log`.
+  `find` folds case: the first of names that differ only by case is the part, however a name is spelled.
+  `xml(name)` returns the cached root, undefined when the part is missing, and throws when it is over budget
+  or malformed. `Rel.target` is resolved, normalised and the stored part name; `Rel.type` is Transitional.
+  `relType(uri)`, `relsPartOf`, `resolveTarget`, `externalHost`, `relIdOf`, `decodeText`,
+  `MAX_XML_PART_BYTES`.
+- **Every tree `Package.xml` returns is one dialect** (`markup.ts` `normalizePart`, run once per part):
+  Strict URIs and `"90%"` percentages read as Transitional; elements and attributes of known namespaces under
+  their usual prefixes (`p:`, `a:`, `r:`, `mc:`, `p14:` …, none for relationships and content types)
+  whatever prefix or default namespace the deck declared; each `mc:AlternateContent` keeps its wrapper and
+  only the branch to read (the first `mc:Choice` whose `Requires` namespaces are all in
+  `UNDERSTOOD_NAMESPACES`, LibreOffice's a14/p14/p15, else the first `mc:Fallback`, else nothing). Readers
+  match names like `'p:sld'` and `'r:embed'` literally, and walk an `mc:AlternateContent` through
+  `chooseAlternate(el)` (which also applies the rule to a tree parsed some other way).
+- `readDeck(pkg): DeckInfo` (`presentationPart`, `size`, `slides: SlideRef[]` with `index`, `part`,
+  `hidden`, `shown`, `defaultTextStyle`, `sections`, `embeddedFonts`); `slideParts(pkg, part): SlideParts`
+  (a related part with the wrong root, a cycle back to the slide included, is not used).
 - `frame.ts`: `frameOf`, `lenPx`, `ptPx`, `slideRect`, `IDENTITY`, `multiply`, `apply`, `xfrmAffine`,
-  `childSpace`, `decompose`, `boxPx`.
+  `childSpace`, `decompose`, `boxPx`, `DEFAULT_SLIDE`, `MIN_SIDE`, `MAX_SIDE`.
 
-To do (design/27 §1, §4 "Order and identity", §12): Strict → Transitional (`annotate.ts` 1478-1539,
-including `"90%"` percentages, before parsing), a prefix-agnostic `r:id`, slides by `slideN` number when
-`p:sldIdLst` is empty, duplicates placed once and the shown index as `annotate.ts` `placeSlides`
-(725-800), `p14:sectionLst`, `embeddedFontLst`, External targets logged with their host only, content-type
-overrides naming missing parts ignored. Tests: the §14 fuzz list that concerns reading (DOCTYPE, billion
-laughs, `a:__proto__`, depth, huge parts, cyclic rels, External targets, hidden-only decks, 10,000 media
-parts, control characters in names), each under 5 s.
+Done (design/27 §1, §4 "Order and identity", "Alternate content", §12):
+- **Package.** Parts found without case (first of a clash) and under percent-decoded names; text by BOM,
+  else the declared encoding, else UTF-8; parsed trees cached within 16 M characters (LRU). Content-type
+  overrides naming missing parts ignored. Relationship targets: fragment dropped, percent-decoded, `.`/`..`
+  applied never above the root, leading `/` the root; a duplicate `Id` keeps the first; targets over 2,048
+  characters ignored; `TargetMode="External"` never resolved or fetched, noted as `external <type> target
+  (<host>) is not fetched` (host only, at most 20 notes).
+- **Presentation.** The package's officeDocument, else a presentation content type, else
+  `ppt/presentation.xml`. `p:sldSz` within 1-51,206,400 EMU, else the one default. `p:sldIdLst` order, the
+  relationship id under any prefix; entries naming no slide part (missing, External, another kind of part)
+  skipped and counted in a note; when it lists no slide, the slide relationships (else the content types'
+  slide parts) by the number in their names. At most 2,000 slides. `show="0"`/`"false"` read from the
+  root tag in the part's head (no whole-slide parse). A slide listed twice is read once at its first
+  place, and each later listing of a shown slide still takes a shown index (the LibreOffice page, as
+  `annotate.ts` `placeSlides`). `p14:sectionLst` (≤ 1,000; a slide in its first section only),
+  `p:defaultTextStyle`, `p:embeddedFontLst` (≤ 64 typefaces, cleaned).
+- **Tests** (`xml`, `opc`, `markup`, `deck`): crafted decks for each rule, and the §14 reading fuzz list,
+  each under 5 s: DOCTYPE and billion laughs (the slide quarantined, never the deck), `__proto__` and
+  `constructor` as part names, ids, types, prefixes and attributes, depth 20,000, a 9 MB part, cyclic
+  relationships (slide → itself as layout, layout → itself as master …), 50 External targets, 2,001 slides
+  plus 100,000 repeated listings, all-hidden decks, 10,000 media parts and relationships, control
+  characters in part names, a Strict deck and decks with their own prefixes or default namespaces emitting
+  exactly what their Transitional twins emit.
+
+Not done: universal measures (a Strict coordinate written `"2.5cm"`) are not converted, so `num` reads them as
+missing (Office writes EMU integers); `p:custShowLst` and `p:showPr` (loop, kiosk) are for later milestones.
+The `v` (VML) Choice is not read, unlike LibreOffice: its Fallback is usually an OLE object with its preview picture.
 
 ### B: theme-colour (`theme.ts`, `color.ts`)
 

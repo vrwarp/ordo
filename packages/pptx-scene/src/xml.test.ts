@@ -6,6 +6,7 @@ import {
   MAX_TAGS_PER_PART,
   parseXml,
   rootOf,
+  rootTag,
   startTags,
   textOf,
   XML_MAX_DEPTH,
@@ -120,5 +121,27 @@ describe('startTags', () => {
   it('finds whole start tags, quotes respected, names not prefixes of others', () => {
     const xml = '<a:t x=">">1</a:t><a:tab/><a:t/>';
     expect(startTags(xml, 'a:t').map(([s, e]) => xml.slice(s, e))).toEqual(['<a:t x=">">', '<a:t/>']);
+  });
+});
+
+describe('rootTag', () => {
+  it('reads the root start tag alone, past the declaration, instructions and comments', () => {
+    const t = rootTag(
+      '\ufeff<?xml version="1.0"?>\n<!-- a > b --><?pi x?><p:sld xmlns:p="u" show="0"><p:cSld>',
+    );
+    expect(t?.name).toBe('p:sld');
+    expect(t?.attrs.show).toBe('0');
+    expect(t?.children).toEqual([]);
+    expect(rootTag('<p:sld a="x>y"/>')?.attrs.a).toBe('x>y');
+    expect(Object.getPrototypeOf(rootTag('<a __proto__="1"/>')?.attrs)).toBeNull();
+  });
+
+  it('gives up on a declaration, an end tag, a cut tag or no tag at all', () => {
+    expect(rootTag('<!DOCTYPE x><x/>')).toBeUndefined();
+    expect(rootTag('</x>')).toBeUndefined();
+    expect(rootTag('<?xml version="1.0"?><p:sld show="0')).toBeUndefined();
+    expect(rootTag('<!-- never closed')).toBeUndefined();
+    expect(rootTag('text only')).toBeUndefined();
+    expect(rootTag('< x/>')).toBeUndefined();
   });
 });
