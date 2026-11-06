@@ -2,7 +2,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import pptxgen from 'pptxgenjs';
 import { run } from '../../../apps/hub/src/media/tools.ts';
-import { dataUri, testPicture } from './png.ts';
+import { PLACEMENT_COLOURS as C } from './placement.ts';
+import { dataUri, png, testPicture } from './png.ts';
 
 /**
  * Synthetic decks, one per area, each slide exercising one PowerPoint feature, so a score can say which
@@ -10,7 +11,7 @@ import { dataUri, testPicture } from './png.ts';
  * real decks belong in the local corpus, outside the repository). Every text is public domain: World English
  * Bible verses, the 1919 Chinese Union Version, hymn titles.
  */
-type Deck = { name: string; build: (p: pptxgen, media: TestMedia) => void };
+type Deck = { name: string; layout?: 'LAYOUT_4x3'; build: (p: pptxgen, media: TestMedia) => void };
 
 /** Test media made by ffmpeg from its own test patterns, as pptxgenjs data (`type;base64,...`). */
 type TestMedia = { clip: string; poster: string; loop: string; tone: string };
@@ -47,6 +48,8 @@ async function testMedia(dir: string): Promise<TestMedia> {
 const W = 13.333;
 const PIC = dataUri(testPicture(640, 360));
 const PIC_SQ = dataUri(testPicture(400, 400, 0.4));
+/** A solid orange picture, for the placement check (its colour must stay one colour when scaled). */
+const PIC_SOLID = dataUri(png(300, 150, () => [0xff, 0x80, 0x00, 255]));
 
 function title(s: pptxgen.Slide, text: string): void {
   s.addText(text, { x: 0.4, y: 0.2, w: W - 0.8, h: 0.6, fontSize: 20, color: '666666', fontFace: 'Arial' });
@@ -420,6 +423,38 @@ const DECKS: Deck[] = [
       });
     },
   },
+  {
+    // design/27 §15 M1: a 4:3 deck whose boxes land within 2 px of LibreOffice's page (src/placement.ts).
+    // Each box has its own colour and no outline; nothing else on the slides uses these colours.
+    name: 'placement-4x3',
+    layout: 'LAYOUT_4x3',
+    build(p) {
+      const box = (s: pptxgen.Slide, shape: pptxgen.ShapeType, color: string, o: pptxgen.ShapeProps) =>
+        s.addShape(shape, { ...o, fill: { color }, line: { type: 'none' } });
+      let s = p.addSlide();
+      box(s, p.ShapeType.rect, C.red!, { x: 0.2, y: 0.2, w: 2, h: 1 });
+      box(s, p.ShapeType.rect, C.green!, { x: 7.55, y: 0.35, w: 2.25, h: 1.15 });
+      box(s, p.ShapeType.rect, C.blue!, { x: 0.3, y: 6.05, w: 3.1, h: 1.2 });
+      box(s, p.ShapeType.rect, C.magenta!, { x: 6.45, y: 5.85, w: 3.35, h: 1.45 });
+      box(s, p.ShapeType.ellipse, C.cyan!, { x: 3.5, y: 2.4, w: 3, h: 2.6 });
+      s = p.addSlide();
+      box(s, p.ShapeType.rect, C.yellow!, { x: 1, y: 1, w: 2.4, h: 1.2, rotate: 30 });
+      s.addImage({ data: PIC_SOLID, x: 5.3, y: 0.9, w: 3.7, h: 1.4 });
+      s.addText('Box with text', {
+        shape: p.ShapeType.rect,
+        x: 1.2,
+        y: 4.2,
+        w: 7.4,
+        h: 2.1,
+        fill: { color: C.navy! },
+        color: 'FFFFFF',
+        fontSize: 32,
+        fontFace: 'Arial',
+        align: 'center',
+        valign: 'middle',
+      });
+    },
+  },
 ];
 
 /** Write the synthetic decks into `dir`; returns their paths. */
@@ -429,7 +464,7 @@ export async function buildCorpus(dir: string): Promise<string[]> {
   const media = await testMedia(join(dir, 'media'));
   for (const d of DECKS) {
     const p = new pptxgen();
-    p.layout = 'LAYOUT_WIDE';
+    p.layout = d.layout ?? 'LAYOUT_WIDE';
     d.build(p, media);
     const file = join(dir, `corpus-${d.name}.pptx`);
     await writeFile(file, (await p.write({ outputType: 'nodebuffer' })) as Buffer);

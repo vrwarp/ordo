@@ -66,6 +66,9 @@ type ImageObject = {
   fit: 'contain' | 'cover' | 'stretch';
   opacity: number;
   radius: number;
+  // Share of the picture cut from each side (-1..1) before `fit`; a negative share pads with
+  // transparency (PowerPoint a:srcRect, design/27 §3.1).
+  crop?: { l: number; t: number; r: number; b: number };
 };
 type ShapeObject = {
   id: Id;

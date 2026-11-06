@@ -11,7 +11,7 @@ import {
   rootOf,
   startTags,
   type XNode,
-} from './xml.ts';
+} from '@ordo/pptx-scene/xml.ts';
 
 /**
  * What ordo applies to a rendered run because pptx-preview gets it wrong or ignores it. Only properties

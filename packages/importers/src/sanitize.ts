@@ -107,7 +107,19 @@ function clampObject(o: SlideObject): SlideObject {
   const opacity = finite(o.opacity, 1, 0, 1);
   if (o.type === 'text')
     return { ...o, box, opacity, text: clipText(o.text, IMPORT_LIMITS.text), style: clampStyle(o.style) };
-  if (o.type === 'image') return { ...o, box, opacity, radius: finite(o.radius, 0, 0, 1000) };
+  if (o.type === 'image') {
+    const out = { ...o, box, opacity, radius: finite(o.radius, 0, 0, 1000) };
+    if (o.crop && typeof o.crop === 'object') {
+      const c = o.crop;
+      out.crop = {
+        l: finite(c.l, 0, -1, 1),
+        t: finite(c.t, 0, -1, 1),
+        r: finite(c.r, 0, -1, 1),
+        b: finite(c.b, 0, -1, 1),
+      };
+    } else delete out.crop;
+    return out;
+  }
   return { ...o, box, opacity, radius: finite(o.radius, 0, 0, 1000) };
 }
 

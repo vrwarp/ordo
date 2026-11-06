@@ -8,8 +8,11 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@ordo/domain": "workspace:*",
     "@ordo/importers": "workspace:*",
     "@ordo/pptx-render": "workspace:*",
+    "@ordo/pptx-scene": "workspace:*",
+    "@ordo/renderer": "workspace:*",
     "pptxgenjs": "4.0.1"
   },
   "devDependencies": {
