@@ -98,6 +98,12 @@ playing), `host.ts`, `media.ts`, `host-protocol.ts`, `render.worker.ts`, `engine
 scale with the poster's size, answer `SRC_SCENE` with `videoSlot`/`videoGen` from the job. Video
 ImageObjects draw their Media's poster on outputs: `slideImages` (link-core) maps a video to
 `stillFile(m)`; the operator thumbnail worker does the same.
+Done: `rasterScene` and `sceneSlides` in `scene-raster.ts` (the worker's `sceneParts` calls them on its
+surface, `transferToImageBitmap` as the take); text is measured with `layoutText`, and text using rich
+text fields that can draw past it (M2 runs, paragraph styles, the office line model, insets, no wrapping)
+counts as covering the whole frame until the measure uses the M2 layout. The plane uses the drawn poster's size; without a poster
+the clip is stretched until the slide is drawn again with it. The operator's `stillHash` is `stillFile`.
+Pixels: `scene-raster.browser.test.ts` (headless Chromium, skipped without one).
 
 **(F) frames-uploads.** `packages/renderer/src/engine.ts`: a 2-deep frame ring per slot presenting the newest
 frame whose timestamp is at most the expected media time (hubNow − startedAt, modulo the duration when

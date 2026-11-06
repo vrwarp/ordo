@@ -606,4 +606,39 @@ describe('link worker core', () => {
     asset.port2.close();
     t.close();
   });
+
+  it('an image object whose media is a video draws its poster, which the manifest ships (design/27 §8)', async () => {
+    const t = setup();
+    await t.core.start();
+    const s0 = liveState();
+    const r = s0.resolved!;
+    const poster = { hash: 'poster1', bytes: 10, mime: 'image/jpeg', path: 'files/poster1' };
+    const talk = r.presentations.talk!;
+    const sec = talk.sections[0]!;
+    const still = {
+      id: 'im',
+      type: 'image',
+      box: { x: 0, y: 0, w: 960, h: 540, rotation: 0 },
+      mediaId: 'vid',
+      fit: 'contain',
+      opacity: 1,
+      radius: 0,
+    } as const;
+    const resolved = {
+      ...r,
+      media: { ...r.media, vid: { ...r.media.vid!, poster } },
+      presentations: {
+        ...r.presentations,
+        talk: { ...talk, sections: [{ ...sec, slides: [sec.slides[0]!, { id: 't2', objects: [still] }] }] },
+      },
+    };
+    const i = s0.cues.findIndex((c) => c.slideId === 't2');
+    t.hub.emit('state', stateMsg({ ...slideLive(i), resolved }));
+    await tick(30);
+    const job = t.toAsset.find((m) => m.t === 'job' && m.job.kind === 'slide' && m.job.cueIndex === i);
+    expect(job?.t === 'job' && job.job.kind === 'slide' ? job.job.images : undefined).toEqual({
+      vid: 'poster1',
+    });
+    t.close();
+  });
 });

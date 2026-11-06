@@ -2,6 +2,7 @@ export * from './text2d.ts';
 export * from './timing.ts';
 export * from './stacks.ts';
 export * from './scene.ts';
+export * from './scene-raster.ts';
 export * from './plan.ts';
 export * from './props.ts';
 export * from './health.ts';
