@@ -1,0 +1,76 @@
+import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+import type { Check } from './draw.page.test-util.ts';
+
+/**
+ * drawGeom with a real Canvas 2D: bundles draw.page.test-util.ts, runs it in headless Chromium and expects every
+ * pixel check to hold (fill-mode shades, the even-odd rule, stroke-only paths, the clip path). Skipped when no
+ * Chromium is found (ORDO_TEST_CHROMIUM, Playwright's, or the system's Google Chrome), as
+ * scene-raster.browser.test.ts is.
+ */
+
+const here = dirname(fileURLToPath(import.meta.url));
+const root = resolve(here, '../../../..');
+
+async function findChromium(): Promise<string | undefined> {
+  if (process.env.ORDO_TEST_CHROMIUM) return process.env.ORDO_TEST_CHROMIUM;
+  try {
+    const { chromium } = await import('@playwright/test');
+    const exe = chromium.executablePath();
+    if (existsSync(exe)) return exe;
+  } catch {
+    /* Playwright not installed */
+  }
+  return existsSync('/usr/bin/google-chrome') ? '/usr/bin/google-chrome' : undefined;
+}
+
+type Esbuild = {
+  build(o: Record<string, unknown>): Promise<{ outputFiles: { text: string }[] }>;
+};
+
+/** esbuild is not a dependency of this package; vite (apps/output) depends on it, so resolve it through vite. */
+async function loadEsbuild(): Promise<Esbuild> {
+  const name = 'esbuild';
+  try {
+    return (await import(name)) as Esbuild;
+  } catch {
+    const fromOutput = createRequire(join(root, 'apps/output/package.json'));
+    return (await import(createRequire(fromOutput.resolve('vite')).resolve(name))) as Esbuild;
+  }
+}
+
+const executablePath = await findChromium();
+
+describe.skipIf(!executablePath)('drawGeom in headless Chromium', () => {
+  it('shades, fills even-odd, strokes and clips as the geometry says', async () => {
+    const esbuild = await loadEsbuild();
+    const built = await esbuild.build({
+      entryPoints: [join(here, 'draw.page.test-util.ts')],
+      bundle: true,
+      write: false,
+      format: 'iife',
+      target: 'es2022',
+      absWorkingDir: root,
+      logLevel: 'silent',
+    });
+    const { chromium } = await import('@playwright/test');
+    const browser = await chromium.launch({ headless: true, executablePath });
+    let checks: Check[];
+    try {
+      const page = await browser.newPage();
+      const errors: string[] = [];
+      page.on('pageerror', (e) => errors.push(e.message));
+      await page.setContent('<!doctype html><html><body></body></html>');
+      await page.addScriptTag({ content: built.outputFiles[0]!.text });
+      checks = await page.evaluate(() => (window as unknown as { __geomDraw: () => Check[] }).__geomDraw());
+      expect(errors).toEqual([]);
+    } finally {
+      await browser.close();
+    }
+    expect(checks.length).toBeGreaterThan(10);
+    expect(checks.filter((c) => !c.ok).map((c) => `${c.what}: ${c.detail}`)).toEqual([]);
+  }, 120_000);
+});

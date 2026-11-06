@@ -51,12 +51,12 @@ import { basename, join, relative, resolve } from 'node:path';
 import { pptxForRendering } from '@ordo/importers';
 import { renderWithPptxPreview } from '@ordo/pptx-render';
 import { pdfToPngs, pptxToPdf } from '../../../apps/hub/src/media/ffmpeg.ts';
-import { run } from '../../../apps/hub/src/media/tools.ts';
 import { parseArgs, slidesFor } from './args.ts';
 import { type BaselineDeck, compareBaseline } from './baseline.ts';
 import { buildCorpus } from './corpus.ts';
 import { convertDeckIsolated, NativeRenderer, type RenderedDeck } from './native.ts';
 import { png } from './png.ts';
+import { ssim } from './ssim.ts';
 import {
   type DeckScore,
   mean,
@@ -155,43 +155,6 @@ async function drawWithPptxPreview(
   } finally {
     await rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
-}
-
-/** A PNG's size from its header. */
-async function pngSize(file: string): Promise<{ w: number; h: number } | undefined> {
-  const b = await readFile(file);
-  if (b.length < 24 || b.toString('latin1', 12, 16) !== 'IHDR') return undefined;
-  return { w: b.readUInt32BE(16), h: b.readUInt32BE(20) };
-}
-
-/**
- * SSIM of two pictures in greyscale at 960x540 (ffmpeg). The reference is first cut to the other's
- * proportions: LibreOffice rounds a slide up to a whole pixel (1921x1080, 1440x811), a blank last column
- * or row.
- */
-async function ssim(a: string, b: string): Promise<number> {
-  const size = await pngSize(b);
-  const ratio = size ? `${size.w}/${size.h}` : '';
-  const crop = size ? `crop='min(iw,trunc(ih*${ratio}+0.5))':'min(ih,trunc(iw/(${ratio})+0.5))':0:0,` : '';
-  const r = await run(
-    'ffmpeg',
-    [
-      '-hide_banner',
-      '-nostats',
-      '-i',
-      a,
-      '-i',
-      b,
-      '-lavfi',
-      `[0:v]${crop}scale=960:540:flags=area,format=gray[a];[1:v]scale=960:540:flags=area,format=gray[b];[a][b]ssim`,
-      '-f',
-      'null',
-      '-',
-    ],
-    { timeoutMs: 60_000 },
-  );
-  const m = /All:([0-9.]+)/.exec(r.stderr);
-  return m ? Number(m[1]) : 0;
 }
 
 /** SSIM of each page against the other renderer's (0 where it drew none), for the slides `keep` keeps. */
