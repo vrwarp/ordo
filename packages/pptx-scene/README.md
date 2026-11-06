@@ -348,6 +348,8 @@ Measured (shown worship slides, cumulative T1 / T1-T2 / T1-T3 / T1-T4 / T1-T5): 
 decks 31.9 / 73.2 / 87.7 / 92.5 / 95.8 % (census 30.9 / 73.3 / 87.6 / 92.5 / 95.8 %, n 4,922 against
 4,897); on the 268 worship decks of `validate/scores.jsonl` 21.5 / 52.7 / 81.0 / 87.4 / 92.7 % (the census
 script gives 20.3 / 52.7 / 81.0 / 87.4 / 92.7 % on the same decks: the set has more design templates).
+After the M1 merge (one alternate-content branch, repeated listings shown as LibreOffice pages), the census
+decks give 32.2 / 73.4 / 87.8 / 92.5 / 95.8 % over 4,941 shown slides.
 
 Still to do: the 64 KB slide JSON budget and the 4,096 path points (§3.4, M3/M6, once emission measures
 them); kerning and unknown transitions as approx (slide-level, M8); `artText` from `ArtRange.elements`
