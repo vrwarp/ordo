@@ -183,6 +183,14 @@ Decisions the other items rely on:
   main size and direction; no bullet, no space between them. The converter may write `{ soft: true }` only;
   the editor's paragraph strip edits the paragraph a soft one continues. `prepare` (A) gives a soft
   paragraph its paragraph's base direction.
+- **A trailing a:br** (an empty soft paragraph that no soft paragraph follows, at the end of the text or
+  before another paragraph) makes a line as tall as its own end mark, and in the office model at single
+  spacing: the paragraph's proportional spacing does not apply to it (so neither does the spacing scale),
+  its exact spacing does. An empty line between two a:br and an empty paragraph keep the paragraph's
+  spacing. LibreOffice 24.2, measured with 40 pt text: the trailing line is 96 px at 80, 90 and 150 %, and
+  80 px at an exact 40 pt. At the Office theme's 90 % a title ending in an a:br was 0.12 F shorter than
+  LibreOffice's, so it sat lower when centred and fitted a point larger under its own normAutofit. The
+  'ordo' model applies the paragraph's spacing to it as to any line.
 - **`align` is visual** (left is left in a right-to-left paragraph); RTL changes the start edge: where
   indents and the bullet are, and where the last line of a justified paragraph goes.
 - **Points**: 2 logical px per point (`PX_PER_PT`, both standard deck sizes).

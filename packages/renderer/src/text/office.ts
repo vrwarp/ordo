@@ -15,7 +15,8 @@ import type { ParaStyle } from './types.ts';
  * - exact spacing P is P·k high and adds or removes space above the line;
  * - unset spacing and an explicit 100 % are single spacing, which k leaves alone (measured: a shrunk box
  *   draws them alike).
- * Space before and after (k-scaled), the main size F and raised runs are applied by lines.ts.
+ * Space before and after (k-scaled), the main size F, raised runs and the single-spaced line of a trailing
+ * a:br are applied by lines.ts.
  *
  * Autofit (`autofit`): ordo keeps the stored `fitScale` while the text fits at it, so an edit never makes
  * text jump in size (§11). When it does not fit, LibreOffice's search (`searchFit`,
