@@ -265,6 +265,38 @@ worker) and at 3840 for timing, then cropping `slideRect`; fonts from `fc-match`
 per-feature means; cached LibreOffice pictures reused through `--out`; `native-baseline.json`. A deck the
 converter cannot read is a note, never an abort. Uses only `@ordo/pptx-scene`'s public API (`index.ts`).
 
+Done:
+- **Run.** `pnpm --filter @ordo/pptx-fidelity start -- --engine native --out <dir> [--manifest
+  manifest.json] [--baseline native-baseline.json] <decks or folders>`. The default engine stays `ppv`;
+  `both` draws both columns, and `--no-ppv` removes pptx-preview from either.
+- **Converting** (`convertDeck`). XML and `.rels` parts of 8 MB or less stay in memory, up to 64 MB in all;
+  every other part is spilled. Only the pictures the slides use are kept, under generated names
+  (`<deck>/native/media/<n>.<ext>`), at most 2,000 per deck. Pictures that are not PNG, JPEG, GIF, WebP or
+  BMP by their bytes (EMF, WMF, TIFF, …) are counted in a note and not drawn. `slides.json` holds every
+  slide (hidden ones too) with its tier, class, reasons, convert time, notes and ordo `Slide`.
+- **Drawing** (`NativeRenderer`). One headless Chromium per run, a fresh page per deck. Every request
+  except the page's own origin is refused, and host resolution is off. Each family the slides use is
+  registered as `ordo-native-<n>` with fontconfig's regular face, plus its bold, italic and bold italic
+  faces when those are separate files; missing variants are synthesized. Pictures are decoded once per
+  deck, scaled to the largest size the deck draws them at 3840 px (as the hub's picture preparation will),
+  and kept in a bounded cache. `rasterMs` is the median of three draws (thumbnail-worker order: black,
+  background cover, `drawSlide2D`) plus a one-pixel read-back, which makes Chromium rasterize.
+- **Scoring.** `nativeSsim` uses the existing `ssim()` against `libreoffice/slide-NNNN.png` (page
+  `shown + 1`). `blackSsim` is an all-black frame of the same size scored the same way: the "beats black"
+  floor of the M1 exit. It is cached in `libreoffice/black-ssim.json`.
+- **Reporting.** `summary.json` keeps the pptx-preview fields when that engine ran; per deck it adds
+  `nativeSsim`, `nativeSlides`, `nativeMs`, `convertMs`, `embeddedFonts` (font parts present: left out of
+  means), `nativeNotes`, and from `--manifest` `worship` and `features`. `report.html` adds tables per
+  tier, class, classifier reason and manifest feature (worship decks first), each with the share of shown
+  slides, mean native and pptx-preview SSIM and the share that beats black. It also gives p50/p95 convert
+  and raster times and a native picture per slide.
+- **Baseline.** `<out>/native-baseline.json` is written by every native run. `--baseline` takes it or a
+  `summary.json`, prints the change per deck, and exits 1 when a worship deck (every deck without
+  `--manifest`) loses more than `--max-drop` (default 0.02) of native SSIM.
+
+To do: `--lo-compat` (design/27 §14.1) and the committed probe corpus with its CI gate (§14.2) belong to later
+milestones. The 4:3 placement check of the M1 exit needs a synthetic 4:3 deck run with LibreOffice.
+
 ### F: classify (`classify.ts`)
 
 Contracts: `tierOf(features): { tier, reasons }`, `slideFeatures(ctx): Set<string>`,
