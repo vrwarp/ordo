@@ -2196,6 +2196,23 @@ LibreOffice becomes optional at run time. Every element that M3 to M6 leave resi
 - Charts: bar, column, line and pie from the chart part's cached values (`c:numCache`, `c:strCache`) as a locked group of native shapes and text; other chart types draw their fallback image.
 - LibreOffice optional at run time: the hub detects `soffice`, hides options that need it, and keeps working without it; the Docker image takes a build argument to leave it out.
 
+<!-- m9:lo-detect -->
+*Built for M9 (wave 1, track `lo-detect`): LibreOffice optional at run time, without the budget ladder.*
+- **Detection** (hub `tools.ts`): `ORDO_LIBREOFFICE=auto|off|<path>`, an executable looked up on the PATH
+  (no process started), then `soffice --version` through the hardened command in the background; states
+  `checking`, `available`, `absent`, `off`, `broken`; a run that finds soffice gone (`ToolError.missing`) marks
+  it absent. `GET /capabilities` (`HubCapabilities`) tells the operator.
+- **Policy without LibreOffice** (decision 8): nothing is `pending` and no `pptx-lo` is queued; what the art
+  or a metafile conversion would have drawn is listed in `Slide.pptx.missing` (class hybrid, no art object;
+  a picture-class slide lists `slide` until the `ladder` track makes it native), the card, the editor and
+  goLive name it. A follow-up left from when LibreOffice was there clears `pending`, sets `missing` from its
+  plan (`PptxLoSlide.kinds`) and re-imports those slides with this converter.
+- **'Show original' without LibreOffice**: the PDF PowerPoint exports, sent to `pptx-reference` as multipart;
+  its pages (the shown slides, or every listed slide) become the reference pictures through pdftoppm.
+- **Formats**: .ppsx, .potx and .pptm import natively (macros never read); .ppt, .pps, .odp and .key are
+  refused with a save-as hint (converting them would hand an unsanitisable upload to LibreOffice).
+<!-- /m9:lo-detect -->
+
 **Exit.**
 - ≥ 99% of shown worship slides are native; the rest are hybrid with a reason, and none is a picture slide.
 - Every slide that was hybrid or picture before M9 is at least as faithful to LibreOffice (SSIM) as before.
@@ -2240,23 +2257,6 @@ LibreOffice becomes optional at run time. Every element that M3 to M6 leave resi
 - ∥ charts and SmartArt layouts;
 - ∥ vertical text and anchorCtr;
 - ∥ optional LibreOffice in the hub and the image.
-
-<!-- m9:lo-detect -->
-*Built for M9 (wave 1, track `lo-detect`): LibreOffice optional at run time, without the budget ladder.*
-- **Detection** (hub `tools.ts`): `ORDO_LIBREOFFICE=auto|off|<path>`, an executable looked up on the PATH
-  (no process started), then `soffice --version` through the hardened command in the background; states
-  `checking`, `available`, `absent`, `off`, `broken`; a run that finds soffice gone (`ToolError.missing`) marks
-  it absent. `GET /capabilities` (`HubCapabilities`) tells the operator.
-- **Policy without LibreOffice** (decision 8): nothing is `pending` and no `pptx-lo` is queued; what the art
-  or a metafile conversion would have drawn is listed in `Slide.pptx.missing` (class hybrid, no art object;
-  a picture-class slide lists `slide` until the `ladder` track makes it native), the card, the editor and
-  goLive name it. A follow-up left from when LibreOffice was there clears `pending`, sets `missing` from its
-  plan (`PptxLoSlide.kinds`) and re-imports those slides with this converter.
-- **'Show original' without LibreOffice**: the PDF PowerPoint exports, sent to `pptx-reference` as multipart;
-  its pages (the shown slides, or every listed slide) become the reference pictures through pdftoppm.
-- **Formats**: .ppsx, .potx and .pptm import natively (macros never read); .ppt, .pps, .odp and .key are
-  refused with a save-as hint (converting them would hand an unsanitisable upload to LibreOffice).
-<!-- /m9:lo-detect -->
 
 <!-- m9:render-seams -->
 **Built for M9 wave 1: the renderer seams (render-seams track).** So that each area track owns its files, the
