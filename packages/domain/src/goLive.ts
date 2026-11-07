@@ -1,7 +1,8 @@
-import { drawnGeomRefs } from './content.ts';
 import { expandCues } from './cues.ts';
 import { newId } from './ids.ts';
 import type { ManifestFile, ResolvedPlaylist } from './live.ts';
+import { drawnShapeFileRefs } from './m9-readers.ts';
+import { type MissingKind, missingKinds, missingLabel } from './missing.ts';
 import {
   type SlidePlay,
   manifestFiles,
@@ -354,6 +355,7 @@ const MEDIA_REASON =
 
 export function degradedKind(reason: string): DegradedKind {
   if (reason === PENDING_SLIDE_REASON || reason === FAILED_SLIDE_REASON) return 'drawing';
+  if (reason.startsWith(MISSING_SLIDE_REASON)) return 'drawing';
   if (MEDIA_REASON.test(reason)) return 'media';
   if (/ slide \d+ is invalid \(.*\); shown empty$/s.test(reason)) return 'empty';
   return 'other';
@@ -367,13 +369,29 @@ export const PENDING_SLIDE_REASON =
 export const FAILED_SLIDE_REASON =
   'PowerPoint slide LibreOffice could not draw: its chart, art or page picture is missing';
 
+/**
+ * The start of the reason a slide with PowerPoint elements nothing draws (`Slide.pptx.missing`, M9) is listed
+ * in `degraded`; `missingSlideReason` adds what is left out.
+ */
+export const MISSING_SLIDE_REASON = 'PowerPoint slide with something ordo cannot draw';
+
+/**
+ * The reason for a slide whose elements of `kinds` are left out: 'PowerPoint slide with something ordo
+ * cannot draw (a chart, a SmartArt graphic): it is left out'.
+ */
+export function missingSlideReason(kinds: readonly MissingKind[]): string {
+  const what = kinds.length ? ` (${kinds.map(missingLabel).join(', ')})` : '';
+  return `${MISSING_SLIDE_REASON}${what}: it is left out`;
+}
+
 /** At most this many geometry files a goLive lists (each is one file the outputs cache). */
 export const GOLIVE_GEOM_FILES_MAX = 20_000;
 
 /**
- * The geometry files the presentations' slides draw (`drawnGeomRefs`, design/27 §3.1 `ShapeGeom.ref`), once
- * each, from the library's file index, and one problem per slide that draws one the library does not have
- * (its shapes are drawn as their plain outlines). Nothing without a file index.
+ * The shape files the presentations' slides draw (`drawnShapeFileRefs`: geometry files, design/27 §3.1
+ * `ShapeGeom.ref`, and decoration files, M9 `DecorData.ref`), once each, from the library's file index, and
+ * one problem per slide that draws one the library does not have (its shapes are drawn as their plain
+ * outlines or inline parts). Nothing without a file index.
  */
 function geomFiles(
   presentations: Record<string, Presentation>,
@@ -387,7 +405,7 @@ function geomFiles(
     for (const sec of p.sections)
       for (const s of sec.slides) {
         let lost = 0;
-        for (const ref of drawnGeomRefs(s)) {
+        for (const ref of drawnShapeFileRefs(s)) {
           if (files.has(ref) || files.size >= GOLIVE_GEOM_FILES_MAX) continue;
           const f = missing.has(ref) ? undefined : file(ref);
           if (f?.hash === ref) files.set(ref, f);
@@ -407,21 +425,25 @@ function geomFiles(
 }
 
 /**
- * Slides of a native PowerPoint import that still wait for LibreOffice (`Slide.pptx.pending`) or that it
- * could not draw (`Slide.pptx.failed`).
+ * Slides of a native PowerPoint import that still wait for LibreOffice (`Slide.pptx.pending`), that it could
+ * not draw (`Slide.pptx.failed`), or with elements nothing draws (`Slide.pptx.missing`, M9, named by kind).
+ * One entry a slide: waiting or failed first, since LibreOffice's drawing would bring the missing elements.
  */
 function pendingSlides(resolved: ResolvedPlaylist): GoLiveProblem[] {
   const out: GoLiveProblem[] = [];
   // A hidden slide is listed too: its cue is skipped by Next, but a click shows it (design/27 §9).
-  const flagged = (s: Slide) => s.pptx?.pending || s.pptx?.failed;
+  const reason = (s: Slide): string | undefined => {
+    if (s.pptx?.pending) return PENDING_SLIDE_REASON;
+    if (s.pptx?.failed) return FAILED_SLIDE_REASON;
+    if (s.pptx?.missing?.length) return missingSlideReason(missingKinds(s.pptx.missing));
+    return undefined;
+  };
   for (const p of Object.values(resolved.presentations))
     for (const sec of p.sections)
-      for (const s of sec.slides)
-        if (flagged(s) && out.length < DEGRADED_MAX)
-          out.push({
-            presentationId: p.id,
-            slideId: s.id,
-            reason: s.pptx?.pending ? PENDING_SLIDE_REASON : FAILED_SLIDE_REASON,
-          });
+      for (const s of sec.slides) {
+        if (out.length >= DEGRADED_MAX) return out;
+        const r = reason(s);
+        if (r) out.push({ presentationId: p.id, slideId: s.id, reason: r });
+      }
   return out;
 }

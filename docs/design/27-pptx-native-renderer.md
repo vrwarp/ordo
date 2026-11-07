@@ -385,6 +385,61 @@ export const SlideSound = z.object({                     // M5: one sound per sl
   notes: z.boolean().optional(),                         // stage notes region, drawn in style['notes']
 ```
 
+<!-- m9:schema -->
+*Built for M9 (schema track; every stored field of M9 in one change, `packages/domain/src/schemas.ts`):*
+
+```ts
+// Every field below is .optional().catch(undefined); every enum inside .catch()es; arrays, strings, numbers bounded.
+ShapeGeom  += { adjWide: [name ≤ 16, ±21_600_000][] ≤ 10 }        // preferred by name over adj (which stays ±1e7)
+GeomFile    = { paths: ShapeGeomPath[1..64] }                      // was 8; inline ShapeGeom.paths keeps .max(8)
+GEOM_FILE_MAX_BYTES = 2_600_000                                    // was 400_000; also bounds a DecorFile
+Look3d      = { bevel?, back?: { prst: BEVEL_PRESETS, w, h ≤ 1_000 }, depth? ≤ 1_000, lift? ±1_000,
+                contour?: { width ≤ 500, color }, side?, material?: MATERIALS, light?: { rig: LIGHT_RIGS,
+                dir?, rot? }, camera?: { prst: CAMERA_PRESETS, fov?, rot?: [lat, lon, rev], zoom? },
+                grow? ≤ 500, flat? }                               // names: domain/src/three-names.ts (62/27/15/12)
+ShapeObject += { table?: TableData, chart?: ChartData, decor?: DecorData, look3d?: Look3d }
+ImageObject += { look3d?: Look3d, vectorFonts?: string[] ≤ 8 }
+TextObject  += { warp?: { preset: TEXT_WARPS (40), adj? ≤ 4 }, writing?: { upright: none|cjk|all, reverse? },
+                 centerBlock?: boolean, look3d?: Look3d }          // on the object, never on TextStyle (decision 5)
+TableData   = plan §3 (TABLE_LIMITS: 256 rows, 64 columns, 4,096 slots, 10,000 / 60,000 characters, palettes)
+ChartData   = charts.md §3.2 in domain/src/chart.ts (CHART_LIMITS), built over schemas.ts's own pieces
+DecorData   = { w, h, paints: DecorPaint[1..64], parts: DecorPart[≤ 256], ref? } ; DecorFile = { parts[1..256] }
+SlidePptx  += { missing: string[] ≤ 16 of ≤ 40 }                   // '<kind>[:<subtype>]', MISSING_KINDS (missing.ts)
+// media.ts: VECTOR_MIME = 'application/vnd.ordo.vector' (Media stays kind 'image').
+```
+
+- **Not written** (M9 decision 4: no legacy table group): `TableData.shadow` and `ChartData.shadow` are left
+  out, and so is `content.ts`'s `tableShadows`; an older build draws a table's background rect, a chart's
+  area. A table's edge indices are bounded by 256 (the row count, which covers the column edges too).
+- **`chart.ts`** cannot import `schemas.ts` (which imports it for `ShapeObject.chart`), so `chartSchemas()`
+  takes `Rgba`, `length`, `Gradient`, `LineDash`, `TextRun` and `TextPara` from `schemas.ts`, which exports the
+  resulting `Chart*` schemas. `chart.ts` and `three-names.ts` are fingerprinted with the schema for
+  `APP_VERSION` (`packages/protocol/src/version.test.ts`).
+- **Clamp** (`renderer/src/clamp.ts` dispatching to `clamp/{table,chart,decor,look3d,warp,writing,vector}.ts`):
+  each area file re-validates its field with the schema and keeps it (a decoration's path strings are
+  re-tokenised, vector picture families cleaned through the object's `FontBudget`); the area tracks fill in
+  the full clamps. `clampObject` keeps at most one of `table` > `chart` > `decor` on a shape, the first usable
+  one, and drops `look3d` on any of them; `clampGeom` keeps `adjWide` within ±21,600,000. `isRichText` is true
+  for a text object with any of `RICH_OBJECT_KEYS` (warp, writing, centerBlock, look3d), so the legacy
+  `drawText` never meets them.
+- **Sanitize** (`importers/src/sanitize.ts` dispatching to `sanitize/{table,chart,decor,look3d,warp,writing}.ts`):
+  cell texts cut to 10,000 with their runs and paragraph styles and the table to 60,000 (later cells emptied);
+  runs sorted, inside their text and naming a run style that exists; chart names, categories and labels to
+  255, titles to 1,000 with their runs and paras, format codes to 64; decoration paths re-tokenised; palette
+  indices that name no entry dropped; numbers finite and bounded; `missing` entries one line of ≤ 40, once each.
+- **Readers** (`domain/src/m9-readers.ts`): `tableText` (rows by '\n', cells by '\t', readable numbers),
+  `chartText`, `objectSearchText`; `extraFontFamilies` and `extraText`, which `referencedFontFamilies` and
+  `scriptFontFamilies` read, so goLive ships the faces of table, chart and vector picture text;
+  `drawnShapeFileRefs` (geometry and decoration files), which goLive's manifest uses. `palette.ts`:
+  `canonicalJson`, `Palette` (Map-deduped, capped) and `paletteIndex`.
+- **goLive**: a slide with `pptx.missing` goes live with a `degraded` entry naming what is left out
+  (`missingSlideReason`: 'PowerPoint slide with something ordo cannot draw (a chart, …): it is left out',
+  kind 'drawing'); a slide waiting for LibreOffice is reported as waiting instead.
+- **Older builds**: `schemas.prev.test-util.ts` stays 0.1.x's schema (M9 lands in 0.2.0, M9 decision 1); it
+  strips every M9 field and the M9 fixture slide (`domain/src/m9.test-util.ts`, 10.8 KB) still parses and draws
+  its legacy shapes and text.
+<!-- /m9:schema -->
+
 ### 3.2 Compatibility rules
 
 - **`TextObject.text` stays canonical.** Runs and paragraph styles annotate it. `firstText`, cue labels, search, stage `slideText`, lyric-only looks, 'Make lyric box' and themes keep working. Readers that show text to people go through `readableText(o)`, which writes automatic numbers and bullets as text, so verse numbers survive on the stage and the stream.

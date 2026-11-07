@@ -1,6 +1,7 @@
 import { slideContent } from './content.ts';
 import { SCRIPT_FALLBACK_FONTS } from './defaults.ts';
 import type { ManifestFile } from './live.ts';
+import { extraFontFamilies, extraText } from './m9-readers.ts';
 import type {
   FileRef,
   Font,
@@ -148,8 +149,9 @@ export function slideOnlyMedia(
 
 /**
  * Font families used by any text in the presentations or looks: every text style's family and
- * `fallbackFonts`, and for text objects also their runs' and bullets' families (design/27 §10), so goLive
- * ships them and outputs cache them before the service.
+ * `fallbackFonts`, and for text objects also their runs' and bullets' families (design/27 §10), and the
+ * families of tables, charts and vector pictures (`extraFontFamilies`, M9), so goLive ships them and outputs
+ * cache them before the service.
  */
 export function referencedFontFamilies(presentations: Presentation[], looks: Look[]): Set<string> {
   const fam = new Set<string>();
@@ -164,7 +166,10 @@ export function referencedFontFamilies(presentations: Presentation[], looks: Loo
     for (const sec of p.sections)
       for (const sl of sec.slides)
         for (const o of sl.objects) {
-          if (o.type !== 'text') continue;
+          if (o.type !== 'text') {
+            for (const f of extraFontFamilies(o)) add(f);
+            continue;
+          }
           addStyle(o.style);
           for (const r of o.runs ?? []) add(r.fontFamily);
           for (const para of o.paras ?? []) add(para?.bullet?.fontFamily);
@@ -231,10 +236,10 @@ export function fallbackFontScripts(text: string): Set<string> {
 
 /**
  * The script fallback families the presentations' text needs: `SCRIPT_FALLBACK_FONTS` of every script
- * present in a text object. `referencedFontFamilies` includes them, so goLive ships the faces the library
- * has of these families, and CJK faces reach outputs only this way (design/27 §10: by text scan). Han in a
- * text with Kana or Hangul is Japanese or Korean, whose family covers it; Han alone names every CJK family
- * and goLive ships the ones the venue added.
+ * present in a text object, a table's cells or a chart's text (`extraText`, M9). `referencedFontFamilies`
+ * includes them, so goLive ships the faces the library has of these families, and CJK faces reach outputs
+ * only this way (design/27 §10: by text scan). Han in a text with Kana or Hangul is Japanese or Korean, whose
+ * family covers it; Han alone names every CJK family and goLive ships the ones the venue added.
  */
 export function scriptFontFamilies(presentations: Presentation[]): Set<string> {
   const scripts = new Set<string>();
@@ -242,8 +247,9 @@ export function scriptFontFamilies(presentations: Presentation[]): Set<string> {
     for (const sec of p.sections)
       for (const sl of sec.slides)
         for (const o of sl.objects) {
-          if (o.type !== 'text') continue;
-          const found = fallbackFontScripts(o.text);
+          const text = o.type === 'text' ? o.text : extraText(o);
+          if (!text) continue;
+          const found = fallbackFontScripts(text);
           const kanaOrHangul = found.has('Hira') || found.has('Kana') || found.has('Hang');
           for (const code of found) if (code !== 'Hani' || !kanaOrHangul) scripts.add(code);
         }

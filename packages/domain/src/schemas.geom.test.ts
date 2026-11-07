@@ -113,12 +113,12 @@ describe('geometry files (ShapeGeom.ref, GeomFile; M6 round 2)', () => {
     expect(old.objects[0]).toMatchObject({ shape: 'rect' });
   });
 
-  it('a file holds 1-8 paths bounded as inline paths are', () => {
+  it('a file holds 1-64 paths (M9; schemas.m9.test.ts), each bounded as inline paths are', () => {
     expect(GeomFile.parse({ paths: [path] })).toEqual({ paths: [path] });
     expect(GeomFile.safeParse({ paths: [] }).success).toBe(false);
-    expect(GeomFile.safeParse({ paths: Array(9).fill(path) }).success).toBe(false);
+    expect(GeomFile.safeParse({ paths: Array(65).fill(path) }).success).toBe(false);
     expect(GeomFile.safeParse({ paths: [{ ...path, d: 'M'.repeat(40_001) }] }).success).toBe(false);
-    expect(GEOM_FILE_MAX_BYTES).toBeGreaterThan(8 * 40_000);
+    expect(GEOM_FILE_MAX_BYTES).toBeGreaterThan(64 * 40_000);
   });
 
   it('names a file by a SHA-256 in hex', () => {

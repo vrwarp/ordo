@@ -21,7 +21,14 @@ import {
   type TextRun,
   type TextStyle,
   cleanPathData,
+  MISSING_LIMITS,
 } from '@ordo/domain';
+import { sanitizeChart } from './sanitize/chart.ts';
+import { sanitizeDecor } from './sanitize/decor.ts';
+import { sanitizeLook3d } from './sanitize/look3d.ts';
+import { sanitizeTable } from './sanitize/table.ts';
+import { sanitizeWarp } from './sanitize/warp.ts';
+import { sanitizeCenterBlock, sanitizeWriting } from './sanitize/writing.ts';
 
 export const IMPORT_LIMITS = {
   text: 10_000,
@@ -246,21 +253,27 @@ export function sanitizeGradient(g: Gradient): Gradient | undefined {
 
 /**
  * A stored geometry within the schema's bounds (design/27 §3.1, §12): the preset name cut to 40, at most 10
- * finite adjust pairs, at most 8 paths, each re-tokenised to M L Q C Z and numbers (`cleanPathData`, at most
- * 4,096 points) and dropped when nothing is left of it, `cont` kept only when true, `ref` (a geometry file,
- * M6 round 2) kept when it is a string of 1-100 characters without control characters. Undefined when
- * neither a preset, a path nor a ref is left.
+ * finite adjust pairs (`adj` within ±1e7, M9's `adjWide` within ±21,600,000), at most 8 paths, each
+ * re-tokenised to M L Q C Z and numbers (`cleanPathData`, at most 4,096 points) and dropped when nothing is
+ * left of it, `cont` kept only when true, `ref` (a geometry file, M6 round 2) kept when it is a string of
+ * 1-100 characters without control characters. Undefined when neither a preset, a path nor a ref is left.
  */
 export function sanitizeGeom(g: ShapeGeom): ShapeGeom | undefined {
   if (!g || typeof g !== 'object') return undefined;
   const out: ShapeGeom = {};
   if (typeof g.preset === 'string' && g.preset) out.preset = clipText(g.preset, 40);
-  if (Array.isArray(g.adj)) {
-    const adj = g.adj
+  const pairs = (list: unknown, max: number) =>
+    (Array.isArray(list) ? list : [])
       .filter((p) => Array.isArray(p) && typeof p[0] === 'string' && Number.isFinite(p[1]))
       .slice(0, 10)
-      .map(([n, v]): [string, number] => [clipText(n, 16), finite(v, 0, -1e7, 1e7)]);
+      .map(([n, v]): [string, number] => [clipText(n, 16), finite(v, 0, -max, max)]);
+  if (Array.isArray(g.adj)) {
+    const adj = pairs(g.adj, 1e7);
     if (adj.length) out.adj = adj;
+  }
+  if (Array.isArray(g.adjWide)) {
+    const adjWide = pairs(g.adjWide, 21_600_000);
+    if (adjWide.length) out.adjWide = adjWide;
   }
   if (Array.isArray(g.paths)) {
     const paths: NonNullable<ShapeGeom['paths']> = [];
@@ -322,6 +335,47 @@ function sanitizeShape(o: ShapeObj): ShapeObj {
   if (o.softEdge !== undefined) out.softEdge = finite(o.softEdge, 0, 0, 500);
   if (out.lineJoin === 'miter') delete out.lineJoin;
   if (out.lineCap === 'flat') delete out.lineCap;
+  // M9: what the shape draws instead of its geometry, and its 3-D look (sanitize/*.ts).
+  keep(out, 'table', o.table, sanitizeTable);
+  keep(out, 'chart', o.chart, sanitizeChart);
+  keep(out, 'decor', o.decor, sanitizeDecor);
+  keep(out, 'look3d', o.look3d, sanitizeLook3d);
+  return out;
+}
+
+/** `out[k]` = `f(v)` when `v` is present and something is left of it, else no `k`. */
+function keep<T extends object, K extends keyof T, V>(
+  out: T,
+  k: K,
+  v: V | undefined,
+  f: (v: V) => T[K] | undefined,
+): void {
+  if (v === undefined) return;
+  const x = f(v);
+  if (x === undefined) delete out[k];
+  else out[k] = x;
+}
+
+/** A vector picture's families (`ImageObject.vectorFonts`, M9): at most 8, cleaned as run families, once each. */
+function vectorFonts(list: unknown): string[] | undefined {
+  if (!Array.isArray(list)) return undefined;
+  const budget = fontBudget();
+  const out: string[] = [];
+  for (const f of list.slice(0, 8)) {
+    const name = typeof f === 'string' ? budget.family(clipText(f, IMPORT_LIMITS.fontFamily)) : '';
+    if (name && !out.includes(name)) out.push(name);
+  }
+  return out.length ? out : undefined;
+}
+
+type TextObj = Extract<SlideObject, { type: 'text' }>;
+
+/** A text object's M9 looks (sanitize/*.ts): its warp, vertical writing, centred block and 3-D look. */
+function sanitizeTextLooks(o: TextObj, out: TextObj): TextObj {
+  keep(out, 'warp', o.warp, sanitizeWarp);
+  keep(out, 'writing', o.writing, sanitizeWriting);
+  keep(out, 'centerBlock', o.centerBlock, sanitizeCenterBlock);
+  keep(out, 'look3d', o.look3d, sanitizeLook3d);
   return out;
 }
 
@@ -433,7 +487,11 @@ function clampObject(o: SlideObject): SlideObject {
   const box = clampBox(o.box);
   const opacity = finite(o.opacity, 1, 0, 1);
   if (o.type === 'text')
-    return { ...cutText({ ...o, style: clampStyle(o.style) }, IMPORT_LIMITS.text), box, opacity };
+    return sanitizeTextLooks(o, {
+      ...cutText({ ...o, style: clampStyle(o.style) }, IMPORT_LIMITS.text),
+      box,
+      opacity,
+    });
   if (o.type === 'image') {
     const out = { ...o, box, opacity, radius: finite(o.radius, 0, 0, 1000) };
     if (o.crop && typeof o.crop === 'object') {
@@ -463,6 +521,8 @@ function clampObject(o: SlideObject): SlideObject {
       if (se > 0) out.softEdge = se;
       else delete out.softEdge;
     }
+    keep(out, 'look3d', o.look3d, sanitizeLook3d);
+    keep(out, 'vectorFonts', o.vectorFonts, vectorFonts);
     return out;
   }
   return { ...sanitizeShape(o), box, opacity, radius: finite(o.radius, 0, 0, 1000) };
@@ -554,6 +614,16 @@ function sanitizePptxSlide(sl: PptxSlide): void {
   if (x.artText) out.artText = clipText(x.artText, IMPORT_LIMITS.text);
   if (x.refMediaId) out.refMediaId = clipText(x.refMediaId, IMPORT_LIMITS.name);
   if (x.show !== undefined) out.show = x.show === 'picture' ? 'picture' : 'objects';
+  if (Array.isArray(x.missing)) {
+    // M9: what nothing draws, '<kind>' or '<kind>:<subtype>' (MISSING_KINDS), once each.
+    const missing: string[] = [];
+    for (const m of x.missing.slice(0, 4 * MISSING_LIMITS.entries)) {
+      const entry = oneLine(m, MISSING_LIMITS.chars);
+      if (entry && !missing.includes(entry)) missing.push(entry);
+      if (missing.length >= MISSING_LIMITS.entries) break;
+    }
+    if (missing.length) out.missing = missing;
+  }
   sl.pptx = out;
 }
 

@@ -352,6 +352,58 @@ type ScriptureSlideSource = { ref: ScriptureRef; text: string; fetchedAt: string
 // milestone adds a provider interface (API.Bible, ESV) in the hub that creates such presentations.
 ```
 
+<!-- m9:schema -->
+### M9 fields: what ordo draws instead of LibreOffice (design/27 M9)
+
+All optional, each with `.catch(undefined)`, so a malformed one is dropped without failing the slide, and
+every enum inside them degrades to its default. An older build strips them and draws the legacy fields the
+converter writes beside them (design/27 §3.2). No `SlideObject` member and no stored enum is added.
+
+```ts
+type ShapeObject += {
+  // What the shape draws instead of its geometry; a drawer keeps at most one, in this order, and no look3d
+  // with any of them. Legacy: table → a rect of the table's background; chart → the chart area's rect;
+  // decor → a line without a stroke (nothing).
+  table?: TableData; // origin.role 'table'
+  chart?: ChartData; // origin.role 'chart' (packages/domain/src/chart.ts)
+  decor?: DecorData; // origin.role 'decor', locked: a z-run of plain shapes as one object
+  look3d?: Look3d; // bevel, extrusion, contour, material, light, camera (names: three-names.ts)
+};
+type ImageObject += { look3d?: Look3d; vectorFonts?: string[] /* ≤ 8: the families of a vector picture */ };
+type TextObject += {
+  warp?: { preset: TextWarpPreset /* 40 names */; adj?: [string, number][] }; // WordArt
+  writing?: { upright: 'none' | 'cjk' | 'all'; reverse?: boolean }; // vertical text in a quarter-turned box
+  centerBlock?: boolean; // PowerPoint anchorCtr
+  look3d?: Look3d;
+}; // never on TextStyle: themes, bands, the stage and props never warp, stand up or turn text
+type ShapeGeom += { adjWide?: [string, number][] }; // angles past adj's ±1e7, up to ±21,600,000
+type SlidePptx += { missing?: string[] }; // '<kind>' | '<kind>:<subtype>' (MISSING_KINDS), ≤ 16 of ≤ 40
+
+type TableData = {
+  cols: number[]; rows: number[]; // widths and minimum heights, scaled to the box
+  cells: TableCell[]; // row-major, each at the next grid slot no earlier cell covers
+  base: TextStyle; // the cells' style; palettes hold only what differs from it
+  styles?: CellStyle[]; runStyles?: TableRunStyle[]; fills?: TableFill[]; lineStyles?: TableLineStyle[];
+  h?: [edge, from, to, line][]; v?: [edge, from, to, line][];
+  background?: number; rtl?: boolean; rowRule?: 'grow' | 'fixed';
+};
+type TableCell = {
+  text?: string; runs?: [start, end, runStyle][]; paras?: (TextPara | null)[];
+  style?: number; fill?: number; colSpan?: number; rowSpan?: number; diag?: { down?: number; up?: number };
+};
+type DecorData = { w: number; h: number; paints: DecorPaint[]; parts: DecorPart[]; ref?: string /* DecorFile */ };
+// Files in the content store, read like pictures: GeomFile { paths } (≤ 64 paths since M9) and
+// DecorFile { parts } (≤ 256), each ≤ GEOM_FILE_MAX_BYTES (2,600,000).
+// Media: a vector picture is kind 'image' with original.mime VECTOR_MIME ('application/vnd.ordo.vector').
+```
+
+Limits: `TABLE_LIMITS` (256 rows, 64 columns, 4,096 grid slots, 10,000 characters a cell and 60,000 a table),
+`CHART_LIMITS` (64 series of 1,024 points, 4 groups and axes, labels 255, titles 1,000), `DECOR_LIMITS`
+(64 paints, 256 parts, 16,384 points, 24 shadows). Readers (`m9-readers.ts`): `tableText`, `chartText` and
+`objectSearchText` for search and labels, `extraFontFamilies` and `extraText` for goLive's font scan,
+`drawnShapeFileRefs` for the geometry and decoration files a slide draws; `palette.ts` dedupes palettes.
+<!-- /m9:schema -->
+
 ## Live state
 
 Owned by the hub (or the operator in fallback), produced by the pure reducer in
