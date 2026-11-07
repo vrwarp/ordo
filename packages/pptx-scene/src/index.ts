@@ -35,12 +35,14 @@ import { walkSlide } from './walk.ts';
 export type { BlipReader, ColorCtx } from './color.ts';
 export type { SlideCtx, Source } from './context.ts';
 export type { DeckInfo, SlideRef } from './deck.ts';
-export type { EmitOptions, EmitResult, EmittedSlide } from './emit.ts';
+export type { EmitOptions, EmitResult, EmittedSlide, M9Field } from './emit.ts';
 export {
+  ALL_M9_FIELDS,
   BAKE_PREFIX,
   CLIP_PREFIX,
   GEOM_FILE_CHARS,
   GEOM_PREFIX,
+  M9_FIELDS,
   MEDIA_PREFIX,
   SLIDE_BYTES_NOTE,
   storedSlideBytes,
@@ -49,14 +51,27 @@ export type { BakeRaster, PictureBake, TileBake } from './bake.ts';
 export type { EmittedClip } from './media.ts';
 export { type PictureHeader, pictureSize } from './picture.ts';
 export * from './ir.ts';
-export type { Log } from './log.ts';
+export { addNote, type Log, SLIDE_NOTES } from './log.ts';
 export {
+  advanceOf,
+  type BodyMeasure,
+  ESTIMATED_ADVANCE,
   type FaceMetrics,
   type FaceSource,
+  type FaceStyle,
+  heightOf,
   metricsOfTables,
   type SfntTables,
   sfntMetrics,
 } from './metrics.ts';
+export {
+  type Decision,
+  decisionOf,
+  missingKindOf,
+  RESIDUAL_ROWS,
+  type ResidualRow,
+  rowOf,
+} from './residual.ts';
 export type { Package, PartSource, Rel } from './opc.ts';
 export type { Theme } from './theme.ts';
 
@@ -96,25 +111,44 @@ export interface ParseOptions {
 
 /** Families, weights and slants `ParseOptions.fontFace` is asked for per call (a deck can name thousands). */
 export const MAX_FACE_LOOKUPS = 256;
+/** Scripts `FaceSource.script` is asked for per call (M9; ISO 15924 codes, at most a few dozen exist in decks). */
+export const MAX_SCRIPT_LOOKUPS = 64;
 
-/** `ParseOptions.fontFace` asked once per family, weight and slant (case-insensitive), its answer checked. */
-function faceSources(get: FaceSource | undefined): FaceSource | undefined {
+/**
+ * `ParseOptions.fontFace` asked once per family, weight and slant (case-insensitive), and once per script
+ * when it answers `script` (M9), each answer checked. Exported for its tests.
+ */
+export function faceSources(get: FaceSource | undefined): FaceSource | undefined {
   if (!get) return undefined;
+  const checked = (ask: () => FaceMetrics | undefined): FaceMetrics | undefined => {
+    try {
+      const got = ask();
+      return got && typeof got.advance === 'function' ? got : undefined;
+    } catch {
+      return undefined; // a face the caller cannot read is missing
+    }
+  };
   const known = new Map<string, FaceMetrics | undefined>();
-  return (family, bold, italic) => {
+  const out: FaceSource = (family, bold, italic) => {
     const key = `${family.trim().toLowerCase()}|${bold ? 1 : 0}|${italic ? 1 : 0}`;
     if (known.has(key)) return known.get(key);
     if (known.size >= MAX_FACE_LOOKUPS) return undefined;
-    let v: FaceMetrics | undefined;
-    try {
-      const got = get(family, bold, italic);
-      v = got && typeof got.advance === 'function' ? got : undefined;
-    } catch {
-      v = undefined; // a face the caller cannot read is missing
-    }
+    const v = checked(() => get(family, bold, italic));
     known.set(key, v);
     return v;
   };
+  const script = get.script;
+  if (typeof script === 'function') {
+    const scripts = new Map<string, FaceMetrics | undefined>();
+    out.script = (code) => {
+      if (scripts.has(code)) return scripts.get(code);
+      if (scripts.size >= MAX_SCRIPT_LOOKUPS) return undefined;
+      const v = checked(() => script.call(get, code));
+      scripts.set(code, v);
+      return v;
+    };
+  }
+  return out;
 }
 
 /** `ParseOptions.mediaKind` asked once per part, its answer checked. */

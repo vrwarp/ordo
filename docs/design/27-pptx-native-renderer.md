@@ -661,6 +661,43 @@ As built in M3 (`packages/domain/src/size.ts`):
 - **Approx** (drawn natively, logged): reflection, inner shadow, soft edge on pictures before M8, kerning differences, unknown transitions.
 - Everything else is native.
 
+<!-- m9:conv-seams -->
+*As built (M9 wave 1, track `conv-seams`):*
+- **One decision table** (`pptx-scene` `residual.ts`, `RESIDUAL_ROWS`): a row per reason the classifier and
+  the readers write (`ElementBase.reasons`, the census's `art:<reason>`), with its decision (`native`,
+  `approx`, `residual`, or `unread`: not in the IR, such as ink), the census features it is a case of, who
+  rates it (the classifier from the XML, a reader's own verdict, a slide budget) and, for a residual one, the
+  kind a hub without LibreOffice records (`MISSING_KINDS`: `chart`, `smartart`, `ole`, `metafile`, `math`,
+  `ink`, `decoration`, else `element`). `classify.ts` rates elements through it (`decisionOf`); every
+  `FALLBACK_FEATURES` entry has a row, and the census features and tiers do not change with a decision. The
+  M9 areas change their own rows.
+- **Real 3-D is approx, never residual**: a bevel with a size or an extrusion is `3d`, or `3d:camera` when
+  its `a:scene3d` camera turns the face (a preset other than `orthographicFront`, `perspectiveFront`,
+  `legacyObliqueFront`, `legacyPerspectiveFront`, or a rotation with a latitude or longitude). It is drawn
+  flat, as version 1 already drew it and as LibreOffice's art shows 63 of the 68 `art:3d` slides, with the
+  note "3-D is drawn flat (an approximation)". A SmartArt drawing with bevels (3-D quick styles) is therefore
+  native rather than sent whole to the art. Only on a slide past the 150-object budget does real 3-D still go
+  to the art first (`budget:3d`, reason `art:budget:3d`), drawn flat in version 1 until the art replaces it,
+  as all real 3-D did before: the budget's other steps then choose as they did (where 3-D shapes go past the
+  budget once decorations hold its shapes is `decor-conv`'s, M9 decision 6).
+- **Measured** (`scratchpad/m9/w1/conv-seams/`). Census over E: `art:3d` on 74 slides → 0. 59 worship slides
+  and the sermon 3-D slide go hybrid → native (worship native 2,620 → 2,679 of 2,820, 95.00 %; sermons 73 of
+  73); 3 hybrid slides keep their other residual (OLE, vertical text, a warp); the 11 picture slides with
+  3-D stay pictures for their budgets alone (10 + 1 `budget:pictures`; 1 over 64 KB as stored, `art:budget:3d`
+  in place of `art:3d`). No slide's class got worse; no slide's objects changed (the 63 that were hybrid
+  store one note more). The harness (`--lo-compat --before hub`) draws all 74 slides exactly as before:
+  their score equals the before-harness one on every slide (mean 0.8719 hybrid, 0.9311 picture). Their
+  before-hub score, LibreOffice's own pixels pasted in the art box, stays higher (0.9556 on the 60 now
+  native; 39 of them more than 0.02 above): the 3-D look of `three-rim` and `three-turned` is what closes it.
+- **Without LibreOffice** (`EmitOptions.libreoffice: false`, `hybrid.ts` `withoutLibreOffice`): neither the
+  art nor the metafile conversion is planned (`EmittedSlide.art` and `.metafiles` absent, so nothing is
+  pending). Version 1's objects stay as they are, and what nothing draws is listed by kind
+  (`EmittedSlide.missing`: each residual element of the art range, `smartart` for a SmartArt drawing's, and
+  `metafile` for pictures waiting for conversion); the slide is class hybrid (decision 8) with a reason
+  `missing:<kind>` per kind after its own, `EmittedSlide.artText` keeps the art's text, and one note says
+  what is not drawn. A picture-class slide is left to the budget ladder (`ladder`).
+<!-- /m9:conv-seams -->
+
 **Slide class.**
 - **native:** no residual element, ≤ 150 objects, ≤ 12 distinct pictures, ≤ 64 KB of JSON, every path ≤ 4,096 points.
 - **hybrid:** let Rmin and Rmax be the z positions of the lowest and the highest residual element. The **art range** is [Rmin, Rmax].
@@ -1922,9 +1959,15 @@ _As built (M6 wave 2, item D: SmartArt and baked pictures; `pptx-scene` `smartar
   2,000,000 elements of drawings are read (a shared drawing named from every slide), the rest left residual.
   <!-- m9:base -->
   A drawing whose `dsp:spTree` holds no `dsp:sp` at any depth is no drawing (M9 base). PowerPoint writes
-  such empty caches, and LibreOffice skips them and lays the diagram out itself. ordo used to class those
+  such empty caches. LibreOffice counts top-level `dsp:sp` only (`DiagramShapeCounter`) and lays a diagram
+  without them out itself; ordo also accepts grouped ones, as PowerPoint draws them. ordo used to class those
   frames native and draw nothing. They are residual now: 3 slides of shard 0 go native → hybrid.
   <!-- /m9:base -->
+  <!-- m9:conv-seams -->
+  An empty cache whose data model holds no text (`a:t` with visible characters) and no picture (`a:blip`) is
+  native and blank (M9 wave 1, base review): PowerPoint and LibreOffice draw nothing for it either, so the
+  slide is not sent to the art for nothing. No slide of E has one.
+  <!-- /m9:conv-seams -->
 - Recolour and tile bakes as §4 says; `pptx-bake` decodes nothing itself (ffmpeg does, at the bake's size)
   and is bounded at 8,192 px a side and 16 MP in and out, 60 s, and the import's decode budget. No schema
   field is added: a baked picture is an ordinary media item, so an older build draws it too.
@@ -2114,6 +2157,37 @@ LibreOffice becomes optional at run time. Every element that M3 to M6 leave resi
 - ≥ 99% of shown worship slides are native; the rest are hybrid with a reason, and none is a picture slide.
 - Every slide that was hybrid or picture before M9 is at least as faithful to LibreOffice (SSIM) as before.
 - The whole worship validation set imports with `soffice` absent.
+
+<!-- m9:conv-seams -->
+*Built for M9 (wave 1, track `conv-seams`): the converter's seams, so that each later area owns its files.*
+- **The emitter in parts.** `emit.ts` (the slide, backgrounds, shapes, pictures, origin, lyric box),
+  `emit-ctx.ts` (`EmitCtx`, the M9 field gate, box and colour helpers), `emit-text.ts` (text bodies),
+  `emit-budget.ts` (`storedSlideBytes`, `fitBytes`, the text budget `chargeText`) and `emit-table.ts`, moved
+  verbatim (the strict goldens, the census and the fidelity of E are unchanged by the move). `emit.ts`
+  re-exports every name it exported before.
+- **Dispatch stubs**, each in the file of the area that fills it, each writing nothing yet:
+  `emit-table.ts` `emitTableObject`, `chart.ts` `readChart` and `emitChart`, `decor.ts` `emitDecor` (runs of
+  `ElementBase.decor`), `three3d.ts` `read3d` and `look3dOf`, `emit-text.ts` `warpOf` and `writingOf`, and
+  `ole.ts` `readOle`; `walk.ts` asks `readChart` and `readOle` before a frame is left residual and `read3d`
+  for every shape and picture.
+- **Every M9 IR type** (`ir.ts`): `Look3dIR` on shapes, pictures and text bodies; `TextBody.warp` as
+  `{ preset, adj }` (was the preset's name), `writing`, `rot`, `upright`; `ChartElement` in `Element` (one
+  object in `slideCost`); `PictureFill.metafile`; `ElementBase.culled` and `.decor`; the table extras (`rtl`,
+  `storedRows`, a cell's `vert` and diagonals).
+- **The field gate.** `EmitOptions.m9Writes` (`M9_FIELDS`: table, chart, decor, look3d, warp, writing,
+  centerBlock, vectorFonts, adjWide, geomFile64; default every one) is consulted by each stub: without a
+  field the converter writes what an older build draws for it (§3.2). The hub passes `M9_WRITES`
+  (`apps/hub/src/pptx/shared.ts`, every field, decisions.md 1) from `sceneTask.ts`, and `CONVERTER_VERSION`
+  is 2.
+- **Notes.** `log.ts` `addNote` keeps a slide's stored notes within `Slide.pptx.notes`' 16: 15 and
+  'and N more'.
+- **Text measured on the hub.** The sfnt reader and cmap are `@ordo/renderer/text/sfnt/{reader,cmap}.ts`
+  (decision 12), which `metrics.ts` re-exports (the same functions, so `FaceMetrics` are byte-identical);
+  `FaceSource.script(code)` (a script's fallback face, asked once per script), `advanceOf` (a line's advance
+  in em through the family and its fallbacks, kerned, 0.55 em per character no face has) and `heightOf`
+  (paragraphs' height at a size through `tables.ts` `Measure`) are the measurement seams of tables, warps
+  and SmartArt.
+<!-- /m9:conv-seams -->
 
 **Parallel.**
 - ∥ 3D and shear;

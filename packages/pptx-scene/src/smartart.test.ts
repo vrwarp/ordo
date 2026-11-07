@@ -5,6 +5,7 @@ import { buildRenderCopy } from './rendercopy.ts';
 import type { ShapeElement } from './ir.ts';
 import {
   colorsXml,
+  dataModelXml,
   drawingXml,
   dspSp,
   smartArtFrame,
@@ -41,6 +42,27 @@ const TWO_NODES = drawingXml(
     tx: { x: IN / 2, y: IN / 2, cx: 3 * IN, cy: IN },
   }) + dspSp({ x: 5 * IN, y: IN, cx: 2 * IN, cy: 2 * IN, geom: 'ellipse', fill: solid('00FF00') }),
 );
+
+/** Data model points: a node with text, one with a picture fill, one with only spaces. */
+const NODE_TEXT =
+  '<dgm:pt modelId="{1}"><dgm:prSet/><dgm:spPr/><dgm:t><a:bodyPr/><a:p><a:r><a:t>Grace</a:t></a:r></a:p></dgm:t></dgm:pt>';
+const NODE_PICTURE =
+  '<dgm:pt modelId="{1}"><dgm:prSet/><dgm:spPr><a:blipFill><a:blip r:embed="rIdImg"/></a:blipFill></dgm:spPr><dgm:t><a:bodyPr/><a:p/></dgm:t></dgm:pt>';
+const NODE_SPACES =
+  '<dgm:pt modelId="{1}"><dgm:prSet/><dgm:spPr/><dgm:t><a:bodyPr/><a:p><a:r><a:t>  </a:t></a:r></a:p></dgm:t></dgm:pt>';
+
+/** The deck's SmartArt 1 with its data model holding `points` after the doc point (the drawing kept). */
+function withPoints(parts: ReturnType<typeof buildDeck>, points: string) {
+  return withPart(
+    parts,
+    'ppt/diagrams/data1.xml',
+    dataModelXml('rIdDrawing1', points),
+    'application/vnd.openxmlformats-officedocument.drawingml.diagramData+xml',
+  );
+}
+
+/** A drawing shape that is residual: its text is vertical (`residual.ts`; 3-D is approx since M9). */
+const VERTICAL = { paras: para(run('Rise')), bodyPr: 'vert="vert270"' };
 
 function deckWith(
   drawing: string | undefined,
@@ -156,7 +178,7 @@ describe('SmartArt from its drawing cache (M6)', () => {
         '<dsp:grpSp><dsp:nvGrpSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/></dsp:grpSp>',
       ),
     ]) {
-      const scene = parseDeck(deckWith(empty));
+      const scene = parseDeck(withPoints(deckWith(empty), NODE_TEXT));
       const s = scene.slides[0]!;
       expect(s.elements).toHaveLength(1);
       expect(s.elements[0]).toMatchObject({ kind: 'residual', what: 'smartart', support: 'residual' });
@@ -174,6 +196,24 @@ describe('SmartArt from its drawing cache (M6)', () => {
     const g = parseDeck(deckWith(grouped)).slides[0]!;
     expect(g.classification.class).toBe('native');
     expect(g.elements.some((e) => e.kind === 'shape' && e.diagram !== undefined)).toBe(true);
+  });
+
+  it('an empty cache whose data model holds no text and no picture is native and blank', () => {
+    // M9 (base review): PowerPoint and LibreOffice draw nothing for it, so neither does ordo, and the slide
+    // is not sent to the art for nothing.
+    const scene = parseDeck(deckWith(drawingXml('')));
+    const s = scene.slides[0]!;
+    expect(s.elements).toEqual([]);
+    expect(s.classification.class).toBe('native');
+    expect(s.notes.join(' ')).toMatch(/SmartArt graphic holds no shapes, text or pictures/);
+    expect(emitSlides(scene).slides[0]!.art).toBeUndefined();
+    // A picture in the data model (a node's picture fill) is something to draw: residual.
+    const pictured = parseDeck(withPoints(deckWith(drawingXml('')), NODE_PICTURE)).slides[0]!;
+    expect(pictured.elements[0]).toMatchObject({ kind: 'residual', what: 'smartart' });
+    expect(pictured.classification.class).toBe('hybrid');
+    // Whitespace is no text.
+    const blank = parseDeck(withPoints(deckWith(drawingXml('')), NODE_SPACES)).slides[0]!;
+    expect(blank.classification.class).toBe('native');
   });
 
   it('turns the text with the shape plus its own rotation, and keeps the shadow of a shape showing nothing', () => {
@@ -233,9 +273,9 @@ describe('SmartArt from its drawing cache (M6)', () => {
   });
 
   it('goes to the art whole when one of its shapes is residual, named once for the render copy', () => {
-    const bevel = '<a:sp3d><a:bevelT w="63500" h="25400"/></a:sp3d>';
+    // A shape with vertical text is residual (3-D, since M9, is approx: drawn flat).
     const drawing = drawingXml(
-      dspSp({ x: 0, y: 0, cx: 2 * IN, cy: 2 * IN, extra: bevel }) +
+      dspSp({ x: 0, y: 0, cx: 2 * IN, cy: 2 * IN, ...VERTICAL }) +
         dspSp({ x: 3 * IN, y: 0, cx: 2 * IN, cy: 2 * IN, paras: para(run('Love')) }),
     );
     // A slide shape sharing the frame's id comes after it: the render copy must still find it.
@@ -245,17 +285,17 @@ describe('SmartArt from its drawing cache (M6)', () => {
     expect(s.classification.class).toBe('hybrid');
     expect(s.classification.reasons).toContain('art:smartart');
     expect(s.art?.elements).toEqual([{ from: 'slide', shapeId: 7, nth: 0 }]);
-    expect(s.art?.text).toBe('Love');
+    expect(s.art?.text).toBe('Rise\nLove');
     // Version 1 draws it natively until the art replaces every one of its objects.
     const ids = s.slide.objects.filter((o) => o.origin?.role === 'diagram').map((o) => o.id);
-    expect(ids.length).toBe(3);
+    expect(ids.length).toBe(4);
     expect(s.art?.replaces).toEqual(ids);
   });
 
   it('prints the whole frame with its diagram parts in the render copy when it is in the art', () => {
-    const bevel = '<a:sp3d><a:bevelT w="63500" h="25400"/></a:sp3d>';
+    // A shape with vertical text is residual (3-D, since M9, is approx: drawn flat).
     const drawing = drawingXml(
-      dspSp({ x: 0, y: 0, cx: 2 * IN, cy: 2 * IN, extra: bevel }) +
+      dspSp({ x: 0, y: 0, cx: 2 * IN, cy: 2 * IN, ...VERTICAL }) +
         dspSp({ x: 3 * IN, y: 0, cx: 2 * IN, cy: 2 * IN, paras: para(run('Love')) }),
     );
     const parts = deckWith(drawing, sp({ id: 3, x: 0, y: 6 * IN, cx: IN, cy: IN, fill: solid('0000FF') }));
@@ -384,8 +424,7 @@ describe('SmartArt from its drawing cache (M6)', () => {
   });
 
   it("keeps a layout's drawing and a slide's apart on every slide that shows both", () => {
-    const bevel = '<a:sp3d><a:bevelT w="63500" h="25400"/></a:sp3d>';
-    const residualDrawing = drawingXml(dspSp({ x: 0, y: 0, cx: IN, cy: IN, extra: bevel }));
+    const residualDrawing = drawingXml(dspSp({ x: 0, y: 0, cx: IN, cy: IN, ...VERTICAL }));
     const slide = { rels: smartArtRels(2), shapes: smartArtFrame({ ...FRAME, id: 9, dmId: 'rIdDm2' }) };
     const parts = buildDeck({
       slides: [slide, slide],

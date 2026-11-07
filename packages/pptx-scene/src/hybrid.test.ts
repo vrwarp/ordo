@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { elementRefs } from './hybrid.ts';
+import { drawingXml, dspSp, smartArtFrame, smartArtRels, withSmartArt } from './smartart.test-util.ts';
 import { convertDeck } from './index.ts';
 import type { Element } from './ir.ts';
 import {
@@ -8,7 +9,9 @@ import {
   CHART_CONTENT_TYPE,
   chartFrame,
   chartXml,
+  imageRel,
   para,
+  pic,
   run,
   solid,
   sp,
@@ -113,5 +116,87 @@ describe('hybrid art (EmittedSlide.art)', () => {
       { from: 'layout', shapeId: 4, nth: 0 },
       { from: 'master', shapeId: 4, nth: 0 },
     ]);
+  });
+});
+
+describe('without LibreOffice (EmitOptions.libreoffice: false, M9)', () => {
+  it('libreoffice:false leaves the art out, lists missing kinds, class hybrid with reason missing:<kind>, artText kept', () => {
+    const withLo = convertDeck(deck()).slides[0]!;
+    const out = convertDeck(deck(), { libreoffice: false });
+    const s = out.slides[0]!;
+    // No art is planned: nothing would draw it.
+    expect(s.art).toBeUndefined();
+    // The chart and the table (one ordo cannot read) are what nothing draws.
+    expect(s.missing).toEqual(['chart', 'element']);
+    expect(s.classification.class).toBe('hybrid');
+    expect(s.classification.reasons).toEqual([
+      ...withLo.classification.reasons,
+      'missing:chart',
+      'missing:element',
+    ]);
+    // The art's text stays for search; version 1's objects are those a hub with LibreOffice writes.
+    expect(s.artText).toBe('Total');
+    expect(s.slide.objects).toEqual(withLo.slide.objects);
+    expect(s.digest).toBe(withLo.digest);
+    expect(s.notes.some((n) => n === 'not drawn without LibreOffice: a chart, an element')).toBe(true);
+    // With LibreOffice (the default) nothing of this is written.
+    expect(withLo.art).toBeDefined();
+    expect(withLo.missing).toBeUndefined();
+    expect(withLo.artText).toBeUndefined();
+  });
+
+  it('lists metafile pictures as missing instead of setting them aside, and a slide with nothing missing is unchanged', () => {
+    const parts = buildDeck({
+      slides: [
+        {
+          rels: [imageRel('rId2', 'logo.emf')],
+          shapes:
+            sp({ id: 2, x: 0, y: 0, cx: 4 * EMU, cy: EMU, txBody: body(para(run('Welcome'))) }) +
+            pic({ id: 3, x: 0, y: 2 * EMU, cx: 2 * EMU, cy: 2 * EMU, rId: 'rId2' }),
+        },
+        { shapes: sp({ id: 2, x: 0, y: 0, cx: EMU, cy: EMU, fill: solid('00FF00') }) },
+      ],
+    });
+    withPart(parts, 'ppt/media/logo.emf', new Uint8Array([1, 0, 0, 0]));
+    const withLo = convertDeck(parts).slides;
+    expect(withLo[0]!.metafiles).toHaveLength(1);
+    expect(withLo[0]!.classification.class).toBe('native');
+    const [s, plain] = convertDeck(parts, { libreoffice: false }).slides;
+    expect(s!.metafiles).toBeUndefined();
+    expect(s!.missing).toEqual(['metafile']);
+    expect(s!.classification).toMatchObject({ class: 'hybrid' });
+    expect(s!.classification.reasons.at(-1)).toBe('missing:metafile');
+    expect(s!.artText).toBeUndefined();
+    expect(plain!.missing).toBeUndefined();
+    expect(plain!.classification).toEqual(withLo[1]!.classification);
+  });
+
+  it('names the elements of a SmartArt drawing in the art smartart', () => {
+    const drawing = drawingXml(
+      dspSp({ x: 0, y: 0, cx: 2 * EMU, cy: 2 * EMU, paras: para(run('Rise')), bodyPr: 'vert="vert270"' }) +
+        dspSp({ x: 3 * EMU, y: 0, cx: 2 * EMU, cy: 2 * EMU, paras: para(run('Shine')) }),
+    );
+    const parts = buildDeck({
+      slides: [
+        {
+          rels: smartArtRels(1),
+          shapes: smartArtFrame({ id: 7, x: EMU, y: EMU, cx: 8 * EMU, cy: 4 * EMU, dmId: 'rIdDm1' }),
+        },
+      ],
+    });
+    withSmartArt(parts, 1, drawing);
+    const s = convertDeck(parts, { libreoffice: false }).slides[0]!;
+    expect(s.missing).toEqual(['smartart']);
+    expect(s.classification.reasons).toContain('missing:smartart');
+    expect(s.artText).toBe('Rise\nShine');
+  });
+
+  it('leaves picture slides to the budget', () => {
+    let shapes = '';
+    for (let i = 0; i < 160; i++)
+      shapes += sp({ id: i + 2, x: 0, y: 0, cx: EMU, cy: EMU, txBody: body(para(run(`t${i}`))) });
+    const big = convertDeck(buildDeck({ slides: [{ shapes }] }), { libreoffice: false }).slides[0]!;
+    expect(big.classification.class).toBe('picture');
+    expect(big.missing).toBeUndefined();
   });
 });

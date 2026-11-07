@@ -16,10 +16,16 @@
  * - `text`: the text of the text bodies inside the art, a table's cells included (`Slide.pptx.artText`,
  *   search and labels only).
  *
+ * **Without LibreOffice** (M9, `EmitOptions.libreoffice: false`, `withoutLibreOffice`): nothing draws the art,
+ * so it is not planned. The slide keeps version 1's objects, and its residual elements are listed by kind
+ * (`EmittedSlide.missing`); the slide is hybrid with a `missing:<kind>` reason, its art text kept.
+ *
  * Pure: indexes and ids only.
  */
 import type { SlideObject } from '@ordo/domain';
-import type { ArtInfo, Element, ElementRef, Frame, SlideScene, TextBody } from './ir.ts';
+import { MISSING_LIMITS, type MissingKind, missingEntry, missingLabel } from '@ordo/domain/missing.ts';
+import type { ArtInfo, Classification, Element, ElementRef, Frame, SlideScene, TextBody } from './ir.ts';
+import { missingKindOf } from './residual.ts';
 
 /** Longest art text kept (`@ordo/domain` MAX.text). */
 const MAX_ART_TEXT = 20_000;
@@ -120,5 +126,52 @@ export function artInfo(
     replaces,
     text: texts.join('\n').slice(0, MAX_ART_TEXT),
     ...(before !== undefined ? { before } : {}),
+  };
+}
+
+/**
+ * A slide as a hub without LibreOffice stores it (`EmitOptions.libreoffice: false`; design/27 §15 M9,
+ * decision 8): nothing draws its art or converts its metafile pictures, so neither is planned (the caller
+ * drops `art` and `metafiles`). Version 1's objects stay as they are: the native objects of the art range
+ * and the stand-ins version 1 draws for residual text (a warp as plain text, vertical text in its turned
+ * box). What the art or the conversion would have drawn is listed by kind (`@ordo/domain` `missingEntry`):
+ * - each residual element of the art range: 'smartart' for an element of a SmartArt drawing, else the kind
+ *   of its first reason the decision table names (`residual.ts` `missingKindOf`: 'chart', 'ole', 'math',
+ *   'decoration' …, 'element' for the rest);
+ * - 'metafile' when `metafiles` pictures waited for conversion.
+ * The slide is then class hybrid (no art object), with a reason `missing:<kind>` per kind after its own, and
+ * `artText` keeps the art's text for search; one note says what is not drawn. Undefined when nothing is
+ * missing, and for a picture-class slide (the budget ladder's, M9 `ladder`).
+ */
+export function withoutLibreOffice(
+  s: SlideScene,
+  classification: Classification,
+  art: ArtInfo | undefined,
+  metafiles: number,
+  log: (msg: string) => void,
+): { classification: Classification; missing: string[]; artText?: string } | undefined {
+  if (classification.class === 'picture' || s.error) return undefined;
+  const kinds: MissingKind[] = [];
+  const add = (k: MissingKind) => {
+    if (!kinds.includes(k) && kinds.length < MISSING_LIMITS.entries) kinds.push(k);
+  };
+  for (const i of s.classification.art?.elements ?? []) {
+    const e = s.elements[i];
+    if (e?.support !== 'residual') continue;
+    add(e.diagram !== undefined ? 'smartart' : missingKindOf(e.reasons));
+  }
+  if (metafiles > 0) add('metafile');
+  if (!kinds.length) return undefined;
+  const missing = kinds.map((k) => missingEntry(k));
+  const why = missing.map((m) => `missing:${m}`).sort();
+  log(`not drawn without LibreOffice: ${kinds.map(missingLabel).join(', ')}`);
+  return {
+    classification: {
+      ...classification,
+      class: 'hybrid',
+      reasons: [...classification.reasons.filter((r) => !why.includes(r)), ...why],
+    },
+    missing,
+    ...(art?.text ? { artText: art.text } : {}),
   };
 }

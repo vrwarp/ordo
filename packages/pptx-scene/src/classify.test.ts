@@ -11,8 +11,9 @@ import {
   tierOf,
 } from './classify.ts';
 import { frameOf } from './frame.ts';
-import { parseDeck } from './index.ts';
+import { emitSlides, parseDeck } from './index.ts';
 import type { Affine, Element, ShapeElement, SlideScene } from './ir.ts';
+import { drawingXml, dspSp, smartArtFrame, smartArtRels, withSmartArt } from './smartart.test-util.ts';
 import {
   body,
   buildDeck,
@@ -327,7 +328,7 @@ describe('element support (design/27 §5)', () => {
     ).toEqual([['approx', ['preset:noSuchShape']]]);
   });
 
-  it('makes charts, tables, SmartArt, OLE, maths, real 3D, warps and vertical or column text residual', () => {
+  it('makes charts, tables, SmartArt, OLE, maths, warps and vertical or column text residual', () => {
     expect(support(frame(2, CHART) + frame(3, TABLE) + frame(4, DIAGRAM) + frame(5, OLE))).toEqual([
       ['residual', ['chart']],
       ['residual', ['table']],
@@ -347,17 +348,107 @@ describe('element support (design/27 §5)', () => {
     expect(support(textBox(2, para(run('x') + '<a14:m><m:oMathPara/></a14:m>')))).toEqual([
       ['residual', ['math']],
     ]);
+    // Vertical text matters only where there is text.
+    expect(support(textBox(2, '<a:p/>', 'vert="vert"'))).toEqual([['native', []]]);
+  });
+
+  it('real 3-D is approx, never residual', () => {
+    // M9 (`residual.ts`): drawn flat, as LibreOffice's art draws most of it; `3d:camera` when the camera
+    // turns the face.
     expect(support(box(2, 0, 0, '<a:sp3d><a:bevelT w="38100" h="38100"/></a:sp3d>'))).toEqual([
-      ['residual', ['3d']],
+      ['approx', ['3d']],
     ]);
-    expect(support(box(2, 0, 0, '<a:sp3d extrusionH="76200"/>'))).toEqual([['residual', ['3d']]]);
+    expect(support(box(2, 0, 0, '<a:sp3d extrusionH="76200"/>'))).toEqual([['approx', ['3d']]]);
+    const turned = (camera: string) =>
+      support(
+        box(
+          2,
+          0,
+          0,
+          `<a:scene3d>${camera}<a:lightRig rig="threePt" dir="t"/></a:scene3d><a:sp3d extrusionH="76200"/>`,
+        ),
+      );
+    expect(turned('<a:camera prst="perspectiveRelaxedModerately"/>')).toEqual([['approx', ['3d:camera']]]);
+    expect(
+      turned('<a:camera prst="orthographicFront"><a:rot lat="1200000" lon="0" rev="0"/></a:camera>'),
+    ).toEqual([['approx', ['3d:camera']]]);
+    // A front camera, turned in the plane only, is the face seen straight on.
+    expect(
+      turned('<a:camera prst="orthographicFront"><a:rot lat="0" lon="0" rev="5400000"/></a:camera>'),
+    ).toEqual([['approx', ['3d']]]);
+    expect(turned('<a:camera prst="perspectiveFront"/>')).toEqual([['approx', ['3d']]]);
+    // Text 3-D (in the body) and a picture's 3-D are approx too.
+    expect(
+      support(
+        textBoxWith(
+          2,
+          '<a:scene3d><a:camera prst="orthographicFront"/><a:lightRig rig="threePt" dir="t"/></a:scene3d><a:sp3d><a:bevelT/></a:sp3d>',
+        ),
+      ),
+    ).toEqual([['approx', ['3d']]]);
     // A no-op scene3d/sp3d, or a flat bevel, is ignored.
     expect(
       support(box(2, 0, 0, '<a:scene3d><a:camera prst="orthographicFront"/></a:scene3d><a:sp3d/>')),
     ).toEqual([['native', []]]);
     expect(support(box(2, 0, 0, '<a:sp3d><a:bevelT w="0" h="0"/></a:sp3d>'))).toEqual([['native', []]]);
-    // Vertical text matters only where there is text.
-    expect(support(textBox(2, '<a:p/>', 'vert="vert"'))).toEqual([['native', []]]);
+    // The slide stays native, with one note; the census feature (and so the tier) is unchanged.
+    const s = slideOf(
+      box(2, 0, 0, '<a:sp3d><a:bevelT/></a:sp3d>') + box(3, 2, 0, '<a:sp3d extrusionH="1"/>'),
+    );
+    expect(s.classification).toEqual({ tier: 'fallback', class: 'native', reasons: ['3d'] });
+    expect(s.notes.filter((n) => n.startsWith('3-D is drawn flat'))).toHaveLength(1);
+    expect(s.classification.art).toBeUndefined();
+  });
+
+  it('real 3-D on a slide past the object budget goes to the art first, drawn flat until then', () => {
+    // As every real 3-D did before M9, so the budget's other steps choose as they did (`budget:3d`).
+    let shapes = '';
+    for (let i = 0; i < MAX_SLIDE_OBJECTS + 10; i++)
+      shapes += box(
+        i + 2,
+        (i % 12) * 0.5,
+        Math.floor(i / 12) * 0.5,
+        i < 20 ? '<a:sp3d><a:bevelT/></a:sp3d>' : '',
+      );
+    const s = slideOf(shapes);
+    const three = s.elements.filter((e) => e.reasons?.includes('3d'));
+    expect(three).toHaveLength(20);
+    expect(three.every((e) => e.support === 'residual' && e.reasons!.includes('budget:3d'))).toBe(true);
+    expect(s.classification.reasons).toContain('art:budget:3d');
+    expect(s.classification.reasons).not.toContain('art:3d');
+    expect(s.notes.some((n) => n.includes('3-D shape(s) on a slide past its object budget'))).toBe(true);
+    // Version 1 draws them (flat), as it drew every residual shape.
+    const out = emitSlides(parseDeck(buildDeck({ slides: [{ shapes }] }))).slides[0]!;
+    expect(out.slide.objects.length).toBeGreaterThan(MAX_SLIDE_OBJECTS);
+  });
+
+  it('a bevelled SmartArt drawing is native', () => {
+    // A 3-D quick style writes real bevels into the drawing cache's shapes (`smartart.md` §3.8); M6 sent such
+    // a drawing to the art whole. Since M9 its shapes are approx, drawn flat, and the drawing is native.
+    const bevel = '<a:sp3d><a:bevelT w="63500" h="25400"/></a:sp3d>';
+    const drawing = drawingXml(
+      dspSp({ x: 0, y: 0, cx: 2 * IN, cy: 2 * IN, extra: bevel }) +
+        dspSp({ x: 3 * IN, y: 0, cx: 2 * IN, cy: 2 * IN, extra: bevel, paras: para(run('Hope')) }),
+    );
+    const parts = buildDeck({
+      slides: [
+        {
+          rels: smartArtRels(1),
+          shapes: smartArtFrame({ id: 7, x: IN, y: IN, cx: 8 * IN, cy: 4 * IN, dmId: 'rIdDm1' }),
+        },
+      ],
+    });
+    withSmartArt(parts, 1, drawing);
+    const scene = parseDeck(parts);
+    const s = scene.slides[0]!;
+    expect(s.elements.length).toBe(2);
+    expect(s.elements.every((e) => e.diagram === 1 && e.support === 'approx')).toBe(true);
+    expect(s.elements.filter((e) => e.reasons?.includes('3d'))).toHaveLength(2);
+    expect(s.classification.class).toBe('native');
+    expect(s.classification.art).toBeUndefined();
+    const out = emitSlides(scene).slides[0]!;
+    expect(out.art).toBeUndefined();
+    expect(out.slide.objects.filter((o) => o.origin?.role === 'diagram')).toHaveLength(3);
   });
 
   it('inherits vertical text from the layout placeholder', () => {

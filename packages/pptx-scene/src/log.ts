@@ -38,3 +38,44 @@ export function noteList(max = MAX_NOTES): { notes: string[]; log: Log } {
   };
   return { notes, log };
 }
+
+/**
+ * The provenance notes a slide stores (`Slide.pptx.notes`, the schema's `max(16)`, each at most 200
+ * characters): every writer of a slide's notes adds through `addNote`, so the list stays within the schema
+ * and says how much it left out instead of losing notes at the end (design/27 M9: six areas add notes).
+ * Notes left out are not remembered (the list stays bounded), so one given twice after the overflow counts
+ * twice.
+ */
+export const SLIDE_NOTES = 16;
+export const SLIDE_NOTE_CHARS = 200;
+
+/** How many notes a list's last entry stands for, once it overflowed (`addNote`). */
+const overflow = new WeakMap<string[], number>();
+const MORE = /^and (\d{1,9}) more$/;
+
+/**
+ * Add a note to a slide's stored notes (`list`, changed in place): cleaned and cut to `SLIDE_NOTE_CHARS`,
+ * skipped when the list holds it already. Up to `max` notes are kept; past that the list keeps its first
+ * `max - 1` and ends with 'and N more', N counting every note left out since. Returns the list.
+ */
+export function addNote(list: string[], note: string, max = SLIDE_NOTES): string[] {
+  const msg = clean(note, SLIDE_NOTE_CHARS);
+  if (!msg || max < 1 || list.includes(msg)) return list;
+  let more = overflow.get(list);
+  if (more === undefined && list.length >= max) {
+    // A list copied from one that overflowed: its last entry says how many it stands for.
+    const m = MORE.exec(list[max - 1] ?? '');
+    if (m) more = Number(m[1]);
+  }
+  if (more === undefined && list.length < max) {
+    list.push(msg);
+    return list;
+  }
+  // Overflow: the last kept note gives its place to the count (one note more than before, or two: it and
+  // this one).
+  more = more === undefined ? list.length - (max - 1) + 1 : more + 1;
+  list.length = max;
+  list[max - 1] = `and ${more} more`;
+  overflow.set(list, more);
+  return list;
+}

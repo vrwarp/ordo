@@ -680,6 +680,46 @@ only tables (`budget:table`) and SmartArt drawings (`budget:smartart`) were ever
   thirty 10 px rects with 500 px outlines and shadows; the 140-gradient stack to the art with only what is
   drawn emitted; six gradients, as many as fit after the background).
 
+<!-- m9:conv-seams -->
+## M9 wave 1: the converter's seams (`conv-seams`)
+
+The converter is split and given every seam the M9 areas fill (design/27 §15 M9, plan §4), so each of them
+owns its files. Nothing of what a slide draws changes, except that real 3-D is drawn flat instead of left to
+the art.
+
+| File | What | Filled by |
+| --- | --- | --- |
+| `residual.ts` | The decision table: per reason its decision (native, approx, residual, unread), census features, who rates it, its missing kind; `decisionOf`, `missingKindOf`, `rowOf` | each area's rows |
+| `emit-ctx.ts` | `EmitCtx`, `M9_FIELDS` and `writes` (the `EmitOptions.m9Writes` gate), box, colour and object helpers | (frozen) |
+| `emit-text.ts` | Text bodies (`textObject`, `richTextObject`, legacy text, `marginOf`); stubs `warpOf`, `writingOf` | `text-conv` |
+| `emit-budget.ts` | `storedSlideBytes`, `fitBytes`, `chargeText`, `overBudget`, `MAX_SLIDE_BYTES` | `ladder` |
+| `emit-table.ts` | The M6 table group; stub `emitTableObject` | `tables-conv` |
+| `chart.ts` | Stubs `readChart`, `emitChart` | `charts-conv` |
+| `decor.ts` | Stub `emitDecor` (runs of `ElementBase.decor`) | `decor-conv` |
+| `three3d.ts` | Stubs `read3d`, `look3dOf` | `three-model` |
+| `ole.ts` | Stub `readOle` | `metafile-a` |
+
+- **`emit.ts`** keeps the slide, backgrounds, shapes, pictures, origin and the lyric box, and re-exports every
+  name it exported before. The parts were moved verbatim.
+- **3-D** (`classify.ts`): a real bevel or extrusion is approx `3d` (`3d:camera` when its camera turns the
+  face), drawn flat; a SmartArt drawing with bevels is native. On a slide past the object budget it goes to
+  the art first (`budget:3d`), as before, so the budget's other steps choose as they did.
+- **Without LibreOffice** (`EmitOptions.libreoffice: false`, `hybrid.ts` `withoutLibreOffice`): no art and no
+  metafile conversion is planned; `EmittedSlide.missing` lists by kind what nothing draws, the slide is hybrid
+  with `missing:<kind>` reasons, and `EmittedSlide.artText` keeps the art's text.
+- **IR** (`ir.ts`): `Look3dIR`, `TextBody.warp` as `{ preset, adj }`, `writing`, `rot`, `upright`, `look3d`;
+  `ChartElement`; `PictureFill.metafile`; `ElementBase.culled`, `.decor`; table `rtl`, `storedRows`, cell
+  `vert` and `diag`.
+- **Measurement** (`metrics.ts`): the sfnt reader and cmap moved to `@ordo/renderer/text/sfnt/{reader,cmap}.ts`
+  and are re-exported; `FaceSource.script`, `advanceOf`, `heightOf` (through `tables.ts` `Measure`).
+- **Notes** (`log.ts`): `addNote` keeps a slide's stored notes within the schema's 16 (15 and 'and N more').
+- **SmartArt** (`smartart.ts`): an empty drawing cache whose data model holds no text and no picture is native
+  and blank (LibreOffice counts top-level `dsp:sp` only; ordo also accepts grouped ones).
+- Tests: `residual.test.ts`, `classify.test.ts` (3-D approx, past the budget, bevelled SmartArt),
+  `hybrid.test.ts` (`libreoffice: false`), `log.test.ts`, `emit.m9writes.test.ts`, `metrics.m9.test.ts`,
+  `smartart.test.ts` (empty caches), `purity.test.ts` (the sfnt modules and `@ordo/domain/missing.ts`).
+<!-- /m9:conv-seams -->
+
 ## Module map
 
 | File            | What                                                                                                              | Owner  |

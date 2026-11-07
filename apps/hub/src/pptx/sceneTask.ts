@@ -26,6 +26,7 @@ import { readSlideTransition, showLoops } from '@ordo/pptx-scene/transition.ts';
 import { libraryFaces } from './faces.ts';
 import { geomFileOf, type NamedGeomFile } from './geoms.ts';
 import {
+  M9_WRITES,
   PPTX_LIMITS,
   type SceneScan,
   type SceneSlideExtra,
@@ -47,6 +48,7 @@ export function sceneTask(input: SceneTaskInput): SceneTaskOutput {
     ...(input.fonts?.length ? { fontFace: libraryFaces(input.fonts) } : {}),
     extendBackgrounds: input.options.extendBackgrounds ?? true,
     transitionSounds: input.options.transitionSounds ?? false,
+    m9Writes: M9_WRITES,
     newId,
   });
   const out: SceneTaskOutput = { result, ms: 0, heapMb: 0 };

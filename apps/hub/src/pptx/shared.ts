@@ -11,6 +11,7 @@ import type { ExtractedText, ImageObject } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import type { ArtInfo, ConvertResult, SlideClass } from '@ordo/pptx-scene';
 import type { PictureBake } from '@ordo/pptx-scene/bake.ts';
+import { ALL_M9_FIELDS, type M9Field } from '@ordo/pptx-scene/emit-ctx.ts';
 import { MAX_XML_PART_BYTES } from '@ordo/pptx-scene/opc.ts';
 import type { RenderCopyPage } from '@ordo/pptx-scene/rendercopy.ts';
 import type { Logger } from 'pino';
@@ -20,8 +21,19 @@ import type { Library } from '../library.ts';
 import type { MediaService } from '../media/service.ts';
 import type { Store } from '../store.ts';
 
-/** The converter version written to `Slide.pptx.version` and `source.native.version`. */
-export const CONVERTER_VERSION = 1;
+/**
+ * The converter version written to `Slide.pptx.version` and `source.native.version`. 2 since M9 (design/27
+ * §15 M9, decisions.md 1): the converter that writes the M9 fields (`M9_WRITES`) and draws 3-D flat.
+ */
+export const CONVERTER_VERSION = 2;
+
+/**
+ * The stored M9 fields the import writes (design/27 §15 M9 decision 13, decisions.md 1: every one, in
+ * 0.2.0), passed to the converter as `EmitOptions.m9Writes` (`sceneTask.ts`). A kill switch per field: take
+ * one out and the import writes what an older build draws for it instead (§3.2), so a field found wrong can
+ * be withheld without a release of the drawers.
+ */
+export const M9_WRITES: ReadonlySet<M9Field> = ALL_M9_FIELDS;
 
 const MiB = 1024 * 1024;
 

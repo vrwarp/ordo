@@ -23,6 +23,10 @@
  *   objects form a group of their own, or join the top-level group they are in; and SmartArt whose deck
  *   holds PowerPoint's drawing of it (M6, `smartart.ts`): its shapes are read like these, as the frame's
  *   own group.
+ * - M9 seams (`conv-seams`): a chart frame goes through `chart.ts` `readChart` and an OLE frame through
+ *   `ole.ts` `readOle` first (residual when they read nothing, as every one does until `charts-conv` and
+ *   `metafile-a`), and every shape and picture through `three3d.ts` `read3d` (its 3-D, until `three-model`
+ *   none: real 3-D is drawn flat, approx `3d`, `classify.ts`).
  *
  * Owned by work item C (inherit-emit).
  */
@@ -58,10 +62,13 @@ import {
   presetDrawn,
   readCxnRef,
 } from './geom.ts';
+import { readChart } from './chart.ts';
+import { readOle } from './ole.ts';
 import { blipReader, blipReaderOf, readPicture } from './picture.ts';
 import { readSmartArt, type Walker } from './smartart.ts';
 import { readTable } from './tables.ts';
 import { readShadow, readTextBody, textChars } from './text.ts';
+import { read3d } from './three3d.ts';
 import { child, num, path, type XNode } from './xml.ts';
 
 /** Group nesting followed (design/27 §12). */
@@ -345,7 +352,12 @@ export function walkTree(
       case 'p:sp':
       case 'p:cxnSp': {
         const shape = readShape(ctx, el, base, chain, st, groupFill);
-        if (shape) st.out.push(shape);
+        if (shape) {
+          // M9 (`three-model`): the shape's 3-D.
+          const look3d = read3d(ctx, chain);
+          if (look3d) shape.look3d = look3d;
+          st.out.push(shape);
+        }
         if (
           from === 'slide' &&
           shape?.kind === 'shape' &&
@@ -359,6 +371,9 @@ export function walkTree(
         const pic = readPicture(ctx, el, base);
         if (pic) {
           if (pic.kind === 'picture') {
+            // M9 (`three-model`): the picture's 3-D.
+            const look3d = read3d(ctx, chain);
+            if (look3d) pic.look3d = look3d;
             const line = readLine(ctx, chain);
             if (line) pic.line = line;
             const custNode = pic.geom === 'custom' ? firstChildOf(spPrChain(chain), 'a:custGeom') : undefined;
@@ -421,6 +436,17 @@ export function walkTree(
               ...(st.autogrow ? { afterAutogrow: true } : {}),
             }),
           );
+          break;
+        }
+        // M9 seams: a chart or an OLE object ordo reads (`chart.ts`, `ole.ts`; none yet), else residual.
+        const read =
+          what === 'chart'
+            ? readChart(ctx, el, from, base)
+            : what === 'ole'
+              ? readOle(ctx, el, from, base)
+              : undefined;
+        if (read) {
+          st.out.push(read);
           break;
         }
         // M6: SmartArt with PowerPoint's drawing of it is drawn natively (`smartart.ts`), its own group.

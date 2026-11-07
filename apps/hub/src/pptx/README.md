@@ -623,6 +623,18 @@ slide as this job stores it. The job (`geoms.ts`):
   slides through the real job: one file each, the slides native and under 16 KB, the manifest and the live
   process; the same deck again storing nothing new; the import budget).
 
+<!-- m9:conv-seams -->
+## M9 wave 1: converter version 2 and the M9 field gate (m9/conv-seams)
+
+- `CONVERTER_VERSION` is 2 (`shared.ts`): the converter that draws 3-D flat and writes the M9 fields.
+- `M9_WRITES` (`shared.ts`): the M9 stored fields the import writes, every one (M9 decision 1); `sceneTask.ts`
+  passes it as `EmitOptions.m9Writes`. Taking a field out is the kill switch: the import then writes what an
+  older build draws for it. In wave 1 no converter part writes an M9 field yet (the stubs of
+  `@ordo/pptx-scene`), so nothing stored changes.
+- `EmitOptions.libreoffice` (default true) is `lo-detect`'s to set: with false the converter plans no art and
+  no metafile conversion and lists `EmittedSlide.missing` and `artText` instead.
+<!-- /m9:conv-seams -->
+
 ## Not in this wave
 
 Waiting for M2's second wave to merge: rich text emission (runs and paragraphs) from the converter; bundled

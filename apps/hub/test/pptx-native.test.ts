@@ -31,6 +31,7 @@ import type { JobCtx, JobQueue } from '../src/jobs.ts';
 import { CpuPool, WorkerStartError } from '../src/pool.ts';
 import { type NativeJobEnv, nativeJob } from '../src/pptx/nativeJob.ts';
 import {
+  CONVERTER_VERSION,
   PPTX_LIMITS,
   type PptxLoPayload,
   type PptxNativeFallback,
@@ -215,7 +216,7 @@ describe('pptx-native: a synthetic service deck', () => {
     expect(media).toMatchObject({ kind: 'image', state: 'ready', tags: ['pptx'] });
     // Provenance: the deck, the place, the converter version and the digest of the objects as stored.
     for (const [i, s] of [s1, s2, s3, s4].entries()) {
-      expect(s.pptx).toMatchObject({ fileId: hash, index: i, version: 1 });
+      expect(s.pptx).toMatchObject({ fileId: hash, index: i, version: CONVERTER_VERSION });
       expect(s.pptx!.digest).toBe(digestOf(s.objects));
     }
     // Every imported object is marked as the import's (`origin`), so a slide set to show its PowerPoint
@@ -234,7 +235,7 @@ describe('pptx-native: a synthetic service deck', () => {
       kind: 'pptx',
       fileId: hash,
       native: {
-        version: 1,
+        version: CONVERTER_VERSION,
         slides: 4,
         native: 3,
         hybrid: 1,
@@ -251,7 +252,7 @@ describe('pptx-native: a synthetic service deck', () => {
     expect(lo).toMatchObject({
       presentationId: p.id,
       hash,
-      version: 1,
+      version: CONVERTER_VERSION,
       slides: [{ slideId: s4.id, index: 3, shown: 2, class: 'hybrid', digest: s4.pptx!.digest }],
     });
   });

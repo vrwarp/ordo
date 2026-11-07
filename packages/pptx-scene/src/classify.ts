@@ -11,9 +11,10 @@
  * **Support** (`native` / `approx` / `residual`) is per element: the reader's own verdict (`walk.ts`: since M6
  * every preset of the table, custom geometry, gradients and line styles are native; a preset the table does
  * not know, a pattern fill and sheared group children are approx; custom geometry past the bounds is
- * residual) combined with the rules of §5 (charts, the tables and SmartArt the walk leaves residual, OLE, maths,
- * real 3D, WordArt warps, vertical and multi-column text, HD Photo pictures are residual;
- * reflections, inner shadows, soft edges on pictures and metafiles waiting for conversion are approx).
+ * residual) combined with the rules of §5, each a row of the decision table (`residual.ts`, M9): charts, the
+ * tables and SmartArt the walk leaves residual, OLE, maths, WordArt warps, vertical and multi-column text,
+ * HD Photo pictures are residual; reflections, inner shadows, soft edges on pictures, metafiles waiting for
+ * conversion and (since M9) real 3D, drawn flat, are approx.
  *
  * **Class**: native without residual elements; hybrid with them, the residuals and what they overlap baked
  * into one art picture over the range [Rmin, Rmax]; picture when the objects or pictures left after the
@@ -46,6 +47,7 @@ import type {
   Tier,
 } from './ir.ts';
 import { clean } from './log.ts';
+import { decisionOf } from './residual.ts';
 import { child, num, path, textOf, type XNode } from './xml.ts';
 
 /** Reasons are short words; one built from a deck string is cleaned and cut to this (design/27 §12 "Logs"). */
@@ -53,7 +55,10 @@ const MAX_REASON_CHARS = 60;
 
 // ── Census features and tiers ───────────────────────────────────────────────────────────────────────────
 
-/** Features that send a slide to LibreOffice (picture or residual art) whatever the milestone. */
+/**
+ * The census's fallback features: the tier they put a slide in measures their use, whatever the milestone
+ * draws. What ordo does with each is the decision table's (`residual.ts`, which has a row for every one).
+ */
 export const FALLBACK_FEATURES: ReadonlySet<string> = new Set([
   'table',
   'chart',
@@ -395,7 +400,7 @@ export function slideFeatures(ctx: SlideCtx): Set<string> {
 // ── Element support ─────────────────────────────────────────────────────────────────────────────────────
 
 /** Whether an `a:sp3d` really draws in 3D: a bevel with a size, or an extrusion (else it is ignored). */
-function isReal3d(sp3d: XNode): boolean {
+export function isReal3d(sp3d: XNode): boolean {
   if ((num(sp3d.attrs.extrusionH) ?? 0) > 0) return true;
   for (const name of ['a:bevelT', 'a:bevelB']) {
     const b = child(sp3d, name);
@@ -403,6 +408,30 @@ function isReal3d(sp3d: XNode): boolean {
     if (b && (num(b.attrs.w) ?? 76_200) > 0 && (num(b.attrs.h) ?? 76_200) > 0) return true;
   }
   return false;
+}
+
+/** Reasons of real 3-D (`residual.ts`): approx, drawn flat, since M9. */
+const REAL_3D = (r: string) => r === '3d' || r === '3d:camera';
+
+/** Camera presets that look at the face straight on (`3d.md` §3.2): any other one turns it. */
+const FRONT_CAMERAS: ReadonlySet<string> = new Set([
+  'orthographicFront',
+  'perspectiveFront',
+  'legacyObliqueFront',
+  'legacyPerspectiveFront',
+]);
+
+/**
+ * Whether an `a:scene3d`'s camera turns the face (`3d:camera`): a preset that is not a front one, or a
+ * rotation with a latitude or longitude (a revolution alone is a plain turn in the plane).
+ */
+export function turnedCamera(scene3d: XNode | undefined): boolean {
+  const camera = child(scene3d, 'a:camera');
+  if (!camera) return false;
+  if (camera.attrs.prst !== undefined && !FRONT_CAMERAS.has(camera.attrs.prst)) return true;
+  const rot = child(camera, 'a:rot');
+  const angle = (v: string | undefined) => (num(v) ?? 0) % 21_600_000;
+  return !!rot && (angle(rot.attrs.lat) !== 0 || angle(rot.attrs.lon) !== 0);
 }
 
 /** The picture part an element draws: a `p:pic`'s, or a shape's picture fill. */
@@ -416,13 +445,16 @@ function picturePart(e: Element): string | undefined {
  * The support of one element by design/27 §5, from the IR element and, when known, its XML (`p:sp`,
  * `p:pic`, `p:graphicFrame`, `p:cxnSp`). Reasons are short words.
  *
- * - residual: chart, table, SmartArt, OLE, other graphic frames, maths, a real 3D bevel or extrusion,
- *   a WordArt warp (not `textNoShape`), text that is vertical, in columns or `anchorCtr` (until M8), an
- *   HD Photo picture (`pic:wdp`, `pic:hdp`); custom geometry past the bounds is the reader's verdict
- *   (`walk.ts`), as a sheared group child's approx is;
+ * - residual: chart, table, SmartArt, OLE, other graphic frames, maths, a WordArt warp (not `textNoShape`),
+ *   text that is vertical, in columns or `anchorCtr` (until M8), an HD Photo picture (`pic:wdp`,
+ *   `pic:hdp`); custom geometry past the bounds is the reader's verdict (`walk.ts`), as a sheared group
+ *   child's approx is;
  * - approx: reflection, inner shadow, a soft edge on a picture, a metafile (converted by LibreOffice in the
- *   follow-up job);
+ *   follow-up job), and since M9 a real 3D bevel or extrusion (`3d`; `3d:camera` when the camera turns the
+ *   face), drawn flat;
  * - everything else native. The element's own `support` (the reader's verdict) is not part of this.
+ *
+ * Each of these is a row of the decision table (`residual.ts` `decisionOf`), which this reads.
  */
 export function elementSupport(
   ctx: SlideCtx,
@@ -454,16 +486,23 @@ function marksOf(node: XNode): NodeMarks {
   if (m) return m;
   const residual = new Set<string>();
   const approx = new Set<string>();
+  const rate = (reason: string) => {
+    const d = decisionOf(reason, 'native');
+    if (d === 'residual') residual.add(reason);
+    else if (d === 'approx') approx.add(reason);
+  };
   let softEdge = false;
-  const stack = [node];
+  // Each node with its parent: a real `a:sp3d`'s camera is its sibling `a:scene3d`'s (`p:spPr`, `a:bodyPr`).
+  const stack: [XNode, XNode | undefined][] = [[node, undefined]];
   while (stack.length) {
-    const n = stack.pop()!;
-    if (n.name === 'a14:m' || n.name.startsWith('m:oMath')) residual.add('math');
-    else if (n.name === 'a:sp3d' && isReal3d(n)) residual.add('3d');
-    else if (n.name === 'a:reflection') approx.add('reflection');
-    else if (n.name === 'a:innerShdw') approx.add('innerShdw');
+    const [n, parent] = stack.pop()!;
+    if (n.name === 'a14:m' || n.name.startsWith('m:oMath')) rate('math');
+    else if (n.name === 'a:sp3d' && isReal3d(n))
+      rate(turnedCamera(child(parent, 'a:scene3d')) ? '3d:camera' : '3d');
+    else if (n.name === 'a:reflection') rate('reflection');
+    else if (n.name === 'a:innerShdw') rate('innerShdw');
     else if (n.name === 'a:softEdge') softEdge = true;
-    pushChildren(stack, n);
+    for (const c of n.children) if (c.name !== '#text') stack.push([c, n]);
   }
   m = { residual: [...residual], approx: [...approx], softEdge };
   marksCache.set(node, m);
@@ -478,30 +517,37 @@ function supportReasons(
 ): { residual: string[]; approx: string[] } {
   const residual: string[] = [];
   const approx: string[] = [];
+  // Each reason goes where the decision table puts it (`residual.ts`); one it does not draw at all is no
+  // verdict here.
+  const rate = (reason: string) => {
+    const d = decisionOf(reason, 'native');
+    if (d === 'residual') residual.push(reason);
+    else if (d === 'approx') approx.push(reason);
+  };
   // A metafile waits for conversion (approx); every other residual element is residual, for the budget
   // the reader found it past when there is one (`tables.ts`: a table of more cells than a slide's objects).
-  if (e.kind === 'residual')
-    (e.what === 'metafile' ? approx : residual).push(
-      e.reasons?.find((r) => r.startsWith('budget:')) ?? e.what,
-    );
+  if (e.kind === 'residual') {
+    const reason = e.reasons?.find((r) => r.startsWith('budget:')) ?? e.what;
+    (decisionOf(reason) === 'approx' ? approx : residual).push(reason);
+  }
   const part = picturePart(e);
   const ext = part === undefined ? '' : extOf(part);
-  if (ext === 'wdp' || ext === 'hdp') residual.push(`pic:${ext}`);
-  if (ext === 'emf' || ext === 'wmf') approx.push('metafile');
+  if (ext === 'wdp' || ext === 'hdp') rate(`pic:${ext}`);
+  if (ext === 'emf' || ext === 'wmf') rate('metafile');
   if (node) {
     const marks = marksOf(node);
     residual.push(...marks.residual);
     approx.push(...marks.approx);
-    if (marks.softEdge && part !== undefined) approx.push('softEdge');
+    if (marks.softEdge && part !== undefined) rate('softEdge');
     if (e.kind === 'shape' && e.text) {
       const body = bodyPrChain(chainOf(ctx, node, e.from));
       const vert = e.text.vert ?? firstAttr(body, 'vert');
-      if (vert !== undefined && vert !== 'horz') residual.push('vert');
-      if ((e.text.numCol ?? num(firstAttr(body, 'numCol')) ?? 1) > 1) residual.push('numCol');
+      if (vert !== undefined && vert !== 'horz') rate('vert');
+      if ((e.text.numCol ?? num(firstAttr(body, 'numCol')) ?? 1) > 1) rate('numCol');
       const ctr = firstAttr(body, 'anchorCtr');
-      if (e.text.anchorCtr ?? (ctr === '1' || ctr === 'true')) residual.push('anchorCtr');
-      const warp = e.text.warp ?? firstChildOf(body, 'a:prstTxWarp')?.attrs.prst;
-      if (warp !== undefined && warp !== 'textNoShape') residual.push('warp');
+      if (e.text.anchorCtr ?? (ctr === '1' || ctr === 'true')) rate('anchorCtr');
+      const warp = e.text.warp?.preset ?? firstChildOf(body, 'a:prstTxWarp')?.attrs.prst;
+      if (warp !== undefined && warp !== 'textNoShape') rate('warp');
     }
   }
   return { residual: [...new Set(residual)], approx: [...new Set(approx)] };
@@ -578,7 +624,7 @@ export function refineSupport(ctx: SlideCtx, elements: Element[]): string[][] {
     if (e.kind === 'shape' && e.node) nodes = [e.node];
     else {
       const c = candidatesOf(rootOf(ctx, e.from))?.get(e.shapeId);
-      if (c) nodes = e.kind === 'residual' || e.kind === 'table' ? c.any : c[e.kind];
+      if (c) nodes = e.kind === 'shape' || e.kind === 'picture' ? c[e.kind] : c.any;
     }
     const residual: string[] = [];
     const approx: string[] = [];
@@ -599,6 +645,8 @@ export function refineSupport(ctx: SlideCtx, elements: Element[]): string[][] {
     const reasons = [...new Set([...own, ...residual, ...approx].map((r) => clean(r, MAX_REASON_CHARS)))];
     e.support = support;
     if (reasons.length) e.reasons = reasons;
+    // M9: real 3-D is drawn flat, never left to the art (`residual.ts`).
+    if (!e.hidden && approx.some(REAL_3D)) ctx.log('3-D is drawn flat (an approximation)');
     return support === 'residual' ? [...new Set(residual)] : [];
   });
 }
@@ -708,6 +756,8 @@ export function slideCost(
     if (part !== undefined) pictures.add(part);
     if (e.kind === 'picture') objects++;
     else if (e.kind === 'table') objects += e.objects;
+    // M9: a chart is one object (`ShapeObject.chart`, charts-conv).
+    else if (e.kind === 'chart') objects++;
     else objects += (e.fill.kind !== 'none' || e.line ? 1 : 0) + (e.text ? 1 : 0);
   });
   if (frame && objects > MAX_SLIDE_OBJECTS)
@@ -855,7 +905,8 @@ const NO_BACKGROUND: Background = { fill: { kind: 'none' }, from: 'none' };
 
 /**
  * SmartArt drawings stay whole (M6, `smartart.ts`): one is drawn natively, or by LibreOffice into the art,
- * never partly both. A drawing with a residual element (3D, vertical text …), or one the art takes an element
+ * never partly both. A drawing with a residual element (vertical text, a warp …; since M9 not 3D, which is
+ * drawn flat, so a drawing with bevels is native), or one the art takes an element
  * of (an overlap with a residual above it), goes to the art entirely ('smartart'); then, while the slide's
  * objects pass `MAX_SLIDE_OBJECTS`, the native drawing with the most objects goes too ('budget:smartart'),
  * so the slide is hybrid rather than picture (design/27 §15 M6). `residual` (per element, `refineSupport`)
@@ -956,6 +1007,27 @@ function textless(e: Element): boolean {
     !isVideo(e) &&
     (e.kind === 'picture' || (e.kind === 'shape' && !e.text))
   );
+}
+
+/**
+ * Real 3-D on a slide past the object budget goes to the art first (M9, 'budget:3d'), as all real 3-D did
+ * before M9: drawn flat in version 1 until the art replaces it, so the budget's later steps (`fitTables`,
+ * `wholeDiagrams`, `fitShapes`) see the slide as they did, and such a slide keeps its drawing. On a slide
+ * within the budget real 3-D is approx, drawn flat (`residual.ts`). Where 3-D shapes go past the budget once
+ * decorations hold the budget's shapes is `decor-conv`'s (plan decision 6). `residual` (per element,
+ * `refineSupport`) gets the reason.
+ */
+function fit3d(ctx: SlideCtx, elements: Element[], background: Background, residual: string[][]): void {
+  if (slideCost(elements, background, artRange(elements), ctx.frame).objects <= MAX_SLIDE_OBJECTS) return;
+  let n = 0;
+  elements.forEach((e, i) => {
+    if (e.hidden || e.support === 'residual' || !e.reasons?.some(REAL_3D)) return;
+    e.support = 'residual';
+    e.reasons = [...e.reasons, 'budget:3d'];
+    residual[i] = [...residual[i]!, 'budget:3d'];
+    n++;
+  });
+  if (n) ctx.log(`${n} 3-D shape(s) on a slide past its object budget: LibreOffice draws them`);
 }
 
 /**
@@ -1093,6 +1165,7 @@ function textlessRuns(
 export function classifySlide(ctx: SlideCtx, elements: Element[], background: Background): Classification {
   const { tier, reasons } = tierOf(slideFeatures(ctx));
   const residual = refineSupport(ctx, elements);
+  fit3d(ctx, elements, background, residual);
   fitTables(ctx, elements, background, residual);
   wholeDiagrams(ctx, elements, background, residual);
   fitShapes(ctx, elements, background, residual);

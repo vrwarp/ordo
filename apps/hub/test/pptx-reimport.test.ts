@@ -53,7 +53,7 @@ import {
   unedited,
 } from '../src/pptx/reimport.ts';
 import { patchSlide } from '../src/pptx/fallback.ts';
-import { PPTX_JOB_CLASS, PPTX_JOBS, type PptxLoSlide } from '../src/pptx/shared.ts';
+import { CONVERTER_VERSION, PPTX_JOB_CLASS, PPTX_JOBS, type PptxLoSlide } from '../src/pptx/shared.ts';
 import { ffmpeg } from './fixtures.ts';
 import {
   type Client,
@@ -355,7 +355,7 @@ describe('the merge', () => {
     expect(m.p.source).toMatchObject({
       kind: 'pptx',
       renderer: 'libreoffice',
-      native: { version: 1, slides: 2, native: 2, hybrid: 0, picture: 0 },
+      native: { version: CONVERTER_VERSION, slides: 2, native: 2, hybrid: 0, picture: 0 },
     });
   });
 

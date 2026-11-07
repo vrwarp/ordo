@@ -10,7 +10,14 @@
  *   M2 needs no new reader.
  *
  * Growing the IR: add optional fields or new union members; do not rename or remove fields others use.
+ *
+ * M9 (design/27 §15 M9, track `conv-seams`): every IR type the LibreOffice-free import needs is declared here
+ * at once, so the later work fills fields that exist: `Look3dIR` (shapes, pictures, text bodies), the warp's
+ * preset with its adjust values, the writing mode, `bodyPr rot` and `upright`, `ChartElement`, a picture's
+ * `metafile` format, `ElementBase.culled` and the table extras (`rtl`, the stored row heights, a cell's
+ * vertical text and diagonals). Until the work that reads a field lands, nothing sets it.
  */
+import type { ChartData } from '@ordo/domain';
 import type { XNode } from './xml.ts';
 
 /** English Metric Units. */
@@ -121,6 +128,11 @@ export interface PictureFill {
    * only (the picture is approx).
    */
   recolor?: Recolor[];
+  /**
+   * M9: the part is a Windows metafile (EMF, WMF, or their compressed EMZ, WMZ), drawn as a picture once
+   * the hub converts it (`metafile-a`); undefined for any other picture.
+   */
+  metafile?: 'emf' | 'wmf';
 }
 
 /**
@@ -275,8 +287,69 @@ export interface TextBody {
    * nothing because every paragraph that draws something is centred (`text.ts`); absent when not set.
    */
   anchorCtr?: boolean;
-  /** `a:prstTxWarp prst` when not `textNoShape` (residual). */
-  warp?: string;
+  /**
+   * `a:prstTxWarp` when its preset is not `textNoShape`: the preset name and, since M9, its adjust values
+   * (`a:avLst` guides as name and value, at most 4; `text-conv` reads them). Residual until M9's warps.
+   */
+  warp?: TextWarpIR;
+  /**
+   * M9: how a vertical body's glyphs stand (design/27 M9 `TextObject.writing`, `text-conv`): `upright` CJK
+   * (`eaVert`) or every letter (`wordArtVert`), `reverse` for lines left to right (`mongolianVert`,
+   * `wordArtVert`). Undefined for horizontal text and for `vert`/`vert270` (a turned box is exact). The
+   * centred block of `anchorCtr` is `anchorCtr` above (`TextObject.centerBlock`).
+   */
+  writing?: WritingIR;
+  /** M9: `bodyPr rot` in degrees (ST_Angle / 60,000, within ±360): the text box turns about its centre. */
+  rot?: number;
+  /** M9: `bodyPr upright="1"`: the text box keeps upright when the shape turns. */
+  upright?: boolean;
+  /** M9: the body's own 3-D (`a:bodyPr/a:scene3d`, `a:bodyPr/a:sp3d`, `a:flatTx`; `three-model`). */
+  look3d?: Look3dIR;
+}
+
+/** A WordArt warp (`a:prstTxWarp`): one of the 40 ST_TextShapeType presets, with its adjust values. */
+export interface TextWarpIR {
+  preset: string;
+  /** `a:avLst` guides with a plain `val N` formula: name and value in the deck's units. */
+  adj?: [string, number][];
+}
+
+/** The writing mode of vertical text (the IR of `TextObject.writing`, design/27 M9). */
+export interface WritingIR {
+  upright: 'none' | 'cjk' | 'all';
+  reverse?: boolean;
+}
+
+/** A bevel (`a:bevelT`, `a:bevelB`): its preset name and size in EMU (OOXML default 76,200 each). */
+export interface Bevel3dIR {
+  prst: string;
+  w: Emu;
+  h: Emu;
+}
+
+/**
+ * The 3-D of a shape, a picture or a text body (`a:scene3d` and `a:sp3d` along the element's chain; design/27
+ * M9, `3d.md` §3.3; `three-model` reads it, `walk.ts` `read3d`). Lengths in EMU, angles in 60,000ths of a
+ * degree as the deck writes them, colours resolved, names as written (the emitter maps them onto the closed
+ * lists of `@ordo/domain` three-names.ts, an unknown name to its default).
+ */
+export interface Look3dIR {
+  bevelT?: Bevel3dIR;
+  bevelB?: Bevel3dIR;
+  extrusionH?: Emu;
+  /** `sp3d z`: the distance towards the camera. */
+  z?: Emu;
+  contourW?: Emu;
+  contourClr?: Rgba;
+  extrusionClr?: Rgba;
+  /** `prstMaterial`. */
+  material?: string;
+  /** `a:camera`: its preset, field of view and rotation (latitude, longitude, revolution). */
+  camera?: { prst: string; fov?: number; rot?: [number, number, number] };
+  /** `a:lightRig`: its rig, direction and rotation. */
+  light?: { rig: string; dir: string; rot?: [number, number, number] };
+  /** `a:flatTx` (a text body): the text stays flat on a turned shape. */
+  flatTx?: boolean;
 }
 
 // ── Elements ────────────────────────────────────────────────────────────────────────────────────────────
@@ -313,6 +386,18 @@ export interface ElementBase {
    */
   ownFlipH?: true;
   ownFlipV?: true;
+  /**
+   * M9 (`decor-conv`): the element draws nothing on the slide, so it is not emitted, counted, put in the art
+   * or its text, as a hidden element is: `offSlide` when its bounds grown by its reach miss the slide area,
+   * `invisible` for a shape that shows nothing (no fill, line, visible text or effect).
+   */
+  culled?: 'offSlide' | 'invisible';
+  /**
+   * M9 (`decor-conv`): drawn with its z-neighbours as one decoration (`ShapeObject.decor`, `decor.ts`): the
+   * index in `SlideScene.elements` of the run's first (lowest) element, which writes it; the others write
+   * nothing once it is written (as `ShapeElement.merge`).
+   */
+  decor?: number;
 }
 
 /** A `p:sp` or `p:cxnSp`: geometry with a fill and a line, and maybe text. */
@@ -347,6 +432,8 @@ export interface ShapeElement extends ElementBase {
    * first (lowest) element, which emits the merged object; the others emit nothing.
    */
   merge?: number;
+  /** M9: the shape's 3-D (`walk.ts` `read3d`, `three-model`). */
+  look3d?: Look3dIR;
 }
 
 /** One end of a connector glued to a shape's connection site. */
@@ -404,6 +491,8 @@ export interface PictureElement extends ElementBase {
   adj?: [string, number][];
   /** A custom clip geometry built (M6, `geom.ts`). */
   custom?: CustomPaths;
+  /** M9: the picture's 3-D (`walk.ts` `read3d`, `three-model`). */
+  look3d?: Look3dIR;
 }
 
 /**
@@ -511,6 +600,10 @@ export interface TableElement extends ElementBase {
     lift: Emu[];
     lines: 'independent' | 'font';
   };
+  /** M9 (`tables-conv`): `a:tblPr rtl="1"`: column 0 on the right. */
+  rtl?: boolean;
+  /** M9 (`tables-conv`): the row heights the deck stores (`a:tr h`, EMU), before rows grow to their text. */
+  storedRows?: Emu[];
 }
 
 /** One drawn cell of a table: a merge counts once. */
@@ -524,6 +617,10 @@ export interface TableCell {
   fill: Fill;
   /** Its text: margins as `insets`, `anchor`; shrinks to fit (`autofit`); no visible text is an empty box. */
   text: TextBody;
+  /** M9 (`tables-conv`): `a:tcPr vert` when not `horz` (the cell's text is vertical). */
+  vert?: string;
+  /** M9 (`tables-conv`): the cell's diagonals (`a:lnTlToBr` down, `a:lnBlToTr` up). */
+  diag?: { down?: Line; up?: Line };
 }
 
 /** A border line along the grid: a row edge (`h`, edge `at` from column edge `from` to `to`) or a column edge. */
@@ -537,7 +634,21 @@ export interface TableLine {
   line: Line;
 }
 
-export type Element = ShapeElement | PictureElement | ResidualElement | TableElement;
+/**
+ * M9 (`charts-conv`, `chart.ts` `readChart`): a chart (`c:chart` in a graphic frame) drawn by ordo, its data
+ * and look as stored (`ShapeObject.chart`). `part` is the chart part, `cells` the data cells read (the
+ * converter's bound), `approx` what of it is drawn approximately. Until `charts-conv`, nothing makes one: a
+ * chart frame is a residual element.
+ */
+export interface ChartElement extends ElementBase {
+  kind: 'chart';
+  data: ChartData;
+  part: string;
+  cells: number;
+  approx?: string[];
+}
+
+export type Element = ShapeElement | PictureElement | ResidualElement | TableElement | ChartElement;
 
 // ── Slides and the deck ─────────────────────────────────────────────────────────────────────────────────
 

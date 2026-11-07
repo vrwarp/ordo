@@ -7,16 +7,19 @@ import { describe, expect, it } from 'vitest';
  * on the hub's CPU pool and in Node alike. Code outside tests imports only its own modules, types from
  * `@ordo/domain`, and the few domain modules that are plain tables and functions shared with the renderer
  * (the Wingdings/Symbol bullet table, the script fallback families and the script scan, design/27 §1 and
- * §10; the stored path data tokeniser, §3.1), which import nothing at run time but each other. Since M6
+ * §10; the stored path data tokeniser, §3.1; M9: the missing kinds, `missing.ts`), which import nothing at
+ * run time but each other. Since M6
  * also the renderer's geometry engine without its drawer (`@ordo/renderer/geom`: the preset table, the
  * compiler, the evaluator, arcs and the path builder; M6 repair: the drawing estimate, `cost.ts`, with the
  * outline as drawn, `outline.ts`, its line ends, `ends.ts` and `markers.ts`, and stored paths built at a box,
  * `built.ts`; M6 finish: what a shape covers, `bounds.ts`; M6 merge repair: the stops a gradient is drawn with,
  * `stops.ts`), so a custGeom means in the converter what it means
  * when drawn, and costs what it costs; those
- * import nothing at run time but each other and the pure domain modules.
+ * import nothing at run time but each other and the pure domain modules. Since M9 also the renderer's sfnt
+ * reader and cmap (`@ordo/renderer/text/sfnt`, moved there from `metrics.ts`), which import nothing at run
+ * time but each other.
  */
-const PURE_DOMAIN = ['bullets.ts', 'defaults.ts', 'pathdata.ts', 'readable.ts'];
+const PURE_DOMAIN = ['bullets.ts', 'defaults.ts', 'missing.ts', 'pathdata.ts', 'readable.ts'];
 const PURE_GEOM = [
   'compile.ts',
   'eval.ts',
@@ -32,6 +35,7 @@ const PURE_GEOM = [
   'bounds.ts',
   'stops.ts',
 ];
+const PURE_SFNT = ['reader.ts', 'cmap.ts'];
 const IMPORT = /^\s*(import|export)\s+(type\s+)?[^'"]*?from\s+'([^']+)'/gm;
 const IMPURE = /\brequire\(|\bimport\(|\bprocess\.|\bdocument\.|\bwindow\.|\bfetch\(/;
 
@@ -49,6 +53,7 @@ describe('package purity', () => {
       if (spec!.startsWith('./')) continue;
       if (!typeOnly && PURE_DOMAIN.some((p) => spec === `@ordo/domain/${p}`)) continue;
       if (PURE_GEOM.some((p) => spec === `@ordo/renderer/geom/${p}`)) continue;
+      if (PURE_SFNT.some((p) => spec === `@ordo/renderer/text/sfnt/${p}`)) continue;
       expect(`${file}: ${spec} ${typeOnly ? 'type' : 'value'}`).toBe(`${file}: @ordo/domain type`);
     }
     expect(src).not.toMatch(IMPURE);
@@ -74,6 +79,21 @@ describe('package purity', () => {
         if (PURE_DOMAIN.some((p) => spec === `@ordo/domain/${p}`)) continue;
         expect(`${file}: ${spec}`).toMatch(
           new RegExp(`^${file}: \\./(${PURE_GEOM.join('|').replaceAll('.', '\\.')})$`),
+        );
+      }
+      expect(src).not.toMatch(IMPURE);
+    },
+  );
+
+  it.each(PURE_SFNT)(
+    'renderer text/sfnt/%s imports nothing at run time but the other sfnt modules',
+    (file) => {
+      const src = readFileSync(join(dir, '../../renderer/src/text/sfnt', file), 'utf8');
+      for (const m of src.matchAll(IMPORT)) {
+        const [, , typeOnly, spec] = m;
+        if (typeOnly) continue;
+        expect(`${file}: ${spec}`).toMatch(
+          new RegExp(`^${file}: \\./(${PURE_SFNT.join('|').replaceAll('.', '\\.')})$`),
         );
       }
       expect(src).not.toMatch(IMPURE);

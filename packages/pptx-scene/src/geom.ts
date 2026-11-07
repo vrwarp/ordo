@@ -579,7 +579,7 @@ export function presetDrawn(name: string, adj: [string, number][] | undefined, w
  */
 export function textRectOf(e: Element): [number, number, number, number] {
   const whole: [number, number, number, number] = [0, 0, 1, 1];
-  if (e.kind === 'residual' || e.kind === 'table') return whole;
+  if (e.kind !== 'shape' && e.kind !== 'picture') return whole;
   if (e.custom) return e.custom.text;
   if (e.geom === 'rect' || !hasPreset(e.geom)) return whole;
   const p = decompose(e.xf);
@@ -590,7 +590,7 @@ export function textRectOf(e: Element): [number, number, number, number] {
 
 /** The connection sites of an element's geometry, as fractions of its box. */
 export function sitesOf(e: Element): { x: number; y: number; angle: number }[] {
-  if (e.kind === 'residual' || e.kind === 'table') return [];
+  if (e.kind !== 'shape' && e.kind !== 'picture') return [];
   if (e.custom) return e.custom.sites;
   const p = decompose(e.xf);
   const g = preset(e.geom, p.w, p.h, e.adj) ?? preset('rect', p.w, p.h, undefined);
