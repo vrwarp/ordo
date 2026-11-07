@@ -3,6 +3,7 @@ import { type Bounds, CANVAS_H, CANVAS_W, canvasArea, type Placement, placedBoun
 import type { GeomArrow } from './ends.ts';
 import { CLOSED_TOLERANCE, CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD } from './ops.ts';
 import { hasShapeExtras, type Outline, outlineOf } from './outline.ts';
+import { drawnStops, type GradientStopLike, stopAt } from './stops.ts';
 import type { GeomPath } from './path.ts';
 
 /*
@@ -36,7 +37,8 @@ import type { GeomPath } from './path.ts';
  *   soft edge's mask (the fill, its outline stroked round twice the edge wide); a picture's mask its fill;
  * - the pixels each fill paints (`spanArea` of its points, cut to the canvas when the box is placed; a
  *   logical px² of it `GEOM_COST.opaqueArea` or `area` for a colour, opaque or not, `opaqueGradientArea` or
- *   `gradientArea` for a gradient, about five times as costly a pixel: `areaWeight`) and the area each
+ *   `gradientArea` for a gradient, about five times as costly a pixel, `slowGradient` times that again for one
+ *   Skia cannot draw on its two-stop fast path: `areaWeight`) and the area each
  *   outline covers (`area`): every path is filled and stroked on its own, so a full-slide translucent
  *   gradient takes about 11.7 ms at 4K whatever its edges, and a stack of them seconds; a legacy shape (rect,
  *   ellipse, line) is rated the same way;
@@ -110,6 +112,14 @@ export const GEOM_COST = {
   gradientArea: 0.2,
   /** A logical px² an opaque gradient paints (7.2 to 8 ms a full slide at 4K). */
   opaqueGradientArea: 0.14,
+  /**
+   * What a pixel of a gradient Skia cannot draw on its two-stop fast path costs, as a multiple of
+   * `gradientArea` or `opaqueGradientArea`: three stops or more, or two at one position (`slowGradient`; two
+   * stops inside 0..1 are drawn as stops at 0 and 1, `paint.ts` `fastStops`). Measured on the asset worker's
+   * path at 4K, a full-slide translucent rect less a blank job's 9 to 10.5 ms: linear and radial at 0 and 1
+   * 8 to 11 ms, linear 0..0.6 or of 3 or 4 stops 17 to 19 ms, radial 0..0.6 or of 4 stops 20 to 22 ms.
+   */
+  slowGradient: 2,
   /**
    * One leg of an outline (each segment, each leg of a curve's control polygon): the stroker's own work on
    * it (normals, joins, the outline's path), about 0.4 µs at 4K whatever it covers (eight 2,400-point
@@ -486,6 +496,8 @@ export interface DrawnGeom {
 /** What a fill paints a pixel with: a colour or a gradient, opaque or not (`GEOM_COST` area weights). */
 export interface FillPaint {
   readonly gradient?: boolean;
+  /** A gradient off Skia's two-stop fast path (`slowGradient`): `GEOM_COST.slowGradient` times the cost. */
+  readonly slow?: boolean;
   /** Below full alpha somewhere: the shape's opacity, the colour's alpha or a stop's. */
   readonly translucent?: boolean;
 }
@@ -586,8 +598,25 @@ export function maskCost(g: DrawnGeom): number {
 /** What a logical px² of a fill costs (`GEOM_COST` area weights): a colour or a gradient, opaque or not. */
 export function areaWeight(paint: FillPaint | undefined): number {
   const translucent = paint?.translucent !== false;
-  if (paint?.gradient) return translucent ? GEOM_COST.gradientArea : GEOM_COST.opaqueGradientArea;
+  if (paint?.gradient)
+    return (
+      (translucent ? GEOM_COST.gradientArea : GEOM_COST.opaqueGradientArea) *
+      (paint.slow ? GEOM_COST.slowGradient : 1)
+    );
   return translucent ? GEOM_COST.area : GEOM_COST.opaqueArea;
+}
+
+/**
+ * Whether Skia draws a gradient of these stops off its two-stop fast path: unless they draw as exactly two at
+ * different positions (`stops.ts` `drawnStops` drops end stops that repeat their neighbour's colour; `paint.ts`
+ * draws two inside 0..1 as two at 0 and 1), it pads them with stops at 0 and 1 of its own and searches them for
+ * every pixel, about twice the time a pixel (`GEOM_COST.slowGradient`). Positions are read in any order; one
+ * that is not a finite number counts as 0.
+ */
+export function slowGradient(stops: readonly GradientStopLike[] | undefined): boolean {
+  if (!Array.isArray(stops)) return true;
+  const s = drawnStops(stops);
+  return !(s.length === 2 && Math.abs(stopAt(s[0]) - stopAt(s[1])) > 1e-6);
 }
 
 /**
@@ -641,7 +670,9 @@ export interface CostedObject {
   readonly shape?: string;
   readonly opacity?: number;
   readonly fill?: Rgba | undefined;
-  readonly gradient?: { readonly stops?: readonly { readonly color?: { readonly a?: number } }[] } | unknown;
+  readonly gradient?:
+    | { readonly stops?: readonly { readonly at?: number; readonly color?: { readonly a?: number } }[] }
+    | unknown;
   readonly stroke?: { readonly width: number } | undefined;
   readonly geom?: ShapeGeom | undefined;
   readonly mask?: ShapeGeom | undefined;
@@ -659,11 +690,13 @@ export interface CostedObject {
 /** How a shape's fill paints (`FillPaint`): its gradient or colour, below full alpha anywhere or not. */
 export function fillPaintOf(o: CostedObject): FillPaint {
   const opacity = typeof o.opacity === 'number' ? o.opacity : 1;
-  const g = o.gradient as { stops?: readonly { color?: { a?: number } }[] } | undefined;
+  const g = o.gradient as { stops?: readonly { at?: number; color?: { a?: number } }[] } | undefined;
   if (g !== undefined && g !== null) {
     const stops = Array.isArray(g.stops) ? g.stops : [];
     const translucent = opacity < 1 || !stops.length || stops.some((st) => !((st?.color?.a ?? 1) >= 1));
-    return { gradient: true, translucent };
+    return slowGradient(stops)
+      ? { gradient: true, slow: true, translucent }
+      : { gradient: true, translucent };
   }
   return { translucent: opacity < 1 || !((o.fill?.a ?? 1) >= 1) };
 }

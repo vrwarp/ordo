@@ -1,7 +1,17 @@
-import type { SlideObject } from '@ordo/domain';
+import type { Look, SlideObject } from '@ordo/domain';
+import { clampLook } from './clamp.ts';
+import { drawableContent } from './content.ts';
 import { drawnBounds } from './geom/bounds.ts';
 import { legacyGeometry } from './geom/built.ts';
-import { effectArea, type LegacyPart, objectCost, type Rated, slidePlan, withoutPart } from './geom/cost.ts';
+import {
+  charged,
+  effectArea,
+  type LegacyPart,
+  objectCost,
+  type Rated,
+  slidePlan,
+  withoutPart,
+} from './geom/cost.ts';
 import { outlineOf } from './geom/outline.ts';
 import type { BuiltGeom } from './geom/path.ts';
 import { geomFilesVersion, storedCost, storedGeometry } from './geom/stored.ts';
@@ -27,9 +37,22 @@ import { clampShapeObject } from './shape.ts';
  * names is read.
  */
 
+/** What a slide's objects cost as its drawing budget draws them (`slideDrawCost`). */
+export interface SlideDrawCost {
+  /** The drawing estimates and stored points of what is drawn (`charged`), in `GEOM_COST` units. */
+  readonly units: number;
+  /** The area of the effect layers drawn, in slide areas, weighted (`effectArea`). */
+  readonly effects: number;
+}
+
 const memo = new WeakMap<
   readonly SlideObject[],
-  { version: number; drawn: ReadonlyMap<SlideObject, SlideObject>; over: ReadonlySet<SlideObject> }
+  {
+    version: number;
+    drawn: ReadonlyMap<SlideObject, SlideObject>;
+    over: ReadonlySet<SlideObject>;
+    cost: SlideDrawCost;
+  }
 >();
 const copies = new WeakMap<SlideObject, { geom?: SlideObject; effects?: SlideObject; both?: SlideObject }>();
 const rated = new WeakMap<SlideObject, { version: number; r: Rated; area: number }>();
@@ -119,13 +142,18 @@ function planOf(objects: readonly SlideObject[]) {
     (o, part) => drawnCost(part ? legacyCopy(o, part) : o),
     (o) => drawnEffectArea(o),
   );
+  let units = 0;
+  let effects = 0;
   parts.forEach((part, i) => {
     const o = objects[i]!;
+    const d = part ? legacyCopy(o, part) : o;
+    units += charged(drawnCost(d));
+    effects += drawnEffectArea(d);
     if (!part) return;
-    drawn.set(o, legacyCopy(o, part));
+    drawn.set(o, d);
     if (part !== 'effects') over.add(o);
   });
-  const out = { version, drawn, over };
+  const out = { version, drawn, over, cost: { units, effects } };
   memo.set(objects, out);
   return out;
 }
@@ -133,6 +161,28 @@ function planOf(objects: readonly SlideObject[]) {
 /** The objects of `objects` that draw as their legacy shapes for the slide's geometry budget (`geom`, `both`). */
 export function overGeomBudget(objects: readonly SlideObject[]): ReadonlySet<SlideObject> {
   return planOf(objects).over;
+}
+
+/**
+ * What `objects` (a slide's, in z-order) cost as the slide's drawing budget draws them: the units of their
+ * drawing estimates and stored points (`charged`, at most about `GEOM_COST.slide` past the legacy copies) and
+ * the weighted area of the effect layers kept (at most about `EFFECT_COST.slide`). What health reads to tell a
+ * slide whose content takes longer than the raster budget from a slow computer (`health.ts`
+ * `rasterEstimateMs`). Memoised with the budget.
+ */
+export function slideDrawCost(objects: readonly SlideObject[]): SlideDrawCost {
+  return planOf(objects).cost;
+}
+
+const NO_COST: SlideDrawCost = { units: 0, effects: 0 };
+
+/**
+ * What a slide job draws (`slideDrawCost` of the objects `drawSlide2D` draws for `look`; nothing of the kind
+ * for a look that draws lyric bands or hides the slide), for health's `heavySlide`. Shares the drawers' memo.
+ */
+export function slideJobCost(slide: unknown, look?: Look): SlideDrawCost {
+  if (look && clampLook(look).layers.slide.mode !== 'authored') return NO_COST;
+  return slideDrawCost(drawableContent(slide).objects);
 }
 
 /** `objects` as the slide's drawing budget draws them (the same array when it changes none). */

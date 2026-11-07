@@ -555,6 +555,34 @@ export const SIX_GRADIENTS: Slide = { id: 'six-gradients', objects: gradientStac
  */
 export const GRADIENT_STACK: Slide = { id: 'gradient-stack', objects: gradientStack(140) };
 
+/** Full-slide rects, each with a 50 % gradient of the given stops, alternately linear and radial. */
+function stopStack(n: number, ats: readonly number[]): Slide['objects'] {
+  const colours = [
+    { r: 255, g: 0, b: 0, a: 0.5 },
+    { r: 0, g: 160, b: 0, a: 0.5 },
+    { r: 0, g: 0, b: 255, a: 0.5 },
+    { r: 255, g: 220, b: 0, a: 0.5 },
+  ];
+  const stops = ats.map((at, i) => ({ at, color: colours[i % colours.length]! }));
+  return gradientStack(n).map((o) => ({ ...o, fill: stops[0]!.color, gradient: { ...o.gradient, stops } }));
+}
+
+/**
+ * Three full-slide gradients of four stops (M6 merge review: 67 to 69 ms at 3840, all three drawn): Skia
+ * draws only two stops at 0 and 1 on its fast path, so any other gradient costs about twice a pixel
+ * (`cost.ts` `slowGradient`), and the budget keeps one of the three.
+ */
+export const MULTI_STOP_GRADIENTS: Slide = {
+  id: 'multi-stop-gradients',
+  objects: stopStack(3, [0, 0.2, 0.7, 1]),
+};
+
+/**
+ * Three full-slide gradients of two stops at 0 and 60 % (M6 merge review: PowerPoint's radial decorations,
+ * 75 ms at 3840): drawn as stops at 0 and 1 over 60 % of the line (`paint.ts` `fastStops`), on the fast path.
+ */
+export const INNER_STOP_GRADIENTS: Slide = { id: 'inner-stop-gradients', objects: stopStack(3, [0, 0.6]) };
+
 export type Stats = { n: number; p50: number; p95: number; max: number; mean: number };
 export type BenchReport = {
   context: string;
@@ -622,6 +650,8 @@ export async function bench(
     ['stacked full-slide paths (bounded geometry, M6 finish)', STACKED_PATHS],
     ['six full-slide gradients (bounded geometry, M6 finish review)', SIX_GRADIENTS],
     ['140 full-slide gradients, 137 as legacy colours (legacy floor, M6 finish review)', GRADIENT_STACK],
+    ['three full-slide gradients of four stops (bounded geometry, M6 merge review)', MULTI_STOP_GRADIENTS],
+    ['three full-slide gradients 0 to 60 % (bounded geometry, M6 merge review)', INNER_STOP_GRADIENTS],
     ['three large shadowed panels (bounded, M6 repair)', SHADOWED_PANELS],
     ['three full-slide soft edges (bounded, M6 finish)', SOFT_EDGES],
     [

@@ -46,7 +46,7 @@ import {
 import type { Affine, Element, ElementBase, Fill, Line, ShapeElement, Support } from './ir.ts';
 import { chooseAlternate } from './markup.ts';
 import { CANVAS_H, CANVAS_W } from '@ordo/renderer/geom/bounds.ts';
-import { type DrawnGeom, drawCost, GEOM_COST, maskCost } from '@ordo/renderer/geom/cost.ts';
+import { type DrawnGeom, drawCost, GEOM_COST, maskCost, slowGradient } from '@ordo/renderer/geom/cost.ts';
 import { outlineOf } from '@ordo/renderer/geom/outline.ts';
 import {
   customPaths,
@@ -135,7 +135,11 @@ function backgroundCost(fill: Fill): number {
   const g = presetDrawn('rect', undefined, CANVAS_W, CANVAS_H);
   return drawCost(g, {
     fill: true,
-    paint: { gradient: fill.kind === 'gradient', translucent: false },
+    paint: {
+      gradient: fill.kind === 'gradient',
+      ...(fill.kind === 'gradient' && slowGradient(fill.stops.slice(0, 16)) ? { slow: true } : {}),
+      translucent: false,
+    },
     place: { box: { x: 0, y: 0, w: CANVAS_W, h: CANVAS_H } },
   });
 }

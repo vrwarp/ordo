@@ -7,6 +7,8 @@ import {
   type TextStyle,
 } from '@ordo/domain';
 import { pictureKey } from '../src/bitmap-cache.ts';
+import { slideJobCost } from '../src/geombudget.ts';
+import { heavySlide, rasterEstimateMs } from '../src/health.ts';
 import { preparePicture } from '../src/picture.ts';
 import { rasterSlide } from '../src/raster.ts';
 import { rasterScene, rasterSceneSprites } from '../src/scene-raster.ts';
@@ -26,7 +28,13 @@ import { FontResolver, installFontEnv } from '../src/text/fonts.ts';
  * - **table**: a title and a 5x4 grid of filled and stroked cells, each with its own text, as the converter
  *   writes a table;
  * - **scene**: a slide whose video plays in its box, drawn as base and over (`rasterScene`), with a title
- *   over the video's top edge.
+ *   over the video's top edge;
+ * - **traced decorations** (M6): a worship template's slide of traced outlines near the drawing budget, as
+ *   the converter writes it: a three-stop background, eight large filled outlines of 1,000 to 2,000 points
+ *   and 70 thin round-joined strokes, under a title; its drawing estimate is past the raster budget
+ *   (`heavySlide`, design/27 §13's named exception), so it is held to the 50 ms of an asset-worker task;
+ * - **gradient decorations** (M6): two large radial decorations of two stops at 0 and 60 % (drawn on Skia's
+ *   two-stop fast path, `paint.ts` `fastStops`) over a solid background, with a title and a body.
  * A job is what the worker does for a slide whose pictures are cached (`raster`): measure the slide's reach
  * on the surface shrunk to 1x1, size the surface to the tight sprite of what it draws (or the frame, when the
  * sprite would be most of it), draw, `transferToImageBitmap` (which makes Chromium raster the recorded draw
@@ -242,11 +250,169 @@ export const SCENE: Slide = {
   ] as SlideObject[],
 };
 
+/** A traced outline: a closed blob of `points` points (cubic segments) in a 1000 x 1000 space, seeded. */
+function tracedOutline(points: number, seed: number): string {
+  const segs = Math.max(4, Math.floor(points / 3));
+  const at = (k: number) => {
+    const a = (k / segs) * Math.PI * 2;
+    const r =
+      400 *
+      (1 + 0.18 * Math.sin(5 * a + seed) + 0.07 * Math.sin(17 * a + 2 * seed) + 0.03 * Math.sin(61 * a));
+    return [500 + r * Math.cos(a), 500 + r * Math.sin(a)] as const;
+  };
+  const f = (v: number) => v.toFixed(1);
+  const [x0, y0] = at(0);
+  let d = `M ${f(x0)} ${f(y0)}`;
+  for (let k = 0; k < segs; k++) {
+    const [ax, ay] = at(k + 1 / 3);
+    const [bx, by] = at(k + 2 / 3);
+    const [cx, cy] = at(k + 1);
+    d += ` C ${f(ax)} ${f(ay)} ${f(bx)} ${f(by)} ${f(cx)} ${f(cy)}`;
+  }
+  return `${d} Z`;
+}
+
+/** A thin traced stroke: an open wavy curve of `points` points in a 1000 x 1000 space. */
+function tracedStroke(points: number, seed: number): string {
+  let d = 'M 0 500';
+  for (let k = 1; k < points; k++) {
+    const t = k / (points - 1);
+    d += ` L ${(t * 1000).toFixed(1)} ${(500 + 380 * Math.sin(t * 7 + seed)).toFixed(1)}`;
+  }
+  return d;
+}
+
+const LEAF: Rgba = { r: 120, g: 150, b: 90, a: 1 };
+
+/** A worship template's slide of traced decorations near the drawing budget (see the header). */
+export const TRACED: Slide = {
+  id: 'traced',
+  objects: [
+    {
+      id: 'bg',
+      type: 'shape',
+      box: box(0, 0, 1920, 1080),
+      shape: 'rect',
+      fill: { r: 245, g: 238, b: 225, a: 1 },
+      opacity: 1,
+      radius: 0,
+      gradient: {
+        kind: 'linear',
+        angle: 90,
+        stops: [
+          { at: 0, color: { r: 245, g: 238, b: 225, a: 1 } },
+          { at: 0.5, color: { r: 236, g: 226, b: 205, a: 1 } },
+          { at: 1, color: { r: 222, g: 208, b: 180, a: 1 } },
+        ],
+      },
+    },
+    ...Array.from({ length: 8 }, (_, i): SlideObject => {
+      const big = i < 4;
+      const w = big ? 420 + 120 * i : 220 + 40 * i;
+      const h = big ? 1000 : 300 + 30 * i;
+      return {
+        id: `outline-${i}`,
+        type: 'shape',
+        box: box(i % 2 ? 1920 - w - 20 * i : 20 * i, big ? 40 : 1080 - h - 10 * i, w, h),
+        shape: 'rect',
+        fill: i % 3 ? LEAF : { r: 190, g: 120, b: 90, a: 1 },
+        opacity: 1,
+        radius: 0,
+        geom: { paths: [{ d: tracedOutline(big ? 2000 : 1000, i), w: 1000, h: 1000 }] },
+      };
+    }),
+    ...Array.from({ length: 70 }, (_, i): SlideObject => {
+      const w = 60 + ((i * 37) % 300);
+      const h = 20 + ((i * 53) % 200);
+      return {
+        id: `stroke-${i}`,
+        type: 'shape',
+        box: box((i * 173) % (1920 - w), (i * 97) % (1080 - h), w, h),
+        shape: 'rect',
+        stroke: { width: 1.5, color: { r: 70, g: 60, b: 50, a: 1 } },
+        opacity: 1,
+        radius: 0,
+        geom: { paths: [{ d: tracedStroke(10 + (i % 16), i), w: 1000, h: 1000, fill: 'none' }] },
+        lineJoin: 'round',
+        lineCap: 'round',
+      };
+    }),
+    {
+      id: 'title',
+      type: 'text',
+      box: box(360, 420, 1200, 240),
+      text: 'Harvest thanksgiving',
+      style: { ...base, fontSizePx: 110, fontWeight: 700, color: INK, align: 'center', lineModel: 'office' },
+      opacity: 1,
+    },
+  ] as SlideObject[],
+};
+
+/** A radial decoration of two stops at 0 and 60 % (a worship template's glow). */
+const glowDeco = (id: string, x: number, colour: Rgba): SlideObject => ({
+  id,
+  type: 'shape',
+  box: box(x, 90, 720, 900),
+  shape: 'ellipse',
+  fill: colour,
+  opacity: 1,
+  radius: 0,
+  gradient: {
+    kind: 'radial',
+    stops: [
+      { at: 0, color: { ...colour, a: 0.85 } },
+      { at: 0.6, color: { ...colour, a: 0 } },
+    ],
+  },
+});
+
+/** Two large radial decorations over a solid background, with a title and a body (see the header). */
+export const GRADIENT_DECO: Slide = {
+  id: 'gradient-deco',
+  objects: [
+    {
+      id: 'bg',
+      type: 'shape',
+      box: box(0, 0, 1920, 1080),
+      shape: 'rect',
+      fill: { r: 30, g: 20, b: 60, a: 1 },
+      opacity: 1,
+      radius: 0,
+    },
+    glowDeco('glow-a', -120, { r: 255, g: 180, b: 90, a: 1 }),
+    glowDeco('glow-b', 1320, { r: 120, g: 200, b: 255, a: 1 }),
+    {
+      id: 'title',
+      type: 'text',
+      box: box(240, 140, 1440, 160),
+      text: 'Advent: the light is coming',
+      style: { ...base, fontSizePx: 84, fontWeight: 700, align: 'center', lineModel: 'office' },
+      opacity: 1,
+    },
+    {
+      id: 'body',
+      type: 'text',
+      box: box(240, 340, 1440, 600),
+      text: 'The people walking in darkness have seen a great light;\non those living in the land of deep darkness a light has dawned.',
+      style: {
+        ...base,
+        fontSizePx: 56,
+        align: 'center',
+        lineModel: 'office',
+        insets: { l: 14, t: 7, r: 14, b: 7 },
+      },
+      opacity: 1,
+    },
+  ] as SlideObject[],
+};
+
 export const KINDS = [
   { kind: 'sermon over a photo', slide: SERMON_PHOTO },
   { kind: 'lyric with a shadow', slide: LYRIC_SHADOW },
   { kind: 'table', slide: TABLE },
   { kind: 'scene (video in its box)', slide: SCENE },
+  { kind: 'traced decorations (M6)', slide: TRACED },
+  { kind: 'gradient decorations (M6)', slide: GRADIENT_DECO },
 ] as const;
 
 export type Stats = { n: number; p50: number; p95: number; max: number; mean: number };
@@ -264,6 +430,10 @@ export type SlideRow = {
   fullFrame: Stats;
   /** Pixels of the bitmaps drawn, as a share of the frame (a scene: base and over together). */
   share: number;
+  /** What the slide's drawing estimate predicts its raster takes at this size (`rasterEstimateMs`), ms. */
+  estimateMs: number;
+  /** Past the raster budget by its content (`heavySlide`): held to the 50 ms of an asset-worker task. */
+  heavy: boolean;
 };
 export type SlidesReport = {
   context: string;
@@ -476,6 +646,7 @@ export async function bench(
         fullTimes.push(full());
       }
       for (const b of prepared.values()) b.close();
+      const cost = slideJobCost(slide, LOOK_MAIN);
       rows.push({
         kind,
         width,
@@ -485,6 +656,8 @@ export async function bench(
         raster: stats(times),
         fullFrame: stats(fullTimes),
         share,
+        estimateMs: Math.round(rasterEstimateMs(cost, width, height) * 100) / 100,
+        heavy: heavySlide(cost, width, height),
       });
     }
   }

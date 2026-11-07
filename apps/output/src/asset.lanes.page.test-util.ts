@@ -18,7 +18,9 @@ import { type ImageDecoderCtor, createDecoder } from './decode.ts';
  *   while the slide is still decoding and preparing. Reported: when each arrived, and the lane timings.
  * - `__lanes.geometry`: the crop-aware decode against the whole-file decode for targets that cover, crop
  *   and contain, with coloured markers whose centroids must land in the same place; and banded preparation
- *   against one pass, which must be identical byte for byte.
+ *   against one pass, which must be identical byte for byte, masked and mirrored pictures included (M6 merge
+ *   review: their mask is cut once, without a band's clip); a turned masked one is reported with its
+ *   premultiplied difference (Chromium anti-aliases a turned picture's own edge differently under a clip).
  */
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -311,11 +313,44 @@ async function geometryScenario() {
     want.close();
     got.close();
   }
-  // Bands: a 4K cover target and a sub-pixel one, in bands of 2^19 pixels, against one pass.
-  const bands: { name: string; differing: number; steps: number }[] = [];
+  // Bands: a 4K cover target, a sub-pixel one, masked and mirrored ones and a turned masked one, in bands of
+  // 2^19 pixels, against one pass.
+  const bands: { name: string; differing: number; steps: number; levels: number }[] = [];
   for (const [name, t] of [
     ['4K cover', pictureTarget({ box: box(0, 0, 1920, 1080), fit: 'cover' }, 2)!],
     ['sub-pixel contain', pictureTarget({ box: box(300.7, 120.2, 800.4, 600.3), fit: 'contain' }, 2)!],
+    [
+      'ellipse mask, mirrored',
+      pictureTarget(
+        { box: box(200.5, 100, 1200, 900), fit: 'stretch', mask: { preset: 'ellipse' }, flipH: true },
+        2,
+      )!,
+    ],
+    [
+      'star mask, mirrored, cropped',
+      pictureTarget(
+        {
+          box: box(-150, 140.3, 1300, 800),
+          fit: 'cover',
+          crop: { l: 0.1, t: 0, r: 0.2, b: 0.1 },
+          mask: { preset: 'star5' },
+          flipV: true,
+        },
+        2,
+      )!,
+    ],
+    [
+      'turned star mask',
+      pictureTarget(
+        {
+          box: { ...box(300, 200, 900, 700), rotation: 30 },
+          fit: 'cover',
+          mask: { preset: 'star5' },
+          flipV: true,
+        },
+        2,
+      )!,
+    ],
   ] as const) {
     const one = pixels(preparePicture(full, t)!);
     const g = preparePictureSteps(full, t, undefined, 1 << 19);
@@ -327,8 +362,19 @@ async function geometryScenario() {
     }
     const banded = pixels(r.value!);
     let differing = 0;
-    for (let i = 0; i < one.length; i++) if (one[i] !== banded[i]) differing++;
-    bands.push({ name, differing, steps });
+    let levels = 0;
+    for (let i = 0; i < one.length; i += 4) {
+      let d = Math.abs(one[i + 3]! - banded[i + 3]!);
+      for (let c = 0; c < 3; c++)
+        d = Math.max(
+          d,
+          Math.round(Math.abs(one[i + c]! * one[i + 3]! - banded[i + c]! * banded[i + 3]!) / 255),
+        );
+      if (one[i] !== banded[i] || one[i + 1] !== banded[i + 1] || one[i + 2] !== banded[i + 2] || d)
+        differing++;
+      levels = Math.max(levels, d);
+    }
+    bands.push({ name, differing, steps, levels });
   }
   full.close();
   return { cases, bands };

@@ -2177,6 +2177,8 @@ export class LinkCore {
       errors,
       appVersion: APP_VERSION,
       raster: this.perf.raster.summary(),
+      rasterAlarm: this.perf.rasterAlarm.summary(),
+      rasterHeavy: this.perf.rasterHeavy,
       size: { width: this.width, height: this.height },
       fontCoverage: this.perf.fontCoverage(),
     });

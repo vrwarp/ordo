@@ -22,6 +22,7 @@ import {
   contextMetrics,
   coversFrame,
   drawSprite,
+  heavySlide,
   imageReach,
   installFontEnv,
   jobFontFamilies,
@@ -34,6 +35,7 @@ import {
   rasterProps,
   rasterSceneSprites,
   rasterSlide,
+  slideJobCost,
   slidePictures,
   slideReach,
   spriteRect,
@@ -470,6 +472,9 @@ async function run(job: AssetJob, steps: Steps): Promise<void> {
       release = undefined;
       return deliver(job, d, t0);
     });
+    // A slide whose content is past the raster budget by its drawing estimate (memoised by the draw): health
+    // reports its time apart from the alarm's.
+    const heavy = job.kind === 'slide' && heavySlide(slideJobCost(job.slide, job.look), w, h);
     // The picture is on its way: its text is probed for coverage in slices of their own, so a props job can
     // run between them, and the job is reported done (a cancel meanwhile only skips the probe).
     let uncovered = '';
@@ -478,7 +483,7 @@ async function run(job: AssetJob, steps: Steps): Promise<void> {
     } catch (err) {
       if (!(err instanceof Cancelled)) throw err;
     }
-    done(job, ms, timing, steps, skipped, missing, uncovered);
+    done(job, ms, timing, steps, skipped, missing, uncovered, heavy);
   } catch (err) {
     if (err instanceof Cancelled) return;
     const d = err instanceof DecodeError ? err : undefined;
@@ -560,6 +565,7 @@ function done(
   skipped: number,
   missing: string[],
   uncovered: string,
+  heavy: boolean,
 ): void {
   const t = steps.timing();
   post({
@@ -568,6 +574,7 @@ function done(
     key: job.key,
     ms,
     rasterMs: round(timing.ms),
+    heavy: heavy || undefined,
     fontFallbacks: fontFallbacks(job),
     uncovered: uncovered || undefined,
     skippedImages: skipped || undefined,

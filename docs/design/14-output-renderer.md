@@ -195,7 +195,9 @@ decodes two large photos never holds up the props layer, which flips on every se
 - **Turns.** Synchronous work (preparing a picture, drawing and taking the layer) runs in slices, each in a
   task of its own once it is the most urgent waiting slice; the messages that arrived meanwhile are handled
   first. A picture over 2 MiB-pixels (a 4K frame) is prepared in bands of whole rows
-  (`preparePictureSteps`, byte for byte the one-pass bitmap), so the longest slice is a band, the first
+  (`preparePictureSteps`, byte for byte the one-pass bitmap: a masked picture is cut by its mask once, in a
+  slice after its bands, unclipped; only a turned picture's own edge, where its mask shows it, may differ by
+  a few levels, design/27 §7.5), so the longest slice is a band, the first
   of which also builds the source's mipmaps, or the layer's own draw. Nothing interrupts a running slice.
 - **Cancellation.** After each plan, the link cancels the jobs no live or armed layer, props or warm job
   needs any more (the armed cue changed before its job ran, a props second passed): a queued job is dropped,
@@ -353,7 +355,10 @@ Arm sequence for a cue (asset worker, then render worker):
    the other reaches of `sprite.ts`: each object as its drawer lays it out, text's lines grown
    by 0.3 em and united with the ink its glyphs measure, a PowerPoint shape by its geometry,
    outline and effect layers (`geomShapeReach`), its effects, turned with its box), cut
-   to the frame and drawn at that offset;
+   to the frame and drawn at that offset; the sprite's origin is aligned to a multiple of
+   8 device px (`SPRITE_ALIGN`), since Chromium dithers gradients by device position and a
+   sprite at any other offset differed from the full-frame draw by a level on thousands of
+   gradient pixels;
    when that is most of the frame (over 80 %), or unknown (a slide's PowerPoint picture, an
    object with fields the reach does not know, a logo), the canvas is the frame. A drawing
    that touches the sprite's edge ring is drawn again full-frame, so a sprite never cuts what
@@ -591,7 +596,7 @@ and `LinkCore.buildHealth`); the hub keeps the latest per output and fans it out
 ```ts
 { t: 'health', presented, missed, longTasks, lateFlips, armed, armedOk, armError, live, cache: { ready, total },
   gpuLost, videoDropped, fps, audio, meters, mediaPositionMs, mediaDurationMs, error, appVersion, bus,
-  recentLog, compositor, gpuMB, rasterMs: { n, p50, p95, max }, uploadMs, wholeUploads: { count, maxMs },
+  recentLog, compositor, gpuMB, rasterMs: { n, p50, p95, max }, rasterHeavy, uploadMs, wholeUploads: { count, maxMs },
   budgets: { rasterP95Ms, uploadMs, gpuMB }, alarms, mainThreadStallMs, workers, quarantined,
   fontFallbacks, fontCoverage: { chars, count, scripts }, cacheRepairs, busTransport }
 ```
@@ -612,7 +617,12 @@ output's size:
 
 `budgets` carries the three for the output's size; the output computes them because only it knows its size.
 `alarms` lists the budgets passed now: `raster` (only once 20 slides were drawn: the first draws pay for
-compiling and cold caches) and `upload`. GPU memory has none: `gpuMB` counts only the textures ordo
+compiling and cold caches) and `upload`. The `raster` alarm reads the slides within the raster budget by
+their content: a slide job whose drawing estimate (`rasterEstimateMs`, the units its drawing budget charges)
+is past 80 % of the p95 budget at the output's size comes back `done.heavy` (`heavySlide`, design/27 §13's
+named exception: traced decorations near the drawing budget take 45 to 48 ms at 4K on the bench machine,
+held to the 50 ms of a task), and the link keeps its time in `rasterMs` but out of the alarm's window;
+`rasterHeavy` counts such slides in the window, and the diagnostics and the alarm's detail name them. GPU memory has none: `gpuMB` counts only the textures ordo
 allocates, which the budget is derived from, so it cannot pass it at any size the app picks, and the GPU's
 real pressure (video frames, the swap chain, other programs, an iGPU's shared memory) is not observable from
 a page. The alarms are plain strings, so an alarm a newer output adds never fails an older hub's parse of the

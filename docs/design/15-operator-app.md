@@ -232,7 +232,9 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
     numeric field.
   - Mask (a radio group): None, Ellipse, Rounded with its 'Corner size' (% of the shorter side). 'Corner
     radius' is hidden under a mask, which draws the corners; removing a mask also drops a radius that was
-    only the importer's stand-in for it. Flip horizontal and Flip vertical are toggle buttons.
+    only the importer's stand-in for it. A PowerPoint mask the picker does not offer (another preset,
+    custom paths or a geometry file) checks no choice and hides 'Corner radius' too; picking None or one
+    of the offered masks replaces it. Flip horizontal and Flip vertical are toggle buttons.
   - 'Replace' keeps the look, not the crop numbers: a stretched picture is cover-cropped to its box,
     centred on the old crop's centre, so a picture of another aspect is never distorted; a contained or
     covered one keeps its fit and drops the crop. Box, mask, flips, opacity, radius and a video's clip stay.

@@ -2,7 +2,7 @@ import type { Gradient } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
 import { type RecordedGradient, recordingCtx } from '../text/test-util.ts';
 import type { GeomSpacePaint } from './draw.ts';
-import { gradientStyle } from './paint.ts';
+import { fastStops, gradientStyle } from './paint.ts';
 
 /** Gradients over a box (design/27 §3.1 Gradient): OOXML angles, scaled, path gradients, shaded stops. */
 
@@ -77,5 +77,75 @@ describe('gradientStyle', () => {
     // For text: a circle in box space, at the box's origin.
     const text = gradientStyle(ctx, r, 200, 100, 0, { x0: 10, y0: 20 }) as unknown as RecordedGradient;
     near(text.args, [110, 70, 0, 110, 70, Math.hypot(100, 50)]);
+  });
+
+  it("draws two stops inside 0..1 as stops at 0 and 1 over that part of the line (Skia's fast path)", () => {
+    const grey = { r: 128, g: 128, b: 128, a: 0.5 };
+    const inner = (g: Gradient): Gradient => ({
+      ...g,
+      stops: [
+        { at: 0.25, color: black },
+        { at: 0.75, color: grey },
+      ],
+    });
+    // Linear, 0° over 200 x 100: the line from x 0 to 200 is cut to 50..150; the colours are the stops'.
+    const l = lin(inner(linear(0)), 200, 100);
+    near(l.args, [50, 50, 150, 50]);
+    expect(l.stops).toEqual([
+      [0, 'rgba(0,0,0,1)'],
+      [1, 'rgba(128,128,128,0.5)'],
+    ]);
+    // Any angle: the cut line lies on the full one, a quarter in from each end.
+    const full = lin(linear(30), 200, 100).args;
+    const cut = lin(inner(linear(30)), 200, 100).args;
+    const at = (t: number) => [full[0]! + t * (full[2]! - full[0]!), full[1]! + t * (full[3]! - full[1]!)];
+    near(cut, [...at(0.25), ...at(0.75)]);
+    // Radial 0..0.6 (a PowerPoint decoration): the circle ends at 0.6 of the farthest corner.
+    const r: Gradient = {
+      kind: 'radial',
+      stops: [
+        { at: 0, color: white },
+        { at: 0.6, color: grey },
+      ],
+    };
+    near((gradientStyle(ctx, r, 100, 100) as unknown as RecordedGradient).args, [
+      50,
+      50,
+      0,
+      50,
+      50,
+      0.6 * Math.hypot(50, 50),
+    ]);
+    // A stop moved in from both ends: concentric circles, padded inside as outside.
+    const both = gradientStyle(ctx, { ...r, stops: inner(r).stops }, 200, 100) as GeomSpacePaint;
+    near((both.style as unknown as RecordedGradient).args, [
+      100,
+      100,
+      0.25 * Math.hypot(100, 100),
+      100,
+      100,
+      0.75 * Math.hypot(100, 100),
+    ]);
+    // A decoration's centre and edge colours held from 0 to 15 % and 97 to 100 %: drawn as its two inner stops.
+    const held: Gradient = {
+      kind: 'radial',
+      stops: [
+        { at: 0, color: white },
+        { at: 0.15, color: white },
+        { at: 0.97, color: grey },
+        { at: 1, color: grey },
+      ],
+    };
+    const h = gradientStyle(ctx, held, 100, 100) as unknown as RecordedGradient;
+    near(h.args, [50, 50, 0.15 * Math.hypot(50, 50), 50, 50, 0.97 * Math.hypot(50, 50)]);
+    expect(h.stops).toEqual([
+      [0, 'rgba(255,255,255,1)'],
+      [1, 'rgba(128,128,128,0.5)'],
+    ]);
+    // Stops at the ends, three stops and two at one position keep their own drawing.
+    expect(fastStops(linear(0).stops)).toBeUndefined();
+    expect(fastStops([{ at: 0.5 }, { at: 0.5 }])).toBeUndefined();
+    expect(fastStops([{ at: 0 }, { at: 0.5 }, { at: 1 }])).toBeUndefined();
+    expect(fastStops([{ at: 0 }, { at: 0.6 }])).toEqual([0, 0.6]);
   });
 });

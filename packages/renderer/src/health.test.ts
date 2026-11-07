@@ -6,8 +6,10 @@ import {
   TimingWindow,
   armStatus,
   buildHealth,
+  heavySlide,
   perfAlarms,
   perfBudgets,
+  rasterEstimateMs,
 } from './health.ts';
 
 describe('arm status', () => {
@@ -199,5 +201,56 @@ describe('dropped video frames', () => {
     expect(d.total).toBe(6);
     d.sample('v0', '2', 2);
     expect(d.total).toBe(8);
+  });
+});
+
+describe('slides heavy by their content (design/27 §13, M6 merge review)', () => {
+  it('predicts a raster from the drawing estimate: a fresh frame and the units at their 4K cost', () => {
+    // Nothing drawn: the fresh full-frame bitmap, by pixel count (10 ms at 4K, 2.5 at 1080p).
+    expect(rasterEstimateMs({ units: 0 }, 3840, 2160)).toBeCloseTo(10, 6);
+    expect(rasterEstimateMs({ units: 0 }, 1920, 1080)).toBeCloseTo(2.5, 6);
+    // A traced-decoration slide near the drawing budget (1.23M units): 45.7 ms at 4K, 16.8 at 1080p
+    // (measured warm 42 to 45 and 17 to 20 ms on the bench machine).
+    expect(rasterEstimateMs({ units: 1_230_000 }, 3840, 2160)).toBeCloseTo(45.67, 1);
+    expect(rasterEstimateMs({ units: 1_230_000 }, 1920, 1080)).toBeCloseTo(16.77, 1);
+    expect(rasterEstimateMs({ units: Number.NaN }, 1920, 1080)).toBeCloseTo(2.5, 6);
+  });
+
+  it('calls a slide heavy when that prediction is past 80 % of the raster p95 budget at the size', () => {
+    for (const [w, h] of [
+      [3840, 2160],
+      [1920, 1080],
+    ] as const) {
+      expect(heavySlide({ units: 1_230_000 }, w, h)).toBe(true);
+      expect(heavySlide({ units: 500_000 }, w, h)).toBe(true);
+      // A slide of text over pictures, a table or SmartArt (50k to 150k units) never is, nor one at 400k.
+      expect(heavySlide({ units: 150_000 }, w, h)).toBe(false);
+      expect(heavySlide({ units: 400_000 }, w, h)).toBe(false);
+    }
+  });
+
+  it('raises the raster alarm on the slides within the budget only, and reports the heavy ones', () => {
+    const base = {
+      render: EMPTY_TELEMETRY,
+      mainLongTasks: 0,
+      arm: { ok: true, pending: [] },
+      cache: { ready: 1, total: 1 },
+      videoDropped: 0,
+      errors: [],
+      size: { width: 3840, height: 2160 },
+    };
+    const all = { n: 64, p50: 20, p95: 46, max: 48 };
+    const light = { n: 40, p50: 12, p95: 18, max: 22 };
+    const h = buildHealth({ ...base, raster: all, rasterAlarm: light, rasterHeavy: 24 });
+    expect(h.rasterMs).toEqual(all);
+    expect(h.rasterHeavy).toBe(24);
+    expect(h.alarms).toBeUndefined();
+    // Every slide heavy: nothing to alarm on.
+    expect(
+      buildHealth({ ...base, raster: all, rasterAlarm: undefined, rasterHeavy: 64 }).alarms,
+    ).toBeUndefined();
+    // Without the split (an older link), the alarm reads every slide as before.
+    expect(buildHealth({ ...base, raster: all }).alarms).toEqual(['raster']);
+    expect(buildHealth({ ...base, raster: all, rasterAlarm: all }).rasterHeavy).toBeUndefined();
   });
 });

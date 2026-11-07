@@ -56,7 +56,7 @@ import {
   presetGeometry,
 } from '@ordo/renderer/geom/path.ts';
 import { parsePathData } from '@ordo/domain/pathdata.ts';
-import { type DrawnGeom, type DrawSpec, geomCost } from '@ordo/renderer/geom/cost.ts';
+import { type DrawnGeom, type DrawSpec, geomCost, slowGradient } from '@ordo/renderer/geom/cost.ts';
 import { type OutlineFields, outlineOf } from '@ordo/renderer/geom/outline.ts';
 import { apply, boxPx, decompose, multiply, xfrmAffine } from './frame.ts';
 import type { Affine, CustomPaths, Element, Fill, Frame, Line, RectEmu, Rgba, ShapeElement } from './ir.ts';
@@ -1169,10 +1169,15 @@ export function drawSpecOf(
   const soft = e.softEdge ? px500(f, e.softEdge) : 0;
   const fill = e.fill;
   const filled = !!fill && fill.kind !== 'none' && fill.kind !== 'picture' && fill.kind !== 'group';
-  // How the emitted fill paints (`emit.ts`: a gradient, else its colour; a pattern as its blended colour).
+  // How the emitted fill paints (`emit.ts`: a gradient, else its colour; a pattern as its blended colour). A
+  // gradient of more than two stops is drawn off Skia's fast path (`slowGradient`, the 16 emitted at most).
   const paint =
     fill?.kind === 'gradient'
-      ? { gradient: true, translucent: !fill.stops.length || fill.stops.some((s) => !(s.color.a >= 1)) }
+      ? {
+          gradient: true,
+          ...(slowGradient(fill.stops.slice(0, 16)) ? { slow: true } : {}),
+          translucent: !fill.stops.length || fill.stops.some((s) => !(s.color.a >= 1)),
+        }
       : fill?.kind === 'solid'
         ? { translucent: !(fill.color.a >= 1) }
         : fill?.kind === 'pattern'

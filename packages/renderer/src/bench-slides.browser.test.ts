@@ -43,6 +43,14 @@ describe.skipIf(!chromium || !existsSync(fonts.regular) || !existsSync(fonts.bol
       expect(r.rows[2]!.share).toBeLessThan(SPRITE_MAX_SHARE);
       expect(r.rows[3]!.share).toBeGreaterThan(1);
       expect(r.rows[3]!.share).toBeLessThan(2);
+      // M6: the traced decorations are past the raster budget by their content (held to the task's 50 ms);
+      // the gradient decorations, on Skia's two-stop fast path, are not.
+      const traced = r.rows.find((x) => x.kind.startsWith('traced'))!;
+      const glow = r.rows.find((x) => x.kind.startsWith('gradient'))!;
+      expect(traced.heavy).toBe(true);
+      expect(budgetFor(traced)).toBe(50);
+      expect(glow.heavy).toBe(false);
+      expect(glow.estimateMs).toBeLessThan(traced.estimateMs);
       expect(r.blank.map((b) => b.width)).toEqual([960]);
     }, 120_000);
 
@@ -51,6 +59,8 @@ describe.skipIf(!chromium || !existsSync(fonts.regular) || !existsSync(fonts.bol
       expect(budgetFor({ kind: 'table', width: 3840 })).toBe(30);
       expect(budgetFor({ kind: 'table', width: 1920 })).toBe(10);
       expect(budgetFor({ kind: 'table', width: 2880 })).toBe(20);
+      expect(budgetFor({ kind: 'traced decorations (M6)', width: 3840, heavy: true })).toBe(50);
+      expect(budgetFor({ kind: 'traced decorations (M6)', width: 1920, heavy: true })).toBe(50);
     });
   },
 );

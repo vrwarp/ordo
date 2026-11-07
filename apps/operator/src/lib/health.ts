@@ -54,7 +54,7 @@ export function outputIssues(h: OutputHealthEntry | undefined): HealthIssue[] {
       id: 'raster',
       level: 'warn',
       label: 'This computer is slow to prepare slides, so a slide may appear a moment late.',
-      detail: `Slide drawing p50 ${h.rasterMs?.p50 ?? '?'} ms, p95 ${h.rasterMs?.p95 ?? '?'} ms over the last ${h.rasterMs?.n ?? '?'} slides; budget p95 ${b?.rasterP95Ms ?? '?'} ms (design/27 §13). Check the computer's power plan and other running programs.`,
+      detail: `Slide drawing p50 ${h.rasterMs?.p50 ?? '?'} ms, p95 ${h.rasterMs?.p95 ?? '?'} ms over the last ${h.rasterMs?.n ?? '?'} slides${h.rasterHeavy ? ` (${h.rasterHeavy} of them past the budget by their content, such as large traced decorations, and not counted)` : ''}; budget p95 ${b?.rasterP95Ms ?? '?'} ms (design/27 §13). Check the computer's power plan and other running programs.`,
     });
   if (alarms.has('upload'))
     out.push({

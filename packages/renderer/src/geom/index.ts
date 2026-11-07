@@ -62,7 +62,7 @@ export {
   type GeomEnds,
   withEnds,
 } from './ends.ts';
-export { gradientStyle } from './paint.ts';
+export { fastStops, gradientStyle } from './paint.ts';
 export {
   areaWeight,
   clampPoints,
@@ -83,6 +83,7 @@ export {
   objectCost,
   type Rated,
   slidePlan,
+  slowGradient,
   type StrokeCost,
   strokeCost,
   type UnitCost,

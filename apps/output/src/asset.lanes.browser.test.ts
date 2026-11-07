@@ -17,7 +17,8 @@ import type { GeometryCase, PropsRun } from './asset.lanes.page.test-util.ts';
  *   shares the machine with others; `pnpm --filter @ordo/output bench:lanes --check` checks every run on
  *   a quiet machine). The slide itself takes longer than the lead, so the check means something.
  * - The crop-aware decode lands every marker where the whole-file decode does, within half a pixel, and
- *   banded preparation is the one-pass bitmap byte for byte.
+ *   banded preparation is the one-pass bitmap byte for byte, masked and mirrored pictures included; a turned
+ *   masked picture within a few levels on its own edge.
  *
  * Skipped when no Chromium is found (ORDO_TEST_CHROMIUM, Playwright's, or the system's Google Chrome).
  * Timings are of a software canvas on whatever machine runs it; the bound is the props deadline only.
@@ -79,7 +80,10 @@ describe.skipIf(!executablePath)('asset worker raster lanes in headless Chromium
     const { chromium } = await import('@playwright/test');
     const browser = await chromium.launch({ headless: true, executablePath });
     let props: { runs: PropsRun[]; errors: string[]; failures: unknown[] };
-    let geometry: { cases: GeometryCase[]; bands: { name: string; differing: number; steps: number }[] };
+    let geometry: {
+      cases: GeometryCase[];
+      bands: { name: string; differing: number; steps: number; levels: number }[];
+    };
     try {
       const p = await browser.newPage();
       const errors: string[] = [];
@@ -124,9 +128,17 @@ describe.skipIf(!executablePath)('asset worker raster lanes in headless Chromium
       'crop, stretched, sub-pixel box',
       'cover overflowing',
     ]);
+    console.log(
+      `banded preparation: ${geometry.bands.map((b) => `${b.name}: ${b.steps} steps, ${b.differing} px differ (premultiplied up to ${b.levels})`).join('; ')}`,
+    );
     for (const b of geometry.bands) {
       expect(b.steps, b.name).toBeGreaterThan(1);
-      expect(b.differing, b.name).toBe(0);
+      // A turned picture's own edge is anti-aliased differently under a band's clip: a few levels on a few
+      // edge pixels (design/27 §7.5); every other band is the one pass byte for byte.
+      if (b.name.startsWith('turned')) {
+        expect(b.levels, b.name).toBeLessThanOrEqual(24);
+        expect(b.differing, b.name).toBeLessThanOrEqual(2_000);
+      } else expect(b.differing, b.name).toBe(0);
     }
 
     // The props job is never held up by the slide; the deadline holds, while the slide takes longer.

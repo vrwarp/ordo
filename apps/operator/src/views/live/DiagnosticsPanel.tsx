@@ -150,6 +150,14 @@ export function PerformanceTable() {
               <td style={over(alarms.has('raster'))}>
                 {rasterText(h)}
                 {b ? <span className="muted"> (p95 ≤ {b.rasterP95Ms} ms)</span> : null}
+                {h?.rasterHeavy ? (
+                  <div
+                    className="muted small"
+                    title="Slides whose content the drawing estimate puts past the budget (large traced decorations): their time is shown, but they do not raise the alarm"
+                  >
+                    {h.rasterHeavy} heavy by content, not counted
+                  </div>
+                ) : null}
               </td>
               <td style={over(alarms.has('upload'))}>
                 {h?.uploadMs !== undefined ? `${h.uploadMs} ms` : h?.compositor === '2d' ? 'none (2D)' : '—'}

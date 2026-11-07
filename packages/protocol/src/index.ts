@@ -38,6 +38,11 @@ export const OutputHealth = z.object({
   gpuMB: z.number().min(0).max(1e6).optional(),
   /** Slide raster times of the asset worker over the last slides it drew, ms (design/27 §13). */
   rasterMs: z.object({ n: z.number(), p50: z.number(), p95: z.number(), max: z.number() }).optional(),
+  /**
+   * How many of those slides the drawing estimate puts past the raster budget by their content (design/27
+   * §13 named exception): counted in `rasterMs`, left out of the `raster` alarm.
+   */
+  rasterHeavy: z.number().min(0).max(1e6).optional(),
   /** The longest per-frame texture upload in budgeted strips over the last minute, render worker CPU ms (WebGPU). */
   uploadMs: z.number().min(0).max(1e6).optional(),
   /**

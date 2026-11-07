@@ -1,5 +1,5 @@
 import { arrowReach } from './ends.ts';
-import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD } from './ops.ts';
+import { CLOSED_TOLERANCE, CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD } from './ops.ts';
 import type { Outline } from './outline.ts';
 import type { BuiltGeom } from './path.ts';
 
@@ -159,25 +159,93 @@ function pathMiter(cmds: readonly number[], pts: readonly number[], limit: numbe
 /**
  * How far an outline reaches past the path it strokes (box units): half its width times the farthest its
  * joins (`miterFactor` for miter joins; half a width for round and bevel ones) and caps (a square cap's
- * corner, √2 half widths; flat and round caps half a width) reach, and its arrowheads' size from the end point.
+ * corner, √2 half widths; flat and round caps half a width) reach, and (unless `ends` is false) its
+ * arrowheads' size from the end point.
  */
-export function outlineReach(built: BuiltGeom, o: Outline | undefined): number {
+export function outlineReach(built: BuiltGeom, o: Outline | undefined, ends = true): number {
   if (!o || !(o.width > 0)) return 0;
   const half = o.width / 2;
   const join = o.join === 'miter' ? miterFactor(built, Math.max(1, o.miterLimit)) : 1;
   const cap = o.cap === 'square' ? Math.SQRT2 : 1;
-  const r = Math.max(half * Math.max(join, cap), arrowReach(o.ends?.head), arrowReach(o.ends?.tail));
+  const arrows = ends ? Math.max(arrowReach(o.ends?.head), arrowReach(o.ends?.tail)) : 0;
+  const r = Math.max(half * Math.max(join, cap), arrows);
   return Number.isFinite(r) ? r : 0;
 }
 
 /**
  * What a shape draws, in box space: its geometry's points and box (`geomBounds`) grown by its outline's reach
- * (`outlineReach`). Its effect layers are made over these bounds (`effects.ts`) and sized by them (`effectArea`).
+ * without the arrowheads (`outlineReach`), and each arrowhead's reach around the end point it sits on: the
+ * start (head) and end (tail) of every open sub-path of a stroked path, as `drawGeom` draws them (`ends.ts`
+ * `withEnds`; a sub-path ending within the closed tolerance of its start has none). A slide of connectors
+ * therefore reaches what it draws, not its boxes grown by their largest arrowhead on every side. Its effect
+ * layers are made over these bounds (`effects.ts`) and sized by them (`effectArea`).
  */
 export function drawnBounds(built: BuiltGeom, o: Outline | undefined): Bounds {
   const b = geomBounds(built);
-  const grow = outlineReach(built, o);
-  return { x0: b.x0 - grow, y0: b.y0 - grow, x1: b.x1 + grow, y1: b.y1 + grow };
+  const grow = outlineReach(built, o, false);
+  const out = { x0: b.x0 - grow, y0: b.y0 - grow, x1: b.x1 + grow, y1: b.y1 + grow };
+  const head = o && o.width > 0 ? arrowReach(o.ends?.head) : 0;
+  const tail = o && o.width > 0 ? arrowReach(o.ends?.tail) : 0;
+  if (!(head > 0 || tail > 0) || !Number.isFinite(head + tail)) return out;
+  const around = (x: number, y: number, r: number) => {
+    if (!(r > 0)) return;
+    if (x - r < out.x0) out.x0 = x - r;
+    if (y - r < out.y0) out.y0 = y - r;
+    if (x + r > out.x1) out.x1 = x + r;
+    if (y + r > out.y1) out.y1 = y + r;
+  };
+  const tolerance = CLOSED_TOLERANCE * Math.max(built.w, built.h);
+  for (const p of built.paths)
+    if (p.stroke)
+      openEnds(p.cmds, p.pts, tolerance, (sx, sy, ex, ey) => {
+        around(sx, sy, head);
+        around(ex, ey, tail);
+      });
+  return out;
+}
+
+/**
+ * The start and end points of a path's open sub-paths (`withEnds`' rule: at least one segment, not closed and
+ * not ending within `tolerance` of its start on both axes).
+ */
+function openEnds(
+  cmds: readonly number[],
+  pts: readonly number[],
+  tolerance: number,
+  each: (sx: number, sy: number, ex: number, ey: number) => void,
+): void {
+  let at = 0;
+  let sx = 0;
+  let sy = 0;
+  let ex = 0;
+  let ey = 0;
+  let segments = 0;
+  const end = () => {
+    if (segments > 0 && (Math.abs(ex - sx) > tolerance || Math.abs(ey - sy) > tolerance))
+      each(sx, sy, ex, ey);
+    segments = 0;
+  };
+  for (const op of cmds) {
+    if (op === CMD_MOVE) {
+      end();
+      if (at + 1 >= pts.length) return;
+      sx = ex = pts[at]!;
+      sy = ey = pts[at + 1]!;
+      at += 2;
+    } else if (op === CMD_CLOSE) {
+      segments = 0;
+      ex = sx;
+      ey = sy;
+    } else {
+      const n = op === CMD_LINE ? 2 : op === CMD_QUAD ? 4 : op === CMD_CUBIC ? 6 : 0;
+      if (n === 0 || at + n > pts.length) continue;
+      at += n;
+      ex = pts[at - 2]!;
+      ey = pts[at - 1]!;
+      segments++;
+    }
+  }
+  end();
 }
 
 /**

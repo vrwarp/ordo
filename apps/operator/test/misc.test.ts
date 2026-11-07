@@ -106,6 +106,10 @@ describe('things to check on an output (design/27 §13, M7)', () => {
     expect(dotTitle(entry({ ...perf, alarms: ['upload'] }), 'Audience 1')).toMatch(/slow to send new slides/);
     // GPU memory over its budget is no issue (ordo's own fixed allocation; design/27 §13).
     expect(outputIssues(entry({ ...perf, alarms: ['gpuMemory'] }))).toEqual([]);
+    // Slides past the budget by their content are named in the detail, never in the label (M6 merge review).
+    const heavy = outputIssues(entry({ ...perf, alarms: ['raster'], rasterHeavy: 7 }));
+    expect(heavy[0]!.detail).toMatch(/over the last 40 slides \(7 of them past the budget by their content/);
+    expect(heavy[0]!.label).toBe(issues[0]!.label);
   });
 
   it('reports missing fonts and characters no font has', () => {

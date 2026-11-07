@@ -1,4 +1,4 @@
-import type { ShapeObject, SlideObject } from '@ordo/domain';
+import { LOOK_LOWER_THIRD, LOOK_MAIN, type ShapeObject, type SlideObject } from '@ordo/domain';
 import { afterEach, describe, expect, it } from 'vitest';
 import { charged, EFFECT_COST, effectArea, GEOM_COST } from './geom/cost.ts';
 import { clearGeomFiles, putGeomFile, storedCost, storedGeometry } from './geom/stored.ts';
@@ -7,6 +7,8 @@ import {
   drawnEffectArea,
   overGeomBudget,
   slideBudget,
+  slideDrawCost,
+  slideJobCost,
   withinDrawBudget,
   withoutGeom,
 } from './geombudget.ts';
@@ -320,6 +322,29 @@ describe("a slide's drawing budget (design/27 §12 drawing cost)", () => {
     const six = withinDrawBudget(objects.slice(0, 6)) as ShapeObject[];
     expect(six.filter((o) => o.gradient).length).toBe(2);
     expect(six.reduce((n, o) => n + charged(drawnCost(o)), 0)).toBeLessThanOrEqual(GEOM_COST.slide);
+  });
+
+  it('sums what the slide draws as the budget draws it: the units health predicts a raster by (M6 merge review)', () => {
+    const one = charged(drawnCost(shape('a', zigzag(250))));
+    const fit = Math.floor(GEOM_COST.slide / one);
+    const objects: SlideObject[] = Array.from({ length: fit + 2 }, (_, i) => shape(`z${i}`, zigzag(250)));
+    const drawn = withinDrawBudget(objects);
+    const want = drawn.reduce((n, o) => n + charged(drawnCost(o)), 0);
+    const cost = slideDrawCost(objects);
+    expect(cost.units).toBeCloseTo(want, 6);
+    expect(cost.units).toBeLessThanOrEqual(GEOM_COST.slide);
+    expect(cost.units).toBeGreaterThan(fit * one);
+    expect(cost.effects).toBe(0);
+    expect(slideDrawCost(objects)).toBe(cost);
+    // A slide job: what drawSlide2D draws for the look; a lyric-only look draws its bands, no geometry.
+    const slide = { id: 's', objects };
+    expect(slideJobCost(slide, LOOK_MAIN).units).toBeCloseTo(want, 6);
+    expect(slideJobCost(slide, LOOK_LOWER_THIRD)).toEqual({ units: 0, effects: 0 });
+    // Effects kept are counted by their layers' area.
+    const shadowed = [
+      shape('s', circle(100), { shadow: { dx: 4, dy: 4, blur: 10, color: { r: 0, g: 0, b: 0, a: 0.5 } } }),
+    ];
+    expect(slideDrawCost(shadowed).effects).toBeCloseTo(drawnEffectArea(shadowed[0]!), 9);
   });
 
   it('gives back the same array when nothing is over', () => {

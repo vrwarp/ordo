@@ -1,3 +1,5 @@
+import { GEOM_COST } from './geom/cost.ts';
+
 /**
  * Health aggregation for an output window: counters from the render worker plus main-thread state,
  * shaped like the protocol's OutputHealth (kept structural so this package does not depend on protocol).
@@ -60,6 +62,13 @@ export type HealthInputs = {
   appVersion?: string;
   /** Slide raster times of the asset worker (`TimingWindow` over the last slides drawn). */
   raster?: TimingSummary;
+  /**
+   * The raster times the `raster` alarm reads: those of the slides whose content fits the raster budget
+   * (`heavySlide` false; undefined while there are none). Without the key, the alarm reads `raster`.
+   */
+  rasterAlarm?: TimingSummary;
+  /** Slides of `raster` whose content is past the raster budget (`heavySlide`): reported, not alarmed. */
+  rasterHeavy?: number;
   /** The output's size in device px: the performance budgets scale with it (`perfBudgets`). */
   size?: { width: number; height: number };
   /** Characters drawn that no face this output has covers (`GlyphCoverage`), with their scripts. */
@@ -88,6 +97,11 @@ export type HealthReport = {
   gpuMB?: number;
   /** Slide raster p50, p95 and max over the last `n` slides the asset worker drew, ms. */
   rasterMs?: TimingSummary;
+  /**
+   * How many of those slides the drawing estimate puts past the raster budget at this size (`heavySlide`):
+   * their times are in `rasterMs`, but the `raster` alarm leaves them out. Absent when none is.
+   */
+  rasterHeavy?: number;
   uploadMs?: number;
   wholeUploads?: { count: number; maxMs: number };
   /** This output's performance budgets at its size (design/27 §13). */
@@ -179,6 +193,46 @@ export type PerfAlarm = 'raster' | 'upload';
 /** Slides drawn before a raster p95 can raise the alarm (the first draws pay for compiling and caches). */
 export const RASTER_ALARM_MIN = 20;
 
+/**
+ * A fresh full-frame bitmap of a 4K output, ms (sizing the surface, a new backing, the transfer: what a blank
+ * full-frame job costs, 9 to 10.5 ms on the bench machine), scaled by pixel count to other sizes.
+ */
+const FRAME_MS_4K = 10;
+
+/**
+ * The share of the raster p95 budget past which a slide's drawing estimate makes it heavy (`heavySlide`): the
+ * estimate is within about 20 % of the asset worker's warm raster time on the bench machine.
+ */
+const HEAVY_SHARE = 0.8;
+
+/**
+ * What the drawing estimate of a slide's content predicts its raster takes at `width` x `height` on the
+ * bench machine, ms (design/27 §12 drawing cost, §13): a fresh full-frame bitmap, and its geometry's and
+ * fills' units (`geombudget.ts` `slideDrawCost`, the units the slide's drawing budget charges) at
+ * `GEOM_COST.nsPerUnit` at 4K, 0.4 of that at 1080p and below (the units are logical px: the edges' rows halve
+ * with the output's height, the painted pixels quarter), by pixel count between. Text, pictures and cached
+ * effect layers are not in it. Fitted over 343 full-frame slides of the converted worship decks (M6 merge
+ * review): 10.9 ms + 32.8 ns a unit at 4K, 2.8 ms + 12.4 ns at 1080p; a traced-decoration slide of 1.23M units
+ * predicts 45.7 ms at 4K (42 to 45 ms measured warm) and 16.8 ms at 1080p (17 to 20 ms).
+ */
+export function rasterEstimateMs(cost: { units: number }, width: number, height: number): number {
+  const px = Math.max(1, width) * Math.max(1, height);
+  const t = Math.min(1, Math.max(0, (px - PX_1080) / (PX_4K - PX_1080)));
+  const units = Number.isFinite(cost.units) && cost.units > 0 ? cost.units : 0;
+  return (FRAME_MS_4K * px) / PX_4K + units * GEOM_COST.nsPerUnit * 1e-6 * (0.4 + 0.6 * t);
+}
+
+/**
+ * Whether a slide's content is past the raster budget by its drawing estimate (`rasterEstimateMs` over
+ * `HEAVY_SHARE` of `PerfBudgets.rasterP95Ms` at this size): a slide the drawing budget keeps whole may take up
+ * to the 50 ms of an asset-worker task (design/27 §13's named exception, the M6 merge review: traced
+ * decorations of 100 shapes or more, 42 to 48 ms at 4K and 17 to 21 ms at 1080p on the bench machine). Its
+ * time is reported, but the `raster` alarm, which tells the operator the computer is slow, leaves it out.
+ */
+export function heavySlide(cost: { units: number }, width: number, height: number): boolean {
+  return rasterEstimateMs(cost, width, height) > HEAVY_SHARE * perfBudgets(width, height).rasterP95Ms;
+}
+
 export function perfAlarms(b: PerfBudgets, m: { raster?: TimingSummary; uploadMs?: number }): PerfAlarm[] {
   const out: PerfAlarm[] = [];
   if (m.raster && m.raster.n >= RASTER_ALARM_MIN && m.raster.p95 > b.rasterP95Ms) out.push('raster');
@@ -238,17 +292,20 @@ export function buildHealth(i: HealthInputs): HealthReport {
 }
 
 /** The performance part of a health report: measured figures, the budgets at this size, and the alarms. */
-type PerfPart = 'rasterMs' | 'uploadMs' | 'wholeUploads' | 'budgets' | 'alarms';
+type PerfPart = 'rasterMs' | 'rasterHeavy' | 'uploadMs' | 'wholeUploads' | 'budgets' | 'alarms';
 
 function perf(i: HealthInputs): Pick<HealthReport, PerfPart> {
   const out: Pick<HealthReport, PerfPart> = {};
   if (i.raster) out.rasterMs = i.raster;
+  if (i.rasterHeavy) out.rasterHeavy = i.rasterHeavy;
   if (i.render.uploadMs !== undefined) out.uploadMs = Math.round(i.render.uploadMs * 100) / 100;
   const w = i.render.wholeUploads;
   if (w?.count) out.wholeUploads = { count: w.count, maxMs: Math.round(w.maxMs * 100) / 100 };
   if (!i.size) return out;
   out.budgets = perfBudgets(i.size.width, i.size.height);
-  const alarms = perfAlarms(out.budgets, { raster: i.raster, uploadMs: out.uploadMs });
+  // The alarm reads the slides within the budget by their content when the caller tells them apart.
+  const raster = 'rasterAlarm' in i ? i.rasterAlarm : i.raster;
+  const alarms = perfAlarms(out.budgets, { raster, uploadMs: out.uploadMs });
   if (alarms.length) out.alarms = alarms;
   return out;
 }

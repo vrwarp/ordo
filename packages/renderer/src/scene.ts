@@ -1,6 +1,9 @@
-import type { Box, SlideObject } from '@ordo/domain';
+import type { Box, ShapeObject, SlideObject } from '@ordo/domain';
 
-import { shapeGeometry, shapeReach } from './shape.ts';
+import { CLAMP, num } from './clamp.ts';
+import { drawnBounds, placedBounds } from './geom/bounds.ts';
+import { hasShapeExtras, outlineOf } from './geom/outline.ts';
+import { clampShapeObject, shapeGeometry, shapeReach } from './shape.ts';
 
 /**
  * Scene stack: a video playing inside its slide (design/27 §7.2; work split in ../SCENE.md).
@@ -380,13 +383,42 @@ function effectMargin(o: SlideObject): number {
 }
 
 /**
- * Where an object can draw (logical px): its rotated box plus the reach of its effects. Text that
- * overflows its box draws past this; the asset worker passes measured bounds for text instead.
+ * Where an object can draw (logical px): its rotated box plus the reach of its effects; for a shape drawn
+ * through the geometry engine (M6), what it draws (`drawnBounds`: its geometry's points past the box, its
+ * outline's miter tips, square caps and arrowheads, flipped and turned with its box) plus the reach of its
+ * shadow and glow. Text that overflows its box draws past this; the asset worker passes measured bounds for
+ * text instead.
  */
 export function objectBounds(o: SlideObject): Rect {
+  const drawn = o.type === 'shape' ? geomDrawnBounds(o) : undefined;
+  if (drawn) {
+    const m = effectMargin({ ...o, stroke: undefined, geom: undefined, ends: undefined } as SlideObject);
+    return {
+      x: drawn.x0 - m,
+      y: drawn.y0 - m,
+      w: drawn.x1 - drawn.x0 + 2 * m,
+      h: drawn.y1 - drawn.y0 + 2 * m,
+    };
+  }
   const r = rotatedBounds(o.box);
   const m = effectMargin(o);
   return { x: r.x - m, y: r.y - m, w: r.w + 2 * m, h: r.h + 2 * m };
+}
+
+/**
+ * What a shape drawn through the geometry engine covers on the slide (`sprite.ts` `geomShapeReach` without the
+ * blur layers' slack); undefined for a legacy shape, or when the bounds are not finite.
+ */
+function geomDrawnBounds(raw: ShapeObject): ReturnType<typeof placedBounds> | undefined {
+  if (!hasShapeExtras(raw)) return undefined;
+  const o = clampShapeObject(raw);
+  const outline = o.stroke ? outlineOf(o, num(o.stroke.width, 0, CLAMP.maxEffectPx, 1)) : undefined;
+  const b = placedBounds(drawnBounds(shapeGeometry(o), outline), {
+    box: o.box,
+    flipH: o.flipH === true,
+    flipV: o.flipV === true,
+  });
+  return [b.x0, b.y0, b.x1, b.y1].every(Number.isFinite) ? b : undefined;
 }
 
 function overlaps(a: Rect, b: Rect): boolean {

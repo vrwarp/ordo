@@ -78,6 +78,9 @@ describe.skipIf(!executablePath)('tight sprites in headless Chromium', () => {
     const failed = results.flatMap((r) =>
       r.checks.filter((c) => !c.ok).map((c) => `${r.name}: ${c.what} (${c.detail})`),
     );
+    // The real-like slides' differences, for the record (design/27 §7.3).
+    for (const r of results.filter((x) => x.name.startsWith('real-like')))
+      console.log(`${r.name}: ${r.checks.map((c) => `${c.what.split(' (')[0]} ${c.detail}`).join('; ')}`);
     expect(failed).toEqual([]);
   }, 120_000);
 });

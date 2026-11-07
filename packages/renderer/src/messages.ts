@@ -205,6 +205,11 @@ export type FromAsset =
        * already prepared): what health reports as slide `rasterMs` (design/27 §13).
        */
       rasterMs?: number;
+      /**
+       * A slide job whose content the drawing estimate puts past the raster budget at the job's size
+       * (`heavySlide`, design/27 §13): health counts its time, the `raster` alarm leaves it out.
+       */
+      heavy?: boolean;
       /** Font families the job asked for that are not loaded; drawn in the fallback font. */
       fontFallbacks?: string[];
       /**

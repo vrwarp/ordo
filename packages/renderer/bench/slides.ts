@@ -15,7 +15,9 @@ import type { SlideRow, SlidesReport, Stats } from './slides.page.ts';
  *        [--channel chrome | --executable <path>] [--headed] [--size 1920,3840]
  *
  * --check fails when a p95 is over its budget: 10 ms at 1920 and 30 ms at 3840 for every kind, and 12 ms at
- * 3840 for text over a photo (the M7 exit). These are the asset worker's CPU costs (a software canvas on
+ * 3840 for text over a photo (the M7 exit); 50 ms, the longest asset-worker task, for a kind whose drawing
+ * estimate is past the raster budget (`heavySlide`: the traced decorations, design/27 §13's named exception,
+ * which health leaves out of the raster alarm). These are the asset worker's CPU costs (a software canvas on
  * purpose, design/14), so the figures belong to the machine that runs the bench: in CI (headless, a shared
  * runner) read them as a trend; on a venue machine (`bench/venue.ts`) as that machine's. The face is
  * DejaVu Sans (fonts-dejavu-core; on Windows and macOS pass --font <regular.ttf> --bold <bold.ttf>).
@@ -34,8 +36,15 @@ export type SlidesOptions = {
   headless: boolean;
 };
 
-/** p95 budgets per width (design/27 §13); text over a photo at 4K has the M7 exit's tighter one. */
-export function budgetFor(row: Pick<SlideRow, 'kind' | 'width'>): number {
+/** The longest asset-worker task (design/27 §13), the bound of a slide heavy by its content. */
+export const TASK_MS = 50;
+
+/**
+ * p95 budgets per width (design/27 §13); text over a photo at 4K has the M7 exit's tighter one, a slide past
+ * the raster budget by its drawing estimate (`heavy`) the longest task's.
+ */
+export function budgetFor(row: Pick<SlideRow, 'kind' | 'width'> & { heavy?: boolean }): number {
+  if (row.heavy) return TASK_MS;
   if (row.width >= 3840) return row.kind.startsWith('sermon over a photo') ? 12 : 30;
   if (row.width <= 1920) return 10;
   return 10 + (20 * (row.width - 1920)) / 1920;
@@ -127,8 +136,12 @@ export function printSlides(r: SlidesReport & { browser: string }): number {
       : row.share < 0.999
         ? `sprite ${Math.round(row.share * 100)} % of the frame`
         : 'full-frame';
+    const estimate =
+      row.estimateMs !== undefined
+        ? `; drawing estimate ${ms(row.estimateMs)} ms${row.heavy ? ', past the raster budget by its content' : ''}`
+        : '';
     console.log(
-      `  ${`${row.width}x${row.height}`.padEnd(10)} ${row.kind.padEnd(26)} ${fmtStats(row.raster)} (budget p95 ${budget} ms${bad ? ': OVER' : ''}); ${sprite}; drawn full-frame p50 ${ms(row.fullFrame.p50)} p95 ${ms(row.fullFrame.p95)} ms; first ${ms(row.firstMs)} ms${row.prepareMs > 0.05 ? `, pictures prepared ${ms(row.prepareMs)} ms` : ''}`,
+      `  ${`${row.width}x${row.height}`.padEnd(10)} ${row.kind.padEnd(26)} ${fmtStats(row.raster)} (budget p95 ${budget} ms${bad ? ': OVER' : ''}); ${sprite}; drawn full-frame p50 ${ms(row.fullFrame.p50)} p95 ${ms(row.fullFrame.p95)} ms; first ${ms(row.firstMs)} ms${row.prepareMs > 0.05 ? `, pictures prepared ${ms(row.prepareMs)} ms` : ''}${estimate}`,
     );
   }
   return over;

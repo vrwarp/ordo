@@ -223,6 +223,7 @@ export function paintShapedPicture(
   c: ImageCrop | undefined,
   shape: PictureShape & { w: number; h: number },
   from?: PictureFrom,
+  cut = true,
 ): void {
   ctx.save();
   placeShape(ctx, bx, by, bw, bh, shape);
@@ -230,13 +231,21 @@ export function paintShapedPicture(
   const lh = shape.h > 0 ? shape.h : bh;
   if (from) paintPictureFrom(ctx, img, from, 0, 0, lw, lh, fit, c);
   else paintPicture(ctx, img, 0, 0, lw, lh, fit, c);
-  const built = shape.mask ? storedGeometry(shape.mask, lw, lh) : undefined;
-  if (built) {
-    ctx.globalCompositeOperation = 'destination-in';
-    ctx.fillStyle = '#000';
-    ctx.fill(geomFillPath2D(built), GEOM_CLIP_RULE);
-  }
+  if (cut) cutToMask(ctx, lw, lh, shape);
   ctx.restore();
+}
+
+/**
+ * The 'destination-in' fill of a picture's mask (its filled paths' union at the logical box `lw` x `lh`),
+ * in box space as `placeShape` maps it: what `paintShapedPicture` cuts with. Chromium anti-aliases this fill
+ * differently under a clip, so a prepared bitmap is cut once, unclipped, as the source path cuts its sprite.
+ */
+function cutToMask(ctx: Ctx2D, lw: number, lh: number, shape: PictureShape): void {
+  const built = shape.mask ? storedGeometry(shape.mask, lw, lh) : undefined;
+  if (!built) return;
+  ctx.globalCompositeOperation = 'destination-in';
+  ctx.fillStyle = '#000';
+  ctx.fill(geomFillPath2D(built), GEOM_CLIP_RULE);
 }
 
 /** Bitmaps `preparePicture` made: the key of the target each was made for, and its source's size. */
@@ -312,9 +321,10 @@ export function preparePicture(
 /**
  * `preparePicture` in steps: each `next()` draws one band of at most `stepPixels` device pixels (whole rows)
  * and the last one also takes the bitmap, so the asset worker's raster lanes can let a props job run between
- * two bands of a large picture (design/27 §7.5). The bands are clipped at whole rows, so the bitmap is the
- * one `preparePicture` makes, byte for byte (`asset.lanes.browser.test.ts`). Abandoning the generator drops
- * the canvas.
+ * two bands of a large picture (design/27 §7.5). The bands are clipped at whole rows, and a masked picture is
+ * cut by its mask once, in a step of its own after the last band and without a clip (Chromium anti-aliases
+ * the cut differently under one), so the bitmap is the one `preparePicture` makes, byte for byte
+ * (`asset.lanes.browser.test.ts`). Abandoning the generator drops the canvas.
  */
 export function* preparePictureSteps(
   src: CanvasImageSource,
@@ -334,7 +344,13 @@ export function* preparePictureSteps(
     for (let y = 0; y < t.h; y += rows) {
       if (y > 0) yield;
       ctx.save();
-      paintTarget(ctx, src, t, from, y, Math.min(rows, t.h - y));
+      paintTarget(ctx, src, t, from, { y, rows: Math.min(rows, t.h - y) });
+      ctx.restore();
+    }
+    if (t.shape?.mask) {
+      yield;
+      ctx.save();
+      paintTarget(ctx, src, t, from, 'cut');
       ctx.restore();
     }
   }
@@ -345,17 +361,17 @@ export function* preparePictureSteps(
 }
 
 /**
- * One step of a preparation: the picture clipped to its box (a masked one is not: its mask's cut is its edge)
- * and to the band of `rows` rows from `y` when given, then drawn as the target says: turned with its box and
- * cut to its mask, mirrored, or as it is.
+ * One step of a preparation: the picture clipped to its box (a masked one is not: its mask's cut is its edge),
+ * then drawn as the target says: turned with its box and cut to its mask, mirrored, or as it is. `step` is
+ * the whole of it (absent), one band of `rows` rows from `y` (clipped to it; a masked picture is not cut
+ * yet), or `cut`: a masked picture's cut alone, over the bands drawn.
  */
 function paintTarget(
   ctx: Ctx2D,
   src: CanvasImageSource,
   t: PictureTarget,
   from?: PictureFrom,
-  y?: number,
-  rows?: number,
+  step?: { y: number; rows: number } | 'cut',
 ): void {
   const masked = !!t.shape?.mask;
   if (!masked) {
@@ -363,9 +379,9 @@ function paintTarget(
     ctx.rect(t.bx, t.by, t.bw, t.bh);
     ctx.clip();
   }
-  if (y !== undefined && rows !== undefined) {
+  if (step && step !== 'cut') {
     ctx.beginPath();
-    ctx.rect(0, y, t.w, rows);
+    ctx.rect(0, step.y, t.w, step.rows);
     ctx.clip();
   }
   if (t.shape && masked && t.rotation) {
@@ -375,7 +391,11 @@ function paintTarget(
     ctx.rotate((t.rotation * Math.PI) / 180);
     ctx.translate(-cx, -cy);
   }
-  if (t.shape) paintShapedPicture(ctx, src, t.bx, t.by, t.bw, t.bh, t.fit, t.crop, t.shape, from);
+  if (t.shape && step === 'cut') {
+    placeShape(ctx, t.bx, t.by, t.bw, t.bh, t.shape);
+    cutToMask(ctx, t.shape.w > 0 ? t.shape.w : t.bw, t.shape.h > 0 ? t.shape.h : t.bh, t.shape);
+  } else if (t.shape)
+    paintShapedPicture(ctx, src, t.bx, t.by, t.bw, t.bh, t.fit, t.crop, t.shape, from, !step || !masked);
   else if (from) paintPictureFrom(ctx, src, from, t.bx, t.by, t.bw, t.bh, t.fit, t.crop);
   else paintPicture(ctx, src, t.bx, t.by, t.bw, t.bh, t.fit, t.crop);
 }

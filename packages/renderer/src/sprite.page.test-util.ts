@@ -7,6 +7,7 @@ import {
   type SlideObject,
   type TextStyle,
 } from '@ordo/domain';
+import { clearGeomFiles, putGeomFile } from './geom/stored.ts';
 import type { PropsModel } from './props.ts';
 import { rasterLowerThird, rasterProps, rasterSlide } from './raster.ts';
 import { rasterScene, rasterSceneSprites } from './scene-raster.ts';
@@ -30,6 +31,12 @@ import type { Ctx2D, ImageLookup } from './text2d.ts';
  * (text that overflows its box, the box alone as its reach) must be caught by the edge ring and drawn
  * full-frame, and recomposing a sprite one pixel off must differ.
  *
+ * A slide like the worship decks' (traced outlines read from geometry files, office-model text that shrinks to
+ * fit, turned text) is also drawn at 1920 and 3840 and compared in premultiplied levels (getImageData
+ * unpremultiplies, so a pixel of alpha 1 carries any colour): a tight sprite's device translation differs from
+ * the frame's by its offset, which moves float32 device coordinates by about 1e-4 px and can flip an
+ * anti-aliasing sample or a glyph's subpixel bucket on a few edge pixels (`REAL_NOISE`, design/27 §7.3).
+ *
  * Run once as drawers ran before the font resolver (`LEGACY_FONT_ENV`, no layout memo) and once with a
  * resolver-like environment installed (`RESOLVER`: same CSS fonts, but a generation, which turns on the
  * legacy layout memo in text2d.ts), as the asset worker runs. The reference is always drawn on a fresh
@@ -44,6 +51,12 @@ const SCALE = W / 1920;
 /** Rasterizer noise allowed between a sprite and the full-frame draw: pixels, and levels per channel. */
 const NOISE = { pixels: 24, levels: 8 };
 const same = (d: { differing: number; max: number }) => d.differing <= NOISE.pixels && d.max <= NOISE.levels;
+/**
+ * The same for real slides at 1920 and 3840, in premultiplied levels (M6 merge review, 268 converted worship
+ * slides drawn as tight sprites: at most 287 pixels of a slide, at most 70 levels on 180 glyph-edge pixels of
+ * an autofit text, 55 on 39 edge pixels of a traced outline; nothing outside the sprite's rect).
+ */
+const REAL_NOISE = { pixels: 400, levels: 72 };
 
 export type Check = { what: string; ok: boolean; detail: string };
 export type CaseResult = { name: string; checks: Check[] };
@@ -627,6 +640,127 @@ function run(k: Case): CaseResult {
   return { name: k.name, checks };
 }
 
+/** A traced outline: a closed wavy blob of `points` points (cubic segments) in a 1000 x 1000 space. */
+function traced(points: number, seed: number): string {
+  const segs = Math.max(4, Math.floor(points / 3));
+  const at = (k: number) => {
+    const a = (k / segs) * Math.PI * 2;
+    const r = 400 * (1 + 0.2 * Math.sin(5 * a + seed) + 0.08 * Math.sin(23 * a + 2 * seed));
+    return [500 + r * Math.cos(a), 500 + r * Math.sin(a)];
+  };
+  const f = (v: number) => v.toFixed(2);
+  const [x0, y0] = at(0);
+  let d = `M ${f(x0!)} ${f(y0!)}`;
+  for (let k = 0; k < segs; k++) {
+    const [ax, ay] = at(k + 1 / 3);
+    const [bx, by] = at(k + 2 / 3);
+    const [cx, cy] = at(k + 1);
+    d += ` C ${f(ax!)} ${f(ay!)} ${f(bx!)} ${f(by!)} ${f(cx!)} ${f(cy!)}`;
+  }
+  return `${d} Z`;
+}
+
+/** Geometry files of the real-like slide (64 hex digits, as the hub names them). */
+const FILES = [0, 1, 2].map((i) => ({ ref: `${i}`.repeat(64), d: traced(600 + 400 * i, i) }));
+
+/** A slide like the worship decks': traced outlines in geometry files, office-model autofit text, turned text. */
+const REAL_LIKE: Slide = {
+  id: 'real-like',
+  objects: [
+    ...Array.from({ length: 9 }, (_, i): SlideObject => {
+      const f = FILES[i % 3]!;
+      return {
+        id: `deco${i}`,
+        type: 'shape',
+        box: box(1030.37 + 83.3 * (i % 3), 120.61 + 190.7 * Math.floor(i / 3), 210.4, 180.9, i * 7.5),
+        shape: 'rect',
+        fill: { r: 90 + 20 * i, g: 140, b: 110, a: i % 2 ? 0.85 : 1 },
+        ...(i % 3 === 1 ? { stroke: { width: 2.25, color: { r: 40, g: 50, b: 40, a: 1 } } } : {}),
+        opacity: 1,
+        radius: 0,
+        geom: { ref: f.ref, paths: [{ d: 'M 0 0 L 1000 0 L 1000 1000 Z', w: 1000, h: 1000 }] },
+        ...(i === 4 ? { flipH: true } : {}),
+      } as SlideObject;
+    }),
+    text('fit', LONG, box(120.3, 160.45, 820.7, 420.2), {
+      fontFamily: 'serif',
+      fontSizePx: 64,
+      shadow: undefined,
+      outline: undefined,
+      lineModel: 'office',
+      autofit: 'shrink',
+      fitScale: { font: 0.775, spacing: 0.9 },
+      insets: { l: 14.4, t: 7.2, r: 14.4, b: 7.2 },
+    }),
+    text('turned', 'He is risen', box(240.5, 640.3, 600, 140), { fontSizePx: 72, shadow: undefined }, {}),
+  ].map((o) => (o.id === 'turned' ? { ...o, box: { ...o.box, rotation: -6.5 } } : o)) as SlideObject[],
+};
+
+/** Premultiplied difference of two RGBA frames: pixels that differ, and the largest level. */
+function comparePremultiplied(
+  a: Uint8ClampedArray,
+  b: Uint8ClampedArray,
+): { differing: number; max: number } {
+  let differing = 0;
+  let max = 0;
+  for (let i = 0; i < a.length; i += 4) {
+    let d = Math.abs(a[i + 3]! - b[i + 3]!);
+    for (let c = 0; c < 3; c++)
+      d = Math.max(d, Math.round(Math.abs(a[i + c]! * a[i + 3]! - b[i + c]! * b[i + 3]!) / 255));
+    if (d > 0) differing++;
+    if (d > max) max = d;
+  }
+  return { differing, max };
+}
+
+/** The real-like slide at `width` (16:9) as a tight sprite against its full-frame draw, premultiplied. */
+function realLike(width: number): CaseResult {
+  const checks: Check[] = [];
+  const check = (what: string, ok: boolean, detail = '') => checks.push({ what, ok, detail });
+  clearGeomFiles();
+  for (const f of FILES) putGeomFile(f.ref, { paths: [{ d: f.d, w: 1000, h: 1000 }] });
+  try {
+    const w = width;
+    const h = Math.round((width * 9) / 16);
+    const scale = w / 1920;
+    const draw = (c: Ctx2D) => rasterSlide(c, structuredClone(REAL_LIKE), LOOK_MAIN, scale, images, {});
+    const fresh = new OffscreenCanvas(w, h);
+    const fx = fresh.getContext('2d', { willReadFrequently: true })!;
+    draw(fx);
+    const want = fx.getImageData(0, 0, w, h).data;
+    const canvas = new OffscreenCanvas(1, 1);
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+    const surface = (sw: number, sh: number): Ctx2D => {
+      canvas.width = sw;
+      canvas.height = sh;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      return ctx;
+    };
+    const rect = spriteRect(
+      slideReach(ctx, structuredClone(REAL_LIKE), { scale, look: LOOK_MAIN }),
+      scale,
+      w,
+      h,
+    );
+    const got = drawSprite(surface, () => canvas.transferToImageBitmap(), w, h, rect, draw);
+    check('tight', got.tight, `rect ${JSON.stringify(rect)}`);
+    check('nothing touched the edge ring', !got.missed);
+    const c = new OffscreenCanvas(w, h);
+    const x = c.getContext('2d', { willReadFrequently: true })!;
+    x.drawImage(got.bitmap, got.x, got.y);
+    const d = comparePremultiplied(x.getImageData(0, 0, w, h).data, want);
+    check(
+      "the sprite at its offset is the full-frame picture within the real slides' noise (premultiplied)",
+      d.differing <= REAL_NOISE.pixels && d.max <= REAL_NOISE.levels,
+      `${d.differing} px, max ${d.max}`,
+    );
+    got.bitmap.close();
+  } finally {
+    clearGeomFiles();
+  }
+  return { name: `real-like slide at ${width}: geometry files, autofit and turned text`, checks };
+}
+
 /** Control: text overflowing its box with its box as the reach must be caught and drawn full-frame. */
 function shortReach(): CaseResult {
   const checks: Check[] = [];
@@ -660,7 +794,7 @@ function shortReach(): CaseResult {
 (window as unknown as { __sprites: (env?: 'resolver') => CaseResult[] }).__sprites = (env) => {
   installFontEnv(env === 'resolver' ? RESOLVER : LEGACY_FONT_ENV);
   try {
-    return [...CASES.map(run), shortReach()];
+    return [...CASES.map(run), shortReach(), realLike(1920), realLike(3840)];
   } finally {
     installFontEnv(LEGACY_FONT_ENV);
   }

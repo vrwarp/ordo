@@ -116,6 +116,60 @@ describe('what a shape draws (geom/bounds.ts, design/27 §12 drawing cost)', () 
     expect(outlineReach(built(100, 10, [line]), o)).toBe(arrowReach(arrowFor('triangle', 'lg', 'lg', 4)));
   });
 
+  it('grows by each arrowhead around the end point it sits on, not the whole box (M6 merge review)', () => {
+    const o = outlineOf({
+      stroke: { width: 4 },
+      ends: { head: { type: 'oval', w: 'sm', len: 'sm' }, tail: { type: 'triangle', w: 'lg', len: 'lg' } },
+    })!;
+    const head = arrowReach(arrowFor('oval', 'sm', 'sm', 4));
+    const tail = arrowReach(arrowFor('triangle', 'lg', 'lg', 4));
+    expect(tail).toBeGreaterThan(head);
+    // A line along the top of a tall box, from (0, 0) to (100, 0): the tail reaches past its end only.
+    const line: GeomPath = { cmds: [CMD_MOVE, CMD_LINE], pts: [0, 0, 100, 0], fill: 'none', stroke: true };
+    const b = drawnBounds(built(100, 300, [line]), o);
+    expect(b.x0).toBeCloseTo(-head, 6);
+    expect(b.y0).toBeCloseTo(-tail, 6);
+    expect(b.x1).toBeCloseTo(100 + tail, 6);
+    // Below the line nothing is drawn but the box: no arrowhead reaches past its bottom.
+    expect(b.y1).toBeCloseTo(300 + 2, 6);
+    // The review's 12 x 6 line with large arrowheads reached about 400 px a side; now its two end points.
+    const big = outlineOf({
+      stroke: { width: 20 },
+      ends: {
+        head: { type: 'triangle', w: 'lg', len: 'lg' },
+        tail: { type: 'triangle', w: 'lg', len: 'lg' },
+      },
+    })!;
+    const r = arrowReach(arrowFor('triangle', 'lg', 'lg', 20));
+    const short: GeomPath = { cmds: [CMD_MOVE, CMD_LINE], pts: [0, 0, 12, 6], fill: 'none', stroke: true };
+    const s = drawnBounds(built(12, 6, [short]), big);
+    expect(s.x1 - s.x0).toBeCloseTo(12 + 2 * r, 6);
+    expect(s.y1 - s.y0).toBeCloseTo(6 + 2 * r, 6);
+    // Closed sub-paths, unstroked paths and one ending where it starts have no arrowheads.
+    const closed = drawnBounds(built(100, 100, [polygon([0, 0, 100, 0, 100, 100])]), o);
+    expect(closed).toEqual(
+      drawnBounds(built(100, 100, [polygon([0, 0, 100, 0, 100, 100])]), { ...o, ends: undefined }),
+    );
+    const loop: GeomPath = {
+      cmds: [CMD_MOVE, CMD_LINE, CMD_LINE],
+      pts: [0, 0, 100, 50, 0, 0],
+      fill: 'none',
+      stroke: true,
+    };
+    expect(drawnBounds(built(100, 100, [loop]), o).x1).toBeCloseTo(102, 6);
+    expect(drawnBounds(built(100, 100, [{ ...line, stroke: false }]), o).x1).toBeCloseTo(102, 6);
+    // Every open sub-path of a path has its own: two lines in one path, each with its tail.
+    const two: GeomPath = {
+      cmds: [CMD_MOVE, CMD_LINE, CMD_MOVE, CMD_LINE],
+      pts: [0, 50, 40, 50, 60, 100, 60, 0],
+      fill: 'none',
+      stroke: true,
+    };
+    const t = drawnBounds(built(100, 100, [two]), o);
+    expect(t.y0).toBeCloseTo(-tail, 6);
+    expect(t.x1).toBeCloseTo(100 + 2, 6);
+  });
+
   it('places box-space bounds on the slide: flipped about the centre, rotated about it', () => {
     const box = { x: 100, y: 200, w: 40, h: 20, rotation: 0 };
     expect(placedBounds({ x0: 0, y0: 0, x1: 40, y1: 20 }, { box })).toEqual({

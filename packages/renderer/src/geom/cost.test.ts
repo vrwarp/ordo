@@ -15,6 +15,7 @@ import {
   objectCost,
   type Rated,
   slidePlan,
+  slowGradient,
   spanArea,
   strokeCost,
   unitCost,
@@ -477,8 +478,65 @@ describe('painted area and effect layers (M6 finish review, design/27 §12 drawi
     });
     expect(fillPaintOf({ ...o, gradient: { kind: 'linear', stops: stops.slice(0, 1) } })).toEqual({
       gradient: true,
+      slow: true,
       translucent: false,
     });
+  });
+
+  it("rates a gradient off Skia's two-stop fast path at twice a pixel (M6 merge review)", () => {
+    const c = (a: number) => ({ r: 0, g: 0, b: 0, a });
+    const o: CostedObject = { type: 'shape', shape: 'rect', fill: c(1), opacity: 1 };
+    const paint = (ats: number[]) =>
+      fillPaintOf({
+        ...o,
+        gradient: { kind: 'radial', stops: ats.map((at, i) => ({ at, color: { ...c(0.5), r: 40 * i } })) },
+      });
+    // Two stops at different positions are drawn as two at 0 and 1 (`paint.ts` `fastStops`): the fast path.
+    expect(paint([0, 1])).toEqual({ gradient: true, translucent: true });
+    expect(paint([0, 0.6])).toEqual({ gradient: true, translucent: true });
+    expect(paint([0.2, 0.8])).toEqual({ gradient: true, translucent: true });
+    // End stops repeating their neighbour's colour change nothing (`stops.ts` `drawnStops`): two stops drawn.
+    const held = [0, 0.15, 0.97, 1].map((at, i) => ({ at, color: { r: i < 2 ? 78 : 0, g: 0, b: 0, a: 1 } }));
+    expect(slowGradient(held)).toBe(false);
+    expect(slowGradient(held.map((st, i) => (i === 1 ? { ...st, color: { ...st.color, r: 77 } } : st)))).toBe(
+      true,
+    );
+    // Three or four stops, or two at one position (a hard edge), are searched for every pixel.
+    for (const ats of [
+      [0, 0.5, 1],
+      [0, 0.3, 0.7, 1],
+      [0.5, 0.5],
+      [0, 0.6, 0.6],
+    ])
+      expect(paint(ats), ats.join(' ')).toEqual({ gradient: true, slow: true, translucent: true });
+    expect(slowGradient([{ at: 1 }, { at: 0 }])).toBe(false);
+    expect(slowGradient([{ at: Number.NaN }, { at: 0 }])).toBe(true);
+    expect(slowGradient(undefined)).toBe(true);
+    expect(areaWeight({ gradient: true, slow: true })).toBe(GEOM_COST.gradientArea * GEOM_COST.slowGradient);
+    expect(areaWeight({ gradient: true, slow: true, translucent: false })).toBe(
+      GEOM_COST.opaqueGradientArea * GEOM_COST.slowGradient,
+    );
+    // A full-slide translucent 4-stop gradient took 17 to 19 ms at 4K past a blank job: the estimate covers it.
+    const SLIDE = 1920 * 1080;
+    expect(SLIDE * areaWeight({ gradient: true, slow: true }) * GEOM_COST.nsPerUnit * 1e-6).toBeGreaterThan(
+      19,
+    );
+    // The slide budget then keeps one of three such full-slide gradients (67 to 69 ms at 4K, all three drawn).
+    const box = { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 };
+    const four = [0, 0.3, 0.7, 1].map((at, i) => ({ at, color: { ...c(0.5), r: 40 * i } }));
+    const objects = Array.from({ length: 3 }, () => ({
+      ...o,
+      box,
+      fill: c(0.5),
+      gradient: { kind: 'linear', stops: four },
+    }));
+    const full = presetGeometry('rect', 1920, 1080)!;
+    const parts = slidePlan(
+      objects,
+      (x, part) => ({ est: objectCost(part ? withoutPart(x, part) : x, full), points: 0 }),
+      () => 0,
+    );
+    expect(parts).toEqual([undefined, 'geom', 'geom']);
   });
 
   it('rates a gradient stack as drawn: what fits on top of every legacy colour, the rest as those', () => {

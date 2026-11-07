@@ -15,23 +15,39 @@ const MAX_COVERAGE_KEYS = 256;
 /** Distinct uncovered characters a health report lists (the count says how many there are). */
 const MAX_REPORTED_CHARS = 64;
 
-export type DoneTiming = { key: string; ms: number; rasterMs?: number; uncovered?: string };
+export type DoneTiming = { key: string; ms: number; rasterMs?: number; heavy?: boolean; uncovered?: string };
 
 /** The performance figures of a health report. */
 type Perf = Pick<
   OutputHealth,
-  'gpuMB' | 'rasterMs' | 'uploadMs' | 'wholeUploads' | 'budgets' | 'alarms' | 'fontCoverage'
+  'gpuMB' | 'rasterMs' | 'rasterHeavy' | 'uploadMs' | 'wholeUploads' | 'budgets' | 'alarms' | 'fontCoverage'
 >;
 
 const ALARM_TEXT: Record<PerfAlarm, (h: Perf) => string> = {
   raster: (h) =>
-    `slide raster p95 ${h.rasterMs?.p95} ms is over the ${h.budgets?.rasterP95Ms} ms budget (p50 ${h.rasterMs?.p50} ms, ${h.rasterMs?.n} slides)`,
+    `slide raster p95 ${h.rasterMs?.p95} ms is over the ${h.budgets?.rasterP95Ms} ms budget (p50 ${h.rasterMs?.p50} ms, ${h.rasterMs?.n} slides${heavyText(h)})`,
   upload: (h) =>
     `texture upload in strips ${h.uploadMs} ms per frame (last minute) is over the ${h.budgets?.uploadMs} ms budget`,
 };
 
+/** ", k of them past the budget by their content, not counted": the slides `rasterHeavy` leaves out of the alarm. */
+function heavyText(h: Perf): string {
+  return h.rasterHeavy ? `, ${h.rasterHeavy} of them past the budget by their content, not counted` : '';
+}
+
 export class PerfHealth {
+  /** Every slide's raster time: what health reports (`rasterMs`). */
   readonly raster = new TimingWindow(RASTER_WINDOW);
+  /**
+   * The raster times of the slides whose content fits the budget (`heavy` not set, design/27 §13): what the
+   * `raster` alarm reads, so that a deck of traced decorations near the drawing budget does not tell the
+   * operator the computer is slow.
+   */
+  readonly rasterAlarm = new TimingWindow(RASTER_WINDOW);
+  /** Whether each of the last RASTER_WINDOW slides was heavy (a ring beside `raster`'s). */
+  private heavyRing = new Uint8Array(RASTER_WINDOW);
+  private heavyAt = 0;
+  private heavyCount = 0;
   /** Uncovered characters by the slide key that drew them (this service). */
   private uncovered = new Map<string, string>();
   /** Every uncovered character logged this service: each is logged once. */
@@ -45,7 +61,15 @@ export class PerfHealth {
    */
   done(m: DoneTiming): string | undefined {
     const slide = m.key.startsWith('sl|');
-    if (slide) this.raster.add(m.rasterMs ?? m.ms);
+    if (slide) {
+      const ms = m.rasterMs ?? m.ms;
+      this.raster.add(ms);
+      if (!m.heavy) this.rasterAlarm.add(ms);
+      const heavy = m.heavy ? 1 : 0;
+      this.heavyCount += heavy - this.heavyRing[this.heavyAt]!;
+      this.heavyRing[this.heavyAt] = heavy;
+      this.heavyAt = (this.heavyAt + 1) % RASTER_WINDOW;
+    }
     if (!m.uncovered) {
       this.uncovered.delete(m.key);
       return undefined;
@@ -60,6 +84,11 @@ export class PerfHealth {
     const chars = fresh.join('');
     const codes = fresh.map((ch) => `U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`);
     return `no font on this output has ${fresh.length} character(s) of ${m.key.slice(0, 60)}: ${chars} (${codes.slice(0, 8).join(' ')}${codes.length > 8 ? ' …' : ''}; ${coverageScripts(chars).join(', ')}); drawn with this computer's own fallback font`;
+  }
+
+  /** Slides of the raster window past the budget by their content (`rasterHeavy`); 0 when none is. */
+  get rasterHeavy(): number {
+    return this.heavyCount;
   }
 
   /** The characters of this service no face covers, for `buildHealth`; undefined when there are none. */
@@ -108,7 +137,7 @@ export function perfDiagnostics(h: Perf): Record<string, string> {
   const fc = h.fontCoverage;
   return {
     raster: r
-      ? `slides p50 ${r.p50} ms, p95 ${r.p95} ms, max ${r.max} ms over ${r.n}${b ? ` (budget p95 ${b.rasterP95Ms} ms)` : ''}`
+      ? `slides p50 ${r.p50} ms, p95 ${r.p95} ms, max ${r.max} ms over ${r.n}${b ? ` (budget p95 ${b.rasterP95Ms} ms)` : ''}${h.rasterHeavy ? `; ${h.rasterHeavy} past the budget by their content (drawing estimate), left out of the alarm` : ''}`
       : '-',
     upload:
       h.uploadMs !== undefined

@@ -310,6 +310,39 @@ describe('splitScene', () => {
     expect(ids(m.over)).toEqual(['plain']);
   });
 
+  it("counts an M6 shape's outline reach, its miter tips and arrowheads, not only its width (M6 merge review)", () => {
+    const v = image('video', box(800, 300, 600, 400));
+    // A star whose box ends 35 px left of the video: its right tip's miter (30 px outline) reaches into it.
+    const star = {
+      ...shape('star', box(465, 350, 300, 300)),
+      geom: { preset: 'star5' },
+      fill: { r: 250, g: 200, b: 0, a: 1 },
+      stroke: { width: 30, color: { r: 255, g: 255, b: 255, a: 1 } },
+    } as SlideObject;
+    const b = objectBounds(star);
+    expect(b.x + b.w).toBeGreaterThan(810);
+    expect(ids(splitScene([v, star], 0).over)).toEqual(['star']);
+    // The same box without the miter (round joins) stays clear of it: its outline reaches 15 px.
+    const round = { ...star, id: 'round', lineJoin: 'round' } as SlideObject;
+    expect(ids(splitScene([v, round], 0).over)).toEqual([]);
+    // A line whose arrowhead reaches into the video from 20 px left of it; its shadow counts as before.
+    const arrow = {
+      ...shape('arrow', box(400, 500, 380, 0)),
+      shape: 'line',
+      fill: undefined,
+      geom: { preset: 'line' },
+      stroke: { width: 8, color: { r: 0, g: 0, b: 0, a: 1 } },
+      ends: { tail: { type: 'triangle', w: 'lg', len: 'lg' } },
+    } as SlideObject;
+    expect(ids(splitScene([v, arrow], 0).over)).toEqual(['arrow']);
+    const shadowed = {
+      ...shape('shadowed', box(400, 500, 300, 100)),
+      geom: { preset: 'rect' },
+      shadow: { dx: 80, dy: 0, blur: 10, color: { r: 0, g: 0, b: 0, a: 0.5 } },
+    } as SlideObject;
+    expect(ids(splitScene([v, shadowed], 0).over)).toEqual(['shadowed']);
+  });
+
   it('keeps everything in base when the play index is unknown', () => {
     const s = splitScene(objects, 42);
     expect(ids(s.base)).toEqual(ids(objects));
