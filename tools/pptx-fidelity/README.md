@@ -24,8 +24,11 @@ by the next run with the same `--out` (they are the slow part); `--fresh-lo` dra
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--engine native\|ppv\|both` | which renderers to score (default pptx-preview)                                                                                                                 |
 | `--no-ppv`                   | leave pptx-preview out whatever `--engine` says                                                                                                                 |
-| `--lo-compat`                | draw native slides with LibreOffice's policies where ordo's differ (`src/compat.ts`); each slide a rule changes is drawn both ways                              |
-| `--before hub`               | also score what a hub with LibreOffice showed before M9 (`beforeHubSsim`, below)                                                                                |
+| `--lo-compat`                | draw native slides with LibreOffice's policies where ordo's differ (`src/compat/`); each slide a rule changes is drawn both ways                                |
+| `--before hub\|paste`        | also score what a hub with LibreOffice shows (`beforeHubSsim`, below): its real version 2, or (`paste`) the pixel paste alone                                   |
+| `--hub dist\|source`         | the hub `--before hub` imports through: this checkout's sources (default) or its built bundle                                                                   |
+| `--no-libreoffice`           | also score what a hub without LibreOffice shows (`noLoSsim`, `missing`, below)                                                                                  |
+| `--hub-budget`               | draw every slide as the hub stores it once its budgets ran (a slide it makes a picture loses its objects)                                                       |
 | `--slides [DECK:]LIST`       | score only these slides (1-based shown numbers, `3,5-7`), for every deck or the decks whose run name contains `DECK`; repeatable                                |
 | `--manifest FILE`            | a suite manifest: per-feature means, worship decks first                                                                                                        |
 | `--baseline FILE`            | compare with an earlier `summary.json` or `native-baseline.json`; a worship deck whose native SSIM drops by more than `--max-drop` (default 0.02) fails the run |
@@ -49,21 +52,50 @@ tight (the summaries keep every number).
 - `blackSsim`: an all-black frame scored the same way, the floor to beat.
 - `tier`, `class`, `reasons` (the converter's), `hub` (the class in the hub when its §3.4 budgets make it
   differ: `src/census.ts` `hubClasses`).
-- `beforeHubSsim` (`--before hub`, `src/beforehub.ts`): what a hub **with** LibreOffice showed before M9.
-  A slide the hub stores as a picture shows LibreOffice's page (1 by construction). A hybrid slide shows
-  LibreOffice's art over its box, and a slide with metafile pictures shows LibreOffice's conversion of
-  them: LibreOffice's pixels inside those boxes (grown by 2 px before and 3 px after) are pasted over the
-  native page, which is then scored as the native page is. The paste also takes LibreOffice's background
-  inside the box, so the score is an upper bound of the real version 2. Any other slide scores
-  `nativeSsim`. Decks have the mean as `beforeHubSsim`, the summary as `beforeHubMean`.
+- `beforeHubSsim` (`--before hub`, `src/beforehub.ts`): what a hub **with** LibreOffice shows. Every deck
+  with a slide in F (below) is imported once through this checkout's hub with LibreOffice
+  (`src/hub-import.ts`: the upload route, the native import, the LibreOffice follow-up); the hub's version 2
+  of those slides (LibreOffice's art over a hybrid slide's box, its page for a picture slide, its conversion
+  of the metafiles), with its pictures and geometry files, is drawn by the native column's renderer and
+  scored (`beforeHubFrom: 'hub'`). A slide LibreOffice could not draw in the hub (its bounded follow-up gave
+  up: on one deck of E, LibreOffice crashes under the hub's resource limits on every attempt) is scored as
+  the hub shows it, without its art (`beforeHubFailed`).
+  Any other slide scores `nativeSsim`. Decks have the mean as `beforeHubSsim`, the summary as
+  `beforeHubMean` (and `before`).
+- `beforeHubPaste` (`--before`, F only): the labelled fallback. LibreOffice's pixels inside the art box and
+  the metafiles' boxes (grown by 2 px before and 3 px after) pasted over the native page, scored as the
+  native page is; a picture slide (or a slide the converter did not emit) scores 1. It stands in as
+  `beforeHubSsim` where the hub gave no score (its import failed, or the slide is still pending there:
+  `beforeHubFrom: 'paste'`; `--before paste` uses it alone).
+  It is no bound of the real picture: it takes LibreOffice's background inside the box, misses art that
+  spills past it (a 3-D extrusion), and resamples a page of another size twice. Measured over E's F (the
+  186 slides the hub drew with their art), it is within ±0.012 of the hub on 114, up to 0.19 above it where
+  a large box covers a textured background, at least 0.02 above it on 23 of the 37 picture slides (the hub
+  shows its stored page, not LibreOffice's), and up to 0.04 below it on extruded 3-D.
+- `noLoSsim` (`--no-libreoffice`): what a hub **without** LibreOffice shows: the deck emitted with
+  `EmitOptions.libreoffice: false` (M9: the art and the metafile conversions left out and listed), each slide
+  as the hub stores it (`hubStoredSlide`: a picture slide loses its objects; the budget ladder will fill that
+  hook). It is `nativeSsim` where the two draw alike, and `nativeNoLo` names its picture where they do not.
+  `missing` lists the kinds nothing draws (`EmittedSlide.missing`). Summary: `noLoMean`.
+- `metafiles`: metafile pictures left to LibreOffice on the slide (pending; such a slide is in F even when
+  native). `exception`: the reason of a named exception (`src/exceptions.ts`) for the slide, which lifts
+  gate 2 (before-hub) only, unless `exceptionGate: 'all'` says it lifts gate 1 (before-harness) too; decks
+  carry their file's `sha256`, by which exceptions name them.
+- **F** (the M9 exit's set): every slide whose hub class is not native, every slide with `metafiles`, and
+  every shown slide the converter did not emit. `native.all.causes` and the report table it by cause, with
+  `exit_ssim.py`'s groups (first match: 3d, warp, table, decorations, pictures, vertical, metafile/ole,
+  chart, smartart; then ladder for a picture slide, other): before-harness, before-hub (and how many from the
+  hub), the paste, without LibreOffice, black, `missing`, exceptions and the largest object.
 - `rasterMs`: the median `drawSlide2D` time (draw and flush) at 1920 and 3840 px wide, pictures prepared.
 - `coldMs`: preparing the pictures the deck's cache lacks plus the first draw, at each width.
 - `maxObjectMs` and `maxObjectId`: the largest single object's draw and flush at 1920 and 3840 px, cold
   (design/27 §13's 50 ms task). After every slide's own timings, each slide is drawn again on a canvas of its
   own, object by object as `drawSlide2D` draws them (the authored objects within the slide's drawing budget),
-  from a copy of the slide with the effect sprites cleared, so nothing cached for its objects applies; its
-  pictures are prepared first, outside the times, as an output's lanes prepare them (`src/objecttime.ts`,
-  `src/native-page.ts`). The run prints the p95 and the largest over all slides.
+  from a copy of the slide with the effect sprites cleared and the deck's geometry files read again (their
+  paths, Path2D and union tracing are built inside the times, as on an output that has just read them), so
+  nothing cached for its objects applies; its pictures are prepared first, outside the times, as an
+  output's lanes prepare them (`src/objecttime.ts`, `src/native-page.ts`). The run prints the p95 and the
+  largest over all slides.
 
 ## Census
 
@@ -79,6 +111,42 @@ columns: `n`, `i`, `tier`, `class`, `reasons`, `objects`, `geom`, `refs`, `bytes
 an error. Each deck is converted in the harness's worker, with the pool's heap limit and timeout.
 
 A census line names its deck. Tables made from a census of private decks print counts only.
+
+<!-- m9:harness -->
+## Hub import (M9)
+
+```
+npx tsx src/hub-import.ts [--dry-run] [--libreoffice] [--out DIR] [--hub dist|source] [--sermons DIR]... <deck | folder>...
+```
+
+The M9 exit's import of the whole worship set through a real hub (plan §6.3). It starts this checkout's hub
+(one process, `jobs.light` 1, data under `<DIR>/hub-data`) with a PATH of links to `node`, `ffmpeg`,
+`ffprobe`, `pdftoppm`, `pdfinfo` and `prlimit` only and `ORDO_LIBREOFFICE=auto`, checks that
+`GET /capabilities` reports LibreOffice absent, posts every deck through `POST /import/document`, and writes
+`hub-import.json` and `hub-import.md`: per deck the job state, the time to version 1, the classes,
+`pending`, the `missing` kinds, `simplified`, the presentation's bytes and its largest slide's, and whether
+a goLive of it resolves every file it names (`resolvePlaylist`, then each file fetched); then the gates
+(every job done, nothing pending, no picture slide, no slide over 64 KB, no presentation over 4 MiB, every
+reference resolved, no LibreOffice command in the hub log, sermon decks at version 1 within 5 s, RSS within
+`--mem-limit-mb`). `--libreoffice` runs with LibreOffice on the PATH and counts the slides left to it.
+`--dry-run` lists the decks and the dangling links (unreadable) without a hub. Decks under `--sermons` are
+reported as `sermon-<k>`.
+
+## Registries (M9)
+
+- `src/compat/`: one LibreOffice policy rule per file (`compatRule`: key, text, `hits(element, slide)`),
+  listed once in `COMPAT_REGISTRY` (`index.ts`), in report order. An M9 track adds its rule (`flat3d`,
+  `warpRuns`, `vertLo`, `mirrorTurn`, `chartLo`) as a file and one line there.
+- `src/features/`: one family of XML features per file (`featureFamily`: key, features in report order,
+  optional targets, `detect(source)` with the slide's XML and the parts it names, `related('/chart')`),
+  listed once in `FEATURE_FAMILIES`. The text family is `textFeatures` (as since M2); every other family's
+  features are `xmlFeatures`, tabled the same way.
+- `src/exceptions.ts`: the named exceptions of the M9 gates, each a deck's SHA-256 prefix, a slide and a
+  reason (no deck names), and the gates it lifts (`gate`: 'hub', the default, or 'all'). A run writes
+  `exception` (and `exceptionGate`) on each slide one names; `exit_ssim.py` honours them.
+- `src/libreoffice.ts`: LibreOffice's reference pictures (`pptxToPdf`, moved here from the hub, which keeps
+  its own sandboxed LibreOffice path).
+<!-- /m9:harness -->
 
 ## Other tools
 

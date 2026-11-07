@@ -23,8 +23,17 @@ export type Args = {
   loCompat: boolean;
   /** Register fontconfig's face for a script under a missing script fallback family's name (`fonts.ts`). */
   scriptStandIns: boolean;
-  /** `--before hub`: also score what a hub with LibreOffice showed before M9 (`beforehub.ts`). */
-  before?: 'hub';
+  /**
+   * `--before hub`: also score what a hub with LibreOffice showed (`beforehub.ts`): its real version 2,
+   * drawn, with the pixel paste as the labelled fallback; `--before paste`: the paste alone.
+   */
+  before?: 'hub' | 'paste';
+  /** `--hub dist|source`: the hub `--before hub` imports through (default: this checkout's sources). */
+  hub?: 'dist' | 'source';
+  /** `--no-libreoffice`: also score what a hub without LibreOffice shows (`noLoSsim`, `missing`). */
+  noLibreOffice: boolean;
+  /** `--hub-budget`: draw every slide as the hub stores it once its budgets ran (`withHubBudget`). */
+  hubBudget: boolean;
   /** `--slides`, in the order given; empty: every slide of every deck. */
   slides: SlideSpec[];
   decks: string[];
@@ -79,6 +88,8 @@ export function parseArgs(argv: readonly string[]): Args {
     maxDrop: 0.02,
     loCompat: false,
     scriptStandIns: false,
+    noLibreOffice: false,
+    hubBudget: false,
     slides: [],
     decks: [],
   };
@@ -96,13 +107,19 @@ export function parseArgs(argv: readonly string[]): Args {
     else if (v === '--fresh-lo') a.freshLo = true;
     else if (v === '--lo-compat') a.loCompat = true;
     else if (v === '--script-stand-ins') a.scriptStandIns = true;
-    else if (v === '--chromium') a.chromium = value(++i, v);
+    else if (v === '--no-libreoffice') a.noLibreOffice = true;
+    else if (v === '--hub-budget') a.hubBudget = true;
+    else if (v === '--hub') {
+      const h = value(++i, v);
+      if (h !== 'dist' && h !== 'source') throw new Error('--hub takes dist or source');
+      a.hub = h;
+    } else if (v === '--chromium') a.chromium = value(++i, v);
     else if (v === '--baseline') a.baseline = value(++i, v);
     else if (v === '--manifest') a.manifest = value(++i, v);
     else if (v === '--slides') a.slides.push(parseSlideSpec(value(++i, v)));
     else if (v === '--before') {
       const b = value(++i, v);
-      if (b !== 'hub') throw new Error('--before takes hub');
+      if (b !== 'hub' && b !== 'paste') throw new Error('--before takes hub or paste');
       a.before = b;
     } else if (v === '--no-ppv') noPpv = true;
     else if (v === '--max-drop') {

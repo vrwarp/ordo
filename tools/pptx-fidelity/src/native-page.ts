@@ -48,8 +48,10 @@ import {
  * `objects` times each object of a slide on its own (`maxObjectMs`, design/27 §13's 50 ms task): the slide
  * is drawn again on a canvas of its own, object by object as `drawSlide2D` draws them, each `drawObject`
  * timed with its flush. Each object is drawn cold: a copy of the slide (nothing cached for its objects
- * applies) with the effect sprites cleared; its pictures are prepared first, outside the times, as an
- * output's lanes prepare them before the draw. `native.ts` asks for it once every slide's own draws are
+ * applies) with the effect sprites cleared and the deck's geometry files read again (`putGeomFile` builds a
+ * new geometry, so its paths, Path2D and union tracing are built inside the times, as on an output that has
+ * just read the files); its pictures are prepared first, outside the times, as an output's lanes prepare
+ * them before the draw. `native.ts` asks for it once every slide's own draws are
  * done, so clearing the sprites changes none of the other timings.
  */
 
@@ -124,6 +126,14 @@ const BACKGROUND = { box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 }, fit: 'c
 type Decoded = { bmp: ImageBitmap | undefined; px: number };
 
 const known = new Map<string, PageMedia>();
+/** The deck's geometry files as `geoms` was given them: read again before each slide's object pass. */
+let geomList: { id: string; file: unknown }[] = [];
+
+/** Forget every geometry file and read the deck's again: what was built from them is built anew. */
+function rereadGeoms(): void {
+  clearGeomFiles();
+  for (const g of geomList) putGeomFile(g.id, g.file);
+}
 /** Sources by media id and prepared pictures by `pictureKey(id, target)`, least recently used first. */
 const cache = new Map<string, Decoded>();
 let cached = 0;
@@ -329,11 +339,13 @@ function context(width: number, from = canvases): OffscreenCanvasRenderingContex
 
 /**
  * The largest single object's time at `width`: the background as `draw` lays it, then the slide's objects as
- * `drawSlide2D` draws them (authored, within the slide's drawing budget), each timed with its flush. A
- * slide drawn as one page picture (`slideContent`) is timed whole.
+ * `drawSlide2D` draws them (authored, within the slide's drawing budget), each timed with its flush, cold:
+ * the effect sprites cleared and the geometry files read again first. A slide drawn as one page picture
+ * (`slideContent`) is timed whole.
  */
 function largestObject(slide: Slide, width: number, images: ImageLookup): { ms: number; id?: string } {
   clearEffectCache();
+  rereadGeoms();
   const copy = structuredClone(slide);
   const ctx = context(width, objectCanvases);
   const scale = width / 1920;
@@ -375,8 +387,8 @@ const page: NativePage = {
     for (const m of list) known.set(m.id, m);
   },
   geoms(list) {
-    clearGeomFiles();
-    for (const g of list) putGeomFile(g.id, g.file);
+    geomList = list;
+    rereadGeoms();
   },
   async render(job) {
     const missing: string[] = [];

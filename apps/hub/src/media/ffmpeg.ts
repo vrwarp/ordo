@@ -422,31 +422,6 @@ export async function pdfPage(
   return `${outPrefix}.${o.format}`;
 }
 
-/** LibreOffice headless conversion of a PPTX to PDF, with a throwaway profile. */
-export async function pptxToPdf(pptx: string, outDir: string, o: TOpts): Promise<string> {
-  const profile = join(outDir, 'lo-profile');
-  await run(
-    'soffice',
-    [
-      `-env:UserInstallation=file://${profile}`,
-      '--headless',
-      '--norestore',
-      '--nolockcheck',
-      '--nodefault',
-      '--nologo',
-      '--convert-to',
-      'pdf',
-      '--outdir',
-      outDir,
-      pptx,
-    ],
-    { ...o, env: { PATH: process.env.PATH, HOME: outDir, LANG: 'C.UTF-8' } },
-  );
-  const pdf = (await readdir(outDir)).find((f) => f.toLowerCase().endsWith('.pdf'));
-  if (!pdf) throw new Error('LibreOffice produced no PDF');
-  return join(outDir, pdf);
-}
-
 /**
  * Parse a GIF's frame count and whether the first frame uses a transparent colour. Later frames are
  * ignored: encoders (ffmpeg included) use transparency there for inter-frame delta compression.

@@ -1460,6 +1460,31 @@ The current JSZip text path takes 1.17 s per 100 slides.
        cleared, its pictures prepared outside the times). Each `drawObject` is timed with its flush, at 1920
        and 3840 px, and the largest is kept with its object's id.
    <!-- /m9:base -->
+   <!-- m9:harness -->
+   - *Built for M9 (harness track; `tools/pptx-fidelity/README.md`):*
+     - `--before hub` now takes the hub's real picture: each deck with a slide the hub does not store native,
+       with pending metafiles, or that the converter did not emit, is imported once through this checkout's
+       hub with LibreOffice (`src/hub-import.ts`), and its version 2 of those slides is drawn by the harness's
+       renderer and scored (`beforeHubFrom: 'hub'`). The wave-0 pixel paste is kept as `beforeHubPaste`, a
+       labelled fallback where the hub gives no score (`--before paste` alone). It was no bound of version 2:
+       it took LibreOffice's background inside the art box, missed the art's spill past the box, and stood at
+       1 for picture slides, which really show the hub's stored page.
+     - F, the exit's set, is every slide not stored native, every slide with metafiles left to LibreOffice
+       (`perSlide.metafiles`), and every shown slide the converter did not emit (scored as the hub's
+       LibreOffice picture). `native.all.causes` tables F by cause as `exit_ssim.py` groups it.
+     - `--no-libreoffice` scores what a hub without LibreOffice shows (`noLoSsim`, `missing`), drawn from the
+       deck emitted with `EmitOptions.libreoffice: false` as the hub stores it; `--hub-budget` draws every slide
+       as the hub stores it (`hubStoredSlide`, the hook the budget ladder fills).
+     - Registries: `src/compat/` (one LibreOffice policy rule per file) and `src/features/` (one XML feature
+       family per file, with the parts a slide names), each listed once; `src/exceptions.ts` (named
+       exceptions by deck SHA-256 prefix, slide and reason, lifting gate 2 only unless the entry says 'all');
+       `src/libreoffice.ts` (`pptxToPdf`, moved out of the hub's `media/ffmpeg.ts`: the hub keeps only its
+       sandboxed LibreOffice path).
+     - `maxObjectMs` reads the deck's geometry files again before each slide's object pass, so a geometry in a
+       file is built inside the times.
+     - `src/hub-import.ts` is also the exit's soffice-less import of the whole worship set (§15 M9 exit,
+       plan §6.3), with `--dry-run`.
+   <!-- /m9:harness -->
 2. **Committed probe decks.** Synthetic generators, as in `corpus.ts`, one per verified rule:
    - tint/shade (#454545);
    - defaultTextStyle for non-placeholders;

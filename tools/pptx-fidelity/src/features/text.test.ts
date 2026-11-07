@@ -1,6 +1,6 @@
 import { body, para, run, solid, sp } from '@ordo/pptx-scene/test-util.ts';
 import { describe, expect, it } from 'vitest';
-import { deckTextFeatures, TEXT_FEATURES, textFeatures } from './features.ts';
+import { deckTextFeatures, TEXT_FEATURES, textFeatures } from './text.ts';
 
 const shape = (txBody: string) => sp({ id: 2, x: 0, y: 0, cx: 100, cy: 100, txBody });
 

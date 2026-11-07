@@ -1,9 +1,22 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
-import { beforeHubSsim, boundsOf, pagePx, pasteLibreOffice, pasteRegions } from './beforehub.ts';
+import {
+  BeforeHub,
+  boundsOf,
+  needsHub,
+  pagePx,
+  pasteLibreOffice,
+  pasteRegions,
+  pasteSsim,
+} from './beforehub.ts';
+import { hubClasses } from './census.ts';
+import { findOnPath } from './hub-import.ts';
+import { drawWithLibreOffice } from './libreoffice.ts';
+import { convertDeck, NativeRenderer } from './native.ts';
 import { png } from './png.ts';
 import { ssim } from './ssim.ts';
 
@@ -32,6 +45,18 @@ function rgb(file: string, x: number, y: number): number[] {
 const SLIDE = { x: 0, y: 0, w: 1920, h: 1080 };
 /** The middle of the slide: 480..1440 x 270..810 logical px. */
 const ART = { x: 480, y: 270, w: 960, h: 540, rotation: 0 };
+
+describe('which slides the hub is asked for', () => {
+  it('asks for every slide not stored native, one with pending metafiles, and one never converted', () => {
+    expect(needsHub({ hub: 'native' })).toBe(false);
+    expect(needsHub({ hub: 'native', metafiles: [] })).toBe(false);
+    expect(needsHub({ hub: 'native', metafiles: [{ x: 0, y: 0, w: 1, h: 1 }] })).toBe(true);
+    expect(needsHub({ hub: 'hybrid', art: ART })).toBe(true);
+    expect(needsHub({ hub: 'picture' })).toBe(true);
+    // The converter did not emit it: the hub shows LibreOffice's picture of it.
+    expect(needsHub(undefined)).toBe(true);
+  });
+});
 
 describe('regions', () => {
   it('turns a box into its bounds, and pastes only the art of a hybrid slide and the metafiles', () => {
@@ -91,12 +116,12 @@ describe.skipIf(!hasFfmpeg)('--before hub', () => {
 
     const nativeSsim = await ssim(lo, native);
     const page = { lo, native, nativeSsim, rect: SLIDE, scratch: join(dir, 'scratch.png') };
-    const hybrid = await beforeHubSsim({ hub: 'hybrid', art: ART }, page);
+    const hybrid = await pasteSsim({ hub: 'hybrid', art: ART }, page);
     expect(hybrid).toBeGreaterThan(nativeSsim);
     expect(hybrid).toBeCloseTo(await ssim(lo, out), 6);
     // A picture slide is LibreOffice's page; a native slide is what the native column drew.
-    expect(await beforeHubSsim({ hub: 'picture', art: ART }, { ...page, lo: join(dir, 'none.png') })).toBe(1);
-    expect(await beforeHubSsim({ hub: 'native' }, page)).toBe(nativeSsim);
+    expect(await pasteSsim({ hub: 'picture', art: ART }, { ...page, lo: join(dir, 'none.png') })).toBe(1);
+    expect(await pasteSsim({ hub: 'native' }, page)).toBe(nativeSsim);
   });
 
   it("scales LibreOffice's pixels to the native page where the pages differ in size", async () => {
@@ -112,4 +137,70 @@ describe.skipIf(!hasFfmpeg)('--before hub', () => {
     expect(rgb(two, 96, 54)).toEqual([255, 0, 0]);
     expect(rgb(two, 150, 20)).toEqual([0, 200, 0]);
   });
+});
+
+/** Chromium for the renderer (as native.test.ts finds it) and LibreOffice for the hub's art. */
+async function tools(): Promise<string | undefined> {
+  if (!(await findOnPath('soffice')) || !(await findOnPath('ffmpeg'))) return undefined;
+  if (process.env.ORDO_TEST_CHROMIUM) return process.env.ORDO_TEST_CHROMIUM;
+  try {
+    const exe = (await import('@playwright/test')).chromium.executablePath();
+    return existsSync(exe) ? exe : undefined;
+  } catch {
+    return undefined;
+  }
+}
+const chromium = await tools();
+
+describe.skipIf(!chromium)('--before hub through a real hub', () => {
+  it("draws the hub's version 2 of a hybrid slide, LibreOffice's art in it, and scores it", async () => {
+    const work = mkdtempSync(join(tmpdir(), 'ordo-beforehub-'));
+    const p = new pptxgen();
+    p.layout = 'LAYOUT_16x9';
+    p.addSlide().addText('Amazing grace', { x: 1, y: 1, w: 6, h: 1, fontFace: 'Arial', fontSize: 40 });
+    const chart = p.addSlide();
+    chart.addText('Offering', { x: 0.5, y: 0.3, w: 6, h: 0.8, fontFace: 'Arial', fontSize: 32 });
+    chart.addChart(p.ChartType.bar, [{ name: 'Gifts', labels: ['A', 'B', 'C'], values: [3, 5, 2] }], {
+      x: 1,
+      y: 1.3,
+      w: 8,
+      h: 4,
+      chartColors: ['C00000'],
+    });
+    const deck = join(work, 'deck.pptx');
+    writeFileSync(deck, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
+    const loDir = join(work, 'lo');
+    mkdirSync(loDir);
+    const lo = await drawWithLibreOffice(deck, loDir);
+    const nd = join(work, 'native');
+    mkdirSync(nd);
+    const conv = await convertDeck(deck, nd);
+    const hub = hubClasses(conv.slides, conv.geoms ?? []).map((h) => h.hub);
+    expect(hub).toEqual(['native', 'hybrid']);
+    const renderer = await NativeRenderer.start(chromium!);
+    const before = new BeforeHub({ dir: join(work, 'hub') });
+    try {
+      const drawn = await renderer.renderDeck(conv, nd, { repeats: 0 });
+      const blankArt = await ssim(lo[1]!, join(nd, drawn.slides[1]!.png!));
+      const r = await before.score({
+        deck,
+        shown: new Set([1]),
+        lo,
+        rect: conv.slideRect,
+        renderer,
+        work: join(work, 'v2'),
+      });
+      expect(r.notes.filter((n) => /gave no score|import failed|follow-up failed/.test(n))).toEqual([]);
+      // Only the slide asked for, with LibreOffice's chart drawn in: far closer to LibreOffice than the blank box.
+      expect([...r.scores.keys()]).toEqual([1]);
+      expect(r.scores.get(1)!).toBeGreaterThan(blankArt + 0.02);
+      expect(r.scores.get(1)!).toBeGreaterThan(0.9);
+      expect(existsSync(join(work, 'v2'))).toBe(false);
+    } finally {
+      await before.close();
+      await renderer.close();
+      rmSync(work, { recursive: true, force: true });
+    }
+    expect(existsSync(join(work, 'hub'))).toBe(false);
+  }, 300_000);
 });

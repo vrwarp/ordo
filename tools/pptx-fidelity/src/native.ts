@@ -8,9 +8,12 @@
  *   name never becomes a path). It never throws: a deck the converter cannot read is a note.
  * - `convertDeckIsolated` runs it in a worker thread with a heap limit and a timeout, as the hub's CPU pool
  *   will (design/27 §12): a deck that exhausts either is a note, and the run goes on.
- * - Each slide also gets its text features (`features.ts`, from its own XML) and the LibreOffice policy
- *   rules that change its drawing (`compat.ts`; the deck is emitted a second time with
+ * - Each slide also gets its features (`features/`, from its own XML and the parts it names) and the
+ *   LibreOffice policy rules that change its drawing (`compat/`; the deck is emitted a second time with
  *   `EmitOptions.loCompat`); with `loCompat` the slide as LibreOffice draws it is kept too (`compatSlide`).
+ * - With `noLibreOffice` (`--no-libreoffice`, M9) the deck is emitted once more as a hub without LibreOffice
+ *   emits it (`EmitOptions.libreoffice: false`): the art and the metafile conversions are left out and listed
+ *   in `missing`; the run draws that slide as the hub stores it (`hubStoredSlide`) for `noLoSsim`.
  * - `NativeRenderer` loads `native-page.ts` (bundled with esbuild) in headless Chromium, gives the page's
  *   font resolver the faces this machine has for every family the slides ask for, ordo's default face and
  *   the script fallbacks (`fonts.ts`, as LibreOffice and the outputs draw them), and draws every shown slide
@@ -29,6 +32,7 @@ import type { GeomFile, Slide } from '@ordo/domain';
 import { extractZip } from '@ordo/importers/zip-stream.ts';
 import { Worker } from 'node:worker_threads';
 import {
+  type EmitOptions,
   type EmitResult,
   type EmittedSlide,
   emitSlides,
@@ -42,8 +46,8 @@ import type { FaceRequest } from '@ordo/renderer/text/types.ts';
 import type { Browser, Page } from '@playwright/test';
 import { bakePicture } from './bake.ts';
 import { hostFace } from './faces.ts';
-import { type CompatRule, compatRules, drawingKey } from './compat.ts';
-import { deckTextFeatures, textFeatures } from './features.ts';
+import { type CompatRule, compatRules, drawingKey } from './compat/index.ts';
+import { deckFeatures, type Features, featureSource, partFeatures } from './features/index.ts';
 import { hostFonts, type ScriptFace } from './fonts.ts';
 import type { NativePage, ObjectsResult, PageFont, PageMedia, RenderResult } from './native-page.ts';
 
@@ -79,9 +83,11 @@ export type NativeSlide = {
   notes: string[];
   /** The slide as ordo draws it. */
   slide: Slide;
-  /** Text features of the slide's own XML (`features.ts`). */
+  /** Text features of the slide's own XML (`features/text.ts`). */
   textFeatures: string[];
-  /** LibreOffice policy rules that change how the slide is drawn (`compat.ts`). */
+  /** The other registered families' features (`features/index.ts`; none before the M9 tracks add theirs). */
+  xmlFeatures?: string[];
+  /** LibreOffice policy rules that change how the slide is drawn (`compat/`). */
   compat: CompatRule[];
   /** With `loCompat`: the slide as LibreOffice draws it, when that differs from `slide`. */
   compatSlide?: Slide;
@@ -91,12 +97,29 @@ export type NativeSlide = {
   metafiles?: { x: number; y: number; w: number; h: number; rotation: number }[];
   /** Classed picture by the converter's slide budget alone (`EmittedSlide.overBudget`). */
   overBudget?: true;
+  /**
+   * With `noLibreOffice`: the slide as a hub without LibreOffice emits it (`EmitOptions.libreoffice: false`,
+   * with the policies `slide` or `compatSlide` is drawn with), when that differs from the slide drawn.
+   */
+  noLoSlide?: Slide;
+  /** With `noLibreOffice`: that emission's class where it differs (hybrid with `missing:<kind>` in M9). */
+  noLoClass?: SlideClass;
+  /** With `noLibreOffice`: what nothing draws without LibreOffice (`EmittedSlide.missing`: kinds). */
+  missing?: string[];
+  /**
+   * Set by the run, not the converter: what `noLoSsim` is drawn from (the hub's stored form of the slide
+   * without LibreOffice, `hubStoredSlide`), when it differs from the slide drawn; `renderDeck` draws it as
+   * `slide-NNNN.nolo.png` with `RenderOptions.noLo`.
+   */
+  noLoDraw?: Slide;
 };
 
 /** What `convertDeck` is asked for besides the slides. */
 export type ConvertOptions = {
   /** Keep each slide as LibreOffice draws it as well (`--lo-compat`). */
   loCompat?: boolean;
+  /** Emit the deck as a hub without LibreOffice does as well (`--no-libreoffice`, `NativeSlide.noLoSlide`). */
+  noLibreOffice?: boolean;
 };
 
 export type NativeMedia = {
@@ -122,8 +145,10 @@ export type NativeDeck = {
   notes: string[];
   /** The deck carries font files (`ppt/fonts/`); LibreOffice 24.2 ignores them (design/27 §14.1). */
   embeddedFonts: boolean;
-  /** Text features of every slide part and the presentation part (`deckTextFeatures`). */
+  /** Text features of every slide part and the presentation part (`deckFeatures`). */
   textFeatures: string[];
+  /** The other registered families' features of the deck (`deckFeatures`). */
+  xmlFeatures?: string[];
   /** Reading the zip, parsing and emitting the whole deck, in ms. */
   extractMs: number;
   parseMs: number;
@@ -270,13 +295,13 @@ export async function convertDeck(
     for (const n of [...scene.notes, ...emitted.notes]) note(n);
 
     const sceneMs = new Map(scene.slides.map((s) => [s.index, s.ms]));
-    const features = new Map(
-      scene.slides.map((s) => [s.index, textFeatures(xmlOf(zip.files, s.part))] as const),
+    const read = (part: string) => xmlOf(zip.files, part);
+    const features = new Map<number, Features>(
+      scene.slides.map((s) => [s.index, partFeatures(featureSource(s.part, read))] as const),
     );
-    out.textFeatures = deckTextFeatures(
-      features.values(),
-      textFeatures(xmlOf(zip.files, 'ppt/presentation.xml')),
-    );
+    const deck = deckFeatures(features.values(), partFeatures(featureSource('ppt/presentation.xml', read)));
+    out.textFeatures = deck.textFeatures;
+    if (deck.xmlFeatures.length) out.xmlFeatures = deck.xmlFeatures;
     // LibreOffice's policies: the converter writes them (`EmitOptions.loCompat`), compat.ts names them.
     const hits = compatRules(scene);
     let compatSlides: Map<number, Slide> | undefined;
@@ -289,6 +314,22 @@ export async function convertDeck(
     } catch (e) {
       note(`the slides as LibreOffice draws them could not be emitted: ${errorText(e)}`);
     }
+    // A hub without LibreOffice (M9, `EmitOptions.libreoffice`: a field of the converter's from M9 wave 1),
+    // drawn with the same policies as the slides above.
+    let noLo: Map<number, EmittedSlide> | undefined;
+    if (opts.noLibreOffice)
+      try {
+        const o: EmitOptions = Object.assign(
+          { geomId },
+          opts.loCompat && hits.size ? { loCompat: true } : {},
+          { libreoffice: false },
+        );
+        const r = emitSlides(scene, o);
+        for (const g of r.geoms) if (!geoms.has(g.id)) geoms.set(g.id, g);
+        noLo = new Map(r.slides.map((s) => [s.index, s] as const));
+      } catch (e) {
+        note(`the slides as a hub without LibreOffice emits them could not be emitted: ${errorText(e)}`);
+      }
     out.geoms = [...geoms.values()];
     out.slides = emitted.slides.map((s) => {
       // Drawn as a still (a motion background as its poster), as LibreOffice draws the slide.
@@ -296,6 +337,11 @@ export async function convertDeck(
       const lo = compatSlides?.get(s.index);
       const differs = lo !== undefined && drawingKey(lo) !== drawingKey(slide);
       const rules: CompatRule[] = differs ? [...(hits.get(s.index) ?? [])].sort() : [];
+      const nl = noLo?.get(s.index);
+      const nlSlide = nl ? still(nl) : undefined;
+      const drawn = opts.loCompat && differs ? lo : slide;
+      const missing = (nl as { missing?: unknown } | undefined)?.missing;
+      const f = features.get(s.index);
       return {
         index: s.index,
         ...(s.shown !== undefined ? { shown: s.shown } : {}),
@@ -306,12 +352,20 @@ export async function convertDeck(
         convertMs: (sceneMs.get(s.index) ?? 0) + s.ms,
         notes: s.notes,
         slide,
-        textFeatures: features.get(s.index) ?? [],
+        textFeatures: f?.textFeatures ?? [],
+        xmlFeatures: f?.xmlFeatures ?? [],
         compat: rules,
         ...(opts.loCompat && differs ? { compatSlide: lo } : {}),
         ...(s.art ? { art: { ...s.art.box } } : {}),
         ...(s.metafiles?.length ? { metafiles: s.metafiles.map((m) => ({ ...m.object.box })) } : {}),
         ...(s.overBudget ? { overBudget: true as const } : {}),
+        ...(nl && nlSlide && drawingKey(nlSlide) !== drawingKey(drawn) ? { noLoSlide: nlSlide } : {}),
+        ...(nl && nl.classification.class !== s.classification.class
+          ? { noLoClass: nl.classification.class }
+          : {}),
+        ...(Array.isArray(missing) && missing.length
+          ? { missing: missing.filter((m): m is string => typeof m === 'string').slice(0, 16) }
+          : {}),
       };
     });
 
@@ -472,7 +526,11 @@ async function convertInWorker(
     worker.on('error', onError);
     worker.on('exit', onExit);
     worker.ref();
-    worker.postMessage({ deckFile, dir, opts: { loCompat: limits.loCompat === true } });
+    worker.postMessage({
+      deckFile,
+      dir,
+      opts: { loCompat: limits.loCompat === true, noLibreOffice: limits.noLibreOffice === true },
+    });
   });
   if (typeof result !== 'string') return result;
   await rm(join(dir, '.parts'), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
@@ -552,6 +610,8 @@ export type RenderedSlide = {
   png?: string;
   /** With `loCompat`, on a slide a policy rule changes: the slide as ordo draws it. */
   policyPng?: string;
+  /** With `noLo`, on a slide whose `noLoDraw` is set: what a hub without LibreOffice shows. */
+  noLoPng?: string;
   width?: number;
   height?: number;
   rasterMs?: { '1920': number; '3840': number };
@@ -585,6 +645,8 @@ export type RenderOptions = {
   probe?: FaceRequest[];
   /** Register stand-ins for script fallback families this machine lacks (`fonts.ts`). */
   standIns?: boolean;
+  /** Draw each slide's `noLoDraw` as well (`noLoPng`, untimed). */
+  noLo?: boolean;
 };
 
 declare global {
@@ -685,9 +747,11 @@ export class NativeRenderer {
       .filter((s): s is NativeSlide & { shown: number } => s.shown !== undefined)
       .filter((s) => !opts.only || opts.only.has(s.shown))
       .sort((a, b) => a.shown - b.shown);
-    const drawn = shown.flatMap((s) =>
-      opts.loCompat && s.compatSlide ? [s.slide, s.compatSlide] : [s.slide],
-    );
+    const drawn = shown.flatMap((s) => [
+      s.slide,
+      ...(opts.loCompat && s.compatSlide ? [s.compatSlide] : []),
+      ...(opts.noLo && s.noLoDraw ? [s.noLoDraw] : []),
+    ]);
     const files = new Map<string, string>();
     const media: PageMedia[] = [];
     const need = picturesNeeded(drawn);
@@ -766,6 +830,10 @@ export class NativeRenderer {
             await draw(s.slide, `${base}.policy.png`, 0);
             out.policyPng = `${base}.policy.png`;
           }
+          if (opts.noLo && s.noLoDraw) {
+            await draw(s.noLoDraw, `${base}.nolo.png`, 0);
+            out.noLoPng = `${base}.nolo.png`;
+          }
         } catch (e) {
           out.error = errorText(e);
           notes.push(`slide ${s.shown + 1} not drawn: ${out.error}`);
@@ -814,6 +882,46 @@ export class NativeRenderer {
 }
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
+
+/** A slide's class in the hub once its budgets ran (`census.ts` `HubSlide.hub`). */
+export type HubClass = 'native' | 'hybrid' | 'picture';
+
+/**
+ * The slide as the hub stores it, given its class there (design/27 §3.4; `--hub-budget`, `--no-libreoffice`).
+ * A slide the hub stores as a picture is the compact picture slide `nativeJob.ts` `toPicture` makes: its
+ * objects and lyric box left out, its background kept, LibreOffice's page to come (a hub without LibreOffice
+ * shows only the background). Any other slide is stored as emitted.
+ *
+ * This is the hook the M9 `ladder` track fills: with the budget ladder a slide over 64 KB is stored at the
+ * first of `fitSlideBudget`'s levels that fits (full, grid, plain, minimal), never as a picture, and this
+ * function returns that level's slide.
+ */
+export function hubStoredSlide(slide: Slide, hub: HubClass): Slide {
+  if (hub !== 'picture') return slide;
+  const { lyricObjectId: _, ...rest } = slide;
+  return { ...rest, objects: [] };
+}
+
+/**
+ * `--hub-budget`: the deck with every slide (and its LibreOffice-policy and LibreOffice-less forms) as the hub
+ * stores it, given each slide's class there (`hubClasses`, in deck order). Slides keep their converter class
+ * and reasons; only what is drawn changes.
+ */
+export function withHubBudget(deck: NativeDeck, hub: readonly HubClass[]): NativeDeck {
+  return {
+    ...deck,
+    slides: deck.slides.map((s, k) => {
+      const h = hub[k] ?? 'native';
+      if (h !== 'picture') return s;
+      return {
+        ...s,
+        slide: hubStoredSlide(s.slide, h),
+        ...(s.compatSlide ? { compatSlide: hubStoredSlide(s.compatSlide, h) } : {}),
+        ...(s.noLoSlide ? { noLoSlide: hubStoredSlide(s.noLoSlide, h) } : {}),
+      };
+    }),
+  };
+}
 
 /**
  * For each media id, the widest and tallest the slides draw it at 3840 px wide: image boxes (divided by
