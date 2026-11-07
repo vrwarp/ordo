@@ -183,7 +183,9 @@ describe('a hub without LibreOffice (design/27 M9)', () => {
     expect(chart.pptx!.pending).toBeUndefined();
     expect(chart.objects.some((o) => o.type === 'image' && o.origin?.role === 'art')).toBe(false);
     expect(chart.objects.some((o) => o.type === 'text' && o.text === 'Giving this year')).toBe(true);
-    expect(chart.pptx!.notes?.some((n) => /^not drawn: a chart$/.test(n))).toBe(true);
+    // The note: the converter's own (told there is no LibreOffice), or the hub's for a converter that still
+    // planned the art.
+    expect(chart.pptx!.notes?.some((n) => /^not drawn( without LibreOffice)?: a chart$/.test(n))).toBe(true);
     const r = resolvePlaylist(
       {
         playlist: {
