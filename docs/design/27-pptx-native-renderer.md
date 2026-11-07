@@ -2346,7 +2346,7 @@ calls by digest against the code before it:
 The `PptxRenderer` enum values stay forever, so stored presentations validate. A 'pptx-preview' request maps to native.
 
 **Kept:**
-- the LibreOffice tools: `pptxToPdf`, `pdfToPngs` (gains page ranges and 288 dpi), `fitPage`, `addReadyImage`, used for fallbacks, art, references and metafiles;
+- the LibreOffice tools: the hub's bounded `sofficeToPdf` (`pptx/fallback.ts`, with the executable `tools.ts` found; M9: optional), `pdfToPngs` (gains page ranges and 288 dpi), `fitPage`, `addReadyImage`, used for fallbacks, art, references and metafiles; the unbounded `pptxToPdf` moved to the fidelity harness in M9 (`tools/pptx-fidelity/src/libreoffice.ts`), its only user;
 - the whole-deck LibreOffice path, for PDF and the 'Pictures (LibreOffice)' option, always through the worker-built render copy (it fails closed when the copy cannot be built);
 - `tools/pptx-fidelity` (`ssim()`, corpus builder, report), extended;
 - `extractZip` and its limits, `sanitizePresentation` (extended for runs and paras), `remapMediaIds` (generalised prefix), `mediaFor` (generalised: tags, names, hash index);

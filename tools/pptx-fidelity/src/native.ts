@@ -314,16 +314,16 @@ export async function convertDeck(
     } catch (e) {
       note(`the slides as LibreOffice draws them could not be emitted: ${errorText(e)}`);
     }
-    // A hub without LibreOffice (M9, `EmitOptions.libreoffice`: a field of the converter's from M9 wave 1),
-    // drawn with the same policies as the slides above.
+    // A hub without LibreOffice (M9, `EmitOptions.libreoffice`), drawn with the same policies as the slides
+    // above.
     let noLo: Map<number, EmittedSlide> | undefined;
     if (opts.noLibreOffice)
       try {
-        const o: EmitOptions = Object.assign(
-          { geomId },
-          opts.loCompat && hits.size ? { loCompat: true } : {},
-          { libreoffice: false },
-        );
+        const o: EmitOptions = {
+          geomId,
+          ...(opts.loCompat && hits.size ? { loCompat: true } : {}),
+          libreoffice: false,
+        };
         const r = emitSlides(scene, o);
         for (const g of r.geoms) if (!geoms.has(g.id)) geoms.set(g.id, g);
         noLo = new Map(r.slides.map((s) => [s.index, s] as const));
@@ -340,7 +340,7 @@ export async function convertDeck(
       const nl = noLo?.get(s.index);
       const nlSlide = nl ? still(nl) : undefined;
       const drawn = opts.loCompat && differs ? lo : slide;
-      const missing = (nl as { missing?: unknown } | undefined)?.missing;
+      const missing = nl?.missing;
       const f = features.get(s.index);
       return {
         index: s.index,
@@ -363,9 +363,7 @@ export async function convertDeck(
         ...(nl && nl.classification.class !== s.classification.class
           ? { noLoClass: nl.classification.class }
           : {}),
-        ...(Array.isArray(missing) && missing.length
-          ? { missing: missing.filter((m): m is string => typeof m === 'string').slice(0, 16) }
-          : {}),
+        ...(missing?.length ? { missing: missing.slice(0, 16) } : {}),
       };
     });
 

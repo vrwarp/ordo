@@ -164,7 +164,8 @@ export function withoutLibreOffice(
   if (!kinds.length) return undefined;
   const missing = kinds.map((k) => missingEntry(k));
   const why = missing.map((m) => `missing:${m}`).sort();
-  log(`not drawn without LibreOffice: ${kinds.map(missingLabel).join(', ')}`);
+  // The hub's own wording for the same list (`nativeJob.ts`): a hub without LibreOffice never names it.
+  log(`not drawn: ${kinds.map(missingLabel).join(', ')}`);
   return {
     classification: {
       ...classification,

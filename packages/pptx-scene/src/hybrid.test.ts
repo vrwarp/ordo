@@ -138,7 +138,7 @@ describe('without LibreOffice (EmitOptions.libreoffice: false, M9)', () => {
     expect(s.artText).toBe('Total');
     expect(s.slide.objects).toEqual(withLo.slide.objects);
     expect(s.digest).toBe(withLo.digest);
-    expect(s.notes.some((n) => n === 'not drawn without LibreOffice: a chart, an element')).toBe(true);
+    expect(s.notes.some((n) => n === 'not drawn: a chart, an element')).toBe(true);
     // With LibreOffice (the default) nothing of this is written.
     expect(withLo.art).toBeDefined();
     expect(withLo.missing).toBeUndefined();

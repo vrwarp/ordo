@@ -77,12 +77,14 @@ import {
 import { type PptxClientScene, remapMediaIds } from '@ordo/importers';
 import { sanitizePresentation } from '@ordo/importers/sanitize.ts';
 import {
+  addNote,
   type ArtInfo,
   type EmittedClip,
   type EmittedSlide,
   MEDIA_PREFIX,
   type PictureHeader,
   pictureSize,
+  rowOf,
   type SectionInfo,
   type SlideClass,
   type SlideRef,
@@ -284,7 +286,10 @@ type Draft = {
   /** Its batch's placeholder ids → picture parts (`EmitResult.media`). */
   media: Map<string, string>;
   cls: SlideClass;
-  /** The converter's notes, then the job's. */
+  /**
+   * The converter's notes, then the job's, each added with `addNote` (as the converter adds its own), so the
+   * list stays within the schema's 16 with 'and N more' last and a note of the job's is counted, not cut.
+   */
   notes: string[];
   /** Hybrid slides: what the art holds (`EmittedSlide.art`, item D). */
   art?: ArtInfo;
@@ -314,9 +319,6 @@ type Draft = {
   /** M9, with LibreOffice: the kinds its art holds (`artKinds`), for `PptxLoSlide.kinds`. */
   artKinds?: MissingKind[];
 };
-
-/** An emitted slide with the fields an M9 converter adds without LibreOffice (`EmitOptions.libreoffice`). */
-type EmittedM9 = EmittedSlide & { missing?: string[]; artText?: string };
 
 class Cancelled extends Error {
   constructor() {
@@ -932,7 +934,7 @@ class NativeImport {
       if (x?.transition) d.slide.transition = x.transition;
       if (x?.advanceMs !== undefined && x.advanceMs > 0) d.slide.durationMs = x.advanceMs;
       if (x?.note) {
-        d.notes.push(x.note);
+        addNote(d.notes, x.note);
         this.log.add('info', `${label}: ${x.note}`);
       }
       // The metafiles the slide draws, set aside by the converter (item D): LibreOffice converts them.
@@ -940,16 +942,16 @@ class NativeImport {
       if (mf?.length && d.cls !== 'picture') {
         if (this.lo) {
           d.metafiles = mf.map((m) => ({ ...m, object: imported(m.object) }));
-          d.notes.push(`${mf.length} metafile picture(s) wait for LibreOffice`);
+          addNote(d.notes, `${mf.length} metafile picture(s) wait for LibreOffice`);
         } else {
           d.missing = addMissing(d.missing, 'metafile');
-          d.notes.push(`not drawn: ${mf.length} vector picture(s) (EMF, WMF)`);
+          addNote(d.notes, `not drawn: ${mf.length} vector picture(s) (EMF, WMF)`);
         }
       }
       if (c && d.cls !== 'picture') {
         if (this.lo) {
           if (d.art) d.artKinds = artKinds(c.s.classification.reasons);
-        } else this.gaps(d, c.s as EmittedM9);
+        } else this.gaps(d, c.s);
       }
       if (d.cls === 'picture') toPicture(d);
       return d;
@@ -968,14 +970,14 @@ class NativeImport {
    * that still planned the art has it dropped here, by the kinds of the art's reasons (`artKinds`). The slide
    * is then hybrid with no art object (design/27 M9 decision 8), its art's text kept for search.
    */
-  private gaps(d: Draft, e: EmittedM9): void {
+  private gaps(d: Draft, e: EmittedSlide): void {
     for (const m of Array.isArray(e.missing) ? e.missing : [])
       if (typeof m === 'string') d.missing = addMissing(d.missing, m);
     if (e.artText && !d.artText) d.artText = e.artText;
     if (d.art) {
       const kinds = artKinds(e.classification.reasons);
       for (const k of kinds) d.missing = addMissing(d.missing, k);
-      d.notes.push(`not drawn: ${kinds.map(missingLabel).join(', ')}`);
+      addNote(d.notes, `not drawn: ${kinds.map(missingLabel).join(', ')}`);
       delete d.art;
     }
     if (d.missing?.length && d.cls === 'native') d.cls = 'hybrid';
@@ -1041,7 +1043,8 @@ class NativeImport {
           `slide ${i + 1}'s shape outlines pass the import's ${formatBytes(this.limits.geomFileBytes)} of outline files: ${shown}`,
         );
       d.compact = true;
-      d.notes.push(
+      addNote(
+        d.notes,
         why === 'slide'
           ? `over the slide size budget: ${this.pictureNote()}`
           : why === 'geoms'
@@ -1092,7 +1095,7 @@ class NativeImport {
     for (const d of drafts) {
       if (d.cls === 'picture' || !drawnGeomRefs(d.slide).some((x) => failed.has(x))) continue;
       d.compact = true;
-      d.notes.push(`its shape outlines could not be stored: ${this.pictureNote()}`);
+      addNote(d.notes, `its shape outlines could not be stored: ${this.pictureNote()}`);
       toPicture(d);
       n++;
     }
@@ -1247,7 +1250,7 @@ class NativeImport {
       const before = d.slide.objects.length;
       d.slide = remapMediaIds(d.slide, map);
       if (d.slide.objects.length < before)
-        d.notes.push(`${before - d.slide.objects.length} picture(s) could not be imported`);
+        addNote(d.notes, `${before - d.slide.objects.length} picture(s) could not be imported`);
       if (d.slide.lyricObjectId && !d.slide.objects.some((o) => o.id === d.slide.lyricObjectId))
         delete d.slide.lyricObjectId;
       const bg = d.slide.backgroundMediaId;
@@ -1255,7 +1258,7 @@ class NativeImport {
         // A picture with alpha is drawn on white, as PowerPoint lays every background (design/27 §4).
         delete d.slide.backgroundMediaId;
         if (d.cls !== 'picture') d.slide.objects.unshift(...backgroundOnWhite(bg, slideRect));
-        d.notes.push('a background picture with transparency is drawn on white');
+        addNote(d.notes, 'a background picture with transparency is drawn on white');
       }
     }
     const kind = isLoop(drafts, scan.loop) ? 'loop' : 'slides';
@@ -1302,7 +1305,7 @@ class NativeImport {
         );
         if (!d) return Slide.parse({ id: sl.id, objects: [] });
         toPicture(d);
-        d.notes.push(`not storable natively: ${this.pictureNote()}`);
+        addNote(d.notes, `not storable natively: ${this.pictureNote()}`);
         d.slide.pptx = provenance(d, hash, this.lo);
         const again = Slide.safeParse(d.slide);
         return again.success ? again.data : Slide.parse({ id: sl.id, objects: [], pptx: d.slide.pptx });
@@ -1685,22 +1688,27 @@ const SHAPE_REASONS: ReadonlySet<string> = new Set(['shapes', 'custGeom', 'geom'
 /**
  * The kinds of what a hybrid slide's art holds, read from the converter's `art:<reason>` reasons (design/27
  * M9: what a hub without LibreOffice lists in `Slide.pptx.missing` when the converter does not list it
- * itself): a chart, SmartArt, an OLE object, an equation, ink, a metafile picture (EMF, WMF), decoration shapes
- * for geometry; 'element' for anything else (a table, 3-D, a warp). Deck strings are only compared.
+ * itself, and `PptxLoSlide.kinds` with LibreOffice). A reason the converter's decision table names
+ * (`residual.ts` `rowOf`) has the kind the converter records for it without LibreOffice (`missingKindOf`),
+ * so both lists agree; for any other reason: a metafile picture (EMF, WMF), decoration shapes for geometry,
+ * the reason's own kind when it is one (chart, SmartArt, OLE, an equation, ink), 'element' for the rest.
+ * Deck strings are only compared.
  */
 export function artKinds(reasons: readonly string[]): MissingKind[] {
   const out: MissingKind[] = [];
   for (const r of reasons) {
     if (typeof r !== 'string' || !r.startsWith('art:')) continue;
-    let k = r.slice(4);
+    const reason = r.slice(4);
+    let k = reason;
     if (k.startsWith('budget:')) k = k.slice(7);
     const head = k.split(':')[0] ?? '';
     const kind: MissingKind =
-      k === 'pic:emf' || k === 'pic:wmf'
+      rowOf(reason)?.missing ??
+      (k === 'pic:emf' || k === 'pic:wmf'
         ? 'metafile'
         : SHAPE_REASONS.has(head)
           ? 'decoration'
-          : missingKind(head);
+          : missingKind(head));
     if (!out.includes(kind)) out.push(kind);
   }
   return out.length ? out : ['element'];

@@ -665,10 +665,11 @@ lo-dependencies §4.2-4.4, §4.6-4.11).
   false` → `EmitOptions.libreoffice`) and, without LibreOffice, sets no slide `pending` and queues no
   `pptx-lo`: what the art or a metafile conversion would have drawn is listed in `Slide.pptx.missing`
   (the converter's `EmittedSlide.missing`, or, from a converter that still plans art, the kinds of the art's
-  `art:<reason>` reasons, `artKinds`); such a slide is hybrid with no art object (M9 decision 8), a
-  picture-class slide lists `slide` and keeps its text for search. The result says `libreoffice` and how many
-  slides have something `missing`. With LibreOffice each follow-up plan records those kinds
-  (`PptxLoSlide.kinds`).
+  `art:<reason>` reasons, `artKinds`, read through the converter's decision table `residual.ts` so both
+  lists agree); such a slide is hybrid with no art object (M9 decision 8), a picture-class slide lists
+  `slide` and keeps its text for search. The result says `libreoffice` and how many slides have something
+  `missing`. With LibreOffice each follow-up plan records those kinds (`PptxLoSlide.kinds`). The slide's
+  notes are added with the converter's `addNote`, so they stay within 16 with 'and N more' last.
 - **A follow-up on a hub without LibreOffice** (`fallback.ts` `withoutLibreOffice`: queued before it went
   away, a restored revision, or soffice found gone mid-run): one save (never while live-locked) clears
   `pending` on the deck's waiting slides and sets `missing` from the plan, and in the same transaction the
