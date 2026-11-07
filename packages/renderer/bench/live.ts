@@ -30,7 +30,11 @@ export function lateContent(l: LiveRun): string {
 export function liveProblems(l: LiveRun, frameMs: number | undefined, where: string): string[] {
   const out: string[] = [];
   if (l.lateContentFrames.n < l.lateAsked)
-    out.push(`${where}: late content never flipped (n=${l.lateContentFrames.n} of ${l.lateAsked})`);
+    out.push(
+      l.lateContentFrames.n === 0
+        ? `${where}: late content never flipped (n=0 of ${l.lateAsked})`
+        : `${where}: some late content never flipped (flipped ${l.lateContentFrames.n} of ${l.lateAsked})`,
+    );
   if (frameMs && frameMs > 0) {
     const expected = Math.round((l.seconds * 1000) / frameMs);
     if (l.presented < PRESENTED_SHARE * expected)
