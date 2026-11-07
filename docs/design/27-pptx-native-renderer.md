@@ -590,7 +590,7 @@ As built in M3 (`packages/domain/src/size.ts`):
   - sp3d with a non-zero bevel or extrusion (a no-op scene3d/sp3d is ignored);
   - a real `prstTxWarp` (not textNoShape);
   - vertical text (until M8);
-  - tables (until M6; since M6 only those of more than 60 cells, with vertical cell text, or past the slide's object budget);
+  - tables (until M6; since M6 only those with vertical cell text or past the slide's object budget, a table of more drawn cells than a slide may have objects among them);
   - a metafile that fails conversion.
 - **Approx** (drawn natively, logged): reflection, inner shadow, soft edge on pictures before M8, kerning differences, unknown transitions.
 - Everything else is native.
@@ -1536,7 +1536,7 @@ Also:
   - row height = max(stored h, text height measured with sfnt metrics);
   - merges;
   - built-in table styles (port of LibreOffice `predefined-table-styles.cxx` as a separate MPL-2.0 file);
-  - tables over 60 cells stay residual.
+  - tables past the slide's object budget stay residual (until fidelity round 2, any table over 60 cells did).
   - *As built (M6 wave 2, `packages/pptx-scene/src/tables.ts`, `tablestyles.ts`, `metrics.ts`; README "M6 wave
     2: tables"):* cell fills, the table background and the lines are locked `ShapeObject`s of today's fields
     (role `grid`), each cell a rich `TextObject` (role `cell`; an empty cell an empty one), all in the table's
@@ -1586,6 +1586,16 @@ Also:
     either way), 12 table slides up, none down; the sermon decks do not change (0.955). The charts of
     79 and 90 drawn cells stay residual: drawn natively they reach 0.46 and 0.82 but pass 64 KB of text
     formatting (picture class), so the cap waits until `fitTables` budgets text as well as objects.
+  - *Fidelity round 2 (the cell cap; `pptx-scene` README "Fidelity round 2"):* no fixed count of cells sends
+    a table to the art any more: `MAX_TABLE_CELLS` is the slide's object budget (150), past which a table
+    could never be native (each drawn cell is an object; it stays residual unmeasured, `budget:table`), and
+    below it the object budget (`fitTables`) and the 64 KB of text formatting decide, as for other content.
+    The two charts above are drawn natively in the harness (0.138 → 0.817, 0.348 → 0.462) and are picture
+    class in the hub, where they were hybrid (their text formatting passes 64 KB); four Peace verses table
+    slides and Coptic Plural's become native and editable (0.72-0.79 → 0.81-0.95), and the two Boletim
+    tables of 87 and 96 cells stay in the art as `budget:table`. Tables 0.738 → 0.770, tableMerge 0.627 →
+    0.686, the suite's table decks 0.934 → 0.937, worship shard 0 0.865 → 0.873 (3 slides up); no slide
+    falls, and the sermon decks do not change.
 - SmartArt from its drawing cache as a locked group.
 - Recolour and tile bakes.
 - Editor shape fields.

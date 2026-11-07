@@ -1,8 +1,9 @@
 import { type ShapeObject, Slide, type TextObject } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
-import { convertDeck, parseDeck } from './index.ts';
 import type { TableElement } from './ir.ts';
 import type { FaceSource } from './metrics.ts';
+import { MAX_SLIDE_OBJECTS } from './classify.ts';
+import { convertDeck, parseDeck } from './index.ts';
 import { loAscent, loLineHeight, MAX_TABLE_CELLS, MAX_TABLE_GRID } from './tables.ts';
 import { PREDEFINED_TABLE_STYLE_IDS, predefinedTableStyle } from './tablestyles.ts';
 import {
@@ -518,20 +519,21 @@ describe("tables: LibreOffice's rows (R1, the harness's cellRows rule)", () => {
 
 describe('tables: what stays residual', () => {
   it('counts drawn cells: a merge is one cell, the cells it covers none', () => {
-    // 7 × 9 = 63 grid cells, but the first row is one merge of four and five cells: 60 drawn.
-    const rows = Array.from({ length: 7 }, (_, r) => ({
-      h: IN / 4,
-      cells: Array.from({ length: 9 }, (_, c) =>
-        r === 0 && c === 0
-          ? tc('x', { attrs: 'gridSpan="4"' })
-          : r === 0 && c < 4
+    // 12 × 13 = 156 grid cells, more than a slide may have objects, but each of the first six rows is one
+    // merge of thirteen: 84 drawn, read and measured, and with the background the slide's 85 objects fit.
+    const rows = Array.from({ length: 12 }, (_, r) => ({
+      h: IN / 16,
+      cells: Array.from({ length: 13 }, (_, c) =>
+        r < 6 && c === 0
+          ? tc('x', { attrs: 'gridSpan="13"' })
+          : r < 6
             ? tc('', { attrs: 'hMerge="1"' })
             : tc('x'),
       ),
     }));
-    const { s, texts } = convert(table({ cols: Array(9).fill(IN / 2), rows }));
+    const { s, texts } = convert(table({ cols: Array(13).fill(IN / 2), rows }));
     expect(s.classification.class).toBe('native');
-    expect(texts).toHaveLength(60);
+    expect(texts).toHaveLength(84);
   });
 
   it(`reads no table of more than ${MAX_TABLE_GRID} grid cells`, () => {
@@ -544,16 +546,54 @@ describe('tables: what stays residual', () => {
     expect(s.notes.some((n) => n.startsWith(`a table of ${65 * 64} grid cells`))).toBe(true);
   });
 
-  it(`leaves a table of more than ${MAX_TABLE_CELLS} cells to LibreOffice (hybrid)`, () => {
-    const rows = Array.from({ length: 7 }, () => ({
-      h: IN / 4,
+  it('draws a dense table natively while the slide stays within its object budget', () => {
+    // 90 cells and no style: 90 text objects and the background, so no fixed cell count sends it to the art.
+    const rows = Array.from({ length: 10 }, () => ({
+      h: IN / 8,
       cells: Array.from({ length: 9 }, () => tc('x')),
     }));
     const { s, texts } = convert(table({ cols: Array(9).fill(IN / 2), rows }));
-    expect(texts).toHaveLength(0);
+    expect(s.classification.class).toBe('native');
+    expect(s.classification.reasons.filter((r) => r.startsWith('art:'))).toEqual([]);
+    expect(texts).toHaveLength(90);
+  });
+
+  it('sends the same table to the art once its objects pass the slide budget (budget:table)', () => {
+    // A checkerboard of fills: no two neighbours join, so the 90 cells are 90 rects and 90 text objects.
+    const rows = Array.from({ length: 10 }, (_, r) => ({
+      h: IN / 8,
+      cells: Array.from({ length: 9 }, (_, c) => tcWith('x', solid((r + c) % 2 ? 'FF0000' : '0000FF'))),
+    }));
+    const { s, texts, rects } = convert(table({ cols: Array(9).fill(IN / 2), rows }));
     expect(s.classification.class).toBe('hybrid');
-    expect(s.classification.reasons).toContain('art:table');
-    expect(s.notes.some((n) => n.startsWith('a table of 63 cells'))).toBe(true);
+    expect(s.classification.reasons).toContain('art:budget:table');
+    expect(texts).toHaveLength(0);
+    expect(rects).toHaveLength(0);
+    expect(s.notes).toContain("a table of 180 objects passes the slide's budget: LibreOffice draws it");
+    // Read in full, its cells' text is the art's (search and labels).
+    expect(s.art?.text).toContain('x');
+  });
+
+  it('leaves a table of more cells than a slide may have objects to LibreOffice, unmeasured', () => {
+    expect(MAX_TABLE_CELLS).toBe(MAX_SLIDE_OBJECTS);
+    // 12 × 13 = 156 drawn cells: each is an object, so the table could never be drawn natively.
+    const rows = Array.from({ length: 12 }, () => ({
+      h: IN / 16,
+      cells: Array.from({ length: 13 }, () => tc('x')),
+    }));
+    let faces = 0;
+    const counting: FaceSource = (...args) => {
+      faces++;
+      return HALF_EM(...args);
+    };
+    const { s, texts } = convert(table({ cols: Array(13).fill(IN / 2), rows }), { fontFace: counting });
+    expect(texts).toHaveLength(0);
+    expect(faces).toBe(0);
+    expect(s.classification.class).toBe('hybrid');
+    expect(s.classification.reasons).toContain('art:budget:table');
+    expect(s.notes).toContain(
+      `a table of 156 cells passes the slide's budget of ${MAX_SLIDE_OBJECTS} objects: LibreOffice draws it`,
+    );
   });
 
   it('leaves a table with vertical cell text to LibreOffice', () => {

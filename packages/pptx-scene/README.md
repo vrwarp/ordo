@@ -179,12 +179,16 @@ fills, the lines), all sharing the table's `origin.group` (the top-level group's
 Only today's shape fields are written (solid fills, a gradient's first stop; lines as `line` shapes, dashed
 ones solid), so an older build draws the table as this one does. IR: `TableElement` (`ir.ts`); the walk
 reads it through `readTable`, `emit.ts` writes it through `emitTable`.
-- **Residual.** A table of more than `MAX_TABLE_CELLS` (60) drawn cells (a merge counts once, the cells it
-  covers not at all; R1), or with vertical cell text, stays a `ResidualElement` ('table'): LibreOffice draws
-  it into the art; one of more than `MAX_TABLE_GRID` (4,096) grid cells is not read at all. So does a native table that would take its
-  slide past the 150 objects of design/27 §5 (`classify.ts` `fitTables`, the table with the most objects
-  first, reason `budget:table`), so the slide becomes hybrid, not picture; the art's text then holds the
-  table's cells (`hybrid.ts`).
+- **Residual.** A table with vertical cell text stays a `ResidualElement` ('table'): LibreOffice draws it
+  into the art; one of more than `MAX_TABLE_GRID` (4,096) grid cells is not read at all. No count of cells
+  decides otherwise but the slide's object budget: a table of more drawn cells (a merge counts once, the
+  cells it covers not at all; R1) than a slide may have objects (`MAX_TABLE_CELLS` = `MAX_SLIDE_OBJECTS`,
+  150: each cell is an object, so it could never be drawn natively) stays residual unmeasured, reason
+  `budget:table`; a native table that would take its slide past the 150 objects of design/27 §5 goes to the
+  art too (`classify.ts` `fitTables`, the table with the most objects first, reason `budget:table`), so the
+  slide becomes hybrid, not picture; the art's text then holds the table's cells (`hybrid.ts`). A table
+  within the objects whose cells' text formatting takes the slide past its 64 KB (`emit.ts`
+  `MAX_SLIDE_BYTES`) makes the slide picture class, as any text does (round 2, below).
 - **Grid and merges.** Column widths from `a:tblGrid`, one `a:tc` per grid column; `gridSpan`/`rowSpan`
   merge (cut at the grid), the cells they cover (`hMerge`, `vMerge`) are not drawn; a short row's missing
   cells are empty cells.
@@ -287,7 +291,8 @@ LibreOffice is 0.35 % narrower than the rule says, so one line wraps that LibreO
 0 (924 slides): 0.843 → 0.863 / 0.840 → 0.840, 12 table slides up, none down; the sermon decks do not
 change (0.955 / 0.953). Still residual: the
 charts of 79 and 90 drawn cells (with a cap of 200 they draw natively at 0.46 and 0.82, but pass the 64 KB
-of text formatting and become picture class, so the cap stays until `fitTables` budgets text too).
+of text formatting and become picture class, so the cap stays until `fitTables` budgets text too; round 2
+lifts it, below).
 
 Tests: `metrics.test.ts` (crafted `GPOS` format 1, format 2 and Extension kerning, scripts and features,
 the legacy table, vertical metrics, every byte of a `GPOS` corrupted, truncations), `tables.test.ts`
@@ -297,6 +302,33 @@ drawn cells, the grid bound), `tools/pptx-fidelity/src/table-probe.test.ts` (the
 converter's LibreOffice rows against `LO_PROBE_ROWS` when this machine has Carlito and Liberation Sans),
 `apps/hub/test/pptx-faces.test.ts` (kerning and vertical metrics through TTF and WOFF, an oversized `GPOS`
 left out).
+
+### Fidelity round 2: no cell cap below the object budget (`tables.ts` `MAX_TABLE_CELLS`)
+
+The fixed cap of 60 drawn cells sent dense tables to the art before `fitTables` had weighed them against
+the slide's 150 objects: a Bible chart of 90 drawn cells is 146 objects drawn natively, within the budget,
+yet the slide was hybrid ('art:table'), the harness left the art box black and the hub showed only
+LibreOffice's picture of the table. `MAX_TABLE_CELLS` is now `MAX_SLIDE_OBJECTS`: a table of more drawn
+cells could never be native (each cell is an object), so it stays residual unmeasured, reason
+`budget:table` (`classify.ts` reports a residual element's budget reason, not its kind); below it the
+object budget (`fitTables`) and the slide's 64 KB of text formatting decide, as for any other content.
+`MAX_TABLE_GRID` still bounds the grid read, and the measure, linear in the cells, is bounded by the cap
+(converting the 90-cell chart's slide takes 35 ms, from 10 ms).
+
+Measured (`--engine native --lo-compat`, LibreOffice 24.2 pictures, against the round 1 merge): the
+validation suite's 30 table decks (28 without embedded fonts, the feature tables) 0.738 → 0.770,
+tableMerge (14) 0.627 → 0.686, ordo's policies 0.596 → 0.600; 7 slides up and none down. The
+flesh-and-spirit chart goes 0.138 → 0.817 and matthew-16v18 0.348 → 0.462, both picture class now where
+they were hybrid: their text formatting passes 64 KB (the slides are 102 and 107 KB), so the hub shows
+them as LibreOffice pictures with its budget warning, while the harness draws them. The four Peace verses
+table slides go 0.725 → 0.930 and 0.720 → 0.805 and Coptic Plural's 0.794 → 0.953, native and editable
+(slides of 53-56 KB). The two Boletim slides of 87 and 96 cells stay in the art, now as 'budget:table'
+over the object budget (the art's text then holds their cells). The suite's tables-charts-smartart decks
+0.934 → 0.937 (one table slide 0.739 → 0.963, hybrid → native); worship shard 0 (924 slides) 0.865 →
+0.873, its three slides of these tables up and none down; the sermon decks do not change (0.955).
+
+Tests: `tables.test.ts` (a 90-cell table native within the budget and in the art past it, a table of more
+cells than the budget left unmeasured, merges counted once against the cap).
 
 ## M6 wave 2, item D: SmartArt and baked pictures (`smartart.ts`, `bake.ts`)
 
