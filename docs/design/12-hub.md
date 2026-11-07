@@ -58,7 +58,8 @@ once (like a crash: no goodbyes), the library process stops its jobs (re-queued 
 
 **Routing** (`src/liveproc.ts`, `src/proxy.ts`): the live process listens on `ORDO_PORT` and answers
 itself `/ws`, `/api/v1/{live, live/summary, live/events, actions, cache/manifest, output/config, auth/me, health}`,
-`/api/v1/files/<hash>` for files it knows (the live playlist's media and fonts, every font, the logo) and
+`/api/v1/files/<hash>` for files it knows (the live playlist's media, geometry files and fonts, every font,
+the logo) and
 every non-API path (the built apps). Everything else under `/api/v1` is streamed to the library process
 over loopback. We chose the live process as the front door rather than the supervisor so the supervisor
 stays free of network input, and rather than two DSM rules so the deployment is unchanged. The proxy is

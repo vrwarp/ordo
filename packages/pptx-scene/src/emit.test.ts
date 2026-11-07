@@ -30,6 +30,7 @@ import {
   solid,
   solidBg,
   sp,
+  inlineGeoms,
 } from './test-util.ts';
 
 const IN = 914_400;
@@ -41,8 +42,10 @@ const RED = { r: 255, g: 0, b: 0, a: 1 };
 /** Emit the first slide of a deck; every emitted slide must be an ordinary ordo slide. */
 function emitOne(spec: DeckSpec, opts: EmitOptions = {}) {
   const scene = parseDeck(buildDeck(spec));
-  const out = emitSlides(scene, opts);
-  for (const s of out.slides) expect(Slide.parse(s.slide)).toEqual(s.slide);
+  const stored = emitSlides(scene, opts);
+  for (const s of stored.slides) expect(Slide.parse(s.slide)).toEqual(s.slide);
+  // The paths as drawn: a geometry file's in place of its ref.
+  const out = inlineGeoms(stored);
   const e = out.slides[0]!;
   return { scene, out, slide: e.slide, notes: e.notes, objects: e.slide.objects };
 }
@@ -966,7 +969,7 @@ describe('the object budget (M6)', () => {
             flipV: i % 5 === 3,
           });
     const scene = parseDeck(buildDeck({ slides: [{ shapes: group(pieces(160, shape)) }] }));
-    const merged = emitSlides(scene).slides[0]!;
+    const merged = inlineGeoms(emitSlides(scene)).slides[0]!;
     expect(Slide.parse(merged.slide)).toEqual(merged.slide);
     expect(merged.classification.class).toBe('native');
     const objects = content(merged.slide.objects) as ShapeObject[];
@@ -980,7 +983,7 @@ describe('the object budget (M6)', () => {
     }
     // The same shapes emitted apart (the marks removed) put every point where the merged object does.
     for (const e of scene.slides[0]!.elements) delete (e as ShapeElement).merge;
-    const apart = content(emitSlides(scene).slides[0]!.slide.objects) as ShapeObject[];
+    const apart = content(inlineGeoms(emitSlides(scene)).slides[0]!.slide.objects) as ShapeObject[];
     expect(apart).toHaveLength(160);
     const together = objects.flatMap(devicePoints);
     const each = apart.flatMap(devicePoints);

@@ -76,3 +76,24 @@ export function drawnMediaIds(slide: Pick<Slide, 'objects' | 'imported' | 'pptx'
   for (const o of c.objects) if (o?.type === 'image') add(o.mediaId);
   return [...out];
 }
+
+/**
+ * Every geometry file a slide draws (`ShapeGeom.ref` of its shapes' geometries and its pictures' masks,
+ * M6 round 2), in drawing order and once each: what a drawer reads before it draws the slide, as it decodes
+ * the pictures of `drawnMediaIds`. Refs as stored: the hub's are SHA-256 names (`isGeomFileRef`), the
+ * converter's placeholders until the hub replaces them.
+ */
+export function drawnGeomRefs(slide: Pick<Slide, 'objects' | 'imported' | 'pptx'>): string[] {
+  const out = new Set<string>();
+  for (const o of slideContent(slide).objects) {
+    const g =
+      o?.type === 'shape'
+        ? (o as { geom?: unknown }).geom
+        : o?.type === 'image'
+          ? (o as { mask?: unknown }).mask
+          : undefined;
+    const ref = g && typeof g === 'object' ? (g as { ref?: unknown }).ref : undefined;
+    if (typeof ref === 'string' && ref) out.add(ref);
+  }
+  return [...out];
+}

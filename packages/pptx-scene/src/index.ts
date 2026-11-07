@@ -19,6 +19,7 @@ import {
   type EmitResult,
   type EmittedSlide,
   emitDeck,
+  GEOM_PREFIX,
   MEDIA_PREFIX,
 } from './emit.ts';
 import { frameOf, slideRect } from './frame.ts';
@@ -35,7 +36,15 @@ export type { BlipReader, ColorCtx } from './color.ts';
 export type { SlideCtx, Source } from './context.ts';
 export type { DeckInfo, SlideRef } from './deck.ts';
 export type { EmitOptions, EmitResult, EmittedSlide } from './emit.ts';
-export { BAKE_PREFIX, CLIP_PREFIX, MEDIA_PREFIX } from './emit.ts';
+export {
+  BAKE_PREFIX,
+  CLIP_PREFIX,
+  GEOM_FILE_CHARS,
+  GEOM_PREFIX,
+  MEDIA_PREFIX,
+  SLIDE_BYTES_NOTE,
+  storedSlideBytes,
+} from './emit.ts';
 export type { BakeRaster, PictureBake, TileBake } from './bake.ts';
 export type { EmittedClip } from './media.ts';
 export { type PictureHeader, pictureSize } from './picture.ts';
@@ -298,10 +307,23 @@ export function convertDeck(src: PartSource, opts: ConvertOptions = {}): Convert
     }
     return b.id;
   };
+  // Geometry files numbered across the call too (one per distinct file, M6 round 2).
+  const geomIds = new Map<string, string>();
+  const geomId = (json: string) => {
+    let id = geomIds.get(json);
+    if (id === undefined) {
+      id = opts.geomId ? opts.geomId(json) : `${GEOM_PREFIX}${geomIds.size + 1}`;
+      geomIds.set(json, id);
+    }
+    return id;
+  };
+  const geoms = new Map<string, EmitResult['geoms'][number]>();
   const slides: EmittedSlide[] = [];
   for (const ref of r.refs) {
     const scene: DeckScene = { frame: r.frame, slides: [r.readSlide(ref)], sections: [], notes: [] };
-    slides.push(emitDeck(scene, { ...opts, newId, mediaId, clipId, bakeId }).slides[0]!);
+    const one = emitDeck(scene, { ...opts, newId, mediaId, clipId, bakeId, geomId });
+    slides.push(one.slides[0]!);
+    for (const g of one.geoms) if (!geoms.has(g.id)) geoms.set(g.id, g);
   }
   return {
     slides,
@@ -311,6 +333,7 @@ export function convertDeck(src: PartSource, opts: ConvertOptions = {}): Convert
     ],
     slideRect: slideRect(r.frame),
     notes: [...r.notes],
+    geoms: [...geoms.values()],
     frame: r.frame,
     sections: r.deck.sections,
     listed: r.deck.slides,

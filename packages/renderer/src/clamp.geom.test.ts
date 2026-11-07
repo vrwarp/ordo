@@ -59,6 +59,18 @@ describe('clampGeom', () => {
     for (const v of [undefined, null, 'star5', [], {}, { preset: '' }, { paths: [{ d: '' }] }])
       expect(clampGeom(v)).toBeUndefined();
   });
+
+  it('keeps a geometry file ref (M6 round 2) of 1-100 characters without control characters', () => {
+    const ref = 'f'.repeat(64);
+    expect(clampGeom({ ref })).toEqual({ ref });
+    expect(clampGeom({ ref, paths: [{ d: 'M 0 0 L 1 1', w: 1, h: 1 }] })).toEqual({
+      ref,
+      paths: [{ d: 'M 0 0 L 1 1', w: 1, h: 1 }],
+    });
+    for (const bad of ['', 'x'.repeat(101), 'a\nb', 7, { ref }])
+      expect(clampGeom({ ref: bad })).toBeUndefined();
+    expect(clampGeom({ preset: 'star5', ref: 'a\u0000' })).toEqual({ preset: 'star5' });
+  });
 });
 
 describe('clampGradient', () => {

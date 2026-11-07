@@ -171,6 +171,38 @@ scored both times): with this converter alone, whose renderer still ignores the 
 LibreOffice and whose extra objects pass the renderer's 200-object clamp in the harness, and one table slide
 by 0.014). Tier means with both: T1 0.945, T2 0.846, T3 0.873. The sermon decks stay 0.953.
 
+### Round 2: geometry files and the slide's JSON budget (`emit.ts` `fitBytes`, `storedSlideBytes`)
+
+design/27 §3.1 `ShapeGeom.ref`, §3.4. A traced decoration is 100-150 KB of path text in its own space, and a
+Google-Slides-made template draws it on several objects of a slide at different sizes and on every slide of a layout:
+slides of 140 KB to 1 MB, of which path text was 60-98 %. The converter counted only text toward
+`MAX_SLIDE_BYTES`, so it called them native while the hub's `planImportSizes`, which measures the whole
+slide, made them compact LibreOffice pictures (70 of the census's 2,187 native T1-T3 worship slides).
+- **Geometry files.** After a slide is emitted, every geometry (`ShapeObject.geom`, `ImageObject.mask`) whose
+  paths take more than `GEOM_FILE_CHARS` (2,048) of the slide's JSON, its own JSON times the times the slide
+  draws it, is written once as a geometry file: its object keeps `ref` (placeholder `pptxgeom:<n>`, one per
+  distinct file over the deck, or over a `convertDeck` call: `EmitOptions.geomId`), the paths go to
+  `EmitResult.geoms`. Paths are in their own space, so one outline at three sizes is one file. While the
+  slide as stored is still over `MAX_SLIDE_BYTES` less 4 KB (room for what the hub adds: speaker notes,
+  timing), the largest remaining geometries whose paths are longer than a ref go to files too.
+  `EmitOptions.geomFiles: false` keeps every path inline (the release before the schema ships `ref`, §3.2).
+- **The budget as the hub counts it.** `storedSlideBytes(slide, notes)` is the slide's JSON as the hub's
+  native job stores it (ULID ids, files named by SHA-256, an origin on every object, the provenance with up to
+  16 notes), a few hundred bytes over the hub's own measure and never under it (`emit.geomfiles.test.ts`); a
+  slide over 64 KB that way, its large geometries in files, is picture class (`more than 64 KB as stored`,
+  `SLIDE_BYTES_NOTE`, `EmittedSlide.overBudget`), as the hub would make it; the text-formatting budget is
+  unchanged.
+- **Older builds** strip `ref` and draw the shape's legacy form (a rect with the fill, or a line for a thin
+  outline), as a pre-M6 build drew every custom geometry.
+- Measured (the census over worship shards 0-2 of `validate/sample4` and the five sermon decks, with the
+  hub's `planImportSizes` applied to `storedSlideBytes`; 2,220 T1-T3 slides): native 2,187 in the converter
+  and 2,113 in the hub before; 2,186 in both after (the one slide fewer is the text-heavy slide the hub made
+  a picture already). In the hub's terms 73 T3 slides go from compact picture to native, and 10 T3 and 26
+  fallback slides from compact picture to hybrid. 1,702 geometry files, 2.75 MB in all, in 25 decks (at most
+  409 files and 549 KB a deck; none in the sermon decks, whose 73 slides do not change). The drawing is the same: with
+  LibreOffice 24.2's pictures (`--engine native --lo-compat`), the 924 slides of shard 0, the 73 sermon slides
+  and the evidence decks of shard 2 score exactly as before, slide by slide.
+
 ## M6 wave 2: tables (`tables.ts`, `tablestyles.ts`, `metrics.ts`)
 
 A table (`a:tbl` in a `p:graphicFrame`, design/27 §15 M6, §11 "Mapping") becomes one editable rich

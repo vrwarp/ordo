@@ -9,6 +9,8 @@
  *
  * EMU everywhere: 914,400 per inch, 12,700 per point; the default slide is 12,192,000 x 6,858,000.
  */
+import type { ShapeGeom, SlideObject } from '@ordo/domain';
+import type { EmitResult } from './emit.ts';
 import type { PartSource } from './opc.ts';
 
 export const NS_A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
@@ -940,4 +942,31 @@ function gpos(pairs: readonly (readonly [number, number, number])[], spec: KernS
     ...featureList,
     ...lookupList,
   ];
+}
+
+/**
+ * The emitted slides with each geometry file's paths back in place of its placeholder (`ShapeGeom.ref`,
+ * `EmitResult.geoms`, M6 round 2): what a drawer draws once it has read the files, for tests of the paths
+ * themselves. The result's own slides are left as they are.
+ */
+export function inlineGeoms<T extends Pick<EmitResult, 'slides' | 'geoms'>>(out: T): T {
+  const files = new Map(out.geoms.map((g) => [g.id, g.file]));
+  const inline = (g: ShapeGeom | undefined): ShapeGeom | undefined => {
+    const file = g?.ref === undefined ? undefined : files.get(g.ref);
+    if (!g || !file) return g;
+    const { ref: _ref, ...rest } = g;
+    return { ...rest, paths: file.paths.map((p) => ({ ...p })) };
+  };
+  const slides = out.slides.map((s) => ({
+    ...s,
+    slide: {
+      ...s.slide,
+      objects: s.slide.objects.map((o): SlideObject => {
+        if (o.type === 'shape' && o.geom?.ref !== undefined) return { ...o, geom: inline(o.geom)! };
+        if (o.type === 'image' && o.mask?.ref !== undefined) return { ...o, mask: inline(o.mask)! };
+        return o;
+      }),
+    },
+  }));
+  return { ...out, slides };
 }

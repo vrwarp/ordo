@@ -121,18 +121,36 @@ export const PathFillMode = z.enum(['norm', 'none', 'lighten', 'lightenLess', 'd
 export type PathFillMode = z.infer<typeof PathFillMode>;
 
 /**
- * A DrawingML geometry: a preset by name (POI's table, evaluated at draw time, so a resize keeps the corners
- * and adjust values; `adj` pairs override the preset's adjust values by name, pairs so no deck string is a
- * key), or the paths of a custGeom, already evaluated. A known preset wins over `paths`; an unknown one with
- * no paths draws the legacy shape.
- * Each path's `d` uses only M, L, C, Q and Z with numbers (the render plan re-tokenises it, at most 4,096
- * points per path) in the path's own space `w` x `h`, scaled to the box; a side of 0 means the box's own
- * logical px on that axis.
+ * One stored path of a geometry (`ShapeGeom.paths`, `GeomFile.paths`). `d` uses only M, L, C, Q and Z with
+ * numbers (the render plan re-tokenises it, at most 4,096 points per path) in the path's own space `w` x `h`,
+ * scaled to the box; a side of 0 means the box's own logical px on that axis.
  * `cont` (M6): the path continues the one before it, so the two are drawn as one path (one even-odd fill,
  * stroked together; the first path's fill mode and stroke flag): a traced outline whose holes all sit
  * inside it, too long for one path, is stored in pieces cut at its sub-paths' starts. A build without
  * `cont` fills each piece on its own (holes filled where a piece has no outline); `cont` on the first
  * path means nothing.
+ */
+export const ShapeGeomPath = z.object({
+  d: z.string().max(40_000),
+  w: z.number().min(0).max(1e9),
+  h: z.number().min(0).max(1e9),
+  fill: PathFillMode.catch('norm').optional(),
+  stroke: z.boolean().optional(),
+  cont: z.boolean().optional().catch(undefined),
+});
+export type ShapeGeomPath = z.infer<typeof ShapeGeomPath>;
+
+/**
+ * A DrawingML geometry: a preset by name (POI's table, evaluated at draw time, so a resize keeps the corners
+ * and adjust values; `adj` pairs override the preset's adjust values by name, pairs so no deck string is a
+ * key), or the paths of a custGeom, already evaluated (`ShapeGeomPath`). A known preset wins over `paths`; an
+ * unknown one with no paths draws the legacy shape.
+ * `ref` (M6 round 2): the paths are stored once in a geometry file (`GeomFile`), named here by the SHA-256 of
+ * its JSON in the content store (`/files/<ref>`), and read like a picture: a traced decoration of 100-1,000 KB
+ * of path text, which a layout repeats on every slide and a slide at several sizes, travels once per library
+ * instead of inside every slide. While the file is read, its paths are drawn and `paths` beside it (if any)
+ * is ignored; without it (not read yet, missing, an older build that strips `ref`) the geometry is `paths`,
+ * else the legacy shape. The converter writes placeholders (`pptxgeom:<n>`) that the hub replaces.
  */
 export const ShapeGeom = z.object({
   preset: z.string().max(40).optional(),
@@ -140,21 +158,26 @@ export const ShapeGeom = z.object({
     .array(z.tuple([z.string().max(16), z.number().min(-1e7).max(1e7)]))
     .max(10)
     .optional(),
-  paths: z
-    .array(
-      z.object({
-        d: z.string().max(40_000),
-        w: z.number().min(0).max(1e9),
-        h: z.number().min(0).max(1e9),
-        fill: PathFillMode.catch('norm').optional(),
-        stroke: z.boolean().optional(),
-        cont: z.boolean().optional().catch(undefined),
-      }),
-    )
-    .max(8)
-    .optional(),
+  paths: z.array(ShapeGeomPath).max(8).optional(),
+  ref: z.string().min(1).max(100).optional().catch(undefined),
 });
 export type ShapeGeom = z.infer<typeof ShapeGeom>;
+
+/**
+ * A geometry file (`ShapeGeom.ref`, M6 round 2): one geometry's paths, the JSON the content store holds under
+ * its SHA-256 (`application/json`, at most `GEOM_FILE_MAX_BYTES`). Bounded as `ShapeGeom.paths` is, and
+ * re-tokenised by every reader as inline paths are.
+ */
+export const GeomFile = z.object({ paths: z.array(ShapeGeomPath).min(1).max(8) });
+export type GeomFile = z.infer<typeof GeomFile>;
+
+/** The largest geometry file a reader parses: 8 paths of 40,000 characters and their fields. */
+export const GEOM_FILE_MAX_BYTES = 400_000;
+
+/** A geometry file's name in the content store (`ShapeGeom.ref` as the hub writes it): a SHA-256 in hex. */
+export function isGeomFileRef(ref: unknown): ref is string {
+  return typeof ref === 'string' && ref.length === 64 && /^[0-9a-f]{64}$/.test(ref);
+}
 
 /** A line's dash pattern (OOXML prstDash; 'long…' are lgDash…), relative to the line width. */
 export const LineDash = z.enum([

@@ -26,7 +26,7 @@ const deck = customGeometry(custGeomStrings, w, h); // a:custGeom; deck.notes sa
 | `draw.ts`         | `drawGeom(ctx, built, fill, stroke)`: Canvas 2D, Path2D per path, LibreOffice's order, even-odd rule and shades (`shadeRgba`); `geomFillPath2D` for picture clips.                                  |
 | `ends.ts`         | Line ends: `arrowFor` (LibreOffice's marker sizes), `withEnds` (the shaft cut back and the marker polygons of every open sub-path).                                                                 |
 | `paint.ts`        | `gradientStyle`: a `Gradient` over a box (OOXML angle and `scaled`, radial focus to the farthest corner on an ellipse of the box), each stop shaded for a path's brightness.                        |
-| `stored.ts`       | `storedGeometry`: a `ShapeGeom` at a box (a preset by name, else its re-tokenised paths); `legacyGeometry`: the legacy rect, roundRect, ellipse and line as geometries.                             |
+| `stored.ts`       | `storedGeometry`: a `ShapeGeom` at a box (its geometry file's paths, else a preset by name, else its re-tokenised paths); `readGeomFiles`/`putGeomFile`: geometry files; `legacyGeometry`: the legacy shapes. |
 | `presets.gen.ts`  | Generated (`pnpm --filter @ordo/geom-gen gen`, never edited): the 187 presets of `third_party/poi-presets` as `PRESET_GEOMS`, with the two fixes of its README.                                     |
 | `poi-guides.json` | Reference values from POI 5.2.5 itself for the dozen presets of the spot checks (`tools/geom-gen/poi/GuideDump.java`).                                                                              |
 | `poi-paths.json`  | POI 5.2.5's own paths (segments, text rect, sites) for the dozen presets and for arcs in every quadrant and path spaces (`tools/geom-gen/poi/PathDump.java`).                                       |
@@ -128,7 +128,20 @@ differences below.
   traced outline holding all its holes, stored in pieces of 4,096 points and 40,000 characters by the
   converter, cut at sub-paths or between two commands) are one built path again: one even-odd fill, holes
   and all, stroked together, in the first piece's fill mode and stroke flag (at most 8 x 4,096 points). Memoised
-  per geometry object and box size.
+  per geometry object and box size (up to 8 sizes each).
+- **Geometry files** (`stored.ts`, design/27 §3.1 `ShapeGeom.ref`, M6 wave 2 round 2). A large traced outline is
+  stored once per library as a geometry file (`GeomFile`: `{ paths }`, JSON named by its SHA-256) and a
+  geometry names it by `ref`. A drawer reads the files a slide names (`drawnGeomRefs`) before it draws it, as it
+  decodes its pictures: `readGeomFiles(refs, read)` (reads of one ref shared, a failed one asked for again only
+  after `GEOM_FILE_RETRY_MS`, a file over `GEOM_FILE_MAX_BYTES` or not a geometry refused) keeps each, clamped
+  as inline paths are (`clampGeom`), in an LRU of at most `GEOM_FILES_MAX` files and `GEOM_FILES_CHARS` of path
+  text. `storedGeometry` draws a read file's paths, built once per file and box size for every shape that names
+  it; until then (or without the file) the geometry beside the ref, else the legacy shape. What is drawn from
+  a fallback is not cached under the file's key: a shape's plan is made again once its file is read, its effect
+  sprite is not kept, and a masked picture's prepared key tells a pending mask apart (`geomPending`). The
+  readers: the output's asset worker (from the service cache or the hub; a file not there yet is reported with
+  the missing images, so the link draws the slide again once it is cached), the operator's thumbnail worker and
+  editor canvas, and the fidelity harness's page.
 - **Union clip** (`draw.ts` `geomFillPath2D`, `traceUnionPath`). The filled paths of a geometry as one Path2D whose
   non-zero fill (`GEOM_CLIP_RULE`) is the union of each path's even-odd region: every closed sub-path is turned
   to wind positively when an even number of the path's other sub-paths contain its first point and negatively

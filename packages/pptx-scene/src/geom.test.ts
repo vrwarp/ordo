@@ -34,6 +34,7 @@ import {
   tableFrame,
   tc,
   themeXml,
+  inlineGeoms,
 } from './test-util.ts';
 
 const IN = 914_400;
@@ -44,8 +45,10 @@ const RED = { r: 255, g: 0, b: 0, a: 1 };
 /** Emit the first slide of a deck; every emitted slide must be one `Slide.parse` returns unchanged. */
 function emitOne(spec: DeckSpec, opts: EmitOptions = {}) {
   const scene = parseDeck(buildDeck(spec));
-  const out = emitSlides(scene, opts);
-  for (const s of out.slides) expect(Slide.parse(s.slide)).toEqual(s.slide);
+  const stored = emitSlides(scene, opts);
+  for (const s of stored.slides) expect(Slide.parse(s.slide)).toEqual(s.slide);
+  // The paths as drawn: a geometry file's in place of its ref.
+  const out = inlineGeoms(stored);
   const e = out.slides[0]!;
   return { scene, slide: e.slide, notes: e.notes, objects: e.slide.objects.slice(1), emitted: e };
 }

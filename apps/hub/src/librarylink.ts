@@ -19,6 +19,7 @@
  */
 import {
   DEFAULT_SURFACES,
+  type FileRef,
   type Font,
   type GeneralSettings,
   type Look,
@@ -45,6 +46,8 @@ export type GoLiveBundle = {
   playlist: unknown;
   presentations: Record<string, unknown>;
   media: Record<string, Media>;
+  /** The geometry files the presentations' shapes name (`ShapeGeom.ref`); absent in a copy saved before them. */
+  files?: Record<string, FileRef>;
   fonts: Font[];
   looks: Look[];
   general: GeneralSettings;
@@ -243,6 +246,7 @@ export class LibraryLink implements LiveSource {
       playlist: b.playlist,
       presentation: (id) => b.presentations[id],
       media: (id) => b.media[id],
+      file: (hash) => (b.files && Object.hasOwn(b.files, hash) ? b.files[hash] : undefined),
       fonts: () => b.fonts,
       looks: b.looks,
       general: b.general,

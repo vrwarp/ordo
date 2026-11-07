@@ -1,6 +1,7 @@
 import { fileUrl } from '@ordo/client';
 import {
   type Box,
+  isGeomFileRef,
   LOGICAL_HEIGHT,
   LOGICAL_WIDTH,
   type Media,
@@ -8,7 +9,14 @@ import {
   type SlideObject,
   type TextObject,
 } from '@ordo/domain';
-import { drawImageFit, drawObject, drawTextObject, isRichText } from '@ordo/renderer';
+import {
+  drawImageFit,
+  drawObject,
+  drawTextObject,
+  geomPending,
+  isRichText,
+  readGeomFiles,
+} from '@ordo/renderer';
 import type Konva from 'konva';
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Layer, Line, Rect, Shape, Stage, Transformer } from 'react-konva';
@@ -39,6 +47,20 @@ function imageFor(hash: string | undefined): HTMLImageElement | undefined {
     images.set(hash, img);
   }
   return img.complete && img.naturalWidth > 0 ? img : undefined;
+}
+/**
+ * Read the geometry file a shape or a picture's mask names (`ShapeGeom.ref`) if it is not yet; the canvas
+ * draws again once it is (the shape draws its fallback meanwhile).
+ */
+function readGeomOf(o: SlideObject): void {
+  const g = o.type === 'shape' ? o.geom : o.type === 'image' ? o.mask : undefined;
+  if (!g || !isGeomFileRef(g.ref) || !geomPending(g)) return;
+  void readGeomFiles([g.ref], async (hash) => {
+    const r = await fetch(fileUrl(hash), { credentials: 'same-origin' });
+    return r.ok ? r.text() : undefined;
+  }).then((left) => {
+    if (!left.size) for (const l of imageListeners) l();
+  });
 }
 function useImageTick(): number {
   const [n, setN] = useState(0);
@@ -165,6 +187,7 @@ function ObjectNode(props: {
       perfectDrawEnabled={false}
       sceneFunc={(context) => {
         const ctx = context._context as CanvasRenderingContext2D;
+        readGeomOf(o);
         if (o.type === 'text') {
           const t = textCanvas(o, tick, props.density);
           ctx.drawImage(t.canvas, -MARGIN, -MARGIN, t.canvas.width / t.density, t.canvas.height / t.density);

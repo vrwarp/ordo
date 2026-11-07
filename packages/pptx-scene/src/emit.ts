@@ -44,6 +44,11 @@
  *   the cut folded into the crop, so the clamp never squeezes it. A recoloured picture (duotone, clrChange,
  *   grayscl, biLevel, lum) and a tiled fill (one picture over the whole box) are baked (M6, `bake.ts`): their
  *   placeholder is `pptxmedia:bake<n>`, one per part and recipe, listed in `EmitResult.media` with it.
+ * - **Geometry files** (M6 round 2): a geometry's paths of more than `GEOM_FILE_CHARS` on a slide (one
+ *   geometry's JSON times the times the slide draws it), and then the largest others while the slide as the
+ *   hub stores it is within 4 KB of `MAX_SLIDE_BYTES`, are written once in a geometry file (`ShapeGeom.ref`, placeholder
+ *   `pptxgeom:<n>`, one per distinct file, listed in `EmitResult.geoms`) instead of in the slide. A slide
+ *   still past it (its text formatting, or its objects with every path in files) is picture class.
  * - **SmartArt** drawn from its drawing cache (M6, `smartart.ts`): its objects are a locked group (origin
  *   role 'diagram'; text objects unlocked), and its text is never the lyric box.
  * - **Backgrounds**: a plain stretched picture known to be opaque whose aspect is known and matches a 16:9
@@ -69,6 +74,7 @@
  * Owned by work item C (inherit-emit).
  */
 import type {
+  GeomFile,
   ImageObject,
   Rgba as OrdoRgba,
   ShapeGeom,
@@ -137,6 +143,17 @@ export const CLIP_PREFIX = `${MEDIA_PREFIX}clip`;
  * recipe, listed in `EmitResult.media` with their `bake`.
  */
 export const BAKE_PREFIX = `${MEDIA_PREFIX}bake`;
+/**
+ * The prefix of geometry files' placeholders (M6 round 2, `ShapeGeom.ref`): `pptxgeom:<n>`, one per distinct
+ * file, listed in `EmitResult.geoms` with its content; the hub stores each and names it by its SHA-256.
+ */
+export const GEOM_PREFIX = 'pptxgeom:';
+/**
+ * A geometry whose paths take more than this many characters of a slide's JSON (its own times the times the
+ * slide draws it) is written in a geometry file (`ShapeGeom.ref`, M6 round 2). Smaller ones stay inline
+ * unless the slide comes within 4 KB of `MAX_SLIDE_BYTES` with them: then the largest go to files too.
+ */
+export const GEOM_FILE_CHARS = 2_048;
 /** Longest text an ordo `TextObject` holds (`@ordo/domain` MAX.text). */
 export const MAX_TEXT = 20_000;
 /** Stored font sizes in logical px (design/27 §4 "Sizes"). */
@@ -153,6 +170,26 @@ export const MAX_OBJECTS = 1_000;
 export const MAX_SLIDE_BYTES = 64 * 1024;
 /** The note a slide gets when it passes `MAX_SLIDE_BYTES` (an importer that logs the budget itself drops it). */
 export const SLIDE_BUDGET_NOTE = `the slide has more than ${MAX_SLIDE_BYTES / 1024} KB of text formatting: its further text is written without it (picture class)`;
+/**
+ * The note a slide gets when it is over `MAX_SLIDE_BYTES` as the hub stores it (`storedSlideBytes`) with
+ * its large geometries in files (an importer that logs the budget itself drops it, as `SLIDE_BUDGET_NOTE`).
+ */
+export const SLIDE_BYTES_NOTE = `the slide is more than ${MAX_SLIDE_BYTES / 1024} KB as stored, with its shape outlines in files (picture class)`;
+/** What `storedSlideBytes` adds for a slide's provenance (`Slide.pptx` without notes) and as a margin. */
+const PROVENANCE_BYTES = 400;
+/** Characters of an id as the hub writes it (a ULID) and of a geometry file's name (a SHA-256 in hex). */
+const STORED_ID_CHARS = 26;
+const STORED_REF_CHARS = 64;
+/**
+ * Geometries go to files until the slide is this far within `MAX_SLIDE_BYTES`: room for what the hub adds
+ * that the converter does not know (speaker notes, timing, a transition).
+ */
+const SLIDE_BYTES_ROOM = 4 * 1024;
+/** `"ref":"<64>"` and the two braces of a file's JSON (`{"paths":…}`) it no longer has around its paths. */
+const REF_JSON_BYTES = 7 + STORED_REF_CHARS + 2;
+/** The provenance notes the hub keeps per slide (`Slide.pptx.notes`), each cut to 200 characters. */
+const STORED_NOTES = 16;
+const STORED_NOTE_CHARS = 200;
 /** Single line spacing in the office line model: 1.2 × the font size (`pptx-render/src/page.ts`). */
 export const SINGLE_LINE = 1.2;
 /** Logical coordinates are bounded by the schema (`coord`). */
@@ -188,6 +225,17 @@ export interface EmitOptions {
   clipId?: (key: string) => string;
   /** 'Import transition sounds' (default false): a slide's transition sound becomes its sound. */
   transitionSounds?: boolean;
+  /**
+   * Write large geometries in geometry files (M6 round 2, `ShapeGeom.ref`; default true). With false every
+   * geometry's paths stay in the slide (what the importer writes while the schema ships one release ahead
+   * of it, §3.2), counted toward `MAX_SLIDE_BYTES` all the same.
+   */
+  geomFiles?: boolean;
+  /**
+   * The placeholder of a geometry file by its JSON (`GeomFile`); default `pptxgeom:<n>`, numbered from 1 in
+   * first-use order. Asked once per distinct file.
+   */
+  geomId?: (json: string) => string;
   /**
    * The placeholder id of a baked picture (M6, `bake.ts`), by its source part and recipe; default
    * `pptxmedia:bake<n>`, numbered from 1 in first-use order. Asked once per part and recipe.
@@ -242,9 +290,10 @@ export interface EmittedSlide {
   metafiles?: { part: string; object: ImageObject; before?: string }[];
   /**
    * Classed picture by the slide budget alone (design/27 §3.4): its text formatting passed `MAX_SLIDE_BYTES`,
-   * and it would be native or hybrid otherwise. The slide's JSON is then over 64 KB too (its objects hold
-   * that text), so an importer counts and logs it exactly as its own slide budget would (the hub: a compact
-   * picture slide, one warning), and drops `SLIDE_BUDGET_NOTE`.
+   * or the slide as the hub stores it did with its large geometries in files (`storedSlideBytes`), and it
+   * would be native or hybrid otherwise. An importer counts and logs it exactly as its own slide budget
+   * would (the hub: a compact picture slide, one warning), and drops `SLIDE_BUDGET_NOTE` and
+   * `SLIDE_BYTES_NOTE`.
    */
   overBudget?: true;
   /** The clips the slide plays or names (`media.ts`): what the hub ingests and puts in place of placeholders. */
@@ -265,6 +314,12 @@ export interface EmitResult {
   /** The deck's area in 1920x1080 logical px (`source.native.slideRect`). */
   slideRect: { x: number; y: number; w: number; h: number };
   notes: string[];
+  /**
+   * The geometry files the slides name (M6 round 2, `ShapeGeom.ref`), each once in first-use order: its
+   * placeholder (`pptxgeom:<n>`) and content. An importer stores each and puts its name in place of the
+   * placeholder (the hub: the file's SHA-256); one that cannot leaves the shape drawing its legacy form.
+   */
+  geoms: { id: string; file: GeomFile }[];
 }
 
 /** What one slide's emission needs. */
@@ -318,6 +373,18 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
     }
     return b.id;
   };
+  const files = new Map<string, { id: string; file: GeomFile }>();
+  const geomRef =
+    opts.geomFiles === false
+      ? undefined
+      : (json: string, file: GeomFile) => {
+          let f = files.get(json);
+          if (!f) {
+            f = { id: opts.geomId ? opts.geomId(json) : `${GEOM_PREFIX}${files.size + 1}`, file };
+            files.set(json, f);
+          }
+          return f.id;
+        };
   const slides = scene.slides.map((s) => {
     const t0 = performance.now();
     const { notes, log } = noteList();
@@ -341,7 +408,11 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
     ctx.metafiles = [];
     ctx.clips = [];
     const slide = emitSlide(ctx, s, spans);
-    const over = ctx.textBytes > MAX_SLIDE_BYTES;
+    const overText = ctx.textBytes > MAX_SLIDE_BYTES;
+    // The slide's whole JSON as the hub stores it, its large geometries in files (design/27 §3.4).
+    const overBytes = !overText && fitBytes(slide, notes, geomRef) > MAX_SLIDE_BYTES;
+    if (overBytes) log(SLIDE_BYTES_NOTE);
+    const over = overText || overBytes;
     const art = artInfo(s, scene.frame, spans, slide.objects);
     const metafiles = ctx.metafiles.map(({ part, object, at }) => {
       const before = slide.objects[at]?.id;
@@ -352,7 +423,7 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       ...(s.shown !== undefined ? { shown: s.shown } : {}),
       hidden: s.hidden,
       slide,
-      classification: over ? overBudget(s.classification) : s.classification,
+      classification: over ? overBudget(s.classification, overText) : s.classification,
       digest: digestOf(slide.objects),
       notes,
       ms: performance.now() - t0,
@@ -370,7 +441,82 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
     ],
     slideRect: slideRect(scene.frame),
     notes: [...scene.notes],
+    geoms: [...files.values()],
   };
+}
+
+// ── Geometry files and the slide's JSON budget (M6 round 2, design/27 §3.4) ───────────────────────────────
+
+/** A geometry in a slide's objects: its owner's field (`ShapeObject.geom`, `ImageObject.mask`) and its JSON. */
+type GeomSite = { o: SlideObject; key: 'geom' | 'mask'; g: ShapeGeom; json: string };
+
+/**
+ * What a slide's JSON is as the hub stores it (`planImportSizes`'s size): its objects with ids of a ULID's
+ * length and geometry files named by SHA-256, an origin on every object, and its provenance (`Slide.pptx`
+ * with up to 16 of `notes`). An estimate a few hundred bytes over the hub's own, never under it.
+ */
+export function storedSlideBytes(slide: Slide, notes: readonly string[]): number {
+  let n = utf8Bytes(JSON.stringify(slide)) + PROVENANCE_BYTES;
+  const id = (v: unknown) => (typeof v === 'string' ? Math.max(0, STORED_ID_CHARS - v.length) : 0);
+  n += id(slide.id) + id(slide.lyricObjectId);
+  for (const o of slide.objects) {
+    n += id(o.id);
+    if (!o.origin) n += 24; // ,"origin":{"src":"pptx"}
+    const g = o.type === 'shape' ? o.geom : o.type === 'image' ? o.mask : undefined;
+    if (typeof g?.ref === 'string') n += Math.max(0, STORED_REF_CHARS - g.ref.length);
+  }
+  if (notes.length)
+    n +=
+      10 + utf8Bytes(JSON.stringify(notes.slice(0, STORED_NOTES).map((t) => t.slice(0, STORED_NOTE_CHARS))));
+  return n;
+}
+
+/**
+ * Moves a slide's large geometries into geometry files (`ref`, through `geomRef`; none without it): first
+ * every geometry whose paths take more than `GEOM_FILE_CHARS` of the slide (its JSON times the times the
+ * slide draws it), then, while the slide as stored (`storedSlideBytes`) passes `MAX_SLIDE_BYTES` less
+ * `SLIDE_BYTES_ROOM`, the largest of the others whose paths are longer than a ref. Returns the slide's
+ * stored size after it.
+ */
+function fitBytes(
+  slide: Slide,
+  notes: readonly string[],
+  geomRef: ((json: string, file: GeomFile) => string) | undefined,
+): number {
+  if (!geomRef) return storedSlideBytes(slide, notes);
+  const sites: GeomSite[] = [];
+  const times = new Map<string, number>();
+  for (const o of slide.objects) {
+    const key = o.type === 'shape' ? 'geom' : o.type === 'image' ? 'mask' : undefined;
+    const g = key ? (o as { geom?: ShapeGeom; mask?: ShapeGeom })[key] : undefined;
+    if (!key || !g?.paths?.length || g.ref !== undefined) continue;
+    const json = JSON.stringify({ paths: g.paths });
+    sites.push({ o, key, g, json });
+    times.set(json, (times.get(json) ?? 0) + 1);
+  }
+  const toFile = (site: GeomSite) => {
+    const { paths, ...rest } = site.g;
+    const ref = geomRef(site.json, { paths: paths! });
+    (site.o as { geom?: ShapeGeom; mask?: ShapeGeom })[site.key] = { ...rest, ref };
+  };
+  const rest: GeomSite[] = [];
+  for (const site of sites)
+    if (site.json.length * times.get(site.json)! > GEOM_FILE_CHARS) toFile(site);
+    else rest.push(site);
+  let bytes = storedSlideBytes(slide, notes);
+  const target = MAX_SLIDE_BYTES - SLIDE_BYTES_ROOM;
+  if (bytes <= target) return bytes;
+  // `"ref":"<64>"` takes the place of `"paths":[…]` (the file's JSON less its braces): only longer paths
+  // are worth a file. Counted as it goes, then measured once more.
+  rest.sort((a, b) => b.json.length - a.json.length);
+  let moved = false;
+  for (const site of rest) {
+    if (bytes <= target || site.json.length <= REF_JSON_BYTES + 16) break;
+    toFile(site);
+    bytes -= site.json.length - REF_JSON_BYTES;
+    moved = true;
+  }
+  return moved ? storedSlideBytes(slide, notes) : bytes;
 }
 
 /** A text object with the element it came from, for the lyric box. */
@@ -553,9 +699,11 @@ function scriptClassOf(text: string): 'latin' | 'ea' | 'cs' {
   return n.ea > n.latin && n.ea >= n.cs ? 'ea' : n.cs > n.latin ? 'cs' : 'latin';
 }
 
-/** A slide over `MAX_SLIDE_BYTES`: picture class (design/27 §3.4), with why. */
-function overBudget(c: Classification): Classification {
-  const reason = `more than ${MAX_SLIDE_BYTES / 1024} KB of text formatting`;
+/** A slide over `MAX_SLIDE_BYTES` (its text formatting, else its JSON as stored): picture class (design/27 §3.4), with why. */
+function overBudget(c: Classification, text = true): Classification {
+  const reason = text
+    ? `more than ${MAX_SLIDE_BYTES / 1024} KB of text formatting`
+    : `more than ${MAX_SLIDE_BYTES / 1024} KB as stored`;
   return { ...c, class: 'picture', reasons: [...c.reasons.filter((r) => r !== reason), reason] };
 }
 

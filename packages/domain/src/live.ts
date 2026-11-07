@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  FileRef,
   Font,
   Id,
   Look,
@@ -28,6 +29,12 @@ export const ResolvedPlaylist = z.object({
   looks: z.array(Look),
   logoMediaId: Id.optional(),
   files: z.array(ManifestFile),
+  /**
+   * The geometry files the slides draw (`drawnGeomRefs`, design/27 §3.1 `ShapeGeom.ref`): their hashes are
+   * in `files` too, so outputs cache them with the pictures; the live process serves them from here while
+   * the library is down. Absent when no slide draws one.
+   */
+  geoms: z.array(FileRef).max(100_000).optional(),
   manifestId: z.string(),
   /**
    * Content that failed validation at goLive and was quarantined (design/25): a bad slide is replaced by an

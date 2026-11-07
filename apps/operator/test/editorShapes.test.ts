@@ -7,6 +7,7 @@
 import { type Gradient, Presentation, type Rgba, ShapeObject, type SlideObject } from '@ordo/domain';
 import { createElement, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { clearGeomFiles, putGeomFile } from '@ordo/renderer/geom/index.ts';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { Check, ColorField, NumberField, Select } from '../src/components/fields.tsx';
 import { openPresentation, useEditor } from '../src/views/editor/editorStore.ts';
@@ -351,6 +352,24 @@ describe('geometry: read-only, the preset with its adjust values', () => {
     expect(shapeName(unknown)).toBe('ellipse');
     expect(geomInfo(shape())).toBeUndefined();
     expect(shapeName(shape({ shape: 'line' }))).toBe('line');
+  });
+
+  it('a geometry in a file (ShapeGeom.ref) is a freeform, read as the canvas draws it once its file is read', () => {
+    clearGeomFiles();
+    const ref = 'e'.repeat(64);
+    const stored = shape({ geom: { ref } });
+    expect(geomInfo(stored)).toEqual({ kind: 'custom', paths: 1 });
+    expect(shapeName(stored)).toBe('freeform');
+    expect(hasOpenOutline(stored)).toBe(false);
+    putGeomFile(ref, {
+      paths: [
+        { d: 'M0 0L1 1', w: 1, h: 1 },
+        { d: 'M0 0L1 0Z', w: 1, h: 1 },
+      ],
+    });
+    expect(geomInfo(stored)).toEqual({ kind: 'custom', paths: 2 });
+    expect(hasOpenOutline(stored)).toBe(true);
+    clearGeomFiles();
   });
 });
 

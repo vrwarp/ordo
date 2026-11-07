@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { drawnMediaIds, fromImport, referencePicture, slideContent } from './content.ts';
+import { drawnGeomRefs, drawnMediaIds, fromImport, referencePicture, slideContent } from './content.ts';
 import { CONTENT_CASES, contentCase } from './content.test-util.ts';
 import { DEFAULT_GENERAL, DEFAULT_LOOKS } from './defaults.ts';
 import { localDigest, resolvePlaylist } from './goLive.ts';
@@ -163,5 +163,100 @@ describe('the media a goLive ships follow the rule (design/27 §5, §8)', () => 
     expect(() =>
       resolve([contentCase('ref').slide, other], (id) => (id === 'ref' ? undefined : media(id))),
     ).toThrow(/media ref is missing/);
+  });
+});
+
+describe('drawnGeomRefs (ShapeGeom.ref, M6 round 2)', () => {
+  const shape = (id: string, ref: string, origin = true) => ({
+    id,
+    type: 'shape',
+    box: { x: 0, y: 0, w: 10, h: 10, rotation: 0 },
+    shape: 'rect',
+    opacity: 1,
+    radius: 0,
+    geom: { ref },
+    ...(origin ? { origin: { src: 'pptx' } } : {}),
+  });
+  const photo = {
+    id: 'p',
+    type: 'image',
+    box: { x: 0, y: 0, w: 1, h: 1, rotation: 0 },
+    mediaId: 'm',
+    mask: { ref: 'b' },
+  };
+
+  it('names the files of the shapes and masks a slide draws, once each, in drawing order', () => {
+    const slide = { id: 's', objects: [shape('1', 'a'), photo, shape('2', 'a'), { id: 't', type: 'text' }] };
+    expect(drawnGeomRefs(slide as unknown as Slide)).toEqual(['a', 'b']);
+  });
+
+  it('follows slideContent: on a reference picture only the operator objects draw', () => {
+    const slide = {
+      id: 's',
+      objects: [shape('1', 'a'), shape('2', 'c', false)],
+      pptx: { show: 'picture', refMediaId: 'ref' },
+    };
+    expect(drawnGeomRefs(slide as unknown as Slide)).toEqual(['c']);
+    expect(
+      drawnGeomRefs({ objects: [null, { type: 'shape', geom: { ref: 7 } }] } as unknown as Slide),
+    ).toEqual([]);
+  });
+});
+
+describe('resolvePlaylist: geometry files (M6 round 2)', () => {
+  const ref = 'c'.repeat(64);
+  const lost = 'd'.repeat(64);
+  const p = Presentation.parse({
+    id: 'p',
+    title: 'Deck',
+    kind: 'slides',
+    sections: [
+      {
+        id: 'sec',
+        label: 'S',
+        short: 'S',
+        slides: [
+          { id: 'a', objects: [{ ...shapeObj('1'), geom: { ref } }] },
+          {
+            id: 'b',
+            objects: [
+              { ...shapeObj('2'), geom: { ref: lost } },
+              { ...shapeObj('3'), geom: { ref } },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  function shapeObj(id: string) {
+    return { id, type: 'shape', box: { x: 0, y: 0, w: 10, h: 10, rotation: 0 }, shape: 'rect' };
+  }
+  const file = { hash: ref, bytes: 120, mime: 'application/json', path: `media/cc/${ref}.json` };
+  const base = {
+    playlist: { id: 'pl', name: 'x', items: [{ id: 'i', kind: 'presentation', presentationId: 'p' }] },
+    presentation: (id: string) => (id === 'p' ? p : undefined),
+    media: () => undefined,
+    fonts: () => [],
+    looks: DEFAULT_LOOKS,
+    general: DEFAULT_GENERAL,
+  };
+
+  it('lists each file the slides draw in the manifest and for the live process, and notes the missing ones', () => {
+    const r = resolvePlaylist({ ...base, file: (h) => (h === ref ? file : undefined) }, 'pl', {
+      digest: localDigest,
+    });
+    expect(r.files).toEqual([{ hash: ref, bytes: 120, mime: 'application/json' }]);
+    expect(r.geoms).toEqual([file]);
+    expect(r.degraded?.map((d) => d.reason)).toEqual([
+      '1 shape outline(s) of this slide are missing from the library: drawn as plain shapes',
+    ]);
+    expect(r.degraded?.[0]?.slideId).toBe('b');
+  });
+
+  it('lists nothing without a file index (the operator PC resolving from its cache)', () => {
+    const r = resolvePlaylist(base, 'pl', { digest: localDigest });
+    expect(r.files).toEqual([]);
+    expect(r).not.toHaveProperty('geoms');
+    expect(r.degraded).toBeUndefined();
   });
 });

@@ -1,6 +1,7 @@
+import { drawnGeomRefs } from './content.ts';
 import { expandCues } from './cues.ts';
 import { newId } from './ids.ts';
-import type { ResolvedPlaylist } from './live.ts';
+import type { ManifestFile, ResolvedPlaylist } from './live.ts';
 import {
   type SlidePlay,
   manifestFiles,
@@ -9,6 +10,7 @@ import {
   slideOnlyMedia,
 } from './resolve.ts';
 import {
+  type FileRef,
   type Font,
   type GeneralSettings,
   type Look,
@@ -39,6 +41,12 @@ export type GoLiveInputs = {
   fonts(): Font[];
   looks: Look[];
   general: Pick<GeneralSettings, 'logoMediaId'>;
+  /**
+   * The content-store file of a hash: the geometry files slides draw (`ShapeGeom.ref`, M6 round 2) go into
+   * the manifest with it. Absent (the operator PC resolving from its cache): they are left out, and outputs
+   * draw what they cached.
+   */
+  file?(hash: string): FileRef | undefined;
   /** When the copy was taken (remote sources serve a cached copy while the library is down). */
   takenAt?: number;
   /**
@@ -253,6 +261,10 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
   );
   const fonts: Font[] = inputs.fonts().filter((f) => families.has(f.family.trim().toLowerCase()));
   const files = manifestFiles(Object.values(media), fonts);
+  const geoms = geomFiles(presentations, inputs.file);
+  for (const f of geoms.files)
+    files.push({ hash: f.hash, bytes: f.bytes, mime: f.mime } satisfies ManifestFile);
+  problems.push(...geoms.problems);
   const parts = [`${playlist.id}:${playlist.rev}`];
   for (const p of Object.values(presentations)) parts.push(`${p.id}:${p.rev}`);
   for (const f of files) parts.push(f.hash);
@@ -265,6 +277,7 @@ export function resolvePlaylist(inputs: GoLiveInputs | undefined, playlistId: st
     looks,
     logoMediaId: logoId && media[logoId] ? logoId : undefined,
     files,
+    ...(geoms.files.length ? { geoms: geoms.files } : {}),
     manifestId: opts.digest(parts),
   };
   // Too large for an operator takeover's hand-back (design/27 §3.4): live with a warning.
@@ -353,6 +366,45 @@ export const PENDING_SLIDE_REASON =
 /** The reason a slide LibreOffice could not draw (`Slide.pptx.failed`) is listed in `degraded`. */
 export const FAILED_SLIDE_REASON =
   'PowerPoint slide LibreOffice could not draw: its chart, art or page picture is missing';
+
+/** At most this many geometry files a goLive lists (each is one file the outputs cache). */
+export const GOLIVE_GEOM_FILES_MAX = 20_000;
+
+/**
+ * The geometry files the presentations' slides draw (`drawnGeomRefs`, design/27 §3.1 `ShapeGeom.ref`), once
+ * each, from the library's file index, and one problem per slide that draws one the library does not have
+ * (its shapes are drawn as their plain outlines). Nothing without a file index.
+ */
+function geomFiles(
+  presentations: Record<string, Presentation>,
+  file: ((hash: string) => FileRef | undefined) | undefined,
+): { files: FileRef[]; problems: GoLiveProblem[] } {
+  const files = new Map<string, FileRef>();
+  const problems: GoLiveProblem[] = [];
+  if (!file) return { files: [], problems };
+  const missing = new Set<string>();
+  for (const p of Object.values(presentations))
+    for (const sec of p.sections)
+      for (const s of sec.slides) {
+        let lost = 0;
+        for (const ref of drawnGeomRefs(s)) {
+          if (files.has(ref) || files.size >= GOLIVE_GEOM_FILES_MAX) continue;
+          const f = missing.has(ref) ? undefined : file(ref);
+          if (f?.hash === ref) files.set(ref, f);
+          else {
+            missing.add(ref);
+            lost++;
+          }
+        }
+        if (lost && problems.length < DEGRADED_MAX)
+          problems.push({
+            presentationId: p.id,
+            slideId: s.id,
+            reason: `${lost} shape outline(s) of this slide are missing from the library: drawn as plain shapes`,
+          });
+      }
+  return { files: [...files.values()], problems };
+}
 
 /**
  * Slides of a native PowerPoint import that still wait for LibreOffice (`Slide.pptx.pending`) or that it

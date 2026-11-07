@@ -17,6 +17,7 @@ import {
   installFontEnv,
   jobFontFamilies,
   preparePicture,
+  readGeomFiles,
   rasterImage,
   rasterLowerThird,
   rasterProps,
@@ -24,7 +25,7 @@ import {
   rasterSlide,
   slidePictures,
 } from '@ordo/renderer';
-import { LOGICAL_WIDTH } from '@ordo/domain';
+import { drawnGeomRefs, GEOM_FILE_MAX_BYTES, isGeomFileRef, LOGICAL_WIDTH } from '@ordo/domain';
 import { type PictureDecoder, preloadPictures, sourcePicture } from './pictures.ts';
 
 /**
@@ -186,6 +187,24 @@ async function preload(
   return { lookup: pre.lookup, skipped: pre.skipped, missing, release: pre.release };
 }
 
+/**
+ * Read the geometry files a slide job draws (`ShapeGeom.ref`, design/27 §3.1), as its pictures are decoded
+ * before it is drawn. Returns the hashes not there yet: drawn with their shapes' fallback for now, and
+ * reported with the missing images, so the link draws the slide again once they are cached.
+ */
+async function readGeoms(job: Extract<AssetJob, { kind: 'slide' }>): Promise<string[]> {
+  const refs = drawnGeomRefs(job.slide).filter(isGeomFileRef);
+  if (job.nextSlide) refs.push(...drawnGeomRefs(job.nextSlide).filter(isGeomFileRef));
+  if (!refs.length) return [];
+  const r = await readGeomFiles(refs, async (hash) => {
+    const { blob } = await readFile(hash);
+    return blob.size > GEOM_FILE_MAX_BYTES ? null : blob.text();
+  });
+  const missing: string[] = [];
+  for (const [hash, why] of r) if (why === 'missing') missing.push(hash);
+  return missing;
+}
+
 /** Missing families a 'done' message reports: as many as the link keeps (FromAsset, protocol health). */
 const MAX_FONT_FALLBACKS = 20;
 
@@ -236,9 +255,11 @@ async function run(job: AssetJob): Promise<void> {
   let scene: (SceneParts & { base: ImageBitmap }) | undefined;
   try {
     if (job.kind === 'slide') {
+      // Geometry files first: a masked picture is prepared with its mask's paths.
+      const geoms = await readGeoms(job);
       const pre = await preload(job.images, slidePictures(job.slide, { scale, look: job.look }));
       skipped = pre.skipped;
-      missing = pre.missing;
+      missing = geoms.length ? [...pre.missing, ...geoms] : pre.missing;
       try {
         const c = surface();
         scene = sceneParts(job, c, scale, pre.lookup);

@@ -343,6 +343,62 @@ describe.skipIf(!chromium)('NativeRenderer (headless Chromium)', () => {
     }
   }, 120_000);
 
+  it("reads the deck's geometry files before it draws (a traced outline with a hole, in a file)", async () => {
+    const p = new pptxgen();
+    p.layout = 'LAYOUT_16x9';
+    const ring = (r: number, n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        x: 2 + r * Math.cos((2 * Math.PI * i) / n),
+        y: 2 + r * Math.sin((2 * Math.PI * i) / n),
+        ...(i === 0 ? { moveTo: true } : {}),
+      }));
+    const points = [...ring(2, 400), { close: true as const }, ...ring(0.6, 200), { close: true as const }];
+    const slide = p.addSlide();
+    // pptxgenjs writes custGeom from `points`; its types do not list the shape's name.
+    slide.addShape('custGeom' as Parameters<typeof slide.addShape>[0], {
+      x: 1,
+      y: 0.5,
+      w: 4,
+      h: 4,
+      fill: { color: 'FF0000' },
+      points,
+    });
+    const dir = await work();
+    const file = join(dir, 'outline.pptx');
+    await writeFile(file, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
+    const d = await convertDeck(file, dir);
+    expect(d.geoms).toHaveLength(1);
+    const shape = d.slides[0]!.slide.objects.find((o) => o.type === 'shape' && o.geom)!;
+    expect(shape.type === 'shape' && shape.geom).toEqual({ ref: d.geoms![0]!.id });
+    const json = JSON.parse(await readFile(join(dir, 'slides.json'), 'utf8')) as NativeDeck;
+    expect(json.geoms).toEqual(d.geoms);
+    const r = await NativeRenderer.start(chromium!);
+    try {
+      await r.renderDeck(d, dir, { repeats: 0 });
+    } finally {
+      await r.close();
+    }
+    // 192 px per inch: the ring is red, its hole (the outline's centre) is not, as the file's paths draw it;
+    // the shape's legacy form, drawn without the file, would fill the centre too.
+    const rgb = (x: number, y: number) => [
+      ...execFileSync('ffmpeg', [
+        '-v',
+        'error',
+        '-i',
+        join(dir, 'slide-0001.png'),
+        '-vf',
+        `crop=1:1:${x}:${y}`,
+        '-f',
+        'rawvideo',
+        '-pix_fmt',
+        'rgb24',
+        '-',
+      ]),
+    ];
+    expect(rgb(3 * 192 + 250, 2.5 * 192)).toEqual([255, 0, 0]);
+    expect(rgb(3 * 192, 2.5 * 192)).not.toEqual([255, 0, 0]);
+  }, 120_000);
+
   it('draws the slides asked for, both ways under --lo-compat, through the font resolver', async () => {
     const r = await NativeRenderer.start(chromium!);
     try {

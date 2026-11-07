@@ -1,9 +1,22 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { GEOM_FILE_MAX_BYTES } from '@ordo/domain';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { traceUnionPath, UNION_NESTING_LIMIT, UNION_NESTING_WORK } from './draw.ts';
 import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE } from './ops.ts';
 import { presetGeometry } from './path.ts';
 import { RecPath } from './path2d.test-util.ts';
-import { legacyGeometry, storedGeometry } from './stored.ts';
+import {
+  clearGeomFiles,
+  GEOM_FILE_RETRY_MS,
+  GEOM_FILES_CHARS,
+  GEOM_FILES_MAX,
+  geomFile,
+  geomPending,
+  legacyGeometry,
+  putGeomFile,
+  readGeomFiles,
+  resolvedGeom,
+  storedGeometry,
+} from './stored.ts';
 
 /** Stored geometries (design/27 §3.1 ShapeGeom): presets by name, re-tokenised paths, the legacy shapes. */
 
@@ -202,5 +215,106 @@ describe('traceUnionPath', () => {
     for (const path of filled) traceUnionPath(p, path);
     // Every closed outline of both paths winds the same way: their non-zero fill is the face, eyes kept.
     expect(new Set(areas(p))).toEqual(new Set([1]));
+  });
+});
+
+describe('geometry files (ShapeGeom.ref, M6 round 2)', () => {
+  const file = { paths: [{ d: 'M 0 0 L 10 0 L 10 10 Z', w: 10, h: 10 }] };
+  const ref = 'a'.repeat(64);
+  beforeEach(() => clearGeomFiles());
+
+  it("draws a read file's paths, the geometry beside the ref until then", () => {
+    const g = { ref, preset: 'ellipse' };
+    expect(geomPending(g)).toBe(true);
+    expect(storedGeometry(g, 100, 50)).toEqual(presetGeometry('ellipse', 100, 50));
+    expect(storedGeometry({ ref }, 100, 50)).toBeUndefined();
+    expect(putGeomFile(ref, file)).toBe(true);
+    expect(geomPending(g)).toBe(false);
+    expect(resolvedGeom(g)).toEqual(file);
+    const built = storedGeometry(g, 100, 50)!;
+    expect(built.paths[0]!.pts).toEqual([0, 0, 100, 0, 100, 50]);
+    // Every shape naming the file shares its built geometry, per box size.
+    expect(storedGeometry({ ref }, 100, 50)).toBe(built);
+    const small = storedGeometry({ ref }, 10, 5)!;
+    expect(small.paths[0]!.pts).toEqual([0, 0, 10, 0, 10, 5]);
+    expect(storedGeometry({ ref, paths: [] }, 100, 50)).toBe(built);
+  });
+
+  it('keeps of a file only what inline paths keep (re-tokenised), and nothing of a file that is not one', () => {
+    expect(putGeomFile(ref, { paths: [{ d: 'M 0 0 L 1 1 <script>', w: 1, h: 1 }], extra: 1 })).toBe(true);
+    expect(geomFile(ref)).toEqual({ paths: [{ d: 'M 0 0 L 1 1', w: 1, h: 1 }] });
+    expect(putGeomFile('b'.repeat(64), { paths: 'M 0 0' })).toBe(false);
+    expect(putGeomFile('b'.repeat(64), [1, 2])).toBe(false);
+    expect(putGeomFile('', file)).toBe(false);
+    expect(putGeomFile('x'.repeat(101), file)).toBe(false);
+  });
+
+  it('keeps at most GEOM_FILES_MAX files and GEOM_FILES_CHARS of path text, least recently read first out', () => {
+    const big = 'M 0 0 '.repeat(4_000).trim();
+    for (let i = 0; i < GEOM_FILES_MAX + 10; i++)
+      putGeomFile(`f${i}`, { paths: [{ d: 'M 0 0 L 1 1', w: 1, h: 1 }] });
+    expect(geomFile('f0')).toBeUndefined();
+    expect(geomFile(`f${GEOM_FILES_MAX + 9}`)).toBeDefined();
+    clearGeomFiles();
+    const n = Math.ceil(GEOM_FILES_CHARS / big.length) + 5;
+    for (let i = 0; i < n; i++) putGeomFile(`g${i}`, { paths: [{ d: big, w: 1, h: 1 }] });
+    expect(geomFile('g0')).toBeUndefined();
+    expect(geomFile(`g${n - 1}`)).toBeDefined();
+  });
+
+  it('reads each file once, says which could not be read, and asks again for a failed one only later', async () => {
+    let t = 1_000;
+    const asked: string[] = [];
+    const texts = new Map<string, string | null>([
+      ['ok', JSON.stringify(file)],
+      ['bad', '{"paths":'],
+      ['big', JSON.stringify({ paths: [{ d: 'M 0 0'.padEnd(GEOM_FILE_MAX_BYTES + 10, ' '), w: 1, h: 1 }] })],
+      ['null', null],
+    ]);
+    const read = async (r: string) => {
+      asked.push(r);
+      if (r === 'gone') throw new Error('404');
+      return texts.get(r);
+    };
+    const r1 = await readGeomFiles(['ok', 'ok', 'bad', 'big', 'null', 'gone', 'none'], read, () => t);
+    expect(Object.fromEntries(r1)).toEqual({
+      bad: 'invalid',
+      big: 'invalid',
+      null: 'invalid',
+      gone: 'missing',
+      none: 'missing',
+    });
+    expect(asked.filter((a) => a === 'ok')).toHaveLength(1);
+    expect(geomFile('ok')).toEqual(file);
+    // Read already: not asked again; failed: not asked again within GEOM_FILE_RETRY_MS.
+    asked.length = 0;
+    expect((await readGeomFiles(['ok', 'gone'], read, () => t)).get('gone')).toBe('missing');
+    expect(asked).toEqual([]);
+    t += GEOM_FILE_RETRY_MS;
+    texts.set('gone', JSON.stringify(file));
+    const r3 = await readGeomFiles(
+      ['gone'],
+      async (r) => texts.get(r),
+      () => t,
+    );
+    expect(r3.size).toBe(0);
+    expect(geomFile('gone')).toEqual(file);
+  });
+
+  it('shares a read in flight between callers', async () => {
+    let calls = 0;
+    let release: (s: string) => void = () => {};
+    const read = () => {
+      calls++;
+      return new Promise<string>((res) => {
+        release = res;
+      });
+    };
+    const a = readGeomFiles([ref], read);
+    const b = readGeomFiles([ref], read);
+    release(JSON.stringify(file));
+    expect((await a).size).toBe(0);
+    expect((await b).size).toBe(0);
+    expect(calls).toBe(1);
   });
 });

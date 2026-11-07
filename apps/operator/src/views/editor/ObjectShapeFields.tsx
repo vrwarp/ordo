@@ -6,6 +6,7 @@ import {
   geomPathOpen,
   PRESET_GEOMS,
   presetGeometry,
+  resolvedGeom,
 } from '@ordo/renderer/geom/index.ts';
 import { Check, ColorField, NumberField, Select } from '../../components/fields.tsx';
 
@@ -255,7 +256,8 @@ export function openPathData(d: string): boolean {
  */
 export function hasOpenOutline(o: ShapeObject): boolean {
   if (o.ends?.head || o.ends?.tail) return true;
-  const g = o.geom;
+  // A geometry stored in a file (`ShapeGeom.ref`) is read as the canvas draws it.
+  const g = resolvedGeom(o.geom);
   if (!g) return o.shape === 'line';
   if (g.preset !== undefined && PRESET_GEOMS.has(g.preset)) {
     const built = presetGeometry(g.preset, Math.abs(o.box.w), Math.abs(o.box.h), g.adj);
@@ -320,7 +322,7 @@ export type GeomInfo =
  * evaluates them, at the box (a stored pair replaces the first adjust value of its name).
  */
 export function geomInfo(o: ShapeObject): GeomInfo | undefined {
-  const g = o.geom;
+  const g = resolvedGeom(o.geom);
   if (!g) return undefined;
   const compiled = g.preset !== undefined ? PRESET_GEOMS.get(g.preset) : undefined;
   if (g.preset !== undefined && compiled) {
@@ -338,6 +340,8 @@ export function geomInfo(o: ShapeObject): GeomInfo | undefined {
     };
   }
   if (g.paths?.length) return { kind: 'custom', paths: g.paths.filter((p, i) => i === 0 || !p.cont).length };
+  // Its geometry file not read yet: a freeform all the same.
+  if (g.ref !== undefined) return { kind: 'custom', paths: 1 };
   return { kind: 'unknown', name: g.preset ?? '' };
 }
 

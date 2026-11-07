@@ -140,7 +140,12 @@ type ShapeGeom = {
     h: number;
     fill?: 'norm' | 'none' | 'lighten' | 'lightenLess' | 'darken' | 'darkenLess';
     stroke?: boolean;
+    cont?: boolean; // continues the path before it (one long path stored in pieces)
   }[];
+  // M6 round 2: the paths live in a geometry file (`GeomFile` = { paths }, JSON in the content store), named
+  // by its SHA-256 and read by drawers like a picture; while it is not read the geometry is the rest of this
+  // object, else the legacy shape. Large traced outlines travel once per library, not in every slide.
+  ref?: string;
 };
 type Gradient = {
   kind: 'linear' | 'radial';

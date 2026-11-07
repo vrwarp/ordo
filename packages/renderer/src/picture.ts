@@ -4,7 +4,7 @@ import { CLAMP, clampBox, clampCrop, clampGeom, num } from './clamp.ts';
 import type { Ctx2D } from './ctx.ts';
 import { digest } from './digest.ts';
 import { GEOM_CLIP_RULE, geomFillPath2D } from './geom/draw.ts';
-import { storedGeometry } from './geom/stored.ts';
+import { geomPending, storedGeometry } from './geom/stored.ts';
 
 /**
  * Pictures prepared at their displayed device size (design/27 §7.1 "Decode target").
@@ -110,9 +110,13 @@ export function pictureShape(o: PictureShape): PictureShape | undefined {
   return out;
 }
 
-/** The key part of a picture's mask and flips. */
+/**
+ * The key part of a picture's mask and flips; a mask whose geometry file is not read yet is told apart, so
+ * the picture prepared with its fallback is not taken for the one cut to the file's paths.
+ */
 function shapeKey(s: PictureShape): string {
-  return ` ${s.flipH ? 'h' : ''}${s.flipV ? 'v' : ''}${s.mask ? `m${maskOf(s.mask).key}` : ''}`;
+  const mask = s.mask ? `m${maskOf(s.mask).key}${geomPending(s.mask) ? '?' : ''}` : '';
+  return ` ${s.flipH ? 'h' : ''}${s.flipV ? 'v' : ''}${mask}`;
 }
 
 /** The largest picture prepared (16 MP, design/27 §7.1); a larger box is drawn from the source as before. */

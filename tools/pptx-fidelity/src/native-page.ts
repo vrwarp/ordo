@@ -2,6 +2,7 @@ import type { Slide } from '@ordo/domain';
 import { currentFontEnv, type FontFile, FontResolver, installFontEnv } from '@ordo/renderer/text/fonts.ts';
 import type { FaceRequest } from '@ordo/renderer/text/types.ts';
 import { pictureKey } from '@ordo/renderer/bitmap-cache.ts';
+import { clearGeomFiles, putGeomFile } from '@ordo/renderer/geom/stored.ts';
 import { type PictureTarget, pictureTarget, preparePicture } from '@ordo/renderer/picture.ts';
 import {
   type ImageLookup,
@@ -81,6 +82,8 @@ export type NativePage = {
   /** The CSS font the installed font environment gives each request (what text is drawn with). */
   font(reqs: FaceRequest[]): string[];
   media(list: PageMedia[]): void;
+  /** The deck's geometry files (`ShapeGeom.ref`): read before any slide is drawn, as an output reads them. */
+  geoms(list: { id: string; file: unknown }[]): void;
   render(job: RenderJob): Promise<RenderResult>;
 };
 
@@ -307,6 +310,10 @@ const page: NativePage = {
     cached = 0;
     known.clear();
     for (const m of list) known.set(m.id, m);
+  },
+  geoms(list) {
+    clearGeomFiles();
+    for (const g of list) putGeomFile(g.id, g.file);
   },
   async render(job) {
     const missing: string[] = [];
