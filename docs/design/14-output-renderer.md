@@ -162,6 +162,8 @@ A slide job that carries `video` (design/27 §7.2) is answered with `SRC_SCENE` 
 goes over it; draws the base (with the poster unless the clip is hidden while stopped), transfers it, draws
 the over on the same surface when anything is over the video, and encodes the plane at the output's scale
 with the clip's size (the poster's when the clip's is unknown), so the clip lands exactly on its poster.
+Since M7 base and over are each drawn as a tight sprite of what they reach (`rasterSceneSprites`), so an
+over that is only a title is a title-sized bitmap at its offset.
 Base and over draw the pictures the worker prepared for the whole slide (`slidePictures`), with the same
 targets as the slide drawn as one bitmap; a prepared poster is the box's size, so its source's size
 (`sourceSize`) fits the plane. A look that does not draw the slide as authored, an object that is gone or an
@@ -175,8 +177,8 @@ without the clip playing, from source and from prepared pictures.
 The asset worker's jobs run in raster lanes (`apps/output/src/lanes.ts`, design/27 §7.5), so a slide that
 decodes two large photos never holds up the props layer, which flips on every second:
 
-- **Ranks.** Props first, then the live cue's layers, then the armed cue's (the *interactive* lane), then
-  bulk work (the *bulk* lane): the pictures of the cue after the armed one (`warm`), prepared into the
+- **Ranks.** Props first, then the live cue's layers, then the armed cue's (the _interactive_ lane), then
+  bulk work (the _bulk_ lane): the pictures of the cue after the armed one (`warm`), prepared into the
   cache so that arming it after the next GO only draws. The link marks each job `live` or `armed`.
 - **Chains.** Each layer is a chain: its jobs run one at a time, live before armed, because a layer's
   content must reach the renderer in the order its stacks expect (`LayerStack.offer`). Jobs of different
@@ -196,12 +198,16 @@ decodes two large photos never holds up the props layer, which flips on every se
 - **Pins are counted** (`BitmapCache.pin`/`unpin`): jobs run side by side, and one's release must not unpin
   what another still draws. A cache insert never replaces an entry a draw holds; a target another job
   prepared meanwhile is taken, not made again.
-- **Timing.** Each `done` (and `warmed`) carries its lane, the time it waited (queue, fonts, turns), the
-  time its slices ran on the thread and its longest slice; the link keeps per-lane p50/p95 over the last 128
-  jobs and the number cancelled (`__ordo.telemetry().lanes`, the diagnostics view's `rasterLanes`).
-- **Surface.** The worker's surface is transparent once its picture is taken, so it is cleared only when a
-  draw failed before taking it (0.2 ms at 1080p, 1.1 ms at 4K saved per job). Drawing the first opaque
-  layer with `'copy'` saved nothing on this software surface (it cost 0.4-1.5 ms more), so it is not done.
+- **Timing.** Each `done` (and `warmed`) carries its lane, the time it waited (queue, fonts, turns),
+  `busyMs`, the time all its slices ran on the thread (picture bands included, the slice running when the
+  result is sent counted so far), and its longest slice; the link keeps per-lane p50/p95 over the last 128
+  jobs and the number cancelled (`__ordo.telemetry().lanes`, the diagnostics view's `rasterLanes`). The
+  draw alone is `done.rasterMs`, which health reports (below).
+- **Surface.** One CPU-backed canvas: shrunk to 1x1 while a job measures its reach (so a tight sprite never
+  pays for a frame-sized backing), then sized to the sprite or the frame, drawn on and taken in the same
+  slice. A resize or a transfer leaves it transparent, so it is cleared only when a draw failed before
+  taking it (0.2 ms at 1080p, 1.1 ms at 4K saved per job). Drawing the first opaque layer with `'copy'`
+  saved nothing on this software surface (it cost 0.4-1.5 ms more), so it is not done.
 
 **Crop-aware decode** (`apps/output/src/decode.ts`). The hub prepares pictures for a 3840 px output
 (design/27 §4), so a 1080p output decodes four times what it shows. When every use of a JPEG in a job
@@ -225,7 +231,9 @@ and 25.6 ms p50 (35.5 max) at 4K, against the link's 150 ms lead: never late. Th
 and 404 ms (4K) to the renderer, 18 and 116 ms of it on the thread, longest slice 15 and 41 ms. The asset
 worker before M7 (one chain, `--baseline`) delivered the same props 269 ms p50 (1080p) and 299 ms p50 (4K)
 after sending: 5 of 7 and 7 of 7 flips more than a frame late. `asset.lanes.browser.test.ts` checks the
-deadline at 4K in CI.
+deadline at 4K in CI. Again on the integrated M7 tree (sprites, lanes and health together, 2026-11-07, load
+average 3 to 4): the props bitmap 2.0 ms p50 (6.0 max) after sending at 1080p and 4.1 ms p50 (25.6 max) at
+4K, none late; the worker before M7 149 ms and 246 ms p50, 3 and 6 of 7 late.
 
 **Measuring on a venue machine.** The asset worker's costs are CPU costs (a software canvas on purpose), so
 they are measured on the venue's presentation PC itself, with its own Chrome: on the PC (Windows: a
@@ -234,7 +242,8 @@ checkout with Node and pnpm, `pnpm install`), run
 with the machine on mains power and nothing else running, once at the start of a service day and once after
 an hour of a running service (thermal state). Record the Chrome version, CPU, the props p50/max per size and
 the decode table in this section. `--check` fails if any props bitmap is more than a frame late. GPU
-figures (uploads, frame time) belong to the render worker and are measured separately.
+figures (uploads, frame time) belong to the render worker and are measured by `bench:venue` ("Measuring on
+venue machines" below).
 
 ## Frame loop
 
@@ -563,11 +572,11 @@ bus.
 **Performance (design/27 §13, M7).** Measured where the work happens, checked against the budgets of the
 output's size:
 
-| Field | Measured | Budget (`perfBudgets`) |
-|---|---|---|
-| `rasterMs` | p50, p95 and max of the asset worker's slide draws over the last 64 slides (`done.rasterMs`: the job's synchronous draw on the worker's thread, from the surface to the picture taken, pictures prepared; `done.ms`, the whole job with its reads and decodes, from a worker that does not report it). Props, lower thirds and image cues do not count. | p95 ≤ 10 ms at 1080p and below, 30 ms at 4K, by pixel count between |
-| `uploadMs` | the render worker's telemetry `uploadMs`: its CPU time in texture uploads, the longest frame of its last uploading frames, as the WebGPU compositor measures it (absent on Canvas 2D, which uploads nothing, and from a compositor that does not measure it) | ≤ 4 ms per frame |
-| `gpuMB` | the compositor's layer and scene textures (WebGPU only; since M5) | 400 MB at 4K (five layers of two textures and the two over textures), by pixel count to the next MB: 100 at 1080p |
+| Field      | Measured                                                                                                                                                                                                                                                                                                                                                | Budget (`perfBudgets`)                                                                                            |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `rasterMs` | p50, p95 and max of the asset worker's slide draws over the last 64 slides (`done.rasterMs`: the job's synchronous draw on the worker's thread, from the surface to the picture taken, pictures prepared; `done.ms`, the whole job with its reads and decodes, from a worker that does not report it). Props, lower thirds and image cues do not count. | p95 ≤ 10 ms at 1080p and below, 30 ms at 4K, by pixel count between                                               |
+| `uploadMs` | the render worker's telemetry `uploadMs`: its CPU time in texture uploads, the longest frame of its last uploading frames, as the WebGPU compositor measures it (absent on Canvas 2D, which uploads nothing, and from a compositor that does not measure it)                                                                                            | ≤ 4 ms per frame                                                                                                  |
+| `gpuMB`    | the compositor's layer and scene textures (WebGPU only; since M5)                                                                                                                                                                                                                                                                                       | 400 MB at 4K (five layers of two textures and the two over textures), by pixel count to the next MB: 100 at 1080p |
 
 `budgets` carries the three for the output's size; the output computes them because only it knows its size.
 `alarms` lists the budgets passed now: `gpuMemory`, `raster` (only once 20 slides were drawn: the first
@@ -611,54 +620,79 @@ with their own Chrome:
 1. On the machine (the Windows 11 presentation PC with its iGPU; a PC with a discrete GPU; a Mac): Node 22
    and pnpm, a checkout, `pnpm install`, Google Chrome installed. Mains power, other programs closed, the
    venue display connected at its native resolution.
-2. From the checkout: `pnpm --filter @ordo/renderer bench:venue` (Chrome visible on that display; on Linux
-   add `--channel chrome`). It records the machine (OS, CPU, memory, Chrome, display and refresh), the WebGPU
-   adapter (vendor, architecture, whether it is a software fallback, timestamp queries), a full-frame upload
-   at 1080p and 4K (CPU ms of the call, ms until the GPU has done it), five full-frame layers composed in one
-   pass (GPU ms, timestamp queries) and the asset worker's slide raster on this CPU per slide kind
-   (`bench:slides`: sermon text over a photo, a lyric with a shadow, a table, a scene slide, p50/p95 at 1080p
-   and 4K), and says which figures are over their budgets.
+2. From the checkout: `pnpm --filter @ordo/renderer bench:venue` (Chrome visible on that display and kept
+   in front for the live run; on Linux add `--channel chrome`). One command records:
+   - the machine (OS, CPU, memory, Chrome, display and refresh) and the WebGPU adapter (vendor, architecture,
+     whether it is a software fallback, timestamp queries);
+   - one full-frame copy at 1080p and 4K (CPU ms of the call, ms until the GPU has done it) and five
+     full-frame layers composed in one pass (`venue.page.ts`);
+   - the compositor as the render worker drives it (`gpu-venue.page.ts`; `bench:gpu` runs this part alone,
+     for tuning the strips): a full-frame bitmap and a lyric-band sprite uploaded in one copy, in the
+     default strips and in eighths of a frame (CPU and GPU ms per frame, frames per upload); five layers
+     composed full-frame, as sprites, and as sprites over an opaque background (the replace path; GPU ms from
+     timestamp queries); and a live run of the engine with and without strips (missed frames, late flips,
+     rAF interval, `uploadMs`);
+   - the asset worker's slide raster on this CPU (`bench:slides`: sermon text over a photo, a lyric with a
+     shadow, a table, a scene slide, p50/p95 at 1080p and 4K, drawn as the worker draws them and drawn
+     full-frame, and a blank full-frame job: the cost of a fresh frame-sized bitmap);
+
+   and says which figures are over their budgets: slide raster p95 (10 ms at 1080p, 30 ms at 4K, 12 ms for
+   text over a photo at 4K), the 4K upload in strips per frame (CPU and GPU p95 ≤ 4 ms) and each 4K
+   composition (GPU p95 ≤ 4 ms).
 3. Results go to two places: the JSON it writes (`venue-results/<host>-<date>.json`; commit it as
    `docs/measurements/venue/<machine>-<date>.json`), and the table below, one row per machine, pasted from
    the line it prints at the end. Measure once at the start of a service day and once after an hour of a
-   running service (thermal state), and again after a Chrome or driver update.
+   running service (thermal state), and again after a Chrome or driver update. If the 4K upload in strips
+   is over 4 ms of GPU time per frame, lower `UPLOAD_FRAME_SHARE` (`gpu.ts`) until it is not, and record
+   both runs.
 4. During a rehearsal, read the operator's Diagnostics "Performance and fonts" table (or download the
    operator log, which carries every output's health): the live `rasterMs`, `uploadMs` and `gpuMB` of the
    real outputs, and any alarm.
 
-The upload figure is one full-frame copy, the worst case: the render worker uploads armed content in strips
-within its per-frame budget. An alpha video should be checked by eye on each venue GPU (external textures may
-not keep alpha, design/27 §7.2).
+The "one full-frame copy" column is the worst case, which the render worker no longer does for armed content:
+it uploads in strips within its per-frame budget (the strips column). An alpha video should be checked by eye
+on each venue GPU (external textures may not keep alpha, design/27 §7.2).
 
-| Machine | GPU | Slide raster p50 / p95 ms at 1080p: photo, lyric, table, scene; at 4K: the same | Upload done p50 1080p / 4K | Compose 5 layers 4K (GPU) |
-|---|---|---|---|---|
-| (venue PC, to be measured) | | | | |
+| Machine                    | GPU | Slide raster p50 / p95 ms at 1080p: photo, lyric, table, scene; at 4K: the same | One full-frame copy, done p50 1080p / 4K | 4K upload in strips per frame p95, CPU / GPU | 4K compose GPU p95: 5 full-frame / sprites / replace | Live 4K: missed, late flips |
+| -------------------------- | --- | ------------------------------------------------------------------------------- | ---------------------------------------- | -------------------------------------------- | ---------------------------------------------------- | --------------------------- |
+| (venue PC, to be measured) |     |                                                                                 |                                          |                                              |                                                      |                             |
 
-Measured in this container (2026-11-06, Chromium 153 headless, 4 shared cores, CPU canvas; `bench:venue
---swiftshader`, so the GPU columns are SwiftShader's CPU and are not venue figures):
+Measured in this container (2026-11-07, Chromium 153 headless, 4 shared cores at a load average of 2 to 4,
+CPU canvas; `bench:venue --swiftshader`, so every GPU column is SwiftShader's CPU, not a venue figure, and
+there is no live run headless):
 
-| Machine | GPU | Slide raster p50 / p95 ms at 1080p: photo, lyric, table, scene; at 4K: the same | Upload done p50 1080p / 4K | Compose 5 layers 4K |
-|---|---|---|---|---|
-| container, Xeon 2.3 GHz, 4 threads | SwiftShader (CPU) | 5.2 / 6.1, 11.6 / 15.1, 4.4 / 5.1, 8.8 / 8.9; 18.3 / 18.8, 38.5 / 39.1, 13.8 / 15.1, 39.0 / 43.6 | 62.7 / 250.6 (CPU) | 162 (CPU) |
+| Machine                            | GPU               | Slide raster p50 / p95 ms at 1080p: photo, lyric, table, scene; at 4K: the same                  | One full-frame copy, done p50 1080p / 4K | 4K upload in strips per frame p95, CPU / GPU | 4K compose GPU p95: 5 full-frame / sprites / replace | Live 4K: missed, late flips |
+| ---------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------- | -------------------------------------------- | ---------------------------------------------------- | --------------------------- |
+| container, Xeon 2.3 GHz, 4 threads | SwiftShader (CPU) | 4.6 / 5.8, 10.5 / 10.9, 3.6 / 4.8, 7.4 / 8.1; 17.4 / 19.1, 38.2 / 40.2, 11.9 / 13.0, 38.1 / 42.2 | 60.9 / 244.0 (CPU)                       | 2.0 / 64.3 (CPU)                             | 13.7 / 15.5 / 14.0 (CPU)                             | -                           |
 
-Read there: the lyric with a shadow and the scene (two full-frame pictures, a title with a shadow) are over
-their p95 budgets on this software canvas at 1080p and 4K, and text over a photo at 4K is over the M7 exit's
-12 ms (the photo's 1:1 copy and the text, full-frame); the table is within budget at both sizes. These are the
-full-frame draws of this tree; tight sprites (design/27 §7.3) shrink the lyric and the title draws.
+Read there:
+- Text over a photo is within its budget at 1080p (p95 5.8 ms) and over the M7 exit's 12 ms at 4K (p95
+  19.1 ms). An imported slide whose photo is one of its objects reaches the whole frame, so it is drawn
+  full-frame, and a blank full-frame job alone costs 9.4 ms p50 at 4K here (2.4 ms at 1080p): a fresh 33 MB
+  software bitmap per job, its pages faulted in and cleared, then the transfer. The photo's 1:1 copy, the
+  dimming rectangle and the text add about 8 ms. How much of the fixed cost a venue PC pays is what its
+  `bench:venue` row says.
+- The lyric with a shadow (six lines in the default lyric style) and the scene (a title with a shadow over a
+  video) are over their p95 budgets at 4K, and the lyric at 1080p: the canvas shadow is drawn per glyph run
+  on the software canvas. Both reach most of the frame (the lyric's box is two thirds of it, grown by an em
+  and its shadow), so a sprite does not shrink them; the effect sprite cache of design/27 §7.5 is what
+  would. The table is within budget at both sizes.
+- On the render worker's CPU, a 4K full frame uploaded in its default strips costs at most 2.2 ms per frame
+  (p95 2.0) over four frames, against 9.1 ms p50 (11.0 p95) in one copy: within the 4 ms budget. The GPU's
+  own time is SwiftShader's here and is the venue row's to give.
 
-CPU-side costs measured here (2026-11-06, Chromium 153 headless, 4 shared cores at a load average of
-7 to 10, CPU canvas: read the ratios, not the absolute times): `bench:sprites` (the asset worker's raster) and `bench:gpu
---swiftshader` (the render worker's CPU time in the copies).
+CPU-side costs of tight sprites (`bench:sprites`, the asset worker's raster and the Canvas 2D compositor,
+same run and machine; read the ratios, not the absolute times):
 
-| Measurement | 1920x1080 | 3840x2160 |
-|---|---|---|
-| Lyric-only band (legacy text), full-frame / sprite, p50 | 3.3 / 1.5 ms | 12.2 / 4.5 ms |
-| Lyric-only band (rich source), full-frame / sprite, p50 | 4.1 / 2.4 ms | 25.4 / 16.2 ms |
-| Lower third, full-frame / sprite, p50 | 3.2 / 1.1 ms | 11.8 / 3.4 ms |
-| Authored title (rich), full-frame / sprite, p50 | 3.6 / 2.2 ms | 18.1 / 12.6 ms |
-| Bytes uploaded, band sprite against a full frame | 2.8 / 8.3 MB | 11.2 / 33.2 MB |
-| Canvas 2D frame of five layers, full-frame / sprites, p50 | 4.2 / 2.4 ms | 26.5 / 14.0 ms |
-| Render worker CPU per frame uploading a full frame, one copy / default strips, p50 (max) | 1.9 (3.6) / 0.4 (1.0) ms | 8.7 (12.7) / 1.7 (4.1) ms |
+| Measurement                                                                              | 1920x1080                | 3840x2160                 |
+| ---------------------------------------------------------------------------------------- | ------------------------ | ------------------------- |
+| Lyric-only band (legacy text), full-frame / sprite, p50                                  | 2.7 / 1.2 ms             | 11.6 / 4.4 ms             |
+| Lyric-only band (rich source), full-frame / sprite, p50                                  | 3.3 / 1.9 ms             | 21.8 / 14.8 ms            |
+| Lower third, full-frame / sprite, p50                                                    | 3.0 / 1.1 ms             | 9.7 / 2.8 ms              |
+| Authored title (rich), full-frame / sprite, p50                                          | 3.4 / 2.1 ms             | 16.9 / 11.7 ms            |
+| Bytes uploaded, band sprite against a full frame                                         | 2.8 / 8.3 MB             | 11.2 / 33.2 MB            |
+| Canvas 2D frame of five layers, full-frame / sprites, p50                                | 4.2 / 2.4 ms             | 23.8 / 13.8 ms            |
+| Render worker CPU per frame uploading a full frame, one copy / default strips, p50 (p95) | 2.1 (3.6) / 0.4 (0.6) ms | 9.1 (11.0) / 1.8 (2.0) ms |
 
 A slide that covers most of the frame (a six-line authored lyric) is drawn full-frame and costs the
 same either way. The legacy rows include the layout memo (`layoutText` per context, keyed by every

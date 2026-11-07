@@ -9,9 +9,11 @@ import type { Stats, VenueReport } from './gpu-venue.page.ts';
  * Venue GPU measurement (design/27 §13 upload and GPU-time budgets, §15 M7): the WebGPU compositor's
  * uploads (at once against strips), its compositing (full-frame layers against sprites, the opaque replace
  * path) and a live run of the engine, at 1920x1080 and 3840x2160, on the machine's real GPU
- * (gpu-venue.page.ts). Results go to design/14 "Venue measurements".
+ * (gpu-venue.page.ts). `bench:venue` (venue.ts) runs this measurement too, with the machine, the adapter and
+ * the slide rasters, and is the one command of the venue procedure (design/14 "Measuring on venue
+ * machines"); this script runs the compositor part alone, for tuning the strips.
  *
- * Procedure (Windows 11 presentation PC with its iGPU, a discrete GPU, a Mac):
+ * Procedure for the compositor part alone (Windows 11 presentation PC with its iGPU, a discrete GPU, a Mac):
  * 1. Install Node 22 and pnpm, clone the repository, `pnpm install`, and `npx playwright install chrome`
  *    (or use the installed Google Chrome).
  * 2. Plug in the venue display at its native resolution (a 4K display for the 3840 rows), close other
@@ -21,9 +23,9 @@ import type { Stats, VenueReport } from './gpu-venue.page.ts';
  *    The window must stay visible and focused for the live runs (rAF is throttled otherwise).
  *    On a laptop with two GPUs, run once as is (high-performance adapter requested) and note in the
  *    results which GPU Chrome's chrome://gpu reports.
- * 4. Record in design/14: the adapter line, per size the upload rows (CPU and GPU ms, frames per upload),
- *    the compose rows (GPU ms per frame) and the live rows (missed frames, late flips, rAF p95/max,
- *    uploadMs). The M7 exit: uploads <= 4 ms per frame at 4K with the default strips; GPU time per frame
+ * 4. Record in design/14 (bench:venue prints the table row): the adapter line, per size the upload rows
+ *    (CPU and GPU ms, frames per upload), the compose rows (GPU ms per frame) and the live rows (missed
+ *    frames, late flips, rAF p95/max, uploadMs). The M7 exit: uploads <= 4 ms per frame at 4K with the default strips; GPU time per frame
  *    <= 4 ms at 4K on the iGPU.
  * 5. If uploads exceed 4 ms per frame, lower UPLOAD_FRAME_SHARE (gpu.ts) until they do and record both.
  *

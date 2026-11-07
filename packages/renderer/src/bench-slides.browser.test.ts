@@ -28,9 +28,16 @@ describe.skipIf(!chromium || !existsSync(fonts.regular) || !existsSync(fonts.bol
         expect(row.width).toBe(960);
         expect(row.raster.n).toBe(3);
         expect(row.raster.p95).toBeGreaterThanOrEqual(row.raster.p50);
+        expect(row.fullFrame.n).toBe(3);
         expect(row.firstMs).toBeGreaterThan(0);
       }
       expect(r.rows[0]!.prepareMs).toBeGreaterThan(0); // the photo is prepared for the slide
+      // As the asset worker draws them: these reach most of the frame, so each is drawn full-frame
+      // (bench:sprites measures the layers a sprite shrinks); the scene's over (its title) is a sprite.
+      for (const row of r.rows.slice(0, 3)) expect(row.share).toBe(1);
+      expect(r.rows[3]!.share).toBeGreaterThan(1);
+      expect(r.rows[3]!.share).toBeLessThan(2);
+      expect(r.blank.map((b) => b.width)).toEqual([960]);
     }, 120_000);
 
     it('holds text over a photo at 4K to the M7 exit, every other slide to the §13 budgets', () => {

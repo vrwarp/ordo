@@ -393,7 +393,9 @@ async function run(job: AssetJob, steps: Steps): Promise<void> {
         const opts = { nextSlide: job.nextSlide, isSong: job.isSong };
         const reach = slideReach(measure(), job.slide, { scale, look: job.look, ...opts });
         return {
-          main: sprite(reach, scale, out, (c) => rasterSlide(c, job.slide, job.look, scale, pre.lookup, opts)),
+          main: sprite(reach, scale, out, (c) =>
+            rasterSlide(c, job.slide, job.look, scale, pre.lookup, opts),
+          ),
         };
       };
     } else if (job.kind === 'image') {

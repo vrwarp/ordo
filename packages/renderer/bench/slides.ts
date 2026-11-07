@@ -8,7 +8,8 @@ import type { SlideRow, SlidesReport, Stats } from './slides.page.ts';
 /**
  * Slide raster bench (design/27 §13 "Asset worker slide raster p95", §15 M7): sermon text over a photo, a
  * lyric with a shadow, a table and a scene slide, drawn at 1920x1080 and 3840x2160 as the outputs' asset
- * worker draws them (slides.page.ts), with p50/p95/max per slide kind and size.
+ * worker draws them (slides.page.ts: a tight sprite where that saves pixels), with p50/p95/max per slide
+ * kind and size, the same slides drawn full-frame for comparison, and a blank full-frame job.
  *
  *   pnpm --filter @ordo/renderer bench:slides [--iterations 60] [--check] [--json out.json]
  *        [--channel chrome | --executable <path>] [--headed] [--size 1920,3840]
@@ -113,12 +114,21 @@ export function printSlides(r: SlidesReport & { browser: string }): number {
     `bench:slides: Chromium ${r.browser}, ${r.context}, ${r.cores} cores; photo decode ${ms(r.decodeMs)} ms (4000x2667 JPEG)`,
   );
   let over = 0;
+  for (const b of r.blank ?? [])
+    console.log(
+      `  ${`${b.width}x${b.height}`.padEnd(10)} ${'blank full-frame job'.padEnd(26)} ${fmtStats(b.raster)} (a fresh bitmap of the frame: every full-frame job pays it)`,
+    );
   for (const row of r.rows) {
     const budget = budgetFor(row);
     const bad = row.raster.p95 > budget;
     if (bad) over++;
+    const sprite = row.kind.startsWith('scene')
+      ? `base and over ${Math.round(row.share * 100)} % of a frame`
+      : row.share < 0.999
+        ? `sprite ${Math.round(row.share * 100)} % of the frame`
+        : 'full-frame';
     console.log(
-      `  ${`${row.width}x${row.height}`.padEnd(10)} ${row.kind.padEnd(26)} ${fmtStats(row.raster)} (budget p95 ${budget} ms${bad ? ': OVER' : ''}); first ${ms(row.firstMs)} ms${row.prepareMs > 0.05 ? `, pictures prepared ${ms(row.prepareMs)} ms` : ''}`,
+      `  ${`${row.width}x${row.height}`.padEnd(10)} ${row.kind.padEnd(26)} ${fmtStats(row.raster)} (budget p95 ${budget} ms${bad ? ': OVER' : ''}); ${sprite}; drawn full-frame p50 ${ms(row.fullFrame.p50)} p95 ${ms(row.fullFrame.p95)} ms; first ${ms(row.firstMs)} ms${row.prepareMs > 0.05 ? `, pictures prepared ${ms(row.prepareMs)} ms` : ''}`,
     );
   }
   return over;

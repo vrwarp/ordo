@@ -84,6 +84,8 @@ type Entry = {
   busy: number;
   slices: number;
   longest: number;
+  /** When the slice running now started (-1: none runs). */
+  sliceAt: number;
 };
 
 type Waiter = { e: Entry; at: number; resolve: () => void; reject: (err: Error) => void };
@@ -143,6 +145,7 @@ export class Lanes {
       busy: 0,
       slices: 0,
       longest: 0,
+      sliceAt: -1,
     };
     let chain = this.chains.get(job.chain);
     if (!chain) this.chains.set(job.chain, (chain = { queue: [] }));
@@ -255,22 +258,29 @@ export class Lanes {
   }
 
   private steps(e: Entry): Steps {
-    const timing = (): JobTiming => ({
-      lane: laneOf(e.job.rank),
-      waitMs: e.waited,
-      busyMs: e.busy,
-      slices: e.slices,
-      longestMs: e.longest,
-    });
+    // Read inside a slice, the timing counts that slice so far: the asset worker reports a job from inside
+    // the slice that draws and sends it, often its longest.
+    const timing = (): JobTiming => {
+      const running = e.sliceAt >= 0 ? this.now() - e.sliceAt : -1;
+      return {
+        lane: laneOf(e.job.rank),
+        waitMs: e.waited,
+        busyMs: e.busy + Math.max(0, running),
+        slices: e.slices + (running >= 0 ? 1 : 0),
+        longestMs: Math.max(e.longest, running),
+      };
+    };
     return {
       slice: async <T>(fn: () => T): Promise<T> => {
         await this.turn(e);
         try {
           if (e.cancelled) throw new Cancelled();
           const t0 = this.now();
+          e.sliceAt = t0;
           try {
             return fn();
           } finally {
+            e.sliceAt = -1;
             const d = this.now() - t0;
             e.busy += d;
             e.slices++;

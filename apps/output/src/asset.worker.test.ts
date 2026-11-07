@@ -486,6 +486,8 @@ describe('asset worker: raster lanes (design/27 §7.5)', () => {
     expect(done.waitMs).toBeGreaterThanOrEqual(0);
     expect(done.busyMs).toBeGreaterThanOrEqual(0);
     expect(done.longestMs).toBeLessThanOrEqual(done.busyMs! + 1e-9);
+    // The draw is one of the job's slices.
+    expect(done.rasterMs!).toBeLessThanOrEqual(done.busyMs! + 1e-9);
   });
 
   it('a cancelled job sends nothing, to the renderer or to the link', async () => {

@@ -9,7 +9,8 @@ import {
 import { pictureKey } from '../src/bitmap-cache.ts';
 import { preparePicture } from '../src/picture.ts';
 import { rasterSlide } from '../src/raster.ts';
-import { rasterScene } from '../src/scene-raster.ts';
+import { rasterScene, rasterSceneSprites } from '../src/scene-raster.ts';
+import { drawSprite, slideReach, spriteRect } from '../src/sprite.ts';
 import { type ImageLookup, slidePictures } from '../src/text2d.ts';
 import { FontResolver, installFontEnv } from '../src/text/fonts.ts';
 
@@ -26,9 +27,13 @@ import { FontResolver, installFontEnv } from '../src/text/fonts.ts';
  *   writes a table;
  * - **scene**: a slide whose video plays in its box, drawn as base and over (`rasterScene`), with a title
  *   over the video's top edge.
- * A job is what the worker does for a slide whose pictures are cached: clear, draw, `transferToImageBitmap`
- * (which makes Chromium raster the recorded draw calls). Every job draws a structured clone of the slide, as
- * a job message brings one, so no layout memo hits; the width cache stays warm, as in the worker. The first
+ * A job is what the worker does for a slide whose pictures are cached (`raster`): measure the slide's reach
+ * on the surface shrunk to 1x1, size the surface to the tight sprite of what it draws (or the frame, when the
+ * sprite would be most of it), draw, `transferToImageBitmap` (which makes Chromium raster the recorded draw
+ * calls); a scene draws its base and over that way (`rasterSceneSprites`). `fullFrame` is the same slide drawn
+ * full-frame, as before M7's sprites, and `blank` per size a full-frame job that draws nothing: the cost of a
+ * fresh bitmap of the frame, which every full-frame job pays. Every job draws a structured clone of the slide,
+ * as a job message brings one, so no layout memo hits; the width cache stays warm, as in the worker. The first
  * job of a kind and size is reported apart (`first`: compiling, the width cache, preparing the photo).
  */
 
@@ -253,7 +258,12 @@ export type SlideRow = {
   firstMs: number;
   /** Preparing the slide's pictures for this size (decode excluded), once per size as the cache keeps them. */
   prepareMs: number;
+  /** As the asset worker draws it now: a tight sprite where that saves pixels. */
   raster: Stats;
+  /** The same slide drawn full-frame (before M7's sprites). */
+  fullFrame: Stats;
+  /** Pixels of the bitmaps drawn, as a share of the frame (a scene: base and over together). */
+  share: number;
 };
 export type SlidesReport = {
   context: string;
@@ -262,6 +272,8 @@ export type SlidesReport = {
   /** Decoding the 4000x2667 photo JPEG (`createImageBitmap`), once. */
   decodeMs: number;
   rows: SlideRow[];
+  /** Per size: a full-frame job that draws nothing (sizing the surface, a fresh backing, the transfer). */
+  blank: { width: number; height: number; raster: Stats }[];
 };
 
 function stats(xs: number[]): Stats {
@@ -322,6 +334,40 @@ function poster(): ImageBitmap {
   return c.transferToImageBitmap();
 }
 
+/**
+ * The asset worker's surface as apps/output/src/asset.worker.ts keeps it (M7): one CPU-backed canvas, shrunk
+ * to 1x1 to measure text on, sized to the frame or a sprite's rect to draw on, and not cleared again when a
+ * transfer or a resize has just cleared it.
+ */
+function workerSurface(canvas: OffscreenCanvas, ctx: OffscreenCanvasRenderingContext2D) {
+  let fresh = true;
+  const measure = () => {
+    if (canvas.width !== 1 || canvas.height !== 1) {
+      canvas.width = 1;
+      canvas.height = 1;
+      fresh = true;
+    }
+    return ctx;
+  };
+  const surface = (w: number, h: number) => {
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      fresh = true;
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (!fresh) ctx.clearRect(0, 0, w, h);
+    fresh = false;
+    return ctx;
+  };
+  const take = () => {
+    const b = canvas.transferToImageBitmap();
+    fresh = true;
+    return b;
+  };
+  return { measure, surface, take };
+}
+
 export async function bench(
   set: FontFaceSet,
   regular: ArrayBuffer,
@@ -345,12 +391,25 @@ export async function bench(
   const decodeMs = performance.now() - d0;
   const sources: Record<string, ImageBitmap> = { photo, poster: poster() };
   const rows: SlideRow[] = [];
+  const blank: SlidesReport['blank'] = [];
   for (const width of sizes) {
     const height = Math.round((width * 9) / 16);
     const scale = width / 1920;
-    const canvas = new OffscreenCanvas(width, height);
+    const frame = { width, height };
+    const canvas = new OffscreenCanvas(1, 1);
     const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
-    const take = () => canvas.transferToImageBitmap();
+    const { measure, surface, take } = workerSurface(canvas, ctx);
+    const blankJob = () => {
+      const t0 = performance.now();
+      surface(width, height).fillRect(0, 0, 1, 1);
+      take().close();
+      measure();
+      return performance.now() - t0;
+    };
+    for (let i = 0; i < 3; i++) blankJob();
+    const blankTimes: number[] = [];
+    for (let i = 0; i < iterations; i++) blankTimes.push(blankJob());
+    blank.push({ width, height, raster: stats(blankTimes) });
     for (const { kind, slide } of KINDS) {
       // The worker's picture cache: each use prepared once for its device target, then copied 1:1.
       const prepared = new Map<string, ImageBitmap>();
@@ -364,29 +423,69 @@ export async function bench(
       const prepareMs = performance.now() - p0;
       const lookup: ImageLookup = (id, target) =>
         (target && prepared.get(pictureKey(id, target))) || sources[id];
+      const scene = kind.startsWith('scene');
+      const opts = { isSong: kind.startsWith('lyric') };
+      let share = 1;
+      // As the asset worker draws a slide job now (asset.worker.ts `run`).
       const job = () => {
         const s = structuredClone(slide);
         const t0 = performance.now();
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.clearRect(0, 0, width, height);
-        if (kind.startsWith('scene')) {
-          const sc = rasterScene(ctx, take, s, LOOK_MAIN, scale, lookup, 'vid', {
+        if (scene) {
+          const sc = rasterSceneSprites(measure(), surface, take, frame, s, LOOK_MAIN, scale, lookup, 'vid', {
             clip: { w: 1920, h: 1080 },
           });
-          sc?.base.close();
-          sc?.over?.close();
+          const px = (b: ImageBitmap | undefined) => (b ? b.width * b.height : 0);
+          share = (px(sc?.base.bitmap) + px(sc?.over?.bitmap)) / (width * height);
+          sc?.base.bitmap.close();
+          sc?.over?.bitmap.close();
         } else {
-          rasterSlide(ctx, s, LOOK_MAIN, scale, lookup, { isSong: kind.startsWith('lyric') });
-          take().close();
+          const reach = slideReach(measure(), s, { scale, look: LOOK_MAIN, ...opts });
+          const d = drawSprite(surface, take, width, height, spriteRect(reach, scale, width, height), (c) =>
+            rasterSlide(c, s, LOOK_MAIN, scale, lookup, opts),
+          );
+          share = (d.bitmap.width * d.bitmap.height) / (width * height);
+          d.bitmap.close();
         }
         return performance.now() - t0;
       };
+      // The same slide full-frame, as before M7's sprites.
+      const full = () => {
+        const s = structuredClone(slide);
+        const t0 = performance.now();
+        const c = surface(width, height);
+        if (scene) {
+          const sc = rasterScene(c, take, s, LOOK_MAIN, scale, lookup, 'vid', { clip: { w: 1920, h: 1080 } });
+          sc?.base.close();
+          sc?.over?.close();
+        } else {
+          rasterSlide(c, s, LOOK_MAIN, scale, lookup, opts);
+          take().close();
+        }
+        measure();
+        return performance.now() - t0;
+      };
       const firstMs = job() + prepareMs;
-      for (let i = 0; i < 3; i++) job();
+      for (let i = 0; i < 3; i++) {
+        job();
+        full();
+      }
       const times: number[] = [];
-      for (let i = 0; i < iterations; i++) times.push(job());
+      const fullTimes: number[] = [];
+      for (let i = 0; i < iterations; i++) {
+        times.push(job());
+        fullTimes.push(full());
+      }
       for (const b of prepared.values()) b.close();
-      rows.push({ kind, width, height, firstMs, prepareMs, raster: stats(times) });
+      rows.push({
+        kind,
+        width,
+        height,
+        firstMs,
+        prepareMs,
+        raster: stats(times),
+        fullFrame: stats(fullTimes),
+        share,
+      });
     }
   }
   for (const b of Object.values(sources)) b.close();
@@ -397,6 +496,7 @@ export async function bench(
     cores: navigator.hardwareConcurrency ?? 0,
     decodeMs,
     rows,
+    blank,
   };
 }
 

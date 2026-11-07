@@ -3,6 +3,7 @@ import { cpus, hostname, platform, release, totalmem } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { chromium } from '@playwright/test';
 import { budgetFor, bundle, defaultFonts, fmtStats, printSlides, runSlides } from './slides.ts';
+import type { VenueReport as CompositorReport, Stats as CompositorStats } from './gpu-venue.page.ts';
 import type { Stats, VenuePageReport } from './venue.page.ts';
 
 /**
@@ -13,14 +14,19 @@ import type { Stats, VenuePageReport } from './venue.page.ts';
  * - the GPU: the WebGPU adapter (vendor, architecture, whether it is a software fallback, timestamp
  *   queries), a full-frame upload at 1920x1080 and 3840x2160 (CPU ms of the call, ms until the GPU has done
  *   it) and five full-frame layers composed in one pass (GPU ms, timestamp queries), venue.page.ts;
+ * - the WebGPU compositor as the render worker drives it (gpu-venue.page.ts, also `bench:gpu` on its own):
+ *   uploads of a full-frame bitmap and of a lyric-band sprite at once and in strips (CPU and GPU ms per
+ *   frame, frames per upload), five layers composed full-frame, as sprites and as sprites over an opaque
+ *   background (the replace path), and a live run of the engine (missed frames, late flips, `uploadMs`);
  * - the asset worker's slide raster on this machine's CPU, per slide kind and size (slides.page.ts);
  * and checks them against the budgets: slide raster p95 10 ms at 1080p, 30 ms at 4K (12 ms for text over a
  * photo, the M7 exit), upload and GPU time per frame 4 ms at 4K.
  *
  *   pnpm --filter @ordo/renderer bench:venue [--channel chrome | --executable <path>] [--out <file>]
- *        [--iterations 60] [--runs 30] [--headless] [--swiftshader] [--font <ttf> --bold <ttf>]
+ *        [--iterations 60] [--runs 30] [--live 8] [--headless] [--swiftshader] [--font <ttf> --bold <ttf>]
  *
- * Chrome runs visible (the refresh rate and a real GPU need a shown window) unless --headless. --swiftshader
+ * Chrome runs visible (the refresh rate, a real GPU and the live run need a shown window, which must stay in
+ * front and focused) unless --headless, which skips the live run. --swiftshader
  * runs WebGPU on SwiftShader in this container: it checks that the script works and measures the CPU, never
  * a GPU. The JSON goes to --out (default venue-results/<host>-<date>.json); a summary line for design/14's
  * table is printed at the end.
@@ -45,6 +51,8 @@ function platformFonts(): { regular: string; bold: string } {
 }
 
 const ms = (x: number | undefined) => (x === undefined ? '-' : x.toFixed(2));
+const cs = (s: CompositorStats) =>
+  `p50 ${s.p50.toFixed(2)} p95 ${s.p95.toFixed(2)} max ${s.max.toFixed(2)} ms`;
 const p = (s: Stats | undefined) => (s ? `${ms(s.p50)} / ${ms(s.p95)}` : '-');
 
 async function main(): Promise<number> {
@@ -70,8 +78,11 @@ async function main(): Promise<number> {
 
   // 1. The machine, its display and its GPU, on a secure page (WebGPU needs one).
   const script = await bundle('venue.page.ts');
+  const compositorScript = await bundle('gpu-venue.page.ts');
+  const liveSeconds = headless ? 0 : Math.max(0, Number(arg('--live') ?? 8));
   const browser = await chromium.launch({ headless, args, channel, executablePath });
   let page: VenuePageReport;
+  let compositor: CompositorReport | { error: string } | undefined;
   let version = '';
   try {
     version = browser.version();
@@ -90,6 +101,29 @@ async function main(): Promise<number> {
         ),
       [!headless, Math.max(5, Number(arg('--runs') ?? 30))] as const,
     );
+    // 1b. The WebGPU compositor as the render worker drives it, on a tab of its own.
+    if (page.gpu.available) {
+      try {
+        const tab2 = await browser.newPage({ viewport: null });
+        tab2.on('pageerror', (e) => console.error('page error:', e.message));
+        await tab2.route('https://venue.test/**', (route) =>
+          route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><body></body></html>' }),
+        );
+        await tab2.goto('https://venue.test/');
+        await tab2.bringToFront();
+        await tab2.addScriptTag({ content: compositorScript });
+        compositor = await tab2.evaluate(
+          ([src, live]) =>
+            (window as unknown as { __venue(s: string, n: number): Promise<CompositorReport> }).__venue(
+              src as string,
+              live as number,
+            ),
+          [compositorScript, liveSeconds] as const,
+        );
+      } catch (err) {
+        compositor = { error: String((err as Error)?.message ?? err) };
+      }
+    }
   } finally {
     await browser.close();
   }
@@ -116,6 +150,7 @@ async function main(): Promise<number> {
     swiftshader,
     fonts: { regular, bold },
     ...page,
+    compositor,
     slides,
   };
 
@@ -136,6 +171,20 @@ async function main(): Promise<number> {
         `  ${s.width}x${s.height}: upload CPU ${fmtStats(s.uploadCpuMs)}; upload done ${fmtStats(s.uploadDoneMs)}${s.composeGpuMs ? `; compose 5 layers GPU ${fmtStats(s.composeGpuMs)}` : ''}`,
       );
   }
+  const comp = compositor && 'sizes' in compositor ? compositor : undefined;
+  if (compositor && !comp) console.log(`  compositor: failed (${(compositor as { error: string }).error})`);
+  for (const s of comp?.sizes ?? []) {
+    console.log(`  compositor ${s.width}x${s.height}:`);
+    for (const u of s.uploads)
+      console.log(
+        `    upload ${u.name}, ${u.budget}: ${u.frames.toFixed(1)} frame(s) each; per frame CPU ${cs(u.cpuMs)}; GPU done ${cs(u.gpuMs)}`,
+      );
+    for (const c of s.compose) console.log(`    compose ${c.name}: GPU ${cs(c.gpuMs)} (${c.source})`);
+    for (const l of s.live)
+      console.log(
+        `    live ${l.seconds} s, ${l.budget}: presented ${l.presented}, missed ${l.missed}, late flips ${l.lateFlips}, rAF interval ${cs(l.intervalMs)}, uploadMs ${l.uploadMs}`,
+      );
+  }
   printSlides(slides);
 
   // 3. Budgets (design/27 §13).
@@ -144,10 +193,18 @@ async function main(): Promise<number> {
     if (row.raster.p95 > budgetFor(row))
       over.push(`${row.kind} at ${row.width}: raster p95 ${ms(row.raster.p95)} ms`);
   const k4 = g.sizes.find((s) => s.width === 3840);
-  if (k4 && !swiftshader) {
-    if (k4.uploadDoneMs.p50 > 4)
-      over.push(`4K upload ${ms(k4.uploadDoneMs.p50)} ms (one copy; the renderer uploads in strips)`);
-    if (k4.composeGpuMs && k4.composeGpuMs.p50 > 4) over.push(`4K compose ${ms(k4.composeGpuMs.p50)} ms GPU`);
+  // The renderer's own path at 4K: a full-frame upload in its default strips, and the compositions.
+  const c4 = comp?.sizes.find((s) => s.width === 3840);
+  const strips = c4?.uploads.find((u) => u.name === 'full-frame bitmap' && u.budget === 'default strips');
+  if (strips && strips.cpuMs.p95 > 4)
+    over.push(`4K upload in strips ${ms(strips.cpuMs.p95)} ms CPU per frame (p95)`);
+  if (!swiftshader) {
+    if (strips && strips.gpuMs.p95 > 4)
+      over.push(`4K upload in strips ${ms(strips.gpuMs.p95)} ms GPU per frame (p95)`);
+    for (const c of c4?.compose ?? [])
+      if (c.gpuMs.p95 > 4) over.push(`4K compose, ${c.name}: ${ms(c.gpuMs.p95)} ms GPU (p95)`);
+    if (!c4 && k4?.composeGpuMs && k4.composeGpuMs.p50 > 4)
+      over.push(`4K compose ${ms(k4.composeGpuMs.p50)} ms GPU`);
   }
   console.log(over.length ? `  over budget: ${over.join('; ')}` : '  every figure within its budget');
 
@@ -155,11 +212,13 @@ async function main(): Promise<number> {
   const r = (kind: string, w: number) =>
     slides.rows.find((x) => x.kind.startsWith(kind) && x.width === w)?.raster;
   const k1 = g.sizes.find((s) => s.width === 1920);
+  const compose4 = (name: string) => c4?.compose.find((c) => c.name.startsWith(name))?.gpuMs.p95;
+  const live4 = c4?.live.find((l) => l.budget === 'default strips');
   console.log(
-    '\nRow for design/14 (machine | GPU | slide raster p50/p95 at 1080p, 4K: photo, lyric, table, scene | upload done p50 1080p / 4K | compose 4K):',
+    '\nRow for design/14 (machine | GPU | slide raster p50/p95 at 1080p, 4K: photo, lyric, table, scene | one full-frame copy, done p50 1080p / 4K | 4K upload in strips per frame p95, CPU / GPU | 4K compose GPU p95: 5 full-frame / sprites / replace | live 4K: missed, late flips):',
   );
   console.log(
-    `| ${report.host}: ${report.cpu.model}, ${report.os} | ${g.adapter ? `${g.adapter.vendor} ${g.adapter.architecture} ${g.adapter.description}`.trim() : 'none'} | ${['sermon', 'lyric', 'table', 'scene'].map((k) => `${p(r(k, 1920))}`).join(', ')}; ${['sermon', 'lyric', 'table', 'scene'].map((k) => `${p(r(k, 3840))}`).join(', ')} | ${ms(k1?.uploadDoneMs.p50)} / ${ms(k4?.uploadDoneMs.p50)} | ${ms(k4?.composeGpuMs?.p50)} |`,
+    `| ${report.host}: ${report.cpu.model}, ${report.os} | ${g.adapter ? `${g.adapter.vendor} ${g.adapter.architecture} ${g.adapter.description}`.trim() : 'none'}${swiftshader ? ' (SwiftShader)' : ''} | ${['sermon', 'lyric', 'table', 'scene'].map((k) => `${p(r(k, 1920))}`).join(', ')}; ${['sermon', 'lyric', 'table', 'scene'].map((k) => `${p(r(k, 3840))}`).join(', ')} | ${ms(k1?.uploadDoneMs.p50)} / ${ms(k4?.uploadDoneMs.p50)} | ${ms(strips?.cpuMs.p95)} / ${ms(strips?.gpuMs.p95)} | ${ms(compose4('five'))} / ${ms(compose4('four sprites over a full'))} / ${ms(compose4('four sprites over an opaque'))} | ${live4 ? `${live4.missed}, ${live4.lateFlips}` : '-'} |`,
   );
 
   const date = report.at.slice(0, 10);

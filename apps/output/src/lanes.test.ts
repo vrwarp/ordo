@@ -292,4 +292,23 @@ describe('raster lanes: fonts and timing', () => {
     await h.drain();
     expect(warm.steps!.timing()).toMatchObject({ lane: 'bulk', waitMs: 20, busyMs: 5 });
   });
+
+  it('counts the running slice in a timing read inside it (a result reported from its last slice)', async () => {
+    const h = harness();
+    let inside: ReturnType<Steps['timing']> | undefined;
+    h.lanes.push({
+      key: 'slide',
+      chain: 'slide',
+      rank: RANK.live,
+      async run(s) {
+        await s.slice(() => h.tick(3)); // a picture band
+        await s.slice(() => {
+          h.tick(12); // the draw, then the result is sent
+          inside = s.timing();
+        });
+      },
+    });
+    await h.drain();
+    expect(inside).toMatchObject({ busyMs: 15, slices: 2, longestMs: 12 });
+  });
 });
