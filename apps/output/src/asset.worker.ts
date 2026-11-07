@@ -177,6 +177,11 @@ const decoder = createDecoder({
   ImageDecoder: typeof ImageDecoder === 'undefined' ? undefined : ImageDecoder,
 });
 
+/** The decoder as a job uses it: each whole-file decode within the lanes' bound on decodes at once. */
+function jobDecoder(steps: Steps): typeof decoder {
+  return { ...decoder, decode: (hash, want) => steps.decode(() => decoder.decode(hash, want)) };
+}
+
 async function loadFonts(list: FontLoad[]): Promise<void> {
   const r = await fonts.sync(list);
   post({ t: 'fonts', loaded: r.loaded, failed: r.failed, ready: r.ready.length ? r.ready : undefined });
@@ -264,7 +269,7 @@ async function preload(
   out: { w: number; h: number },
   steps: Steps,
 ): Promise<{ lookup: ImageLookup; skipped: number; missing: string[]; release: () => void }> {
-  const pre = await preloadPictures(images, decoder, map, uses, out, PICTURE_LIMITS, steps);
+  const pre = await preloadPictures(images, jobDecoder(steps), map, uses, out, PICTURE_LIMITS, steps);
   // Drawn without the image. One whose file is not there yet is reported so the link re-draws the slide
   // once the file arrives; a corrupt one is not (it would be missing again every time).
   const missing: string[] = [];
@@ -399,7 +404,7 @@ async function run(job: AssetJob, steps: Steps): Promise<void> {
         };
       };
     } else if (job.kind === 'image') {
-      const img = await sourcePicture(images, decoder, job.hash, out, steps);
+      const img = await sourcePicture(images, jobDecoder(steps), job.hash, out, steps);
       release = img.release;
       draw = () => ({
         main: sprite(imageReach(img.bitmap, job.fit), scale, out, (c) =>
@@ -428,13 +433,22 @@ async function run(job: AssetJob, steps: Steps): Promise<void> {
       };
     }
     // Measured, drawn, taken and sent in one turn: nothing can cancel it half-way.
-    await steps.slice(() => {
-      const timing: DrawTiming = { ms: 0, text: null };
+    const timing: DrawTiming = { ms: 0, text: null };
+    const ms = await steps.slice(() => {
       const d = timed(timing, draw);
       release?.();
       release = undefined;
-      deliver(job, d, timing, t0, steps, skipped, missing);
+      return deliver(job, d, t0);
     });
+    // The picture is on its way: its text is probed for coverage in slices of their own, so a props job can
+    // run between them, and the job is reported done (a cancel meanwhile only skips the probe).
+    let uncovered = '';
+    try {
+      uncovered = await probeCoverage(timing, steps);
+    } catch (err) {
+      if (!(err instanceof Cancelled)) throw err;
+    }
+    done(job, ms, timing, steps, skipped, missing, uncovered);
   } catch (err) {
     if (err instanceof Cancelled) return;
     const d = err instanceof DecodeError ? err : undefined;
@@ -453,16 +467,24 @@ async function run(job: AssetJob, steps: Steps): Promise<void> {
   }
 }
 
-/** Send a drawn job to the render worker and say so to the link, with its lane timing. */
-function deliver(
-  job: AssetJob,
-  d: Drawn,
-  timing: DrawTiming,
-  t0: number,
-  steps: Steps,
-  skipped: number,
-  missing: string[],
-): void {
+/** Characters probed per slice for coverage (about 12 ms for new Han characters on this container). */
+const PROBE_CHARS = 32;
+/** Probe slices per job at most; what is left is probed in the last one. */
+const PROBE_SLICES = 256;
+
+/** The characters of a job's text no face covers, probed in slices of PROBE_CHARS after it was sent. */
+async function probeCoverage(timing: DrawTiming, steps: Steps): Promise<string> {
+  const text = timing.text;
+  if (!text?.size) return '';
+  // Characters seen before have their verdicts: lookups only, no slice.
+  if (coverage.probeSome(text, 0)) return coverage.misses(text, MAX_UNCOVERED);
+  for (let i = 0; i < PROBE_SLICES; i++)
+    if (await steps.slice(() => coverage.probeSome(text, PROBE_CHARS))) break;
+  return steps.slice(() => coverage.misses(text, MAX_UNCOVERED));
+}
+
+/** Send a drawn job to the render worker; returns the job's time from its start to the send. */
+function deliver(job: AssetJob, d: Drawn, t0: number): number {
   const { main, scene } = d;
   const bitmap = main.bitmap;
   const over = scene?.over?.bitmap ?? null;
@@ -496,9 +518,19 @@ function deliver(
     throw new UnavailableError('render port not connected');
   }
   port.postMessage(msg, over ? [bitmap, over] : [bitmap]);
-  const ms = performance.now() - t0;
-  // Probed after the picture is sent, so a character seen for the first time never delays it.
-  const uncovered = timing.text ? coverage.misses(timing.text, MAX_UNCOVERED) : '';
+  return performance.now() - t0;
+}
+
+/** Say to the link that a job was sent, with its lane timing and the characters no face covers. */
+function done(
+  job: AssetJob,
+  ms: number,
+  timing: DrawTiming,
+  steps: Steps,
+  skipped: number,
+  missing: string[],
+  uncovered: string,
+): void {
   const t = steps.timing();
   post({
     t: 'done',
@@ -532,7 +564,7 @@ async function warmUp(wj: WarmJob, steps: Steps): Promise<void> {
   if (wj.slide) {
     const pre = await preloadPictures(
       images,
-      decoder,
+      jobDecoder(steps),
       wj.images,
       slidePictures(wj.slide, { scale, look: wj.look }),
       out,
@@ -546,7 +578,7 @@ async function warmUp(wj: WarmJob, steps: Steps): Promise<void> {
     steps.check();
     const cached = images.has(hash);
     try {
-      (await sourcePicture(images, decoder, hash, out, steps)).release();
+      (await sourcePicture(images, jobDecoder(steps), hash, out, steps)).release();
       if (!cached) decodes++;
     } catch (err) {
       if (err instanceof Cancelled) throw err;

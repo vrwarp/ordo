@@ -143,30 +143,34 @@ describe('performance health (design/27 §13, M7)', () => {
       expect(Math.round((12 * w * h * 4) / 1e5) / 10).toBeLessThanOrEqual(perfBudgets(w, h).gpuMB);
   });
 
-  it('raises an alarm per budget passed; a raster alarm needs enough slides', () => {
+  it('raises an alarm per budget passed; a raster alarm needs enough slides; GPU memory has none', () => {
     const b = perfBudgets(3840, 2160);
     const slow = { n: RASTER_ALARM_MIN, p50: 12, p95: 31, max: 40 };
-    expect(perfAlarms(b, { gpuMB: 398.2, raster: { ...slow, p95: 30 }, uploadMs: 4 })).toEqual([]);
-    expect(perfAlarms(b, { gpuMB: 400.1, raster: slow, uploadMs: 4.5 })).toEqual([
-      'gpuMemory',
-      'raster',
-      'upload',
-    ]);
+    expect(perfAlarms(b, { raster: { ...slow, p95: 30 }, uploadMs: 4 })).toEqual([]);
+    expect(perfAlarms(b, { raster: slow, uploadMs: 4.5 })).toEqual(['raster', 'upload']);
     expect(perfAlarms(b, { raster: { ...slow, n: RASTER_ALARM_MIN - 1 } })).toEqual([]);
   });
 
   it('reports the figures, the budgets at its size and the alarms', () => {
     const h = buildHealth({
       ...quiet,
-      render: { ...EMPTY_TELEMETRY, compositor: 'webgpu', gpuMB: 465.1, uploadMs: 2.345 },
+      render: {
+        ...EMPTY_TELEMETRY,
+        compositor: 'webgpu',
+        gpuMB: 465.1,
+        uploadMs: 4.345,
+        wholeUploads: { count: 2, maxMs: 9.123 },
+      },
       raster: { n: 30, p50: 8, p95: 14, max: 22 },
       size: { width: 3840, height: 2160 },
       fontCoverage: { chars: '☧', count: 1, scripts: ['Zyyy'] },
     });
     expect(h.rasterMs).toEqual({ n: 30, p50: 8, p95: 14, max: 22 });
-    expect(h.uploadMs).toBe(2.35);
+    expect(h.uploadMs).toBe(4.35);
+    expect(h.wholeUploads).toEqual({ count: 2, maxMs: 9.12 });
     expect(h.budgets).toEqual({ rasterP95Ms: 30, uploadMs: 4, gpuMB: 400 });
-    expect(h.alarms).toEqual(['gpuMemory']);
+    // gpuMB over its budget is shown, never an alarm (it is ordo's own fixed allocation).
+    expect(h.alarms).toEqual(['upload']);
     expect(h.fontCoverage).toEqual({ chars: '☧', count: 1, scripts: ['Zyyy'] });
   });
 

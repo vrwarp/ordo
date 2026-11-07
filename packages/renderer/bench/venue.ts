@@ -79,7 +79,8 @@ async function main(): Promise<number> {
   // 1. The machine, its display and its GPU, on a secure page (WebGPU needs one).
   const script = await bundle('venue.page.ts');
   const compositorScript = await bundle('gpu-venue.page.ts');
-  const liveSeconds = headless ? 0 : Math.max(0, Number(arg('--live') ?? 8));
+  // Live runs need a shown window (a display paces rAF); --live runs them headless too, to check the script.
+  const liveSeconds = Math.max(0, Number(arg('--live') ?? (headless ? 0 : 8)));
   const browser = await chromium.launch({ headless, args, channel, executablePath });
   let page: VenuePageReport;
   let compositor: CompositorReport | { error: string } | undefined;
@@ -177,12 +178,12 @@ async function main(): Promise<number> {
     console.log(`  compositor ${s.width}x${s.height}:`);
     for (const u of s.uploads)
       console.log(
-        `    upload ${u.name}, ${u.budget}: ${u.frames.toFixed(1)} frame(s) each; per frame CPU ${cs(u.cpuMs)}; GPU done ${cs(u.gpuMs)}`,
+        `    upload ${u.name}, ${u.budget}: ${u.frames.toFixed(1)} frame(s) each; per frame CPU ${cs(u.cpuMs)}; done (latency) ${cs(u.doneMs)}; empty submit ${cs(u.emptyMs)}`,
       );
     for (const c of s.compose) console.log(`    compose ${c.name}: GPU ${cs(c.gpuMs)} (${c.source})`);
     for (const l of s.live)
       console.log(
-        `    live ${l.seconds} s, ${l.budget}: presented ${l.presented}, missed ${l.missed}, late flips ${l.lateFlips}, rAF interval ${cs(l.intervalMs)}, uploadMs ${l.uploadMs}`,
+        `    live ${l.seconds} s, ${l.budget}${headless ? ' (headless: not paced by a display)' : ''}: presented ${l.presented}, missed ${l.missed}, late flips ${l.lateFlips}, late content flipped after ${l.lateContentFrames.p50} frame(s) p50 (max ${l.lateContentFrames.max}), rAF interval ${cs(l.intervalMs)}, uploadMs ${l.uploadMs}`,
       );
   }
   printSlides(slides);
@@ -198,9 +199,18 @@ async function main(): Promise<number> {
   const strips = c4?.uploads.find((u) => u.name === 'full-frame bitmap' && u.budget === 'default strips');
   if (strips && strips.cpuMs.p95 > 4)
     over.push(`4K upload in strips ${ms(strips.cpuMs.p95)} ms CPU per frame (p95)`);
+  // Done latency minus an empty submit's round trip bounds the copies' GPU time (fence and IPC excluded).
+  const stripGpu = strips ? Math.max(0, strips.doneMs.p95 - strips.emptyMs.p50) : undefined;
+  // The compositor's composition must be of the order of venue.page.ts's own five-layer pass: a figure ten
+  // times smaller times a pass that draws nothing (the check gpu-venue.page.ts makes before timing).
+  const five = c4?.compose.find((c) => c.name.startsWith('five'));
+  if (five && k4?.composeGpuMs && five.gpuMs.p50 * 10 < k4.composeGpuMs.p50)
+    over.push(
+      `4K compose ${ms(five.gpuMs.p50)} ms is not of the order of the plain five-layer pass (${ms(k4.composeGpuMs.p50)} ms): check the measurement`,
+    );
   if (!swiftshader) {
-    if (strips && strips.gpuMs.p95 > 4)
-      over.push(`4K upload in strips ${ms(strips.gpuMs.p95)} ms GPU per frame (p95)`);
+    if (stripGpu !== undefined && stripGpu > 4)
+      over.push(`4K upload in strips ${ms(stripGpu)} ms GPU per frame (p95 done minus empty submit)`);
     for (const c of c4?.compose ?? [])
       if (c.gpuMs.p95 > 4) over.push(`4K compose, ${c.name}: ${ms(c.gpuMs.p95)} ms GPU (p95)`);
     if (!c4 && k4?.composeGpuMs && k4.composeGpuMs.p50 > 4)
@@ -218,7 +228,7 @@ async function main(): Promise<number> {
     '\nRow for design/14 (machine | GPU | slide raster p50/p95 at 1080p, 4K: photo, lyric, table, scene | one full-frame copy, done p50 1080p / 4K | 4K upload in strips per frame p95, CPU / GPU | 4K compose GPU p95: 5 full-frame / sprites / replace | live 4K: missed, late flips):',
   );
   console.log(
-    `| ${report.host}: ${report.cpu.model}, ${report.os} | ${g.adapter ? `${g.adapter.vendor} ${g.adapter.architecture} ${g.adapter.description}`.trim() : 'none'}${swiftshader ? ' (SwiftShader)' : ''} | ${['sermon', 'lyric', 'table', 'scene'].map((k) => `${p(r(k, 1920))}`).join(', ')}; ${['sermon', 'lyric', 'table', 'scene'].map((k) => `${p(r(k, 3840))}`).join(', ')} | ${ms(k1?.uploadDoneMs.p50)} / ${ms(k4?.uploadDoneMs.p50)} | ${ms(strips?.cpuMs.p95)} / ${ms(strips?.gpuMs.p95)} | ${ms(compose4('five'))} / ${ms(compose4('four sprites over a full'))} / ${ms(compose4('four sprites over an opaque'))} | ${live4 ? `${live4.missed}, ${live4.lateFlips}` : '-'} |`,
+    `| ${report.host}: ${report.cpu.model}, ${report.os} | ${g.adapter ? `${g.adapter.vendor} ${g.adapter.architecture} ${g.adapter.description}`.trim() : 'none'}${swiftshader ? ' (SwiftShader)' : ''} | ${['sermon', 'lyric', 'table', 'scene'].map((k) => `${p(r(k, 1920))}`).join(', ')}; ${['sermon', 'lyric', 'table', 'scene'].map((k) => `${p(r(k, 3840))}`).join(', ')} | ${ms(k1?.uploadDoneMs.p50)} / ${ms(k4?.uploadDoneMs.p50)} | ${ms(strips?.cpuMs.p95)} / ${ms(stripGpu)} | ${ms(compose4('five'))} / ${ms(compose4('four sprites over a full'))} / ${ms(compose4('four sprites over an opaque'))} | ${live4 ? `${live4.missed}, ${live4.lateFlips}` : '-'} |`,
   );
 
   const date = report.at.slice(0, 10);

@@ -65,9 +65,11 @@ describe.skipIf(!executablePath)('tight sprites in headless Chromium', () => {
       page.on('pageerror', (e) => errors.push(e.message));
       await page.setContent('<!doctype html><html><body></body></html>');
       await page.addScriptTag({ content: built.outputFiles[0]!.text });
-      results = await page.evaluate(() =>
-        (window as unknown as { __sprites: () => CaseResult[] }).__sprites(),
-      );
+      type Run = { __sprites: (env?: 'resolver') => CaseResult[] };
+      const legacy = await page.evaluate(() => (window as unknown as Run).__sprites());
+      // With a font resolver installed, as in the asset worker: the legacy layout memo is on.
+      const resolver = await page.evaluate(() => (window as unknown as Run).__sprites('resolver'));
+      results = [...legacy, ...resolver.map((r) => ({ ...r, name: `${r.name} (font resolver)` }))];
       expect(errors).toEqual([]);
     } finally {
       await browser.close();

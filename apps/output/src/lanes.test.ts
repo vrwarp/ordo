@@ -312,3 +312,96 @@ describe('raster lanes: fonts and timing', () => {
     expect(inside).toMatchObject({ busyMs: 15, slices: 2, longestMs: 12 });
   });
 });
+
+describe('raster lanes: decodes across chains', () => {
+  /** A decode that settles when the test says. */
+  function pending() {
+    let done!: () => void;
+    const p = new Promise<void>((r) => (done = r));
+    return { p, done };
+  }
+
+  it('runs at most two whole-file decodes at once, the most urgent job first', async () => {
+    const h = harness();
+    const d = [pending(), pending(), pending()];
+    const started: string[] = [];
+    const decoding = (k: string, i: number) => (_: number, s: Steps) =>
+      s.decode(async () => {
+        started.push(k);
+        await d[i]!.p;
+      });
+    h.lanes.push(h.job('bg', { chain: 'bg', rank: RANK.armed, slices: 2 }, decoding('bg', 0)));
+    h.lanes.push(h.job('slide', { chain: 'slide', rank: RANK.armed, slices: 2 }, decoding('slide', 1)));
+    h.lanes.push(h.job('live', { chain: 'media', rank: RANK.live, slices: 2 }, decoding('live', 2)));
+    await h.drain();
+    // The live job (most urgent) and then bg got the two permits; the slide waits for one.
+    expect(started).toEqual(['live', 'bg']);
+    d[0]!.done();
+    await h.drain();
+    expect(started).toEqual(['live', 'bg', 'slide']);
+    d[1]!.done();
+    d[2]!.done();
+    await h.drain();
+    expect(h.lanes.peakDecodes).toBe(2);
+    expect(h.lanes.size).toBe(0);
+  });
+
+  it('pauses a running warm job at its next decode while interactive work runs (never decodes beside it)', async () => {
+    const h = harness();
+    const slideDecode = pending();
+    const started: string[] = [];
+    // A warm job that started while nothing else ran: two decodes, a slice between.
+    const warm = h.job('warm', { chain: 'warm', rank: RANK.bulk, slices: 3 }, (_, s) =>
+      s.decode(async () => {
+        started.push('warm');
+      }),
+    );
+    h.lanes.push(warm);
+    await h.step();
+    expect(h.log).toEqual(['warm0']);
+    // Its first decode had started before the GO.
+    expect(started).toEqual(['warm']);
+    // A GO: the slide job arrives and decodes; the warm job's next decode waits until it is done.
+    h.lanes.push(
+      h.job('slide', { chain: 'slide', rank: RANK.live, slices: 2 }, (_, s) =>
+        s.decode(async () => {
+          started.push('slide');
+          await slideDecode.p;
+        }),
+      ),
+    );
+    await h.drain();
+    expect(started).toEqual(['warm', 'slide']);
+    expect(h.log).toEqual(['warm0', 'slide0', 'warm1']);
+    slideDecode.done();
+    await h.drain();
+    expect(started).toEqual(['warm', 'slide', 'warm']);
+    expect(warm.finished).toBe(true);
+    expect(h.lanes.peakDecodes).toBe(1);
+  });
+
+  it('a job cancelled while it waits for a decode unwinds without decoding', async () => {
+    const h = harness();
+    const hold = pending();
+    const started: string[] = [];
+    const dec = (k: string, wait?: Promise<void>) => (_: number, s: Steps) =>
+      s.decode(async () => {
+        started.push(k);
+        await wait;
+      });
+    h.lanes.push(h.job('a', { chain: 'a', slices: 2 }, dec('a', hold.p)));
+    h.lanes.push(h.job('b', { chain: 'b', slices: 2 }, dec('b', hold.p)));
+    const c = h.job('c', { chain: 'c', slices: 2 }, dec('c'));
+    h.lanes.push(c);
+    await h.drain();
+    expect(started).toEqual(['a', 'b']);
+    h.lanes.cancel(['c']);
+    await h.drain();
+    expect(c.unwound).toBe(true);
+    expect(c.finished).toBeUndefined();
+    hold.done();
+    await h.drain();
+    expect(started).toEqual(['a', 'b']);
+    expect(h.lanes.size).toBe(0);
+  });
+});

@@ -94,11 +94,12 @@ export const PIPELINES: readonly string[] = [
 ];
 
 /**
- * Default upload budget per frame (design/27 §7.3, §13): at most a quarter of a frame's bytes, and no
- * further strip once the copies of this frame took this many ms of the render worker's time. Tuned from
- * venue measurements (bench/gpu-venue.ts).
+ * Default upload budget per frame (design/27 §7.3, §13): at most this many bytes (8 MiB, whatever the
+ * output's size: a whole 1080p frame, 8.3 MB, fits, so 1080p and smaller outputs flip on the frame they
+ * are due as before strips; a 4K frame, 33.2 MB, takes four), and no further strip once the copies of this
+ * frame took this many ms of the render worker's time. Tuned from venue measurements (bench/gpu-venue.ts).
  */
-export const UPLOAD_FRAME_SHARE = 0.25;
+export const UPLOAD_BUDGET_BYTES = 8 * 1024 * 1024;
 export const UPLOAD_BUDGET_MS = 4;
 
 const COMMON = /* wgsl */ `
@@ -278,7 +279,7 @@ export type GpuInit = {
   onError?: (message: string) => void;
   /** Called once the canvas is bound to WebGPU (it can no longer give a 2D context). */
   onContext?: () => void;
-  /** Upload budget per frame (bytes; default UPLOAD_FRAME_SHARE of a frame) and CPU ms (UPLOAD_BUDGET_MS). */
+  /** Upload budget per frame (bytes; default UPLOAD_BUDGET_BYTES) and CPU ms (UPLOAD_BUDGET_MS). */
   uploadBudgetBytes?: number;
   uploadBudgetMs?: number;
 };
@@ -407,6 +408,8 @@ export class GpuCompositor implements Compositor {
   readonly uploads = new UploadMeter();
   /** Copies issued (tests and the venue bench). */
   copies = 0;
+  /** Layer draws encoded (the venue bench checks its compositions draw what they time). */
+  layerDraws = 0;
 
   constructor(
     readonly device: GPUDevice,
@@ -420,7 +423,7 @@ export class GpuCompositor implements Compositor {
     this.budgetBytes =
       budget.bytes !== undefined && Number.isFinite(budget.bytes) && budget.bytes >= 0
         ? budget.bytes
-        : Math.round(width * height * 4 * UPLOAD_FRAME_SHARE);
+        : UPLOAD_BUDGET_BYTES;
     this.budgetMs =
       budget.ms !== undefined && Number.isFinite(budget.ms) && budget.ms >= 0 ? budget.ms : UPLOAD_BUDGET_MS;
     this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
@@ -600,6 +603,11 @@ export class GpuCompositor implements Compositor {
     return this.uploads.max();
   }
 
+  /** See Compositor.wholeUploads. */
+  wholeUploads(): { count: number; maxMs: number } {
+    return this.uploads.wholeUploads();
+  }
+
   draw(f: FrameInputs): void {
     /* @hot */
     this.frameNo++;
@@ -677,6 +685,7 @@ export class GpuCompositor implements Compositor {
         pass.setBindGroup(0, this.device.createBindGroup(dd.desc));
       }
       pass.draw(3);
+      this.layerDraws++;
       return;
     }
     const s = liveOn ? live : out;
@@ -703,6 +712,7 @@ export class GpuCompositor implements Compositor {
       pass.setBindGroup(0, this.device.createBindGroup(dd.desc));
     }
     pass.draw(3);
+    this.layerDraws++;
   }
 
   /** Grow the scissor of this draw by what a source of kind `k` can cover (rects already written). */
@@ -1013,7 +1023,7 @@ export class GpuCompositor implements Compositor {
       if (fit < n) n = fit > 0 ? fit : 1;
       this.bytesLeft -= n * w * 4;
     }
-    this.copyRows(texture, bitmap, dx, dy, from, w, n);
+    this.copyRows(texture, bitmap, dx, dy, from, w, n, !budgeted);
     rows[idx] = from + n;
     return from + n >= h;
   }
@@ -1026,6 +1036,8 @@ export class GpuCompositor implements Compositor {
     row: number,
     w: number,
     n: number,
+    /** Content on screen copied whole by design (UploadMeter: not a budgeted frame). */
+    whole: boolean,
   ): void {
     /* @hot */
     this.copySrc.source = bitmap;
@@ -1038,6 +1050,7 @@ export class GpuCompositor implements Compositor {
     this.copySize[1] = n;
     this.copies++;
     this.uploads.work++;
+    if (whole) this.uploads.whole++;
     try {
       this.device.queue.copyExternalImageToTexture(this.copySrc, this.copyDst, this.copySize);
     } catch (err) {

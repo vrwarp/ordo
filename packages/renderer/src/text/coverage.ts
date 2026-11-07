@@ -206,6 +206,24 @@ export class GlyphCoverage {
     return String.fromCodePoint(...[...out].sort((a, b) => a - b).slice(0, max));
   }
 
+  /**
+   * Probe at most `max` characters of `drawn` that have no verdict yet (four `measureText` each); true once
+   * every character has one, so `misses` is then only lookups. The asset worker probes a job's text in
+   * slices of its own (32 characters each) after the picture is sent: text in a script seen for the first
+   * time (40 new Han characters cost about 15 ms) never makes one long slice that a props job waits behind.
+   * `max` 0 only says whether everything has a verdict (lookups).
+   */
+  probeSome(drawn: DrawnText, max: number): boolean {
+    let left = Math.max(0, Math.floor(max));
+    for (const [key, cps] of drawn)
+      for (const cp of cps) {
+        if (this.#verdicts.get(key)?.get(cp) !== undefined) continue;
+        if (left-- <= 0) return false;
+        this.#keep(key, cp, this.#probe(key, cp));
+      }
+    return true;
+  }
+
   /** Drop every verdict (the drawer's faces changed: a face loaded, a family was added). */
   reset(): void {
     this.#stacks.clear();

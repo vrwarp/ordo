@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Compositor, FrameInputs } from './compositor.ts';
 import { RenderEngine } from './engine.ts';
-import { GpuCompositor, U_OVER_A, U_RECT_A, U_RECT_B } from './gpu.ts';
+import { GpuCompositor, U_OVER_A, U_RECT_A, U_RECT_B, UPLOAD_BUDGET_BYTES } from './gpu.ts';
+import { perfAlarms, perfBudgets } from './health.ts';
 import { PLANE_FLOATS, PLANE_OPACITY } from './scene.ts';
 import { FIT_CONTAIN, LAYERS, LAYER_INDEX, LayerStack, SRC_BITMAP, SRC_SCENE, SRC_VIDEO } from './stacks.ts';
 
@@ -378,6 +379,73 @@ describe('WebGPU strip uploads', () => {
     expect(dev.copies[0]!.size).toEqual([W, H]);
   });
 
+  it('flips late full-frame content on the frame it arrives up to 1080p (an absolute byte budget)', async () => {
+    // A GO to a cue that was not armed: the flip is due before its content arrives (GO_LEAD_MS is short).
+    expect(UPLOAD_BUDGET_BYTES).toBe(8 * 1024 * 1024);
+    const late: Record<string, number> = {};
+    for (const [w, h] of [
+      [1280, 720],
+      [1920, 1080],
+      [3840, 2160],
+    ] as const) {
+      const dev = new FakeDevice();
+      const c = new GpuCompositor(dev as unknown as GPUDevice, context, 'rgba8unorm', w, h, LAYERS.length, {
+        ms: 0,
+      });
+      await c.compile();
+      const f = inputs();
+      const ls = f.layers[SLIDE]!;
+      ls.requestFlip('late', 0, 0, 0);
+      frame(c, f, 16);
+      ls.offer({ key: 'late', kind: SRC_BITMAP, bitmap: bitmap('late', w, h) });
+      let frames = 0;
+      while (ls.liveStack.key !== 'late' && frames < 10) frame(c, f, 32 + 16 * frames++);
+      late[`${w}x${h}`] = frames;
+    }
+    // One frame (the frame it arrives) at 720p and 1080p, as before strips; four 8 MiB strips at 4K.
+    expect(late).toEqual({ '1280x720': 1, '1920x1080': 1, '3840x2160': 4 });
+  });
+
+  it('keeps whole uploads apart from strips; a slow strip frame ages out and the upload alarm clears', async () => {
+    let t = 1000;
+    vi.spyOn(performance, 'now').mockImplementation(() => t);
+    const { c, dev } = await gpu({ bytes: 9 * W * 4, ms: 0 });
+    // CPU cost of a copy: a whole frame 9 ms, a strip of 9 rows `strip` ms.
+    let strip = 1;
+    const real = dev.queue.copyExternalImageToTexture;
+    dev.queue.copyExternalImageToTexture = (...a: Parameters<typeof real>) => {
+      t += (a[2] as ArrayLike<number>)[1] === H ? 9 : strip;
+      real(...a);
+    };
+    const f = inputs();
+    const ls = f.layers[SLIDE]!;
+    const b4k = perfBudgets(3840, 2160);
+    ls.offer({ key: 'A', kind: SRC_BITMAP, bitmap: bitmap('A') });
+    ls.requestFlip('A', 0, 0, 0);
+    for (let i = 0; i < 5; i++) frame(c, f, i * 16);
+    expect(ls.liveStack.key).toBe('A');
+    expect(c.uploadMs()).toBe(1);
+    // A refresh of the live slide (its image arrived late) is uploaded whole: reported apart, no alarm.
+    ls.offer({ key: 'A', kind: SRC_BITMAP, bitmap: bitmap('A2'), refresh: true });
+    frame(c, f, 200);
+    expect(c.uploadMs()).toBe(1);
+    expect(c.wholeUploads()).toEqual({ count: 1, maxMs: 9 });
+    expect(perfAlarms(b4k, { uploadMs: c.uploadMs() })).toEqual([]);
+    // Slow strips raise it; a minute without uploads lets it clear (a time window, not 128 frames).
+    strip = 5;
+    ls.offer({ key: 'B', kind: SRC_BITMAP, bitmap: bitmap('B') });
+    ls.requestFlip('B', 300, 0, 300);
+    for (let i = 0; i < 5; i++) frame(c, f, 300 + i * 16);
+    expect(ls.liveStack.key).toBe('B');
+    expect(c.uploadMs()).toBe(5);
+    expect(perfAlarms(b4k, { uploadMs: c.uploadMs() })).toEqual(['upload']);
+    t += 61_000;
+    for (let i = 0; i < 100; i++) frame(c, f, 62_000 + i * 16);
+    expect(c.uploadMs()).toBe(0);
+    expect(perfAlarms(b4k, { uploadMs: c.uploadMs() })).toEqual([]);
+    expect(c.wholeUploads()).toEqual({ count: 1, maxMs: 0 });
+  });
+
   it('prefers the content a pending flip waits for over other armed content', async () => {
     const { c, dev } = await gpu({ bytes: W * H * 4, ms: 0 });
     const f = inputs();
@@ -426,6 +494,39 @@ describe('RenderEngine with strip uploads', () => {
     };
     return { e, frame, lose: (r: string) => lost?.(r) };
   }
+
+  it('flips the layers of one GO together while one of them is still uploading', async () => {
+    const { c, dev } = await gpu({ bytes: 9 * W * 4, ms: 0 });
+    const { e, frame } = engine(async () => c);
+    await e.start();
+    // A new background and a new slide, both full-frame, offered just before one GO: 4 + 4 strips.
+    e.offer(BG, { key: 'bg2', kind: SRC_BITMAP, bitmap: bitmap('bg2') });
+    e.offer(SLIDE, { key: 'sl2', kind: SRC_BITMAP, bitmap: bitmap('sl2') });
+    e.flip(BG, 'bg2', 100, 0);
+    e.flip(SLIDE, 'sl2', 100, 0);
+    const at: Record<string, number> = {};
+    for (let i = 0; i < 12; i++) {
+      frame(100 + i * 16);
+      for (const [k, l] of [
+        ['bg2', BG],
+        ['sl2', SLIDE],
+      ] as const)
+        if (e.layers[l]!.liveStack.key === k && at[k] === undefined) at[k] = i;
+    }
+    expect(dev.copies.filter((x) => x.bitmap === 'bg2')).toHaveLength(4);
+    // Both on the frame the last strip is in (never the new background with the old slide).
+    expect(at.bg2).toBeGreaterThan(0);
+    expect(at.bg2).toBe(at.sl2);
+    // A flip at another time is not held by them: props uploaded already, a slide still uploading.
+    e.offer(LAYER_INDEX.props, { key: 'p', kind: SRC_BITMAP, bitmap: bitmap('p', 4, 4), x: 2, y: 2 });
+    frame(900);
+    e.offer(SLIDE, { key: 'sl3', kind: SRC_BITMAP, bitmap: bitmap('sl3') });
+    e.flip(SLIDE, 'sl3', 1000, 0);
+    e.flip(LAYER_INDEX.props, 'p', 1001, 0);
+    frame(1010);
+    expect(e.layers[LAYER_INDEX.props]!.liveStack.key).toBe('p');
+    expect(e.layers[SLIDE]!.liveStack.key).toBe('sl2');
+  });
 
   it('gates flips on uploads, re-uploads after a device loss, and reports uploadMs', async () => {
     const first = await gpu({ bytes: 9 * W * 4, ms: 0 });

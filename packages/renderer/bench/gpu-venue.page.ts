@@ -1,6 +1,6 @@
 import type { FrameInputs } from '../src/compositor.ts';
 import { RenderEngine } from '../src/engine.ts';
-import { GpuCompositor, UPLOAD_BUDGET_MS, UPLOAD_FRAME_SHARE } from '../src/gpu.ts';
+import { GpuCompositor, UPLOAD_BUDGET_BYTES, UPLOAD_BUDGET_MS } from '../src/gpu.ts';
 import { LAYERS, LAYER_INDEX, LayerStack, SRC_BITMAP, type StackContent } from '../src/stacks.ts';
 
 /**
@@ -8,14 +8,21 @@ import { LAYERS, LAYER_INDEX, LayerStack, SRC_BITMAP, type StackContent } from '
  * Runs in a dedicated worker, as the render worker does, on the machine's real GPU:
  * - uploads: a CPU-backed full-frame bitmap (what the asset worker sends) and a lyric-band sprite, uploaded
  *   by the WebGPU compositor at once (budget 0, the M5 behaviour) and in strips (the default budget and an
- *   eighth of a frame): per frame, the render worker's CPU time in the copies and the GPU time until the
- *   queue has done them (`onSubmittedWorkDone`, from the submit);
+ *   eighth of a frame): per frame, the render worker's CPU time in the copies, and the latency until the
+ *   queue reports them done (`onSubmittedWorkDone` from the submit: GPU time plus the IPC and fence round
+ *   trip), beside the same round trip of an empty submit (`emptyMs`), so done minus empty bounds the
+ *   copies' GPU time;
  * - compositing: one frame of five layers, full-frame transparent bitmaps against the same layers as
  *   sprites (scissored), and an opaque background (replace pipeline): GPU time of the render pass from
- *   timestamp queries when the adapter has 'timestamp-query', else the queue's completion time;
- * - a live run: the real engine on requestAnimationFrame for a few seconds, a new full-frame slide armed
- *   every second and flipped half a second later, with the default budget and without strips: frames
- *   presented and missed, late flips, rAF interval p95 and max, and telemetry `uploadMs`.
+ *   timestamp queries when the adapter has 'timestamp-query', else the queue's completion time. Every
+ *   layer is live before the timing starts and each frame must encode five layer draws (it throws
+ *   otherwise: a composition that draws nothing would time a cleared pass);
+ * - a live run: the real engine on requestAnimationFrame for a few seconds, drawing on a canvas the page
+ *   transferred (`transferControlToOffscreen`, as the output does, so frames are presented on the display
+ *   and paced by it), a new full-frame slide armed every second and flipped half a second later, and a
+ *   late one (its flip due before its content arrives, as a GO to a cue that was not armed), with the
+ *   default budget and without strips: frames presented and missed, late flips, frames from the late
+ *   content's arrival to its flip, rAF interval p95 and max, and telemetry `uploadMs`.
  */
 
 export type Stats = { n: number; p50: number; p95: number; max: number };
@@ -30,7 +37,10 @@ export type VenueReport = {
       budget: string;
       frames: number;
       cpuMs: Stats;
-      gpuMs: Stats;
+      /** Submit to `onSubmittedWorkDone` after the copies: latency, not GPU time alone. */
+      doneMs: Stats;
+      /** The same round trip of an empty submit, measured beside it. */
+      emptyMs: Stats;
     }[];
     compose: { name: string; gpuMs: Stats; source: 'timestamp' | 'queue' }[];
     live: {
@@ -39,6 +49,8 @@ export type VenueReport = {
       presented: number;
       missed: number;
       lateFlips: number;
+      /** Late content (flip due before it arrived): frames from its arrival to its flip. */
+      lateContentFrames: Stats;
       intervalMs: Stats;
       uploadMs: number;
     }[];
@@ -126,9 +138,10 @@ async function uploads(
   make: () => ImageBitmap,
   at: { x: number; y: number },
   rounds: number,
-): Promise<{ frames: number; cpu: number[]; gpu: number[] }> {
+): Promise<{ frames: number; cpu: number[]; done: number[]; empty: number[] }> {
   const cpu: number[] = [];
-  const gpu: number[] = [];
+  const done: number[] = [];
+  const empty: number[] = [];
   let frames = 0;
   // One set of layers for every round, as the engine keeps (stack versions only grow).
   const f = inputs();
@@ -137,18 +150,23 @@ async function uploads(
     const content: StackContent<ImageBitmap> = { key: `k${r}`, kind: SRC_BITMAP, bitmap: make(), ...at };
     ls.offer(content);
     for (let i = 0; i < 64 && !ls.armedStack.ready; i++) {
+      // The round trip of an empty submit first (the queue is idle), then the frame's copies.
+      const e0 = performance.now();
+      device.queue.submit([]);
+      await device.queue.onSubmittedWorkDone();
+      empty.push(performance.now() - e0);
       const t0 = performance.now();
       c.drainUploads(f, true);
       const t1 = performance.now();
       device.queue.submit([]);
       await device.queue.onSubmittedWorkDone();
       cpu.push(t1 - t0);
-      gpu.push(performance.now() - t1);
+      done.push(performance.now() - t1);
       frames++;
     }
   }
   ls.reset();
-  return { frames: frames / rounds, cpu, gpu };
+  return { frames: frames / rounds, cpu, done, empty };
 }
 
 /** GPU time of draw(): timestamp queries around its render pass, or the queue's completion time. */
@@ -165,9 +183,17 @@ async function compose(
   c.drainUploads(f, false);
   c.drainUploads(f, true);
   await device.queue.onSubmittedWorkDone();
+  // What is timed must be what is named: every layer live and uploaded, five layer draws per frame.
+  f.layers.forEach((ls, l) => {
+    if (ls.liveStack.key === '' || ls.flipPending || !ls.liveStack.ready)
+      throw new Error(`compose: layer ${l} is not live (key '${ls.liveStack.key}')`);
+  });
   for (let i = 0; i < frames + 3; i++) {
     const t0 = performance.now();
+    const before = c.layerDraws;
     c.draw(f);
+    if (c.layerDraws - before !== f.layers.length)
+      throw new Error(`compose: ${c.layerDraws - before} layer draws, expected ${f.layers.length}`);
     if (ts) {
       const enc = device.createCommandEncoder();
       enc.resolveQuerySet(ts.set, 0, 2, ts.resolve, 0);
@@ -186,19 +212,28 @@ async function compose(
   return out;
 }
 
-/** The engine on requestAnimationFrame: a new full-frame slide armed every second, flipped 500 ms later. */
+/**
+ * The engine on requestAnimationFrame, drawing on `canvas` (transferred from a canvas shown on the page):
+ * every second a new full-frame slide armed and flipped 500 ms later, and a late one, its flip due before
+ * its content arrives two frames later (a GO to a cue that was not armed).
+ */
 async function live(
+  canvas: OffscreenCanvas,
   w: number,
   h: number,
   seconds: number,
   budget: number | undefined,
 ): Promise<VenueReport['sizes'][number]['live'][number]> {
-  const canvas = new OffscreenCanvas(w, h);
   const raf = (cb: (t: number) => void) =>
     (self as unknown as { requestAnimationFrame(cb: (t: number) => void): number }).requestAnimationFrame(cb);
   const intervals: number[] = [];
+  const lateFrames: number[] = [];
   let last = 0;
-  const e = new RenderEngine(
+  let frameNo = 0;
+  let lateKey = '';
+  let lateFrom = 0;
+  const slide = () => e.layers[LAYER_INDEX.slide]!;
+  const e: RenderEngine = new RenderEngine(
     {
       canvas,
       width: w,
@@ -216,7 +251,12 @@ async function live(
         raf((t) => {
           if (last) intervals.push(t - last);
           last = t;
+          frameNo++;
           cb(t);
+          if (lateKey && slide().liveStack.key === lateKey) {
+            lateFrames.push(frameNo - lateFrom);
+            lateKey = '';
+          }
         }),
       wallNow: () => performance.timeOrigin + performance.now(),
     },
@@ -226,11 +266,21 @@ async function live(
   const bg = bitmap(w, h, 'opaque', 0);
   e.offer(LAYER_INDEX.background, { key: 'bg', kind: SRC_BITMAP, bitmap: bg, opaque: true });
   e.flip(LAYER_INDEX.background, 'bg', e.hubNow(), 0);
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
   for (let s = 0; s < seconds; s++) {
     const key = `s${s}`;
     e.offer(LAYER_INDEX.slide, { key, kind: SRC_BITMAP, bitmap: bitmap(w, h, 'layer', s + 1) });
     e.flip(LAYER_INDEX.slide, key, e.hubNow() + 500, 300);
-    await new Promise((r) => setTimeout(r, 1000));
+    await wait(700);
+    // Late content: the flip is due now, the content arrives two frames later.
+    const late = `late${s}`;
+    const content = bitmap(w, h, 'layer', 100 + s);
+    e.flip(LAYER_INDEX.slide, late, e.hubNow(), 0);
+    await wait(33);
+    lateFrom = frameNo;
+    lateKey = late;
+    e.offer(LAYER_INDEX.slide, { key: late, kind: SRC_BITMAP, bitmap: content });
+    await wait(267);
   }
   const t = e.telemetry();
   e.stop();
@@ -240,12 +290,19 @@ async function live(
     presented: t.presented,
     missed: t.missed,
     lateFlips: t.lateFlips,
+    lateContentFrames: stats(lateFrames),
     intervalMs: stats(intervals.slice(10)),
     uploadMs: t.uploadMs ?? 0,
   };
 }
 
-export async function run(opts: { liveSeconds: number }): Promise<VenueReport> {
+export async function run(opts: {
+  liveSeconds: number;
+  canvases?: OffscreenCanvas[];
+  /** Called before each live run with its index (the page brings that run's canvas to the front). */
+  onLive?: (i: number) => void;
+}): Promise<VenueReport> {
+  let liveRun = 0;
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
   if (!adapter) throw new Error('no WebGPU adapter');
   const info = (adapter as GPUAdapter & { info?: GPUAdapterInfo }).info;
@@ -258,7 +315,7 @@ export async function run(opts: { liveSeconds: number }): Promise<VenueReport> {
       device: info?.device,
       description: info?.description,
       isFallbackAdapter: (info as unknown as { isFallbackAdapter?: boolean } | undefined)?.isFallbackAdapter,
-      budget: `${UPLOAD_FRAME_SHARE} of a frame, ${UPLOAD_BUDGET_MS} ms`,
+      budget: `${UPLOAD_BUDGET_BYTES} bytes, ${UPLOAD_BUDGET_MS} ms`,
     },
     timestamps,
     sizes: [],
@@ -297,7 +354,8 @@ export async function run(opts: { liveSeconds: number }): Promise<VenueReport> {
         budget: budgetName,
         frames: full.frames,
         cpuMs: stats(full.cpu),
-        gpuMs: stats(full.gpu),
+        doneMs: stats(full.done),
+        emptyMs: stats(full.empty),
       });
       const sp = await uploads(
         device,
@@ -311,15 +369,18 @@ export async function run(opts: { liveSeconds: number }): Promise<VenueReport> {
         budget: budgetName,
         frames: sp.frames,
         cpuMs: stats(sp.cpu),
-        gpuMs: stats(sp.gpu),
+        doneMs: stats(sp.done),
+        emptyMs: stats(sp.empty),
       });
       release(device, c);
     }
     // Compositing: five full-frame layers, the same as sprites, and an opaque background under sprites.
-    const c = await compositor(device, w, h, 0);
+    // Each case on a compositor of its own (its upload bookkeeping is by stack version), its stacks not
+    // gated so the flips happen at once; compose() uploads them all before timing.
     const layered = (tight: boolean, opaqueBg: boolean) => {
       const f = inputs();
       f.layers.forEach((ls, l) => {
+        ls.gated = false;
         const isBg = l === LAYER_INDEX.background;
         const sprite = tight && !isBg;
         const b =
@@ -340,24 +401,29 @@ export async function run(opts: { liveSeconds: number }): Promise<VenueReport> {
       });
       return f;
     };
-    for (const [name, f] of [
-      ['five full-frame layers', layered(false, false)],
-      ['four sprites over a full-frame layer', layered(true, false)],
-      ['four sprites over an opaque background (replace)', layered(true, true)],
+    for (const [name, tight, opaqueBg] of [
+      ['five full-frame layers', false, false],
+      ['four sprites over a full-frame layer', true, false],
+      ['four sprites over an opaque background (replace)', true, true],
     ] as const) {
-      // Upload everything first (unbudgeted compositor), then time the draws.
-      for (const ls of f.layers) ls.stacks[ls.live]!.ready = false;
+      const c = await compositor(device, w, h, 0);
+      const f = layered(tight, opaqueBg);
       size.compose.push({
         name,
         gpuMs: stats(await compose(device, c, f, 30, ts)),
         source: ts ? 'timestamp' : 'queue',
       });
       for (const ls of f.layers) ls.reset();
+      release(device, c);
     }
-    release(device, c);
     if (opts.liveSeconds > 0) {
-      size.live.push(await live(w, h, opts.liveSeconds, 0));
-      size.live.push(await live(w, h, opts.liveSeconds, undefined));
+      // A canvas the page transferred for each live run (`canvases`, in order), else a worker-made one.
+      const canvas = () => {
+        opts.onLive?.(liveRun++);
+        return opts.canvases?.shift() ?? new OffscreenCanvas(w, h);
+      };
+      size.live.push(await live(canvas(), w, h, opts.liveSeconds, 0));
+      size.live.push(await live(canvas(), w, h, opts.liveSeconds, undefined));
     }
     report.sizes.push(size);
   }
@@ -370,9 +436,10 @@ const inWorker = typeof WorkerGlobalScope !== 'undefined' && typeof window === '
 
 if (inWorker) {
   const scope = self as unknown as { onmessage: unknown; postMessage(m: unknown): void };
-  scope.onmessage = async (e: MessageEvent<{ liveSeconds: number }>) => {
+  scope.onmessage = async (e: MessageEvent<{ liveSeconds: number; canvases?: OffscreenCanvas[] }>) => {
     try {
-      scope.postMessage({ ok: true, report: await run(e.data) });
+      const onLive = (i: number) => scope.postMessage({ live: i });
+      scope.postMessage({ ok: true, report: await run({ ...e.data, onLive }) });
     } catch (err) {
       scope.postMessage({ ok: false, error: String((err as Error)?.stack ?? err) });
     }
@@ -381,12 +448,41 @@ if (inWorker) {
   (window as unknown as { __venue: unknown }).__venue = (source: string, liveSeconds: number) =>
     new Promise<VenueReport>((resolve, reject) => {
       const w = new Worker(URL.createObjectURL(new Blob([source], { type: 'text/javascript' })));
-      w.onmessage = (e: MessageEvent<{ ok: boolean; report?: VenueReport; error?: string }>) => {
+      const shown: HTMLCanvasElement[] = [];
+      w.onmessage = (
+        e: MessageEvent<{ ok: boolean; report?: VenueReport; error?: string; live?: number }>,
+      ) => {
+        if (e.data.live !== undefined) {
+          // The canvas of this live run in front of the others.
+          shown.forEach((el, i) => {
+            el.style.zIndex = i === e.data.live ? '2' : '1';
+          });
+          return;
+        }
         w.terminate();
+        for (const el of shown) el.remove();
         if (e.data.ok) resolve(e.data.report!);
         else reject(new Error(e.data.error));
       };
       w.onerror = (e) => reject(new Error(e.message));
-      w.postMessage({ liveSeconds });
+      // A shown canvas per live run (1080p and 4K, without strips and with), transferred as the output
+      // transfers its canvas to its render worker: the live frames are presented and paced by the display.
+      const canvases: OffscreenCanvas[] = [];
+      if (liveSeconds > 0)
+        for (const [cw, ch] of [
+          [1920, 1080],
+          [1920, 1080],
+          [3840, 2160],
+          [3840, 2160],
+        ] as const) {
+          const el = document.createElement('canvas');
+          el.width = cw;
+          el.height = ch;
+          el.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;';
+          document.body.appendChild(el);
+          shown.push(el);
+          canvases.push(el.transferControlToOffscreen());
+        }
+      w.postMessage({ liveSeconds, canvases }, canvases);
     });
 }

@@ -21,10 +21,16 @@ export type RenderTelemetry = {
   /** GPU memory of the compositor's layer and scene textures, MB (design/27 §13 budget); absent on 2D. */
   gpuMB?: number;
   /**
-   * The longest per-frame upload time over the last 128 frames that uploaded, ms of the render worker's CPU
-   * time in the copies (design/27 §13 `uploadMs`; GPU time is measured by bench/gpu-venue.ts); absent on 2D.
+   * The longest per-frame upload time in budgeted strips over the last minute (at most 128 uploading
+   * frames), ms of the render worker's CPU time in the copies (design/27 §13 `uploadMs`; GPU time is
+   * measured by bench/gpu-venue.ts); absent on 2D.
    */
   uploadMs?: number;
+  /**
+   * Frames that uploaded content on screen whole by design (a `refresh` of the live slide, recovery after
+   * a device loss), and the longest of the last minute in ms: reported apart, never an alarm.
+   */
+  wholeUploads?: { count: number; maxMs: number };
 };
 
 export const EMPTY_TELEMETRY: RenderTelemetry = {
@@ -83,6 +89,7 @@ export type HealthReport = {
   /** Slide raster p50, p95 and max over the last `n` slides the asset worker drew, ms. */
   rasterMs?: TimingSummary;
   uploadMs?: number;
+  wholeUploads?: { count: number; maxMs: number };
   /** This output's performance budgets at its size (design/27 §13). */
   budgets?: PerfBudgets;
   /** Budgets passed now (`PerfAlarm`); absent when every measured figure is within its budget. */
@@ -141,7 +148,10 @@ export type PerfBudgets = {
   /**
    * GPU memory of the layer and scene textures, MB: 400 at 4K (five layers of two textures, 331.8 MB,
    * plus the two over textures of a scene, 66.4 MB), scaled by pixel count to the next MB (100 at 1080p,
-   * where they take 99.5).
+   * where they take 99.5). For display beside `gpuMB` only: `gpuMB` is ordo's own fixed allocation (a
+   * function of the output's size and of the scenes' over textures), which this budget is derived from,
+   * so it is no alarm; the GPU's real pressure (video, the swap chain, other programs, an iGPU's shared
+   * memory) is not observable from a page.
    */
   gpuMB: number;
 };
@@ -160,22 +170,17 @@ export function perfBudgets(width: number, height: number): PerfBudgets {
 }
 
 /**
- * A budget passed: `gpuMemory` (gpuMB over its budget: the GPU may run out of memory and lose its device,
- * the iGPU of a venue PC shares the system's), `raster` (slide raster p95 over its budget once
- * `RASTER_ALARM_MIN` slides were drawn: slides may flip late), `upload` (uploadMs over its budget: frames
- * may be missed while new content uploads).
+ * A budget passed: `raster` (slide raster p95 over its budget once `RASTER_ALARM_MIN` slides were drawn:
+ * slides may flip late), `upload` (uploadMs, the budgeted strip frames of the last minute, over its budget:
+ * frames may be missed while new content uploads). GPU memory has no alarm (see `PerfBudgets.gpuMB`).
  */
-export type PerfAlarm = 'gpuMemory' | 'raster' | 'upload';
+export type PerfAlarm = 'raster' | 'upload';
 
 /** Slides drawn before a raster p95 can raise the alarm (the first draws pay for compiling and caches). */
 export const RASTER_ALARM_MIN = 20;
 
-export function perfAlarms(
-  b: PerfBudgets,
-  m: { gpuMB?: number; raster?: TimingSummary; uploadMs?: number },
-): PerfAlarm[] {
+export function perfAlarms(b: PerfBudgets, m: { raster?: TimingSummary; uploadMs?: number }): PerfAlarm[] {
   const out: PerfAlarm[] = [];
-  if (m.gpuMB !== undefined && m.gpuMB > b.gpuMB) out.push('gpuMemory');
   if (m.raster && m.raster.n >= RASTER_ALARM_MIN && m.raster.p95 > b.rasterP95Ms) out.push('raster');
   if (m.uploadMs !== undefined && m.uploadMs > b.uploadMs) out.push('upload');
   return out;
@@ -233,13 +238,17 @@ export function buildHealth(i: HealthInputs): HealthReport {
 }
 
 /** The performance part of a health report: measured figures, the budgets at this size, and the alarms. */
-function perf(i: HealthInputs): Pick<HealthReport, 'rasterMs' | 'uploadMs' | 'budgets' | 'alarms'> {
-  const out: Pick<HealthReport, 'rasterMs' | 'uploadMs' | 'budgets' | 'alarms'> = {};
+type PerfPart = 'rasterMs' | 'uploadMs' | 'wholeUploads' | 'budgets' | 'alarms';
+
+function perf(i: HealthInputs): Pick<HealthReport, PerfPart> {
+  const out: Pick<HealthReport, PerfPart> = {};
   if (i.raster) out.rasterMs = i.raster;
   if (i.render.uploadMs !== undefined) out.uploadMs = Math.round(i.render.uploadMs * 100) / 100;
+  const w = i.render.wholeUploads;
+  if (w?.count) out.wholeUploads = { count: w.count, maxMs: Math.round(w.maxMs * 100) / 100 };
   if (!i.size) return out;
   out.budgets = perfBudgets(i.size.width, i.size.height);
-  const alarms = perfAlarms(out.budgets, { gpuMB: i.render.gpuMB, raster: i.raster, uploadMs: out.uploadMs });
+  const alarms = perfAlarms(out.budgets, { raster: i.raster, uploadMs: out.uploadMs });
   if (alarms.length) out.alarms = alarms;
   return out;
 }

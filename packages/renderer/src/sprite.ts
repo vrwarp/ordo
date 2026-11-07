@@ -42,7 +42,8 @@ import { bandSource, layoutText, lyricTextFor } from './text2d.ts';
  * The box comes from the content, before anything is drawn (`*Reach`, logical px): every object's reach as
  * its drawer lays it out (legacy text by `layoutText`, rich text by the engine's own layout and paint plan,
  * memoised, so the draw that follows does not lay out again), widened by its effects (shadow, outline, glow)
- * and one em for glyphs that reach past their line box, turned with its box. Anything this cannot bound
+ * and OVERHANG_EM of its glyph size for glyphs that reach past their line box (accents over capitals,
+ * descenders, italics), turned with its box. Anything this cannot bound
  * (an object with fields it does not know, a slide's PowerPoint picture, an opaque logo) reaches the whole
  * frame, and the layer stays full-frame. `drawSprite` draws into a surface of the box (with a margin) and
  * checks that nothing touches the surface's edges where they are not the frame's: if anything does, the
@@ -59,6 +60,14 @@ export type Reach = { x: number; y: number; w: number; h: number } | null;
 export const SPRITE_MARGIN = 2;
 /** A sprite is used only when it covers at most this share of the frame; else the raster is full-frame. */
 export const SPRITE_MAX_SHARE = 0.8;
+/**
+ * How far glyphs can reach past their laid-out line boxes, in ems of their size: an accent over a capital
+ * (0.95 em above the baseline against the 0.8 em the layout gives the ascent), a descender with a line
+ * height under 1, an italic's overhang. The ink touches the glyphs' own box, so anything that reaches
+ * further still crosses the sprite's edge ring and `drawSprite` draws the layer again full-frame: a tighter
+ * margin can cost a redraw, never a cut glyph.
+ */
+export const OVERHANG_EM = 0.3;
 
 const EMPTY = { x: 0, y: 0, w: 0, h: 0 };
 const FRAME: Box = { x: 0, y: 0, w: LOGICAL_WIDTH, h: LOGICAL_HEIGHT, rotation: 0 };
@@ -141,8 +150,9 @@ function effectReach(e: Effects | undefined | null): number {
 }
 
 /**
- * Legacy text as `drawText` draws it (`layoutText` with the same `fit`): its laid-out block united with the
- * box, one em for glyph overhang, the style's effects, turned with the box.
+ * Legacy text as `drawText` draws it (`layoutText` with the same `fit`): its laid-out block (the lines, and
+ * the fill box when the style has one: `drawText` paints nothing else of the box), OVERHANG_EM of the font
+ * size for glyph overhang, the style's effects, turned with the box.
  */
 export function legacyTextReach(
   ctx: Ctx2D,
@@ -160,28 +170,29 @@ export function legacyTextReach(
   ctx.save();
   const l = layoutText(ctx, t, st, b, s, fit);
   ctx.restore();
-  const em = l.fontSize;
-  const x0 = Math.min(b.x, l.block.x / s);
-  const y0 = Math.min(b.y, l.block.y / s);
-  const x1 = Math.max(b.x + b.w, (l.block.x + l.block.w) / s);
-  const y1 = Math.max(b.y + b.h, (l.block.y + l.block.h) / s);
-  return turned(x0, y0, x1, y1, b, em + effectReach(st as unknown as Effects));
+  if (!(l.block.w > 0 && l.block.h > 0)) return EMPTY;
+  const x0 = l.block.x / s;
+  const y0 = l.block.y / s;
+  const x1 = (l.block.x + l.block.w) / s;
+  const y1 = (l.block.y + l.block.h) / s;
+  return turned(x0, y0, x1, y1, b, OVERHANG_EM * l.fontSize + effectReach(st as unknown as Effects));
 }
 
 /**
  * Rich text as `drawRichText` draws it: the engine's layout of the clamped object (memoised, so the draw
- * reuses it) and its paint plan: the box, the fill box, highlights, decorations and every laid line with its
- * bullet, grown by the tallest line (glyph overhang) and the largest effect of any run, turned with the box.
+ * reuses it) and its paint plan: the fill box, highlights, decorations and every laid line with its bullet
+ * (the box itself is not painted), grown by OVERHANG_EM of the largest glyph (plus the largest baseline
+ * shift) and the largest effect of any run, turned with the box.
  */
 export function richTextReach(ctx: Ctx2D, o: TextObject, opts?: RichLayoutOptions): Reach {
   const c = clampTextObject(o);
   const l = layoutRich(measurerFor(ctx), c, currentFontEnv(), opts);
   const plan = paintPlan(c, l);
   const b = c.box;
-  let x0 = b.x;
-  let y0 = b.y;
-  let x1 = b.x + b.w;
-  let y1 = b.y + b.h;
+  let x0 = Number.POSITIVE_INFINITY;
+  let y0 = Number.POSITIVE_INFINITY;
+  let x1 = Number.NEGATIVE_INFINITY;
+  let y1 = Number.NEGATIVE_INFINITY;
   const add = (x: number, y: number, w: number, h: number) => {
     if (!(Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(w) && Number.isFinite(h))) return;
     x0 = Math.min(x0, x);
@@ -200,7 +211,6 @@ export function richTextReach(ctx: Ctx2D, o: TextObject, opts?: RichLayoutOption
   let em = size * scaleMax;
   for (const line of l.lines) {
     add(line.x, line.top, line.w, line.height);
-    em = Math.max(em, line.height);
     if (line.bullet) {
       const size = num(line.bullet.sizePx, 0, 1e4, 0);
       em = Math.max(em, size);
@@ -215,7 +225,8 @@ export function richTextReach(ctx: Ctx2D, o: TextObject, opts?: RichLayoutOption
   for (const g of plan.bullets) fx = Math.max(fx, effectReach(g));
   for (const d of plan.decorations) fx = Math.max(fx, effectReach(d));
   if (plan.glow) fx = Math.max(fx, 2 * num(plan.glow.radius, 0, CLAMP.maxEffectPx, 0));
-  return turned(x0, y0, x1, y1, b, em * (1 + shift) + fx);
+  if (!(x1 >= x0 && y1 >= y0)) return EMPTY;
+  return turned(x0, y0, x1, y1, b, em * (OVERHANG_EM + shift) + fx);
 }
 
 /** Where one object `drawObject` draws can reach (logical px), or null when it is not known. */

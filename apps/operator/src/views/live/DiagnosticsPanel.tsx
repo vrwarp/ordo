@@ -124,8 +124,12 @@ export function PerformanceTable() {
         <tr>
           <th>Output</th>
           <th title="Asset worker, last slides drawn: p50 / p95">Slide drawing</th>
-          <th title="Render worker, longest frame of uploads (CPU time)">Upload per frame</th>
-          <th title="Layer and scene textures">GPU memory</th>
+          <th title="Render worker, longest frame of strip uploads in the last minute (CPU time)">
+            Upload per frame
+          </th>
+          <th title="Layer and scene textures: fixed by the output's size, and a scene's over textures">
+            GPU memory
+          </th>
           <th>Fonts</th>
           <th>What to look at</th>
         </tr>
@@ -150,8 +154,16 @@ export function PerformanceTable() {
               <td style={over(alarms.has('upload'))}>
                 {h?.uploadMs !== undefined ? `${h.uploadMs} ms` : h?.compositor === '2d' ? 'none (2D)' : '—'}
                 {b && h?.uploadMs !== undefined ? <span className="muted"> (≤ {b.uploadMs} ms)</span> : null}
+                {h?.wholeUploads?.count ? (
+                  <div
+                    className="muted small"
+                    title="Content on screen uploaded at once by design (a slide drawn again, recovery after a GPU reset)"
+                  >
+                    whole: {h.wholeUploads.count}×, up to {h.wholeUploads.maxMs} ms
+                  </div>
+                ) : null}
               </td>
-              <td style={over(alarms.has('gpuMemory'))}>
+              <td>
                 {h?.gpuMB !== undefined ? `${h.gpuMB} MB` : h?.compositor === '2d' ? 'none (2D)' : '—'}
                 {b && h?.gpuMB !== undefined ? <span className="muted"> (≤ {b.gpuMB} MB)</span> : null}
               </td>
@@ -162,8 +174,8 @@ export function PerformanceTable() {
                 {issues.length === 0
                   ? ''
                   : issues.map((i) => (
-                      <div key={i.id} data-issue={i.id} title={i.detail}>
-                        <b>{i.label}</b>
+                      <div key={i.id} data-issue={i.id} data-level={i.level} title={i.detail}>
+                        {i.level === 'warn' ? <b>{i.label}</b> : <span>{i.label}</span>}
                         <div className="muted">{i.detail}</div>
                       </div>
                     ))}

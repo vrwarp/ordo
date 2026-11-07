@@ -151,6 +151,8 @@ export class RenderEngine {
     this.snapEvery = 0; // the canvas cannot be copied on this platform; stop trying
   };
   private readonly frame = (ts: number) => this.onFrame(ts);
+  /** Flip times of the layers waiting for an upload this frame (`tickLayers`). */
+  private readonly waitingAt = new Float64Array(LAYERS.length);
 
   constructor(
     private opts: EngineOptions,
@@ -226,10 +228,12 @@ export class RenderEngine {
     this.gpuRetrying = true;
     this.gpuRetries++;
     let canvas: OffscreenCanvas | undefined;
+    let gpu: Compositor | undefined;
+    let adopted = false;
     try {
       await this.refuseFallbackAdapter();
       canvas = await this.host.requestCanvas!();
-      const gpu = await (this.host.createGpu ?? createGpuCompositor)({
+      gpu = await (this.host.createGpu ?? createGpuCompositor)({
         canvas,
         width: this.opts.width,
         height: this.opts.height,
@@ -242,15 +246,21 @@ export class RenderEngine {
         uploadBudgetMs: this.opts.uploadBudgetMs,
       });
       if (!this.running || this.rebuilding) {
-        gpu.destroy();
+        const unused = gpu;
+        gpu = undefined;
+        unused.destroy();
         this.host.canvasUnused?.();
         return;
       }
+      // Synchronous from here to the swap: the 2D frame loop never sees the stacks gated for WebGPU, unless
+      // the first draw throws (the catch gives them back to the compositor still drawing).
+      adopted = true;
       this.adoptStacks(gpu);
       this.prepareHeld(gpu);
       this.drawFrame(gpu);
       const old = this.compositor;
       this.compositor = gpu;
+      gpu = undefined;
       this.opts.canvas = canvas;
       this.gpuContextUsed = true;
       this.kind = 'webgpu';
@@ -263,6 +273,16 @@ export class RenderEngine {
       }
       this.host.onRestored?.('webgpu');
     } catch (err) {
+      // The stacks were gated for the new compositor (not ready until it uploads them): Canvas 2D, which
+      // keeps drawing, never uploads, so give them back to it or no flip to a bitmap would ever happen.
+      if (adopted && this.compositor) this.adoptStacks(this.compositor);
+      if (gpu) {
+        try {
+          gpu.destroy();
+        } catch {
+          /* gone */
+        }
+      }
       if (canvas) this.host.canvasUnused?.();
       this.error = `WebGPU still unavailable, using Canvas 2D: ${(err as Error).message}`;
       this.gpuRetrying = false;
@@ -455,6 +475,7 @@ export class RenderEngine {
     for (const l of this.layers) late += l.lateFlips;
     const gpuBytes = this.compositor?.gpuBytes?.();
     const uploadMs = this.compositor?.uploadMs?.();
+    const whole = this.compositor?.wholeUploads?.();
     return {
       presented: this.clock.presented,
       missed: this.clock.missed,
@@ -470,6 +491,7 @@ export class RenderEngine {
       slideFlipAt: this.markerFlipAt,
       ...(gpuBytes !== undefined ? { gpuMB: Math.round(gpuBytes / 1e5) / 10 } : {}),
       ...(uploadMs !== undefined ? { uploadMs } : {}),
+      ...(whole?.count ? { wholeUploads: whole } : {}),
     };
   }
 
@@ -486,14 +508,10 @@ export class RenderEngine {
     const now = this.hubNow();
     const frameMs = this.clock.frameMs;
     this.inputs.now = now;
-    for (let i = 0; i < this.layers.length; i++) this.layers[i]!.tick(now, frameMs);
+    this.tickLayers(now, frameMs, false);
     const c = this.compositor;
     // A flip held for its upload: what fits this frame's budget is uploaded now and flips on time.
-    if (c?.uploadDue?.(this.inputs, now, frameMs))
-      for (let i = 0; i < this.layers.length; i++) {
-        const l = this.layers[i]!;
-        if (l.flipPending) l.tick(now, frameMs);
-      }
+    if (c?.uploadDue?.(this.inputs, now, frameMs)) this.tickLayers(now, frameMs, true);
     if (
       this.markerPending &&
       flipDue(now, this.markerAt, frameMs) &&
@@ -535,6 +553,30 @@ export class RenderEngine {
         this.snapCue = live.key !== '' ? live.cueIndex : this.markerLive;
         createImageBitmap(this.opts.canvas, this.snapOpts).then(this.onSnapDone, this.onSnapFail);
       }
+    }
+  }
+
+  /**
+   * Tick every layer (`pending`: only those with a flip pending). The layers of one cue flip together
+   * (design/27 §7.3): flips due at the same hub time `at` (one GO) wait while any of them is still
+   * uploading its content (`LayerStack.uploadWaiting`), so a new background never shows with the old slide
+   * for the frames the other layer's strips take. Content that has not arrived does not hold the others
+   * (it flips late on its own, as before strips).
+   */
+  private tickLayers(now: number, frameMs: number, pending: boolean): void {
+    /* @hot */
+    const waits = this.waitingAt;
+    let n = 0;
+    for (let i = 0; i < this.layers.length; i++) {
+      const l = this.layers[i]!;
+      if (l.uploadWaiting(now, frameMs)) waits[n++] = l.flipAt;
+    }
+    for (let i = 0; i < this.layers.length; i++) {
+      const l = this.layers[i]!;
+      if (pending && !l.flipPending) continue;
+      let hold = false;
+      for (let k = 0; k < n; k++) if (waits[k] === l.flipAt) hold = true;
+      l.tick(now, frameMs, hold && l.flipPending);
     }
   }
 

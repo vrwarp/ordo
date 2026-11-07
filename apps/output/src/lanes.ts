@@ -8,8 +8,12 @@
  * - **Chains.** Jobs of one chain run one at a time, in rank then arrival order: a layer's content must
  *   reach the renderer in the order its stacks expect it (`LayerStack.offer`), so each layer is a chain. Jobs
  *   of different chains run side by side: one awaiting a file read or a decode (off this thread) never
- *   holds up another. A bulk job starts only while no interactive job is queued or running, so its decodes
- *   do not compete for the cores with theirs.
+ *   holds up another. A bulk job starts only while no interactive job is queued or running.
+ * - **Decodes.** A whole-file decode is the worker's largest allocation (96 MB for a 24 MP photo), so chains
+ *   side by side bound it together: at most `maxDecodes` (2) run at once across chains, the most urgent job
+ *   first, and a bulk job's decode starts only while no interactive job is queued or running, so a warm
+ *   job that started before a GO pauses at its next decode instead of decoding beside the slide job
+ *   (`Steps.decode`).
  * - **Turns.** A job does its synchronous work (preparing a picture band, drawing the slide) in slices
  *   (`Steps.slice`), and each slice waits for its turn: the most urgent waiting slice runs next, in its own
  *   task, after the messages that arrived meanwhile. A props job that arrives while a slide decodes therefore
@@ -58,6 +62,11 @@ export interface Steps {
   slice<T>(fn: () => T): Promise<T>;
   /** Throws `Cancelled` once the job has been cancelled. */
   check(): void;
+  /**
+   * Run a whole-file decode (`fn`) once it may start (see Decodes above): waits for a permit, which a
+   * cancelled job never gets (throws `Cancelled`), and gives it back when `fn` settles.
+   */
+  decode<T>(fn: () => Promise<T>): Promise<T>;
   readonly cancelled: boolean;
   /** The job's timing so far. */
   timing(): JobTiming;
@@ -94,6 +103,8 @@ type Chain = { running?: Entry; queue: Entry[] };
 export type LanesOptions = {
   /** Runs `fn` in a task of its own (default: a MessageChannel message, else setTimeout 0). */
   post?: (fn: () => void) => void;
+  /** Whole-file decodes at once across chains (default 2). */
+  maxDecodes?: number;
   now?: () => number;
   /** A job threw something other than `Cancelled` (its own errors are its business). */
   onError?: (err: unknown, job: LaneJob) => void;
@@ -124,12 +135,19 @@ export class Lanes {
   private pumpPosted = false;
   private seq = 0;
   private idleWaiters: (() => void)[] = [];
+  /** Decodes running, and jobs waiting for a decode permit. */
+  private decoding = 0;
+  private decodeWaiters: Waiter[] = [];
+  /** The most decodes at once so far (tests and the bench). */
+  peakDecodes = 0;
+  readonly maxDecodes: number;
   private readonly post: (fn: () => void) => void;
   private readonly now: () => number;
   private readonly onError: (err: unknown, job: LaneJob) => void;
 
   constructor(opts: LanesOptions = {}) {
     this.post = opts.post ?? defaultPost();
+    this.maxDecodes = Math.max(1, Math.floor(opts.maxDecodes ?? 2));
     this.now = opts.now ?? (() => performance.now());
     this.onError = opts.onError ?? ((err) => console.error('[ordo asset]', err));
   }
@@ -176,13 +194,19 @@ export class Lanes {
         n++;
       }
     }
-    // A cancelled job waiting for its turn unwinds at once.
+    // A cancelled job waiting for its turn or for a decode unwinds at once.
     const left: Waiter[] = [];
     for (const w of this.waiters) {
       if (w.e.cancelled) w.reject(new Cancelled());
       else left.push(w);
     }
     this.waiters = left;
+    const leftDecodes: Waiter[] = [];
+    for (const w of this.decodeWaiters) {
+      if (w.e.cancelled) w.reject(new Cancelled());
+      else leftDecodes.push(w);
+    }
+    this.decodeWaiters = leftDecodes;
     this.settle();
     return n;
   }
@@ -246,8 +270,9 @@ export class Lanes {
     } finally {
       chain.running = undefined;
       this.start(chain);
-      // Bulk work waiting for the interactive jobs may start now.
+      // Bulk work waiting for the interactive jobs may start now, and its decodes.
       for (const c of this.chains.values()) this.start(c);
+      this.grantDecodes();
       this.settle();
     }
   }
@@ -293,6 +318,16 @@ export class Lanes {
       check: () => {
         if (e.cancelled) throw new Cancelled();
       },
+      decode: async <T>(fn: () => Promise<T>): Promise<T> => {
+        await this.decodePermit(e);
+        try {
+          if (e.cancelled) throw new Cancelled();
+          return await fn();
+        } finally {
+          this.decoding--;
+          this.grantDecodes();
+        }
+      },
       get cancelled() {
         return e.cancelled;
       },
@@ -334,6 +369,33 @@ export class Lanes {
     w.e.waited += this.now() - w.at;
     this.busy = true;
     w.resolve();
+  }
+
+  private decodePermit(e: Entry): Promise<void> {
+    if (e.cancelled) return Promise.reject(new Cancelled());
+    return new Promise<void>((resolve, reject) => {
+      this.decodeWaiters.push({ e, at: this.now(), resolve, reject });
+      this.grantDecodes();
+    });
+  }
+
+  /** Hand out decode permits: the most urgent waiting job first; a bulk one only while nothing interactive. */
+  private grantDecodes(): void {
+    while (this.decoding < this.maxDecodes && this.decodeWaiters.length) {
+      let best = -1;
+      for (let i = 0; i < this.decodeWaiters.length; i++) {
+        const a = this.decodeWaiters[i]!.e;
+        if (a.job.rank >= RANK.bulk && this.interactiveBusy()) continue;
+        const b = best >= 0 ? this.decodeWaiters[best]!.e : undefined;
+        if (!b || a.job.rank < b.job.rank || (a.job.rank === b.job.rank && a.seq < b.seq)) best = i;
+      }
+      if (best < 0) return;
+      const w = this.decodeWaiters.splice(best, 1)[0]!;
+      w.e.waited += this.now() - w.at;
+      this.decoding++;
+      if (this.decoding > this.peakDecodes) this.peakDecodes = this.decoding;
+      w.resolve();
+    }
   }
 
   private settle(): void {

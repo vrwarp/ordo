@@ -57,9 +57,13 @@ export function TopBar() {
   const held = enabled.filter((o) => launch.open[o.id]).length;
   const known = enabled.filter((o) => launch.open[o.id] || live.health[o.id]?.connected).length;
   const linkMissing = isLive && held < known;
-  // Things to look at on the screens (missing fonts, characters without a font, performance alarms), in
-  // plain words; the diagnostics view has the figures.
-  const notes = enabled.flatMap((o) => outputIssues(live.health[o.id]).map((i) => `${o.name}: ${i.label}`));
+  // Performance alarms on the screens, in plain words; the diagnostics view has the figures, and the fonts
+  // (nothing a volunteer can do during the service: notes for the tech, not here).
+  const notes = enabled.flatMap((o) =>
+    outputIssues(live.health[o.id])
+      .filter((i) => i.level === 'warn')
+      .map((i) => `${o.name}: ${i.label}`),
+  );
   const red = currentRedState(live);
   // Peak main-thread stall of the last minute as the core worker saw it (250 ms watchdog tick; design/25).
   const stall = live.core?.mainThreadStallMaxMs ?? 0;

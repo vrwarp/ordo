@@ -1,6 +1,7 @@
 import { DEFAULT_LYRIC_STYLE, LOOK_LOWER_THIRD, LOOK_MAIN, type Look, type SlideObject } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
 import {
+  OVERHANG_EM,
   SPRITE_MARGIN,
   coversFrame,
   drawSprite,
@@ -74,13 +75,20 @@ describe('spriteRect', () => {
 describe('reaches', () => {
   const ctx = fakeCtx();
 
-  it('bounds legacy text by its laid-out block and one em, turned with its box', () => {
+  it('bounds legacy text by its laid-out block and the glyph overhang, turned with its box', () => {
+    // 'Hello' is 50 px wide (10 px a glyph), centred in a 400 px box; one 40 px line, centred in 100 px.
     const r = objectReach(ctx, text('Hello', box(100, 100, 400, 100)), 1)!;
-    expect(r.x).toBeLessThanOrEqual(100 - 40);
-    expect(r.y).toBeLessThanOrEqual(100 - 40);
-    expect(r.x + r.w).toBeGreaterThanOrEqual(500 + 40);
+    const m = OVERHANG_EM * 40;
+    const lh = 40 * style.lineHeight;
+    expect(r.x).toBeCloseTo(275 - m);
+    expect(r.w).toBeCloseTo(50 + 2 * m);
+    expect(r.y).toBeCloseTo(150 - lh / 2 - m);
+    expect(r.h).toBeCloseTo(lh + 2 * m);
+    // Nothing of the box itself is drawn: the reach is the text's, not the box's.
+    expect(r.w).toBeLessThan(400);
     const turned = objectReach(ctx, text('Hello', box(100, 100, 400, 100, 90)), 1)!;
     expect(turned.h).toBeGreaterThan(r.h);
+    expect(turned.w).toBeLessThan(r.w);
     // Overflow: a long text in a short box reaches below the box.
     const long = objectReach(ctx, text('word '.repeat(80), box(100, 100, 400, 50)), 1)!;
     expect(long.y + long.h).toBeGreaterThan(150 + 40);
@@ -133,9 +141,11 @@ describe('reaches', () => {
   it("bounds a lyric-only band around the look's band", () => {
     const slide = { id: 's', objects: [text('Amazing grace', box(0, 0, 1900, 1000))] };
     const r = slideReach(ctx, slide, { scale: 1, look: LOOK_LOWER_THIRD, isSong: true })!;
-    const band = (LOOK_LOWER_THIRD.layers.slide as { band: { y: number } }).band;
-    expect(r.y).toBeLessThanOrEqual(band.y);
-    expect(r.y).toBeGreaterThan(band.y - 300);
+    const band = (LOOK_LOWER_THIRD.layers.slide as { band: { y: number; h: number } }).band;
+    // The text's lines within the band (fitted to it), grown by the overhang only.
+    expect(r.y).toBeGreaterThan(band.y - 100);
+    expect(r.y + r.h).toBeLessThan(band.y + band.h + 100);
+    expect(r.h).toBeLessThan(band.h + 100);
   });
 
   it('reaches the frame for a logo, and contain-fitted pictures only their fitted rect', () => {

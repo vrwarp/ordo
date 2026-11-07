@@ -83,18 +83,29 @@ describe('things to check on an output (design/27 §13, M7)', () => {
   });
 
   it('says in plain words what an alarm means, with the figures in the detail', () => {
-    const issues = outputIssues(entry({ ...perf, alarms: ['gpuMemory', 'raster', 'upload', 'later'] }));
-    expect(issues.map((i) => i.id)).toEqual(['gpuMemory', 'raster', 'upload']);
+    const issues = outputIssues(
+      entry({ ...perf, alarms: ['raster', 'upload', 'later'], wholeUploads: { count: 2, maxMs: 9.1 } }),
+    );
+    expect(issues.map((i) => [i.id, i.level])).toEqual([
+      ['raster', 'warn'],
+      ['upload', 'warn'],
+    ]);
     for (const i of issues) {
       // No figures, units or jargon for the volunteer at the desk.
       expect(i.label).not.toMatch(/\d|ms\b|MB|p95|GPU|raster|texture/);
       expect(i.detail.length).toBeGreaterThan(20);
     }
-    expect(issues[0]!.detail).toMatch(/GPU memory 412.4 MB, budget 400 MB/);
-    expect(issues[1]!.detail).toMatch(/p50 12 ms, p95 34 ms over the last 40 slides; budget p95 30 ms/);
-    expect(issues[2]!.detail).toMatch(/up to 5.1 ms in one frame; budget 4 ms/);
-    expect(outputDot(entry({ ...perf, alarms: ['gpuMemory'] }))).toBe('amber');
-    expect(dotTitle(entry({ ...perf, alarms: ['gpuMemory'] }), 'Audience 1')).toMatch(/nearly out of memory/);
+    expect(issues[0]!.detail).toMatch(/p50 12 ms, p95 34 ms over the last 40 slides; budget p95 30 ms/);
+    expect(issues[1]!.detail).toMatch(
+      /up to 5.1 ms of the render worker's time in one frame over the last minute; budget 4 ms/,
+    );
+    expect(issues[1]!.detail).toMatch(/2 frame\(s\) uploaded what was on screen whole .* up to 9.1 ms/);
+    // The label does not blame the graphics card for what the render worker's CPU time shows.
+    expect(issues[1]!.label).toMatch(/^This computer/);
+    expect(outputDot(entry({ ...perf, alarms: ['upload'] }))).toBe('amber');
+    expect(dotTitle(entry({ ...perf, alarms: ['upload'] }), 'Audience 1')).toMatch(/slow to send new slides/);
+    // GPU memory over its budget is no issue (ordo's own fixed allocation; design/27 §13).
+    expect(outputIssues(entry({ ...perf, alarms: ['gpuMemory'] }))).toEqual([]);
   });
 
   it('reports missing fonts and characters no font has', () => {
@@ -104,12 +115,17 @@ describe('things to check on an output (design/27 §13, M7)', () => {
         fontCoverage: { chars: '☧中', count: 3, scripts: ['Hani', 'Zyyy'] },
       }),
     );
-    expect(issues.map((i) => i.id)).toEqual(['fontMissing', 'fontCoverage']);
+    expect(issues.map((i) => [i.id, i.level])).toEqual([
+      ['fontMissing', 'note'],
+      ['fontCoverage', 'note'],
+    ]);
     expect(issues[0]!.detail).toMatch(/Not loaded here: calibri, aptos/);
     expect(issues[1]!.detail).toMatch(
       /3 characters no font of this output has: ☧ 中 … \(scripts Hani, Zyyy\)/,
     );
-    expect(outputDot(entry({ fontFallbacks: ['calibri'] }))).toBe('amber');
+    // Notes for the tech: the dot stays green (nothing to do during the service) and the tooltip lists them.
+    expect(outputDot(entry({ fontFallbacks: ['calibri'] }))).toBe('green');
+    expect(dotTitle(entry({ fontFallbacks: ['calibri'] }), 'Audience 1')).toMatch(/A font is missing/);
     // A red state stays red.
     expect(outputDot(entry({ fontFallbacks: ['calibri'], error: 'decode failed' }))).toBe('red');
   });

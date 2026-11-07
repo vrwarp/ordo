@@ -147,6 +147,35 @@ describe('RenderEngine compositor selection', () => {
     expect(timers).toHaveLength(0);
   });
 
+  it('a retry whose first WebGPU draw throws leaves Canvas 2D flipping (stacks not left gated)', async () => {
+    // A compositor that uploads (drainUploads: the engine gates flips on its uploads) and fails to draw.
+    class ThrowingGpu extends FakeGpu {
+      override draw(_f: FrameInputs): void {
+        throw new Error('device hung');
+      }
+      drainUploads(_f: FrameInputs, _all: boolean): void {}
+    }
+    const failed = new ThrowingGpu();
+    const { engine, events, fire } = makeEngine([new Error('no adapter'), failed]);
+    expect((await engine.start()).kind).toBe('2d');
+    engine.setSnapshot(0, 640, 360);
+    await fire();
+    expect(engine.kind).toBe('2d');
+    expect(failed.destroyed).toBe(true);
+    expect(events).toEqual(['needCanvas', 'canvasUnused']);
+    expect(engine.telemetry().error).toContain('device hung');
+    const slide = engine.layers[1]!;
+    expect(slide.gated).toBe(false);
+    // A GO to a picture still flips on Canvas 2D.
+    const bitmap = { width: 1920, height: 1080, close() {} } as unknown as ImageBitmap;
+    engine.offer(1, { key: 'sl|cue2', kind: 1, bitmap });
+    expect(slide.armedStack.ready).toBe(true);
+    engine.flip(1, 'sl|cue2', engine.hubNow() - 1, 0);
+    (engine as unknown as { onFrame(ts: number): void }).onFrame(16);
+    expect(slide.liveStack.key).toBe('sl|cue2');
+    expect(slide.flipPending).toBe(false);
+  });
+
   it('never retries when Canvas 2D was forced or the retry is disabled', async () => {
     const a = makeEngine([new Error('x')], 0);
     expect((await a.engine.start()).kind).toBe('2d');

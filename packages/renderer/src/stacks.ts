@@ -185,8 +185,25 @@ export class LayerStack<B> {
     this.flipRequestedAt = now;
   }
 
-  /** Returns true if the layer flipped on this frame. */
-  tick(now: number, frameMs: number): boolean {
+  /**
+   * Whether a flip due now waits only for its content's upload (armed, not `ready`): the engine holds the
+   * other flips of the same cue meanwhile, so the cue's layers flip on one frame.
+   */
+  uploadWaiting(now: number, frameMs: number): boolean {
+    /* @hot */
+    if (!this.flipPending || !flipDue(now, this.flipAt, frameMs)) return false;
+    const key = this.flipKey;
+    if (key === '' || key === this.liveStack.key) return false;
+    const a = this.armedStack;
+    if (a.key === key) return !a.ready;
+    return this.hasQueued && this.queued.key === key && this.gated && holdsBitmaps(this.queued);
+  }
+
+  /**
+   * Returns true if the layer flipped on this frame. `hold`: another layer of the same cue is still
+   * uploading (`uploadWaiting`), so a flip that could happen waits too (still counted late if it is).
+   */
+  tick(now: number, frameMs: number, hold = false): boolean {
     /* @hot */
     if (this.fading && now >= this.fadeStart + this.fadeMs) this.endFade();
     if (!this.flipPending || !flipDue(now, this.flipAt, frameMs)) return false;
@@ -212,7 +229,7 @@ export class LayerStack<B> {
     }
     // Not uploaded completely yet (strip uploads): hold the previous content; the flip happens on the first
     // frame after the upload completes (a late flip, as for content that arrives late).
-    if (!this.armedStack.ready) return false;
+    if (!this.armedStack.ready || hold) return false;
     this.live = 1 - this.live;
     this.flipPending = false;
     this.flips++;

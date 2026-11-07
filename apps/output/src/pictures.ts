@@ -249,8 +249,15 @@ export async function preloadPictures<B extends Bitmap>(
             if (src) {
               const down = downscaleFor(src.width, src.height, output.w, output.h);
               if (down) {
-                bmp = await decoder.reduce(src, down.width, down.height);
-                steps.check();
+                const reduced = await decoder.reduce(src, down.width, down.height);
+                try {
+                  steps.check();
+                } catch (err) {
+                  // Cancelled during the reduce (a quick Next): the reduced copy is neither cached nor kept.
+                  reduced.close();
+                  throw err;
+                }
+                bmp = reduced;
               } else {
                 bmp = src;
                 full = undefined; // kept as the source: not closed below

@@ -24,13 +24,15 @@ import type { Stats, VenueReport } from './gpu-venue.page.ts';
  *    On a laptop with two GPUs, run once as is (high-performance adapter requested) and note in the
  *    results which GPU Chrome's chrome://gpu reports.
  * 4. Record in design/14 (bench:venue prints the table row): the adapter line, per size the upload rows
- *    (CPU and GPU ms, frames per upload), the compose rows (GPU ms per frame) and the live rows (missed
- *    frames, late flips, rAF p95/max, uploadMs). The M7 exit: uploads <= 4 ms per frame at 4K with the default strips; GPU time per frame
- *    <= 4 ms at 4K on the iGPU.
- * 5. If uploads exceed 4 ms per frame, lower UPLOAD_FRAME_SHARE (gpu.ts) until they do and record both.
+ *    (CPU ms, and the latency until the queue reports the copies done beside an empty submit's: done minus
+ *    empty bounds the GPU time), the compose rows (GPU ms per frame) and the live rows (missed frames, late
+ *    flips, frames from late content's arrival to its flip, rAF p95/max, uploadMs). The M7 exit: uploads
+ *    <= 4 ms per frame at 4K with the default strips; GPU time per frame <= 4 ms at 4K on the iGPU.
+ * 5. If uploads exceed 4 ms per frame, lower UPLOAD_BUDGET_BYTES (gpu.ts) until they do and record both.
  *
- * Options: --channel <chrome|msedge> | --executable <path>; --headless (no live runs: rAF does not pace a
- * hidden page); --live <seconds> (default 8); --swiftshader (this container: WebGPU on SwiftShader, which
+ * Options: --channel <chrome|msedge> | --executable <path>; --headless (no live runs unless --live is
+ * given: a headless page is not paced by a display, so its live figures only check the script);
+ * --live <seconds> (default 8 when visible); --swiftshader (this container: WebGPU on SwiftShader, which
  * checks the script works but measures the CPU, not a GPU); --out <file>.
  */
 
@@ -43,9 +45,9 @@ const arg = (name: string) => {
 const has = (name: string) => process.argv.includes(name);
 const swiftshader = has('--swiftshader');
 const headless = has('--headless') || swiftshader;
-// A hidden page's rAF is not paced by a display (frames queue on the GPU without bound, measured: the run
-// never ends on SwiftShader): live runs only with a visible window.
-const liveSeconds = headless ? 0 : Math.max(0, Number(arg('--live') ?? 8));
+// A hidden page's rAF is not paced by a display: live runs by default only with a visible window; --live
+// runs them headless too (the figures then check the script, not the display).
+const liveSeconds = Math.max(0, Number(arg('--live') ?? (headless ? 0 : 8)));
 
 async function loadEsbuild(): Promise<typeof import('esbuild')> {
   try {
@@ -114,12 +116,12 @@ async function main(): Promise<number> {
     console.log(`${s.width}x${s.height}`);
     for (const u of s.uploads)
       console.log(
-        `  upload ${u.name}, ${u.budget}: ${u.frames.toFixed(1)} frame(s) each; per frame CPU ${f(u.cpuMs)}; GPU done ${f(u.gpuMs)}`,
+        `  upload ${u.name}, ${u.budget}: ${u.frames.toFixed(1)} frame(s) each; per frame CPU ${f(u.cpuMs)}; done (latency) ${f(u.doneMs)}; empty submit ${f(u.emptyMs)}`,
       );
     for (const c of s.compose) console.log(`  compose ${c.name}: GPU ${f(c.gpuMs)} (${c.source})`);
     for (const l of s.live)
       console.log(
-        `  live ${l.seconds} s, ${l.budget}: presented ${l.presented}, missed ${l.missed}, late flips ${l.lateFlips}, rAF interval ${f(l.intervalMs)}, uploadMs ${l.uploadMs}`,
+        `  live ${l.seconds} s, ${l.budget}: presented ${l.presented}, missed ${l.missed}, late flips ${l.lateFlips}, late content flipped after ${l.lateContentFrames.p50} frame(s) p50 (max ${l.lateContentFrames.max}), rAF interval ${f(l.intervalMs)}, uploadMs ${l.uploadMs}`,
       );
   }
   const out = arg('--out');

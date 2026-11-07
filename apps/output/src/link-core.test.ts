@@ -609,12 +609,16 @@ describe('link worker core', () => {
       frameMs: 1000 / 60,
       compositor: 'webgpu' as const,
       gpuMB: 30,
-      uploadMs: 1,
+      uploadMs: 5,
+      wholeUploads: { count: 1, maxMs: 9 },
     };
     t.render.port2.postMessage({ t: 'telemetry', tel });
     await tick(20);
-    expect(t.core.buildHealth().alarms).toEqual(['gpuMemory']); // 30 MB over the 12 MB of 640x360
-    expect(t.core.buildHealth().uploadMs).toBe(1);
+    // 5 ms over the 4 ms budget; 30 MB over the 12 MB of 640x360 is shown, not an alarm.
+    expect(t.core.buildHealth().alarms).toEqual(['upload']);
+    expect(t.core.buildHealth().uploadMs).toBe(5);
+    expect(t.core.buildHealth().wholeUploads).toEqual({ count: 1, maxMs: 9 });
+    expect(t.core.buildHealth().gpuMB).toBe(30);
     t.close();
   });
 

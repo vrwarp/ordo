@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { KINDS } from '../bench/slides.page.ts';
 import { budgetFor, defaultFonts, runSlides } from '../bench/slides.ts';
+import { SPRITE_MAX_SHARE } from './sprite.ts';
 
 /**
  * The slide raster bench still runs (design/27 §13, M7): a short run in headless Chromium draws every slide
@@ -32,9 +33,14 @@ describe.skipIf(!chromium || !existsSync(fonts.regular) || !existsSync(fonts.bol
         expect(row.firstMs).toBeGreaterThan(0);
       }
       expect(r.rows[0]!.prepareMs).toBeGreaterThan(0); // the photo is prepared for the slide
-      // As the asset worker draws them: these reach most of the frame, so each is drawn full-frame
-      // (bench:sprites measures the layers a sprite shrinks); the scene's over (its title) is a sprite.
-      for (const row of r.rows.slice(0, 3)) expect(row.share).toBe(1);
+      // As the asset worker draws them: the photo slide reaches the whole frame, so it is drawn full-frame;
+      // the six bold lines of the lyric with their shadow reach 84 % of it (its box itself is not painted),
+      // over SPRITE_MAX_SHARE, so it is full-frame too; the table (its grid) is a sprite; the scene's base is
+      // full-frame (its poster) and its over (the title and the footer, at the top and the bottom of the
+      // frame) a sprite.
+      expect(r.rows[0]!.share).toBe(1);
+      expect(r.rows[1]!.share).toBe(1);
+      expect(r.rows[2]!.share).toBeLessThan(SPRITE_MAX_SHARE);
       expect(r.rows[3]!.share).toBeGreaterThan(1);
       expect(r.rows[3]!.share).toBeLessThan(2);
       expect(r.blank.map((b) => b.width)).toEqual([960]);

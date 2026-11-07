@@ -141,6 +141,12 @@ export type TextLayout = {
   fontSize: number;
   lineHeightPx: number;
   block: { x: number; y: number; w: number; h: number };
+  /**
+   * The CSS font and letter spacing (device px) the lines were measured in. `drawText` sets both from the
+   * layout, so a layout from the memo draws in its own font whatever state the context is in.
+   */
+  font: string;
+  letterSpacing: number;
 };
 
 /**
@@ -187,11 +193,14 @@ function layoutTextNow(
   let lines: string[] = [];
   let lineDirs: ('ltr' | 'rtl' | null)[] | null = null;
   let lh = 0;
+  let font = '';
+  const spacing = style.letterSpacing * scale;
   const dirs = paragraphDirections(text);
   const script = legacyScript(text);
   for (;;) {
-    ctx.font = fontString(style, scale, size, script);
-    setLetterSpacing(ctx, style.letterSpacing * scale);
+    font = fontString(style, scale, size, script);
+    ctx.font = font;
+    setLetterSpacing(ctx, spacing);
     if (dirs) ({ lines, dirs: lineDirs } = wrapDirected(ctx, text, innerW, dirs));
     else lines = wrapLines(ctx, text, innerW);
     lh = size * scale * style.lineHeight;
@@ -233,6 +242,8 @@ function layoutTextNow(
     fontSize: size,
     lineHeightPx: lh,
     block: { x: blockX - pad, y: top, w: maxW + 2 * pad, h: Math.max(0, bottom - top) },
+    font,
+    letterSpacing: spacing,
   };
 }
 
@@ -251,6 +262,10 @@ export function drawText(
   ctx.save();
   ctx.globalAlpha = num(opts.opacity, 0, 1, 1);
   const layout = layoutText(ctx, text, style, box, scale, opts.fit ?? false);
+  // The layout may come from the memo (measured on another surface, or before a resize reset the state):
+  // draw in the font it was measured in, not whatever the context holds.
+  ctx.font = layout.font;
+  setLetterSpacing(ctx, layout.letterSpacing);
   // Lines of right-to-left paragraphs are drawn in their direction, left-aligned at their x like every line.
   const directed = layout.lines.some((l) => l.dir);
   const dir0 = directed ? ctx.direction : undefined;

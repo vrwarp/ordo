@@ -31,11 +31,12 @@ const WHITE = { r: 255, g: 255, b: 255, a: 1 };
 const LYRIC =
   'Amazing grace, how sweet the sound\nThat saved a wretch like me\nI once was lost, but now am found\nWas blind, but now I see';
 
-const lyric = (rich: boolean): TextObject => ({
+/** `tag` makes each iteration's text its own (a new slide for the layout memos, as a new job is). */
+const lyric = (rich: boolean, tag = ''): TextObject => ({
   id: 'lyric',
   type: 'text',
   box: { x: 160, y: 120, w: 1600, h: 840, rotation: 0 },
-  text: LYRIC,
+  text: `${LYRIC}${tag}`,
   style: {
     ...DEFAULT_LYRIC_STYLE,
     fontFamily: 'Bench',
@@ -59,52 +60,66 @@ const bandLook: Look = {
   },
 } as Look;
 
-const titleSlide: Slide = {
+const titleSlide = (tag: string): Slide => ({
   id: 'title',
   objects: [
     {
       id: 't',
       type: 'text',
       box: { x: 160, y: 380, w: 1600, h: 320, rotation: 0 },
-      text: 'Welcome to our service\nPlease find a seat',
+      text: `Welcome to our service\nPlease find a seat${tag}`,
       style: { ...DEFAULT_LYRIC_STYLE, fontFamily: 'Bench', fontSizePx: 88, lineModel: 'office' },
       opacity: 1,
     } as TextObject,
   ],
+});
+
+/**
+ * A bench job as the asset worker runs one: `make` builds its content once per job (a fresh object, with
+ * its own text, so neither layout memo holds it yet), and the reach and the draw of a sprite get that same
+ * content (the draw reuses the layout the reach made, as in asset.worker.ts); a full-frame draw gets a
+ * content of its own, laid out once.
+ */
+type Job<T = unknown> = {
+  name: string;
+  make: (tag: string) => T;
+  reach: (c: Ctx2D, scale: number, x: T) => Reach;
+  draw: (c: Ctx2D, scale: number, x: T) => void;
 };
 
-type Job = {
-  name: string;
-  reach: (c: Ctx2D, scale: number) => Reach;
-  draw: (c: Ctx2D, scale: number) => void;
-};
+const job = <T>(j: Job<T>): Job => j as Job;
 
 const JOBS: Job[] = [
-  {
+  job({
     name: 'lyric-only band (legacy text)',
-    reach: (c, s) => slideReach(c, { id: 'a', objects: [lyric(false)] }, { scale: s, look: bandLook }),
-    draw: (c, s) => rasterSlide(c, { id: 'a', objects: [lyric(false)] }, bandLook, s, () => undefined),
-  },
-  {
+    make: (tag): Slide => ({ id: 'a', objects: [lyric(false, tag)] }),
+    reach: (c, s, x) => slideReach(c, x, { scale: s, look: bandLook }),
+    draw: (c, s, x) => rasterSlide(c, x, bandLook, s, () => undefined),
+  }),
+  job({
     name: 'lyric-only band (rich source)',
-    reach: (c, s) => slideReach(c, { id: 'b', objects: [lyric(true)] }, { scale: s, look: bandLook }),
-    draw: (c, s) => rasterSlide(c, { id: 'b', objects: [lyric(true)] }, bandLook, s, () => undefined),
-  },
-  {
+    make: (tag): Slide => ({ id: 'b', objects: [lyric(true, tag)] }),
+    reach: (c, s, x) => slideReach(c, x, { scale: s, look: bandLook }),
+    draw: (c, s, x) => rasterSlide(c, x, bandLook, s, () => undefined),
+  }),
+  job({
     name: 'lower third',
-    reach: (c, s) => lowerThirdReach(c, 'Pastor Anna Smith\nWelcome', LOOK_MAIN, s),
-    draw: (c, s) => rasterLowerThird(c, 'Pastor Anna Smith\nWelcome', LOOK_MAIN, s),
-  },
-  {
+    make: (tag) => `Pastor Anna Smith\nWelcome${tag}`,
+    reach: (c, s, x) => lowerThirdReach(c, x, LOOK_MAIN, s),
+    draw: (c, s, x) => rasterLowerThird(c, x, LOOK_MAIN, s),
+  }),
+  job({
     name: 'authored title (rich, middle of the frame)',
-    reach: (c, s) => slideReach(c, titleSlide, { scale: s, look: LOOK_MAIN }),
-    draw: (c, s) => rasterSlide(c, titleSlide, LOOK_MAIN, s, () => undefined),
-  },
-  {
+    make: titleSlide,
+    reach: (c, s, x) => slideReach(c, x, { scale: s, look: LOOK_MAIN }),
+    draw: (c, s, x) => rasterSlide(c, x, LOOK_MAIN, s, () => undefined),
+  }),
+  job({
     name: 'six-line authored lyric (rich, most of the frame)',
-    reach: (c, s) => slideReach(c, { id: 'c', objects: [lyric(true)] }, { scale: s, look: LOOK_MAIN }),
-    draw: (c, s) => rasterSlide(c, { id: 'c', objects: [lyric(true)] }, LOOK_MAIN, s, () => undefined),
-  },
+    make: (tag): Slide => ({ id: 'c', objects: [lyric(true, tag)] }),
+    reach: (c, s, x) => slideReach(c, x, { scale: s, look: LOOK_MAIN }),
+    draw: (c, s, x) => rasterSlide(c, x, LOOK_MAIN, s, () => undefined),
+  }),
 ];
 
 export type Stats = { p50: number; p95: number };
@@ -161,25 +176,28 @@ export async function bench(set: FontFaceSet, font: ArrayBuffer, iterations: num
       let share = 1;
       let bytes = 0;
       for (let i = 0; i < iterations + 5; i++) {
+        // Each arm draws content of its own, made before its clock starts (the link sends it).
+        const forFull = job.make(` ${width}f${i}`);
+        const forSprite = job.make(` ${width}s${i}`);
         let t = performance.now();
         const c = surface(width, height);
-        job.draw(c, scale);
+        job.draw(c, scale, forFull);
         take().close();
         const f = performance.now() - t;
         t = performance.now();
         // As the asset worker measures: on its surface shrunk to 1x1 (no full-frame backing for a sprite).
         canvas.width = 1;
         canvas.height = 1;
-        const rect = spriteRect(job.reach(ctx, scale), scale, width, height);
+        const rect = spriteRect(job.reach(ctx, scale, forSprite), scale, width, height);
         const tr = performance.now() - t;
-        const d = drawSprite(surface, take, width, height, rect, (x) => job.draw(x, scale));
+        const d = drawSprite(surface, take, width, height, rect, (x) => job.draw(x, scale, forSprite));
         const s = performance.now() - t;
         if (rect && i >= 5) {
-          // Parts: the tight draw and transfer without the edge-ring check.
+          // Parts: the tight draw and transfer without the edge-ring check (its layout held already).
           const t2 = performance.now();
           const c2 = surface(rect.w, rect.h);
           c2.translate(-rect.x, -rect.y);
-          job.draw(c2, scale);
+          job.draw(c2, scale, forSprite);
           take().close();
           parts.reach.push(tr);
           parts.draw.push(performance.now() - t2);
@@ -209,16 +227,17 @@ export async function bench(set: FontFaceSet, font: ArrayBuffer, iterations: num
     const fullBitmaps: ImageBitmap[] = [];
     const spriteBitmaps: { bitmap: ImageBitmap; x: number; y: number }[] = [];
     for (const job of pick) {
+      const content = job.make(' compose');
       const c = surface(width, height);
-      job.draw(c, scale);
+      job.draw(c, scale, content);
       fullBitmaps.push(take());
       const d = drawSprite(
         surface,
         take,
         width,
         height,
-        spriteRect(job.reach(ctx, scale), scale, width, height),
-        (x) => job.draw(x, scale),
+        spriteRect(job.reach(ctx, scale, content), scale, width, height),
+        (x) => job.draw(x, scale, content),
       );
       spriteBitmaps.push(d);
     }

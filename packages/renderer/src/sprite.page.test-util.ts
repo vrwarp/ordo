@@ -11,6 +11,8 @@ import type { PropsModel } from './props.ts';
 import { rasterLowerThird, rasterProps, rasterSlide } from './raster.ts';
 import { rasterScene, rasterSceneSprites } from './scene-raster.ts';
 import { type Reach, drawSprite, lowerThirdReach, propsReach, slideReach, spriteRect } from './sprite.ts';
+import { LEGACY_FONT_ENV, installFontEnv } from './text/fonts.ts';
+import type { FontEnv } from './text/types.ts';
 import type { Ctx2D, ImageLookup } from './text2d.ts';
 
 /**
@@ -25,6 +27,13 @@ import type { Ctx2D, ImageLookup } from './text2d.ts';
  * base and over as sprites and are recomposed the same way. Controls: a reach cut short of what is drawn
  * (text that overflows its box, the box alone as its reach) must be caught by the edge ring and drawn
  * full-frame, and recomposing a sprite one pixel off must differ.
+ *
+ * Run once as drawers ran before the font resolver (`LEGACY_FONT_ENV`, no layout memo) and once with a
+ * resolver-like environment installed (`RESOLVER`: same CSS fonts, but a generation, which turns on the
+ * legacy layout memo in text2d.ts), as the asset worker runs. The reference is always drawn on a fresh
+ * context, so it never comes from the memo; the reach is measured on the surface shrunk to 1x1 and the
+ * sprite drawn after the resize, as the asset worker does; and each layer is drawn a second time on the
+ * same context, which must give the same picture (a memo hit draws in the layout's own font).
  */
 
 const W = 960;
@@ -307,6 +316,9 @@ const CASES: Case[] = [
   },
 ];
 
+/** A resolver-like font environment: the legacy CSS fonts, but with a generation (the memo is on). */
+const RESOLVER: FontEnv = { generation: 1, font: (req) => LEGACY_FONT_ENV.font(req) };
+
 type Surface = { canvas: OffscreenCanvas; ctx: OffscreenCanvasRenderingContext2D };
 
 function makeSurface(): Surface {
@@ -344,26 +356,26 @@ function compare(a: Uint8ClampedArray, b: Uint8ClampedArray): { differing: numbe
   return { differing, max };
 }
 
-/** The draw and reach of a non-scene job. */
+/** The draw and reach (measured on `measure` when asked) of a non-scene job. */
 function drawerOf(
   job: Exclude<Kind, { kind: 'scene' }>,
   measure: Ctx2D,
-): { reach: Reach; draw: (c: Ctx2D) => void } {
+): { reach: () => Reach; draw: (c: Ctx2D) => void } {
   if (job.kind === 'slide') {
     const opts = { nextSlide: job.nextSlide, isSong: job.isSong ?? true };
     return {
-      reach: slideReach(measure, job.slide, { scale: SCALE, look: job.look, ...opts }),
+      reach: () => slideReach(measure, job.slide, { scale: SCALE, look: job.look, ...opts }),
       draw: (c) => rasterSlide(c, job.slide, job.look, SCALE, images, opts),
     };
   }
   if (job.kind === 'lowerThird')
     return {
-      reach: lowerThirdReach(measure, job.text, job.look, SCALE),
+      reach: () => lowerThirdReach(measure, job.text, job.look, SCALE),
       draw: (c) => rasterLowerThird(c, job.text, job.look, SCALE),
     };
   const model = { key: 'props', empty: false, items: job.items } as PropsModel;
   return {
-    reach: propsReach(measure, model, SCALE),
+    reach: () => propsReach(measure, model, SCALE),
     draw: (c) => rasterProps(c, model, SCALE, images, { r: 0, g: 0, b: 0, a: 1 }),
   };
 }
@@ -376,17 +388,19 @@ function run(k: Case): CaseResult {
   const take = () => s.canvas.transferToImageBitmap();
   if (k.job.kind === 'scene') {
     const job = k.job;
-    // The M5 scene parts (full-frame) against the tight ones placed at their offsets.
+    // The M5 scene parts (full-frame, on a fresh context) against the tight ones placed at their offsets.
+    const fresh = makeSurface();
     const ref = rasterScene(
-      s.ctx,
-      () => s.canvas.transferToImageBitmap(),
+      fresh.ctx,
+      () => fresh.canvas.transferToImageBitmap(),
       job.slide,
       LOOK_MAIN,
       SCALE,
       images,
       'vid',
     );
-    if (ref) surface(W, H);
+    s.canvas.width = 1;
+    s.canvas.height = 1;
     const tight = rasterSceneSprites(
       s.ctx,
       surface,
@@ -415,12 +429,15 @@ function run(k: Case): CaseResult {
     check('the same plane', planes);
     return { name: k.name, checks };
   }
+  // Reference on a fresh context; then, as the asset worker: the reach on the surface shrunk to 1x1, the
+  // sprite drawn after the resize.
+  const fresh = makeSurface();
   const { reach, draw } = drawerOf(k.job, s.ctx);
-  const full = surface(W, H);
-  draw(full);
-  const want = full.getImageData(0, 0, W, H).data;
-  take().close();
-  const rect = spriteRect(reach, SCALE, W, H);
+  draw(fresh.ctx);
+  const want = fresh.ctx.getImageData(0, 0, W, H).data;
+  s.canvas.width = 1;
+  s.canvas.height = 1;
+  const rect = spriteRect(reach(), SCALE, W, H);
   const got = drawSprite(surface, take, W, H, rect, draw);
   check(k.tight ? 'tight' : 'full-frame', got.tight === k.tight, `rect ${JSON.stringify(rect)}`);
   check('nothing touched the edge ring', !got.missed);
@@ -437,6 +454,12 @@ function run(k: Case): CaseResult {
   }
   const d = compare(placedPixels([got]), want);
   check('the sprite at its offset is the full-frame picture', same(d), `${d.differing} px, max ${d.max}`);
+  // Drawn again on the same context, full-frame: the same picture (a layout memo hit draws in its font).
+  const again = surface(W, H);
+  draw(again);
+  const twice = compare(again.getImageData(0, 0, W, H).data, want);
+  check('drawn again on the same context, the same picture', same(twice), `${twice.differing} px`);
+  take().close();
   return { name: k.name, checks };
 }
 
@@ -451,9 +474,10 @@ function shortReach(): CaseResult {
     objects: [text('t', LONG, box(300, 120, 900, 120), { fontSizePx: 48 })],
   };
   const draw = (c: Ctx2D) => rasterSlide(c, slide, LOOK_MAIN, SCALE, images, {});
-  const full = surface(W, H);
-  draw(full);
-  const want = full.getImageData(0, 0, W, H).data;
+  const fresh = makeSurface();
+  draw(fresh.ctx);
+  const want = fresh.ctx.getImageData(0, 0, W, H).data;
+  draw(surface(W, H));
   take().close();
   const got = drawSprite(
     surface,
@@ -469,4 +493,11 @@ function shortReach(): CaseResult {
   return { name: 'control: a reach cut short', checks };
 }
 
-(window as unknown as { __sprites: () => CaseResult[] }).__sprites = () => [...CASES.map(run), shortReach()];
+(window as unknown as { __sprites: (env?: 'resolver') => CaseResult[] }).__sprites = (env) => {
+  installFontEnv(env === 'resolver' ? RESOLVER : LEGACY_FONT_ENV);
+  try {
+    return [...CASES.map(run), shortReach()];
+  } finally {
+    installFontEnv(LEGACY_FONT_ENV);
+  }
+};

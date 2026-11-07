@@ -42,7 +42,8 @@ describe('performance and fonts in the diagnostics view', () => {
         uploadMs: 2.5,
         rasterMs: { n: 40, p50: 12, p95: 18, max: 30 },
         budgets: { rasterP95Ms: 30, uploadMs: 4, gpuMB: 400 },
-        alarms: ['gpuMemory'],
+        alarms: ['upload'],
+        wholeUploads: { count: 3, maxMs: 8.8 },
         fontCoverage: { chars: '☧', count: 1, scripts: ['Zyyy'] },
       }),
       o2: entry({ outputId: 'o2', compositor: '2d', budgets: { rasterP95Ms: 10, uploadMs: 4, gpuMB: 100 } }),
@@ -54,14 +55,15 @@ describe('performance and fonts in the diagnostics view', () => {
     const a = row('o1');
     expect(a).toContain('12 / 18 ms');
     expect(a).toContain('(p95 ≤ 30 ms)');
-    expect(a).toContain('2.5 ms');
-    expect(a).toMatch(/color:var\(--amber\)">412.4 MB/);
+    expect(a).toMatch(/color:var\(--amber\)">2.5 ms/);
+    expect(a).toContain('whole: 3×, up to 8.8 ms');
+    // GPU memory is shown against its budget, never in amber (no alarm: a fixed allocation).
+    expect(a).toContain('<td>412.4 MB');
     expect(a).toContain('(≤ 400 MB)');
     expect(a).toContain('1 character(s) without a font');
-    expect(a).toContain('data-issue="gpuMemory"');
-    expect(a).toContain('The graphics card of this screen is nearly out of memory');
-    expect(a).toContain('GPU memory 412.4 MB, budget 400 MB');
-    expect(a).toContain('data-issue="fontCoverage"');
+    expect(a).toContain('data-issue="upload" data-level="warn"');
+    expect(a).toContain('This computer is slow to send new slides to the screen');
+    expect(a).toContain('data-issue="fontCoverage" data-level="note"');
     const b = row('o2');
     expect(b).toContain('none (2D)');
     expect(b).toContain('>ok<');

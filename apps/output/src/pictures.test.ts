@@ -305,6 +305,28 @@ describe('preloadPictures in the raster lanes (design/27 §7.5)', () => {
     expect(fresh.size).toBe(1);
   });
 
+  it('closes the reduced source when the job is cancelled during the reduce', async () => {
+    const cache = new BitmapCache<Bmp>(DEFAULT_BITMAP_BUDGET, 64);
+    const { d, made } = decoder();
+    const stop = counting();
+    const slow: PictureDecoder<Bmp> = {
+      ...d,
+      async reduce(src, w, h) {
+        const b = await d.reduce(src, w, h);
+        stop.cancel(); // cancelled while the reduce ran (a quick Next)
+        return b;
+      },
+    };
+    // A logo with no target: drawn from its source, reduced to cover the output.
+    await expect(
+      preloadPictures(cache, slow, { logo: 'h1' }, undefined, OUT, undefined, stop.steps),
+    ).rejects.toBeInstanceOf(Cancelled);
+    expect(made.filter((b) => b.what === 'reduced')).toHaveLength(1);
+    expect(made.every((b) => b.closed)).toBe(true);
+    expect(cache.size).toBe(0);
+    expect(cache.pinnedCount).toBe(0);
+  });
+
   it('a cancellation during a decode is not a decode failure', async () => {
     const cache = new BitmapCache<Bmp>(DEFAULT_BITMAP_BUDGET, 64);
     const { d, made } = decoder();

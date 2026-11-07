@@ -18,13 +18,16 @@ const MAX_REPORTED_CHARS = 64;
 export type DoneTiming = { key: string; ms: number; rasterMs?: number; uncovered?: string };
 
 /** The performance figures of a health report. */
-type Perf = Pick<OutputHealth, 'gpuMB' | 'rasterMs' | 'uploadMs' | 'budgets' | 'alarms' | 'fontCoverage'>;
+type Perf = Pick<
+  OutputHealth,
+  'gpuMB' | 'rasterMs' | 'uploadMs' | 'wholeUploads' | 'budgets' | 'alarms' | 'fontCoverage'
+>;
 
 const ALARM_TEXT: Record<PerfAlarm, (h: Perf) => string> = {
-  gpuMemory: (h) => `GPU memory ${h.gpuMB} MB is over the ${h.budgets?.gpuMB} MB budget`,
   raster: (h) =>
     `slide raster p95 ${h.rasterMs?.p95} ms is over the ${h.budgets?.rasterP95Ms} ms budget (p50 ${h.rasterMs?.p50} ms, ${h.rasterMs?.n} slides)`,
-  upload: (h) => `texture upload ${h.uploadMs} ms per frame is over the ${h.budgets?.uploadMs} ms budget`,
+  upload: (h) =>
+    `texture upload in strips ${h.uploadMs} ms per frame (last minute) is over the ${h.budgets?.uploadMs} ms budget`,
 };
 
 export class PerfHealth {
@@ -109,7 +112,7 @@ export function perfDiagnostics(h: Perf): Record<string, string> {
       : '-',
     upload:
       h.uploadMs !== undefined
-        ? `${h.uploadMs} ms per frame at most${b ? ` (budget ${b.uploadMs} ms)` : ''}`
+        ? `${h.uploadMs} ms per frame at most in strips, last minute${b ? ` (budget ${b.uploadMs} ms)` : ''}${h.wholeUploads?.count ? `; whole by design ${h.wholeUploads.count}x, up to ${h.wholeUploads.maxMs} ms` : ''}`
         : '-',
     gpuBudget: b ? `${b.gpuMB} MB` : '-',
     alarms: h.alarms?.length ? h.alarms.join(', ') : 'none',

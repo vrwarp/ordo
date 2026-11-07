@@ -38,8 +38,13 @@ export const OutputHealth = z.object({
   gpuMB: z.number().min(0).max(1e6).optional(),
   /** Slide raster times of the asset worker over the last slides it drew, ms (design/27 §13). */
   rasterMs: z.object({ n: z.number(), p50: z.number(), p95: z.number(), max: z.number() }).optional(),
-  /** The longest per-frame texture upload of the render worker over its last uploading frames, CPU ms (WebGPU). */
+  /** The longest per-frame texture upload in budgeted strips over the last minute, render worker CPU ms (WebGPU). */
   uploadMs: z.number().min(0).max(1e6).optional(),
+  /**
+   * Frames that uploaded content on screen whole by design (a refresh of the live slide, recovery after a
+   * device loss) and the longest of the last minute, ms: for the tech, never an alarm.
+   */
+  wholeUploads: z.object({ count: z.number().min(0), maxMs: z.number().min(0).max(1e6) }).optional(),
   /** This output's performance budgets at its size (design/27 §13): raster p95, upload per frame, GPU memory. */
   budgets: z.object({ rasterP95Ms: z.number(), uploadMs: z.number(), gpuMB: z.number() }).optional(),
   /**

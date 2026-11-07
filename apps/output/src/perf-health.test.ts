@@ -41,13 +41,13 @@ describe('performance health in the link (design/27 §13, M7)', () => {
 
   it('logs an alarm when it starts and when it ends', () => {
     const p = new PerfHealth();
-    const h = { gpuMB: 412.5, budgets: { rasterP95Ms: 30, uploadMs: 4, gpuMB: 400 }, alarms: ['gpuMemory'] };
+    const h = { uploadMs: 5.5, budgets: { rasterP95Ms: 30, uploadMs: 4, gpuMB: 400 }, alarms: ['upload'] };
     expect(p.alarmChanges(h, '3840x2160')).toEqual([
-      'performance alarm at 3840x2160: GPU memory 412.5 MB is over the 400 MB budget',
+      'performance alarm at 3840x2160: texture upload in strips 5.5 ms per frame (last minute) is over the 4 ms budget',
     ]);
     expect(p.alarmChanges(h, '3840x2160')).toEqual([]);
     expect(p.alarmChanges({ ...h, alarms: undefined }, '3840x2160')).toEqual([
-      'performance alarm over: gpuMemory',
+      'performance alarm over: upload',
     ]);
     expect(p.alarmChanges({ alarms: ['newer'] }, '1920x1080')).toEqual([
       'performance alarm at 1920x1080: newer',
@@ -59,12 +59,14 @@ describe('performance health in the link (design/27 §13, M7)', () => {
       perfDiagnostics({
         rasterMs: { n: 30, p50: 4, p95: 9.5, max: 12 },
         uploadMs: 1.2,
+        wholeUploads: { count: 2, maxMs: 3.1 },
         budgets: { rasterP95Ms: 10, uploadMs: 4, gpuMB: 100 },
         fontCoverage: { chars: '中', count: 1, scripts: ['Hani'] },
       }),
     ).toEqual({
       raster: 'slides p50 4 ms, p95 9.5 ms, max 12 ms over 30 (budget p95 10 ms)',
-      upload: '1.2 ms per frame at most (budget 4 ms)',
+      upload:
+        '1.2 ms per frame at most in strips, last minute (budget 4 ms); whole by design 2x, up to 3.1 ms',
       gpuBudget: '100 MB',
       alarms: 'none',
       glyphs: '1 without a font: 中 (Hani)',

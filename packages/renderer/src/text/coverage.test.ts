@@ -88,6 +88,27 @@ describe('glyph coverage', () => {
     expect(f.calls.length).toBe(probes);
   });
 
+  it('probes a bounded number of new characters per call (slices of the asset worker)', () => {
+    const f = fakeFonts({ o11111111: 'abcdefgh' });
+    const cov = new GlyphCoverage(f.metrics);
+    const ctx = recorder('40px o11111111, sans-serif');
+    cov.instrument(ctx);
+    cov.begin();
+    ctx.fillText('abcdefgh☧', 0, 0);
+    const drawn = cov.end();
+    expect(cov.probeSome(drawn, 0)).toBe(false); // lookups only: nothing probed
+    expect(f.calls).toHaveLength(0);
+    expect(cov.probeSome(drawn, 4)).toBe(false);
+    const after4 = f.calls.length;
+    expect(after4).toBe(4 * 2);
+    expect(cov.probeSome(drawn, 4)).toBe(false);
+    expect(cov.probeSome(drawn, 4)).toBe(true); // the ninth, ☧
+    const probes = f.calls.length;
+    expect(cov.probeSome(drawn, 0)).toBe(true);
+    expect(cov.misses(drawn)).toBe('☧');
+    expect(f.calls.length).toBe(probes); // misses after probeSome: lookups only
+  });
+
   it('probes with the stack, the style and the weight, before two generics and each alone', () => {
     const f = fakeFonts({ o11111111: 'a' });
     const cov = new GlyphCoverage(f.metrics);
