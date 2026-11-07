@@ -477,8 +477,12 @@ function supportReasons(
 ): { residual: string[]; approx: string[] } {
   const residual: string[] = [];
   const approx: string[] = [];
-  // A metafile waits for conversion (approx); every other residual element is residual.
-  if (e.kind === 'residual') (e.what === 'metafile' ? approx : residual).push(e.what);
+  // A metafile waits for conversion (approx); every other residual element is residual, for the budget
+  // the reader found it past when there is one (`tables.ts`: a table of more cells than a slide's objects).
+  if (e.kind === 'residual')
+    (e.what === 'metafile' ? approx : residual).push(
+      e.reasons?.find((r) => r.startsWith('budget:')) ?? e.what,
+    );
   const part = picturePart(e);
   const ext = part === undefined ? '' : extOf(part);
   if (ext === 'wdp' || ext === 'hdp') residual.push(`pic:${ext}`);

@@ -5,9 +5,11 @@
  * Reading (`readTable`):
  * - **Grid.** Column widths from `a:tblGrid`, rows from `a:tr h`. One `a:tc` per grid column; `gridSpan`
  *   and `rowSpan` merge, the cells they cover (`hMerge`, `vMerge`) are not drawn. Spans are cut at the
- *   grid. A table of more than `MAX_TABLE_CELLS` drawn cells (a merge once) stays residual (LibreOffice
- *   draws it into the art), and so does one with vertical cell text (until M8, as other vertical text);
- *   one of more than `MAX_TABLE_GRID` grid cells is not read.
+ *   grid. A table with vertical cell text stays residual (until M8, as other vertical text; LibreOffice
+ *   draws it into the art), and so does one of more drawn cells (a merge once) than a slide may have
+ *   objects (`MAX_TABLE_CELLS`: each cell is one, so it could never be drawn natively; 'budget:table'). One
+ *   of more than `MAX_TABLE_GRID` grid cells is not read. Below that, the slide's budgets decide
+ *   (`classify.ts` `fitTables`, the 64 KB of text formatting).
  * - **Style.** `a:tableStyleId` names a style of `ppt/tableStyles.xml`, else one of PowerPoint's built-in
  *   styles (`tablestyles.ts`, LibreOffice's table); `a:tblPr/a:tableStyle` is an inline one. Its parts apply
  *   to a cell in `CT_TableStyle` order, a later part overriding what an earlier one set: whole table, row
@@ -45,13 +47,14 @@
  * older build draws the table as this one does. With `TableEmitCtx.lo` (the harness only) the columns, the
  * rows, the cells' sizes and the text's placement are LibreOffice's (`TableElement.lo`).
  *
- * Bounded: at most `MAX_TABLE_GRID` grid cells are read and `MAX_TABLE_CELLS` cells measured,
- * `MAX_GRID_SCAN` children of the grid and the table are looked at, `MAX_STYLE_SCAN` styles of
- * `ppt/tableStyles.xml`; deck strings only reach notes cleaned.
+ * Bounded: at most `MAX_TABLE_GRID` grid cells are read and `MAX_TABLE_CELLS` cells measured (the
+ * measure is linear in the cells), `MAX_GRID_SCAN` children of the grid and the table are looked at,
+ * `MAX_STYLE_SCAN` styles of `ppt/tableStyles.xml`; deck strings only reach notes cleaned.
  */
 import type { Rgba as OrdoRgba, ShapeObject, SlideObject, TextObject } from '@ordo/domain';
 import { DEFAULT_FONT } from '@ordo/domain/defaults.ts';
 import { type ColorCtx, colorIn, readFill, styleFill } from './color.ts';
+import { MAX_SLIDE_OBJECTS } from './classify.ts';
 import type { SlideCtx } from './context.ts';
 import { scriptClasses, scriptFallbacks, substituteOf } from './fontmap.ts';
 import { apply, boxPx, lenPx, multiply, ptPx } from './frame.ts';
@@ -80,10 +83,12 @@ import { child, num, path, textOf, type XNode } from './xml.ts';
 
 /**
  * Cells a table drawn natively may have (design/27 §15 M6), counted as drawn: a merge is one cell, the
- * cells it covers none. A table with more stays residual; the slide's object and text budgets
- * (`classify.ts` `fitTables`, the 64 KB of text) decide the rest.
+ * cells it covers none. Each drawn cell is one object, so a table with more passes the slide's object
+ * budget on its own: it stays residual ('budget:table') and is never measured. Below it the slide's
+ * object and text budgets decide (`classify.ts` `fitTables`, which weighs the table against the slide's
+ * other objects, and `emit.ts` `MAX_SLIDE_BYTES`).
  */
-export const MAX_TABLE_CELLS = 60;
+export const MAX_TABLE_CELLS = MAX_SLIDE_OBJECTS;
 /**
  * Grid cells (rows × columns, covered ones included) a table is read with at most; a larger one stays
  * residual.
@@ -192,7 +197,8 @@ export function readTable(
       }
   if (anchors.length > MAX_TABLE_CELLS)
     return residual(
-      `a table of ${anchors.length} cells (more than ${MAX_TABLE_CELLS}) is drawn by LibreOffice`,
+      `a table of ${anchors.length} cells passes the slide's budget of ${MAX_SLIDE_OBJECTS} objects: LibreOffice draws it`,
+      'budget:table',
     );
 
   const tcPrOf = (a: Anchor) => child(a.tc, 'a:tcPr');
