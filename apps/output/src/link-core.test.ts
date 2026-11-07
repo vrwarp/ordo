@@ -102,7 +102,7 @@ function setup(deps: Partial<ConstructorParameters<typeof LinkCore>[0]> = {}) {
     asset.port1.close();
     asset.port2.close();
   };
-  return { core, hub, link, sent, posts, toRender, toAsset, asset, close };
+  return { core, hub, link, sent, posts, toRender, toAsset, asset, render, close };
 }
 
 const tick = (ms = 10) => new Promise((r) => setTimeout(r, ms));
@@ -552,6 +552,76 @@ describe('link worker core', () => {
     t.close();
   });
 
+  it('reports slide raster times, characters without a face and the budgets in health (design/27 §13)', async () => {
+    const t = setup();
+    await t.core.start();
+    t.hub.emit('state', stateMsg(slideLive(0)));
+    await tick(30);
+    const job = t.toAsset.find((m) => m.t === 'job' && m.job.kind === 'slide' && m.job.cueIndex === 0);
+    const key = job!.t === 'job' ? job!.job.key : '';
+    t.asset.port2.postMessage({
+      t: 'done',
+      layer: 1,
+      key,
+      ms: 80,
+      rasterMs: 7.5,
+      uncovered: '中☧',
+    } satisfies FromAsset);
+    t.asset.port2.postMessage({
+      t: 'done',
+      layer: 4,
+      key: 'props|x',
+      ms: 2,
+      rasterMs: 1,
+    } satisfies FromAsset);
+    await tick(20);
+    const h = t.core.buildHealth();
+    expect(h.rasterMs).toEqual({ n: 1, p50: 7.5, p95: 7.5, max: 7.5 });
+    expect(h.budgets).toEqual({ rasterP95Ms: 10, uploadMs: 4, gpuMB: 12 }); // the 640x360 test output
+    expect(h.alarms).toBeUndefined();
+    expect(h.fontCoverage).toEqual({ chars: '☧中', count: 2, scripts: ['Hani', 'Zyyy'] });
+    expect(h.recentLog!.some((l) => /no font on this output has 2 character\(s\)/.test(l))).toBe(true);
+    // A face that becomes available may have them: the held slide is drawn again in place.
+    t.toAsset.length = 0;
+    t.asset.port2.postMessage({
+      t: 'fonts',
+      loaded: 3,
+      failed: [],
+      ready: ['noto sans cjk sc'],
+    } satisfies FromAsset);
+    await tick(30);
+    const again = t.toAsset.find((m) => m.t === 'job' && m.job.kind === 'slide' && m.job.key === key);
+    expect(again!.t === 'job' && again!.job.kind === 'slide' ? again!.job.refresh : undefined).toBe(true);
+    expect(t.core.buildHealth().fontCoverage).toBeUndefined();
+    t.close();
+  });
+
+  it("raises the GPU memory alarm past the budget of the output's size and carries the upload time", async () => {
+    const t = setup();
+    await t.core.start();
+    const tel = {
+      presented: 1,
+      missed: 0,
+      lateFlips: 0,
+      longTasks: 0,
+      gpuLost: 0,
+      fps: 60,
+      frameMs: 1000 / 60,
+      compositor: 'webgpu' as const,
+      gpuMB: 30,
+      uploadMs: 5,
+      wholeUploads: { count: 1, maxMs: 9 },
+    };
+    t.render.port2.postMessage({ t: 'telemetry', tel });
+    await tick(20);
+    // 5 ms over the 4 ms budget; 30 MB over the 12 MB of 640x360 is shown, not an alarm.
+    expect(t.core.buildHealth().alarms).toEqual(['upload']);
+    expect(t.core.buildHealth().uploadMs).toBe(5);
+    expect(t.core.buildHealth().wholeUploads).toEqual({ count: 1, maxMs: 9 });
+    expect(t.core.buildHealth().gpuMB).toBe(30);
+    t.close();
+  });
+
   it('asks the asset worker to retry failed fonts after a complete cache fill', async () => {
     const t = setup({ fetchNetwork: async () => new Blob([new Uint8Array(10)]) });
     await t.core.start();
@@ -804,5 +874,177 @@ describe('link worker core', () => {
       );
     }
     t.close();
+  });
+
+  describe('raster lanes (design/27 §7.5): roles, warm work, superseded jobs, timing', () => {
+    /** A talk of four picture slides, live at its first, armed at its second. */
+    function pictureDeck() {
+      const s0 = liveState();
+      const r = s0.resolved!;
+      const picture = (id: string): Media => ({
+        id,
+        rev: 1,
+        name: id,
+        tags: [],
+        kind: 'image',
+        original: { hash: `${id}-file`, bytes: 10, mime: 'image/jpeg', path: `files/${id}-file` },
+        state: 'ready',
+        loop: false,
+        isBackground: false,
+      });
+      const ids = ['p0', 'p1', 'p2', 'p3'];
+      const talk = r.presentations.talk!;
+      const slides = ids.map((id) => ({
+        id: `slide-${id}`,
+        objects: [
+          {
+            id: `img-${id}`,
+            type: 'image' as const,
+            box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+            mediaId: id,
+            fit: 'cover' as const,
+            opacity: 1,
+            radius: 0,
+          },
+        ],
+      }));
+      const resolved = {
+        ...r,
+        media: { ...r.media, ...Object.fromEntries(ids.map((id) => [id, picture(id)])) },
+        presentations: {
+          ...r.presentations,
+          talk: { ...talk, sections: [{ ...talk.sections[0]!, slides }] },
+        },
+      };
+      const cues = expandCues(resolved);
+      const first = cues.findIndex((c) => c.slideId === 'slide-p0');
+      const at = (live: number, armed: number | undefined, seq: number): LiveState => {
+        const base = slideLive(0);
+        return {
+          ...base,
+          seq,
+          cues,
+          live,
+          armed,
+          resolved,
+          layers: {
+            ...base.layers,
+            background: { content: null, at: 0, seq: 0 },
+            slide: {
+              content: {
+                kind: 'slide',
+                cueIndex: live,
+                presentationId: 'talk',
+                slideId: cues[live]!.slideId!,
+              },
+              at: 1000,
+              seq,
+            },
+          },
+        };
+      };
+      return { cues, first, at };
+    }
+    const jobs = (t: ReturnType<typeof setup>) =>
+      t.toAsset.flatMap((m) => (m.t === 'job' && m.job.kind === 'slide' ? [{ ...m.job, role: m.role }] : []));
+
+    it('sends the live cue’s layers as live and the armed cue’s as armed, and warms the cue after', async () => {
+      const t = setup();
+      await t.core.start();
+      const d = pictureDeck();
+      t.hub.emit('state', stateMsg(d.at(d.first, d.first + 1, 20)));
+      await tick(30);
+      const sl = jobs(t);
+      expect(sl.find((j) => j.cueIndex === d.first)?.role).toBe('live');
+      expect(sl.find((j) => j.cueIndex === d.first + 1)?.role).toBe('armed');
+      const warms = t.toAsset.flatMap((m) => (m.t === 'warm' ? [m.warm] : []));
+      expect(warms).toHaveLength(1);
+      expect(warms[0]!.key).toMatch(/^wm\|/);
+      expect(warms[0]!.slide?.id).toBe('slide-p2');
+      expect(warms[0]!.images).toEqual({ p2: 'p2-file' });
+      // Answered: not sent again by the next sync; GO moves it on to the next cue, nothing to cancel.
+      t.asset.port2.postMessage({
+        t: 'warmed',
+        key: warms[0]!.key,
+        ms: 40,
+        waitMs: 2,
+        busyMs: 12,
+        longestMs: 9,
+        decodes: 1,
+      } satisfies FromAsset);
+      await tick(10);
+      t.core.sync();
+      expect(t.toAsset.filter((m) => m.t === 'warm')).toHaveLength(1);
+      t.toAsset.length = 0;
+      t.hub.emit('state', stateMsg(d.at(d.first + 1, d.first + 2, 21)));
+      await tick(30);
+      const next = t.toAsset.flatMap((m) => (m.t === 'warm' ? [m.warm] : []));
+      expect(next.map((w) => w.slide?.id)).toEqual(['slide-p3']);
+      const cancels = t.toAsset.flatMap((m) => (m.t === 'cancel' ? m.keys : []));
+      expect(cancels.some((k) => k.startsWith('wm|'))).toBe(false);
+      expect((t.core.telemetry() as { lanes: { bulk: { jobs: number } } }).lanes.bulk.jobs).toBe(1);
+      t.close();
+    });
+
+    it('cancels the jobs no plan needs any more, and sends a key needed again anew', async () => {
+      const t = setup();
+      await t.core.start();
+      const d = pictureDeck();
+      t.hub.emit('state', stateMsg(d.at(d.first, d.first + 1, 30)));
+      await tick(30);
+      const armedKey = jobs(t).find((j) => j.cueIndex === d.first + 1)!.key;
+      const liveKey = jobs(t).find((j) => j.cueIndex === d.first)!.key;
+      const warmKey = t.toAsset.flatMap((m) => (m.t === 'warm' ? [m.warm.key] : []))[0]!;
+      t.toAsset.length = 0;
+      // The operator arms another cue before the armed job was answered.
+      t.hub.emit('state', stateMsg(d.at(d.first, d.first + 3, 31)));
+      await tick(30);
+      const cancels = t.toAsset.flatMap((m) => (m.t === 'cancel' ? m.keys : []));
+      expect(cancels).toContain(armedKey);
+      expect(cancels).toContain(warmKey); // the cue after the armed one moved too
+      expect(cancels).not.toContain(liveKey);
+      expect(cancels.some((k) => k.startsWith('pr|'))).toBe(false);
+      expect(jobs(t).map((j) => j.cueIndex)).toContain(d.first + 3);
+      expect((t.core.introspect() as { inflight: string[] }).inflight).not.toContain(armedKey);
+      // Back to the first armed cue: its job is sent again, not taken for in flight.
+      t.toAsset.length = 0;
+      t.hub.emit('state', stateMsg(d.at(d.first, d.first + 1, 32)));
+      await tick(30);
+      expect(jobs(t).map((j) => j.key)).toContain(armedKey);
+      expect((t.core.telemetry() as { lanes: { cancelled: number } }).lanes.cancelled).toBeGreaterThanOrEqual(
+        3,
+      );
+      t.close();
+    });
+
+    it('keeps the lane timing the asset worker reports, by lane', async () => {
+      const t = setup();
+      await t.core.start();
+      for (let i = 0; i < 20; i++)
+        t.asset.port2.postMessage({
+          t: 'done',
+          layer: 4,
+          key: `pr|${i}`,
+          ms: 5,
+          lane: 'interactive',
+          waitMs: i,
+          busyMs: 2,
+          longestMs: i % 5,
+        } satisfies FromAsset);
+      await tick(20);
+      const lanes = (t.core.telemetry() as { lanes: Record<string, Record<string, number>> }).lanes;
+      expect(lanes.interactive).toMatchObject({
+        jobs: 20,
+        waitP50: 9,
+        waitP95: 18,
+        busyP95: 2,
+        longestMs: 4,
+      });
+      expect(lanes.bulk!.jobs).toBe(0);
+      expect(
+        String((t.core as unknown as { diagnostics(): Record<string, unknown> }).diagnostics().rasterLanes),
+      ).toMatch(/interactive 20 jobs, wait p95 18 ms/);
+      t.close();
+    });
   });
 });

@@ -72,13 +72,20 @@ export type AssetToRender = {
   key: string;
   /** SRC_BITMAP, or SRC_SCENE for a slide whose video plays in its box (design/27 §7.2). */
   kind: number;
-  /** The picture; for SRC_SCENE the base. */
+  /** The picture; for SRC_SCENE the base. Full-frame, or a tight sprite at `x`, `y` (design/27 §7.3). */
   bitmap: ImageBitmap;
+  /** Device px offset of a tight `bitmap` in the frame (absent: 0, a full-frame bitmap). */
+  x?: number;
+  y?: number;
+  /** The full-frame `bitmap` is opaque: drawn without blending, hiding the layers under it (StackContent). */
+  opaque?: boolean;
   cueIndex?: number;
   /** A fresh copy of content the renderer may already show (a slide re-drawn with an image that arrived). */
   refresh?: boolean;
-  /** SRC_SCENE: objects above the video that overlap it, if any. */
+  /** SRC_SCENE: objects above the video that overlap it, if any (full-frame, or tight at overX, overY). */
   over?: ImageBitmap | null;
+  overX?: number;
+  overY?: number;
   /** SRC_SCENE: the video plane (PLANE_FLOATS floats, scene.ts). */
   plane?: Float32Array;
   /** SRC_SCENE: the media slot playing the clip, and the slot generation it was loaded under. */
@@ -148,12 +155,39 @@ export type AssetJob =
       images: Record<string, string>;
     };
 
+/**
+ * Which cue a job draws for (design/27 §7.5 raster lanes): the live cue's layers go ahead of the armed
+ * cue's. Props always go first. Absent: armed.
+ */
+export type JobRole = 'live' | 'armed';
+
+/**
+ * Bulk work for later (design/27 §7.5): the pictures of the cue after the armed one, prepared into the
+ * asset worker's cache so that arming it after the next GO only draws. `slide` (with `nextSlide` and `look`)
+ * names the targets as the slide job will ask for them; `sources` are files drawn as their source (a
+ * background or media image cue). Nothing is sent to the renderer.
+ */
+export type WarmJob = {
+  key: string;
+  slide?: Slide;
+  nextSlide?: Slide;
+  look: Look;
+  images: Record<string, string>;
+  sources?: string[];
+};
+
 export type ToAsset =
   | { t: 'init'; port?: MessagePort; width: number; height: number; token: string; apiPrefix: string }
   /** (main → asset) New channel ends after a (re)start: bitmaps go to `render`, jobs arrive on `link`. */
   | { t: 'ports'; render: MessagePort; link: MessagePort }
   | { t: 'fonts'; fonts: FontLoad[] }
-  | { t: 'job'; job: AssetJob }
+  | { t: 'job'; job: AssetJob; role?: JobRole }
+  | { t: 'warm'; warm: WarmJob }
+  /**
+   * Jobs (and warm jobs) that were superseded: a queued one is dropped, a running one stops at its next step
+   * and sends nothing. The link has already forgotten them (no answer comes).
+   */
+  | { t: 'cancel'; keys: string[] }
   | { t: 'resize'; width: number; height: number }
   /** Drop cached image bitmaps not in `keep` (manifest changed). */
   | { t: 'prune'; keep: string[] };
@@ -164,9 +198,20 @@ export type FromAsset =
       t: 'done';
       layer: number;
       key: string;
+      /** From the job's arrival to its picture sent: reads and decodes included. */
       ms: number;
+      /**
+       * The job's synchronous draw on the worker's thread, from the surface to the picture taken (pictures
+       * already prepared): what health reports as slide `rasterMs` (design/27 §13).
+       */
+      rasterMs?: number;
       /** Font families the job asked for that are not loaded; drawn in the fallback font. */
       fontFallbacks?: string[];
+      /**
+       * Characters the job drew that no face of the worker covers, drawn by the machine's own fallback face
+       * (design/27 §10, `GlyphCoverage`): in code point order, at most 32.
+       */
+      uncovered?: string;
       /** Images left out because the cue's decoded-bitmap budget was exhausted. */
       skippedImages?: number;
       /**
@@ -174,6 +219,25 @@ export type FromAsset =
        * slide was drawn without them. The link re-plans the key once such a file arrives.
        */
       missingImages?: string[];
+      /**
+       * The raster lane the job ran in and its timing there (design/27 §7.5): the time it waited (queue,
+       * fonts, turns), the time its synchronous slices ran on the worker's thread (pictures prepared in
+       * bands and the draw: `busyMs` ≥ `rasterMs`), and the longest slice.
+       */
+      lane?: 'interactive' | 'bulk';
+      waitMs?: number;
+      busyMs?: number;
+      longestMs?: number;
+    }
+  /** A warm job is done (its pictures are in the cache): its lane timing and the decodes it made. */
+  | {
+      t: 'warmed';
+      key: string;
+      ms: number;
+      waitMs: number;
+      busyMs: number;
+      longestMs: number;
+      decodes: number;
     }
   | {
       t: 'error';

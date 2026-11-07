@@ -28,7 +28,9 @@ import {
 } from './picture.ts';
 import { firstStrong, hasStrongRtl } from './text/bidi.ts';
 import { LEGACY_FONT_ENV, currentFontEnv } from './text/fonts.ts';
+import { metricsInk } from './text/measure.ts';
 import { BAND_MIN_FONT_SCALE, bandObject, drawRichText, isRichStyle, isRichText } from './text/rich.ts';
+import type { Ink } from './text/types.ts';
 
 export type { Ctx2D } from './ctx.ts';
 /**
@@ -136,18 +138,43 @@ function wrapDirected(
 }
 
 export type TextLayout = {
-  /** `dir` is set on lines of paragraphs with a strong right-to-left character (`paragraphDirections`). */
-  lines: { text: string; x: number; y: number; width: number; dir?: 'ltr' | 'rtl' }[];
+  /**
+   * `dir` is set on lines of paragraphs with a strong right-to-left character (`paragraphDirections`).
+   * `ink` (device px, from the line's own `measureText`, `metricsInk`) is where its glyphs reach from
+   * (x, the baseline `drawText` draws it on, `y + baselineOffset`): every glyph part, a tone mark stacked
+   * over a capital that lies wholly above the line box included. Absent on blank lines and where the
+   * context reports no ink box.
+   */
+  lines: { text: string; x: number; y: number; width: number; dir?: 'ltr' | 'rtl'; ink?: Ink }[];
   fontSize: number;
   lineHeightPx: number;
   block: { x: number; y: number; w: number; h: number };
+  /**
+   * The CSS font and letter spacing (device px) the lines were measured in. `drawText` sets both from the
+   * layout, so a layout from the memo draws in its own font whatever state the context is in.
+   */
+  font: string;
+  letterSpacing: number;
 };
 
 /**
  * Lay out text in a box (device pixels = logical * scale). With `fit`, shrinks the font down to
- * `minScale` of its size until the block fits the box height.
+ * `minScale` of its size until the block fits the box height. Memoised per context while a font resolver
+ * is installed (`legacyLayoutMemo`); the layout returned is shared and must not be changed.
  */
 export function layoutText(
+  ctx: Ctx2D,
+  text: string,
+  style: TextStyle,
+  box: Box,
+  scale: number,
+  fit = false,
+  minScale = 0.5,
+): TextLayout {
+  return legacyLayoutMemo(ctx, text, style, box, scale, fit, minScale, layoutTextNow);
+}
+
+function layoutTextNow(
   ctx: Ctx2D,
   text: string,
   style: TextStyle,
@@ -174,11 +201,14 @@ export function layoutText(
   let lines: string[] = [];
   let lineDirs: ('ltr' | 'rtl' | null)[] | null = null;
   let lh = 0;
+  let font = '';
+  const spacing = style.letterSpacing * scale;
   const dirs = paragraphDirections(text);
   const script = legacyScript(text);
   for (;;) {
-    ctx.font = fontString(style, scale, size, script);
-    setLetterSpacing(ctx, style.letterSpacing * scale);
+    font = fontString(style, scale, size, script);
+    ctx.font = font;
+    setLetterSpacing(ctx, spacing);
     if (dirs) ({ lines, dirs: lineDirs } = wrapDirected(ctx, text, innerW, dirs));
     else lines = wrapLines(ctx, text, innerW);
     lh = size * scale * style.lineHeight;
@@ -196,18 +226,27 @@ export function layoutText(
   const hi = CLAMP.boxFactor * LOGICAL_HEIGHT * scale;
   const laid: TextLayout['lines'] = [];
   const dir0 = lineDirs ? ctx.direction : undefined;
+  // Each line's ink comes from the same measure as its width, on the alphabetic baseline `drawText` draws
+  // on (put back after), relative to the line's left edge whatever the context's alignment.
+  const baseline0 = ctx.textBaseline;
+  if (baseline0 !== 'alphabetic') ctx.textBaseline = 'alphabetic';
   for (let i = 0; i < lines.length; i++) {
     const y = y0 + i * lh;
     if (y < lo || y > hi) continue;
     const t = lines[i]!;
     const dir = lineDirs?.[i];
     if (lineDirs) ctx.direction = dir ?? dir0!;
-    const width = ctx.measureText(t).width;
+    const metrics = ctx.measureText(t);
+    const width = metrics.width;
     let x = bx + pad;
     if (style.align === 'center') x = bx + pad + (innerW - width) / 2;
     else if (style.align === 'right') x = bx + pad + innerW - width;
-    laid.push(dir ? { text: t, x, y, width, dir } : { text: t, x, y, width });
+    const line: TextLayout['lines'][number] = dir ? { text: t, x, y, width, dir } : { text: t, x, y, width };
+    const ink = /\S/.test(t) ? metricsInk(metrics, ctx.textAlign, ctx.direction) : undefined;
+    if (ink) line.ink = ink;
+    laid.push(line);
   }
+  if (baseline0 !== 'alphabetic') ctx.textBaseline = baseline0;
   if (lineDirs) ctx.direction = dir0!;
   const maxW = laid.reduce((m, l) => Math.max(m, l.width), 0);
   let blockX = bx + pad;
@@ -220,7 +259,18 @@ export function layoutText(
     fontSize: size,
     lineHeightPx: lh,
     block: { x: blockX - pad, y: top, w: maxW + 2 * pad, h: Math.max(0, bottom - top) },
+    font,
+    letterSpacing: spacing,
   };
+}
+
+/**
+ * Where `drawText` puts a line's baseline below the line's `y` (device px): the line box centred on the
+ * font size, an ascent of 0.8 em.
+ */
+export function baselineOffset(layout: TextLayout, scale: number): number {
+  const ascent = layout.fontSize * scale * 0.8;
+  return (layout.lineHeightPx - layout.fontSize * scale) / 2 + ascent;
 }
 
 /** Draw one text block: fill, shadow, outline, then the glyphs. */
@@ -238,6 +288,10 @@ export function drawText(
   ctx.save();
   ctx.globalAlpha = num(opts.opacity, 0, 1, 1);
   const layout = layoutText(ctx, text, style, box, scale, opts.fit ?? false);
+  // The layout may come from the memo (measured on another surface, or before a resize reset the state):
+  // draw in the font it was measured in, not whatever the context holds.
+  ctx.font = layout.font;
+  setLetterSpacing(ctx, layout.letterSpacing);
   // Lines of right-to-left paragraphs are drawn in their direction, left-aligned at their x like every line.
   const directed = layout.lines.some((l) => l.dir);
   const dir0 = directed ? ctx.direction : undefined;
@@ -249,8 +303,7 @@ export function drawText(
   withRotation(ctx, box, scale, () => {
     ctx.textBaseline = 'alphabetic';
     if (directed) ctx.textAlign = 'left';
-    const ascent = layout.fontSize * scale * 0.8;
-    const offsetY = (layout.lineHeightPx - layout.fontSize * scale) / 2 + ascent;
+    const offsetY = baselineOffset(layout, scale);
     if (style.fill && text.trim()) {
       ctx.fillStyle = rgbaCss(style.fill.color);
       roundRect(
@@ -541,4 +594,41 @@ export function fillColor(ctx: Ctx2D, c: Rgba, w: number, h: number): void {
   ctx.fillStyle = rgbaCss(c);
   ctx.fillRect(0, 0, w, h);
   ctx.restore();
+}
+
+/** Legacy layouts kept per context (a band laid out for its sprite's reach, then drawn: design/27 §7.3). */
+const LEGACY_LAYOUTS = 32;
+const legacyLayouts = new WeakMap<Ctx2D, Map<string, TextLayout>>();
+
+/**
+ * `layoutText` through a small memo per context, keyed by every input and the font generation: the asset
+ * worker lays a legacy text out to find its sprite's reach (sprite.ts) and `drawText` then draws that very
+ * layout instead of measuring it again. Only while a font resolver is installed (its generation changes
+ * whenever a face loads); without one a late font would leave a stale layout, so nothing is kept.
+ */
+function legacyLayoutMemo(
+  ctx: Ctx2D,
+  text: string,
+  style: TextStyle,
+  box: Box,
+  scale: number,
+  fit: boolean,
+  minScale: number,
+  lay: typeof layoutTextNow,
+): TextLayout {
+  const env = currentFontEnv();
+  if (env === LEGACY_FONT_ENV) return lay(ctx, text, style, box, scale, fit, minScale);
+  const key = `${env.generation}|${scale}|${fit ? 1 : 0}|${minScale}|${JSON.stringify(box)}|${JSON.stringify(style)}|${text}`;
+  let m = legacyLayouts.get(ctx);
+  if (!m) legacyLayouts.set(ctx, (m = new Map()));
+  const hit = m.get(key);
+  if (hit) {
+    m.delete(key);
+    m.set(key, hit);
+    return hit;
+  }
+  const out = lay(ctx, text, style, box, scale, fit, minScale);
+  m.set(key, out);
+  if (m.size > LEGACY_LAYOUTS) m.delete(m.keys().next().value!);
+  return out;
 }

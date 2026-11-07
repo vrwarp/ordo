@@ -752,7 +752,7 @@ Hidden paragraphs (M8) are laid out but not painted, so revealed lines never mov
 
 ### 7.1 Static slides
 
-- **Unchanged path.** The asset worker draws `slideContent(slide)` with the shared drawers onto its CPU-backed (`willReadFrequently`) OffscreenCanvas at `scale = width/1920`, and transfers one full-frame `SRC_BITMAP`. The compositors do not change.
+- **One bitmap per layer.** The asset worker draws `slideContent(slide)` with the shared drawers onto its CPU-backed (`willReadFrequently`) OffscreenCanvas at `scale = width/1920`, and transfers one `SRC_BITMAP`: since M7 a tight sprite at its offset where that saves pixels, else full-frame (§7.3), and marked opaque when it is a full-frame opaque picture.
 - **Rasterized at device resolution:** text, vectors, gradients, effects and pictures (crop via the 9-argument `drawImage`, mask via a clip path, flip via the transform, `adjust` via `ctx.filter`).
 - **Decode target.** A picture is prepared at its displayed device size, upscaling included, and converted to sRGB once.
   - The target (`pictureTarget`, `packages/renderer/src/picture.ts`) is the box's device rectangle widened to whole pixels and cut to the canvas, at most 16 MP. A 128 px tile stretched over the slide is prepared at the slide's size; a photo overflowing the slide on every side at the output's size (8.3 MB at 1080p), not its box's (35.8 MB for a 3920x2280 box). Not min(native, device): enlarging on every draw is the cost this avoids.
@@ -772,9 +772,9 @@ Hidden paragraphs (M8) are laid out but not painted, so revealed lines never mov
 
 A slide whose playing `ImageObject` (`play`) is on the media layer becomes a **scene stack** on the slide layer. Static slides never pay for it.
 
-- **base** (full-frame bitmap): objects 0..k, where k is the play object, drawn with its poster. The poster therefore shows whenever the slot has no frame: not loaded, onEnd 'black', or a slot taken by another clip. With `showWhenStopped: false`, or a play object below full opacity (the video is mixed over base at that opacity, so the poster would show through it), the poster is left out of base.
+- **base** (one bitmap, a tight sprite at its offset since M7, §7.3): objects 0..k, where k is the play object, drawn with its poster. The poster therefore shows whenever the slot has no frame: not loaded, onEnd 'black', or a slot taken by another clip. With `showWhenStopped: false`, or a play object below full opacity (the video is mixed over base at that opacity, so the poster would show through it), the poster is left out of base.
 - **video plane:** an mdPair slot (2-3, below `MAX_VIDEO_SLOTS = 4`), placed at the play object's box and fitted with the clip's own size (`Media.width` x `height`, in `SlideDesc.video` and the job's `video.w`/`h`), not the poster's: a custom poster may have another aspect. A plane whose box is under 1e-3 logical px or that would hold a non-finite float is not encoded (the slide stays one bitmap).
-- **over** (full-frame bitmap, usually absent): objects above k that *intersect* the video box, for example a title over a video. Upper objects that do not overlap the box go into base.
+- **over** (one bitmap, a tight sprite at its offset since M7; usually absent): objects above k that *intersect* the video box, for example a title over a video. Upper objects that do not overlap the box go into base.
 - **plane** (16 floats, pre-allocated and copied with `set()`):
 
   | Floats | Content |
@@ -808,7 +808,7 @@ A slide whose playing `ImageObject` (`play`) is on the media layer becomes a **s
 
 **WebGPU.**
 - **Single pass.** One fragment shader composes each stack: `c = base; if (video present) c = video over c; if (hasOver) c = over over c`. A crossfade stays the existing exact `mix(sceneA, sceneB, t) · opacity` in the one fullscreen triangle per layer. No intermediate render; each stack holds one video.
-- **Uniform.** `U` grows to `{rectA, rectB, p, color, planeA[4], planeB[4]}` = 192 B, which fits the existing 256 B slots (`UNIFORM_SIZE` 64 → 192).
+- **Uniform.** `U` grows to `{rectA, rectB, p, color, planeA[4], planeB[4]}` = 192 B, which fits the existing 256 B slots (`UNIFORM_SIZE` 64 → 192). M7 adds the over rects `overA`, `overB` for tight overs (224 B, §7.3).
 - **Pipelines.** Source kinds are t (bitmap), e (full-frame video) and v (scene). That gives singles `t e v`, pairs `tt te tv et ee ev vt ve vv`, plus `solid`: 13 pipelines, all compiled in `compile()` before ready (7 today). A `vv` bind group holds two external textures (8 sampled-texture slots) plus four 2D textures, within the default limit of 16.
 - **Bindings for v:** base = the existing layer texture; over = one of two full-frame textures allocated on the first scene offer (in the offer handler, never on a flip; +66 MB at 4K), or a 1x1 transparent texture created at startup; video = the slot's external texture.
 - **Slot without a frame.** A 1x1 `VideoFrame`, created at startup from an OffscreenCanvas, is imported only to satisfy the binding. The "video present" bit, not its alpha, decides whether the video is sampled, because external textures may not keep alpha.
@@ -833,8 +833,11 @@ A scene is several draws, so it is composed at full alpha before it is weighted:
 
 - **M5:** uploads leave `draw()`. `offer` queues them, and the frame loop drains the queue after `submit`.
   - Built as `Compositor.drainUploads(f, all)`; the queue is the stacks whose `version` differs from the uploaded one. Before each draw the frame loop uploads only what that draw samples (live stacks, and outgoing ones while fading): content flipped on the frame it changed, such as content promoted from the queue or a `refresh` of the live copy. After the submit it uploads the rest, which is armed content for a coming flip.
-- **M7:** the queue is tuned from venue measurements. Uploads go in strips (`copyExternalImageToTexture` with an origin; at most one quarter-frame, about 8 MB at 4K, per frame). A stack is not flippable before its upload completes; `LayerStack` already holds the previous content for late content (`stacks.ts:133-170`). Arming normally happens a full cue ahead.
+- **M7:** the queue is tuned from venue measurements. Uploads go in strips (`copyExternalImageToTexture` with an origin; at most about 8 MB per frame, a quarter of a 4K frame). A stack is not flippable before its upload completes; `LayerStack` already holds the previous content for late content (`stacks.ts:133-170`). Arming normally happens a full cue ahead.
+  - Built (M7 wave 1): `GpuCompositor` copies armed content after the submit in whole-row strips, the content a pending flip waits for first, within `UPLOAD_BUDGET_BYTES` (8 MiB, absolute: a 4K frame takes four) and `UPLOAD_BUDGET_MS` (4 ms of the render worker's CPU time in the copies) per frame; `Stack.ready` gates the flip (`LayerStack.gated` on WebGPU). Right after the layers tick, `uploadDue` uploads the content of flips due on this frame within the time budget alone (the byte budget, which spreads armed content over frames, does not hold a flip that is already due): one strip, which times the frame's copies, then the rest in one go when that cost says it ends within the 4 ms, else as many rows as do. Late content (a GO to a cue that was not armed) at 1080p, 1920x1200 and 2560x1440 therefore flips on the frame it arrives, as before strips, and 4K in two frames; larger content keeps the previous picture whole (strips only go into the armed texture) and flips once its last rows are in, as a late flip. The layers of one GO (flips due at the same `at`) flip on one frame: while one still uploads, the others wait (`LayerStack.uploadWaiting`, the engine's `tickLayers`), so the cue is never shown torn (a new background with the old slide); content that has not arrived holds nobody. A `refresh` of the live copy is on screen and is uploaded whole before the draw. After a device loss or a WebGPU retry the live stacks are uploaded whole before the first draw and the armed ones in strips (`LayerStack.resetUploads`); a retry whose first draw fails gives the stacks back to Canvas 2D ungated. Telemetry `uploadMs` is the longest budgeted upload frame of the last minute (whole uploads by design are counted apart, `wholeUploads`), so one deliberate large copy never raises the `upload` alarm. `e2e/outputs.spec.ts` runs its outputs on Canvas 2D (a software adapter is refused, §7.2); `slide-media.spec.ts` and `pptx-media.spec.ts` force one output onto WebGPU on SwiftShader at 1280x720, where every upload is one strip, so multi-frame strips, the cue's layers waiting for each other and whole uploads are covered by the compositor fakes (`gpu.sprites.test.ts`), the compositor golden and `bench:gpu`. Measured here on SwiftShader (CPU, `bench:venue --swiftshader`, 2026-11-07 after the integration's repair; one run, one set of figures, which design/14 records too): a 4K full frame costs the render worker 8.9 ms p50 (12.6 p95) in one copy and at most 2.3 ms per frame (p50 1.9) in its four strips; a 1080p frame is one strip, 1.8 ms p50. GPU times come from `bench:venue` (which runs `bench/gpu-venue.ts`) on venue hardware (design/14 "Measuring on venue machines").
 - **M7 tight sprites:** the asset worker sends the bounding box of the drawn content plus its offset. The GPU clears the layer texture with a render pass and copies into the sub-rect. Canvas 2D draws at the offset. On 16:9 decks the photo is on the background layer, so the slide layer usually holds only text and this removes most of the clear, transfer and upload.
+  - Built (M7 wave 1), with two changes. No clear: the sprite is copied into its layer texture at its frame offset, the shaders sample layer textures in frame coordinates and mask each source to its rect (a scene's base and over each have theirs: `U` is 224 B, `overA`/`overB` added), and texel centres map 1:1, so stale texels outside the rect are never read; every draw is scissored to what its sources cover. The box is known before drawing (`sprite.ts`: each object's reach as its drawer lays it out, the rich engine's memoised layout and paint plan, legacy `layoutText` memoised per context and bounded by its laid-out block, since `drawText` paints nothing else of the box; the block or lines grown by 0.3 em, `OVERHANG_EM`, united with the ink every line or glyph run measures, `TextMetrics.actualBoundingBox*`, since a glyph part that is a shape of its own, such as a tone mark stacked over a circumflex on a Vietnamese capital, can lie wholly outside the line box and the 0.3 em with tight line spacing, where the edge ring never sees it; effects; turned with its box); anything unbounded (a slide's PowerPoint picture, an object with fields the reach does not know, such as M6 geometry until it reports its bounds) stays full-frame, as does a box over 80 % of the frame, and a drawing that touches the sprite's edge ring is drawn again full-frame (`drawSprite`), so a sprite never cuts what is drawn. Scenes draw base and over as sprites (`rasterSceneSprites`). Checked pixel for pixel against the full-frame draw in headless Chromium (`sprite.browser.test.ts`) and in the compositor golden (sprites at offsets, crossfades between full-frame and tight layers, scenes with tight overs, strips mid-upload). Asset worker raster at 4K, full-frame → sprite, p50 (`bench:sprites`, CPU, loaded container, each job a fresh slide whose layout the reach makes and the draw reuses): a legacy lyric band 24.5 → 13.6 ms, a lower third 10.2 → 1.3 ms, a rich title 23.3 → 13.0 ms (design/14 "Measuring on venue machines").
+- **M7 opaque-first:** a full-frame bitmap the asset worker knows to be opaque (a cover-fitted JPEG or a PNG without alpha, read from its header by `apps/output/src/opaque.ts`; the props logo over an opaque clear colour) is sent `opaque`. The compositors start the frame at the top-most such layer shown at full weight and write it without blending (WebGPU `replace-t`, the 14th pipeline; Canvas 2D `'copy'`), so neither the clear nor the layers under it are drawn.
 
 ### 7.4 Editor, thumbnails, stage
 
@@ -856,6 +859,9 @@ A scene is several draws, so it is composed at full alpha before it is weighted:
 - the layout memo per object identity, box and font generation;
 - an effect sprite cache (large blurred shadows, glows; key fnv(object JSON) × scale, ≤ 64 MiB).
 - **Two raster lanes (M7):** *interactive* (props, lower third) and *bulk* (slide, image), each its own promise chain gated on font loads. A 4K decode can no longer delay the once-a-second props flip (one chain today, `asset.worker.ts:57-60`). Slide jobs yield between objects, so no task exceeds 50 ms.
+  - **As built (M7 wave 1, item B; design/14 "Asset worker: raster lanes and picture decoding").** Ranks, not two chains: props, then the live cue's layers, then the armed cue's (*interactive*), then *bulk* work, the pictures of the cue after the armed one (`warm`, which the link sends so that arming that cue after the next GO only draws). Each layer is a chain (its content must reach the renderer in order); chains run side by side, so a job waiting for a read or a decode (off the thread) holds nothing up, and bulk work starts only while nothing interactive is queued or running. Synchronous work runs in turns, the most urgent waiting slice first, each in a task of its own after the messages that arrived meanwhile (`apps/output/src/lanes.ts`). A slide does not yield between objects (its draw is one slice, 14-22 ms at 4K, §13), but a picture over 2 MiB-pixels is prepared in bands of whole rows (`preparePictureSteps`, byte-identical), so the longest slice measured at 4K was 41 ms. Superseded jobs are cancelled by the link (dropped, or stopped at their next slice); pins are counted so jobs side by side never unpin each other's bitmaps. Font loads gate the jobs sent after them only. Each result carries its lane's wait, raster time and longest slice; the link keeps per-lane percentiles (`telemetry().lanes`). Measured (`bench:lanes`, headless Chromium 153, this container): a props bitmap sent while a 4K slide decodes two large photos arrives 26 ms p50, 36 ms max after it was sent (the lead is 150 ms); before M7, 299 ms p50, every one late.
+  - **Crop-aware decode (as built).** A JPEG whose uses all need half its size or less is decoded with `ImageDecoder` at the next eighth at or above (an inverse-DCT scale, not a resample), cut to its visible part with a margin when that is at most half of it, and laid out from where that part lies (`PictureFrom`); a 4K-prepared photo on a 1080p output decodes in 48 ms instead of 107, its longest task 11 ms instead of 35. PNG, GIF, WebP, EXIF-oriented JPEGs and uses of five eighths or more decode whole as before (`apps/output/src/decode.ts`).
+  - **Opaque-first copy (CPU side, measured, not adopted).** On the asset worker's software surface `'copy'` for the first opaque layer cost 0.4-1.5 ms more than drawing over the transparent surface; what saves work is not clearing a surface whose picture was just taken (1.1 ms at 4K).
 
 ## 8. Media playable in place (M5)
 
@@ -962,6 +968,7 @@ A scene is several draws, so it is composed at full alpha before it is weighted:
   5. a generic family.
 - The legacy `fontString` uses the same resolver when one is installed.
 - The asset worker reports text that no shipped face covers in `health.fontFallbacks`, with its script (M3, with the script fallbacks). `self.fonts.check` cannot do it: it says whether the matching faces have loaded, not whether one has the glyphs. The text is measured with the shipped stack before two different generic families instead; the widths differ where a glyph falls through.
+  - *As built (M7 wave 1, item C):* reported as `health.fontCoverage` (`chars`, `count`, `scripts`), not in `fontFallbacks`, which keeps the families that are not loaded. `GlyphCoverage` (`packages/renderer/src/text/coverage.ts`) wraps the asset worker's surface's `fillText` and `strokeText`, so the drawers are unchanged, and probes each new character once per stack, style and weight after the job's picture is sent: the stack's shipped faces (the resolver's internal names) before `serif` and before `monospace`, against each generic alone, comparing the advance and the ink box (every CJK glyph is 1 em wide, so widths alone would not tell two CJK faces apart). A face that matches one generic's metrics exactly (the same file) is told apart by the other. Verdicts are kept until the faces change; a face that loads draws again the held slides that had uncovered characters. Design/14 "Health message".
 - Remove `'inter'` from `FALLBACK_FAMILIES` (`raster.ts:139-148`) and bundle Inter, so the default font is shipped like any other.
 
 *As built (M2, `packages/renderer/src/text/fonts.ts`):*
@@ -1187,7 +1194,7 @@ The extensions, in priority order (M4 unless noted):
 
 ## 13. Performance budgets
 
-Measured today (renderer bench, 4-core container, CPU canvas):
+Measured at design time, before M7 (renderer bench, 4-core container, CPU canvas; the tight text sprite row was an estimate of the drawing alone; the as-built figures, transfer and the fresh bitmap included, are in design/14 "Measuring on venue machines": a lower-third sprite 1.3 ms at 4K, a lyric band 13.6 ms):
 
 | Measurement | 1080p | 4K |
 |---|---|---|
@@ -1208,13 +1215,13 @@ The current JSZip text path takes 1.17 s per 100 slides.
 | Picture preparation | ≤ 1.5 s per 24 MP photo on the NAS; prepared pictures ≤ 8,192 px and ≤ 40 MP | M3 e2e |
 | LibreOffice work | proportional to the slides that need it; one soffice run per import (art slides counted twice as pages) | job log |
 | JSON sizes | per §3.4 | importer, tests |
-| Asset worker slide raster p95 | ≤ 10 ms at 1080p, ≤ 30 ms at 4K; after M7 ≤ 12 ms at 4K for text over photo | bench, health `rasterMs` (today `done.ms` is unread, `messages.ts:136`) |
-| Longest asset-worker task | ≤ 50 ms; props flip never > 1 frame late during a slide decode (M7) | health long tasks |
+| Asset worker slide raster p95 | ≤ 10 ms at 1080p, ≤ 30 ms at 4K; after M7 ≤ 12 ms at 4K for text over photo | `bench:slides` (four slide kinds, `--check`), health `rasterMs` p50/p95 over the last 64 slides with the `raster` alarm (M7) |
+| Longest asset-worker task | ≤ 50 ms; props flip never > 1 frame late during a slide decode (M7; as built: longest slice 41 ms and props bitmap ≤ 36 ms after sending at 4K, `bench:lanes`) | health long tasks; `asset.lanes.browser.test.ts`; per-lane `longestMs` in telemetry |
 | Rich layout | ≤ 1 ms warm, ≤ 5 ms cold per 400 characters; autofit ≤ 12 layouts | unit bench |
 | Render worker | zero missed vsync; no task ≥ 50 ms; nothing allocates or compiles on GO; static slides add 0 draws; in-slide video adds 1 external texture + 1 bind group per frame, same single pass per layer | hot-lint, soak, e2e |
-| Uploads | ≤ 4 ms per frame at 4K on the reference venue GPU (M7) | health `uploadMs` |
-| GPU memory at 4K | static slides +0; +66 MB only once a scene needs `over`; total ≤ 400 MB (5 layers: 331.8 MB of layer textures + 66.4 MB of over = 398.2 MB) | health `gpuMB` (reported since M5: layer and over textures; the alarm on the budget is M7) |
-| GPU time per frame | ≤ 4 ms at 4K on a venue iGPU (timestamp-query where available) | M7 measurement |
+| Uploads | ≤ 4 ms per frame at 4K on the reference venue GPU (M7) | health `uploadMs` with the `upload` alarm (M7); `bench:venue` on the venue machine |
+| GPU memory at 4K | static slides +0; +66 MB only once a scene needs `over`; total ≤ 400 MB (5 layers: 331.8 MB of layer textures + 66.4 MB of over = 398.2 MB) | health `gpuMB` (reported since M5: layer and over textures) shown against the budget for the output's size (M7: 400 MB at 4K, by pixel count, 100 MB at 1080p). No alarm: `gpuMB` is ordo's own allocation, a fixed function of the size and of the scenes with an over, so it meets the budget by construction; the GPU's real pressure is not observable from a page |
+| GPU time per frame | ≤ 4 ms at 4K on a venue iGPU (timestamp-query where available) | M7 measurement (`bench:venue`: five full-frame layers in one pass, timestamp queries) |
 | Editor | rich box re-layout + redraw ≤ 8 ms for 1,000 characters; thumbnail ≤ 15 ms at 640 px; opening a 17-slide sermon deck decodes no picture larger than its prepared size | unit bench, M4 e2e |
 | Sync | in-slide video start skew within design/23 bounds (17 ms real GPU, 100 ms SwiftShader) | e2e |
 
@@ -1699,25 +1706,25 @@ Also:
 - ∥ editor shape fields;
 - ∥ preset golden.
 
-### M7: 4K performance pass and per-element art (about 2 weeks)
+### M7: 4K performance pass (about 2 weeks; per-element art dropped for M9)
 
 **Scope.**
 - Tight sprites (bounding-box bitmap plus offset; GPU sub-rect copy; Canvas 2D equivalent).
 - Interactive and bulk raster lanes.
 - Crop-aware decode; opaque-first `copy`.
 - Strip uploads with a per-frame budget.
-- Health gains `rasterMs` p50/p95, `uploadMs` and font coverage misses, and an alarm when `gpuMB` (reported since M5) passes the budget.
-- Measurements on venue GPUs (Windows iGPU, discrete, macOS) at 1080p and 4K, recorded in design/14.
+- Health gains `rasterMs` p50/p95, `uploadMs` and font coverage misses, and an alarm when `gpuMB` (reported since M5) passes the budget (as built: `gpuMB` is shown against the budget without an alarm, which could not fire; item C below).
+- Measurements on venue GPUs (Windows iGPU, discrete, macOS) at 1080p and 4K, recorded in design/14 (as built: the procedure and `bench:venue` are ready and this container's SwiftShader row is recorded; the venue rows wait for the venue machines).
 - Per-element art fragments (dropped: M9 draws the residuals natively instead, so there is no art left to split).
 - Refresh the stale design/14 sections and ADR 0004/0005/0013.
 
-**Files.** `packages/renderer/src/stacks.ts`, `gpu.ts`, `canvas2d.ts`, `engine.ts`, `health.ts`, `bitmap-cache.ts`; `apps/output/src/asset.worker.ts`, `link-core.ts`; `apps/hub/src/pptx/fallback.ts`, `art.ts`; `packages/pptx-scene/src/rendercopy.ts`, `classify.ts`; `docs/design/14-output-renderer.md`; `docs/adr/0004-text-rasterized-at-arm.md`, `0005-video-element-first.md`, `0013-implementation-adjustments.md`.
+**Files.** `packages/renderer/src/stacks.ts`, `gpu.ts`, `canvas2d.ts`, `compositor.ts`, `engine.ts`, `health.ts`, `bitmap-cache.ts`, `sprite.ts`, `picture.ts`, `text2d.ts`, `text/coverage.ts`, `bench/*`; `apps/output/src/asset.worker.ts`, `link-core.ts`, `lanes.ts`, `decode.ts`, `opaque.ts`, `pictures.ts`, `perf-health.ts`; `apps/operator/src/views/live/DiagnosticsPanel.tsx`, `TopBar.tsx`; `docs/design/14-output-renderer.md`; `docs/adr/0004-text-rasterized-at-arm.md`, `0005-video-element-first.md`, `0013-implementation-adjustments.md`.
 
-**Exit.**
-- Slide raster p95 ≤ 10 ms at 1080p and ≤ 12 ms at 4K for text-over-photo slides.
-- The props flip is never more than 1 frame late while a slide decodes.
-- Uploads ≤ 4 ms per frame at 4K on the reference GPU.
-- The health metrics are visible in the operator.
+**Exit.** (Status after wave 1; the figures are in the as-built table below.)
+- Slide raster p95 ≤ 10 ms at 1080p and ≤ 12 ms at 4K for text-over-photo slides. *Met at 1080p. Not met at 4K in this container; pending the venue PC's `bench:venue` row and, if that is over too, the follow-up that keeps the photo out of the slide's bitmap (not built).*
+- The props flip is never more than 1 frame late while a slide decodes. *Met.*
+- Uploads ≤ 4 ms per frame at 4K on the reference GPU. *Met on the render worker's CPU; the GPU time is pending the venue GPUs.*
+- The health metrics are visible in the operator. *Met.*
 
 **Parallel.**
 - ∥ tight sprites (GPU and 2D);
@@ -1725,6 +1732,27 @@ Also:
 - ∥ strip uploads and health metrics;
 - ∥ venue GPU measurements;
 - ∥ docs refresh.
+
+**As built, wave 1 item C (health and measurement).**
+- Health: `rasterMs` p50/p95/max of slide draws (the asset worker's `done.rasterMs`, the synchronous draw), `uploadMs` (the render worker's telemetry: budgeted strip frames of the last minute) and `wholeUploads` (uploads whole by design, apart), `budgets` for the output's size and `alarms` (`raster`, `upload`; the integration's repair dropped `gpuMemory`, which could not fire), and `fontCoverage` (§10). Budgets and alarms are computed by the output (`perfBudgets`, `perfAlarms` in `packages/renderer/src/health.ts`); an alarm that starts or ends is logged with its figures.
+- Operator: an amber dot and a "things to check on the screens" tag for a performance alarm, each issue in plain words for volunteers with its figures for techs, fonts as notes for the tech (no amber dot during a service), and a "Performance and fonts" table in Diagnostics (design/14 "Health message").
+- Measurement: `bench:slides` (sermon text over a photo, a lyric with a shadow, a table, a scene; p50/p95 per kind at 1080p and 4K; headless in CI, `--check` against the budgets) and `bench:venue` for the venue machines (machine, display, WebGPU adapter, a full-frame upload, five layers composed with timestamp queries, and the slide raster on that CPU), with the procedure and the results table in design/14 "Measuring on venue machines". In this container (software canvas, full-frame draws) text over a photo is 18.3 ms p50 at 4K, over the 12 ms exit; the GPU exits await the venue machines.
+
+**As built, wave 1 integration (items A, B and C together).**
+- The asset worker draws each job in the slice its lane gives it (B) as a tight sprite (A): the reach measured on the surface shrunk to 1x1, the draw, the take, the offset and opacity sent; health times that slice's draw (C, `done.rasterMs`). B's lane time is `busyMs` (every slice of the job, picture bands included, counting the slice running when the result is sent), so the two are not confused.
+- `bench:venue` is the one venue command: the machine and adapter, the compositor as the render worker drives it (A's strips, sprites, replace path and live run, `gpu-venue.page.ts`) and the slide raster (C's `bench:slides`, now drawn as the worker draws: sprites where they save pixels, the same slides full-frame, and a blank full-frame job), with the budgets checked and a table row for design/14.
+- `e2e/outputs.spec.ts` reads the output's performance row in the operator's Diagnostics, as the volunteer and the tech see it.
+- Repair of the integration (review): a layout from the legacy memo carries its font (a memo hit drew in the context's default 10 px font on every output with a font resolver); a WebGPU retry whose first draw fails gives the stacks back to Canvas 2D ungated; the strip byte budget is absolute (8 MiB), so 1080p and smaller outputs flip late content on the frame it arrives; the layers of one GO flip together; `uploadMs` is a one-minute window of budgeted frames with the whole uploads apart, and the `gpuMemory` alarm is gone; fonts are notes for the tech, not an amber dot; decodes are bounded across chains and a warm job pauses at its next decode while interactive work runs; the coverage probe runs in slices of its own; text reaches are the laid-out lines plus 0.3 em; the venue compose times what it names (five layer draws a frame), the upload GPU figure is latency beside an empty submit, and the live run draws on a canvas the page shows, with a late flip.
+- Second repair (re-review): text reaches hold the measured ink of every line and glyph run besides the lines plus 0.3 em (Vietnamese capitals with stacked tone marks at a line height of 0.7 and no padding lost their marks on the audience screen: a mark that never crosses the sprite's edge ring is never redrawn); a flip already due spends the upload time budget alone, so late content at 1920x1200 and 2560x1440 flips on the frame it arrives, as at 1080p; the venue live run reports late content that never flipped as such (no longer as "0 frames"), and on a shown window counts it, and a run that presented far fewer frames than its seconds at the display's refresh, as over budget.
+- Exit, measured in this container (2026-11-07 after the repair, load average 3 to 6; design/14 "Measuring on venue machines" and "Asset worker: raster lanes and picture decoding"):
+
+  | Exit | Result |
+  |---|---|
+  | Slide raster p95 ≤ 10 ms at 1080p, ≤ 12 ms at 4K, text over a photo | Met at 1080p (p95 6.1 ms). Not met at 4K: p50 17.2, p95 24.8 ms (19 to 25 ms over the day's runs). The imported slide's photo reaches the whole frame, so it is drawn full-frame, and a blank full-frame 4K job alone costs 9.9 ms p50 here (a fresh 33 MB software bitmap); meeting it needs the photo kept out of the slide's bitmap (not built) or a CPU that pays less, which the venue PC's `bench:venue` row says. |
+  | (§13 budgets, other slides) | The six-line lyric with a shadow is over at 1080p (p95 13.0 against 10 ms) and at 4K (45.7 against 30 ms), the scene at 4K (34.6 against 30 ms): canvas shadows on the software canvas; the table is within budget at both sizes. |
+  | Props flip never more than 1 frame late while a slide decodes | Met: 0 of 7 late at 1080p and at 4K (props bitmap at most 8.9 and 20.3 ms after sending, against a 150 ms lead); the worker before M7: 4 and 6 of 7 late. |
+  | Uploads ≤ 4 ms per frame at 4K | CPU side met: a 4K full frame in the default strips costs the render worker at most 2.3 ms per frame (p50 1.9) over four frames, against 8.9 ms p50 (12.6 p95) in one copy. The GPU time needs the venue GPUs (`bench:venue` on them; SwiftShader here). |
+  | Health metrics visible in the operator | Met: Diagnostics "Performance and fonts" shows each output's slide drawing p50 / p95 against its budget, upload, GPU memory, fonts and issues (asserted by `e2e/outputs.spec.ts`). |
 
 ### M9: Import without LibreOffice (about 4 weeks; replaces M7's art fragments)
 
@@ -1819,7 +1847,7 @@ The `PptxRenderer` enum values stay forever, so stored presentations validate. A
 - **WebGPU on venue GPUs is unverified.** Only SwiftShader was tested here. Driver behaviour of `importExternalTexture` with the scene shader, 13-pipeline compile time, 4K upload cost and +66 MB for `over` on iGPUs are unknowns. Mitigations: Canvas 2D parity, the compositor golden, M7 measurements, and treating fallback adapters as Canvas 2D.
 - **Media readiness on Sunday.** Clips transcode on the heavy queue behind other jobs. They show posters with a degraded note; including a clip that became ready later needs another Go live. One video and one sound per slide; extra clips become posters. A slide's autoplay sound replaces playlist music (a click-start one does so when F8 starts it). There is no drift correction for long boxed videos (only the 0.25 s start seek).
 - **Reducer change.** A slide cue now starts media and audio, and hidden cues change what Next does. Every client ships the change together (ADR 0006).
-- **Hybrid art is not editable.** Its z-range is flattened until M7's per-residual fragments, but backgrounds, videos and everything outside the range stay native. Picture mode hides edits; it is guarded by the digest, but can confuse.
+- **Hybrid art is not editable.** Its z-range is flattened until M9 draws its residuals natively, but backgrounds, videos and everything outside the range stay native. Picture mode hides edits; it is guarded by the digest, but can confuse.
 - **Hub hardware.** A NAS is several times slower than the dev container. LibreOffice at 288 dpi and picture preparation can take minutes on large decks. They run in jobs, off the live process, and never during a write to a live presentation.
 - **Size growth.** Rich slides make presentations and library snapshots larger. The §3.4 budgets and health reporting bound it; summary-only library snapshots are the follow-up if venues outgrow them.
 - **New attack surface:** XML, guide formulas, path data, colour maths, the render-copy writer, the art alpha task, the MTX decoder, sniffing of attacker-named parts, picture preparation through ffmpeg, soffice. Everything stays on the bounded pool or behind `tools.run`, with fuzz tests before native becomes the default.

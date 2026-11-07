@@ -36,6 +36,22 @@ export const OutputHealth = z.object({
   compositor: z.enum(['webgpu', '2d']).optional(),
   /** MB of GPU memory in the compositor's layer and scene textures (design/27 §13: ≤ 400 at 4K). */
   gpuMB: z.number().min(0).max(1e6).optional(),
+  /** Slide raster times of the asset worker over the last slides it drew, ms (design/27 §13). */
+  rasterMs: z.object({ n: z.number(), p50: z.number(), p95: z.number(), max: z.number() }).optional(),
+  /** The longest per-frame texture upload in budgeted strips over the last minute, render worker CPU ms (WebGPU). */
+  uploadMs: z.number().min(0).max(1e6).optional(),
+  /**
+   * Frames that uploaded content on screen whole by design (a refresh of the live slide, recovery after a
+   * device loss) and the longest of the last minute, ms: for the tech, never an alarm.
+   */
+  wholeUploads: z.object({ count: z.number().min(0), maxMs: z.number().min(0).max(1e6) }).optional(),
+  /** This output's performance budgets at its size (design/27 §13): raster p95, upload per frame, GPU memory. */
+  budgets: z.object({ rasterP95Ms: z.number(), uploadMs: z.number(), gpuMB: z.number() }).optional(),
+  /**
+   * Budgets passed now ('raster', 'upload'). Plain strings, so an alarm a newer output adds
+   * never fails an older hub's parse of the whole report.
+   */
+  alarms: z.array(z.string().max(40)).max(8).optional(),
   /** Ms since the main thread last ran the watchdog tick, as measured by the output's link worker. */
   mainThreadStallMs: z.number().optional(),
   /** Supervised workers of the window (design/25): restarts and give-ups per worker. */
@@ -55,6 +71,17 @@ export const OutputHealth = z.object({
   quarantined: z.object({ count: z.number(), items: z.array(z.string().max(300)).max(20) }).optional(),
   /** Font families requested by drawn text that are not loaded (drawn in the fallback font). */
   fontFallbacks: z.array(z.string().max(200)).max(20).optional(),
+  /**
+   * Characters drawn this service that no face the output has covers, so the computer's own fallback face
+   * drew them (design/27 §10): a sample, how many distinct ones, and their scripts (ISO 15924).
+   */
+  fontCoverage: z
+    .object({
+      chars: z.string().max(200),
+      count: z.number(),
+      scripts: z.array(z.string().max(8)).max(16),
+    })
+    .optional(),
   /** Service-cache files found corrupt or truncated and fetched again. */
   cacheRepairs: z.number().optional(),
   /** What carries the window's fallback bus: a handed-over MessagePort, or the window.postMessage relay. */

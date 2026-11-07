@@ -20,6 +20,17 @@ export type RenderTelemetry = {
   slideFlipAt?: number;
   /** GPU memory of the compositor's layer and scene textures, MB (design/27 §13 budget); absent on 2D. */
   gpuMB?: number;
+  /**
+   * The longest per-frame upload time in budgeted strips over the last minute (at most 128 uploading
+   * frames), ms of the render worker's CPU time in the copies (design/27 §13 `uploadMs`; GPU time is
+   * measured by bench/gpu-venue.ts); absent on 2D.
+   */
+  uploadMs?: number;
+  /**
+   * Frames that uploaded content on screen whole by design (a `refresh` of the live slide, recovery after
+   * a device loss), and the longest of the last minute in ms: reported apart, never an alarm.
+   */
+  wholeUploads?: { count: number; maxMs: number };
 };
 
 export const EMPTY_TELEMETRY: RenderTelemetry = {
@@ -47,6 +58,12 @@ export type HealthInputs = {
   mediaDurationMs?: number;
   errors: string[];
   appVersion?: string;
+  /** Slide raster times of the asset worker (`TimingWindow` over the last slides drawn). */
+  raster?: TimingSummary;
+  /** The output's size in device px: the performance budgets scale with it (`perfBudgets`). */
+  size?: { width: number; height: number };
+  /** Characters drawn that no face this output has covers (`GlyphCoverage`), with their scripts. */
+  fontCoverage?: { chars: string; count: number; scripts: string[] };
 };
 
 export type HealthReport = {
@@ -69,7 +86,105 @@ export type HealthReport = {
   error?: string;
   appVersion?: string;
   gpuMB?: number;
+  /** Slide raster p50, p95 and max over the last `n` slides the asset worker drew, ms. */
+  rasterMs?: TimingSummary;
+  uploadMs?: number;
+  wholeUploads?: { count: number; maxMs: number };
+  /** This output's performance budgets at its size (design/27 §13). */
+  budgets?: PerfBudgets;
+  /** Budgets passed now (`PerfAlarm`); absent when every measured figure is within its budget. */
+  alarms?: PerfAlarm[];
+  fontCoverage?: { chars: string; count: number; scripts: string[] };
 };
+
+/** Nearest-rank percentiles of a window of timings, ms (0.01 ms resolution). */
+export type TimingSummary = { n: number; p50: number; p95: number; max: number };
+
+/**
+ * The last `size` timings of one kind (the link keeps one for slide rasters): `add` on every result,
+ * `summary` once per health report. Non-finite and negative values count as 0.
+ */
+export class TimingWindow {
+  private readonly ring: Float64Array;
+  private count = 0;
+  private at = 0;
+
+  constructor(readonly size = 64) {
+    this.ring = new Float64Array(Math.max(1, Math.floor(size)));
+  }
+
+  add(ms: number): void {
+    this.ring[this.at] = Number.isFinite(ms) && ms > 0 ? ms : 0;
+    this.at = (this.at + 1) % this.ring.length;
+    if (this.count < this.ring.length) this.count++;
+  }
+
+  /** Timings in the window (at most `size`). */
+  get n(): number {
+    return this.count;
+  }
+
+  clear(): void {
+    this.count = 0;
+    this.at = 0;
+  }
+
+  /** Undefined while the window is empty. */
+  summary(): TimingSummary | undefined {
+    if (!this.count) return undefined;
+    const s = Array.from(this.ring.subarray(0, this.count)).sort((a, b) => a - b);
+    const q = (p: number) => s[Math.min(s.length - 1, Math.max(0, Math.ceil(p * s.length) - 1))]!;
+    const r = (x: number) => Math.round(x * 100) / 100;
+    return { n: this.count, p50: r(q(0.5)), p95: r(q(0.95)), max: r(s[s.length - 1]!) };
+  }
+}
+
+/** The performance budgets of design/27 §13 that health checks, for one output size. */
+export type PerfBudgets = {
+  /** Slide raster p95 in the asset worker, ms: 10 at 1080p (and below), 30 at 4K, by pixel count between. */
+  rasterP95Ms: number;
+  /** Texture upload per frame, ms (the render worker's CPU time in the copies): 4 at every size. */
+  uploadMs: number;
+  /**
+   * GPU memory of the layer and scene textures, MB: 400 at 4K (five layers of two textures, 331.8 MB,
+   * plus the two over textures of a scene, 66.4 MB), scaled by pixel count to the next MB (100 at 1080p,
+   * where they take 99.5). For display beside `gpuMB` only: `gpuMB` is ordo's own fixed allocation (a
+   * function of the output's size and of the scenes' over textures), which this budget is derived from,
+   * so it is no alarm; the GPU's real pressure (video, the swap chain, other programs, an iGPU's shared
+   * memory) is not observable from a page.
+   */
+  gpuMB: number;
+};
+
+const PX_1080 = 1920 * 1080;
+const PX_4K = 3840 * 2160;
+
+export function perfBudgets(width: number, height: number): PerfBudgets {
+  const px = Math.max(1, width) * Math.max(1, height);
+  const t = Math.min(1, Math.max(0, (px - PX_1080) / (PX_4K - PX_1080)));
+  return {
+    rasterP95Ms: Math.round((10 + 20 * t) * 10) / 10,
+    uploadMs: 4,
+    gpuMB: Math.ceil((400 * px) / PX_4K),
+  };
+}
+
+/**
+ * A budget passed: `raster` (slide raster p95 over its budget once `RASTER_ALARM_MIN` slides were drawn:
+ * slides may flip late), `upload` (uploadMs, the budgeted strip frames of the last minute, over its budget:
+ * frames may be missed while new content uploads). GPU memory has no alarm (see `PerfBudgets.gpuMB`).
+ */
+export type PerfAlarm = 'raster' | 'upload';
+
+/** Slides drawn before a raster p95 can raise the alarm (the first draws pay for compiling and caches). */
+export const RASTER_ALARM_MIN = 20;
+
+export function perfAlarms(b: PerfBudgets, m: { raster?: TimingSummary; uploadMs?: number }): PerfAlarm[] {
+  const out: PerfAlarm[] = [];
+  if (m.raster && m.raster.n >= RASTER_ALARM_MIN && m.raster.p95 > b.rasterP95Ms) out.push('raster');
+  if (m.uploadMs !== undefined && m.uploadMs > b.uploadMs) out.push('upload');
+  return out;
+}
 
 export type ArmStatus = { ok: boolean; pending: string[]; error?: string };
 
@@ -117,7 +232,25 @@ export function buildHealth(i: HealthInputs): HealthReport {
     error,
     appVersion: i.appVersion,
     ...(i.render.gpuMB !== undefined ? { gpuMB: i.render.gpuMB } : {}),
+    ...perf(i),
+    ...(i.fontCoverage?.count ? { fontCoverage: i.fontCoverage } : {}),
   };
+}
+
+/** The performance part of a health report: measured figures, the budgets at this size, and the alarms. */
+type PerfPart = 'rasterMs' | 'uploadMs' | 'wholeUploads' | 'budgets' | 'alarms';
+
+function perf(i: HealthInputs): Pick<HealthReport, PerfPart> {
+  const out: Pick<HealthReport, PerfPart> = {};
+  if (i.raster) out.rasterMs = i.raster;
+  if (i.render.uploadMs !== undefined) out.uploadMs = Math.round(i.render.uploadMs * 100) / 100;
+  const w = i.render.wholeUploads;
+  if (w?.count) out.wholeUploads = { count: w.count, maxMs: Math.round(w.maxMs * 100) / 100 };
+  if (!i.size) return out;
+  out.budgets = perfBudgets(i.size.width, i.size.height);
+  const alarms = perfAlarms(out.budgets, { raster: i.raster, uploadMs: out.uploadMs });
+  if (alarms.length) out.alarms = alarms;
+  return out;
 }
 
 /**

@@ -44,12 +44,15 @@ export function pictureKeyHash(key: string): string {
 /**
  * LRU by last use; eviction closes the bitmap. Keys are `pictureKey`s. A pinned key (`pin`) is never
  * evicted or pruned: the asset worker pins what a cue's draw holds from its preload until the draw is done
- * (`unpinAll`), so neither a later insert of the same preload nor a prune arriving meanwhile closes a bitmap
- * the draw is about to use. Pinned entries may hold the cache over its limits until they are unpinned.
+ * (`unpin`), so neither a later insert nor a prune arriving meanwhile closes a bitmap the draw is about to
+ * use. Pins are counted: jobs of the asset worker's raster lanes run side by side (design/27 §7.5), and one
+ * job's release must not unpin what another still draws. Pinned entries may hold the cache over its limits
+ * until they are unpinned.
  */
 export class BitmapCache<B extends Sized> {
   private map = new Map<string, B>();
-  private pinned = new Set<string>();
+  /** Pin counts by key. */
+  private pinned = new Map<string, number>();
   bytes = 0;
 
   constructor(
@@ -73,9 +76,18 @@ export class BitmapCache<B extends Sized> {
     return this.map.has(hash);
   }
 
-  /** Insert (replacing any previous entry) and evict least recently used entries over budget. */
-  set(hash: string, bmp: B): void {
+  /**
+   * Insert and evict least recently used entries over budget. A previous entry under the key is replaced and
+   * closed, unless it is pinned: a draw still holds it, so it stays and `bmp` is closed instead. Returns the
+   * bitmap the cache now holds under the key.
+   */
+  set(hash: string, bmp: B): B {
     const prev = this.map.get(hash);
+    if (prev && prev !== bmp && this.pinned.has(hash)) {
+      bmp.close();
+      this.get(hash);
+      return prev;
+    }
     if (prev && prev !== bmp) {
       this.bytes -= bitmapBytes(prev);
       prev.close();
@@ -84,18 +96,31 @@ export class BitmapCache<B extends Sized> {
     this.map.set(hash, bmp);
     if (!prev || prev !== bmp) this.bytes += bitmapBytes(bmp);
     this.trim(hash);
+    return bmp;
   }
 
-  /** Keep `key` (inserted or not yet) from eviction and pruning until `unpinAll`. */
+  /** Keep `key` (inserted or not yet) from eviction and pruning until it is unpinned as often as pinned. */
   pin(key: string): void {
-    this.pinned.add(key);
+    this.pinned.set(key, (this.pinned.get(key) ?? 0) + 1);
   }
 
+  /** Undo one `pin` of `key`; once no pin is left the cache trims back to its limits. */
+  unpin(key: string): void {
+    const n = this.pinned.get(key);
+    if (n === undefined) return;
+    if (n > 1) this.pinned.set(key, n - 1);
+    else {
+      this.pinned.delete(key);
+      this.trim();
+    }
+  }
+
+  /** Keys pinned at least once. */
   get pinnedCount(): number {
     return this.pinned.size;
   }
 
-  /** Unpin every key and evict back to the limits. */
+  /** Unpin every key (every job's pins) and evict back to the limits. */
   unpinAll(): void {
     this.pinned.clear();
     this.trim();

@@ -1,4 +1,4 @@
-import type { LayerStack, Stack, StackContent } from './stacks.ts';
+import { type LayerStack, SRC_BITMAP, type Stack, type StackContent } from './stacks.ts';
 
 /**
  * The video frame each slot presents this frame (chosen by the engine's FrameRing, frame-ring.ts, which owns
@@ -39,6 +39,14 @@ export interface Compositor {
    * with true after the draw's submit. Compositors that draw bitmaps directly (Canvas 2D) have none.
    */
   drainUploads?(f: FrameInputs, all: boolean): void;
+  /**
+   * Upload, within the frame's time budget (the byte budget, which spreads armed content over frames, does
+   * not hold a flip that is due), the armed content of every flip due on this frame that is not ready
+   * (design/27 §7.3), right after the layers tick: content whose copies end within the budget then flips on
+   * time (the engine ticks those layers again), larger content keeps the previous picture and flips once
+   * its last rows are in. Returns true when it made any stack ready. A compositor without uploads has none.
+   */
+  uploadDue?(f: FrameInputs, now: number, frameMs: number): boolean;
   /** Forget uploaded textures (after a rebuild everything is re-uploaded from the stacks' bitmaps). */
   destroy(): void;
   /**
@@ -52,6 +60,155 @@ export interface Compositor {
    * reported as health `gpuMB` (design/27 §13). Canvas 2D holds none.
    */
   gpuBytes?(): number;
+  /**
+   * The longest time one frame spent uploading in strips within its budget over the last minute
+   * (`UploadMeter.max`: ms of the render worker's CPU time in the copies, not GPU time), reported as
+   * telemetry `uploadMs`. Whole uploads made by design are apart (`wholeUploads`).
+   */
+  uploadMs?(): number;
+  /**
+   * Frames that uploaded content on screen whole by design (a `refresh` of the live copy, recovery after a
+   * device loss), since the compositor was created, and the longest of the last minute in ms.
+   */
+  wholeUploads?(): { count: number; maxMs: number };
+}
+
+/**
+ * Where a frame's drawing starts (design/27 §7.1 opaque-first): the top-most of the first `n` layers whose
+ * live content is a full-frame opaque bitmap (`Stack.opaque`) shown at full weight (not fading). It hides
+ * every layer under it and the clear colour, so a compositor draws from it, without blending; 0 when there
+ * is none.
+ */
+export function opaqueFrom(
+  layers: LayerStack<ImageBitmap>[],
+  n: number,
+  width: number,
+  height: number,
+): number {
+  /* @hot */
+  for (let l = n - 1; l > 0; l--) if (opaqueLive(layers[l]!, width, height)) return l;
+  return 0;
+}
+
+/** Whether a layer shows a full-frame opaque bitmap at full weight this frame (see `opaqueFrom`). */
+export function opaqueLive(ls: LayerStack<ImageBitmap>, width: number, height: number): boolean {
+  /* @hot */
+  if (ls.fading) return false;
+  const s = ls.stacks[ls.live]!;
+  const b = s.bitmap;
+  return (
+    s.kind === SRC_BITMAP &&
+    s.opaque &&
+    b !== null &&
+    s.x === 0 &&
+    s.y === 0 &&
+    b.width >= width &&
+    b.height >= height
+  );
+}
+
+/** Uploading frames an UploadMeter keeps of each kind. */
+const UPLOAD_FRAMES = 128;
+
+/** The upload time of recent frames with their times: the longest within a time window. */
+class FrameTimes {
+  private readonly ms = new Float32Array(UPLOAD_FRAMES);
+  private readonly at = new Float64Array(UPLOAD_FRAMES).fill(Number.NEGATIVE_INFINITY);
+  private next = 0;
+
+  push(ms: number, now: number): void {
+    /* @hot */
+    this.ms[this.next] = ms;
+    this.at[this.next] = now;
+    this.next = (this.next + 1) % UPLOAD_FRAMES;
+  }
+
+  /** The longest of the frames kept that are at most `windowMs` old, 0.01 ms resolution. */
+  max(now: number, windowMs: number): number {
+    let m = 0;
+    for (let i = 0; i < this.ms.length; i++)
+      if (now - this.at[i]! <= windowMs && this.ms[i]! > m) m = this.ms[i]!;
+    return Math.round(m * 100) / 100;
+  }
+}
+
+/**
+ * The CPU time a compositor spends uploading per frame (design/27 §13 `uploadMs`): the drain before the
+ * draw and the one after its submit are one frame. Two kinds of frames are kept apart:
+ * - budgeted frames (strips of armed content, within the per-frame budget): `max()` is the longest of
+ *   those in the last WINDOW_MS (at most FRAMES of them), the figure the health `upload` alarm checks;
+ * - whole frames, where content on screen was uploaded at once by design (`whole`: a `refresh` of the
+ *   live copy, everything on screen after a device loss or a new compositor): counted, with the longest
+ *   in the window (`wholeUploads()`), and never in `max()`, so one deliberate large copy cannot raise or
+ *   hold the alarm.
+ */
+export class UploadMeter {
+  static readonly FRAMES = UPLOAD_FRAMES;
+  /** Frames older than this no longer count toward `max()` (a minute of the service). */
+  static readonly WINDOW_MS = 60_000;
+  private readonly budgeted = new FrameTimes();
+  private readonly wholeTimes = new FrameTimes();
+  private acc = 0;
+  private t0 = 0;
+  private running = false;
+  /** Frames that uploaded content on screen whole, since the compositor was created. */
+  wholeFrames = 0;
+  /** Copies (or upload work) in this frame so far. */
+  work = 0;
+  /** Of which copies of content on screen made whole by design (not budgeted). */
+  whole = 0;
+
+  begin(): void {
+    /* @hot */
+    this.acc = 0;
+    this.work = 0;
+    this.whole = 0;
+    this.resume();
+  }
+
+  resume(): void {
+    /* @hot */
+    this.t0 = performance.now();
+    this.running = true;
+  }
+
+  pause(): void {
+    /* @hot */
+    if (this.running) this.acc += performance.now() - this.t0;
+    this.running = false;
+  }
+
+  /** Upload time of this frame so far, ms. */
+  elapsed(): number {
+    /* @hot */
+    return this.running ? this.acc + performance.now() - this.t0 : this.acc;
+  }
+
+  /** Close the frame: it counts when it uploaded anything (`work`), as a whole frame when `whole`. */
+  end(): void {
+    /* @hot */
+    this.pause();
+    if (this.work > 0) {
+      const now = performance.now();
+      if (this.whole > 0) {
+        this.wholeFrames++;
+        this.wholeTimes.push(this.acc, now);
+      } else this.budgeted.push(this.acc, now);
+    }
+    this.acc = 0;
+    this.work = 0;
+    this.whole = 0;
+  }
+
+  /** The longest budgeted upload frame of the last WINDOW_MS, ms (0 when none). */
+  max(now = performance.now()): number {
+    return this.budgeted.max(now, UploadMeter.WINDOW_MS);
+  }
+
+  /** Whole uploads (by design): how many frames since the start, and the longest of the last WINDOW_MS. */
+  wholeUploads(now = performance.now()): { count: number; maxMs: number } {
+    return { count: this.wholeFrames, maxMs: this.wholeTimes.max(now, UploadMeter.WINDOW_MS) };
+  }
 }
 
 export const MAX_VIDEO_SLOTS = 4;

@@ -7,8 +7,10 @@ import {
   type Slide,
   type TextObject,
 } from '@ordo/domain';
+import { clampStyle } from './clamp.ts';
 import { rasterLowerThird } from './raster.ts';
-import { LEGACY_FONT_ENV } from './text/fonts.ts';
+import { LEGACY_FONT_ENV, installFontEnv } from './text/fonts.ts';
+import type { FontEnv } from './text/types.ts';
 import { itemize } from './text/itemize.ts';
 import { BAND_MIN_FONT_SCALE, bandObject, clampTextObject, layoutRich } from './text/rich.ts';
 import { prepare } from './text/segments.ts';
@@ -226,5 +228,45 @@ describe('look bands (design/27 §6)', () => {
     const f = at('Pastor Sam Jones', rich);
     expect(f.length).toBeGreaterThan(0);
     expect(f.every((o) => o.transform[0] === 0.5)).toBe(true);
+  });
+});
+
+describe('legacy layout memo (design/27 §7.3)', () => {
+  // A resolver-like environment: the legacy CSS fonts with a generation, which turns the memo on.
+  const RESOLVER: FontEnv = { generation: 1, font: (req) => LEGACY_FONT_ENV.font(req) };
+  // Clamped, as every caller passes it (`legacyTextReach`, `drawText`): the memo keys on the inputs.
+  const style = clampStyle({ ...DEFAULT_LYRIC_STYLE, fontSizePx: 72, letterSpacing: 2 });
+  const box = { x: 100, y: 100, w: 1700, h: 400, rotation: 0 };
+  const glyphFonts = (ctx: ReturnType<typeof recordingCtx>) =>
+    ctx.ops.filter((o) => o.op === 'fillText' || o.op === 'strokeText').map((o) => o.font);
+
+  it('a layout from the memo draws in its own font, whatever the context holds', () => {
+    installFontEnv(RESOLVER);
+    try {
+      const ctx = recordingCtx();
+      // Laid out first (a sprite's reach, inside save/restore): the context's font goes back to its default.
+      ctx.save();
+      const l = layoutText(ctx, 'Amazing grace', style, box, 2);
+      ctx.restore();
+      expect(String(ctx.font)).toBe('10px sans-serif');
+      expect(l.font).toContain('144px');
+      expect(l.letterSpacing).toBe(4);
+      // Drawn twice on the same context: both draws hit the memo and both draw in the layout's font.
+      expect(drawText(ctx, 'Amazing grace', style, box, 2)).toBe(l);
+      drawText(ctx, 'Amazing grace', style, box, 2);
+      const fonts = glyphFonts(ctx);
+      expect(fonts.length).toBeGreaterThan(1);
+      expect(new Set(fonts)).toEqual(new Set([l.font]));
+    } finally {
+      installFontEnv(LEGACY_FONT_ENV);
+    }
+  });
+
+  it('without a resolver nothing is kept', () => {
+    const ctx = recordingCtx();
+    const a = layoutText(ctx, 'Amazing grace', style, box, 2);
+    expect(layoutText(ctx, 'Amazing grace', style, box, 2)).not.toBe(a);
+    drawText(ctx, 'Amazing grace', style, box, 2);
+    expect(new Set(glyphFonts(ctx))).toEqual(new Set([a.font]));
   });
 });

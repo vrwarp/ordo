@@ -58,6 +58,9 @@ export type EngineOptions = {
    * 0 disables the retry. Default 60 s.
    */
   gpuRetryMs?: number;
+  /** WebGPU upload budget per frame (GpuInit; defaults in gpu.ts), for the venue measurements. */
+  uploadBudgetBytes?: number;
+  uploadBudgetMs?: number;
 };
 
 export const GPU_RETRY_MAX_MS = 15 * 60_000;
@@ -148,6 +151,8 @@ export class RenderEngine {
     this.snapEvery = 0; // the canvas cannot be copied on this platform; stop trying
   };
   private readonly frame = (ts: number) => this.onFrame(ts);
+  /** Flip times of the layers waiting for an upload this frame (`tickLayers`). */
+  private readonly waitingAt = new Float64Array(LAYERS.length);
 
   constructor(
     private opts: EngineOptions,
@@ -223,10 +228,12 @@ export class RenderEngine {
     this.gpuRetrying = true;
     this.gpuRetries++;
     let canvas: OffscreenCanvas | undefined;
+    let gpu: Compositor | undefined;
+    let adopted = false;
     try {
       await this.refuseFallbackAdapter();
       canvas = await this.host.requestCanvas!();
-      const gpu = await (this.host.createGpu ?? createGpuCompositor)({
+      gpu = await (this.host.createGpu ?? createGpuCompositor)({
         canvas,
         width: this.opts.width,
         height: this.opts.height,
@@ -235,20 +242,25 @@ export class RenderEngine {
         onError: (message) => {
           this.error = `GPU: ${message}`;
         },
+        uploadBudgetBytes: this.opts.uploadBudgetBytes,
+        uploadBudgetMs: this.opts.uploadBudgetMs,
       });
       if (!this.running || this.rebuilding) {
-        gpu.destroy();
+        const unused = gpu;
+        gpu = undefined;
+        unused.destroy();
         this.host.canvasUnused?.();
         return;
       }
-      for (const ls of this.layers) {
-        ls.stacks[0].version++;
-        ls.stacks[1].version++;
-      }
+      // Synchronous from here to the swap: the 2D frame loop never sees the stacks gated for WebGPU, unless
+      // the first draw throws (the catch gives them back to the compositor still drawing).
+      adopted = true;
+      this.adoptStacks(gpu);
       this.prepareHeld(gpu);
       this.drawFrame(gpu);
       const old = this.compositor;
       this.compositor = gpu;
+      gpu = undefined;
       this.opts.canvas = canvas;
       this.gpuContextUsed = true;
       this.kind = 'webgpu';
@@ -261,6 +273,16 @@ export class RenderEngine {
       }
       this.host.onRestored?.('webgpu');
     } catch (err) {
+      // The stacks were gated for the new compositor (not ready until it uploads them): Canvas 2D, which
+      // keeps drawing, never uploads, so give them back to it or no flip to a bitmap would ever happen.
+      if (adopted && this.compositor) this.adoptStacks(this.compositor);
+      if (gpu) {
+        try {
+          gpu.destroy();
+        } catch {
+          /* gone */
+        }
+      }
       if (canvas) this.host.canvasUnused?.();
       this.error = `WebGPU still unavailable, using Canvas 2D: ${(err as Error).message}`;
       this.gpuRetrying = false;
@@ -288,9 +310,12 @@ export class RenderEngine {
           onError: (message) => {
             this.error = `GPU: ${message}`;
           },
+          uploadBudgetBytes: this.opts.uploadBudgetBytes,
+          uploadBudgetMs: this.opts.uploadBudgetMs,
         });
         this.kind = 'webgpu';
         this.error = undefined;
+        this.adoptStacks(this.compositor);
         this.prepareHeld(this.compositor);
         return { kind: 'webgpu' };
       } catch (err) {
@@ -306,8 +331,19 @@ export class RenderEngine {
     this.compositor = new Canvas2DCompositor(this.opts.canvas, this.opts.width, this.opts.height);
     this.kind = '2d';
     if (note) this.error = note;
+    this.adoptStacks(this.compositor);
     this.prepareHeld(this.compositor);
     return { kind: '2d', note };
+  }
+
+  /**
+   * A new or rebuilt compositor uploads every held stack again; one that uploads (WebGPU) gates flips on
+   * its uploads (`LayerStack.gated`, design/27 §7.3), so held content that is not on screen becomes ready
+   * only once it is uploaded again. What is on screen is uploaded before the first draw.
+   */
+  private adoptStacks(c: Compositor): void {
+    const gated = typeof c.drainUploads === 'function';
+    for (const ls of this.layers) ls.resetUploads(gated);
   }
 
   /**
@@ -348,12 +384,7 @@ export class RenderEngine {
     for (let attempt = 0; attempt < 20; attempt++) {
       try {
         await new Promise((r) => setTimeout(r, attempt === 0 ? 50 : 500));
-        const r = await this.createCompositor();
-        // Force re-upload from the stacks' bitmaps.
-        for (const ls of this.layers) {
-          ls.stacks[0].version++;
-          ls.stacks[1].version++;
-        }
+        const r = await this.createCompositor(); // re-uploads every held stack (adoptStacks)
         this.snapEvery = this.snapEvery || 1000;
         // The rebuilt compositor is copied once it has drawn for SNAP_SETTLE_MS: the main thread
         // uncovers the screen on that copy.
@@ -443,6 +474,8 @@ export class RenderEngine {
     let late = 0;
     for (const l of this.layers) late += l.lateFlips;
     const gpuBytes = this.compositor?.gpuBytes?.();
+    const uploadMs = this.compositor?.uploadMs?.();
+    const whole = this.compositor?.wholeUploads?.();
     return {
       presented: this.clock.presented,
       missed: this.clock.missed,
@@ -457,6 +490,8 @@ export class RenderEngine {
       slideCue: this.markerLive,
       slideFlipAt: this.markerFlipAt,
       ...(gpuBytes !== undefined ? { gpuMB: Math.round(gpuBytes / 1e5) / 10 } : {}),
+      ...(uploadMs !== undefined ? { uploadMs } : {}),
+      ...(whole?.count ? { wholeUploads: whole } : {}),
     };
   }
 
@@ -473,7 +508,10 @@ export class RenderEngine {
     const now = this.hubNow();
     const frameMs = this.clock.frameMs;
     this.inputs.now = now;
-    for (let i = 0; i < this.layers.length; i++) this.layers[i]!.tick(now, frameMs);
+    this.tickLayers(now, frameMs, false);
+    const c = this.compositor;
+    // A flip held for its upload: what fits this frame's budget is uploaded now and flips on time.
+    if (c?.uploadDue?.(this.inputs, now, frameMs)) this.tickLayers(now, frameMs, true);
     if (
       this.markerPending &&
       flipDue(now, this.markerAt, frameMs) &&
@@ -485,7 +523,6 @@ export class RenderEngine {
     }
     this.videoRing.select(now, frameMs);
     if (this.opts.testPixel) this.updateTestPixel();
-    const c = this.compositor;
     if (!c) return; // rebuilding after device loss; the main thread shows the last frame copy
     try {
       this.drawFrame(c);
@@ -520,9 +557,33 @@ export class RenderEngine {
   }
 
   /**
+   * Tick every layer (`pending`: only those with a flip pending). The layers of one cue flip together
+   * (design/27 §7.3): flips due at the same hub time `at` (one GO) wait while any of them is still
+   * uploading its content (`LayerStack.uploadWaiting`), so a new background never shows with the old slide
+   * for the frames the other layer's strips take. Content that has not arrived does not hold the others
+   * (it flips late on its own, as before strips).
+   */
+  private tickLayers(now: number, frameMs: number, pending: boolean): void {
+    /* @hot */
+    const waits = this.waitingAt;
+    let n = 0;
+    for (let i = 0; i < this.layers.length; i++) {
+      const l = this.layers[i]!;
+      if (l.uploadWaiting(now, frameMs)) waits[n++] = l.flipAt;
+    }
+    for (let i = 0; i < this.layers.length; i++) {
+      const l = this.layers[i]!;
+      if (pending && !l.flipPending) continue;
+      let hold = false;
+      for (let k = 0; k < n; k++) if (waits[k] === l.flipAt) hold = true;
+      l.tick(now, frameMs, hold && l.flipPending);
+    }
+  }
+
+  /**
    * Draw one frame on `c`. Texture uploads stay out of `draw` (design/27 §7.3): what this frame samples is
    * uploaded just before it, the rest (content armed for a coming flip) after its submit, off the frame's
-   * critical path.
+   * critical path, in strips within the compositor's per-frame budget.
    */
   private drawFrame(c: Compositor): void {
     /* @hot */

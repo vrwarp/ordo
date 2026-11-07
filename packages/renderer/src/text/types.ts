@@ -19,7 +19,21 @@ import type { Box, Rgba, Shadow, TextPara } from '@ordo/domain';
  */
 export interface Measurer {
   width(font: string, dir: 'ltr' | 'rtl', lang: string, spacingPx: number, text: string): number;
+  /**
+   * The ink of `text` in the same state, drawn with `textAlign 'left'` on an alphabetic baseline (`Ink`),
+   * or undefined where the platform reports none. Optional: layout never needs it; a sprite's reach does
+   * (sprite.ts), since a glyph part can lie wholly outside its line box (a tone mark stacked over a
+   * circumflex on a capital, with tight line spacing).
+   */
+  ink?(font: string, dir: 'ltr' | 'rtl', lang: string, spacingPx: number, text: string): Ink | undefined;
 }
+
+/**
+ * Where a string's glyphs reach from its pen at the baseline (px of the font's size, `TextMetrics`'
+ * `actualBoundingBox*`): `left` of the pen (negative when the ink starts right of it), `right` of it,
+ * `ascent` above the baseline and `descent` below it.
+ */
+export type Ink = { left: number; right: number; ascent: number; descent: number };
 
 /**
  * One drawn segment of a line: a maximal substring with one style run, one bidi level and no break

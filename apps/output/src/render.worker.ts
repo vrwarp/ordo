@@ -119,14 +119,27 @@ function attachAsset(port: MessagePort): void {
             key: a.key,
             kind: SRC_SCENE,
             bitmap: a.bitmap,
+            x: a.x,
+            y: a.y,
             cueIndex: a.cueIndex,
             refresh: a.refresh,
             over: a.over ?? null,
+            overX: a.overX,
+            overY: a.overY,
             plane: a.plane,
             videoSlot: a.videoSlot,
             videoGen: a.videoGen,
           }
-        : { key: a.key, kind: SRC_BITMAP, bitmap: a.bitmap, cueIndex: a.cueIndex, refresh: a.refresh };
+        : {
+            key: a.key,
+            kind: SRC_BITMAP,
+            bitmap: a.bitmap,
+            x: a.x,
+            y: a.y,
+            opaque: a.opaque,
+            cueIndex: a.cueIndex,
+            refresh: a.refresh,
+          };
     if (engine) engine.offer(a.layer, c);
     else earlyOffers.push({ layer: a.layer, c });
   };

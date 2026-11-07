@@ -1,5 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 import {
+  OP,
+  PIN,
   shownSlideCue,
   fixtures,
   goLive,
@@ -124,6 +126,37 @@ test.describe('outputs follow the live state', () => {
     const t = await telemetry(p1);
     expect(t.presented).toBeGreaterThan(30);
     expect(t.error ?? '').not.toMatch(/arm/i);
+    // Performance health (design/27 §13, M7): the slides drawn so far are timed, and the budgets are those
+    // of this output's size. Timings are printed, not asserted (SwiftShader, a loaded runner).
+    const perf = t as unknown as {
+      rasterMs?: { n: number; p50: number; p95: number };
+      budgets?: { rasterP95Ms: number; uploadMs: number; gpuMB: number };
+      alarms?: string[];
+      gpuMB?: number;
+    };
+    expect(perf.rasterMs?.n ?? 0).toBeGreaterThanOrEqual(3);
+    expect(perf.budgets?.rasterP95Ms).toBeGreaterThanOrEqual(10);
+    expect(perf.budgets?.gpuMB).toBeGreaterThan(0);
+    console.log(
+      `output health: slide raster p50 ${perf.rasterMs?.p50} ms, p95 ${perf.rasterMs?.p95} ms over ${perf.rasterMs?.n}; budgets ${JSON.stringify(perf.budgets)}; gpuMB ${perf.gpuMB ?? '-'}; alarms ${perf.alarms?.join(', ') ?? 'none'}`,
+    );
+    // The same figures in the operator (the M7 exit: the health metrics are visible there): Diagnostics,
+    // "Performance and fonts", this output's row with its slide drawing p50 / p95 against its budget.
+    const op = await context.newPage();
+    await op.goto(`${OP}/`);
+    await op.locator('input.pin').fill(PIN);
+    await op.getByRole('button', { name: 'OK' }).click();
+    await op.locator('button[title="Diagnostics"]').click();
+    const row = op.locator(`[data-performance-output="${a1.id}"]`);
+    await expect(row).toContainText(/\d+(\.\d+)? \/ \d+(\.\d+)? ms \(p95 ≤ \d+ ms\)/, { timeout: 15_000 });
+    // The 2D compositor of these outputs uploads nothing and holds no GPU textures.
+    await expect(row).toContainText('none (2D)');
+    console.log(`operator performance row: ${(await row.locator('td').allInnerTexts()).join(' | ')}`);
+    if (process.env.ORDO_E2E_SHOTS)
+      await op
+        .locator('[data-performance]')
+        .screenshot({ path: `${process.env.ORDO_E2E_SHOTS}/operator-performance.png` });
+    await op.close();
   });
 
   test('an output URL without a valid token shows nothing and gets no state', async ({ page }) => {

@@ -23,6 +23,13 @@ import {
  * (masks, crops, rotation, flips, an over), crossfade midpoints of every source pair, a stale generation
  * and a slot without a frame (both show the poster, never black), and the legacy bitmap and video paths.
  * `canvas2dScenes` probes that the Canvas 2D compositor draws a scene's video; the runner fails without it.
+ *
+ * M7 (design/27 §7.3): tight sprites at offsets (a bitmap, a scene's base and over, cut to the bounding box
+ * of their pixels), crossfades between a full-frame and a tight layer, opaque full-frame layers (the
+ * replace pipeline and Canvas 2D 'copy', with nothing drawn under them), and strip uploads: with a budget
+ * of a few rows per frame, a flip to content still uploading keeps the previous picture whole until the
+ * last strip is in (`STRIP_CASES`, compared with Canvas 2D drawing the previous and then the new content).
+ * Every other case lets its uploads finish before its flips, as arming a cue ahead does.
  */
 
 const W = 640;
@@ -41,6 +48,33 @@ function canvas(w: number, h: number, draw: (c: Ctx) => void): Canvas {
   draw(ctx);
   return c;
 }
+
+/** A canvas cut to the bounding box of its non-transparent pixels: a tight sprite and its offset. */
+type Sprite = { canvas: Canvas; x: number; y: number };
+function tight(src: Canvas): Sprite {
+  const d = src.getContext('2d')!.getImageData(0, 0, src.width, src.height).data;
+  let x0 = src.width;
+  let y0 = src.height;
+  let x1 = 0;
+  let y1 = 0;
+  for (let y = 0; y < src.height; y++)
+    for (let x = 0; x < src.width; x++)
+      if (d[(y * src.width + x) * 4 + 3]! > 0) {
+        if (x < x0) x0 = x;
+        if (y < y0) y0 = y;
+        if (x + 1 > x1) x1 = x + 1;
+        if (y + 1 > y1) y1 = y + 1;
+      }
+  if (x1 <= x0 || y1 <= y0) return { canvas: canvas(1, 1, () => undefined), x: 0, y: 0 };
+  const out = canvas(x1 - x0, y1 - y0, (c) => c.drawImage(src, -x0, -y0));
+  return { canvas: out, x: x0, y: y0 };
+}
+const sprites = new Map<Canvas, Sprite>();
+const spriteOf = (src: Canvas): Sprite => {
+  let s = sprites.get(src);
+  if (!s) sprites.set(src, (s = tight(src)));
+  return s;
+};
 
 /** Premultiplied 0..1 RGBA of a canvas (what the GPU holds after a premultiplied upload). */
 function pixels(c: Canvas): Px {
@@ -128,6 +162,31 @@ const slideBitmap = canvas(W, H, (c) => {
   c.fillRect(W * 0.1, H * 0.1, W * 0.4, H * 0.4);
 });
 
+/** A lyric band in the lower half: what a tight slide sprite usually holds (text over the background). */
+const band = canvas(W, H, (c) => {
+  c.fillStyle = 'rgba(0,0,0,0.45)';
+  c.beginPath();
+  c.roundRect(52, 214, 536, 104, 14);
+  c.fill();
+  c.fillStyle = '#ffffff';
+  c.fillRect(80, 232, 470, 26);
+  c.fillStyle = 'rgba(255,220,120,0.9)';
+  c.fillRect(120, 272, 380, 22);
+});
+
+/** An opaque full-frame picture (a cover-fitted photo): drawn without blending, hiding what is under it. */
+const photo = canvas(W, H, (c) => {
+  const g = c.createLinearGradient(0, H, W, 0);
+  g.addColorStop(0, '#2d5016');
+  g.addColorStop(1, '#c8a24a');
+  c.fillStyle = g;
+  c.fillRect(0, 0, W, H);
+  c.fillStyle = 'rgba(255,255,255,0.3)';
+  c.beginPath();
+  c.arc(W * 0.3, H * 0.4, H * 0.25, 0, Math.PI * 2);
+  c.fill();
+});
+
 const lowerThird = canvas(W, H, (c) => {
   c.fillStyle = 'rgba(0,0,0,0.6)';
   c.fillRect(0, H * 0.72, W, H * 0.18);
@@ -146,7 +205,15 @@ function maskPath(c: Ctx, plane: Float32Array): void {
   else c.rect(0, 0, 1, 1);
 }
 
-type Scene = { plane: Float32Array; base: Canvas; over: Canvas | null; clip: Canvas };
+type Scene = {
+  plane: Float32Array;
+  base: Canvas;
+  over: Canvas | null;
+  clip: Canvas;
+  /** Base and over cut to tight sprites (the asset worker's M7 scene parts). */
+  tightBase?: boolean;
+  tightOver?: boolean;
+};
 
 /**
  * A scene as the asset worker would make it: base = panels and the poster at the video's frame (a flat
@@ -229,7 +296,7 @@ const S = {
 // ---- Cases ---------------------------------------------------------------------------------------------
 
 type Content =
-  | { kind: 'bitmap'; src: Canvas }
+  | { kind: 'bitmap'; src: Canvas; tight?: boolean; opaque?: boolean }
   | { kind: 'video'; slot: number; fit: number }
   | { kind: 'scene'; scene: Scene; slot: number; gen: number };
 
@@ -252,6 +319,8 @@ const centre = (s: Scene) => {
 };
 
 const bg: LayerSpec = { layer: LAYER_INDEX.background, to: { kind: 'bitmap', src: background } };
+const sprite = (src: Canvas): Content => ({ kind: 'bitmap', src, tight: true });
+const opaque = (src: Canvas): Content => ({ kind: 'bitmap', src, opaque: true });
 const slide = (to: Content, from?: Content, fade = !!from): LayerSpec => ({
   layer: LAYER_INDEX.slide,
   to,
@@ -392,6 +461,83 @@ export const CASES: Record<string, Case> = {
     frames: [],
     progress: 0.5,
   },
+  // M7: tight sprites at their offsets, crossfades with full-frame layers, scenes with tight parts.
+  'sprite-offset': {
+    layers: [
+      bg,
+      slide(sprite(band)),
+      { layer: LAYER_INDEX.lowerThird, to: sprite(lowerThird) },
+      { layer: LAYER_INDEX.props, to: sprite(slideBitmap) },
+    ],
+    frames: [],
+  },
+  'fade-full-to-sprite': {
+    layers: [bg, slide(sprite(band), { kind: 'bitmap', src: slideBitmap })],
+    frames: [],
+    progress: 0.5,
+  },
+  'fade-sprite-to-full': {
+    layers: [bg, slide({ kind: 'bitmap', src: lowerThird }, sprite(band))],
+    frames: [],
+    progress: 0.35,
+  },
+  'fade-sprite-sprite': {
+    layers: [bg, slide(sprite(lowerThird), sprite(band))],
+    frames: [],
+    progress: 0.6,
+  },
+  'scene-tight-over': {
+    layers: [bg, slide(sc({ ...S.over, tightOver: true }, 3, 9))],
+    frames: [[3, clipB, 9]],
+  },
+  'scene-tight-base-over': {
+    layers: [bg, slide(sc({ ...S.ellipse, tightBase: true, tightOver: true }))],
+    frames: [[2, clipA, 1]],
+  },
+  'fade-sprite-tight-scene': {
+    layers: [bg, slide(sc({ ...S.over, tightBase: true, tightOver: true }), sprite(band))],
+    frames: [[2, clipB, 1]],
+    progress: 0.5,
+  },
+  'fade-tight-scene-full': {
+    layers: [bg, slide({ kind: 'bitmap', src: slideBitmap }, sc({ ...S.ellipse, tightOver: true }))],
+    frames: [[2, clipA, 1]],
+    progress: 0.4,
+  },
+  // Opaque full-frame layers: the background written without blending; an opaque props layer (the logo)
+  // hides every layer under it; a fade between opaque pictures blends as usual.
+  'opaque-background': {
+    layers: [{ layer: LAYER_INDEX.background, to: opaque(photo) }, slide(sprite(band))],
+    frames: [],
+  },
+  'opaque-props-hides-below': {
+    layers: [bg, slide(sprite(band)), { layer: LAYER_INDEX.props, to: opaque(photo) }],
+    frames: [],
+  },
+  'opaque-fade': {
+    layers: [
+      { layer: LAYER_INDEX.background, from: opaque(background), to: opaque(photo), fade: true },
+      slide(sprite(lowerThird)),
+    ],
+    frames: [],
+    progress: 0.5,
+  },
+};
+
+/**
+ * Strip uploads (design/27 §7.3): the WebGPU side uploads STRIP_ROWS rows per frame (a byte budget and no
+ * time budget, so the due flip is held to it too). `from` is live; `to` is offered and flipped at once, so
+ * the flip waits on its upload: until its last strip the frame must be the previous picture, whole
+ * (compared with Canvas 2D drawing `from`), and after it the new one.
+ */
+const STRIP_ROWS = 24;
+export const STRIP_CASES: Record<string, { from: Content; to: Content }> = {
+  'strip-full-frame': { from: { kind: 'bitmap', src: slideBitmap }, to: { kind: 'bitmap', src: lowerThird } },
+  'strip-sprite': { from: sprite(lowerThird), to: sprite(band) },
+  'strip-scene-tight-over': {
+    from: { kind: 'bitmap', src: slideBitmap },
+    to: sc({ ...S.over, tightOver: true }, 2, 1),
+  },
 };
 
 // ---- Engines -------------------------------------------------------------------------------------------
@@ -406,7 +552,10 @@ class Side {
   /** Source pixels of every bitmap and frame handed to this engine (reference only). */
   readonly px = new WeakMap<object, Px>();
 
-  constructor(readonly gpu: boolean) {
+  constructor(
+    readonly gpu: boolean,
+    uploadBudgetBytes?: number,
+  ) {
     this.engine = new RenderEngine(
       {
         canvas: this.canvas,
@@ -419,6 +568,10 @@ class Side {
         clear: CLEAR,
         clockOffset: 0,
         gpuRetryMs: 0,
+        uploadBudgetBytes,
+        // The strip cases hold every upload to the byte budget, a due flip's included: with a time budget
+        // a due flip copies what the frame's time allows, which on these small frames is all of it at once.
+        uploadBudgetMs: uploadBudgetBytes === undefined ? undefined : 0,
       },
       {
         raf: (cb) => {
@@ -453,17 +606,43 @@ class Side {
       this.px.set(b, p);
       return b;
     };
-    if (c.kind === 'bitmap') return { key, kind: SRC_BITMAP, bitmap: await bmp(c.src) };
+    if (c.kind === 'bitmap') {
+      if (!c.tight) return { key, kind: SRC_BITMAP, bitmap: await bmp(c.src), opaque: c.opaque };
+      const t = spriteOf(c.src);
+      return { key, kind: SRC_BITMAP, bitmap: await bmp(t.canvas), x: t.x, y: t.y };
+    }
     if (c.kind === 'video') return { key, kind: SRC_VIDEO, videoSlot: c.slot, fit: c.fit };
+    const base = c.scene.tightBase ? spriteOf(c.scene.base) : { canvas: c.scene.base, x: 0, y: 0 };
+    const over = c.scene.over
+      ? c.scene.tightOver
+        ? spriteOf(c.scene.over)
+        : { canvas: c.scene.over, x: 0, y: 0 }
+      : null;
     return {
       key,
       kind: SRC_SCENE,
-      bitmap: await bmp(c.scene.base),
-      over: c.scene.over ? await bmp(c.scene.over) : null,
+      bitmap: await bmp(base.canvas),
+      x: base.x,
+      y: base.y,
+      over: over ? await bmp(over.canvas) : null,
+      overX: over?.x,
+      overY: over?.y,
       plane: c.scene.plane,
       videoSlot: c.slot,
       videoGen: c.gen,
     };
+  }
+
+  /** Run frames at hub time `now` until every due flip happened and all armed content is uploaded. */
+  settle(now: number): void {
+    for (let i = 0; i < 400; i++) {
+      let done = true;
+      for (const ls of this.engine.layers)
+        if (!ls.armedStack.ready || (ls.flipPending && ls.flipAt <= now)) done = false;
+      if (done) return;
+      this.frame(now);
+    }
+    throw new Error('uploads did not settle');
   }
 
   /** Set the case up: `from` contents cut in at 0, `to` contents flipped at 1000 (fading over 1 s). */
@@ -482,10 +661,13 @@ class Side {
       e.flip(l.layer, `A${l.layer}`, 0, 0);
     }
     this.frame(0);
+    this.settle(0);
     for (const l of k.layers) {
       e.offer(l.layer, await this.content(l.to, `B${l.layer}`, cache));
       e.flip(l.layer, `B${l.layer}`, 1000, l.fade ? 1000 : 0);
     }
+    // Armed ahead of its flip, as a cue is: its strips are uploaded before the flip is due.
+    this.settle(500);
     this.frame(1000);
     const now = 1000 + (k.progress ?? 1) * 1000;
     this.frame(now);
@@ -528,15 +710,22 @@ function bilinear(p: Px, u: number, v: number, out: Float32Array): void {
   }
 }
 
+/** Pixel (x, y) of the frame from a bitmap placed at (ox, oy), premultiplied; 0 outside it. */
+function placed(p: Px | undefined, ox: number, oy: number, x: number, y: number, out: Float32Array): void {
+  out.fill(0);
+  const sx = x - ox;
+  const sy = y - oy;
+  if (!p || sx < 0 || sy < 0 || sx >= p.w || sy >= p.h) return;
+  const i = (sy * p.w + sx) * 4;
+  for (let k = 0; k < 4; k++) out[k] = p.d[i + k]!;
+}
+
 /** What a stack draws at pixel (x, y), premultiplied, by the compositor contract. */
 function stackColour(side: Side, s: Stack<ImageBitmap>, x: number, y: number, out: Float32Array): void {
   const v = side.engine.video;
-  const i = (y * W + x) * 4;
   out.fill(0);
-  if (s.kind === SRC_BITMAP || s.kind === SRC_SCENE) {
-    const b = s.bitmap ? side.px.get(s.bitmap) : undefined;
-    if (b) for (let k = 0; k < 4; k++) out[k] = b.d[i + k]!;
-  }
+  if (s.kind === SRC_BITMAP || s.kind === SRC_SCENE)
+    placed(s.bitmap ? side.px.get(s.bitmap) : undefined, s.x, s.y, x, y, out);
   if (s.kind === SRC_VIDEO) {
     const fr = v.frames[s.videoSlot]!;
     const p = side.px.get(fr)!;
@@ -564,10 +753,11 @@ function stackColour(side: Side, s: Stack<ImageBitmap>, x: number, y: number, ou
     for (let k = 0; k < 3; k++) out[k] = c[k]! * w + out[k]! * (1 - a);
     out[3] = a + out[3]! * (1 - a);
   }
-  const o = s.over ? side.px.get(s.over) : undefined;
-  if (o) {
-    const a = o.d[i + 3]!;
-    for (let k = 0; k < 4; k++) out[k] = o.d[i + k]! + out[k]! * (1 - a);
+  if (s.over) {
+    const o = new Float32Array(4);
+    placed(side.px.get(s.over), s.overX, s.overY, x, y, o);
+    const a = o[3]!;
+    for (let k = 0; k < 4; k++) out[k] = o[k]! + out[k]! * (1 - a);
   }
 }
 
@@ -750,10 +940,120 @@ async function run(lim: Limits, images: boolean): Promise<RunResult> {
     gpu.reset();
     c2d.reset();
   }
+  await runStrips(lim, images, c2d, cache, result);
   // The over textures were allocated by the engine's offer hook, once (two full-frame textures).
   result.overBytes =
     (gpu.engine as unknown as { compositor: { overBytes?: number } }).compositor.overBytes ?? 0;
   return result;
+}
+
+/**
+ * STRIP_CASES on a WebGPU engine that uploads STRIP_ROWS rows per frame: every frame while the new content
+ * uploads must show the previous picture whole (`:during`, the worst frame against Canvas 2D drawing
+ * `from`), the flip must wait for more than one frame, and once it happens the new picture shows
+ * (`:after`, against Canvas 2D drawing `to`).
+ */
+async function runStrips(
+  lim: Limits,
+  images: boolean,
+  c2d: Side,
+  cache: Map<Canvas, Px>,
+  result: RunResult,
+): Promise<void> {
+  const strip = new Side(true, STRIP_ROWS * W * 4);
+  if ((await strip.start()) !== 'webgpu') {
+    result.ok = false;
+    result.error = 'WebGPU unavailable for the strip cases';
+    return;
+  }
+  const SLIDE_L = LAYER_INDEX.slide;
+  const clipFrames: [number, Canvas, number][] = [[2, clipB, 1]];
+  const bad = (d: Diff, max: number) => d.differing / d.total > max;
+  for (const [name, k] of Object.entries(STRIP_CASES)) {
+    // The pictures before and after, drawn by Canvas 2D.
+    await c2d.run({ layers: [bg, slide(k.from)], frames: clipFrames }, cache);
+    const before = c2d.read();
+    c2d.reset();
+    await c2d.run({ layers: [bg, slide(k.to)], frames: clipFrames }, cache);
+    const after = c2d.read();
+    c2d.reset();
+    const e = strip.engine;
+    for (const [slot, src, gen] of clipFrames) {
+      const f = new VideoFrame(src, { timestamp: 0 });
+      let px = cache.get(src);
+      if (!px) cache.set(src, (px = pixels(src)));
+      strip.px.set(f, px);
+      e.setVideoFrame(slot, f, gen);
+    }
+    e.offer(bg.layer, await strip.content(bg.to, 'BG', cache));
+    e.flip(bg.layer, 'BG', 0, 0);
+    e.offer(SLIDE_L, await strip.content(k.from, 'A', cache));
+    e.flip(SLIDE_L, 'A', 0, 0);
+    strip.frame(0);
+    strip.settle(0);
+    // The new content is offered and flipped at once: the flip waits on its strips.
+    e.offer(SLIDE_L, await strip.content(k.to, 'B', cache));
+    e.flip(SLIDE_L, 'B', 1000, 0);
+    let now = 1000;
+    let waited = 0;
+    let worst: Diff = { differing: 0, total: W * H, maxDelta: 0 };
+    let worstImg: Uint8ClampedArray | null = null;
+    let worstRef: Uint8ClampedArray | null = null;
+    const ls = e.layers[SLIDE_L]!;
+    for (; waited < 400; waited++) {
+      strip.frame(now);
+      if (ls.liveStack.key === 'B') break;
+      const g = strip.read();
+      const d = diff(g, before, lim.tolerance);
+      if (!worstImg || d.differing > worst.differing) {
+        worst = d;
+        worstImg = g;
+        worstRef = reference(strip, now);
+      }
+      now += 16;
+    }
+    const during: CaseResult = {
+      name: `${name}:during`,
+      ok: true,
+      gpuVsRef: worstImg && worstRef ? diff(worstImg, worstRef, lim.refTolerance) : worst,
+      gpuVs2d: worst,
+      probes: [
+        {
+          what: 'the flip waits for the strips (frames held)',
+          ok: waited > 1 && waited < 400,
+          got: [waited],
+          want: [2],
+        },
+      ],
+    };
+    during.ok = !(
+      bad(during.gpuVs2d!, lim.maxFraction) ||
+      bad(during.gpuVsRef, lim.refMaxFraction) ||
+      during.probes.some((p) => !p.ok)
+    );
+    const g = strip.read();
+    const ref = reference(strip, now);
+    const done: CaseResult = {
+      name: `${name}:after`,
+      ok: true,
+      gpuVsRef: diff(g, ref, lim.refTolerance),
+      gpuVs2d: diff(g, after, lim.tolerance),
+      probes: [],
+    };
+    done.ok = !(bad(done.gpuVs2d!, lim.maxFraction) || bad(done.gpuVsRef, lim.refMaxFraction));
+    const err = e.telemetry().error;
+    if (err) done.error = err;
+    for (const r of [during, done]) if (!r.ok || r.error) result.ok = false;
+    if (!during.ok || images)
+      during.images = {
+        gpu: await png(worstImg ?? g),
+        ref: await png(worstRef ?? ref),
+        c2d: await png(before),
+      };
+    if (!done.ok || images) done.images = { gpu: await png(g), ref: await png(ref), c2d: await png(after) };
+    result.results.push(during, done);
+    strip.reset();
+  }
 }
 
 const scope = self as unknown as {

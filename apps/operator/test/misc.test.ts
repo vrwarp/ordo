@@ -5,7 +5,7 @@ import { keyFace } from '@ordo/surfaces';
 import { type Media, type Presentation, type SlideObject, parseLyrics, songFromParsed } from '@ordo/domain';
 import { DoublePressGuard } from '../src/lib/confirm.ts';
 import { allowedForRole, parseRoute, routeHash } from '../src/lib/route.ts';
-import { armDot, cacheSummary, outputDot } from '../src/lib/health.ts';
+import { armDot, cacheSummary, dotTitle, outputDot, outputIssues, rasterText } from '../src/lib/health.ts';
 import { deckView } from '../src/lib/deckView.ts';
 import { applyLibraryDelta, type LibraryData } from '../src/lib/libraryData.ts';
 import { swSource } from '../src/sw/template.ts';
@@ -64,6 +64,75 @@ describe('health dots', () => {
     expect(armDot(entry({ armed: 1 }), 2, s)).toBe('amber');
     expect(armDot(entry({ connected: false }), 2, s)).toBe('grey');
     expect(cacheSummary([entry({ cache: { ready: 2, total: 4 } })], { ready: 3, total: 4 }).frac).toBe(0.5);
+  });
+});
+
+describe('things to check on an output (design/27 §13, M7)', () => {
+  const perf = {
+    compositor: 'webgpu' as const,
+    gpuMB: 412.4,
+    uploadMs: 5.1,
+    rasterMs: { n: 40, p50: 12, p95: 34, max: 60 },
+    budgets: { rasterP95Ms: 30, uploadMs: 4, gpuMB: 400 },
+  };
+
+  it('none on a healthy output, and the dot stays green', () => {
+    expect(outputIssues(entry({ ...perf, gpuMB: 300, alarms: undefined }))).toEqual([]);
+    expect(outputDot(entry({ ...perf, gpuMB: 300 }))).toBe('green');
+    expect(outputIssues(entry({ connected: false, fontFallbacks: ['calibri'] }))).toEqual([]);
+  });
+
+  it('says in plain words what an alarm means, with the figures in the detail', () => {
+    const issues = outputIssues(
+      entry({ ...perf, alarms: ['raster', 'upload', 'later'], wholeUploads: { count: 2, maxMs: 9.1 } }),
+    );
+    expect(issues.map((i) => [i.id, i.level])).toEqual([
+      ['raster', 'warn'],
+      ['upload', 'warn'],
+    ]);
+    for (const i of issues) {
+      // No figures, units or jargon for the volunteer at the desk.
+      expect(i.label).not.toMatch(/\d|ms\b|MB|p95|GPU|raster|texture/);
+      expect(i.detail.length).toBeGreaterThan(20);
+    }
+    expect(issues[0]!.detail).toMatch(/p50 12 ms, p95 34 ms over the last 40 slides; budget p95 30 ms/);
+    expect(issues[1]!.detail).toMatch(
+      /up to 5.1 ms of the render worker's time in one frame over the last minute; budget 4 ms/,
+    );
+    expect(issues[1]!.detail).toMatch(/2 frame\(s\) uploaded what was on screen whole .* up to 9.1 ms/);
+    // The label does not blame the graphics card for what the render worker's CPU time shows.
+    expect(issues[1]!.label).toMatch(/^This computer/);
+    expect(outputDot(entry({ ...perf, alarms: ['upload'] }))).toBe('amber');
+    expect(dotTitle(entry({ ...perf, alarms: ['upload'] }), 'Audience 1')).toMatch(/slow to send new slides/);
+    // GPU memory over its budget is no issue (ordo's own fixed allocation; design/27 §13).
+    expect(outputIssues(entry({ ...perf, alarms: ['gpuMemory'] }))).toEqual([]);
+  });
+
+  it('reports missing fonts and characters no font has', () => {
+    const issues = outputIssues(
+      entry({
+        fontFallbacks: ['calibri', 'aptos'],
+        fontCoverage: { chars: '☧中', count: 3, scripts: ['Hani', 'Zyyy'] },
+      }),
+    );
+    expect(issues.map((i) => [i.id, i.level])).toEqual([
+      ['fontMissing', 'note'],
+      ['fontCoverage', 'note'],
+    ]);
+    expect(issues[0]!.detail).toMatch(/Not loaded here: calibri, aptos/);
+    expect(issues[1]!.detail).toMatch(
+      /3 characters no font of this output has: ☧ 中 … \(scripts Hani, Zyyy\)/,
+    );
+    // Notes for the tech: the dot stays green (nothing to do during the service) and the tooltip lists them.
+    expect(outputDot(entry({ fontFallbacks: ['calibri'] }))).toBe('green');
+    expect(dotTitle(entry({ fontFallbacks: ['calibri'] }), 'Audience 1')).toMatch(/A font is missing/);
+    // A red state stays red.
+    expect(outputDot(entry({ fontFallbacks: ['calibri'], error: 'decode failed' }))).toBe('red');
+  });
+
+  it('formats slide drawing times', () => {
+    expect(rasterText(entry(perf))).toBe('12 / 34 ms');
+    expect(rasterText(entry())).toBe('—');
   });
 });
 

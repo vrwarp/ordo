@@ -53,6 +53,9 @@ function fakeCtx(rec: { ops: string[]; drawn: FakeBitmap[] }) {
   return new Proxy(state, {
     get(t, k) {
       if (k === 'measureText') return (s: string) => ({ width: s.length * 10 });
+      // Nothing drawn reaches a pixel of these fakes: a tight sprite's edge ring reads transparent.
+      if (k === 'getImageData')
+        return (_x: number, _y: number, w: number, h: number) => ({ data: new Uint8ClampedArray(w * h * 4) });
       if (k in t) return t[k];
       return (...args: unknown[]) => {
         if (k === 'fillText') rec.ops.push(`text:${args[0]}`);
@@ -75,10 +78,34 @@ function fakeCtx(rec: { ops: string[]; drawn: FakeBitmap[] }) {
 class FakeOffscreenCanvas {
   private readonly rec = { ops: [] as string[], drawn: [] as FakeBitmap[] };
   private ctx = fakeCtx(this.rec);
-  constructor(
-    public width: number,
-    public height: number,
-  ) {}
+  private w: number;
+  private h: number;
+  /** Every size a surface was set to (the asset worker sizes it to each tight sprite). */
+  static sizes: [number, number][] = [];
+  constructor(width: number, height: number) {
+    this.w = width;
+    this.h = height;
+  }
+  // Setting a size clears the canvas, as in Chromium.
+  get width(): number {
+    return this.w;
+  }
+  set width(v: number) {
+    this.w = v;
+    this.reset();
+  }
+  get height(): number {
+    return this.h;
+  }
+  set height(v: number) {
+    this.h = v;
+    this.reset();
+  }
+  private reset(): void {
+    this.rec.ops.length = 0;
+    this.rec.drawn.length = 0;
+    FakeOffscreenCanvas.sizes.push([this.w, this.h]);
+  }
   getContext() {
     return this.ctx;
   }
@@ -106,6 +133,8 @@ const scope: { postMessage: (m: unknown) => void; onmessage: ((ev: { data: unkno
   onmessage: null,
 };
 const rendered: { msg: AssetToRender; transfer: unknown[] }[] = [];
+/** Files decoded (createImageBitmap of a fetched file). */
+const decoded: string[] = [];
 const replies: FromAsset[] = [];
 const link: {
   onmessage: ((ev: { data: unknown }) => void) | null;
@@ -128,12 +157,16 @@ beforeAll(async () => {
   // Pictures arrive from the hub's file route, tagged with their hash; the poster is 4:3.
   vi.stubGlobal('fetch', async (url: string) => {
     const hash = /files\/([^?]+)/.exec(url)?.[1] ?? '';
-    return { status: 200, ok: true, blob: async () => ({ hash }) };
+    // A file's head (opaque.ts reads it): a .jpg starts with the JPEG marker, anything else is unknown.
+    const head = hash.endsWith('.jpg') ? new Uint8Array([0xff, 0xd8, 0xff, 0xe0]) : new Uint8Array(4);
+    const slice = () => ({ arrayBuffer: async () => head.buffer });
+    return { status: 200, ok: true, blob: async () => ({ hash, size: 4, slice }) };
   });
   // A decode of a file, or a reduction of a decoded picture (`downscaleFor`), keeps the tag.
   vi.stubGlobal(
     'createImageBitmap',
     async (b: { hash?: string; tag?: string }, o?: { resizeWidth: number; resizeHeight: number }) => {
+      if (b.hash) decoded.push(b.hash);
       const tag = b.hash ?? b.tag;
       const bmp = {
         tag,
@@ -393,5 +426,143 @@ describe('asset worker: what a slide job draws follows slideContent (design/27 �
       'image:mine.png',
       'text:Added',
     ]);
+  });
+});
+
+describe('asset worker: tight sprites and opaque layers (design/27 §7.3, M7)', () => {
+  it('draws a lower third as a tight sprite at its offset', async () => {
+    const { msg, transfer } = await run({
+      kind: 'lowerThird',
+      layer: 2,
+      key: 'lt|x',
+      text: 'Pastor Anna',
+      look: LOOK_MAIN,
+    });
+    const b = msg!.bitmap as unknown as FakeBitmap;
+    expect(msg!.kind).toBe(SRC_BITMAP);
+    expect(b.width * b.height).toBeLessThan(W * H * 0.8);
+    expect(msg!.x).toBeGreaterThanOrEqual(0);
+    expect(msg!.y).toBeGreaterThan(H / 2);
+    expect(b.ops).toEqual(['text:Pastor Anna']);
+    expect(msg).not.toHaveProperty('opaque');
+    expect(transfer).toEqual([msg!.bitmap]);
+  });
+
+  it('draws a lyric-only band as a sprite, and a slide covering the frame full-frame', async () => {
+    const band = (await run(slideJob({ video: undefined, look: LOOK_LOWER_THIRD, isSong: true }))).msg!;
+    expect(band.y).toBeGreaterThan(0);
+    expect((band.bitmap as unknown as FakeBitmap).height).toBeLessThan(H);
+    // The slide's page picture covers the frame: one full-frame bitmap, no offset.
+    const page = (await run(slideJob({ video: undefined }))).msg!;
+    expect(page).not.toHaveProperty('x');
+    expect((page.bitmap as unknown as FakeBitmap).width).toBe(W);
+  });
+
+  it('marks a cover-fitted JPEG opaque, and neither a contained one nor another file', async () => {
+    const job = (hash: string, fit: 'cover' | 'contain'): AssetJob => ({
+      kind: 'image',
+      layer: 0,
+      key: `img|${hash}|${fit}`,
+      hash,
+      fit,
+    });
+    const cover = (await run(job('photo.jpg', 'cover'))).msg!;
+    expect(cover.opaque).toBe(true);
+    expect(cover).not.toHaveProperty('x');
+    const contain = (await run(job('photo.jpg', 'contain'))).msg!;
+    expect(contain).not.toHaveProperty('opaque');
+    const png = (await run(job('art.png', 'cover'))).msg!;
+    expect(png).not.toHaveProperty('opaque');
+  });
+});
+
+describe('asset worker: raster lanes (design/27 §7.5)', () => {
+  const send = (m: unknown) => link.onmessage!({ data: m });
+
+  it('reports the lane and the timing of each job with its result', async () => {
+    const { reply } = await run(slideJob({ video: undefined, key: 'sl|timed' }));
+    expect(reply).toMatchObject({ t: 'done', key: 'sl|timed', lane: 'interactive' });
+    const done = reply as Extract<FromAsset, { t: 'done' }>;
+    expect(done.waitMs).toBeGreaterThanOrEqual(0);
+    expect(done.busyMs).toBeGreaterThanOrEqual(0);
+    expect(done.longestMs).toBeLessThanOrEqual(done.busyMs! + 1e-9);
+    // The draw is one of the job's slices.
+    expect(done.rasterMs!).toBeLessThanOrEqual(done.busyMs! + 1e-9);
+  });
+
+  it('a cancelled job sends nothing, to the renderer or to the link', async () => {
+    rendered.length = 0;
+    replies.length = 0;
+    // Two jobs of one layer: the second waits behind the first, and is cancelled there.
+    send({ t: 'job', job: slideJob({ video: undefined, key: 'sl|first' }), role: 'armed' });
+    send({ t: 'job', job: slideJob({ video: undefined, key: 'sl|superseded' }), role: 'armed' });
+    send({ t: 'cancel', keys: ['sl|superseded'] });
+    send({ t: 'job', job: slideJob({ video: undefined, key: 'sl|after' }), role: 'armed' });
+    await vi.waitFor(() => expect(replies.map((r) => (r as { key: string }).key)).toContain('sl|after'));
+    expect(replies.map((r) => (r as { key: string }).key)).toEqual(['sl|first', 'sl|after']);
+    expect(rendered.map((r) => r.msg.key)).toEqual(['sl|first', 'sl|after']);
+  });
+
+  it('runs a live job ahead of an armed one queued before it on the same layer', async () => {
+    rendered.length = 0;
+    replies.length = 0;
+    send({ t: 'job', job: slideJob({ video: undefined, key: 'sl|running' }), role: 'armed' });
+    send({ t: 'job', job: slideJob({ video: undefined, key: 'sl|armed' }), role: 'armed' });
+    send({ t: 'job', job: slideJob({ video: undefined, key: 'sl|live' }), role: 'live' });
+    await vi.waitFor(() => expect(replies).toHaveLength(3));
+    expect(rendered.map((r) => r.msg.key)).toEqual(['sl|running', 'sl|live', 'sl|armed']);
+  });
+
+  it('a warm job prepares the next cue’s pictures and sends no content; arming it then decodes nothing', async () => {
+    rendered.length = 0;
+    replies.length = 0;
+    decoded.length = 0;
+    const next: Slide = {
+      id: 'next',
+      objects: [
+        {
+          id: 'photo',
+          type: 'image',
+          box: box(0, 0, 1920, 1080),
+          mediaId: 'bgphoto',
+          fit: 'cover',
+          opacity: 1,
+          radius: 0,
+        } as SlideObject,
+      ],
+    };
+    const images = { bgphoto: 'warm-photo.jpg' };
+    send({
+      t: 'warm',
+      warm: { key: 'wm|next', slide: next, look: LOOK_MAIN, images, sources: ['warm-bg.jpg'] },
+    });
+    await vi.waitFor(() => expect(replies).toHaveLength(1));
+    expect(replies[0]).toMatchObject({ t: 'warmed', key: 'wm|next', decodes: 2 });
+    expect(rendered).toHaveLength(0);
+    expect(decoded.sort()).toEqual(['warm-bg.jpg', 'warm-photo.jpg']);
+    decoded.length = 0;
+    const { msg } = await run(slideJob({ slide: next, images, video: undefined, key: 'sl|next' }));
+    expect(msg?.kind).toBe(SRC_BITMAP);
+    expect(decoded).toEqual([]);
+    await run({ kind: 'image', layer: 0, key: 'im|bg', hash: 'warm-bg.jpg', fit: 'cover' });
+    expect(decoded).toEqual([]);
+  });
+});
+
+describe('asset worker: what health reads from a result (design/27 §13, M7)', () => {
+  it("reports the draw on the worker's thread apart from the job's whole time", async () => {
+    for (const job of [
+      slideJob({ video: undefined }),
+      slideJob(),
+      { kind: 'lowerThird', layer: 2, key: 'lt|x', text: 'Pastor Jo', look: LOOK_LOWER_THIRD } as AssetJob,
+    ]) {
+      const { reply } = await run(job);
+      expect(reply.t).toBe('done');
+      if (reply.t !== 'done') continue;
+      expect(reply.rasterMs).toBeGreaterThanOrEqual(0);
+      expect(reply.rasterMs!).toBeLessThanOrEqual(reply.ms + 0.01);
+      // No face is loaded here: text in an unloaded family is a font fallback, never probed glyph by glyph.
+      expect(reply.uncovered).toBeUndefined();
+    }
   });
 });

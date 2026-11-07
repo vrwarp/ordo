@@ -2,7 +2,7 @@ import { DEMO } from '@ordo/client';
 import { formatClock } from '@ordo/domain';
 import { useEffect, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
-import { cacheSummary, dotTitle, outputDot } from '../../lib/health.ts';
+import { cacheSummary, dotTitle, outputDot, outputIssues } from '../../lib/health.ts';
 import { hubStatus } from '../../lib/hubStatus.ts';
 import { useHubNow } from '../../hooks.ts';
 import { controller, dispatch } from '../../services/controller.ts';
@@ -57,6 +57,13 @@ export function TopBar() {
   const held = enabled.filter((o) => launch.open[o.id]).length;
   const known = enabled.filter((o) => launch.open[o.id] || live.health[o.id]?.connected).length;
   const linkMissing = isLive && held < known;
+  // Performance alarms on the screens, in plain words; the diagnostics view has the figures, and the fonts
+  // (nothing a volunteer can do during the service: notes for the tech, not here).
+  const notes = enabled.flatMap((o) =>
+    outputIssues(live.health[o.id])
+      .filter((i) => i.level === 'warn')
+      .map((i) => `${o.name}: ${i.label}`),
+  );
   const red = currentRedState(live);
   // Peak main-thread stall of the last minute as the core worker saw it (250 ms watchdog tick; design/25).
   const stall = live.core?.mainThreadStallMaxMs ?? 0;
@@ -100,6 +107,19 @@ export function TopBar() {
             );
           })}
       </span>
+      {notes.length > 0 && (
+        <button
+          type="button"
+          className="tag amber"
+          data-output-notes={notes.length}
+          onClick={() => setUi({ showDiagnostics: true })}
+          title={`${notes.join('\n')}\n\nClick for the details.`}
+        >
+          {notes.length === 1
+            ? '1 thing to check on the screens'
+            : `${notes.length} things to check on the screens`}
+        </button>
+      )}
       {live.pending > 0 && !fallback && <span className="tag amber">{live.pending} pending</span>}
       {live.recovering && (
         <span

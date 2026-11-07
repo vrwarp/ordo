@@ -10,7 +10,74 @@ export function outputDot(h: OutputHealthEntry | undefined, now = Date.now()): D
   if (h.error || h.audio === 'lost' || h.armedOk === false) return 'red';
   if (h.cache.total > 0 && h.cache.ready < h.cache.total) return 'amber';
   if (h.bus === 'fallback') return 'amber';
+  if (outputIssues(h).some((i) => i.level === 'warn')) return 'amber';
   return 'green';
+}
+
+export type HealthIssueId = 'fontMissing' | 'fontCoverage' | 'raster' | 'upload';
+
+/**
+ * Something on an output that does not stop the service but should be looked at (design/27 §13, M7): a
+ * `label` in plain words for the volunteer at the desk (what the audience may notice and whom to tell), and
+ * a `detail` with the figures for the tech. `level` 'warn' (a performance alarm: the output's dot turns
+ * amber and the top bar says it) or 'note' (fonts: nothing to do during a service, so only the
+ * diagnostics view and the dot's tooltip list it, for the tech to fix before the next one).
+ */
+export type HealthIssue = { id: HealthIssueId; level: 'warn' | 'note'; label: string; detail: string };
+
+const list = (xs: readonly string[], max = 6) =>
+  xs.length > max ? `${xs.slice(0, max).join(', ')} and ${xs.length - max} more` : xs.join(', ');
+
+/** The issues an output reports: missing fonts, characters no font has, and budget alarms. */
+export function outputIssues(h: OutputHealthEntry | undefined): HealthIssue[] {
+  if (!h?.connected) return [];
+  const out: HealthIssue[] = [];
+  if (h.fontFallbacks?.length)
+    out.push({
+      id: 'fontMissing',
+      level: 'note',
+      label: 'A font is missing on this screen, so some text looks different. Tell the tech team.',
+      detail: `Not loaded here: ${list(h.fontFallbacks)}. Text in these fonts is drawn in a fallback font. Upload the font (Library, Fonts) or check that the screen's cache is complete.`,
+    });
+  const fc = h.fontCoverage;
+  if (fc?.count)
+    out.push({
+      id: 'fontCoverage',
+      level: 'note',
+      label: 'Some letters or symbols are not in any font, so they may look different or show as boxes.',
+      detail: `${fc.count} character${fc.count === 1 ? '' : 's'} no font of this output has: ${[...fc.chars].join(' ')}${fc.count > [...fc.chars].length ? ' …' : ''} (scripts ${fc.scripts.join(', ')}). This computer's own fonts draw them. Upload a font that has them.`,
+    });
+  const alarms = new Set(h.alarms ?? []);
+  const b = h.budgets;
+  if (alarms.has('raster'))
+    out.push({
+      id: 'raster',
+      level: 'warn',
+      label: 'This computer is slow to prepare slides, so a slide may appear a moment late.',
+      detail: `Slide drawing p50 ${h.rasterMs?.p50 ?? '?'} ms, p95 ${h.rasterMs?.p95 ?? '?'} ms over the last ${h.rasterMs?.n ?? '?'} slides; budget p95 ${b?.rasterP95Ms ?? '?'} ms (design/27 §13). Check the computer's power plan and other running programs.`,
+    });
+  if (alarms.has('upload'))
+    out.push({
+      id: 'upload',
+      level: 'warn',
+      label: 'This computer is slow to send new slides to the screen, so motion may stutter at a change.',
+      detail: `Texture upload in strips up to ${h.uploadMs ?? '?'} ms of the render worker's time in one frame over the last minute; budget ${b?.uploadMs ?? '?'} ms (design/27 §13).${wholeText(h)} Check the computer's power plan and other running programs; bench:venue measures the GPU itself.`,
+    });
+  return out;
+}
+
+/** Whole uploads made by design (a refresh, recovery after a GPU reset), for an upload detail. */
+function wholeText(h: OutputHealthEntry): string {
+  const w = h.wholeUploads;
+  return w?.count
+    ? ` Apart from these, ${w.count} frame(s) uploaded what was on screen whole (a slide drawn again, recovery after a GPU reset), up to ${w.maxMs} ms in the last minute: by design, not counted.`
+    : '';
+}
+
+/** "p50 / p95 ms" of slide drawing, or a dash. */
+export function rasterText(h: OutputHealthEntry | undefined): string {
+  const r = h?.rasterMs;
+  return r ? `${r.p50} / ${r.p95} ms` : '—';
 }
 
 /** Per-output arm marker for a cue: grey (not armed), amber (arming), green (armed), red (failed). */
@@ -63,6 +130,7 @@ export function dotTitle(h: OutputHealthEntry | undefined, name: string): string
     h.videoDropped ? `video dropped ${h.videoDropped}` : '',
     h.audio ? `audio ${h.audio}` : '',
     h.error ? `error: ${h.error}` : '',
+    ...outputIssues(h).map((i) => i.label),
   ]
     .filter(Boolean)
     .join('\n');
