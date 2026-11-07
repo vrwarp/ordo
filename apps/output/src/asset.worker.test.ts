@@ -133,6 +133,8 @@ const scope: { postMessage: (m: unknown) => void; onmessage: ((ev: { data: unkno
   onmessage: null,
 };
 const rendered: { msg: AssetToRender; transfer: unknown[] }[] = [];
+/** Files decoded (createImageBitmap of a fetched file). */
+const decoded: string[] = [];
 const replies: FromAsset[] = [];
 const link: {
   onmessage: ((ev: { data: unknown }) => void) | null;
@@ -164,6 +166,7 @@ beforeAll(async () => {
   vi.stubGlobal(
     'createImageBitmap',
     async (b: { hash?: string; tag?: string }, o?: { resizeWidth: number; resizeHeight: number }) => {
+      if (b.hash) decoded.push(b.hash);
       const tag = b.hash ?? b.tag;
       const bmp = {
         tag,
@@ -470,5 +473,76 @@ describe('asset worker: tight sprites and opaque layers (design/27 §7.3, M7)', 
     expect(contain).not.toHaveProperty('opaque');
     const png = (await run(job('art.png', 'cover'))).msg!;
     expect(png).not.toHaveProperty('opaque');
+  });
+});
+
+describe('asset worker: raster lanes (design/27 §7.5)', () => {
+  const send = (m: unknown) => link.onmessage!({ data: m });
+
+  it('reports the lane and the timing of each job with its result', async () => {
+    const { reply } = await run(slideJob({ video: undefined, key: 'sl|timed' }));
+    expect(reply).toMatchObject({ t: 'done', key: 'sl|timed', lane: 'interactive' });
+    const done = reply as Extract<FromAsset, { t: 'done' }>;
+    expect(done.waitMs).toBeGreaterThanOrEqual(0);
+    expect(done.rasterMs).toBeGreaterThanOrEqual(0);
+    expect(done.longestMs).toBeLessThanOrEqual(done.rasterMs! + 1e-9);
+  });
+
+  it('a cancelled job sends nothing, to the renderer or to the link', async () => {
+    rendered.length = 0;
+    replies.length = 0;
+    // Two jobs of one layer: the second waits behind the first, and is cancelled there.
+    send({ t: 'job', job: slideJob({ video: undefined, key: 'sl|first' }), role: 'armed' });
+    send({ t: 'job', job: slideJob({ video: undefined, key: 'sl|superseded' }), role: 'armed' });
+    send({ t: 'cancel', keys: ['sl|superseded'] });
+    send({ t: 'job', job: slideJob({ video: undefined, key: 'sl|after' }), role: 'armed' });
+    await vi.waitFor(() => expect(replies.map((r) => (r as { key: string }).key)).toContain('sl|after'));
+    expect(replies.map((r) => (r as { key: string }).key)).toEqual(['sl|first', 'sl|after']);
+    expect(rendered.map((r) => r.msg.key)).toEqual(['sl|first', 'sl|after']);
+  });
+
+  it('runs a live job ahead of an armed one queued before it on the same layer', async () => {
+    rendered.length = 0;
+    replies.length = 0;
+    send({ t: 'job', job: slideJob({ video: undefined, key: 'sl|running' }), role: 'armed' });
+    send({ t: 'job', job: slideJob({ video: undefined, key: 'sl|armed' }), role: 'armed' });
+    send({ t: 'job', job: slideJob({ video: undefined, key: 'sl|live' }), role: 'live' });
+    await vi.waitFor(() => expect(replies).toHaveLength(3));
+    expect(rendered.map((r) => r.msg.key)).toEqual(['sl|running', 'sl|live', 'sl|armed']);
+  });
+
+  it('a warm job prepares the next cue’s pictures and sends no content; arming it then decodes nothing', async () => {
+    rendered.length = 0;
+    replies.length = 0;
+    decoded.length = 0;
+    const next: Slide = {
+      id: 'next',
+      objects: [
+        {
+          id: 'photo',
+          type: 'image',
+          box: box(0, 0, 1920, 1080),
+          mediaId: 'bgphoto',
+          fit: 'cover',
+          opacity: 1,
+          radius: 0,
+        } as SlideObject,
+      ],
+    };
+    const images = { bgphoto: 'warm-photo.jpg' };
+    send({
+      t: 'warm',
+      warm: { key: 'wm|next', slide: next, look: LOOK_MAIN, images, sources: ['warm-bg.jpg'] },
+    });
+    await vi.waitFor(() => expect(replies).toHaveLength(1));
+    expect(replies[0]).toMatchObject({ t: 'warmed', key: 'wm|next', decodes: 2 });
+    expect(rendered).toHaveLength(0);
+    expect(decoded.sort()).toEqual(['warm-bg.jpg', 'warm-photo.jpg']);
+    decoded.length = 0;
+    const { msg } = await run(slideJob({ slide: next, images, video: undefined, key: 'sl|next' }));
+    expect(msg?.kind).toBe(SRC_BITMAP);
+    expect(decoded).toEqual([]);
+    await run({ kind: 'image', layer: 0, key: 'im|bg', hash: 'warm-bg.jpg', fit: 'cover' });
+    expect(decoded).toEqual([]);
   });
 });

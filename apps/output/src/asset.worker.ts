@@ -11,11 +11,13 @@ import {
   FontResolver,
   type FromAsset,
   type ImageLookup,
+  type JobRole,
   SRC_BITMAP,
   SRC_SCENE,
   type SlidePicture,
   type Reach,
   type ToAsset,
+  type WarmJob,
   coversFrame,
   drawSprite,
   imageReach,
@@ -23,7 +25,6 @@ import {
   jobFontFamilies,
   lowerThirdReach,
   opaqueColor,
-  preparePicture,
   propsReach,
   rasterImage,
   rasterLowerThird,
@@ -35,8 +36,10 @@ import {
   spriteRect,
 } from '@ordo/renderer';
 import { LOGICAL_WIDTH } from '@ordo/domain';
+import { DecodeError, createDecoder } from './decode.ts';
+import { Cancelled, Lanes, RANK, type Steps } from './lanes.ts';
 import { OpaqueFiles } from './opaque.ts';
-import { type PictureDecoder, preloadPictures, sourcePicture } from './pictures.ts';
+import { PICTURE_LIMITS, preloadPictures, sourcePicture } from './pictures.ts';
 
 /**
  * Asset worker: OPFS reads, image decoding, font loading and text rasterization at output resolution.
@@ -46,6 +49,11 @@ import { type PictureDecoder, preloadPictures, sourcePicture } from './pictures.
  * A full-frame bitmap known to be opaque (a cover-fitted JPEG, the props logo) says so. Jobs arrive from
  * the link worker on a port and results go back on it (design/25); the main thread only sends `init` and
  * the channel ends (`ports`). Supervised: heartbeat every 250 ms.
+ *
+ * Jobs run in raster lanes (lanes.ts, design/27 §7.5): props first, then the live cue's layers, then the
+ * armed cue's, and bulk work (the pictures of the cue after the armed one) last. Each layer is a chain of
+ * its own; synchronous work runs in short turns (a picture is prepared in bands), so a slide that decodes
+ * never holds a props flip up by more than one turn. A job the link cancels stops at its next turn.
  */
 
 const scope = self as unknown as {
@@ -66,6 +74,8 @@ let token = '';
 let apiPrefix = '/api/v1';
 let canvas: OffscreenCanvas | null = null;
 let ctx: OffscreenCanvasRenderingContext2D | null = null;
+/** The surface was just taken (`take`): it is transparent, and needs no clear before the next draw. */
+let fresh = false;
 const store = new OpfsStore();
 
 // Decoded images by hash and target size (`pictureKey`): LRU bounded by bytes (256 MiB) rather than count,
@@ -91,27 +101,18 @@ fonts.onChange((c) => {
   post({ t: 'fonts', loaded, failed, ready: c.families });
 });
 
-let chain: Promise<void> = Promise.resolve();
-function enqueue(fn: () => Promise<void>): void {
-  chain = chain.then(fn, fn).catch((err) => console.error('[ordo asset]', err));
-}
+const lanes = new Lanes();
+/**
+ * The font loads sent so far, in order: a job waits for those sent before it (text never draws in a fallback
+ * for a face that was on its way), a job sent earlier does not.
+ */
+let fonts$: Promise<unknown> = Promise.resolve();
 
 function post(m: FromAsset): void {
   try {
     linkPort?.postMessage(m);
   } catch {
     /* link gone: it re-arms when it is back */
-  }
-}
-
-/** A decode failure, with the file and where it was read from (an OPFS copy may be corrupt). */
-class DecodeError extends Error {
-  constructor(
-    message: string,
-    readonly hash: string,
-    readonly source: 'opfs' | 'network',
-  ) {
-    super(message);
   }
 }
 
@@ -142,28 +143,23 @@ async function readFile(hash: string): Promise<{ blob: Blob; source: 'opfs' | 'n
 }
 
 /**
- * The worker's picture decoder (pictures.ts): a file read from OPFS or the hub and decoded at its own size
- * (colour profile kept); a target resampled once into an sRGB bitmap of its device size, upscaling
- * included, which the slide copies 1:1 (design/27 §7.1: resampling and colour conversion on every draw
- * cost 4-50 ms per full-slide picture); a source reduced with high quality.
+ * The worker's picture decoder (decode.ts): a file read from OPFS or the hub and decoded at its own size
+ * (colour profile kept), or a large JPEG only at the part and scale its uses show (crop-aware decode); a
+ * target resampled once into an sRGB bitmap of its device size, upscaling included, which the slide copies
+ * 1:1 (design/27 §7.1: resampling and colour conversion on every draw cost 4-50 ms per full-slide picture);
+ * a source reduced with high quality.
  */
-const decoder: PictureDecoder<ImageBitmap> = {
-  async decode(hash) {
-    const { blob, source } = await readFile(hash);
-    await opaqueFiles.note(hash, blob);
-    try {
-      return await createImageBitmap(blob);
-    } catch (err) {
-      throw new DecodeError(
-        `image ${hash.slice(0, 8)} could not be decoded: ${(err as Error).message}`,
-        hash,
-        source,
-      );
-    }
+const decoder = createDecoder({
+  // Each file's opacity is noted from its first bytes as it is read for decoding (opaque.ts).
+  read: async (hash) => {
+    const r = await readFile(hash);
+    await opaqueFiles.note(hash, r.blob);
+    return r;
   },
-  prepare: (src, t) => preparePicture(src, t),
-  reduce: (src, w, h) => createImageBitmap(src, { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' }),
-};
+  createImageBitmap: (...a: unknown[]) =>
+    (createImageBitmap as (...b: unknown[]) => Promise<ImageBitmap>)(...a),
+  ImageDecoder: typeof ImageDecoder === 'undefined' ? undefined : ImageDecoder,
+});
 
 async function loadFonts(list: FontLoad[]): Promise<void> {
   const r = await fonts.sync(list);
@@ -183,6 +179,7 @@ function measuring(): OffscreenCanvasRenderingContext2D {
     // belong to whoever holds them, so the render worker keeps its picture through an asset restart.
     canvas = new OffscreenCanvas(1, 1);
     ctx = canvas.getContext('2d', { willReadFrequently: true });
+    fresh = true;
   }
   if (!ctx) throw new Error('2D context unavailable in the asset worker');
   return ctx;
@@ -191,31 +188,43 @@ function measuring(): OffscreenCanvasRenderingContext2D {
 /** `measuring()` with the surface shrunk to 1x1 first (between draws). */
 function measure(): OffscreenCanvasRenderingContext2D {
   const c = measuring();
-  if (canvas!.width !== 1) canvas!.width = 1;
-  if (canvas!.height !== 1) canvas!.height = 1;
+  if (canvas!.width !== 1 || canvas!.height !== 1) {
+    canvas!.width = 1;
+    canvas!.height = 1;
+    fresh = true;
+  }
   return c;
 }
 
-/** The surface at `w` x `h` (the frame, or a tight sprite's rect), cleared and untransformed. */
-function surface(w = width, h = height): OffscreenCanvasRenderingContext2D {
+/**
+ * The surface at `w` x `h` (the frame, or a tight sprite's rect), clear and untransformed. Resizing clears
+ * it; so does a transfer (`take`). A surface whose picture was just taken is transparent already, and
+ * clearing it again cost 0.2 ms at 1080p and 1.1 ms at 4K (Chromium 153, software), so it is not cleared.
+ */
+function surface(w: number, h: number): OffscreenCanvasRenderingContext2D {
   const c = measuring();
-  if (canvas!.width !== w) canvas!.width = w;
-  if (canvas!.height !== h) canvas!.height = h;
+  if (canvas!.width !== w || canvas!.height !== h) {
+    canvas!.width = w;
+    canvas!.height = h;
+    fresh = true;
+  }
   c.setTransform(1, 0, 0, 1, 0, 0);
-  c.clearRect(0, 0, w, h);
+  if (!fresh) c.clearRect(0, 0, w, h);
+  fresh = false;
   return c;
 }
 
 /** Sprites drawn again full-frame because their reach was short (logged, not expected; sprite.ts). */
 let spriteMisses = 0;
 
-/** Draw one layer as a tight sprite of `reach` (logical px; null: full-frame) at this output's size. */
+/** Draw one layer as a tight sprite of `reach` (logical px; null: full-frame) in a frame of `out`. */
 function sprite(
   reach: Reach,
   scale: number,
+  out: { w: number; h: number },
   draw: (c: OffscreenCanvasRenderingContext2D) => void,
 ): DrawnSprite<ImageBitmap> {
-  const d = drawSprite(surface, take, width, height, spriteRect(reach, scale, width, height), (c) =>
+  const d = drawSprite(surface, take, out.w, out.h, spriteRect(reach, scale, out.w, out.h), (c) =>
     draw(c as OffscreenCanvasRenderingContext2D),
   );
   noteMiss(d);
@@ -234,9 +243,11 @@ function noteMiss(d: DrawnSprite<ImageBitmap> | null | undefined): void {
  */
 async function preload(
   map: Record<string, string>,
-  uses?: readonly SlidePicture[],
+  uses: readonly SlidePicture[] | undefined,
+  out: { w: number; h: number },
+  steps: Steps,
 ): Promise<{ lookup: ImageLookup; skipped: number; missing: string[]; release: () => void }> {
-  const pre = await preloadPictures(images, decoder, map, uses, { w: width, h: height });
+  const pre = await preloadPictures(images, decoder, map, uses, out, PICTURE_LIMITS, steps);
   // Drawn without the image. One whose file is not there yet is reported so the link re-draws the slide
   // once the file arrives; a corrupt one is not (it would be missing again every time).
   const missing: string[] = [];
@@ -265,7 +276,9 @@ type SceneParts = {
 
 /** The surface's picture; the surface is left transparent for the next draw. */
 function take(): ImageBitmap {
-  return canvas!.transferToImageBitmap();
+  const b = canvas!.transferToImageBitmap();
+  fresh = true;
+  return b;
 }
 
 /**
@@ -281,13 +294,14 @@ function take(): ImageBitmap {
  */
 function sceneParts(
   job: Extract<AssetJob, { kind: 'slide' }>,
+  out: { w: number; h: number },
   scale: number,
   lookup: ImageLookup,
 ): (SceneParts & { base: DrawnSprite<ImageBitmap> }) | undefined {
   const v = job.video;
   if (!v) return undefined;
   const opts = { nextSlide: job.nextSlide, isSong: job.isSong, clip: { w: v.w, h: v.h } };
-  const frame = { width, height };
+  const frame = { width: out.w, height: out.h };
   const s = rasterSceneSprites(
     measure(),
     surface,
@@ -305,93 +319,84 @@ function sceneParts(
   return s && { base: s.base, over: s.over, plane: s.plane, videoSlot: v.slot, videoGen: v.gen };
 }
 
-async function run(job: AssetJob): Promise<void> {
+/**
+ * A layer drawn: its picture (a tight sprite or full-frame), whether that full-frame picture is opaque, and
+ * for a scene the over and the plane.
+ */
+type Drawn = {
+  main: DrawnSprite<ImageBitmap>;
+  opaque?: boolean;
+  scene?: SceneParts;
+};
+
+/**
+ * Draw a job in its lane (`steps`): pictures are read and decoded off this thread and prepared in turns,
+ * then the layer is measured, drawn as a sprite, taken and sent in one turn. Every size is the one the job
+ * started with, so a resize arriving meanwhile cannot mix two. A cancelled job (`Cancelled`) sends nothing.
+ */
+async function run(job: AssetJob, steps: Steps): Promise<void> {
   const t0 = performance.now();
-  const scale = width / LOGICAL_WIDTH;
+  const w = width;
+  const h = height;
+  const out = { w, h };
+  const scale = w / LOGICAL_WIDTH;
   let skipped = 0;
   let missing: string[] = [];
-  let scene: (SceneParts & { base: DrawnSprite<ImageBitmap> }) | undefined;
-  let drawn: DrawnSprite<ImageBitmap> | undefined;
-  let opaque = false;
+  let release: (() => void) | undefined;
   try {
+    let draw: () => Drawn;
     if (job.kind === 'slide') {
-      const pre = await preload(job.images, slidePictures(job.slide, { scale, look: job.look }));
+      const pre = await preload(job.images, slidePictures(job.slide, { scale, look: job.look }), out, steps);
+      release = pre.release;
       skipped = pre.skipped;
       missing = pre.missing;
-      try {
-        scene = sceneParts(job, scale, pre.lookup);
-        if (!scene) {
-          const opts = { nextSlide: job.nextSlide, isSong: job.isSong };
-          const reach = slideReach(measure(), job.slide, { scale, look: job.look, ...opts });
-          drawn = sprite(reach, scale, (c) => rasterSlide(c, job.slide, job.look, scale, pre.lookup, opts));
-        }
-      } finally {
-        pre.release();
-      }
+      draw = () => {
+        const scene = sceneParts(job, out, scale, pre.lookup);
+        if (scene) return { main: scene.base, scene };
+        const opts = { nextSlide: job.nextSlide, isSong: job.isSong };
+        const reach = slideReach(measure(), job.slide, { scale, look: job.look, ...opts });
+        return {
+          main: sprite(reach, scale, out, (c) => rasterSlide(c, job.slide, job.look, scale, pre.lookup, opts)),
+        };
+      };
     } else if (job.kind === 'image') {
-      const img = await sourcePicture(images, decoder, job.hash, { w: width, h: height });
-      drawn = sprite(imageReach(img, job.fit), scale, (c) => rasterImage(c, img, job.fit, scale));
-      // A cover or stretch fit of a file without transparency fills the frame opaquely.
-      opaque = job.fit !== 'contain' && opaqueFiles.opaque(job.hash) && coversFrame(scale, width, height);
+      const img = await sourcePicture(images, decoder, job.hash, out, steps);
+      release = img.release;
+      draw = () => ({
+        main: sprite(imageReach(img.bitmap, job.fit), scale, out, (c) =>
+          rasterImage(c, img.bitmap, job.fit, scale),
+        ),
+        // A cover or stretch fit of a file without transparency fills the frame opaquely.
+        opaque: job.fit !== 'contain' && opaqueFiles.opaque(job.hash) && coversFrame(scale, w, h),
+      });
     } else if (job.kind === 'lowerThird') {
-      const reach = lowerThirdReach(measure(), job.text, job.look, scale);
-      drawn = sprite(reach, scale, (c) => rasterLowerThird(c, job.text, job.look, scale));
+      draw = () => {
+        const reach = lowerThirdReach(measure(), job.text, job.look, scale);
+        return { main: sprite(reach, scale, out, (c) => rasterLowerThird(c, job.text, job.look, scale)) };
+      };
     } else {
-      const pre = await preload(job.images);
-      try {
+      const pre = await preload(job.images, undefined, out, steps);
+      release = pre.release;
+      draw = () => {
         const reach = propsReach(measure(), job.model, scale);
-        drawn = sprite(reach, scale, (c) =>
-          rasterProps(c, job.model, scale, pre.lookup, job.look.clearColor),
-        );
-        // The logo's backdrop is the clear colour over the whole frame.
-        opaque = !!job.model.logo && opaqueColor(job.look.clearColor) && coversFrame(scale, width, height);
-      } finally {
-        pre.release();
-      }
+        return {
+          main: sprite(reach, scale, out, (c) =>
+            rasterProps(c, job.model, scale, pre.lookup, job.look.clearColor),
+          ),
+          // The logo's backdrop is the clear colour over the whole frame.
+          opaque: !!job.model.logo && opaqueColor(job.look.clearColor) && coversFrame(scale, w, h),
+        };
+      };
     }
-    const main = scene ? scene.base : drawn!;
-    const bitmap = main.bitmap;
-    const over = scene?.over?.bitmap ?? null;
-    const cueIndex = job.kind === 'slide' ? job.cueIndex : job.kind === 'image' ? job.cueIndex : undefined;
-    const msg: AssetToRender = {
-      t: 'content',
-      layer: job.layer,
-      key: job.key,
-      kind: scene ? SRC_SCENE : SRC_BITMAP,
-      bitmap,
-      cueIndex,
-      refresh: job.kind === 'slide' ? job.refresh : undefined,
-    };
-    if (main.tight) {
-      msg.x = main.x;
-      msg.y = main.y;
-    } else if (opaque) msg.opaque = true;
-    if (scene) {
-      msg.over = over;
-      if (scene.over?.tight) {
-        msg.overX = scene.over.x;
-        msg.overY = scene.over.y;
-      }
-      msg.plane = scene.plane;
-      msg.videoSlot = scene.videoSlot;
-      msg.videoGen = scene.videoGen;
-    }
-    if (!port) {
-      bitmap.close();
-      over?.close();
-      throw new UnavailableError('render port not connected');
-    }
-    port.postMessage(msg, over ? [bitmap, over] : [bitmap]);
-    post({
-      t: 'done',
-      layer: job.layer,
-      key: job.key,
-      ms: performance.now() - t0,
-      fontFallbacks: fontFallbacks(job),
-      skippedImages: skipped || undefined,
-      missingImages: missing.length ? missing : undefined,
+    // Measured, drawn, taken and sent in one turn: nothing can cancel it half-way.
+    await steps.slice(() => {
+      const d = draw();
+      release?.();
+      release = undefined;
+      deliver(job, d, t0, steps, skipped, missing);
     });
   } catch (err) {
+    if (err instanceof Cancelled) return;
     const d = err instanceof DecodeError ? err : undefined;
     post({
       t: 'error',
@@ -403,17 +408,152 @@ async function run(job: AssetJob): Promise<void> {
       cause:
         err instanceof MissingError ? 'missing' : err instanceof UnavailableError ? 'unavailable' : 'invalid',
     });
+  } finally {
+    release?.();
   }
+}
+
+/** Send a drawn job to the render worker and say so to the link, with its lane timing. */
+function deliver(
+  job: AssetJob,
+  d: Drawn,
+  t0: number,
+  steps: Steps,
+  skipped: number,
+  missing: string[],
+): void {
+  const { main, scene } = d;
+  const bitmap = main.bitmap;
+  const over = scene?.over?.bitmap ?? null;
+  const cueIndex = job.kind === 'slide' ? job.cueIndex : job.kind === 'image' ? job.cueIndex : undefined;
+  const msg: AssetToRender = {
+    t: 'content',
+    layer: job.layer,
+    key: job.key,
+    kind: scene ? SRC_SCENE : SRC_BITMAP,
+    bitmap,
+    cueIndex,
+    refresh: job.kind === 'slide' ? job.refresh : undefined,
+  };
+  if (main.tight) {
+    msg.x = main.x;
+    msg.y = main.y;
+  } else if (d.opaque) msg.opaque = true;
+  if (scene) {
+    msg.over = over;
+    if (scene.over?.tight) {
+      msg.overX = scene.over.x;
+      msg.overY = scene.over.y;
+    }
+    msg.plane = scene.plane;
+    msg.videoSlot = scene.videoSlot;
+    msg.videoGen = scene.videoGen;
+  }
+  if (!port) {
+    bitmap.close();
+    over?.close();
+    throw new UnavailableError('render port not connected');
+  }
+  port.postMessage(msg, over ? [bitmap, over] : [bitmap]);
+  const t = steps.timing();
+  post({
+    t: 'done',
+    layer: job.layer,
+    key: job.key,
+    ms: performance.now() - t0,
+    fontFallbacks: fontFallbacks(job),
+    skippedImages: skipped || undefined,
+    missingImages: missing.length ? missing : undefined,
+    lane: t.lane,
+    waitMs: round(t.waitMs),
+    rasterMs: round(t.rasterMs),
+    longestMs: round(t.longestMs),
+  });
+}
+
+const round = (ms: number) => Math.round(ms * 100) / 100;
+
+/**
+ * Bulk work (design/27 §7.5): prepare the pictures of the cue after the armed one into the cache, as its
+ * slide job will ask for them, so that arming it after the next GO only draws. Failures are left to that
+ * job, which reports them.
+ */
+async function warmUp(wj: WarmJob, steps: Steps): Promise<void> {
+  const t0 = performance.now();
+  const out = { w: width, h: height };
+  const scale = out.w / LOGICAL_WIDTH;
+  let decodes = 0;
+  if (wj.slide) {
+    const pre = await preloadPictures(
+      images,
+      decoder,
+      wj.images,
+      slidePictures(wj.slide, { scale, look: wj.look }),
+      out,
+      PICTURE_LIMITS,
+      steps,
+    );
+    decodes += pre.decodes;
+    pre.release();
+  }
+  for (const hash of wj.sources ?? []) {
+    steps.check();
+    const cached = images.has(hash);
+    try {
+      (await sourcePicture(images, decoder, hash, out, steps)).release();
+      if (!cached) decodes++;
+    } catch (err) {
+      if (err instanceof Cancelled) throw err;
+    }
+  }
+  const t = steps.timing();
+  post({
+    t: 'warmed',
+    key: wj.key,
+    ms: round(performance.now() - t0),
+    waitMs: round(t.waitMs),
+    rasterMs: round(t.rasterMs),
+    longestMs: round(t.longestMs),
+    decodes,
+  });
+}
+
+/** A job's rank in the lanes: props first, then the live cue's layers, then the armed cue's. */
+function rankOf(job: AssetJob, role: JobRole | undefined): number {
+  if (job.kind === 'props') return RANK.props;
+  return role === 'live' ? RANK.live : RANK.armed;
 }
 
 function onJobMessage(m: ToAsset): void {
   switch (m.t) {
-    case 'fonts':
-      enqueue(() => loadFonts(m.fonts));
+    case 'fonts': {
+      const list = m.fonts;
+      fonts$ = fonts$.then(
+        () => loadFonts(list),
+        () => loadFonts(list),
+      );
+      fonts$.catch((err) => console.error('[ordo asset] fonts', err));
       return;
-    case 'job':
-      // Props jobs (once per second) are cheap; everything runs in order so fonts precede text.
-      enqueue(() => run(m.job));
+    }
+    case 'job': {
+      const job = m.job;
+      // Each layer is a chain: its content reaches the renderer in the order its stacks expect.
+      lanes.push({
+        key: job.key,
+        chain: `layer ${job.layer}`,
+        rank: rankOf(job, m.role),
+        gate: fonts$,
+        run: (steps) => run(job, steps),
+      });
+      return;
+    }
+    case 'warm': {
+      const wj = m.warm;
+      lanes.push({ key: wj.key, chain: 'warm', rank: RANK.bulk, gate: fonts$, run: (s) => warmUp(wj, s) });
+      return;
+    }
+    case 'cancel':
+      lanes.cancel(m.keys);
       return;
     case 'prune':
       images.prune(new Set(m.keep));

@@ -108,6 +108,41 @@ describe('decoded image cache byte budget (review item 26)', () => {
   });
 });
 
+describe('pins of jobs that run side by side (design/27 §7.5 raster lanes)', () => {
+  it('counts pins: one job unpinning leaves what another still draws pinned', () => {
+    const c = new BitmapCache<Bmp>(100 * MB, 1);
+    const shared = new Bmp(1, 1);
+    c.set('shared', shared);
+    c.pin('shared'); // job A
+    c.pin('shared'); // job B
+    c.set('other', new Bmp(1, 1)); // over the count, but `shared` is pinned
+    c.unpin('shared'); // A is done
+    c.set('third', new Bmp(1, 1));
+    expect(shared.closed).toBe(false);
+    expect(c.pinnedCount).toBe(1);
+    c.unpin('shared'); // B is done: trimmed back to one entry
+    expect(shared.closed).toBe(true);
+    expect(c.size).toBe(1);
+    c.unpin('never-pinned'); // harmless
+  });
+
+  it('never replaces a pinned entry: the newcomer is closed and the held bitmap returned', () => {
+    const c = new BitmapCache<Bmp>(100 * MB);
+    const held = new Bmp(10, 10);
+    expect(c.set('k', held)).toBe(held);
+    c.pin('k');
+    const late = new Bmp(10, 10);
+    expect(c.set('k', late)).toBe(held);
+    expect(late.closed).toBe(true);
+    expect(held.closed).toBe(false);
+    expect(c.bytes).toBe(bitmapBytes(held));
+    c.unpin('k');
+    const next = new Bmp(10, 10);
+    expect(c.set('k', next)).toBe(next);
+    expect(held.closed).toBe(true);
+  });
+});
+
 describe('downscale to the output size', () => {
   it('reduces large images so that they still cover the output without upscaling', () => {
     expect(downscaleFor(8000, 4500, 1920, 1080)).toEqual({ width: 1920, height: 1080 });

@@ -805,4 +805,176 @@ describe('link worker core', () => {
     }
     t.close();
   });
+
+  describe('raster lanes (design/27 §7.5): roles, warm work, superseded jobs, timing', () => {
+    /** A talk of four picture slides, live at its first, armed at its second. */
+    function pictureDeck() {
+      const s0 = liveState();
+      const r = s0.resolved!;
+      const picture = (id: string): Media => ({
+        id,
+        rev: 1,
+        name: id,
+        tags: [],
+        kind: 'image',
+        original: { hash: `${id}-file`, bytes: 10, mime: 'image/jpeg', path: `files/${id}-file` },
+        state: 'ready',
+        loop: false,
+        isBackground: false,
+      });
+      const ids = ['p0', 'p1', 'p2', 'p3'];
+      const talk = r.presentations.talk!;
+      const slides = ids.map((id) => ({
+        id: `slide-${id}`,
+        objects: [
+          {
+            id: `img-${id}`,
+            type: 'image' as const,
+            box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+            mediaId: id,
+            fit: 'cover' as const,
+            opacity: 1,
+            radius: 0,
+          },
+        ],
+      }));
+      const resolved = {
+        ...r,
+        media: { ...r.media, ...Object.fromEntries(ids.map((id) => [id, picture(id)])) },
+        presentations: {
+          ...r.presentations,
+          talk: { ...talk, sections: [{ ...talk.sections[0]!, slides }] },
+        },
+      };
+      const cues = expandCues(resolved);
+      const first = cues.findIndex((c) => c.slideId === 'slide-p0');
+      const at = (live: number, armed: number | undefined, seq: number): LiveState => {
+        const base = slideLive(0);
+        return {
+          ...base,
+          seq,
+          cues,
+          live,
+          armed,
+          resolved,
+          layers: {
+            ...base.layers,
+            background: { content: null, at: 0, seq: 0 },
+            slide: {
+              content: {
+                kind: 'slide',
+                cueIndex: live,
+                presentationId: 'talk',
+                slideId: cues[live]!.slideId!,
+              },
+              at: 1000,
+              seq,
+            },
+          },
+        };
+      };
+      return { cues, first, at };
+    }
+    const jobs = (t: ReturnType<typeof setup>) =>
+      t.toAsset.flatMap((m) => (m.t === 'job' && m.job.kind === 'slide' ? [{ ...m.job, role: m.role }] : []));
+
+    it('sends the live cue’s layers as live and the armed cue’s as armed, and warms the cue after', async () => {
+      const t = setup();
+      await t.core.start();
+      const d = pictureDeck();
+      t.hub.emit('state', stateMsg(d.at(d.first, d.first + 1, 20)));
+      await tick(30);
+      const sl = jobs(t);
+      expect(sl.find((j) => j.cueIndex === d.first)?.role).toBe('live');
+      expect(sl.find((j) => j.cueIndex === d.first + 1)?.role).toBe('armed');
+      const warms = t.toAsset.flatMap((m) => (m.t === 'warm' ? [m.warm] : []));
+      expect(warms).toHaveLength(1);
+      expect(warms[0]!.key).toMatch(/^wm\|/);
+      expect(warms[0]!.slide?.id).toBe('slide-p2');
+      expect(warms[0]!.images).toEqual({ p2: 'p2-file' });
+      // Answered: not sent again by the next sync; GO moves it on to the next cue, nothing to cancel.
+      t.asset.port2.postMessage({
+        t: 'warmed',
+        key: warms[0]!.key,
+        ms: 40,
+        waitMs: 2,
+        rasterMs: 12,
+        longestMs: 9,
+        decodes: 1,
+      } satisfies FromAsset);
+      await tick(10);
+      t.core.sync();
+      expect(t.toAsset.filter((m) => m.t === 'warm')).toHaveLength(1);
+      t.toAsset.length = 0;
+      t.hub.emit('state', stateMsg(d.at(d.first + 1, d.first + 2, 21)));
+      await tick(30);
+      const next = t.toAsset.flatMap((m) => (m.t === 'warm' ? [m.warm] : []));
+      expect(next.map((w) => w.slide?.id)).toEqual(['slide-p3']);
+      const cancels = t.toAsset.flatMap((m) => (m.t === 'cancel' ? m.keys : []));
+      expect(cancels.some((k) => k.startsWith('wm|'))).toBe(false);
+      expect((t.core.telemetry() as { lanes: { bulk: { jobs: number } } }).lanes.bulk.jobs).toBe(1);
+      t.close();
+    });
+
+    it('cancels the jobs no plan needs any more, and sends a key needed again anew', async () => {
+      const t = setup();
+      await t.core.start();
+      const d = pictureDeck();
+      t.hub.emit('state', stateMsg(d.at(d.first, d.first + 1, 30)));
+      await tick(30);
+      const armedKey = jobs(t).find((j) => j.cueIndex === d.first + 1)!.key;
+      const liveKey = jobs(t).find((j) => j.cueIndex === d.first)!.key;
+      const warmKey = t.toAsset.flatMap((m) => (m.t === 'warm' ? [m.warm.key] : []))[0]!;
+      t.toAsset.length = 0;
+      // The operator arms another cue before the armed job was answered.
+      t.hub.emit('state', stateMsg(d.at(d.first, d.first + 3, 31)));
+      await tick(30);
+      const cancels = t.toAsset.flatMap((m) => (m.t === 'cancel' ? m.keys : []));
+      expect(cancels).toContain(armedKey);
+      expect(cancels).toContain(warmKey); // the cue after the armed one moved too
+      expect(cancels).not.toContain(liveKey);
+      expect(cancels.some((k) => k.startsWith('pr|'))).toBe(false);
+      expect(jobs(t).map((j) => j.cueIndex)).toContain(d.first + 3);
+      expect((t.core.introspect() as { inflight: string[] }).inflight).not.toContain(armedKey);
+      // Back to the first armed cue: its job is sent again, not taken for in flight.
+      t.toAsset.length = 0;
+      t.hub.emit('state', stateMsg(d.at(d.first, d.first + 1, 32)));
+      await tick(30);
+      expect(jobs(t).map((j) => j.key)).toContain(armedKey);
+      expect((t.core.telemetry() as { lanes: { cancelled: number } }).lanes.cancelled).toBeGreaterThanOrEqual(
+        3,
+      );
+      t.close();
+    });
+
+    it('keeps the lane timing the asset worker reports, by lane', async () => {
+      const t = setup();
+      await t.core.start();
+      for (let i = 0; i < 20; i++)
+        t.asset.port2.postMessage({
+          t: 'done',
+          layer: 4,
+          key: `pr|${i}`,
+          ms: 5,
+          lane: 'interactive',
+          waitMs: i,
+          rasterMs: 2,
+          longestMs: i % 5,
+        } satisfies FromAsset);
+      await tick(20);
+      const lanes = (t.core.telemetry() as { lanes: Record<string, Record<string, number>> }).lanes;
+      expect(lanes.interactive).toMatchObject({
+        jobs: 20,
+        waitP50: 9,
+        waitP95: 18,
+        rasterP95: 2,
+        longestMs: 4,
+      });
+      expect(lanes.bulk!.jobs).toBe(0);
+      expect(
+        String((t.core as unknown as { diagnostics(): Record<string, unknown> }).diagnostics().rasterLanes),
+      ).toMatch(/interactive 20 jobs, wait p95 18 ms/);
+      t.close();
+    });
+  });
 });

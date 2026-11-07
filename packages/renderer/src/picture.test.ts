@@ -3,9 +3,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LOOK_LOWER_THIRD, LOOK_MAIN, type Look, type Slide, type SlideObject } from '@ordo/domain';
 import {
   MAX_PREPARED_PIXELS,
+  type PictureFrom,
   type PictureTarget,
+  decodePlan,
+  paintPicture,
+  paintPictureFrom,
+  pictureRegion,
   pictureTarget,
   preparePicture,
+  preparePictureSteps,
   preparedKey,
   sourceSize,
 } from './picture.ts';
@@ -228,6 +234,191 @@ describe('preparePicture', () => {
     vi.stubGlobal('OffscreenCanvas', undefined);
     const t = pictureTarget({ box: box(0, 0, 10, 10), fit: 'stretch' }, 1)!;
     expect(preparePicture(source(10, 10), t)).toBeUndefined();
+  });
+});
+
+describe('crop-aware decode: the part of a picture a target shows (design/27 §7.5)', () => {
+  it('is the visible crop of a covering photo, at the scale it is shown at', () => {
+    // A 4:3 photo covering the 16:9 frame at 1080p: 375 rows are cut above and below.
+    const t = pictureTarget({ box: box(0, 0, 1920, 1080), fit: 'cover' }, 1)!;
+    const r = pictureRegion(t, 4000, 3000)!;
+    expect(r.x).toBeCloseTo(0, 9);
+    expect(r.y).toBeCloseTo(375, 9);
+    expect(r.w).toBeCloseTo(4000, 9);
+    expect(r.h).toBeCloseTo(2250, 9);
+    expect(r.scale).toBeCloseTo(0.48, 9);
+    // At 4K the same part, twice the scale.
+    expect(
+      pictureRegion(pictureTarget({ box: box(0, 0, 1920, 1080), fit: 'cover' }, 2)!, 4000, 3000)!.scale,
+    ).toBeCloseTo(0.96, 9);
+    // A crop share and a box overflowing the slide narrow the part further.
+    const cropped = pictureTarget(
+      { box: box(-960, 0, 1920, 1080), fit: 'stretch', crop: { l: 0.5, t: 0, r: 0, b: 0 } },
+      1,
+    )!;
+    const c = pictureRegion(cropped, 4000, 3000)!;
+    expect(c.x).toBeCloseTo(3000, 9); // the right half of the crop is on the slide
+    expect(c.w).toBeCloseTo(1000, 9);
+    expect(c.h).toBeCloseTo(3000, 9);
+    expect(c.scale).toBeCloseTo(0.96, 9); // 1920 px for 2000 picture px across
+    // A crop that leaves nothing, and an empty picture, show nothing.
+    expect(
+      pictureRegion(
+        pictureTarget({ box: box(0, 0, 100, 100), fit: 'stretch', crop: { l: 0.6, t: 0, r: 0.5, b: 0 } }, 1)!,
+        100,
+        100,
+      ),
+    ).toBeUndefined();
+    expect(pictureRegion(t, 0, 10)).toBeUndefined();
+  });
+
+  it('plans one decode for every target of a file: the union of their parts at the largest scale', () => {
+    const big = pictureTarget({ box: box(0, 0, 1920, 1080), fit: 'cover' }, 1)!;
+    const small = pictureTarget(
+      { box: box(100, 100, 200, 100), fit: 'stretch', crop: { l: 0, t: 0, r: 0.9, b: 0.9 } },
+      1,
+    )!;
+    const p = decodePlan([big, small], 4000, 3000)!;
+    expect(p.y).toBeCloseTo(0, 9); // the small one shows the top tenth
+    expect(p.h).toBeCloseTo(2625, 9);
+    expect(p.scale).toBeCloseTo(0.5, 9); // 200 px for 400 picture px
+    expect(decodePlan([], 4000, 3000)).toBeUndefined();
+  });
+
+  it('draws every visible pixel from a decoded crop where it lands from the whole picture', () => {
+    const fits = ['contain', 'cover', 'stretch'] as const;
+    const share = fc.double({ min: -0.4, max: 0.45, noNaN: true });
+    fc.assert(
+      fc.property(
+        fc.record({
+          x: fc.double({ min: -400, max: 1800, noNaN: true }),
+          y: fc.double({ min: -300, max: 1000, noNaN: true }),
+          w: fc.double({ min: 20, max: 2400, noNaN: true }),
+          h: fc.double({ min: 20, max: 1400, noNaN: true }),
+          fit: fc.constantFrom(...fits),
+          crop: fc.option(fc.record({ l: share, t: share, r: share, b: share }), { nil: undefined }),
+          scale: fc.constantFrom(0.5, 1, 2),
+          iw: fc.integer({ min: 50, max: 6000 }),
+          ih: fc.integer({ min: 50, max: 4000 }),
+          k: fc.constantFrom(1, 0.5, 0.25),
+        }),
+        (g) => {
+          const t = pictureTarget({ box: box(g.x, g.y, g.w, g.h), fit: g.fit, crop: g.crop }, g.scale);
+          if (!t) return;
+          const plan = decodePlan([t], g.iw, g.ih);
+          const whole = recorder();
+          whole.ctx.beginPath();
+          paintPicture(whole.ctx, source(g.iw, g.ih), t.bx, t.by, t.bw, t.bh, t.fit, t.crop);
+          if (!plan) {
+            // Nothing visible: whatever the whole picture draws lies outside the box or the canvas.
+            for (const d of whole.draws()) {
+              const [dx, dy, dw, dh] = d.args.slice(-4) as [number, number, number, number];
+              const ix = Math.min(dx + dw, t.bx + t.bw, t.w) - Math.max(dx, t.bx, 0);
+              const iy = Math.min(dy + dh, t.by + t.bh, t.h) - Math.max(dy, t.by, 0);
+              expect(ix <= 1e-6 || iy <= 1e-6).toBe(true);
+            }
+            return;
+          }
+          // The decoded part: the plan padded by two picture pixels, at k of the picture's size.
+          const fx = Math.max(0, Math.floor(plan.x) - 2);
+          const fy = Math.max(0, Math.floor(plan.y) - 2);
+          const from: PictureFrom = {
+            iw: g.iw,
+            ih: g.ih,
+            x: fx,
+            y: fy,
+            w: Math.min(g.iw, Math.ceil(plan.x + plan.w) + 2) - fx,
+            h: Math.min(g.ih, Math.ceil(plan.y + plan.h) + 2) - fy,
+          };
+          const part = recorder();
+          paintPictureFrom(
+            part.ctx,
+            source(from.w * g.k, from.h * g.k),
+            from,
+            t.bx,
+            t.by,
+            t.bw,
+            t.bh,
+            t.fit,
+            t.crop,
+          );
+          const a = whole.draws()[0]!.args;
+          const b = part.draws()[0]!.args;
+          // The whole picture's mapping from picture pixels to device pixels.
+          const [sx, sy, sw, sh] = a.length === 8 ? a.slice(0, 4) : [0, 0, g.iw, g.ih];
+          const [dx, dy, dw, dh] = a.slice(-4) as [number, number, number, number];
+          // The part maps the same picture pixels to the same device pixels...
+          const px = from.x + b[0]! / g.k;
+          const py = from.y + b[1]! / g.k;
+          expect(b[4]!).toBeCloseTo(dx + ((px - sx!) * dw) / sw!, 6);
+          expect(b[5]!).toBeCloseTo(dy + ((py - sy!) * dh) / sh!, 6);
+          expect(b[6]! / (b[2]! / g.k)).toBeCloseTo(dw / sw!, 6);
+          expect(b[7]! / (b[3]! / g.k)).toBeCloseTo(dh / sh!, 6);
+          // ...and covers everything the whole picture puts inside the box on the canvas.
+          const vis = (r: number[]) => {
+            const [x, y, w, h] = r.slice(-4) as [number, number, number, number];
+            return [
+              Math.max(x, t.bx, 0),
+              Math.max(y, t.by, 0),
+              Math.min(x + w, t.bx + t.bw, t.w),
+              Math.min(y + h, t.by + t.bh, t.h),
+            ];
+          };
+          const va = vis(a);
+          const vb = vis(b);
+          for (let i = 0; i < 4; i++) expect(vb[i]!).toBeCloseTo(va[i]!, 6);
+        },
+      ),
+      { numRuns: 400 },
+    );
+  });
+
+  it('records the picture size, not the decoded part, as the source size of what it prepares', () => {
+    stubOffscreen();
+    const t = pictureTarget({ box: box(0, 0, 1920, 1080), fit: 'cover' }, 1)!;
+    const from: PictureFrom = { iw: 4000, ih: 3000, x: 0, y: 373, w: 4000, h: 2254 };
+    const bmp = preparePicture(source(2000, 1127), t, from)!;
+    expect(sourceSize(bmp)).toEqual([4000, 3000]);
+    expect(preparedKey(bmp)).toBe(t.key);
+  });
+});
+
+describe('preparePictureSteps: a large target in bands (design/27 §7.5)', () => {
+  it('draws a 4K target in four bands of whole rows, then takes the bitmap', () => {
+    const made = stubOffscreen();
+    const t = pictureTarget({ box: box(0, 0, 1920, 1080), fit: 'cover' }, 2)!;
+    const steps = preparePictureSteps(source(6000, 4000), t);
+    let n = 0;
+    let r = steps.next();
+    while (!r.done) {
+      n++;
+      r = steps.next();
+    }
+    expect(n).toBe(3); // four bands: three yields between them
+    expect(r.value).toBe(made[0]!.bmp);
+    const rects = made[0]!.rec.calls.filter((c) => c.op === 'rect').map((c) => c.args);
+    expect(rects).toEqual([
+      [0, 0, 3840, 2160],
+      [0, 0, 3840, 546],
+      [0, 0, 3840, 2160],
+      [0, 546, 3840, 546],
+      [0, 0, 3840, 2160],
+      [0, 1092, 3840, 546],
+      [0, 0, 3840, 2160],
+      [0, 1638, 3840, 522],
+    ]);
+    expect(made[0]!.rec.draws()).toHaveLength(4);
+    expect(preparedKey(r.value!)).toBe(t.key);
+  });
+
+  it('is one step, the very calls of preparePicture, for a target up to the step size', () => {
+    const made = stubOffscreen();
+    const t = pictureTarget({ box: box(0, 0, 1920, 1080), fit: 'cover' }, 1)!;
+    const r = preparePictureSteps(source(6000, 4000), t).next();
+    expect(r.done).toBe(true);
+    preparePicture(source(6000, 4000), t);
+    expect(made[0]!.rec.calls).toEqual(made[1]!.rec.calls);
+    expect(made[0]!.rec.calls.map((c) => c.op)).toEqual(['beginPath', 'rect', 'clip', 'drawImage']);
   });
 });
 

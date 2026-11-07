@@ -26,6 +26,7 @@ import {
   type FromAsset,
   type FromRender,
   type HeldKeys,
+  type JobRole,
   LAYER_INDEX,
   type LayerPlan,
   type MediaDesc,
@@ -35,6 +36,7 @@ import {
   type SlideDesc,
   type ToAsset,
   type ToRender,
+  type WarmJob,
   armStatus,
   buildHealth,
   clampLook,
@@ -60,6 +62,7 @@ import type {
   Transport,
   WorkerName,
 } from './host-protocol.ts';
+import { LaneStats } from './lane-stats.ts';
 import { SlotPair } from './media.ts';
 import {
   Downloads,
@@ -192,10 +195,20 @@ export class LinkCore {
   private heldSet = new Set<string>();
   private inflight = new Set<string>();
   /**
-   * Asset jobs sent and not answered, in the order sent: the asset worker runs them in order, so the first
-   * is the one it was drawing when it stopped answering.
+   * Asset jobs sent and not answered, in the order sent. The asset worker's lanes run each layer's jobs in
+   * order and the most urgent first (design/27 §7.5), so the first is the likeliest to be the one it was
+   * drawing when it stopped answering.
    */
   private assetInflight = new Set<string>();
+  /**
+   * Bulk work (design/27 §7.5): the warm job last sent (the pictures of the cue after the armed one), the
+   * one still running ('' none), and the one the last sync wanted.
+   */
+  private warmSent = '';
+  private warmRunning = '';
+  private warmWanted = '';
+  /** Per-lane timing of the asset worker's jobs, and the jobs cancelled as superseded. */
+  private laneStats = new LaneStats();
   private delivered = new Map<string, number>();
   /** Arm errors by key; the key is not tried again before `until`. */
   private errors = new Map<string, { error: string; at: number; until: number }>();
@@ -567,6 +580,8 @@ export class LinkCore {
     }
     if (assetChanged) {
       this.fontsSig = '';
+      this.warmSent = '';
+      this.warmRunning = '';
       if (!firstStart) {
         this.diagLog(`asset worker generation ${gens.asset}: reloading fonts, checking the cache`);
         void this.verifyCache(true);
@@ -875,11 +890,15 @@ export class LinkCore {
       return;
     }
     let armed: FramePlan | undefined;
+    /** The state after a GO to the armed cue: its `armed` is the cue after it (warmed, design/27 §7.5). */
+    let afterGo: LiveState | undefined;
     if (state.mode === 'live' && state.armed !== undefined && state.armed !== state.live) {
       try {
-        armed = planFrame(reduce(state, { k: 'go', cueIndex: state.armed, at: 0 }), look, planOpts);
+        afterGo = reduce(state, { k: 'go', cueIndex: state.armed, at: 0 });
+        armed = planFrame(afterGo, look, planOpts);
       } catch {
         armed = undefined;
+        afterGo = undefined;
       }
     }
     // The live slide's click-start sound waits for F8 (design/27 §8): the audio master preloads it, paused.
@@ -908,9 +927,9 @@ export class LinkCore {
 
     for (const name of PLAN_LAYERS) {
       const lp = live[name] as LayerPlan<{ key: string }>;
-      this.ensureContent(name, lp, live, state);
+      this.ensureContent(name, lp, live, state, 'live');
       const ap = armed?.[name] as LayerPlan<{ key: string }> | undefined;
-      if (ap && ap.key !== lp.key) this.ensureContent(name, ap, armed!, state);
+      if (ap && ap.key !== lp.key) this.ensureContent(name, ap, armed!, state, 'armed');
       // Re-arming a restarted render worker: the hold covers it, and it comes down 200 ms after the live
       // keys are held, so a crossfade into the re-armed content (a late flip fades from its arrival)
       // would be seen half-done. Cuts, until the screen is covered by the renderer again.
@@ -925,7 +944,78 @@ export class LinkCore {
         if (now - p.at < PENDING_ENDED_MS) this.onMediaEnded(p.key);
     }
     this.syncProps(false);
+    this.syncWarm(afterGo, planOpts);
+    this.cancelSuperseded();
     this.checkCover();
+  }
+
+  /**
+   * Bulk work for the asset worker's raster lanes (design/27 §7.5): the pictures of the cue after the armed
+   * one, prepared into its cache while nothing more urgent runs, so arming that cue after the next GO only
+   * draws. Sent once per content (its plan keys); a newer one supersedes it (`cancelSuperseded`).
+   */
+  private syncWarm(afterGo: LiveState | undefined, planOpts: Parameters<typeof planFrame>[2]): void {
+    let warm: WarmJob | undefined;
+    const next = afterGo?.armed;
+    if (afterGo && next !== undefined && next !== afterGo.live) {
+      try {
+        warm = this.warmJob(
+          planFrame(reduce(afterGo, { k: 'go', cueIndex: next, at: 0 }), this.look, planOpts),
+        );
+      } catch {
+        warm = undefined;
+      }
+    }
+    this.warmWanted = warm?.key ?? '';
+    if (!warm || warm.key === this.warmSent || !this.assetPort) return;
+    // The one still running is superseded: cancelled before this one is sent.
+    this.cancelSuperseded();
+    this.warmSent = warm.key;
+    this.warmRunning = warm.key;
+    this.postAsset({ t: 'warm', warm });
+  }
+
+  /** What warming a planned cue prepares: its slide's pictures as its slide job asks, and image cues. */
+  private warmJob(plan: FramePlan): WarmJob | undefined {
+    const d = plan.slide.desc;
+    const images = d ? this.slideImages(d.slide, d.nextSlide) : {};
+    const sources: string[] = [];
+    for (const desc of [plan.background.desc, plan.media.desc])
+      if (desc?.kind === 'image' && !sources.includes(desc.hash)) sources.push(desc.hash);
+    if (!Object.keys(images).length && !sources.length) return undefined;
+    return {
+      key: `wm|${plan.slide.key}|${plan.background.key}|${plan.media.key}`,
+      ...(d ? { slide: d.slide, nextSlide: d.nextSlide } : {}),
+      look: this.look,
+      images,
+      ...(sources.length ? { sources } : {}),
+    };
+  }
+
+  /**
+   * Cancel the asset jobs that no plan needs any more (design/27 §7.5): the armed cue changed before its
+   * job ran (Next pressed quickly), a props second passed, the warm cue moved on. The asset worker drops
+   * them, or stops them at their next step, and answers nothing; they are forgotten here at once, so a
+   * key needed again later is simply sent again. A slide that waited for a late image keeps waiting for it.
+   */
+  private cancelSuperseded(): void {
+    const need = new Set<string>();
+    for (const p of [this.livePlan, this.armedPlan])
+      if (p) for (const n of PLAN_LAYERS) need.add((p[n] as LayerPlan<{ key: string }>).key);
+    if (this.propsKey) need.add(this.propsKey);
+    const gone = [...this.assetInflight].filter((k) => !need.has(k));
+    for (const k of gone) {
+      this.assetInflight.delete(k);
+      this.inflight.delete(k);
+      if (this.missingImages.has(k)) this.refreshKeys.add(k);
+    }
+    if (this.warmRunning && this.warmRunning !== this.warmWanted) {
+      gone.push(this.warmRunning);
+      this.warmRunning = '';
+    }
+    if (!gone.length) return;
+    this.laneStats.cancelled(gone.length);
+    this.postAsset({ t: 'cancel', keys: gone });
   }
 
   /** A quarantined key is never flipped to; the layer shows nothing instead of retrying. */
@@ -990,6 +1080,7 @@ export class LinkCore {
     lp: LayerPlan<{ key: string }>,
     plan: FramePlan,
     _state: LiveState,
+    role: JobRole,
   ): void {
     const key = lp.key;
     if (!key || this.errorBlocks(key) || !this.renderPort) return;
@@ -1011,7 +1102,7 @@ export class LinkCore {
     if (this.inflight.has(key) && !stale) return;
     if (name === 'background' && plan.background.desc) {
       const d = plan.background.desc;
-      if (d.kind === 'image') this.job({ kind: 'image', layer, key, hash: d.hash, fit: 'cover' });
+      if (d.kind === 'image') this.job({ kind: 'image', layer, key, hash: d.hash, fit: 'cover' }, role);
       else this.armVideo(this.bgPair, layer, key, d.hash, true, FIT_COVER);
     } else if (name === 'slide' && plan.slide.desc) {
       const d = plan.slide.desc;
@@ -1020,25 +1111,28 @@ export class LinkCore {
       if (images) this.refreshedAt.set(key, Date.now());
       const refresh = images || (stale && this.has(key));
       this.sceneVideo.set(key, scene ? sceneSig(scene) : '');
-      this.job({
-        kind: 'slide',
-        layer,
-        key,
-        cueIndex: d.cueIndex,
-        slide: d.slide,
-        nextSlide: d.nextSlide,
-        isSong: d.isSong,
-        look: this.look,
-        images: this.slideImages(d.slide, d.nextSlide),
-        refresh: refresh || undefined,
-        video: scene,
-      });
+      this.job(
+        {
+          kind: 'slide',
+          layer,
+          key,
+          cueIndex: d.cueIndex,
+          slide: d.slide,
+          nextSlide: d.nextSlide,
+          isSong: d.isSong,
+          look: this.look,
+          images: this.slideImages(d.slide, d.nextSlide),
+          refresh: refresh || undefined,
+          video: scene,
+        },
+        role,
+      );
     } else if (name === 'lowerThird' && plan.lowerThird.desc) {
-      this.job({ kind: 'lowerThird', layer, key, text: plan.lowerThird.desc.text, look: this.look });
+      this.job({ kind: 'lowerThird', layer, key, text: plan.lowerThird.desc.text, look: this.look }, role);
     } else if (name === 'media' && plan.media.desc) {
       const d = plan.media.desc;
       if (d.kind === 'image')
-        this.job({ kind: 'image', layer, key, hash: d.hash, fit: 'contain', cueIndex: d.cueIndex });
+        this.job({ kind: 'image', layer, key, hash: d.hash, fit: 'contain', cueIndex: d.cueIndex }, role);
       else this.armVideo(this.mdPair, layer, key, d.hash, d.loop, FIT_CONTAIN, d.cueIndex);
     }
   }
@@ -1106,12 +1200,13 @@ export class LinkCore {
     return out;
   }
 
-  private job(job: AssetJob): void {
+  /** Send a job to the asset worker; `role`: whether it draws for the live or the armed cue (its lane). */
+  private job(job: AssetJob, role?: JobRole): void {
     if (!this.assetPort) return;
     this.inflight.add(job.key);
     this.assetInflight.delete(job.key);
     this.assetInflight.add(job.key);
-    this.postAsset({ t: 'job', job });
+    this.postAsset(role ? { t: 'job', job, role } : { t: 'job', job });
   }
 
   /** Load a file into a host media slot; resolves when its first frame is available. */
@@ -1482,6 +1577,8 @@ export class LinkCore {
         if (f) images[model.logo.mediaId] = f.hash;
       }
       this.job({ kind: 'props', layer, key: model.key, model, look: this.look, images });
+      // A props job of an earlier second still waiting is superseded by this one.
+      if (fromTick) this.cancelSuperseded();
     }
     const key = this.shown(model.key);
     this.flips[layer] = { key, at, fadeMs: fade, cue: -1 };
@@ -1900,6 +1997,7 @@ export class LinkCore {
         this.inflight.delete(m.key);
         this.assetInflight.delete(m.key);
         this.delivered.set(m.key, Date.now());
+        if (m.lane) this.laneStats.add(m.lane, m.waitMs ?? 0, m.rasterMs ?? 0, m.longestMs ?? 0);
         this.errors.delete(m.key);
         this.unavailable.delete(m.key);
         for (const f of m.fontFallbacks ?? []) {
@@ -1936,6 +2034,10 @@ export class LinkCore {
         if (!unavailable) setTimeout(() => this.requestSync(), ERROR_RETRY_MS + 50);
         return;
       }
+      case 'warmed':
+        if (m.key === this.warmRunning) this.warmRunning = '';
+        this.laneStats.add('bulk', m.waitMs, m.rasterMs, m.longestMs);
+        return;
       case 'fonts':
         this.diagLog(
           `fonts loaded: ${m.loaded}${m.failed.length ? `, failed: ${m.failed.join(', ')}` : ''}${m.ready?.length ? `; ready: ${m.ready.join(', ')}` : ''}`,
@@ -2154,6 +2256,8 @@ export class LinkCore {
       slideFlip: { cue: this.tel.slideCue ?? -1, at: this.tel.slideFlipAt ?? 0 },
       resyncs: this.gaps,
       invariantResyncs: this.invariantResyncs,
+      // The asset worker's raster lanes (design/27 §7.5): per-lane wait and raster percentiles.
+      lanes: this.laneStats.summary(),
     };
   }
 
@@ -2174,6 +2278,7 @@ export class LinkCore {
       },
       held: this.held,
       inflight: [...this.inflight],
+      warm: { sent: this.warmSent, running: this.warmRunning },
       errors: Object.fromEntries([...this.errors].map(([k, v]) => [k, v.error])),
       quarantined: [...this.quarantine.keys()],
       missingImages: Object.fromEntries(this.missingImages),
@@ -2226,6 +2331,7 @@ export class LinkCore {
         ? [...this.quarantine.keys()].map((k) => k.slice(0, 40)).join(', ')
         : '-',
       fonts: this.fontFallbacks.size ? `fallback for ${[...this.fontFallbacks].join(', ')}` : 'ok',
+      rasterLanes: this.laneStats.line(),
       workers: workers || '-',
       audio: h.audio ?? (this.config?.output.audioMaster ? 'none' : 'not master'),
       media:

@@ -28,5 +28,10 @@ else. The same rasterizer runs in the operator for thumbnails.
   its offset, wherever that is under 80 % of the frame: a lyric band at 4K is about 11 MB instead of
   33 MB to draw, transfer and upload, and its draw is scissored to its rect. On WebGPU each stack
   also holds an output-sized layer texture (two per layer, 331.8 MB for five layers at 4K).
+- Arm time is the asset worker's: its jobs run in raster lanes (design/27 §7.5, design/14
+  "Asset worker: raster lanes and picture decoding"). Props go first, then the live cue's
+  layers, the armed cue's and the pictures of the cue after it, in short turns, so a slide
+  that decodes large photos never delays the once-a-second props flip; superseded jobs are
+  cancelled.
 - Sub-pixel text animation is not available (none is required).
 - A DOM text layer remains only for diagnostics.
