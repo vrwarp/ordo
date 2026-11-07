@@ -30,6 +30,7 @@ import { drawableContent } from './content.ts';
 import { type Ctx2D, roundRect, setLetterSpacing, withRotation } from './ctx.ts';
 import {
   type PictureShape,
+  type PictureSource,
   type PictureTarget,
   paintPicture,
   paintShapedPicture,
@@ -42,7 +43,7 @@ import { EFFECT_MAX_PIXELS } from './effects.ts';
 import { GEOM_CLIP_RULE, geomFillPath2D } from './geom/draw.ts';
 import { geomAwaited, storedGeometry } from './geom/stored.ts';
 import { withinDrawBudget } from './geombudget.ts';
-import { drawGeomShape, hasShapeExtras, placeBox } from './shape.ts';
+import { drawShapeObject, placeBox } from './shape.ts';
 import { firstStrong, hasStrongRtl } from './text/bidi.ts';
 import { LEGACY_FONT_ENV, currentFontEnv } from './text/fonts.ts';
 import { metricsInk } from './text/measure.ts';
@@ -53,9 +54,10 @@ export type { Ctx2D } from './ctx.ts';
 /**
  * Decoded pictures by media id. The drawers pass the `pictureTarget` each picture is drawn at (undefined
  * for one drawn from its source: rotated, round corners, oversized). Given a target, a lookup returns the
- * source or a bitmap `preparePicture` made for a target with the same key; a lookup may ignore targets.
+ * source or a bitmap `preparePicture` made for a target with the same key; a lookup may ignore targets. A
+ * source may be a vector picture (`PictureSource`, M9), which a registered source step draws.
  */
-export type ImageLookup = (mediaId: string, target?: PictureTarget) => CanvasImageSource | undefined;
+export type ImageLookup = (mediaId: string, target?: PictureTarget) => PictureSource | undefined;
 
 /**
  * The CSS font of legacy text. With a font resolver installed (design/27 §10: the asset worker, the thumbnail
@@ -392,7 +394,7 @@ export function drawText(
  */
 export function drawImageFit(
   ctx: Ctx2D,
-  img: CanvasImageSource,
+  img: PictureSource,
   box: Box,
   scale: number,
   fit: 'contain' | 'cover' | 'stretch',
@@ -406,7 +408,8 @@ export function drawImageFit(
   if (target && preparedKey(img) === target.key) {
     ctx.save();
     ctx.globalAlpha = opacity;
-    ctx.drawImage(img, target.x, target.y);
+    // A prepared bitmap (`preparePicture`): a canvas image, copied 1:1.
+    ctx.drawImage(img as CanvasImageSource, target.x, target.y);
     ctx.restore();
     return;
   }
@@ -489,7 +492,7 @@ function applyPictureSoftEdge(
 /** A masked or flipped picture from its source (`drawImageFit` with a `shape`). */
 function drawShapedPicture(
   ctx: Ctx2D,
-  img: CanvasImageSource,
+  img: PictureSource,
   box: Box,
   scale: number,
   fit: 'contain' | 'cover' | 'stretch',
@@ -572,10 +575,8 @@ function drawShapedPicture(
 }
 
 export function drawShape(ctx: Ctx2D, o: Extract<SlideObject, { type: 'shape' }>, scale: number): void {
-  if (hasShapeExtras(o)) {
-    drawGeomShape(ctx, o, scale);
-    return;
-  }
+  // M9 draw dispatch (shape.ts): table, chart, decoration, geometry; else the legacy shape below.
+  if (drawShapeObject(ctx, o, scale)) return;
   const box = clampBox(o.box);
   ctx.save();
   ctx.globalAlpha = num(o.opacity, 0, 1, 1);

@@ -7,11 +7,13 @@ import {
   type Rgba,
   type Slide,
   type TextStyle,
+  extraFontFamilies,
   isSymbolFont,
 } from '@ordo/domain';
 import { clampLook } from './clamp.ts';
 import { drawableContent } from './content.ts';
 import type { AssetJob } from './messages.ts';
+import type { PictureSource } from './picture.ts';
 import type { PropsModel } from './props.ts';
 import {
   type Ctx2D,
@@ -64,7 +66,7 @@ export function rasterLowerThird(ctx: Ctx2D, text: string, look: Look, scale: nu
 
 export function rasterImage(
   ctx: Ctx2D,
-  img: CanvasImageSource,
+  img: PictureSource,
   fit: 'contain' | 'cover' | 'stretch',
   scale: number,
 ): void {
@@ -94,7 +96,7 @@ export type ThumbnailOptions = {
   /** Whether the slide belongs to a song (lyric-only looks apply their non-song rule otherwise). */
   isSong?: boolean;
   /** Background image or video frame to draw under the slide (cover). */
-  background?: CanvasImageSource;
+  background?: PictureSource;
   /** Fill under everything: true (default) uses the look's clear colour, false leaves it transparent. */
   clear?: boolean | Rgba;
   /** Reuse a canvas (it is resized to width x height). */
@@ -109,7 +111,7 @@ export function drawSlideThumbnail(
   ctx: Ctx2D,
   slide: Slide,
   look: Look | undefined,
-  images: ImageLookup | Map<string, CanvasImageSource>,
+  images: ImageLookup | Map<string, PictureSource>,
   width: number,
   height: number,
   nextSlide?: Slide,
@@ -137,7 +139,7 @@ export function drawSlideThumbnail(
 export function renderSlideThumbnail(
   slide: Slide,
   look: Look | undefined,
-  images: ImageLookup | Map<string, CanvasImageSource>,
+  images: ImageLookup | Map<string, PictureSource>,
   width: number,
   height: number,
   nextSlide?: Slide,
@@ -170,9 +172,11 @@ export const FALLBACK_FAMILIES: ReadonlySet<string> = new Set([
 /**
  * Every font family a raster job draws text with (clamped, deduplicated, lower-cased): each text style's
  * family and `fallbackFonts`, and for the text objects the slide draws (`slideContent`) also their runs'
- * and bullets' families (not a symbol font's: its bullet is drawn mapped, in the run's family). With
- * `fallbacks: false`, only the families text asks for (what the asset worker reports when not loaded: a
- * missing fallback face matters only through them).
+ * and bullets' families (not a symbol font's: its bullet is drawn mapped, in the run's family), and the
+ * families the M9 objects draw their text with (`extraFontFamilies`: a table's, a chart's, a vector
+ * picture's), so the asset worker waits for those faces as for any text. With `fallbacks: false`, only the
+ * families text asks for (what the asset worker reports when not loaded: a missing fallback face matters only
+ * through them).
  */
 export function jobFontFamilies(job: AssetJob, opts: { fallbacks?: boolean } = {}): string[] {
   const withFallbacks = opts.fallbacks ?? true;
@@ -190,6 +194,7 @@ export function jobFontFamilies(job: AssetJob, opts: { fallbacks?: boolean } = {
   if (job.kind === 'slide') {
     if (rule.mode === 'authored')
       for (const o of drawableContent(job.slide).objects) {
+        if (o.type !== 'text') for (const f of extraFontFamilies(o)) add(f);
         if (o.type !== 'text' || !o.text.trim()) continue;
         addStyle(o.style);
         for (const r of o.runs ?? []) add(r.fontFamily);

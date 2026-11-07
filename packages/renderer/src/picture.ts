@@ -46,9 +46,139 @@ import { geomPending, storedGeometry } from './geom/stored.ts';
  * bitmap covers the turned box's bounds; a slide of four large turned photos in masks drew in 297 ms at 4K
  * from the source, each through a frame-sized sprite). The mask is evaluated at the logical box (a resized
  * picture keeps its corners) and scaled to the device box.
+ *
+ * The pipeline's seams (M9; design/27 M9 render-seams), each empty until a track registers into it, so with
+ * none registered every picture is prepared and drawn exactly as before:
+ * - source steps (`registerPictureSource`): a picture that is not a canvas image (`PictureSource`: a
+ *   `VectorPicture`, the metafiles' vector player) is drawn by the step that accepts it wherever a canvas
+ *   image is drawn with `drawImage`, at the device size it lands at, so it stays sharp;
+ * - target extensions (`registerPictureTarget`): what else a target's pixels depend on (the 3-D look of a
+ *   front-camera picture) widens its key, and an extension may refuse to prepare a picture (it is then drawn
+ *   from its source);
+ * - post steps (`registerPicturePost`): after a target is painted and cut to its mask, before the bitmap is
+ *   taken, in a step of their own (the rim of a front-camera picture).
  */
 
 export type PictureFit = 'contain' | 'cover' | 'stretch';
+
+/**
+ * A picture a canvas cannot draw by itself (M9 vector pictures): the source step that accepts it draws it
+ * (`registerPictureSource`). Its own size is `width` x `height`; `bytes` is what it holds, for the decoders'
+ * budgets; `close` releases it, as an ImageBitmap's does.
+ */
+export interface VectorPicture {
+  readonly kind: 'vector';
+  readonly width: number;
+  readonly height: number;
+  readonly bytes: number;
+  close(): void;
+}
+
+/** What a decoder hands the drawers: a canvas image (a bitmap, an image, a video frame) or a vector picture. */
+export type PictureSource = CanvasImageSource | VectorPicture;
+
+/** Whether a picture is a vector picture (a source step draws it), not a canvas image. */
+export function isVectorPicture(img: unknown): img is VectorPicture {
+  return typeof img === 'object' && img !== null && (img as { kind?: unknown }).kind === 'vector';
+}
+
+/**
+ * Draws pictures a canvas cannot: the rectangle (sx, sy, sw, sh) of `src` (its own pixels) onto the
+ * rectangle (dx, dy, dw, dh) of `ctx` under its transform and state, as the 9-argument `drawImage` would.
+ */
+export interface PictureSourceStep {
+  readonly name: string;
+  accepts(src: PictureSource): boolean;
+  draw(
+    ctx: Ctx2D,
+    src: PictureSource,
+    sx: number,
+    sy: number,
+    sw: number,
+    sh: number,
+    dx: number,
+    dy: number,
+    dw: number,
+    dh: number,
+  ): void;
+}
+
+/**
+ * Widens a target with what else its pixels depend on: a key part (appended to the target's key, so the
+ * decoders cache it apart) and data for the post steps (`PictureTarget.ext[name]`); `false` refuses to
+ * prepare the picture (it is drawn from its source); undefined adds nothing.
+ */
+export interface PictureTargetExtension {
+  readonly name: string;
+  extend(o: PictureDraw, t: Readonly<PictureTarget>): { key: string; data?: unknown } | false | undefined;
+}
+
+/**
+ * Changes a prepared picture's pixels after they are painted and cut to the mask, before the bitmap is taken
+ * (`ctx` is the bitmap's canvas, untransformed, its state saved around the call).
+ */
+export interface PicturePostStep {
+  readonly name: string;
+  applies(t: PictureTarget): boolean;
+  run(ctx: Ctx2D, t: PictureTarget, src: PictureSource): void;
+}
+
+const sourceSteps: PictureSourceStep[] = [];
+const targetExtensions: PictureTargetExtension[] = [];
+const postSteps: PicturePostStep[] = [];
+
+/** Add `x` to `list` (one per name: a later one replaces it); returns its removal. */
+function register<T extends { readonly name: string }>(list: T[], x: T): () => void {
+  const at = list.findIndex((y) => y.name === x.name);
+  if (at >= 0) list[at] = x;
+  else list.push(x);
+  return () => {
+    const i = list.indexOf(x);
+    if (i >= 0) list.splice(i, 1);
+  };
+}
+
+/** Register a source step (the vector player); returns its unregistration. */
+export function registerPictureSource(step: PictureSourceStep): () => void {
+  return register(sourceSteps, step);
+}
+
+/** Register a target extension (the 3-D look of a picture); returns its unregistration. */
+export function registerPictureTarget(ext: PictureTargetExtension): () => void {
+  return register(targetExtensions, ext);
+}
+
+/** Register a post step (the rim of a front-camera picture); returns its unregistration. */
+export function registerPicturePost(step: PicturePostStep): () => void {
+  return register(postSteps, step);
+}
+
+/**
+ * `ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh)` for any picture: a canvas image directly, a vector
+ * picture through the source step that accepts it (nothing when none does).
+ */
+export function drawPictureSource(
+  ctx: Ctx2D,
+  img: PictureSource,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  dx: number,
+  dy: number,
+  dw: number,
+  dh: number,
+): void {
+  if (!isVectorPicture(img)) {
+    ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+    return;
+  }
+  for (const step of sourceSteps)
+    if (step.accepts(img)) {
+      step.draw(ctx, img, sx, sy, sw, sh, dx, dy, dw, dh);
+      return;
+    }
+}
 
 /**
  * How a picture is cut and mirrored in its box (design/27 §3.1 `ImageObject.mask`, `flipH`, `flipV`, `shadow`, `softEdge`):
@@ -96,6 +226,8 @@ export type PictureTarget = {
    * bitmap covers the turned box's bounds and holds the picture turned and cut to its mask.
    */
   rotation?: number;
+  /** What the target extensions added (`PictureTargetExtension`), by their names; absent when none did. */
+  ext?: Readonly<Record<string, unknown>>;
 };
 
 /** Clamped masks and their key digests, by the stored mask object (a slide's pictures are asked for often). */
@@ -203,7 +335,21 @@ export function pictureTarget(o: PictureDraw, scale: number): PictureTarget | un
   if (crop) t.crop = crop;
   if (shape) t.shape = { ...shape, w: box.w, h: box.h };
   if (box.rotation) t.rotation = box.rotation;
-  return t;
+  return targetExtensions.length ? extended(o, t) : t;
+}
+
+/** `t` with what the registered target extensions add, or undefined when one refuses it. */
+function extended(o: PictureDraw, t: PictureTarget): PictureTarget | undefined {
+  let key = t.key;
+  let ext: Record<string, unknown> | undefined;
+  for (const e of targetExtensions) {
+    const r = e.extend(o, t);
+    if (r === false) return undefined;
+    if (!r) continue;
+    key += ` ${e.name}:${r.key}`;
+    if (r.data !== undefined) (ext ??= {})[e.name] = r.data;
+  }
+  return key === t.key && !ext ? t : { ...t, key, ...(ext ? { ext } : {}) };
 }
 
 /**
@@ -232,7 +378,7 @@ function placeShape(
  */
 export function paintShapedPicture(
   ctx: Ctx2D,
-  img: CanvasImageSource,
+  img: PictureSource,
   bx: number,
   by: number,
   bw: number,
@@ -270,12 +416,12 @@ function cutToMask(ctx: Ctx2D, lw: number, lh: number, shape: PictureShape): voi
 const prepared = new WeakMap<object, { key: string; w: number; h: number }>();
 
 /** The target key a bitmap was prepared for (`preparePicture`), else undefined: a source. */
-export function preparedKey(img: CanvasImageSource): string | undefined {
+export function preparedKey(img: PictureSource): string | undefined {
   return typeof img === 'object' && img !== null ? prepared.get(img)?.key : undefined;
 }
 
-/** A picture's own pixel size (an image's, a bitmap's or a video's), 0 when it has none. */
-function ownSize(img: CanvasImageSource): [number, number] {
+/** A picture's own pixel size (an image's, a bitmap's, a video's or a vector picture's), 0 when it has none. */
+function ownSize(img: PictureSource): [number, number] {
   return [
     (img as { width?: number }).width || (img as HTMLVideoElement).videoWidth || 0,
     (img as { height?: number }).height || (img as HTMLVideoElement).videoHeight || 0,
@@ -289,7 +435,7 @@ function ownSize(img: CanvasImageSource): [number, number] {
  * with (the poster's size, design/27 §7.2), whichever of the two the image lookup hands back. Raw numbers:
  * 0 (or whatever the image says) when it has none; callers clamp.
  */
-export function sourceSize(img: CanvasImageSource): [number, number] {
+export function sourceSize(img: PictureSource): [number, number] {
   const p = typeof img === 'object' && img !== null ? prepared.get(img) : undefined;
   return p ? [p.w, p.h] : ownSize(img);
 }
@@ -325,7 +471,7 @@ export const PREPARE_STEP_PIXELS = 1 << 21;
  * there never reads a texture back.
  */
 export function preparePicture(
-  src: CanvasImageSource,
+  src: PictureSource,
   t: PictureTarget,
   from?: PictureFrom,
 ): ImageBitmap | undefined {
@@ -345,7 +491,7 @@ export function preparePicture(
  * (`asset.lanes.browser.test.ts`). Abandoning the generator drops the canvas.
  */
 export function* preparePictureSteps(
-  src: CanvasImageSource,
+  src: PictureSource,
   t: PictureTarget,
   from?: PictureFrom,
   stepPixels = PREPARE_STEP_PIXELS,
@@ -372,6 +518,16 @@ export function* preparePictureSteps(
       ctx.restore();
     }
   }
+  // Post steps (none by default): in a step of their own, over the finished pixels.
+  const post = postSteps.length ? postSteps.filter((p) => p.applies(t)) : postSteps;
+  if (post.length) {
+    yield;
+    for (const p of post) {
+      ctx.save();
+      p.run(ctx, t, src);
+      ctx.restore();
+    }
+  }
   const bmp = canvas.transferToImageBitmap();
   const [w, h] = from ? [from.iw, from.ih] : ownSize(src);
   prepared.set(bmp, { key: t.key, w, h });
@@ -386,7 +542,7 @@ export function* preparePictureSteps(
  */
 function paintTarget(
   ctx: Ctx2D,
-  src: CanvasImageSource,
+  src: PictureSource,
   t: PictureTarget,
   from?: PictureFrom,
   step?: { y: number; rows: number } | 'cut',
@@ -546,7 +702,7 @@ export function decodePlan(
  */
 export function paintPicture(
   ctx: Ctx2D,
-  img: CanvasImageSource,
+  img: PictureSource,
   bx: number,
   by: number,
   bw: number,
@@ -559,11 +715,13 @@ export function paintPicture(
   const l = pictureLayout(iw, ih, bx, by, bw, bh, fit, c);
   if (!l) return;
   if (!c) {
-    ctx.drawImage(img, l.dx, l.dy, l.dw, l.dh);
+    if (isVectorPicture(img)) drawPictureSource(ctx, img, 0, 0, iw, ih, l.dx, l.dy, l.dw, l.dh);
+    else ctx.drawImage(img, l.dx, l.dy, l.dw, l.dh);
     return;
   }
   // The part of the cropped rect that lies on the picture, and where it lands; the rest stays clear.
-  ctx.drawImage(
+  drawPictureSource(
+    ctx,
     img,
     l.x0,
     l.y0,
@@ -584,7 +742,7 @@ export function paintPicture(
  */
 export function paintPictureFrom(
   ctx: Ctx2D,
-  img: CanvasImageSource,
+  img: PictureSource,
   from: PictureFrom,
   bx: number,
   by: number,
@@ -603,7 +761,8 @@ export function paintPictureFrom(
   const [iw, ih] = ownSize(img);
   const ux = iw / from.w;
   const uy = ih / from.h;
-  ctx.drawImage(
+  drawPictureSource(
+    ctx,
     img,
     (x0 - from.x) * ux,
     (y0 - from.y) * uy,

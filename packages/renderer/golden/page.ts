@@ -26,6 +26,7 @@ import {
 } from '../src/text2d.ts';
 import { type FontFile, FontResolver, LEGACY_FONT_ENV, installFontEnv } from '../src/text/fonts.ts';
 import { isRichText, RICH_STYLE_KEYS } from '../src/text/rich.ts';
+import { AREA_CASES } from './areas.ts';
 import { CONTENT_CASES } from './content-cases.ts';
 import { RICH_CASES, invarianceObjects } from './rich-cases.ts';
 import { SHAPE_CASES } from './shape-cases.ts';
@@ -645,6 +646,7 @@ export const CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2D) => v
   },
   ...CONTENT_CASES,
   ...SHAPE_CASES,
+  ...Object.assign({}, ...AREA_CASES),
 };
 
 /**

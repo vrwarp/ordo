@@ -2,6 +2,7 @@ import { type Glow, type Shadow, rgbaCss } from '@ordo/domain';
 
 import type { Ctx2D } from './ctx.ts';
 import type { Bounds } from './geom/bounds.ts';
+import { SPRITE_CACHE_BYTES, spriteCache } from './spritecache.ts';
 
 export type { Bounds } from './geom/bounds.ts';
 
@@ -25,9 +26,10 @@ export type { Bounds } from './geom/bounds.ts';
  * BLUR_MAX_PIXELS too). Making a full-slide shadow at 4K blurs a few hundred thousand pixels instead of eight
  * million.
  *
- * The reduced layers are cached by the caller's key and the device transform (`EFFECT_CACHE_BYTES`, LRU; a
- * layer is at most 4 MB): a master decoration with a shadow is drawn on every slide of a deck, and a slide is
- * drawn again for every look and refresh. A shape and its layers are composed into one full-resolution
+ * The reduced layers are cached by the caller's key and the device transform in the renderer's sprite cache
+ * (`spritecache.ts`, kind 'effect': one LRU of `EFFECT_CACHE_BYTES` for every kind of sprite, M9; a layer is
+ * at most 4 MB): a master decoration with a shadow is drawn on every slide of a deck, and a slide is drawn
+ * again for every look and refresh. A shape and its layers are composed into one full-resolution
  * sprite (cached, copied 1:1) up to EFFECT_COMPOSITE_BYTES, and past it until it thrashes the cache
  * (`drawEffected`). With no OffscreenCanvas (Node) or a sprite past
  * EFFECT_MAX_PIXELS nothing is drawn here: the caller draws the shape without its effects.
@@ -40,8 +42,11 @@ export type { Bounds } from './geom/bounds.ts';
 
 /** Device pixels of one effect sprite at most (the 16 MP of a prepared picture). */
 export const EFFECT_MAX_PIXELS = 16_000_000;
-/** Bytes of cached effect sprites (design/27 §7.5: ≤ 64 MiB). */
-export const EFFECT_CACHE_BYTES = 64 * 1024 * 1024;
+/**
+ * Bytes of cached sprites (design/27 §7.5: ≤ 64 MiB): the budget of the sprite cache, which the effect sprites
+ * share with every other kind (`spritecache.ts`).
+ */
+export const EFFECT_CACHE_BYTES = SPRITE_CACHE_BYTES;
 /** σ of a stack blur of radius r, over r (a triangular kernel's √(r²/6)). */
 export const STACK_BLUR_SIGMA = 1 / Math.sqrt(6);
 /** The largest resolution reduction of a blurred layer (its σ is kept at 2 px or more). */
@@ -73,13 +78,24 @@ export interface EffectSource {
   readonly softEdge?: number;
   /** Cache key of everything drawn but the transform; undefined: not cached. */
   readonly key?: string;
+  /**
+   * The object's 3-D look resolved for this transform (M9 plan decision 6; drawn by three-rim's face, rim and
+   * walls inside the composite): a type only until then, so a shape with one draws flat, as today.
+   */
+  readonly look3d?: Look3dPlan;
+}
+
+/**
+ * A 3-D look resolved once per object and device transform (design/27 M9 3-D, three-rim): what the effect
+ * composite draws in place of the flat shape. `key` names it for the sprite cache; the rest is three-rim's.
+ */
+export interface Look3dPlan {
+  readonly key: string;
 }
 
 /** A sprite and where it goes: device px x, y, size w x h (it may be smaller: it is enlarged to that). */
 type Sprite = { canvas: OffscreenCanvas; x: number; y: number; w: number; h: number; bytes: number };
 
-const cache = new Map<string, Sprite>();
-let cacheBytes = 0;
 /**
  * Keys of large composites made once, and of those made again after the cache let them go (the slide holds
  * more of them than the cache: they would be rebuilt on every raster), which are drawn layered from then on.
@@ -89,48 +105,44 @@ const thrashed = new Set<string>();
 /** Keys remembered in `composed` and `thrashed` at most (both are cleared past it). */
 const KEYS_MAX = 4_096;
 
-/** Forget every cached effect sprite (tests, and memory pressure). */
+/** Forget every cached effect sprite (tests, a cold measurement, memory pressure). */
 export function clearEffectCache(): void {
-  cache.clear();
-  cacheBytes = 0;
+  spriteCache.clear('effect');
   composed.clear();
   thrashed.clear();
 }
 
-/** Bytes the effect cache holds. */
+/** Bytes the effect sprites hold in the sprite cache. */
 export function effectCacheBytes(): number {
-  return cacheBytes;
+  return spriteCache.bytes('effect');
 }
 
 function cached(key: string | undefined): Sprite | undefined {
-  if (key === undefined) return undefined;
-  const hit = cache.get(key);
-  if (hit) {
-    cache.delete(key);
-    cache.set(key, hit);
-  }
-  return hit;
+  return spriteCache.get('effect', key) as Sprite | undefined;
 }
 
+/** Keeps a sprite (at most half the cache: `SpriteCache.set`), the least recently used ones evicted. */
 function remember(key: string | undefined, s: Sprite): void {
-  if (key === undefined || s.bytes > EFFECT_CACHE_BYTES / 2) return;
-  const old = cache.get(key);
-  if (old) {
-    cache.delete(key);
-    cacheBytes -= old.bytes;
-  }
-  while (cacheBytes + s.bytes > EFFECT_CACHE_BYTES && cache.size) {
-    const [k, v] = cache.entries().next().value as [string, Sprite];
-    cache.delete(k);
-    cacheBytes -= v.bytes;
-  }
-  cache.set(key, s);
-  cacheBytes += s.bytes;
+  spriteCache.set('effect', key, s);
 }
 
-function sprite(w: number, h: number): OffscreenCanvasRenderingContext2D | undefined {
+/**
+ * Device pixels of the effect canvases made so far (composites and bodies at full resolution, `full`; blur
+ * layers and masks at their reduced one, `reduced`): what a draw that had to make its effect sprites cost
+ * besides copying them (health's raster estimate reads the difference over a job, `effectWork`).
+ */
+const work = { full: 0, reduced: 0 };
+
+/** The effect canvases made so far, device pixels (`work`): take the difference across one draw. */
+export function effectWork(): { readonly full: number; readonly reduced: number } {
+  return { full: work.full, reduced: work.reduced };
+}
+
+function sprite(w: number, h: number, reduced = false): OffscreenCanvasRenderingContext2D | undefined {
   if (typeof OffscreenCanvas === 'undefined') return undefined;
   const c = new OffscreenCanvas(w, h);
+  if (reduced) work.reduced += w * h;
+  else work.full += w * h;
   return c.getContext('2d', { willReadFrequently: true }) ?? undefined;
 }
 
@@ -261,8 +273,8 @@ function blurLayer(
   k = Math.max(k, Math.sqrt((r.W * r.H) / BLUR_MAX_PIXELS));
   const w = Math.max(1, Math.ceil(r.W / k));
   const h = Math.max(1, Math.ceil(r.H / k));
-  const a = sprite(w, h);
-  const b = sprite(w, h);
+  const a = sprite(w, h, true);
+  const b = sprite(w, h, true);
   if (!a || !b) return undefined;
   a.setTransform(m.a / k, m.b / k, m.c / k, m.d / k, (m.e + dx - r.X) / k, (m.f + dy - r.Y) / k);
   paint(a);
@@ -517,8 +529,8 @@ function softened(
   const h = Math.max(1, Math.ceil(H / q));
   let made = cached(maskKey);
   if (!made || made.canvas.width !== w || made.canvas.height !== h) {
-    const mask = sprite(w, h);
-    const blurred = sprite(w, h);
+    const mask = sprite(w, h, true);
+    const blurred = sprite(w, h, true);
     if (!mask || !blurred) return;
     mask.setTransform(t.a / q, t.b / q, t.c / q, t.d / q, t.e / q, t.f / q);
     eroded(mask, src, e);

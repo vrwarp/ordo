@@ -9,7 +9,8 @@ import type { BenchReport, Stats } from './raster.page.ts';
  * Raster bench of the text engine (design/27 §13 and §14 item 13): a sermon slide (a title and a body with
  * runs, verse numbers, bullets and a stored autofit), a six-line lyric slide through the rich engine and the
  * same lyric slide as a legacy object, rasterized at 1920x1080 and 3840x2160 in a dedicated worker of
- * headless Chromium, as the outputs' asset worker does. Prints layout (cold and with a warm width cache),
+ * headless Chromium, as the outputs' asset worker does, with the bounded drawing cases of M6 and those the
+ * M9 areas list in bench/cases/index.ts. Prints layout (cold and with a warm width cache),
  * raster (clear, draw, transferToImageBitmap) and paint-only times.
  *
  *   pnpm --filter @ordo/renderer bench [--iterations 200] [--check]

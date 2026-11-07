@@ -191,6 +191,19 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
 
 ## Editor
 
+<!-- m9:render-seams -->
+*Object panel sections (M9 render-seams; `views/editor/objectSections.ts`, `ObjectPanel.tsx`).* The Object panel
+renders a list of sections, each a component given one context (the object, `readOnly` for the live lock or a
+locked object, `liveLocked` alone, the slide and draft, whether it is the themed lyric box and its override marks,
+and `set`, the one way a section changes the object as an undo step). The built-in sections keep today's order and
+markup (heading, lock and group notes, text, position and size, opacity, text style, picture, video, slide
+operations, shape; `OBJECT_SECTION_ORDER` 100 to 1000), and the markup of every panel is unchanged
+(`test/ObjectPanel.test.ts` pins it). M9's editor tracks add their sections with one line in
+`OBJECT_SECTIONS` (or `registerObjectSection` at run time): a section has an `order` among the built-ins, applies
+to the objects it says, and may stand in for built-in sections for those objects (`replaces`, such as a table's
+cells in place of the shape fields).
+<!-- /m9:render-seams -->
+
 - Canvas-based editor with `react-konva` for selection, transforms and guides; the
   visual preview inside the editor uses the shared rasterizer for text so WYSIWYG holds.
   Rich text objects (design/27) are drawn by the rich engine into their cached canvas at the stage

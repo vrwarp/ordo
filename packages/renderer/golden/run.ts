@@ -7,7 +7,8 @@ import { chromium } from '@playwright/test';
 
 /**
  * Golden-image test of the text rasterizer and looks (design/14, design/23, design/27 §14 item 4). Bundles
- * golden/page.ts, runs it in headless Chromium, renders every case to a PNG and compares it to
+ * golden/page.ts (its own cases, rich-cases.ts, content-cases.ts, shape-cases.ts and the M9 areas' files listed
+ * in golden/areas.ts), runs it in headless Chromium, renders every case to a PNG and compares it to
  * golden/expected/<case>.png with a per-pixel tolerance (anti-aliasing differs slightly between Chromium
  * builds). It also draws the legacy cases again with the font resolver installed, against the same PNGs,
  * and runs the line-break invariance check (identical text drawing at 320, 960, 1920 and 3840 px wide).

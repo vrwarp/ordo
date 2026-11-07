@@ -145,6 +145,7 @@ function backgroundCost(fill: Fill): number {
     paint: {
       gradient: fill.kind === 'gradient',
       ...(fill.kind === 'gradient' && slowGradient(fill.stops.slice(0, 16)) ? { slow: true } : {}),
+      ...(fill.kind === 'gradient' && fill.path !== undefined ? { radial: true } : {}),
       translucent: false,
     },
     place: { box: { x: 0, y: 0, w: CANVAS_W, h: CANVAS_H } },

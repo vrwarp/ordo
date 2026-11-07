@@ -43,6 +43,11 @@ export const OutputHealth = z.object({
    * §13 named exception): counted in `rasterMs`, left out of the `raster` alarm.
    */
   rasterHeavy: z.number().min(0).max(1e6).optional(),
+  /**
+   * The raster times the `raster` alarm read: those of the slides whose content fits the budget, when some
+   * are past it (`rasterHeavy`); what the alarm's text quotes. Absent: the alarm read `rasterMs`.
+   */
+  rasterAlarmMs: z.object({ n: z.number(), p50: z.number(), p95: z.number(), max: z.number() }).optional(),
   /** The longest per-frame texture upload in budgeted strips over the last minute, render worker CPU ms (WebGPU). */
   uploadMs: z.number().min(0).max(1e6).optional(),
   /**

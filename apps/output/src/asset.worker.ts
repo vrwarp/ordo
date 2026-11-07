@@ -22,6 +22,8 @@ import {
   contextMetrics,
   coversFrame,
   drawSprite,
+  effectsMade,
+  effectWork,
   heavySlide,
   imageReach,
   installFontEnv,
@@ -29,7 +31,6 @@ import {
   lowerThirdReach,
   opaqueColor,
   propsReach,
-  readGeomFiles,
   registerBlankFace,
   rasterImage,
   rasterLowerThird,
@@ -41,11 +42,12 @@ import {
   slideReach,
   spriteRect,
 } from '@ordo/renderer';
-import { drawnGeomRefs, GEOM_FILE_MAX_BYTES, isGeomFileRef, LOGICAL_WIDTH, type Slide } from '@ordo/domain';
+import { LOGICAL_WIDTH, type Look, type Slide } from '@ordo/domain';
 import { DecodeError, createDecoder } from './decode.ts';
 import { Cancelled, Lanes, RANK, type Steps } from './lanes.ts';
 import { OpaqueFiles } from './opaque.ts';
 import { PICTURE_LIMITS, preloadPictures, sourcePicture } from './pictures.ts';
+import { jobSlides, type PrepareHost, prepareSlides } from './prepare/index.ts';
 
 /**
  * Asset worker: OPFS reads, image decoding, font loading and text rasterization at output resolution.
@@ -287,29 +289,23 @@ async function preload(
 }
 
 /**
- * Read the geometry files a slide job draws (`ShapeGeom.ref`, design/27 §3.1), as its pictures are decoded
- * before it is drawn: read off this thread like a picture's file, and parsed in the job's turns (`steps`),
- * so a props job never waits for a large file's parse. Returns the hashes not there yet: drawn with their
- * shapes' fallback for now, and reported with the missing images, so the link draws the slide again once
- * they are cached.
+ * Run the slide prepare steps (prepare/index.ts: the geometry files a slide draws, `ShapeGeom.ref`, design/27
+ * §3.1, and those M9 registers) for a slide job, as its pictures are decoded before it is drawn: files read
+ * off this thread like a picture's, the synchronous work in the job's turns (`steps`), so a props job never
+ * waits for a large file's parse. Returns the hashes not there yet: drawn with their fallback for now, and
+ * reported with the missing images, so the link draws the slide again once they are cached.
  */
-async function readGeoms(job: { slide?: Slide; nextSlide?: Slide }, steps: Steps): Promise<string[]> {
-  const refs: string[] = [];
-  for (const s of [job.slide, job.nextSlide]) if (s) refs.push(...drawnGeomRefs(s).filter(isGeomFileRef));
-  if (!refs.length) return [];
-  const r = await readGeomFiles(
-    refs,
-    async (hash) => {
-      const { blob } = await readFile(hash);
-      return blob.size > GEOM_FILE_MAX_BYTES ? null : blob.text();
-    },
-    undefined,
-    (fn) => steps.slice(fn),
-  );
-  steps.check();
-  const missing: string[] = [];
-  for (const [hash, why] of r) if (why === 'missing') missing.push(hash);
-  return missing;
+function prepare(
+  job: { slide?: Slide; nextSlide?: Slide; look?: Look },
+  scale: number,
+  steps: Steps,
+): Promise<string[]> {
+  const host: PrepareHost = {
+    read: async (hash) => (await readFile(hash)).blob,
+    slice: (fn) => steps.slice(fn),
+    check: () => steps.check(),
+  };
+  return prepareSlides({ slides: jobSlides(job), scale, look: job.look }, host);
 }
 
 /** Missing families a 'done' message reports: as many as the link keeps (FromAsset, protocol health). */
@@ -427,9 +423,9 @@ async function run(job: AssetJob, steps: Steps): Promise<void> {
   try {
     let draw: () => Drawn;
     if (job.kind === 'slide') {
-      // Geometry files first: a masked picture is prepared with its mask's paths, and the slide's reach and
-      // drawing budget are worked out with them.
-      const geoms = await readGeoms(job, steps);
+      // Prepare steps first (geometry files): a masked picture is prepared with its mask's paths, and the
+      // slide's reach and drawing budget are worked out with them.
+      const geoms = await prepare(job, scale, steps);
       const pre = await preload(job.images, slidePictures(job.slide, { scale, look: job.look }), out, steps);
       release = pre.release;
       skipped = pre.skipped;
@@ -480,15 +476,20 @@ async function run(job: AssetJob, steps: Steps): Promise<void> {
     }
     // Measured, drawn, taken and sent in one turn: nothing can cancel it half-way.
     const timing: DrawTiming = { ms: 0, text: null };
+    let made: ReturnType<typeof effectsMade> | undefined;
     const ms = await steps.slice(() => {
+      const before = effectWork();
       const d = timed(timing, draw);
+      // The effect sprites this draw had to make (none when they were cached): content, not the computer.
+      made = effectsMade(before, effectWork(), scale);
       release?.();
       release = undefined;
       return deliver(job, d, t0);
     });
-    // A slide whose content is past the raster budget by its drawing estimate (memoised by the draw): health
-    // reports its time apart from the alarm's.
-    const heavy = job.kind === 'slide' && heavySlide(slideJobCost(job.slide, job.look), w, h);
+    // A slide whose content is past the raster budget by its drawing estimate (memoised by the draw, with the
+    // effect sprites it made): health reports its time apart from the alarm's.
+    const heavy =
+      job.kind === 'slide' && heavySlide({ ...slideJobCost(job.slide, job.look), effectsMade: made }, w, h);
     // The picture is on its way: its text is probed for coverage in slices of their own, so a props job can
     // run between them, and the job is reported done (a cancel meanwhile only skips the probe).
     let uncovered = '';
@@ -618,8 +619,8 @@ async function warmUp(wj: WarmJob, steps: Steps): Promise<void> {
   const scale = out.w / LOGICAL_WIDTH;
   let decodes = 0;
   if (wj.slide) {
-    // Its geometry files first, as its slide job reads them: a masked picture is prepared cut to them.
-    await readGeoms(wj, steps);
+    // Its prepare steps first, as its slide job runs them: a masked picture is prepared cut to its mask.
+    await prepare(wj, scale, steps);
     const pre = await preloadPictures(
       images,
       jobDecoder(steps),

@@ -3,11 +3,11 @@ import type { Box, ShapeObject } from '@ordo/domain';
 import { CLAMP, clampObject, isClamped, num } from './clamp.ts';
 import type { Ctx2D } from './ctx.ts';
 import { digest } from './digest.ts';
-import { drawEffected } from './effects.ts';
+import { drawEffected, type Look3dPlan } from './effects.ts';
 import { type Bounds, drawnBounds, geomBounds } from './geom/bounds.ts';
 import { drawGeom, type GeomFill, type GeomStroke, geomFillPath2D, geomPath2D } from './geom/draw.ts';
 import { arrowFor, arrowReach } from './geom/ends.ts';
-import { lineStyleOf, outlineOf, SHAPE_MITER_LIMIT } from './geom/outline.ts';
+import { hasShapeExtras, lineStyleOf, outlineOf, SHAPE_MITER_LIMIT } from './geom/outline.ts';
 import { gradientStyle } from './geom/paint.ts';
 import type { BuiltGeom } from './geom/path.ts';
 import { geomAwaited, geomPending, legacyGeometry, storedGeometry } from './geom/stored.ts';
@@ -27,6 +27,14 @@ import { geomAwaited, geomPending, legacyGeometry, storedGeometry } from './geom
  * - Placement: box space (0..w, 0..h, logical px) flipped about the box's centre, rotated about it, scaled to
  *   the device.
  * - Effects (effects.ts): shadow, glow and soft edge through sprites, the whole shape at its opacity.
+ *
+ * Draw dispatch (M9 plan decision 10, `drawShapeObject`): a shape is drawn by the first of its `table`, `chart`
+ * and `decor` (the clamp keeps one of them, in that order) whose drawer is registered (`registerShapeDrawer`:
+ * the table, chart and decoration tracks of M9), else through its geometry (`hasShapeExtras`), else by the
+ * legacy path. Until a kind's drawer is registered, such a shape draws what an older build draws once it
+ * strips the field (design/27 §3.2): its legacy shape (a table's background rect, a chart's area, a
+ * decoration's empty line). A registered 3-D look (`registerLook3d`, three-rim) decorates the geometry path:
+ * a shape with `look3d` goes through `drawGeomShape` and hands the effect composite its resolved plan.
  */
 
 export { geomBounds } from './geom/bounds.ts';
@@ -160,6 +168,66 @@ function effectKey(o: ShapeObject): string | undefined {
   return key;
 }
 
+/** The M9 fields a registered drawer draws a shape by, in precedence order (plan decision 10). */
+export const SHAPE_DRAW_KINDS = ['table', 'chart', 'decor'] as const;
+export type ShapeDrawKind = (typeof SHAPE_DRAW_KINDS)[number];
+
+/**
+ * Draws a clamped shape that holds its kind's field (`o.table`, `o.chart` or `o.decor`) at `scale` device px
+ * per logical px, under the caller's transform. False: nothing was drawn, and the shape falls to its legacy
+ * shape (the drawer's own fallback, for a field it cannot draw yet).
+ */
+export type ShapeDrawer = (ctx: Ctx2D, o: ShapeObject, scale: number) => boolean;
+
+const drawers = new Map<ShapeDrawKind, ShapeDrawer>();
+
+/** Register the drawer of one kind (the last one registered wins); returns its unregistration. */
+export function registerShapeDrawer(kind: ShapeDrawKind, draw: ShapeDrawer): () => void {
+  drawers.set(kind, draw);
+  return () => {
+    if (drawers.get(kind) === draw) drawers.delete(kind);
+  };
+}
+
+/**
+ * Resolves a shape's 3-D look for the transform it is drawn under (three-rim): the plan the effect composite
+ * draws its face, rim and walls from, or undefined to draw it flat. Called only for a shape with `look3d`.
+ */
+export type Look3dResolver = (o: ShapeObject, m: DOMMatrix, built: BuiltGeom) => Look3dPlan | undefined;
+
+let look3dResolver: Look3dResolver | undefined;
+
+/** Register the 3-D look's resolver (one at a time); returns its unregistration. */
+export function registerLook3d(resolve: Look3dResolver): () => void {
+  look3dResolver = resolve;
+  return () => {
+    if (look3dResolver === resolve) look3dResolver = undefined;
+  };
+}
+
+/** Which kind's field a shape is drawn by (`SHAPE_DRAW_KINDS` order, as clamped), else undefined. */
+export function shapeDrawKind(o: ShapeObject): ShapeDrawKind | undefined {
+  if (o.table === undefined && o.chart === undefined && o.decor === undefined) return undefined;
+  const c = clampShapeObject(o);
+  return c.table ? 'table' : c.chart ? 'chart' : c.decor ? 'decor' : undefined;
+}
+
+/**
+ * Draw a shape object as dispatched (see the header): `table` → `chart` → `decor` → geometry → legacy. True
+ * when one of the first four drew it; false leaves it to the legacy path (`drawShape`).
+ */
+export function drawShapeObject(ctx: Ctx2D, o: ShapeObject, scale: number): boolean {
+  const kind = shapeDrawKind(o);
+  if (kind) {
+    if (drawers.get(kind)?.(ctx, clampShapeObject(o), scale)) return true;
+  }
+  if (hasShapeExtras(o) || (o.look3d !== undefined && look3dResolver)) {
+    drawGeomShape(ctx, o, scale);
+    return true;
+  }
+  return false;
+}
+
 /** Draw a shape with M6 fields (`hasShapeExtras`) at `scale` device px per logical px. */
 export function drawGeomShape(ctx: Ctx2D, raw: ShapeObject, scale: number): void {
   const o = clampShapeObject(raw);
@@ -171,7 +239,11 @@ export function drawGeomShape(ctx: Ctx2D, raw: ShapeObject, scale: number): void
   const s = num(scale, 0.01, 8, 1);
   ctx.save();
   placeBox(ctx, o.box, s, o.flipH === true, o.flipV === true);
-  if ((o.shadow || o.glow || o.softEdge) && typeof ctx.getTransform === 'function') {
+  const look3d =
+    o.look3d && look3dResolver && typeof ctx.getTransform === 'function'
+      ? look3dResolver(o, ctx.getTransform(), plan.built)
+      : undefined;
+  if ((o.shadow || o.glow || o.softEdge || look3d) && typeof ctx.getTransform === 'function') {
     const m = ctx.getTransform();
     const device = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
     const drawn = drawEffected(
@@ -202,6 +274,7 @@ export function drawGeomShape(ctx: Ctx2D, raw: ShapeObject, scale: number): void
         softEdge: o.softEdge,
         // A shape still waiting for its geometry file is not cached under the key it will draw with.
         key: geomPending(o.geom) ? undefined : effectKey(o),
+        ...(look3d ? { look3d } : {}),
       },
       opacity,
     );

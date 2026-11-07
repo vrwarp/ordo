@@ -1,5 +1,6 @@
 import { DEFAULT_LYRIC_STYLE, LOOK_MAIN, type Slide, type TextObject, type TextStyle } from '@ordo/domain';
 import { clearEffectCache } from '../src/effects.ts';
+import { AREA_BENCH_CASES } from './cases/index.ts';
 import { rasterSlide } from '../src/raster.ts';
 import { FontResolver, installFontEnv } from '../src/text/fonts.ts';
 import { WidthCache, canvasMeasurer, measurerFor } from '../src/text/measure.ts';
@@ -580,8 +581,37 @@ export const MULTI_STOP_GRADIENTS: Slide = {
 /**
  * Three full-slide gradients of two stops at 0 and 60 % (M6 merge review: PowerPoint's radial decorations,
  * 75 ms at 3840): drawn as stops at 0 and 1 over 60 % of the line (`paint.ts` `fastStops`), on the fast path.
+ * Stacked, each costs about 12.6 ms a full slide at 4K: with all three kept (gradientArea 0.2) the row took 45 to
+ * 47 ms p50 and up to 54 p95 at 3840, past the 50 ms task; rated at 0.22 the budget keeps two, 36.3 to 36.6 ms p50
+ * and 37.1 to 38.8 p95 at 3840 (M6 merge re-review, M9 wave 1).
  */
 export const INNER_STOP_GRADIENTS: Slide = { id: 'inner-stop-gradients', objects: stopStack(3, [0, 0.6]) };
+
+/**
+ * Three opaque full-slide radial gradients of four stops (M6 merge re-review: two kept whole took 49.7 ms
+ * p50 and 54.7 p95 at 3840, while the budget rated them with the opaque discount): an opaque radial gradient off
+ * Skia's fast path costs what a translucent one does (`cost.ts` `areaWeight`), so the budget keeps one and draws
+ * the others as their legacy colours.
+ */
+export const OPAQUE_RADIAL_GRADIENTS: Slide = {
+  id: 'opaque-radial-gradients',
+  objects: Array.from({ length: 3 }, (_, i) => {
+    const stops = [0, 0.3, 0.7, 1].map((at, k) => ({
+      at,
+      color: { r: (k * 80 + i * 40) % 256, g: 120, b: 255 - k * 60, a: 1 },
+    }));
+    return {
+      id: `r${i}`,
+      type: 'shape' as const,
+      box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+      shape: 'rect' as const,
+      fill: stops[0]!.color,
+      opacity: 1,
+      radius: 0,
+      gradient: { kind: 'radial' as const, stops },
+    };
+  }),
+};
 
 export type Stats = { n: number; p50: number; p95: number; max: number; mean: number };
 export type BenchReport = {
@@ -652,6 +682,10 @@ export async function bench(
     ['140 full-slide gradients, 137 as legacy colours (legacy floor, M6 finish review)', GRADIENT_STACK],
     ['three full-slide gradients of four stops (bounded geometry, M6 merge review)', MULTI_STOP_GRADIENTS],
     ['three full-slide gradients 0 to 60 % (bounded geometry, M6 merge review)', INNER_STOP_GRADIENTS],
+    [
+      'three opaque full-slide radial gradients of four stops (bounded geometry, M6 merge re-review)',
+      OPAQUE_RADIAL_GRADIENTS,
+    ],
     ['three large shadowed panels (bounded, M6 repair)', SHADOWED_PANELS],
     ['three full-slide soft edges (bounded, M6 finish)', SOFT_EDGES],
     [
@@ -665,6 +699,7 @@ export async function bench(
     ['6-line lyric (legacy)', LYRIC_LEGACY],
     ['6-line lyric (rich, no shadow)', LYRIC_NO_SHADOW],
     ['6-line lyric (rich, no shadow or outline)', LYRIC_PLAIN],
+    ...AREA_BENCH_CASES,
   ] as const) {
     const objs = textObjects(slide);
     const chars = objs.reduce((n, o) => n + o.text.length, 0);

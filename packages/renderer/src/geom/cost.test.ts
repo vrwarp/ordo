@@ -492,9 +492,9 @@ describe('painted area and effect layers (M6 finish review, design/27 §12 drawi
         gradient: { kind: 'radial', stops: ats.map((at, i) => ({ at, color: { ...c(0.5), r: 40 * i } })) },
       });
     // Two stops at different positions are drawn as two at 0 and 1 (`paint.ts` `fastStops`): the fast path.
-    expect(paint([0, 1])).toEqual({ gradient: true, translucent: true });
-    expect(paint([0, 0.6])).toEqual({ gradient: true, translucent: true });
-    expect(paint([0.2, 0.8])).toEqual({ gradient: true, translucent: true });
+    expect(paint([0, 1])).toEqual({ gradient: true, radial: true, translucent: true });
+    expect(paint([0, 0.6])).toEqual({ gradient: true, radial: true, translucent: true });
+    expect(paint([0.2, 0.8])).toEqual({ gradient: true, radial: true, translucent: true });
     // End stops repeating their neighbour's colour change nothing (`stops.ts` `drawnStops`): two stops drawn.
     const held = [0, 0.15, 0.97, 1].map((at, i) => ({ at, color: { r: i < 2 ? 78 : 0, g: 0, b: 0, a: 1 } }));
     expect(slowGradient(held)).toBe(false);
@@ -508,7 +508,12 @@ describe('painted area and effect layers (M6 finish review, design/27 §12 drawi
       [0.5, 0.5],
       [0, 0.6, 0.6],
     ])
-      expect(paint(ats), ats.join(' ')).toEqual({ gradient: true, slow: true, translucent: true });
+      expect(paint(ats), ats.join(' ')).toEqual({
+        gradient: true,
+        slow: true,
+        radial: true,
+        translucent: true,
+      });
     expect(slowGradient([{ at: 1 }, { at: 0 }])).toBe(false);
     expect(slowGradient([{ at: Number.NaN }, { at: 0 }])).toBe(true);
     expect(slowGradient(undefined)).toBe(true);
@@ -516,6 +521,28 @@ describe('painted area and effect layers (M6 finish review, design/27 §12 drawi
     expect(areaWeight({ gradient: true, slow: true, translucent: false })).toBe(
       GEOM_COST.opaqueGradientArea * GEOM_COST.slowGradient,
     );
+    // An opaque radial one off the fast path gets no opaque discount (M6 merge re-review: two full-slide 4-stop
+    // radials took 49.7 ms p50 at 4K, about 20 ms each past a blank job); on the fast path it keeps it.
+    expect(areaWeight({ gradient: true, slow: true, radial: true, translucent: false })).toBe(
+      GEOM_COST.gradientArea * GEOM_COST.slowGradient,
+    );
+    expect(areaWeight({ gradient: true, radial: true, translucent: false })).toBe(
+      GEOM_COST.opaqueGradientArea,
+    );
+    const opaque = (ats: number[], kind: 'linear' | 'radial') =>
+      fillPaintOf({
+        ...o,
+        gradient: { kind, stops: ats.map((at, i) => ({ at, color: { ...c(1), r: 40 * i } })) },
+      });
+    expect(opaque([0, 0.3, 0.7, 1], 'radial')).toEqual({
+      gradient: true,
+      slow: true,
+      radial: true,
+      translucent: false,
+    });
+    expect(opaque([0, 0.3, 0.7, 1], 'linear')).toEqual({ gradient: true, slow: true, translucent: false });
+    // Two of them a full slide each now rate past the slide's budget (the budget keeps one).
+    expect(2 * 1920 * 1080 * areaWeight(opaque([0, 0.3, 0.7, 1], 'radial'))).toBeGreaterThan(GEOM_COST.slide);
     // A full-slide translucent 4-stop gradient took 17 to 19 ms at 4K past a blank job: the estimate covers it.
     const SLIDE = 1920 * 1080;
     expect(SLIDE * areaWeight({ gradient: true, slow: true }) * GEOM_COST.nsPerUnit * 1e-6).toBeGreaterThan(

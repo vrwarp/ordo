@@ -1,21 +1,9 @@
 /// <reference lib="webworker" />
-import {
-  drawnGeomRefs,
-  GEOM_FILE_MAX_BYTES,
-  isGeomFileRef,
-  type Look,
-  type Rgba,
-  type Slide,
-} from '@ordo/domain';
+import type { Look, Rgba, Slide } from '@ordo/domain';
 import { isControl, startHeartbeat } from '@ordo/client';
-import {
-  FontResolver,
-  drawImageFit,
-  drawSlide2D,
-  fillColor,
-  installFontEnv,
-  readGeomFiles,
-} from '@ordo/renderer';
+import { FontResolver, drawImageFit, drawSlide2D, fillColor, installFontEnv } from '@ordo/renderer';
+// The outputs' slide prepare steps (geometry files, and what M9 registers): thumbnails draw what outputs draw.
+import { jobSlides, prepareSlides } from '../../../output/src/prepare/index.ts';
 
 /** Thumbnail worker (design/15): the shared 2D rasterizer on an OffscreenCanvas; the main thread never rasterizes. */
 
@@ -146,13 +134,11 @@ async function render(job: ThumbJob): Promise<Blob> {
     ctx.fillRect(0, 0, job.width, job.height);
   }
   const scale = job.width / 1920;
-  // Geometry files the slides draw (`ShapeGeom.ref`), read as their pictures are.
-  const refs = [...drawnGeomRefs(job.slide), ...(job.nextSlide ? drawnGeomRefs(job.nextSlide) : [])];
-  if (refs.some(isGeomFileRef))
-    await readGeomFiles(refs.filter(isGeomFileRef), async (hash) => {
-      const b = await fileBlob(hash);
-      return !b ? undefined : b.size > GEOM_FILE_MAX_BYTES ? null : b.text();
-    });
+  // The slide prepare steps (geometry files the slides draw, `ShapeGeom.ref`), run as their pictures are read.
+  await prepareSlides(
+    { slides: jobSlides(job), scale, look: job.look },
+    { read: (hash) => fileBlob(hash), slice: async (fn) => fn(), check: () => {} },
+  );
   const ids = Object.entries(job.images);
   const bms = new Map<string, ImageBitmap>();
   await Promise.all(

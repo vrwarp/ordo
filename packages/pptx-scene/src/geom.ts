@@ -1176,6 +1176,8 @@ export function drawSpecOf(
       ? {
           gradient: true,
           ...(slowGradient(fill.stops.slice(0, 16)) ? { slow: true } : {}),
+          // A path gradient is emitted radial (`gradientOf`).
+          ...(fill.path !== undefined ? { radial: true } : {}),
           translucent: !fill.stops.length || fill.stops.some((s) => !(s.color.a >= 1)),
         }
       : fill?.kind === 'solid'

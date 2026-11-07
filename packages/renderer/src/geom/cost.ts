@@ -107,10 +107,18 @@ export const GEOM_COST = {
   opaqueArea: 0.025,
   /**
    * A logical px² a translucent gradient paints (the shape's opacity or a stop below 1; linear and radial
-   * alike, about 11.6 to 11.8 ms a full slide at 4K: a slide of 140 took 1.3 s).
+   * alike, about 11.6 to 11.8 ms a full slide at 4K over a clear canvas: a slide of 140 took 1.3 s; stacked
+   * over one another about 12.6 ms each, M6 merge re-review: three full-slide ones at 0 and 60 % took 47.7 ms
+   * p50 at 4K, a blank job's 10 ms included, and passed the 50 ms task at p95 while the budget kept all three
+   * at 0.2). Rated at 13.2 ms a full slide, the budget keeps two of the three (about 37 ms) and draws the
+   * third as its legacy colour, as an older build does.
    */
-  gradientArea: 0.2,
-  /** A logical px² an opaque gradient paints (7.2 to 8 ms a full slide at 4K). */
+  gradientArea: 0.22,
+  /**
+   * A logical px² an opaque gradient paints (7.2 to 8 ms a full slide at 4K), on Skia's fast path or linear.
+   * An opaque radial one off the fast path costs a translucent one's (`areaWeight`; M6 merge re-review: two
+   * opaque full-slide 4-stop radials took 49.7 ms p50 at 4K, about 20 ms each past a blank job).
+   */
   opaqueGradientArea: 0.14,
   /**
    * What a pixel of a gradient Skia cannot draw on its two-stop fast path costs, as a multiple of
@@ -498,6 +506,8 @@ export interface FillPaint {
   readonly gradient?: boolean;
   /** A gradient off Skia's two-stop fast path (`slowGradient`): `GEOM_COST.slowGradient` times the cost. */
   readonly slow?: boolean;
+  /** A radial gradient (a path gradient): off the fast path, opaque costs what translucent does. */
+  readonly radial?: boolean;
   /** Below full alpha somewhere: the shape's opacity, the colour's alpha or a stop's. */
   readonly translucent?: boolean;
 }
@@ -595,12 +605,16 @@ export function maskCost(g: DrawnGeom): number {
   return unitCost(u.cmds, u.pts).est;
 }
 
-/** What a logical px² of a fill costs (`GEOM_COST` area weights): a colour or a gradient, opaque or not. */
+/**
+ * What a logical px² of a fill costs (`GEOM_COST` area weights): a colour or a gradient, opaque or not. An
+ * opaque radial gradient off Skia's fast path gets no opaque discount: it searches its stops and works out
+ * each pixel's distance as a translucent one does.
+ */
 export function areaWeight(paint: FillPaint | undefined): number {
   const translucent = paint?.translucent !== false;
   if (paint?.gradient)
     return (
-      (translucent ? GEOM_COST.gradientArea : GEOM_COST.opaqueGradientArea) *
+      (translucent || (paint.slow && paint.radial) ? GEOM_COST.gradientArea : GEOM_COST.opaqueGradientArea) *
       (paint.slow ? GEOM_COST.slowGradient : 1)
     );
   return translucent ? GEOM_COST.area : GEOM_COST.opaqueArea;
@@ -690,13 +704,16 @@ export interface CostedObject {
 /** How a shape's fill paints (`FillPaint`): its gradient or colour, below full alpha anywhere or not. */
 export function fillPaintOf(o: CostedObject): FillPaint {
   const opacity = typeof o.opacity === 'number' ? o.opacity : 1;
-  const g = o.gradient as { stops?: readonly { at?: number; color?: { a?: number } }[] } | undefined;
+  const g = o.gradient as
+    | { kind?: unknown; stops?: readonly { at?: number; color?: { a?: number } }[] }
+    | undefined;
   if (g !== undefined && g !== null) {
     const stops = Array.isArray(g.stops) ? g.stops : [];
     const translucent = opacity < 1 || !stops.length || stops.some((st) => !((st?.color?.a ?? 1) >= 1));
+    const radial = g.kind === 'radial' ? { radial: true } : {};
     return slowGradient(stops)
-      ? { gradient: true, slow: true, translucent }
-      : { gradient: true, translucent };
+      ? { gradient: true, slow: true, ...radial, translucent }
+      : { gradient: true, ...radial, translucent };
   }
   return { translucent: opacity < 1 || !((o.fill?.a ?? 1) >= 1) };
 }

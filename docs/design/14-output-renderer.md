@@ -257,6 +257,33 @@ the decode table in this section. `--check` fails if any props bitmap is more th
 figures (uploads, frame time) belong to the render worker and are measured by `bench:venue` ("Measuring on
 venue machines" below).
 
+<!-- m9:render-seams -->
+**Seams for M9's drawers** (design/27 M9 render-seams). Each is empty, or holds only today's behaviour, until an
+M9 area track registers into it, so every existing picture is drawn exactly as before (the renderer's goldens
+are byte-identical, and the tests pin each seam's calls by digest against the code before it):
+
+- **Slide prepare steps** (`apps/output/src/prepare/index.ts`): what a worker reads, decodes or lays out before it
+  draws a slide, besides its pictures. The asset worker runs them in the job's lane turns (`host.slice`, a
+  cancelled job stops at `host.check`), the operator's thumbnail worker at once, from one registry
+  (`registerPrepareStep`), so thumbnails draw what outputs draw. Steps run in order and return the files they
+  found missing, which the asset worker reports with the missing pictures. Built in: the geometry files
+  (`ShapeGeom.ref`); M9 adds table layout, warp faces, vector pictures and decoration files.
+- **Shape dispatch** (`renderer/src/shape.ts` `drawShapeObject`): `table` → `chart` → `decor` → geometry → legacy,
+  by the first of the fields the clamp kept whose drawer is registered (`registerShapeDrawer`); until then such a
+  shape draws what an older build draws once it strips the field. A registered 3-D look (`registerLook3d`)
+  resolves a plan the effect composite draws (`EffectSource.look3d`).
+- **Paint hooks** (`renderer/src/text/paint.ts`): `paintRich` puts glyphs on the context through a glyph painter
+  (`PLAIN_PAINTER`; upright and warp ones registered by kind) and draws its face on a face target
+  (`DIRECT_TARGET`; a face sprite registered by the 3-D look, whose alpha casts the shadow and glow), chosen per
+  object and independently.
+- **One sprite cache** (`renderer/src/spritecache.ts`): 64 MiB for every kind of sprite (effects today; geometry,
+  decorations, 3-D faces and charts in M9), least recently used first, with counted pins as the bitmap cache has.
+- **Picture pipeline** (`renderer/src/picture.ts`): `PictureSource` is a canvas image or a `VectorPicture`, which
+  the source step that accepts it draws wherever `drawImage` would (`registerPictureSource`); target extensions
+  widen a target's key or refuse to prepare it (`registerPictureTarget`); post steps change a prepared bitmap
+  after its mask's cut (`registerPicturePost`).
+<!-- /m9:render-seams -->
+
 ## Frame loop
 
 ```
@@ -596,7 +623,7 @@ and `LinkCore.buildHealth`); the hub keeps the latest per output and fans it out
 ```ts
 { t: 'health', presented, missed, longTasks, lateFlips, armed, armedOk, armError, live, cache: { ready, total },
   gpuLost, videoDropped, fps, audio, meters, mediaPositionMs, mediaDurationMs, error, appVersion, bus,
-  recentLog, compositor, gpuMB, rasterMs: { n, p50, p95, max }, rasterHeavy, uploadMs, wholeUploads: { count, maxMs },
+  recentLog, compositor, gpuMB, rasterMs: { n, p50, p95, max }, rasterHeavy, rasterAlarmMs, uploadMs, wholeUploads: { count, maxMs },
   budgets: { rasterP95Ms, uploadMs, gpuMB }, alarms, mainThreadStallMs, workers, quarantined,
   fontFallbacks, fontCoverage: { chars, count, scripts }, cacheRepairs, busTransport }
 ```
@@ -622,7 +649,15 @@ their content: a slide job whose drawing estimate (`rasterEstimateMs`, the units
 is past 80 % of the p95 budget at the output's size comes back `done.heavy` (`heavySlide`, design/27 §13's
 named exception: traced decorations near the drawing budget take 45 to 48 ms at 4K on the bench machine,
 held to the 50 ms of a task), and the link keeps its time in `rasterMs` but out of the alarm's window;
-`rasterHeavy` counts such slides in the window, and the diagnostics and the alarm's detail name them. GPU memory has none: `gpuMB` counts only the textures ordo
+`rasterHeavy` counts such slides in the window, and the diagnostics and the alarm's detail name them.
+<!-- m9:render-seams -->
+*M6 merge re-review (M9 wave 1).* The estimate counts what a slide draws besides its geometry: the effect layers
+copied, the glyphs drawn blurred, the characters, the pictures copied or resampled, and the effect sprites the
+draw had to make (`effects.ts` `effectWork` across the job), with constants fitted on 500 slides of 31 converted
+decks (design/27 §13); the report carries the figures the alarm read (`rasterAlarmMs`, when heavy slides are
+left out) and the alarm's log line and the operator's detail quote them, with every slide's p95 beside.
+<!-- /m9:render-seams -->
+GPU memory has none: `gpuMB` counts only the textures ordo
 allocates, which the budget is derived from, so it cannot pass it at any size the app picks, and the GPU's
 real pressure (video frames, the swap chain, other programs, an iGPU's shared memory) is not observable from
 a page. The alarms are plain strings, so an alarm a newer output adds never fails an older hub's parse of the

@@ -1377,6 +1377,49 @@ The current JSZip text path takes 1.17 s per 100 slides.
 
 **Named exception to the asset worker slide raster p95** (M6 merge review): _a slide whose drawing estimate is past the raster budget._ The drawing budget keeps a slide whole up to `GEOM_COST.slide` (about 38 ms of geometry and fills at 4K, within the 50 ms of an asset-worker task with the clear and the copy out), not up to the 10 / 30 ms raster p95. The worship decks' traced decorations reach it: a template slide of about 100 geometry-file shapes and 36 path shapes over a 4-stop background takes 19 to 21 ms at 1080p and 45 to 48 ms at 4K job-warm, and 55 of 100 traced-outline slides take over 50 ms cold at 4K. Such a slide is held to the 50 ms task, not to the p95: the asset worker marks it `heavy` when its drawing estimate (`health.ts` `rasterEstimateMs`: a fresh full-frame bitmap, 10 ms at 4K by pixel count, and the units the budget charges at 29 ns at 4K, 0.4 of that at 1080p; fitted over 343 full-frame converted slides at 10.9 ms + 32.8 ns a unit at 4K and 2.8 ms + 12.4 ns at 1080p) is past 80 % of the p95 budget at the output's size (`heavySlide`), and health reports its time in `rasterMs` and counts it in `rasterHeavy`, but the `raster` alarm, which tells the operator the computer is slow, reads only the other slides (`rasterAlarm`). `bench:slides` has a traced-decoration kind (a 3-stop background, eight filled outlines of 1,000 to 2,000 points and 70 thin strokes; heavy, checked at 50 ms: 43 ms p50 and 46 p95 at 4K, 19 and 22 ms at 1080p when added) and a gradient-decoration kind (two large radial decorations at 0 and 60 %, within 10 / 30 ms: 17 ms p50 at 4K). The estimate is not an upper bound for every part of such a slide: 110 thin round-joined open strokes of 10 to 25 points cost about 64 ns a unit at 4K and the filled outlines of cubic curves about 50, against the 29 the budget assumes, which the background's and the traced outlines' points (rated well above their cost) make up for on the worship decks' slides. Tables (warm p95 5.1 / 14.8 ms) and SmartArt drawings (5.8 / 17.2 ms) are within the p95 on their own. The way out is the same as the effect budget's: a draw that yields between objects, or composites of heavy effect-free shapes cached by content key as `effects.ts` caches effect layers.
 
+<!-- m9:render-seams -->
+*M6 merge re-review, fixed in M9 wave 1 (render-seams).*
+- **What the heavy-slide estimate counts.** `rasterEstimateMs` (`health.ts`) is no longer the geometry units alone:
+  it adds the effect layers copied or enlarged from the cache (`SlideDrawCost.effects`), the glyphs drawn blurred
+  (`textEffects`: a box or run shadow, or a glow, each character's em square), the characters laid out and drawn
+  (`chars`), the pictures copied 1:1 and those drawn from their source (`pictures`, `sourcePictures`; a slide's
+  reference picture counts as one copied), and the effect sprites the draw had to make, which the asset worker
+  reads from `effects.ts` `effectWork` across the job (`effectsMade`: canvases at full resolution and reduced),
+  so a slide's first raster that builds its shadow layers is heavy by its content, not a slow computer. The
+  constants (`RASTER_ESTIMATE`) are the estimate's own fit: non-negative least squares over 500 slides of 31
+  converted decks (the re-review's 22 worship decks, 7 ordinary shard decks, 2 sermon decks), each drawn as the
+  asset worker draws it, first in deck order with the sprite cache emptied at each deck's start and then warm,
+  divided by 1.31 (the container ran that much slower that day than in the M6 review's session, by both
+  sessions' job-warm intercepts: 14.3 / 3.7 ms against 10.9 / 2.8). At 4K a fresh frame with a first raster's own
+  costs is 13.3 ms, a million units 25.6 ms, a slide area of effects copied 3.8 ms, of glyphs blurred 18.1 ms, a
+  thousand characters 10.8 ms, a slide area of pictures copied 2.5 ms, of effect canvases made 35 (full) and 62
+  (reduced); at 1080p 4.1, 9.9, 0, 3.3, 5.1, 0.7, 11.1 and 27 ms. Measured over estimated on first rasters: p50 0.99,
+  p90 1.24 at 4K; 0.86, 1.41 at 1080p. The alarm simulated deck by deck on those first rasters at the reference
+  speed (`scratchpad m9/w1/render-seams/fit`): at 4K it fires on 2 of the 26 decks of five slides or more (was 10)
+  and the slides it reads have a p95 of 27.7 ms (was 55.3); at 1080p on 5 (was 10), p95 12.7 ms (was 21.0). What is
+  left at 1080p is first-raster cost the content does not explain (an ordinary 20-slide deck draws its first
+  rasters in 14 to 23 ms against 5 to 7 ms warm, at about 300 characters a slide).
+- **The figures the alarm quotes.** The report carries the window the alarm read (`HealthReport.rasterAlarmMs`,
+  when heavy slides are left out of it); the alarm's log line and the operator's detail quote it, with every
+  slide's p95 beside (`slide raster p95 34.5 ms is over the 30 ms budget (p50 19 ms, 20 slides; 9 more past the
+  budget by their content, not counted (p95 of all 29: 41.4 ms))`).
+- **Opaque slow radial gradients.** `areaWeight` gives an opaque radial gradient off Skia's fast path no opaque
+  discount (`FillPaint.radial`; the converter's `drawSpecOf` and background cost say radial for a path gradient):
+  two opaque full-slide 4-stop radials took 49.7 ms p50 at 4K while rated 1.17M units; now one is kept and the
+  other drawn as its legacy colour. The raster bench checks a stack of three (`OPAQUE_RADIAL_GRADIENTS`): 31.8 to
+  35.9 ms p50 and 33.3 to 42.9 p95 at 3840 in three runs, 8.1 to 9.3 / 8.3 to 11.2 at 1920.
+- **Headroom for stacked translucent gradients.** `GEOM_COST.gradientArea` is 0.22 (was 0.2): over one another
+  such gradients cost about 12.6 ms a full slide each at 4K, not the 11.7 of one over a clear canvas, and three
+  full-slide ones at 0 and 60 % (all kept at 0.2, 47.7 ms p50 and 52.7 p95 at 4K in the re-review) left the 50 ms
+  task no headroom. Now two are kept: in three runs of `bench/raster.ts --check` each, alternating with the base
+  build on one quiet machine, the row took 36.3 to 36.6 ms p50 and 37.1 to 38.8 p95 at 3840 (base: 40.3 to 45.9 p50,
+  47.1 to 54.2 p95, over the bound in two runs), 9.2 to 9.6 p50 at 1920. The six translucent full-slide gradients
+  row drops the same way (36.6 to 42.8 ms p50 at 3840; base 41.9 to 44.3, over the bound once). Every other row is
+  within the runs' noise of the base build (`scratchpad m9/w1/render-seams/bench-cmp.txt`).
+- **No converted slide changes**: the census of E is identical to the base's in every slide's class, reasons,
+  objects, geometry count and bytes (the converter rates its emitted shapes with the same functions).
+<!-- /m9:render-seams -->
+
 **Named exception to the editor's 15 ms thumbnail at 640 px** (M6 merge review): _the first thumbnail of a heavy traced-outline slide_, which builds its geometry paths and its effect layers: 22.6 ms for a slide of 136 shadowed geometry-file shapes, 19.2 ms and 13.9 ms for two others; later draws take 1 to 8 ms. The thumbnail worker draws in a worker of its own, so the editor's main thread does not wait for it.
 
 **Named exceptions to the 50 ms asset-worker task** (M6 finish review; a slide's draw is one task, §7.5 "Two raster lanes"):
@@ -2197,6 +2240,30 @@ LibreOffice becomes optional at run time. Every element that M3 to M6 leave resi
 - ∥ charts and SmartArt layouts;
 - ∥ vertical text and anchorCtr;
 - ∥ optional LibreOffice in the hub and the image.
+
+<!-- m9:render-seams -->
+**Built for M9 wave 1: the renderer seams (render-seams track).** So that each area track owns its files, the
+renderer's hot files gained registries, each empty (or today's behaviour) until a track registers into it; the
+renderer, compositor, canvas-scene, late-font and preset goldens are byte-identical, and each seam's test pins its
+calls by digest against the code before it:
+- `shape.ts` `drawShapeObject`: `table` → `chart` → `decor` → geometry → legacy (plan decision 10), the drawers
+  registered by kind (`registerShapeDrawer`; until then the legacy shape an older build draws), and a 3-D look
+  resolver decorating the geometry path (`registerLook3d` → `EffectSource.look3d`, a type until three-rim).
+- `text/paint.ts`: a glyph painter (`PLAIN_PAINTER`; upright and warp registered by kind, warp first) and a face
+  target (`DIRECT_TARGET`; a face sprite registered by the 3-D look) chosen independently per object (decision 6);
+  planned glyph runs and rectangles carry their layout line and segment for painters that place lines.
+- `spritecache.ts`: one 64 MiB LRU with counted pins for every kind of sprite (decision 9); the effect layers
+  and composites live in it.
+- `picture.ts`: `PictureSource = CanvasImageSource | VectorPicture`, drawn by a registered source step wherever
+  `drawImage` would (`ImageLookup` returns either); target extensions widen a target's key (or refuse to prepare
+  it) and hand data to post steps, which run after the mask's cut before the bitmap is taken.
+- `raster.ts` `jobFontFamilies` waits for the families of tables, charts and vector pictures
+  (`extraFontFamilies`).
+- `apps/output/src/prepare/index.ts`: the slide prepare steps of the asset worker (in its lane turns) and the
+  thumbnail worker (at once), geometry files built in.
+- `apps/operator/src/views/editor/objectSections.ts`: the Object panel's sections (design/15).
+- `golden/areas.ts` and `bench/cases/index.ts`: one line per area's golden cases and bench slides.
+<!-- /m9:render-seams -->
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)
 
