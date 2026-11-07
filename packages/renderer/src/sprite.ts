@@ -20,7 +20,7 @@ import { rotatedBounds } from './scene.ts';
 import { hasStrongRtl } from './text/bidi.ts';
 import { currentFontEnv } from './text/fonts.ts';
 import { measurerFor } from './text/measure.ts';
-import { paintPlan } from './text/paint.ts';
+import { type PaintPlan, paintPlan } from './text/paint.ts';
 import {
   BAND_MIN_FONT_SCALE,
   type RichLayoutOptions,
@@ -30,7 +30,8 @@ import {
   isRichText,
   layoutRich,
 } from './text/rich.ts';
-import { bandSource, layoutText, lyricTextFor } from './text2d.ts';
+import type { Measurer } from './text/types.ts';
+import { bandSource, baselineOffset, layoutText, lyricTextFor } from './text2d.ts';
 
 /**
  * Tight sprites (design/27 §7.3, M7): a layer's raster is the bounding box of what it draws, at its offset
@@ -41,13 +42,17 @@ import { bandSource, layoutText, lyricTextFor } from './text2d.ts';
  *
  * The box comes from the content, before anything is drawn (`*Reach`, logical px): every object's reach as
  * its drawer lays it out (legacy text by `layoutText`, rich text by the engine's own layout and paint plan,
- * memoised, so the draw that follows does not lay out again), widened by its effects (shadow, outline, glow)
- * and OVERHANG_EM of its glyph size for glyphs that reach past their line box (accents over capitals,
- * descenders, italics), turned with its box. Anything this cannot bound
- * (an object with fields it does not know, a slide's PowerPoint picture, an opaque logo) reaches the whole
- * frame, and the layer stays full-frame. `drawSprite` draws into a surface of the box (with a margin) and
- * checks that nothing touches the surface's edges where they are not the frame's: if anything does, the
- * reach was short, and the layer is drawn again full-frame, so a sprite never cuts what it draws.
+ * memoised, so the draw that follows does not lay out again), widened by its effects (shadow, outline, glow),
+ * turned with its box. Text reaches its laid-out lines grown by OVERHANG_EM, united with the ink its glyphs
+ * measure (`TextMetrics.actualBoundingBox*`: legacy lines carry theirs in the layout, rich segments are
+ * measured once per paint plan), which is what bounds glyph parts that are shapes of their own beyond the
+ * line box (tone marks stacked over a circumflex on a capital, Thai marks above a vowel, with tight line
+ * spacing). Anything this cannot bound (an object with fields it does not know, a slide's PowerPoint
+ * picture, an opaque logo) reaches the whole frame, and the layer stays full-frame. `drawSprite` draws into
+ * a surface of the box (with a margin) and checks that nothing touches the surface's edges where they are
+ * not the frame's: if anything does, the reach was short, and the layer is drawn again full-frame. The edge
+ * ring sees only drawing that crosses it, never a shape that lies wholly beyond it, so the reach itself must
+ * hold every part of every glyph: the ring is the safety net for a reach that is short by a little.
  */
 
 /** A device px rect in the frame, whole pixels. */
@@ -61,13 +66,18 @@ export const SPRITE_MARGIN = 2;
 /** A sprite is used only when it covers at most this share of the frame; else the raster is full-frame. */
 export const SPRITE_MAX_SHARE = 0.8;
 /**
- * How far glyphs can reach past their laid-out line boxes, in ems of their size: an accent over a capital
- * (0.95 em above the baseline against the 0.8 em the layout gives the ascent), a descender with a line
- * height under 1, an italic's overhang. The ink touches the glyphs' own box, so anything that reaches
- * further still crosses the sprite's edge ring and `drawSprite` draws the layer again full-frame: a tighter
- * margin can cost a redraw, never a cut glyph.
+ * How far glyphs are taken to reach past their laid-out line boxes, in ems of their size, before their ink
+ * is known: an accent over a capital (0.95 em above the baseline against the 0.8 em the layout gives the
+ * ascent), a descender with a line height under 1, an italic's overhang. It is not a bound: a glyph part
+ * that is a shape of its own can lie wholly beyond it ('Ễ' in Inter Bold reaches 1.11 em above its
+ * baseline, 0.46 em above its line box at a line height of 0.7, and its tilde lies wholly above the 0.3 em),
+ * and the edge ring cannot see a shape that never crosses it. The measured ink (the legacy lines' `ink`,
+ * `planInk`) is what bounds the glyphs; this margin covers contexts that report no ink box and keeps the
+ * reach of ordinary text what it was.
  */
 export const OVERHANG_EM = 0.3;
+/** Logical px the measured ink is grown by: its rounding to whole px at the measured size, antialiasing. */
+const INK_SLACK = 1;
 
 const EMPTY = { x: 0, y: 0, w: 0, h: 0 };
 const FRAME: Box = { x: 0, y: 0, w: LOGICAL_WIDTH, h: LOGICAL_HEIGHT, rotation: 0 };
@@ -151,8 +161,9 @@ function effectReach(e: Effects | undefined | null): number {
 
 /**
  * Legacy text as `drawText` draws it (`layoutText` with the same `fit`): its laid-out block (the lines, and
- * the fill box when the style has one: `drawText` paints nothing else of the box), OVERHANG_EM of the font
- * size for glyph overhang, the style's effects, turned with the box.
+ * the fill box when the style has one: `drawText` paints nothing else of the box) grown by OVERHANG_EM of the
+ * font size, united with every line's ink (`TextLayout` lines' `ink`, at the baseline `drawText` draws the
+ * line on), then the style's effects, turned with the box.
  */
 export function legacyTextReach(
   ctx: Ctx2D,
@@ -171,22 +182,37 @@ export function legacyTextReach(
   const l = layoutText(ctx, t, st, b, s, fit);
   ctx.restore();
   if (!(l.block.w > 0 && l.block.h > 0)) return EMPTY;
-  const x0 = l.block.x / s;
-  const y0 = l.block.y / s;
-  const x1 = (l.block.x + l.block.w) / s;
-  const y1 = (l.block.y + l.block.h) / s;
-  return turned(x0, y0, x1, y1, b, OVERHANG_EM * l.fontSize + effectReach(st as unknown as Effects));
+  const o = OVERHANG_EM * l.fontSize;
+  let x0 = l.block.x / s - o;
+  let y0 = l.block.y / s - o;
+  let x1 = (l.block.x + l.block.w) / s + o;
+  let y1 = (l.block.y + l.block.h) / s + o;
+  const base = baselineOffset(l, s);
+  for (const line of l.lines) {
+    const k = line.ink;
+    if (!k) continue;
+    const y = line.y + base;
+    x0 = Math.min(x0, (line.x - k.left) / s - INK_SLACK);
+    x1 = Math.max(x1, (line.x + k.right) / s + INK_SLACK);
+    y0 = Math.min(y0, (y - k.ascent) / s - INK_SLACK);
+    y1 = Math.max(y1, (y + k.descent) / s + INK_SLACK);
+  }
+  if (!(Number.isFinite(x0) && Number.isFinite(y0) && Number.isFinite(x1) && Number.isFinite(y1)))
+    return null;
+  return turned(x0, y0, x1, y1, b, effectReach(st as unknown as Effects));
 }
 
 /**
  * Rich text as `drawRichText` draws it: the engine's layout of the clamped object (memoised, so the draw
  * reuses it) and its paint plan: the fill box, highlights, decorations and every laid line with its bullet
  * (the box itself is not painted), grown by OVERHANG_EM of the largest glyph (plus the largest baseline
- * shift) and the largest effect of any run, turned with the box.
+ * shift), united with the ink of every glyph run and bullet (`planInk`), then the largest effect of any run,
+ * turned with the box.
  */
 export function richTextReach(ctx: Ctx2D, o: TextObject, opts?: RichLayoutOptions): Reach {
   const c = clampTextObject(o);
-  const l = layoutRich(measurerFor(ctx), c, currentFontEnv(), opts);
+  const m = measurerFor(ctx);
+  const l = layoutRich(m, c, currentFontEnv(), opts);
   const plan = paintPlan(c, l);
   const b = c.box;
   let x0 = Number.POSITIVE_INFINITY;
@@ -226,7 +252,58 @@ export function richTextReach(ctx: Ctx2D, o: TextObject, opts?: RichLayoutOption
   for (const d of plan.decorations) fx = Math.max(fx, effectReach(d));
   if (plan.glow) fx = Math.max(fx, 2 * num(plan.glow.radius, 0, CLAMP.maxEffectPx, 0));
   if (!(x1 >= x0 && y1 >= y0)) return EMPTY;
-  return turned(x0, y0, x1, y1, b, em * (OVERHANG_EM + shift) + fx);
+  const over = em * (OVERHANG_EM + shift);
+  x0 -= over;
+  y0 -= over;
+  x1 += over;
+  y1 += over;
+  const ink = planInk(m, plan);
+  if (ink) {
+    x0 = Math.min(x0, ink.x0);
+    y0 = Math.min(y0, ink.y0);
+    x1 = Math.max(x1, ink.x1);
+    y1 = Math.max(y1, ink.y1);
+  }
+  return turned(x0, y0, x1, y1, b, fx);
+}
+
+type InkBox = { x0: number; y0: number; x1: number; y1: number };
+const planInks = new WeakMap<PaintPlan, InkBox | null>();
+
+/**
+ * Where the glyphs of a paint plan reach (logical px, rotation 0): each glyph run and bullet measured in the
+ * state `paintRich` draws it in (font, direction, language, letter spacing; left-aligned at its x, on its
+ * baseline y), grown by INK_SLACK. Memoised per plan (plans are per layout, layouts per object and font
+ * generation), so a layer's reach measures its runs once. Null when the measurer reports no ink.
+ */
+function planInk(m: Measurer, plan: PaintPlan): InkBox | null {
+  const hit = planInks.get(plan);
+  if (hit !== undefined) return hit;
+  let x0 = Number.POSITIVE_INFINITY;
+  let y0 = Number.POSITIVE_INFINITY;
+  let x1 = Number.NEGATIVE_INFINITY;
+  let y1 = Number.NEGATIVE_INFINITY;
+  if (m.ink)
+    for (const list of [plan.glyphs, plan.bullets])
+      for (const g of list) {
+        const k = m.ink(g.font, g.dir, g.lang, g.spacing, g.text);
+        if (!k) continue;
+        const a = g.x - k.left;
+        const b = g.x + k.right;
+        const t = g.y - k.ascent;
+        const d = g.y + k.descent;
+        if (!(Number.isFinite(a) && Number.isFinite(b) && Number.isFinite(t) && Number.isFinite(d))) continue;
+        x0 = Math.min(x0, a);
+        x1 = Math.max(x1, b);
+        y0 = Math.min(y0, t);
+        y1 = Math.max(y1, d);
+      }
+  const out =
+    x1 >= x0 && y1 >= y0
+      ? { x0: x0 - INK_SLACK, y0: y0 - INK_SLACK, x1: x1 + INK_SLACK, y1: y1 + INK_SLACK }
+      : null;
+  planInks.set(plan, out);
+  return out;
 }
 
 /** Where one object `drawObject` draws can reach (logical px), or null when it is not known. */

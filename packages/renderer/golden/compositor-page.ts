@@ -525,9 +525,10 @@ export const CASES: Record<string, Case> = {
 };
 
 /**
- * Strip uploads (design/27 §7.3): the WebGPU side uploads STRIP_ROWS rows per frame. `from` is live; `to`
- * is offered and flipped at once, so the flip waits on its upload: until its last strip the frame must be
- * the previous picture, whole (compared with Canvas 2D drawing `from`), and after it the new one.
+ * Strip uploads (design/27 §7.3): the WebGPU side uploads STRIP_ROWS rows per frame (a byte budget and no
+ * time budget, so the due flip is held to it too). `from` is live; `to` is offered and flipped at once, so
+ * the flip waits on its upload: until its last strip the frame must be the previous picture, whole
+ * (compared with Canvas 2D drawing `from`), and after it the new one.
  */
 const STRIP_ROWS = 24;
 export const STRIP_CASES: Record<string, { from: Content; to: Content }> = {
@@ -568,6 +569,9 @@ class Side {
         clockOffset: 0,
         gpuRetryMs: 0,
         uploadBudgetBytes,
+        // The strip cases hold every upload to the byte budget, a due flip's included: with a time budget
+        // a due flip copies what the frame's time allows, which on these small frames is all of it at once.
+        uploadBudgetMs: uploadBudgetBytes === undefined ? undefined : 0,
       },
       {
         raf: (cb) => {

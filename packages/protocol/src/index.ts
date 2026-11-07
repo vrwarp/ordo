@@ -48,7 +48,7 @@ export const OutputHealth = z.object({
   /** This output's performance budgets at its size (design/27 §13): raster p95, upload per frame, GPU memory. */
   budgets: z.object({ rasterP95Ms: z.number(), uploadMs: z.number(), gpuMB: z.number() }).optional(),
   /**
-   * Budgets passed now ('gpuMemory', 'raster', 'upload'). Plain strings, so an alarm a newer output adds
+   * Budgets passed now ('raster', 'upload'). Plain strings, so an alarm a newer output adds
    * never fails an older hub's parse of the whole report.
    */
   alarms: z.array(z.string().max(40)).max(8).optional(),

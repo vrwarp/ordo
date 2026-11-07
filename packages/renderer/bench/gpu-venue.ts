@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
 import type { Stats, VenueReport } from './gpu-venue.page.ts';
+import { lateContent } from './live.ts';
 
 /**
  * Venue GPU measurement (design/27 §13 upload and GPU-time budgets, §15 M7): the WebGPU compositor's
@@ -121,7 +122,7 @@ async function main(): Promise<number> {
     for (const c of s.compose) console.log(`  compose ${c.name}: GPU ${f(c.gpuMs)} (${c.source})`);
     for (const l of s.live)
       console.log(
-        `  live ${l.seconds} s, ${l.budget}: presented ${l.presented}, missed ${l.missed}, late flips ${l.lateFlips}, late content flipped after ${l.lateContentFrames.p50} frame(s) p50 (max ${l.lateContentFrames.max}), rAF interval ${f(l.intervalMs)}, uploadMs ${l.uploadMs}`,
+        `  live ${l.seconds} s, ${l.budget}: presented ${l.presented}, missed ${l.missed}, late flips ${l.lateFlips}, ${lateContent(l)}, rAF interval ${f(l.intervalMs)}, uploadMs ${l.uploadMs}`,
       );
   }
   const out = arg('--out');

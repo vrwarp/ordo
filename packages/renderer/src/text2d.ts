@@ -28,7 +28,9 @@ import {
 } from './picture.ts';
 import { firstStrong, hasStrongRtl } from './text/bidi.ts';
 import { LEGACY_FONT_ENV, currentFontEnv } from './text/fonts.ts';
+import { metricsInk } from './text/measure.ts';
 import { BAND_MIN_FONT_SCALE, bandObject, drawRichText, isRichStyle, isRichText } from './text/rich.ts';
+import type { Ink } from './text/types.ts';
 
 export type { Ctx2D } from './ctx.ts';
 /**
@@ -136,8 +138,14 @@ function wrapDirected(
 }
 
 export type TextLayout = {
-  /** `dir` is set on lines of paragraphs with a strong right-to-left character (`paragraphDirections`). */
-  lines: { text: string; x: number; y: number; width: number; dir?: 'ltr' | 'rtl' }[];
+  /**
+   * `dir` is set on lines of paragraphs with a strong right-to-left character (`paragraphDirections`).
+   * `ink` (device px, from the line's own `measureText`, `metricsInk`) is where its glyphs reach from
+   * (x, the baseline `drawText` draws it on, `y + baselineOffset`): every glyph part, a tone mark stacked
+   * over a capital that lies wholly above the line box included. Absent on blank lines and where the
+   * context reports no ink box.
+   */
+  lines: { text: string; x: number; y: number; width: number; dir?: 'ltr' | 'rtl'; ink?: Ink }[];
   fontSize: number;
   lineHeightPx: number;
   block: { x: number; y: number; w: number; h: number };
@@ -218,18 +226,27 @@ function layoutTextNow(
   const hi = CLAMP.boxFactor * LOGICAL_HEIGHT * scale;
   const laid: TextLayout['lines'] = [];
   const dir0 = lineDirs ? ctx.direction : undefined;
+  // Each line's ink comes from the same measure as its width, on the alphabetic baseline `drawText` draws
+  // on (put back after), relative to the line's left edge whatever the context's alignment.
+  const baseline0 = ctx.textBaseline;
+  if (baseline0 !== 'alphabetic') ctx.textBaseline = 'alphabetic';
   for (let i = 0; i < lines.length; i++) {
     const y = y0 + i * lh;
     if (y < lo || y > hi) continue;
     const t = lines[i]!;
     const dir = lineDirs?.[i];
     if (lineDirs) ctx.direction = dir ?? dir0!;
-    const width = ctx.measureText(t).width;
+    const metrics = ctx.measureText(t);
+    const width = metrics.width;
     let x = bx + pad;
     if (style.align === 'center') x = bx + pad + (innerW - width) / 2;
     else if (style.align === 'right') x = bx + pad + innerW - width;
-    laid.push(dir ? { text: t, x, y, width, dir } : { text: t, x, y, width });
+    const line: TextLayout['lines'][number] = dir ? { text: t, x, y, width, dir } : { text: t, x, y, width };
+    const ink = /\S/.test(t) ? metricsInk(metrics, ctx.textAlign, ctx.direction) : undefined;
+    if (ink) line.ink = ink;
+    laid.push(line);
   }
+  if (baseline0 !== 'alphabetic') ctx.textBaseline = baseline0;
   if (lineDirs) ctx.direction = dir0!;
   const maxW = laid.reduce((m, l) => Math.max(m, l.width), 0);
   let blockX = bx + pad;
@@ -245,6 +262,15 @@ function layoutTextNow(
     font,
     letterSpacing: spacing,
   };
+}
+
+/**
+ * Where `drawText` puts a line's baseline below the line's `y` (device px): the line box centred on the
+ * font size, an ascent of 0.8 em.
+ */
+export function baselineOffset(layout: TextLayout, scale: number): number {
+  const ascent = layout.fontSize * scale * 0.8;
+  return (layout.lineHeightPx - layout.fontSize * scale) / 2 + ascent;
 }
 
 /** Draw one text block: fill, shadow, outline, then the glyphs. */
@@ -277,8 +303,7 @@ export function drawText(
   withRotation(ctx, box, scale, () => {
     ctx.textBaseline = 'alphabetic';
     if (directed) ctx.textAlign = 'left';
-    const ascent = layout.fontSize * scale * 0.8;
-    const offsetY = (layout.lineHeightPx - layout.fontSize * scale) / 2 + ascent;
+    const offsetY = baselineOffset(layout, scale);
     if (style.fill && text.trim()) {
       ctx.fillStyle = rgbaCss(style.fill.color);
       roundRect(

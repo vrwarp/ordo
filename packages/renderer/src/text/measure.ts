@@ -1,5 +1,5 @@
 import { type Ctx2D, setLang, setLetterSpacing } from '../ctx.ts';
-import type { Measurer } from './types.ts';
+import type { Ink, Measurer } from './types.ts';
 
 /*
  * Stage 5, measuring (design/27 §6 step 5). Owner: lines-office (B).
@@ -54,16 +54,64 @@ export class WidthCache {
 export type MeasureCtx = Pick<Ctx2D, 'measureText'> & {
   font: string;
   direction?: CanvasDirection;
+  textAlign?: CanvasTextAlign;
+  textBaseline?: CanvasTextBaseline;
   save?: () => void;
   restore?: () => void;
 };
 
 /**
+ * The ink of a measured string (`Ink`, relative to the string's left edge), from metrics taken on an
+ * alphabetic baseline with the context's `align` and `direction` (the alignment point the metrics are
+ * relative to: 'start' in a right-to-left context is the right edge): `actualBoundingBox*`, which covers
+ * every glyph part (Chromium measures the shaped glyphs' bounds, marks included: 'Ễ' reaches 1.11 em above
+ * the baseline in Inter Bold). Where a platform reports no ink box, the font's ascent and descent over the
+ * advance (`fontBoundingBox*`); where it reports neither (a test double), undefined.
+ */
+export function metricsInk(
+  m: TextMetrics,
+  align: CanvasTextAlign | undefined = 'left',
+  direction: CanvasDirection | undefined = 'ltr',
+): Ink | undefined {
+  const { actualBoundingBoxLeft: l, actualBoundingBoxRight: r, width } = m;
+  const { actualBoundingBoxAscent: a, actualBoundingBoxDescent: d } = m;
+  if (Number.isFinite(l) && Number.isFinite(r) && Number.isFinite(a) && Number.isFinite(d)) {
+    const rtl = direction === 'rtl';
+    const w = Number.isFinite(width) ? width : 0;
+    const at =
+      align === 'right' || (align === 'start' && rtl) || (align === 'end' && !rtl)
+        ? w
+        : align === 'center'
+          ? w / 2
+          : 0;
+    return { left: l - at, right: r + at, ascent: a, descent: d };
+  }
+  const { fontBoundingBoxAscent: fa, fontBoundingBoxDescent: fd } = m;
+  if (Number.isFinite(fa) && Number.isFinite(fd) && Number.isFinite(width))
+    return { left: 0, right: width, ascent: fa, descent: fd };
+  return undefined;
+}
+
+/**
  * A measurer over `ctx`, cached. When `isolate` is set, the context's state is saved and restored around
- * each measure (for a context that also draws).
+ * each measure (for a context that also draws). Its `ink` is not cached: a sprite's reach asks once per
+ * paint plan (sprite.ts memoises it).
  */
 export function canvasMeasurer(ctx: MeasureCtx, cache = new WidthCache(), isolate = false): Measurer {
   return {
+    ink(font, dir, lang, spacingPx, text) {
+      if (!text) return undefined;
+      if (isolate) ctx.save?.();
+      ctx.font = font;
+      if ('direction' in ctx) ctx.direction = dir;
+      setLang(ctx as Ctx2D, lang);
+      setLetterSpacing(ctx as Ctx2D, spacingPx);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+      const ink = metricsInk(ctx.measureText(text));
+      if (isolate) ctx.restore?.();
+      return ink;
+    },
     width(font, dir, lang, spacingPx, text) {
       if (!text) return 0;
       const key = text.length <= MAX_CACHED_TEXT ? `${font}|${dir}|${lang}|${spacingPx}|${text}` : '';

@@ -49,6 +49,8 @@ export type VenueReport = {
       presented: number;
       missed: number;
       lateFlips: number;
+      /** Late flips asked (one a second): late content that flipped is `lateContentFrames.n` of them. */
+      lateAsked: number;
       /** Late content (flip due before it arrived): frames from its arrival to its flip. */
       lateContentFrames: Stats;
       intervalMs: Stats;
@@ -290,6 +292,7 @@ async function live(
     presented: t.presented,
     missed: t.missed,
     lateFlips: t.lateFlips,
+    lateAsked: seconds,
     lateContentFrames: stats(lateFrames),
     intervalMs: stats(intervals.slice(10)),
     uploadMs: t.uploadMs ?? 0,

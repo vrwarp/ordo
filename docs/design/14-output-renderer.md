@@ -284,17 +284,24 @@ every rAF (render worker, via requestAnimationFrame on the OffscreenCanvas's wor
 - Uploads (design/27 §7.3) never run in `draw`. Armed content is uploaded after the frame's submit,
   in horizontal strips (`copyExternalImageToTexture` with a source and destination origin), the
   content a pending flip waits for first, at most 8 MiB per frame (`UPLOAD_BUDGET_BYTES`, whatever
-  the output's size: a whole 1080p frame, 8.3 MB, is one strip, so 1080p and smaller outputs flip
-  late content on the frame it arrives as before strips; a 4K frame takes four) and no further strip
-  once the frame's copies took 4 ms of the render worker's CPU time (`UPLOAD_BUDGET_MS`). A stack is
+  the output's size: a 4K frame, 33.2 MB, takes four) and no further strip once the frame's copies
+  took 4 ms of the render worker's CPU time (`UPLOAD_BUDGET_MS`). A flip that is already due when its
+  content arrives (late content: a GO to a cue that was not armed) is held to the time budget alone,
+  right after the tick (`uploadDue`): its first copy of the frame is one 8 MiB strip, which times the
+  frame's copies, and the rest follows in one go when that cost says it ends within the 4 ms, else as
+  many rows as do. At about 2 ms a strip (what a 1080p copy costs here and on venue machines), late
+  content at 1280x720, 1920x1080, 1920x1200 (9.2 MB, common WUXGA projectors) and 2560x1440 (14.7 MB)
+  flips on the frame it arrives, as before strips; at 3840x2160 it flips on the second frame, each
+  frame within the 4 ms; a slower copy moves the line down (a strip that takes the whole 4 ms leaves
+  the rest to the next frame). A stack is
   `ready` once its last strip is in; a flip to content that is not ready waits (counted as a late
   flip) and the previous picture stays whole, since strips only ever go into the armed stack's
   texture. The layers of one GO (flips due at the same hub time) flip together: while one of them
   still uploads, the others wait for it, so a new background never shows with the old slide for the
   frames the slide's strips take (`LayerStack.uploadWaiting`; content that has not arrived holds
   nobody, it flips late on its own as before strips). Content armed a cue ahead is uploaded long
-  before its GO; content that arrives on its flip's frame and fits the budget is uploaded right
-  after the tick and flips on time. Two uploads are whole by design and do take the frame's time
+  before its GO; content that arrives on its flip's frame and whose copies end within the time budget
+  is uploaded right after the tick and flips on time. Two uploads are whole by design and do take the frame's time
   before its draw: a `refresh` of the live copy (an image that arrived after the slide was armed: it
   is on screen and must not tear; about 9 ms of CPU at 4K on SwiftShader here), and, on a new or
   rebuilt compositor (device loss, a WebGPU retry), the live stacks before its first draw; the
@@ -343,8 +350,9 @@ Arm sequence for a cue (asset worker, then render worker):
    output resolution (ADR 0013) and takes it with `transferToImageBitmap`: text through the
    shared drawers (fill, padding, wrap, alignment, outline, shadow, the rich text engine),
    shapes and pictures. The canvas is the size of what the layer reaches (`slideReach` and
-   the other reaches of `sprite.ts`: each object as its drawer lays it out, its effects and
-   one em of glyph overhang, turned with its box), cut to the frame and drawn at that offset;
+   the other reaches of `sprite.ts`: each object as its drawer lays it out, text's lines grown
+   by 0.3 em and united with the ink its glyphs measure, its effects, turned with its box), cut
+   to the frame and drawn at that offset;
    when that is most of the frame (over 80 %), or unknown (a slide's PowerPoint picture, an
    object with fields the reach does not know, a logo), the canvas is the frame. A drawing
    that touches the sprite's edge ring is drawn again full-frame, so a sprite never cuts what
@@ -731,7 +739,11 @@ Read there:
   2.3 ms per frame (p50 1.9) over four frames, against 8.9 ms p50 (12.6 p95) in one copy: within the 4 ms
   budget. A 1080p frame is one strip (1.8 ms p50, 2.1 p95), so late content still flips on the frame it
   arrives (the live run: one frame from the late content's arrival to its flip at 1080p, with and without
-  strips). The compositions now draw what they time (five layer draws a frame): 341.8 ms p50 for five
+  strips). A due flip is now held to the time budget alone (above), so late content at 1920x1200 and
+  2560x1440 also flips on the frame it arrives, and at 4K on the second (`gpu.sprites.test.ts` at 2 ms a
+  1080p copy; this run measured before that change). The live run reports late content that never flipped
+  as "never flipped (n=0 of N)", and on a shown window `bench:venue` counts that, and a run that presented
+  under half its seconds at the display's refresh (a hidden or throttled window), as over budget. The compositions now draw what they time (five layer draws a frame): 341.8 ms p50 for five
   full-frame layers at 4K on SwiftShader, against venue.page's plain pass of 208.6 ms, the same order. The
   GPU's own times are SwiftShader's here and are the venue row's to give.
 
@@ -751,9 +763,14 @@ the absolute times):
 | Canvas 2D frame of five layers, full-frame / sprites, p50                                | 4.1 / 1.4 ms             | 23.0 / 5.8 ms             |
 | Render worker CPU per frame uploading a full frame, one copy / default strips, p50 (p95) | 1.5 (3.9) / 1.8 (2.1) ms | 8.9 (12.6) / 1.9 (2.3) ms |
 
-The reach of text is its laid-out lines (the box itself is not painted) grown by 0.3 em for glyph overhang
-and by its effects, so the authored lyric in regular weight is now a sprite of 46 % of the frame (it was
-full-frame with a margin of one line height). The legacy rows include the layout memo (`layoutText` per context, keyed
+The reach of text is its laid-out lines (the box itself is not painted) grown by 0.3 em for glyph overhang,
+united with the ink each line or glyph run measures (`TextMetrics.actualBoundingBox*`), and grown by its
+effects, so the authored lyric in regular weight is now a sprite of 46 % of the frame (it was full-frame
+with a margin of one line height). The 0.3 em is not a bound: a tone mark stacked over a circumflex on a
+Vietnamese capital reaches 1.11 em above its baseline, 0.46 em above its line box at a line height of 0.7,
+and lies wholly outside the 0.3 em, where the sprite's edge ring cannot see it (only drawing that crosses
+the ring sends a layer back to full-frame); the measured ink holds it (`sprite.browser.test.ts`: Vietnamese,
+Thai, Arabic, Devanagari and Burmese at line heights 0.7 and 0.35, legacy and rich text). The legacy rows include the layout memo (`layoutText` per context, keyed
 by every input and the font generation): the sprite's reach lays the text out once and the draw reuses it.
 A layout carries the CSS font and letter spacing it was measured in, and `drawText` sets both from it, so
 a layout from the memo draws in its own font whatever the context's state (a canvas resize resets it).

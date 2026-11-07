@@ -1,5 +1,5 @@
 /** ordo's text engine (design/27 §6): the public surface. README.md describes the pipeline. */
-export type { FaceRequest, FontEnv, LaidLine, Measurer, RichLayout, Seg } from './types.ts';
+export type { FaceRequest, FontEnv, Ink, LaidLine, Measurer, RichLayout, Seg } from './types.ts';
 export {
   RICH_STYLE_KEYS,
   clampTextObject,

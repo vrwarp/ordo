@@ -40,8 +40,10 @@ import { flipDue } from './timing.ts';
  *
  * Uploads (design/27 §7.3) never run in `draw`: what a frame samples is uploaded before it, the rest after
  * its submit, in horizontal strips within a per-frame budget (bytes, and CPU time spent in the copies), so
- * a 4K upload is spread over frames and never stalls one. A stack is ready (`Stack.ready`) only once all of
- * it is uploaded; a flip to it waits until then and the previous picture stays.
+ * a 4K upload is spread over frames and never stalls one. A flip that is due before its content is uploaded
+ * (`uploadDue`) spends only the time budget: what is left in one go while the frame's copies so far say it
+ * ends within it. A stack is ready (`Stack.ready`) only once all of it is uploaded; a flip to it waits
+ * until then and the previous picture stays.
  *
  * Source kinds (design/27 §7.2): t a bitmap texture, e a full-frame video (external texture), v a scene
  * (SRC_SCENE): the base texture, the slot's video drawn through the stack's plane (scene.ts) only while
@@ -94,13 +96,23 @@ export const PIPELINES: readonly string[] = [
 ];
 
 /**
- * Default upload budget per frame (design/27 §7.3, §13): at most this many bytes (8 MiB, whatever the
- * output's size: a whole 1080p frame, 8.3 MB, fits, so 1080p and smaller outputs flip on the frame they
- * are due as before strips; a 4K frame, 33.2 MB, takes four), and no further strip once the copies of this
- * frame took this many ms of the render worker's time. Tuned from venue measurements (bench/gpu-venue.ts).
+ * Default upload budget per frame (design/27 §7.3, §13): armed content is copied in strips of at most this
+ * many bytes a frame (8 MiB, whatever the output's size: a 4K frame, 33.2 MB, takes four frames), and no
+ * further strip once the copies of this frame took UPLOAD_BUDGET_MS of the render worker's time. A flip
+ * already due (late content: a GO to a cue that was not armed) is held to the time alone (`uploadDue`):
+ * its first copy of a frame is one such strip, which times the copies, and the rest follows in one go when
+ * that cost says it ends within the time budget, else as many rows as do. At about 2 ms a strip, 1080p,
+ * 1920x1200 (9.2 MB) and 2560x1440 (14.7 MB) flip on the frame they arrive, as before strips; 4K in two.
+ * Tuned from venue measurements (bench/gpu-venue.ts).
  */
 export const UPLOAD_BUDGET_BYTES = 8 * 1024 * 1024;
 export const UPLOAD_BUDGET_MS = 4;
+
+/** How `ensureUploaded` copies: whole, in a strip of the frame's budget, or as a due flip (`dueRows`). */
+type UploadMode = 0 | 1 | 2;
+const UP_WHOLE = 0;
+const UP_STRIPS = 1;
+const UP_DUE = 2;
 
 const COMMON = /* wgsl */ `
 struct U {
@@ -402,6 +414,9 @@ export class GpuCompositor implements Compositor {
   private readonly budgetBytes: number;
   private readonly budgetMs: number;
   private bytesLeft = 0;
+  /** CPU ms and bytes of this frame's copies so far: the cost a due flip's next copy is predicted from. */
+  private frameCopyMs = 0;
+  private frameCopyBytes = 0;
   /** Between the first upload call of a frame and the drain after its submit. */
   private frameOpen = false;
   /** CPU time spent in uploads, per frame (telemetry `uploadMs`). */
@@ -896,8 +911,8 @@ export class GpuCompositor implements Compositor {
       for (let l = 0; l < n; l++) {
         const ls = f.layers[l]!;
         const liveIdx = ls.live;
-        this.ensureUploaded(l, liveIdx, ls.stacks[liveIdx]!, false);
-        if (ls.fading) this.ensureUploaded(l, 1 - liveIdx, ls.stacks[1 - liveIdx]!, false);
+        this.ensureUploaded(l, liveIdx, ls.stacks[liveIdx]!, UP_WHOLE);
+        if (ls.fading) this.ensureUploaded(l, 1 - liveIdx, ls.stacks[1 - liveIdx]!, UP_WHOLE);
       }
       this.uploads.pause();
       return;
@@ -906,16 +921,16 @@ export class GpuCompositor implements Compositor {
     // for, then the rest of the armed content.
     for (let l = 0; l < n; l++) {
       const ls = f.layers[l]!;
-      this.ensureUploaded(l, ls.live, ls.stacks[ls.live]!, false);
+      this.ensureUploaded(l, ls.live, ls.stacks[ls.live]!, UP_WHOLE);
     }
     for (let l = 0; l < n; l++) {
       const ls = f.layers[l]!;
       const a = ls.stacks[1 - ls.live]!;
-      if (ls.flipPending && a.key === ls.flipKey) this.ensureUploaded(l, 1 - ls.live, a, true);
+      if (ls.flipPending && a.key === ls.flipKey) this.ensureUploaded(l, 1 - ls.live, a, UP_STRIPS);
     }
     for (let l = 0; l < n; l++) {
       const ls = f.layers[l]!;
-      this.ensureUploaded(l, 1 - ls.live, ls.stacks[1 - ls.live]!, true);
+      this.ensureUploaded(l, 1 - ls.live, ls.stacks[1 - ls.live]!, UP_STRIPS);
     }
     this.uploads.end();
     this.frameOpen = false;
@@ -933,7 +948,7 @@ export class GpuCompositor implements Compositor {
       const idx = 1 - ls.live;
       const a = ls.stacks[idx]!;
       if (a.key !== ls.flipKey || a.ready) continue;
-      this.ensureUploaded(l, idx, a, true);
+      this.ensureUploaded(l, idx, a, UP_DUE);
       if (a.ready) readied = true;
     }
     this.uploads.pause();
@@ -950,14 +965,16 @@ export class GpuCompositor implements Compositor {
     this.frameOpen = true;
     this.uploads.begin();
     this.bytesLeft = this.budgetBytes > 0 ? this.budgetBytes : Number.POSITIVE_INFINITY;
+    this.frameCopyMs = 0;
+    this.frameCopyBytes = 0;
   }
 
   /**
    * Upload a stack's bitmaps into its textures when its content changed (arm time, not every frame): all
-   * at once, or (`budgeted`) the next strips within the frame's budget. Marks the stack ready once all of
-   * it is copied.
+   * at once (UP_WHOLE), the next strip within the frame's budget (UP_STRIPS), or what the frame's time
+   * budget allows (UP_DUE, `dueRows`). Marks the stack ready once all of it is copied.
    */
-  private ensureUploaded(l: number, idx: number, s: Stack<ImageBitmap>, budgeted: boolean): void {
+  private ensureUploaded(l: number, idx: number, s: Stack<ImageBitmap>, mode: UploadMode): void {
     /* @hot */
     const up = this.uploaded[l]!;
     if (up[idx] === s.version) {
@@ -978,8 +995,7 @@ export class GpuCompositor implements Compositor {
       row[idx] = 0;
     }
     if (part[idx] === 0) {
-      if (s.bitmap && !this.uploadPart(this.textures[l]![idx]!, s.bitmap, s.x, s.y, row, idx, budgeted))
-        return;
+      if (s.bitmap && !this.uploadPart(this.textures[l]![idx]!, s.bitmap, s.x, s.y, row, idx, mode)) return;
       part[idx] = 1;
       row[idx] = 0;
     }
@@ -987,7 +1003,7 @@ export class GpuCompositor implements Compositor {
       // prepare() allocated them when the scene was offered; this only runs for a compositor driven
       // without the engine's hook.
       if (!this.overTex[l]) this.allocOver(l);
-      if (!this.uploadPart(this.overTex[l]![idx]!, s.over, s.overX, s.overY, row, idx, budgeted)) return;
+      if (!this.uploadPart(this.overTex[l]![idx]!, s.over, s.overX, s.overY, row, idx, mode)) return;
     }
     part[idx] = 2;
     up[idx] = s.version;
@@ -997,8 +1013,9 @@ export class GpuCompositor implements Compositor {
 
   /**
    * Copy rows of `bitmap` into `texture` at its frame offset (dx, dy), from row `rows[idx]` on: all that is
-   * left, or (`budgeted`) as many whole rows as the frame's budget allows (at least one while it lasts).
-   * Returns true when the part is complete. The bitmap is cut to the frame.
+   * left (UP_WHOLE), as many whole rows as the frame's budget allows (UP_STRIPS: at least one while it
+   * lasts), or copies while the frame's time budget allows them (UP_DUE, `dueRows`). Returns true when the
+   * part is complete. The bitmap is cut to the frame.
    */
   private uploadPart(
     texture: GPUTexture,
@@ -1007,25 +1024,57 @@ export class GpuCompositor implements Compositor {
     dy: number,
     rows: Int32Array,
     idx: number,
-    budgeted: boolean,
+    mode: UploadMode,
   ): boolean {
     /* @hot */
     const w = Math.min(bitmap.width, this.width - dx);
     const h = Math.min(bitmap.height, this.height - dy);
     if (!(w > 0 && h > 0)) return true;
-    const from = rows[idx]!;
-    let n = h - from;
-    if (n <= 0) return true;
-    if (budgeted) {
-      if (this.bytesLeft <= 0) return false;
-      if (this.budgetMs > 0 && this.uploads.elapsed() >= this.budgetMs) return false;
-      const fit = Math.floor(this.bytesLeft / (w * 4));
-      if (fit < n) n = fit > 0 ? fit : 1;
-      this.bytesLeft -= n * w * 4;
+    const rowBytes = w * 4;
+    for (;;) {
+      const from = rows[idx]!;
+      let n = h - from;
+      if (n <= 0) return true;
+      if (mode === UP_STRIPS) {
+        if (this.bytesLeft <= 0) return false;
+        if (this.budgetMs > 0 && this.uploads.elapsed() >= this.budgetMs) return false;
+        const fit = Math.floor(this.bytesLeft / rowBytes);
+        if (fit < n) n = fit > 0 ? fit : 1;
+      } else if (mode === UP_DUE) {
+        const fit = this.dueRows(rowBytes);
+        if (fit < 1) return false;
+        if (fit < n) n = fit;
+      }
+      if (mode !== UP_WHOLE) this.bytesLeft -= n * rowBytes;
+      this.copyRows(texture, bitmap, dx, dy, from, w, n, mode === UP_WHOLE);
+      rows[idx] = from + n;
+      if (mode !== UP_DUE || from + n >= h) return from + n >= h;
     }
-    this.copyRows(texture, bitmap, dx, dy, from, w, n, !budgeted);
-    rows[idx] = from + n;
-    return from + n >= h;
+  }
+
+  /**
+   * How many rows of `rowBytes` a flip due on this frame may copy now (design/27 §7.3): it spends the
+   * frame's time budget, never held to its bytes. None once the frame's copies took UPLOAD_BUDGET_MS; while
+   * none of this frame's copies is timed, one strip of the byte budget (which times one); then the rows
+   * that this frame's copies so far (CPU ms per byte) say end within the time left, the rest in one go when
+   * it does. A compositor made without a time budget holds due flips to the byte budget, as other strips.
+   */
+  private dueRows(rowBytes: number): number {
+    /* @hot */
+    if (!(this.budgetMs > 0)) {
+      if (this.bytesLeft <= 0) return 0;
+      const fit = Math.floor(this.bytesLeft / rowBytes);
+      return fit > 0 ? fit : 1;
+    }
+    const left = this.budgetMs - this.uploads.elapsed();
+    if (!(left > 0)) return 0;
+    if (this.frameCopyBytes > 0) {
+      const msPerRow = (this.frameCopyMs / this.frameCopyBytes) * rowBytes;
+      return msPerRow > 0 ? Math.floor(left / msPerRow) : Number.MAX_SAFE_INTEGER;
+    }
+    if (!(this.budgetBytes > 0)) return Number.MAX_SAFE_INTEGER;
+    const strip = Math.floor(this.budgetBytes / rowBytes);
+    return strip > 0 ? strip : 1;
   }
 
   private copyRows(
@@ -1051,11 +1100,14 @@ export class GpuCompositor implements Compositor {
     this.copies++;
     this.uploads.work++;
     if (whole) this.uploads.whole++;
+    const t0 = this.uploads.elapsed();
     try {
       this.device.queue.copyExternalImageToTexture(this.copySrc, this.copyDst, this.copySize);
     } catch (err) {
       console.error('[ordo] texture upload failed', err); // alloc-ok (error path)
     }
+    this.frameCopyMs += this.uploads.elapsed() - t0;
+    this.frameCopyBytes += w * n * 4;
   }
 
   destroy(): void {

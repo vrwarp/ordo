@@ -20,12 +20,26 @@ import type { Ctx2D } from './text2d.ts';
  * by sprite.browser.test.ts.
  */
 
-/** A 2D context that measures every glyph 10 px wide and reads back `alpha` everywhere. */
-function fakeCtx(alpha = 0): Ctx2D {
+/**
+ * A 2D context that measures every glyph 10 px wide and reads back `alpha` everywhere. With `ink`, its
+ * metrics also report an ink box (`actualBoundingBox*`) that reaches `ink.ascent` above the baseline and
+ * `ink.descent` below it, from the pen to the advance's end, relative to the left-aligned pen.
+ */
+function fakeCtx(alpha = 0, ink?: { ascent: number; descent: number }): Ctx2D {
   const state: Record<string | symbol, unknown> = { font: '10px x', letterSpacing: '0px', direction: 'ltr' };
   return new Proxy(state, {
     get(t, k) {
-      if (k === 'measureText') return (s: string) => ({ width: s.length * 10 });
+      if (k === 'measureText')
+        return (s: string) =>
+          ink
+            ? {
+                width: s.length * 10,
+                actualBoundingBoxLeft: 0,
+                actualBoundingBoxRight: s.length * 10,
+                actualBoundingBoxAscent: ink.ascent,
+                actualBoundingBoxDescent: ink.descent,
+              }
+            : { width: s.length * 10 };
       if (k === 'getImageData')
         return (_x: number, _y: number, w: number, h: number) => {
           const data = new Uint8ClampedArray(w * h * 4);
@@ -92,6 +106,35 @@ describe('reaches', () => {
     // Overflow: a long text in a short box reaches below the box.
     const long = objectReach(ctx, text('word '.repeat(80), box(100, 100, 400, 50)), 1)!;
     expect(long.y + long.h).toBeGreaterThan(150 + 40);
+  });
+
+  it('holds the ink of glyph parts that lie wholly beyond the line box and the overhang', () => {
+    // 'Ễ' over a 0.7 line height: the ink reaches 1.5 em (60 px) above the baseline, past the 0.3 em
+    // overhang above the line box. One 28 px line centred in the 100 px box: its top at 136, the baseline
+    // (drawText's: the box centred on the font size, an ascent of 0.8 em) 26 px below it.
+    const tight = { ...style, lineHeight: 0.7 };
+    const o = { ...text('ỄỄ', box(100, 100, 400, 100)), style: tight } as SlideObject;
+    const plain = objectReach(ctx, o, 1)!;
+    expect(plain.y).toBeCloseTo(136 - OVERHANG_EM * 40);
+    const r = objectReach(fakeCtx(0, { ascent: 60, descent: 2 }), o, 1)!;
+    expect(r.y).toBeCloseTo(136 + 26 - 60 - 1);
+    // Below and to the sides the line box and the overhang still hold more than the ink.
+    expect(r.y + r.h).toBeCloseTo(plain.y + plain.h);
+    expect(r.x).toBeCloseTo(plain.x);
+    expect(r.w).toBeCloseTo(plain.w);
+    // At scale 2 the same logical reach (layout and ink in device px, divided back).
+    const r2 = objectReach(fakeCtx(0, { ascent: 120, descent: 4 }), o, 2)!;
+    expect(r2.y).toBeCloseTo(r.y);
+    // Rich text does the same with its measured runs: exact spacing of a third of the size.
+    const rich = {
+      ...text('ỄỄ', box(100, 100, 400, 100)),
+      style: { ...style, lineModel: 'office' },
+      paras: [{ lineSpacingPx: 40 / 3 }],
+    } as SlideObject;
+    const richPlain = objectReach(ctx, rich, 1)!;
+    const richInk = objectReach(fakeCtx(0, { ascent: 60, descent: 2 }), rich, 1)!;
+    expect(richInk.y).toBeLessThan(richPlain.y - 10);
+    expect(richInk.y + richInk.h).toBeCloseTo(richPlain.y + richPlain.h);
   });
 
   it('widens text by its shadow and outline', () => {

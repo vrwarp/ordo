@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Compositor, FrameInputs } from './compositor.ts';
 import { RenderEngine } from './engine.ts';
-import { GpuCompositor, U_OVER_A, U_RECT_A, U_RECT_B, UPLOAD_BUDGET_BYTES } from './gpu.ts';
+import { GpuCompositor, U_OVER_A, U_RECT_A, U_RECT_B, UPLOAD_BUDGET_BYTES, UPLOAD_BUDGET_MS } from './gpu.ts';
 import { perfAlarms, perfBudgets } from './health.ts';
 import { PLANE_FLOATS, PLANE_OPACITY } from './scene.ts';
 import { FIT_CONTAIN, LAYERS, LAYER_INDEX, LayerStack, SRC_BITMAP, SRC_SCENE, SRC_VIDEO } from './stacks.ts';
@@ -11,8 +11,9 @@ import { FIT_CONTAIN, LAYERS, LAYER_INDEX, LayerStack, SRC_BITMAP, SRC_SCENE, SR
  * origins and sizes, scissor rects and pipelines: tight sprites (a sub-rect copy at the sprite's offset,
  * the uniform rect, the scissor of single and crossfaded draws), the opaque replace path (and the layers it
  * hides), strip uploads within the per-frame byte and time budget (the flip waits, the previous content
- * stays, nothing is torn), the engine's same-frame upload of a due flip that fits, device loss, and the
- * `uploadMs` telemetry. The pixels are checked in a browser by the compositor golden.
+ * stays, nothing is torn), the engine's same-frame upload of a due flip (held to the time budget alone,
+ * so late content up to 2560x1440 flips on the frame it arrives), device loss, and the `uploadMs`
+ * telemetry. The pixels are checked in a browser by the compositor golden.
  */
 
 const W = 64;
@@ -379,19 +380,29 @@ describe('WebGPU strip uploads', () => {
     expect(dev.copies[0]!.size).toEqual([W, H]);
   });
 
-  it('flips late full-frame content on the frame it arrives up to 1080p (an absolute byte budget)', async () => {
+  it('flips late full-frame content on the frame it arrives up to 2560x1440 (a due flip spends the time budget)', async () => {
     // A GO to a cue that was not armed: the flip is due before its content arrives (GO_LEAD_MS is short).
-    expect(UPLOAD_BUDGET_BYTES).toBe(8 * 1024 * 1024);
-    const late: Record<string, number> = {};
+    expect([UPLOAD_BUDGET_BYTES, UPLOAD_BUDGET_MS]).toEqual([8 * 1024 * 1024, 4]);
+    let t = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => t);
+    // A copy's CPU cost: 2 ms per full 1080p frame's bytes (what venue machines measure, design/14).
+    const MS_PER_BYTE = 2 / (1920 * 1080 * 4);
+    const late: Record<string, { frames: number; copies: number; uploadMs: number }> = {};
     for (const [w, h] of [
       [1280, 720],
       [1920, 1080],
+      [1920, 1200],
+      [2560, 1440],
       [3840, 2160],
     ] as const) {
       const dev = new FakeDevice();
-      const c = new GpuCompositor(dev as unknown as GPUDevice, context, 'rgba8unorm', w, h, LAYERS.length, {
-        ms: 0,
-      });
+      const real = dev.queue.copyExternalImageToTexture;
+      dev.queue.copyExternalImageToTexture = (...a: Parameters<typeof real>) => {
+        const size = a[2] as ArrayLike<number>;
+        t += size[0]! * size[1]! * 4 * MS_PER_BYTE;
+        real(...a);
+      };
+      const c = new GpuCompositor(dev as unknown as GPUDevice, context, 'rgba8unorm', w, h, LAYERS.length);
       await c.compile();
       const f = inputs();
       const ls = f.layers[SLIDE]!;
@@ -400,10 +411,56 @@ describe('WebGPU strip uploads', () => {
       ls.offer({ key: 'late', kind: SRC_BITMAP, bitmap: bitmap('late', w, h) });
       let frames = 0;
       while (ls.liveStack.key !== 'late' && frames < 10) frame(c, f, 32 + 16 * frames++);
-      late[`${w}x${h}`] = frames;
+      // Every row copied once, in order, into the armed texture.
+      let row = 0;
+      for (const x of dev.copies) {
+        expect([x.texture, x.src[1], x.dst[1], x.size[0]]).toEqual(['layer1-stack1', row, row, w]);
+        row += x.size[1];
+      }
+      expect(row).toBe(h);
+      late[`${w}x${h}`] = {
+        frames,
+        copies: dev.copies.length,
+        uploadMs: Math.round(c.uploadMs() * 100) / 100,
+      };
     }
-    // One frame (the frame it arrives) at 720p and 1080p, as before strips; four 8 MiB strips at 4K.
-    expect(late).toEqual({ '1280x720': 1, '1920x1080': 1, '3840x2160': 4 });
+    // The frame it arrives up to 2560x1440: a strip of the byte budget that times the copies, then the rest
+    // in one go (0.8 MB at 1920x1200, 6.4 MB at 2560x1440). 4K in two frames, each within the 4 ms.
+    expect(late).toEqual({
+      '1280x720': { frames: 1, copies: 1, uploadMs: 0.89 },
+      '1920x1080': { frames: 1, copies: 1, uploadMs: 2 },
+      '1920x1200': { frames: 1, copies: 2, uploadMs: 2.22 },
+      '2560x1440': { frames: 1, copies: 2, uploadMs: 3.56 },
+      '3840x2160': { frames: 2, copies: 4, uploadMs: 4 },
+    });
+  });
+
+  it('copies a due flip within what is left of the time budget, and not at all once it is spent', async () => {
+    let t = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => t);
+    // 1 ms per 9 rows of W: a 36-row frame costs 4 ms; budget strips of 9 rows, 3 ms of time.
+    const { c, dev } = await gpu({ bytes: 9 * W * 4, ms: 3 });
+    const real = dev.queue.copyExternalImageToTexture;
+    dev.queue.copyExternalImageToTexture = (...a: Parameters<typeof real>) => {
+      t += (a[2] as ArrayLike<number>)[1]! / 9;
+      real(...a);
+    };
+    const f = inputs();
+    const ls = f.layers[SLIDE]!;
+    ls.requestFlip('B', 0, 0, 0);
+    frame(c, f, 0);
+    ls.offer({ key: 'B', kind: SRC_BITMAP, bitmap: bitmap('B') });
+    frame(c, f, 16);
+    // One 9-row strip (1 ms) times the copies; 2 ms are left, 18 rows; the last 9 wait for the next frame.
+    expect(dev.copies.map((x) => [x.src[1], x.size[1]])).toEqual([
+      [0, 9],
+      [9, 18],
+    ]);
+    expect(ls.liveStack.key).not.toBe('B');
+    frame(c, f, 32);
+    expect(dev.copies.map((x) => [x.src[1], x.size[1]]).slice(2)).toEqual([[27, 9]]);
+    expect(ls.liveStack.key).toBe('B');
+    expect(c.uploadMs()).toBe(3);
   });
 
   it('keeps whole uploads apart from strips; a slow strip frame ages out and the upload alarm clears', async () => {

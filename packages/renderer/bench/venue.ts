@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { chromium } from '@playwright/test';
 import { budgetFor, bundle, defaultFonts, fmtStats, printSlides, runSlides } from './slides.ts';
 import type { VenueReport as CompositorReport, Stats as CompositorStats } from './gpu-venue.page.ts';
+import { lateContent, liveProblems } from './live.ts';
 import type { Stats, VenuePageReport } from './venue.page.ts';
 
 /**
@@ -183,7 +184,7 @@ async function main(): Promise<number> {
     for (const c of s.compose) console.log(`    compose ${c.name}: GPU ${cs(c.gpuMs)} (${c.source})`);
     for (const l of s.live)
       console.log(
-        `    live ${l.seconds} s, ${l.budget}${headless ? ' (headless: not paced by a display)' : ''}: presented ${l.presented}, missed ${l.missed}, late flips ${l.lateFlips}, late content flipped after ${l.lateContentFrames.p50} frame(s) p50 (max ${l.lateContentFrames.max}), rAF interval ${cs(l.intervalMs)}, uploadMs ${l.uploadMs}`,
+        `    live ${l.seconds} s, ${l.budget}${headless ? ' (headless: not paced by a display)' : ''}: presented ${l.presented}, missed ${l.missed}, late flips ${l.lateFlips}, ${lateContent(l)}, rAF interval ${cs(l.intervalMs)}, uploadMs ${l.uploadMs}`,
       );
   }
   printSlides(slides);
@@ -216,6 +217,11 @@ async function main(): Promise<number> {
     if (!c4 && k4?.composeGpuMs && k4.composeGpuMs.p50 > 4)
       over.push(`4K compose ${ms(k4.composeGpuMs.p50)} ms GPU`);
   }
+  // A live run on a shown window measures only when it ran paced and its late content flipped.
+  if (!headless)
+    for (const s of comp?.sizes ?? [])
+      for (const l of s.live)
+        over.push(...liveProblems(l, page.machine.frameMs, `live ${s.width}x${s.height}, ${l.budget}`));
   console.log(over.length ? `  over budget: ${over.join('; ')}` : '  every figure within its budget');
 
   // 4. One line for the table in design/14 "Measuring on venue machines".

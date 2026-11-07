@@ -40,10 +40,11 @@ export interface Compositor {
    */
   drainUploads?(f: FrameInputs, all: boolean): void;
   /**
-   * Upload, within the frame's budget, the armed content of every flip due on this frame that is not ready
-   * (design/27 §7.3), right after the layers tick: content that fits the budget then flips on time (the
-   * engine ticks those layers again), larger content keeps the previous picture and flips once its last
-   * strip is in. Returns true when it made any stack ready. A compositor without uploads has none.
+   * Upload, within the frame's time budget (the byte budget, which spreads armed content over frames, does
+   * not hold a flip that is due), the armed content of every flip due on this frame that is not ready
+   * (design/27 §7.3), right after the layers tick: content whose copies end within the budget then flips on
+   * time (the engine ticks those layers again), larger content keeps the previous picture and flips once
+   * its last rows are in. Returns true when it made any stack ready. A compositor without uploads has none.
    */
   uploadDue?(f: FrameInputs, now: number, frameMs: number): boolean;
   /** Forget uploaded textures (after a rebuild everything is re-uploaded from the stacks' bitmaps). */

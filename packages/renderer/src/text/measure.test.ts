@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { WidthCache, canvasMeasurer, linearWidth, memoMeasurer, type MeasureCtx } from './measure.ts';
+import {
+  WidthCache,
+  canvasMeasurer,
+  linearWidth,
+  memoMeasurer,
+  metricsInk,
+  type MeasureCtx,
+} from './measure.ts';
 import { testMeasurer } from './test-util.ts';
 
 /** A context that measures 10 px per character plus Canvas's letter spacing after each, and logs its state. */
@@ -98,5 +105,66 @@ describe('autofit helpers', () => {
       expect(linearWidth(at20, 20, 13, spacing, 'abcd')).toBeCloseTo(at13, 9);
     }
     expect(linearWidth(40, 20, 20, 0, 'abcd')).toBe(40);
+  });
+});
+
+describe('metricsInk', () => {
+  // A 100 px advance whose ink starts 2 px right of its left edge and ends 3 px before its right edge.
+  const at = (offset: number) =>
+    ({
+      width: 100,
+      actualBoundingBoxLeft: offset - 2,
+      actualBoundingBoxRight: 97 - offset,
+      actualBoundingBoxAscent: 133,
+      actualBoundingBoxDescent: 2,
+    }) as TextMetrics;
+
+  it("gives the ink from the string's left edge whatever the alignment the metrics were taken with", () => {
+    const want = { left: -2, right: 97, ascent: 133, descent: 2 };
+    expect(metricsInk(at(0))).toEqual(want);
+    expect(metricsInk(at(0), 'left', 'rtl')).toEqual(want);
+    expect(metricsInk(at(0), 'start', 'ltr')).toEqual(want);
+    expect(metricsInk(at(0), 'start', 'inherit')).toEqual(want);
+    expect(metricsInk(at(0), 'end', 'rtl')).toEqual(want);
+    expect(metricsInk(at(50), 'center', 'ltr')).toEqual(want);
+    expect(metricsInk(at(100), 'right', 'ltr')).toEqual(want);
+    expect(metricsInk(at(100), 'start', 'rtl')).toEqual(want);
+    expect(metricsInk(at(100), 'end', 'ltr')).toEqual(want);
+  });
+
+  it("falls back to the font's ascent and descent over the advance, else reports none", () => {
+    const font = { width: 80, fontBoundingBoxAscent: 116, fontBoundingBoxDescent: 29 } as TextMetrics;
+    expect(metricsInk(font)).toEqual({ left: 0, right: 80, ascent: 116, descent: 29 });
+    expect(metricsInk({ width: 80 } as TextMetrics)).toBeUndefined();
+  });
+
+  it("measures a measurer's ink left-aligned on an alphabetic baseline, the state restored", () => {
+    const ctx = {
+      font: '10px x',
+      direction: 'inherit' as CanvasDirection,
+      textAlign: 'center' as CanvasTextAlign,
+      textBaseline: 'top' as CanvasTextBaseline,
+      saved: [] as [string, CanvasTextAlign, CanvasTextBaseline][],
+      save() {
+        this.saved.push([this.font, this.textAlign, this.textBaseline]);
+      },
+      restore() {
+        [this.font, this.textAlign, this.textBaseline] = this.saved.pop()!;
+      },
+      measureText(text: string) {
+        expect([this.font, this.textAlign, this.textBaseline]).toEqual(['20px y', 'left', 'alphabetic']);
+        return {
+          width: text.length * 10,
+          actualBoundingBoxLeft: 1,
+          actualBoundingBoxRight: text.length * 10,
+          actualBoundingBoxAscent: 30,
+          actualBoundingBoxDescent: 4,
+        } as TextMetrics;
+      },
+    };
+    const m = canvasMeasurer(ctx, new WidthCache(), true);
+    expect(m.ink?.('20px y', 'rtl', '', 0, 'abc')).toEqual({ left: 1, right: 30, ascent: 30, descent: 4 });
+    expect(m.ink?.('20px y', 'ltr', '', 0, '')).toBeUndefined();
+    expect([ctx.font, ctx.textAlign, ctx.textBaseline]).toEqual(['10px x', 'center', 'top']);
   });
 });

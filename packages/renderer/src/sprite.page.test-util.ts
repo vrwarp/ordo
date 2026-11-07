@@ -23,7 +23,9 @@ import type { Ctx2D, ImageLookup } from './text2d.ts';
  * picture (a whole-pixel offset rasters the same; Chromium's anti-aliasing of a curve or a glyph edge may
  * differ by a few levels on a few pixels, NOISE), that it is tight where a sprite saves work (and full-frame
  * where it does not: one box over disjoint corners of the frame covers most of it), and that nothing
- * touched its edge ring (no redraw). Scenes draw
+ * touched its edge ring (no redraw). Glyph parts wholly outside their line box (tone marks stacked over
+ * Vietnamese capitals, Thai and Arabic marks, tall scripts, with tight line spacing: `MARK_CASES`) must be
+ * in the reach, since the edge ring never sees them. Scenes draw
  * base and over as sprites and are recomposed the same way. Controls: a reach cut short of what is drawn
  * (text that overflows its box, the box alone as its reach) must be caught by the edge ring and drawn
  * full-frame, and recomposing a sprite one pixel off must differ.
@@ -103,6 +105,65 @@ type Case = {
 };
 
 const lyricLook: Look = LOOK_LOWER_THIRD;
+
+/**
+ * Glyph parts that are shapes of their own and lie wholly outside their line box with tight line spacing,
+ * no padding and no effects: tone marks stacked over a circumflex on Vietnamese capitals (1.11 em above the
+ * baseline), Thai marks above a vowel, Arabic vowel marks, and the tall Devanagari and Burmese scripts. The
+ * edge ring cannot see a shape that never crosses it, so these must be in the reach (the measured ink).
+ */
+const MARKS: [string, string][] = [
+  ['Vietnamese capitals', 'Ễ Ể Ề Ế Ỗ Ổ'],
+  ['Vietnamese lowercase', 'ễ ể ề ế ỗ ổ'],
+  ['Thai', 'ปี่ ญ ฐ สวัสดี'],
+  ['Arabic marks', 'بِسْمِ ٱللَّٰهِ'],
+  ['Devanagari', 'हिन्दी दुनिया'],
+  ['Burmese', 'မြန်မာ ဘာသာ'],
+];
+// 240 logical px is 120 device px at this page's half scale: the size, line height and fractional pen
+// position of a 120 px line at 1920x1080, so the full-size picture is drawn here pixel for pixel.
+const MARK_PX = 240;
+const bare = { fontSizePx: MARK_PX, padding: 0, shadow: undefined, outline: undefined } as Partial<TextStyle>;
+const markBox = box(200, 300, 1500, 400);
+const MARK_CASES: Case[] = MARKS.flatMap(([name, t], i): Case[] => [
+  ...[0.7, 0.35].map(
+    (lh): Case => ({
+      name: `${name}, line height ${lh}, no padding or effects (legacy text)`,
+      job: {
+        kind: 'slide',
+        slide: { id: `mk${i}-${lh}`, objects: [text('t', t, markBox, { ...bare, lineHeight: lh })] },
+        look: LOOK_MAIN,
+      },
+      tight: true,
+    }),
+  ),
+  // Rich text: the office line model at 0.45 of single spacing, and exact spacing of 0.65 em.
+  ...[
+    ['spacing 0.45', { lineSpacing: 0.45 }],
+    ['exact 0.65 em', { lineSpacingPx: 0.65 * MARK_PX }],
+  ].map(
+    ([how, para]): Case => ({
+      name: `${name}, ${how as string}, no padding or effects (rich text)`,
+      job: {
+        kind: 'slide',
+        slide: {
+          id: `mkr${i}-${how as string}`,
+          objects: [
+            text(
+              't',
+              t,
+              markBox,
+              { ...bare, lineModel: 'office' },
+              { paras: [para], runs: [{ start: 0, end: 1, fontWeight: 700 }] },
+            ),
+          ],
+        },
+        look: LOOK_MAIN,
+      },
+      tight: true,
+    }),
+  ),
+]);
 
 const CASES: Case[] = [
   {
@@ -314,6 +375,7 @@ const CASES: Case[] = [
     },
     tight: true,
   },
+  ...MARK_CASES,
 ];
 
 /** A resolver-like font environment: the legacy CSS fonts, but with a generation (the memo is on). */
