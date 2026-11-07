@@ -33,7 +33,6 @@ export {
   writeBuiltins,
 } from './eval.ts';
 export {
-  CLOSED_TOLERANCE,
   drawGeom,
   FILL_BRIGHTNESS,
   GEOM_CLIP_RULE,
@@ -64,7 +63,38 @@ export {
   withEnds,
 } from './ends.ts';
 export { gradientStyle } from './paint.ts';
-export { clampPoints, drawWeight, GEOM_COST, geomCost, unitCost } from './cost.ts';
+export {
+  clampPoints,
+  type CostedObject,
+  type DrawnGeom,
+  type DrawSpec,
+  drawCost,
+  EFFECT_COST,
+  effectArea,
+  GEOM_COST,
+  geomCost,
+  type LegacyPart,
+  maskCost,
+  objectCost,
+  type Rated,
+  slidePlan,
+  type StrokeCost,
+  strokeCost,
+  type UnitCost,
+  unitCost,
+  withoutPart,
+} from './cost.ts';
+export { boxSide, geometryAt, pathsGeometry, type PathsGeometry } from './built.ts';
+export {
+  cappedDash,
+  DASH_PATTERNS,
+  hasShapeExtras,
+  lineStyleOf,
+  type Outline,
+  type OutlineFields,
+  outlineOf,
+  SHAPE_MITER_LIMIT,
+} from './outline.ts';
 export {
   clearGeomFiles,
   GEOM_FILE_RETRY_MS,

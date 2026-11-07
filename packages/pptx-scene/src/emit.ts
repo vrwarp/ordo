@@ -84,7 +84,16 @@ import type {
   SlideObject,
   TextObject,
 } from '@ordo/domain';
-import { EFFECT_COST, effectArea } from '@ordo/renderer/geom/cost.ts';
+import { geometryAt, legacyGeometry } from '@ordo/renderer/geom/built.ts';
+import {
+  EFFECT_COST,
+  effectArea,
+  type LegacyPart,
+  objectCost,
+  type Rated,
+  slidePlan,
+  withoutPart,
+} from '@ordo/renderer/geom/cost.ts';
 import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD } from '@ordo/renderer/geom/ops.ts';
 import { apply, boxPx, decompose, lenPx, multiply, ptPx, slideRect } from './frame.ts';
 import { bakeKey, bakeOf, type PictureBake } from './bake.ts';
@@ -95,6 +104,7 @@ import {
   endsOf,
   gradientOf,
   knownPreset,
+  lineWidthPx,
   mergedPaths,
   pictureFillPlacement,
   presetRoute,
@@ -562,6 +572,7 @@ function emitSlide(ctx: EmitCtx, s: SlideScene, spans: [number, number][] = []):
     objects.length = MAX_OBJECTS;
   }
   fitEffects(ctx, objects);
+  fitDrawing(ctx, objects);
   // A SmartArt node's text is a fragment of a diagram, never the lyric box.
   const lyric = lyricOf(texts.filter((t) => objects.includes(t.o) && t.e.diagram === undefined));
   if (lyric) slide.lyricObjectId = lyric.id;
@@ -591,6 +602,43 @@ function fitEffects(ctx: EmitCtx, objects: SlideObject[]): void {
     dropped++;
   }
   if (dropped) ctx.log(`the effects of ${dropped} shape(s) past the slide's effect budget are not drawn`);
+}
+
+/**
+ * The slide's drawing budget (renderer `geom/cost.ts` `slidePlan`, design/27 §12 drawing cost) applied to the
+ * objects as emitted, exactly as every drawer applies it (`geombudget.ts`): the walk already sent what passes
+ * it to the art (`walk.ts` `slideCustom`, `chargeDrawing`), within a margin, so this changes only what the
+ * walk could not see (shapes merged into one object past the object budget, a picture's mask and outline).
+ * An object it changes is stored as the drawers would draw it (`withoutPart`), with a note.
+ */
+function fitDrawing(ctx: EmitCtx, objects: SlideObject[]): void {
+  const geometryOf = (o: SlideObject) => {
+    if (o.type === 'shape')
+      return (
+        geometryAt(o.geom, o.box.w, o.box.h) ?? {
+          built: legacyGeometry(o.shape, o.radius ?? 0, o.box.w, o.box.h),
+          points: 0,
+        }
+      );
+    if (o.type === 'image' && o.mask) return geometryAt(o.mask, o.box.w, o.box.h);
+    return undefined;
+  };
+  const rate = (o: SlideObject, part?: LegacyPart): Rated => {
+    const x = part ? withoutPart(o, part) : o;
+    const at = geometryOf(x);
+    return { est: objectCost(x, at?.built), points: at?.points ?? 0 };
+  };
+  const parts = slidePlan(objects, rate, (o) => (o.type === 'shape' ? effectArea(o) : 0));
+  let changed = 0;
+  parts.forEach((part, i) => {
+    if (!part) return;
+    const o = objects[i] as SlideObject & Record<string, unknown>;
+    const legacy = withoutPart(o, part);
+    for (const k of Object.keys(o)) if (!(k in legacy)) delete o[k];
+    changed++;
+  });
+  if (changed)
+    ctx.log(`${changed} object(s) past the slide's drawing budget are drawn as their legacy shapes`);
 }
 
 /**
@@ -1210,9 +1258,9 @@ function fmtPx(v: number): string {
   return Object.is(r, -0) ? '0' : String(r);
 }
 
-/** A line width in logical px: PowerPoint draws a zero-width line one device pixel wide. */
+/** A line width in logical px: PowerPoint draws a zero-width line one device pixel wide (`lineWidthPx`). */
 function strokeWidth(ctx: EmitCtx, w: number): number {
-  return bound(Math.max(lenPx(ctx.frame, w), 0.5), 0, 500);
+  return lineWidthPx(ctx.frame, w);
 }
 
 function adjOf(adj: [string, number][] | undefined, name: string, dflt: number): number {

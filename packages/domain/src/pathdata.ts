@@ -71,6 +71,39 @@ function numberEnd(d: string, i: number): number {
   return j;
 }
 
+/** Powers of ten exactly representable (10^0 .. 10^22). */
+const POW10 = Array.from({ length: 23 }, (_, i) => 10 ** i);
+
+/**
+ * The value of the number `d.slice(i, end)` (`numberEnd`'s), as `Number` reads it. Plain decimals of at most
+ * 15 digits are read here: their digits as an integer, divided by a power of ten, which IEEE division rounds
+ * to the nearest double, as `Number` does. Anything else (an exponent, more digits) goes to `Number`.
+ */
+function numberOf(d: string, i: number, end: number): number {
+  let j = i;
+  let neg = false;
+  const c0 = d.charCodeAt(j);
+  if (c0 === 45) {
+    neg = true;
+    j++;
+  } else if (c0 === 43) j++;
+  let m = 0;
+  let digits = 0;
+  let frac = -1;
+  for (; j < end; j++) {
+    const c = d.charCodeAt(j);
+    if (c >= 48 && c <= 57) {
+      m = m * 10 + (c - 48);
+      digits++;
+      if (frac >= 0) frac++;
+    } else if (c === 46 && frac < 0) frac = 0;
+    else return Number(d.slice(i, end));
+  }
+  if (digits > 15) return Number(d.slice(i, end));
+  const v = frac > 0 ? m / POW10[frac]! : m;
+  return neg ? -v : v;
+}
+
 function coordOf(v: number): number {
   const L = PATH_DATA_LIMITS.coord;
   if (!(v > -L)) return v <= -L ? -L : 0;
@@ -88,44 +121,52 @@ export function parsePathData(d: unknown, maxPoints: number = PATH_DATA_LIMITS.p
   const s = d.length > PATH_DATA_LIMITS.chars * 4 ? d.slice(0, PATH_DATA_LIMITS.chars * 4) : d;
   const limit = Math.max(0, Math.min(Math.floor(maxPoints) || 0, PATH_DATA_LIMITS.points));
   let points = 0;
+  /** The command being read ('' before the first), its arity and points, and the numbers read for it. */
   let cmd = '';
-  const args: number[] = [];
+  let arity = 0;
+  let per = 0;
+  let pending = 0;
   let i = 0;
   const n = s.length;
-  /** Emit `cmd` with `args` when complete; false when the point budget is spent. */
-  const emit = (): boolean => {
-    const p = POINTS[cmd]!;
-    if (points + p > limit) return false;
-    points += p;
-    cmds += cmd;
-    for (const a of args) pts.push(a);
-    args.length = 0;
-    if (cmd === 'M') cmd = 'L';
-    return true;
-  };
   while (i < n) {
     const c = s.charCodeAt(i);
     if (isSpace(c)) {
       i++;
       continue;
     }
-    const ch = s[i]!;
-    if (ARITY[ch] !== undefined) {
-      if (args.length) break; // a command with too few numbers: stop here
-      cmd = ch;
+    // M L Q C Z (77 76 81 67 90).
+    if (c === 77 || c === 76 || c === 81 || c === 67 || c === 90) {
+      if (pending) break; // a command with too few numbers: stop here
+      cmd = s[i]!;
+      arity = ARITY[cmd]!;
+      per = POINTS[cmd]!;
       i++;
-      if (cmd === 'Z' && !emit()) break;
+      if (c === 90) {
+        if (points + per > limit) break;
+        points += per;
+        cmds += cmd;
+      }
       continue;
     }
     const end = numberEnd(s, i);
     if (end < 0 || cmd === '' || cmd === 'Z') break;
-    args.push(coordOf(Number(s.slice(i, end))));
+    pts.push(coordOf(numberOf(s, i, end)));
+    pending++;
     i = end;
-    if (args.length === ARITY[cmd] && !emit()) {
-      args.length = 0;
-      break;
+    if (pending === arity) {
+      if (points + per > limit) break;
+      points += per;
+      cmds += cmd;
+      pending = 0;
+      // More pairs after M are lines (SVG).
+      if (cmd === 'M') {
+        cmd = 'L';
+        per = POINTS.L!;
+      }
     }
   }
+  // The numbers of a command left incomplete (or past the point budget) are not kept.
+  if (pending) pts.length -= pending;
   return { cmds, pts };
 }
 

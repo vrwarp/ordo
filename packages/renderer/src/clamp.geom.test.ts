@@ -1,6 +1,6 @@
 import { geomSlide } from '@ordo/domain/geom.test-util.ts';
 import { describe, expect, it } from 'vitest';
-import { clampGeom, clampGradient, clampObject, clampSlide, clampStyle } from './clamp.ts';
+import { CLAMP, clampGeom, clampGradient, clampObject, clampSlide, clampStyle, isClamped } from './clamp.ts';
 
 /**
  * The render plan's clamps of the M6 fields (design/27 §3.2 "clampObject rules", §12 "Rendering"): every
@@ -158,6 +158,33 @@ describe('clampObject: shapes and pictures', () => {
     });
     for (const k of ['dash', 'ends', 'glow', 'softEdge']) expect(o).not.toHaveProperty(k);
     expect(clampObject({ ...shape, dash: 'wavy' })).not.toHaveProperty('dash');
+  });
+
+  it('draws a dashed outline at least CLAMP.minDashedStrokePx wide (each dash is a sub-path of its own)', () => {
+    const black = { r: 0, g: 0, b: 0, a: 1 };
+    const thin = clampObject({ ...shape, stroke: { width: 0.01, color: black }, dash: 'sysDot' });
+    expect((thin as { stroke: { width: number } }).stroke.width).toBe(CLAMP.minDashedStrokePx);
+    // A solid line keeps its width, and so does a dashed one already wide enough.
+    expect(
+      (clampObject({ ...shape, stroke: { width: 0.01, color: black } }) as { stroke: { width: number } })
+        .stroke.width,
+    ).toBe(0.01);
+    expect(
+      (
+        clampObject({ ...shape, stroke: { width: 3, color: black }, dash: 'dash' }) as {
+          stroke: { width: number };
+        }
+      ).stroke.width,
+    ).toBe(3);
+  });
+
+  it('marks what it clamped: a clamped slide is not clamped again, object by object', () => {
+    const o = clampObject({ ...shape, geom: { paths: [{ d: 'M 0 0 L 10 10 Z', w: 10, h: 10 }] } })!;
+    expect(isClamped(o)).toBe(true);
+    expect(isClamped({ ...o })).toBe(false);
+    const part = clampSlide({ id: 'p', objects: [o, { ...shape, id: 't' }] });
+    expect(part.objects[0]).toBe(o);
+    expect(part.objects[1]).not.toBe(o);
   });
 
   it('clamps a legacy shape and picture to exactly the fields they had', () => {

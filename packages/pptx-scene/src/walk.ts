@@ -45,8 +45,18 @@ import {
 } from './inherit.ts';
 import type { Affine, Element, ElementBase, Fill, Line, ShapeElement, Support } from './ir.ts';
 import { chooseAlternate } from './markup.ts';
-import { drawWeight, GEOM_COST } from '@ordo/renderer/geom/cost.ts';
-import { customPaths, knownPreset, MAX_SLIDE_PATH_POINTS, placeConnectors, readCxnRef } from './geom.ts';
+import { type DrawnGeom, drawCost, GEOM_COST, maskCost } from '@ordo/renderer/geom/cost.ts';
+import { outlineOf } from '@ordo/renderer/geom/outline.ts';
+import {
+  customPaths,
+  drawSpecOf,
+  knownPreset,
+  MAX_SLIDE_PATH_POINTS,
+  outlineFields,
+  placeConnectors,
+  presetDrawn,
+  readCxnRef,
+} from './geom.ts';
 import { blipReader, blipReaderOf, readPicture } from './picture.ts';
 import { readSmartArt, type Walker } from './smartart.ts';
 import { readTable } from './tables.ts';
@@ -326,12 +336,22 @@ export function walkTree(
             const line = readLine(ctx, chain);
             if (line) pic.line = line;
             const custNode = pic.geom === 'custom' ? firstChildOf(spPrChain(chain), 'a:custGeom') : undefined;
+            // The mask is filled once; the outline is a stroke-only shape along the same geometry (`emit.ts`
+            // `emitPicture`): its points are stored twice.
+            const outline = line ? outlineOf(outlineFields(ctx.frame, line)) : undefined;
+            const rate = (g: DrawnGeom) =>
+              maskCost(g) + (outline ? drawCost(g, { fill: false, outline }) : 0);
             if (custNode) {
-              pic.custom = slideCustom(ctx, custNode, base, st);
+              pic.custom = slideCustom(ctx, custNode, base, st, rate, line ? 2 : 1);
               if (pic.custom.over) {
                 pic.support = pic.support === 'residual' ? 'residual' : 'approx';
                 pic.reasons = [...(pic.reasons ?? []), 'mask:custom'];
               }
+            } else if (pic.geom !== 'rect' || line) {
+              const p = decompose(base.xf);
+              const g = presetDrawn(pic.geom, pic.adj, p.w * ctx.frame.s, p.h * ctx.frame.s);
+              // Past the budget the emitted slide's own check (`emit.ts` `fitDrawing`) draws it as a rect.
+              chargeDrawing(st, rate(g));
             }
           }
           st.out.push(pic);
@@ -469,15 +489,25 @@ function readShape(
   if (base.from === 'slide' && chain.ph && !chars && fill.kind !== 'picture') return undefined;
   const line = readLine(ctx, chain);
   const fx = effectsOf(ctx, chain);
+  // What drawing it costs as `emit.ts` emits it (renderer `geom/cost.ts`): the shape object (fill, outline,
+  // effects), and a picture fill's picture clipped to the same geometry.
+  const spec = drawSpecOf(ctx.frame, { fill, ...(line ? { line } : {}), ...fx });
+  const pictureFill = fill.kind === 'picture';
+  const rate = (g: DrawnGeom) => drawCost(g, spec) + (pictureFill ? maskCost(g) : 0);
   const custom = custNode
-    ? slideCustom(
-        ctx,
-        custNode,
-        base,
-        st,
-        drawWeight({ stroked: !!line, shadow: !!fx.shadow, glow: !!fx.glow, softEdge: !!fx.softEdge }),
-      )
+    ? slideCustom(ctx, custNode, base, st, rate, pictureFill && line ? 2 : 1)
     : undefined;
+  let complex = false;
+  if (!custNode && (fill.kind !== 'none' || line)) {
+    const p = decompose(base.xf);
+    const g = presetDrawn(geom, adj, p.w * ctx.frame.s, p.h * ctx.frame.s);
+    if (!chargeDrawing(st, rate(g))) {
+      ctx.log(
+        "a shape past the slide's drawing budget (its outline, dashes or arrowheads) is drawn by LibreOffice",
+      );
+      complex = true;
+    }
+  }
   const reasons: string[] = [];
   let support: Support = 'native';
   // M6: every preset of the table, custom geometry within the bounds, gradients and line styles are drawn;
@@ -487,6 +517,10 @@ function readShape(
   if (reasons.length) support = 'approx';
   if (custom?.over) {
     reasons.push(custom.complex ? 'custGeom:complex' : 'custGeom');
+    support = 'residual';
+  }
+  if (complex) {
+    reasons.push('geom:complex');
     support = 'residual';
   }
   const cxn =
@@ -530,39 +564,58 @@ function readShape(
 }
 
 /**
- * A custom geometry built for an element (`geom.ts`), its points counted against the slide's 64k and its
- * drawing estimate (renderer `geom/cost.ts`), times `weight` (the passes that draw it, `drawWeight`), against
- * the slide's `GEOM_COST.slide`; past them, or past `GEOM_COST.geometry` on its own, it is marked over the
- * bounds (residual: LibreOffice draws it into the art; `complex` for the drawing budgets). The renderer holds
- * a slide to the same budgets (`geombudget.ts`), so a geometry kept native here is drawn natively there.
- * Its compile notes go to the slide's log.
+ * A custom geometry built for an element (`geom.ts`), its points (times `times`: the objects that store
+ * them) counted against the slide's 64k, its fill estimate against `GEOM_COST.geometry` and what drawing it
+ * costs as emitted (`rate`: renderer `geom/cost.ts` `drawCost`, fill, outline and effects, with
+ * `GEOM_COST.point` a stored point) against the slide's `GEOM_COST.slide` (`chargeDrawing`); past them it is
+ * marked over the bounds (residual: LibreOffice draws it into the art; `complex` for the drawing budgets),
+ * and charges nothing. The renderer holds a slide to the same budgets the same way (`geom/cost.ts`
+ * `slidePlan`, `geombudget.ts`) and the emitted slide is checked by them again (`emit.ts` `fitDrawing`), so a
+ * geometry kept native here is drawn natively there. Its compile notes go to the slide's log.
  */
-export function slideCustom(ctx: SlideCtx, node: XNode, base: ElementBase, st: WalkState, weight = 1) {
+export function slideCustom(
+  ctx: SlideCtx,
+  node: XNode,
+  base: ElementBase,
+  st: WalkState,
+  rate?: (g: DrawnGeom) => number,
+  times = 1,
+) {
   const p = decompose(base.xf);
-  const custom = customPaths(node, p.w, p.h, ctx.frame.s);
+  const custom = customPaths(node, p.w, p.h, ctx.frame.s, rate);
   for (const n of custom.notes) ctx.log(`custom geometry: ${n}`);
-  st.points = (st.points ?? 0) + custom.points;
-  if (st.points > MAX_SLIDE_PATH_POINTS && !custom.over) {
+  if (custom.over) return custom;
+  const points = custom.points * times;
+  if ((st.points ?? 0) + points > MAX_SLIDE_PATH_POINTS) {
     ctx.log(
       `more than ${MAX_SLIDE_PATH_POINTS} path points: further custom geometry is drawn by LibreOffice`,
     );
     return { ...custom, over: true };
   }
-  if (custom.over) return custom;
   // A margin under the renderer's budgets, for the rounding of the stored coordinates.
-  if ((custom.cost ?? 0) > GEOM_COST.geometry * COST_MARGIN) {
+  if ((custom.fillCost ?? 0) > GEOM_COST.geometry * COST_MARGIN) {
     ctx.log(
       'a custom geometry too costly to draw (its edges cross the box many times) is drawn by LibreOffice',
     );
     return { ...custom, over: true, complex: true };
   }
-  const total = (st.geomCost ?? 0) + (custom.cost ?? 0) * weight;
-  if (total > GEOM_COST.slide * COST_MARGIN) {
+  if (!chargeDrawing(st, (custom.cost ?? 0) + points * GEOM_COST.point)) {
     ctx.log("custom geometry past the slide's drawing budget is drawn by LibreOffice");
     return { ...custom, over: true, complex: true };
   }
-  st.geomCost = total;
+  st.points = (st.points ?? 0) + points;
   return custom;
+}
+
+/**
+ * Charges what drawing an element costs (`drawCost`, its stored points' share included) against the slide's
+ * `GEOM_COST.slide` (within COST_MARGIN of it): false, with nothing charged, past it.
+ */
+function chargeDrawing(st: WalkState, cost: number): boolean {
+  const total = (st.geomCost ?? 0) + cost;
+  if (!(total <= GEOM_COST.slide * COST_MARGIN)) return false;
+  st.geomCost = total;
+  return true;
 }
 
 /** The share of the renderer's drawing budgets the converter fills (rounding of stored coordinates aside). */

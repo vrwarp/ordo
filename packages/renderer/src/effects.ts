@@ -280,7 +280,8 @@ export const EFFECT_COMPOSITE_BYTES = 8 * 1024 * 1024;
  *   composed and cached the same way until the cache lets its sprite go and it is drawn again (`thrashed`).
  * - From then on it draws its reduced layers (each at most BLUR_MAX_PIXELS, cached on its own: a few MB)
  *   enlarged onto `ctx`, then the shape as vectors, or, soft-edged, through a sprite of its device bounds cut
- *   by its mask (made each time; the slide's effect budget, `geombudget.ts`, bounds how much of it there is).
+ *   by its reduced mask (the sprite made each time, the mask cached as the layers are; the slide's effect
+ *   budget, `geom/cost.ts` `EFFECT_COST`, bounds how much of it there is).
  * False when it could not (no OffscreenCanvas, a sprite past EFFECT_MAX_PIXELS, a non-finite transform):
  * the caller then draws the shape without its effects.
  */
@@ -371,7 +372,7 @@ export function drawEffected(ctx: Ctx2D, src: EffectSource, opacity: number): bo
         if (!layer) return false;
         place(layer);
       }
-      if (!body(f, src, m, s, r, soft)) return false;
+      if (!body(f, src, m, s, r, soft, tagged('softmask'))) return false;
       out = { canvas: f.canvas, x: r.X, y: r.Y, w: r.W, h: r.H, bytes };
       remember(allKey, out);
     }
@@ -394,10 +395,16 @@ export function drawEffected(ctx: Ctx2D, src: EffectSource, opacity: number): bo
   const shadowLayer = sh ? layer('shadow', shadowOf) : undefined;
   const glowLayer = gl ? layer('glow', glowOf) : undefined;
   if ((sh && !shadowLayer) || (gl && !glowLayer)) return false;
+  // A soft-edged shape: drawn into a sprite of its device rect (empty: no copy of it is needed) and cut by its
+  // mask, which is cached as the layers are (an eroded, blurred silhouette made each raster cost about a
+  // shadow's layer five times over at 4K).
   let softBody: OffscreenCanvasRenderingContext2D | undefined;
   if (soft) {
     softBody = sprite(r.W, r.H);
-    if (!softBody || !body(softBody, src, m, s, r, true)) return false;
+    if (!softBody) return false;
+    softBody.setTransform(m.a, m.b, m.c, m.d, m.e - r.X, m.f - r.Y);
+    src.draw(softBody);
+    softened(softBody, src, m, s, r, tagged('softmask'));
   }
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -423,6 +430,7 @@ function body(
   s: number,
   r: { X: number; Y: number; W: number; H: number },
   soft: boolean,
+  maskKey?: string,
 ): boolean {
   if (!soft) {
     c.save();
@@ -436,7 +444,7 @@ function body(
   if (!alone) return false;
   alone.setTransform(m.a, m.b, m.c, m.d, m.e - r.X, m.f - r.Y);
   src.draw(alone);
-  softened(alone, src, m, s, r);
+  softened(alone, src, m, s, r, maskKey);
   c.save();
   c.setTransform(1, 0, 0, 1, 0, 0);
   c.drawImage(alone.canvas, 0, 0);
@@ -447,7 +455,8 @@ function body(
 /**
  * Multiplies the alpha of what `c` holds (the shape, drawn under its transform) by the soft edge's mask: the
  * silhouette shrunk by `softEdge` and blurred by it, made at a reduced resolution. `r` is the device rect `c`
- * covers (undefined: `c` is a reduced blur sprite, whose own transform maps box space).
+ * covers (undefined: `c` is a reduced blur sprite, whose own transform maps box space). With `maskKey` the
+ * reduced mask is cached under it (a body sprite of `r` under `m`: what the key names).
  */
 function softened(
   c: OffscreenCanvasRenderingContext2D,
@@ -455,6 +464,7 @@ function softened(
   m: DOMMatrix,
   s: number,
   r?: { X: number; Y: number; W: number; H: number },
+  maskKey?: string,
 ): void {
   const e = src.softEdge ?? 0;
   if (!(e > 0)) return;
@@ -470,17 +480,22 @@ function softened(
   q = Math.max(q, Math.sqrt((W * H) / BLUR_MAX_PIXELS));
   const w = Math.max(1, Math.ceil(W / q));
   const h = Math.max(1, Math.ceil(H / q));
-  const mask = sprite(w, h);
-  const blurred = sprite(w, h);
-  if (!mask || !blurred) return;
-  mask.setTransform(t.a / q, t.b / q, t.c / q, t.d / q, t.e / q, t.f / q);
-  eroded(mask, src, e);
-  shadowOnly(blurred, mask.canvas, '#000', sigma / q);
+  let made = cached(maskKey);
+  if (!made || made.canvas.width !== w || made.canvas.height !== h) {
+    const mask = sprite(w, h);
+    const blurred = sprite(w, h);
+    if (!mask || !blurred) return;
+    mask.setTransform(t.a / q, t.b / q, t.c / q, t.d / q, t.e / q, t.f / q);
+    eroded(mask, src, e);
+    shadowOnly(blurred, mask.canvas, '#000', sigma / q);
+    made = { canvas: blurred.canvas, x: 0, y: 0, w, h, bytes: w * h * 4 };
+    remember(maskKey, made);
+  }
   c.save();
   c.setTransform(1, 0, 0, 1, 0, 0);
   c.globalCompositeOperation = 'destination-in';
   c.imageSmoothingEnabled = true;
   c.imageSmoothingQuality = 'medium';
-  c.drawImage(blurred.canvas, 0, 0, w * q, h * q);
+  c.drawImage(made.canvas, 0, 0, w * q, h * q);
   c.restore();
 }

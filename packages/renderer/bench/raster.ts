@@ -14,9 +14,11 @@ import type { BenchReport, Stats } from './raster.page.ts';
  *
  *   pnpm --filter @ordo/renderer bench [--iterations 200] [--check]
  *
- * --check fails when a rich slide's raster p95 is over the M2 budget: 8 ms at 1920, 30 ms at 3840, or a
- * bounded one's (hostile geometry and large effects, M6 repair, design/27 §12 drawing cost) over 50 ms at 1920
- * and 120 ms at 3840.
+ * --check fails when a rich slide's raster p95 is over the M2 budget: 8 ms at 1920, 30 ms at 3840; a
+ * bounded geometry one's (hostile fills and outlines at the slide's drawing budget, M6 repair and finish,
+ * design/27 §12 drawing cost; every job draws a fresh copy, so its geometry is built and rated cold) over
+ * design/27 §13's 50 ms at either size; or a bounded one's (large effects) over 50 ms at 1920 and 120 ms at
+ * 3840.
  * The face is DejaVu Sans (fonts-dejavu-core). Timings depend on the machine and its load.
  */
 
@@ -30,6 +32,7 @@ const iterations = Math.max(10, Number(arg('--iterations') ?? 120));
 const check = process.argv.includes('--check');
 const BUDGET: Record<string, number> = { '1920': 8, '3840': 30 };
 const BOUNDED: Record<string, number> = { '1920': 50, '3840': 120 };
+const BOUNDED_GEOMETRY: Record<string, number> = { '1920': 50, '3840': 50 };
 
 async function loadEsbuild(): Promise<typeof import('esbuild')> {
   try {
@@ -93,13 +96,14 @@ async function main(): Promise<number> {
       console.log(`${s.name} (${s.chars} characters)`);
       const rich = s.name.includes('(rich');
       const bounded = s.name.includes('(bounded');
+      const geometry = s.name.includes('(bounded geometry');
       if (rich)
         console.log(
           `  layout: empty width cache ${ms(s.layoutColdMs)} ms (median); warm width cache ${fmt(s.layoutWarmCache)}`,
         );
       else console.log('  layout: drawText lays out while it draws (included in raster)');
       for (const [w, r] of Object.entries(s.raster)) {
-        const budget = (bounded ? BOUNDED : BUDGET)[w]!;
+        const budget = (geometry ? BOUNDED_GEOMETRY : bounded ? BOUNDED : BUDGET)[w]!;
         const checked = rich || bounded;
         const bad = checked && r.steady.p95 > budget;
         if (bad) over++;

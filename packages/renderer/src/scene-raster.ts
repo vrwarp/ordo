@@ -9,6 +9,7 @@ import {
 } from '@ordo/domain';
 import { CLAMP, clampBox, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
 import { drawableContent } from './content.ts';
+import { withinDrawBudget } from './geombudget.ts';
 import { pictureTarget, sourceSize } from './picture.ts';
 import { rasterSlide } from './raster.ts';
 import {
@@ -173,7 +174,10 @@ export function sceneSlides(
 ): SceneSlides | undefined {
   if (look && clampLook(look).layers.slide.mode !== 'authored') return undefined;
   const s = clampSlide(slide);
-  const drawn = drawableContent(s).objects;
+  // The slide's drawing budget decides once for the whole slide, as `drawSlide2D` does for the editor and
+  // thumbnails; each part then draws what it decided (geombudget.ts: a part of a slide within the budget
+  // changes nothing more).
+  const drawn = withinDrawBudget(drawableContent(s).objects);
   const index = drawn.findIndex((o) => o.type === 'image' && o.id === objectId);
   const play = drawn[index] as ImageObject | undefined;
   if (!play) return undefined;

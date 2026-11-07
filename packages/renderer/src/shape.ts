@@ -1,11 +1,12 @@
-import type { Box, LineCap, LineDash, LineJoin, ShapeObject } from '@ordo/domain';
+import type { Box, ShapeObject } from '@ordo/domain';
 
-import { CLAMP, clampObject, num } from './clamp.ts';
+import { CLAMP, clampObject, isClamped, num } from './clamp.ts';
 import type { Ctx2D } from './ctx.ts';
 import { digest } from './digest.ts';
 import { type Bounds, drawEffected } from './effects.ts';
 import { drawGeom, type GeomFill, type GeomStroke, geomFillPath2D, geomPath2D } from './geom/draw.ts';
-import { ARROW_MIN_BASE, arrowFor, arrowReach, type GeomEnds } from './geom/ends.ts';
+import { arrowFor, arrowReach } from './geom/ends.ts';
+import { lineStyleOf, outlineOf, SHAPE_MITER_LIMIT } from './geom/outline.ts';
 import { gradientStyle } from './geom/paint.ts';
 import type { BuiltGeom } from './geom/path.ts';
 import { geomAwaited, geomPending, legacyGeometry, storedGeometry } from './geom/stored.ts';
@@ -27,68 +28,20 @@ import { geomAwaited, geomPending, legacyGeometry, storedGeometry } from './geom
  * - Effects (effects.ts): shadow, glow and soft edge through sprites, the whole shape at its opacity.
  */
 
-/** Whether a shape uses any M6 drawing field (it is drawn by `drawGeomShape`). */
-export function hasShapeExtras(o: Partial<ShapeObject>): boolean {
-  return (
-    o.geom !== undefined ||
-    o.gradient !== undefined ||
-    o.dash !== undefined ||
-    o.ends !== undefined ||
-    o.flipH === true ||
-    o.flipV === true ||
-    o.shadow !== undefined ||
-    o.glow !== undefined ||
-    o.softEdge !== undefined ||
-    (o.lineJoin !== undefined && o.lineJoin !== 'miter') ||
-    (o.lineCap !== undefined && o.lineCap !== 'flat')
-  );
-}
-
-/** Dash and gap lengths of each preset dash, × the line width (LibreOffice lclConvertPresetDash). */
-export const DASH_PATTERNS: Readonly<Record<LineDash, readonly number[]>> = {
-  solid: [],
-  dot: [1, 3],
-  dash: [4, 3],
-  dashDot: [4, 3, 1, 3],
-  longDash: [8, 3],
-  longDashDot: [8, 3, 1, 3],
-  longDashDotDot: [8, 3, 1, 3, 1, 3],
-  sysDot: [1, 1],
-  sysDash: [3, 1],
-  sysDashDot: [3, 1, 1, 1],
-  sysDashDotDot: [3, 1, 1, 1, 1, 1],
-};
-
-/** The miter limit of shape outlines (OOXML a:miter lim="800000", the Office themes' line style). */
-export const SHAPE_MITER_LIMIT = 8;
-
-/**
- * A preset dash pattern (× the line width) with a round or square cap: each dash or dot of at least one line
- * width loses 0.99 of it and every gap gains 0.99 when one does (LibreOffice lineproperties.cxx: Office
- * counts those caps within a preset dash's length; Canvas adds them).
- */
-export function cappedDash(pattern: readonly number[], cap: LineCap | undefined): number[] {
-  if (cap !== 'round' && cap !== 'square') return [...pattern];
-  const long = pattern.some((v, i) => i % 2 === 0 && v >= 1);
-  if (!long) return [...pattern];
-  return pattern.map((v, i) => (i % 2 === 0 ? (v >= 1 ? v - 0.99 : v) : v + 0.99));
-}
-
-/** Canvas's lineJoin and lineCap for a shape's (defaults: miter, butt). */
-export function lineStyleOf(o: { lineJoin?: LineJoin; lineCap?: LineCap }): {
-  join: CanvasLineJoin;
-  cap: CanvasLineCap;
-} {
-  return {
-    join: o.lineJoin === 'round' || o.lineJoin === 'bevel' ? o.lineJoin : 'miter',
-    cap: o.lineCap === 'round' ? 'round' : o.lineCap === 'square' ? 'square' : 'butt',
-  };
-}
+export {
+  cappedDash,
+  DASH_PATTERNS,
+  hasShapeExtras,
+  lineStyleOf,
+  SHAPE_MITER_LIMIT,
+} from './geom/outline.ts';
 
 const clamped = new WeakMap<object, ShapeObject>();
 
 /** `clampObject` of a shape, memoised by identity (a clamped shape maps to itself). */
 export function clampShapeObject(o: ShapeObject): ShapeObject {
+  // One `clampSlide` made is clamped already (a slide's shapes with inline paths were clamped twice a raster).
+  if (isClamped(o) && o.type === 'shape') return o;
   const hit = clamped.get(o);
   if (hit) return hit;
   const out = (clampObject({ ...o, type: 'shape' }) ?? o) as ShapeObject;
@@ -139,20 +92,14 @@ function planOf(ctx: Ctx2D, o: ShapeObject): Plan {
     } else if (o.fill) fill = o.fill;
   }
   let stroke: GeomStroke | null = null;
-  const lw = o.stroke ? num(o.stroke.width, 0, CLAMP.maxEffectPx, 1) : 0;
-  if (o.stroke && lw > 0) {
-    const pattern = cappedDash(DASH_PATTERNS[o.dash ?? 'solid'] ?? [], o.lineCap);
-    const ends: GeomEnds = {
-      head: arrowFor(o.ends?.head?.type, o.ends?.head?.w, o.ends?.head?.len, lw, ARROW_MIN_BASE),
-      tail: arrowFor(o.ends?.tail?.type, o.ends?.tail?.w, o.ends?.tail?.len, lw, ARROW_MIN_BASE),
-    };
+  const outline = o.stroke ? outlineOf(o, num(o.stroke.width, 0, CLAMP.maxEffectPx, 1)) : undefined;
+  if (o.stroke && outline)
     stroke = {
       color: o.stroke.color,
-      width: lw,
-      ...(pattern.length ? { dash: pattern.map((v) => v * lw) } : {}),
-      ...(ends.head || ends.tail ? { ends } : {}),
+      width: outline.width,
+      ...(outline.dash ? { dash: outline.dash } : {}),
+      ...(outline.ends ? { ends: outline.ends } : {}),
     };
-  }
   const bounds = geomBounds(built);
   const grow = stroke
     ? Math.max(

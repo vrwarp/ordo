@@ -1,13 +1,21 @@
 import fc from 'fast-check';
 import { describe, expect, it, vi } from 'vitest';
-import { cleanPathData, PATH_DATA_LIMITS, parsePathData, pathDataPoints, type ShapeGeom } from '@ordo/domain';
+import {
+  cleanPathData,
+  PATH_DATA_LIMITS,
+  parsePathData,
+  pathDataPoints,
+  type ShapeGeom,
+  type SlideObject,
+} from '@ordo/domain';
 import { clampGeom } from '../clamp.ts';
 import { geomBounds } from '../shape.ts';
 import { compileGeom, type GeomSource, newGeomNotes } from './compile.ts';
 import { geomFillPath2D } from './draw.ts';
 import { withEnds } from './ends.ts';
 import { evalGuideLists, evalGuides } from './eval.ts';
-import { GEOM_COST } from './cost.ts';
+import { charged, GEOM_COST } from './cost.ts';
+import { drawnCost, slideBudget } from '../geombudget.ts';
 import { GEOM_LIMITS, PATH_FILLS } from './ops.ts';
 import {
   buildGeom,
@@ -421,5 +429,97 @@ describe('geometry fuzz (design/27 §12, §15 M6)', () => {
     expect(pathDataPoints(p)).toBe(PATH_DATA_LIMITS.points);
     expect(cleanPathData(d).length).toBeLessThanOrEqual(PATH_DATA_LIMITS.chars);
     expect(performance.now() - t0).toBeLessThan(1000);
+  });
+
+  it('never draws a slide past its drawing budget: random hostile outlines, caps, arrowheads, dashes, effects', () => {
+    // Slides of random shapes: scattered clouds, many short open sub-paths, zigzags and presets, stroked
+    // 0.01 to 500 px wide with every join, cap, dash and arrowhead, some with effects (the re-review's
+    // blocker and its variations). What a slide draws natively charges its budget at most, its stored points
+    // stay within 64k, and a legacy copy costs little; the whole slide is rated quickly.
+    const black = { r: 0, g: 0, b: 0, a: 1 };
+    const pathOf = (kind: number, seed: number, n: number, r: number) => {
+      let x = seed * 7919 + 1;
+      const rand = () => {
+        x ^= x << 13;
+        x ^= x >>> 17;
+        x ^= x << 5;
+        return ((x >>> 0) % 1_000_000) / 1_000_000;
+      };
+      let d = '';
+      for (let k = 0; k < n; k++) {
+        const a = rand() * Math.PI * 2;
+        const q = Math.sqrt(rand()) * r;
+        const px = (500 + q * Math.cos(a)).toFixed(2);
+        const py = (500 + q * Math.sin(a)).toFixed(2);
+        if (kind === 0) d += `${k ? 'L' : 'M'} ${px} ${py} `;
+        else if (kind === 1)
+          d += `M ${px} ${py} L ${(+px + Math.cos(a)).toFixed(2)} ${(+py + Math.sin(a)).toFixed(2)} `;
+        else
+          d += `${k ? 'L' : 'M'} ${(500 + (k % 2 ? r : -r) * Math.cos(a)).toFixed(1)} ${(500 + (k % 2 ? r : -r) * Math.sin(a)).toFixed(1)} `;
+      }
+      return { d: d.trim(), w: 1000, h: 1000, ...(kind === 1 ? { fill: 'none' as const } : {}) };
+    };
+    const shapeArb = fc.record({
+      kind: fc.nat(3),
+      seed: fc.nat(1000),
+      paths: fc.integer({ min: 1, max: 8 }),
+      n: fc.integer({ min: 2, max: 1_500 }),
+      r: fc.constantFrom(0.5, 3, 50, 480),
+      width: fc.constantFrom(0, 0.01, 0.5, 2, 20, 100, 400, 500),
+      join: fc.constantFrom(undefined, 'round', 'bevel'),
+      cap: fc.constantFrom(undefined, 'round', 'square'),
+      dash: fc.constantFrom(undefined, 'sysDot', 'dash', 'longDashDotDot'),
+      ends: fc.boolean(),
+      fx: fc.nat(3),
+      full: fc.boolean(),
+    });
+    let slowest = 0;
+    fc.assert(
+      fc.property(fc.array(shapeArb, { minLength: 1, maxLength: 24 }), (specs) => {
+        const objects: SlideObject[] = specs.map((t, i) => ({
+          id: `s${i}`,
+          type: 'shape',
+          box: t.full
+            ? { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 }
+            : { x: 460, y: 40, w: 1000, h: 1000, rotation: 0 },
+          shape: 'rect',
+          ...(t.kind === 1 ? {} : { fill: { r: 1, g: 2, b: 3, a: 1 } }),
+          opacity: 1,
+          radius: 0,
+          geom:
+            t.kind === 3
+              ? { preset: 'star32' }
+              : { paths: Array.from({ length: t.paths }, (_, j) => pathOf(t.kind, t.seed + j, t.n, t.r)) },
+          ...(t.width ? { stroke: { width: t.width, color: black } } : {}),
+          ...(t.join ? { lineJoin: t.join } : {}),
+          ...(t.cap ? { lineCap: t.cap } : {}),
+          ...(t.dash ? { dash: t.dash } : {}),
+          ...(t.ends
+            ? { ends: { head: { type: 'triangle', w: 'lg', len: 'lg' }, tail: { type: 'oval' } } }
+            : {}),
+          ...(t.fx === 1 ? { shadow: { dx: 4, dy: 4, blur: 12, color: black } } : {}),
+          ...(t.fx === 2 ? { glow: { radius: 40, color: black } } : {}),
+          ...(t.fx === 3 ? { softEdge: 12 } : {}),
+        })) as SlideObject[];
+        const t0 = performance.now();
+        const plan = slideBudget(objects);
+        slowest = Math.max(slowest, performance.now() - t0);
+        let native = 0;
+        let points = 0;
+        for (const o of objects) {
+          const copy = plan.get(o);
+          const r = drawnCost(copy ?? o);
+          points += r.points;
+          // A copy without its effects keeps its geometry (charged); one without its geometry is a legacy shape.
+          if (copy && (copy as { geom?: unknown }).geom === undefined)
+            expect(charged(r)).toBeLessThan(GEOM_COST.slide / 10);
+          else native += charged(r);
+        }
+        expect(native).toBeLessThanOrEqual(GEOM_COST.slide);
+        expect(points).toBeLessThanOrEqual(GEOM_COST.slidePoints);
+      }),
+      { numRuns: 60, seed: 2711 },
+    );
+    expect(slowest).toBeLessThan(1_000);
   });
 });

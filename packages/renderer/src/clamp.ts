@@ -57,6 +57,12 @@ export const CLAMP = {
   maxLetterSpacing: 500,
   maxPadding: LOGICAL_WIDTH,
   maxEffectPx: 500,
+  /**
+   * The thinnest dashed outline drawn (logical px; thinner ones are drawn this wide): a dash is a sub-path of
+   * its own, so a sysDot outline at 0.01 px would cut a slide-sized shape into 300,000 dashes (design/27 §12
+   * drawing cost). The converter writes no line thinner (PowerPoint's thinnest is one device pixel).
+   */
+  minDashedStrokePx: 0.5,
   maxRadius: LOGICAL_WIDTH,
   /** Style runs of one text object (the schema's bound). */
   maxRuns: 2000,
@@ -632,7 +638,21 @@ export function clampCrop(c: unknown): ImageCrop | undefined {
   return out.l || out.t || out.r || out.b ? out : undefined;
 }
 
+/** Objects `clampObject` made (a clamped object clamps to an equal one: the drawers need not clamp it again). */
+const CLAMPED = new WeakSet<object>();
+
+/** Whether `o` is an object `clampObject` made. */
+export function isClamped(o: unknown): boolean {
+  return !!o && typeof o === 'object' && CLAMPED.has(o);
+}
+
 export function clampObject(o: unknown): SlideObject | undefined {
+  const out = clampObjectOf(o);
+  if (out) CLAMPED.add(out);
+  return out;
+}
+
+function clampObjectOf(o: unknown): SlideObject | undefined {
   if (!o || typeof o !== 'object') return undefined;
   const x = o as Partial<SlideObject> & { type?: unknown };
   const id = str(x.id) || 'obj';
@@ -683,6 +703,14 @@ export function clampObject(o: unknown): SlideObject | undefined {
     if (s.stroke && typeof s.stroke === 'object')
       out.stroke = { width: num(s.stroke.width, 0, CLAMP.maxEffectPx, 1), color: clampColor(s.stroke.color) };
     clampShapeExtras(s, out);
+    if (
+      out.dash &&
+      out.dash !== 'solid' &&
+      out.stroke &&
+      out.stroke.width > 0 &&
+      out.stroke.width < CLAMP.minDashedStrokePx
+    )
+      out.stroke = { ...out.stroke, width: CLAMP.minDashedStrokePx };
     return clampCommon(x, out);
   }
   return undefined;
@@ -708,7 +736,9 @@ export function clampSlide(slide: unknown): Slide {
   const src = Array.isArray(s.objects) ? s.objects : [];
   const underPicture = !!referencePicture(s);
   for (let i = 0; i < src.length && objects.length < CLAMP.maxObjects; i++) {
-    const o = withPlay(clampObject(src[i]), src[i]);
+    // An object clamped already (a part of a clamped slide, `sceneSlides`) is kept as it is.
+    const raw = src[i];
+    const o = isClamped(raw) ? (raw as SlideObject) : withPlay(clampObject(raw), raw);
     if (!o) continue;
     if (o.type === 'image' && !(underPicture && fromImport(o))) {
       if (!images.has(o.mediaId) && images.size >= CLAMP.maxImagesPerSlide) continue;

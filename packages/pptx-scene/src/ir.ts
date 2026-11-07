@@ -372,7 +372,12 @@ export interface CustomPaths {
   }[];
   /** Points of all paths (an arc counts its cubic segments' points). */
   points: number;
-  /** Its drawing estimate in logical px (renderer `geom/cost.ts` `unitCost`, each stored path a unit). */
+  /** Its fill estimate in logical px (renderer `geom/cost.ts` `geomCost`: past `GEOM_COST.geometry` not drawn). */
+  fillCost?: number;
+  /**
+   * What drawing it costs as emitted (renderer `geom/cost.ts` `drawCost`: its fill, its outline with joins,
+   * caps, dashes and arrowheads, its effects' passes), in units of the slide's `GEOM_COST.slide`.
+   */
   cost?: number;
   /** Over the drawing budgets (`GEOM_COST`, `slideCustom`): drawn by LibreOffice (`custGeom:complex`). */
   complex?: boolean;

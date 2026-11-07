@@ -1,17 +1,9 @@
-import { GEOM_FILE_MAX_BYTES, parsePathData, type ShapeGeom } from '@ordo/domain';
+import { GEOM_FILE_MAX_BYTES, type ShapeGeom } from '@ordo/domain';
 import { clampGeom } from '../clamp.ts';
-import { clampPoints, GEOM_COST, geomCost } from './cost.ts';
-import {
-  CMD_CLOSE,
-  CMD_CUBIC,
-  CMD_LINE,
-  CMD_MOVE,
-  CMD_QUAD,
-  GEOM_LIMITS,
-  PATH_FILLS,
-  type PathFill,
-} from './ops.ts';
-import { type BuiltGeom, COORD_LIMIT, type GeomPath, presetGeometry } from './path.ts';
+import { geometryAt, legacyGeometry, storedPath } from './built.ts';
+import type { BuiltGeom } from './path.ts';
+
+export { legacyGeometry, storedPath };
 
 /*
  * A stored geometry (design/27 §3.1 `ShapeGeom`: ShapeObject.geom, ImageObject.mask) built at a box, in the
@@ -31,40 +23,6 @@ import { type BuiltGeom, COORD_LIMIT, type GeomPath, presetGeometry } from './pa
  * its pictures); until then, or without it, it is the geometry beside the ref as above.
  * Results are memoised per geometry (a file's is shared by every shape that names it) and box size.
  */
-
-const CMD_OF: Readonly<Record<string, number>> = {
-  M: CMD_MOVE,
-  L: CMD_LINE,
-  Q: CMD_QUAD,
-  C: CMD_CUBIC,
-  Z: CMD_CLOSE,
-};
-
-function side(v: number): number {
-  return v > 0 ? Math.min(v, COORD_LIMIT) : 0;
-}
-
-function coord(v: number): number {
-  return v > COORD_LIMIT ? COORD_LIMIT : v < -COORD_LIMIT ? -COORD_LIMIT : Number.isNaN(v) ? 0 : v + 0;
-}
-
-type StoredPath = NonNullable<ShapeGeom['paths']>[number];
-
-/** One stored path in box space. */
-export function storedPath(p: StoredPath, w: number, h: number): GeomPath {
-  const parsed = parsePathData(p?.d, GEOM_LIMITS.points);
-  const sw = typeof p?.w === 'number' && p.w > 0 && Number.isFinite(p.w) ? w / p.w : 1;
-  const sh = typeof p?.h === 'number' && p.h > 0 && Number.isFinite(p.h) ? h / p.h : 1;
-  const cmds: number[] = [];
-  for (const c of parsed.cmds) cmds.push(CMD_OF[c]!);
-  const pts = parsed.pts;
-  for (let i = 0; i < pts.length; i += 2) {
-    pts[i] = coord(pts[i]! * sw);
-    pts[i + 1] = coord(pts[i + 1]! * sh);
-  }
-  const fill: PathFill = PATH_FILLS.includes(p?.fill as PathFill) ? (p.fill as PathFill) : 'norm';
-  return { cmds, pts, fill, stroke: p?.stroke !== false };
-}
 
 // ── Geometry files (`ShapeGeom.ref`, M6 round 2) ──────────────────────────────────────────────────────────
 
@@ -226,93 +184,36 @@ export function resolvedGeom(g: ShapeGeom | undefined): ShapeGeom | undefined {
 const memo = new WeakMap<object, Map<string, BuiltGeom | undefined>>();
 const MEMO_SIZES = 8;
 
-/** What a geometry built from stored paths costs to draw: its estimate (`cost.ts`) and its points. */
+/** What a geometry built from stored paths holds: its fill estimate (`cost.ts`) and its stored points. */
 export interface StoredCost {
   readonly est: number;
   readonly points: number;
 }
 const costs = new WeakMap<BuiltGeom, StoredCost>();
 
-/** The drawing cost of a geometry `storedGeometry` built from stored paths; undefined for a preset. */
+/** The fill estimate and points of a geometry `storedGeometry` built from stored paths; undefined for a preset. */
 export function storedCost(b: BuiltGeom | undefined): StoredCost | undefined {
   return b ? costs.get(b) : undefined;
 }
 
 /**
  * A stored geometry built at a w x h box: its read geometry file's paths (`ref`), else its preset when the
- * table knows it, else its paths (at most GEOM_LIMITS.paths), else undefined.
+ * table knows it, else its paths (at most GEOM_LIMITS.paths; none past `GEOM_COST.geometry`, `built.ts`),
+ * else undefined.
  */
 export function storedGeometry(raw: ShapeGeom | undefined, w: number, h: number): BuiltGeom | undefined {
   const g = resolvedGeom(raw);
   if (!g) return undefined;
-  const bw = side(w);
-  const bh = side(h);
-  const key = `${bw} ${bh}`;
+  const key = `${w} ${h}`;
   let sizes = memo.get(g);
   if (sizes?.has(key)) return sizes.get(key);
-  let built: BuiltGeom | undefined;
-  if (typeof g.preset === 'string') {
-    const adj = Array.isArray(g.adj) ? g.adj.filter((p) => Array.isArray(p) && p.length === 2) : undefined;
-    built = presetGeometry(g.preset, bw, bh, adj as [string, number][] | undefined);
-  }
-  if (!built && Array.isArray(g.paths) && g.paths.length) {
-    const paths: GeomPath[] = [];
-    for (const p of g.paths.slice(0, GEOM_LIMITS.paths)) {
-      const path = storedPath(p, bw, bh);
-      const prev = paths[paths.length - 1];
-      if (p?.cont === true && prev)
-        paths[paths.length - 1] = {
-          ...prev,
-          cmds: prev.cmds.concat(path.cmds),
-          pts: prev.pts.concat(path.pts),
-        };
-      else paths.push(path);
-    }
-    const est = geomCost(paths);
-    if (est <= GEOM_COST.geometry) {
-      built = { w: bw, h: bh, paths, text: { l: 0, t: 0, r: bw, b: bh }, sites: [] };
-      let points = 0;
-      for (const p of paths) points += clampPoints(p.cmds, p.pts);
-      costs.set(built, { est, points });
-    }
-  }
+  const at = geometryAt(g, w, h);
+  const built = at?.built;
+  if (at?.stored) costs.set(at.built, { est: at.est, points: at.points });
   if (!sizes) {
     sizes = new Map();
     memo.set(g, sizes);
   } else if (sizes.size >= MEMO_SIZES) sizes.delete(sizes.keys().next().value!);
   sizes.set(key, built);
-  return built;
-}
-
-const legacyMemo = new Map<string, BuiltGeom>();
-
-/**
- * The legacy shape as a geometry (`ShapeObject.shape`, `radius`), for an object drawn through the M6 path
- * without a stored geometry: rect (roundRect when `radius` > 0, its corner capped at half the shorter side
- * as Canvas caps it), ellipse, or a line across the middle of the box (open, unfilled), as `drawShape` draws
- * them.
- */
-export function legacyGeometry(shape: string, radius: number, w: number, h: number): BuiltGeom {
-  const bw = side(w);
-  const bh = side(h);
-  const ss = Math.min(bw, bh);
-  const r = Number.isFinite(radius) && radius > 0 && ss > 0 ? Math.min(radius, ss / 2) : 0;
-  const key = `${shape} ${r} ${bw} ${bh}`;
-  const hit = legacyMemo.get(key);
-  if (hit) return hit;
-  let built: BuiltGeom;
-  if (shape === 'line') {
-    const path: GeomPath = {
-      cmds: [CMD_MOVE, CMD_LINE],
-      pts: [0, bh / 2, bw, bh / 2],
-      fill: 'none',
-      stroke: true,
-    };
-    built = { w: bw, h: bh, paths: [path], text: { l: 0, t: 0, r: bw, b: bh }, sites: [] };
-  } else if (shape === 'ellipse') built = presetGeometry('ellipse', bw, bh)!;
-  else if (r > 0) built = presetGeometry('roundRect', bw, bh, [['adj', (r / ss) * 100_000]])!;
-  else built = presetGeometry('rect', bw, bh)!;
-  if (legacyMemo.size >= 256) legacyMemo.clear();
-  legacyMemo.set(key, built);
   return built;
 }

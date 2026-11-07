@@ -260,6 +260,165 @@ export const HOSTILE_GEOMETRY: Slide = {
   })),
 };
 
+/** A deterministic PRNG (xorshift) for the hostile outlines. */
+function rng(seed: number) {
+  let x = seed >>> 0 || 1;
+  return () => {
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    return ((x >>> 0) % 1_000_000) / 1_000_000;
+  };
+}
+const BLACK = { r: 0, g: 0, b: 0, a: 1 };
+const CENTRE = { x: 460, y: 40, w: 1000, h: 1000, rotation: 0 };
+
+/** `n` points scattered within `r` of the centre of a 1000 x 1000 space (every turn a join). */
+function cloud(seed: number, n: number, r: number): string {
+  const rand = rng(seed);
+  let d = 'M 500 500';
+  for (let k = 1; k < n; k++) {
+    const a = rand() * Math.PI * 2;
+    const q = Math.sqrt(rand()) * r;
+    d += ` L ${(500 + q * Math.cos(a)).toFixed(2)} ${(500 + q * Math.sin(a)).toFixed(2)}`;
+  }
+  return d;
+}
+
+/** `n` open sub-paths 1 unit long within 20 units of the centre of a 1000 x 1000 space. */
+function bits(seed: number, n: number): string {
+  const rand = rng(seed);
+  let d = '';
+  for (let k = 0; k < n; k++) {
+    const x = 500 + (rand() - 0.5) * 20;
+    const y = 500 + (rand() - 0.5) * 20;
+    const a = rand() * Math.PI * 2;
+    d += `M ${x.toFixed(1)} ${y.toFixed(1)} L ${(x + Math.cos(a)).toFixed(1)} ${(y + Math.sin(a)).toFixed(1)} `;
+  }
+  return d.trim();
+}
+
+/**
+ * The re-review's hostile outlines (M6 finish, design/27 §12 drawing cost): two shapes of eight 2,000-point
+ * paths scattered within half a pixel, stroked 400 px wide with round joins (3.9 s at 3840 before), now
+ * their legacy rects; within the geometry bound.
+ */
+export const WIDE_OUTLINES: Slide = {
+  id: 'wide-outlines',
+  objects: [1, 2].map((i) => ({
+    id: `w${i}`,
+    type: 'shape' as const,
+    box: CENTRE,
+    shape: 'rect' as const,
+    fill: { r: 48, g: 96, b: 192, a: 1 },
+    opacity: 1,
+    radius: 0,
+    geom: {
+      paths: Array.from({ length: 8 }, (_, j) => ({ d: cloud(i * 10 + j, 2_000, 0.5), w: 1000, h: 1000 })),
+    },
+    stroke: { width: 400, color: BLACK },
+    lineJoin: 'round' as const,
+  })),
+};
+
+/**
+ * Arrowheads on 8 x 1,500 open sub-paths of a 100 px line (24,000 marker fills, 2.6 s at 3840 before), and a
+ * sysDot outline 0.01 px wide on 20 full-slide rects (each dash a sub-path of its own: drawn 0.5 px wide,
+ * the dashes past the budget as plain rects).
+ */
+export const ENDS_AND_DASHES: Slide = {
+  id: 'ends-and-dashes',
+  objects: [
+    {
+      id: 'e',
+      type: 'shape' as const,
+      box: CENTRE,
+      shape: 'rect' as const,
+      opacity: 1,
+      radius: 0,
+      geom: {
+        paths: Array.from({ length: 8 }, (_, j) => ({
+          d: bits(j + 1, 1_500),
+          w: 1000,
+          h: 1000,
+          fill: 'none' as const,
+        })),
+      },
+      stroke: { width: 100, color: BLACK },
+      ends: {
+        head: { type: 'triangle' as const, w: 'lg' as const, len: 'lg' as const },
+        tail: { type: 'triangle' as const, w: 'lg' as const, len: 'lg' as const },
+      },
+    },
+    ...Array.from({ length: 20 }, (_, i) => ({
+      id: `d${i}`,
+      type: 'shape' as const,
+      box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+      shape: 'rect' as const,
+      opacity: 1,
+      radius: 0,
+      geom: { preset: 'rect' },
+      stroke: { width: 0.01, color: BLACK },
+      dash: 'sysDot' as const,
+    })),
+  ],
+};
+
+/**
+ * A dashed spiral within the slide's budget (M6 finish: thin dashes are the closest the outline estimate
+ * comes to what Chromium spends), drawn natively: 2,400 points, 40 turns, a 2 px sysDot line.
+ */
+export const DASHED_SPIRAL: Slide = {
+  id: 'dashed-spiral',
+  objects: [
+    {
+      id: 'sp',
+      type: 'shape' as const,
+      box: CENTRE,
+      shape: 'rect' as const,
+      opacity: 1,
+      radius: 0,
+      geom: {
+        paths: [
+          {
+            d: Array.from({ length: 2_400 }, (_, k) => {
+              const t = k / 2_399;
+              const a = t * 40 * Math.PI * 2;
+              const r = 480 - 460 * t;
+              return `${k ? 'L' : 'M'} ${(500 + r * Math.cos(a)).toFixed(2)} ${(500 + r * Math.sin(a)).toFixed(2)}`;
+            }).join(' '),
+            w: 1000,
+            h: 1000,
+            fill: 'none' as const,
+          },
+        ],
+      },
+      stroke: { width: 2, color: BLACK },
+      dash: 'sysDot' as const,
+    },
+  ],
+};
+
+/**
+ * Three full-slide soft-edged panels (M6 finish: a soft edge weighs EFFECT_COST.softEdge slide areas, so one
+ * fits the effect budget and the others are drawn without; its mask is cached, its body made each raster: at
+ * 4K its full-resolution cut by the enlarged mask takes about 55 ms, which caching cannot avoid within the
+ * effect cache's 32 MB a sprite).
+ */
+export const SOFT_EDGES: Slide = {
+  id: 'soft-edges',
+  objects: [0, 1, 2].map((i) => ({
+    id: `s${i}`,
+    type: 'shape' as const,
+    box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+    shape: 'rect' as const,
+    fill: { r: 200 - i * 40, g: 120, b: 60 + i * 50, a: 1 },
+    opacity: 1,
+    radius: 0,
+    softEdge: 1,
+  })),
+};
+
 /**
  * Three large shadowed panels (M6 repair: the effect cache held about two 4K composites and rebuilt them on
  * every raster; now the reduced layers are cached and the panels drawn over them).
@@ -339,8 +498,12 @@ export async function bench(
   for (const [name, slide] of [
     ['sermon (rich)', SERMON],
     ['shapes with effects (M6)', SHAPES],
-    ['hostile custom geometry (bounded, M6 repair)', HOSTILE_GEOMETRY],
+    ['hostile custom geometry (bounded geometry, M6 repair)', HOSTILE_GEOMETRY],
+    ['wide outlines on tiny paths (bounded geometry, M6 finish)', WIDE_OUTLINES],
+    ['arrowheads and thin dashes (bounded geometry, M6 finish)', ENDS_AND_DASHES],
+    ['dashed spiral within the budget (bounded geometry, M6 finish)', DASHED_SPIRAL],
     ['three large shadowed panels (bounded, M6 repair)', SHADOWED_PANELS],
+    ['three full-slide soft edges (bounded, M6 finish)', SOFT_EDGES],
     ['autofit search (rich)', AUTOFIT],
     ['6-line lyric (rich)', LYRIC_RICH],
     ['6-line lyric (legacy)', LYRIC_LEGACY],

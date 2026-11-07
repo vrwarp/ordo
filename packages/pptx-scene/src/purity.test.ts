@@ -9,11 +9,25 @@ import { describe, expect, it } from 'vitest';
  * (the Wingdings/Symbol bullet table, the script fallback families and the script scan, design/27 §1 and
  * §10; the stored path data tokeniser, §3.1), which import nothing at run time but each other. Since M6
  * also the renderer's geometry engine without its drawer (`@ordo/renderer/geom`: the preset table, the
- * compiler, the evaluator, arcs and the path builder; M6 repair: the drawing estimate, `cost.ts`), so a custGeom
- * means in the converter what it means when drawn; those import nothing at run time but each other.
+ * compiler, the evaluator, arcs and the path builder; M6 repair: the drawing estimate, `cost.ts`, with the
+ * outline as drawn, `outline.ts`, its line ends, `ends.ts` and `markers.ts`, and stored paths built at a box,
+ * `built.ts`), so a custGeom means in the converter what it means when drawn, and costs what it costs; those
+ * import nothing at run time but each other and the pure domain modules.
  */
 const PURE_DOMAIN = ['bullets.ts', 'defaults.ts', 'pathdata.ts', 'readable.ts'];
-const PURE_GEOM = ['compile.ts', 'eval.ts', 'arc.ts', 'path.ts', 'ops.ts', 'presets.gen.ts', 'cost.ts'];
+const PURE_GEOM = [
+  'compile.ts',
+  'eval.ts',
+  'arc.ts',
+  'path.ts',
+  'ops.ts',
+  'presets.gen.ts',
+  'cost.ts',
+  'outline.ts',
+  'ends.ts',
+  'markers.ts',
+  'built.ts',
+];
 const IMPORT = /^\s*(import|export)\s+(type\s+)?[^'"]*?from\s+'([^']+)'/gm;
 const IMPURE = /\brequire\(|\bimport\(|\bprocess\.|\bdocument\.|\bwindow\.|\bfetch\(/;
 
@@ -53,6 +67,7 @@ describe('package purity', () => {
       for (const m of src.matchAll(IMPORT)) {
         const [, , typeOnly, spec] = m;
         if (typeOnly) continue;
+        if (PURE_DOMAIN.some((p) => spec === `@ordo/domain/${p}`)) continue;
         expect(`${file}: ${spec}`).toMatch(
           new RegExp(`^${file}: \\./(${PURE_GEOM.join('|').replaceAll('.', '\\.')})$`),
         );

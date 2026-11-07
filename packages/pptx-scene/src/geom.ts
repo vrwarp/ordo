@@ -56,9 +56,10 @@ import {
   presetGeometry,
 } from '@ordo/renderer/geom/path.ts';
 import { parsePathData } from '@ordo/domain/pathdata.ts';
-import { unitCost } from '@ordo/renderer/geom/cost.ts';
+import { type DrawnGeom, type DrawSpec, geomCost } from '@ordo/renderer/geom/cost.ts';
+import { type OutlineFields, outlineOf } from '@ordo/renderer/geom/outline.ts';
 import { apply, decompose, multiply, xfrmAffine } from './frame.ts';
-import type { Affine, CustomPaths, Element, Fill, Line, RectEmu, Rgba, ShapeElement } from './ir.ts';
+import type { Affine, CustomPaths, Element, Fill, Frame, Line, RectEmu, Rgba, ShapeElement } from './ir.ts';
 import { clean } from './log.ts';
 import { child, type XNode } from './xml.ts';
 
@@ -374,15 +375,22 @@ function spaceSide(v: number): number {
  * all its holes must be, into a chain of pieces drawn as one path (`cont`; `chainStrings`). Past the paths
  * a geometry keeps, it is over the bounds.
  */
-export function customPaths(node: XNode, w: number, h: number, s: number): CustomPaths {
+export function customPaths(
+  node: XNode,
+  w: number,
+  h: number,
+  s: number,
+  rate: (g: DrawnGeom) => number = (g) => geomCost(g.paths),
+): CustomPaths {
   const { geom, of, notes, lost } = compiledOf(node);
   const atBox = buildGeom(geom, w, h);
   const bw = atBox.w;
   const bh = atBox.h;
   const out: CustomPaths['paths'] = [];
   let points = 0;
-  let cost = 0;
   let over = lost;
+  /** Each part in box space (logical px), as the renderer builds the stored paths, for the estimates. */
+  const drawn: GeomPath[] = [];
   const built = new Map<string, BuiltGeom>();
   /** Each deck path joined from its chunks, built in its space. */
   const joined: { path: GeomPath; pw: number; ph: number }[] = [];
@@ -444,9 +452,11 @@ export function customPaths(node: XNode, w: number, h: number, s: number): Custo
       pieces = [''];
     }
     points += pointCount(path);
-    // What drawing it costs (renderer geom/cost.ts), in logical px: each part is one filled unit, as the
-    // renderer fills a stored path or a chain of pieces.
-    cost += unitCost(path.cmds, path.pts, pw ? (bw * s) / pw : s, ph ? (bh * s) / ph : s).est;
+    // In logical px, as the renderer draws it (renderer geom/cost.ts): each part is one path, as the renderer
+    // draws a stored path or a chain of pieces.
+    const sx = pw ? (bw * s) / pw : s;
+    const sy = ph ? (bh * s) / ph : s;
+    drawn.push({ ...path, pts: path.pts.map((v, i) => v * (i % 2 ? sy : sx)) });
     for (let i = 0; i < pieces.length; i++)
       out.push({
         d: pieces[i]!,
@@ -459,10 +469,12 @@ export function customPaths(node: XNode, w: number, h: number, s: number): Custo
   }
   const fx = (x: number) => (bw > 0 ? x / bw : 0);
   const fy = (y: number) => (bh > 0 ? y / bh : 0);
+  const g = { w: bw * s, h: bh * s, paths: drawn };
   return {
     paths: out,
     points,
-    cost,
+    fillCost: geomCost(drawn),
+    cost: rate(g),
     text: [fx(atBox.text.l), fy(atBox.text.t), fx(atBox.text.r), fy(atBox.text.b)],
     sites: atBox.sites.map((p) => ({ x: fx(p.x), y: fy(p.y), angle: p.angle })),
     ...(over ? { over: true } : {}),
@@ -550,6 +562,14 @@ export function knownPreset(name: string): boolean {
 /** A preset built at a box of `w` x `h` (any unit), or undefined for a name the table does not know. */
 function preset(name: string, w: number, h: number, adj: readonly [string, number][] | undefined) {
   return presetGeometry(name, w, h, adj);
+}
+
+/**
+ * The geometry an element of a preset draws at a box of `w` x `h` logical px, for its drawing estimate: the
+ * preset with its adjust values (as emitted), a rect for one the table does not know.
+ */
+export function presetDrawn(name: string, adj: [string, number][] | undefined, w: number, h: number) {
+  return preset(knownPreset(name) ? name : 'rect', w, h, adjPairs(adj)) ?? preset('rect', w, h, undefined)!;
 }
 
 /**
@@ -1106,6 +1126,53 @@ export function endsOf(line: Line): { head?: OrdoArrowEnd; tail?: OrdoArrowEnd }
   const tail = arrowEnd(line.tail, line.tailSize);
   if (!head && !tail) return undefined;
   return { ...(head ? { head } : {}), ...(tail ? { tail } : {}) };
+}
+
+// ── What a shape draws, for its drawing estimate ─────────────────────────────────────────────────────────
+
+/** A length in EMU as logical px within 0..500 (the bound `emit.ts` writes widths and effect radii with). */
+function px500(f: Frame, emu: number): number {
+  const v = emu * f.s;
+  return Number.isFinite(v) ? Math.min(500, Math.max(0, v)) : 0;
+}
+
+/** A line width in logical px as emitted: PowerPoint draws a zero-width line one device pixel wide. */
+export function lineWidthPx(f: Frame, w: number): number {
+  const v = Math.max(w * f.s, 0.5);
+  return Number.isFinite(v) ? Math.min(500, v) : 0.5;
+}
+
+/** The outline fields an element's line is emitted with (`emit.ts`: width, dash, joins, caps, arrowheads). */
+export function outlineFields(f: Frame, line: Line | undefined): OutlineFields {
+  if (!line) return {};
+  const dash = dashOf(line);
+  const ends = endsOf(line);
+  return {
+    stroke: { width: lineWidthPx(f, line.width) },
+    ...(dash ? { dash } : {}),
+    ...(line.join === 'round' || line.join === 'bevel' ? { lineJoin: line.join } : {}),
+    ...(line.cap === 'round' || line.cap === 'square' ? { lineCap: line.cap } : {}),
+    ...(ends ? { ends } : {}),
+  };
+}
+
+/**
+ * What an element's shape object draws (renderer `geom/cost.ts` `DrawSpec`), as `emit.ts` emits it: a fill
+ * when it has one a colour or gradient can draw, its outline, and its effects in logical px.
+ */
+export function drawSpecOf(
+  f: Frame,
+  e: { fill?: Fill; line?: Line; shadow?: { blur: number }; glow?: { radius: number }; softEdge?: number },
+): DrawSpec {
+  const glow = e.glow ? px500(f, e.glow.radius) : 0;
+  const soft = e.softEdge ? px500(f, e.softEdge) : 0;
+  return {
+    fill: !!e.fill && e.fill.kind !== 'none' && e.fill.kind !== 'picture' && e.fill.kind !== 'group',
+    outline: outlineOf(outlineFields(f, e.line)),
+    ...(e.shadow ? { shadow: true, shadowBlur: px500(f, e.shadow.blur) } : {}),
+    ...(glow > 0 ? { glow } : {}),
+    ...(soft > 0 ? { softEdge: soft } : {}),
+  };
 }
 
 // ── Connectors ──────────────────────────────────────────────────────────────────────────────────────────

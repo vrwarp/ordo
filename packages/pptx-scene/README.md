@@ -586,11 +586,11 @@ only tables (`budget:table`) and SmartArt drawings (`budget:smartart`) were ever
 - **Drawing cost of custom geometry** (`geom.ts` `customPaths`, `walk.ts` `slideCustom`; renderer
   `geom/cost.ts`). A custGeom's paths are rated by the renderer's own estimate (`unitCost`: the edges' length
   along their longer axis, times 1 + the most edges active at once / 64), each stored path or `cont` chain a
-  unit, in logical px at the shape's box. Past `GEOM_COST.geometry` (1.5M; the corpus's costliest, a traced
+  unit, in logical px at the shape's box. Past `GEOM_COST.geometry` (1.5M, 1.3M since the finish; the corpus's costliest, a traced
   8,300-point silhouette, is 0.64M) the geometry is residual with `custGeom:complex` and a note, LibreOffice
-  drawing it into the art; a slide keeps its custom geometries native while their estimates, weighted by
-  `drawWeight` (an outline 2 more, a shadow 1, a glow 3, a soft edge 3), stay within 98 % of `GEOM_COST.slide`
-  (3M; the corpus's costliest slide 1.42M), the rest going to the art the same way. A zigzag of 4,000 points
+  drawing it into the art; a slide keeps its custom geometries native while their estimates, weighted by the
+  passes that drew them, stay within 98 % of `GEOM_COST.slide`, the rest going to the art the same way (since
+  the finish below, each shape is rated as it is drawn instead). A zigzag of 4,000 points
   across its box (1.5 s at 1920 and 4.6 s at 3840 in Chromium before) is now art. The renderer holds every
   drawn slide to the same budgets (`geombudget.ts`), so a saved or edited slide cannot pass them either.
 - **Effect budget** (`emit.ts` `fitEffects`): shapes keep their shadow, glow and soft edge, bottom first,
@@ -626,6 +626,26 @@ only tables (`budget:table`) and SmartArt drawings (`budget:smartart`) were ever
 - **Merged runs' legacy** (`emitMerged`, design/27 §3.2): a run with an outline keeps its stroke (the M6
   drawing needs it), so an older build draws its legacy `line` along the union box's midline; a run without
   one draws nothing there.
+
+
+## M6 wave 2 finish (re-review findings)
+
+- **Outlines in the drawing cost** (`walk.ts` `readShape`, `slideCustom`, `chargeDrawing`; `geom.ts`
+  `drawSpecOf`, `outlineFields`, `presetDrawn`; `emit.ts` `fitDrawing`; renderer `geom/cost.ts`,
+  `geom/outline.ts`, `geom/built.ts`). The estimate rated fills only, so a tiny custGeom with a 400 px line
+  (3.9 s at 3840 for two) or one of 12,000 short open sub-paths with arrowheads (2.6 s) was native. Each shape
+  is now rated as `emit.ts` writes it and the renderer draws it (`drawCost`): its fill, its outline as the
+  polygon Canvas fills (offset edges, every join, every open sub-path's caps, every dash, each arrowhead's
+  fill and area), its effects' passes, and `GEOM_COST.point` a stored point. Custom geometries, presets
+  (`geom:complex`), picture masks and the outlines along them (the mask filled, the outline stroked, the
+  points stored twice) are charged against 98 % of `GEOM_COST.slide` (1.3M) and the slide's 64k points,
+  the rest going to the art; points of a geometry sent to the art are no longer charged. `fitDrawing` runs
+  the renderer's own `slidePlan` on the emitted objects (merged runs and table grids included), so a slide the
+  converter keeps native is drawn natively by every drawer; what it still has to change is noted.
+- **Line widths** (`geom.ts` `lineWidthPx`): one function for the emitted width and its estimate (at least
+  0.5 px; the renderer draws a dashed outline at least 0.5 px wide too).
+- Tests: `geom.test.ts` (wide outlines and arrowheads to the art, thin dashes on presets past the budget,
+  a masked picture with an outline charged as the renderer charges its two objects, within 5 %).
 
 ## Module map
 

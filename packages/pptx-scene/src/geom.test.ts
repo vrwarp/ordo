@@ -1,9 +1,10 @@
 import { type ImageObject, type ShapeObject, Slide, type SlideObject, type TextObject } from '@ordo/domain';
 import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
-import { GEOM_COST } from '@ordo/renderer/geom/cost.ts';
+import { charged, GEOM_COST } from '@ordo/renderer/geom/cost.ts';
 import { CMD_CLOSE, CMD_MOVE } from '@ordo/renderer/geom/ops.ts';
 import { presetGeometry } from '@ordo/renderer/geom/path.ts';
 import { storedGeometry } from '@ordo/renderer/geom/stored.ts';
+import { drawnCost, overGeomBudget } from '@ordo/renderer/geombudget.ts';
 import { describe, expect, it } from 'vitest';
 import type { EmitOptions } from './emit.ts';
 import { apply } from './frame.ts';
@@ -338,11 +339,14 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     });
     expect(e.custom!.cost).toBeGreaterThan(GEOM_COST.geometry);
     expect(hostile.scene.slides[0]!.notes.join(' ')).toMatch(/too costly to draw/);
-    // The slide's budget: each of these fits on its own; the shapes past the slide's estimate do not.
+    // The slide's budget: each of these fits on its own; the shapes past the slide's estimate (with
+    // GEOM_COST.point a stored point) do not.
+    const charge = (e: ShapeElement) => e.custom!.cost! + e.custom!.points * GEOM_COST.point;
     const one = parseDeck(buildDeck({ slides: [{ shapes: custom(2, { paths: zigzag(380) }, big) }] }));
-    const cost = (one.slides[0]!.elements[0] as ShapeElement).custom!.cost!;
-    expect(cost).toBeLessThan(GEOM_COST.geometry);
-    const fit = Math.floor((GEOM_COST.slide * 0.98) / cost);
+    const first = one.slides[0]!.elements[0] as ShapeElement;
+    expect(first.custom!.cost!).toBeLessThan(GEOM_COST.geometry);
+    const fit = Math.floor((GEOM_COST.slide * 0.98) / charge(first));
+    expect(fit).toBeGreaterThanOrEqual(1);
     let all = '';
     for (let i = 0; i < fit + 2; i++) all += custom(2 + i, { paths: zigzag(380) }, big);
     const els = parseDeck(buildDeck({ slides: [{ shapes: all }] })).slides[0]!.elements as ShapeElement[];
@@ -352,23 +356,140 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
       'residual',
     ]);
     expect(els[fit]!.reasons).toEqual(['custGeom:complex']);
-    // An outline weighs it three times (a stroke's outline has about twice the edges).
-    const small = parseDeck(buildDeck({ slides: [{ shapes: custom(2, { paths: zigzag(200) }, big) }] }));
-    const cost200 = (small.slides[0]!.elements[0] as ShapeElement).custom!.cost!;
-    const fitOutlined = Math.floor((GEOM_COST.slide * 0.98) / (3 * cost200));
+    // An outline is rated as drawn (renderer geom/cost.ts strokeCost: two offset edges a leg, each join).
+    const line = '<a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></p:spPr>';
+    const outlinedOne = (id: number) => custom(id, { paths: zigzag(100) }, big).replace('</p:spPr>', line);
+    const plain = parseDeck(buildDeck({ slides: [{ shapes: custom(2, { paths: zigzag(100) }, big) }] }));
+    const small = parseDeck(buildDeck({ slides: [{ shapes: outlinedOne(2) }] }));
+    const lone = small.slides[0]!.elements[0] as ShapeElement;
+    expect(lone.custom!.cost!).toBeGreaterThan(
+      2 * (plain.slides[0]!.elements[0] as ShapeElement).custom!.cost!,
+    );
+    const fitOutlined = Math.floor((GEOM_COST.slide * 0.98) / charge(lone));
     expect(fitOutlined).toBeGreaterThanOrEqual(1);
     let outlined = '';
-    for (let i = 0; i <= fitOutlined; i++)
-      outlined += custom(2 + i, { paths: zigzag(200) }, big).replace(
-        '</p:spPr>',
-        '<a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></p:spPr>',
-      );
+    for (let i = 0; i <= fitOutlined; i++) outlined += outlinedOne(2 + i);
     const lined = parseDeck(buildDeck({ slides: [{ shapes: outlined }] })).slides[0]!
       .elements as ShapeElement[];
     expect(lined.map((x) => x.support)).toEqual([
       ...Array.from({ length: fitOutlined }, () => 'native'),
       'residual',
     ]);
+  });
+
+  it("rates a custGeom's outline as drawn: a wide line on a tiny path, and arrowheads on many sub-paths (M6 finish)", () => {
+    let seed = 5;
+    const rand = () => {
+      seed ^= seed << 13;
+      seed ^= seed >>> 17;
+      seed ^= seed << 5;
+      return ((seed >>> 0) % 1_000_000) / 1_000_000;
+    };
+    const big = { cx: 6_350_000, cy: 6_350_000 };
+    // The re-review's: eight paths of 2,000 points within 10 units of a 20000 space (half a pixel), a 400 px
+    // line (3.9 s at 3840 for two of them); then 8 x 1,500 open 1 px sub-paths with large triangles at both
+    // ends of a 100 px line (24,000 arrowhead fills, 2.6 s at 3840).
+    let cloud = '';
+    for (let p = 0; p < 8; p++) {
+      let d = M(10_000, 10_000);
+      for (let k = 1; k < 2_000; k++) {
+        const a = rand() * Math.PI * 2;
+        const q = Math.sqrt(rand()) * 10;
+        d += L(Math.round(10_000 + q * Math.cos(a)), Math.round(10_000 + q * Math.sin(a)));
+      }
+      cloud += `<a:path w="20000" h="20000">${d}</a:path>`;
+    }
+    const wide = custom(2, { paths: cloud }, big).replace(
+      '</p:spPr>',
+      '<a:ln w="2540000"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:round/></a:ln></p:spPr>',
+    );
+    let bits = '';
+    for (let p = 0; p < 8; p++) {
+      let d = '';
+      for (let k = 0; k < 1_500; k++) {
+        const x = Math.round(10_000 + (rand() - 0.5) * 400);
+        const y = Math.round(10_000 + (rand() - 0.5) * 400);
+        const a = rand() * Math.PI * 2;
+        d += M(x, y) + L(Math.round(x + 20 * Math.cos(a)), Math.round(y + 20 * Math.sin(a)));
+      }
+      bits += `<a:path w="20000" h="20000" fill="none">${d}</a:path>`;
+    }
+    const ends = custom(3, { paths: bits }, big).replace(
+      '</p:spPr>',
+      '<a:ln w="635000"><a:solidFill><a:srgbClr val="000000"/></a:solidFill>' +
+        '<a:headEnd type="triangle" w="lg" len="lg"/><a:tailEnd type="triangle" w="lg" len="lg"/></a:ln></p:spPr>',
+    );
+    for (const shapes of [wide, ends]) {
+      const out = emitOne({ slides: [{ shapes }] });
+      const e = out.scene.slides[0]!.elements[0] as ShapeElement;
+      expect(e).toMatchObject({
+        support: 'residual',
+        reasons: ['custGeom:complex'],
+        custom: { complex: true },
+      });
+      expect(e.custom!.fillCost!).toBeLessThan(GEOM_COST.geometry);
+      expect(e.custom!.cost!).toBeGreaterThan(GEOM_COST.slide);
+      expect(out.notes.join(' ')).toMatch(/past the slide's drawing budget/);
+    }
+  });
+
+  it("holds presets' outlines to the slide's budget too: thin dashes on full-slide rects (geom:complex)", () => {
+    // A sysDot line one EMU wide is drawn half a pixel wide: a full-slide rect of 6,000 dots.
+    const rect = (id: number) =>
+      sp({ id, x: 0, y: 0, cx: 12_192_000, cy: 6_858_000, geom: 'rect' }).replace(
+        '</p:spPr>',
+        '<a:ln w="1"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:prstDash val="sysDot"/></a:ln></p:spPr>',
+      );
+    let all = '';
+    for (let i = 0; i < 30; i++) all += rect(2 + i);
+    const out = emitOne({ slides: [{ shapes: all }] });
+    const els = out.scene.slides[0]!.elements as ShapeElement[];
+    const complex = els.filter((e) => e.reasons?.includes('geom:complex'));
+    expect(complex.length).toBeGreaterThan(0);
+    expect(complex.length).toBeLessThan(30);
+    expect(els.slice(0, 30 - complex.length).every((e) => e.support === 'native')).toBe(true);
+    // What is emitted is within the renderer's budget: it draws every shape as the converter decided.
+    expect(overGeomBudget(out.slide.objects).size).toBe(0);
+  });
+
+  it('charges a masked picture with an outline as the renderer does: the mask filled, the outline stroked', () => {
+    const star = (n: number, k: number) => {
+      let d = '';
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2 + k;
+        const r = 9_000 - k * 900;
+        d += (i ? L : M)(Math.round(10_000 + r * Math.cos(a)), Math.round(10_000 + r * Math.sin(a)));
+      }
+      return `<a:path w="20000" h="20000">${d}${Z}</a:path>`;
+    };
+    const mask = custGeom({ paths: Array.from({ length: 4 }, (_, k) => star(600, k)).join('') });
+    const picture = (id: number, x: number) =>
+      pic({ id, x, y: 254_000, cx: 3_000_000, cy: 3_000_000, rId: 'rId2' }).replace(
+        /<a:prstGeom prst="rect"><a:avLst\/><\/a:prstGeom><\/p:spPr>/,
+        `${mask}<a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></p:spPr>`,
+      );
+    const one = emitOne({ slides: [{ rels: [imageRel('rId2', 'a.png')], shapes: picture(3, 254_000) }] });
+    const el = one.scene.slides[0]!.elements.find((e) => e.kind === 'picture') as {
+      custom: { cost: number; points: number };
+    };
+    // The renderer draws a masked image and a stroke-only shape along the same geometry: both charged.
+    const drawn = one.slide.objects.filter(
+      (o) => (o.type === 'image' && o.mask) || (o.type === 'shape' && o.geom),
+    );
+    expect(drawn.map((o) => o.type)).toEqual(['image', 'shape']);
+    const renderer = drawn.reduce((n, o) => n + charged(drawnCost(o)), 0);
+    const converter = el.custom.cost + 2 * el.custom.points * GEOM_COST.point;
+    expect(Math.abs(renderer - converter) / converter).toBeLessThan(0.05);
+    // As many as fit: the converter keeps native what the renderer draws natively.
+    const fit = Math.floor((GEOM_COST.slide * 0.98) / converter);
+    let all = '';
+    for (let i = 0; i <= fit; i++) all += picture(3 + i, 254_000 + i * 100_000);
+    const out = emitOne({ slides: [{ rels: [imageRel('rId2', 'a.png')], shapes: all }] });
+    const pics = out.scene.slides[0]!.elements.filter((e) => e.kind === 'picture') as {
+      custom?: { over?: boolean };
+    }[];
+    expect(pics.map((p) => !!p.custom?.over)).toEqual([...Array.from({ length: fit }, () => false), true]);
+    expect(overGeomBudget(out.slide.objects).size).toBe(0);
   });
 
   it('reads hostile geometry within the bounds and quickly (design/27 §12, §14.3)', () => {

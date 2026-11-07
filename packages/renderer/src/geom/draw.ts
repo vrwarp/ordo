@@ -1,7 +1,17 @@
 import { type Rgba, rgbaCss } from '@ordo/domain';
 import type { Ctx2D } from '../ctx.ts';
 import { type GeomEnds, withEnds } from './ends.ts';
-import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD, type PathFill } from './ops.ts';
+import {
+  CLOSED_TOLERANCE,
+  CMD_CLOSE,
+  CMD_CUBIC,
+  CMD_LINE,
+  CMD_MOVE,
+  CMD_QUAD,
+  type PathFill,
+} from './ops.ts';
+
+export { CLOSED_TOLERANCE };
 import type { BuiltGeom, GeomPath } from './path.ts';
 
 /*
@@ -116,13 +126,6 @@ export function traceGeomPath(sink: PathSink, path: GeomPath): void {
     } else if (op === CMD_CLOSE) sink.closePath();
   }
 }
-
-/**
- * How close, as a fraction of the box's larger side, a sub-path's end must be to its start to count as closed
- * when the drawing order is decided (LibreOffice's `checkClosed` compares the points rounded to 1/100 mm, about
- * 1e-4 of a slide-sized box; a millionth is above arithmetic noise and below anything visible).
- */
-export const CLOSED_TOLERANCE = 1e-6;
 
 const OPEN_CACHE = new WeakMap<GeomPath, boolean>();
 
