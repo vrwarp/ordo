@@ -5,13 +5,13 @@ the operator on the stage screen (token in URL like an output). No WebGPU, no me
 
 ## Content
 
-| Region    | Content                                                                                                                                                                              |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Top left  | Clock, 24 h or 12 h per settings, updated every second                                                                                                                               |
-| Top right | Elapsed timer when running (label and `mm:ss`), countdown to service when active                                                                                                     |
+| Region    | Content                                                                                                                                                                                                                                                                                                        |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Top left  | Clock, 24 h or 12 h per settings, updated every second                                                                                                                                                                                                                                                         |
+| Top right | Elapsed timer when running (label and `mm:ss`), countdown to service when active                                                                                                                                                                                                                               |
 | Centre    | Current slide lyric text, large, with the section label; next slide text below at 60 % size and reduced opacity (the slide Next goes to: hidden slides are skipped, design/27 §9). Non-song slides show their first text box (a picture slide its own extracted text, design/27 §11) or the presentation title |
-| Bottom    | Operator message, high contrast, with a 1 s fade in and out; multiple messages stack newest first                                                                                    |
-| Notes     | When the Stage look's `PropsRule.notes` is on: the live slide's `Slide.notes` for the preacher, in `style['notes']`, else a box under the next-slide band (below)                        |
+| Bottom    | Operator message, high contrast, with a 1 s fade in and out; multiple messages stack newest first                                                                                                                                                                                                              |
+| Notes     | When the Stage look's `PropsRule.notes` is on: the live slide's `Slide.notes` for the preacher, in `style['notes']`, else a box under the next-slide band (below)                                                                                                                                              |
 
 Layout values come from the Stage look's `PropsRule.style` boxes so the operator can
 adjust sizes without code. Fonts load from the service cache through the Cache API.

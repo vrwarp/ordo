@@ -5,10 +5,10 @@
 handles and connection sites. ordo compiles it with `tools/geom-gen` into
 `packages/renderer/src/geom/presets.gen.ts` (design/27 §1, §15 M6).
 
-| File | From |
-|---|---|
+| File                         | From                                                                                                                                                                                                                                                                                                                 |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `presetShapeDefinitions.xml` | Apache POI 5.2.5, `poi-5.2.5.jar` entry `org/apache/poi/sl/draw/geom/presetShapeDefinitions.xml` (in POI's sources: `poi/src/main/resources/org/apache/poi/sl/draw/geom/`, tag `REL_5_2_5`). Byte for byte, SHA-256 `a7dad593d27bd70536b41da9b761fa16409536cc0c25ef2b6c7a61c5d9b3e738` (`tools/geom-gen` checks it). |
-| `LICENSE`, `NOTICE` | The same jar's `META-INF/LICENSE` and `META-INF/NOTICE`, identical to POI's `legal/LICENSE` and `legal/NOTICE` at `REL_5_2_5`. |
+| `LICENSE`, `NOTICE`          | The same jar's `META-INF/LICENSE` and `META-INF/NOTICE`, identical to POI's `legal/LICENSE` and `legal/NOTICE` at `REL_5_2_5`.                                                                                                                                                                                       |
 
 Licence: Apache License 2.0 (`LICENSE`), with POI's `NOTICE`. The definitions themselves come from ECMA-376,
 whose schemas and definitions POI's `LICENSE` describes as available to all interested parties without
