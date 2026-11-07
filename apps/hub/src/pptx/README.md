@@ -642,3 +642,60 @@ substitutes in drawers (M2's font resolver). Later in M3 wave 2: recoloured pict
 recolouring), noted on the slide; flipped pictures and ellipse and roundRect picture masks are written and
 drawn since M4 item D. Hub budgets measured on a reference NAS. 'Re-import from PowerPoint' (M4). A copy of a hybrid
 slide made before LibreOffice finished keeps no art.
+
+<!-- m9:lo-detect -->
+## M9 wave 1: LibreOffice optional at run time (m9/lo-detect)
+
+The hub detects its server tools and keeps every PowerPoint path working without LibreOffice (design/27 M9;
+lo-dependencies §4.2-4.4, §4.6-4.11).
+
+- **Detection** (`../tools.ts`, one `HubTools` per library process, owned by `ImportService`, given to every job
+  as `PptxDeps.tools`): `ORDO_LIBREOFFICE` = `auto` (default: `soffice`, else `libreoffice`, on the PATH; no
+  process started to find it), `off` (`0`/`false`/`no`: no office code ever runs on a deck), or soffice's
+  absolute path. In the background it asks `soffice --version` through the same hardened command as the
+  conversions (`sofficeCommand(args, home, mb, exe)`, 30 s) and `pdftoppm -v` (with `pdfinfo` found on the
+  PATH); `ready` settles once both answered and the jobs await it. One log line per tool. States: `checking`,
+  `available` (with its version), `absent`, `off`, `broken` (installed, but its version command fails).
+  `ToolError.missing` (spawn ENOENT/EACCES, a launcher's exit 126/127 'failed to execute') marks a tool absent
+  from then on (`markMissing`), so a hub whose image lost LibreOffice says so without a restart.
+- **`GET /capabilities`** (edit role; `HubCapabilities` in `@ordo/protocol`; also in the diagnostics zip):
+  LibreOffice's state and version, `pdf` (pdftoppm), the extensions `/import/document` accepts and
+  `pptx.{pictures, reference, referencePdf, art}`. Not in the public `/health`.
+- **The native import** (`nativeJob.ts`) awaits the tools, tells the converter (`SceneTaskInput.libreoffice:
+  false` → `EmitOptions.libreoffice`) and, without LibreOffice, sets no slide `pending` and queues no
+  `pptx-lo`: what the art or a metafile conversion would have drawn is listed in `Slide.pptx.missing`
+  (the converter's `EmittedSlide.missing`, or, from a converter that still plans art, the kinds of the art's
+  `art:<reason>` reasons, `artKinds`); such a slide is hybrid with no art object (M9 decision 8), a
+  picture-class slide lists `slide` and keeps its text for search. The result says `libreoffice` and how many
+  slides have something `missing`. With LibreOffice each follow-up plan records those kinds
+  (`PptxLoSlide.kinds`).
+- **A follow-up on a hub without LibreOffice** (`fallback.ts` `withoutLibreOffice`: queued before it went
+  away, a restored revision, or soffice found gone mid-run): one save (never while live-locked) clears
+  `pending` on the deck's waiting slides and sets `missing` from the plan, and in the same transaction the
+  re-import of those slides is queued, which redraws the unedited ones with this converter and keeps the
+  edited ones. Never retried, LibreOffice never runs. A restored revision's follow-up goes on the light queue
+  when LibreOffice is known to be missing.
+- **Refusals in words, never a tool's output**: `renderer=libreoffice` without LibreOffice is 501
+  `libreoffice_unavailable` (the upload removed first); a PDF without pdftoppm is 501 `pdf_unavailable`; a
+  queued picture import, reference job or PDF import on a hub that lost the tool fails with the same words.
+- **'Show original' from PowerPoint's own PDF**: `POST /presentations/:id/pptx-reference` as multipart with
+  one PDF (sniffed `%PDF`, ≤ 256 MB, optional field `showPicture` as a JSON array; 423 while live) queues the
+  same job with `PptxReferencePayload.pdf`. `pdfinfo` gives the page count, which must be the shown slides
+  (PowerPoint's default) or every listed one ('print hidden slides'), else the job fails with both counts;
+  every page must be shaped like the slides (within 1 %); pdftoppm draws each page the presentation needs at
+  the size LibreOffice's pages have. The PDF is released when the pictures are on the slides or the job
+  fails for good. A JSON request (LibreOffice draws them) without LibreOffice is 501
+  `libreoffice_unavailable`: "This hub has no LibreOffice. Add a PDF exported from PowerPoint instead."
+- **Formats** (`routes.ts` `documentKind`): .pptx, .ppsx, .potx and .pptm import natively (`vbaProject.bin`
+  is never read: `deckParts.ts` `SKIPPED_PART`); .ppt/.pps/.pot (compound file), .odp (by name or its
+  `mimetype`) and .key are refused with 415 `unsupported` and "Open it in PowerPoint, Keynote or LibreOffice
+  Impress and save it as .pptx, then import that file."
+- **Re-import** (`reimport.ts`): without LibreOffice it queues no follow-up and never waits for one.
+- Tests: `apps/hub/test/tools.test.ts` (the six detection cases), `apps/hub/test/pptx-no-libreoffice.test.ts`
+  (`ORDO_LIBREOFFICE=off` with a recording soffice first on the PATH that never runs). Test hubs see the tools
+  as available (`helpers.ts` `TEST_TOOLS`) unless a test says otherwise, so the suites behave the same on any
+  machine.
+- Not in this track: the budget ladder that replaces picture slides (`ladder`), the image without
+  LibreOffice and the CI leg (`lite-image`), the harness's `--no-libreoffice` and hub import (`harness`).
+<!-- /m9:lo-detect -->
+

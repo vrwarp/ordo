@@ -152,6 +152,19 @@ All under `https://hub.<venue>.synology.me/api/v1`. JSON bodies validated with t
 | `GET /health`, `GET /diagnostics/export`                                                                               | operate                                              | Hub health; zip of logs, journal tail, settings                                                                                                                                                                                                                              |
 | `POST /backup/run`, `GET /backup/list`                                                                                 | operate                                              | Backups                                                                                                                                                                                                                                                                      |
 
+<!-- m9:lo-detect -->
+*M9 (design/27, track `lo-detect`): LibreOffice is optional.* `GET /capabilities` (edit, operate) answers
+what the hub's server tools allow (`HubCapabilities` in `@ordo/protocol`: LibreOffice's state and version,
+`pdf`, the `documents` extensions, `pptx.{pictures, reference, referencePdf, art}`); the operator offers only
+that. `POST /import/document` takes .pptx, .ppsx, .potx and .pptm as PowerPoint, refuses .ppt, .pps, .odp and
+.key with 415 `unsupported` and a save-as hint, and answers 501 `libreoffice_unavailable` for
+`renderer=libreoffice` without LibreOffice and 501 `pdf_unavailable` for a PDF without pdftoppm (the upload
+removed first). `POST /presentations/:id/pptx-reference` also takes multipart with one PDF (PowerPoint's own
+export, ≤ 256 MB, field `showPicture` a JSON array): the reference pictures then come from its pages
+(pdftoppm, pdfinfo), with no LibreOffice; its JSON form answers 501 `libreoffice_unavailable` on a hub
+without LibreOffice. The diagnostics zip holds `capabilities.json`.
+<!-- /m9:lo-detect -->
+
 ## WebSocket
 
 `wss://hub.<venue>.synology.me/ws`. Authenticated by the session cookie (operator,
@@ -414,3 +427,14 @@ and its labels, `127.0.0.1`/`::1`, and `ORDO_ALLOWED_HOSTS`; anything else gets 
 HTTP and on the WebSocket upgrade. Behind the trusted proxy the browser's host arrives in
 `X-Forwarded-Host`, which the hub uses for the allow-list, app routing and the CSP
 `connect-src`; from any other peer the header is ignored.
+
+<!-- m9:lo-detect -->
+`ORDO_LIBREOFFICE` (design/27 M9): `auto` (the default: `soffice`, else `libreoffice`, on the PATH), `off`
+(also `0`, `false`, `no`: no office code runs on a deck), or soffice's absolute path; anything else is a
+start-up warning and auto. The library process looks the tools up at start and asks their version in the
+background (soffice through its hardened command, 30 s), logging one line each (`libreoffice: available
+(LibreOffice 24.2.7.2)`, or `libreoffice: absent: ordo draws PowerPoint slides itself; …`). Without
+LibreOffice the native import leaves nothing waiting: no `pptx-lo` follow-up is queued, and what ordo cannot
+draw is listed on its slide (`Slide.pptx.missing`); a follow-up left from when LibreOffice was there clears
+`pending` and queues the re-import of those slides instead of running.
+<!-- /m9:lo-detect -->

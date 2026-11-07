@@ -871,7 +871,8 @@ export async function withoutLibreOffice(
       const note = `not drawn: ${why} (${missingKinds(missing).map(missingLabel).join(', ')})`;
       const notes = [...(pptx.notes ?? []), logSafe(note)].slice(-SLIDE_NOTES);
       cleared.push(sl.id);
-      return Slide.parse({ ...sl, pptx: { ...pptx, missing, notes } });
+      const next = Slide.safeParse({ ...sl, pptx: { ...pptx, missing, notes } });
+      return next.success ? next.data : { ...sl, pptx };
     }),
   }));
   if (!cleared.length) {

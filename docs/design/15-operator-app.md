@@ -486,6 +486,21 @@ runs); the report shows its progress, and when it is done the editor takes its r
 PowerPoint follow-up's (`PPTX_JOB_SAVERS` includes 'pptx-reimport': an unsaved edit of a slide stays, every
 other slide shows the re-import) and says what changed. Nothing runs while the presentation is live.
 
+<!-- m9:lo-detect -->
+*M9 (design/27, track `lo-detect`): a hub without LibreOffice.* The operator reads what the hub's tools allow
+(`lib/hubCaps.ts`: `GET /capabilities` with the protocol's `.catch` defaults, 404 meaning a hub before M9 with
+LibreOffice, a network error keeping the last answer, asked again on every reconnect) and offers only that:
+- the import screen hides 'Pictures (LibreOffice)'; a choice remembered from a hub that had it imports as
+  editable slides and the screen says "This hub has no LibreOffice, so PowerPoint files are imported as
+  editable slides"; the drop zone takes .pptx, .ppsx, .potx, .pptm and, with poppler-utils, .pdf;
+- the import card says nothing of LibreOffice on such a hub (nothing waits for it) and names the slides with
+  something ordo cannot draw and what it is ("2 slides have something ordo cannot draw: a chart, a vector
+  picture"); the import report counts them;
+- the slide card shows "Not drawn: a chart" (`Slide.pptx.missing`), keeps 'Show original' for a slide that
+  already has its picture, and offers 'Add PowerPoint's pictures (PDF)…' (the deck exported as PDF from
+  PowerPoint, sent to `pptx-reference` as multipart) where LibreOffice would have drawn them.
+<!-- /m9:lo-detect -->
+
 ## Service checklist
 
 A printable page (`/checklist`) generated from the current settings: launch steps, health

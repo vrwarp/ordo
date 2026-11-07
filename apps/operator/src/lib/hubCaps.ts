@@ -13,7 +13,7 @@
  */
 import { ApiFailure, api } from '@ordo/client';
 import { HubCapabilities, LEGACY_CAPABILITIES } from '@ordo/protocol';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { create } from 'zustand';
 import { useLive } from '../state/live.ts';
 
@@ -78,8 +78,12 @@ export function loadHubCaps(
 export function useHubCaps(): HubCapabilities | undefined {
   const caps = useHubCapsStore((s) => s.caps);
   const connected = useLive((s) => s.hubConnected);
+  const was = useRef<boolean | undefined>(undefined);
   useEffect(() => {
-    void loadHubCaps(undefined, connected);
+    // A reconnect always asks; a screen opening asks unless the last answer is fresh.
+    const reconnected = was.current === false && connected;
+    was.current = connected;
+    void loadHubCaps(undefined, reconnected);
   }, [connected]);
   return caps;
 }
