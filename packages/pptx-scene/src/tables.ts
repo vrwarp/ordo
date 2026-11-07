@@ -34,15 +34,16 @@
  *   it with (`ParseOptions.fontFace`: the run's family, its metric substitute, the script fallbacks, ordo's
  *   default face), breaking as the renderer does (`Measure`). A family with no face is measured with
  *   conservative estimated widths (noted). For the fidelity harness's LibreOffice policy the rows are also
- *   sized as LibreOffice 24.2 sizes them (`TableElement.lo`, `LoLines`, `loSizePt`).
+ *   sized as LibreOffice 24.2 sizes them (`TableElement.lo`, `LoLines`, `loSizePt`), and its layouter's
+ *   column minimums and merge rules apply (`loColumns`, `loGrowRows`).
  *
  * Emission (`emitTable`): the background, the cell fills (neighbouring cells of a row with the same fill
  * as one rect), the lines (joined while they look the same, each stretched over the lines it meets so
  * corners close) as locked `ShapeObject`s with role 'grid'; then each cell as a `TextObject` with role
  * 'cell' (an empty cell as an empty one, to type into). All of them share the table's `origin.group`. Only
  * the legacy shape fields are written (solid fills: a gradient's first stop; dashed lines solid), so an
- * older build draws the table as this one does. With `TableEmitCtx.lo` (the harness only) the rows, the
- * cells' sizes and the text's placement are LibreOffice's (`TableElement.lo`).
+ * older build draws the table as this one does. With `TableEmitCtx.lo` (the harness only) the columns, the
+ * rows, the cells' sizes and the text's placement are LibreOffice's (`TableElement.lo`).
  *
  * Bounded: at most `MAX_TABLE_GRID` grid cells are read and `MAX_TABLE_CELLS` cells measured,
  * `MAX_GRID_SCAN` children of the grid and the table are looked at, `MAX_STYLE_SCAN` styles of
@@ -274,19 +275,18 @@ export function readTable(
     });
   }
 
-  // Rows grow to their text: LibreOffice's way first (`loRows`, with the deck's own line spacing), then
-  // ordo's, the lines spaced by their font's line height as LibreOffice draws them and PowerPoint sizes
-  // rows. An empty cell is one line of its end mark.
+  // Rows grow to their text: LibreOffice's way first (`loRows`, with the deck's own line spacing, in
+  // LibreOffice's columns), then ordo's, the lines spaced by their font's line height as LibreOffice draws
+  // them and PowerPoint sizes rows. An empty cell is one line of its end mark.
   const stored = trs.map((tr) => emu(tr.attrs.h, 0));
-  const widthOf = (c: TableCell) => {
+  const loCols = loColumns(cols, cells);
+  const textWidth = (c: TableCell, widths: readonly Emu[] = cols) => {
     let w = 0;
-    for (let x = c.col; x < c.col + c.cols; x++) w += cols[x]!;
-    return w;
+    for (let x = c.col; x < c.col + c.cols; x++) w += widths[x]!;
+    return lenPx(ctx.frame, Math.max(0, w - c.text.insets.l - c.text.insets.r));
   };
-  const textWidth = (c: TableCell) =>
-    lenPx(ctx.frame, Math.max(0, widthOf(c) - c.text.insets.l - c.text.insets.r));
   const loLines: LoLines = opts.afterAutogrow ? 'independent' : 'font';
-  const lo = cells.map((c) => measure.loLayout(c.text, textWidth(c), loLines));
+  const lo = cells.map((c) => measure.loLayout(c.text, textWidth(c, loCols), loLines));
   // LibreOffice's row: the text and its extra 1/100 mm (`Cell::getMinimumHeight`), then the margins.
   const loTall = lo.map(
     (l, i) =>
@@ -298,10 +298,10 @@ export function readTable(
     b.height / ctx.frame.s + cells[i]!.text.insets.t + cells[i]!.text.insets.b;
   const tall = drawn.map(withInsets);
   // As the harness's LibreOffice policy draws the cells: at LibreOffice's sizes (`loSizePt`).
-  const loDrawn = cells.map((c) => measure.layout(c.text, textWidth(c), loSizePt));
+  const loDrawn = cells.map((c) => measure.layout(c.text, textWidth(c, loCols), loSizePt));
   const loTallDrawn = loDrawn.map(withInsets);
   const rows = growRows(stored, cells, tall);
-  const loRows = growRows(stored, cells, loTall);
+  const loRows = loGrowRows(stored, cells, loTall);
   if (measure.missing.size)
     ctx.log(
       `table text measured with estimated widths (no font for ${[...measure.missing]
@@ -312,6 +312,7 @@ export function readTable(
 
   const W = cols.reduce((s, w) => s + w, 0);
   const H = rows.reduce((s, h) => s + h, 0);
+  const loW = loCols.reduce((s, w) => s + w, 0);
   const loH = loRows.reduce((s, h) => s + h, 0);
   // Where LibreOffice's row is shorter than the text as drawn, the text runs into the cell's margins; and
   // its lines sit at the face's ascent, where ordo's office model puts them a size below the line's top.
@@ -348,12 +349,13 @@ export function readTable(
     objects,
     ...(diagonal ? { support: 'approx' as const, reasons: ['tableDiagonal'] } : {}),
     ...(loRows.some((h, r) => h !== rows[r]) ||
+    loCols.some((w, c) => w !== cols[c]) ||
     spill.some((v) => v > 0) ||
     lift.some((v) => v !== 0) ||
     cells.some((c) =>
       c.text.paras.some((p) => p.runs.some((r) => loSizePt(r.style.sizePt) !== r.style.sizePt)),
     )
-      ? { lo: { rows: loRows, xf: place(W, loH), spill, lift, lines: loLines } }
+      ? { lo: { cols: loCols, rows: loRows, xf: place(loW, loH), spill, lift, lines: loLines } }
       : {}),
   };
 }
@@ -373,6 +375,68 @@ function growRows(stored: readonly Emu[], cells: readonly TableCell[], tall: rea
     for (let y = c.row; y < c.row + c.rows; y++) h += rows[y]!;
     if (tall[i]! > h) rows[c.row + c.rows - 1]! += tall[i]! - h;
   });
+  return rows.map((h) => clamp(h, 0, MAX_EMU));
+}
+
+/**
+ * A cell's minimum width as LibreOffice gives it (`Cell::getMinimumWidth`): its left and right text
+ * distances and 1 mm, in 1/100 mm, as EMU.
+ */
+function loMinWidth(c: TableCell): Emu {
+  return (mm100Emu(c.text.insets.l) + mm100Emu(c.text.insets.r) + 100) * EMU_PER_MM100;
+}
+
+/**
+ * Where a merge's minimum (`min`, along columns or rows) is checked, as LibreOffice 24.2's
+ * `TableLayouter` checks it (`LayoutTableWidth`, `LayoutTableHeight`): at its last column or row `end`,
+ * less the ones it spans before that. The subtraction loop, `for (nM = n - span + 1; nM > 0 && nM < n;
+ * ++nM)`, ends at once when the merge starts at the first column or row: such a merge's whole minimum
+ * falls on its last one. `sizes` before `end` are final.
+ */
+function loMergeNeed(min: number, start: number, end: number, sizes: readonly number[]): number {
+  let m = min;
+  for (let k = start; k > 0 && k < end; k++) m -= sizes[k]!;
+  return m;
+}
+
+/**
+ * Column widths as LibreOffice 24.2 lays out an imported table (svx `TableLayouter::LayoutTableWidth`, not
+ * fitted to the frame): every column at least as wide as the widest minimum of its single-column cells
+ * (`loMinWidth`); then, from the second column on, each merge that ends at a column at least its minimum
+ * less the columns it spans before (`loMergeNeed`: nothing is subtracted when it starts at the first
+ * column). The table grows to the right. ordo's own drawing keeps the grid's widths.
+ */
+export function loColumns(cols: readonly Emu[], cells: readonly TableCell[]): Emu[] {
+  const out = [...cols];
+  for (const c of cells) if (c.cols === 1) out[c.col] = Math.max(out[c.col]!, loMinWidth(c));
+  for (let x = 1; x < out.length; x++)
+    for (const c of cells)
+      if (c.cols > 1 && c.col + c.cols - 1 === x)
+        out[x] = Math.max(out[x]!, loMergeNeed(loMinWidth(c), c.col, x, out));
+  return out.map((w) => clamp(w, 0, MAX_EMU));
+}
+
+/**
+ * Row heights as LibreOffice 24.2 lays out an imported table (svx `TableLayouter::LayoutTableHeight`, not
+ * fitted): a row as tall as its stored height (`a:tr h`) or its tallest single-row cell (`tall`, EMU,
+ * margins included); then, from the second row on, each merge that ends at a row at least its need less
+ * the rows it spans before (`loMergeNeed`): a merge from the first row puts its whole height on its last
+ * row, where `growRows` gives the last row only the merge's shortfall over all the rows it spans.
+ */
+export function loGrowRows(
+  stored: readonly Emu[],
+  cells: readonly TableCell[],
+  tall: readonly number[],
+): Emu[] {
+  const rows = [...stored];
+  cells.forEach((c, i) => {
+    if (c.rows === 1) rows[c.row] = Math.max(rows[c.row]!, tall[i]!);
+  });
+  for (let y = 1; y < rows.length; y++)
+    cells.forEach((c, i) => {
+      if (c.rows > 1 && c.row + c.rows - 1 === y)
+        rows[y] = Math.max(rows[y]!, loMergeNeed(tall[i]!, c.row, y, rows));
+    });
   return rows.map((h) => clamp(h, 0, MAX_EMU));
 }
 
@@ -1219,7 +1283,10 @@ export interface TableEmitCtx {
   cellText: (body: TextBody) => RichText | undefined;
   /** The legacy solid colour of a fill (`emit.ts` `legacyColor`). */
   color: (fill: Fill) => OrdoRgba | undefined;
-  /** The harness's LibreOffice policy (`EmitOptions.loCompat`): LibreOffice's rows (`TableElement.lo`). */
+  /**
+   * The harness's LibreOffice policy (`EmitOptions.loCompat`): LibreOffice's columns and rows
+   * (`TableElement.lo`).
+   */
   lo?: boolean;
 }
 
@@ -1250,13 +1317,14 @@ export function emitTable(ctx: TableEmitCtx, e: TableElement, out: SlideObject[]
   }
   const f = ctx.frame;
   const lo = ctx.lo ? e.lo : undefined;
+  const colsOf = lo?.cols ?? e.cols;
   const rowsOf = lo?.rows ?? e.rows;
   const xf = lo?.xf ?? e.xf;
-  const W = e.cols.reduce((s, w) => s + w, 0);
+  const W = colsOf.reduce((s, w) => s + w, 0);
   const H = rowsOf.reduce((s, h) => s + h, 0);
   if (!(W > 0) || !(H > 0)) return [];
   const xs = [0];
-  for (const w of e.cols) xs.push(xs[xs.length - 1]! + w);
+  for (const w of colsOf) xs.push(xs[xs.length - 1]! + w);
   const ys = [0];
   for (const h of rowsOf) ys.push(ys[ys.length - 1]! + h);
   const rect = (r0: number, r1: number, c0: number, c1: number): Box =>
