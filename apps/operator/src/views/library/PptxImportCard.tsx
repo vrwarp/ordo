@@ -6,6 +6,8 @@ import {
   classCounts,
   hiddenCount,
   loStatus,
+  missingLine,
+  missingSummary,
   type NativeImportFallback,
   type NativeImportResult,
   plural,
@@ -41,7 +43,8 @@ export function JobProgress({ value, label }: { value: number; label: string }) 
  * The import card of a native PowerPoint import (design/27 §3.4, §5, §10; M3 item H): how many slides are
  * editable, partly pictures or pictures, what LibreOffice still has to draw, fonts to upload, and what was
  * approximated. Follows the import job, its LibreOffice follow-up and, when the deck went to the picture
- * import instead, that job.
+ * import instead, that job. On a hub without LibreOffice (design/27 M9, `NativeImportResult.libreoffice`)
+ * nothing waits for it: the card names what ordo could not draw instead, and says nothing of LibreOffice.
  */
 export function PptxImportCard({ id, title }: { id: string; title: string }) {
   const job = useJob(id);
@@ -137,6 +140,12 @@ function NativeSummary(props: {
   const lo = loStatus(r.pending, props.lo);
   const approx = props.presentation ? approximatedSlides(props.presentation) : { slides: [], more: 0 };
   const hidden = props.presentation ? hiddenCount(props.presentation) : 0;
+  const noLo = r.libreoffice === false;
+  // What ordo could not draw: from the slides when the presentation is here (it may have changed since).
+  const gaps = props.presentation
+    ? missingSummary(props.presentation)
+    : { slides: r.missing ?? 0, kinds: [] };
+  const missing = missingLine(gaps.slides, gaps.kinds);
   return (
     <div className="col" style={{ gap: 6 }}>
       <div className="row wrap" style={{ gap: 6 }}>
@@ -155,16 +164,29 @@ function NativeSummary(props: {
           ))}
         </ul>
       </div>
-      {r.hybrid > 0 && (
-        <span className="muted small">
-          Partly pictures: what ordo cannot edit (a chart, SmartArt, 3D or WordArt) is a picture drawn by
-          LibreOffice; the rest of the slide is editable.
-        </span>
-      )}
+      {r.hybrid > 0 &&
+        (noLo ? (
+          <span className="muted small">
+            Partly drawn: what ordo cannot draw is left out, and each slide says what; the rest of the slide
+            is editable.
+          </span>
+        ) : (
+          <span className="muted small">
+            Partly pictures: what ordo cannot edit (a chart, SmartArt, 3D or WordArt) is a picture drawn by
+            LibreOffice; the rest of the slide is editable.
+          </span>
+        ))}
       {r.picture > 0 && (
         <span className="muted small">
-          Pictures: ordo could not rebuild these slides, so they show a picture of the PowerPoint slide.
+          {noLo
+            ? 'Not drawn: ordo could not rebuild these slides, so they keep only their text, for search.'
+            : 'Pictures: ordo could not rebuild these slides, so they show a picture of the PowerPoint slide.'}
         </span>
+      )}
+      {missing && (
+        <div className="banner small" role="status" data-missing>
+          {missing}
+        </div>
       )}
       {hidden > 0 && (
         <span className="muted small" data-hidden-count>
@@ -174,8 +196,9 @@ function NativeSummary(props: {
       )}
       {r.compact > 0 && (
         <div className="banner small">
-          {plural(r.compact, 'slide')} became {r.compact === 1 ? 'a picture' : 'pictures'} to keep the
-          presentation small enough to send to every screen.
+          {noLo
+            ? `${plural(r.compact, 'slide')} kept only ${r.compact === 1 ? 'its' : 'their'} text to keep the presentation small enough to send to every screen.`
+            : `${plural(r.compact, 'slide')} became ${r.compact === 1 ? 'a picture' : 'pictures'} to keep the presentation small enough to send to every screen.`}
         </div>
       )}
       {lo && (

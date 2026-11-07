@@ -943,7 +943,7 @@ class NativeImport {
           d.notes.push(`${mf.length} metafile picture(s) wait for LibreOffice`);
         } else {
           d.missing = addMissing(d.missing, 'metafile');
-          d.notes.push(`${mf.length} metafile picture(s) are not drawn: this hub has no LibreOffice`);
+          d.notes.push(`not drawn: ${mf.length} vector picture(s) (EMF, WMF)`);
         }
       }
       if (c && d.cls !== 'picture') {
@@ -975,7 +975,7 @@ class NativeImport {
     if (d.art) {
       const kinds = artKinds(e.classification.reasons);
       for (const k of kinds) d.missing = addMissing(d.missing, k);
-      d.notes.push(`not drawn without LibreOffice: ${kinds.map(missingLabel).join(', ')}`);
+      d.notes.push(`not drawn: ${kinds.map(missingLabel).join(', ')}`);
       delete d.art;
     }
     if (d.missing?.length && d.cls === 'native') d.cls = 'hybrid';

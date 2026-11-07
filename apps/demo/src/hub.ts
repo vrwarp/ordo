@@ -23,6 +23,7 @@ import {
 import { initialState } from '@ordo/live-state';
 import { clearAll, deleteFile, getDoc, getFile, putDoc, putFile } from './store.ts';
 import {
+  type HubCapabilities,
   type Job,
   type LibrarySnapshot,
   SETTINGS_BODY,
@@ -591,6 +592,15 @@ export async function handle(req: Request): Promise<Res> {
     if (path === '/auth/pins') return notInDemo('Changing the PINs');
     if (seg[0] === 'auth') return json({ ok: true });
     if (path === '/health') return json({ ok: true, demo: true, version: VERSION });
+    // design/27 M9: what the server tools allow. The pages demo has none (no LibreOffice, no poppler-utils,
+    // no document import), so the operator hides what it answers 501 for.
+    if (path === '/capabilities')
+      return json({
+        libreoffice: { state: 'absent' },
+        pdf: false,
+        documents: [],
+        pptx: { pictures: false, reference: false, referencePdf: false, art: false },
+      } satisfies HubCapabilities);
 
     // ---- the reset button
     if (path === '/demo/reset' && m === 'POST') {

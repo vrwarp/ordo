@@ -1,6 +1,7 @@
-import { mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, expect, test } from '@playwright/test';
+import pptxgen from 'pptxgenjs';
 import { convertDeck, NativeRenderer } from '../tools/pptx-fidelity/src/native.ts';
 import { hubApi, login } from './linkhelpers.ts';
 import { decodePng } from './png.ts';
@@ -324,4 +325,81 @@ test('an imported PowerPoint deck draws like the harness, shows its text everywh
   } finally {
     hub.kill();
   }
+});
+
+/**
+ * The same import on a hub without LibreOffice (design/27 M9 "LibreOffice optional", `ORDO_LIBREOFFICE=off`):
+ * a deck with a chart over its title goes through the import screen; the card counts the slides, names what
+ * ordo could not draw and says nothing of LibreOffice; no slide waits for it and no follow-up is queued; the
+ * import screen offers no 'Pictures (LibreOffice)'. Port 8397.
+ */
+test.describe('without LibreOffice on the hub (ORDO_LIBREOFFICE=off)', () => {
+  const LITE_PORT = 8397;
+  const LITE_OUT = 'test-results/pptx-native-lite';
+
+  test('imports editable slides, lists what ordo cannot draw and waits for nothing', async ({ page }) => {
+    test.setTimeout(240_000);
+    rmSync(LITE_OUT, { recursive: true, force: true });
+    mkdirSync(LITE_OUT, { recursive: true });
+    const deck = join(LITE_OUT, 'Giving.pptx');
+    const p = new pptxgen();
+    p.layout = 'LAYOUT_WIDE';
+    p.addSlide().addText('Welcome', { x: 0.5, y: 2.5, w: 12.3, h: 2, fontSize: 60, align: 'center' });
+    const s2 = p.addSlide();
+    s2.addText('Giving this year', { x: 0.5, y: 0.4, w: 12.3, h: 1, fontSize: 40 });
+    s2.addChart(p.ChartType.bar, [{ name: 'Gifts', labels: ['Jan', 'Feb', 'Mar'], values: [3, 5, 2] }], {
+      x: 2,
+      y: 1.6,
+      w: 9,
+      h: 5,
+    });
+    writeFileSync(deck, (await p.write({ outputType: 'nodebuffer' })) as Buffer);
+
+    const before = process.env.ORDO_LIBREOFFICE;
+    process.env.ORDO_LIBREOFFICE = 'off';
+    const hub = await pptxHub(LITE_PORT);
+    try {
+      const a = await hubApi(LITE_PORT);
+      const caps = await apiJson<{ libreoffice: { state: string }; pptx: Record<string, boolean> }>(
+        a,
+        'capabilities',
+      );
+      expect(caps.libreoffice.state).toBe('off');
+      expect(caps.pptx).toMatchObject({ pictures: false, reference: false, art: false });
+
+      await login(page, `http://op.localhost:${LITE_PORT}`);
+      await page.evaluate(() => {
+        location.hash = '#/library/import';
+      });
+      await expect(page.getByRole('radio', { name: /Editable \(recommended\)/ })).toBeChecked();
+      await expect(page.getByRole('radio', { name: /Pictures \(LibreOffice\)/ })).toHaveCount(0);
+      // Through the import screen's drop zone, as a volunteer adds it.
+      const card = page.locator('section[data-pptx-import]').filter({ hasText: 'Giving.pptx' });
+      await page.locator('input[type="file"][accept*=".pptx"]').first().setInputFiles(deck);
+      await expect(card.getByText(/^done$/)).toBeVisible({ timeout: 120_000 });
+      await expect(card).toContainText('2 slides:');
+      await expect(card).toContainText('1 partly drawn');
+      await expect(card).toContainText('1 slide has something ordo cannot draw: a chart');
+      // Nothing on the card speaks of LibreOffice (the collapsed lists of notes are not read here).
+      await expect(card).not.toContainText('LibreOffice', { useInnerText: true });
+
+      type Job = { kind: string; state: string; result?: { presentationId: string; pending: number } };
+      const jobs = await apiJson<Job[]>(a, 'jobs');
+      expect(jobs.filter((j) => j.kind === 'pptx-lo')).toHaveLength(0);
+      const native = jobs.find((j) => j.kind === 'pptx-native' && j.state === 'done')!;
+      expect(native.result!.pending).toBe(0);
+      const pres = await apiJson<Presentation>(a, `presentations/${native.result!.presentationId}`);
+      const slides = pres.sections.flatMap((s) => s.slides) as (Slide & {
+        pptx?: { pending?: boolean; missing?: string[] };
+      })[];
+      expect(slides.map((s) => s.pptx?.class)).toEqual(['native', 'hybrid']);
+      expect(slides.every((s) => !s.pptx?.pending)).toBe(true);
+      expect(slides[1]!.pptx?.missing).toEqual(['chart']);
+      expect(slides[1]!.objects.some((o) => o.text === 'Giving this year')).toBe(true);
+    } finally {
+      hub.kill();
+      if (before === undefined) delete process.env.ORDO_LIBREOFFICE;
+      else process.env.ORDO_LIBREOFFICE = before;
+    }
+  });
 });

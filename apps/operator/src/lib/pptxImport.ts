@@ -7,8 +7,15 @@
  * job or a failed one shows less on the card, never breaks it. Deck-derived strings (notes, font names) are
  * only ever rendered as text, and are bounded here once more.
  */
-import type { Presentation, Slide, SlideObject } from '@ordo/domain';
-import type { Job } from '@ordo/protocol';
+import {
+  type MissingKind,
+  missingKinds,
+  missingLabel,
+  type Presentation,
+  type Slide,
+  type SlideObject,
+} from '@ordo/domain';
+import type { HubCapabilities, Job } from '@ordo/protocol';
 import { metricCompatible } from '@ordo/renderer';
 
 // ── The import screen ───────────────────────────────────────────────────────────────────────────────────
@@ -46,19 +53,39 @@ export function writeImportChoice(store: Store | undefined, c: PptxImportChoice)
   }
 }
 
-export const isPptxName = (name: string) => /\.pptx$/i.test(name);
+/** A PowerPoint file the import reads: a deck, a show (.ppsx), a template (.potx), a macro deck (.pptm). */
+export const isPptxName = (name: string) => /\.(pptx|ppsx|potx|pptm)$/i.test(name);
 
 /**
- * The form fields `POST /import/document` gets for one file: only a .pptx carries the PowerPoint choice
- * (`renderer`; `extendBackgrounds` for the native import). A PDF is always pictures.
+ * Whether the 'Pictures (LibreOffice)' choice applies: the hub has LibreOffice (design/27 M9). Unknown (no
+ * answer yet): the choice is sent as made, and a hub without it says so.
  */
-export function documentFields(fileName: string, c: PptxImportChoice): [string, string][] {
+export function picturesOffered(caps: HubCapabilities | undefined): boolean {
+  return caps ? caps.pptx.pictures : true;
+}
+
+/**
+ * The form fields `POST /import/document` gets for one file: only a PowerPoint carries the PowerPoint choice
+ * (`renderer`; `extendBackgrounds` for the native import). A PDF is always pictures. A stored 'Pictures
+ * (LibreOffice)' choice on a hub without LibreOffice imports as editable slides (the screen says so).
+ */
+export function documentFields(
+  fileName: string,
+  c: PptxImportChoice,
+  caps?: HubCapabilities,
+): [string, string][] {
   if (!isPptxName(fileName)) return [];
-  if (c.mode === 'libreoffice') return [['renderer', 'libreoffice']];
+  if (c.mode === 'libreoffice' && picturesOffered(caps)) return [['renderer', 'libreoffice']];
   return [
     ['renderer', 'native'],
     ['extendBackgrounds', c.extendBackgrounds ? '1' : '0'],
   ];
+}
+
+/** The files the import screen's drop zone takes: what the hub accepts (`HubCapabilities.documents`). */
+export function documentAccept(caps: HubCapabilities | undefined): string {
+  const exts = caps?.documents.filter((d) => /^[a-z0-9]{1,8}$/.test(d)) ?? ['pptx', 'pdf'];
+  return exts.map((d) => `.${d}`).join(',');
 }
 
 // ── The import jobs list ────────────────────────────────────────────────────────────────────────────────
@@ -103,6 +130,10 @@ export type NativeImportResult = {
   loJobId?: string;
   missingFonts: string[];
   notes: string[];
+  /** M9: slides with something ordo cannot draw (`Slide.pptx.missing`); absent from an older hub. */
+  missing?: number;
+  /** M9: whether the hub had LibreOffice; undefined from an older hub (which always had it). */
+  libreoffice?: boolean;
 };
 /** The `pptx-native` result when the deck went to the picture import instead (the CPU pool could not start). */
 export type NativeImportFallback = { jobId: string; reason: string };
@@ -145,6 +176,8 @@ export function readNativeResult(result: unknown): NativeImportResult | undefine
     ...(loJobId ? { loJobId } : {}),
     missingFonts: texts(result.missingFonts, MAX_FONTS, 100),
     notes: texts(result.notes, MAX_NOTES, 300),
+    ...(result.missing !== undefined ? { missing: count(result.missing) } : {}),
+    ...(typeof result.libreoffice === 'boolean' ? { libreoffice: result.libreoffice } : {}),
   };
 }
 
@@ -161,14 +194,22 @@ export type ClassCount = { cls: SlideClass; count: number; text: string; tone: '
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** The per-class counts the card shows (native, hybrid, picture), as text: '15 editable', '1 partly a picture'. */
-export function classCounts(r: Pick<NativeImportResult, SlideClass>): ClassCount[] {
+/**
+ * The per-class counts the card shows (native, hybrid, picture), as text: '15 editable', '1 partly a picture'.
+ * An import without LibreOffice (`libreoffice: false`) has no art: its hybrid slides are 'partly drawn'.
+ */
+export function classCounts(
+  r: Pick<NativeImportResult, SlideClass> & { libreoffice?: boolean },
+): ClassCount[] {
   return [
     { cls: 'native', count: r.native, text: `${r.native} editable`, tone: 'green' },
     {
       cls: 'hybrid',
       count: r.hybrid,
-      text: plural(r.hybrid, 'partly a picture', 'partly pictures'),
+      text:
+        r.libreoffice === false
+          ? `${r.hybrid} partly drawn`
+          : plural(r.hybrid, 'partly a picture', 'partly pictures'),
       tone: 'amber',
     },
     { cls: 'picture', count: r.picture, text: plural(r.picture, 'picture'), tone: 'red' },
@@ -247,14 +288,69 @@ export function loStatus(
   };
 }
 
+// ── What nothing draws (design/27 M9) ───────────────────────────────────────────────────────────────────
+
+/** The kinds a slide lists as not drawn (`Slide.pptx.missing`), read defensively. */
+export function slideMissing(slide: Pick<Slide, 'pptx'>): MissingKind[] {
+  return missingKinds(slide.pptx?.missing);
+}
+
+/** 'Not drawn: a chart, a vector picture', or undefined when nothing is missing. */
+export function missingText(kinds: readonly MissingKind[]): string | undefined {
+  if (!kinds.length) return undefined;
+  return `Not drawn: ${kinds.map(missingLabel).join(', ')}.`;
+}
+
+/**
+ * The slides of a presentation with something nothing draws, and the kinds over all of them (first seen
+ * first): what the import card names.
+ */
+export function missingSummary(p: Pick<Presentation, 'sections'>): { slides: number; kinds: MissingKind[] } {
+  let slides = 0;
+  const kinds: MissingKind[] = [];
+  for (const sec of p.sections)
+    for (const sl of sec.slides) {
+      const k = slideMissing(sl);
+      if (!k.length) continue;
+      slides++;
+      for (const x of k) if (!kinds.includes(x)) kinds.push(x);
+    }
+  return { slides, kinds };
+}
+
+/** The import card's line about what ordo could not draw, or undefined when nothing is missing. */
+export function missingLine(count: number, kinds: readonly MissingKind[] = []): string | undefined {
+  if (!count) return undefined;
+  const what = kinds.length ? `: ${kinds.map(missingLabel).join(', ')}` : '';
+  return `${plural(count, 'slide')} ${count === 1 ? 'has' : 'have'} something ordo cannot draw${what}. It is left out; open ${count === 1 ? 'it' : 'them'} in the editor to see what.`;
+}
+
 // ── The editor's PowerPoint card ────────────────────────────────────────────────────────────────────────
 
-/** What the card says about a slide's class (design/27 §5). */
-export function slideClassText(cls: SlideClass): {
+/**
+ * What the card says about a slide's class (design/27 §5). `missing`: the slide lists what nothing draws
+ * (M9, a hub without LibreOffice): a hybrid slide then has no picture of its own.
+ */
+export function slideClassText(
+  cls: SlideClass,
+  missing = false,
+): {
   label: string;
   tone: 'green' | 'amber' | 'red';
   text: string;
 } {
+  if (cls === 'hybrid' && missing)
+    return {
+      label: 'Partly drawn',
+      tone: 'amber',
+      text: 'ordo draws everything on this slide but what is listed below, which is left out. Everything it draws is editable.',
+    };
+  if (cls === 'picture' && missing)
+    return {
+      label: 'Not drawn',
+      tone: 'red',
+      text: 'ordo could not rebuild this slide, and this hub has no LibreOffice to draw it: only its text is kept, for search.',
+    };
   if (cls === 'hybrid')
     return {
       label: 'Partly a picture',
@@ -281,10 +377,20 @@ export function originalMediaId(slide: Pick<Slide, 'pptx'>): string | undefined 
 
 /**
  * Whether LibreOffice can draw this slide's original: the reference job draws the deck's shown slides only
- * (a hidden slide has no page).
+ * (a hidden slide has no page), and only on a hub with LibreOffice (design/27 M9; unknown: assumed).
  */
-export function canDrawOriginal(slide: Pick<Slide, 'pptx' | 'hidden'>): boolean {
-  return !!slide.pptx && slide.pptx.shown !== undefined && !slide.hidden;
+export function canDrawOriginal(slide: Pick<Slide, 'pptx' | 'hidden'>, caps?: HubCapabilities): boolean {
+  return (
+    !!slide.pptx && slide.pptx.shown !== undefined && !slide.hidden && (caps ? caps.pptx.reference : true)
+  );
+}
+
+/**
+ * Whether the card offers 'Add PowerPoint's pictures (PDF)…' instead: no picture yet, no LibreOffice to draw
+ * one, and the hub can read PowerPoint's PDF export (poppler-utils).
+ */
+export function offersReferencePdf(slide: Pick<Slide, 'pptx'>, caps: HubCapabilities | undefined): boolean {
+  return !!slide.pptx && !originalMediaId(slide) && !!caps && !caps.pptx.reference && caps.pptx.referencePdf;
 }
 
 /** Whether a slide is set to show its PowerPoint picture instead of its objects (`Slide.pptx.show`). */
@@ -396,6 +502,8 @@ export type ImportReport = {
   /** PowerPoint slides waiting for LibreOffice, and those it could not draw. */
   pending: number;
   failed: number;
+  /** M9: slides with something nothing draws (`Slide.pptx.missing`). */
+  missing: number;
   hidden: number;
   /** Slides edited since the import (their objects no longer match the digest). */
   edited: number;
@@ -417,6 +525,7 @@ export function importReport(p: Pick<Presentation, 'source' | 'sections'>): Impo
   let pages = 0;
   let pending = 0;
   let failed = 0;
+  let missing = 0;
   let hidden = 0;
   let edited = 0;
   for (const sec of p.sections)
@@ -425,6 +534,7 @@ export function importReport(p: Pick<Presentation, 'source' | 'sections'>): Impo
       if (sl.imported && !sl.pptx) pages++;
       if (sl.pptx?.pending) pending++;
       if (sl.pptx?.failed) failed++;
+      if (slideMissing(sl).length) missing++;
       if (sl.pptx && slideEdited(sl)) edited++;
     }
   const all = (src.log ?? '').split('\n').filter((l) => l.trim());
@@ -445,6 +555,7 @@ export function importReport(p: Pick<Presentation, 'source' | 'sections'>): Impo
     pages,
     pending,
     failed,
+    missing,
     hidden,
     edited,
     ...(src.renderer ? { renderer: src.renderer } : {}),

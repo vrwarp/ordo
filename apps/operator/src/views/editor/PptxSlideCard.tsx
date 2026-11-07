@@ -1,13 +1,18 @@
 import type { Presentation, Slide } from '@ordo/domain';
+import type { HubCapabilities } from '@ordo/protocol';
 import { confirmDialog } from '../../components/Confirm.tsx';
 import { Check } from '../../components/fields.tsx';
+import { useHubCaps } from '../../lib/hubCaps.ts';
 import {
   canDrawOriginal,
   missingSlideFonts,
+  missingText,
+  offersReferencePdf,
   originalMediaId,
   showsPicture,
   slideClassText,
   slideEdited,
+  slideMissing,
 } from '../../lib/pptxImport.ts';
 import { useLibrary } from '../../state/library.ts';
 import { setSlideShows } from './actions.ts';
@@ -16,6 +21,7 @@ import {
   type ReferenceJob,
   referenceRunning,
   requestOriginals,
+  requestOriginalsPdf,
   setShowOriginal,
   useOriginal,
 } from './original.ts';
@@ -29,8 +35,13 @@ import { type ReimportRun, reimportRunning, startReimport, useReimport } from '.
  * (`Slide.pptx.show`; it warns when the slide was edited, since the picture does not show edits, and asks
  * LibreOffice for the pictures when there are none yet) and 'Reset slide from PowerPoint' (a re-import of
  * this slide, `reset`).
+ *
+ * Design/27 M9: what nothing draws on the slide ('Not drawn: a chart', `Slide.pptx.missing`); on a hub
+ * without LibreOffice (`useHubCaps`) 'Show original' needs a picture the slide already has, and the card offers
+ * 'Add PowerPoint's pictures (PDF)…' instead of asking LibreOffice.
  */
 export function PptxSlideCard({ slide, p, readOnly }: { slide: Slide; p: Presentation; readOnly: boolean }) {
+  const caps = useHubCaps();
   const on = useOriginal((s) => !!s.on[p.id]);
   const job = useOriginal((s) => s.jobs[p.id]);
   const dirty = useEditor((s) => s.dirty);
@@ -96,6 +107,8 @@ export function PptxSlideCard({ slide, p, readOnly }: { slide: Slide; p: Present
         fonts.map((f) => f.family),
       )}
       reimport={run}
+      caps={caps}
+      onAddPdf={(file) => void requestOriginalsPdf(p, file)}
       onToggle={(next) => void toggle(next)}
       onShowPicture={() => void onScreens()}
       onShowObjects={() => !readOnly && setSlideShows(slide.id, 'objects')}
@@ -117,6 +130,10 @@ export function PptxSlideCardView(props: {
   missingFonts?: readonly string[];
   /** The presentation's re-import followed in this visit (a 'Reset slide' of this slide shows here). */
   reimport?: ReimportRun;
+  /** What the hub's tools allow (design/27 M9); undefined: not known yet (LibreOffice assumed). */
+  caps?: HubCapabilities;
+  /** 'Add PowerPoint's pictures (PDF)…': the PDF chosen. */
+  onAddPdf?(file: File): void;
   onToggle(on: boolean): void;
   onShowObjects(): void;
   onShowPicture?(): void;
@@ -125,22 +142,32 @@ export function PptxSlideCardView(props: {
   const { slide, job, edited = false, reimport } = props;
   const pptx = slide.pptx;
   if (!pptx) return null;
-  const cls = slideClassText(pptx.class);
+  const gaps = slideMissing(slide);
+  const cls = slideClassText(pptx.class, gaps.length > 0);
+  const notDrawn = missingText(gaps);
   const notes = (pptx.notes ?? []).filter((n) => n.trim());
   const fonts = props.missingFonts ?? [];
   const has = !!originalMediaId(slide);
   const running = referenceRunning(job);
-  const drawable = canDrawOriginal(slide);
+  const drawable = canDrawOriginal(slide, props.caps);
+  const pdf = offersReferencePdf(slide, props.caps) && !!props.onAddPdf;
   // Showing a picture that exists never writes; drawing the pictures saves a revision, so not while live.
   const disabled = !has && !running && (!drawable || props.readOnly);
   let hint: string;
   if (running)
-    hint = `LibreOffice is drawing the PowerPoint pictures (${Math.round((job?.progress ?? 0) * 100)}%).`;
+    hint =
+      props.caps && !props.caps.pptx.reference
+        ? `The PowerPoint pictures are made from the PDF (${Math.round((job?.progress ?? 0) * 100)}%).`
+        : `LibreOffice is drawing the PowerPoint pictures (${Math.round((job?.progress ?? 0) * 100)}%).`;
   else if (has)
     hint = props.on
       ? 'The canvas shows the PowerPoint slide as LibreOffice draws it. The screens still show the slide as rebuilt.'
       : 'Compare this slide with the PowerPoint slide.';
-  else if (!drawable) hint = 'A hidden slide has no PowerPoint picture to compare with.';
+  else if (!canDrawOriginal(slide)) hint = 'A hidden slide has no PowerPoint picture to compare with.';
+  else if (!drawable)
+    hint = pdf
+      ? 'Export the deck as PDF from PowerPoint to compare with the original.'
+      : 'This hub has no LibreOffice to draw the PowerPoint pictures.';
   else if (props.readOnly) hint = 'The PowerPoint pictures can be drawn after the service.';
   else hint = 'LibreOffice first draws every slide of the presentation as PowerPoint shows it.';
   const resetting = !!reimport && reimportRunning(reimport) && reimport.slideId === slide.id;
@@ -165,6 +192,11 @@ export function PptxSlideCardView(props: {
         </span>
       </div>
       <span className="muted">{cls.text}</span>
+      {notDrawn && (
+        <span data-missing>
+          <b>{notDrawn}</b>
+        </span>
+      )}
       {edited && (
         <span className="muted" data-edited>
           Edited in ordo since the import.
@@ -216,9 +248,28 @@ export function PptxSlideCardView(props: {
           </span>
         </div>
       )}
+      {pdf && (
+        <label className={`btn small${props.readOnly || running ? ' disabled' : ''}`} data-reference-pdf>
+          Add PowerPoint's pictures (PDF)…
+          <input
+            type="file"
+            accept=".pdf,application/pdf"
+            hidden
+            disabled={props.readOnly || running}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (f) props.onAddPdf?.(f);
+            }}
+          />
+        </label>
+      )}
       {job?.state === 'failed' && (
         <div className="banner red small" role="alert">
-          LibreOffice could not draw the PowerPoint pictures{job.error ? `: ${job.error}` : '.'}
+          {props.caps && !props.caps.pptx.reference
+            ? "The PDF's pages could not be used as the PowerPoint pictures"
+            : 'LibreOffice could not draw the PowerPoint pictures'}
+          {job.error ? `: ${job.error}` : '.'}
         </div>
       )}
       {canShowPicture && (

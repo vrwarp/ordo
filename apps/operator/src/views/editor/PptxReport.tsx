@@ -21,7 +21,8 @@ import { type ReimportRun, reimportRunning, startReimport, useReimport } from '.
 
 /**
  * The Presentation panel's PowerPoint report (design/27 §11 item 12, §15 M4; M4 item F): what the import
- * made of the deck (`source.native` counts, legacy picture pages), what waits for LibreOffice or failed, the
+ * made of the deck (`source.native` counts, legacy picture pages), what waits for LibreOffice or failed, what
+ * nothing draws (design/27 M9, `Slide.pptx.missing`: a hub without LibreOffice lists it instead), the
  * fonts the hub lacks, the slides it approximated (each opens its slide), the import log (`source.log`), and
  * 'Re-import from PowerPoint…' with its dialog (the plan, made-editable slides each with 'Keep as it is').
  * Only for a presentation imported from PowerPoint.
@@ -129,6 +130,12 @@ export function PptxReportView(props: {
       {r.pending > 0 && (
         <div className="banner small" role="status">
           LibreOffice is still drawing part of {plural(r.pending, 'slide')}.
+        </div>
+      )}
+      {r.missing > 0 && (
+        <div className="banner small" data-missing>
+          {plural(r.missing, 'slide')} {r.missing === 1 ? 'has' : 'have'} something ordo cannot draw: it is
+          left out, and each slide's PowerPoint card says what.
         </div>
       )}
       {r.failed > 0 && (
