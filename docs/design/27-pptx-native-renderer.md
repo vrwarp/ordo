@@ -1663,6 +1663,16 @@ Also:
   - Raster p95 at 3840 on the evidence decks 34.8 → 44.0 ms (the decorations are drawn now); converting the silhouette template takes 7 % longer.
 - **Not solved: the slide JSON budget.** The converter does not count path text against §3.4's 64 KB (only text formatting), and the hub's `planImportSizes` makes a slide over it a compact LibreOffice picture. A traced decoration is 100-140 KB of path text on its own, and a layout repeats it on every slide that shows it: these slides are native in the converter and compact pictures in the hub (the first template's slides were over 64 KB before this round too; the silhouette template's were 26-65 KB as hybrid slides and are 160-1,000 KB now).
 
+*As merged after round 1 (the budget split, the table rows, the traced outlines and turned group children, and `anchorCtr` on one branch):*
+- **Between the items.** Shapes merged into one object past the budget keep a traced outline's chain: the merged paths carry `cont` on a chain's later pieces, so the renderer joins them into the one path they were cut from, and a piece counts as open only where the chain is open, not where it was cut.
+- **Exit, measured** (`--engine native --lo-compat` against LibreOffice 24.2 pictures, per slide; the merged wave's numbers above, then this round's):
+  - Presets: 186 of 187 at SSIM ≥ 0.95 (mean 0.9959); funnel 0.928 is listed. Met.
+  - T1-T3: 2,187 of the 2,220 T1-T3 slides of shards 0-2 are native (95.5 % → 98.5 %; census, 81.8 % of the 2,713 shown worship slides). The 33 left: 27 T3 slides hybrid with `art:budget:shapes`, and 6 picture class for 64 KB of text formatting or 12 pictures. No slide is hybrid for `anchorCtr` (14 before). Counting the hub's 64 KB slide budget, which these slides' path text can pass (above), 2,117 stay native there (94.6 % → 95.4 %). Not all native.
+  - T3 0.908 → 0.918 (493 slides; M2 wave 2's last round 0.842); on the 418 with corrected pptx-preview scores 0.924 against pptx-preview's 0.760. Met. T1 0.947 and T2 0.889 do not move (0.940 and 0.880 in M2 wave 2's round): no regression. All 1,822 slides 0.900 → 0.904 (72 up, 6 down; the 5 down by more than 0.02 are picture-class slides that are now hybrid, or picture class with their shapes in the art, for the object budget, whose art the harness does not draw). The sermon decks stay 0.955 (pptx-preview 0.927).
+  - Tables: the 30 worship decks with tables 0.612 → 0.749, tableMerge (14) 0.432 → 0.627 (pptx-preview 0.51 and 0.36); with ordo's own rows (the hub's) 0.609 → 0.617 and 0.432 → 0.449. Not met. The suite's tables-charts-smartart decks: tables (20) 0.952 → 0.956, tableMerge (5) 0.950 → 0.951.
+  - Objects: no slide over 150 objects is native or picture class (44 picture-class slides before); the most a native slide has is 149. Two hybrid slides draw 171 and 225 objects in version 1 (their 3D and warped residuals are drawn approx until the art comes). Met.
+  - Fuzz: chains are fuzzed too (cut anywhere, drawn as the one path; 8 full pieces bounded). Met.
+
 ### M7: 4K performance pass and per-element art (about 2 weeks)
 
 **Scope.**
