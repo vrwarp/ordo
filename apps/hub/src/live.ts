@@ -65,6 +65,7 @@ export function librarySource(lib: Library): LiveSource {
         playlist,
         presentation: (id) => lib.presentations.get(id),
         media: (id) => lib.media.get(id),
+        file: (hash) => lib.getFile(hash),
         fonts: () => lib.listFonts(),
         looks: s.looks,
         general: s.general,

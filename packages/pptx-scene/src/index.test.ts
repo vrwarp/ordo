@@ -229,7 +229,13 @@ describe('convertDeck (the hub pool task entry, M3)', () => {
       const two = emitSlides(parseDeck(parts), opts);
       const strip = (r: typeof two) => ({ ...r, slides: r.slides.map(({ ms: _, ...s }) => s) });
       expect(
-        strip({ slides: one.slides, media: one.media, slideRect: one.slideRect, notes: one.notes }),
+        strip({
+          slides: one.slides,
+          media: one.media,
+          slideRect: one.slideRect,
+          notes: one.notes,
+          geoms: one.geoms,
+        }),
       ).toEqual(strip(two));
     }
     expect(convertDeck(parts).media.map((m) => [m.id, m.part.split('/').pop()])).toEqual([

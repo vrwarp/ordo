@@ -25,8 +25,11 @@ POST /import/document  (423 while live, ≤ 1 GiB, zip + .pptx sniff, stored by 
        parts copied), 2 min per batch, ≤ 15 min of pool time per import                                        [B, A]
        clip parts (SceneScan.clips, ≤ 50) spilled after the pictures, sniffed: the batches get their kinds      [w2 A]
        the library's font files listed (faces.ts, ≤ 2,000): a batch reads one when a table row is measured    [M6]
+     2b geometry files (geoms.ts): each batch's pptxgeom placeholders named by the file's SHA-256           [M6 r2]
      3 classification and size budgets (@ordo/domain planImportSizes): over budget → picture class (logged)    [B]
-     3b clips ─► clipForFile (hash + trim, trims baked), media job not queued yet; placeholders replaced     [w2 A]
+       a slide whose new geometry files pass PPTX_LIMITS.geomFileBytes (32 MB an import) is compact too       [M6 r2]
+     3b geometry files the kept slides name ─► store.putBytes (application/json), once each                [M6 r2]
+     3c clips ─► clipForFile (hash + trim, trims baked), media job not queued yet; placeholders replaced     [w2 A]
      4 any hybrid/picture/metafile slide: enqueue heavy 'pptx-lo' now, before any clip job                     [B]
      5 pictures ─► preparePicture ─► addReadyPicture; dedup through the media hash index; resume pairs        [C]
      6 remap placeholders, Slide.pptx/hidden/transition/notes, sections, sanitize, save ── version 1;
@@ -39,7 +42,8 @@ POST /import/document  (423 while live, ≤ 1 GiB, zip + .pptx sniff, stored by 
  PUT /presentations/:id or a restored revision with slides pending again ─► queueFollowUp (fallback.ts)
  heavy job 'pptx-reference' ('Show PowerPoint picture': every slide, hidden ones too, into Slide.pptx.refMediaId)          [D]
  light job 'pptx-text-repair' (legacy imported.textBoxes, once)                                                [G]
- goLive ─► resolvePlaylist: bundled and script-fallback fonts, CJK faces by text scan [E]; > 12 MiB warning [F]
+ goLive ─► resolvePlaylist: bundled and script-fallback fonts, CJK faces by text scan [E]; > 12 MiB warning [F];
+           the geometry files the slides draw in the manifest and `geoms` (the bundle's `files`)             [M6 r2]
  operator: ImportTab and import card [H]; previewSlice and the adopt check [F]; MediaTab and gated text [G]
 ```
 
@@ -68,6 +72,7 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 | `renderCopyTask.ts` | Worker side of `pptx-render-copy`: `buildRenderCopy` + spilled media → .pptx               | D      |
 | `art.ts`            | Worker side of `pptx-art`: white/black alpha and bounding-box crop                         | D      |
 | `bakes.ts`          | `storeBakes`: recoloured pictures and tiled fills baked into new ready pictures (M6)       | M6b D  |
+| `geoms.ts`          | Geometry files: `geomFileOf` (named by SHA-256), `nameGeoms`, `storeGeomFiles` (M6 r2)     | M6b r2 |
 | `bakeTask.ts`       | Worker side of `pptx-bake`: `@ordo/pptx-scene` `applyBake`, PNG encoding (M6)              | M6b D  |
 | `textRepair.ts`     | `pptx-text-repair` job, `pagesOf`, `readDeckText`, `slideBoxes`, `queueTextRepair`         | G      |
 | `reimport.ts`       | 'Re-import from PowerPoint' (M4, not this wave)                                            | M4     |
@@ -587,6 +592,33 @@ pictures and tiled picture fills come out of the converter as placeholders `pptx
   a tiled shape fill of a generated checker, a grayscale JPEG and a SmartArt node filled with it, through the
   real job: pixels, sizes, JPEG kept, one item per part and recipe, a re-import storing nothing new; an
   animated WebP that is not baked shows its first frame with the warning).
+
+## M6 wave 2, round 2: geometry files (m6b/r2-path-text-slide-budget)
+
+A traced decoration (worship templates made in Google Slides: one outline of 4,200-8,300 points, 100-150 KB of
+path text, on several objects of a slide at different sizes and on every slide of a layout) made slides of
+140 KB-1 MB that `planImportSizes` turned into compact LibreOffice pictures, while the converter, counting only
+text toward 64 KB, called them native. The converter now writes such paths once as a geometry file
+(`ShapeGeom.ref`, placeholder `pptxgeom:<n>`, `EmitResult.geoms`; `@ordo/pptx-scene` README) and measures the
+slide as this job stores it. The job (`geoms.ts`):
+- **Names** each batch's files by the SHA-256 of their JSON (`GeomFile`, its paths re-tokenised by
+  `sanitizeGeom` and checked by the schema) right after the batch, before the budgets: a placeholder whose file
+  is not usable loses its ref (the shape draws its legacy form). One outline in two batches, two decks or two
+  imports is one name.
+- **Budgets** them: a slide whose new files pass `PPTX_LIMITS.geomFileBytes` (32 MB an import; the largest
+  worship deck needs 0.6 MB) is a compact picture like an oversized one ('over the import budget of shape
+  outlines'), so a hostile deck cannot fill the store through files instead of slides.
+- **Stores** the files the kept slides name (`storeGeomFiles`, step 3b): `store.putBytes`, `application/json`,
+  skipped when the store has one; a failure warns once and leaves those shapes drawing their legacy form.
+  The store keeps a file while a stored presentation names it (`fileReferenced` scans presentations' JSON),
+  and backups list it with every file row.
+- **goLive**: the library's bundle carries the files the presentations name (`libproc.ts` `geomRefsIn`,
+  `GoLiveBundle.files`, `GoLiveInputs.file`); `resolvePlaylist` puts them in the manifest (outputs cache them
+  with the pictures) and in `ResolvedPlaylist.geoms` (the live process serves them while the library is down,
+  `liveFiles`), and notes a slide whose file the library lacks (`degraded`: drawn as plain shapes).
+- Tests: `apps/hub/test/pptx-geoms.test.ts` (naming, renaming, storing once, a deck with three outlines on two
+  slides through the real job: one file each, the slides native and under 16 KB, the manifest and the live
+  process; the same deck again storing nothing new; the import budget).
 
 ## Not in this wave
 

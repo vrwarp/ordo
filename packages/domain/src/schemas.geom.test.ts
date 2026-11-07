@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { geomSlide } from './geom.test-util.ts';
-import { Gradient, ImageObject, ShapeGeom, ShapeObject, Slide, TextStyle } from './schemas.ts';
+import {
+  GEOM_FILE_MAX_BYTES,
+  GeomFile,
+  Gradient,
+  ImageObject,
+  isGeomFileRef,
+  ShapeGeom,
+  ShapeObject,
+  Slide,
+  TextStyle,
+} from './schemas.ts';
 import * as prev from './schemas.prev.test-util.ts';
 
 /**
@@ -81,5 +91,39 @@ describe('M6 shape, picture and gradient text fields', () => {
     expect(ImageObject.safeParse({ ...photo, mask: { paths: Array(9).fill(path) } }).success).toBe(false);
     const star = geomSlide().objects[0] as ShapeObject;
     expect(ShapeObject.safeParse({ ...star, softEdge: -1 }).success).toBe(false);
+  });
+});
+
+describe('geometry files (ShapeGeom.ref, GeomFile; M6 round 2)', () => {
+  const ref = 'e'.repeat(64);
+  const path = { d: 'M 0 0 L 1 1', w: 1, h: 1 };
+
+  it('keeps a ref beside or instead of paths; a ref that is not a string of 1-100 characters is dropped', () => {
+    expect(ShapeGeom.parse({ ref })).toEqual({ ref });
+    expect(ShapeGeom.parse({ ref, paths: [path] })).toEqual({ ref, paths: [path] });
+    for (const bad of [7, '', 'x'.repeat(101), null]) expect(ShapeGeom.parse({ ref: bad })).toEqual({});
+    const star = geomSlide().objects[0] as ShapeObject;
+    expect(ShapeObject.parse({ ...star, geom: { ref } }).geom).toEqual({ ref });
+  });
+
+  it('the previous release strips the ref (its shape draws the legacy one)', () => {
+    const star = geomSlide().objects[0] as ShapeObject;
+    const old = prev.Slide.parse({ id: 's', objects: [{ ...star, geom: { ref } }] });
+    expect(old.objects[0]).not.toHaveProperty('geom');
+    expect(old.objects[0]).toMatchObject({ shape: 'rect' });
+  });
+
+  it('a file holds 1-8 paths bounded as inline paths are', () => {
+    expect(GeomFile.parse({ paths: [path] })).toEqual({ paths: [path] });
+    expect(GeomFile.safeParse({ paths: [] }).success).toBe(false);
+    expect(GeomFile.safeParse({ paths: Array(9).fill(path) }).success).toBe(false);
+    expect(GeomFile.safeParse({ paths: [{ ...path, d: 'M'.repeat(40_001) }] }).success).toBe(false);
+    expect(GEOM_FILE_MAX_BYTES).toBeGreaterThan(8 * 40_000);
+  });
+
+  it('names a file by a SHA-256 in hex', () => {
+    expect(isGeomFileRef(ref)).toBe(true);
+    for (const bad of ['E'.repeat(64), 'e'.repeat(63), 'pptxgeom:1', `${'e'.repeat(63)}g`, 64])
+      expect(isGeomFileRef(bad)).toBe(false);
   });
 });

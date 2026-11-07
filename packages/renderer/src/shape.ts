@@ -8,7 +8,7 @@ import { drawGeom, type GeomFill, type GeomStroke, geomFillPath2D, geomPath2D } 
 import { ARROW_MIN_BASE, arrowFor, arrowReach, type GeomEnds } from './geom/ends.ts';
 import { gradientStyle } from './geom/paint.ts';
 import type { BuiltGeom } from './geom/path.ts';
-import { legacyGeometry, storedGeometry } from './geom/stored.ts';
+import { geomPending, legacyGeometry, storedGeometry } from './geom/stored.ts';
 
 /*
  * PowerPoint shapes (design/27 §3.1 ShapeObject M6 fields, §7.1, §15 M6): a shape with any of `geom`,
@@ -84,11 +84,12 @@ type Plan = {
   bounds: Bounds;
 };
 
-const plans = new WeakMap<ShapeObject, { ctx: Ctx2D; plan: Plan }>();
+/** Plans per shape and context; one made while its geometry file was not read is made again once it is. */
+const plans = new WeakMap<ShapeObject, { ctx: Ctx2D; plan: Plan; pending: boolean }>();
 
 function planOf(ctx: Ctx2D, o: ShapeObject): Plan {
   const hit = plans.get(o);
-  if (hit && hit.ctx === ctx) return hit.plan;
+  if (hit && hit.ctx === ctx && !(hit.pending && !geomPending(o.geom))) return hit.plan;
   const built = shapeGeometry(o);
   const line = o.shape === 'line' && !o.geom;
   const g = o.gradient;
@@ -134,7 +135,7 @@ function planOf(ctx: Ctx2D, o: ShapeObject): Plan {
   bounds.x1 += grow;
   bounds.y1 += grow;
   const plan = { built, fill, stroke, bounds };
-  plans.set(o, { ctx, plan });
+  plans.set(o, { ctx, plan, pending: geomPending(o.geom) });
   return plan;
 }
 
@@ -233,7 +234,8 @@ export function drawGeomShape(ctx: Ctx2D, raw: ShapeObject, scale: number): void
         shadow: o.shadow,
         glow: o.glow,
         softEdge: o.softEdge,
-        key: effectKey(o),
+        // A shape still waiting for its geometry file is not cached under the key it will draw with.
+        key: geomPending(o.geom) ? undefined : effectKey(o),
       },
       opacity,
     );

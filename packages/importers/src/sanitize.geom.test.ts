@@ -94,6 +94,20 @@ describe('sanitizePresentation and the M6 fields', () => {
     expect(g.paths![2]).not.toHaveProperty('cont');
   });
 
+  it('keeps a geometry file ref (M6 round 2), alone or beside paths, unless it is not a printable string', () => {
+    const ref = 'a'.repeat(64);
+    expect(sanitizeGeom({ ref })).toEqual({ ref });
+    expect(sanitizeGeom({ ref, paths: [{ d: 'M 0 0 L 1 1', w: 1, h: 1 }] })).toEqual({
+      ref,
+      paths: [{ d: 'M 0 0 L 1 1', w: 1, h: 1 }],
+    });
+    for (const bad of ['', 'x'.repeat(101), 'a\u0007b', 5 as never])
+      expect(sanitizeGeom({ ref: bad })).toBeUndefined();
+    const p = deck(geomSlide());
+    (objects(p)[2] as Record<string, unknown>).mask = { ref };
+    expect(objects(sanitizePresentation(p))[2]).toHaveProperty('mask', { ref });
+  });
+
   it('drops a geometry, gradient or mask with nothing usable left', () => {
     expect(sanitizeGeom({ paths: [{ d: 'garbage', w: 1, h: 1 }] })).toBeUndefined();
     expect(sanitizeGradient({ kind: 'linear', stops: [{ at: 0, color: white }] } as never)).toBeUndefined();

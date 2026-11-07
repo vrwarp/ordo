@@ -218,8 +218,9 @@ export function sanitizeGradient(g: Gradient): Gradient | undefined {
 /**
  * A stored geometry within the schema's bounds (design/27 §3.1, §12): the preset name cut to 40, at most 10
  * finite adjust pairs, at most 8 paths, each re-tokenised to M L Q C Z and numbers (`cleanPathData`, at most
- * 4,096 points) and dropped when nothing is left of it, `cont` kept only when true. Undefined when neither a
- * preset nor a path is left.
+ * 4,096 points) and dropped when nothing is left of it, `cont` kept only when true, `ref` (a geometry file,
+ * M6 round 2) kept when it is a string of 1-100 characters without control characters. Undefined when
+ * neither a preset, a path nor a ref is left.
  */
 export function sanitizeGeom(g: ShapeGeom): ShapeGeom | undefined {
   if (!g || typeof g !== 'object') return undefined;
@@ -250,7 +251,17 @@ export function sanitizeGeom(g: ShapeGeom): ShapeGeom | undefined {
     }
     if (paths.length) out.paths = paths;
   }
-  return out.preset || out.paths ? out : undefined;
+  const ref = geomRef(g.ref);
+  if (ref) out.ref = ref;
+  return out.preset || out.paths || out.ref ? out : undefined;
+}
+
+/** A geometry file's name as stored (`ShapeGeom.ref`): 1-100 printable characters, else undefined. */
+function geomRef(v: unknown): string | undefined {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what is refused
+  return typeof v === 'string' && v.length >= 1 && v.length <= 100 && !/[\u0000-\u001f\u007f]/.test(v)
+    ? v
+    : undefined;
 }
 
 type ShapeObj = Extract<SlideObject, { type: 'shape' }>;

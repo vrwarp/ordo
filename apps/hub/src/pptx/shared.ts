@@ -48,6 +48,11 @@ export const PPTX_LIMITS = {
   importPoolMs: 15 * 60_000,
   /** Longest part name in a payload pair. */
   partName: 512,
+  /**
+   * Bytes of geometry files one import stores (`ShapeGeom.ref`, design/27 §15 M6 round 2; the largest of
+   * the worship decks measured needs 0.6 MB); a slide whose new files would pass it is a compact picture.
+   */
+  geomFileBytes: 32 * MiB,
 } as const;
 
 /** The options of a native import: form fields of `POST /import/document`, kept in the job payload. */

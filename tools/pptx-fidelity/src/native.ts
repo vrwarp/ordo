@@ -24,7 +24,7 @@ import { copyFile, mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { Slide } from '@ordo/domain';
+import type { GeomFile, Slide } from '@ordo/domain';
 import { extractZip } from '@ordo/importers/zip-stream.ts';
 import { Worker } from 'node:worker_threads';
 import {
@@ -107,6 +107,11 @@ export type NativeDeck = {
   /** The deck's slide area in logical px. */
   slideRect: { x: number; y: number; w: number; h: number };
   media: NativeMedia[];
+  /**
+   * The geometry files the slides name (`ShapeGeom.ref`, `EmitResult.geoms`; the slides as LibreOffice draws
+   * them name the same placeholders), which the page reads before it draws, as an output does.
+   */
+  geoms?: { id: string; file: GeomFile }[];
   notes: string[];
   /** The deck carries font files (`ppt/fonts/`); LibreOffice 24.2 ignores them (design/27 §14.1). */
   embeddedFonts: boolean;
@@ -205,6 +210,7 @@ export async function convertDeck(
     slides: [],
     slideRect: { x: 0, y: 0, w: 1920, h: 1080 },
     media: [],
+    geoms: [],
     notes: [],
     embeddedFonts: false,
     textFeatures: [],
@@ -243,8 +249,16 @@ export async function convertDeck(
     });
     out.parseMs = performance.now() - t0;
     t0 = performance.now();
-    const emitted: EmitResult = emitSlides(scene);
+    // One placeholder per geometry file over both emissions (the slides as LibreOffice draws them below).
+    const geomIds = new Map<string, string>();
+    const geomId = (json: string) => {
+      let id = geomIds.get(json);
+      if (id === undefined) geomIds.set(json, (id = `pptxgeom:${geomIds.size + 1}`));
+      return id;
+    };
+    const emitted: EmitResult = emitSlides(scene, { geomId });
     out.emitMs = performance.now() - t0;
+    const geoms = new Map(emitted.geoms.map((g) => [g.id, g]));
     out.slideRect = emitted.slideRect;
     for (const n of [...scene.notes, ...emitted.notes]) note(n);
 
@@ -260,13 +274,15 @@ export async function convertDeck(
     const hits = compatRules(scene);
     let compatSlides: Map<number, Slide> | undefined;
     try {
-      if (hits.size)
-        compatSlides = new Map(
-          emitSlides(scene, { loCompat: true }).slides.map((s) => [s.index, still(s)] as const),
-        );
+      if (hits.size) {
+        const lo = emitSlides(scene, { loCompat: true, geomId });
+        for (const g of lo.geoms) if (!geoms.has(g.id)) geoms.set(g.id, g);
+        compatSlides = new Map(lo.slides.map((s) => [s.index, still(s)] as const));
+      }
     } catch (e) {
       note(`the slides as LibreOffice draws them could not be emitted: ${errorText(e)}`);
     }
+    out.geoms = [...geoms.values()];
     out.slides = emitted.slides.map((s) => {
       // Drawn as a still (a motion background as its poster), as LibreOffice draws the slide.
       const slide = still(s);
@@ -690,6 +706,7 @@ export class NativeRenderer {
       loaded = { offered: fonts.length, loaded: got.loaded };
       if (opts.probe) probes = await p.evaluate((reqs) => window.__native.font(reqs), opts.probe);
       await p.evaluate((list) => window.__native.media(list), media);
+      await p.evaluate((list) => window.__native.geoms(list), deck.geoms ?? []);
       return p;
     };
     const slides: RenderedSlide[] = [];

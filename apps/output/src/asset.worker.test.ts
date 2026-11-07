@@ -20,6 +20,8 @@ import {
   preparedKey,
 } from '@ordo/renderer';
 import { CONTENT_CASES, contentCase } from '@ordo/domain/content.test-util.ts';
+import { RecPath } from '@ordo/renderer/geom/path2d.test-util.ts';
+import { geomFile } from '@ordo/renderer/geom/stored.ts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -46,6 +48,12 @@ type FakeBitmap = {
 
 const W = 960;
 const H = 540;
+/** Geometry files the fake hub serves, by hash, and one it does not have. */
+const GEOM_READ = 'a'.repeat(64);
+const GEOM_GONE = 'b'.repeat(64);
+const GEOM_FILES = new Map([
+  [GEOM_READ, JSON.stringify({ paths: [{ d: 'M 0 0 L 10 0 L 10 10 Z', w: 10, h: 10 }] })],
+]);
 
 /** A 2D context that logs fillText and drawImage on `rec` (every glyph is 10 device px wide). */
 function fakeCtx(rec: { ops: string[]; drawn: FakeBitmap[] }) {
@@ -125,11 +133,17 @@ beforeAll(async () => {
   vi.useFakeTimers({ toFake: ['setInterval'] });
   vi.stubGlobal('self', scope);
   vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
-  // Pictures arrive from the hub's file route, tagged with their hash; the poster is 4:3.
+  // Pictures arrive from the hub's file route, tagged with their hash; the poster is 4:3. Geometry files
+  // (`ShapeGeom.ref`) are JSON; one the hub does not have is a 404.
   vi.stubGlobal('fetch', async (url: string) => {
     const hash = /files\/([^?]+)/.exec(url)?.[1] ?? '';
+    if (hash === GEOM_GONE) return { status: 404, ok: false, blob: async () => ({}) };
+    const json = GEOM_FILES.get(hash);
+    if (json)
+      return { status: 200, ok: true, blob: async () => ({ size: json.length, text: async () => json }) };
     return { status: 200, ok: true, blob: async () => ({ hash }) };
   });
+  vi.stubGlobal('Path2D', RecPath);
   // A decode of a file, or a reduction of a decoded picture (`downscaleFor`), keeps the tag.
   vi.stubGlobal(
     'createImageBitmap',
@@ -393,5 +407,27 @@ describe('asset worker: what a slide job draws follows slideContent (design/27 Â
       'image:mine.png',
       'text:Added',
     ]);
+  });
+});
+
+describe('asset worker: geometry files (ShapeGeom.ref)', () => {
+  const shape = (id: string, ref: string): SlideObject =>
+    ({
+      id,
+      type: 'shape',
+      box: box(100, 100, 400, 300),
+      shape: 'rect',
+      fill: { r: 255, g: 0, b: 0, a: 1 },
+      opacity: 1,
+      radius: 0,
+      geom: { ref },
+    }) as SlideObject;
+
+  it('reads the files a slide draws before drawing it, and reports one the hub lacks with the missing images', async () => {
+    const s: Slide = { id: 'g', objects: [shape('a', GEOM_READ), shape('b', GEOM_GONE)] };
+    const { reply } = await run(slideJob({ slide: s, images: {}, video: undefined, key: 'sl|geoms' }));
+    expect(reply).toMatchObject({ t: 'done', key: 'sl|geoms', missingImages: [GEOM_GONE] });
+    expect(geomFile(GEOM_READ)).toEqual(JSON.parse(GEOM_FILES.get(GEOM_READ)!));
+    expect(geomFile(GEOM_GONE)).toBeUndefined();
   });
 });

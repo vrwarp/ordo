@@ -322,7 +322,9 @@ const PATH_FILL_MODES: readonly PathFillMode[] = [
  * A stored geometry (design/27 §3.1 `ShapeGeom`, §12): a preset name of letters and digits (at most 40), at
  * most 10 finite adjust pairs, at most 8 paths, each path string re-tokenised (`cleanPathData`: only M L Q C Z
  * and numbers, at most 4,096 points) with its space within 0..1e9, `cont` kept when true (the stored pieces
- * of one path). Unknown fill modes are 'norm' (the schema's .catch). Undefined when nothing usable is left.
+ * of one path), `ref` (a geometry file, M6 round 2: `geom/stored.ts` draws its paths once read) kept when
+ * it is 1-100 characters without control characters. Unknown fill modes are 'norm' (the schema's .catch).
+ * Undefined when nothing usable is left.
  */
 export function clampGeom(g: unknown): ShapeGeom | undefined {
   if (!g || typeof g !== 'object' || Array.isArray(g)) return undefined;
@@ -362,7 +364,15 @@ export function clampGeom(g: unknown): ShapeGeom | undefined {
     }
     if (paths.length) out.paths = paths;
   }
-  return out.preset || out.paths ? out : undefined;
+  if (
+    typeof x.ref === 'string' &&
+    x.ref.length >= 1 &&
+    x.ref.length <= 100 &&
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what is refused
+    !/[\u0000-\u001f\u007f]/.test(x.ref)
+  )
+    out.ref = x.ref;
+  return out.preset || out.paths || out.ref ? out : undefined;
 }
 
 const LINE_DASHES: readonly LineDash[] = [

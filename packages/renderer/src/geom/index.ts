@@ -64,7 +64,21 @@ export {
   withEnds,
 } from './ends.ts';
 export { gradientStyle } from './paint.ts';
-export { legacyGeometry, storedGeometry, storedPath } from './stored.ts';
+export {
+  clearGeomFiles,
+  GEOM_FILE_RETRY_MS,
+  GEOM_FILES_CHARS,
+  GEOM_FILES_MAX,
+  type GeomFileRead,
+  geomFile,
+  geomPending,
+  legacyGeometry,
+  putGeomFile,
+  readGeomFiles,
+  resolvedGeom,
+  storedGeometry,
+  storedPath,
+} from './stored.ts';
 export * from './ops.ts';
 export {
   type BuiltGeom,

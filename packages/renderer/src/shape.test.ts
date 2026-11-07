@@ -4,6 +4,7 @@ import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { effectCacheBytes } from './effects.ts';
 import { RecPath } from './geom/path2d.test-util.ts';
+import { clearGeomFiles, putGeomFile } from './geom/stored.ts';
 import { objectBounds } from './scene.ts';
 import { DASH_PATTERNS, drawGeomShape, hasShapeExtras, shapeGeometry, shapeReach } from './shape.ts';
 import { drawShape, drawSlide2D } from './text2d.ts';
@@ -194,5 +195,31 @@ describe('drawGeomShape on an unclamped object', () => {
     drawGeomShape(ctx, { ...base, flipH: true, stroke: { width: 1e9, color: white } }, Number.NaN);
     const s = ctx.ops.find((x) => x.op === 'stroke')!;
     expect(s.state.lineWidth).toBe(500);
+  });
+});
+
+describe('geometry files (ShapeGeom.ref, M6 round 2)', () => {
+  const ref = 'c'.repeat(64);
+  const paths = [{ d: 'M 0 0 L 100 0 L 50 100 Z', w: 100, h: 100 }];
+  const pathsOf = (o: ReturnType<typeof ops>) =>
+    o.filter((x) => x.op === 'fill' && x.args[0] instanceof RecPath).map((x) => JSON.stringify(x.args[0]));
+
+  it('draws its legacy shape until the file is read, then the same as the paths inline (same object)', () => {
+    clearGeomFiles();
+    const o: ShapeObject = { ...base, geom: { ref } };
+    const before = ops(o);
+    expect(pathsOf(before)).toEqual(pathsOf(ops({ ...base, geom: { preset: 'rect' } })));
+    putGeomFile(ref, { paths });
+    expect(pathsOf(ops(o))).toEqual(pathsOf(ops({ ...base, geom: { paths } })));
+    expect(pathsOf(ops(o))).not.toEqual(pathsOf(before));
+  });
+
+  it("an older build strips the ref and draws the legacy shape (the previous release's schema)", () => {
+    const slide = { id: 'x', objects: [{ ...base, geom: { ref } }] };
+    const parsed = prev.Slide.parse(slide) as Slide;
+    expect((parsed.objects[0] as ShapeObject).geom?.ref).toBeUndefined();
+    const ctx = recordingCtx();
+    drawSlide2D(ctx, parsed, { scale: 0.5 });
+    expect(ctx.ops.filter((x) => x.op === 'fill').length).toBeGreaterThan(0);
   });
 });

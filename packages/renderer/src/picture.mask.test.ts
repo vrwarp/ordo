@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { RecPath } from './geom/path2d.test-util.ts';
+import { clearGeomFiles, putGeomFile } from './geom/stored.ts';
 import { paintShapedPicture, pictureShape, pictureTarget } from './picture.ts';
 import { drawImageFit } from './text2d.ts';
 import { recordingCtx } from './text/test-util.ts';
@@ -51,6 +52,16 @@ describe('pictureTarget with a mask or flips', () => {
     expect([t.bx, t.by, t.bw, t.bh]).toEqual([-25, 25, 200, 150]);
     expect(t.rotation).toBe(90);
     expect(t.key).toContain(' r90 ');
+  });
+
+  it('tells a mask whose geometry file is not read yet from the same mask once it is (M6 round 2)', () => {
+    clearGeomFiles();
+    const mask = { ref: 'd'.repeat(64) };
+    const pending = pictureTarget({ box, fit: 'stretch', mask }, 0.5)!;
+    putGeomFile(mask.ref, { paths: [{ d: 'M 0 0 L 1 0 L 0 1 Z', w: 1, h: 1 }] });
+    const read = pictureTarget({ box, fit: 'stretch', mask }, 0.5)!;
+    expect(pending.key).not.toBe(read.key);
+    expect(read.key).toBe(pictureTarget({ box, fit: 'stretch', mask: { ...mask } }, 0.5)!.key);
   });
 
   it('clamps the mask: garbage is no mask', () => {

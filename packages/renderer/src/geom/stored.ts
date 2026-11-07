@@ -1,4 +1,5 @@
-import { parsePathData, type ShapeGeom } from '@ordo/domain';
+import { GEOM_FILE_MAX_BYTES, parsePathData, type ShapeGeom } from '@ordo/domain';
+import { clampGeom } from '../clamp.ts';
 import {
   CMD_CLOSE,
   CMD_CUBIC,
@@ -23,7 +24,10 @@ import { type BuiltGeom, COORD_LIMIT, type GeomPath, presetGeometry } from './pa
  *   first piece's fill mode and stroke flag; at most GEOM_LIMITS.paths x GEOM_LIMITS.points points); the
  *   text rect is the box;
  * - else undefined: the caller draws the legacy shape (`legacyGeometry`).
- * Results are memoised per geometry object and box size.
+ * A geometry with a `ref` (M6 round 2) draws its geometry file's paths once the file is read
+ * (`putGeomFile`, `readGeomFiles`: the drawer reads the files a slide names before drawing it, as it decodes
+ * its pictures); until then, or without it, it is the geometry beside the ref as above.
+ * Results are memoised per geometry (a file's is shared by every shape that names it) and box size.
  */
 
 const CMD_OF: Readonly<Record<string, number>> = {
@@ -60,18 +64,157 @@ export function storedPath(p: StoredPath, w: number, h: number): GeomPath {
   return { cmds, pts, fill, stroke: p?.stroke !== false };
 }
 
-const memo = new WeakMap<object, { w: number; h: number; built: BuiltGeom | undefined }>();
+// ── Geometry files (`ShapeGeom.ref`, M6 round 2) ──────────────────────────────────────────────────────────
+
+/** Geometry files kept read: at most this many, and this many characters of path text in all (LRU). */
+export const GEOM_FILES_MAX = 4_096;
+export const GEOM_FILES_CHARS = 32 * 1024 * 1024;
+/** A file that could not be read is asked for again only after this long. */
+export const GEOM_FILE_RETRY_MS = 10_000;
+
+/** Read geometry files by ref: each clamped to its paths (`clampGeom`), in least-recently-used order. */
+const files = new Map<string, { geom: ShapeGeom; chars: number }>();
+let fileChars = 0;
+/** Reads in flight, and when a read last failed, by ref. */
+const reading = new Map<string, Promise<GeomFileRead>>();
+const failedAt = new Map<string, number>();
+
+/** What became of one file of `readGeomFiles`: read, unavailable (try again later) or not a geometry. */
+export type GeomFileRead = 'read' | 'missing' | 'invalid';
 
 /**
- * A stored geometry built at a w x h box: its preset when the table knows it, else its paths (at most
- * GEOM_LIMITS.paths), else undefined.
+ * Keep a geometry file's content (`GeomFile`: `{ paths }`, parsed JSON) under its ref, clamped as inline
+ * paths are (`clampGeom`: re-tokenised, at most 8 paths of 4,096 points; nothing else of it is kept).
+ * False when nothing drawable is left of it.
  */
-export function storedGeometry(g: ShapeGeom | undefined, w: number, h: number): BuiltGeom | undefined {
+export function putGeomFile(ref: string, data: unknown): boolean {
+  if (typeof ref !== 'string' || !ref || ref.length > 100) return false;
+  const raw = data && typeof data === 'object' ? (data as { paths?: unknown }).paths : undefined;
+  const geom = clampGeom({ paths: raw });
+  if (!geom?.paths) return false;
+  let chars = 0;
+  for (const p of geom.paths) chars += p.d.length;
+  const old = files.get(ref);
+  if (old) {
+    files.delete(ref);
+    fileChars -= old.chars;
+  }
+  files.set(ref, { geom, chars });
+  fileChars += chars;
+  failedAt.delete(ref);
+  for (const [k, v] of files) {
+    if (files.size <= GEOM_FILES_MAX && fileChars <= GEOM_FILES_CHARS) break;
+    if (k === ref) continue;
+    files.delete(k);
+    fileChars -= v.chars;
+  }
+  return true;
+}
+
+/** The geometry of a read file, or undefined. */
+export function geomFile(ref: unknown): ShapeGeom | undefined {
+  return typeof ref === 'string' ? files.get(ref)?.geom : undefined;
+}
+
+/** Whether a stored geometry names a geometry file that is not read (it draws its fallback for now). */
+export function geomPending(g: unknown): boolean {
+  const ref = g && typeof g === 'object' ? (g as { ref?: unknown }).ref : undefined;
+  return typeof ref === 'string' && ref !== '' && !files.has(ref);
+}
+
+/** Forget every read file (tests). */
+export function clearGeomFiles(): void {
+  files.clear();
+  fileChars = 0;
+  reading.clear();
+  failedAt.clear();
+}
+
+/**
+ * Read the geometry files `refs` names that are not read yet: `read` gives a file's JSON text (undefined or a
+ * throw: unavailable for now; null, a file over `GEOM_FILE_MAX_BYTES` or one that is not a geometry: invalid). Reads
+ * of one ref are shared, and a ref whose read failed is not asked for again within `GEOM_FILE_RETRY_MS`.
+ * Resolves with the outcome of each ref that is not read (empty when every one is).
+ */
+export async function readGeomFiles(
+  refs: Iterable<string>,
+  read: (ref: string) => Promise<string | null | undefined>,
+  now: () => number = Date.now,
+): Promise<Map<string, GeomFileRead>> {
+  const out = new Map<string, GeomFileRead>();
+  const waits: Promise<void>[] = [];
+  for (const ref of refs) {
+    if (typeof ref !== 'string' || !ref || files.has(ref) || out.has(ref)) continue;
+    let p = reading.get(ref);
+    if (!p) {
+      const t = failedAt.get(ref);
+      if (t !== undefined && now() - t < GEOM_FILE_RETRY_MS) {
+        out.set(ref, 'missing');
+        continue;
+      }
+      p = readOne(ref, read).then((r) => {
+        reading.delete(ref);
+        if (r !== 'read') failedAt.set(ref, now());
+        return r;
+      });
+      reading.set(ref, p);
+    }
+    waits.push(
+      p.then((r) => {
+        if (r !== 'read') out.set(ref, r);
+      }),
+    );
+  }
+  await Promise.all(waits);
+  return out;
+}
+
+async function readOne(
+  ref: string,
+  read: (ref: string) => Promise<string | null | undefined>,
+): Promise<GeomFileRead> {
+  let text: string | null | undefined;
+  try {
+    text = await read(ref);
+  } catch {
+    return 'missing';
+  }
+  if (text === null) return 'invalid';
+  if (typeof text !== 'string') return 'missing';
+  if (text.length > GEOM_FILE_MAX_BYTES) return 'invalid';
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return 'invalid';
+  }
+  return putGeomFile(ref, data) ? 'read' : 'invalid';
+}
+
+/** The geometry a stored one draws now: its read file's, else itself. */
+export function resolvedGeom(g: ShapeGeom | undefined): ShapeGeom | undefined {
   if (!g || typeof g !== 'object') return undefined;
+  return (typeof g.ref === 'string' && files.get(g.ref)?.geom) || g;
+}
+
+// ── Building ───────────────────────────────────────────────────────────────────────────────────────────
+
+/** Built geometries per stored geometry, by box size: a few sizes each (a file's is shared by its shapes). */
+const memo = new WeakMap<object, Map<string, BuiltGeom | undefined>>();
+const MEMO_SIZES = 8;
+
+/**
+ * A stored geometry built at a w x h box: its read geometry file's paths (`ref`), else its preset when the
+ * table knows it, else its paths (at most GEOM_LIMITS.paths), else undefined.
+ */
+export function storedGeometry(raw: ShapeGeom | undefined, w: number, h: number): BuiltGeom | undefined {
+  const g = resolvedGeom(raw);
+  if (!g) return undefined;
   const bw = side(w);
   const bh = side(h);
-  const hit = memo.get(g);
-  if (hit && hit.w === bw && hit.h === bh) return hit.built;
+  const key = `${bw} ${bh}`;
+  let sizes = memo.get(g);
+  if (sizes?.has(key)) return sizes.get(key);
   let built: BuiltGeom | undefined;
   if (typeof g.preset === 'string') {
     const adj = Array.isArray(g.adj) ? g.adj.filter((p) => Array.isArray(p) && p.length === 2) : undefined;
@@ -92,7 +235,11 @@ export function storedGeometry(g: ShapeGeom | undefined, w: number, h: number): 
     }
     built = { w: bw, h: bh, paths, text: { l: 0, t: 0, r: bw, b: bh }, sites: [] };
   }
-  memo.set(g, { w: bw, h: bh, built });
+  if (!sizes) {
+    sizes = new Map();
+    memo.set(g, sizes);
+  } else if (sizes.size >= MEMO_SIZES) sizes.delete(sizes.keys().next().value!);
+  sizes.set(key, built);
   return built;
 }
 
