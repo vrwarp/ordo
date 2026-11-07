@@ -484,8 +484,8 @@ describe('asset worker: raster lanes (design/27 §7.5)', () => {
     expect(reply).toMatchObject({ t: 'done', key: 'sl|timed', lane: 'interactive' });
     const done = reply as Extract<FromAsset, { t: 'done' }>;
     expect(done.waitMs).toBeGreaterThanOrEqual(0);
-    expect(done.rasterMs).toBeGreaterThanOrEqual(0);
-    expect(done.longestMs).toBeLessThanOrEqual(done.rasterMs! + 1e-9);
+    expect(done.busyMs).toBeGreaterThanOrEqual(0);
+    expect(done.longestMs).toBeLessThanOrEqual(done.busyMs! + 1e-9);
   });
 
   it('a cancelled job sends nothing, to the renderer or to the link', async () => {
@@ -544,5 +544,23 @@ describe('asset worker: raster lanes (design/27 §7.5)', () => {
     expect(decoded).toEqual([]);
     await run({ kind: 'image', layer: 0, key: 'im|bg', hash: 'warm-bg.jpg', fit: 'cover' });
     expect(decoded).toEqual([]);
+  });
+});
+
+describe('asset worker: what health reads from a result (design/27 §13, M7)', () => {
+  it("reports the draw on the worker's thread apart from the job's whole time", async () => {
+    for (const job of [
+      slideJob({ video: undefined }),
+      slideJob(),
+      { kind: 'lowerThird', layer: 2, key: 'lt|x', text: 'Pastor Jo', look: LOOK_LOWER_THIRD } as AssetJob,
+    ]) {
+      const { reply } = await run(job);
+      expect(reply.t).toBe('done');
+      if (reply.t !== 'done') continue;
+      expect(reply.rasterMs).toBeGreaterThanOrEqual(0);
+      expect(reply.rasterMs!).toBeLessThanOrEqual(reply.ms + 0.01);
+      // No face is loaded here: text in an unloaded family is a font fallback, never probed glyph by glyph.
+      expect(reply.uncovered).toBeUndefined();
+    }
   });
 });

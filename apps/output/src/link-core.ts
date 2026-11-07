@@ -64,6 +64,7 @@ import type {
 } from './host-protocol.ts';
 import { LaneStats } from './lane-stats.ts';
 import { SlotPair } from './media.ts';
+import { PerfHealth, perfDiagnostics } from './perf-health.ts';
 import {
   Downloads,
   type FileBody,
@@ -249,6 +250,8 @@ export class LinkCore {
   private fontFallbackKeys = new Map<string, string[]>();
   /** The asset worker's last font report had failures: the next complete cache fill asks it to retry. */
   private fontsFailed = false;
+  /** Slide raster times, characters without a face and budget alarms (design/27 §13, M7). */
+  private perf = new PerfHealth();
   private cacheRepairs = 0;
 
   // Media (mirrors of the host's slots)
@@ -789,6 +792,7 @@ export class LinkCore {
       this.quarantine.clear();
       this.fontFallbacks.clear();
       this.fontFallbackKeys.clear();
+      this.perf.newService();
       this.unavailable.clear();
       this.missingImages.clear();
       this.refreshKeys.clear();
@@ -1997,7 +2001,7 @@ export class LinkCore {
         this.inflight.delete(m.key);
         this.assetInflight.delete(m.key);
         this.delivered.set(m.key, Date.now());
-        if (m.lane) this.laneStats.add(m.lane, m.waitMs ?? 0, m.rasterMs ?? 0, m.longestMs ?? 0);
+        if (m.lane) this.laneStats.add(m.lane, m.waitMs ?? 0, m.busyMs ?? 0, m.longestMs ?? 0);
         this.errors.delete(m.key);
         this.unavailable.delete(m.key);
         for (const f of m.fontFallbacks ?? []) {
@@ -2010,6 +2014,10 @@ export class LinkCore {
         if (m.fontFallbacks?.length && m.key.startsWith('sl|'))
           this.fontFallbackKeys.set(m.key, m.fontFallbacks.slice(0, 20));
         else this.fontFallbackKeys.delete(m.key);
+        {
+          const line = this.perf.done(m);
+          if (line) this.diagLog(line);
+        }
         if (m.skippedImages)
           this.diagLog(`${m.key.slice(0, 60)}: ${m.skippedImages} image(s) over the cue budget`);
         if (m.missingImages?.length) {
@@ -2036,7 +2044,7 @@ export class LinkCore {
       }
       case 'warmed':
         if (m.key === this.warmRunning) this.warmRunning = '';
-        this.laneStats.add('bulk', m.waitMs, m.rasterMs, m.longestMs);
+        this.laneStats.add('bulk', m.waitMs, m.busyMs, m.longestMs);
         return;
       case 'fonts':
         this.diagLog(
@@ -2060,6 +2068,12 @@ export class LinkCore {
       if (!missing.some((f) => ready.has(f))) continue;
       this.fontFallbackKeys.delete(key);
       if (!this.has(key)) continue;
+      this.refreshKeys.add(key);
+      changed = true;
+    }
+    // A face that loaded may have the characters no face had: those slides are drawn again too.
+    for (const key of this.perf.fontsReady()) {
+      if (!key.startsWith('sl|') || !this.has(key)) continue;
       this.refreshKeys.add(key);
       changed = true;
     }
@@ -2162,6 +2176,9 @@ export class LinkCore {
       mediaDurationMs: pos?.durationMs ?? md?.durationMs,
       errors,
       appVersion: APP_VERSION,
+      raster: this.perf.raster.summary(),
+      size: { width: this.width, height: this.height },
+      fontCoverage: this.perf.fontCoverage(),
     });
     const out: OutputHealth = {
       ...(h as OutputHealth),
@@ -2199,6 +2216,7 @@ export class LinkCore {
     }
     this.maxStall = 0;
     this.lastHealth = h;
+    for (const line of this.perf.alarmChanges(h, `${this.width}x${this.height}`)) this.diagLog(line);
     this.link.sendHealth(h);
     this.checkRenderer();
     this.checkCover();
@@ -2256,7 +2274,7 @@ export class LinkCore {
       slideFlip: { cue: this.tel.slideCue ?? -1, at: this.tel.slideFlipAt ?? 0 },
       resyncs: this.gaps,
       invariantResyncs: this.invariantResyncs,
-      // The asset worker's raster lanes (design/27 §7.5): per-lane wait and raster percentiles.
+      // The asset worker's raster lanes (design/27 §7.5): per-lane wait and busy percentiles.
       lanes: this.laneStats.summary(),
     };
   }
@@ -2331,6 +2349,7 @@ export class LinkCore {
         ? [...this.quarantine.keys()].map((k) => k.slice(0, 40)).join(', ')
         : '-',
       fonts: this.fontFallbacks.size ? `fallback for ${[...this.fontFallbacks].join(', ')}` : 'ok',
+      ...perfDiagnostics(h),
       rasterLanes: this.laneStats.line(),
       workers: workers || '-',
       audio: h.audio ?? (this.config?.output.audioMaster ? 'none' : 'not master'),

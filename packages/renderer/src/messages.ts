@@ -198,9 +198,20 @@ export type FromAsset =
       t: 'done';
       layer: number;
       key: string;
+      /** From the job's arrival to its picture sent: reads and decodes included. */
       ms: number;
+      /**
+       * The job's synchronous draw on the worker's thread, from the surface to the picture taken (pictures
+       * already prepared): what health reports as slide `rasterMs` (design/27 §13).
+       */
+      rasterMs?: number;
       /** Font families the job asked for that are not loaded; drawn in the fallback font. */
       fontFallbacks?: string[];
+      /**
+       * Characters the job drew that no face of the worker covers, drawn by the machine's own fallback face
+       * (design/27 §10, `GlyphCoverage`): in code point order, at most 32.
+       */
+      uncovered?: string;
       /** Images left out because the cue's decoded-bitmap budget was exhausted. */
       skippedImages?: number;
       /**
@@ -210,11 +221,12 @@ export type FromAsset =
       missingImages?: string[];
       /**
        * The raster lane the job ran in and its timing there (design/27 §7.5): the time it waited (queue,
-       * fonts, turns), the time its synchronous slices ran on the worker's thread, and the longest slice.
+       * fonts, turns), the time its synchronous slices ran on the worker's thread (pictures prepared in
+       * bands and the draw: `busyMs` ≥ `rasterMs`), and the longest slice.
        */
       lane?: 'interactive' | 'bulk';
       waitMs?: number;
-      rasterMs?: number;
+      busyMs?: number;
       longestMs?: number;
     }
   /** A warm job is done (its pictures are in the cache): its lane timing and the decodes it made. */
@@ -223,7 +235,7 @@ export type FromAsset =
       key: string;
       ms: number;
       waitMs: number;
-      rasterMs: number;
+      busyMs: number;
       longestMs: number;
       decodes: number;
     }

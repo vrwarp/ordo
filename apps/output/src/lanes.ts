@@ -47,7 +47,7 @@ export type JobTiming = {
   /** Time spent waiting: in the queue, for the fonts sent before it, and for its turns. */
   waitMs: number;
   /** Time its slices ran on this thread. */
-  rasterMs: number;
+  busyMs: number;
   slices: number;
   longestMs: number;
 };
@@ -258,7 +258,7 @@ export class Lanes {
     const timing = (): JobTiming => ({
       lane: laneOf(e.job.rank),
       waitMs: e.waited,
-      rasterMs: e.busy,
+      busyMs: e.busy,
       slices: e.slices,
       longestMs: e.longest,
     });

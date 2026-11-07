@@ -10,6 +10,7 @@ import {
   type FontLoad,
   FontResolver,
   type FromAsset,
+  GlyphCoverage,
   type ImageLookup,
   type JobRole,
   SRC_BITMAP,
@@ -18,6 +19,7 @@ import {
   type Reach,
   type ToAsset,
   type WarmJob,
+  contextMetrics,
   coversFrame,
   drawSprite,
   imageReach,
@@ -101,6 +103,20 @@ fonts.onChange((c) => {
   post({ t: 'fonts', loaded, failed, ready: c.families });
 });
 
+// Font coverage (design/27 §10): the characters a job drew that no face of this worker covers, so the
+// machine's own fallback face drew them. The drawing surface's text calls are noted (`measuring`) and probed
+// on a 1x1 canvas of their own after the job's picture is sent; verdicts are kept until the faces change.
+let probe: ((font: string, text: string) => ArrayLike<number>) | null = null;
+const coverage = new GlyphCoverage((font, text) => {
+  if (!probe) {
+    const c = new OffscreenCanvas(1, 1).getContext('2d');
+    if (!c) throw new Error('2D context unavailable'); // the probe fails: no miss is reported
+    probe = contextMetrics(c);
+  }
+  return probe(font, text);
+});
+fonts.onChange(() => coverage.reset());
+
 const lanes = new Lanes();
 /**
  * The font loads sent so far, in order: a job waits for those sent before it (text never draws in a fallback
@@ -179,6 +195,7 @@ function measuring(): OffscreenCanvasRenderingContext2D {
     // belong to whoever holds them, so the render worker keeps its picture through an asset restart.
     canvas = new OffscreenCanvas(1, 1);
     ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (ctx) coverage.instrument(ctx);
     fresh = true;
   }
   if (!ctx) throw new Error('2D context unavailable in the asset worker');
@@ -258,6 +275,8 @@ async function preload(
 
 /** Missing families a 'done' message reports: as many as the link keeps (FromAsset, protocol health). */
 const MAX_FONT_FALLBACKS = 20;
+/** Characters without a face a 'done' message reports. */
+const MAX_UNCOVERED = 32;
 
 function fontFallbacks(job: AssetJob): string[] | undefined {
   const missing = jobFontFamilies(job, { fallbacks: false }).filter(
@@ -330,6 +349,24 @@ type Drawn = {
 };
 
 /**
+ * A job's synchronous draw, from measuring its reach to the picture taken (the draw calls are rastered by
+ * `transferToImageBitmap`): its time on the worker's thread, which health reports as `rasterMs`
+ * (design/27 §13), and the text it drew, for `coverage`.
+ */
+type DrawTiming = { ms: number; text: ReturnType<GlyphCoverage['end']> | null };
+
+function timed<T>(d: DrawTiming, fn: () => T): T {
+  const t = performance.now();
+  coverage.begin();
+  try {
+    return fn();
+  } finally {
+    d.text = coverage.end();
+    d.ms += performance.now() - t;
+  }
+}
+
+/**
  * Draw a job in its lane (`steps`): pictures are read and decoded off this thread and prepared in turns,
  * then the layer is measured, drawn as a sprite, taken and sent in one turn. Every size is the one the job
  * started with, so a resize arriving meanwhile cannot mix two. A cancelled job (`Cancelled`) sends nothing.
@@ -390,10 +427,11 @@ async function run(job: AssetJob, steps: Steps): Promise<void> {
     }
     // Measured, drawn, taken and sent in one turn: nothing can cancel it half-way.
     await steps.slice(() => {
-      const d = draw();
+      const timing: DrawTiming = { ms: 0, text: null };
+      const d = timed(timing, draw);
       release?.();
       release = undefined;
-      deliver(job, d, t0, steps, skipped, missing);
+      deliver(job, d, timing, t0, steps, skipped, missing);
     });
   } catch (err) {
     if (err instanceof Cancelled) return;
@@ -417,6 +455,7 @@ async function run(job: AssetJob, steps: Steps): Promise<void> {
 function deliver(
   job: AssetJob,
   d: Drawn,
+  timing: DrawTiming,
   t0: number,
   steps: Steps,
   skipped: number,
@@ -455,18 +494,23 @@ function deliver(
     throw new UnavailableError('render port not connected');
   }
   port.postMessage(msg, over ? [bitmap, over] : [bitmap]);
+  const ms = performance.now() - t0;
+  // Probed after the picture is sent, so a character seen for the first time never delays it.
+  const uncovered = timing.text ? coverage.misses(timing.text, MAX_UNCOVERED) : '';
   const t = steps.timing();
   post({
     t: 'done',
     layer: job.layer,
     key: job.key,
-    ms: performance.now() - t0,
+    ms,
+    rasterMs: round(timing.ms),
     fontFallbacks: fontFallbacks(job),
+    uncovered: uncovered || undefined,
     skippedImages: skipped || undefined,
     missingImages: missing.length ? missing : undefined,
     lane: t.lane,
     waitMs: round(t.waitMs),
-    rasterMs: round(t.rasterMs),
+    busyMs: round(t.busyMs),
     longestMs: round(t.longestMs),
   });
 }
@@ -512,7 +556,7 @@ async function warmUp(wj: WarmJob, steps: Steps): Promise<void> {
     key: wj.key,
     ms: round(performance.now() - t0),
     waitMs: round(t.waitMs),
-    rasterMs: round(t.rasterMs),
+    busyMs: round(t.busyMs),
     longestMs: round(t.longestMs),
     decodes,
   });

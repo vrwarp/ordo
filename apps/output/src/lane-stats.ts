@@ -1,6 +1,6 @@
 /**
  * Per-lane timing of the asset worker's jobs (design/27 §7.5 raster lanes), kept by the link from what each
- * result reports (`done` and `warmed`: wait, raster and longest slice): the last `WINDOW` jobs of each lane,
+ * result reports (`done` and `warmed`: wait, busy time on the thread and longest slice): the last `WINDOW` jobs of each lane,
  * summarised as percentiles for telemetry and the diagnostics view, and the count of jobs the link cancelled
  * because they were superseded.
  */
@@ -15,8 +15,8 @@ export type LaneSummary = {
   jobs: number;
   waitP50: number;
   waitP95: number;
-  rasterP50: number;
-  rasterP95: number;
+  busyP50: number;
+  busyP95: number;
   /** The longest slice of any job in the window: what a props job could have waited behind. */
   longestMs: number;
 };
@@ -34,14 +34,14 @@ const round = (ms: number) => Math.round(ms * 10) / 10;
 
 class Ring {
   wait: number[] = [];
-  raster: number[] = [];
+  busy: number[] = [];
   longest: number[] = [];
   jobs = 0;
-  add(wait: number, raster: number, longest: number): void {
+  add(wait: number, busy: number, longest: number): void {
     this.jobs++;
     for (const [a, v] of [
       [this.wait, wait],
-      [this.raster, raster],
+      [this.busy, busy],
       [this.longest, longest],
     ] as const) {
       a.push(Number.isFinite(v) && v > 0 ? v : 0);
@@ -53,8 +53,8 @@ class Ring {
       jobs: this.jobs,
       waitP50: round(quantile(this.wait, 0.5)),
       waitP95: round(quantile(this.wait, 0.95)),
-      rasterP50: round(quantile(this.raster, 0.5)),
-      rasterP95: round(quantile(this.raster, 0.95)),
+      busyP50: round(quantile(this.busy, 0.5)),
+      busyP95: round(quantile(this.busy, 0.95)),
       longestMs: round(this.longest.length ? Math.max(...this.longest) : 0),
     };
   }
@@ -64,8 +64,8 @@ export class LaneStats {
   private lanes: Record<Lane, Ring> = { interactive: new Ring(), bulk: new Ring() };
   private cancelledJobs = 0;
 
-  add(lane: Lane, waitMs: number, rasterMs: number, longestMs: number): void {
-    (this.lanes[lane] ?? this.lanes.interactive).add(waitMs, rasterMs, longestMs);
+  add(lane: Lane, waitMs: number, busyMs: number, longestMs: number): void {
+    (this.lanes[lane] ?? this.lanes.interactive).add(waitMs, busyMs, longestMs);
   }
 
   cancelled(n: number): void {
@@ -85,7 +85,7 @@ export class LaneStats {
     const s = this.summary();
     const one = (n: string, l: LaneSummary) =>
       l.jobs
-        ? `${n} ${l.jobs} jobs, wait p95 ${l.waitP95} ms, raster p50/p95 ${l.rasterP50}/${l.rasterP95} ms, longest slice ${l.longestMs} ms`
+        ? `${n} ${l.jobs} jobs, wait p95 ${l.waitP95} ms, busy p50/p95 ${l.busyP50}/${l.busyP95} ms, longest slice ${l.longestMs} ms`
         : `${n} idle`;
     return `${one('interactive', s.interactive)}; ${one('bulk', s.bulk)}; ${s.cancelled} superseded`;
   }

@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { keyed } from '../../lib/keys.ts';
 import { Dialog } from '../../components/Dialog.tsx';
 import { BUDGET_INFO, type BudgetKind } from '../../lib/budgets.ts';
-import { outputDot } from '../../lib/health.ts';
+import { outputDot, outputIssues, rasterText } from '../../lib/health.ts';
 import { APP_VERSION, controller } from '../../services/controller.ts';
 import { logLines, onLog } from '../../services/log.ts';
 import { outputWindows, useLaunch } from '../../services/outputs.ts';
@@ -99,6 +99,74 @@ export function HealthTable() {
               <td>{h?.audio ?? '—'}</td>
               <td className="small" style={{ color: 'var(--red)' }}>
                 {h?.error ?? h?.armError ?? ''}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+/**
+ * Performance and fonts per output (design/27 §13, M7): what the asset worker takes to draw a slide, what
+ * the render worker takes to upload one, the GPU memory its textures hold, each against the budget for the
+ * output's size, and the fonts and characters it could not draw as asked. Each issue reads in plain words;
+ * the figures are in its detail (hover, or below it).
+ */
+export function PerformanceTable() {
+  const health = useLive((s) => s.health);
+  const outputs = useLibrary((s) => s.data.settings.outputs);
+  const over = (on: boolean | undefined) => (on ? { color: 'var(--amber)' } : undefined);
+  return (
+    <table className="list" data-performance>
+      <thead>
+        <tr>
+          <th>Output</th>
+          <th title="Asset worker, last slides drawn: p50 / p95">Slide drawing</th>
+          <th title="Render worker, longest frame of uploads (CPU time)">Upload per frame</th>
+          <th title="Layer and scene textures">GPU memory</th>
+          <th>Fonts</th>
+          <th>What to look at</th>
+        </tr>
+      </thead>
+      <tbody>
+        {outputs.map((o) => {
+          const h = health[o.id];
+          const b = h?.budgets;
+          const alarms = new Set(h?.alarms ?? []);
+          const issues = outputIssues(h);
+          const fonts = [
+            h?.fontFallbacks?.length ? `missing ${h.fontFallbacks.join(', ')}` : '',
+            h?.fontCoverage?.count ? `${h.fontCoverage.count} character(s) without a font` : '',
+          ].filter(Boolean);
+          return (
+            <tr key={o.id} data-performance-output={o.id}>
+              <td>{o.name}</td>
+              <td style={over(alarms.has('raster'))}>
+                {rasterText(h)}
+                {b ? <span className="muted"> (p95 ≤ {b.rasterP95Ms} ms)</span> : null}
+              </td>
+              <td style={over(alarms.has('upload'))}>
+                {h?.uploadMs !== undefined ? `${h.uploadMs} ms` : h?.compositor === '2d' ? 'none (2D)' : '—'}
+                {b && h?.uploadMs !== undefined ? <span className="muted"> (≤ {b.uploadMs} ms)</span> : null}
+              </td>
+              <td style={over(alarms.has('gpuMemory'))}>
+                {h?.gpuMB !== undefined ? `${h.gpuMB} MB` : h?.compositor === '2d' ? 'none (2D)' : '—'}
+                {b && h?.gpuMB !== undefined ? <span className="muted"> (≤ {b.gpuMB} MB)</span> : null}
+              </td>
+              <td className="small" title={h?.fontCoverage ? [...h.fontCoverage.chars].join(' ') : undefined}>
+                {fonts.length ? fonts.join('; ') : h?.connected ? 'ok' : '—'}
+              </td>
+              <td className="small">
+                {issues.length === 0
+                  ? ''
+                  : issues.map((i) => (
+                      <div key={i.id} data-issue={i.id} title={i.detail}>
+                        <b>{i.label}</b>
+                        <div className="muted">{i.detail}</div>
+                      </div>
+                    ))}
               </td>
             </tr>
           );
@@ -327,6 +395,8 @@ export function DiagnosticsPanel() {
           </span>
         </div>
         <HealthTable />
+        <h4>Performance and fonts</h4>
+        <PerformanceTable />
         {live.cacheCheck && (
           <div className={`banner ${live.cacheCheck.message ? '' : 'blue'}`}>
             {live.cacheCheck.message ?? 'Service cache complete on every output'} (checked{' '}

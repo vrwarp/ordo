@@ -13,6 +13,8 @@
     "typecheck": "tsc -p tsconfig.json",
     "golden": "tsx golden/run.ts",
     "late-font": "tsx golden/late-font.ts",
+    "bench:slides": "tsx bench/slides.ts",
+    "bench:venue": "tsx bench/venue.ts",
     "bench": "tsx bench/raster.ts",
     "golden:compositor": "tsx golden/compositor-run.ts",
     "bench:sprites": "tsx bench/sprites.ts",

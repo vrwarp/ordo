@@ -274,7 +274,7 @@ describe('raster lanes: fonts and timing', () => {
     expect(props.steps!.timing()).toEqual({
       lane: 'interactive',
       waitMs: 0,
-      rasterMs: 4,
+      busyMs: 4,
       slices: 1,
       longestMs: 4,
     });
@@ -282,7 +282,7 @@ describe('raster lanes: fonts and timing', () => {
     expect(slide.steps!.timing()).toEqual({
       lane: 'interactive',
       waitMs: 4,
-      rasterMs: 60,
+      busyMs: 60,
       slices: 2,
       longestMs: 30,
     });
@@ -290,6 +290,6 @@ describe('raster lanes: fonts and timing', () => {
     h.lanes.push(h.job('busy', { chain: 'other', rank: RANK.live, ms: 20 }));
     h.lanes.push(warm);
     await h.drain();
-    expect(warm.steps!.timing()).toMatchObject({ lane: 'bulk', waitMs: 20, rasterMs: 5 });
+    expect(warm.steps!.timing()).toMatchObject({ lane: 'bulk', waitMs: 20, busyMs: 5 });
   });
 });
