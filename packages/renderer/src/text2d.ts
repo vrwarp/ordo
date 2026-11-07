@@ -145,9 +145,22 @@ export type TextLayout = {
 
 /**
  * Lay out text in a box (device pixels = logical * scale). With `fit`, shrinks the font down to
- * `minScale` of its size until the block fits the box height.
+ * `minScale` of its size until the block fits the box height. Memoised per context while a font resolver
+ * is installed (`legacyLayoutMemo`); the layout returned is shared and must not be changed.
  */
 export function layoutText(
+  ctx: Ctx2D,
+  text: string,
+  style: TextStyle,
+  box: Box,
+  scale: number,
+  fit = false,
+  minScale = 0.5,
+): TextLayout {
+  return legacyLayoutMemo(ctx, text, style, box, scale, fit, minScale, layoutTextNow);
+}
+
+function layoutTextNow(
   ctx: Ctx2D,
   text: string,
   style: TextStyle,
@@ -541,4 +554,41 @@ export function fillColor(ctx: Ctx2D, c: Rgba, w: number, h: number): void {
   ctx.fillStyle = rgbaCss(c);
   ctx.fillRect(0, 0, w, h);
   ctx.restore();
+}
+
+/** Legacy layouts kept per context (a band laid out for its sprite's reach, then drawn: design/27 §7.3). */
+const LEGACY_LAYOUTS = 32;
+const legacyLayouts = new WeakMap<Ctx2D, Map<string, TextLayout>>();
+
+/**
+ * `layoutText` through a small memo per context, keyed by every input and the font generation: the asset
+ * worker lays a legacy text out to find its sprite's reach (sprite.ts) and `drawText` then draws that very
+ * layout instead of measuring it again. Only while a font resolver is installed (its generation changes
+ * whenever a face loads); without one a late font would leave a stale layout, so nothing is kept.
+ */
+function legacyLayoutMemo(
+  ctx: Ctx2D,
+  text: string,
+  style: TextStyle,
+  box: Box,
+  scale: number,
+  fit: boolean,
+  minScale: number,
+  lay: typeof layoutTextNow,
+): TextLayout {
+  const env = currentFontEnv();
+  if (env === LEGACY_FONT_ENV) return lay(ctx, text, style, box, scale, fit, minScale);
+  const key = `${env.generation}|${scale}|${fit ? 1 : 0}|${minScale}|${JSON.stringify(box)}|${JSON.stringify(style)}|${text}`;
+  let m = legacyLayouts.get(ctx);
+  if (!m) legacyLayouts.set(ctx, (m = new Map()));
+  const hit = m.get(key);
+  if (hit) {
+    m.delete(key);
+    m.set(key, hit);
+    return hit;
+  }
+  const out = lay(ctx, text, style, box, scale, fit, minScale);
+  m.set(key, out);
+  if (m.size > LEGACY_LAYOUTS) m.delete(m.keys().next().value!);
+  return out;
 }

@@ -58,6 +58,9 @@ export type EngineOptions = {
    * 0 disables the retry. Default 60 s.
    */
   gpuRetryMs?: number;
+  /** WebGPU upload budget per frame (GpuInit; defaults in gpu.ts), for the venue measurements. */
+  uploadBudgetBytes?: number;
+  uploadBudgetMs?: number;
 };
 
 export const GPU_RETRY_MAX_MS = 15 * 60_000;
@@ -235,16 +238,15 @@ export class RenderEngine {
         onError: (message) => {
           this.error = `GPU: ${message}`;
         },
+        uploadBudgetBytes: this.opts.uploadBudgetBytes,
+        uploadBudgetMs: this.opts.uploadBudgetMs,
       });
       if (!this.running || this.rebuilding) {
         gpu.destroy();
         this.host.canvasUnused?.();
         return;
       }
-      for (const ls of this.layers) {
-        ls.stacks[0].version++;
-        ls.stacks[1].version++;
-      }
+      this.adoptStacks(gpu);
       this.prepareHeld(gpu);
       this.drawFrame(gpu);
       const old = this.compositor;
@@ -288,9 +290,12 @@ export class RenderEngine {
           onError: (message) => {
             this.error = `GPU: ${message}`;
           },
+          uploadBudgetBytes: this.opts.uploadBudgetBytes,
+          uploadBudgetMs: this.opts.uploadBudgetMs,
         });
         this.kind = 'webgpu';
         this.error = undefined;
+        this.adoptStacks(this.compositor);
         this.prepareHeld(this.compositor);
         return { kind: 'webgpu' };
       } catch (err) {
@@ -306,8 +311,19 @@ export class RenderEngine {
     this.compositor = new Canvas2DCompositor(this.opts.canvas, this.opts.width, this.opts.height);
     this.kind = '2d';
     if (note) this.error = note;
+    this.adoptStacks(this.compositor);
     this.prepareHeld(this.compositor);
     return { kind: '2d', note };
+  }
+
+  /**
+   * A new or rebuilt compositor uploads every held stack again; one that uploads (WebGPU) gates flips on
+   * its uploads (`LayerStack.gated`, design/27 §7.3), so held content that is not on screen becomes ready
+   * only once it is uploaded again. What is on screen is uploaded before the first draw.
+   */
+  private adoptStacks(c: Compositor): void {
+    const gated = typeof c.drainUploads === 'function';
+    for (const ls of this.layers) ls.resetUploads(gated);
   }
 
   /**
@@ -348,12 +364,7 @@ export class RenderEngine {
     for (let attempt = 0; attempt < 20; attempt++) {
       try {
         await new Promise((r) => setTimeout(r, attempt === 0 ? 50 : 500));
-        const r = await this.createCompositor();
-        // Force re-upload from the stacks' bitmaps.
-        for (const ls of this.layers) {
-          ls.stacks[0].version++;
-          ls.stacks[1].version++;
-        }
+        const r = await this.createCompositor(); // re-uploads every held stack (adoptStacks)
         this.snapEvery = this.snapEvery || 1000;
         // The rebuilt compositor is copied once it has drawn for SNAP_SETTLE_MS: the main thread
         // uncovers the screen on that copy.
@@ -443,6 +454,7 @@ export class RenderEngine {
     let late = 0;
     for (const l of this.layers) late += l.lateFlips;
     const gpuBytes = this.compositor?.gpuBytes?.();
+    const uploadMs = this.compositor?.uploadMs?.();
     return {
       presented: this.clock.presented,
       missed: this.clock.missed,
@@ -457,6 +469,7 @@ export class RenderEngine {
       slideCue: this.markerLive,
       slideFlipAt: this.markerFlipAt,
       ...(gpuBytes !== undefined ? { gpuMB: Math.round(gpuBytes / 1e5) / 10 } : {}),
+      ...(uploadMs !== undefined ? { uploadMs } : {}),
     };
   }
 
@@ -474,6 +487,13 @@ export class RenderEngine {
     const frameMs = this.clock.frameMs;
     this.inputs.now = now;
     for (let i = 0; i < this.layers.length; i++) this.layers[i]!.tick(now, frameMs);
+    const c = this.compositor;
+    // A flip held for its upload: what fits this frame's budget is uploaded now and flips on time.
+    if (c?.uploadDue?.(this.inputs, now, frameMs))
+      for (let i = 0; i < this.layers.length; i++) {
+        const l = this.layers[i]!;
+        if (l.flipPending) l.tick(now, frameMs);
+      }
     if (
       this.markerPending &&
       flipDue(now, this.markerAt, frameMs) &&
@@ -485,7 +505,6 @@ export class RenderEngine {
     }
     this.videoRing.select(now, frameMs);
     if (this.opts.testPixel) this.updateTestPixel();
-    const c = this.compositor;
     if (!c) return; // rebuilding after device loss; the main thread shows the last frame copy
     try {
       this.drawFrame(c);
@@ -522,7 +541,7 @@ export class RenderEngine {
   /**
    * Draw one frame on `c`. Texture uploads stay out of `draw` (design/27 §7.3): what this frame samples is
    * uploaded just before it, the rest (content armed for a coming flip) after its submit, off the frame's
-   * critical path.
+   * critical path, in strips within the compositor's per-frame budget.
    */
   private drawFrame(c: Compositor): void {
     /* @hot */

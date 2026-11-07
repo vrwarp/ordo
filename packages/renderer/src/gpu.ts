@@ -1,5 +1,13 @@
-import { type Compositor, type FrameInputs, MAX_VIDEO_SLOTS, sceneVideoPresent } from './compositor.ts';
-import { PLANE_FLAGS, PLANE_HAS_OVER, PLANE_VIDEO } from './scene.ts';
+import {
+  type Compositor,
+  type FrameInputs,
+  MAX_VIDEO_SLOTS,
+  UploadMeter,
+  opaqueFrom,
+  opaqueLive,
+  sceneVideoPresent,
+} from './compositor.ts';
+import { PLANE_FLAGS, PLANE_HAS_OVER, PLANE_VIDEO, planeForward } from './scene.ts';
 import {
   type LayerStack,
   SRC_BITMAP,
@@ -10,6 +18,7 @@ import {
   type StackContent,
   fitRect,
 } from './stacks.ts';
+import { flipDue } from './timing.ts';
 
 /**
  * WebGPU compositor. Every pipeline, the sampler, uniform buffer, layer textures (two per layer, at
@@ -20,15 +29,25 @@ import {
  * view, and, for video and scenes, the GPUExternalTexture imported from the latest VideoFrame plus its bind
  * group.
  *
- * Every draw is a fullscreen triangle; the fragment shader maps the fragment position into each
- * source's rect (device px), so bitmaps (always full-frame) and fitted videos use the same pipelines.
- * Colours are premultiplied; blending is "over" (one, one-minus-src-alpha). A crossfade draws the
- * outgoing and incoming stacks in one pass with mix(a, b, t), which is exact for any alpha.
+ * Every draw is a fullscreen triangle cut by a scissor rect to what its sources can cover; the fragment
+ * shader masks each source to its rect (device px). A bitmap is full-frame or a tight sprite (design/27
+ * §7.3): it is uploaded into its layer texture at its frame offset, so a texture is sampled in frame
+ * coordinates and only its sprite's rect of it is ever read (no clear before a sub-rect copy); a fitted
+ * video maps the fragment into its rect. Colours are premultiplied; blending is "over" (one,
+ * one-minus-src-alpha), except for a full-frame opaque bitmap at full weight, which the replace pipeline
+ * writes without blending; the layers under it are not drawn. A crossfade draws the outgoing and incoming
+ * stacks in one pass with mix(a, b, t), which is exact for any alpha.
+ *
+ * Uploads (design/27 §7.3) never run in `draw`: what a frame samples is uploaded before it, the rest after
+ * its submit, in horizontal strips within a per-frame budget (bytes, and CPU time spent in the copies), so
+ * a 4K upload is spread over frames and never stalls one. A stack is ready (`Stack.ready`) only once all of
+ * it is uploaded; a flip to it waits until then and the previous picture stays.
  *
  * Source kinds (design/27 §7.2): t a bitmap texture, e a full-frame video (external texture), v a scene
  * (SRC_SCENE): the base texture, the slot's video drawn through the stack's plane (scene.ts) only while
- * the "video present" bit is set, then the over texture. Singles t e v, pairs tt te tv et ee ev vt ve vv
- * and the test-pixel solid make 13 pipelines, all compiled before the compositor is ready. A scene's
+ * the "video present" bit is set, then the over texture. Singles t e v, pairs tt te tv et ee ev vt ve vv,
+ * the test-pixel solid and the opaque single t (replace) make 14 pipelines, all compiled before the
+ * compositor is ready. A scene's
  * `over` textures (two full-frame textures per layer) are allocated when the first scene with an over is
  * offered (`prepare`), never on a flip; until then a 1x1 transparent texture is bound. A slot without a
  * frame of the stack's generation binds a 1x1 placeholder VideoFrame made at startup; the bit, not the
@@ -37,8 +56,12 @@ import {
 
 const UNIFORM_SLOT_BYTES = 256;
 const UNIFORM_SLOT_FLOATS = UNIFORM_SLOT_BYTES / 4;
-/** struct U { rectA, rectB, p, color, planeA: array<vec4f, 4>, planeB: array<vec4f, 4> }: 12 x vec4f. */
-export const UNIFORM_SIZE = 192;
+/**
+ * struct U { rectA, rectB, p, color, planeA: array<vec4f, 4>, planeB: array<vec4f, 4>, overA, overB }:
+ * 14 x vec4f. rectA/B: the source's rect (a bitmap's or a scene base's sprite rect, a fitted video);
+ * overA/B: a scene's over rect.
+ */
+export const UNIFORM_SIZE = 224;
 /** Float offsets inside a layer's uniform slot. */
 export const U_RECT_A = 0;
 export const U_RECT_B = 4;
@@ -46,6 +69,8 @@ export const U_P = 8;
 export const U_COLOR = 12;
 export const U_PLANE_A = 16;
 export const U_PLANE_B = 32;
+export const U_OVER_A = 48;
+export const U_OVER_B = 52;
 const TEST_SLOT = 5;
 const SLOTS = 6;
 
@@ -60,12 +85,21 @@ const BINDINGS = [1, 1, 3];
 /** The ext slot of the placeholder VideoFrame (after the real video slots). */
 const PLACEHOLDER = MAX_VIDEO_SLOTS;
 
-/** Pipeline labels in compile order: 3 singles, 9 pairs, solid. */
+/** Pipeline labels in compile order: 3 singles, 9 pairs, solid, and the opaque single t (no blending). */
 export const PIPELINES: readonly string[] = [
   ...KINDS.map((k) => `single-${k}`),
   ...KINDS.flatMap((a) => KINDS.map((b) => `pair-${a}${b}`)),
   'solid',
+  'replace-t',
 ];
+
+/**
+ * Default upload budget per frame (design/27 §7.3, §13): at most a quarter of a frame's bytes, and no
+ * further strip once the copies of this frame took this many ms of the render worker's time. Tuned from
+ * venue measurements (bench/gpu-venue.ts).
+ */
+export const UPLOAD_FRAME_SHARE = 0.25;
+export const UPLOAD_BUDGET_MS = 4;
 
 const COMMON = /* wgsl */ `
 struct U {
@@ -75,6 +109,8 @@ struct U {
   color: vec4f,
   planeA: array<vec4f, 4>,
   planeB: array<vec4f, 4>,
+  overA: vec4f,
+  overB: vec4f,
 };
 @group(0) @binding(0) var<uniform> u: U;
 
@@ -87,6 +123,12 @@ fn uvIn(pos: vec2f, r: vec4f) -> vec3f {
   let uv = (pos - r.xy) / max(r.zw, vec2f(1.0));
   let inside = select(0.0, 1.0, all(uv >= vec2f(0.0)) && all(uv <= vec2f(1.0)));
   return vec3f(clamp(uv, vec2f(0.0), vec2f(1.0)), inside);
+}
+
+// A layer texture holds its content at its frame position: sampled in frame coordinates, masked to the
+// content's rect by the caller (a texel centre maps to itself, so nothing outside the rect is filtered in).
+fn frameUv(pos: vec2f, t: texture_2d<f32>) -> vec2f {
+  return pos / vec2f(textureDimensions(t));
 }
 `;
 
@@ -149,13 +191,13 @@ fn planeSample(pos: vec2f, pl: array<vec4f, 4>) -> vec3f {
 `;
 
 /** WGSL declarations and `sample_<name>(pos, rect)` of one source, from binding `b`. */
-function sourceDecl(kind: SrcKind, name: string, b: number, plane: string): string {
+function sourceDecl(kind: SrcKind, name: string, b: number, plane: string, over: string): string {
   if (kind === 't')
     return `
 @group(0) @binding(${b}) var ${name}: texture_2d<f32>;
 fn sample_${name}(pos: vec2f, r: vec4f) -> vec4f {
   let q = uvIn(pos, r);
-  return textureSampleLevel(${name}, samp, q.xy, 0.0) * q.z;
+  return textureSampleLevel(${name}, samp, frameUv(pos, ${name}), 0.0) * q.z;
 }`;
   if (kind === 'e')
     return `
@@ -174,7 +216,7 @@ fn sample_${name}(pos: vec2f, r: vec4f) -> vec4f {
   let q = uvIn(pos, r);
   let pl = u.${plane};
   let flags = u32(pl[3].w + 0.5);
-  var c = textureSampleLevel(${name}_base, samp, q.xy, 0.0) * q.z;
+  var c = textureSampleLevel(${name}_base, samp, frameUv(pos, ${name}_base), 0.0) * q.z;
   if ((flags & ${PLANE_VIDEO}u) != 0u) {
     let s = planeSample(pos, pl);
     let t = textureSampleBaseClampToEdge(${name}_video, samp, s.xy);
@@ -182,7 +224,8 @@ fn sample_${name}(pos: vec2f, r: vec4f) -> vec4f {
     c = vc + c * (1.0 - vc.a);
   }
   if ((flags & ${PLANE_HAS_OVER}u) != 0u) {
-    let o = textureSampleLevel(${name}_over, samp, q.xy, 0.0) * q.z;
+    let qo = uvIn(pos, u.${over});
+    let o = textureSampleLevel(${name}_over, samp, frameUv(pos, ${name}_over), 0.0) * qo.z;
     c = o + c * (1.0 - o.a);
   }
   return c;
@@ -192,7 +235,7 @@ fn sample_${name}(pos: vec2f, r: vec4f) -> vec4f {
 function singleShader(kind: SrcKind): string {
   return `${COMMON}${kind === 'v' ? PLANE : ''}
 @group(0) @binding(1) var samp: sampler;
-${sourceDecl(kind, 'srcA', 2, 'planeA')}
+${sourceDecl(kind, 'srcA', 2, 'planeA', 'overA')}
 @fragment fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   return sample_srcA(pos.xy, u.rectA) * u.p.y;
 }`;
@@ -201,8 +244,8 @@ ${sourceDecl(kind, 'srcA', 2, 'planeA')}
 function pairShader(a: SrcKind, b: SrcKind): string {
   return `${COMMON}${a === 'v' || b === 'v' ? PLANE : ''}
 @group(0) @binding(1) var samp: sampler;
-${sourceDecl(a, 'srcA', 2, 'planeA')}
-${sourceDecl(b, 'srcB', 2 + BINDINGS[KINDS.indexOf(a)]!, 'planeB')}
+${sourceDecl(a, 'srcA', 2, 'planeA', 'overA')}
+${sourceDecl(b, 'srcB', 2 + BINDINGS[KINDS.indexOf(a)]!, 'planeB', 'overB')}
 @fragment fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   let ca = sample_srcA(pos.xy, u.rectA);
   let cb = sample_srcB(pos.xy, u.rectB);
@@ -213,12 +256,13 @@ ${sourceDecl(b, 'srcB', 2 + BINDINGS[KINDS.indexOf(a)]!, 'planeB')}
 const SOLID_SHADER = `${COMMON}
 @fragment fn fs() -> @location(0) vec4f { return u.color; }`;
 
-/** The WGSL of every pipeline, in PIPELINES order (exported for tests). */
+/** The WGSL of every pipeline, in PIPELINES order (exported for tests); replace-t is single-t unblended. */
 export function pipelineSources(): string[] {
   return [
     ...KINDS.map((k) => singleShader(k)),
     ...KINDS.flatMap((a) => KINDS.map((b) => pairShader(a, b))),
     SOLID_SHADER,
+    singleShader('t'),
   ];
 }
 
@@ -234,6 +278,9 @@ export type GpuInit = {
   onError?: (message: string) => void;
   /** Called once the canvas is bound to WebGPU (it can no longer give a 2D context). */
   onContext?: () => void;
+  /** Upload budget per frame (bytes; default UPLOAD_FRAME_SHARE of a frame) and CPU ms (UPLOAD_BUDGET_MS). */
+  uploadBudgetBytes?: number;
+  uploadBudgetMs?: number;
 };
 
 export async function createGpuCompositor(init: GpuInit): Promise<GpuCompositor> {
@@ -256,7 +303,10 @@ export async function createGpuCompositor(init: GpuInit): Promise<GpuCompositor>
     alphaMode: 'opaque',
     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
   });
-  const c = new GpuCompositor(device, context, format, init.width, init.height, init.layerCount);
+  const c = new GpuCompositor(device, context, format, init.width, init.height, init.layerCount, {
+    bytes: init.uploadBudgetBytes,
+    ms: init.uploadBudgetMs,
+  });
   // Keep the adapter reachable: if it is garbage collected some implementations drop the instance and
   // lose the device ("A valid external Instance reference no longer exists").
   c.adapter = adapter;
@@ -292,22 +342,32 @@ export class GpuCompositor implements Compositor {
   readonly kind = 'webgpu' as const;
   onDestroy?: () => void;
   adapter?: GPUAdapter;
-  /** Pipelines: single[k] and pair[ka * 3 + kb] by source kind (t e v), plus the test-pixel solid. */
+  /** Pipelines: single[k] and pair[ka * 3 + kb] by source kind (t e v), the test-pixel solid, replace-t. */
   private single: GPURenderPipeline[] = [];
   private pair: GPURenderPipeline[] = [];
   private solid!: GPURenderPipeline;
+  private replace!: GPURenderPipeline;
   private sampler: GPUSampler;
   private uniformBuf: GPUBuffer;
   private uniformData = new Float32Array(SLOTS * UNIFORM_SLOT_FLOATS);
   private textures: GPUTexture[][] = [];
   private textureViews: GPUTextureView[][] = [];
   private bgSingle: GPUBindGroup[][] = [];
+  private bgReplace: GPUBindGroup[][] = [];
   private bgPairTT: GPUBindGroup[][] = [];
   private bgSolidTest!: GPUBindGroup;
   /** Per layer, by kind index (e, v) and by pair index (all but tt): descriptors re-bound per draw. */
   private dynSingle: DynDesc[][] = [];
   private dynPair: DynDesc[][] = [];
+  /** Per layer and stack index: the content version whose upload is complete (-1 none). */
   private uploaded: Int32Array[] = [];
+  /**
+   * Per layer and stack index, the strip upload in progress: its content version (-1 none), the part
+   * (0 the bitmap or a scene's base, 1 a scene's over) and the next row of that part.
+   */
+  private stripVersion: Int32Array[] = [];
+  private stripPart: Int32Array[] = [];
+  private stripRow: Int32Array[] = [];
   // Scenes
   /** Per layer, the over textures of stacks 0 and 1 (null until a scene with an over is offered). */
   private overTex: (GPUTexture[] | null)[] = [];
@@ -330,7 +390,23 @@ export class GpuCompositor implements Compositor {
   private cmd: GPUCommandBuffer[] = [];
   private copyDst: GPUCopyExternalImageDestInfo;
   private copySrc: GPUCopyExternalImageSourceInfo;
+  private srcOrigin = { x: 0, y: 0 };
+  private dstOrigin = { x: 0, y: 0 };
   private copySize = new Uint32Array(2);
+  /** The scissor of the draw being encoded: x0, y0, x1, y1 (device px). */
+  private sc = new Float64Array(4);
+  /** A scene plane's forward affine (scissor bounds of its video). */
+  private fwd = new Float64Array(6);
+  // Upload budget (design/27 §7.3)
+  private readonly budgetBytes: number;
+  private readonly budgetMs: number;
+  private bytesLeft = 0;
+  /** Between the first upload call of a frame and the drain after its submit. */
+  private frameOpen = false;
+  /** CPU time spent in uploads, per frame (telemetry `uploadMs`). */
+  readonly uploads = new UploadMeter();
+  /** Copies issued (tests and the venue bench). */
+  copies = 0;
 
   constructor(
     readonly device: GPUDevice,
@@ -339,7 +415,14 @@ export class GpuCompositor implements Compositor {
     readonly width: number,
     readonly height: number,
     private layerCount: number,
+    budget: { bytes?: number; ms?: number } = {},
   ) {
+    this.budgetBytes =
+      budget.bytes !== undefined && Number.isFinite(budget.bytes) && budget.bytes >= 0
+        ? budget.bytes
+        : Math.round(width * height * 4 * UPLOAD_FRAME_SHARE);
+    this.budgetMs =
+      budget.ms !== undefined && Number.isFinite(budget.ms) && budget.ms >= 0 ? budget.ms : UPLOAD_BUDGET_MS;
     this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     this.uniformBuf = device.createBuffer({
       size: SLOTS * UNIFORM_SLOT_BYTES,
@@ -352,8 +435,12 @@ export class GpuCompositor implements Compositor {
       storeOp: 'store',
     };
     this.passDesc = { colorAttachments: [this.colorAttachment] };
-    this.copySrc = { source: undefined as unknown as ImageBitmap };
-    this.copyDst = { texture: undefined as unknown as GPUTexture, premultipliedAlpha: true };
+    this.copySrc = { source: undefined as unknown as ImageBitmap, origin: this.srcOrigin };
+    this.copyDst = {
+      texture: undefined as unknown as GPUTexture,
+      origin: this.dstOrigin,
+      premultipliedAlpha: true,
+    };
     for (let s = 0; s <= MAX_VIDEO_SLOTS; s++) {
       this.ext.push(null);
       this.importDesc.push({ source: undefined as unknown as VideoFrame });
@@ -369,11 +456,13 @@ export class GpuCompositor implements Compositor {
     };
     const make = async (code: string, label: string) => {
       const module = d.createShaderModule({ code, label });
+      const target: GPUColorTargetState =
+        label === 'replace-t' ? { format: this.format } : { format: this.format, blend };
       return d.createRenderPipelineAsync({
         label,
         layout: 'auto',
         vertex: { module, entryPoint: 'vs' },
-        fragment: { module, entryPoint: 'fs', targets: [{ format: this.format, blend }] },
+        fragment: { module, entryPoint: 'fs', targets: [target] },
         primitive: { topology: 'triangle-list' },
       });
     };
@@ -382,6 +471,7 @@ export class GpuCompositor implements Compositor {
     this.single = pipes.slice(0, 3);
     this.pair = pipes.slice(3, 12);
     this.solid = pipes[12]!;
+    this.replace = pipes[13]!;
 
     this.clearTex = d.createTexture({
       label: 'transparent-1x1',
@@ -414,18 +504,20 @@ export class GpuCompositor implements Compositor {
       this.textures.push(texs);
       const views = texs.map((x) => x.createView());
       this.textureViews.push(views);
-      this.bgSingle.push(
+      const singleGroups = (pipe: GPURenderPipeline) =>
         [0, 1].map((s) =>
           d.createBindGroup({
-            layout: t.getBindGroupLayout(0),
+            layout: pipe.getBindGroupLayout(0),
             entries: [
               { binding: 0, resource: ubuf(l) },
               { binding: 1, resource: this.sampler },
               { binding: 2, resource: views[s]! },
             ],
           }),
-        ),
-      );
+        );
+      this.bgSingle.push(singleGroups(t));
+      // An auto layout belongs to its pipeline: replace-t has bind groups of its own.
+      this.bgReplace.push(singleGroups(this.replace));
       // Pair (A = outgoing stack, B = incoming stack), indexed by the outgoing stack.
       this.bgPairTT.push(
         [0, 1].map((out) =>
@@ -459,6 +551,9 @@ export class GpuCompositor implements Compositor {
       this.dynSingle.push(singles);
       this.dynPair.push(pairs);
       this.uploaded.push(new Int32Array(2).fill(-1));
+      this.stripVersion.push(new Int32Array(2).fill(-1));
+      this.stripPart.push(new Int32Array(2));
+      this.stripRow.push(new Int32Array(2));
       this.overTex.push(null);
       this.overViews.push(null);
     }
@@ -500,6 +595,11 @@ export class GpuCompositor implements Compositor {
     return this.textures.length * 2 * this.width * this.height * 4 + this.overBytes;
   }
 
+  /** See Compositor.uploadMs. */
+  uploadMs(): number {
+    return this.uploads.max();
+  }
+
   draw(f: FrameInputs): void {
     /* @hot */
     this.frameNo++;
@@ -510,7 +610,11 @@ export class GpuCompositor implements Compositor {
     this.colorAttachment.view = this.context.getCurrentTexture().createView();
     const enc = d.createCommandEncoder();
     const pass = enc.beginRenderPass(this.passDesc);
-    for (let l = 0; l < f.layers.length && l < this.layerCount; l++) this.drawLayer(pass, f.layers[l]!, l, f);
+    const n = Math.min(f.layers.length, this.layerCount);
+    // An opaque full-frame layer at full weight hides everything under it: start there.
+    const first = opaqueFrom(f.layers, n, this.width, this.height);
+    const opaque = n > 0 && opaqueLive(f.layers[first]!, this.width, this.height);
+    for (let l = first; l < n; l++) this.drawLayer(pass, f.layers[l]!, l, f, opaque && l === first);
     if (f.testPixel[0]! >= 0) {
       const b = TEST_SLOT * UNIFORM_SLOT_FLOATS + U_COLOR;
       this.uniformData[b] = f.testPixel[0]! / 255;
@@ -533,6 +637,8 @@ export class GpuCompositor implements Compositor {
     ls: LayerStack<ImageBitmap>,
     l: number,
     f: FrameInputs,
+    /** The layer is the frame's opaque first layer (`opaqueFrom`): written without blending. */
+    replace: boolean,
   ): void {
     /* @hot */
     const liveIdx = ls.live;
@@ -545,13 +651,21 @@ export class GpuCompositor implements Compositor {
     const w = ls.weight(f.now);
     const u = this.uniformData;
     const base = l * UNIFORM_SLOT_FLOATS;
+    const sc = this.sc;
+    sc[0] = this.width;
+    sc[1] = this.height;
+    sc[2] = 0;
+    sc[3] = 0;
     if (liveOn && outOn) {
       const ka = this.kindOf(out, l, f);
       const kb = this.kindOf(live, l, f);
-      this.writeRect(out, f, base + U_RECT_A);
-      this.writeRect(live, f, base + U_RECT_B);
+      this.writeRect(out, f, base + U_RECT_A, base + U_OVER_A);
+      this.writeRect(live, f, base + U_RECT_B, base + U_OVER_B);
       if (ka === K_V) this.writePlane(out, f, l, base + U_PLANE_A);
       if (kb === K_V) this.writePlane(live, f, l, base + U_PLANE_B);
+      this.cover(out, ka, f, l, base + U_RECT_A, base + U_OVER_A);
+      this.cover(live, kb, f, l, base + U_RECT_B, base + U_OVER_B);
+      if (!this.scissor(pass)) return;
       u[base + U_P] = w;
       u[base + U_P + 1] = 1;
       pass.setPipeline(this.pair[ka * 3 + kb]!);
@@ -568,18 +682,82 @@ export class GpuCompositor implements Compositor {
     const s = liveOn ? live : out;
     const sIdx = liveOn ? liveIdx : outIdx;
     const k = this.kindOf(s, l, f);
-    this.writeRect(s, f, base + U_RECT_A);
+    const alpha = liveOn ? w : 1 - w;
+    this.writeRect(s, f, base + U_RECT_A, base + U_OVER_A);
     if (k === K_V) this.writePlane(s, f, l, base + U_PLANE_A);
+    this.cover(s, k, f, l, base + U_RECT_A, base + U_OVER_A);
+    if (!this.scissor(pass)) return;
     u[base + U_P] = 1;
-    u[base + U_P + 1] = liveOn ? w : 1 - w;
-    pass.setPipeline(this.single[k]!);
-    if (k === K_T) pass.setBindGroup(0, this.bgSingle[l]![sIdx]!);
-    else {
+    u[base + U_P + 1] = alpha;
+    if (replace) {
+      // Opaque and covering the frame: written without blending (nothing under it is drawn).
+      pass.setPipeline(this.replace);
+      pass.setBindGroup(0, this.bgReplace[l]![sIdx]!);
+    } else if (k === K_T) {
+      pass.setPipeline(this.single[k]!);
+      pass.setBindGroup(0, this.bgSingle[l]![sIdx]!);
+    } else {
+      pass.setPipeline(this.single[k]!);
       const dd = this.dynSingle[l]![k]!;
       this.bindSource(dd.entries, 2, k, s, sIdx, l, f);
       pass.setBindGroup(0, this.device.createBindGroup(dd.desc));
     }
     pass.draw(3);
+  }
+
+  /** Grow the scissor of this draw by what a source of kind `k` can cover (rects already written). */
+  private cover(
+    s: Stack<ImageBitmap>,
+    k: number,
+    f: FrameInputs,
+    l: number,
+    rect: number,
+    over: number,
+  ): void {
+    /* @hot */
+    const u = this.uniformData;
+    this.grow(u[rect]!, u[rect + 1]!, u[rect + 2]!, u[rect + 3]!);
+    if (k !== K_V) return;
+    if (s.over && this.overViews[l]) this.grow(u[over]!, u[over + 1]!, u[over + 2]!, u[over + 3]!);
+    if (!sceneVideoPresent(s, f.video)) return;
+    // The video's frame (the plane's unit square) in device px, plus its anti-aliased edge.
+    const m = this.fwd;
+    if (!planeForward(s.plane, m)) {
+      this.grow(0, 0, this.width, this.height); // degenerate: never cut what the shader decides
+      return;
+    }
+    const ax = m[0]!;
+    const ay = m[1]!;
+    const bx = m[2]!;
+    const by = m[3]!;
+    const x0 = m[4]! + Math.min(ax, 0) + Math.min(bx, 0) - 2;
+    const y0 = m[5]! + Math.min(ay, 0) + Math.min(by, 0) - 2;
+    const x1 = m[4]! + Math.max(ax, 0) + Math.max(bx, 0) + 2;
+    const y1 = m[5]! + Math.max(ay, 0) + Math.max(by, 0) + 2;
+    this.grow(x0, y0, x1 - x0, y1 - y0);
+  }
+
+  private grow(x: number, y: number, w: number, h: number): void {
+    /* @hot */
+    if (!(w > 0 && h > 0)) return;
+    const sc = this.sc;
+    if (x < sc[0]!) sc[0] = x;
+    if (y < sc[1]!) sc[1] = y;
+    if (x + w > sc[2]!) sc[2] = x + w;
+    if (y + h > sc[3]!) sc[3] = y + h;
+  }
+
+  /** Set the scissor to the covered rect in whole pixels within the frame; false when it is empty. */
+  private scissor(pass: GPURenderPassEncoder): boolean {
+    /* @hot */
+    const sc = this.sc;
+    const x0 = Math.max(0, Math.floor(sc[0]!));
+    const y0 = Math.max(0, Math.floor(sc[1]!));
+    const x1 = Math.min(this.width, Math.ceil(sc[2]!));
+    const y1 = Math.min(this.height, Math.ceil(sc[3]!));
+    if (!(x1 > x0 && y1 > y0)) return false;
+    pass.setScissorRect(x0, y0, x1 - x0, y1 - y0);
+    return true;
   }
 
   /**
@@ -615,7 +793,11 @@ export class GpuCompositor implements Compositor {
     return at + 1;
   }
 
-  private writeRect(s: Stack<ImageBitmap>, f: FrameInputs, o: number): void {
+  /**
+   * The rect of a source (uniform floats at `o`): a fitted video's, else its bitmap's sprite rect (a scene's
+   * base); a scene also writes its over's at `ov`. A source without a bitmap has an empty rect.
+   */
+  private writeRect(s: Stack<ImageBitmap>, f: FrameInputs, o: number, ov: number): void {
     /* @hot */
     const u = this.uniformData;
     if (s.kind === SRC_VIDEO) {
@@ -623,10 +805,17 @@ export class GpuCompositor implements Compositor {
       fitRect(fr.displayWidth, fr.displayHeight, this.width, this.height, s.fit, u, o);
       return;
     }
-    u[o] = 0;
-    u[o + 1] = 0;
-    u[o + 2] = this.width;
-    u[o + 3] = this.height;
+    const b = s.bitmap;
+    u[o] = s.x;
+    u[o + 1] = s.y;
+    u[o + 2] = b ? b.width : 0;
+    u[o + 3] = b ? b.height : 0;
+    if (s.kind !== SRC_SCENE) return;
+    const v = s.over;
+    u[ov] = s.overX;
+    u[ov + 1] = s.overY;
+    u[ov + 2] = v ? v.width : 0;
+    u[ov + 3] = v ? v.height : 0;
   }
 
   /**
@@ -682,41 +871,177 @@ export class GpuCompositor implements Compositor {
     return s.videoSlot >= 0 && s.videoSlot < MAX_VIDEO_SLOTS && f.video.frames[s.videoSlot] != null;
   }
 
-  /** See Compositor.drainUploads: `draw` samples only textures uploaded here. */
+  /**
+   * See Compositor.drainUploads: `draw` samples only textures uploaded here. `all` false (before a draw):
+   * what the draw samples, in full, at once: content shown on the frame it changed (a `refresh` of the
+   * live copy, content after a device loss). `all` true (after the submit): everything else, the armed
+   * content of coming flips first, in strips within the frame's budget; a stack becomes ready when its
+   * last strip is copied.
+   */
   drainUploads(f: FrameInputs, all: boolean): void {
     /* @hot */
-    for (let l = 0; l < f.layers.length && l < this.layerCount; l++) {
-      const ls = f.layers[l]!;
-      const liveIdx = ls.live;
-      this.ensureUploaded(l, liveIdx, ls.stacks[liveIdx]!);
-      if (all || ls.fading) this.ensureUploaded(l, 1 - liveIdx, ls.stacks[1 - liveIdx]!);
+    const n = Math.min(f.layers.length, this.layerCount);
+    this.openFrame();
+    if (!all) {
+      for (let l = 0; l < n; l++) {
+        const ls = f.layers[l]!;
+        const liveIdx = ls.live;
+        this.ensureUploaded(l, liveIdx, ls.stacks[liveIdx]!, false);
+        if (ls.fading) this.ensureUploaded(l, 1 - liveIdx, ls.stacks[1 - liveIdx]!, false);
+      }
+      this.uploads.pause();
+      return;
     }
+    // What is on screen (when a caller skipped the pre-draw drain), then the content a pending flip waits
+    // for, then the rest of the armed content.
+    for (let l = 0; l < n; l++) {
+      const ls = f.layers[l]!;
+      this.ensureUploaded(l, ls.live, ls.stacks[ls.live]!, false);
+    }
+    for (let l = 0; l < n; l++) {
+      const ls = f.layers[l]!;
+      const a = ls.stacks[1 - ls.live]!;
+      if (ls.flipPending && a.key === ls.flipKey) this.ensureUploaded(l, 1 - ls.live, a, true);
+    }
+    for (let l = 0; l < n; l++) {
+      const ls = f.layers[l]!;
+      this.ensureUploaded(l, 1 - ls.live, ls.stacks[1 - ls.live]!, true);
+    }
+    this.uploads.end();
+    this.frameOpen = false;
   }
 
-  /** Upload a stack's bitmaps into its textures when its content changed (arm time, not every frame). */
-  private ensureUploaded(l: number, idx: number, s: Stack<ImageBitmap>): void {
+  /** See Compositor.uploadDue. */
+  uploadDue(f: FrameInputs, now: number, frameMs: number): boolean {
+    /* @hot */
+    const n = Math.min(f.layers.length, this.layerCount);
+    this.openFrame();
+    let readied = false;
+    for (let l = 0; l < n; l++) {
+      const ls = f.layers[l]!;
+      if (!ls.flipPending || !flipDue(now, ls.flipAt, frameMs)) continue;
+      const idx = 1 - ls.live;
+      const a = ls.stacks[idx]!;
+      if (a.key !== ls.flipKey || a.ready) continue;
+      this.ensureUploaded(l, idx, a, true);
+      if (a.ready) readied = true;
+    }
+    this.uploads.pause();
+    return readied;
+  }
+
+  /** The frame's first upload call opens its budget (bytes and CPU ms) and its upload time. */
+  private openFrame(): void {
+    /* @hot */
+    if (this.frameOpen) {
+      this.uploads.resume();
+      return;
+    }
+    this.frameOpen = true;
+    this.uploads.begin();
+    this.bytesLeft = this.budgetBytes > 0 ? this.budgetBytes : Number.POSITIVE_INFINITY;
+  }
+
+  /**
+   * Upload a stack's bitmaps into its textures when its content changed (arm time, not every frame): all
+   * at once, or (`budgeted`) the next strips within the frame's budget. Marks the stack ready once all of
+   * it is copied.
+   */
+  private ensureUploaded(l: number, idx: number, s: Stack<ImageBitmap>, budgeted: boolean): void {
     /* @hot */
     const up = this.uploaded[l]!;
-    if (up[idx] === s.version) return;
+    if (up[idx] === s.version) {
+      s.ready = true;
+      return;
+    }
+    if (s.kind !== SRC_BITMAP && s.kind !== SRC_SCENE) {
+      up[idx] = s.version;
+      s.ready = true;
+      return;
+    }
+    const sv = this.stripVersion[l]!;
+    const part = this.stripPart[l]!;
+    const row = this.stripRow[l]!;
+    if (sv[idx] !== s.version) {
+      sv[idx] = s.version;
+      part[idx] = 0;
+      row[idx] = 0;
+    }
+    if (part[idx] === 0) {
+      if (s.bitmap && !this.uploadPart(this.textures[l]![idx]!, s.bitmap, s.x, s.y, row, idx, budgeted))
+        return;
+      part[idx] = 1;
+      row[idx] = 0;
+    }
+    if (part[idx] === 1 && s.kind === SRC_SCENE && s.over) {
+      // prepare() allocated them when the scene was offered; this only runs for a compositor driven
+      // without the engine's hook.
+      if (!this.overTex[l]) this.allocOver(l);
+      if (!this.uploadPart(this.overTex[l]![idx]!, s.over, s.overX, s.overY, row, idx, budgeted)) return;
+    }
+    part[idx] = 2;
     up[idx] = s.version;
-    if (s.kind !== SRC_BITMAP && s.kind !== SRC_SCENE) return;
-    if (s.bitmap) this.upload(this.textures[l]![idx]!, s.bitmap);
-    if (s.kind !== SRC_SCENE || !s.over) return;
-    // prepare() allocated them when the scene was offered; this only runs for a compositor driven
-    // without the engine's hook.
-    if (!this.overTex[l]) this.allocOver(l);
-    this.upload(this.overTex[l]![idx]!, s.over);
+    sv[idx] = -1;
+    s.ready = true;
   }
 
-  private upload(texture: GPUTexture, bitmap: ImageBitmap): void {
+  /**
+   * Copy rows of `bitmap` into `texture` at its frame offset (dx, dy), from row `rows[idx]` on: all that is
+   * left, or (`budgeted`) as many whole rows as the frame's budget allows (at least one while it lasts).
+   * Returns true when the part is complete. The bitmap is cut to the frame.
+   */
+  private uploadPart(
+    texture: GPUTexture,
+    bitmap: ImageBitmap,
+    dx: number,
+    dy: number,
+    rows: Int32Array,
+    idx: number,
+    budgeted: boolean,
+  ): boolean {
+    /* @hot */
+    const w = Math.min(bitmap.width, this.width - dx);
+    const h = Math.min(bitmap.height, this.height - dy);
+    if (!(w > 0 && h > 0)) return true;
+    const from = rows[idx]!;
+    let n = h - from;
+    if (n <= 0) return true;
+    if (budgeted) {
+      if (this.bytesLeft <= 0) return false;
+      if (this.budgetMs > 0 && this.uploads.elapsed() >= this.budgetMs) return false;
+      const fit = Math.floor(this.bytesLeft / (w * 4));
+      if (fit < n) n = fit > 0 ? fit : 1;
+      this.bytesLeft -= n * w * 4;
+    }
+    this.copyRows(texture, bitmap, dx, dy, from, w, n);
+    rows[idx] = from + n;
+    return from + n >= h;
+  }
+
+  private copyRows(
+    texture: GPUTexture,
+    bitmap: ImageBitmap,
+    dx: number,
+    dy: number,
+    row: number,
+    w: number,
+    n: number,
+  ): void {
+    /* @hot */
     this.copySrc.source = bitmap;
+    this.srcOrigin.x = 0;
+    this.srcOrigin.y = row;
     this.copyDst.texture = texture;
-    this.copySize[0] = Math.min(bitmap.width, this.width);
-    this.copySize[1] = Math.min(bitmap.height, this.height);
+    this.dstOrigin.x = dx;
+    this.dstOrigin.y = dy + row;
+    this.copySize[0] = w;
+    this.copySize[1] = n;
+    this.copies++;
+    this.uploads.work++;
     try {
       this.device.queue.copyExternalImageToTexture(this.copySrc, this.copyDst, this.copySize);
     } catch (err) {
-      console.error('[ordo] texture upload failed', err);
+      console.error('[ordo] texture upload failed', err); // alloc-ok (error path)
     }
   }
 

@@ -20,6 +20,11 @@ export type RenderTelemetry = {
   slideFlipAt?: number;
   /** GPU memory of the compositor's layer and scene textures, MB (design/27 §13 budget); absent on 2D. */
   gpuMB?: number;
+  /**
+   * The longest per-frame upload time over the last 128 frames that uploaded, ms of the render worker's CPU
+   * time in the copies (design/27 §13 `uploadMs`; GPU time is measured by bench/gpu-venue.ts); absent on 2D.
+   */
+  uploadMs?: number;
 };
 
 export const EMPTY_TELEMETRY: RenderTelemetry = {

@@ -24,5 +24,10 @@ jitter attributable to this path.
 
 - The soak test reports `droppedVideoFrames` separately so this decision can be
   revisited with data.
-- A WebCodecs path would slot in behind the same `VideoSource` interface in
-  `packages/renderer`.
+- There is no `VideoSource` interface (the original text named one that was never built). The
+  render worker receives the elements' frames as transferred `VideoFrame`s per media slot (`vframe`
+  with the slot's load generation and clock), keeps the two newest per slot (`FrameRing`,
+  `packages/renderer/src/frame-ring.ts`) and imports the presented one as an external texture each
+  frame (design/14 "Video playback", design/27 §7.2). A WebCodecs decoder would replace the main
+  thread's `requestVideoFrameCallback` loop as the producer of those `vframe`s; the renderer would
+  not change.

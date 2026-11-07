@@ -53,6 +53,9 @@ function fakeCtx(rec: { ops: string[]; drawn: FakeBitmap[] }) {
   return new Proxy(state, {
     get(t, k) {
       if (k === 'measureText') return (s: string) => ({ width: s.length * 10 });
+      // Nothing drawn reaches a pixel of these fakes: a tight sprite's edge ring reads transparent.
+      if (k === 'getImageData')
+        return (_x: number, _y: number, w: number, h: number) => ({ data: new Uint8ClampedArray(w * h * 4) });
       if (k in t) return t[k];
       return (...args: unknown[]) => {
         if (k === 'fillText') rec.ops.push(`text:${args[0]}`);
@@ -75,10 +78,34 @@ function fakeCtx(rec: { ops: string[]; drawn: FakeBitmap[] }) {
 class FakeOffscreenCanvas {
   private readonly rec = { ops: [] as string[], drawn: [] as FakeBitmap[] };
   private ctx = fakeCtx(this.rec);
-  constructor(
-    public width: number,
-    public height: number,
-  ) {}
+  private w: number;
+  private h: number;
+  /** Every size a surface was set to (the asset worker sizes it to each tight sprite). */
+  static sizes: [number, number][] = [];
+  constructor(width: number, height: number) {
+    this.w = width;
+    this.h = height;
+  }
+  // Setting a size clears the canvas, as in Chromium.
+  get width(): number {
+    return this.w;
+  }
+  set width(v: number) {
+    this.w = v;
+    this.reset();
+  }
+  get height(): number {
+    return this.h;
+  }
+  set height(v: number) {
+    this.h = v;
+    this.reset();
+  }
+  private reset(): void {
+    this.rec.ops.length = 0;
+    this.rec.drawn.length = 0;
+    FakeOffscreenCanvas.sizes.push([this.w, this.h]);
+  }
   getContext() {
     return this.ctx;
   }
@@ -128,7 +155,10 @@ beforeAll(async () => {
   // Pictures arrive from the hub's file route, tagged with their hash; the poster is 4:3.
   vi.stubGlobal('fetch', async (url: string) => {
     const hash = /files\/([^?]+)/.exec(url)?.[1] ?? '';
-    return { status: 200, ok: true, blob: async () => ({ hash }) };
+    // A file's head (opaque.ts reads it): a .jpg starts with the JPEG marker, anything else is unknown.
+    const head = hash.endsWith('.jpg') ? new Uint8Array([0xff, 0xd8, 0xff, 0xe0]) : new Uint8Array(4);
+    const slice = () => ({ arrayBuffer: async () => head.buffer });
+    return { status: 200, ok: true, blob: async () => ({ hash, size: 4, slice }) };
   });
   // A decode of a file, or a reduction of a decoded picture (`downscaleFor`), keeps the tag.
   vi.stubGlobal(
@@ -393,5 +423,52 @@ describe('asset worker: what a slide job draws follows slideContent (design/27 ย
       'image:mine.png',
       'text:Added',
     ]);
+  });
+});
+
+describe('asset worker: tight sprites and opaque layers (design/27 ยง7.3, M7)', () => {
+  it('draws a lower third as a tight sprite at its offset', async () => {
+    const { msg, transfer } = await run({
+      kind: 'lowerThird',
+      layer: 2,
+      key: 'lt|x',
+      text: 'Pastor Anna',
+      look: LOOK_MAIN,
+    });
+    const b = msg!.bitmap as unknown as FakeBitmap;
+    expect(msg!.kind).toBe(SRC_BITMAP);
+    expect(b.width * b.height).toBeLessThan(W * H * 0.8);
+    expect(msg!.x).toBeGreaterThanOrEqual(0);
+    expect(msg!.y).toBeGreaterThan(H / 2);
+    expect(b.ops).toEqual(['text:Pastor Anna']);
+    expect(msg).not.toHaveProperty('opaque');
+    expect(transfer).toEqual([msg!.bitmap]);
+  });
+
+  it('draws a lyric-only band as a sprite, and a slide covering the frame full-frame', async () => {
+    const band = (await run(slideJob({ video: undefined, look: LOOK_LOWER_THIRD, isSong: true }))).msg!;
+    expect(band.y).toBeGreaterThan(0);
+    expect((band.bitmap as unknown as FakeBitmap).height).toBeLessThan(H);
+    // The slide's page picture covers the frame: one full-frame bitmap, no offset.
+    const page = (await run(slideJob({ video: undefined }))).msg!;
+    expect(page).not.toHaveProperty('x');
+    expect((page.bitmap as unknown as FakeBitmap).width).toBe(W);
+  });
+
+  it('marks a cover-fitted JPEG opaque, and neither a contained one nor another file', async () => {
+    const job = (hash: string, fit: 'cover' | 'contain'): AssetJob => ({
+      kind: 'image',
+      layer: 0,
+      key: `img|${hash}|${fit}`,
+      hash,
+      fit,
+    });
+    const cover = (await run(job('photo.jpg', 'cover'))).msg!;
+    expect(cover.opaque).toBe(true);
+    expect(cover).not.toHaveProperty('x');
+    const contain = (await run(job('photo.jpg', 'contain'))).msg!;
+    expect(contain).not.toHaveProperty('opaque');
+    const png = (await run(job('art.png', 'cover'))).msg!;
+    expect(png).not.toHaveProperty('opaque');
   });
 });

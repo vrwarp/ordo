@@ -29,11 +29,15 @@ permission prompt is pending, and outputs open on the current screen instead. Re
 operator reload happens only when this browser session launched outputs before, and never in the same gesture
 as Launch or Relaunch, because that raced the launch and lost the windows.
 
-## One full-frame bitmap per slide layer (design/14)
+## One bitmap per layer (design/14)
 
 The asset worker rasterizes the whole slide layer of a cue, under a given look, into one output-resolution
-bitmap with the shared `text2d.ts` code. The render worker composites five layers of pre-built textures. This
-keeps the GPU side trivial and makes lyric-only, stage and stream looks the same code path.
+bitmap with the shared drawers (`text2d.ts`, the text engine). The render worker composites five layers of
+pre-built textures. This keeps the GPU side trivial and makes lyric-only, stage and stream looks the same code
+path. Two refinements since: a slide whose video plays in its box is a scene of a base bitmap, the video
+through a plane and an over bitmap (design/27 §7.2, M5); and the bitmap is the tight sprite of what the layer
+draws, at its offset, wherever that saves work, uploaded in strips within a per-frame budget (design/27
+§7.3, M7). A layer is still one picture per cue, never a texture per object.
 
 ## Canvas 2D compositor as a safety net (ADR 0001)
 

@@ -1,4 +1,10 @@
-import { type Compositor, type FrameInputs, sceneVideoPresent } from './compositor.ts';
+import {
+  type Compositor,
+  type FrameInputs,
+  opaqueFrom,
+  opaqueLive,
+  sceneVideoPresent,
+} from './compositor.ts';
 import {
   MASK_ELLIPSE,
   MASK_ROUND,
@@ -41,6 +47,9 @@ type RoundMask = { rx: number; ry: number; path: Path2D };
  * Canvas 2D fallback compositor, used when WebGPU is unavailable (headless tests, odd machines, software
  * adapters). It draws the same bitmaps and video frames with the same crossfade maths: the pair is mixed
  * in a scratch canvas with additive blending of premultiplied colour (exact mix), then composited over.
+ * A tight sprite (design/27 §7.3) is drawn at its offset, and a crossfade of two sprites mixes only the
+ * rect they cover. A full-frame opaque bitmap at full weight is drawn with 'copy' (no blending) and
+ * nothing under it is drawn, the clear included (`opaqueFrom`).
  *
  * A scene stack (SRC_SCENE, design/27 §7.2, scene.ts) draws its base, then, while its slot holds a frame
  * of the stack's generation, the video through its plane, then its over. The video is drawn with
@@ -64,6 +73,8 @@ export class Canvas2DCompositor implements Compositor {
   private scratch: OffscreenCanvas;
   private sctx: OffscreenCanvasRenderingContext2D;
   private rect = new Float32Array(4);
+  /** The rect a crossfade mixes: x0, y0, x1, y1 (device px). */
+  private mix = new Float64Array(4);
   private clearStyle = '';
   private clearKey = -1;
   private pixelStyle = '';
@@ -129,9 +140,20 @@ export class Canvas2DCompositor implements Compositor {
       this.clearKey = ck;
       this.clearStyle = rgbString(f.clear[0]! * 255, f.clear[1]! * 255, f.clear[2]! * 255);
     }
-    ctx.fillStyle = this.clearStyle;
-    ctx.fillRect(0, 0, this.width, this.height);
-    for (let i = 0; i < f.layers.length; i++) this.drawLayer(f.layers[i]!, f);
+    const n = f.layers.length;
+    const first = opaqueFrom(f.layers, n, this.width, this.height);
+    if (n > 0 && opaqueLive(f.layers[first]!, this.width, this.height)) {
+      // Opaque and covering the frame: it replaces the clear and every layer under it.
+      ctx.globalCompositeOperation = 'copy';
+      const b = f.layers[first]!.liveStack.bitmap!;
+      ctx.drawImage(b, 0, 0, b.width, b.height);
+      ctx.globalCompositeOperation = 'source-over';
+      for (let i = first + 1; i < n; i++) this.drawLayer(f.layers[i]!, f);
+    } else {
+      ctx.fillStyle = this.clearStyle;
+      ctx.fillRect(0, 0, this.width, this.height);
+      for (let i = 0; i < n; i++) this.drawLayer(f.layers[i]!, f);
+    }
     if (f.testPixel[0]! >= 0) {
       const pk = (f.testPixel[0]! << 16) | (f.testPixel[1]! << 8) | f.testPixel[2]!;
       if (pk !== this.pixelKey) {
@@ -154,14 +176,28 @@ export class Canvas2DCompositor implements Compositor {
     const w = ls.weight(f.now);
     const ctx = this.ctx;
     if (liveOn && outOn) {
+      // Mixed in the scratch, within the rect the two sources cover (two sprites: their union).
+      const m = this.mix;
+      m[0] = this.width;
+      m[1] = this.height;
+      m[2] = 0;
+      m[3] = 0;
+      this.coverOf(out);
+      this.coverOf(live);
+      const x0 = Math.max(0, Math.floor(m[0]!));
+      const y0 = Math.max(0, Math.floor(m[1]!));
+      const x1 = Math.min(this.width, Math.ceil(m[2]!));
+      const y1 = Math.min(this.height, Math.ceil(m[3]!));
+      if (!(x1 > x0 && y1 > y0)) return;
       const s = this.sctx;
       s.globalCompositeOperation = 'source-over';
-      s.clearRect(0, 0, this.width, this.height);
+      s.clearRect(x0, y0, x1 - x0, y1 - y0);
       this.mixSource(s, out, f, 1 - w);
       s.globalCompositeOperation = 'lighter';
       this.mixSource(s, live, f, w);
       ctx.globalAlpha = 1;
-      ctx.drawImage(this.scratch, 0, 0);
+      if (x0 === 0 && y0 === 0 && x1 === this.width && y1 === this.height) ctx.drawImage(this.scratch, 0, 0);
+      else ctx.drawImage(this.scratch, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
       return;
     }
     const one = liveOn ? live : out;
@@ -180,6 +216,28 @@ export class Canvas2DCompositor implements Compositor {
       this.drawSource(ctx, one, f);
     }
     ctx.globalAlpha = 1;
+  }
+
+  /** Grow the crossfade's rect by what a stack covers: a bitmap its sprite rect, anything else the frame. */
+  private coverOf(s: Stack<ImageBitmap>): void {
+    /* @hot */
+    const m = this.mix;
+    let x0 = 0;
+    let y0 = 0;
+    let x1 = this.width;
+    let y1 = this.height;
+    if (s.kind === SRC_BITMAP) {
+      const b = s.bitmap;
+      if (!b) return;
+      x0 = s.x;
+      y0 = s.y;
+      x1 = s.x + b.width;
+      y1 = s.y + b.height;
+    }
+    if (x0 < m[0]!) m[0] = x0;
+    if (y0 < m[1]!) m[1] = y0;
+    if (x1 > m[2]!) m[2] = x1;
+    if (y1 > m[3]!) m[3] = y1;
   }
 
   /** Draw a stack into the crossfade's scratch at `alpha`, with the scratch's current blend mode. */
@@ -225,14 +283,18 @@ export class Canvas2DCompositor implements Compositor {
 
   private drawSource(ctx: OffscreenCanvasRenderingContext2D, s: Stack<ImageBitmap>, f: FrameInputs): void {
     /* @hot */
+    // Bitmaps are drawn 1:1 at their offset (a full-frame bitmap at 0, 0; a tight sprite where it was drawn).
     if (s.kind === SRC_BITMAP) {
-      if (s.bitmap) ctx.drawImage(s.bitmap, 0, 0, this.width, this.height);
+      const b = s.bitmap;
+      if (b) ctx.drawImage(b, s.x, s.y, b.width, b.height);
       return;
     }
     if (s.kind === SRC_SCENE) {
-      if (s.bitmap) ctx.drawImage(s.bitmap, 0, 0, this.width, this.height);
+      const b = s.bitmap;
+      if (b) ctx.drawImage(b, s.x, s.y, b.width, b.height);
       if (sceneVideoPresent(s, f.video)) this.drawPlane(ctx, s.plane, f.video.frames[s.videoSlot]!);
-      if (s.over) ctx.drawImage(s.over, 0, 0, this.width, this.height);
+      const o = s.over;
+      if (o) ctx.drawImage(o, s.overX, s.overY, o.width, o.height);
       return;
     }
     if (s.kind === SRC_VIDEO) {
