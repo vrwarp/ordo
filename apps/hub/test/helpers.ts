@@ -6,11 +6,20 @@ import { APP_VERSION } from '@ordo/protocol';
 import WebSocket from 'ws';
 import type { HubConfig } from '../src/config.ts';
 import { createHub, type Hub } from '../src/hub.ts';
+import type { ToolProbe } from '../src/tools.ts';
 
 export const OPERATE_PIN = '111111';
 export const EDIT_PIN = '222222';
 
 export type TestHub = Hub & { url: string; dir: string; cleanup(): Promise<void> };
+
+/**
+ * The server tools a test hub sees (design/27 M9, `tools.ts`): LibreOffice and poppler-utils 'available'
+ * without looking for them, so the PowerPoint tests behave the same on any machine (those that really run
+ * LibreOffice skip without it). A test of their absence passes `libreoffice: { mode: 'off', exe: '' }`, or
+ * `toolProbe: undefined` to detect them for real.
+ */
+export const TEST_TOOLS: ToolProbe = () => ({ state: 'available' });
 
 export function tempDir(prefix = 'ordo-hub-'): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -29,6 +38,7 @@ export async function startHub(overrides: Partial<HubConfig> = {}): Promise<Test
     importRoots: [join(dir, 'import')],
     host: '127.0.0.1',
     healthIntervalMs: 100,
+    toolProbe: TEST_TOOLS,
     ...overrides,
   });
   const url = await hub.listen(0);

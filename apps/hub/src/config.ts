@@ -1,5 +1,6 @@
-import { dirname, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { ToolProbe } from './tools.ts';
 
 export type FetchLike = (
   url: string,
@@ -50,6 +51,17 @@ export type HubConfig = {
    * PATH). `sandbox` keeps Chromium's sandbox (ORDO_CHROMIUM_SANDBOX=1); containers usually cannot.
    */
   chromium: { path: string; sandbox: boolean };
+  /**
+   * LibreOffice (design/27 M9: optional; `tools.ts`). `ORDO_LIBREOFFICE`: `auto` or unset (the default:
+   * `soffice` on the PATH, else the Debian alias `libreoffice`), `off` (also `0`, `false`, `no`: no office code
+   * ever runs on a deck), or the absolute path of soffice. Anything else is `warning` (logged at start) and auto.
+   */
+  libreoffice: LibreOfficeConfig;
+  /**
+   * Tests only: decides each server tool's state instead of looking for it on the PATH and running its version
+   * command (`tools.ts` `HubTools`). `libreoffice.mode: 'off'` still wins.
+   */
+  toolProbe?: ToolProbe;
   /** Number of concurrent heavy and light jobs. */
   jobs: { heavy: number; light: number };
   /**
@@ -58,6 +70,27 @@ export type HubConfig = {
    */
   fontsDir?: string;
 };
+
+export type LibreOfficeConfig = {
+  mode: 'auto' | 'off';
+  /** The command auto looks for (`soffice`), or the absolute path given; '' when off. */
+  exe: string;
+  /** Why the value given was not understood (logged once at start; auto applies). */
+  warning?: string;
+};
+
+/** `ORDO_LIBREOFFICE` read (`HubConfig.libreoffice`). Never throws. */
+export function libreofficeConfig(v: string | undefined): LibreOfficeConfig {
+  const t = (v ?? '').trim();
+  if (!t || t.toLowerCase() === 'auto') return { mode: 'auto', exe: 'soffice' };
+  if (/^(0|off|false|no)$/i.test(t)) return { mode: 'off', exe: '' };
+  if (isAbsolute(t) && !t.includes('\0') && t.length <= 4096) return { mode: 'auto', exe: t };
+  return {
+    mode: 'auto',
+    exe: 'soffice',
+    warning: `ORDO_LIBREOFFICE is neither auto, off nor an absolute path (${JSON.stringify(t.slice(0, 100))}): auto`,
+  };
+}
 
 /** apps/ of this repo: src/ and dist/ both sit two levels below it. */
 export function defaultAppsDir(): string {
@@ -99,6 +132,7 @@ export function loadConfig(
     timeouts: { probe: 30_000, transcode: 4 * 3600_000, soffice: 180_000, pdf: 300_000, light: 600_000 },
     jobs: { heavy: 1, light: 2 },
     chromium: { path: env.ORDO_CHROMIUM || 'chromium', sandbox: env.ORDO_CHROMIUM_SANDBOX === '1' },
+    libreoffice: libreofficeConfig(env.ORDO_LIBREOFFICE),
     fontsDir: env.ORDO_FONTS_DIR ? resolve(env.ORDO_FONTS_DIR) : undefined,
     ...overrides,
   };

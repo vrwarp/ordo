@@ -31,7 +31,8 @@
  *   the `pptx-lo` follow-up as the first import does, reusing the art, page and metafile pictures earlier
  *   follow-ups stored for the same slide (same deck, same art), so LibreOffice runs only for what is new.
  * Refused while the presentation is live-locked (the route answers 423; a queued job defers itself, as the
- * follow-ups do, and never writes during a service: ADR 0007). 'Make editable' on one legacy slide is this
+ * follow-ups do, and never writes during a service: ADR 0007). On a hub without LibreOffice (design/27 M9,
+ * `HubTools`) the conversion leaves nothing waiting, so a re-import queues no follow-up and never waits for one. 'Make editable' on one legacy slide is this
  * job with `slideIds: [that slide]` (`imports.ts` `makeEditableNative`). The presentation becomes a native
  * import (`source.native`, counted over its slides), so the follow-ups and the editor treat it as one.
  *
@@ -838,7 +839,11 @@ export function reimportJob(deps: PptxDeps, env: NativeJobEnv = {}): JobHandler<
     const p0 = deps.lib.presentations.get(pl.presentationId);
     if (!p0) throw notFound('The presentation is gone');
     if (deps.locked(p0.id)) deferWhileLocked(ctx);
-    if (followUpActive(deps, p0.id)) deferWhileFollowUp();
+    // M9: a follow-up on a hub without LibreOffice only clears `pending` (it may be what queued this job): the
+    // re-import never waits for it.
+    await deps.tools.ready;
+    const lo = deps.tools.has('libreoffice');
+    if (lo && followUpActive(deps, p0.id)) deferWhileFollowUp();
     if (deckOf(p0) !== pl.hash)
       throw new Error(
         'The presentation no longer comes from the PowerPoint file this re-import was asked for',
@@ -903,7 +908,7 @@ export function reimportJob(deps: PptxDeps, env: NativeJobEnv = {}): JobHandler<
       // Live now, or a follow-up queued meanwhile (a save brought back waiting slides): the conversion runs
       // again later, its pictures and clips resumed from this payload (the clips' media jobs go now).
       const locked = deps.locked(cur.id);
-      if (locked || followUpActive(deps, cur.id)) {
+      if (locked || (lo && followUpActive(deps, cur.id))) {
         for (const id of clips) deps.media.queue(id);
         if (locked) deferWhileLocked(ctx);
         deferWhileFollowUp();
@@ -926,7 +931,8 @@ export function reimportJob(deps: PptxDeps, env: NativeJobEnv = {}): JobHandler<
         const saved = deps.lib.db.transaction(() => {
           const s = deps.lib.savePresentation(parsed, { expectedRev: cur.rev, by: REIMPORT_BY });
           let after: Job | undefined;
-          if (m.lo.length) {
+          // Without LibreOffice no slide waits (`buildNative`), so nothing is queued.
+          if (m.lo.length && lo) {
             after = enqueuePptx(deps.jobs, PPTX_JOBS.lo, {
               presentationId: s.id,
               hash: pl.hash,

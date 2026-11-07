@@ -25,7 +25,14 @@ export class PptxImports {
     jobs.register(PPTX_JOBS.native, nativeJob(deps), (payload: PptxNativePayload) =>
       queueStoredClips(deps, payload?.done),
     );
-    jobs.register(PPTX_JOBS.lo, loJob(deps));
+    // On a hub without LibreOffice the follow-up re-imports the slides that waited for it (M9).
+    jobs.register(
+      PPTX_JOBS.lo,
+      loJob(deps, {
+        reimport: (presentationId, hash, slideIds) =>
+          this.queueReimport(presentationId, hash, { slideIds }, 'pptx-lo'),
+      }),
+    );
     jobs.register(PPTX_JOBS.reference, referenceJob(deps));
     jobs.register(PPTX_JOBS.textRepair, textRepairJob(deps));
     // Abandoned after repeated crashes: the clips its conversion stored still get their media jobs.
@@ -47,20 +54,32 @@ export class PptxImports {
   /**
    * Queue 'Show PowerPoint picture' for a presentation (the route refuses it while it is locked).
    * `showPicture`: the slides switched to the picture (`PptxReferencePayload.showPicture`); absent: all.
+   * `pdf`: the pictures come from this stored PDF, PowerPoint's own export (M9); absent: LibreOffice draws them.
    *
-   * At most one job per presentation waits: a request while one is queued joins it (the slides to switch
-   * are merged, absent meaning all), and one asking for what a running job does gets that job. Repeated
+   * At most one job per presentation and source waits: a request while one is queued joins it (the slides to
+   * switch are merged, absent meaning all), and one asking for what a running job does gets that job. Repeated
    * clicks or a scripted client never stack LibreOffice runs on the heavy queue.
    */
-  queueReference(presentationId: string, hash: string, by?: string, showPicture?: string[]): Job {
+  queueReference(
+    presentationId: string,
+    hash: string,
+    by?: string,
+    showPicture?: string[],
+    pdf?: string,
+  ): Job {
     const { jobs, lib } = this.deps;
     const active = lib.db
       .prepare(
         `SELECT id, state, payload FROM jobs WHERE kind = ? AND state IN ('queued', 'running')
          AND json_extract(payload, '$.presentationId') = ? AND json_extract(payload, '$.hash') = ?
+         AND coalesce(json_extract(payload, '$.pdf'), '') = ?
          ORDER BY created_at, id`,
       )
-      .all(PPTX_JOBS.reference, presentationId, hash) as { id: string; state: string; payload: string }[];
+      .all(PPTX_JOBS.reference, presentationId, hash, pdf ?? '') as {
+      id: string;
+      state: string;
+      payload: string;
+    }[];
     const queued = active.find((r) => r.state === 'queued');
     if (queued) {
       const pl = JSON.parse(queued.payload) as PptxReferencePayload;
@@ -84,6 +103,7 @@ export class PptxImports {
       hash,
       ...(by ? { by } : {}),
       ...(showPicture ? { showPicture } : {}),
+      ...(pdf ? { pdf } : {}),
     });
   }
 

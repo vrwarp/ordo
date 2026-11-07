@@ -39,6 +39,15 @@
  *
  * Version 1 of a picture-class slide has no objects, `pptx.pending` and its text in `pptx.artText`; a hybrid
  * slide has its native objects (residuals are left out until version 2) and `pptx.artText` from its art.
+ *
+ * **Without LibreOffice** (design/27 M9, `HubTools`: the lite image, `ORDO_LIBREOFFICE=off`): nothing waits
+ * for it. The converter is told (`SceneTaskInput.libreoffice: false`, `EmitOptions.libreoffice`) and lists what
+ * its art or metafile conversion would have drawn (`EmittedSlide.missing`); a converter that still plans them
+ * has them dropped here and listed by the kinds of the art's reasons (`artKinds`). Such a slide is class
+ * hybrid with no art object and `Slide.pptx.missing`; a picture-class slide keeps its text for search and
+ * lists 'slide'. No slide is `pending`, no `pptx-lo` is queued, and the result says `libreoffice: false` and
+ * how many slides have something missing. With LibreOffice each follow-up plan records those kinds
+ * (`PptxLoSlide.kinds`) for a hub that loses LibreOffice later (`fallback.ts` `withoutLibreOffice`).
  */
 import { open, readFile, rm, stat } from 'node:fs/promises';
 import {
@@ -48,6 +57,11 @@ import {
   formatBytes,
   IMPORT_RESERVE_BYTES,
   type ImageObject,
+  MISSING_LIMITS,
+  type MissingKind,
+  missingEntry,
+  missingKind,
+  missingLabel,
   newId,
   planImportSizes,
   Presentation,
@@ -292,7 +306,17 @@ type Draft = {
   metafiles?: { part: string; object: ImageObject; before?: string }[];
   /** The clips the slide plays or names (`EmittedSlide.clips`, `clips.ts`). */
   clips?: EmittedClip[];
+  /**
+   * M9, without LibreOffice: what nothing draws on the slide (`Slide.pptx.missing` entries). A picture-class
+   * slide lists 'slide' instead (`provenance`).
+   */
+  missing?: string[];
+  /** M9, with LibreOffice: the kinds its art holds (`artKinds`), for `PptxLoSlide.kinds`. */
+  artKinds?: MissingKind[];
 };
+
+/** An emitted slide with the fields an M9 converter adds without LibreOffice (`EmitOptions.libreoffice`). */
+type EmittedM9 = EmittedSlide & { missing?: string[]; artText?: string };
 
 class Cancelled extends Error {
   constructor() {
@@ -357,6 +381,8 @@ class NativeImport {
   /** Bytes of `geomFiles`, and the names of files dropped past the import's budget as batches arrived. */
   private geomBytes = 0;
   private readonly geomDropped = new Set<string>();
+  /** LibreOffice can draw what ordo cannot (`HubTools`), decided once the tools are known (`steps`). */
+  private lo = true;
 
   constructor(
     private readonly deps: PptxDeps,
@@ -404,7 +430,8 @@ class NativeImport {
       const result = this.saveVersion1(await this.steps(deck, scratch));
       this.ctx.log(
         `version 1 saved in ${Math.round(performance.now() - t0)} ms: ${result.native} native, ${result.hybrid} hybrid, ` +
-          `${result.picture} picture slide(s)${result.pending ? `, ${result.pending} waiting for LibreOffice` : ''}`,
+          `${result.picture} picture slide(s)${result.pending ? `, ${result.pending} waiting for LibreOffice` : ''}` +
+          (result.missing ? `, ${result.missing} with something ordo cannot draw` : ''),
       );
       return result;
     });
@@ -429,6 +456,13 @@ class NativeImport {
   private async steps(deck: string, scratch: string): Promise<NativeBuild> {
     const { ctx } = this;
     this.scratch = scratch;
+    // M9: whether anything will draw what ordo cannot (the probes settle within 30 s of the start).
+    await this.deps.tools.ready;
+    this.lo = this.deps.tools.has('libreoffice');
+    if (!this.lo) {
+      ctx.log('this hub has no LibreOffice: ordo draws the slides, and lists what it cannot draw');
+      this.log.add('info', 'no LibreOffice on this hub: what ordo cannot draw is listed on its slides');
+    }
 
     if (ctx.payload.sceneHash) {
       const fromClient = await this.stepsFromClientScene(deck, scratch, ctx.payload.sceneHash);
@@ -788,6 +822,7 @@ class NativeImport {
             mediaKinds,
             fonts,
             geomBytes: this.limits.batchGeomBytes,
+            ...(this.lo ? {} : { libreoffice: false }),
           },
           transferables(mine),
         );
@@ -830,7 +865,7 @@ class NativeImport {
         this.checkCancelled();
         this.warn(
           'batch',
-          `slides ${from + 1}-${to} could not be converted (${logSafe(errorMessage(e))}): they wait for LibreOffice pictures`,
+          `slides ${from + 1}-${to} could not be converted (${logSafe(errorMessage(e))}): ${this.lo ? 'they wait for LibreOffice pictures' : 'only their text is kept (this hub has no LibreOffice to draw them)'}`,
         );
       }
       this.ctx.progress(0.1 + (0.5 * to) / n);
@@ -873,7 +908,11 @@ class NativeImport {
             slide: { id: newId(), objects: [] },
             media: new Map(),
             cls: 'picture',
-            notes: ['not converted: a LibreOffice picture is shown instead'],
+            notes: [
+              this.lo
+                ? 'not converted: a LibreOffice picture is shown instead'
+                : 'not converted: this hub has no LibreOffice to draw it',
+            ],
           };
       for (const n of own) this.log.add('info', `${label}: ${n}`);
       if (c?.s.classification.class === 'picture' && !overBudget)
@@ -899,8 +938,18 @@ class NativeImport {
       // The metafiles the slide draws, set aside by the converter (item D): LibreOffice converts them.
       const mf = c?.s.metafiles;
       if (mf?.length && d.cls !== 'picture') {
-        d.metafiles = mf.map((m) => ({ ...m, object: imported(m.object) }));
-        d.notes.push(`${mf.length} metafile picture(s) wait for LibreOffice`);
+        if (this.lo) {
+          d.metafiles = mf.map((m) => ({ ...m, object: imported(m.object) }));
+          d.notes.push(`${mf.length} metafile picture(s) wait for LibreOffice`);
+        } else {
+          d.missing = addMissing(d.missing, 'metafile');
+          d.notes.push(`${mf.length} metafile picture(s) are not drawn: this hub has no LibreOffice`);
+        }
+      }
+      if (c && d.cls !== 'picture') {
+        if (this.lo) {
+          if (d.art) d.artKinds = artKinds(c.s.classification.reasons);
+        } else this.gaps(d, c.s as EmittedM9);
       }
       if (d.cls === 'picture') toPicture(d);
       return d;
@@ -911,6 +960,32 @@ class NativeImport {
         `the speaker notes of ${notesCut} slide(s) were cut: a presentation keeps at most ${NOTES_TOTAL_BYTES / 1024 ** 2} MB of notes`,
       );
     return drafts;
+  }
+
+  /**
+   * M9, without LibreOffice: what LibreOffice would have drawn on this slide is listed (`Draft.missing`). A
+   * converter told so lists it itself (`EmittedSlide.missing`, its note already in the slide's notes); one
+   * that still planned the art has it dropped here, by the kinds of the art's reasons (`artKinds`). The slide
+   * is then hybrid with no art object (design/27 M9 decision 8), its art's text kept for search.
+   */
+  private gaps(d: Draft, e: EmittedM9): void {
+    for (const m of Array.isArray(e.missing) ? e.missing : [])
+      if (typeof m === 'string') d.missing = addMissing(d.missing, m);
+    if (e.artText && !d.artText) d.artText = e.artText;
+    if (d.art) {
+      const kinds = artKinds(e.classification.reasons);
+      for (const k of kinds) d.missing = addMissing(d.missing, k);
+      d.notes.push(`not drawn without LibreOffice: ${kinds.map(missingLabel).join(', ')}`);
+      delete d.art;
+    }
+    if (d.missing?.length && d.cls === 'native') d.cls = 'hybrid';
+  }
+
+  /** The end of a note on a slide that became a picture: what shows it. */
+  private pictureNote(): string {
+    return this.lo
+      ? 'a LibreOffice picture'
+      : 'only its text is kept (this hub has no LibreOffice to draw it)';
   }
 
   /** Step 3: the §3.4 budgets (`planImportSizes`, item F). Returns how many slides were made compact. */
@@ -935,7 +1010,7 @@ class NativeImport {
       for (const n of fresh) files.add(n);
       fileBytes += bytes;
     }
-    const stored = drafts.map((d) => record(d, DIGEST_STANDIN));
+    const stored = drafts.map((d) => record(d, DIGEST_STANDIN, this.lo));
     const sizes = stored.map((sl) => slideBytes(sl));
     // Each slide's compact size with version 2's page picture and text boxes (`compactSlideBytes`).
     const plan = planImportSizes(
@@ -957,30 +1032,30 @@ class NativeImport {
             : plan.reasons[i];
       if (!why) return;
       compact++;
+      const shown = this.lo ? 'shown as a LibreOffice picture' : this.pictureNote();
       if (why === 'slide')
-        this.warn(
-          'budget',
-          `slide ${i + 1} is over ${SIZE_BUDGETS.slideMax / 1024} KB: shown as a LibreOffice picture`,
-        );
+        this.warn('budget', `slide ${i + 1} is over ${SIZE_BUDGETS.slideMax / 1024} KB: ${shown}`);
       if (why === 'geoms')
         this.warn(
           'budget',
-          `slide ${i + 1}'s shape outlines pass the import's ${formatBytes(this.limits.geomFileBytes)} of outline files: shown as a LibreOffice picture`,
+          `slide ${i + 1}'s shape outlines pass the import's ${formatBytes(this.limits.geomFileBytes)} of outline files: ${shown}`,
         );
       d.compact = true;
       d.notes.push(
         why === 'slide'
-          ? 'over the slide size budget: a LibreOffice picture'
+          ? `over the slide size budget: ${this.pictureNote()}`
           : why === 'geoms'
-            ? 'over the import budget of shape outlines: a LibreOffice picture'
-            : 'compact: the presentation reached its size budget',
+            ? `over the import budget of shape outlines: ${this.pictureNote()}`
+            : this.lo
+              ? 'compact: the presentation reached its size budget'
+              : `compact: the presentation reached its size budget, ${this.pictureNote()}`,
       );
       toPicture(d);
     });
     if (plan.tailFrom >= 0)
       this.warn(
         'budget',
-        `the presentation reached its size budget (${SIZE_BUDGETS.presentationMax / 1024 ** 2} MiB): slide ${plan.tailFrom + 1} and later are compact LibreOffice pictures`,
+        `the presentation reached its size budget (${SIZE_BUDGETS.presentationMax / 1024 ** 2} MiB): slide ${plan.tailFrom + 1} and later are compact ${this.lo ? 'LibreOffice pictures' : 'slides that keep only their text (this hub has no LibreOffice to draw them)'}`,
       );
     if (!plan.fits) {
       // Even compact the slides are over the budget (their text): the text kept for search is cut.
@@ -1017,7 +1092,7 @@ class NativeImport {
     for (const d of drafts) {
       if (d.cls === 'picture' || !drawnGeomRefs(d.slide).some((x) => failed.has(x))) continue;
       d.compact = true;
-      d.notes.push('its shape outlines could not be stored: a LibreOffice picture');
+      d.notes.push(`its shape outlines could not be stored: ${this.pictureNote()}`);
       toPicture(d);
       n++;
     }
@@ -1210,7 +1285,7 @@ class NativeImport {
       for (const d of drafts) delete d.slide.backgroundMediaId;
     }
     // Provenance (the digest is set once the objects are final).
-    for (const d of drafts) d.slide.pptx = provenance(d, hash);
+    for (const d of drafts) d.slide.pptx = provenance(d, hash, this.lo);
     p.sections = sectionsOf(drafts, sectionInfo);
     p.arrangements = [{ id: newId(), name: 'Default', sectionIds: p.sections.map((s) => s.id) }];
     sanitizePresentation(p);
@@ -1223,12 +1298,12 @@ class NativeImport {
         const d = byId.get(sl.id);
         this.warn(
           'slide',
-          `slide ${(sl.pptx?.index ?? 0) + 1} could not be stored natively: a LibreOffice picture is shown instead`,
+          `slide ${(sl.pptx?.index ?? 0) + 1} could not be stored natively: ${this.lo ? 'a LibreOffice picture is shown instead' : this.pictureNote()}`,
         );
         if (!d) return Slide.parse({ id: sl.id, objects: [] });
         toPicture(d);
-        d.notes.push('not storable natively: a LibreOffice picture');
-        d.slide.pptx = provenance(d, hash);
+        d.notes.push(`not storable natively: ${this.pictureNote()}`);
+        d.slide.pptx = provenance(d, hash, this.lo);
         const again = Slide.safeParse(d.slide);
         return again.success ? again.data : Slide.parse({ id: sl.id, objects: [], pptx: d.slide.pptx });
       });
@@ -1254,6 +1329,9 @@ class NativeImport {
     );
     const lo = loSlides(drafts, slides);
     if (lo.length) this.log.add('info', `${lo.length} slide(s) wait for LibreOffice`);
+    const gaps = slides.filter((sl) => sl.pptx?.missing?.length).length;
+    if (gaps)
+      this.log.add('info', `${gaps} slide(s) have something ordo cannot draw (no LibreOffice on this hub)`);
     const fonts = missingFonts(
       fontFamilies(slides),
       deps.lib.listFonts().map((f) => f.family),
@@ -1282,7 +1360,8 @@ class NativeImport {
     const saved = deps.lib.db.transaction(() => {
       const v1 = deps.lib.savePresentation(parsed, { create: true, by: 'pptx-import' });
       let after: Job | undefined;
-      if (lo.length) {
+      // Without LibreOffice nothing is pending (`provenance`), so no follow-up is ever queued.
+      if (lo.length && this.lo) {
         const job = enqueuePptx(deps.jobs, PPTX_JOBS.lo, {
           presentationId: v1.id,
           hash,
@@ -1299,16 +1378,27 @@ class NativeImport {
       return v1;
     })();
     deps.lib.emit([{ kind: 'presentation', id: saved.id, rev: saved.rev, entity: saved }]);
-    return importResult({
-      presentationId: saved.id,
-      classes,
-      compact,
-      pending: lo.length,
-      ...(loJobId ? { loJobId } : {}),
-      missingFonts: fonts,
-      notes: this.log.warnings(),
-    });
+    return {
+      ...importResult({
+        presentationId: saved.id,
+        classes,
+        compact,
+        pending: loJobId ? lo.length : 0,
+        ...(loJobId ? { loJobId } : {}),
+        missingFonts: fonts,
+        notes: this.log.warnings(),
+      }),
+      missing: missingSlides(parsed),
+      libreoffice: this.lo,
+    };
   }
+}
+
+/** Slides of a presentation with something nothing draws (`Slide.pptx.missing`). */
+function missingSlides(p: Presentation): number {
+  let n = 0;
+  for (const sec of p.sections) for (const sl of sec.slides) if (sl.pptx?.missing?.length) n++;
+  return n;
 }
 
 /**
@@ -1342,15 +1432,19 @@ function resumedResult(
     save();
   }
   ctx.log('resumed: version 1 was already saved');
-  return importResult({
-    presentationId: saved.id,
-    classes: slides.map((s) => s.pptx?.class ?? 'native'),
-    compact: 0,
-    pending: pending.length,
-    ...(done.loJobId ? { loJobId: done.loJobId } : {}),
-    missingFonts: [],
-    notes: ['resumed after a restart: version 1 was already saved'],
-  });
+  return {
+    ...importResult({
+      presentationId: saved.id,
+      classes: slides.map((s) => s.pptx?.class ?? 'native'),
+      compact: 0,
+      pending: pending.length,
+      ...(done.loJobId ? { loJobId: done.loJobId } : {}),
+      missingFonts: [],
+      notes: ['resumed after a restart: version 1 was already saved'],
+    }),
+    missing: missingSlides(saved),
+    libreoffice: deps.tools.has('libreoffice'),
+  };
 }
 
 // ── Helpers (pure) ──────────────────────────────────────────────────────────────────────────────────────
@@ -1423,6 +1517,9 @@ function toPicture(d: Draft): void {
   delete d.slide.lyricObjectId;
   delete d.art;
   delete d.metafiles;
+  // The whole slide is what is missing now (`provenance`), and what LibreOffice draws is its page.
+  delete d.missing;
+  delete d.artKinds;
   // A hybrid slide's art text is part of the page too.
   const all = [text, d.artText].filter(Boolean).join('\n').slice(0, ART_TEXT_CHARS);
   if (all) d.artText = all;
@@ -1433,13 +1530,18 @@ function toPicture(d: Draft): void {
 const DIGEST_STANDIN = 'x'.repeat(16);
 
 /** The slide as it will be stored, with a stand-in digest (for its size). */
-function record(d: Draft, digest: string): Slide {
-  return { ...d.slide, pptx: { ...provenance(d, 'x'.repeat(64)), digest } };
+function record(d: Draft, digest: string, lo: boolean): Slide {
+  return { ...d.slide, pptx: { ...provenance(d, 'x'.repeat(64), lo), digest } };
 }
 
-/** `Slide.pptx` of a draft (without its digest). */
-function provenance(d: Draft, hash: string): SlidePptx {
-  const pending = d.cls !== 'native' || !!d.metafiles?.length;
+/**
+ * `Slide.pptx` of a draft (without its digest). With LibreOffice (`lo`), a hybrid or picture slide and one
+ * with metafile pictures waits for it (`pending`); without it nothing waits, and what nothing draws is listed
+ * (`missing`: the draft's, or 'slide' for a picture-class slide, design/27 M9).
+ */
+function provenance(d: Draft, hash: string, lo: boolean): SlidePptx {
+  const pending = lo && (d.cls !== 'native' || !!d.metafiles?.length);
+  const missing = lo ? undefined : d.cls === 'picture' ? [missingEntry('slide')] : d.missing;
   const artText = d.artText;
   return {
     fileId: hash,
@@ -1448,6 +1550,7 @@ function provenance(d: Draft, hash: string): SlidePptx {
     class: d.cls,
     version: CONVERTER_VERSION,
     ...(pending ? { pending: true } : {}),
+    ...(missing?.length ? { missing: missing.slice(0, MISSING_LIMITS.entries) } : {}),
     ...(d.notes.length ? { notes: d.notes.slice(0, SLIDE_NOTES).map((n) => logSafe(n)) } : {}),
     ...(artText ? { artText } : {}),
   };
@@ -1551,9 +1654,56 @@ function loSlides(drafts: readonly Draft[], slides: readonly Slide[]): PptxLoSli
       ...(d?.metafiles?.length && sl.pptx.class !== 'picture' ? { metafileObjects: d.metafiles } : {}),
       digest: sl.pptx.digest ?? '',
       ...(d?.art && sl.pptx.class === 'hybrid' ? { replaced: replacedOf(sl, d.art) } : {}),
+      kinds: loKinds(sl.pptx.class, d),
     });
   }
   return out;
+}
+
+/** What a waiting slide lacks if LibreOffice never draws it (`PptxLoSlide.kinds`, `withoutLibreOffice`). */
+function loKinds(cls: SlideClass, d: Draft | undefined): string[] {
+  if (cls === 'picture' || !d) return [missingEntry('slide')];
+  let out: string[] | undefined;
+  if (d.art)
+    for (const k of d.artKinds?.length ? d.artKinds : (['element'] as const)) out = addMissing(out, k);
+  if (d.metafiles?.length) out = addMissing(out, 'metafile');
+  return out ?? [missingEntry('element')];
+}
+
+/** `list` with `entry` added once (a stored `Slide.pptx.missing` entry, within its bounds). */
+function addMissing(list: string[] | undefined, entry: string): string[] {
+  const colon = entry.indexOf(':');
+  const e = missingEntry(missingKind(entry), colon > 0 ? entry.slice(colon + 1) : undefined);
+  const out = list ?? [];
+  if (!out.includes(e) && out.length < MISSING_LIMITS.entries) out.push(e);
+  return out;
+}
+
+/** Reasons of a hybrid slide's art whose element ordo draws as a shape (what a decoration loses). */
+const SHAPE_REASONS: ReadonlySet<string> = new Set(['shapes', 'custGeom', 'geom', 'preset', 'path']);
+
+/**
+ * The kinds of what a hybrid slide's art holds, read from the converter's `art:<reason>` reasons (design/27
+ * M9: what a hub without LibreOffice lists in `Slide.pptx.missing` when the converter does not list it
+ * itself): a chart, SmartArt, an OLE object, an equation, ink, a metafile picture (EMF, WMF), decoration shapes
+ * for geometry; 'element' for anything else (a table, 3-D, a warp). Deck strings are only compared.
+ */
+export function artKinds(reasons: readonly string[]): MissingKind[] {
+  const out: MissingKind[] = [];
+  for (const r of reasons) {
+    if (typeof r !== 'string' || !r.startsWith('art:')) continue;
+    let k = r.slice(4);
+    if (k.startsWith('budget:')) k = k.slice(7);
+    const head = k.split(':')[0] ?? '';
+    const kind: MissingKind =
+      k === 'pic:emf' || k === 'pic:wmf'
+        ? 'metafile'
+        : SHAPE_REASONS.has(head)
+          ? 'decoration'
+          : missingKind(head);
+    if (!out.includes(kind)) out.push(kind);
+  }
+  return out.length ? out : ['element'];
 }
 
 /** Version 1's objects the art replaces, each with its own digest (`PptxLoSlide.replaced`). */

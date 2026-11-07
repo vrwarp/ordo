@@ -4,11 +4,26 @@ export type RunResult = { code: number; stdout: string; stderr: string };
 
 export class ToolError extends Error {
   stderr: string;
+  /**
+   * The program is not there (design/27 M9, `tools.ts`): its spawn failed with ENOENT or EACCES, or a
+   * launcher in front of it (`prlimit`, `unshare`) could not execute it (`missingExit`). A caller never
+   * retries such a run; it marks the tool absent (`HubTools.markMissing`).
+   */
+  readonly missing: boolean;
 
-  constructor(message: string, stderr: string) {
+  constructor(message: string, stderr: string, missing = false) {
     super(message);
     this.stderr = stderr;
+    this.missing = missing;
   }
+}
+
+/**
+ * Whether a run's end means its program is not installed: a launcher (`prlimit`, `unshare`) that exits 126
+ * or 127 saying it 'failed to execute' it (`unshare: failed to execute soffice: No such file or directory`).
+ */
+export function missingExit(code: number | null, stderr: string): boolean {
+  return (code === 126 || code === 127) && /failed to execute/i.test(stderr);
 }
 
 /**
@@ -77,7 +92,8 @@ export function run(
     child.on('error', (e) => {
       clearTimeout(timer);
       opts.signal?.removeEventListener('abort', onAbort);
-      reject(new ToolError(`${cmd}: ${e.message}`, stderr));
+      const code = (e as NodeJS.ErrnoException).code;
+      reject(new ToolError(`${cmd}: ${e.message}`, stderr, code === 'ENOENT' || code === 'EACCES'));
     });
     child.on('close', (code) => {
       clearTimeout(timer);
@@ -93,7 +109,9 @@ export function run(
       const r = { code: code ?? -1, stdout, stderr };
       if (code !== 0 && !opts.allowFail) {
         const tail = stderr.trim().split('\n').slice(-3).join(' | ');
-        return reject(new ToolError(`${cmd} exited with ${code}: ${tail}`, stderr));
+        return reject(
+          new ToolError(`${cmd} exited with ${code}: ${tail}`, stderr, missingExit(code, stderr)),
+        );
       }
       resolve(r);
     });

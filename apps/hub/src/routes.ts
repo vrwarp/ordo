@@ -47,7 +47,8 @@ import type { LogRing } from './log.ts';
 import type { MediaService } from './media/service.ts';
 import type { Store } from './store.ts';
 import { searchGoogleFonts } from './fonts/google.ts';
-import { PPTX_MIME } from './imports.ts';
+import { NO_LIBREOFFICE_PICTURES, NO_PDF_IMPORT, PPTX_MIME } from './imports.ts';
+import { NO_LIBREOFFICE_REFERENCE, NO_PDF_TOOLS } from './pptx/fallback.ts';
 import { planReimport } from './pptx/reimport.ts';
 import type { PptxImportOptions } from './pptx/shared.ts';
 import { sendFile } from './send.ts';
@@ -128,6 +129,58 @@ export type DocumentImportForm = {
   /** The native import's options; only the fields that were sent. */
   options: PptxImportOptions;
 };
+
+/**
+ * The PowerPoint family the import reads (design/27 M9): decks, shows (.ppsx), templates (.potx) and
+ * macro-enabled decks (.pptm), whose macro part is never read (`deckParts.ts` `SKIPPED_PART`).
+ */
+export const PPTX_EXTS: ReadonlySet<string> = new Set(['pptx', 'ppsx', 'potx', 'pptm']);
+/** The compound-file signature of PowerPoint 97-2003 (.ppt, .pps, .pot). */
+const CFB_MAGIC = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
+const ODP_MIME = 'application/vnd.oasis.opendocument.presentation';
+/** What a volunteer does with a presentation the import cannot read. */
+export const SAVE_AS_PPTX =
+  'Open it in PowerPoint, Keynote or LibreOffice Impress and save it as .pptx, then import that file.';
+/** An uploaded PDF of reference pictures (PowerPoint's own export of the deck, design/27 M9). */
+export const MAX_REFERENCE_PDF_BYTES = 256 * 1024 * 1024;
+
+/**
+ * The `mimetype` an OpenDocument zip stores first and uncompressed (ODF 1.2 §3.3), from the upload's first
+ * bytes; undefined for any other zip.
+ */
+function zipMimetype(b: Uint8Array): string | undefined {
+  const u16 = (o: number) => (b[o] ?? 0) | ((b[o + 1] ?? 0) << 8);
+  if (b[0] !== 0x50 || b[1] !== 0x4b || b[2] !== 3 || b[3] !== 4 || u16(8) !== 0) return undefined;
+  const nameLen = u16(26);
+  const extra = u16(28);
+  const size = u16(18) + u16(20) * 65_536;
+  if (nameLen !== 8 || size > 100) return undefined;
+  const at = 30 + nameLen + extra;
+  if (String.fromCharCode(...b.subarray(30, 38)) !== 'mimetype' || at + size > b.length) return undefined;
+  return String.fromCharCode(...b.subarray(at, at + size));
+}
+
+/**
+ * What `POST /import/document` does with an upload, from its first bytes and its name (design/27 M9): a PDF,
+ * a PowerPoint of the OOXML family (a zip named .pptx, .ppsx, .potx or .pptm), or a refusal. PowerPoint
+ * 97-2003 (compound file), OpenDocument (.odp) and Keynote (.key) files are refused with how to save them as
+ * .pptx: converting them would hand an upload nothing can sanitise to an office suite (design/21).
+ */
+export function documentKind(
+  head: Uint8Array,
+  filename: string,
+): { kind: 'pdf' | 'pptx' } | { refused: string } {
+  const s = sniff(head);
+  if (s?.kind === 'pdf') return { kind: 'pdf' };
+  const ext = extOf(filename);
+  if (CFB_MAGIC.every((x, i) => head[i] === x) || ext === 'ppt' || ext === 'pps' || ext === 'pot')
+    return { refused: `PowerPoint 97-2003 files (.ppt, .pps) cannot be imported. ${SAVE_AS_PPTX}` };
+  if (ext === 'odp' || (s?.kind === 'zip' && zipMimetype(head) === ODP_MIME))
+    return { refused: `OpenDocument presentations (.odp) cannot be imported. ${SAVE_AS_PPTX}` };
+  if (ext === 'key') return { refused: `Keynote presentations (.key) cannot be imported. ${SAVE_AS_PPTX}` };
+  if (s?.kind === 'zip' && PPTX_EXTS.has(ext)) return { kind: 'pptx' };
+  return { refused: 'Upload a PowerPoint file (.pptx, .ppsx, .potx or .pptm) or a .pdf file' };
+}
 
 /** `POST /import/document`'s form fields; an unknown value is refused (400), absent fields are defaults. */
 export function documentImportForm(fields: Readonly<Record<string, string>>): DocumentImportForm {
@@ -484,16 +537,61 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     if (job) return reply.code(202).send(job);
     return hub.imports.makeEditable(id, params(req).slideId!, by(req));
   });
-  // 'Show PowerPoint picture' (design/27 §5 "Operator fallback"): LibreOffice pictures of every shown slide.
+  // 'Show PowerPoint picture' (design/27 §5 "Operator fallback"): LibreOffice pictures of every shown slide,
+  // or (M9, multipart with one PDF) the pages of PowerPoint's own PDF export, which needs no LibreOffice.
   route('POST', '/presentations/:id/pptx-reference', 'edit', async (req, reply) => {
     const id = params(req).id!;
     assertPresentationUnlocked(id);
     const p = lib.presentations.must(id);
     const fileId = p.source?.kind === 'pptx' ? p.source.fileId : undefined;
-    if (!fileId || !lib.getFile(fileId))
-      throw badRequest('This presentation has no stored PowerPoint file', 'no_pptx');
+    const stored = !!fileId && !!lib.getFile(fileId);
+    const tools = hub.imports.tools;
+    if (req.isMultipart()) {
+      const { files, fields } = await readMultipart(hub, req, {
+        maxFiles: 1,
+        limit: MAX_REFERENCE_PDF_BYTES,
+      });
+      const f = files[0];
+      let showPicture: string[] | undefined;
+      try {
+        if (!f) throw badRequest('No PDF');
+        if (!stored) throw badRequest('This presentation has no stored PowerPoint file', 'no_pptx');
+        // The upload took a while: the presentation may have gone live meanwhile.
+        assertPresentationUnlocked(id);
+        if (sniff(await readHead(f.path))?.kind !== 'pdf')
+          throw new HttpError(415, 'unsupported', 'Add the PDF PowerPoint exports (File, Export, PDF)');
+        await tools.settled();
+        if (!tools.has('pdfinfo')) throw new HttpError(501, 'pdf_unavailable', NO_PDF_TOOLS);
+        if (fields.showPicture !== undefined) {
+          let v: unknown;
+          try {
+            v = JSON.parse(fields.showPicture);
+          } catch {
+            throw badRequest('showPicture must be a JSON array of slide ids');
+          }
+          showPicture = validate(PptxReferenceBody, { showPicture: v }).showPicture;
+        }
+      } catch (e) {
+        if (f) await rm(f.path, { force: true });
+        throw e;
+      }
+      const ref = await hub.store.put(f.path, {
+        ext: 'pdf',
+        mime: 'application/pdf',
+        hash: f.hash,
+        bytes: f.bytes,
+      });
+      return reply
+        .code(202)
+        .send(hub.imports.pptx.queueReference(id, fileId!, by(req), showPicture, ref.hash));
+    }
+    if (!stored) throw badRequest('This presentation has no stored PowerPoint file', 'no_pptx');
     const body = validate(PptxReferenceBody, req.body ?? {});
-    return reply.code(202).send(hub.imports.pptx.queueReference(id, fileId, by(req), body.showPicture));
+    // M9: LibreOffice draws these; a hub without it says how to get PowerPoint's own pictures instead.
+    await tools.settled();
+    if (!tools.has('libreoffice'))
+      throw new HttpError(501, 'libreoffice_unavailable', NO_LIBREOFFICE_REFERENCE);
+    return reply.code(202).send(hub.imports.pptx.queueReference(id, fileId!, by(req), body.showPicture));
   });
   // 'Re-import from PowerPoint' (design/27 §11, M4 item F): the plan, then the job on the stored deck.
   const storedDeck = (id: string) => {
@@ -858,14 +956,22 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
       await cleanupFiles();
       throw e;
     }
-    const s = sniff(await readHead(f.path));
-    const ext = extOf(f.filename);
-    let kind: 'pdf' | 'pptx';
-    if (s?.kind === 'pdf') kind = 'pdf';
-    else if (s?.kind === 'zip' && ext === 'pptx') kind = 'pptx';
-    else {
+    const what = documentKind(await readHead(f.path), f.filename);
+    if ('refused' in what) {
       await cleanupFiles();
-      throw new HttpError(415, 'unsupported', 'Upload a .pptx or .pdf file');
+      throw new HttpError(415, 'unsupported', what.refused);
+    }
+    const kind = what.kind;
+    // M9: what this hub's tools cannot do is refused before anything is stored (the upload removed first).
+    const tools = hub.imports.tools;
+    await tools.settled();
+    if (kind === 'pptx' && form.renderer === 'libreoffice' && !tools.has('libreoffice')) {
+      await cleanupFiles();
+      throw new HttpError(501, 'libreoffice_unavailable', NO_LIBREOFFICE_PICTURES);
+    }
+    if (kind === 'pdf' && !tools.has('pdftoppm')) {
+      await cleanupFiles();
+      throw new HttpError(501, 'pdf_unavailable', NO_PDF_IMPORT);
     }
     const ref = await hub.store.put(f.path, {
       ext: kind,
@@ -892,6 +998,13 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     // A PDF is always pictures: the PowerPoint choice does not apply to it.
     const renderer = form.renderer === 'native' ? 'libreoffice' : form.renderer;
     return reply.code(202).send(hub.imports.queueDocument(ref.hash, f.filename, kind, renderer));
+  });
+
+  // What this hub's server tools allow (design/27 M9: LibreOffice is optional): the operator offers only what
+  // works. Not in the public /health: no tool versions to the world.
+  route('GET', '/capabilities', 'edit', async () => {
+    await hub.imports.tools.settled();
+    return hub.imports.tools.capabilities();
   });
 
   // ---------------- jobs ----------------
@@ -970,6 +1083,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     zip.file('journal.json', JSON.stringify(d?.journal ?? 'the live process did not answer', null, 1));
     zip.file('settings.json', JSON.stringify(s, null, 1));
     zip.file('health.json', JSON.stringify(d?.health ?? {}, null, 1));
+    zip.file('capabilities.json', JSON.stringify(hub.imports.tools.capabilities(), null, 1));
     zip.file(
       'hub.json',
       JSON.stringify(

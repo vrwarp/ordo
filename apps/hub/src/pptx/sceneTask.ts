@@ -46,6 +46,7 @@ export function sceneTask(input: SceneTaskInput): SceneTaskOutput {
     pictureSize: (part) => sizes.get(part),
     mediaKind: (part) => kinds.get(part),
     ...(input.fonts?.length ? { fontFace: libraryFaces(input.fonts) } : {}),
+    ...(input.libreoffice === false ? { libreoffice: false } : {}),
     extendBackgrounds: input.options.extendBackgrounds ?? true,
     transitionSounds: input.options.transitionSounds ?? false,
     m9Writes: M9_WRITES,

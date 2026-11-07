@@ -25,6 +25,7 @@ import { badRequest, errorMessage, forbidden } from './errors.ts';
 import type { JobCtx, JobQueue } from './jobs.ts';
 import type { Library } from './library.ts';
 import { fitPage, pdfToPngs } from './media/ffmpeg.ts';
+import { ToolError } from './media/tools.ts';
 import { baseName, type MediaService } from './media/service.ts';
 import { cpuPool, transferables, WorkerStartError } from './pool.ts';
 import { renderCopyForDocument, sofficeToPdf } from './pptx/fallback.ts';
@@ -33,6 +34,7 @@ import { mediaForFile } from './pptx/mediaParts.ts';
 import { logSafe } from './pptx/report.ts';
 import { type DeckText, pagesOf, readDeckText } from './pptx/textRepair.ts';
 import { readHead, sniff, type Store } from './store.ts';
+import { HubTools } from './tools.ts';
 
 export type Pro7Result = {
   presentations: Presentation[];
@@ -96,6 +98,18 @@ export type DocPayload = {
   done?: Record<number, string>;
 };
 
+/**
+ * Why a picture import of a PowerPoint cannot run on a hub without LibreOffice (design/27 M9): the route's 501
+ * `libreoffice_unavailable` and a queued job's failure say it in these words, never with a tool's output.
+ */
+export const NO_LIBREOFFICE_PICTURES =
+  "This hub has no LibreOffice, so PowerPoint files are imported as editable slides: import it again without 'Pictures (LibreOffice)'.";
+/** pptx-preview failed and nothing else can draw the deck as pictures. */
+export const NO_LIBREOFFICE_PREVIEW_FALLBACK =
+  'pptx-preview could not draw the deck and this hub has no LibreOffice: import it as editable slides';
+/** A PDF on a hub without pdftoppm (the route's 501 `pdf_unavailable`). */
+export const NO_PDF_IMPORT = 'PDF import needs poppler-utils (pdftoppm) on the hub.';
+
 /** Files the importer sees: documents in memory, media as empty placeholders backed by `onDisk`. */
 type ImportFiles = { files: Map<string, Uint8Array>; onDisk: Map<string, string> };
 
@@ -103,6 +117,11 @@ export class ImportService {
   private imp: Importers;
   /** The native PowerPoint import and its follow-up jobs (design/27, `pptx/`). */
   readonly pptx: PptxImports;
+  /**
+   * The server tools and what they allow (design/27 M9, `tools.ts`): looked up and asked their version once
+   * per process, in the background; `GET /capabilities` reports them.
+   */
+  readonly tools: HubTools;
 
   /** `locked`: whether a presentation is frozen in the live session (ADR 0007); imports never write it then. */
   constructor(
@@ -117,7 +136,8 @@ export class ImportService {
     this.imp = (cfg.importers as Importers | undefined) ?? (realImporters as unknown as Importers);
     jobs.register<Pro7Payload>('pro7-import', (ctx) => this.pro7Job(ctx));
     jobs.register<DocPayload>('document', (ctx) => this.documentJob(ctx));
-    this.pptx = new PptxImports({ lib, store, jobs, media, cfg, log, locked });
+    this.tools = new HubTools(cfg, log, { tmpDir: () => store.tmpDir() });
+    this.pptx = new PptxImports({ lib, store, jobs, media, cfg, log, locked, tools: this.tools });
     // Legacy PowerPoint text boxes are re-keyed once, in the background (design/27 §11): checked at every
     // start, it queues nothing once the library is repaired.
     try {
@@ -474,6 +494,11 @@ export class ImportService {
       let pdf = this.store.abs(file.path);
       let text: DeckText | undefined;
       let pages: string[] | undefined;
+      // M9: a job queued before the hub lost a tool fails in words (the route refuses new ones with 501).
+      await this.tools.ready;
+      if (ext === 'pdf' && !this.tools.has('pdftoppm')) throw new Error(NO_PDF_IMPORT);
+      if (ext === 'pptx' && renderer === 'libreoffice' && !this.tools.has('libreoffice'))
+        throw new Error(NO_LIBREOFFICE_PICTURES);
       if (ext === 'pptx') {
         const input = join(dir, 'slides.pptx');
         await copyFile(pdf, input);
@@ -501,6 +526,7 @@ export class ImportService {
             pages = r.pages;
           } catch (e) {
             if (ctx.signal.aborted) throw e;
+            if (!this.tools.has('libreoffice')) throw new Error(NO_LIBREOFFICE_PREVIEW_FALLBACK);
             // A church needs its slides more than it needs this renderer: draw them the usual way.
             ctx.log(
               `[warn] pptx-preview failed (${logSafe(errorMessage(e))}); rendering with LibreOffice instead`,
@@ -527,7 +553,17 @@ export class ImportService {
             );
           }
           ctx.log('converting with LibreOffice');
-          pdf = await sofficeToPdf(input, dir, { timeoutMs: t.soffice, signal: ctx.signal });
+          try {
+            pdf = await sofficeToPdf(input, dir, {
+              timeoutMs: t.soffice,
+              signal: ctx.signal,
+              exe: this.tools.libreoffice().exe ?? '',
+            });
+          } catch (e) {
+            if (!(e instanceof ToolError) || !e.missing || ctx.signal.aborted) throw e;
+            this.tools.markMissing('libreoffice', errorMessage(e));
+            throw new Error(NO_LIBREOFFICE_PICTURES);
+          }
           ctx.progress(0.3);
         }
       }
@@ -536,7 +572,13 @@ export class ImportService {
         const pagesDir = join(dir, 'pages');
         const { mkdir } = await import('node:fs/promises');
         await mkdir(pagesDir);
-        pages = await pdfToPngs(pdf, pagesDir, { timeoutMs: t.pdf, signal: ctx.signal });
+        try {
+          pages = await pdfToPngs(pdf, pagesDir, { timeoutMs: t.pdf, signal: ctx.signal });
+        } catch (e) {
+          if (!(e instanceof ToolError) || !e.missing || ctx.signal.aborted) throw e;
+          this.tools.markMissing('pdftoppm', errorMessage(e));
+          throw new Error(NO_PDF_IMPORT);
+        }
       }
       if (!pages.length) throw new Error('The document has no pages');
       ctx.log(`${pages.length} page(s)`);

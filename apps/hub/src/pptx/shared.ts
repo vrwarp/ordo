@@ -20,6 +20,7 @@ import type { JobClass, JobQueue } from '../jobs.ts';
 import type { Library } from '../library.ts';
 import type { MediaService } from '../media/service.ts';
 import type { Store } from '../store.ts';
+import type { HubTools } from '../tools.ts';
 
 /**
  * The converter version written to `Slide.pptx.version` and `source.native.version`. 2 since M9 (design/27
@@ -92,6 +93,11 @@ export type PptxDeps = {
   log: Logger;
   /** Whether a presentation is frozen in the live session (ADR 0007): no pptx job writes it then. */
   locked(presentationId: string): boolean;
+  /**
+   * The server tools and what they allow (design/27 M9, `tools.ts`): LibreOffice is optional. Jobs that need
+   * a tool await `tools.ready`, then never run one whose state is not 'available'.
+   */
+  tools: HubTools;
 };
 
 // ── Jobs ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -156,6 +162,13 @@ export type PptxNativeResult = {
   missingFonts: string[];
   /** The first notes of the import, sanitised; `source.log` keeps them all. */
   notes: string[];
+  /**
+   * M9: slides with PowerPoint elements nothing draws (`Slide.pptx.missing`): on a hub without LibreOffice,
+   * what ordo cannot draw is listed instead of waiting for LibreOffice. Absent from older hubs' results.
+   */
+  missing?: number;
+  /** M9: whether LibreOffice was there to draw what ordo cannot (`HubTools`). Absent from older results. */
+  libreoffice?: boolean;
 };
 
 /**
@@ -194,6 +207,12 @@ export type PptxLoSlide = {
    * edited meanwhile the art still replaces those that are exactly as they were.
    */
   replaced?: [string, string][];
+  /**
+   * M9: what the slide lacks if LibreOffice never draws it (`Slide.pptx.missing` entries, `@ordo/domain`
+   * `MISSING_KINDS`): written when a hub that lost LibreOffice clears `pending` (`withoutLibreOffice`).
+   * Absent in plans made before M9 (the kinds are then read from the slide's class).
+   */
+  kinds?: string[];
 };
 
 export type PptxLoPayload = {
@@ -233,6 +252,11 @@ export type PptxReferencePayload = {
   done?: [number, string][];
   /** Times the job found the presentation live-locked and deferred itself (the backoff step). */
   deferrals?: number;
+  /**
+   * M9: the pictures come from this PDF (a stored file's SHA-256), PowerPoint's own export of the deck, drawn
+   * by pdftoppm; absent: LibreOffice draws them (design/27 M9 "'Show original' without LibreOffice").
+   */
+  pdf?: string;
 };
 
 export type TextRepairPayload = {
@@ -335,6 +359,11 @@ export type SceneTaskInput = {
   fonts?: SceneFontFile[];
   /** Bytes of geometry files the batch may return (`PPTX_LIMITS.batchGeomBytes`; tests set less). */
   geomBytes?: number;
+  /**
+   * M9: false on a hub without LibreOffice (`EmitOptions.libreoffice`): the converter plans no art and no
+   * metafile conversion and lists what they would have drawn (`EmittedSlide.missing`). Absent: true.
+   */
+  libreoffice?: boolean;
 };
 export type SceneTaskOutput = {
   result: ConvertResult;

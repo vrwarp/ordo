@@ -40,6 +40,11 @@ import {
   type ExtractedText,
   type ImageObject,
   jsonBytes,
+  MISSING_LIMITS,
+  missingEntry,
+  missingKind,
+  missingKinds,
+  missingLabel,
   newId,
   type Presentation,
   presentationBytes,
@@ -47,6 +52,7 @@ import {
   Slide,
   type SlideObject,
 } from '@ordo/domain';
+import type { SlideRef } from '@ordo/pptx-scene';
 import { digestOf } from '@ordo/pptx-scene/emit.ts';
 import { digestMatches, importDigest } from './digest.ts';
 import { PAGE_BACKGROUNDS, type PageBackground, type RenderCopyPage } from '@ordo/pptx-scene/rendercopy.ts';
@@ -54,7 +60,7 @@ import { errorMessage } from '../errors.ts';
 import type { Job } from '@ordo/protocol';
 import { JobDeferred, type JobCtx, type JobHandler } from '../jobs.ts';
 import { pdfPage } from '../media/ffmpeg.ts';
-import { run } from '../media/tools.ts';
+import { run, ToolError } from '../media/tools.ts';
 import { cpuPool, transferables } from '../pool.ts';
 import { readPpm } from './art.ts';
 import { readDeckXml, spillDeckParts } from './deckParts.ts';
@@ -64,6 +70,7 @@ import {
   CONVERTER_VERSION,
   enqueuePptx,
   PPTX_JOBS,
+  PPTX_LIMITS,
   type PptxDeps,
   type PptxLoPayload,
   type PptxLoSlide,
@@ -128,19 +135,21 @@ const DEAD_PROXY = 'http://127.0.0.1:9';
 /**
  * The command that runs soffice hardened: `prlimit --as` (when available), `unshare -rn` where the
  * container allows it; the environment is minimal, with proxies pointing at a dead port when there is no
- * namespace. Exported for tests.
+ * namespace. `exe`: the soffice the hub found (`HubTools.libreoffice().exe`, an absolute path, or the one
+ * `ORDO_LIBREOFFICE` names; design/27 M9). Exported for tests.
  */
 export async function sofficeCommand(
   args: string[],
   home: string,
   addressSpaceMb = SOFFICE_ADDRESS_SPACE_MB,
+  exe = 'soffice',
 ): Promise<{ cmd: string; args: string[]; env: NodeJS.ProcessEnv; sandboxed: boolean }> {
   const sandboxed = await canUnshare();
   const cap = (await canPrlimit())
     ? ['prlimit', `--as=${Math.round(addressSpaceMb) * 1024 * 1024}`, '--']
     : [];
   const ns = sandboxed ? ['unshare', '-rn', '--'] : [];
-  const full = [...cap, ...ns, 'soffice', ...args];
+  const full = [...cap, ...ns, exe, ...args];
   const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: home, LANG: 'C.UTF-8' };
   if (!sandboxed)
     for (const k of [
@@ -161,13 +170,15 @@ export async function sofficeCommand(
  * relationships are already gone from its input (the primary control); it runs in an empty network
  * namespace (`unshare -rn`) where the container allows it, else with proxy variables pointing at a dead
  * port; under an address-space cap (`prlimit --as`); with `tools.run`'s timeout and SIGKILL of its whole
- * process group; with a throwaway profile in `outDir`.
+ * process group; with a throwaway profile in `outDir`. `exe` is `HubTools.libreoffice().exe`: '' (no
+ * LibreOffice) throws `ToolError.missing` without starting anything, as a soffice gone from the disk does.
  */
 export async function sofficeToPdf(
   input: string,
   outDir: string,
-  opts: { timeoutMs: number; signal: AbortSignal; addressSpaceMb?: number },
+  opts: { timeoutMs: number; signal: AbortSignal; addressSpaceMb?: number; exe: string },
 ): Promise<string> {
+  if (!opts.exe) throw new ToolError('soffice: this hub has no LibreOffice', '', true);
   const profile = join(outDir, 'lo-profile');
   const c = await sofficeCommand(
     [
@@ -186,6 +197,7 @@ export async function sofficeToPdf(
     ],
     outDir,
     opts.addressSpaceMb,
+    opts.exe,
   );
   await run(c.cmd, c.args, { timeoutMs: opts.timeoutMs, signal: opts.signal, env: c.env, group: true });
   const base = input.slice(input.lastIndexOf('/') + 1).replace(/\.[^.]*$/, '');
@@ -478,6 +490,7 @@ async function printCopy(
       pdf = await sofficeToPdf(join(dir, 'copy.pptx'), join(dir, 'pdf'), {
         timeoutMs: deps.cfg.timeouts.soffice,
         signal: ctx.signal,
+        exe: deps.tools.has('libreoffice') ? (deps.tools.libreoffice().exe ?? '') : '',
       });
     }
     await rm(join(dir, 'deck'), { recursive: true, force: true });
@@ -487,8 +500,16 @@ async function printCopy(
   }
 }
 
+/**
+ * What the follow-up may be given (`PptxImports`): how it queues the re-import of slides LibreOffice will never
+ * draw (`withoutLibreOffice`); without it nothing is re-imported (tests).
+ */
+export type LoJobEnv = {
+  reimport?: (presentationId: string, hash: string, slideIds: string[]) => Job | undefined;
+};
+
 /** The `pptx-lo` job. */
-export function loJob(deps: PptxDeps): JobHandler<PptxLoPayload> {
+export function loJob(deps: PptxDeps, env: LoJobEnv = {}): JobHandler<PptxLoPayload> {
   return async (ctx) => {
     const pl = ctx.payload;
     const done = new Map(pl.done ?? []);
@@ -499,6 +520,11 @@ export function loJob(deps: PptxDeps): JobHandler<PptxLoPayload> {
       ctx.log('the presentation was deleted: nothing to do');
       return { presentationId: pl.presentationId, deleted: true };
     }
+    // M9: on a hub without LibreOffice (queued before it went away, or a restored revision) nothing will draw
+    // these slides: they stop waiting, and the M9 converter redraws the unedited ones.
+    await deps.tools.ready;
+    if (!deps.tools.has('libreoffice'))
+      return withoutLibreOffice(deps, ctx, env, 'this hub has no LibreOffice');
     if (deps.locked(p0.id)) deferWhileLocked(ctx, 'LibreOffice will try');
     // Only slides that still wait: a re-run after the save (a crash, a restart) finds none and adds nothing twice.
     const waiting = new Set(
@@ -677,6 +703,12 @@ export function loJob(deps: PptxDeps): JobHandler<PptxLoPayload> {
         });
       } catch (e) {
         if (ctx.signal.aborted) throw e;
+        // soffice is gone (an image without LibreOffice, an uninstall): never retried. The hub knows it from
+        // now on, and the slides stop waiting.
+        if (e instanceof ToolError && e.missing) {
+          deps.tools.markMissing('libreoffice', errorMessage(e));
+          return withoutLibreOffice(deps, ctx, env, 'LibreOffice is no longer installed on this hub');
+        }
         // LibreOffice or the pool failed for the whole copy: tried again later (what is stored stays), then
         // the slides keep version 1, marked `failed`, which the card and goLive report.
         const why = logSafe(errorMessage(e));
@@ -770,6 +802,109 @@ export function loJob(deps: PptxDeps): JobHandler<PptxLoPayload> {
   };
 }
 
+/** The `pptx-lo` result on a hub without LibreOffice (`withoutLibreOffice`). */
+export type PptxLoWithoutResult = {
+  presentationId: string;
+  rev?: number;
+  deleted?: true;
+  withoutLibreOffice: true;
+  /** Slides that stopped waiting (`pending` cleared, `missing` set). */
+  cleared: number;
+  /** The re-import that redraws the unedited ones with the M9 converter. */
+  reimportJobId?: string;
+};
+
+/**
+ * What a slide lacks when LibreOffice never draws it (`Slide.pptx.missing`): the kinds its plan recorded
+ * (`PptxLoSlide.kinds`), else read from what it waited for (an older plan): its whole page ('slide'), its art
+ * ('element': the plan does not say what the art held), its metafile pictures ('metafile').
+ */
+export function kindsWithoutLibreOffice(plan: PptxLoSlide | undefined, slide: Pick<Slide, 'pptx'>): string[] {
+  const out: string[] = [];
+  const add = (entry: string) => {
+    const kind = missingKind(entry);
+    const colon = entry.indexOf(':');
+    const e = missingEntry(kind, colon > 0 ? entry.slice(colon + 1) : undefined);
+    if (!out.includes(e) && out.length < MISSING_LIMITS.entries) out.push(e);
+  };
+  for (const k of Array.isArray(plan?.kinds) ? plan.kinds : []) if (typeof k === 'string') add(k);
+  for (const k of slide.pptx?.missing ?? []) add(k);
+  if (out.length) return out;
+  const cls = plan?.class ?? slide.pptx?.class;
+  if (cls === 'picture') return ['slide'];
+  if (cls === 'hybrid' && (!plan || plan.art)) add('element');
+  if (plan?.metafiles?.length || plan?.metafileObjects?.length) add('metafile');
+  return out.length ? out : ['element'];
+}
+
+/**
+ * The follow-up on a hub without LibreOffice (design/27 M9; lo-dependencies §4.4, §4.7): a presentation
+ * imported while LibreOffice was there, then the hub lost it (the lite image, an uninstall), or a restored
+ * revision that brings back waiting slides. Nothing will draw them, so in one save (never while live-locked,
+ * ADR 0007) every slide of this deck still `pending` stops waiting: `pending` is cleared and `missing` lists
+ * what it lacks (`kindsWithoutLibreOffice`), with a note. In the same transaction the re-import of those
+ * slides is queued (`LoJobEnv.reimport`): an unedited one is redrawn by this converter, which draws more of
+ * PowerPoint than the one that planned the art (the digest covers the import's objects only, `digest.ts`, so
+ * this save does not mark them edited); an edited one is kept as it is. LibreOffice never runs.
+ */
+export async function withoutLibreOffice(
+  deps: PptxDeps,
+  ctx: JobCtx<PptxLoPayload>,
+  env: LoJobEnv,
+  why: string,
+): Promise<PptxLoWithoutResult> {
+  const pl = ctx.payload;
+  const p = deps.lib.presentations.get(pl.presentationId);
+  if (!p) {
+    ctx.log('the presentation was deleted: nothing to do');
+    return { presentationId: pl.presentationId, deleted: true, withoutLibreOffice: true, cleared: 0 };
+  }
+  if (deps.locked(p.id)) deferWhileLocked(ctx, 'the slides are updated');
+  const plans = new Map(pl.slides.map((s) => [s.slideId, s]));
+  const cleared: string[] = [];
+  const sections = p.sections.map((sec) => ({
+    ...sec,
+    slides: sec.slides.map((sl) => {
+      if (!sl.pptx?.pending || sl.pptx.fileId !== pl.hash) return sl;
+      const missing = kindsWithoutLibreOffice(plans.get(sl.id), sl);
+      const { pending: _pending, ...pptx } = sl.pptx;
+      const note = `not drawn: ${why} (${missingKinds(missing).map(missingLabel).join(', ')})`;
+      const notes = [...(pptx.notes ?? []), logSafe(note)].slice(-SLIDE_NOTES);
+      cleared.push(sl.id);
+      return Slide.parse({ ...sl, pptx: { ...pptx, missing, notes } });
+    }),
+  }));
+  if (!cleared.length) {
+    ctx.log(`${why}: no slide waits any more`);
+    return { presentationId: p.id, rev: p.rev, withoutLibreOffice: true, cleared: 0 };
+  }
+  const deck =
+    p.source?.kind === 'pptx' && p.source.fileId === pl.hash && deps.lib.getFile(pl.hash)
+      ? pl.hash
+      : undefined;
+  let reimportJobId: string | undefined;
+  const saved = deps.lib.db.transaction(() => {
+    const s = deps.lib.savePresentation({ ...p, sections } as Presentation, {
+      expectedRev: p.rev,
+      by: 'pptx-lo',
+    });
+    if (deck) reimportJobId = env.reimport?.(s.id, deck, cleared)?.id;
+    return s;
+  })();
+  deps.lib.emit([{ kind: 'presentation', id: saved.id, rev: saved.rev, entity: saved }]);
+  ctx.log(
+    `${why}: ${cleared.length} slide(s) no longer wait for it` +
+      (reimportJobId ? '; ordo redraws the unedited ones (re-import)' : ''),
+  );
+  return {
+    presentationId: saved.id,
+    rev: saved.rev,
+    withoutLibreOffice: true,
+    cleared: cleared.length,
+    ...(reimportJobId ? { reimportJobId } : {}),
+  };
+}
+
 /** Follow-ups of one presentation read when planning a new one (newest first). */
 const FOLLOW_UP_HISTORY = 20;
 
@@ -824,14 +959,20 @@ export function queueFollowUp(deps: PptxDeps, p: Presentation): Job | undefined 
   const mine = (k: string) => k.startsWith('mf:') || ids.has(k.slice(0, k.lastIndexOf(':')));
   const reuse = [...done].filter(([k, id]) => mine(k) && (id === '' || deps.lib.media.get(id)));
   const where = [...placed].filter(([k]) => reuse.some(([d]) => d === k));
-  return enqueuePptx(deps.jobs, PPTX_JOBS.lo, {
+  const payload: PptxLoPayload = {
     presentationId: p.id,
     hash,
     version: CONVERTER_VERSION,
     slides,
     ...(reuse.length ? { done: reuse } : {}),
     ...(where.length ? { placed: where } : {}),
-  });
+  };
+  // M9: on a hub known to have no LibreOffice the follow-up only clears `pending` and queues the re-import
+  // (`withoutLibreOffice`): light work, never behind a transcode.
+  const lo = deps.tools.libreoffice().state;
+  return lo === 'absent' || lo === 'off' || lo === 'broken'
+    ? deps.jobs.enqueue(PPTX_JOBS.lo, payload, 'light')
+    : enqueuePptx(deps.jobs, PPTX_JOBS.lo, payload);
 }
 
 /** Whether the copy printed `got` for the page asked as `want` (same slide, mode and background or part). */
@@ -842,9 +983,20 @@ function samePage(got: RenderCopyPage, want: RenderCopyPage): boolean {
   return got.mode === want.mode;
 }
 
-/** The `pptx-reference` job ('Show PowerPoint picture'). */
+/** Why a reference job without a PDF cannot run on a hub without LibreOffice (also the route's 501). */
+export const NO_LIBREOFFICE_REFERENCE =
+  'This hub has no LibreOffice. Add a PDF exported from PowerPoint instead.';
+/** Why a PDF reference job cannot run (also the route's 501). */
+export const NO_PDF_TOOLS = 'PDF pictures need poppler-utils (pdftoppm and pdfinfo) on the hub.';
+/** pdfinfo's time for one PDF. */
+const PDFINFO_MS = 30_000;
+/** A PDF page's shape may differ from the slide's by this share (PowerPoint rounds the page to points). */
+const PDF_ASPECT_SLACK = 0.01;
+
+/** The `pptx-reference` job ('Show PowerPoint picture'): LibreOffice draws the pictures, or a PDF gives them. */
 export function referenceJob(deps: PptxDeps): JobHandler<PptxReferencePayload> {
   return async (ctx) => {
+    if (ctx.payload.pdf) return pdfReference(deps, ctx);
     const pl = ctx.payload;
     const done = new Map(pl.done ?? []);
     const save = () => ctx.setPayload({ ...ctx.payload, done: [...done] });
@@ -854,30 +1006,224 @@ export function referenceJob(deps: PptxDeps): JobHandler<PptxReferencePayload> {
       return { presentationId: pl.presentationId, deleted: true };
     }
     if (deps.locked(p0.id)) deferWhileLocked(ctx, 'LibreOffice will try');
-    // Every slide of this deck, once (a duplicated slide shares its picture), hidden ones too: a click in
-    // the grid shows a hidden slide in the service (design/27 §9), and it must draw what the others draw.
-    // The render copy prints each page asked for, hidden or not. Named by the shown position.
-    const want = new Map<number, string>();
-    for (const sec of p0.sections)
-      for (const sl of sec.slides)
-        if (sl.pptx?.fileId === pl.hash)
-          want.set(
-            sl.pptx.index,
-            sl.pptx.shown !== undefined ? `${sl.pptx.shown + 1}` : `hidden slide ${sl.pptx.index + 1}`,
-          );
+    const want = referenceSlides(p0, pl.hash);
     const pages: RenderCopyPage[] = [...want.keys()]
       .filter((i) => !done.has(i))
       .sort((a, b) => a - b)
       .map((index) => ({ index, mode: 'whole' as const }));
-    if (pages.length)
-      await printCopy(deps, ctx as JobCtx<unknown>, pl.hash, pages, [], async (pdf, copy, dir) => {
-        const page = pageSize(copy.slideSize ?? { cx: 12_192_000, cy: 6_858_000 });
-        let k = 0;
-        for (const got of copy.pages) {
-          k++;
+    if (pages.length) {
+      // M9: queued on a hub that has (or since lost) no LibreOffice: refused in words, never with a tool's output.
+      await deps.tools.ready;
+      if (!deps.tools.has('libreoffice')) throw new Error(NO_LIBREOFFICE_REFERENCE);
+      try {
+        await printCopy(deps, ctx as JobCtx<unknown>, pl.hash, pages, [], async (pdf, copy, dir) => {
+          const page = pageSize(copy.slideSize ?? { cx: 12_192_000, cy: 6_858_000 });
+          let k = 0;
+          for (const got of copy.pages) {
+            k++;
+            if (ctx.signal.aborted) throw new Error('cancelled');
+            ctx.progress((0.9 * k) / copy.pages.length);
+            if (!pdf) break;
+            const png = await pdfPage(pdf, k, join(dir, `page-${k}`), {
+              ...page,
+              format: 'png',
+              timeoutMs: deps.cfg.timeouts.pdf,
+              signal: ctx.signal,
+            });
+            const id = await store(deps, png, {
+              ...page,
+              hasAlpha: false,
+              key: `${pl.hash}:reference:${got.index}`,
+              name: `${p0.title} – ${want.get(got.index) ?? got.index + 1} (PowerPoint)`,
+            });
+            done.set(got.index, id);
+            save();
+          }
+        });
+      } catch (e) {
+        if (ctx.signal.aborted || !(e instanceof ToolError) || !e.missing) throw e;
+        deps.tools.markMissing('libreoffice', errorMessage(e));
+        throw new Error(NO_LIBREOFFICE_REFERENCE);
+      }
+    }
+    return saveReferences(deps, ctx, done);
+  };
+}
+
+/**
+ * Every slide of this deck in the presentation, once (a duplicated slide shares its picture), hidden ones
+ * too: a click in the grid shows a hidden slide in the service (design/27 §9), and it must draw what the others
+ * draw. The render copy prints each page asked for, hidden or not. Named by the shown position.
+ */
+function referenceSlides(p: Presentation, hash: string): Map<number, string> {
+  const want = new Map<number, string>();
+  for (const sec of p.sections)
+    for (const sl of sec.slides)
+      if (sl.pptx?.fileId === hash)
+        want.set(
+          sl.pptx.index,
+          sl.pptx.shown !== undefined ? `${sl.pptx.shown + 1}` : `hidden slide ${sl.pptx.index + 1}`,
+        );
+  return want;
+}
+
+/** The reference pictures stored (`done`) on their slides, in one revision saved as `pptx-reference`. */
+function saveReferences(
+  deps: PptxDeps,
+  ctx: JobCtx<PptxReferencePayload>,
+  done: Map<number, string>,
+): { presentationId: string; deleted?: true; rev?: number; slides?: number; pictures?: number } {
+  const pl = ctx.payload;
+  const p = deps.lib.presentations.get(pl.presentationId);
+  if (!p) return { presentationId: pl.presentationId, deleted: true };
+  if (deps.locked(p.id)) deferWhileLocked(ctx, 'the slides are updated');
+  // Every slide gets its picture; only those `showPicture` names (all when absent) switch to it.
+  const switched = pl.showPicture ? new Set(pl.showPicture) : undefined;
+  let shown = 0;
+  let pictures = 0;
+  const sections = p.sections.map((sec) => ({
+    ...sec,
+    slides: sec.slides.map((sl) => {
+      const id = sl.pptx?.fileId === pl.hash ? done.get(sl.pptx.index) : undefined;
+      if (!id || !sl.pptx) return sl;
+      pictures++;
+      if (switched && !switched.has(sl.id)) return { ...sl, pptx: { ...sl.pptx, refMediaId: id } };
+      shown++;
+      return { ...sl, pptx: { ...sl.pptx, refMediaId: id, show: 'picture' as const } };
+    }),
+  }));
+  const saved = deps.lib.savePresentation(
+    { ...p, sections },
+    // Saved as the job (an editor takes a PowerPoint job's revision over, `adoptJobSaves`); who asked is logged.
+    { expectedRev: p.rev, by: 'pptx-reference' },
+  );
+  deps.lib.emit([{ kind: 'presentation', id: saved.id, rev: saved.rev, entity: saved }]);
+  ctx.log(
+    `${pictures} PowerPoint picture(s)${pl.pdf ? ' from the PDF' : ''}; ${shown} slide(s) show the picture${pl.by ? ` (asked by ${logSafe(pl.by, 100)})` : ''}`,
+  );
+  return { presentationId: saved.id, rev: saved.rev, slides: shown, pictures };
+}
+
+/** A PDF's page count and each page's size in points (turned pages swapped), from `pdfinfo`. */
+export async function pdfPages(
+  pdf: string,
+  signal: AbortSignal,
+  maxPages = PPTX_LIMITS.slides,
+): Promise<{ pages: number; sizes: [number, number][] }> {
+  const first = await run('pdfinfo', [pdf], { timeoutMs: PDFINFO_MS, signal });
+  const pages = Number(/^Pages:\s+(\d+)\s*$/m.exec(first.stdout)?.[1] ?? Number.NaN);
+  if (!Number.isInteger(pages) || pages < 1) throw new Error('The PDF has no pages');
+  if (pages > maxPages) return { pages, sizes: [] };
+  const all = await run('pdfinfo', ['-f', '1', '-l', String(pages), pdf], { timeoutMs: PDFINFO_MS, signal });
+  const sizes: [number, number][] = [];
+  const rot = new Map<number, number>();
+  for (const m of all.stdout.matchAll(/^Page\s+(\d+)\s+rot:\s+(\d+)\s*$/gm))
+    rot.set(Number(m[1]), Number(m[2]));
+  for (const m of all.stdout.matchAll(/^Page\s+(\d+)\s+size:\s+([\d.]+) x ([\d.]+) pts/gm)) {
+    const k = Number(m[1]);
+    const w = Number(m[2]);
+    const h = Number(m[3]);
+    if (!(k >= 1 && k <= pages) || !(w > 0) || !(h > 0)) continue;
+    const turned = (rot.get(k) ?? 0) % 180 === 90;
+    sizes[k - 1] = turned ? [h, w] : [w, h];
+  }
+  return { pages, sizes };
+}
+
+/** The deck's slide list and size, read on the pool (`pptx-scene` without slides): the deck is untrusted. */
+async function deckListing(
+  file: string,
+  dir: string,
+  signal: AbortSignal,
+): Promise<{ listed: SlideRef[]; size: { cx: number; cy: number } }> {
+  const xml = await readDeckXml(file, dir, signal);
+  const out = await cpuPool().run(
+    'pptx-scene',
+    { parts: xml.parts, pictureSizes: [], range: { from: 0, to: 0 }, options: {} },
+    { signal },
+  );
+  xml.parts.clear();
+  return { listed: out.result.listed, size: { cx: out.result.frame.cx, cy: out.result.frame.cy } };
+}
+
+/** Why a PDF's pages do not fit the deck (both counts, design/27 M9). */
+export function pageCountMismatch(pages: number, shown: number, listed: number): string {
+  const slides =
+    shown === listed
+      ? `the presentation has ${listed} slide${listed === 1 ? '' : 's'}`
+      : `the presentation shows ${shown} slide${shown === 1 ? '' : 's'} (${listed} with hidden ones)`;
+  return `The PDF has ${pages} page${pages === 1 ? '' : 's'}; ${slides}. Export it from PowerPoint again.`;
+}
+
+/**
+ * 'Show original' from PowerPoint's own pixels (design/27 M9; lo-dependencies §4.6): the PDF PowerPoint
+ * exported (`PptxReferencePayload.pdf`, a stored file) instead of LibreOffice, on any hub with poppler-utils.
+ * - Its pages are PowerPoint's default export (one per shown slide) or 'print hidden slides' (one per listed
+ *   slide); any other count fails with both counts, and a page not shaped like the slides (within 1 %: notes
+ *   pages, handouts) fails too.
+ * - Each page this presentation needs is drawn by pdftoppm at the size LibreOffice's pages have (a fixed output
+ *   size, so a crafted page size cannot blow memory), stored, and set as `Slide.pptx.refMediaId` as the
+ *   LibreOffice source does (resume pairs in `done`).
+ * The PDF is released once the pictures are on the slides, or when the job fails for good.
+ */
+async function pdfReference(
+  deps: PptxDeps,
+  ctx: JobCtx<PptxReferencePayload>,
+): Promise<ReturnType<typeof saveReferences>> {
+  const pl = ctx.payload;
+  const pdfHash = pl.pdf!;
+  const done = new Map(pl.done ?? []);
+  const save = () => ctx.setPayload({ ...ctx.payload, done: [...done] });
+  const release = () => deps.store.release(pdfHash).catch(() => undefined);
+  try {
+    const p0 = deps.lib.presentations.get(pl.presentationId);
+    if (!p0) {
+      ctx.log('the presentation was deleted: nothing to do');
+      await release();
+      return { presentationId: pl.presentationId, deleted: true };
+    }
+    if (deps.locked(p0.id)) deferWhileLocked(ctx, 'the PowerPoint pictures are drawn');
+    await deps.tools.ready;
+    if (!deps.tools.has('pdfinfo')) throw new Error(NO_PDF_TOOLS);
+    const pdfRow = deps.lib.getFile(pdfHash);
+    if (!pdfRow) throw new Error('The PDF is no longer stored: add it again');
+    const deckRow = deps.lib.getFile(pl.hash);
+    if (!deckRow) throw new Error('The PowerPoint file is no longer stored');
+    const want = referenceSlides(p0, pl.hash);
+    const todo = [...want.keys()].filter((i) => !done.has(i)).sort((a, b) => a - b);
+    if (todo.length) {
+      const pdf = deps.store.abs(pdfRow.path);
+      const dir = await deps.store.tmpDir();
+      try {
+        const { listed, size } = await deckListing(deps.store.abs(deckRow.path), dir, ctx.signal);
+        const info = await pdfPages(pdf, ctx.signal);
+        const shown = listed.filter((r) => !r.hidden).length;
+        // PowerPoint's default export has the shown slides; 'Print hidden slides' every listed one.
+        const pageOf =
+          info.pages === shown
+            ? (r: SlideRef) => (r.shown === undefined ? undefined : r.shown + 1)
+            : info.pages === listed.length
+              ? (r: SlideRef) => r.index + 1
+              : undefined;
+        if (!pageOf) throw new Error(pageCountMismatch(info.pages, shown, listed.length));
+        const aspect = size.cx / size.cy;
+        for (let k = 0; k < info.pages; k++) {
+          const s = info.sizes[k];
+          if (s && Math.abs(s[0] / s[1] - aspect) <= PDF_ASPECT_SLACK * aspect) continue;
+          throw new Error(
+            `Page ${k + 1} of the PDF is not shaped like the slides${s ? ` (${Math.round(s[0])} x ${Math.round(s[1])} pt)` : ''}: export the slides themselves, not notes pages or handouts.`,
+          );
+        }
+        const page = pageSize(size);
+        const byIndex = new Map(listed.map((r) => [r.index, r]));
+        let n = 0;
+        for (const index of todo) {
           if (ctx.signal.aborted) throw new Error('cancelled');
-          ctx.progress((0.9 * k) / copy.pages.length);
-          if (!pdf) break;
+          ctx.progress((0.9 * ++n) / todo.length);
+          const r = byIndex.get(index);
+          const k = r ? pageOf(r) : undefined;
+          // A hidden slide has no page in the default export: it keeps no picture.
+          if (k === undefined) continue;
           const png = await pdfPage(pdf, k, join(dir, `page-${k}`), {
             ...page,
             format: 'png',
@@ -887,42 +1233,26 @@ export function referenceJob(deps: PptxDeps): JobHandler<PptxReferencePayload> {
           const id = await store(deps, png, {
             ...page,
             hasAlpha: false,
-            key: `${pl.hash}:reference:${got.index}`,
-            name: `${p0.title} – ${want.get(got.index) ?? got.index + 1} (PowerPoint)`,
+            key: `${pdfHash}:reference:${index}`,
+            name: `${p0.title} – ${want.get(index) ?? index + 1} (PowerPoint PDF)`,
           });
-          done.set(got.index, id);
+          done.set(index, id);
           save();
         }
-      });
-    const p = deps.lib.presentations.get(pl.presentationId);
-    if (!p) return { presentationId: pl.presentationId, deleted: true };
-    if (deps.locked(p.id)) deferWhileLocked(ctx, 'the slides are updated');
-    // Every slide gets its picture; only those `showPicture` names (all when absent) switch to it.
-    const switched = pl.showPicture ? new Set(pl.showPicture) : undefined;
-    let shown = 0;
-    let pictures = 0;
-    const sections = p.sections.map((sec) => ({
-      ...sec,
-      slides: sec.slides.map((sl) => {
-        const id = sl.pptx?.fileId === pl.hash ? done.get(sl.pptx.index) : undefined;
-        if (!id || !sl.pptx) return sl;
-        pictures++;
-        if (switched && !switched.has(sl.id)) return { ...sl, pptx: { ...sl.pptx, refMediaId: id } };
-        shown++;
-        return { ...sl, pptx: { ...sl.pptx, refMediaId: id, show: 'picture' as const } };
-      }),
-    }));
-    const saved = deps.lib.savePresentation(
-      { ...p, sections },
-      // Saved as the job (an editor takes a PowerPoint job's revision over, `adoptJobSaves`); who asked is logged.
-      { expectedRev: p.rev, by: 'pptx-reference' },
-    );
-    deps.lib.emit([{ kind: 'presentation', id: saved.id, rev: saved.rev, entity: saved }]);
-    ctx.log(
-      `${pictures} PowerPoint picture(s); ${shown} slide(s) show the picture${pl.by ? ` (asked by ${logSafe(pl.by, 100)})` : ''}`,
-    );
-    return { presentationId: saved.id, rev: saved.rev, slides: shown, pictures };
-  };
+      } finally {
+        await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    }
+    const result = saveReferences(deps, ctx, done);
+    await release();
+    return result;
+  } catch (e) {
+    // A deferral or a cancel (a restart) runs again and needs the PDF; any other failure is final.
+    if (e instanceof ToolError && e.missing) deps.tools.markMissing('pdftoppm', errorMessage(e));
+    if (!(e instanceof JobDeferred) && !ctx.signal.aborted) await release();
+    if (e instanceof ToolError && e.missing) throw new Error(NO_PDF_TOOLS);
+    throw e;
+  }
 }
 
 // ── The 'Pictures (LibreOffice)' import ─────────────────────────────────────────────────────────────────
