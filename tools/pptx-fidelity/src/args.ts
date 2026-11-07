@@ -23,6 +23,8 @@ export type Args = {
   loCompat: boolean;
   /** Register fontconfig's face for a script under a missing script fallback family's name (`fonts.ts`). */
   scriptStandIns: boolean;
+  /** `--before hub`: also score what a hub with LibreOffice showed before M9 (`beforehub.ts`). */
+  before?: 'hub';
   /** `--slides`, in the order given; empty: every slide of every deck. */
   slides: SlideSpec[];
   decks: string[];
@@ -98,7 +100,11 @@ export function parseArgs(argv: readonly string[]): Args {
     else if (v === '--baseline') a.baseline = value(++i, v);
     else if (v === '--manifest') a.manifest = value(++i, v);
     else if (v === '--slides') a.slides.push(parseSlideSpec(value(++i, v)));
-    else if (v === '--no-ppv') noPpv = true;
+    else if (v === '--before') {
+      const b = value(++i, v);
+      if (b !== 'hub') throw new Error('--before takes hub');
+      a.before = b;
+    } else if (v === '--no-ppv') noPpv = true;
     else if (v === '--max-drop') {
       a.maxDrop = Number(argv[++i]);
       if (!(a.maxDrop >= 0)) throw new Error('--max-drop takes a number ≥ 0');

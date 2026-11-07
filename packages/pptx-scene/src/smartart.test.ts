@@ -147,6 +147,35 @@ describe('SmartArt from its drawing cache (M6)', () => {
     expect(s.classification.class).toBe('hybrid');
   });
 
+  it('an empty dsp:spTree is no drawing (text falls to the residual path)', () => {
+    // PowerPoint writes caches without shapes; LibreOffice skips them and lays the diagram out, so the frame
+    // goes to the art with its text rather than being classed native and drawing nothing.
+    for (const empty of [
+      drawingXml(''),
+      drawingXml(
+        '<dsp:grpSp><dsp:nvGrpSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/></dsp:grpSp>',
+      ),
+    ]) {
+      const scene = parseDeck(deckWith(empty));
+      const s = scene.slides[0]!;
+      expect(s.elements).toHaveLength(1);
+      expect(s.elements[0]).toMatchObject({ kind: 'residual', what: 'smartart', support: 'residual' });
+      expect(s.classification.class).toBe('hybrid');
+      expect(s.classification.reasons).toContain('art:smartart');
+      expect(s.notes.join(' ')).toMatch(/SmartArt drawing holds no shapes/);
+      const e = emitSlides(scene).slides[0]!;
+      expect(e.slide.objects.filter((o) => o.origin?.role === 'diagram')).toEqual([]);
+      expect(e.art?.elements).toEqual([{ from: 'slide', shapeId: FRAME.id, nth: 0 }]);
+    }
+    // A shape inside a group is a drawing.
+    const grouped = drawingXml(
+      `<dsp:grpSp><dsp:nvGrpSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/>${dspSp({ x: 0, y: 0, cx: IN, cy: IN })}</dsp:grpSp>`,
+    );
+    const g = parseDeck(deckWith(grouped)).slides[0]!;
+    expect(g.classification.class).toBe('native');
+    expect(g.elements.some((e) => e.kind === 'shape' && e.diagram !== undefined)).toBe(true);
+  });
+
   it('turns the text with the shape plus its own rotation, and keeps the shadow of a shape showing nothing', () => {
     const drawing = drawingXml(
       dspSp({

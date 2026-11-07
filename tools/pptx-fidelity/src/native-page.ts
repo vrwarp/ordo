@@ -2,13 +2,19 @@ import type { Slide } from '@ordo/domain';
 import { currentFontEnv, type FontFile, FontResolver, installFontEnv } from '@ordo/renderer/text/fonts.ts';
 import type { FaceRequest } from '@ordo/renderer/text/types.ts';
 import { pictureKey } from '@ordo/renderer/bitmap-cache.ts';
+import { clampSlide } from '@ordo/renderer/clamp.ts';
+import { drawableContent } from '@ordo/renderer/content.ts';
+import { clearEffectCache } from '@ordo/renderer/effects.ts';
+import { withinDrawBudget } from '@ordo/renderer/geombudget.ts';
 import { clearGeomFiles, putGeomFile } from '@ordo/renderer/geom/stored.ts';
 import { withoutExifOrientation } from './exif.ts';
+import { timeEach } from './objecttime.ts';
 import { type PictureTarget, pictureTarget, preparePicture } from '@ordo/renderer/picture.ts';
 import {
   type ImageLookup,
   type SlidePicture,
   drawImageFit,
+  drawObject,
   drawSlide2D,
   fillColor,
   slidePictures,
@@ -38,6 +44,13 @@ import {
  * copy it 1:1; the cold time includes that preparation. A picture
  * drawn from its source (rotated, round corners) is decoded scaled down to what the deck shows of it (the
  * hub's picture preparation does the same, design/27 §4). Both are kept in a bounded cache.
+ *
+ * `objects` times each object of a slide on its own (`maxObjectMs`, design/27 §13's 50 ms task): the slide
+ * is drawn again on a canvas of its own, object by object as `drawSlide2D` draws them, each `drawObject`
+ * timed with its flush. Each object is drawn cold: a copy of the slide (nothing cached for its objects
+ * applies) with the effect sprites cleared; its pictures are prepared first, outside the times, as an
+ * output's lanes prepare them before the draw. `native.ts` asks for it once every slide's own draws are
+ * done, so clearing the sprites changes none of the other timings.
  */
 
 /** A face to register: the resolver's `FontFile`, read from `url`. */
@@ -77,6 +90,17 @@ export type RenderResult = {
   missing: string[];
 };
 
+export type ObjectsJob = Omit<RenderJob, 'repeats'>;
+
+export type ObjectsResult = {
+  /** The largest single object's draw and flush, cold, at 1920 and 3840 px wide, in ms. */
+  ms1920: number;
+  ms3840: number;
+  /** The id of that object at each width (none for a slide without objects). */
+  id1920?: string;
+  id3840?: string;
+};
+
 export type NativePage = {
   /** Register the deck's faces with the page's resolver (`FontResolver.sync`). */
   fonts(list: PageFont[]): Promise<{ loaded: number; failed: string[]; generation: number }>;
@@ -86,6 +110,8 @@ export type NativePage = {
   /** The deck's geometry files (`ShapeGeom.ref`): read before any slide is drawn, as an output reads them. */
   geoms(list: { id: string; file: unknown }[]): void;
   render(job: RenderJob): Promise<RenderResult>;
+  /** Each object's cold draw on its own, at 1920 and 3840 px: the largest (`maxObjectMs`). */
+  objects(job: ObjectsJob): Promise<ObjectsResult>;
 };
 
 /** Decoded pixels kept between slides of a deck (about 512 MB of RGBA). */
@@ -262,6 +288,8 @@ async function blobToBase64(b: Blob): Promise<string> {
 }
 
 const canvases = new Map<number, OffscreenCanvasRenderingContext2D>();
+/** The canvases `objects` draws on, apart from the timed ones. */
+const objectCanvases = new Map<number, OffscreenCanvasRenderingContext2D>();
 
 /** Font files by hash: each is fetched once per sync, and every face made from it gets its own copy. */
 const fontUrls = new Map<string, string>();
@@ -287,16 +315,45 @@ const resolver = new FontResolver({
 });
 installFontEnv(resolver);
 
-function context(width: number): OffscreenCanvasRenderingContext2D {
-  let ctx = canvases.get(width);
+function context(width: number, from = canvases): OffscreenCanvasRenderingContext2D {
+  let ctx = from.get(width);
   if (!ctx) {
     const c = new OffscreenCanvas(width, Math.round((width * 1080) / 1920));
     const got = c.getContext('2d');
     if (!got) throw new Error('2D context unavailable');
     ctx = got;
-    canvases.set(width, ctx);
+    from.set(width, ctx);
   }
   return ctx;
+}
+
+/**
+ * The largest single object's time at `width`: the background as `draw` lays it, then the slide's objects as
+ * `drawSlide2D` draws them (authored, within the slide's drawing budget), each timed with its flush. A
+ * slide drawn as one page picture (`slideContent`) is timed whole.
+ */
+function largestObject(slide: Slide, width: number, images: ImageLookup): { ms: number; id?: string } {
+  clearEffectCache();
+  const copy = structuredClone(slide);
+  const ctx = context(width, objectCanvases);
+  const scale = width / 1920;
+  const flush = () => void ctx.getImageData(0, 0, 1, 1);
+  const now = () => performance.now();
+  fillColor(ctx, { r: 0, g: 0, b: 0, a: 1 }, width, Math.round(1080 * scale));
+  if (copy.backgroundMediaId) {
+    const target = pictureTarget(BACKGROUND, scale);
+    const bg = images(copy.backgroundMediaId, target);
+    if (bg) drawImageFit(ctx, bg, BACKGROUND.box, scale, 'cover', 1, 0, undefined, target);
+  }
+  flush();
+  const drawn = drawableContent(clampSlide(copy));
+  if (drawn.pictureMediaId) {
+    const t = timeEach([copy], (s) => drawSlide2D(ctx, s, { scale, images }), flush, now);
+    return { ms: t.max };
+  }
+  const objects = withinDrawBudget(drawn.objects);
+  const t = timeEach(objects, (o) => drawObject(ctx, o, scale, images), flush, now);
+  return { ms: t.max, ...(t.at >= 0 ? { id: objects[t.at]!.id } : {}) };
 }
 
 const page: NativePage = {
@@ -350,6 +407,17 @@ const page: NativePage = {
       ms3840 = timed(ctx4, job.slide, 3840, big, job.repeats);
     }
     return { png, width: w, height: h, ms1920, ms3840, cold1920, cold3840, missing };
+  },
+  async objects(job) {
+    const missing: string[] = [];
+    const small = largestObject(job.slide, 1920, await picturesOf(job.slide, missing, [1920]));
+    const big = largestObject(job.slide, 3840, await picturesOf(job.slide, missing, [3840]));
+    return {
+      ms1920: small.ms,
+      ms3840: big.ms,
+      ...(small.id !== undefined ? { id1920: small.id } : {}),
+      ...(big.id !== undefined ? { id3840: big.id } : {}),
+    };
   },
 };
 

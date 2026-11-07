@@ -24,6 +24,13 @@ describe('parseArgs', () => {
     expect(() => parseArgs(['--slides', '--lo-compat'])).toThrow(/needs a value/);
   });
 
+  it('reads --before hub and refuses anything else', () => {
+    expect(parseArgs(['decks']).before).toBeUndefined();
+    expect(parseArgs(['--before', 'hub', 'decks'])).toMatchObject({ before: 'hub', decks: ['decks'] });
+    expect(() => parseArgs(['--before', 'harness'])).toThrow(/--before takes hub/);
+    expect(() => parseArgs(['--before'])).toThrow(/needs a value/);
+  });
+
   it('refuses slide lists that are not numbers or ranges', () => {
     for (const bad of ['', '0', '3-1', 'a', '1,,2', ':3', '1-200000', '2.5', '-1'])
       expect(() => parseSlideSpec(bad), bad).toThrow();

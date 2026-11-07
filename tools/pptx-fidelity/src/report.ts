@@ -34,6 +34,17 @@ export type SlideScore = {
   rasterMs?: { '1920': number; '3840': number };
   /** Cold: preparing the pictures the deck's cache lacks plus the first draw, in ms. */
   coldMs?: { '1920': number; '3840': number };
+  /** The largest single object's cold draw and flush at 1920 and 3840 px, in ms (`native-page.ts`). */
+  maxObjectMs?: { '1920': number; '3840': number };
+  /** The id of that object at 3840 px. */
+  maxObjectId?: string;
+  /** The slide's class in the hub when its budgets made it differ from `class` (`census.ts` `hubClasses`). */
+  hub?: string;
+  /**
+   * `--before hub`: what a hub with LibreOffice showed before M9, scored against LibreOffice (`beforehub.ts`;
+   * `nativeSsim` is what a hub without LibreOffice drew).
+   */
+  beforeHubSsim?: number;
 };
 
 export type DeckScore = {
@@ -51,6 +62,8 @@ export type DeckScore = {
   nativeSsim?: number;
   /** With `--lo-compat`: the mean with every slide drawn as ordo does. */
   nativePolicySsim?: number;
+  /** With `--before hub`: the mean of `SlideScore.beforeHubSsim`. */
+  beforeHubSsim?: number;
   /** Text features of any slide (and the presentation part), as the suite's inventory reads a deck. */
   textFeatures?: string[];
   /** The whole native column for this deck (convert, fonts, draw), and the converter alone, in ms. */
@@ -79,6 +92,8 @@ export type Summary = {
   loCompat?: boolean;
   /** With `--lo-compat`: `nativeMean` with every slide drawn as ordo does. */
   nativePolicyMean?: number;
+  /** With `--before hub`: `nativeMean` of what a hub with LibreOffice showed before M9. */
+  beforeHubMean?: number;
   /** The native column's tables (`nativeTables`): all decks, and worship decks when a manifest says. */
   native?: { all: NativeTables; worship?: NativeTables };
   /** How this machine served each script fallback family (`fonts.ts`). */
@@ -123,6 +138,11 @@ export type NativeStats = {
   rasterMs: { '1920': { p50: number; p95: number }; '3840': { p50: number; p95: number } };
   /** Cold times (`SlideScore.coldMs`): what an output pays on a slide change, decode included. */
   coldMs: { '1920': { p50: number; p95: number }; '3840': { p50: number; p95: number } };
+  /** The largest single object per slide (`SlideScore.maxObjectMs`), and the largest of all. */
+  maxObjectMs: {
+    '1920': { p50: number; p95: number; max: number };
+    '3840': { p50: number; p95: number; max: number };
+  };
   tiers: GroupRow[];
   /** T1 and T2 together (the M2 exit compares them with pptx-preview). */
   t1t2?: GroupRow;
@@ -235,10 +255,12 @@ export function nativeStats(decks: DeckScore[]): NativeStats {
       const t = of(x.s);
       return t ? [t[w]] : [];
     });
-    return { p50: quantile(xs, 0.5), p95: quantile(xs, 0.95) };
+    return { p50: quantile(xs, 0.5), p95: quantile(xs, 0.95), max: xs.length ? Math.max(...xs) : 0 };
   };
   const warm = (s: SlideScore) => s.rasterMs;
   const cold = (s: SlideScore) => s.coldMs;
+  const largest = (s: SlideScore) => s.maxObjectMs;
+  const two = (r: { p50: number; p95: number }) => ({ p50: r.p50, p95: r.p95 });
   const conv = slides.flatMap((x) => (x.s.convertMs !== undefined ? [x.s.convertMs] : []));
   return {
     slides: slides.length,
@@ -248,8 +270,9 @@ export function nativeStats(decks: DeckScore[]): NativeStats {
     ...(ppv.length ? { meanPpv: mean(ppv.map((s) => s.ssim!)) } : {}),
     ...(scored.some((s) => s.policySsim !== undefined) ? { meanPolicy: mean(scored.map(policyOf)) } : {}),
     convertMs: { p50: quantile(conv, 0.5), p95: quantile(conv, 0.95) },
-    rasterMs: { '1920': raster('1920', warm), '3840': raster('3840', warm) },
-    coldMs: { '1920': raster('1920', cold), '3840': raster('3840', cold) },
+    rasterMs: { '1920': two(raster('1920', warm)), '3840': two(raster('3840', warm)) },
+    coldMs: { '1920': two(raster('1920', cold)), '3840': two(raster('3840', cold)) },
+    maxObjectMs: { '1920': raster('1920', largest), '3840': raster('3840', largest) },
     tiers: groupRows(slides, (s) => [s.tier!], TIER_ORDER),
     ...(t1t2[0] ? { t1t2: t1t2[0] } : {}),
     classes: groupRows(slides, (s) => [s.class ?? '?'], ['native', 'hybrid', 'picture', '?']),

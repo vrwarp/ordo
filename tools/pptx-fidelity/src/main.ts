@@ -5,11 +5,11 @@
  *
  *   pnpm --filter @ordo/pptx-fidelity start -- [--engine ppv|native|both] [--no-ppv] [--corpus]
  *        [--out DIR] [--chromium PATH] [--raw] [--fresh-lo] [--manifest FILE] [--baseline FILE]
- *        [--max-drop 0.02] [--lo-compat] [--slides [DECK:]LIST]... [--script-stand-ins]
+ *        [--max-drop 0.02] [--lo-compat] [--slides [DECK:]LIST]... [--script-stand-ins] [--before hub]
  *        [deck.pptx | dir]...
  *
- * Folders are searched with their subfolders for .pptx/.pptm/.ppsx/.potx decks; a deck any renderer cannot
- * draw is recorded in its notes and the run goes on.
+ * Folders are searched with their subfolders for PresentationML decks (src/decks.ts `DECK_RE`); a deck any
+ * renderer cannot draw is recorded in its notes and the run goes on. README.md lists the per-slide fields.
  *
  * --engine      which renderers to score: pptx-preview (ppv, the default), native, or both
  * --no-ppv      leave pptx-preview out whatever --engine says (alone, only LibreOffice's pictures are made)
@@ -36,6 +36,9 @@
  * --script-stand-ins  where a script fallback family (Noto Sans Hebrew, Noto Naskh Arabic, …) is not
  *               installed, register fontconfig's face for the script's language under its name, as an
  *               output would have the family; by default such glyphs fall back as LibreOffice's do
+ * --before hub  also score what a hub with LibreOffice showed before M9 (`perSlide.beforeHubSsim`,
+ *               src/beforehub.ts): LibreOffice's page for a slide the hub stores as a picture, LibreOffice's
+ *               pixels pasted over the art box of a hybrid slide and over pending metafiles
  *
  * Real decks stay outside the repository: pass their paths. The score is SSIM of greyscale pictures at
  * 960x540 (1 = identical), computed by ffmpeg. A native run also writes <out>/native-baseline.json.
@@ -53,7 +56,10 @@ import { renderWithPptxPreview } from '@ordo/pptx-render';
 import { pdfToPngs, pptxToPdf } from '../../../apps/hub/src/media/ffmpeg.ts';
 import { parseArgs, slidesFor } from './args.ts';
 import { type BaselineDeck, compareBaseline } from './baseline.ts';
+import { beforeHubSsim } from './beforehub.ts';
+import { hubClasses } from './census.ts';
 import { buildCorpus } from './corpus.ts';
+import { DECK_RE, listDecks } from './decks.ts';
 import { convertDeckIsolated, NativeRenderer, type RenderedDeck } from './native.ts';
 import { png } from './png.ts';
 import { ssim } from './ssim.ts';
@@ -81,28 +87,12 @@ async function findChromium(given?: string): Promise<string> {
   return 'chromium';
 }
 
-/** PresentationML files: decks, slide shows, templates, macro-enabled decks. */
-const DECK_RE = /\.(pptx|pptm|ppsx|ppsm|potx|potm)$/i;
-
 /** Decks given as files, or found in folders (and their subfolders), each with a name unique in the run. */
 async function decksIn(paths: string[]): Promise<{ file: string; name: string }[]> {
-  const out: { file: string; name: string }[] = [];
-  const walk = async (dir: string, prefix: string) => {
-    for (const f of (await readdir(dir, { withFileTypes: true })).sort((a, b) =>
-      a.name.localeCompare(b.name),
-    )) {
-      if (f.isDirectory()) await walk(join(dir, f.name), `${prefix}${f.name}__`);
-      else if (DECK_RE.test(f.name)) out.push({ file: join(dir, f.name), name: prefix + f.name });
-    }
-  };
-  for (const p of paths) {
-    if ((await stat(p)).isDirectory()) await walk(p, '');
-    else out.push({ file: p, name: basename(p) });
-  }
+  const out = await listDecks(paths);
   // A link whose deck is gone is not a deck the converter failed on: it is left out of the run and its means.
-  const missing = out.filter((d) => !existsSync(d.file));
-  for (const d of missing) console.log(`skipped ${d.name}: the deck file is missing`);
-  return out.filter((d) => existsSync(d.file));
+  for (const d of out) if (!d.exists) console.log(`skipped ${d.name}: the deck file is missing`);
+  return out.filter((d) => d.exists).map(({ file, name }) => ({ file, name }));
 }
 
 async function pngsIn(dir: string): Promise<string[]> {
@@ -276,7 +266,7 @@ async function nativeColumn(
   out: string,
   lo: string[],
   renderer: () => Promise<NativeRenderer>,
-  opts: { only?: ReadonlySet<number>; loCompat: boolean; standIns: boolean },
+  opts: { only?: ReadonlySet<number>; loCompat: boolean; standIns: boolean; beforeHub: boolean },
 ): Promise<{ fields: Partial<DeckScore>; perSlide: SlideScore[] }> {
   const t0 = performance.now();
   const nd = join(dir, 'native');
@@ -305,6 +295,10 @@ async function nativeColumn(
     notes.push(`${shown.length} shown slide(s) where LibreOffice drew ${lo.length} page(s)`);
   const pics = new Map(drawn.slides.map((r) => [r.shown, r]));
   const blacks = await blackScores(join(dir, 'libreoffice'));
+  // Each slide's class once the hub's budgets ran (`census.ts`), by deck index.
+  const hub = hubClasses(conv.slides, conv.geoms ?? []);
+  const hubOf = new Map(conv.slides.map((s, k) => [s.index, hub[k]!]));
+  const pasted = join(nd, '.beforehub.png');
   const perSlide: SlideScore[] = [];
   const n = Math.max(lo.length, shown.length);
   const rect = conv.slideRect;
@@ -320,16 +314,30 @@ async function nativeColumn(
       ...(pic ? { native: relative(out, pic) } : {}),
       ...(policyPic ? { nativePolicy: relative(out, policyPic) } : {}),
     };
+    const h = s ? hubOf.get(s.index) : undefined;
     if (lo[i]) {
       score.nativeSsim = pic ? await ssim(lo[i]!, pic) : 0;
       if (policyPic) score.policySsim = await ssim(lo[i]!, policyPic);
       const w = r?.width ?? Math.max(1, Math.round(rect.w));
-      const h = r?.height ?? Math.max(1, Math.round(rect.h));
-      score.blackSsim = await blacks.get(lo[i]!, w, h, () => blackPng(join(out, '.black'), w, h));
+      const ht = r?.height ?? Math.max(1, Math.round(rect.h));
+      const black = () => blackPng(join(out, '.black'), w, ht);
+      score.blackSsim = await blacks.get(lo[i]!, w, ht, black);
+      // What a hub with LibreOffice showed (`beforehub.ts`); a slide the converter did not emit drew nothing.
+      if (opts.beforeHub && s && h)
+        score.beforeHubSsim = await beforeHubSsim(
+          {
+            hub: h.hub,
+            ...(s.art ? { art: s.art } : {}),
+            ...(s.metafiles ? { metafiles: s.metafiles } : {}),
+          },
+          { lo: lo[i]!, native: pic ?? (await black()), nativeSsim: score.nativeSsim, rect, scratch: pasted },
+        );
+      else if (opts.beforeHub) score.beforeHubSsim = score.nativeSsim;
     }
     if (s) {
       score.tier = s.tier;
       score.class = s.class;
+      if (h && h.hub !== s.class) score.hub = h.hub;
       score.reasons = s.reasons;
       score.convertMs = Math.round(s.convertMs * 100) / 100;
       if (s.textFeatures.length) score.textFeatures = s.textFeatures;
@@ -337,14 +345,20 @@ async function nativeColumn(
     }
     if (r?.rasterMs) score.rasterMs = r.rasterMs;
     if (r?.coldMs) score.coldMs = r.coldMs;
+    if (r?.maxObjectMs) score.maxObjectMs = r.maxObjectMs;
+    if (r?.maxObjectId) score.maxObjectId = r.maxObjectId;
     perSlide.push(score);
   }
   await blacks.save();
+  await rm(pasted, { force: true });
   const scored = perSlide.filter((p) => p.nativeSsim !== undefined);
   return {
     fields: {
       nativeSlides: shown.length,
       ...(scored.length ? { nativeSsim: mean(scored.map((p) => p.nativeSsim!)) } : {}),
+      ...(opts.beforeHub && scored.length
+        ? { beforeHubSsim: mean(scored.map((p) => p.beforeHubSsim ?? p.nativeSsim!)) }
+        : {}),
       ...(opts.loCompat && scored.length
         ? { nativePolicySsim: mean(scored.map((p) => p.policySsim ?? p.nativeSsim!)) }
         : {}),
@@ -411,6 +425,9 @@ async function main(): Promise<void> {
             loCompat: true,
             nativePolicyMean: mean(counted.map((s) => s.nativePolicySsim ?? s.nativeSsim!)),
           }
+        : {}),
+      ...(nativeOn && a.before === 'hub'
+        ? { beforeHubMean: mean(counted.map((s) => s.beforeHubSsim ?? s.nativeSsim!)) }
         : {}),
       ...(a.slides.length
         ? { slides: a.slides.map((x) => ({ ...(x.deck ? { deck: x.deck } : {}), slides: [...x.slides] })) }
@@ -504,6 +521,7 @@ async function main(): Promise<void> {
             ...(only ? { only } : {}),
             loCompat: a.loCompat,
             standIns: a.scriptStandIns,
+            beforeHub: a.before === 'hub',
           });
           Object.assign(s, n.fields);
           s.perSlide = mergeSlides(s.perSlide, n.perSlide);
@@ -521,6 +539,7 @@ async function main(): Promise<void> {
         s.ms !== undefined ? `${s.ms} ms` : '',
         s.nativeSsim !== undefined ? `native ${s.nativeSsim.toFixed(3)}` : '',
         s.nativePolicySsim !== undefined ? `(ordo's policies ${s.nativePolicySsim.toFixed(3)})` : '',
+        s.beforeHubSsim !== undefined ? `before hub ${s.beforeHubSsim.toFixed(3)}` : '',
         s.nativeMs !== undefined ? `${s.nativeMs} ms` : '',
         s.nativeSlides !== undefined && s.nativeSsim === undefined ? `native: ${s.nativeSlides} slides` : '',
       ].filter(Boolean);
@@ -568,6 +587,7 @@ async function main(): Promise<void> {
     summary.nativePolicyMean !== undefined
       ? `native with ordo's policies ${summary.nativePolicyMean.toFixed(3)}`
       : '',
+    summary.beforeHubMean !== undefined ? `before hub ${summary.beforeHubMean.toFixed(3)}` : '',
   ].filter(Boolean);
   console.log(
     `\nmean ssim ${means.join(', ') || '-'} over ${scores.length} deck(s); report: ${join(out, 'report.html')}`,
@@ -580,6 +600,9 @@ async function main(): Promise<void> {
     );
     console.log(
       `native raster p95 ${st.rasterMs['1920'].p95.toFixed(1)} ms at 1920, ${st.rasterMs['3840'].p95.toFixed(1)} ms at 3840 (cold, pictures prepared + first draw: ${st.coldMs['1920'].p95.toFixed(1)} / ${st.coldMs['3840'].p95.toFixed(1)} ms); convert p95 ${st.convertMs.p95.toFixed(2)} ms per slide`,
+    );
+    console.log(
+      `native largest object (cold): p95 ${st.maxObjectMs['1920'].p95.toFixed(1)} / ${st.maxObjectMs['3840'].p95.toFixed(1)} ms, max ${st.maxObjectMs['1920'].max.toFixed(1)} / ${st.maxObjectMs['3840'].max.toFixed(1)} ms at 1920 / 3840`,
     );
     const rows = (summary.native?.all.textFeatures ?? []).filter((r) => r.beatsBlack !== undefined);
     if (rows.length)

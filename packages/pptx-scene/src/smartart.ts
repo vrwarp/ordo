@@ -7,7 +7,8 @@
  * - **Finding the drawing** as PowerPoint and LibreOffice do: the frame's `dgm:relIds r:dm` names the data
  *   model part; its `dgm:extLst` holds `dsp:dataModelExt relId`, a relationship of the part holding the frame
  *   (slide, layout or master) to the drawing part (`diagramDrawing`). Anything missing, external or malformed
- *   on the way: no drawing (residual).
+ *   on the way: no drawing (residual). A drawing whose `dsp:spTree` holds no `dsp:sp` at any depth is no drawing
+ *   either: PowerPoint writes such empty caches, and LibreOffice skips them and lays the diagram out itself.
  * - **The drawing's shapes** (`dsp:sp`, `dsp:grpSp` in `dsp:spTree`) have PresentationML's vocabulary, so they
  *   are read as one: a copy of the tree with the `dsp:` shape elements named `p:` (`p:sp`, `p:spPr`,
  *   `p:style`, `p:txBody`, …; DrawingML children shared, never copied) goes through the ordinary shape walk
@@ -240,7 +241,10 @@ export function modelDrawingRelId(
   return undefined;
 }
 
-/** The SmartArt drawing's tree and part of a graphic frame, or undefined when the deck holds none. */
+/**
+ * The SmartArt drawing's tree and part of a graphic frame, or undefined when the deck holds none or the
+ * drawing holds no shape (an empty cache is no drawing: the frame stays residual).
+ */
 export function smartArtDrawing(
   ctx: SlideCtx,
   from: Source,
@@ -261,7 +265,27 @@ export function smartArtDrawing(
     return undefined;
   }
   const tree = root?.name === 'dsp:drawing' ? child(root, 'dsp:spTree') : undefined;
-  return tree ? { part: rel.target, tree } : undefined;
+  if (!tree) return undefined;
+  // PowerPoint writes empty caches; LibreOffice skips a drawing without shapes and lays the diagram out
+  // itself (`DiagramShapeCounter`), so such a frame stays residual rather than native and blank.
+  if (!holdsShape(tree)) {
+    ctx.log('a SmartArt drawing holds no shapes: LibreOffice lays the diagram out');
+    return undefined;
+  }
+  return { part: rel.target, tree };
+}
+
+/** Whether a drawing's tree holds a `dsp:sp` at any depth (groups included); stops at the first. */
+function holdsShape(tree: XNode): boolean {
+  const stack = [tree];
+  while (stack.length) {
+    const x = stack.pop()!;
+    for (const c of x.children) {
+      if (c.name === 'dsp:sp') return true;
+      if (c.name === 'dsp:grpSp') stack.push(c);
+    }
+  }
+  return false;
 }
 
 /** The context the drawing's shapes are read in: their relationships are the drawing part's. */

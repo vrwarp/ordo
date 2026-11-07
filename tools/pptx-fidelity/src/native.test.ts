@@ -334,6 +334,11 @@ describe.skipIf(!chromium)('NativeRenderer (headless Chromium)', () => {
         for (const s of drawn.slides) {
           expect(s.rasterMs!['1920']).toBeGreaterThan(0);
           expect(s.rasterMs!['3840']).toBeGreaterThan(0);
+          // Each object drawn cold on its own: the largest, and which object it was.
+          expect(s.maxObjectMs!['1920']).toBeGreaterThan(0);
+          expect(s.maxObjectMs!['3840']).toBeGreaterThan(0);
+          const ids = d.slides.find((x) => x.shown === s.shown)!.slide.objects.map((o) => o.id);
+          expect(ids).toContain(s.maxObjectId);
         }
         expect(drawn.fonts!.loaded).toBe(drawn.fonts!.offered);
         expect(drawn.fonts!.loaded).toBeGreaterThan(0);

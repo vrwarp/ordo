@@ -14,7 +14,8 @@
  * - `NativeRenderer` loads `native-page.ts` (bundled with esbuild) in headless Chromium, gives the page's
  *   font resolver the faces this machine has for every family the slides ask for, ordo's default face and
  *   the script fallbacks (`fonts.ts`, as LibreOffice and the outputs draw them), and draws every shown slide
- *   with `drawSlide2D`: a 1920x1080 picture cut to the slide area, and raster timings at 1920 and 3840 px.
+ *   with `drawSlide2D`: a 1920x1080 picture cut to the slide area, and raster timings at 1920 and 3840 px;
+ *   then, with the timings, each slide's objects drawn cold one at a time (`maxObjectMs`).
  *
  * The deck is untrusted: the page fetches only from the harness's own origin, which answers from a fixed
  * table of generated names, and every other request is refused.
@@ -44,7 +45,7 @@ import { hostFace } from './faces.ts';
 import { type CompatRule, compatRules, drawingKey } from './compat.ts';
 import { deckTextFeatures, textFeatures } from './features.ts';
 import { hostFonts, type ScriptFace } from './fonts.ts';
-import type { NativePage, PageFont, PageMedia, RenderResult } from './native-page.ts';
+import type { NativePage, ObjectsResult, PageFont, PageMedia, RenderResult } from './native-page.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../../..');
@@ -84,6 +85,12 @@ export type NativeSlide = {
   compat: CompatRule[];
   /** With `loCompat`: the slide as LibreOffice draws it, when that differs from `slide`. */
   compatSlide?: Slide;
+  /** Hybrid: the art's box in logical px (`EmittedSlide.art`), where the hub's version 2 draws LibreOffice. */
+  art?: { x: number; y: number; w: number; h: number };
+  /** The boxes of the metafile pictures left out of `slide` until LibreOffice converts them. */
+  metafiles?: { x: number; y: number; w: number; h: number; rotation: number }[];
+  /** Classed picture by the converter's slide budget alone (`EmittedSlide.overBudget`). */
+  overBudget?: true;
 };
 
 /** What `convertDeck` is asked for besides the slides. */
@@ -302,6 +309,9 @@ export async function convertDeck(
         textFeatures: features.get(s.index) ?? [],
         compat: rules,
         ...(opts.loCompat && differs ? { compatSlide: lo } : {}),
+        ...(s.art ? { art: { ...s.art.box } } : {}),
+        ...(s.metafiles?.length ? { metafiles: s.metafiles.map((m) => ({ ...m.object.box })) } : {}),
+        ...(s.overBudget ? { overBudget: true as const } : {}),
       };
     });
 
@@ -547,6 +557,10 @@ export type RenderedSlide = {
   rasterMs?: { '1920': number; '3840': number };
   /** Preparing the pictures the cache lacks plus the first draw, in ms (`RenderResult.cold1920`). */
   coldMs?: { '1920': number; '3840': number };
+  /** The largest single object's cold draw and flush, in ms (`NativePage.objects`). */
+  maxObjectMs?: { '1920': number; '3840': number };
+  /** The id of that object at 3840 px. */
+  maxObjectId?: string;
   error?: string;
 };
 
@@ -760,6 +774,31 @@ export class NativeRenderer {
           page = undefined;
         }
       }
+      // Each object on its own, once every slide's own draws are timed: the cold draws clear the page's
+      // effect sprites, which would change the next slide's times.
+      if (repeats)
+        for (const [k, s] of shown.entries()) {
+          const out = slides[k]!;
+          if (out.error) continue;
+          try {
+            const p = page ?? (await open());
+            const job = {
+              slide: (opts.loCompat ? s.compatSlide : undefined) ?? s.slide,
+              rect: deck.slideRect,
+            };
+            const r: ObjectsResult = await withTimeout(
+              p.evaluate((j) => window.__native.objects(j), job),
+              SLIDE_TIMEOUT_MS,
+              `slide ${s.shown + 1}'s objects`,
+            );
+            out.maxObjectMs = { '1920': round2(r.ms1920), '3840': round2(r.ms3840) };
+            if (r.id3840 !== undefined) out.maxObjectId = r.id3840;
+          } catch (e) {
+            notes.push(`slide ${s.shown + 1}'s objects not timed: ${errorText(e)}`);
+            await page?.close().catch(() => undefined);
+            page = undefined;
+          }
+        }
     } finally {
       await page?.close().catch(() => undefined);
     }

@@ -1307,6 +1307,24 @@ The current JSZip text path takes 1.17 s per 100 slides.
      - _As built (M2):_ the converter writes the text with LibreOffice 24.2's policies (`EmitOptions.loCompat`, never set by the hub): no run shadows (an unfilled shape's shadow on its text stays), no outline on filled text (the reference pictures come from `pptxForRendering`'s copy, which strips them, so hollow letters never appear in them), shrink-to-fit re-fitted from full size, and only for a shape's own `normAutofit` (LibreOffice ignores one inherited from a layout or master placeholder; measured with a probe deck). The harness emits each deck both ways and records per slide the rules that change its drawing (`runShadow`, `textOutline`, `refit`, `inheritedFit`); with `--lo-compat` such a slide is drawn both ways, and `summary.json` and the report give the means both ways, per rule and overall. `--baseline` compares ordo's own drawings.
    - _Also built in M2:_ per-slide text features read from the slide's XML with the suite inventory's rules (superSub, lnSpcPct, normAutofitScaled, rtl, rtlScriptText, bulletsAuto) and the census's mixedRuns, with means per feature, per tier and per deck next to the M2 targets; `--slides [DECK:]LIST` scores only some slides.
    - Decks with embedded fonts are excluded from means; LibreOffice 24.2 ignores them (it drew Inter).
+   <!-- m9:base -->
+   - *Built for M9 (base track; `tools/pptx-fidelity/README.md`):*
+     - `src/census.ts`: the census as a harness tool. It reads every file of `DECK_RE` (`.pptx`, `.pptm`,
+       `.ppsx`, `.ppsm`, `.potx`, `.potm`, as a fidelity run does), converts each deck in the harness's worker,
+       and writes per shown slide the converter's tier, class and reasons and the hub's view: `stored`
+       (`storedSlideBytes`), `hub` and `hubWhy` (`hubClasses`: the import's geometry-file budget, then
+       `planImportSizes`, as `nativeJob.ts` runs them). A link whose deck is gone is a row
+       `unreadable: "missing target"`, never an error.
+     - `--before hub` (`src/beforehub.ts`) writes `perSlide.beforeHubSsim`: what a hub with LibreOffice showed
+       before M9. A slide the hub stores as a picture shows LibreOffice's page (1). A hybrid slide is scored
+       with LibreOffice's pixels pasted over its art box, and a slide with metafile pictures with them pasted
+       over the metafiles' boxes, on the native page. `nativeSsim` stays the harness's before: residual
+       elements draw nothing.
+     - `maxObjectMs` (`src/native-page.ts`, §13's 50 ms task): once a deck's slides are timed, each slide is
+       drawn again object by object as `drawSlide2D` draws them, cold (a copy of the slide, the effect sprites
+       cleared, its pictures prepared outside the times). Each `drawObject` is timed with its flush, at 1920
+       and 3840 px, and the largest is kept with its object's id.
+   <!-- /m9:base -->
 2. **Committed probe decks.** Synthetic generators, as in `corpus.ts`, one per verified rule:
    - tint/shade (#454545);
    - defaultTextStyle for non-placeholders;
@@ -1847,6 +1865,11 @@ _As built (M6 wave 2, item D: SmartArt and baked pictures; `pptx-scene` `smartar
   text rule the walk has; a drawing goes native or into the art whole, and over the 150-object budget it is
   the drawing that goes to the art. The render copy keeps the drawing with its frame. Per batch at most
   2,000,000 elements of drawings are read (a shared drawing named from every slide), the rest left residual.
+  <!-- m9:base -->
+  A drawing whose `dsp:spTree` holds no `dsp:sp` at any depth is no drawing (M9 base). PowerPoint writes
+  such empty caches, and LibreOffice skips them and lays the diagram out itself. ordo used to class those
+  frames native and draw nothing. They are residual now: 3 slides of shard 0 go native → hybrid.
+  <!-- /m9:base -->
 - Recolour and tile bakes as §4 says; `pptx-bake` decodes nothing itself (ffmpeg does, at the bake's size)
   and is bounded at 8,192 px a side and 16 MP in and out, 60 s, and the import's decode budget. No schema
   field is added: a baked picture is an ordinary media item, so an older build draws it too.
