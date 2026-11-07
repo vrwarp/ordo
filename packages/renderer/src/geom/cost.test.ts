@@ -9,6 +9,7 @@ import {
   objectCost,
   type Rated,
   slidePlan,
+  spanArea,
   strokeCost,
   unitCost,
 } from './cost.ts';
@@ -246,8 +247,9 @@ describe('outline estimate (design/27 §12 drawing cost)', () => {
     expect(outlineOf({ stroke: { width: Number.POSITIVE_INFINITY } })).toBeUndefined();
     const inf: Outline = { width: Number.POSITIVE_INFINITY, join: 'miter', cap: 'butt', miterLimit: 8 };
     expect(strokeCost([CMD_MOVE, CMD_LINE], [0, 0, 10, 10], inf).est).toBe(Number.POSITIVE_INFINITY);
-    // A leg to a point that is not a number is not drawn (Canvas skips it; the clamp makes it 0 first).
-    expect(strokeCost([CMD_MOVE, CMD_LINE], [0, Number.NaN, 10, 10], line(2)).est).toBe(0);
+    // A leg to a point that is not a number draws nothing (Canvas skips it; the clamp makes it 0 first): only
+    // the stroker's pass over it is counted.
+    expect(strokeCost([CMD_MOVE, CMD_LINE], [0, Number.NaN, 10, 10], line(2)).est).toBe(GEOM_COST.leg);
     expect(strokeCost([], [], line(2)).est).toBe(0);
     expect(strokeCost([CMD_LINE, 99, CMD_CLOSE], [1, 2], line(2)).est).toBeGreaterThanOrEqual(0);
   });
@@ -279,6 +281,7 @@ describe('outline estimate (design/27 §12 drawing cost)', () => {
     expect(objectCost({ ...base, stroke: { width: 400 }, opacity: 0 }, g)).toBe(0);
     // A legacy shape (no M6 field) draws through the old path: not rated here.
     expect(objectCost({ type: 'shape', shape: 'rect', opacity: 1, stroke: { width: 400 } }, g)).toBe(0);
+    // A mask is its filled paths as one unit (a clip).
     expect(objectCost({ type: 'image', mask: { paths: [] } }, g)).toBe(
       unitCost(g.paths[0]!.cmds, g.paths[0]!.pts).est,
     );
@@ -298,6 +301,51 @@ describe('outline estimate (design/27 §12 drawing cost)', () => {
       () => 0,
     );
     expect(parts).toEqual([undefined, 'geom', undefined]);
+  });
+
+  it("counts what the self-check found: each path's covered area, the stroker's legs, open arrowheads' strokes", () => {
+    // Eight full-box paths of four edges each: few edges, but each fills the box once (GEOM_COST.area).
+    const rect = (w: number, h: number): GeomPath => ({
+      cmds: [CMD_MOVE, CMD_LINE, CMD_LINE, CMD_LINE, CMD_CLOSE],
+      pts: [0, 0, w, 0, w, h, 0, h],
+      fill: 'norm',
+      stroke: true,
+    });
+    const full = { w: 1920, h: 1080, paths: Array.from({ length: 8 }, () => rect(1920, 1080)) };
+    const one = { ...full, paths: full.paths.slice(0, 1) };
+    // Past the widest path (what one fill, and the legacy shape, paint anyway) each paints the box again.
+    expect(drawCost(full, { fill: true }) - 8 * drawCost(one, { fill: true })).toBeCloseTo(
+      7 * 1920 * 1080 * GEOM_COST.area,
+      6,
+    );
+    expect(spanArea([0, 0, 1e9, 1e9])).toBe(1920 * 1080);
+    // A straight line of 2,400 collinear points stroked 500 px wide: no join and no slanted edge, but the
+    // stroker walks every leg (eight of them took 15 to 21 ms at 3840).
+    const cmds = [CMD_MOVE, ...Array.from({ length: 2_399 }, () => CMD_LINE)];
+    const pts = Array.from({ length: 2_400 }, (_, k) => [k * 0.4, 500]).flat();
+    const straight = strokeCost(cmds, pts, line(500));
+    expect(straight.est).toBeGreaterThanOrEqual(2_399 * GEOM_COST.leg);
+    const covered = drawCost(
+      { w: 1000, h: 1000, paths: [{ cmds, pts, fill: 'none', stroke: true }] },
+      {
+        fill: false,
+        outline: line(500),
+      },
+    );
+    expect(covered - straight.est).toBeGreaterThan(1000 * 500 * GEOM_COST.area * 0.9);
+    // An open arrowhead is a stroke of its own (about 10 µs a call at 4K), a filled one a fill.
+    const bits = bitsPath(9, 100, 3, 900);
+    const open = strokeCost(
+      bits.cmds,
+      bits.pts,
+      line(4, { ends: { head: { type: 'arrow' }, tail: { type: 'arrow' } } }),
+    );
+    const filled = strokeCost(
+      bits.cmds,
+      bits.pts,
+      line(4, { ends: { head: { type: 'triangle' }, tail: { type: 'triangle' } } }),
+    );
+    expect(open.est - filled.est).toBeGreaterThan(200 * (GEOM_COST.markerStroked - GEOM_COST.marker) * 0.99);
   });
 
   it('property: every outline term is counted, whatever the path (fast-check)', () => {

@@ -71,7 +71,11 @@ describe("a slide's drawing budget (design/27 §12 drawing cost)", () => {
   });
 
   it("holds a slide's stored path points to 64k (§12)", () => {
-    const objects = Array.from({ length: 22 }, (_, i) => shape(`c${i}`, circle(3_000)));
+    // Small boxes: what they fill is little (GEOM_COST.area), so the points decide.
+    const objects = Array.from({ length: 22 }, (_, i) => ({
+      ...shape(`c${i}`, circle(3_000)),
+      box: { x: i * 80, y: 0, w: 80, h: 80, rotation: 0 },
+    }));
     // 21 of 3,001 points fit 65,536 (and the slide's budget, at GEOM_COST.point a point); the 22nd does not.
     expect(charged(drawnCost(objects[0]!)) * 22).toBeLessThan(GEOM_COST.slide);
     expect([...overGeomBudget(objects)].map((o) => o.id)).toEqual(['c21']);
@@ -90,6 +94,7 @@ describe("a slide's drawing budget (design/27 §12 drawing cost)", () => {
     };
     const presets = Array.from({ length: 50 }, (_, i) => ({
       ...shape(`s${i}`, ''),
+      box: { x: (i % 10) * 190, y: Math.floor(i / 10) * 200, w: 100, h: 100, rotation: 0 },
       geom: { preset: 'star32' },
     }));
     const one = charged(drawnCost(shape('a', zigzag(250))));
@@ -203,6 +208,27 @@ describe("a slide's drawing budget (design/27 §12 drawing cost)", () => {
     let total = 0;
     for (const o of drawn) total += charged(drawnCost(o));
     expect(total).toBeLessThanOrEqual(GEOM_COST.slide);
+  });
+
+  it('charges the area each path covers: eight full-slide paths a shape paint the slide eight times (M6 finish)', () => {
+    // The self-check's: few edges, each path filled on its own over the whole box (80 translucent full-slide
+    // fills took 149 ms at 3840). Its legacy rect paints the box once.
+    const stacked = (id: string): ShapeObject => ({
+      ...shape(id, ''),
+      fill: { r: 40, g: 90, b: 160, a: 0.5 },
+      geom: {
+        paths: Array.from({ length: 8 }, () => ({
+          d: 'M 0 0 L 1000 0 L 1000 1000 L 0 1000 Z',
+          w: 1000,
+          h: 1000,
+        })),
+      },
+    });
+    const objects: SlideObject[] = Array.from({ length: 10 }, (_, i) => stacked(`r${i}`));
+    const one = charged(drawnCost(objects[0]!));
+    expect(one).toBeGreaterThan(7 * 1920 * 1080 * GEOM_COST.area);
+    const fit = Math.floor(GEOM_COST.slide / one);
+    expect([...overGeomBudget(objects)].map((o) => o.id)).toEqual(objects.slice(fit).map((o) => o.id));
   });
 
   it('gives back the same array when nothing is over', () => {

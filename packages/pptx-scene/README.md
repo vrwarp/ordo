@@ -642,6 +642,10 @@ only tables (`budget:table`) and SmartArt drawings (`budget:smartart`) were ever
   the rest going to the art; points of a geometry sent to the art are no longer charged. `fitDrawing` runs
   the renderer's own `slidePlan` on the emitted objects (merged runs and table grids included), so a slide the
   converter keeps native is drawn natively by every drawer; what it still has to change is noted.
+- **Self-check** (renderer `geom/cost.ts`): the shared estimate also charges the area each outline covers
+  and each fill past a geometry's widest, the stroker's walk of every leg, and an open arrowhead's own
+  stroke, so the converter rates stacked full-box paths, wide straight polylines and open arrowheads as the
+  drawers spend on them.
 - **Line widths** (`geom.ts` `lineWidthPx`): one function for the emitted width and its estimate (at least
   0.5 px; the renderer draws a dashed outline at least 0.5 px wide too).
 - Tests: `geom.test.ts` (wide outlines and arrowheads to the art, thin dashes on presets past the budget,

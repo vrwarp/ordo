@@ -510,9 +510,10 @@ describe('geometry fuzz (design/27 §12, §15 M6)', () => {
           const copy = plan.get(o);
           const r = drawnCost(copy ?? o);
           points += r.points;
-          // A copy without its effects keeps its geometry (charged); one without its geometry is a legacy shape.
+          // A copy without its effects keeps its geometry (charged); one without its geometry is a legacy shape
+          // (a rect, its fill and outline over at most a slide: GEOM_COST.area).
           if (copy && (copy as { geom?: unknown }).geom === undefined)
-            expect(charged(r)).toBeLessThan(GEOM_COST.slide / 10);
+            expect(charged(r)).toBeLessThan(GEOM_COST.slide / 4);
           else native += charged(r);
         }
         expect(native).toBeLessThanOrEqual(GEOM_COST.slide);

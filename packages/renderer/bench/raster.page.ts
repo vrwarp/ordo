@@ -400,6 +400,31 @@ export const DASHED_SPIRAL: Slide = {
 };
 
 /**
+ * Six shapes of eight translucent full-slide paths each (M6 finish, the self-check: few edges, but each path
+ * filled on its own over the whole box), within the budget by the area they cover: two drawn, the rest as
+ * their legacy rects.
+ */
+export const STACKED_PATHS: Slide = {
+  id: 'stacked-paths',
+  objects: Array.from({ length: 6 }, (_, i) => ({
+    id: `r${i}`,
+    type: 'shape' as const,
+    box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+    shape: 'rect' as const,
+    fill: { r: 40 + i * 30, g: 90, b: 160, a: 0.5 },
+    opacity: 1,
+    radius: 0,
+    geom: {
+      paths: Array.from({ length: 8 }, () => ({
+        d: 'M 0 0 L 1000 0 L 1000 1000 L 0 1000 Z',
+        w: 1000,
+        h: 1000,
+      })),
+    },
+  })),
+};
+
+/**
  * Three full-slide soft-edged panels (M6 finish: a soft edge weighs EFFECT_COST.softEdge slide areas, so one
  * fits the effect budget and the others are drawn without; its mask is cached, its body made each raster: at
  * 4K its full-resolution cut by the enlarged mask takes about 55 ms, which caching cannot avoid within the
@@ -502,6 +527,7 @@ export async function bench(
     ['wide outlines on tiny paths (bounded geometry, M6 finish)', WIDE_OUTLINES],
     ['arrowheads and thin dashes (bounded geometry, M6 finish)', ENDS_AND_DASHES],
     ['dashed spiral within the budget (bounded geometry, M6 finish)', DASHED_SPIRAL],
+    ['stacked full-slide paths (bounded geometry, M6 finish)', STACKED_PATHS],
     ['three large shadowed panels (bounded, M6 repair)', SHADOWED_PANELS],
     ['three full-slide soft edges (bounded, M6 finish)', SOFT_EDGES],
     ['autofit search (rich)', AUTOFIT],

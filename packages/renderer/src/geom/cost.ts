@@ -25,13 +25,17 @@ import type { GeomPath } from './path.ts';
  * - an outline, per stroked path (`strokeCost`): what Canvas fills for it, rated the same way. Each segment
  *   (each leg of a curve's control polygon) gives two offset edges; each vertex a join (inner: two edges of
  *   half the width to the vertex and back; outer: a miter's two edges, up to the limit, a round join's arc, a
- *   bevel's edge), each active within the reach of its vertex; each open sub-path two caps (flat: the width,
- *   round: a half circle, square: three sides); bands about a line width tall. A dashed outline adds its
+ *   bevel's edge), each active within the reach of its vertex, and `GEOM_COST.leg` a leg for the stroker;
+ *   each open sub-path two caps (flat: the width, round: a half circle, square: three sides); bands about a
+ *   line width tall. A dashed outline adds its
  *   dashes' caps and `GEOM_COST.dash` a dash; arrowheads are fills of their own, `GEOM_COST.marker` each
  *   besides their edges and `GEOM_COST.markerArea` a logical px² of their area;
  * - a shape (`drawCost`): its fills and outlines, again for a shadow (its layer redraws the shape), a glow's
  *   silhouette (the fill, its outline stroked round as wide as the glow, the outlines widened by it) and a
  *   soft edge's mask (the fill, its outline stroked round twice the edge wide); a picture's mask its fill;
+ * - the area each outline covers, and each fill past the widest (`GEOM_COST.area` a logical px², `spanArea`):
+ *   every path is filled and stroked on its own, so a geometry of a few edges can paint its whole box once a
+ *   path, where a single fill and the legacy shape paint it once (that once is in the fill's rate);
  * - a stored path's points (`GEOM_COST.point` each, charged with the slide's): parsing them when the geometry
  *   is first built at a size, rating them, and tracing them into Canvas on every draw, whatever their edges
  *   cost to fill (about 0.25 µs a point at 4K: 64k points take about 16 ms before a pixel is filled).
@@ -69,6 +73,11 @@ export const GEOM_COST = {
   dashCapped: 64,
   /** One arrowhead besides its edges: its own fill. */
   marker: 40,
+  /**
+   * One open arrowhead (`arrow`) besides its edges: its own stroke, about 10 µs at 4K a call (19,200 small
+   * ones took 190 ms).
+   */
+  markerStroked: 400,
   /** A logical px² of an arrowhead's area: its fill's spans. */
   markerArea: 0.06,
   /** The fill estimate of one stored geometry at most (its legacy shape is drawn past it). */
@@ -79,6 +88,18 @@ export const GEOM_COST = {
   slidePoints: 65_536,
   /** One stored point: parsed, rated and traced into Canvas (about 0.25 µs at 4K). */
   point: 10,
+  /**
+   * A logical px² an outline covers, or a fill past the widest of its geometry's (each path is filled on its
+   * own, so eight paths over the whole box paint it eight times where one, or the legacy shape, paints it
+   * once; a full-slide translucent fill takes about 1.7 to 2 ms at 4K).
+   */
+  area: 0.045,
+  /**
+   * One leg of an outline (each segment, each leg of a curve's control polygon): the stroker's own work on
+   * it (normals, joins, the outline's path), about 0.4 µs at 4K whatever it covers (eight 2,400-point
+   * straight lines 500 px wide took 15 to 21 ms, joins and all).
+   */
+  leg: 24,
   /** The most a unit was measured to cost at 4K (ns), over the arrangements tried. */
   nsPerUnit: 29,
 } as const;
@@ -217,11 +238,9 @@ function markerCost(a: GeomArrow | undefined): number {
   const w = Number.isFinite(a.width) ? Math.abs(a.width) : 0;
   const l = Number.isFinite(a.length) ? Math.abs(a.length) : 0;
   const edges = 2 * (w + l) + (a.kind === 'arrow' ? 4 * a.line : 0);
-  return (
-    edges * (1 + 4 / GEOM_COST.peakScale) +
-    GEOM_COST.marker +
-    GEOM_COST.markerArea * Math.min(w * l, SLIDE_AREA)
-  );
+  // An open arrowhead is stroked on its own, a filled one filled.
+  const own = a.kind === 'arrow' ? GEOM_COST.markerStroked : GEOM_COST.marker;
+  return edges * (1 + 4 / GEOM_COST.peakScale) + own + GEOM_COST.markerArea * Math.min(w * l, SLIDE_AREA);
 }
 
 /**
@@ -307,6 +326,8 @@ export function strokeCost(
   let pcurve = 0;
   let legs = 0;
   let segments = 0;
+  /** Legs stroked in all: the stroker's work a segment, whatever it draws. */
+  let allLegs = 0;
   let sub = 0;
   let started = false;
   let curve = 0;
@@ -343,6 +364,7 @@ export function strokeCost(
     const dy = y - cy;
     const len = Math.hypot(dx, dy);
     segments++;
+    allLegs++;
     if (!(len > 0)) return;
     const ady = Math.abs(dy);
     if (ady > 0) {
@@ -431,7 +453,8 @@ export function strokeCost(
     if (active > peak) peak = active;
   }
   const dashUnit = o.cap === 'butt' ? GEOM_COST.dash : GEOM_COST.dashCapped;
-  const est = length * (1 + peak / GEOM_COST.peakScale) + dashes * dashUnit + markerEst;
+  const est =
+    length * (1 + peak / GEOM_COST.peakScale) + dashes * dashUnit + markerEst + allLegs * GEOM_COST.leg;
   return { length, peak, dashes, markers, est: finiteEst(est) };
 }
 
@@ -484,10 +507,20 @@ export function drawCost(g: DrawnGeom, spec: DrawSpec): number {
   const o = spec.outline;
   let fills = 0;
   let strokes = 0;
+  // Each filled path paints what it spans on its own: past the one that spans most (what a single fill, and
+  // the legacy shape, paints anyway), each paints its span again.
+  let spans = 0;
+  let widest = 0;
   for (const p of g.paths) {
-    if (spec.fill && p.fill !== 'none') fills += unitCost(p.cmds, p.pts).est;
-    if (o && p.stroke) strokes += strokeCost(p.cmds, p.pts, o, tolerance).est;
+    if (spec.fill && p.fill !== 'none') {
+      fills += unitCost(p.cmds, p.pts).est;
+      const a = spanArea(p.pts);
+      spans += a;
+      if (a > widest) widest = a;
+    }
+    if (o && p.stroke) strokes += outlineCost(p.cmds, p.pts, o, tolerance);
   }
+  fills += (spans - widest) * GEOM_COST.area;
   const base = fills + strokes;
   let total = base;
   const glow = spec.glow !== undefined && spec.glow > 0 ? spec.glow : 0;
@@ -498,18 +531,18 @@ export function drawCost(g: DrawnGeom, spec: DrawSpec): number {
   // A silhouette: the fill with its outline stroked round `grow` wide, the outlines `widen` wider.
   const silhouette = (grow: number, widen: number, round: boolean) => {
     let c = unionFill;
-    if (union && grow > 0) c += strokeCost(union.cmds, union.pts, roundOutline(grow), tolerance).est;
+    if (union && grow > 0) c += outlineCost(union.cmds, union.pts, roundOutline(grow), tolerance);
     if (o)
       for (const p of g.paths)
         if (p.stroke) {
           const w = o.width + widen;
           if (w > 0)
-            c += strokeCost(
+            c += outlineCost(
               p.cmds,
               p.pts,
               round ? roundOutline(w) : { width: w, join: o.join, cap: o.cap, miterLimit: o.miterLimit },
               tolerance,
-            ).est;
+            );
         }
     return c;
   };
@@ -527,6 +560,40 @@ export function drawCost(g: DrawnGeom, spec: DrawSpec): number {
 export function maskCost(g: DrawnGeom): number {
   const u = unionUnit(g.paths);
   return unitCost(u.cmds, u.pts).est;
+}
+
+/**
+ * The area (logical px²) the points of a path span, grown by `grow` a side, at most a slide's (Canvas paints
+ * nothing past the canvas): what its fill or stroke can cover.
+ */
+export function spanArea(pts: readonly number[], grow = 0): number {
+  let x0 = Infinity;
+  let x1 = -Infinity;
+  let y0 = Infinity;
+  let y1 = -Infinity;
+  for (let i = 0; i + 1 < pts.length; i += 2) {
+    const x = pts[i]!;
+    const y = pts[i + 1]!;
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+  if (!(x1 >= x0 && y1 >= y0)) return 0;
+  const g = Number.isFinite(grow) && grow > 0 ? grow : 0;
+  const a = (x1 - x0 + 2 * g) * (y1 - y0 + 2 * g);
+  return Number.isFinite(a) ? Math.min(SLIDE_AREA, a) : SLIDE_AREA;
+}
+
+/**
+ * An outline as drawn: its polygon's edges (`strokeCost`) and the area it covers, about half its edges'
+ * length times its width, within the span of its points grown by the width.
+ */
+function outlineCost(cmds: readonly number[], pts: readonly number[], o: Outline, tolerance: number): number {
+  const c = strokeCost(cmds, pts, o, tolerance);
+  if (!(c.est > 0)) return c.est;
+  const covered = Math.min(spanArea(pts, o.width), ((c.length + 2 * o.width) * o.width) / 2);
+  return finiteEst(c.est + covered * GEOM_COST.area);
 }
 
 // ── Objects and slides ────────────────────────────────────────────────────────────────────────────────────
