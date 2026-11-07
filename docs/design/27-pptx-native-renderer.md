@@ -11,7 +11,7 @@ Packages and apps involved:
 - `apps/stage`: text direction and a notes region.
 - `tools/pptx-fidelity`: measurement against LibreOffice.
 
-Status: proposed (2026-11), revised 2026-11-06 after a completeness review (§19 lists what changed). The pptx-preview path of design/20 "PPTX and PDF" is retired once the M8 gates hold. LibreOffice stays (§5).
+Status: proposed (2026-11), revised 2026-11-06 after a completeness review (§19 lists what changed). The pptx-preview path of design/20 "PPTX and PDF" is retired once the M8 gates hold. LibreOffice stays (§5) until M9 makes it optional at run time (§15).
 
 ## Today
 
@@ -505,7 +505,7 @@ As built in M3 (`packages/domain/src/size.ts`):
 - Body properties: insets (defaults 7.2/3.6 pt) → `insets`; anchor → `valign`; `wrap="none"` → `wrap:false`.
 - Autofit: `normAutofit` → `autofit:'shrink'` plus `fitScale` from fontScale/lnSpcReduction of the shape's own `a:bodyPr` (an inherited `normAutofit` keeps the policy, but its scale was fitted to the layout's prompt text, so the box shrinks from full size). `spAutoFit` keeps the stored (already grown) xfrm; the editor warns when later edits overflow it (§11).
 - Text in non-rect presets uses the preset's text rect from the POI table (M6). Before M6, rect/roundRect/ellipse text rects are computed directly; other presets are 'approx'.
-- `vert ≠ horz`, `numCol > 1` and `anchorCtr` are residual until M8.
+- `vert ≠ horz` and `anchorCtr` are residual until M9; `numCol > 1` until M8.
 
 **Shapes with text.** A shape that has a fill or line *and* text becomes a `ShapeObject` plus a `TextObject` sharing `origin.group`. The editor selects, moves and transforms them as one group (§11).
 
@@ -584,7 +584,7 @@ As built in M3 (`packages/domain/src/size.ts`):
   - ink;
   - sp3d with a non-zero bevel or extrusion (a no-op scene3d/sp3d is ignored);
   - a real `prstTxWarp` (not textNoShape);
-  - vertical text (until M8);
+  - vertical text (until M9);
   - tables (until M6);
   - a metafile that fails conversion.
 - **Approx** (drawn natively, logged): reflection, inner shadow, soft edge on pictures before M8, kerning differences, unknown transitions.
@@ -746,7 +746,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
 
 Hidden paragraphs (M8) are laid out but not painted, so revealed lines never move.
 
-**Not supported:** vertical text (residual until M8 emulates it), kashida, OpenType feature settings per call. harfbuzzjs (MIT) stays the escape hatch if browser-measured fitting proves non-deterministic across operating systems.
+**Not supported:** vertical text (residual until M9 emulates it), kashida, OpenType feature settings per call. harfbuzzjs (MIT) stays the escape hatch if browser-measured fitting proves non-deterministic across operating systems.
 
 ## 7. Drawing: Canvas 2D and WebGPU
 
@@ -1708,7 +1708,7 @@ Also:
 - Strip uploads with a per-frame budget.
 - Health gains `rasterMs` p50/p95, `uploadMs` and font coverage misses, and an alarm when `gpuMB` (reported since M5) passes the budget.
 - Measurements on venue GPUs (Windows iGPU, discrete, macOS) at 1080p and 4K, recorded in design/14.
-- Per-element art fragments: when the residuals of a hybrid slide are separable, the single art object of M3 (which spans the art z-range) is split into one locked fragment per residual at its own z, from the same white/black double render. Non-residual elements between residuals then become native, so chart slides keep editable pictures and text between their residuals.
+- Per-element art fragments (dropped: M9 draws the residuals natively instead, so there is no art left to split).
 - Refresh the stale design/14 sections and ADR 0004/0005/0013.
 
 **Files.** `packages/renderer/src/stacks.ts`, `gpu.ts`, `canvas2d.ts`, `engine.ts`, `health.ts`, `bitmap-cache.ts`; `apps/output/src/asset.worker.ts`, `link-core.ts`; `apps/hub/src/pptx/fallback.ts`, `art.ts`; `packages/pptx-scene/src/rendercopy.ts`, `classify.ts`; `docs/design/14-output-renderer.md`; `docs/adr/0004-text-rasterized-at-arm.md`, `0005-video-element-first.md`, `0013-implementation-adjustments.md`.
@@ -1718,22 +1718,49 @@ Also:
 - The props flip is never more than 1 frame late while a slide decodes.
 - Uploads ≤ 4 ms per frame at 4K on the reference GPU.
 - The health metrics are visible in the operator.
-- Fragment alpha reproduces LibreOffice over white and black within 2/255.
-- Hybrid slides with separable residuals have one fragment per residual and native elements between them.
 
 **Parallel.**
 - ∥ tight sprites (GPU and 2D);
 - ∥ raster lanes and decode sizing;
 - ∥ strip uploads and health metrics;
 - ∥ venue GPU measurements;
-- ∥ art fragments;
 - ∥ docs refresh.
+
+### M9: Import without LibreOffice (about 4 weeks; replaces M7's art fragments)
+
+LibreOffice becomes optional at run time. Every element that M3 to M6 leave residual is drawn natively, so a hub without `soffice` imports every deck, and the slides that were art become editable where they can be. LibreOffice stays the reference picture of the fidelity harness, a development tool only.
+
+**Scope.**
+- 3D: sp3d bevels and extrusions approximated in 2D (bevel as an inner gradient rim, extrusion as an offset, darkened copy of the outline along the camera direction; the camera presets of `scene3d` as an affine). Text with sp3d draws flat with the same rim.
+- Tables as one compact object, `ShapeObject.table` (grid, merges, per-cell fill, borders, and a TextObject body per cell), drawn by the renderer and edited in place (cell text, add or remove a row). No cell cap. Older builds read the legacy rectangles that are still written next to it.
+- Locked decorations: runs of non-text, non-picture shapes that a deck uses as ornament collapse into one locked `ShapeObject` with several paths, so a slide over the object budget stays native.
+- WordArt warps: the 40 `prstTxWarp` presets (presetTextWarpDefinitions, Apache-2.0) as an envelope warp of the glyph outlines on the asset worker.
+- `custGeom` limits raised (paths, points, nesting), with the evaluator's time bound unchanged.
+- Shear: a skewed group or shape is drawn through the object's matrix instead of being residual.
+- SmartArt without a drawing cache: fallback layouts for the common families (list, process, cycle, hierarchy) from the data model, as a locked group with editable text.
+- `anchorCtr`, and vertical text (vert, vert270 by rotation, eaVert by stacked upright CJK; brought forward from M8).
+- Metafiles: a native EMF/EMF+/WMF renderer in TypeScript for pictures and OLE fallback images (records to Canvas 2D paths, bounded record count and time).
+- Charts: bar, column, line and pie from the chart part's cached values (`c:numCache`, `c:strCache`) as a locked group of native shapes and text; other chart types draw their fallback image.
+- LibreOffice optional at run time: the hub detects `soffice`, hides options that need it, and keeps working without it; the Docker image takes a build argument to leave it out.
+
+**Exit.**
+- ≥ 99% of shown worship slides are native; the rest are hybrid with a reason, and none is a picture slide.
+- Every slide that was hybrid or picture before M9 is at least as faithful to LibreOffice (SSIM) as before.
+- The whole worship validation set imports with `soffice` absent.
+
+**Parallel.**
+- ∥ 3D and shear;
+- ∥ table object and editor;
+- ∥ warps;
+- ∥ metafiles;
+- ∥ charts and SmartArt layouts;
+- ∥ vertical text and anchorCtr;
+- ∥ optional LibreOffice in the hub and the image.
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)
 
 **Scope.**
 - Embedded fonts: TypeScript MTX/EOT decoder on the pool (`eot2ttf` stop-gap first), scoped Fonts (shipping and resolution honour `scope`), fsType/subset view-only warnings.
-- Vertical text emulation: vert/vert270 by rotation, eaVert by stacked upright CJK.
 - Reflection, inner shadow and soft edge on pictures.
 - 'Split reveal into slides' as an import option and an editor action.
 - 'Convert to song' and 'Re-flow lyrics'; a bilingual band using `role:'translation'`.
@@ -1750,7 +1777,6 @@ Also:
 
 **Parallel.**
 - ∥ MTX decoder and scoped fonts;
-- ∥ vertical text;
 - ∥ picture effects;
 - ∥ split reveal, convert to song and the bilingual band;
 - ∥ retirement and code moves once the gate passes.
