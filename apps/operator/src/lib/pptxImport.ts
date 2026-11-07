@@ -57,17 +57,21 @@ export function writeImportChoice(store: Store | undefined, c: PptxImportChoice)
 export const isPptxName = (name: string) => /\.(pptx|ppsx|potx|pptm)$/i.test(name);
 
 /**
- * Whether the 'Pictures (LibreOffice)' choice applies: the hub has LibreOffice (design/27 M9). Unknown (no
- * answer yet): the choice is sent as made, and a hub without it says so.
+ * Whether the 'Pictures (LibreOffice)' choice applies: the hub says it has LibreOffice (design/27 M9). Unknown
+ * (no answer yet, or the hub could not be asked): not offered, so the import screen (`PptxImportChoices`,
+ * which shows a remembered 'Pictures' choice as 'Editable' until then) and the upload (`documentFields`) follow
+ * one rule, and a file dropped before the answer imports as the screen showed it. A hub from before M9
+ * answers 404, read as `LEGACY_CAPABILITIES` (pictures offered).
  */
 export function picturesOffered(caps: HubCapabilities | undefined): boolean {
-  return caps ? caps.pptx.pictures : true;
+  return caps?.pptx.pictures === true;
 }
 
 /**
  * The form fields `POST /import/document` gets for one file: only a PowerPoint carries the PowerPoint choice
  * (`renderer`; `extendBackgrounds` for the native import). A PDF is always pictures. A stored 'Pictures
- * (LibreOffice)' choice on a hub without LibreOffice imports as editable slides (the screen says so).
+ * (LibreOffice)' choice on a hub without LibreOffice, or before the hub said it has it (`picturesOffered`),
+ * imports as editable slides, as the screen shows it.
  */
 export function documentFields(
   fileName: string,

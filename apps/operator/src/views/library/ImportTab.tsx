@@ -11,6 +11,7 @@ import {
   isPptxName,
   PPTX_NATIVE_JOB,
   type PptxImportChoice,
+  picturesOffered,
   readImportChoice,
   writeImportChoice,
 } from '../../lib/pptxImport.ts';
@@ -86,7 +87,8 @@ export function PptxImportChoices(props: {
   onChange: (c: PptxImportChoice) => void;
   caps?: HubCapabilities;
 }) {
-  const offered = props.caps?.pptx.pictures === true;
+  // One rule with the upload (`documentFields`): unknown caps offer no pictures.
+  const offered = picturesOffered(props.caps);
   const c = props.value;
   // A remembered 'Pictures' choice where the hub cannot make them: editable slides.
   const mode = c.mode === 'libreoffice' && !offered ? 'native' : c.mode;

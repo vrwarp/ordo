@@ -8,6 +8,11 @@ import { TableData } from '@ordo/domain';
  */
 export function clampTable(v: unknown): TableData | undefined {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
-  const r = TableData.safeParse(v);
-  return r.success ? r.data : undefined;
+  // zod can throw on a hostile value (an object whose `length` has no usable valueOf): the legacy drawing.
+  try {
+    const r = TableData.safeParse(v);
+    return r.success ? r.data : undefined;
+  } catch {
+    return undefined;
+  }
 }

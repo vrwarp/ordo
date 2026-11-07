@@ -8,6 +8,11 @@ import { Look3d } from '@ordo/domain';
  */
 export function clampLook3d(v: unknown): Look3d | undefined {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
-  const r = Look3d.safeParse(v);
-  return r.success ? r.data : undefined;
+  // zod can throw on a hostile value (an object whose `length` has no usable valueOf): the legacy drawing.
+  try {
+    const r = Look3d.safeParse(v);
+    return r.success ? r.data : undefined;
+  } catch {
+    return undefined;
+  }
 }

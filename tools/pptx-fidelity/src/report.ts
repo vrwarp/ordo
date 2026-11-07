@@ -439,7 +439,7 @@ export function policyRows(decks: DeckScore[]): PolicyRow[] {
  * first of these whose reasons it carries.
  */
 export const CAUSE_GROUPS: readonly (readonly [string, readonly string[]])[] = [
-  ['3d', ['art:3d']],
+  ['3d', ['art:3d', 'art:budget:3d']],
   ['warp', ['art:warp']],
   ['table', ['art:table', 'art:budget:table']],
   ['decorations', ['art:budget:shapes', 'budget:objects']],

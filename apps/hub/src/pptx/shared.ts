@@ -228,6 +228,11 @@ export type PptxLoPayload = {
    * (`LO_RETRIES`); past them the slides are marked `failed`.
    */
   retries?: number;
+  /**
+   * Times the job found LibreOffice 'broken' (`HubTools.recheck`) and deferred itself to probe it again
+   * (`LO_PROBE_RETRIES`); past them the slides are marked `failed`.
+   */
+  probes?: number;
   /** Pictures already stored by an earlier attempt: [`<slideId>:<what>`, media id] pairs. */
   done?: [string, string][];
   /**
@@ -250,6 +255,8 @@ export type PptxReferencePayload = {
   showPicture?: string[];
   /** Reference pictures already stored: [`SlideRef.index`, media id] pairs. */
   done?: [number, string][];
+  /** Times the job found LibreOffice 'broken' and deferred itself to probe it again (`HubTools.recheck`). */
+  probes?: number;
   /** Times the job found the presentation live-locked and deferred itself (the backoff step). */
   deferrals?: number;
   /**

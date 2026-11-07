@@ -83,7 +83,8 @@
  *   `emitChart` (`chart.ts`), `emitDecor` (`decor.ts`), `look3dOf` (`three3d.ts`), `warpOf` and `writingOf`
  *   (`emit-text.ts`), each only for a field `EmitOptions.m9Writes` names (`M9_FIELDS`; default all), each
  *   writing nothing yet. `EmitOptions.libreoffice: false` (a hub without LibreOffice) plans no art and no
- *   metafile conversion: what they would draw is listed in `EmittedSlide.missing` (`hybrid.ts`).
+ *   metafile conversion on any slide: what they would draw is listed in `EmittedSlide.missing`, and the
+ *   notes say 'not drawn' where they would name LibreOffice (`hybrid.ts`).
  *
  * Owned by work item C (inherit-emit).
  */
@@ -151,7 +152,7 @@ import {
   shapePiece,
   transformedPaths,
 } from './geom.ts';
-import { artInfo, withoutLibreOffice } from './hybrid.ts';
+import { artInfo, noteWithoutLibreOffice, withoutLibreOffice } from './hybrid.ts';
 import { isFooter, isTitle, masterClass } from './inherit.ts';
 import { type EmittedClip, emitMedia } from './media.ts';
 import type {
@@ -170,7 +171,7 @@ import type {
   ShapeElement,
   SlideScene,
 } from './ir.ts';
-import { noteList } from './log.ts';
+import { type Log, noteList } from './log.ts';
 import { scriptClasses } from './fontmap.ts';
 import { BAKED_EFFECTS, extensionOf, METAFILE_EXTENSIONS } from './picture.ts';
 import { lockDiagram } from './smartart.ts';
@@ -277,8 +278,10 @@ export interface EmitOptions {
   /**
    * M9: whether LibreOffice can draw what ordo does not (default true: the art of a hybrid slide and the
    * metafile pictures are planned for the follow-up, `EmittedSlide.art` and `.metafiles`). With false (a hub
-   * without LibreOffice, design/27 §15 M9) neither is planned: the slide keeps what version 1 draws, and what
-   * the art or the conversion would have drawn is listed in `EmittedSlide.missing` (`hybrid.ts`).
+   * without LibreOffice, design/27 §15 M9) neither is planned on any slide, a picture-class one's included:
+   * the slide keeps what version 1 draws, what the art or the conversion would have drawn is listed in
+   * `EmittedSlide.missing`, and the notes never name LibreOffice (`hybrid.ts` `withoutLibreOffice`,
+   * `noteWithoutLibreOffice`).
    */
   libreoffice?: boolean;
   /**
@@ -303,12 +306,13 @@ export interface EmittedSlide {
   notes: string[];
   /** Time spent emitting this slide, in ms. */
   ms: number;
-  /** Hybrid slides: what the art holds, for the LibreOffice follow-up (M3 item D). */
+  /** Hybrid slides: what the art holds, for the LibreOffice follow-up (M3 item D). Never without LibreOffice. */
   art?: ArtInfo;
   /**
    * Metafile pictures, left out of `slide` until LibreOffice converts them (M3 item D): each as the image
    * object it becomes (`mediaId` `METAFILE_MEDIA`, replaced by the converted picture's) and the object it
-   * goes just under (absent: on top). The shape of the hub's `PptxLoSlide.metafileObjects`.
+   * goes just under (absent: on top). The shape of the hub's `PptxLoSlide.metafileObjects`. Never without
+   * LibreOffice.
    */
   metafiles?: { part: string; object: ImageObject; before?: string }[];
   /**
@@ -395,7 +399,15 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
         };
   const slides = scene.slides.map((s) => {
     const t0 = performance.now();
-    const { notes, log } = noteList();
+    const { notes, log: put } = noteList();
+    // M9: a hub without LibreOffice says what is not drawn, never that LibreOffice draws it.
+    const log: Log =
+      opts.libreoffice === false
+        ? (msg) => {
+            const note = noteWithoutLibreOffice(msg);
+            if (note !== undefined) put(note);
+          }
+        : put;
     for (const note of s.notes) log(note);
     const ctx: EmitCtx = {
       frame: scene.frame,
@@ -429,15 +441,16 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       return { part, object, ...(before !== undefined ? { before } : {}) };
     });
     let classification = over ? overBudget(s.classification, overText) : s.classification;
-    // M9: without LibreOffice nothing draws the art or converts the metafiles: they are listed as missing.
+    // M9: without LibreOffice nothing draws the art or converts the metafiles: neither is planned, on any
+    // slide, and what they would draw is listed as missing (a picture-class slide's by the importer).
     const gaps = ctx.libreoffice
       ? undefined
       : withoutLibreOffice(s, classification, art, metafiles.length, log);
-    if (gaps) {
+    if (!ctx.libreoffice) {
       art = undefined;
       metafiles = [];
-      classification = gaps.classification;
     }
+    if (gaps) classification = gaps.classification;
     return {
       index: s.index,
       ...(s.shown !== undefined ? { shown: s.shown } : {}),

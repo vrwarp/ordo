@@ -7,8 +7,13 @@ import { Writing } from '@ordo/domain';
  */
 export function clampWriting(v: unknown): Writing | undefined {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
-  const r = Writing.safeParse(v);
-  return r.success ? r.data : undefined;
+  // zod can throw on a hostile value (an object whose `length` has no usable valueOf): the legacy drawing.
+  try {
+    const r = Writing.safeParse(v);
+    return r.success ? r.data : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** `TextObject.centerBlock` (PowerPoint anchorCtr): true or absent (false means what absent means). */

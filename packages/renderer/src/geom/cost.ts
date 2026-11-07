@@ -68,6 +68,11 @@ import type { GeomPath } from './path.ts';
  * budget bounds it. A slide at the budget draws its geometry and fills in at most about 38 ms at 4K, with the
  * clear and the copy out (about 11 ms) within design/27 §13's 50 ms for an asset-worker task, cold (geometry
  * not yet built, nothing cached). The converter fills 0.98 of it (rounding of stored coordinates).
+ *
+ * These constants and `areaWeight` decide what the converter keeps native and what it sends to the art, on
+ * every deck, not only on the slides a bench measures: a change to them runs the census of the whole suite
+ * (pptx-suite/suite and the table decks) before and after, and explains every slide it moves (M9 wave 1
+ * review: the gradient repair moved 55 slides outside the exit set).
  */
 
 export const GEOM_COST = {

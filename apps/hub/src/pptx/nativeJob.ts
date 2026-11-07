@@ -458,9 +458,18 @@ class NativeImport {
   private async steps(deck: string, scratch: string): Promise<NativeBuild> {
     const { ctx } = this;
     this.scratch = scratch;
-    // M9: whether anything will draw what ordo cannot (the probes settle within 30 s of the start).
-    await this.deps.tools.ready;
-    this.lo = this.deps.tools.has('libreoffice');
+    // M9: whether anything will draw what ordo cannot (the probes settle within 30 s of the start). Only a
+    // LibreOffice known absent or turned off means nothing will: a 'broken' one (its probe timed out on a slow
+    // start) is probed again first, and while it does not answer the art still waits for it, the follow-up
+    // probing it again before it gives up (`fallback.ts` `loJob`, `LO_PROBE_RETRIES`).
+    const lo = await this.deps.tools.recheck();
+    this.lo = lo !== 'absent' && lo !== 'off';
+    if (this.lo && lo !== 'available') {
+      ctx.log(
+        '[warn] LibreOffice does not answer yet: what ordo cannot draw waits for it, tried again later',
+      );
+      this.log.add('warn', 'LibreOffice does not answer yet: its pictures are tried again later');
+    }
     if (!this.lo) {
       ctx.log('this hub has no LibreOffice: ordo draws the slides, and lists what it cannot draw');
       this.log.add('info', 'no LibreOffice on this hub: what ordo cannot draw is listed on its slides');
@@ -977,10 +986,12 @@ class NativeImport {
     if (d.art) {
       const kinds = artKinds(e.classification.reasons);
       for (const k of kinds) d.missing = addMissing(d.missing, k);
-      addNote(d.notes, `not drawn: ${kinds.map(missingLabel).join(', ')}`);
+      if (kinds.length) addNote(d.notes, `not drawn: ${kinds.map(missingLabel).join(', ')}`);
       delete d.art;
     }
     if (d.missing?.length && d.cls === 'native') d.cls = 'hybrid';
+    // An art that only improved on what version 1 draws (flat 3-D past the object budget): nothing is missing.
+    else if (!d.missing?.length && d.cls === 'hybrid') d.cls = 'native';
   }
 
   /** The end of a note on a slide that became a picture: what shows it. */
@@ -1663,14 +1674,16 @@ function loSlides(drafts: readonly Draft[], slides: readonly Slide[]): PptxLoSli
   return out;
 }
 
-/** What a waiting slide lacks if LibreOffice never draws it (`PptxLoSlide.kinds`, `withoutLibreOffice`). */
+/**
+ * What a waiting slide lacks if LibreOffice never draws it (`PptxLoSlide.kinds`, `withoutLibreOffice`): none
+ * for an art that only improves on what version 1 draws (`artKinds` empty: flat 3-D past the object budget).
+ */
 function loKinds(cls: SlideClass, d: Draft | undefined): string[] {
   if (cls === 'picture' || !d) return [missingEntry('slide')];
-  let out: string[] | undefined;
-  if (d.art)
-    for (const k of d.artKinds?.length ? d.artKinds : (['element'] as const)) out = addMissing(out, k);
+  let out: string[] = [];
+  if (d.art) for (const k of d.artKinds ?? (['element'] as const)) out = addMissing(out, k);
   if (d.metafiles?.length) out = addMissing(out, 'metafile');
-  return out ?? [missingEntry('element')];
+  return d.art || d.metafiles?.length ? out : [missingEntry('element')];
 }
 
 /** `list` with `entry` added once (a stored `Slide.pptx.missing` entry, within its bounds). */
@@ -1691,14 +1704,20 @@ const SHAPE_REASONS: ReadonlySet<string> = new Set(['shapes', 'custGeom', 'geom'
  * itself, and `PptxLoSlide.kinds` with LibreOffice). A reason the converter's decision table names
  * (`residual.ts` `rowOf`) has the kind the converter records for it without LibreOffice (`missingKindOf`),
  * so both lists agree; for any other reason: a metafile picture (EMF, WMF), decoration shapes for geometry,
- * the reason's own kind when it is one (chart, SmartArt, OLE, an equation, ink), 'element' for the rest.
- * Deck strings are only compared.
+ * the reason's own kind when it is one (chart, SmartArt, OLE, an equation, ink), 'element' for the rest. A
+ * reason whose element version 1 draws as ordo draws it within the budgets (`ResidualRow.drawn`: flat 3-D
+ * past the object budget) has none: an art of only those lacks nothing ([]). Deck strings are only compared.
  */
 export function artKinds(reasons: readonly string[]): MissingKind[] {
   const out: MissingKind[] = [];
+  let drawn = false;
   for (const r of reasons) {
     if (typeof r !== 'string' || !r.startsWith('art:')) continue;
     const reason = r.slice(4);
+    if (rowOf(reason)?.drawn) {
+      drawn = true;
+      continue;
+    }
     let k = reason;
     if (k.startsWith('budget:')) k = k.slice(7);
     const head = k.split(':')[0] ?? '';
@@ -1711,7 +1730,7 @@ export function artKinds(reasons: readonly string[]): MissingKind[] {
           : missingKind(head));
     if (!out.includes(kind)) out.push(kind);
   }
-  return out.length ? out : ['element'];
+  return out.length || drawn ? out : ['element'];
 }
 
 /** Version 1's objects the art replaces, each with its own digest (`PptxLoSlide.replaced`). */

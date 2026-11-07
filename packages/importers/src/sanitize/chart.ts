@@ -12,6 +12,7 @@ import {
   type ChartSeries,
   type ChartText,
   type ChartTitle,
+  type TextRun,
 } from '@ordo/domain';
 import {
   type FontBudget,
@@ -105,7 +106,8 @@ function title(t: ChartTitle | undefined, n: Palettes, budget: FontBudget): Char
   const text = clipText(t.text, CHART_LIMITS.title);
   const out: ChartTitle = { ...t, text, style: int(t.style, 0, n.texts - 1) ?? 0 };
   if (Array.isArray(t.runs)) {
-    const runs = cutRuns(t.runs, text.length, 64, budget).slice(0, 64);
+    // Entries that are not runs (null from a hostile deck or store) are dropped first: `cutRuns` reads each.
+    const runs = cutRuns(t.runs.filter(isObj) as unknown as TextRun[], text.length, 64, budget).slice(0, 64);
     if (runs.length) out.runs = runs;
     else delete out.runs;
   }

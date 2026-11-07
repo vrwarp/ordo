@@ -1,7 +1,8 @@
 import type { Cue, ResolvedPlaylist } from './live.ts';
+import { extraText } from './m9-readers.ts';
 import { readableText } from './readable.ts';
 import { playingObject } from './resolve.ts';
-import type { Arrangement, Presentation, Section, Slide, TextObject } from './schemas.ts';
+import type { Arrangement, Presentation, Section, Slide, SlideObject, TextObject } from './schemas.ts';
 
 /** The arrangement used by a playlist item: the named one, else the first, else authoring order. */
 export function arrangementFor(p: Presentation, arrangementId?: string): Arrangement {
@@ -229,7 +230,9 @@ function soundEnds(slides: Slide[]): (k: number) => number {
 
 /**
  * The text a slide is known by (cue labels, lyric-only bands, thumbnails): its lyric object, else its
- * first text box, as people read it (`readableText`: automatic numbers and bullets written as text).
+ * first text box, as people read it (`readableText`: automatic numbers and bullets written as text). A
+ * slide without text of its own: the text of its picture (`importedText`), else of its first table or chart
+ * (M9, `extraText`).
  */
 export function firstText(slide: {
   objects: { type: string; text?: string; id: string; paras?: TextObject['paras'] }[];
@@ -241,6 +244,10 @@ export function firstText(slide: {
   if (!slide.objects.some((x) => x.type === 'text' && x.text)) {
     const t = importedText(slide);
     if (t) return t;
+    for (const o of slide.objects) {
+      const x = extraText(o as unknown as SlideObject);
+      if (x) return x;
+    }
   }
   if (slide.lyricObjectId) {
     const o = slide.objects.find((x) => x.id === slide.lyricObjectId);

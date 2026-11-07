@@ -6,6 +6,7 @@ import {
   type Decision,
   decidedFeatures,
   decisionOf,
+  drawnWithoutArt,
   missingKindOf,
   RESIDUAL_ROWS,
   rowOf,
@@ -91,7 +92,10 @@ describe('the residual decision table (M9)', () => {
     expect(new Set(reasons).size).toBe(reasons.length);
     const kinds = new Set<string>(MISSING_KINDS);
     for (const r of RESIDUAL_ROWS) {
-      if (r.decision === 'residual' || r.decision === 'unread') expect(r.missing, r.reason).toBeDefined();
+      // A residual row version 1 draws as ordo draws it elsewhere (`drawn`) has no missing kind: nothing is.
+      if ((r.decision === 'residual' || r.decision === 'unread') && !r.drawn)
+        expect(r.missing, r.reason).toBeDefined();
+      if (r.drawn) expect([r.decision, r.missing], r.reason).toEqual(['residual', undefined]);
       if (r.missing) expect(kinds.has(r.missing), r.reason).toBe(true);
       expect(r.note.length).toBeGreaterThan(0);
     }
@@ -104,6 +108,18 @@ describe('the residual decision table (M9)', () => {
     expect(missingKindOf(['budget:shapes'])).toBe('decoration');
     expect(missingKindOf(['warp'])).toBe('element');
     expect(missingKindOf(undefined)).toBe('element');
+  });
+
+  it('knows which residual elements version 1 draws as ordo draws them (real 3-D past the object budget)', () => {
+    expect(RESIDUAL_ROWS.filter((r) => r.drawn).map((r) => r.reason)).toEqual(['budget:3d']);
+    expect(drawnWithoutArt(['3d', 'budget:3d'])).toBe(true);
+    expect(drawnWithoutArt(['3d:camera', 'shear', 'budget:3d'])).toBe(true);
+    // Anything else the art draws is missing without LibreOffice.
+    expect(drawnWithoutArt(['3d', 'budget:3d', 'warp'])).toBe(false);
+    expect(drawnWithoutArt(['budget:3d', 'something new'])).toBe(false);
+    expect(drawnWithoutArt(['budget:shapes'])).toBe(false);
+    expect(drawnWithoutArt(['3d'])).toBe(false);
+    expect(drawnWithoutArt(undefined)).toBe(false);
   });
 
   it("the classifier's verdicts are the table's", () => {

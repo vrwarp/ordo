@@ -167,7 +167,17 @@ describe('clampObject and the M9 fields', () => {
   });
 
   it('never throws on hostile M9 values', () => {
+    // JSON can carry an object whose `length` has no callable valueOf or toString: zod 4 throws on it.
+    const evil = JSON.parse('{"length":{"valueOf":0,"toString":0}}');
     const hostile = [
+      evil,
+      { preset: 'textPlain', adj: evil },
+      { parts: evil },
+      { paints: evil, parts: [] },
+      { cols: evil, rows: [1], cells: [] },
+      { groups: evil },
+      { bevelT: evil },
+      { upright: 'cjk', dir: evil },
       null,
       7,
       'x',

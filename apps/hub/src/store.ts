@@ -11,6 +11,19 @@ import type { Library } from './library.ts';
 
 export const MAX_UPLOAD_BYTES = 4 * 1024 ** 3;
 
+/** The 413 for an upload past `limit` bytes, in the words of that limit ('the 256 MB upload limit'). */
+export function tooLarge(limit: number = MAX_UPLOAD_BYTES): HttpError {
+  const gb = 1024 ** 3;
+  const mb = 1024 ** 2;
+  const size =
+    limit >= gb && limit % gb === 0
+      ? `${limit / gb} GB`
+      : limit >= mb
+        ? `${Math.round(limit / mb)} MB`
+        : `${Math.max(1, Math.round(limit / 1024))} KB`;
+  return new HttpError(413, 'too_large', `File exceeds the ${size} upload limit`);
+}
+
 export type Sniffed = {
   ext: string;
   mime: string;
@@ -249,15 +262,14 @@ export class Store {
         async function* (src: AsyncIterable<Buffer>) {
           for await (const chunk of src) {
             bytes += chunk.length;
-            if (bytes > limit) throw new HttpError(413, 'too_large', 'File exceeds the 4 GB upload limit');
+            if (bytes > limit) throw tooLarge(limit);
             h.update(chunk);
             yield chunk;
           }
         },
         out,
       );
-      if ((stream as { truncated?: boolean }).truncated)
-        throw new HttpError(413, 'too_large', 'File exceeds the 4 GB upload limit');
+      if ((stream as { truncated?: boolean }).truncated) throw tooLarge(limit);
     } catch (e) {
       await rm(path, { force: true });
       throw e;

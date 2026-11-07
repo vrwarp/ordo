@@ -8,6 +8,7 @@
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import {
   DEFAULT_GENERAL,
   DEFAULT_LOOKS,
@@ -34,8 +35,9 @@ import {
 } from '@ordo/pptx-scene/test-util.ts';
 import JSZip from 'jszip';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { JobCtx } from '../src/jobs.ts';
-import { loJob, type PptxLoWithoutResult } from '../src/pptx/fallback.ts';
+import { type JobCtx, MAX_JOB_ATTEMPTS } from '../src/jobs.ts';
+import { loJob, type PptxLoWithoutResult, releaseReferencePdf } from '../src/pptx/fallback.ts';
+import { tooLarge } from '../src/store.ts';
 import type { PptxLoPayload, PptxNativeResult } from '../src/pptx/shared.ts';
 import { findOnPath } from '../src/tools.ts';
 import { minimalPdf } from './fixtures.ts';
@@ -331,6 +333,74 @@ describe('a hub without LibreOffice (design/27 M9)', () => {
     180_000,
   );
 
+  it.skipIf(!PDF_TOOLS)(
+    'a PDF given to two presentations is kept until both reference jobs used it, then released (M9 wave 1 repair)',
+    async () => {
+      const { p: a } = await importDeck(serviceDeck(), 'Shared A.pptx');
+      const { p: b } = await importDeck(serviceDeck('Hello'), 'Shared B.pptx');
+      const pdf = minimalPdf(3);
+      const hash = createHash('sha256').update(pdf).digest('hex');
+      // Both queued at once: the second is queued while the first runs (one heavy job at a time).
+      const [ja, jb] = await Promise.all([referencePdf(a, pdf, []), referencePdf(b, pdf, [])]);
+      expect(ja.state, ja.error).toBe('done');
+      expect(jb.state, jb.error).toBe('done');
+      for (const p of [a, b])
+        expect(slidesOf(hub.lib.presentations.must(p.id)).filter((s) => s.pptx?.refMediaId)).toHaveLength(3);
+      // Released once the last job that names it is done.
+      expect(hub.lib.getFile(hash)).toBeUndefined();
+      expect(uploadsLeft()).toEqual([]);
+      neverRan();
+    },
+    180_000,
+  );
+
+  it('a reference PDF is released by a job given up after repeated crashes, never while another job names it', async () => {
+    const pdf = minimalPdf(2);
+    const ref = await hub.store.putBytes(pdf, { ext: 'pdf', mime: 'application/pdf' });
+    expect(hub.lib.getFile(ref.hash)).toBeDefined();
+    const now = new Date().toISOString();
+    const row = (id: string, state: string) =>
+      hub.lib.db
+        .prepare(
+          `INSERT INTO jobs (id, kind, class, state, progress, payload, log, created_at, updated_at) VALUES (?, 'pptx-reference', 'heavy', ?, 0, ?, '[]', ?, ?)`,
+        )
+        .run(
+          id,
+          state,
+          JSON.stringify({ presentationId: 'gone', hash: 'f'.repeat(64), pdf: ref.hash }),
+          now,
+          now,
+        );
+    // Another queued job names it: kept (the check runs before anything waits).
+    const other = `other-${Math.random().toString(36).slice(2)}`;
+    row(other, 'queued');
+    await releaseReferencePdf(hub.imports.pptx.deps, ref.hash, 'self');
+    expect(hub.lib.getFile(ref.hash)).toBeDefined();
+    hub.lib.db.prepare(`UPDATE jobs SET state = 'failed' WHERE id = ?`).run(other);
+    // A job left running by repeated crashes is given up at the next start: its PDF goes with it.
+    const crashed = `crashed-${Math.random().toString(36).slice(2)}`;
+    row(crashed, 'running');
+    hub.lib.db
+      .prepare('INSERT INTO job_attempts (job_id, attempts) VALUES (?, ?)')
+      .run(crashed, MAX_JOB_ATTEMPTS);
+    await hub.jobs.idle();
+    hub.jobs.start(); // the sweep a restart runs
+    expect(hub.jobs.get(crashed).state).toBe('failed');
+    await expect.poll(() => hub.lib.getFile(ref.hash), { timeout: 5_000 }).toBeUndefined();
+  }, 60_000);
+
+  it("an upload past a route's own limit is refused in that limit's words", async () => {
+    expect(tooLarge(256 * 1024 * 1024).message).toBe('File exceeds the 256 MB upload limit');
+    expect(tooLarge().message).toBe('File exceeds the 4 GB upload limit');
+    const e = await hub.store.receive(Readable.from([Buffer.alloc(3_000)]), 2_048).catch((x: unknown) => x);
+    expect(e).toMatchObject({
+      status: 413,
+      code: 'too_large',
+      message: 'File exceeds the 2 KB upload limit',
+    });
+    expect(uploadsLeft()).toEqual([]);
+  });
+
   it('a pptx-lo job queued before LibreOffice went away clears pending and re-imports the unedited slides', async () => {
     // The same hub as when LibreOffice was there (its follow-ups held: no heavy job runs), then it goes.
     const fake = join(dir, 'bin', 'soffice');
@@ -407,6 +477,71 @@ describe('a hub without LibreOffice (design/27 M9)', () => {
       expect(after.every((s) => !s.pptx?.pending)).toBe(true);
       // Nothing new waits for LibreOffice, and it never ran.
       expect(followUps(h, p0.id)).toHaveLength(1);
+      neverRan();
+    } finally {
+      await h.cleanup();
+    }
+  }, 180_000);
+
+  it("a follow-up without LibreOffice keeps a slide's first notes, and a slide that lacks nothing is native (M9 wave 1 repair)", async () => {
+    const fake = join(dir, 'bin', 'soffice');
+    const h = await startHub({
+      libreoffice: { mode: 'auto', exe: fake },
+      toolProbe: () => ({ state: 'available' }),
+      jobs: { heavy: 0, light: 2 },
+    });
+    try {
+      const ed = await login(h.url, EDIT_PIN);
+      const fd = new FormData();
+      fd.append('file', new Blob([new Uint8Array(await zipOf(serviceDeck()))]), 'Notes.pptx');
+      const queued = await ed.json<Job>('/import/document', { method: 'POST', body: fd });
+      const result = (await waitJob(h, queued.id, 120_000)).result as PptxNativeResult;
+      const lo = h.jobs.get(result.loJobId!);
+      const payload = JSON.parse(
+        (h.lib.db.prepare('SELECT payload FROM jobs WHERE id = ?').get(lo.id) as { payload: string }).payload,
+      ) as PptxLoPayload;
+      // The chart slide already holds the schema's 16 notes; the metafile slide's plan recorded that it
+      // lacks nothing without LibreOffice (an art that only improves on version 1: flat 3-D past the budget).
+      const p0 = h.lib.presentations.must(result.presentationId);
+      const notes = Array.from({ length: 16 }, (_, i) => `note ${i + 1}`);
+      h.lib.savePresentation(
+        {
+          ...p0,
+          sections: p0.sections.map((sec) => ({
+            ...sec,
+            slides: sec.slides.map((sl) =>
+              sl.pptx?.index === 1 ? { ...sl, pptx: { ...sl.pptx, notes } } : sl,
+            ),
+          })),
+        },
+        { expectedRev: p0.rev, by: 'editor' },
+      );
+      const metafileSlide = payload.slides.find((x) => x.index === 3)!;
+      metafileSlide.kinds = [];
+      h.imports.tools.markMissing('libreoffice', 'soffice: spawn soffice ENOENT');
+      const ctx: JobCtx<PptxLoPayload> = {
+        id: lo.id,
+        payload,
+        signal: new AbortController().signal,
+        log: () => undefined,
+        progress: () => undefined,
+        setPayload: (pl) => {
+          ctx.payload = pl;
+        },
+      };
+      const out = (await loJob(h.imports.pptx.deps)(ctx)) as PptxLoWithoutResult;
+      expect(out.cleared).toBe(2);
+      const after = slidesOf(h.lib.presentations.must(p0.id));
+      // Within the cap and counted, never cut from the front: the first note stays.
+      const kept = after[1]!.pptx!.notes!;
+      expect(kept).toHaveLength(16);
+      expect(kept[0]).toBe('note 1');
+      expect(kept.at(-1)).toBe('and 2 more');
+      expect(after[1]!.pptx!.missing).toEqual(['chart']);
+      // Nothing missing: version 1 is the slide.
+      expect(after[3]!.pptx!.pending).toBeUndefined();
+      expect(after[3]!.pptx!.missing).toBeUndefined();
+      expect(after[3]!.pptx!.class).toBe('native');
       neverRan();
     } finally {
       await h.cleanup();

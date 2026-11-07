@@ -1,4 +1,4 @@
-import { missingKindOf, RESIDUAL_ROWS } from '@ordo/pptx-scene';
+import { drawnWithoutArt, missingKindOf, RESIDUAL_ROWS } from '@ordo/pptx-scene';
 import { describe, expect, it } from 'vitest';
 import { artKinds } from '../src/pptx/nativeJob.ts';
 
@@ -9,6 +9,11 @@ describe('artKinds', () => {
     const rows = RESIDUAL_ROWS.filter((r) => r.missing && !r.reason.endsWith(':*'));
     expect(rows.length).toBeGreaterThan(10);
     for (const r of rows) expect(artKinds([`art:${r.reason}`])).toEqual([missingKindOf([r.reason])]);
+    // A row version 1 draws (`drawn`) lacks nothing, in both.
+    for (const r of RESIDUAL_ROWS.filter((x) => x.drawn)) {
+      expect(artKinds([`art:${r.reason}`])).toEqual([]);
+      expect(drawnWithoutArt([r.reason])).toBe(true);
+    }
   });
 
   it('keeps its own reading of reasons the table does not name, once per kind, in order', () => {
@@ -18,7 +23,9 @@ describe('artKinds', () => {
       'chart',
       'decoration',
     ]);
-    expect(artKinds(['art:budget:3d'])).toEqual(['decoration']);
+    // Real 3-D past the object budget: version 1 draws it flat, as the converter does without LibreOffice.
+    expect(artKinds(['art:budget:3d'])).toEqual([]);
+    expect(artKinds(['art:budget:3d', 'art:chart'])).toEqual(['chart']);
     expect(artKinds(['art:something-new', 'art:'])).toEqual(['element']);
     expect(artKinds([])).toEqual(['element']);
   });

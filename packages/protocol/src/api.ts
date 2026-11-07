@@ -254,7 +254,9 @@ export const HUB_TOOL_STATES = ['checking', 'available', 'absent', 'off', 'broke
  * `libreoffice_unavailable`); as multipart with one PDF (field `file`, optional field `showPicture`: a JSON
  * array of slide ids) it needs `pptx.referencePdf` (else 501 `pdf_unavailable`). POST /import/document answers
  * 501 `libreoffice_unavailable` for `renderer=libreoffice` without LibreOffice, 501 `pdf_unavailable` for a
- * PDF without pdftoppm, and 415 `unsupported` with a save-as hint for .ppt, .pps, .odp and .key files.
+ * PDF without pdftoppm, and 415 `unsupported` with a save-as hint for .ppt, .pps, .odp and .key files. Both
+ * answer 503 with `Retry-After` while LibreOffice is still being checked (`libreoffice_checking`) or does not
+ * answer (`libreoffice_not_answering`, state 'broken'): it may be there in a minute.
  */
 export const HubCapabilities = z.object({
   libreoffice: z

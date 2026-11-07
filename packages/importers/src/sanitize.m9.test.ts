@@ -239,6 +239,7 @@ describe('the M9 sanitizers never throw on hostile input (fuzz)', () => {
     [],
     {},
     [null],
+    [null, null],
     { length: 1e9 },
     true,
   ];
@@ -298,6 +299,25 @@ describe('the M9 sanitizers never throw on hostile input (fuzz)', () => {
     for (const v of ODD) {
       expect(() => sanitizeTable(v as never)).not.toThrow();
       expect(() => sanitizeChart(v as never)).not.toThrow();
+    }
+  });
+
+  it('a chart title or axis title with a run that is not one (null) is sanitized, not thrown on', () => {
+    for (const where of ['title', 'axis'] as const) {
+      const s = m9Slide();
+      const chart = byId(s, 'chart').chart as unknown as Record<string, unknown> & {
+        title: Record<string, unknown>;
+        axes: Record<string, unknown>[];
+      };
+      if (where === 'title') chart.title.runs = [null, 5, { start: 0, end: 2, fontWeight: 700 }];
+      else chart.axes[0]!.title = { text: 'Weeks', style: 0, runs: [null] };
+      const p = rawDeck(s);
+      expect(() => sanitizePresentation(p), where).not.toThrow();
+      const parsed = Presentation.safeParse(p);
+      expect(parsed.success, where).toBe(true);
+      const out = (byId(slideOf(parsed.data!), 'chart') as unknown as ShapeObject).chart!;
+      if (where === 'title') expect(out.title!.runs).toEqual([{ start: 0, end: 2, fontWeight: 700 }]);
+      else expect(out.axes![0]!.title!.runs).toBeUndefined();
     }
   });
 

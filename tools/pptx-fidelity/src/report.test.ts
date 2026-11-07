@@ -215,6 +215,13 @@ describe('cause groups of F', () => {
     ]),
   ];
 
+  it("counts real 3-D past the object budget ('art:budget:3d', M9) in the 3d group", () => {
+    const s = (reasons: string[]) => ({ ...T, n: 1, class: 'picture' as const, reasons, nativeSsim: 0.9 });
+    expect(causeOf(s(['art:budget:3d', 'more than 64 KB as stored']))).toBe('3d');
+    expect(causeOf(s(['art:3d']))).toBe('3d');
+    expect(causeOf(s(['more than 64 KB as stored']))).toBe('ladder');
+  });
+
   it('groups by cause with before-harness and before-hub means', () => {
     const slides = f[0]!.perSlide;
     expect(slides.map(inF)).toEqual([true, true, true, true, false, true, true]);

@@ -21,7 +21,8 @@
  * M9 wave 1 changes one row from the base: real 3-D (`3d`, `3d:camera`) is approx, drawn flat, never
  * residual (`3d.md` §3.1: LibreOffice draws 63 of the 68 `art:3d` slides flat too). Only on a slide past the
  * object budget does it still go to the art first (`budget:3d`, as all real 3-D did before), so the budget's
- * other steps choose as they did.
+ * other steps choose as they did; version 1 draws it flat meanwhile, and for good without LibreOffice
+ * (`drawn`: nothing is missing).
  *
  * Pure: tables and lookups; deck strings are only compared, never used as object keys.
  */
@@ -39,6 +40,12 @@ export interface ResidualRow {
   decision: Decision;
   /** Residual or unread: what a hub without LibreOffice records for the element (`Slide.pptx.missing`). */
   missing?: MissingKind;
+  /**
+   * Residual, but version 1 draws the element as ordo draws it within the budgets (real 3-D past the object
+   * budget: flat, as approx 3-D is): the art only improves on it, so a hub without LibreOffice records
+   * nothing for it (`drawnWithoutArt`) and has no `missing` kind for it.
+   */
+  drawn?: true;
   /** Who rates it: the classifier from the element's XML, the reader's own verdict, or a slide budget. */
   by: 'classify' | 'reader' | 'budget';
   /** What ordo does, in a few words. */
@@ -123,9 +130,9 @@ export const RESIDUAL_ROWS: readonly ResidualRow[] = [
     reason: 'budget:3d',
     features: ['3d'],
     decision: 'residual',
-    missing: 'decoration',
+    drawn: true,
     by: 'budget',
-    note: 'real 3-D on a slide past the object budget: to the art first, drawn flat until then (as before M9)',
+    note: 'real 3-D on a slide past the object budget: to the art first, drawn flat until then (as before M9) and for good without LibreOffice',
   },
   {
     reason: 'math',
@@ -348,6 +355,22 @@ export function missingKindOf(reasons: readonly string[] | undefined): MissingKi
     if (kind) return kind;
   }
   return 'element';
+}
+
+/**
+ * Whether version 1 draws an element left residual with these reasons as ordo draws it within the budgets
+ * (`ResidualRow.drawn`: real 3-D past the object budget, drawn flat): some reason is such a row, and no other
+ * reason leaves it to the art (residual, unread, or a reason the table has no row for). A hub without
+ * LibreOffice records nothing for it.
+ */
+export function drawnWithoutArt(reasons: readonly string[] | undefined): boolean {
+  let drawn = false;
+  for (const r of reasons ?? []) {
+    const row = rowOf(r);
+    if (row?.drawn) drawn = true;
+    else if (!row || row.decision === 'residual' || row.decision === 'unread') return false;
+  }
+  return drawn;
 }
 
 /** The census features some row decides (every `FALLBACK_FEATURES` entry among them). */

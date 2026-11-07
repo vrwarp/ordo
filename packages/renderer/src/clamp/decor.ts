@@ -8,12 +8,17 @@ import { DecorData, cleanPathData } from '@ordo/domain';
  */
 export function clampDecor(v: unknown): DecorData | undefined {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
-  const r = DecorData.safeParse(v);
-  if (!r.success) return undefined;
-  const parts: DecorData['parts'] = [];
-  for (const p of r.data.parts) {
-    const d = cleanPathData(p.d);
-    if (d) parts.push(d === p.d ? p : { ...p, d });
+  // zod can throw on a hostile value (an object whose `length` has no usable valueOf): the legacy drawing.
+  try {
+    const r = DecorData.safeParse(v);
+    if (!r.success) return undefined;
+    const parts: DecorData['parts'] = [];
+    for (const p of r.data.parts) {
+      const d = cleanPathData(p.d);
+      if (d) parts.push(d === p.d ? p : { ...p, d });
+    }
+    return { ...r.data, parts };
+  } catch {
+    return undefined;
   }
-  return { ...r.data, parts };
 }

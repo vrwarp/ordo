@@ -11,8 +11,11 @@
  *   through the same hardened command as its conversions, `sofficeCommand`, 30 s). `ready` settles once both
  *   answered; jobs and routes that need a tool await it. `ORDO_LIBREOFFICE=off` probes nothing and no office
  *   code ever runs. A run that finds a tool gone (`ToolError.missing`) marks it absent (`markMissing`), so the
- *   capabilities change without a restart.
- * - Nothing here ever runs soffice unless its state is 'available' (the jobs check `has`).
+ *   capabilities change without a restart. A probe that times out (a slow cold start) or fails leaves
+ *   LibreOffice 'broken', which is not 'absent': the jobs that need it probe again (`recheck`, at most once
+ *   per `RECHECK_MS`) and defer while it stays broken, and the routes answer 503 with a retry hint, as they
+ *   do while it is still 'checking'. Only 'absent' and 'off' mean no LibreOffice.
+ * - Nothing here ever runs soffice unless its state is 'available' (the jobs check `has`), the probes aside.
  *
  * One log line per tool at start: `libreoffice: available (LibreOffice 24.2.7.2)`, or `libreoffice: absent: ordo
  * draws PowerPoint slides itself; …`.
@@ -48,6 +51,8 @@ export type ToolProbe = (tool: ToolName | 'pdfinfo') => ToolInfo | Promise<ToolI
 
 /** How long a version command may take (LibreOffice starts in about 2 s here, minutes on a slow NAS never). */
 export const TOOL_PROBE_MS = 30_000;
+/** The least time between two probes of a broken LibreOffice (`HubTools.recheck`). */
+export const RECHECK_MS = 60_000;
 
 /** What the start-up line says LibreOffice's absence turns off. */
 const WITHOUT_LIBREOFFICE =
@@ -92,11 +97,15 @@ export class HubTools {
   private pdfinfo = false;
   /** Tools whose loss a run already logged (`markMissing`). */
   private readonly lost = new Set<ToolName>();
+  /** The probe `recheck` runs, while it runs. */
+  private rechecking: Promise<void> | undefined;
+  /** When `recheck` last probed (ms since the epoch). */
+  private recheckedAt = 0;
 
   constructor(
     private readonly cfg: Pick<HubConfig, 'libreoffice' | 'toolProbe'>,
     private readonly log: Log,
-    private readonly opts: { tmpDir?: () => Promise<string>; probeMs?: number } = {},
+    private readonly opts: { tmpDir?: () => Promise<string>; probeMs?: number; recheckMs?: number } = {},
   ) {
     const off = cfg.libreoffice.mode === 'off';
     this.lo = off ? { state: 'off', reason: 'ORDO_LIBREOFFICE=off' } : { state: 'checking' };
@@ -158,6 +167,28 @@ export class HubTools {
   has(t: ToolName | 'pdfinfo'): boolean {
     if (t === 'pdfinfo') return this.pdf.state === 'available' && this.pdfinfo;
     return (t === 'libreoffice' ? this.lo : this.pdf).state === 'available';
+  }
+
+  /**
+   * LibreOffice's state once `ready`, probed again first when it is 'broken' (a start-up probe that timed out
+   * on a slow cold start, a version command that failed once): one probe at a time, at most once per
+   * `RECHECK_MS` (callers in between share the last answer), each within `TOOL_PROBE_MS`. A probe that
+   * answers makes it 'available' (logged), so a hub recovers without a restart. Any other state is returned as
+   * it is: 'absent' and 'off' are not probed again (a restart finds a newly installed LibreOffice).
+   */
+  async recheck(): Promise<ToolState> {
+    await this.ready;
+    if (this.lo.state !== 'broken') return this.lo.state;
+    const now = Date.now();
+    if (!this.rechecking && now - this.recheckedAt >= (this.opts.recheckMs ?? RECHECK_MS)) {
+      this.recheckedAt = now;
+      this.rechecking = this.settle('libreoffice', () => this.probeLibreOffice()).then(() => {
+        this.rechecking = undefined;
+        if (this.lo.state !== 'broken') this.announce('libreoffice', this.lo);
+      });
+    }
+    await this.rechecking;
+    return this.lo.state;
   }
 
   /**

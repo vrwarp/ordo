@@ -7,6 +7,11 @@ import { TextWarp } from '@ordo/domain';
  */
 export function clampWarp(v: unknown): TextWarp | undefined {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
-  const r = TextWarp.safeParse(v);
-  return r.success ? r.data : undefined;
+  // zod can throw on a hostile value (an object whose `length` has no usable valueOf): the legacy drawing.
+  try {
+    const r = TextWarp.safeParse(v);
+    return r.success ? r.data : undefined;
+  } catch {
+    return undefined;
+  }
 }

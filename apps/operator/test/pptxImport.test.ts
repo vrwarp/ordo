@@ -1,5 +1,5 @@
 import type { Presentation, Slide } from '@ordo/domain';
-import type { Job } from '@ordo/protocol';
+import { type Job, LEGACY_CAPABILITIES } from '@ordo/protocol';
 import { describe, expect, it } from 'vitest';
 import {
   approximatedSlides,
@@ -13,6 +13,7 @@ import {
   hiddenCount,
   loStatus,
   onlyJobSaves,
+  picturesOffered,
   rebaseOnJobs,
   PPTX_EXTEND_KEY,
   PPTX_IMPORT_KEY,
@@ -93,10 +94,23 @@ describe('the import choice', () => {
       'extendBackgrounds',
       '0',
     ]);
-    expect(documentFields('a.pptx', { mode: 'libreoffice', extendBackgrounds: true })).toEqual([
-      ['renderer', 'libreoffice'],
-    ]);
+    expect(
+      documentFields('a.pptx', { mode: 'libreoffice', extendBackgrounds: true }, LEGACY_CAPABILITIES),
+    ).toEqual([['renderer', 'libreoffice']]);
     expect(documentFields('Notices.pdf', DEFAULT_PPTX_CHOICE)).toEqual([]);
+  });
+
+  it('sends what the import screen shows before the hub says it offers pictures (M9 wave 1 repair)', () => {
+    const stored = { mode: 'libreoffice' as const, extendBackgrounds: true };
+    // Not known yet (or the hub could not be asked): the screen shows 'Editable', and that is what is sent.
+    expect(picturesOffered(undefined)).toBe(false);
+    expect(documentFields('a.pptx', stored)).toEqual([
+      ['renderer', 'native'],
+      ['extendBackgrounds', '1'],
+    ]);
+    const lite = { ...LEGACY_CAPABILITIES, pptx: { ...LEGACY_CAPABILITIES.pptx, pictures: false } };
+    expect(documentFields('a.pptx', stored, lite)[0]).toEqual(['renderer', 'native']);
+    expect(picturesOffered(LEGACY_CAPABILITIES)).toBe(true);
   });
 });
 

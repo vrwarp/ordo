@@ -104,6 +104,9 @@ export type DocPayload = {
  */
 export const NO_LIBREOFFICE_PICTURES =
   "This hub has no LibreOffice, so PowerPoint files are imported as editable slides: import it again without 'Pictures (LibreOffice)'.";
+/** A picture import whose LibreOffice stays 'broken' (`HubTools.recheck`: it is installed but does not answer). */
+export const LIBREOFFICE_NOT_ANSWERING =
+  "LibreOffice does not answer on this hub: try again later, or import it without 'Pictures (LibreOffice)'.";
 /** pptx-preview failed and nothing else can draw the deck as pictures. */
 export const NO_LIBREOFFICE_PREVIEW_FALLBACK =
   'pptx-preview could not draw the deck and this hub has no LibreOffice: import it as editable slides';
@@ -497,8 +500,12 @@ export class ImportService {
       // M9: a job queued before the hub lost a tool fails in words (the route refuses new ones with 501).
       await this.tools.ready;
       if (ext === 'pdf' && !this.tools.has('pdftoppm')) throw new Error(NO_PDF_IMPORT);
-      if (ext === 'pptx' && renderer === 'libreoffice' && !this.tools.has('libreoffice'))
-        throw new Error(NO_LIBREOFFICE_PICTURES);
+      if (ext === 'pptx' && renderer === 'libreoffice') {
+        // A 'broken' LibreOffice (a probe that timed out on a slow start) is probed again first.
+        const lo = await this.tools.recheck();
+        if (lo === 'absent' || lo === 'off') throw new Error(NO_LIBREOFFICE_PICTURES);
+        if (lo !== 'available') throw new Error(LIBREOFFICE_NOT_ANSWERING);
+      }
       if (ext === 'pptx') {
         const input = join(dir, 'slides.pptx');
         await copyFile(pdf, input);

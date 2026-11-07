@@ -4,7 +4,7 @@
  */
 import type { Presentation } from '@ordo/domain';
 import type { Job, PptxReimportReq } from '@ordo/protocol';
-import { loJob, queueFollowUp, referenceJob } from './fallback.ts';
+import { loJob, queueFollowUp, referenceJob, releaseReferencePdf } from './fallback.ts';
 import { nativeJob, queueStoredClips } from './nativeJob.ts';
 import { importOptionsOf, queueReimport, reimportJob } from './reimport.ts';
 import {
@@ -33,7 +33,10 @@ export class PptxImports {
           this.queueReimport(presentationId, hash, { slideIds }, 'pptx-lo'),
       }),
     );
-    jobs.register(PPTX_JOBS.reference, referenceJob(deps));
+    // Abandoned after repeated crashes: its uploaded PDF is released (unless another job still uses it).
+    jobs.register(PPTX_JOBS.reference, referenceJob(deps), (payload: PptxReferencePayload) => {
+      void releaseReferencePdf(deps, payload?.pdf);
+    });
     jobs.register(PPTX_JOBS.textRepair, textRepairJob(deps));
     // Abandoned after repeated crashes: the clips its conversion stored still get their media jobs.
     jobs.register(PPTX_JOBS.reimport, reimportJob(deps), (payload: PptxReimportPayload) =>

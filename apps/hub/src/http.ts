@@ -178,6 +178,8 @@ export async function createHttpApp(opts: {
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof HttpError) {
       if (err.status === 429) reply.header('Retry-After', String(err.extra?.retryAfterS ?? 900));
+      else if (err.status === 503 && typeof err.extra?.retryAfterS === 'number')
+        reply.header('Retry-After', String(err.extra.retryAfterS));
       return reply.code(err.status).send({ error: { code: err.code, message: err.message, ...err.extra } });
     }
     const e = err as { statusCode?: number; code?: string; message: string };

@@ -52,7 +52,7 @@ import {
   Slide,
   type SlideObject,
 } from '@ordo/domain';
-import type { SlideRef } from '@ordo/pptx-scene';
+import { addNote, type SlideRef } from '@ordo/pptx-scene';
 import { digestOf } from '@ordo/pptx-scene/emit.ts';
 import { digestMatches, importDigest } from './digest.ts';
 import { PAGE_BACKGROUNDS, type PageBackground, type RenderCopyPage } from '@ordo/pptx-scene/rendercopy.ts';
@@ -92,13 +92,17 @@ export const PAGE_SCALE = 2;
  * text colour treats like white, where black turns automatic black text white (`PAGE_BACKGROUNDS`).
  */
 export const SECOND: PageBackground = 'yellow';
-/** Notes kept on a slide (`SlidePptx.notes`). */
-const SLIDE_NOTES = 16;
 /**
  * Later attempts of a follow-up whose whole LibreOffice run failed (soffice killed or timed out, the pool, the
  * disk): deferred with `deferDelay` backoff. Past them the slides are marked `failed`.
  */
 export const LO_RETRIES = 2;
+/**
+ * Later attempts of a follow-up that finds LibreOffice 'broken' (`HubTools.recheck`: its probe timed out on a
+ * slow start, or its version command failed): deferred with `deferDelay` backoff (about half an hour in all),
+ * LibreOffice probed again on each. Past them the slides are marked `failed`, as after `LO_RETRIES`.
+ */
+export const LO_PROBE_RETRIES = 6;
 
 type Box = { x: number; y: number; w: number; h: number };
 
@@ -406,8 +410,10 @@ export function patchSlide(slide: Slide, lo: PptxLoSlide, work: SlideWork, hash:
     delete pptx.pending;
     if (work.failed?.length) pptx.failed = true;
     else delete pptx.failed;
-    const all = [...(pptx.notes ?? []), ...notes.map((n) => logSafe(n))];
-    if (all.length) pptx.notes = all.slice(-SLIDE_NOTES);
+    // Within the schema's cap, counted in 'and N more' (`addNote`), never cut from the front.
+    const all = [...(pptx.notes ?? [])];
+    for (const n of notes) addNote(all, logSafe(n));
+    if (all.length) pptx.notes = all;
     next.pptx = pptx;
   }
   const parsed = Slide.parse(next);
@@ -521,10 +527,27 @@ export function loJob(deps: PptxDeps, env: LoJobEnv = {}): JobHandler<PptxLoPayl
       return { presentationId: pl.presentationId, deleted: true };
     }
     // M9: on a hub without LibreOffice (queued before it went away, or a restored revision) nothing will draw
-    // these slides: they stop waiting, and the M9 converter redraws the unedited ones.
-    await deps.tools.ready;
-    if (!deps.tools.has('libreoffice'))
+    // these slides: they stop waiting, and the M9 converter redraws the unedited ones. Only a LibreOffice
+    // known absent or turned off does that: a 'broken' one (a probe that timed out on a slow start, a version
+    // command that failed) is probed again, and the slides keep waiting while it does not answer.
+    const lo = await deps.tools.recheck();
+    if (lo === 'absent' || lo === 'off')
       return withoutLibreOffice(deps, ctx, env, 'this hub has no LibreOffice');
+    let unanswered: string | undefined;
+    if (lo !== 'available') {
+      const why = logSafe(deps.tools.libreoffice().reason ?? lo, 200);
+      const n = ctx.payload.probes ?? 0;
+      if (n < LO_PROBE_RETRIES) {
+        ctx.setPayload({ ...ctx.payload, probes: n + 1 });
+        const ms = deferDelay(n);
+        throw new JobDeferred(
+          ms,
+          `[warn] LibreOffice does not answer on this hub (${why}): trying again in ${Math.round(ms / 1000)} s`,
+        );
+      }
+      unanswered = `LibreOffice did not answer on this hub after ${n + 1} attempts: ${why}`;
+      ctx.log(`[warn] ${unanswered}`);
+    }
     if (deps.locked(p0.id)) deferWhileLocked(ctx, 'LibreOffice will try');
     // Only slides that still wait: a re-run after the save (a crash, a restart) finds none and adds nothing twice.
     const waiting = new Set(
@@ -588,7 +611,10 @@ export function loJob(deps: PptxDeps, env: LoJobEnv = {}): JobHandler<PptxLoPayl
     for (const id of unplanned) fail(id, 'copied before LibreOffice finished: its PowerPoint art is missing');
     let textBoxes = new Map<number, ExtractedText[]>();
 
-    if (pages.length || texts.length) {
+    if ((pages.length || texts.length) && unanswered) {
+      // The slides keep version 1, marked `failed`, as after a run that failed `LO_RETRIES` times.
+      for (const s of slides) fail(s.slideId, 'LibreOffice could not draw this slide');
+    } else if (pages.length || texts.length) {
       try {
         await printCopy(deps, ctx as JobCtx<unknown>, pl.hash, pages, texts, async (pdf, copy, dir) => {
           textBoxes = new Map(copy.texts ?? []);
@@ -816,8 +842,9 @@ export type PptxLoWithoutResult = {
 
 /**
  * What a slide lacks when LibreOffice never draws it (`Slide.pptx.missing`): the kinds its plan recorded
- * (`PptxLoSlide.kinds`), else read from what it waited for (an older plan): its whole page ('slide'), its art
- * ('element': the plan does not say what the art held), its metafile pictures ('metafile').
+ * (`PptxLoSlide.kinds`; none recorded: nothing, version 1 draws what the art would have), else read from what
+ * it waited for (an older plan): its whole page ('slide'), its art ('element': the plan does not say what the
+ * art held), its metafile pictures ('metafile').
  */
 export function kindsWithoutLibreOffice(plan: PptxLoSlide | undefined, slide: Pick<Slide, 'pptx'>): string[] {
   const out: string[] = [];
@@ -830,6 +857,8 @@ export function kindsWithoutLibreOffice(plan: PptxLoSlide | undefined, slide: Pi
   for (const k of Array.isArray(plan?.kinds) ? plan.kinds : []) if (typeof k === 'string') add(k);
   for (const k of slide.pptx?.missing ?? []) add(k);
   if (out.length) return out;
+  // A plan that recorded its kinds and found none: version 1 draws everything the art would have (`artKinds`).
+  if (Array.isArray(plan?.kinds) && !plan.kinds.length) return [];
   const cls = plan?.class ?? slide.pptx?.class;
   if (cls === 'picture') return ['slide'];
   if (cls === 'hybrid' && (!plan || plan.art)) add('element');
@@ -868,9 +897,19 @@ export async function withoutLibreOffice(
       if (!sl.pptx?.pending || sl.pptx.fileId !== pl.hash) return sl;
       const missing = kindsWithoutLibreOffice(plans.get(sl.id), sl);
       const { pending: _pending, ...pptx } = sl.pptx;
-      const note = `not drawn: ${why} (${missingKinds(missing).map(missingLabel).join(', ')})`;
-      const notes = [...(pptx.notes ?? []), logSafe(note)].slice(-SLIDE_NOTES);
       cleared.push(sl.id);
+      // Nothing it waited for is missing (its art only improved on what version 1 draws: flat 3-D past the
+      // object budget): version 1 is the slide.
+      if (!missing.length) {
+        const next = Slide.safeParse({
+          ...sl,
+          pptx: { ...pptx, ...(pptx.class === 'hybrid' ? { class: 'native' } : {}) },
+        });
+        return next.success ? next.data : { ...sl, pptx };
+      }
+      const note = `not drawn: ${why} (${missingKinds(missing).map(missingLabel).join(', ')})`;
+      // Within the schema's cap, counted in 'and N more' (`addNote`), never cut from the front.
+      const notes = addNote([...(pptx.notes ?? [])], logSafe(note));
       const next = Slide.safeParse({ ...sl, pptx: { ...pptx, missing, notes } });
       return next.success ? next.data : { ...sl, pptx };
     }),
@@ -969,9 +1008,10 @@ export function queueFollowUp(deps: PptxDeps, p: Presentation): Job | undefined 
     ...(where.length ? { placed: where } : {}),
   };
   // M9: on a hub known to have no LibreOffice the follow-up only clears `pending` and queues the re-import
-  // (`withoutLibreOffice`): light work, never behind a transcode.
+  // (`withoutLibreOffice`): light work, never behind a transcode. A 'broken' one may answer later (`loJob`
+  // probes it again): the follow-up is LibreOffice's heavy work as usual.
   const lo = deps.tools.libreoffice().state;
-  return lo === 'absent' || lo === 'off' || lo === 'broken'
+  return lo === 'absent' || lo === 'off'
     ? deps.jobs.enqueue(PPTX_JOBS.lo, payload, 'light')
     : enqueuePptx(deps.jobs, PPTX_JOBS.lo, payload);
 }
@@ -987,6 +1027,9 @@ function samePage(got: RenderCopyPage, want: RenderCopyPage): boolean {
 /** Why a reference job without a PDF cannot run on a hub without LibreOffice (also the route's 501). */
 export const NO_LIBREOFFICE_REFERENCE =
   'This hub has no LibreOffice. Add a PDF exported from PowerPoint instead.';
+/** Why a reference job whose LibreOffice stays 'broken' fails (`HubTools.recheck`). */
+export const LIBREOFFICE_UNANSWERED =
+  'LibreOffice does not answer on this hub. Try again later, or add a PDF exported from PowerPoint instead.';
 /** Why a PDF reference job cannot run (also the route's 501). */
 export const NO_PDF_TOOLS = 'PDF pictures need poppler-utils (pdftoppm and pdfinfo) on the hub.';
 /** pdfinfo's time for one PDF. */
@@ -1014,8 +1057,15 @@ export function referenceJob(deps: PptxDeps): JobHandler<PptxReferencePayload> {
       .map((index) => ({ index, mode: 'whole' as const }));
     if (pages.length) {
       // M9: queued on a hub that has (or since lost) no LibreOffice: refused in words, never with a tool's output.
-      await deps.tools.ready;
-      if (!deps.tools.has('libreoffice')) throw new Error(NO_LIBREOFFICE_REFERENCE);
+      // A 'broken' one is probed again first (`recheck`), and the job waits a little while it does not answer.
+      const lo = await deps.tools.recheck();
+      if (lo === 'absent' || lo === 'off') throw new Error(NO_LIBREOFFICE_REFERENCE);
+      if (lo !== 'available') {
+        const n = ctx.payload.probes ?? 0;
+        if (n >= LO_RETRIES) throw new Error(LIBREOFFICE_UNANSWERED);
+        ctx.setPayload({ ...ctx.payload, probes: n + 1 });
+        throw new JobDeferred(deferDelay(n), `[warn] ${LIBREOFFICE_UNANSWERED}`);
+      }
       try {
         await printCopy(deps, ctx as JobCtx<unknown>, pl.hash, pages, [], async (pdf, copy, dir) => {
           const page = pageSize(copy.slideSize ?? { cx: 12_192_000, cy: 6_858_000 });
@@ -1165,7 +1215,10 @@ export function pageCountMismatch(pages: number, shown: number, listed: number):
  * - Each page this presentation needs is drawn by pdftoppm at the size LibreOffice's pages have (a fixed output
  *   size, so a crafted page size cannot blow memory), stored, and set as `Slide.pptx.refMediaId` as the
  *   LibreOffice source does (resume pairs in `done`).
- * The PDF is released once the pictures are on the slides, or when the job fails for good.
+ * The PDF is released once the pictures are on the slides, or when the job fails for good, unless another
+ * queued or running reference job names it (`releaseReferencePdf`; two presentations from one deck may be
+ * given the same PDF). A job is only ever aborted by a shutdown (the queue has no cancel), after which it
+ * runs again and needs the PDF; one abandoned after repeated crashes releases it in its give-up.
  */
 async function pdfReference(
   deps: PptxDeps,
@@ -1175,7 +1228,7 @@ async function pdfReference(
   const pdfHash = pl.pdf!;
   const done = new Map(pl.done ?? []);
   const save = () => ctx.setPayload({ ...ctx.payload, done: [...done] });
-  const release = () => deps.store.release(pdfHash).catch(() => undefined);
+  const release = () => releaseReferencePdf(deps, pdfHash, ctx.id);
   try {
     const p0 = deps.lib.presentations.get(pl.presentationId);
     if (!p0) {
@@ -1253,6 +1306,32 @@ async function pdfReference(
     if (!(e instanceof JobDeferred) && !ctx.signal.aborted) await release();
     if (e instanceof ToolError && e.missing) throw new Error(NO_PDF_TOOLS);
     throw e;
+  }
+}
+
+/**
+ * Remove a reference job's uploaded PDF from the store, unless a queued or running `pptx-reference` job other
+ * than `except` names it (`PptxReferencePayload.pdf`), or the library references it (`Store.release`). The
+ * check and the removal of the file's row run in one turn of the event loop, so a job queued meanwhile is
+ * seen. Never throws.
+ */
+export async function releaseReferencePdf(
+  deps: Pick<PptxDeps, 'lib' | 'store'>,
+  pdf: unknown,
+  except?: string,
+): Promise<void> {
+  if (typeof pdf !== 'string' || !pdf) return;
+  try {
+    const other = deps.lib.db
+      .prepare(
+        `SELECT 1 FROM jobs WHERE kind = ? AND state IN ('queued','running') AND id IS NOT ?
+           AND (CASE WHEN json_valid(payload) THEN json_extract(payload, '$.pdf') END) = ? LIMIT 1`,
+      )
+      .get(PPTX_JOBS.reference, except ?? null, pdf);
+    if (other) return;
+    await deps.store.release(pdf);
+  } catch {
+    // Left in the store: the next reference job given the same PDF releases it.
   }
 }
 

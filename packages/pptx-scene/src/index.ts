@@ -67,6 +67,7 @@ export {
 export {
   type Decision,
   decisionOf,
+  drawnWithoutArt,
   missingKindOf,
   RESIDUAL_ROWS,
   type ResidualRow,

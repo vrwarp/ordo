@@ -563,17 +563,25 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     const out = emitOne({ slides: [{ shapes: all }] });
     const els = out.scene.slides[0]!.elements as ShapeElement[];
     const native = els.filter((e) => e.support !== 'residual');
-    expect(native.length).toBeGreaterThanOrEqual(2);
-    expect(native.length).toBeLessThanOrEqual(3);
+    // M9 wave 1 repair: kept while their legacy copies fit (the floor every drawer draws: a translucent
+    // full-slide colour each, about 2 ms at 4K), the rest to the art; the floors bound the stack.
+    const floor =
+      (GEOM_COST.slide * 0.98 - 1920 * 1080 * GEOM_COST.opaqueArea) / (1920 * 1080 * GEOM_COST.area);
+    // (Each legacy copy's edges cost a little more than its pixels.)
+    expect(native.length).toBeGreaterThanOrEqual(Math.floor(floor) - 1);
+    expect(native.length).toBeLessThanOrEqual(Math.floor(floor));
     expect(els.slice(native.length).every((e) => e.reasons?.includes('geom:complex'))).toBe(true);
     expect(out.emitted.classification.class).toBe('hybrid');
     // The rest emit nothing until the art arrives: their legacy colours would cost what the budget held back
-    // (138 translucent full-slide rects: 300 ms at 3840).
-    expect(shapes(out.objects).length).toBe(native.length);
-    expect(shapes(out.objects).every((o) => o.gradient)).toBe(true);
+    // (140 translucent full-slide rects: 300 ms at 3840). What is kept is drawn as every drawer draws it
+    // within the budget (`fitDrawing`): its legacy colour, the first stop, where no gradient fits.
+    const drawn = shapes(out.objects);
+    expect(drawn.length).toBe(native.length);
+    expect(drawn.every((o) => !o.gradient && o.fill?.r === 255 && o.fill.a === 0.5)).toBe(true);
+    expect(out.notes.join(' ')).toMatch(/past the slide's drawing budget are drawn as their legacy shapes/);
     expect(slideBudget(out.slide.objects).size).toBe(0);
-    // Six full-slide gradients, the review's (78 ms at 3840): as many as fit after the background are drawn
-    // (two, within the converter's margin), the rest by LibreOffice.
+    // Six full-slide gradients, the review's (78 ms at 3840): all kept, as many drawn with their gradient as
+    // fit over every one's legacy copy (one), the others in their first colour, as the renderer draws them.
     let six = '';
     for (let i = 0; i < 6; i++)
       six += sp({
@@ -587,13 +595,94 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
         ln: '<a:ln><a:noFill/></a:ln>',
       });
     const few = emitOne({ slides: [{ shapes: six }] });
+    expect(few.emitted.classification.class).toBe('native');
+    expect(shapes(few.objects)).toHaveLength(6);
     const kept = shapes(few.objects).filter((o) => o.gradient);
-    const background = charged(drawnCost(few.slide.objects[0]!));
+    const legacy = shapes(few.objects).filter((o) => !o.gradient);
+    const floors = charged(drawnCost(few.slide.objects[0]!)) + 6 * charged(drawnCost(legacy[0]!));
     expect(kept.length).toBe(
-      Math.floor((GEOM_COST.slide * 0.98 - background) / charged(drawnCost(kept[0]!))),
+      Math.floor(
+        (GEOM_COST.slide - floors) / (charged(drawnCost(kept[0]!)) - charged(drawnCost(legacy[0]!))),
+      ),
     );
-    expect(kept.length).toBe(2);
+    expect(kept.length).toBe(1);
     expect(slideBudget(few.slide.objects).size).toBe(0);
+  });
+
+  it('keeps a textless shape only its pixels put past the budget, drawn as the renderer draws it there (M9 wave 1 repair)', () => {
+    // An opaque three-stop radial background and a full-slide textless rect with the same radial: an opaque
+    // radial off Skia's fast path costs what a translucent one does (render-seams), so the two pass
+    // GEOM_COST.slide. The rect keeps its place in its legacy colour (the first stop); the slide stays native.
+    const grad = (radial: boolean) =>
+      '<a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:srgbClr val="1F3864"/></a:gs><a:gs pos="50000"><a:srgbClr val="2E75B6"/></a:gs>' +
+      `<a:gs pos="100000"><a:srgbClr val="DEEBF7"/></a:gs></a:gsLst>${radial ? '<a:path path="circle"><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path>' : '<a:lin ang="5400000" scaled="0"/>'}</a:gradFill>`;
+    for (const radial of [true, false]) {
+      const bg = `<p:bg><p:bgPr>${grad(radial)}<a:effectLst/></p:bgPr></p:bg>`;
+      const deck = {
+        slides: [
+          {
+            bg,
+            shapes:
+              sp({ id: 2, x: 0, y: 0, cx: 12_192_000, cy: 6_858_000, fill: grad(radial) }) +
+              sp({
+                id: 3,
+                x: IN,
+                y: IN,
+                cx: 6_000_000,
+                cy: IN,
+                fill: '<a:noFill/>',
+                txBox: true,
+                txBody: body(para(run('Amazing grace'))),
+              }),
+          },
+        ],
+      };
+      const out = emitOne(deck);
+      expect(out.emitted.classification.class, `radial ${radial}`).toBe('native');
+      const rect = out.scene.slides[0]!.elements.find((e) => e.shapeId === 2) as ShapeElement;
+      expect(rect.support).toBe('native');
+      expect(out.slide.objects.map((o) => o.type)).toEqual(['shape', 'shape', 'text']);
+      const [bgObj, rectObj] = shapes(out.slide.objects);
+      expect(bgObj!.gradient?.kind).toBe(radial ? 'radial' : 'linear');
+      if (radial) {
+        // In its legacy colour: the first stop, as the renderer's budget draws it.
+        expect(rectObj!.gradient).toBeUndefined();
+        expect(rectObj!.fill).toEqual({ r: 0x1f, g: 0x38, b: 0x64, a: 1 });
+      } else expect(rectObj!.gradient?.kind).toBe('linear');
+      // Every drawer draws it as emitted, and a hub without LibreOffice misses nothing.
+      expect(slideBudget(out.slide.objects).size).toBe(0);
+      expect(emitOne(deck, { libreoffice: false }).emitted.missing).toBeUndefined();
+    }
+    // A plain panel after costly decorations (the worship lyric template: a gradient background and a large
+    // translucent 3-stop gradient decoration fill the budget): kept, not left out.
+    const deco =
+      '<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FFFFFF"><a:alpha val="10000"/></a:srgbClr></a:gs>' +
+      '<a:gs pos="50000"><a:srgbClr val="FFFFFF"><a:alpha val="8000"/></a:srgbClr></a:gs><a:gs pos="100000"><a:srgbClr val="FFFFFF"><a:alpha val="1000"/></a:srgbClr></a:gs></a:gsLst><a:lin ang="5400000"/></a:gradFill>';
+    const panel = emitOne({
+      slides: [
+        {
+          bg: `<p:bg><p:bgPr>${grad(false)}<a:effectLst/></p:bgPr></p:bg>`,
+          shapes:
+            sp({ id: 2, x: 0, y: 0, cx: 12_192_000, cy: 6_858_000, geom: 'rtTriangle', fill: deco }) +
+            sp({ id: 3, x: 0, y: 0, cx: 12_192_000, cy: 6_858_000, geom: 'rtTriangle', fill: deco }) +
+            sp({ id: 4, x: IN, y: IN, cx: 8 * IN, cy: 4 * IN, fill: solid('202020') }) +
+            sp({
+              id: 5,
+              x: IN,
+              y: IN,
+              cx: 6_000_000,
+              cy: IN,
+              fill: '<a:noFill/>',
+              txBox: true,
+              txBody: body(para(run('Amazing grace'))),
+            }),
+        },
+      ],
+    });
+    const els = panel.scene.slides[0]!.elements as ShapeElement[];
+    expect(els.find((e) => e.shapeId === 4)!.support).toBe('native');
+    expect(shapes(panel.objects).some((o) => o.fill?.r === 0x20 && !o.gradient)).toBe(true);
+    expect(slideBudget(panel.slide.objects).size).toBe(0);
   });
 
   it('reads hostile geometry within the bounds and quickly (design/27 §12, §14.3)', () => {

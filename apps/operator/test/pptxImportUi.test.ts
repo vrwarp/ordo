@@ -333,10 +333,16 @@ describe('without LibreOffice on the hub (design/27 M9)', () => {
       ['renderer', 'native'],
       ['extendBackgrounds', '1'],
     ]);
-    // A hub with LibreOffice gets the choice as made; so does one that has not answered yet (it refuses
-    // pictures it cannot make, in words).
+    // A hub with LibreOffice gets the choice as made. One that has not answered yet gets what the screen
+    // shows meanwhile: 'Editable' (M9 wave 1 repair: one rule for the screen and the upload).
     expect(documentFields('Sunday.pptx', stored, LEGACY_CAPABILITIES)).toEqual([['renderer', 'libreoffice']]);
-    expect(documentFields('Sunday.pptx', stored)).toEqual([['renderer', 'libreoffice']]);
+    const before = renderToStaticMarkup(createElement(PptxImportChoices, { value: stored, onChange: noop }));
+    expect(before.match(/<input type="radio"[^>]*>/g)).toHaveLength(1);
+    expect(before.match(/<input type="radio"[^>]*>/g)![0]).toContain('checked');
+    expect(documentFields('Sunday.pptx', stored)).toEqual([
+      ['renderer', 'native'],
+      ['extendBackgrounds', '1'],
+    ]);
     // The OOXML family carries the choice; a PDF never does.
     for (const name of ['Show.ppsx', 'Template.potx', 'Macros.pptm', 'DECK.PPTX'])
       expect(isPptxName(name)).toBe(true);

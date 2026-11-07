@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { elementRefs } from './hybrid.ts';
+import { elementRefs, noteWithoutLibreOffice } from './hybrid.ts';
 import { drawingXml, dspSp, smartArtFrame, smartArtRels, withSmartArt } from './smartart.test-util.ts';
 import { convertDeck } from './index.ts';
 import type { Element } from './ir.ts';
@@ -198,5 +198,129 @@ describe('without LibreOffice (EmitOptions.libreoffice: false, M9)', () => {
     const big = convertDeck(buildDeck({ slides: [{ shapes }] }), { libreoffice: false }).slides[0]!;
     expect(big.classification.class).toBe('picture');
     expect(big.missing).toBeUndefined();
+  });
+
+  it('plans no art on a picture-class slide either (M9 wave 1 repair)', () => {
+    // A chart (residual: the scene's class is hybrid) and text formatting past 64 KB: the emitted slide is a
+    // picture for its budget, and with LibreOffice its art is still planned.
+    let runs = '';
+    for (let i = 0; i < 1600; i++)
+      runs += run(
+        `word${i} `,
+        `sz="${1000 + (i % 40) * 100}" b="${i % 2}"`,
+        `<a:solidFill><a:srgbClr val="${(i * 7919).toString(16).padStart(6, '0').slice(-6)}"/></a:solidFill><a:latin typeface="Face ${i % 50}"/>`,
+      );
+    const parts = buildDeck({
+      slides: [
+        {
+          rels: [{ id: 'rId3', type: 'chart', target: '../charts/chart1.xml' }],
+          shapes:
+            chartFrame({ id: 4, x: 0, y: 0, cx: 4 * EMU, cy: 3 * EMU, rId: 'rId3' }) +
+            sp({ id: 2, x: 0, y: 4 * EMU, cx: 8 * EMU, cy: 4 * EMU, txBody: body(para(runs)) }),
+        },
+      ],
+    });
+    withPart(parts, 'ppt/charts/chart1.xml', chartXml(), CHART_CONTENT_TYPE);
+    const withLo = convertDeck(parts).slides[0]!;
+    expect(withLo.classification.class).toBe('picture');
+    expect(withLo.art).toBeDefined();
+    const s = convertDeck(parts, { libreoffice: false }).slides[0]!;
+    expect(s.classification.class).toBe('picture');
+    expect(s.art).toBeUndefined();
+    expect(s.metafiles).toBeUndefined();
+    expect(s.missing).toBeUndefined();
+  });
+
+  it('draws real 3-D past the object budget flat without LibreOffice: nothing missing, never named (M9 wave 1 repair)', () => {
+    let shapes = '';
+    for (let i = 0; i < 170; i++)
+      shapes += sp({
+        id: i + 2,
+        x: (i % 17) * EMU,
+        y: Math.floor(i / 17) * EMU,
+        cx: EMU / 2,
+        cy: EMU / 2,
+        fill:
+          '<a:solidFill><a:srgbClr val="3366CC"/></a:solidFill><a:scene3d><a:camera prst="orthographicFront"/>' +
+          '<a:lightRig rig="threePt" dir="t"/></a:scene3d><a:sp3d><a:bevelT w="38100" h="38100"/></a:sp3d>',
+      });
+    const parts = buildDeck({ slides: [{ shapes }] });
+    const withLo = convertDeck(parts).slides[0]!;
+    // With LibreOffice the art draws the bevels (`budget:3d`); version 1 draws them flat meanwhile.
+    expect(withLo.classification).toMatchObject({ class: 'hybrid' });
+    expect(withLo.classification.reasons).toContain('art:budget:3d');
+    expect(withLo.art).toBeDefined();
+    const s = convertDeck(parts, { libreoffice: false }).slides[0]!;
+    // Without it version 1 is the slide: every shape drawn flat, as approx 3-D within the budget is.
+    expect(s.classification.class).toBe('native');
+    expect(s.classification.reasons.some((r) => r.startsWith('art:') || r.startsWith('missing:'))).toBe(
+      false,
+    );
+    expect(s.missing).toBeUndefined();
+    expect(s.art).toBeUndefined();
+    expect(s.slide.objects).toEqual(withLo.slide.objects);
+    expect(s.notes).toContain('3-D is drawn flat (an approximation)');
+    expect(s.notes.some((n) => /LibreOffice|not drawn/.test(n))).toBe(false);
+  });
+
+  it("never names LibreOffice in a slide's notes without it (M9 wave 1 repair)", () => {
+    // A chart, a table it cannot read and an EMF: residual, each with its converter note.
+    const parts = buildDeck({
+      slides: [
+        {
+          rels: [{ id: 'rId3', type: 'chart', target: '../charts/chart1.xml' }, imageRel('rId2', 'logo.emf')],
+          shapes:
+            chartFrame({ id: 4, x: 0, y: 0, cx: 4 * EMU, cy: 3 * EMU, rId: 'rId3' }) +
+            tableFrame({ id: 5, x: 0, y: 4 * EMU, cx: 4 * EMU, cy: 2 * EMU }) +
+            pic({ id: 6, x: 5 * EMU, y: 0, cx: 2 * EMU, cy: 2 * EMU, rId: 'rId2' }),
+        },
+      ],
+    });
+    withPart(parts, 'ppt/charts/chart1.xml', chartXml(), CHART_CONTENT_TYPE);
+    withPart(parts, 'ppt/media/logo.emf', new Uint8Array([1, 0, 0, 0]));
+    const withLo = convertDeck(parts).slides[0]!;
+    expect(withLo.notes.some((n) => /LibreOffice/.test(n))).toBe(true);
+    const s = convertDeck(parts, { libreoffice: false }).slides[0]!;
+    expect(
+      s.notes.some((n) => /LibreOffice/.test(n)),
+      s.notes.join(' | '),
+    ).toBe(false);
+    expect(s.notes).toContain('chart not drawn');
+    expect(s.notes.some((n) => /^not drawn: /.test(n))).toBe(true);
+  });
+
+  it('rewrites every converter note that names LibreOffice', () => {
+    const cases: [string, string | undefined][] = [
+      ['170 3-D shape(s) on a slide past its object budget: LibreOffice draws them', undefined],
+      [
+        "a SmartArt graphic of 300 objects passes the slide's budget: LibreOffice draws it",
+        "a SmartArt graphic of 300 objects passes the slide's budget: not drawn",
+      ],
+      [
+        "12 shapes and pictures pass the slide's object budget: LibreOffice draws them",
+        "12 shapes and pictures pass the slide's object budget: not drawn",
+      ],
+      [
+        'more SmartArt than an import reads natively: LibreOffice draws the rest',
+        'more SmartArt than an import reads natively: the rest is not drawn',
+      ],
+      [
+        'a SmartArt drawing holds no shapes: LibreOffice lays the diagram out',
+        'a SmartArt drawing holds no shapes: not drawn',
+      ],
+      [
+        "custom geometry past the slide's drawing budget is drawn by LibreOffice",
+        "custom geometry past the slide's drawing budget is not drawn",
+      ],
+      ['chart drawn by LibreOffice as a picture', 'chart not drawn'],
+      ['table drawn by LibreOffice as a picture', 'table not drawn'],
+      ['a emf picture is converted by LibreOffice', 'a emf picture is not drawn'],
+      [
+        'a shape turned in an unevenly scaled group is placed as LibreOffice places it',
+        'a shape turned in an unevenly scaled group is placed without the shear',
+      ],
+      ['3-D is drawn flat (an approximation)', '3-D is drawn flat (an approximation)'],
+    ];
+    for (const [note, want] of cases) expect(noteWithoutLibreOffice(note), note).toBe(want);
   });
 });

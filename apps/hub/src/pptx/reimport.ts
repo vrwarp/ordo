@@ -841,8 +841,9 @@ export function reimportJob(deps: PptxDeps, env: NativeJobEnv = {}): JobHandler<
     if (deps.locked(p0.id)) deferWhileLocked(ctx);
     // M9: a follow-up on a hub without LibreOffice only clears `pending` (it may be what queued this job): the
     // re-import never waits for it.
-    await deps.tools.ready;
-    const lo = deps.tools.has('libreoffice');
+    // A 'broken' LibreOffice may answer later: its follow-up still runs (`fallback.ts` `loJob`).
+    const state = await deps.tools.recheck();
+    const lo = state !== 'absent' && state !== 'off';
     if (lo && followUpActive(deps, p0.id)) deferWhileFollowUp();
     if (deckOf(p0) !== pl.hash)
       throw new Error(

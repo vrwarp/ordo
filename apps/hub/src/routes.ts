@@ -52,7 +52,8 @@ import { NO_LIBREOFFICE_REFERENCE, NO_PDF_TOOLS } from './pptx/fallback.ts';
 import { planReimport } from './pptx/reimport.ts';
 import type { PptxImportOptions } from './pptx/shared.ts';
 import { sendFile } from './send.ts';
-import { extOf, MAX_UPLOAD_BYTES, readHead, sniff } from './store.ts';
+import { extOf, MAX_UPLOAD_BYTES, readHead, sniff, tooLarge } from './store.ts';
+import type { HubTools } from './tools.ts';
 import { validate } from './validate.ts';
 
 export const DEVICE_COOKIE = 'ordo_device';
@@ -254,6 +255,40 @@ type Ctx = LibraryApiCtx;
 
 type Received = { path: string; hash: string; bytes: number; filename: string; fieldname: string };
 
+/** The wait a 503 asks for while LibreOffice is still being checked (`Retry-After`, s). */
+const LIBREOFFICE_CHECKING_RETRY_S = 30;
+/** The wait a 503 asks for while LibreOffice does not answer (`HubTools.recheck` probes it once a minute). */
+const LIBREOFFICE_BROKEN_RETRY_S = 120;
+
+/**
+ * Refuse a request that needs LibreOffice when this hub cannot run it now (design/27 M9), once the caller
+ * waited for the probes (`tools.settled()`): 501 `libreoffice_unavailable` with `absent` when it has none
+ * ('absent', 'off'); 503 with a retry hint while it is still being checked after that wait (a slow cold
+ * start) or does not answer ('broken': probed again in the background, `recheck`), since it may be there in a
+ * minute.
+ */
+function needLibreOffice(tools: HubTools, absent: string): void {
+  if (tools.has('libreoffice')) return;
+  const state = tools.libreoffice().state;
+  if (state === 'checking')
+    throw new HttpError(
+      503,
+      'libreoffice_checking',
+      'LibreOffice is still starting on this hub. Try again in a minute.',
+      { retryAfterS: LIBREOFFICE_CHECKING_RETRY_S },
+    );
+  if (state === 'broken') {
+    void tools.recheck();
+    throw new HttpError(
+      503,
+      'libreoffice_not_answering',
+      'LibreOffice does not answer on this hub. Try again in a few minutes.',
+      { retryAfterS: LIBREOFFICE_BROKEN_RETRY_S },
+    );
+  }
+  throw new HttpError(501, 'libreoffice_unavailable', absent);
+}
+
 /** Drain a multipart request: files go to uploads/ (hashed while streaming), fields are collected. */
 async function readMultipart(
   hub: Ctx,
@@ -280,8 +315,7 @@ async function readMultipart(
   } catch (e) {
     await Promise.all(files.map((f) => rm(f.path, { force: true })));
     const err = e as { code?: string; statusCode?: number };
-    if (err.code === 'FST_REQ_FILE_TOO_LARGE')
-      throw new HttpError(413, 'too_large', 'File exceeds the 4 GB upload limit');
+    if (err.code === 'FST_REQ_FILE_TOO_LARGE') throw tooLarge(MAX_UPLOAD_BYTES);
     throw e;
   }
   return { files, fields };
@@ -589,8 +623,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const body = validate(PptxReferenceBody, req.body ?? {});
     // M9: LibreOffice draws these; a hub without it says how to get PowerPoint's own pictures instead.
     await tools.settled();
-    if (!tools.has('libreoffice'))
-      throw new HttpError(501, 'libreoffice_unavailable', NO_LIBREOFFICE_REFERENCE);
+    needLibreOffice(tools, NO_LIBREOFFICE_REFERENCE);
     return reply.code(202).send(hub.imports.pptx.queueReference(id, fileId!, by(req), body.showPicture));
   });
   // 'Re-import from PowerPoint' (design/27 §11, M4 item F): the plan, then the job on the stored deck.
@@ -965,10 +998,13 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     // M9: what this hub's tools cannot do is refused before anything is stored (the upload removed first).
     const tools = hub.imports.tools;
     await tools.settled();
-    if (kind === 'pptx' && form.renderer === 'libreoffice' && !tools.has('libreoffice')) {
-      await cleanupFiles();
-      throw new HttpError(501, 'libreoffice_unavailable', NO_LIBREOFFICE_PICTURES);
-    }
+    if (kind === 'pptx' && form.renderer === 'libreoffice')
+      try {
+        needLibreOffice(tools, NO_LIBREOFFICE_PICTURES);
+      } catch (e) {
+        await cleanupFiles();
+        throw e;
+      }
     if (kind === 'pdf' && !tools.has('pdftoppm')) {
       await cleanupFiles();
       throw new HttpError(501, 'pdf_unavailable', NO_PDF_IMPORT);
