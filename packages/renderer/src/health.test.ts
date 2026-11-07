@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { DroppedFrames, EMPTY_TELEMETRY, armStatus, buildHealth } from './health.ts';
+import {
+  DroppedFrames,
+  EMPTY_TELEMETRY,
+  RASTER_ALARM_MIN,
+  TimingWindow,
+  armStatus,
+  buildHealth,
+  perfAlarms,
+  perfBudgets,
+} from './health.ts';
 
 describe('arm status', () => {
   it('is ok when every required key is held; empty keys are ignored', () => {
@@ -82,6 +91,96 @@ describe('health aggregation', () => {
       errors: [],
     });
     expect(h.gpuMB).toBe(398.2);
+  });
+});
+
+const quiet = {
+  mainLongTasks: 0,
+  arm: { ok: true, pending: [] },
+  cache: { ready: 0, total: 0 },
+  videoDropped: 0,
+  errors: [],
+};
+
+describe('performance health (design/27 §13, M7)', () => {
+  it('keeps the last timings of a window and takes nearest-rank percentiles', () => {
+    const w = new TimingWindow(4);
+    expect(w.summary()).toBeUndefined();
+    for (const ms of [5, 1, 3]) w.add(ms);
+    expect(w.summary()).toEqual({ n: 3, p50: 3, p95: 5, max: 5 });
+    w.add(2);
+    w.add(100); // the 5 leaves the window
+    expect(w.summary()).toEqual({ n: 4, p50: 2, p95: 100, max: 100 });
+    w.add(Number.NaN);
+    w.add(-4);
+    expect(w.summary()).toEqual({ n: 4, p50: 0, p95: 100, max: 100 });
+    w.clear();
+    expect(w.n).toBe(0);
+  });
+
+  it('20 values: p95 is the 19th, p50 the 10th', () => {
+    const w = new TimingWindow(64);
+    for (let i = 1; i <= 20; i++) w.add(i + 0.004);
+    expect(w.summary()).toEqual({ n: 20, p50: 10, p95: 19, max: 20 });
+  });
+
+  it('scales the budgets with the output size', () => {
+    expect(perfBudgets(1920, 1080)).toEqual({ rasterP95Ms: 10, uploadMs: 4, gpuMB: 100 });
+    expect(perfBudgets(3840, 2160)).toEqual({ rasterP95Ms: 30, uploadMs: 4, gpuMB: 400 });
+    expect(perfBudgets(1280, 720)).toEqual({ rasterP95Ms: 10, uploadMs: 4, gpuMB: 45 });
+    // Between 1080p and 4K the raster budget follows the pixel count.
+    expect(perfBudgets(2560, 1440).rasterP95Ms).toBeCloseTo(
+      10 + (20 * (2560 * 1440 - 1920 * 1080)) / (3840 * 2160 - 1920 * 1080),
+      1,
+    );
+    // What WebGPU takes at a size (12 output-sized RGBA textures) is within that size's budget.
+    for (const [w, h] of [
+      [1280, 720],
+      [1920, 1080],
+      [2560, 1440],
+      [3840, 2160],
+    ] as const)
+      expect(Math.round((12 * w * h * 4) / 1e5) / 10).toBeLessThanOrEqual(perfBudgets(w, h).gpuMB);
+  });
+
+  it('raises an alarm per budget passed; a raster alarm needs enough slides', () => {
+    const b = perfBudgets(3840, 2160);
+    const slow = { n: RASTER_ALARM_MIN, p50: 12, p95: 31, max: 40 };
+    expect(perfAlarms(b, { gpuMB: 398.2, raster: { ...slow, p95: 30 }, uploadMs: 4 })).toEqual([]);
+    expect(perfAlarms(b, { gpuMB: 400.1, raster: slow, uploadMs: 4.5 })).toEqual([
+      'gpuMemory',
+      'raster',
+      'upload',
+    ]);
+    expect(perfAlarms(b, { raster: { ...slow, n: RASTER_ALARM_MIN - 1 } })).toEqual([]);
+  });
+
+  it('reports the figures, the budgets at its size and the alarms', () => {
+    const h = buildHealth({
+      ...quiet,
+      render: { ...EMPTY_TELEMETRY, compositor: 'webgpu', gpuMB: 465.1, uploadMs: 2.345 },
+      raster: { n: 30, p50: 8, p95: 14, max: 22 },
+      size: { width: 3840, height: 2160 },
+      fontCoverage: { chars: '☧', count: 1, scripts: ['Zyyy'] },
+    });
+    expect(h.rasterMs).toEqual({ n: 30, p50: 8, p95: 14, max: 22 });
+    expect(h.uploadMs).toBe(2.35);
+    expect(h.budgets).toEqual({ rasterP95Ms: 30, uploadMs: 4, gpuMB: 400 });
+    expect(h.alarms).toEqual(['gpuMemory']);
+    expect(h.fontCoverage).toEqual({ chars: '☧', count: 1, scripts: ['Zyyy'] });
+  });
+
+  it('leaves out what was not measured (Canvas 2D: no GPU memory, no uploads)', () => {
+    const h = buildHealth({
+      ...quiet,
+      render: { ...EMPTY_TELEMETRY, compositor: '2d' },
+      size: { width: 1920, height: 1080 },
+    });
+    expect(h).not.toHaveProperty('rasterMs');
+    expect(h).not.toHaveProperty('uploadMs');
+    expect(h).not.toHaveProperty('alarms');
+    expect(h).not.toHaveProperty('fontCoverage');
+    expect(h.budgets).toEqual({ rasterP95Ms: 10, uploadMs: 4, gpuMB: 100 });
   });
 });
 

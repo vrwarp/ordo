@@ -164,9 +164,20 @@ export type FromAsset =
       t: 'done';
       layer: number;
       key: string;
+      /** From the job's arrival to its picture sent: reads and decodes included. */
       ms: number;
+      /**
+       * The job's synchronous draw on the worker's thread, from the surface to the picture taken (pictures
+       * already prepared): what health reports as slide `rasterMs` (design/27 §13).
+       */
+      rasterMs?: number;
       /** Font families the job asked for that are not loaded; drawn in the fallback font. */
       fontFallbacks?: string[];
+      /**
+       * Characters the job drew that no face of the worker covers, drawn by the machine's own fallback face
+       * (design/27 §10, `GlyphCoverage`): in code point order, at most 32.
+       */
+      uncovered?: string;
       /** Images left out because the cue's decoded-bitmap budget was exhausted. */
       skippedImages?: number;
       /**

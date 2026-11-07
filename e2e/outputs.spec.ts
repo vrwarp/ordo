@@ -124,6 +124,20 @@ test.describe('outputs follow the live state', () => {
     const t = await telemetry(p1);
     expect(t.presented).toBeGreaterThan(30);
     expect(t.error ?? '').not.toMatch(/arm/i);
+    // Performance health (design/27 §13, M7): the slides drawn so far are timed, and the budgets are those
+    // of this output's size. Timings are printed, not asserted (SwiftShader, a loaded runner).
+    const perf = t as unknown as {
+      rasterMs?: { n: number; p50: number; p95: number };
+      budgets?: { rasterP95Ms: number; uploadMs: number; gpuMB: number };
+      alarms?: string[];
+      gpuMB?: number;
+    };
+    expect(perf.rasterMs?.n ?? 0).toBeGreaterThanOrEqual(3);
+    expect(perf.budgets?.rasterP95Ms).toBeGreaterThanOrEqual(10);
+    expect(perf.budgets?.gpuMB).toBeGreaterThan(0);
+    console.log(
+      `output health: slide raster p50 ${perf.rasterMs?.p50} ms, p95 ${perf.rasterMs?.p95} ms over ${perf.rasterMs?.n}; budgets ${JSON.stringify(perf.budgets)}; gpuMB ${perf.gpuMB ?? '-'}; alarms ${perf.alarms?.join(', ') ?? 'none'}`,
+    );
   });
 
   test('an output URL without a valid token shows nothing and gets no state', async ({ page }) => {

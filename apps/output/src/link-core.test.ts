@@ -102,7 +102,7 @@ function setup(deps: Partial<ConstructorParameters<typeof LinkCore>[0]> = {}) {
     asset.port1.close();
     asset.port2.close();
   };
-  return { core, hub, link, sent, posts, toRender, toAsset, asset, close };
+  return { core, hub, link, sent, posts, toRender, toAsset, asset, render, close };
 }
 
 const tick = (ms = 10) => new Promise((r) => setTimeout(r, ms));
@@ -549,6 +549,72 @@ describe('link worker core', () => {
     expect(again!.t === 'job' && again!.job.kind === 'slide' ? again!.job.refresh : undefined).toBe(true);
     expect(t.toRender.filter((m) => m.t === 'flip' && m.key === key)).toHaveLength(1);
     expect(t.core.buildHealth().fontFallbacks).toBeUndefined();
+    t.close();
+  });
+
+  it('reports slide raster times, characters without a face and the budgets in health (design/27 §13)', async () => {
+    const t = setup();
+    await t.core.start();
+    t.hub.emit('state', stateMsg(slideLive(0)));
+    await tick(30);
+    const job = t.toAsset.find((m) => m.t === 'job' && m.job.kind === 'slide' && m.job.cueIndex === 0);
+    const key = job!.t === 'job' ? job!.job.key : '';
+    t.asset.port2.postMessage({
+      t: 'done',
+      layer: 1,
+      key,
+      ms: 80,
+      rasterMs: 7.5,
+      uncovered: '中☧',
+    } satisfies FromAsset);
+    t.asset.port2.postMessage({
+      t: 'done',
+      layer: 4,
+      key: 'props|x',
+      ms: 2,
+      rasterMs: 1,
+    } satisfies FromAsset);
+    await tick(20);
+    const h = t.core.buildHealth();
+    expect(h.rasterMs).toEqual({ n: 1, p50: 7.5, p95: 7.5, max: 7.5 });
+    expect(h.budgets).toEqual({ rasterP95Ms: 10, uploadMs: 4, gpuMB: 12 }); // the 640x360 test output
+    expect(h.alarms).toBeUndefined();
+    expect(h.fontCoverage).toEqual({ chars: '☧中', count: 2, scripts: ['Hani', 'Zyyy'] });
+    expect(h.recentLog!.some((l) => /no font on this output has 2 character\(s\)/.test(l))).toBe(true);
+    // A face that becomes available may have them: the held slide is drawn again in place.
+    t.toAsset.length = 0;
+    t.asset.port2.postMessage({
+      t: 'fonts',
+      loaded: 3,
+      failed: [],
+      ready: ['noto sans cjk sc'],
+    } satisfies FromAsset);
+    await tick(30);
+    const again = t.toAsset.find((m) => m.t === 'job' && m.job.kind === 'slide' && m.job.key === key);
+    expect(again!.t === 'job' && again!.job.kind === 'slide' ? again!.job.refresh : undefined).toBe(true);
+    expect(t.core.buildHealth().fontCoverage).toBeUndefined();
+    t.close();
+  });
+
+  it("raises the GPU memory alarm past the budget of the output's size and carries the upload time", async () => {
+    const t = setup();
+    await t.core.start();
+    const tel = {
+      presented: 1,
+      missed: 0,
+      lateFlips: 0,
+      longTasks: 0,
+      gpuLost: 0,
+      fps: 60,
+      frameMs: 1000 / 60,
+      compositor: 'webgpu' as const,
+      gpuMB: 30,
+      uploadMs: 1,
+    };
+    t.render.port2.postMessage({ t: 'telemetry', tel });
+    await tick(20);
+    expect(t.core.buildHealth().alarms).toEqual(['gpuMemory']); // 30 MB over the 12 MB of 640x360
+    expect(t.core.buildHealth().uploadMs).toBe(1);
     t.close();
   });
 

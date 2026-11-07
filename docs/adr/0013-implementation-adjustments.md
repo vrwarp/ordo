@@ -37,9 +37,14 @@ keeps the GPU side trivial and makes lyric-only, stage and stream looks the same
 
 ## Canvas 2D compositor as a safety net (ADR 0001)
 
-WebGPU stays the primary path. If no adapter is available, or the device is lost three times within a minute,
-the render worker switches to a Canvas 2D compositor that draws the same bitmaps. The output keeps showing
-correct content and reports the switch in health. This does not replace verifying WebGPU on the venue PC.
+WebGPU stays the primary path. If no adapter is available, the adapter is a software fallback
+(`isFallbackAdapter`, SwiftShader), or the device is lost three times within a minute, the render worker
+switches to a Canvas 2D compositor that draws the same bitmaps. Every switch is drawn on a fresh canvas, since a
+canvas keeps its first context kind. After a fallback WebGPU is tried again on a slow timer (60 s, doubling to
+15 min), except after three losses, which keep Canvas 2D for the session. The output keeps showing correct
+content and reports the compositor in health. This does not replace verifying WebGPU on the venue PC: the venue
+measurement (`pnpm --filter @ordo/renderer bench:venue`, design/14 "Measuring on venue machines") records the
+adapter Chrome gives the output and whether it is a software one.
 
 ## Service worker caching (design/17)
 
@@ -57,3 +62,13 @@ suffix and name.
 
 Pairs store 0-based channel indices. The settings UI shows them 1-based. Device ids differ per origin in
 Chrome, so the house and preview device labels are stored with the ids, and the output window matches by label.
+
+## Performance budgets in health (design/14, design/27 §13)
+
+Health carries the output's measured costs (`rasterMs` p50/p95 of slide draws, `uploadMs`, `gpuMB`), the
+budgets for its size (`budgets`) and the budgets passed (`alarms`), and the characters it drew that no face it
+has covers (`fontCoverage`). The output computes budgets and alarms itself, because only it knows its size; the
+hub stores what it receives and the operator only reads it. Alarm names are plain strings in the protocol, not
+an enum, so an alarm a newer output adds never makes an older hub reject the whole report. The operator words
+each issue twice: a label for the volunteer at the desk, without figures, and a detail with the figures for
+the tech (`apps/operator/src/lib/health.ts`).

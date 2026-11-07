@@ -395,3 +395,21 @@ describe('asset worker: what a slide job draws follows slideContent (design/27 ย
     ]);
   });
 });
+
+describe('asset worker: what health reads from a result (design/27 ยง13, M7)', () => {
+  it("reports the draw on the worker's thread apart from the job's whole time", async () => {
+    for (const job of [
+      slideJob({ video: undefined }),
+      slideJob(),
+      { kind: 'lowerThird', layer: 2, key: 'lt|x', text: 'Pastor Jo', look: LOOK_LOWER_THIRD } as AssetJob,
+    ]) {
+      const { reply } = await run(job);
+      expect(reply.t).toBe('done');
+      if (reply.t !== 'done') continue;
+      expect(reply.rasterMs).toBeGreaterThanOrEqual(0);
+      expect(reply.rasterMs!).toBeLessThanOrEqual(reply.ms + 0.01);
+      // No face is loaded here: text in an unloaded family is a font fallback, never probed glyph by glyph.
+      expect(reply.uncovered).toBeUndefined();
+    }
+  });
+});

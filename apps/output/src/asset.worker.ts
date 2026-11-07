@@ -9,11 +9,13 @@ import {
   type FontLoad,
   FontResolver,
   type FromAsset,
+  GlyphCoverage,
   type ImageLookup,
   SRC_BITMAP,
   SRC_SCENE,
   type SlidePicture,
   type ToAsset,
+  contextMetrics,
   installFontEnv,
   jobFontFamilies,
   preparePicture,
@@ -75,6 +77,20 @@ fonts.onChange((c) => {
   const { loaded, failed } = fonts.stats();
   post({ t: 'fonts', loaded, failed, ready: c.families });
 });
+
+// Font coverage (design/27 §10): the characters a job drew that no face of this worker covers, so the
+// machine's own fallback face drew them. The drawing surface's text calls are noted (`surface`) and probed
+// on a 1x1 canvas of their own after the job's picture is sent; verdicts are kept until the faces change.
+let probe: ((font: string, text: string) => ArrayLike<number>) | null = null;
+const coverage = new GlyphCoverage((font, text) => {
+  if (!probe) {
+    const c = new OffscreenCanvas(1, 1).getContext('2d');
+    if (!c) throw new Error('2D context unavailable'); // the probe fails: no miss is reported
+    probe = contextMetrics(c);
+  }
+  return probe(font, text);
+});
+fonts.onChange(() => coverage.reset());
 
 let chain: Promise<void> = Promise.resolve();
 function enqueue(fn: () => Promise<void>): void {
@@ -161,6 +177,7 @@ function surface(): OffscreenCanvasRenderingContext2D {
     // and turn black on screen the moment this worker dies (found by the chaos e2e). CPU-backed bitmaps
     // belong to whoever holds them, so the render worker keeps its picture through an asset restart.
     ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (ctx) coverage.instrument(ctx);
   }
   if (!ctx) throw new Error('2D context unavailable in the asset worker');
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -188,6 +205,8 @@ async function preload(
 
 /** Missing families a 'done' message reports: as many as the link keeps (FromAsset, protocol health). */
 const MAX_FONT_FALLBACKS = 20;
+/** Characters without a face a 'done' message reports. */
+const MAX_UNCOVERED = 32;
 
 function fontFallbacks(job: AssetJob): string[] | undefined {
   const missing = jobFontFamilies(job, { fallbacks: false }).filter(
@@ -228,45 +247,75 @@ function sceneParts(
   return s && { base: s.base, over: s.over, plane: s.plane, videoSlot: v.slot, videoGen: v.gen };
 }
 
+/**
+ * A job's synchronous draw, from the surface to the picture taken (the draw calls are rastered by
+ * `transferToImageBitmap`): its time on the worker's thread, which health reports as `rasterMs`
+ * (design/27 §13), and the text it drew, for `coverage`.
+ */
+type Draw = { ms: number; text: ReturnType<GlyphCoverage['end']> | null };
+
+function drawn<T>(d: Draw, fn: () => T): T {
+  const t = performance.now();
+  coverage.begin();
+  try {
+    return fn();
+  } finally {
+    d.text = coverage.end();
+    d.ms += performance.now() - t;
+  }
+}
+
 async function run(job: AssetJob): Promise<void> {
   const t0 = performance.now();
   const scale = width / LOGICAL_WIDTH;
   let skipped = 0;
   let missing: string[] = [];
   let scene: (SceneParts & { base: ImageBitmap }) | undefined;
+  const draw: Draw = { ms: 0, text: null };
   try {
+    let bitmap: ImageBitmap;
     if (job.kind === 'slide') {
       const pre = await preload(job.images, slidePictures(job.slide, { scale, look: job.look }));
       skipped = pre.skipped;
       missing = pre.missing;
       try {
-        const c = surface();
-        scene = sceneParts(job, c, scale, pre.lookup);
-        if (!scene)
+        const out = drawn(draw, () => {
+          const c = surface();
+          const sc = sceneParts(job, c, scale, pre.lookup);
+          if (sc) return { bitmap: sc.base, scene: sc };
           rasterSlide(c, job.slide, job.look, scale, pre.lookup, {
             nextSlide: job.nextSlide,
             isSong: job.isSong,
           });
+          return { bitmap: take(), scene: undefined };
+        });
+        bitmap = out.bitmap;
+        scene = out.scene;
       } finally {
         pre.release();
       }
     } else if (job.kind === 'image') {
       const img = await sourcePicture(images, decoder, job.hash, { w: width, h: height });
-      const c = surface();
-      rasterImage(c, img, job.fit, scale);
+      bitmap = drawn(draw, () => {
+        rasterImage(surface(), img, job.fit, scale);
+        return take();
+      });
     } else if (job.kind === 'lowerThird') {
-      const c = surface();
-      rasterLowerThird(c, job.text, job.look, scale);
+      bitmap = drawn(draw, () => {
+        rasterLowerThird(surface(), job.text, job.look, scale);
+        return take();
+      });
     } else {
       const pre = await preload(job.images);
       try {
-        const c = surface();
-        rasterProps(c, job.model, scale, pre.lookup, job.look.clearColor);
+        bitmap = drawn(draw, () => {
+          rasterProps(surface(), job.model, scale, pre.lookup, job.look.clearColor);
+          return take();
+        });
       } finally {
         pre.release();
       }
     }
-    const bitmap = scene ? scene.base : take();
     const cueIndex = job.kind === 'slide' ? job.cueIndex : job.kind === 'image' ? job.cueIndex : undefined;
     const msg: AssetToRender = {
       t: 'content',
@@ -289,12 +338,17 @@ async function run(job: AssetJob): Promise<void> {
       throw new UnavailableError('render port not connected');
     }
     port.postMessage(msg, scene?.over ? [bitmap, scene.over] : [bitmap]);
+    const ms = performance.now() - t0;
+    // Probed after the picture is sent, so a character seen for the first time never delays it.
+    const uncovered = draw.text ? coverage.misses(draw.text, MAX_UNCOVERED) : '';
     post({
       t: 'done',
       layer: job.layer,
       key: job.key,
-      ms: performance.now() - t0,
+      ms,
+      rasterMs: Math.round(draw.ms * 100) / 100,
       fontFallbacks: fontFallbacks(job),
+      uncovered: uncovered || undefined,
       skippedImages: skipped || undefined,
       missingImages: missing.length ? missing : undefined,
     });

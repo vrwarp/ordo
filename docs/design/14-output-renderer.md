@@ -243,7 +243,12 @@ Arm sequence for a cue (asset worker, then render worker):
 6. Report `output.armed { ok: true }`. Any failure reports `ok: false` with the error
    and the previous live stack stays.
 
-Memory bound: at most two stacks per layer, and one playing plus one armed video.
+Memory bound: two stacks per layer (live and armed) plus a one-deep queue for content that
+arrives while the armed stack is busy (the outgoing side of a fade, or the target of a flip
+not yet due; the latest wins), so at most three pictures per layer, six for scenes (base and
+over). The host keeps six media elements (two background, two media, two audio slots); the
+renderer presents at most `MAX_VIDEO_SLOTS` (4) video slots, two newest frames each
+(`FrameRing`).
 
 ## Video playback
 
@@ -267,8 +272,11 @@ Memory bound: at most two stacks per layer, and one playing plus one armed video
   ([design/18](18-audio-engine.md)); other outputs mute their copies.
 - Looping uses the `loop` attribute; `ended` on a non-looping cue sends `media.ended` to
   the hub (audio master only), and the look's `onEnd` rule applies.
-- Alpha video (VP9 WebM with alpha) comes through the same path; Chrome supplies the
-  alpha plane in the external texture.
+- Alpha video (VP9 WebM with alpha) comes through the same path: the full-frame video
+  shader weights by the external texture's alpha. External textures may not keep alpha on
+  every GPU (design/27 §7.2), which is why a video in a slide's box never relies on it (a
+  "video present" bit decides) and why an alpha clip is checked by eye on each venue GPU
+  ("Measuring on venue machines"); where alpha is dropped the clip covers the layers under it.
 
 ## Text
 
@@ -383,7 +391,7 @@ the main look. `planFrame`/`planPreview` carry clamped copies (memoised by ident
 re-applies the cheap clamps and culls lines far outside the canvas. The asset worker bounds the decoded
 image bytes per cue (192 MiB) and reports text in a font family that is not loaded
 (`health.fontFallbacks`; run, bullet and fallback fonts count, and so does Inter, which ships like any
-other face). Property tests (`plan.fuzz.test.ts`) feed random slides and looks within and
+other face) and characters no face it has covers (`health.fontCoverage`, "Health message"). Property tests (`plan.fuzz.test.ts`) feed random slides and looks within and
 far beyond the clamps: never throws, output within bounds.
 
 Arm failures are classified (review 2026-11-04 item 3). A deterministic failure (the image does not
@@ -421,10 +429,105 @@ download disagrees with the manifest's size is kept once and its size remembered
 
 ## Health message
 
+The link worker assembles a `health` report once a second (`buildHealth`, `packages/renderer/src/health.ts`,
+and `LinkCore.buildHealth`); the hub keeps the latest per output and fans it out as `health.summary`
+(ADR 0013). Every field is in `OutputHealth` (`packages/protocol/src/index.ts`):
+
 ```ts
-{ t: 'health', presented, missed, longTasks, lateFlips, armed, live, cache: { ready, total }, gpuLost, videoDropped }
+{ t: 'health', presented, missed, longTasks, lateFlips, armed, armedOk, armError, live, cache: { ready, total },
+  gpuLost, videoDropped, fps, audio, meters, mediaPositionMs, mediaDurationMs, error, appVersion, bus,
+  recentLog, compositor, gpuMB, rasterMs: { n, p50, p95, max }, uploadMs,
+  budgets: { rasterP95Ms, uploadMs, gpuMB }, alarms, mainThreadStallMs, workers, quarantined,
+  fontFallbacks, fontCoverage: { chars, count, scripts }, cacheRepairs, busTransport }
 ```
 
-`videoDropped` comes from `video.getVideoPlaybackQuality().droppedVideoFrames`. Additive fields:
-`mainThreadStallMs`, `workers [{name, generation, restarts, lastReason, gaveUp}]`, `quarantined
-{count, items}`, `fontFallbacks`, `cacheRepairs`, `busTransport` ('port' | 'window').
+`videoDropped` comes from `video.getVideoPlaybackQuality().droppedVideoFrames`, `mainThreadStallMs` from the
+link's watchdog ticks, `workers [{name, generation, restarts, lastReason, gaveUp}]` from the supervisor,
+`quarantined {count, items}` from the error budgets, `busTransport` ('port' | 'window') from the fallback
+bus.
+
+**Performance (design/27 §13, M7).** Measured where the work happens, checked against the budgets of the
+output's size:
+
+| Field | Measured | Budget (`perfBudgets`) |
+|---|---|---|
+| `rasterMs` | p50, p95 and max of the asset worker's slide draws over the last 64 slides (`done.rasterMs`: the job's synchronous draw on the worker's thread, from the surface to the picture taken, pictures prepared; `done.ms`, the whole job with its reads and decodes, from a worker that does not report it). Props, lower thirds and image cues do not count. | p95 ≤ 10 ms at 1080p and below, 30 ms at 4K, by pixel count between |
+| `uploadMs` | the render worker's telemetry `uploadMs`: its CPU time in texture uploads, the longest frame of its last uploading frames, as the WebGPU compositor measures it (absent on Canvas 2D, which uploads nothing, and from a compositor that does not measure it) | ≤ 4 ms per frame |
+| `gpuMB` | the compositor's layer and scene textures (WebGPU only; since M5) | 400 MB at 4K (five layers of two textures and the two over textures), by pixel count to the next MB: 100 at 1080p |
+
+`budgets` carries the three for the output's size; the output computes them because only it knows its size.
+`alarms` lists the budgets passed now: `gpuMemory`, `raster` (only once 20 slides were drawn: the first
+draws pay for compiling and cold caches) and `upload`. They are plain strings, so an alarm a newer output adds
+never fails an older hub's parse of the whole report. An alarm that starts or ends writes a line to the
+window's log (`recentLog`), with the figures: `performance alarm at 3840x2160: GPU memory 412 MB is over the
+400 MB budget`.
+
+**Fonts.** `fontFallbacks` are families drawn text asked for that are not loaded (drawn in the fallback
+font). `fontCoverage` are characters drawn this service that no face the output has covers, so the
+machine's own fallback face drew them (another shape on every computer, or a box), with how many there are
+and their scripts (ISO 15924; Zsye emoji, Zyyy symbols). The asset worker wraps its surface's `fillText` and
+`strokeText` (`GlyphCoverage.instrument`, `packages/renderer/src/text/coverage.ts`), so the drawers are
+unchanged, and after each job's picture is sent probes each new character once per stack, style and weight:
+measured with the stack's shipped faces (the resolver's internal names) before `serif` and before
+`monospace`, and with each generic alone; where no shipped face has the glyph both stacks fall through and
+equal their generic exactly (advance and ink box). `self.fonts.check` cannot tell: it says whether faces have
+loaded, not whether one has the glyph. Text whose family is not loaded is a font fallback and is not probed
+glyph by glyph. Verdicts are kept until the faces change; a face that loads draws again in place the held
+slides that had uncovered characters, as for a fallback family. Each new character is logged once per service
+with its code point (`no font on this output has 1 character(s) of sl|…: ☧ (U+2627; Zyyy)`).
+`coverage.browser.test.ts` draws legacy and rich text with DejaVu Sans in a worker of headless Chromium and
+requires exactly DejaVu's missing characters, whatever fonts the machine has.
+
+**In the operator** (`apps/operator/src/lib/health.ts`, `outputIssues`). A missing font, characters without a
+font and each alarm make the output's dot in the top bar amber, its tooltip says what it means in plain words,
+and a "things to check on the screens" tag opens Diagnostics. Each issue has a label for the volunteer at the
+desk (what the audience may notice and whom to tell, no figures: "The graphics card of this screen is nearly
+out of memory. Tell the tech team.") and a detail for the tech, with the figures and the budget ("GPU memory
+412 MB, budget 400 MB for this output's size"). Diagnostics has a "Performance and fonts" table per output:
+slide drawing p50 / p95, upload per frame and GPU memory against their budgets (amber when over), the fonts,
+and the issues with their details. The output's own diagnostics overlay (Ctrl+Shift+D) shows the same
+figures.
+
+### Measuring on venue machines
+
+The container this is built in has no GPU: WebGPU runs on SwiftShader, which checks correctness (the
+compositor golden, the e2e specs) but measures the CPU. Real figures come from the venue's machines, measured
+with their own Chrome:
+
+1. On the machine (the Windows 11 presentation PC with its iGPU; a PC with a discrete GPU; a Mac): Node 22
+   and pnpm, a checkout, `pnpm install`, Google Chrome installed. Mains power, other programs closed, the
+   venue display connected at its native resolution.
+2. From the checkout: `pnpm --filter @ordo/renderer bench:venue` (Chrome visible on that display; on Linux
+   add `--channel chrome`). It records the machine (OS, CPU, memory, Chrome, display and refresh), the WebGPU
+   adapter (vendor, architecture, whether it is a software fallback, timestamp queries), a full-frame upload
+   at 1080p and 4K (CPU ms of the call, ms until the GPU has done it), five full-frame layers composed in one
+   pass (GPU ms, timestamp queries) and the asset worker's slide raster on this CPU per slide kind
+   (`bench:slides`: sermon text over a photo, a lyric with a shadow, a table, a scene slide, p50/p95 at 1080p
+   and 4K), and says which figures are over their budgets.
+3. Results go to two places: the JSON it writes (`venue-results/<host>-<date>.json`; commit it as
+   `docs/measurements/venue/<machine>-<date>.json`), and the table below, one row per machine, pasted from
+   the line it prints at the end. Measure once at the start of a service day and once after an hour of a
+   running service (thermal state), and again after a Chrome or driver update.
+4. During a rehearsal, read the operator's Diagnostics "Performance and fonts" table (or download the
+   operator log, which carries every output's health): the live `rasterMs`, `uploadMs` and `gpuMB` of the
+   real outputs, and any alarm.
+
+The upload figure is one full-frame copy, the worst case: the render worker uploads armed content in strips
+within its per-frame budget. An alpha video should be checked by eye on each venue GPU (external textures may
+not keep alpha, design/27 §7.2).
+
+| Machine | GPU | Slide raster p50 / p95 ms at 1080p: photo, lyric, table, scene; at 4K: the same | Upload done p50 1080p / 4K | Compose 5 layers 4K (GPU) |
+|---|---|---|---|---|
+| (venue PC, to be measured) | | | | |
+
+Measured in this container (2026-11-06, Chromium 153 headless, 4 shared cores, CPU canvas; `bench:venue
+--swiftshader`, so the GPU columns are SwiftShader's CPU and are not venue figures):
+
+| Machine | GPU | Slide raster p50 / p95 ms at 1080p: photo, lyric, table, scene; at 4K: the same | Upload done p50 1080p / 4K | Compose 5 layers 4K |
+|---|---|---|---|---|
+| container, Xeon 2.3 GHz, 4 threads | SwiftShader (CPU) | 5.2 / 6.1, 11.6 / 15.1, 4.4 / 5.1, 8.8 / 8.9; 18.3 / 18.8, 38.5 / 39.1, 13.8 / 15.1, 39.0 / 43.6 | 62.7 / 250.6 (CPU) | 162 (CPU) |
+
+Read there: the lyric with a shadow and the scene (two full-frame pictures, a title with a shadow) are over
+their p95 budgets on this software canvas at 1080p and 4K, and text over a photo at 4K is over the M7 exit's
+12 ms (the photo's 1:1 copy and the text, full-frame); the table is within budget at both sizes. These are the
+full-frame draws of this tree; tight sprites (design/27 §7.3) shrink the lyric and the title draws.

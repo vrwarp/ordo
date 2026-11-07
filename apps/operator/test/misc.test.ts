@@ -5,7 +5,7 @@ import { keyFace } from '@ordo/surfaces';
 import { type Media, type Presentation, type SlideObject, parseLyrics, songFromParsed } from '@ordo/domain';
 import { DoublePressGuard } from '../src/lib/confirm.ts';
 import { allowedForRole, parseRoute, routeHash } from '../src/lib/route.ts';
-import { armDot, cacheSummary, outputDot } from '../src/lib/health.ts';
+import { armDot, cacheSummary, dotTitle, outputDot, outputIssues, rasterText } from '../src/lib/health.ts';
 import { deckView } from '../src/lib/deckView.ts';
 import { applyLibraryDelta, type LibraryData } from '../src/lib/libraryData.ts';
 import { swSource } from '../src/sw/template.ts';
@@ -64,6 +64,59 @@ describe('health dots', () => {
     expect(armDot(entry({ armed: 1 }), 2, s)).toBe('amber');
     expect(armDot(entry({ connected: false }), 2, s)).toBe('grey');
     expect(cacheSummary([entry({ cache: { ready: 2, total: 4 } })], { ready: 3, total: 4 }).frac).toBe(0.5);
+  });
+});
+
+describe('things to check on an output (design/27 §13, M7)', () => {
+  const perf = {
+    compositor: 'webgpu' as const,
+    gpuMB: 412.4,
+    uploadMs: 5.1,
+    rasterMs: { n: 40, p50: 12, p95: 34, max: 60 },
+    budgets: { rasterP95Ms: 30, uploadMs: 4, gpuMB: 400 },
+  };
+
+  it('none on a healthy output, and the dot stays green', () => {
+    expect(outputIssues(entry({ ...perf, gpuMB: 300, alarms: undefined }))).toEqual([]);
+    expect(outputDot(entry({ ...perf, gpuMB: 300 }))).toBe('green');
+    expect(outputIssues(entry({ connected: false, fontFallbacks: ['calibri'] }))).toEqual([]);
+  });
+
+  it('says in plain words what an alarm means, with the figures in the detail', () => {
+    const issues = outputIssues(entry({ ...perf, alarms: ['gpuMemory', 'raster', 'upload', 'later'] }));
+    expect(issues.map((i) => i.id)).toEqual(['gpuMemory', 'raster', 'upload']);
+    for (const i of issues) {
+      // No figures, units or jargon for the volunteer at the desk.
+      expect(i.label).not.toMatch(/\d|ms\b|MB|p95|GPU|raster|texture/);
+      expect(i.detail.length).toBeGreaterThan(20);
+    }
+    expect(issues[0]!.detail).toMatch(/GPU memory 412.4 MB, budget 400 MB/);
+    expect(issues[1]!.detail).toMatch(/p50 12 ms, p95 34 ms over the last 40 slides; budget p95 30 ms/);
+    expect(issues[2]!.detail).toMatch(/up to 5.1 ms in one frame; budget 4 ms/);
+    expect(outputDot(entry({ ...perf, alarms: ['gpuMemory'] }))).toBe('amber');
+    expect(dotTitle(entry({ ...perf, alarms: ['gpuMemory'] }), 'Audience 1')).toMatch(/nearly out of memory/);
+  });
+
+  it('reports missing fonts and characters no font has', () => {
+    const issues = outputIssues(
+      entry({
+        fontFallbacks: ['calibri', 'aptos'],
+        fontCoverage: { chars: '☧中', count: 3, scripts: ['Hani', 'Zyyy'] },
+      }),
+    );
+    expect(issues.map((i) => i.id)).toEqual(['fontMissing', 'fontCoverage']);
+    expect(issues[0]!.detail).toMatch(/Not loaded here: calibri, aptos/);
+    expect(issues[1]!.detail).toMatch(
+      /3 characters no font of this output has: ☧ 中 … \(scripts Hani, Zyyy\)/,
+    );
+    expect(outputDot(entry({ fontFallbacks: ['calibri'] }))).toBe('amber');
+    // A red state stays red.
+    expect(outputDot(entry({ fontFallbacks: ['calibri'], error: 'decode failed' }))).toBe('red');
+  });
+
+  it('formats slide drawing times', () => {
+    expect(rasterText(entry(perf))).toBe('12 / 34 ms');
+    expect(rasterText(entry())).toBe('—');
   });
 });
 

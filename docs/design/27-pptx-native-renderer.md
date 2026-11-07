@@ -962,6 +962,7 @@ A scene is several draws, so it is composed at full alpha before it is weighted:
   5. a generic family.
 - The legacy `fontString` uses the same resolver when one is installed.
 - The asset worker reports text that no shipped face covers in `health.fontFallbacks`, with its script (M3, with the script fallbacks). `self.fonts.check` cannot do it: it says whether the matching faces have loaded, not whether one has the glyphs. The text is measured with the shipped stack before two different generic families instead; the widths differ where a glyph falls through.
+  - *As built (M7 wave 1, item C):* reported as `health.fontCoverage` (`chars`, `count`, `scripts`), not in `fontFallbacks`, which keeps the families that are not loaded. `GlyphCoverage` (`packages/renderer/src/text/coverage.ts`) wraps the asset worker's surface's `fillText` and `strokeText`, so the drawers are unchanged, and probes each new character once per stack, style and weight after the job's picture is sent: the stack's shipped faces (the resolver's internal names) before `serif` and before `monospace`, against each generic alone, comparing the advance and the ink box (every CJK glyph is 1 em wide, so widths alone would not tell two CJK faces apart). A face that matches one generic's metrics exactly (the same file) is told apart by the other. Verdicts are kept until the faces change; a face that loads draws again the held slides that had uncovered characters. Design/14 "Health message".
 - Remove `'inter'` from `FALLBACK_FAMILIES` (`raster.ts:139-148`) and bundle Inter, so the default font is shipped like any other.
 
 *As built (M2, `packages/renderer/src/text/fonts.ts`):*
@@ -1208,13 +1209,13 @@ The current JSZip text path takes 1.17 s per 100 slides.
 | Picture preparation | ≤ 1.5 s per 24 MP photo on the NAS; prepared pictures ≤ 8,192 px and ≤ 40 MP | M3 e2e |
 | LibreOffice work | proportional to the slides that need it; one soffice run per import (art slides counted twice as pages) | job log |
 | JSON sizes | per §3.4 | importer, tests |
-| Asset worker slide raster p95 | ≤ 10 ms at 1080p, ≤ 30 ms at 4K; after M7 ≤ 12 ms at 4K for text over photo | bench, health `rasterMs` (today `done.ms` is unread, `messages.ts:136`) |
+| Asset worker slide raster p95 | ≤ 10 ms at 1080p, ≤ 30 ms at 4K; after M7 ≤ 12 ms at 4K for text over photo | `bench:slides` (four slide kinds, `--check`), health `rasterMs` p50/p95 over the last 64 slides with the `raster` alarm (M7) |
 | Longest asset-worker task | ≤ 50 ms; props flip never > 1 frame late during a slide decode (M7) | health long tasks |
 | Rich layout | ≤ 1 ms warm, ≤ 5 ms cold per 400 characters; autofit ≤ 12 layouts | unit bench |
 | Render worker | zero missed vsync; no task ≥ 50 ms; nothing allocates or compiles on GO; static slides add 0 draws; in-slide video adds 1 external texture + 1 bind group per frame, same single pass per layer | hot-lint, soak, e2e |
-| Uploads | ≤ 4 ms per frame at 4K on the reference venue GPU (M7) | health `uploadMs` |
-| GPU memory at 4K | static slides +0; +66 MB only once a scene needs `over`; total ≤ 400 MB (5 layers: 331.8 MB of layer textures + 66.4 MB of over = 398.2 MB) | health `gpuMB` (reported since M5: layer and over textures; the alarm on the budget is M7) |
-| GPU time per frame | ≤ 4 ms at 4K on a venue iGPU (timestamp-query where available) | M7 measurement |
+| Uploads | ≤ 4 ms per frame at 4K on the reference venue GPU (M7) | health `uploadMs` with the `upload` alarm (M7); `bench:venue` on the venue machine |
+| GPU memory at 4K | static slides +0; +66 MB only once a scene needs `over`; total ≤ 400 MB (5 layers: 331.8 MB of layer textures + 66.4 MB of over = 398.2 MB) | health `gpuMB` (reported since M5: layer and over textures) with the `gpuMemory` alarm past the budget for the output's size (M7: 400 MB at 4K, by pixel count, 100 MB at 1080p) |
+| GPU time per frame | ≤ 4 ms at 4K on a venue iGPU (timestamp-query where available) | M7 measurement (`bench:venue`: five full-frame layers in one pass, timestamp queries) |
 | Editor | rich box re-layout + redraw ≤ 8 ms for 1,000 characters; thumbnail ≤ 15 ms at 640 px; opening a 17-slide sermon deck decodes no picture larger than its prepared size | unit bench, M4 e2e |
 | Sync | in-slide video start skew within design/23 bounds (17 ms real GPU, 100 ms SwiftShader) | e2e |
 
@@ -1728,6 +1729,11 @@ Also:
 - ∥ venue GPU measurements;
 - ∥ art fragments;
 - ∥ docs refresh.
+
+**As built, wave 1 item C (health and measurement).**
+- Health: `rasterMs` p50/p95/max of slide draws (the asset worker's `done.rasterMs`, the synchronous draw), `uploadMs` (the render worker's telemetry), `budgets` for the output's size and `alarms` (`gpuMemory`, `raster`, `upload`), and `fontCoverage` (§10). Budgets and alarms are computed by the output (`perfBudgets`, `perfAlarms` in `packages/renderer/src/health.ts`); an alarm that starts or ends is logged with its figures.
+- Operator: an amber dot and a "things to check on the screens" tag, each issue in plain words for volunteers with its figures for techs, and a "Performance and fonts" table in Diagnostics (design/14 "Health message").
+- Measurement: `bench:slides` (sermon text over a photo, a lyric with a shadow, a table, a scene; p50/p95 per kind at 1080p and 4K; headless in CI, `--check` against the budgets) and `bench:venue` for the venue machines (machine, display, WebGPU adapter, a full-frame upload, five layers composed with timestamp queries, and the slide raster on that CPU), with the procedure and the results table in design/14 "Measuring on venue machines". In this container (software canvas, full-frame draws) text over a photo is 18.3 ms p50 at 4K, over the 12 ms exit; the GPU exits await the venue machines.
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)
 

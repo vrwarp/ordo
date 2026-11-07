@@ -21,3 +21,5 @@ export {
 } from './fonts.ts';
 export { WidthCache, canvasMeasurer, measurerFor } from './measure.ts';
 export { firstStrong, hasStrongRtl } from './bidi.ts';
+export type { CoverageLimits, DrawnText, GlyphMetrics, ShippedStack, TextContext } from './coverage.ts';
+export { GlyphCoverage, contextMetrics, coverageScripts, shippedStack } from './coverage.ts';
