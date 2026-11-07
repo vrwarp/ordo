@@ -176,9 +176,9 @@ by 0.014). Tier means with both: T1 0.945, T2 0.846, T3 0.873. The sermon decks 
 A table (`a:tbl` in a `p:graphicFrame`, design/27 §15 M6, §11 "Mapping") becomes one editable rich
 `TextObject` per cell (role `cell`) over locked grid shapes (role `grid`: the table's background, the cell
 fills, the lines), all sharing the table's `origin.group` (the top-level group's when the table is nested).
-Only today's shape fields are written (solid fills, a gradient's first stop; lines as `line` shapes, dashed
-ones solid), so an older build draws the table as this one does. IR: `TableElement` (`ir.ts`); the walk
-reads it through `readTable`, `emit.ts` writes it through `emitTable`.
+Fills are solid (a gradient's first stop) and lines solid (dashes noted). Since fidelity round 2 the fills
+and lines are one geometry object per fill and per line look (below); the background is one rect. IR:
+`TableElement` (`ir.ts`); the walk reads it through `readTable`, `emit.ts` writes it through `emitTable`.
 - **Residual.** A table with vertical cell text stays a `ResidualElement` ('table'): LibreOffice draws it
   into the art; one of more than `MAX_TABLE_GRID` (4,096) grid cells is not read at all. No count of cells
   decides otherwise but the slide's object budget: a table of more drawn cells (a merge counts once, the
@@ -208,7 +208,7 @@ reads it through `readTable`, `emit.ts` writes it through `emitTable`.
 - **Lines.** A cell's `a:lnL`/`a:lnR`/`a:lnT`/`a:lnB` override the style's line property by property (as
   LibreOffice merges them); where two cells give a shared edge different lines the wider wins, the upper or
   left one on a tie, a line beats none (LibreOffice's `TableLayouter`). No line inside a merge. Consecutive
-  pieces of one look are one object, stretched over the lines they meet so corners close. Diagonal lines are
+  pieces of one look are one run, stretched over the lines they meet so corners close. Diagonal lines are
   not drawn (noted, the table approx, reason `tableDiagonal`).
 - **Cells.** Margins `marL`/`marR` (91,440) and `marT`/`marB` (45,720 EMU) become the text's `insets`,
   `anchor` its `valign`; the text wraps and shrinks to fit (`autofit: 'shrink'`, no stored scale) when the
@@ -362,6 +362,54 @@ over the object budget (the art's text then holds their cells). The suite's tabl
 
 Tests: `tables.test.ts` (a 90-cell table native within the budget and in the art past it, a table of more
 cells than the budget left unmeasured, merges counted once against the cap).
+
+### Fidelity round 2: one grid object per fill and per line look (`tables.ts` `gridObjects`)
+
+Each line run and each fill run was a locked object of its own, 25 to 84 per chart table, and
+`TableElement.objects` counted them all, so a slide of two or three chart tables passed the 150 objects of
+design/27 §5 and `fitTables` sent its largest table to the art (`budget:table`), though its grid drew in
+2-8 distinct looks. Now (`gridObjects`, shared by `readTable`'s count and `emitTable`):
+- **Lines.** The runs of one look (width, fill, dash) are one locked `ShapeObject` whose `geom.paths` hold
+  each run as an open `M x0 y0 L x1 y1` sub-path in the table box's own space (unturned, from its top
+  left; three decimals), ends stretched by half the widest line they meet as before, `fill: 'none'`,
+  stroked with the look's width and colour (flat caps, so each sub-path is the line it was). When a table's
+  lines have more than one look they are also split by direction, horizontal ones first, so every vertical
+  line is still drawn over the horizontal ones it crosses, as when they were drawn in that order one by one.
+  Two collinear runs of different looks meeting over a crossing line overlap where both are stretched;
+  there the look drawn later now covers the other (a few pixels; before, the lower or right run did).
+- **Fills.** The fill runs of one fill (`fillRuns`: neighbours of a row joined) are one object of rect
+  sub-paths (`stroke: false`), in the box of their bounds turned as the table is. Runs of one fill never
+  overlap in a well-formed table; where spans of a malformed one do, the overlapping run goes in a path of
+  its own, so the even-odd fill never cuts one out of the other. The table background stays one rect.
+- **Bounds.** A stored path holds at most `GRID_LINES_PER_PATH` lines or `GRID_RECTS_PER_PATH` rects (the
+  4,096 points and 40,000 characters of `ShapeGeom` at the widest coordinate written, ±999,999.999), the
+  pieces of one group chained with `cont`; past 8 paths a group goes on in another object.
+- **Cost.** `TableElement.objects` is the background, the fill objects, the line objects and the cells.
+  The slide JSON shrinks too (the 2 Corinthians chart's slide: 117 objects and 60 KB → 54 and 45 KB).
+- **Older builds** strip `geom` and draw the legacy shape: a line look as the table's outline rect in that
+  line (no fill), a fill as the rect of its runs' bounds (the larger first, so headers and first columns
+  stay over the bands).
+- **Drawing.** Drawn one sub-path at a time a look's object is the legacy line objects pixel for pixel
+  (`tables.browser.test.ts`, headless Chromium, flat and turned tables at 0.5, 1 and 2 × 1920). Stroked
+  together as one path, Skia rasterises a path rather than each lone segment's rect: edge pixels move by at
+  most 12 of 255 and the ink stays within 1 %; where runs of one object cross (a one-look table), an edge
+  pixel both covered is no longer composited twice (up to a quarter less ink there).
+
+Measured (`--engine native --lo-compat` against round 1's merge, LibreOffice 24.2 pictures; the 30 table
+decks): tables 0.749 → 0.766, tableMerge (14) 0.627 → 0.643; three slides change by more than 0.002, all
+up, none down: moral-character 0.590 → 0.872 (two 60-cell tables: 173 objects drawn natively before, 125
+now), colossians 0.434 → 0.601 (three tables, 163 → 111), 1000-years 0.566 → 0.631 (four tables, 191 →
+115); every other slide within 0.0003. Worship shard 0 (924 slides, the same three among them): 0.9062 →
+0.9068, deck mean 0.865 → 0.871, none down. The sermon decks (0.955) and the suite's tables-charts-smartart
+decks (0.936) do not change; one suite slide turns hybrid → native.
+Moral-character and 1000-years are now picture class in the hub, as colossians already was: with every
+table native their cells' text formatting passes 64 KB (the cap waits on `fitTables` budgeting text). The
+two Boletim tables (87 and 96 cells) stay residual for `MAX_TABLE_CELLS`; with the cap lifted they would
+cost 146 and 153 objects (63 and 69 grid objects before).
+
+Tests: `tables.test.ts` (one object per look, its sub-paths read back by the renderer, the legacy outline,
+looks split by direction, fills by fill and their legacy boxes, a turned table, two checkered chart
+tables native, `gridObjects` bounds and chains, overlapping runs), `tables.browser.test.ts` (pixels).
 
 ## M6 wave 2, item D: SmartArt and baked pictures (`smartart.ts`, `bake.ts`)
 

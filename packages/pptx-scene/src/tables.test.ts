@@ -1,10 +1,22 @@
-import { type ShapeObject, Slide, type TextObject } from '@ordo/domain';
+import { parsePathData, type Rgba, type ShapeObject, Slide, type TextObject } from '@ordo/domain';
+import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
+import { CMD_MOVE, GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
+import { storedGeometry } from '@ordo/renderer/geom/stored.ts';
 import { describe, expect, it } from 'vitest';
-import type { TableElement } from './ir.ts';
-import type { FaceSource } from './metrics.ts';
 import { MAX_SLIDE_OBJECTS } from './classify.ts';
+import { MAX_PATH_CHARS } from './geom.ts';
 import { convertDeck, parseDeck } from './index.ts';
-import { loAscent, loLineHeight, MAX_TABLE_CELLS, MAX_TABLE_GRID } from './tables.ts';
+import type { Line, TableCell, TableElement, TableLine } from './ir.ts';
+import type { FaceSource } from './metrics.ts';
+import {
+  GRID_LINES_PER_PATH,
+  GRID_RECTS_PER_PATH,
+  gridObjects,
+  loAscent,
+  loLineHeight,
+  MAX_TABLE_CELLS,
+  MAX_TABLE_GRID,
+} from './tables.ts';
 import { PREDEFINED_TABLE_STYLE_IDS, predefinedTableStyle } from './tablestyles.ts';
 import {
   body,
@@ -32,6 +44,73 @@ type Table = Parameters<typeof tableFrame>[0];
 const table = (o: Partial<Table> & Pick<Table, 'cols' | 'rows'>): string =>
   tableFrame({ id: 7, x: IN, y: IN, ...o });
 
+/** A grid object's box-space point in slide px. */
+function toPage(o: ShapeObject, u: number, v: number): [number, number] {
+  const b = o.box;
+  const t = (b.rotation * Math.PI) / 180;
+  const du = u - b.w / 2;
+  const dv = v - b.h / 2;
+  return [
+    b.x + b.w / 2 + du * Math.cos(t) - dv * Math.sin(t),
+    b.y + b.h / 2 + du * Math.sin(t) + dv * Math.cos(t),
+  ];
+}
+
+/** A grid object's sub-paths (`M` and `L` points only, as the converter writes them) in slide px. */
+function subPaths(o: ShapeObject): [number, number][][] {
+  const out: [number, number][][] = [];
+  for (const p of o.geom?.paths ?? []) {
+    const sx = p.w > 0 ? o.box.w / p.w : 1;
+    const sy = p.h > 0 ? o.box.h / p.h : 1;
+    const t = p.d.split(' ');
+    for (let i = 0; i < t.length; ) {
+      const c = t[i++];
+      if (c === 'M') out.push([]);
+      if (c === 'M' || c === 'L')
+        out[out.length - 1]!.push(toPage(o, Number(t[i++]) * sx, Number(t[i++]) * sy));
+    }
+  }
+  return out;
+}
+
+/** A table's line as drawn: one sub-path of a line object, in slide px. */
+interface Seg {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  width: number;
+  color: Rgba;
+}
+/** A table's fill rect as drawn (unturned tables): the background, or one rect sub-path of a fill object. */
+interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  fill: Rgba;
+}
+
+const segmentsOf = (o: ShapeObject): Seg[] =>
+  subPaths(o).map(([a, b]) => ({
+    x0: a![0],
+    y0: a![1],
+    x1: b![0],
+    y1: b![1],
+    width: o.stroke!.width,
+    color: o.stroke!.color,
+  }));
+const rectsOf = (o: ShapeObject): Rect[] =>
+  o.geom
+    ? subPaths(o).map((pts) => {
+        const xs = pts.map((q) => q[0]);
+        const ys = pts.map((q) => q[1]);
+        const x = Math.min(...xs);
+        const y = Math.min(...ys);
+        return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y, fill: o.fill! };
+      })
+    : [{ x: o.box.x, y: o.box.y, w: o.box.w, h: o.box.h, fill: o.fill! }];
+
 /** Convert one slide; it must be an ordinary ordo slide. */
 function convert(
   shapes: string,
@@ -46,16 +125,24 @@ function convert(
   const s = out.slides[0]!;
   expect(Slide.parse(s.slide)).toEqual(s.slide);
   const objects = s.slide.objects.slice(1); // the background first
+  const shapes_ = objects.filter((o): o is ShapeObject => o.type === 'shape');
+  const lineObjects = shapes_.filter((o) => o.stroke);
+  const fillObjects = shapes_.filter((o) => o.fill);
   return {
     s,
     objects,
     texts: objects.filter((o): o is TextObject => o.type === 'text'),
-    rects: objects.filter((o): o is ShapeObject => o.type === 'shape' && o.shape === 'rect'),
-    lines: objects.filter((o): o is ShapeObject => o.type === 'shape' && o.shape === 'line'),
+    lineObjects,
+    fillObjects,
+    /** Every fill rect: the background's, then each fill object's runs. */
+    rects: fillObjects.flatMap(rectsOf),
+    /** Every line run. */
+    lines: lineObjects.flatMap(segmentsOf),
   };
 }
 
 const close = (a: number, b: number, d = 0.01) => Math.abs(a - b) <= d;
+const r6 = (v: number) => Math.round(v * 1e6) / 1e6;
 const rgb = (o: { fill?: { r: number; g: number; b: number } }) => o.fill && [o.fill.r, o.fill.g, o.fill.b];
 
 describe('tables: grid, cells and objects', () => {
@@ -138,16 +225,13 @@ describe('tables: merges', () => {
     expect(texts[4]!.box).toMatchObject({ x: 3 * PX, y: 1.5 * PX, w: PX, h: PX });
     // The column edge between the merged cells has no line in the first row; the row edge under "tall"
     // has none in the last column.
-    const vertical = lines.filter((l) => l.box.rotation === 90);
-    const atX = (x: number) => vertical.filter((l) => close(l.box.x + l.box.w / 2, x, 0.5));
-    const span = (l: ShapeObject) => [
-      l.box.y + l.box.h / 2 - l.box.w / 2,
-      l.box.y + l.box.h / 2 + l.box.w / 2,
-    ];
-    expect(atX(2 * PX).map(span)).toEqual([[1.5 * PX - 1, 2.5 * PX + 1]]); // rows 2 and 3 only, stretched 1 px
-    const horizontal = lines.filter((l) => l.box.rotation === 0);
-    const atY = (y: number) => horizontal.filter((l) => close(l.box.y, y, 0.5));
-    expect(atY(2 * PX).map((l) => [l.box.x, l.box.x + l.box.w])).toEqual([[PX - 1, 3 * PX + 1]]);
+    const vertical = lines.filter((l) => close(l.x0, l.x1));
+    const atX = (x: number) => vertical.filter((l) => close(l.x0, x, 0.5));
+    // Rows 2 and 3 only, stretched 1 px.
+    expect(atX(2 * PX).map((l) => [r6(l.y0), r6(l.y1)])).toEqual([[1.5 * PX - 1, 2.5 * PX + 1]]);
+    const horizontal = lines.filter((l) => close(l.y0, l.y1));
+    const atY = (y: number) => horizontal.filter((l) => close(l.y0, y, 0.5));
+    expect(atY(2 * PX).map((l) => [r6(l.x0), r6(l.x1)])).toEqual([[PX - 1, 3 * PX + 1]]);
   });
 
   it('cuts spans at the grid and ignores cells past it', () => {
@@ -178,21 +262,24 @@ describe('tables: styles', () => {
     `<a:tblPr ${attrs}><a:tableStyleId>${id}</a:tableStyleId></a:tblPr>`;
 
   it("applies the deck's style: first row, bands and the whole table, rows joined into one rect", () => {
-    const { texts, rects, lines } = convert(
+    const { texts, rects, lines, fillObjects } = convert(
       table({ cols: [IN, IN], rows: rows(4), tblPr: tblPr('firstRow="1" bandRow="1"') }),
       {
         styles: style,
       },
     );
     // One rect per row (two cells of the same fill join): header accent1, band1H, the whole table's, band1H.
-    expect(rects.map(rgb)).toEqual([[68, 114, 196], [170, 187, 204], rgb(rects[2]!), [170, 187, 204]]);
-    expect(rects[2]!.fill).not.toEqual(rects[0]!.fill);
-    expect(rects.every((r) => close(r.box.w, 2 * PX))).toBe(true);
+    const byRow = [...rects].sort((a, b) => a.y - b.y);
+    expect(byRow.map(rgb)).toEqual([[68, 114, 196], [170, 187, 204], rgb(byRow[2]!), [170, 187, 204]]);
+    expect(byRow[2]!.fill).not.toEqual(byRow[0]!.fill);
+    expect(byRow.every((r) => close(r.w, 2 * PX) && close(r.h, PX / 2))).toBe(true);
+    // One object per fill, the one whose runs span the most first: band1H (rows 2 and 4), then the others.
+    expect(fillObjects.map(rgb)).toEqual([[170, 187, 204], [68, 114, 196], rgb(byRow[2]!)]);
     // Header text bold and white, body text dark (wholeTbl's dk1), the run's own properties untouched.
     expect(texts[0]!.style).toMatchObject({ fontWeight: 700, color: { r: 255, g: 255, b: 255 } });
     expect(texts[2]!.style).toMatchObject({ fontWeight: 400, color: { r: 0, g: 0, b: 0 } });
     // insideH between rows, the header's 3 pt bottom line wider than it.
-    const widths = lines.map((l) => [Math.round(l.box.y), l.stroke!.width]);
+    const widths = [...lines].sort((a, b) => a.y0 - b.y0).map((l) => [Math.round(l.y0), l.width]);
     expect(widths).toEqual([
       [Math.round(1.5 * PX), 6],
       [2 * PX, 2],
@@ -201,7 +288,7 @@ describe('tables: styles', () => {
   });
 
   it('turns parts off with their flags and leaves a run its own colour', () => {
-    const { texts, rects } = convert(
+    const { texts, rects, fillObjects } = convert(
       table({
         cols: [IN],
         rows: [
@@ -212,8 +299,9 @@ describe('tables: styles', () => {
       }),
       { styles: style },
     );
-    // No firstRow, no banding: both rows take the whole table's fill.
+    // No firstRow, no banding: both rows take the whole table's fill, in one object.
     expect(rects).toHaveLength(2);
+    expect(fillObjects).toHaveLength(1);
     expect(rects[1]!.fill).toEqual(rects[0]!.fill);
     expect(texts[0]!.style.color).toMatchObject({ r: 255, g: 0, b: 0 });
   });
@@ -227,7 +315,7 @@ describe('tables: styles', () => {
         tblPr: tblPr('firstRow="1" bandRow="1"', '{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}'),
       }),
     );
-    expect(rects.map(rgb)).toEqual([
+    expect([...rects].sort((a, b) => a.y - b.y).map(rgb)).toEqual([
       [68, 114, 196], // accent1
       [207, 213, 233], // band1H: accent1 tint 40 %
       [232, 235, 244], // wholeTbl: accent1 tint 20 %
@@ -247,7 +335,7 @@ describe('tables: styles', () => {
       [0, 0, 255],
       [0, 255, 0],
     ]);
-    expect(rects[0]!.box.w).toBeCloseTo(2 * PX, 6);
+    expect(rects[0]!.w).toBeCloseTo(2 * PX, 6);
   });
 });
 
@@ -263,14 +351,13 @@ describe('tables: lines', () => {
         { h: IN / 2, cells: [tcWith('b', lower)] },
       ],
     });
-  const shared = (lines: ShapeObject[]) =>
-    lines.filter((l) => l.box.rotation === 0 && close(l.box.y, 1.5 * PX, 0.5));
+  const shared = (lines: Seg[]) => lines.filter((l) => close(l.y0, l.y1) && close(l.y0, 1.5 * PX, 0.5));
 
   it("gives a shared edge the wider of the two cells' lines, the upper one on a tie", () => {
     let l = shared(convert(two(ln('lnB', 'FF0000', 12_700), ln('lnT', '0000FF', 25_400))).lines);
-    expect(l.map((x) => [x.stroke!.color.b, x.stroke!.width])).toEqual([[255, 4]]);
+    expect(l.map((x) => [x.color.b, x.width])).toEqual([[255, 4]]);
     l = shared(convert(two(ln('lnB', 'FF0000', 12_700), ln('lnT', '0000FF', 12_700))).lines);
-    expect(l.map((x) => x.stroke!.color.r)).toEqual([255]);
+    expect(l.map((x) => x.color.r)).toEqual([255]);
   });
 
   it('draws a line where only one side has it, and none where both say none', () => {
@@ -290,9 +377,7 @@ describe('tables: lines', () => {
         tblPr: '<a:tblPr><a:tableStyleId>{5940675A-B579-460E-94D1-54222C63F5DA}</a:tableStyleId></a:tblPr>',
       }),
     );
-    expect(shared(lines).map((l) => [l.stroke!.width, l.stroke!.color])).toEqual([
-      [6, { r: 0, g: 0, b: 0, a: 1 }],
-    ]);
+    expect(shared(lines).map((l) => [l.width, l.color])).toEqual([[6, { r: 0, g: 0, b: 0, a: 1 }]]);
   });
 
   it('notes diagonal lines, which are not drawn, and rates the table approx', () => {
@@ -307,6 +392,217 @@ describe('tables: lines', () => {
     const t = scene.slides[0]!.elements[0] as TableElement;
     expect(t.support).toBe('approx');
     expect(t.reasons).toContain('tableDiagonal');
+  });
+});
+
+describe('tables: grid objects (one per fill and line look, fidelity round 2)', () => {
+  /** A deck style drawing every edge in one 1 pt black line. */
+  const GRID_ID = '{22222222-3333-4444-5555-666666666666}';
+  const GRID = `<a:tblPr><a:tableStyleId>${GRID_ID}</a:tableStyleId></a:tblPr>`;
+  const ln = (color: string) =>
+    `<a:ln w="12700"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:ln>`;
+  const styles =
+    `<a:tblStyle styleId="${GRID_ID}" styleName="Grid"><a:wholeTbl><a:tcStyle><a:tcBdr>` +
+    ['left', 'right', 'top', 'bottom', 'insideH', 'insideV']
+      .map((k) => `<a:${k}>${ln('000000')}</a:${k}>`)
+      .join('') +
+    '</a:tcBdr></a:tcStyle></a:wholeTbl></a:tblStyle>';
+  const BLACK = { r: 0, g: 0, b: 0, a: 1 };
+  const cells = (rows: number, cols: number, cell = (r: number, c: number) => tc(`${r}${c}`)) =>
+    Array.from({ length: rows }, (_, r) => ({
+      h: IN / 2,
+      cells: Array.from({ length: cols }, (_, c) => cell(r, c)),
+    }));
+  const tablesOf = (shapes: string) =>
+    parseDeck(withTableStyles(buildDeck({ slides: [{ shapes }] }), styles)).slides[0]!.elements.filter(
+      (e): e is TableElement => e.kind === 'table',
+    );
+  const tableOf = (shapes: string) => tablesOf(shapes)[0]!;
+  const horizontal = (o: ShapeObject) => segmentsOf(o).every((l) => close(l.y0, l.y1));
+  const vertical = (o: ShapeObject) => segmentsOf(o).every((l) => close(l.x0, l.x1));
+
+  it('draws all lines of one look as one object of open sub-paths, its legacy shape the table outline', () => {
+    const shapes = table({ cols: [IN, IN, IN], rows: cells(3, 3), tblPr: GRID });
+    const { objects, lineObjects, lines, texts, s } = convert(shapes, { styles });
+    expect(lineObjects).toHaveLength(1);
+    const o = lineObjects[0]!;
+    expect(o).toMatchObject({
+      shape: 'rect',
+      stroke: { width: 2, color: BLACK },
+      opacity: 1,
+      locked: true,
+      origin: { role: 'grid', group: 1 },
+    });
+    expect(o.fill).toBeUndefined();
+    expect(o.box).toEqual({ x: PX, y: PX, w: 3 * PX, h: 1.5 * PX, rotation: 0 });
+    expect(o.geom!.paths!.every((p) => p.fill === 'none' && p.stroke !== false)).toBe(true);
+    // Four row edges and four column edges, each one run, stretched 1 px over the lines it meets.
+    expect(lines).toHaveLength(8);
+    expect(lines.slice(0, 4).map((l) => [r6(l.x0), r6(l.y0), r6(l.x1), r6(l.y1)])).toEqual(
+      [0, 1, 2, 3].map((r) => [PX - 1, PX + (r * PX) / 2, 4 * PX + 1, PX + (r * PX) / 2]),
+    );
+    // The renderer reads every sub-path back.
+    const built = storedGeometry(o.geom, o.box.w, o.box.h)!;
+    expect(built.paths.flatMap((p) => p.cmds).filter((c) => c === CMD_MOVE)).toHaveLength(8);
+    // The table costs the slide what it emits: one line object and nine cells.
+    expect(texts).toHaveLength(9);
+    expect(tableOf(shapes).objects).toBe(objects.length);
+    expect(objects).toHaveLength(10);
+    // An older build strips the geometry and draws the table's outline in the line.
+    const old = (prev.Slide.parse(s.slide) as Slide).objects.find((x) => x.id === o.id) as ShapeObject;
+    expect(old).toMatchObject({ shape: 'rect', box: o.box, stroke: o.stroke });
+    expect(old.fill).toBeUndefined();
+    expect('geom' in old).toBe(false);
+  });
+
+  it('splits looks by direction when there are several, so vertical lines stay over horizontal ones', () => {
+    // A 3 pt red line under the first cell over the style's 1 pt black grid: two looks.
+    const shapes = table({
+      cols: [IN, IN, IN],
+      rows: cells(3, 3, (r, c) =>
+        r === 0 && c === 0
+          ? tcWith('00', '<a:lnB w="38100"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:lnB>')
+          : tc(`${r}${c}`),
+      ),
+      tblPr: GRID,
+    });
+    const { objects, lineObjects } = convert(shapes, { styles });
+    expect(lineObjects.map((o) => [horizontal(o), vertical(o), o.stroke!.color.r, o.stroke!.width])).toEqual([
+      [true, false, 0, 2], // the black horizontal runs first, as the first run is
+      [true, false, 255, 6],
+      [false, true, 0, 2],
+    ]);
+    expect(tableOf(shapes).objects).toBe(objects.length);
+    expect(objects).toHaveLength(3 + 9);
+  });
+
+  it('fills the runs of one fill as one object in the box of their bounds, the largest first', () => {
+    const band = (r: number, c: number) =>
+      tcWith(`${r}${c}`, solid(r === 0 ? '112233' : r % 2 ? 'AABBCC' : 'DDEEFF'));
+    const shapes = table({ cols: [IN, IN], rows: cells(5, 2, band) });
+    const { objects, fillObjects, rects, s } = convert(shapes);
+    // Rows 1 and 3, then rows 2 and 4 (the same area, as they come), then the header.
+    expect(fillObjects.map(rgb)).toEqual([
+      [170, 187, 204],
+      [221, 238, 255],
+      [17, 34, 51],
+    ]);
+    const box = fillObjects[0]!.box;
+    expect([box.x, box.y, box.w, box.h].map(r6)).toEqual([PX, 1.5 * PX, 2 * PX, 1.5 * PX]);
+    expect(fillObjects[0]!.geom!.paths!.every((p) => p.stroke === false && !p.fill)).toBe(true);
+    // Each row one rect where its cells are.
+    expect([...rects].sort((a, b) => a.y - b.y).map((r) => [r.x, r.y, r.w, r.h].map(r6))).toEqual(
+      [0, 1, 2, 3, 4].map((r) => [PX, PX + (r * PX) / 2, 2 * PX, PX / 2]),
+    );
+    expect(tableOf(shapes).objects).toBe(objects.length);
+    expect(objects).toHaveLength(3 + 10);
+    // An older build draws each as its box: the header over the bands, the second band over the first.
+    const old = (prev.Slide.parse(s.slide) as Slide).objects.filter((o) => o.type === 'shape');
+    expect(old.slice(1).map((o) => 'geom' in o)).toEqual([false, false, false]);
+  });
+
+  it('turns the grid with its table: the same lines and fills, rotated about the group', () => {
+    const tableXml = table({
+      cols: [IN, IN],
+      rows: cells(2, 2, (r, c) => tcWith(`${r}${c}`, solid(c ? 'AABBCC' : '112233'))),
+      tblPr: GRID,
+    });
+    const group = (rot: number) =>
+      `<p:grpSp><p:nvGrpSpPr><p:cNvPr id="3" name="G"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm rot="${rot}"><a:off x="0" y="0"/><a:ext cx="${4 * IN}" cy="${2 * IN}"/><a:chOff x="0" y="0"/><a:chExt cx="${4 * IN}" cy="${2 * IN}"/></a:xfrm></p:grpSpPr>` +
+      `${tableXml}</p:grpSp>`;
+    const flat = convert(group(0), { styles });
+    const turned = convert(group(1_800_000), { styles });
+    const points = (c: ReturnType<typeof convert>) =>
+      c.objects.filter((o): o is ShapeObject => o.type === 'shape').map(subPaths);
+    // 30° clockwise about the group's centre (2 in, 1 in).
+    const t = Math.PI / 6;
+    const turn = ([x, y]: [number, number]) => {
+      const dx = x - 2 * PX;
+      const dy = y - PX;
+      return [2 * PX + dx * Math.cos(t) - dy * Math.sin(t), PX + dx * Math.sin(t) + dy * Math.cos(t)];
+    };
+    const want = points(flat).map((o) => o.map((sp) => sp.map((q) => turn(q).map((v) => v.toFixed(2)))));
+    const got = points(turned).map((o) => o.map((sp) => sp.map((q) => q.map((v) => v.toFixed(2)))));
+    expect(got).toEqual(want);
+    expect(turned.objects.every((o) => close(o.box.rotation, 30, 1e-9))).toBe(true);
+  });
+
+  it('keeps two chart tables native that one object per line run would send to the art', () => {
+    // Every cell's lines blue or red, alternating: each of a table's 84 edges is a run of its own, so it
+    // was 36 cells and 84 line objects, 240 for the two; now its lines are four objects.
+    const checkered = (r: number, c: number) =>
+      tcWith(
+        `${r}${c}`,
+        ['lnL', 'lnR', 'lnT', 'lnB']
+          .map(
+            (k) =>
+              `<a:${k} w="12700"><a:solidFill><a:srgbClr val="${(r + c) % 2 ? 'FF0000' : '0000FF'}"/></a:solidFill></a:${k}>`,
+          )
+          .join(''),
+      );
+    const chart = (id: number, y: number) =>
+      tableFrame({ id, x: IN, y, cols: Array(6).fill(IN / 2), rows: cells(6, 6, checkered) });
+    const shapes = chart(7, 0) + chart(8, 3.5 * IN);
+    expect(tablesOf(shapes).map((t) => [t.lines.length, t.objects])).toEqual([
+      [84, 40],
+      [84, 40],
+    ]);
+    const { s, texts, lineObjects, lines } = convert(shapes);
+    expect(s.classification.class).toBe('native');
+    expect(s.classification.reasons.filter((r) => r.includes('budget'))).toEqual([]);
+    expect(texts).toHaveLength(72);
+    expect(lineObjects).toHaveLength(8);
+    expect(lines).toHaveLength(168);
+  });
+});
+
+describe('tables: gridObjects within the stored path bounds', () => {
+  const line: Line = { width: 12_700, fill: { kind: 'solid', color: { r: 0, g: 0, b: 0, a: 1 } } };
+  const run = (at: number): TableLine => ({ dir: 'h', at, from: 0, to: 1, line });
+  const cell = (row: number, col: number, rows = 1, cols = 1): TableCell =>
+    ({ row, col, rows, cols, fill: { kind: 'solid', color: { r: 9, g: 9, b: 9, a: 1 } } }) as TableCell;
+
+  it('cuts a look into chained paths and goes on in another object past eight paths', () => {
+    const n = GRID_LINES_PER_PATH * GEOM_LIMITS.paths + 5;
+    const { lines } = gridObjects(
+      [],
+      Array.from({ length: n }, (_, i) => run(i)),
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[0]!.paths.map((p) => p.cont)).toEqual([false, true, true, true, true, true, true, true]);
+    expect(lines[1]!.paths.map((p) => [p.runs.length, p.cont])).toEqual([[5, false]]);
+    expect(lines.flatMap((o) => o.paths.flatMap((p) => p.runs))).toHaveLength(n);
+  });
+
+  it('keeps the most sub-paths of a path within 4,096 points and 40,000 characters at the widest coordinates', () => {
+    const c = '-999999.999';
+    const lineD = Array(GRID_LINES_PER_PATH).fill(`M ${c} ${c} L ${c} ${c}`).join(' ');
+    const rectD = Array(GRID_RECTS_PER_PATH)
+      .fill(`M ${c} ${c} L ${c} ${c} L ${c} ${c} L ${c} ${c} Z`)
+      .join(' ');
+    for (const [d, points] of [
+      [lineD, 2 * GRID_LINES_PER_PATH],
+      [rectD, 4 * GRID_RECTS_PER_PATH],
+    ] as const) {
+      expect(d.length).toBeLessThanOrEqual(MAX_PATH_CHARS);
+      expect(parsePathData(d, GEOM_LIMITS.points).pts).toHaveLength(2 * points);
+    }
+  });
+
+  it('puts fill runs of one fill that overlap (a malformed span) in paths of their own', () => {
+    // A cell spanning two columns over a cell another row's span already covers.
+    const { fills } = gridObjects([cell(0, 0), cell(0, 1, 2, 1), cell(1, 0, 1, 2)], []);
+    expect(fills).toHaveLength(1);
+    expect(fills[0]!.paths.map((p) => [p.runs.map((r) => [r.row, r.col, r.rows, r.cols]), p.cont])).toEqual([
+      [
+        [
+          [0, 0, 1, 1],
+          [0, 1, 2, 1],
+        ],
+        false,
+      ],
+      [[[1, 0, 1, 2]], false],
+    ]);
   });
 });
 
@@ -645,10 +941,13 @@ describe('tables: what stays residual', () => {
   });
 
   it('sends the same table to the art once its objects pass the slide budget (budget:table)', () => {
-    // A checkerboard of fills: no two neighbours join, so the 90 cells are 90 rects and 90 text objects.
+    // A fill of its own in every cell: the grid draws one object per fill (gridObjects), so the 90 cells
+    // are 90 fill objects and 90 text objects.
     const rows = Array.from({ length: 10 }, (_, r) => ({
       h: IN / 8,
-      cells: Array.from({ length: 9 }, (_, c) => tcWith('x', solid((r + c) % 2 ? 'FF0000' : '0000FF'))),
+      cells: Array.from({ length: 9 }, (_, c) =>
+        tcWith('x', solid((0x100000 + r * 9 + c).toString(16).toUpperCase())),
+      ),
     }));
     const { s, texts, rects } = convert(table({ cols: Array(9).fill(IN / 2), rows }));
     expect(s.classification.class).toBe('hybrid');
@@ -691,8 +990,9 @@ describe('tables: what stays residual', () => {
   });
 
   it('sends the largest tables to the art when the slide would pass its object budget', () => {
-    // A checkerboard of fills: no two neighbours join, so each table is 60 rects and 60 text objects.
-    const cell = (r: number, c: number) => tcWith('x', solid((r + c) % 2 ? 'FF0000' : '0000FF'));
+    // Every cell its own fill: no two join or share an object, so each table is a fill and a text per cell.
+    const cell = (r: number, c: number) =>
+      tcWith('x', solid((r * 16 + c + 1).toString(16).padStart(2, '0').repeat(3)));
     const big = (id: number, y: number, cols: number) =>
       tableFrame({
         id,

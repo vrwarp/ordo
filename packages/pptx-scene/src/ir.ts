@@ -475,7 +475,10 @@ export interface TableElement extends ElementBase {
   cells: TableCell[];
   /** The lines along the grid, consecutive pieces of the same look joined. */
   lines: TableLine[];
-  /** The ordo objects the table emits (`classify.ts` `slideCost`). */
+  /**
+   * The ordo objects the table emits (`classify.ts` `slideCost`): its background, its grid objects (one per
+   * fill and line look, `tables.ts` `gridObjects`) and its cells.
+   */
   objects: number;
   /**
    * The columns and rows as LibreOffice 24.2 sizes them, when they differ from `cols` and `rows` (R1, R2:

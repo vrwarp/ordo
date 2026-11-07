@@ -18,7 +18,8 @@
  * **Class**: native without residual elements; hybrid with them, the residuals and what they overlap baked
  * into one art picture over the range [Rmin, Rmax]; picture when the objects or pictures left after the
  * split exceed the slide budgets (or the slide could not be read, `index.ts`). A table read natively
- * (`tables.ts`, M6) counts the objects it emits. A slide past the object budget counts its z-adjacent shapes
+ * (`tables.ts`, M6) counts the objects it emits: its cells, its background, and one grid object per fill and
+ * per line look (`gridObjects`), not one per run. A slide past the object budget counts its z-adjacent shapes
  * of one look as one object each run (`shapeRuns`, drawn so by `emit.ts`); while it still passes the budget,
  * tables go to the art first (`budget:table`), then whole SmartArt drawings (`budget:smartart`,
  * `wholeDiagrams`), then decorations and runs of shapes and pictures without text (`budget:shapes`,
@@ -923,7 +924,8 @@ export function wholeDiagrams(
 
 /**
  * Tables over the object budget go to the art (M6, design/27 §15: no slide passes `MAX_SLIDE_OBJECTS`
- * without becoming hybrid): while the slide would pass it, its native table with the most objects is made
+ * without becoming hybrid): while the slide would pass it, its native table with the most objects (cells,
+ * background and grid objects, `TableElement.objects`) is made
  * residual ('budget:table'), LibreOffice drawing it. `residual` (per element, `refineSupport`) gets the
  * reason.
  */

@@ -39,25 +39,32 @@
  *   sized as LibreOffice 24.2 sizes them (`TableElement.lo`, `LoLines`, `loSizePt`), and its layouter's
  *   column minimums and merge rules apply (`loColumns`, `loGrowRows`).
  *
- * Emission (`emitTable`): the background, the cell fills (neighbouring cells of a row with the same fill
- * as one rect), the lines (joined while they look the same, each stretched over the lines it meets so
- * corners close) as locked `ShapeObject`s with role 'grid'; then each cell as a `TextObject` with role
- * 'cell' (an empty cell as an empty one, to type into). All of them share the table's `origin.group`. Only
- * the legacy shape fields are written (solid fills: a gradient's first stop; dashed lines solid), so an
- * older build draws the table as this one does. With `TableEmitCtx.lo` (the harness only) the columns, the
- * rows, the cells' sizes and the text's placement are LibreOffice's (`TableElement.lo`).
+ * Emission (`emitTable`): locked `ShapeObject`s with role 'grid' (the background as one rect; the cell
+ * fills, neighbouring cells of a row with the same fill as one rect, one object per fill; the lines, joined
+ * while they look the same and each stretched over the lines it meets so corners close, one object per look,
+ * by direction too when there are several: `gridObjects`), then each cell as a `TextObject` with role
+ * 'cell' (an empty cell as an empty one, to type into). All of them share the table's `origin.group`. The
+ * fills and lines are geometries of sub-paths (`ShapeGeom.paths`: a fill's rects, a look's open lines,
+ * stroked with flat caps as separate line objects were), so a chart table of 60 cells costs the slide's
+ * object budget its cells and a few grid objects, not one per run. Fills are solid (a gradient's first
+ * stop), lines solid (dashes noted). An older build, which strips `geom`, draws a fill's object as the
+ * bounding box of its runs and a line look as the table's outline in that line, the cells' text over them.
+ * With `TableEmitCtx.lo` (the harness only) the columns, the rows, the cells' sizes and the text's
+ * placement are LibreOffice's (`TableElement.lo`).
  *
  * Bounded: at most `MAX_TABLE_GRID` grid cells are read and `MAX_TABLE_CELLS` cells measured (the
  * measure is linear in the cells), `MAX_GRID_SCAN` children of the grid and the table are looked at,
  * `MAX_STYLE_SCAN` styles of `ppt/tableStyles.xml`; deck strings only reach notes cleaned.
  */
-import type { Rgba as OrdoRgba, ShapeObject, SlideObject, TextObject } from '@ordo/domain';
+import type { Rgba as OrdoRgba, ShapeGeom, ShapeObject, SlideObject, TextObject } from '@ordo/domain';
 import { DEFAULT_FONT } from '@ordo/domain/defaults.ts';
+import { GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
 import { type ColorCtx, colorIn, readFill, styleFill } from './color.ts';
 import { MAX_SLIDE_OBJECTS } from './classify.ts';
 import type { SlideCtx } from './context.ts';
 import { scriptClasses, scriptFallbacks, substituteOf } from './fontmap.ts';
 import { apply, boxPx, lenPx, multiply, ptPx } from './frame.ts';
+import { MAX_PATH_CHARS } from './geom.ts';
 import type {
   Affine,
   ElementBase,
@@ -340,9 +347,9 @@ export function readTable(
         (theirs.baselines[k]! - at(theirs.height)) * EMU_PER_MM100;
     return Math.round(d / n);
   });
-  const fills = fillRuns(cells);
+  const gridded = gridObjects(cells, tableLines);
   const objects =
-    (background && paints(background) ? 1 : 0) + fills.length + tableLines.length + cells.length;
+    (background && paints(background) ? 1 : 0) + gridded.fills.length + gridded.lines.length + cells.length;
   return {
     ...base,
     kind: 'table',
@@ -451,11 +458,18 @@ function paints(f: Fill): boolean {
   return f.kind === 'solid' || f.kind === 'gradient' || f.kind === 'pattern';
 }
 
+/** A rect of cells of one fill (`fillRuns`). */
+export interface FillRun {
+  row: number;
+  col: number;
+  rows: number;
+  cols: number;
+  fill: Fill;
+}
+
 /** The cells' fills as rects: neighbours of a row with the same fill join; merges keep their own. */
-export function fillRuns(
-  cells: readonly TableCell[],
-): { row: number; col: number; rows: number; cols: number; fill: Fill }[] {
-  const out: { row: number; col: number; rows: number; cols: number; fill: Fill }[] = [];
+export function fillRuns(cells: readonly TableCell[]): FillRun[] {
+  const out: FillRun[] = [];
   let key = '';
   for (const c of cells) {
     if (!paints(c.fill)) {
@@ -477,6 +491,116 @@ export function fillRuns(
     key = k;
   }
   return out;
+}
+
+// ── Grid objects ────────────────────────────────────────────────────────────────────────────────────────
+
+/** Largest grid coordinate written (box-space px): far past any slide, so a sub-path stays within its bound. */
+const GRID_COORD = 999_999;
+/** Characters a written grid coordinate takes at most: a sign, six digits, the point and three decimals. */
+const GRID_COORD_CHARS = 11;
+
+/** A grid coordinate as written: at most three decimals, within ±`GRID_COORD`, never `-0`. */
+function gridNum(v: number): string {
+  const r = Number((Number.isFinite(v) ? Math.min(GRID_COORD, Math.max(-GRID_COORD, v)) : 0).toFixed(3)) + 0;
+  return String(r);
+}
+/**
+ * Sub-paths one stored path holds, so it stays within `ShapeGeom`'s 4,096 points and 40,000 characters
+ * whatever its coordinates: a line (`M x y L x y`, and the space before the next) is 2 points and at most
+ * 8 + 4 coordinates' characters, a rect (`M x y L x y L x y L x y Z`) 5 points and 18 + 8.
+ */
+export const GRID_LINES_PER_PATH = Math.min(
+  Math.floor(GEOM_LIMITS.points / 2),
+  Math.floor(MAX_PATH_CHARS / (8 + 4 * GRID_COORD_CHARS)),
+);
+export const GRID_RECTS_PER_PATH = Math.min(
+  Math.floor(GEOM_LIMITS.points / 5),
+  Math.floor(MAX_PATH_CHARS / (18 + 8 * GRID_COORD_CHARS)),
+);
+
+/**
+ * One grid object of a table: the runs it draws, as its stored paths (`ShapeGeom.paths`, at most
+ * `GEOM_LIMITS.paths`), each holding sub-paths of runs; `cont` marks a path that goes on with the one
+ * before it (one path cut in pieces, drawn as the one it was cut from).
+ */
+export interface GridObject<T> {
+  paths: { runs: T[]; cont: boolean }[];
+}
+
+/**
+ * Layers of runs as grid objects: each layer is one path chain cut every `per` runs, objects hold at most
+ * `GEOM_LIMITS.paths` paths and a chain past that goes on in the next object (its first piece then starts
+ * the object's chain).
+ */
+function packGrid<T>(layers: readonly T[][], per: number): GridObject<T>[] {
+  const out: GridObject<T>[] = [];
+  let cur: GridObject<T> | undefined;
+  for (const layer of layers)
+    for (let i = 0; i < layer.length; i += per) {
+      if (!cur || cur.paths.length >= GEOM_LIMITS.paths) out.push((cur = { paths: [] }));
+      cur.paths.push({ runs: layer.slice(i, i + per), cont: i > 0 && cur.paths.length > 0 });
+    }
+  return out;
+}
+
+/**
+ * A table's locked grid objects (M6 fidelity round 2, `emitTable`; `readTable` counts them for the slide's
+ * object budget):
+ * - **Fills**: the cells' fill runs (`fillRuns`) of one fill as one object of rect sub-paths, filled
+ *   together (one even-odd fill: runs of one fill that overlap, as spans of a malformed table can, go in a
+ *   path of their own so neither cuts the other out). Ordered by the area of the runs' bounding box (in
+ *   grid cells), largest first: an older build draws each as that box, the smaller ones over it.
+ * - **Lines**: the line runs of one look (width, fill and dash) as one object of open sub-paths, stroked
+ *   together; when the table's lines have more than one look, also by direction, horizontal ones first, so
+ *   every vertical line is still drawn over the horizontal ones it crosses, as when each run was an object
+ *   of its own. Ordered as their first run comes.
+ * Each object holds at most `GEOM_LIMITS.paths` paths of `GRID_RECTS_PER_PATH` rects or
+ * `GRID_LINES_PER_PATH` lines; a group past that goes on in another object.
+ */
+export function gridObjects(
+  cells: readonly TableCell[],
+  lines: readonly TableLine[],
+): { fills: (GridObject<FillRun> & { fill: Fill })[]; lines: (GridObject<TableLine> & { line: Line })[] } {
+  const fillGroups = new Map<string, { fill: Fill; layers: FillRun[][]; box: number[] }>();
+  for (const run of fillRuns(cells)) {
+    const k = JSON.stringify(run.fill);
+    let g = fillGroups.get(k);
+    if (!g)
+      fillGroups.set(k, (g = { fill: run.fill, layers: [], box: [run.row, run.col, run.row, run.col] }));
+    const b = g.box;
+    b[0] = Math.min(b[0]!, run.row);
+    b[1] = Math.min(b[1]!, run.col);
+    b[2] = Math.max(b[2]!, run.row + run.rows);
+    b[3] = Math.max(b[3]!, run.col + run.cols);
+    const apart = (o: FillRun) =>
+      o.row >= run.row + run.rows ||
+      run.row >= o.row + o.rows ||
+      o.col >= run.col + run.cols ||
+      run.col >= o.col + o.cols;
+    let layer = g.layers.find((l) => l.every(apart));
+    if (!layer) g.layers.push((layer = []));
+    layer.push(run);
+  }
+  const area = (b: number[]) => (b[2]! - b[0]!) * (b[3]! - b[1]!);
+  const fills = [...fillGroups.values()]
+    .sort((p, q) => area(q.box) - area(p.box))
+    .flatMap((g) => packGrid(g.layers, GRID_RECTS_PER_PATH).map((o) => ({ ...o, fill: g.fill })));
+
+  const looks = new Set(lines.map((l) => JSON.stringify(l.line)));
+  const byDir = looks.size > 1;
+  const lineGroups = new Map<string, { line: Line; runs: TableLine[] }>();
+  for (const l of lines) {
+    const k = `${byDir ? l.dir : ''}${JSON.stringify(l.line)}`;
+    let g = lineGroups.get(k);
+    if (!g) lineGroups.set(k, (g = { line: l.line, runs: [] }));
+    g.runs.push(l);
+  }
+  // Horizontal runs come first in `lines` (`EdgeLines.resolve`), so by direction the horizontal groups do.
+  const lineObjects = [...lineGroups.values()].flatMap((g) =>
+    packGrid([g.runs], GRID_LINES_PER_PATH).map((o) => ({ ...o, line: g.line })),
+  );
+  return { fills, lines: lineObjects };
 }
 
 // ── Styles ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -1312,9 +1436,9 @@ function clampBox(b: Box): Box {
 }
 
 /**
- * A table's objects, appended to `out`: background, fills and lines (locked, role 'grid'), then one text
- * object per cell (role 'cell'). Returns the text objects (the slide's text budget counts them). A table
- * the classification made residual emits nothing: LibreOffice draws it into the art.
+ * A table's objects, appended to `out`: background, fills and lines (locked, role 'grid'; `gridObjects`),
+ * then one text object per cell (role 'cell'). Returns the text objects (the slide's text budget counts
+ * them). A table the classification made residual emits nothing: LibreOffice draws it into the art.
  */
 export function emitTable(ctx: TableEmitCtx, e: TableElement, out: SlideObject[]): TextObject[] {
   if (e.support === 'residual') {
@@ -1346,7 +1470,7 @@ export function emitTable(ctx: TableEmitCtx, e: TableElement, out: SlideObject[]
     role,
     ...(e.group !== undefined ? { group: Math.min(100_000, Math.max(0, e.group)) } : {}),
   });
-  const grid = (box: Box, kind: ShapeObject['shape'], fill: OrdoRgba | undefined): ShapeObject => ({
+  const gridShape = (box: Box, kind: ShapeObject['shape'], fill: OrdoRgba | undefined): ShapeObject => ({
     id: ctx.newId(),
     type: 'shape',
     box,
@@ -1358,6 +1482,26 @@ export function emitTable(ctx: TableEmitCtx, e: TableElement, out: SlideObject[]
     locked: true,
   });
 
+  // The grid objects' sub-paths are in the table box's own space: unturned, from its top left corner.
+  const table = rect(0, rowsOf.length, 0, e.cols.length);
+  const turn = (table.rotation * Math.PI) / 180;
+  const cos = Math.cos(turn);
+  const sin = Math.sin(turn);
+  const tcx = table.x + table.w / 2;
+  const tcy = table.y + table.h / 2;
+  /** Grid point (column edge, row edge) in slide px. */
+  const page = (c: number, r: number): [number, number] => {
+    const [x, y] = apply(xf, xs[c]! / W, ys[r]! / H);
+    return [f.x0 + x * f.s, f.y0 + y * f.s];
+  };
+  /** A slide px point in the table box's space. */
+  const inTable = (p: readonly [number, number]): [number, number] => {
+    const dx = p[0] - tcx;
+    const dy = p[1] - tcy;
+    return [dx * cos + dy * sin + table.w / 2, -dx * sin + dy * cos + table.h / 2];
+  };
+  const grid = gridObjects(e.cells, e.lines);
+
   let gradients = false;
   const colorOf = (fill: Fill) => {
     if (fill.kind === 'gradient' || fill.kind === 'pattern') gradients = true;
@@ -1365,45 +1509,100 @@ export function emitTable(ctx: TableEmitCtx, e: TableElement, out: SlideObject[]
   };
   if (e.background) {
     const c = colorOf(e.background);
-    if (c) out.push(grid(rect(0, rowsOf.length, 0, e.cols.length), 'rect', c));
+    if (c) out.push(gridShape(table, 'rect', c));
   }
-  for (const run of fillRuns(e.cells)) {
-    const c = colorOf(run.fill);
-    if (c) out.push(grid(rect(run.row, run.row + run.rows, run.col, run.col + run.cols), 'rect', c));
+  // Fills: one object per fill, its runs as rects in the box of their bounds (turned as the table is).
+  for (const g of grid.fills) {
+    const c = colorOf(g.fill);
+    if (!c) continue;
+    const quads = g.paths.map((p) =>
+      p.runs.map((run) =>
+        [
+          page(run.col, run.row),
+          page(run.col + run.cols, run.row),
+          page(run.col + run.cols, run.row + run.rows),
+          page(run.col, run.row + run.rows),
+        ].map(inTable),
+      ),
+    );
+    let u0 = Number.POSITIVE_INFINITY;
+    let v0 = Number.POSITIVE_INFINITY;
+    let u1 = Number.NEGATIVE_INFINITY;
+    let v1 = Number.NEGATIVE_INFINITY;
+    for (const path of quads)
+      for (const q of path)
+        for (const [u, v] of q) {
+          u0 = Math.min(u0, u);
+          v0 = Math.min(v0, v);
+          u1 = Math.max(u1, u);
+          v1 = Math.max(v1, v);
+        }
+    if (!(u1 >= u0 && v1 >= v0)) continue;
+    const cu = (u0 + u1) / 2 - table.w / 2;
+    const cv = (v0 + v1) / 2 - table.h / 2;
+    const box = clampBox({
+      x: tcx + cu * cos - cv * sin - (u1 - u0) / 2,
+      y: tcy + cu * sin + cv * cos - (v1 - v0) / 2,
+      w: u1 - u0,
+      h: v1 - v0,
+      rotation: table.rotation,
+    });
+    const at = ([u, v]: [number, number]) => `${gridNum(u - u0)} ${gridNum(v - v0)}`;
+    const paths: NonNullable<ShapeGeom['paths']> = g.paths.map((p, k) => ({
+      d: quads[k]!.map((q) => `M ${at(q[0]!)} L ${at(q[1]!)} L ${at(q[2]!)} L ${at(q[3]!)} Z`).join(' '),
+      w: box.w,
+      h: box.h,
+      stroke: false,
+      ...(p.cont ? { cont: true } : {}),
+    }));
+    out.push({ ...gridShape(box, 'rect', c), geom: { paths } });
   }
   if (gradients) ctx.log('table cells filled with a gradient or pattern are drawn in one colour (M6)');
 
-  // Lines, each stretched at its ends by half the widest line it meets there, so corners close.
+  // Lines: one object per look, each run an open sub-path stretched at its ends by half the widest line
+  // it meets there, so corners close. Its legacy shape is the table's outline in that line.
   let dashed = false;
-  for (const l of e.lines) {
-    const color = ctx.color(l.line.fill);
+  for (const g of grid.lines) {
+    const color = ctx.color(g.line.fill);
     if (!color) continue;
-    if (l.line.dash) dashed = true;
-    /** The widest line of the other direction through edge `k` of this one. */
-    const across = (k: number) => {
-      let w = 0;
-      for (const o of e.lines)
-        if (o.dir !== l.dir && o.at === k && o.from <= l.at && l.at <= o.to) w = Math.max(w, o.line.width);
-      return w;
+    if (g.line.dash) dashed = true;
+    const segment = (l: TableLine) => {
+      /** The widest line of the other direction through edge `k` of this one. */
+      const across = (k: number) => {
+        let w = 0;
+        for (const o of e.lines)
+          if (o.dir !== l.dir && o.at === k && o.from <= l.at && l.at <= o.to) w = Math.max(w, o.line.width);
+        return w;
+      };
+      const a = l.dir === 'h' ? page(l.from, l.at) : page(l.at, l.from);
+      const b = l.dir === 'h' ? page(l.to, l.at) : page(l.at, l.to);
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (len > 0) {
+        const ux = (b[0] - a[0]) / len;
+        const uy = (b[1] - a[1]) / len;
+        const e0 = lenPx(f, across(l.from)) / 2;
+        const e1 = lenPx(f, across(l.to)) / 2;
+        a[0] -= ux * e0;
+        a[1] -= uy * e0;
+        b[0] += ux * e1;
+        b[1] += uy * e1;
+      }
+      const [u0, v0] = inTable(a);
+      const [u1, v1] = inTable(b);
+      return `M ${gridNum(u0)} ${gridNum(v0)} L ${gridNum(u1)} ${gridNum(v1)}`;
     };
-    const a: [number, number] =
-      l.dir === 'h' ? [xs[l.from]! / W, ys[l.at]! / H] : [xs[l.at]! / W, ys[l.from]! / H];
-    const b: [number, number] =
-      l.dir === 'h' ? [xs[l.to]! / W, ys[l.at]! / H] : [xs[l.at]! / W, ys[l.to]! / H];
-    const width = bound(Math.max(lenPx(f, l.line.width), 0.5), 0, 500);
-    out.push(
-      lineShape(
-        ctx,
-        xf,
-        a,
-        b,
-        width,
-        color,
-        lenPx(f, across(l.from)) / 2,
-        lenPx(f, across(l.to)) / 2,
-        origin,
-      ),
-    );
+    const paths: NonNullable<ShapeGeom['paths']> = g.paths.map((p) => ({
+      d: p.runs.map(segment).join(' '),
+      w: table.w,
+      h: table.h,
+      fill: 'none',
+      ...(p.cont ? { cont: true } : {}),
+    }));
+    out.push({
+      ...gridShape(table, 'rect', undefined),
+      stroke: { width: bound(Math.max(lenPx(f, g.line.width), 0.5), 0, 500), color },
+      geom: { paths },
+    });
   }
   if (dashed) ctx.log('dashed table lines are drawn solid (M6)');
 
@@ -1479,49 +1678,4 @@ function emptyText(ctx: TableEmitCtx, body: TextBody): RichText | undefined {
     paras: [{ ...p, runs: [{ kind: 'text', text: 'x', style: p.end }] }],
   });
   return probe ? { text: '', style: probe.style } : undefined;
-}
-
-/** A line object from `a` to `b` (the table's unit square), stretched by `ext0` and `ext1` px at its ends. */
-function lineShape(
-  ctx: TableEmitCtx,
-  xf: Affine,
-  a: [number, number],
-  b: [number, number],
-  width: number,
-  color: OrdoRgba,
-  ext0: number,
-  ext1: number,
-  origin: (role: string) => ShapeObject['origin'],
-): ShapeObject {
-  const f = ctx.frame;
-  const [x0, y0] = apply(xf, a[0], a[1]);
-  const [x1, y1] = apply(xf, b[0], b[1]);
-  let px0 = f.x0 + x0 * f.s;
-  let py0 = f.y0 + y0 * f.s;
-  let px1 = f.x0 + x1 * f.s;
-  let py1 = f.y0 + y1 * f.s;
-  const len = Math.hypot(px1 - px0, py1 - py0);
-  if (len > 0) {
-    const ux = (px1 - px0) / len;
-    const uy = (py1 - py0) / len;
-    px0 -= ux * ext0;
-    py0 -= uy * ext0;
-    px1 += ux * ext1;
-    py1 += uy * ext1;
-  }
-  const full = Math.hypot(px1 - px0, py1 - py0);
-  const rot = full > 0 ? (Math.atan2(py1 - py0, px1 - px0) * 180) / Math.PI : 0;
-  const cx = (px0 + px1) / 2;
-  const cy = (py0 + py1) / 2;
-  return {
-    id: ctx.newId(),
-    type: 'shape',
-    box: clampBox({ x: cx - full / 2, y: cy, w: full, h: 0, rotation: Math.abs(rot) < 1e-9 ? 0 : rot }),
-    shape: 'line',
-    stroke: { width, color },
-    opacity: 1,
-    radius: 0,
-    origin: origin('grid'),
-    locked: true,
-  };
 }
