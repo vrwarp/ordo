@@ -435,6 +435,14 @@ describe('the editor panels with the stores', () => {
     const still = html(createElement(ObjectPanel, { o: pic, readOnly: false }));
     expect(still).toContain('<b class="grow">Image</b>');
     expect(still).not.toContain('Replace video');
+    // A locked picture (a SmartArt picture, the art): move, resize, delete and z-order only.
+    const replace = (markup: string) => /<button[^>]*>Replace<\/button>/.exec(markup)?.[0] ?? '';
+    expect(replace(still)).not.toContain('disabled');
+    const locked = html(createElement(ObjectPanel, { o: { ...pic, locked: true }, readOnly: false }));
+    expect(replace(locked)).toContain('disabled');
+    expect((locked.match(/disabled=""/g) ?? []).length).toBeGreaterThan(
+      (still.match(/disabled=""/g) ?? []).length + 1,
+    );
   });
 
   it('SlidePanel: the slide sound section', async () => {

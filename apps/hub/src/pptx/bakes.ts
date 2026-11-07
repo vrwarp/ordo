@@ -19,7 +19,13 @@
  * - **Dedup.** The derived picture's identity is SHA-256 of the source's hash and the recipe: stored as the
  *   item's `source` hash, so a re-import finds the baked item without decoding anything; the content hash
  *   deduplicates as for every prepared picture.
- * - **Failure** (a source the header check refuses, a decode or pool error, the budget): the bake is listed in
+ * - **Bounds.** At most `BAKE_LIMITS_HUB.perImport` distinct bakes an import (each is a pool task, a stored
+ *   file and a Media row in every operator's library snapshot, like a picture part, of which a deck may hold
+ *   2,000); each charges the import's picture budget with what it decodes and makes (the source, the size
+ *   the bake reads and its output, in megapixels: a 3 x 3 tile made 3840 x 2160 costs its 8.3 MP, not the
+ *   source's 1e-5), and its pool time counts against the import's (`PPTX_LIMITS.importPoolMs`, through
+ *   `StoreBakesOptions.poolTime`).
+ * - **Failure** (a source the header check refuses, a decode or pool error, a bound): the bake is listed in
  *   `failed` with ordo's own reason; the job then shows the source picture as it is, without the effect.
  */
 import { createHash } from 'node:crypto';
@@ -45,6 +51,12 @@ import {
 } from './pictures.ts';
 import type { PptxDeps } from './shared.ts';
 
+/** Bounds of an import's bakes (see the module comment). */
+export const BAKE_LIMITS_HUB = {
+  /** Distinct bakes stored, found or resumed per import; the rest show their source pictures. */
+  perImport: 500,
+} as const;
+
 /** What a bake's key starts with: a NUL, which no part name of the deck's maps holds. */
 export const BAKE_KEY_PREFIX = '\u0000bake:';
 
@@ -67,6 +79,10 @@ export type StoreBakesOptions = {
   name(part: string): string;
   tags: string[];
   log(msg: string): void;
+  /** The import's pool time: what bakes use is added to it, and none starts once it is spent. */
+  poolTime?: { add(ms: number): void; spent(): boolean };
+  /** Distinct bakes at most (`BAKE_LIMITS_HUB.perImport`; tests set less). */
+  maxBakes?: number;
 };
 
 export type StoreBakesResult = {
@@ -136,7 +152,9 @@ async function bakeOne(
   )[0];
   if (found) return { media: found, reused: true };
   const read = item.bake.tile ? tileSourceSize(item.bake.tile, out) : out;
-  opts.budget.spend((h.width * h.height) / 1e6);
+  if (opts.poolTime?.spent()) throw new PictureError('the import used its conversion time: it is not baked');
+  // What it decodes (the source, at the size it is read) and what it makes, not the source's header alone.
+  opts.budget.spend((h.width * h.height + read.width * read.height + out.width * out.height) / 1e6);
   if (opts.signal.aborted) throw new Error('cancelled');
   const raw = join(opts.dir, `${newId()}.rgba`);
   const png = join(opts.dir, `${newId()}.png`);
@@ -156,16 +174,22 @@ async function bakeOne(
     await rm(raw, { force: true });
     if (data.length !== read.width * read.height * 4)
       throw new PictureError('the decoded picture is not the size asked for');
-    const baked = await pool.run(
-      'pptx-bake',
-      {
-        source: { width: read.width, height: read.height, channels: 4, data },
-        bake: item.bake,
-        ...(item.bake.tile ? { out } : {}),
-        format: h.format,
-      },
-      { signal: opts.signal, transfer: [data.buffer as ArrayBuffer] },
-    );
+    const t0 = performance.now();
+    let baked: Awaited<ReturnType<typeof pool.run<'pptx-bake'>>>;
+    try {
+      baked = await pool.run(
+        'pptx-bake',
+        {
+          source: { width: read.width, height: read.height, channels: 4, data },
+          bake: item.bake,
+          ...(item.bake.tile ? { out } : {}),
+          format: h.format,
+        },
+        { signal: opts.signal, transfer: [data.buffer as ArrayBuffer] },
+      );
+    } finally {
+      opts.poolTime?.add(performance.now() - t0);
+    }
     await writeFile(png, baked.png);
     let picture: PreparedPicture = {
       path: png,
@@ -216,10 +240,18 @@ export async function storeBakes(
     const m = deps.lib.media.get(id);
     if (m && m.kind === 'image' && m.state !== 'failed') res.media.set(key, id);
   }
+  const max = opts.maxBakes ?? BAKE_LIMITS_HUB.perImport;
+  let over = 0;
   try {
     for (const item of items) {
       if (opts.signal.aborted) throw new Error('cancelled');
       if (res.media.has(item.key)) continue;
+      // Past the import's bakes (those resumed count): the source picture is shown, once noted for all.
+      if (res.media.size >= max) {
+        res.failed.push([item.key, `more than ${max} baked pictures in one deck`]);
+        over++;
+        continue;
+      }
       try {
         const got = await bakeOne(deps, pool, item, opts);
         res.media.set(item.key, got.media.id);
@@ -238,5 +270,9 @@ export async function storeBakes(
   } finally {
     opts.save();
   }
+  if (over)
+    opts.log(
+      `[warn] ${over} recoloured or tiled picture(s) past the ${max} an import bakes are drawn without their effects or tiles`,
+    );
   return res;
 }

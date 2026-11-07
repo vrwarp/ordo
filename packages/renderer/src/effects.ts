@@ -16,15 +16,18 @@ import type { Ctx2D } from './ctx.ts';
  * the canvas (only the shadow lands; every engine anti-aliases and blurs it, unlike `ctx.filter`, which Safari
  * lacks). A blur is smooth, so its layer is made at a reduced resolution (as LibreOffice computes its blurs
  * within 250,000 px and 1,000 px a side): 1/k of the device size with k = σ/2 (σ in device px, k between 1
- * and BLUR_MAX_REDUCTION, more for a layer past BLUR_MAX_PIXELS), enlarged with smoothing into the final
- * sprite, over which the shape is drawn as vectors. A soft-edged shape is drawn into a full-resolution sprite
- * first and its alpha multiplied by the (reduced, blurred) eroded silhouette. Making a full-slide shadow at 4K
- * blurs a few hundred thousand pixels instead of eight million.
+ * and BLUR_MAX_REDUCTION, more for a layer past BLUR_MAX_PIXELS), enlarged with smoothing onto the canvas,
+ * over which the shape is drawn as vectors. A soft-edged shape is drawn into a sprite of its device bounds
+ * and its alpha multiplied by the eroded silhouette, blurred and reduced the same way (a mask past
+ * BLUR_MAX_PIXELS too). Making a full-slide shadow at 4K blurs a few hundred thousand pixels instead of eight
+ * million.
  *
- * Sprites are cached by the caller's key and the device transform (`EFFECT_CACHE_BYTES`, LRU): a master
- * decoration with a shadow is drawn on every slide of a deck, and a slide is drawn again for every look and
- * refresh. With no OffscreenCanvas (Node) or a sprite past EFFECT_MAX_PIXELS nothing is drawn here: the caller
- * draws the shape without its effects.
+ * The reduced layers are cached by the caller's key and the device transform (`EFFECT_CACHE_BYTES`, LRU; a
+ * layer is at most 4 MB): a master decoration with a shadow is drawn on every slide of a deck, and a slide is
+ * drawn again for every look and refresh. A shape and its layers are composed into one full-resolution
+ * sprite (cached, copied 1:1) up to EFFECT_COMPOSITE_BYTES, and past it until it thrashes the cache
+ * (`drawEffected`). With no OffscreenCanvas (Node) or a sprite past
+ * EFFECT_MAX_PIXELS nothing is drawn here: the caller draws the shape without its effects.
  */
 
 /** Device pixels of one effect sprite at most (the 16 MP of a prepared picture). */
@@ -61,6 +64,9 @@ export interface EffectSource {
   /** The stroked paths and the line width (box units), for the silhouette of the outline. */
   readonly strokes?: readonly Path2D[];
   readonly lineWidth: number;
+  /** The outline's joins and caps (Canvas's; default miter and butt), for its silhouette. */
+  readonly join?: CanvasLineJoin;
+  readonly cap?: CanvasLineCap;
   readonly shadow?: Shadow;
   readonly glow?: Glow;
   /** Logical px. */
@@ -74,11 +80,21 @@ type Sprite = { canvas: OffscreenCanvas; x: number; y: number; w: number; h: num
 
 const cache = new Map<string, Sprite>();
 let cacheBytes = 0;
+/**
+ * Keys of large composites made once, and of those made again after the cache let them go (the slide holds
+ * more of them than the cache: they would be rebuilt on every raster), which are drawn layered from then on.
+ */
+const composed = new Set<string>();
+const thrashed = new Set<string>();
+/** Keys remembered in `composed` and `thrashed` at most (both are cleared past it). */
+const KEYS_MAX = 4_096;
 
 /** Forget every cached effect sprite (tests, and memory pressure). */
 export function clearEffectCache(): void {
   cache.clear();
   cacheBytes = 0;
+  composed.clear();
+  thrashed.clear();
 }
 
 /** Bytes the effect cache holds. */
@@ -166,6 +182,10 @@ function silhouette(c: OffscreenCanvasRenderingContext2D, src: EffectSource, gro
     }
   }
   if (src.strokes?.length && src.lineWidth > 0) {
+    // The outline as drawn (its joins and caps), grown round.
+    c.lineJoin = grow > 0 ? 'round' : (src.join ?? 'miter');
+    c.lineCap = grow > 0 ? 'round' : (src.cap ?? 'butt');
+    c.miterLimit = 8;
     c.lineWidth = src.lineWidth + 2 * grow;
     for (const p of src.strokes) c.stroke(p);
   }
@@ -184,6 +204,9 @@ function eroded(c: OffscreenCanvasRenderingContext2D, src: EffectSource, e: numb
   if (stroked && src.lineWidth / 2 >= e) {
     if (src.fill) c.fill(src.fill, 'nonzero');
     if (src.lineWidth - 2 * e > 0) {
+      c.lineJoin = src.join ?? 'miter';
+      c.lineCap = src.cap ?? 'butt';
+      c.miterLimit = 8;
       c.lineWidth = src.lineWidth - 2 * e;
       for (const p of src.strokes!) c.stroke(p);
     }
@@ -241,9 +264,23 @@ function blurLayer(
 }
 
 /**
+ * Bytes of a composite sprite (a shape with its layers at full resolution) always composed: a smaller one is
+ * composed once, cached and copied 1:1. A larger one (up to half the cache) is composed and cached too until
+ * the cache lets it go and it is needed again: a slide holding more of them than the cache (three large
+ * shadowed panels at 4K, 24 MB each) would rebuild them on every raster, so such a shape is drawn layered
+ * from then on (its reduced layers cached and enlarged, the shape drawn over them).
+ */
+export const EFFECT_COMPOSITE_BYTES = 8 * 1024 * 1024;
+
+/**
  * Draws a shape with its effects on `ctx` (whose transform the source's `transform` already is), at `opacity`.
- * The layers (reduced blurs) and the shape are composed once into a full-resolution sprite of their device
- * bounds, cached, and copied 1:1: a cached shadow costs one copy per draw, not a resampling of each layer.
+ * - A shape whose device bounds and layers fit EFFECT_COMPOSITE_BYTES (or one below full opacity, drawn as a
+ *   group) is composed into one sprite: its reduced layers enlarged into it, the shape over them (a soft
+ *   edge cut by its mask); the sprite is cached (up to half the cache) and copied 1:1. A larger one is
+ *   composed and cached the same way until the cache lets its sprite go and it is drawn again (`thrashed`).
+ * - From then on it draws its reduced layers (each at most BLUR_MAX_PIXELS, cached on its own: a few MB)
+ *   enlarged onto `ctx`, then the shape as vectors, or, soft-edged, through a sprite of its device bounds cut
+ *   by its mask (made each time; the slide's effect budget, `geombudget.ts`, bounds how much of it there is).
  * False when it could not (no OffscreenCanvas, a sprite past EFFECT_MAX_PIXELS, a non-finite transform):
  * the caller then draws the shape without its effects.
  */
@@ -287,54 +324,123 @@ export function drawEffected(ctx: Ctx2D, src: EffectSource, opacity: number): bo
     src.key === undefined
       ? undefined
       : `${src.key}|${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f}|${r.X} ${r.Y} ${r.W} ${r.H}`;
-  let out = cached(key);
-  if (!out) {
-    const f = sprite(r.W, r.H);
-    if (!f) return false;
-    f.imageSmoothingEnabled = true;
-    f.imageSmoothingQuality = 'medium';
-    const place = (c: OffscreenCanvasRenderingContext2D, layer: Sprite) => {
-      c.save();
-      c.setTransform(1, 0, 0, 1, 0, 0);
-      c.drawImage(layer.canvas, layer.x - r.X, layer.y - r.Y, layer.w, layer.h);
-      c.restore();
-    };
-    if (sh) {
-      const layer = blurLayer(m, r, shadowSigma, sdx, sdy, rgbaCss(sh.color), (c) => {
-        src.draw(c);
-        if (src.softEdge) softened(c, src, m, s);
-      });
-      if (!layer) return false;
-      place(f, layer);
-    }
-    if (gl) {
-      const layer = blurLayer(m, r, glowSigma, 0, 0, rgbaCss(gl.color), (c) =>
-        silhouette(c, src, gl.radius / 2),
-      );
-      if (!layer) return false;
-      place(f, layer);
-    }
-    if (src.softEdge && src.softEdge > 0) {
-      const c = sprite(r.W, r.H);
-      if (!c) return false;
-      c.setTransform(m.a, m.b, m.c, m.d, m.e - r.X, m.f - r.Y);
-      src.draw(c);
-      softened(c, src, m, s, r);
-      f.drawImage(c.canvas, 0, 0);
+  const tagged = (tag: string) => (key === undefined ? undefined : `${key}|${tag}`);
+  const soft = !!src.softEdge && src.softEdge > 0;
+  const shadowOf = () =>
+    sh
+      ? blurLayer(m, r, shadowSigma, sdx, sdy, rgbaCss(sh.color), (c) => {
+          src.draw(c);
+          if (soft) softened(c, src, m, s);
+        })
+      : undefined;
+  const glowOf = () =>
+    gl
+      ? blurLayer(m, r, glowSigma, 0, 0, rgbaCss(gl.color), (c) => silhouette(c, src, gl.radius / 2))
+      : undefined;
+  const bytes = r.W * r.H * 4;
+
+  const allKey = tagged('all');
+  let out = cached(allKey);
+  let compose = !!out || bytes <= EFFECT_COMPOSITE_BYTES || opacity < 1;
+  if (!compose && allKey !== undefined && bytes <= EFFECT_CACHE_BYTES / 2 && !thrashed.has(allKey)) {
+    if (composed.has(allKey)) {
+      if (thrashed.size >= KEYS_MAX) thrashed.clear();
+      thrashed.add(allKey);
     } else {
-      f.save();
-      f.setTransform(m.a, m.b, m.c, m.d, m.e - r.X, m.f - r.Y);
-      src.draw(f);
-      f.restore();
+      if (composed.size >= KEYS_MAX) composed.clear();
+      composed.add(allKey);
+      compose = true;
     }
-    out = { canvas: f.canvas, x: r.X, y: r.Y, w: r.W, h: r.H, bytes: r.W * r.H * 4 };
-    remember(key, out);
+  }
+  if (compose) {
+    if (!out) {
+      const f = sprite(r.W, r.H);
+      if (!f) return false;
+      f.imageSmoothingEnabled = true;
+      f.imageSmoothingQuality = 'medium';
+      const place = (layer: Sprite) => {
+        f.drawImage(layer.canvas, layer.x - r.X, layer.y - r.Y, layer.w, layer.h);
+      };
+      if (sh) {
+        const layer = shadowOf();
+        if (!layer) return false;
+        place(layer);
+      }
+      if (gl) {
+        const layer = glowOf();
+        if (!layer) return false;
+        place(layer);
+      }
+      if (!body(f, src, m, s, r, soft)) return false;
+      out = { canvas: f.canvas, x: r.X, y: r.Y, w: r.W, h: r.H, bytes };
+      remember(allKey, out);
+    }
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha *= opacity;
+    ctx.drawImage(out.canvas, out.x, out.y);
+    ctx.restore();
+    return true;
+  }
+
+  // Large: the reduced layers, each cached on its own, enlarged onto the canvas; the shape over them.
+  const layer = (tag: string, make: () => Sprite | undefined): Sprite | undefined => {
+    const hit = cached(tagged(tag));
+    if (hit) return hit;
+    const made = make();
+    if (made) remember(tagged(tag), made);
+    return made;
+  };
+  const shadowLayer = sh ? layer('shadow', shadowOf) : undefined;
+  const glowLayer = gl ? layer('glow', glowOf) : undefined;
+  if ((sh && !shadowLayer) || (gl && !glowLayer)) return false;
+  let softBody: OffscreenCanvasRenderingContext2D | undefined;
+  if (soft) {
+    softBody = sprite(r.W, r.H);
+    if (!softBody || !body(softBody, src, m, s, r, true)) return false;
   }
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalAlpha *= opacity;
-  ctx.drawImage(out.canvas, out.x, out.y);
+  // Bilinear: the layers are blurs, and 'low' enlarges them a third faster than 'medium' at 4K.
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'low';
+  for (const l of [shadowLayer, glowLayer]) if (l) ctx.drawImage(l.canvas, l.x, l.y, l.w, l.h);
+  if (softBody) ctx.drawImage(softBody.canvas, r.X, r.Y);
+  else {
+    ctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
+    src.draw(ctx);
+  }
   ctx.restore();
+  return true;
+}
+
+/** The shape drawn into `c`, a sprite of the device rect `r`: soft-edged, cut by its mask. */
+function body(
+  c: OffscreenCanvasRenderingContext2D,
+  src: EffectSource,
+  m: DOMMatrix,
+  s: number,
+  r: { X: number; Y: number; W: number; H: number },
+  soft: boolean,
+): boolean {
+  if (!soft) {
+    c.save();
+    c.setTransform(m.a, m.b, m.c, m.d, m.e - r.X, m.f - r.Y);
+    src.draw(c);
+    c.restore();
+    return true;
+  }
+  // The soft edge multiplies what the sprite holds: drawn alone first when the sprite has layers in it.
+  const alone = sprite(r.W, r.H);
+  if (!alone) return false;
+  alone.setTransform(m.a, m.b, m.c, m.d, m.e - r.X, m.f - r.Y);
+  src.draw(alone);
+  softened(alone, src, m, s, r);
+  c.save();
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.drawImage(alone.canvas, 0, 0);
+  c.restore();
   return true;
 }
 
@@ -358,7 +464,10 @@ function softened(
   // The device px per sprite px of `c`: 1 for the body, k for a reduced layer.
   const k = r ? 1 : Math.hypot(m.a, m.b) / Math.max(1e-12, Math.hypot(t.a, t.b));
   const sigma = (e * STACK_BLUR_SIGMA * s) / k;
-  const q = Math.min(BLUR_MAX_REDUCTION, Math.max(1, sigma / 2));
+  // Reduced as a blur layer is: by σ/2 (at most BLUR_MAX_REDUCTION), and more for a mask past BLUR_MAX_PIXELS
+  // (a 1 px soft edge on a full-slide shape at 4K made four 8 MP canvases).
+  let q = Math.min(BLUR_MAX_REDUCTION, Math.max(1, sigma / 2));
+  q = Math.max(q, Math.sqrt((W * H) / BLUR_MAX_PIXELS));
   const w = Math.max(1, Math.ceil(W / q));
   const h = Math.max(1, Math.ceil(H / q));
   const mask = sprite(w, h);

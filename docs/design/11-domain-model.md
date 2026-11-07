@@ -193,6 +193,8 @@ type ShapeObject = {
     | 'sysDash'
     | 'sysDashDot'
     | 'sysDashDotDot';
+  lineJoin?: 'miter' | 'round' | 'bevel'; // M6 repair: absent = miter (limit 8)
+  lineCap?: 'flat' | 'round' | 'square'; // M6 repair: absent = flat; round/square drawn within a preset dash
   ends?: { head?: ArrowEnd; tail?: ArrowEnd }; // arrowheads at an open path's start and end
   flipH?: boolean;
   flipV?: boolean;

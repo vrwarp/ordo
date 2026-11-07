@@ -19,3 +19,4 @@ export * from './text/index.ts';
 export * from './geom/index.ts';
 export * from './shape.ts';
 export * from './effects.ts';
+export * from './geombudget.ts';

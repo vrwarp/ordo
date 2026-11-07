@@ -56,6 +56,7 @@ import {
   presetGeometry,
 } from '@ordo/renderer/geom/path.ts';
 import { parsePathData } from '@ordo/domain/pathdata.ts';
+import { unitCost } from '@ordo/renderer/geom/cost.ts';
 import { apply, decompose, multiply, xfrmAffine } from './frame.ts';
 import type { Affine, CustomPaths, Element, Fill, Line, RectEmu, Rgba, ShapeElement } from './ir.ts';
 import { clean } from './log.ts';
@@ -380,6 +381,7 @@ export function customPaths(node: XNode, w: number, h: number, s: number): Custo
   const bh = atBox.h;
   const out: CustomPaths['paths'] = [];
   let points = 0;
+  let cost = 0;
   let over = lost;
   const built = new Map<string, BuiltGeom>();
   /** Each deck path joined from its chunks, built in its space. */
@@ -442,6 +444,9 @@ export function customPaths(node: XNode, w: number, h: number, s: number): Custo
       pieces = [''];
     }
     points += pointCount(path);
+    // What drawing it costs (renderer geom/cost.ts), in logical px: each part is one filled unit, as the
+    // renderer fills a stored path or a chain of pieces.
+    cost += unitCost(path.cmds, path.pts, pw ? (bw * s) / pw : s, ph ? (bh * s) / ph : s).est;
     for (let i = 0; i < pieces.length; i++)
       out.push({
         d: pieces[i]!,
@@ -457,6 +462,7 @@ export function customPaths(node: XNode, w: number, h: number, s: number): Custo
   return {
     paths: out,
     points,
+    cost,
     text: [fx(atBox.text.l), fy(atBox.text.t), fx(atBox.text.r), fy(atBox.text.b)],
     sites: atBox.sites.map((p) => ({ x: fx(p.x), y: fy(p.y), angle: p.angle })),
     ...(over ? { over: true } : {}),
@@ -941,12 +947,20 @@ const unit = (v: number, lo = 0, hi = 1) => (Number.isFinite(v) ? Math.min(hi, M
  * with the box; `rotWithShape="0"` turned back by the box's rotation), a path one is radial from the centre
  * of its focus rectangle (`rect` and `shape` paths noted). `over` lays each stop on a colour (backgrounds
  * on white); `log` receives what is approximated.
+ *
+ * A `rotWithShape="0"` gradient (`fill.fixed`) is turned back so that it lands where LibreOffice draws it
+ * (oox `FillProperties::pushToPropMap`): mirrored by the element's own flips (flipH: 180 − θ, flipV: −θ)
+ * and not turned. `mirrored`: the box is drawn mirrored (`ShapeObject.flipH`, the element's affine a
+ * reflection), whose drawer paints a box-space angle θb at 180 − θb + rotation on the slide (θb + rotation
+ * otherwise); `flips`: the element's own `a:xfrm` flips (`ownFlipH`, `ownFlipV`).
  */
 export function gradientOf(
   fill: Fill,
   rotation: number,
   log?: (msg: string) => void,
   over?: (c: Rgba) => Rgba,
+  mirrored = false,
+  flips: { h?: boolean; v?: boolean } = {},
 ): OrdoGradient | undefined {
   if (fill.kind !== 'gradient' || fill.stops.length < 2) return undefined;
   const stops = fill.stops.slice(0, 16).map((st) => {
@@ -967,7 +981,13 @@ export function gradientOf(
     };
   }
   let angle = fill.angle ?? 0;
-  if (fill.fixed) angle -= rotation;
+  if (fill.fixed) {
+    // Where LibreOffice draws it on the slide, then that angle in the box as the drawer places it.
+    let page = angle;
+    if (flips.h) page = 180 - page;
+    if (flips.v) page = -page;
+    angle = mirrored ? 180 - page + rotation : page - rotation;
+  }
   angle = ((angle % 360) + 360) % 360;
   return {
     kind: 'linear',

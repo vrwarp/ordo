@@ -266,7 +266,10 @@ function geomRef(v: unknown): string | undefined {
 
 type ShapeObj = Extract<SlideObject, { type: 'shape' }>;
 
-/** A shape's M6 fields within the schema's bounds (design/27 §3.1); enums are left to the schema's .catch. */
+/**
+ * A shape's M6 fields within the schema's bounds (design/27 §3.1); enums (`dash`, `lineJoin`, `lineCap`,
+ * arrowheads) are left to the schema's .catch, and defaults are dropped.
+ */
 function sanitizeShape(o: ShapeObj): ShapeObj {
   const out: ShapeObj = { ...o };
   if (o.geom) {
@@ -288,6 +291,8 @@ function sanitizeShape(o: ShapeObj): ShapeObj {
     };
   if (o.glow) out.glow = { radius: finite(o.glow.radius, 0, 0, 500), color: clampColor(o.glow.color) };
   if (o.softEdge !== undefined) out.softEdge = finite(o.softEdge, 0, 0, 500);
+  if (out.lineJoin === 'miter') delete out.lineJoin;
+  if (out.lineCap === 'flat') delete out.lineCap;
   return out;
 }
 

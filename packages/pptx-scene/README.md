@@ -116,8 +116,8 @@ values an older build draws (§3.2: `shape` rect, ellipse or line, `fill` a grad
   are drawn; gradient text paints the box (`TextStyle.paint`, `richtext.ts`), a run in another gradient
   keeps its first stop (noted). Pattern fills stay their blended colour (approx, noted).
 - **Lines**: `dash` from `a:prstDash` (all eleven), `a:custDash` the nearest by its lengths (noted); `ends`
-  from `a:headEnd`/`a:tailEnd` with their sizes. Joins (`a:round`/`a:bevel`/`a:miter`) and caps are read
-  into the IR (`Line.join`, `Line.cap`); the schema has no field for them yet.
+  from `a:headEnd`/`a:tailEnd` with their sizes. Joins (`a:round`/`a:bevel`/`a:miter`) and caps (`cap`)
+  become `lineJoin` and `lineCap` when they are not the defaults (miter, flat; M6 repair, below).
 - **Effects**: `shadow`, `glow` and `softEdge` of a visible shape from the nearest `a:effectLst` along the
   chain, else the theme's effect style (`a:effectRef`, `phClr` its colour). An invisible shape's shadow still
   falls on its text.
@@ -581,6 +581,52 @@ only tables (`budget:table`) and SmartArt drawings (`budget:smartart`) were ever
   (merged and apart put every point in the same place, the outline and dash kept, version 1 without the
   art's elements), `geom.test.ts` (the string bound against what is written, presets and open outlines).
 
+## M6 wave 2 repair (review findings)
+
+- **Drawing cost of custom geometry** (`geom.ts` `customPaths`, `walk.ts` `slideCustom`; renderer
+  `geom/cost.ts`). A custGeom's paths are rated by the renderer's own estimate (`unitCost`: the edges' length
+  along their longer axis, times 1 + the most edges active at once / 64), each stored path or `cont` chain a
+  unit, in logical px at the shape's box. Past `GEOM_COST.geometry` (1.5M; the corpus's costliest, a traced
+  8,300-point silhouette, is 0.64M) the geometry is residual with `custGeom:complex` and a note, LibreOffice
+  drawing it into the art; a slide keeps its custom geometries native while their estimates, weighted by
+  `drawWeight` (an outline 2 more, a shadow 1, a glow 3, a soft edge 3), stay within 98 % of `GEOM_COST.slide`
+  (3M; the corpus's costliest slide 1.42M), the rest going to the art the same way. A zigzag of 4,000 points
+  across its box (1.5 s at 1920 and 4.6 s at 3840 in Chromium before) is now art. The renderer holds every
+  drawn slide to the same budgets (`geombudget.ts`), so a saved or edited slide cannot pass them either.
+- **Effect budget** (`emit.ts` `fitEffects`): shapes keep their shadow, glow and soft edge, bottom first,
+  while their layers' area (`effectArea`, in slide areas; a soft edge counts twice) stays within 98 % of
+  `EFFECT_COST.slide` (10; the corpus's most effected slides reach 7.7); later shapes lose them, noted.
+- **`useBgFill`** (`walk.ts` `readShape`): the slide's background only where no `p:spPr` along the chain sets
+  a fill (`a:noFill` or none; the style's `a:fillRef` does not count), as LibreOffice reads it
+  (`pptshapegroupcontext.cxx` defaults the fill to none before `spPr` is read). A Designer layout's full-slide
+  "decorative" rect with `useBgFill="1"` and a tx1 fill is the dark panel its light text sits on (suite slide
+  0.324 → 0.934).
+- **Joins and caps** (`emit.ts` `joinsOf`): `lineJoin` round or bevel and `lineCap` round or square on every
+  stroked shape, connector, picture outline and merged run, from `Line.join` and `Line.cap`; the renderer
+  draws a round or square cap within a preset dash's length (LibreOffice takes 0.99 of a line width off each
+  dash and gives it to the gaps), so a round-capped sysDot is a row of round dots.
+- **Fixed gradients on mirrored shapes** (`geom.ts` `gradientOf`): a `rotWithShape="0"` gradient lands where
+  LibreOffice draws it, mirrored by the element's own flips (flipH 180 − θ, flipV −θ) and not turned
+  (`ElementBase.ownFlipH`, `ownFlipV`); the angle stored is expressed in the box as the drawer mirrors and
+  turns it.
+- **Picture fills and `rotWithShape`** (a choice, not a change): a picture fill is placed as LibreOffice
+  24.2 draws it, never mirrored and turned only by quarter turns, whatever `a:blipFill rotWithShape` says;
+  OOXML's `rotWithShape="1"` (PowerPoint's 'Rotate with shape') would turn and mirror it with the shape. No
+  PowerPoint render was at hand to check; the worship shards have 10 flipped picture-filled shapes in 4
+  decks and none turned past 45°.
+- **Right-to-left tables** (`tables.ts` `cellText`): `a:tblPr rtl="1"` makes the cells' paragraphs right to
+  left, one without an alignment of its own starting at the right, as LibreOffice and PowerPoint draw them.
+  The columns are not mirrored: PowerPoint mirrors their order, LibreOffice 24.2 (the fidelity reference)
+  does not.
+- **Backgrounds of slides of another aspect** (`emit.ts` `emitBackground`, `linearOverFrame`): extended to
+  the 16:9 frame, a linear gradient's stops move to where the slide's edges fall on the frame's gradient line
+  (its `scaled` angle taken at the slide's aspect), so inside the slide it is the slide's own gradient and
+  the frame carries its end colours on; a radial one is drawn over the slide itself (an ellipse of the slide's
+  aspect), on a frame rect of its outer stop's colour.
+- **Merged runs' legacy** (`emitMerged`, design/27 §3.2): a run with an outline keeps its stroke (the M6
+  drawing needs it), so an older build draws its legacy `line` along the union box's midline; a run without
+  one draws nothing there.
+
 ## Module map
 
 | File            | What                                                                                                              | Owner  |
@@ -781,7 +827,8 @@ Done (design/27 §4, §15 M1):
   anchorCtr, warp.
 - Walk: `showMasterSp` on the slide (both) and the layout (the master's); `mc:AlternateContent` through
   `chooseAlternate` (the branch `Package.xml` keeps: the first Choice of a14, p14 or p15, else Fallback); style references (fillRef, lnRef, effectRef with phClr);
-  `useBgFill` with a solid background; `a:grpFill`; groups by offset, scale, rotation and flips, a child's
+  `useBgFill` with a solid background (only where no `p:spPr` along the chain sets a fill of its own: an
+  explicit fill wins, M6 repair); `a:grpFill`; groups by offset, scale, rotation and flips, a child's
   own box scaled along the group's axes (`boxAffine`, no shear; a child the composed affine would shear is
   marked residual and still drawn; since M6 wave 2 it is approx, placed as LibreOffice places it, below);
   graphic frames residual; ≤ 32 group levels, ≤ 5,000 shapes.

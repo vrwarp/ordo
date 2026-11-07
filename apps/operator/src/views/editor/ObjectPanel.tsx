@@ -40,9 +40,11 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
     (l) => l.kind === 'stream' || (l.clearColor.g > 200 && l.clearColor.r < 60 && l.clearColor.b < 60),
   );
   const keyClash = o.type === 'text' && keyLooks.some((l) => nearColor(o.style.color, l.clearColor));
-  // A locked shape (PowerPoint art, table grids: design/27 §11 "Locked objects") keeps its style fields
-  // read-only; its box stays editable.
+  // A locked shape or picture (PowerPoint art, table grids, SmartArt pictures: design/27 §11 "Locked
+  // objects": move, resize, delete and z-order only) keeps its style fields and its picture read-only; its
+  // box stays editable.
   const shapeFixed = readOnly || (o.type === 'shape' && !!o.locked);
+  const imageFixed = readOnly || (o.type === 'image' && !!o.locked);
 
   return (
     <div className="col" style={{ gap: 10 }}>
@@ -127,7 +129,7 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
             <span className="grow ellipsis small">
               {media.find((m) => m.id === o.mediaId)?.name ?? 'Missing media'}
             </span>
-            <button type="button" className="small" disabled={readOnly} onClick={() => setPicking(true)}>
+            <button type="button" className="small" disabled={imageFixed} onClick={() => setPicking(true)}>
               Replace
             </button>
           </div>
@@ -135,15 +137,17 @@ export function ObjectPanel({ o, readOnly }: { o: SlideObject; readOnly: boolean
             label="Fit"
             value={o.fit}
             options={['contain', 'cover', 'stretch'] as const}
+            disabled={imageFixed}
             onChange={(fit) => set((x) => ({ ...x, fit }) as SlideObject)}
           />
           <NumberField
             label="Corner radius"
             value={o.radius}
             min={0}
+            disabled={imageFixed}
             onChange={(radius) => set((x) => ({ ...x, radius }) as SlideObject)}
           />
-          {picking && (
+          {picking && !imageFixed && (
             <MediaPickerDialog
               title={o.play ? 'Choose a poster image' : 'Choose an image'}
               kinds={['image']}

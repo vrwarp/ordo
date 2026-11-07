@@ -1,5 +1,16 @@
+import {
+  ARROW_MIN_BASE,
+  type ArrowKind,
+  type ArrowSize,
+  FACTOR,
+  markerPercent as markerPolygon,
+  OPEN_LENGTH,
+  OPEN_WIDTH,
+} from './markers.ts';
 import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD } from './ops.ts';
 import type { GeomPath } from './path.ts';
+
+export { ARROW_MIN_BASE, type ArrowKind, type ArrowSize };
 
 /*
  * Line ends (design/27 §3.1 `ShapeObject.ends`, §15 M6): arrowheads on open sub-paths as LibreOffice draws
@@ -17,10 +28,9 @@ import type { GeomPath } from './path.ts';
  *   so a pointed marker meets the shaft without a gap); a sub-path shorter than both ends together draws
  *   its markers only.
  * Closed sub-paths get no ends, as in LibreOffice and PowerPoint. Units are the path's (box space).
+ * The marker polygons, size factors and smallest base are LibreOffice's, ported in `markers.ts` (MPL 2.0);
+ * their placement and drawing here are ordo's own.
  */
-
-export type ArrowKind = 'triangle' | 'stealth' | 'arrow' | 'oval' | 'diamond';
-export type ArrowSize = 'sm' | 'med' | 'lg';
 
 /** An arrowhead resolved to box units. */
 export interface GeomArrow {
@@ -39,13 +49,6 @@ export interface GeomEnds {
   /** At each open sub-path's end (OOXML tailEnd). */
   readonly tail?: GeomArrow;
 }
-
-/** 0.7 mm in logical px (144 px per inch on both standard deck sizes): LibreOffice's smallest marker base. */
-export const ARROW_MIN_BASE = (0.7 / 25.4) * 144;
-
-const FACTOR: Readonly<Record<ArrowSize, number>> = { sm: 2, med: 3, lg: 5 };
-const OPEN_WIDTH: Readonly<Record<ArrowSize, number>> = { sm: 2.5, med: 3.5, lg: 5.5 };
-const OPEN_LENGTH: Readonly<Record<ArrowSize, number>> = { sm: 2.5, med: 3.5, lg: 6 };
 
 function sizeOf(v: unknown): ArrowSize {
   return v === 'sm' || v === 'lg' ? v : 'med';
@@ -80,40 +83,7 @@ export function arrowCentred(a: GeomArrow): boolean {
 
 /** The marker polygon in percent: x across the width (0..100), y back from the tip (0..100). */
 function markerPercent(a: GeomArrow): number[] {
-  switch (a.kind) {
-    case 'triangle':
-      return [50, 0, 100, 100, 0, 100];
-    case 'stealth':
-      return [50, 0, 100, 100, 50, 60, 0, 100];
-    case 'diamond':
-      return [50, 0, 100, 50, 50, 100, 0, 50];
-    case 'oval':
-      return [50, 0, 75, 7, 93, 25, 100, 50, 93, 75, 75, 93, 50, 100, 25, 93, 7, 75, 0, 50, 7, 25, 25, 7];
-    default: {
-      // tdf#100491: the open arrow's arms and stem are as thick as the line.
-      const h = Math.max((100 * 0.5 * a.line) / a.width, 1);
-      return [
-        50,
-        0,
-        100,
-        100 - h * 1.5,
-        100 - h * 1.5,
-        100,
-        50 + h,
-        5.5 * h,
-        50 + h,
-        100,
-        50 - h,
-        100,
-        50 - h,
-        5.5 * h,
-        h * 1.5,
-        100,
-        0,
-        100 - h * 1.5,
-      ];
-    }
-  }
+  return markerPolygon(a.kind, a.width, a.line);
 }
 
 /** One segment of a sub-path: its start, its control points (none, one or two) and its end. */

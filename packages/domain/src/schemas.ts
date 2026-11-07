@@ -195,6 +195,15 @@ export const LineDash = z.enum([
 ]);
 export type LineDash = z.infer<typeof LineDash>;
 
+/**
+ * A line's joins (OOXML `a:round`, `a:bevel`, `a:miter` of `a:ln`) and caps (`a:ln cap`: flat, rnd, sq);
+ * M6 repair. Absent: miter joins (limit 8) and flat caps, what every build drew before.
+ */
+export const LineJoin = z.enum(['miter', 'round', 'bevel']);
+export type LineJoin = z.infer<typeof LineJoin>;
+export const LineCap = z.enum(['flat', 'round', 'square']);
+export type LineCap = z.infer<typeof LineCap>;
+
 /** The size of an arrowhead's width or length (OOXML sm, med, lg), relative to the line width. */
 const ArrowSize = z.enum(['sm', 'med', 'lg']);
 
@@ -401,6 +410,8 @@ export const ShapeObject = z.object({
   geom: ShapeGeom.optional(),
   gradient: Gradient.optional(),
   dash: LineDash.catch('solid').optional(),
+  lineJoin: LineJoin.catch('miter').optional(),
+  lineCap: LineCap.catch('flat').optional(),
   ends: z.object({ head: ArrowEnd.optional(), tail: ArrowEnd.optional() }).optional(),
   flipH: z.boolean().optional(),
   flipV: z.boolean().optional(),

@@ -7,6 +7,7 @@ import { compileGeom, type GeomSource, newGeomNotes } from './compile.ts';
 import { geomFillPath2D } from './draw.ts';
 import { withEnds } from './ends.ts';
 import { evalGuideLists, evalGuides } from './eval.ts';
+import { GEOM_COST } from './cost.ts';
 import { GEOM_LIMITS, PATH_FILLS } from './ops.ts';
 import {
   buildGeom,
@@ -17,14 +18,15 @@ import {
   presetGeometry,
 } from './index.ts';
 import { RecPath } from './path2d.test-util.ts';
-import { storedGeometry } from './stored.ts';
+import { storedCost, storedGeometry } from './stored.ts';
 
 /**
  * The geometry engine on hostile input (design/27 §12, §14 item 3 "NaN and huge numbers, 10k path points",
  * §15 M6 "Fuzz covers guide formulas and paths"): random guide lists (every operator, unknown ones, forward
  * references and cycles, names that shadow built-ins, `__proto__`, huge and non-numeric tokens), random paths
  * of every command, random stored path strings and random boxes. Nothing throws; every value, coordinate and
- * point count stays within GEOM_LIMITS, COORD_LIMIT and PATH_DATA_LIMITS; each property runs well under 5 s.
+ * point count stays within GEOM_LIMITS, COORD_LIMIT and PATH_DATA_LIMITS, and every stored geometry built is
+ * within its drawing budget (`cost.ts`, M6 repair); each property runs well under 5 s.
  */
 
 const OPS = [
@@ -298,6 +300,40 @@ describe('geometry fuzz (design/27 §12, §15 M6)', () => {
   const commands = fc.array(command, { minLength: 1, maxLength: 300 });
   const fillMode = fc.constantFrom(...PATH_FILLS);
 
+  it('never builds a stored geometry over its drawing budget, and rates any of them quickly', () => {
+    // Random commands, often crossing each other across the box, at random box sizes: a built geometry is
+    // within GEOM_COST.geometry, else the drawer draws the legacy shape; a chain of 8 full pieces is rated
+    // fast (the estimate is linear in its points).
+    fc.assert(
+      fc.property(fc.array(commands, { minLength: 1, maxLength: 8 }), side, side, (paths, w, h) => {
+        const g = clampGeom({
+          paths: paths.map((cmds, i) => ({
+            d: cmds.map(([c, n]) => [c, ...n].join(' ')).join(' '),
+            w: 100,
+            h: 100,
+            ...(i % 2 ? { cont: true } : {}),
+          })),
+        });
+        if (!g) return;
+        const built = storedGeometry(g, w, h);
+        const cost = storedCost(built);
+        if (built && cost) expect(cost.est).toBeLessThanOrEqual(GEOM_COST.geometry);
+      }),
+      { numRuns: 300 },
+    );
+    const zig = (k: number) => {
+      let d = 'M 0 0';
+      for (let i = 1; i < 4_095; i++) d += ` L ${(i * 37 + k) % 100} ${i % 2 ? 100 : 0}`;
+      return d;
+    };
+    const t0 = performance.now();
+    const chain = {
+      paths: Array.from({ length: 8 }, (_, k) => ({ d: zig(k), w: 100, h: 100, cont: k > 0 })),
+    };
+    expect(storedGeometry(clampGeom(chain)!, 1920, 1080)).toBeUndefined();
+    expect(performance.now() - t0).toBeLessThan(1_000);
+  });
+
   it('draws a cont chain as the one path it was cut from, wherever it is cut', () => {
     vi.stubGlobal('Path2D', RecPath);
     try {
@@ -329,8 +365,11 @@ describe('geometry fuzz (design/27 §12, §15 M6)', () => {
             };
             const clamped = clampGeom(chain)!;
             expect(clamped.paths!.slice(1).every((p) => p.cont === true)).toBe(true);
-            const a = storedGeometry(clampGeom(one)!, w, h)!;
-            const b = storedGeometry(clamped, w, h)!;
+            const a = storedGeometry(clampGeom(one)!, w, h);
+            const b = storedGeometry(clamped, w, h);
+            // Its drawing estimate is the joined path's: both draw, or both are their legacy shape.
+            expect(b === undefined).toBe(a === undefined);
+            if (!a || !b) return;
             expect(b.paths).toHaveLength(1);
             expect(b.paths[0]).toEqual(a.paths[0]);
             expect((geomFillPath2D(b) as unknown as RecPath).ops).toEqual(

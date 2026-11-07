@@ -82,7 +82,7 @@ import { type CpuPool, cpuPool, transferables, WorkerStartError } from '../pool.
 import { sceneFontFiles } from './faces.ts';
 import { type ClipFile, ClipImport, spillClips } from './clips.ts';
 import { type DeckXml, readDeckXml, spillDeckParts } from './deckParts.ts';
-import { geomFileOf, type NamedGeomFile, nameGeoms, storeGeomFiles } from './geoms.ts';
+import { type NamedGeomFile, nameGeoms, storeGeomFiles } from './geoms.ts';
 import { type BakeItem, bakeMapKey, storeBakes } from './bakes.ts';
 import { displayNeeds, PictureBudget, type PictureItem, storePictures } from './pictures.ts';
 import { ImportLog, importResult, logSafe, missingFonts } from './report.ts';
@@ -110,7 +110,7 @@ import {
  */
 export type NativeJobEnv = {
   pool?: Pick<CpuPool, 'run'>;
-  limits?: { batchSlides?: number; importPoolMs?: number; geomFileBytes?: number };
+  limits?: { batchSlides?: number; importPoolMs?: number; geomFileBytes?: number; batchGeomBytes?: number };
 };
 
 /**
@@ -132,11 +132,21 @@ export function nativeJob(deps: PptxDeps, env: NativeJobEnv = {}): JobHandler<Pp
     batchSlides: env.limits?.batchSlides ?? PPTX_LIMITS.batchSlides,
     importPoolMs: env.limits?.importPoolMs ?? PPTX_LIMITS.importPoolMs,
     geomFileBytes: env.limits?.geomFileBytes ?? PPTX_LIMITS.geomFileBytes,
+    batchGeomBytes: env.limits?.batchGeomBytes ?? PPTX_LIMITS.batchGeomBytes,
   };
   return (ctx) => runNative(deps, env.pool ?? cpuPool(), limits, ctx);
 }
 
-type Limits = { batchSlides: number; importPoolMs: number; geomFileBytes: number };
+/** One converted slide of a batch, with its stored media map and what the job reads beside it. */
+type Converted = {
+  s: EmittedSlide;
+  media: Map<string, string>;
+  extra?: SceneSlideExtra;
+  /** The batch's geometry bound left it without its files (`SceneTaskOutput.geomOver`): compact. */
+  overGeoms?: boolean;
+};
+
+type Limits = { batchSlides: number; importPoolMs: number; geomFileBytes: number; batchGeomBytes: number };
 
 /** Parts read once by the scan and never by a batch. */
 const NOTES_PART = /^ppt\/(notesSlides|notesMasters)\//i;
@@ -260,6 +270,9 @@ class NativeImport {
   private readonly bakes = new Map<string, { part: string; bake: PictureBake }>();
   /** The deck's geometry files by name (M6 round 2, `geoms.ts`): what the kept slides' refs name. */
   private readonly geomFiles = new Map<string, NamedGeomFile>();
+  /** Bytes of `geomFiles`, and the names of files dropped past the import's budget as batches arrived. */
+  private geomBytes = 0;
+  private readonly geomDropped = new Set<string>();
 
   constructor(
     private readonly deps: PptxDeps,
@@ -366,10 +379,11 @@ class NativeImport {
 
     // 3. Drafts, classes and the size budgets.
     const drafts = this.drafts(listed, converted, scan);
-    const compact = this.budget(drafts);
+    let compact = this.budget(drafts);
 
-    // 3b. Geometry files the kept slides name (M6 round 2, `geoms.ts`).
-    await this.storeGeoms(drafts);
+    // 3b. Geometry files the kept slides name (M6 round 2, `geoms.ts`); a slide whose file could not be
+    // stored is a compact picture (it would draw nothing where its outline is).
+    compact += await this.storeGeoms(drafts);
     this.checkCancelled();
 
     // 3c. Clips: stored (their media jobs queued with version 1), placeholders replaced.
@@ -524,8 +538,8 @@ class NativeImport {
     listed: readonly SlideRef[],
     pictureSizes: [string, PictureHeader][],
     mediaKinds: [string, 'video' | 'audio'][] = [],
-  ): Promise<Map<number, { s: EmittedSlide; media: Map<string, string>; extra?: SceneSlideExtra }>> {
-    const out = new Map<number, { s: EmittedSlide; media: Map<string, string>; extra?: SceneSlideExtra }>();
+  ): Promise<Map<number, Converted>> {
+    const out = new Map<number, Converted>();
     const own = new Set<string>();
     for (const r of listed) {
       own.add(r.part);
@@ -570,7 +584,15 @@ class NativeImport {
       }
       try {
         const r = await this.scene(
-          { parts: batch, pictureSizes, range: { from, to }, options: this.options, mediaKinds, fonts },
+          {
+            parts: batch,
+            pictureSizes,
+            range: { from, to },
+            options: this.options,
+            mediaKinds,
+            fonts,
+            geomBytes: this.limits.batchGeomBytes,
+          },
           transferables(mine),
         );
         // Every batch must list the deck as the scan did, or its indexes would name other slides.
@@ -583,17 +605,30 @@ class NativeImport {
           r.result.media.map((m) => [m.id, m.bake ? this.bakeKeyOf(m.part, m.bake) : m.part]),
         );
         const extras = new Map((r.extras ?? []).map((e) => [e.index, e]));
-        // Geometry files are named by their content (`geoms.ts`): the batch's placeholders become names.
+        // Geometry files are named by their content in the worker (`sceneTask.ts` `nameGeomFiles`): the
+        // batch's placeholders become names. The import's budget applies as batches arrive: a file past it
+        // is dropped at once, and the slides that name it are compact pictures (step 3), as are those the
+        // batch's own bound left without their files (`geomOver`).
         const names = new Map<string, string>();
-        for (const g of r.result.geoms ?? []) {
-          const f = geomFileOf(g.file);
-          if (!f) continue;
-          names.set(g.id, f.hash);
-          if (!this.geomFiles.has(f.hash)) this.geomFiles.set(f.hash, f);
+        for (const g of r.geomFiles ?? []) {
+          names.set(g.id, g.hash);
+          if (this.geomFiles.has(g.hash) || this.geomDropped.has(g.hash)) continue;
+          if (this.geomBytes + g.bytes.length > this.limits.geomFileBytes) {
+            this.geomDropped.add(g.hash);
+            continue;
+          }
+          this.geomFiles.set(g.hash, { hash: g.hash, bytes: g.bytes });
+          this.geomBytes += g.bytes.length;
         }
+        const geomOver = new Set(r.geomOver ?? []);
         for (const s of r.result.slides) {
           s.slide = nameGeoms(s.slide, names);
-          out.set(s.index, { s, media, extra: extras.get(s.index) });
+          out.set(s.index, {
+            s,
+            media,
+            extra: extras.get(s.index),
+            ...(geomOver.has(s.index) ? { overGeoms: true } : {}),
+          });
         }
       } catch (e) {
         this.checkCancelled();
@@ -615,11 +650,7 @@ class NativeImport {
   }
 
   /** Step 3: one draft per listed slide with its class, notes, hidden flag, transition and timing. */
-  private drafts(
-    listed: readonly SlideRef[],
-    converted: Map<number, { s: EmittedSlide; media: Map<string, string>; extra?: SceneSlideExtra }>,
-    scan: SceneScan,
-  ): Draft[] {
+  private drafts(listed: readonly SlideRef[], converted: Map<number, Converted>, scan: SceneScan): Draft[] {
     const notes = new Map(scan.notes);
     let notesBytes = 0;
     let notesCut = 0;
@@ -638,6 +669,7 @@ class NativeImport {
             notes: own,
             ...(c.s.art ? { art: c.s.art, artText: c.s.art.text } : {}),
             ...(overBudget ? { overBudget } : {}),
+            ...(c.overGeoms ? { overGeoms: true } : {}),
             ...(c.s.clips?.length ? { clips: c.s.clips } : {}),
           }
         : {
@@ -691,8 +723,14 @@ class NativeImport {
     const files = new Set<string>();
     let fileBytes = 0;
     for (const d of drafts) {
-      if (d.cls === 'picture') continue;
-      const fresh = drawnGeomRefs(d.slide).filter((n) => !files.has(n) && this.geomFiles.has(n));
+      if (d.cls === 'picture' || d.overGeoms) continue;
+      const refs = drawnGeomRefs(d.slide);
+      // A file dropped past the budget as its batch arrived: the slide that needs it is compact.
+      if (refs.some((n) => this.geomDropped.has(n))) {
+        d.overGeoms = true;
+        continue;
+      }
+      const fresh = refs.filter((n) => !files.has(n) && this.geomFiles.has(n));
       const bytes = fresh.reduce((n, name) => n + this.geomFiles.get(name)!.bytes.length, 0);
       if (fileBytes + bytes > this.limits.geomFileBytes) {
         d.overGeoms = true;
@@ -762,15 +800,30 @@ class NativeImport {
     return compact;
   }
 
-  /** Step 3b: the geometry files the kept slides name, stored once each (`storeGeomFiles`). */
-  private async storeGeoms(drafts: Draft[]): Promise<void> {
+  /**
+   * Step 3b: the geometry files the kept slides name, stored once each (`storeGeomFiles`). A slide naming a
+   * file that could not be stored is made a compact picture (a shape whose file never arrives draws nothing,
+   * `geom/stored.ts`); returns how many.
+   */
+  private async storeGeoms(drafts: Draft[]): Promise<number> {
     const names: string[] = [];
     for (const d of drafts) if (d.cls !== 'picture') names.push(...drawnGeomRefs(d.slide));
-    if (!names.length) return;
+    if (!names.length) return 0;
     const r = await storeGeomFiles(this.deps.store, this.deps.lib, this.geomFiles, names, (m) =>
       this.warn('geometry', m),
     );
     if (r.written) this.ctx.log(`${r.written} shape outline file(s) stored`);
+    if (!r.failed.length) return 0;
+    const failed = new Set(r.failed);
+    let n = 0;
+    for (const d of drafts) {
+      if (d.cls === 'picture' || !drawnGeomRefs(d.slide).some((x) => failed.has(x))) continue;
+      d.compact = true;
+      d.notes.push('its shape outlines could not be stored: a LibreOffice picture');
+      toPicture(d);
+      n++;
+    }
+    return n;
   }
 
   /**
@@ -885,6 +938,13 @@ class NativeImport {
       log: (msg) => {
         if (msg.startsWith('[warn] ')) this.warn('picture', logSafe(msg.slice(7), 400));
         else this.log.add('info', msg);
+      },
+      // Bakes run on the pool too: their time counts against the import's (§12: 15 minutes).
+      poolTime: {
+        add: (ms) => {
+          this.poolMs += ms;
+        },
+        spent: () => this.poolMs > this.limits.importPoolMs,
       },
     });
     if (this.ctx.signal.aborted) throw new Cancelled();

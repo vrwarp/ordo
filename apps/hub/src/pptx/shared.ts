@@ -53,6 +53,13 @@ export const PPTX_LIMITS = {
    * the worship decks measured needs 0.6 MB); a slide whose new files would pass it is a compact picture.
    */
   geomFileBytes: 32 * MiB,
+  /**
+   * Bytes of geometry files one `pptx-scene` batch may return (named in the worker, `sceneTask.ts`); a slide
+   * whose new files would pass it is a compact picture, so neither the worker's output nor the library
+   * process ever holds more than this of one batch (a layout's custGeom rebuilt at every slide's size made
+   * 0.5 MB a slide).
+   */
+  batchGeomBytes: 32 * MiB,
 } as const;
 
 /** The options of a native import: form fields of `POST /import/document`, kept in the job payload. */
@@ -280,6 +287,8 @@ export type SceneTaskInput = {
    * §15 M6: a row grows to its text). Absent: widths are estimated.
    */
   fonts?: SceneFontFile[];
+  /** Bytes of geometry files the batch may return (`PPTX_LIMITS.batchGeomBytes`; tests set less). */
+  geomBytes?: number;
 };
 export type SceneTaskOutput = {
   result: ConvertResult;
@@ -290,6 +299,14 @@ export type SceneTaskOutput = {
   scan?: SceneScan;
   /** Per converted slide, what `convertDeck` does not read (`transition.ts`). */
   extras?: SceneSlideExtra[];
+  /**
+   * The batch's geometry files, named in the worker (`geoms.ts` `geomFileOf`: re-tokenised, serialised and
+   * hashed off the library's event loop): placeholder (`EmitResult.geoms` id) → SHA-256 name and JSON bytes.
+   * `result.geoms` is emptied. At most `PPTX_LIMITS.batchGeomBytes` of distinct files.
+   */
+  geomFiles?: { id: string; hash: string; bytes: Uint8Array }[];
+  /** Slides whose new geometry files would pass `PPTX_LIMITS.batchGeomBytes`: compact pictures. */
+  geomOver?: number[];
 };
 
 /** What the first `pptx-scene` call reads for the whole deck (`sceneTask.ts`). */

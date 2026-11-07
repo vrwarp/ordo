@@ -17,13 +17,14 @@
  *   `convertDeck` does not read: only the part's tail after `p:cSld` is parsed for it.
  */
 import { getHeapStatistics } from 'node:v8';
-import { newId } from '@ordo/domain';
+import { drawnGeomRefs, newId } from '@ordo/domain';
 import { type ConvertResult, convertDeck, type SlideRef } from '@ordo/pptx-scene';
 import { readNotes } from '@ordo/pptx-scene/notes.ts';
 import { openPackage, type Package, relType } from '@ordo/pptx-scene/opc.ts';
 import { extensionOf, METAFILE_EXTENSIONS } from '@ordo/pptx-scene/picture.ts';
 import { readSlideTransition, showLoops } from '@ordo/pptx-scene/transition.ts';
 import { libraryFaces } from './faces.ts';
+import { geomFileOf, type NamedGeomFile } from './geoms.ts';
 import {
   PPTX_LIMITS,
   type SceneScan,
@@ -49,11 +50,51 @@ export function sceneTask(input: SceneTaskInput): SceneTaskOutput {
     newId,
   });
   const out: SceneTaskOutput = { result, ms: 0, heapMb: 0 };
+  nameGeomFiles(out, input.geomBytes ?? PPTX_LIMITS.batchGeomBytes);
   if (input.scan) out.scan = scanDeck(openPackage(input.parts), result.listed);
   else if (result.slides.length) out.extras = extrasOf(openPackage(input.parts), result);
   out.ms = performance.now() - t0;
   out.heapMb = getHeapStatistics().used_heap_size / (1024 * 1024);
   return out;
+}
+
+/**
+ * The batch's geometry files named here, in the worker (`geomFileOf`: re-tokenised, checked, serialised and
+ * hashed), slide by slide: a slide whose new files would take the batch past `maxBytes` keeps none and is
+ * listed in `geomOver` (the job makes it a compact picture). `result.geoms` is emptied: the job reads only
+ * the named files, whose bytes are all it holds.
+ */
+export function nameGeomFiles(out: SceneTaskOutput, maxBytes: number): void {
+  const geoms = out.result.geoms ?? [];
+  if (!geoms.length) return;
+  const byId = new Map<string, NamedGeomFile | undefined>();
+  for (const g of geoms) byId.set(g.id, geomFileOf(g.file));
+  const kept = new Map<string, NamedGeomFile>();
+  const hashes = new Set<string>();
+  const over: number[] = [];
+  let bytes = 0;
+  for (const s of out.result.slides) {
+    const ids = drawnGeomRefs(s.slide).filter((id) => byId.get(id) && !kept.has(id));
+    const fresh = new Map<string, number>();
+    for (const id of ids) {
+      const f = byId.get(id)!;
+      if (!hashes.has(f.hash)) fresh.set(f.hash, f.bytes.length);
+    }
+    const add = [...fresh.values()].reduce((a, b) => a + b, 0);
+    if (bytes + add > maxBytes) {
+      over.push(s.index);
+      continue;
+    }
+    bytes += add;
+    for (const id of ids) {
+      const f = byId.get(id)!;
+      kept.set(id, f);
+      hashes.add(f.hash);
+    }
+  }
+  out.result.geoms = [];
+  out.geomFiles = [...kept].map(([id, f]) => ({ id, hash: f.hash, bytes: f.bytes }));
+  if (over.length) out.geomOver = over;
 }
 
 type Images = { pictures: string[]; metafiles: string[] };

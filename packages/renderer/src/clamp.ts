@@ -420,6 +420,9 @@ function clampShapeExtras(s: Partial<ShapeObj>, out: ShapeObj): void {
     const dash = LINE_DASHES.includes(s.dash) ? s.dash : 'solid';
     if (dash !== 'solid') out.dash = dash;
   }
+  // Joins and caps: unknown values are the defaults (the schema's .catch), which are left out.
+  if (s.lineJoin === 'round' || s.lineJoin === 'bevel') out.lineJoin = s.lineJoin;
+  if (s.lineCap === 'round' || s.lineCap === 'square') out.lineCap = s.lineCap;
   if (s.ends && typeof s.ends === 'object') {
     const head = clampArrowEnd(s.ends.head);
     const tail = clampArrowEnd(s.ends.tail);

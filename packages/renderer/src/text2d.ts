@@ -29,7 +29,8 @@ import {
 } from './picture.ts';
 import { EFFECT_MAX_PIXELS } from './effects.ts';
 import { GEOM_CLIP_RULE, geomFillPath2D } from './geom/draw.ts';
-import { storedGeometry } from './geom/stored.ts';
+import { geomAwaited, storedGeometry } from './geom/stored.ts';
+import { withinDrawBudget } from './geombudget.ts';
 import { drawGeomShape, hasShapeExtras, placeBox } from './shape.ts';
 import { firstStrong, hasStrongRtl } from './text/bidi.ts';
 import { LEGACY_FONT_ENV, currentFontEnv } from './text/fonts.ts';
@@ -485,6 +486,8 @@ export function drawObject(ctx: Ctx2D, o: SlideObject, scale: number, images?: I
   if (o.type === 'text') drawTextObject(ctx, o, scale);
   else if (o.type === 'shape') drawShape(ctx, o, scale);
   else {
+    // A mask only in a geometry file not read yet: the picture waits for it, as for its own decode.
+    if (geomAwaited(o.mask)) return;
     const target = pictureTarget(o, scale);
     const img = images?.(o.mediaId, target);
     if (img) drawImageFit(ctx, img, o.box, scale, o.fit, o.opacity, o.radius, o.crop, target, o);
@@ -579,7 +582,7 @@ export function slidePictures(
   const out: SlidePicture[] = [];
   if (drawn.pictureMediaId)
     out.push({ mediaId: drawn.pictureMediaId, target: pictureTarget(SLIDE_PICTURE, scale) });
-  for (const o of drawn.objects)
+  for (const o of withinDrawBudget(drawn.objects))
     if (o.type === 'image') out.push({ mediaId: o.mediaId, target: pictureTarget(o, scale) });
   return out;
 }
@@ -605,7 +608,9 @@ export function drawSlide2D(ctx: Ctx2D, rawSlide: Slide, opts: SlideDrawOptions)
       const img = opts.images?.(drawn.pictureMediaId, target);
       if (img) drawImageFit(ctx, img, SLIDE_PICTURE.box, scale, 'contain', 1, 0, undefined, target);
     }
-    for (const o of drawn.objects) drawObject(ctx, o, scale, opts.images);
+    // Past the slide's drawing budget, later stored geometries draw as their legacy shapes and later effects are
+    // left out (geombudget.ts).
+    for (const o of withinDrawBudget(drawn.objects)) drawObject(ctx, o, scale, opts.images);
     return;
   }
   const text = lyricTextFor(slide, look, opts.isSong ?? true);

@@ -75,6 +75,7 @@
  */
 import type {
   GeomFile,
+  Gradient as OrdoGradient,
   ImageObject,
   Rgba as OrdoRgba,
   ShapeGeom,
@@ -83,6 +84,7 @@ import type {
   SlideObject,
   TextObject,
 } from '@ordo/domain';
+import { EFFECT_COST, effectArea } from '@ordo/renderer/geom/cost.ts';
 import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD } from '@ordo/renderer/geom/ops.ts';
 import { apply, boxPx, decompose, lenPx, multiply, ptPx, slideRect } from './frame.ts';
 import { bakeKey, bakeOf, type PictureBake } from './bake.ts';
@@ -114,6 +116,7 @@ import type {
   Fill,
   Frame,
   Insets,
+  Line,
   Para,
   PictureElement,
   PictureFill,
@@ -558,10 +561,36 @@ function emitSlide(ctx: EmitCtx, s: SlideScene, spans: [number, number][] = []):
     ctx.log(`more than ${MAX_OBJECTS} objects: the top ones are not drawn`);
     objects.length = MAX_OBJECTS;
   }
+  fitEffects(ctx, objects);
   // A SmartArt node's text is a fragment of a diagram, never the lyric box.
   const lyric = lyricOf(texts.filter((t) => objects.includes(t.o) && t.e.diagram === undefined));
   if (lyric) slide.lyricObjectId = lyric.id;
   return slide;
+}
+
+/**
+ * The slide's effect budget (renderer `geom/cost.ts` `EFFECT_COST`, design/27 §12 drawing cost): shapes keep
+ * their shadow, glow and soft edge, bottom first, while the area of their layers stays within it; later ones
+ * lose them, with a note, as the renderer would draw them (`geombudget.ts`). The corpus's most effected
+ * slides use 7.7 of its 10 slide areas.
+ */
+function fitEffects(ctx: EmitCtx, objects: SlideObject[]): void {
+  let area = 0;
+  let dropped = 0;
+  for (const o of objects) {
+    if (o.type !== 'shape') continue;
+    const a = effectArea(o);
+    if (!a) continue;
+    if (area + a <= EFFECT_COST.slide * 0.98) {
+      area += a;
+      continue;
+    }
+    delete o.shadow;
+    delete o.glow;
+    delete o.softEdge;
+    dropped++;
+  }
+  if (dropped) ctx.log(`the effects of ${dropped} shape(s) past the slide's effect budget are not drawn`);
 }
 
 /**
@@ -751,8 +780,56 @@ function emitBackground(ctx: EmitCtx, s: SlideScene, slide: Slide): void {
   const bg = shape(ctx, area, 'rect', color ? overWhite(color) : WHITE);
   // M6: a gradient over the background area, each stop laid on white (the first stop is the legacy colour).
   const gradient = gradientOf(fill, 0, ctx.log, overWhite);
-  if (gradient) bg.gradient = gradient;
+  const framed = area.w !== rect.w || area.h !== rect.h || area.x !== rect.x || area.y !== rect.y;
+  if (gradient && framed && gradient.kind === 'radial') {
+    // Extended past a slide of another aspect: the slide's own gradient over the slide (a radial one is an
+    // ellipse of the slide's aspect, which the frame's could not be), the frame around it in the colour the
+    // gradient ends in (where the slide's gradient would carry on).
+    const outer = gradient.stops.reduce((a, b) => (b.at >= a.at ? b : a)).color;
+    bg.fill = outer;
+    slide.objects.push(bg);
+    const inner = shape(ctx, rect, 'rect', color ? overWhite(color) : WHITE);
+    inner.gradient = gradient;
+    slide.objects.push(inner);
+    return;
+  }
+  if (gradient) bg.gradient = framed ? linearOverFrame(gradient, rect, area) : gradient;
   slide.objects.push(bg);
+}
+
+/**
+ * A linear gradient laid over the slide area `rect` (as the slide defines it), expressed over the larger
+ * `area` it is drawn on (the 16:9 frame of a slide of another aspect, `extendBackgrounds`): the same direction
+ * in px (a `scaled` angle taken at the slide's aspect), the stops moved to where they fall on the frame's
+ * gradient line, so that inside the slide it is the slide's gradient and the frame around it carries its end
+ * colours on (the drawer pads past the stops).
+ */
+export function linearOverFrame(
+  g: OrdoGradient,
+  rect: { x: number; y: number; w: number; h: number },
+  area: { x: number; y: number; w: number; h: number },
+): OrdoGradient {
+  const th = ((g.angle ?? 0) * Math.PI) / 180;
+  let nx = g.scaled ? rect.h * Math.cos(th) : Math.cos(th);
+  let ny = g.scaled ? rect.w * Math.sin(th) : Math.sin(th);
+  const len = Math.hypot(nx, ny) || 1;
+  nx /= len;
+  ny /= len;
+  const line = (b: { x: number; y: number; w: number; h: number }) => {
+    const half = (Math.abs(b.w * nx) + Math.abs(b.h * ny)) / 2 || 0.5;
+    const centre = (b.x + b.w / 2) * nx + (b.y + b.h / 2) * ny;
+    return { from: centre - half, len: 2 * half };
+  };
+  const s = line(rect);
+  const f = line(area);
+  const at = (v: number) => Math.min(1, Math.max(0, (s.from + v * s.len - f.from) / f.len));
+  const angle = ((((Math.atan2(ny, nx) * 180) / Math.PI) % 360) + 360) % 360;
+  const { scaled: _scaled, ...rest } = g;
+  return {
+    ...rest,
+    angle: Math.round(angle * 1e6) / 1e6,
+    stops: g.stops.map((st) => ({ ...st, at: Math.round(at(st.at) * 1e6) / 1e6 })),
+  };
 }
 
 /** A colour laid on white, as a slide background is: opaque. */
@@ -843,6 +920,7 @@ function emitPicture(ctx: EmitCtx, e: PictureElement, out: SlideObject[]): void 
     if (geom && decompose(e.xf).flipH) o.flipH = true;
     const dash = dashOf(e.line, ctx.log);
     if (dash) o.dash = dash;
+    joinsOf(o, e.line);
     out.push(o);
   }
 }
@@ -881,17 +959,31 @@ function shadowPx(ctx: EmitCtx, shadow: Shadow): NonNullable<ShapeObject['shadow
 }
 
 /**
+ * A line's joins and caps (`a:round`/`a:bevel`/`a:miter`, `cap`) on a stroked shape object, when they are
+ * not the defaults (miter, flat), as LibreOffice draws them (M6 repair).
+ */
+function joinsOf(o: ShapeObject, line: Line): void {
+  if (line.join === 'round' || line.join === 'bevel') o.lineJoin = line.join;
+  if (line.cap === 'round' || line.cap === 'square') o.lineCap = line.cap;
+}
+
+/**
  * The M6 fields of a shape object (design/27 §3.1): its geometry, gradient, dash, arrowheads, flips and
  * effects. The legacy fields beside them stay what an older build draws.
  */
 function styleShape(ctx: EmitCtx, o: ShapeObject, e: ShapeElement, geom: ShapeGeom | undefined): void {
   if (geom) o.geom = geom;
-  const gradient = gradientOf(e.fill, o.box.rotation, ctx.log);
+  const mirrored = decompose(e.xf).flipH;
+  const gradient = gradientOf(e.fill, o.box.rotation, ctx.log, undefined, mirrored, {
+    h: e.ownFlipH,
+    v: e.ownFlipV,
+  });
   if (gradient && o.fill) o.gradient = gradient;
-  if ((o.geom || o.gradient) && decompose(e.xf).flipH) o.flipH = true;
+  if ((o.geom || o.gradient) && mirrored) o.flipH = true;
   if (o.stroke && e.line) {
     const dash = dashOf(e.line, ctx.log);
     if (dash) o.dash = dash;
+    joinsOf(o, e.line);
     const ends = endsOf(e.line);
     if (ends) o.ends = ends;
   }
@@ -949,6 +1041,7 @@ function emitShape(ctx: EmitCtx, e: ShapeElement, out: SlideObject[], texts: Emi
       if (o) {
         const dash = dashOf(e.line, ctx.log);
         if (dash) o.dash = dash;
+        joinsOf(o, e.line);
         const ends = endsOf(e.line);
         if (ends) o.ends = ends;
         if (e.shadow) o.shadow = shadowPx(ctx, e.shadow);
@@ -1018,6 +1111,7 @@ function emitMerged(ctx: EmitCtx, run: ShapeElement[], out: SlideObject[], texts
     o.stroke = { width: strokeWidth(ctx, first.line.width), color: stroke };
     const dash = dashOf(first.line, ctx.log);
     if (dash) o.dash = dash;
+    joinsOf(o, first.line);
   }
   o.geom = { paths: mergedPaths(list, box, f.s) };
   out.push(o);

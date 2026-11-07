@@ -1,4 +1,4 @@
-import type { Box, LineDash, ShapeObject } from '@ordo/domain';
+import type { Box, LineCap, LineDash, LineJoin, ShapeObject } from '@ordo/domain';
 
 import { CLAMP, clampObject, num } from './clamp.ts';
 import type { Ctx2D } from './ctx.ts';
@@ -8,7 +8,7 @@ import { drawGeom, type GeomFill, type GeomStroke, geomFillPath2D, geomPath2D } 
 import { ARROW_MIN_BASE, arrowFor, arrowReach, type GeomEnds } from './geom/ends.ts';
 import { gradientStyle } from './geom/paint.ts';
 import type { BuiltGeom } from './geom/path.ts';
-import { geomPending, legacyGeometry, storedGeometry } from './geom/stored.ts';
+import { geomAwaited, geomPending, legacyGeometry, storedGeometry } from './geom/stored.ts';
 
 /*
  * PowerPoint shapes (design/27 §3.1 ShapeObject M6 fields, §7.1, §15 M6): a shape with any of `geom`,
@@ -17,8 +17,11 @@ import { geomPending, legacyGeometry, storedGeometry } from './geom/stored.ts';
  * - Geometry: the stored preset or paths at the box (geom/stored.ts), else the legacy rect, roundRect,
  *   ellipse or line.
  * - Paint: `gradient` (geom/paint.ts) over `fill`; the outline in `stroke`, with `dash` (prstDash scaled by
- *   the line width, LibreOffice's lclConvertPresetDash) and `ends` (geom/ends.ts). Miter joins, limit 8
- *   (OOXML's usual `a:miter lim="800000"`), flat caps (Office's default).
+ *   the line width, LibreOffice's lclConvertPresetDash) and `ends` (geom/ends.ts); `lineJoin` (miter, limit 8:
+ *   OOXML's usual `a:miter lim="800000"`, else round or bevel) and `lineCap` (flat, Office's default, else
+ *   round or square). A round or square cap is drawn within a preset dash's length as Office draws it:
+ *   LibreOffice takes one line width off each dash or dot of at least that length and adds it to the gaps
+ *   (lineproperties.cxx), so a round-capped sysDot is a row of round dots.
  * - Placement: box space (0..w, 0..h, logical px) flipped about the box's centre, rotated about it, scaled to
  *   the device.
  * - Effects (effects.ts): shadow, glow and soft edge through sprites, the whole shape at its opacity.
@@ -35,7 +38,9 @@ export function hasShapeExtras(o: Partial<ShapeObject>): boolean {
     o.flipV === true ||
     o.shadow !== undefined ||
     o.glow !== undefined ||
-    o.softEdge !== undefined
+    o.softEdge !== undefined ||
+    (o.lineJoin !== undefined && o.lineJoin !== 'miter') ||
+    (o.lineCap !== undefined && o.lineCap !== 'flat')
   );
 }
 
@@ -56,6 +61,29 @@ export const DASH_PATTERNS: Readonly<Record<LineDash, readonly number[]>> = {
 
 /** The miter limit of shape outlines (OOXML a:miter lim="800000", the Office themes' line style). */
 export const SHAPE_MITER_LIMIT = 8;
+
+/**
+ * A preset dash pattern (× the line width) with a round or square cap: each dash or dot of at least one line
+ * width loses 0.99 of it and every gap gains 0.99 when one does (LibreOffice lineproperties.cxx: Office
+ * counts those caps within a preset dash's length; Canvas adds them).
+ */
+export function cappedDash(pattern: readonly number[], cap: LineCap | undefined): number[] {
+  if (cap !== 'round' && cap !== 'square') return [...pattern];
+  const long = pattern.some((v, i) => i % 2 === 0 && v >= 1);
+  if (!long) return [...pattern];
+  return pattern.map((v, i) => (i % 2 === 0 ? (v >= 1 ? v - 0.99 : v) : v + 0.99));
+}
+
+/** Canvas's lineJoin and lineCap for a shape's (defaults: miter, butt). */
+export function lineStyleOf(o: { lineJoin?: LineJoin; lineCap?: LineCap }): {
+  join: CanvasLineJoin;
+  cap: CanvasLineCap;
+} {
+  return {
+    join: o.lineJoin === 'round' || o.lineJoin === 'bevel' ? o.lineJoin : 'miter',
+    cap: o.lineCap === 'round' ? 'round' : o.lineCap === 'square' ? 'square' : 'butt',
+  };
+}
 
 const clamped = new WeakMap<object, ShapeObject>();
 
@@ -82,6 +110,9 @@ type Plan = {
   stroke: GeomStroke | null;
   /** Box-space bounds of what is drawn, strokes and markers included. */
   bounds: Bounds;
+  /** The effects' silhouettes, built once per plan when an effect layer is first made. */
+  fillPath?: Path2D;
+  strokePaths?: Path2D[];
 };
 
 /** Plans per shape and context; one made while its geometry file was not read is made again once it is. */
@@ -110,7 +141,7 @@ function planOf(ctx: Ctx2D, o: ShapeObject): Plan {
   let stroke: GeomStroke | null = null;
   const lw = o.stroke ? num(o.stroke.width, 0, CLAMP.maxEffectPx, 1) : 0;
   if (o.stroke && lw > 0) {
-    const pattern = DASH_PATTERNS[o.dash ?? 'solid'] ?? [];
+    const pattern = cappedDash(DASH_PATTERNS[o.dash ?? 'solid'] ?? [], o.lineCap);
     const ends: GeomEnds = {
       head: arrowFor(o.ends?.head?.type, o.ends?.head?.w, o.ends?.head?.len, lw, ARROW_MIN_BASE),
       tail: arrowFor(o.ends?.tail?.type, o.ends?.tail?.w, o.ends?.tail?.len, lw, ARROW_MIN_BASE),
@@ -125,7 +156,7 @@ function planOf(ctx: Ctx2D, o: ShapeObject): Plan {
   const bounds = geomBounds(built);
   const grow = stroke
     ? Math.max(
-        (stroke.width / 2) * SHAPE_MITER_LIMIT,
+        (stroke.width / 2) * (o.lineJoin === 'round' || o.lineJoin === 'bevel' ? 1.5 : SHAPE_MITER_LIMIT),
         arrowReach(stroke.ends?.head),
         arrowReach(stroke.ends?.tail),
       )
@@ -184,10 +215,11 @@ export function placeBox(ctx: Ctx2D, box: Box, scale: number, flipH = false, fli
   ctx.translate(-box.w / 2, -box.h / 2);
 }
 
-function styleLines(c: Ctx2D): void {
-  c.lineJoin = 'miter';
+function styleLines(c: Ctx2D, o: ShapeObject): void {
+  const { join, cap } = lineStyleOf(o);
+  c.lineJoin = join;
   c.miterLimit = SHAPE_MITER_LIMIT;
-  c.lineCap = 'butt';
+  c.lineCap = cap;
 }
 
 const keys = new WeakMap<ShapeObject, string | undefined>();
@@ -209,6 +241,8 @@ function effectKey(o: ShapeObject): string | undefined {
 /** Draw a shape with M6 fields (`hasShapeExtras`) at `scale` device px per logical px. */
 export function drawGeomShape(ctx: Ctx2D, raw: ShapeObject, scale: number): void {
   const o = clampShapeObject(raw);
+  // A geometry only in a file not read yet draws nothing until it is (`geomAwaited`).
+  if (geomAwaited(o.geom)) return;
   const plan = planOf(ctx, o);
   const opacity = num(o.opacity, 0, 1, 1);
   if ((!plan.fill && !plan.stroke) || opacity <= 0) return;
@@ -225,12 +259,22 @@ export function drawGeomShape(ctx: Ctx2D, raw: ShapeObject, scale: number): void
         scale: device,
         bounds: plan.bounds,
         draw: (c) => {
-          styleLines(c);
+          styleLines(c, o);
           drawGeom(c, plan.built, plan.fill, plan.stroke);
         },
-        fill: plan.fill ? geomFillPath2D(plan.built) : undefined,
-        strokes: plan.stroke ? plan.built.paths.filter((p) => p.stroke).map(geomPath2D) : undefined,
+        // Built only when a layer is made (a cached layer needs neither), once per plan.
+        get fill() {
+          if (!plan.fill) return undefined;
+          plan.fillPath ??= geomFillPath2D(plan.built);
+          return plan.fillPath;
+        },
+        get strokes() {
+          if (!plan.stroke) return undefined;
+          plan.strokePaths ??= plan.built.paths.filter((p) => p.stroke).map(geomPath2D);
+          return plan.strokePaths;
+        },
         lineWidth: plan.stroke?.width ?? 0,
+        ...lineStyleOf(o),
         shadow: o.shadow,
         glow: o.glow,
         softEdge: o.softEdge,
@@ -245,7 +289,7 @@ export function drawGeomShape(ctx: Ctx2D, raw: ShapeObject, scale: number): void
     }
   }
   ctx.globalAlpha *= opacity;
-  styleLines(ctx);
+  styleLines(ctx, o);
   drawGeom(ctx, plan.built, plan.fill, plan.stroke);
   ctx.restore();
 }

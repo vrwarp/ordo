@@ -85,6 +85,12 @@ describe('libraryFaces', () => {
     expect(f.advance(0x78)).toBe(0.4);
     expect(f.advance(0x3b1)).toBe(0.7);
     expect(f.advance(0x41)).toBeUndefined();
+    // The first subset's line metrics, and a pair kerned only by a face that has both characters.
+    const one = libraryFaces(files)('Test Sans', false, false)!;
+    expect(f.lineHeight).toBe(one.lineHeight);
+    expect(f.ascent).toBe(one.ascent);
+    expect(f.descent).toBe(one.descent);
+    expect(f.kern?.(0x78, 0x3b1)).toBe(0);
   });
 
   it('reads no more files than its limits and survives files it cannot read', () => {

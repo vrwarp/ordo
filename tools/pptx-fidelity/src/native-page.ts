@@ -3,6 +3,7 @@ import { currentFontEnv, type FontFile, FontResolver, installFontEnv } from '@or
 import type { FaceRequest } from '@ordo/renderer/text/types.ts';
 import { pictureKey } from '@ordo/renderer/bitmap-cache.ts';
 import { clearGeomFiles, putGeomFile } from '@ordo/renderer/geom/stored.ts';
+import { withoutExifOrientation } from './exif.ts';
 import { type PictureTarget, pictureTarget, preparePicture } from '@ordo/renderer/picture.ts';
 import {
   type ImageLookup,
@@ -133,12 +134,17 @@ function put(key: string, bmp: ImageBitmap | undefined): void {
   cached += d.px;
 }
 
-/** The file decoded at its own size (colour profile kept, as `createImageBitmap` keeps it in the output). */
+/**
+ * The file decoded at its own size (colour profile kept, as `createImageBitmap` keeps it in the output), a
+ * JPEG's EXIF orientation removed first (`exif.ts`).
+ */
 async function decode(m: PageMedia): Promise<ImageBitmap | undefined> {
   try {
     const res = await fetch(m.url);
     if (!res.ok) return undefined;
-    return await createImageBitmap(await res.blob());
+    // As stored: an EXIF orientation is not applied, as PowerPoint and the hub's preparation lay it out.
+    const bytes = withoutExifOrientation(new Uint8Array(await res.arrayBuffer()));
+    return await createImageBitmap(new Blob([bytes as BlobPart]));
   } catch {
     return undefined;
   }

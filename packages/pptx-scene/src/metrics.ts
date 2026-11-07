@@ -70,6 +70,12 @@ export const SFNT_LIMITS = {
   /** `GPOS` lookups looked at, and pair subtables kept in all. */
   lookups: 1_024,
   subtables: 4_096,
+  /**
+   * Pair subtables tried for one pair (the first that covers it decides): a hostile font whose thousands of
+   * subtables all cover a glyph and never match would otherwise make each pair cost two binary searches per
+   * subtable. Real fonts have a few per lookup.
+   */
+  pairTries: 64,
   /** Legacy `kern` subtables read. */
   kernTables: 64,
 } as const;
@@ -454,8 +460,10 @@ function gposKerning(r: Reader, upm: number): Pairs | undefined | null {
   if (!tables.length) return undefined;
   return (a, b) => {
     let v = 0;
+    let tries = 0;
     for (const subs of tables)
       for (const st of subs) {
+        if (++tries > SFNT_LIMITS.pairTries) return v / upm;
         const d = pairPos(r, st, a, b);
         if (d !== undefined) {
           v += d;

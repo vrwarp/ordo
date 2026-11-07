@@ -19,8 +19,18 @@ import {
 import { buildDeck, imageRel, pic, sp } from '@ordo/pptx-scene/test-util.ts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { bakeTask } from '../src/pptx/bakeTask.ts';
-import { BAKE_KEY_PREFIX, bakeHash, bakeMapKey, bakeSize } from '../src/pptx/bakes.ts';
-import { pictureHeader } from '../src/pptx/pictures.ts';
+import type { PictureBake } from '@ordo/pptx-scene/bake.ts';
+import type { CpuPool } from '../src/pool.ts';
+import {
+  BAKE_KEY_PREFIX,
+  type BakeItem,
+  bakeHash,
+  bakeMapKey,
+  bakeSize,
+  type StoreBakesOptions,
+  storeBakes,
+} from '../src/pptx/bakes.ts';
+import { PictureBudget, pictureHeader } from '../src/pptx/pictures.ts';
 import type { PptxNativeResult } from '../src/pptx/shared.ts';
 import { ffmpeg } from './fixtures.ts';
 import { startHub, type TestHub, tempDir } from './helpers.ts';
@@ -270,6 +280,72 @@ describe('baked pictures through the native import', () => {
     expect(job.log.join('\n')).toMatch(/drawn without its effects or tiles/);
     expect(readFileSync(hub.store.abs(hub.lib.media.must(img.mediaId).original.path)).length).toBeGreaterThan(
       0,
+    );
+  }, 120_000);
+
+  it("bounds an import's bakes: their number, their decode and output size, their pool time", async () => {
+    const file = join(dir, 'media', 'red.png');
+    // Distinct duotones of one tiny picture: each would be its own pool task and media item.
+    const items: BakeItem[] = Array.from({ length: 6 }, (_, i) => {
+      const bake: PictureBake = {
+        recolor: [
+          { kind: 'duotone', dark: { r: i, g: 0, b: 0, a: 1 }, light: { r: 255, g: 255, b: 255, a: 1 } },
+        ],
+      };
+      return { key: bakeMapKey('ppt/media/red.png', bake), part: 'ppt/media/red.png', file, bake, need: 320 };
+    });
+    let runs = 0;
+    const pool = {
+      run: (async (_name: string, input: unknown) => {
+        runs++;
+        return bakeTask(input as Parameters<typeof bakeTask>[0]);
+      }) as Pick<CpuPool, 'run'>['run'],
+    };
+    const logs: string[] = [];
+    const opts = (over: Partial<StoreBakesOptions> = {}): StoreBakesOptions => ({
+      dir,
+      timeoutMs: 30_000,
+      signal: new AbortController().signal,
+      budget: new PictureBudget(),
+      done: [],
+      save: () => {},
+      name: () => 'Bakes',
+      tags: [],
+      log: (m) => logs.push(m),
+      ...over,
+    });
+    // At most `maxBakes` (500 in an import): the rest show their source pictures, noted once.
+    const capped = await storeBakes(hub.imports.pptx.deps, pool, items, opts({ maxBakes: 4 }));
+    expect(capped.media.size).toBe(4);
+    expect(capped.failed.map(([, why]) => why)).toEqual([
+      'more than 4 baked pictures in one deck',
+      'more than 4 baked pictures in one deck',
+    ]);
+    expect(logs.filter((l) => /past the 4 an import bakes/.test(l))).toHaveLength(1);
+    expect(runs).toBe(capped.baked); // one of them may be found already (an earlier test made it)
+    expect(capped.baked + capped.reused).toBe(4);
+    // Each charges what it decodes and makes: a 320 x 180 source read and made at 320 x 180 is 3 x 0.0576 MP.
+    const fresh = items.map((it) => ({
+      ...it,
+      bake: { recolor: [{ ...it.bake.recolor![0]!, light: { r: 1, g: 2, b: 3, a: 1 } }] } as PictureBake,
+      key: `${it.key}+`,
+    }));
+    const budget = new PictureBudget(0.2);
+    const spent = await storeBakes(hub.imports.pptx.deps, pool, fresh.slice(0, 2), opts({ budget }));
+    expect(spent.media.size).toBe(1);
+    expect(spent.failed).toHaveLength(1);
+    expect(budget.megapixels).toBeCloseTo(0.2 - 3 * 0.0576, 4);
+    // Pool time: what bakes use is added to the import's, and none starts once it is spent.
+    let used = 0;
+    const timed = await storeBakes(
+      hub.imports.pptx.deps,
+      pool,
+      fresh.slice(2).map((it) => ({ ...it, key: `${it.key}t` })),
+      opts({ poolTime: { add: (ms) => (used += ms + 1), spent: () => used > 0 } }),
+    );
+    expect(timed.media.size).toBe(1);
+    expect(timed.failed.map(([, why]) => why)).toEqual(
+      Array(3).fill('the import used its conversion time: it is not baked'),
     );
   }, 120_000);
 });

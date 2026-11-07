@@ -1,5 +1,6 @@
 import { type ImageObject, type ShapeObject, Slide, type SlideObject, type TextObject } from '@ordo/domain';
 import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
+import { GEOM_COST } from '@ordo/renderer/geom/cost.ts';
 import { CMD_CLOSE, CMD_MOVE } from '@ordo/renderer/geom/ops.ts';
 import { presetGeometry } from '@ordo/renderer/geom/path.ts';
 import { storedGeometry } from '@ordo/renderer/geom/stored.ts';
@@ -200,11 +201,16 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     expect(shapes(objects)[0]!.geom!.paths).toHaveLength(1); // one path: its sub-paths share the fill rule
     expect(path!.d.replace(/[-\d. ]/g, '')).toBe('MC'.repeat(400));
     // Past the render clamp's points once built, with every sub-path overlapping the others, the joined
-    // path is a chain of two pieces cut at a sub-path's start, drawn as one path.
+    // path is a chain of two pieces cut at a sub-path's start, drawn as one path. (A small box: its 1,100
+    // sub-paths cross one another, which in a box of 2 x 1 inches passes the drawing budget, geom/cost.ts.)
     let lines = '';
     for (let i = 0; i < 1_100; i++) lines += `${M(i % 10, 0)}${L(1, 1)}${L(2, 2)}${L(3, 3)}`;
     const big = emitOne({
-      slides: [{ shapes: custom(2, { paths: `<a:path w="10" h="10">${lines}</a:path>` }) }],
+      slides: [
+        {
+          shapes: custom(2, { paths: `<a:path w="10" h="10">${lines}</a:path>` }, { cx: IN / 8, cy: IN / 8 }),
+        },
+      ],
     });
     expect(big.scene.slides[0]!.elements[0]!.support).toBe('native');
     const chain = shapes(big.objects)[0]!.geom!.paths!;
@@ -254,8 +260,12 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
   it('splits a path past the render clamp at sub-paths that do not overlap', () => {
     let cells = '';
     for (let i = 0; i < 1_100; i++) cells += `${M(i * 10, 0)}${L(i * 10 + 3, 0)}${L(i * 10 + 3, 3)}${Z}`;
+    // A box a quarter inch tall: 2,200 edges side by side on every row of a taller one pass the drawing
+    // estimate (geom/cost.ts counts edges active at once as if they crossed).
     const { scene, objects } = emitOne({
-      slides: [{ shapes: custom(2, { paths: `<a:path w="11000" h="10">${cells}</a:path>` }) }],
+      slides: [
+        { shapes: custom(2, { paths: `<a:path w="11000" h="10">${cells}</a:path>` }, { cy: IN / 4 }) },
+      ],
     });
     expect(scene.slides[0]!.elements[0]!.support).toBe('native');
     const paths = shapes(objects)[0]!.geom!.paths!;
@@ -288,9 +298,13 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
   });
 
   it('counts path points per slide: past 64k, further custom geometry is LibreOffice’s', () => {
-    let path = M(0, 0);
-    for (let i = 0; i < 3_999; i++) path += L(i % 10, (i * 3) % 10);
-    const one = (id: number) => custom(id, { paths: `<a:path w="10" h="10">${path}${Z}</a:path>` });
+    // 4,001 points round a circle each (cheap to draw: the drawing budget is not what decides here).
+    let path = M(100_000, 50_000);
+    for (let i = 1; i < 4_000; i++) {
+      const a = (i / 4_000) * 2 * Math.PI;
+      path += L(Math.round(50_000 + 50_000 * Math.cos(a)), Math.round(50_000 + 50_000 * Math.sin(a)));
+    }
+    const one = (id: number) => custom(id, { paths: `<a:path w="100000" h="100000">${path}${Z}</a:path>` });
     const count = Math.ceil(MAX_SLIDE_PATH_POINTS / 4_001) + 1;
     let all = '';
     for (let i = 0; i < count; i++) all += one(2 + i);
@@ -301,6 +315,60 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     expect(els.slice(0, count - 2).every((e) => e.support === 'native')).toBe(true);
     expect(els[count - 1]).toMatchObject({ support: 'residual', custom: { over: true } });
     expect(scene.slides[0]!.notes.join(' ')).toMatch(/more than 65536 path points/);
+  });
+
+  it('sends a custGeom too costly to draw to LibreOffice: edges zigzagging across the box (custGeom:complex)', () => {
+    // Within every count (4,000 points, one path), but Canvas would spend seconds filling it at 4K.
+    const zigzag = (points: number) => {
+      let d = M(10_000, 10_000);
+      for (let k = 1; k < points; k++) {
+        const a = (k / points) * Math.PI * 2 * 37;
+        const r = k % 2 ? 10_000 : 500;
+        d += L(Math.round(10_000 + r * Math.cos(a)), Math.round(10_000 + r * Math.sin(a)));
+      }
+      return `<a:path w="20000" h="20000">${d}${Z}</a:path>`;
+    };
+    const big = { cx: 12_192_000, cy: 6_858_000 };
+    const hostile = emitOne({ slides: [{ shapes: custom(2, { paths: zigzag(4_000) }, big) }] });
+    const e = hostile.scene.slides[0]!.elements[0] as ShapeElement;
+    expect(e).toMatchObject({
+      support: 'residual',
+      reasons: ['custGeom:complex'],
+      custom: { complex: true },
+    });
+    expect(e.custom!.cost).toBeGreaterThan(GEOM_COST.geometry);
+    expect(hostile.scene.slides[0]!.notes.join(' ')).toMatch(/too costly to draw/);
+    // The slide's budget: each of these fits on its own; the shapes past the slide's estimate do not.
+    const one = parseDeck(buildDeck({ slides: [{ shapes: custom(2, { paths: zigzag(380) }, big) }] }));
+    const cost = (one.slides[0]!.elements[0] as ShapeElement).custom!.cost!;
+    expect(cost).toBeLessThan(GEOM_COST.geometry);
+    const fit = Math.floor((GEOM_COST.slide * 0.98) / cost);
+    let all = '';
+    for (let i = 0; i < fit + 2; i++) all += custom(2 + i, { paths: zigzag(380) }, big);
+    const els = parseDeck(buildDeck({ slides: [{ shapes: all }] })).slides[0]!.elements as ShapeElement[];
+    expect(els.map((x) => x.support)).toEqual([
+      ...Array.from({ length: fit }, () => 'native'),
+      'residual',
+      'residual',
+    ]);
+    expect(els[fit]!.reasons).toEqual(['custGeom:complex']);
+    // An outline weighs it three times (a stroke's outline has about twice the edges).
+    const small = parseDeck(buildDeck({ slides: [{ shapes: custom(2, { paths: zigzag(200) }, big) }] }));
+    const cost200 = (small.slides[0]!.elements[0] as ShapeElement).custom!.cost!;
+    const fitOutlined = Math.floor((GEOM_COST.slide * 0.98) / (3 * cost200));
+    expect(fitOutlined).toBeGreaterThanOrEqual(1);
+    let outlined = '';
+    for (let i = 0; i <= fitOutlined; i++)
+      outlined += custom(2 + i, { paths: zigzag(200) }, big).replace(
+        '</p:spPr>',
+        '<a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></p:spPr>',
+      );
+    const lined = parseDeck(buildDeck({ slides: [{ shapes: outlined }] })).slides[0]!
+      .elements as ShapeElement[];
+    expect(lined.map((x) => x.support)).toEqual([
+      ...Array.from({ length: fitOutlined }, () => 'native'),
+      'residual',
+    ]);
   });
 
   it('reads hostile geometry within the bounds and quickly (design/27 §12, §14.3)', () => {
@@ -431,6 +499,72 @@ describe('gradients (a:gradFill → Gradient)', () => {
     expect(turning!.gradient!.angle).toBe(0);
   });
 
+  it('keeps a fixed gradient on a mirrored, turned shape where LibreOffice draws it: 180 − θ on the slide', () => {
+    // The drawer paints the stored angle in box space, then mirrors (flipH) and turns the box: a box-space
+    // angle θb lands at 180 − θb + rotation. LibreOffice mirrors a rotWithShape="0" gradient but does not
+    // turn it: 180 − θ, whatever the rotation.
+    const flipped = (id: number, rot: number) =>
+      sp({
+        id,
+        x: 0,
+        y: 0,
+        cx: 2 * IN,
+        cy: IN,
+        rot,
+        flipH: true,
+        fill: grad('<a:lin ang="1800000" scaled="0"/>', ' rotWithShape="0"'),
+      });
+    const { objects } = emitOne({ slides: [{ shapes: flipped(2, 0) + flipped(3, 40) + flipped(4, 90) }] });
+    for (const o of shapes(objects)) {
+      expect(o.flipH).toBe(true);
+      const page = (((180 - o.gradient!.angle! + o.box.rotation) % 360) + 360) % 360;
+      expect(page).toBeCloseTo(150);
+    }
+    // flipV alone is a mirror too (a reflection turned by 180°).
+    const v = emitOne({
+      slides: [
+        {
+          shapes: sp({
+            id: 2,
+            x: 0,
+            y: 0,
+            cx: 2 * IN,
+            cy: IN,
+            rot: 40,
+            flipV: true,
+            fill: grad('<a:lin ang="1800000" scaled="0"/>', ' rotWithShape="0"'),
+          }),
+        },
+      ],
+    });
+    // flipV is −θ in LibreOffice (330° here), though the same box drawn flipH turned 180° more is 150°.
+    const o = shapes(v.objects)[0]!;
+    expect(o.flipH).toBe(true);
+    const page = (((180 - o.gradient!.angle! + o.box.rotation) % 360) + 360) % 360;
+    expect(page).toBeCloseTo(330);
+    // Both flips: not a mirror; LibreOffice draws θ + 180.
+    const both = emitOne({
+      slides: [
+        {
+          shapes: sp({
+            id: 2,
+            x: 0,
+            y: 0,
+            cx: 2 * IN,
+            cy: IN,
+            rot: 40,
+            flipH: true,
+            flipV: true,
+            fill: grad('<a:lin ang="1800000" scaled="0"/>', ' rotWithShape="0"'),
+          }),
+        },
+      ],
+    });
+    const b = shapes(both.objects)[0]!;
+    expect(b.flipH).toBeUndefined();
+    expect((((b.gradient!.angle! + b.box.rotation) % 360) + 360) % 360).toBeCloseTo(210);
+  });
+
   it('writes path gradients radial from the centre of their focus rectangle', () => {
     const { objects, notes } = emitOne({
       slides: [
@@ -546,6 +680,35 @@ describe('lines (dashes, arrowheads, joins and caps)', () => {
       join: 'bevel',
       cap: 'round',
     });
+  });
+
+  it('writes joins and caps that are not the defaults on the shapes, as LibreOffice draws them', () => {
+    const { objects } = emitOne({
+      slides: [
+        {
+          shapes:
+            line(2, '<a:prstDash val="sysDot"/>').replace('<a:ln w="12700">', '<a:ln w="12700" cap="rnd">') +
+            line(3, '<a:round/>') +
+            line(4, '<a:miter lim="800000"/>').replace('<a:ln w="12700">', '<a:ln w="12700" cap="flat">') +
+            sp({
+              id: 5,
+              x: 0,
+              y: 0,
+              cx: IN,
+              cy: IN,
+              geom: 'star5',
+              ln: `<a:ln w="152400" cap="sq">${solid('000000')}<a:round/></a:ln>`,
+            }),
+        },
+      ],
+    });
+    const [dots, round, plain, star] = shapes(objects);
+    expect(dots).toMatchObject({ dash: 'sysDot', lineCap: 'round' });
+    expect(dots!.lineJoin).toBeUndefined();
+    expect(round).toMatchObject({ lineJoin: 'round' });
+    expect(plain!.lineJoin).toBeUndefined();
+    expect(plain!.lineCap).toBeUndefined();
+    expect(star).toMatchObject({ geom: { preset: 'star5' }, lineJoin: 'round', lineCap: 'square' });
   });
 
   it('picks the nearest dash by its lengths', () => {

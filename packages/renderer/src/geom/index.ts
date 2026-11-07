@@ -64,18 +64,23 @@ export {
   withEnds,
 } from './ends.ts';
 export { gradientStyle } from './paint.ts';
+export { clampPoints, drawWeight, GEOM_COST, geomCost, unitCost } from './cost.ts';
 export {
   clearGeomFiles,
   GEOM_FILE_RETRY_MS,
   GEOM_FILES_CHARS,
   GEOM_FILES_MAX,
   type GeomFileRead,
+  geomAwaited,
   geomFile,
+  geomFilesVersion,
   geomPending,
   legacyGeometry,
   putGeomFile,
   readGeomFiles,
   resolvedGeom,
+  type StoredCost,
+  storedCost,
   storedGeometry,
   storedPath,
 } from './stored.ts';

@@ -837,6 +837,42 @@ describe('backgrounds', () => {
     expect(emitOne(spec, { extendBackgrounds: false }).objects[0]!.box.x).toBeCloseTo(240);
   });
 
+  it("lays a 4:3 slide's gradient background over the slide, the 16:9 frame carrying its end colours", () => {
+    const grad = (inner: string) =>
+      `<p:bg><p:bgPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="000080"/></a:gs></a:gsLst>${inner}</a:gradFill><a:effectLst/></p:bgPr></p:bg>`;
+    const size = { cx: 9_144_000, cy: 6_858_000 };
+    // Linear: one frame rect whose stops fall where the slide's edges are on the frame's line (240-1680 px).
+    const lin = emitOne({ size, slides: [{ bg: grad('<a:lin ang="0" scaled="0"/>') }] }).objects;
+    expect(lin).toHaveLength(1);
+    expect(lin[0]).toMatchObject({ box: { x: 0, w: 1920 }, gradient: { kind: 'linear', angle: 0 } });
+    const at = (lin[0] as ShapeObject).gradient!.stops.map((st) => st.at);
+    expect(at[0]).toBeCloseTo(240 / 1920);
+    expect(at[1]).toBeCloseTo(1680 / 1920);
+    // Scaled 45°: corner to corner of the 4:3 slide, the same direction in px on the frame.
+    const sc = emitOne({ size, slides: [{ bg: grad('<a:lin ang="2700000" scaled="1"/>') }] }).objects;
+    const g = (sc[0] as ShapeObject).gradient!;
+    expect(g.scaled).toBeUndefined();
+    expect(g.angle).toBeCloseTo((Math.atan2(1440, 1080) * 180) / Math.PI);
+    // Radial: the slide's own ellipse over the slide, the frame in the outer stop's colour.
+    const rad = emitOne({
+      size,
+      slides: [
+        {
+          bg: grad('<a:path path="circle"><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path>'),
+        },
+      ],
+    }).objects as ShapeObject[];
+    expect(rad).toHaveLength(2);
+    expect(rad[0]).toMatchObject({ box: { x: 0, w: 1920 }, fill: { r: 0, g: 0, b: 128, a: 1 } });
+    expect(rad[0]!.gradient).toBeUndefined();
+    expect(rad[1]!.box.x).toBeCloseTo(240);
+    expect(rad[1]!.box.w).toBeCloseTo(1440);
+    expect(rad[1]!.gradient).toMatchObject({ kind: 'radial' });
+    // On a 16:9 slide nothing moves.
+    const wide = emitOne({ slides: [{ bg: grad('<a:lin ang="0" scaled="0"/>') }] }).objects as ShapeObject[];
+    expect(wide[0]!.gradient!.stops.map((st) => st.at)).toEqual([0, 1]);
+  });
+
   it('draws no background as white, as PowerPoint shows it', () => {
     const { objects } = emitOne({ master: { bg: '' }, slides: [{}] });
     expect(objects).toEqual([

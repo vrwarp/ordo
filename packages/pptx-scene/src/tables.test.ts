@@ -192,6 +192,23 @@ describe('tables: grid, cells and objects', () => {
     expect(texts[1]!.runs).toBeUndefined();
   });
 
+  it('runs the cells of a right-to-left table right to left, starting at the right unless set (rtl)', () => {
+    const { texts } = convert(
+      table({
+        cols: [IN, IN],
+        rows: [{ h: IN / 2, cells: [tc('שלום'), tc('x', { pPr: 'algn="ctr"' })] }],
+        tblPr: '<a:tblPr rtl="1"/>',
+      }),
+    );
+    // One paragraph a cell: its alignment and direction are the box's.
+    expect(texts[0]!.style).toMatchObject({ align: 'right', direction: 'rtl' });
+    expect(texts[1]!.style).toMatchObject({ align: 'center', direction: 'rtl' });
+    // A left-to-right table is as before.
+    const ltr = convert(table({ cols: [IN], rows: [{ h: IN / 2, cells: [tc('a')] }] })).texts;
+    expect(ltr[0]!.style.align).toBe('left');
+    expect(ltr[0]!.style.direction).not.toBe('rtl');
+  });
+
   it('places the table in its group: a table in a group shares the group number', () => {
     const shapes =
       sp({ id: 2, x: 0, y: 0, cx: IN, cy: IN, fill: solid('FF0000') }) +

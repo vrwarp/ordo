@@ -284,7 +284,7 @@ export function readTable(
       rows: a.rows,
       cols: a.cols,
       fill: fill ?? { kind: 'none' },
-      text: cellText(ctx, base, a.tc, pr, textStyleOf(ctx, ps)),
+      text: cellText(ctx, base, a.tc, pr, textStyleOf(ctx, ps), on(tblPr?.attrs.rtl)),
     });
   }
 
@@ -772,6 +772,7 @@ function cellText(
   tc: XNode | undefined,
   tcPr: XNode | undefined,
   styled: XNode | undefined,
+  rtl = false,
 ): TextBody {
   const own = child(tc, 'a:txBody');
   // The cell's body as a shape's, so the text chain reads its list style and paragraphs.
@@ -783,6 +784,15 @@ function cellText(
     wrap: true,
     autofit: { kind: 'none' },
   };
+  if (rtl) {
+    // A right-to-left table (`a:tblPr rtl="1"`): its paragraphs run right to left, and one that sets no
+    // alignment of its own starts at the right, as LibreOffice and PowerPoint draw it.
+    const ps = (own?.children ?? []).filter((n) => n.name === 'a:p');
+    body.paras.forEach((p, i) => {
+      p.rtl = true;
+      if (child(ps[i], 'a:pPr')?.attrs.algn === undefined && p.align === 'left') p.align = 'right';
+    });
+  }
   return {
     paras: body.paras,
     insets: {

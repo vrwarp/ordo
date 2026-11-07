@@ -307,6 +307,12 @@ export interface ElementBase {
    * `shapeId`. The elements are a locked group and are drawn natively or by LibreOffice as a whole.
    */
   diagram?: number;
+  /**
+   * The element's own `a:xfrm flipH` / `flipV` (not its groups'): LibreOffice mirrors a gradient that does
+   * not turn with the shape (`rotWithShape="0"`) by them (`geom.ts` `gradientOf`).
+   */
+  ownFlipH?: true;
+  ownFlipV?: true;
 }
 
 /** A `p:sp` or `p:cxnSp`: geometry with a fill and a line, and maybe text. */
@@ -366,6 +372,10 @@ export interface CustomPaths {
   }[];
   /** Points of all paths (an arc counts its cubic segments' points). */
   points: number;
+  /** Its drawing estimate in logical px (renderer `geom/cost.ts` `unitCost`, each stored path a unit). */
+  cost?: number;
+  /** Over the drawing budgets (`GEOM_COST`, `slideCustom`): drawn by LibreOffice (`custGeom:complex`). */
+  complex?: boolean;
   /** `a:rect` as fractions of the box: l, t, r, b. */
   text: [number, number, number, number];
   /** `a:cxnLst` as fractions of the box, with the angle a connector leaves at (degrees clockwise). */

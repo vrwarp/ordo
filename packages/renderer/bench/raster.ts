@@ -14,7 +14,9 @@ import type { BenchReport, Stats } from './raster.page.ts';
  *
  *   pnpm --filter @ordo/renderer bench [--iterations 200] [--check]
  *
- * --check fails when a rich slide's raster p95 is over the M2 budget: 8 ms at 1920, 30 ms at 3840.
+ * --check fails when a rich slide's raster p95 is over the M2 budget: 8 ms at 1920, 30 ms at 3840, or a
+ * bounded one's (hostile geometry and large effects, M6 repair, design/27 §12 drawing cost) over 50 ms at 1920
+ * and 120 ms at 3840.
  * The face is DejaVu Sans (fonts-dejavu-core). Timings depend on the machine and its load.
  */
 
@@ -27,6 +29,7 @@ const arg = (name: string) => {
 const iterations = Math.max(10, Number(arg('--iterations') ?? 120));
 const check = process.argv.includes('--check');
 const BUDGET: Record<string, number> = { '1920': 8, '3840': 30 };
+const BOUNDED: Record<string, number> = { '1920': 50, '3840': 120 };
 
 async function loadEsbuild(): Promise<typeof import('esbuild')> {
   try {
@@ -89,17 +92,19 @@ async function main(): Promise<number> {
     for (const s of report.slides) {
       console.log(`${s.name} (${s.chars} characters)`);
       const rich = s.name.includes('(rich');
+      const bounded = s.name.includes('(bounded');
       if (rich)
         console.log(
           `  layout: empty width cache ${ms(s.layoutColdMs)} ms (median); warm width cache ${fmt(s.layoutWarmCache)}`,
         );
       else console.log('  layout: drawText lays out while it draws (included in raster)');
       for (const [w, r] of Object.entries(s.raster)) {
-        const budget = BUDGET[w]!;
-        const bad = rich && r.steady.p95 > budget;
+        const budget = (bounded ? BOUNDED : BUDGET)[w]!;
+        const checked = rich || bounded;
+        const bad = checked && r.steady.p95 > budget;
         if (bad) over++;
         console.log(
-          `  raster ${w}: first ${ms(r.first)} ms; per job ${fmt(r.steady)}${rich ? ` (budget p95 ${budget} ms${bad ? ': OVER' : ''})` : ''}${rich ? `; paint only ${fmt(r.paintOnly)}` : ''}`,
+          `  raster ${w}: first ${ms(r.first)} ms; per job ${fmt(r.steady)}${checked ? ` (budget p95 ${budget} ms${bad ? ': OVER' : ''})` : ''}${rich ? `; paint only ${fmt(r.paintOnly)}` : ''}`,
         );
       }
     }

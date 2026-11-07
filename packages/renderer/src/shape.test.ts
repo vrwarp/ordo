@@ -6,7 +6,15 @@ import { effectCacheBytes } from './effects.ts';
 import { RecPath } from './geom/path2d.test-util.ts';
 import { clearGeomFiles, putGeomFile } from './geom/stored.ts';
 import { objectBounds } from './scene.ts';
-import { DASH_PATTERNS, drawGeomShape, hasShapeExtras, shapeGeometry, shapeReach } from './shape.ts';
+import {
+  cappedDash,
+  DASH_PATTERNS,
+  drawGeomShape,
+  hasShapeExtras,
+  lineStyleOf,
+  shapeGeometry,
+  shapeReach,
+} from './shape.ts';
 import { drawShape, drawSlide2D } from './text2d.ts';
 import { type RecordedGradient, recordingCtx } from './text/test-util.ts';
 
@@ -35,6 +43,57 @@ const ops = (o: ShapeObject, scale = 0.5) => {
   drawShape(ctx, o, scale);
   return ctx.ops;
 };
+
+describe('joins and caps (lineJoin, lineCap)', () => {
+  it('maps them to Canvas, defaults miter and butt, and draws a shape with either through its geometry', () => {
+    expect(lineStyleOf({})).toEqual({ join: 'miter', cap: 'butt' });
+    expect(lineStyleOf({ lineJoin: 'round', lineCap: 'round' })).toEqual({ join: 'round', cap: 'round' });
+    expect(lineStyleOf({ lineJoin: 'bevel', lineCap: 'square' })).toEqual({ join: 'bevel', cap: 'square' });
+    expect(hasShapeExtras({ lineJoin: 'round' })).toBe(true);
+    expect(hasShapeExtras({ lineCap: 'square' })).toBe(true);
+    expect(hasShapeExtras({ lineJoin: 'miter', lineCap: 'flat' })).toBe(false);
+  });
+
+  it('draws round and square caps within a preset dash, as Office does (LibreOffice: −0.99 and +0.99 widths)', () => {
+    expect(cappedDash(DASH_PATTERNS.sysDot, 'round').map((v) => Math.round(v * 100) / 100)).toEqual([
+      0.01, 1.99,
+    ]);
+    expect(cappedDash(DASH_PATTERNS.dashDot, 'square').map((v) => Math.round(v * 100) / 100)).toEqual([
+      3.01, 3.99, 0.01, 3.99,
+    ]);
+    expect(cappedDash(DASH_PATTERNS.dash, 'flat')).toEqual([4, 3]);
+    expect(cappedDash(DASH_PATTERNS.dash, undefined)).toEqual([4, 3]);
+    expect(cappedDash([0.5, 1], 'round')).toEqual([0.5, 1]);
+  });
+
+  it('strokes with the joins, caps and capped dash given', () => {
+    const rec = recordingCtx();
+    const caps: unknown[] = [];
+    const ctx = new Proxy(rec, {
+      set(t, k, v) {
+        if (k === 'lineCap') caps.push(v);
+        return Reflect.set(t, k, v);
+      },
+    });
+    drawGeomShape(
+      ctx,
+      {
+        ...base,
+        geom: { preset: 'star5' },
+        stroke: { width: 10, color: white },
+        lineJoin: 'round',
+        lineCap: 'round',
+        dash: 'sysDot',
+      },
+      1,
+    );
+    const stroke = rec.ops.find((x) => x.op === 'stroke');
+    expect(stroke?.state.lineJoin).toBe('round');
+    expect(caps).toContain('round');
+    const dash = (rec.ops.find((x) => x.op === 'setLineDash')?.args[0] ?? []) as number[];
+    expect(dash.map((v) => Math.round(v * 100) / 100)).toEqual([0.1, 19.9]);
+  });
+});
 
 describe('drawShape dispatch', () => {
   it('draws a legacy shape exactly as before (roundRect, fill, stroke under the scale)', () => {
@@ -204,14 +263,16 @@ describe('geometry files (ShapeGeom.ref, M6 round 2)', () => {
   const pathsOf = (o: ReturnType<typeof ops>) =>
     o.filter((x) => x.op === 'fill' && x.args[0] instanceof RecPath).map((x) => JSON.stringify(x.args[0]));
 
-  it('draws its legacy shape until the file is read, then the same as the paths inline (same object)', () => {
+  it('draws nothing until the file is read (not a filled rect over the box), then the paths (same object)', () => {
     clearGeomFiles();
     const o: ShapeObject = { ...base, geom: { ref } };
-    const before = ops(o);
-    expect(pathsOf(before)).toEqual(pathsOf(ops({ ...base, geom: { preset: 'rect' } })));
+    expect(ops(o)).toEqual([]);
+    // A geometry with a preset beside its ref draws the preset meanwhile.
+    expect(pathsOf(ops({ ...base, geom: { ref, preset: 'ellipse' } }))).toEqual(
+      pathsOf(ops({ ...base, geom: { preset: 'ellipse' } })),
+    );
     putGeomFile(ref, { paths });
     expect(pathsOf(ops(o))).toEqual(pathsOf(ops({ ...base, geom: { paths } })));
-    expect(pathsOf(ops(o))).not.toEqual(pathsOf(before));
   });
 
   it("an older build strips the ref and draws the legacy shape (the previous release's schema)", () => {

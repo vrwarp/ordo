@@ -1,5 +1,6 @@
 import { GEOM_FILE_MAX_BYTES, parsePathData, type ShapeGeom } from '@ordo/domain';
 import { clampGeom } from '../clamp.ts';
+import { clampPoints, GEOM_COST, geomCost } from './cost.ts';
 import {
   CMD_CLOSE,
   CMD_CUBIC,
@@ -23,7 +24,8 @@ import { type BuiltGeom, COORD_LIMIT, type GeomPath, presetGeometry } from './pa
  *   before it (its pieces become the one path they were cut from: one even-odd fill, holes and all, in the
  *   first piece's fill mode and stroke flag; at most GEOM_LIMITS.paths x GEOM_LIMITS.points points); the
  *   text rect is the box;
- * - else undefined: the caller draws the legacy shape (`legacyGeometry`).
+ * - else undefined: the caller draws the legacy shape (`legacyGeometry`); so too for paths whose drawing
+ *   estimate (`cost.ts`) passes `GEOM_COST.geometry` (a zigzag across the box that would take seconds).
  * A geometry with a `ref` (M6 round 2) draws its geometry file's paths once the file is read
  * (`putGeomFile`, `readGeomFiles`: the drawer reads the files a slide names before drawing it, as it decodes
  * its pictures); until then, or without it, it is the geometry beside the ref as above.
@@ -75,6 +77,13 @@ export const GEOM_FILE_RETRY_MS = 10_000;
 /** Read geometry files by ref: each clamped to its paths (`clampGeom`), in least-recently-used order. */
 const files = new Map<string, { geom: ShapeGeom; chars: number }>();
 let fileChars = 0;
+/** Counts the files read (a slide's geometry budget is worked out again when one is). */
+let filesRead = 0;
+
+/** Changes whenever a geometry file is read (or the files are forgotten). */
+export function geomFilesVersion(): number {
+  return filesRead;
+}
 /** Reads in flight, and when a read last failed, by ref. */
 const reading = new Map<string, Promise<GeomFileRead>>();
 const failedAt = new Map<string, number>();
@@ -101,6 +110,7 @@ export function putGeomFile(ref: string, data: unknown): boolean {
   }
   files.set(ref, { geom, chars });
   fileChars += chars;
+  filesRead++;
   failedAt.delete(ref);
   for (const [k, v] of files) {
     if (files.size <= GEOM_FILES_MAX && fileChars <= GEOM_FILES_CHARS) break;
@@ -122,10 +132,23 @@ export function geomPending(g: unknown): boolean {
   return typeof ref === 'string' && ref !== '' && !files.has(ref);
 }
 
+/**
+ * Whether a stored geometry is only a geometry file that is not read: no preset or paths beside its ref, so
+ * its fallback would be the legacy shape (for a custom geometry, a filled rect over its whole box). Such a
+ * shape, or a picture with such a mask, draws nothing until the file is read, as a picture not decoded yet
+ * draws nothing. An older build, which strips `ref`, still draws the legacy shape.
+ */
+export function geomAwaited(g: unknown): boolean {
+  if (!geomPending(g)) return false;
+  const x = g as { preset?: unknown; paths?: unknown };
+  return typeof x.preset !== 'string' && !(Array.isArray(x.paths) && x.paths.length > 0);
+}
+
 /** Forget every read file (tests). */
 export function clearGeomFiles(): void {
   files.clear();
   fileChars = 0;
+  filesRead++;
   reading.clear();
   failedAt.clear();
 }
@@ -203,6 +226,18 @@ export function resolvedGeom(g: ShapeGeom | undefined): ShapeGeom | undefined {
 const memo = new WeakMap<object, Map<string, BuiltGeom | undefined>>();
 const MEMO_SIZES = 8;
 
+/** What a geometry built from stored paths costs to draw: its estimate (`cost.ts`) and its points. */
+export interface StoredCost {
+  readonly est: number;
+  readonly points: number;
+}
+const costs = new WeakMap<BuiltGeom, StoredCost>();
+
+/** The drawing cost of a geometry `storedGeometry` built from stored paths; undefined for a preset. */
+export function storedCost(b: BuiltGeom | undefined): StoredCost | undefined {
+  return b ? costs.get(b) : undefined;
+}
+
 /**
  * A stored geometry built at a w x h box: its read geometry file's paths (`ref`), else its preset when the
  * table knows it, else its paths (at most GEOM_LIMITS.paths), else undefined.
@@ -233,7 +268,13 @@ export function storedGeometry(raw: ShapeGeom | undefined, w: number, h: number)
         };
       else paths.push(path);
     }
-    built = { w: bw, h: bh, paths, text: { l: 0, t: 0, r: bw, b: bh }, sites: [] };
+    const est = geomCost(paths);
+    if (est <= GEOM_COST.geometry) {
+      built = { w: bw, h: bh, paths, text: { l: 0, t: 0, r: bw, b: bh }, sites: [] };
+      let points = 0;
+      for (const p of paths) points += clampPoints(p.cmds, p.pts);
+      costs.set(built, { est, points });
+    }
   }
   if (!sizes) {
     sizes = new Map();

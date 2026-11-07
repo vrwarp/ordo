@@ -26,6 +26,7 @@ import { librarySource } from '../src/live.ts';
 import { liveFiles } from '../src/liveproc.ts';
 import { geomFileOf, nameGeoms, storeGeomFiles } from '../src/pptx/geoms.ts';
 import { nativeJob } from '../src/pptx/nativeJob.ts';
+import { sceneTask } from '../src/pptx/sceneTask.ts';
 import type { PptxNativePayload, PptxNativeResult } from '../src/pptx/shared.ts';
 import { startHub, type TestHub, tempDir } from './helpers.ts';
 import { slidesOf, storeDeck, waitJob, zipDeck } from './pptx-helpers.ts';
@@ -270,5 +271,84 @@ describe('pptx-native: geometry files', () => {
     expect(s2.objects).toEqual([]);
     expect(s2.pptx!.notes).toEqual(['over the import budget of shape outlines: a LibreOffice picture']);
     expect(out.notes.some((n) => /slide 2's shape outlines pass/.test(n))).toBe(true);
+  });
+
+  it('names the files in the pool worker and bounds what one batch returns: past it, slides are compact', async () => {
+    // The worker names the files (SHA-256 of their re-tokenised JSON): the job gets names and bytes only.
+    const scene = sceneTask({
+      parts: buildDeck({ slides }),
+      pictureSizes: [],
+      options: {},
+      range: { from: 0, to: 2 },
+    });
+    expect(scene.result.geoms).toEqual([]);
+    expect(scene.geomFiles?.length).toBeGreaterThanOrEqual(3);
+    for (const g of scene.geomFiles!) expect(createHash('sha256').update(g.bytes).digest('hex')).toBe(g.hash);
+    expect(new Set(scene.geomFiles!.map((g) => g.hash)).size).toBe(3);
+    // A bound that holds slide 1's two files and not slide 2's new third one.
+    const sizes = new Map(scene.geomFiles!.map((g) => [g.hash, g.bytes.length]));
+    const [a, b, c] = [...sizes.values()] as [number, number, number];
+    const bound = a + b + Math.floor(c / 2);
+    const bounded = sceneTask({
+      parts: buildDeck({ slides }),
+      pictureSizes: [],
+      options: {},
+      range: { from: 0, to: 2 },
+      geomBytes: bound,
+    });
+    expect(bounded.geomOver).toEqual([1]);
+    expect(new Set(bounded.geomFiles!.map((g) => g.hash)).size).toBe(2);
+    // Through the job: slide 2 is a compact picture.
+    const file = await zipDeck(buildDeck({ slides }), dir, 'batch-bound.pptx');
+    const hash = await storeDeck(hub, file);
+    const payload: PptxNativePayload = { hash, name: 'Template.pptx', options: {} };
+    const ctx = {
+      id: 'direct-batch',
+      payload,
+      signal: new AbortController().signal,
+      log: () => {},
+      progress: () => {},
+      setPayload: (pl: PptxNativePayload) => {
+        ctx.payload = pl;
+      },
+    };
+    const out = (await nativeJob(hub.imports.pptx.deps, { limits: { batchGeomBytes: bound } })(
+      ctx,
+    )) as PptxNativeResult;
+    expect(out).toMatchObject({ native: 1, picture: 1, compact: 1 });
+    const [, s2] = slidesOf(hub.lib.presentations.must(out.presentationId)) as [Slide, Slide];
+    expect(s2.pptx!.notes).toEqual(['over the import budget of shape outlines: a LibreOffice picture']);
+  });
+
+  it('makes a slide whose outline file could not be stored a compact picture, not a shape that never draws', async () => {
+    // Distinct outlines (k 7-9), so the store has none of them yet.
+    const fresh = [{ shapes: deco(2, 4_000, 7) + deco(3, 4_000, 8) }, { shapes: deco(2, 4_000, 9) }];
+    const file = await zipDeck(buildDeck({ slides: fresh }), dir, 'store-fails.pptx');
+    const hash = await storeDeck(hub, file);
+    const deps = hub.imports.pptx.deps;
+    const store = Object.create(deps.store) as typeof deps.store;
+    let refused = 0;
+    store.putBytes = async (bytes, opts) => {
+      if (opts?.mime === 'application/json' && refused++ === 0) throw new Error('disk full');
+      return deps.store.putBytes(bytes, opts);
+    };
+    const payload: PptxNativePayload = { hash, name: 'Template.pptx', options: {} };
+    const ctx = {
+      id: 'direct-store',
+      payload,
+      signal: new AbortController().signal,
+      log: () => {},
+      progress: () => {},
+      setPayload: (pl: PptxNativePayload) => {
+        ctx.payload = pl;
+      },
+    };
+    const out = (await nativeJob({ ...deps, store }, {})(ctx)) as PptxNativeResult;
+    // The first file (slide 1's) was refused: slide 1 is a compact picture, slide 2 stays native.
+    expect(out).toMatchObject({ native: 1, picture: 1, compact: 1 });
+    const [s1, s2] = slidesOf(hub.lib.presentations.must(out.presentationId)) as [Slide, Slide];
+    expect(s1.objects).toEqual([]);
+    expect(s1.pptx!.notes).toContain('its shape outlines could not be stored: a LibreOffice picture');
+    expect(refsOf(s2).every(isGeomFileRef)).toBe(true);
   });
 });

@@ -251,16 +251,68 @@ describe('shapes', () => {
     expect(cxn).toMatchObject({ geom: 'straightConnector1', line: { width: 12_700, tail: 'triangle' } });
   });
 
-  it('fills a useBgFill shape with a solid slide background', () => {
+  it('fills a useBgFill shape with a solid slide background when its spPr sets no fill or noFill', () => {
+    const bgShape = (id: number, fill?: string) =>
+      sp({ id, x: 0, y: 0, cx: IN, cy: IN, ...(fill ? { fill } : {}) }).replace(
+        '<p:sp>',
+        '<p:sp useBgFill="1">',
+      );
+    // The style's fillRef does not count: the slide's background is drawn.
+    const styled = sp({
+      id: 4,
+      x: 0,
+      y: 0,
+      cx: IN,
+      cy: IN,
+      style:
+        '<p:style><a:lnRef idx="0"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="1"><a:schemeClr val="accent2"/></a:fillRef>' +
+        '<a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></p:style>',
+    }).replace('<p:sp>', '<p:sp useBgFill="1">');
     const s = slideOf({
-      slides: [
-        { bg: solidBg('123456'), shapes: rect(2, 0, 'FF0000').replace('<p:sp>', '<p:sp useBgFill="1">') },
-      ],
+      slides: [{ bg: solidBg('123456'), shapes: bgShape(2) + bgShape(3, '<a:noFill/>') + styled }],
     });
+    for (const e of s.elements)
+      expect((e as ShapeElement).fill).toEqual({ kind: 'solid', color: { r: 0x12, g: 0x34, b: 0x56, a: 1 } });
+  });
+
+  it("keeps a useBgFill shape's own explicit fill (a Designer layout's decorative panel), as LibreOffice does", () => {
+    // PowerPoint Designer: a full-slide "decorative" rect with useBgFill="1" and a tx1 fill, under a title in
+    // bg1 lumMod 95 % and white bullets. LibreOffice draws the panel in tx1 (black); the slide's background
+    // (white) would leave the text white on white.
+    const panel = sp({
+      id: 2,
+      name: 'Rectangle 1',
+      x: 0,
+      y: 0,
+      cx: 12_192_000,
+      cy: 6_858_000,
+      fill: '<a:solidFill><a:schemeClr val="tx1"/></a:solidFill>',
+    }).replace('<p:sp>', '<p:sp useBgFill="1">');
+    const title = sp({
+      id: 3,
+      x: IN,
+      y: IN,
+      cx: 4 * IN,
+      cy: IN,
+      txBody:
+        '<p:txBody><a:bodyPr/><a:p><a:r><a:rPr lang="en-US"><a:solidFill><a:schemeClr val="bg1"><a:lumMod val="95000"/></a:schemeClr></a:solidFill></a:rPr><a:t>Title</a:t></a:r></a:p></p:txBody>',
+    });
+    const s = slideOf({ slides: [{ bg: solidBg('FFFFFF'), shapes: panel + title }] });
     expect((s.elements[0] as ShapeElement).fill).toEqual({
       kind: 'solid',
-      color: { r: 0x12, g: 0x34, b: 0x56, a: 1 },
+      color: { r: 0, g: 0, b: 0, a: 1 },
     });
+    // A gradient of its own is kept too (not the "picture or gradient background" note).
+    const grad = sp({
+      id: 2,
+      x: 0,
+      y: 0,
+      cx: IN,
+      cy: IN,
+      fill: '<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill>',
+    }).replace('<p:sp>', '<p:sp useBgFill="1">');
+    const g = slideOf({ slides: [{ bg: solidBg('FFFFFF'), shapes: grad }] });
+    expect((g.elements[0] as ShapeElement).fill.kind).toBe('gradient');
   });
 
   it('reads graphic frames as residual elements', () => {

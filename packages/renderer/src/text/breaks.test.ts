@@ -59,8 +59,12 @@ describe('UAX#14 break opportunities', () => {
     // Small kana and the prolonged sound mark never start a line.
     expect(lines('ちょっとコーヒー')).toEqual(['ちょっ', 'と', 'コー', 'ヒー']);
     expect(lines('主よ、みもとに')).toEqual(['主', 'よ、', 'み', 'も', 'と', 'に']);
-    // Hangul breaks between syllables (CSS word-break: normal), and after spaces.
-    expect(lines('주 예수 ')).toEqual(['주 ', '예', '수 ']);
+    // Korean breaks at spaces only (keep-all, as LibreOffice and PowerPoint): '이야기를' stays whole.
+    expect(lines('주 예수 ')).toEqual(['주 ', '예수 ']);
+    expect(lines('이야기를 할 것인지에 대한')).toEqual(['이야기를 ', '할 ', '것인지에 ', '대한']);
+    // A Hangul word next to Latin letters or digits stays whole too; ideographs still break.
+    expect(lines('3절과 Jesus님')).toEqual(['3절과 ', 'Jesus님']);
+    expect(lines('主啊主')).toEqual(['主', '啊', '主']);
   });
 
   it('breaks Thai, Lao, Khmer and Burmese at dictionary word boundaries', () => {

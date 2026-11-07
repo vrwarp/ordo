@@ -107,12 +107,17 @@ export function fontTables(buf: Uint8Array): Map<string, Buffer> {
  * (its advances are not in the table's own layout), so such a face measures as missing.
  */
 export function metricTables(buf: Uint8Array): Map<string, Buffer> {
-  return tablesOf(
+  const tables = tablesOf(
     buf,
     new Set(['head', 'hhea', 'hmtx', 'cmap', 'OS/2', 'GPOS', 'kern']),
     new Set(['hmtx']),
     new Set(['OS/2', 'GPOS', 'kern']),
   );
+  // Copies: the measures keep the tables, not the file read (up to 32 MB) or a WOFF2's whole decompressed
+  // font (up to 64 MB, glyf included), which the tables would be views into.
+  const out = new Map<string, Buffer>();
+  for (const [t, v] of tables) out.set(t, Buffer.from(v));
+  return out;
 }
 
 /**

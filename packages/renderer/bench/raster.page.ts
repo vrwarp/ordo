@@ -230,6 +230,55 @@ export const SHAPES: Slide = {
   ],
 };
 
+/** A path zigzagging across a 2000 x 2000 space `points` times (37 turns round its centre). */
+function zigzag(points: number): string {
+  let d = 'M 1000 1000';
+  for (let k = 1; k < points; k++) {
+    const a = (k / points) * Math.PI * 2 * 37;
+    const r = k % 2 ? 1000 : 50;
+    d += ` L ${(1000 + r * Math.cos(a)).toFixed(1)} ${(1000 + r * Math.sin(a)).toFixed(1)}`;
+  }
+  return `${d} Z`;
+}
+
+/**
+ * Hostile custom geometry (M6 repair, design/27 §12 drawing cost): a 4,000-point zigzag across the slide (the
+ * review's, 4.6 s at 3840 before the budget; now its legacy rect), and two within the per-geometry budget,
+ * the second past the slide's (its legacy shape). Bounded, not within the text budgets.
+ */
+export const HOSTILE_GEOMETRY: Slide = {
+  id: 'hostile-geometry',
+  objects: [4_000, 380, 380].map((n, i) => ({
+    id: `z${i}`,
+    type: 'shape' as const,
+    box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+    shape: 'rect' as const,
+    fill: { r: 40, g: 90, b: 160, a: 0.5 },
+    opacity: 1,
+    radius: 0,
+    geom: { paths: [{ d: zigzag(n), w: 2000, h: 2000 }] },
+  })),
+};
+
+/**
+ * Three large shadowed panels (M6 repair: the effect cache held about two 4K composites and rebuilt them on
+ * every raster; now the reduced layers are cached and the panels drawn over them).
+ */
+export const SHADOWED_PANELS: Slide = {
+  id: 'shadowed-panels',
+  objects: [0, 1, 2].map((i) => ({
+    id: `p${i}`,
+    type: 'shape' as const,
+    box: { x: 100 + i * 20, y: 80 + i * 10, w: 1600, h: 900, rotation: 0 },
+    shape: 'rect' as const,
+    fill: { r: 200 - i * 40, g: 120, b: 60 + i * 50, a: 1 },
+    opacity: 1,
+    radius: 0,
+    geom: { preset: 'rect' },
+    shadow: { dx: 6, dy: 6, blur: 12, color: { r: 0, g: 0, b: 0, a: 0.5 } },
+  })),
+};
+
 export type Stats = { n: number; p50: number; p95: number; max: number; mean: number };
 export type BenchReport = {
   context: string;
@@ -290,6 +339,8 @@ export async function bench(
   for (const [name, slide] of [
     ['sermon (rich)', SERMON],
     ['shapes with effects (M6)', SHAPES],
+    ['hostile custom geometry (bounded, M6 repair)', HOSTILE_GEOMETRY],
+    ['three large shadowed panels (bounded, M6 repair)', SHADOWED_PANELS],
     ['autofit search (rich)', AUTOFIT],
     ['6-line lyric (rich)', LYRIC_RICH],
     ['6-line lyric (legacy)', LYRIC_LEGACY],

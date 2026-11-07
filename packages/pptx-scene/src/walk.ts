@@ -45,6 +45,7 @@ import {
 } from './inherit.ts';
 import type { Affine, Element, ElementBase, Fill, Line, ShapeElement, Support } from './ir.ts';
 import { chooseAlternate } from './markup.ts';
+import { drawWeight, GEOM_COST } from '@ordo/renderer/geom/cost.ts';
 import { customPaths, knownPreset, MAX_SLIDE_PATH_POINTS, placeConnectors, readCxnRef } from './geom.ts';
 import { blipReader, blipReaderOf, readPicture } from './picture.ts';
 import { readSmartArt, type Walker } from './smartart.ts';
@@ -81,6 +82,8 @@ export interface WalkState {
   background?: Fill;
   /** Custom geometry points so far (design/27 §12: 64k per slide; M6). */
   points?: number;
+  /** Weighted drawing estimates of the custom geometries drawn natively so far (`GEOM_COST.slide`). */
+  geomCost?: number;
   /** SmartArt drawings read so far (M6, `smartart.ts`: `ElementBase.diagram` numbers them). */
   diagrams?: number;
   /**
@@ -114,6 +117,7 @@ interface Decorations {
   groups: number;
   notes: string[];
   points: number;
+  geomCost: number;
 }
 
 /**
@@ -146,6 +150,7 @@ function decorations(ctx: SlideCtx, st: WalkState): void {
     st.count = known.count;
     st.groups = known.groups;
     st.points = known.points;
+    st.geomCost = known.geomCost;
     return;
   }
   const notes: string[] = [];
@@ -161,7 +166,14 @@ function decorations(ctx: SlideCtx, st: WalkState): void {
     return;
   }
   // Kept as walked; this slide and the next ones get copies.
-  byKey.set(key, { out: st.out.slice(), count: st.count, groups: st.groups, notes, points: st.points ?? 0 });
+  byKey.set(key, {
+    out: st.out.slice(),
+    count: st.count,
+    groups: st.groups,
+    notes,
+    points: st.points ?? 0,
+    geomCost: st.geomCost ?? 0,
+  });
   for (let i = 0; i < st.out.length; i++) st.out[i] = { ...st.out[i]! };
 }
 
@@ -288,6 +300,8 @@ export function walkTree(
       ...(chain.ph ? { ph: { type: chain.ph.type.slice(0, 20), ...idxOf(chain.ph.idx) } } : {}),
       ...(group !== undefined ? { group } : {}),
       ...(hidden ? { hidden: true } : {}),
+      ...(place.flipH ? { ownFlipH: true as const } : {}),
+      ...(place.flipV ? { ownFlipV: true as const } : {}),
       support: 'native',
     };
     const at = st.out.length;
@@ -409,12 +423,17 @@ function chainParts(ctx: SlideCtx, c: Chain): [XNode, string | undefined][] {
   return out;
 }
 
-/** A shape's fill along the chain: the nearest `p:spPr` fill, else the style's `a:fillRef`. */
-function fillOf(ctx: SlideCtx, c: Chain): Fill | undefined {
+/** The nearest `p:spPr` fill along the chain (`a:noFill` included), or undefined when none sets one. */
+function spPrFillOf(ctx: SlideCtx, c: Chain): Fill | undefined {
   for (const [n, part] of chainParts(ctx, c)) {
     const f = readFill(spPrOf(n), ctx.color, blipReaderOf(ctx, part));
     if (f) return f;
   }
+  return undefined;
+}
+
+/** The fill of a shape's style (`p:style` `a:fillRef`), what it draws when no `p:spPr` sets one. */
+function styleFillOf(ctx: SlideCtx, c: Chain): Fill | undefined {
   return styleFill(ctx.theme, child(styleOf(c), 'a:fillRef'), ctx.color, blipReaderOf(ctx, ctx.themePart));
 }
 
@@ -429,9 +448,13 @@ function readShape(
   const { geom, adj } = geometryOf(chain);
   const custNode = geom === 'custom' ? firstChildOf(spPrChain(chain), 'a:custGeom') : undefined;
   const coverage = custNode ? pathCoverage(custNode) : undefined;
-  const custom = custNode ? slideCustom(ctx, custNode, base, st) : undefined;
-  let fill = fillOf(ctx, chain) ?? { kind: 'none' };
-  if (on(el.attrs.useBgFill)) {
+  // `useBgFill` (LibreOffice pptshapegroupcontext.cxx): the slide's background only where no `p:spPr` along
+  // the chain sets a fill of its own (`a:noFill` or none; the style's `a:fillRef` does not count). An explicit
+  // fill wins, as LibreOffice draws it: a Designer layout's full-slide "decorative" rect with useBgFill="1"
+  // and a tx1 solidFill is the dark panel its light text sits on.
+  const ownFill = spPrFillOf(ctx, chain);
+  let fill = ownFill ?? styleFillOf(ctx, chain) ?? { kind: 'none' };
+  if (on(el.attrs.useBgFill) && (!ownFill || ownFill.kind === 'none')) {
     st.background ??= readBackground(ctx).fill;
     fill = st.background;
     if (fill.kind !== 'solid' && fill.kind !== 'none') {
@@ -446,6 +469,15 @@ function readShape(
   if (base.from === 'slide' && chain.ph && !chars && fill.kind !== 'picture') return undefined;
   const line = readLine(ctx, chain);
   const fx = effectsOf(ctx, chain);
+  const custom = custNode
+    ? slideCustom(
+        ctx,
+        custNode,
+        base,
+        st,
+        drawWeight({ stroked: !!line, shadow: !!fx.shadow, glow: !!fx.glow, softEdge: !!fx.softEdge }),
+      )
+    : undefined;
   const reasons: string[] = [];
   let support: Support = 'native';
   // M6: every preset of the table, custom geometry within the bounds, gradients and line styles are drawn;
@@ -454,7 +486,7 @@ function readShape(
   if (fill.kind === 'pattern') reasons.push('pattFill');
   if (reasons.length) support = 'approx';
   if (custom?.over) {
-    reasons.push('custGeom');
+    reasons.push(custom.complex ? 'custGeom:complex' : 'custGeom');
     support = 'residual';
   }
   const cxn =
@@ -498,10 +530,14 @@ function readShape(
 }
 
 /**
- * A custom geometry built for an element (`geom.ts`), its points counted against the slide's 64k; past them
- * it is marked over the bounds (residual: LibreOffice draws it). Its compile notes go to the slide's log.
+ * A custom geometry built for an element (`geom.ts`), its points counted against the slide's 64k and its
+ * drawing estimate (renderer `geom/cost.ts`), times `weight` (the passes that draw it, `drawWeight`), against
+ * the slide's `GEOM_COST.slide`; past them, or past `GEOM_COST.geometry` on its own, it is marked over the
+ * bounds (residual: LibreOffice draws it into the art; `complex` for the drawing budgets). The renderer holds
+ * a slide to the same budgets (`geombudget.ts`), so a geometry kept native here is drawn natively there.
+ * Its compile notes go to the slide's log.
  */
-export function slideCustom(ctx: SlideCtx, node: XNode, base: ElementBase, st: WalkState) {
+export function slideCustom(ctx: SlideCtx, node: XNode, base: ElementBase, st: WalkState, weight = 1) {
   const p = decompose(base.xf);
   const custom = customPaths(node, p.w, p.h, ctx.frame.s);
   for (const n of custom.notes) ctx.log(`custom geometry: ${n}`);
@@ -512,8 +548,25 @@ export function slideCustom(ctx: SlideCtx, node: XNode, base: ElementBase, st: W
     );
     return { ...custom, over: true };
   }
+  if (custom.over) return custom;
+  // A margin under the renderer's budgets, for the rounding of the stored coordinates.
+  if ((custom.cost ?? 0) > GEOM_COST.geometry * COST_MARGIN) {
+    ctx.log(
+      'a custom geometry too costly to draw (its edges cross the box many times) is drawn by LibreOffice',
+    );
+    return { ...custom, over: true, complex: true };
+  }
+  const total = (st.geomCost ?? 0) + (custom.cost ?? 0) * weight;
+  if (total > GEOM_COST.slide * COST_MARGIN) {
+    ctx.log("custom geometry past the slide's drawing budget is drawn by LibreOffice");
+    return { ...custom, over: true, complex: true };
+  }
+  st.geomCost = total;
   return custom;
 }
+
+/** The share of the renderer's drawing budgets the converter fills (rounding of stored coordinates aside). */
+const COST_MARGIN = 0.98;
 
 /**
  * An outline along the chain: each property from the nearest `a:ln` that sets it, else the theme line the

@@ -7,7 +7,9 @@
  *
  * As the resolver does, a family is its library faces only: `@ordo/pptx-scene` asks for the metric
  * substitute (Carlito for Calibri, ...) and ordo's default face by name next. Faces of one family, weight and
- * slant (Google Fonts' unicode-range subsets) are tried in turn for each character.
+ * slant (Google Fonts' unicode-range subsets) are tried in turn for each character; their line metrics are
+ * the first face's, and a pair is kerned by a face that has both characters. `FACE_LIMITS.bytes` counts
+ * what a face keeps (its tables, decompressed) or its file, whichever is more.
  */
 import { readFileSync, statSync } from 'node:fs';
 import type { Font } from '@ordo/domain';
@@ -61,8 +63,12 @@ export function libraryFaces(files: readonly SceneFontFile[]): FaceSource {
         bytesRead + size <= FACE_LIMITS.bytes
       ) {
         filesRead++;
-        bytesRead += size;
         const tables = metricTables(readFileSync(file));
+        // What the task keeps: the tables (copies, `metricTables`), a WOFF2's decompressed ones larger than
+        // its file; the file itself when that is more.
+        let held = 0;
+        for (const t of tables.values()) held += t.length;
+        bytesRead += Math.max(size, held);
         v = metricsOfTables((tag) => tables.get(tag));
       }
     } catch {
@@ -85,6 +91,9 @@ export function libraryFaces(files: readonly SceneFontFile[]): FaceSource {
       .filter((m): m is FaceMetrics => m !== undefined);
     if (!faces.length) return undefined;
     if (faces.length === 1) return faces[0];
+    // Subsets of one face: a character from the first that has it; the line metrics are the first face's
+    // (the subsets of one family share them), and a pair's kerning is that of a face that has both.
+    const first = faces[0]!;
     return {
       advance: (cp) => {
         for (const m of faces) {
@@ -92,6 +101,14 @@ export function libraryFaces(files: readonly SceneFontFile[]): FaceSource {
           if (a !== undefined) return a;
         }
         return undefined;
+      },
+      ...(first.lineHeight !== undefined ? { lineHeight: first.lineHeight } : {}),
+      ...(first.ascent !== undefined ? { ascent: first.ascent } : {}),
+      ...(first.descent !== undefined ? { descent: first.descent } : {}),
+      kern: (l, r) => {
+        for (const m of faces)
+          if (m.advance(l) !== undefined && m.advance(r) !== undefined) return m.kern?.(l, r) ?? 0;
+        return 0;
       },
     };
   };
