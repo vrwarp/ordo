@@ -45,6 +45,7 @@ import {
 } from './inherit.ts';
 import type { Affine, Element, ElementBase, Fill, Line, ShapeElement, Support } from './ir.ts';
 import { chooseAlternate } from './markup.ts';
+import { CANVAS_H, CANVAS_W } from '@ordo/renderer/geom/bounds.ts';
 import { type DrawnGeom, drawCost, GEOM_COST, maskCost } from '@ordo/renderer/geom/cost.ts';
 import { outlineOf } from '@ordo/renderer/geom/outline.ts';
 import {
@@ -92,7 +93,10 @@ export interface WalkState {
   background?: Fill;
   /** Custom geometry points so far (design/27 §12: 64k per slide; M6). */
   points?: number;
-  /** Weighted drawing estimates of the custom geometries drawn natively so far (`GEOM_COST.slide`). */
+  /**
+   * Drawing estimates of what is drawn natively so far, the background's first (`GEOM_COST.slide`,
+   * `chargeDrawing`).
+   */
   geomCost?: number;
   /** SmartArt drawings read so far (M6, `smartart.ts`: `ElementBase.diagram` numbers them). */
   diagrams?: number;
@@ -113,11 +117,27 @@ const treeOf = (n: XNode | undefined) => path(n, 'p:cSld', 'p:spTree');
  */
 export function walkSlide(ctx: SlideCtx): Element[] {
   const st: WalkState = { out: [], count: 0, groups: 0 };
+  // The background is emitted under everything, a full-slide fill laid on white (`emit.ts`
+  // `emitBackground`): its pixels are charged first, as every drawer's budget counts them.
+  st.geomCost = backgroundCost(readBackground(ctx).fill);
   if (shows(ctx.slide)) decorations(ctx, st);
   walkTree(ctx, treeOf(ctx.slide), 'slide', IDENTITY, undefined, 0, st);
   // Connector ends glued to shapes move to their connection sites (M6).
   placeConnectors(st.out);
   return st.out;
+}
+
+/**
+ * What drawing a slide's background costs as emitted (renderer `geom/cost.ts` `drawCost`): a full-slide rect,
+ * opaque (a colour or a gradient laid on white; a picture's white under it), at most the canvas.
+ */
+function backgroundCost(fill: Fill): number {
+  const g = presetDrawn('rect', undefined, CANVAS_W, CANVAS_H);
+  return drawCost(g, {
+    fill: true,
+    paint: { gradient: fill.kind === 'gradient', translucent: false },
+    place: { box: { x: 0, y: 0, w: CANVAS_W, h: CANVAS_H } },
+  });
 }
 
 /** The master's and layout's decorations as one slide's walk leaves them, with the notes it logged. */
@@ -160,10 +180,12 @@ function decorations(ctx: SlideCtx, st: WalkState): void {
     st.count = known.count;
     st.groups = known.groups;
     st.points = known.points;
-    st.geomCost = known.geomCost;
+    // What the decorations charge on top of this slide's background.
+    st.geomCost = (st.geomCost ?? 0) + known.geomCost;
     return;
   }
   const notes: string[] = [];
+  const before = st.geomCost ?? 0;
   walk({
     ...ctx,
     log: (msg) => {
@@ -182,7 +204,7 @@ function decorations(ctx: SlideCtx, st: WalkState): void {
     groups: st.groups,
     notes,
     points: st.points ?? 0,
-    geomCost: st.geomCost ?? 0,
+    geomCost: (st.geomCost ?? 0) - before,
   });
   for (let i = 0; i < st.out.length; i++) st.out[i] = { ...st.out[i]! };
 }
@@ -491,7 +513,7 @@ function readShape(
   const fx = effectsOf(ctx, chain);
   // What drawing it costs as `emit.ts` emits it (renderer `geom/cost.ts`): the shape object (fill, outline,
   // effects), and a picture fill's picture clipped to the same geometry.
-  const spec = drawSpecOf(ctx.frame, { fill, ...(line ? { line } : {}), ...fx });
+  const spec = drawSpecOf(ctx.frame, { fill, ...(line ? { line } : {}), ...fx }, base.xf);
   const pictureFill = fill.kind === 'picture';
   const rate = (g: DrawnGeom) => drawCost(g, spec) + (pictureFill ? maskCost(g) : 0);
   const custom = custNode
@@ -507,6 +529,23 @@ function readShape(
       );
       complex = true;
     }
+  }
+  // A shape not drawn natively but still emitted (`emit.ts`: its legacy rect, ellipse or line, under its text)
+  // is charged as that legacy shape: every drawer draws it, and no budget refuses it (renderer
+  // `geom/cost.ts` `slidePlan` counts it first). One past the drawing budget without text emits nothing.
+  const legacy = (custom?.over === true || complex) && !pictureFill;
+  if (legacy && (chars > 0 || !(complex || custom?.complex))) {
+    const p = decompose(base.xf);
+    const g = presetDrawn('rect', undefined, p.w * ctx.frame.s, p.h * ctx.frame.s);
+    const o = spec.outline;
+    st.geomCost =
+      (st.geomCost ?? 0) +
+      drawCost(g, {
+        fill: spec.fill,
+        paint: { translucent: spec.paint?.translucent !== false },
+        ...(spec.place ? { place: spec.place } : {}),
+        ...(o ? { outline: { width: o.width, join: 'miter', cap: 'butt', miterLimit: o.miterLimit } } : {}),
+      });
   }
   const reasons: string[] = [];
   let support: Support = 'native';

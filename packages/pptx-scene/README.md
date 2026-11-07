@@ -651,6 +651,35 @@ only tables (`budget:table`) and SmartArt drawings (`budget:smartart`) were ever
 - Tests: `geom.test.ts` (wide outlines and arrowheads to the art, thin dashes on presets past the budget,
   a masked picture with an outline charged as the renderer charges its two objects, within 5 %).
 
+## M6 wave 2 finish review (painted area, effect layers)
+
+- **The pixels a fill paints** (`geom.ts` `drawSpecOf`, `walk.ts` `readShape`, `backgroundCost`; renderer
+  `geom/cost.ts` `areaWeight`, `spanArea`). A fill was rated by its edges, so a full-slide translucent
+  gradient (about 11.7 ms at 4K) rated 65 µs and stacks of them were native (140: 1.3 s at 3840). Every
+  filled path is now charged the span of its points cut to the canvas (its box placed on the slide, `place`),
+  a logical px² `GEOM_COST.area` for a translucent colour, `opaqueArea` for an opaque one, `gradientArea` or
+  `opaqueGradientArea` for a gradient (about five times a colour). The slide's background (a full-slide rect
+  laid on white, opaque) is charged first; decorations cached for a layout keep their own share only.
+- **Shapes the drawing budget sends to the art emit nothing when they have no text** (`emit.ts`
+  `pastBudget`, as 'budget:shapes'): their legacy rect, which no budget refuses, cost what the budget held
+  back (138 translucent full-slide rects: 300 ms at 3840) and covered the box where the geometry did not. One
+  with text is emitted as its legacy shape under its text, and the walk charges that legacy shape.
+- **Effect layers sized by what is drawn** (`emit.ts` `fitEffects`, `effectAreaOf`; renderer `geom/bounds.ts`
+  `drawnBounds`, `geom/cost.ts` `effectArea`). The effect budget measured a shape's layers by its box, but
+  the drawers make them over what it draws: a custGeom's points past its box (kept, as PowerPoint and
+  LibreOffice draw them) and an outline's reach. Both now take the drawn bounds (the geometry's points grown
+  by the outline's sharpest miter, caps and arrowheads), placed on the slide and cut to the canvas and the
+  effect's reach as the drawer cuts them, so the converter, the renderer's budget and the drawers measure
+  the same area. Twenty 10 px custGeoms whose paths cover the slide, with shadows, were native with 0.009
+  slide areas (793 ms at 3840); each now weighs about 1.02.
+- **Corpus** (worship shards and sermons, 2,927 slides): two slides of one deck of full-slide traced
+  decorations go hybrid (their geometry plus their painted area pass the budget); no other class changes, no
+  effect is dropped, and the renderer changes nothing the converter emits. The costliest slide's estimate
+  is 1.06M.
+- Tests: `geom.test.ts` (twelve out-of-box shadowed custGeoms: the effect budget keeps nine, with a note;
+  thirty 10 px rects with 500 px outlines and shadows; the 140-gradient stack to the art with only what is
+  drawn emitted; six gradients, as many as fit after the background).
+
 ## Module map
 
 | File            | What                                                                                                              | Owner  |

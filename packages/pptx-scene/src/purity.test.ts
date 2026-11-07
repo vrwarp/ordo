@@ -11,7 +11,8 @@ import { describe, expect, it } from 'vitest';
  * also the renderer's geometry engine without its drawer (`@ordo/renderer/geom`: the preset table, the
  * compiler, the evaluator, arcs and the path builder; M6 repair: the drawing estimate, `cost.ts`, with the
  * outline as drawn, `outline.ts`, its line ends, `ends.ts` and `markers.ts`, and stored paths built at a box,
- * `built.ts`), so a custGeom means in the converter what it means when drawn, and costs what it costs; those
+ * `built.ts`; M6 finish: what a shape covers, `bounds.ts`), so a custGeom means in the converter what it means
+ * when drawn, and costs what it costs; those
  * import nothing at run time but each other and the pure domain modules.
  */
 const PURE_DOMAIN = ['bullets.ts', 'defaults.ts', 'pathdata.ts', 'readable.ts'];
@@ -27,6 +28,7 @@ const PURE_GEOM = [
   'ends.ts',
   'markers.ts',
   'built.ts',
+  'bounds.ts',
 ];
 const IMPORT = /^\s*(import|export)\s+(type\s+)?[^'"]*?from\s+'([^']+)'/gm;
 const IMPURE = /\brequire\(|\bimport\(|\bprocess\.|\bdocument\.|\bwindow\.|\bfetch\(/;

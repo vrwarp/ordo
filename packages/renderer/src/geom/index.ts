@@ -64,15 +64,20 @@ export {
 } from './ends.ts';
 export { gradientStyle } from './paint.ts';
 export {
+  areaWeight,
   clampPoints,
   type CostedObject,
   type DrawnGeom,
   type DrawSpec,
   drawCost,
   EFFECT_COST,
+  type EffectedObject,
   effectArea,
+  type FillPaint,
+  fillPaintOf,
   GEOM_COST,
   geomCost,
+  hasPart,
   type LegacyPart,
   maskCost,
   objectCost,
@@ -84,6 +89,18 @@ export {
   unitCost,
   withoutPart,
 } from './cost.ts';
+export {
+  type Bounds,
+  CANVAS_H,
+  CANVAS_W,
+  canvasArea,
+  drawnBounds,
+  geomBounds,
+  miterFactor,
+  outlineReach,
+  type Placement,
+  placedBounds,
+} from './bounds.ts';
 export { boxSide, geometryAt, pathsGeometry, type PathsGeometry } from './built.ts';
 export {
   cappedDash,

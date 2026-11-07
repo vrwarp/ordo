@@ -65,7 +65,8 @@
  *   `TextObject` per cell, in one group; a table classed residual emits nothing (LibreOffice's art).
  * - **The object budget** (M6, `classify.ts`): on a slide past it, a run of z-adjacent shapes of one look
  *   (`ShapeElement.merge`) is one shape object of all their paths (`emitMerged`), and an element the budget
- *   sent to the art ('budget:shapes') emits nothing, as a residual table.
+ *   sent to the art ('budget:shapes') emits nothing, as a residual table; so does a shape without text the
+ *   drawing budget sent there ('custGeom:complex', 'geom:complex', `walk.ts`).
  * - **Lyric box** (design/27 §4 "Church mappings"): the slide's own body placeholder with the most
  *   characters; else the largest other text by characters × area (not title, date, footer, slide number);
  *   the title only when it is the only text. On a bilingual slide (the two boxes with the most text in
@@ -84,6 +85,7 @@ import type {
   SlideObject,
   TextObject,
 } from '@ordo/domain';
+import { drawnBounds } from '@ordo/renderer/geom/bounds.ts';
 import { geometryAt, legacyGeometry } from '@ordo/renderer/geom/built.ts';
 import {
   EFFECT_COST,
@@ -95,6 +97,7 @@ import {
   withoutPart,
 } from '@ordo/renderer/geom/cost.ts';
 import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD } from '@ordo/renderer/geom/ops.ts';
+import { outlineOf } from '@ordo/renderer/geom/outline.ts';
 import { apply, boxPx, decompose, lenPx, multiply, ptPx, slideRect } from './frame.ts';
 import { bakeKey, bakeOf, type PictureBake } from './bake.ts';
 import { boundsOf, unionBox } from './classify.ts';
@@ -579,6 +582,30 @@ function emitSlide(ctx: EmitCtx, s: SlideScene, spans: [number, number][] = []):
   return slide;
 }
 
+/** The geometry an emitted object draws at its box (`geombudget.ts` `drawnGeometry`) and its stored points. */
+function geometryOf(o: SlideObject) {
+  if (o.type === 'shape')
+    return (
+      geometryAt(o.geom, o.box.w, o.box.h) ?? {
+        built: legacyGeometry(o.shape, o.radius ?? 0, o.box.w, o.box.h),
+        points: 0,
+      }
+    );
+  if (o.type === 'image' && o.mask) return geometryAt(o.mask, o.box.w, o.box.h);
+  return undefined;
+}
+
+/**
+ * What an emitted shape's effects weigh (renderer `effectArea`): their layers over what it draws (`bounds.ts`
+ * `drawnBounds`: its geometry's points, past its box included, grown by its outline), as every drawer makes
+ * them (`shape.ts`, `effects.ts`) and sizes them (`geombudget.ts`).
+ */
+function effectAreaOf(o: SlideObject): number {
+  if (o.type !== 'shape' || !(o.shadow || o.glow || o.softEdge)) return 0;
+  const g = geometryOf(o);
+  return effectArea(o, g ? drawnBounds(g.built, outlineOf(o)) : undefined);
+}
+
 /**
  * The slide's effect budget (renderer `geom/cost.ts` `EFFECT_COST`, design/27 §12 drawing cost): shapes keep
  * their shadow, glow and soft edge, bottom first, while the area of their layers stays within it; later ones
@@ -590,7 +617,7 @@ function fitEffects(ctx: EmitCtx, objects: SlideObject[]): void {
   let dropped = 0;
   for (const o of objects) {
     if (o.type !== 'shape') continue;
-    const a = effectArea(o);
+    const a = effectAreaOf(o);
     if (!a) continue;
     if (area + a <= EFFECT_COST.slide * 0.98) {
       area += a;
@@ -608,27 +635,17 @@ function fitEffects(ctx: EmitCtx, objects: SlideObject[]): void {
  * The slide's drawing budget (renderer `geom/cost.ts` `slidePlan`, design/27 §12 drawing cost) applied to the
  * objects as emitted, exactly as every drawer applies it (`geombudget.ts`): the walk already sent what passes
  * it to the art (`walk.ts` `slideCustom`, `chargeDrawing`), within a margin, so this changes only what the
- * walk could not see (shapes merged into one object past the object budget, a picture's mask and outline).
+ * walk could not see (shapes merged into one object past the object budget, a picture's mask and outline,
+ * a table's cells and grid, the background's fill).
  * An object it changes is stored as the drawers would draw it (`withoutPart`), with a note.
  */
 function fitDrawing(ctx: EmitCtx, objects: SlideObject[]): void {
-  const geometryOf = (o: SlideObject) => {
-    if (o.type === 'shape')
-      return (
-        geometryAt(o.geom, o.box.w, o.box.h) ?? {
-          built: legacyGeometry(o.shape, o.radius ?? 0, o.box.w, o.box.h),
-          points: 0,
-        }
-      );
-    if (o.type === 'image' && o.mask) return geometryAt(o.mask, o.box.w, o.box.h);
-    return undefined;
-  };
   const rate = (o: SlideObject, part?: LegacyPart): Rated => {
     const x = part ? withoutPart(o, part) : o;
     const at = geometryOf(x);
     return { est: objectCost(x, at?.built), points: at?.points ?? 0 };
   };
-  const parts = slidePlan(objects, rate, (o) => (o.type === 'shape' ? effectArea(o) : 0));
+  const parts = slidePlan(objects, rate, effectAreaOf);
   let changed = 0;
   parts.forEach((part, i) => {
     if (!part) return;
@@ -644,10 +661,19 @@ function fitDrawing(ctx: EmitCtx, objects: SlideObject[]): void {
 /**
  * An element the object budget sent to the art (`classify.ts` `fitShapes`, 'budget:shapes'): like a residual
  * table it emits nothing, so version 1 stays within the budget (and the render clamp's 200 objects) with the
- * slide's own text drawn, until the art replaces what it draws.
+ * slide's own text drawn, until the art replaces what it draws. So too a shape without text the drawing
+ * budget sent there (`walk.ts`: 'custGeom:complex', 'geom:complex'): its legacy shape, which every drawer
+ * draws and no budget refuses, would cost what the budget held back (a stack of 140 full-slide fills as
+ * their legacy colours took 300 ms at 4K) and cover its box where the geometry did not.
  */
 function pastBudget(e: Element): boolean {
-  return e.support === 'residual' && e.reasons?.includes('budget:shapes') === true;
+  if (e.support !== 'residual' || !e.reasons) return false;
+  if (e.reasons.includes('budget:shapes')) return true;
+  return (
+    e.kind === 'shape' &&
+    !e.text &&
+    (e.reasons.includes('custGeom:complex') || e.reasons.includes('geom:complex'))
+  );
 }
 
 /**

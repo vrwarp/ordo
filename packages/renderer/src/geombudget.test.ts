@@ -2,7 +2,14 @@ import type { ShapeObject, SlideObject } from '@ordo/domain';
 import { afterEach, describe, expect, it } from 'vitest';
 import { charged, EFFECT_COST, effectArea, GEOM_COST } from './geom/cost.ts';
 import { clearGeomFiles, putGeomFile, storedCost, storedGeometry } from './geom/stored.ts';
-import { drawnCost, overGeomBudget, slideBudget, withinDrawBudget, withoutGeom } from './geombudget.ts';
+import {
+  drawnCost,
+  drawnEffectArea,
+  overGeomBudget,
+  slideBudget,
+  withinDrawBudget,
+  withoutGeom,
+} from './geombudget.ts';
 
 /** A path zigzagging across a 2000 x 2000 space (a costly fill within the per-geometry bound). */
 function zigzag(points: number): string {
@@ -190,6 +197,7 @@ describe("a slide's drawing budget (design/27 §12 drawing cost)", () => {
     // (CLAMP.minDashedStrokePx), the dashes past the budget as plain rects.
     const dashed = Array.from({ length: 20 }, (_, i) => ({
       ...shape(`d${i}`, ''),
+      fill: undefined,
       geom: { preset: 'rect' },
       stroke: { width: 0.01, color: black },
       dash: 'sysDot' as const,
@@ -204,10 +212,13 @@ describe("a slide's drawing budget (design/27 §12 drawing cost)", () => {
     const kept = drawn.slice(3).filter((o) => o.dash);
     expect(kept.length).toBeGreaterThan(0);
     expect(kept.length).toBeLessThan(20);
-    // What is drawn natively charges the slide's budget at most.
+    // Each object drawn natively fits, with everything drawn below it (legacy copies counted), the slide's
+    // budget.
     let total = 0;
-    for (const o of drawn) total += charged(drawnCost(o));
-    expect(total).toBeLessThanOrEqual(GEOM_COST.slide);
+    drawn.forEach((o, i) => {
+      total += charged(drawnCost(o));
+      if (!over.has(objects[i]!)) expect(total).toBeLessThanOrEqual(GEOM_COST.slide);
+    });
   });
 
   it('charges the area each path covers: eight full-slide paths a shape paint the slide eight times (M6 finish)', () => {
@@ -224,11 +235,91 @@ describe("a slide's drawing budget (design/27 §12 drawing cost)", () => {
         })),
       },
     });
-    const objects: SlideObject[] = Array.from({ length: 10 }, (_, i) => stacked(`r${i}`));
+    const objects: SlideObject[] = Array.from({ length: 4 }, (_, i) => stacked(`r${i}`));
     const one = charged(drawnCost(objects[0]!));
-    expect(one).toBeGreaterThan(7 * 1920 * 1080 * GEOM_COST.area);
-    const fit = Math.floor(GEOM_COST.slide / one);
+    expect(one).toBeGreaterThan(8 * 1920 * 1080 * GEOM_COST.area);
+    // Every one paints the slide at least once as its legacy rect, counted first; what fits on top is drawn.
+    const legacy = charged(drawnCost(withoutGeom(objects[0]!)));
+    expect(legacy).toBeGreaterThan(1920 * 1080 * GEOM_COST.area);
+    const fit = Math.floor((GEOM_COST.slide - objects.length * legacy) / (one - legacy));
+    expect(fit).toBe(1);
     expect([...overGeomBudget(objects)].map((o) => o.id)).toEqual(objects.slice(fit).map((o) => o.id));
+  });
+
+  it("sizes effects by what the shape draws: the review's out-of-box custGeom and wide outline (M6 finish review)", () => {
+    const shadow = { dx: 2.83, dy: 2.83, blur: 6, color: { r: 0, g: 0, b: 0, a: 0.4 } };
+    // A 10 px box at the centre whose path covers the slide (kept by the converter, as PowerPoint and
+    // LibreOffice draw it), 60 % filled: each shadow layer covers the canvas (20 took 793 ms at 3840).
+    const outside = (i: number): ShapeObject => ({
+      ...shape(`o${i}`, ''),
+      box: { x: 955, y: 535, w: 10, h: 10, rotation: 0 },
+      fill: { r: (i * 37) % 255, g: 120, b: 160, a: 0.6 },
+      geom: { paths: [{ d: 'M -960 -540 L 970 -540 L 970 550 L -960 550 Z', w: 10, h: 10 }] },
+      shadow,
+    });
+    const objects: SlideObject[] = Array.from({ length: 20 }, (_, i) => outside(i));
+    const one = drawnEffectArea(objects[0]!);
+    expect(one).toBeGreaterThan(1);
+    expect(one).toBeLessThan(1.05);
+    const drawn = withinDrawBudget(objects) as ShapeObject[];
+    const shadowed = drawn.filter((o) => o.shadow);
+    expect(shadowed.length).toBeLessThanOrEqual(9);
+    // What keeps its effects stays within the effect budget, and what is drawn natively within the slide's.
+    let area = 0;
+    for (const o of drawn) if (o.shadow) area += drawnEffectArea(o);
+    expect(area).toBeLessThanOrEqual(EFFECT_COST.slide);
+    let total = 0;
+    drawn.forEach((o, i) => {
+      total += charged(drawnCost(o));
+      if (!overGeomBudget(objects).has(objects[i]!)) expect(total).toBeLessThanOrEqual(GEOM_COST.slide);
+    });
+    // A 10 px rect with a 500 px outline (the editor's clamp) and the editor's shadow: its layers cover the
+    // outline (250 √2 past each corner), about a quarter slide, not 0.001.
+    const wide = (i: number): ShapeObject => ({
+      ...shape(`w${i}`, ''),
+      box: { x: 955, y: 535, w: 10, h: 10, rotation: 0 },
+      geom: undefined,
+      stroke: { width: 500, color: { r: 0, g: 0, b: 0, a: 1 } },
+      shadow: { dx: 6, dy: 6, blur: 12, color: { r: 0, g: 0, b: 0, a: 0.5 } },
+    });
+    const w = drawnEffectArea(wide(0));
+    expect(w).toBeGreaterThan(0.25);
+    expect(w).toBeLessThan(0.3);
+    // Twenty of them keep their shadows (the effect budget would keep 36). Thirty outlines, drawn in any case
+    // (their legacy copies, counted first), fill the drawing budget alone: none gets a shadow on top.
+    const twenty = (withinDrawBudget(Array.from({ length: 20 }, (_, i) => wide(i))) as ShapeObject[]).filter(
+      (o) => o.shadow,
+    );
+    expect(twenty.length).toBe(20);
+    expect(twenty.reduce((a, o) => a + drawnEffectArea(o), 0)).toBeLessThanOrEqual(EFFECT_COST.slide);
+    const thirty = Array.from({ length: 30 }, (_, i) => wide(i));
+    const floor = thirty.reduce((n, o) => n + charged(drawnCost({ ...o, shadow: undefined })), 0);
+    expect(floor).toBeGreaterThan(GEOM_COST.slide);
+    expect((withinDrawBudget(thirty) as ShapeObject[]).some((o) => o.shadow)).toBe(false);
+  });
+
+  it("draws gradients past the slide's budget as their legacy colours: the review's stack (M6 finish review)", () => {
+    // Full-slide legacy rects with a 50 % linear gradient each, as the editor stores them: 200 took 2.25 s at
+    // 3840, none changed by the budget. A gradient paints about five times a colour's cost a pixel.
+    const stops = [
+      { at: 0, color: { r: 255, g: 0, b: 0, a: 0.5 } },
+      { at: 1, color: { r: 0, g: 0, b: 255, a: 0.5 } },
+    ];
+    const objects: SlideObject[] = Array.from({ length: 200 }, (_, i) => ({
+      ...shape(`g${i}`, ''),
+      geom: undefined,
+      fill: stops[0]!.color,
+      gradient: { kind: i % 2 ? ('radial' as const) : ('linear' as const), stops, angle: 90 },
+    }));
+    // Their legacy colours alone (each a full-slide translucent fill, drawn in any case) pass the budget: every
+    // one is its first stop, drawn by the legacy path as an older build draws it.
+    const drawn = withinDrawBudget(objects) as ShapeObject[];
+    expect(drawn.every((o) => !o.gradient && o.fill?.a === 0.5)).toBe(true);
+    // Six (the first six of the converter's 140, 78 ms at 3840 cold): two keep theirs on top of the six
+    // legacy fills, within the budget.
+    const six = withinDrawBudget(objects.slice(0, 6)) as ShapeObject[];
+    expect(six.filter((o) => o.gradient).length).toBe(2);
+    expect(six.reduce((n, o) => n + charged(drawnCost(o)), 0)).toBeLessThanOrEqual(GEOM_COST.slide);
   });
 
   it('gives back the same array when nothing is over', () => {

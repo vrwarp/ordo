@@ -1,6 +1,8 @@
 import type { SlideObject } from '@ordo/domain';
-import { effectArea, type LegacyPart, objectCost, type Rated, slidePlan, withoutPart } from './geom/cost.ts';
+import { drawnBounds } from './geom/bounds.ts';
 import { legacyGeometry } from './geom/built.ts';
+import { effectArea, type LegacyPart, objectCost, type Rated, slidePlan, withoutPart } from './geom/cost.ts';
+import { outlineOf } from './geom/outline.ts';
 import type { BuiltGeom } from './geom/path.ts';
 import { geomFilesVersion, storedCost, storedGeometry } from './geom/stored.ts';
 import { clampShapeObject } from './shape.ts';
@@ -8,14 +10,16 @@ import { clampShapeObject } from './shape.ts';
 /*
  * A slide's drawing budget (design/27 §12 "drawing cost", §13), the same for every drawer: the outputs'
  * asset worker and the thumbnail worker (`drawSlide2D`, `slidePictures`, `sceneSlides`) and the editor canvas.
- * - Geometry: in z-order, each shape drawn through the geometry engine and each picture mask is drawn while
- *   the drawing estimates of what is drawn (`objectCost`: fills, outlines with their joins, caps, dashes and
- *   arrowheads, effect passes) stay within `GEOM_COST.slide` and the stored paths' points within
+ * - Geometry: in z-order, each shape and each picture mask is drawn while the drawing estimates of what is
+ *   drawn (`objectCost`: fills with the pixels they paint, a gradient's about five times a colour's, outlines
+ *   with their joins, caps, dashes and arrowheads, effect passes), on top of every object's legacy copy
+ *   (counted first and never refused), stay within `GEOM_COST.slide` and the stored paths' points within
  *   `GEOM_COST.slidePoints` (§12's 64k); a later one is drawn as its legacy shape (`withoutPart` 'geom': a
- *   shape without its stored geometry, dash, arrowheads, joins and caps; a picture without its mask), as an
- *   older build draws it. A stored geometry whose fill alone is over `GEOM_COST.geometry` is already its
+ *   shape without its stored geometry, gradient (its first stop), dash, arrowheads, joins and caps; a picture
+ *   without its mask), as an older build draws it. A stored geometry whose fill alone is over `GEOM_COST.geometry` is already its
  *   legacy shape (`storedGeometry`).
- * - Effects: shapes keep their shadow, glow and soft edge while the area of their layers (`effectArea`) stays
+ * - Effects: shapes keep their shadow, glow and soft edge while the area of their layers (`effectArea`, over
+ *   what each shape draws: `bounds.ts` `drawnBounds`, the bounds `drawGeomShape` makes its layers over) stays
  *   within `EFFECT_COST.slide`; later ones are drawn without them.
  * The loop is `slidePlan`, which the converter runs on what it emits (`pptx-scene` `emit.ts`), after keeping
  * native slides within the same budgets as it reads them (`walk.ts` `slideCost`, `fitEffects`), so this
@@ -28,7 +32,7 @@ const memo = new WeakMap<
   { version: number; drawn: ReadonlyMap<SlideObject, SlideObject>; over: ReadonlySet<SlideObject> }
 >();
 const copies = new WeakMap<SlideObject, { geom?: SlideObject; effects?: SlideObject; both?: SlideObject }>();
-const rated = new WeakMap<SlideObject, { version: number; r: Rated }>();
+const rated = new WeakMap<SlideObject, { version: number; r: Rated; area: number }>();
 
 /**
  * An object as drawn past a budget (`withoutPart`): without its stored geometry and costly outline fields
@@ -63,19 +67,37 @@ function drawnGeometry(o: SlideObject): { g: BuiltGeom | undefined; points: numb
   return { g: undefined, points: 0 };
 }
 
-/** What an object costs to draw (`objectCost`, clamped as drawn), memoised per object and files read. */
-export function drawnCost(o: SlideObject): Rated {
+/** An object's estimate and effect area as drawn (clamped), memoised per object and files read. */
+function ratedOf(o: SlideObject): { r: Rated; area: number } {
   const version = geomFilesVersion();
   const hit = rated.get(o);
-  if (hit && hit.version === version) return hit.r;
+  if (hit && hit.version === version) return hit;
   let r: Rated = { est: 0, points: 0 };
+  let area = 0;
   if (o?.box && (o.type === 'shape' || o.type === 'image')) {
     const c = o.type === 'shape' ? clampShapeObject(o) : o;
     const { g, points } = drawnGeometry(c);
     r = { est: objectCost(c, g), points };
+    // The effect layers cover what the shape draws, as `drawGeomShape` makes them.
+    if (c.type === 'shape' && g && (c.shadow || c.glow || c.softEdge))
+      area = effectArea(c, drawnBounds(g, outlineOf(c)));
   }
-  rated.set(o, { version, r });
-  return r;
+  const out = { version, r, area };
+  rated.set(o, out);
+  return out;
+}
+
+/** What an object costs to draw (`objectCost`, clamped as drawn), memoised per object and files read. */
+export function drawnCost(o: SlideObject): Rated {
+  return ratedOf(o).r;
+}
+
+/**
+ * What an object's effects weigh against the slide's effect budget (`effectArea` over what it draws,
+ * `drawnBounds`, clamped as drawn), memoised per object and files read.
+ */
+export function drawnEffectArea(o: SlideObject): number {
+  return ratedOf(o).area;
 }
 
 /**
@@ -95,7 +117,7 @@ function planOf(objects: readonly SlideObject[]) {
   const parts = slidePlan(
     objects,
     (o, part) => drawnCost(part ? legacyCopy(o, part) : o),
-    (o) => (o?.type === 'shape' && o.box ? effectArea(o) : 0),
+    (o) => drawnEffectArea(o),
   );
   parts.forEach((part, i) => {
     const o = objects[i]!;

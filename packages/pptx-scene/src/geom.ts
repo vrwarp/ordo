@@ -58,7 +58,7 @@ import {
 import { parsePathData } from '@ordo/domain/pathdata.ts';
 import { type DrawnGeom, type DrawSpec, geomCost } from '@ordo/renderer/geom/cost.ts';
 import { type OutlineFields, outlineOf } from '@ordo/renderer/geom/outline.ts';
-import { apply, decompose, multiply, xfrmAffine } from './frame.ts';
+import { apply, boxPx, decompose, multiply, xfrmAffine } from './frame.ts';
 import type { Affine, CustomPaths, Element, Fill, Frame, Line, RectEmu, Rgba, ShapeElement } from './ir.ts';
 import { clean } from './log.ts';
 import { child, type XNode } from './xml.ts';
@@ -1163,11 +1163,27 @@ export function outlineFields(f: Frame, line: Line | undefined): OutlineFields {
 export function drawSpecOf(
   f: Frame,
   e: { fill?: Fill; line?: Line; shadow?: { blur: number }; glow?: { radius: number }; softEdge?: number },
+  xf?: Affine,
 ): DrawSpec {
   const glow = e.glow ? px500(f, e.glow.radius) : 0;
   const soft = e.softEdge ? px500(f, e.softEdge) : 0;
+  const fill = e.fill;
+  const filled = !!fill && fill.kind !== 'none' && fill.kind !== 'picture' && fill.kind !== 'group';
+  // How the emitted fill paints (`emit.ts`: a gradient, else its colour; a pattern as its blended colour).
+  const paint =
+    fill?.kind === 'gradient'
+      ? { gradient: true, translucent: !fill.stops.length || fill.stops.some((s) => !(s.color.a >= 1)) }
+      : fill?.kind === 'solid'
+        ? { translucent: !(fill.color.a >= 1) }
+        : fill?.kind === 'pattern'
+          ? { translucent: !(fill.fg.a >= 1 && fill.bg.a >= 1) }
+          : undefined;
   return {
-    fill: !!e.fill && e.fill.kind !== 'none' && e.fill.kind !== 'picture' && e.fill.kind !== 'group',
+    fill: filled,
+    ...(paint ? { paint } : {}),
+    // Where it lands on the slide, as emitted (`boxPx`; a flip is the x axis turned, `decompose`): painted
+    // areas are cut to the canvas as the drawers' estimate cuts them.
+    ...(xf ? { place: { box: boxPx(f, xf), flipH: decompose(xf).flipH } } : {}),
     outline: outlineOf(outlineFields(f, e.line)),
     ...(e.shadow ? { shadow: true, shadowBlur: px500(f, e.shadow.blur) } : {}),
     ...(glow > 0 ? { glow } : {}),

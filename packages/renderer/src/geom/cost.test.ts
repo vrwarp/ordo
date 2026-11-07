@@ -1,21 +1,28 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { drawnBounds } from './bounds.ts';
 import {
+  areaWeight,
   type CostedObject,
   charged,
   drawCost,
+  EFFECT_COST,
+  effectArea,
+  fillPaintOf,
   GEOM_COST,
   geomCost,
+  hasPart,
   objectCost,
   type Rated,
   slidePlan,
   spanArea,
   strokeCost,
   unitCost,
+  withoutPart,
 } from './cost.ts';
 import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE } from './ops.ts';
 import { type Outline, outlineOf } from './outline.ts';
-import type { GeomPath } from './path.ts';
+import { type GeomPath, presetGeometry } from './path.ts';
 import { clearGeomFiles, putGeomFile, storedCost, storedGeometry } from './stored.ts';
 
 /** A path string zigzagging across a 2000 x 2000 space (`turns` times round its centre, radius 1000 ↔ 50). */
@@ -279,8 +286,11 @@ describe('outline estimate (design/27 §12 drawing cost)', () => {
     const stroked = objectCost({ ...base, stroke: { width: 400 } }, g);
     expect(stroked).toBeGreaterThan(1_000 * filled);
     expect(objectCost({ ...base, stroke: { width: 400 }, opacity: 0 }, g)).toBe(0);
-    // A legacy shape (no M6 field) draws through the old path: not rated here.
-    expect(objectCost({ type: 'shape', shape: 'rect', opacity: 1, stroke: { width: 400 } }, g)).toBe(0);
+    // A legacy shape (no M6 field) draws through the old path, rated as that path draws it: its outline here
+    // (no fill), plain.
+    const legacy: CostedObject = { type: 'shape', shape: 'rect', opacity: 1, stroke: { width: 400 } };
+    expect(objectCost(legacy, g)).toBe(drawCost(g, { fill: false, outline: outlineOf(legacy) }));
+    expect(objectCost(legacy, g)).toBeGreaterThan(0);
     // A mask is its filled paths as one unit (a clip).
     expect(objectCost({ type: 'image', mask: { paths: [] } }, g)).toBe(
       unitCost(g.paths[0]!.cmds, g.paths[0]!.pts).est,
@@ -288,7 +298,7 @@ describe('outline estimate (design/27 §12 drawing cost)', () => {
     expect(objectCost({ type: 'image' }, g)).toBe(0);
   });
 
-  it("charges a slide's stored points with its estimates, and counts the legacy copies drawn", () => {
+  it("charges a slide's stored points with its estimates, and counts the legacy copies drawn first", () => {
     const rated: Record<string, Rated> = {
       a: { est: GEOM_COST.slide / 2, points: 0 },
       b: { est: 0, points: Math.ceil(GEOM_COST.slide / 2 / GEOM_COST.point) + 1 },
@@ -313,11 +323,10 @@ describe('outline estimate (design/27 §12 drawing cost)', () => {
     });
     const full = { w: 1920, h: 1080, paths: Array.from({ length: 8 }, () => rect(1920, 1080)) };
     const one = { ...full, paths: full.paths.slice(0, 1) };
-    // Past the widest path (what one fill, and the legacy shape, paint anyway) each paints the box again.
-    expect(drawCost(full, { fill: true }) - 8 * drawCost(one, { fill: true })).toBeCloseTo(
-      7 * 1920 * 1080 * GEOM_COST.area,
-      6,
-    );
+    // Each path paints the box on its own (M6 finish review: the widest too, which a stack of objects pays
+    // once each).
+    expect(drawCost(full, { fill: true })).toBeCloseTo(8 * drawCost(one, { fill: true }), 6);
+    expect(drawCost(one, { fill: true })).toBeGreaterThan(1920 * 1080 * GEOM_COST.area);
     expect(spanArea([0, 0, 1e9, 1e9])).toBe(1920 * 1080);
     // A straight line of 2,400 collinear points stroked 500 px wide: no join and no slanted edge, but the
     // stroker walks every leg (eight of them took 15 to 21 ms at 3840).
@@ -423,5 +432,144 @@ describe('outline estimate (design/27 §12 drawing cost)', () => {
       ),
       { numRuns: 300, seed: 27 },
     );
+  });
+});
+
+describe('painted area and effect layers (M6 finish review, design/27 §12 drawing cost)', () => {
+  const SLIDE = 1920 * 1080;
+  const full = presetGeometry('rect', 1920, 1080)!;
+  const box = { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 };
+
+  it("rates every fill's pixels by its paint: a gradient about five times a colour", () => {
+    const solid = drawCost(full, { fill: true, place: { box } });
+    const gradient = drawCost(full, { fill: true, paint: { gradient: true }, place: { box } });
+    const edges = drawCost(full, {
+      fill: true,
+      paint: { gradient: true },
+      place: { box: { ...box, x: 5000 } },
+    });
+    // Off the canvas it paints nothing: its edges are left.
+    expect(edges).toBeLessThan(10_000);
+    expect(solid - edges).toBeCloseTo(SLIDE * GEOM_COST.area, 0);
+    expect(gradient - edges).toBeCloseTo(SLIDE * GEOM_COST.gradientArea, 0);
+    expect(GEOM_COST.gradientArea / GEOM_COST.area).toBeGreaterThan(4);
+    expect(areaWeight({ gradient: true, translucent: false })).toBe(GEOM_COST.opaqueGradientArea);
+    expect(areaWeight({ translucent: false })).toBe(GEOM_COST.opaqueArea);
+    expect(areaWeight(undefined)).toBe(GEOM_COST.area);
+    // A full-slide translucent gradient takes about 11.7 ms at 4K: about 400k units of 29 ns.
+    expect(SLIDE * GEOM_COST.gradientArea * GEOM_COST.nsPerUnit * 1e-6).toBeGreaterThan(11);
+    // Half the box past the canvas paints half.
+    const half = drawCost(full, { fill: true, place: { box: { ...box, x: 960 } } });
+    expect(half - edges).toBeCloseTo((SLIDE / 2) * GEOM_COST.area, 0);
+  });
+
+  it('reads the paint from the object: its opacity, colour alpha and gradient stops', () => {
+    const o: CostedObject = { type: 'shape', shape: 'rect', fill: { r: 0, g: 0, b: 0, a: 1 }, opacity: 1 };
+    expect(fillPaintOf(o)).toEqual({ translucent: false });
+    expect(fillPaintOf({ ...o, opacity: 0.5 })).toEqual({ translucent: true });
+    const stops = [
+      { at: 0, color: { r: 0, g: 0, b: 0, a: 1 } },
+      { at: 1, color: { r: 0, g: 0, b: 0, a: 0.5 } },
+    ];
+    expect(fillPaintOf({ ...o, gradient: { kind: 'linear', stops } })).toEqual({
+      gradient: true,
+      translucent: true,
+    });
+    expect(fillPaintOf({ ...o, gradient: { kind: 'linear', stops: stops.slice(0, 1) } })).toEqual({
+      gradient: true,
+      translucent: false,
+    });
+  });
+
+  it('rates a gradient stack as drawn: what fits on top of every legacy colour, the rest as those', () => {
+    // The review's: full-slide rects with a 50 % linear gradient each (1.3 s at 3840, every one native).
+    const stops = [
+      { at: 0, color: { r: 255, g: 0, b: 0, a: 0.5 } },
+      { at: 1, color: { r: 0, g: 0, b: 255, a: 0.5 } },
+    ];
+    const objects = Array.from({ length: 6 }, (_, i) => ({
+      id: `g${i}`,
+      type: 'shape',
+      box,
+      shape: 'rect',
+      opacity: 1,
+      fill: stops[0]!.color,
+      gradient: { kind: 'linear', stops, angle: 90 },
+    }));
+    const rate = (o: (typeof objects)[number], part?: 'geom' | 'effects' | 'both') => {
+      const x = part ? withoutPart(o, part) : o;
+      return { est: objectCost(x, full), points: 0 };
+    };
+    const parts = slidePlan(objects, rate, () => 0);
+    // Six legacy fills first (about 93k each), then each gradient adds about 320k: two fit.
+    const kept = parts.filter((p) => p === undefined).length;
+    expect(kept).toBe(2);
+    expect(parts.slice(kept).every((p) => p === 'geom')).toBe(true);
+    // The review's 140: their legacy colours alone pass the budget, so none is drawn as a gradient.
+    const many = Array.from({ length: 140 }, (_, i) => ({ ...objects[0]!, id: `m${i}` }));
+    expect(slidePlan(many, rate, () => 0).every((p) => p === 'geom')).toBe(true);
+    // The legacy copy draws its first stop as a colour.
+    const legacy = withoutPart(objects[0]!, 'geom') as Partial<(typeof objects)[number]>;
+    expect(legacy.gradient).toBeUndefined();
+    expect(legacy.fill).toEqual(stops[0]!.color);
+  });
+
+  it('leaves out only what an object has: a legacy rect over the budget is drawn as it is, never marked', () => {
+    const rect = {
+      id: 'r',
+      type: 'shape',
+      box,
+      shape: 'rect',
+      opacity: 1,
+      fill: { r: 1, g: 2, b: 3, a: 0.5 },
+    };
+    expect(hasPart(rect, 'geom')).toBe(false);
+    expect(hasPart(rect, 'effects')).toBe(false);
+    expect(hasPart({ ...rect, gradient: {} }, 'geom')).toBe(true);
+    expect(hasPart({ ...rect, shadow: {} }, 'effects')).toBe(true);
+    expect(hasPart({ ...rect, shadow: {} }, 'geom')).toBe(false);
+    expect(hasPart({ type: 'image', mask: {} }, 'geom')).toBe(true);
+    const objects = Array.from({ length: 30 }, (_, i) => ({ ...rect, id: `r${i}` }));
+    const parts = slidePlan(
+      objects,
+      (o) => ({ est: objectCost(o, full), points: 0 }),
+      () => 0,
+    );
+    expect(parts.every((p) => p === undefined)).toBe(true);
+  });
+
+  it('sizes effect layers by what the shape draws, placed and cut as the drawer cuts them', () => {
+    const shadow = { dx: 3, dy: 3, blur: 6 };
+    // The review's out-of-box custGeom: a 10 px box at the centre whose path covers the slide.
+    const out = {
+      cmds: [CMD_MOVE, CMD_LINE, CMD_LINE, CMD_LINE, CMD_CLOSE],
+      pts: [-960, -540, 970, -540, 970, 550, -960, 550],
+      fill: 'norm' as const,
+      stroke: true,
+    };
+    const g = { w: 10, h: 10, paths: [out], text: { l: 0, t: 0, r: 10, b: 10 }, sites: [] };
+    const centre = { x: 955, y: 535, w: 10, h: 10, rotation: 0 };
+    expect(effectArea({ box: centre, shadow })).toBeLessThan(0.001);
+    const a = effectArea({ box: centre, shadow }, drawnBounds(g, undefined));
+    expect(a).toBeGreaterThan(1);
+    expect(a).toBeLessThan(1.05);
+    // So no more than ten of them keep their shadows.
+    expect(Math.floor(EFFECT_COST.slide / a)).toBeLessThanOrEqual(9);
+    // The review's 10 px rect with a 500 px outline: its layer covers the outline's square (250 √2 past
+    // each corner), not 8 x 250.
+    const rect = presetGeometry('rect', 10, 10)!;
+    const wide = outlineOf({ stroke: { width: 500 } })!;
+    const side = 10 + 500 * Math.SQRT2 + 2 * (3 * 6 * (1 / Math.sqrt(6)) + 2) + 3;
+    expect(effectArea({ box: centre, shadow }, drawnBounds(rect, wide))).toBeCloseTo(
+      (side * side) / SLIDE,
+      2,
+    );
+    // Off the canvas a layer is cut to the effect's reach past it.
+    expect(effectArea({ box: { ...centre, x: 5000 }, shadow }, drawnBounds(g, undefined))).toBe(0);
+    // Turned a quarter, a wide shape's layer is its turned bounds.
+    const bar = { x: 460, y: 500, w: 1000, h: 80, rotation: 90 };
+    expect(effectArea({ box: bar, glow: { radius: 0 } })).toBeCloseTo(((80 + 4) * (1000 + 4)) / SLIDE, 4);
+    // Non-finite bounds weigh the most a layer can.
+    expect(effectArea({ box: centre, shadow }, { x0: Number.NaN, y0: 0, x1: 1, y1: 1 })).toBeGreaterThan(8);
   });
 });

@@ -3,7 +3,8 @@ import type { Box, ShapeObject } from '@ordo/domain';
 import { CLAMP, clampObject, isClamped, num } from './clamp.ts';
 import type { Ctx2D } from './ctx.ts';
 import { digest } from './digest.ts';
-import { type Bounds, drawEffected } from './effects.ts';
+import { drawEffected } from './effects.ts';
+import { type Bounds, drawnBounds, geomBounds } from './geom/bounds.ts';
 import { drawGeom, type GeomFill, type GeomStroke, geomFillPath2D, geomPath2D } from './geom/draw.ts';
 import { arrowFor, arrowReach } from './geom/ends.ts';
 import { lineStyleOf, outlineOf, SHAPE_MITER_LIMIT } from './geom/outline.ts';
@@ -28,6 +29,7 @@ import { geomAwaited, geomPending, legacyGeometry, storedGeometry } from './geom
  * - Effects (effects.ts): shadow, glow and soft edge through sprites, the whole shape at its opacity.
  */
 
+export { geomBounds } from './geom/bounds.ts';
 export {
   cappedDash,
   DASH_PATTERNS,
@@ -100,39 +102,12 @@ function planOf(ctx: Ctx2D, o: ShapeObject): Plan {
       ...(outline.dash ? { dash: outline.dash } : {}),
       ...(outline.ends ? { ends: outline.ends } : {}),
     };
-  const bounds = geomBounds(built);
-  const grow = stroke
-    ? Math.max(
-        (stroke.width / 2) * (o.lineJoin === 'round' || o.lineJoin === 'bevel' ? 1.5 : SHAPE_MITER_LIMIT),
-        arrowReach(stroke.ends?.head),
-        arrowReach(stroke.ends?.tail),
-      )
-    : 0;
-  bounds.x0 -= grow;
-  bounds.y0 -= grow;
-  bounds.x1 += grow;
-  bounds.y1 += grow;
+  // What the effect layers are made over: the geometry grown by its outline's joins, caps and arrowheads
+  // (geom/bounds.ts, the same bounds the effect budget sizes them by).
+  const bounds = drawnBounds(built, stroke ? outline : undefined);
   const plan = { built, fill, stroke, bounds };
   plans.set(o, { ctx, plan, pending: geomPending(o.geom) });
   return plan;
-}
-
-/** The bounds of a geometry's points (control points included, so conservative) and its box. */
-export function geomBounds(b: BuiltGeom): Bounds {
-  let x0 = 0;
-  let y0 = 0;
-  let x1 = b.w;
-  let y1 = b.h;
-  for (const p of b.paths)
-    for (let i = 0; i < p.pts.length; i += 2) {
-      const x = p.pts[i]!;
-      const y = p.pts[i + 1]!;
-      if (x < x0) x0 = x;
-      if (x > x1) x1 = x;
-      if (y < y0) y0 = y;
-      if (y > y1) y1 = y;
-    }
-  return { x0, y0, x1, y1 };
 }
 
 /**

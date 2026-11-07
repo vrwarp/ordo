@@ -1,6 +1,9 @@
 import { type Glow, type Shadow, rgbaCss } from '@ordo/domain';
 
 import type { Ctx2D } from './ctx.ts';
+import type { Bounds } from './geom/bounds.ts';
+
+export type { Bounds } from './geom/bounds.ts';
 
 /*
  * Shape effects (design/27 §7.5 "effect sprite cache", §15 M6): an outer shadow, a glow and a soft edge, drawn
@@ -28,6 +31,11 @@ import type { Ctx2D } from './ctx.ts';
  * sprite (cached, copied 1:1) up to EFFECT_COMPOSITE_BYTES, and past it until it thrashes the cache
  * (`drawEffected`). With no OffscreenCanvas (Node) or a sprite past
  * EFFECT_MAX_PIXELS nothing is drawn here: the caller draws the shape without its effects.
+ *
+ * The layers are made over what the shape draws (`EffectSource.bounds`, `geom/bounds.ts` `drawnBounds`: its
+ * geometry's points, past its box included, grown by its outline's reach), grown by each effect's reach and
+ * cut to the canvas and that reach (`region`): the area the slide's effect budget sizes them by
+ * (`geom/cost.ts` `effectArea`), the same in the converter.
  */
 
 /** Device pixels of one effect sprite at most (the 16 MP of a prepared picture). */
@@ -40,14 +48,6 @@ export const STACK_BLUR_SIGMA = 1 / Math.sqrt(6);
 export const BLUR_MAX_REDUCTION = 8;
 /** Pixels of one reduced blur layer at most (LibreOffice: 250,000). */
 export const BLUR_MAX_PIXELS = 1_000_000;
-
-/** A box-space rectangle. */
-export interface Bounds {
-  x0: number;
-  y0: number;
-  x1: number;
-  y1: number;
-}
 
 /** What the effect sprites draw of a shape, in box space under `transform`. */
 export interface EffectSource {
@@ -357,8 +357,10 @@ export function drawEffected(ctx: Ctx2D, src: EffectSource, opacity: number): bo
     if (!out) {
       const f = sprite(r.W, r.H);
       if (!f) return false;
+      // Bilinear, as the layered path enlarges them: the layers are blurs ('medium' differs by 2 levels at
+      // most and costs a third more at 4K).
       f.imageSmoothingEnabled = true;
-      f.imageSmoothingQuality = 'medium';
+      f.imageSmoothingQuality = 'low';
       const place = (layer: Sprite) => {
         f.drawImage(layer.canvas, layer.x - r.X, layer.y - r.Y, layer.w, layer.h);
       };
@@ -372,7 +374,7 @@ export function drawEffected(ctx: Ctx2D, src: EffectSource, opacity: number): bo
         if (!layer) return false;
         place(layer);
       }
-      if (!body(f, src, m, s, r, soft, tagged('softmask'))) return false;
+      if (!body(f, src, m, s, r, soft, !!(sh || gl), tagged('softmask'))) return false;
       out = { canvas: f.canvas, x: r.X, y: r.Y, w: r.W, h: r.H, bytes };
       remember(allKey, out);
     }
@@ -422,7 +424,10 @@ export function drawEffected(ctx: Ctx2D, src: EffectSource, opacity: number): bo
   return true;
 }
 
-/** The shape drawn into `c`, a sprite of the device rect `r`: soft-edged, cut by its mask. */
+/**
+ * The shape drawn into `c`, a sprite of the device rect `r`: soft-edged, cut by its mask. `layered`: `c` holds
+ * layers already (the soft edge must not cut them).
+ */
 function body(
   c: OffscreenCanvasRenderingContext2D,
   src: EffectSource,
@@ -430,16 +435,24 @@ function body(
   s: number,
   r: { X: number; Y: number; W: number; H: number },
   soft: boolean,
+  layered: boolean,
   maskKey?: string,
 ): boolean {
-  if (!soft) {
+  if (!soft || !layered) {
+    // Alone in the sprite: drawn and, soft-edged, cut in place (a copy of a 4K sprite costs about 17 ms cold).
     c.save();
     c.setTransform(m.a, m.b, m.c, m.d, m.e - r.X, m.f - r.Y);
     src.draw(c);
     c.restore();
+    if (soft) {
+      c.save();
+      c.setTransform(m.a, m.b, m.c, m.d, m.e - r.X, m.f - r.Y);
+      softened(c, src, m, s, r, maskKey);
+      c.restore();
+    }
     return true;
   }
-  // The soft edge multiplies what the sprite holds: drawn alone first when the sprite has layers in it.
+  // The soft edge multiplies what the sprite holds: drawn alone first, as the sprite has layers in it.
   const alone = sprite(r.W, r.H);
   if (!alone) return false;
   alone.setTransform(m.a, m.b, m.c, m.d, m.e - r.X, m.f - r.Y);
@@ -495,7 +508,7 @@ function softened(
   c.setTransform(1, 0, 0, 1, 0, 0);
   c.globalCompositeOperation = 'destination-in';
   c.imageSmoothingEnabled = true;
-  c.imageSmoothingQuality = 'medium';
+  c.imageSmoothingQuality = 'low';
   c.drawImage(made.canvas, 0, 0, w * q, h * q);
   c.restore();
 }

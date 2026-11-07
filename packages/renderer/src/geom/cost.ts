@@ -1,4 +1,5 @@
 import type { ArrowEnd, LineCap, LineDash, LineJoin, Rgba, ShapeGeom } from '@ordo/domain';
+import { type Bounds, CANVAS_H, CANVAS_W, canvasArea, type Placement, placedBounds } from './bounds.ts';
 import type { GeomArrow } from './ends.ts';
 import { CLOSED_TOLERANCE, CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD } from './ops.ts';
 import { hasShapeExtras, type Outline, outlineOf } from './outline.ts';
@@ -33,9 +34,12 @@ import type { GeomPath } from './path.ts';
  * - a shape (`drawCost`): its fills and outlines, again for a shadow (its layer redraws the shape), a glow's
  *   silhouette (the fill, its outline stroked round as wide as the glow, the outlines widened by it) and a
  *   soft edge's mask (the fill, its outline stroked round twice the edge wide); a picture's mask its fill;
- * - the area each outline covers, and each fill past the widest (`GEOM_COST.area` a logical px², `spanArea`):
- *   every path is filled and stroked on its own, so a geometry of a few edges can paint its whole box once a
- *   path, where a single fill and the legacy shape paint it once (that once is in the fill's rate);
+ * - the pixels each fill paints (`spanArea` of its points, cut to the canvas when the box is placed; a
+ *   logical px² of it `GEOM_COST.opaqueArea` or `area` for a colour, opaque or not, `opaqueGradientArea` or
+ *   `gradientArea` for a gradient, about five times as costly a pixel: `areaWeight`) and the area each
+ *   outline covers (`area`): every path is filled and stroked on its own, so a full-slide translucent
+ *   gradient takes about 11.7 ms at 4K whatever its edges, and a stack of them seconds; a legacy shape (rect,
+ *   ellipse, line) is rated the same way;
  * - a stored path's points (`GEOM_COST.point` each, charged with the slide's): parsing them when the geometry
  *   is first built at a size, rating them, and tracing them into Canvas on every draw, whatever their edges
  *   cost to fill (about 0.25 µs a point at 4K: 64k points take about 16 ms before a pixel is filled).
@@ -55,9 +59,13 @@ import type { GeomPath } from './path.ts';
  * sends it to the art as `custGeom:complex`; the renderer draws the legacy shape), and a slide's shapes are
  * drawn while their estimates and stored points (`objectCost` plus `point` a point) stay within `slide`, and
  * the points within `slidePoints`; past them the converter sends the rest to the art and the renderer draws
- * them as legacy shapes (`slidePlan`). A slide at the budget draws its geometry in at most about 38 ms at 4K,
- * with the clear and the copy out (about 11 ms) within design/27 §13's 50 ms for an asset-worker task, cold
- * (geometry not yet built, nothing cached). The converter fills 0.98 of it (rounding of stored coordinates).
+ * them as legacy shapes (`slidePlan`: without their stored geometry, and a gradient as its first stop, as an
+ * older build draws them). Every object's legacy copy is counted first and never refused, and what is drawn
+ * on top of it must fit, so a slide draws within the budget whenever its legacy copies do: a slide of 200
+ * full-slide translucent legacy rects draws as an older build draws it (about 2 ms each at 4K); the object
+ * budget bounds it. A slide at the budget draws its geometry and fills in at most about 38 ms at 4K, with the
+ * clear and the copy out (about 11 ms) within design/27 §13's 50 ms for an asset-worker task, cold (geometry
+ * not yet built, nothing cached). The converter fills 0.98 of it (rounding of stored coordinates).
  */
 
 export const GEOM_COST = {
@@ -89,11 +97,19 @@ export const GEOM_COST = {
   /** One stored point: parsed, rated and traced into Canvas (about 0.25 µs at 4K). */
   point: 10,
   /**
-   * A logical px² an outline covers, or a fill past the widest of its geometry's (each path is filled on its
-   * own, so eight paths over the whole box paint it eight times where one, or the legacy shape, paints it
-   * once; a full-slide translucent fill takes about 1.7 to 2 ms at 4K).
+   * A logical px² an outline covers, or a translucent solid fill paints (each path is filled on its own; a
+   * full-slide translucent fill takes about 1.8 to 2.2 ms at 4K, an opaque one about 1.2 ms).
    */
   area: 0.045,
+  /** A logical px² an opaque solid fill paints (about 1.2 ms a full slide at 4K). */
+  opaqueArea: 0.025,
+  /**
+   * A logical px² a translucent gradient paints (the shape's opacity or a stop below 1; linear and radial
+   * alike, about 11.6 to 11.8 ms a full slide at 4K: a slide of 140 took 1.3 s).
+   */
+  gradientArea: 0.2,
+  /** A logical px² an opaque gradient paints (7.2 to 8 ms a full slide at 4K). */
+  opaqueGradientArea: 0.14,
   /**
    * One leg of an outline (each segment, each leg of a curve's control polygon): the stroker's own work on
    * it (normals, joins, the outline's path), about 0.4 µs at 4K whatever it covers (eight 2,400-point
@@ -467,10 +483,21 @@ export interface DrawnGeom {
   readonly paths: readonly GeomPath[];
 }
 
+/** What a fill paints a pixel with: a colour or a gradient, opaque or not (`GEOM_COST` area weights). */
+export interface FillPaint {
+  readonly gradient?: boolean;
+  /** Below full alpha somewhere: the shape's opacity, the colour's alpha or a stop's. */
+  readonly translucent?: boolean;
+}
+
 /** What a shape draws, for its estimate. */
 export interface DrawSpec {
   /** Its paths are filled (a colour or a gradient; a picture's mask). */
   readonly fill: boolean;
+  /** How the fill paints (default: a translucent colour). */
+  readonly paint?: FillPaint;
+  /** Where the box lies on the slide: painted areas are cut to the canvas (default: at most a slide's). */
+  readonly place?: Placement;
   readonly outline?: Outline | undefined;
   readonly shadow?: boolean;
   /** The shadow's blur radius (logical px): its layer is drawn reduced by it. */
@@ -507,20 +534,13 @@ export function drawCost(g: DrawnGeom, spec: DrawSpec): number {
   const o = spec.outline;
   let fills = 0;
   let strokes = 0;
-  // Each filled path paints what it spans on its own: past the one that spans most (what a single fill, and
-  // the legacy shape, paints anyway), each paints its span again.
-  let spans = 0;
-  let widest = 0;
+  // Each filled path paints what it spans on its own, at its paint's cost a pixel.
+  const perPixel = areaWeight(spec.paint);
   for (const p of g.paths) {
-    if (spec.fill && p.fill !== 'none') {
-      fills += unitCost(p.cmds, p.pts).est;
-      const a = spanArea(p.pts);
-      spans += a;
-      if (a > widest) widest = a;
-    }
-    if (o && p.stroke) strokes += outlineCost(p.cmds, p.pts, o, tolerance);
+    if (spec.fill && p.fill !== 'none')
+      fills += unitCost(p.cmds, p.pts).est + spanArea(p.pts, 0, spec.place) * perPixel;
+    if (o && p.stroke) strokes += outlineCost(p.cmds, p.pts, o, tolerance, spec.place);
   }
-  fills += (spans - widest) * GEOM_COST.area;
   const base = fills + strokes;
   let total = base;
   const glow = spec.glow !== undefined && spec.glow > 0 ? spec.glow : 0;
@@ -531,7 +551,7 @@ export function drawCost(g: DrawnGeom, spec: DrawSpec): number {
   // A silhouette: the fill with its outline stroked round `grow` wide, the outlines `widen` wider.
   const silhouette = (grow: number, widen: number, round: boolean) => {
     let c = unionFill;
-    if (union && grow > 0) c += outlineCost(union.cmds, union.pts, roundOutline(grow), tolerance);
+    if (union && grow > 0) c += outlineCost(union.cmds, union.pts, roundOutline(grow), tolerance, spec.place);
     if (o)
       for (const p of g.paths)
         if (p.stroke) {
@@ -542,6 +562,7 @@ export function drawCost(g: DrawnGeom, spec: DrawSpec): number {
               p.pts,
               round ? roundOutline(w) : { width: w, join: o.join, cap: o.cap, miterLimit: o.miterLimit },
               tolerance,
+              spec.place,
             );
         }
     return c;
@@ -562,11 +583,19 @@ export function maskCost(g: DrawnGeom): number {
   return unitCost(u.cmds, u.pts).est;
 }
 
+/** What a logical px² of a fill costs (`GEOM_COST` area weights): a colour or a gradient, opaque or not. */
+export function areaWeight(paint: FillPaint | undefined): number {
+  const translucent = paint?.translucent !== false;
+  if (paint?.gradient) return translucent ? GEOM_COST.gradientArea : GEOM_COST.opaqueGradientArea;
+  return translucent ? GEOM_COST.area : GEOM_COST.opaqueArea;
+}
+
 /**
- * The area (logical px²) the points of a path span, grown by `grow` a side, at most a slide's (Canvas paints
- * nothing past the canvas): what its fill or stroke can cover.
+ * The area (logical px²) the points of a path span, grown by `grow` a side, within the canvas when `place`
+ * puts its box on the slide (Canvas paints nothing past the canvas), else at most a slide's: what its fill or
+ * stroke can cover.
  */
-export function spanArea(pts: readonly number[], grow = 0): number {
+export function spanArea(pts: readonly number[], grow = 0, place?: Placement): number {
   let x0 = Infinity;
   let x1 = -Infinity;
   let y0 = Infinity;
@@ -581,6 +610,7 @@ export function spanArea(pts: readonly number[], grow = 0): number {
   }
   if (!(x1 >= x0 && y1 >= y0)) return 0;
   const g = Number.isFinite(grow) && grow > 0 ? grow : 0;
+  if (place) return canvasArea(placedBounds({ x0: x0 - g, y0: y0 - g, x1: x1 + g, y1: y1 + g }, place));
   const a = (x1 - x0 + 2 * g) * (y1 - y0 + 2 * g);
   return Number.isFinite(a) ? Math.min(SLIDE_AREA, a) : SLIDE_AREA;
 }
@@ -589,10 +619,16 @@ export function spanArea(pts: readonly number[], grow = 0): number {
  * An outline as drawn: its polygon's edges (`strokeCost`) and the area it covers, about half its edges'
  * length times its width, within the span of its points grown by the width.
  */
-function outlineCost(cmds: readonly number[], pts: readonly number[], o: Outline, tolerance: number): number {
+function outlineCost(
+  cmds: readonly number[],
+  pts: readonly number[],
+  o: Outline,
+  tolerance: number,
+  place?: Placement,
+): number {
   const c = strokeCost(cmds, pts, o, tolerance);
   if (!(c.est > 0)) return c.est;
-  const covered = Math.min(spanArea(pts, o.width), ((c.length + 2 * o.width) * o.width) / 2);
+  const covered = Math.min(spanArea(pts, o.width, place), ((c.length + 2 * o.width) * o.width) / 2);
   return finiteEst(c.est + covered * GEOM_COST.area);
 }
 
@@ -601,10 +637,11 @@ function outlineCost(cmds: readonly number[], pts: readonly number[], o: Outline
 /** The fields of a slide object the estimate reads (a `ShapeObject` or `ImageObject` as clamped). */
 export interface CostedObject {
   readonly type: string;
+  readonly box?: Placement['box'];
   readonly shape?: string;
   readonly opacity?: number;
   readonly fill?: Rgba | undefined;
-  readonly gradient?: unknown;
+  readonly gradient?: { readonly stops?: readonly { readonly color?: { readonly a?: number } }[] } | unknown;
   readonly stroke?: { readonly width: number } | undefined;
   readonly geom?: ShapeGeom | undefined;
   readonly mask?: ShapeGeom | undefined;
@@ -619,26 +656,51 @@ export interface CostedObject {
   readonly softEdge?: number | undefined;
 }
 
+/** How a shape's fill paints (`FillPaint`): its gradient or colour, below full alpha anywhere or not. */
+export function fillPaintOf(o: CostedObject): FillPaint {
+  const opacity = typeof o.opacity === 'number' ? o.opacity : 1;
+  const g = o.gradient as { stops?: readonly { color?: { a?: number } }[] } | undefined;
+  if (g !== undefined && g !== null) {
+    const stops = Array.isArray(g.stops) ? g.stops : [];
+    const translucent = opacity < 1 || !stops.length || stops.some((st) => !((st?.color?.a ?? 1) >= 1));
+    return { gradient: true, translucent };
+  }
+  return { translucent: opacity < 1 || !((o.fill?.a ?? 1) >= 1) };
+}
+
+/** An object's box on the slide (`Placement`), when it has a usable one. */
+function placementOf(o: CostedObject): Placement | undefined {
+  const b = o.box;
+  if (!b || ![b.x, b.y, b.w, b.h].every(Number.isFinite)) return undefined;
+  return { box: b, flipH: o.flipH === true, flipV: o.flipV === true };
+}
+
 /**
- * The drawing estimate of one slide object as drawn (`drawGeomShape`, `drawImageFit`), given the geometry it
- * draws at its box (`g`: a shape's stored or legacy geometry, a picture's mask; undefined: none). A shape
- * drawn by the legacy path (`hasShapeExtras` false), one that draws nothing, text and a picture without a
- * mask cost 0 here.
+ * The drawing estimate of one slide object as drawn (`drawGeomShape`, `drawShape`, `drawImageFit`), given the
+ * geometry it draws at its box (`g`: a shape's stored or legacy geometry, a picture's mask; undefined: none).
+ * A shape drawn by the legacy path (`hasShapeExtras` false) is rated as its legacy geometry: its fill's
+ * pixels and its outline. One that draws nothing, text and a picture without a mask cost 0 here.
  */
 export function objectCost(o: CostedObject, g: DrawnGeom | undefined): number {
   if (!g) return 0;
   if (o.type === 'image') return o.mask ? maskCost(g) : 0;
-  if (o.type !== 'shape' || !hasShapeExtras(o)) return 0;
+  if (o.type !== 'shape') return 0;
   const opacity = typeof o.opacity === 'number' ? o.opacity : 1;
   if (!(opacity > 0)) return 0;
   const line = o.shape === 'line' && !o.geom;
   const fill = !line && (o.gradient !== undefined || o.fill !== undefined);
   const outline = outlineOf(o);
   if (!fill && !outline) return 0;
+  const place = placementOf(o);
+  // The legacy path draws neither effects nor the M6 outline fields (`withoutPart` 'geom' leaves none).
+  if (!hasShapeExtras(o))
+    return drawCost(g, { fill, outline, paint: fillPaintOf(o), ...(place ? { place } : {}) });
   const glow = o.glow && o.glow.radius > 0 && o.glow.color.a > 0 ? o.glow.radius : 0;
   return drawCost(g, {
     fill,
     outline,
+    paint: fillPaintOf(o),
+    ...(place ? { place } : {}),
     shadow: !!o.shadow && o.shadow.color.a > 0,
     ...(o.shadow ? { shadowBlur: Number.isFinite(o.shadow.blur) ? o.shadow.blur : 0 } : {}),
     ...(glow ? { glow } : {}),
@@ -649,29 +711,35 @@ export function objectCost(o: CostedObject, g: DrawnGeom | undefined): number {
 /** What a slide object draws as past a budget: without its geometry (`geom`), its effects, or both. */
 export type LegacyPart = 'geom' | 'effects' | 'both';
 
+const GEOM_FIELDS = ['geom', 'gradient', 'dash', 'ends', 'lineJoin', 'lineCap'] as const;
+const EFFECT_FIELDS = ['shadow', 'glow', 'softEdge'] as const;
+
+/** Whether leaving `part` out changes what `o` draws (`withoutPart` removes a field it has). */
+export function hasPart(o: object, part: LegacyPart): boolean {
+  const r = o as Record<string, unknown>;
+  const type = r.type;
+  if (part !== 'effects') {
+    if (type === 'shape' && GEOM_FIELDS.some((k) => r[k] !== undefined)) return true;
+    if (type === 'image' && r.mask !== undefined) return true;
+  }
+  return part !== 'geom' && type === 'shape' && EFFECT_FIELDS.some((k) => r[k] !== undefined);
+}
+
 /**
- * An object as drawn past a budget (a shallow copy): `geom` leaves out a shape's stored geometry and the
- * outline fields that multiply its cost (dash, arrowheads, joins, caps), a picture's mask; `effects` a shape's
- * shadow, glow and soft edge. What is left is drawn as an older build draws it (a legacy rect, ellipse or
- * line with a plain outline), whose cost the geometry no longer drives.
+ * An object as drawn past a budget (a shallow copy): `geom` leaves out a shape's stored geometry, its gradient
+ * (its `fill`, the first stop, is drawn: about five times cheaper a pixel) and the outline fields that
+ * multiply its cost (dash, arrowheads, joins, caps), a picture's mask; `effects` a shape's shadow, glow and
+ * soft edge. What is left is drawn as an older build draws it (a legacy rect, ellipse or line in its colour
+ * with a plain outline), whose cost the geometry no longer drives.
  */
 export function withoutPart<T extends object>(o: T, part: LegacyPart): T {
   const out = { ...o } as T & Record<string, unknown>;
   const type = (o as { type?: unknown }).type;
   if (part !== 'effects') {
-    if (type === 'shape') {
-      delete out.geom;
-      delete out.dash;
-      delete out.ends;
-      delete out.lineJoin;
-      delete out.lineCap;
-    } else if (type === 'image') delete out.mask;
+    if (type === 'shape') for (const k of GEOM_FIELDS) delete out[k];
+    else if (type === 'image') delete out.mask;
   }
-  if (part !== 'geom' && type === 'shape') {
-    delete out.shadow;
-    delete out.glow;
-    delete out.softEdge;
-  }
+  if (part !== 'geom' && type === 'shape') for (const k of EFFECT_FIELDS) delete out[k];
   return out;
 }
 
@@ -687,13 +755,17 @@ export function charged(r: Rated): number {
 }
 
 /**
- * A slide's drawing budgets (design/27 §12 drawing cost), the same for the converter and every drawer: in
+ * A slide's drawing budgets (design/27 §12 drawing cost), the same for the converter and every drawer. Every
+ * object is drawn at least as its legacy copy (`withoutPart` 'both': an older build's shape, a picture
+ * without its mask), which is counted first and never refused: what the slide draws in any case. Then, in
  * z-order, each object keeps its effects while their layers' area (`area`, `effectArea`) stays within
- * `EFFECT_COST.slide`, and its geometry while what is drawn charges (`rate`, `charged`: estimates and stored
- * points) stays within `GEOM_COST.slide` and its points within `GEOM_COST.slidePoints`; past them it is drawn
- * as `withoutPart` leaves it, the geometry first, then the effects too when that is not enough. `rate(o, part)`
- * rates `o` as drawn without `part` (undefined: as it is). The legacy copies' own estimates are counted (they
- * are drawn), never refused.
+ * `EFFECT_COST.slide`, and its geometry and gradient while what that adds to its legacy copy (`rate`,
+ * `charged`: estimates, painted areas and stored points) keeps the slide within `GEOM_COST.slide` and its
+ * points within `GEOM_COST.slidePoints`; past them it is drawn as `withoutPart` leaves it, the geometry
+ * first, then the effects too when that is not enough. So a slide draws within the budget whenever its legacy
+ * copies do (the object budget bounds those), and a slide within it is drawn as it is, whatever the order.
+ * `rate(o, part)` rates `o` as drawn without `part` (undefined: as it is); an object `part` would not change
+ * (`hasPart`: a legacy rect) keeps it undefined.
  * Returns each object's part left out (undefined: drawn as it is).
  */
 export function slidePlan<T>(
@@ -701,35 +773,55 @@ export function slidePlan<T>(
   rate: (o: T, part?: LegacyPart) => Rated,
   area: (o: T) => number,
 ): (LegacyPart | undefined)[] {
+  // Anything but a slide object (a test's stand-in) may change.
+  const has = (o: T, part: LegacyPart) => typeof o !== 'object' || o === null || hasPart(o, part);
+  // What every object draws at least: its legacy copy.
+  const floor = objects.map((o) => (has(o, 'both') ? rate(o, 'both') : rate(o)));
   let points = 0;
   let cost = 0;
+  for (const r of floor) {
+    points += r.points;
+    cost += charged(r);
+  }
   let effects = 0;
   const out: (LegacyPart | undefined)[] = [];
-  const fits = (r: Rated) =>
-    points + r.points <= GEOM_COST.slidePoints && cost + charged(r) <= GEOM_COST.slide;
-  for (const o of objects) {
+  objects.forEach((o, i) => {
+    const least = floor[i]!;
+    // Drawn as `r` instead of its legacy copy, the slide stays within its budgets.
+    const fits = (r: Rated) =>
+      points + r.points - least.points <= GEOM_COST.slidePoints &&
+      cost + charged(r) - charged(least) <= GEOM_COST.slide;
+    const take = (r: Rated) => {
+      points += r.points - least.points;
+      cost += charged(r) - charged(least);
+    };
     let part: LegacyPart | undefined;
     const a = area(o);
     if (a > 0) {
       if (effects + a > EFFECT_COST.slide) part = 'effects';
       else effects += a;
     }
-    let r = rate(o, part);
-    if (!fits(r)) {
-      const before = part;
-      part = part === 'effects' ? 'both' : 'geom';
-      r = rate(o, part);
-      if (!fits(r) && part === 'geom' && a > 0) {
-        part = 'both';
-        r = rate(o, part);
-        // Its effects' area is no longer drawn.
-        if (before === undefined) effects -= a;
-      }
+    const r = rate(o, part);
+    if (fits(r)) {
+      take(r);
+    } else if (part === undefined && has(o, 'geom') && fits(rate(o, 'geom'))) {
+      part = 'geom';
+      take(rate(o, 'geom'));
+    } else {
+      // Its legacy copy, counted already; its effects' area is no longer drawn.
+      if (part === undefined && a > 0) effects -= a;
+      part =
+        has(o, 'geom') && has(o, 'effects')
+          ? 'both'
+          : has(o, 'geom')
+            ? 'geom'
+            : has(o, 'effects')
+              ? 'effects'
+              : undefined;
     }
-    points += r.points;
-    cost += charged(r);
+    if (part === 'effects' && !has(o, 'effects')) part = undefined;
     out.push(part);
-  }
+  });
   return out;
 }
 
@@ -740,30 +832,67 @@ export function slidePlan<T>(
  * 1920 x 1080, at most `EFFECT_COST.slide` (weighted: a shadow and a glow 1 each, a soft edge
  * `EFFECT_COST.softEdge`: its body is made and cut by its enlarged mask at full resolution on every raster
  * past the composite cache, about 55 ms a slide area at 4K, against 25 ms cold and a few ms warm a slide area
- * of other layers, reduced and enlarged onto the canvas). Past it the renderer draws later shapes without
- * their effects (`slidePlan`) and the converter leaves them out with a note. The worship corpus's most
- * effected slides reach 7.7 (Slidesmania templates of 8-9 large shadowed shapes; p99 7.3, p90 1.2), its most
- * soft-edged 1.0 slide area of soft edges (9.2 weighted).
+ * of other layers, reduced and enlarged onto the canvas). Each layer is made over what the shape draws
+ * (`bounds.ts` `drawnBounds`: its geometry's points, a custom geometry's past its box included, grown by its
+ * outline's joins, caps and arrowheads) on the slide, grown by the effect's reach and cut to the canvas and
+ * that reach (`effects.ts` `drawEffected`, `region`), and sized so here. Past it the renderer draws later
+ * shapes without their effects (`slidePlan`) and the converter leaves them out with a note. The worship
+ * corpus's most effected slides reach 7.7 (Slidesmania templates of 8-9 large shadowed shapes; p99 7.3, p90
+ * 1.2), its most soft-edged 1.0 slide area of soft edges (9.2 weighted).
  */
 export const EFFECT_COST = { slide: 10, softEdge: 8 } as const;
 
-/** What an object's effects weigh against `EFFECT_COST.slide`: their layers' area in slide areas, weighted. */
-export function effectArea(o: {
-  box?: { w: number; h: number };
-  shadow?: { dx: number; dy: number; blur: number } | undefined;
-  glow?: { radius: number } | undefined;
-  softEdge?: number | undefined;
-}): number {
+/** The fields of a shape `effectArea` reads. */
+export interface EffectedObject {
+  readonly box?: Placement['box'];
+  readonly flipH?: boolean | undefined;
+  readonly flipV?: boolean | undefined;
+  readonly shadow?: { readonly dx: number; readonly dy: number; readonly blur: number } | undefined;
+  readonly glow?: { readonly radius: number } | undefined;
+  readonly softEdge?: number | undefined;
+}
+
+/**
+ * What an object's effects weigh against `EFFECT_COST.slide`: their layers' area in slide areas, weighted.
+ * `drawn` is what the shape draws in box space (`drawnBounds`; default: its box), placed on the slide and
+ * grown and cut as the drawer grows and cuts its layers (`effects.ts` `drawEffected`; logical px, the reach's
+ * 2 device px taken as 2).
+ */
+export function effectArea(o: EffectedObject, drawn?: Bounds): number {
   const weight = (o.shadow ? 1 : 0) + (o.glow ? 1 : 0) + (o.softEdge ? EFFECT_COST.softEdge : 0);
   if (!weight || !o.box) return 0;
-  const fin = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.abs(v) : 0);
-  const shadowReach = o.shadow
-    ? 3 * fin(o.shadow.blur) * BLUR_SIGMA + Math.max(fin(o.shadow.dx), fin(o.shadow.dy))
-    : 0;
-  const glowReach = o.glow ? fin(o.glow.radius) / 2 + 3 * (fin(o.glow.radius) / 2) * BLUR_SIGMA : 0;
-  const reach = Math.max(shadowReach, glowReach);
-  // A layer is cut to the canvas and its reach (effects.ts `region`): at most about 3 x 3 slides.
-  const w = Math.min(fin(o.box.w) + 2 * reach, 3 * 1920);
-  const h = Math.min(fin(o.box.h) + 2 * reach, 3 * 1080);
-  return ((w * h) / SLIDE_AREA) * weight;
+  const fin = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  const box = { x: fin(o.box.x), y: fin(o.box.y), w: Math.abs(fin(o.box.w)), h: Math.abs(fin(o.box.h)) };
+  const b: Bounds = drawn ?? { x0: 0, y0: 0, x1: box.w, y1: box.h };
+  if (![b.x0, b.y0, b.x1, b.y1].every(Number.isFinite)) return weight * MAX_LAYER_AREA;
+  const content = placedBounds(b, {
+    box: { ...box, rotation: fin(o.box.rotation) },
+    flipH: o.flipH === true,
+    flipV: o.flipV === true,
+  });
+  const all = { ...content };
+  let cut = 2;
+  if (o.shadow) {
+    const reach = 3 * Math.abs(fin(o.shadow.blur)) * BLUR_SIGMA + 2;
+    const dx = fin(o.shadow.dx);
+    const dy = fin(o.shadow.dy);
+    all.x0 = Math.min(all.x0, content.x0 + dx - reach);
+    all.y0 = Math.min(all.y0, content.y0 + dy - reach);
+    all.x1 = Math.max(all.x1, content.x1 + dx + reach);
+    all.y1 = Math.max(all.y1, content.y1 + dy + reach);
+    cut = Math.max(cut, reach + Math.max(Math.abs(dx), Math.abs(dy)));
+  }
+  if (o.glow) {
+    const r = Math.abs(fin(o.glow.radius));
+    const reach = r / 2 + 3 * (r / 2) * BLUR_SIGMA + 2;
+    all.x0 = Math.min(all.x0, content.x0 - reach);
+    all.y0 = Math.min(all.y0, content.y0 - reach);
+    all.x1 = Math.max(all.x1, content.x1 + reach);
+    all.y1 = Math.max(all.y1, content.y1 + reach);
+    cut = Math.max(cut, reach);
+  }
+  return Math.min(MAX_LAYER_AREA, canvasArea(all, cut) / SLIDE_AREA) * weight;
 }
+
+/** A layer's area at most, in slide areas: the canvas grown by the largest reach the clamp allows (about 3 x 3). */
+const MAX_LAYER_AREA = (3 * CANVAS_W * 3 * CANVAS_H) / SLIDE_AREA;

@@ -17,8 +17,9 @@ import type { BenchReport, Stats } from './raster.page.ts';
  * --check fails when a rich slide's raster p95 is over the M2 budget: 8 ms at 1920, 30 ms at 3840; a
  * bounded geometry one's (hostile fills and outlines at the slide's drawing budget, M6 repair and finish,
  * design/27 §12 drawing cost; every job draws a fresh copy, so its geometry is built and rated cold) over
- * design/27 §13's 50 ms at either size; or a bounded one's (large effects) over 50 ms at 1920 and 120 ms at
- * 3840.
+ * design/27 §13's 50 ms at either size; a bounded one's (large effects) over 50 ms at 1920 and 120 ms at
+ * 3840; or a bounded effects one's (drawn cold, the effect cache emptied before every job: §13's named
+ * exception for a slide at its effect budget) over 400 and 500 ms.
  * The face is DejaVu Sans (fonts-dejavu-core). Timings depend on the machine and its load.
  */
 
@@ -33,6 +34,12 @@ const check = process.argv.includes('--check');
 const BUDGET: Record<string, number> = { '1920': 8, '3840': 30 };
 const BOUNDED: Record<string, number> = { '1920': 50, '3840': 120 };
 const BOUNDED_GEOMETRY: Record<string, number> = { '1920': 50, '3840': 50 };
+/**
+ * A slide at its effect budget (10 slide areas of layers) drawn cold, every layer made again: design/27 §13's
+ * named exception (CPU-backed canvases enlarge a reduced layer at about 20 ms a slide area at 4K; the corpus's
+ * most effected slides take 120 to 225 ms cold at 3840).
+ */
+const BOUNDED_EFFECTS: Record<string, number> = { '1920': 400, '3840': 500 };
 
 async function loadEsbuild(): Promise<typeof import('esbuild')> {
   try {
@@ -97,13 +104,16 @@ async function main(): Promise<number> {
       const rich = s.name.includes('(rich');
       const bounded = s.name.includes('(bounded');
       const geometry = s.name.includes('(bounded geometry');
+      const effects = s.name.includes('(bounded effects');
       if (rich)
         console.log(
           `  layout: empty width cache ${ms(s.layoutColdMs)} ms (median); warm width cache ${fmt(s.layoutWarmCache)}`,
         );
       else console.log('  layout: drawText lays out while it draws (included in raster)');
       for (const [w, r] of Object.entries(s.raster)) {
-        const budget = (geometry ? BOUNDED_GEOMETRY : bounded ? BOUNDED : BUDGET)[w]!;
+        const budget = (geometry ? BOUNDED_GEOMETRY : effects ? BOUNDED_EFFECTS : bounded ? BOUNDED : BUDGET)[
+          w
+        ]!;
         const checked = rich || bounded;
         const bad = checked && r.steady.p95 > budget;
         if (bad) over++;

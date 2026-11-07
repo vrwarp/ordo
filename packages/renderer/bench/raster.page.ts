@@ -1,4 +1,5 @@
 import { DEFAULT_LYRIC_STYLE, LOOK_MAIN, type Slide, type TextObject, type TextStyle } from '@ordo/domain';
+import { clearEffectCache } from '../src/effects.ts';
 import { rasterSlide } from '../src/raster.ts';
 import { FontResolver, installFontEnv } from '../src/text/fonts.ts';
 import { WidthCache, canvasMeasurer, measurerFor } from '../src/text/measure.ts';
@@ -445,6 +446,13 @@ export const SOFT_EDGES: Slide = {
 };
 
 /**
+ * One full-slide soft-edged panel (M6 finish review: 134 ms at 3840 cold; the review measured the warm 15 ms
+ * only): its first raster makes the eroded, blurred mask and the full-resolution body cut by it. Drawn alone
+ * in its sprite it is cut in place (no copy of a 33 MB body), within design/27 §13's named exception.
+ */
+export const ONE_SOFT_EDGE: Slide = { id: 'one-soft-edge', objects: SOFT_EDGES.objects.slice(0, 1) };
+
+/**
  * Three large shadowed panels (M6 repair: the effect cache held about two 4K composites and rebuilt them on
  * every raster; now the reduced layers are cached and the panels drawn over them).
  */
@@ -462,6 +470,90 @@ export const SHADOWED_PANELS: Slide = {
     shadow: { dx: 6, dy: 6, blur: 12, color: { r: 0, g: 0, b: 0, a: 0.5 } },
   })),
 };
+
+/** A distinct colour per index (no two shapes share an effect sprite). */
+function hue(i: number, a = 1) {
+  return { r: (i * 97) % 256, g: (60 + i * 53) % 256, b: (200 + i * 31) % 256, a };
+}
+
+/**
+ * The finish review's custom geometries drawn past their boxes (M6 finish review, design/27 §12 drawing cost):
+ * twenty 10 px boxes at the centre whose paths cover the slide, 60 % filled, each with a shadow, as the
+ * converter kept them (PowerPoint and LibreOffice draw them so). Every shadow layer covers the canvas: they
+ * were sized by their boxes (20 took 793 ms at 3840 cold); sized by what they draw, the slide's budgets keep
+ * nine (their fills and the effect budget's 10 slide areas), the rest their legacy 10 px rects without. Nine
+ * full-canvas layers made cold are design/27 §13's named exception (the converter now sends the eleven to
+ * the art and emits nine).
+ */
+export const OUTSIDE_SHADOWS: Slide = {
+  id: 'outside-shadows',
+  objects: Array.from({ length: 20 }, (_, i) => ({
+    id: `o${i}`,
+    type: 'shape' as const,
+    box: { x: 955, y: 535, w: 10, h: 10, rotation: 0 },
+    shape: 'rect' as const,
+    fill: hue(i, 0.6),
+    opacity: 1,
+    radius: 0,
+    geom: { paths: [{ d: 'M -960 -540 L 970 -540 L 970 550 L -960 550 Z', w: 10, h: 10 }] },
+    shadow: { dx: 2.83, dy: 2.83, blur: 6, color: { r: 0, g: 0, b: 0, a: 0.4 } },
+  })),
+};
+
+/**
+ * The finish review's small shapes with wide outlines (M6 finish review): thirty 10 px rects stroked 500 px
+ * wide (the editor's clamp) with the editor's shadow, each its own colour. Their layers were sized by the
+ * 10 px box (415 ms at 3840 cold); sized by the outline's square they are about a quarter slide each, and the
+ * thirty outlines alone (drawn in any case, counted first) fill the drawing budget, so no shadow is added.
+ */
+export const WIDE_SHADOWS: Slide = {
+  id: 'wide-shadows',
+  objects: Array.from({ length: 30 }, (_, i) => ({
+    id: `w${i}`,
+    type: 'shape' as const,
+    box: { x: 955, y: 535, w: 10, h: 10, rotation: 0 },
+    shape: 'rect' as const,
+    fill: hue(i),
+    opacity: 1,
+    radius: 0,
+    stroke: { width: 500, color: hue(i + 7) },
+    shadow: { dx: 6, dy: 6, blur: 12, color: { r: 0, g: 0, b: 0, a: 0.5 } },
+  })),
+};
+
+/** Full-slide rects with a 50 % linear or radial gradient each, as the editor stores them. */
+function gradientStack(n: number): Slide['objects'] {
+  const stops = [
+    { at: 0, color: { r: 255, g: 0, b: 0, a: 0.5 } },
+    { at: 1, color: { r: 0, g: 0, b: 255, a: 0.5 } },
+  ];
+  return Array.from({ length: n }, (_, i) => ({
+    id: `g${i}`,
+    type: 'shape' as const,
+    box: { x: 0, y: 0, w: 1920, h: 1080, rotation: 0 },
+    shape: 'rect' as const,
+    fill: stops[0]!.color,
+    opacity: 1,
+    radius: 0,
+    gradient:
+      i % 2 ? { kind: 'radial' as const, stops } : { kind: 'linear' as const, stops, angle: 90 + i * 10 },
+  }));
+}
+
+/**
+ * Six translucent full-slide gradients (M6 finish review: 78 ms at 3840 cold, every one drawn): a gradient
+ * paints about five times a colour's cost a pixel, and the slide's budget rates it so; three are drawn, the
+ * rest as their legacy colours (the first stop), as an older build draws them.
+ */
+export const SIX_GRADIENTS: Slide = { id: 'six-gradients', objects: gradientStack(6) };
+
+/**
+ * The finish review's stack of 140 full-slide gradients as an editor could store it (1.3 s at 3840 before):
+ * three drawn, the rest their legacy colours, which no budget refuses (each about 2 ms at 4K, as an older
+ * build draws it; the object budget bounds them). The converter sends such a stack to the art and emits only
+ * what it draws natively (`emit.ts` `pastBudget`). Reported, not checked.
+ */
+export const GRADIENT_STACK: Slide = { id: 'gradient-stack', objects: gradientStack(140) };
 
 export type Stats = { n: number; p50: number; p95: number; max: number; mean: number };
 export type BenchReport = {
@@ -528,8 +620,16 @@ export async function bench(
     ['arrowheads and thin dashes (bounded geometry, M6 finish)', ENDS_AND_DASHES],
     ['dashed spiral within the budget (bounded geometry, M6 finish)', DASHED_SPIRAL],
     ['stacked full-slide paths (bounded geometry, M6 finish)', STACKED_PATHS],
+    ['six full-slide gradients (bounded geometry, M6 finish review)', SIX_GRADIENTS],
+    ['140 full-slide gradients, 137 as legacy colours (legacy floor, M6 finish review)', GRADIENT_STACK],
     ['three large shadowed panels (bounded, M6 repair)', SHADOWED_PANELS],
     ['three full-slide soft edges (bounded, M6 finish)', SOFT_EDGES],
+    [
+      'custom geometries past their boxes with shadows (bounded effects, cold, M6 finish review)',
+      OUTSIDE_SHADOWS,
+    ],
+    ['10 px rects with 500 px outlines and shadows (bounded geometry, cold, M6 finish review)', WIDE_SHADOWS],
+    ['a full-slide soft edge (bounded effects, cold, M6 finish review)', ONE_SOFT_EDGE],
     ['autofit search (rich)', AUTOFIT],
     ['6-line lyric (rich)', LYRIC_RICH],
     ['6-line lyric (legacy)', LYRIC_LEGACY],
@@ -566,8 +666,11 @@ export async function bench(
       const scale = width / 1920;
       const canvas = new OffscreenCanvas(width, height);
       const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+      // A cold case starts every job with an empty effect cache: its layers are made each time.
+      const cold = name.includes(', cold');
       const job = () => {
         const s = clone(slide);
+        if (cold) clearEffectCache();
         const t0 = performance.now();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, width, height);

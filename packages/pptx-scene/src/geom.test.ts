@@ -1,10 +1,10 @@
 import { type ImageObject, type ShapeObject, Slide, type SlideObject, type TextObject } from '@ordo/domain';
 import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
-import { charged, GEOM_COST } from '@ordo/renderer/geom/cost.ts';
+import { charged, EFFECT_COST, GEOM_COST } from '@ordo/renderer/geom/cost.ts';
 import { CMD_CLOSE, CMD_MOVE } from '@ordo/renderer/geom/ops.ts';
 import { presetGeometry } from '@ordo/renderer/geom/path.ts';
 import { storedGeometry } from '@ordo/renderer/geom/stored.ts';
-import { drawnCost, overGeomBudget } from '@ordo/renderer/geombudget.ts';
+import { drawnCost, drawnEffectArea, overGeomBudget, slideBudget } from '@ordo/renderer/geombudget.ts';
 import { describe, expect, it } from 'vitest';
 import type { EmitOptions } from './emit.ts';
 import { apply } from './frame.ts';
@@ -480,8 +480,11 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     const renderer = drawn.reduce((n, o) => n + charged(drawnCost(o)), 0);
     const converter = el.custom.cost + 2 * el.custom.points * GEOM_COST.point;
     expect(Math.abs(renderer - converter) / converter).toBeLessThan(0.05);
-    // As many as fit: the converter keeps native what the renderer draws natively.
-    const fit = Math.floor((GEOM_COST.slide * 0.98) / converter);
+    // As many as fit after the slide's background (a full-slide white rect, charged first): the converter
+    // keeps native what the renderer draws natively.
+    const background = charged(drawnCost(one.slide.objects[0]!));
+    expect(background).toBeGreaterThan(1920 * 1080 * GEOM_COST.opaqueArea);
+    const fit = Math.floor((GEOM_COST.slide * 0.98 - background) / converter);
     let all = '';
     for (let i = 0; i <= fit; i++) all += picture(3 + i, 254_000 + i * 100_000);
     const out = emitOne({ slides: [{ rels: [imageRel('rId2', 'a.png')], shapes: all }] });
@@ -490,6 +493,107 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     }[];
     expect(pics.map((p) => !!p.custom?.over)).toEqual([...Array.from({ length: fit }, () => false), true]);
     expect(overGeomBudget(out.slide.objects).size).toBe(0);
+  });
+
+  it("sizes effects by what the shape draws: a custGeom past its box, a small shape's wide outline (M6 finish review)", () => {
+    const EMU = 6_350; // a logical px
+    const shadow =
+      '<a:effectLst><a:outerShdw blurRad="38100" dist="25400" dir="2700000" algn="tl" rotWithShape="0">' +
+      '<a:srgbClr val="000000"><a:alpha val="40000"/></a:srgbClr></a:outerShdw></a:effectLst>';
+    // A 10 px box at the centre whose path (w = h = 10: a unit a px) covers the slide, opaque: its shadow
+    // layer covers the canvas. Twelve fit the drawing budget; their effects do not fit the effect budget.
+    const outside = (id: number) =>
+      `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="S${id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>` +
+      `<a:xfrm><a:off x="${955 * EMU}" y="${535 * EMU}"/><a:ext cx="${10 * EMU}" cy="${10 * EMU}"/></a:xfrm>` +
+      custGeom({
+        paths: `<a:path w="10" h="10">${M(-960, -540)}${L(970, -540)}${L(970, 550)}${L(-960, 550)}${Z}</a:path>`,
+      }) +
+      `${solid('3366CC')}<a:ln><a:noFill/></a:ln>${shadow}</p:spPr></p:sp>`;
+    let all = '';
+    for (let i = 0; i < 12; i++) all += outside(2 + i);
+    const out = emitOne({ slides: [{ shapes: all }] });
+    const drawn = shapes(out.objects);
+    expect(drawn.filter((o) => o.geom).length).toBe(12);
+    const kept = drawn.filter((o) => o.shadow);
+    expect(kept.length).toBeGreaterThanOrEqual(8);
+    expect(kept.length).toBeLessThan(10);
+    expect(kept.reduce((a, o) => a + drawnEffectArea(o), 0)).toBeLessThanOrEqual(EFFECT_COST.slide);
+    expect(out.notes.join(' ')).toMatch(/past the slide's effect budget are not drawn/);
+    // Every drawer draws it as emitted.
+    expect(slideBudget(out.slide.objects).size).toBe(0);
+
+    // Thirty 10 px rects with a 500 px outline and a shadow (as the editor can make): each layer covers the
+    // outline's square, so the drawing budget and the effect budget hold them; the renderer agrees.
+    const ln = `<a:ln w="${500 * EMU}"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln>`;
+    let rects = '';
+    for (let i = 0; i < 30; i++)
+      rects += sp({
+        id: 2 + i,
+        x: 955 * EMU,
+        y: 535 * EMU,
+        cx: 10 * EMU,
+        cy: 10 * EMU,
+        fill: solid('C04040'),
+        ln: ln + shadow,
+      });
+    const wide = emitOne({ slides: [{ shapes: rects }] });
+    const w = shapes(wide.objects).filter((o) => o.shadow);
+    expect(drawnEffectArea(w[0]!)).toBeGreaterThan(0.25);
+    expect(w.reduce((a, o) => a + drawnEffectArea(o), 0)).toBeLessThanOrEqual(EFFECT_COST.slide);
+    expect(slideBudget(wide.slide.objects).size).toBe(0);
+  });
+
+  it('charges the pixels each fill paints: a stack of full-slide gradients goes to the art (M6 finish review)', () => {
+    // The review's 140 full-slide rects with a 50 % linear gradient (1.3 s at 3840, all native).
+    const grad =
+      '<a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"><a:alpha val="50000"/></a:srgbClr></a:gs>' +
+      '<a:gs pos="100000"><a:srgbClr val="0000FF"><a:alpha val="50000"/></a:srgbClr></a:gs></a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill>';
+    let all = '';
+    for (let i = 0; i < 140; i++)
+      all += sp({
+        id: 2 + i,
+        x: 0,
+        y: 0,
+        cx: 12_192_000,
+        cy: 6_858_000,
+        geom: 'rect',
+        fill: grad,
+        ln: '<a:ln><a:noFill/></a:ln>',
+      });
+    const out = emitOne({ slides: [{ shapes: all }] });
+    const els = out.scene.slides[0]!.elements as ShapeElement[];
+    const native = els.filter((e) => e.support !== 'residual');
+    expect(native.length).toBeGreaterThanOrEqual(2);
+    expect(native.length).toBeLessThanOrEqual(3);
+    expect(els.slice(native.length).every((e) => e.reasons?.includes('geom:complex'))).toBe(true);
+    expect(out.emitted.classification.class).toBe('hybrid');
+    // The rest emit nothing until the art arrives: their legacy colours would cost what the budget held back
+    // (138 translucent full-slide rects: 300 ms at 3840).
+    expect(shapes(out.objects).length).toBe(native.length);
+    expect(shapes(out.objects).every((o) => o.gradient)).toBe(true);
+    expect(slideBudget(out.slide.objects).size).toBe(0);
+    // Six full-slide gradients, the review's (78 ms at 3840): as many as fit after the background are drawn
+    // (two, within the converter's margin), the rest by LibreOffice.
+    let six = '';
+    for (let i = 0; i < 6; i++)
+      six += sp({
+        id: 2 + i,
+        x: 0,
+        y: 0,
+        cx: 12_192_000,
+        cy: 6_858_000,
+        geom: 'rect',
+        fill: grad,
+        ln: '<a:ln><a:noFill/></a:ln>',
+      });
+    const few = emitOne({ slides: [{ shapes: six }] });
+    const kept = shapes(few.objects).filter((o) => o.gradient);
+    const background = charged(drawnCost(few.slide.objects[0]!));
+    expect(kept.length).toBe(
+      Math.floor((GEOM_COST.slide * 0.98 - background) / charged(drawnCost(kept[0]!))),
+    );
+    expect(kept.length).toBe(2);
+    expect(slideBudget(few.slide.objects).size).toBe(0);
   });
 
   it('reads hostile geometry within the bounds and quickly (design/27 §12, §14.3)', () => {
