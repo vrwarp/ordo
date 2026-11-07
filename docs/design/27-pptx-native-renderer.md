@@ -1586,6 +1586,19 @@ Also:
     either way), 12 table slides up, none down; the sermon decks do not change (0.955). The charts of
     79 and 90 drawn cells stay residual: drawn natively they reach 0.46 and 0.82 but pass 64 KB of text
     formatting (picture class), so the cap waits until `fitTables` budgets text as well as objects.
+  - *Fidelity round 2 (grid objects; `pptx-scene` `tables.ts` `gridObjects`, README "Fidelity round 2"):* a
+    table's lines are one locked `ShapeObject` per look (width, fill, dash; by direction too when there are
+    several, so vertical lines stay over the horizontal ones they cross), each run an open sub-path of its
+    `geom.paths` stroked with flat caps; its fills one object per fill of rect sub-paths; the background one
+    rect. `TableElement.objects` counts them, so a chart table costs its cells and a few grid objects, not
+    one per run (25-84). Paths stay within `ShapeGeom`'s bounds (`cont` chains, another object past 8
+    paths). An older build draws a line look as the table's outline and a fill as its runs' bounding box.
+    Drawn one run at a time a look's object is the legacy lines pixel for pixel; stroked as one path, edge
+    pixels move by at most 12 of 255 (Chromium). *Measured* (the 30 table decks): tables 0.749 → 0.766,
+    tableMerge 0.627 → 0.643; moral-character 0.590 → 0.872, colossians 0.434 → 0.601, 1000-years 0.566 →
+    0.631, no slide down; moral-character and 1000-years are now picture class in the hub for their cells'
+    64 KB of text formatting (colossians already was). Worship shard 0: 0.865 → 0.871 (deck mean), none
+    down; the sermon decks and the suite's tables decks do not change.
 - SmartArt from its drawing cache as a locked group.
 - Recolour and tile bakes.
 - Editor shape fields.

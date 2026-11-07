@@ -19,7 +19,10 @@ const IMPURE = /\brequire\(|\bimport\(|\bprocess\.|\bdocument\.|\bwindow\.|\bfet
 
 describe('package purity', () => {
   const dir = import.meta.dirname;
-  const sources = readdirSync(dir).filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'));
+  // Tests and their browser pages (`*.page.test-util.ts`, bundled for Chromium) are not the package.
+  const sources = readdirSync(dir).filter(
+    (f) => f.endsWith('.ts') && !f.endsWith('.test.ts') && !f.endsWith('.page.test-util.ts'),
+  );
 
   it.each(sources)('%s imports only its own modules, @ordo/domain types and pure domain tables', (file) => {
     const src = readFileSync(join(dir, file), 'utf8');
