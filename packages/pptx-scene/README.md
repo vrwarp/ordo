@@ -443,6 +443,27 @@ Tests: `tables.test.ts` (one object per look, its sub-paths read back by the ren
 looks split by direction, fills by fill and their legacy boxes, a turned table, two checkered chart
 tables native, `gridObjects` bounds and chains, overlapping runs), `tables.browser.test.ts` (pixels).
 
+### Fidelity round 2, as merged (the three table branches and geometry files together)
+
+- **Cell cap and grid objects.** With both, a table costs the slide its cells, its background and its few
+  grid objects, and no count of cells applies below the slide's 150 objects. Tables that needed both are
+  native now: Boletim's 87-cell reading plan is 146 objects (0.741 → 0.866) and Matthew 16v18's tables fit
+  the budget together (0.348 → 0.737; 0.462 with the cap alone). The 96-cell Boletim table, 153 objects,
+  stays in the art (`budget:table`). The cap's test of a table past the budget by its own objects gives
+  every cell a fill of its own, since a checkerboard of two fills is now 92 objects, not 180.
+- **Layouter and grid objects.** Under loCompat the grid's sub-paths are placed on LibreOffice's columns
+  (`TableElement.lo.cols`) like the cells; the 666 chart scores 0.756, as on the layouter's branch.
+- **Grid geometries and geometry files.** A table's fill or line geometry is an ordinary `ShapeGeom`, so
+  paths over `GEOM_FILE_CHARS` go to geometry files like a traced outline's (5 files, 2.3 KB, over worship
+  shards 0-2); with them the biblical-mary chart's slide is 65,017 bytes as stored and native in the hub,
+  where it was a compact picture.
+- **The 64 KB of text formatting.** Native tables bring their cells' text formatting with them, and
+  `fitTables` weighs objects only: five charts of the 30 table decks and one suite table that were
+  hybrid, their table in the art, are picture class now, and the hub shows LibreOffice's picture of them
+  (in the census, in the hub's own terms, four slides go hybrid → picture; the others were compact
+  pictures there already). The harness draws them natively. Sending the largest table to the art when its
+  text would pass 64 KB is left to `fitTables`.
+
 ## M6 wave 2, item D: SmartArt and baked pictures (`smartart.ts`, `bake.ts`)
 
 design/27 §4 "Pictures", §5 "Element support", §15 M6 ("SmartArt from its drawing cache as a locked group",
