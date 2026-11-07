@@ -514,6 +514,92 @@ describe("tables: LibreOffice's rows (R1, the harness's cellRows rule)", () => {
     for (const [k, v] of Object.entries({ l: 14.4, t: 7.2, r: 14.4, b: 7.2 }))
       expect(ours.style.insets![k as 'l']).toBeCloseTo(v, 9);
   });
+
+  it('puts the whole height of a merge from the first row on its last row, as LayoutTableHeight does', () => {
+    // One line of 18 pt Carlito and three, each with the extra 1/100 mm and the margins.
+    const one = 774 + 1 + 254;
+    const three = 3 * 774 + 1 + 254;
+    const merged = (start: number) =>
+      tableOf(
+        table({
+          cols: [2 * IN, 2 * IN],
+          rows: [0, 1, 2].map((r) => ({
+            h: 0,
+            cells: [
+              tc(`row ${r}`),
+              r === start
+                ? tc('a\nb\nc', { attrs: 'rowSpan="2"' })
+                : r === start + 1
+                  ? tc('', { attrs: 'vMerge="1"' })
+                  : tc('d'),
+            ],
+          })),
+        }),
+      );
+    // From the first row the subtraction loop ends at once: row 1 takes the merge's whole height.
+    const top = merged(0);
+    expect(top.lo?.rows).toEqual([one, three, one].map((v) => v * MM));
+    // From the second row it is checked less the rows before its last, the way ordo's rows take it.
+    const low = merged(1);
+    expect(low.lo?.rows).toEqual([one, one, three - one].map((v) => v * MM));
+    // ordo's own rows give a merge from the first row only its shortfall over the rows it spans.
+    const line = (2500 / 2048) * 36;
+    const px = top.rows.map((h) => h / 6350);
+    expect(px[0]).toBeCloseTo(line + 14.4, 6);
+    expect(px[0]! + px[1]!).toBeCloseTo(3 * line + 14.4, 6);
+  });
+
+  it('widens a column to its minimum and puts a merge from the first column on its last, as LayoutTableWidth does', () => {
+    const wide = ' marL="182880" marR="182880"'; // 508/100 mm each: a minimum of 1,116/100 mm
+    const tight = ' marL="0" marR="0"'; // a minimum of 1 mm
+    const narrow = 300 * MM; // 3 mm
+    const first = table({
+      cols: [IN, narrow, IN],
+      rows: [
+        {
+          h: 0,
+          cells: [
+            tc('a', { attrs: 'gridSpan="2"', tcPr: wide }),
+            tc('', { attrs: 'hMerge="1"' }),
+            tc('b', { tcPr: tight }),
+          ],
+        },
+        { h: 0, cells: [tc('c', { tcPr: tight }), tc('', { tcPr: tight }), tc('d', { tcPr: tight })] },
+      ],
+    });
+    // Its own cells need 1 mm, less than 3 mm; the merge from the first column puts its whole minimum on
+    // the narrow column, nothing subtracted. ordo's own columns are the grid's.
+    const t = tableOf(first);
+    expect(t.lo?.cols).toEqual([IN, 1116 * MM, IN]);
+    expect(t.cols).toEqual([IN, narrow, IN]);
+    // The table grows to the right: under loCompat the third column starts that much further.
+    expect(t.lo!.xf[0]).toBeCloseTo(2 * IN + 1116 * MM, 6);
+    expect(t.lo!.xf[4]).toBe(t.xf[4]);
+    const cellB = (lo: boolean) =>
+      convert(first, { fontFace: carlito, loCompat: lo }).texts.find((o) => o.text === 'b')!.box;
+    expect(cellB(true).x).toBeCloseTo((2 * IN + 1116 * MM) / 6350, 6);
+    expect(cellB(false).x).toBeCloseTo((2 * IN + narrow) / 6350, 6);
+
+    // From the second column: a cell with the default margins widens the narrow column to 608/100 mm
+    // first, and the merge needs only its minimum less that column of the last one.
+    const second = tableOf(
+      table({
+        cols: [IN, narrow, narrow],
+        rows: [
+          {
+            h: 0,
+            cells: [
+              tc('a', { tcPr: tight }),
+              tc('b', { attrs: 'gridSpan="2"', tcPr: wide }),
+              tc('', { attrs: 'hMerge="1"' }),
+            ],
+          },
+          { h: 0, cells: [tc('c', { tcPr: tight }), tc(''), tc('d', { tcPr: tight })] },
+        ],
+      }),
+    );
+    expect(second.lo?.cols).toEqual([IN, 608 * MM, (1116 - 608) * MM]);
+  });
 });
 
 describe('tables: what stays residual', () => {

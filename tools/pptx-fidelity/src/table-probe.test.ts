@@ -4,9 +4,12 @@ import { parseDeck, type TableElement } from '@ordo/pptx-scene';
 import { describe, expect, it } from 'vitest';
 import { hostFace } from './faces.ts';
 import {
+  LAYOUT_SLIDES,
+  LO_PROBE_LAYOUT,
   LO_PROBE_ROWS,
   PROBE_FACES,
   PROBE_SIZES,
+  pdfColWidths,
   pdfRowHeights,
   probeDeck,
   probeRows,
@@ -22,10 +25,19 @@ function hasFace(family: string): boolean {
 }
 const faces = hasFace('Carlito') && hasFace('Liberation Sans');
 
+/** Each slide's tables: the probe slides', then the layouter slides'. */
 async function probeTables() {
   const parts = await readZip(probeDeck());
   const scene = parseDeck(parts, { fontFace: hostFace });
   return scene.slides.map((s) => s.elements.filter((e): e is TableElement => e.kind === 'table'));
+}
+
+/** Within LibreOffice's PDF of the slide at 0.99897 (as for the rows). */
+function near(got: readonly number[], want: readonly number[]): void {
+  expect(got).toHaveLength(want.length);
+  got.forEach((v, i) => {
+    expect(Math.abs(v - want[i]!)).toBeLessThanOrEqual(0.05 + 0.0015 * want[i]!);
+  });
 }
 
 describe('table probe deck', () => {
@@ -34,8 +46,9 @@ describe('table probe deck', () => {
     expect(slides).toHaveLength(2 * PROBE_FACES.length * PROBE_SIZES.length);
     expect(slides.filter((s) => s.autogrow)).toHaveLength(slides.length / 2);
     expect(probeDeck()).toEqual(probeDeck());
-    const tables = await probeTables();
-    expect(tables).toHaveLength(slides.length);
+    const all = await probeTables();
+    expect(all).toHaveLength(slides.length + LAYOUT_SLIDES.length);
+    const tables = all.slice(0, slides.length);
     tables.forEach((t, i) => {
       const rows = probeRows(slides[i]!.pt);
       expect(t.map((e) => e.rows.length)).toEqual([rows.left.length, rows.right.length]);
@@ -47,10 +60,11 @@ describe('table probe deck', () => {
       }
     });
     expect(LO_PROBE_ROWS).toHaveLength(slides.length);
+    expect(LO_PROBE_LAYOUT).toHaveLength(LAYOUT_SLIDES.length);
   });
 
   it.skipIf(!faces)("sizes LibreOffice's rows as LibreOffice 24.2 drew them, within 0.25 pt", async () => {
-    const tables = await probeTables();
+    const tables = (await probeTables()).slice(0, probeSlides().length);
     let worst = 0;
     tables.forEach((t, i) => {
       t.forEach((e, k) => {
@@ -66,6 +80,39 @@ describe('table probe deck', () => {
     });
     expect(worst).toBeLessThan(0.25);
   });
+
+  it("widens narrow columns and sizes merges from the first column as LibreOffice 24.2's layouter", async () => {
+    // Column widths depend on the cells' margins only, not on the faces.
+    const tables = (await probeTables()).slice(probeSlides().length);
+    LAYOUT_SLIDES.forEach((l, j) => {
+      expect(tables[j]).toHaveLength(2);
+      tables[j]!.forEach((e, k) => {
+        expect(e.support).toBe('native');
+        expect(e.cols).toEqual(l.tables[k]!.cols);
+        if (l.measure === 'cols')
+          near(
+            (e.lo?.cols ?? e.cols).map((w) => w / EMU_PER_PT),
+            LO_PROBE_LAYOUT[j]![k]!,
+          );
+      });
+    });
+  });
+
+  it.skipIf(!faces)(
+    "sizes merges from the first row as LibreOffice 24.2's layouter, within 0.15 pt",
+    async () => {
+      const tables = (await probeTables()).slice(probeSlides().length);
+      LAYOUT_SLIDES.forEach((l, j) => {
+        if (l.measure !== 'rows') return;
+        tables[j]!.forEach((e, k) => {
+          near(
+            (e.lo?.rows ?? e.rows).map((h) => h / EMU_PER_PT),
+            LO_PROBE_LAYOUT[j]![k]!,
+          );
+        });
+      });
+    },
+  );
 
   it.skipIf(!faces)(
     'sets lines apart by about 1.217 × the size alone and 1.2 × after an autogrow shape',
@@ -97,5 +144,13 @@ describe('table probe deck', () => {
       stroke(1100, 990, 1800),
     ].join('');
     expect(pdfRowHeights(svg)).toEqual([[25, 50], [5]]);
+    // Column widths from the vertical strokes alike (the first one of the left table's is at x 30).
+    const across = (x: number, y0: number, y1: number) =>
+      `<path fill="none" d="M ${x} ${y0} L ${x} ${y1} " transform="matrix(0.5, 0, 0, -0.5, 0, 540)"/>`;
+    const cols = [across(60, 900, 100), across(460, 900, 500), across(560, 900, 100), across(1100, 900, 100)];
+    expect(pdfColWidths([...cols, stroke(60, 1000, 800), across(1180, 900, 100)].join(''))).toEqual([
+      [200, 50],
+      [40],
+    ]);
   });
 });

@@ -298,6 +298,39 @@ converter's LibreOffice rows against `LO_PROBE_ROWS` when this machine has Carli
 `apps/hub/test/pptx-faces.test.ts` (kerning and vertical metrics through TTF and WOFF, an oversized `GPOS`
 left out).
 
+### Fidelity round 2: LibreOffice's table layouter (`tables.ts` `loColumns`, `loGrowRows`)
+
+For the harness's LibreOffice policy only (compat rule `cellRows`; the hub keeps the grid's widths and
+ordo's rows), the grid is laid out as LibreOffice 24.2's svx `TableLayouter` lays out an imported table
+(`LayoutTableWidth`, `LayoutTableHeight`, not fitted to the frame). Two of its rules were missing:
+- **Column minimums.** Every column is at least as wide as the widest minimum of its single-column cells,
+  `Cell::getMinimumWidth`: the left and right text distances and 1 mm, in 1/100 mm. The table grows to the
+  right (`TableElement.lo.cols`, `lo.xf` at their width), and LibreOffice's rows are measured in these
+  columns.
+- **Merges from the first row or column.** A merge's minimum width or height is checked only at its last
+  column or row, less the ones it spans before; the subtraction loop, `for (nM = n - span + 1; nM > 0 &&
+  nM < n; ++nM)`, ends at once when the merge starts at index 0, so a cell merged from the first row puts
+  its whole text height on its last row, and one merged from the first column its whole minimum width on its
+  last column. ordo's own rows give a merge only its shortfall over all the rows it spans.
+
+The probe deck's two layouter slides (`table-probe.ts` `LAYOUT_SLIDES`, `LO_PROBE_LAYOUT`) pin both against
+LibreOffice 24.2.7: three lines merged over two one-line rows make row 1 the whole merge from row 0 (2,055/100
+mm) and row 2 the merge less row 1 from row 1 (1,200); a 3 mm column under a merge of 1,116/100 mm minimum
+from column 0 becomes 1,116, and from column 1, over two 3 mm columns, the first takes its own cell's 608 and
+the second 1,116 less 608. Measured (`--engine native --lo-compat`, the 30 table decks): tables 0.749 →
+0.765, tableMerge (14) 0.627 → 0.661 (ordo's policies unchanged, 0.617 and 0.449); the 666 chart 0.476 →
+0.756 (a 16.8 px column under a merge from column 0: every edge after it moves 10.4 px right, to within a
+pixel of LibreOffice's), ground-await 0.593 → 0.797 (a merge from row 0 over two rows: every row line
+after it 21.5 px lower, within a pixel); no other deck changes. The sermon decks (0.955) and worship shard 0
+(924 slides, 0.865) do not change, nor do the validation suite's tables-charts-smartart decks (194 slides,
+0.934). Of the table decks, both worship shards, the suite and the sermon decks, the 666 chart is the only
+one with a column under LibreOffice's minimum.
+
+Tests: `tables.test.ts` (a merge from row 0 against one from row 1, a 3 mm column under a merge from
+column 0 and from column 1, the boxes under loCompat, ordo's own grid and rows unchanged),
+`tools/pptx-fidelity/src/table-probe.test.ts` (the layouter slides' columns against `LO_PROBE_LAYOUT`
+always, their rows when this machine has Carlito and Liberation Sans; `pdfColWidths`).
+
 ## M6 wave 2, item D: SmartArt and baked pictures (`smartart.ts`, `bake.ts`)
 
 design/27 §4 "Pictures", §5 "Element support", §15 M6 ("SmartArt from its drawing cache as a locked group",

@@ -6,14 +6,17 @@
  * and outlined with 1 pt black lines; every slide once with its tables alone and once under a text box
  * that grows to its text. LibreOffice's drawing of the deck gives its row heights (`LO_PROBE_ROWS`,
  * LibreOffice 24.2.7), which the converter's LibreOffice row rule (`@ordo/pptx-scene` `TableElement.lo`,
- * `tables.ts` `LoLines`) is checked against (`table-probe.test.ts`).
+ * `tables.ts` `LoLines`) is checked against (`table-probe.test.ts`). Two layouter slides follow
+ * (`LAYOUT_SLIDES`, R2): merges from the first row and column against ones from the second, and 3 mm
+ * columns, for LibreOffice's `TableLayouter` rules (`tables.ts` `loColumns`, `loGrowRows`;
+ * `LO_PROBE_LAYOUT`).
  *
  * The deck is written here as XML (every byte of a cell is the probe's) in a zip stored without
  * compression. Slide space is 1920x1080 px at 6350 EMU per px, LibreOffice's PDF page at 144 dpi.
  *
  * `npx tsx src/table-probe.ts <out.pptx>` writes the deck. To measure it again: `soffice --headless
- * --convert-to pdf <out.pptx>`, then per page `pdftocairo -svg` and `pdfRowHeights` of the SVG: the
- * tables' borders are stroked paths, so their y positions are exact, not read off a picture.
+ * --convert-to pdf <out.pptx>`, then per page `pdftocairo -svg` and `pdfRowHeights` (`pdfColWidths`) of
+ * the SVG: the tables' borders are stroked paths, so their positions are exact, not read off a picture.
  */
 
 export const SLIDE_W = 1920;
@@ -165,6 +168,137 @@ export function slideXml(s: ProbeSlide): string {
   );
 }
 
+/**
+ * One cell of a layouter slide's table: its `a:tc` attributes (spans, covered), its `a:tcPr` margin
+ * attributes, and how many paragraphs of text it holds (0: one empty paragraph).
+ */
+export interface LayoutCell {
+  readonly attrs?: string;
+  readonly mar?: string;
+  readonly lines: number;
+}
+
+/** A layouter slide's table: its grid columns in EMU and its rows of cells (one `a:tc` per column). */
+export interface LayoutTable {
+  readonly cols: readonly number[];
+  readonly rows: readonly (readonly LayoutCell[])[];
+}
+
+/** Calibri 14 pt, so that a line of the probe's text fits a 400 px column with any margins here. */
+export const LAYOUT_FACE: ProbeSlide = { family: 'Calibri', bold: false, pt: 14, autogrow: false };
+/** Margins of 508/100 mm each (a cell minimum of 1,116/100 mm) and none (a minimum of 1 mm). */
+const WIDE = ' marL="182880" marR="182880"';
+const TIGHT = ' marL="0" marR="0"';
+/** A 3 mm grid column (300/100 mm): narrower than any cell's minimum with the default margins. */
+const NARROW = 300 * 360;
+const PX400 = 400 * EMU_PER_PX;
+
+/**
+ * The layouter slides (R2), after the probe slides, for LibreOffice 24.2's `TableLayouter` rules: each
+ * with a left and a right table. `mergedRows`: a cell of three paragraphs over two rows of one line,
+ * merged from the first row on the left (LibreOffice puts its whole height on its last row) and from the
+ * second on the right (its height less the row before). `narrowColumn`: a 3 mm column under a merge of
+ * wide margins, the merge from the first column on the left (its whole minimum on the narrow column); on
+ * the right from the second column, over the narrow column and another 3 mm one, the first widened to
+ * its own cell's minimum with the default margins (608/100 mm) and the second to the merge's minimum less
+ * that (the narrow columns' cells are empty: text in them would have 1 mm).
+ */
+export const LAYOUT_SLIDES: readonly {
+  readonly name: string;
+  /** What LibreOffice's drawing of it is measured for (`LO_PROBE_LAYOUT`). */
+  readonly measure: 'rows' | 'cols';
+  readonly tables: readonly [LayoutTable, LayoutTable];
+}[] = [
+  {
+    name: 'mergedRows',
+    measure: 'rows',
+    tables: [
+      {
+        cols: [PX400, PX400],
+        rows: [
+          [{ lines: 1 }, { attrs: 'rowSpan="2"', lines: 3 }],
+          [{ lines: 1 }, { attrs: 'vMerge="1"', lines: 0 }],
+          [{ lines: 1 }, { lines: 1 }],
+        ],
+      },
+      {
+        cols: [PX400, PX400],
+        rows: [
+          [{ lines: 1 }, { lines: 1 }],
+          [{ lines: 1 }, { attrs: 'rowSpan="2"', lines: 3 }],
+          [{ lines: 1 }, { attrs: 'vMerge="1"', lines: 0 }],
+        ],
+      },
+    ],
+  },
+  {
+    name: 'narrowColumn',
+    measure: 'cols',
+    tables: [
+      {
+        cols: [PX400, NARROW, PX400],
+        rows: [
+          [
+            { attrs: 'gridSpan="2"', mar: WIDE, lines: 1 },
+            { attrs: 'hMerge="1"', lines: 0 },
+            { mar: TIGHT, lines: 1 },
+          ],
+          [
+            { mar: TIGHT, lines: 1 },
+            { mar: TIGHT, lines: 0 },
+            { mar: TIGHT, lines: 1 },
+          ],
+        ],
+      },
+      {
+        cols: [PX400, NARROW, NARROW],
+        rows: [
+          [
+            { mar: TIGHT, lines: 1 },
+            { attrs: 'gridSpan="2"', mar: WIDE, lines: 0 },
+            { attrs: 'hMerge="1"', lines: 0 },
+          ],
+          [{ mar: TIGHT, lines: 1 }, { lines: 0 }, { mar: TIGHT, lines: 0 }],
+        ],
+      },
+    ],
+  },
+];
+
+function layoutTableXml(id: number, x: number, t: LayoutTable): string {
+  const s = LAYOUT_FACE;
+  const cell = (c: LayoutCell) => {
+    const paras: ProbePara[] = c.lines
+      ? Array.from({ length: c.lines }, () => ({ pt: s.pt }))
+      : [{ pt: 0, endPt: s.pt }];
+    return (
+      `<a:tc${c.attrs ? ` ${c.attrs}` : ''}><a:txBody><a:bodyPr/><a:lstStyle/>` +
+      `${paras.map((p) => paraXml(s, p)).join('')}</a:txBody><a:tcPr anchor="ctr"${c.mar ?? ''}>` +
+      `${line('lnL')}${line('lnR')}${line('lnT')}${line('lnB')}<a:noFill/></a:tcPr></a:tc>`
+    );
+  };
+  const cx = t.cols.reduce((a, w) => a + w, 0);
+  return (
+    `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="Table ${id}"/>` +
+    '<p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr>' +
+    `<p:xfrm><a:off x="${x * EMU_PER_PX}" y="${60 * EMU_PER_PX}"/><a:ext cx="${cx}" cy="${t.rows.length * EMU_PER_PT}"/></p:xfrm>` +
+    '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl>' +
+    `<a:tblPr/><a:tblGrid>${t.cols.map((w) => `<a:gridCol w="${w}"/>`).join('')}</a:tblGrid>` +
+    t.rows.map((r) => `<a:tr h="${EMU_PER_PT}">${r.map(cell).join('')}</a:tr>`).join('') +
+    '</a:tbl></a:graphicData></a:graphic></p:graphicFrame>'
+  );
+}
+
+/** A layouter slide's XML: its two tables at the probe tables' places. */
+export function layoutSlideXml(l: (typeof LAYOUT_SLIDES)[number]): string {
+  return (
+    `${HEAD}<p:sld ${NS}><p:cSld><p:spTree>${GROUP_PROPS}` +
+    layoutTableXml(2, TABLES[0].x, l.tables[0]) +
+    layoutTableXml(3, TABLES[1].x, l.tables[1]) +
+    '</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>'
+  );
+}
+
 const CLR_MAP =
   'bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" ' +
   'accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"';
@@ -209,7 +343,7 @@ function relsXml(rels: readonly [string, string, string][]): string {
  * font-independent line spacing (see `LO_PROBE_ROWS`), and almost every real deck has one.
  */
 export function probeParts(app = true): [string, string][] {
-  const slides = probeSlides();
+  const slides = [...probeSlides().map(slideXml), ...LAYOUT_SLIDES.map(layoutSlideXml)];
   const nums = slides.map((_, i) => i + 1);
   const types =
     `${HEAD}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
@@ -279,8 +413,8 @@ export function probeParts(app = true): [string, string][] {
       `${HEAD}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">` +
         '<Application>Microsoft Office PowerPoint</Application><AppVersion>16.0000</AppVersion></Properties>',
     ]);
-  slides.forEach((s, i) => {
-    parts.push([`ppt/slides/slide${i + 1}.xml`, slideXml(s)]);
+  slides.forEach((xml, i) => {
+    parts.push([`ppt/slides/slide${i + 1}.xml`, xml]);
     parts.push([
       `ppt/slides/_rels/slide${i + 1}.xml.rels`,
       relsXml([['rId1', 'slideLayout', '../slideLayouts/slideLayout1.xml']]),
@@ -361,23 +495,51 @@ export function probeDeck(app = true): Uint8Array {
 }
 
 /**
+ * The straight strokes of a page from `pdftocairo -svg` of LibreOffice's PDF (the tables' borders), in PDF
+ * points: `matrix(a, 0, 0, -a, 0, ty)` maps a path's (x, y) to (a·x, ty - a·y).
+ */
+function strokes(svg: string): { x0: number; y0: number; x1: number; y1: number }[] {
+  const re =
+    /<path fill="none"[^>]*?d="M ([\d.]+) ([\d.]+) L ([\d.]+) ([\d.]+) "[^>]*?transform="matrix\(([\d.]+), 0, 0, -([\d.]+), 0, ([\d.]+)\)"/g;
+  const out: { x0: number; y0: number; x1: number; y1: number }[] = [];
+  for (const m of svg.matchAll(re)) {
+    const [x0, y0, x1, y1, a, , ty] = m.slice(1).map(Number) as number[];
+    out.push({ x0: a! * x0!, y0: ty! - a! * y0!, x1: a! * x1!, y1: ty! - a! * y1! });
+  }
+  return out;
+}
+
+/** Differences of the sorted distinct positions of each table's set, to 1/10,000 pt. */
+function gaps(sets: [Set<number>, Set<number>]): [number[], number[]] {
+  return sets.map((set) => {
+    const v = [...set].sort((p, q) => p - q);
+    return v.slice(1).map((y, i) => Math.round((y - v[i]!) * 10_000) / 10_000);
+  }) as [number[], number[]];
+}
+
+const at4 = (v: number) => Math.round(v * 10_000) / 10_000;
+
+/**
  * Row heights in PDF points of each probe table on one page, from `pdftocairo -svg` of LibreOffice's PDF:
  * the y of every horizontal stroke (a table border), grouped by table (left of the slide's middle or
  * right), differences of the sorted distinct positions.
  */
 export function pdfRowHeights(svg: string): [number[], number[]] {
   const ys: [Set<number>, Set<number>] = [new Set(), new Set()];
-  const re =
-    /<path fill="none"[^>]*?d="M ([\d.]+) ([\d.]+) L ([\d.]+) ([\d.]+) "[^>]*?transform="matrix\(([\d.]+), 0, 0, -([\d.]+), 0, ([\d.]+)\)"/g;
-  for (const m of svg.matchAll(re)) {
-    const [x0, y0, , y1, a, , ty] = m.slice(1).map(Number) as number[];
-    if (Math.abs(y0! - y1!) > 1e-6) continue;
-    ys[x0! * a! < SLIDE_W / 4 ? 0 : 1].add(Math.round((ty! - a! * y0!) * 10_000) / 10_000);
-  }
-  return ys.map((set) => {
-    const v = [...set].sort((p, q) => p - q);
-    return v.slice(1).map((y, i) => Math.round((y - v[i]!) * 10_000) / 10_000);
-  }) as [number[], number[]];
+  for (const s of strokes(svg))
+    if (Math.abs(s.y0 - s.y1) <= 1e-6) ys[s.x0 < SLIDE_W / 4 ? 0 : 1].add(at4(s.y0));
+  return gaps(ys);
+}
+
+/**
+ * Column widths in PDF points of each table on one page (the layouter slides), as `pdfRowHeights` but
+ * from the x of every vertical stroke.
+ */
+export function pdfColWidths(svg: string): [number[], number[]] {
+  const xs: [Set<number>, Set<number>] = [new Set(), new Set()];
+  for (const s of strokes(svg))
+    if (Math.abs(s.x0 - s.x1) <= 1e-6) xs[s.x0 < SLIDE_W / 4 ? 0 : 1].add(at4(s.x0));
+  return gaps(xs);
 }
 
 /**
@@ -530,6 +692,24 @@ export const LO_PROBE_ROWS: readonly (readonly [readonly number[], readonly numb
   [
     [28.8, 71.96, 158.27, 74.33],
     [83.96, 76.46, 71.95, 45.59, 28.8],
+  ],
+];
+
+/**
+ * LibreOffice 24.2.7's sizes of the layouter slides in PDF points (`pdfRowHeights`, `pdfColWidths`, rounded
+ * to 0.01 pt; the page is the slide at 0.99897, as for `LO_PROBE_ROWS`), per slide of `LAYOUT_SLIDES`, the
+ * left table then the right one: `mergedRows`' rows (row 1 holds the whole merge from the first row, 2,055
+ * of 1/100 mm; from the second row, row 2 holds 2,055 less row 1's 855), `narrowColumn`'s columns (the 3 mm
+ * column is the merge's 1,116/100 mm from the first column; from the second, 608 and 1,116 less 608).
+ */
+export const LO_PROBE_LAYOUT: readonly (readonly [readonly number[], readonly number[]])[] = [
+  [
+    [24.24, 58.28, 24.24],
+    [24.24, 24.24, 34.04],
+  ],
+  [
+    [199.78, 31.6, 199.78],
+    [199.78, 17.21, 14.39],
   ],
 ];
 
