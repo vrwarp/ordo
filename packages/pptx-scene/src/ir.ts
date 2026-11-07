@@ -84,6 +84,10 @@ export type Fill =
       path?: string;
       /** `a:path/a:fillToRect`: the focus rectangle as insets of the box (fractions, ±1). */
       focus?: Insets;
+      /** `a:lin scaled="1"`: the angle is taken in the unit square and scaled with the box (M6). */
+      scaled?: boolean;
+      /** `rotWithShape="0"`: the gradient keeps its angle on the slide when the shape turns (M6). */
+      fixed?: boolean;
     }
   | { kind: 'picture'; picture: PictureFill }
   | { kind: 'pattern'; preset: string; fg: Rgba; bg: Rgba }
@@ -107,10 +111,33 @@ export interface PictureFill {
   /**
    * The picture's size in pixels, read from its header when the part's bytes were present (not spilled),
    * else given by the caller. `alpha` (M3): the picture may have transparent pixels (an alpha channel or a
-   * transparent colour); undefined when the header did not tell.
+   * transparent colour); undefined when the header did not tell. `dpi` (M6): the resolution its header
+   * states (PNG `pHYs`, JPEG JFIF), which sizes a tile; undefined when it states none.
    */
-  px?: { w: number; h: number; alpha?: boolean };
+  px?: { w: number; h: number; alpha?: boolean; dpi?: { x: number; y: number } };
+  /**
+   * The blip's colour effects ordo bakes into a derived picture (M6, `bake.ts`), in document order, colours
+   * resolved: what `effects` names that a bake reproduces. Effects it does not reproduce stay in `effects`
+   * only (the picture is approx).
+   */
+  recolor?: Recolor[];
 }
+
+/**
+ * One colour effect of a blip (`a:blip` children, ECMA-376 §20.1.8), as the bake applies it (M6, `bake.ts`).
+ * Colours are resolved; shares are 0-1.
+ */
+export type Recolor =
+  /** `a:grayscl`: every pixel its luminance. */
+  | { kind: 'grayscale' }
+  /** `a:biLevel thresh`: white where the luminance reaches `threshold`, else black. */
+  | { kind: 'biLevel'; threshold: number }
+  /** `a:duotone`: the luminance mapped from the first colour (black) to the second (white). */
+  | { kind: 'duotone'; dark: Rgba; light: Rgba }
+  /** `a:clrChange`: pixels of colour `from` (within a tolerance) become `to`, its alpha included. */
+  | { kind: 'clrChange'; from: Rgba; to: Rgba }
+  /** `a:lum bright contrast`: brightness and contrast, -1..1 each. */
+  | { kind: 'lum'; bright: number; contrast: number };
 
 export interface Line {
   /** Line width in EMU (`a:ln w`; 12,700 = 1 pt). */
@@ -120,6 +147,15 @@ export interface Line {
   dash?: string;
   head?: string;
   tail?: string;
+  /** `a:custDash`: dash and space lengths in line widths (`a:ds d`, `sp` / 100,000), pairs flattened (M6). */
+  custDash?: number[];
+  /** Arrowhead sizes (`w`, `len`: sm, med, lg) when not medium (M6). */
+  headSize?: { w: string; len: string };
+  tailSize?: { w: string; len: string };
+  /** `a:round`, `a:bevel` or `a:miter` (M6); undefined when the line sets none. */
+  join?: 'round' | 'bevel' | 'miter';
+  /** `cap`: flat, rnd or sq (M6); undefined when the line sets none. */
+  cap?: 'flat' | 'round' | 'square';
 }
 
 /** An outer shadow (`a:outerShdw`). */
@@ -234,6 +270,10 @@ export interface TextBody {
   /** `vert` when not horizontal (residual until M8). */
   vert?: string;
   numCol?: number;
+  /**
+   * `anchorCtr` along the bodyPr chain: true when it moves text (residual until M8), false when it changes
+   * nothing because every paragraph that draws something is centred (`text.ts`); absent when not set.
+   */
   anchorCtr?: boolean;
   /** `a:prstTxWarp prst` when not `textNoShape` (residual). */
   warp?: string;
@@ -261,6 +301,18 @@ export interface ElementBase {
   support: Support;
   /** Why the element is approximated or residual (short words, e.g. 'gradFill', 'preset:star5'). */
   reasons?: string[];
+  /**
+   * Part of a SmartArt drawing drawn natively (M6, `smartart.ts`): every element of one graphic frame's
+   * drawing has the same number (one per frame among the elements of its `from`, from 1), and the frame's
+   * `shapeId`. The elements are a locked group and are drawn natively or by LibreOffice as a whole.
+   */
+  diagram?: number;
+  /**
+   * The element's own `a:xfrm flipH` / `flipV` (not its groups'): LibreOffice mirrors a gradient that does
+   * not turn with the shape (`rotWithShape="0"`) by them (`geom.ts` `gradientOf`).
+   */
+  ownFlipH?: true;
+  ownFlipV?: true;
 }
 
 /** A `p:sp` or `p:cxnSp`: geometry with a fill and a line, and maybe text. */
@@ -281,6 +333,62 @@ export interface ShapeElement extends ElementBase {
    * when every point could be read. M1 draws the legacy rect only when most of the box is filled.
    */
   coverage?: number;
+  /** Custom geometry built (M6, `geom.ts`): its paths, text rectangle and connection sites. */
+  custom?: CustomPaths;
+  /** `a:glow` (M6): radius in EMU. */
+  glow?: { radius: Emu; color: Rgba };
+  /** `a:softEdge rad` in EMU (M6). */
+  softEdge?: Emu;
+  /** A connector's ends glued to shapes (`a:stCxn`, `a:endCxn`; M6): their `cNvPr id` and site index. */
+  cxn?: { start?: CxnRef; end?: CxnRef };
+  /**
+   * Drawn with the z-adjacent text-less shapes of the same look as one object (M6, `classify.ts`
+   * `shapeRuns`, set only on a slide over the object budget): the index in `SlideScene.elements` of the run's
+   * first (lowest) element, which emits the merged object; the others emit nothing.
+   */
+  merge?: number;
+}
+
+/** One end of a connector glued to a shape's connection site. */
+export interface CxnRef {
+  id: number;
+  idx: number;
+}
+
+/**
+ * A custom geometry (`a:custGeom`) built for one shape (M6, `geom.ts`): each path as an SVG-like string in its
+ * own space (the deck's `w`/`h`, else the shape's box in logical px), the text rectangle and connection
+ * sites in unit-square fractions of the box. A path too long for one string is a chain: its later pieces
+ * have `cont` (`ShapeGeom.paths[].cont`: drawn as one path with the pieces before them).
+ */
+export interface CustomPaths {
+  paths: {
+    d: string;
+    w: number;
+    h: number;
+    fill?: 'norm' | 'none' | 'lighten' | 'lightenLess' | 'darken' | 'darkenLess';
+    stroke?: boolean;
+    cont?: boolean;
+  }[];
+  /** Points of all paths (an arc counts its cubic segments' points). */
+  points: number;
+  /** Its fill estimate in logical px (renderer `geom/cost.ts` `geomCost`: past `GEOM_COST.geometry` not drawn). */
+  fillCost?: number;
+  /**
+   * What drawing it costs as emitted (renderer `geom/cost.ts` `drawCost`: its fill, its outline with joins,
+   * caps, dashes and arrowheads, its effects' passes), in units of the slide's `GEOM_COST.slide`.
+   */
+  cost?: number;
+  /** Over the drawing budgets (`GEOM_COST`, `slideCustom`): drawn by LibreOffice (`custGeom:complex`). */
+  complex?: boolean;
+  /** `a:rect` as fractions of the box: l, t, r, b. */
+  text: [number, number, number, number];
+  /** `a:cxnLst` as fractions of the box, with the angle a connector leaves at (degrees clockwise). */
+  sites: { x: number; y: number; angle: number }[];
+  /** The geometry lost parts to its bounds (or a path string over the schema's length): not drawn natively. */
+  over?: boolean;
+  /** What compiling replaced by 0 or dropped (cleaned, short). */
+  notes: string[];
 }
 
 /** A `p:pic` (or a picture placeholder filled with one). */
@@ -294,6 +402,8 @@ export interface PictureElement extends ElementBase {
   media?: MediaRef;
   /** `a:avLst` guide values of the clip geometry (a roundRect's corner), as `ShapeElement.adj`. */
   adj?: [string, number][];
+  /** A custom clip geometry built (M6, `geom.ts`). */
+  custom?: CustomPaths;
 }
 
 /**
@@ -364,7 +474,70 @@ export interface ResidualElement extends ElementBase {
   adj?: [string, number][];
 }
 
-export type Element = ShapeElement | PictureElement | ResidualElement;
+/**
+ * A table (`a:tbl` in a `p:graphicFrame`, M6; `tables.ts`): a grid of cells, each with its fill and text,
+ * and the lines along the grid. Geometry is in table space: `xf` maps the whole grid (the sum of `cols`
+ * by the sum of `rows`) to the slide. A table read as residual is a `ResidualElement` ('table').
+ */
+export interface TableElement extends ElementBase {
+  kind: 'table';
+  /** Column widths and row heights in EMU; rows are as tall as their text needs (`tables.ts`). */
+  cols: Emu[];
+  rows: Emu[];
+  /** The fill behind every cell (`a:tblPr`'s own fill, else the style's `a:tblBg`). */
+  background?: Fill;
+  /** The cells drawn, row by row: each merge once, at its first cell. */
+  cells: TableCell[];
+  /** The lines along the grid, consecutive pieces of the same look joined. */
+  lines: TableLine[];
+  /**
+   * The ordo objects the table emits (`classify.ts` `slideCost`): its background, its grid objects (one per
+   * fill and line look, `tables.ts` `gridObjects`) and its cells.
+   */
+  objects: number;
+  /**
+   * The columns and rows as LibreOffice 24.2 sizes them, when they differ from `cols` and `rows` (R1, R2:
+   * `tables.ts` `LoLines`, `loColumns`, `loGrowRows`): for the fidelity harness's LibreOffice policy only
+   * (`EmitOptions.loCompat`, compat rule `cellRows`). `xf` is the table's affine at their width and height
+   * (it grows to the right and down); per cell (in `cells` order) `spill`, how much taller than its box the
+   * text is drawn (it then runs into the cell's margins, as LibreOffice draws it), and `lift`, how far above
+   * ordo's office line model LibreOffice draws its lines (at the face's ascent).
+   */
+  lo?: {
+    cols: Emu[];
+    rows: Emu[];
+    xf: Affine;
+    spill: Emu[];
+    lift: Emu[];
+    lines: 'independent' | 'font';
+  };
+}
+
+/** One drawn cell of a table: a merge counts once. */
+export interface TableCell {
+  row: number;
+  col: number;
+  /** Rows and columns it spans (`rowSpan`, `gridSpan`), at least 1, inside the grid. */
+  rows: number;
+  cols: number;
+  /** Its fill, the table style and the cell's own resolved (none: the background shows). */
+  fill: Fill;
+  /** Its text: margins as `insets`, `anchor`; shrinks to fit (`autofit`); no visible text is an empty box. */
+  text: TextBody;
+}
+
+/** A border line along the grid: a row edge (`h`, edge `at` from column edge `from` to `to`) or a column edge. */
+export interface TableLine {
+  dir: 'h' | 'v';
+  /** The row edge (0 = top) of an `h` line, the column edge (0 = left) of a `v` line. */
+  at: number;
+  /** Where it starts and ends, in edges across it. */
+  from: number;
+  to: number;
+  line: Line;
+}
+
+export type Element = ShapeElement | PictureElement | ResidualElement | TableElement;
 
 // ── Slides and the deck ─────────────────────────────────────────────────────────────────────────────────
 

@@ -358,6 +358,9 @@ importers:
       '@ordo/domain':
         specifier: workspace:*
         version: link:../domain
+      '@ordo/renderer':
+        specifier: workspace:*
+        version: link:../renderer
 
   packages/protocol:
     dependencies:

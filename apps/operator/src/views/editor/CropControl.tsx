@@ -103,9 +103,13 @@ export function CropControlView(props: {
   const name = useId();
   const seen = visualCrop(o);
   const preset = o.mask?.preset;
-  // Another geometry (a PowerPoint preset, M6) checks no choice: any of them replaces it.
-  const mask: MaskChoice | undefined =
-    preset === undefined ? 'none' : preset === 'ellipse' || preset === 'roundRect' ? preset : undefined;
+  // Another geometry (a PowerPoint preset, freeform paths or a geometry file, M6) checks no choice: any of
+  // them replaces it.
+  const mask: MaskChoice | undefined = !(preset || o.mask?.paths?.length || o.mask?.ref)
+    ? 'none'
+    : preset === 'ellipse' || preset === 'roundRect'
+      ? preset
+      : undefined;
   const corner = roundCorner(o);
   const proportions = size?.width && size.height ? coverCrop(o, size) : undefined;
   return (

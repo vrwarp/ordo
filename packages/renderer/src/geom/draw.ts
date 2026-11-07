@@ -1,6 +1,17 @@
 import { type Rgba, rgbaCss } from '@ordo/domain';
 import type { Ctx2D } from '../ctx.ts';
-import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD, type PathFill } from './ops.ts';
+import { type GeomEnds, withEnds } from './ends.ts';
+import {
+  CLOSED_TOLERANCE,
+  CMD_CLOSE,
+  CMD_CUBIC,
+  CMD_LINE,
+  CMD_MOVE,
+  CMD_QUAD,
+  type PathFill,
+} from './ops.ts';
+
+export { CLOSED_TOLERANCE };
 import type { BuiltGeom, GeomPath } from './path.ts';
 
 /*
@@ -19,6 +30,8 @@ import type { BuiltGeom, GeomPath } from './path.ts';
  *   darkenLess towards black by 40 % and 20 %, per channel, truncated to an integer as LibreOffice does; alpha is
  *   kept. Strokes are never shaded. A gradient or picture fill is shaded by the caller's painter (LibreOffice
  *   shades each gradient stop).
+ * - A stroke may carry a dash pattern and line ends (ends.ts): open sub-paths are stroked cut back for their
+ *   arrowheads, which are filled in the stroke's paint without the dashes, after their path's outline.
  */
 
 /** The blend of each fill mode: positive towards white, negative towards black (LibreOffice's dBrightness). */
@@ -57,15 +70,31 @@ export function shadeRgba(c: Rgba, brightness: number): Rgba {
 export type GeomStyle = string | CanvasGradient | CanvasPattern;
 
 /**
- * The fill of a geometry: a colour (shaded here per path), or a painter that returns the style for a brightness
- * of FILL_BRIGHTNESS (0 for norm), built in box space so one gradient spans every path as in LibreOffice.
+ * A paint defined in its own space: `style` (a gradient built there) is used under `transform`, the affine
+ * (a b c d e f, as `DOMMatrix`) from that space to box space, so an elliptical radial gradient can be a
+ * circle in a stretched space. The path is mapped into that space for the fill.
  */
-export type GeomFill = Rgba | ((brightness: number) => GeomStyle);
+export interface GeomSpacePaint {
+  readonly style: GeomStyle;
+  readonly transform: readonly [number, number, number, number, number, number];
+}
 
-/** The outline: its paint and width (box units). Dashes, joins and caps are the caller's, set on the context. */
+/**
+ * The fill of a geometry: a colour (shaded here per path), or a painter that returns the style for a brightness
+ * of FILL_BRIGHTNESS (0 for norm), built in box space (or its own, `GeomSpacePaint`) so one gradient spans
+ * every path as in LibreOffice.
+ */
+export type GeomFill = Rgba | ((brightness: number) => GeomStyle | GeomSpacePaint);
+
+/**
+ * The outline: its paint and width (box units), and optionally its dash pattern (box units, already scaled
+ * by the width: `ctx.setLineDash`) and line ends. Joins and caps are the caller's, set on the context.
+ */
 export interface GeomStroke {
   readonly color: Rgba | GeomStyle;
   readonly width: number;
+  readonly dash?: readonly number[];
+  readonly ends?: GeomEnds;
 }
 
 /** What a path is traced into: a CanvasRenderingContext2D, an OffscreenCanvasRenderingContext2D or a Path2D. */
@@ -97,13 +126,6 @@ export function traceGeomPath(sink: PathSink, path: GeomPath): void {
     } else if (op === CMD_CLOSE) sink.closePath();
   }
 }
-
-/**
- * How close, as a fraction of the box's larger side, a sub-path's end must be to its start to count as closed
- * when the drawing order is decided (LibreOffice's `checkClosed` compares the points rounded to 1/100 mm, about
- * 1e-4 of a slide-sized box; a millionth is above arithmetic noise and below anything visible).
- */
-export const CLOSED_TOLERANCE = 1e-6;
 
 const OPEN_CACHE = new WeakMap<GeomPath, boolean>();
 
@@ -166,18 +188,265 @@ export function geomPath2D(path: GeomPath): Path2D {
   return p;
 }
 
+/** The fill rule of `geomFillPath2D`'s union path (fill it, or clip to it, with this rule). */
+export const GEOM_CLIP_RULE: CanvasFillRule = 'nonzero';
+
 /**
- * One Path2D of every filled path of a geometry (fill ≠ none), for clipping a picture to the shape (fill it, or
- * clip to it, with GEOM_FILL_RULE).
+ * Sub-paths of one path above which `traceUnionPath` no longer works out nesting (each pair's bounding boxes
+ * are compared): they are all traced one way round, as filled outlines without holes. A traced decoration is
+ * one outline holding a few hundred holes, often stored in pieces (`ShapeGeom.paths[].cont`) that arrive here
+ * joined into one path.
+ */
+export const UNION_NESTING_LIMIT = 2_048;
+
+/**
+ * Polygon edges `traceUnionPath` tests at most to work out nesting (each sub-path's first point against the
+ * flattened sub-paths whose bounding boxes hold it): past it, nesting is not worked out (as past
+ * UNION_NESTING_LIMIT), so a hostile path costs a few milliseconds at most.
+ */
+export const UNION_NESTING_WORK = 4_000_000;
+
+/** A sub-path: its segments' points (start, controls, end per segment), flattened for area and containment. */
+interface UnionSub {
+  /** Commands after the move (CMD_LINE, CMD_QUAD, CMD_CUBIC), with their points (x y pairs, the start first). */
+  readonly segs: { op: number; p: number[] }[];
+  readonly flat: number[];
+  readonly area: number;
+  /** Bounding box of `flat`: min x, min y, max x, max y. */
+  readonly box: readonly [number, number, number, number];
+}
+
+const FLAT_STEPS = 8;
+
+function unionSubs(path: GeomPath): UnionSub[] {
+  const out: UnionSub[] = [];
+  const p = path.pts;
+  let at = 0;
+  let segs: UnionSub['segs'] = [];
+  let flat: number[] = [];
+  let cx = 0;
+  let cy = 0;
+  const end = (): void => {
+    if (segs.length) {
+      let area = 0;
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      for (let i = 0, n = flat.length; i < n; i += 2) {
+        const j = (i + 2) % n;
+        const x = flat[i]!;
+        const y = flat[i + 1]!;
+        area += x * flat[j + 1]! - flat[j]! * y;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+      out.push({ segs, flat, area: area / 2, box: [x0, y0, x1, y1] });
+    }
+    segs = [];
+    flat = [];
+  };
+  for (const op of path.cmds) {
+    if (op === CMD_MOVE) {
+      end();
+      cx = p[at]!;
+      cy = p[at + 1]!;
+      flat.push(cx, cy);
+      at += 2;
+    } else if (op === CMD_CLOSE) {
+      const sx = flat[0];
+      const sy = flat[1];
+      end();
+      if (sx !== undefined && sy !== undefined) {
+        cx = sx;
+        cy = sy;
+        flat.push(cx, cy);
+      }
+    } else {
+      const n = op === CMD_LINE ? 2 : op === CMD_QUAD ? 4 : op === CMD_CUBIC ? 6 : 0;
+      if (n === 0) continue;
+      if (!flat.length) flat.push(cx, cy);
+      const pts = [cx, cy];
+      for (let k = 0; k < n; k++) pts.push(p[at + k]!);
+      at += n;
+      segs.push({ op, p: pts });
+      if (op === CMD_LINE) flat.push(pts[2]!, pts[3]!);
+      else
+        for (let i = 1; i <= FLAT_STEPS; i++) {
+          const t = i / FLAT_STEPS;
+          const u = 1 - t;
+          if (op === CMD_QUAD)
+            flat.push(
+              u * u * pts[0]! + 2 * u * t * pts[2]! + t * t * pts[4]!,
+              u * u * pts[1]! + 2 * u * t * pts[3]! + t * t * pts[5]!,
+            );
+          else
+            flat.push(
+              u * u * u * pts[0]! + 3 * u * u * t * pts[2]! + 3 * u * t * t * pts[4]! + t * t * t * pts[6]!,
+              u * u * u * pts[1]! + 3 * u * u * t * pts[3]! + 3 * u * t * t * pts[5]! + t * t * t * pts[7]!,
+            );
+        }
+      cx = pts[pts.length - 2]!;
+      cy = pts[pts.length - 1]!;
+    }
+  }
+  end();
+  return out;
+}
+
+/** Whether (x, y) is inside a flattened polygon (even-odd crossing test). */
+function inside(flat: readonly number[], x: number, y: number): boolean {
+  let c = false;
+  for (let i = 0, n = flat.length; i < n; i += 2) {
+    const j = (i + 2) % n;
+    const yi = flat[i + 1]!;
+    const yj = flat[j + 1]!;
+    if (yi > y !== yj > y && x < ((flat[j]! - flat[i]!) * (y - yi)) / (yj - yi) + flat[i]!) c = !c;
+  }
+  return c;
+}
+
+/** Traces a sub-path forwards, or backwards (the same outline the other way round), closed. */
+function traceSub(sink: PathSink, sub: UnionSub, reverse: boolean): void {
+  const segs = sub.segs;
+  if (!reverse) {
+    sink.moveTo(segs[0]!.p[0]!, segs[0]!.p[1]!);
+    for (const s of segs) {
+      const q = s.p;
+      if (s.op === CMD_LINE) sink.lineTo(q[2]!, q[3]!);
+      else if (s.op === CMD_QUAD) sink.quadraticCurveTo(q[2]!, q[3]!, q[4]!, q[5]!);
+      else sink.bezierCurveTo(q[2]!, q[3]!, q[4]!, q[5]!, q[6]!, q[7]!);
+    }
+  } else {
+    const last = segs[segs.length - 1]!.p;
+    sink.moveTo(last[last.length - 2]!, last[last.length - 1]!);
+    for (let i = segs.length - 1; i >= 0; i--) {
+      const q = segs[i]!.p;
+      if (segs[i]!.op === CMD_LINE) sink.lineTo(q[0]!, q[1]!);
+      else if (segs[i]!.op === CMD_QUAD) sink.quadraticCurveTo(q[2]!, q[3]!, q[0]!, q[1]!);
+      else sink.bezierCurveTo(q[4]!, q[5]!, q[2]!, q[3]!, q[0]!, q[1]!);
+    }
+  }
+  sink.closePath();
+}
+
+/**
+ * How many of `subs` other than each one contain its first point (its nesting depth), or undefined past
+ * UNION_NESTING_LIMIT sub-paths or UNION_NESTING_WORK edges tested. A sub-path is tested only against those
+ * whose bounding boxes hold the point.
+ */
+function nestingDepths(subs: readonly UnionSub[]): number[] | undefined {
+  if (subs.length > UNION_NESTING_LIMIT) return undefined;
+  const depths: number[] = [];
+  let work = 0;
+  for (let i = 0; i < subs.length; i++) {
+    const s = subs[i]!;
+    const x = s.flat[0]!;
+    const y = s.flat[1]!;
+    let depth = 0;
+    for (let j = 0; j < subs.length; j++) {
+      if (j === i) continue;
+      const o = subs[j]!;
+      const b = o.box;
+      if (x < b[0] || x > b[2] || y < b[1] || y > b[3]) continue;
+      work += o.flat.length / 2;
+      if (work > UNION_NESTING_WORK) return undefined;
+      if (inside(o.flat, x, y)) depth++;
+    }
+    depths.push(depth);
+  }
+  return depths;
+}
+
+/**
+ * Traces a path so that its non-zero fill is its even-odd fill (GEOM_FILL_RULE) with winding 0 or 1: each
+ * closed sub-path is turned to wind positively when an even number of the path's other sub-paths contain its
+ * first point, negatively (a hole) when an odd number do. Paths traced so into one sink fill (GEOM_CLIP_RULE)
+ * as the union of their even-odd regions: overlapping paths add up instead of cancelling. Exact for sub-paths
+ * that do not cross themselves or each other (every preset); crossing ones fill as non-zero would. A stored
+ * geometry's pieces (`cont`) arrive joined (`storedGeometry`), so holes in one piece of an outline stored in
+ * another are holes here too.
+ */
+export function traceUnionPath(sink: PathSink, path: GeomPath): void {
+  const subs = unionSubs(path);
+  const depths = nestingDepths(subs);
+  for (let i = 0; i < subs.length; i++) {
+    const s = subs[i]!;
+    const want = (depths?.[i] ?? 0) % 2 === 0 ? 1 : -1;
+    traceSub(sink, s, Math.sign(s.area) === -want);
+  }
+}
+
+const UNION_CACHE = new WeakMap<BuiltGeom, Path2D>();
+
+/**
+ * One Path2D of the union of a geometry's filled paths (fill ≠ none), each with its holes (the even-odd rule),
+ * for cutting a picture to the shape: fill it, or clip to it, with GEOM_CLIP_RULE (`traceUnionPath`). The
+ * paths of a preset such as smileyFace overlap (its eyes are a second, darker path over the face): one even-odd
+ * path of both would cut the eyes out of the picture. Made once per built geometry (a stored one is memoised
+ * per box); never change the Path2D it returns.
  */
 export function geomFillPath2D(built: BuiltGeom): Path2D {
-  const p = new Path2D();
-  for (const path of built.paths) if (path.fill !== 'none') traceGeomPath(p, path);
+  let p = UNION_CACHE.get(built);
+  if (p === undefined) {
+    p = new Path2D();
+    for (const path of built.paths) if (path.fill !== 'none') traceUnionPath(p, path);
+    UNION_CACHE.set(built, p);
+  }
   return p;
 }
 
 function styleOf(paint: Rgba | GeomStyle): GeomStyle {
   return typeof paint === 'object' && paint !== null && 'r' in paint ? rgbaCss(paint) : paint;
+}
+
+function isSpacePaint(v: GeomStyle | GeomSpacePaint): v is GeomSpacePaint {
+  return typeof v === 'object' && v !== null && 'transform' in v && 'style' in v;
+}
+
+/** Fills `p2d` (box space) with a style, or with a paint defined in its own space. */
+function fillWith(ctx: Ctx2D, p2d: Path2D, style: GeomStyle | GeomSpacePaint): void {
+  if (!isSpacePaint(style)) {
+    ctx.fillStyle = style;
+    ctx.fill(p2d, GEOM_FILL_RULE);
+    return;
+  }
+  const [a, b, c, d, e, f] = style.transform;
+  const det = a * d - b * c;
+  if (!(Math.abs(det) > 1e-12) || typeof DOMMatrix === 'undefined') return;
+  const inv = new DOMMatrix([a, b, c, d, e, f]).inverse();
+  const q = new Path2D();
+  q.addPath(p2d, inv);
+  ctx.save();
+  ctx.transform(a, b, c, d, e, f);
+  ctx.fillStyle = style.style;
+  ctx.fill(q, GEOM_FILL_RULE);
+  ctx.restore();
+}
+
+const ENDED_CACHE = new WeakMap<GeomPath, { ends: GeomEnds; shaft: Path2D; markers: Path2D[] }>();
+
+/** A path's shaft and marker Path2Ds for `ends`, made once per path object and ends. */
+function endedPath2D(path: GeomPath, ends: GeomEnds, built: BuiltGeom): { shaft: Path2D; markers: Path2D[] } {
+  const hit = ENDED_CACHE.get(path);
+  if (hit && hit.ends === ends) return hit;
+  const e = withEnds(path, ends, CLOSED_TOLERANCE * Math.max(built.w, built.h));
+  const shaft = new Path2D();
+  traceGeomPath(shaft, e.shaft);
+  const markers = e.markers.map((m) => {
+    const p = new Path2D();
+    for (let i = 0; i < m.length; i += 2) {
+      if (i === 0) p.moveTo(m[0]!, m[1]!);
+      else p.lineTo(m[i]!, m[i + 1]!);
+    }
+    p.closePath();
+    return p;
+  });
+  const out = { ends, shaft, markers };
+  ENDED_CACHE.set(path, out);
+  return out;
 }
 
 /**
@@ -195,8 +464,10 @@ export function drawGeom(
   const width = stroke ? stroke.width : 0;
   const stroked = stroke !== undefined && stroke !== null && Number.isFinite(width) && width > 0;
   const strokeStyle = stroked ? styleOf(stroke.color) : undefined;
-  const shades = new Map<number, GeomStyle>();
-  const fillStyle = (brightness: number): GeomStyle => {
+  const dash = stroked && stroke.dash?.length ? stroke.dash : undefined;
+  const ends = stroked && (stroke.ends?.head || stroke.ends?.tail) ? stroke.ends : undefined;
+  const shades = new Map<number, GeomStyle | GeomSpacePaint>();
+  const fillStyle = (brightness: number): GeomStyle | GeomSpacePaint => {
     let s = shades.get(brightness);
     if (s === undefined) {
       s = typeof fill === 'function' ? fill(brightness) : rgbaCss(shadeRgba(fill as Rgba, brightness));
@@ -204,25 +475,35 @@ export function drawGeom(
     }
     return s;
   };
-  const stroke2d = (p2d: Path2D): void => {
+  const stroke2d = (path: GeomPath, p2d: Path2D): void => {
     ctx.lineWidth = width;
     ctx.strokeStyle = strokeStyle!;
-    ctx.stroke(p2d);
+    if (!ends || !pathOpen(path, built)) {
+      if (dash) ctx.setLineDash(dash as number[]);
+      ctx.stroke(p2d);
+      if (dash) ctx.setLineDash([]);
+      return;
+    }
+    const e = endedPath2D(path, ends, built);
+    if (dash) ctx.setLineDash(dash as number[]);
+    ctx.stroke(e.shaft);
+    if (dash) ctx.setLineDash([]);
+    if (e.markers.length) {
+      ctx.fillStyle = strokeStyle!;
+      for (const m of e.markers) ctx.fill(m, 'nonzero');
+    }
   };
-  let later: Path2D[] | undefined;
+  let later: GeomPath[] | undefined;
   for (const path of built.paths) {
     const doFill = fill !== undefined && fill !== null && path.fill !== 'none';
     const doStroke = stroked && path.stroke;
     if ((!doFill && !doStroke) || path.cmds.length === 0) continue;
     const p2d = geomPath2D(path);
-    if (doFill) {
-      ctx.fillStyle = fillStyle(FILL_BRIGHTNESS[path.fill]);
-      ctx.fill(p2d, GEOM_FILL_RULE);
-    }
+    if (doFill) fillWith(ctx, p2d, fillStyle(FILL_BRIGHTNESS[path.fill]));
     if (doStroke) {
-      if (pathOpen(path, built)) (later ??= []).push(p2d);
-      else stroke2d(p2d);
+      if (pathOpen(path, built)) (later ??= []).push(path);
+      else stroke2d(path, p2d);
     }
   }
-  if (later) for (const p2d of later) stroke2d(p2d);
+  if (later) for (const path of later) stroke2d(path, geomPath2D(path));
 }

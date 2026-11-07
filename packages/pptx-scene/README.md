@@ -12,8 +12,9 @@ const out = emitSlides(scene, { mediaId }); // ordo Slides; pictures as 'pptxmed
 ```
 
 - **Pure TypeScript.** No DOM, no zip, no fs and no runtime dependency: it runs on the hub's CPU pool (M3)
-  and in Node for the fidelity harness. Code outside tests imports only its own modules and _types_ from
-  `@ordo/domain` (`purity.test.ts` enforces it). Media parts may be empty (spilled by `extractZip`): only
+  and in Node for the fidelity harness. Code outside tests imports only its own modules, _types_ from
+  `@ordo/domain`, a few pure domain tables and, since M6, the renderer's geometry engine without its drawer
+  (`@ordo/renderer/geom/{compile,eval,arc,path,ops,presets.gen}.ts`; `purity.test.ts` enforces it). Media parts may be empty (spilled by `extractZip`): only
   their names are used, plus their pixel size when the caller gives `ParseOptions.pictureSize` (read from
   the spilled file's first bytes).
 - **Never throws for one bad slide.** A slide that cannot be read gets `error` and class `'picture'`; the
@@ -82,6 +83,603 @@ Embedded video and sound play in place (design/27 §4 "Media", §8 "p:timing map
   `clipKey`), listed in `EmittedSlide.clips` with linked and missing clips; objects left out keep the art's
   and the metafiles' places (`leaveOut` remaps the element spans).
 
+## M6 wave 2: shape geometry on real slides (`geom.ts`)
+
+Shapes, pictures and connectors draw as PowerPoint draws them (design/27 §3.1 `ShapeGeom`, `Gradient`, the
+`ShapeObject` additions and `ImageObject.mask`; §4 "Simple shapes", "Groups"; §12), always beside the legacy
+values an older build draws (§3.2: `shape` rect, ellipse or line, `fill` a gradient's first stop, `radius`):
+- **Presets** stay presets: `geom: { preset, adj }` (the `a:avLst` pairs, at most 10), evaluated by the
+  renderer at draw time; rect and ellipse need none. A name the table does not know is its rect (approx,
+  noted). The text rectangle is the preset's (`a:rect` of POI's table), placed through the shape's affine,
+  so it is mirrored with a flipped shape; the connection sites are the preset's.
+- **Custom geometry** (`a:custGeom`) is read with bounded scans (`readCustGeom`; attributes cut one past the
+  compiler's own bounds), compiled once per node with the renderer's compiler (POI semantics, the same code
+  that draws presets) and built at the shape's size: `geom.paths`, each path an `M L Q C Z` string in its own
+  space (the deck's `w`/`h`, else the shape's box in logical px; written with about 1/20,000 of the space
+  as precision, coarser until it fits the schema's 40,000 characters), arcs already cubic. A long deck path
+  is compiled in chunks at its sub-paths (the compiler counts an arc as a full turn's 12 points) and stored
+  whole when its real points fit 4,096 and its string 40,000 characters; past that it is split into stored
+  paths where no sub-path of one part overlaps one of another (even-odd holes stay with their outlines, and
+  every build fills the parts apart as one), else stored as a chain (`ShapeGeom.paths[].cont`, M6 wave 2
+  round 1): pieces of at most 4,096 points and 40,000 characters, cut where a sub-path starts, or between
+  two commands of a sub-path longer than a piece, each later piece marked `cont`, which the renderer joins
+  into the one path they were cut from (one even-odd fill). That is the traced decoration of Google Slides
+  templates: one outline holding 40-300 holes, 4,200-8,300 points in 7-digit EMU, which no split can hold.
+  An M6 build without `cont` fills each piece apart (holes filled), a pre-M6 build draws the legacy rect.
+  What the compiler replaced by 0 is noted (`custom geometry: …`) and still drawn. Native while within the
+  bounds (8 stored paths, 4,096 points a sub-path, 64k points a slide); past them residual (`custGeom`, the
+  LibreOffice art). A thin custom geometry's legacy is a `line`, which draws no fill, as M1 drew nothing for
+  it.
+- **Gradients** (`a:gradFill`): `gradient` with the stops (≤ 16, laid on white for backgrounds); linear with
+  `angle` and `scaled` as written (`rotWithShape="0"`: turned back by the shape's rotation), path gradients
+  radial from the centre of `a:fillToRect` (`rect` and `shape` paths noted as radial). Background gradients
+  are drawn; gradient text paints the box (`TextStyle.paint`, `richtext.ts`), a run in another gradient
+  keeps its first stop (noted). Pattern fills stay their blended colour (approx, noted).
+- **Lines**: `dash` from `a:prstDash` (all eleven), `a:custDash` the nearest by its lengths (noted); `ends`
+  from `a:headEnd`/`a:tailEnd` with their sizes. Joins (`a:round`/`a:bevel`/`a:miter`) and caps (`cap`)
+  become `lineJoin` and `lineCap` when they are not the defaults (miter, flat; M6 repair, below).
+- **Effects**: `shadow`, `glow` and `softEdge` of a visible shape from the nearest `a:effectLst` along the
+  chain, else the theme's effect style (`a:effectRef`, `phClr` its colour). An invisible shape's shadow still
+  falls on its text.
+- **Flips** (design/27 §4 "Groups"): the composed affine of every group level (offset, `chOff`/`chExt`
+  scale, rotation, flips) is decomposed into a box, a rotation and `flipH` (a vertical flip is a horizontal
+  one turned half a turn, exact for any shape, and PowerPoint's upside-down text with it), written on pictures
+  and on shapes whose geometry or gradient it changes. Text is never mirrored.
+- **Pictures**: `mask` from the clip geometry (every preset, custom paths; ellipse and roundRect keep their
+  legacy `radius`), `flipH`, and the outline along the same geometry with its dash. A shape's picture fill
+  is clipped to the shape's geometry but never mirrored, and drawn square to the nearest quarter turn of
+  the shape (`pictureFillPlacement`): the mirror-free rotation ρ becomes ρ − 90k, the box's sides swapped
+  when k is odd, so a shape turned 170° shows its picture turned −10° and one turned 90° shows it upright in
+  the tall box. This is LibreOffice 24.2's drawing, measured with probe decks (flips, both flips, rot 30, 90,
+  120, 170, 180, 200, flips in groups), and the reference the pictures are scored against; PowerPoint is
+  known not to mirror a picture fill, and its turning past 45° was not verified. The clip geometry is
+  carried into the picture's box (mirrored and turned there, as paths).
+- **Connectors** (`p:cxnSp`): an end glued to a shape of the same part (`a:stCxn`/`a:endCxn`: its `cNvPr id`
+  and site) moves to that site after the walk (`placeConnectors`), keeping the connector's frame (rotation;
+  the signs of its extents become its flips); an end that names no shape, or a site the shape lacks, keeps
+  the stored geometry, and so does a connector whose stored ends are at their sites already (within 1 % of
+  its length): PowerPoint keeps a routed elbow in a 1 EMU extent with an adjust value of −24,700,009, which
+  re-placing would flatten. Straight connectors and lines are one `line` object with `dash` and `ends`; bent and
+  curved connectors one `line` object whose box's midline runs from the route's start to its end (an older
+  build draws that straight line) with the preset's route in that box as `geom.paths` (fill none).
+- **Classification**: every preset of the table, custom geometry within the bounds, gradients and line styles
+  are native (no reason); approx: unknown presets (`preset:<name>`, `mask:<name>`), pattern fills, group
+  children the composed affine would shear (`shear`); residual: custom geometry past the bounds. Census tiers
+  are unchanged (they count feature use, not support).
+- **Turned children of scaled groups** (`walk.ts` `boxAffine`): a child's box is scaled along the group's
+  axes, then turned, so it is never sheared; a box turned by 45° up to 135° (or 225° up to 315°) takes the
+  scales the other way round (its width the group's vertical scale), as LibreOffice imports it (oox
+  `lcl_doSpecialMSOWidthHeightToggle`: "MSO acts strange in that case"). A probe deck (rect, star5,
+  rightArrow and a custGeom, turned -40° to 145°, in groups scaled 2.5:1 and 1:3, rotated, mirrored either
+  way and both, nested) scores 0.9987-0.9996 against LibreOffice 24.2 (0.886-0.931 with the scales never
+  swapped). LibreOffice's newer source also turns a swapped box in a mirrored group a further half turn;
+  24.2 does not, and neither does `boxAffine`. Such children are approx (`shear`), not residual: PowerPoint's
+  own placement is LibreOffice's claim, not measured here.
+
+Measured (the census over worship shards 0-2 of `validate/sample4`, 2,713 shown slides, and the five sermon
+decks; tiers are features, so unchanged): T1 22.8 %, T1-T2 54.4 %, T1-T3 81.8 %, T1-T4 86.8 %, T1-T5 92.4 %.
+Of the 2,220 T1-T3 slides 2,120 are native class (95.5 %; before 2,132, 96.0 %): 12 slides of one deck
+became hybrid, its layout's traced decorations having paths of up to 6,532 overlapping points (LibreOffice
+draws them now; before they were a rect or nothing), and one picture-class slide of the same deck became
+hybrid (the art took its decorations under the object budget). 19,653 objects carry a geometry, 1,671 a gradient and 699 pictures a mask. The 73 sermon slides are
+unchanged (72 native, one hybrid for its 3D).
+
+Fidelity (`--engine native`, LibreOffice 24.2 pictures, per slide over the 1,000 slides of worship shard 2
+scored both times): with this converter alone, whose renderer still ignores the new fields, 0.8616 →
+0.8623; with M6 wave 2 item A's renderer, which draws them, 0.8616 → 0.8813 (335 slides up by more than
+0.002, 6 down; the falls over 0.01 are four picture-class slides of one template, which the hub draws with
+LibreOffice and whose extra objects pass the renderer's 200-object clamp in the harness, and one table slide
+by 0.014). Tier means with both: T1 0.945, T2 0.846, T3 0.873. The sermon decks stay 0.953.
+
+### Round 2: geometry files and the slide's JSON budget (`emit.ts` `fitBytes`, `storedSlideBytes`)
+
+design/27 §3.1 `ShapeGeom.ref`, §3.4. A traced decoration is 100-150 KB of path text in its own space, and a
+Google-Slides-made template draws it on several objects of a slide at different sizes and on every slide of a layout:
+slides of 140 KB to 1 MB, of which path text was 60-98 %. The converter counted only text toward
+`MAX_SLIDE_BYTES`, so it called them native while the hub's `planImportSizes`, which measures the whole
+slide, made them compact LibreOffice pictures (70 of the census's 2,187 native T1-T3 worship slides).
+- **Geometry files.** After a slide is emitted, every geometry (`ShapeObject.geom`, `ImageObject.mask`) whose
+  paths take more than `GEOM_FILE_CHARS` (2,048) of the slide's JSON, its own JSON times the times the slide
+  draws it, is written once as a geometry file: its object keeps `ref` (placeholder `pptxgeom:<n>`, one per
+  distinct file over the deck, or over a `convertDeck` call: `EmitOptions.geomId`), the paths go to
+  `EmitResult.geoms`. Paths are in their own space, so one outline at three sizes is one file. While the
+  slide as stored is still over `MAX_SLIDE_BYTES` less 4 KB (room for what the hub adds: speaker notes,
+  timing), the largest remaining geometries whose paths are longer than a ref go to files too.
+  `EmitOptions.geomFiles: false` keeps every path inline (the release before the schema ships `ref`, §3.2).
+- **The budget as the hub counts it.** `storedSlideBytes(slide, notes)` is the slide's JSON as the hub's
+  native job stores it (ULID ids, files named by SHA-256, an origin on every object, the provenance with up to
+  16 notes), a few hundred bytes over the hub's own measure and never under it (`emit.geomfiles.test.ts`); a
+  slide over 64 KB that way, its large geometries in files, is picture class (`more than 64 KB as stored`,
+  `SLIDE_BYTES_NOTE`, `EmittedSlide.overBudget`), as the hub would make it; the text-formatting budget is
+  unchanged.
+- **Older builds** strip `ref` and draw the shape's legacy form (a rect with the fill, or a line for a thin
+  outline), as a pre-M6 build drew every custom geometry.
+- Measured (the census over worship shards 0-2 of `validate/sample4` and the five sermon decks, with the
+  hub's `planImportSizes` applied to `storedSlideBytes`; 2,220 T1-T3 slides): native 2,187 in the converter
+  and 2,113 in the hub before; 2,186 in both after (the one slide fewer is the text-heavy slide the hub made
+  a picture already). In the hub's terms 73 T3 slides go from compact picture to native, and 10 T3 and 26
+  fallback slides from compact picture to hybrid. 1,702 geometry files, 2.75 MB in all, in 25 decks (at most
+  409 files and 549 KB a deck; none in the sermon decks, whose 73 slides do not change). The drawing is the same: with
+  LibreOffice 24.2's pictures (`--engine native --lo-compat`), the 924 slides of shard 0, the 73 sermon slides
+  and the evidence decks of shard 2 score exactly as before, slide by slide.
+
+## M6 wave 2: tables (`tables.ts`, `tablestyles.ts`, `metrics.ts`)
+
+A table (`a:tbl` in a `p:graphicFrame`, design/27 §15 M6, §11 "Mapping") becomes one editable rich
+`TextObject` per cell (role `cell`) over locked grid shapes (role `grid`: the table's background, the cell
+fills, the lines), all sharing the table's `origin.group` (the top-level group's when the table is nested).
+Fills are solid (a gradient's first stop) and lines solid (dashes noted). Since fidelity round 2 the fills
+and lines are one geometry object per fill and per line look (below); the background is one rect. IR:
+`TableElement` (`ir.ts`); the walk reads it through `readTable`, `emit.ts` writes it through `emitTable`.
+- **Residual.** A table with vertical cell text stays a `ResidualElement` ('table'): LibreOffice draws it
+  into the art; one of more than `MAX_TABLE_GRID` (4,096) grid cells is not read at all. No count of cells
+  decides otherwise but the slide's object budget: a table of more drawn cells (a merge counts once, the
+  cells it covers not at all; R1) than a slide may have objects (`MAX_TABLE_CELLS` = `MAX_SLIDE_OBJECTS`,
+  150: each cell is an object, so it could never be drawn natively) stays residual unmeasured, reason
+  `budget:table`; a native table that would take its slide past the 150 objects of design/27 §5 goes to the
+  art too (`classify.ts` `fitTables`, the table with the most objects first, reason `budget:table`), so the
+  slide becomes hybrid, not picture; the art's text then holds the table's cells (`hybrid.ts`). A table
+  within the objects whose cells' text formatting takes the slide past its 64 KB (`emit.ts`
+  `MAX_SLIDE_BYTES`) makes the slide picture class, as any text does (round 2, below).
+- **Grid and merges.** Column widths from `a:tblGrid`, one `a:tc` per grid column; `gridSpan`/`rowSpan`
+  merge (cut at the grid), the cells they cover (`hMerge`, `vMerge`) are not drawn; a short row's missing
+  cells are empty cells.
+- **Styles.** `a:tableStyleId` names a style of `ppt/tableStyles.xml` (indexed once per deck), else one of
+  PowerPoint's 74 built-in styles (`tablestyles.ts`, a port of LibreOffice's
+  `oox/source/drawingml/table/predefined-table-styles.cxx` under the MPL 2.0, kept in its own file with its
+  header; it returns the `a:tblStyle` element PowerPoint would have written, so both are read by the same
+  code). Two changes from LibreOffice's table, where it differs from PowerPoint's own definitions: every line
+  is 1 pt (LibreOffice leaves most widths at 0, which draws nothing) and the first/last row and column are
+  bold (LibreOffice: Light Style 1 only). Parts apply in `CT_TableStyle` order, later ones overriding: whole
+  table, row bands (`bandRow`, from the first body row), column bands, last column, first column, last
+  row, first row, corner cells. Fills (`a:fill`, `a:fillRef`), the text style (`a:tcTxStyle`: `b`, `i`, a
+  colour, `a:font`/`a:fontRef` typefaces; in the cell text's chain after the cell's own list style, before
+  `defaultTextStyle`: `readTextBody`'s new `styled` argument), and lines by region (a part's
+  `left`/`right`/`top`/`bottom` are its region's outline, `insideH`/`insideV` the edges inside it). The table's
+  own fill (`a:tblPr`), else the style's `a:tblBg`, is drawn behind the cells.
+- **Lines.** A cell's `a:lnL`/`a:lnR`/`a:lnT`/`a:lnB` override the style's line property by property (as
+  LibreOffice merges them); where two cells give a shared edge different lines the wider wins, the upper or
+  left one on a tie, a line beats none (LibreOffice's `TableLayouter`). No line inside a merge. Consecutive
+  pieces of one look are one run, stretched over the lines they meet so corners close. Diagonal lines are
+  not drawn (noted, the table approx, reason `tableDiagonal`).
+- **Cells.** Margins `marL`/`marR` (91,440) and `marT`/`marB` (45,720 EMU) become the text's `insets`,
+  `anchor` its `valign`; the text wraps and shrinks to fit (`autofit: 'shrink'`, no stored scale) when the
+  drawing finds it overflows. An empty cell is an empty text object (to type into) in its end mark's style.
+- **Rows grow** to their text: a row is as tall as its stored `h` or its tallest cell's text plus margins,
+  whichever is more (a merge's extra height goes to its last row; an empty cell is one line of its end
+  mark). The text is measured in the office line model with the advances and pair kerning of the faces the
+  fonts draw it with (`ParseOptions.fontFace`: the run's family, its metric substitute, its script's
+  fallback, ordo's default face; `metrics.ts` reads `cmap`, `hmtx`, `hhea`, `head`, `OS/2` and `GPOS` or
+  the legacy `kern` table from a TrueType/OpenType file or a collection's face, bounded), breaking as the
+  renderer breaks: greedily at spaces and around East Asian characters, a word kerned between the
+  characters of one run as the renderer measures a piece, cut only when it is still wider than the line
+  kerned; a family with no face is measured with conservative estimated widths (noted). A cell's lines are spaced by its face's line height (`FaceMetrics.lineHeight`, `hhea`
+  ascender less descender: Carlito 1.22, Liberation Sans 1.12 of the size), a proportional spacing scaled
+  by it over the office model's 1.2: measured with a probe deck, LibreOffice 24.2 sets a cell's lines of
+  Liberation Sans 1.115 apart and Carlito's 1.215-1.225 (6 to 20 pt), and PowerPoint's new rows of 18 pt
+  Calibri are 29.2 pt (22 pt and the margins).
+- **Callers.** The hub's `pptx-scene` task gets the library's face files (`apps/hub/src/pptx/faces.ts`,
+  WOFF and WOFF2 through `fonts/sfnt.ts` `metricTables`, which leaves out an `OS/2`, `GPOS` or `kern` past
+  its 4 MB table limit), read only when a table asks for a family; the
+  fidelity harness gives fontconfig's file of each family (`tools/pptx-fidelity/src/faces.ts`), the face its
+  page draws with.
+
+Measured (`--engine native --lo-compat`, the validation suite's 30 worship decks with tables, LibreOffice
+24.2 pictures; deck means with LibreOffice's policies / ordo's): tables 0.605 / 0.602 against 0.535 / 0.533
+with tables residual (pptx-preview 0.51), tableMerge 0.431 / 0.431 against 0.351 (pptx-preview 0.36); with
+LibreOffice's pixels pasted into each hybrid slide's art box (the harness draws no art) 0.723 and 0.638.
+Most of the remaining gap is dense charts of 6-9 pt text, where a line wrapped one character apart or rows
+1-2 % off move every row below: design/27 §15 M6 "As built".
+
+Tests: `tables.test.ts` (grid and objects, groups, merges, the deck's and built-in styles, flags,
+backgrounds, line precedence and merging, diagonals, row growth with a fixed-advance face, line heights,
+paragraph spacing, estimated widths, the substitute chain, the residual and budget rules, the 74 built-in
+styles), `metrics.test.ts` (crafted fonts: format 4 and 12 cmaps, collections, truncated and hostile files),
+`apps/hub/test/pptx-faces.test.ts`.
+
+### Fidelity round 1: rows as LibreOffice sizes them (`tables.ts` `LoLines`, `metrics.ts` kerning)
+
+The converter's rows disagreed with both the drawing and LibreOffice's, and on dense 6-9 pt charts each
+error moved every row below it (cells are mostly centred). Three changes:
+- **Kerning in the measure.** `FaceMetrics.kern(left, right)`: `GPOS` PairPos formats 1 and 2 of the
+  'kern' feature of the 'latn' (else 'DFLT') default language system, Extension lookups unwrapped, lookups
+  in index order, a subtable that does not apply passing to the next (HarfBuzz's rules), else, in a font
+  without `GPOS`, the legacy table's horizontal format 0 pairs. Checked against Chromium's `measureText`
+  on Carlito, Liberation Sans and DejaVu Sans words: equal to 0.01 px at 100 px, but for ligatures (`ff`),
+  which the measure does not model and which only narrow. `Measure` kerns within one run between break
+  opportunities, as the renderer measures a piece, so an 18 pt bold word of 124.29 pt of advances (123.88
+  kerned) in a 124.11 pt column stays on its line in the measure too.
+- **LibreOffice's rows** (`TableElement.lo`, for the harness's `--lo-compat` only, compat rule
+  `cellRows`; the hub keeps ordo's rows). LibreOffice 24.2 sizes a row (`Cell::getMinimumHeight`) by its
+  cells' text height in 1/100 mm, plus 1/100 mm, plus the margins, with the draw outliner's line spacing,
+  and measured with the table probe deck (`tools/pptx-fidelity/src/table-probe.ts`, `LO_PROBE_ROWS`) that
+  spacing is one of two (`LoLines`): 'font', the face's ascent and descent at the 600 dpi reference device
+  (the font's pixel height rounded, then ascent and descent rounded: Carlito 1.215-1.229 × the size), or
+  'independent', 1.2 × the font height truncated (`ImplCalculateFontIndependentLineSpacing`), for any face.
+  The second holds after a text shape that grew to its text (its own `a:spAutoFit`, with text) earlier on
+  the same slide: that shape leaves the shared outliner in font-independent mode (a group's child counts; a
+  title without its own `a:spAutoFit`, `a:normAutofit`, a shape after the table, a layout's shape, a
+  picture or an empty box do not; the next slide starts afresh). The probe's 324 rows, both modes, three
+  faces, 6-18 pt, spacers, space after, 107 % spacing and soft breaks, match within 0.16 pt (the PDF page
+  is the slide at 0.99897). LibreOffice draws the cells' text with the face's line heights all the same,
+  so text in an 'independent' row runs into the cell's margins (`spill`, written as smaller insets on the
+  anchor's side), and it sets each line's baseline at the face's ascent, where ordo's office model puts it
+  the size plus the extra spacing below the line's top (0.07 × the size lower for Carlito): `lift` moves
+  the text up by the mean difference of the two layouts' baselines from the anchor. And LibreOffice lays
+  text out at the font's whole-pixel size at its reference device (`loSizePt`: 14 pt is 117 px, 0.27 %
+  wider; 9.5 pt 79 px, 0.17 % narrower; measured on one line at 4.5-18 pt, within 0.15 % but 0.35 % at
+  5 pt), so under the policy the cells are measured and drawn at that size: a 14 pt header of 899.2 pt kerned
+  in a 916 pt cell wraps there as in LibreOffice.
+- **Drawn cells.** `MAX_TABLE_CELLS` counts the cells drawn, after merges (the 666 chart: 90 grid cells,
+  24 drawn); `MAX_TABLE_GRID` bounds the grid read.
+
+Measured (`--engine native --lo-compat`, the 28 decks of the validation suite's 30 table decks without
+embedded fonts, LibreOffice 24.2 pictures; LibreOffice's policies / ordo's): tables 0.591 → 0.738 / 0.588
+→ 0.596, tableMerge (14) 0.432 → 0.627 / 0.432 → 0.449. Single-slide charts: depression 0.228 → 0.859,
+jesus-and-stephen 0.149 → 0.894, what-does-a-seal 0.377 → 0.839 (ordo's 0.624), ten-commandments 0.434 →
+0.800, 2-corinthians 0.683 → 0.811, 666 0.259 → 0.476 (now native); no deck falls. The pixel-size rule
+costs one deck what the rows gave it (colossians 0.409 → 0.490 without it, 0.434 with it: 5 pt cells where
+LibreOffice is 0.35 % narrower than the rule says, so one line wraps that LibreOffice keeps). Worship shard
+0 (924 slides): 0.843 → 0.863 / 0.840 → 0.840, 12 table slides up, none down; the sermon decks do not
+change (0.955 / 0.953). Still residual: the
+charts of 79 and 90 drawn cells (with a cap of 200 they draw natively at 0.46 and 0.82, but pass the 64 KB
+of text formatting and become picture class, so the cap stays until `fitTables` budgets text too; round 2
+lifts it, below).
+
+Tests: `metrics.test.ts` (crafted `GPOS` format 1, format 2 and Extension kerning, scripts and features,
+the legacy table, vertical metrics, every byte of a `GPOS` corrupted, truncations), `tables.test.ts`
+(kerned words kept and cut, no kerning across runs, empty cells, LibreOffice's line heights and ascents,
+both modes and what triggers them, proportional and exact spacing, the policy's boxes, margins and lift,
+drawn cells, the grid bound), `tools/pptx-fidelity/src/table-probe.test.ts` (the probe deck, and the
+converter's LibreOffice rows against `LO_PROBE_ROWS` when this machine has Carlito and Liberation Sans),
+`apps/hub/test/pptx-faces.test.ts` (kerning and vertical metrics through TTF and WOFF, an oversized `GPOS`
+left out).
+
+### Fidelity round 2: LibreOffice's table layouter (`tables.ts` `loColumns`, `loGrowRows`)
+
+For the harness's LibreOffice policy only (compat rule `cellRows`; the hub keeps the grid's widths and
+ordo's rows), the grid is laid out as LibreOffice 24.2's svx `TableLayouter` lays out an imported table
+(`LayoutTableWidth`, `LayoutTableHeight`, not fitted to the frame). Two of its rules were missing:
+- **Column minimums.** Every column is at least as wide as the widest minimum of its single-column cells,
+  `Cell::getMinimumWidth`: the left and right text distances and 1 mm, in 1/100 mm. The table grows to the
+  right (`TableElement.lo.cols`, `lo.xf` at their width), and LibreOffice's rows are measured in these
+  columns.
+- **Merges from the first row or column.** A merge's minimum width or height is checked only at its last
+  column or row, less the ones it spans before; the subtraction loop, `for (nM = n - span + 1; nM > 0 &&
+  nM < n; ++nM)`, ends at once when the merge starts at index 0, so a cell merged from the first row puts
+  its whole text height on its last row, and one merged from the first column its whole minimum width on its
+  last column. ordo's own rows give a merge only its shortfall over all the rows it spans.
+
+The probe deck's two layouter slides (`table-probe.ts` `LAYOUT_SLIDES`, `LO_PROBE_LAYOUT`) pin both against
+LibreOffice 24.2.7: three lines merged over two one-line rows make row 1 the whole merge from row 0 (2,055/100
+mm) and row 2 the merge less row 1 from row 1 (1,200); a 3 mm column under a merge of 1,116/100 mm minimum
+from column 0 becomes 1,116, and from column 1, over two 3 mm columns, the first takes its own cell's 608 and
+the second 1,116 less 608. Measured (`--engine native --lo-compat`, the 30 table decks): tables 0.749 →
+0.765, tableMerge (14) 0.627 → 0.661 (ordo's policies unchanged, 0.617 and 0.449); the 666 chart 0.476 →
+0.756 (a 16.8 px column under a merge from column 0: every edge after it moves 10.4 px right, to within a
+pixel of LibreOffice's), ground-await 0.593 → 0.797 (a merge from row 0 over two rows: every row line
+after it 21.5 px lower, within a pixel); no other deck changes. The sermon decks (0.955) and worship shard 0
+(924 slides, 0.865) do not change, nor do the validation suite's tables-charts-smartart decks (194 slides,
+0.934). Of the table decks, both worship shards, the suite and the sermon decks, the 666 chart is the only
+one with a column under LibreOffice's minimum.
+
+Tests: `tables.test.ts` (a merge from row 0 against one from row 1, a 3 mm column under a merge from
+column 0 and from column 1, the boxes under loCompat, ordo's own grid and rows unchanged),
+`tools/pptx-fidelity/src/table-probe.test.ts` (the layouter slides' columns against `LO_PROBE_LAYOUT`
+always, their rows when this machine has Carlito and Liberation Sans; `pdfColWidths`).
+
+### Fidelity round 2: no cell cap below the object budget (`tables.ts` `MAX_TABLE_CELLS`)
+
+The fixed cap of 60 drawn cells sent dense tables to the art before `fitTables` had weighed them against
+the slide's 150 objects: a Bible chart of 90 drawn cells is 146 objects drawn natively, within the budget,
+yet the slide was hybrid ('art:table'), the harness left the art box black and the hub showed only
+LibreOffice's picture of the table. `MAX_TABLE_CELLS` is now `MAX_SLIDE_OBJECTS`: a table of more drawn
+cells could never be native (each cell is an object), so it stays residual unmeasured, reason
+`budget:table` (`classify.ts` reports a residual element's budget reason, not its kind); below it the
+object budget (`fitTables`) and the slide's 64 KB of text formatting decide, as for any other content.
+`MAX_TABLE_GRID` still bounds the grid read, and the measure, linear in the cells, is bounded by the cap
+(converting the 90-cell chart's slide takes 35 ms, from 10 ms).
+
+Measured (`--engine native --lo-compat`, LibreOffice 24.2 pictures, against the round 1 merge): the
+validation suite's 30 table decks (28 without embedded fonts, the feature tables) 0.738 → 0.770,
+tableMerge (14) 0.627 → 0.686, ordo's policies 0.596 → 0.600; 7 slides up and none down. The
+flesh-and-spirit chart goes 0.138 → 0.817 and matthew-16v18 0.348 → 0.462, both picture class now where
+they were hybrid: their text formatting passes 64 KB (the slides are 102 and 107 KB), so the hub shows
+them as LibreOffice pictures with its budget warning, while the harness draws them. The four Peace verses
+table slides go 0.725 → 0.930 and 0.720 → 0.805 and Coptic Plural's 0.794 → 0.953, native and editable
+(slides of 53-56 KB). The two Boletim slides of 87 and 96 cells stay in the art, now as 'budget:table'
+over the object budget (the art's text then holds their cells). The suite's tables-charts-smartart decks
+0.934 → 0.937 (one table slide 0.739 → 0.963, hybrid → native); worship shard 0 (924 slides) 0.865 →
+0.873, its three slides of these tables up and none down; the sermon decks do not change (0.955).
+
+Tests: `tables.test.ts` (a 90-cell table native within the budget and in the art past it, a table of more
+cells than the budget left unmeasured, merges counted once against the cap).
+
+### Fidelity round 2: one grid object per fill and per line look (`tables.ts` `gridObjects`)
+
+Each line run and each fill run was a locked object of its own, 25 to 84 per chart table, and
+`TableElement.objects` counted them all, so a slide of two or three chart tables passed the 150 objects of
+design/27 §5 and `fitTables` sent its largest table to the art (`budget:table`), though its grid drew in
+2-8 distinct looks. Now (`gridObjects`, shared by `readTable`'s count and `emitTable`):
+- **Lines.** The runs of one look (width, fill, dash) are one locked `ShapeObject` whose `geom.paths` hold
+  each run as an open `M x0 y0 L x1 y1` sub-path in the table box's own space (unturned, from its top
+  left; three decimals), ends stretched by half the widest line they meet as before, `fill: 'none'`,
+  stroked with the look's width and colour (flat caps, so each sub-path is the line it was). When a table's
+  lines have more than one look they are also split by direction, horizontal ones first, so every vertical
+  line is still drawn over the horizontal ones it crosses, as when they were drawn in that order one by one.
+  Two collinear runs of different looks meeting over a crossing line overlap where both are stretched;
+  there the look drawn later now covers the other (a few pixels; before, the lower or right run did).
+- **Fills.** The fill runs of one fill (`fillRuns`: neighbours of a row joined) are one object of rect
+  sub-paths (`stroke: false`), in the box of their bounds turned as the table is. Runs of one fill never
+  overlap in a well-formed table; where spans of a malformed one do, the overlapping run goes in a path of
+  its own, so the even-odd fill never cuts one out of the other. The table background stays one rect.
+- **Bounds.** A stored path holds at most `GRID_LINES_PER_PATH` lines or `GRID_RECTS_PER_PATH` rects (the
+  4,096 points and 40,000 characters of `ShapeGeom` at the widest coordinate written, ±999,999.999), the
+  pieces of one group chained with `cont`; past 8 paths a group goes on in another object.
+- **Cost.** `TableElement.objects` is the background, the fill objects, the line objects and the cells.
+  The slide JSON shrinks too (the 2 Corinthians chart's slide: 117 objects and 60 KB → 54 and 45 KB).
+- **Older builds** strip `geom` and draw the legacy shape: a line look as the table's outline rect in that
+  line (no fill), a fill as the rect of its runs' bounds (the larger first, so headers and first columns
+  stay over the bands).
+- **Drawing.** Drawn one sub-path at a time a look's object is the legacy line objects pixel for pixel
+  (`tables.browser.test.ts`, headless Chromium, flat and turned tables at 0.5, 1 and 2 × 1920). Stroked
+  together as one path, Skia rasterises a path rather than each lone segment's rect: edge pixels move by at
+  most 12 of 255 and the ink stays within 1 %; where runs of one object cross (a one-look table), an edge
+  pixel both covered is no longer composited twice (up to a quarter less ink there).
+
+Measured (`--engine native --lo-compat` against round 1's merge, LibreOffice 24.2 pictures; the 30 table
+decks): tables 0.749 → 0.766, tableMerge (14) 0.627 → 0.643; three slides change by more than 0.002, all
+up, none down: moral-character 0.590 → 0.872 (two 60-cell tables: 173 objects drawn natively before, 125
+now), colossians 0.434 → 0.601 (three tables, 163 → 111), 1000-years 0.566 → 0.631 (four tables, 191 →
+115); every other slide within 0.0003. Worship shard 0 (924 slides, the same three among them): 0.9062 →
+0.9068, deck mean 0.865 → 0.871, none down. The sermon decks (0.955) and the suite's tables-charts-smartart
+decks (0.936) do not change; one suite slide turns hybrid → native.
+Moral-character and 1000-years are now picture class in the hub, as colossians already was: with every
+table native their cells' text formatting passes 64 KB (the cap waits on `fitTables` budgeting text). The
+two Boletim tables (87 and 96 cells) stay residual for `MAX_TABLE_CELLS`; with the cap lifted they would
+cost 146 and 153 objects (63 and 69 grid objects before).
+
+Tests: `tables.test.ts` (one object per look, its sub-paths read back by the renderer, the legacy outline,
+looks split by direction, fills by fill and their legacy boxes, a turned table, two checkered chart
+tables native, `gridObjects` bounds and chains, overlapping runs), `tables.browser.test.ts` (pixels).
+
+### Fidelity round 2, as merged (the three table branches and geometry files together)
+
+- **Cell cap and grid objects.** With both, a table costs the slide its cells, its background and its few
+  grid objects, and no count of cells applies below the slide's 150 objects. Tables that needed both are
+  native now: Boletim's 87-cell reading plan is 146 objects (0.741 → 0.866) and Matthew 16v18's tables fit
+  the budget together (0.348 → 0.737; 0.462 with the cap alone). The 96-cell Boletim table, 153 objects,
+  stays in the art (`budget:table`). The cap's test of a table past the budget by its own objects gives
+  every cell a fill of its own, since a checkerboard of two fills is now 92 objects, not 180.
+- **Layouter and grid objects.** Under loCompat the grid's sub-paths are placed on LibreOffice's columns
+  (`TableElement.lo.cols`) like the cells; the 666 chart scores 0.756, as on the layouter's branch.
+- **Grid geometries and geometry files.** A table's fill or line geometry is an ordinary `ShapeGeom`, so
+  paths over `GEOM_FILE_CHARS` go to geometry files like a traced outline's (5 files, 2.3 KB, over worship
+  shards 0-2); with them the biblical-mary chart's slide is 65,017 bytes as stored and native in the hub,
+  where it was a compact picture.
+- **The 64 KB of text formatting.** Native tables bring their cells' text formatting with them, and
+  `fitTables` weighs objects only: five charts of the 30 table decks and one suite table that were
+  hybrid, their table in the art, are picture class now, and the hub shows LibreOffice's picture of them
+  (in the census, in the hub's own terms, four slides go hybrid → picture; the others were compact
+  pictures there already). The harness draws them natively. Sending the largest table to the art when its
+  text would pass 64 KB is left to `fitTables`.
+
+## M6 wave 2, item D: SmartArt and baked pictures (`smartart.ts`, `bake.ts`)
+
+design/27 §4 "Pictures", §5 "Element support", §15 M6 ("SmartArt from its drawing cache as a locked group",
+"Recolour and tile bakes"):
+- **SmartArt** (`smartart.ts`, called by the walk for a graphic frame of the diagram URI): the frame's
+  `dgm:relIds r:dm` names the data model, whose `dgm:extLst` holds `dsp:dataModelExt relId`, a relationship of
+  the part holding the frame to PowerPoint's drawing of it (`diagramDrawing`, `ppt/diagrams/drawingN.xml`).
+  Without one the frame stays residual ('smartart'). The drawing's `dsp:` shape elements are PresentationML's
+  vocabulary: a copy of its tree with them named `p:` (DrawingML children shared, made once per drawing)
+  goes through `walkTree`, so geometry, fills, lines, effects, style references and text are read as any
+  shape's, with the drawing part's relationships for picture fills. The coordinates are the frame's at scale
+  1 (a `dsp:grpSpPr` child space maps them like a group's; its own offset is not used: LibreOffice places
+  such a drawing at that offset on the slide, PowerPoint in its frame). A node's text goes in PowerPoint's own text
+  rectangle (`dsp:txXfrm`): the shape is emitted without it and the text as a frameless rect there, turned
+  by the shape's rotation plus the rectangle's; a shape showing nothing keeps casting its shadow on it. The
+  colour of every `a:fontRef` is the colours part's `node0` text colour (the last of its `dgm:txFillClrLst`),
+  as LibreOffice applies it (`PPTShapeGroupContext::applyFontRefColor`): drawing caches often name the node's
+  fill colour there, white text on white nodes. Each element gets `ElementBase.diagram` (a number per frame),
+  the frame's `cNvPr id` and the frame's flattened group, and keeps its renamed node (`ShapeElement.node`),
+  so classification rates it by its own XML, never by a slide shape sharing its id (drawing shapes all have
+  id 0). Bounded as any shape tree (5,000 shapes a slide, groups 32 deep), and per package: a drawing can be
+  named from every slide, so past `DIAGRAM_NODE_BUDGET` (2,000,000) elements of drawings read in one batch,
+  further SmartArt stays residual (noted).
+- **Emission** (`lockDiagram`): every object of a drawing gets `origin { src: 'pptx', shapeId: <frame>, role:
+  'diagram', group }` and all but text objects `locked` (move, resize, delete and z-order only); the text
+  stays editable, and is never the lyric box.
+- **Classification** (`classify.ts` `wholeDiagrams`, after `refineSupport`): a drawing is native or in the
+  art as a whole. One with a residual element (a real 3D bevel, vertical text …), or one the art range takes
+  an element of, goes to the art entirely ('art:smartart'); then, while the slide passes 150 objects, the
+  native drawing with the most objects goes too ('art:budget:smartart'), so the slide is hybrid, not
+  picture. The render copy names a drawing once, by its frame (`hybrid.ts` `elementRefs`), so LibreOffice
+  prints the whole frame, and keeps the drawing's relationship the data model names (`rendercopy.ts`,
+  `modelDrawingRelId`), so LibreOffice prints PowerPoint's drawing rather than laying the diagram out itself. The census tier is unchanged (SmartArt is still a fallback feature: the tier
+  measures feature use).
+- **Baked pictures** (`bake.ts`): a blip's duotone, clrChange, grayscl, biLevel and lum (PowerPoint's
+  recolour presets are these) are read with their colours resolved (`PictureFill.recolor`; `picture.ts`) in
+  the fill's own colour context (a theme fill's `phClr` is its reference's colour: Office 2007's paper
+  texture is a tile duotoned in `bg1`), and such a picture is native (any other blip effect, a blur say, keeps it approx). A tiled picture fill
+  (`a:tile`) of a shape or a background becomes one picture of the whole box: the tile grid as shares of the
+  box (`tileBakeOf`: the picture's size at its header's resolution, `PictureHeader.dpi` from PNG `pHYs` or
+  JPEG JFIF, else 96 dpi, times `sx`/`sy`, its corner by `algn` then `tx`/`ty`, every other tile mirrored by
+  `flip`, `a:srcRect` the part one tile shows); a tile of unknown size stays stretched. `alphaModFix` stays
+  the image's `opacity`. Each distinct part and recipe gets one placeholder `pptxmedia:bake<n>`
+  (`BAKE_PREFIX`, numbered across a `convertDeck` call, `EmitOptions.bakeId`), listed in `EmitResult.media`
+  with its `bake`; an importer that cannot bake one maps it to the source part's picture. Metafiles are not
+  baked (LibreOffice converts them). An older build draws a baked picture as the ordinary picture it is.
+- **Pixels** (`applyBake`, the hub's `pptx-bake` pool task and the harness): colour effects in document
+  order with LibreOffice's arithmetic (luminance (76·R + 151·G + 29·B) / 256; biLevel's 50 % is 128;
+  duotone linear from the first colour to the second; clrChange within a per-channel tolerance by the
+  source's format, JPEG 15, PNG and TIFF 1, BMP 0, else 9, giving `clrTo`'s colour and alpha; lum as
+  PowerPoint's brightness and contrast, half the brightness before the contrast and half after), then the
+  tiles, nearest-sampled from a source decoded at the tile's size (`tileSourceSize`). Bounded: 8,192 px a
+  side and 16 MP for the source and the output (`BAKE_LIMITS`).
+- Tests: `smartart.test.ts` (crafted decks of `smartart.test-util.ts`: placement, text rectangles and their
+  rotation, the node text colour, picture fills through the drawing part, residual without a drawing, the
+  whole-drawing rule for a 3D shape and for an overlap inside the art range, the object budget, ids shared
+  with slide shapes, a layout's SmartArt, hostile drawings: 6,000 shapes, 40 nested groups, one large
+  drawing named from 40 slides, under 5 s), `bake.test.ts` (each effect's pixels, tile geometry, flips and
+  offsets, limits, emitted placeholders for pictures, tiled shape fills and tiled backgrounds, numbering
+  across slides), `picture.test.ts` (recolour reading, header resolutions).
+
+## M6: the object budget (`classify.ts` `shapeRuns`, `fitShapes`; `emit.ts`; `geom.ts` `shapePiece`)
+
+design/27 §5 "picture", §15 M6 ("no slide goes above 150 objects without becoming hybrid"). Traced
+decorations and icon grids are hundreds of z-adjacent, text-less custom-geometry pieces of a few fills, and
+the converter emits one object per shape, so such slides passed `MAX_SLIDE_OBJECTS` and were picture class:
+only tables (`budget:table`) and SmartArt drawings (`budget:smartart`) were ever split off to the art.
+- **Shapes of one look are one object** (`shapeRuns`, only on a slide that passes the budget with every
+  shape apart; `slideCost(…, frame)` counts it so, and tables and drawings go to the art only when that is
+  not enough). A run is consecutive shown shapes without text, of the slide's verdict native, in one
+  top-level group or among one layout's or master's decorations (the slide's own ungrouped shapes stay
+  apart), with the same opaque solid fill (or none) and the same opaque solid line (or none, not both),
+  no arrowheads, no shadow, glow or soft edge, a known preset or custom geometry within the bounds, inside
+  the render clamp's bounds, none in the art; at most 8 paths together (`GEOM_LIMITS.paths`), each path
+  string within 40,000 characters once written in the run's box (`mergedChars`, a bound from the number
+  of coordinates and the farthest point). The object (`emit.ts` `emitMerged`, at the run's first element,
+  `ShapeElement.merge`) is a `ShapeObject` whose `geom.paths` are every piece's paths in z-order, each
+  piece's rotation and flips in its points (`geom.ts` `shapePiece`, `mergedPaths`: a custom geometry's
+  stored paths, else its preset built at its box), in the union of their boxes, unrotated. `drawGeom` fills
+  and strokes path after path as separate shapes are drawn, and each path keeps its fill mode, so the
+  object looks as the shapes do (in the harness, merged and apart differ in a few dozen anti-aliased edge
+  pixels of a slide). The one order it changes is an open outline, which a geometry strokes after all its
+  paths: a shape with a fill and a line merges only when every stroked sub-path is closed by Z. A traced
+  outline stored as a chain (`cont`; see the long paths of the geometry section) stays a chain in the object,
+  its later pieces marked `cont`, so the renderer joins them into the one path they were cut from; its open
+  ends are worked out over the chain, not where it was cut. Its legacy shape is a `line` with the fill, as
+  a thin custom geometry's: an older build draws no filled union rectangle, only the line's midline when
+  the shapes have an outline.
+- **Then elements without text go to the art** (`fitShapes`, reason `budget:shapes`, `art:budget:shapes`):
+  shown pictures (not play videos) and shapes without text, not in a SmartArt drawing. First the fewest of
+  the layout's and master's decorations, bottom first (a binary search: the art stays at the bottom and the
+  slide's text native above it); then the costliest z-contiguous run of such elements in one top-level
+  group, and once no group has one, of ungrouped elements (a run ends at any other shown element, one in
+  the art, and where the source or group changes), costed with its shapes merged, several at a time while
+  the estimate stays over the budget. A slide still over the budget with every such element in the art
+  (checked first) keeps no mark and is a picture. The SmartArt rule runs again after it, so a drawing the
+  art now overlaps goes whole. Such an element emits nothing in version 1, as a residual table does, so
+  version 1 stays within the budget (and the render clamp's 200 objects) with the slide's text drawn; the
+  render copy prints it into the art.
+- Measured on the 44 shown worship slides of shards 0-2 that were picture class for `budget:objects` (the
+  census, 12 decks; 150-784 objects): 10 native (their runs merged), 6 hybrid for residuals they already
+  had (sheared group children, custom geometry past the bounds, a table) with their runs merged, 27 hybrid
+  with `art:budget:shapes`, and one picture for its 64 KB of text formatting; every native and hybrid one
+  within 150 objects in version 2 (at most 150), and its version 1 too unless residual shapes it already
+  had are drawn there. Against LibreOffice 24.2 (`--engine native --lo-compat`, the native column): the 10
+  native slides 0.964 → 0.981 (before, the renderer's 200-object clamp cut their top objects in the
+  harness); the 33 hybrid ones 0.833 → 0.913 without the art, 0.989 with LibreOffice's pixels pasted into
+  the art box (an estimate of version 2). The other 161 slides of those decks are unchanged, and so is every
+  other slide of the shards and the sermon decks (the emitted objects' digests, ids and media numbers
+  aside). The sermon decks stay 0.955; shard 0 goes 0.843 → 0.842, all of it the one picture slide, whose
+  version 1 now leaves out what went to the art (the hub draws it with LibreOffice). Conversion time over
+  the shards is unchanged (29.4 s).
+- Tests: `classify.test.ts` (runs: what ends one, the path and string bounds; the decorations first, the
+  costliest group first, nothing marked on a slide its text alone keeps over the budget), `emit.test.ts`
+  (merged and apart put every point in the same place, the outline and dash kept, version 1 without the
+  art's elements), `geom.test.ts` (the string bound against what is written, presets and open outlines).
+
+## M6 wave 2 repair (review findings)
+
+- **Drawing cost of custom geometry** (`geom.ts` `customPaths`, `walk.ts` `slideCustom`; renderer
+  `geom/cost.ts`). A custGeom's paths are rated by the renderer's own estimate (`unitCost`: the edges' length
+  along their longer axis, times 1 + the most edges active at once / 64), each stored path or `cont` chain a
+  unit, in logical px at the shape's box. Past `GEOM_COST.geometry` (1.5M, 1.3M since the finish; the corpus's costliest, a traced
+  8,300-point silhouette, is 0.64M) the geometry is residual with `custGeom:complex` and a note, LibreOffice
+  drawing it into the art; a slide keeps its custom geometries native while their estimates, weighted by the
+  passes that drew them, stay within 98 % of `GEOM_COST.slide`, the rest going to the art the same way (since
+  the finish below, each shape is rated as it is drawn instead). A zigzag of 4,000 points
+  across its box (1.5 s at 1920 and 4.6 s at 3840 in Chromium before) is now art. The renderer holds every
+  drawn slide to the same budgets (`geombudget.ts`), so a saved or edited slide cannot pass them either.
+- **Effect budget** (`emit.ts` `fitEffects`): shapes keep their shadow, glow and soft edge, bottom first,
+  while their layers' area (`effectArea`, in slide areas; a soft edge counts twice) stays within 98 % of
+  `EFFECT_COST.slide` (10; the corpus's most effected slides reach 7.7); later shapes lose them, noted.
+- **`useBgFill`** (`walk.ts` `readShape`): the slide's background only where no `p:spPr` along the chain sets
+  a fill (`a:noFill` or none; the style's `a:fillRef` does not count), as LibreOffice reads it
+  (`pptshapegroupcontext.cxx` defaults the fill to none before `spPr` is read). A Designer layout's full-slide
+  "decorative" rect with `useBgFill="1"` and a tx1 fill is the dark panel its light text sits on (suite slide
+  0.324 → 0.934).
+- **Joins and caps** (`emit.ts` `joinsOf`): `lineJoin` round or bevel and `lineCap` round or square on every
+  stroked shape, connector, picture outline and merged run, from `Line.join` and `Line.cap`; the renderer
+  draws a round or square cap within a preset dash's length (LibreOffice takes 0.99 of a line width off each
+  dash and gives it to the gaps), so a round-capped sysDot is a row of round dots.
+- **Fixed gradients on mirrored shapes** (`geom.ts` `gradientOf`): a `rotWithShape="0"` gradient lands where
+  LibreOffice draws it, mirrored by the element's own flips (flipH 180 − θ, flipV −θ) and not turned
+  (`ElementBase.ownFlipH`, `ownFlipV`); the angle stored is expressed in the box as the drawer mirrors and
+  turns it.
+- **Picture fills and `rotWithShape`** (a choice, not a change): a picture fill is placed as LibreOffice
+  24.2 draws it, never mirrored and turned only by quarter turns, whatever `a:blipFill rotWithShape` says;
+  OOXML's `rotWithShape="1"` (PowerPoint's 'Rotate with shape') would turn and mirror it with the shape. No
+  PowerPoint render was at hand to check; the worship shards have 10 flipped picture-filled shapes in 4
+  decks and none turned past 45°.
+- **Right-to-left tables** (`tables.ts` `cellText`): `a:tblPr rtl="1"` makes the cells' paragraphs right to
+  left, one without an alignment of its own starting at the right, as LibreOffice and PowerPoint draw them.
+  The columns are not mirrored: PowerPoint mirrors their order, LibreOffice 24.2 (the fidelity reference)
+  does not.
+- **Backgrounds of slides of another aspect** (`emit.ts` `emitBackground`, `linearOverFrame`): extended to
+  the 16:9 frame, a linear gradient's stops move to where the slide's edges fall on the frame's gradient line
+  (its `scaled` angle taken at the slide's aspect), so inside the slide it is the slide's own gradient and
+  the frame carries its end colours on; a radial one is drawn over the slide itself (an ellipse of the slide's
+  aspect), on a frame rect of its outer stop's colour.
+- **Merged runs' legacy** (`emitMerged`, design/27 §3.2): a run with an outline keeps its stroke (the M6
+  drawing needs it), so an older build draws its legacy `line` along the union box's midline; a run without
+  one draws nothing there.
+
+
+## M6 wave 2 finish (re-review findings)
+
+- **Outlines in the drawing cost** (`walk.ts` `readShape`, `slideCustom`, `chargeDrawing`; `geom.ts`
+  `drawSpecOf`, `outlineFields`, `presetDrawn`; `emit.ts` `fitDrawing`; renderer `geom/cost.ts`,
+  `geom/outline.ts`, `geom/built.ts`). The estimate rated fills only, so a tiny custGeom with a 400 px line
+  (3.9 s at 3840 for two) or one of 12,000 short open sub-paths with arrowheads (2.6 s) was native. Each shape
+  is now rated as `emit.ts` writes it and the renderer draws it (`drawCost`): its fill, its outline as the
+  polygon Canvas fills (offset edges, every join, every open sub-path's caps, every dash, each arrowhead's
+  fill and area), its effects' passes, and `GEOM_COST.point` a stored point. Custom geometries, presets
+  (`geom:complex`), picture masks and the outlines along them (the mask filled, the outline stroked, the
+  points stored twice) are charged against 98 % of `GEOM_COST.slide` (1.3M) and the slide's 64k points,
+  the rest going to the art; points of a geometry sent to the art are no longer charged. `fitDrawing` runs
+  the renderer's own `slidePlan` on the emitted objects (merged runs and table grids included), so a slide the
+  converter keeps native is drawn natively by every drawer; what it still has to change is noted.
+- **Self-check** (renderer `geom/cost.ts`): the shared estimate also charges the area each outline covers
+  and each fill past a geometry's widest, the stroker's walk of every leg, and an open arrowhead's own
+  stroke, so the converter rates stacked full-box paths, wide straight polylines and open arrowheads as the
+  drawers spend on them.
+- **Line widths** (`geom.ts` `lineWidthPx`): one function for the emitted width and its estimate (at least
+  0.5 px; the renderer draws a dashed outline at least 0.5 px wide too).
+- Tests: `geom.test.ts` (wide outlines and arrowheads to the art, thin dashes on presets past the budget,
+  a masked picture with an outline charged as the renderer charges its two objects, within 5 %).
+
+## M6 wave 2 finish review (painted area, effect layers)
+
+- **The pixels a fill paints** (`geom.ts` `drawSpecOf`, `walk.ts` `readShape`, `backgroundCost`; renderer
+  `geom/cost.ts` `areaWeight`, `spanArea`). A fill was rated by its edges, so a full-slide translucent
+  gradient (about 11.7 ms at 4K) rated 65 µs and stacks of them were native (140: 1.3 s at 3840). Every
+  filled path is now charged the span of its points cut to the canvas (its box placed on the slide, `place`),
+  a logical px² `GEOM_COST.area` for a translucent colour, `opaqueArea` for an opaque one, `gradientArea` or
+  `opaqueGradientArea` for a gradient (about five times a colour). The slide's background (a full-slide rect
+  laid on white, opaque) is charged first; decorations cached for a layout keep their own share only.
+- **Shapes the drawing budget sends to the art emit nothing when they have no text** (`emit.ts`
+  `pastBudget`, as 'budget:shapes'): their legacy rect, which no budget refuses, cost what the budget held
+  back (138 translucent full-slide rects: 300 ms at 3840) and covered the box where the geometry did not. One
+  with text is emitted as its legacy shape under its text, and the walk charges that legacy shape.
+- **Effect layers sized by what is drawn** (`emit.ts` `fitEffects`, `effectAreaOf`; renderer `geom/bounds.ts`
+  `drawnBounds`, `geom/cost.ts` `effectArea`). The effect budget measured a shape's layers by its box, but
+  the drawers make them over what it draws: a custGeom's points past its box (kept, as PowerPoint and
+  LibreOffice draw them) and an outline's reach. Both now take the drawn bounds (the geometry's points grown
+  by the outline's sharpest miter, caps and arrowheads), placed on the slide and cut to the canvas and the
+  effect's reach as the drawer cuts them, so the converter, the renderer's budget and the drawers measure
+  the same area. Twenty 10 px custGeoms whose paths cover the slide, with shadows, were native with 0.009
+  slide areas (793 ms at 3840); each now weighs about 1.02.
+- **Corpus** (worship shards and sermons, 2,927 slides): two slides of one deck of full-slide traced
+  decorations go hybrid (their geometry plus their painted area pass the budget); no other class changes, no
+  effect is dropped, and the renderer changes nothing the converter emits. The costliest slide's estimate
+  is 1.06M.
+- Tests: `geom.test.ts` (twelve out-of-box shadowed custGeoms: the effect budget keeps nine, with a note;
+  thirty 10 px rects with 500 px outlines and shadows; the 140-gradient stack to the art with only what is
+  drawn emitted; six gradients, as many as fit after the background).
+
 ## Module map
 
 | File            | What                                                                                                              | Owner  |
@@ -102,10 +700,15 @@ Embedded video and sound play in place (design/27 §4 "Media", §8 "p:timing map
 | `richtext.ts`   | A text body as rich ordo text: runs, paragraph styles, office box fields (M2)                                     | C (M2) |
 | `fontmap.ts`    | Script class of each character (Latin, East Asian, complex), substitutes and fallback families (M2)               | C (M2) |
 | `classify.ts`   | Census tiers T1-T5, reasons, slide class                                                                          | F      |
+| `geom.ts`       | Presets, custom geometry, text rectangles and sites, gradients, dashes, arrowheads, connector glue (M6)           | M6b B  |
 | `notes.ts`      | `readNotes`: a slide's speaker notes (notesSlide body placeholders), bounded                                      | M3 B   |
 | `transition.ts` | `readTransition`, `readSlideTransition` (a slide's tail only), `showLoops` (`p:showPr loop`)                      | M3 B   |
 | `timing.ts`     | `readSlideTiming`: the `p:timing` mapping of clips, transition and animation sounds; `gainDbOf`                   | M3b A  |
 | `media.ts`      | `readMediaRef` (a poster's clip, trim, kind), `emitMedia` (play, slide sound, motion background), `EmittedClip`   | M3b A  |
+| `tables.ts`     | `readTable`, `emitTable`, `Measure`: tables (M6); `tablestyles.ts`: the built-in styles (LibreOffice's, MPL 2.0)  | M6b C  |
+| `metrics.ts`    | `sfntMetrics`, `metricsOfTables`, `FaceSource`: advances, pair kerning, line heights from font files, bounded     | M6b C  |
+| `smartart.ts`   | SmartArt from its drawing cache: `readSmartArt` (the drawing's shapes through the walk), `lockDiagram`            | M6b D  |
+| `bake.ts`       | Baked pictures: `PictureBake` recipes (`bakeOf`, `tileBakeOf`), `applyBake` (recolour and tile pixels)            | M6b D  |
 | `ir.ts`         | The scene IR (types only)                                                                                         | shared |
 | `context.ts`    | `SlideCtx`, `slideContext`                                                                                        | shared |
 | `log.ts`        | `clean`, `noteList`                                                                                               | shared |
@@ -134,7 +737,8 @@ colours as `Rgba` (channels 0-255, alpha 0-1, the shape of `@ordo/domain` `Rgba`
   packages/pptx-scene packages/pptx-render`, `npx biome check --write <changed paths>`.
 - A worktree without `pnpm install` needs the `@ordo/*` links (`packages/pptx-render/node_modules/@ordo/
   pptx-scene → ../../../pptx-scene`, `tools/pptx-fidelity/node_modules/@ordo/pptx-scene →
-  ../../../../packages/pptx-scene`, `packages/pptx-scene/node_modules/@ordo/domain → ../../../domain`).
+  ../../../../packages/pptx-scene`, `packages/pptx-scene/node_modules/@ordo/domain → ../../../domain`,
+  and since M6 `packages/pptx-scene/node_modules/@ordo/renderer → ../../../renderer`).
 
 ### A: reading (`xml.ts`, `opc.ts`, `markup.ts`, `deck.ts`, `frame.ts`)
 
@@ -276,9 +880,11 @@ Done (design/27 §4, §15 M1):
   anchorCtr, warp.
 - Walk: `showMasterSp` on the slide (both) and the layout (the master's); `mc:AlternateContent` through
   `chooseAlternate` (the branch `Package.xml` keeps: the first Choice of a14, p14 or p15, else Fallback); style references (fillRef, lnRef, effectRef with phClr);
-  `useBgFill` with a solid background; `a:grpFill`; groups by offset, scale, rotation and flips, a child's
+  `useBgFill` with a solid background (only where no `p:spPr` along the chain sets a fill of its own: an
+  explicit fill wins, M6 repair); `a:grpFill`; groups by offset, scale, rotation and flips, a child's
   own box scaled along the group's axes (`boxAffine`, no shear; a child the composed affine would shear is
-  marked residual and still drawn); graphic frames residual; ≤ 32 group levels, ≤ 5,000 shapes.
+  marked residual and still drawn; since M6 wave 2 it is approx, placed as LibreOffice places it, below);
+  graphic frames residual; ≤ 32 group levels, ≤ 5,000 shapes.
 - Pictures: blip part through the holding part's relationships (theme parts too), srcRect, fillRect,
   tile, alphaModFix, recolour effects (an empty `a:lum` is not one), header-sniffed size, metafiles
   residual elements rated approx (not drawn before M3 converts them; design/27 §5), TIFF/WDP noted, linked pictures logged with their host only, video/audio posters recorded.
@@ -298,7 +904,8 @@ Done (design/27 §4, §15 M1):
   schema; `EmitOptions.crop: false` writes the legacy uncropped picture and notes it.
 
 Left for later milestones: shape text rectangles of other presets and custom paths (M6), picture
-masks/flips/adjust (M3), arrowheads and dashes (M6), tiles pre-tiled (M3), media (M5).
+masks/flips/adjust (M3), arrowheads and dashes (M6), tiles pre-tiled (M3), media (M5). (M6 wave 2 has done the text
+rectangles, picture masks and flips, arrowheads and dashes: see "M6 wave 2" above.)
 
 ### M2 wave 2: rich emission (`richtext.ts`, `fontmap.ts`; `text.ts`, `emit.ts`)
 
@@ -589,10 +1196,12 @@ kern, bmk, in any order, plus child elements) of runs that have text, so a run w
 with neutral attributes only and whitespace inside the tag does not count; `crop` needs a non-zero side;
 `outline` is an `a:ln` inside an `a:rPr`; slides whose relationship ids do not start with `rId` are counted.
 
-**Support** per element (§5): the reader's verdict (walk: presets, fills; sheared children) merged with
+**Support** per element (§5): the reader's verdict (walk: presets, fills, custom geometry past the bounds;
+sheared children approx) merged with
 residual (chart, table, SmartArt, OLE, other graphic frames, maths, a bevel with a size or an extrusion,
 a warp other than `textNoShape`, text that is vertical, `numCol` > 1 or `anchorCtr` through the bodyPr
-chain, `.wdp`/`.hdp` pictures) and approx (reflection, inner shadow, soft edge on a picture, EMF/WMF
+chain when it moves text (not when every paragraph that draws something is centred, `text.ts`),
+`.wdp`/`.hdp` pictures) and approx (reflection, inner shadow, soft edge on a picture, EMF/WMF
 waiting for conversion). The XML of an element is `ShapeElement.node` when the walk keeps it, else found
 by source and `cNvPr id` (at most 4 candidates per kind, indexed once per part); each node's subtree is
 rated once per deck (`marksOf`), so a huge layout shape sharing an id with thousands of elements costs one
@@ -602,7 +1211,9 @@ walk.
 residual and every other element of the range that an art element above it overlaps (top down; hidden
 elements and play videos never), with its bounding box; picture when the objects (a shape with fill or
 line and text counts two, the background and the art one each) exceed 150 or the distinct pictures exceed
-12 after the split. Reasons add `art:<residual reason>` and `budget:objects` / `budget:pictures`.
+12 after the split. Reasons add `art:<residual reason>` and `budget:objects` / `budget:pictures`. Over 150
+objects, shapes of one look are merged and tables, SmartArt drawings and elements without text go to the
+art first (M6, "the object budget" above).
 
 Measured (shown worship slides, cumulative T1 / T1-T2 / T1-T3 / T1-T4 / T1-T5): on the census's own 280
 decks 31.9 / 73.2 / 87.7 / 92.5 / 95.8 % (census 30.9 / 73.3 / 87.6 / 92.5 / 95.8 %, n 4,922 against
@@ -611,6 +1222,7 @@ script gives 20.3 / 52.7 / 81.0 / 87.4 / 92.7 % on the same decks: the set has m
 After the M1 merge (one alternate-content branch, repeated listings shown as LibreOffice pages), the census
 decks give 32.2 / 73.4 / 87.8 / 92.5 / 95.8 % over 4,941 shown slides.
 
-Still to do: the 64 KB slide JSON budget and the 4,096 path points (§3.4, M3/M6, once emission measures
-them); kerning and unknown transitions as approx (slide-level, M8); `artText` from `ArtRange.elements`
+Still to do: the 64 KB slide JSON budget for path data (§3.4: the converter counts text formatting only;
+the hub's `planImportSizes` makes a slide whose stored paths pass it a compact picture, and a traced
+decoration of 6,500 points in 7-digit EMU is 100 KB of path text on its own); kerning and unknown transitions as approx (slide-level, M8); `artText` from `ArtRange.elements`
 (emission, M3).

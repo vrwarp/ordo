@@ -86,6 +86,135 @@ export type Shadow = z.infer<typeof Shadow>;
 export const Glow = z.object({ radius: length, color: Rgba });
 export type Glow = z.infer<typeof Glow>;
 
+/** A signed share of a length, -1..1 (design/27 §3.1). */
+const frac = z.number().min(-1).max(1);
+
+/*
+ * Shape geometry and paint (design/27 §3.1, §15 M6). An older build strips these fields and draws the legacy
+ * values written beside them: `ShapeObject.shape` (rect, ellipse or line) with `fill` as a solid colour (the
+ * first gradient stop), `TextStyle.color`, the whole picture.
+ */
+
+/**
+ * A linear or radial gradient over a box (a shape's fill, gradient text). Stops are sorted by `at`.
+ * - linear: `angle` is OOXML's `a:lin ang` in degrees, clockwise from left→right (90 = top→bottom); the
+ *   stops run across the box's projection on that direction, from corner to corner. `scaled` (OOXML
+ *   `scaled="1"`) takes the angle in a square and stretches it with the box, so 45° runs corner to corner.
+ * - radial (OOXML path gradients): `at` 0 is the focus, 1 the farthest corner of the box, on an ellipse of
+ *   the box's aspect; `center` is the focus in box fractions from the top-left corner (absent: the centre,
+ *   0.5, 0.5; OOXML's fillToRect l t r b gives ((1 + l − r)/2, (1 + t − b)/2)).
+ */
+export const Gradient = z.object({
+  kind: z.enum(['linear', 'radial']).catch('linear'),
+  angle: z.number().min(-36_000).max(36_000).optional(),
+  scaled: z.boolean().optional(),
+  stops: z
+    .array(z.object({ at: z.number().min(0).max(1), color: Rgba }))
+    .min(2)
+    .max(16),
+  center: z.object({ x: frac, y: frac }).optional(),
+});
+export type Gradient = z.infer<typeof Gradient>;
+
+/** How a geometry path is filled: 'none' unfilled; the shaded modes blend the fill towards white or black. */
+export const PathFillMode = z.enum(['norm', 'none', 'lighten', 'lightenLess', 'darken', 'darkenLess']);
+export type PathFillMode = z.infer<typeof PathFillMode>;
+
+/**
+ * One stored path of a geometry (`ShapeGeom.paths`, `GeomFile.paths`). `d` uses only M, L, C, Q and Z with
+ * numbers (the render plan re-tokenises it, at most 4,096 points per path) in the path's own space `w` x `h`,
+ * scaled to the box; a side of 0 means the box's own logical px on that axis.
+ * `cont` (M6): the path continues the one before it, so the two are drawn as one path (one even-odd fill,
+ * stroked together; the first path's fill mode and stroke flag): a traced outline whose holes all sit
+ * inside it, too long for one path, is stored in pieces cut at its sub-paths' starts. A build without
+ * `cont` fills each piece on its own (holes filled where a piece has no outline); `cont` on the first
+ * path means nothing.
+ */
+export const ShapeGeomPath = z.object({
+  d: z.string().max(40_000),
+  w: z.number().min(0).max(1e9),
+  h: z.number().min(0).max(1e9),
+  fill: PathFillMode.catch('norm').optional(),
+  stroke: z.boolean().optional(),
+  cont: z.boolean().optional().catch(undefined),
+});
+export type ShapeGeomPath = z.infer<typeof ShapeGeomPath>;
+
+/**
+ * A DrawingML geometry: a preset by name (POI's table, evaluated at draw time, so a resize keeps the corners
+ * and adjust values; `adj` pairs override the preset's adjust values by name, pairs so no deck string is a
+ * key), or the paths of a custGeom, already evaluated (`ShapeGeomPath`). A known preset wins over `paths`; an
+ * unknown one with no paths draws the legacy shape.
+ * `ref` (M6 round 2): the paths are stored once in a geometry file (`GeomFile`), named here by the SHA-256 of
+ * its JSON in the content store (`/files/<ref>`), and read like a picture: a traced decoration of 100-1,000 KB
+ * of path text, which a layout repeats on every slide and a slide at several sizes, travels once per library
+ * instead of inside every slide. While the file is read, its paths are drawn and `paths` beside it (if any)
+ * is ignored; without it (not read yet, missing, an older build that strips `ref`) the geometry is `paths`,
+ * else the legacy shape. The converter writes placeholders (`pptxgeom:<n>`) that the hub replaces.
+ */
+export const ShapeGeom = z.object({
+  preset: z.string().max(40).optional(),
+  adj: z
+    .array(z.tuple([z.string().max(16), z.number().min(-1e7).max(1e7)]))
+    .max(10)
+    .optional(),
+  paths: z.array(ShapeGeomPath).max(8).optional(),
+  ref: z.string().min(1).max(100).optional().catch(undefined),
+});
+export type ShapeGeom = z.infer<typeof ShapeGeom>;
+
+/**
+ * A geometry file (`ShapeGeom.ref`, M6 round 2): one geometry's paths, the JSON the content store holds under
+ * its SHA-256 (`application/json`, at most `GEOM_FILE_MAX_BYTES`). Bounded as `ShapeGeom.paths` is, and
+ * re-tokenised by every reader as inline paths are.
+ */
+export const GeomFile = z.object({ paths: z.array(ShapeGeomPath).min(1).max(8) });
+export type GeomFile = z.infer<typeof GeomFile>;
+
+/** The largest geometry file a reader parses: 8 paths of 40,000 characters and their fields. */
+export const GEOM_FILE_MAX_BYTES = 400_000;
+
+/** A geometry file's name in the content store (`ShapeGeom.ref` as the hub writes it): a SHA-256 in hex. */
+export function isGeomFileRef(ref: unknown): ref is string {
+  return typeof ref === 'string' && ref.length === 64 && /^[0-9a-f]{64}$/.test(ref);
+}
+
+/** A line's dash pattern (OOXML prstDash; 'long…' are lgDash…), relative to the line width. */
+export const LineDash = z.enum([
+  'solid',
+  'dot',
+  'dash',
+  'dashDot',
+  'longDash',
+  'longDashDot',
+  'longDashDotDot',
+  'sysDot',
+  'sysDash',
+  'sysDashDot',
+  'sysDashDotDot',
+]);
+export type LineDash = z.infer<typeof LineDash>;
+
+/**
+ * A line's joins (OOXML `a:round`, `a:bevel`, `a:miter` of `a:ln`) and caps (`a:ln cap`: flat, rnd, sq);
+ * M6 repair. Absent: miter joins (limit 8) and flat caps, what every build drew before.
+ */
+export const LineJoin = z.enum(['miter', 'round', 'bevel']);
+export type LineJoin = z.infer<typeof LineJoin>;
+export const LineCap = z.enum(['flat', 'round', 'square']);
+export type LineCap = z.infer<typeof LineCap>;
+
+/** The size of an arrowhead's width or length (OOXML sm, med, lg), relative to the line width. */
+const ArrowSize = z.enum(['sm', 'med', 'lg']);
+
+/** An arrowhead at one end of an open path (OOXML headEnd at its start, tailEnd at its end). */
+export const ArrowEnd = z.object({
+  type: z.enum(['none', 'triangle', 'stealth', 'arrow', 'oval', 'diamond']).catch('none'),
+  w: ArrowSize.catch('med').optional(),
+  len: ArrowSize.catch('med').optional(),
+});
+export type ArrowEnd = z.infer<typeof ArrowEnd>;
+
 /*
  * Rich text and PowerPoint fields (design/27 §3). Every new field is optional and bounded, and enums inside
  * new fields use .catch(default), so a value a later release adds degrades instead of failing
@@ -131,6 +260,8 @@ export const TextStyle = z.object({
   fallbackFonts: z.array(z.string().max(300)).max(8).optional(),
   underline: z.boolean().optional(),
   glow: Glow.optional(),
+  /** Gradient text: the glyphs of runs without their own colour are painted with it, over the box. */
+  paint: Gradient.optional(),
 });
 export type TextStyle = z.infer<typeof TextStyle>;
 
@@ -206,7 +337,10 @@ export const ObjectOrigin = z.object({
   shapeId: z.number().int().min(0).max(2_147_483_647).optional(),
   /** 'title' | 'body' | 'body:2' | 'subTitle' ... */
   ph: z.string().max(40).optional(),
-  /** title|body|text|picture|shape|bg|deco|poster|cell|art (a string: the list can grow) */
+  /**
+   * title|body|text|picture|shape|bg|deco|poster|cell|grid|art (a string: the list can grow). cell: a
+   * table cell's text; grid: a table's locked fills and lines.
+   */
   role: z.string().max(20).optional(),
   /** A flattened group or a shape+text pair: selected together. */
   group: z.number().int().min(0).max(100_000).optional(),
@@ -229,9 +363,6 @@ export const TextObject = z.object({
 });
 export type TextObject = z.infer<typeof TextObject>;
 
-/** A signed share of a length, -1..1 (design/27 §3.1). */
-const frac = z.number().min(-1).max(1);
-
 /**
  * The share of the source picture cut from each side (PowerPoint's `a:srcRect`/100,000), applied before
  * `fit`: what is left is the picture `fit` places in the box. A negative share extends the picture past
@@ -239,38 +370,6 @@ const frac = z.number().min(-1).max(1);
  */
 export const ImageCrop = z.object({ l: frac, t: frac, r: frac, b: frac });
 export type ImageCrop = z.infer<typeof ImageCrop>;
-
-/**
- * A DrawingML geometry (design/27 §3.1): a preset by POI's name, evaluated at draw time so a resize keeps
- * its corners, with adjust values as [name, value] pairs (no deck string is ever a key), or the paths of a
- * custGeom (`d` with M, L, C, Q, Z and numbers only, in the path's own `w` x `h`, scaled to the box; M6).
- * As a picture's mask (M4): 'ellipse' and 'roundRect' are drawn, roundRect's 'adj' being the corner radius
- * in 1/100,000 of the box's shorter side (default 16,667); any other geometry draws the picture uncut until
- * M6 draws it.
- */
-export const ShapeGeom = z.object({
-  preset: z.string().max(40).optional(),
-  adj: z
-    .array(z.tuple([z.string().max(16), z.number().min(-1e7).max(1e7)]))
-    .max(10)
-    .optional(),
-  paths: z
-    .array(
-      z.object({
-        d: z.string().max(40_000),
-        w: z.number().min(0).max(1e9),
-        h: z.number().min(0).max(1e9),
-        fill: z
-          .enum(['norm', 'none', 'lighten', 'lightenLess', 'darken', 'darkenLess'])
-          .catch('norm')
-          .optional(),
-        stroke: z.boolean().optional(),
-      }),
-    )
-    .max(8)
-    .optional(),
-});
-export type ShapeGeom = z.infer<typeof ShapeGeom>;
 
 export const ImageObject = z.object({
   id: Id,
@@ -290,12 +389,21 @@ export const ImageObject = z.object({
    */
   flipH: z.boolean().optional(),
   flipV: z.boolean().optional(),
-  /** The picture is cut to this geometry in its box; `radius` applies only without one (design/27 §3.1). */
+  /**
+   * The picture is cut to this geometry in its box (the union of its filled paths); `radius` applies only
+   * without one (design/27 §3.1).
+   */
   mask: ShapeGeom.optional(),
   ...common,
 });
 export type ImageObject = z.infer<typeof ImageObject>;
 
+/**
+ * `shape` stays rect, ellipse or line and `fill` a solid colour: what an older build draws. The M6 fields
+ * (design/27 §3.1) draw the PowerPoint shape: its geometry, a gradient instead of `fill`, the line's dash and
+ * arrowheads, flips about the box's centre (before the rotation) and the effects: an outer shadow, a glow
+ * and a soft edge (the shape's edges fading out over that many logical px).
+ */
 export const ShapeObject = z.object({
   id: Id,
   type: z.literal('shape'),
@@ -305,6 +413,17 @@ export const ShapeObject = z.object({
   stroke: z.object({ width: length, color: Rgba }).optional(),
   opacity: z.number().min(0).max(1).default(1),
   radius: length.default(0),
+  geom: ShapeGeom.optional(),
+  gradient: Gradient.optional(),
+  dash: LineDash.catch('solid').optional(),
+  lineJoin: LineJoin.catch('miter').optional(),
+  lineCap: LineCap.catch('flat').optional(),
+  ends: z.object({ head: ArrowEnd.optional(), tail: ArrowEnd.optional() }).optional(),
+  flipH: z.boolean().optional(),
+  flipV: z.boolean().optional(),
+  shadow: Shadow.optional(),
+  glow: Glow.optional(),
+  softEdge: length.optional(),
   ...common,
 });
 export type ShapeObject = z.infer<typeof ShapeObject>;

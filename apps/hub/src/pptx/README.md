@@ -24,8 +24,12 @@ POST /import/document  (423 while live, ≤ 1 GiB, zip + .pptx sniff, stored by 
      2 pool 'pptx-scene' (sceneTask.ts → convertDeck), batches ≤ 150 slides (slide parts transferred, shared
        parts copied), 2 min per batch, ≤ 15 min of pool time per import                                        [B, A]
        clip parts (SceneScan.clips, ≤ 50) spilled after the pictures, sniffed: the batches get their kinds      [w2 A]
+       the library's font files listed (faces.ts, ≤ 2,000): a batch reads one when a table row is measured    [M6]
+     2b geometry files (geoms.ts): each batch's pptxgeom placeholders named by the file's SHA-256           [M6 r2]
      3 classification and size budgets (@ordo/domain planImportSizes): over budget → picture class (logged)    [B]
-     3b clips ─► clipForFile (hash + trim, trims baked), media job not queued yet; placeholders replaced     [w2 A]
+       a slide whose new geometry files pass PPTX_LIMITS.geomFileBytes (32 MB an import) is compact too       [M6 r2]
+     3b geometry files the kept slides name ─► store.putBytes (application/json), once each                [M6 r2]
+     3c clips ─► clipForFile (hash + trim, trims baked), media job not queued yet; placeholders replaced     [w2 A]
      4 any hybrid/picture/metafile slide: enqueue heavy 'pptx-lo' now, before any clip job                     [B]
      5 pictures ─► preparePicture ─► addReadyPicture; dedup through the media hash index; resume pairs        [C]
      6 remap placeholders, Slide.pptx/hidden/transition/notes, sections, sanitize, save ── version 1;
@@ -40,7 +44,8 @@ POST /import/document  (423 while live, ≤ 1 GiB, zip + .pptx sniff, stored by 
  light job 'pptx-text-repair' (legacy imported.textBoxes, once)                                                [G]
  light job 'pptx-reimport' ('Re-import from PowerPoint', reimport.ts): steps 1-5 again (buildNative), merged
      into the stored presentation, one revision, then 'pptx-lo' as above; 'Make editable' on a legacy page  [M4 F]
- goLive ─► resolvePlaylist: bundled and script-fallback fonts, CJK faces by text scan [E]; > 12 MiB warning [F]
+ goLive ─► resolvePlaylist: bundled and script-fallback fonts, CJK faces by text scan [E]; > 12 MiB warning [F];
+           the geometry files the slides draw in the manifest and `geoms` (the bundle's `files`)             [M6 r2]
  operator: ImportTab and import card [H]; previewSlice and the adopt check [F]; MediaTab and gated text [G]
 ```
 
@@ -60,6 +65,7 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 | `index.ts`          | `PptxImports`: registers the jobs, `queueNative`, `queueReference` (`imports.pptx`)        | shared |
 | `nativeJob.ts`      | The light `pptx-native` job, steps 1-6                                                     | B      |
 | `sceneTask.ts`      | Worker side of `pptx-scene`: one batch through `convertDeck` (working pass-through)        | B      |
+| `faces.ts`          | The library's faces for `pptx-scene` (M6 tables: rows grow to their text), read on demand  | M6     |
 | `report.ts`         | `PptxNativeResult` for the import card, `source.log`, `logSafe`                            | B      |
 | `mediaParts.ts`     | `mediaForFile`: the generalised `mediaFor`, through the media hash index; `clipForFile`    | C      |
 | `clips.ts`          | `spillClips` (spill and sniff), `ClipImport` (store clips, replace their placeholders)     | w2 A   |
@@ -67,6 +73,9 @@ index with the uniform contain mapping, `textAligned`). Nothing writes a live-lo
 | `fallback.ts`       | `pptx-lo` and `pptx-reference` jobs, `sofficeToPdf` (hardened)                             | D      |
 | `renderCopyTask.ts` | Worker side of `pptx-render-copy`: `buildRenderCopy` + spilled media → .pptx               | D      |
 | `art.ts`            | Worker side of `pptx-art`: white/black alpha and bounding-box crop                         | D      |
+| `bakes.ts`          | `storeBakes`: recoloured pictures and tiled fills baked into new ready pictures (M6)       | M6b D  |
+| `geoms.ts`          | Geometry files: `geomFileOf` (named by SHA-256), `nameGeoms`, `storeGeomFiles` (M6 r2)     | M6b r2 |
+| `bakeTask.ts`       | Worker side of `pptx-bake`: `@ordo/pptx-scene` `applyBake`, PNG encoding (M6)              | M6b D  |
 | `textRepair.ts`     | `pptx-text-repair` job, `pagesOf`, `readDeckText`, `slideBoxes`, `queueTextRepair`         | G      |
 | `reimport.ts`       | 'Re-import from PowerPoint': plan, merge and the `pptx-reimport` job (M4; editor/M4.md)    | M4 F   |
 | `digest.ts`         | `importDigest`, `digestMatches`: "unedited" over the objects with an origin, everywhere    | M4     |
@@ -87,7 +96,7 @@ Contracts already in place (the scaffold):
   `ParseOptions.range`; `ElementRef` and `ArtInfo` (`ir.ts`); `EmittedSlide.art?: ArtInfo`;
   `rendercopy.ts` (`RenderCopyPage`, `RenderCopyResult`, `buildRenderCopy`).
 - Hub: the pool tasks `pptx-scene`, `pptx-render-copy`, `pptx-art` (`pool.ts` `CpuTasks`, timeouts
-  2 min / 2 min / 60 s; `cpu.worker.ts`); the job kinds `pptx-native` (light), `pptx-lo` (heavy),
+  2 min / 2 min / 60 s; `cpu.worker.ts`), and since M6 `pptx-bake` (60 s, `bakes.ts`); the job kinds `pptx-native` (light), `pptx-lo` (heavy),
   `pptx-reference` (heavy), `pptx-text-repair` (light), registered by `PptxImports`, which `ImportService`
   owns as `imports.pptx` with the live-lock check (`locked(presentationId)`) from `hub.ts` / `libproc.ts`;
   `@ordo/pptx-scene` is a hub dependency. `apps/hub/test/pptx-scaffold.test.ts` checks the wiring; every
@@ -557,6 +566,62 @@ What wires items A-C together:
   (`slideOnlyMedia` roles 'background', 'video', 'poster', 'sound', 'picture').
 - End to end (design/27 §14.12): `e2e/pptx-native.spec.ts` and `e2e/pptx-media.spec.ts` on synthetic
   probe decks (`e2e/pptxdecks.ts`), through the upload route on a hub with the bundled fonts.
+
+## M6 wave 2, item D: SmartArt and baked pictures (m6b/smartart-pictures)
+
+SmartArt with PowerPoint's drawing of it is converted natively by `@ordo/pptx-scene` (`smartart.ts`, its
+README): a locked group with editable text, nothing for the hub to do but spill the drawing's pictures
+(`sceneTask.ts` `scanDeck` follows each part's `diagramDrawing` relationships to their images). Recoloured
+pictures and tiled picture fills come out of the converter as placeholders `pptxmedia:bake<n>` with a recipe
+(`EmitResult.media` entries with `bake`), which step 4 turns into new prepared pictures (`bakes.ts`):
+- **Keys.** A bake stands in the job's part maps under `bakeMapKey(part, bake)` (`BAKE_KEY_PREFIX`, a NUL no
+  part name holds), so the drafts' maps, `saveVersion1`'s remap and the resume pairs (`PptxNativeProgress.media`)
+  carry bakes and parts alike, unchanged.
+- **Size.** A recoloured picture is made at the size the source is prepared at for the bake's own display need
+  (`targetSize`, measured with the source's size); a tiled fill at its box's need (3840 px wide), its height by
+  the box's aspect; both within `BAKE_LIMITS` (8,192 px a side, 16 MP).
+- **Steps.** Header check (`checkSource`; an animated WebP is not baked), the import's decode budget (shared
+  with the pictures), ffmpeg to raw RGBA at the size the bake reads (`pictureFile` `output: 'rgba'`: the
+  demuxer forced, `-max_pixels` from the header), pool task `pptx-bake` (60 s; `bakeTask.ts` applies the
+  recipe and encodes the PNG in the worker, RGB when every pixel is opaque), an opaque bake of a JPEG stored as
+  a JPEG, `addReadyPicture` (tag `pptx`).
+- **Dedup.** The baked item's `source` hash is SHA-256 of the source's hash and the recipe (`bakeHash`): a
+  re-import finds it without decoding; content hashes dedup as for every prepared picture. One part with one
+  recipe is one item, whatever boxes it fills.
+- **Failure.** A bake that fails (refused header, decode, pool, budget) logs `[warn] <part>: …; it is drawn
+  without its effects or tiles` and its placeholder gets the source part's plain picture (prepared then if
+  nothing else used it).
+- Tests: `apps/hub/test/pptx-bakes.test.ts` (the pool task on generated rasters; a deck with a duotone PNG,
+  a tiled shape fill of a generated checker, a grayscale JPEG and a SmartArt node filled with it, through the
+  real job: pixels, sizes, JPEG kept, one item per part and recipe, a re-import storing nothing new; an
+  animated WebP that is not baked shows its first frame with the warning).
+
+## M6 wave 2, round 2: geometry files (m6b/r2-path-text-slide-budget)
+
+A traced decoration (worship templates made in Google Slides: one outline of 4,200-8,300 points, 100-150 KB of
+path text, on several objects of a slide at different sizes and on every slide of a layout) made slides of
+140 KB-1 MB that `planImportSizes` turned into compact LibreOffice pictures, while the converter, counting only
+text toward 64 KB, called them native. The converter now writes such paths once as a geometry file
+(`ShapeGeom.ref`, placeholder `pptxgeom:<n>`, `EmitResult.geoms`; `@ordo/pptx-scene` README) and measures the
+slide as this job stores it. The job (`geoms.ts`):
+- **Names** each batch's files by the SHA-256 of their JSON (`GeomFile`, its paths re-tokenised by
+  `sanitizeGeom` and checked by the schema) right after the batch, before the budgets: a placeholder whose file
+  is not usable loses its ref (the shape draws its legacy form). One outline in two batches, two decks or two
+  imports is one name.
+- **Budgets** them: a slide whose new files pass `PPTX_LIMITS.geomFileBytes` (32 MB an import; the largest
+  worship deck needs 0.6 MB) is a compact picture like an oversized one ('over the import budget of shape
+  outlines'), so a hostile deck cannot fill the store through files instead of slides.
+- **Stores** the files the kept slides name (`storeGeomFiles`, step 3b): `store.putBytes`, `application/json`,
+  skipped when the store has one; a failure warns once and leaves those shapes drawing their legacy form.
+  The store keeps a file while a stored presentation names it (`fileReferenced` scans presentations' JSON),
+  and backups list it with every file row.
+- **goLive**: the library's bundle carries the files the presentations name (`libproc.ts` `geomRefsIn`,
+  `GoLiveBundle.files`, `GoLiveInputs.file`); `resolvePlaylist` puts them in the manifest (outputs cache them
+  with the pictures) and in `ResolvedPlaylist.geoms` (the live process serves them while the library is down,
+  `liveFiles`), and notes a slide whose file the library lacks (`degraded`: drawn as plain shapes).
+- Tests: `apps/hub/test/pptx-geoms.test.ts` (naming, renaming, storing once, a deck with three outlines on two
+  slides through the real job: one file each, the slides native and under 16 KB, the manifest and the live
+  process; the same deck again storing nothing new; the import budget).
 
 ## Not in this wave
 

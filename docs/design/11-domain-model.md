@@ -125,7 +125,33 @@ type TextStyle = {
   fill?: { color: Rgba; radius: number };
   // Rich text (design/27 §3.1), all optional: lineModel 'ordo' | 'office', insets (replace padding), wrap,
   // autofit 'none' | 'shrink' with fitScale, justify, direction 'ltr' | 'rtl' | 'auto', lang, fallbackFonts,
-  // underline, glow. A text object with runs, paras or any of these is drawn by the rich text engine.
+  // underline, glow, paint (M6: a Gradient for gradient text). A text object with runs, paras or any of these
+  // is drawn by the rich text engine.
+};
+// M6 (design/27 §3.1): a geometry and a gradient, shared by shapes, picture masks and gradient text.
+type ShapeGeom = {
+  preset?: string; // a PowerPoint preset by name (187), evaluated at draw time
+  adj?: [string, number][]; // its adjust values, as pairs
+  // A custGeom's evaluated paths: only M L C Q Z and numbers (re-tokenised before drawing, ≤ 4,096 points),
+  // in their own w x h space scaled to the box; ≤ 8.
+  paths?: {
+    d: string;
+    w: number;
+    h: number;
+    fill?: 'norm' | 'none' | 'lighten' | 'lightenLess' | 'darken' | 'darkenLess';
+    stroke?: boolean;
+    cont?: boolean; // continues the path before it (one long path stored in pieces)
+  }[];
+  // M6 round 2: the paths live in a geometry file (`GeomFile` = { paths }, JSON in the content store), named
+  // by its SHA-256 and read by drawers like a picture; while it is not read the geometry is the rest of this
+  // object, else the legacy shape. Large traced outlines travel once per library, not in every slide.
+  ref?: string;
+};
+type Gradient = {
+  kind: 'linear' | 'radial';
+  angle?: number; // degrees clockwise from left→right (OOXML a:lin ang); scaled?: boolean
+  stops: { at: number; color: Rgba }[]; // 2..16, sorted
+  center?: { x: number; y: number }; // radial focus in box fractions (default the centre)
 };
 type ImageObject = {
   id: Id;
@@ -143,20 +169,49 @@ type ImageObject = {
   // naming the source's sides). Older builds draw the picture unflipped.
   flipH?: boolean;
   flipV?: boolean;
-  // Cut to a geometry (ShapeGeom: preset, adj pairs, paths); 'ellipse' and 'roundRect' (adj: the corner in
-  // 1/100,000 of the shorter side) are drawn, any other geometry draws the picture uncut until M6. `radius`
-  // applies only without a mask; the importer writes it beside one as the legacy value (design/27 §3.2).
-  mask?: { preset?: string; adj?: [string, number][]; paths?: { d: string; w: number; h: number }[] };
+  // Cut to a geometry (ShapeGeom: a preset with adj pairs, paths or a geometry file; the union of its filled
+  // paths), drawn by every drawer since M6 (the editor offers 'ellipse' and 'roundRect', adj being the corner
+  // in 1/100,000 of the shorter side; the video plane cuts only those two). `radius` applies only without a
+  // mask; the importer writes it beside one as the legacy value (design/27 §3.2).
+  mask?: ShapeGeom;
 };
 type ShapeObject = {
   id: Id;
   type: 'shape';
   box: Box;
-  shape: 'rect' | 'ellipse' | 'line';
+  shape: 'rect' | 'ellipse' | 'line'; // what an older build draws, with fill as a solid colour
   fill?: Rgba;
   stroke?: { width: number; color: Rgba };
   opacity: number;
   radius: number;
+  // M6 (design/27 §3.1), all optional; a shape with any of them is drawn through the geometry engine.
+  geom?: ShapeGeom;
+  gradient?: Gradient; // instead of fill
+  dash?:
+    | 'solid'
+    | 'dot'
+    | 'dash'
+    | 'dashDot'
+    | 'longDash'
+    | 'longDashDot'
+    | 'longDashDotDot'
+    | 'sysDot'
+    | 'sysDash'
+    | 'sysDashDot'
+    | 'sysDashDotDot';
+  lineJoin?: 'miter' | 'round' | 'bevel'; // M6 repair: absent = miter (limit 8)
+  lineCap?: 'flat' | 'round' | 'square'; // M6 repair: absent = flat; round/square drawn within a preset dash
+  ends?: { head?: ArrowEnd; tail?: ArrowEnd }; // arrowheads at an open path's start and end
+  flipH?: boolean;
+  flipV?: boolean;
+  shadow?: { dx: number; dy: number; blur: number; color: Rgba }; // outer shadow
+  glow?: { radius: number; color: Rgba };
+  softEdge?: number; // logical px
+};
+type ArrowEnd = {
+  type: 'none' | 'triangle' | 'stealth' | 'arrow' | 'oval' | 'diamond';
+  w?: 'sm' | 'med' | 'lg';
+  len?: 'sm' | 'med' | 'lg';
 };
 
 // Every object may also carry origin?: { src; shapeId?; ph?; role?; group? } (where an imported PowerPoint

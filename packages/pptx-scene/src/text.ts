@@ -73,13 +73,17 @@ const clamp = (v: number, lo: number, hi: number) =>
 const emu = (v: number | undefined, dflt: number) => clamp(v ?? dflt, 0, MAX_EMU);
 const BLACK = { r: 0, g: 0, b: 0, a: 1 };
 
-/** A shape's text body with inheritance resolved, or undefined when it has none. */
-export function readTextBody(ctx: SlideCtx, c: Chain): TextBody | undefined {
+/**
+ * A shape's text body with inheritance resolved, or undefined when it has none. `styled` (a table cell's
+ * text style, `tables.ts`) is an `a:pPr` whose `a:defRPr` takes the place of the shape's `p:style/a:fontRef`
+ * in the chain: after the body's own list style, before the presentation's defaults.
+ */
+export function readTextBody(ctx: SlideCtx, c: Chain, styled?: XNode): TextBody | undefined {
   const txBody = child(c.own, 'p:txBody');
   if (!txBody) return undefined;
   const body = bodyPrChain(c);
   const ins = (k: string, d: number) => emu(num(firstAttr(body, k)), d);
-  const fontRef = fontRefNode(ctx, c);
+  const fontRef = styled ?? fontRefNode(ctx, c);
   const paras: Para[] = [];
   for (const p of txBody.children) if (p.name === 'a:p') paras.push(readPara(ctx, c, p, fontRef));
   const out: TextBody = {
@@ -98,10 +102,39 @@ export function readTextBody(ctx: SlideCtx, c: Chain): TextBody | undefined {
   if (vert !== undefined && vert !== 'horz') out.vert = vert;
   const numCol = num(firstAttr(body, 'numCol'));
   if (numCol !== undefined && numCol > 1) out.numCol = Math.min(16, Math.floor(numCol));
-  if (on(firstAttr(body, 'anchorCtr'))) out.anchorCtr = true;
+  if (on(firstAttr(body, 'anchorCtr'))) out.anchorCtr = anchorCtrMoves(out);
   const warp = firstChildOf(body, 'a:prstTxWarp')?.attrs.prst;
   if (warp && warp !== 'textNoShape') out.warp = warp;
   return out;
+}
+
+/**
+ * Whether `anchorCtr` moves any of a body's text. It centres the text block, as wide as its widest line
+ * and still wrapped at the box width, in the box (LibreOffice: horizontal adjust CENTER instead of BLOCK).
+ * A centre-aligned line lies at the same distance from the middle of a block of any width (half its margin
+ * and indent), so when every paragraph that draws something is centred, each line is where it would be
+ * without `anchorCtr`. Not with columns: their block can be narrower than all the columns.
+ */
+function anchorCtrMoves(body: TextBody): boolean {
+  return (body.numCol ?? 1) > 1 || body.paras.some((p) => p.align !== 'center' && drawsSomething(p));
+}
+
+/**
+ * Whether a paragraph draws anything: a field (PowerPoint fills in its value), or text with a character
+ * other than white space, or white space that a bullet, underline, strikethrough or highlight shows.
+ */
+function drawsSomething(p: Para): boolean {
+  return p.runs.some(
+    (r) =>
+      r.kind === 'field' ||
+      (r.kind === 'text' &&
+        r.text !== '' &&
+        (/\S/u.test(r.text) ||
+          p.bullet !== undefined ||
+          r.style.underline ||
+          r.style.strike ||
+          r.style.highlight !== undefined)),
+  );
 }
 
 /**

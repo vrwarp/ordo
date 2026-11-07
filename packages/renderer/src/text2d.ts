@@ -21,11 +21,17 @@ import {
   type PictureShape,
   type PictureTarget,
   paintPicture,
-  pictureCut,
+  paintShapedPicture,
   pictureFit,
+  pictureShape,
   pictureTarget,
   preparedKey,
 } from './picture.ts';
+import { EFFECT_MAX_PIXELS } from './effects.ts';
+import { GEOM_CLIP_RULE, geomFillPath2D } from './geom/draw.ts';
+import { geomAwaited, storedGeometry } from './geom/stored.ts';
+import { withinDrawBudget } from './geombudget.ts';
+import { drawGeomShape, hasShapeExtras, placeBox } from './shape.ts';
 import { firstStrong, hasStrongRtl } from './text/bidi.ts';
 import { LEGACY_FONT_ENV, currentFontEnv } from './text/fonts.ts';
 import { metricsInk } from './text/measure.ts';
@@ -359,16 +365,19 @@ export function drawText(
  * exactly as before crops existed.
  *
  * `shape` (an `ImageObject`'s `flipH`, `flipV` and `mask`, design/27 §3.1) mirrors the picture about the
- * box's centre before the rotation, mask included, and cuts it to the mask (`pictureCut`: an ellipse or a
- * rounded rect; `radius` applies only without a mask). The editor's image node passes the same fields, so
- * the editor, the thumbnails and the outputs cut and mirror a picture alike.
+ * box's centre before the rotation, mask included, and cuts it to the mask's filled paths instead of the box
+ * and `radius` (`radius` applies only without a mask): drawn into a sprite of its device bounds and cut there
+ * by an anti-aliased 'destination-in' fill (`paintShapedPicture`), then copied at the opacity; without
+ * OffscreenCanvas, or past EFFECT_MAX_PIXELS, through a clip of the mask. The editor's image node passes the
+ * same fields, so the editor, the thumbnails and the outputs cut and mirror a picture alike. Without a mask
+ * or flips the picture is drawn exactly as before.
  *
  * `target` is the `pictureTarget` the caller asked its image lookup for. When `img` is a bitmap
  * `preparePicture` made for that target (same key: size, sub-pixel offset, fit and crop), it already holds
  * what the box shows at
  * device size: it is copied 1:1 at the target's whole-pixel origin, with no resampling and no clip
- * (design/27 §7.1). Any other image is drawn as the source, as above. A masked or flipped picture has no
- * target (`pictureTarget`), so it is always drawn from its source.
+ * (design/27 §7.1). Any other image is drawn as the source, as above. A prepared bitmap of a masked or
+ * flipped picture already holds it cut and mirrored (`pictureTarget`).
  */
 export function drawImageFit(
   ctx: Ctx2D,
@@ -390,8 +399,23 @@ export function drawImageFit(
     ctx.restore();
     return;
   }
+  const shaped = shape ? pictureShape(shape) : undefined;
+  if (shaped) {
+    drawShapedPicture(
+      ctx,
+      img,
+      clampBox(box),
+      num(scale, 0.01, 8, 1),
+      pictureFit(fit),
+      opacity,
+      radius,
+      crop,
+      shaped,
+    );
+    return;
+  }
   box = clampBox(box);
-  const cut = pictureCut({ radius, mask: shape?.mask }, box.w, box.h);
+  radius = num(radius, 0, CLAMP.maxRadius, 0);
   const c = clampCrop(crop);
   const bx = box.x * scale;
   const by = box.y * scale;
@@ -400,24 +424,84 @@ export function drawImageFit(
   ctx.save();
   ctx.globalAlpha = opacity;
   withRotation(ctx, box, scale, () => {
-    const flipH = shape?.flipH === true;
-    const flipV = shape?.flipV === true;
-    if (flipH || flipV) {
-      ctx.translate(bx + bw / 2, by + bh / 2);
-      ctx.scale(flipH ? -1 : 1, flipV ? -1 : 1);
-      ctx.translate(-(bx + bw / 2), -(by + bh / 2));
-    }
-    if (cut.kind === 'ellipse') {
-      ctx.beginPath();
-      ctx.ellipse(bx + bw / 2, by + bh / 2, Math.abs(bw) / 2, Math.abs(bh) / 2, 0, 0, Math.PI * 2);
-    } else roundRect(ctx, bx, by, bw, bh, cut.radius * scale);
+    roundRect(ctx, bx, by, bw, bh, radius * scale);
     ctx.clip();
     paintPicture(ctx, img, bx, by, bw, bh, pictureFit(fit), c);
   });
   ctx.restore();
 }
 
+/** A masked or flipped picture from its source (`drawImageFit` with a `shape`). */
+function drawShapedPicture(
+  ctx: Ctx2D,
+  img: CanvasImageSource,
+  box: Box,
+  scale: number,
+  fit: 'contain' | 'cover' | 'stretch',
+  opacity: number,
+  radius: number,
+  crop: ImageCrop | undefined,
+  shape: PictureShape,
+): void {
+  const c = clampCrop(crop);
+  const sized = { ...shape, w: box.w, h: box.h };
+  ctx.save();
+  placeBox(ctx, box, scale);
+  if (shape.mask && typeof OffscreenCanvas !== 'undefined' && typeof ctx.getTransform === 'function') {
+    const m = ctx.getTransform();
+    const xs = [m.e, m.a * box.w + m.e, m.c * box.h + m.e, m.a * box.w + m.c * box.h + m.e];
+    const ys = [m.f, m.b * box.w + m.f, m.d * box.h + m.f, m.b * box.w + m.d * box.h + m.f];
+    const canvas = ctx.canvas as { width?: number; height?: number } | undefined;
+    const cw = canvas?.width ?? 0;
+    const ch = canvas?.height ?? 0;
+    const X = Math.max(0, Math.floor(Math.min(...xs)));
+    const Y = Math.max(0, Math.floor(Math.min(...ys)));
+    const W = Math.min(cw || Number.POSITIVE_INFINITY, Math.ceil(Math.max(...xs))) - X;
+    const H = Math.min(ch || Number.POSITIVE_INFINITY, Math.ceil(Math.max(...ys))) - Y;
+    if (!(W >= 1 && H >= 1)) {
+      ctx.restore();
+      return;
+    }
+    if (W * H <= EFFECT_MAX_PIXELS && [m.a, m.b, m.c, m.d, m.e, m.f].every(Number.isFinite)) {
+      const sprite = new OffscreenCanvas(W, H).getContext('2d', { willReadFrequently: true });
+      if (sprite) {
+        sprite.imageSmoothingQuality = 'medium';
+        sprite.setTransform(m.a, m.b, m.c, m.d, m.e - X, m.f - Y);
+        paintShapedPicture(sprite, img, 0, 0, box.w, box.h, fit, c, sized);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.globalAlpha = opacity;
+        ctx.drawImage(sprite.canvas, X, Y);
+        ctx.restore();
+        return;
+      }
+    }
+  }
+  // A clip (not anti-aliased on an OffscreenCanvas): the mask's union, else the box with its corners.
+  ctx.globalAlpha = opacity;
+  const built = shape.mask ? storedGeometry(shape.mask, box.w, box.h) : undefined;
+  if (built) {
+    // The mask is mirrored with the picture: clip in the mirrored box, then mirror back (a flip about the
+    // centre undoes itself), since paintShapedPicture mirrors the picture again.
+    ctx.translate(box.w / 2, box.h / 2);
+    ctx.scale(shape.flipH ? -1 : 1, shape.flipV ? -1 : 1);
+    ctx.translate(-box.w / 2, -box.h / 2);
+    ctx.clip(geomFillPath2D(built), GEOM_CLIP_RULE);
+    ctx.translate(box.w / 2, box.h / 2);
+    ctx.scale(shape.flipH ? -1 : 1, shape.flipV ? -1 : 1);
+    ctx.translate(-box.w / 2, -box.h / 2);
+  } else {
+    roundRect(ctx, 0, 0, box.w, box.h, num(radius, 0, CLAMP.maxRadius, 0));
+    ctx.clip();
+  }
+  paintShapedPicture(ctx, img, 0, 0, box.w, box.h, fit, c, { ...sized, mask: undefined });
+  ctx.restore();
+}
+
 export function drawShape(ctx: Ctx2D, o: Extract<SlideObject, { type: 'shape' }>, scale: number): void {
+  if (hasShapeExtras(o)) {
+    drawGeomShape(ctx, o, scale);
+    return;
+  }
   const box = clampBox(o.box);
   ctx.save();
   ctx.globalAlpha = num(o.opacity, 0, 1, 1);
@@ -458,6 +542,8 @@ export function drawObject(ctx: Ctx2D, o: SlideObject, scale: number, images?: I
   if (o.type === 'text') drawTextObject(ctx, o, scale);
   else if (o.type === 'shape') drawShape(ctx, o, scale);
   else {
+    // A mask only in a geometry file not read yet: the picture waits for it, as for its own decode.
+    if (geomAwaited(o.mask)) return;
     const target = pictureTarget(o, scale);
     const img = images?.(o.mediaId, target);
     if (img) drawImageFit(ctx, img, o.box, scale, o.fit, o.opacity, o.radius, o.crop, target, o);
@@ -552,7 +638,7 @@ export function slidePictures(
   const out: SlidePicture[] = [];
   if (drawn.pictureMediaId)
     out.push({ mediaId: drawn.pictureMediaId, target: pictureTarget(SLIDE_PICTURE, scale) });
-  for (const o of drawn.objects)
+  for (const o of withinDrawBudget(drawn.objects))
     if (o.type === 'image') out.push({ mediaId: o.mediaId, target: pictureTarget(o, scale) });
   return out;
 }
@@ -578,7 +664,9 @@ export function drawSlide2D(ctx: Ctx2D, rawSlide: Slide, opts: SlideDrawOptions)
       const img = opts.images?.(drawn.pictureMediaId, target);
       if (img) drawImageFit(ctx, img, SLIDE_PICTURE.box, scale, 'contain', 1, 0, undefined, target);
     }
-    for (const o of drawn.objects) drawObject(ctx, o, scale, opts.images);
+    // Past the slide's drawing budget, later stored geometries draw as their legacy shapes and later effects are
+    // left out (geombudget.ts).
+    for (const o of withinDrawBudget(drawn.objects)) drawObject(ctx, o, scale, opts.images);
     return;
   }
   const text = lyricTextFor(slide, look, opts.isSong ?? true);

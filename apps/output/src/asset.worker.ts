@@ -28,6 +28,7 @@ import {
   lowerThirdReach,
   opaqueColor,
   propsReach,
+  readGeomFiles,
   rasterImage,
   rasterLowerThird,
   rasterProps,
@@ -37,7 +38,7 @@ import {
   slideReach,
   spriteRect,
 } from '@ordo/renderer';
-import { LOGICAL_WIDTH } from '@ordo/domain';
+import { drawnGeomRefs, GEOM_FILE_MAX_BYTES, isGeomFileRef, LOGICAL_WIDTH, type Slide } from '@ordo/domain';
 import { DecodeError, createDecoder } from './decode.ts';
 import { Cancelled, Lanes, RANK, type Steps } from './lanes.ts';
 import { OpaqueFiles } from './opaque.ts';
@@ -278,6 +279,32 @@ async function preload(
   return { lookup: pre.lookup, skipped: pre.skipped, missing, release: pre.release };
 }
 
+/**
+ * Read the geometry files a slide job draws (`ShapeGeom.ref`, design/27 §3.1), as its pictures are decoded
+ * before it is drawn: read off this thread like a picture's file, and parsed in the job's turns (`steps`),
+ * so a props job never waits for a large file's parse. Returns the hashes not there yet: drawn with their
+ * shapes' fallback for now, and reported with the missing images, so the link draws the slide again once
+ * they are cached.
+ */
+async function readGeoms(job: { slide?: Slide; nextSlide?: Slide }, steps: Steps): Promise<string[]> {
+  const refs: string[] = [];
+  for (const s of [job.slide, job.nextSlide]) if (s) refs.push(...drawnGeomRefs(s).filter(isGeomFileRef));
+  if (!refs.length) return [];
+  const r = await readGeomFiles(
+    refs,
+    async (hash) => {
+      const { blob } = await readFile(hash);
+      return blob.size > GEOM_FILE_MAX_BYTES ? null : blob.text();
+    },
+    undefined,
+    (fn) => steps.slice(fn),
+  );
+  steps.check();
+  const missing: string[] = [];
+  for (const [hash, why] of r) if (why === 'missing') missing.push(hash);
+  return missing;
+}
+
 /** Missing families a 'done' message reports: as many as the link keeps (FromAsset, protocol health). */
 const MAX_FONT_FALLBACKS = 20;
 /** Characters without a face a 'done' message reports. */
@@ -388,10 +415,13 @@ async function run(job: AssetJob, steps: Steps): Promise<void> {
   try {
     let draw: () => Drawn;
     if (job.kind === 'slide') {
+      // Geometry files first: a masked picture is prepared with its mask's paths, and the slide's reach and
+      // drawing budget are worked out with them.
+      const geoms = await readGeoms(job, steps);
       const pre = await preload(job.images, slidePictures(job.slide, { scale, look: job.look }), out, steps);
       release = pre.release;
       skipped = pre.skipped;
-      missing = pre.missing;
+      missing = geoms.length ? [...pre.missing, ...geoms] : pre.missing;
       draw = () => {
         const scene = sceneParts(job, out, scale, pre.lookup);
         if (scene) return { main: scene.base, scene };
@@ -562,6 +592,8 @@ async function warmUp(wj: WarmJob, steps: Steps): Promise<void> {
   const scale = out.w / LOGICAL_WIDTH;
   let decodes = 0;
   if (wj.slide) {
+    // Its geometry files first, as its slide job reads them: a masked picture is prepared cut to them.
+    await readGeoms(wj, steps);
     const pre = await preloadPictures(
       images,
       jobDecoder(steps),

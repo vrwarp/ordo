@@ -20,6 +20,8 @@ import {
   preparedKey,
 } from '@ordo/renderer';
 import { CONTENT_CASES, contentCase } from '@ordo/domain/content.test-util.ts';
+import { RecPath } from '@ordo/renderer/geom/path2d.test-util.ts';
+import { geomFile } from '@ordo/renderer/geom/stored.ts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -46,6 +48,15 @@ type FakeBitmap = {
 
 const W = 960;
 const H = 540;
+/** Geometry files the fake hub serves, by hash, and one it does not have. */
+const GEOM_READ = 'a'.repeat(64);
+const GEOM_GONE = 'b'.repeat(64);
+/** One only a warm job reads first. */
+const GEOM_WARM = 'c'.repeat(64);
+const GEOM_FILES = new Map([
+  [GEOM_READ, JSON.stringify({ paths: [{ d: 'M 0 0 L 10 0 L 10 10 Z', w: 10, h: 10 }] })],
+  [GEOM_WARM, JSON.stringify({ paths: [{ d: 'M 0 0 L 10 0 L 0 10 Z', w: 10, h: 10 }] })],
+]);
 
 /** A 2D context that logs fillText and drawImage on `rec` (every glyph is 10 device px wide). */
 function fakeCtx(rec: { ops: string[]; drawn: FakeBitmap[] }) {
@@ -154,14 +165,20 @@ beforeAll(async () => {
   vi.useFakeTimers({ toFake: ['setInterval'] });
   vi.stubGlobal('self', scope);
   vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
-  // Pictures arrive from the hub's file route, tagged with their hash; the poster is 4:3.
+  // Pictures arrive from the hub's file route, tagged with their hash; the poster is 4:3. Geometry files
+  // (`ShapeGeom.ref`) are JSON; one the hub does not have is a 404.
   vi.stubGlobal('fetch', async (url: string) => {
     const hash = /files\/([^?]+)/.exec(url)?.[1] ?? '';
+    if (hash === GEOM_GONE) return { status: 404, ok: false, blob: async () => ({}) };
+    const json = GEOM_FILES.get(hash);
+    if (json)
+      return { status: 200, ok: true, blob: async () => ({ size: json.length, text: async () => json }) };
     // A file's head (opaque.ts reads it): a .jpg starts with the JPEG marker, anything else is unknown.
     const head = hash.endsWith('.jpg') ? new Uint8Array([0xff, 0xd8, 0xff, 0xe0]) : new Uint8Array(4);
     const slice = () => ({ arrayBuffer: async () => head.buffer });
     return { status: 200, ok: true, blob: async () => ({ hash, size: 4, slice }) };
   });
+  vi.stubGlobal('Path2D', RecPath);
   // A decode of a file, or a reduction of a decoded picture (`downscaleFor`), keeps the tag.
   vi.stubGlobal(
     'createImageBitmap',
@@ -564,5 +581,52 @@ describe('asset worker: what health reads from a result (design/27 §13, M7)', (
       // No face is loaded here: text in an unloaded family is a font fallback, never probed glyph by glyph.
       expect(reply.uncovered).toBeUndefined();
     }
+  });
+});
+
+describe('asset worker: geometry files (ShapeGeom.ref)', () => {
+  const shape = (id: string, ref: string): SlideObject =>
+    ({
+      id,
+      type: 'shape',
+      box: box(100, 100, 400, 300),
+      shape: 'rect',
+      fill: { r: 255, g: 0, b: 0, a: 1 },
+      opacity: 1,
+      radius: 0,
+      geom: { ref },
+    }) as SlideObject;
+
+  it('reads the files a slide draws before drawing it, and reports one the hub lacks with the missing images', async () => {
+    const s: Slide = { id: 'g', objects: [shape('a', GEOM_READ), shape('b', GEOM_GONE)] };
+    const { reply } = await run(slideJob({ slide: s, images: {}, video: undefined, key: 'sl|geoms' }));
+    expect(reply).toMatchObject({ t: 'done', key: 'sl|geoms', missingImages: [GEOM_GONE] });
+    expect(geomFile(GEOM_READ)).toEqual(JSON.parse(GEOM_FILES.get(GEOM_READ)!));
+    expect(geomFile(GEOM_GONE)).toBeUndefined();
+  });
+
+  it("a warm job reads the next cue's geometry files, so its masked pictures are prepared cut to them", async () => {
+    replies.length = 0;
+    const next: Slide = {
+      id: 'warm-geom',
+      objects: [
+        {
+          id: 'm',
+          type: 'image',
+          box: box(0, 0, 400, 300),
+          mediaId: 'photo',
+          fit: 'cover',
+          opacity: 1,
+          radius: 0,
+          mask: { ref: GEOM_WARM },
+        } as SlideObject,
+      ],
+    };
+    expect(geomFile(GEOM_WARM)).toBeUndefined();
+    link.onmessage!({
+      data: { t: 'warm', warm: { key: 'wm|geom', slide: next, look: LOOK_MAIN, images: { photo: 'w.jpg' } } },
+    });
+    await vi.waitFor(() => expect(replies.some((r) => (r as { key?: string }).key === 'wm|geom')).toBe(true));
+    expect(geomFile(GEOM_WARM)).toEqual(JSON.parse(GEOM_FILES.get(GEOM_WARM)!));
   });
 });

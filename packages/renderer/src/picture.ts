@@ -1,7 +1,10 @@
 import { type Box, type ImageCrop, LOGICAL_HEIGHT, LOGICAL_WIDTH, type ShapeGeom } from '@ordo/domain';
 
-import { CLAMP, clampBox, clampCrop, clampMask, num } from './clamp.ts';
+import { CLAMP, clampBox, clampCrop, clampGeom, num } from './clamp.ts';
 import type { Ctx2D } from './ctx.ts';
+import { digest } from './digest.ts';
+import { GEOM_CLIP_RULE, geomFillPath2D } from './geom/draw.ts';
+import { geomPending, storedGeometry } from './geom/stored.ts';
 
 /**
  * Pictures prepared at their displayed device size (design/27 §7.1 "Decode target").
@@ -26,8 +29,16 @@ import type { Ctx2D } from './ctx.ts';
  * the 924 slides of worship shard 0 against LibreOffice, by up to 0.024 SSIM, against 24 slides by at
  * most 0.005 with the exact position.
  *
- * A rotated picture and one with round corners, a mask or a flip keep being drawn from the source through
- * the transform and the clip path (`drawImageFit`).
+ * A rotated picture and one with round corners keep being drawn from the source through the transform and
+ * the clip path (`drawImageFit`).
+ *
+ * A picture's mask and flips (design/27 §3.1 `ImageObject.mask`, `flipH`, `flipV`) are part of what is
+ * prepared: the bitmap holds the picture mirrored about the box's centre and cut to the mask's filled paths
+ * (their union, `geomFillPath2D`) by an anti-aliased fill, not a clip (a 2D clip on an OffscreenCanvas is not
+ * anti-aliased in Chromium), so a masked picture is copied 1:1 like any other, rotated ones included (their
+ * bitmap covers the turned box's bounds; a slide of four large turned photos in masks drew in 297 ms at 4K
+ * from the source, each through a frame-sized sprite). The mask is evaluated at the logical box (a resized
+ * picture keeps its corners) and scaled to the device box.
  */
 
 export type PictureFit = 'contain' | 'cover' | 'stretch';
@@ -40,37 +51,6 @@ export type PictureShape = { mask?: ShapeGeom; flipH?: boolean; flipV?: boolean 
 
 /** What a picture's pixels depend on besides its source: an `ImageObject`, or a frame-filling picture. */
 export type PictureDraw = { box: Box; fit: PictureFit; crop?: ImageCrop; radius?: number } & PictureShape;
-
-/** OOXML roundRect's default `adj`: the corner radius in 1/100,000 of the shorter side. */
-export const ROUND_RECT_ADJ = 16_667;
-
-/**
- * The outline a picture is cut to in its `w` x `h` box (logical px), as every drawer cuts it (the 2D
- * drawers, the editor and the video plane, `scene.ts`): an 'ellipse' mask is the box's ellipse; a
- * 'roundRect' mask is a rect with corners of its 'adj' share (0..50,000) of the shorter side; another
- * preset is the box itself until M6 draws presets; without a preset the box with `radius` corners.
- */
-export function pictureCut(
-  o: { radius?: number; mask?: ShapeGeom },
-  w: number,
-  h: number,
-): { kind: 'rect' | 'ellipse'; radius: number } {
-  const mask = clampMask(o.mask);
-  if (mask?.preset === 'ellipse') return { kind: 'ellipse', radius: 0 };
-  if (mask?.preset === 'roundRect') {
-    let adj = ROUND_RECT_ADJ;
-    for (const [name, v] of mask.adj ?? []) if (name === 'adj') adj = num(v, 0, 50_000, ROUND_RECT_ADJ);
-    const side = Math.min(Math.abs(w), Math.abs(h));
-    return { kind: 'rect', radius: Number.isFinite(side) ? (side * adj) / 100_000 : 0 };
-  }
-  if (mask?.preset !== undefined) return { kind: 'rect', radius: 0 };
-  return { kind: 'rect', radius: num(o.radius, 0, CLAMP.maxRadius, 0) };
-}
-
-/** Whether a picture is cut or mirrored beyond its box and `radius` (it is then drawn from its source). */
-export function isShapedPicture(o: PictureShape): boolean {
-  return o.flipH === true || o.flipV === true || clampMask(o.mask)?.preset !== undefined;
-}
 
 /**
  * The device pixels a picture is prepared for and copied to: the box's device rectangle widened to whole
@@ -96,7 +76,51 @@ export type PictureTarget = {
    * their caches by the file and this.
    */
   key: string;
+  /** The clamped mask and flips (absent when there are none), with the logical box size the mask is built at. */
+  shape?: PictureShape & { w: number; h: number };
+  /**
+   * A masked picture's rotation in degrees about the box's centre (bx, by, bw, bh stay the unturned box): the
+   * bitmap covers the turned box's bounds and holds the picture turned and cut to its mask.
+   */
+  rotation?: number;
 };
+
+/** Clamped masks and their key digests, by the stored mask object (a slide's pictures are asked for often). */
+const masks = new WeakMap<object, { mask: ShapeGeom | undefined; key: string }>();
+
+function maskOf(v: unknown): { mask: ShapeGeom | undefined; key: string } {
+  if (!v || typeof v !== 'object') return { mask: undefined, key: '' };
+  let hit = masks.get(v);
+  if (!hit) {
+    const mask = clampGeom(v);
+    hit = { mask, key: mask ? digest(JSON.stringify(mask)) : '' };
+    masks.set(v, hit);
+    if (mask) masks.set(mask, hit);
+  }
+  return hit;
+}
+
+/** The clamped mask and flips of a picture, or undefined when it has none. */
+export function pictureShape(o: PictureShape): PictureShape | undefined {
+  const mask = maskOf(o.mask).mask;
+  const flipH = o.flipH === true;
+  const flipV = o.flipV === true;
+  if (!mask && !flipH && !flipV) return undefined;
+  const out: PictureShape = {};
+  if (mask) out.mask = mask;
+  if (flipH) out.flipH = true;
+  if (flipV) out.flipV = true;
+  return out;
+}
+
+/**
+ * The key part of a picture's mask and flips; a mask whose geometry file is not read yet is told apart, so
+ * the picture prepared with its fallback is not taken for the one cut to the file's paths.
+ */
+function shapeKey(s: PictureShape): string {
+  const mask = s.mask ? `m${maskOf(s.mask).key}${geomPending(s.mask) ? '?' : ''}` : '';
+  return ` ${s.flipH ? 'h' : ''}${s.flipV ? 'v' : ''}${mask}`;
+}
 
 /** The largest picture prepared (16 MP, design/27 §7.1); a larger box is drawn from the source as before. */
 export const MAX_PREPARED_PIXELS = 16_000_000;
@@ -108,27 +132,46 @@ export function pictureFit(fit: unknown): PictureFit {
 
 /**
  * The device pixels a picture is prepared for at `scale` (device px per logical px): undefined for a rotated
- * box, round corners, a mask or a flip (a clip path and a mirror), an empty box, one entirely off the canvas
- * or one over `MAX_PREPARED_PIXELS`. Those are drawn from the source as before. Edges within 1e-6 px of a pixel boundary
- * are taken as on it, so float noise never widens a box by a pixel.
+ * box, round corners (a clip path), an empty box, one entirely off the canvas or one over
+ * `MAX_PREPARED_PIXELS`. Those are drawn from the source as before. A masked picture is prepared with round
+ * corners (the mask replaces them) and rotated (the bitmap covers the turned box's bounds). Edges within
+ * 1e-6 px of a pixel boundary are taken as on it, so float noise never widens a box by a pixel.
  */
 export function pictureTarget(o: PictureDraw, scale: number): PictureTarget | undefined {
   if (!(Number.isFinite(scale) && scale > 0)) return undefined;
   const box = clampBox(o.box);
-  if (box.rotation) return undefined;
-  if (num(o.radius, 0, CLAMP.maxRadius, 0) > 0 || isShapedPicture(o)) return undefined;
+  const shape = pictureShape(o);
+  // A rotated picture is prepared only with a mask, which cuts it (anti-aliased) wherever the box turns.
+  if (box.rotation && !shape?.mask) return undefined;
+  if (!shape?.mask && num(o.radius, 0, CLAMP.maxRadius, 0) > 0) return undefined;
   const snap = (v: number) => (Math.abs(v - Math.round(v)) < 1e-6 ? Math.round(v) : v);
   const x0 = snap(box.x * scale);
   const y0 = snap(box.y * scale);
   const x1 = snap((box.x + box.w) * scale);
   const y1 = snap((box.y + box.h) * scale);
+  // The device rect the picture covers: the box's, or the bounds of the turned box.
+  let ax0 = x0;
+  let ay0 = y0;
+  let ax1 = x1;
+  let ay1 = y1;
+  if (box.rotation) {
+    const th = (box.rotation * Math.PI) / 180;
+    const hw = ((x1 - x0) * Math.abs(Math.cos(th)) + (y1 - y0) * Math.abs(Math.sin(th))) / 2;
+    const hh = ((x1 - x0) * Math.abs(Math.sin(th)) + (y1 - y0) * Math.abs(Math.cos(th))) / 2;
+    const cx = (x0 + x1) / 2;
+    const cy = (y0 + y1) / 2;
+    ax0 = cx - hw;
+    ay0 = cy - hh;
+    ax1 = cx + hw;
+    ay1 = cy + hh;
+  }
   // The canvas: the logical frame at this scale, in whole pixels.
   const cw = Math.ceil(snap(LOGICAL_WIDTH * scale));
   const ch = Math.ceil(snap(LOGICAL_HEIGHT * scale));
-  const x = Math.max(0, Math.floor(x0));
-  const y = Math.max(0, Math.floor(y0));
-  const w = Math.min(cw, Math.ceil(x1)) - x;
-  const h = Math.min(ch, Math.ceil(y1)) - y;
+  const x = Math.max(0, Math.floor(ax0));
+  const y = Math.max(0, Math.floor(ay0));
+  const w = Math.min(cw, Math.ceil(ax1)) - x;
+  const h = Math.min(ch, Math.ceil(ay1)) - y;
   if (!(w >= 1 && h >= 1 && x1 > x0 && y1 > y0) || w * h > MAX_PREPARED_PIXELS) return undefined;
   const bx = x0 - x;
   const by = y0 - y;
@@ -136,9 +179,64 @@ export function pictureTarget(o: PictureDraw, scale: number): PictureTarget | un
   const bh = y1 - y0;
   const fit = pictureFit(o.fit);
   const crop = clampCrop(o.crop);
-  const key = `${w}x${h} ${bx} ${by} ${bw} ${bh} ${fit}${crop ? ` ${crop.l} ${crop.t} ${crop.r} ${crop.b}` : ''}`;
-  const t = { x, y, w, h, fit, bx, by, bw, bh, key };
-  return crop ? { ...t, crop } : t;
+  const turn = box.rotation ? ` r${box.rotation}` : '';
+  const key = `${w}x${h} ${bx} ${by} ${bw} ${bh} ${fit}${crop ? ` ${crop.l} ${crop.t} ${crop.r} ${crop.b}` : ''}${turn}${shape ? shapeKey(shape) : ''}`;
+  const t: PictureTarget = { x, y, w, h, fit, bx, by, bw, bh, key };
+  if (crop) t.crop = crop;
+  if (shape) t.shape = { ...shape, w: box.w, h: box.h };
+  if (box.rotation) t.rotation = box.rotation;
+  return t;
+}
+
+/**
+ * Maps a picture's box (0..w, 0..h, the logical box) onto device px (bx, by, bw, bh) of `ctx`, mirrored about
+ * the box's centre as `shape` says.
+ */
+function placeShape(
+  ctx: Ctx2D,
+  bx: number,
+  by: number,
+  bw: number,
+  bh: number,
+  shape: PictureShape & { w: number; h: number },
+): void {
+  ctx.translate(bx + bw / 2, by + bh / 2);
+  ctx.scale(shape.flipH ? -1 : 1, shape.flipV ? -1 : 1);
+  ctx.translate(-bw / 2, -bh / 2);
+  if (shape.w > 0 && shape.h > 0) ctx.scale(bw / shape.w, bh / shape.h);
+}
+
+/**
+ * Paints a picture as `paintPicture` does, mirrored and cut to its mask as `shape` says (box: device px
+ * bx, by, bw, bh; the mask built at the logical box `shape.w` x `shape.h`). The cut is a 'destination-in'
+ * fill of the mask, so `ctx` must hold nothing else under the picture (a sprite or a prepared bitmap).
+ * `from`: `img` holds only part of the picture (`PictureFrom`, a crop-aware decode).
+ */
+export function paintShapedPicture(
+  ctx: Ctx2D,
+  img: CanvasImageSource,
+  bx: number,
+  by: number,
+  bw: number,
+  bh: number,
+  fit: PictureFit,
+  c: ImageCrop | undefined,
+  shape: PictureShape & { w: number; h: number },
+  from?: PictureFrom,
+): void {
+  ctx.save();
+  placeShape(ctx, bx, by, bw, bh, shape);
+  const lw = shape.w > 0 ? shape.w : bw;
+  const lh = shape.h > 0 ? shape.h : bh;
+  if (from) paintPictureFrom(ctx, img, from, 0, 0, lw, lh, fit, c);
+  else paintPicture(ctx, img, 0, 0, lw, lh, fit, c);
+  const built = shape.mask ? storedGeometry(shape.mask, lw, lh) : undefined;
+  if (built) {
+    ctx.globalCompositeOperation = 'destination-in';
+    ctx.fillStyle = '#000';
+    ctx.fill(geomFillPath2D(built), GEOM_CLIP_RULE);
+  }
+  ctx.restore();
 }
 
 /** Bitmaps `preparePicture` made: the key of the target each was made for, and its source's size. */
@@ -231,22 +329,12 @@ export function* preparePictureSteps(
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'medium';
   const rows = Math.max(1, Math.floor(stepPixels / t.w));
-  if (rows >= t.h) {
-    ctx.beginPath();
-    ctx.rect(t.bx, t.by, t.bw, t.bh);
-    ctx.clip();
-    paintTarget(ctx, src, t, from);
-  } else {
+  if (rows >= t.h) paintTarget(ctx, src, t, from);
+  else {
     for (let y = 0; y < t.h; y += rows) {
       if (y > 0) yield;
       ctx.save();
-      ctx.beginPath();
-      ctx.rect(t.bx, t.by, t.bw, t.bh);
-      ctx.clip();
-      ctx.beginPath();
-      ctx.rect(0, y, t.w, Math.min(rows, t.h - y));
-      ctx.clip();
-      paintTarget(ctx, src, t, from);
+      paintTarget(ctx, src, t, from, y, Math.min(rows, t.h - y));
       ctx.restore();
     }
   }
@@ -256,8 +344,39 @@ export function* preparePictureSteps(
   return bmp;
 }
 
-function paintTarget(ctx: Ctx2D, src: CanvasImageSource, t: PictureTarget, from?: PictureFrom): void {
-  if (from) paintPictureFrom(ctx, src, from, t.bx, t.by, t.bw, t.bh, t.fit, t.crop);
+/**
+ * One step of a preparation: the picture clipped to its box (a masked one is not: its mask's cut is its edge)
+ * and to the band of `rows` rows from `y` when given, then drawn as the target says: turned with its box and
+ * cut to its mask, mirrored, or as it is.
+ */
+function paintTarget(
+  ctx: Ctx2D,
+  src: CanvasImageSource,
+  t: PictureTarget,
+  from?: PictureFrom,
+  y?: number,
+  rows?: number,
+): void {
+  const masked = !!t.shape?.mask;
+  if (!masked) {
+    ctx.beginPath();
+    ctx.rect(t.bx, t.by, t.bw, t.bh);
+    ctx.clip();
+  }
+  if (y !== undefined && rows !== undefined) {
+    ctx.beginPath();
+    ctx.rect(0, y, t.w, rows);
+    ctx.clip();
+  }
+  if (t.shape && masked && t.rotation) {
+    const cx = t.bx + t.bw / 2;
+    const cy = t.by + t.bh / 2;
+    ctx.translate(cx, cy);
+    ctx.rotate((t.rotation * Math.PI) / 180);
+    ctx.translate(-cx, -cy);
+  }
+  if (t.shape) paintShapedPicture(ctx, src, t.bx, t.by, t.bw, t.bh, t.fit, t.crop, t.shape, from);
+  else if (from) paintPictureFrom(ctx, src, from, t.bx, t.by, t.bw, t.bh, t.fit, t.crop);
   else paintPicture(ctx, src, t.bx, t.by, t.bw, t.bh, t.fit, t.crop);
 }
 
@@ -325,7 +444,9 @@ export function pictureLayout(
 /**
  * The part of an `iw` x `ih` picture that target `t` shows (in the picture's pixels: what lies inside the
  * box and on the canvas), and the device pixels per picture pixel it is shown at (`scale`, the larger of the
- * two axes). Undefined when nothing of it is visible.
+ * two axes). Undefined when nothing of it is visible. A mirrored picture shows the part mirrored about the
+ * box's centre; a turned one (a masked picture, prepared over the turned box's bounds) is taken to show its
+ * whole box.
  */
 export function pictureRegion(
   t: PictureTarget,
@@ -336,10 +457,13 @@ export function pictureRegion(
   const l = pictureLayout(iw, ih, t.bx, t.by, t.bw, t.bh, t.fit, t.crop);
   if (!l || !(l.kx > 0 && l.ky > 0) || !Number.isFinite(l.kx) || !Number.isFinite(l.ky)) return undefined;
   // The device window: the box (the clip) on the target's canvas.
-  const X0 = Math.max(t.bx, 0);
-  const Y0 = Math.max(t.by, 0);
-  const X1 = Math.min(t.bx + t.bw, t.w);
-  const Y1 = Math.min(t.by + t.bh, t.h);
+  let X0 = t.rotation ? t.bx : Math.max(t.bx, 0);
+  let Y0 = t.rotation ? t.by : Math.max(t.by, 0);
+  let X1 = t.rotation ? t.bx + t.bw : Math.min(t.bx + t.bw, t.w);
+  let Y1 = t.rotation ? t.by + t.bh : Math.min(t.by + t.bh, t.h);
+  // Mirrored, the window's part of the box comes from the other side of the picture.
+  if (t.shape?.flipH) [X0, X1] = [2 * t.bx + t.bw - X1, 2 * t.bx + t.bw - X0];
+  if (t.shape?.flipV) [Y0, Y1] = [2 * t.by + t.bh - Y1, 2 * t.by + t.bh - Y0];
   const x0 = Math.max(l.x0, l.sx + (X0 - l.dx) / l.kx);
   const y0 = Math.max(l.y0, l.sy + (Y0 - l.dy) / l.ky);
   const x1 = Math.min(l.x1, l.sx + (X1 - l.dx) / l.kx);

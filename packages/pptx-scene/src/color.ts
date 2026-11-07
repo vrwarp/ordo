@@ -39,8 +39,12 @@ export interface ColorCtx {
   phClr?: Rgba;
 }
 
-/** Reads an `a:blipFill` into a picture fill; supplied by `picture.ts`, which knows the relationships. */
-export type BlipReader = (blipFill: XNode) => PictureFill | undefined;
+/**
+ * Reads an `a:blipFill` into a picture fill; supplied by `picture.ts`, which knows the relationships. `color`
+ * is the context the fill is read in (a style-matrix entry's, with its `phClr`), for the colours of its
+ * recolouring (M6: a theme background's duotone in the reference's colour).
+ */
+export type BlipReader = (blipFill: XNode, color?: ColorCtx) => PictureFill | undefined;
 
 /** Modifiers read per colour element; real decks use up to four. Bounds the work a theme entry can cause. */
 export const MAX_MODIFIERS = 32;
@@ -613,6 +617,8 @@ function gradientOf(el: XNode, ctx: ColorCtx): Fill {
   if (stops.length === 1) return { kind: 'solid', color: stops[0]!.color };
   const lin = child(el, 'a:lin');
   const path = child(el, 'a:path');
+  // M6: `rotWithShape="0"` keeps the angle on the slide; `scaled="1"` scales it with the box.
+  const fixed = el.attrs.rotWithShape === '0' || el.attrs.rotWithShape === 'false';
   if (path) {
     const r = child(path, 'a:fillToRect')?.attrs;
     const kind = path.attrs.path ?? '';
@@ -621,10 +627,18 @@ function gradientOf(el: XNode, ctx: ColorCtx): Fill {
       stops,
       path: PATH_KINDS.has(kind) ? kind : 'circle',
       ...(r ? { focus: { l: frac(r.l), t: frac(r.t), r: frac(r.r), b: frac(r.b) } } : {}),
+      ...(fixed ? { fixed } : {}),
     };
   }
   const ang = intOf(lin?.attrs.ang) / PER_DEGREE;
-  return { kind: 'gradient', stops, angle: ((ang % 360) + 360) % 360 };
+  const scaled = lin?.attrs.scaled === '1' || lin?.attrs.scaled === 'true';
+  return {
+    kind: 'gradient',
+    stops,
+    angle: ((ang % 360) + 360) % 360,
+    ...(scaled ? { scaled } : {}),
+    ...(fixed ? { fixed } : {}),
+  };
 }
 
 /** One fill element. A gradient without stops is no fill; a pattern keeps its two colours. */
@@ -646,7 +660,7 @@ export function fillOf(el: XNode, ctx: ColorCtx, blip?: BlipReader): Fill {
       };
     }
     case 'a:blipFill': {
-      const picture = blip?.(el);
+      const picture = blip?.(el, ctx);
       return picture ? { kind: 'picture', picture } : { kind: 'none' };
     }
     case 'a:grpFill':

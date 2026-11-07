@@ -1,5 +1,5 @@
 import type { Rgba } from '@ordo/domain';
-import { drawGeom, geomFillPath2D, GEOM_FILL_RULE } from './draw.ts';
+import { drawGeom, GEOM_CLIP_RULE, GEOM_FILL_RULE, geomFillPath2D } from './draw.ts';
 import { type BuiltGeom, customGeometry, presetGeometry } from './path.ts';
 
 /**
@@ -106,6 +106,30 @@ function run(): Check[] {
   expectPixel(checks, 'donut clip hole', clipped, 150, 100, none);
   expectPixel(checks, 'donut clip ring', clipped, 25, 100, [0, 255, 0, 255]);
   expectPixel(checks, 'donut clip corner', clipped, 2, 2, none);
+
+  // smileyFace's eyes are a second filled path over its face: the clip is their union, eyes included, filled
+  // with GEOM_CLIP_RULE (one even-odd path of both would cut the eyes out of a picture).
+  const smiley = new OffscreenCanvas(300, 300).getContext('2d')!;
+  smiley.fillStyle = '#00ff00';
+  smiley.fill(geomFillPath2D(presetGeometry('smileyFace', 300, 300)!), GEOM_CLIP_RULE);
+  const face = smiley.getImageData(0, 0, 300, 300);
+  checks.push({ what: 'clip rule', ok: GEOM_CLIP_RULE === 'nonzero', detail: GEOM_CLIP_RULE });
+  // The left eye's centre: (wd3, hd3·1.1) of the preset, about (99, 105).
+  expectPixel(checks, 'smileyFace union keeps the eye', face, 99, 105, [0, 255, 0, 255]);
+  expectPixel(checks, 'smileyFace union keeps the face', face, 150, 150, [0, 255, 0, 255]);
+  expectPixel(checks, 'smileyFace union outside', face, 3, 3, none);
+  // The union keeps each path's even-odd holes under the non-zero rule: the donut's, and the nested squares'
+  // traced the same way round.
+  const holes = new OffscreenCanvas(300, 200).getContext('2d')!;
+  holes.fillStyle = '#00ff00';
+  holes.fill(geomFillPath2D(presetGeometry('donut', 300, 200)!), GEOM_CLIP_RULE);
+  expectPixel(checks, 'donut union hole', holes.getImageData(0, 0, 300, 200), 150, 100, none);
+  expectPixel(checks, 'donut union ring', holes.getImageData(0, 0, 300, 200), 25, 100, [0, 255, 0, 255]);
+  const sq = new OffscreenCanvas(100, 100).getContext('2d')!;
+  sq.fillStyle = '#00ff00';
+  sq.fill(geomFillPath2D(nested), GEOM_CLIP_RULE);
+  expectPixel(checks, 'nested squares union hole', sq.getImageData(0, 0, 100, 100), 50, 50, none);
+  expectPixel(checks, 'nested squares union ring', sq.getImageData(0, 0, 100, 100), 10, 50, [0, 255, 0, 255]);
   return checks;
 }
 

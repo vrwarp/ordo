@@ -118,6 +118,7 @@ export function ColorField(props: {
   value: Rgba;
   onChange: (c: Rgba) => void;
   alpha?: boolean;
+  disabled?: boolean;
 }) {
   const { value } = props;
   const el = (
@@ -125,6 +126,7 @@ export function ColorField(props: {
       <input
         type="color"
         value={rgbaHex(value)}
+        disabled={props.disabled}
         onChange={(e) => props.onChange(hexToRgba(e.target.value, value.a))}
       />
       {props.alpha !== false && (
@@ -134,6 +136,7 @@ export function ColorField(props: {
           max={1}
           step={0.01}
           value={value.a}
+          disabled={props.disabled}
           title={`Opacity ${Math.round(value.a * 100)}%`}
           style={{ width: 70 }}
           onChange={(e) => props.onChange({ ...value, a: Number(e.target.value) })}

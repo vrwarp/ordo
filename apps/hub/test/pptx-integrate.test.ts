@@ -374,7 +374,8 @@ describe.skipIf(!tools)('a chart over a photo background (design/27 §15 M3 exit
 describe.skipIf(!tools)('a 4:3 deck (design/27 §4, §15 M3 exit)', () => {
   it('keeps its bars empty on native, hybrid and picture slides and aligns with LibreOffice within 2 px', async () => {
     const chartRel = (n: number) => ({ id: `rId${n}`, type: 'chart', target: `../charts/chart${n}.xml` });
-    // Slide 3 holds more objects than a native slide may (150): picture class.
+    // Slide 3 holds more objects than a native slide may (150), each with text, which never goes to the art
+    // (plain shapes past the budget would): picture class.
     let crowd = '';
     for (let i = 0; i < 160; i++)
       crowd += sp({
@@ -384,6 +385,7 @@ describe.skipIf(!tools)('a 4:3 deck (design/27 §4, §15 M3 exit)', () => {
         cx: 0.2 * IN,
         cy: 0.05 * IN,
         fill: solid('808080'),
+        txBody: body(para(run('.', 'sz="100"'))),
       });
     const red = [IN, IN, 3 * IN, 2 * IN] as const;
     const green = [2 * IN, 3 * IN, 2 * IN, 2 * IN] as const;

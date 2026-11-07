@@ -69,7 +69,10 @@ export const LIBRARY_APPLIED_WAIT_MS = 2500;
 
 export type FileEntry = { path: string; mime: string };
 
-/** Content-store files the live process serves itself: the live playlist's media and fonts, fonts, logo. */
+/**
+ * Content-store files the live process serves itself: the live playlist's media, geometry files
+ * (`ResolvedPlaylist.geoms`) and fonts, fonts, logo.
+ */
 export function liveFiles(
   resolved: ResolvedPlaylist | undefined,
   ctx: LiveContext | undefined,
@@ -85,6 +88,7 @@ export function liveFiles(
     add(m.poster);
   };
   for (const m of Object.values(resolved?.media ?? {})) addMedia(m);
+  for (const f of resolved?.geoms ?? []) add(f);
   for (const f of resolved?.fonts ?? []) add(f.file);
   for (const f of ctx?.fonts ?? []) add(f.file);
   addMedia(ctx?.logo);

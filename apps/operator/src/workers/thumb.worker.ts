@@ -1,7 +1,21 @@
 /// <reference lib="webworker" />
-import type { Look, Rgba, Slide } from '@ordo/domain';
+import {
+  drawnGeomRefs,
+  GEOM_FILE_MAX_BYTES,
+  isGeomFileRef,
+  type Look,
+  type Rgba,
+  type Slide,
+} from '@ordo/domain';
 import { isControl, startHeartbeat } from '@ordo/client';
-import { FontResolver, drawImageFit, drawSlide2D, fillColor, installFontEnv } from '@ordo/renderer';
+import {
+  FontResolver,
+  drawImageFit,
+  drawSlide2D,
+  fillColor,
+  installFontEnv,
+  readGeomFiles,
+} from '@ordo/renderer';
 
 /** Thumbnail worker (design/15): the shared 2D rasterizer on an OffscreenCanvas; the main thread never rasterizes. */
 
@@ -112,6 +126,13 @@ async function render(job: ThumbJob): Promise<Blob> {
     ctx.fillRect(0, 0, job.width, job.height);
   }
   const scale = job.width / 1920;
+  // Geometry files the slides draw (`ShapeGeom.ref`), read as their pictures are.
+  const refs = [...drawnGeomRefs(job.slide), ...(job.nextSlide ? drawnGeomRefs(job.nextSlide) : [])];
+  if (refs.some(isGeomFileRef))
+    await readGeomFiles(refs.filter(isGeomFileRef), async (hash) => {
+      const b = await fileBlob(hash);
+      return !b ? undefined : b.size > GEOM_FILE_MAX_BYTES ? null : b.text();
+    });
   const ids = Object.entries(job.images);
   const bms = new Map<string, ImageBitmap>();
   await Promise.all(

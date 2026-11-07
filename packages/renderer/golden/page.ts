@@ -28,6 +28,7 @@ import { type FontFile, FontResolver, LEGACY_FONT_ENV, installFontEnv } from '..
 import { isRichText, RICH_STYLE_KEYS } from '../src/text/rich.ts';
 import { CONTENT_CASES } from './content-cases.ts';
 import { RICH_CASES, invarianceObjects } from './rich-cases.ts';
+import { SHAPE_CASES } from './shape-cases.ts';
 
 /**
  * Browser side of the golden-image test (design/14, design/23, design/27 §14 item 4): renders known slides
@@ -643,6 +644,7 @@ export const CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2D) => v
     editorCanvasDraw(ctx, edited, SCALE, cropImages);
   },
   ...CONTENT_CASES,
+  ...SHAPE_CASES,
 };
 
 /**

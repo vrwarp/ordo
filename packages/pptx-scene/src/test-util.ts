@@ -9,6 +9,8 @@
  *
  * EMU everywhere: 914,400 per inch, 12,700 per point; the default slide is 12,192,000 x 6,858,000.
  */
+import type { ShapeGeom, SlideObject } from '@ordo/domain';
+import type { EmitResult } from './emit.ts';
 import type { PartSource } from './opc.ts';
 
 export const NS_A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
@@ -393,15 +395,66 @@ export interface GroupSpec {
   chY?: number;
   chCx?: number;
   chCy?: number;
+  /** The group's rotation in degrees and flips (M6). */
+  rot?: number;
+  flipH?: boolean;
+  flipV?: boolean;
 }
 
 /** A `p:grpSp` around `inner` shapes. */
 export function grpSp(o: GroupSpec, inner: string): string {
+  const attrs = `${o.rot ? ` rot="${Math.round(o.rot * 60_000)}"` : ''}${o.flipH ? ' flipH="1"' : ''}${o.flipV ? ' flipV="1"' : ''}`;
   return (
     `<p:grpSp><p:nvGrpSpPr><p:cNvPr id="${o.id}" name="Group ${o.id}"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>` +
-    `<p:grpSpPr><a:xfrm><a:off x="${o.x}" y="${o.y}"/><a:ext cx="${o.cx}" cy="${o.cy}"/>` +
+    `<p:grpSpPr><a:xfrm${attrs}><a:off x="${o.x}" y="${o.y}"/><a:ext cx="${o.cx}" cy="${o.cy}"/>` +
     `<a:chOff x="${o.chX ?? o.x}" y="${o.chY ?? o.y}"/><a:chExt cx="${o.chCx ?? o.cx}" cy="${o.chCy ?? o.cy}"/></a:xfrm></p:grpSpPr>` +
     `${inner}</p:grpSp>`
+  );
+}
+
+export interface CxnSpec {
+  id: number;
+  x: number;
+  y: number;
+  cx: number;
+  cy: number;
+  rot?: number;
+  flipH?: boolean;
+  flipV?: boolean;
+  /** `a:prstGeom prst` (default 'straightConnector1') and its `a:avLst` inner XML. */
+  geom?: string;
+  av?: string;
+  /** The ends glued to shapes: `a:stCxn`, `a:endCxn` (`cNvPr id`, site index). */
+  start?: { id: number; idx: number };
+  end?: { id: number; idx: number };
+  /** The `a:ln` element (default 1 pt black). */
+  ln?: string;
+}
+
+/** A `p:cxnSp` connector (M6). */
+export function cxnSp(o: CxnSpec): string {
+  const ref = (name: string, r?: { id: number; idx: number }) =>
+    r ? `<a:${name} id="${r.id}" idx="${r.idx}"/>` : '';
+  return (
+    `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="${o.id}" name="Connector ${o.id}"/><p:cNvCxnSpPr>${ref('stCxn', o.start)}${ref('endCxn', o.end)}</p:cNvCxnSpPr><p:nvPr/></p:nvCxnSpPr>` +
+    `<p:spPr>${xfrm(o.x, o.y, o.cx, o.cy, { rot: o.rot, flipH: o.flipH, flipV: o.flipV })}` +
+    `<a:prstGeom prst="${o.geom ?? 'straightConnector1'}"><a:avLst>${o.av ?? ''}</a:avLst></a:prstGeom>` +
+    `${o.ln ?? `<a:ln w="12700">${solid('000000')}</a:ln>`}</p:spPr></p:cxnSp>`
+  );
+}
+
+/** An `a:custGeom` from its `a:avLst`/`a:gdLst` inner XML, `a:path` elements, `a:rect` and `a:cxnLst` (M6). */
+export function custGeom(o: {
+  av?: string;
+  gd?: string;
+  paths: string;
+  rect?: string;
+  cxn?: string;
+}): string {
+  return (
+    `<a:custGeom><a:avLst>${o.av ?? ''}</a:avLst><a:gdLst>${o.gd ?? ''}</a:gdLst><a:ahLst/>` +
+    `<a:cxnLst>${o.cxn ?? ''}</a:cxnLst>${o.rect ? `<a:rect ${o.rect}/>` : '<a:rect l="l" t="t" r="r" b="b"/>'}` +
+    `<a:pathLst>${o.paths}</a:pathLst></a:custGeom>`
   );
 }
 
@@ -612,4 +665,308 @@ export function timingXml(media: MediaTimingSpec[], extra = ''): string {
     )
     .join('');
   return `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>${main}${nodes}${triggers}${extra}</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`;
+}
+
+// ── Tables (M6, `tables.ts`) ──────────────────────────────────────────────────────────────────────────────
+
+const NS_TABLE = 'http://schemas.openxmlformats.org/drawingml/2006/table';
+
+/**
+ * An `a:tc`: its text as one run per paragraph (`\n` splits them; `rPr` attributes and `rPrChildren` of each
+ * run, `pPr` attributes of each paragraph), `tcPr` attributes of its cell properties, `attrs` its own.
+ */
+export function tc(
+  text = '',
+  o: { tcPr?: string; attrs?: string; rPr?: string; rPrChildren?: string; pPr?: string } = {},
+): string {
+  const paras = text
+    .split('\n')
+    .map((t) => (t ? para(run(t, o.rPr ?? '', o.rPrChildren ?? ''), o.pPr) : para('', o.pPr)))
+    .join('');
+  return `<a:tc${o.attrs ? ` ${o.attrs}` : ''}><a:txBody><a:bodyPr/><a:lstStyle/>${paras}</a:txBody><a:tcPr${o.tcPr ?? ''}/></a:tc>`;
+}
+
+/** An `a:tc` with child elements in its `a:tcPr` (lines, fill): `tcPrAttrs` then `inner`. */
+export function tcWith(
+  text: string,
+  inner: string,
+  o: { tcPrAttrs?: string; attrs?: string; rPr?: string } = {},
+): string {
+  const paras = text
+    .split('\n')
+    .map((t) => (t ? para(run(t, o.rPr ?? '')) : para('')))
+    .join('');
+  return `<a:tc${o.attrs ? ` ${o.attrs}` : ''}><a:txBody><a:bodyPr/><a:lstStyle/>${paras}</a:txBody><a:tcPr${o.tcPrAttrs ?? ''}>${inner}</a:tcPr></a:tc>`;
+}
+
+/** A `p:graphicFrame` holding a table: column widths, rows of a height and `tc(...)` cells, `a:tblPr` inside. */
+export function tableFrame(o: {
+  id: number;
+  x: number;
+  y: number;
+  cols: number[];
+  rows: { h: number; cells: string[] }[];
+  tblPr?: string;
+}): string {
+  const cx = o.cols.reduce((s, w) => s + w, 0);
+  const cy = o.rows.reduce((s, r) => s + r.h, 0);
+  return (
+    `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${o.id}" name="Table ${o.id}"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr>` +
+    `<p:xfrm><a:off x="${o.x}" y="${o.y}"/><a:ext cx="${cx}" cy="${cy}"/></p:xfrm>` +
+    `<a:graphic><a:graphicData uri="${NS_TABLE}"><a:tbl>${o.tblPr ?? '<a:tblPr/>'}<a:tblGrid>${o.cols
+      .map((w) => `<a:gridCol w="${w}"/>`)
+      .join('')}</a:tblGrid>${o.rows
+      .map((r) => `<a:tr h="${r.h}">${r.cells.join('')}</a:tr>`)
+      .join('')}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>`
+  );
+}
+
+/** Add `ppt/tableStyles.xml` (`a:tblStyleLst` holding `styles`) with the presentation's relationship to it. */
+export function withTableStyles(parts: PartSource, styles: string): PartSource {
+  const relsName = 'ppt/_rels/presentation.xml.rels';
+  parts.set(
+    relsName,
+    new TextEncoder().encode(
+      partText(parts, relsName).replace(
+        '</Relationships>',
+        `<Relationship Id="rIdTs" Type="${relTypeUri('tableStyles')}" Target="tableStyles.xml"/></Relationships>`,
+      ),
+    ),
+  );
+  return withPart(
+    parts,
+    'ppt/tableStyles.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<a:tblStyleLst xmlns:a="${NS_A}" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}">${styles}</a:tblStyleLst>`,
+    'application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml',
+  );
+}
+
+/** Pair kerning for `sfntFont` (R1): `[left, right, x advance in font units]` per pair. */
+export interface KernSpec {
+  pairs: [string, string, number][];
+  /**
+   * How it is stored: `GPOS` PairPos format 1 (pairs), format 2 (`classes`: each character's class on its
+   * side, the pair values per class pair), either wrapped in an Extension lookup, or the legacy `kern`
+   * table. Default 'pairs'.
+   */
+  table?: 'pairs' | 'classes' | 'extension' | 'legacy';
+  /** The script the `GPOS` 'kern' feature is under (default 'latn'). */
+  script?: string;
+  /** The feature's tag (default 'kern'). */
+  feature?: string;
+}
+
+/**
+ * A minimal TrueType font: `head` (units per em), `hhea`, `hmtx` and a `cmap` (format 4, or 12 with
+ * `format: 12`) mapping each character of `advances` to its own glyph with that advance in font units.
+ * Glyph 0 is .notdef. Enough for `metrics.ts`; nothing draws with it. With `kern` it has pair kerning
+ * (`GPOS`, or a legacy `kern` table), with `vertical` an `hhea` ascender and descender, with `os2` an
+ * `OS/2` table's typo and win metrics.
+ */
+export function sfntFont(
+  advances: Record<string, number>,
+  o: {
+    upm?: number;
+    format?: 4 | 12;
+    notdef?: number;
+    kern?: KernSpec;
+    vertical?: { ascender: number; descender: number };
+    os2?: { typo: [number, number]; win: [number, number]; useTypo?: boolean };
+  } = {},
+): Uint8Array {
+  const upm = o.upm ?? 1000;
+  const chars = Object.keys(advances)
+    .map((c) => c.codePointAt(0)!)
+    .sort((a, b) => a - b);
+  const glyphOf = new Map(chars.map((cp, i) => [cp, i + 1]));
+  const u16 = (v: number) => [(v >> 8) & 0xff, v & 0xff];
+  const u32 = (v: number) => [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff];
+  const head = new Array(54).fill(0);
+  head.splice(18, 2, ...u16(upm));
+  const hhea = new Array(36).fill(0);
+  hhea.splice(34, 2, ...u16(chars.length + 1));
+  if (o.vertical)
+    hhea.splice(4, 4, ...u16(o.vertical.ascender & 0xffff), ...u16(o.vertical.descender & 0xffff));
+  const hmtx = [...u16(o.notdef ?? 500), 0, 0];
+  for (const cp of chars) hmtx.push(...u16(advances[String.fromCodePoint(cp)]!), 0, 0);
+  let sub: number[];
+  if (o.format === 12) {
+    sub = [...u16(12), 0, 0, ...u32(16 + chars.length * 12), 0, 0, 0, 0, ...u32(chars.length)];
+    for (const cp of chars) sub.push(...u32(cp), ...u32(cp), ...u32(glyphOf.get(cp)!));
+  } else {
+    // One segment per character (idDelta maps it to its glyph), then the closing 0xFFFF segment.
+    const segs = [...chars.map((cp) => [cp, cp, (glyphOf.get(cp)! - cp) & 0xffff]), [0xffff, 0xffff, 1]];
+    const n = segs.length;
+    sub = [...u16(4), ...u16(16 + n * 8), 0, 0, ...u16(n * 2), 0, 0, 0, 0, 0, 0];
+    for (const s of segs) sub.push(...u16(s[1]!));
+    sub.push(0, 0);
+    for (const s of segs) sub.push(...u16(s[0]!));
+    for (const s of segs) sub.push(...u16(s[2]!));
+    for (const _ of segs) sub.push(0, 0);
+  }
+  const cmap = [...u16(0), ...u16(1), ...u16(3), ...u16(o.format === 12 ? 10 : 1), ...u32(12), ...sub];
+  const tables: [string, number[]][] = [
+    ['cmap', cmap],
+    ['head', head],
+    ['hhea', hhea],
+    ['hmtx', hmtx],
+  ];
+  if (o.os2) {
+    const os2 = new Array(78).fill(0);
+    os2.splice(62, 2, ...u16(o.os2.useTypo ? 0x80 : 0));
+    os2.splice(68, 4, ...u16(o.os2.typo[0] & 0xffff), ...u16(o.os2.typo[1] & 0xffff));
+    os2.splice(74, 4, ...u16(o.os2.win[0]), ...u16(o.os2.win[1]));
+    tables.push(['OS/2', os2]);
+  }
+  if (o.kern) {
+    const glyph = (c: string) => glyphOf.get(c.codePointAt(0)!) ?? 0;
+    const pairs = o.kern.pairs.map(([a, b, v]) => [glyph(a), glyph(b), v] as const);
+    if (o.kern.table === 'legacy') tables.push(['kern', legacyKern(pairs)]);
+    else tables.push(['GPOS', gpos(pairs, o.kern)]);
+    tables.sort((a, b) => (a[0] < b[0] ? -1 : 1));
+  }
+  const out = [...u32(0x00010000), ...u16(tables.length), 0, 0, 0, 0, 0, 0];
+  let off = 12 + tables.length * 16;
+  const body: number[] = [];
+  for (const [tag, data] of tables) {
+    out.push(...[...tag].map((c) => c.charCodeAt(0)), 0, 0, 0, 0, ...u32(off), ...u32(data.length));
+    body.push(...data);
+    while (body.length % 4) body.push(0);
+    off = 12 + tables.length * 16 + body.length;
+  }
+  return Uint8Array.from([...out, ...body]);
+}
+
+const be16 = (v: number) => [(v >> 8) & 0xff, v & 0xff];
+const be32 = (v: number) => [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff];
+
+/** A legacy `kern` table (version 0, one horizontal format 0 subtable) of glyph pairs. */
+function legacyKern(pairs: readonly (readonly [number, number, number])[]): number[] {
+  const sorted = [...pairs].sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+  const body = [...be16(sorted.length), 0, 0, 0, 0, 0, 0];
+  for (const [a, b, v] of sorted) body.push(...be16(a), ...be16(b), ...be16(v & 0xffff));
+  return [...be16(0), ...be16(1), ...be16(0), ...be16(6 + body.length), ...be16(0x0001), ...body];
+}
+
+/** A `GPOS` table with one 'kern' feature of one pair-adjustment lookup (see `KernSpec`). */
+function gpos(pairs: readonly (readonly [number, number, number])[], spec: KernSpec): number[] {
+  const firsts = [...new Set(pairs.map((p) => p[0]))].sort((a, b) => a - b);
+  const coverage = [...be16(1), ...be16(firsts.length), ...firsts.flatMap(be16)];
+  let sub: number[];
+  if (spec.table === 'classes') {
+    // Each glyph its own class on each side (class 0: every other glyph).
+    const seconds = [...new Set(pairs.map((p) => p[1]))].sort((a, b) => a - b);
+    const classDef = (gs: number[]) => [
+      ...be16(2),
+      ...be16(gs.length),
+      ...gs.flatMap((g, i) => [...be16(g), ...be16(g), ...be16(i + 1)]),
+    ];
+    const c1 = classDef(firsts);
+    const c2 = classDef(seconds);
+    const n1 = firsts.length + 1;
+    const n2 = seconds.length + 1;
+    const records: number[] = [];
+    for (let i = 0; i < n1; i++)
+      for (let j = 0; j < n2; j++) {
+        const hit = pairs.find((p) => p[0] === firsts[i - 1] && p[1] === seconds[j - 1]);
+        records.push(...be16((hit?.[2] ?? 0) & 0xffff));
+      }
+    const head = 16 + records.length;
+    sub = [
+      ...be16(2),
+      ...be16(head + c1.length + c2.length),
+      ...be16(0x0004),
+      ...be16(0),
+      ...be16(head),
+      ...be16(head + c1.length),
+      ...be16(n1),
+      ...be16(n2),
+      ...records,
+      ...c1,
+      ...c2,
+      ...coverage,
+    ];
+  } else {
+    const sets = firsts.map((f) => {
+      const ps = pairs.filter((p) => p[0] === f).sort((p, q) => p[1] - q[1]);
+      return [...be16(ps.length), ...ps.flatMap((p) => [...be16(p[1]), ...be16(p[2] & 0xffff)])];
+    });
+    const head = 10 + firsts.length * 2;
+    const offsets: number[] = [];
+    let at = head;
+    for (const set of sets) {
+      offsets.push(at);
+      at += set.length;
+    }
+    sub = [
+      ...be16(1),
+      ...be16(at),
+      ...be16(0x0004),
+      ...be16(0),
+      ...be16(firsts.length),
+      ...offsets.flatMap(be16),
+      ...sets.flat(),
+      ...coverage,
+    ];
+  }
+  // An Extension lookup (type 9) points at the pair subtable with a 32-bit offset.
+  const ext = spec.table === 'extension';
+  const lookup = [...be16(ext ? 9 : 2), ...be16(0), ...be16(1), ...be16(8)];
+  const subtable = ext ? [...be16(1), ...be16(2), ...be32(8), ...sub] : sub;
+  const lookupList = [...be16(1), ...be16(4), ...lookup, ...subtable];
+  const feature = [...be16(0), ...be16(1), ...be16(0)];
+  const featureList = [
+    ...be16(1),
+    ...[...(spec.feature ?? 'kern')].map((c) => c.charCodeAt(0)),
+    ...be16(8),
+    ...feature,
+  ];
+  const langSys = [...be16(0), ...be16(0xffff), ...be16(1), ...be16(0)];
+  const script = [...be16(4), ...be16(0), ...langSys];
+  const scriptList = [
+    ...be16(1),
+    ...[...(spec.script ?? 'latn')].map((c) => c.charCodeAt(0)),
+    ...be16(8),
+    ...script,
+  ];
+  const at1 = 10;
+  const at2 = at1 + scriptList.length;
+  const at3 = at2 + featureList.length;
+  return [
+    ...be16(1),
+    ...be16(0),
+    ...be16(at1),
+    ...be16(at2),
+    ...be16(at3),
+    ...scriptList,
+    ...featureList,
+    ...lookupList,
+  ];
+}
+
+/**
+ * The emitted slides with each geometry file's paths back in place of its placeholder (`ShapeGeom.ref`,
+ * `EmitResult.geoms`, M6 round 2): what a drawer draws once it has read the files, for tests of the paths
+ * themselves. The result's own slides are left as they are.
+ */
+export function inlineGeoms<T extends Pick<EmitResult, 'slides' | 'geoms'>>(out: T): T {
+  const files = new Map(out.geoms.map((g) => [g.id, g.file]));
+  const inline = (g: ShapeGeom | undefined): ShapeGeom | undefined => {
+    const file = g?.ref === undefined ? undefined : files.get(g.ref);
+    if (!g || !file) return g;
+    const { ref: _ref, ...rest } = g;
+    return { ...rest, paths: file.paths.map((p) => ({ ...p })) };
+  };
+  const slides = out.slides.map((s) => ({
+    ...s,
+    slide: {
+      ...s.slide,
+      objects: s.slide.objects.map((o): SlideObject => {
+        if (o.type === 'shape' && o.geom?.ref !== undefined) return { ...o, geom: inline(o.geom)! };
+        if (o.type === 'image' && o.mask?.ref !== undefined) return { ...o, mask: inline(o.mask)! };
+        return o;
+      }),
+    },
+  }));
+  return { ...out, slides };
 }

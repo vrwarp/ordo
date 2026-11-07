@@ -299,6 +299,108 @@ const CASES: Case[] = [
     tight: true,
   },
   {
+    name: 'PowerPoint shapes (M6): a callout tail past its box, arrowheads, a mitred star, flipped and turned',
+    job: {
+      kind: 'slide',
+      slide: {
+        id: 'geom',
+        objects: [
+          {
+            ...shape('c', 'rect', box(200, 520, 400, 200)),
+            radius: 0,
+            geom: { preset: 'wedgeRectCallout', adj: [['adj2', 95_000]] },
+            flipV: true,
+          } as SlideObject,
+          {
+            ...shape('a', 'line', box(700, 640, 400, 120, 12)),
+            stroke: { width: 10, color: { r: 250, g: 200, b: 40, a: 1 } },
+            ends: { head: { type: 'triangle', w: 'lg', len: 'lg' }, tail: { type: 'stealth' } },
+            dash: 'dash',
+          } as SlideObject,
+          {
+            ...shape('s', 'rect', box(1250, 560, 260, 260, 30)),
+            radius: 0,
+            geom: { preset: 'star5' },
+            stroke: { width: 24, color: { r: 250, g: 250, b: 250, a: 1 } },
+            flipH: true,
+            gradient: {
+              kind: 'linear',
+              angle: 45,
+              stops: [
+                { at: 0, color: { r: 200, g: 40, b: 40, a: 1 } },
+                { at: 1, color: { r: 40, g: 40, b: 200, a: 1 } },
+              ],
+            },
+          } as SlideObject,
+        ],
+      },
+      look: LOOK_MAIN,
+    },
+    tight: true,
+  },
+  {
+    name: 'PowerPoint shapes (M6) with effects: an outer shadow, a glow and a soft edge',
+    job: {
+      kind: 'slide',
+      slide: {
+        id: 'fx',
+        objects: [
+          {
+            ...shape('sh', 'rect', box(220, 560, 360, 200)),
+            geom: { preset: 'roundRect' },
+            shadow: { dx: 24, dy: 30, blur: 40, color: { r: 0, g: 0, b: 0, a: 0.7 } },
+          } as SlideObject,
+          {
+            ...shape('gl', 'ellipse', box(760, 600, 260, 180, 20)),
+            glow: { radius: 36, color: { r: 255, g: 220, b: 60, a: 0.8 } },
+          } as SlideObject,
+          {
+            ...shape('se', 'rect', box(1200, 580, 360, 220)),
+            radius: 0,
+            softEdge: 30,
+          } as SlideObject,
+        ],
+      },
+      look: LOOK_MAIN,
+    },
+    tight: true,
+  },
+  {
+    name: 'a picture cut to a star, mirrored and turned (M6 mask, M4 flips), and gradient text',
+    job: {
+      kind: 'slide',
+      slide: {
+        id: 'mask',
+        objects: [
+          {
+            id: 'm',
+            type: 'image',
+            box: box(300, 520, 420, 300, 20),
+            mediaId: 'pic',
+            fit: 'cover',
+            opacity: 1,
+            radius: 0,
+            flipH: true,
+            mask: { preset: 'star5' },
+          } as SlideObject,
+          text('g', 'Grace', box(900, 600, 700, 220), {
+            fontSizePx: 160,
+            paint: {
+              kind: 'linear',
+              angle: 90,
+              stops: [
+                { at: 0, color: { r: 255, g: 200, b: 0, a: 1 } },
+                { at: 1, color: { r: 200, g: 0, b: 120, a: 1 } },
+              ],
+            },
+          }),
+        ],
+      },
+      look: LOOK_MAIN,
+    },
+    tight: true,
+  },
+  {
     name: 'lower third',
     job: { kind: 'lowerThird', text: 'Pastor Anna Smith\nWelcome and announcements', look: LOOK_MAIN },
     tight: true,

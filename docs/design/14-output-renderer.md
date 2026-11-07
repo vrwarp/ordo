@@ -351,7 +351,8 @@ Arm sequence for a cue (asset worker, then render worker):
    shared drawers (fill, padding, wrap, alignment, outline, shadow, the rich text engine),
    shapes and pictures. The canvas is the size of what the layer reaches (`slideReach` and
    the other reaches of `sprite.ts`: each object as its drawer lays it out, text's lines grown
-   by 0.3 em and united with the ink its glyphs measure, its effects, turned with its box), cut
+   by 0.3 em and united with the ink its glyphs measure, a PowerPoint shape by its geometry,
+   outline and effect layers (`geomShapeReach`), its effects, turned with its box), cut
    to the frame and drawn at that offset;
    when that is most of the frame (over 80 %), or unknown (a slide's PowerPoint picture, an
    object with fields the reach does not know, a logo), the canvas is the frame. A drawing

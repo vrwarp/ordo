@@ -7,10 +7,12 @@
  * Internal endpoints for the live process (`/internal/*`, secret required):
  * - GET /internal/context: every setting (with output tokens), the output-config fonts, the logo media.
  * - GET /internal/golive/:playlistId: the stored playlist, its stored presentations (unvalidated: the live
- *   process validates and quarantines), the media they reference, fonts, looks and general settings.
+ *   process validates and quarantines), the media they reference, the geometry files their shapes name
+ *   (`ShapeGeom.ref`), fonts, looks and general settings.
  */
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { isGeomFileRef } from '@ordo/domain';
 import type { FastifyInstance, RouteHandlerMethod } from 'fastify';
 import type { Logger } from 'pino';
 import { Auth } from './auth.ts';
@@ -50,6 +52,24 @@ export function mediaIdsIn(value: unknown, out = new Set<string>(), depth = 0): 
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
     if (typeof v === 'string' && v && /mediaid$/i.test(k)) out.add(v);
     else if (typeof v === 'object') mediaIdsIn(v, out, depth + 1);
+  }
+  return out;
+}
+
+/**
+ * The geometry files a stored value names (`ShapeGeom.ref` of shapes and masks, design/27 §3.1): every
+ * string `ref` that is a SHA-256 name, at most `max`.
+ */
+export function geomRefsIn(value: unknown, out = new Set<string>(), max = 20_000, depth = 0): Set<string> {
+  if (depth > 64 || value === null || typeof value !== 'object' || out.size >= max) return out;
+  if (Array.isArray(value)) {
+    for (const v of value) geomRefsIn(v, out, max, depth + 1);
+    return out;
+  }
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (k === 'ref' && isGeomFileRef(v)) {
+      if (out.size < max) out.add(v);
+    } else if (typeof v === 'object') geomRefsIn(v, out, max, depth + 1);
   }
   return out;
 }
@@ -189,10 +209,17 @@ export async function createLibraryProcess(
       const m = lib.media.get(mid);
       if (m) media[mid] = m;
     }
+    // The geometry files the presentations' shapes name: the live process lists and serves them.
+    const files: Record<string, unknown> = {};
+    for (const hash of geomRefsIn(presentations)) {
+      const f = lib.getFile(hash);
+      if (f) files[hash] = f;
+    }
     return {
       playlist,
       presentations,
       media,
+      files,
       fonts: lib.listFonts(),
       looks: settings.looks,
       general: settings.general,

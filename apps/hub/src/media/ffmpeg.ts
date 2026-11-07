@@ -510,7 +510,8 @@ export type PictureFileOpts = TOpts & {
   /** The exact output size. */
   width: number;
   height: number;
-  output: 'png' | 'jpg';
+  /** `rgba`: raw RGBA pixels, `width` x `height` x 4 bytes, rows top to bottom (M6 bakes). */
+  output: 'png' | 'jpg' | 'rgba';
   /** PNG only: RGBA, else RGB (8 bits either way). */
   alpha: boolean;
   /**
@@ -539,6 +540,7 @@ export async function pictureFile(input: string, output: string, o: PictureFileO
     );
   vf.push(`scale=${o.width}:${o.height}:flags=lanczos`);
   if (o.output === 'png') vf.push(o.alpha ? 'format=rgba' : 'format=rgb24');
+  if (o.output === 'rgba') vf.push('format=rgba');
   const aligned = (n: number) => Math.ceil(Math.max(1, n) / 32) * 32 + 32;
   const maxPixels = aligned(o.decoded.width) * aligned(o.decoded.height);
   const args = [...BASE, ...IN_SAFE, '-max_pixels', String(maxPixels)];
@@ -546,6 +548,10 @@ export async function pictureFile(input: string, output: string, o: PictureFileO
   // Newer ffmpeg turns a picture by its EXIF orientation itself, older ones do not: the stored pixels, always.
   args.push('-noautorotate', '-f', PICTURE_DEMUXER[o.input], '-i', input, '-map', '0:v:0', '-frames:v', '1');
   args.push('-vf', vf.join(','), '-map_metadata', '-1');
+  if (o.output === 'rgba') {
+    await run('ffmpeg', [...args, '-f', 'rawvideo', '-pix_fmt', 'rgba', output], o);
+    return;
+  }
   if (o.output === 'png') args.push('-c:v', 'png');
   else args.push('-c:v', 'mjpeg', '-q:v', '2');
   await run('ffmpeg', [...args, '-f', 'image2', output], o);

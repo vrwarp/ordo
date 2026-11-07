@@ -96,9 +96,43 @@ function tag(b: Buffer, o: number): string {
 
 /** Extract the `name` and `OS/2` tables from TTF/OTF, WOFF (zlib) or WOFF2 (brotli). */
 export function fontTables(buf: Uint8Array): Map<string, Buffer> {
+  return tablesOf(buf, new Set(['name', 'OS/2', 'head']));
+}
+
+/**
+ * The tables text is measured with (`head`, `hhea`, `hmtx`, `cmap`; `@ordo/pptx-scene` `metricsOfTables`,
+ * design/27 §15 M6 tables), from the same formats, and when present and within the table limit `OS/2`
+ * (LibreOffice's fallback ascent and descent), `GPOS` and `kern` (pair kerning, M6 R1): one of those past
+ * the limit is left out, and the face is measured without it. A WOFF2 `hmtx` stored transformed is left out
+ * (its advances are not in the table's own layout), so such a face measures as missing.
+ */
+export function metricTables(buf: Uint8Array): Map<string, Buffer> {
+  const tables = tablesOf(
+    buf,
+    new Set(['head', 'hhea', 'hmtx', 'cmap', 'OS/2', 'GPOS', 'kern']),
+    new Set(['hmtx']),
+    new Set(['OS/2', 'GPOS', 'kern']),
+  );
+  // Copies: the measures keep the tables, not the file read (up to 32 MB) or a WOFF2's whole decompressed
+  // font (up to 64 MB, glyf included), which the tables would be views into.
+  const out = new Map<string, Buffer>();
+  for (const [t, v] of tables) out.set(t, Buffer.from(v));
+  return out;
+}
+
+/**
+ * The tables of `want` (WOFF2 tables of `plainOnly` only when stored without a transform). A table of
+ * `optional` over `FONT_LIMITS.maxTableBytes` is left out; any other one throws.
+ */
+function tablesOf(
+  buf: Uint8Array,
+  want: ReadonlySet<string>,
+  plainOnly?: ReadonlySet<string>,
+  optional?: ReadonlySet<string>,
+): Map<string, Buffer> {
+  const big = (t: string, len: number) => len > FONT_LIMITS.maxTableBytes && optional?.has(t) === true;
   const b = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
   const out = new Map<string, Buffer>();
-  const want = new Set(['name', 'OS/2', 'head']);
   const sig = tag(b, 0);
   if (sig === 'wOFF') {
     const num = b.readUInt16BE(12);
@@ -110,6 +144,7 @@ export function fontTables(buf: Uint8Array): Map<string, Buffer> {
       const off = b.readUInt32BE(e + 4);
       const comp = b.readUInt32BE(e + 8);
       const orig = b.readUInt32BE(e + 12);
+      if (big(t, Math.max(orig, comp))) continue;
       checkTable(t, Math.max(orig, comp));
       const data = b.subarray(off, off + comp);
       out.set(t, comp < orig ? inflateSync(data, { maxOutputLength: orig }) : Buffer.from(data));
@@ -132,7 +167,7 @@ export function fontTables(buf: Uint8Array): Map<string, Buffer> {
       }
       throw new Error('bad UIntBase128');
     };
-    const entries: { tag: string; length: number }[] = [];
+    const entries: { tag: string; length: number; transformed: boolean }[] = [];
     for (let i = 0; i < num; i++) {
       const flags = b[p++]!;
       const idx = flags & 0x3f;
@@ -145,18 +180,19 @@ export function fontTables(buf: Uint8Array): Map<string, Buffer> {
       const origLength = readBase128();
       const transformed = t === 'glyf' || t === 'loca' ? version !== 3 : version !== 0;
       const length = transformed ? readBase128() : origLength;
-      entries.push({ tag: t, length });
+      entries.push({ tag: t, length, transformed });
     }
     const total = entries.reduce((n, e) => n + e.length, 0);
     if (total > FONT_LIMITS.maxWoff2Bytes)
       throw new Error(`font tables total ${total} bytes; the limit is ${FONT_LIMITS.maxWoff2Bytes}`);
-    for (const e of entries) if (want.has(e.tag)) checkTable(e.tag, e.length);
+    for (const e of entries) if (want.has(e.tag) && !big(e.tag, e.length)) checkTable(e.tag, e.length);
     const data = brotliDecompressSync(b.subarray(p, p + totalCompressed), {
       maxOutputLength: Math.max(1, total),
     });
     let off = 0;
     for (const e of entries) {
-      if (want.has(e.tag)) out.set(e.tag, data.subarray(off, off + e.length));
+      if (want.has(e.tag) && !(e.transformed && plainOnly?.has(e.tag)) && !big(e.tag, e.length))
+        out.set(e.tag, data.subarray(off, off + e.length));
       off += e.length;
     }
     return out;
@@ -170,6 +206,7 @@ export function fontTables(buf: Uint8Array): Map<string, Buffer> {
     if (!want.has(t)) continue;
     const off = b.readUInt32BE(e + 8);
     const len = b.readUInt32BE(e + 12);
+    if (big(t, len)) continue;
     checkTable(t, len);
     out.set(t, b.subarray(off, off + len));
   }

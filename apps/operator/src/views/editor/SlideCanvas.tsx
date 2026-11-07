@@ -1,6 +1,8 @@
 import { fileUrl } from '@ordo/client';
 import {
   type Box,
+  GEOM_FILE_MAX_BYTES,
+  isGeomFileRef,
   LOGICAL_HEIGHT,
   LOGICAL_WIDTH,
   type Media,
@@ -8,7 +10,15 @@ import {
   type SlideObject,
   type TextObject,
 } from '@ordo/domain';
-import { drawImageFit, drawObject, drawTextObject, isRichText } from '@ordo/renderer';
+import {
+  drawImageFit,
+  drawObject,
+  drawTextObject,
+  geomPending,
+  isRichText,
+  readGeomFiles,
+  slideBudget,
+} from '@ordo/renderer';
 import type Konva from 'konva';
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Layer, Line, Rect, Shape, Stage, Transformer } from 'react-konva';
@@ -43,6 +53,28 @@ function imageFor(hash: string | undefined): HTMLImageElement | undefined {
     images.set(hash, img);
   }
   return img.complete && img.naturalWidth > 0 ? img : undefined;
+}
+/**
+ * Read the geometry file a shape or a picture's mask names (`ShapeGeom.ref`) if it is not yet; the canvas
+ * draws again once it is (the shape draws its fallback meanwhile).
+ */
+function readGeomOf(o: SlideObject): void {
+  const g = o.type === 'shape' ? o.geom : o.type === 'image' ? o.mask : undefined;
+  if (!g || !isGeomFileRef(g.ref) || !geomPending(g)) return;
+  void readGeomFiles([g.ref], async (hash) => {
+    const r = await fetch(fileUrl(hash), { credentials: 'same-origin' });
+    if (!r.ok) return undefined;
+    // A file larger than a geometry file can be is refused unread, as the workers refuse it (a ref can name
+    // any file of the content store).
+    if (Number(r.headers.get('content-length')) > GEOM_FILE_MAX_BYTES) {
+      void r.body?.cancel();
+      return null;
+    }
+    const b = await r.blob();
+    return b.size > GEOM_FILE_MAX_BYTES ? null : b.text();
+  }).then((left) => {
+    if (!left.size) for (const l of imageListeners) l();
+  });
 }
 function useImageTick(): number {
   const [n, setN] = useState(0);
@@ -186,6 +218,8 @@ function ObjectNode(props: {
   tick: number;
   /** Device px per logical px on screen: the stage scale × devicePixelRatio. */
   density: number;
+  /** What the slide's drawing budget draws instead (`slideBudget`), as the outputs draw it. */
+  drawAs?: SlideObject;
   readOnly: boolean;
   /** The lock badge's size in slide px (constant on screen). */
   badge: number;
@@ -209,19 +243,34 @@ function ObjectNode(props: {
       perfectDrawEnabled={false}
       sceneFunc={(context) => {
         const ctx = context._context as CanvasRenderingContext2D;
+        readGeomOf(o);
+        const d = props.drawAs ?? o;
         if (o.type === 'text') {
           const t = textCanvas(o, tick, props.density);
           ctx.drawImage(t.canvas, -MARGIN, -MARGIN, t.canvas.width / t.density, t.canvas.height / t.density);
         } else if (o.type === 'image') {
           const img = imageFor(stillHash(props.media(o.mediaId)));
-          // Flips and the mask as every drawer applies them (design/27 §3.1).
-          if (img) drawImageFit(ctx, img, local(b), 1, o.fit, o.opacity, o.radius, o.crop, undefined, o);
+          // Flips and the mask as every drawer applies them (design/27 §3.1); what the slide's drawing budget
+          // draws instead when it is past the budget (`drawAs`).
+          if (img)
+            drawImageFit(
+              ctx,
+              img,
+              local(b),
+              1,
+              o.fit,
+              o.opacity,
+              o.radius,
+              o.crop,
+              undefined,
+              d.type === 'image' ? d : o,
+            );
           else {
             ctx.fillStyle = '#333';
             ctx.fillRect(0, 0, b.w, b.h);
           }
           if (o.play) drawPlayBadge(ctx, b.w, b.h);
-        } else drawObject(ctx, { ...o, box: local(b) }, 1);
+        } else drawObject(ctx, { ...d, box: local(b) }, 1);
         if (o.locked) drawLockBadge(ctx, b.w, Math.min(props.badge, Math.abs(b.w) / 2, Math.abs(b.h) / 2));
       }}
       hitFunc={(context, shape) => {
@@ -313,6 +362,10 @@ export function SlideCanvas(props: {
   const lockedSel = selected.some(isLocked);
   // A locked art picture alone keeps its aspect: corner anchors only.
   const aspect = selected.length === 1 && keepsAspect(selected[0]!);
+  // Past the slide's drawing budget, stored geometries draw as their legacy shapes and effects are left out,
+  // as on the outputs (worked out again when a geometry file arrives: `tick`).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: tick changes when a geometry file is read
+  const budget = useMemo(() => slideBudget(drawn.objects), [drawn.objects, tick]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-attach the transformer when the slide re-renders
   useEffect(() => {
     const t = tr.current;
@@ -545,6 +598,7 @@ export function SlideCanvas(props: {
               others={othersFor(o.id)}
               tick={tick}
               density={density}
+              drawAs={budget.get(o)}
               readOnly={props.readOnly}
               badge={22 / scale}
               on={on}

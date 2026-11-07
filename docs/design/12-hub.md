@@ -58,7 +58,8 @@ once (like a crash: no goodbyes), the library process stops its jobs (re-queued 
 
 **Routing** (`src/liveproc.ts`, `src/proxy.ts`): the live process listens on `ORDO_PORT` and answers
 itself `/ws`, `/api/v1/{live, live/summary, live/events, actions, cache/manifest, output/config, auth/me, health}`,
-`/api/v1/files/<hash>` for files it knows (the live playlist's media and fonts, every font, the logo) and
+`/api/v1/files/<hash>` for files it knows (the live playlist's media, geometry files and fonts, every font,
+the logo) and
 every non-API path (the built apps). Everything else under `/api/v1` is streamed to the library process
 over loopback. We chose the live process as the front door rather than the supervisor so the supervisor
 stays free of network input, and rather than two DSM rules so the deployment is unchanged. The proxy is
@@ -256,7 +257,10 @@ Chromium for the pptx-preview PowerPoint renderer (design/20 "PPTX and PDF").
 The native PowerPoint import (`pptx-native`, light; [design/27](27-pptx-native-renderer.md) §2) reads the
 deck's XML into memory within its caps, parses and converts it on the CPU pool (a scan call, then batches
 of at most 150 slides, 2 minutes each and 15 minutes of pool time per import), stores the pictures the
-slides use, and saves version 1 of the presentation. In the same synchronous step it queues the heavy
+slides use (recoloured pictures and tiled fills baked into new prepared pictures first: ffmpeg decodes the
+source to RGBA at the size the bake needs, pool task `pptx-bake` applies the recipe and encodes a PNG, at
+most 16 MP in and out and 60 s, deduplicated by the source's hash and the recipe; design/27 §4), and saves
+version 1 of the presentation. In the same synchronous step it queues the heavy
 `pptx-lo` follow-up for the slides that wait for LibreOffice, so that job never starts before version 1
 exists and is queued before any clip job of the deck; version 1, that job and the import's resume point are
 written in one transaction. The deck's clips are stored before the save without their `media` jobs

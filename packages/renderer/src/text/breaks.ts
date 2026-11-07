@@ -16,6 +16,10 @@ import LineBreaker from 'linebreak';
  * - SA scripts (Thai, Lao, Khmer, Myanmar) write words without spaces; UAX#14 resolves them to AL (no
  *   break), so their runs are split at `Intl.Segmenter` word boundaries (the ICU dictionaries, the same
  *   the browser uses). Never before a mark, a repetition mark (ๆ) or an abbreviation mark (ฯ).
+ * - Korean breaks at spaces (CSS `word-break: keep-all` for Hangul, as LibreOffice and PowerPoint break it,
+ *   M6 repair): no break between two letter units of a word when one of them is Hangul ('이야기를' stays
+ *   whole), where UAX#14 would break between syllables; ideographs and kana still break between each other.
+ *   A Korean word wider than the line still breaks, at its clusters (below).
  * - Emergency breaks, for a word wider than the line, fall only between clusters: extended grapheme
  *   clusters (`Intl.Segmenter`) joined across a conjunct-forming virama, so Tamil 'க்ஷி' and Kannada
  *   'ಕ್ಷಿ' stay whole whatever Unicode version the browser's segmenter has.
@@ -49,9 +53,11 @@ export function breakOpportunities(text: string, start: number, end: number, lan
   if (end - start < 2) return out;
   const s = text.slice(start, end);
   const lb = new LineBreaker(s);
+  const hangul = HANGUL.test(s);
   for (let b = lb.nextBreak(); b && b.position < s.length; b = lb.nextBreak()) {
     const p = b.position;
     const before = s.charCodeAt(p - 1);
+    if (hangul && keepAll(s, p)) continue;
     if (p > 0 && !isGlue(before) && (!isGlue(s.charCodeAt(p)) || isBreakSpace(before))) out.push(start + p);
   }
   if (!SA_BLOCK.test(s)) return out;
@@ -73,6 +79,23 @@ export function breakOpportunities(text: string, start: number, end: number, lan
     }
   }
   return merged;
+}
+
+// ---- Korean (keep-all) ----
+
+/** Hangul syllables, jamo, compatibility jamo and the extended jamo blocks. */
+const HANGUL = /[\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\uac00-\ud7af\ud7b0-\ud7ff]/;
+/** A letter unit of a word: a letter, a mark or a digit. */
+const WORD_UNIT = /[\p{L}\p{M}\p{N}]/u;
+
+/** Whether the break before `s[p]` falls inside a Korean word (letter units on both sides, one Hangul). */
+function keepAll(s: string, p: number): boolean {
+  // The unit before p may be the low half of a surrogate pair: take the whole code point.
+  const lo = s.charCodeAt(p - 1);
+  const at = lo >= 0xdc00 && lo <= 0xdfff && p >= 2 ? p - 2 : p - 1;
+  const prev = String.fromCodePoint(s.codePointAt(at) ?? 0);
+  const next = String.fromCodePoint(s.codePointAt(p) ?? 0);
+  return WORD_UNIT.test(prev) && WORD_UNIT.test(next) && (HANGUL.test(prev) || HANGUL.test(next));
 }
 
 // ---- SA scripts ----

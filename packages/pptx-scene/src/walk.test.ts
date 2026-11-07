@@ -33,8 +33,8 @@ function slideOf(spec: DeckSpec, i = 0): SlideScene {
 function placed(e: Element) {
   const p = decompose(e.xf);
   return {
-    x: Math.round(p.cx - p.w / 2),
-    y: Math.round(p.cy - p.h / 2),
+    x: Math.round(p.cx - p.w / 2) + 0,
+    y: Math.round(p.cy - p.h / 2) + 0,
     cx: Math.round(p.w),
     cy: Math.round(p.h),
     rot: Math.round(p.rot * 1000) / 1000,
@@ -229,13 +229,13 @@ describe('shapes', () => {
     expect(e.line).toBeUndefined();
   });
 
-  it('marks presets M1 does not draw, custom geometry and connectors', () => {
+  it('draws every preset of the table and custom geometry (M6), notes an unknown preset, reads connectors', () => {
     const s = slideOf({
       slides: [
         {
           shapes:
-            rect(2, 0, 'FF0000', { geom: 'star5' }) +
-            rect(3, 0, 'FF0000', { geom: 'roundRect' }) +
+            rect(2, 0, 'FF0000', { geom: 'noSuchShape' }) +
+            rect(3, 0, 'FF0000', { geom: 'star5' }) +
             sp({ id: 4, x: 0, y: 0, cx: IN, cy: IN, geom: 'none', fill: solid('FF0000') }).replace(
               '<p:spPr>',
               '<p:spPr><a:custGeom><a:pathLst/></a:custGeom>',
@@ -244,23 +244,75 @@ describe('shapes', () => {
         },
       ],
     });
-    const [star, round, cust, cxn] = s.elements as ShapeElement[];
-    expect([star!.support, star!.reasons]).toEqual(['approx', ['preset:star5']]);
-    expect([round!.support, round!.reasons]).toEqual(['native', undefined]);
-    expect(cust).toMatchObject({ geom: 'custom', support: 'approx', reasons: ['custGeom'] });
+    const [unknown, star, cust, cxn] = s.elements as ShapeElement[];
+    expect([unknown!.support, unknown!.reasons]).toEqual(['approx', ['preset:noSuchShape']]);
+    expect([star!.support, star!.reasons]).toEqual(['native', undefined]);
+    expect(cust).toMatchObject({ geom: 'custom', support: 'native', custom: { paths: [], points: 0 } });
     expect(cxn).toMatchObject({ geom: 'straightConnector1', line: { width: 12_700, tail: 'triangle' } });
   });
 
-  it('fills a useBgFill shape with a solid slide background', () => {
+  it('fills a useBgFill shape with a solid slide background when its spPr sets no fill or noFill', () => {
+    const bgShape = (id: number, fill?: string) =>
+      sp({ id, x: 0, y: 0, cx: IN, cy: IN, ...(fill ? { fill } : {}) }).replace(
+        '<p:sp>',
+        '<p:sp useBgFill="1">',
+      );
+    // The style's fillRef does not count: the slide's background is drawn.
+    const styled = sp({
+      id: 4,
+      x: 0,
+      y: 0,
+      cx: IN,
+      cy: IN,
+      style:
+        '<p:style><a:lnRef idx="0"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="1"><a:schemeClr val="accent2"/></a:fillRef>' +
+        '<a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></p:style>',
+    }).replace('<p:sp>', '<p:sp useBgFill="1">');
     const s = slideOf({
-      slides: [
-        { bg: solidBg('123456'), shapes: rect(2, 0, 'FF0000').replace('<p:sp>', '<p:sp useBgFill="1">') },
-      ],
+      slides: [{ bg: solidBg('123456'), shapes: bgShape(2) + bgShape(3, '<a:noFill/>') + styled }],
     });
+    for (const e of s.elements)
+      expect((e as ShapeElement).fill).toEqual({ kind: 'solid', color: { r: 0x12, g: 0x34, b: 0x56, a: 1 } });
+  });
+
+  it("keeps a useBgFill shape's own explicit fill (a Designer layout's decorative panel), as LibreOffice does", () => {
+    // PowerPoint Designer: a full-slide "decorative" rect with useBgFill="1" and a tx1 fill, under a title in
+    // bg1 lumMod 95 % and white bullets. LibreOffice draws the panel in tx1 (black); the slide's background
+    // (white) would leave the text white on white.
+    const panel = sp({
+      id: 2,
+      name: 'Rectangle 1',
+      x: 0,
+      y: 0,
+      cx: 12_192_000,
+      cy: 6_858_000,
+      fill: '<a:solidFill><a:schemeClr val="tx1"/></a:solidFill>',
+    }).replace('<p:sp>', '<p:sp useBgFill="1">');
+    const title = sp({
+      id: 3,
+      x: IN,
+      y: IN,
+      cx: 4 * IN,
+      cy: IN,
+      txBody:
+        '<p:txBody><a:bodyPr/><a:p><a:r><a:rPr lang="en-US"><a:solidFill><a:schemeClr val="bg1"><a:lumMod val="95000"/></a:schemeClr></a:solidFill></a:rPr><a:t>Title</a:t></a:r></a:p></p:txBody>',
+    });
+    const s = slideOf({ slides: [{ bg: solidBg('FFFFFF'), shapes: panel + title }] });
     expect((s.elements[0] as ShapeElement).fill).toEqual({
       kind: 'solid',
-      color: { r: 0x12, g: 0x34, b: 0x56, a: 1 },
+      color: { r: 0, g: 0, b: 0, a: 1 },
     });
+    // A gradient of its own is kept too (not the "picture or gradient background" note).
+    const grad = sp({
+      id: 2,
+      x: 0,
+      y: 0,
+      cx: IN,
+      cy: IN,
+      fill: '<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill>',
+    }).replace('<p:sp>', '<p:sp useBgFill="1">');
+    const g = slideOf({ slides: [{ bg: solidBg('FFFFFF'), shapes: grad }] });
+    expect((g.elements[0] as ShapeElement).fill.kind).toBe('gradient');
   });
 
   it('reads graphic frames as residual elements', () => {
@@ -319,26 +371,88 @@ describe('groups', () => {
     expect([a!.group, b!.group, c!.group]).toEqual([1, 2, undefined]);
   });
 
-  it('scales the own box of a rotated child in an unevenly scaled group, and marks it residual', () => {
-    // A child rotated 45° inside a group scaled 2:1 would be sheared by the composed affine; PowerPoint and
-    // LibreOffice scale its box (2 in x 1 in) and rotate that.
+  it('scales the own box of a rotated child in an unevenly scaled group as LibreOffice does (approx)', () => {
+    // A child rotated 30° inside a group scaled 2:1 would be sheared by the composed affine; PowerPoint and
+    // LibreOffice scale its box (2 in x 1 in) and rotate that. From 45° up to 135° the scales swap: the box
+    // grows along the axis it shows on the slide (LibreOffice's `lcl_doSpecialMSOWidthHeightToggle`).
     const s = slideOf({
       slides: [
         {
           shapes: grpSp(
             { id: 10, x: 0, y: 0, cx: 2 * IN, cy: IN, chX: 0, chY: 0, chCx: IN, chCy: IN },
-            rect(2, 0, 'FF0000', { rot: 45 }) + rect(3, 0, '00FF00', { rot: 90 }),
+            rect(2, 0, 'FF0000', { rot: 30 }) +
+              rect(3, 0, '00FF00', { rot: 90 }) +
+              rect(4, 0, '0000FF', { rot: 45 }) +
+              rect(5, 0, '0000FF', { rot: 135 }) +
+              rect(6, 0, '0000FF', { rot: 250 }),
           ),
         },
       ],
     });
-    const [a, b] = s.elements;
-    expect(a).toMatchObject({ kind: 'shape', support: 'residual', reasons: ['shear'] });
-    expect(placed(a!)).toEqual({ x: 0, y: 0, cx: 2 * IN, cy: IN, rot: 45 });
+    const [a, b, c, d, e] = s.elements;
+    expect(a).toMatchObject({ kind: 'shape', support: 'approx', reasons: ['shear'] });
+    expect(placed(a!)).toEqual({ x: 0, y: 0, cx: 2 * IN, cy: IN, rot: 30 });
     expect(decompose(a!.xf).sheared).toBe(false);
-    // A quarter turn is not sheared either way; its own box is still scaled along the group's axes.
+    // A quarter turn is not sheared either way; its own box takes the scales swapped (1 in x 2 in).
     expect(b).toMatchObject({ kind: 'shape', support: 'native' });
-    expect(placed(b!)).toMatchObject({ cx: 2 * IN, cy: IN, rot: 90 });
+    expect(placed(b!)).toMatchObject({ x: IN / 2, y: -IN / 2, cx: IN, cy: 2 * IN, rot: 90 });
+    expect(placed(c!)).toMatchObject({ cx: IN, cy: 2 * IN, rot: 45 });
+    expect(c).toMatchObject({ support: 'approx', reasons: ['shear'] });
+    expect(placed(d!)).toMatchObject({ cx: 2 * IN, cy: IN, rot: 135 });
+    expect(placed(e!)).toMatchObject({ cx: IN, cy: 2 * IN });
+    for (const x of [c, d, e]) expect(decompose(x!.xf).sheared).toBe(false);
+    expect(s.notes).toContain(
+      'a shape turned in an unevenly scaled group is placed as LibreOffice places it',
+    );
+  });
+
+  it('swaps the scales of a turned child in a mirrored group too, with no further half turn', () => {
+    // LibreOffice 24.2 (measured with a probe deck): a mirrored group scales the box as an unmirrored one,
+    // and the child keeps its own turn, mirrored with the group.
+    const g = (flipH: boolean) =>
+      slideOf({
+        slides: [
+          {
+            shapes: grpSp(
+              { id: 10, x: 0, y: 0, cx: 2 * IN, cy: IN, chX: 0, chY: 0, chCx: IN, chCy: IN, flipH },
+              rect(2, 0, 'FF0000', { rot: 60 }),
+            ),
+          },
+        ],
+      }).elements[0]!;
+    const plain = decompose(g(false).xf);
+    const mirrored = decompose(g(true).xf);
+    expect([Math.round(plain.w), Math.round(plain.h)]).toEqual([IN, 2 * IN]);
+    expect([Math.round(mirrored.w), Math.round(mirrored.h)]).toEqual([IN, 2 * IN]);
+    // Each point of the box is the unmirrored one's mirrored about the group's centre (x = 1 in).
+    for (const [u, v] of [
+      [0, 0],
+      [1, 0],
+      [0, 1],
+    ] as const) {
+      const [x, y] = apply(g(false).xf, u, v);
+      const [mx, my] = apply(g(true).xf, u, v);
+      expect(mx).toBeCloseTo(2 * IN - x, 3);
+      expect(my).toBeCloseTo(y, 3);
+    }
+  });
+
+  it('keeps a residual child of a sheared group residual, with the shear among its reasons', () => {
+    const chart =
+      '<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="7" name="Chart"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>' +
+      '<p:xfrm rot="1800000"><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></p:xfrm>' +
+      '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"/></a:graphic></p:graphicFrame>';
+    const s = slideOf({
+      slides: [
+        {
+          shapes: grpSp(
+            { id: 10, x: 0, y: 0, cx: 2 * IN, cy: IN, chX: 0, chY: 0, chCx: IN, chCy: IN },
+            chart,
+          ),
+        },
+      ],
+    });
+    expect(s.elements[0]).toMatchObject({ support: 'residual', reasons: ['chart', 'shear'] });
   });
 
   it('places a box like the composed affine when the scale is even or the box is not rotated', () => {

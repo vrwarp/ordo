@@ -138,9 +138,62 @@ describe('p:pic', () => {
     );
     const [a, b] = s.elements as PictureElement[];
     expect(a!.picture.effects).toEqual(['a:grayscl', 'a:lum']);
-    expect(a!.reasons).toEqual(['recolor']);
+    // M6: both are baked into a derived picture, so the picture is native.
+    expect(a!.picture.recolor).toEqual([{ kind: 'grayscale' }, { kind: 'lum', bright: 0.2, contrast: 0 }]);
+    expect(a!.reasons).toBeUndefined();
+    expect(a!.support).toBe('native');
     expect(b).toMatchObject({ support: 'approx', reasons: ['pic:tiff'] });
     expect(b!.picture.px).toBeUndefined(); // spilled: no bytes
+  });
+
+  it('reads duotone, clrChange and biLevel with their colours, and keeps other effects approx', () => {
+    const duotone =
+      '<a:duotone><a:prstClr val="black"/><a:schemeClr val="accent1"><a:tint val="45000"/></a:schemeClr></a:duotone>';
+    const change =
+      '<a:clrChange><a:clrFrom><a:srgbClr val="FFFFFF"/></a:clrFrom><a:clrTo><a:srgbClr val="FFFFFF"><a:alpha val="0"/></a:srgbClr></a:clrTo></a:clrChange>';
+    const s = picturesOf(
+      p({ blip: duotone + change + '<a:biLevel thresh="25000"/>' }) +
+        p({ id: 3, blip: '<a:duotone><a:prstClr val="black"/></a:duotone><a:blur rad="5000"/>' }),
+      [imageRel('rId2', 'image1.png')],
+    );
+    const [a, b] = s.elements as PictureElement[];
+    expect(a!.support).toBe('native');
+    const [d, c, bl] = a!.picture.recolor!;
+    expect(d).toMatchObject({ kind: 'duotone', dark: { r: 0, g: 0, b: 0, a: 1 } });
+    expect(d?.kind === 'duotone' && d.light.r).toBeGreaterThan(150); // accent1 tinted towards white
+    expect(c).toEqual({
+      kind: 'clrChange',
+      from: { r: 255, g: 255, b: 255, a: 1 },
+      to: { r: 255, g: 255, b: 255, a: 0 },
+    });
+    expect(bl).toEqual({ kind: 'biLevel', threshold: 0.25 });
+    // A duotone missing its second colour is left out; a blur is not drawn: approx.
+    expect(b!.picture.recolor).toBeUndefined();
+    expect(b).toMatchObject({ support: 'approx', reasons: ['recolor'] });
+  });
+
+  it('reads the resolution a PNG or JPEG header states', () => {
+    const png = new Uint8Array(33 + 21 + 12);
+    png.set(pngHeader(10, 20, false).subarray(0, 33));
+    const dv = new DataView(png.buffer);
+    dv.setUint32(33, 9);
+    png.set([0x70, 0x48, 0x59, 0x73], 37); // pHYs
+    dv.setUint32(41, 5906); // 150 dpi in pixels per metre
+    dv.setUint32(45, 5906);
+    png[49] = 1;
+    dv.setUint32(54, 0);
+    png.set([0x49, 0x44, 0x41, 0x54], 58);
+    const got = pictureSize(png)!;
+    expect(got.dpi?.x).toBeCloseTo(150, 0);
+    // JPEG: SOI, APP0 JFIF with 72 dpi, then a frame header.
+    const jpeg = Uint8Array.from([
+      0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 1, 0, 72, 0, 72, 0, 0, 0xff, 0xc0, 0,
+      11, 8, 0, 30, 0, 40, 1, 1, 0x11, 0,
+    ]);
+    expect(pictureSize(jpeg)).toEqual({ w: 40, h: 30, alpha: false, dpi: { x: 72, y: 72 } });
+    // Units 0 (only an aspect): no resolution.
+    jpeg[13] = 0;
+    expect(pictureSize(jpeg)?.dpi).toBeUndefined();
   });
 
   it('reads a metafile as a residual element with approx support (converted in M3)', () => {
@@ -185,10 +238,14 @@ describe('p:pic', () => {
     expect((s.elements[0] as PictureElement).media).toEqual({ kind: 'video', part: 'ppt/media/media1.mp4' });
   });
 
-  it('notes clip geometries other than rect, roundRect and ellipse', () => {
-    const s = picturesOf(p({ geom: 'ellipse' }) + p({ id: 3, geom: 'hexagon' }), [imageRel('rId2', 'a.png')]);
+  it('clips to every preset of the table (M6) and notes a preset it does not know', () => {
+    const s = picturesOf(
+      p({ geom: 'ellipse' }) + p({ id: 3, geom: 'hexagon' }) + p({ id: 4, geom: 'noSuchShape' }),
+      [imageRel('rId2', 'a.png')],
+    );
     expect((s.elements[0] as PictureElement).support).toBe('native');
-    expect(s.elements[1]).toMatchObject({ support: 'approx', reasons: ['mask:hexagon'] });
+    expect((s.elements[1] as PictureElement).support).toBe('native');
+    expect(s.elements[2]).toMatchObject({ support: 'approx', reasons: ['mask:noSuchShape'] });
   });
 
   it('names extensions in lower case', () => {

@@ -4,6 +4,7 @@ import {
   LOGICAL_WIDTH,
   type Look,
   type Rgba,
+  type ShapeObject,
   type Slide,
   type SlideObject,
   type TextObject,
@@ -13,10 +14,16 @@ import {
 import { CLAMP, clampBox, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
 import { drawableContent } from './content.ts';
 import type { Ctx2D } from './ctx.ts';
+import { BLUR_MAX_REDUCTION, STACK_BLUR_SIGMA } from './effects.ts';
+import { drawnBounds, placedBounds } from './geom/bounds.ts';
+import { hasShapeExtras, outlineOf } from './geom/outline.ts';
+import { geomAwaited } from './geom/stored.ts';
+import { withinDrawBudget } from './geombudget.ts';
 import { sourceSize } from './picture.ts';
 import type { PropsModel } from './props.ts';
 import { lowerThirdStyle } from './raster.ts';
 import { rotatedBounds } from './scene.ts';
+import { clampShapeObject, shapeGeometry } from './shape.ts';
 import { hasStrongRtl } from './text/bidi.ts';
 import { currentFontEnv } from './text/fonts.ts';
 import { measurerFor } from './text/measure.ts';
@@ -43,7 +50,8 @@ import { bandSource, baselineOffset, layoutText, lyricTextFor } from './text2d.t
  * The box comes from the content, before anything is drawn (`*Reach`, logical px): every object's reach as
  * its drawer lays it out (legacy text by `layoutText`, rich text by the engine's own layout and paint plan,
  * memoised, so the draw that follows does not lay out again), widened by its effects (shadow, outline, glow),
- * turned with its box. Text reaches its laid-out lines grown by OVERHANG_EM, united with the ink its glyphs
+ * turned with its box; a PowerPoint shape (M6) its geometry, outline and effect layers as `drawGeomShape` and
+ * `drawEffected` make them. Text reaches its laid-out lines grown by OVERHANG_EM, united with the ink its glyphs
  * measure (`TextMetrics.actualBoundingBox*`: legacy lines carry theirs in the layout, rich segments are
  * measured once per paint plan), which is what bounds glyph parts that are shapes of their own beyond the
  * line box (tone marks stacked over a circumflex on a capital, Thai marks above a vowel, with tight line
@@ -63,6 +71,12 @@ export type Reach = { x: number; y: number; w: number; h: number } | null;
 
 /** Device px kept clear around a reach: the ring `drawSprite` checks lies outside everything reached. */
 export const SPRITE_MARGIN = 2;
+/**
+ * A sprite's origin is a whole multiple of this many device px (its left and top edges move out to one):
+ * Chromium dithers gradients (a PowerPoint shape's or gradient text's, M6) by device position, so a sprite
+ * at any other offset would differ from the full-frame draw by a level on many pixels of a gradient.
+ */
+export const SPRITE_ALIGN = 8;
 /** A sprite is used only when it covers at most this share of the frame; else the raster is full-frame. */
 export const SPRITE_MAX_SHARE = 0.8;
 /**
@@ -101,7 +115,30 @@ const KNOWN: Record<SlideObject['type'], ReadonlySet<string>> = {
     'origin',
     'locked',
   ]),
-  shape: new Set(['id', 'type', 'box', 'shape', 'fill', 'stroke', 'opacity', 'radius', 'origin', 'locked']),
+  shape: new Set([
+    'id',
+    'type',
+    'box',
+    'shape',
+    'fill',
+    'stroke',
+    'opacity',
+    'radius',
+    // M6 (design/27 §3.1), drawn through the geometry engine: `geomShapeReach`.
+    'geom',
+    'gradient',
+    'dash',
+    'lineJoin',
+    'lineCap',
+    'ends',
+    'flipH',
+    'flipV',
+    'shadow',
+    'glow',
+    'softEdge',
+    'origin',
+    'locked',
+  ]),
 };
 
 function union(a: Reach, b: Reach): Reach {
@@ -315,11 +352,63 @@ export function objectReach(ctx: Ctx2D, o: SlideObject, scale: number): Reach {
     if (isRichText(o)) return richTextReach(ctx, o);
     return legacyTextReach(ctx, o.text, o.style, o.box, scale, false);
   }
-  // A picture is cut to its box (a prepared one is copied at the box rounded out to whole pixels); a shape is
-  // its box plus its stroke.
+  if (o.type === 'shape' && hasShapeExtras(o)) return geomShapeReach(o, scale);
+  // A picture is cut to its box (a prepared one is copied at the box rounded out to whole pixels; a masked
+  // one is cut to its mask within the box, or the turned box's bounds); a shape is its box plus its stroke.
   const r = rotatedBounds(clampBox(o.box));
   const m = o.type === 'shape' && o.stroke ? num(o.stroke.width, 0, CLAMP.maxEffectPx, 1) : 0;
   return { x: r.x - m, y: r.y - m, w: r.w + 2 * m, h: r.h + 2 * m };
+}
+
+/**
+ * Device px a blurred effect layer reaches past what its blur covers (`drawEffected`): the 2 px its region
+ * adds, and the enlarged reduced layer's last pixel (up to BLUR_MAX_REDUCTION device px).
+ */
+const BLUR_SLACK_PX = 2 + BLUR_MAX_REDUCTION;
+
+/**
+ * A shape drawn through the geometry engine (`drawGeomShape`, M6): what it draws in box space (its geometry's
+ * points, past its box included, grown by its outline's joins, caps and arrowheads: `drawnBounds`, the
+ * bounds its effect layers are made over) placed on the slide with its flips and rotation, united with its
+ * shadow (offset, blurred 3σ past it) and glow (grown by half its radius, blurred 3σ past that) as
+ * `drawEffected` sizes their layers, grown by INK_SLACK for anti-aliasing. A soft edge only fades the shape
+ * inside its outline. A shape whose geometry file is not read yet draws nothing (`geomAwaited`).
+ */
+export function geomShapeReach(raw: ShapeObject, scale: number): Reach {
+  const o = clampShapeObject(raw);
+  if (geomAwaited(o.geom)) return EMPTY;
+  const s = num(scale, 0.01, 8, 1);
+  const built = shapeGeometry(o);
+  const outline = o.stroke ? outlineOf(o, num(o.stroke.width, 0, CLAMP.maxEffectPx, 1)) : undefined;
+  const b = placedBounds(drawnBounds(built, outline), {
+    box: o.box,
+    flipH: o.flipH === true,
+    flipV: o.flipV === true,
+  });
+  let { x0, y0, x1, y1 } = b;
+  const slack = BLUR_SLACK_PX / s;
+  const sh = o.shadow && num(o.shadow.color?.a, 0, 1, 0) > 0 ? o.shadow : undefined;
+  if (sh) {
+    const dx = num(sh.dx, -CLAMP.maxEffectPx, CLAMP.maxEffectPx, 0);
+    const dy = num(sh.dy, -CLAMP.maxEffectPx, CLAMP.maxEffectPx, 0);
+    const r = 3 * num(sh.blur, 0, CLAMP.maxEffectPx, 0) * STACK_BLUR_SIGMA + slack;
+    x0 = Math.min(x0, b.x0 + dx - r);
+    y0 = Math.min(y0, b.y0 + dy - r);
+    x1 = Math.max(x1, b.x1 + dx + r);
+    y1 = Math.max(y1, b.y1 + dy + r);
+  }
+  const radius =
+    o.glow && num(o.glow.color?.a, 0, 1, 0) > 0 ? num(o.glow.radius, 0, CLAMP.maxEffectPx, 0) : 0;
+  if (radius > 0) {
+    const r = (radius / 2) * (1 + 3 * STACK_BLUR_SIGMA) + slack;
+    x0 = Math.min(x0, b.x0 - r);
+    y0 = Math.min(y0, b.y0 - r);
+    x1 = Math.max(x1, b.x1 + r);
+    y1 = Math.max(y1, b.y1 + r);
+  }
+  if (!(Number.isFinite(x0) && Number.isFinite(y0) && Number.isFinite(x1) && Number.isFinite(y1)))
+    return null;
+  return { x: x0 - INK_SLACK, y: y0 - INK_SLACK, w: x1 - x0 + 2 * INK_SLACK, h: y1 - y0 + 2 * INK_SLACK };
 }
 
 /** A look band (`drawBandText`): the rich engine's layout or `drawText`'s, shrunk to fit as the draw does. */
@@ -356,7 +445,8 @@ export function slideReach(
     // The slide's PowerPoint or page picture covers the frame.
     if (drawn.pictureMediaId) return null;
     let r: Reach = EMPTY;
-    for (const o of drawn.objects) {
+    // As `drawSlide2D` draws them: past the slide's drawing budget, as their legacy shapes or without effects.
+    for (const o of withinDrawBudget(drawn.objects)) {
       r = union(r, objectReach(ctx, o, scale));
       if (r === null) return null;
     }
@@ -418,15 +508,17 @@ export function opaqueColor(c: Rgba | undefined): boolean {
 
 /**
  * The device rect of a reach on a `width` x `height` frame at `scale`: rounded out to whole pixels, grown by
- * SPRITE_MARGIN, cut to the frame. Null (full-frame) when the reach is unknown or the rect would cover more
- * than SPRITE_MAX_SHARE of the frame; a 1x1 rect when nothing is drawn on the frame.
+ * SPRITE_MARGIN, its origin moved out to a multiple of SPRITE_ALIGN, cut to the frame. Null (full-frame) when
+ * the reach is unknown or the rect would cover more than SPRITE_MAX_SHARE of the frame; a 1x1 rect when
+ * nothing is drawn on the frame.
  */
 export function spriteRect(reach: Reach, scale: number, width: number, height: number): SpriteRect | null {
   if (reach === null) return null;
   if (!(reach.w > 0 && reach.h > 0)) return { x: 0, y: 0, w: 1, h: 1 };
   const s = num(scale, 0.01, 8, 1);
-  const x0 = Math.max(0, Math.floor(reach.x * s) - SPRITE_MARGIN);
-  const y0 = Math.max(0, Math.floor(reach.y * s) - SPRITE_MARGIN);
+  const align = (v: number) => Math.floor(v / SPRITE_ALIGN) * SPRITE_ALIGN;
+  const x0 = Math.max(0, align(Math.floor(reach.x * s) - SPRITE_MARGIN));
+  const y0 = Math.max(0, align(Math.floor(reach.y * s) - SPRITE_MARGIN));
   const x1 = Math.min(width, Math.ceil((reach.x + reach.w) * s) + SPRITE_MARGIN);
   const y1 = Math.min(height, Math.ceil((reach.y + reach.h) * s) + SPRITE_MARGIN);
   if (!(Number.isFinite(x0) && Number.isFinite(y0) && Number.isFinite(x1) && Number.isFinite(y1)))

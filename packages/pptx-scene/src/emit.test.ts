@@ -11,6 +11,7 @@ import {
   overWhite,
   placePicture,
 } from './emit.ts';
+import { legacyGeometry, storedGeometry } from '@ordo/renderer/geom/stored.ts';
 import { emitSlides, parseDeck } from './index.ts';
 import type { DeckScene, ShapeElement } from './ir.ts';
 import {
@@ -30,6 +31,7 @@ import {
   solidBg,
   sp,
   xfrm,
+  inlineGeoms,
 } from './test-util.ts';
 
 const IN = 914_400;
@@ -41,8 +43,10 @@ const RED = { r: 255, g: 0, b: 0, a: 1 };
 /** Emit the first slide of a deck; every emitted slide must be an ordinary ordo slide. */
 function emitOne(spec: DeckSpec, opts: EmitOptions = {}) {
   const scene = parseDeck(buildDeck(spec));
-  const out = emitSlides(scene, opts);
-  for (const s of out.slides) expect(Slide.parse(s.slide)).toEqual(s.slide);
+  const stored = emitSlides(scene, opts);
+  for (const s of stored.slides) expect(Slide.parse(s.slide)).toEqual(s.slide);
+  // The paths as drawn: a geometry file's in place of its ref.
+  const out = inlineGeoms(stored);
   const e = out.slides[0]!;
   return { scene, out, slide: e.slide, notes: e.notes, objects: e.slide.objects };
 }
@@ -358,7 +362,7 @@ describe('text', () => {
 });
 
 describe('shapes', () => {
-  it('draws rect, roundRect with its corner, ellipse, and other presets as the nearest (noted)', () => {
+  it('draws rect, roundRect with its corner, ellipse, other presets by their geometry (M6)', () => {
     const { objects, notes } = emitOne({
       slides: [
         {
@@ -378,22 +382,33 @@ describe('shapes', () => {
             ) +
             sp({ id: 4, x: 0, y: 0, cx: 2 * IN, cy: IN, geom: 'ellipse', fill: solid('FF0000') }) +
             sp({ id: 5, x: 0, y: 0, cx: 2 * IN, cy: IN, geom: 'star5', fill: solid('FF0000') }) +
-            sp({ id: 6, x: 0, y: 0, cx: 2 * IN, cy: IN, geom: 'roundRect', fill: solid('FF0000') }),
+            sp({ id: 6, x: 0, y: 0, cx: 2 * IN, cy: IN, geom: 'roundRect', fill: solid('FF0000') }) +
+            sp({ id: 7, x: 0, y: 0, cx: 2 * IN, cy: IN, geom: 'noSuchShape', fill: solid('FF0000') }),
         },
       ],
     });
-    const [rect, round, ell, star, dflt] = content(objects) as ShapeObject[];
+    const [rect, round, ell, star, dflt, unknown] = content(objects) as ShapeObject[];
     expect(rect).toMatchObject({
       shape: 'rect',
       fill: RED,
       stroke: { width: 4, color: { r: 0, g: 0, b: 255, a: 1 } },
       radius: 0,
     });
-    expect(round).toMatchObject({ shape: 'rect', radius: PX / 2 });
+    expect(rect!.geom).toBeUndefined();
+    expect(round).toMatchObject({
+      shape: 'rect',
+      radius: PX / 2,
+      geom: { preset: 'roundRect', adj: [['adj', 50_000]] },
+    });
     expect(ell!.shape).toBe('ellipse');
-    expect(star!.shape).toBe('rect');
+    expect(ell!.geom).toBeUndefined(); // today's ellipse is exact
+    // The legacy rect an older build draws, and the preset beside it.
+    expect(star).toMatchObject({ shape: 'rect', fill: RED, geom: { preset: 'star5' } });
     expect(dflt!.radius).toBeCloseTo(PX * 0.16667, 2);
-    expect(notes.join(' ')).toMatch(/preset:star5 drawn as rect/);
+    expect(dflt!.geom).toEqual({ preset: 'roundRect' });
+    expect(unknown!.geom).toBeUndefined();
+    expect(notes.join(' ')).toMatch(/preset:noSuchShape drawn as rect/);
+    expect(notes.join(' ')).not.toMatch(/star5/);
   });
 
   it('draws a line at its angle, through flips and groups', () => {
@@ -422,20 +437,37 @@ describe('shapes', () => {
     expect(flat!.box.w).toBeCloseTo(2 * PX);
   });
 
-  it('draws an elbow connector as its segments and notes arrowheads', () => {
+  it('draws an elbow connector as one route along its chord, with its arrowhead (M6)', () => {
     const cxn =
       '<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="5" name="C"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1828800" cy="914400"/></a:xfrm>' +
       '<a:prstGeom prst="bentConnector3"><a:avLst><a:gd name="adj1" fmla="val 25000"/></a:avLst></a:prstGeom><a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:tailEnd type="triangle"/></a:ln></p:spPr></p:cxnSp>';
     const { objects, notes } = emitOne({ slides: [{ shapes: cxn }] });
-    const segs = content(objects) as ShapeObject[];
-    expect(segs).toHaveLength(3);
-    expect(segs[0]!.box.w).toBeCloseTo(0.5 * PX);
-    expect(segs[1]!.box.rotation).toBeCloseTo(90);
-    expect(segs[2]!.box.w).toBeCloseTo(1.5 * PX);
-    expect(notes.join(' ')).toMatch(/arrowheads/);
+    const [route, ...rest] = content(objects) as ShapeObject[];
+    expect(rest).toHaveLength(0);
+    // An older build draws the line from the start (0, 0) to the end (2, 1) in, along the box's midline.
+    const chord = Math.hypot(2 * PX, PX);
+    expect(route).toMatchObject({
+      shape: 'line',
+      stroke: { width: 2 },
+      ends: { tail: { type: 'triangle' } },
+    });
+    expect(route!.box.w).toBeCloseTo(chord);
+    expect(route!.box.rotation).toBeCloseTo((Math.atan2(1, 2) * 180) / Math.PI);
+    expect(route!.box.x + route!.box.w / 2).toBeCloseTo(PX);
+    expect(route!.box.y + route!.box.h / 2).toBeCloseTo(PX / 2);
+    // The route in the chord's frame: (0, 0) → (0.5, 0) → (0.5, 1) → (2, 1) in, as the preset builds it.
+    const [path] = route!.geom!.paths!;
+    expect(path).toMatchObject({ w: route!.box.w, h: route!.box.h, fill: 'none' });
+    const nums = path!.d.match(/-?[\d.]+/g)!.map(Number);
+    const u = [2 / Math.sqrt(5), 1 / Math.sqrt(5)];
+    const at = (x: number, y: number) => [x * u[0]! + y * u[1]!, -x * u[1]! + y * u[0]! + route!.box.h / 2];
+    const want = [at(0, 0), at(0.5 * PX, 0), at(0.5 * PX, PX), at(2 * PX, PX)].flat();
+    expect(path!.d.replace(/[-\d. ]/g, '')).toBe('MLLL');
+    for (const [i, v] of nums.entries()) expect(v).toBeCloseTo(want[i]!, 1);
+    expect(notes.join(' ')).not.toMatch(/arrowheads/);
   });
 
-  it('draws custom geometry as its legacy rect only when it fills most of its box', () => {
+  it('draws custom geometry as its paths, its legacy rect only when it fills most of its box (M6)', () => {
     const custom = (id: number, pts: string) =>
       sp({
         id,
@@ -454,9 +486,19 @@ describe('shapes', () => {
       '<a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="10" y="0"/></a:lnTo><a:lnTo><a:pt x="10" y="10"/></a:lnTo><a:lnTo><a:pt x="0" y="10"/></a:lnTo>';
     const thin =
       '<a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="10" y="0"/></a:lnTo><a:lnTo><a:pt x="10" y="1"/></a:lnTo><a:lnTo><a:pt x="0" y="1"/></a:lnTo>';
-    const { objects, notes } = emitOne({ slides: [{ shapes: custom(2, full) + custom(3, thin) }] });
-    expect(content(objects).map((o) => o.type)).toEqual(['shape', 'text', 'text']);
-    expect(notes.join(' ')).toMatch(/fills little of its box/);
+    const { objects } = emitOne({ slides: [{ shapes: custom(2, full) + custom(3, thin) }] });
+    const [fullShape, , thinShape] = content(objects) as ShapeObject[];
+    expect(content(objects).map((o) => o.type)).toEqual(['shape', 'text', 'shape', 'text']);
+    expect(fullShape).toMatchObject({
+      shape: 'rect',
+      geom: { paths: [{ d: 'M 0 0 L 10 0 L 10 10 L 0 10 Z', w: 10, h: 10 }] },
+    });
+    // A thin silhouette's legacy is a line, which draws no fill: an older build draws nothing of it.
+    expect(thinShape).toMatchObject({
+      shape: 'line',
+      fill: RED,
+      geom: { paths: [{ d: 'M 0 0 L 10 0 L 10 1 L 0 1 Z', w: 10, h: 10 }] },
+    });
   });
 
   it('draws a shape and its text as two objects, the text above', () => {
@@ -862,6 +904,42 @@ describe('backgrounds', () => {
     expect(emitOne(spec, { extendBackgrounds: false }).objects[0]!.box.x).toBeCloseTo(240);
   });
 
+  it("lays a 4:3 slide's gradient background over the slide, the 16:9 frame carrying its end colours", () => {
+    const grad = (inner: string) =>
+      `<p:bg><p:bgPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="000080"/></a:gs></a:gsLst>${inner}</a:gradFill><a:effectLst/></p:bgPr></p:bg>`;
+    const size = { cx: 9_144_000, cy: 6_858_000 };
+    // Linear: one frame rect whose stops fall where the slide's edges are on the frame's line (240-1680 px).
+    const lin = emitOne({ size, slides: [{ bg: grad('<a:lin ang="0" scaled="0"/>') }] }).objects;
+    expect(lin).toHaveLength(1);
+    expect(lin[0]).toMatchObject({ box: { x: 0, w: 1920 }, gradient: { kind: 'linear', angle: 0 } });
+    const at = (lin[0] as ShapeObject).gradient!.stops.map((st) => st.at);
+    expect(at[0]).toBeCloseTo(240 / 1920);
+    expect(at[1]).toBeCloseTo(1680 / 1920);
+    // Scaled 45°: corner to corner of the 4:3 slide, the same direction in px on the frame.
+    const sc = emitOne({ size, slides: [{ bg: grad('<a:lin ang="2700000" scaled="1"/>') }] }).objects;
+    const g = (sc[0] as ShapeObject).gradient!;
+    expect(g.scaled).toBeUndefined();
+    expect(g.angle).toBeCloseTo((Math.atan2(1440, 1080) * 180) / Math.PI);
+    // Radial: the slide's own ellipse over the slide, the frame in the outer stop's colour.
+    const rad = emitOne({
+      size,
+      slides: [
+        {
+          bg: grad('<a:path path="circle"><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path>'),
+        },
+      ],
+    }).objects as ShapeObject[];
+    expect(rad).toHaveLength(2);
+    expect(rad[0]).toMatchObject({ box: { x: 0, w: 1920 }, fill: { r: 0, g: 0, b: 128, a: 1 } });
+    expect(rad[0]!.gradient).toBeUndefined();
+    expect(rad[1]!.box.x).toBeCloseTo(240);
+    expect(rad[1]!.box.w).toBeCloseTo(1440);
+    expect(rad[1]!.gradient).toMatchObject({ kind: 'radial' });
+    // On a 16:9 slide nothing moves.
+    const wide = emitOne({ slides: [{ bg: grad('<a:lin ang="0" scaled="0"/>') }] }).objects as ShapeObject[];
+    expect(wide[0]!.gradient!.stops.map((st) => st.at)).toEqual([0, 1]);
+  });
+
   it('draws no background as white, as PowerPoint shows it', () => {
     const { objects } = emitOne({ master: { bg: '' }, slides: [{}] });
     expect(objects).toEqual([
@@ -934,10 +1012,120 @@ describe('placement', () => {
   });
 
   it('caps a slide at 1,000 objects', () => {
-    const many = sp({ id: 2, x: 0, y: 0, cx: IN, cy: IN, fill: solid('FF0000') }).repeat(1_100);
+    // Text boxes: shapes without text over the budget would go to the art (and emit nothing).
+    const many = sp({ id: 2, x: 0, y: 0, cx: IN, cy: IN, txBody: body(para(run('x'))) }).repeat(1_100);
     const { objects, notes } = emitOne({ slides: [{ shapes: many }] });
     expect(objects).toHaveLength(1_000);
     expect(notes.join(' ')).toMatch(/more than 1000 objects/);
+  });
+});
+
+describe('the object budget (M6)', () => {
+  /** `n` shapes 0.1 in wide in rows of 20 of `colors` in turn; `shape` makes each (its id, x and y in EMU). */
+  const pieces = (n: number, shape: (id: number, x: number, y: number, i: number) => string) => {
+    let out = '';
+    for (let i = 0; i < n; i++) out += shape(10 + i, (i % 20) * 0.1 * IN, Math.floor(i / 20) * 0.1 * IN, i);
+    return out;
+  };
+  const square = (color: string) => (id: number, x: number, y: number) =>
+    sp({ id, x, y, cx: 0.1 * IN, cy: 0.1 * IN, fill: solid(color) });
+  const group = (inner: string) => grpSp({ id: 2, x: 0, y: 0, cx: 4 * IN, cy: 4 * IN }, inner);
+  /** Device points (logical px) of a shape as the renderer builds it: box space flipped, turned, placed. */
+  const devicePoints = (o: ShapeObject): number[][] => {
+    const g = storedGeometry(o.geom, o.box.w, o.box.h) ?? legacyGeometry(o.shape, o.radius, o.box.w, o.box.h);
+    const a = (o.box.rotation * Math.PI) / 180;
+    const cx = o.box.x + o.box.w / 2;
+    const cy = o.box.y + o.box.h / 2;
+    return g.paths.map((p) => {
+      const out: number[] = [];
+      for (let i = 0; i < p.pts.length; i += 2) {
+        const u = (p.pts[i]! - o.box.w / 2) * (o.flipH ? -1 : 1);
+        const v = (p.pts[i + 1]! - o.box.h / 2) * (o.flipV ? -1 : 1);
+        out.push(cx + u * Math.cos(a) - v * Math.sin(a), cy + u * Math.sin(a) + v * Math.cos(a));
+      }
+      return out;
+    });
+  };
+
+  it('draws shapes of one look as one object per eight paths that draws as they do apart', () => {
+    // Triangles, turned and mirrored in turn, and custom stars: 160 in one group, past the budget apart.
+    const star =
+      '<a:custGeom><a:pathLst><a:path w="10" h="10"><a:moveTo><a:pt x="5" y="0"/></a:moveTo>' +
+      '<a:lnTo><a:pt x="10" y="10"/></a:lnTo><a:lnTo><a:pt x="0" y="4"/></a:lnTo><a:lnTo><a:pt x="10" y="4"/></a:lnTo>' +
+      '<a:lnTo><a:pt x="0" y="10"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom>';
+    const shape = (id: number, x: number, y: number, i: number) =>
+      i % 3 === 2
+        ? sp({ id, x, y, cx: 0.1 * IN, cy: 0.08 * IN, geom: 'none', fill: solid('FF0000') }).replace(
+            '<p:spPr>',
+            `<p:spPr>${star}`,
+          )
+        : sp({
+            id,
+            x,
+            y,
+            cx: 0.1 * IN,
+            cy: 0.06 * IN,
+            geom: 'triangle',
+            fill: solid('FF0000'),
+            rot: i % 2 ? 30 : 0,
+            flipH: i % 4 === 1,
+            flipV: i % 5 === 3,
+          });
+    const scene = parseDeck(buildDeck({ slides: [{ shapes: group(pieces(160, shape)) }] }));
+    const merged = inlineGeoms(emitSlides(scene)).slides[0]!;
+    expect(Slide.parse(merged.slide)).toEqual(merged.slide);
+    expect(merged.classification.class).toBe('native');
+    const objects = content(merged.slide.objects) as ShapeObject[];
+    expect(objects).toHaveLength(20);
+    for (const o of objects) {
+      // No legacy fill an older build would draw over the union box: a line, without an outline here.
+      expect(o).toMatchObject({ type: 'shape', shape: 'line', fill: RED, opacity: 1 });
+      expect(o.box.rotation).toBe(0);
+      expect(o.stroke).toBeUndefined();
+      expect(o.geom?.paths).toHaveLength(8);
+    }
+    // The same shapes emitted apart (the marks removed) put every point where the merged object does.
+    for (const e of scene.slides[0]!.elements) delete (e as ShapeElement).merge;
+    const apart = content(inlineGeoms(emitSlides(scene)).slides[0]!.slide.objects) as ShapeObject[];
+    expect(apart).toHaveLength(160);
+    const together = objects.flatMap(devicePoints);
+    const each = apart.flatMap(devicePoints);
+    expect(together).toHaveLength(each.length);
+    each.forEach((pts, k) => {
+      expect(together[k]).toHaveLength(pts.length);
+      for (const [j, v] of pts.entries()) expect(Math.abs(together[k]![j]! - v)).toBeLessThan(0.02);
+    });
+    expect(merged.notes).toContain(
+      "160 shapes of one look are drawn as 20 objects (the slide's object budget)",
+    );
+  });
+
+  it('keeps a common outline and its dash on the merged object', () => {
+    const ln = `<a:ln w="25400">${solid('0000FF')}<a:prstDash val="dash"/></a:ln>`;
+    const shape = (id: number, x: number, y: number) =>
+      sp({ id, x, y, cx: 0.1 * IN, cy: 0.1 * IN, fill: solid('FF0000'), ln });
+    const { objects } = emitOne({ slides: [{ shapes: group(pieces(160, shape)) }] });
+    expect(content(objects)).toHaveLength(20);
+    expect(content(objects)[0]).toMatchObject({
+      shape: 'line',
+      fill: RED,
+      stroke: { width: 4, color: { r: 0, g: 0, b: 255, a: 1 } },
+      dash: 'dash',
+    });
+  });
+
+  it('leaves out of version 1 what the budget sends to the art, so the slide stays within it', () => {
+    // 160 squares of two looks in turn (none merge) under a title: the squares go to the art.
+    const shape = (id: number, x: number, y: number, i: number) =>
+      square(i % 2 ? '336699' : '993366')(id, x, y);
+    const title = sp({ id: 3, x: 0, y: 5 * IN, cx: 4 * IN, cy: IN, txBody: body(para(run('Words'))) });
+    const { out, objects } = emitOne({ slides: [{ shapes: group(pieces(160, shape)) + title }] });
+    const e = out.slides[0]!;
+    expect(e.classification.class).toBe('hybrid');
+    expect(e.classification.reasons).toContain('art:budget:shapes');
+    expect(objects.map((o) => o.type)).toEqual(['shape', 'text']);
+    expect(e.art).toMatchObject({ at: 1, replaces: [], before: objects[1]!.id });
+    expect(e.art?.elements).toHaveLength(160);
   });
 });
 

@@ -16,7 +16,8 @@
  *   `fallbackFonts` (fontmap.ts).
  * - **Runs** (§4 "Run properties"): every stretch whose look differs from the box style, merged while it
  *   stays the same: family, weight, slant, `sizeScale` (× the box size), colour (all colour forms, already
- *   resolved; hollow text is transparent with its outline; a gradient is its first stop until M6),
+ *   resolved; hollow text is transparent with its outline; a gradient is its first stop, and the box's
+ *   own gradient also paints it over the box, `TextStyle.paint`, M6),
  *   highlight, underline, strike, caps, letter spacing, `baseline` (a superscript verse number), outline and
  *   shadow (null where the box has one and the run has none) and language (when its primary subtag
  *   differs). A run's characters are drawn in its Latin, East Asian or complex-script family by script
@@ -41,6 +42,7 @@ import type { Rgba as OrdoRgba, TextPara, TextRun, TextStyle } from '@ordo/domai
 import { isPrivateUse, isSymbolFont, symbolFontChar } from '@ordo/domain/bullets.ts';
 import { fallbackFonts, type ScriptClass, scriptClasses } from './fontmap.ts';
 import { lenPx, ptPx } from './frame.ts';
+import { gradientOf } from './geom.ts';
 import type { Bullet, Fill, Frame, Para, RunStyle, Shadow, TextBody } from './ir.ts';
 import type { Log } from './log.ts';
 
@@ -137,7 +139,8 @@ export function richText(body: TextBody, opts: RichOptions): RichText | undefine
   const st = dom.style;
   const fontPx = bound(ptPx(f, st.sizePt), MIN_FONT_PX, MAX_FONT_PX);
   const family = (dom.family ?? 'Calibri').slice(0, 300);
-  const color = runColor(st.fill, opts.log);
+  // A gradient box is painted with it (M6, `TextStyle.paint`); its first stop is the legacy colour.
+  const color = runColor(st.fill, opts.log, st.fill);
   const ins = {
     l: bound(lenPx(f, body.insets.l), 0, MAX_COORD),
     t: bound(lenPx(f, body.insets.t), 0, MAX_COORD),
@@ -177,6 +180,8 @@ export function richText(body: TextBody, opts: RichOptions): RichText | undefine
   const lang = cleanLang(st.lang);
   if (lang) style.lang = lang;
   if (st.underline) style.underline = true;
+  const paint = gradientOf(st.fill, 0, opts.log);
+  if (paint) style.paint = paint;
 
   // Families tried after each run's own: substitutes, the East Asian and complex-script faces, scripts.
   const byClass = (cls: ScriptClass) => familiesBy(pieces, text, (p) => p.cls === cls);
@@ -197,6 +202,7 @@ export function richText(body: TextBody, opts: RichOptions): RichText | undefine
     boxCaps: st.caps === 'none' ? 'none' : 'all',
     shadow: opts.shapeShadow,
     lo,
+    boxFill: st.fill,
   };
   const marks: { start: number; end: number; diff: Omit<TextRun, 'start' | 'end'> }[] = [];
   const keys: string[] = [];
@@ -462,6 +468,8 @@ interface DiffCtx {
   boxCaps: 'none' | 'all';
   shadow: Shadow | undefined;
   lo: boolean;
+  /** The box's own fill: a run with the same gradient is painted with the box (M6). */
+  boxFill: Fill;
 }
 
 /** What a run's look changes on the box style; undefined when nothing. */
@@ -481,7 +489,7 @@ function runDiff(
   const px = bound(ptPx(ctx.f, s.sizePt), 0.01, MAX_FONT_PX * 4);
   const scale = Math.round((px / box.fontSizePx) * 1e6) / 1e6;
   if (Math.abs(scale - 1) > 1e-6) d.sizeScale = bound(scale, 0.01, 50);
-  const color = runColor(s.fill, log);
+  const color = runColor(s.fill, log, ctx.boxFill);
   if (!sameColor(color, box.color)) d.color = color;
   if (s.highlight) d.highlight = ordo(s.highlight);
   if (s.underline !== (box.underline ?? false)) d.underline = s.underline;
@@ -501,15 +509,19 @@ function runDiff(
   return undefined;
 }
 
-/** A run's colour: solid; a gradient's first stop (M6 paints it); hollow text transparent. */
-function runColor(fill: Fill, log: Log): OrdoRgba {
+/**
+ * A run's colour: solid; a gradient's first stop; hollow text transparent. The box's own gradient is painted
+ * over the box (`TextStyle.paint`, M6); a run in another gradient is drawn in its first colour (noted).
+ */
+function runColor(fill: Fill, log: Log, boxFill: Fill): OrdoRgba {
   switch (fill.kind) {
     case 'solid':
       return ordo(fill.color);
     case 'none':
       return { r: 0, g: 0, b: 0, a: 0 };
     case 'gradient': {
-      log('gradient text is drawn in its first colour (M6)');
+      if (fill !== boxFill && JSON.stringify(fill) !== JSON.stringify(boxFill))
+        log('text in a gradient other than its box’s is drawn in its first colour');
       let first = fill.stops[0];
       for (const s of fill.stops) if (first && s.at < first.at) first = s;
       return first ? ordo(first.color) : { r: 0, g: 0, b: 0, a: 1 };

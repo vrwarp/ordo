@@ -263,3 +263,10 @@ export function slotCount(geom: CompiledGeom): number {
 export function guideSlotOf(geom: CompiledGeom, i: number): number {
   return BUILTIN_COUNT + geom.k.length + i;
 }
+
+/**
+ * How close, as a fraction of the box's larger side, a sub-path's end must be to its start to count as closed
+ * when the drawing order is decided (LibreOffice's `checkClosed` compares the points rounded to 1/100 mm, about
+ * 1e-4 of a slide-sized box; a millionth is above arithmetic noise and below anything visible).
+ */
+export const CLOSED_TOLERANCE = 1e-6;

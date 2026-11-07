@@ -1,7 +1,10 @@
 import { DEFAULT_LYRIC_STYLE, LOOK_LOWER_THIRD, LOOK_MAIN, type Look, type SlideObject } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
+import { STACK_BLUR_SIGMA } from './effects.ts';
 import {
   OVERHANG_EM,
+  type Reach,
+  SPRITE_ALIGN,
   SPRITE_MARGIN,
   coversFrame,
   drawSprite,
@@ -62,19 +65,23 @@ const text = (t: string, b: ReturnType<typeof box>, extra: Partial<SlideObject> 
   ({ id: 't', type: 'text', box: b, text: t, style, opacity: 1, ...extra }) as SlideObject;
 
 describe('spriteRect', () => {
-  it('rounds out, grows by the margin and cuts to the frame', () => {
+  it('rounds out, grows by the margin, starts at a multiple of SPRITE_ALIGN and cuts to the frame', () => {
+    // 50 - 2 = 48 is aligned already; 25 - 2 = 23 moves out to 16.
     expect(spriteRect({ x: 100.4, y: 50.6, w: 200, h: 100 }, 0.5, 960, 540)).toEqual({
       x: 50 - SPRITE_MARGIN,
-      y: 25 - SPRITE_MARGIN,
+      y: 16,
       w: 151 - 50 + 2 * SPRITE_MARGIN,
-      h: 76 - 25 + 2 * SPRITE_MARGIN,
+      h: 76 + SPRITE_MARGIN - 16,
     });
+    // 1000 - 2 = 998 moves out to 992.
     expect(spriteRect({ x: -50, y: 1000, w: 300, h: 200 }, 1, 1920, 1080)).toEqual({
       x: 0,
-      y: 998,
+      y: 992,
       w: 252,
-      h: 82,
+      h: 88,
     });
+    for (const x of [0.3, 7.9, 13, 101.5])
+      expect(spriteRect({ x, y: x, w: 10, h: 10 }, 1.37, 1920, 1080)!.x % SPRITE_ALIGN).toBe(0);
   });
 
   it('is full-frame when the reach is unknown or covers most of the frame, 1x1 when nothing is drawn', () => {
@@ -165,9 +172,72 @@ describe('reaches', () => {
       radius: 0,
     } as SlideObject;
     expect(objectReach(ctx, s, 1)).toEqual({ x: 4, y: 14, w: 112, h: 62 });
+    expect(objectReach(ctx, { ...s, future: { x: 1 } } as unknown as SlideObject, 1)).toBeNull();
+  });
+
+  it("bounds a PowerPoint shape (M6) by its geometry past its box, its outline's mitres and its effects", () => {
+    const black = { r: 0, g: 0, b: 0, a: 1 };
+    const s = {
+      id: 's',
+      type: 'shape',
+      box: box(100, 100, 100, 50),
+      shape: 'rect',
+      fill: black,
+      opacity: 1,
+      radius: 0,
+    } as SlideObject;
+    const within = (inner: Reach, outer: Reach) =>
+      !!inner &&
+      !!outer &&
+      inner.x >= outer.x - 1e-9 &&
+      inner.y >= outer.y - 1e-9 &&
+      inner.x + inner.w <= outer.x + outer.w + 1e-9 &&
+      inner.y + inner.h <= outer.y + outer.h + 1e-9;
+    // wedgeRectCallout's tail (adj1 -20,833, adj2 62,500): its tip at (29.2, 56.25) of the 100 x 50 box.
+    const callout = objectReach(ctx, { ...s, geom: { preset: 'wedgeRectCallout' } } as SlideObject, 1)!;
+    expect(callout.y + callout.h).toBeGreaterThanOrEqual(100 + 56.25);
+    expect(callout.y + callout.h).toBeLessThan(100 + 56.25 + 3);
+    // Flipped vertically, the tail points up.
+    const up = objectReach(
+      ctx,
+      { ...s, geom: { preset: 'wedgeRectCallout' }, flipV: true } as SlideObject,
+      1,
+    )!;
+    expect(up.y).toBeLessThanOrEqual(100 - 6.25);
+    // A thick stroke reaches half its width past the outline, more at a sharp miter.
+    const star = { ...s, geom: { preset: 'star5' }, stroke: { width: 10, color: black } } as SlideObject;
+    const r = objectReach(ctx, star, 1)!;
+    expect(r.x).toBeLessThan(100 - 5);
+    // A shadow: its offset and three sigmas of its blur, plus the layer's slack; a glow around every side.
+    const shadow = { dx: 20, dy: 10, blur: 12, color: { r: 0, g: 0, b: 0, a: 0.5 } };
+    const sh = objectReach(ctx, { ...s, shadow } as SlideObject, 1)!;
+    expect(sh.x + sh.w).toBeGreaterThanOrEqual(200 + 20 + 3 * 12 * STACK_BLUR_SIGMA);
+    expect(sh.x).toBeLessThanOrEqual(100);
+    const gl = objectReach(ctx, { ...s, glow: { radius: 20, color: shadow.color } } as SlideObject, 1)!;
+    expect(gl.x).toBeLessThanOrEqual(100 - 10 * (1 + 3 * STACK_BLUR_SIGMA));
+    // A soft edge fades inside the outline; an invisible shadow casts nothing.
+    const soft = objectReach(ctx, { ...s, softEdge: 20 } as SlideObject, 1)!;
     expect(
-      objectReach(ctx, { ...s, geom: { preset: 'wedgeRectCallout' } } as unknown as SlideObject, 1),
-    ).toBeNull();
+      within(soft, objectReach(ctx, { ...s, gradient: undefined, dash: 'solid' } as SlideObject, 1)),
+    ).toBe(true);
+    const clear = { ...shadow, color: { ...shadow.color, a: 0 } };
+    expect(objectReach(ctx, { ...s, shadow: clear } as SlideObject, 1)).toEqual(
+      objectReach(ctx, { ...s, dash: 'solid' } as SlideObject, 1),
+    );
+    // Turned with the box.
+    const turned = objectReach(
+      ctx,
+      { ...s, box: box(100, 100, 100, 50, 90), dash: 'solid' } as SlideObject,
+      1,
+    )!;
+    expect(turned.w).toBeLessThan(turned.h);
+    // A geometry only in a file not read yet draws nothing.
+    expect(objectReach(ctx, { ...s, geom: { ref: 'f'.repeat(64) } } as SlideObject, 1)).toEqual({
+      x: 0,
+      y: 0,
+      w: 0,
+      h: 0,
+    });
   });
 
   it('reaches the whole frame for a slide with its PowerPoint picture, nothing for a hidden look', () => {

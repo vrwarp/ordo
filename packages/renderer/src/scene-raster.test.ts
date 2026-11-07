@@ -3,6 +3,7 @@ import {
   LOOK_LOWER_THIRD,
   LOOK_MAIN,
   type Look,
+  type ShapeObject,
   type Slide,
   type SlideObject,
   type TextObject,
@@ -259,6 +260,34 @@ describe('sceneSlides', () => {
     expect(sceneSlides(fakeCtx(), slide([empty]), LOOK_MAIN, SCALE, images, 'vid')).toBeUndefined();
     // Without a look the slide is drawn as authored, as drawSlide2D does.
     expect(sceneSlides(fakeCtx(), sl, undefined, SCALE, images, 'vid')).toBeDefined();
+  });
+
+  it("applies the slide's drawing budget once to the whole slide, before the split (geombudget.ts)", () => {
+    // Three costly geometries (about 0.53M each of GEOM_COST.slide's 1.3M): two under the video fit; the one
+    // over it is past the slide's budget and draws its legacy shape in the over part too, as the editor and
+    // the thumbnails draw it (each part on its own would have drawn it).
+    let d = 'M 1000 1000';
+    for (let k = 1; k < 250; k++) {
+      const a = (k / 250) * Math.PI * 2 * 37;
+      const r = k % 2 ? 1000 : 50;
+      d += ` L ${(1000 + r * Math.cos(a)).toFixed(1)} ${(1000 + r * Math.sin(a)).toFixed(1)}`;
+    }
+    const zig = (id: string): SlideObject => ({
+      ...(shape(id, box(0, 0, 1920, 1080)) as ShapeObject),
+      geom: { paths: [{ d: `${d} Z`, w: 2000, h: 2000 }] },
+    });
+    const s = sceneSlides(
+      fakeCtx(),
+      slide([zig('z0'), zig('z1'), video(), zig('z2')]),
+      LOOK_MAIN,
+      SCALE,
+      images,
+      'vid',
+    )!;
+    expect(ids(s.base)).toEqual(['z0', 'z1', 'vid']);
+    expect(ids(s.over)).toEqual(['z2']);
+    expect(s.base.objects.slice(0, 2).every((o) => o.type === 'shape' && o.geom)).toBe(true);
+    expect((s.over!.objects[0] as { geom?: unknown }).geom).toBeUndefined();
   });
 });
 

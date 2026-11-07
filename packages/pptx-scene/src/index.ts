@@ -11,12 +11,15 @@ import { classifySlide } from './classify.ts';
 import { slideContext } from './context.ts';
 import { type DeckInfo, readDeck, type SlideRef } from './deck.ts';
 import { readBackground } from './background.ts';
+import { bakeKey, type PictureBake } from './bake.ts';
 import {
+  BAKE_PREFIX,
   CLIP_PREFIX,
   type EmitOptions,
   type EmitResult,
   type EmittedSlide,
   emitDeck,
+  GEOM_PREFIX,
   MEDIA_PREFIX,
 } from './emit.ts';
 import { frameOf, slideRect } from './frame.ts';
@@ -24,7 +27,8 @@ import type { DeckScene, Frame, SectionInfo, SlideScene } from './ir.ts';
 import { clean, type Log, noteList } from './log.ts';
 import { openPackage, type PartSource } from './opc.ts';
 import { readSlideSounds } from './media.ts';
-import type { PictureHeader } from './picture.ts';
+import type { FaceMetrics, FaceSource } from './metrics.ts';
+import { MAX_DPI, MIN_DPI, type PictureHeader } from './picture.ts';
 import { readSlideTiming } from './timing.ts';
 import { walkSlide } from './walk.ts';
 
@@ -32,11 +36,27 @@ export type { BlipReader, ColorCtx } from './color.ts';
 export type { SlideCtx, Source } from './context.ts';
 export type { DeckInfo, SlideRef } from './deck.ts';
 export type { EmitOptions, EmitResult, EmittedSlide } from './emit.ts';
-export { CLIP_PREFIX, MEDIA_PREFIX } from './emit.ts';
+export {
+  BAKE_PREFIX,
+  CLIP_PREFIX,
+  GEOM_FILE_CHARS,
+  GEOM_PREFIX,
+  MEDIA_PREFIX,
+  SLIDE_BYTES_NOTE,
+  storedSlideBytes,
+} from './emit.ts';
+export type { BakeRaster, PictureBake, TileBake } from './bake.ts';
 export type { EmittedClip } from './media.ts';
 export { type PictureHeader, pictureSize } from './picture.ts';
 export * from './ir.ts';
 export type { Log } from './log.ts';
+export {
+  type FaceMetrics,
+  type FaceSource,
+  metricsOfTables,
+  type SfntTables,
+  sfntMetrics,
+} from './metrics.ts';
 export type { Package, PartSource, Rel } from './opc.ts';
 export type { Theme } from './theme.ts';
 
@@ -65,6 +85,36 @@ export interface ParseOptions {
    * element and the slide's timing decide.
    */
   mediaKind?: (part: string) => 'video' | 'audio' | undefined;
+  /**
+   * The font face of a family in a weight and slant, as the caller's fonts would draw it (M6 tables: a row is
+   * as tall as its text, measured with the faces' advances; `metrics.ts` `sfntMetrics` reads a font file).
+   * Asked at most once per family, weight and slant, and for at most `MAX_FACE_LOOKUPS` of them per call; a
+   * family it has no face for is undefined, and its text is measured with estimated widths (noted).
+   */
+  fontFace?: FaceSource;
+}
+
+/** Families, weights and slants `ParseOptions.fontFace` is asked for per call (a deck can name thousands). */
+export const MAX_FACE_LOOKUPS = 256;
+
+/** `ParseOptions.fontFace` asked once per family, weight and slant (case-insensitive), its answer checked. */
+function faceSources(get: FaceSource | undefined): FaceSource | undefined {
+  if (!get) return undefined;
+  const known = new Map<string, FaceMetrics | undefined>();
+  return (family, bold, italic) => {
+    const key = `${family.trim().toLowerCase()}|${bold ? 1 : 0}|${italic ? 1 : 0}`;
+    if (known.has(key)) return known.get(key);
+    if (known.size >= MAX_FACE_LOOKUPS) return undefined;
+    let v: FaceMetrics | undefined;
+    try {
+      const got = get(family, bold, italic);
+      v = got && typeof got.advance === 'function' ? got : undefined;
+    } catch {
+      v = undefined; // a face the caller cannot read is missing
+    }
+    known.set(key, v);
+    return v;
+  };
 }
 
 /** `ParseOptions.mediaKind` asked once per part, its answer checked. */
@@ -101,8 +151,14 @@ function pictureSizes(
       const got = get(part);
       const ok = (n: unknown): n is number =>
         typeof n === 'number' && Number.isFinite(n) && n >= 1 && n <= MAX_PICTURE_SIDE;
-      if (got && ok(got.w) && ok(got.h))
+      if (got && ok(got.w) && ok(got.h)) {
         v = { w: got.w, h: got.h, ...(typeof got.alpha === 'boolean' ? { alpha: got.alpha } : {}) };
+        // M6: a stated resolution sizes tiles (`bake.ts`).
+        const dpi = got.dpi;
+        const okDpi = (n: unknown): n is number =>
+          typeof n === 'number' && Number.isFinite(n) && n >= MIN_DPI && n <= MAX_DPI;
+        if (dpi && okDpi(dpi.x) && okDpi(dpi.y)) v.dpi = { x: dpi.x, y: dpi.y };
+      }
     } catch {
       v = undefined; // a size the caller cannot read is unknown
     }
@@ -143,6 +199,7 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
   const frame = frameOf(deck.size.cx, deck.size.cy);
   const pictureSize = pictureSizes(opts.pictureSize);
   const mediaKind = mediaKinds(opts.mediaKind);
+  const fontFace = faceSources(opts.fontFace);
   const range = opts.range;
   const refs = range ? deck.slides.filter((r) => r.index >= range.from && r.index < range.to) : deck.slides;
   const readSlide = (ref: SlideRef): SlideScene => {
@@ -158,6 +215,7 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
       const ctx = slideContext(pkg, deck, frame, ref, slideLog, {
         ...(pictureSize ? { pictureSize } : {}),
         ...(mediaKind ? { mediaKind } : {}),
+        ...(fontFace ? { fontFace } : {}),
       });
       // Clip timing is read before the shape tree, which attaches it to each poster (`media.ts`).
       ctx.timing = readSlideTiming(ctx.slide);
@@ -238,16 +296,44 @@ export function convertDeck(src: PartSource, opts: ConvertOptions = {}): Convert
     }
     return id;
   };
+  // Baked pictures numbered across the call too (one per part and recipe, M6).
+  const bakes = new Map<string, { id: string; part: string; bake: PictureBake }>();
+  const bakeId = (part: string, bake: PictureBake) => {
+    const key = bakeKey(part, bake);
+    let b = bakes.get(key);
+    if (!b) {
+      b = { id: opts.bakeId ? opts.bakeId(part, bake) : `${BAKE_PREFIX}${bakes.size + 1}`, part, bake };
+      bakes.set(key, b);
+    }
+    return b.id;
+  };
+  // Geometry files numbered across the call too (one per distinct file, M6 round 2).
+  const geomIds = new Map<string, string>();
+  const geomId = (json: string) => {
+    let id = geomIds.get(json);
+    if (id === undefined) {
+      id = opts.geomId ? opts.geomId(json) : `${GEOM_PREFIX}${geomIds.size + 1}`;
+      geomIds.set(json, id);
+    }
+    return id;
+  };
+  const geoms = new Map<string, EmitResult['geoms'][number]>();
   const slides: EmittedSlide[] = [];
   for (const ref of r.refs) {
     const scene: DeckScene = { frame: r.frame, slides: [r.readSlide(ref)], sections: [], notes: [] };
-    slides.push(emitDeck(scene, { ...opts, newId, mediaId, clipId }).slides[0]!);
+    const one = emitDeck(scene, { ...opts, newId, mediaId, clipId, bakeId, geomId });
+    slides.push(one.slides[0]!);
+    for (const g of one.geoms) if (!geoms.has(g.id)) geoms.set(g.id, g);
   }
   return {
     slides,
-    media: [...media].map(([part, id]) => ({ id, part })),
+    media: [
+      ...[...media].map(([part, id]) => ({ id, part })),
+      ...[...bakes.values()].map((b) => ({ id: b.id, part: b.part, bake: b.bake })),
+    ],
     slideRect: slideRect(r.frame),
     notes: [...r.notes],
+    geoms: [...geoms.values()],
     frame: r.frame,
     sections: r.deck.sections,
     listed: r.deck.slides,

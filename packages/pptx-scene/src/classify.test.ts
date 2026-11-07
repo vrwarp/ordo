@@ -5,12 +5,14 @@ import {
   FALLBACK_FEATURES,
   MAX_SLIDE_OBJECTS,
   overlaps,
+  shapeRuns,
   slideCost,
   TIER_BLOCKERS,
   tierOf,
 } from './classify.ts';
+import { frameOf } from './frame.ts';
 import { parseDeck } from './index.ts';
-import type { Affine, Element, SlideScene } from './ir.ts';
+import type { Affine, Element, ShapeElement, SlideScene } from './ir.ts';
 import {
   body,
   buildDeck,
@@ -316,9 +318,13 @@ describe('element support (design/27 §5)', () => {
       ['native', []],
       ['native', []],
     ]);
+    // M6: every preset of the table is drawn; one it does not know is drawn as its rect.
     expect(support(sp({ id: 2, x: 0, y: 0, cx: IN, cy: IN, geom: 'star5', fill: solid('FF0000') }))).toEqual([
-      ['approx', ['preset:star5']],
+      ['native', []],
     ]);
+    expect(
+      support(sp({ id: 2, x: 0, y: 0, cx: IN, cy: IN, geom: 'noSuchShape', fill: solid('FF0000') })),
+    ).toEqual([['approx', ['preset:noSuchShape']]]);
   });
 
   it('makes charts, tables, SmartArt, OLE, maths, real 3D, warps and vertical or column text residual', () => {
@@ -331,6 +337,10 @@ describe('element support (design/27 §5)', () => {
     expect(support(textBox(2, para(run('Text')), 'vert="vert270"'))).toEqual([['residual', ['vert']]]);
     expect(support(textBox(2, para(run('Text')), 'numCol="2"'))).toEqual([['residual', ['numCol']]]);
     expect(support(textBox(2, para(run('Text')), 'anchorCtr="1"'))).toEqual([['residual', ['anchorCtr']]]);
+    // Centring the block of centred lines changes nothing (`text.ts`), so the XML attribute is not consulted.
+    expect(support(textBox(2, para(run('Text'), 'algn="ctr"') + para(''), 'anchorCtr="1"'))).toEqual([
+      ['native', []],
+    ]);
     expect(support(textBoxWith(2, '<a:prstTxWarp prst="textWave1"><a:avLst/></a:prstTxWarp>'))).toEqual([
       ['residual', ['warp']],
     ]);
@@ -513,11 +523,214 @@ describe('slide class and art range', () => {
   it('becomes a picture when the objects left exceed the budget', () => {
     let shapes = '';
     for (let i = 0; i < MAX_SLIDE_OBJECTS; i++)
-      shapes += box(i + 2, (i % 10) * 0.5, Math.floor(i / 10) * 0.3);
-    // With the slide's background (one object) that is one too many.
+      shapes += textBox(i + 2, para(run('Text')), '', (i % 10) * 0.5, Math.floor(i / 10) * 0.3);
+    // With the slide's background (one object) that is one too many, and text never goes to the art.
     const s = slideOf(shapes);
     expect(s.classification).toEqual({ tier: 'T1', class: 'picture', reasons: ['budget:objects'] });
     expect(s.notes.some((n) => n.startsWith('over the slide budgets'))).toBe(true);
+    expect(s.elements.every((e) => e.support === 'native' && !e.reasons)).toBe(true);
+  });
+});
+
+describe('the object budget: shapes of one look merged, then shapes to the art (M6)', () => {
+  const FRAME = frameOf(12_192_000, 6_858_000);
+  /** `n` squares 0.1 in wide in rows of 20 from (x, y) inches, of `colors` in turn, ids from `first`. */
+  const squares = (n: number, first: number, colors = ['336699'], x = 0, y = 0) => {
+    let out = '';
+    for (let i = 0; i < n; i++)
+      out += sp({
+        id: first + i,
+        x: (x + (i % 20) * 0.1) * IN,
+        y: (y + Math.floor(i / 20) * 0.1) * IN,
+        cx: 0.1 * IN,
+        cy: 0.1 * IN,
+        fill: solid(colors[i % colors.length]!),
+      });
+    return out;
+  };
+  const group = (id: number, inner: string) => grpSp({ id, x: 0, y: 0, cx: 4 * IN, cy: 4 * IN }, inner);
+  const TWO = ['336699', '993366'];
+
+  it('draws z-adjacent shapes of one look in a group as one object per eight paths, over the budget only', () => {
+    const scene = parseDeck(buildDeck({ slides: [{ shapes: group(2, squares(160, 10)) }] }));
+    const s = scene.slides[0]!;
+    // 160 squares and the background: one past the budget apart, 20 objects and the background merged.
+    expect(slideCost(s.elements, s.background, undefined).objects).toBe(161);
+    expect(slideCost(s.elements, s.background, undefined, scene.frame).objects).toBe(21);
+    expect(s.classification).toMatchObject({ class: 'native' });
+    expect(s.classification.reasons.filter((r) => r.startsWith('budget:') || r.startsWith('art:'))).toEqual(
+      [],
+    );
+    expect(s.elements.map((e) => (e as ShapeElement).merge)).toEqual(
+      s.elements.map((_, i) => Math.floor(i / 8) * 8),
+    );
+    expect(s.notes).toContain("160 shapes of one look are drawn as 20 objects (the slide's object budget)");
+    // Within the budget nothing is merged.
+    const small = slideOf(group(2, squares(100, 10)));
+    expect(small.elements.some((e) => (e as ShapeElement).merge !== undefined)).toBe(false);
+  });
+
+  it('keeps apart what would not draw as it does apart', () => {
+    const at = (x: number): Affine => [IN / 10, 0, 0, IN / 10, x * IN, 0];
+    const sq = (x: number, extra: Partial<ShapeElement> = {}): Element =>
+      ({
+        kind: 'shape',
+        shapeId: 1,
+        name: '',
+        xf: at(x),
+        from: 'slide',
+        group: 1,
+        support: 'native',
+        geom: 'rect',
+        fill: { kind: 'solid', color: { r: 0, g: 0, b: 255, a: 1 } },
+        ...extra,
+      }) as Element;
+    const runs = (list: Element[], inArt?: Set<number>) => shapeRuns(list, FRAME, inArt);
+    const red = { kind: 'solid' as const, color: { r: 255, g: 0, b: 0, a: 1 } };
+    const line = { width: 12_700, fill: red };
+    expect(runs([sq(0), sq(1), sq(2)])).toEqual([[0, 1, 2]]);
+    // Another look, a translucent fill, an effect, text, another group: the run ends.
+    expect(runs([sq(0), sq(1), sq(2, { fill: red }), sq(3), sq(4)])).toEqual([
+      [0, 1],
+      [3, 4],
+    ]);
+    const blue50 = { kind: 'solid' as const, color: { r: 0, g: 0, b: 255, a: 0.5 } };
+    expect(runs([sq(0, { fill: blue50 }), sq(1, { fill: blue50 })])).toEqual([]);
+    const shadow = { dist: 0, blur: 0, dir: 0, color: { r: 0, g: 0, b: 0, a: 1 } };
+    expect(runs([sq(0), sq(1, { shadow }), sq(2)])).toEqual([]);
+    expect(runs([sq(0), sq(1, { glow: { radius: 1, color: red.color } }), sq(2, { softEdge: 1 })])).toEqual(
+      [],
+    );
+    expect(runs([sq(0), sq(1, { text: { paras: [] } as never }), sq(2)])).toEqual([]);
+    expect(runs([sq(0), sq(1), sq(2, { group: 2 }), sq(3, { group: 2 })])).toEqual([
+      [0, 1],
+      [2, 3],
+    ]);
+    // The slide's own shapes outside a group stay apart; a layout's or master's decorations merge.
+    expect(runs([sq(0, { group: undefined }), sq(1, { group: undefined })])).toEqual([]);
+    expect(
+      runs([sq(0, { group: undefined, from: 'layout' }), sq(1, { group: undefined, from: 'layout' })]),
+    ).toEqual([[0, 1]]);
+    // A hidden shape draws nothing; one in the art, a residual or an approximated one ends the run.
+    expect(runs([sq(0), sq(1, { hidden: true }), sq(2)])).toEqual([[0, 2]]);
+    expect(runs([sq(0), sq(1), sq(2), sq(3)], new Set([2]))).toEqual([[0, 1]]);
+    expect(runs([sq(0), sq(1, { support: 'approx' }), sq(2), sq(3)])).toEqual([[2, 3]]);
+    // Lines and connectors are drawn as lines; an unknown preset as its rect.
+    expect(runs([sq(0, { geom: 'line' }), sq(1, { geom: 'line' })])).toEqual([]);
+    expect(runs([sq(0, { geom: 'nonsense' }), sq(1, { geom: 'nonsense' })])).toEqual([]);
+    // Eight paths at most: nine squares are a run of eight and one alone.
+    expect(runs(Array.from({ length: 10 }, (_, i) => sq(i)))).toEqual([
+      [0, 1, 2, 3, 4, 5, 6, 7],
+      [8, 9],
+    ]);
+    // A line of the same look merges; an arrowhead, a translucent line or no paint at all does not.
+    expect(runs([sq(0, { line }), sq(1, { line })])).toEqual([[0, 1]]);
+    expect(
+      runs([sq(0, { line: { ...line, tail: 'triangle' } }), sq(1, { line: { ...line, tail: 'triangle' } })]),
+    ).toEqual([]);
+    const clear = { ...line, fill: blue50 };
+    expect(runs([sq(0, { line: clear }), sq(1, { line: clear })])).toEqual([]);
+    expect(runs([sq(0, { fill: { kind: 'none' } }), sq(1, { fill: { kind: 'none' } })])).toEqual([]);
+    // An open outline is stroked after every path of a geometry: with a fill it would move above the next
+    // shape's fill, so only a fill or a line alone merges.
+    const open = {
+      paths: [{ d: 'M 0 0 L 100 100 L 0 100', w: 100, h: 100 }],
+      points: 3,
+      text: [0, 0, 1, 1] as [number, number, number, number],
+      sites: [],
+      notes: [],
+    };
+    const custom = (x: number, extra: Partial<ShapeElement> = {}) =>
+      sq(x, { geom: 'custom', custom: open, ...extra });
+    expect(runs([custom(0, { line }), custom(1, { line })])).toEqual([]);
+    expect(runs([custom(0), custom(1)])).toEqual([[0, 1]]);
+    expect(
+      runs([custom(0, { line, fill: { kind: 'none' } }), custom(1, { line, fill: { kind: 'none' } })]),
+    ).toEqual([[0, 1]]);
+    const closed = { ...open, paths: [{ d: 'M 0 0 L 100 100 L 0 100 Z', w: 100, h: 100 }] };
+    expect(runs([custom(0, { line, custom: closed }), custom(1, { line, custom: closed })])).toEqual([
+      [0, 1],
+    ]);
+    // Custom geometry past the bounds is never merged, nor a shape past the render clamp's bounds.
+    expect(
+      runs([custom(0, { custom: { ...open, over: true } }), custom(1, { custom: { ...open, over: true } })]),
+    ).toEqual([]);
+    expect(runs([sq(0), sq(1e4)])).toEqual([]);
+  });
+
+  it('ends a run before its path strings would pass 40,000 characters', () => {
+    // Paths of 1,500 points each: about 30 characters a point once written in a slide-wide box.
+    let d = 'M 0 0';
+    for (let i = 1; i < 1_500; i++) d += ` L ${(i * 7919) % 10_000} ${(i * 104_729) % 10_000}`;
+    const custom = {
+      paths: [{ d, w: 10_000, h: 10_000 }],
+      points: 1_500,
+      text: [0, 0, 1, 1] as [number, number, number, number],
+      sites: [],
+      notes: [],
+    };
+    const piece = (x: number): Element =>
+      ({
+        kind: 'shape',
+        shapeId: 1,
+        name: '',
+        xf: [IN, 0, 0, IN, x * IN, 0],
+        from: 'master',
+        support: 'native',
+        geom: 'custom',
+        custom,
+        fill: { kind: 'solid', color: { r: 0, g: 0, b: 255, a: 1 } },
+      }) as Element;
+    // Side by side the box stays small; one far away makes every coordinate long.
+    expect(shapeRuns([piece(0), piece(0.5)], FRAME)).toEqual([[0, 1]]);
+    expect(shapeRuns([piece(0), piece(-30)], FRAME)).toEqual([]);
+  });
+
+  it('sends the fewest layout decorations without text to the art first, from the bottom', () => {
+    const s = slideOf(textBox(2, para(run('Words'))), {}, { layouts: [{ shapes: squares(160, 10, TWO) }] });
+    // 160 decorations of two looks in turn (none merge), the text and the background: 162 objects. With
+    // the art (one object) the bottom 13 go: 1 + 1 + 147 + 1 = 150.
+    expect(s.classification.class).toBe('hybrid');
+    expect(s.classification.reasons).toContain('art:budget:shapes');
+    expect(s.classification.art?.elements).toEqual(Array.from({ length: 13 }, (_, i) => i));
+    expect(s.elements[12]).toMatchObject({ support: 'residual', reasons: ['budget:shapes'] });
+    expect(s.elements[13]!.support).toBe('native');
+    expect(s.elements[160]).toMatchObject({ kind: 'shape', support: 'native' });
+    expect(s.notes).toContain(
+      "13 shapes and pictures pass the slide's object budget: LibreOffice draws them",
+    );
+  });
+
+  it('then the costliest run of elements without text, a top-level group first', () => {
+    const s = slideOf(
+      group(2, squares(30, 10, TWO)) + // 0-29
+        textBox(3, para(run('Words')), '', 0, 5) + // 30
+        squares(40, 100, TWO, 0, 1) + // 31-70: ungrouped, costlier than the first group
+        grpSp({ id: 4, x: 5 * IN, y: 0, cx: 4 * IN, cy: 4 * IN }, squares(90, 200, TWO, 5)), // 71-160
+    );
+    expect(s.classification.class).toBe('hybrid');
+    expect(s.classification.art?.elements).toEqual(Array.from({ length: 90 }, (_, i) => 71 + i));
+    expect(s.elements.slice(0, 71).every((e) => e.support === 'native')).toBe(true);
+    // With the costliest group too small, the ungrouped run goes as well.
+    const t = slideOf(
+      group(2, squares(10, 10, TWO)) + // 0-9
+        textBox(3, para(run('Words')), '', 0, 5) + // 10
+        squares(150, 100, TWO, 0, 1), // 11-160
+    );
+    expect(t.classification.class).toBe('hybrid');
+    expect(t.classification.art?.elements).toEqual(
+      Array.from({ length: 161 }, (_, i) => i).filter((i) => i !== 10),
+    );
+    expect(t.elements[10]!.support).toBe('native');
+  });
+
+  it('marks nothing when even every element without text in the art leaves the slide over the budget', () => {
+    let texts = '';
+    for (let i = 0; i < MAX_SLIDE_OBJECTS; i++) texts += textBox(1000 + i, para(run('Text')), '', 0, 0);
+    const s = slideOf(group(2, squares(20, 10, TWO)) + texts);
+    expect(s.classification.class).toBe('picture');
+    expect(s.classification.reasons).toContain('budget:objects');
+    expect(s.elements.some((e) => e.reasons?.includes('budget:shapes'))).toBe(false);
   });
 });
 

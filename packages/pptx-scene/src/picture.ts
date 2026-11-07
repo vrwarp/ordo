@@ -11,13 +11,26 @@
  *   aspect differs from the slide is not cover-fitted.
  * - Video and audio posters (`a:videoFile`, `a:audioFile`, `p14:media`) keep their poster; the clip is read
  *   by `media.ts` (`PictureElement.media`).
+ * - Colour effects of the blip that ordo bakes into a derived picture (M6, `bake.ts`: duotone, clrChange,
+ *   grayscl, biLevel, lum, so PowerPoint's recolour presets too) are read with their colours resolved
+ *   (`PictureFill.recolor`); a picture with only those is native. Any other blip effect (blur, alpha
+ *   effects, …) keeps it approx: it is drawn without that effect.
  *
  * Owned by work item C (inherit-emit).
  */
-import type { BlipReader } from './color.ts';
+import { type BlipReader, type ColorCtx, readColor } from './color.ts';
 import { partOf, type SlideCtx, type Source } from './context.ts';
 import { chainOf, geometryOf } from './inherit.ts';
-import type { ElementBase, Insets, PictureElement, PictureFill, ResidualElement } from './ir.ts';
+import type {
+  ElementBase,
+  Insets,
+  PictureElement,
+  PictureFill,
+  Recolor,
+  ResidualElement,
+  Rgba,
+} from './ir.ts';
+import { knownPreset } from './geom.ts';
 import { readMediaRef } from './media.ts';
 import { externalHost } from './opc.ts';
 import { child, num, type XNode } from './xml.ts';
@@ -53,8 +66,17 @@ export function extensionOf(part: string): string {
   return dot > slash ? part.slice(dot + 1).toLowerCase() : '';
 }
 
-/** An `a:blipFill` of the part `source` as a picture fill, or undefined when its picture is missing. */
-export function readBlipFill(ctx: SlideCtx, blipFill: XNode, source: string): PictureFill | undefined {
+/**
+ * An `a:blipFill` of the part `source` as a picture fill, or undefined when its picture is missing. Its
+ * recolouring's colours are read in `color` (the fill's own context: a style entry's `phClr`), else the
+ * slide's.
+ */
+export function readBlipFill(
+  ctx: SlideCtx,
+  blipFill: XNode,
+  source: string,
+  color: ColorCtx = ctx.color,
+): PictureFill | undefined {
   const blip = child(blipFill, 'a:blip');
   const id = blip?.attrs['r:embed'] ?? blip?.attrs['r:link'];
   if (!blip || !id) return undefined;
@@ -86,6 +108,8 @@ export function readBlipFill(ctx: SlideCtx, blipFill: XNode, source: string): Pi
   if (alpha !== undefined) out.alpha = Math.min(1, Math.max(0, alpha / 100_000));
   const effects = effectsOf(blip);
   if (effects.length) out.effects = effects;
+  const recolor = recolorOf(color, blip);
+  if (recolor.length) out.recolor = recolor;
   const bytes = ctx.pkg.bytes(rel.target);
   const px = bytes?.length ? pictureSize(bytes) : ctx.pictureSize?.(rel.target);
   if (px) out.px = px;
@@ -95,20 +119,108 @@ export function readBlipFill(ctx: SlideCtx, blipFill: XNode, source: string): Pi
 /** Effects kept per blip (names only). */
 const MAX_EFFECTS = 16;
 /** The effects of each blip read so far: an inherited picture fill is read for every inheriting shape. */
-const effectsCache = new WeakMap<XNode, string[]>();
+const effectsCache = new WeakMap<XNode, { names: string[]; nodes: XNode[] }>();
 
 /** The recolouring and effect elements of a blip, in order (at most `MAX_EFFECTS`). Memoised per node. */
-function effectsOf(blip: XNode): string[] {
+function effectNodes(blip: XNode): { names: string[]; nodes: XNode[] } {
   let out = effectsCache.get(blip);
   if (out) return out;
-  out = [];
+  out = { names: [], nodes: [] };
   for (const c of blip.children) {
     if (NOT_EFFECTS.has(c.name) || noOp(c)) continue;
-    out.push(c.name.slice(0, 40));
-    if (out.length >= MAX_EFFECTS) break;
+    out.names.push(c.name.slice(0, 40));
+    out.nodes.push(c);
+    if (out.names.length >= MAX_EFFECTS) break;
   }
   effectsCache.set(blip, out);
   return out;
+}
+
+function effectsOf(blip: XNode): string[] {
+  return effectNodes(blip).names;
+}
+
+/** Blip effects the bake reproduces (`bake.ts`, M6); any other keeps its picture approx. */
+export const BAKED_EFFECTS: ReadonlySet<string> = new Set([
+  'a:duotone',
+  'a:clrChange',
+  'a:grayscl',
+  'a:biLevel',
+  'a:lum',
+]);
+
+/** Colour elements a duotone or clrChange holds (`color.ts` reads each). */
+const COLOR_NAMES: ReadonlySet<string> = new Set([
+  'a:srgbClr',
+  'a:schemeClr',
+  'a:sysClr',
+  'a:prstClr',
+  'a:scrgbClr',
+  'a:hslClr',
+]);
+/** Children of a duotone looked at for its two colours (a deck can give it any number of others). */
+const MAX_COLOR_SCAN = 16;
+
+/** The first `n` colour elements among a node's children, resolved. */
+function colorsIn(color: ColorCtx, n: XNode | undefined, want: number): Rgba[] {
+  const out: Rgba[] = [];
+  const cs = n?.children ?? [];
+  for (let i = 0; i < cs.length && i < MAX_COLOR_SCAN && out.length < want; i++) {
+    const c = cs[i]!;
+    if (!COLOR_NAMES.has(c.name)) continue;
+    const v = readColor(c, color);
+    if (!v) return [];
+    out.push(v);
+  }
+  return out;
+}
+
+/** A share in 1/100,000 within [lo, hi] (a missing or malformed one is `dflt`). */
+function share(v: string | undefined, dflt: number, lo: number, hi: number): number {
+  const n = num(v);
+  return n === undefined ? dflt : Math.min(hi, Math.max(lo, n / 100_000));
+}
+
+/**
+ * The colour effects of a blip the bake reproduces, in document order, their colours resolved in the slide's
+ * colour context (an effect missing what it needs, such as a duotone without two colours, is left out, as
+ * LibreOffice leaves it out).
+ */
+function recolorOf(color: ColorCtx, blip: XNode): Recolor[] {
+  const out: Recolor[] = [];
+  for (const fx of effectNodes(blip).nodes) {
+    switch (fx.name) {
+      case 'a:grayscl':
+        out.push({ kind: 'grayscale' });
+        break;
+      case 'a:biLevel':
+        out.push({ kind: 'biLevel', threshold: share(fx.attrs.thresh, 0.5, 0, 1) });
+        break;
+      case 'a:lum': {
+        const bright = share(fx.attrs.bright, 0, -1, 1);
+        const contrast = share(fx.attrs.contrast, 0, -1, 1);
+        if (bright || contrast) out.push({ kind: 'lum', bright, contrast });
+        break;
+      }
+      case 'a:duotone': {
+        const [dark, light] = colorsIn(color, fx, 2);
+        if (dark && light) out.push({ kind: 'duotone', dark, light });
+        break;
+      }
+      case 'a:clrChange': {
+        const [from] = colorsIn(color, child(fx, 'a:clrFrom'), 1);
+        const [to] = colorsIn(color, child(fx, 'a:clrTo'), 1);
+        if (from && to) out.push({ kind: 'clrChange', from, to });
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** Whether every effect of a picture fill is one the bake reproduces (`BAKED_EFFECTS`). */
+export function recolorBaked(p: PictureFill): boolean {
+  return (p.effects ?? []).every((name) => BAKED_EFFECTS.has(name));
 }
 
 /**
@@ -144,9 +256,12 @@ export function readPicture(
   const out: PictureElement = { ...base, kind: 'picture', picture, geom, ...(adj ? { adj } : {}) };
   const reasons: string[] = [];
   if (PREPARED_EXTENSIONS.has(ext)) reasons.push(`pic:${ext}`);
-  if (geom !== 'rect' && geom !== 'roundRect' && geom !== 'ellipse')
-    reasons.push(`mask:${geom.slice(0, 30)}`);
-  if (picture.effects?.length) reasons.push('recolor');
+  // M6: every preset of the table and custom geometry clip the picture (`ImageObject.mask`); an unknown
+  // preset is drawn as a rect (the walk rates a custom one past the bounds the same way).
+  if (geom !== 'custom' && !knownPreset(geom)) reasons.push(`mask:${geom.slice(0, 30)}`);
+  // M6: duotone, clrChange, grayscl, biLevel and lum are baked into a derived picture; anything else is not
+  // drawn (the picture without it).
+  if (picture.effects?.length && !recolorBaked(picture)) reasons.push('recolor');
   if (reasons.length) {
     out.support = 'approx';
     out.reasons = reasons;
@@ -159,12 +274,12 @@ export function readPicture(
 /** A blip reader for fills of the given source part (`color.ts` `readFill`). */
 export function blipReader(ctx: SlideCtx, from: Source): BlipReader {
   const source = partOf(ctx, from);
-  return (blipFill) => (source === undefined ? undefined : readBlipFill(ctx, blipFill, source));
+  return (blipFill, color) => (source === undefined ? undefined : readBlipFill(ctx, blipFill, source, color));
 }
 
 /** A blip reader for fills in another part (a theme's bgFillStyleLst). */
 export function blipReaderOf(ctx: SlideCtx, source: string | undefined): BlipReader {
-  return (blipFill) => (source === undefined ? undefined : readBlipFill(ctx, blipFill, source));
+  return (blipFill, color) => (source === undefined ? undefined : readBlipFill(ctx, blipFill, source, color));
 }
 
 /** JPEG markers read before giving up on finding the frame header. */
@@ -176,12 +291,25 @@ const MAX_SIDE_PX = 1_000_000;
 
 /**
  * A picture's header facts: its pixel size, and `alpha`, whether it may have transparent pixels (an alpha
- * channel or a transparent colour; undefined when the bytes given end before the header tells).
+ * channel or a transparent colour; undefined when the bytes given end before the header tells). `dpi` (M6):
+ * the resolution the header states (a PNG's `pHYs` in pixels per metre, a JPEG's JFIF density in dots per
+ * inch or centimetre), within `MIN_DPI`-`MAX_DPI`; undefined when it states none.
  */
 export interface PictureHeader {
   w: number;
   h: number;
   alpha?: boolean;
+  dpi?: { x: number; y: number };
+}
+
+/** Resolutions a header may state (others are not believed: the picture's size is then taken at 96 dpi). */
+export const MIN_DPI = 1;
+export const MAX_DPI = 100_000;
+
+/** A stated resolution, or undefined when it is not one. */
+function dpiOf(x: number, y: number): { x: number; y: number } | undefined {
+  const ok = (v: number) => Number.isFinite(v) && v >= MIN_DPI && v <= MAX_DPI;
+  return ok(x) && ok(y) ? { x, y } : undefined;
 }
 
 /**
@@ -191,14 +319,20 @@ export interface PictureHeader {
 export function pictureSize(b: Uint8Array): PictureHeader | undefined {
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
   const ok = (o: number, n: number) => o >= 0 && o + n <= b.length;
-  const size = (w: number, h: number, alpha: boolean | undefined): PictureHeader | undefined =>
+  const size = (
+    w: number,
+    h: number,
+    alpha: boolean | undefined,
+    dpi?: { x: number; y: number },
+  ): PictureHeader | undefined =>
     w > 0 && h > 0 && w <= MAX_SIDE_PX && h <= MAX_SIDE_PX
-      ? { w, h, ...(alpha !== undefined ? { alpha } : {}) }
+      ? { w, h, ...(alpha !== undefined ? { alpha } : {}), ...(dpi ? { dpi } : {}) }
       : undefined;
   if (ok(0, 24) && dv.getUint32(0) === 0x89504e47)
-    return size(dv.getUint32(16), dv.getUint32(20), pngAlpha(b, dv));
+    return size(dv.getUint32(16), dv.getUint32(20), pngAlpha(b, dv), pngDpi(b, dv));
   if (ok(0, 4) && dv.getUint16(0) === 0xffd8) {
     let o = 2;
+    let dpi: { x: number; y: number } | undefined;
     for (let n = 0; ok(o, 4) && n < MAX_JPEG_MARKERS; n++) {
       if (b[o] !== 0xff) return undefined;
       const m = b[o + 1]!;
@@ -212,7 +346,13 @@ export function pictureSize(b: Uint8Array): PictureHeader | undefined {
       }
       const len = dv.getUint16(o + 2);
       if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc)
-        return ok(o + 5, 4) ? size(dv.getUint16(o + 7), dv.getUint16(o + 5), false) : undefined;
+        return ok(o + 5, 4) ? size(dv.getUint16(o + 7), dv.getUint16(o + 5), false, dpi) : undefined;
+      // APP0 JFIF: density units (1 dots per inch, 2 per centimetre; 0 only an aspect), X and Y density.
+      if (m === 0xe0 && len >= 14 && ok(o + 4, 12) && dv.getUint32(o + 4) === 0x4a464946 && b[o + 8] === 0) {
+        const units = b[o + 11];
+        const k = units === 1 ? 1 : units === 2 ? 2.54 : 0;
+        if (k) dpi = dpiOf(dv.getUint16(o + 12) * k, dv.getUint16(o + 14) * k);
+      }
       if (len < 2) return undefined;
       o += 2 + len;
     }
@@ -257,6 +397,23 @@ function pngAlpha(b: Uint8Array, dv: DataView): boolean | undefined {
     if (type === 0x49444154) return false; // IDAT
     if (type === 0x74524e53) return true; // tRNS
     o += 12 + dv.getUint32(o);
+  }
+  return undefined;
+}
+
+/** A PNG's `pHYs` resolution (pixels per metre) in dots per inch, when it comes before the image data. */
+function pngDpi(b: Uint8Array, dv: DataView): { x: number; y: number } | undefined {
+  let o = 33; // after the signature and IHDR
+  for (let n = 0; n < MAX_HEADER_CHUNKS && o + 8 <= b.length; n++) {
+    const len = dv.getUint32(o);
+    const type = dv.getUint32(o + 4);
+    if (type === 0x49444154) return undefined; // IDAT
+    if (type === 0x70485973) {
+      // pHYs: x, y pixels per unit, the unit (1: the metre; 0: only an aspect)
+      if (len < 9 || o + 17 > b.length || b[o + 16] !== 1) return undefined;
+      return dpiOf(dv.getUint32(o + 8) * 0.0254, dv.getUint32(o + 12) * 0.0254);
+    }
+    o += 12 + len;
   }
   return undefined;
 }

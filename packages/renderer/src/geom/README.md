@@ -3,10 +3,11 @@
 The preset and custom geometry engine of design/27 §1 (`geom/`), §3.1 (`ShapeGeom`) and §15 M6: what a
 PowerPoint `a:prstGeom` or `a:custGeom` means, as numbers. Read design/27 §3.1, §12 (bounds) and §14 item 6 first.
 
-Status: **M6 wave 1, self-contained.** The preset table, the compiler, the guide evaluator, the path builder
-(arcTo with POI's visual-angle rule, path spaces, fill modes) and the Canvas 2D drawer are built and tested, and
-the preset golden compares them with LibreOffice; `@ordo/renderer` exports the drawing API, and nothing draws with it yet. The next wave wires geometry into
-`ShapeObject` drawing, the schema, the converter and the editor.
+Status: **M6 wave 2.** The preset table, the compiler, the guide evaluator, the path builder (arcTo with POI's
+visual-angle rule, path spaces, fill modes) and the Canvas 2D drawer are built and tested, and the preset golden
+compares them with LibreOffice (wave 1). Wave 2 draws real slides with them: stored geometries
+(`ShapeObject.geom`, `ImageObject.mask`), gradients, dashes, line ends, the shapes and their effects
+(`../shape.ts`, `../effects.ts`) and picture masks (`../picture.ts`); `@ordo/renderer` re-exports all of it.
 
 ```ts
 const g = presetGeometry('star5', w, h, [['adj', 25000]]); // undefined for an unknown name: draw the rect
@@ -15,18 +16,26 @@ drawGeom(ctx, g, fill, { color, width }); // fill: an Rgba, or (brightness) => g
 const deck = customGeometry(custGeomStrings, w, h); // a:custGeom; deck.notes says what was dropped
 ```
 
-| File              | Contents                                                                                                                                                                                            |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ops.ts`          | The compiled form (`CompiledGeom`, `CompiledPath`): the 17 operators and their op codes, the 40 built-in guides in slot order, path commands, fill modes, handle encoding and `GEOM_LIMITS`.        |
-| `compile.ts`      | `compileGeom(GeomSource)`: geometry given as strings (a preset read by `tools/geom-gen`, a custGeom read by the converter) → `CompiledGeom`, with `GeomNotes` for what it replaced by 0 or dropped. |
-| `eval.ts`         | `evalGuides(geom, box, adj)`: every slot's value at a box; `guideSlot`/`guideValue`/`guideValues` by name; `evalGuideLists` for a custGeom's avLst/gdLst given as `[name, fmla]` pairs.             |
-| `arc.ts`          | `arcToCubics`: an arcTo from the current point as at most four cubic segments (POI's visual-angle rule, Arc2D's segments); `arcParamAngle`, the visual-to-parametric angle.                         |
-| `path.ts`         | `buildGeom(geom, w, h, adj)`: sub-paths in box space with fill mode and stroke flag, the text rect, the connection sites; `presetGeometry`, `customGeometry`, `pathData`.                           |
-| `draw.ts`         | `drawGeom(ctx, built, fill, stroke)`: Canvas 2D, Path2D per path, LibreOffice's order, even-odd rule and shades (`shadeRgba`); `geomFillPath2D` for picture clips.                                  |
-| `presets.gen.ts`  | Generated (`pnpm --filter @ordo/geom-gen gen`, never edited): the 187 presets of `third_party/poi-presets` as `PRESET_GEOMS`, with the two fixes of its README.                                     |
-| `poi-guides.json` | Reference values from POI 5.2.5 itself for the dozen presets of the spot checks (`tools/geom-gen/poi/GuideDump.java`).                                                                              |
-| `poi-paths.json`  | POI 5.2.5's own paths (segments, text rect, sites) for the dozen presets and for arcs in every quadrant and path spaces (`tools/geom-gen/poi/PathDump.java`).                                       |
-| `index.ts`        | The geometry surface (`@ordo/renderer/geom/index.ts`, for the converter and tools); `@ordo/renderer` re-exports its drawing API.                                                                    |
+| File              | Contents                                                                                                                                                                                                                                                                                                                                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ops.ts`          | The compiled form (`CompiledGeom`, `CompiledPath`): the 17 operators and their op codes, the 40 built-in guides in slot order, path commands, fill modes, handle encoding and `GEOM_LIMITS`.                                                                                                                                                                                                |
+| `compile.ts`      | `compileGeom(GeomSource)`: geometry given as strings (a preset read by `tools/geom-gen`, a custGeom read by the converter) → `CompiledGeom`, with `GeomNotes` for what it replaced by 0 or dropped.                                                                                                                                                                                         |
+| `eval.ts`         | `evalGuides(geom, box, adj)`: every slot's value at a box; `guideSlot`/`guideValue`/`guideValues` by name; `evalGuideLists` for a custGeom's avLst/gdLst given as `[name, fmla]` pairs.                                                                                                                                                                                                     |
+| `arc.ts`          | `arcToCubics`: an arcTo from the current point as at most four cubic segments (POI's visual-angle rule, Arc2D's segments); `arcParamAngle`, the visual-to-parametric angle.                                                                                                                                                                                                                 |
+| `path.ts`         | `buildGeom(geom, w, h, adj)`: sub-paths in box space with fill mode and stroke flag, the text rect, the connection sites; `presetGeometry`, `customGeometry`, `pathData`.                                                                                                                                                                                                                   |
+| `draw.ts`         | `drawGeom(ctx, built, fill, stroke)`: Canvas 2D, Path2D per path, LibreOffice's order, even-odd rule and shades (`shadeRgba`); `geomFillPath2D` for picture clips.                                                                                                                                                                                                                          |
+| `ends.ts`         | Line ends: `arrowFor` (LibreOffice's marker sizes), `withEnds` (the shaft cut back and the marker polygons of every open sub-path).                                                                                                                                                                                                                                                         |
+| `markers.ts`      | LibreOffice's marker polygons, size factors and smallest base (`lclPushMarkerProperties`), ported under the MPL 2.0 and kept in their own file with its header.                                                                                                                                                                                                                             |
+| `cost.ts`         | The drawing estimate of a shape as drawn: fills with the pixels they paint (`unitCost`, `geomCost`, `areaWeight`), outlines with their joins, caps, dashes and arrowheads (`strokeCost`), effect passes (`drawCost`), slide objects (`objectCost`); the budgets of one geometry and one slide (`GEOM_COST`, `slidePlan`, `charged`) and of a slide's effects (`EFFECT_COST`, `effectArea`). |
+| `outline.ts`      | A shape's outline as drawn (`outlineOf`: width, joins, caps, dash pattern, arrowheads), shared by the drawer and the estimate.                                                                                                                                                                                                                                                              |
+| `built.ts`        | Stored paths and legacy shapes built at a box (`geometryAt`, `legacyGeometry`), shared by the drawers and the converter's estimate.                                                                                                                                                                                                                                                         |
+| `bounds.ts`       | What a shape covers: its geometry's points grown by its outline's sharpest miter, caps and arrowheads (`drawnBounds`, `miterFactor`), placed on the slide and cut to the canvas (`placedBounds`, `canvasArea`); the effect layers' region and size, and the painted areas' cut.                                                                                                             |
+| `paint.ts`        | `gradientStyle`: a `Gradient` over a box (OOXML angle and `scaled`, radial focus to the farthest corner on an ellipse of the box), each stop shaded for a path's brightness.                                                                                                                                                                                                                |
+| `stored.ts`       | `storedGeometry`: a `ShapeGeom` at a box (its geometry file's paths, else a preset by name, else its re-tokenised paths); `readGeomFiles`/`putGeomFile`: geometry files; `legacyGeometry`: the legacy shapes.                                                                                                                                                                               |
+| `presets.gen.ts`  | Generated (`pnpm --filter @ordo/geom-gen gen`, never edited): the 187 presets of `third_party/poi-presets` as `PRESET_GEOMS`, with the two fixes of its README.                                                                                                                                                                                                                             |
+| `poi-guides.json` | Reference values from POI 5.2.5 itself for the dozen presets of the spot checks (`tools/geom-gen/poi/GuideDump.java`).                                                                                                                                                                                                                                                                      |
+| `poi-paths.json`  | POI 5.2.5's own paths (segments, text rect, sites) for the dozen presets and for arcs in every quadrant and path spaces (`tools/geom-gen/poi/PathDump.java`).                                                                                                                                                                                                                               |
+| `index.ts`        | The geometry surface (`@ordo/renderer/geom/index.ts`, for the converter and tools); `@ordo/renderer` re-exports its drawing API.                                                                                                                                                                                                                                                            |
 
 ## The compiled form
 
@@ -113,6 +122,46 @@ differences below.
   (`GetColorData`), strokes unshaded. A gradient or picture fill is a painter called with each path's brightness.
   `draw.browser.test.ts` checks the shades, the even-odd hole, stroke-only paths, open outlines over the fill and
   the clip path with Chromium.
+
+## Stored geometries, paint and line ends (M6 wave 2)
+
+- **Stored geometry** (`stored.ts`, design/27 §3.1 `ShapeGeom`). A known preset is evaluated at the box with the
+  stored adjust pairs, so a resized shape keeps its corners; else the paths, each `d` re-tokenised by
+  `parsePathData` (`@ordo/domain` `pathdata.ts`: absolute M L Q C Z and plain decimals, ≤ 4,096 points) and
+  scaled from its own w x h space to the box (a side of 0: the box's units); else nothing, and the caller draws
+  the legacy shape. A path marked `cont` is appended to the one before it, so the pieces of one long path (a
+  traced outline holding all its holes, stored in pieces of 4,096 points and 40,000 characters by the
+  converter, cut at sub-paths or between two commands) are one built path again: one even-odd fill, holes
+  and all, stroked together, in the first piece's fill mode and stroke flag (at most 8 x 4,096 points). Memoised
+  per geometry object and box size (up to 8 sizes each).
+- **Geometry files** (`stored.ts`, design/27 §3.1 `ShapeGeom.ref`, M6 wave 2 round 2). A large traced outline is
+  stored once per library as a geometry file (`GeomFile`: `{ paths }`, JSON named by its SHA-256) and a
+  geometry names it by `ref`. A drawer reads the files a slide names (`drawnGeomRefs`) before it draws it, as it
+  decodes its pictures: `readGeomFiles(refs, read)` (reads of one ref shared, a failed one asked for again only
+  after `GEOM_FILE_RETRY_MS`, a file over `GEOM_FILE_MAX_BYTES` or not a geometry refused) keeps each, clamped
+  as inline paths are (`clampGeom`), in an LRU of at most `GEOM_FILES_MAX` files and `GEOM_FILES_CHARS` of path
+  text. `storedGeometry` draws a read file's paths, built once per file and box size for every shape that names
+  it; until then (or without the file) the geometry beside the ref, else the legacy shape. What is drawn from
+  a fallback is not cached under the file's key: a shape's plan is made again once its file is read, its effect
+  sprite is not kept, and a masked picture's prepared key tells a pending mask apart (`geomPending`). The
+  readers: the output's asset worker (from the service cache or the hub; a file not there yet is reported with
+  the missing images, so the link draws the slide again once it is cached), the operator's thumbnail worker and
+  editor canvas, and the fidelity harness's page.
+- **Union clip** (`draw.ts` `geomFillPath2D`, `traceUnionPath`). The filled paths of a geometry as one Path2D whose
+  non-zero fill (`GEOM_CLIP_RULE`) is the union of each path's even-odd region: every closed sub-path is turned
+  to wind positively when an even number of the path's other sub-paths contain its first point and negatively
+  when an odd number do, so holes stay holes while overlapping paths (smileyFace's eyes over its face) add up
+  instead of cancelling. Exact for sub-paths that cross neither themselves nor each other (every preset). A
+  sub-path's first point is tested only against the sub-paths whose bounding boxes hold it; past
+  `UNION_NESTING_LIMIT` (2,048) sub-paths in one path, or `UNION_NESTING_WORK` (4M) polygon edges tested,
+  nesting is not worked out (every sub-path an outline). Made once per built geometry.
+- **Strokes.** `GeomStroke` may carry a dash pattern (box units) and line ends: open paths are stroked cut back
+  for their markers, which are filled in the stroke's paint without the dashes. Sizes, shapes and placement
+  follow LibreOffice (oox `lclPushMarkerProperties`, drawinglayer `PolygonStrokeArrowPrimitive2D`; design/27
+  §15 M6 "As built").
+- **Paint** (`paint.ts`). A fill painter may return a `GeomSpacePaint`: a style defined in its own space and the
+  affine to box space, so an elliptical radial gradient is a circle in a squeezed space; the path is mapped into
+  that space for the fill (`Path2D.addPath`).
 
 ## Preset golden
 

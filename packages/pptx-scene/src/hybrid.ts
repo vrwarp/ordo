@@ -3,7 +3,8 @@
  * `EmittedSlide.art`, everything the LibreOffice follow-up needs without the IR.
  *
  * - `elements`: the art's elements as `ElementRef`s (source, `cNvPr id`, and the place among the elements of
- *   that source with that id), so the render copy finds them in the deck again and prints only them.
+ *   that source with that id), so the render copy finds them in the deck again and prints only them. The
+ *   elements of a SmartArt drawing are one graphic frame there, named once (M6).
  * - `box`: the art range's bounding box in logical px (`ArtRange.box` through the frame).
  * - `at` and `before`: where the art object goes in version 2. It takes the place of the lowest residual
  *   element (Rmin): just under the first object emitted for an element at or above Rmin that the art does not
@@ -12,7 +13,8 @@
  *   the emitted objects.
  * - `replaces`: the objects of the non-residual elements the art bakes in (residuals emit nothing). Version 1
  *   draws them natively until the art arrives.
- * - `text`: the text of the text bodies inside the art (`Slide.pptx.artText`, search and labels only).
+ * - `text`: the text of the text bodies inside the art, a table's cells included (`Slide.pptx.artText`,
+ *   search and labels only).
  *
  * Pure: indexes and ids only.
  */
@@ -37,11 +39,24 @@ export function elementRefs(elements: readonly Element[], indexes: readonly numb
   for (let i = 0; i <= last && i < elements.length; i++) {
     const e = elements[i]!;
     const key = `${e.from}:${e.shapeId}`;
-    const nth = seen.get(key) ?? 0;
-    seen.set(key, nth + 1);
+    // The elements of one SmartArt drawing are its one graphic frame in the deck (M6, `smartart.ts`).
+    const prev = elements[i - 1];
+    const same = e.diagram !== undefined && prev?.diagram === e.diagram && prev.from === e.from;
+    const nth = same ? (seen.get(key) ?? 1) - 1 : (seen.get(key) ?? 0);
+    if (!same) seen.set(key, nth + 1);
     if (want.has(i)) byIndex.set(i, { from: e.from, shapeId: e.shapeId, nth });
   }
-  return indexes.map((i) => byIndex.get(i)).filter((r): r is ElementRef => r !== undefined);
+  const out: ElementRef[] = [];
+  const kept = new Set<string>();
+  for (const i of indexes) {
+    const r = byIndex.get(i);
+    if (!r) continue;
+    const k = `${r.from}:${r.shapeId}#${r.nth}`;
+    if (kept.has(k)) continue;
+    kept.add(k);
+    out.push(r);
+  }
+  return out;
 }
 
 /** A text body's characters as `TextObject.text` writes them (paragraphs and breaks as '\n'). */
@@ -77,7 +92,11 @@ export function artInfo(
     if (e?.kind === 'shape') {
       const t = bodyText(e.text);
       if (t) texts.push(t);
-    }
+    } else if (e?.kind === 'table')
+      for (const c of e.cells) {
+        const t = bodyText(c.text);
+        if (t) texts.push(t);
+      }
   }
   const at = Math.min(objects.length, spans[art.from]?.[0] ?? objects.length);
   const gone = new Set(replaces);

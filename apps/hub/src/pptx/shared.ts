@@ -6,9 +6,11 @@
  * Every map in a payload is an array of pairs (design/27 §12 "Prototype safety"): job payloads are JSON and
  * their keys come from deck strings (part names). Part names are at most `PPTX_LIMITS.partName` characters.
  */
+import type { SceneFontFile } from './faces.ts';
 import type { ExtractedText, ImageObject } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import type { ArtInfo, ConvertResult, SlideClass } from '@ordo/pptx-scene';
+import type { PictureBake } from '@ordo/pptx-scene/bake.ts';
 import { MAX_XML_PART_BYTES } from '@ordo/pptx-scene/opc.ts';
 import type { RenderCopyPage } from '@ordo/pptx-scene/rendercopy.ts';
 import type { Logger } from 'pino';
@@ -46,6 +48,18 @@ export const PPTX_LIMITS = {
   importPoolMs: 15 * 60_000,
   /** Longest part name in a payload pair. */
   partName: 512,
+  /**
+   * Bytes of geometry files one import stores (`ShapeGeom.ref`, design/27 §15 M6 round 2; the largest of
+   * the worship decks measured needs 0.6 MB); a slide whose new files would pass it is a compact picture.
+   */
+  geomFileBytes: 32 * MiB,
+  /**
+   * Bytes of geometry files one `pptx-scene` batch may return (named in the worker, `sceneTask.ts`); a slide
+   * whose new files would pass it is a compact picture, so neither the worker's output nor the library
+   * process ever holds more than this of one batch (a layout's custGeom rebuilt at every slide's size made
+   * 0.5 MB a slide).
+   */
+  batchGeomBytes: 32 * MiB,
 } as const;
 
 /** The options of a native import: form fields of `POST /import/document`, kept in the job payload. */
@@ -300,6 +314,13 @@ export type SceneTaskInput = {
    * (`ParseOptions.mediaKind`; pptxgenjs writes sounds under `a:videoFile`).
    */
   mediaKinds?: [string, 'video' | 'audio'][];
+  /**
+   * The library's font faces, read by the worker when a table's text is measured (`faces.ts`; design/27
+   * §15 M6: a row grows to its text). Absent: widths are estimated.
+   */
+  fonts?: SceneFontFile[];
+  /** Bytes of geometry files the batch may return (`PPTX_LIMITS.batchGeomBytes`; tests set less). */
+  geomBytes?: number;
 };
 export type SceneTaskOutput = {
   result: ConvertResult;
@@ -310,6 +331,14 @@ export type SceneTaskOutput = {
   scan?: SceneScan;
   /** Per converted slide, what `convertDeck` does not read (`transition.ts`). */
   extras?: SceneSlideExtra[];
+  /**
+   * The batch's geometry files, named in the worker (`geoms.ts` `geomFileOf`: re-tokenised, serialised and
+   * hashed off the library's event loop): placeholder (`EmitResult.geoms` id) → SHA-256 name and JSON bytes.
+   * `result.geoms` is emptied. At most `PPTX_LIMITS.batchGeomBytes` of distinct files.
+   */
+  geomFiles?: { id: string; hash: string; bytes: Uint8Array }[];
+  /** Slides whose new geometry files would pass `PPTX_LIMITS.batchGeomBytes`: compact pictures. */
+  geomOver?: number[];
 };
 
 /** What the first `pptx-scene` call reads for the whole deck (`sceneTask.ts`). */
@@ -407,6 +436,28 @@ export type ArtTaskOutput = {
   empty: boolean;
   /** With `ArtTaskInput.encode`: `image` as a PNG (RGBA, 8 bits). */
   png?: Uint8Array;
+};
+
+/**
+ * `pptx-bake` (M6, `bakeTask.ts`): a picture derived at import, a recoloured picture or a tiled fill
+ * (`@ordo/pptx-scene` `bake.ts`). The source is decoded by ffmpeg before the task, at the size the bake needs.
+ */
+export type BakeTaskInput = {
+  /** The source picture, RGBA (`channels` 4), straight alpha. */
+  source: RasterImage;
+  bake: PictureBake;
+  /** A tile's output size (the box at its display need); without a tile the output is the source's size. */
+  out?: { width: number; height: number };
+  /** The source's format (`clrChange`'s tolerance depends on it): png, jpeg, gif, webp, bmp, tiff. */
+  format: string;
+};
+export type BakeTaskOutput = {
+  /** The derived picture as a PNG (RGBA, or RGB when every pixel is opaque). */
+  png: Uint8Array;
+  width: number;
+  height: number;
+  /** Some pixel is not opaque. */
+  alpha: boolean;
 };
 
 /** A stub's error: the work item that will implement it (README.md). */
