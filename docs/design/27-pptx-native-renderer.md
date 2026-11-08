@@ -715,6 +715,59 @@ _As built (M9 wave 1, track `conv-seams`):_
 
 The budgets keep slides inside the render clamps (200 objects, 16 images, 192 MiB, `clamp.ts:22-38`), so nothing is silently dropped.
 
+<!-- m9:decor-conv -->
+_As built (M9 wave 2, track `decor-conv`; `pptx-scene` `budget.ts`, `decor.ts`, `sheet.ts`, `bake.ts`; decisions.md
+"Slow-to-draw elements"):_ **the budgets never make a slide hybrid or a picture.** Nothing is sent to the art for
+a budget, and nothing for being slow to draw: the drawing budgets choose how an element is drawn (from the
+slide's decoration plate, or live), never whether. The M6 steps above stay only behind `ParseOptions.budgetArt`,
+the fidelity harness's A/B.
+- **Culling** (always, before anything is counted): an element whose bounds, grown by its shadow, glow and half
+  its outline, miss the slide area (the deck's, not the frame: a 4:3 deck's side bars are off the slide), or a
+  shape that shows nothing (no visible fill, line, text or effect), is not imported, as a hidden element: not
+  emitted, counted, put in the art or its text. Clips, sounds and SmartArt drawings' elements are never culled;
+  groups per leaf. On the shown slides of E: 3,059 elements on 287 worship slides, 2 invisible shapes on 2
+  sermon slides (no drawing change).
+- **The steps**, each after the first only while the slide passes 150 objects as version 1 draws it (the art
+  range's elements counted as themselves: version 1, and a hub without LibreOffice for good, draws them), the
+  runs that save most first, stopping as soon as it fits: a table or a chart is one object; shapes of one look
+  merge as above; **decorations** of one SmartArt drawing, top-level group or layout/master source, then of one
+  source (the slide's own ungrouped shapes too), each one locked `ShapeObject.decor`; between them
+  **composites** of z-adjacent plain pictures (any rotation) as one picture over their union box; and, only for
+  a slide still over, real 3-D drawn flat in decorations (`3d:flat-in-decoration`; otherwise 3-D never joins a
+  decoration, and merges by look only with an equal 3-D digest and disjoint boxes, decision 6). Objects left
+  that are text or that no step can merge stay up to 190; past that, and never past the render clamp's 200,
+  the guard leaves the topmost elements without text out, then text (class hybrid, `missing:<kind>`; never
+  reached on E). Past 12 distinct pictures an **atlas** packs the fewest smallest into one sheet, each object
+  keeping its box and showing its cell through its crop.
+- **A decoration draws what its shapes draw**: each member is emitted as a single shape is, then its geometry
+  built at its box as the renderer builds it and placed (flips, rotation) into the decoration's own space (its
+  box in logical px); parts in z-order, a member's first marked `s: 1`; its look a paint (fill; gradient laid on
+  the member's own box, `DecorPart.frame`, mirrored by its flips; stroke; dash; shadow), equal paints shared;
+  a path too long for one part a `cont` chain. A member is drawn as `drawGeomShape` draws a shape: its shadow,
+  then its fills and stroke, with miter joins and flat caps, so an outline with round or bevel joins or round
+  or square caps joins only when it is at most 2 logical px wide (`THIN_LINE_PX`; `DecorPaint` has no joins or
+  caps). Caps: 256 parts, 64 paints, 16,384 points, 24 shadowed shapes. Legacy: an empty line, locked (an older
+  build draws nothing, §3.2). A large decoration is a decoration file (`DecorData.ref`, `pptxdecor:<n>`).
+- **Sheets** (`pptxmedia:sheet<n>`, `EmitResult.sheets`, `SheetBake`, made by the hub and the harness,
+  `decor-render`): cells at the 3840 density, in z-order, each the picture as its object draws it (crop,
+  recolour, flips, a turn by quarter turns exactly or by any angle sampled bilinearly, opacity), at most 64
+  cells, 8,192 px a side, 16 MP out and 32 MP decoded; the objects as they are without the sheet go with it
+  (`EmittedSlide.sheets`), for an importer that cannot make it.
+- **Kept whole** (the wave 1 re-review): an object past the slide's drawing or effect budget is stored as it
+  is, its gradient, geometry, dash, ends and effects kept (`emit.ts` `fitDrawing`, `fitEffects` no longer
+  flatten it to its legacy copy), and a shape past the drawing budget is never sent to the art
+  (`custGeom:complex`, `geom:complex` are no longer written): every drawer draws it as its own budget allows
+  until the slide's decoration plate holds it. `EmittedSlide.plate` names the slide's static decoration stack
+  (its bottom objects up to the first text, table, chart or picture that plays), the objects above it with
+  effect layers, and those its drawing budgets draw past them (`pastBudget`): what the client bakes.
+- **Measured** (`scratchpad m9/w2a/decor-conv/`): census of E, worship native 2,679 → 2,729 of 2,820 (96.77 %),
+  hybrid 104 → 74, picture 37 → 17 (all 17 for 64 KB, the ladder's: 10 of text formatting, 7 as stored);
+  `art:budget:shapes` 30 → 0, `budget:pictures` 13 → 0, `art:custGeom:complex` 16 → 0, `art:budget:3d` 1 → 0;
+  BannerStyle 225 → 41 objects (culled 205 elements off the slide; its 3-D shapes merge); one slide over 150
+  objects, a 96-cell table counted as one object and emitted as its M6 group until `tables-conv`'s table object.
+  Sermons: 73 of 73 native, unchanged.
+<!-- /m9:decor-conv -->
+
 **One rule for every drawer.** `slideContent(slide): { pictureMediaId?: string; objects: SlideObject[] }` in `packages/renderer/src/content.ts`:
 - `pptx.show === 'picture'` and `pptx.refMediaId`: the reference picture plus only the objects without `origin` (the operator's own additions);
 - otherwise: `imported?.imageMediaId` plus all objects.
@@ -1408,7 +1461,11 @@ _M6 merge re-review, fixed in M9 wave 1 (render-seams)._
   two opaque full-slide 4-stop radials took 49.7 ms p50 at 4K while rated 1.17M units; now one is kept and the
   other drawn as its legacy colour (the converter now emits such a shape for the renderer's plan to draw so,
   rather than send it to the art, wave 1 repair: on the suite, 55 slides of 10 decks had lost a textless shape
-  to `geom:complex` and 21 of them went hybrid, a hub without LibreOffice showing them without it).
+  to `geom:complex` and 21 of them went hybrid, a hub without LibreOffice showing them without it). The raster
+  bench checks a stack of three (`OPAQUE_RADIAL_GRADIENTS`): 31.8 to 35.9 ms p50 and 33.3 to 42.9 p95 at 3840
+  in three runs, 8.1 to 9.3 / 8.3 to 11.2 at 1920. _(M9 wave 2, `decor-conv`: such a shape is stored whole,
+  never flattened to its legacy colour; the renderer's plan draws it so until the slide's decoration plate
+  holds it.)_
 - **The share the heavy-slide estimate leaves out of the alarm** (wave 1 review, measured over E, warm draws,
   no effect sprites made): 689 of the 2,820 worship slides (24.4 %) are heavy at 1080p and 723 (25.6 %) at 4K,
   against 149 with the geometry units alone; of the 73 sermon slides 10 at 1080p and 17 at 4K (none before).
@@ -1418,8 +1475,7 @@ _M6 merge re-review, fixed in M9 wave 1 (render-seams)._
   three quarters of an ordinary worship deck. The constants were checked only on the 500 slides they were fitted
   on; open for the renderer: refit them on first rasters outside the fit (E through the asset worker's path), or
   judge a slow computer by measured over predicted time (the M6 re-review's proposal), so that ordinary
-  shadowed text stays in the alarm. The raster bench checks a stack of three (`OPAQUE_RADIAL_GRADIENTS`): 31.8 to
-  35.9 ms p50 and 33.3 to 42.9 p95 at 3840 in three runs, 8.1 to 9.3 / 8.3 to 11.2 at 1920.
+  shadowed text stays in the alarm.
 - **Headroom for stacked translucent gradients.** `GEOM_COST.gradientArea` is 0.22 (was 0.2): over one another
   such gradients cost about 12.6 ms a full slide each at 4K, not the 11.7 of one over a clear canvas, and three
   full-slide ones at 0 and 60 % (all kept at 0.2, 47.7 ms p50 and 52.7 p95 at 4K in the re-review) left the 50 ms
@@ -2296,6 +2352,23 @@ _Built for M9 (wave 1, track `conv-seams`): the converter's seams, so that each 
   (paragraphs' height at a size through `tables.ts` `Measure`) are the measurement seams of tables, warps
   and SmartArt.
 <!-- /m9:conv-seams -->
+
+<!-- m9:decor-conv -->
+_Built for M9 (wave 2, track `decor-conv`): the slide budgets drawn natively (§5 "Slide class", as built)._
+- `pptx-scene` `budget.ts` (`cullElements`, `fitBudgets`, `budgetCost`, `MAX_SLIDE_OBJECTS_TEXT` 190,
+  `MAX_DRAWN_OBJECTS` 200), `decor.ts` (`decorable`, `decorRuns`, `emitDecor`, `decorFiles`, `platePlan`),
+  `sheet.ts` (`pictureRuns`, `emitComposite`, `atlasParts`, `atlasSlide`), `bake.ts` (`SheetBake`, `SheetCell`,
+  `SHEET_LIMITS`, `checkSheet`, `applySheet`); `classify.ts` culls first, then `fitBudgets`, the M6 budget halves
+  behind `ParseOptions.budgetArt`; `slideCost` counts a table or a chart as one object.
+- The job payload grows (not stored): `EmitResult.decors` (decoration files), `EmitResult.sheets` (each sheet's
+  recipe once), `EmittedSlide.sheets` (each sheet's uses and the objects to put back), `EmittedSlide.plate`
+  (the plate plan); `EmitOptions.decorId`, `sheetId`, `sheets` (false: no sheets, for an importer that cannot
+  make them). The hub's storing of decoration files and sheets is `decor-render`'s (`geoms.ts`, `bakes.ts`
+  `storeSheets`); until it lands an import leaves a sheet's objects out ('could not be imported') and a
+  decoration file unread (the decoration draws nothing).
+- Decisions.md "Slow-to-draw elements": the converter keeps every element and its full vector source, names
+  the slide's plate candidates, and leaves "plate or live" to the drawers (`decor-render`).
+<!-- /m9:decor-conv -->
 
 **Parallel.**
 - ∥ 3D and shear;

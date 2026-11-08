@@ -12,10 +12,14 @@
  * - `slides`: per shown slide `n` (its shown number, as the harness's `--slides` numbers it), `i` (its
  *   index in the deck), `tier`, `class`, `reasons`, `objects`, `geom` (objects with a geometry), `refs`
  *   (geometries stored in files), `bytes` (the slide's JSON, in characters), `metafiles` (pictures waiting for
- *   LibreOffice), and the hub's view of it (`hubClasses`): `stored` (the slide as the hub stores it,
+ *   LibreOffice), the slide budgets' work (M9, `decor-conv`; each only when not 0): `decors` (decoration
+ *   objects, `ShapeObject.decor`), `sheets` (pictures drawn from a composite or an atlas sheet, `SHEET_PREFIX`),
+ *   `culled` (elements not imported because they draw nothing on the slide: off it, or showing nothing; read
+ *   from the converter's notes) and `plate` (objects past the slide's drawing budgets, drawn from its
+ *   decoration plate: the converter's note), and the hub's view of it (`hubClasses`): `stored` (the slide as the hub stores it,
  *   `storedSlideBytes`; 0 for a picture slide), `hub` (its class once the hub's §3.4 budgets ran) and
  *   `hubWhy` (why the hub made it a picture: `slide`, `presentation` or `geoms`; null otherwise);
- * - `geomFiles`, `geomBytes`: the deck's geometry files;
+ * - `geomFiles`, `geomBytes`: the deck's geometry files; `maxObjects`: the most objects one shown slide has;
  * - `error` when the converter could not read the deck;
  * - `unreadable: 'missing target'` (and no slides) for a link whose deck is gone: listed, never an error.
  *
@@ -34,7 +38,7 @@ import {
   type Slide,
   utf8Bytes,
 } from '@ordo/domain';
-import { storedSlideBytes } from '@ordo/pptx-scene';
+import { SHEET_PREFIX, storedSlideBytes } from '@ordo/pptx-scene';
 import { PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
 import { listDecks } from './decks.ts';
 import { convertDeckIsolated, type NativeDeck } from './native.ts';
@@ -87,6 +91,41 @@ export function hubClasses(
   });
 }
 
+/** The count a converter note starts with when it matches `re` (summed over the notes), else 0. */
+function noted(notes: readonly string[], re: RegExp): number {
+  let n = 0;
+  for (const note of notes) {
+    const m = re.exec(note);
+    if (m) n += Number(m[1]);
+  }
+  return n;
+}
+
+/**
+ * What the slide budgets did to a slide (M9, `decor-conv`): its decorations, the pictures drawn from sheets,
+ * the elements culled and the objects past its drawing budgets (named for its decoration plate). Zeros left
+ * out.
+ */
+export function budgetColumns(
+  slide: Pick<Slide, 'objects'>,
+  notes: readonly string[],
+): Record<string, number> {
+  const objects: Slide['objects'] = slide.objects ?? [];
+  const out: Record<string, number> = {
+    decors: objects.filter((o) => o.type === 'shape' && o.decor !== undefined).length,
+    sheets: objects.filter((o) => o.type === 'image' && o.mediaId.startsWith(SHEET_PREFIX)).length,
+    culled:
+      noted(notes, /^(\d+) element\(s\) outside the slide are not imported$/) +
+      noted(notes, /^(\d+) shape\(s\) that show nothing are not imported$/),
+    plate: noted(
+      notes,
+      /^(\d+) object\(s\) past the slide's drawing budget are drawn from its decoration plate/,
+    ),
+  };
+  for (const k of Object.keys(out)) if (!out[k]) delete out[k];
+  return out;
+}
+
 /** One deck's line of the census. */
 export function censusRow(
   deck: NativeDeck,
@@ -111,6 +150,7 @@ export function censusRow(
         ).length,
         bytes: JSON.stringify(s.slide).length,
         ...(s.metafiles?.length ? { metafiles: s.metafiles.length } : {}),
+        ...budgetColumns(s.slide, s.notes),
         stored: h.stored,
         hub: h.hub,
         hubWhy: h.hubWhy,
@@ -123,6 +163,7 @@ export function censusRow(
     slides,
     geomFiles: files.length,
     geomBytes: files.reduce((a, b) => a + b, 0),
+    maxObjects: slides.reduce((m, s) => Math.max(m, s.objects), 0),
     ...(deck.error ? { error: deck.error } : {}),
   };
 }

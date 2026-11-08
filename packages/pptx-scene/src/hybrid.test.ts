@@ -245,12 +245,19 @@ describe('without LibreOffice (EmitOptions.libreoffice: false, M9)', () => {
           '<a:lightRig rig="threePt" dir="t"/></a:scene3d><a:sp3d><a:bevelT w="38100" h="38100"/></a:sp3d>',
       });
     const parts = buildDeck({ slides: [{ shapes }] });
-    const withLo = convertDeck(parts).slides[0]!;
-    // With LibreOffice the art draws the bevels (`budget:3d`); version 1 draws them flat meanwhile.
+    // M9 (`decor-conv`): shapes of one 3-D look whose boxes do not overlap merge (plan decision 6), so the
+    // slide fits its budget natively with LibreOffice too: nothing goes to the art.
+    const native = convertDeck(parts).slides[0]!;
+    expect(native.classification).toMatchObject({ class: 'native' });
+    expect(native.art).toBeUndefined();
+    expect(native.slide.objects.length).toBeLessThanOrEqual(150);
+    // Behind budgetArt (the A/B), with LibreOffice the art draws the bevels (`budget:3d`); version 1 draws
+    // them flat meanwhile.
+    const withLo = convertDeck(parts, { budgetArt: true }).slides[0]!;
     expect(withLo.classification).toMatchObject({ class: 'hybrid' });
     expect(withLo.classification.reasons).toContain('art:budget:3d');
     expect(withLo.art).toBeDefined();
-    const s = convertDeck(parts, { libreoffice: false }).slides[0]!;
+    const s = convertDeck(parts, { libreoffice: false, budgetArt: true }).slides[0]!;
     // Without it version 1 is the slide: every shape drawn flat, as approx 3-D within the budget is.
     expect(s.classification.class).toBe('native');
     expect(s.classification.reasons.some((r) => r.startsWith('art:') || r.startsWith('missing:'))).toBe(

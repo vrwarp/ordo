@@ -342,8 +342,9 @@ describe('pptx-native: classes, budgets and timing', () => {
     });
     parts.set('ppt/slides/slide3.xml', enc.encode('<!DOCTYPE x [<!ENTITY a "aaaa">]><p:sld/>'));
     const { result, p } = await importDeck(parts);
-    // Picture class for its object count, not made compact by the size budgets.
-    expect(result).toMatchObject({ slides: 3, native: 1, picture: 2, compact: 0, pending: 2 });
+    // M9 (`decor-conv`): the converter keeps 160 text boxes native (the text ceiling, 190); the hub's size
+    // budget makes the slide a compact picture (the budget ladder's to change, `ladder`).
+    expect(result).toMatchObject({ slides: 3, native: 1, picture: 2, compact: 1, pending: 2 });
     const [budget, fine, bad] = slidesOf(p) as [Slide, Slide, Slide];
     expect(budget.objects).toEqual([]);
     expect(budget.lyricObjectId).toBeUndefined();

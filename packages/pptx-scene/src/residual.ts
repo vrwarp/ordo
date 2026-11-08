@@ -24,6 +24,13 @@
  * other steps choose as they did; version 1 draws it flat meanwhile, and for good without LibreOffice
  * (`drawn`: nothing is missing).
  *
+ * M9 wave 2 (`decor-conv`): the slide budgets send nothing to the art (`budget.ts`: decorations,
+ * composites, an atlas instead), so the `budget:*` rows are written only behind `ParseOptions.budgetArt`
+ * (the harness's A/B), and `3d:flat-in-decoration` (approx) marks real 3-D drawn flat inside a decoration.
+ * Nothing goes to the art for being slow to draw (decisions.md "Slow-to-draw elements"): `custGeom:complex`
+ * and `geom:complex` are native, kept whole and drawn from the slide's decoration plate, and no longer
+ * written.
+ *
  * Pure: tables and lookups; deck strings are only compared, never used as object keys.
  */
 import type { MissingKind } from '@ordo/domain';
@@ -69,7 +76,7 @@ export const RESIDUAL_ROWS: readonly ResidualRow[] = [
     decision: 'residual',
     missing: 'element',
     by: 'budget',
-    note: "a table of more objects than the slide's budget",
+    note: "a table of more objects than the slide's budget (M9: only behind ParseOptions.budgetArt, the harness's A/B)",
   },
   {
     reason: 'chart',
@@ -93,7 +100,7 @@ export const RESIDUAL_ROWS: readonly ResidualRow[] = [
     decision: 'residual',
     missing: 'smartart',
     by: 'budget',
-    note: "a SmartArt drawing of more objects than the slide's budget",
+    note: "a SmartArt drawing of more objects than the slide's budget (M9: only behind ParseOptions.budgetArt)",
   },
   {
     reason: 'ole',
@@ -132,7 +139,7 @@ export const RESIDUAL_ROWS: readonly ResidualRow[] = [
     decision: 'residual',
     drawn: true,
     by: 'budget',
-    note: 'real 3-D on a slide past the object budget: to the art first, drawn flat until then (as before M9) and for good without LibreOffice',
+    note: 'real 3-D on a slide past the object budget: to the art first, drawn flat until then and for good without LibreOffice (M9: only behind ParseOptions.budgetArt)',
   },
   {
     reason: 'math',
@@ -276,18 +283,16 @@ export const RESIDUAL_ROWS: readonly ResidualRow[] = [
   {
     reason: 'custGeom:complex',
     features: ['custGeom'],
-    decision: 'residual',
-    missing: 'decoration',
+    decision: 'native',
     by: 'reader',
-    note: "custom geometry past the slide's drawing budget",
+    note: "custom geometry past the slide's drawing budget: kept whole, drawn from the slide's decoration plate (M9; no longer written)",
   },
   {
     reason: 'geom:complex',
     features: [],
-    decision: 'residual',
-    missing: 'decoration',
+    decision: 'native',
     by: 'reader',
-    note: "a preset past the slide's drawing budget",
+    note: "a preset past the slide's drawing budget: kept whole, drawn from the slide's decoration plate (M9; no longer written)",
   },
   {
     reason: 'preset:*',
@@ -323,7 +328,14 @@ export const RESIDUAL_ROWS: readonly ResidualRow[] = [
     decision: 'residual',
     missing: 'decoration',
     by: 'budget',
-    note: "shapes and pictures past the slide's object budget",
+    note: "shapes and pictures past the slide's object budget (M9: only behind ParseOptions.budgetArt)",
+  },
+  {
+    reason: '3d:flat-in-decoration',
+    features: ['3d'],
+    decision: 'approx',
+    by: 'budget',
+    note: 'real 3-D drawn flat inside a decoration, on a slide past the object budget with every other step taken (M9, plan decision 6)',
   },
 ];
 

@@ -318,7 +318,7 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     expect(scene.slides[0]!.notes.join(' ')).toMatch(/more than 65536 path points/);
   });
 
-  it('sends a custGeom too costly to draw to LibreOffice: edges zigzagging across the box (custGeom:complex)', () => {
+  it('keeps a custGeom too costly to draw whole, for the decoration plate: edges zigzagging across the box (M9)', () => {
     // Within every count (4,000 points, one path), but Canvas would spend seconds filling it at 4K.
     const zigzag = (points: number) => {
       let d = M(10_000, 10_000);
@@ -332,13 +332,16 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     const big = { cx: 12_192_000, cy: 6_858_000 };
     const hostile = emitOne({ slides: [{ shapes: custom(2, { paths: zigzag(4_000) }, big) }] });
     const e = hostile.scene.slides[0]!.elements[0] as ShapeElement;
-    expect(e).toMatchObject({
-      support: 'residual',
-      reasons: ['custGeom:complex'],
-      custom: { complex: true },
-    });
+    // M9 (decisions.md "Slow-to-draw elements"): kept whole, never sent to LibreOffice, and named for the
+    // slide's decoration plate; every drawer draws its legacy shape until a plate holds it.
+    expect(e).toMatchObject({ support: 'native', custom: { complex: true } });
+    expect(e.reasons).toBeUndefined();
+    expect(e.custom!.over).toBeUndefined();
     expect(e.custom!.cost).toBeGreaterThan(GEOM_COST.geometry);
-    expect(hostile.scene.slides[0]!.notes.join(' ')).toMatch(/too costly to draw/);
+    expect(hostile.scene.slides[0]!.notes.join(' ')).toMatch(/too costly to draw at once/);
+    const kept = shapes(hostile.objects)[0]!;
+    expect(kept.geom?.paths?.length).toBeGreaterThan(0);
+    expect(hostile.emitted.plate?.pastBudget).toEqual([kept.id]);
     // The slide's budget: each of these fits on its own; the shapes past the slide's estimate (with
     // GEOM_COST.point a stored point) do not.
     const charge = (e: ShapeElement) => e.custom!.cost! + e.custom!.points * GEOM_COST.point;
@@ -349,13 +352,18 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     expect(fit).toBeGreaterThanOrEqual(1);
     let all = '';
     for (let i = 0; i < fit + 2; i++) all += custom(2 + i, { paths: zigzag(380) }, big);
-    const els = parseDeck(buildDeck({ slides: [{ shapes: all }] })).slides[0]!.elements as ShapeElement[];
-    expect(els.map((x) => x.support)).toEqual([
-      ...Array.from({ length: fit }, () => 'native'),
-      'residual',
-      'residual',
+    const many = emitOne({ slides: [{ shapes: all }] });
+    const els = many.scene.slides[0]!.elements as ShapeElement[];
+    expect(els.every((x) => x.support === 'native')).toBe(true);
+    expect(els.map((x) => !!x.custom!.complex)).toEqual([
+      ...Array.from({ length: fit }, () => false),
+      true,
+      true,
     ]);
-    expect(els[fit]!.reasons).toEqual(['custGeom:complex']);
+    // Emitted whole; the renderer draws what passes its budget as legacy shapes: the plate's list.
+    expect(shapes(many.objects).every((o) => o.geom?.paths?.length)).toBe(true);
+    expect(many.emitted.plate?.pastBudget.length).toBe(slideBudget(many.slide.objects).size);
+    expect(slideBudget(many.slide.objects).size).toBeGreaterThan(0);
     // An outline is rated as drawn (renderer geom/cost.ts strokeCost: two offset edges a leg, each join).
     const line = '<a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></p:spPr>';
     const outlinedOne = (id: number) => custom(id, { paths: zigzag(100) }, big).replace('</p:spPr>', line);
@@ -371,9 +379,10 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     for (let i = 0; i <= fitOutlined; i++) outlined += outlinedOne(2 + i);
     const lined = parseDeck(buildDeck({ slides: [{ shapes: outlined }] })).slides[0]!
       .elements as ShapeElement[];
-    expect(lined.map((x) => x.support)).toEqual([
-      ...Array.from({ length: fitOutlined }, () => 'native'),
-      'residual',
+    expect(lined.every((x) => x.support === 'native')).toBe(true);
+    expect(lined.map((x) => !!x.custom!.complex)).toEqual([
+      ...Array.from({ length: fitOutlined }, () => false),
+      true,
     ]);
   });
 
@@ -419,21 +428,24 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
       '<a:ln w="635000"><a:solidFill><a:srgbClr val="000000"/></a:solidFill>' +
         '<a:headEnd type="triangle" w="lg" len="lg"/><a:tailEnd type="triangle" w="lg" len="lg"/></a:ln></p:spPr>',
     );
-    for (const shapes of [wide, ends]) {
-      const out = emitOne({ slides: [{ shapes }] });
+    for (const one of [wide, ends]) {
+      const out = emitOne({ slides: [{ shapes: one }] });
       const e = out.scene.slides[0]!.elements[0] as ShapeElement;
-      expect(e).toMatchObject({
-        support: 'residual',
-        reasons: ['custGeom:complex'],
-        custom: { complex: true },
-      });
+      // M9: kept whole for the decoration plate; the renderer draws its legacy shape until then.
+      expect(e).toMatchObject({ support: 'native', custom: { complex: true } });
       expect(e.custom!.fillCost!).toBeLessThan(GEOM_COST.geometry);
       expect(e.custom!.cost!).toBeGreaterThan(GEOM_COST.slide);
-      expect(out.notes.join(' ')).toMatch(/past the slide's drawing budget/);
+      expect(out.notes.join(' ')).toMatch(
+        /past the slide's drawing budget are drawn from its decoration plate/,
+      );
+      const o = shapes(out.objects)[0]!;
+      expect(o.geom?.paths?.length).toBeGreaterThan(0);
+      expect(out.emitted.plate?.pastBudget).toEqual([o.id]);
+      expect(slideBudget(out.slide.objects).has(o)).toBe(true);
     }
   });
 
-  it("holds presets' outlines to the slide's budget too: thin dashes on full-slide rects (geom:complex)", () => {
+  it("rates presets' outlines against the slide's budget too, keeping them whole: thin dashes on full-slide rects (M9)", () => {
     // A sysDot line one EMU wide is drawn half a pixel wide: a full-slide rect of 6,000 dots.
     const rect = (id: number) =>
       sp({ id, x: 0, y: 0, cx: 12_192_000, cy: 6_858_000, geom: 'rect' }).replace(
@@ -444,12 +456,15 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     for (let i = 0; i < 30; i++) all += rect(2 + i);
     const out = emitOne({ slides: [{ shapes: all }] });
     const els = out.scene.slides[0]!.elements as ShapeElement[];
-    const complex = els.filter((e) => e.reasons?.includes('geom:complex'));
-    expect(complex.length).toBeGreaterThan(0);
-    expect(complex.length).toBeLessThan(30);
-    expect(els.slice(0, 30 - complex.length).every((e) => e.support === 'native')).toBe(true);
-    // What is emitted is within the renderer's budget: it draws every shape as the converter decided.
-    expect(overGeomBudget(out.slide.objects).size).toBe(0);
+    // M9: none goes to the art; every rect keeps its dash, and those the renderer draws past its budget
+    // (plain, until the decoration plate holds them) are the plate's list.
+    expect(els.every((e) => e.support === 'native' && !e.reasons)).toBe(true);
+    expect(shapes(out.objects)).toHaveLength(30);
+    expect(shapes(out.objects).every((o) => o.dash === 'sysDot')).toBe(true);
+    const past = overGeomBudget(out.slide.objects);
+    expect(past.size).toBeGreaterThan(0);
+    expect(past.size).toBeLessThan(30);
+    expect(out.emitted.plate?.pastBudget).toEqual([...past].map((o) => o.id));
   });
 
   it('charges a masked picture with an outline as the renderer does: the mask filled, the outline stroked', () => {
@@ -491,8 +506,11 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     const pics = out.scene.slides[0]!.elements.filter((e) => e.kind === 'picture') as {
       custom?: { over?: boolean };
     }[];
-    expect(pics.map((p) => !!p.custom?.over)).toEqual([...Array.from({ length: fit }, () => false), true]);
-    expect(overGeomBudget(out.slide.objects).size).toBe(0);
+    // M9: every mask is kept; the renderer draws the last one past its budget, which the plate holds.
+    expect(pics.every((p) => !p.custom?.over)).toBe(true);
+    const past = overGeomBudget(out.slide.objects);
+    expect(past.size).toBeGreaterThan(0);
+    expect(out.emitted.plate?.pastBudget).toEqual(expect.arrayContaining([...past].map((o) => o.id)));
   });
 
   it("sizes effects by what the shape draws: a custGeom past its box, a small shape's wide outline (M6 finish review)", () => {
@@ -514,13 +532,18 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     const out = emitOne({ slides: [{ shapes: all }] });
     const drawn = shapes(out.objects);
     expect(drawn.filter((o) => o.geom).length).toBe(12);
-    const kept = drawn.filter((o) => o.shadow);
-    expect(kept.length).toBeGreaterThanOrEqual(8);
-    expect(kept.length).toBeLessThan(10);
-    expect(kept.reduce((a, o) => a + drawnEffectArea(o), 0)).toBeLessThanOrEqual(EFFECT_COST.slide);
-    expect(out.notes.join(' ')).toMatch(/past the slide's effect budget are not drawn/);
-    // Every drawer draws it as emitted.
-    expect(slideBudget(out.slide.objects).size).toBe(0);
+    // M9: every shape keeps its shadow; those past the effect budget are drawn without it by every drawer
+    // until the slide's decoration plate holds their effect layers.
+    expect(drawn.filter((o) => o.shadow)).toHaveLength(12);
+    const past = slideBudget(out.slide.objects);
+    expect(past.size).toBeGreaterThan(2);
+    expect(past.size).toBeLessThanOrEqual(4);
+    const drawnWith = drawn.filter((o) => !past.has(o));
+    expect(drawnWith.reduce((a, o) => a + drawnEffectArea(o), 0)).toBeLessThanOrEqual(EFFECT_COST.slide);
+    expect(out.notes.join(' ')).toMatch(/past the slide's effect budget are drawn from its decoration plate/);
+    // No text: all of it is the static decoration stack, the background included.
+    expect(out.emitted.plate?.stack).toHaveLength(13);
+    expect(out.emitted.plate?.pastBudget).toEqual([...past.keys()].map((o) => o.id));
 
     // Thirty 10 px rects with a 500 px outline and a shadow (as the editor can make): each layer covers the
     // outline's square, so the drawing budget and the effect budget hold them; the renderer agrees.
@@ -538,12 +561,18 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
       });
     const wide = emitOne({ slides: [{ shapes: rects }] });
     const w = shapes(wide.objects).filter((o) => o.shadow);
+    expect(w).toHaveLength(30);
     expect(drawnEffectArea(w[0]!)).toBeGreaterThan(0.25);
-    expect(w.reduce((a, o) => a + drawnEffectArea(o), 0)).toBeLessThanOrEqual(EFFECT_COST.slide);
-    expect(slideBudget(wide.slide.objects).size).toBe(0);
+    // The renderer draws those within the effect budget with their shadow, the rest without (M9: kept).
+    const plan = slideBudget(wide.slide.objects);
+    const withShadow = w.filter(
+      (o) => !plan.has(o) || (plan.get(o)!.type === 'shape' && (plan.get(o) as ShapeObject).shadow),
+    );
+    expect(withShadow.reduce((a, o) => a + drawnEffectArea(o), 0)).toBeLessThanOrEqual(EFFECT_COST.slide);
+    expect(withShadow.length).toBeLessThan(30);
   });
 
-  it('charges the pixels each fill paints: a stack of full-slide gradients goes to the art (M6 finish review)', () => {
+  it('charges the pixels each fill paints: a stack of full-slide gradients is kept whole for the plate (M9)', () => {
     // The review's 140 full-slide rects with a 50 % linear gradient (1.3 s at 3840, all native).
     const grad =
       '<a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"><a:alpha val="50000"/></a:srgbClr></a:gs>' +
@@ -562,24 +591,23 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
       });
     const out = emitOne({ slides: [{ shapes: all }] });
     const els = out.scene.slides[0]!.elements as ShapeElement[];
-    const native = els.filter((e) => e.support !== 'residual');
-    // M9 wave 1 repair: kept while their legacy copies fit (the floor every drawer draws: a translucent
-    // full-slide colour each, about 2 ms at 4K), the rest to the art; the floors bound the stack.
-    const floor =
-      (GEOM_COST.slide * 0.98 - 1920 * 1080 * GEOM_COST.opaqueArea) / (1920 * 1080 * GEOM_COST.area);
-    // (Each legacy copy's edges cost a little more than its pixels.)
-    expect(native.length).toBeGreaterThanOrEqual(Math.floor(floor) - 1);
-    expect(native.length).toBeLessThanOrEqual(Math.floor(floor));
-    expect(els.slice(native.length).every((e) => e.reasons?.includes('geom:complex'))).toBe(true);
-    expect(out.emitted.classification.class).toBe('hybrid');
-    // The rest emit nothing until the art arrives: their legacy colours would cost what the budget held back
-    // (140 translucent full-slide rects: 300 ms at 3840). What is kept is drawn as every drawer draws it
-    // within the budget (`fitDrawing`): its legacy colour, the first stop, where no gradient fits.
+    // M9 (decisions.md "Slow-to-draw elements"): all 140 are kept whole, gradients and all, and the slide is
+    // native; nothing goes to LibreOffice. The renderer draws each past its budget in its legacy colour (the
+    // first stop) until the slide's decoration plate holds the stack (they lie under its first text).
+    expect(els.every((e) => e.support === 'native' && !e.reasons)).toBe(true);
+    expect(out.emitted.classification.class).toBe('native');
     const drawn = shapes(out.objects);
-    expect(drawn.length).toBe(native.length);
-    expect(drawn.every((o) => !o.gradient && o.fill?.r === 255 && o.fill.a === 0.5)).toBe(true);
-    expect(out.notes.join(' ')).toMatch(/past the slide's drawing budget are drawn as their legacy shapes/);
-    expect(slideBudget(out.slide.objects).size).toBe(0);
+    expect(drawn).toHaveLength(140);
+    expect(drawn.every((o) => o.gradient?.kind === 'linear' && o.fill?.r === 255 && o.fill.a === 0.5)).toBe(
+      true,
+    );
+    expect(out.notes.join(' ')).toMatch(
+      /past the slide's drawing budget are drawn from its decoration plate/,
+    );
+    const past = slideBudget(out.slide.objects);
+    expect(past.size).toBeGreaterThan(130);
+    expect(out.emitted.plate?.pastBudget).toEqual(drawn.filter((o) => past.has(o)).map((o) => o.id));
+    expect(out.emitted.plate?.stack).toEqual(out.slide.objects.map((o) => o.id));
     // Six full-slide gradients, the review's (78 ms at 3840): all kept, as many drawn with their gradient as
     // fit over every one's legacy copy (one), the others in their first colour, as the renderer draws them.
     let six = '';
@@ -597,16 +625,12 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     const few = emitOne({ slides: [{ shapes: six }] });
     expect(few.emitted.classification.class).toBe('native');
     expect(shapes(few.objects)).toHaveLength(6);
-    const kept = shapes(few.objects).filter((o) => o.gradient);
-    const legacy = shapes(few.objects).filter((o) => !o.gradient);
-    const floors = charged(drawnCost(few.slide.objects[0]!)) + 6 * charged(drawnCost(legacy[0]!));
-    expect(kept.length).toBe(
-      Math.floor(
-        (GEOM_COST.slide - floors) / (charged(drawnCost(kept[0]!)) - charged(drawnCost(legacy[0]!))),
-      ),
-    );
-    expect(kept.length).toBe(1);
-    expect(slideBudget(few.slide.objects).size).toBe(0);
+    // Stored whole (the wave 1 re-review: never flattened to the first colour); the renderer draws as many
+    // with their gradient as fit over every one's legacy copy (one), the others in their first colour.
+    expect(shapes(few.objects).every((o) => o.gradient)).toBe(true);
+    const plan = slideBudget(few.slide.objects);
+    expect(plan.size).toBe(5);
+    expect([...plan.values()].every((o) => o.type === 'shape' && !o.gradient)).toBe(true);
   });
 
   it('keeps a textless shape only its pixels put past the budget, drawn as the renderer draws it there (M9 wave 1 repair)', () => {
@@ -644,13 +668,19 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
       expect(out.slide.objects.map((o) => o.type)).toEqual(['shape', 'shape', 'text']);
       const [bgObj, rectObj] = shapes(out.slide.objects);
       expect(bgObj!.gradient?.kind).toBe(radial ? 'radial' : 'linear');
+      // M9 (the wave 1 re-review): stored whole, its radial kept for the editor and the plate.
+      expect(rectObj!.gradient?.kind).toBe(radial ? 'radial' : 'linear');
+      expect(rectObj!.fill).toEqual({ r: 0x1f, g: 0x38, b: 0x64, a: 1 });
+      const plan = slideBudget(out.slide.objects);
       if (radial) {
-        // In its legacy colour: the first stop, as the renderer's budget draws it.
-        expect(rectObj!.gradient).toBeUndefined();
-        expect(rectObj!.fill).toEqual({ r: 0x1f, g: 0x38, b: 0x64, a: 1 });
-      } else expect(rectObj!.gradient?.kind).toBe('linear');
-      // Every drawer draws it as emitted, and a hub without LibreOffice misses nothing.
-      expect(slideBudget(out.slide.objects).size).toBe(0);
+        // In its legacy colour (the first stop) as the renderer's budget draws it, until the plate holds it.
+        expect(plan.get(rectObj!)).toMatchObject({ fill: { r: 0x1f, g: 0x38, b: 0x64, a: 1 } });
+        expect(plan.get(rectObj!)?.type === 'shape' && plan.get(rectObj!)).not.toHaveProperty('gradient');
+        expect(out.emitted.plate?.pastBudget).toEqual([rectObj!.id]);
+      } else expect(plan.size).toBe(0);
+      // Below the slide's text: on the slide's decoration plate with the background.
+      expect(out.emitted.plate?.stack).toEqual([bgObj!.id, rectObj!.id]);
+      // A hub without LibreOffice misses nothing.
       expect(emitOne(deck, { libreoffice: false }).emitted.missing).toBeUndefined();
     }
     // A plain panel after costly decorations (the worship lyric template: a gradient background and a large
@@ -682,7 +712,8 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     const els = panel.scene.slides[0]!.elements as ShapeElement[];
     expect(els.find((e) => e.shapeId === 4)!.support).toBe('native');
     expect(shapes(panel.objects).some((o) => o.fill?.r === 0x20 && !o.gradient)).toBe(true);
-    expect(slideBudget(panel.slide.objects).size).toBe(0);
+    // The decorations keep their gradients; the renderer draws what passes its budget plainly.
+    expect(shapes(panel.objects).filter((o) => o.gradient)).toHaveLength(2);
   });
 
   it('reads hostile geometry within the bounds and quickly (design/27 §12, §14.3)', () => {

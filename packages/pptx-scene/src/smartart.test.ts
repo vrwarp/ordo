@@ -350,11 +350,25 @@ describe('SmartArt from its drawing cache (M6)', () => {
     expect(s.elements.slice(0, 3).every((e) => e.support === 'native')).toBe(true);
   });
 
-  it('goes to the art when it would take the slide past the object budget', () => {
+  it('is drawn natively as decorations when it would take the slide past the object budget (M9)', () => {
     let nodes = '';
     for (let i = 0; i < 160; i++)
       nodes += dspSp({ x: (i % 16) * (IN / 2), y: Math.floor(i / 16) * (IN / 4), cx: IN / 4, cy: IN / 8 });
     const s = parseDeck(deckWith(drawingXml(nodes))).slides[0]!;
+    expect(s.classification.class).toBe('native');
+    expect(s.classification.reasons.some((r) => r.startsWith('art:'))).toBe(false);
+    // Its shapes merge or join decorations of the drawing; it stays one locked group.
+    const drawn = s.elements.filter((e) => e.diagram !== undefined);
+    expect(drawn.every((e) => e.decor !== undefined || (e.kind === 'shape' && e.merge !== undefined))).toBe(
+      true,
+    );
+  });
+
+  it('goes to the art when it would take the slide past the object budget behind budgetArt (the A/B)', () => {
+    let nodes = '';
+    for (let i = 0; i < 160; i++)
+      nodes += dspSp({ x: (i % 16) * (IN / 2), y: Math.floor(i / 16) * (IN / 4), cx: IN / 4, cy: IN / 8 });
+    const s = parseDeck(deckWith(drawingXml(nodes)), { budgetArt: true }).slides[0]!;
     expect(s.classification.class).toBe('hybrid');
     expect(s.classification.reasons).toContain('art:budget:smartart');
   });

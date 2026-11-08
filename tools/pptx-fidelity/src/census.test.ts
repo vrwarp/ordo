@@ -5,7 +5,7 @@ import { DEFAULT_LYRIC_STYLE, type Slide } from '@ordo/domain';
 import { extractZip } from '@ordo/importers/zip-stream.ts';
 import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
-import { hubClasses, parseCensusArgs, runCensus } from './census.ts';
+import { budgetColumns, hubClasses, parseCensusArgs, runCensus } from './census.ts';
 import { listDecks } from './decks.ts';
 import { zipStore } from './table-probe.ts';
 
@@ -98,6 +98,34 @@ describe('hubClasses', () => {
     ]);
     expect(got[0]!.stored).toBeGreaterThan(400);
     expect(got[5]!.stored).toBe(0);
+  });
+});
+
+describe('budgetColumns (M9, decor-conv)', () => {
+  it("counts a slide's decorations, sheet pictures, culled elements and plate objects, zeros left out", () => {
+    const box = { x: 0, y: 0, w: 1, h: 1, rotation: 0 };
+    const slide = {
+      objects: [
+        {
+          id: 'a',
+          type: 'shape',
+          box,
+          shape: 'line',
+          opacity: 1,
+          radius: 0,
+          decor: { w: 1, h: 1, paints: [{}], parts: [] },
+        },
+        { id: 'b', type: 'image', box, mediaId: 'pptxmedia:sheet1', fit: 'stretch', opacity: 1, radius: 0 },
+        { id: 'c', type: 'image', box, mediaId: 'pptxmedia:1', fit: 'stretch', opacity: 1, radius: 0 },
+      ],
+    } as unknown as Slide;
+    const notes = [
+      '12 element(s) outside the slide are not imported',
+      '2 shape(s) that show nothing are not imported',
+      "3 object(s) past the slide's drawing budget are drawn from its decoration plate (as their legacy shapes until it is made)",
+    ];
+    expect(budgetColumns(slide, notes)).toEqual({ decors: 1, sheets: 1, culled: 14, plate: 3 });
+    expect(budgetColumns({ objects: [] }, [])).toEqual({});
   });
 });
 

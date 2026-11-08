@@ -72,6 +72,9 @@ export function storedSlideBytes(slide: Slide, notes: readonly string[]): number
     if (!o.origin) n += 24; // ,"origin":{"src":"pptx"}
     const g = o.type === 'shape' ? o.geom : o.type === 'image' ? o.mask : undefined;
     if (typeof g?.ref === 'string') n += Math.max(0, STORED_REF_CHARS - g.ref.length);
+    // M9 (`decor-conv`): a decoration file is named by its SHA-256 too.
+    const decor = o.type === 'shape' ? o.decor?.ref : undefined;
+    if (typeof decor === 'string') n += Math.max(0, STORED_REF_CHARS - decor.length);
   }
   if (notes.length)
     n +=

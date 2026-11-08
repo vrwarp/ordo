@@ -389,15 +389,21 @@ export interface ElementBase {
   /**
    * M9 (`decor-conv`): the element draws nothing on the slide, so it is not emitted, counted, put in the art
    * or its text, as a hidden element is: `offSlide` when its bounds grown by its reach miss the slide area,
-   * `invisible` for a shape that shows nothing (no fill, line, visible text or effect).
+   * `invisible` for a shape that shows nothing (no fill, line, visible text or effect), `budget` for one
+   * the slide budgets' guard left out (`budget.ts`; listed in `Classification.missing`).
    */
-  culled?: 'offSlide' | 'invisible';
+  culled?: 'offSlide' | 'invisible' | 'budget';
   /**
    * M9 (`decor-conv`): drawn with its z-neighbours as one decoration (`ShapeObject.decor`, `decor.ts`): the
    * index in `SlideScene.elements` of the run's first (lowest) element, which writes it; the others write
    * nothing once it is written (as `ShapeElement.merge`).
    */
   decor?: number;
+  /**
+   * M9 (`decor-conv`): drawn with its z-neighbours as one composite picture (`sheet.ts`): the index in
+   * `SlideScene.elements` of the run's first (lowest) picture, which writes it.
+   */
+  sheet?: number;
 }
 
 /** A `p:sp` or `p:cxnSp`: geometry with a fill and a line, and maybe text. */
@@ -466,7 +472,10 @@ export interface CustomPaths {
    * caps, dashes and arrowheads, its effects' passes), in units of the slide's `GEOM_COST.slide`.
    */
   cost?: number;
-  /** Over the drawing budgets (`GEOM_COST`, `slideCustom`): drawn by LibreOffice (`custGeom:complex`). */
+  /**
+   * Past the drawing budgets (`GEOM_COST`, `slideCustom`). Since M9 (`decor-conv`) kept whole: drawn from the
+   * slide's decoration plate, as its legacy shape by a drawer until one exists; never sent to the art.
+   */
   complex?: boolean;
   /** `a:rect` as fractions of the box: l, t, r, b. */
   text: [number, number, number, number];
@@ -669,6 +678,16 @@ export interface Classification {
   reasons: string[];
   /** Hybrid slides: the art range and what the art holds (design/27 §5 "Slide class"). Added by F. */
   art?: ArtRange;
+  /**
+   * M9 (`decor-conv`, `budget.ts`): the picture parts packed into one atlas sheet (the slide's picture
+   * budget), which the emitter makes once the slide is emitted (`sheet.ts` `atlasSlide`).
+   */
+  atlas?: string[];
+  /**
+   * M9 (`decor-conv`, `budget.ts`): what the budgets' guard left out (`Slide.pptx.missing` kinds, never
+   * reached in the corpus); the slide is then hybrid with a `missing:<kind>` reason per kind.
+   */
+  missing?: string[];
 }
 
 /**

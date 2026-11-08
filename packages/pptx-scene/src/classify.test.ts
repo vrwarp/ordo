@@ -77,9 +77,14 @@ const alternate = (choice: string, fallback: string) =>
   `<mc:Choice xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" Requires="a14">${choice}</mc:Choice>` +
   `<mc:Fallback>${fallback}</mc:Fallback></mc:AlternateContent>`;
 
-/** The scene of a one-slide deck. */
-function slideOf(shapes: string, more: Partial<SlideSpec> = {}, deck: Partial<DeckSpec> = {}): SlideScene {
-  const scene = parseDeck(buildDeck({ ...deck, slides: [{ shapes, ...more }] }));
+/** The scene of a one-slide deck (`budgetArt`: the slide budgets of M6, the harness's A/B). */
+function slideOf(
+  shapes: string,
+  more: Partial<SlideSpec> = {},
+  deck: Partial<DeckSpec> = {},
+  budgetArt = false,
+): SlideScene {
+  const scene = parseDeck(buildDeck({ ...deck, slides: [{ shapes, ...more }] }), { budgetArt });
   return scene.slides[0]!;
 }
 
@@ -400,8 +405,7 @@ describe('element support (design/27 §5)', () => {
     expect(s.classification.art).toBeUndefined();
   });
 
-  it('real 3-D on a slide past the object budget goes to the art first, drawn flat until then', () => {
-    // As every real 3-D did before M9, so the budget's other steps choose as they did (`budget:3d`).
+  it('real 3-D on a slide past the object budget stays out of decorations, drawn flat (M9)', () => {
     let shapes = '';
     for (let i = 0; i < MAX_SLIDE_OBJECTS + 10; i++)
       shapes += box(
@@ -413,12 +417,32 @@ describe('element support (design/27 §5)', () => {
     const s = slideOf(shapes);
     const three = s.elements.filter((e) => e.reasons?.includes('3d'));
     expect(three).toHaveLength(20);
+    expect(three.every((e) => e.support === 'approx' && e.decor === undefined)).toBe(true);
+    // The 140 flat shapes are drawn as decorations; the slide is native, nothing in any art.
+    expect(s.elements.slice(20).every((e) => e.decor !== undefined)).toBe(true);
+    expect(s.classification).toMatchObject({ class: 'native' });
+    expect(s.classification.reasons.some((r) => r.startsWith('art:') || r.startsWith('budget:'))).toBe(false);
+  });
+
+  it('real 3-D on a slide past the object budget goes to the art first behind budgetArt (the A/B)', () => {
+    // As every real 3-D did before M9, so the budget's other steps choose as they did (`budget:3d`).
+    let shapes = '';
+    for (let i = 0; i < MAX_SLIDE_OBJECTS + 10; i++)
+      shapes += box(
+        i + 2,
+        (i % 12) * 0.5,
+        Math.floor(i / 12) * 0.5,
+        i < 20 ? '<a:sp3d><a:bevelT/></a:sp3d>' : '',
+      );
+    const s = slideOf(shapes, {}, {}, true);
+    const three = s.elements.filter((e) => e.reasons?.includes('3d'));
+    expect(three).toHaveLength(20);
     expect(three.every((e) => e.support === 'residual' && e.reasons!.includes('budget:3d'))).toBe(true);
     expect(s.classification.reasons).toContain('art:budget:3d');
     expect(s.classification.reasons).not.toContain('art:3d');
     expect(s.notes.some((n) => n.includes('3-D shape(s) on a slide past its object budget'))).toBe(true);
     // Version 1 draws them (flat), as it drew every residual shape.
-    const out = emitSlides(parseDeck(buildDeck({ slides: [{ shapes }] }))).slides[0]!;
+    const out = emitSlides(parseDeck(buildDeck({ slides: [{ shapes }] }), { budgetArt: true })).slides[0]!;
     expect(out.slide.objects.length).toBeGreaterThan(MAX_SLIDE_OBJECTS);
   });
 
@@ -508,7 +532,9 @@ describe('element support (design/27 §5)', () => {
     const t0 = performance.now();
     const s = slideOf(one.repeat(4_999));
     expect(performance.now() - t0).toBeLessThan(5_000);
-    expect(s.classification).toMatchObject({ tier: 'T2', class: 'picture' });
+    // M9: never a picture for a budget: the guard keeps 200 objects and lists what it left out.
+    expect(s.classification).toMatchObject({ tier: 'T2', class: 'hybrid', missing: ['element'] });
+    expect(s.elements.filter((e) => !e.hidden)).toHaveLength(199);
   });
 
   it('rates an element of alternate content by the branch Package.xml keeps', () => {
@@ -611,19 +637,30 @@ describe('slide class and art range', () => {
     expect(slideOf(box(2) + hiddenChart).classification.class).toBe('native');
   });
 
-  it('becomes a picture when the objects left exceed the budget', () => {
+  it('keeps a slide of text past the object budget native up to the text ceiling (M9)', () => {
+    let shapes = '';
+    for (let i = 0; i < MAX_SLIDE_OBJECTS; i++)
+      shapes += textBox(i + 2, para(run('Text')), '', (i % 10) * 0.5, Math.floor(i / 10) * 0.3);
+    // With the slide's background (one object) that is one past the budget: text is never merged, and up
+    // to 190 objects of it stay (`MAX_SLIDE_OBJECTS_TEXT`).
+    const s = slideOf(shapes);
+    expect(s.classification).toEqual({ tier: 'T1', class: 'native', reasons: [] });
+    expect(s.elements.every((e) => e.support === 'native' && !e.reasons && !e.hidden)).toBe(true);
+  });
+
+  it('becomes a picture when the objects left exceed the budget behind budgetArt (the A/B)', () => {
     let shapes = '';
     for (let i = 0; i < MAX_SLIDE_OBJECTS; i++)
       shapes += textBox(i + 2, para(run('Text')), '', (i % 10) * 0.5, Math.floor(i / 10) * 0.3);
     // With the slide's background (one object) that is one too many, and text never goes to the art.
-    const s = slideOf(shapes);
+    const s = slideOf(shapes, {}, {}, true);
     expect(s.classification).toEqual({ tier: 'T1', class: 'picture', reasons: ['budget:objects'] });
     expect(s.notes.some((n) => n.startsWith('over the slide budgets'))).toBe(true);
     expect(s.elements.every((e) => e.support === 'native' && !e.reasons)).toBe(true);
   });
 });
 
-describe('the object budget: shapes of one look merged, then shapes to the art (M6)', () => {
+describe('the object budget behind budgetArt: shapes of one look merged, then shapes to the art (M6, the A/B)', () => {
   const FRAME = frameOf(12_192_000, 6_858_000);
   /** `n` squares 0.1 in wide in rows of 20 from (x, y) inches, of `colors` in turn, ids from `first`. */
   const squares = (n: number, first: number, colors = ['336699'], x = 0, y = 0) => {
@@ -778,7 +815,12 @@ describe('the object budget: shapes of one look merged, then shapes to the art (
   });
 
   it('sends the fewest layout decorations without text to the art first, from the bottom', () => {
-    const s = slideOf(textBox(2, para(run('Words'))), {}, { layouts: [{ shapes: squares(160, 10, TWO) }] });
+    const s = slideOf(
+      textBox(2, para(run('Words'))),
+      {},
+      { layouts: [{ shapes: squares(160, 10, TWO) }] },
+      true,
+    );
     // 160 decorations of two looks in turn (none merge), the text and the background: 162 objects. With
     // the art (one object) the bottom 13 go: 1 + 1 + 147 + 1 = 150.
     expect(s.classification.class).toBe('hybrid');
@@ -798,6 +840,9 @@ describe('the object budget: shapes of one look merged, then shapes to the art (
         textBox(3, para(run('Words')), '', 0, 5) + // 30
         squares(40, 100, TWO, 0, 1) + // 31-70: ungrouped, costlier than the first group
         grpSp({ id: 4, x: 5 * IN, y: 0, cx: 4 * IN, cy: 4 * IN }, squares(90, 200, TWO, 5)), // 71-160
+      {},
+      {},
+      true,
     );
     expect(s.classification.class).toBe('hybrid');
     expect(s.classification.art?.elements).toEqual(Array.from({ length: 90 }, (_, i) => 71 + i));
@@ -807,6 +852,9 @@ describe('the object budget: shapes of one look merged, then shapes to the art (
       group(2, squares(10, 10, TWO)) + // 0-9
         textBox(3, para(run('Words')), '', 0, 5) + // 10
         squares(150, 100, TWO, 0, 1), // 11-160
+      {},
+      {},
+      true,
     );
     expect(t.classification.class).toBe('hybrid');
     expect(t.classification.art?.elements).toEqual(
@@ -818,7 +866,7 @@ describe('the object budget: shapes of one look merged, then shapes to the art (
   it('marks nothing when even every element without text in the art leaves the slide over the budget', () => {
     let texts = '';
     for (let i = 0; i < MAX_SLIDE_OBJECTS; i++) texts += textBox(1000 + i, para(run('Text')), '', 0, 0);
-    const s = slideOf(group(2, squares(20, 10, TWO)) + texts);
+    const s = slideOf(group(2, squares(20, 10, TWO)) + texts, {}, {}, true);
     expect(s.classification.class).toBe('picture');
     expect(s.classification.reasons).toContain('budget:objects');
     expect(s.elements.some((e) => e.reasons?.includes('budget:shapes'))).toBe(false);

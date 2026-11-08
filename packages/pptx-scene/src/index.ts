@@ -11,7 +11,9 @@ import { classifySlide } from './classify.ts';
 import { slideContext } from './context.ts';
 import { type DeckInfo, readDeck, type SlideRef } from './deck.ts';
 import { readBackground } from './background.ts';
-import { bakeKey, type PictureBake } from './bake.ts';
+import { bakeKey, type PictureBake, type SheetBake, sheetKey } from './bake.ts';
+import { DECOR_PREFIX } from './decor.ts';
+import { SHEET_PREFIX } from './sheet.ts';
 import {
   BAKE_PREFIX,
   CLIP_PREFIX,
@@ -47,7 +49,11 @@ export {
   SLIDE_BYTES_NOTE,
   storedSlideBytes,
 } from './emit.ts';
-export type { BakeRaster, PictureBake, TileBake } from './bake.ts';
+export type { BakeRaster, PictureBake, SheetBake, SheetCell, TileBake } from './bake.ts';
+export { applySheet, cellSourceSize, checkSheet, SHEET_LIMITS } from './bake.ts';
+export { type BudgetPlan, MAX_DRAWN_OBJECTS, MAX_SLIDE_OBJECTS_TEXT } from './budget.ts';
+export { DECOR_PREFIX, type PlatePlan, platePlan } from './decor.ts';
+export { type EmittedSheet, SHEET_DENSITY, SHEET_PREFIX } from './sheet.ts';
 export type { EmittedClip } from './media.ts';
 export { type PictureHeader, pictureSize } from './picture.ts';
 export * from './ir.ts';
@@ -108,6 +114,14 @@ export interface ParseOptions {
    * family it has no face for is undefined, and its text is measured with estimated widths (noted).
    */
   fontFace?: FaceSource;
+  /**
+   * The fidelity harness's A/B only (`--budget-art`; never the hub): the slide budgets of M6 and M9 wave 1,
+   * which send tables, SmartArt drawings, real 3-D and shapes without text past the object budget to
+   * LibreOffice's art, instead of M9's native decorations, composites and atlases (`classify.ts`
+   * `ClassifyOptions.budgetArt`). Plan §4 names it an emit option; it is read here because a slide is
+   * classified as it is parsed.
+   */
+  budgetArt?: boolean;
 }
 
 /** Families, weights and slants `ParseOptions.fontFace` is asked for per call (a deck can name thousands). */
@@ -256,7 +270,7 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
       ctx.timing = readSlideTiming(ctx.slide);
       const elements = walkSlide(ctx);
       const background = readBackground(ctx);
-      const classification = classifySlide(ctx, elements, background);
+      const classification = classifySlide(ctx, elements, background, { budgetArt: opts.budgetArt === true });
       return {
         ...base,
         layoutPart: ctx.layoutPart,
@@ -352,13 +366,37 @@ export function convertDeck(src: PartSource, opts: ConvertOptions = {}): Convert
     }
     return id;
   };
+  // M9 (`decor-conv`): decoration files and sheets numbered across the call too (one per distinct one).
+  const decorIds = new Map<string, string>();
+  const decorId = (json: string) => {
+    let id = decorIds.get(json);
+    if (id === undefined) {
+      id = opts.decorId ? opts.decorId(json) : `${DECOR_PREFIX}${decorIds.size + 1}`;
+      decorIds.set(json, id);
+    }
+    return id;
+  };
+  const sheetIds = new Map<string, string>();
+  const sheetId = (bake: SheetBake) => {
+    const key = sheetKey(bake);
+    let id = sheetIds.get(key);
+    if (id === undefined) {
+      id = opts.sheetId ? opts.sheetId(bake) : `${SHEET_PREFIX}${sheetIds.size + 1}`;
+      sheetIds.set(key, id);
+    }
+    return id;
+  };
   const geoms = new Map<string, EmitResult['geoms'][number]>();
+  const decors = new Map<string, EmitResult['decors'][number]>();
+  const sheets = new Map<string, EmitResult['sheets'][number]>();
   const slides: EmittedSlide[] = [];
   for (const ref of r.refs) {
     const scene: DeckScene = { frame: r.frame, slides: [r.readSlide(ref)], sections: [], notes: [] };
-    const one = emitDeck(scene, { ...opts, newId, mediaId, clipId, bakeId, geomId });
+    const one = emitDeck(scene, { ...opts, newId, mediaId, clipId, bakeId, geomId, decorId, sheetId });
     slides.push(one.slides[0]!);
     for (const g of one.geoms) if (!geoms.has(g.id)) geoms.set(g.id, g);
+    for (const d of one.decors) if (!decors.has(d.id)) decors.set(d.id, d);
+    for (const b of one.sheets) if (!sheets.has(b.id)) sheets.set(b.id, b);
   }
   return {
     slides,
@@ -369,6 +407,8 @@ export function convertDeck(src: PartSource, opts: ConvertOptions = {}): Convert
     slideRect: slideRect(r.frame),
     notes: [...r.notes],
     geoms: [...geoms.values()],
+    decors: [...decors.values()],
+    sheets: [...sheets.values()],
     frame: r.frame,
     sections: r.deck.sections,
     listed: r.deck.slides,

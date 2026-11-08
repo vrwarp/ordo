@@ -8,10 +8,12 @@
  * Pure: values in, ordo objects out.
  */
 import type { ImageObject, Rgba as OrdoRgba, ShapeObject } from '@ordo/domain';
-import type { PictureBake } from './bake.ts';
+import type { PictureBake, SheetBake } from './bake.ts';
+import type { PlatePlan } from './decor.ts';
 import { boxPx } from './frame.ts';
 import type { Affine, Fill, Frame, Rgba } from './ir.ts';
 import type { EmittedClip } from './media.ts';
+import type { EmittedSheet } from './sheet.ts';
 
 /** Logical coordinates are bounded by the schema (`coord`). */
 export const MAX_COORD = 100_000;
@@ -79,6 +81,17 @@ export interface EmitCtx {
   libreoffice: boolean;
   /** M9: the stored fields the emission may write (`EmitOptions.m9Writes`, `writes`). */
   m9: ReadonlySet<M9Field>;
+  /**
+   * M9 (`decor-conv`, `sheet.ts`): the placeholder media id of a sheet (`pptxmedia:sheet<n>`, one per distinct
+   * recipe in the deck); undefined: no sheets in this emission (pictures are emitted one by one).
+   */
+  sheet?: (bake: SheetBake) => string;
+  /** M9: the sheets the slide uses so far (`EmittedSlide.sheets`). */
+  sheets?: EmittedSheet[];
+  /** M9: the picture part and recipe a placeholder media id stands for (a part's, a bake's). */
+  mediaPart?: (id: string) => { part: string; bake?: PictureBake } | undefined;
+  /** M9 (`decor-conv`): the slide's plate plan once it is emitted (`EmittedSlide.plate`). */
+  plate?: PlatePlan & { pastBudget: string[] };
 }
 
 /** Visible characters of a string (whitespace not counted). */
