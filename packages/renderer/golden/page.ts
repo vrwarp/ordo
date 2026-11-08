@@ -658,6 +658,7 @@ export const SAME_AS: Record<string, string> = {
   'image-shape-editor': 'image-shape',
   'edited-slide-output': 'edited-slide',
   'edited-slide-editor': 'edited-slide',
+  'table-vs-group': 'table-basic',
 };
 
 /** The faces the runner injects: each family is also registered directly under its own name. */

@@ -404,6 +404,30 @@ Limits: `TABLE_LIMITS` (256 rows, 64 columns, 4,096 grid slots, 10,000 character
 `drawnShapeFileRefs` for the geometry and decoration files a slide draws; `palette.ts` dedupes palettes.
 <!-- /m9:schema -->
 
+<!-- m9:tables-render -->
+**Tables: placement and edits** (`packages/domain/src/table.ts`, M9 tables-render). A table's cells have no
+coordinates: walking the grid row-major, each takes the next slot no earlier cell covers (`placeCells`; a span
+is cut where it would reach a covered slot or the grid's edge, cells past the grid are dropped). A cell is
+read and written as a rich text body: `cellRich(t, i)` gives `{ text, style, runs?, paras? }` with the style
+`cellTextStyle(base, styles[cell.style])` (no autofit: rows grow instead) and the runs expanded from
+`runStyles`; `setCell(o, i, body)` writes an edited body back into the palettes (`cellStyleOf`: the fields
+that differ from `base`). Ops on a table shape, each returning a new object or the same one when refused:
+
+```ts
+setCell(o, i, body);
+setCellFill(o, cells, color | null);
+insertRow(o, at, from);
+deleteRow(o, r);
+insertCol(o, at, from);
+deleteCol(o, c);
+gcTable(t); // palette entries nothing uses removed, indices renumbered (every op ends with it)
+```
+
+Row and column ops keep every slot covered once, grow or shrink the spans they cross, copy the source row's or
+column's size, cell styles, fills and lines, keep no line inside a merged cell, keep the table's width and add
+or remove a row's height to `box.h`; they refuse past `TABLE_LIMITS` and at the last row or column.
+<!-- /m9:tables-render -->
+
 ## Live state
 
 Owned by the hub (or the operator in fallback), produced by the pure reducer in

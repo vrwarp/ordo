@@ -2345,6 +2345,62 @@ SmartArt layouts) is measured with estimated widths: until the operator loads th
 the operator parsed can lay text out differently from one the hub parsed.
 <!-- /m9:rebase -->
 
+<!-- m9:tables-render -->
+**Built for M9 wave 2: the table object drawn and edited by ordo (tables-render track).** `ShapeObject.table`
+(the schema track's `TableData`) is laid out and drawn by the renderer, its cells edited by pure ops in the
+domain; the converter writes it from the tables-conv track on (until then nothing writes one).
+- **Model** (`domain/src/table.ts`): placement is implicit (row-major, each cell at the next slot no earlier
+  cell covers, a span cut at a covered slot or the grid's edge, cells past the grid dropped: `placeCells`,
+  O(grid)); a cell is drawn and edited as a rich text body (`cellRich`: `base` with its style entry over it,
+  never shrinking, its runs expanded from the run palette). `setCell` compacts an edited body back into the
+  palettes (the style's differences from `base`, each run's formatting), `setCellFill` fills cells, and
+  `insertRow`/`deleteRow`/`insertCol`/`deleteCol` work on the grid made explicit: spans across the row or
+  column grow or shrink, a new row or column copies its source's height or width, styles, fills and lines, no
+  line is kept inside a merged cell, the table keeps its width (columns rescaled) and a row adds or removes its
+  height to the box; every op removes palette entries nothing uses (`gcTable`) and refuses past `TABLE_LIMITS`
+  or at the last row or column. A property test runs 10,000 random ops. Not built (decision 4): the legacy
+  group, its digest (`tableShadows`) and 'Rebuild table from cells'.
+- **Clamp** (`renderer/src/clamp/table.ts`, by hand, as the rest of the render clamp, so a slide sent to a
+  worker again costs a fraction of a millisecond): palettes keep their indices (a malformed entry becomes an
+  empty one), an index naming no entry falls back (the base style, no fill, no line, no run), one
+  `FontBudget` for the whole table (16 families, 64 size scales), text ≤ 10,000 a cell and 60,000 a table
+  (later cells emptied), runs ≤ 2,000 a cell and 8,000 a table, edges in the grid with `from < to`, rows past
+  4,096 grid slots cut; a valid table comes out equal.
+- **Layout** (`renderer/src/table/layout.ts`), table-local logical px: columns `cols × box.w / Σcols` (column
+  0 on the right when `rtl`); rows at least `rows × box.h / Σrows`, grown to their single-row cells' needs
+  (the text's height at the cell's width less its insets, plus its top and bottom insets; an empty cell one
+  line of its style's size), then each merge's need beyond its rows added to its last row (LibreOffice's
+  `TableLayouter`, PowerPoint's growth); `rowRule: 'fixed'` keeps the stored rows and lets text overflow as
+  its anchor says. A cell's text is laid out once at the top of its cell and moved by its anchor (`dy`), as
+  `layoutBox` anchors a box. Each cell's layout is kept in a bounded cache by its content (text, runs,
+  paragraph styles, digests of its resolved style and of the run palette, width), and each whole table by its
+  content and box size: editing one cell lays out that cell, a slide sent to a worker again lays out nothing,
+  a master grid's 640 empty cells are one layout. Cells asking for vertical text are laid out horizontally
+  until wave 3 (editor-table wires the writing engine).
+- **Draw** (`table/draw.ts`, registered with the shape dispatch by importing the renderer): M6's order and
+  primitives, so the object draws what the M6 group drew wherever their rows agree (golden `table-vs-group`:
+  identical pixels): the background over the grown table, solid fills as one path of rects per fill (row
+  neighbours joined, largest first), gradient fills per cell, one stroke per line style (per direction when
+  there are several), each segment stretched by half the widest crossing line at its vertices (a per-vertex
+  array, linear where M6 compared every pair), none inside a merge, at least 0.5 px, dashed, then diagonals,
+  then each cell's text through `paintRich` at the device scale. Turned about the box's centre; drawn at its
+  opacity. A table the clamp drops draws the shape's legacy rect.
+- **Editor seams** (wave 3 builds the panel): `tableHit`/`tablePoint` (the cell under a slide point),
+  `cellText` (a cell's view as a text object), `TableLayout.height` (the drawn height).
+- **Preparation** (`apps/output/src/prepare/tables.ts`): the asset and thumbnail workers lay a slide's tables
+  out in 8 ms slices of the job's turns before the synchronous draw, which then lays out nothing.
+- **Measured** (`scratchpad m9/w2a/tables-render`, a shared 4-CPU machine; the converter writes no table yet,
+  so the exit's raster figures come from the raster bench's table cases, each drawn as the object and as its
+  M6 group, a fresh copy of the slide every job). Warm raster p50 / p95 ms at 1920 and 3840, object against
+  group, last run: 96-cell bulletin 4.6 / 11.9 and 15.5 / 16.5 against 6.6 / 12.5 and 17.8 / 41.7; 640-cell
+  master grid 4.1 / 6.3 and 16.2 / 21.2 against 4.2 / 6.8 and 16.7 / 18.7; 13,782-character chart 6.3 / 9.9
+  and 18.8 / 28.2 against 9.9 / 21.6 and 22.0 / 32.5 (three runs: the object's p50 is at or below the group's
+  in each). Preparation in Chromium, in words never measured before: the chart in one or two 8 ms slices
+  (longest 5.7 to 9.9 ms; a cold layout in one call 9 to 41 ms), the bulletin and the master grid in one of 1
+  to 11 ms; the prepared chart draws at 3840 in 24 to 32 ms: no task over 50 ms. The fuzz test of hostile
+  tables runs in about 1.2 s.
+<!-- /m9:tables-render -->
+
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)
 
 **Scope.**

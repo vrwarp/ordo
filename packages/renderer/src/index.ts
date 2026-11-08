@@ -22,3 +22,4 @@ export * from './shape.ts';
 export * from './effects.ts';
 export * from './spritecache.ts';
 export * from './geombudget.ts';
+export * from './table/index.ts';
