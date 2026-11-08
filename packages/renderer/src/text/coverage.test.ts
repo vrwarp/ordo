@@ -175,14 +175,21 @@ describe('glyph coverage', () => {
     const f = fakeFonts({});
     const cov = new GlyphCoverage(f.metrics, BLANK);
     cov.begin();
-    // CGJ, Hangul fillers, Mongolian FVS1, an invisible operator, a Khmer inherent vowel, a reserved
-    // ignorable, a shorthand format control, a musical format control, a variation selector supplement.
-    cov.note(
-      '40px o11111111',
-      '\u034F\u115F\u1160\u3164\uFFA0\u180B\u2064\u17B4\uFFF0\u{1BCA0}\u{1D173}\u{E0100}',
-    );
+    // CGJ, Mongolian FVS1, an invisible operator, a Khmer inherent vowel, a reserved ignorable, a musical
+    // format control, a variation selector supplement: all hidden by HarfBuzz.
+    cov.note('40px o11111111', '\u034F\u180B\u2064\u17B4\uFFF0\u{1D173}\u{E0100}');
     expect(cov.misses(cov.end())).toBe('');
     expect(f.calls).toEqual([]);
+  });
+
+  it('reports the default-ignorables a browser draws (Hangul fillers, shorthand format controls, U+180F)', () => {
+    const f = fakeFonts({});
+    const cov = new GlyphCoverage(f.metrics, BLANK);
+    cov.begin();
+    const drawn = '\u115F\u1160\u180F\u3164\uFFA0\u{1BCA0}\u{1BCA3}';
+    cov.note('40px o11111111', drawn);
+    expect(cov.misses(cov.end())).toBe(drawn);
+    expect(f.calls).not.toEqual([]);
   });
 
   it('notes nothing outside a draw, and nothing for text in a family that is not loaded', () => {

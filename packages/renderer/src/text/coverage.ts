@@ -88,6 +88,8 @@ function invisible(cp: number): boolean {
     (cp >= 0x2000 && cp <= 0x200f) ||
     (cp >= 0x2028 && cp <= 0x202f) ||
     (cp >= 0x205f && cp <= 0x206f) ||
+    // U+3000 must stay skipped: it is the one character Chromium draws with a system CJK face even when the
+    // blank face is alone in the stack, so the probe could not judge it.
     cp === 0x3000 ||
     (cp >= 0xfe00 && cp <= 0xfe0f) ||
     cp === 0xfeff ||
@@ -97,8 +99,23 @@ function invisible(cp: number): boolean {
   );
 }
 
-/** Drawn as nothing in every face (HarfBuzz hides them): never a miss, whatever the faces have. */
+/**
+ * Default-ignorable characters HarfBuzz hides (drawn as nothing in every face): never a miss, whatever the
+ * faces have. Not all of them are hidden: the Hangul fillers (U+115F, U+1160, U+3164, U+FFA0), the shorthand
+ * format controls (U+1BCA0..U+1BCA3) and U+180F are drawn like any character, so a face that lacks them shows
+ * the computer's fallback or a box, and they are probed (`drawnIgnorable`).
+ */
 const IGNORABLE = /\p{Default_Ignorable_Code_Point}/u;
+function drawnIgnorable(cp: number): boolean {
+  return (
+    cp === 0x115f ||
+    cp === 0x1160 ||
+    cp === 0x180f ||
+    cp === 0x3164 ||
+    cp === 0xffa0 ||
+    (cp >= 0x1bca0 && cp <= 0x1bca3)
+  );
+}
 
 const LATIN = /\p{Script=Latin}/u;
 const EMOJI = /\p{Extended_Pictographic}/u;
@@ -282,7 +299,7 @@ export class GlyphCoverage {
    */
   #probe(key: string, cp: number): boolean | undefined {
     const ch = String.fromCodePoint(cp);
-    if (IGNORABLE.test(ch)) return true;
+    if (IGNORABLE.test(ch) && !drawnIgnorable(cp)) return true;
     const blank = this.#blank;
     if (!blank.ready) return undefined;
     const bar = key.indexOf('|');

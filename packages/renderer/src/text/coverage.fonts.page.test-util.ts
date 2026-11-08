@@ -81,9 +81,14 @@ export async function checks(set: FontFaceSet, font: ArrayBuffer): Promise<Probe
       expected: [sorted(MISSING), sorted(MISSING), sorted(MISSING)].join('|'),
     },
     {
-      name: 'default-ignorable and zero-width characters are never reported',
-      uncovered: read(`700 48px ${stack}`, '­͏ᅟᅠㅤﾠ᠋​‌‍⁠⁤️\u{E0041}\u{E0100}\u{1D173}\u{1BCA0}'),
+      name: 'default-ignorable and zero-width characters HarfBuzz hides are never reported',
+      uncovered: read(`700 48px ${stack}`, '­͏᠋​‌‍⁠⁤️\u{E0041}\u{E0100}\u{1D173}'),
       expected: '',
+    },
+    {
+      name: 'default-ignorables a browser draws are reported when no face has them',
+      uncovered: read(`700 48px ${stack}`, 'ᅟᅠㅤﾠ\u{1BCA0}'),
+      expected: sorted('ᅟᅠㅤﾠ\u{1BCA0}'),
     },
     {
       name: 'mixed text: only what no face has',
