@@ -6,13 +6,21 @@ import { textScripts } from '@ordo/domain';
  *
  * `FontFaceSet.check` cannot tell: it says whether the matching faces have loaded, not whether one has the
  * glyph. So each character is measured with the drawn stack's shipped faces (the resolver's internal names,
- * `o` + 8 hex digits) before two different generic families, and with each generic alone. Where a shipped
- * face has the glyph, the two stacks draw it with that face and at least one of them differs from its
- * generic alone (the advance and the ink box are compared). Where none has it, each stack falls through to
- * its generic, glyph for glyph, and both equal their generic exactly.
+ * `o` + 8 hex digits) before ordo's blank face (blankface.ts), and with the blank face alone. The blank face
+ * maps every code point to an empty glyph of no advance: where a shipped face has the glyph, the stack draws
+ * it with that face and differs from the blank alone (the advance and the ink box are compared, so a mark of
+ * no advance is told by its ink); where none has it, the character lands on the blank face and measures as
+ * nothing, exactly as the blank alone. The computer's own fonts are never reached, so the verdict is the
+ * same on every computer: a generic family or the system fallback would answer with whatever faces the
+ * computer has (where none has the character, the .notdef box of the stack's first family, which is not the
+ * generic's own).
+ *
+ * Until the blank face has loaded nothing has a verdict, and nothing is reported (`BlankFace.loaded`; the
+ * asset worker waits for it before probing). Default-ignorable characters draw nothing in any face and are
+ * never reported, like spaces and controls.
  *
  * What is drawn is noted by wrapping a context's `fillText` and `strokeText` (`instrument`), so the drawers
- * themselves are unchanged. A character is probed once per stack, style and weight (four `measureText` on a
+ * themselves are unchanged. A character is probed once per stack, style and weight (two `measureText` on a
  * 1x1 canvas), and the verdicts are kept until the faces change (`reset`): a slide drawn again costs a set
  * lookup per character. Text whose stack holds no shipped face is not probed: its family is not loaded,
  * which `fontFallbacks` reports.
@@ -33,6 +41,9 @@ export type ShippedStack = { style: string; weight: string; faces: string[] };
 
 /** What one draw drew: the characters of each stack it used. Resolved by `GlyphCoverage.misses`. */
 export type DrawnText = Map<string, Set<number>>;
+
+/** The blank face the probe ends its stacks with (`registerBlankFace`): no verdict before it is ready. */
+export type ProbeBlank = { readonly family: string; readonly ready: boolean };
 
 const INTERNAL = /^o[0-9a-f]{8}$/;
 const SIZE = /^(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?px(?:\/\S+)?$/i;
@@ -86,6 +97,9 @@ function invisible(cp: number): boolean {
   );
 }
 
+/** Drawn as nothing in every face (HarfBuzz hides them): never a miss, whatever the faces have. */
+const IGNORABLE = /\p{Default_Ignorable_Code_Point}/u;
+
 const LATIN = /\p{Script=Latin}/u;
 const EMOJI = /\p{Extended_Pictographic}/u;
 const INHERITED = /\p{Script=Inherited}/u;
@@ -120,6 +134,7 @@ const DEFAULT_LIMITS: CoverageLimits = { maxStacks: 256, maxVerdicts: 50_000, ma
 
 export class GlyphCoverage {
   readonly #metrics: GlyphMetrics;
+  readonly #blank: ProbeBlank;
   readonly #limits: CoverageLimits;
   /** Probe stacks by the drawn font string (null: no shipped face). */
   readonly #stacks = new Map<string, string | null>();
@@ -128,8 +143,9 @@ export class GlyphCoverage {
   #count = 0;
   #open: DrawnText | null = null;
 
-  constructor(metrics: GlyphMetrics, limits: Partial<CoverageLimits> = {}) {
+  constructor(metrics: GlyphMetrics, blank: ProbeBlank, limits: Partial<CoverageLimits> = {}) {
     this.#metrics = metrics;
+    this.#blank = blank;
     this.#limits = { ...DEFAULT_LIMITS, ...limits };
   }
 
@@ -190,7 +206,7 @@ export class GlyphCoverage {
 
   /**
    * The characters of `drawn` that no shipped face of their stack covers, in code point order, at most
-   * `max`. Characters not probed yet are probed now.
+   * `max`. Characters not probed yet are probed now; before the blank face is ready none is reported.
    */
   misses(drawn: DrawnText, max = 64): string {
     const out = new Set<number>();
@@ -199,6 +215,7 @@ export class GlyphCoverage {
         let ok = this.#verdicts.get(key)?.get(cp);
         if (ok === undefined) {
           ok = this.#probe(key, cp);
+          if (ok === undefined) continue; // no verdict yet: not reported
           this.#keep(key, cp, ok);
         }
         if (!ok) out.add(cp);
@@ -207,19 +224,22 @@ export class GlyphCoverage {
   }
 
   /**
-   * Probe at most `max` characters of `drawn` that have no verdict yet (four `measureText` each); true once
-   * every character has one, so `misses` is then only lookups. The asset worker probes a job's text in
-   * slices of its own (32 characters each) after the picture is sent: text in a script seen for the first
-   * time (40 new Han characters cost about 15 ms) never makes one long slice that a props job waits behind.
-   * `max` 0 only says whether everything has a verdict (lookups).
+   * Probe at most `max` characters of `drawn` that have no verdict yet (two `measureText` each); true once
+   * every character has one, so `misses` is then only lookups, and true while the blank face is not ready
+   * (nothing can be probed yet). The asset worker probes a job's text in slices of its own (32 characters
+   * each) after the picture is sent: text in a script seen for the first time (40 new Han characters cost
+   * about 1.5 ms) never makes one long slice that a props job waits behind. `max` 0 only says whether
+   * everything has a verdict (lookups).
    */
   probeSome(drawn: DrawnText, max: number): boolean {
+    if (!this.#blank.ready) return true;
     let left = Math.max(0, Math.floor(max));
     for (const [key, cps] of drawn)
       for (const cp of cps) {
         if (this.#verdicts.get(key)?.get(cp) !== undefined) continue;
         if (left-- <= 0) return false;
-        this.#keep(key, cp, this.#probe(key, cp));
+        const ok = this.#probe(key, cp);
+        if (ok !== undefined) this.#keep(key, cp, ok);
       }
     return true;
   }
@@ -256,23 +276,26 @@ export class GlyphCoverage {
     this.#count++;
   }
 
-  /** Whether a shipped face of the probe stack `key` has a glyph for `cp`. */
-  #probe(key: string, cp: number): boolean {
+  /**
+   * Whether a shipped face of the probe stack `key` has a glyph for `cp`: the stack before the blank face
+   * measures otherwise than the blank face alone. Undefined (no verdict) while the blank face is not ready.
+   */
+  #probe(key: string, cp: number): boolean | undefined {
+    const ch = String.fromCodePoint(cp);
+    if (IGNORABLE.test(ch)) return true;
+    const blank = this.#blank;
+    if (!blank.ready) return undefined;
     const bar = key.indexOf('|');
     const head = `${key.slice(0, bar)} ${PROBE_PX}px`;
     const faces = key.slice(bar + 1);
-    const ch = String.fromCodePoint(cp);
     const m = this.#metrics;
-    const same = (a: ArrayLike<number>, b: ArrayLike<number>) => {
-      if (a.length !== b.length) return false;
-      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-      return true;
-    };
     try {
-      return !(
-        same(m(`${head} ${faces}, serif`, ch), m(`${head} serif`, ch)) &&
-        same(m(`${head} ${faces}, monospace`, ch), m(`${head} monospace`, ch))
-      );
+      // Copied: a metrics function may hand back the same buffer each time.
+      const stack = Array.from(m(`${head} ${faces}, ${blank.family}`, ch));
+      const alone = m(`${head} ${blank.family}`, ch);
+      if (stack.length !== alone.length) return true;
+      for (let i = 0; i < stack.length; i++) if (stack[i] !== alone[i]) return true;
+      return false;
     } catch {
       return true; // nothing to say: never report a miss the probe could not see
     }
@@ -280,8 +303,8 @@ export class GlyphCoverage {
 }
 
 /**
- * Metrics from a 2D context (a 1x1 OffscreenCanvas of the drawer's own): the advance and the ink box,
- * which differ between two faces' glyphs even where the advances agree (every CJK glyph is 1 em wide).
+ * Metrics from a 2D context (a 1x1 OffscreenCanvas of the drawer's own): the advance and the ink box. The
+ * blank face's glyph has neither; a shipped glyph has an advance or ink (a combining mark has no advance).
  */
 export function contextMetrics(ctx: { font: string; measureText(text: string): TextMetrics }): GlyphMetrics {
   const out = new Float64Array(5);

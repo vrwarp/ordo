@@ -1,10 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { GlyphCoverage, type TextContext, coverageScripts, shippedStack } from './coverage.ts';
+import {
+  GlyphCoverage,
+  type ProbeBlank,
+  type TextContext,
+  coverageScripts,
+  shippedStack,
+} from './coverage.ts';
+
+/** The blank face as the probe sees it (`registerBlankFace`), loaded. */
+const BLANK = { family: '"o-blank-0badf00d"', ready: true } satisfies ProbeBlank;
 
 /**
- * A browser's font fallback in miniature: each family covers some characters, the generics cover all of
- * them. A character is measured in the first family of the stack that covers it, and its metrics are that
- * family's (the advance and an ink box), so a stack that falls through measures like the generic alone.
+ * A browser's font fallback in miniature: each family covers some characters and the blank face covers all
+ * of them with an empty glyph of no advance. A character is measured in the first family of the stack that
+ * covers it, and its metrics are that family's (the advance and an ink box). A stack that falls through
+ * every family gets the computer's own answer, which depends on the stack's first family (Chromium draws
+ * the .notdef box of the first family where no face has the character).
  */
 function fakeFonts(covers: Record<string, string>) {
   const calls: string[] = [];
@@ -15,11 +26,10 @@ function fakeFonts(covers: Record<string, string>) {
       .split(',')
       .map((f) => f.trim());
     for (const [i, f] of list.entries()) {
-      if (f === 'serif') return [10, 0, 10, 7, 0];
-      if (f === 'monospace') return [20, 0, 20, 7, 0];
+      if (f === BLANK.family) return [0, 0, 0, 0, 0];
       if (covers[f]?.includes(text)) return [100 + i, 1, 90, 70, 2];
     }
-    return [0, 0, 0, 0, 0];
+    return [list[0]!.length, 0, list[0]!.length, 7, 0];
   };
   return { metrics, calls };
 }
@@ -68,7 +78,7 @@ describe('shipped stacks of a drawn font string', () => {
 describe('glyph coverage', () => {
   it('reports what no shipped face covers, once probed per stack', () => {
     const f = fakeFonts({ o11111111: 'abc', o22222222: 'xyz' });
-    const cov = new GlyphCoverage(f.metrics);
+    const cov = new GlyphCoverage(f.metrics, BLANK);
     const ctx = recorder('bold 40px o11111111, o22222222, Inter, sans-serif');
     cov.instrument(ctx);
     cov.begin();
@@ -78,8 +88,8 @@ describe('glyph coverage', () => {
     expect(ctx.drawn).toEqual(['fill:ab x☧ c', 'stroke:ab x☧ c']); // drawing itself unchanged
     expect(cov.misses(drawn)).toBe('☧');
     const probes = f.calls.length;
-    // a, b, x and c: two measures each (the first pair differs); ☧: all four. The space is skipped.
-    expect(probes).toBe(4 * 2 + 4);
+    // a, b, x, c and ☧: two measures each (the stack, the blank face alone). The space is skipped.
+    expect(probes).toBe(5 * 2);
     // The same characters at another size and on another draw: no probe again.
     ctx.font = 'bold 72px o11111111, o22222222, Inter, sans-serif';
     cov.begin();
@@ -90,7 +100,7 @@ describe('glyph coverage', () => {
 
   it('probes a bounded number of new characters per call (slices of the asset worker)', () => {
     const f = fakeFonts({ o11111111: 'abcdefgh' });
-    const cov = new GlyphCoverage(f.metrics);
+    const cov = new GlyphCoverage(f.metrics, BLANK);
     const ctx = recorder('40px o11111111, sans-serif');
     cov.instrument(ctx);
     cov.begin();
@@ -109,38 +119,75 @@ describe('glyph coverage', () => {
     expect(f.calls.length).toBe(probes); // misses after probeSome: lookups only
   });
 
-  it('probes with the stack, the style and the weight, before two generics and each alone', () => {
+  it('probes with the stack, the style and the weight, before the blank face and the blank face alone', () => {
     const f = fakeFonts({ o11111111: 'a' });
-    const cov = new GlyphCoverage(f.metrics);
+    const cov = new GlyphCoverage(f.metrics, BLANK);
     cov.begin();
-    cov.note('italic 300 12px o11111111, sans-serif', 'a');
-    expect(cov.misses(cov.end())).toBe('');
-    expect(f.calls).toEqual(['italic 300 100px o11111111, serif|a', 'italic 300 100px serif|a']);
-    f.calls.length = 0;
-    cov.begin();
-    cov.note('italic 300 12px o11111111, sans-serif', 'b');
+    cov.note('italic 300 12px o11111111, o22222222, sans-serif', 'ab');
     expect(cov.misses(cov.end())).toBe('b');
-    expect(f.calls.map((c) => c.replace('|b', ''))).toEqual([
-      'italic 300 100px o11111111, serif',
-      'italic 300 100px serif',
-      'italic 300 100px o11111111, monospace',
-      'italic 300 100px monospace',
+    expect(f.calls).toEqual([
+      'italic 300 100px o11111111, o22222222, "o-blank-0badf00d"|a',
+      'italic 300 100px "o-blank-0badf00d"|a',
+      'italic 300 100px o11111111, o22222222, "o-blank-0badf00d"|b',
+      'italic 300 100px "o-blank-0badf00d"|b',
     ]);
   });
 
-  it('a face that matches one generic is still told apart by the other', () => {
-    // The shipped face has the glyph with exactly the serif's metrics (the same font file).
-    const cov = new GlyphCoverage((font) =>
-      /o1|serif/.test(font.split('px ')[1]!.split(',')[0]!) ? [10] : [20],
+  it("never asks the computer's fonts, whose answer depends on the stack's first family", () => {
+    // What the probe of two generic families got wrong on a computer with no face for these characters:
+    // each stack fell through to a .notdef box of its first family, so the shipped stack differed from its
+    // generic alone and the characters passed for covered.
+    const f = fakeFonts({ o11111111: 'Grace' });
+    const cov = new GlyphCoverage(f.metrics, BLANK);
+    cov.begin();
+    cov.note('700 64px o11111111, Inter, sans-serif', 'Grace 中文 ก 🕊');
+    expect(cov.misses(cov.end())).toBe('ก中文🕊');
+    expect(f.metrics('700 100px o11111111, serif', '中')).not.toEqual(f.metrics('700 100px serif', '中'));
+  });
+
+  it('tells a covered mark of no advance by its ink', () => {
+    const cov = new GlyphCoverage(
+      (font) => (font.includes('o11111111') ? [0, -8, 30, 80, -60] : [0, 0, 0, 0, 0]),
+      BLANK,
     );
     cov.begin();
-    cov.note('40px o11111111', 'q');
+    cov.note('40px o11111111', '\u0301');
     expect(cov.misses(cov.end())).toBe('');
+  });
+
+  it('gives no verdict and reports nothing before the blank face is ready', () => {
+    const f = fakeFonts({ o11111111: 'a' });
+    const blank = { family: BLANK.family, ready: false };
+    const cov = new GlyphCoverage(f.metrics, blank);
+    cov.begin();
+    cov.note('40px o11111111', 'a中');
+    const drawn = cov.end();
+    expect(cov.probeSome(drawn, 8)).toBe(true); // nothing can be probed yet
+    expect(cov.misses(drawn)).toBe('');
+    expect(f.calls).toEqual([]);
+    blank.ready = true; // loaded: the same text is probed now, nothing was kept before
+    expect(cov.probeSome(drawn, 0)).toBe(false);
+    expect(cov.misses(drawn)).toBe('中');
+    expect(f.calls).toHaveLength(4);
+  });
+
+  it('never reports default-ignorable characters, nor measures them', () => {
+    const f = fakeFonts({});
+    const cov = new GlyphCoverage(f.metrics, BLANK);
+    cov.begin();
+    // CGJ, Hangul fillers, Mongolian FVS1, an invisible operator, a Khmer inherent vowel, a reserved
+    // ignorable, a shorthand format control, a musical format control, a variation selector supplement.
+    cov.note(
+      '40px o11111111',
+      '\u034F\u115F\u1160\u3164\uFFA0\u180B\u2064\u17B4\uFFF0\u{1BCA0}\u{1D173}\u{E0100}',
+    );
+    expect(cov.misses(cov.end())).toBe('');
+    expect(f.calls).toEqual([]);
   });
 
   it('notes nothing outside a draw, and nothing for text in a family that is not loaded', () => {
     const f = fakeFonts({});
-    const cov = new GlyphCoverage(f.metrics);
+    const cov = new GlyphCoverage(f.metrics, BLANK);
     const ctx = recorder('40px o11111111');
     cov.instrument(ctx);
     cov.instrument(ctx); // once
@@ -155,7 +202,7 @@ describe('glyph coverage', () => {
 
   it('skips spaces, controls, joiners and variation selectors', () => {
     const f = fakeFonts({});
-    const cov = new GlyphCoverage(f.metrics);
+    const cov = new GlyphCoverage(f.metrics, BLANK);
     cov.begin();
     cov.note('40px o11111111', ' \t ‍‏️　 ﻿');
     expect(cov.misses(cov.end())).toBe('');
@@ -165,7 +212,7 @@ describe('glyph coverage', () => {
   it('forgets every verdict when the faces change, and stays within its bounds', () => {
     const covers: Record<string, string> = { o11111111: '' };
     const f = fakeFonts(covers);
-    const cov = new GlyphCoverage(f.metrics, { maxVerdicts: 3, maxPerDraw: 2 });
+    const cov = new GlyphCoverage(f.metrics, BLANK, { maxVerdicts: 3, maxPerDraw: 2 });
     cov.begin();
     cov.note('40px o11111111', 'αβγδ');
     expect(cov.misses(cov.end())).toBe('αβ'); // two characters per draw
@@ -185,14 +232,14 @@ describe('glyph coverage', () => {
   it('never reports a miss its probe could not measure', () => {
     const cov = new GlyphCoverage(() => {
       throw new Error('no canvas');
-    });
+    }, BLANK);
     cov.begin();
     cov.note('40px o11111111', '中');
     expect(cov.misses(cov.end())).toBe('');
   });
 
   it('caps what one report lists, in code point order', () => {
-    const cov = new GlyphCoverage(fakeFonts({}).metrics);
+    const cov = new GlyphCoverage(fakeFonts({}).metrics, BLANK);
     cov.begin();
     cov.note('40px o11111111', 'zyxwv');
     expect(cov.misses(cov.end(), 3)).toBe('vwx');

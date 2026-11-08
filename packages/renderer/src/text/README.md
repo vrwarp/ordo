@@ -321,7 +321,9 @@ Paint passes and the dispatch of §6. **Done** (wave 1):
   domain's `resolve.test.ts`, the link's late-font refresh, and `pnpm --filter @ordo/renderer late-font`: in
   headless Chromium, in a worker and on a page, text drawn before its face loaded (after a failed read and a
   retry; through a later sync) is drawn with the face on the next draw, with the face's widths and pixels.
-- Not built: the per-script coverage report. `FontFaceSet.check` says whether the matching faces have
-  loaded, not whether one has the glyphs, so it cannot find text no shipped face covers; M3, which ships the
-  script fallbacks, measures the text with the shipped stack before two different generic families instead
-  (the widths differ where a glyph falls through).
+- Coverage (M7, `coverage.ts`): `FontFaceSet.check` says whether the matching faces have loaded, not
+  whether one has the glyphs, so it cannot find text no shipped face covers. `GlyphCoverage` measures each
+  drawn character with the shipped stack before ordo's blank face (`blankface.ts`: every code point on an
+  empty glyph of no advance) and with the blank face alone; they differ where a shipped face has the glyph.
+  The computer's own fonts are never asked, so the verdict is the same on every computer
+  (`coverage.browser.test.ts`, `coverage.fonts.browser.test.ts`).

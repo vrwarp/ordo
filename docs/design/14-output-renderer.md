@@ -637,17 +637,22 @@ machine's own fallback face drew them (another shape on every computer, or a box
 and their scripts (ISO 15924; Zsye emoji, Zyyy symbols). The asset worker wraps its surface's `fillText` and
 `strokeText` (`GlyphCoverage.instrument`, `packages/renderer/src/text/coverage.ts`), so the drawers are
 unchanged, and after each job's picture is sent probes each new character once per stack, style and weight,
-in slices of its own of 32 characters (`GlyphCoverage.probeSome`; 40 new Han characters cost about 15 ms,
+in slices of its own of 32 characters (`GlyphCoverage.probeSome`; 40 new Han characters cost about 1.5 ms,
 which a props job then never waits behind; characters seen before are lookups, no slice):
-measured with the stack's shipped faces (the resolver's internal names) before `serif` and before
-`monospace`, and with each generic alone; where no shipped face has the glyph both stacks fall through and
-equal their generic exactly (advance and ink box). `self.fonts.check` cannot tell: it says whether faces have
-loaded, not whether one has the glyph. Text whose family is not loaded is a font fallback and is not probed
-glyph by glyph. Verdicts are kept until the faces change; a face that loads draws again in place the held
-slides that had uncovered characters, as for a fallback family. Each new character is logged once per service
-with its code point (`no font on this output has 1 character(s) of sl|…: ☧ (U+2627; Zyyy)`).
-`coverage.browser.test.ts` draws legacy and rich text with DejaVu Sans in a worker of headless Chromium and
-requires exactly DejaVu's missing characters, whatever fonts the machine has.
+measured with the stack's shipped faces (the resolver's internal names) before ordo's blank face, and with
+the blank face alone. The blank face (`text/blankface.ts`, built in memory and registered in the worker's
+face set under a name no font string holds) maps every code point to an empty glyph of no advance, so where
+no shipped face has the glyph the stack equals the blank face alone exactly (advance and ink box), and the
+computer's own fonts, whose answer depends on what the computer has, are never asked. Nothing is probed
+before the blank face has loaded; default-ignorable characters are never reported. `self.fonts.check` cannot
+tell: it says whether faces have loaded, not whether one has the glyph. Text whose family is not loaded is a
+font fallback and is not probed glyph by glyph. Verdicts are kept until the faces change; a face that loads
+draws again in place the held slides that had uncovered characters, as for a fallback family. Each new
+character is logged once per service with its code point (`no font on this output has 1 character(s) of sl|…:
+☧ (U+2627; Zyyy)`). `coverage.browser.test.ts` draws legacy and rich text with DejaVu Sans in a worker of
+headless Chromium and requires exactly DejaVu's missing characters, whatever fonts the machine has;
+`coverage.fonts.browser.test.ts` runs the same cases under two fontconfigs of its own (no face for the
+characters, and generated CJK and Thai faces that the generic families resolve to).
 
 **In the operator** (`apps/operator/src/lib/health.ts`, `outputIssues`). Each issue has a level. A performance
 alarm is a warning: the output's dot in the top bar turns amber, its tooltip says what it means in plain

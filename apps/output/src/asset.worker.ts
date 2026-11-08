@@ -30,6 +30,7 @@ import {
   opaqueColor,
   propsReach,
   readGeomFiles,
+  registerBlankFace,
   rasterImage,
   rasterLowerThird,
   rasterProps,
@@ -109,6 +110,10 @@ fonts.onChange((c) => {
 // Font coverage (design/27 §10): the characters a job drew that no face of this worker covers, so the
 // machine's own fallback face drew them. The drawing surface's text calls are noted (`measuring`) and probed
 // on a 1x1 canvas of their own after the job's picture is sent; verdicts are kept until the faces change.
+// The probe measures each character with the stack's faces before ordo's blank face, which every code point
+// lands on as nothing, so its verdict never depends on the fonts this computer has (blankface.ts). It is
+// registered once here, beside the resolver's faces and under a name no font string holds.
+const blank = registerBlankFace(scope.fonts);
 let probe: ((font: string, text: string) => ArrayLike<number>) | null = null;
 const coverage = new GlyphCoverage((font, text) => {
   if (!probe) {
@@ -117,7 +122,7 @@ const coverage = new GlyphCoverage((font, text) => {
     probe = contextMetrics(c);
   }
   return probe(font, text);
-});
+}, blank);
 fonts.onChange(() => coverage.reset());
 
 const lanes = new Lanes();
@@ -502,15 +507,20 @@ async function run(job: AssetJob, steps: Steps): Promise<void> {
   }
 }
 
-/** Characters probed per slice for coverage (about 12 ms for new Han characters on this container). */
+/** Characters probed per slice for coverage (about 1.5 ms for new Han characters on this container). */
 const PROBE_CHARS = 32;
 /** Probe slices per job at most; what is left is probed in the last one. */
 const PROBE_SLICES = 256;
 
-/** The characters of a job's text no face covers, probed in slices of PROBE_CHARS after it was sent. */
+/**
+ * The characters of a job's text no face covers, probed in slices of PROBE_CHARS after it was sent. Nothing
+ * has a verdict before the blank face has loaded (once, as the worker starts): a job drawn before then waits
+ * for it, so its characters are still reported; a blank face that could not load reports nothing.
+ */
 async function probeCoverage(timing: DrawTiming, steps: Steps): Promise<string> {
   const text = timing.text;
   if (!text?.size) return '';
+  if (!(await blank.loaded)) return '';
   // Characters seen before have their verdicts: lookups only, no slice.
   if (coverage.probeSome(text, 0)) return coverage.misses(text, MAX_UNCOVERED);
   for (let i = 0; i < PROBE_SLICES; i++)

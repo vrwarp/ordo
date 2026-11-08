@@ -1,13 +1,14 @@
 import { DEFAULT_LYRIC_STYLE, LOOK_MAIN, type Slide, type TextStyle } from '@ordo/domain';
 import { rasterSlide } from '../raster.ts';
+import { registerBlankFace } from './blankface.ts';
 import { GlyphCoverage, contextMetrics } from './coverage.ts';
 import { FontResolver, installFontEnv } from './fonts.ts';
 
 /**
  * Browser side of coverage.browser.test.ts: in a dedicated worker, as the outputs' asset worker does, with
- * the font resolver installed and one face (DejaVu Sans) registered as the family 'Bench'. Slides are drawn
- * with `rasterSlide` on an instrumented, CPU-backed canvas, legacy and rich text, and the characters no face
- * covers are read back, as the asset worker reports them.
+ * the font resolver installed, one face (DejaVu Sans) registered as the family 'Bench' and the probe's blank
+ * face loaded. Slides are drawn with `rasterSlide` on an instrumented, CPU-backed canvas, legacy and rich
+ * text, and the characters no face covers are read back, as the asset worker reports them.
  */
 
 export type CoverageCase = { name: string; uncovered: string; expected: string };
@@ -52,8 +53,10 @@ export async function run(set: FontFaceSet, font: ArrayBuffer): Promise<Coverage
     { family: 'Bench', weight: 700, style: 'normal', hash: 'regular' },
   ]);
   installFontEnv(resolver);
+  const blank = registerBlankFace(set);
+  if (!(await blank.loaded)) throw new Error('the blank face did not load');
   const probe = new OffscreenCanvas(1, 1).getContext('2d')!;
-  const coverage = new GlyphCoverage(contextMetrics(probe));
+  const coverage = new GlyphCoverage(contextMetrics(probe), blank);
   const canvas = new OffscreenCanvas(960, 540);
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
   coverage.instrument(ctx);
