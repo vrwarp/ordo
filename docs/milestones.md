@@ -90,8 +90,10 @@ login page and lockout behaviour; first live service scheduled.
 ## After the first service
 
 Candidates, not commitments: WebCodecs decode path if telemetry warrants; Planning
-Center; Bible provider; phone remote; outputs on separate machines; auto-shrink and RTL
-text; per-object builds; cloud sync and user accounts.
+Center; Bible provider; phones for the week (viewing the library and light changes, phases
+P0 to P3 of [design/28](design/28-mobile.md)); a phone remote (design/28 §11 "Not now");
+outputs on separate machines; auto-shrink and RTL text; per-object builds; cloud sync and
+user accounts.
 
 ## Implementation status
 

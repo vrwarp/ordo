@@ -38,6 +38,7 @@ an ADR.
 | [prd/07-control-surfaces.md](prd/07-control-surfaces.md)                 | Keyboard, Stream Deck, MIDI with learn                                              |
 | [prd/08-reliability.md](prd/08-reliability.md)                           | Zero dropped frames, offline continuation, health, recovery, ProPresenter fallback  |
 | [prd/09-security-and-remote-prep.md](prd/09-security-and-remote-prep.md) | Public exposure, PINs, output tokens, editing from home, live lock                  |
+| [prd/10-mobile.md](prd/10-mobile.md)                                     | Phones outside the service: viewing the library, light changes, safety, access      |
 
 ### Technical design
 
@@ -72,6 +73,7 @@ an ADR.
 | [design/25-isolation-and-hardening.md](design/25-isolation-and-hardening.md) | Worker isolation, supervision, validation and quarantine; phased plan                                                |
 | [design/26-pages-demo.md](design/26-pages-demo.md)                           | The GitHub Pages demo: the apps with a service-worker hub, ProPresenter import in the browser                        |
 | [design/27-pptx-native-renderer.md](design/27-pptx-native-renderer.md)       | Native PowerPoint slides: editable ordo objects, own text engine, video in place, LibreOffice per-slide fallback     |
+| [design/28-mobile.md](design/28-mobile.md)                                   | Phones for the week: library and previews, light edits, capped sessions, readiness, offline, phases P0 to P3         |
 
 ## Glossary
 
