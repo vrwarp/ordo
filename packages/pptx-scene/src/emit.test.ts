@@ -7,6 +7,7 @@ import {
   legacyColor,
   MAX_SLIDE_BYTES,
   SLIDE_BUDGET_NOTE,
+  TEXT_BUDGET_BYTES,
   marginOf,
   overWhite,
   placePicture,
@@ -974,8 +975,8 @@ describe('placement', () => {
     expect(insetBox({ x: 0, y: 0, w: 10, h: 10, rotation: 0 }, 20, 0, 20, 0).w).toBe(0);
   });
 
-  it('writes formatting within the slide budget, then plain text, and classes the slide picture', () => {
-    // 40 boxes of 300 differently coloured runs each: far past 64 KB of formatting.
+  it('writes formatting within the text budget, then plain text, and keeps the class (M9: never a picture)', () => {
+    // 40 boxes of 300 differently coloured runs each: far past 128 KB of formatting.
     const colors = ['FF0000', '00FF00'];
     const runs = Array.from({ length: 300 }, (_, i) => run(`w${i} `, '', solid(colors[i % 2]!))).join('');
     const box = (id: number) => sp({ id, x: 0, y: 0, cx: IN, cy: IN, txBody: body(para(runs)) });
@@ -986,15 +987,16 @@ describe('placement', () => {
     expect(texts).toHaveLength(40);
     const formatted = texts.filter((t) => t.runs);
     expect(formatted.length).toBeGreaterThan(0);
-    expect(formatted.length).toBeLessThan(10);
+    expect(formatted.length).toBeLessThan(20);
     // The rest keep their text and box style.
     expect(texts.at(-1)!.text).toBe(texts[0]!.text);
     expect(texts.at(-1)!.runs).toBeUndefined();
-    expect(JSON.stringify(s.slide).length).toBeLessThan(MAX_SLIDE_BYTES + 40 * 2_000);
-    expect(s.classification.class).toBe('picture');
-    expect(s.classification.reasons.join(' ')).toMatch(/KB of text formatting/);
+    expect(JSON.stringify(s.slide).length).toBeLessThan(TEXT_BUDGET_BYTES + 40 * 2_000);
+    expect(JSON.stringify(s.slide).length).toBeGreaterThan(MAX_SLIDE_BYTES);
+    // No budget makes a picture (M9): the class stays, the importer's ladder fits the flagged slide.
+    expect(s.classification.class).toBe('native');
+    expect(s.classification.reasons.join(' ')).not.toMatch(/KB/);
     expect(s.notes).toContain(SLIDE_BUDGET_NOTE);
-    // The budget alone made it picture class: an importer counts it as its own slide budget does.
     expect(s.overBudget).toBe(true);
     // A slide within the budget is untouched.
     const small = emitSlides(parseDeck(buildDeck({ slides: [{ shapes: box(2) }] }))).slides[0]!;
@@ -1007,7 +1009,7 @@ describe('placement', () => {
     ).join('');
     const crowded = emitSlides(parseDeck(buildDeck({ slides: [{ shapes: many }] }))).slides[0]!;
     expect(crowded.classification.class).toBe('picture');
-    expect(crowded.classification.reasons.join(' ')).toMatch(/KB of text formatting/);
+    expect(crowded.classification.reasons.join(' ')).not.toMatch(/KB of text formatting/);
     expect(crowded.overBudget).toBeUndefined();
   });
 

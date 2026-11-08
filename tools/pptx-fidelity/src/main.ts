@@ -47,7 +47,7 @@
  *               with `EmitOptions.libreoffice: false` (art and metafile conversions left out, listed in
  *               `perSlide.missing`), each slide as the hub stores it (a picture slide: no objects)
  * --hub-budget  draw every slide as the hub stores it once its budgets ran (`native.ts` `withHubBudget`:
- *               today a slide the hub makes a picture loses its objects; the M9 budget ladder fills the hook)
+ *               M9's budget ladder, re-gridded, simplified or minimal, never a picture for its size)
  *
  * Real decks stay outside the repository: pass their paths. The score is SSIM of greyscale pictures at
  * 960x540 (1 = identical), computed by ffmpeg. A native run also writes <out>/native-baseline.json.
@@ -307,7 +307,7 @@ async function nativeColumn(
     }));
     const stored = hubClasses(input, conv.geoms ?? []);
     for (const [k, s] of conv.slides.entries()) {
-      const nl = hubStoredSlide(input[k]!.slide, stored[k]!.hub);
+      const nl = hubStoredSlide(input[k]!.slide, stored[k]!);
       if (drawingKey(nl) !== drawingKey(drawnOf(s))) s.noLoDraw = nl;
     }
   }

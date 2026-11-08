@@ -12,6 +12,7 @@ import {
   imageRel,
   para,
   pic,
+  pngHeader,
   run,
   solid,
   sp,
@@ -201,29 +202,39 @@ describe('without LibreOffice (EmitOptions.libreoffice: false, M9)', () => {
   });
 
   it('plans no art on a picture-class slide either (M9 wave 1 repair)', () => {
-    // A chart (residual: the scene's class is hybrid) and text formatting past 64 KB: the emitted slide is a
-    // picture for its budget, and with LibreOffice its art is still planned.
-    let runs = '';
-    for (let i = 0; i < 1600; i++)
-      runs += run(
-        `word${i} `,
-        `sz="${1000 + (i % 40) * 100}" b="${i % 2}"`,
-        `<a:solidFill><a:srgbClr val="${(i * 7919).toString(16).padStart(6, '0').slice(-6)}"/></a:solidFill><a:latin typeface="Face ${i % 50}"/>`,
-      );
+    // A chart (residual) and 13 distinct pictures, past the slide's 12: the emitted slide is a picture for its
+    // budget. (No byte budget makes a picture since M9's ladder: before it, a chart slide past 64 KB of text
+    // formatting was a picture with its art still planned.)
+    const n = 13;
+    const media: Record<string, Uint8Array> = {};
+    for (let i = 0; i < n; i++) media[`ppt/media/p${i}.png`] = pngHeader(64 + i, 64, true);
     const parts = buildDeck({
       slides: [
         {
-          rels: [{ id: 'rId3', type: 'chart', target: '../charts/chart1.xml' }],
+          rels: [
+            { id: 'rId3', type: 'chart', target: '../charts/chart1.xml' },
+            ...Array.from({ length: n }, (_, i) => imageRel(`rId${10 + i}`, `p${i}.png`)),
+          ],
           shapes:
             chartFrame({ id: 4, x: 0, y: 0, cx: 4 * EMU, cy: 3 * EMU, rId: 'rId3' }) +
-            sp({ id: 2, x: 0, y: 4 * EMU, cx: 8 * EMU, cy: 4 * EMU, txBody: body(para(runs)) }),
+            Array.from({ length: n }, (_, i) =>
+              pic({
+                id: 20 + i,
+                x: i * EMU * 0.5,
+                y: 4 * EMU,
+                cx: EMU / 2,
+                cy: EMU / 2,
+                rId: `rId${10 + i}`,
+              }),
+            ).join(''),
         },
       ],
+      media,
     });
     withPart(parts, 'ppt/charts/chart1.xml', chartXml(), CHART_CONTENT_TYPE);
     const withLo = convertDeck(parts).slides[0]!;
     expect(withLo.classification.class).toBe('picture');
-    expect(withLo.art).toBeDefined();
+    expect(withLo.classification.reasons).toContain('budget:pictures');
     const s = convertDeck(parts, { libreoffice: false }).slides[0]!;
     expect(s.classification.class).toBe('picture');
     expect(s.art).toBeUndefined();

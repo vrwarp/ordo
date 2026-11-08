@@ -148,6 +148,20 @@ reported as `sermon-<k>`.
   its own sandboxed LibreOffice path).
 <!-- /m9:harness -->
 
+<!-- m9:ladder -->
+## The hub's budget ladder in the harness (M9)
+
+`native.ts` `hubLadder` models the hub's step 3 (`apps/hub/src/pptx/ladder.ts`, the same functions): outline
+files within the import's budget (objects naming one past it left out), each slide fitted to 64 KB as the hub
+stores it (`fitSlideBudget`: grid, plain, minimal) and the presentation's tail stored minimal; no slide is a
+picture for its size. `--hub-budget` draws every slide, its LibreOffice-policy form and its LibreOffice-less
+form as the hub stores them (`withHubBudget`), and `--no-libreoffice` scores the stored form
+(`hubStoredSlide`). The census's hub columns (`hubClasses`) come from it: `hub` (hybrid when the ladder left
+something out), `hubWhy` (`slide`, `presentation`, `geoms`), `level` (when not `full`) and `missing`;
+`census.ts --no-libreoffice` reads each slide as a hub without LibreOffice emits it, with the converter's
+`missing` kinds too, and `--hub-budget` is accepted (the hub columns always model the ladder).
+<!-- /m9:ladder -->
+
 ## Other tools
 
 - `src/placement.ts`: the M1 placement check on the synthetic 4:3 deck (boxes within 2 px of LibreOffice's).

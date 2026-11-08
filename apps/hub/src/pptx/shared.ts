@@ -57,18 +57,19 @@ export const PPTX_LIMITS = {
   /** Slides per `pptx-scene` pool task, and that task's timeout. */
   batchSlides: 150,
   batchMs: 2 * 60_000,
-  /** Pool time one import may use; past it the remaining slides are picture class (or a clean failure). */
+  /** Pool time one import may use; past it the remaining slides keep only their text (the rescue, M9). */
   importPoolMs: 15 * 60_000,
   /** Longest part name in a payload pair. */
   partName: 512,
   /**
    * Bytes of geometry files one import stores (`ShapeGeom.ref`, design/27 §15 M6 round 2; the largest of
-   * the worship decks measured needs 0.6 MB); a slide whose new files would pass it is a compact picture.
+   * the worship decks measured needs 0.6 MB); the objects naming a file past it are left out (M9 `ladder`).
    */
   geomFileBytes: 32 * MiB,
   /**
    * Bytes of geometry files one `pptx-scene` batch may return (named in the worker, `sceneTask.ts`); a slide
-   * whose new files would pass it is a compact picture, so neither the worker's output nor the library
+   * whose new files would pass it keeps none of them (the objects naming them are left out), so neither the
+   * worker's output nor the library
    * process ever holds more than this of one batch (a layout's custGeom rebuilt at every slide's size made
    * 0.5 MB a slide).
    */
@@ -153,8 +154,16 @@ export type PptxNativeResult = {
   native: number;
   hybrid: number;
   picture: number;
-  /** Slides made compact picture class to keep the presentation within its budget (design/27 §3.4). */
+  /**
+   * Slides made compact picture class to keep the presentation within its budget (design/27 §3.4): 0 since
+   * M9's budget ladder, which makes no picture (`simplified` counts what it changed).
+   */
   compact: number;
+  /**
+   * M9 `ladder`: slides the budget ladder simplified (formatting or decorations left out, or kept minimal as
+   * the presentation's tail). Absent from older hubs' results.
+   */
+  simplified?: number;
   /** Slides waiting for the LibreOffice follow-up (`Slide.pptx.pending`). */
   pending: number;
   loJobId?: string;
@@ -371,6 +380,11 @@ export type SceneTaskInput = {
    * metafile conversion and lists what they would have drawn (`EmittedSlide.missing`). Absent: true.
    */
   libreoffice?: boolean;
+  /**
+   * M9 `ladder`: the text rescue of slides whose conversion failed (`@ordo/pptx-scene` `rescueDeck`): only their
+   * text bodies, no geometry read. Absent: the full conversion.
+   */
+  rescue?: boolean;
 };
 export type SceneTaskOutput = {
   result: ConvertResult;
@@ -387,7 +401,7 @@ export type SceneTaskOutput = {
    * `result.geoms` is emptied. At most `PPTX_LIMITS.batchGeomBytes` of distinct files.
    */
   geomFiles?: { id: string; hash: string; bytes: Uint8Array }[];
-  /** Slides whose new geometry files would pass `PPTX_LIMITS.batchGeomBytes`: compact pictures. */
+  /** Slides whose new geometry files would pass `PPTX_LIMITS.batchGeomBytes`: their objects naming them are left out. */
   geomOver?: number[];
 };
 

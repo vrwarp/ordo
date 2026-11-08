@@ -46,6 +46,7 @@ export {
   MEDIA_PREFIX,
   SLIDE_BYTES_NOTE,
   storedSlideBytes,
+  TEXT_BUDGET_BYTES,
 } from './emit.ts';
 export type { BakeRaster, PictureBake, TileBake } from './bake.ts';
 export type { EmittedClip } from './media.ts';
@@ -74,6 +75,7 @@ export {
   rowOf,
 } from './residual.ts';
 export type { Package, PartSource, Rel } from './opc.ts';
+export { RESCUE_DEPTH, RESCUE_NOTE, rescueDeck } from './rescue.ts';
 export type { Theme } from './theme.ts';
 
 export interface ParseOptions {

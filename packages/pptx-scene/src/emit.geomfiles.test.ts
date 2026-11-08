@@ -89,8 +89,8 @@ describe('geometry files (ShapeGeom.ref)', () => {
     const shapes = Array.from({ length: 70 }, (_, i) => deco(i + 2, 70 + (i % 7), i)).join('');
     const inline = emit([shapes], { geomFiles: false }).slides[0]!;
     expect(storedSlideBytes(inline.slide, inline.notes)).toBeGreaterThan(MAX_SLIDE_BYTES);
-    expect(inline.classification.class).toBe('picture');
-    expect(inline.classification.reasons).toContain('more than 64 KB as stored');
+    // Over the budget, flagged for the importer's ladder; its class stays (M9: never a picture).
+    expect(inline.classification.class).toBe('native');
     expect(inline.overBudget).toBe(true);
     for (const o of shapesOf(inline)) expect(pathChars(o)).toBeLessThan(GEOM_FILE_CHARS);
     const out = emit([shapes]);
@@ -110,7 +110,7 @@ describe('geometry files (ShapeGeom.ref)', () => {
     expect(Math.max(...kept.map(pathChars))).toBeLessThanOrEqual(smallestMoved);
   });
 
-  it('classes a slide past the budget as stored with its paths in files picture, as the hub would', () => {
+  it('flags a slide past the budget as stored with its paths in files, keeping its class (M9)', () => {
     // Formatted text within its own budget, and many plain shapes: together past 64 KB.
     const colors = ['FF0000', '00FF00'];
     const runs = Array.from({ length: 300 }, (_, i) => run(`w${i} `, '', solid(colors[i % 2]!))).join('');
@@ -131,8 +131,8 @@ describe('geometry files (ShapeGeom.ref)', () => {
     const s = emit([text + rects]).slides[0]!;
     expect(s.notes).not.toContain('the slide has more than 64 KB of text formatting');
     expect(storedSlideBytes(s.slide, s.notes)).toBeGreaterThan(MAX_SLIDE_BYTES);
-    expect(s.classification.class).toBe('picture');
-    expect(s.classification.reasons).toContain('more than 64 KB as stored');
+    expect(s.classification.class).toBe('native');
+    expect(s.classification.reasons.join(' ')).not.toMatch(/KB/);
     expect(s.notes).toContain(SLIDE_BYTES_NOTE);
     expect(s.overBudget).toBe(true);
   });

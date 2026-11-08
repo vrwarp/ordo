@@ -692,7 +692,7 @@ the art.
 | `residual.ts`    | The decision table: per reason its decision (native, approx, residual, unread), census features, who rates it, its missing kind; `decisionOf`, `missingKindOf`, `rowOf` | each area's rows |
 | `emit-ctx.ts`    | `EmitCtx`, `M9_FIELDS` and `writes` (the `EmitOptions.m9Writes` gate), box, colour and object helpers                                                                   | (frozen)         |
 | `emit-text.ts`   | Text bodies (`textObject`, `richTextObject`, legacy text, `marginOf`); stubs `warpOf`, `writingOf`                                                                      | `text-conv`      |
-| `emit-budget.ts` | `storedSlideBytes`, `fitBytes`, `chargeText`, `overBudget`, `MAX_SLIDE_BYTES`                                                                                           | `ladder`         |
+| `emit-budget.ts` | `storedSlideBytes`, `fitBytes`, `chargeText`, `slideBudget` (was `overBudget`), `compactRuns`, `MAX_SLIDE_BYTES`, `TEXT_BUDGET_BYTES`                                   | `ladder`         |
 | `emit-table.ts`  | The M6 table group; stub `emitTableObject`                                                                                                                              | `tables-conv`    |
 | `chart.ts`       | Stubs `readChart`, `emitChart`                                                                                                                                          | `charts-conv`    |
 | `decor.ts`       | Stub `emitDecor` (runs of `ElementBase.decor`)                                                                                                                          | `decor-conv`     |
@@ -719,6 +719,32 @@ the art.
   `hybrid.test.ts` (`libreoffice: false`), `log.test.ts`, `emit.m9writes.test.ts`, `metrics.m9.test.ts`,
   `smartart.test.ts` (empty caches), `purity.test.ts` (the sfnt modules and `@ordo/domain/missing.ts`).
 <!-- /m9:conv-seams -->
+
+<!-- m9:ladder -->
+## M9 wave 2: the converter's part of the budget ladder (`emit-budget.ts`, `rescue.ts`)
+
+No budget makes a slide picture class any more (design/27 M9, plan decision 3): the importer fits a slide
+that is over (`@ordo/domain` `fitSlideBudget`).
+- **`compactRuns`** (plan decision 14): before a rich text object is counted, its runs lose every field that
+  says what the box style says (family, weight, slant, spacing, language, colour unless the box is a
+  gradient, scale 1, underline, caps, outline, no strike, no baseline, no shadow where the box has none);
+  a run is never merged or removed (the text engine cuts its pieces at run ends), so `layoutRich` and
+  `paintPlan` give exactly the same output (`emit-budget.test.ts`). `richtext.ts` already writes runs as their
+  difference from the box, so on its own output this finds nothing (0 bytes on the worship set).
+- **The text budget** is a memory guard of 128 KB (`TEXT_BUDGET_BYTES`, twice `MAX_SLIDE_BYTES`): past it the
+  slide's further text is written plain (`SLIDE_BUDGET_NOTE`), so the importer's ladder chooses which
+  formatting a slide over 64 KB keeps (the largest goes first) and a deck that repeats thousands of formatted
+  runs still never builds megabytes a slide.
+- **`slideBudget`** (from `emit.ts`): the large geometries go to files whatever the text holds (`fitBytes`),
+  and a slide still over 64 KB as stored, or past the text budget, keeps its class and is flagged
+  `EmittedSlide.overBudget` (`SLIDE_BYTES_NOTE`); it was picture class.
+- **`rescueDeck`** (`rescue.ts`, `index.ts`): a slide's own text bodies (shapes, placeholders placed by their
+  layout or master, table cells' text as one object a table) as text objects in their boxes, with the
+  dominant run's face, size, weight and colour; no geometry, picture, effect, SmartArt or chart is read,
+  groups to depth 4 (`RESCUE_DEPTH`), at most 5,000 elements and 1,000 objects a slide; class hybrid,
+  `missing: ['slide']`, `RESCUE_NOTE`. The hub's `pptx-scene` task runs it for slides whose conversion failed.
+  Never throws for a slide (`rescue.test.ts`, with a mutation fuzz).
+<!-- /m9:ladder -->
 
 ## Module map
 

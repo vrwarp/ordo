@@ -24,6 +24,10 @@ export function importResult(input: {
   presentationId: string;
   classes: readonly ('native' | 'hybrid' | 'picture')[];
   compact: number;
+  /** M9 `ladder`: slides the budget ladder simplified (absent: none counted, an older import). */
+  simplified?: number;
+  /** M9: slides with something nothing draws (`Slide.pptx.missing`). */
+  missing?: number;
   pending: number;
   loJobId?: string;
   missingFonts: readonly string[];
@@ -37,10 +41,12 @@ export function importResult(input: {
     hybrid: count('hybrid'),
     picture: count('picture'),
     compact: input.compact,
+    ...(input.simplified !== undefined ? { simplified: input.simplified } : {}),
     pending: input.pending,
     ...(input.loJobId ? { loJobId: input.loJobId } : {}),
     missingFonts: input.missingFonts.slice(0, RESULT_FONTS).map((f) => logSafe(f, 100)),
     notes: input.notes.slice(0, RESULT_NOTES).map((n) => logSafe(n, 300)),
+    ...(input.missing !== undefined ? { missing: input.missing } : {}),
   };
 }
 

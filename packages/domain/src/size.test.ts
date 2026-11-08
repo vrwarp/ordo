@@ -1,11 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { resolvePlaylist } from './goLive.ts';
-import { type Presentation, Presentation as PresentationSchema, Slide, type TextStyle } from './schemas.ts';
+import { parsePathData } from './pathdata.ts';
+import {
+  type Presentation,
+  Presentation as PresentationSchema,
+  type ShapeObject,
+  Slide,
+  type SlideObject,
+  type TextObject,
+  type TextStyle,
+} from './schemas.ts';
 import {
   compactSlide,
   compactSlideBytes,
+  fitSlideBudget,
   formatBytes,
+  GRID_PX,
+  gridSlide,
   jsonBytes,
+  minimalSlide,
   planImportSizes,
   presentationBytes,
   previewSlice,
@@ -458,5 +471,272 @@ describe('resolved playlist size (design/27 §14.10)', () => {
     expect(resolvedSizeWarning(SIZE_BUDGETS.resolvedWarn)).toBeUndefined();
     expect(resolvedSizeWarning(Number.NaN)).toBeUndefined();
     expect(resolvedSizeWarning(SIZE_BUDGETS.resolvedWarn + 1)).toContain('12.0 MiB');
+  });
+});
+
+// ── The budget ladder (M9 `ladder`) ──────────────────────────────────────────────────────────────────────
+
+/** A seeded generator (mulberry32): the same slides on every run. */
+function rng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+  };
+}
+
+/** A traced outline of `n` points in a `w × h` space with float coordinates (a converter's custGeom). */
+function tracedPath(
+  r: () => number,
+  n: number,
+  w = 21_600.123,
+  h = 10_800.456,
+): { d: string; w: number; h: number } {
+  const pts: string[] = [];
+  for (let i = 0; i < n; i++) pts.push(`${i ? 'L' : 'M'} ${(r() * w).toFixed(6)} ${(r() * h).toFixed(6)}`);
+  return { d: `${pts.join(' ')} Z`, w, h };
+}
+
+const traced = (k: number, r: () => number, n = 400, b = box(100 + k, 100, 600, 300)): ShapeObject => ({
+  id: id('G', k),
+  type: 'shape',
+  box: b,
+  shape: 'rect',
+  fill: { r: 10, g: 20, b: 30, a: 1 },
+  opacity: 1,
+  radius: 0,
+  geom: { paths: [tracedPath(r, n)] },
+});
+
+/** A text object with `n` formatted runs over its text. */
+function formatted(k: number, n: number, chars = n * 10): TextObject {
+  const text = VERSE.repeat(Math.ceil(chars / VERSE.length)).slice(0, chars);
+  const step = Math.max(1, Math.floor(chars / n));
+  return {
+    id: id('Q', k),
+    type: 'text',
+    box: box(96, 96 + k, 1728, 300),
+    text,
+    style: style(32),
+    opacity: 1,
+    runs: Array.from({ length: n }, (_, i) => ({
+      start: i * step,
+      end: Math.min(chars, i * step + Math.max(1, step - 1)),
+      fontWeight: 700,
+      color: { r: (i * 37) % 256, g: 200, b: 0, a: 1 },
+    })).filter((x) => x.end > x.start),
+    paras: [{ align: 'center', spaceBeforePx: 12 }],
+  };
+}
+
+const textsOf = (s: Slide) => s.objects.flatMap((o) => (o.type === 'text' ? [[o.id, o.text]] : []));
+
+describe('fitSlideBudget (design/27 §3.4, M9 ladder)', () => {
+  it('keeps the first level that fits', () => {
+    const r = rng(1);
+    // Full: a typical slide is returned as it is.
+    const typical = importedSlide(1);
+    const full = fitSlideBudget(typical);
+    expect(full).toMatchObject({ level: 'full', dropped: 0, plain: 0, missing: [] });
+    expect(full.slide).toBe(typical);
+    // Grid: outlines with long float coordinates fit once on the grid (`GRID_PX`).
+    const outlines: Slide = { ...importedSlide(2), objects: [traced(1, r, 2_000), traced(2, r, 2_000)] };
+    const before = slideBytes(outlines);
+    const grid = fitSlideBudget(outlines, Math.round(before * 0.7));
+    expect(grid.level).toBe('grid');
+    expect(grid.bytes).toBeLessThanOrEqual(Math.round(before * 0.7));
+    expect(grid.slide.objects).toHaveLength(2);
+    // Plain: formatted text over the budget loses the largest formatting first, and only what it must.
+    const rich: Slide = {
+      ...importedSlide(3),
+      objects: [formatted(1, 600), formatted(2, 40), formatted(3, 40)],
+    };
+    const plain = fitSlideBudget(rich, slideBytes(rich) - 10_000);
+    expect(plain.level).toBe('plain');
+    expect(plain.plain).toBe(1);
+    const [big, small] = plain.slide.objects as [TextObject, TextObject];
+    expect(big.runs).toBeUndefined();
+    expect(big.paras).toBeUndefined();
+    expect(small.runs).toHaveLength(40);
+    expect(textsOf(plain.slide)).toEqual(textsOf(rich));
+    // Minimal: shapes past the budget are left out, the largest first; text, pictures and formatting stay.
+    const decorated: Slide = {
+      ...importedSlide(4),
+      objects: [...importedSlide(4).objects, traced(1, r, 3_000), traced(2, r, 200), formatted(5, 20)],
+    };
+    // Under the budget only without the larger outline, even on the grid.
+    const max = slideBytes(gridSlide(decorated)) - 20_000;
+    const minimal = fitSlideBudget(decorated, max);
+    expect(minimal.level).toBe('minimal');
+    expect(minimal.bytes).toBeLessThanOrEqual(max);
+    expect(minimal.dropped).toBe(1);
+    expect(minimal.missing).toEqual(['decoration']);
+    expect(minimal.plain).toBe(0);
+    const ids = minimal.slide.objects.map((o) => o.id);
+    expect(ids).not.toContain(id('G', 1));
+    expect(ids).toContain(id('G', 2));
+    expect(textsOf(minimal.slide)).toEqual(textsOf(decorated));
+    expect(minimal.slide.objects.filter((o) => o.type === 'image')).toHaveLength(2);
+    expect((minimal.slide.objects.find((o) => o.id === id('Q', 5)) as TextObject).runs).toHaveLength(20);
+    // A slide whose text alone passes the budget is minimal and over it: nothing of its text is cut.
+    const words: Slide = { ...importedSlide(5), objects: [formatted(6, 10, 20_000)] };
+    const over = fitSlideBudget(words, 4_000);
+    expect(over.level).toBe('minimal');
+    expect(over.bytes).toBeGreaterThan(4_000);
+    expect(textsOf(over.slide)).toEqual(textsOf(words));
+    // The input is never changed; the caller's measure decides.
+    expect(slideBytes(gridSlide(decorated))).toBe(max + 20_000);
+    expect(gridSlide(decorated)).not.toBe(decorated);
+    expect(fitSlideBudget(typical, 64 * KiB, { size: () => 70 * KiB }).level).toBe('minimal');
+    expect(fitSlideBudget(typical, 64 * KiB, { size: () => Number.NaN }).level).toBe('full');
+  });
+
+  it('grid moves no point more than 0.125 logical px', () => {
+    const r = rng(7);
+    let worst = 0;
+    let points = 0;
+    for (let k = 0; k < 60; k++) {
+      const w = r() < 0.1 ? 0 : 1 + r() * 3_000;
+      const h = r() < 0.1 ? 0.3 : 1 + r() * 2_000;
+      const space = { w: 1 + r() * 1e7, h: 1 + r() * 1e7 };
+      const p = tracedPath(r, 50 + Math.floor(r() * 300), space.w, space.h);
+      const shape: ShapeObject = {
+        ...traced(k, r),
+        box: box(r() * 1000, r() * 500, w, h),
+        geom: { paths: [p] },
+      };
+      const image = {
+        id: id('I', k),
+        type: 'image' as const,
+        box: box(0, 0, w, h),
+        mediaId: id('M', k),
+        fit: 'cover' as const,
+        opacity: 1,
+        radius: 0,
+        mask: { paths: [p] },
+      };
+      const out = gridSlide({ id: id('S', k), objects: [shape, image] });
+      for (const [i, o] of out.objects.entries()) {
+        const g = o.type === 'shape' ? o.geom! : (o as typeof image).mask;
+        const q = g.paths![0]!;
+        const a = parsePathData(p.d);
+        const b = parsePathData(q.d);
+        expect(b.cmds).toBe(a.cmds);
+        if (q !== p) {
+          expect(Number.isInteger(q.w) && Number.isInteger(q.h)).toBe(true);
+          expect(q.w).toBe(Math.max(1, Math.ceil(w / GRID_PX)));
+        }
+        for (let j = 0; j < a.pts.length; j += 2) {
+          const dx = Math.abs((a.pts[j]! * w) / p.w - (b.pts[j]! * w) / q.w);
+          const dy = Math.abs((a.pts[j + 1]! * h) / p.h - (b.pts[j + 1]! * h) / q.h);
+          worst = Math.max(worst, dx, dy);
+          points++;
+        }
+        expect(i).toBeLessThan(2);
+      }
+    }
+    expect(points).toBeGreaterThan(10_000);
+    // At most half a grid cell: well within the plan's 0.125 logical px.
+    expect(worst).toBeLessThanOrEqual(GRID_PX / 2 + 1e-9);
+    expect(GRID_PX / 2).toBeLessThanOrEqual(0.125);
+    // Integer paths already on a coarser grid stay as they are; objects without outlines are shared.
+    const coarse: ShapeObject = {
+      ...traced(1, r),
+      geom: { paths: [{ d: 'M 0 0 L 4 0 L 4 2 Z', w: 4, h: 2 }] },
+    };
+    const text = importedSlide(1).objects[2]!;
+    const same = gridSlide({ id: 's', objects: [coarse, text] });
+    expect(same.objects[0]).toBe(coarse);
+    expect(same.objects[1]).toBe(text);
+  });
+
+  it("minimal keeps every text object's text", () => {
+    const r = rng(3);
+    const table: ShapeObject = {
+      id: id('TB', 1),
+      type: 'shape',
+      box: box(100, 600, 800, 200),
+      shape: 'rect',
+      opacity: 1,
+      radius: 0,
+      table: {
+        cols: [400, 400],
+        rows: [100, 100],
+        cells: [
+          { text: 'Hymn', runs: [[0, 4, 0]] },
+          { text: '42' },
+          { text: 'Psalm', paras: [{ align: 'right' }] },
+          { text: '23' },
+        ],
+        base: style(24),
+        runStyles: [{ fontWeight: 700 }],
+      },
+    };
+    const s: Slide = {
+      ...importedSlide(9),
+      objects: [...importedSlide(9).objects, traced(1, r), formatted(2, 30), table],
+      backgroundMediaId: id('BG', 1),
+    };
+    const m = minimalSlide(s);
+    expect(textsOf(m)).toEqual(textsOf(s));
+    for (const o of m.objects) if (o.type === 'text') expect(o.runs ?? o.paras).toBeUndefined();
+    expect(m.objects.filter((o) => o.type === 'image')).toHaveLength(2);
+    expect(m.objects.filter((o) => o.type === 'shape').map((o) => o.id)).toEqual([id('TB', 1)]);
+    const t = (m.objects.find((o) => o.id === id('TB', 1)) as ShapeObject).table!;
+    expect(t.cells.map((c) => c.text)).toEqual(['Hymn', '42', 'Psalm', '23']);
+    expect(t.runStyles).toBeUndefined();
+    expect(t.cells.some((c) => c.runs || c.paras)).toBe(false);
+    expect(m.backgroundMediaId).toBe(id('BG', 1));
+    expect(m.lyricObjectId).toBe(s.lyricObjectId);
+    expect(Slide.safeParse(m).success).toBe(true);
+  });
+
+  it('property: within the limit or minimal, schema-valid, every text and picture kept', () => {
+    const r = rng(2026);
+    const levels = new Set<string>();
+    for (let k = 0; k < 120; k++) {
+      const objects: SlideObject[] = [];
+      const n = 1 + Math.floor(r() * 40);
+      for (let i = 0; i < n; i++) {
+        const pick = r();
+        if (pick < 0.35) objects.push(traced(i, r, 10 + Math.floor(r() * 800)));
+        else if (pick < 0.75)
+          objects.push({
+            ...formatted(i, 1 + Math.floor(r() * 120), 50 + Math.floor(r() * 4_000)),
+            id: id(`Q${k}_`, i),
+          });
+        else
+          objects.push({
+            id: id(`P${k}_`, i),
+            type: 'image',
+            box: box(r() * 1000, r() * 500, 10 + r() * 900, 10 + r() * 500),
+            mediaId: id('M', i),
+            fit: 'cover',
+            opacity: 1,
+            radius: 0,
+            ...(r() < 0.3 ? { mask: { paths: [tracedPath(r, 100)] } } : {}),
+          });
+      }
+      const slide = Slide.parse({ id: id('S', k), objects });
+      const max = 2_000 + Math.floor(r() * 64 * KiB);
+      const out = fitSlideBudget(slide, max);
+      levels.add(out.level);
+      expect(out.bytes).toBe(slideBytes(out.slide));
+      if (out.level !== 'minimal') expect(out.bytes).toBeLessThanOrEqual(max);
+      else if (out.bytes > max) {
+        // Over the limit only when nothing more can go: no shape but tables, no formatting.
+        expect(out.slide.objects.some((o) => o.type === 'shape' && !o.table)).toBe(false);
+        expect(out.slide.objects.some((o) => o.type === 'text' && (o.runs || o.paras))).toBe(false);
+      }
+      expect(Slide.safeParse(out.slide).success).toBe(true);
+      expect(textsOf(out.slide)).toEqual(textsOf(slide));
+      const pictures = (s: Slide) => s.objects.filter((o) => o.type === 'image').map((o) => o.id);
+      expect(pictures(out.slide)).toEqual(pictures(slide));
+      expect(jsonBytes(slide)).toBe(slideBytes(Slide.parse(slide)));
+    }
+    expect([...levels].sort()).toEqual(['full', 'grid', 'minimal', 'plain']);
   });
 });

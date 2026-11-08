@@ -70,40 +70,75 @@ const outline = (ref: string): Slide['objects'][number] =>
 const slide = (objects: Slide['objects']): Slide => ({ id: 's', objects }) as Slide;
 
 describe('hubClasses', () => {
-  it("classes slides as the hub's budgets do: over 64 KB, past the geometry files, the converter's pictures", () => {
+  it("models the hub's budget ladder: never a picture for a size, what it leaves out said (M9)", () => {
     const geoms = [
       { id: 'pptxgeom:1', file: { paths: 'x'.repeat(60) } },
       { id: 'pptxgeom:2', file: { paths: 'y'.repeat(60) } },
     ];
+    const rect = (i: number): Slide['objects'][number] =>
+      ({
+        ...outline('r'),
+        id: `r${i}`,
+        geom: undefined,
+        fill: { r: 1, g: 2, b: 3, a: 1 },
+      }) as Slide['objects'][number];
     const got = hubClasses(
       [
         { class: 'native', slide: slide([text('Grace')]), notes: [] },
-        { class: 'hybrid', slide: slide([text('x'.repeat(70_000))]), notes: [] },
+        // Its text alone is over 64 KB: kept whole, nothing to leave out.
+        {
+          class: 'hybrid',
+          // (The hub's sanitizer keeps 10,000 characters a text object.)
+          slide: slide([0, 1, 2, 3, 4, 5, 6, 7].map((i) => ({ ...text('x'.repeat(9_000)), id: `t${i}` }))),
+          notes: [],
+        },
         { class: 'native', slide: slide([outline('pptxgeom:1')]), notes: [] },
-        // The same file again costs nothing; a new one passes the budget of 100 bytes.
+        // The same file again costs nothing; a new one passes the budget of 100 bytes: its shape is left out.
         { class: 'native', slide: slide([outline('pptxgeom:1')]), notes: [] },
-        { class: 'native', slide: slide([outline('pptxgeom:2')]), notes: [] },
-        { class: 'picture', slide: slide([]), notes: [] },
+        { class: 'native', slide: slide([text('Grace'), outline('pptxgeom:2')]), notes: [] },
+        { class: 'picture', slide: slide([text('Kept for search')]), notes: [] },
+        // Text and 700 rectangles past 64 KB: the rectangles go first.
+        {
+          class: 'native',
+          slide: slide([text('Grace'), ...Array.from({ length: 700 }, (_, i) => rect(i))]),
+          notes: [],
+        },
       ],
       geoms,
       100,
     );
-    expect(got.map((h) => [h.hub, h.hubWhy])).toEqual([
-      ['native', null],
-      ['picture', 'slide'],
-      ['native', null],
-      ['native', null],
-      ['picture', 'geoms'],
-      ['picture', null],
+    expect(got.map((h) => [h.hub, h.hubWhy, h.level, h.missing])).toEqual([
+      ['native', null, 'full', []],
+      ['hybrid', null, 'minimal', []],
+      ['native', null, 'full', []],
+      ['native', null, 'full', []],
+      ['hybrid', 'geoms', 'full', ['decoration']],
+      ['picture', null, 'full', []],
+      ['hybrid', 'slide', 'minimal', ['decoration']],
     ]);
     expect(got[0]!.stored).toBeGreaterThan(400);
+    expect(got[1]!.slide.objects).toHaveLength(8);
+    expect(got[1]!.stored).toBeGreaterThan(64 * 1024);
+    expect(got[4]!.slide.objects.map((o) => o.type)).toEqual(['text']);
     expect(got[5]!.stored).toBe(0);
+    expect(got[5]!.slide.objects).toEqual([]);
+    expect(got[6]!.stored).toBeLessThanOrEqual(64 * 1024);
+    expect(got[6]!.slide.objects.filter((o) => o.type === 'text')).toHaveLength(1);
   });
 });
 
 describe('census', () => {
   it('reads its options', () => {
-    expect(parseCensusArgs(['--out', 'c.jsonl', 'a', 'b'])).toEqual({ out: 'c.jsonl', paths: ['a', 'b'] });
+    expect(parseCensusArgs(['--out', 'c.jsonl', 'a', 'b'])).toEqual({
+      out: 'c.jsonl',
+      paths: ['a', 'b'],
+      hubBudget: false,
+      noLibreOffice: false,
+    });
+    expect(parseCensusArgs(['--hub-budget', '--no-libreoffice', '--out', 'c.jsonl', 'a'])).toMatchObject({
+      hubBudget: true,
+      noLibreOffice: true,
+    });
     expect(() => parseCensusArgs(['a'])).toThrow(/usage/);
     expect(() => parseCensusArgs(['--out', 'c.jsonl'])).toThrow(/no decks/);
     expect(() => parseCensusArgs(['--out', 'c', '--hub', 'a'])).toThrow(/unknown option/);

@@ -28,7 +28,7 @@ import { copyFile, mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { GeomFile, Slide } from '@ordo/domain';
+import { type BudgetLevel, drawnGeomRefs, type GeomFile, type Slide } from '@ordo/domain';
 import { extractZip } from '@ordo/importers/zip-stream.ts';
 import { Worker } from 'node:worker_threads';
 import {
@@ -43,6 +43,8 @@ import {
   type Tier,
 } from '@ordo/pptx-scene';
 import type { FaceRequest } from '@ordo/renderer/text/types.ts';
+import { planLadder, provenanceStandIn, withoutFiles } from '../../../apps/hub/src/pptx/ladder.ts';
+import { CONVERTER_VERSION, PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
 import type { Browser, Page } from '@playwright/test';
 import { bakePicture } from './bake.ts';
 import { hostFace } from './faces.ts';
@@ -884,17 +886,114 @@ const round2 = (v: number) => Math.round(v * 100) / 100;
 /** A slide's class in the hub once its budgets ran (`census.ts` `HubSlide.hub`). */
 export type HubClass = 'native' | 'hybrid' | 'picture';
 
+/** Why the hub's budget ladder changed a slide: over 64 KB, the presentation's tail, its outline files. */
+export type HubWhy = 'slide' | 'presentation' | 'geoms';
+
+/** A slide as the hub stores it once its budgets ran (`hubLadder`). */
+export type HubStored = {
+  /** Its bytes as the hub stores it (`ladder.ts` `storedWithin`, its provenance included); 0 for a picture slide. */
+  stored: number;
+  /** Its class there: picture only when the converter said so (no budget makes a picture since M9). */
+  hub: HubClass;
+  /** Why the ladder changed it (null: stored as emitted, or only re-gridded). */
+  why: HubWhy | null;
+  /** The ladder's level (`fitSlideBudget`; 'minimal' for the tail). */
+  level: BudgetLevel;
+  /** What the ladder left out (`Slide.pptx.missing` kinds: 'decoration', 'chart'). */
+  missing: string[];
+  /** The slide as stored, without its provenance (a picture slide: no objects). */
+  slide: Slide;
+};
+
+type HubInput = { class: SlideClass; slide: Slide; notes: readonly string[]; index?: number; shown?: number };
+
 /**
- * The slide as the hub stores it, given its class there (design/27 §3.4; `--hub-budget`, `--no-libreoffice`).
- * A slide the hub stores as a picture is the compact picture slide `nativeJob.ts` `toPicture` makes: its
- * objects and lyric box left out, its background kept, LibreOffice's page to come (a hub without LibreOffice
- * shows only the background). Any other slide is stored as emitted.
- *
- * This is the hook the M9 `ladder` track fills: with the budget ladder a slide over 64 KB is stored at the
- * first of `fitSlideBudget`'s levels that fits (full, grid, plain, minimal), never as a picture, and this
- * function returns that level's slide.
+ * The slides as the hub stores them (`apps/hub/src/pptx/nativeJob.ts` `budget`, M9's budget ladder), in deck
+ * order, hidden ones included: the objects naming outline files past `PPTX_LIMITS.geomFileBytes` left out
+ * (`ladder.ts` `withoutFiles`), then each slide fitted to 64 KB and the presentation's tail stored minimal
+ * (`planLadder`, measured with a stand-in of the provenance the hub writes). A slide the converter classed
+ * picture keeps no objects (`toPicture`). The census, `--hub-budget` and `--no-libreoffice` all read it.
  */
-export function hubStoredSlide(slide: Slide, hub: HubClass): Slide {
+export function hubLadder(
+  slides: readonly HubInput[],
+  geoms: readonly { id: string; file: unknown }[] = [],
+  geomBudget: number = PPTX_LIMITS.geomFileBytes,
+): HubStored[] {
+  const fileBytes = new Map(geoms.map((g) => [g.id, utf8Of(JSON.stringify(g.file))]));
+  const admitted = new Set<string>();
+  let spent = 0;
+  const kept = slides.map((s) => {
+    if (s.class === 'picture') return { slide: s.slide, missing: [] as string[], geoms: false };
+    const keep = new Set<string>();
+    for (const r of drawnGeomRefs(s.slide)) {
+      const bytes = fileBytes.get(r);
+      if (admitted.has(r) || bytes === undefined) {
+        keep.add(r);
+        continue;
+      }
+      if (spent + bytes > geomBudget) continue;
+      admitted.add(r);
+      keep.add(r);
+      spent += bytes;
+    }
+    const left = withoutFiles(s.slide, (ref) => keep.has(ref));
+    return { slide: left.slide, missing: left.missing as string[], geoms: left.slide !== s.slide };
+  });
+  const plan = planLadder(
+    slides.map((s, k) => ({
+      slide: {
+        ...kept[k]!.slide,
+        pptx: provenanceStandIn({
+          index: s.index ?? k,
+          ...(s.shown !== undefined ? { shown: s.shown } : {}),
+          cls: s.class,
+          version: CONVERTER_VERSION,
+          notes: s.notes,
+        }),
+      },
+      fixed: s.class === 'picture',
+    })),
+  );
+  return slides.map((s, k): HubStored => {
+    const r = plan.slides[k]!;
+    // As emitted when the ladder kept it whole (the very slide, without the stand-in provenance).
+    const { pptx: _, ...fitted } = r.slide;
+    const slide = r.level === 'full' && !kept[k]!.geoms ? s.slide : fitted;
+    if (s.class === 'picture') {
+      const { lyricObjectId: _l, ...rest } = s.slide;
+      return {
+        stored: 0,
+        hub: 'picture',
+        why: null,
+        level: 'full',
+        missing: [],
+        slide: { ...rest, objects: [] },
+      };
+    }
+    const missing = [...kept[k]!.missing];
+    for (const m of r.missing) if (!missing.includes(m)) missing.push(m);
+    const changed = r.tail || r.dropped > 0 || r.plain > 0;
+    const why: HubWhy | null = r.tail ? 'presentation' : changed ? 'slide' : kept[k]!.geoms ? 'geoms' : null;
+    return {
+      stored: r.bytes,
+      hub: missing.length && s.class === 'native' ? 'hybrid' : s.class,
+      why,
+      level: r.level,
+      missing,
+      slide,
+    };
+  });
+}
+
+const utf8Of = (s: string) => Buffer.byteLength(s, 'utf8');
+
+/**
+ * The slide as the hub stores it (design/27 §3.4; `--hub-budget`, `--no-libreoffice`): its `hubLadder` form.
+ * Given only a class (an older caller), a picture-class slide is the one `nativeJob.ts` `toPicture` makes (no
+ * objects, its background kept) and any other slide is stored as emitted.
+ */
+export function hubStoredSlide(slide: Slide, hub: HubClass | Pick<HubStored, 'slide'>): Slide {
+  if (typeof hub === 'object') return hub.slide;
   if (hub !== 'picture') return slide;
   const { lyricObjectId: _, ...rest } = slide;
   return { ...rest, objects: [] };
@@ -902,22 +1001,48 @@ export function hubStoredSlide(slide: Slide, hub: HubClass): Slide {
 
 /**
  * `--hub-budget`: the deck with every slide (and its LibreOffice-policy and LibreOffice-less forms) as the hub
- * stores it, given each slide's class there (`hubClasses`, in deck order). Slides keep their converter class
- * and reasons; only what is drawn changes.
+ * stores it (`hubLadder`, M9's budget ladder: re-gridded, simplified or minimal, never a picture for its
+ * size). Slides keep their converter class and reasons; only what is drawn changes. `_hub` (each slide's class
+ * there) is no longer needed: the ladder is run here on each form.
  */
-export function withHubBudget(deck: NativeDeck, hub: readonly HubClass[]): NativeDeck {
+export function withHubBudget(
+  deck: NativeDeck,
+  _hub?: readonly (HubClass | Pick<HubStored, 'slide'>)[],
+): NativeDeck {
+  const geoms = deck.geoms ?? [];
+  const ladder = (pick: (s: NativeSlide) => Slide | undefined, cls: (s: NativeSlide) => SlideClass) => {
+    const at = deck.slides.map((s, k) => [k, pick(s)] as const).filter(([, sl]) => sl !== undefined);
+    const out = hubLadder(
+      at.map(([k, sl]) => ({
+        class: cls(deck.slides[k]!),
+        slide: sl!,
+        notes: deck.slides[k]!.notes,
+        index: deck.slides[k]!.index,
+      })),
+      geoms,
+    );
+    return new Map(at.map(([k], i) => [k, out[i]!.slide]));
+  };
+  const main = ladder(
+    (s) => s.slide,
+    (s) => s.class,
+  );
+  const compat = ladder(
+    (s) => s.compatSlide,
+    (s) => s.class,
+  );
+  const noLo = ladder(
+    (s) => s.noLoSlide,
+    (s) => s.noLoClass ?? s.class,
+  );
   return {
     ...deck,
-    slides: deck.slides.map((s, k) => {
-      const h = hub[k] ?? 'native';
-      if (h !== 'picture') return s;
-      return {
-        ...s,
-        slide: hubStoredSlide(s.slide, h),
-        ...(s.compatSlide ? { compatSlide: hubStoredSlide(s.compatSlide, h) } : {}),
-        ...(s.noLoSlide ? { noLoSlide: hubStoredSlide(s.noLoSlide, h) } : {}),
-      };
-    }),
+    slides: deck.slides.map((s, k) => ({
+      ...s,
+      slide: main.get(k) ?? s.slide,
+      ...(s.compatSlide ? { compatSlide: compat.get(k) ?? s.compatSlide } : {}),
+      ...(s.noLoSlide ? { noLoSlide: noLo.get(k) ?? s.noLoSlide } : {}),
+    })),
   };
 }
 

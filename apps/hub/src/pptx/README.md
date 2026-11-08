@@ -715,3 +715,40 @@ lo-dependencies §4.2-4.4, §4.6-4.11).
   LibreOffice and the CI leg (`lite-image`), the harness's `--no-libreoffice` and hub import (`harness`).
 <!-- /m9:lo-detect -->
 
+<!-- m9:ladder -->
+## M9 wave 2: the budget ladder (m9/ladder)
+
+No budget and no failure makes a picture slide (design/27 M9, plan decision 3); `toPicture` is left only for
+a slide the converter classes picture (more pictures than a slide may hold, until `decor-conv`'s sheets).
+
+- **Step 3** (`nativeJob.ts` `budget`, pure parts in `ladder.ts`, which the harness's census also runs):
+  - outline files are admitted one by one in slide order within `PPTX_LIMITS.geomFileBytes`; an object that
+    names one past it (or one dropped as its batch arrived, or one its batch's bound left out, `geomOver`) is
+    left out, a picture keeps its box without the mask (`withoutFiles`);
+  - every slide is measured as stored (`storedBytes`: one-slide `sanitizePresentation`, `Slide.safeParse`,
+    ULID ids and SHA-256 refs; `quickBytes` for slides well within 64 KB) and fitted with
+    `fitSlideBudget` (grid, plain, minimal); `planImportSizes` then takes the fitted sizes and each slide's
+    minimal form (`minimalSlide`) as its compact size, and the tail is stored minimal. A deck too large
+    even all minimal has its tail's text cut to 200 characters a box (as the compact slides' search text was);
+  - each simplified slide gets one note ('simplified to fit the slide budget: …', 'the presentation reached
+    its size budget: only its text and pictures are kept') and one warning; what it lost is `Slide.pptx.missing`
+    ('decoration', 'chart') with or without LibreOffice, the slide is hybrid and never `pending`
+    (`provenance`: a hybrid slide waits for LibreOffice only for its art). `PptxNativeResult.simplified`
+    counts them; `compact` is 0.
+- **Step 3b**: an object naming a file the store could not take is left out the same way (was: the slide a
+  compact picture).
+- **Step 5**: a slide the schema refuses is stored minimal, else with its text objects rebuilt from their text
+  and box (`rescuedTexts`), with a note and a warning (was: a compact picture).
+- **Step 2c, failures** (`convert`, `batch`, `oneByOne`, `rescue`): a batch's slide parts are sent as copies,
+  so a failed batch is converted again slide by slide (`RETRY_SLIDE_MS`, 30 s each, within the pool-time
+  budget); a slide that still fails, one the converter read as `unreadable`, and the slides past
+  `PPTX_LIMITS.importPoolMs` go to the text rescue: pool task `pptx-scene` with `SceneTaskInput.rescue`
+  (`sceneTask.ts` → `@ordo/pptx-scene` `rescueDeck`: own text bodies and table text, no geometry; runs of
+  consecutive slides per call at `RESCUE_SLIDE_MS` 2 s a slide, a failed run slide by slide, all within
+  `RESCUE_TOTAL_MS` 2 minutes, each call stopped by an abort timer). A rescued slide is hybrid with
+  `missing: ['slide']` and the rescue's note; one nothing could read is an empty slide that says so.
+- Tests: `pptx-no-libreoffice.test.ts` ('the budget ladder without LibreOffice': over 64 KB, the 4 MiB tail,
+  the outline-file budget, a schema refusal, the rescue, the retry), `pptx-native.test.ts` (the same with
+  LibreOffice: no follow-up for a budget), `pptx-geoms.test.ts`, `pptx-integrate.test.ts` (2,000-slide decks).
+<!-- /m9:ladder -->
+

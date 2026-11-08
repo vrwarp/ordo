@@ -78,13 +78,13 @@ afterAll(async () => {
 
 const textBox = (id: number, text: string, y = 0) =>
   sp({ id, x: IN, y: IN + y, cx: 8 * IN, cy: IN, txBody: body(para(run(text, 'sz="2000"'))) });
-/** A slide too large for one native slide (§3.4: 64 KB): picture class. */
-const pictureSlide = () => {
-  const big = 'x'.repeat(19_000);
-  return {
-    shapes: textBox(2, big) + textBox(3, big, IN) + textBox(5, big, 2 * IN) + textBox(6, big, 3 * IN),
-  };
-};
+/**
+ * A slide over the object budget (160 text boxes, past 150): picture class. (Since M9's budget ladder a slide
+ * too large in bytes stays native, simplified.)
+ */
+const pictureSlide = () => ({
+  shapes: Array.from({ length: 160 }, (_, i) => textBox(10 + i, `Item ${i}`, (i % 6) * 0.1 * IN)).join(''),
+});
 const chartSlide = (text = 'Giving') => ({
   shapes:
     textBox(2, text) +
