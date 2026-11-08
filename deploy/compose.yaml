@@ -1,0 +1,25 @@
+# ordo hub on the Synology NAS (Container Manager → Project). See deploy/README.md.
+services:
+  ordo-hub:
+    image: vrwarp/ordo-hub:v0.1.0
+    container_name: ordo-hub
+    restart: unless-stopped
+    # tini -> supervisor -> live + library processes; the supervisor stops both within 5 s of SIGTERM.
+    stop_grace_period: 15s
+    environment:
+      ORDO_DOMAIN: venue.synology.me # your DDNS name; role hosts are op., hub., stage., out1..6.
+      ORDO_TRUSTED_PROXY: 172.16.0.0/12 # DSM reverse proxy source on the Docker bridge
+      ORDO_TZ: America/Los_Angeles # venue time zone on first run; Settings → General → Time zone afterwards
+      ORDO_PORT: "8080"
+    volumes:
+      - /volume1/docker/ordo/data:/data
+      # Optional: a read-only ProPresenter library folder for POST /import/pro7 { path: "/import/..." }
+      # - /volume1/ProPresenter:/import:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    # Hard memory cap. `mem_limit` is honoured by plain `docker compose up` (and Container Manager);
+    # `deploy.resources.limits` only applies in swarm mode or with `--compatibility`.
+    mem_limit: 4g
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }

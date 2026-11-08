@@ -1,0 +1,214 @@
+import { DEMO } from '@ordo/client';
+import { formatClock } from '@ordo/domain';
+import { useEffect, useState } from 'react';
+import { confirmDialog } from '../../components/Confirm.tsx';
+import { cacheSummary, dotTitle, outputDot, outputIssues } from '../../lib/health.ts';
+import { hubStatus } from '../../lib/hubStatus.ts';
+import { useHubNow } from '../../hooks.ts';
+import { controller, dispatch } from '../../services/controller.ts';
+import { useLaunch } from '../../services/outputs.ts';
+import { missingHandles, reacquireMissing } from '../../services/reacquire.ts';
+import { currentRedState, runRedAction } from '../../services/redState.ts';
+import { useLibrary } from '../../state/library.ts';
+import { useLive } from '../../state/live.ts';
+import { toast } from '../../state/toasts.ts';
+import { setUi } from '../../state/ui.ts';
+
+function useOnline(): boolean {
+  const [on, setOn] = useState(navigator.onLine);
+  useEffect(() => {
+    const a = () => setOn(true);
+    const b = () => setOn(false);
+    window.addEventListener('online', a);
+    window.addEventListener('offline', b);
+    return () => {
+      window.removeEventListener('online', a);
+      window.removeEventListener('offline', b);
+    };
+  }, []);
+  return on;
+}
+
+export function TopBar() {
+  const now = useHubNow(1000);
+  const general = useLibrary((s) => s.data.settings.general);
+  const outputs = useLibrary((s) => s.data.settings.outputs);
+  const live = useLive();
+  const launch = useLaunch();
+  const online = useOnline();
+  const s = live.state;
+  const isLive = s.mode === 'live';
+  const status = hubStatus(live);
+  const { fallback } = status;
+  // The GitHub Pages demo has no hub by design: say so instead of "Connecting…".
+  const hubDot = DEMO ? (live.held ? 'amber' : 'green') : status.dot;
+  const hubText = DEMO
+    ? live.held
+      ? 'Demo: live in this browser'
+      : 'Demo: runs in this browser'
+    : status.text;
+  const entries = Object.values(live.health);
+  const cache = cacheSummary(entries, live.ownCache.total ? live.ownCache : undefined);
+  const cacheDot = !isLive ? 'grey' : cache.frac >= 1 ? 'green' : 'amber';
+  const tone = fallback || (isLive && !live.hubConnected) ? 'amber' : '';
+  // Fallback link: windows this tab holds a handle for, out of the output windows known to exist
+  // (held, or reported connected by the hub). Without a handle the fallback bus cannot reach a window.
+  const enabled = outputs.filter((o) => o.enabled);
+  const held = enabled.filter((o) => launch.open[o.id]).length;
+  const known = enabled.filter((o) => launch.open[o.id] || live.health[o.id]?.connected).length;
+  const linkMissing = isLive && held < known;
+  // Performance alarms on the screens, in plain words; the diagnostics view has the figures, and the fonts
+  // (nothing a volunteer can do during the service: notes for the tech, not here).
+  const notes = enabled.flatMap((o) =>
+    outputIssues(live.health[o.id])
+      .filter((i) => i.level === 'warn')
+      .map((i) => `${o.name}: ${i.label}`),
+  );
+  const red = currentRedState(live);
+  // Peak main-thread stall of the last minute as the core worker saw it (250 ms watchdog tick; design/25).
+  const stall = live.core?.mainThreadStallMaxMs ?? 0;
+  const onFallbackLink = () => {
+    reacquireMissing(true);
+    if (missingHandles().ids.length)
+      toast(
+        'Some output windows were opened by another operator tab and cannot be reached from this one. Use Relaunch to take them over.',
+        'warn',
+        10_000,
+      );
+  };
+  return (
+    <div className={`topbar ${tone}`}>
+      <div className="col" style={{ gap: 0, minWidth: 160 }}>
+        <span className="muted small">{isLive ? 'LIVE' : 'Not live'}</span>
+        <b className="ellipsis" style={{ maxWidth: 240 }}>
+          {s.resolved?.playlist.name ?? '—'}
+        </b>
+      </div>
+      <span className="stat" title={hubText} data-hub-status>
+        <span className={`dot ${hubDot}`} /> {hubText}
+      </span>
+      <span className="stat" title="Internet connection of this PC">
+        <span className={`dot ${online ? 'green' : 'amber'}`} /> WAN
+      </span>
+      <span className="stat" title={`Service cache ${cache.ready}/${cache.total}`}>
+        <span className={`dot ${cacheDot}`} /> Cache {isLive ? `${Math.floor(cache.frac * 100)}%` : ''}
+      </span>
+      <span className="stat">
+        {outputs
+          .filter((o) => o.enabled)
+          .map((o) => {
+            const h = live.health[o.id];
+            const d = outputDot(h);
+            return (
+              <span key={o.id} className="row" style={{ gap: 4 }} title={dotTitle(h, o.name)}>
+                <span className={`dot ${d}`} />
+                <span className="small">{o.name}</span>
+              </span>
+            );
+          })}
+      </span>
+      {notes.length > 0 && (
+        <button
+          type="button"
+          className="tag amber"
+          data-output-notes={notes.length}
+          onClick={() => setUi({ showDiagnostics: true })}
+          title={`${notes.join('\n')}\n\nClick for the details.`}
+        >
+          {notes.length === 1
+            ? '1 thing to check on the screens'
+            : `${notes.length} things to check on the screens`}
+        </button>
+      )}
+      {live.pending > 0 && !fallback && <span className="tag amber">{live.pending} pending</span>}
+      {live.recovering && (
+        <span
+          className="tag amber"
+          data-recovering
+          title="The operator core is restarting. Keys and Stream Deck presses are kept and sent when it is back (about a second)."
+        >
+          Recovering…
+        </span>
+      )}
+      {red && (
+        <button
+          type="button"
+          className="tag red"
+          data-red-state={red.kind ?? 'core'}
+          onClick={() => runRedAction(red)}
+          title={red.detail ? `Last: ${red.detail}` : red.info.label}
+        >
+          {red.info.label} — {red.info.actionLabel}
+        </button>
+      )}
+      {stall >= 1000 && (
+        <span
+          className="tag amber"
+          title="The operator page was busy (peak in the last minute); the hub link, the fallback bus and the outputs were not affected. Use the Stream Deck if keys feel late."
+        >
+          UI stalled {(stall / 1000).toFixed(1)} s
+        </span>
+      )}
+      {linkMissing && (
+        <button
+          type="button"
+          className="tag amber"
+          data-fallback-link
+          onClick={onFallbackLink}
+          title="This tab holds no handle for some output windows, so it could not drive them if the hub were lost. Click to re-acquire them, or use Relaunch."
+        >
+          fallback link {held}/{known}
+        </button>
+      )}
+      <span className="spacer" />
+      <span className="clock">{formatClock(now, general.timeZone, general.clock24h)}</span>
+      <button
+        type="button"
+        className="big"
+        disabled={launch.busy}
+        data-launch
+        onClick={() => dispatch({ id: 'launchOutputs' })}
+        title="Ctrl+Shift+L"
+      >
+        Launch outputs
+      </button>
+      <button
+        type="button"
+        className="big"
+        disabled={launch.busy}
+        data-launch
+        onClick={() => dispatch({ id: 'relaunchOutputs' })}
+        title="Ctrl+Shift+R"
+      >
+        Relaunch
+      </button>
+      {isLive && (
+        <button
+          type="button"
+          className="danger big"
+          onClick={async () => {
+            if (
+              await confirmDialog(
+                'End service',
+                'Clear every output and unlock the playlist for editing?',
+                'End service',
+                true,
+              )
+            )
+              controller()?.endService();
+          }}
+        >
+          End service
+        </button>
+      )}
+      <button
+        type="button"
+        className="ghost"
+        onClick={() => setUi({ showDiagnostics: true })}
+        title="Diagnostics"
+      >
+        ⚙
+      </button>
+    </div>
+  );
+}

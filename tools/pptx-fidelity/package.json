@@ -1,0 +1,21 @@
+{
+  "name": "@ordo/pptx-fidelity",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@ordo/domain": "workspace:*",
+    "@ordo/importers": "workspace:*",
+    "@ordo/pptx-render": "workspace:*",
+    "@ordo/pptx-scene": "workspace:*",
+    "@ordo/renderer": "workspace:*",
+    "pptxgenjs": "4.0.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15"
+  }
+}

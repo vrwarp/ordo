@@ -1,0 +1,18 @@
+node_modules
+dist
+.data
+*.db
+*.db-wal
+*.db-shm
+test-results
+playwright-report
+tools/fixtures/out
+soak-*.json
+soak-*.md
+.env
+.e2e-data*
+site
+tmp
+
+# Agent worktrees (local tooling)
+.claude/worktrees/

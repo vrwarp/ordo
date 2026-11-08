@@ -1,0 +1,138 @@
+html,
+body,
+#root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  color: #fff;
+  cursor: none;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.viewport {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+
+/* The 1920x1080 logical canvas, scaled to the screen and centred. */
+.stage {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1920px;
+  height: 1080px;
+  transform-origin: 50% 50%;
+  overflow: hidden;
+}
+
+.region {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.region-inner {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+/* Paragraphs (App.tsx Paragraphs): each its own block taking its direction from its content (dir="auto",
+   design/27 §6). The '\n' between the blocks is collapsed; an empty paragraph keeps its line. */
+.lyrics,
+.notes-text {
+  white-space: normal;
+}
+
+.para {
+  white-space: pre-wrap;
+  unicode-bidi: plaintext;
+}
+
+.para:empty::before {
+  content: "\200b";
+}
+
+.kicker {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6em;
+  text-transform: uppercase;
+  margin-bottom: 0.15em;
+  line-height: 1.1;
+  -webkit-text-stroke: 0;
+}
+
+.kicker .pos {
+  opacity: 0.7;
+  font-weight: 400;
+}
+
+.next .lyrics {
+  opacity: 0.95;
+}
+
+/* The preacher's notes: cut to their box (never shrunk), the last line faded when something is cut. */
+.notes-clip {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overflow-wrap: break-word;
+}
+
+.notes-clip[data-cut="1"] {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent);
+}
+
+.prop {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.prop-inner {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.timer-label {
+  font-size: 0.55em;
+  font-weight: 500;
+  opacity: 0.8;
+  margin-right: 0.3em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.messages {
+  justify-content: safe flex-end;
+  gap: 12px;
+}
+
+.message {
+  box-sizing: border-box;
+  flex: none;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  unicode-bidi: plaintext;
+  transition-property: opacity;
+  transition-timing-function: ease;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+
+.offline-dot {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ff3b30;
+  opacity: 0.8;
+}

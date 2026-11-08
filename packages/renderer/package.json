@@ -1,0 +1,31 @@
+{
+  "name": "@ordo/renderer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "golden": "tsx golden/run.ts",
+    "late-font": "tsx golden/late-font.ts",
+    "bench:slides": "tsx bench/slides.ts",
+    "bench:venue": "tsx bench/venue.ts",
+    "bench": "tsx bench/raster.ts",
+    "golden:compositor": "tsx golden/compositor-run.ts",
+    "bench:sprites": "tsx bench/sprites.ts",
+    "bench:gpu": "tsx bench/gpu-venue.ts"
+  },
+  "dependencies": {
+    "@ordo/domain": "workspace:*",
+    "bidi-js": "1.1.0",
+    "linebreak": "1.1.0"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.74"
+  }
+}

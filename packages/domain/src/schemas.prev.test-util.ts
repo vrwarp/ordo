@@ -1,0 +1,513 @@
+/*
+ * The stored-model schema of the previous release, kept verbatim as a test fixture (design/27 §14.7):
+ * schemas.ts as it was before design/27's optional fields (last changed in commit 71635a3). The
+ * compatibility tests check that this schema still parses slides written by the current one, stripping the
+ * new fields as an older build would, and that the stripped slides still draw. When a release adds stored
+ * fields, replace this file with the schema of the release before it.
+ */
+import { z } from 'zod';
+
+/**
+ * Bounds (design/25 "validate at entry"): every string, array, record and number has a limit far above any
+ * real use, so a damaged or hostile record is refused at the boundary instead of reaching a renderer. The
+ * render plan clamps further at the point of use.
+ */
+const MAX = {
+  id: 200,
+  name: 500,
+  text: 20_000,
+  long: 200_000,
+  coord: 100_000,
+  ms: 86_400_000,
+} as const;
+const name = () => z.string().max(MAX.name);
+/** A record with at most `n` keys. */
+function bounded<T extends z.ZodType>(schema: T, n: number): T {
+  return schema.refine((o) => Object.keys(o as object).length <= n, { message: `at most ${n} entries` }) as T;
+}
+
+/** ULID string identifiers for every stored entity. */
+export const Id = z.string().min(1).max(MAX.id);
+export type Id = z.infer<typeof Id>;
+
+/** Logical canvas is 1920x1080; outputs scale. */
+export const LOGICAL_WIDTH = 1920;
+export const LOGICAL_HEIGHT = 1080;
+
+const channel = z.number().min(0).max(255);
+export const Rgba = z.object({ r: channel, g: channel, b: channel, a: z.number().min(0).max(1) });
+export type Rgba = z.infer<typeof Rgba>;
+
+const coord = z.number().min(-MAX.coord).max(MAX.coord);
+const length = z.number().min(0).max(MAX.coord);
+export const Box = z.object({
+  x: coord,
+  y: coord,
+  w: coord,
+  h: coord,
+  rotation: z.number().min(-36_000).max(36_000).default(0),
+});
+export type Box = z.infer<typeof Box>;
+
+export const TextStyle = z.object({
+  fontFamily: z.string().max(300),
+  fontWeight: z.number().min(0).max(1000).default(400),
+  fontStyle: z.enum(['normal', 'italic']).default('normal'),
+  fontSizePx: z.number().min(0).max(5000),
+  color: Rgba,
+  align: z.enum(['left', 'center', 'right']).default('center'),
+  valign: z.enum(['top', 'middle', 'bottom']).default('middle'),
+  lineHeight: z.number().min(0).max(100).default(1.2),
+  letterSpacing: z.number().min(-1000).max(1000).default(0),
+  padding: coord.default(0),
+  outline: z.object({ width: length, color: Rgba }).optional(),
+  shadow: z.object({ dx: coord, dy: coord, blur: length, color: Rgba }).optional(),
+  fill: z.object({ color: Rgba, radius: length.default(0) }).optional(),
+  /** Applied when drawn; the text itself keeps its authored casing (ProPresenter's ALL CAPS). */
+  transform: z.enum(['none', 'uppercase']).default('none'),
+});
+export type TextStyle = z.infer<typeof TextStyle>;
+
+export const TextObject = z.object({
+  id: Id,
+  type: z.literal('text'),
+  box: Box,
+  text: z.string().max(MAX.text),
+  style: TextStyle,
+  opacity: z.number().min(0).max(1).default(1),
+});
+export type TextObject = z.infer<typeof TextObject>;
+
+export const ImageObject = z.object({
+  id: Id,
+  type: z.literal('image'),
+  box: Box,
+  mediaId: Id,
+  fit: z.enum(['contain', 'cover', 'stretch']).default('contain'),
+  opacity: z.number().min(0).max(1).default(1),
+  radius: length.default(0),
+});
+export type ImageObject = z.infer<typeof ImageObject>;
+
+export const ShapeObject = z.object({
+  id: Id,
+  type: z.literal('shape'),
+  box: Box,
+  shape: z.enum(['rect', 'ellipse', 'line']),
+  fill: Rgba.optional(),
+  stroke: z.object({ width: length, color: Rgba }).optional(),
+  opacity: z.number().min(0).max(1).default(1),
+  radius: length.default(0),
+});
+export type ShapeObject = z.infer<typeof ShapeObject>;
+
+export const SlideObject = z.discriminatedUnion('type', [TextObject, ImageObject, ShapeObject]);
+export type SlideObject = z.infer<typeof SlideObject>;
+
+export const ExtractedText = z.object({
+  text: z.string().max(MAX.text),
+  box: Box,
+  fontSizePx: z.number().min(0).max(5000).optional(),
+});
+export type ExtractedText = z.infer<typeof ExtractedText>;
+
+export const ScriptureRef = z.object({
+  translation: z.string().max(200),
+  book: z.string().max(200),
+  chapter: z.number().int().min(0).max(10_000),
+  verseFrom: z.number().int().min(0).max(10_000),
+  verseTo: z.number().int().min(0).max(10_000).optional(),
+});
+export type ScriptureRef = z.infer<typeof ScriptureRef>;
+
+export const ScriptureSlideSource = z.object({
+  ref: ScriptureRef,
+  text: z.string().max(MAX.text),
+  fetchedAt: z.string().max(100),
+  provider: z.string().max(200),
+});
+export type ScriptureSlideSource = z.infer<typeof ScriptureSlideSource>;
+
+export const Slide = z.object({
+  id: Id,
+  objects: z.array(SlideObject).max(1000).default([]),
+  lyricObjectId: Id.optional(),
+  backgroundMediaId: Id.optional(),
+  /**
+   * Showing this slide clears the running background (a ProPresenter slide with a clear action). Ignored
+   * when the slide has a background of its own.
+   */
+  clearBackground: z.boolean().optional(),
+  durationMs: z.number().min(0).max(MAX.ms).optional(),
+  notes: z.string().max(MAX.long).optional(),
+  overrides: z.array(z.string().max(200)).max(1000).optional(),
+  imported: z
+    .object({
+      fileId: Id,
+      page: z.number().int().min(0).max(100_000),
+      imageMediaId: Id,
+      textBoxes: z.array(ExtractedText).max(1000).optional(),
+    })
+    .optional(),
+  scripture: ScriptureSlideSource.optional(),
+});
+export type Slide = z.infer<typeof Slide>;
+
+export const Section = z.object({
+  id: Id,
+  label: z.string().max(MAX.name),
+  short: z.string().max(100),
+  slides: z.array(Slide).max(5000).default([]),
+  /** Chords per lyric line, kept from ChordPro imports for a future chord view. */
+  chords: z.array(z.string().max(2000)).max(20_000).optional(),
+});
+export type Section = z.infer<typeof Section>;
+
+export const Arrangement = z.object({ id: Id, name: name(), sectionIds: z.array(Id).max(10_000) });
+export type Arrangement = z.infer<typeof Arrangement>;
+
+export const Transition = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('cut') }),
+  z.object({ kind: z.literal('crossfade'), ms: z.number().min(0).max(10000) }),
+]);
+export type Transition = z.infer<typeof Transition>;
+
+export const PresentationKind = z.enum(['song', 'slides', 'loop']);
+export type PresentationKind = z.infer<typeof PresentationKind>;
+
+/** What draws a PowerPoint's slides into pictures on import (design/20 "PPTX and PDF"). */
+export const PptxRenderer = z.enum(['libreoffice', 'pptx-preview']);
+export type PptxRenderer = z.infer<typeof PptxRenderer>;
+
+export const Presentation = z.object({
+  id: Id,
+  rev: z.number().int().min(0).default(1),
+  title: z.string().max(1000),
+  kind: PresentationKind,
+  meta: z
+    .object({
+      author: z.string().max(2000).optional(),
+      ccli: z.string().max(200).optional(),
+      copyright: z.string().max(5000).optional(),
+      key: z.string().max(50).optional(),
+      tempo: z.number().min(0).max(10_000).optional(),
+      tags: z.array(z.string().max(200)).max(200).default([]),
+    })
+    .default({ tags: [] }),
+  folderId: Id.optional(),
+  themeId: Id.optional(),
+  backgroundMediaId: Id.optional(),
+  transition: Transition.optional(),
+  sections: z.array(Section).max(2000).default([]),
+  arrangements: z.array(Arrangement).max(500).default([]),
+  loop: z.object({ defaultSlideMs: z.number().min(0).max(MAX.ms) }).optional(),
+  linesPerSlide: z.number().int().min(1).max(12).optional(),
+  source: z
+    .object({
+      kind: z.enum(['pro7', 'songselect', 'pptx', 'pdf', 'manual', 'paste']),
+      fileId: Id.optional(),
+      /** What drew a PowerPoint's slide pictures (design/20 "PPTX and PDF"). */
+      renderer: PptxRenderer.optional(),
+      log: z.string().max(MAX.long).optional(),
+    })
+    .optional(),
+  archived: z.boolean().default(false),
+  createdAt: z.string().max(100).optional(),
+  updatedAt: z.string().max(100).optional(),
+});
+export type Presentation = z.infer<typeof Presentation>;
+
+export const Theme = z.object({
+  id: Id,
+  name: name(),
+  lyricBox: Box,
+  text: TextStyle,
+  textBoxDefaults: TextStyle,
+});
+export type Theme = z.infer<typeof Theme>;
+
+export const FileRef = z.object({
+  hash: z.string().max(128),
+  bytes: z.number().int().min(0),
+  mime: z.string().max(200),
+  path: z.string().max(1000),
+});
+export type FileRef = z.infer<typeof FileRef>;
+
+export const MediaKind = z.enum(['video', 'image', 'audio']);
+export type MediaKind = z.infer<typeof MediaKind>;
+
+export const Media = z.object({
+  id: Id,
+  rev: z.number().int().min(0).default(1),
+  name: name(),
+  tags: z.array(z.string().max(200)).max(200).default([]),
+  kind: MediaKind,
+  original: FileRef,
+  delivery: FileRef.optional(),
+  poster: FileRef.optional(),
+  state: z.enum(['uploaded', 'processing', 'ready', 'failed']),
+  error: z.string().max(5000).optional(),
+  durationMs: z
+    .number()
+    .min(0)
+    .max(10 * MAX.ms)
+    .optional(),
+  width: z.number().min(0).max(MAX.coord).optional(),
+  height: z.number().min(0).max(MAX.coord).optional(),
+  hasAlpha: z.boolean().optional(),
+  loop: z.boolean().default(false),
+  isBackground: z.boolean().default(false),
+  audio: z
+    .object({
+      pairId: Id.optional(),
+      gainDb: z.number().min(-100).max(100).default(0),
+      loudnessLufs: z.number().min(-200).max(100).optional(),
+    })
+    .optional(),
+  createdAt: z.string().max(100).optional(),
+  updatedAt: z.string().max(100).optional(),
+});
+export type Media = z.infer<typeof Media>;
+
+export const Font = z.object({
+  id: Id,
+  family: z.string().max(300),
+  weight: z.number().min(0).max(1000),
+  style: z.enum(['normal', 'italic']),
+  file: FileRef,
+  source: z.enum(['upload', 'google', 'bundled']),
+});
+export type Font = z.infer<typeof Font>;
+
+export const TimerSpec = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('countdownTo'),
+    /** HH:MM in the venue's time zone. */
+    timeOfDay: z.string().regex(/^\d{2}:\d{2}$/),
+    label: z.string().max(200).optional(),
+  }),
+  z.object({ kind: z.literal('elapsed'), label: z.string().max(200).optional() }),
+]);
+export type TimerSpec = z.infer<typeof TimerSpec>;
+
+export const ActionId = z.enum([
+  'go',
+  'next',
+  'prev',
+  'nextItem',
+  'prevItem',
+  'goToSection',
+  'goToSlide',
+  'clearSlide',
+  'clearAll',
+  'clearLowerThird',
+  'clearProps',
+  'clearMedia',
+  'clearBackground',
+  'logo',
+  'mediaPlayPause',
+  'mediaRestart',
+  'timerStart',
+  'timerStop',
+  'timerReset',
+  'messagePreset',
+  'messageDismiss',
+  'audioMute',
+  'audioMasterUp',
+  'audioMasterDown',
+  'audioFadeOut',
+  'launchOutputs',
+  'relaunchOutputs',
+]);
+export type ActionId = z.infer<typeof ActionId>;
+
+export const MediaOnEnd = z.enum(['hold', 'black', 'advance']);
+export type MediaOnEnd = z.infer<typeof MediaOnEnd>;
+
+export const PlaylistItem = z.discriminatedUnion('kind', [
+  z.object({
+    id: Id,
+    kind: z.literal('presentation'),
+    presentationId: Id,
+    arrangementId: Id.optional(),
+    transition: Transition.optional(),
+    backgroundMediaId: Id.optional(),
+  }),
+  z.object({
+    id: Id,
+    kind: z.literal('media'),
+    mediaId: Id,
+    loop: z.boolean().optional(),
+    onEnd: MediaOnEnd.optional(),
+    audio: z.object({ pairId: Id.optional(), gainDb: z.number().min(-100).max(100).optional() }).optional(),
+  }),
+  z.object({ id: Id, kind: z.literal('timer'), timer: TimerSpec }),
+  z.object({ id: Id, kind: z.literal('action'), action: ActionId }),
+]);
+export type PlaylistItem = z.infer<typeof PlaylistItem>;
+
+export const Playlist = z.object({
+  id: Id,
+  rev: z.number().int().min(0).default(1),
+  name: name(),
+  serviceDate: z.string().max(100).optional(),
+  items: z.array(PlaylistItem).max(5000).default([]),
+  createdAt: z.string().max(100).optional(),
+  updatedAt: z.string().max(100).optional(),
+});
+export type Playlist = z.infer<typeof Playlist>;
+
+export const LayerName = z.enum(['background', 'slide', 'lowerThird', 'media', 'props']);
+export type LayerName = z.infer<typeof LayerName>;
+export const LAYER_ORDER: readonly LayerName[] = ['background', 'slide', 'lowerThird', 'media', 'props'];
+
+export const LayerRule = z.object({ visible: z.boolean() });
+export type LayerRule = z.infer<typeof LayerRule>;
+
+export const SlideRule = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('authored') }),
+  z.object({
+    mode: z.literal('lyricOnly'),
+    style: TextStyle,
+    band: Box,
+    nextSlide: z.object({ style: TextStyle, band: Box }).optional(),
+    nonSong: z.enum(['text', 'none']).default('text'),
+  }),
+  z.object({ mode: z.literal('hidden') }),
+]);
+export type SlideRule = z.infer<typeof SlideRule>;
+
+export const PropBox = TextStyle.extend({ box: Box });
+export type PropBox = z.infer<typeof PropBox>;
+
+export const PropsRule = z.object({
+  logo: z.boolean().default(false),
+  countdown: z.boolean().default(false),
+  clock: z.boolean().default(false),
+  messages: z.boolean().default(false),
+  elapsed: z.boolean().default(false),
+  /**
+   * Stage look: show the remaining time of the live video. Optional so stored looks need no migration;
+   * absent means "follow `elapsed`".
+   */
+  mediaRemaining: z.boolean().optional(),
+  style: bounded(z.record(z.string().max(100), PropBox), 100).default({}),
+});
+export type PropsRule = z.infer<typeof PropsRule>;
+
+export const Look = z.object({
+  id: Id,
+  name: name(),
+  kind: z.enum(['main', 'stage', 'lowerThird', 'stream', 'custom']).default('custom'),
+  layers: z.object({
+    background: LayerRule,
+    slide: SlideRule,
+    lowerThird: LayerRule,
+    media: LayerRule,
+    props: PropsRule,
+  }),
+  /** Fill drawn under everything: black, or the key colour for the stream look. */
+  clearColor: Rgba,
+  /** Optional holding slide image shown when the background layer is hidden (lobby). */
+  holdingMediaId: Id.optional(),
+  transition: Transition,
+});
+export type Look = z.infer<typeof Look>;
+
+export const ScreenRef = z.object({
+  label: z.string().max(500),
+  left: coord,
+  top: coord,
+  width: length,
+  height: length,
+});
+export type ScreenRef = z.infer<typeof ScreenRef>;
+
+export const OutputKind = z.enum(['output', 'stage']);
+export const Output = z.object({
+  id: Id,
+  name: name(),
+  kind: OutputKind.default('output'),
+  /** out<k> hostname index; 0 for stage. */
+  hostIndex: z.number().int().min(0).max(6),
+  lookId: Id,
+  screen: ScreenRef.optional(),
+  enabled: z.boolean().default(true),
+  audioMaster: z.boolean().default(false),
+  /** Plain token is only returned to the operate role; stored hashed at rest is not required for the prototype. */
+  token: z.string().max(200).optional(),
+});
+export type Output = z.infer<typeof Output>;
+
+export const AudioPair = z.object({
+  id: Id,
+  name: name(),
+  left: z.number().int().min(0).max(1024),
+  right: z.number().int().min(0).max(1024),
+});
+export type AudioPair = z.infer<typeof AudioPair>;
+
+export const AudioSettings = z.object({
+  houseDeviceId: z.string().max(1000).optional(),
+  houseDeviceLabel: z.string().max(1000).optional(),
+  previewDeviceId: z.string().max(1000).optional(),
+  previewDeviceLabel: z.string().max(1000).optional(),
+  pairs: z.array(AudioPair).max(256).default([]),
+  defaultPairId: Id.optional(),
+  masterDb: z.number().min(-100).max(100).default(0),
+});
+export type AudioSettings = z.infer<typeof AudioSettings>;
+
+/** A surface action's argument: a cue/section number or a short string (a message preset). */
+const ActionArg = z.union([z.number().min(-1_000_000).max(1_000_000), z.string().max(500)]);
+export const KeyMap = bounded(
+  z.record(z.string().max(100), z.object({ id: ActionId, arg: ActionArg.optional() })),
+  1000,
+);
+export type KeyMap = z.infer<typeof KeyMap>;
+
+export const StreamDeckKey = z.object({
+  action: z.object({ id: ActionId, arg: ActionArg.optional() }).optional(),
+  /** Dynamic keys bind to live state instead of a fixed action. */
+  dynamic: z.enum(['section', 'nextItem']).optional(),
+  dynamicIndex: z.number().int().min(0).max(10_000).optional(),
+  label: z.string().max(200).optional(),
+  color: z.string().max(100).optional(),
+});
+export type StreamDeckKey = z.infer<typeof StreamDeckKey>;
+
+export const StreamDeckPage = z.object({
+  name: z.string().max(200),
+  keys: bounded(z.record(z.string().max(20), StreamDeckKey), 200),
+});
+export type StreamDeckPage = z.infer<typeof StreamDeckPage>;
+
+export const MidiMapping = z.object({
+  id: Id,
+  deviceName: z.string().max(500).optional(),
+  kind: z.enum(['note', 'cc']),
+  number: z.number().int().min(0).max(127),
+  channel: z.number().int().min(1).max(16).optional(),
+  threshold: z.number().int().min(0).max(127).default(64),
+  action: z.object({ id: ActionId, arg: ActionArg.optional() }),
+});
+export type MidiMapping = z.infer<typeof MidiMapping>;
+
+export const SurfaceSettings = z.object({
+  streamDeckPages: z.array(StreamDeckPage).max(100).default([]),
+  midi: z.array(MidiMapping).max(1000).default([]),
+  messagePresets: z.array(z.string().max(500)).max(200).default([]),
+});
+export type SurfaceSettings = z.infer<typeof SurfaceSettings>;
+
+export const GeneralSettings = z.object({
+  venueName: z.string().max(200).default('ordo'),
+  timeZone: z.string().max(100).default('UTC'),
+  clock24h: z.boolean().default(false),
+  logoMediaId: Id.optional(),
+  defaultThemeId: Id.optional(),
+  defaultLinesPerSlide: z.number().int().min(0).max(100).default(2),
+  defaultPreRollMs: z.number().int().min(0).max(60_000).default(33),
+});
+export type GeneralSettings = z.infer<typeof GeneralSettings>;

@@ -1,0 +1,65 @@
+name: CI
+
+# Pull requests, and merges to main (a merge is a push to main). Pushes to other branches do not run CI
+# on their own: open a pull request (or run it by hand) to check a branch.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: System tools for the media pipeline
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils libreoffice-impress
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      # The GitHub Pages demo (apps/demo); e2e/pages-demo.spec.ts serves and drives it.
+      - run: pnpm build:pages
+      # Advisories in third-party packages must not block an unrelated merge; the weekly audit
+      # workflow (.github/workflows/audit.yml) reports them on its own schedule.
+      - name: Audit dependencies (advisory only)
+        continue-on-error: true
+        run: pnpm audit --prod --audit-level high
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      # iPad editing (design/15): the webkit-ipad and webkit-ipad-portrait projects run in the same `pnpm e2e`.
+      - name: Install Playwright WebKit
+        run: pnpm exec playwright install --with-deps webkit
+      - name: End-to-end tests (Chromium venue PC, WebKit iPad)
+        run: pnpm e2e
+        env:
+          ORDO_CI: "1"
+      # The faces the golden images were drawn with (golden/expected/meta.json); a missing one fails the run.
+      - name: Fonts of the golden images
+        run: sudo apt-get install -y --no-install-recommends fonts-dejavu-core fonts-freefont-ttf fonts-ipafont-gothic
+      - name: Golden images of the text rasterizer
+        run: pnpm --filter @ordo/renderer golden --strict
+      - name: Late-loaded fonts take effect without a worker restart
+        run: pnpm --filter @ordo/renderer late-font
+      - name: Compositor golden (WebGPU on SwiftShader against Canvas 2D and the scene reference)
+        run: pnpm --filter @ordo/renderer golden:compositor
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7

@@ -1,0 +1,73 @@
+name: Docker build (dry run)
+
+# Builds the hub image for every pull request, for both platforms the publish workflow ships, and pushes
+# nothing. A Dockerfile, dependency or build change that breaks the image fails here, before the merge
+# that would publish it (docker-publish.yml). Needs no secrets, so it also runs for pull requests from forks.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to the pull request replaces the build in progress.
+concurrency:
+  group: docker-pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: ordo-hub:pr-${{ github.event.pull_request.number || 'manual' }}
+          build-args: |
+            VERSION=pr-${{ github.event.pull_request.number || 'manual' }}
+          # Reads the cache the publish workflow writes on main; writes its own layers for this branch.
+          cache-from: type=gha,scope=docker
+          cache-to: type=gha,scope=docker-pr-${{ github.event.pull_request.number || 'manual' }},mode=max
+      # The amd64 image is loaded and started once, so a runtime break (a missing system tool, a bundle
+      # that does not start) fails too, not only a build break.
+      - name: Load the amd64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ordo-hub:smoke
+          cache-from: |
+            type=gha,scope=docker
+            type=gha,scope=docker-pr-${{ github.event.pull_request.number || 'manual' }}
+      - name: Start the image and wait for its health check
+        run: |
+          docker run -d --name ordo-smoke -e ORDO_DEV_PIN=246810 -p 8080:8080 ordo-hub:smoke
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8080/api/v1/health >/dev/null; then
+              echo "hub is up"
+              curl -fsS -o /dev/null http://127.0.0.1:8080/ && echo "operator app served"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::The image did not answer its health check within 2 minutes."
+          docker logs ordo-smoke
+          exit 1
+      - name: The PowerPoint renderers start inside the image
+        run: |
+          # LibreOffice (default) and headless Chromium for pptx-preview, as the hub runs them (no sandbox).
+          docker exec ordo-smoke soffice --version
+          docker exec ordo-smoke sh -c 'chromium --headless --no-sandbox --disable-gpu --dump-dom about:blank >/dev/null'
+          echo "renderers start"
+      - name: Container log
+        if: always()
+        run: docker logs ordo-smoke 2>&1 | tail -50 || true

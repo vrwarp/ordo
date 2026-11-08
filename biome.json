@@ -1,0 +1,31 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.4/schema.json",
+  "files": {
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/node_modules",
+      "!**/*.gen.ts",
+      "!tools/fixtures/out",
+      "!**/proto/*.json",
+      "!test-results",
+      "!**/.e2e-data*",
+      "!playwright-report",
+      "!site",
+      "!**/tmp"
+    ]
+  },
+  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 110 },
+  "javascript": { "formatter": { "quoteStyle": "single", "semicolons": "always" } },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "style": { "noNonNullAssertion": "off", "useTemplate": "off", "noParameterAssign": "off" },
+      "suspicious": { "noExplicitAny": "warn", "noAssignInExpressions": "off" },
+      "complexity": { "noForEach": "off", "useLiteralKeys": "off" },
+      "a11y": { "preset": "none" }
+    }
+  },
+  "assist": { "actions": { "source": { "organizeImports": "off" } } }
+}
