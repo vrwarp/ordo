@@ -106,3 +106,21 @@ export function windowName(outputId: string): string {
 export function windowFeatures(s: ScreenInfo): string {
   return `popup,fullscreen,left=${s.left},top=${s.top},width=${s.width},height=${s.height}`;
 }
+
+export function simulatedWindowFeatures(index = 0, screen?: ScreenInfo): string {
+  const scWidth = screen?.width ?? (typeof window !== 'undefined' ? window.screen.width : 1920);
+  const scHeight = screen?.height ?? (typeof window !== 'undefined' ? window.screen.height : 1080);
+  const scLeft = screen?.left ?? 0;
+  const scTop = screen?.top ?? 0;
+
+  const w = scWidth > 1400 ? 960 : 640;
+  const h = Math.round((w * 9) / 16);
+
+  const stagger = 40;
+  const maxLeft = Math.max(0, scWidth - w - 40);
+  const maxTop = Math.max(0, scHeight - h - 60);
+  const left = scLeft + Math.min(maxLeft, 60 + (index % 6) * stagger);
+  const top = scTop + Math.min(maxTop, 60 + (index % 6) * stagger);
+
+  return `popup=yes,left=${left},top=${top},width=${w},height=${h},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=no`;
+}

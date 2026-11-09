@@ -8,7 +8,7 @@ type Kind = Media['kind'];
  */
 const ACCEPT: Record<Kind, string[]> = {
   video: ['video/*', '.mov', '.mp4', '.m4v', '.webm'],
-  image: ['image/*', '.gif', '.jpg', '.jpeg', '.png', '.webp'],
+  image: ['image/*', '.gif', '.jpg', '.jpeg', '.png', '.webp', '.svg'],
   audio: ['audio/*', '.wav', '.mp3', '.aac', '.flac', '.ogg', '.m4a'],
 };
 
@@ -32,6 +32,7 @@ const EXT_KIND: Record<string, Kind> = {
   png: 'image',
   gif: 'image',
   webp: 'image',
+  svg: 'image',
   avif: 'image',
   wav: 'audio',
   mp3: 'audio',

@@ -814,13 +814,6 @@ table.list th {
   min-height: 0;
   flex: 1;
 }
-.editor.focus-mode {
-  grid-template-columns: 0 1fr 0;
-}
-.editor.focus-mode > .ed-slides,
-.editor.focus-mode > .props {
-  display: none;
-}
 .editor > .toolbar {
   grid-column: 1 / -1;
   display: flex;
@@ -1151,6 +1144,44 @@ button.arr-chip-label {
 .ed-looks .look-previews.compact {
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   padding: 0 12px 10px;
+}
+
+.editor.focus-mode {
+  grid-template-columns: 1fr;
+  background: #000;
+}
+.editor.focus-mode > .ed-slides,
+.editor.focus-mode > .props,
+.editor.focus-mode .ed-looks {
+  display: none;
+}
+.editor.focus-mode > .stagewrap {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 100%;
+}
+.editor.focus-mode .canvasbox {
+  padding: 0;
+}
+
+.editor:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  grid-template-columns: 1fr;
+  background: #000;
+}
+.editor:fullscreen > .ed-slides,
+.editor:fullscreen > .props,
+.editor:fullscreen .ed-looks {
+  display: none;
+}
+.editor:fullscreen > .stagewrap {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 100%;
+}
+.editor:fullscreen .canvasbox {
+  padding: 0;
 }
 
 /* ---- touch (iPad): 44 px targets, 16 px inputs, labels, no sticky hover; mouse layouts unchanged ---- */

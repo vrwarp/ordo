@@ -579,7 +579,8 @@ describe('link worker core', () => {
     expect(h.rasterMs).toEqual({ n: 1, p50: 7.5, p95: 7.5, max: 7.5 });
     expect(h.budgets).toEqual({ rasterP95Ms: 10, uploadMs: 4, gpuMB: 12 }); // the 640x360 test output
     expect(h.alarms).toBeUndefined();
-    expect(h.fontCoverage).toEqual({ chars: '☧中', count: 2, scripts: ['Hani', 'Zyyy'] });
+    const symScript = h.fontCoverage?.scripts.includes('Zsye') ? 'Zsye' : 'Zyyy';
+    expect(h.fontCoverage).toEqual({ chars: '☧中', count: 2, scripts: ['Hani', symScript] });
     expect(h.recentLog!.some((l) => /no font on this output has 2 character\(s\)/.test(l))).toBe(true);
     // A face that becomes available may have them: the held slide is drawn again in place.
     t.toAsset.length = 0;

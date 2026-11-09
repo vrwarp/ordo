@@ -29,6 +29,7 @@ import {
   reloadLatest,
   save,
   selectObject,
+  startInlineEditing,
   undo,
   useEditor,
 } from './editorStore.ts';
@@ -81,6 +82,33 @@ export function EditorView({ id }: { id: string }) {
   const media = useMediaLookup();
   const [tab, setTab] = useState<'object' | 'slide' | 'presentation'>('slide');
   const [focusMode, setFocusMode] = useState(false);
+
+  const toggleFullScreen = async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        setFocusMode(false);
+      } else {
+        const rootEl = root.current;
+        if (rootEl?.requestFullscreen) {
+          await rootEl.requestFullscreen();
+          setFocusMode(true);
+        } else {
+          setFocusMode((v) => !v);
+        }
+      }
+    } catch {
+      setFocusMode((v) => !v);
+    }
+  };
+
+  useEffect(() => {
+    const onFsChange = () => {
+      setFocusMode(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
   const [revisions, setRevisions] = useState(false);
   const [imagePick, setImagePick] = useState(false);
   const [videoPick, setVideoPick] = useState(false);
@@ -193,11 +221,7 @@ export function EditorView({ id }: { id: string }) {
       }
       if (e.key === 'Enter' && o.type === 'text') {
         e.preventDefault();
-        setTab('object');
-        setTimeout(
-          () => (document.getElementById('ordo-text-editor') as HTMLTextAreaElement | null)?.focus(),
-          0,
-        );
+        startInlineEditing(o.id);
       }
       if (e.key === 'Escape') selectObject(undefined);
     };
@@ -239,9 +263,14 @@ export function EditorView({ id }: { id: string }) {
   const bgId = slide?.backgroundMediaId ?? p.backgroundMediaId;
   const editText = (objectId?: string) => {
     if (readOnly) return;
-    if (objectId && objectId !== ed.objectId) selectObject(objectId);
-    setTab('object');
-    focusTextEditor();
+    const targetId = objectId ?? ed.objectId;
+    if (targetId) {
+      if (targetId !== ed.objectId) selectObject(targetId);
+      startInlineEditing(targetId);
+    } else {
+      setTab('object');
+      focusTextEditor();
+    }
   };
   const duplicate = () => {
     if (obj && slide) duplicateSelection();
@@ -348,7 +377,7 @@ export function EditorView({ id }: { id: string }) {
           <button
             type="button"
             className={`small ${focusMode ? 'on' : ''}`}
-            onClick={() => setFocusMode((v) => !v)}
+            onClick={() => void toggleFullScreen()}
             title="Toggle full screen canvas (hide side panels)"
           >
             {focusMode ? 'Exit Full Screen' : 'Full Screen'}
@@ -465,7 +494,7 @@ export function EditorView({ id }: { id: string }) {
           <button
             type="button"
             className={`small ${focusMode ? 'on' : ''}`}
-            onClick={() => setFocusMode((v) => !v)}
+            onClick={() => void toggleFullScreen()}
             title="Toggle full screen canvas (hide side panels)"
           >
             {focusMode ? 'Exit Full Screen' : 'Full Screen'}

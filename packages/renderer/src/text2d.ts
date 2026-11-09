@@ -605,8 +605,18 @@ export function bandSource(slide: Slide, text: string): TextObject | undefined {
 /** The text a lyric-only look shows for a slide, or null when the look shows nothing for it. */
 export function lyricTextFor(slide: Slide, look: Look | undefined, isSong: boolean): string | null {
   const rule = look?.layers.slide;
-  if (!rule || rule.mode !== 'lyricOnly') return null;
+  if (rule?.mode !== 'lyricOnly') return null;
   if (!isSong && rule.nonSong === 'none') return null;
+  if (!isSong) {
+    const textObjects = slide.objects.filter((x): x is TextObject => x.type === 'text' && !!x.text?.trim());
+    if (textObjects.length > 1) {
+      const combined = textObjects
+        .map((o) => readableText(o).trim())
+        .filter(Boolean)
+        .join('\n');
+      if (combined.trim()) return combined;
+    }
+  }
   const t = firstText(slide);
   return t.trim() ? t : null;
 }

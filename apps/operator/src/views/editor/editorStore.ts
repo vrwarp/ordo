@@ -38,6 +38,7 @@ export type EditorState = {
   guides: Guides;
   canUndo: boolean;
   canRedo: boolean;
+  inlineEditingId?: string;
   loadError?: string;
 };
 
@@ -50,7 +51,16 @@ export const useEditor = create<EditorState>(() => ({
   guides: { x: [], y: [] },
   canUndo: false,
   canRedo: false,
+  inlineEditingId: undefined,
 }));
+
+export function startInlineEditing(objectId: string): void {
+  useEditor.setState({ inlineEditingId: objectId });
+}
+
+export function stopInlineEditing(): void {
+  useEditor.setState({ inlineEditingId: undefined });
+}
 
 const history = new History<Presentation>(200, 800);
 /** Presentations already warned about this session for passing the 4 MiB budget (design/27 §3.4). */

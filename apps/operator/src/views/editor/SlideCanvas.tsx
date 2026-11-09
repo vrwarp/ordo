@@ -28,8 +28,15 @@ import { stillHash } from '../../services/thumbs.ts';
 import { CanvasGuides, type SlideRect } from './CanvasGuides.tsx';
 import { canvasContent } from './canvasContent.ts';
 import { CropHandles } from './CropControl.tsx';
-import { change, selectObject, selectObjects, useEditor } from './editorStore.ts';
-import { dragSelection, transformSelection } from './actions.ts';
+import {
+  change,
+  selectObject,
+  selectObjects,
+  startInlineEditing,
+  stopInlineEditing,
+  useEditor,
+} from './editorStore.ts';
+import { dragSelection, transformSelection, typeText } from './actions.ts';
 import { updateObject } from './ops.ts';
 import { boxFromCorner, clickSelection, groupBox, groupMembers, isLocked, keepsAspect } from './ops/group.ts';
 import { useOriginalOver } from './original.ts';
@@ -225,6 +232,8 @@ function ObjectNode(props: {
   badge: number;
   on: NodeHandlers;
   onEditText?: () => void;
+  onStartInlineEdit?: (id: string) => void;
+  isEditingInline?: boolean;
   registerNode: (id: string, n: Konva.Shape | null) => void;
 }) {
   const { o, tick, on } = props;
@@ -239,15 +248,23 @@ function ObjectNode(props: {
       offsetX={b.w / 2}
       offsetY={b.h / 2}
       rotation={b.rotation ?? 0}
-      draggable={!props.readOnly}
+      draggable={!props.readOnly && !props.isEditingInline}
       perfectDrawEnabled={false}
       sceneFunc={(context) => {
         const ctx = context._context as CanvasRenderingContext2D;
         readGeomOf(o);
         const d = props.drawAs ?? o;
         if (o.type === 'text') {
-          const t = textCanvas(o, tick, props.density);
-          ctx.drawImage(t.canvas, -MARGIN, -MARGIN, t.canvas.width / t.density, t.canvas.height / t.density);
+          if (!props.isEditingInline) {
+            const t = textCanvas(o, tick, props.density);
+            ctx.drawImage(
+              t.canvas,
+              -MARGIN,
+              -MARGIN,
+              t.canvas.width / t.density,
+              t.canvas.height / t.density,
+            );
+          }
         } else if (o.type === 'image') {
           const img = imageFor(stillHash(props.media(o.mediaId)));
           // Flips and the mask as every drawer applies them (design/27 §3.1); what the slide's drawing budget
@@ -285,7 +302,22 @@ function ObjectNode(props: {
       onPointerMove={on.pressMove}
       onPointerUp={on.pressEnd}
       onPointerCancel={on.pressEnd}
-      onDblTap={props.onEditText}
+      onDblClick={(e) => {
+        e.cancelBubble = true;
+        if (!props.readOnly && o.type === 'text') {
+          props.onStartInlineEdit?.(o.id);
+        } else {
+          props.onEditText?.();
+        }
+      }}
+      onDblTap={(e) => {
+        e.cancelBubble = true;
+        if (!props.readOnly && o.type === 'text') {
+          props.onStartInlineEdit?.(o.id);
+        } else {
+          props.onEditText?.();
+        }
+      }}
       onDragStart={(e) => on.dragStart(o, e)}
       onDragMove={(e) => on.dragMove(o, e, props.others)}
       onDragEnd={(e) => on.dragEnd(o, e)}
@@ -555,6 +587,10 @@ export function SlideCanvas(props: {
       : undefined;
   const bg = imageFor(stillHash(props.backgroundMediaId ? props.media(props.backgroundMediaId) : undefined));
   const picture = imageFor(drawn.pictureHash);
+  const inlineEditingId = useEditor((s) => s.inlineEditingId);
+  const editingObj = inlineEditingId
+    ? drawn.objects.find((x): x is TextObject => x.id === inlineEditingId && x.type === 'text')
+    : undefined;
   // 'Show original' (PptxSlideCard): the PowerPoint picture over the slide, to compare; it takes the pointer.
   const originalId = useOriginalOver(slide);
   const original = originalId ? imageFor(stillHash(props.media(originalId))) : undefined;
@@ -564,139 +600,151 @@ export function SlideCanvas(props: {
   );
   return (
     <div ref={box} className="canvasbox">
-      <Stage
-        width={size.w}
-        height={size.h}
-        style={{ background: '#000', boxShadow: '0 0 0 1px #333' }}
-        onMouseDown={(e) => {
-          if (e.target === e.target.getStage() || e.target.name() === 'bg') selectObject(undefined);
-        }}
-        onTouchStart={(e) => {
-          if (e.target === e.target.getStage() || e.target.name() === 'bg') selectObject(undefined);
-        }}
-      >
-        <Layer scaleX={scale} scaleY={scale} listening={false}>
-          <Shape
-            name="bg"
-            sceneFunc={(context) => {
-              const ctx = context._context as CanvasRenderingContext2D;
-              ctx.fillStyle = '#000';
-              ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
-              const full = { x: 0, y: 0, w: LOGICAL_WIDTH, h: LOGICAL_HEIGHT, rotation: 0 };
-              if (bg) drawImageFit(ctx, bg, full, 1, 'cover');
-              if (picture) drawImageFit(ctx, picture, full, 1, 'contain');
-            }}
-          />
-        </Layer>
-        <Layer scaleX={scale} scaleY={scale}>
-          <Rect name="bg" x={0} y={0} width={LOGICAL_WIDTH} height={LOGICAL_HEIGHT} fill="rgba(0,0,0,0)" />
-          {drawn.objects.map((o) => (
-            <ObjectNode
-              key={o.id}
-              o={o}
-              media={props.media}
-              others={othersFor(o.id)}
-              tick={tick}
-              density={density}
-              drawAs={budget.get(o)}
-              readOnly={props.readOnly}
-              badge={22 / scale}
-              on={on}
-              onEditText={
-                o.type === 'text' && !props.readOnly && props.onEditText
-                  ? () => props.onEditText?.(o.id)
-                  : undefined
-              }
-              registerNode={(id, n) => {
-                if (n) nodes.current.set(id, n);
-                else nodes.current.delete(id);
-              }}
-            />
-          ))}
-          {guides.x.map((x) => (
-            <Line
-              key={`gx${x}`}
-              points={[x, 0, x, LOGICAL_HEIGHT]}
-              stroke="#f0f"
-              strokeWidth={2 / scale}
-              listening={false}
-            />
-          ))}
-          {guides.y.map((y) => (
-            <Line
-              key={`gy${y}`}
-              points={[0, y, LOGICAL_WIDTH, y]}
-              stroke="#f0f"
-              strokeWidth={2 / scale}
-              listening={false}
-            />
-          ))}
-          <CanvasGuides objects={drawn.objects} slideRect={props.slideRect} scale={scale} />
-          <CropHandles objects={drawn.objects} scale={scale} readOnly={props.readOnly} />
-          <Transformer
-            ref={tr}
-            rotateEnabled={!lockedSel}
-            keepRatio={aspect}
-            enabledAnchors={aspect ? CORNER_ANCHORS : ALL_ANCHORS}
-            onTransformStart={() => {
-              const t = tr.current;
-              transformFrom.current = t && t.nodes().length > 1 ? trBox(t) : undefined;
-            }}
-            onTransformEnd={() => {
-              const t = tr.current;
-              const from = transformFrom.current;
-              transformFrom.current = undefined;
-              if (!t || !from || t.nodes().length < 2) return;
-              const to = trBox(t);
-              // The nodes back as the store has them (Konva scaled and turned them as a preview); the members'
-              // new boxes come with the next render. Re-attaching resets the Transformer's own rotation.
-              for (const o of selected) {
-                const b = o.box;
-                nodes.current.get(o.id)?.setAttrs({
-                  x: b.x + b.w / 2,
-                  y: b.y + b.h / 2,
-                  rotation: b.rotation ?? 0,
-                  scaleX: 1,
-                  scaleY: 1,
-                  skewX: 0,
-                  skewY: 0,
-                });
-              }
-              t.nodes(t.nodes());
-              transformSelection(from, to);
-            }}
-            rotationSnaps={[0, 90, 180, 270]}
-            boundBoxFunc={(oldB, newB) => (newB.width < 8 || newB.height < 8 ? oldB : newB)}
-            anchorSize={coarse ? TOUCH_ANCHOR : 10}
-            rotateAnchorOffset={coarse ? TOUCH_ROTATE_OFFSET : 50}
-            rotateAnchorAngle={rotAngle}
-            anchorCornerRadius={coarse ? TOUCH_ANCHOR / 2 : 0}
-            anchorStyleFunc={coarse ? touchAnchor : undefined}
-            borderStroke="#3b82f6"
-            anchorStroke="#3b82f6"
-          />
-        </Layer>
-        {original && (
-          <Layer scaleX={scale} scaleY={scale}>
+      <div style={{ position: 'relative', width: size.w, height: size.h }}>
+        <Stage
+          width={size.w}
+          height={size.h}
+          style={{ background: '#000', boxShadow: '0 0 0 1px #333' }}
+          onMouseDown={(e) => {
+            if (e.target === e.target.getStage() || e.target.name() === 'bg') selectObject(undefined);
+          }}
+          onTouchStart={(e) => {
+            if (e.target === e.target.getStage() || e.target.name() === 'bg') selectObject(undefined);
+          }}
+        >
+          <Layer scaleX={scale} scaleY={scale} listening={false}>
             <Shape
-              name="original"
+              name="bg"
               sceneFunc={(context) => {
                 const ctx = context._context as CanvasRenderingContext2D;
                 ctx.fillStyle = '#000';
                 ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
                 const full = { x: 0, y: 0, w: LOGICAL_WIDTH, h: LOGICAL_HEIGHT, rotation: 0 };
-                drawImageFit(ctx, original, full, 1, 'contain');
-              }}
-              hitFunc={(context, shape) => {
-                context.beginPath();
-                context.rect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
-                context.closePath();
-                context.fillStrokeShape(shape);
+                if (bg) drawImageFit(ctx, bg, full, 1, 'cover');
+                if (picture) drawImageFit(ctx, picture, full, 1, 'contain');
               }}
             />
           </Layer>
+          <Layer scaleX={scale} scaleY={scale}>
+            <Rect name="bg" x={0} y={0} width={LOGICAL_WIDTH} height={LOGICAL_HEIGHT} fill="rgba(0,0,0,0)" />
+            {drawn.objects.map((o) => (
+              <ObjectNode
+                key={o.id}
+                o={o}
+                media={props.media}
+                others={othersFor(o.id)}
+                tick={tick}
+                density={density}
+                drawAs={budget.get(o)}
+                readOnly={props.readOnly}
+                badge={22 / scale}
+                on={on}
+                isEditingInline={inlineEditingId === o.id}
+                onStartInlineEdit={(id) => startInlineEditing(id)}
+                onEditText={
+                  o.type === 'text' && !props.readOnly && props.onEditText
+                    ? () => props.onEditText?.(o.id)
+                    : undefined
+                }
+                registerNode={(id, n) => {
+                  if (n) nodes.current.set(id, n);
+                  else nodes.current.delete(id);
+                }}
+              />
+            ))}
+            {guides.x.map((x) => (
+              <Line
+                key={`gx${x}`}
+                points={[x, 0, x, LOGICAL_HEIGHT]}
+                stroke="#f0f"
+                strokeWidth={2 / scale}
+                listening={false}
+              />
+            ))}
+            {guides.y.map((y) => (
+              <Line
+                key={`gy${y}`}
+                points={[0, y, LOGICAL_WIDTH, y]}
+                stroke="#f0f"
+                strokeWidth={2 / scale}
+                listening={false}
+              />
+            ))}
+            <CanvasGuides objects={drawn.objects} slideRect={props.slideRect} scale={scale} />
+            <CropHandles objects={drawn.objects} scale={scale} readOnly={props.readOnly} />
+            <Transformer
+              ref={tr}
+              rotateEnabled={!lockedSel}
+              keepRatio={aspect}
+              enabledAnchors={aspect ? CORNER_ANCHORS : ALL_ANCHORS}
+              onTransformStart={() => {
+                const t = tr.current;
+                transformFrom.current = t && t.nodes().length > 1 ? trBox(t) : undefined;
+              }}
+              onTransformEnd={() => {
+                const t = tr.current;
+                const from = transformFrom.current;
+                transformFrom.current = undefined;
+                if (!t || !from || t.nodes().length < 2) return;
+                const to = trBox(t);
+                // The nodes back as the store has them (Konva scaled and turned them as a preview); the members'
+                // new boxes come with the next render. Re-attaching resets the Transformer's own rotation.
+                for (const o of selected) {
+                  const b = o.box;
+                  nodes.current.get(o.id)?.setAttrs({
+                    x: b.x + b.w / 2,
+                    y: b.y + b.h / 2,
+                    rotation: b.rotation ?? 0,
+                    scaleX: 1,
+                    scaleY: 1,
+                    skewX: 0,
+                    skewY: 0,
+                  });
+                }
+                t.nodes(t.nodes());
+                transformSelection(from, to);
+              }}
+              rotationSnaps={[0, 90, 180, 270]}
+              boundBoxFunc={(oldB, newB) => (newB.width < 8 || newB.height < 8 ? oldB : newB)}
+              anchorSize={coarse ? TOUCH_ANCHOR : 10}
+              rotateAnchorOffset={coarse ? TOUCH_ROTATE_OFFSET : 50}
+              rotateAnchorAngle={rotAngle}
+              anchorCornerRadius={coarse ? TOUCH_ANCHOR / 2 : 0}
+              anchorStyleFunc={coarse ? touchAnchor : undefined}
+              borderStroke="#3b82f6"
+              anchorStroke="#3b82f6"
+            />
+          </Layer>
+          {original && (
+            <Layer scaleX={scale} scaleY={scale}>
+              <Shape
+                name="original"
+                sceneFunc={(context) => {
+                  const ctx = context._context as CanvasRenderingContext2D;
+                  ctx.fillStyle = '#000';
+                  ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+                  const full = { x: 0, y: 0, w: LOGICAL_WIDTH, h: LOGICAL_HEIGHT, rotation: 0 };
+                  drawImageFit(ctx, original, full, 1, 'contain');
+                }}
+                hitFunc={(context, shape) => {
+                  context.beginPath();
+                  context.rect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+                  context.closePath();
+                  context.fillStrokeShape(shape);
+                }}
+              />
+            </Layer>
+          )}
+        </Stage>
+        {editingObj && (
+          <InlineTextEditor
+            key={editingObj.id}
+            obj={editingObj}
+            scale={scale}
+            onCommit={() => stopInlineEditing()}
+          />
         )}
-      </Stage>
+      </div>
       {toolsAt && (
         <div
           ref={bar}
@@ -709,5 +757,75 @@ export function SlideCanvas(props: {
         </div>
       )}
     </div>
+  );
+}
+
+function InlineTextEditor({
+  obj,
+  scale,
+  onCommit,
+}: {
+  obj: TextObject;
+  scale: number;
+  onCommit: () => void;
+}) {
+  const b = obj.box;
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const color = obj.style?.color
+    ? `rgba(${obj.style.color.r},${obj.style.color.g},${obj.style.color.b},${obj.style.color.a ?? 1})`
+    : '#fff';
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (el) {
+      el.focus();
+      el.select();
+    }
+  }, []);
+
+  return (
+    <textarea
+      ref={textareaRef}
+      className="ordo-inline-textarea"
+      value={obj.text ?? ''}
+      onChange={(e) => {
+        typeText(obj.id, e.target.value, e.target.selectionStart ?? undefined);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          onCommit();
+        }
+      }}
+      onBlur={() => {
+        onCommit();
+      }}
+      style={{
+        position: 'absolute',
+        left: b.x * scale,
+        top: b.y * scale,
+        width: b.w * scale,
+        height: b.h * scale,
+        transform: b.rotation ? `rotate(${b.rotation}deg)` : undefined,
+        transformOrigin: '0 0',
+        fontFamily: obj.style?.fontFamily || 'Inter, sans-serif',
+        fontSize: `${(obj.style?.fontSizePx ?? 72) * scale}px`,
+        fontWeight: obj.style?.fontWeight || 400,
+        color,
+        textAlign: (obj.style?.align as CanvasTextAlign) || 'center',
+        lineHeight: 1.25,
+        background: 'rgba(15, 23, 42, 0.75)',
+        boxShadow: '0 0 0 2px #3b82f6, 0 4px 12px rgba(0,0,0,0.5)',
+        borderRadius: 4,
+        padding: `${Math.max(4, 8 * scale)}px`,
+        border: 'none',
+        outline: 'none',
+        resize: 'none',
+        boxSizing: 'border-box',
+        overflow: 'hidden',
+        zIndex: 20,
+        caretColor: '#fff',
+      }}
+    />
   );
 }

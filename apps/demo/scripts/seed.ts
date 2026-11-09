@@ -77,6 +77,69 @@ function gradientPng(w: number, h: number, stops: [number, number, number][]): B
   ]);
 }
 
+/** An animated multi-layer SVG background with CSS keyframes, glowing orbs and floating wave paths. */
+function animatedWaveSvg(): Buffer {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0a0e27" />
+      <stop offset="50%" stop-color="#141a3e" />
+      <stop offset="100%" stop-color="#050714" />
+    </linearGradient>
+    <linearGradient id="waveGrad1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.38" />
+      <stop offset="50%" stop-color="#8b5cf6" stop-opacity="0.48" />
+      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0.38" />
+    </linearGradient>
+    <linearGradient id="waveGrad2" x1="100%" y1="0%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#6366f1" stop-opacity="0.32" />
+      <stop offset="50%" stop-color="#ec4899" stop-opacity="0.28" />
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.32" />
+    </linearGradient>
+    <radialGradient id="orbGrad1" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#818cf8" stop-opacity="0.42" />
+      <stop offset="100%" stop-color="#818cf8" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="orbGrad2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.35" />
+      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0" />
+    </radialGradient>
+    <style>
+      @keyframes floatA {
+        0%, 100% { transform: translate(0px, 0px) scale(1); }
+        50% { transform: translate(140px, 70px) scale(1.18); }
+      }
+      @keyframes floatB {
+        0%, 100% { transform: translate(0px, 0px) scale(1); }
+        50% { transform: translate(-120px, -60px) scale(1.12); }
+      }
+      @keyframes waveA {
+        0%, 100% { transform: translateY(0px) scaleY(1); }
+        50% { transform: translateY(-45px) scaleY(1.1); }
+      }
+      @keyframes waveB {
+        0%, 100% { transform: translateY(0px) scaleY(1); }
+        50% { transform: translateY(40px) scaleY(0.92); }
+      }
+      .orb-1 { animation: floatA 16s ease-in-out infinite; transform-origin: 450px 320px; }
+      .orb-2 { animation: floatB 20s ease-in-out infinite; transform-origin: 1450px 680px; }
+      .wave-layer-1 { animation: waveA 14s ease-in-out infinite; transform-origin: center bottom; }
+      .wave-layer-2 { animation: waveB 18s ease-in-out infinite; transform-origin: center bottom; }
+    </style>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#bgGrad)" />
+  <circle class="orb-1" cx="450" cy="320" r="520" fill="url(#orbGrad1)" />
+  <circle class="orb-2" cx="1450" cy="680" r="620" fill="url(#orbGrad2)" />
+  <g class="wave-layer-1">
+    <path d="M0,680 C320,580 640,800 960,700 C1280,600 1600,760 1920,660 L1920,1080 L0,1080 Z" fill="url(#waveGrad1)" />
+  </g>
+  <g class="wave-layer-2">
+    <path d="M0,740 C380,820 760,660 1140,760 C1520,860 1700,720 1920,770 L1920,1080 L0,1080 Z" fill="url(#waveGrad2)" />
+  </g>
+</svg>`;
+  return Buffer.from(svg, 'utf8');
+}
+
 // ---------------------------------------------------------------- content
 
 const HYMNS = [
@@ -230,15 +293,23 @@ async function main() {
       'image/png',
       true,
     );
+    const auroraSvg = await upload('Aurora Waves (Animated).svg', animatedWaveSvg(), 'image/svg+xml', true);
 
     const songs: { id: string; rev: number }[] = [];
     for (const h of HYMNS) songs.push(await api('import/songselect', { method: 'POST', json: { text: h } }));
-    // The first song gets the dusk background.
+    // The first song gets the dusk background; the second gets the animated multi-layer SVG background.
     const first = await api<Record<string, unknown> & { rev: number }>(`presentations/${songs[0]!.id}`);
     await api(`presentations/${songs[0]!.id}`, {
       method: 'PUT',
       json: { ...first, backgroundMediaId: dusk.id },
     });
+    if (songs[1]) {
+      const second = await api<Record<string, unknown> & { rev: number }>(`presentations/${songs[1]!.id}`);
+      await api(`presentations/${songs[1]!.id}`, {
+        method: 'PUT',
+        json: { ...second, backgroundMediaId: auroraSvg.id },
+      });
+    }
 
     const verses: [string, number][] = [
       [
