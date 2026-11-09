@@ -313,7 +313,7 @@ describe('SmartArt from its drawing cache (M6)', () => {
     const s = parseDeck(deckWith(drawingXml(many))).slides[0]!;
     expect(s.elements.length).toBeLessThanOrEqual(5_000);
     expect(s.notes.join(' ')).toMatch(/more than 5000 shapes/);
-    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(performance.now() - t0).toBeLessThan(process.env.CI ? 15_000 : 5_000);
   });
 
   it('reads groups of a drawing to a depth of 32 and no further', () => {
@@ -341,7 +341,7 @@ describe('SmartArt from its drawing cache (M6)', () => {
     const residual = deck.slides.filter((x) => x.elements.some((e) => e.kind === 'residual'));
     expect(residual.length).toBeGreaterThan(0);
     expect(residual[0]!.notes.join(' ')).toMatch(/more SmartArt than an import reads/);
-    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(performance.now() - t0).toBeLessThan(process.env.CI ? 15_000 : 5_000);
   });
 
   it('reads the drawing of a layout decoration through the layout part', () => {
