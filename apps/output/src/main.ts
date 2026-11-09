@@ -13,6 +13,8 @@ import { type WakeSentinel, WakeLockKeeper } from './wakelock.ts';
  */
 
 const q = new URLSearchParams(location.search);
+const outputId = q.get('output');
+if (outputId && !window.name) window.name = `ordo-out-${outputId}`;
 const testMode = import.meta.env.MODE === 'test' || q.get('test') === '1';
 
 function resolution(): { width: number; height: number } {

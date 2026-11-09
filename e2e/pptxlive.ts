@@ -87,12 +87,18 @@ export async function roleWindow(
   extra = '',
 ): Promise<Page> {
   const page = await ctx.newPage();
+  await page.addInitScript((name) => {
+    window.name = name;
+  }, `ordo-out-${o.id}`);
   await page.setViewportSize(size);
   page.on('pageerror', (e) => console.error(`[${o.name}] pageerror`, e.message));
   const q = `output=${encodeURIComponent(o.id)}&token=${encodeURIComponent(o.token ?? '')}${extra ? `&${extra}` : ''}`;
   const origin =
     o.kind === 'stage' ? `http://stage.localhost:${port}` : `http://out${o.hostIndex}.localhost:${port}`;
   await page.goto(`${origin}/?${q}`);
+  await page.evaluate((name) => {
+    window.name = name;
+  }, `ordo-out-${o.id}`);
   return page;
 }
 
