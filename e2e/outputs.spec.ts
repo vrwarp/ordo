@@ -148,7 +148,9 @@ test.describe('outputs follow the live state', () => {
     await op.goto(`${OP}/`);
     await op.locator('input.pin').fill(PIN);
     await op.getByRole('button', { name: 'OK' }).click();
-    await expect(op.getByRole('button', { name: /Launch outputs|Relaunch outputs/ })).toBeVisible({ timeout: 30_000 });
+    await expect(op.getByRole('button', { name: /Launch outputs|Relaunch outputs/ })).toBeVisible({
+      timeout: 30_000,
+    });
     await op.locator('button[title="Diagnostics"]').click();
     await op.locator('[data-performance] tbody tr').first().waitFor({ timeout: 30_000 });
     const row = op.locator(`[data-performance-output="${a1.id}"]`);
