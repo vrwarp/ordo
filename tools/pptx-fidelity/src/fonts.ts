@@ -314,8 +314,8 @@ export async function hostFonts(
   if (have.has(key(DEFAULT_FONT))) requested.push(DEFAULT_FONT);
   for (const family of requested) {
     const k = key(family);
-    // A script fallback family that is not installed is served by its stand-in, below.
-    if (faces.has(k) || (plan.has(k) && !have.has(k))) continue;
+    // A script fallback family is served with its script's unicode-range below.
+    if (faces.has(k) || plan.has(k)) continue;
     faces.set(k, (await facesFor(family, fcFamily(family), undefined, notes)).faces);
   }
   const scripts: ScriptFace[] = [];
