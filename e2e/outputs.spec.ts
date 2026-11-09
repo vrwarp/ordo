@@ -152,8 +152,9 @@ test.describe('outputs follow the live state', () => {
       timeout: 30_000,
     });
     await op.locator('button[title="Diagnostics"]').click();
-    await op.locator('[data-performance] tbody tr').first().waitFor({ timeout: 30_000 });
+    await op.locator('[data-performance] tbody tr').first().waitFor({ state: 'attached', timeout: 30_000 });
     const row = op.locator(`[data-performance-output="${a1.id}"]`);
+    await row.scrollIntoViewIfNeeded();
     await expect(row).toContainText(/\d+(\.\d+)? \/ \d+(\.\d+)? ms \(p95 ≤ \d+ ms\)/, { timeout: 30_000 });
     // The 2D compositor of these outputs uploads nothing and holds no GPU textures.
     await expect(row).toContainText('none (2D)', { timeout: 30_000 });
