@@ -145,7 +145,7 @@ export function PlaylistEditor(props: {
         height: '100%',
         minHeight: 0,
       }}
-      className="pl-editor"
+      className={`pl-editor ${props.locked ? 'locked' : ''}`}
     >
       <div className="col" style={{ minHeight: 0, overflow: 'auto', padding: 14, gap: 10 }}>
         {props.locked && (
@@ -306,15 +306,11 @@ export function PlaylistEditor(props: {
           </div>
         )}
       </div>
-      <div className="pl-add" style={{ minHeight: 0, overflow: 'hidden' }}>
-        {props.locked ? (
-          <div className="muted" style={{ padding: 16 }}>
-            Adding items is disabled while live.
-          </div>
-        ) : (
+      {!props.locked && (
+        <div className="pl-add" style={{ minHeight: 0, overflow: 'hidden' }}>
           <AddItemsPanel onAdd={addItems} />
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

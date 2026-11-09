@@ -485,6 +485,21 @@ table.list th {
   font-size: 12px;
   color: var(--fg2);
 }
+.topbar-actions-group {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.topbar-divider {
+  width: 1px;
+  height: 24px;
+  background: var(--line);
+  margin: 0 4px;
+}
+.topbar-danger-zone {
+  display: inline-flex;
+  align-items: center;
+}
 .op-main {
   display: grid;
   grid-template-columns: 280px 1fr 360px;
@@ -525,7 +540,38 @@ table.list th {
   background: #1b2a44;
 }
 .pl-item.live {
+  background: rgba(220, 38, 38, 0.12);
   box-shadow: inset 4px 0 0 var(--live);
+}
+.pl-item.live.sel {
+  background: rgba(220, 38, 38, 0.22);
+}
+.pl-item .kind.live {
+  background: var(--live);
+  color: #fff;
+  font-size: 10px;
+  animation: pulse-live 2s infinite;
+}
+.live-pill-mini {
+  display: inline-flex;
+  align-items: center;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--live);
+  color: #fff;
+  line-height: 1.2;
+}
+@keyframes pulse-live {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
 }
 .pl-item .kind {
   width: 26px;
@@ -1145,6 +1191,9 @@ button.arr-chip-label {
 .pl-editor {
   grid-template-columns: minmax(360px, 1fr) 380px;
 }
+.pl-editor.locked {
+  grid-template-columns: 1fr;
+}
 .pl-add {
   border-left: 1px solid var(--line);
 }
@@ -1168,12 +1217,28 @@ button.arr-chip-label {
   letter-spacing: 0.04em;
 }
 .ed-looks[open] {
-  max-height: 42%;
+  max-height: 145px;
   overflow: auto;
 }
 .ed-looks .look-previews.compact {
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  padding: 0 12px 10px;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 12px;
+  padding: 0 12px 8px;
+  overflow-x: auto;
+}
+.ed-looks .look-previews.compact .look-preview {
+  flex: 0 0 135px;
+  margin: 0;
+}
+.ed-looks .look-previews.compact .look-preview-frame {
+  aspect-ratio: 16 / 9;
+  width: 100%;
+}
+.ed-looks .look-previews.compact .look-preview figcaption {
+  font-size: 11px;
+  gap: 4px;
 }
 
 .editor.focus-mode {
@@ -1426,6 +1491,10 @@ button.arr-chip-label {
   .pl-editor {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) minmax(0, 46%);
+  }
+  .pl-editor.locked {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 1fr;
   }
   .pl-add {
     border-left: 0;
