@@ -160,7 +160,7 @@ function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOu
         break;
     }
   return (
-    <div className="app">
+    <div className={`app app-route-${route.name}`}>
       <DemoBanner />
       <Nav role={role} route={route} profile={profile} />
       <div className="page">{body}</div>

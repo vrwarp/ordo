@@ -250,6 +250,27 @@ label.check {
   background: #3b0d0d;
   color: #fca5a5;
 }
+.live-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+.live-status-pill.live {
+  background: #7f1d1d;
+  color: #fecaca;
+  border: 1px solid #dc2626;
+  box-shadow: 0 0 8px rgba(220, 38, 38, 0.4);
+}
+.live-status-pill.idle {
+  background: var(--bg4);
+  color: var(--fg3);
+  border: 1px solid var(--line);
+}
 .dot {
   width: 12px;
   height: 12px;
@@ -860,6 +881,15 @@ table.list th {
 .ed-slide.sel {
   border-color: var(--accent);
 }
+.ed-sec-head button.sec-delete-btn {
+  opacity: 0.35;
+  transition: opacity 0.15s ease;
+}
+.ed-sec-head:hover button.sec-delete-btn,
+.ed-sec-head button.sec-delete-btn:focus,
+.ed-sec-head button.sec-delete-btn:focus-visible {
+  opacity: 1;
+}
 .ed-slide img,
 .ed-slide .ph {
   width: 120px;
@@ -1445,6 +1475,9 @@ button.arr-chip-label {
   border-bottom: 1px solid #4338ca;
   color: #e0e7ff;
   font-size: 13px;
+}
+.app-route-edit .demo-banner {
+  display: none;
 }
 .demo-banner span {
   flex: 1;

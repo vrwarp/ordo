@@ -63,7 +63,9 @@ export function Nav({
             This device edits; run services from the venue PC
           </span>
         )}
-        <span className="tag">{role === 'operate' ? 'Operate' : 'Edit'}</span>
+        <span className="tag" title="User profile role">
+          Role: {role === 'operate' ? 'Operator' : 'Editor'}
+        </span>
         <button type="button" className="ghost small" onClick={() => void logout()}>
           Sign out
         </button>
@@ -79,7 +81,9 @@ export function Nav({
       {role === 'operate' && link('#/setup', 'Setup', route.name === 'setup' || route.name === 'checklist')}
       <span className="spacer" />
       {offline && <span className="tag amber">offline: hub unreachable</span>}
-      <span className="tag">{role === 'operate' ? 'Operate' : 'Edit'}</span>
+      <span className="tag" title="User profile role">
+        Role: {role === 'operate' ? 'Operator' : 'Editor'}
+      </span>
       <button type="button" className="ghost small" onClick={() => void logout()}>
         Sign out
       </button>
