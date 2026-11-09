@@ -204,6 +204,7 @@ export const DEFAULT_SURFACES: SurfaceSettings = {
     { id: 'midi-next', kind: 'note', number: 60, threshold: 1, action: { id: 'next' } },
     { id: 'midi-prev', kind: 'note', number: 62, threshold: 1, action: { id: 'prev' } },
   ],
+  midiEnabled: false,
   messagePresets: ['Wrap up', 'Repeat chorus', 'One more time', 'Watch the leader', 'Mic check'],
 };
 

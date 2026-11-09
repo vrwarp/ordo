@@ -6,6 +6,7 @@ import {
   Supervisor,
   acceptPorts,
   appEnv,
+  broadcastEndpoint,
   operatorOrigin,
   requestPort,
   windowEndpoint,
@@ -431,8 +432,13 @@ export class OutputHost {
     // The previous generation's relay goes first, also when the opener is already gone (review item 29).
     this.winEp?.close();
     this.winEp = undefined;
-    if (!this.openerAlive()) return;
-    const ep = windowEndpoint(() => window.opener as Window | null, this.operatorOrigin);
+    let ep: BusEndpoint | undefined;
+    if (this.openerAlive()) {
+      ep = windowEndpoint(() => window.opener as Window | null, this.operatorOrigin);
+    } else if (typeof BroadcastChannel !== 'undefined' && !appEnv().domain) {
+      ep = broadcastEndpoint(`ordo-bus-${this.outputId}`);
+    }
+    if (!ep) return;
     this.winEp = ep;
     ep.onMessage((m) => {
       try {

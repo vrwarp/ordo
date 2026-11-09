@@ -1,5 +1,7 @@
 import {
   type BusEndpoint,
+  appEnv,
+  broadcastEndpoint,
   clock,
   type ClientMessageBody,
   Emitter,
@@ -363,6 +365,18 @@ export class CoreClient extends Emitter<CoreClientEvents> {
     );
   }
 
+  /**
+   * Listen for an output over BroadcastChannel without a window handle (e.g. opened as a tab, or
+   * before the window is launched on this origin).
+   */
+  attachBroadcast(outputId: string, origin: string): void {
+    if (this.windows.has(outputId)) return;
+    const dummyWin = { closed: false } as unknown as Window;
+    const k: KnownWindow = { win: dummyWin, origin, retries: [], offers: 0 };
+    this.windows.set(outputId, k);
+    this.makeRelay(outputId, k);
+  }
+
   detachWindow(outputId: string): void {
     const k = this.windows.get(outputId);
     if (!k) return;
@@ -412,18 +426,72 @@ export class CoreClient extends Emitter<CoreClientEvents> {
    */
   private makeRelay(outputId: string, k: KnownWindow): void {
     this.dropRelay(k);
-    let ep: BusEndpoint;
+    let winEp: BusEndpoint | undefined;
     try {
-      ep = windowEndpoint(k.win, k.origin);
+      winEp = windowEndpoint(k.win, k.origin);
     } catch {
-      return;
+      /* ignore */
     }
+    let bcastEp: BusEndpoint | undefined;
+    if (typeof BroadcastChannel !== 'undefined' && !appEnv().domain) {
+      try {
+        bcastEp = broadcastEndpoint(`ordo-bus-${outputId}`);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!winEp && !bcastEp) return;
     const ch = new MessageChannel();
     const port = ch.port1;
-    const unsub = ep.onMessage((m) => port.postMessage(m));
-    port.onmessage = (ev) => ep.post(ev.data);
+    const unsubWin = winEp?.onMessage((m) => {
+      try {
+        port.postMessage(m);
+      } catch {
+        /* closed */
+      }
+    });
+    const unsubBcast = bcastEp?.onMessage((m) => {
+      try {
+        port.postMessage(m);
+      } catch {
+        /* closed */
+      }
+    });
+    port.onmessage = (ev) => {
+      winEp?.post(ev.data);
+      bcastEp?.post(ev.data);
+    };
     port.start();
-    k.relay = { ep, port, unsub };
+    const ep: BusEndpoint = {
+      kind: 'window',
+      post(m) {
+        winEp?.post(m);
+        bcastEp?.post(m);
+      },
+      onMessage(fn) {
+        const u1 = winEp?.onMessage(fn);
+        const u2 = bcastEp?.onMessage(fn);
+        return () => {
+          u1?.();
+          u2?.();
+        };
+      },
+      alive: () => (winEp?.alive() ?? false) || (bcastEp?.alive() ?? false),
+      close() {
+        unsubWin?.();
+        unsubBcast?.();
+        winEp?.close();
+        bcastEp?.close();
+      },
+    };
+    k.relay = {
+      ep,
+      port,
+      unsub: () => {
+        unsubWin?.();
+        unsubBcast?.();
+      },
+    };
     if (!this.post({ t: 'bus.relay', outputId, port: ch.port2 }, [ch.port2])) this.dropRelay(k);
   }
 

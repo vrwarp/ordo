@@ -42,6 +42,18 @@ export class OutputWindows {
 
   constructor(private ctl: Controller) {
     this.watch = setInterval(() => this.refreshOpen(), 2000);
+    this.ensureBroadcastRelays();
+  }
+
+  ensureBroadcastRelays(): void {
+    if (typeof BroadcastChannel === 'undefined' || appEnv().domain) return;
+    for (const o of settings().outputs) {
+      if (o.enabled && o.token) {
+        const url = this.urlFor(o);
+        const origin = url ? originOf(url) : location.origin;
+        this.ctl.core.attachBroadcast(o.id, origin);
+      }
+    }
   }
 
   dispose(): void {

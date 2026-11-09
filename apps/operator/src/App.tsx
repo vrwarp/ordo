@@ -21,7 +21,7 @@ import { navigate, useRoute } from './useRoute.ts';
 import { LoginView } from './views/auth/LoginView.tsx';
 import { SetupView } from './views/auth/SetupView.tsx';
 import { Nav } from './views/Nav.tsx';
-import { ChecklistView } from './views/checklist/ChecklistView.tsx';
+import { DeviceSetupView } from './views/setup/DeviceSetupView.tsx';
 import { EditorView } from './views/editor/EditorView.tsx';
 import { LibraryView } from './views/library/LibraryView.tsx';
 import { LiveView } from './views/live/LiveView.tsx';
@@ -151,8 +151,9 @@ function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOu
       case 'settings':
         body = role === 'operate' ? <SettingsView page={route.page} profile={profile} /> : null;
         break;
+      case 'setup':
       case 'checklist':
-        body = profile === 'full' ? <ChecklistView /> : null;
+        body = profile === 'full' ? <DeviceSetupView /> : null;
         break;
       case 'previews':
         body = <PreviewsView id={route.id} slideId={route.slideId} />;

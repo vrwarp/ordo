@@ -293,9 +293,10 @@ table.list th {
 
 /* ---- app shell ---- */
 .app {
-  display: grid;
-  grid-template-rows: auto 1fr;
+  display: flex;
+  flex-direction: column;
   height: 100%;
+  overflow: hidden;
 }
 .nav {
   display: flex;
@@ -305,6 +306,7 @@ table.list th {
   height: 48px;
   background: var(--bg2);
   border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
 }
 .nav a {
   color: var(--fg2);
@@ -326,8 +328,11 @@ table.list th {
   margin-right: 10px;
 }
 .page {
-  overflow: auto;
+  flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
 }
 .page-pad {
   padding: 16px;
@@ -807,6 +812,14 @@ table.list th {
   grid-template-rows: auto 1fr;
   height: 100%;
   min-height: 0;
+  flex: 1;
+}
+.editor.focus-mode {
+  grid-template-columns: 0 1fr 0;
+}
+.editor.focus-mode > .ed-slides,
+.editor.focus-mode > .props {
+  display: none;
 }
 .editor > .toolbar {
   grid-column: 1 / -1;

@@ -12,6 +12,7 @@ import {
 import { create } from 'zustand';
 import { HoldGuard } from '../lib/confirm.ts';
 import { deckView } from '../lib/deckView.ts';
+import { saveSettings } from '../state/library.ts';
 import { useLibrary } from '../state/library.ts';
 import { useLive } from '../state/live.ts';
 import type { Controller } from './controller.ts';
@@ -19,12 +20,14 @@ import { log } from './log.ts';
 
 export type SurfacesStore = {
   deck: DeckInfo | null;
+  midiEnabled: boolean;
   midiReady: boolean;
   midiInputs: MidiInputInfo[];
   keyboardActive: boolean;
 };
 export const useSurfaces = create<SurfacesStore>(() => ({
   deck: null,
+  midiEnabled: false,
   midiReady: false,
   midiInputs: [],
   keyboardActive: false,
@@ -82,6 +85,10 @@ export class Surfaces {
         const b = prev.data.settings;
         if (a.keymap !== b.keymap) this.keyboard.setMap(a.keymap);
         if (a.surfaces.midi !== b.surfaces.midi) this.midi.setMappings(a.surfaces.midi);
+        if (a.surfaces.midiEnabled !== b.surfaces.midiEnabled) {
+          if (a.surfaces.midiEnabled) void this.startMidi();
+          else this.stopMidi();
+        }
         if (a.surfaces.streamDeckPages !== b.surfaces.streamDeckPages) this.applyDeckPages();
         if (a.audio.masterDb !== b.audio.masterDb) this.pushView(useLive.getState().state);
       }),
@@ -98,11 +105,49 @@ export class Surfaces {
     } catch (e) {
       this.fault(`stream deck: ${String(e)}`);
     }
+    const s = useLibrary.getState().data.settings;
+    if (s.surfaces.midiEnabled) {
+      await this.startMidi();
+    }
+  }
+
+  async enableMidi(): Promise<boolean> {
+    const ok = await this.startMidi();
+    if (ok) {
+      const cur = useLibrary.getState().data.settings;
+      if (!cur.surfaces.midiEnabled) {
+        await saveSettings('surfaces', { ...cur.surfaces, midiEnabled: true }).catch((e) =>
+          this.fault(`save midiEnabled: ${String(e)}`),
+        );
+      }
+    }
+    return ok;
+  }
+
+  async disableMidi(): Promise<void> {
+    this.stopMidi();
+    const cur = useLibrary.getState().data.settings;
+    if (cur.surfaces.midiEnabled) {
+      await saveSettings('surfaces', { ...cur.surfaces, midiEnabled: false }).catch((e) =>
+        this.fault(`save midiEnabled: ${String(e)}`),
+      );
+    }
+  }
+
+  private stopMidi(): void {
+    this.midi.dispose();
+    useSurfaces.setState({ midiEnabled: false, midiReady: false, midiInputs: [] });
+  }
+
+  private async startMidi(): Promise<boolean> {
     try {
       const ok = await this.midi.start();
-      useSurfaces.setState({ midiReady: ok, midiInputs: ok ? this.midi.inputs() : [] });
+      useSurfaces.setState({ midiEnabled: ok, midiReady: ok, midiInputs: ok ? this.midi.inputs() : [] });
+      return ok;
     } catch (e) {
       this.fault(`midi: ${String(e)}`);
+      useSurfaces.setState({ midiEnabled: false, midiReady: false, midiInputs: [] });
+      return false;
     }
   }
 
