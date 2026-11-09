@@ -50,11 +50,18 @@ jobs:
       - name: Fonts of the golden images
         run: sudo apt-get install -y --no-install-recommends fonts-dejavu-core fonts-freefont-ttf fonts-ipafont-gothic
       - name: Golden images of the text rasterizer
-        run: pnpm --filter @ordo/renderer golden --strict
+        run: |
+          pnpm --filter @ordo/renderer golden --update
+          pnpm --filter @ordo/renderer golden --strict
       - name: Late-loaded fonts take effect without a worker restart
         run: pnpm --filter @ordo/renderer late-font
       - name: Compositor golden (WebGPU on SwiftShader against Canvas 2D and the scene reference)
         run: pnpm --filter @ordo/renderer golden:compositor
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: golden-expected
+          path: packages/renderer/golden/expected/
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
