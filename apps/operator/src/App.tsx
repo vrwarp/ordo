@@ -153,7 +153,7 @@ function Shell({ role, signedOut = false }: { role: 'operate' | 'edit'; signedOu
         break;
       case 'setup':
       case 'checklist':
-        body = profile === 'full' ? <DeviceSetupView /> : null;
+        body = <DeviceSetupView />;
         break;
       case 'previews':
         body = <PreviewsView id={route.id} slideId={route.slideId} />;

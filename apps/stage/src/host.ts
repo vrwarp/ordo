@@ -7,6 +7,7 @@ import {
   acceptPorts,
   appEnv,
   broadcastEndpoint,
+  type BusEndpoint,
   clock,
   isControl,
   operatorOrigin,
@@ -133,27 +134,36 @@ export class StageHost {
       this.onWorker(d as LinkToMain);
     });
     let bridge: MessagePort | undefined;
+    const eps: BusEndpoint[] = [];
     if (window.opener) {
-      // Relay window.postMessage from the opener to the worker (operators that do not hand over ports,
-      // and the gap until a restarted worker gets a fresh port).
+      eps.push(windowEndpoint(() => window.opener as Window | null, this.operatorOrigin));
+    }
+    if (typeof BroadcastChannel !== 'undefined' && !appEnv().domain) {
+      eps.push(broadcastEndpoint(`ordo-bus-${this.outputId}`));
+    }
+    if (eps.length > 0) {
       const ch = new MessageChannel();
-      const win = windowEndpoint(() => window.opener as Window | null, this.operatorOrigin);
-      const unsub = win.onMessage((m) => ch.port1.postMessage(m));
-      ch.port1.onmessage = (ev) => win.post(ev.data);
-      this.bridgeCleanup = () => {
-        unsub();
-        win.close();
-        ch.port1.close();
+      const unsubs = eps.map((ep) =>
+        ep.onMessage((m) => {
+          try {
+            ch.port1.postMessage(m);
+          } catch {
+            /* closed */
+          }
+        }),
+      );
+      ch.port1.onmessage = (ev) => {
+        for (const ep of eps) {
+          try {
+            ep.post(ev.data);
+          } catch {
+            /* closed */
+          }
+        }
       };
-      bridge = ch.port2;
-    } else if (typeof BroadcastChannel !== 'undefined' && !appEnv().domain) {
-      const ch = new MessageChannel();
-      const bcast = broadcastEndpoint(`ordo-bus-${this.outputId}`);
-      const unsub = bcast.onMessage((m) => ch.port1.postMessage(m));
-      ch.port1.onmessage = (ev) => bcast.post(ev.data);
       this.bridgeCleanup = () => {
-        unsub();
-        bcast.close();
+        for (const u of unsubs) u();
+        for (const ep of eps) ep.close();
         ch.port1.close();
       };
       bridge = ch.port2;

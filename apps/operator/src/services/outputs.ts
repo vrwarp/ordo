@@ -6,6 +6,7 @@ import {
   placementUpdates,
   planLaunch,
   type ScreenInfo,
+  simulatedWindowFeatures,
   toScreenRef,
   windowFeatures,
   windowName,
@@ -22,6 +23,15 @@ type WindowWithScreens = Window & {
   getScreenDetails?: () => Promise<{ screens: ScreenDetailed[] }>;
 };
 
+const SIMULATED_KEY = 'ordo.simulatedWindows';
+function readSimulated(): boolean {
+  try {
+    return localStorage.getItem(SIMULATED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 export type LaunchStore = {
   /** Outputs that opened on the primary screen because their saved screen was not found. */
   unmatched: Placement[];
@@ -29,9 +39,25 @@ export type LaunchStore = {
   open: Record<string, boolean>;
   busy: boolean;
   permission?: 'granted' | 'denied' | 'unsupported';
+  simulated: boolean;
+  setSimulated: (sim: boolean) => void;
 };
 
-export const useLaunch = create<LaunchStore>(() => ({ unmatched: [], screens: [], open: {}, busy: false }));
+export const useLaunch = create<LaunchStore>((set) => ({
+  unmatched: [],
+  screens: [],
+  open: {},
+  busy: false,
+  simulated: readSimulated(),
+  setSimulated: (sim: boolean) => {
+    try {
+      localStorage.setItem(SIMULATED_KEY, sim ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+    set({ simulated: sim });
+  },
+}));
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -112,11 +138,13 @@ export class OutputWindows {
 
   /** Launch every enabled output on its remembered screen. Must run inside a user gesture. */
   async launch(): Promise<void> {
-    // An edit-profile device (an iPad) has no screens to put outputs on (design/15 "iPad editing").
-    if (this.ctl.role !== 'operate') return;
+    const isSim = useLaunch.getState().simulated;
+    // An edit-profile device (an iPad) has no screens to put outputs on, unless simulating windows.
+    if (this.ctl.role !== 'operate' && !isSim) return;
     if (useLaunch.getState().busy) return;
     useLaunch.setState({ busy: true });
     try {
+      this.ensureBroadcastRelays();
       const outputs = settings().outputs;
       if (!outputs.length) {
         toast('No outputs configured. Add outputs in Settings → Outputs.', 'warn');
@@ -124,7 +152,8 @@ export class OutputWindows {
       }
       const screens = await this.screens();
       const plan = planLaunch(outputs, screens);
-      for (const p of plan) this.openOne(p.output, p.screen);
+      let idx = 0;
+      for (const p of plan) this.openOne(p.output, p.screen, idx++);
       const updates = placementUpdates(plan);
       if (updates.length) {
         const byId = new Map(updates.map((o) => [o.id, o]));
@@ -175,19 +204,23 @@ export class OutputWindows {
     return settings().outputs.filter((o) => o.enabled && !!o.token && !this.windows.has(o.id));
   }
 
-  openOne(o: Output, screen: ScreenInfo): Window | null {
+  openOne(o: Output, screen: ScreenInfo, index = 0): Window | null {
+    this.ensureBroadcastRelays();
     const url = this.urlFor(o);
     if (!url) {
       toast(`${o.name}: no token. Rotate its token in Settings → Outputs.`, 'error');
       return null;
     }
-    const w = window.open(url, windowName(o.id), windowFeatures(screen));
+    const isSim = useLaunch.getState().simulated;
+    const feats = isSim ? simulatedWindowFeatures(index, screen) : windowFeatures(screen);
+    const w = window.open(url, windowName(o.id), feats);
     if (!w) {
-      toast(`Chrome blocked the window for ${o.name}. Allow pop-ups for this site.`, 'error', 10000);
+      toast(`Browser blocked the window for ${o.name}. Allow pop-ups for this site.`, 'error', 10000);
       return null;
     }
     this.windows.set(o.id, w);
     this.ctl.core.attachWindow(o.id, w, originOf(url));
+    this.refreshOpen();
     return w;
   }
 

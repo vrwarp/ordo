@@ -329,6 +329,17 @@ export class MediaService {
   }
 
   private async transform(m: Media, ctx: JobCtx<unknown>): Promise<Media> {
+    if (m.original.mime === 'image/svg+xml') {
+      const input = this.store.abs(m.original.path);
+      const svgText = (await readFile(input)).toString('utf8');
+      const wMatch = /\bwidth=["']?(\d+)/i.exec(svgText);
+      const hMatch = /\bheight=["']?(\d+)/i.exec(svgText);
+      const vbMatch = /\bviewBox=["']?[\d.-]+[\s,]+[\d.-]+[\s,]+([\d.-]+)[\s,]+([\d.-]+)/i.exec(svgText);
+      const width = wMatch ? Number(wMatch[1]) : vbMatch ? Math.round(Number(vbMatch[1])) : 1920;
+      const height = hMatch ? Number(hMatch[1]) : vbMatch ? Math.round(Number(vbMatch[2])) : 1080;
+      ctx.log(`SVG ${width}x${height}`);
+      return { ...m, delivery: undefined, width, height, hasAlpha: true };
+    }
     const t = this.cfg.timeouts;
     const input = this.store.abs(m.original.path);
     const info = await probe(input, t.probe);

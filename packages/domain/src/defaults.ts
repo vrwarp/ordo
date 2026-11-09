@@ -100,7 +100,7 @@ export const LOOK_LOWER_THIRD: Look = {
       mode: 'lyricOnly',
       style: lowerThirdStyle,
       band: { x: 160, y: 820, w: 1600, h: 220, rotation: 0 },
-      nonSong: 'none',
+      nonSong: 'text',
     },
     lowerThird: { visible: true },
     media: { visible: false },

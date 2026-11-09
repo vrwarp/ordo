@@ -118,7 +118,8 @@ export function DeviceSetupView() {
       height: window.screen.height,
       isPrimary: true,
     };
-    const res = ow.openOne(o, targetScreen);
+    const index = outputs.findIndex((x) => x.id === o.id);
+    const res = ow.openOne(o, targetScreen, Math.max(0, index));
     if (!res) {
       setPopupState('blocked');
     } else {
@@ -229,6 +230,47 @@ export function DeviceSetupView() {
           </div>
           <button type="button" className="small" onClick={testPopup}>
             Test Pop-ups
+          </button>
+        </div>
+
+        {/* Simulated Windows Toggle */}
+        <div
+          className="row"
+          style={{
+            background: launch.simulated ? '#172554' : 'var(--bg3)',
+            padding: '10px 14px',
+            borderRadius: 'var(--radius)',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            border: launch.simulated ? '1px solid #3b82f6' : undefined,
+          }}
+        >
+          <div>
+            <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+              <b>Simulated Windows Mode:</b>
+              {launch.simulated ? (
+                <span className="tag blue">Active (Floating 16:9 Windows)</span>
+              ) : (
+                <span className="tag grey">Multi-Monitor Fullscreen</span>
+              )}
+            </div>
+            <div className="muted small" style={{ marginTop: 4 }}>
+              {launch.simulated
+                ? 'Outputs launch as floating 16:9 windows (960×540) on your current screen. Ideal for single monitors, laptops, and testing without multi-monitor hardware.'
+                : 'Outputs attempt fullscreen placement across physical display screens. If you are testing on a single screen or laptop, turn on Simulated Windows.'}
+            </div>
+          </div>
+          <button
+            type="button"
+            className={launch.simulated ? 'primary small' : 'small'}
+            onClick={() => {
+              const next = !launch.simulated;
+              launch.setSimulated(next);
+              toast(next ? 'Simulated Windows enabled' : 'Multi-Monitor Fullscreen enabled', 'info');
+            }}
+          >
+            {launch.simulated ? 'Disable Simulation' : 'Enable Simulated Windows'}
           </button>
         </div>
 

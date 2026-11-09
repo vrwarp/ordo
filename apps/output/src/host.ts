@@ -432,22 +432,48 @@ export class OutputHost {
     // The previous generation's relay goes first, also when the opener is already gone (review item 29).
     this.winEp?.close();
     this.winEp = undefined;
-    let ep: BusEndpoint | undefined;
+    const eps: BusEndpoint[] = [];
     if (this.openerAlive()) {
-      ep = windowEndpoint(() => window.opener as Window | null, this.operatorOrigin);
-    } else if (typeof BroadcastChannel !== 'undefined' && !appEnv().domain) {
-      ep = broadcastEndpoint(`ordo-bus-${this.outputId}`);
+      eps.push(windowEndpoint(() => window.opener as Window | null, this.operatorOrigin));
     }
-    if (!ep) return;
-    this.winEp = ep;
-    ep.onMessage((m) => {
-      try {
-        port.postMessage(m);
-      } catch {
-        /* closed */
+    if (typeof BroadcastChannel !== 'undefined' && !appEnv().domain) {
+      eps.push(broadcastEndpoint(`ordo-bus-${this.outputId}`));
+    }
+    if (!eps.length) return;
+    for (const ep of eps) {
+      ep.onMessage((m) => {
+        try {
+          port.postMessage(m);
+        } catch {
+          /* closed */
+        }
+      });
+    }
+    port.onmessage = (ev) => {
+      for (const ep of eps) {
+        try {
+          ep.post(ev.data);
+        } catch {
+          /* closed */
+        }
       }
-    });
-    port.onmessage = (ev) => ep.post(ev.data);
+    };
+    this.winEp = {
+      kind: 'window',
+      alive: () => eps.some((ep) => ep.alive()),
+      post: (m) => {
+        for (const ep of eps) ep.post(m);
+      },
+      onMessage: (fn) => {
+        const unsubs = eps.map((ep) => ep.onMessage(fn));
+        return () => {
+          for (const u of unsubs) u();
+        };
+      },
+      close: () => {
+        for (const ep of eps) ep.close();
+      },
+    };
   }
 
   private openerAlive(): boolean {

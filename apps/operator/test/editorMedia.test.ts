@@ -258,12 +258,12 @@ describe('clip readiness and slide tags', () => {
 
 describe('media pickers take their kinds only (design/27 §11 item 6)', () => {
   it('limits the file chooser', () => {
-    expect(mediaAccept(['image'])).toBe('image/*,.gif,.jpg,.jpeg,.png,.webp');
+    expect(mediaAccept(['image'])).toBe('image/*,.gif,.jpg,.jpeg,.png,.webp,.svg');
     expect(mediaAccept(['image'])).not.toMatch(/video|mp4|mov/);
     expect(mediaAccept(['video'])).toBe('video/*,.mov,.mp4,.m4v,.webm');
     expect(mediaAccept(['audio'])).toMatch(/^audio\/\*,/);
     expect(mediaAccept(['video', 'image'])).toBe(
-      'video/*,image/*,.mov,.mp4,.m4v,.webm,.gif,.jpg,.jpeg,.png,.webp',
+      'video/*,image/*,.mov,.mp4,.m4v,.webm,.gif,.jpg,.jpeg,.png,.webp,.svg',
     );
   });
 

@@ -95,10 +95,15 @@ export function sniff(b: Uint8Array): Sniffed | undefined {
   if (at(0, 'OTTO')) return { ext: 'otf', mime: 'font/otf', kind: 'font' };
   if ((u(0) === 0 && u(1) === 1 && u(2) === 0 && u(3) === 0) || at(0, 'true'))
     return { ext: 'ttf', mime: 'font/ttf', kind: 'font' };
+  const textHead = Buffer.from(b.subarray(0, 512)).toString('utf8');
+  if (/<svg[\s>]/i.test(textHead) || /<\?xml[\s\S]*?<svg[\s>]/i.test(textHead)) {
+    return { ext: 'svg', mime: 'image/svg+xml', kind: 'image' };
+  }
   return undefined;
 }
 
 const EXT_KIND: Record<string, Sniffed['kind']> = {
+  svg: 'image',
   mp4: 'video',
   m4v: 'video',
   mov: 'video',

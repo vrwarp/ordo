@@ -33,16 +33,34 @@ export function roleUrl(
   opts: { domain: string; hostIndex: number; outputId: string; token: string; origin?: string },
 ): string {
   const q = `output=${encodeURIComponent(opts.outputId)}&token=${encodeURIComponent(opts.token)}`;
+  const loc = typeof location !== 'undefined' ? location : undefined;
   if (opts.domain) {
+    const proto = loc?.protocol ?? 'https:';
+    const port = loc?.port ? `:${loc.port}` : '';
     const host = kind === 'stage' ? `stage.${opts.domain}` : `out${opts.hostIndex}.${opts.domain}`;
-    return `${location.protocol}//${host}${location.port ? ':' + location.port : ''}/?${q}`;
+    return `${proto}//${host}${port}/?${q}`;
   }
   // Path mode: the windows live under the operator app's own directory (`/` on a hub, `/ordo/` on GitHub
   // Pages), so they are resolved against it rather than the origin root.
-  const root = opts.origin ? `${opts.origin}/` : new URL('./', location.href).href;
+  let baseHref: string;
+  if (opts.origin) {
+    baseHref = opts.origin.endsWith('/') ? opts.origin : `${opts.origin}/`;
+  } else if (loc) {
+    let path = loc.pathname;
+    if (!path.endsWith('/')) {
+      if (/\/[^/]+\.[^/]+$/.test(path)) {
+        path = path.replace(/\/[^/]+\.[^/]+$/, '/');
+      } else {
+        path = `${path}/`;
+      }
+    }
+    baseHref = `${loc.origin}${path}`;
+  } else {
+    baseHref = 'http://localhost:8765/';
+  }
   return kind === 'stage'
-    ? new URL(`stage/?${q}`, root).href
-    : new URL(`output/?${q}&out=${opts.hostIndex}`, root).href;
+    ? new URL(`stage/?${q}`, baseHref).href
+    : new URL(`output/?${q}&out=${opts.hostIndex}`, baseHref).href;
 }
 
 export function originOf(url: string): string {

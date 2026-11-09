@@ -25,13 +25,27 @@ describe('look visibility rules', () => {
     expect(p.clearColor).toEqual(LOOK_MAIN.clearColor);
   });
 
-  it('lower-third look hides backgrounds and media, keeps song lyrics, drops non-song slides', () => {
+  it('lower-third look hides backgrounds and media, keeps song lyrics, and handles non-song slides', () => {
     const song = planFrame(slideLive(0), LOOK_LOWER_THIRD);
     expect(song.background.key).toBe('');
     expect(song.slide.key).not.toBe('');
+    // With nonSong: 'text' (default), non-song slides show bottom-third text
     const talk = planFrame(slideLive(2), LOOK_LOWER_THIRD);
-    expect(talk.slide.key).toBe('');
+    expect(talk.slide.key).not.toBe('');
     expect(talk.slideCue).toBe(2);
+    // With nonSong: 'none', non-song slides are dropped
+    const dropLook: Look = {
+      ...LOOK_LOWER_THIRD,
+      layers: {
+        ...LOOK_LOWER_THIRD.layers,
+        slide:
+          LOOK_LOWER_THIRD.layers.slide.mode === 'lyricOnly'
+            ? { ...LOOK_LOWER_THIRD.layers.slide, nonSong: 'none' }
+            : LOOK_LOWER_THIRD.layers.slide,
+      },
+    };
+    const talkDropped = planFrame(slideLive(2), dropLook);
+    expect(talkDropped.slide.key).toBe('');
   });
 
   it('lower-third look shows its holding slide instead of the background', () => {

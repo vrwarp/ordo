@@ -117,7 +117,7 @@ async function sha256(blob: Blob): Promise<string> {
 
 const VIDEO = /\.(mp4|m4v|mov|webm)$/i;
 const AUDIO = /\.(mp3|wav|m4a|aac|ogg|flac)$/i;
-const IMAGE = /\.(png|jpe?g|gif|webp|bmp)$/i;
+const IMAGE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
 
 function mimeOf(name: string, given: string): string {
   if (given && given !== 'application/octet-stream') return given;
@@ -130,6 +130,7 @@ function mimeOf(name: string, given: string): string {
       gif: 'image/gif',
       webp: 'image/webp',
       bmp: 'image/bmp',
+      svg: 'image/svg+xml',
       mp4: 'video/mp4',
       m4v: 'video/mp4',
       mov: 'video/quicktime',
