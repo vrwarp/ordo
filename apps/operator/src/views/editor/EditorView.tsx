@@ -30,6 +30,7 @@ import {
   save,
   selectObject,
   startInlineEditing,
+  stopInlineEditing,
   undo,
   useEditor,
 } from './editorStore.ts';
@@ -223,7 +224,10 @@ export function EditorView({ id }: { id: string }) {
         e.preventDefault();
         startInlineEditing(o.id);
       }
-      if (e.key === 'Escape') selectObject(undefined);
+      if (e.key === 'Escape') {
+        stopInlineEditing();
+        selectObject(undefined);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -264,13 +268,9 @@ export function EditorView({ id }: { id: string }) {
   const editText = (objectId?: string) => {
     if (readOnly) return;
     const targetId = objectId ?? ed.objectId;
-    if (targetId) {
-      if (targetId !== ed.objectId) selectObject(targetId);
-      startInlineEditing(targetId);
-    } else {
-      setTab('object');
-      focusTextEditor();
-    }
+    if (targetId && targetId !== ed.objectId) selectObject(targetId);
+    setTab('object');
+    focusTextEditor();
   };
   const duplicate = () => {
     if (obj && slide) duplicateSelection();

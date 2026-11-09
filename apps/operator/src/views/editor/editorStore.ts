@@ -147,11 +147,15 @@ function fixSelection(): void {
 }
 
 export function selectSlide(slideId: string | undefined): void {
-  useEditor.setState({ slideId, objectId: undefined, objectIds: [] });
+  useEditor.setState({ slideId, objectId: undefined, objectIds: [], inlineEditingId: undefined });
 }
 /** Select one object (or none): it is the whole selection. */
 export function selectObject(objectId: string | undefined): void {
-  useEditor.setState({ objectId, objectIds: objectId ? [objectId] : [] });
+  useEditor.setState((s) => ({
+    objectId,
+    objectIds: objectId ? [objectId] : [],
+    inlineEditingId: objectId && objectId === s.inlineEditingId ? s.inlineEditingId : undefined,
+  }));
 }
 /**
  * Select several objects (a group, design/27 §11 item 5): `ids` kept in the open slide's z order, `primary`
@@ -162,7 +166,7 @@ export function selectObjects(ids: readonly string[], primary?: string): void {
   const want = new Set(ids);
   const ordered = slide ? slide.objects.filter((o) => want.has(o.id)).map((o) => o.id) : [];
   const first = primary && ordered.includes(primary) ? primary : ids.find((id) => ordered.includes(id));
-  useEditor.setState({ objectId: first, objectIds: ordered });
+  useEditor.setState({ objectId: first, objectIds: ordered, inlineEditingId: undefined });
 }
 
 export function currentSlide() {

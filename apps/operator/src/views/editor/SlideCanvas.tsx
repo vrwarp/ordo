@@ -228,6 +228,8 @@ function ObjectNode(props: {
   /** What the slide's drawing budget draws instead (`slideBudget`), as the outputs draw it. */
   drawAs?: SlideObject;
   readOnly: boolean;
+  selected?: boolean;
+  coarse?: boolean;
   /** The lock badge's size in slide px (constant on screen). */
   badge: number;
   on: NodeHandlers;
@@ -304,19 +306,13 @@ function ObjectNode(props: {
       onPointerCancel={on.pressEnd}
       onDblClick={(e) => {
         e.cancelBubble = true;
-        if (!props.readOnly && o.type === 'text') {
+        if (!props.readOnly && o.type === 'text' && !props.coarse && props.selected) {
           props.onStartInlineEdit?.(o.id);
-        } else {
-          props.onEditText?.();
         }
       }}
       onDblTap={(e) => {
         e.cancelBubble = true;
-        if (!props.readOnly && o.type === 'text') {
-          props.onStartInlineEdit?.(o.id);
-        } else {
-          props.onEditText?.();
-        }
+        props.onEditText?.();
       }}
       onDragStart={(e) => on.dragStart(o, e)}
       onDragMove={(e) => on.dragMove(o, e, props.others)}
@@ -588,6 +584,8 @@ export function SlideCanvas(props: {
   const bg = imageFor(stillHash(props.backgroundMediaId ? props.media(props.backgroundMediaId) : undefined));
   const picture = imageFor(drawn.pictureHash);
   const inlineEditingId = useEditor((s) => s.inlineEditingId);
+  const selectedId = useEditor((s) => s.objectId);
+  const selectedCount = useEditor((s) => s.objectIds.length);
   const editingObj = inlineEditingId
     ? drawn.objects.find((x): x is TextObject => x.id === inlineEditingId && x.type === 'text')
     : undefined;
@@ -637,6 +635,8 @@ export function SlideCanvas(props: {
                 density={density}
                 drawAs={budget.get(o)}
                 readOnly={props.readOnly}
+                selected={selectedId === o.id && selectedCount === 1}
+                coarse={coarse}
                 badge={22 / scale}
                 on={on}
                 isEditingInline={inlineEditingId === o.id}
