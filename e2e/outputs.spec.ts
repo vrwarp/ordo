@@ -1,7 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
 import {
   OP,
-  PIN,
   shownSlideCue,
   fixtures,
   goLive,
@@ -15,6 +14,7 @@ import {
   waitCacheReady,
   telemetry,
 } from './helpers.ts';
+import { login } from './linkhelpers.ts';
 
 /**
  * Flip timing bounds (design/23): one frame (17 ms) between the outputs and 50 ms after the GO's scheduled
@@ -145,12 +145,7 @@ test.describe('outputs follow the live state', () => {
     // The same figures in the operator (the M7 exit: the health metrics are visible there): Diagnostics,
     // "Performance and fonts", this output's row with its slide drawing p50 / p95 against its budget.
     const op = await context.newPage();
-    await op.goto(`${OP}/`);
-    await op.locator('input.pin').fill(PIN);
-    await op.getByRole('button', { name: 'OK' }).click();
-    await expect(op.getByRole('button', { name: /Launch outputs|Relaunch outputs/ })).toBeVisible({
-      timeout: 30_000,
-    });
+    await login(op, OP);
     await op.locator('button[title="Diagnostics"]').click();
     await op.locator('[data-performance] tbody tr').first().waitFor({ state: 'attached', timeout: 30_000 });
     const row = op.locator(`[data-performance-output="${a1.id}"]`);
