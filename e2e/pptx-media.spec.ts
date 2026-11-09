@@ -392,7 +392,7 @@ test('PowerPoint clips and sounds import, go live and play in place on WebGPU an
     }
     await op.bringToFront();
     await op.locator('body').click();
-    const playBtn = op.locator('button[title*="F8"]');
+    const playBtn = op.getByRole('button', { name: '▶' });
     if (await playBtn.isVisible()) {
       await playBtn.click();
     } else {
@@ -408,7 +408,7 @@ test('PowerPoint clips and sounds import, go live and play in place on WebGPU an
     const before = (await slotOf(gpu, clickKey))!.t;
     await op.bringToFront();
     await op.locator('body').click();
-    const restartBtn = op.locator('button[title*="Shift+F8"]');
+    const restartBtn = op.getByRole('button', { name: '⟲' });
     if (await restartBtn.isVisible()) {
       await restartBtn.click();
     } else {
