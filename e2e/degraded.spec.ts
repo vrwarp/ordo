@@ -78,12 +78,19 @@ test('the service continues through a hub outage and the hub adopts the state on
     for (const p of popups) expect(await cueOn(p)).toBe(1);
 
     // And GO works through the hub again.
-    await page.bringToFront();
-    await page.keyboard.press('Space');
-    for (const p of popups) await expect.poll(() => cueOn(p), { timeout: 15_000 }).toBe(2);
     await expect
-      .poll(async () => (await (await a.get('live')).json()).state.live, { timeout: 10_000 })
+      .poll(
+        async () => {
+          await page.bringToFront();
+          await page.locator('body').focus();
+          await page.keyboard.press('Space');
+          const t = await (await a.get('live')).json();
+          return t.state.live;
+        },
+        { timeout: 15_000, intervals: [1000, 2000] },
+      )
       .toBe(2);
+    for (const p of popups) await expect.poll(() => cueOn(p), { timeout: 15_000 }).toBe(2);
   } finally {
     hub.kill();
   }

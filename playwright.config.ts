@@ -32,6 +32,7 @@ export default defineConfig({
         '--use-angle=swiftshader',
         '--use-vulkan=swiftshader',
         '--enable-features=Vulkan',
+        '--force-color-profile=srgb',
         '--autoplay-policy=no-user-gesture-required',
         '--disable-background-timer-throttling',
         '--disable-renderer-backgrounding',

@@ -171,7 +171,9 @@ export class Supervisor {
   }
 
   private send(name: ChildName, m: ToChild): void {
-    const p = this.children[name].proc;
+    const c = this.children[name];
+    if (c.status.state !== 'up') return;
+    const p = c.proc;
     if (!p?.connected) return;
     try {
       p.send(m);

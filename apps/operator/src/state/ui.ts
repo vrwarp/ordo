@@ -56,6 +56,13 @@ export function setUi(patch: Partial<UiState>): void {
   useUi.setState(patch);
 }
 
+if (typeof window !== 'undefined') {
+  const w = window as unknown as { __ordo?: Record<string, unknown> };
+  w.__ordo ??= {};
+  w.__ordo.ui = useUi;
+  w.__ordo.setUi = setUi;
+}
+
 export function rememberMessage(text: string): void {
   const t = text.trim();
   if (!t) return;

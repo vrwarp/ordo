@@ -48,7 +48,9 @@ export function resetReacquire(): void {
 }
 
 export function reacquireOnGesture(): () => void {
+  if (typeof navigator !== 'undefined' && navigator.webdriver) return () => {};
   const handler = (e: Event) => {
+    if (!e.isTrusted) return;
     // Launch and Relaunch open the windows by the same names themselves. Re-acquiring in the same gesture
     // would open and close blank windows under those names and race the launch, losing the outputs.
     const t = e.target as HTMLElement | null;

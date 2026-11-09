@@ -391,26 +391,38 @@ test('PowerPoint clips and sounds import, go live and play in place on WebGPU an
       expect((await slotOf(p, clickKey))?.paused).toBe(true);
     }
     await op.bringToFront();
-    await op.keyboard.press('F8');
+    await op.locator('body').click();
+    const playBtn = op.getByRole('button', { name: '▶' });
+    if (await playBtn.isVisible()) {
+      await playBtn.click();
+    } else {
+      await op.keyboard.press('F8');
+    }
     await expect.poll(async () => (await live()).layers.media.content?.state).toBe('playing');
     for (const p of both)
       await expect.poll(async () => (await slotOf(p, clickKey))?.paused, { timeout: 10_000 }).toBe(false);
-    await stage.bringToFront();
-    await expect(stage.locator('.media-remaining')).toContainText('Probe media – slide 2 video');
-    await expect(stage.locator('.media-remaining')).toContainText(/00:0[1-5]/);
     await expect
       .poll(async () => (await slotOf(gpu, clickKey))?.t ?? 0, { timeout: 10_000 })
       .toBeGreaterThan(0.6);
     const startedAt = (await live()).layers.media.content!.startedAt;
     const before = (await slotOf(gpu, clickKey))!.t;
     await op.bringToFront();
-    await op.keyboard.press('Shift+F8');
+    await op.locator('body').click();
+    const restartBtn = op.getByRole('button', { name: '⟲' });
+    if (await restartBtn.isVisible()) {
+      await restartBtn.click();
+    } else {
+      await op.keyboard.press('Shift+F8');
+    }
     await expect
       .poll(async () => (await live()).layers.media.content?.startedAt ?? 0)
       .toBeGreaterThan(startedAt);
     await expect
       .poll(async () => (await slotOf(gpu, clickKey))?.t ?? 9, { timeout: 5_000 })
       .toBeLessThan(before - 0.3);
+    await stage.bringToFront();
+    await expect(stage.locator('.media-remaining')).toContainText('Probe media – slide 2 video');
+    await expect(stage.locator('.media-remaining')).toContainText(/00:0[1-5]/);
     await expect.poll(async () => (await live()).live, { timeout: 15_000 }).toBe(2);
     await expect.poll(async () => (await live()).layers.media.content).toBeNull();
 

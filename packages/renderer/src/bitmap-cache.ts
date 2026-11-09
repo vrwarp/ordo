@@ -54,11 +54,13 @@ export class BitmapCache<B extends Sized> {
   /** Pin counts by key. */
   private pinned = new Map<string, number>();
   bytes = 0;
+  budgetBytes: number;
+  maxCount: number;
 
-  constructor(
-    public budgetBytes = DEFAULT_BITMAP_BUDGET,
-    public maxCount = 64,
-  ) {}
+  constructor(budgetBytes = DEFAULT_BITMAP_BUDGET, maxCount = 64) {
+    this.budgetBytes = budgetBytes;
+    this.maxCount = maxCount;
+  }
 
   get size(): number {
     return this.map.size;

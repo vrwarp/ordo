@@ -348,6 +348,8 @@ function installTestHooks(ctl: Controller): void {
   const w = window as unknown as { __ordo?: Record<string, unknown> };
   w.__ordo = {
     ...(w.__ordo ?? {}),
+    ctl,
+    controller: () => ctl,
     state: () => useLive.getState().state,
     logs: () => logLines(),
     live: () => {

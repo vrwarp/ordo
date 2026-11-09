@@ -3,11 +3,11 @@ import { spawn } from 'node:child_process';
 export type RunResult = { code: number; stdout: string; stderr: string };
 
 export class ToolError extends Error {
-  constructor(
-    message: string,
-    public stderr: string,
-  ) {
+  stderr: string;
+
+  constructor(message: string, stderr: string) {
     super(message);
+    this.stderr = stderr;
   }
 }
 

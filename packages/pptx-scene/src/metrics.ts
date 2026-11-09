@@ -82,11 +82,15 @@ export const SFNT_LIMITS = {
 
 /** A bounds-checked big-endian reader over one table. */
 class Reader {
-  constructor(
-    readonly b: Uint8Array,
-    readonly start = 0,
-    readonly end = b.length,
-  ) {}
+  readonly b: Uint8Array;
+  readonly start: number;
+  readonly end: number;
+
+  constructor(b: Uint8Array, start = 0, end = b.length) {
+    this.b = b;
+    this.start = start;
+    this.end = end;
+  }
   ok(off: number, len: number): boolean {
     return off >= 0 && len >= 0 && this.start + off + len <= this.end;
   }

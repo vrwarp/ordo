@@ -401,6 +401,7 @@ export class SocketHub {
           appVersion: APP_VERSION,
         });
         if (this.receivesLive(c)) this.sendState(c);
+        if (role === 'operate') this.sendHealth(c);
         if (c.outputId) {
           const h = this.health.get(c.outputId);
           this.health.set(c.outputId, { health: h?.health ?? EMPTY_HEALTH, lastSeen: Date.now() });
@@ -572,10 +573,14 @@ export class SocketHub {
     return out;
   }
 
-  private sendHealth(): void {
+  private sendHealth(target?: Client): void {
+    const raw = JSON.stringify({ t: 'health.summary', v: PROTOCOL_VERSION, outputs: this.healthTable() });
+    if (target) {
+      if (target.role === 'operate') this.send(target, raw);
+      return;
+    }
     const ops = [...this.clients].filter((c) => c.role === 'operate');
     if (!ops.length) return;
-    const raw = JSON.stringify({ t: 'health.summary', v: PROTOCOL_VERSION, outputs: this.healthTable() });
     for (const c of ops) this.send(c, raw);
   }
 }

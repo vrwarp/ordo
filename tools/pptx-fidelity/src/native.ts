@@ -594,11 +594,15 @@ export class NativeRenderer {
   /** How each script fallback family was served, over the run (by family). */
   private scriptFaces = new Map<string, ScriptFace>();
 
-  private constructor(
-    private browser: Browser,
-    private script: string,
-    readonly version: string,
-  ) {}
+  private browser: Browser;
+  private script: string;
+  readonly version: string;
+
+  private constructor(browser: Browser, script: string, version: string) {
+    this.browser = browser;
+    this.script = script;
+    this.version = version;
+  }
 
   static async start(executable: string): Promise<NativeRenderer> {
     const script = await bundlePage();

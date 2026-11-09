@@ -854,10 +854,12 @@ class EdgeLines {
   /** The cells' own strokes: `[upper or left cell's, lower or right cell's]` per edge. */
   readonly hc: [Stroke | undefined, Stroke | undefined][][];
   readonly vc: [Stroke | undefined, Stroke | undefined][][];
-  constructor(
-    readonly M: number,
-    readonly N: number,
-  ) {
+  readonly M: number;
+  readonly N: number;
+
+  constructor(M: number, N: number) {
+    this.M = M;
+    this.N = N;
     const grid = <T>(a: number, b: number, f: () => T) =>
       Array.from({ length: a }, () => Array.from({ length: b }, f));
     this.h = grid(M + 1, N, () => undefined);
@@ -1054,10 +1056,13 @@ export class Measure {
   readonly missing = new Set<string>();
   private readonly chains = new Map<string, FaceMetrics[]>();
 
-  constructor(
-    private readonly frame: Frame,
-    private readonly faces: FaceSource | undefined,
-  ) {}
+  private readonly frame: Frame;
+  private readonly faces: FaceSource | undefined;
+
+  constructor(frame: Frame, faces: FaceSource | undefined) {
+    this.frame = frame;
+    this.faces = faces;
+  }
 
   /** The faces tried for a family, nearest first: its own, its metric substitute, `extra`, ordo's default. */
   private chain(family: string, bold: boolean, italic: boolean, extra: readonly string[]): FaceMetrics[] {

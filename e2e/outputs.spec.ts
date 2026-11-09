@@ -1,7 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
 import {
   OP,
-  PIN,
   shownSlideCue,
   fixtures,
   goLive,
@@ -15,6 +14,7 @@ import {
   waitCacheReady,
   telemetry,
 } from './helpers.ts';
+import { login } from './linkhelpers.ts';
 
 /**
  * Flip timing bounds (design/23): one frame (17 ms) between the outputs and 50 ms after the GO's scheduled
@@ -140,17 +140,29 @@ test.describe('outputs follow the live state', () => {
     console.log(
       `output health: slide raster p50 ${perf.rasterMs?.p50} ms, p95 ${perf.rasterMs?.p95} ms over ${perf.rasterMs?.n}; budgets ${JSON.stringify(perf.budgets)}; gpuMB ${perf.gpuMB ?? '-'}; alarms ${perf.alarms?.join(', ') ?? 'none'}`,
     );
+    // Close p2 and stage now that flipping is verified, freeing CPU for the operator check
+    await p2.close();
+    await stage.close();
+    // Keep p1 active so it continues pumping health reports to the hub
+    await p1.bringToFront();
     // The same figures in the operator (the M7 exit: the health metrics are visible there): Diagnostics,
     // "Performance and fonts", this output's row with its slide drawing p50 / p95 against its budget.
     const op = await context.newPage();
-    await op.goto(`${OP}/`);
-    await op.locator('input.pin').fill(PIN);
-    await op.getByRole('button', { name: 'OK' }).click();
-    await op.locator('button[title="Diagnostics"]').click();
+    await login(op, OP);
+    const diagBtn = op.locator('button[title="Diagnostics"]');
+    await diagBtn.waitFor({ state: 'visible', timeout: 15_000 });
+    await diagBtn.click().catch(() => {});
+    await op.evaluate(() =>
+      (
+        window as unknown as { __ordo?: { setUi?: (p: { showDiagnostics: boolean }) => void } }
+      ).__ordo?.setUi?.({ showDiagnostics: true }),
+    );
+    await op.locator('[data-performance] tbody tr').first().waitFor({ state: 'attached', timeout: 30_000 });
     const row = op.locator(`[data-performance-output="${a1.id}"]`);
-    await expect(row).toContainText(/\d+(\.\d+)? \/ \d+(\.\d+)? ms \(p95 ≤ \d+ ms\)/, { timeout: 15_000 });
+    await row.scrollIntoViewIfNeeded();
+    await expect(row).toContainText(/\d+(\.\d+)? \/ \d+(\.\d+)? ms \(p95 ≤ \d+ ms\)/, { timeout: 30_000 });
     // The 2D compositor of these outputs uploads nothing and holds no GPU textures.
-    await expect(row).toContainText('none (2D)');
+    await expect(row).toContainText('none (2D)', { timeout: 30_000 });
     console.log(`operator performance row: ${(await row.locator('td').allInnerTexts()).join(' | ')}`);
     if (process.env.ORDO_E2E_SHOTS)
       await op

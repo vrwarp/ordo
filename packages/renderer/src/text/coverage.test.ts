@@ -255,7 +255,7 @@ describe('glyph coverage', () => {
 
 describe('scripts of uncovered characters', () => {
   it('names fallback scripts, Latin, emoji, marks and the rest', () => {
-    expect(coverageScripts('אa中😀́☧')).toEqual(['Hani', 'Hebr', 'Latn', 'Zinh', 'Zsye', 'Zyyy']);
+    expect(coverageScripts('אa中😀́☧§')).toEqual(['Hani', 'Hebr', 'Latn', 'Zinh', 'Zsye', 'Zyyy']);
     expect(coverageScripts('')).toEqual([]);
   });
 });
