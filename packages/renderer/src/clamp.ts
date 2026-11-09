@@ -162,10 +162,13 @@ export class FontBudget {
   /** The spelling kept for each family, by key: the first one seen. */
   readonly #families = new Map<string, string>();
   readonly #scales = new Set<number>();
-  constructor(
-    readonly maxFamilies: number = CLAMP.maxRunFamilies,
-    readonly maxScales: number = CLAMP.maxSizeScales,
-  ) {}
+  readonly maxFamilies: number;
+  readonly maxScales: number;
+
+  constructor(maxFamilies: number = CLAMP.maxRunFamilies, maxScales: number = CLAMP.maxSizeScales) {
+    this.maxFamilies = maxFamilies;
+    this.maxScales = maxScales;
+  }
 
   /**
    * The family `v` names, clamped (`clampFamily`), when it is within the budget, else '' (the run or bullet

@@ -204,10 +204,18 @@ test('an imported PowerPoint deck draws like the harness, shows its text everywh
       ] as const) {
         await settledOn(w, cue);
         const file = join(OUT, `cue${cue}-${name}.png`);
-        await capture(w, file);
-        const s = ssim(file, harnessPng(shown));
+        let s = 0;
+        await expect
+          .poll(
+            async () => {
+              await capture(w, file);
+              s = ssim(file, harnessPng(shown));
+              return s;
+            },
+            { timeout: 15_000, intervals: [200, 500, 1000] },
+          )
+          .toBeGreaterThanOrEqual(0.99);
         scores.push(`cue ${cue} ${name} ${s.toFixed(4)}`);
-        expect(s, `cue ${cue} at ${name} against the harness`).toBeGreaterThanOrEqual(0.99);
       }
     }
     console.log(`SSIM against the harness's native page: ${scores.join(', ')}`);

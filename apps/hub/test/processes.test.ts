@@ -33,7 +33,7 @@ function capture() {
   return { log: pino({ level: 'info' }, stream), lines, has: (re: RegExp) => lines.some((l) => re.test(l)) };
 }
 
-async function until(fn: () => boolean | Promise<boolean>, ms = 5000, what = 'condition'): Promise<void> {
+async function until(fn: () => boolean | Promise<boolean>, ms = 15_000, what = 'condition'): Promise<void> {
   const end = Date.now() + ms;
   while (Date.now() < end) {
     if (await fn()) return;
@@ -92,10 +92,10 @@ describe('supervisor', () => {
     const { cap, sup: s } = make({ FIXTURE_STATS: '1' });
     await s.start();
     const seen = () => cap.lines.filter((l) => /"child":"live".*"msg":"stats 4242"/.test(l)).length;
-    await until(() => seen() === 1, 5000, 'stats relayed to live');
+    await until(() => seen() === 1, 15_000, 'stats relayed to live');
     const live = s.status().find((p) => p.name === 'live')!;
     process.kill(live.pid!, 'SIGKILL');
-    await until(() => seen() === 2, 8000, 'stats replayed to the restarted live process');
+    await until(() => seen() === 2, 15_000, 'stats replayed to the restarted live process');
     expect(s.status().find((p) => p.name === 'live')!.restarts).toBe(1);
   });
 

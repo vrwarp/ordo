@@ -525,7 +525,11 @@ class CopyBuilder {
   readonly usedLayouts = new Set<string>();
   readonly usedMasters = new Set<string>();
 
-  constructor(readonly pkg: Package) {}
+  readonly pkg: Package;
+
+  constructor(pkg: Package) {
+    this.pkg = pkg;
+  }
 
   /** Write an XML part of the copy. */
   put(name: string, xml: string, contentType: string | undefined): void {

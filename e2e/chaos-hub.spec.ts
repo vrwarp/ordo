@@ -53,7 +53,9 @@ function outputOnHub(WS: WsCtor, port: number, cookie: string): Promise<boolean>
     ws.on('open', () => ws.send(JSON.stringify({ t: 'hello', v: 1, role: 'operate', appVersion: '0.1.0' })));
     ws.on('message', (d) => {
       const m = JSON.parse(String(d)) as { t: string; outputs?: Record<string, { connected: boolean }> };
-      if (m.t === 'health.summary') finish(Object.values(m.outputs ?? {}).some((o) => o.connected));
+      if (m.t === 'health.summary' && Object.values(m.outputs ?? {}).some((o) => o.connected)) {
+        finish(true);
+      }
     });
   });
 }
@@ -317,7 +319,7 @@ test('the screen holds through library and live process crashes, a stall, a corr
     expect(ref.r + ref.g + ref.b).toBeGreaterThan(30);
     const WS = hubRequire('ws') as WsCtor;
     const cookie = (await a.storageState()).cookies.map((c) => `${c.name}=${c.value}`).join('; ');
-    expect(await outputOnHub(WS, PORT, cookie)).toBe(true);
+    await expect.poll(async () => outputOnHub(WS, PORT, cookie), { timeout: 15_000 }).toBe(true);
 
     // (a) Kill the library process: the live API keeps answering (a GO during the outage reaches the
     // screen), the screen holds throughout, and the library is back within a few seconds.

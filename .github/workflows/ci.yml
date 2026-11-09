@@ -23,8 +23,8 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - name: System tools for the media pipeline
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils libreoffice-impress
+      - name: System tools for the media pipeline and bundled fonts
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg poppler-utils libreoffice-impress fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-noto-core fonts-inter
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
