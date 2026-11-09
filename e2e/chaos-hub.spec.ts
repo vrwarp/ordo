@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
-import { APP_VERSION } from '@ordo/protocol';
+import { APP_VERSION } from '../packages/protocol/src/index.ts';
 import { expect, type Page, test } from '@playwright/test';
 import { fixtures, SONG, uploadMedia, waitCacheReady } from './helpers.ts';
 import { HubProcess } from './hubproc.ts';
