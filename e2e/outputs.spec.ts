@@ -147,6 +147,7 @@ test.describe('outputs follow the live state', () => {
     await op.locator('input.pin').fill(PIN);
     await op.getByRole('button', { name: 'OK' }).click();
     await op.locator('button[title="Diagnostics"]').click();
+    await op.locator('[data-performance] tbody tr').first().waitFor({ timeout: 15_000 });
     const row = op.locator(`[data-performance-output="${a1.id}"]`);
     await expect(row).toContainText(/\d+(\.\d+)? \/ \d+(\.\d+)? ms \(p95 ≤ \d+ ms\)/, { timeout: 15_000 });
     // The 2D compositor of these outputs uploads nothing and holds no GPU textures.

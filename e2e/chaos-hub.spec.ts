@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
+import { APP_VERSION } from '@ordo/protocol';
 import { expect, type Page, test } from '@playwright/test';
 import { fixtures, SONG, uploadMedia, waitCacheReady } from './helpers.ts';
 import { HubProcess } from './hubproc.ts';
@@ -50,7 +51,9 @@ function outputOnHub(WS: WsCtor, port: number, cookie: string): Promise<boolean>
     };
     ws.on('error', () => finish(false));
     ws.on('close', () => finish(false));
-    ws.on('open', () => ws.send(JSON.stringify({ t: 'hello', v: 1, role: 'operate', appVersion: '0.1.0' })));
+    ws.on('open', () =>
+      ws.send(JSON.stringify({ t: 'hello', v: 1, role: 'operate', appVersion: APP_VERSION })),
+    );
     ws.on('message', (d) => {
       const m = JSON.parse(String(d)) as { t: string; outputs?: Record<string, { connected: boolean }> };
       if (m.t === 'health.summary' && Object.values(m.outputs ?? {}).some((o) => o.connected)) {
@@ -393,7 +396,7 @@ test('the screen holds through library and live process crashes, a stall, a corr
       new Promise<number>((done, fail) => {
         const ws = new WS(`ws://localhost:${PORT}/ws?token=${encodeURIComponent(tok)}`);
         ws.on('open', () => {
-          ws.send(JSON.stringify({ t: 'hello', v: 1, role: 'output', appVersion: '0.1.0' }));
+          ws.send(JSON.stringify({ t: 'hello', v: 1, role: 'output', appVersion: APP_VERSION }));
           send(ws);
         });
         ws.on('close', (code) => done(code));
