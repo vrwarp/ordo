@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
-import { appEnv } from '@ordo/client';
 import type { Output } from '@ordo/domain';
 import { buildChecklist } from '../../lib/checklist.ts';
-import { planLaunch, type ScreenInfo, windowFeatures } from '../../lib/screens.ts';
+import { planLaunch, type ScreenInfo } from '../../lib/screens.ts';
 import { outputWindows, useLaunch } from '../../services/outputs.ts';
 import { surfaces, useSurfaces } from '../../services/surfaces.ts';
 import { useLibrary } from '../../state/library.ts';
