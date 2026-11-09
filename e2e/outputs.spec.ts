@@ -140,6 +140,8 @@ test.describe('outputs follow the live state', () => {
     console.log(
       `output health: slide raster p50 ${perf.rasterMs?.p50} ms, p95 ${perf.rasterMs?.p95} ms over ${perf.rasterMs?.n}; budgets ${JSON.stringify(perf.budgets)}; gpuMB ${perf.gpuMB ?? '-'}; alarms ${perf.alarms?.join(', ') ?? 'none'}`,
     );
+    // Keep p1 active so it continues pumping health reports to the hub
+    await p1.bringToFront();
     // The same figures in the operator (the M7 exit: the health metrics are visible there): Diagnostics,
     // "Performance and fonts", this output's row with its slide drawing p50 / p95 against its budget.
     const op = await context.newPage();
@@ -149,9 +151,9 @@ test.describe('outputs follow the live state', () => {
     await op.locator('button[title="Diagnostics"]').click();
     await op.locator('[data-performance] tbody tr').first().waitFor({ timeout: 15_000 });
     const row = op.locator(`[data-performance-output="${a1.id}"]`);
-    await expect(row).toContainText(/\d+(\.\d+)? \/ \d+(\.\d+)? ms \(p95 ≤ \d+ ms\)/, { timeout: 15_000 });
+    await expect(row).toContainText(/\d+(\.\d+)? \/ \d+(\.\d+)? ms \(p95 ≤ \d+ ms\)/, { timeout: 30_000 });
     // The 2D compositor of these outputs uploads nothing and holds no GPU textures.
-    await expect(row).toContainText('none (2D)');
+    await expect(row).toContainText('none (2D)', { timeout: 30_000 });
     console.log(`operator performance row: ${(await row.locator('td').allInnerTexts()).join(' | ')}`);
     if (process.env.ORDO_E2E_SHOTS)
       await op

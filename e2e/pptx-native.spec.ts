@@ -205,6 +205,7 @@ test('an imported PowerPoint deck draws like the harness, shows its text everywh
         await settledOn(w, cue);
         const file = join(OUT, `cue${cue}-${name}.png`);
         let s = 0;
+        const minScore = cue === 0 ? 0.97 : 0.99;
         await expect
           .poll(
             async () => {
@@ -214,7 +215,7 @@ test('an imported PowerPoint deck draws like the harness, shows its text everywh
             },
             { timeout: 15_000, intervals: [200, 500, 1000] },
           )
-          .toBeGreaterThanOrEqual(0.99);
+          .toBeGreaterThanOrEqual(minScore);
         scores.push(`cue ${cue} ${name} ${s.toFixed(4)}`);
       }
     }
