@@ -259,7 +259,12 @@ export function PresentationsTab() {
           render={(p) => (
             <>
               <span className="kind tag">{p.kind}</span>
-              <span className="col grow" style={{ gap: 0 }}>
+              <a
+                href={`#/edit/${p.id}`}
+                className="col grow"
+                style={{ gap: 0, textDecoration: 'none', color: 'inherit' }}
+                title={`Open and edit ${p.title}`}
+              >
                 <span className="ellipsis">
                   <b>{p.title}</b> {locked.has(p.id) && <span className="tag red">live · locked</span>}{' '}
                   {p.archived && <span className="tag">archived</span>}
@@ -277,24 +282,26 @@ export function PresentationsTab() {
                     .filter(Boolean)
                     .join(' · ')}
                 </span>
-              </span>
-              <select
-                value={p.folderId ?? ''}
-                onChange={(e) => move(p, e.target.value)}
-                title="Folder"
-                style={{ maxWidth: 140 }}
-              >
-                <option value="">No folder</option>
-                {folders.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
-              </select>
+              </a>
+              {folders.length > 0 && (
+                <select
+                  value={p.folderId ?? ''}
+                  onChange={(e) => move(p, e.target.value)}
+                  title="Folder"
+                  style={{ maxWidth: 140 }}
+                >
+                  <option value="">No folder</option>
+                  {folders.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+                </select>
+              )}
               <a className="btn small" href={`#/edit/${p.id}`}>
                 Edit
               </a>
-              <button type="button" className="small" onClick={() => setArchived(p, !p.archived)}>
+              <button type="button" className="small ghost" onClick={() => setArchived(p, !p.archived)}>
                 {p.archived ? 'Unarchive' : 'Archive'}
               </button>
               <button type="button" className="small ghost" onClick={() => void del(p)} title="Delete">

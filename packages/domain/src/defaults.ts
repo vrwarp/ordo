@@ -165,6 +165,7 @@ export const LOOK_STAGE: Look = {
 export const DEFAULT_LOOKS: Look[] = [LOOK_MAIN, LOOK_LOWER_THIRD, LOOK_STREAM, LOOK_STAGE];
 
 export const DEFAULT_KEYMAP: KeyMap = {
+  Escape: { id: 'clearSlide' },
   Space: { id: 'next' },
   ArrowRight: { id: 'next' },
   ArrowDown: { id: 'next' },

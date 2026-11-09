@@ -86,7 +86,7 @@ export function LayerBar({ op }: { op: OperatorPlaylist }) {
         value={slideCue?.label}
         on={!!L.slide.content}
         onClear={() => dispatch({ id: 'clearSlide' })}
-        keyHint="F1"
+        keyHint="Esc / F1"
       />
       <Chip
         label="Lower third"

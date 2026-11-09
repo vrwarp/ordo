@@ -3,6 +3,7 @@
  * boxes of the 'Pictures (LibreOffice)' import, and the media delete that names the presentations it would
  * break. Decks are synthetic (`@ordo/pptx-scene` test-util).
  */
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { expandCues, type Media, newId, type Playlist, type Presentation, type Slide } from '@ordo/domain';
 import { body, buildDeck, para, run, sp } from '@ordo/pptx-scene/test-util.ts';
@@ -406,38 +407,50 @@ describe('the one-shot trigger at start-up', () => {
   });
 });
 
-describe("'Pictures (LibreOffice)' import: boxes keyed by the slide each page shows", () => {
-  let hub: TestHub;
-  let ed: Client;
-  beforeAll(async () => {
-    hub = await startHub();
-    ed = await login(hub.url, EDIT_PIN);
-  });
-  afterAll(() => hub.cleanup());
+function has(tool: string, flag: string): boolean {
+  try {
+    execFileSync(tool, [flag], { stdio: 'ignore', timeout: 30_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-  it('gives page 2 the third slide’s text after a hidden slide, in the page’s own frame', async () => {
-    const fd = new FormData();
-    fd.append('file', new Blob([(await hiddenSlideDeck()) as Uint8Array<ArrayBuffer>]), 'Hidden.pptx');
-    // The picture import is a choice since editable slides became the default (item H).
-    fd.append('renderer', 'libreoffice');
-    const job = await ed.json<Job>('/import/document', { method: 'POST', body: fd });
-    await hub.jobs.idle();
-    const done = hub.jobs.get(job.id);
-    expect(done.error).toBeUndefined();
-    const p = hub.lib.presentations.must((done.result as { presentationId: string }).presentationId);
-    const slides = p.sections[0]!.slides;
-    expect(slides).toHaveLength(2);
-    expect(slides.map((s) => s.imported?.textAligned)).toEqual([true, true]);
-    expect(slides.map((s) => s.imported?.textBoxes?.map((b) => b.text))).toEqual([
-      ['Welcome home'],
-      ['Offering'],
-    ]);
-    expect(slides[1]!.imported!.textBoxes![0]!.box.x).toBeGreaterThanOrEqual(240);
-    expect(readers(p).labels).toEqual(['Welcome home', 'Offering']);
-    // Born aligned: the repair has nothing to do.
-    expect(hub.imports.pptx.queueTextRepair()).toBeUndefined();
-  }, 120_000);
-});
+describe.skipIf(!has('soffice', '--version'))(
+  "'Pictures (LibreOffice)' import: boxes keyed by the slide each page shows",
+  () => {
+    let hub: TestHub;
+    let ed: Client;
+    beforeAll(async () => {
+      hub = await startHub();
+      ed = await login(hub.url, EDIT_PIN);
+    });
+    afterAll(() => hub.cleanup());
+
+    it('gives page 2 the third slide’s text after a hidden slide, in the page’s own frame', async () => {
+      const fd = new FormData();
+      fd.append('file', new Blob([(await hiddenSlideDeck()) as Uint8Array<ArrayBuffer>]), 'Hidden.pptx');
+      // The picture import is a choice since editable slides became the default (item H).
+      fd.append('renderer', 'libreoffice');
+      const job = await ed.json<Job>('/import/document', { method: 'POST', body: fd });
+      await hub.jobs.idle();
+      const done = hub.jobs.get(job.id);
+      expect(done.error).toBeUndefined();
+      const p = hub.lib.presentations.must((done.result as { presentationId: string }).presentationId);
+      const slides = p.sections[0]!.slides;
+      expect(slides).toHaveLength(2);
+      expect(slides.map((s) => s.imported?.textAligned)).toEqual([true, true]);
+      expect(slides.map((s) => s.imported?.textBoxes?.map((b) => b.text))).toEqual([
+        ['Welcome home'],
+        ['Offering'],
+      ]);
+      expect(slides[1]!.imported!.textBoxes![0]!.box.x).toBeGreaterThanOrEqual(240);
+      expect(readers(p).labels).toEqual(['Welcome home', 'Offering']);
+      // Born aligned: the repair has nothing to do.
+      expect(hub.imports.pptx.queueTextRepair()).toBeUndefined();
+    }, 120_000);
+  },
+);
 
 describe('deleting media that presentations use (design/27 §11 item 15)', () => {
   let hub: TestHub;

@@ -92,45 +92,53 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
       {o.type === 'text' && (
         <>
           <FormatBar o={o} range={clampRange(range, o.text.length)} readOnly={readOnly} />
-          <textarea
-            rows={5}
-            value={o.text}
-            disabled={readOnly}
-            id="ordo-text-editor"
-            aria-label="Text"
-            onSelect={(e) =>
-              setRange({ start: e.currentTarget.selectionStart, end: e.currentTarget.selectionEnd })
-            }
-            onKeyDown={(e) => {
-              // Ctrl+Z and Ctrl+Y here are the editor's undo and redo, not the field's own: the field's
-              // undo knows nothing of a Bold or a colour and would take typed letters back instead. Typing
-              // is one undo step per pause, so the editor's undo covers the text too.
-              const step = historyKey(e);
-              if (!step) return;
-              e.preventDefault();
-              e.stopPropagation();
-              if (readOnly) return;
-              const el = e.currentTarget;
-              const at = { start: el.selectionStart, end: el.selectionEnd };
-              (step === 'undo' ? undo : redo)();
-              // The field shows the restored text on the next render: the caret stays where it was.
-              requestAnimationFrame(() => {
-                const f = document.getElementById('ordo-text-editor');
-                if (!(f instanceof HTMLTextAreaElement)) return;
-                const n = f.value.length;
-                const r = { start: Math.min(at.start, n), end: Math.min(at.end, n) };
-                f.setSelectionRange(r.start, r.end);
-                setRange(r);
-              });
-            }}
-            onChange={(e) => {
-              // Runs and paragraph styles follow the edit (design/27 §11): a typo fix keeps the formatting.
-              const next = e.target.value;
-              const caret = e.target.selectionEnd;
-              setRange({ start: e.target.selectionStart, end: caret });
-              if (!readOnly) typeText(o.id, next, caret);
-            }}
-          />
+          <div className="col" style={{ gap: 4 }}>
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <span className="muted small">Text content:</span>
+              <span className="muted small" style={{ fontSize: 11 }}>
+                Double-click canvas to edit inline
+              </span>
+            </div>
+            <textarea
+              rows={4}
+              value={o.text}
+              disabled={readOnly}
+              id="ordo-text-editor"
+              aria-label="Text"
+              onSelect={(e) =>
+                setRange({ start: e.currentTarget.selectionStart, end: e.currentTarget.selectionEnd })
+              }
+              onKeyDown={(e) => {
+                // Ctrl+Z and Ctrl+Y here are the editor's undo and redo, not the field's own: the field's
+                // undo knows nothing of a Bold or a colour and would take typed letters back instead. Typing
+                // is one undo step per pause, so the editor's undo covers the text too.
+                const step = historyKey(e);
+                if (!step) return;
+                e.preventDefault();
+                e.stopPropagation();
+                if (readOnly) return;
+                const el = e.currentTarget;
+                const at = { start: el.selectionStart, end: el.selectionEnd };
+                (step === 'undo' ? undo : redo)();
+                // The field shows the restored text on the next render: the caret stays where it was.
+                requestAnimationFrame(() => {
+                  const f = document.getElementById('ordo-text-editor');
+                  if (!(f instanceof HTMLTextAreaElement)) return;
+                  const n = f.value.length;
+                  const r = { start: Math.min(at.start, n), end: Math.min(at.end, n) };
+                  f.setSelectionRange(r.start, r.end);
+                  setRange(r);
+                });
+              }}
+              onChange={(e) => {
+                // Runs and paragraph styles follow the edit (design/27 §11): a typo fix keeps the formatting.
+                const next = e.target.value;
+                const caret = e.target.selectionEnd;
+                setRange({ start: e.target.selectionStart, end: caret });
+                if (!readOnly) typeText(o.id, next, caret);
+              }}
+            />
+          </div>
           <ParagraphStrip o={o} range={clampRange(range, o.text.length)} readOnly={readOnly} />
           {keyClash && (
             <div className="banner small">

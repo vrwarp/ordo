@@ -78,8 +78,17 @@ export function TopBar() {
   };
   return (
     <div className={`topbar ${tone}`}>
-      <div className="col" style={{ gap: 0, minWidth: 160 }}>
-        <span className="muted small">{isLive ? 'LIVE' : 'Not live'}</span>
+      <div className="col" style={{ gap: 2, minWidth: 160 }}>
+        <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+          <span
+            className={`live-status-pill ${isLive ? 'live' : 'idle'}`}
+            data-live-status={isLive ? 'live' : 'idle'}
+          >
+            <span className={`dot sm ${isLive ? 'red' : 'grey'}`} />
+            {isLive ? 'ON AIR' : 'PREVIEW'}
+          </span>
+          <span className="muted small">{isLive ? 'LIVE' : 'Not live'}</span>
+        </div>
         <b className="ellipsis" style={{ maxWidth: 240 }}>
           {s.resolved?.playlist.name ?? '—'}
         </b>

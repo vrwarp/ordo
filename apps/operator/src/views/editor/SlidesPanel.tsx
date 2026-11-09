@@ -173,7 +173,7 @@ export function SlidesPanel({ p, readOnly }: { p: Presentation; readOnly: boolea
             {!readOnly && (
               <button
                 type="button"
-                className="ghost small"
+                className="ghost small sec-delete-btn"
                 title="Delete section"
                 aria-label="Delete section"
                 onClick={async () => {
