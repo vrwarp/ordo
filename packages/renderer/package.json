@@ -26,6 +26,7 @@
     "linebreak": "1.1.0"
   },
   "devDependencies": {
-    "@webgpu/types": "^0.1.74"
+    "@webgpu/types": "^0.1.74",
+    "tsx": "^4.23.15"
   }
 }
