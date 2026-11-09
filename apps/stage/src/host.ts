@@ -6,6 +6,7 @@
 import {
   acceptPorts,
   appEnv,
+  broadcastEndpoint,
   clock,
   isControl,
   operatorOrigin,
@@ -142,6 +143,17 @@ export class StageHost {
       this.bridgeCleanup = () => {
         unsub();
         win.close();
+        ch.port1.close();
+      };
+      bridge = ch.port2;
+    } else if (typeof BroadcastChannel !== 'undefined' && !appEnv().domain) {
+      const ch = new MessageChannel();
+      const bcast = broadcastEndpoint(`ordo-bus-${this.outputId}`);
+      const unsub = bcast.onMessage((m) => ch.port1.postMessage(m));
+      ch.port1.onmessage = (ev) => bcast.post(ev.data);
+      this.bridgeCleanup = () => {
+        unsub();
+        bcast.close();
         ch.port1.close();
       };
       bridge = ch.port2;

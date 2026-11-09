@@ -901,6 +901,7 @@ export type MidiMapping = z.infer<typeof MidiMapping>;
 export const SurfaceSettings = z.object({
   streamDeckPages: z.array(StreamDeckPage).max(100).default([]),
   midi: z.array(MidiMapping).max(1000).default([]),
+  midiEnabled: z.boolean().default(false),
   messagePresets: z.array(z.string().max(500)).max(200).default([]),
 });
 export type SurfaceSettings = z.infer<typeof SurfaceSettings>;

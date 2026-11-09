@@ -8,6 +8,7 @@ import { clock } from './clock.ts';
 import { appEnv, operatorOrigin as defaultOperatorOrigin } from './env.ts';
 import { setApiToken } from './api.ts';
 import type { LibraryDelta } from '@ordo/protocol';
+import { DEMO } from './demo.ts';
 
 export type Bus = 'hub' | 'fallback' | 'none';
 export type OutputEvent = { k: 'media.ended' | 'audio.ended'; cueIndex: number; at: number };
@@ -145,6 +146,7 @@ export class OutputLink extends Emitter<{
     });
     this.fallback?.on('hub', ({ hubUp, hold }) => {
       if (hubUp) {
+        if (DEMO) return; // In demo mode there is no WebSocket hub; stay on fallback bus
         this.setHeld(false);
         if (this.bus === 'fallback') this.leaveFallback('operator says hub up');
         else clock.fallback = false;

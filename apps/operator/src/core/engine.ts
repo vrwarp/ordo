@@ -242,7 +242,9 @@ export class CoreEngine {
         }
       })
       .catch(() => undefined);
-    if (seed && snap?.held && this.now() - snap.at < RESUME_HELD_MS) {
+    if (DEMO) {
+      this.core.activateFallback({ hold: true, quiet: true });
+    } else if (seed && snap?.held && this.now() - snap.at < RESUME_HELD_MS) {
       // A service this PC started without the hub: the hub never had it, so take it back.
       this.log('warn', 'core restarted during a service started from this PC: resuming it');
       this.core.resumeHeld(snap.staleOnHub);

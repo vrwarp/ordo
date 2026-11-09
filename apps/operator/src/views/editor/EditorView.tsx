@@ -80,6 +80,7 @@ export function EditorView({ id }: { id: string }) {
   const locked = useLockedIds();
   const media = useMediaLookup();
   const [tab, setTab] = useState<'object' | 'slide' | 'presentation'>('slide');
+  const [focusMode, setFocusMode] = useState(false);
   const [revisions, setRevisions] = useState(false);
   const [imagePick, setImagePick] = useState(false);
   const [videoPick, setVideoPick] = useState(false);
@@ -290,7 +291,7 @@ export function EditorView({ id }: { id: string }) {
     ) : undefined;
 
   return (
-    <div className="editor" ref={root}>
+    <div className={`editor ${focusMode ? 'focus-mode' : ''}`} ref={root}>
       {coarse ? (
         <div className="toolbar ed-toolbar-touch">
           <a className="btn small ghost" href="#/library">
@@ -343,6 +344,14 @@ export function EditorView({ id }: { id: string }) {
           </button>
           <button type="button" onClick={() => setRevisions(true)}>
             History
+          </button>
+          <button
+            type="button"
+            className={`small ${focusMode ? 'on' : ''}`}
+            onClick={() => setFocusMode((v) => !v)}
+            title="Toggle full screen canvas (hide side panels)"
+          >
+            {focusMode ? 'Exit Full Screen' : 'Full Screen'}
           </button>
         </div>
       ) : (
@@ -452,6 +461,14 @@ export function EditorView({ id }: { id: string }) {
           </button>
           <button type="button" onClick={() => setRevisions(true)}>
             History
+          </button>
+          <button
+            type="button"
+            className={`small ${focusMode ? 'on' : ''}`}
+            onClick={() => setFocusMode((v) => !v)}
+            title="Toggle full screen canvas (hide side panels)"
+          >
+            {focusMode ? 'Exit Full Screen' : 'Full Screen'}
           </button>
         </div>
       )}

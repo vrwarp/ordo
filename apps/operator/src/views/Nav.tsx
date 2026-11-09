@@ -76,7 +76,7 @@ export function Nav({
       {link('#/playlists', 'Playlists', route.name === 'playlists')}
       {link('#/library', 'Library', route.name === 'library' || route.name === 'edit')}
       {role === 'operate' && link('#/settings/outputs', 'Settings', route.name === 'settings')}
-      {role === 'operate' && link('#/checklist', 'Checklist', route.name === 'checklist')}
+      {role === 'operate' && link('#/setup', 'Setup', route.name === 'setup' || route.name === 'checklist')}
       <span className="spacer" />
       {offline && <span className="tag amber">offline: hub unreachable</span>}
       <span className="tag">{role === 'operate' ? 'Operate' : 'Edit'}</span>

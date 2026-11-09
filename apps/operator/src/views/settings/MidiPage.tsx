@@ -41,13 +41,45 @@ export function MidiPage() {
   return (
     <div className="col" style={{ gap: 12 }}>
       <h2>MIDI</h2>
-      <div className="row">
+      <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
         <span className={`dot ${midiReady ? 'green' : 'grey'}`} />
-        <span>{midiReady ? 'Web MIDI ready' : 'Web MIDI not available or not permitted'}</span>
-        <button type="button" className="small" onClick={() => surfaces()?.refreshMidi()}>
-          Refresh inputs
-        </button>
+        <span>{midiReady ? 'Web MIDI active' : 'Web MIDI is disabled (permission not requested)'}</span>
+        {!midiReady ? (
+          <button
+            type="button"
+            className="primary small"
+            onClick={async () => {
+              const ok = await surfaces()?.enableMidi();
+              if (ok) toast('Web MIDI enabled and devices connected.', 'ok');
+              else toast('Web MIDI access was not granted by the browser.', 'warn');
+            }}
+          >
+            Enable Web MIDI
+          </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="small"
+              onClick={async () => {
+                await surfaces()?.disableMidi();
+                toast('MIDI disabled.', 'info');
+              }}
+            >
+              Disable MIDI
+            </button>
+            <button type="button" className="small" onClick={() => surfaces()?.refreshMidi()}>
+              Refresh inputs
+            </button>
+          </>
+        )}
       </div>
+      {!midiReady && (
+        <div className="banner" style={{ margin: 0 }}>
+          MIDI is turned off by default so ordo never requests permission unexpectedly. Click{' '}
+          <b>Enable Web MIDI</b> above to connect your pedals, keyboards, or controllers.
+        </div>
+      )}
       <div className="row wrap">
         {midiInputs.map((i) => (
           <span key={i.id} className="tag">

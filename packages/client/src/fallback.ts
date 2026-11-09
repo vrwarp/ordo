@@ -115,6 +115,55 @@ export function windowEndpoint(peer: Window | (() => Window | null), origin: str
   };
 }
 
+/**
+ * A bus endpoint over BroadcastChannel (same-origin). Messages are relayed between the operator and
+ * output/stage windows even if opened without window.opener (e.g. from popup blocker or as tabs).
+ */
+export function broadcastEndpoint(channelName: string): BusEndpoint {
+  let open = true;
+  const subs = new Set<(m: FallbackMessage) => void>();
+  let channel: BroadcastChannel | null = null;
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      channel = new BroadcastChannel(channelName);
+      channel.onmessage = (ev: MessageEvent) => {
+        if (!open || !validBusMessage(ev.data)) return;
+        for (const fn of subs) fn(ev.data);
+      };
+    } else {
+      open = false;
+    }
+  } catch {
+    open = false;
+  }
+  return {
+    kind: 'window',
+    post(m) {
+      if (!open || !channel) return;
+      try {
+        channel.postMessage(m);
+      } catch {
+        open = false;
+      }
+    },
+    onMessage(fn) {
+      subs.add(fn);
+      return () => subs.delete(fn);
+    },
+    alive: () => open,
+    close() {
+      open = false;
+      subs.clear();
+      try {
+        channel?.close();
+      } catch {
+        /* already closed */
+      }
+      channel = null;
+    },
+  };
+}
+
 type Win = { ep: BusEndpoint; ready: boolean; unsub: () => void };
 
 /** Period of the host's announcements (hello to windows not yet ready, heartbeat to ready ones). */

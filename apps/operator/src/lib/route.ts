@@ -4,6 +4,7 @@ export type Route =
   | { name: 'edit'; id: string }
   | { name: 'playlists'; id?: string }
   | { name: 'settings'; page: string }
+  | { name: 'setup' }
   | { name: 'checklist' }
   | { name: 'previews'; id?: string; slideId?: string };
 
@@ -48,8 +49,9 @@ export function parseRoute(hash: string): Route | null {
         name: 'settings',
         page: a && (SETTINGS_PAGES as readonly string[]).includes(a) ? a : 'outputs',
       };
+    case 'setup':
     case 'checklist':
-      return { name: 'checklist' };
+      return { name: 'setup' };
     case 'previews':
       return { name: 'previews', id: a, slideId: parts[2] };
     default:
@@ -69,8 +71,10 @@ export function routeHash(r: Route): string {
       return r.id ? `#/playlists/${encodeURIComponent(r.id)}` : '#/playlists';
     case 'settings':
       return `#/settings/${r.page}`;
+    case 'setup':
+      return '#/setup';
     case 'checklist':
-      return '#/checklist';
+      return '#/setup';
     case 'previews':
       return `#/previews${r.id ? `/${encodeURIComponent(r.id)}` : ''}${r.id && r.slideId ? `/${encodeURIComponent(r.slideId)}` : ''}`;
   }
