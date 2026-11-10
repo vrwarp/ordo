@@ -3,6 +3,7 @@ import type {
   GeneralSettings,
   KeyMap,
   Look,
+  MidiMapping,
   Rgba,
   SurfaceSettings,
   TextStyle,
@@ -208,6 +209,24 @@ export const DEFAULT_SURFACES: SurfaceSettings = {
   midiEnabled: false,
   messagePresets: ['Wrap up', 'Repeat chorus', 'One more time', 'Watch the leader', 'Mic check'],
 };
+
+/** ProPresenter 7 compatible default MIDI layout with velocity parameterization. */
+export const PROPRESENTER_MIDI_MAPPINGS: MidiMapping[] = [
+  { id: 'pro-next', kind: 'note', number: 0, threshold: 1, action: { id: 'next' } },
+  { id: 'pro-prev', kind: 'note', number: 1, threshold: 1, action: { id: 'prev' } },
+  { id: 'pro-first', kind: 'note', number: 2, threshold: 1, action: { id: 'firstSlide' } },
+  { id: 'pro-last', kind: 'note', number: 3, threshold: 1, action: { id: 'lastSlide' } },
+  { id: 'pro-item', kind: 'note', number: 19, threshold: 1, paramSource: 'velocity', action: { id: 'goToItem' } },
+  { id: 'pro-slide', kind: 'note', number: 20, threshold: 1, paramSource: 'velocity', action: { id: 'goToSlideItem' } },
+  { id: 'pro-sec', kind: 'note', number: 21, threshold: 1, paramSource: 'velocity', action: { id: 'goToSection' } },
+  { id: 'pro-clear-all', kind: 'note', number: 24, threshold: 1, action: { id: 'clearAll' } },
+  { id: 'pro-clear-slide', kind: 'note', number: 25, threshold: 1, action: { id: 'clearSlide' } },
+  { id: 'pro-clear-bg', kind: 'note', number: 26, threshold: 1, action: { id: 'clearBackground' } },
+  { id: 'pro-clear-props', kind: 'note', number: 27, threshold: 1, action: { id: 'clearProps' } },
+  { id: 'pro-clear-msg', kind: 'note', number: 28, threshold: 1, action: { id: 'messageDismiss' } },
+  { id: 'pro-play-pause', kind: 'note', number: 29, threshold: 1, action: { id: 'mediaPlayPause' } },
+  { id: 'pro-restart', kind: 'note', number: 30, threshold: 1, action: { id: 'mediaRestart' } },
+];
 
 export const DEFAULT_GENERAL: GeneralSettings = {
   venueName: 'ordo',

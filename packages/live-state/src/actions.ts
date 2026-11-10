@@ -31,10 +31,34 @@ export function actionToEvent(
       return { k: 'next', at };
     case 'prev':
       return { k: 'prev', at };
+    case 'firstSlide': {
+      const ref = s.live ?? s.armed;
+      if (ref === undefined) return null;
+      const cur = s.cues[ref];
+      if (!cur) return null;
+      const itemCues = s.cues.filter((c) => c.itemIndex === cur.itemIndex && !c.hidden);
+      const first = itemCues[0];
+      return first ? { k: 'go', cueIndex: first.index, at } : null;
+    }
+    case 'lastSlide': {
+      const ref = s.live ?? s.armed;
+      if (ref === undefined) return null;
+      const cur = s.cues[ref];
+      if (!cur) return null;
+      const itemCues = s.cues.filter((c) => c.itemIndex === cur.itemIndex && !c.hidden);
+      const last = itemCues[itemCues.length - 1];
+      return last ? { k: 'go', cueIndex: last.index, at } : null;
+    }
     case 'nextItem':
       return { k: 'nextItem', at };
     case 'prevItem':
       return { k: 'prevItem', at };
+    case 'goToItem': {
+      const n = Number(action.arg ?? 1);
+      const itemCues = s.cues.filter((c) => c.itemIndex === n - 1 && !c.hidden);
+      const target = itemCues[0];
+      return target ? { k: 'go', cueIndex: target.index, at } : null;
+    }
     case 'goToSection': {
       const idx = Number(action.arg ?? 0);
       return Number.isFinite(idx) ? { k: 'goToSection', sectionIndex: idx, at } : null;
@@ -55,6 +79,16 @@ export function actionToEvent(
         return sec ? { k: 'go', cueIndex: sec.entry, at } : null;
       }
       return { k: 'go', cueIndex: target.index, at };
+    }
+    case 'goToSlideItem': {
+      const n = Number(action.arg ?? 1);
+      const ref = s.live ?? s.armed;
+      if (ref === undefined) return null;
+      const cur = s.cues[ref];
+      if (!cur) return null;
+      const itemCues = s.cues.filter((c) => c.itemIndex === cur.itemIndex);
+      const target = itemCues[n - 1];
+      return target ? { k: 'go', cueIndex: target.index, at } : null;
     }
     case 'clearSlide':
       return { k: 'clear', layer: 'slide', at };

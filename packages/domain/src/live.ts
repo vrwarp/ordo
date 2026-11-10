@@ -11,6 +11,7 @@ import {
   TimerSpec,
   type Transition,
   type ActionId,
+  type MidiCue,
 } from './schemas.ts';
 
 /** One entry of the service cache manifest. Content addressed by sha256. */
@@ -101,6 +102,8 @@ export type Cue = {
   mediaShowWhenStopped?: boolean;
   /** The slide's sound; it plays on until the live cue leaves [this cue, untilCue]. */
   slideAudio?: { mediaId: string; start: 'auto' | 'click'; loop: boolean; gainDb?: number; untilCue: number };
+  /** Outgoing MIDI cues to fire when this cue goes live. */
+  midiCues?: MidiCue[];
 };
 
 export type SlideContent = { kind: 'slide'; cueIndex: number; presentationId: Id; slideId: Id };

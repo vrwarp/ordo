@@ -24,5 +24,13 @@ export {
   sanitizeDeckPages,
 } from './deck-model.ts';
 export { StreamDeckDriver, dialActions, type DeckInfo, type DeckRenderer } from './streamdeck.ts';
-export { MidiDriver, matchMidi, learnFrom, parseMidi, type MidiInputInfo, type MidiMessage } from './midi.ts';
+export {
+  MidiDriver,
+  matchMidi,
+  learnFrom,
+  parseMidi,
+  type MidiInputInfo,
+  type MidiOutputInfo,
+  type MidiMessage,
+} from './midi.ts';
 export { wrapText, renderKeyPixels, renderStripPixels } from './deck-render.ts';
