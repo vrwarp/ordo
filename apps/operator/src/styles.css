@@ -1656,3 +1656,14 @@ button.arr-chip-label {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
 }
+details.advanced-details summary {
+  user-select: none;
+  transition: color 0.15s ease;
+}
+details.advanced-details summary:hover {
+  color: var(--fg);
+}
+details.advanced-details[open] summary {
+  margin-bottom: 8px;
+  color: var(--fg);
+}

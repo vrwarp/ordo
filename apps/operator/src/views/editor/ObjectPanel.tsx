@@ -1,4 +1,4 @@
-import { nearColor, type SlideObject, type TextStyle } from '@ordo/domain';
+import { type Box, nearColor, type SlideObject, type TextStyle } from '@ordo/domain';
 import { useEffect, useState } from 'react';
 import { Check, ColorField, NumberField, Select } from '../../components/fields.tsx';
 import { TextStyleEditor } from '../../components/TextStyleEditor.tsx';
@@ -24,6 +24,33 @@ import { isLocked } from './ops/group.ts';
 import type { TextRange } from './ops/text.ts';
 import { ParagraphStrip } from './ParagraphStrip.tsx';
 import { fitMessage } from './textFit.ts';
+
+const PLACEMENT_PRESETS: { id: string; label: string; desc: string; box: Box }[] = [
+  {
+    id: 'center',
+    label: 'Center Screen',
+    desc: 'Auditorium main',
+    box: { x: 120, y: 140, w: 1680, h: 800, rotation: 0 },
+  },
+  {
+    id: 'lower-third',
+    label: 'Lower Third',
+    desc: 'Livestream overlay',
+    box: { x: 120, y: 720, w: 1680, h: 280, rotation: 0 },
+  },
+  {
+    id: 'bottom',
+    label: 'Bottom Third',
+    desc: 'Stage placement',
+    box: { x: 120, y: 640, w: 1680, h: 380, rotation: 0 },
+  },
+  {
+    id: 'top',
+    label: 'Top Banner',
+    desc: 'Top monitor',
+    box: { x: 120, y: 80, w: 1680, h: 280, rotation: 0 },
+  },
+];
 
 /** Property panel for the selected object: every TextStyle, ImageObject and ShapeObject field (prd/03). */
 export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readOnly: boolean }) {
@@ -147,16 +174,87 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
           )}
         </>
       )}
-      <section>
-        <h4>
-          Position and size{marks.has('box') && <span className="override-mark"> ● overrides theme</span>}
-        </h4>
-        <SelectionBox
-          o={o}
-          readOnly={liveLocked}
-          onChange={(box) => set((x) => ({ ...x, box }), undefined, 'box')}
-        />
-      </section>
+      {isLyric && (
+        <div className="col" style={{ gap: 6 }}>
+          <span
+            className="small bold"
+            style={{ letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--fg2)' }}
+          >
+            Screen Placement Presets
+          </span>
+          <div className="grid2" style={{ gap: 6 }}>
+            {PLACEMENT_PRESETS.map((p) => {
+              const active =
+                Math.abs(o.box.x - p.box.x) < 20 &&
+                Math.abs(o.box.y - p.box.y) < 20 &&
+                Math.abs(o.box.w - p.box.w) < 30 &&
+                Math.abs(o.box.h - p.box.h) < 30;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={active ? 'active' : ''}
+                  disabled={readOnly}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'flex-start',
+                    padding: '6px 8px',
+                    borderRadius: 8,
+                    background: active ? 'rgba(59, 130, 246, 0.15)' : 'var(--bg3)',
+                    border: active ? '1.5px solid var(--accent)' : '1px solid var(--line)',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                  onClick={() => set((x) => ({ ...x, box: p.box }), undefined, 'box')}
+                >
+                  <span
+                    style={{ fontSize: 12, fontWeight: 600, color: active ? 'var(--accent)' : 'var(--fg)' }}
+                  >
+                    {p.label}
+                  </span>
+                  <span className="muted" style={{ fontSize: 10 }}>
+                    {p.desc}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <details
+        className="advanced-details"
+        style={{
+          background: 'var(--bg3)',
+          border: '1px solid var(--line)',
+          borderRadius: 8,
+          padding: '10px 12px',
+        }}
+      >
+        <summary
+          style={{
+            cursor: 'pointer',
+            fontSize: 13,
+            fontWeight: 600,
+            color: 'var(--fg2)',
+            outline: 'none',
+          }}
+        >
+          Position & Coordinates{' '}
+          <span className="muted small" style={{ fontWeight: 400 }}>
+            ({Math.round(o.box.w)} × {Math.round(o.box.h)} at {Math.round(o.box.x)}, {Math.round(o.box.y)})
+          </span>
+          {marks.has('box') && <span className="override-mark"> ● overrides theme</span>}
+        </summary>
+        <div style={{ marginTop: 10 }}>
+          <SelectionBox
+            o={o}
+            readOnly={liveLocked}
+            onChange={(box) => set((x) => ({ ...x, box }), undefined, 'box')}
+          />
+        </div>
+      </details>
       <NumberField
         label="Opacity"
         value={o.opacity}
