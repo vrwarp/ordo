@@ -154,7 +154,7 @@ export function ImportTab() {
   }, [jobMap]);
   const started = (job: Job, title: string) => setJobs((j) => [{ id: job.id, kind: job.kind, title }, ...j]);
 
-  const pro7Zip = async (files: File[]) => {
+  const pro7Upload = async (files: File[]) => {
     for (const f of files) {
       const fd = new FormData();
       fd.append('file', f, f.name);
@@ -225,26 +225,26 @@ export function ImportTab() {
           <div className="card col">
             <h3>ProPresenter 7</h3>
             <span className="muted small">
-              Zip the ProPresenter library folder (or exported .pro files and playlists) and drop it here.
-              Media found alongside is uploaded. Builds, macros, timers, looks and stage layouts are skipped
-              and listed in the log.
+              Drop individual .pro presentations, playlists, bundles or a .zip of the ProPresenter library
+              here. Media found alongside is uploaded. Builds, macros, timers, looks and stage layouts are
+              skipped and listed in the log.
             </span>
             <DropZone
-              accept=".zip"
-              touchAccept=".zip,application/zip"
-              label="Drop a .zip of the ProPresenter library"
-              touchLabel="Choose a .zip of the ProPresenter library"
-              onFiles={(f) => void pro7Zip(f)}
+              accept=".pro,.proplaylist,.probundle,.zip,application/zip"
+              touchAccept=".pro,.proplaylist,.probundle,.zip,application/zip"
+              label="Drop ProPresenter files or a library .zip"
+              touchLabel="Choose ProPresenter files or a library .zip"
+              onFiles={(f) => void pro7Upload(f)}
             />
             <div className="row">
               <input
                 className="grow"
-                placeholder="…or a folder path on the NAS, e.g. /import/ProPresenter"
+                placeholder="…or a folder or file path on the NAS, e.g. /import/ProPresenter"
                 value={nasPath}
                 onChange={(e) => setNasPath(e.target.value)}
               />
               <button type="button" disabled={!nasPath.trim()} onClick={() => void pro7Path()}>
-                Import folder
+                Import path
               </button>
             </div>
           </div>

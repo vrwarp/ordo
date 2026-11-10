@@ -70,7 +70,7 @@ test('the Pages demo runs with no hub: sample service, ProPresenter import, go l
     location.hash = '#/library/import';
   });
   await page
-    .locator('input[type=file][accept=".zip"]')
+    .locator('input[type=file][accept*=".zip"]')
     .setInputFiles(resolve('packages/importers/test-fixtures/pro7/RestBildExportFromPP.probundle'));
   await expect(page.getByText('RestBildExportFromPP.probundle').first()).toBeVisible();
   await expect(page.getByText(/^done$/).first()).toBeVisible({ timeout: 30_000 });

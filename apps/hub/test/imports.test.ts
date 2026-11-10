@@ -140,6 +140,42 @@ describe('ProPresenter 7 import', () => {
     expect(hub.lib.media.list().filter((m) => m.tags.includes('pro7')).length).toBe(1);
     expect((await ed.fetch('/import/pro7', { method: 'POST', json: { path: '/etc' } })).status).toBe(403);
   });
+
+  it('imports an individual .pro file upload', async () => {
+    const fd = new FormData();
+    fd.append('file', new Blob([new Uint8Array([1, 2, 3])]), 'Single Song.pro');
+    const res = await ed.fetch('/import/pro7', { method: 'POST', body: fd });
+    expect(res.status).toBe(202);
+    const job = (await res.json()) as Job;
+    await hub.jobs.idle();
+    const done = await ed.json<Job>(`/jobs/${job.id}`);
+    expect(done.state).toBe('done');
+    expect(done.result).toMatchObject({
+      presentations: 1,
+      playlists: 1,
+      presentationId: expect.any(String),
+      protoVersion: 'test',
+    });
+  });
+
+  it('imports an individual .pro file from a NAS path', async () => {
+    const filePath = join(hub.dir, 'import', 'lib1', 'Song.pro');
+    const job = await ed.json<Job>('/import/pro7', { method: 'POST', json: { path: filePath } });
+    await hub.jobs.idle();
+    const done = await ed.json<Job>(`/jobs/${job.id}`);
+    expect(done.state).toBe('done');
+    expect(done.result).toMatchObject({
+      presentations: 1,
+      presentationId: expect.any(String),
+    });
+  });
+
+  it('rejects unsupported file uploads', async () => {
+    const fd = new FormData();
+    fd.append('file', new Blob(['not a propresenter file']), 'notes.txt');
+    const res = await ed.fetch('/import/pro7', { method: 'POST', body: fd });
+    expect(res.status).toBe(415);
+  });
 });
 
 describe('documents', () => {

@@ -807,11 +807,18 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     if (req.isMultipart()) {
       const { files } = await readMultipart(hub, req, { maxFiles: 1 });
       const f = files[0];
-      if (!f) throw badRequest('No zip file');
-      const s = sniff(await readHead(f.path));
-      if (s?.kind !== 'zip') {
+      if (!f) throw badRequest('No file');
+      const head = await readHead(f.path);
+      const s = sniff(head);
+      const isZip = s?.kind === 'zip';
+      const isPro = /\.(pro|proplaylist|probundle)$/i.test(f.filename);
+      if (!isZip && !isPro) {
         await rm(f.path, { force: true });
-        throw new HttpError(415, 'unsupported', 'Upload a .zip of the ProPresenter library or export');
+        throw new HttpError(
+          415,
+          'unsupported',
+          'Upload a .pro file, .proPlaylist, .probundle or a .zip of the ProPresenter library',
+        );
       }
       return reply.code(202).send(hub.imports.queuePro7FromUpload(f.path, f.filename));
     }

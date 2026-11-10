@@ -32,7 +32,7 @@ import { PptxImports } from './pptx/index.ts';
 import { mediaForFile } from './pptx/mediaParts.ts';
 import { logSafe } from './pptx/report.ts';
 import { type DeckText, pagesOf, readDeckText } from './pptx/textRepair.ts';
-import type { Store } from './store.ts';
+import { readHead, sniff, type Store } from './store.ts';
 
 export type Pro7Result = {
   presentations: Presentation[];
@@ -274,12 +274,33 @@ export class ImportService {
       let onDisk: Map<string, string>;
       let fromFolder = false;
       if (pl.upload) {
-        ctx.log(`reading zip ${pl.name ?? ''}`);
-        ({ files, onDisk } = await this.readZipUpload(pl.upload, scratch, ctx.signal));
+        const head = await readHead(pl.upload);
+        if (sniff(head)?.kind === 'zip') {
+          ctx.log(`reading zip ${pl.name ?? ''}`);
+          ({ files, onDisk } = await this.readZipUpload(pl.upload, scratch, ctx.signal));
+        } else {
+          ctx.log(`reading file ${pl.name ?? ''}`);
+          files = new Map([[pl.name ?? 'presentation.pro', await readFile(pl.upload)]]);
+          onDisk = new Map();
+        }
       } else if (pl.path) {
-        ctx.log(`reading folder ${pl.path}`);
-        ({ files, onDisk } = await this.readDir(pl.path, scratch, ctx.signal));
-        fromFolder = true;
+        const st = await stat(pl.path);
+        if (st.isFile()) {
+          fromFolder = true;
+          const head = await readHead(pl.path);
+          if (sniff(head)?.kind === 'zip') {
+            ctx.log(`reading zip ${pl.path}`);
+            ({ files, onDisk } = await this.readZipUpload(pl.path, scratch, ctx.signal));
+          } else {
+            ctx.log(`reading file ${pl.path}`);
+            files = new Map([[baseName(pl.path), await readFile(pl.path)]]);
+            onDisk = new Map();
+          }
+        } else {
+          ctx.log(`reading folder ${pl.path}`);
+          ({ files, onDisk } = await this.readDir(pl.path, scratch, ctx.signal));
+          fromFolder = true;
+        }
       } else throw new Error('Nothing to import');
       ctx.log(`${files.size} file(s), ${onDisk.size} media file(s) on disk`);
       ctx.progress(0.1);
@@ -367,10 +388,13 @@ export class ImportService {
       ctx.log(
         `imported ${presIds.size} presentation(s), ${plIds.size} playlist(s), ${map.size} media file(s)`,
       );
+      const pid = presIds.size === 1 ? [...presIds.values()][0] : undefined;
       return {
         presentations: presIds.size,
         playlists: plIds.size,
         media: map.size,
+        presentationId: pid,
+        presentationIds: [...presIds.values()],
         protoVersion: result.protoVersion,
         log: result.log,
       };
