@@ -66,7 +66,7 @@ export function ArrangementEditor(props: {
     props.onChange(moveAt(a, from, to));
     if (sel === from) setPicked(to);
   };
-  const sort = useSortable({ group: 'arrangement', axis: 'y', disabled: props.disabled, onMove: move });
+  const sort = useSortable({ group: 'arrangement', axis: 'xy', disabled: props.disabled, onMove: move });
 
   const handleCreateCustom = () => {
     const trimmed = customLyrics.trim();

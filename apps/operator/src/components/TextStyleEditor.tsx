@@ -200,7 +200,7 @@ export function TextStyleEditor(props: {
             type="button"
             className={s.fontStyle === 'italic' ? 'active' : ''}
             onClick={() => set('fontStyle', s.fontStyle === 'italic' ? 'normal' : 'italic')}
-            aria-label="Box font italic"
+            aria-label="Box font oblique"
           >
             <i>I Italic</i>
           </button>
