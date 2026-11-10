@@ -73,8 +73,9 @@ export function OutputsPage() {
     <div className="col" style={{ gap: 12 }}>
       <h2>Outputs</h2>
       <p className="muted" style={{ margin: 0 }}>
-        Each output is one fullscreen window on one display with one look. The screen is remembered by name
-        and position; Launch outputs places each window there.
+        Each output is a fullscreen window or remote display showing one Look. Display channels (
+        <code>out1</code>–<code>out6</code>) define the network slots (e.g. <code>out1.local</code>) used by
+        connected projectors, TVs, and video switchers.
       </p>
       <div className="row">
         <button type="button" onClick={() => void loadScreens()}>
@@ -90,7 +91,9 @@ export function OutputsPage() {
               onChange={(e) => set(o.id, { name: e.target.value })}
               style={{ fontWeight: 600 }}
             />
-            <span className="tag">{o.kind === 'stage' ? 'stage' : `out${o.hostIndex}`}</span>
+            <span className="tag">
+              {o.kind === 'stage' ? 'Stage' : `Channel ${o.hostIndex} (out${o.hostIndex})`}
+            </span>
             {open[o.id] && <span className="tag green">window open</span>}
             <span className="spacer" />
             <Check label="Enabled" value={o.enabled} onChange={(enabled) => set(o.id, { enabled })} />
@@ -126,14 +129,14 @@ export function OutputsPage() {
             </label>
             {o.kind !== 'stage' && (
               <label className="field">
-                <span>Host (out1…out6)</span>
+                <span>Display channel</span>
                 <select
                   value={o.hostIndex}
                   onChange={(e) => set(o.id, { hostIndex: Number(e.target.value) })}
                 >
                   {[1, 2, 3, 4, 5, 6].map((k) => (
                     <option key={k} value={k}>
-                      out{k}
+                      Channel {k} (out{k})
                     </option>
                   ))}
                 </select>
