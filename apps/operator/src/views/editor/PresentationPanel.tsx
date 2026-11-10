@@ -265,22 +265,32 @@ function ArrangementsSection({ p, readOnly }: { p: Presentation; readOnly: boole
               onChange={(e) => update({ ...a, name: e.target.value })}
               className="grow"
             />
-            {i === 0 && <span className="tag">default</span>}
+            <button
+              type="button"
+              className="small"
+              title={i === 0 ? 'Default arrangement' : 'Make default'}
+              aria-label={i === 0 ? 'Default arrangement' : 'Make default'}
+              disabled={readOnly || i === 0}
+              onClick={() => {
+                if (i > 0) {
+                  change((q) => ({
+                    ...q,
+                    arrangements: [a, ...q.arrangements.filter((x) => x.id !== a.id)],
+                  }));
+                }
+              }}
+              style={{
+                color: i === 0 ? '#fbbf24' : 'var(--muted, #94a3b8)',
+                cursor: i === 0 || readOnly ? 'default' : 'pointer',
+                opacity: 1,
+              }}
+            >
+              {i === 0 ? '★' : '☆'}
+              <span className="touch-label">{i === 0 ? ' Default' : ' Make default'}</span>
+            </button>
             <button type="button" className="small" onClick={() => setOpen(open === a.id ? null : a.id)}>
               {open === a.id ? 'Done' : 'Edit'}
             </button>
-            {!readOnly && i > 0 && (
-              <button
-                type="button"
-                className="small"
-                title="Make default"
-                onClick={() =>
-                  change((q) => ({ ...q, arrangements: [a, ...q.arrangements.filter((x) => x.id !== a.id)] }))
-                }
-              >
-                ★<span className="touch-label">Make default</span>
-              </button>
-            )}
             {!readOnly && (
               <button
                 type="button"

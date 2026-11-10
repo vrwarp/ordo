@@ -9,18 +9,25 @@ import {
 } from '@ordo/domain';
 import { useState } from 'react';
 import { DragHandle, useSortable } from './Sortable.tsx';
-import { arrangementLabel, insertSection, moveAt, parseArrangement, removeAt } from '../lib/arrangement.ts';
+import {
+  arrangementLabel,
+  insertSection,
+  moveAt,
+  parseArrangement,
+  pruneArrangement,
+  removeAt,
+} from '../lib/arrangement.ts';
 
-function getSectionLyrics(s: Section): string {
-  const parts: string[] = [];
-  for (const sl of s.slides ?? []) {
+function getSectionSlidesLyrics(s: Section): { id: string; text: string }[] {
+  return (s.slides ?? []).map((sl) => {
+    const lines: string[] = [];
     for (const obj of sl.objects ?? []) {
       if (obj.type === 'text' && obj.text?.trim()) {
-        parts.push(obj.text.trim());
+        lines.push(obj.text.trim());
       }
     }
-  }
-  return parts.join('\n');
+    return { id: sl.id, text: lines.join('\n') };
+  });
 }
 
 /**
@@ -34,13 +41,22 @@ export function ArrangementEditor(props: {
   onAddSection?: (sec: Section) => void;
   disabled?: boolean;
 }) {
-  const { presentation: p, value: a } = props;
+  const { presentation: p, value: rawArrangement } = props;
+  const a = pruneArrangement(rawArrangement, p);
+  const [prevId, setPrevId] = useState(`${p.id ?? ''}:${a.id}`);
   const [picked, setPicked] = useState<number | null>(null);
   const [text, setText] = useState<string | null>(null);
   const [showCustom, setShowCustom] = useState(false);
   const [customLabel, setCustomLabel] = useState('');
   const [customShort, setCustomShort] = useState('');
   const [customLyrics, setCustomLyrics] = useState('');
+
+  if (`${p.id ?? ''}:${a.id}` !== prevId) {
+    setPrevId(`${p.id ?? ''}:${a.id}`);
+    setText(null);
+    setPicked(null);
+    setShowCustom(false);
+  }
 
   const byId = new Map(p.sections.map((s) => [s.id, s]));
   const typed = text !== null ? parseArrangement(text, p) : null;
@@ -220,7 +236,8 @@ export function ArrangementEditor(props: {
           const s = byId.get(id);
           const occurrence = a.sectionIds.slice(0, i).filter((x) => x === id).length;
           const chipKey = `${id}#${occurrence}`;
-          const lyrics = s ? getSectionLyrics(s) : '';
+          const slidesLyrics = s ? getSectionSlidesLyrics(s) : [];
+          const slideCount = slidesLyrics.length;
           return (
             <div
               key={chipKey}
@@ -248,6 +265,11 @@ export function ArrangementEditor(props: {
                   <span className="bold small" style={{ color: 'var(--fg)' }}>
                     {s?.label || 'Untitled Section'}
                   </span>
+                  {slideCount > 0 && (
+                    <span className="muted small" style={{ fontSize: 11, opacity: 0.75 }}>
+                      · {slideCount} {slideCount === 1 ? 'slide' : 'slides'}
+                    </span>
+                  )}
                 </div>
                 {!props.disabled && (
                   <button
@@ -266,29 +288,57 @@ export function ArrangementEditor(props: {
                   </button>
                 )}
               </div>
-              {lyrics ? (
-                <div
-                  className="muted small"
-                  style={{
-                    fontSize: 12,
-                    lineHeight: 1.35,
-                    whiteSpace: 'pre-wrap',
-                    maxHeight: 64,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    display: '-webkit-box',
-                    WebkitLineClamp: 3,
-                    WebkitBoxOrient: 'vertical',
-                    fontStyle: 'italic',
-                    opacity: 0.85,
-                    paddingLeft: 22,
-                  }}
-                >
-                  {lyrics}
+              {slideCount > 0 ? (
+                <div className="col" style={{ gap: 5, paddingLeft: 22 }}>
+                  {slidesLyrics.map((sl, idx) => (
+                    <div
+                      key={sl.id}
+                      className="row"
+                      style={{
+                        alignItems: 'flex-start',
+                        gap: 6,
+                        background: 'var(--bg3)',
+                        padding: '4px 8px',
+                        borderRadius: 4,
+                        border: '1px solid var(--line)',
+                      }}
+                    >
+                      <span
+                        className="tag"
+                        style={{
+                          fontSize: 10,
+                          padding: '1px 5px',
+                          opacity: 0.8,
+                          flexShrink: 0,
+                          marginTop: 1,
+                          userSelect: 'none',
+                        }}
+                      >
+                        {idx + 1}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 12,
+                          lineHeight: 1.35,
+                          whiteSpace: 'pre-wrap',
+                          fontStyle: 'italic',
+                          color: 'var(--fg)',
+                          maxHeight: 52,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                        }}
+                      >
+                        {sl.text || '(Empty slide)'}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               ) : (
                 <div className="muted small" style={{ fontStyle: 'italic', opacity: 0.5, paddingLeft: 22 }}>
-                  (No lyrics)
+                  (No slides in this section)
                 </div>
               )}
             </div>

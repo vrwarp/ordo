@@ -1,5 +1,5 @@
 import { api } from '@ordo/client';
-import { type Arrangement, type ActionId, newId, type PlaylistItem, type Section } from '@ordo/domain';
+import { type ActionId, type Arrangement, newId, type PlaylistItem, type Section } from '@ordo/domain';
 import { useState } from 'react';
 import { ArrangementEditor } from '../../components/ArrangementEditor.tsx';
 import { Check, Field, NumberField, Select, TextField, TransitionEditor } from '../../components/fields.tsx';
@@ -18,7 +18,13 @@ export function ItemSettings(props: {
 }) {
   const lib = useLibrary((s) => s.data);
   const it = props.item;
+  const [prevId, setPrevId] = useState(it.id);
   const [editing, setEditing] = useState<Arrangement | null>(null);
+
+  if (it.id !== prevId) {
+    setPrevId(it.id);
+    setEditing(null);
+  }
   if (it.kind === 'presentation') {
     const p = lib.presentations.find((x) => x.id === it.presentationId);
     if (!p) return <div className="banner red">This presentation no longer exists.</div>;

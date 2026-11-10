@@ -298,6 +298,7 @@ export function PlaylistEditor(props: {
         {selected && (
           <div className="card">
             <ItemSettings
+              key={selected.id}
               item={selected}
               disabled={props.locked}
               onChange={(it) => setItem(selected.id, () => it)}
