@@ -60,13 +60,13 @@ Combos are normalised (`Ctrl+Shift+L`).
 
 ## MIDI driver (Web MIDI)
 
-- `navigator.requestMIDIAccess({ sysex: false })`. Every input is listened to.
-- Mapping entries: `{ deviceName, kind: 'note' | 'cc', number, channel?, threshold, action }`.
-  Note-on with velocity ≥ threshold fires; CC fires when the value crosses the threshold
-  upward (edge-triggered) to avoid repeats from pedals that send continuous values.
-- Learn: the mapping editor sets `learning = action`; the next qualifying message writes
-  the entry. A 5 s timeout cancels.
-- Defaults: notes 60 and 62 on any device to `next` and `prev`.
+- `navigator.requestMIDIAccess({ sysex: false })`. Every input and output device is enumerated.
+- Mapping entries: `{ deviceName, kind: 'note' | 'cc' | 'programChange', number, channel?, threshold, action, paramSource? }`.
+  - Static: Note-on with velocity ≥ threshold fires; CC fires when the value crosses the threshold upward (edge-triggered).
+  - Dynamic (`paramSource: 'velocity' | 'ccValue'`): incoming velocity or CC value is dynamically passed as the action's `arg`, enabling DAW show-control patterns (e.g. `goToSlideItem [vel]`, `goToItem [vel]`, `goToSection [vel]`).
+- Learn: the mapping editor sets `learning = action`; the next qualifying message (Note, CC upward edge, or Program Change) writes the entry. A 5 s timeout cancels.
+- Presets: Foot switches (notes 60/62 for `next`/`prev`) and ProPresenter 7 standard layout.
+- MIDI Output / Show Control: `MidiDriver.send` broadcasts Note On/Off, CC, or Program Change messages to target devices or all outputs. Slide definitions in `@ordo/domain` can specify `midiCues: MidiCue[]`, which are dispatched automatically when the slide cue goes live.
 
 Every driver dispatches actions through `actionToEvent` into the reducer, so hidden PowerPoint
 slides (design/27 §9) behave the same on all of them: `next`, `prev`, `nextItem`, `prevItem` and

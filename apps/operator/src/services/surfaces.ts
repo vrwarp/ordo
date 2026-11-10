@@ -6,6 +6,7 @@ import {
   KeyboardDriver,
   MidiDriver,
   type MidiInputInfo,
+  type MidiOutputInfo,
   normalizeCombo,
   StreamDeckDriver,
 } from '@ordo/surfaces';
@@ -23,6 +24,8 @@ export type SurfacesStore = {
   midiEnabled: boolean;
   midiReady: boolean;
   midiInputs: MidiInputInfo[];
+  midiOutputs: MidiOutputInfo[];
+  lastMidiMessage: { kind: string; channel: number; number: number; value: number; time: number } | null;
   keyboardActive: boolean;
 };
 export const useSurfaces = create<SurfacesStore>(() => ({
@@ -30,6 +33,8 @@ export const useSurfaces = create<SurfacesStore>(() => ({
   midiEnabled: false,
   midiReady: false,
   midiInputs: [],
+  midiOutputs: [],
+  lastMidiMessage: null,
   keyboardActive: false,
 }));
 
@@ -79,6 +84,9 @@ export class Surfaces {
     this.deck.renderer = ctl.core.deckRenderer;
     this.deck.onError = (d) => this.fault(`stream deck: ${d}`);
     this.midi.onError = (d) => this.fault(`midi: ${d}`);
+    this.midi.onInputs = (inputs) => useSurfaces.setState({ midiInputs: inputs });
+    this.midi.onOutputs = (outputs) => useSurfaces.setState({ midiOutputs: outputs });
+    this.midi.onMessage = (msg) => useSurfaces.setState({ lastMidiMessage: { ...msg, time: Date.now() } });
     this.unsub.push(
       useLibrary.subscribe((st, prev) => {
         const a = st.data.settings;
@@ -94,6 +102,12 @@ export class Surfaces {
       }),
       useLive.subscribe((st, prev) => {
         if (st.state !== prev.state || st.hubConnected !== prev.hubConnected) this.pushView(st.state);
+        if (st.state.live !== prev.state.live && st.state.live !== undefined) {
+          const liveCue = st.state.cues[st.state.live];
+          if (liveCue?.midiCues?.length) {
+            this.midi.sendCues(liveCue.midiCues);
+          }
+        }
       }),
     );
   }
@@ -136,17 +150,22 @@ export class Surfaces {
 
   private stopMidi(): void {
     this.midi.dispose();
-    useSurfaces.setState({ midiEnabled: false, midiReady: false, midiInputs: [] });
+    useSurfaces.setState({ midiEnabled: false, midiReady: false, midiInputs: [], midiOutputs: [] });
   }
 
   private async startMidi(): Promise<boolean> {
     try {
       const ok = await this.midi.start();
-      useSurfaces.setState({ midiEnabled: ok, midiReady: ok, midiInputs: ok ? this.midi.inputs() : [] });
+      useSurfaces.setState({
+        midiEnabled: ok,
+        midiReady: ok,
+        midiInputs: ok ? this.midi.inputs() : [],
+        midiOutputs: ok ? this.midi.outputs() : [],
+      });
       return ok;
     } catch (e) {
       this.fault(`midi: ${String(e)}`);
-      useSurfaces.setState({ midiEnabled: false, midiReady: false, midiInputs: [] });
+      useSurfaces.setState({ midiEnabled: false, midiReady: false, midiInputs: [], midiOutputs: [] });
       return false;
     }
   }
@@ -184,7 +203,7 @@ export class Surfaces {
   }
 
   refreshMidi(): void {
-    useSurfaces.setState({ midiInputs: this.midi.inputs() });
+    useSurfaces.setState({ midiInputs: this.midi.inputs(), midiOutputs: this.midi.outputs() });
   }
 
   private onDeck(info: DeckInfo): void {

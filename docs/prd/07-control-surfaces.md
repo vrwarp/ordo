@@ -21,13 +21,16 @@ is focused. The key map is editable in settings and stored on the hub.
 
 ## MIDI
 
-- Any MIDI input through Web MIDI, including SysEx-less devices. Notes and CC messages
-  trigger actions; note-on with velocity above a threshold and CC crossing a threshold.
+- Any MIDI input through Web MIDI, including SysEx-less devices. Notes, CC and Program Change
+  messages trigger actions. Supports both static thresholds and dynamic parameter sourcing (ProPresenter
+  velocity-indexed triggers for slide, item and section selection from DAWs like Ableton Live and MultiTracks Playback).
 - Learn: in the mapping editor, choose an action, press Learn, send the control; the
   mapping is captured. Mappings store the device name so several devices can coexist.
-- Default mappings are provided for common foot switches (note numbers 60 and 62 for
-  Next and Previous).
-- MIDI output (feedback) is out of scope.
+- Presets: default mappings for common foot switches (note numbers 60 and 62 for Next and Previous)
+  and 1-click ProPresenter 7 standard layout (notes 0..30 with velocity parameterization).
+- MIDI output (show control): slides support attached communication cues (Note On/Off, CC, Program Change)
+  with target device selection and delay offsets to trigger lighting desks, video switchers and audio consoles
+  when slides go live.
 
 ## Action set
 

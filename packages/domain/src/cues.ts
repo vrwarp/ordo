@@ -67,6 +67,7 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
           // A hidden PowerPoint slide stays in the service (design/27 §9): sequential navigation skips its
           // cue (`nextShownCue`), a GO with its index shows it.
           ...(slide.hidden === true ? { hidden: true } : {}),
+          ...(slide.midiCues?.length ? { midiCues: slide.midiCues } : {}),
           ...slideCueMedia(slide, resolved.media, first + k, first + until(k)),
         });
       });
