@@ -401,7 +401,38 @@ export async function handle(req: Request): Promise<Res> {
 
     if (seg[0] === 'presentations') {
       if (m === 'GET' && !seg[1]) return json(l.presentations);
-      if (m === 'GET' && seg[2] === 'revisions') return json([]);
+      if (m === 'GET' && seg[2] === 'revisions') {
+        const p = l.presentations.find((x) => x.id === seg[1]);
+        if (!p) return fail(404, 'not_found', 'No such presentation');
+        type StoredRevision = { rev: number; savedAt: string; savedBy?: string; title: string; json: string };
+        let revs = (await getDoc<StoredRevision[]>(`revs:${seg[1]}`)) ?? [];
+        if (revs.length === 0) {
+          const baseSavedAt = p.createdAt ?? nowIso();
+          const curSavedAt = p.updatedAt ?? baseSavedAt;
+          revs = [
+            {
+              rev: p.rev ?? 1,
+              savedAt: curSavedAt,
+              savedBy: 'operator',
+              title: p.title,
+              json: JSON.stringify(p),
+            },
+          ];
+          if ((p.rev ?? 1) > 1) {
+            for (let r = (p.rev ?? 1) - 1; r >= 1; r--) {
+              revs.push({
+                rev: r,
+                savedAt: baseSavedAt,
+                savedBy: 'sample',
+                title: `${p.title} (rev ${r})`,
+                json: JSON.stringify({ ...p, rev: r }),
+              });
+            }
+          }
+          await putDoc(`revs:${seg[1]}`, revs);
+        }
+        return json(revs.map(({ rev, savedAt, savedBy, title }) => ({ rev, savedAt, savedBy, title })));
+      }
       if (m === 'GET') {
         const p = l.presentations.find((x) => x.id === seg[1]);
         return p ? json(p) : fail(404, 'not_found', 'No such presentation');
@@ -425,12 +456,32 @@ export async function handle(req: Request): Promise<Res> {
         const prev = l.presentations.find((x) => x.id === seg[1]);
         if (prev && typeof body.rev === 'number' && body.rev !== prev.rev)
           return fail(409, 'conflict', 'This presentation was changed elsewhere; reload it');
+        const nextRev = (prev?.rev ?? 0) + 1;
         const p = PresentationSchema.parse({
           ...body,
           id: seg[1],
-          rev: (prev?.rev ?? 0) + 1,
+          rev: nextRev,
           updatedAt: nowIso(),
         });
+        type StoredRevision = { rev: number; savedAt: string; savedBy?: string; title: string; json: string };
+        const revs = (await getDoc<StoredRevision[]>(`revs:${seg[1]}`)) ?? [];
+        if (prev && !revs.some((r) => r.rev === prev.rev)) {
+          revs.unshift({
+            rev: prev.rev,
+            savedAt: prev.updatedAt ?? prev.createdAt ?? nowIso(),
+            savedBy: 'operator',
+            title: prev.title,
+            json: JSON.stringify(prev),
+          });
+        }
+        revs.unshift({
+          rev: p.rev,
+          savedAt: p.updatedAt ?? nowIso(),
+          savedBy: 'operator',
+          title: p.title,
+          json: JSON.stringify(p),
+        });
+        await putDoc(`revs:${seg[1]}`, revs.slice(0, 50));
         await save({ ...l, presentations: upsert(l.presentations, p) });
         return json(p);
       }
@@ -447,7 +498,34 @@ export async function handle(req: Request): Promise<Res> {
         await save({ ...l, presentations: l.presentations.filter((x) => x.id !== id), playlists });
         return noContent();
       }
-      if (m === 'POST' && seg[2] === 'restore') return notInDemo('Version history');
+      if (m === 'POST' && seg[2] === 'restore') {
+        const id = seg[1];
+        const targetRev = Number(seg[3]);
+        const cur = l.presentations.find((x) => x.id === id);
+        if (!cur) return fail(404, 'not_found', 'No such presentation');
+        type StoredRevision = { rev: number; savedAt: string; savedBy?: string; title: string; json: string };
+        const revs = (await getDoc<StoredRevision[]>(`revs:${id}`)) ?? [];
+        const old = revs.find((r) => r.rev === targetRev);
+        if (!old) return fail(404, 'not_found', `Revision ${targetRev} not found`);
+        const restored = JSON.parse(old.json) as Presentation;
+        const nextRev = (cur.rev ?? 0) + 1;
+        const p = PresentationSchema.parse({
+          ...restored,
+          id,
+          rev: nextRev,
+          updatedAt: nowIso(),
+        });
+        revs.unshift({
+          rev: p.rev,
+          savedAt: p.updatedAt ?? nowIso(),
+          savedBy: 'operator (restored)',
+          title: p.title,
+          json: JSON.stringify(p),
+        });
+        await putDoc(`revs:${id}`, revs.slice(0, 50));
+        await save({ ...l, presentations: upsert(l.presentations, p) });
+        return json(p);
+      }
       if (m === 'POST' && seg[4] === 'make-editable') return notInDemo('Making an imported slide editable');
     }
 

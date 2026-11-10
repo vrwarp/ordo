@@ -44,34 +44,37 @@ export function RevisionsDialog({
     <Dialog title="Revision history" onClose={onClose} width={560}>
       {err && <div className="banner red">{err}</div>}
       {!list && !err && <span className="muted">Loading…</span>}
-      <table className="list">
-        <tbody>
-          {list?.map((r, i) => (
-            <tr key={r.rev}>
-              <td>
-                <b>#{r.rev}</b> {i === 0 && <span className="tag green">current</span>}
-              </td>
-              <td>{new Date(r.savedAt).toLocaleString()}</td>
-              <td className="muted">{r.savedBy ?? ''}</td>
-              <td className="ellipsis" style={{ maxWidth: 160 }}>
-                {r.title}
-              </td>
-              <td>
-                {i > 0 && (
-                  <button
-                    type="button"
-                    className="small"
-                    disabled={readOnly}
-                    onClick={() => void restore(r.rev)}
-                  >
-                    Restore
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {list && list.length === 0 && <span className="muted">No prior revisions recorded yet.</span>}
+      {list && list.length > 0 && (
+        <table className="list">
+          <tbody>
+            {list?.map((r, i) => (
+              <tr key={r.rev}>
+                <td>
+                  <b>#{r.rev}</b> {i === 0 && <span className="tag green">current</span>}
+                </td>
+                <td>{new Date(r.savedAt).toLocaleString()}</td>
+                <td className="muted">{r.savedBy ?? ''}</td>
+                <td className="ellipsis" style={{ maxWidth: 160 }}>
+                  {r.title}
+                </td>
+                <td>
+                  {i > 0 && (
+                    <button
+                      type="button"
+                      className="small"
+                      disabled={readOnly}
+                      onClick={() => void restore(r.rev)}
+                    >
+                      Restore
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </Dialog>
   );
 }
