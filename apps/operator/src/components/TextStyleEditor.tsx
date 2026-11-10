@@ -328,14 +328,24 @@ export function TextStyleEditor(props: {
             Optimized for auditorium screens and motion video backgrounds.
           </span>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+            gap: 8,
+            width: '100%',
+            boxSizing: 'border-box',
+          }}
+        >
           <button
             type="button"
             className={`contrast-card-btn ${activeContrastMode === 'clean' ? 'active' : ''}`}
             onClick={() => props.onChange({ ...s, outline: undefined, shadow: undefined }, 'outline')}
           >
-            <span style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>Clean Text</span>
-            <span className="muted small" style={{ fontSize: 11 }}>
+            <span style={{ fontSize: 13.5, fontWeight: 700, color: '#fff', textAlign: 'center', lineHeight: 1.2 }}>
+              Clean Text
+            </span>
+            <span className="muted small" style={{ fontSize: 10.5, textAlign: 'center' }}>
               No stroke or shadow
             </span>
           </button>
@@ -356,15 +366,17 @@ export function TextStyleEditor(props: {
           >
             <span
               style={{
-                fontSize: 16,
+                fontSize: 13.5,
                 fontWeight: 700,
                 color: '#fff',
+                textAlign: 'center',
+                lineHeight: 1.2,
                 textShadow: '0 4px 10px rgba(0,0,0,0.8)',
               }}
             >
               Soft Shadow
             </span>
-            <span className="muted small" style={{ fontSize: 11 }}>
+            <span className="muted small" style={{ fontSize: 10.5, textAlign: 'center' }}>
               Natural depth
             </span>
           </button>
@@ -385,15 +397,16 @@ export function TextStyleEditor(props: {
           >
             <span
               style={{
-                fontSize: 16,
+                fontSize: 13.5,
                 fontWeight: 700,
                 color: '#fff',
-                WebkitTextStroke: '1px #000',
+                textAlign: 'center',
+                lineHeight: 1.2,
               }}
             >
               Outline (Church)
             </span>
-            <span className="muted small" style={{ fontSize: 11 }}>
+            <span className="muted small" style={{ fontSize: 10.5, textAlign: 'center' }}>
               Sharp on bright screens
             </span>
           </button>
@@ -414,16 +427,17 @@ export function TextStyleEditor(props: {
           >
             <span
               style={{
-                fontSize: 16,
+                fontSize: 13.5,
                 fontWeight: 700,
                 color: '#fff',
-                WebkitTextStroke: '1px #000',
-                textShadow: '0 4px 10px rgba(0,0,0,0.9)',
+                textAlign: 'center',
+                lineHeight: 1.2,
+                textShadow: '0 4px 10px rgba(0,0,0,0.8)',
               }}
             >
               Outline + Shadow
             </span>
-            <span className="muted small" style={{ fontSize: 11 }}>
+            <span className="muted small" style={{ fontSize: 10.5, textAlign: 'center' }}>
               Maximum contrast
             </span>
           </button>

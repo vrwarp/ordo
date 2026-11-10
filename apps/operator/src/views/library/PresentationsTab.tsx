@@ -3,6 +3,7 @@ import { DEFAULT_THEME, newId, type Presentation, type PresentationKind } from '
 import type { Folder } from '@ordo/protocol';
 import { useMemo, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
+import { SlidePreviewRoll } from '../../components/SlidePreviewRoll.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
 import { useLockedIds } from '../../hooks.ts';
 import { removeLocal, upsertLocal, useLibrary } from '../../state/library.ts';
@@ -111,7 +112,7 @@ function FolderSide(props: {
     }
   };
   return (
-    <div className="side col" style={{ gap: 2 }}>
+    <div className="side col" style={{ gap: 4 }}>
       <h4>Folders</h4>
       <span
         className={`link ${folderId === undefined ? 'active' : ''}`}
@@ -191,6 +192,7 @@ export function PresentationsTab() {
   const [q, setQ] = useState('');
   const [tag, setTag] = useState<string>();
   const [newSong, setNewSong] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const byId = useMemo(() => new Map(lib.presentations.map((p) => [p.id, p])), [lib.presentations]);
   const tags = useMemo(
     () => [...new Set(lib.presentations.flatMap((p) => p.meta.tags ?? []))].sort(),
@@ -253,62 +255,144 @@ export function PresentationsTab() {
         </div>
         <VirtualList
           items={results}
-          rowHeight={52}
+          rowHeight={(p) => (expandedId === p.id ? 420 : 52)}
+          rowClass={(p) => (expandedId === p.id ? 'expanded' : '')}
           keyOf={(p) => p.id}
           onRowDoubleClick={(p) => navigate({ name: 'edit', id: p.id })}
-          render={(p) => (
-            <>
-              <span className="kind tag">{p.kind}</span>
-              <a
-                href={`#/edit/${p.id}`}
-                className="col grow"
-                style={{ gap: 0, textDecoration: 'none', color: 'inherit' }}
-                title={`Open and edit ${p.title}`}
-              >
-                <span className="ellipsis">
-                  <b>{p.title}</b> {locked.has(p.id) && <span className="tag red">live · locked</span>}{' '}
-                  {p.archived && <span className="tag">archived</span>}
-                </span>
-                <span className="muted small ellipsis">
-                  {[
-                    p.meta.author,
-                    p.meta.ccli && `CCLI ${p.meta.ccli}`,
-                    `${p.sections.length} sections`,
-                    p.meta.tags?.length ? p.meta.tags.join(', ') : '',
-                    p.source?.kind && p.source.kind !== 'manual' && p.source.kind !== 'paste'
-                      ? `from ${p.source.kind}`
-                      : '',
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </span>
-              </a>
-              {folders.length > 0 && (
-                <select
-                  value={p.folderId ?? ''}
-                  onChange={(e) => move(p, e.target.value)}
-                  title="Folder"
-                  style={{ maxWidth: 140 }}
-                >
-                  <option value="">No folder</option>
-                  {folders.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.name}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <a className="btn small" href={`#/edit/${p.id}`}>
-                Edit
-              </a>
-              <button type="button" className="small ghost" onClick={() => setArchived(p, !p.archived)}>
-                {p.archived ? 'Unarchive' : 'Archive'}
-              </button>
-              <button type="button" className="small ghost" onClick={() => void del(p)} title="Delete">
-                🗑<span className="touch-label">Delete</span>
-              </button>
-            </>
-          )}
+          render={(p) => {
+            const isExpanded = expandedId === p.id;
+            return (
+              <>
+                <div className="row" style={{ alignItems: 'center', gap: 10, width: '100%', minHeight: 36 }}>
+                  <button
+                    type="button"
+                    className="ghost small"
+                    style={{
+                      width: 24,
+                      height: 24,
+                      padding: 0,
+                      fontSize: 13,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExpandedId(isExpanded ? null : p.id);
+                    }}
+                    title={isExpanded ? 'Collapse preview' : 'Expand slide preview'}
+                  >
+                    {isExpanded ? '▾' : '▸'}
+                  </button>
+                  <span className="kind tag">{p.kind}</span>
+                  <div
+                    className="col grow"
+                    style={{ gap: 0, cursor: 'pointer' }}
+                    onClick={() => setExpandedId(isExpanded ? null : p.id)}
+                    title={`Click to ${isExpanded ? 'collapse' : 'preview slides'}, double-click to edit`}
+                  >
+                    <span className="ellipsis">
+                      <b>{p.title}</b> {locked.has(p.id) && <span className="tag red">live · locked</span>}{' '}
+                      {p.archived && <span className="tag">archived</span>}
+                    </span>
+                    <span className="muted small ellipsis">
+                      {[
+                        p.meta.author,
+                        p.meta.ccli && `CCLI ${p.meta.ccli}`,
+                        `${p.sections.length} sections`,
+                        p.meta.tags?.length ? p.meta.tags.join(', ') : '',
+                        p.source?.kind && p.source.kind !== 'manual' && p.source.kind !== 'paste'
+                          ? `from ${p.source.kind}`
+                          : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </span>
+                  </div>
+                  {folders.length > 0 && (
+                    <select
+                      value={p.folderId ?? ''}
+                      onChange={(e) => move(p, e.target.value)}
+                      title="Folder"
+                      style={{ maxWidth: 140 }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <option value="">No folder</option>
+                      {folders.map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {f.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <a className="btn small" href={`#/edit/${p.id}`} onClick={(e) => e.stopPropagation()}>
+                    Edit
+                  </a>
+                  <button
+                    type="button"
+                    className="small ghost"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setArchived(p, !p.archived);
+                    }}
+                  >
+                    {p.archived ? 'Unarchive' : 'Archive'}
+                  </button>
+                  <button
+                    type="button"
+                    className="small ghost"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void del(p);
+                    }}
+                    title="Delete"
+                  >
+                    🗑<span className="touch-label">Delete</span>
+                  </button>
+                </div>
+                {isExpanded && (
+                  <div
+                    className="col"
+                    style={{
+                      width: '100%',
+                      marginTop: 8,
+                      padding: '10px 14px',
+                      background: 'var(--bg)',
+                      borderRadius: 8,
+                      border: '1px solid var(--line)',
+                      gap: 10,
+                      boxSizing: 'border-box',
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <SlidePreviewRoll p={p} />
+                    <div
+                      className="row"
+                      style={{
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        paddingTop: 8,
+                        borderTop: '1px solid var(--line)',
+                        flexShrink: 0,
+                      }}
+                    >
+                      <span className="muted small">
+                        Double-click row or click Open in Editor to modify slides.
+                      </span>
+                      <div className="row" style={{ gap: 8 }}>
+                        <button type="button" className="small" onClick={() => setExpandedId(null)}>
+                          Close preview
+                        </button>
+                        <a className="btn small primary" href={`#/edit/${p.id}`}>
+                          ✎ Open in Editor
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          }}
         />
       </div>
       {newSong && <NewSongDialog onClose={() => setNewSong(false)} folderId={folderId ?? undefined} />}

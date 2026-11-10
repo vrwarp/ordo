@@ -40,7 +40,6 @@ import { ObjectPanel } from './ObjectPanel.tsx';
 import { addObject, getSlide, newImage, newShape, newText, themeOf, type ZOrder } from './ops.ts';
 import { hasGroup } from './ops/group.ts';
 import { PresentationPanel } from './PresentationPanel.tsx';
-import { PreviewControl } from './PreviewControl.tsx';
 import { RevisionsDialog } from './RevisionsDialog.tsx';
 import { SlideCanvas } from './SlideCanvas.tsx';
 import { SlidePanel } from './SlidePanel.tsx';
@@ -367,7 +366,6 @@ export function EditorView({ id }: { id: string }) {
             ]}
           />
           <span className="spacer" />
-          <PreviewControl p={p} slideId={slide?.id} />
           <button type="button" onClick={() => setFinding(true)} title="Find and replace (Ctrl+F)">
             Find…
           </button>
@@ -401,14 +399,21 @@ export function EditorView({ id }: { id: string }) {
           >
             {ed.saving ? 'Saving…' : ed.dirty ? 'Save' : 'Saved'}
           </button>
-          <button type="button" disabled={readOnly || !ed.canUndo} onClick={undo} title="Ctrl+Z">
+          <button type="button" disabled={readOnly || !ed.canUndo} onClick={undo} title="Undo (Ctrl+Z)">
             ↶<span className="touch-label">Undo</span>
           </button>
-          <button type="button" disabled={readOnly || !ed.canRedo} onClick={redo} title="Ctrl+Y">
+          <button type="button" disabled={readOnly || !ed.canRedo} onClick={redo} title="Redo (Ctrl+Y)">
             ↷<span className="touch-label">Redo</span>
           </button>
-          <span style={{ width: 10 }} />
-          <button type="button" disabled={readOnly || !slide} onClick={() => add(newText(theme))}>
+
+          <span style={{ width: 1, height: 20, background: 'var(--line)', margin: '0 4px' }} />
+
+          <button
+            type="button"
+            disabled={readOnly || !slide}
+            onClick={() => add(newText(theme))}
+            title="Add text box"
+          >
             + Text
           </button>
           <button type="button" disabled={readOnly || !slide} onClick={() => setImagePick(true)}>
@@ -422,69 +427,31 @@ export function EditorView({ id }: { id: string }) {
           >
             + Video
           </button>
-          <button type="button" disabled={readOnly || !slide} onClick={() => add(newShape('rect'))}>
-            + Rect
-          </button>
-          <button type="button" disabled={readOnly || !slide} onClick={() => add(newShape('ellipse'))}>
-            + Ellipse
-          </button>
-          <button type="button" disabled={readOnly || !slide} onClick={() => add(newShape('line'))}>
-            + Line
-          </button>
-          <span style={{ width: 10 }} />
-          <button
-            type="button"
-            className="small"
+          <Menu
+            label="Shapes"
+            disabled={readOnly || !slide}
+            items={[
+              { label: 'Rectangle', name: 'Rectangle', onSelect: () => add(newShape('rect')) },
+              { label: 'Ellipse', name: 'Ellipse', onSelect: () => add(newShape('ellipse')) },
+              { label: 'Line', name: 'Line', onSelect: () => add(newShape('line')) },
+            ]}
+          />
+          <Menu
+            label="Arrange"
             disabled={readOnly || !obj}
-            onClick={() => z('front')}
-            title="Bring to front"
-          >
-            ⤒<span className="touch-label">Front</span>
-          </button>
-          <button
-            type="button"
-            className="small"
-            disabled={readOnly || !obj}
-            onClick={() => z('forward')}
-            title="Bring forward"
-          >
-            ↑<span className="touch-label">Forward</span>
-          </button>
-          <button
-            type="button"
-            className="small"
-            disabled={readOnly || !obj}
-            onClick={() => z('backward')}
-            title="Send backward"
-          >
-            ↓<span className="touch-label">Backward</span>
-          </button>
-          <button
-            type="button"
-            className="small"
-            disabled={readOnly || !obj}
-            onClick={() => z('back')}
-            title="Send to back"
-          >
-            ⤓<span className="touch-label">Back</span>
-          </button>
-          <button
-            type="button"
-            className="small"
-            disabled={readOnly || !obj}
-            title="Duplicate (Ctrl+D)"
-            onClick={duplicate}
-          >
-            ⧉<span className="touch-label">Duplicate</span>
-          </button>
-          <button type="button" className="small" disabled={readOnly || !obj} title="Delete" onClick={remove}>
-            🗑<span className="touch-label">Delete</span>
-          </button>
-          <button type="button" className="small" disabled={readOnly || !grouped} onClick={ungroupSelection}>
-            Ungroup
-          </button>
+            items={[
+              { label: '⤒ Bring to front', name: 'Front', onSelect: () => z('front') },
+              { label: '↑ Bring forward', name: 'Forward', onSelect: () => z('forward') },
+              { label: '↓ Send backward', name: 'Backward', onSelect: () => z('backward') },
+              { label: '⤓ Send to back', name: 'Back', onSelect: () => z('back') },
+              { label: '⧉ Duplicate (Ctrl+D)', name: 'Duplicate', onSelect: duplicate },
+              { label: '🗑 Delete (Del)', name: 'Delete', danger: true, onSelect: remove },
+              ...(grouped ? [{ label: 'Ungroup', onSelect: ungroupSelection }] : []),
+            ]}
+          />
+
           <span className="spacer" />
-          <PreviewControl p={p} slideId={slide?.id} />
+
           <button type="button" onClick={() => setFinding(true)} title="Find and replace (Ctrl+F)">
             Find…
           </button>

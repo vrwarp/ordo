@@ -76,9 +76,9 @@ export function PlaylistsView({ id }: { id?: string }) {
   );
   return (
     <div className="split" style={{ gridTemplateColumns: '260px 1fr' }}>
-      <div className="side col" style={{ gap: 2 }}>
+      <div className="side col" style={{ gap: 4 }}>
         <h4>Playlists</h4>
-        <div className="row" style={{ marginBottom: 8 }}>
+        <div className="row" style={{ marginBottom: 10 }}>
           <input
             className="grow"
             placeholder="New playlist name"
@@ -92,7 +92,7 @@ export function PlaylistsView({ id }: { id?: string }) {
         </div>
         {sorted.map((p) => (
           <a key={p.id} href={`#/playlists/${p.id}`} className={p.id === current?.id ? 'active' : ''}>
-            <span className="col grow" style={{ gap: 0 }}>
+            <span className="col grow" style={{ gap: 2 }}>
               <span className="ellipsis">
                 {p.id === liveId && <span style={{ color: 'var(--live)' }}>● </span>}
                 {p.name}

@@ -1,5 +1,6 @@
 import { type ActionId, newId, type PlaylistItem } from '@ordo/domain';
 import { useMemo, useState } from 'react';
+import { SlidePreviewRoll } from '../../components/SlidePreviewRoll.tsx';
 import { Select } from '../../components/fields.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
 import { useLibrary } from '../../state/library.ts';
@@ -24,6 +25,8 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
   const [time, setTime] = useState('10:00');
   const [label, setLabel] = useState('');
   const [action, setAction] = useState<ActionId>('clearAll');
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [previewArrId, setPreviewArrId] = useState<string>('');
   const pres = useMemo(() => new Map(lib.presentations.map((p) => [p.id, p])), [lib.presentations]);
   const media = useMemo(() => new Map(lib.media.map((m) => [m.id, m])), [lib.media]);
   const results = useSearch(q, { kind, limit: 500 });
@@ -55,59 +58,147 @@ export function AddItemsPanel({ onAdd }: { onAdd: (items: PlaylistItem[]) => voi
       </div>
       <VirtualList
         items={results}
-        rowHeight={46}
+        rowHeight={(d) => (d.kind === 'presentation' && expandedId === d.id ? 390 : 46)}
+        rowClass={(d) => (d.kind === 'presentation' && expandedId === d.id ? 'expanded' : '')}
         keyOf={(d) => d.id}
         render={(d) => {
           if (d.kind === 'presentation') {
             const p = pres.get(d.id);
             if (!p) return null;
+            const isExpanded = expandedId === p.id;
             return (
               <>
-                <span className="col grow" style={{ gap: 0 }}>
-                  <span className="ellipsis">{p.title}</span>
-                  <span className="muted small">{p.kind}</span>
-                </span>
-                <select
-                  defaultValue=""
-                  title="Arrangement"
-                  style={{ maxWidth: 110 }}
-                  onChange={(e) => {
-                    onAdd([
-                      {
-                        id: newId(),
-                        kind: 'presentation',
-                        presentationId: p.id,
-                        arrangementId: e.target.value || undefined,
-                      },
-                    ]);
-                    e.target.value = '';
-                  }}
-                >
-                  <option value="" disabled>
-                    Add with…
-                  </option>
-                  {p.arrangements.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
+                <div className="row" style={{ alignItems: 'center', gap: 8, width: '100%', minHeight: 36 }}>
+                  <button
+                    type="button"
+                    className="ghost small"
+                    style={{
+                      width: 22,
+                      height: 22,
+                      padding: 0,
+                      fontSize: 12,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExpandedId(isExpanded ? null : p.id);
+                      setPreviewArrId(p.arrangements[0]?.id ?? '');
+                    }}
+                    title={isExpanded ? 'Collapse preview' : 'Preview slides'}
+                  >
+                    {isExpanded ? '▾' : '▸'}
+                  </button>
+                  <span
+                    className="col grow"
+                    style={{ gap: 0, cursor: 'pointer' }}
+                    onClick={() => {
+                      setExpandedId(isExpanded ? null : p.id);
+                      setPreviewArrId(p.arrangements[0]?.id ?? '');
+                    }}
+                    title={isExpanded ? 'Collapse preview' : 'Click to preview slides'}
+                  >
+                    <span className="ellipsis">{p.title}</span>
+                    <span className="muted small">{p.kind}</span>
+                  </span>
+                  <select
+                    defaultValue=""
+                    title="Arrangement"
+                    style={{ maxWidth: 110 }}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => {
+                      onAdd([
+                        {
+                          id: newId(),
+                          kind: 'presentation',
+                          presentationId: p.id,
+                          arrangementId: e.target.value || undefined,
+                        },
+                      ]);
+                      e.target.value = '';
+                    }}
+                  >
+                    <option value="" disabled>
+                      Add with…
                     </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className="small primary"
-                  onClick={() =>
-                    onAdd([
-                      {
-                        id: newId(),
-                        kind: 'presentation',
-                        presentationId: p.id,
-                        arrangementId: p.arrangements[0]?.id,
-                      },
-                    ])
-                  }
-                >
-                  Add
-                </button>
+                    {p.arrangements.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="small primary"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAdd([
+                        {
+                          id: newId(),
+                          kind: 'presentation',
+                          presentationId: p.id,
+                          arrangementId: p.arrangements[0]?.id,
+                        },
+                      ]);
+                    }}
+                  >
+                    Add
+                  </button>
+                </div>
+                {isExpanded && (
+                  <div
+                    className="col"
+                    style={{
+                      width: '100%',
+                      marginTop: 6,
+                      padding: '10px 12px',
+                      background: 'var(--bg)',
+                      borderRadius: 8,
+                      border: '1px solid var(--line)',
+                      gap: 10,
+                      boxSizing: 'border-box',
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <SlidePreviewRoll
+                      p={p}
+                      compact={true}
+                      selectedArrangementId={previewArrId || p.arrangements[0]?.id}
+                      onSelectArrangement={(arrId) => setPreviewArrId(arrId)}
+                    />
+                    <div
+                      className="row"
+                      style={{
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        paddingTop: 6,
+                        borderTop: '1px solid var(--line)',
+                        flexShrink: 0,
+                      }}
+                    >
+                      <button type="button" className="small" onClick={() => setExpandedId(null)}>
+                        Close
+                      </button>
+                      <button
+                        type="button"
+                        className="small primary"
+                        onClick={() => {
+                          onAdd([
+                            {
+                              id: newId(),
+                              kind: 'presentation',
+                              presentationId: p.id,
+                              arrangementId: previewArrId || p.arrangements[0]?.id,
+                            },
+                          ]);
+                        }}
+                      >
+                        + Add to Playlist
+                      </button>
+                    </div>
+                  </div>
+                )}
               </>
             );
           }

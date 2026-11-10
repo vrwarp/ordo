@@ -275,6 +275,7 @@ export function ThemeCanvas({ box, text, onChangeBox, scenario }: ThemeCanvasPro
               lineHeight: text.lineHeight ?? 1.25,
               textShadow: shadow,
               WebkitTextStroke: stroke,
+              paintOrder: stroke ? 'stroke fill' : undefined,
               fontSize: `${((text.fontSizePx ?? 54) / 1920) * 100}cqw`,
               pointerEvents: 'none',
               wordBreak: 'break-word',

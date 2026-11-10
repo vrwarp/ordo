@@ -82,13 +82,41 @@ void ensureDemoHub('../hub-sw.js', '../').then((ok) => {
 
 // ---- window behaviour: fullscreen, wake lock, keys, cursor ----
 
+let promptEl: HTMLButtonElement | null = null;
+
+function syncFullscreenUI(): void {
+  const isFs = !!document.fullscreenElement;
+  document.body.classList.toggle('not-fullscreen', !isFs);
+  if (isFs) {
+    if (promptEl) {
+      promptEl.remove();
+      promptEl = null;
+    }
+  } else if (!promptEl) {
+    promptEl = document.createElement('button');
+    promptEl.className = 'fs-prompt';
+    promptEl.type = 'button';
+    promptEl.innerHTML = '⛶ Enter full screen';
+    promptEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void goFullscreen();
+      host.onGesture();
+    });
+    document.body.appendChild(promptEl);
+  }
+}
+
 async function goFullscreen(): Promise<void> {
-  if (document.fullscreenElement) return;
+  if (document.fullscreenElement) {
+    syncFullscreenUI();
+    return;
+  }
   try {
     await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
   } catch {
     /* needs a user gesture or the window-management permission; retried on click/keypress */
   }
+  syncFullscreenUI();
 }
 
 // Chrome releases the sentinel whenever the window is hidden or covered; the keeper watches the
@@ -104,7 +132,10 @@ const wake = new WakeLockKeeper({
 const keepAwake = (): Promise<void> => wake.acquire();
 
 document.addEventListener('visibilitychange', () => void keepAwake());
-document.addEventListener('fullscreenchange', () => void keepAwake());
+document.addEventListener('fullscreenchange', () => {
+  syncFullscreenUI();
+  void keepAwake();
+});
 window.addEventListener('focus', () => void keepAwake());
 
 window.addEventListener(
@@ -133,6 +164,7 @@ window.addEventListener('pointerdown', () => {
 });
 window.addEventListener('contextmenu', (e) => e.preventDefault());
 
+syncFullscreenUI();
 void goFullscreen();
 void keepAwake();
 

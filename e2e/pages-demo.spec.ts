@@ -130,6 +130,7 @@ test('the Pages demo runs with no hub: sample service, ProPresenter import, go l
   await page.locator('.backdrop button', { hasText: 'End service' }).click();
 
   // Reset: back to the sample service.
+  await page.locator('[data-demo-banner]').click();
   await page.getByRole('button', { name: 'Reset demo' }).click();
   await Promise.all([
     page.waitForEvent('load', { timeout: 30_000 }),

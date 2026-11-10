@@ -73,7 +73,7 @@ export function SettingsView({ page, profile = 'full' }: { page: string; profile
   }
   return (
     <div className="split" style={{ gridTemplateColumns: '200px 1fr' }}>
-      <div className="side col" style={{ gap: 2 }}>
+      <div className="side col" style={{ gap: 4 }}>
         {pages.map(([k, label]) => (
           <a key={k} href={`#/settings/${k}`} className={page === k ? 'active' : ''}>
             {label}

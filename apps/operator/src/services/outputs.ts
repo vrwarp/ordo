@@ -165,7 +165,16 @@ export class OutputWindows {
       const unmatched = plan.filter((p) => !p.matched);
       useLaunch.setState({ unmatched, screens });
       log('info', `launched ${plan.length} windows (${unmatched.length} need placement)`);
-      if (plan.length) markLaunched(true);
+      if (plan.length) {
+        markLaunched(true);
+        if (!isSim) {
+          toast(
+            'Outputs launched. If a window did not enter full screen automatically, click anywhere on it to full screen.',
+            'info',
+            5000,
+          );
+        }
+      }
     } finally {
       useLaunch.setState({ busy: false });
       this.refreshOpen();
@@ -220,6 +229,21 @@ export class OutputWindows {
     }
     this.windows.set(o.id, w);
     this.ctl.core.attachWindow(o.id, w, originOf(url));
+    try {
+      w.focus();
+      if (!isSim) {
+        w.document?.documentElement?.requestFullscreen?.({ navigationUI: 'hide' })?.catch(() => undefined);
+        w.addEventListener('load', () => {
+          try {
+            w.document?.documentElement?.requestFullscreen?.({ navigationUI: 'hide' })?.catch(() => undefined);
+          } catch {
+            /* ignore */
+          }
+        });
+      }
+    } catch {
+      /* cross-origin or restricted */
+    }
     this.refreshOpen();
     return w;
   }

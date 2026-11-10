@@ -820,8 +820,10 @@ export function ThemesTab() {
                 <div
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: 'repeat(2, 1fr)',
+                    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
                     gap: 8,
+                    width: '100%',
+                    boxSizing: 'border-box',
                   }}
                 >
                   <button
@@ -832,8 +834,10 @@ export function ThemesTab() {
                       setDraft({ ...draft, text: rest });
                     }}
                   >
-                    <span style={{ fontWeight: 600, fontSize: 15, color: '#fff' }}>Clean Text</span>
-                    <span className="muted small" style={{ fontSize: 10 }}>
+                    <span style={{ fontWeight: 700, fontSize: 13.5, color: '#fff', textAlign: 'center', lineHeight: 1.2 }}>
+                      Clean Text
+                    </span>
+                    <span className="muted small" style={{ fontSize: 10.5, textAlign: 'center' }}>
                       No stroke or shadow
                     </span>
                   </button>
@@ -854,15 +858,17 @@ export function ThemesTab() {
                   >
                     <span
                       style={{
-                        fontWeight: 600,
-                        fontSize: 15,
+                        fontWeight: 700,
+                        fontSize: 13.5,
                         color: '#fff',
+                        textAlign: 'center',
+                        lineHeight: 1.2,
                         textShadow: '0 3px 6px rgba(0,0,0,0.9)',
                       }}
                     >
                       Soft Shadow
                     </span>
-                    <span className="muted small" style={{ fontSize: 10 }}>
+                    <span className="muted small" style={{ fontSize: 10.5, textAlign: 'center' }}>
                       Natural depth
                     </span>
                   </button>
@@ -884,14 +890,16 @@ export function ThemesTab() {
                     <span
                       style={{
                         fontWeight: 700,
-                        fontSize: 15,
+                        fontSize: 13.5,
                         color: '#fff',
-                        WebkitTextStroke: '1px #000',
+                        textAlign: 'center',
+                        lineHeight: 1.2,
+                        textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
                       }}
                     >
                       Outline (Church)
                     </span>
-                    <span className="muted small" style={{ fontSize: 10 }}>
+                    <span className="muted small" style={{ fontSize: 10.5, textAlign: 'center' }}>
                       Sharp on bright screens
                     </span>
                   </button>
@@ -913,15 +921,17 @@ export function ThemesTab() {
                     <span
                       style={{
                         fontWeight: 700,
-                        fontSize: 15,
+                        fontSize: 13.5,
                         color: '#fff',
-                        WebkitTextStroke: '1px #000',
-                        textShadow: '0 3px 6px rgba(0,0,0,0.8)',
+                        textAlign: 'center',
+                        lineHeight: 1.2,
+                        textShadow:
+                          '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 3px 6px rgba(0,0,0,0.8)',
                       }}
                     >
                       Outline + Shadow
                     </span>
-                    <span className="muted small" style={{ fontSize: 10 }}>
+                    <span className="muted small" style={{ fontSize: 10.5, textAlign: 'center' }}>
                       Maximum contrast
                     </span>
                   </button>

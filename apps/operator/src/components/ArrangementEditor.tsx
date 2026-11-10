@@ -243,7 +243,7 @@ export function ArrangementEditor(props: {
               key={chipKey}
               {...sort.item(i)}
               {...sort.mouseArea(i)}
-              data-arr-card={i}
+              data-arr-chip={i}
               className={`card col arr-card ${sel === i ? 'picked' : ''} ${sort.cls(i)}`}
               style={{
                 padding: '8px 10px',
@@ -259,7 +259,7 @@ export function ArrangementEditor(props: {
               <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
                 <div className="row" style={{ alignItems: 'center', gap: 6 }}>
                   <DragHandle label="Drag to reorder" disabled={props.disabled} {...sort.handle(i)} />
-                  <span className="tag" style={{ fontWeight: 600, fontSize: 12 }}>
+                  <span className="tag arr-chip-label" style={{ fontWeight: 600, fontSize: 12 }}>
                     {s?.short || s?.label || '?'}
                   </span>
                   <span className="bold small" style={{ color: 'var(--fg)' }}>
@@ -307,7 +307,7 @@ export function ArrangementEditor(props: {
                         className="tag"
                         style={{
                           fontSize: 10,
-                          padding: '1px 5px',
+                          padding: '2px 7px',
                           opacity: 0.8,
                           flexShrink: 0,
                           marginTop: 1,
@@ -350,6 +350,21 @@ export function ArrangementEditor(props: {
           </div>
         )}
       </div>
+      {!props.disabled && a.sectionIds.length > 0 && sel !== null && (
+        <div className="row wrap arr-move touch-only" style={{ gap: 4 }}>
+          <button type="button" className="small" disabled={sel === 0} onClick={() => move(sel, sel - 1)}>
+            ← Earlier
+          </button>
+          <button
+            type="button"
+            className="small"
+            disabled={sel === a.sectionIds.length - 1}
+            onClick={() => move(sel, sel + 1)}
+          >
+            Later →
+          </button>
+        </div>
+      )}
     </div>
   );
 }
