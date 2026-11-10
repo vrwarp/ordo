@@ -30,26 +30,36 @@ export function PresentationPanel({ p, readOnly }: { p: Presentation; readOnly: 
   };
   return (
     <div className="col" style={{ gap: 10 }}>
-      {/* 1. Identity & Classification */}
+      {/* 1. Identity & Classification (Type is fixed at creation) */}
       <TextField
         label="Title"
         value={p.title}
         disabled={readOnly}
         onChange={(title) => set((q) => ({ ...q, title }), 'title')}
       />
-      <Select
-        label="Type"
-        value={p.kind}
-        disabled={readOnly}
-        options={[
-          { value: 'song', label: 'Song' },
-          { value: 'slides', label: 'Slides (sermon, announcements)' },
-          { value: 'loop', label: 'Announcement loop (auto-advance)' },
-        ]}
-        onChange={(kind) =>
-          set((q) => ({ ...q, kind, loop: kind === 'loop' ? (q.loop ?? { defaultSlideMs: 8000 }) : q.loop }))
-        }
-      />
+      <div className="field">
+        <span className="label">Type</span>
+        <div className="row" style={{ alignItems: 'center', gap: 8, padding: '4px 0' }}>
+          <span
+            className="tag"
+            style={{
+              fontSize: 12,
+              fontWeight: 600,
+              padding: '4px 10px',
+              borderRadius: 6,
+              background: 'var(--bg3)',
+              border: '1px solid var(--line)',
+              color: 'var(--fg)',
+            }}
+          >
+            {p.kind === 'song'
+              ? '🎵 Worship Song'
+              : p.kind === 'loop'
+                ? '🔁 Announcement Loop (Auto-advance)'
+                : '📊 Slide Deck (Sermon / Presentation)'}
+          </span>
+        </div>
+      </div>
       <TextField
         label="Tags (comma separated)"
         value={(meta.tags ?? []).join(', ')}
@@ -142,14 +152,30 @@ export function PresentationPanel({ p, readOnly }: { p: Presentation; readOnly: 
             }
           />
 
+          <NumberField
+            label="Lines per slide (for new slides from lyrics)"
+            value={p.linesPerSlide ?? 2}
+            min={1}
+            max={12}
+            disabled={readOnly}
+            onChange={(linesPerSlide) => set((q) => ({ ...q, linesPerSlide }))}
+          />
+
+          <ArrangementsSection p={p} readOnly={readOnly} />
+        </div>
+      )}
+
+      {/* 4. Theme & Formatting (Songs and Slide decks) */}
+      {p.kind !== 'loop' && (
+        <div className="col" style={{ gap: 8, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
           <span
             className="small bold"
-            style={{ textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fg2)', marginTop: 4 }}
+            style={{ textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fg2)' }}
           >
-            Lyric Theme & Formatting
+            {p.kind === 'song' ? 'Lyric Theme' : 'Theme'}
           </span>
           <label className="field">
-            <span>Lyric theme</span>
+            <span>Theme</span>
             <div className="row">
               <select
                 value={theme}
@@ -175,16 +201,6 @@ export function PresentationPanel({ p, readOnly }: { p: Presentation; readOnly: 
               </button>
             </div>
           </label>
-          <NumberField
-            label="Lines per slide (for new slides from lyrics)"
-            value={p.linesPerSlide ?? 2}
-            min={1}
-            max={12}
-            disabled={readOnly}
-            onChange={(linesPerSlide) => set((q) => ({ ...q, linesPerSlide }))}
-          />
-
-          <ArrangementsSection p={p} readOnly={readOnly} />
         </div>
       )}
 

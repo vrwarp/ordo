@@ -188,7 +188,7 @@ export function SlidesPanel({ p, readOnly }: { p: Presentation; readOnly: boolea
                     edit((q) => deleteSection(q, sec.id));
                 }}
               >
-                ✕
+                🗑
               </button>
             )}
           </div>

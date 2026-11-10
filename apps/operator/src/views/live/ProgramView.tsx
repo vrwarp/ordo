@@ -42,9 +42,11 @@ export function ProgramView() {
             {!p?.stream && (
               <div className="center muted small" style={{ position: 'absolute', inset: 0 }}>
                 {h?.connected
-                  ? p?.state === 'failed'
-                    ? 'No picture (retrying)'
-                    : 'Connecting…'
+                  ? DEMO
+                    ? 'Active in window'
+                    : p?.state === 'failed'
+                      ? 'No picture (retrying)'
+                      : 'Connecting…'
                   : 'Output not open'}
               </div>
             )}

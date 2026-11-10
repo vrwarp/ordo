@@ -192,7 +192,7 @@ export function TextStyleEditor(props: {
             type="button"
             className={s.fontWeight >= 600 ? 'active' : ''}
             onClick={() => set('fontWeight', s.fontWeight >= 600 ? 400 : 700)}
-            aria-label="Bold text"
+            aria-label="Box font bold"
           >
             <b>B Bold</b>
           </button>
@@ -200,7 +200,7 @@ export function TextStyleEditor(props: {
             type="button"
             className={s.fontStyle === 'italic' ? 'active' : ''}
             onClick={() => set('fontStyle', s.fontStyle === 'italic' ? 'normal' : 'italic')}
-            aria-label="Italic text"
+            aria-label="Box font italic"
           >
             <i>I Italic</i>
           </button>
@@ -208,7 +208,7 @@ export function TextStyleEditor(props: {
             type="button"
             className={s.transform === 'uppercase' ? 'active' : ''}
             onClick={() => set('transform', s.transform === 'uppercase' ? 'none' : 'uppercase')}
-            aria-label="All capitals"
+            aria-label="Box font uppercase"
           >
             AA Caps
           </button>
