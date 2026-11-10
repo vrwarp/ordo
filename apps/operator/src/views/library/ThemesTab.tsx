@@ -12,24 +12,23 @@ import { ThemeRevisionsDialog } from './ThemeRevisionsDialog.tsx';
 const TEST_SCENARIOS = [
   {
     id: 'chorus',
-    label: '2-Line Chorus',
-    text: 'Amazing grace how sweet the sound\nThat saved a wretch like me',
+    label: '2-Line Chorus (Contemporary)',
+    text: 'Way maker, miracle worker, promise keeper\nLight in the darkness, my God that is who You are',
   },
   {
     id: 'verse',
-    label: '4-Line Hymn Verse',
-    text: 'Through many dangers, toils and snares\nI have already come\n’Tis grace hath brought me safe thus far\nAnd grace will lead me home',
+    label: '4-Line Hymn (Traditional)',
+    text: 'Amazing grace how sweet the sound\nThat saved a wretch like me\nI once was lost but now am found\nWas blind but now I see',
   },
   {
     id: 'impact',
-    label: '1-Line Punch',
-    text: 'Hallelujah, glory to the King!',
+    label: '1-Line Punch / Bridge',
+    text: 'Hallelujah, praise the Lord, oh my soul!',
   },
   {
-    id: 'scripture',
-    label: 'Scripture Passage',
-    text: 'For God so loved the world that He gave His only Son, that whoever believes in Him should not perish but have eternal life.',
-    citation: '— John 3:16',
+    id: 'wrap',
+    label: '3-Line Verse',
+    text: 'Your love never fails, it never gives up\nNever runs out on me\nOn and on and on and on it goes',
   },
 ];
 
@@ -39,16 +38,16 @@ const PRESET_GEOMETRIES: { label: string; box: Box }[] = [
     box: { x: 120, y: 140, w: 1680, h: 800, rotation: 0 },
   },
   {
-    label: 'Lower Third',
+    label: 'Lower Third (Stream)',
     box: { x: 120, y: 720, w: 1680, h: 280, rotation: 0 },
+  },
+  {
+    label: 'Bottom Center',
+    box: { x: 120, y: 640, w: 1680, h: 380, rotation: 0 },
   },
   {
     label: 'Top Banner',
     box: { x: 120, y: 80, w: 1680, h: 280, rotation: 0 },
-  },
-  {
-    label: 'Centered Narrow',
-    box: { x: 260, y: 140, w: 1400, h: 800, rotation: 0 },
   },
 ];
 
@@ -63,7 +62,6 @@ export function ThemesTab() {
   const editingTheme = themes.find((t) => t.id === editingId);
   const [draft, setDraft] = useState<Theme | null>(null);
   const [scenarioId, setScenarioId] = useState('chorus');
-  const [tab, setTab] = useState<'primary' | 'secondary'>('primary');
 
   const onStartEdit = (t: Theme) => {
     setDraft({ ...t });
@@ -73,7 +71,7 @@ export function ThemesTab() {
   const makeDefault = async (themeId: string) => {
     try {
       await saveSettings('general', { ...general, defaultThemeId: themeId });
-      toast('Church default presentation theme updated.', 'ok');
+      toast('Church default lyric theme updated.', 'ok');
     } catch (e) {
       toast(errorText(e), 'error');
     }
@@ -84,12 +82,12 @@ export function ThemesTab() {
       const base = themes[0] ?? DEFAULT_THEME;
       const t = await api<Theme>('/themes', {
         method: 'POST',
-        json: { ...base, id: newId(), name: 'New theme' },
+        json: { ...base, id: newId(), name: 'New Lyric Theme' },
       });
       upsertLocal('themes', t);
       setDraft({ ...t });
       setEditingId(t.id);
-      toast('Created new theme.', 'ok');
+      toast('Created new lyric theme.', 'ok');
     } catch (e) {
       toast(errorText(e), 'error');
     }
@@ -128,7 +126,7 @@ export function ThemesTab() {
     if (
       !(await confirmDialog(
         'Delete theme',
-        `Delete “${t.name}”? Any presentations using this theme will keep their current styling.`,
+        `Delete lyric theme “${t.name}”? Any existing songs using this theme will keep their current styling.`,
         'Delete',
         true,
       ))
@@ -177,14 +175,14 @@ export function ThemesTab() {
         <div className="col" style={{ gap: 20 }}>
           <div className="row wrap" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <h2 style={{ margin: 0 }}>Presentation Themes</h2>
+              <h2 style={{ margin: 0 }}>Lyric Themes</h2>
               <span className="muted small">
-                Visual templates for lyrics, scriptures, and sermon slides. Apply to any presentation from the
-                presentation editor.
+                Visual styling templates for worship songs and lyrics. Sermon decks and announcements imported
+                from PowerPoint retain their original slide designs.
               </span>
             </div>
             <button type="button" className="primary" onClick={() => void createTheme()}>
-              + New Theme
+              + New Lyric Theme
             </button>
           </div>
 
@@ -224,9 +222,9 @@ export function ThemesTab() {
                           <span
                             className="tag green"
                             style={{ fontSize: 11, padding: '2px 6px', fontWeight: 600 }}
-                            title="Default theme applied when creating new presentations"
+                            title="Applied automatically when pasting or importing new worship songs"
                           >
-                            ★ Church Default
+                            ★ Church Default for Songs
                           </span>
                         )}
                       </div>
@@ -241,7 +239,7 @@ export function ThemesTab() {
                       onClick={() => onStartEdit(t)}
                       title="Click to visually edit theme"
                     >
-                      <ThemeThumbnail box={t.lyricBox} text={t.text} />
+                      <ThemeThumbnail box={t.lyricBox} text={t.text} sample={'Way Maker\nMiracle Worker'} />
                     </div>
 
                     <div className="muted small" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -271,7 +269,7 @@ export function ThemesTab() {
                           type="button"
                           className="small ghost"
                           onClick={() => void makeDefault(t.id)}
-                          title="Set as church default for newly created presentations"
+                          title="Set as church default for newly created worship songs"
                         >
                           Make Default
                         </button>
@@ -332,7 +330,7 @@ export function ThemesTab() {
                   setDraft(null);
                 }}
               >
-                ← Back to Themes
+                ← Back to Lyric Themes
               </button>
               <div className="row" style={{ gap: 8, alignItems: 'center' }}>
                 <h3 style={{ margin: 0 }}>{draft.name}</h3>
@@ -341,10 +339,15 @@ export function ThemesTab() {
                 </span>
                 {draft.id === defaultThemeId ? (
                   <span className="tag green" style={{ fontSize: 11 }}>
-                    ★ Church Default
+                    ★ Church Default for Songs
                   </span>
                 ) : (
-                  <button type="button" className="small ghost" onClick={() => void makeDefault(draft.id)}>
+                  <button
+                    type="button"
+                    className="small ghost"
+                    onClick={() => void makeDefault(draft.id)}
+                    title="Set as default theme for new worship songs"
+                  >
                     Make Church Default
                   </button>
                 )}
@@ -379,7 +382,7 @@ export function ThemesTab() {
               alignItems: 'start',
             }}
           >
-            {/* Left Column: Styling Controls */}
+            {/* Left Column: Focused Lyric Styling Controls */}
             <div className="col" style={{ gap: 14 }}>
               <TextField
                 label="Theme Name"
@@ -387,55 +390,21 @@ export function ThemesTab() {
                 onChange={(name) => setDraft({ ...draft, name })}
               />
 
-              <div className="row" style={{ gap: 4 }}>
-                <button
-                  type="button"
-                  className={`small ${tab === 'primary' ? 'on' : 'ghost'}`}
-                  onClick={() => setTab('primary')}
-                >
-                  Primary Slide Text
-                </button>
-                <button
-                  type="button"
-                  className={`small ${tab === 'secondary' ? 'on' : 'ghost'}`}
-                  onClick={() => setTab('secondary')}
-                >
-                  Secondary Callouts Defaults
-                </button>
+              <div className="card col" style={{ gap: 14, padding: 16 }}>
+                <div className="col" style={{ gap: 4 }}>
+                  <h4 style={{ margin: 0 }}>Worship Lyric Geometry & Typography</h4>
+                  <span className="muted small">
+                    Controls the positioning, font, outline, and sizing of worship song lyrics.
+                  </span>
+                </div>
+
+                <BoxEditor value={draft.lyricBox} onChange={(lyricBox) => setDraft({ ...draft, lyricBox })} />
+
+                <TextStyleEditor value={draft.text} onChange={(text) => setDraft({ ...draft, text })} />
               </div>
-
-              {tab === 'primary' ? (
-                <div className="card col" style={{ gap: 14, padding: 16 }}>
-                  <div className="row wrap" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                    <h4 style={{ margin: 0 }}>Primary Slide Text</h4>
-                    <span className="muted small">Main worship lyric & scripture box</span>
-                  </div>
-
-                  <BoxEditor
-                    value={draft.lyricBox}
-                    onChange={(lyricBox) => setDraft({ ...draft, lyricBox })}
-                  />
-
-                  <TextStyleEditor value={draft.text} onChange={(text) => setDraft({ ...draft, text })} />
-                </div>
-              ) : (
-                <div className="card col" style={{ gap: 14, padding: 16 }}>
-                  <div className="col" style={{ gap: 4 }}>
-                    <h4 style={{ margin: 0 }}>Secondary Callouts Defaults</h4>
-                    <span className="muted small">
-                      Used when clicking “+ Text” in the slide editor to add scripture citations, sermon
-                      points, or notes.
-                    </span>
-                  </div>
-                  <TextStyleEditor
-                    value={draft.textBoxDefaults}
-                    onChange={(textBoxDefaults) => setDraft({ ...draft, textBoxDefaults })}
-                  />
-                </div>
-              )}
             </div>
 
-            {/* Right Column: Interactive Canvas & Presets */}
+            {/* Right Column: Interactive Canvas & Worship Presets */}
             <div className="col" style={{ position: 'sticky', top: 16, gap: 14 }}>
               <div className="card col" style={{ gap: 12, padding: 16 }}>
                 <div className="row wrap" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
@@ -463,7 +432,7 @@ export function ThemesTab() {
                 />
 
                 <div className="col" style={{ gap: 6, marginTop: 4 }}>
-                  <span className="muted small">Worship Content Test Scenario:</span>
+                  <span className="muted small">Worship Song Test Scenario:</span>
                   <div className="row wrap" style={{ gap: 4 }}>
                     {TEST_SCENARIOS.map((sc) => (
                       <button

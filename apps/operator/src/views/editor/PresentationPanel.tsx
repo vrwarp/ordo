@@ -22,8 +22,8 @@ export function PresentationPanel({ p, readOnly }: { p: Presentation; readOnly: 
     if (!t) return;
     const n = themeChangeCount(p, t);
     const ok = await confirmDialog(
-      'Apply theme',
-      `Apply “${t.name}” to this presentation? ${n} slide${n === 1 ? '' : 's'} will change. Per-slide overrides are kept.`,
+      'Apply lyric theme',
+      `Apply “${t.name}” to this presentation's lyric slides? ${n} slide${n === 1 ? '' : 's'} will change. Per-slide overrides are kept.`,
       'Apply',
     );
     if (ok) set((q) => applyTheme(q, t));
@@ -125,7 +125,7 @@ export function PresentationPanel({ p, readOnly }: { p: Presentation; readOnly: 
         />
       )}
       <label className="field">
-        <span>Theme</span>
+        <span>Lyric theme {p.kind === 'slides' ? '(songs only)' : ''}</span>
         <div className="row">
           <select
             value={theme}
@@ -150,6 +150,11 @@ export function PresentationPanel({ p, readOnly }: { p: Presentation; readOnly: 
             Apply…
           </button>
         </div>
+        {p.kind === 'slides' && (
+          <span className="muted small">
+            PowerPoint sermon and announcement slides retain their imported layouts.
+          </span>
+        )}
       </label>
       <label className="field">
         <span>Default background</span>
