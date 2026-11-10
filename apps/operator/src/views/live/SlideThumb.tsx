@@ -64,6 +64,15 @@ export const SlideThumb = memo(function SlideThumb(props: {
       {props.marks.waiting && <span className="wait" title="Waiting for outputs to arm" />}
       <div className="cap">
         <span className="ellipsis grow">{props.label}</span>
+        {props.slide?.midiCues && props.slide.midiCues.length > 0 && (
+          <span
+            className="tag"
+            title={`${props.slide.midiCues.length} outgoing MIDI cue(s)`}
+            style={{ fontSize: 9, padding: '1px 4px', lineHeight: '12px', background: 'var(--panel-alt)' }}
+          >
+            MIDI
+          </span>
+        )}
         {props.footer}
       </div>
     </div>

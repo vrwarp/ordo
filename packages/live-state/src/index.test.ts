@@ -18,6 +18,7 @@ import {
   reduceAll,
   safeReduce,
 } from './index.ts';
+import { actionToEvent } from './actions.ts';
 import { expandCues } from '@ordo/domain';
 
 function song(text: string): Presentation {
@@ -372,5 +373,34 @@ describe('guards', () => {
     expect(op.replace(initialState())).toBe(true);
     expect(op.pendingCount).toBe(0);
     expect(errors).toHaveLength(3);
+  });
+});
+
+describe('actionToEvent with ProPresenter navigation actions', () => {
+  it('maps firstSlide and lastSlide within the current item', () => {
+    const s = reduce(initialState(), { k: 'goLive', resolved: fixture() });
+    const live = reduce(s, { k: 'go', cueIndex: 1, at: 10 });
+    // Item 0 has cues 0, 1, 2
+    expect(actionToEvent(live, { id: 'firstSlide' }, 20)).toEqual({ k: 'go', cueIndex: 0, at: 20 });
+    expect(actionToEvent(live, { id: 'lastSlide' }, 20)).toEqual({ k: 'go', cueIndex: 2, at: 20 });
+  });
+
+  it('maps goToItem to the first cue of the target item', () => {
+    const s = reduce(initialState(), { k: 'goLive', resolved: fixture() });
+    // Target item 2 (1-based index) -> song B
+    const ev = actionToEvent(s, { id: 'goToItem', arg: 2 }, 30);
+    expect(ev).toMatchObject({ k: 'go', at: 30 });
+    expect(s.cues[(ev as { cueIndex: number }).cueIndex]!.itemIndex).toBe(1);
+  });
+
+  it('maps goToSlideItem to the exact slide index within the active presentation item', () => {
+    const s = reduce(initialState(), { k: 'goLive', resolved: fixture() });
+    const live = reduce(s, { k: 'go', cueIndex: 0, at: 10 });
+    // Slide 3 of item 0 -> cueIndex 2
+    expect(actionToEvent(live, { id: 'goToSlideItem', arg: 3 }, 40)).toEqual({
+      k: 'go',
+      cueIndex: 2,
+      at: 40,
+    });
   });
 });

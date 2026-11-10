@@ -219,6 +219,76 @@ describe('MIDI learn', () => {
       threshold: 64,
     });
   });
+  it('learns Program Change', () => {
+    const cc = new Map<string, number>();
+    expect(learnFrom({ id: 'go' }, 'X', new Uint8Array([0xc0, 15]), cc)).toMatchObject({
+      kind: 'programChange',
+      number: 15,
+      channel: 1,
+    });
+  });
+});
+
+describe('ProPresenter dynamic velocity and show-control features', () => {
+  it('extracts velocity as action arg when paramSource is velocity', () => {
+    const maps: MidiMapping[] = [
+      {
+        id: '1',
+        kind: 'note',
+        number: 20,
+        threshold: 1,
+        paramSource: 'velocity',
+        action: { id: 'goToSlideItem' },
+      },
+      {
+        id: '2',
+        kind: 'note',
+        number: 19,
+        threshold: 1,
+        paramSource: 'velocity',
+        action: { id: 'goToItem' },
+      },
+    ];
+    const cc = new Map<string, number>();
+    // Note 20, vel 5 -> goToSlideItem 5
+    expect(matchMidi(maps, 'Any', new Uint8Array([0x90, 20, 5]), cc)).toEqual([
+      { id: 'goToSlideItem', arg: 5 },
+    ]);
+    // Note 19, vel 3 -> goToItem 3
+    expect(matchMidi(maps, 'Any', new Uint8Array([0x90, 19, 3]), cc)).toEqual([{ id: 'goToItem', arg: 3 }]);
+    // Note-off or vel 0 yields nothing
+    expect(matchMidi(maps, 'Any', new Uint8Array([0x90, 20, 0]), cc)).toEqual([]);
+  });
+
+  it('handles Program Change matching', () => {
+    const maps: MidiMapping[] = [
+      { id: 'pc1', kind: 'programChange', number: 5, threshold: 0, action: { id: 'next' } },
+      {
+        id: 'pc2',
+        kind: 'programChange',
+        number: 11,
+        threshold: 0,
+        paramSource: 'velocity',
+        action: { id: 'goToItem' },
+      },
+    ];
+    const cc = new Map<string, number>();
+    // Program change 5 on channel 1 -> 'next'
+    expect(matchMidi(maps, 'Any', new Uint8Array([0xc0, 5]), cc)).toEqual([{ id: 'next' }]);
+    // Param source dynamic: Program change 11 -> arg is program number + 1 (12)
+    expect(matchMidi(maps, 'Any', new Uint8Array([0xc0, 11]), cc)).toEqual([{ id: 'goToItem', arg: 12 }]);
+  });
+
+  it('notifies onMessage monitor callback on handled MIDI message', () => {
+    const fired: Action[] = [];
+    const received: { kind: string; number: number; value: number }[] = [];
+    const d = new MidiDriver((a) => fired.push(a));
+    d.onMessage = (m) => received.push({ kind: m.kind, number: m.number, value: m.value });
+    d.setMappings([{ id: 'n', kind: 'note', number: 60, threshold: 1, action: { id: 'next' } }]);
+    d.handle('TestDev', new Uint8Array([0x90, 60, 100]));
+    expect(received).toEqual([{ kind: 'noteOn', number: 60, value: 100 }]);
+    expect(fired).toEqual([{ id: 'next' }]);
+  });
 });
 
 describe('defaultDeckPages', () => {

@@ -123,6 +123,8 @@ export type PptxNativePayload = {
   /** The uploaded file name (the title comes from it). */
   name: string;
   options?: PptxImportOptions;
+  /** Pre-parsed `PptxClientScene` JSON stored by SHA-256 when parsed on the client. */
+  sceneHash?: string;
   done?: PptxNativeProgress;
 };
 

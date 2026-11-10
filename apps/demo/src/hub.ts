@@ -1,6 +1,7 @@
 import {
   DEFAULT_THEME,
   type Font,
+  type ImageObject,
   type Media,
   newId,
   type Output,
@@ -11,7 +12,14 @@ import {
   type Theme,
   Theme as ThemeSchema,
 } from '@ordo/domain';
-import { importPro7, parseSongFile, PRO7_MEDIA_PREFIX, readZip, remapMediaIds } from '@ordo/importers';
+import {
+  importPptxClient,
+  importPro7,
+  parseSongFile,
+  PRO7_MEDIA_PREFIX,
+  readZip,
+  remapMediaIds,
+} from '@ordo/importers';
 import { initialState } from '@ordo/live-state';
 import { clearAll, deleteFile, getDoc, getFile, putDoc, putFile } from './store.ts';
 import {
@@ -302,6 +310,270 @@ function stripPlaceholders(p: Presentation): void {
     }
 }
 
+/** Fallback media for the browser demo when server-side LibreOffice rendering is needed. */
+async function ensureDemoFallbackMedia(l: Lib): Promise<{ full: Media; overlay: Media; nextLib: Lib }> {
+  let full = l.media.find((m) => m.name === 'Demo Fallback Slide');
+  let overlay = l.media.find((m) => m.name === 'Demo Fallback Object');
+  let mediaList = l.media;
+
+  if (!full) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
+  <rect width="1920" height="1080" fill="#0f172a"/>
+  <rect x="40" y="40" width="1840" height="1000" rx="24" fill="#1e293b" stroke="#334155" stroke-width="4" stroke-dasharray="16 12"/>
+  <g transform="translate(960, 420)">
+    <path d="M-40 -70 L10 -70 L40 -40 L40 70 L-40 70 Z" fill="#334155" stroke="#94a3b8" stroke-width="6" stroke-linejoin="round"/>
+    <path d="M10 -70 L10 -40 L40 -40" fill="none" stroke="#94a3b8" stroke-width="6" stroke-linejoin="round"/>
+    <line x1="-20" y1="-15" x2="20" y2="-15" stroke="#64748b" stroke-width="5" stroke-linecap="round"/>
+    <line x1="-20" y1="15" x2="20" y2="15" stroke="#64748b" stroke-width="5" stroke-linecap="round"/>
+    <line x1="-20" y1="40" x2="10" y2="40" stroke="#64748b" stroke-width="5" stroke-linecap="round"/>
+  </g>
+  <text x="960" y="580" text-anchor="middle" fill="#f8fafc" font-family="system-ui, -apple-system, sans-serif" font-size="44" font-weight="600">Rendering Not Available in Browser Demo</text>
+  <text x="960" y="640" text-anchor="middle" fill="#94a3b8" font-family="system-ui, -apple-system, sans-serif" font-size="28">This element or slide picture requires LibreOffice on the Ordo Hub server.</text>
+  <text x="960" y="690" text-anchor="middle" fill="#64748b" font-family="system-ui, -apple-system, sans-serif" font-size="22">Native editable slides remain fully supported and editable in this demo.</text>
+</svg>`;
+    const blob = new Blob([svg], { type: 'image/svg+xml' });
+    full = await mediaFromBlob(blob, 'Demo Fallback Slide.svg', {
+      isBackground: true,
+      tags: ['demo-fallback'],
+    });
+    full.width ??= 1920;
+    full.height ??= 1080;
+    mediaList = [...mediaList, full];
+  }
+
+  if (!overlay) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
+  <rect width="800" height="600" rx="16" fill="rgba(30, 41, 59, 0.9)" stroke="#475569" stroke-width="3" stroke-dasharray="8 6"/>
+  <text x="400" y="280" text-anchor="middle" fill="#f1f5f9" font-family="system-ui, -apple-system, sans-serif" font-size="32" font-weight="600">Object Not Available in Demo</text>
+  <text x="400" y="330" text-anchor="middle" fill="#94a3b8" font-family="system-ui, -apple-system, sans-serif" font-size="20">Rendered by LibreOffice on the Ordo Hub server</text>
+</svg>`;
+    const blob = new Blob([svg], { type: 'image/svg+xml' });
+    overlay = await mediaFromBlob(blob, 'Demo Fallback Object.svg', { tags: ['demo-fallback'] });
+    overlay.width ??= 800;
+    overlay.height ??= 600;
+    overlay.hasAlpha = true;
+    mediaList = [...mediaList, overlay];
+  }
+
+  return { full, overlay, nextLib: { ...l, media: mediaList } };
+}
+
+function slideObjectsDigest(objects: readonly unknown[]): string {
+  const s = JSON.stringify(objects);
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193 ^ 0x5bd1e995;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193);
+    h2 = Math.imul(h2 ^ c, 0x01000193) ^ (h2 >>> 13);
+  }
+  return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
+}
+
+/** Import PowerPoint or PDF in the browser demo. */
+async function importDocumentUpload(file: File, form: FormData): Promise<Job> {
+  let l = await library();
+  const fallbacks = await ensureDemoFallbackMedia(l);
+  l = fallbacks.nextLib;
+
+  const isPdf = /\.pdf$/i.test(file.name);
+  if (isPdf) {
+    const hash = await sha256(file);
+    await putFile(hash, file);
+    const p: Presentation = {
+      id: newId(),
+      rev: 1,
+      title: file.name.replace(/\.pdf$/i, '').slice(0, 200) || 'PDF',
+      kind: 'slides',
+      meta: { tags: [] },
+      sections: [
+        {
+          id: newId(),
+          label: 'Slides',
+          short: '',
+          slides: [
+            {
+              id: newId(),
+              objects: [],
+              imported: {
+                fileId: hash,
+                page: 1,
+                imageMediaId: fallbacks.full.id,
+                textBoxes: [],
+                textAligned: true,
+              },
+            },
+          ],
+        },
+      ],
+      arrangements: [],
+      source: { kind: 'pdf', fileId: hash },
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      archived: false,
+    };
+    p.arrangements = [{ id: newId(), name: 'Default', sectionIds: p.sections.map((s) => s.id) }];
+    const saved = PresentationSchema.parse(p);
+    await save({ ...l, presentations: upsert(l.presentations, saved) });
+    return saveJob(
+      job('document', { presentationId: saved.id }, [
+        `imported PDF ${file.name} (page rendering uses fallback image in demo)`,
+      ]),
+    );
+  }
+
+  // PowerPoint import:
+  const renderer = form.get('renderer');
+  const extendBackgrounds = form.get('extendBackgrounds') !== '0';
+  const parsed = await importPptxClient(file, file.name, { extendBackgrounds });
+
+  // Store uploaded PPTX file by hash
+  await putFile(parsed.deckHash, file);
+
+  if (renderer === 'libreoffice' || renderer === 'pptx-preview') {
+    let page = 0;
+    const p: Presentation = {
+      id: newId(),
+      rev: 1,
+      title: parsed.presentation.title,
+      kind: 'slides',
+      meta: { tags: [] },
+      sections: parsed.presentation.sections.map((sec) => ({
+        ...sec,
+        slides: sec.slides.map((sl) => ({
+          id: sl.id,
+          objects: [],
+          ...(sl.notes ? { notes: sl.notes } : {}),
+          ...(sl.hidden ? { hidden: true } : {}),
+          imported: {
+            fileId: parsed.deckHash,
+            page: ++page,
+            imageMediaId: fallbacks.full.id,
+            textBoxes: [],
+            textAligned: true,
+          },
+        })),
+      })),
+      arrangements: parsed.presentation.arrangements,
+      source: { kind: 'pptx', fileId: parsed.deckHash, renderer: 'libreoffice' },
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      archived: false,
+    };
+    const saved = PresentationSchema.parse(p);
+    await save({ ...l, presentations: upsert(l.presentations, saved) });
+    return saveJob(
+      job('document', { presentationId: saved.id }, [
+        `imported PowerPoint ${file.name} as pictures (page rendering uses fallback image in demo)`,
+      ]),
+    );
+  }
+
+  // Store geometry files
+  for (const g of parsed.geoms) {
+    await putFile(g.hash, new Blob([g.bytes as Uint8Array<ArrayBuffer>], { type: 'application/json' }));
+  }
+
+  // Store pictures and remap presentation media IDs
+  const mediaMap = new Map<string, string>();
+  let mediaList = l.media;
+  for (const [, pic] of parsed.pictures) {
+    const blob = new Blob([pic.bytes as Uint8Array<ArrayBuffer>], { type: pic.mime });
+    const item = await mediaFromBlob(blob, pic.name, {
+      isBackground: pic.isBackground,
+      tags: ['pptx'],
+    });
+    if (pic.width) item.width ??= pic.width;
+    if (pic.height) item.height ??= pic.height;
+    if (pic.hasAlpha) item.hasAlpha = true;
+    const existing = mediaList.find((x) => x.original.hash === item.original.hash);
+    const chosenId = existing?.id ?? item.id;
+    mediaMap.set(pic.key, chosenId);
+    if (!existing) mediaList = [...mediaList, item];
+  }
+
+  // Apply media mapping across presentation (backgroundMediaId, slide backgrounds, image objects)
+  parsed.presentation = remapMediaIds(parsed.presentation, mediaMap);
+
+  // If there are loSlides, apply demo fallback images to those slides
+  if (parsed.loSlides.length > 0) {
+    for (const lo of parsed.loSlides) {
+      for (const sec of parsed.presentation.sections) {
+        const sl = sec.slides.find((s) => s.id === lo.slideId);
+        if (!sl) continue;
+        if (lo.class === 'picture') {
+          sl.imported = {
+            fileId: parsed.deckHash,
+            page: lo.index + 1,
+            imageMediaId: fallbacks.full.id,
+            textBoxes: [],
+            textAligned: true,
+          };
+          if (sl.pptx) delete sl.pptx.pending;
+        } else if (lo.class === 'hybrid' && lo.art) {
+          const artBox = { ...lo.art.box, rotation: 0 };
+          const artImg: ImageObject = {
+            id: newId(),
+            type: 'image',
+            box: artBox,
+            mediaId: fallbacks.overlay.id,
+            fit: 'contain',
+            opacity: 1,
+            radius: 0,
+            origin: { src: 'pptx', role: 'art' },
+          };
+          const replaces = new Set(lo.art.replaces);
+          sl.objects = sl.objects.filter((o) => !replaces.has(o.id));
+          const beforeIdx = lo.art.before ? sl.objects.findIndex((o) => o.id === lo.art!.before) : -1;
+          if (beforeIdx >= 0) sl.objects.splice(beforeIdx, 0, artImg);
+          else sl.objects.push(artImg);
+          if (sl.pptx) delete sl.pptx.pending;
+        }
+        if (lo.metafileObjects?.length && lo.class !== 'picture') {
+          for (const mo of lo.metafileObjects) {
+            const mfObj: ImageObject = { ...mo.object, mediaId: fallbacks.overlay.id };
+            const beforeIdx = mo.before ? sl.objects.findIndex((o) => o.id === mo.before) : -1;
+            if (beforeIdx >= 0) sl.objects.splice(beforeIdx, 0, mfObj);
+            else sl.objects.push(mfObj);
+          }
+          if (sl.pptx) delete sl.pptx.pending;
+        }
+      }
+    }
+  }
+
+  for (const sec of parsed.presentation.sections) {
+    for (const sl of sec.slides) {
+      if (sl.pptx) {
+        sl.pptx.digest = slideObjectsDigest(sl.objects.filter((o) => o.origin));
+      }
+    }
+  }
+
+  // Save presentation
+  const savedPres = PresentationSchema.parse({
+    ...parsed.presentation,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  });
+  l = { ...l, media: mediaList, presentations: upsert(l.presentations, savedPres) };
+  await save(l);
+
+  const jobResult = {
+    presentationId: savedPres.id,
+    slides: parsed.classes.length,
+    native: parsed.classes.filter((c) => c === 'native').length,
+    hybrid: parsed.classes.filter((c) => c === 'hybrid').length,
+    picture: parsed.classes.filter((c) => c === 'picture').length,
+    compact: parsed.compact,
+    pending: 0,
+    missingFonts: parsed.missingFonts,
+    notes: ['Imported natively in browser demo', ...parsed.notes],
+  };
+
+  return saveJob(job('pptx-native', jobResult, parsed.log));
+}
+
 function outputByToken(l: Lib, token: string | null) {
   return l.settings.outputs.find((o) => o.token && o.token === token);
 }
@@ -527,6 +799,53 @@ export async function handle(req: Request): Promise<Res> {
         return json(p);
       }
       if (m === 'POST' && seg[4] === 'make-editable') return notInDemo('Making an imported slide editable');
+      if (seg[2] === 'pptx-reference' && m === 'POST') {
+        const p = l.presentations.find((x) => x.id === seg[1]);
+        if (!p) return fail(404, 'not_found', 'No such presentation');
+        const fallbacks = await ensureDemoFallbackMedia(l);
+        const body = (await req.json().catch(() => ({}))) as { showPicture?: string[] };
+        for (const sec of p.sections) {
+          for (const sl of sec.slides) {
+            if (!sl.pptx) continue;
+            sl.pptx.refMediaId = fallbacks.full.id;
+            if (body.showPicture && (body.showPicture.length === 0 || body.showPicture.includes(sl.id))) {
+              sl.pptx.show = 'picture';
+            }
+          }
+        }
+        p.rev = (p.rev ?? 0) + 1;
+        p.updatedAt = nowIso();
+        await save({ ...fallbacks.nextLib, presentations: upsert(fallbacks.nextLib.presentations, p) });
+        return json(
+          await saveJob(job('pptx-reference', { presentationId: p.id }, ['Show original in demo'])),
+          202,
+        );
+      }
+      if (seg[2] === 'pptx-reimport') {
+        const p = l.presentations.find((x) => x.id === seg[1]);
+        if (!p) return fail(404, 'not_found', 'No such presentation');
+        if (m === 'GET') {
+          return json({
+            presentationId: p.id,
+            fileId: p.source?.fileId ?? '',
+            slides: p.sections.flatMap((s) =>
+              s.slides.map((sl, i) => ({
+                slideId: sl.id,
+                number: i + 1,
+                kind: sl.pptx ? 'native' : 'other',
+                action: 'regenerate',
+                userObjects: sl.objects.filter((o) => !o.origin).length,
+              })),
+            ),
+          });
+        }
+        if (m === 'POST') {
+          return json(
+            await saveJob(job('pptx-reimport', { presentationId: p.id, rev: p.rev }, ['Re-import in demo'])),
+            202,
+          );
+        }
+      }
     }
 
     if (seg[0] === 'playlists') {
@@ -710,7 +1029,12 @@ export async function handle(req: Request): Promise<Res> {
       if (!(f instanceof File)) return fail(400, 'bad_request', 'No file');
       return json(await importPro7Upload(f), 202);
     }
-    if (path === '/import/document') return notInDemo('Importing PowerPoint and PDF');
+    if (path === '/import/document' && m === 'POST') {
+      const form = await req.formData();
+      const f = form.get('file');
+      if (!(f instanceof File)) return fail(400, 'bad_request', 'No file');
+      return json(await importDocumentUpload(f, form), 202);
+    }
 
     if (seg[0] === 'jobs') {
       const jobs = (await getDoc<Job[]>('jobs')) ?? [];

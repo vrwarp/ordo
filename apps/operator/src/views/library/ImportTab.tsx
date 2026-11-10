@@ -1,11 +1,13 @@
 import { api, upload } from '@ordo/client';
 import type { Presentation } from '@ordo/domain';
+import { importPptxClient } from '@ordo/importers';
 import type { Job } from '@ordo/protocol';
 import { useEffect, useState } from 'react';
 import {
   documentFields,
   importJobTitle,
   isImportJob,
+  isPptxName,
   PPTX_NATIVE_JOB,
   type PptxImportChoice,
   readImportChoice,
@@ -154,7 +156,7 @@ export function ImportTab() {
   }, [jobMap]);
   const started = (job: Job, title: string) => setJobs((j) => [{ id: job.id, kind: job.kind, title }, ...j]);
 
-  const pro7Zip = async (files: File[]) => {
+  const pro7Upload = async (files: File[]) => {
     for (const f of files) {
       const fd = new FormData();
       fd.append('file', f, f.name);
@@ -206,10 +208,31 @@ export function ImportTab() {
     for (const f of files) {
       const fd = new FormData();
       for (const [k, v] of documentFields(f.name, choice)) fd.append(k, v);
-      fd.append('file', f, f.name);
       try {
         setProgress(0);
-        started(await upload<Job>('/import/document', fd, setProgress), f.name);
+        const clientNative = isPptxName(f.name) && choice.mode === 'native';
+        if (clientNative) {
+          const parsed = await importPptxClient(
+            f,
+            f.name,
+            { extendBackgrounds: choice.extendBackgrounds },
+            (pct) => setProgress(pct * 0.5),
+          );
+          fd.append(
+            'clientScene',
+            new Blob([JSON.stringify(parsed.clientScene)], { type: 'application/json' }),
+            'scene.json',
+          );
+        }
+        fd.append('file', f, f.name);
+        started(
+          await upload<Job>(
+            '/import/document',
+            fd,
+            clientNative ? (pct) => setProgress(0.5 + pct * 0.5) : setProgress,
+          ),
+          f.name,
+        );
       } catch (e) {
         toast(`${f.name}: ${errorText(e)}`, 'error');
       } finally {
@@ -225,26 +248,26 @@ export function ImportTab() {
           <div className="card col">
             <h3>ProPresenter 7</h3>
             <span className="muted small">
-              Zip the ProPresenter library folder (or exported .pro files and playlists) and drop it here.
-              Media found alongside is uploaded. Builds, macros, timers, looks and stage layouts are skipped
-              and listed in the log.
+              Drop individual .pro presentations, playlists, bundles or a .zip of the ProPresenter library
+              here. Media found alongside is uploaded. Builds, macros, timers, looks and stage layouts are
+              skipped and listed in the log.
             </span>
             <DropZone
-              accept=".zip"
-              touchAccept=".zip,application/zip"
-              label="Drop a .zip of the ProPresenter library"
-              touchLabel="Choose a .zip of the ProPresenter library"
-              onFiles={(f) => void pro7Zip(f)}
+              accept=".pro,.proplaylist,.probundle,.zip,application/zip"
+              touchAccept=".pro,.proplaylist,.probundle,.zip,application/zip"
+              label="Drop ProPresenter files or a library .zip"
+              touchLabel="Choose ProPresenter files or a library .zip"
+              onFiles={(f) => void pro7Upload(f)}
             />
             <div className="row">
               <input
                 className="grow"
-                placeholder="…or a folder path on the NAS, e.g. /import/ProPresenter"
+                placeholder="…or a folder or file path on the NAS, e.g. /import/ProPresenter"
                 value={nasPath}
                 onChange={(e) => setNasPath(e.target.value)}
               />
               <button type="button" disabled={!nasPath.trim()} onClick={() => void pro7Path()}>
-                Import folder
+                Import path
               </button>
             </div>
           </div>

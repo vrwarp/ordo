@@ -151,7 +151,7 @@ export function ColorField(props: {
 export function Select<T extends string>(props: {
   label?: ReactNode;
   value: T;
-  options: { value: T; label: string }[] | readonly T[];
+  options: { value: T; label: string }[] | readonly { value: T; label: string }[] | readonly T[];
   onChange: (v: T) => void;
   disabled?: boolean;
   style?: React.CSSProperties;

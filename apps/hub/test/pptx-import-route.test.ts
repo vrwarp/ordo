@@ -7,14 +7,16 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PptxRenderer } from '@ordo/domain';
+import { importPptxClient } from '@ordo/importers';
 import type { Job } from '@ordo/protocol';
 import { buildDeck, solid, sp } from '@ordo/pptx-scene/test-util.ts';
 import JSZip from 'jszip';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { DocPayload } from '../src/imports.ts';
-import type { JobQueue } from '../src/jobs.ts';
+import type { JobCtx, JobQueue } from '../src/jobs.ts';
 import { PptxImports } from '../src/pptx/index.ts';
-import type { PptxDeps, PptxNativePayload } from '../src/pptx/shared.ts';
+import { nativeJob } from '../src/pptx/nativeJob.ts';
+import type { PptxDeps, PptxNativePayload, PptxNativeResult } from '../src/pptx/shared.ts';
 import { documentImportForm } from '../src/routes.ts';
 import { fixtures } from './fixtures.ts';
 import { type Client, EDIT_PIN, login, startHub, type TestHub, tempDir } from './helpers.ts';
@@ -125,6 +127,50 @@ describe('POST /import/document', () => {
     }
     expect(hub.jobs.list().length).toBe(jobs);
     expect(files()).toBe(before);
+  });
+
+  it('accepts a client-parsed scene file and builds version 1 without running pptx-scene on the hub pool', async () => {
+    const parsed = await importPptxClient(deck, 'Client Parsed.pptx');
+    const fd = new FormData();
+    fd.append('renderer', 'native');
+    fd.append(
+      'clientScene',
+      new Blob([JSON.stringify(parsed.clientScene)], { type: 'application/json' }),
+      'scene.json',
+    );
+    fd.append('file', new Blob([deck]), 'Client Parsed.pptx');
+    const { job, payload } = await queued(await ed.fetch('/import/document', { method: 'POST', body: fd }));
+    expect(job.kind).toBe('pptx-native');
+    const p = payload as PptxNativePayload;
+    expect(p.sceneHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(hub.lib.getFile(p.sceneHash!)).toBeTruthy();
+
+    // Run nativeJob with a pool that throws if pptx-scene is ever called on the hub
+    let poolCalled = false;
+    const noScenePool = {
+      run: async () => {
+        poolCalled = true;
+        throw new Error('pptx-scene should not run on the hub when sceneHash is present');
+      },
+    };
+    let cur = p;
+    const handler = nativeJob(hub.imports.pptx.deps, { pool: noScenePool });
+    const out = (await handler({
+      id: 'client-scene-job',
+      payload: cur,
+      signal: new AbortController().signal,
+      progress: () => undefined,
+      log: () => undefined,
+      setPayload: (next) => {
+        cur = next;
+      },
+    } as JobCtx<PptxNativePayload>)) as PptxNativeResult;
+
+    expect(poolCalled).toBe(false);
+    expect(out.slides).toBe(1);
+    expect(out.native).toBe(1);
+    const saved = hub.lib.presentations.get(out.presentationId);
+    expect(saved?.title).toBe('Client Parsed');
   });
 
   it('does not widen the stored renderer: native lives only in the form and the payload', () => {

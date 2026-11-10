@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@ordo/domain": "workspace:*",
+    "@ordo/pptx-scene": "workspace:*",
     "protobufjs": "^8.8.1",
     "fast-xml-parser": "^5.11.2",
     "jszip": "^3.10.2"

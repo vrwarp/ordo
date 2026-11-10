@@ -1,4 +1,10 @@
-import { type ActionId, type MidiMapping, newId } from '@ordo/domain';
+import {
+  type ActionId,
+  type MidiMapping,
+  type MidiParamSource,
+  PROPRESENTER_MIDI_MAPPINGS,
+  newId,
+} from '@ordo/domain';
 import { useState } from 'react';
 import { Select } from '../../components/fields.tsx';
 import { surfaces, useSurfaces } from '../../services/surfaces.ts';
@@ -6,10 +12,16 @@ import { toast } from '../../state/toasts.ts';
 import { ACTION_OPTIONS, ACTIONS_WITH_ARG, parseArg } from './actions.ts';
 import { SaveBar, useSettingsDraft } from './useSettingsDraft.tsx';
 
-/** MIDI inputs and mappings with Learn (prd/07). */
+const PARAM_SOURCE_OPTIONS: { value: MidiParamSource; label: string }[] = [
+  { value: 'static', label: 'Static (threshold)' },
+  { value: 'velocity', label: 'Velocity as arg (ProPresenter)' },
+  { value: 'ccValue', label: 'CC value as arg' },
+];
+
+/** MIDI inputs, outputs and mappings with ProPresenter show-control parity (prd/07). */
 export function MidiPage() {
   const { draft, setDraft, save, revert, saving, dirty } = useSettingsDraft('surfaces');
-  const { midiReady, midiInputs } = useSurfaces();
+  const { midiReady, midiInputs, midiOutputs, lastMidiMessage } = useSurfaces();
   const [learning, setLearning] = useState<string | null>(null);
   const [newAction, setNewAction] = useState<ActionId>('next');
   const maps = draft.midi;
@@ -69,9 +81,15 @@ export function MidiPage() {
               Disable MIDI
             </button>
             <button type="button" className="small" onClick={() => surfaces()?.refreshMidi()}>
-              Refresh inputs
+              Refresh devices
             </button>
           </>
+        )}
+        {lastMidiMessage && (
+          <span className="tag" style={{ marginLeft: 'auto', background: 'var(--panel-alt)' }}>
+            <b>MIDI In:</b> Ch {lastMidiMessage.channel} · {lastMidiMessage.kind} #{lastMidiMessage.number} ·
+            val {lastMidiMessage.value}
+          </span>
         )}
       </div>
       {!midiReady && (
@@ -80,13 +98,31 @@ export function MidiPage() {
           <b>Enable Web MIDI</b> above to connect your pedals, keyboards, or controllers.
         </div>
       )}
-      <div className="row wrap">
-        {midiInputs.map((i) => (
-          <span key={i.id} className="tag">
-            {i.name}
-          </span>
-        ))}
-        {!midiInputs.length && <span className="muted small">No MIDI inputs found.</span>}
+      <div className="col" style={{ gap: 4 }}>
+        <span className="muted small">
+          <b>Inputs (DAW / Pedals):</b>
+        </span>
+        <div className="row wrap">
+          {midiInputs.map((i) => (
+            <span key={i.id} className="tag">
+              {i.name}
+            </span>
+          ))}
+          {!midiInputs.length && <span className="muted small">No MIDI inputs found.</span>}
+        </div>
+      </div>
+      <div className="col" style={{ gap: 4 }}>
+        <span className="muted small">
+          <b>Outputs (Lighting / Switchers / DAW):</b>
+        </span>
+        <div className="row wrap">
+          {midiOutputs.map((o) => (
+            <span key={o.id} className="tag">
+              {o.name}
+            </span>
+          ))}
+          {!midiOutputs.length && <span className="muted small">No MIDI outputs found.</span>}
+        </div>
       </div>
       <table className="list">
         <thead>
@@ -95,120 +131,135 @@ export function MidiPage() {
             <th>Kind</th>
             <th>Number</th>
             <th>Channel</th>
+            <th>Parameter</th>
             <th>Threshold</th>
             <th>Action</th>
             <th />
           </tr>
         </thead>
         <tbody>
-          {maps.map((m) => (
-            <tr key={m.id}>
-              <td>
-                <select
-                  value={m.deviceName ?? ''}
-                  onChange={(e) => setMap(m.id, { deviceName: e.target.value || undefined })}
-                >
-                  <option value="">Any device</option>
-                  {[
-                    ...new Set([...midiInputs.map((i) => i.name), ...(m.deviceName ? [m.deviceName] : [])]),
-                  ].map((n) => (
-                    <option key={n} value={n}>
-                      {n}
-                    </option>
-                  ))}
-                </select>
-              </td>
-              <td>
-                <Select
-                  value={m.kind}
-                  options={['note', 'cc'] as const}
-                  onChange={(kind) => setMap(m.id, { kind })}
-                />
-              </td>
-              <td>
-                <input
-                  type="number"
-                  min={0}
-                  max={127}
-                  style={{ width: 64 }}
-                  value={m.number}
-                  onChange={(e) =>
-                    setMap(m.id, { number: Math.max(0, Math.min(127, Number(e.target.value))) })
-                  }
-                />
-              </td>
-              <td>
-                <select
-                  value={m.channel ?? ''}
-                  onChange={(e) =>
-                    setMap(m.id, { channel: e.target.value ? Number(e.target.value) : undefined })
-                  }
-                >
-                  <option value="">Any</option>
-                  {Array.from({ length: 16 }, (_, i) => (
-                    // biome-ignore lint/suspicious/noArrayIndexKey: positional list
-                    <option key={i} value={i + 1}>
-                      {i + 1}
-                    </option>
-                  ))}
-                </select>
-              </td>
-              <td>
-                <input
-                  type="number"
-                  min={0}
-                  max={127}
-                  style={{ width: 64 }}
-                  value={m.threshold}
-                  onChange={(e) =>
-                    setMap(m.id, { threshold: Math.max(0, Math.min(127, Number(e.target.value))) })
-                  }
-                />
-              </td>
-              <td>
-                <div className="row">
+          {maps.map((m) => {
+            const isDynamic = m.paramSource === 'velocity' || m.paramSource === 'ccValue';
+            return (
+              <tr key={m.id}>
+                <td>
+                  <select
+                    value={m.deviceName ?? ''}
+                    onChange={(e) => setMap(m.id, { deviceName: e.target.value || undefined })}
+                  >
+                    <option value="">Any device</option>
+                    {[
+                      ...new Set([...midiInputs.map((i) => i.name), ...(m.deviceName ? [m.deviceName] : [])]),
+                    ].map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+                <td>
                   <Select
-                    value={m.action.id}
-                    options={ACTION_OPTIONS}
-                    onChange={(id) => setMap(m.id, { action: { id } })}
+                    value={m.kind}
+                    options={['note', 'cc', 'programChange'] as const}
+                    onChange={(kind) => setMap(m.id, { kind })}
                   />
-                  {ACTIONS_WITH_ARG.has(m.action.id) && (
+                </td>
+                <td>
+                  <input
+                    type="number"
+                    min={0}
+                    max={127}
+                    style={{ width: 64 }}
+                    value={m.number}
+                    onChange={(e) =>
+                      setMap(m.id, { number: Math.max(0, Math.min(127, Number(e.target.value))) })
+                    }
+                  />
+                </td>
+                <td>
+                  <select
+                    value={m.channel ?? ''}
+                    onChange={(e) =>
+                      setMap(m.id, { channel: e.target.value ? Number(e.target.value) : undefined })
+                    }
+                  >
+                    <option value="">Any</option>
+                    {Array.from({ length: 16 }, (_, i) => (
+                      // biome-ignore lint/suspicious/noArrayIndexKey: positional list
+                      <option key={i} value={i + 1}>
+                        {i + 1}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+                <td>
+                  <Select
+                    value={m.paramSource ?? 'static'}
+                    options={PARAM_SOURCE_OPTIONS}
+                    onChange={(paramSource) => setMap(m.id, { paramSource: paramSource as MidiParamSource })}
+                  />
+                </td>
+                <td>
+                  {isDynamic ? (
+                    <span className="muted small">dyn (val)</span>
+                  ) : (
                     <input
-                      style={{ width: 60 }}
-                      defaultValue={m.action.arg ?? ''}
-                      onBlur={(e) =>
-                        setMap(m.id, {
-                          action: { id: m.action.id, arg: parseArg(m.action.id, e.target.value) },
-                        })
+                      type="number"
+                      min={0}
+                      max={127}
+                      style={{ width: 64 }}
+                      value={m.threshold}
+                      onChange={(e) =>
+                        setMap(m.id, { threshold: Math.max(0, Math.min(127, Number(e.target.value))) })
                       }
                     />
                   )}
-                </div>
-              </td>
-              <td>
-                <div className="row">
-                  <button
-                    type="button"
-                    className={`small ${learning === m.id ? 'on' : ''}`}
-                    disabled={!midiReady || learning !== null}
-                    onClick={() => void learn(m)}
-                  >
-                    {learning === m.id ? 'Listening…' : 'Learn'}
-                  </button>
-                  <button
-                    type="button"
-                    className="small ghost"
-                    onClick={() => setMaps(maps.filter((x) => x.id !== m.id))}
-                  >
-                    ✕
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))}
+                </td>
+                <td>
+                  <div className="row">
+                    <Select
+                      value={m.action.id}
+                      options={ACTION_OPTIONS}
+                      onChange={(id) => setMap(m.id, { action: { id } })}
+                    />
+                    {ACTIONS_WITH_ARG.has(m.action.id) && !isDynamic && (
+                      <input
+                        style={{ width: 60 }}
+                        defaultValue={m.action.arg ?? ''}
+                        onBlur={(e) =>
+                          setMap(m.id, {
+                            action: { id: m.action.id, arg: parseArg(m.action.id, e.target.value) },
+                          })
+                        }
+                      />
+                    )}
+                  </div>
+                </td>
+                <td>
+                  <div className="row">
+                    <button
+                      type="button"
+                      className={`small ${learning === m.id ? 'on' : ''}`}
+                      disabled={!midiReady || learning !== null}
+                      onClick={() => void learn(m)}
+                    >
+                      {learning === m.id ? 'Listening…' : 'Learn'}
+                    </button>
+                    <button
+                      type="button"
+                      className="small ghost"
+                      onClick={() => setMaps(maps.filter((x) => x.id !== m.id))}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
-      <div className="row">
+      <div className="row wrap" style={{ gap: 8 }}>
         <Select value={newAction} options={ACTION_OPTIONS} onChange={setNewAction} />
         <button
           type="button"
@@ -228,6 +279,30 @@ export function MidiPage() {
           }
         >
           Add manually
+        </button>
+        <span style={{ flex: 1 }} />
+        <button
+          type="button"
+          className="small"
+          onClick={() => {
+            setMaps(PROPRESENTER_MIDI_MAPPINGS.map((p) => ({ ...p, id: newId() })));
+            toast('Loaded ProPresenter 7 standard layout.', 'ok');
+          }}
+        >
+          Load ProPresenter Map
+        </button>
+        <button
+          type="button"
+          className="small"
+          onClick={() => {
+            setMaps([
+              { id: newId(), kind: 'note', number: 60, threshold: 1, action: { id: 'next' } },
+              { id: newId(), kind: 'note', number: 62, threshold: 1, action: { id: 'prev' } },
+            ]);
+            toast('Loaded pedal defaults (notes 60 & 62).', 'info');
+          }}
+        >
+          Load Pedal Defaults
         </button>
       </div>
       <SaveBar dirty={dirty} saving={saving} onSave={() => void save()} onRevert={revert} />

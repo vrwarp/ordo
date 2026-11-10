@@ -494,6 +494,20 @@ export const SlidePptx = z.object({
 });
 export type SlidePptx = z.infer<typeof SlidePptx>;
 
+export const MidiCueType = z.enum(['noteOn', 'noteOff', 'cc', 'programChange']);
+export type MidiCueType = z.infer<typeof MidiCueType>;
+
+export const MidiCue = z.object({
+  id: Id,
+  deviceName: z.string().max(500).optional(),
+  channel: z.number().int().min(1).max(16).default(1),
+  type: MidiCueType.default('noteOn'),
+  number: z.number().int().min(0).max(127).default(0),
+  value: z.number().int().min(0).max(127).default(127),
+  delayMs: z.number().int().min(0).max(60_000).optional(),
+});
+export type MidiCue = z.infer<typeof MidiCue>;
+
 export const Slide = z.object({
   id: Id,
   objects: z.array(SlideObject).max(1000).default([]),
@@ -531,6 +545,8 @@ export const Slide = z.object({
   scripture: ScriptureSlideSource.optional(),
   /** The slide's own sound (design/27 §8); it can play on across `slides` shown slides. */
   audio: SlideSound.optional(),
+  /** Outgoing MIDI cues to fire when this slide goes live. */
+  midiCues: z.array(MidiCue).max(32).optional(),
 });
 export type Slide = z.infer<typeof Slide>;
 
@@ -699,10 +715,14 @@ export const ActionId = z.enum([
   'go',
   'next',
   'prev',
+  'firstSlide',
+  'lastSlide',
   'nextItem',
   'prevItem',
   'goToSection',
   'goToSlide',
+  'goToItem',
+  'goToSlideItem',
   'clearSlide',
   'clearAll',
   'clearLowerThird',
@@ -889,14 +909,18 @@ export const StreamDeckPage = z.object({
 });
 export type StreamDeckPage = z.infer<typeof StreamDeckPage>;
 
+export const MidiParamSource = z.enum(['static', 'velocity', 'ccValue']).default('static');
+export type MidiParamSource = z.infer<typeof MidiParamSource>;
+
 export const MidiMapping = z.object({
   id: Id,
   deviceName: z.string().max(500).optional(),
-  kind: z.enum(['note', 'cc']),
+  kind: z.enum(['note', 'cc', 'programChange']),
   number: z.number().int().min(0).max(127),
   channel: z.number().int().min(1).max(16).optional(),
   threshold: z.number().int().min(0).max(127).default(64),
   action: z.object({ id: ActionId, arg: ActionArg.optional() }),
+  paramSource: MidiParamSource.optional(),
 });
 export type MidiMapping = z.infer<typeof MidiMapping>;
 

@@ -136,7 +136,7 @@ export type GoogleFontFamily = { family: string; category?: string; variants?: s
 /** POST /media (multipart field "file", optional fields name, isBackground) -> Media */
 /** POST /fonts/upload (multipart "file") -> Font[] */
 /** POST /fonts/google { family } -> Job */
-/** POST /import/pro7 (multipart zip "file", or JSON { path }) -> Job */
+/** POST /import/pro7 (multipart "file" .pro/.probundle/.proplaylist/.zip, or JSON { path }) -> Job */
 /** POST /import/songselect (multipart "file" or JSON { text, title? }) -> Presentation */
 /**
  * POST /import/document (multipart pptx/pdf "file"; optional fields "renderer" native|libreoffice|pptx-preview,
