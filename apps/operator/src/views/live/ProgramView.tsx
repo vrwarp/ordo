@@ -105,31 +105,29 @@ export function ProgramView() {
       {list.map((o) => {
         const h = health[o.id];
         const p = program[o.id];
-        const look = state.resolved?.looks?.find((l) => l.id === o.lookId) ?? looks.find((l) => l.id === o.lookId);
+        const look =
+          state.resolved?.looks?.find((l) => l.id === o.lookId) ?? looks.find((l) => l.id === o.lookId);
         return (
           <div key={o.id} className="pv" title={dotTitle(h, o.name)}>
             <PvVideo stream={p?.stream} />
-            {!p?.stream && (
-              <>
-                {presentation && slide ? (
-                  <PvLiveThumb
-                    look={look}
-                    presentation={presentation}
-                    slide={slide}
-                    next={nextSlide}
-                    media={media}
-                  />
-                ) : (
-                  <div className="center muted small" style={{ position: 'absolute', inset: 0 }}>
-                    {h?.connected
-                      ? state.live === undefined
-                        ? 'Idle (no slide on air)'
-                        : 'Holding'
-                      : 'Output not open'}
-                  </div>
-                )}
-              </>
-            )}
+            {!p?.stream &&
+              (presentation && slide ? (
+                <PvLiveThumb
+                  look={look}
+                  presentation={presentation}
+                  slide={slide}
+                  next={nextSlide}
+                  media={media}
+                />
+              ) : (
+                <div className="center muted small" style={{ position: 'absolute', inset: 0 }}>
+                  {h?.connected
+                    ? state.live === undefined
+                      ? 'Idle (no slide on air)'
+                      : 'Holding'
+                    : 'Output not open'}
+                </div>
+              ))}
             <div className="ov">
               <span className={`dot sm ${outputDot(h)}`} />
               <b>{o.name}</b>
