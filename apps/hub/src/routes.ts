@@ -551,18 +551,17 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const t = validate(ThemeBody, { ...body, id: body.id || newId() });
     if (lib.themes.get(t.id)) throw conflict(`Theme ${t.id} already exists`);
-    const saved = lib.themes.insert(t);
+    const saved = lib.saveTheme(t, { create: true, by: by(req) });
     lib.emit([{ kind: 'theme', id: saved.id, rev: saved.rev, entity: saved }]);
     return reply.code(201).send(saved);
   });
   route('PUT', '/themes/:id', 'edit', async (req) => {
     const id = params(req).id!;
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const saved = lib.themes.update(
-      id,
-      validate(ThemeBody, { ...body, id }),
-      typeof body.rev === 'number' ? body.rev : undefined,
-    );
+    const saved = lib.saveTheme(validate(ThemeBody, { ...body, id }), {
+      expectedRev: typeof body.rev === 'number' ? body.rev : undefined,
+      by: by(req),
+    });
     lib.emit([{ kind: 'theme', id, rev: saved.rev, entity: saved }]);
     return saved;
   });
@@ -570,8 +569,22 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const id = params(req).id!;
     if (id === DEFAULT_THEME.id) throw conflict('The default theme cannot be deleted');
     if (!lib.themes.delete(id)) throw notFound();
+    lib.db.prepare(`DELETE FROM theme_revisions WHERE theme_id = ?`).run(id);
     lib.emit([{ kind: 'theme', id, deleted: true }]);
     return reply.code(204).send();
+  });
+  route('GET', '/themes/:id/revisions', 'edit', async (req) => {
+    lib.themes.must(params(req).id!);
+    return lib.themeRevisions(params(req).id!);
+  });
+  route('GET', '/themes/:id/revisions/:rev', 'edit', async (req) =>
+    lib.themeRevision(params(req).id!, Number(params(req).rev)),
+  );
+  route('POST', '/themes/:id/restore/:rev', 'edit', async (req) => {
+    const id = params(req).id!;
+    const saved = lib.restoreThemeRevision(id, Number(params(req).rev), by(req));
+    lib.emit([{ kind: 'theme', id, rev: saved.rev, entity: saved }]);
+    return saved;
   });
 
   // folders

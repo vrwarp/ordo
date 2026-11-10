@@ -628,6 +628,8 @@ export const Theme = z.object({
   lyricBox: Box,
   text: TextStyle,
   textBoxDefaults: TextStyle,
+  rev: z.number().int().min(0).optional(),
+  updatedAt: z.string().max(100).optional(),
 });
 export type Theme = z.infer<typeof Theme>;
 

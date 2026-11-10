@@ -77,65 +77,83 @@ function gradientPng(w: number, h: number, stops: [number, number, number][]): B
   ]);
 }
 
-/** An animated multi-layer SVG background with CSS keyframes, glowing orbs and floating wave paths. */
+/** A vibrant multi-layer SVG background with glowing aurora ribbons and stars. */
 function animatedWaveSvg(): Buffer {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
   <defs>
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0a0e27" />
-      <stop offset="50%" stop-color="#141a3e" />
-      <stop offset="100%" stop-color="#050714" />
+    <!-- Deep celestial night sky -->
+    <linearGradient id="skyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#070c24" />
+      <stop offset="45%" stop-color="#0c173d" />
+      <stop offset="85%" stop-color="#121136" />
+      <stop offset="100%" stop-color="#08081a" />
     </linearGradient>
-    <linearGradient id="waveGrad1" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.38" />
-      <stop offset="50%" stop-color="#8b5cf6" stop-opacity="0.48" />
-      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0.38" />
+
+    <!-- Emerald / neon cyan aurora ribbon -->
+    <linearGradient id="auroraGreen" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00f5a0" stop-opacity="0.85" />
+      <stop offset="35%" stop-color="#00e5ff" stop-opacity="0.9" />
+      <stop offset="70%" stop-color="#10b981" stop-opacity="0.85" />
+      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0.8" />
     </linearGradient>
-    <linearGradient id="waveGrad2" x1="100%" y1="0%" x2="0%" y2="0%">
-      <stop offset="0%" stop-color="#6366f1" stop-opacity="0.32" />
-      <stop offset="50%" stop-color="#ec4899" stop-opacity="0.28" />
-      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.32" />
+
+    <!-- Purple / magenta / violet ribbons -->
+    <linearGradient id="auroraPurple" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#7c3aed" stop-opacity="0.8" />
+      <stop offset="40%" stop-color="#c026d3" stop-opacity="0.85" />
+      <stop offset="75%" stop-color="#6366f1" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.8" />
     </linearGradient>
-    <radialGradient id="orbGrad1" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#818cf8" stop-opacity="0.42" />
-      <stop offset="100%" stop-color="#818cf8" stop-opacity="0" />
+
+    <!-- Radiant golden-cyan highlight -->
+    <linearGradient id="auroraCyan" x1="0%" y1="50%" x2="100%" y2="50%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.85" />
+      <stop offset="50%" stop-color="#34d399" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#a855f7" stop-opacity="0.85" />
+    </linearGradient>
+
+    <radialGradient id="glowOrb1" cx="35%" cy="40%" r="55%">
+      <stop offset="0%" stop-color="#00f5a0" stop-opacity="0.45" />
+      <stop offset="60%" stop-color="#00e5ff" stop-opacity="0.15" />
+      <stop offset="100%" stop-color="#070c24" stop-opacity="0" />
     </radialGradient>
-    <radialGradient id="orbGrad2" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.35" />
-      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0" />
+
+    <radialGradient id="glowOrb2" cx="70%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="#a855f7" stop-opacity="0.4" />
+      <stop offset="55%" stop-color="#6366f1" stop-opacity="0.15" />
+      <stop offset="100%" stop-color="#070c24" stop-opacity="0" />
     </radialGradient>
-    <style>
-      @keyframes floatA {
-        0%, 100% { transform: translate(0px, 0px) scale(1); }
-        50% { transform: translate(140px, 70px) scale(1.18); }
-      }
-      @keyframes floatB {
-        0%, 100% { transform: translate(0px, 0px) scale(1); }
-        50% { transform: translate(-120px, -60px) scale(1.12); }
-      }
-      @keyframes waveA {
-        0%, 100% { transform: translateY(0px) scaleY(1); }
-        50% { transform: translateY(-45px) scaleY(1.1); }
-      }
-      @keyframes waveB {
-        0%, 100% { transform: translateY(0px) scaleY(1); }
-        50% { transform: translateY(40px) scaleY(0.92); }
-      }
-      .orb-1 { animation: floatA 16s ease-in-out infinite; transform-origin: 450px 320px; }
-      .orb-2 { animation: floatB 20s ease-in-out infinite; transform-origin: 1450px 680px; }
-      .wave-layer-1 { animation: waveA 14s ease-in-out infinite; transform-origin: center bottom; }
-      .wave-layer-2 { animation: waveB 18s ease-in-out infinite; transform-origin: center bottom; }
-    </style>
   </defs>
-  <rect width="1920" height="1080" fill="url(#bgGrad)" />
-  <circle class="orb-1" cx="450" cy="320" r="520" fill="url(#orbGrad1)" />
-  <circle class="orb-2" cx="1450" cy="680" r="620" fill="url(#orbGrad2)" />
-  <g class="wave-layer-1">
-    <path d="M0,680 C320,580 640,800 960,700 C1280,600 1600,760 1920,660 L1920,1080 L0,1080 Z" fill="url(#waveGrad1)" />
+
+  <!-- Sky background -->
+  <rect width="1920" height="1080" fill="url(#skyGrad)" />
+
+  <!-- Stars layer -->
+  <g opacity="0.8">
+    <circle cx="180" cy="90" r="1.5" fill="#fff" />
+    <circle cx="420" cy="150" r="2.5" fill="#dbeafe" />
+    <circle cx="750" cy="80" r="1.5" fill="#fff" />
+    <circle cx="1100" cy="130" r="2" fill="#fff" />
+    <circle cx="1380" cy="70" r="2.5" fill="#dbeafe" />
+    <circle cx="1650" cy="160" r="1.5" fill="#fff" />
+    <circle cx="1820" cy="100" r="1.5" fill="#fff" />
+    <circle cx="290" cy="220" r="1.5" fill="#fff" />
+    <circle cx="890" cy="210" r="2" fill="#fff" />
+    <circle cx="1520" cy="240" r="2" fill="#fff" />
   </g>
-  <g class="wave-layer-2">
-    <path d="M0,740 C380,820 760,660 1140,760 C1520,860 1700,720 1920,770 L1920,1080 L0,1080 Z" fill="url(#waveGrad2)" />
-  </g>
+
+  <!-- Diffuse Aurora Ambient Background Glow -->
+  <rect width="1920" height="1080" fill="url(#glowOrb1)" />
+  <rect width="1920" height="1080" fill="url(#glowOrb2)" />
+
+  <!-- Lower Deep Violet Wave -->
+  <path d="M0,450 C350,300 700,520 1100,360 C1450,220 1720,420 1920,320 L1920,1080 L0,1080 Z" fill="url(#auroraPurple)" opacity="0.85" />
+
+  <!-- Middle Wave Ribbon (Cyan to Emerald) -->
+  <path d="M0,520 C320,380 680,600 1080,420 C1420,280 1700,500 1920,390 L1920,950 C1650,1020 1300,850 950,940 C580,1030 250,880 0,960 Z" fill="url(#auroraGreen)" opacity="0.9" />
+
+  <!-- Dynamic Highlight Swirl (Cyan to Radiant Purple) -->
+  <path d="M0,600 C380,480 760,660 1180,500 C1560,360 1780,540 1920,450 L1920,820 C1720,890 1450,780 1120,860 C750,940 320,810 0,890 Z" fill="url(#auroraCyan)" opacity="0.8" />
 </svg>`;
   return Buffer.from(svg, 'utf8');
 }
@@ -372,7 +390,7 @@ async function main() {
           card(
             'Nothing leaves',
             'It all runs in your browser',
-            'Reset demo at the top starts again from this sample.',
+            'Click "demo" in the top bar to reset and start again from this sample.',
           ),
         ],
         { backgroundMediaId: dusk.id },

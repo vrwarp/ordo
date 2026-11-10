@@ -29,14 +29,31 @@ export function DeviceSetupView() {
   const [isPersisted, setIsPersisted] = useState<boolean | null>(null);
 
   useEffect(() => {
-    // Check permission queries if available
+    // Check permission queries if available (silently without prompting)
     if ('permissions' in navigator && navigator.permissions?.query) {
       try {
         navigator.permissions
           .query({ name: 'window-management' as PermissionName })
           .then((res) => {
             setScreenPerm(res.state as ScreenPermState);
-            res.onchange = () => setScreenPerm(res.state as ScreenPermState);
+            res.onchange = () => {
+              setScreenPerm(res.state as ScreenPermState);
+              if (res.state === 'granted') {
+                void outputWindows()
+                  ?.screens()
+                  .then((sc) => {
+                    if (sc.length) setDetectedScreens(sc);
+                  });
+              }
+            };
+            // Only query screens automatically if permission is ALREADY granted
+            if (res.state === 'granted') {
+              void outputWindows()
+                ?.screens()
+                .then((sc) => {
+                  if (sc.length) setDetectedScreens(sc);
+                });
+            }
           })
           .catch(() => {
             setScreenPerm('unsupported');
@@ -55,13 +72,6 @@ export function DeviceSetupView() {
         .then(setIsPersisted)
         .catch(() => undefined);
     }
-
-    // Query screens if window management already granted
-    void outputWindows()
-      ?.screens()
-      .then((sc) => {
-        if (sc.length) setDetectedScreens(sc);
-      });
   }, []);
 
   const testPopup = () => {
@@ -310,6 +320,29 @@ export function DeviceSetupView() {
           </button>
         </div>
 
+        {/* Automatic Fullscreen Tip */}
+        <div
+          className="col"
+          style={{
+            background: 'var(--bg2)',
+            padding: '10px 14px',
+            borderRadius: 'var(--radius)',
+            gap: 4,
+          }}
+        >
+          <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+            <b style={{ fontSize: 13 }}>Automatic Fullscreen Tip:</b>
+          </div>
+          <div className="muted small" style={{ lineHeight: 1.4 }}>
+            Browsers require a user click or keypress before a newly opened window can enter fullscreen mode.
+            Each launched output window displays a one-click banner or you can press{' '}
+            <kbd style={{ padding: '1px 5px', borderRadius: 4, background: 'var(--bg4)' }}>Enter</kbd> /{' '}
+            <kbd style={{ padding: '1px 5px', borderRadius: 4, background: 'var(--bg4)' }}>F</kbd>. To allow
+            outputs to enter fullscreen automatically without needing a click, allow{' '}
+            <b>Automatic fullscreen</b> in Chrome site settings.
+          </div>
+        </div>
+
         {/* Individual Outputs List */}
         <div className="col" style={{ gap: 8, marginTop: 4 }}>
           <h3 style={{ margin: '4px 0 2px' }}>Configured Outputs</h3>
@@ -441,7 +474,15 @@ export function DeviceSetupView() {
               {audioUnlocked ? (
                 <span className="tag green">Unlocked ✓</span>
               ) : (
-                <span className="tag amber">Click to Unlock</span>
+                <button
+                  type="button"
+                  className="tag amber"
+                  onClick={unlockAudio}
+                  title="Click to unlock audio autoplay"
+                  style={{ border: 0, cursor: 'pointer', fontFamily: 'inherit' }}
+                >
+                  Click to Unlock
+                </button>
               )}
             </div>
             <div className="muted small">

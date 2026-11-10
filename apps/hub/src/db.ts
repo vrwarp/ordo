@@ -158,6 +158,15 @@ END;
 CREATE INDEX IF NOT EXISTS jobs_kind_state ON jobs(kind, state);
 `,
   },
+  {
+    version: 10,
+    name: 'theme-revisions',
+    sql: `
+CREATE TABLE IF NOT EXISTS theme_revisions (
+  theme_id TEXT NOT NULL, rev INTEGER NOT NULL, json TEXT NOT NULL,
+  saved_by TEXT, saved_at TEXT NOT NULL, PRIMARY KEY (theme_id, rev));
+`,
+  },
 ];
 
 /**

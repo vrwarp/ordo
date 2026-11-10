@@ -163,12 +163,30 @@ export function LooksPage() {
           <div className="grid2">
             <TextField label="Name" value={look.name} onChange={(name) => set({ name })} />
             <Select
-              label="Kind"
+              label="Screen role"
               value={look.kind}
-              options={['main', 'stage', 'lowerThird', 'stream', 'custom'] as const}
-              onChange={(kind) => set({ kind })}
+              options={[
+                { value: 'stage', label: 'Stage display (Confidence monitor)' },
+                { value: 'main', label: 'Main screen (Audience)' },
+                { value: 'lowerThird', label: 'Lower third (Broadcast / Lobby)' },
+                { value: 'stream', label: 'Livestream key (Chroma / Green screen)' },
+                { value: 'custom', label: 'Custom' },
+              ]}
+              onChange={(kind) => set({ kind: kind as Look['kind'] })}
             />
           </div>
+          <span className="muted small" style={{ marginTop: -4 }}>
+            {look.kind === 'stage' &&
+              'Stage display (confidence monitor): shows current lyrics, next slide previews, stage messages, and speaker notes.'}
+            {look.kind === 'main' &&
+              'Audience sanctuary screen: shows full background graphics, media, and presentation slides.'}
+            {look.kind === 'lowerThird' &&
+              'Lower-third overlay: formats text for lobby feeds, video streams, or overflow rooms.'}
+            {look.kind === 'stream' &&
+              'Livestream key: applies green or black keying for hardware switchers (ATEM) and OBS.'}
+            {look.kind === 'custom' &&
+              'Custom look for auxiliary screens, choir monitors, or special displays.'}
+          </span>
           <div className="card col">
             <h4>Layers</h4>
             <Check

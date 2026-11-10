@@ -123,7 +123,10 @@ test('add a verse with a superscript number', async ({ page }) => {
   const stress = `${VERSE_TEXT}\n18 ${VERSE_18}`.indexOf('not judged');
   await select(page, stress, stress + 'not judged'.length);
   await page.keyboard.press('Control+i');
-  await expect(page.getByRole('button', { name: 'Italic' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Italic', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
 
   const saved = await saveAndReload(page, a, p.id);
   const o = slidesOf(saved)[2]!.objects.find((x) => x.id === verses.id)!;

@@ -44,6 +44,9 @@ importers:
       '@ordo/live-state':
         specifier: workspace:*
         version: link:../../packages/live-state
+      '@ordo/pptx-scene':
+        specifier: workspace:*
+        version: link:../../packages/pptx-scene
       '@ordo/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

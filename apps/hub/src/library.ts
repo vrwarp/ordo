@@ -263,7 +263,7 @@ export class Library {
       `INSERT OR IGNORE INTO settings (key, rev, json, updated_at) VALUES (?, 1, ?, ?)`,
     );
     for (const k of SETTINGS_KEYS) ins.run(k, JSON.stringify(defaults[k]), now);
-    if (!this.themes.get(DEFAULT_THEME.id)) this.themes.insert({ ...DEFAULT_THEME });
+    if (!this.themes.get(DEFAULT_THEME.id)) this.saveTheme({ ...DEFAULT_THEME }, { create: true });
   }
 
   // ---- settings ----
@@ -426,6 +426,67 @@ export class Library {
     const old = this.revision(id, rev);
     const cur = this.presentations.must(id);
     return this.savePresentation({ ...old, id, rev: cur.rev }, { expectedRev: cur.rev, by });
+  }
+
+  // ---- themes with revisions ----
+  saveTheme(t: Theme, opts: { expectedRev?: number; by?: string; create?: boolean } = {}): Theme {
+    return this.db.transaction(() => {
+      const saved =
+        opts.create || !this.themes.get(t.id)
+          ? this.themes.insert(t)
+          : this.themes.update(t.id, t, opts.expectedRev);
+      this.db
+        .prepare(
+          `INSERT OR REPLACE INTO theme_revisions (theme_id, rev, json, saved_by, saved_at) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(
+          saved.id,
+          saved.rev,
+          JSON.stringify(saved),
+          opts.by ?? null,
+          (saved as { updatedAt?: string }).updatedAt ?? nowIso(),
+        );
+      this.pruneThemeRevisions(saved.id);
+      return saved;
+    })();
+  }
+
+  pruneThemeRevisions(id: string, now = Date.now()): void {
+    const cutoff = new Date(now - 30 * 86400_000).toISOString();
+    this.db
+      .prepare(
+        `DELETE FROM theme_revisions WHERE theme_id = ? AND saved_at < ? AND rev NOT IN
+         (SELECT rev FROM theme_revisions WHERE theme_id = ? ORDER BY rev DESC LIMIT 50)`,
+      )
+      .run(id, cutoff, id);
+  }
+
+  themeRevisions(id: string): RevisionInfo[] {
+    const rows = this.db
+      .prepare(
+        `SELECT rev, json, saved_by, saved_at FROM theme_revisions WHERE theme_id = ? ORDER BY rev DESC`,
+      )
+      .all(id) as { rev: number; json: string; saved_by: string | null; saved_at: string }[];
+    return rows.map((r) => ({
+      rev: r.rev,
+      savedAt: r.saved_at,
+      savedBy: r.saved_by ?? undefined,
+      title: (JSON.parse(r.json) as Theme).name,
+    }));
+  }
+
+  themeRevision(id: string, rev: number): Theme {
+    const r = this.db
+      .prepare(`SELECT json FROM theme_revisions WHERE theme_id = ? AND rev = ?`)
+      .get(id, rev) as { json: string } | undefined;
+    if (!r) throw notFound(`revision ${rev} of theme ${id}`);
+    return JSON.parse(r.json) as Theme;
+  }
+
+  restoreThemeRevision(id: string, rev: number, by?: string): Theme {
+    const old = this.themeRevision(id, rev);
+    const cur = this.themes.must(id);
+    return this.saveTheme({ ...old, id, rev: cur.rev }, { expectedRev: cur.rev, by });
   }
 
   /**

@@ -1,5 +1,5 @@
-import { DEMO } from '@ordo/client';
 import { confirmDialog } from './Confirm.tsx';
+import { Dialog } from './Dialog.tsx';
 
 /**
  * The IndexedDB databases the demo's pages keep: the demo hub's (apps/demo/src/store.ts) and the JsonStore
@@ -9,7 +9,7 @@ import { confirmDialog } from './Confirm.tsx';
 const KNOWN_DATABASES = ['ordo-demo-hub', 'ordo-operator', 'ordo-output', 'ordo-stage'];
 
 /** Forget everything this browser stored for the demo (the demo hub re-seeds on the next request). */
-async function resetDemo(): Promise<void> {
+export async function resetDemo(): Promise<void> {
   if (
     !(await confirmDialog(
       'Reset the demo',
@@ -46,23 +46,60 @@ async function resetDemo(): Promise<void> {
 }
 
 /**
- * The GitHub Pages demo (apps/demo): say what this is, once, at the top of every page. Nothing leaves the
- * browser; Launch outputs opens the screens as windows on this computer.
+ * Modal dialog displaying the demo description and reset controls when clicking the "demo" badge.
+ */
+export function DemoDialog({ onClose }: { onClose: () => void }) {
+  return (
+    <Dialog
+      title={
+        <span>
+          <b>ordo</b> demo
+        </span>
+      }
+      onClose={onClose}
+      width={480}
+      footer={
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+          <a
+            href="https://github.com/vrwarp/ordo"
+            target="_blank"
+            rel="noreferrer"
+            className="small"
+            style={{ color: 'var(--accent)', textDecoration: 'none', fontWeight: 500 }}
+          >
+            Source on GitHub ↗
+          </a>
+          <div className="row" style={{ gap: 8 }}>
+            <button
+              type="button"
+              className="small danger"
+              onClick={() => {
+                onClose();
+                void resetDemo();
+              }}
+            >
+              Reset demo
+            </button>
+            <button type="button" className="small" onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </div>
+      }
+    >
+      <div className="col" style={{ gap: 12 }}>
+        <p style={{ margin: 0, lineHeight: 1.6, color: 'var(--fg)', fontSize: 14 }}>
+          Everything runs in this browser and stays in it: import a ProPresenter song or playlist, edit the
+          sample service, press <b>Go live</b> and <b>Launch outputs</b>.
+        </p>
+      </div>
+    </Dialog>
+  );
+}
+
+/**
+ * Legacy top bar (no longer rendered above Nav; preserved for backwards compatibility).
  */
 export function DemoBanner() {
-  if (!DEMO) return null;
-  return (
-    <div className="demo-banner" data-demo-banner>
-      <span>
-        <b>ordo demo.</b> Everything runs in this browser and stays in it: import a ProPresenter song or
-        playlist, edit the sample service, press Go live and Launch outputs.
-      </span>
-      <a href="https://github.com/vrwarp/ordo" target="_blank" rel="noreferrer">
-        Source
-      </a>
-      <button type="button" className="small" onClick={() => void resetDemo()}>
-        Reset demo
-      </button>
-    </div>
-  );
+  return null;
 }

@@ -171,44 +171,51 @@ export function TopBar() {
       )}
       <span className="spacer" />
       <span className="clock">{formatClock(now, general.timeZone, general.clock24h)}</span>
-      <button
-        type="button"
-        className="big"
-        disabled={launch.busy}
-        data-launch
-        onClick={() => dispatch({ id: 'launchOutputs' })}
-        title="Ctrl+Shift+L"
-      >
-        Launch outputs
-      </button>
-      <button
-        type="button"
-        className="big"
-        disabled={launch.busy}
-        data-launch
-        onClick={() => dispatch({ id: 'relaunchOutputs' })}
-        title="Ctrl+Shift+R"
-      >
-        Relaunch
-      </button>
-      {isLive && (
+      <div className="topbar-actions-group">
         <button
           type="button"
-          className="danger big"
-          onClick={async () => {
-            if (
-              await confirmDialog(
-                'End service',
-                'Clear every output and unlock the playlist for editing?',
-                'End service',
-                true,
-              )
-            )
-              controller()?.endService();
-          }}
+          className="big"
+          disabled={launch.busy}
+          data-launch
+          onClick={() => dispatch({ id: 'launchOutputs' })}
+          title="Ctrl+Shift+L"
         >
-          End service
+          Launch outputs
         </button>
+        <button
+          type="button"
+          className="big"
+          disabled={launch.busy}
+          data-launch
+          onClick={() => dispatch({ id: 'relaunchOutputs' })}
+          title="Ctrl+Shift+R"
+        >
+          Relaunch
+        </button>
+      </div>
+      {isLive && (
+        <>
+          <span className="topbar-divider" />
+          <div className="topbar-danger-zone">
+            <button
+              type="button"
+              className="danger big"
+              onClick={async () => {
+                if (
+                  await confirmDialog(
+                    'End service',
+                    'Clear every output and unlock the playlist for editing?',
+                    'End service',
+                    true,
+                  )
+                )
+                  controller()?.endService();
+              }}
+            >
+              End service
+            </button>
+          </div>
+        </>
       )}
       <button
         type="button"

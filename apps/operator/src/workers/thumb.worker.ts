@@ -42,14 +42,28 @@ export type ThumbFont = {
   hash: string;
   url: string;
 };
-export type ThumbIn = { t: 'fonts'; fonts: ThumbFont[] } | { t: 'render'; id: number; job: ThumbJob };
+export type ThumbIn =
+  | { t: 'fonts'; fonts: ThumbFont[] }
+  | { t: 'render'; id: number; job: ThumbJob }
+  | { t: 'decoded'; id: number; hash: string; bmp?: ImageBitmap };
 export type ThumbOut =
   | { t: 'done'; id: number; blob?: Blob; error?: string }
   /** A font failed at first and has loaded since: thumbnails drawn before used a fallback for it. */
-  | { t: 'fonts'; families: string[] };
+  | { t: 'fonts'; families: string[] }
+  | { t: 'decode'; id: number; hash: string };
 
 const scope = self as unknown as DedicatedWorkerGlobalScope & { fonts?: FontFaceSet };
 const bitmaps = new Map<string, Promise<ImageBitmap | undefined>>();
+let decodeSeq = 1;
+const pendingDecodes = new Map<number, (bmp: ImageBitmap | undefined) => void>();
+
+function decodeViaMainThread(hash: string): Promise<ImageBitmap | undefined> {
+  const id = decodeSeq++;
+  return new Promise((resolve) => {
+    pendingDecodes.set(id, resolve);
+    scope.postMessage({ t: 'decode', id, hash } satisfies ThumbOut);
+  });
+}
 let fontsReady: Promise<unknown> = Promise.resolve();
 /** Where each font file is fetched from when the service-file cache does not have it. */
 const fontUrls = new Map<string, string>();
@@ -82,8 +96,13 @@ function bitmap(hash: string): Promise<ImageBitmap | undefined> {
       try {
         return await createImageBitmap(b, { resizeWidth: 640, resizeQuality: 'medium' });
       } catch {
-        // A decode can fail transiently (memory pressure after a resume): try again on the next job
-        // rather than leaving the image out of every thumbnail until the worker restarts.
+        // If createImageBitmap failed in the worker (e.g. SVG in worker scope), delegate to main thread
+        try {
+          const bmp = await decodeViaMainThread(hash);
+          if (bmp) return bmp;
+        } catch {
+          /* fallback */
+        }
         bitmaps.delete(hash);
         return undefined;
       }
@@ -163,6 +182,14 @@ scope.onmessage = (ev: MessageEvent<ThumbIn>) => {
   if (m.t === 'fonts') {
     for (const f of m.fonts) fontUrls.set(f.hash, f.url);
     fontsReady = Promise.allSettled([fontsReady, fonts.sync(m.fonts)]);
+    return;
+  }
+  if (m.t === 'decoded') {
+    const cb = pendingDecodes.get(m.id);
+    if (cb) {
+      pendingDecodes.delete(m.id);
+      cb(m.bmp);
+    }
     return;
   }
   render(m.job).then(

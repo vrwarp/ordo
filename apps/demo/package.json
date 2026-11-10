@@ -12,6 +12,7 @@
     "@ordo/domain": "workspace:*",
     "@ordo/importers": "workspace:*",
     "@ordo/live-state": "workspace:*",
+    "@ordo/pptx-scene": "workspace:*",
     "@ordo/protocol": "workspace:*",
     "zod": "^4.6.7"
   },

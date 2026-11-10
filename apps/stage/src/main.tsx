@@ -47,13 +47,44 @@ void holdWakeLock();
 document.addEventListener('visibilitychange', () => void holdWakeLock());
 
 // Fullscreen on any click or key (the operator opens the window on the stage screen).
+let promptEl: HTMLButtonElement | null = null;
+
+function syncFullscreenUI(): void {
+  const isFs = !!document.fullscreenElement;
+  document.body.classList.toggle('not-fullscreen', !isFs);
+  if (isFs) {
+    if (promptEl) {
+      promptEl.remove();
+      promptEl = null;
+    }
+  } else if (!promptEl) {
+    promptEl = document.createElement('button');
+    promptEl.className = 'fs-prompt';
+    promptEl.type = 'button';
+    promptEl.innerHTML = '⛶ Enter full screen';
+    promptEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      goFullscreen();
+    });
+    document.body.appendChild(promptEl);
+  }
+}
+
 function goFullscreen(): void {
   void holdWakeLock();
-  if (document.fullscreenElement) return;
+  if (document.fullscreenElement) {
+    syncFullscreenUI();
+    return;
+  }
   document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }).catch(() => undefined);
+  syncFullscreenUI();
 }
 window.addEventListener('click', goFullscreen);
 window.addEventListener('keydown', goFullscreen);
+document.addEventListener('fullscreenchange', syncFullscreenUI);
+
+syncFullscreenUI();
+goFullscreen();
 
 // App shell service worker (build only; dev serves from Vite).
 if (import.meta.env.PROD && 'serviceWorker' in navigator && !DEMO) {

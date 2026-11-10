@@ -116,15 +116,23 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
           const c = firstCueOf(i);
           if (c !== undefined) controller()?.go(c);
         }}
-        render={(it) => (
-          <>
-            <span className="kind">{KIND_ICON[it.kind]}</span>
-            <span className="col grow" style={{ gap: 0 }}>
-              <span className="ellipsis">{itemTitle(it, op)}</span>
-              <span className="muted small ellipsis">{itemSubtitle(it, op)}</span>
-            </span>
-          </>
-        )}
+        render={(it, i) => {
+          const isItemLive = op.live && i === liveItem;
+          return (
+            <>
+              <span className={`kind ${isItemLive ? 'live' : ''}`}>
+                {isItemLive ? '●' : KIND_ICON[it.kind]}
+              </span>
+              <span className="col grow" style={{ gap: 0 }}>
+                <span className="ellipsis row" style={{ gap: 6, alignItems: 'center' }}>
+                  <span className="ellipsis">{itemTitle(it, op)}</span>
+                  {isItemLive && <span className="live-pill-mini">ON AIR</span>}
+                </span>
+                <span className="muted small ellipsis">{itemSubtitle(it, op)}</span>
+              </span>
+            </>
+          );
+        }}
       />
       {items.length === 0 && (
         <div className="muted" style={{ padding: 16 }}>

@@ -162,6 +162,9 @@ describe('edit-profile routes', () => {
     expect(parseRoute('#/previews/p1/s2')).toEqual({ name: 'previews', id: 'p1', slideId: 's2' });
     expect(routeHash({ name: 'previews', id: 'p1', slideId: 's2' })).toBe('#/previews/p1/s2');
     expect(routeHash({ name: 'previews' })).toBe('#/previews');
+    expect(parseRoute('#/library/themes')).toEqual({ name: 'library', tab: 'themes' });
+    expect(parseRoute('#/settings/themes')).toEqual({ name: 'library', tab: 'themes' });
+    expect(routeHash({ name: 'library', tab: 'themes' })).toBe('#/library/themes');
   });
 
   it('an edit-profile device never opens the live view, the checklist or output settings', () => {
@@ -169,9 +172,11 @@ describe('edit-profile routes', () => {
     expect(allowedForRole({ name: 'checklist' }, 'operate', 'edit')).toBe(false);
     for (const page of ['outputs', 'audio', 'keys', 'streamdeck', 'midi', 'backups', 'diagnostics'])
       expect(allowedForRole({ name: 'settings', page }, 'operate', 'edit'), page).toBe(false);
-    for (const page of ['themes', 'pins', 'looks', 'general', 'messages'])
+    for (const page of ['pins', 'looks', 'general', 'messages'])
       expect(allowedForRole({ name: 'settings', page }, 'operate', 'edit'), page).toBe(true);
-    expect(allowedForRole({ name: 'settings', page: 'themes' }, 'edit', 'edit')).toBe(false);
+    expect(allowedForRole({ name: 'library', tab: 'themes' }, 'edit', 'edit')).toBe(true);
+    expect(allowedForRole({ name: 'library', tab: 'themes' }, 'operate', 'edit')).toBe(true);
+    expect(allowedForRole({ name: 'settings', page: 'looks' }, 'edit', 'edit')).toBe(false);
     expect(allowedForRole({ name: 'previews' }, 'edit', 'edit')).toBe(true);
     // The venue PC: unchanged.
     expect(allowedForRole({ name: 'live' }, 'operate')).toBe(true);

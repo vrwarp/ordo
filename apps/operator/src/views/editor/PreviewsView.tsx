@@ -52,7 +52,7 @@ export function PreviewsView({ id, slideId }: { id?: string; slideId?: string })
   const sel = slides.find((s) => s.id === slideId) ?? slides[0];
   return (
     <div className="split previews-view">
-      <div className="side col" style={{ gap: 2 }}>
+      <div className="side col" style={{ gap: 4 }}>
         <h4>Previews</h4>
         <input
           placeholder="Find a presentation"

@@ -212,9 +212,10 @@ test('reorder a playlist and an arrangement by long-press drag and by the button
     const labels = async () =>
       chips.locator('.arr-chip-label').evaluateAll((els) => els.map((e) => e.textContent));
     expect(await labels()).toEqual(['V1', 'C', 'V2', 'B']);
+    await chips.nth(2).scrollIntoViewIfNeeded();
     const from = await center(chips.nth(0).locator('.sort-handle'));
     const v2 = (await chips.nth(2).boundingBox())!;
-    await fingerDrag(page, from, { x: v2.x + v2.width - 4, y: v2.y + v2.height / 2 }, { holdMs: 400 });
+    await fingerDrag(page, from, { x: v2.x + v2.width / 2, y: v2.y + v2.height - 4 }, { holdMs: 400 });
     expect(await labels()).toEqual(['C', 'V2', 'V1', 'B']);
     await page.getByRole('button', { name: 'Save arrangement' }).tap();
     const shorts = async () => {

@@ -1,5 +1,6 @@
 import type { Profile } from '../../lib/capabilities.ts';
 import { EDIT_PROFILE_SETTINGS } from '../../lib/route.ts';
+import { ThemesTab } from '../library/ThemesTab.tsx';
 import { AudioSettingsPage } from './AudioSettingsPage.tsx';
 import { BackupsPage } from './BackupsPage.tsx';
 import { DiagnosticsPage } from './DiagnosticsPage.tsx';
@@ -11,18 +12,17 @@ import { MidiPage } from './MidiPage.tsx';
 import { OutputsPage } from './OutputsPage.tsx';
 import { PinsPage } from './PinsPage.tsx';
 import { StreamDeckPage } from './StreamDeckPage.tsx';
-import { ThemesPage } from './ThemesPage.tsx';
 
 const PAGES: [string, string][] = [
   ['outputs', 'Outputs'],
   ['looks', 'Looks'],
+  ['themes', 'Themes'],
   ['audio', 'Audio'],
   ['keys', 'Keyboard'],
   ['streamdeck', 'Stream Deck'],
   ['midi', 'MIDI'],
   ['messages', 'Stage messages'],
   ['general', 'General'],
-  ['themes', 'Themes'],
   ['pins', 'PINs'],
   ['backups', 'Backups'],
   ['diagnostics', 'Diagnostics'],
@@ -39,6 +39,9 @@ export function SettingsView({ page, profile = 'full' }: { page: string; profile
       break;
     case 'looks':
       body = <LooksPage />;
+      break;
+    case 'themes':
+      body = <ThemesTab />;
       break;
     case 'audio':
       body = <AudioSettingsPage />;
@@ -58,9 +61,6 @@ export function SettingsView({ page, profile = 'full' }: { page: string; profile
     case 'general':
       body = <GeneralPage />;
       break;
-    case 'themes':
-      body = <ThemesPage />;
-      break;
     case 'pins':
       body = <PinsPage />;
       break;
@@ -73,7 +73,7 @@ export function SettingsView({ page, profile = 'full' }: { page: string; profile
   }
   return (
     <div className="split" style={{ gridTemplateColumns: '200px 1fr' }}>
-      <div className="side col" style={{ gap: 2 }}>
+      <div className="side col" style={{ gap: 4 }}>
         {pages.map(([k, label]) => (
           <a key={k} href={`#/settings/${k}`} className={page === k ? 'active' : ''}>
             {label}

@@ -79,6 +79,23 @@ class Thumbs {
         this.invalidate();
         return;
       }
+      if (ev.data.t === 'decode') {
+        const { id, hash } = ev.data;
+        const img = new Image();
+        img.src = fileUrl(hash);
+        img.onload = async () => {
+          try {
+            const bmp = await createImageBitmap(img, { resizeWidth: 640, resizeQuality: 'medium' });
+            w.postMessage({ t: 'decoded', id, hash, bmp } satisfies ThumbIn, [bmp]);
+          } catch {
+            w.postMessage({ t: 'decoded', id, hash } satisfies ThumbIn);
+          }
+        };
+        img.onerror = () => {
+          w.postMessage({ t: 'decoded', id, hash } satisfies ThumbIn);
+        };
+        return;
+      }
       const p = this.waiting.get(ev.data.id);
       if (!p) return;
       this.waiting.delete(ev.data.id);
