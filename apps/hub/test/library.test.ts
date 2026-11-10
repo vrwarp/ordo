@@ -130,10 +130,24 @@ describe('library', () => {
       (await ed.fetch(`/playlists/${pl.id}`, { method: 'PUT', json: { ...pl, name: 'x' } })).status,
     ).toBe(409);
     const folder = await ed.json<{ id: string }>('/folders', { method: 'POST', json: { name: 'Hymns' } });
-    const theme = await ed.json<{ id: string }>('/themes', {
+    const theme = await ed.json<{ id: string; rev: number; name: string }>('/themes', {
       method: 'POST',
       json: { ...hub.lib.themes.get('theme-default'), id: undefined, name: 'Big' },
     });
+    expect(theme.rev).toBe(1);
+    const themeUpdated = await ed.json<{ id: string; rev: number; name: string }>(`/themes/${theme.id}`, {
+      method: 'PUT',
+      json: { ...theme, name: 'Bigger' },
+    });
+    expect(themeUpdated.rev).toBe(2);
+    const themeRevs = await ed.json<{ rev: number; title: string }[]>(`/themes/${theme.id}/revisions`);
+    expect(themeRevs.map((r) => r.rev)).toEqual([2, 1]);
+    const restoredTheme = await ed.json<{ id: string; rev: number; name: string }>(
+      `/themes/${theme.id}/restore/1`,
+      { method: 'POST' },
+    );
+    expect(restoredTheme.rev).toBe(3);
+    expect(restoredTheme.name).toBe('Big');
     const snap = await ed.json<{
       presentations: unknown[];
       playlists: unknown[];

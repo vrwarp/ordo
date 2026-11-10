@@ -474,10 +474,33 @@ export async function handle(req: Request): Promise<Res> {
 
     if (seg[0] === 'themes') {
       if (m === 'GET' && !seg[1]) return json(l.themes.length ? l.themes : [DEFAULT_THEME]);
+      if (m === 'GET' && seg[2] === 'revisions') {
+        const theme = l.themes.find((x) => x.id === seg[1]) ?? DEFAULT_THEME;
+        return json([
+          {
+            rev: theme.rev ?? 1,
+            savedAt: (theme as { updatedAt?: string }).updatedAt ?? nowIso(),
+            savedBy: 'operator',
+            title: theme.name,
+          },
+        ]);
+      }
+      if (m === 'POST' && seg[2] === 'restore') {
+        const theme = l.themes.find((x) => x.id === seg[1]) ?? DEFAULT_THEME;
+        const restored = { ...theme, rev: (theme.rev ?? 1) + 1, updatedAt: nowIso() };
+        await save({ ...l, themes: upsert(l.themes, restored) });
+        return json(restored);
+      }
       if (m === 'GET') return json(l.themes.find((x) => x.id === seg[1]) ?? DEFAULT_THEME);
       if (m === 'POST' || m === 'PUT') {
         const body = (await req.json()) as Theme;
-        const t = ThemeSchema.parse({ ...body, id: seg[1] ?? body.id ?? newId() });
+        const prev = l.themes.find((x) => x.id === (seg[1] ?? body.id));
+        const t = ThemeSchema.parse({
+          ...body,
+          id: seg[1] ?? body.id ?? newId(),
+          rev: m === 'POST' ? 1 : (prev?.rev ?? 0) + 1,
+          updatedAt: nowIso(),
+        });
         if (m === 'POST' && l.themes.some((x) => x.id === t.id))
           return fail(409, 'conflict', `Theme ${t.id} already exists`);
         await save({ ...l, themes: upsert(l.themes, t) });

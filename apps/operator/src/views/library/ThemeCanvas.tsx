@@ -8,8 +8,8 @@ export interface ThemeCanvasProps {
   scenario: {
     id: string;
     label: string;
-    primary: string;
-    secondary?: string;
+    text: string;
+    citation?: string;
   };
 }
 
@@ -50,7 +50,7 @@ export function ThemeCanvas({ box, text, onChangeBox, scenario }: ThemeCanvasPro
 
     let { x, y, w, h } = drag.initBox;
     const snapGuide: { x?: number; y?: number } = {};
-    const SNAP_THRESH = 14;
+    const SNAP_THRESH = 16;
 
     if (drag.handle === 'move') {
       x += dx;
@@ -66,7 +66,7 @@ export function ThemeCanvas({ box, text, onChangeBox, scenario }: ThemeCanvasPro
         y = 540 - h / 2;
         snapGuide.y = 540;
       }
-      // Snap 5% safe margins
+      // Snap 5% safe margins (96px left/right, 54px top/bottom)
       if (Math.abs(x - 96) < SNAP_THRESH) {
         x = 96;
         snapGuide.x = 96;
@@ -172,18 +172,7 @@ export function ThemeCanvas({ box, text, onChangeBox, scenario }: ThemeCanvasPro
     ? `${Math.max(1, text.outline.width * 0.25)}px rgba(${text.outline.color.r}, ${text.outline.color.g}, ${text.outline.color.b}, ${text.outline.color.a ?? 1})`
     : undefined;
 
-  const fontStack = [
-    text.fontFamily,
-    ...(text.fallbackFonts ?? []),
-    'PingFang SC',
-    'Noto Sans CJK SC',
-    'Microsoft YaHei',
-    'system-ui',
-    'sans-serif',
-  ]
-    .filter(Boolean)
-    .join(', ');
-
+  const fontStack = [text.fontFamily, 'system-ui', 'sans-serif'].filter(Boolean).join(', ');
   const vAlign = text.valign === 'top' ? 'flex-start' : text.valign === 'bottom' ? 'flex-end' : 'center';
 
   return (
@@ -198,13 +187,14 @@ export function ThemeCanvas({ box, text, onChangeBox, scenario }: ThemeCanvasPro
           position: 'relative',
           width: '100%',
           aspectRatio: '16 / 9',
-          background: 'radial-gradient(ellipse at 50% 40%, #151d2a 0%, #07090e 100%)',
+          background: 'radial-gradient(ellipse at 50% 40%, #172130 0%, #080b11 100%)',
           borderRadius: 8,
           border: '1px solid var(--line)',
           overflow: 'hidden',
           boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
           userSelect: 'none',
           touchAction: 'none',
+          containerType: 'inline-size',
         }}
       >
         {/* Title-Safe 5% Margin Guide */}
@@ -218,7 +208,7 @@ export function ThemeCanvas({ box, text, onChangeBox, scenario }: ThemeCanvasPro
             border: '1px dashed rgba(255, 255, 255, 0.08)',
             pointerEvents: 'none',
           }}
-          title="5% Title-Safe Margin"
+          title="5% Projector Safe Margin"
         />
 
         {/* Snap Guide Lines */}
@@ -274,7 +264,7 @@ export function ThemeCanvas({ box, text, onChangeBox, scenario }: ThemeCanvasPro
             zIndex: 5,
           }}
         >
-          {/* Sample Typography (English + Chinese Bilingual) */}
+          {/* Sample Typography (English focused) */}
           <div
             style={{
               fontFamily: fontStack,
@@ -282,25 +272,26 @@ export function ThemeCanvas({ box, text, onChangeBox, scenario }: ThemeCanvasPro
               fontStyle: text.fontStyle ?? 'normal',
               color: col,
               textAlign: text.align ?? 'center',
-              lineHeight: text.lineHeight ?? 1.3,
+              lineHeight: text.lineHeight ?? 1.25,
               textShadow: shadow,
               WebkitTextStroke: stroke,
-              fontSize: 'clamp(11px, 2.3vw, 24px)',
+              fontSize: `${((text.fontSizePx ?? 54) / 1920) * 100}cqw`,
               pointerEvents: 'none',
               wordBreak: 'break-word',
+              whiteSpace: 'pre-line',
             }}
           >
-            <div>{scenario.primary}</div>
-            {scenario.secondary && (
+            {scenario.text}
+            {scenario.citation && (
               <div
                 style={{
-                  marginTop: '4px',
-                  fontSize: '0.85em',
-                  opacity: 0.92,
+                  marginTop: '0.4em',
+                  fontSize: '0.7em',
+                  opacity: 0.8,
                   fontWeight: Math.max(400, (text.fontWeight ?? 600) - 100),
                 }}
               >
-                {scenario.secondary}
+                {scenario.citation}
               </div>
             )}
           </div>
@@ -343,9 +334,70 @@ export function ThemeCanvas({ box, text, onChangeBox, scenario }: ThemeCanvasPro
                 borderRadius: 4,
               }}
             >
-              {drag.handle === 'move' ? 'Dragging' : 'Resizing'}
+              {drag.handle === 'move' ? 'Moving' : 'Resizing'}
             </span>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Lightweight 16:9 thumbnail for gallery cards */
+export function ThemeThumbnail({
+  box,
+  text,
+  sample = 'Amazing Grace\nHow sweet the sound',
+}: {
+  box: Box;
+  text: TextStyle;
+  sample?: string;
+}) {
+  const c = text.color;
+  const col = `rgba(${c.r}, ${c.g}, ${c.b}, ${c.a ?? 1})`;
+  const vAlign = text.valign === 'top' ? 'flex-start' : text.valign === 'bottom' ? 'flex-end' : 'center';
+
+  return (
+    <div
+      style={{
+        position: 'relative',
+        width: '100%',
+        aspectRatio: '16 / 9',
+        background: '#090d14',
+        borderRadius: 6,
+        overflow: 'hidden',
+        border: '1px solid var(--line)',
+        containerType: 'inline-size',
+      }}
+    >
+      <div
+        style={{
+          position: 'absolute',
+          left: `${(box.x / 1920) * 100}%`,
+          top: `${(box.y / 1080) * 100}%`,
+          width: `${(box.w / 1920) * 100}%`,
+          height: `${(box.h / 1080) * 100}%`,
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: vAlign,
+          boxSizing: 'border-box',
+          padding: '2%',
+        }}
+      >
+        <div
+          style={{
+            fontFamily: text.fontFamily || 'system-ui',
+            fontWeight: text.fontWeight ?? 600,
+            fontStyle: text.fontStyle ?? 'normal',
+            color: col,
+            textAlign: text.align ?? 'center',
+            lineHeight: text.lineHeight ?? 1.25,
+            fontSize: `${((text.fontSizePx ?? 54) / 1920) * 100}cqw`,
+            whiteSpace: 'pre-line',
+            wordBreak: 'break-word',
+          }}
+        >
+          {sample}
         </div>
       </div>
     </div>
@@ -361,7 +413,7 @@ function Handle({
   cursor: string;
   onStart: (e: ReactPointerEvent) => void;
 }) {
-  const size = 9;
+  const size = 10;
   const style: React.CSSProperties = {
     position: 'absolute',
     width: size,

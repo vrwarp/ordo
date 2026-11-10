@@ -11,7 +11,6 @@ import { MidiPage } from './MidiPage.tsx';
 import { OutputsPage } from './OutputsPage.tsx';
 import { PinsPage } from './PinsPage.tsx';
 import { StreamDeckPage } from './StreamDeckPage.tsx';
-import { ThemesPage } from './ThemesPage.tsx';
 
 const PAGES: [string, string][] = [
   ['outputs', 'Outputs'],
@@ -22,7 +21,6 @@ const PAGES: [string, string][] = [
   ['midi', 'MIDI'],
   ['messages', 'Stage messages'],
   ['general', 'General'],
-  ['themes', 'Themes'],
   ['pins', 'PINs'],
   ['backups', 'Backups'],
   ['diagnostics', 'Diagnostics'],
@@ -57,9 +55,6 @@ export function SettingsView({ page, profile = 'full' }: { page: string; profile
       break;
     case 'general':
       body = <GeneralPage />;
-      break;
-    case 'themes':
-      body = <ThemesPage />;
       break;
     case 'pins':
       body = <PinsPage />;

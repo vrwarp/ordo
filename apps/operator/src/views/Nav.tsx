@@ -54,7 +54,7 @@ export function Nav({
         {link('#/library', 'Library', route.name === 'library' || route.name === 'edit')}
         {link('#/playlists', 'Playlists', route.name === 'playlists')}
         {link('#/previews', 'Previews', route.name === 'previews')}
-        {role === 'operate' && link('#/settings/themes', 'Settings', route.name === 'settings')}
+        {role === 'operate' && link('#/settings/general', 'Settings', route.name === 'settings')}
         <span className="spacer" />
         <LiveChip />
         {offline && <span className="tag amber">offline: hub unreachable</span>}

@@ -1,6 +1,6 @@
 export type Route =
   | { name: 'live' }
-  | { name: 'library'; tab: 'presentations' | 'media' | 'fonts' | 'import' }
+  | { name: 'library'; tab: 'presentations' | 'media' | 'themes' | 'fonts' | 'import' }
   | { name: 'edit'; id: string }
   | { name: 'playlists'; id?: string }
   | { name: 'settings'; page: string }
@@ -17,7 +17,6 @@ export const SETTINGS_PAGES = [
   'midi',
   'messages',
   'general',
-  'themes',
   'pins',
   'backups',
   'diagnostics',
@@ -37,7 +36,7 @@ export function parseRoute(hash: string): Route | null {
     case 'live':
       return { name: 'live' };
     case 'library': {
-      const tab = a === 'media' || a === 'fonts' || a === 'import' ? a : 'presentations';
+      const tab = a === 'media' || a === 'themes' || a === 'fonts' || a === 'import' ? a : 'presentations';
       return { name: 'library', tab };
     }
     case 'edit':
@@ -45,6 +44,7 @@ export function parseRoute(hash: string): Route | null {
     case 'playlists':
       return { name: 'playlists', id: a };
     case 'settings':
+      if (a === 'themes') return { name: 'library', tab: 'themes' };
       return {
         name: 'settings',
         page: a && (SETTINGS_PAGES as readonly string[]).includes(a) ? a : 'outputs',
@@ -81,7 +81,7 @@ export function routeHash(r: Route): string {
 }
 
 /** Settings pages that make sense on an edit-profile device (no outputs, audio devices, keys or backups). */
-export const EDIT_PROFILE_SETTINGS: readonly string[] = ['looks', 'messages', 'general', 'themes', 'pins'];
+export const EDIT_PROFILE_SETTINGS: readonly string[] = ['looks', 'messages', 'general', 'pins'];
 
 /**
  * Routes a role may open on a device of this profile; everything else redirects to the library. An
