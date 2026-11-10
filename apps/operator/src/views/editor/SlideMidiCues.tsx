@@ -10,6 +10,8 @@ const CUE_TYPES: { value: MidiCueType; label: string }[] = [
   { value: 'programChange', label: 'Program Change' },
 ];
 
+const MIDI_CHANNELS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] as const;
+
 /** Slide-level outgoing MIDI cues (ProPresenter communication actions). */
 export function SlideMidiCues({
   cues = [],
@@ -101,9 +103,9 @@ export function SlideMidiCues({
                 disabled={readOnly}
                 onChange={(e) => updateCue(c.id, { channel: Number(e.target.value) })}
               >
-                {Array.from({ length: 16 }, (_, i) => (
-                  <option key={i + 1} value={i + 1}>
-                    {i + 1}
+                {MIDI_CHANNELS.map((ch) => (
+                  <option key={ch} value={ch}>
+                    {ch}
                   </option>
                 ))}
               </select>

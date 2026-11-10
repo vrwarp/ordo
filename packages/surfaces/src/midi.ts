@@ -257,7 +257,7 @@ export class MidiDriver {
 
   /** Send one or more slide/macro cues, observing any specified delayMs. */
   sendCues(cues?: MidiCue[]): void {
-    if (!cues || !cues.length) return;
+    if (!cues?.length) return;
     for (const cue of cues) {
       if (cue.delayMs && cue.delayMs > 0) {
         setTimeout(() => {

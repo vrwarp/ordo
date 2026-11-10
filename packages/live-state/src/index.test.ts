@@ -397,6 +397,10 @@ describe('actionToEvent with ProPresenter navigation actions', () => {
     const s = reduce(initialState(), { k: 'goLive', resolved: fixture() });
     const live = reduce(s, { k: 'go', cueIndex: 0, at: 10 });
     // Slide 3 of item 0 -> cueIndex 2
-    expect(actionToEvent(live, { id: 'goToSlideItem', arg: 3 }, 40)).toEqual({ k: 'go', cueIndex: 2, at: 40 });
+    expect(actionToEvent(live, { id: 'goToSlideItem', arg: 3 }, 40)).toEqual({
+      k: 'go',
+      cueIndex: 2,
+      at: 40,
+    });
   });
 });

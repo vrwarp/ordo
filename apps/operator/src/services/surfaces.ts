@@ -86,8 +86,7 @@ export class Surfaces {
     this.midi.onError = (d) => this.fault(`midi: ${d}`);
     this.midi.onInputs = (inputs) => useSurfaces.setState({ midiInputs: inputs });
     this.midi.onOutputs = (outputs) => useSurfaces.setState({ midiOutputs: outputs });
-    this.midi.onMessage = (msg) =>
-      useSurfaces.setState({ lastMidiMessage: { ...msg, time: Date.now() } });
+    this.midi.onMessage = (msg) => useSurfaces.setState({ lastMidiMessage: { ...msg, time: Date.now() } });
     this.unsub.push(
       useLibrary.subscribe((st, prev) => {
         const a = st.data.settings;
