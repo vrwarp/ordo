@@ -1555,3 +1555,104 @@ button.arr-chip-label {
 .demo-banner a {
   color: #c7d2fe;
 }
+
+/* Lyric Theme Designer (Canva/Figma inspired modern typography workspace) */
+.theme-designer-grid {
+  display: grid;
+  grid-template-columns: minmax(440px, 1.4fr) minmax(360px, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+@media (max-width: 960px) {
+  .theme-designer-grid {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+}
+.segmented-bar {
+  display: flex;
+  background: var(--bg3);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 2px;
+}
+.segmented-bar button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg2);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.segmented-bar button:hover:not(.active) {
+  background: var(--bg4);
+  color: var(--fg);
+}
+.segmented-bar button.active {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+.stepper-box {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg3);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.stepper-box button {
+  background: transparent;
+  border: 0;
+  color: var(--fg);
+  padding: 6px 12px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.stepper-box button:hover {
+  background: var(--bg4);
+}
+.stepper-box input {
+  width: 56px;
+  text-align: center;
+  background: transparent;
+  border: 0;
+  color: var(--fg);
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+}
+.contrast-card-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 10px;
+  background: var(--bg3);
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: center;
+}
+.contrast-card-btn:hover {
+  background: var(--bg4);
+  border-color: var(--fg3);
+}
+.contrast-card-btn.active {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
