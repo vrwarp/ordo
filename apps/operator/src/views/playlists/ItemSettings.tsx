@@ -1,9 +1,11 @@
-import { type Arrangement, type ActionId, newId, type PlaylistItem } from '@ordo/domain';
+import { api } from '@ordo/client';
+import { type Arrangement, type ActionId, newId, type PlaylistItem, type Section } from '@ordo/domain';
 import { useState } from 'react';
 import { ArrangementEditor } from '../../components/ArrangementEditor.tsx';
 import { Check, Field, NumberField, Select, TextField, TransitionEditor } from '../../components/fields.tsx';
 import { authoringArrangement } from '../../lib/arrangement.ts';
-import { useLibrary } from '../../state/library.ts';
+import { upsertLocal, useLibrary } from '../../state/library.ts';
+import { errorText, toast } from '../../state/toasts.ts';
 import { ACTIONS } from './AddItemsPanel.tsx';
 import { BackgroundPicker } from '../editor/BackgroundPicker.tsx';
 
@@ -71,7 +73,23 @@ export function ItemSettings(props: {
               value={editing.name}
               onChange={(name) => setEditing({ ...editing, name })}
             />
-            <ArrangementEditor presentation={p} value={editing} onChange={setEditing} />
+            <ArrangementEditor
+              presentation={p}
+              value={editing}
+              onChange={setEditing}
+              onAddSection={async (sec: Section) => {
+                const updated = { ...p, sections: [...p.sections, sec] };
+                try {
+                  const saved = await api<typeof p>(`/presentations/${p.id}`, {
+                    method: 'PUT',
+                    json: updated,
+                  });
+                  upsertLocal('presentations', saved);
+                } catch (e) {
+                  toast(`Could not save custom section: ${errorText(e)}`, 'error');
+                }
+              }}
+            />
             <div className="row">
               <button
                 type="button"

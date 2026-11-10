@@ -2,7 +2,7 @@ import { type Arrangement, newId, type Presentation } from '@ordo/domain';
 import { useState } from 'react';
 import { ArrangementEditor } from '../../components/ArrangementEditor.tsx';
 import { confirmDialog } from '../../components/Confirm.tsx';
-import { NumberField, Select, TextField, TransitionEditor } from '../../components/fields.tsx';
+import { NumberField, TextField, TransitionEditor } from '../../components/fields.tsx';
 import { authoringArrangement, upsertArrangement } from '../../lib/arrangement.ts';
 import { useLibrary } from '../../state/library.ts';
 import { BackgroundPicker } from './BackgroundPicker.tsx';
@@ -294,7 +294,18 @@ function ArrangementsSection({ p, readOnly }: { p: Presentation; readOnly: boole
             )}
           </div>
           {open === a.id ? (
-            <ArrangementEditor presentation={p} value={a} onChange={update} disabled={readOnly} />
+            <ArrangementEditor
+              presentation={p}
+              value={a}
+              onChange={update}
+              disabled={readOnly}
+              onAddSection={(sec) => {
+                change((q) => ({
+                  ...q,
+                  sections: [...q.sections, sec],
+                }));
+              }}
+            />
           ) : (
             <span className="muted small">
               {a.sectionIds.map((id) => p.sections.find((s) => s.id === id)?.short ?? '?').join(' ')}
