@@ -32,3 +32,14 @@ export type {
 export { GlyphCoverage, contextMetrics, coverageScripts, shippedStack } from './coverage.ts';
 export type { BlankFace } from './blankface.ts';
 export { blankFont, registerBlankFace } from './blankface.ts';
+export type { CaretRect, SelectionRect, TextEditingOverlayOptions } from './cursor.ts';
+export {
+  caretPosition,
+  drawTextEditingOverlay,
+  hitTestText,
+  moveCaretVertically,
+  paraRangeAt,
+  selectionRects,
+  toLocalBoxPoint,
+  wordRangeAt,
+} from './cursor.ts';

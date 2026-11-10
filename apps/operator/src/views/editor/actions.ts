@@ -13,11 +13,15 @@ import {
   formatRange,
   groupBox,
   hideSlide,
+  htmlToRichText,
   MAX_OBJECTS,
   MAX_SECTION_SLIDES,
   moveObjects,
   newSlideLike,
   type ParaPatch,
+  parseObjectsFromHtml,
+  pasteObjects,
+  pasteRichText,
   type PictureFlip,
   type PictureMask,
   type PictureSize,
@@ -27,12 +31,16 @@ import {
   replaceBackgroundOf,
   replacePicture,
   resizeRange,
+  type RichTextSlice,
+  richTextToHtml,
   type RunPatch,
   runOverrides,
+  serializeObjectsToHtml,
   setCrop,
   setFlip,
   setMask,
   setParas,
+  sliceRichText,
   textOnSlide,
   transformGroup,
   ungroup,
@@ -129,6 +137,99 @@ export function refit(objectId: string): void {
   onText(objectId, refitText);
 }
 
+// ---- Rich clipboard (text & slide objects) ----------------------------------------------------------
+
+let lastRichTextClip: { slice: RichTextSlice; plain: string } | null = null;
+let lastObjectClip: {
+  objects: SlideObject[];
+  sourceSlideId?: string;
+  lastSlideId?: string;
+  pasteCount: number;
+  plain: string;
+  html: string;
+} | null = null;
+
+/** Paste a `RichTextSlice` into `[start, end)` of `objectId`; returns the new caret offset. */
+export function pasteRichSelection(
+  objectId: string,
+  start: number,
+  end: number,
+  slice: RichTextSlice,
+): number {
+  let caret = Math.min(start, end) + slice.text.length;
+  const slideId = openSlide();
+  if (!slideId) return caret;
+  change((p) =>
+    withSlide(p, slideId, (s) => {
+      const target = s.objects.find((x) => x.id === objectId);
+      if (target?.type !== 'text' || target.locked) return s;
+      const r = pasteRichText(target, start, end, slice);
+      caret = r.caret;
+      return textOnSlide(s, objectId, () => r.object, p.themeId ? r.overrides : []);
+    }),
+  );
+  return caret;
+}
+
+/** Copy `[start, end)` of `o` as rich text + HTML; returns the copied slice or null if empty. */
+export function copyTextSelection(
+  o: TextObject,
+  start: number,
+  end: number,
+  clipboardData?: DataTransfer | null,
+): RichTextSlice | null {
+  const slice = sliceRichText(o, start, end);
+  if (!slice.text) return null;
+  lastRichTextClip = { slice, plain: slice.text };
+  lastObjectClip = null;
+  if (clipboardData) {
+    try {
+      clipboardData.setData('text/plain', slice.text);
+      clipboardData.setData('text/html', richTextToHtml(slice, o.style));
+    } catch {
+      // Ignore synthetic DataTransfer restrictions in tests.
+    }
+  }
+  return slice;
+}
+
+/** Cut `[start, end)` of `o` as rich text + HTML; returns the new caret offset or null if empty. */
+export function cutTextSelection(
+  o: TextObject,
+  start: number,
+  end: number,
+  clipboardData?: DataTransfer | null,
+): number | null {
+  const slice = copyTextSelection(o, start, end, clipboardData);
+  if (!slice) return null;
+  return pasteRichSelection(o.id, start, end, { text: '' });
+}
+
+/**
+ * Paste rich or plain text from `clipboardData` (or in-memory fallback) into `[start, end)` of `o`;
+ * returns the new caret offset, or null if nothing was pasted.
+ */
+export function handleTextPaste(
+  o: TextObject,
+  start: number,
+  end: number,
+  clipboardData?: DataTransfer | null,
+): number | null {
+  const html = clipboardData?.getData('text/html') ?? '';
+  const plain = clipboardData?.getData('text/plain') ?? '';
+  if (html) {
+    const rich = htmlToRichText(html, o.style);
+    if (rich) return pasteRichSelection(o.id, start, end, rich);
+  }
+  if (lastRichTextClip && (!plain || plain === lastRichTextClip.plain)) {
+    return pasteRichSelection(o.id, start, end, lastRichTextClip.slice);
+  }
+  if (plain) {
+    return pasteRichSelection(o.id, start, end, { text: plain });
+  }
+  return null;
+}
+
 // ---- B: group ops (on the store's selection, `objectIds`) -------------------------------------------
 
 function onSelection(
@@ -198,6 +299,127 @@ export function reorderSelection(z: ZOrder): void {
 /** 'Ungroup' the selection. */
 export function ungroupSelection(): void {
   onSelection((p, slideId, ids) => ungroup(p, slideId, ids));
+}
+
+/** Copy the selected slide objects to the clipboard (in-memory + system `text/html`). */
+export function copySelection(clipboardData?: DataTransfer | null): boolean {
+  const objs = currentObjects();
+  const slideId = openSlide();
+  if (!objs.length || !slideId) return false;
+  const { html, text } = serializeObjectsToHtml(objs, slideId);
+  lastObjectClip = {
+    objects: structuredClone(objs) as SlideObject[],
+    sourceSlideId: slideId,
+    lastSlideId: slideId,
+    pasteCount: 0,
+    plain: text,
+    html,
+  };
+  lastRichTextClip = null;
+  if (clipboardData) {
+    try {
+      clipboardData.setData('text/plain', text);
+      clipboardData.setData('text/html', html);
+    } catch {
+      // Ignore synthetic DataTransfer restrictions.
+    }
+  }
+  return true;
+}
+
+/** Write the most recently copied/cut slide objects into `clipboardData` (used when `cut` fires after `keydown`). */
+export function writeLastObjectClip(clipboardData?: DataTransfer | null): boolean {
+  if (!lastObjectClip || !clipboardData) return false;
+  try {
+    clipboardData.setData('text/plain', lastObjectClip.plain);
+    clipboardData.setData('text/html', lastObjectClip.html);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Cut the selected slide objects (copy + delete in one action). */
+export function cutSelection(clipboardData?: DataTransfer | null): boolean {
+  if (!copySelection(clipboardData)) return false;
+  if (lastObjectClip) lastObjectClip.pasteCount = -1;
+  deleteSelection();
+  return true;
+}
+
+/** Whether there are copied slide objects available in memory. */
+export function hasCopiedObjects(): boolean {
+  return !!lastObjectClip && lastObjectClip.objects.length > 0;
+}
+
+/** Paste `objects` onto the open slide, selecting the newly created copies. */
+export function pasteCopiedObjects(
+  objects?: readonly SlideObject[],
+  sourceSlideId?: string,
+  pasteCount?: number,
+): string[] {
+  const slideId = openSlide();
+  if (!slideId) return [];
+  const srcObjs = objects ?? lastObjectClip?.objects;
+  if (!srcObjs?.length) return [];
+  const srcSlide = sourceSlideId ?? lastObjectClip?.sourceSlideId;
+  let count = pasteCount;
+  if (count === undefined) {
+    if (lastObjectClip && srcObjs === lastObjectClip.objects) {
+      lastObjectClip.pasteCount++;
+      count = lastObjectClip.pasteCount;
+    } else {
+      count = 1;
+    }
+  }
+  const sameSlide = !srcSlide || srcSlide === slideId;
+  const step = !sameSlide && count <= 1 ? 0 : Math.max(0, Math.min(count, 10)) * 20;
+  let copies: string[] = [];
+  let full = false;
+  change((p) => {
+    const r = pasteObjects(p, slideId, srcObjs, { dx: step, dy: step });
+    copies = r.ids;
+    full = !!r.full;
+    return r.p;
+  });
+  if (copies.length) {
+    selectObjects(copies, copies[copies.length - 1]);
+  } else if (full) {
+    toast(`A slide holds at most ${MAX_OBJECTS} objects: the paste was not made.`, 'warn');
+  }
+  return copies;
+}
+
+/**
+ * Check `clipboardData` (or in-memory object clipboard) for copied Ordo slide objects and paste them.
+ * Returns the pasted object IDs if slide objects were pasted, or null if the clipboard does not hold slide objects.
+ */
+export function tryPasteObjectsFromClipboard(clipboardData?: DataTransfer | null): string[] | null {
+  const slideId = openSlide();
+  const html = clipboardData?.getData('text/html') ?? '';
+  const plain = clipboardData?.getData('text/plain') ?? '';
+  const nextCount = (srcSlideId?: string) => {
+    if (!lastObjectClip) return slideId && srcSlideId && slideId !== srcSlideId ? 0 : 1;
+    if (slideId && slideId !== lastObjectClip.lastSlideId) {
+      lastObjectClip.lastSlideId = slideId;
+      lastObjectClip.pasteCount = slideId !== (srcSlideId ?? lastObjectClip.sourceSlideId) ? 0 : 1;
+      return lastObjectClip.pasteCount;
+    }
+    lastObjectClip.pasteCount++;
+    return lastObjectClip.pasteCount;
+  };
+  if (html) {
+    const parsed = parseObjectsFromHtml(html);
+    if (parsed) {
+      const count = lastObjectClip && lastObjectClip.plain === plain ? nextCount(parsed.sourceSlideId) : 1;
+      return pasteCopiedObjects(parsed.objects, parsed.sourceSlideId, count);
+    }
+  }
+  if (lastObjectClip && (!plain || plain === lastObjectClip.plain) && !html) {
+    const count = nextCount(lastObjectClip.sourceSlideId);
+    return pasteCopiedObjects(lastObjectClip.objects, lastObjectClip.sourceSlideId, count);
+  }
+  return null;
 }
 
 // ---- D: picture ops ----------------------------------------------------------------------------------

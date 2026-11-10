@@ -13,6 +13,12 @@ import { type MergeConflict, prepareMerge, same, theirsOf } from './merge.ts';
 import { getSlide } from './ops.ts';
 import type { Guides } from './snapping.ts';
 
+export type CanvasTextSelection = {
+  start: number;
+  end: number;
+  caret: number;
+};
+
 export type EditorState = {
   id?: string;
   /** Last saved (or loaded) version. */
@@ -39,8 +45,11 @@ export type EditorState = {
   canUndo: boolean;
   canRedo: boolean;
   inlineEditingId?: string;
+  textRange: CanvasTextSelection;
   loadError?: string;
 };
+
+const EMPTY_TEXT_RANGE: CanvasTextSelection = { start: 0, end: 0, caret: 0 };
 
 export const useEditor = create<EditorState>(() => ({
   objectIds: [],
@@ -52,10 +61,30 @@ export const useEditor = create<EditorState>(() => ({
   canUndo: false,
   canRedo: false,
   inlineEditingId: undefined,
+  textRange: EMPTY_TEXT_RANGE,
 }));
 
-export function startInlineEditing(objectId: string): void {
-  useEditor.setState({ inlineEditingId: objectId });
+export function setTextRange(range: { start: number; end: number; caret?: number }): void {
+  const start = Math.max(0, Math.min(range.start, range.end));
+  const end = Math.max(start, Math.max(range.start, range.end));
+  const caret = range.caret !== undefined ? Math.max(start, Math.min(end, range.caret)) : end;
+  const cur = useEditor.getState().textRange;
+  if (cur.start === start && cur.end === end && cur.caret === caret) return;
+  useEditor.setState({ textRange: { start, end, caret } });
+}
+
+export function startInlineEditing(
+  objectId: string,
+  range?: { start: number; end: number; caret?: number },
+): void {
+  if (range) {
+    const start = Math.max(0, Math.min(range.start, range.end));
+    const end = Math.max(start, Math.max(range.start, range.end));
+    const caret = range.caret !== undefined ? Math.max(start, Math.min(end, range.caret)) : end;
+    useEditor.setState({ inlineEditingId: objectId, textRange: { start, end, caret } });
+  } else {
+    useEditor.setState({ inlineEditingId: objectId });
+  }
 }
 
 export function stopInlineEditing(): void {
@@ -88,6 +117,8 @@ export function openPresentation(p: Presentation): void {
     mergeConflicts: [],
     canUndo: false,
     canRedo: false,
+    inlineEditingId: undefined,
+    textRange: EMPTY_TEXT_RANGE,
     loadError: undefined,
   });
 }
@@ -147,7 +178,13 @@ function fixSelection(): void {
 }
 
 export function selectSlide(slideId: string | undefined): void {
-  useEditor.setState({ slideId, objectId: undefined, objectIds: [], inlineEditingId: undefined });
+  useEditor.setState({
+    slideId,
+    objectId: undefined,
+    objectIds: [],
+    inlineEditingId: undefined,
+    textRange: EMPTY_TEXT_RANGE,
+  });
 }
 /** Select one object (or none): it is the whole selection. */
 export function selectObject(objectId: string | undefined): void {
@@ -155,6 +192,7 @@ export function selectObject(objectId: string | undefined): void {
     objectId,
     objectIds: objectId ? [objectId] : [],
     inlineEditingId: objectId && objectId === s.inlineEditingId ? s.inlineEditingId : undefined,
+    textRange: objectId && objectId === s.objectId ? s.textRange : EMPTY_TEXT_RANGE,
   }));
 }
 /**
@@ -166,7 +204,12 @@ export function selectObjects(ids: readonly string[], primary?: string): void {
   const want = new Set(ids);
   const ordered = slide ? slide.objects.filter((o) => want.has(o.id)).map((o) => o.id) : [];
   const first = primary && ordered.includes(primary) ? primary : ids.find((id) => ordered.includes(id));
-  useEditor.setState({ objectId: first, objectIds: ordered, inlineEditingId: undefined });
+  useEditor.setState((s) => ({
+    objectId: first,
+    objectIds: ordered,
+    inlineEditingId: undefined,
+    textRange: first && first === s.objectId ? s.textRange : EMPTY_TEXT_RANGE,
+  }));
 }
 
 export function currentSlide() {

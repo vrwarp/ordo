@@ -12,6 +12,7 @@
  * | `slides.ts`   | E    | findText, findReplace, hideSlide, replaceBackground, similarObjects, applyStyleToSimilar, newSlideLike, useAsBackground |
  * | `common.ts`   | -    | withSlide, withObject, withEverySlide (identity-keeping updates) |
  */
+export * from './clipboard.ts';
 export * from './common.ts';
 export * from './group.ts';
 export * from './pictures.ts';
