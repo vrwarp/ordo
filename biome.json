@@ -7,6 +7,8 @@
       "!**/node_modules",
       "!**/*.gen.ts",
       "!tools/fixtures/out",
+      "!golden-pptx",
+      "!tools/corpus_manifest_input.json",
       "!**/proto/*.json",
       "!test-results",
       "!**/.e2e-data*",
