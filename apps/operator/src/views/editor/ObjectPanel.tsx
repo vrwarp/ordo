@@ -68,10 +68,12 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new object starts with a caret at its start
   useEffect(() => setRange({ start: 0, end: 0 }), [o.id]);
   const slide = getSlide(draft, slideId);
+  const isSong = draft?.kind === 'song';
   const isLyric =
-    slide?.lyricObjectId === o.id ||
-    (!slide?.lyricObjectId && slide?.objects.find((x) => x.type === 'text')?.id === o.id);
-  const themed = isLyric && !!draft.themeId;
+    isSong &&
+    (slide?.lyricObjectId === o.id ||
+      (!slide?.lyricObjectId && slide?.objects.find((x) => x.type === 'text')?.id === o.id));
+  const themed = isLyric && !!draft?.themeId;
   const set = (fn: (x: SlideObject) => SlideObject, key?: string, overridePath?: string) => {
     if (liveLocked || (locked && overridePath !== 'box')) return;
     change((p) => {
@@ -103,7 +105,7 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
                 : 'Image'
               : `Shape (${shapeName(o)})`}
         </b>
-        {o.type === 'text' && !isLyric && (
+        {o.type === 'text' && isSong && !isLyric && (
           <button
             type="button"
             className="small"
@@ -174,13 +176,13 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
           )}
         </>
       )}
-      {isLyric && (
+      {o.type === 'text' && (
         <div className="col" style={{ gap: 6 }}>
           <span
             className="small bold"
             style={{ letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--fg2)' }}
           >
-            Screen Placement Presets
+            Screen placement
           </span>
           <div className="grid2" style={{ gap: 6 }}>
             {PLACEMENT_PRESETS.map((p) => {

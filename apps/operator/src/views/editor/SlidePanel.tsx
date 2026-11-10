@@ -58,7 +58,7 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
   return (
     <div className="col" style={{ gap: 10 }}>
       <b>Slide</b>
-      {texts.length > 0 && (
+      {p.kind === 'song' && texts.length > 0 && (
         <label className="field">
           <span>Lyric box (read by lower-third and stage looks)</span>
           <select
@@ -106,7 +106,7 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
         disabled={readOnly}
         onChange={(notes) => set((s) => ({ ...s, notes: notes || undefined }), `notes:${slide.id}`)}
       />
-      {slide.overrides && slide.overrides.length > 0 && (
+      {p.kind === 'song' && slide.overrides && slide.overrides.length > 0 && (
         <div className="col">
           <span className="override-mark">
             ● This slide overrides the theme: {slide.overrides.join(', ')}

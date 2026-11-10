@@ -30,6 +30,7 @@ export function PresentationPanel({ p, readOnly }: { p: Presentation; readOnly: 
   };
   return (
     <div className="col" style={{ gap: 10 }}>
+      {/* 1. Identity & Classification */}
       <TextField
         label="Title"
         value={p.title}
@@ -47,53 +48,6 @@ export function PresentationPanel({ p, readOnly }: { p: Presentation; readOnly: 
         ]}
         onChange={(kind) =>
           set((q) => ({ ...q, kind, loop: kind === 'loop' ? (q.loop ?? { defaultSlideMs: 8000 }) : q.loop }))
-        }
-      />
-      {p.kind === 'loop' && (
-        <NumberField
-          label="Default slide duration (seconds)"
-          value={(p.loop?.defaultSlideMs ?? 8000) / 1000}
-          min={1}
-          max={600}
-          step={0.5}
-          onChange={(v) => set((q) => ({ ...q, loop: { defaultSlideMs: Math.round(v * 1000) } }))}
-        />
-      )}
-      <div className="grid2">
-        <TextField
-          label="Author"
-          value={meta.author ?? ''}
-          disabled={readOnly}
-          onChange={(author) =>
-            set((q) => ({ ...q, meta: { ...q.meta, author: author || undefined } }), 'author')
-          }
-        />
-        <TextField
-          label="CCLI number"
-          value={meta.ccli ?? ''}
-          disabled={readOnly}
-          onChange={(ccli) => set((q) => ({ ...q, meta: { ...q.meta, ccli: ccli || undefined } }), 'ccli')}
-        />
-        <TextField
-          label="Key"
-          value={meta.key ?? ''}
-          disabled={readOnly}
-          onChange={(key) => set((q) => ({ ...q, meta: { ...q.meta, key: key || undefined } }), 'key')}
-        />
-        <NumberField
-          label="Tempo (BPM)"
-          value={meta.tempo ?? 0}
-          min={0}
-          disabled={readOnly}
-          onChange={(tempo) => set((q) => ({ ...q, meta: { ...q.meta, tempo: tempo || undefined } }))}
-        />
-      </div>
-      <TextField
-        label="Copyright"
-        value={meta.copyright ?? ''}
-        disabled={readOnly}
-        onChange={(copyright) =>
-          set((q) => ({ ...q, meta: { ...q.meta, copyright: copyright || undefined } }), 'copyright')
         }
       />
       <TextField
@@ -114,67 +68,162 @@ export function PresentationPanel({ p, readOnly }: { p: Presentation; readOnly: 
           }))
         }
       />
-      {p.kind === 'song' && (
-        <NumberField
-          label="Lines per slide (for new slides from lyrics)"
-          value={p.linesPerSlide ?? 2}
-          min={1}
-          max={12}
-          disabled={readOnly}
-          onChange={(linesPerSlide) => set((q) => ({ ...q, linesPerSlide }))}
-        />
-      )}
-      <label className="field">
-        <span>Lyric theme {p.kind === 'slides' ? '(songs only)' : ''}</span>
-        <div className="row">
-          <select
-            value={theme}
-            onChange={(e) => setTheme(e.target.value)}
-            disabled={readOnly}
-            className="grow"
+
+      {/* 2. Announcement Loop Settings */}
+      {p.kind === 'loop' && (
+        <div className="col" style={{ gap: 8, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+          <span
+            className="small bold"
+            style={{ textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fg2)' }}
           >
-            <option value="">No theme</option>
-            {themes.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-                {t.id === p.themeId ? ' (current)' : ''}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className="small"
-            disabled={readOnly || !theme}
-            onClick={() => void applyChosen()}
-          >
-            Apply…
-          </button>
+            Loop Playback
+          </span>
+          <NumberField
+            label="Default slide duration (seconds)"
+            value={(p.loop?.defaultSlideMs ?? 8000) / 1000}
+            min={1}
+            max={600}
+            step={0.5}
+            onChange={(v) => set((q) => ({ ...q, loop: { defaultSlideMs: Math.round(v * 1000) } }))}
+          />
+          <span className="muted small">
+            Slides auto-advance on-air and loop continuously. Individual slides can override their duration in
+            the Slide tab.
+          </span>
         </div>
-        {p.kind === 'slides' && (
+      )}
+
+      {/* 3. Worship Song Specific Metadata, Theme & Arrangements */}
+      {p.kind === 'song' && (
+        <div className="col" style={{ gap: 10, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+          <span
+            className="small bold"
+            style={{ textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fg2)' }}
+          >
+            Worship & Musical Details
+          </span>
+          <div className="grid2">
+            <TextField
+              label="Author"
+              value={meta.author ?? ''}
+              disabled={readOnly}
+              onChange={(author) =>
+                set((q) => ({ ...q, meta: { ...q.meta, author: author || undefined } }), 'author')
+              }
+            />
+            <TextField
+              label="CCLI number"
+              value={meta.ccli ?? ''}
+              disabled={readOnly}
+              onChange={(ccli) =>
+                set((q) => ({ ...q, meta: { ...q.meta, ccli: ccli || undefined } }), 'ccli')
+              }
+            />
+            <TextField
+              label="Key"
+              value={meta.key ?? ''}
+              disabled={readOnly}
+              onChange={(key) => set((q) => ({ ...q, meta: { ...q.meta, key: key || undefined } }), 'key')}
+            />
+            <NumberField
+              label="Tempo (BPM)"
+              value={meta.tempo ?? 0}
+              min={0}
+              disabled={readOnly}
+              onChange={(tempo) => set((q) => ({ ...q, meta: { ...q.meta, tempo: tempo || undefined } }))}
+            />
+          </div>
+          <TextField
+            label="Copyright"
+            value={meta.copyright ?? ''}
+            disabled={readOnly}
+            onChange={(copyright) =>
+              set((q) => ({ ...q, meta: { ...q.meta, copyright: copyright || undefined } }), 'copyright')
+            }
+          />
+
+          <span
+            className="small bold"
+            style={{ textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fg2)', marginTop: 4 }}
+          >
+            Lyric Theme & Formatting
+          </span>
+          <label className="field">
+            <span>Lyric theme</span>
+            <div className="row">
+              <select
+                value={theme}
+                onChange={(e) => setTheme(e.target.value)}
+                disabled={readOnly}
+                className="grow"
+              >
+                <option value="">No theme</option>
+                {themes.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                    {t.id === p.themeId ? ' (current)' : ''}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="small"
+                disabled={readOnly || !theme}
+                onClick={() => void applyChosen()}
+              >
+                Apply…
+              </button>
+            </div>
+          </label>
+          <NumberField
+            label="Lines per slide (for new slides from lyrics)"
+            value={p.linesPerSlide ?? 2}
+            min={1}
+            max={12}
+            disabled={readOnly}
+            onChange={(linesPerSlide) => set((q) => ({ ...q, linesPerSlide }))}
+          />
+
+          <ArrangementsSection p={p} readOnly={readOnly} />
+        </div>
+      )}
+
+      {/* 4. Slides / Deck Specific Reports */}
+      {p.kind === 'slides' && (
+        <div className="col" style={{ gap: 8, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+          <PptxReport p={p} readOnly={readOnly} />
           <span className="muted small">
             PowerPoint sermon and announcement slides retain their imported layouts.
           </span>
-        )}
-      </label>
-      <label className="field">
-        <span>Default background</span>
-        <BackgroundPicker
-          value={p.backgroundMediaId}
-          disabled={readOnly}
-          onChange={(backgroundMediaId) => set((q) => ({ ...q, backgroundMediaId }))}
-        />
-      </label>
-      <ReplaceOnAllSlides p={p} readOnly={readOnly} />
-      <label className="field">
-        <span>Transition</span>
-        <TransitionEditor
-          value={p.transition}
-          allowInherit
-          onChange={(transition) => set((q) => ({ ...q, transition }))}
-        />
-      </label>
-      <ArrangementsSection p={p} readOnly={readOnly} />
-      <PptxReport p={p} readOnly={readOnly} />
+        </div>
+      )}
+
+      {/* 5. Universal Slide Defaults (Background & Transition) */}
+      <div className="col" style={{ gap: 10, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+        <span
+          className="small bold"
+          style={{ textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fg2)' }}
+        >
+          Slide Defaults
+        </span>
+        <label className="field">
+          <span>Default background</span>
+          <BackgroundPicker
+            value={p.backgroundMediaId}
+            disabled={readOnly}
+            onChange={(backgroundMediaId) => set((q) => ({ ...q, backgroundMediaId }))}
+          />
+        </label>
+        <ReplaceOnAllSlides p={p} readOnly={readOnly} />
+        <label className="field">
+          <span>Transition</span>
+          <TransitionEditor
+            value={p.transition}
+            allowInherit
+            onChange={(transition) => set((q) => ({ ...q, transition }))}
+          />
+        </label>
+      </div>
     </div>
   );
 }

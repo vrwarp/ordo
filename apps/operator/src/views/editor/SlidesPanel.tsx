@@ -226,7 +226,13 @@ export function SlidesPanel({ p, readOnly }: { p: Presentation; readOnly: boolea
         <div className="row" style={{ marginTop: 8 }}>
           <input
             className="grow"
-            placeholder="New section (Verse 2, C, Bridge…)"
+            placeholder={
+              p.kind === 'song'
+                ? 'New section (Verse 2, C, Bridge…)'
+                : p.kind === 'loop'
+                  ? 'New section (Events, Giving, Youth…)'
+                  : 'New section (Intro, Scripture, Points…)'
+            }
             value={newSection}
             onChange={(e) => setNewSection(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && addNamedSection()}

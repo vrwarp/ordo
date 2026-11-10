@@ -477,27 +477,28 @@ export function TextStyleEditor(props: {
         )}
       </div>
 
-      {/* 7. Progressive Disclosure: Advanced Typography, Insets & Text Box Properties */}
-      <details
-        className="advanced-details"
+      {/* 7. Advanced Typography, Insets & Text Box Properties */}
+      <div
+        className="col"
         style={{
           background: 'var(--bg3)',
           border: '1px solid var(--line)',
           borderRadius: 8,
           padding: '10px 12px',
+          gap: 12,
         }}
       >
-        <summary
+        <span
+          className="small bold"
           style={{
-            cursor: 'pointer',
-            fontSize: 13,
-            fontWeight: 600,
+            fontSize: 12,
+            letterSpacing: '0.04em',
+            textTransform: 'uppercase',
             color: 'var(--fg2)',
-            outline: 'none',
           }}
         >
-          Advanced Typography & Insets
-        </summary>
+          Fine-tune & Insets
+        </span>
         <div className="col" style={{ gap: 12, marginTop: 12 }}>
           {/* Spacing Controls */}
           <div className="grid2" style={{ gap: 8 }}>
@@ -694,7 +695,7 @@ export function TextStyleEditor(props: {
             )}
           </div>
         </div>
-      </details>
+      </div>
     </div>
   );
 }
