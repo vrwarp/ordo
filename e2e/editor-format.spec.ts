@@ -4,6 +4,7 @@ import { expect, type Page, test } from '@playwright/test';
 import pptxgen from 'pptxgenjs';
 import {
   ANNOUNCEMENT_TEXT,
+  canvasPoint,
   churchDeck,
   editorHub,
   editorState,
@@ -270,4 +271,139 @@ test('a 4:3 deck shows its area on the canvas, the bars outside it shaded', asyn
   }, wide.id);
   await expect.poll(async () => (await editorState(page)).id).toBe(wide.id);
   await expect.poll(() => guides(page, 'deck-area')).toEqual([]);
+});
+
+test('inline canvas text editing selects words on the canvas and formats them via FormatBar without losing focus', async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  const a = await hubApi(PORT);
+  const p = await importDeck(a, deck);
+  const note = textOn(slidesOf(p)[1]!.objects, ANNOUNCEMENT_TEXT);
+
+  await openEditor(page, PORT, p.id);
+  await openSlide(page, 2);
+  await selectText(page, note);
+
+  // Double-click the text box on the canvas to enter canvas-native inline editing.
+  const pt = await canvasPoint(page, note.box.x + 80, note.box.y + 40);
+  await page.mouse.dblclick(pt.x, pt.y);
+  const inlineOverlay = page.getByTestId('ordo-inline-canvas-editor');
+  await expect(inlineOverlay).toBeVisible();
+
+  // Double-click near the start of 'Potluck' on the canvas overlay to select that word.
+  const wordPt = await canvasPoint(page, note.box.x + 40, note.box.y + 30);
+  await page.mouse.click(wordPt.x, wordPt.y);
+  await page.mouse.click(wordPt.x, wordPt.y);
+  await expect
+    .poll(() => fieldSelection(page))
+    .toEqual({
+      id: 'ordo-text-editor',
+      start: 0,
+      end: 'Potluck'.length,
+    });
+
+  // Format the selected canvas word using FormatBar (Italic + Size +) without dismissing inline editing.
+  const italicBtn = page.getByRole('button', { name: 'Italic' });
+  await expect(italicBtn).toBeEnabled();
+  await italicBtn.click();
+  await expect(italicBtn).toHaveAttribute('aria-pressed', 'true');
+  await expect(inlineOverlay).toBeVisible();
+
+  const sizePlusBtn = page.getByRole('button', { name: 'Size + (larger text)' });
+  await sizePlusBtn.click();
+  await expect(inlineOverlay).toBeVisible();
+
+  const saved = await saveAndReload(page, a, p.id);
+  const updated = textOn(slidesOf(saved)[1]!.objects, ANNOUNCEMENT_TEXT);
+  const potluckRun = (updated.runs ?? []).find((r) => r.start === 0 && r.end === 'Potluck'.length);
+  expect(potluckRun).toMatchObject({
+    start: 0,
+    end: 'Potluck'.length,
+    fontStyle: 'italic',
+  });
+  expect(potluckRun?.sizeScale).toBeGreaterThan(1);
+});
+
+test('rich copy and paste preserves Ordo runs, converts external scripture HTML, and copies slide objects across slides', async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  const a = await hubApi(PORT);
+  const p = await importDeck(a, deck);
+  const note = textOn(slidesOf(p)[1]!.objects, ANNOUNCEMENT_TEXT);
+
+  await openEditor(page, PORT, p.id);
+  await openSlide(page, 2);
+  await selectText(page, note);
+
+  // 1. Format 'Potluck' as Bold + Superscript, copy it, and paste it at the end of the text box.
+  const start = note.text.indexOf('Potluck');
+  const end = start + 'Potluck'.length;
+  await select(page, start, end);
+  await page.getByRole('button', { name: 'Bold', exact: true }).click();
+  await page.getByRole('button', { name: 'Superscript' }).click();
+
+  await page.evaluate(
+    ([s, e]) => {
+      const el = document.getElementById('ordo-text-editor') as HTMLTextAreaElement;
+      el.focus();
+      el.setSelectionRange(s, e);
+      const dt = new DataTransfer();
+      el.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: dt }));
+      el.setSelectionRange(el.value.length, el.value.length);
+      el.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }));
+    },
+    [start, end] as const,
+  );
+
+  // 2. Paste external scripture HTML with superscript verse number and bold phrase at the end.
+  await page.evaluate(() => {
+    const el = document.getElementById('ordo-text-editor') as HTMLTextAreaElement;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+    const dt = new DataTransfer();
+    dt.setData('text/html', '<p><sup class="versenum">16&nbsp;</sup><b>Amen</b></p>');
+    dt.setData('text/plain', '16 Amen');
+    el.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }));
+  });
+
+  // 3. Copy the selected object on Slide 2 and paste it onto Slide 1.
+  await page.evaluate(() => {
+    (document.activeElement as HTMLElement | null)?.blur();
+    const dt = new DataTransfer();
+    window.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: dt }));
+    (window as unknown as { __clipHtml: string; __clipText: string }).__clipHtml = dt.getData('text/html');
+    (window as unknown as { __clipText: string }).__clipText = dt.getData('text/plain');
+  });
+
+  await openSlide(page, 1);
+  const beforeCount = (await editorState(page)).draft!.sections[0]!.slides[0]!.objects.length;
+  await page.evaluate(() => {
+    (document.activeElement as HTMLElement | null)?.blur();
+    const dt = new DataTransfer();
+    const w = window as unknown as { __clipHtml: string; __clipText: string };
+    dt.setData('text/html', w.__clipHtml);
+    dt.setData('text/plain', w.__clipText);
+    window.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }));
+  });
+
+  await expect
+    .poll(async () => (await editorState(page)).draft!.sections[0]!.slides[0]!.objects.length)
+    .toBe(beforeCount + 1);
+
+  const saved = await saveAndReload(page, a, p.id);
+  const s1Objects = slidesOf(saved)[0]!.objects;
+  const pastedObj = s1Objects[s1Objects.length - 1]!;
+  expect(pastedObj.type).toBe('text');
+  if (pastedObj.type === 'text') {
+    expect(pastedObj.text).toContain('Potluck16 Amen');
+    // Verify the pasted '16 ' has baseline: 0.3 and 'Amen' has fontWeight: 700
+    const amenIdx = pastedObj.text.lastIndexOf('Amen');
+    const verseIdx = pastedObj.text.lastIndexOf('16 ');
+    const verseRun = (pastedObj.runs ?? []).find((r) => r.start <= verseIdx && r.end >= verseIdx + 2);
+    const amenRun = (pastedObj.runs ?? []).find((r) => r.start <= amenIdx && r.end >= amenIdx + 4);
+    expect(verseRun?.baseline).toBe(0.3);
+    expect(amenRun?.fontWeight).toBe(700);
+  }
 });

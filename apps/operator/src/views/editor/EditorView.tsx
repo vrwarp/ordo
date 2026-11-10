@@ -9,12 +9,20 @@ import { useLibrary } from '../../state/library.ts';
 import { useSession } from '../../state/session.ts';
 import { toast } from '../../state/toasts.ts';
 import {
+  copySelection,
+  copyTextSelection,
+  cutSelection,
+  cutTextSelection,
   deleteSelection,
   duplicateSelection,
+  handleTextPaste,
   moveSelection,
   reorderSelection,
+  tryPasteObjectsFromClipboard,
   ungroupSelection,
+  writeLastObjectClip,
 } from './actions.ts';
+import { uploadFiles } from '../library/MediaTab.tsx';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { ConflictDialog } from './ConflictDialog.tsx';
 import { historyKey, keyPlace } from './editorKeys.ts';
@@ -29,6 +37,7 @@ import {
   reloadLatest,
   save,
   selectObject,
+  setTextRange,
   startInlineEditing,
   stopInlineEditing,
   undo,
@@ -38,7 +47,7 @@ import {
 import './inspect.ts';
 import { ObjectPanel } from './ObjectPanel.tsx';
 import { addObject, getSlide, newImage, newShape, newText, themeOf, type ZOrder } from './ops.ts';
-import { hasGroup } from './ops/group.ts';
+import { hasGroup, htmlToRichText, pasteRichText } from './ops/index.ts';
 import { PresentationPanel } from './PresentationPanel.tsx';
 import { RevisionsDialog } from './RevisionsDialog.tsx';
 import { SlideCanvas } from './SlideCanvas.tsx';
@@ -206,6 +215,17 @@ export function EditorView({ id }: { id: string }) {
         duplicateSelection();
         return;
       }
+      if (place === 'canvas' && !st.inlineEditingId && ctrl && !e.altKey) {
+        const k = e.key.toLowerCase();
+        if (k === 'c') {
+          copySelection();
+          return;
+        }
+        if (k === 'x') {
+          cutSelection();
+          return;
+        }
+      }
       if (place !== 'canvas' || ctrl || e.altKey) return;
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
@@ -228,8 +248,149 @@ export function EditorView({ id }: { id: string }) {
         selectObject(undefined);
       }
     };
+
+    const syncInlineTextarea = (caret: number) => {
+      requestAnimationFrame(() => {
+        const f = document.getElementById('ordo-text-editor');
+        if (f instanceof HTMLTextAreaElement) f.setSelectionRange(caret, caret);
+      });
+    };
+
+    const onCopy = (e: ClipboardEvent) => {
+      if (e.defaultPrevented) return;
+      const place = keyPlace(e.target);
+      if (place === 'field' || place === 'dialog') return;
+      const st = useEditor.getState();
+      if (st.inlineEditingId && st.draft && st.slideId) {
+        const s = getSlide(st.draft, st.slideId);
+        const inlineObj = s?.objects.find((x) => x.id === st.inlineEditingId);
+        if (inlineObj?.type === 'text') {
+          if (copyTextSelection(inlineObj, st.textRange.start, st.textRange.end, e.clipboardData)) {
+            e.preventDefault();
+          }
+          return;
+        }
+      }
+      if (place === 'canvas') {
+        if (copySelection(e.clipboardData) || writeLastObjectClip(e.clipboardData)) {
+          e.preventDefault();
+        }
+      }
+    };
+
+    const onCut = (e: ClipboardEvent) => {
+      if (e.defaultPrevented || readOnly) return;
+      const place = keyPlace(e.target);
+      if (place === 'field' || place === 'dialog') return;
+      const st = useEditor.getState();
+      if (st.inlineEditingId && st.draft && st.slideId) {
+        const s = getSlide(st.draft, st.slideId);
+        const inlineObj = s?.objects.find((x) => x.id === st.inlineEditingId);
+        if (inlineObj?.type === 'text') {
+          const caret = cutTextSelection(inlineObj, st.textRange.start, st.textRange.end, e.clipboardData);
+          if (caret !== null) {
+            e.preventDefault();
+            setTextRange({ start: caret, end: caret, caret });
+            syncInlineTextarea(caret);
+          }
+          return;
+        }
+      }
+      if (place === 'canvas') {
+        if (cutSelection(e.clipboardData) || writeLastObjectClip(e.clipboardData)) {
+          e.preventDefault();
+        }
+      }
+    };
+
+    const onPaste = (e: ClipboardEvent) => {
+      if (e.defaultPrevented || readOnly) return;
+      const place = keyPlace(e.target);
+      if (place === 'field' || place === 'dialog') return;
+      const st = useEditor.getState();
+      if (!st.draft || !st.slideId) return;
+
+      // 1. If inline editing a text box on the canvas, paste into that text box at `textRange`.
+      if (st.inlineEditingId) {
+        const s = getSlide(st.draft, st.slideId);
+        const inlineObj = s?.objects.find((x) => x.id === st.inlineEditingId);
+        if (inlineObj?.type === 'text') {
+          const caret = handleTextPaste(inlineObj, st.textRange.start, st.textRange.end, e.clipboardData);
+          if (caret !== null) {
+            e.preventDefault();
+            setTextRange({ start: caret, end: caret, caret });
+            syncInlineTextarea(caret);
+          }
+          return;
+        }
+      }
+
+      if (place !== 'canvas') return;
+
+      // 2. Check for an image file/blob in the clipboard (e.g. screenshot or copied image).
+      const items = [...(e.clipboardData?.items ?? [])];
+      const imgItem = items.find((it) => it.kind === 'file' && it.type.startsWith('image/'));
+      const rawFile =
+        imgItem?.getAsFile() ?? [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'));
+      if (rawFile) {
+        e.preventDefault();
+        const ext = rawFile.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
+        const named =
+          !rawFile.name || rawFile.name === 'image.png'
+            ? new File([rawFile], `pasted-${Date.now()}.${ext}`, { type: rawFile.type })
+            : rawFile;
+        const targetSlideId = st.slideId;
+        void uploadFiles([named]).then((uploaded) => {
+          const m = uploaded[0];
+          if (!m) return;
+          const w = m.width && m.height ? Math.min(1920, m.width) : 960;
+          const h = m.width && m.height ? (w * m.height) / m.width : 540;
+          const imgObj = newImage(m.id, {
+            x: Math.round((1920 - w) / 2),
+            y: Math.max(0, Math.round((1080 - h) / 2)),
+            w: Math.round(w),
+            h: Math.min(1080, Math.round(h)),
+            rotation: 0,
+          });
+          change((q) => addObject(q, targetSlideId, imgObj));
+          selectObject(imgObj.id);
+        });
+        return;
+      }
+
+      // 3. Check for copied Ordo slide objects (`data-ordo-objects` or in-memory object clipboard).
+      const pastedIds = tryPasteObjectsFromClipboard(e.clipboardData);
+      if (pastedIds?.length) {
+        e.preventDefault();
+        return;
+      }
+
+      // 4. Check for rich or plain text pasted directly onto the slide canvas -> create a new TextObject.
+      const html = e.clipboardData?.getData('text/html') ?? '';
+      const plain = e.clipboardData?.getData('text/plain') ?? '';
+      const curTheme = themeOf(st.draft, useLibrary.getState().data.themes);
+      const richSlice =
+        (html && htmlToRichText(html, curTheme.textBoxDefaults)) || (plain ? { text: plain } : null);
+      if (richSlice?.text.trim()) {
+        e.preventDefault();
+        const baseObj = newText(curTheme, '');
+        const { object } = pasteRichText(baseObj, 0, 0, richSlice);
+        const targetSlideId = st.slideId;
+        change((q) => addObject(q, targetSlideId, object));
+        selectObject(object.id);
+      }
+    };
+
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('copy', onCopy);
+    window.addEventListener('cut', onCut);
+    window.addEventListener('paste', onPaste);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('copy', onCopy);
+      window.removeEventListener('cut', onCut);
+      window.removeEventListener('paste', onPaste);
+    };
   }, [readOnly]);
 
   useEffect(() => {

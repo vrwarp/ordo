@@ -13,11 +13,17 @@ import {
 import {
   drawImageFit,
   drawObject,
+  drawTextEditingOverlay,
   drawTextObject,
   geomPending,
+  hitTestText,
   isRichText,
+  moveCaretVertically,
+  paraRangeAt,
   readGeomFiles,
   slideBudget,
+  toLocalBoxPoint,
+  wordRangeAt,
 } from '@ordo/renderer';
 import type Konva from 'konva';
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -29,14 +35,27 @@ import { CanvasGuides, type SlideRect } from './CanvasGuides.tsx';
 import { canvasContent } from './canvasContent.ts';
 import { CropHandles } from './CropControl.tsx';
 import {
+  type CanvasTextSelection,
   change,
+  redo,
   selectObject,
   selectObjects,
+  setTextRange,
   startInlineEditing,
   stopInlineEditing,
+  undo,
   useEditor,
 } from './editorStore.ts';
-import { dragSelection, transformSelection, typeText } from './actions.ts';
+import { historyKey } from './editorKeys.ts';
+import { textField } from './formatControls.tsx';
+import {
+  copyTextSelection,
+  cutTextSelection,
+  dragSelection,
+  handleTextPaste,
+  transformSelection,
+  typeText,
+} from './actions.ts';
 import { updateObject } from './ops.ts';
 import { boxFromCorner, clickSelection, groupBox, groupMembers, isLocked, keepsAspect } from './ops/group.ts';
 import { useOriginalOver } from './original.ts';
@@ -107,6 +126,49 @@ type TextRaster = { key: string; canvas: HTMLCanvasElement; density: number };
 const textCache = new WeakMap<TextObject, TextRaster>();
 /** A rich object as its raster draws it: unrotated (Konva rotates the node), memoised per stored object. */
 const unrotated = new WeakMap<TextObject, TextObject>();
+function unrotatedFor(o: TextObject): TextObject {
+  if (!o.box.rotation) return o;
+  let localObj = unrotated.get(o);
+  if (!localObj) {
+    localObj = { ...o, box: { ...o.box, rotation: 0 } };
+    unrotated.set(o, localObj);
+  }
+  return localObj;
+}
+
+let sharedMeasureCtx: CanvasRenderingContext2D | null = null;
+function getMeasureCtx(): CanvasRenderingContext2D {
+  if (!sharedMeasureCtx) {
+    const c = document.createElement('canvas');
+    c.width = 1;
+    c.height = 1;
+    sharedMeasureCtx = c.getContext('2d')!;
+  }
+  return sharedMeasureCtx;
+}
+
+function hitTestObjectOffset(o: TextObject, slideX: number, slideY: number): number {
+  const pt = toLocalBoxPoint(o.box, slideX, slideY);
+  const ctx = getMeasureCtx();
+  if (isRichText(o)) {
+    return hitTestText(ctx, unrotatedFor(o), o.box.x + pt.x, o.box.y + pt.y);
+  }
+  return hitTestText(ctx, { ...o, box: local(o.box) }, pt.x, pt.y);
+}
+
+function moveObjectCaretVertically(
+  o: TextObject,
+  offset: number,
+  dir: -1 | 1,
+  preferredX?: number,
+): { offset: number; preferredX: number } {
+  const ctx = getMeasureCtx();
+  if (isRichText(o)) {
+    return moveCaretVertically(ctx, unrotatedFor(o), offset, dir, preferredX);
+  }
+  return moveCaretVertically(ctx, { ...o, box: local(o.box) }, offset, dir, preferredX);
+}
+
 /**
  * `o` drawn into its cached canvas: rich objects through the rich engine at `screen` density (stage scale ×
  * devicePixelRatio), legacy ones through drawText at 1:1 exactly as before (design/27 §6, §7.4).
@@ -126,14 +188,10 @@ function textCanvas(o: TextObject, tick: number, screen: number): TextRaster {
   const ctx = c.getContext('2d')!;
   ctx.clearRect(0, 0, c.width, c.height);
   if (isRichText(o)) {
-    let local = o.box.rotation ? unrotated.get(o) : o;
-    if (!local) {
-      local = { ...o, box: { ...o.box, rotation: 0 } };
-      unrotated.set(o, local);
-    }
+    const localObj = unrotatedFor(o);
     ctx.save();
     ctx.translate((MARGIN - o.box.x) * density, (MARGIN - o.box.y) * density);
-    drawTextObject(ctx, local, density);
+    drawTextObject(ctx, localObj, density);
     ctx.restore();
   } else
     drawTextObject(
@@ -218,6 +276,13 @@ type NodeHandlers = {
   transformEnd: (o: SlideObject, e: Konva.KonvaEventObject<Event>) => void;
 };
 
+type NodeTextOverlay = {
+  start: number;
+  end: number;
+  caret: number;
+  showCaret: boolean;
+};
+
 function ObjectNode(props: {
   o: SlideObject;
   media: (id: string) => Media | undefined;
@@ -225,6 +290,8 @@ function ObjectNode(props: {
   tick: number;
   /** Device px per logical px on screen: the stage scale × devicePixelRatio. */
   density: number;
+  /** Logical-to-screen scale (size.w / 1920), for converting stage pointer coordinates. */
+  scale: number;
   /** What the slide's drawing budget draws instead (`slideBudget`), as the outputs draw it. */
   drawAs?: SlideObject;
   readOnly: boolean;
@@ -234,8 +301,9 @@ function ObjectNode(props: {
   badge: number;
   on: NodeHandlers;
   onEditText?: () => void;
-  onStartInlineEdit?: (id: string) => void;
+  onStartInlineEdit?: (id: string, range?: CanvasTextSelection) => void;
   isEditingInline?: boolean;
+  textOverlay?: NodeTextOverlay;
   registerNode: (id: string, n: Konva.Shape | null) => void;
 }) {
   const { o, tick, on } = props;
@@ -257,15 +325,17 @@ function ObjectNode(props: {
         readGeomOf(o);
         const d = props.drawAs ?? o;
         if (o.type === 'text') {
-          if (!props.isEditingInline) {
-            const t = textCanvas(o, tick, props.density);
-            ctx.drawImage(
-              t.canvas,
-              -MARGIN,
-              -MARGIN,
-              t.canvas.width / t.density,
-              t.canvas.height / t.density,
-            );
+          const t = textCanvas(o, tick, props.density);
+          ctx.drawImage(t.canvas, -MARGIN, -MARGIN, t.canvas.width / t.density, t.canvas.height / t.density);
+          if (props.textOverlay) {
+            ctx.save();
+            if (isRichText(o)) {
+              ctx.translate(-b.x, -b.y);
+              drawTextEditingOverlay(ctx, unrotatedFor(o), props.textOverlay);
+            } else {
+              drawTextEditingOverlay(ctx, { ...o, box: local(b) }, props.textOverlay);
+            }
+            ctx.restore();
           }
         } else if (o.type === 'image') {
           const img = imageFor(stillHash(props.media(o.mediaId)));
@@ -307,7 +377,9 @@ function ObjectNode(props: {
       onDblClick={(e) => {
         e.cancelBubble = true;
         if (!props.readOnly && o.type === 'text' && !props.coarse && props.selected) {
-          props.onStartInlineEdit?.(o.id);
+          const pos = e.target.getStage()?.getPointerPosition();
+          const idx = pos ? hitTestObjectOffset(o, pos.x / props.scale, pos.y / props.scale) : o.text.length;
+          props.onStartInlineEdit?.(o.id, { start: idx, end: idx, caret: idx });
         }
       }}
       onDblTap={(e) => {
@@ -584,11 +656,29 @@ export function SlideCanvas(props: {
   const bg = imageFor(stillHash(props.backgroundMediaId ? props.media(props.backgroundMediaId) : undefined));
   const picture = imageFor(drawn.pictureHash);
   const inlineEditingId = useEditor((s) => s.inlineEditingId);
+  const textRange = useEditor((s) => s.textRange);
   const selectedId = useEditor((s) => s.objectId);
   const selectedCount = useEditor((s) => s.objectIds.length);
   const editingObj = inlineEditingId
     ? drawn.objects.find((x): x is TextObject => x.id === inlineEditingId && x.type === 'text')
     : undefined;
+  const [caretVisible, setCaretVisible] = useState(true);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset blink phase on any cursor or text change
+  useEffect(() => {
+    if (!editingObj) return;
+    setCaretVisible(true);
+    const timer = setInterval(() => setCaretVisible((v) => !v), 530);
+    return () => clearInterval(timer);
+  }, [editingObj?.id, editingObj?.text, textRange.start, textRange.end, textRange.caret]);
+
+  // Repaint the Konva layer whenever selection range, caret position, or blink visibility changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional redraw trigger
+  useEffect(() => {
+    const targetId = inlineEditingId ?? selectedId;
+    if (!targetId) return;
+    nodes.current.get(targetId)?.getLayer()?.batchDraw();
+  }, [inlineEditingId, selectedId, textRange.start, textRange.end, textRange.caret, caretVisible]);
+
   // 'Show original' (PptxSlideCard): the PowerPoint picture over the slide, to compare; it takes the pointer.
   const originalId = useOriginalOver(slide);
   const original = originalId ? imageFor(stillHash(props.media(originalId))) : undefined;
@@ -596,9 +686,10 @@ export function SlideCanvas(props: {
     () => (id: string) => drawn.objects.filter((o) => o.id !== id).map((o) => o.box),
     [drawn.objects],
   );
+  const stageContainerRef = useRef<HTMLDivElement>(null);
   return (
     <div ref={box} className="canvasbox">
-      <div style={{ position: 'relative', width: size.w, height: size.h }}>
+      <div ref={stageContainerRef} style={{ position: 'relative', width: size.w, height: size.h }}>
         <Stage
           width={size.w}
           height={size.h}
@@ -625,33 +716,50 @@ export function SlideCanvas(props: {
           </Layer>
           <Layer scaleX={scale} scaleY={scale}>
             <Rect name="bg" x={0} y={0} width={LOGICAL_WIDTH} height={LOGICAL_HEIGHT} fill="rgba(0,0,0,0)" />
-            {drawn.objects.map((o) => (
-              <ObjectNode
-                key={o.id}
-                o={o}
-                media={props.media}
-                others={othersFor(o.id)}
-                tick={tick}
-                density={density}
-                drawAs={budget.get(o)}
-                readOnly={props.readOnly}
-                selected={selectedId === o.id && selectedCount === 1}
-                coarse={coarse}
-                badge={22 / scale}
-                on={on}
-                isEditingInline={inlineEditingId === o.id}
-                onStartInlineEdit={(id) => startInlineEditing(id)}
-                onEditText={
-                  o.type === 'text' && !props.readOnly && props.onEditText
-                    ? () => props.onEditText?.(o.id)
-                    : undefined
-                }
-                registerNode={(id, n) => {
-                  if (n) nodes.current.set(id, n);
-                  else nodes.current.delete(id);
-                }}
-              />
-            ))}
+            {drawn.objects.map((o) => {
+              const isInline = inlineEditingId === o.id;
+              const isPrimarySelected = selectedId === o.id && selectedCount === 1;
+              const showOverlay =
+                o.type === 'text' && (isInline || (isPrimarySelected && textRange.start < textRange.end));
+              return (
+                <ObjectNode
+                  key={o.id}
+                  o={o}
+                  media={props.media}
+                  others={othersFor(o.id)}
+                  tick={tick}
+                  density={density}
+                  scale={scale}
+                  drawAs={budget.get(o)}
+                  readOnly={props.readOnly}
+                  selected={isPrimarySelected}
+                  coarse={coarse}
+                  badge={22 / scale}
+                  on={on}
+                  isEditingInline={isInline}
+                  textOverlay={
+                    showOverlay
+                      ? {
+                          start: textRange.start,
+                          end: textRange.end,
+                          caret: textRange.caret,
+                          showCaret: isInline && caretVisible,
+                        }
+                      : undefined
+                  }
+                  onStartInlineEdit={(id, range) => startInlineEditing(id, range)}
+                  onEditText={
+                    o.type === 'text' && !props.readOnly && props.onEditText
+                      ? () => props.onEditText?.(o.id)
+                      : undefined
+                  }
+                  registerNode={(id, n) => {
+                    if (n) nodes.current.set(id, n);
+                    else nodes.current.delete(id);
+                  }}
+                />
+              );
+            })}
             {guides.x.map((x) => (
               <Line
                 key={`gx${x}`}
@@ -737,10 +845,11 @@ export function SlideCanvas(props: {
           )}
         </Stage>
         {editingObj && (
-          <InlineTextEditor
+          <CanvasTextEditor
             key={editingObj.id}
             obj={editingObj}
             scale={scale}
+            stageContainerRef={stageContainerRef}
             onCommit={() => stopInlineEditing()}
           />
         )}
@@ -760,72 +869,272 @@ export function SlideCanvas(props: {
   );
 }
 
-function InlineTextEditor({
+/** Sync the backing `#ordo-text-editor` textarea's focus and selection with `[start, end)` and `caret`. */
+function syncBackingTextarea(start: number, end: number, caret: number): void {
+  const el = textField();
+  if (!el || el.disabled) return;
+  if (document.activeElement !== el) el.focus({ preventScroll: true });
+  const dir = caret === start && start < end ? 'backward' : 'forward';
+  if (el.selectionStart !== start || el.selectionEnd !== end || el.selectionDirection !== dir) {
+    el.setSelectionRange(start, end, dir);
+  }
+}
+
+/**
+ * Canvas-native inline text editing surface:
+ * - The slide canvas itself (`ObjectNode` + `drawTextEditingOverlay`) renders the text, selection highlight
+ *   rectangles, and blinking caret at 100% WYSIWYG fidelity (exact fonts, autofit, vertical alignment,
+ *   runs, shadows, outlines, and paragraph styles).
+ * - This transparent overlay handles pointer hit-testing (click to position caret, drag to select text,
+ *   double-click word, triple-click paragraph, Shift+click extend) and forwards keyboard/formatting
+ *   through `#ordo-text-editor` so `FormatBar` and `ParagraphStrip` work seamlessly without losing selection.
+ */
+function CanvasTextEditor({
   obj,
   scale,
+  stageContainerRef,
   onCommit,
 }: {
   obj: TextObject;
   scale: number;
+  stageContainerRef: React.RefObject<HTMLDivElement | null>;
   onCommit: () => void;
 }) {
   const b = obj.box;
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const color = obj.style?.color
-    ? `rgba(${obj.style.color.r},${obj.style.color.g},${obj.style.color.b},${obj.style.color.a ?? 1})`
-    : '#fff';
+  const fallbackRef = useRef<HTMLTextAreaElement>(null);
+  const draggingRef = useRef(false);
+  const anchorRef = useRef(useEditor.getState().textRange.start);
+  const preferredXRef = useRef<number | undefined>(undefined);
+  const clickTrackRef = useRef<{ count: number; time: number; x: number; y: number }>({
+    count: 0,
+    time: 0,
+    x: 0,
+    y: 0,
+  });
+  const [needsFallbackTextarea, setNeedsFallbackTextarea] = useState(false);
 
+  // Focus the backing textarea on mount and place the caret where the double-click landed.
   useEffect(() => {
-    const el = textareaRef.current;
-    if (el) {
-      el.focus();
-      el.select();
-    }
+    const existing = document.getElementById('ordo-text-editor');
+    const needFallback = !(existing instanceof HTMLTextAreaElement);
+    setNeedsFallbackTextarea(needFallback);
+    requestAnimationFrame(() => {
+      const r = useEditor.getState().textRange;
+      anchorRef.current = r.start;
+      syncBackingTextarea(r.start, r.end, r.caret);
+    });
   }, []);
 
-  return (
-    <textarea
-      ref={textareaRef}
-      className="ordo-inline-textarea"
-      value={obj.text ?? ''}
-      onChange={(e) => {
-        typeText(obj.id, e.target.value, e.target.selectionStart ?? undefined);
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          onCommit();
-        }
-      }}
-      onBlur={() => {
+  // Intercept ArrowUp / ArrowDown on `#ordo-text-editor` so vertical navigation follows the canvas lines.
+  const latestObjRef = useRef(obj);
+  latestObjRef.current = obj;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-bind when fallback textarea mounts
+  useEffect(() => {
+    const el = textField() ?? fallbackRef.current;
+    if (!el) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
         onCommit();
-      }}
-      style={{
-        position: 'absolute',
-        left: b.x * scale,
-        top: b.y * scale,
-        width: b.w * scale,
-        height: b.h * scale,
-        transform: b.rotation ? `rotate(${b.rotation}deg)` : undefined,
-        transformOrigin: '0 0',
-        fontFamily: obj.style?.fontFamily || 'Inter, sans-serif',
-        fontSize: `${(obj.style?.fontSizePx ?? 72) * scale}px`,
-        fontWeight: obj.style?.fontWeight || 400,
-        color,
-        textAlign: (obj.style?.align as CanvasTextAlign) || 'center',
-        lineHeight: 1.25,
-        background: 'rgba(15, 23, 42, 0.75)',
-        boxShadow: '0 0 0 2px #3b82f6, 0 4px 12px rgba(0,0,0,0.5)',
-        borderRadius: 4,
-        padding: `${Math.max(4, 8 * scale)}px`,
-        border: 'none',
-        outline: 'none',
-        resize: 'none',
-        boxSizing: 'border-box',
-        overflow: 'hidden',
-        zIndex: 20,
-        caretColor: '#fff',
-      }}
-    />
+        return;
+      }
+      if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        const dir = e.key === 'ArrowUp' ? -1 : 1;
+        const curObj = latestObjRef.current;
+        const cur = useEditor.getState().textRange;
+        const fromOffset = !e.shiftKey && cur.start < cur.end ? (dir < 0 ? cur.start : cur.end) : cur.caret;
+        const res = moveObjectCaretVertically(curObj, fromOffset, dir, preferredXRef.current);
+        preferredXRef.current = res.preferredX;
+        if (e.shiftKey) {
+          const anchor = cur.caret === cur.start && cur.start < cur.end ? cur.end : cur.start;
+          const nextStart = Math.min(anchor, res.offset);
+          const nextEnd = Math.max(anchor, res.offset);
+          setTextRange({ start: nextStart, end: nextEnd, caret: res.offset });
+          syncBackingTextarea(nextStart, nextEnd, res.offset);
+        } else {
+          anchorRef.current = res.offset;
+          setTextRange({ start: res.offset, end: res.offset, caret: res.offset });
+          syncBackingTextarea(res.offset, res.offset, res.offset);
+        }
+        return;
+      }
+      if (e.key !== 'Shift') {
+        preferredXRef.current = undefined;
+      }
+    };
+    el.addEventListener('keydown', onKeyDown);
+    return () => el.removeEventListener('keydown', onKeyDown);
+  }, [onCommit, needsFallbackTextarea]);
+
+  const slideCoords = (clientX: number, clientY: number): { x: number; y: number } => {
+    const rect = stageContainerRef.current?.getBoundingClientRect();
+    if (!rect) return { x: b.x, y: b.y };
+    return {
+      x: (clientX - rect.left) / scale,
+      y: (clientY - rect.top) / scale,
+    };
+  };
+
+  return (
+    <>
+      {needsFallbackTextarea && (
+        <textarea
+          ref={fallbackRef}
+          id="ordo-text-editor"
+          aria-label="Text"
+          value={obj.text}
+          style={{
+            position: 'fixed',
+            left: -9999,
+            top: 0,
+            width: 1,
+            height: 1,
+            opacity: 0,
+            pointerEvents: 'none',
+          }}
+          onSelect={(e) => {
+            const el = e.currentTarget;
+            const start = el.selectionStart;
+            const end = el.selectionEnd;
+            const caret = el.selectionDirection === 'backward' ? start : end;
+            setTextRange({ start, end, caret });
+          }}
+          onKeyDown={(e) => {
+            const step = historyKey(e);
+            if (!step) return;
+            e.preventDefault();
+            e.stopPropagation();
+            (step === 'undo' ? undo : redo)();
+          }}
+          onChange={(e) => {
+            const next = e.target.value;
+            const caret = e.target.selectionEnd;
+            setTextRange({ start: e.target.selectionStart, end: caret, caret });
+            typeText(obj.id, next, caret);
+          }}
+          onCopy={(e) => {
+            const el = e.currentTarget;
+            if (copyTextSelection(obj, el.selectionStart, el.selectionEnd, e.clipboardData)) {
+              e.preventDefault();
+            }
+          }}
+          onCut={(e) => {
+            const el = e.currentTarget;
+            const caret = cutTextSelection(obj, el.selectionStart, el.selectionEnd, e.clipboardData);
+            if (caret !== null) {
+              e.preventDefault();
+              setTextRange({ start: caret, end: caret, caret });
+              syncBackingTextarea(caret, caret, caret);
+            }
+          }}
+          onPaste={(e) => {
+            const el = e.currentTarget;
+            const caret = handleTextPaste(obj, el.selectionStart, el.selectionEnd, e.clipboardData);
+            if (caret !== null) {
+              e.preventDefault();
+              setTextRange({ start: caret, end: caret, caret });
+              syncBackingTextarea(caret, caret, caret);
+            }
+          }}
+        />
+      )}
+      <div
+        className="ordo-inline-canvas-editor"
+        data-testid="ordo-inline-canvas-editor"
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          e.stopPropagation();
+          preferredXRef.current = undefined;
+          const pt = slideCoords(e.clientX, e.clientY);
+          const idx = hitTestObjectOffset(obj, pt.x, pt.y);
+
+          const now = performance.now();
+          const prev = clickTrackRef.current;
+          const rapid = now - prev.time < 400 && Math.hypot(e.clientX - prev.x, e.clientY - prev.y) < 12;
+          const count = rapid ? (prev.count % 3) + 1 : 1;
+          clickTrackRef.current = { count, time: now, x: e.clientX, y: e.clientY };
+
+          if (count === 3) {
+            const pRange = paraRangeAt(obj.text, idx);
+            anchorRef.current = pRange.start;
+            draggingRef.current = false;
+            setTextRange({ start: pRange.start, end: pRange.end, caret: pRange.end });
+            syncBackingTextarea(pRange.start, pRange.end, pRange.end);
+            return;
+          }
+          if (count === 2) {
+            const wRange = wordRangeAt(obj.text, idx);
+            anchorRef.current = wRange.start;
+            draggingRef.current = false;
+            setTextRange({ start: wRange.start, end: wRange.end, caret: wRange.end });
+            syncBackingTextarea(wRange.start, wRange.end, wRange.end);
+            return;
+          }
+
+          if (e.shiftKey) {
+            const anchor = anchorRef.current;
+            const start = Math.min(anchor, idx);
+            const end = Math.max(anchor, idx);
+            setTextRange({ start, end, caret: idx });
+            syncBackingTextarea(start, end, idx);
+          } else {
+            anchorRef.current = idx;
+            setTextRange({ start: idx, end: idx, caret: idx });
+            syncBackingTextarea(idx, idx, idx);
+          }
+          draggingRef.current = true;
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+          } catch {
+            // Synthetic events in unit tests may not register an active pointerId.
+          }
+        }}
+        onPointerMove={(e) => {
+          if (!draggingRef.current) return;
+          const pt = slideCoords(e.clientX, e.clientY);
+          const idx = hitTestObjectOffset(obj, pt.x, pt.y);
+          const anchor = anchorRef.current;
+          const start = Math.min(anchor, idx);
+          const end = Math.max(anchor, idx);
+          setTextRange({ start, end, caret: idx });
+          syncBackingTextarea(start, end, idx);
+        }}
+        onPointerUp={(e) => {
+          if (!draggingRef.current) return;
+          draggingRef.current = false;
+          try {
+            if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+              e.currentTarget.releasePointerCapture(e.pointerId);
+            }
+          } catch {
+            // Ignore synthetic pointer release errors.
+          }
+          const r = useEditor.getState().textRange;
+          syncBackingTextarea(r.start, r.end, r.caret);
+        }}
+        onPointerCancel={() => {
+          draggingRef.current = false;
+        }}
+        style={{
+          position: 'absolute',
+          left: b.x * scale,
+          top: b.y * scale,
+          width: b.w * scale,
+          height: b.h * scale,
+          transform: b.rotation ? `rotate(${b.rotation}deg)` : undefined,
+          transformOrigin: '50% 50%',
+          background: 'transparent',
+          boxShadow: '0 0 0 2px #3b82f6',
+          borderRadius: 2,
+          cursor: 'text',
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          touchAction: 'none',
+          zIndex: 20,
+        }}
+      />
+    </>
   );
 }

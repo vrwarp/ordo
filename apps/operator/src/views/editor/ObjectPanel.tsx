@@ -1,13 +1,20 @@
 import { type Box, nearColor, type SlideObject, type TextStyle } from '@ordo/domain';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Check, ColorField, NumberField, Select } from '../../components/fields.tsx';
 import { TextStyleEditor } from '../../components/TextStyleEditor.tsx';
 import { ObjectSlideOps } from './ObjectSlideOps.tsx';
 import { useLibrary } from '../../state/library.ts';
-import { refit, replacePictureWith, typeText } from './actions.ts';
+import {
+  copyTextSelection,
+  cutTextSelection,
+  handleTextPaste,
+  refit,
+  replacePictureWith,
+  typeText,
+} from './actions.ts';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { CropControl } from './CropControl.tsx';
-import { change, redo, undo, useEditor } from './editorStore.ts';
+import { change, redo, setTextRange, stopInlineEditing, undo, useEditor } from './editorStore.ts';
 import { historyKey } from './editorKeys.ts';
 import { FormatBar } from './FormatBar.tsx';
 import { GroupNote, LockedNote, SelectionBox } from './GroupPanel.tsx';
@@ -63,10 +70,9 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
   const looks = useLibrary((s) => s.data.settings.looks);
   const media = useLibrary((s) => s.data.media);
   const [picking, setPicking] = useState(false);
-  // The text field's selection, for the format bar and the paragraph strip (M4 item C).
-  const [range, setRange] = useState<TextRange>({ start: 0, end: 0 });
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new object starts with a caret at its start
-  useEffect(() => setRange({ start: 0, end: 0 }), [o.id]);
+  // The text field's selection, for the format bar, paragraph strip, and canvas inline overlay (M4 item C).
+  const range = useEditor((s) => s.textRange);
+  const setRange = setTextRange;
   const slide = getSlide(draft, slideId);
   const isSong = draft?.kind === 'song';
   const isLyric =
@@ -134,10 +140,20 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
               disabled={readOnly}
               id="ordo-text-editor"
               aria-label="Text"
-              onSelect={(e) =>
-                setRange({ start: e.currentTarget.selectionStart, end: e.currentTarget.selectionEnd })
-              }
+              onSelect={(e) => {
+                const el = e.currentTarget;
+                const start = el.selectionStart;
+                const end = el.selectionEnd;
+                const caret = el.selectionDirection === 'backward' ? start : end;
+                setRange({ start, end, caret });
+              }}
               onKeyDown={(e) => {
+                if (e.key === 'Escape' && useEditor.getState().inlineEditingId) {
+                  e.preventDefault();
+                  stopInlineEditing();
+                  e.currentTarget.blur();
+                  return;
+                }
                 // Ctrl+Z and Ctrl+Y here are the editor's undo and redo, not the field's own: the field's
                 // undo knows nothing of a Bold or a colour and would take typed letters back instead. Typing
                 // is one undo step per pause, so the editor's undo covers the text too.
@@ -163,8 +179,40 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
                 // Runs and paragraph styles follow the edit (design/27 §11): a typo fix keeps the formatting.
                 const next = e.target.value;
                 const caret = e.target.selectionEnd;
-                setRange({ start: e.target.selectionStart, end: caret });
+                setRange({ start: e.target.selectionStart, end: caret, caret });
                 if (!readOnly) typeText(o.id, next, caret);
+              }}
+              onCopy={(e) => {
+                const el = e.currentTarget;
+                if (copyTextSelection(o, el.selectionStart, el.selectionEnd, e.clipboardData)) {
+                  e.preventDefault();
+                }
+              }}
+              onCut={(e) => {
+                if (readOnly) return;
+                const el = e.currentTarget;
+                const caret = cutTextSelection(o, el.selectionStart, el.selectionEnd, e.clipboardData);
+                if (caret !== null) {
+                  e.preventDefault();
+                  setRange({ start: caret, end: caret, caret });
+                  requestAnimationFrame(() => {
+                    const f = document.getElementById('ordo-text-editor');
+                    if (f instanceof HTMLTextAreaElement) f.setSelectionRange(caret, caret);
+                  });
+                }
+              }}
+              onPaste={(e) => {
+                if (readOnly) return;
+                const el = e.currentTarget;
+                const caret = handleTextPaste(o, el.selectionStart, el.selectionEnd, e.clipboardData);
+                if (caret !== null) {
+                  e.preventDefault();
+                  setRange({ start: caret, end: caret, caret });
+                  requestAnimationFrame(() => {
+                    const f = document.getElementById('ordo-text-editor');
+                    if (f instanceof HTMLTextAreaElement) f.setSelectionRange(caret, caret);
+                  });
+                }
               }}
             />
           </div>
