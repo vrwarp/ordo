@@ -29,14 +29,31 @@ export function DeviceSetupView() {
   const [isPersisted, setIsPersisted] = useState<boolean | null>(null);
 
   useEffect(() => {
-    // Check permission queries if available
+    // Check permission queries if available (silently without prompting)
     if ('permissions' in navigator && navigator.permissions?.query) {
       try {
         navigator.permissions
           .query({ name: 'window-management' as PermissionName })
           .then((res) => {
             setScreenPerm(res.state as ScreenPermState);
-            res.onchange = () => setScreenPerm(res.state as ScreenPermState);
+            res.onchange = () => {
+              setScreenPerm(res.state as ScreenPermState);
+              if (res.state === 'granted') {
+                void outputWindows()
+                  ?.screens()
+                  .then((sc) => {
+                    if (sc.length) setDetectedScreens(sc);
+                  });
+              }
+            };
+            // Only query screens automatically if permission is ALREADY granted
+            if (res.state === 'granted') {
+              void outputWindows()
+                ?.screens()
+                .then((sc) => {
+                  if (sc.length) setDetectedScreens(sc);
+                });
+            }
           })
           .catch(() => {
             setScreenPerm('unsupported');
@@ -55,13 +72,6 @@ export function DeviceSetupView() {
         .then(setIsPersisted)
         .catch(() => undefined);
     }
-
-    // Query screens if window management already granted
-    void outputWindows()
-      ?.screens()
-      .then((sc) => {
-        if (sc.length) setDetectedScreens(sc);
-      });
   }, []);
 
   const testPopup = () => {
