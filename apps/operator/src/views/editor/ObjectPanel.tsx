@@ -223,38 +223,16 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
         </div>
       )}
 
-      <details
-        className="advanced-details"
-        style={{
-          background: 'var(--bg3)',
-          border: '1px solid var(--line)',
-          borderRadius: 8,
-          padding: '10px 12px',
-        }}
-      >
-        <summary
-          style={{
-            cursor: 'pointer',
-            fontSize: 13,
-            fontWeight: 600,
-            color: 'var(--fg2)',
-            outline: 'none',
-          }}
-        >
-          Position & Coordinates{' '}
-          <span className="muted small" style={{ fontWeight: 400 }}>
-            ({Math.round(o.box.w)} × {Math.round(o.box.h)} at {Math.round(o.box.x)}, {Math.round(o.box.y)})
-          </span>
-          {marks.has('box') && <span className="override-mark"> ● overrides theme</span>}
-        </summary>
-        <div style={{ marginTop: 10 }}>
-          <SelectionBox
-            o={o}
-            readOnly={liveLocked}
-            onChange={(box) => set((x) => ({ ...x, box }), undefined, 'box')}
-          />
-        </div>
-      </details>
+      <section>
+        <h4>
+          Position and size{marks.has('box') && <span className="override-mark"> ● overrides theme</span>}
+        </h4>
+        <SelectionBox
+          o={o}
+          readOnly={liveLocked}
+          onChange={(box) => set((x) => ({ ...x, box }), undefined, 'box')}
+        />
+      </section>
       <NumberField
         label="Opacity"
         value={o.opacity}
