@@ -52,7 +52,7 @@ export function Nav({
     </a>
   );
 
-  const isDemo = DEMO || (venue && venue.toLowerCase().includes('demo'));
+  const isDemo = DEMO || (venue?.toLowerCase().includes('demo') ?? false);
   const brandName = venue ? venue.replace(/\s*demo$/i, '') : 'ordo';
 
   const brandElement = (

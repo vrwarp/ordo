@@ -342,7 +342,9 @@ export function TextStyleEditor(props: {
             className={`contrast-card-btn ${activeContrastMode === 'clean' ? 'active' : ''}`}
             onClick={() => props.onChange({ ...s, outline: undefined, shadow: undefined }, 'outline')}
           >
-            <span style={{ fontSize: 13.5, fontWeight: 700, color: '#fff', textAlign: 'center', lineHeight: 1.2 }}>
+            <span
+              style={{ fontSize: 13.5, fontWeight: 700, color: '#fff', textAlign: 'center', lineHeight: 1.2 }}
+            >
               Clean Text
             </span>
             <span className="muted small" style={{ fontSize: 10.5, textAlign: 'center' }}>

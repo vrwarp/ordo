@@ -834,7 +834,15 @@ export function ThemesTab() {
                       setDraft({ ...draft, text: rest });
                     }}
                   >
-                    <span style={{ fontWeight: 700, fontSize: 13.5, color: '#fff', textAlign: 'center', lineHeight: 1.2 }}>
+                    <span
+                      style={{
+                        fontWeight: 700,
+                        fontSize: 13.5,
+                        color: '#fff',
+                        textAlign: 'center',
+                        lineHeight: 1.2,
+                      }}
+                    >
                       Clean Text
                     </span>
                     <span className="muted small" style={{ fontSize: 10.5, textAlign: 'center' }}>

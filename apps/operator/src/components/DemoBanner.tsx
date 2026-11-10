@@ -1,4 +1,3 @@
-import { DEMO } from '@ordo/client';
 import { confirmDialog } from './Confirm.tsx';
 import { Dialog } from './Dialog.tsx';
 
@@ -90,8 +89,8 @@ export function DemoDialog({ onClose }: { onClose: () => void }) {
     >
       <div className="col" style={{ gap: 12 }}>
         <p style={{ margin: 0, lineHeight: 1.6, color: 'var(--fg)', fontSize: 14 }}>
-          Everything runs in this browser and stays in it: import a ProPresenter song or playlist, edit the sample
-          service, press <b>Go live</b> and <b>Launch outputs</b>.
+          Everything runs in this browser and stays in it: import a ProPresenter song or playlist, edit the
+          sample service, press <b>Go live</b> and <b>Launch outputs</b>.
         </p>
       </div>
     </Dialog>

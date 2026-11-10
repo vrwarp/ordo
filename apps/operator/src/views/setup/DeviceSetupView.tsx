@@ -334,7 +334,12 @@ export function DeviceSetupView() {
             <b style={{ fontSize: 13 }}>Automatic Fullscreen Tip:</b>
           </div>
           <div className="muted small" style={{ lineHeight: 1.4 }}>
-            Browsers require a user click or keypress before a newly opened window can enter fullscreen mode. Each launched output window displays a one-click banner or you can press <kbd style={{ padding: '1px 5px', borderRadius: 4, background: 'var(--bg4)' }}>Enter</kbd> / <kbd style={{ padding: '1px 5px', borderRadius: 4, background: 'var(--bg4)' }}>F</kbd>. To allow outputs to enter fullscreen automatically without needing a click, allow <b>Automatic fullscreen</b> in Chrome site settings.
+            Browsers require a user click or keypress before a newly opened window can enter fullscreen mode.
+            Each launched output window displays a one-click banner or you can press{' '}
+            <kbd style={{ padding: '1px 5px', borderRadius: 4, background: 'var(--bg4)' }}>Enter</kbd> /{' '}
+            <kbd style={{ padding: '1px 5px', borderRadius: 4, background: 'var(--bg4)' }}>F</kbd>. To allow
+            outputs to enter fullscreen automatically without needing a click, allow{' '}
+            <b>Automatic fullscreen</b> in Chrome site settings.
           </div>
         </div>
 

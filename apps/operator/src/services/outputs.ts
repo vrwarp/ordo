@@ -235,7 +235,9 @@ export class OutputWindows {
         w.document?.documentElement?.requestFullscreen?.({ navigationUI: 'hide' })?.catch(() => undefined);
         w.addEventListener('load', () => {
           try {
-            w.document?.documentElement?.requestFullscreen?.({ navigationUI: 'hide' })?.catch(() => undefined);
+            w.document?.documentElement
+              ?.requestFullscreen?.({ navigationUI: 'hide' })
+              ?.catch(() => undefined);
           } catch {
             /* ignore */
           }
