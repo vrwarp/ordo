@@ -40,7 +40,7 @@
  * Version 1 of a picture-class slide has no objects, `pptx.pending` and its text in `pptx.artText`; a hybrid
  * slide has its native objects (residuals are left out until version 2) and `pptx.artText` from its art.
  */
-import { open, rm, stat } from 'node:fs/promises';
+import { open, readFile, rm, stat } from 'node:fs/promises';
 import {
   type Box,
   compactSlideBytes,
@@ -60,7 +60,7 @@ import {
   slideBytes,
   utf8Bytes,
 } from '@ordo/domain';
-import { remapMediaIds } from '@ordo/importers';
+import { type PptxClientScene, remapMediaIds } from '@ordo/importers';
 import { sanitizePresentation } from '@ordo/importers/sanitize.ts';
 import {
   type ArtInfo,
@@ -430,6 +430,11 @@ class NativeImport {
     const { ctx } = this;
     this.scratch = scratch;
 
+    if (ctx.payload.sceneHash) {
+      const fromClient = await this.stepsFromClientScene(deck, scratch, ctx.payload.sceneHash);
+      if (fromClient) return fromClient;
+    }
+
     // 1. XML parts in memory; every other part a placeholder.
     const parts = await this.readXml(deck, scratch);
     ctx.progress(0.05);
@@ -501,6 +506,101 @@ class NativeImport {
 
     // 5. Version 1, assembled (`saveVersion1` saves it).
     const built = this.assemble(drafts, stored, first.result.sections, first.result.slideRect, scan);
+    return { ...built, listed: [...listed], texts, textBoxes, compact };
+  }
+
+  /**
+   * When the client pre-parsed the PowerPoint scene via `importPptxClient`, assemble Version 1 and spill
+   * referenced pictures/clips without running `pptx-scene` on the Hub's CPU pool.
+   */
+  private async stepsFromClientScene(
+    deck: string,
+    scratch: string,
+    sceneHash: string,
+  ): Promise<NativeBuild | undefined> {
+    const { ctx } = this;
+    const sf = this.deps.lib.getFile(sceneHash);
+    if (!sf) return undefined;
+    let raw: PptxClientScene;
+    try {
+      raw = JSON.parse(await readFile(this.deps.store.abs(sf.path), 'utf8')) as PptxClientScene;
+    } catch {
+      return undefined;
+    }
+    if (!raw || raw.version !== CONVERTER_VERSION || !Array.isArray(raw.listed) || !raw.scan) {
+      return undefined;
+    }
+
+    for (const path of raw.oversized ?? [])
+      this.warn('part', `${logSafe(path)} is over ${PPTX_LIMITS.xmlPartBytes / 1024 ** 2} MB: not read`);
+    if (raw.fonts)
+      this.log.add('info', `${raw.fonts} embedded font part(s) not used (embedded fonts come later)`);
+
+    const scan = raw.scan;
+    const listed = raw.listed;
+    if (!listed.length) throw new Error('The deck has no slides');
+    for (const n of raw.notes ?? []) this.log.add('info', n);
+    ctx.log(`${listed.length} slide(s), ${scan.pictures.length} picture(s) referenced (parsed on client)`);
+    ctx.progress(0.1);
+
+    const spilled = await this.spillPictures(deck, scratch, scan);
+    const pictureSizes: [string, PictureHeader][] = [];
+    let spilledBytes = 0;
+    for (const [part, path] of spilled) {
+      const px = await spilledSize(path);
+      if (px) pictureSizes.push([part, px]);
+      spilledBytes += await stat(path).then(
+        (s) => s.size,
+        () => 0,
+      );
+    }
+    const clipFiles = await this.spillClips(deck, scratch, scan, PPTX_LIMITS.spillBytes - spilledBytes);
+
+    const want = this.only?.(listed);
+    const media = new Map(
+      (raw.media ?? []).map((m) => [m.id, m.bake ? this.bakeKeyOf(m.part, m.bake) : m.part]),
+    );
+    const extras = new Map((raw.extras ?? []).map((e) => [e.index, e]));
+    const encoder = new TextEncoder();
+    for (const g of raw.geomFiles ?? []) {
+      if (this.geomFiles.has(g.hash) || this.geomDropped.has(g.hash)) continue;
+      const bytes = encoder.encode(g.json);
+      if (this.geomBytes + bytes.length > this.limits.geomFileBytes) {
+        this.geomDropped.add(g.hash);
+        continue;
+      }
+      this.geomFiles.set(g.hash, { hash: g.hash, bytes });
+      this.geomBytes += bytes.length;
+    }
+    const geomOver = new Set(raw.geomOver ?? []);
+    const converted = new Map<number, Converted>();
+    for (const s of raw.slides ?? []) {
+      if (want && !want.has(s.index)) continue;
+      converted.set(s.index, {
+        s,
+        media,
+        extra: extras.get(s.index),
+        ...(geomOver.has(s.index) ? { overGeoms: true } : {}),
+      });
+    }
+    ctx.progress(0.6);
+
+    const texts = new Map([...converted].map(([index, c]) => [index, bodyTexts(c.s)]));
+    const textBoxes = new Map([...converted].map(([index, c]) => [index, bodyBoxes(c.s)]));
+
+    const drafts = this.drafts(want ? listed.filter((r) => want.has(r.index)) : listed, converted, scan);
+    let compact = this.budget(drafts);
+
+    compact += await this.storeGeoms(drafts);
+    this.checkCancelled();
+
+    await this.clips(drafts, clipFiles);
+    this.checkCancelled();
+
+    const stored = await this.pictures(drafts, spilled, new Map(pictureSizes));
+    ctx.progress(0.95);
+
+    const built = this.assemble(drafts, stored, raw.sections ?? [], raw.slideRect, scan);
     return { ...built, listed: [...listed], texts, textBoxes, compact };
   }
 

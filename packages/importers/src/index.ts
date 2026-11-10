@@ -20,3 +20,26 @@ export { PPTX_MEDIA_PREFIX, remapMediaIds } from './remap.ts';
 export { extractPptxText, type PptxText, pptxForRendering } from './pptx.ts';
 export { parseSongFile } from './songselect.ts';
 export { parseRtf, splitFontName, type RtfResult } from './rtf.ts';
+export { sha256Hex, sha256Bytes } from './sha256.ts';
+export {
+  pictureHeader,
+  clearExifOrientation,
+  displayNeeds,
+  isMetafile,
+  METAFILE_FORMATS,
+  PICTURE_LIMITS,
+  type PictureHeader,
+} from './pptx-pictures.ts';
+export { geomFileOf, nameGeoms, type NamedGeomFile } from './pptx-geoms.ts';
+export {
+  importPptxClient,
+  type PptxClientOptions,
+  type PptxClientImportResult,
+  type PptxClientPicture,
+  type PptxClientScene,
+  type PptxClientSceneScan,
+  type PptxClientSlideExtra,
+  type PptxLoSlide,
+  CONVERTER_VERSION,
+  PPTX_CLIENT_LIMITS,
+} from './pptx-client.ts';

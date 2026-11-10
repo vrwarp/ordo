@@ -199,7 +199,7 @@ export type LiveApiCtx = {
 
 type Ctx = LibraryApiCtx;
 
-type Received = { path: string; hash: string; bytes: number; filename: string };
+type Received = { path: string; hash: string; bytes: number; filename: string; fieldname: string };
 
 /** Drain a multipart request: files go to uploads/ (hashed while streaming), fields are collected. */
 async function readMultipart(
@@ -219,7 +219,7 @@ async function readMultipart(
           throw badRequest('Too many files');
         }
         const r = await hub.store.receive(f.file as Readable, opts.limit ?? MAX_UPLOAD_BYTES);
-        files.push({ ...r, filename: f.filename || 'upload' });
+        files.push({ ...r, filename: f.filename || 'upload', fieldname: f.fieldname });
       } else {
         fields[part.fieldname] = String((part as { value: unknown }).value ?? '');
       }
@@ -820,15 +820,22 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
   });
   route('POST', '/import/document', 'edit', async (req, reply) => {
     assertNotLive();
-    const { files, fields } = await readMultipart(hub, req, { maxFiles: 1, limit: 1024 ** 3 });
-    const f = files[0];
-    if (!f) throw badRequest('No document');
+    const { files, fields } = await readMultipart(hub, req, { maxFiles: 2, limit: 1024 ** 3 });
+    const f = files.find((x) => x.fieldname !== 'clientScene') ?? files[0];
+    const sceneFile = files.find((x) => x.fieldname === 'clientScene' && x !== f);
+    const cleanupFiles = async () => {
+      await Promise.all(files.map((x) => rm(x.path, { force: true })));
+    };
+    if (!f) {
+      await cleanupFiles();
+      throw badRequest('No document');
+    }
     // How a PowerPoint is imported (optional form fields): editable slides unless pictures are asked for.
     let form: DocumentImportForm;
     try {
       form = documentImportForm(fields);
     } catch (e) {
-      await rm(f.path, { force: true });
+      await cleanupFiles();
       throw e;
     }
     const s = sniff(await readHead(f.path));
@@ -837,7 +844,7 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     if (s?.kind === 'pdf') kind = 'pdf';
     else if (s?.kind === 'zip' && ext === 'pptx') kind = 'pptx';
     else {
-      await rm(f.path, { force: true });
+      await cleanupFiles();
       throw new HttpError(415, 'unsupported', 'Upload a .pptx or .pdf file');
     }
     const ref = await hub.store.put(f.path, {
@@ -846,8 +853,22 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
       hash: f.hash,
       bytes: f.bytes,
     });
-    if (kind === 'pptx' && form.renderer === 'native')
-      return reply.code(202).send(hub.imports.pptx.queueNative(ref.hash, f.filename, form.options));
+    if (kind === 'pptx' && form.renderer === 'native') {
+      let sceneHash: string | undefined;
+      if (sceneFile) {
+        const sceneRef = await hub.store.put(sceneFile.path, {
+          ext: 'json',
+          mime: 'application/json',
+          hash: sceneFile.hash,
+          bytes: sceneFile.bytes,
+        });
+        sceneHash = sceneRef.hash;
+      }
+      return reply
+        .code(202)
+        .send(hub.imports.pptx.queueNative(ref.hash, f.filename, form.options, sceneHash));
+    }
+    if (sceneFile) await rm(sceneFile.path, { force: true });
     // A PDF is always pictures: the PowerPoint choice does not apply to it.
     const renderer = form.renderer === 'native' ? 'libreoffice' : form.renderer;
     return reply.code(202).send(hub.imports.queueDocument(ref.hash, f.filename, kind, renderer));
