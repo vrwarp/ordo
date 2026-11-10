@@ -325,6 +325,9 @@ importers:
       '@ordo/domain':
         specifier: workspace:*
         version: link:../domain
+      '@ordo/pptx-scene':
+        specifier: workspace:*
+        version: link:../pptx-scene
       fast-xml-parser:
         specifier: ^5.11.2
         version: 5.11.2

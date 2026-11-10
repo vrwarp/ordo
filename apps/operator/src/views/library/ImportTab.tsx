@@ -1,11 +1,13 @@
 import { api, upload } from '@ordo/client';
 import type { Presentation } from '@ordo/domain';
+import { importPptxClient } from '@ordo/importers';
 import type { Job } from '@ordo/protocol';
 import { useEffect, useState } from 'react';
 import {
   documentFields,
   importJobTitle,
   isImportJob,
+  isPptxName,
   PPTX_NATIVE_JOB,
   type PptxImportChoice,
   readImportChoice,
@@ -206,10 +208,31 @@ export function ImportTab() {
     for (const f of files) {
       const fd = new FormData();
       for (const [k, v] of documentFields(f.name, choice)) fd.append(k, v);
-      fd.append('file', f, f.name);
       try {
         setProgress(0);
-        started(await upload<Job>('/import/document', fd, setProgress), f.name);
+        const clientNative = isPptxName(f.name) && choice.mode === 'native';
+        if (clientNative) {
+          const parsed = await importPptxClient(
+            f,
+            f.name,
+            { extendBackgrounds: choice.extendBackgrounds },
+            (pct) => setProgress(pct * 0.5),
+          );
+          fd.append(
+            'clientScene',
+            new Blob([JSON.stringify(parsed.clientScene)], { type: 'application/json' }),
+            'scene.json',
+          );
+        }
+        fd.append('file', f, f.name);
+        started(
+          await upload<Job>(
+            '/import/document',
+            fd,
+            clientNative ? (pct) => setProgress(0.5 + pct * 0.5) : setProgress,
+          ),
+          f.name,
+        );
       } catch (e) {
         toast(`${f.name}: ${errorText(e)}`, 'error');
       } finally {

@@ -35,8 +35,13 @@ export class PptxImports {
   }
 
   /** Queue the native import of a stored deck (`POST /import/document` with `renderer=native`). */
-  queueNative(hash: string, name: string, options: PptxImportOptions = {}): Job {
-    return enqueuePptx(this.deps.jobs, PPTX_JOBS.native, { hash, name, options });
+  queueNative(hash: string, name: string, options: PptxImportOptions = {}, sceneHash?: string): Job {
+    return enqueuePptx(this.deps.jobs, PPTX_JOBS.native, {
+      hash,
+      name,
+      options,
+      ...(sceneHash ? { sceneHash } : {}),
+    });
   }
 
   /**
