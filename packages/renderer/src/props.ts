@@ -125,12 +125,16 @@ export function elapsedMsOf(t: Timer, now: number): number {
 export function countdownText(
   state: LiveState,
   ctx: PropsContext,
+  look?: Look,
 ): { text: string; label?: string; remainingMs: number } | null {
   const id = state.props.countdownTimerId;
   const t = id ? state.timers[id] : undefined;
   if (!t?.running || t.spec.kind !== 'countdownTo') return null;
   const target = nextTimeOfDay(t.spec.timeOfDay, ctx.timeZone, t.startedAt ?? ctx.now);
-  const remainingMs = Math.max(0, target - ctx.now);
+  const diff = target - ctx.now;
+  // Audience displays auto-hide countdown after holding 00:00 for 3.5 seconds
+  if (look && look.kind !== 'stage' && diff < -3500) return null;
+  const remainingMs = Math.max(0, diff);
   // Round up so the display reaches 00:00 exactly at the target second.
   return { text: formatDuration(Math.ceil(remainingMs / 1000) * 1000), label: t.spec.label, remainingMs };
 }
@@ -167,7 +171,7 @@ export function propsModel(state: LiveState, look: Look, ctx: PropsContext): Pro
     if (rule.logo && state.props.logo && ctx.logoMediaId)
       logo = { mediaId: ctx.logoMediaId, box: propBox('logo', look).box };
     if (rule.countdown) {
-      const cd = countdownText(state, ctx);
+      const cd = countdownText(state, ctx, look);
       if (cd) {
         items.push({ id: 'countdown', text: cd.text, ...split(propBox('countdown', look)) });
         if (cd.label)

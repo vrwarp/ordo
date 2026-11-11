@@ -40,6 +40,7 @@ export type SlideDesc = {
   slide: Slide;
   nextSlide?: Slide;
   isSong: boolean;
+  presentationKind?: 'song' | 'slides' | 'loop';
   /**
    * The slide's video plays in place, in the box of ImageObject `objectId` (design/27 §7.2): set when the
    * media layer's desc is `inSlide` for this slide. `w` x `h` is the clip's delivered size (Media.width,
@@ -155,15 +156,20 @@ export function lookSignature(look: Look, width = 0, height = 0): string {
  * Whether the look draws anything on the slide layer for this slide: as authored, its picture or objects
  * (`slideContent`, design/27 §5).
  */
-export function slideVisible(look: Look, slide: Slide, isSong: boolean, nextSlide?: Slide): boolean {
+export function slideVisible(
+  look: Look,
+  slide: Slide,
+  kindOrIsSong: boolean | 'song' | 'slides' | 'loop',
+  nextSlide?: Slide,
+): boolean {
   const rule = look.layers.slide;
   if (rule.mode === 'hidden') return false;
   if (rule.mode === 'authored') {
     const drawn = drawableContent(slide);
     return drawn.objects.length > 0 || !!drawn.pictureMediaId;
   }
-  if (lyricTextFor(slide, look, isSong) !== null) return true;
-  return !!(rule.nextSlide && nextSlide && lyricTextFor(nextSlide, look, isSong) !== null);
+  if (lyricTextFor(slide, look, kindOrIsSong) !== null) return true;
+  return !!(rule.nextSlide && nextSlide && lyricTextFor(nextSlide, look, kindOrIsSong) !== null);
 }
 
 const EMPTY = <D>(at = 0): LayerPlan<D> => ({ key: '', desc: null, at, fadeMs: 0 });
@@ -253,7 +259,8 @@ export function planFrame(state: LiveState, rawLook: Look, opts: PlanOptions = {
     const found = raw ? { slide: clampSlide(raw.slide), presentation: raw.presentation } : undefined;
     if (c && found) {
       plan.slideCue = c.cueIndex;
-      const isSong = found.presentation.kind === 'song';
+      const presKind = found.presentation.kind;
+      const isSong = presKind === 'song';
       let nextSlide: Slide | undefined;
       if (look.layers.slide.mode === 'lyricOnly' && look.layers.slide.nextSlide) {
         // The slide Next goes to: hidden slides are skipped (design/27 §9).
@@ -264,7 +271,7 @@ export function planFrame(state: LiveState, rawLook: Look, opts: PlanOptions = {
           nextSlide = ns ? clampSlide(ns) : undefined;
         }
       }
-      if (slideVisible(look, found.slide, isSong, nextSlide)) {
+      if (slideVisible(look, found.slide, presKind, nextSlide)) {
         const key = `sl|${resolved?.manifestId ?? ''}|${sig}|${c.cueIndex}|${c.slideId}|${nextSlide?.id ?? ''}`;
         plan.slide = {
           key,
@@ -277,6 +284,7 @@ export function planFrame(state: LiveState, rawLook: Look, opts: PlanOptions = {
             slide: found.slide,
             nextSlide,
             isSong,
+            presentationKind: presKind,
           },
           at: ls.at,
           fadeMs,
@@ -417,7 +425,7 @@ export function planPreview(
       ? slides.slice(idx + 1).find((s) => s.hidden !== true)
       : undefined;
   const nextSlide = rawNext ? clampSlide(rawNext) : undefined;
-  if (slideVisible(look, slide, isSong, nextSlide)) {
+  if (slideVisible(look, slide, presentation.kind, nextSlide)) {
     const key = `pv|${presentation.id}|${presentation.rev}|${sig}|${slide.id}|${nextSlide?.id ?? ''}`;
     plan.slide = {
       key,
@@ -430,6 +438,7 @@ export function planPreview(
         slide,
         nextSlide,
         isSong,
+        presentationKind: presentation.kind,
       },
       at: 0,
       fadeMs,

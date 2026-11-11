@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_LYRIC_STYLE,
   LOOK_LOWER_THIRD,
+  LOOK_STAGE,
   LOOK_STREAM,
   type Look,
   type Slide,
@@ -20,6 +21,7 @@ import {
   drawSlide2D,
   drawText,
   layoutText,
+  lyricTextFor,
   paragraphDirections,
   wrapLines,
 } from './text2d.ts';
@@ -209,6 +211,44 @@ describe('look bands (design/27 §6)', () => {
     const s = lyric('Amazing grace');
     expect(bandSource(s, 'Amazing grace')?.id).toBe('l');
     expect(bandSource(s, 'other text')).toBeUndefined();
+  });
+
+  it('lyricTextFor handles loops, explicit bottomThirdText, and scriptures cleanly', () => {
+    const s1: Slide = {
+      id: 's1',
+      objects: [
+        {
+          id: 't1',
+          type: 'text',
+          box: { x: 0, y: 0, w: 100, h: 50, rotation: 0 },
+          text: 'Announcement Text',
+          style: DEFAULT_LYRIC_STYLE,
+          opacity: 1,
+        },
+      ],
+    };
+    // Loops never show on stream/lower-third bands, and show standby status on stage preview
+    expect(lyricTextFor(s1, LOOK_STREAM, 'loop')).toBeNull();
+    expect(lyricTextFor(s1, LOOK_LOWER_THIRD, 'loop')).toBeNull();
+    expect(lyricTextFor(s1, LOOK_STAGE, 'loop')).toBe('Service Starting Soon');
+    // Non-song slide with explicit bottomThirdText uses it
+    const s2: Slide = { ...s1, bottomThirdText: 'Key Takeaway' };
+    expect(lyricTextFor(s2, LOOK_STREAM, 'slides')).toBe('Key Takeaway');
+    // Non-song slide with empty bottomThirdText is silenced
+    const s3: Slide = { ...s1, bottomThirdText: '' };
+    expect(lyricTextFor(s3, LOOK_STREAM, 'slides')).toBeNull();
+    // Scripture slide formats reference + text
+    const s4: Slide = {
+      id: 's4',
+      objects: [],
+      scripture: {
+        provider: 'local',
+        fetchedAt: '',
+        ref: { translation: 'NIV', book: 'John', chapter: 3, verseFrom: 16 },
+        text: 'For God so loved the world...',
+      },
+    };
+    expect(lyricTextFor(s4, LOOK_STREAM, 'slides')).toBe('John 3:16\nFor God so loved the world...');
   });
 
   it('sends the lower third through the rich engine for Hebrew text or a rich look style', () => {

@@ -45,9 +45,16 @@ export function rasterSlide(
   look: Look,
   scale: number,
   images: ImageLookup,
-  opts: { nextSlide?: Slide; isSong?: boolean } = {},
+  opts: { nextSlide?: Slide; isSong?: boolean; presentationKind?: 'song' | 'slides' | 'loop' } = {},
 ): void {
-  drawSlide2D(ctx, slide, { scale, look, images, nextSlide: opts.nextSlide, isSong: opts.isSong ?? true });
+  drawSlide2D(ctx, slide, {
+    scale,
+    look,
+    images,
+    nextSlide: opts.nextSlide,
+    isSong: opts.isSong ?? true,
+    presentationKind: opts.presentationKind,
+  });
 }
 
 export function rasterLowerThird(ctx: Ctx2D, text: string, look: Look, scale: number): void {

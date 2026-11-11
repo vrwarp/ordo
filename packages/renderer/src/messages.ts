@@ -131,6 +131,7 @@ export type AssetJob =
       slide: Slide;
       nextSlide?: Slide;
       isSong: boolean;
+      presentationKind?: 'song' | 'slides' | 'loop';
       look: Look;
       /** mediaId -> file hash for every image the slide draws. */
       images: Record<string, string>;

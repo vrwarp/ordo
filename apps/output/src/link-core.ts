@@ -1124,6 +1124,7 @@ export class LinkCore {
           slide: d.slide,
           nextSlide: d.nextSlide,
           isSong: d.isSong,
+          presentationKind: d.presentationKind,
           look: this.look,
           images: this.slideImages(d.slide, d.nextSlide),
           refresh: refresh || undefined,

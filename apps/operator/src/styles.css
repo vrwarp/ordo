@@ -985,6 +985,11 @@ table.list th {
   flex-wrap: nowrap;
   min-width: 0;
 }
+.editor > .ed-reflow {
+  grid-column: 1 / -1;
+  min-height: 0;
+  min-width: 0;
+}
 .editor > .toolbar > .ellipsis {
   flex: 0 1 auto;
   min-width: 40px;
@@ -1611,6 +1616,9 @@ button.arr-chip-label {
   .editor {
     grid-template-columns: 220px minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr) minmax(0, 42%);
+  }
+  .editor:has(> .ed-reflow) {
+    grid-template-rows: auto minmax(0, 1fr);
   }
   .editor > .ed-slides {
     grid-row: 2 / 4;

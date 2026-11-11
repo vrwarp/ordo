@@ -133,6 +133,69 @@ export function ItemSettings(props: {
             disabled={props.disabled}
           />
         </Field>
+        <Check
+          label="Continue previous background (medley / multi-deck)"
+          value={it.keepBackground ?? false}
+          disabled={props.disabled}
+          onChange={(keepBackground) =>
+            props.onChange({ ...it, keepBackground: keepBackground || undefined })
+          }
+        />
+        {p.kind === 'loop' && (
+          <div className="card col" style={{ gap: 8, marginTop: 4 }}>
+            <strong style={{ fontSize: 13 }}>Pre-Service Loop Automation</strong>
+            <span className="muted small">
+              Starting this loop can automatically start background music and an audience countdown. Leaving
+              this item automatically fades out the music and clears the countdown.
+            </span>
+            <label className="field">
+              <span>Background music</span>
+              <select
+                value={it.audioMediaId ?? ''}
+                disabled={props.disabled}
+                onChange={(e) => props.onChange({ ...it, audioMediaId: e.target.value || undefined })}
+              >
+                <option value="">No background music</option>
+                {lib.media
+                  .filter((m) => m.kind === 'audio')
+                  .map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Service countdown</span>
+              <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                <input
+                  type="time"
+                  value={it.countdownTimer?.kind === 'countdownTo' ? it.countdownTimer.timeOfDay : ''}
+                  disabled={props.disabled}
+                  onChange={(e) => {
+                    const val = e.target.value.slice(0, 5);
+                    props.onChange({
+                      ...it,
+                      countdownTimer: /^\d{2}:\d{2}$/.test(val)
+                        ? { kind: 'countdownTo', timeOfDay: val, label: 'Service starts in' }
+                        : undefined,
+                    });
+                  }}
+                />
+                {it.countdownTimer && (
+                  <button
+                    type="button"
+                    className="small ghost"
+                    disabled={props.disabled}
+                    onClick={() => props.onChange({ ...it, countdownTimer: undefined })}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </label>
+          </div>
+        )}
       </div>
     );
   }

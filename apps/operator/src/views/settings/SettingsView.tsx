@@ -14,8 +14,8 @@ import { PinsPage } from './PinsPage.tsx';
 import { StreamDeckPage } from './StreamDeckPage.tsx';
 
 const PAGES: [string, string][] = [
-  ['outputs', 'Outputs'],
-  ['looks', 'Looks'],
+  ['outputs', 'Screens'],
+  ['looks', 'Looks (Advanced)'],
   ['themes', 'Themes'],
   ['audio', 'Audio'],
   ['keys', 'Keyboard'],

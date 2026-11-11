@@ -30,6 +30,12 @@ describe('props text', () => {
     expect(countdownText(withCountdown(), { ...ctx, now: NOW + 1000 })?.text).toBe('30:29');
     // Past the target the countdown holds at zero instead of jumping to tomorrow.
     expect(countdownText(withCountdown(), { ...ctx, now: NOW + 40 * 60_000 })?.text).toBe('00:00');
+    // On audience look, it auto-hides after holding 00:00 for 3.5 seconds.
+    expect(countdownText(withCountdown(), { ...ctx, now: NOW + 40 * 60_000 }, LOOK_MAIN)).toBeNull();
+    // On stage look, it holds 00:00 so platform sees it.
+    expect(countdownText(withCountdown(), { ...ctx, now: NOW + 40 * 60_000 }, LOOK_STAGE)?.text).toBe(
+      '00:00',
+    );
     // In another zone 10:30 local is a different instant.
     const ny = countdownText(withCountdown(), { ...ctx, timeZone: 'America/New_York' });
     expect(ny?.text).not.toBe('30:30');

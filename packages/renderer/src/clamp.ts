@@ -753,6 +753,7 @@ export function clampSlide(slide: unknown): Slide {
   if (typeof s.lyricObjectId === 'string') out.lyricObjectId = s.lyricObjectId.slice(0, 200);
   if (typeof s.backgroundMediaId === 'string') out.backgroundMediaId = s.backgroundMediaId.slice(0, 200);
   if (s.clearBackground === true) out.clearBackground = true;
+  if (typeof s.bottomThirdText === 'string') out.bottomThirdText = clampText(s.bottomThirdText);
   const audio = clampSlideSound(s.audio);
   if (audio) out.audio = audio;
   if (s.imported && typeof s.imported === 'object' && typeof s.imported.imageMediaId === 'string') {

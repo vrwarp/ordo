@@ -173,9 +173,9 @@ class Thumbs {
 
   keyOf(job: ThumbJob): string {
     const extra =
-      job.clear || job.nextSlide
+      job.clear || job.nextSlide || job.presentationKind
         ? // Look previews: the look's content too (an edited look re-renders under the same id).
-          `:${job.look ? fnv(JSON.stringify(job.look)) : ''}:${job.clear ? Object.values(job.clear).join(',') : ''}:${job.nextSlide ? slideHash(job.nextSlide) : ''}`
+          `:${job.look ? fnv(JSON.stringify(job.look)) : ''}:${job.clear ? Object.values(job.clear).join(',') : ''}:${job.nextSlide ? slideHash(job.nextSlide) : ''}:${job.presentationKind ?? ''}`
         : '';
     return `${slideHash(job.slide)}:${job.bg ?? ''}:${job.look?.id ?? 'authored'}:${job.width}:${this.version}${extra}`;
   }

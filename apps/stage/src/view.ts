@@ -38,25 +38,64 @@ export function buildView(i: ViewInput): StageView {
       return def;
     }
   };
+  const p = i.shown ? state.resolved?.presentations[i.shown.presentationId] : undefined;
+  const isSong = p?.kind === 'song';
+  const notes = layout.notes ? safe(() => notesText(state, i.shown), null) : null;
+  const messages = layout.messages
+    ? safe(() => activeMessages(state.messages, now), []).map((m) => ({ id: m.id, text: m.text }))
+    : [];
+  let activeLayout = layout;
+  // Non-song presentation with speaker notes on the default cramped bottom strip: adapt layout to give
+  // preacher notes primary space while staying clear of any active stage flash messages.
+  if (
+    !isSong &&
+    notes &&
+    layout.notes &&
+    layout.current &&
+    layout.notes.box.y >= 900 &&
+    layout.notes.box.h <= 140
+  ) {
+    const notesBottom =
+      messages.length > 0 && layout.messages ? Math.max(550, layout.messages.box.y - 12) : 1064;
+    activeLayout = {
+      ...layout,
+      current: {
+        ...layout.current,
+        style: { ...layout.current.style, fontSizePx: Math.min(layout.current.style.fontSizePx, 44) },
+        box: { x: layout.current.box.x, y: 140, w: layout.current.box.w, h: 180, rotation: 0 },
+      },
+      next: layout.next
+        ? {
+            ...layout.next,
+            style: { ...layout.next.style, fontSizePx: Math.min(layout.next.style.fontSizePx, 32) },
+            box: { x: layout.next.box.x, y: 330, w: layout.next.box.w, h: 110, rotation: 0 },
+          }
+        : null,
+      notes: {
+        ...layout.notes,
+        box: { x: layout.current.box.x, y: 450, w: layout.current.box.w, h: notesBottom - 450, rotation: 0 },
+      },
+    };
+  }
   return {
     ready: i.ready,
     bus: i.bus,
-    layout,
-    current: safe(() => currentText(state, i.shown, layout), null),
-    next: safe(() => nextText(state, i.shown, layout), null),
-    notes: layout.notes ? safe(() => notesText(state, i.shown), null) : null,
-    clock: layout.clock
+    layout: activeLayout,
+    current: safe(() => currentText(state, i.shown, activeLayout), null),
+    next: safe(() => nextText(state, i.shown, activeLayout), null),
+    notes,
+    clock: activeLayout.clock
       ? safe(
           () => formatClock(now, i.general.timeZone, i.general.clock24h),
           safe(() => formatClock(now, 'UTC', i.general.clock24h), ''),
         )
       : '',
-    countdown: layout.countdown ? safe(() => countdownDisplay(state, now, i.general.timeZone), null) : null,
-    elapsed: layout.elapsed ? safe(() => elapsedDisplay(state, now), null) : null,
-    remaining: layout.mediaRemaining ? safe(() => mediaRemainingDisplay(state, now), null) : null,
-    messages: layout.messages
-      ? safe(() => activeMessages(state.messages, now), []).map((m) => ({ id: m.id, text: m.text }))
-      : [],
+    countdown: activeLayout.countdown
+      ? safe(() => countdownDisplay(state, now, i.general.timeZone), null)
+      : null,
+    elapsed: activeLayout.elapsed ? safe(() => elapsedDisplay(state, now), null) : null,
+    remaining: activeLayout.mediaRemaining ? safe(() => mediaRemainingDisplay(state, now), null) : null,
+    messages,
     title: i.title,
     clockOffset: i.clockOffset,
     clockFallback: i.clockFallback,

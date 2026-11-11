@@ -36,6 +36,7 @@ export function lookPreviewJob(props: {
     slide,
     look,
     isSong: p.kind === 'song',
+    presentationKind: p.kind,
     bg: bgId ? stillHash(media(bgId)) : undefined,
     images: slideImages(slide, media),
     width,

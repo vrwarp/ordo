@@ -79,6 +79,7 @@ function visitPlaylistMedia(
     if (item.kind === 'media') visit(item.mediaId);
     if (item.kind !== 'presentation') continue;
     visit(item.backgroundMediaId);
+    visit(item.audioMediaId);
     const p = presentations[item.presentationId];
     if (!p) continue;
     visit(p.backgroundMediaId);

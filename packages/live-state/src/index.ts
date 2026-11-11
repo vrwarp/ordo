@@ -237,18 +237,38 @@ function goTo(s: LiveState, index: number, at: number): LiveState {
         };
       }
       layers.media = slideMediaLayer(layers.media, cue, index, at, seq);
+      const enteringItem = s.live === undefined || s.cues[s.live]?.itemId !== cue.itemId;
+      let nextProps = out.props.logo ? { ...out.props, logo: false, at, seq } : out.props;
+      let nextTimers = out.timers;
+      if (cue.timer && cue.timerId && enteringItem) {
+        nextTimers = {
+          ...nextTimers,
+          [cue.timerId]: { id: cue.timerId, spec: cue.timer, running: true, startedAt: at },
+        };
+        if (cue.timer.kind === 'countdownTo') {
+          nextProps = { ...nextProps, countdownTimerId: cue.timerId, at, seq };
+        }
+      } else if (shouldAutoClearCountdown(s, cue, nextProps.countdownTimerId)) {
+        nextProps = { ...nextProps, countdownTimerId: undefined, at, seq };
+      }
       out = {
         ...out,
         layers,
         audio: slideAudioLayer(out.audio, cue, index, at, seq),
-        props: out.props.logo ? { ...out.props, logo: false, at, seq } : out.props,
+        props: nextProps,
+        timers: nextTimers,
       };
       return out;
     }
     case 'media': {
+      let nextProps = out.props;
+      if (shouldAutoClearCountdown(s, cue, nextProps.countdownTimerId)) {
+        nextProps = { ...nextProps, countdownTimerId: undefined, at, seq };
+      }
       if (cue.mediaKind === 'audio') {
         return {
           ...out,
+          props: nextProps,
           audio: {
             content: {
               cueIndex: index,
@@ -265,9 +285,10 @@ function goTo(s: LiveState, index: number, at: number): LiveState {
           },
         };
       }
+      if (nextProps.logo) nextProps = { ...nextProps, logo: false, at, seq };
       return {
         ...out,
-        props: out.props.logo ? { ...out.props, logo: false, at, seq } : out.props,
+        props: nextProps,
         layers: {
           ...out.layers,
           media: {
@@ -300,6 +321,20 @@ function goTo(s: LiveState, index: number, at: number): LiveState {
     case 'action':
       return applyAction(out, cue.action!, at);
   }
+}
+
+function shouldAutoClearCountdown(s: LiveState, nextCue: Cue, activeTimerId: string | undefined): boolean {
+  if (!activeTimerId || s.live === undefined) return false;
+  const prevCue = s.cues[s.live];
+  if (!prevCue || prevCue.itemId === nextCue.itemId) return false;
+  if (prevCue.kind === 'timer') return false;
+  const prevItemStartedIt = s.cues.some(
+    (c) => c.itemId === prevCue.itemId && c.kind === 'slide' && c.timerId === activeTimerId,
+  );
+  if (prevItemStartedIt) return true;
+  const prevPres = prevCue.presentationId ? s.resolved?.presentations[prevCue.presentationId] : undefined;
+  const nextPres = nextCue.presentationId ? s.resolved?.presentations[nextCue.presentationId] : undefined;
+  return prevPres?.kind === 'loop' && nextPres?.kind !== 'loop';
 }
 
 /**

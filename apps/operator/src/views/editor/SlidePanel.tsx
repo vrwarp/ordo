@@ -1,5 +1,5 @@
 import { api } from '@ordo/client';
-import type { Presentation, Slide } from '@ordo/domain';
+import { firstText, type Presentation, type Slide } from '@ordo/domain';
 import type { Job } from '@ordo/protocol';
 import { useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
@@ -23,9 +23,18 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
   const media = useLibrary((s) => s.data.media);
   const dirty = useEditor((s) => s.dirty);
   const [busy, setBusy] = useState(false);
+  const [editingStrapFor, setEditingStrapFor] = useState<string | null>(null);
   const set = (fn: (s: Slide) => Slide, key?: string) =>
     !readOnly && change((q) => updateSlide(q, slide.id, fn), key);
   const texts = slide.objects.filter((o) => o.type === 'text');
+  const defaultStrap = slide.scripture
+    ? `${slide.scripture.ref.book} ${slide.scripture.ref.chapter}:${slide.scripture.ref.verseFrom}${slide.scripture.ref.verseTo ? `-${slide.scripture.ref.verseTo}` : ''}\n${slide.scripture.text}`
+    : firstText(slide);
+  const strapShown =
+    editingStrapFor === slide.id ||
+    (slide.bottomThirdText !== undefined
+      ? slide.bottomThirdText.trim().length > 0
+      : defaultStrap.trim().length > 0);
   const makeEditable = async () => {
     // A PowerPoint page is rebuilt from the stored file (M4 item F, the hub's re-import of this slide);
     // anything else (a PDF page, a file no longer stored) gets text boxes over the page picture.
@@ -59,7 +68,7 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
   return (
     <div className="col" style={{ gap: 10 }}>
       <b>Slide</b>
-      {p.kind === 'song' && texts.length > 0 && (
+      {p.kind === 'song' && texts.length > 1 && (
         <label className="field">
           <span>Lyric box (read by lower-third and stage looks)</span>
           <select
@@ -75,6 +84,56 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
             ))}
           </select>
         </label>
+      )}
+      {p.kind === 'slides' && (
+        <div className="card col small" style={{ gap: 6, padding: 8 }}>
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+            <label className="check" style={{ fontWeight: 600 }}>
+              <input
+                type="checkbox"
+                checked={strapShown}
+                disabled={readOnly}
+                onChange={(e) => {
+                  const on = e.target.checked;
+                  setEditingStrapFor(on ? slide.id : null);
+                  set((s) => ({
+                    ...s,
+                    bottomThirdText: on ? (s.bottomThirdText ? s.bottomThirdText : defaultStrap) : '',
+                  }));
+                }}
+              />
+              Show on Bottom-Third Stream
+            </label>
+            {slide.bottomThirdText !== undefined && !readOnly && (
+              <button
+                type="button"
+                className="small ghost"
+                onClick={() => {
+                  setEditingStrapFor(null);
+                  set((s) => ({ ...s, bottomThirdText: undefined }));
+                }}
+                title="Use slide text automatically"
+              >
+                Auto
+              </button>
+            )}
+          </div>
+          {strapShown ? (
+            <TextField
+              label="Bottom-third text (1–2 lines on livestream/lobby)"
+              multiline
+              rows={2}
+              value={slide.bottomThirdText ?? defaultStrap}
+              disabled={readOnly}
+              onChange={(val) => {
+                setEditingStrapFor(slide.id);
+                set((s) => ({ ...s, bottomThirdText: val }), `strap:${slide.id}`);
+              }}
+            />
+          ) : (
+            <span className="muted">Suppressed on livestream &amp; lobby lower-third screens.</span>
+          )}
+        </div>
       )}
       <SlideBackgroundSection slide={slide} p={p} readOnly={readOnly} />
       <SlideSoundPanel slide={slide} media={(id) => media.find((m) => m.id === id)} readOnly={readOnly} />
