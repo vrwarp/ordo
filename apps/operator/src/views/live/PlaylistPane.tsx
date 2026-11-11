@@ -5,7 +5,7 @@ import { startService } from '../../lib/startService.ts';
 import { controller } from '../../services/controller.ts';
 import { useLibrary } from '../../state/library.ts';
 import { useLive } from '../../state/live.ts';
-import { setUi, useUi } from '../../state/ui.ts';
+import { requestScrollToPlaylistItem, setUi, useUi } from '../../state/ui.ts';
 import { navigate } from '../../useRoute.ts';
 import type { OperatorPlaylist } from './useOperatorPlaylist.ts';
 
@@ -63,9 +63,10 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
           <select
             className="grow"
             value={op.playlist?.id ?? ''}
-            onChange={(e) =>
-              setUi({ selectedPlaylistId: e.target.value, viewItemIndex: 0, followLive: true })
-            }
+            onChange={(e) => {
+              setUi({ selectedPlaylistId: e.target.value, followLive: true });
+              requestScrollToPlaylistItem(0);
+            }}
           >
             {playlists.length === 0 && <option value="">No playlists</option>}
             {playlists.map((p) => (
@@ -111,7 +112,7 @@ export function PlaylistPane({ op, viewItem }: { op: OperatorPlaylist; viewItem:
         rowClass={(_it, i) =>
           `pl-item ${i === viewItem ? 'sel' : ''} ${op.live && i === liveItem ? 'live' : ''}`
         }
-        onRowClick={(_it, i) => setUi({ viewItemIndex: i, followLive: false })}
+        onRowClick={(_it, i) => requestScrollToPlaylistItem(i)}
         onRowDoubleClick={(_it, i) => {
           const c = firstCueOf(i);
           if (c !== undefined) controller()?.go(c);

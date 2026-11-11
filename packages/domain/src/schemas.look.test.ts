@@ -4,8 +4,15 @@ import { Look, PropsRule } from './schemas.ts';
 
 describe("a stage look's notes region (design/27 §3.1 PropsRule.notes, §11 item 13)", () => {
   it('is optional: stored looks without it parse as before, with no notes key', () => {
-    const l = Look.parse(LOOK_STAGE);
+    const l = Look.parse({
+      ...LOOK_STAGE,
+      layers: {
+        ...LOOK_STAGE.layers,
+        props: { logo: false, countdown: true, clock: true, messages: true, elapsed: true, style: {} },
+      },
+    });
     expect('notes' in l.layers.props).toBe(false);
+    expect(Look.parse(LOOK_STAGE).layers.props.notes).toBe(true);
     expect(PropsRule.parse({})).toEqual({
       logo: false,
       countdown: false,

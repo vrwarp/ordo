@@ -99,6 +99,24 @@ test('continuous playlist scroll: all playlist items render in order and scroll 
     const item0Box = await item0.boundingBox();
     expect(item0Box).not.toBeNull();
     expect(item0Box!.y).toBeLessThan(300);
+
+    // Manual scrolling: scrolling up or down does not snap to section tops
+    const scrollPane = page.locator('[data-slide-grid-pane]');
+    await scrollPane.evaluate((el) => {
+      el.scrollTop = 120;
+      el.dispatchEvent(new Event('scroll'));
+    });
+    await page.waitForTimeout(300);
+    const pos1 = await scrollPane.evaluate((el) => el.scrollTop);
+    expect(pos1).toBe(120);
+
+    await scrollPane.evaluate((el) => {
+      el.scrollTop = 60;
+      el.dispatchEvent(new Event('scroll'));
+    });
+    await page.waitForTimeout(300);
+    const pos2 = await scrollPane.evaluate((el) => el.scrollTop);
+    expect(pos2).toBe(60);
   } finally {
     hub.kill();
   }

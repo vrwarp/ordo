@@ -75,15 +75,15 @@ describe('the notes defaults the look editor shows', () => {
 });
 
 describe('the Stage screen card', () => {
-  it('offers Notes, off by default, as stored looks have it', () => {
+  it('offers Notes, on by default for the default stage look', () => {
     const html = render(LOOK_STAGE);
     expect(text(html)).toContain('Stage screen');
     const check = html.match(/<label class="check"><input type="checkbox"[^>]*>/)![0];
-    expect(check).not.toContain('checked');
+    expect(check).toContain('checked');
     expect(text(html)).toContain('Notes: show the live slide’s notes, for the preacher');
-    // Nothing else while the notes are off.
-    expect(html).not.toContain('<fieldset');
-    expect(text(html)).not.toContain('Notes text');
+    // While the notes are on, shows notes box and notes text options.
+    expect(text(html)).toContain('Notes box (default: under the next slide)');
+    expect(text(html)).toContain('Notes text');
   });
 
   it('turns the notes on and off without touching the other props', () => {
@@ -94,8 +94,8 @@ describe('the Stage screen card', () => {
     const check = (
       el.props.children as { props: { label?: string; onChange?: (v: boolean) => void } }[]
     ).find((c) => typeof c?.props?.label === 'string' && c.props.label.startsWith('Notes'))!;
-    check.props.onChange!(true);
-    expect(got).toEqual({ ...props, notes: true });
+    check.props.onChange!(false);
+    expect(got).toEqual({ ...props, notes: false });
   });
 
   it('shows the default box and text while the notes are on, and the reset once styled', () => {
