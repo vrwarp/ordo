@@ -5,7 +5,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import { notChoosable } from '../src/views/editor/BackgroundPicker.tsx';
-import { historyKey, isTypingTarget, keyPlace } from '../src/views/editor/editorKeys.ts';
+import {
+  historyKey,
+  isTypingTarget,
+  keyPlace,
+  slideNavKey,
+  stepSlide,
+} from '../src/views/editor/editorKeys.ts';
 
 /** A stand-in element: its tag, and the selectors it sits inside. */
 function el(tagName: string, inside: string[] = [], attrs: Record<string, string> = {}) {
@@ -77,5 +83,53 @@ describe('notChoosable', () => {
     expect(notChoosable({ state: 'processing', width: 800, height: 600 }, true)).toBeUndefined();
     // Elsewhere anything listed can be chosen, as before.
     expect(notChoosable({ state: 'uploaded' }, false)).toBeUndefined();
+  });
+});
+
+describe('slideNavKey', () => {
+  it('navigates with Up/Down and PageUp/PageDown when focus is on page/canvas', () => {
+    expect(slideNavKey({ key: 'ArrowUp', target: el('BODY') })).toBe(-1);
+    expect(slideNavKey({ key: 'PageUp', target: el('BODY') })).toBe(-1);
+    expect(slideNavKey({ key: 'ArrowDown', target: el('BODY') })).toBe(1);
+    expect(slideNavKey({ key: 'PageDown', target: el('BODY') })).toBe(1);
+  });
+
+  it('ignores keys when typing in a field or inside dialogs/menus/radiogroups', () => {
+    expect(slideNavKey({ key: 'ArrowUp', target: el('INPUT') })).toBe(0);
+    expect(slideNavKey({ key: 'ArrowDown', target: el('TEXTAREA') })).toBe(0);
+    expect(slideNavKey({ key: 'ArrowDown', target: el('DIV', [], { contenteditable: 'true' }) })).toBe(0);
+    expect(slideNavKey({ key: 'ArrowDown', target: el('BUTTON', ['[role="radiogroup"]']) })).toBe(0);
+    expect(slideNavKey({ key: 'ArrowDown', target: el('DIV', ['[role="menu"]']) })).toBe(0);
+    expect(slideNavKey({ key: 'ArrowDown', target: el('DIV', ['[role="dialog"]']) })).toBe(0);
+  });
+
+  it('ignores arrow keys with modifiers or default prevented', () => {
+    expect(slideNavKey({ key: 'ArrowUp', ctrlKey: true, target: el('BODY') })).toBe(0);
+    expect(slideNavKey({ key: 'ArrowDown', altKey: true, target: el('BODY') })).toBe(0);
+    expect(slideNavKey({ key: 'ArrowDown', metaKey: true, target: el('BODY') })).toBe(0);
+    expect(slideNavKey({ key: 'ArrowDown', defaultPrevented: true, target: el('BODY') })).toBe(0);
+  });
+});
+
+describe('stepSlide', () => {
+  const ids = ['s1', 's2', 's3'];
+
+  it('moves forward and clamps at end', () => {
+    expect(stepSlide(ids, 's1', 1)).toBe('s2');
+    expect(stepSlide(ids, 's2', 1)).toBe('s3');
+    expect(stepSlide(ids, 's3', 1)).toBe('s3');
+    expect(stepSlide(ids, undefined, 1)).toBe('s1');
+  });
+
+  it('moves backward and clamps at start', () => {
+    expect(stepSlide(ids, 's3', -1)).toBe('s2');
+    expect(stepSlide(ids, 's2', -1)).toBe('s1');
+    expect(stepSlide(ids, 's1', -1)).toBe('s1');
+    expect(stepSlide(ids, undefined, -1)).toBe('s1');
+  });
+
+  it('handles empty slide list', () => {
+    expect(stepSlide([], undefined, 1)).toBeUndefined();
+    expect(stepSlide([], 's1', -1)).toBeUndefined();
   });
 });

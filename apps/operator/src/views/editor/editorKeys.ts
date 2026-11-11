@@ -64,3 +64,48 @@ export function historyKey(e: {
   if (k === 'y' && !e.shiftKey) return 'redo';
   return undefined;
 }
+
+/**
+ * ArrowUp/PageUp and ArrowDown/PageDown navigate to previous / next slide when nothing on the canvas is selected.
+ * Returns -1 for previous slide, 1 for next slide, or 0 if this key does not navigate slides.
+ */
+export function slideNavKey(e: {
+  key: string;
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  altKey?: boolean;
+  defaultPrevented?: boolean;
+  target?: EventTarget | null;
+}): -1 | 1 | 0 {
+  if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return 0;
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown' && e.key !== 'PageUp' && e.key !== 'PageDown') return 0;
+  if (isTypingTarget(e.target ?? null)) return 0;
+  const el = e.target as El | null;
+  if (
+    el?.closest?.(
+      '[role="radiogroup"], [role="menu"], [role="menuitem"], [role="listbox"], [role="dialog"], .backdrop',
+    )
+  ) {
+    return 0;
+  }
+  return e.key === 'ArrowUp' || e.key === 'PageUp' ? -1 : 1;
+}
+
+/**
+ * Returns the target slide ID when moving backward (-1) or forward (1) in a presentation's slide sequence.
+ */
+export function stepSlide(
+  slideIds: readonly string[],
+  currentSlideId: string | undefined,
+  delta: -1 | 1,
+): string | undefined {
+  if (!slideIds.length) return undefined;
+  const curIdx = currentSlideId ? slideIds.indexOf(currentSlideId) : -1;
+  if (delta < 0) {
+    if (curIdx > 0) return slideIds[curIdx - 1];
+    return slideIds[0];
+  }
+  if (curIdx >= 0 && curIdx < slideIds.length - 1) return slideIds[curIdx + 1];
+  if (curIdx < 0) return slideIds[0];
+  return slideIds[slideIds.length - 1];
+}

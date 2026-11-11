@@ -25,7 +25,7 @@ import {
 import { uploadFiles } from '../library/MediaTab.tsx';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { ConflictDialog } from './ConflictDialog.tsx';
-import { historyKey, keyPlace } from './editorKeys.ts';
+import { historyKey, keyPlace, slideNavKey, stepSlide } from './editorKeys.ts';
 import { LookPreviews } from './LookPreviews.tsx';
 import { addVideo } from './mediaOps.ts';
 import {
@@ -37,6 +37,7 @@ import {
   reloadLatest,
   save,
   selectObject,
+  selectSlide,
   setTextRange,
   startInlineEditing,
   stopInlineEditing,
@@ -208,6 +209,26 @@ export function EditorView({ id }: { id: string }) {
       }
       const st = useEditor.getState();
       const o = currentObject();
+
+      // When nothing has focus (no object is selected on the canvas, and focus is not in a field or dialog),
+      // Up/Down arrows and PageUp/PageDown navigate to the previous / next slide.
+      if (!o && !st.inlineEditingId && st.draft) {
+        const delta = slideNavKey(e);
+        if (delta !== 0) {
+          const allSlides = st.draft.sections.flatMap((sec) => sec.slides);
+          const nextId = stepSlide(
+            allSlides.map((s) => s.id),
+            st.slideId,
+            delta,
+          );
+          e.preventDefault();
+          if (nextId && nextId !== st.slideId) {
+            selectSlide(nextId);
+          }
+          return;
+        }
+      }
+
       if (!o || !st.slideId || readOnly) return;
       // The selection acts as one block: a group, or what Shift-click gathered (design/27 §11 item 5).
       if (ctrl && e.key.toLowerCase() === 'd') {
