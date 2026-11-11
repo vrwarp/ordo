@@ -628,8 +628,8 @@ const view = (state: LiveState, look: Look) =>
   });
 
 describe('the notes region (PropsRule.notes)', () => {
-  it('is off unless the look turns it on, as stored looks have it', () => {
-    expect(stageLayout(LOOK_STAGE).notes).toBeNull();
+  it('is on by default for the stage look and off when notes is false', () => {
+    expect(stageLayout(LOOK_STAGE).notes).not.toBeNull();
     expect(stageLayout(notesLook()).notes).not.toBeNull();
     const off = notesLook();
     off.layers.props.notes = false;
@@ -718,8 +718,12 @@ describe('the notes the stage shows', () => {
     s = reduce(s, { k: 'next', at: 3000 });
     expect(view(s, look).notes).toBe('Pray for the Smiths.');
     expect(notesText(s, s.layers.slide.content)).toBe('Pray for the Smiths.');
-    // Not in the view when the look shows none, nor when the slide layer is cleared.
-    expect(view(s, LOOK_STAGE).notes).toBeNull();
+    // Not in the view when the look turns notes off, nor when the slide layer is cleared.
+    const lookNotesOff = {
+      ...LOOK_STAGE,
+      layers: { ...LOOK_STAGE.layers, props: { ...LOOK_STAGE.layers.props, notes: false } },
+    };
+    expect(view(s, lookNotesOff).notes).toBeNull();
     const c = reduce(s, { k: 'clear', layer: 'slide', at: 4000 });
     expect(view(c, look).notes).toBeNull();
   });

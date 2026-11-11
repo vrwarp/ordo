@@ -5,6 +5,8 @@ export type UiState = {
   selectedPlaylistId?: string;
   /** Playlist item shown in the slide grid (index into the playlist). */
   viewItemIndex?: number;
+  /** Explicit programmatic scroll target requested by user action (e.g. clicking playlist item). */
+  scrollToItem?: { index: number; req: number };
   /** Follow the live item in the slide grid. */
   followLive: boolean;
   /** Single click on a slide goes live (ProPresenter style) instead of arming it. */
@@ -45,7 +47,8 @@ useUi.subscribe((s) => {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     try {
-      localStorage.setItem(KEY, JSON.stringify(s));
+      const { scrollToItem: _, ...persistable } = s;
+      localStorage.setItem(KEY, JSON.stringify(persistable));
     } catch {
       /* ignore */
     }
@@ -54,6 +57,15 @@ useUi.subscribe((s) => {
 
 export function setUi(patch: Partial<UiState>): void {
   useUi.setState(patch);
+}
+
+let scrollReqId = 0;
+export function requestScrollToPlaylistItem(index: number): void {
+  useUi.setState({
+    viewItemIndex: index,
+    followLive: false,
+    scrollToItem: { index, req: ++scrollReqId },
+  });
 }
 
 if (typeof window !== 'undefined') {

@@ -67,8 +67,8 @@ export function TopBar() {
   const red = currentRedState(live);
   // Peak main-thread stall of the last minute as the core worker saw it (250 ms watchdog tick; design/25).
   const stall = live.core?.mainThreadStallMaxMs ?? 0;
-  const onFallbackLink = () => {
-    reacquireMissing(true);
+  const onFallbackLink = async () => {
+    await reacquireMissing(true);
     if (missingHandles().ids.length)
       toast(
         'Some output windows were opened by another operator tab and cannot be reached from this one. Use Relaunch to take them over.',

@@ -167,7 +167,7 @@ function PlaylistItemSection({
  * The main operator slide area: renders all items of the current playlist in a continuous vertical scroll,
  * allowing smooth scrolling between playlist items (like ProPresenter).
  */
-export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem: number }) {
+export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem?: number }) {
   const state = useLive((s) => s.state);
   const health = useLive((s) => s.health);
   const outputs = useLibrary((s) => s.data.settings.outputs);
@@ -198,25 +198,35 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem: nu
     return map;
   }, [op.cues]);
 
-  // When viewItem changes externally (e.g. click in PlaylistPane), scroll that item into view
+  const scrollToItem = useUi((s) => s.scrollToItem);
+  const lastHandledReq = useRef<number | null>(null);
+  const mountedRef = useRef(false);
+
+  // On initial mount, align with initial viewItem if specified and non-zero
   useEffect(() => {
-    if (isProgrammaticScroll.current) return;
-    const container = scrollPaneRef.current;
-    const target = itemRefs.current[viewItem];
-    if (target && container) {
-      const containerRect = container.getBoundingClientRect();
-      const targetRect = target.getBoundingClientRect();
-      const diff = Math.abs(targetRect.top - (containerRect.top + 10));
-      if (diff > 50) {
-        isProgrammaticScroll.current = true;
-        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        if (scrollTimeout.current) clearTimeout(scrollTimeout.current);
-        scrollTimeout.current = setTimeout(() => {
-          isProgrammaticScroll.current = false;
-        }, 500);
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      if (viewItem && viewItem > 0) {
+        const target = itemRefs.current[viewItem];
+        if (target) target.scrollIntoView({ behavior: 'instant', block: 'start' });
       }
     }
   }, [viewItem]);
+
+  // When scrollToItem is requested externally (e.g. click in PlaylistPane), scroll that item into view
+  useEffect(() => {
+    if (!scrollToItem || scrollToItem.req === lastHandledReq.current) return;
+    lastHandledReq.current = scrollToItem.req;
+    const target = itemRefs.current[scrollToItem.index];
+    if (target) {
+      isProgrammaticScroll.current = true;
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (scrollTimeout.current) clearTimeout(scrollTimeout.current);
+      scrollTimeout.current = setTimeout(() => {
+        isProgrammaticScroll.current = false;
+      }, 500);
+    }
+  }, [scrollToItem]);
 
   // When scrolling in the grid, update viewItemIndex to the currently visible item
   const onScroll = useCallback(() => {
@@ -312,6 +322,7 @@ export function SlideGrid({ op, viewItem }: { op: OperatorPlaylist; viewItem: nu
       ref={scrollPaneRef}
       onScroll={onScroll}
       className="pane"
+      data-slide-grid-pane
       style={{ display: 'flex', flexDirection: 'column' }}
     >
       <div className="pane-head">

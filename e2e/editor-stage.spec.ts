@@ -91,27 +91,21 @@ test('the stage shows the live slide’s notes and a Hebrew line right to left',
     slidesOf(withLong)[3]!.notes = LONG;
     await apiJson(a, `presentations/${p.id}`, { put: withLong });
 
-    // ---- The look editor: the stage look's 'Notes' on, saved.
+    // ---- The look editor: the stage look's 'Notes' on by default.
     await page.evaluate(() => {
       location.hash = '#/settings/looks';
     });
     await page.getByRole('button', { name: 'Stage', exact: true }).click();
     const notesOn = page.getByRole('checkbox', { name: /^Notes: show the live slide’s notes/ });
-    await expect(notesOn).not.toBeChecked();
-    await notesOn.check();
+    await expect(notesOn).toBeChecked();
     // The default box is shown, under the next slide; nothing covers the lyrics.
     await expect(page.getByText('Notes box (default: under the next slide)')).toBeVisible();
     await expect(page.locator('[data-stage-notes] .banner')).toHaveCount(0);
-    await page.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect
-      .poll(async () => {
-        const looks = await apiJson<{ id: string; layers: { props: { notes?: boolean } } }[]>(
-          a,
-          'settings/looks',
-        );
-        return looks.find((l) => l.id === 'look-stage')?.layers.props.notes;
-      })
-      .toBe(true);
+    const looks = await apiJson<{ id: string; layers: { props: { notes?: boolean } } }[]>(
+      a,
+      'settings/looks',
+    );
+    expect(looks.find((l) => l.id === 'look-stage')?.layers.props.notes).toBe(true);
 
     // ---- Live: the deck in a playlist, the announcement on screen, the stage window open.
     const pl = await apiJson<{ id: string }>(a, 'playlists', {

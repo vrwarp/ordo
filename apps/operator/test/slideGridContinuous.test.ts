@@ -2,6 +2,7 @@ import { expandCues, type Playlist, Presentation } from '@ordo/domain';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { requestScrollToPlaylistItem, useUi } from '../src/state/ui.ts';
 import { SlideGrid } from '../src/views/live/SlideGrid.tsx';
 
 describe('SlideGrid continuous playlist scroll', () => {
@@ -119,5 +120,21 @@ describe('SlideGrid continuous playlist scroll', () => {
 
     const out = renderToStaticMarkup(createElement(SlideGrid, { op, viewItem: 0 }));
     expect(out).toContain('This playlist is empty.');
+  });
+
+  it('requestScrollToPlaylistItem updates scrollToItem with incrementing req and sets followLive to false', () => {
+    useUi.setState({ followLive: true });
+    requestScrollToPlaylistItem(2);
+    const s1 = useUi.getState();
+    expect(s1.viewItemIndex).toBe(2);
+    expect(s1.followLive).toBe(false);
+    expect(s1.scrollToItem?.index).toBe(2);
+    const req1 = s1.scrollToItem?.req;
+    expect(req1).toBeDefined();
+
+    requestScrollToPlaylistItem(2);
+    const s2 = useUi.getState();
+    expect(s2.scrollToItem?.index).toBe(2);
+    expect(s2.scrollToItem?.req).toBeGreaterThan(req1!);
   });
 });

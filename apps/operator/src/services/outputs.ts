@@ -1,4 +1,4 @@
-import { appEnv, originOf, roleUrl } from '@ordo/client';
+import { appEnv, LocalWindowTracker, originOf, roleUrl } from '@ordo/client';
 import type { Output } from '@ordo/domain';
 import { create } from 'zustand';
 import {
@@ -65,10 +65,20 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export class OutputWindows {
   private windows = new Map<string, Window>();
   private watch?: ReturnType<typeof setInterval>;
+  readonly probeTracker: LocalWindowTracker;
 
   constructor(private ctl: Controller) {
+    this.probeTracker = new LocalWindowTracker();
     this.watch = setInterval(() => this.refreshOpen(), 2000);
     this.ensureBroadcastRelays();
+  }
+
+  async probeLocal(ids?: string[], timeoutMs = 40): Promise<Set<string>> {
+    return this.probeTracker.probe(ids, timeoutMs);
+  }
+
+  isConfirmedLocal(outputId: string): boolean {
+    return this.probeTracker.isConfirmedLocal(outputId);
   }
 
   ensureBroadcastRelays(): void {
@@ -84,6 +94,7 @@ export class OutputWindows {
 
   dispose(): void {
     clearInterval(this.watch);
+    this.probeTracker.dispose();
   }
 
   urlFor(o: Output): string | null {
@@ -193,7 +204,11 @@ export class OutputWindows {
     await sleep(0);
     const before = this.missing();
     if (before.length) {
-      const n = this.reacquire();
+      const found = await this.probeLocal(
+        before.map((o) => o.id),
+        40,
+      );
+      const n = this.reacquire(found);
       const still = this.missing();
       log('info', `relaunch: re-acquired ${n} of ${before.length} windows without a handle`);
       if (still.length)
@@ -273,8 +288,11 @@ export class OutputWindows {
     const had = this.windows.has(o.id);
     if (!had) {
       const h = useLive.getState().health[o.id];
-      const exists = !!h?.connected || launchedEarlier() || this.reacquire() > 0;
+      const found = await this.probeLocal([o.id], 40);
+      const isLocal = found.has(o.id);
+      const exists = !!h?.connected || launchedEarlier() || isLocal;
       if (!exists) return;
+      if (isLocal) this.reacquire(found);
       if (!this.windows.has(o.id)) log('warn', `reopen ${o.name}: no window handle; opening by name`);
     }
     const screens = await this.screens();
@@ -305,11 +323,15 @@ export class OutputWindows {
   /**
    * After an operator reload the WindowProxy handles are gone. Opening the stable window name with an
    * empty URL returns an existing output window without navigating it; a fresh blank window is closed.
+   * To prevent blank windows and focus loss, window.open is ONLY called for windows confirmed to be
+   * running locally in this browser (via BroadcastChannel probe).
    */
-  reacquire(): number {
+  reacquire(onlyIds?: Set<string>): number {
     let n = 0;
+    const confirmed = onlyIds ?? this.probeTracker.confirmedLocalIds();
+    if (!confirmed.size) return 0;
     for (const o of settings().outputs) {
-      if (!o.enabled || this.windows.has(o.id)) continue;
+      if (!o.enabled || this.windows.has(o.id) || !confirmed.has(o.id)) continue;
       const url = this.urlFor(o);
       if (!url) continue;
       let w: Window | null = null;

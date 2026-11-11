@@ -1,4 +1,4 @@
-import { DEMO, ensureDemoHub } from '@ordo/client';
+import { DEMO, ensureDemoHub, registerWindowProbe } from '@ordo/client';
 import { OutputHost } from './host.ts';
 import type { ChaosHooks } from './host-protocol.ts';
 import './style.css';
@@ -15,6 +15,7 @@ import { type WakeSentinel, WakeLockKeeper } from './wakelock.ts';
 const q = new URLSearchParams(location.search);
 const outputId = q.get('output');
 if (outputId && !window.name) window.name = `ordo-out-${outputId}`;
+if (outputId) registerWindowProbe(outputId, 'output');
 const testMode = import.meta.env.MODE === 'test' || q.get('test') === '1';
 
 function resolution(): { width: number; height: number } {

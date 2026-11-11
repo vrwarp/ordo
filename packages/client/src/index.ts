@@ -8,3 +8,4 @@ export * from './fallback.ts';
 export * from './link.ts';
 export * from './isolation.ts';
 export * from './demo.ts';
+export * from './probe.ts';
