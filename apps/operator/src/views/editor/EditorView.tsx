@@ -54,6 +54,7 @@ import { RevisionsDialog } from './RevisionsDialog.tsx';
 import { SlideCanvas } from './SlideCanvas.tsx';
 import { SlidePanel } from './SlidePanel.tsx';
 import { SlidesPanel } from './SlidesPanel.tsx';
+import { SongReflowEditor } from './SongReflowEditor.tsx';
 
 /** Nudge steps (px in slide units) offered by the touch toolbar; the keyboard uses 1 and Shift 10. */
 const STEPS = [1, 10, 50] as const;
@@ -92,6 +93,7 @@ export function EditorView({ id }: { id: string }) {
   const media = useMediaLookup();
   const [tab, setTab] = useState<'object' | 'slide' | 'presentation'>('slide');
   const [focusMode, setFocusMode] = useState(false);
+  const [songMode, setSongMode] = useState<'reflow' | 'canvas' | null>(null);
 
   const toggleFullScreen = async () => {
     try {
@@ -548,6 +550,15 @@ export function EditorView({ id }: { id: string }) {
             ]}
           />
           <span className="spacer" />
+          {p.kind === 'song' && (
+            <button
+              type="button"
+              className={`small ${(songMode ?? 'canvas') === 'reflow' ? 'on' : ''}`}
+              onClick={() => setSongMode((m) => ((m ?? 'canvas') === 'reflow' ? 'canvas' : 'reflow'))}
+            >
+              {(songMode ?? 'canvas') === 'reflow' ? 'Canvas' : 'Script'}
+            </button>
+          )}
           <button type="button" onClick={() => setFinding(true)} title="Find and replace (Ctrl+F)">
             Find…
           </button>
@@ -588,51 +599,66 @@ export function EditorView({ id }: { id: string }) {
             ↷<span className="touch-label">Redo</span>
           </button>
 
-          <span style={{ width: 1, height: 20, background: 'var(--line)', margin: '0 4px' }} />
+          {!(p.kind === 'song' && (songMode ?? 'reflow') === 'reflow') && (
+            <>
+              <span style={{ width: 1, height: 20, background: 'var(--line)', margin: '0 4px' }} />
 
-          <button
-            type="button"
-            disabled={readOnly || !slide}
-            onClick={() => add(newText(theme))}
-            title="Add text box"
-          >
-            + Text
-          </button>
-          <button type="button" disabled={readOnly || !slide} onClick={() => setImagePick(true)}>
-            + Image
-          </button>
-          <button
-            type="button"
-            disabled={readOnly || !slide}
-            onClick={() => setVideoPick(true)}
-            title="Add a video that plays in the slide"
-          >
-            + Video
-          </button>
-          <Menu
-            label="Shapes"
-            disabled={readOnly || !slide}
-            items={[
-              { label: 'Rectangle', name: 'Rectangle', onSelect: () => add(newShape('rect')) },
-              { label: 'Ellipse', name: 'Ellipse', onSelect: () => add(newShape('ellipse')) },
-              { label: 'Line', name: 'Line', onSelect: () => add(newShape('line')) },
-            ]}
-          />
-          <Menu
-            label="Arrange"
-            disabled={readOnly || !obj}
-            items={[
-              { label: '⤒ Bring to front', name: 'Front', onSelect: () => z('front') },
-              { label: '↑ Bring forward', name: 'Forward', onSelect: () => z('forward') },
-              { label: '↓ Send backward', name: 'Backward', onSelect: () => z('backward') },
-              { label: '⤓ Send to back', name: 'Back', onSelect: () => z('back') },
-              { label: '⧉ Duplicate (Ctrl+D)', name: 'Duplicate', onSelect: duplicate },
-              { label: '🗑 Delete (Del)', name: 'Delete', danger: true, onSelect: remove },
-              ...(grouped ? [{ label: 'Ungroup', onSelect: ungroupSelection }] : []),
-            ]}
-          />
+              <button
+                type="button"
+                disabled={readOnly || !slide}
+                onClick={() => add(newText(theme))}
+                title="Add text box"
+              >
+                + Text
+              </button>
+              <button type="button" disabled={readOnly || !slide} onClick={() => setImagePick(true)}>
+                + Image
+              </button>
+              <button
+                type="button"
+                disabled={readOnly || !slide}
+                onClick={() => setVideoPick(true)}
+                title="Add a video that plays in the slide"
+              >
+                + Video
+              </button>
+              <Menu
+                label="Shapes"
+                disabled={readOnly || !slide}
+                items={[
+                  { label: 'Rectangle', name: 'Rectangle', onSelect: () => add(newShape('rect')) },
+                  { label: 'Ellipse', name: 'Ellipse', onSelect: () => add(newShape('ellipse')) },
+                  { label: 'Line', name: 'Line', onSelect: () => add(newShape('line')) },
+                ]}
+              />
+              <Menu
+                label="Arrange"
+                disabled={readOnly || !obj}
+                items={[
+                  { label: '⤒ Bring to front', name: 'Front', onSelect: () => z('front') },
+                  { label: '↑ Bring forward', name: 'Forward', onSelect: () => z('forward') },
+                  { label: '↓ Send backward', name: 'Backward', onSelect: () => z('backward') },
+                  { label: '⤓ Send to back', name: 'Back', onSelect: () => z('back') },
+                  { label: '⧉ Duplicate (Ctrl+D)', name: 'Duplicate', onSelect: duplicate },
+                  { label: '🗑 Delete (Del)', name: 'Delete', danger: true, onSelect: remove },
+                  ...(grouped ? [{ label: 'Ungroup', onSelect: ungroupSelection }] : []),
+                ]}
+              />
+            </>
+          )}
 
           <span className="spacer" />
+
+          {p.kind === 'song' && (
+            <button
+              type="button"
+              className={`small ${(songMode ?? 'reflow') === 'reflow' ? 'on' : ''}`}
+              onClick={() => setSongMode((m) => ((m ?? 'reflow') === 'reflow' ? 'canvas' : 'reflow'))}
+              title="Toggle between Lyric Script and Slide Canvas view"
+            >
+              {(songMode ?? 'reflow') === 'reflow' ? 'Canvas View' : 'Lyric Script'}
+            </button>
+          )}
 
           <button type="button" onClick={() => setFinding(true)} title="Find and replace (Ctrl+F)">
             Find…
@@ -650,91 +676,127 @@ export function EditorView({ id }: { id: string }) {
           </button>
         </div>
       )}
-      <SlidesPanel p={p} readOnly={readOnly} />
-      <div className="stagewrap">
-        {readOnly && (
-          <div className="banner" style={{ margin: 8 }} data-locked-banner>
-            {profile === 'edit'
-              ? 'This presentation is in the playlist that is live at the venue. It can be edited again after the service.'
-              : 'This presentation is in the live playlist. Editing is locked until End service.'}
+      {p.kind === 'song' && (songMode ?? (coarse ? 'canvas' : 'reflow')) === 'reflow' ? (
+        <SongReflowEditor
+          presentation={p}
+          readOnly={readOnly}
+          selectedSlideId={slide?.id}
+          onSwitchToCanvas={() => setSongMode('canvas')}
+          banners={
+            <>
+              {readOnly && (
+                <div className="banner" style={{ margin: '8px 16px 0' }} data-locked-banner>
+                  {profile === 'edit'
+                    ? 'This presentation is in the playlist that is live at the venue. It can be edited again after the service.'
+                    : 'This presentation is in the live playlist. Editing is locked until End service.'}
+                </div>
+              )}
+              {changedElsewhere && (
+                <div className="banner blue row" style={{ margin: '8px 16px 0' }}>
+                  <span className="grow">
+                    Someone else saved this presentation (rev {libP.rev}) since you opened it. Saving combines
+                    your changes with theirs.
+                  </span>
+                  <button type="button" className="small" onClick={() => void reloadLatest()}>
+                    Reload theirs
+                  </button>
+                  <button type="button" className="small" onClick={() => setDismissedRev(libP.rev)}>
+                    Keep editing
+                  </button>
+                </div>
+              )}
+            </>
+          }
+        />
+      ) : (
+        <>
+          <SlidesPanel p={p} readOnly={readOnly} />
+          <div className="stagewrap">
+            {readOnly && (
+              <div className="banner" style={{ margin: 8 }} data-locked-banner>
+                {profile === 'edit'
+                  ? 'This presentation is in the playlist that is live at the venue. It can be edited again after the service.'
+                  : 'This presentation is in the live playlist. Editing is locked until End service.'}
+              </div>
+            )}
+            {changedElsewhere && (
+              <div className="banner blue row" style={{ margin: 8 }}>
+                <span className="grow">
+                  Someone else saved this presentation (rev {libP.rev}) since you opened it. Saving combines
+                  your changes with theirs.
+                </span>
+                <button type="button" className="small" onClick={() => void reloadLatest()}>
+                  Reload theirs
+                </button>
+                <button type="button" className="small" onClick={() => setDismissedRev(libP.rev)}>
+                  Keep editing
+                </button>
+              </div>
+            )}
+            {slide ? (
+              <SlideCanvas
+                slide={slide}
+                backgroundMediaId={bgId}
+                media={media}
+                readOnly={readOnly}
+                onEditText={editText}
+                objectTools={objectTools}
+                slideRect={p.source?.native?.slideRect}
+              />
+            ) : (
+              <div className="center muted">Add a slide to start.</div>
+            )}
+            <details
+              className="ed-looks"
+              open={looksShown}
+              onToggle={(e) => {
+                const open = (e.currentTarget as HTMLDetailsElement).open;
+                if (open === looksShown) return;
+                setLooksOpen(open);
+                try {
+                  localStorage.setItem(LOOKS_OPEN_KEY, open ? '1' : '0');
+                } catch {
+                  /* private mode: not remembered */
+                }
+              }}
+            >
+              <summary>Look previews</summary>
+              {looksShown && <LookPreviews presentation={p} slideId={slide?.id} compact />}
+            </details>
           </div>
-        )}
-        {changedElsewhere && (
-          <div className="banner blue row" style={{ margin: 8 }}>
-            <span className="grow">
-              Someone else saved this presentation (rev {libP.rev}) since you opened it. Saving combines your
-              changes with theirs.
-            </span>
-            <button type="button" className="small" onClick={() => void reloadLatest()}>
-              Reload theirs
-            </button>
-            <button type="button" className="small" onClick={() => setDismissedRev(libP.rev)}>
-              Keep editing
-            </button>
+          <div className="props">
+            <div className="row" style={{ marginBottom: 8, gap: 4 }}>
+              <button
+                type="button"
+                className={`small ${tab === 'object' ? 'on' : ''}`}
+                disabled={!obj}
+                onClick={() => setTab('object')}
+              >
+                Object
+              </button>
+              <button
+                type="button"
+                className={`small ${tab === 'slide' ? 'on' : ''}`}
+                disabled={!slide}
+                onClick={() => setTab('slide')}
+              >
+                Slide
+              </button>
+              <button
+                type="button"
+                className={`small ${tab === 'presentation' ? 'on' : ''}`}
+                onClick={() => setTab('presentation')}
+              >
+                Presentation
+              </button>
+            </div>
+            {tab === 'object' && obj && <ObjectPanel o={obj} readOnly={readOnly} />}
+            {tab === 'object' && !obj && <span className="muted">Select an object on the slide.</span>}
+            {tab === 'slide' && slide && <SlidePanel slide={slide} p={p} readOnly={readOnly} />}
+            {tab === 'presentation' && <PresentationPanel p={p} readOnly={readOnly} />}
           </div>
-        )}
-        {slide ? (
-          <SlideCanvas
-            slide={slide}
-            backgroundMediaId={bgId}
-            media={media}
-            readOnly={readOnly}
-            onEditText={editText}
-            objectTools={objectTools}
-            slideRect={p.source?.native?.slideRect}
-          />
-        ) : (
-          <div className="center muted">Add a slide to start.</div>
-        )}
-        <details
-          className="ed-looks"
-          open={looksShown}
-          onToggle={(e) => {
-            const open = (e.currentTarget as HTMLDetailsElement).open;
-            if (open === looksShown) return;
-            setLooksOpen(open);
-            try {
-              localStorage.setItem(LOOKS_OPEN_KEY, open ? '1' : '0');
-            } catch {
-              /* private mode: not remembered */
-            }
-          }}
-        >
-          <summary>Look previews</summary>
-          {looksShown && <LookPreviews presentation={p} slideId={slide?.id} compact />}
-        </details>
-      </div>
-      <div className="props">
-        <div className="row" style={{ marginBottom: 8, gap: 4 }}>
-          <button
-            type="button"
-            className={`small ${tab === 'object' ? 'on' : ''}`}
-            disabled={!obj}
-            onClick={() => setTab('object')}
-          >
-            Object
-          </button>
-          <button
-            type="button"
-            className={`small ${tab === 'slide' ? 'on' : ''}`}
-            disabled={!slide}
-            onClick={() => setTab('slide')}
-          >
-            Slide
-          </button>
-          <button
-            type="button"
-            className={`small ${tab === 'presentation' ? 'on' : ''}`}
-            onClick={() => setTab('presentation')}
-          >
-            Presentation
-          </button>
-        </div>
-        {tab === 'object' && obj && <ObjectPanel o={obj} readOnly={readOnly} />}
-        {tab === 'object' && !obj && <span className="muted">Select an object on the slide.</span>}
-        {tab === 'slide' && slide && <SlidePanel slide={slide} p={p} readOnly={readOnly} />}
-        {tab === 'presentation' && <PresentationPanel p={p} readOnly={readOnly} />}
-      </div>
+        </>
+      )}
       {revisions && <RevisionsDialog id={p.id} readOnly={readOnly} onClose={() => setRevisions(false)} />}
       {finding && <FindReplaceDialog readOnly={readOnly} onClose={() => setFinding(false)} />}
       {imagePick && (

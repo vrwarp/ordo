@@ -214,7 +214,12 @@ export function rasterScene<B>(
   scale: number,
   images: ImageLookup,
   objectId: string,
-  opts: { nextSlide?: Slide; isSong?: boolean; clip?: { w?: number; h?: number } } = {},
+  opts: {
+    nextSlide?: Slide;
+    isSong?: boolean;
+    presentationKind?: 'song' | 'slides' | 'loop';
+    clip?: { w?: number; h?: number };
+  } = {},
 ): { base: B; over: B | null; plane: Float32Array } | undefined {
   const scene = sceneSlides(ctx, slide, look, scale, images, objectId, opts.clip);
   if (!scene) return undefined;
@@ -244,11 +249,16 @@ export function rasterSceneSprites<B>(
   scale: number,
   images: ImageLookup,
   objectId: string,
-  opts: { nextSlide?: Slide; isSong?: boolean; clip?: { w?: number; h?: number } } = {},
+  opts: {
+    nextSlide?: Slide;
+    isSong?: boolean;
+    presentationKind?: 'song' | 'slides' | 'loop';
+    clip?: { w?: number; h?: number };
+  } = {},
 ): { base: DrawnSprite<B>; over: DrawnSprite<B> | null; plane: Float32Array } | undefined {
   const scene = sceneSlides(ctx, slide, look, scale, images, objectId, opts.clip);
   if (!scene) return undefined;
-  const o = { nextSlide: opts.nextSlide, isSong: opts.isSong };
+  const o = { nextSlide: opts.nextSlide, isSong: opts.isSong, presentationKind: opts.presentationKind };
   const part = (s: Slide) =>
     drawSprite(
       surface,

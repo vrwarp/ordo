@@ -558,6 +558,8 @@ export type SlideDrawOptions = {
   nextSlide?: Slide;
   /** Whether the slide belongs to a song (lyric-only looks treat non-song slides per `nonSong`). */
   isSong?: boolean;
+  /** Explicit presentation kind so loop slides suppress lower-third extraction in previews too. */
+  presentationKind?: 'song' | 'slides' | 'loop';
 };
 
 /**
@@ -603,19 +605,25 @@ export function bandSource(slide: Slide, text: string): TextObject | undefined {
 }
 
 /** The text a lyric-only look shows for a slide, or null when the look shows nothing for it. */
-export function lyricTextFor(slide: Slide, look: Look | undefined, isSong: boolean): string | null {
+export function lyricTextFor(
+  slide: Slide,
+  look: Look | undefined,
+  kindOrIsSong: boolean | 'song' | 'slides' | 'loop',
+): string | null {
   const rule = look?.layers.slide;
   if (rule?.mode !== 'lyricOnly') return null;
+  if (kindOrIsSong === 'loop') {
+    return look?.kind === 'stage' ? 'Service Starting Soon' : null;
+  }
+  const isSong = kindOrIsSong === true || kindOrIsSong === 'song';
+  if (slide.bottomThirdText !== undefined) {
+    return slide.bottomThirdText.trim() ? slide.bottomThirdText.trim() : null;
+  }
   if (!isSong && rule.nonSong === 'none') return null;
-  if (!isSong) {
-    const textObjects = slide.objects.filter((x): x is TextObject => x.type === 'text' && !!x.text?.trim());
-    if (textObjects.length > 1) {
-      const combined = textObjects
-        .map((o) => readableText(o).trim())
-        .filter(Boolean)
-        .join('\n');
-      if (combined.trim()) return combined;
-    }
+  if (!isSong && slide.scripture) {
+    const r = slide.scripture.ref;
+    const refStr = `${r.book} ${r.chapter}:${r.verseFrom}${r.verseTo ? `-${r.verseTo}` : ''}`;
+    return `${refStr}\n${slide.scripture.text}`;
   }
   const t = firstText(slide);
   return t.trim() ? t : null;
@@ -679,10 +687,11 @@ export function drawSlide2D(ctx: Ctx2D, rawSlide: Slide, opts: SlideDrawOptions)
     for (const o of withinDrawBudget(drawn.objects)) drawObject(ctx, o, scale, opts.images);
     return;
   }
-  const text = lyricTextFor(slide, look, opts.isSong ?? true);
+  const kind = opts.presentationKind ?? opts.isSong ?? true;
+  const text = lyricTextFor(slide, look, kind);
   if (text) drawBandText(ctx, text, rule.style, rule.band, scale, bandSource(slide, text));
-  if (rule.nextSlide && next) {
-    const nt = lyricTextFor(next, look, opts.isSong ?? true);
+  if (rule.nextSlide && next && kind !== 'loop') {
+    const nt = lyricTextFor(next, look, kind);
     if (nt) drawBandText(ctx, nt, rule.nextSlide.style, rule.nextSlide.band, scale, bandSource(next, nt));
   }
 }

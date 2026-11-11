@@ -358,7 +358,12 @@ function sceneParts(
 ): (SceneParts & { base: DrawnSprite<ImageBitmap> }) | undefined {
   const v = job.video;
   if (!v) return undefined;
-  const opts = { nextSlide: job.nextSlide, isSong: job.isSong, clip: { w: v.w, h: v.h } };
+  const opts = {
+    nextSlide: job.nextSlide,
+    isSong: job.isSong,
+    presentationKind: job.presentationKind,
+    clip: { w: v.w, h: v.h },
+  };
   const frame = { width: out.w, height: out.h };
   const s = rasterSceneSprites(
     measure(),
@@ -432,7 +437,11 @@ async function run(job: AssetJob, steps: Steps): Promise<void> {
       draw = () => {
         const scene = sceneParts(job, out, scale, pre.lookup);
         if (scene) return { main: scene.base, scene };
-        const opts = { nextSlide: job.nextSlide, isSong: job.isSong };
+        const opts = {
+          nextSlide: job.nextSlide,
+          isSong: job.isSong,
+          presentationKind: job.presentationKind,
+        };
         const reach = slideReach(measure(), job.slide, { scale, look: job.look, ...opts });
         return {
           main: sprite(reach, scale, out, (c) =>

@@ -23,6 +23,7 @@ export type ThumbJob = {
   slide: Slide;
   look?: Look;
   isSong: boolean;
+  presentationKind?: 'song' | 'slides' | 'loop';
   /** Background image hash (an image, or a video's poster). */
   bg?: string;
   /** mediaId -> file hash for image objects and imported page images. */
@@ -169,6 +170,7 @@ async function render(job: ThumbJob): Promise<Blob> {
     look: job.look,
     images: (id) => bms.get(id),
     isSong: job.isSong,
+    presentationKind: job.presentationKind,
     nextSlide: job.nextSlide,
   });
   return canvas.convertToBlob({ type: 'image/jpeg', quality: 0.82 });

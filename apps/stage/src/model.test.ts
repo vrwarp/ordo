@@ -241,6 +241,114 @@ describe('slide text', () => {
       label: 'Next: Benediction',
     });
   });
+  it('shows pre-service standby during announcement loops and looks ahead to the next item', () => {
+    const loopDeck: Presentation = {
+      id: 'loop1',
+      rev: 1,
+      title: 'Welcome & Announcements',
+      kind: 'loop',
+      meta: { tags: [] },
+      sections: [
+        {
+          id: 's',
+          label: 'Announcements',
+          short: 'A',
+          slides: [
+            {
+              id: 'l1',
+              objects: [
+                {
+                  id: 't1',
+                  type: 'text',
+                  text: 'Youth Group Friday 7pm',
+                  box: { x: 0, y: 0, w: 1, h: 1, rotation: 0 },
+                  style: LOOK_MAIN as never,
+                  opacity: 1,
+                },
+              ],
+            },
+            {
+              id: 'l2',
+              objects: [
+                {
+                  id: 't2',
+                  type: 'text',
+                  text: 'Bake Sale Sunday',
+                  box: { x: 0, y: 0, w: 1, h: 1, rotation: 0 },
+                  style: LOOK_MAIN as never,
+                  opacity: 1,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      arrangements: [],
+      archived: false,
+    };
+    const firstSong: Presentation = {
+      id: 'song1',
+      rev: 1,
+      title: '10,000 Reasons',
+      kind: 'song',
+      meta: { tags: [] },
+      sections: [
+        {
+          id: 's',
+          label: 'Verse 1',
+          short: 'V1',
+          slides: [
+            {
+              id: 'v1',
+              objects: [
+                {
+                  id: 't1',
+                  type: 'text',
+                  text: 'Bless the Lord O my soul',
+                  box: { x: 0, y: 0, w: 1, h: 1, rotation: 0 },
+                  style: LOOK_MAIN as never,
+                  opacity: 1,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      arrangements: [],
+      archived: false,
+    };
+    const resolved: ResolvedPlaylist = {
+      playlist: {
+        id: 'pl',
+        rev: 1,
+        name: 'Service',
+        items: [
+          { id: 'i1', kind: 'presentation', presentationId: loopDeck.id },
+          { id: 'i2', kind: 'presentation', presentationId: firstSong.id },
+        ],
+      },
+      presentations: { [loopDeck.id]: loopDeck, [firstSong.id]: firstSong },
+      media: {},
+      fonts: [],
+      looks: DEFAULT_LOOKS,
+      files: [],
+      manifestId: 'm',
+    };
+    const layout = stageLayout(LOOK_STAGE);
+    let s = reduce(initialState(), { k: 'goLive', resolved });
+    s = reduce(s, { k: 'go', cueIndex: 0, at: 1000 });
+    // Current shows standby text instead of cycling announcement slides
+    expect(currentText(s, s.layers.slide.content, layout)).toEqual({
+      text: 'Service Starting Soon',
+      label: 'Welcome & Announcements',
+    });
+    // Next looks ahead to the first song of the service
+    expect(nextText(s, s.layers.slide.content, layout)).toEqual({
+      text: 'Bless the Lord O my soul',
+      label: 'Next: 10,000 Reasons',
+    });
+  });
+
   it('nothing when cleared', () => {
     const { s } = live();
     const c = reduce(s, { k: 'clear', layer: 'slide', at: 5000 });
@@ -737,6 +845,22 @@ describe('the notes the stage shows', () => {
     const v = view(s, look);
     expect(v.current).toBeNull();
     expect(v.notes).toBe('Ask for volunteers.');
+  });
+
+  it('expands default speaker notes box on non-song slides and stays clear of active stage messages', () => {
+    let s = liveSermon(['Preacher sermon outline here.']);
+    const v = view(s, LOOK_STAGE);
+    expect(v.layout.notes?.box.y).toBe(450);
+    expect(v.layout.notes?.box.h).toBe(614);
+    expect(v.layout.notes?.fontSizePx).toBe(32);
+
+    // Sending a stage flash message shrinks the notes bottom so the yellow banner never overlaps notes
+    s = reduce(s, { k: 'message.send', id: 'm1', text: 'Wrap up in 2 min', at: 1500 });
+    const vMsg = view(s, LOOK_STAGE);
+    expect(vMsg.messages).toHaveLength(1);
+    expect(vMsg.layout.notes!.box.y + vMsg.layout.notes!.box.h).toBeLessThanOrEqual(
+      vMsg.layout.messages!.box.y,
+    );
   });
 
   it('are tidied: line ends, trailing spaces and runs of blank lines', () => {

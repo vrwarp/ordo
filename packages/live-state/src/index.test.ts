@@ -403,4 +403,73 @@ describe('actionToEvent with ProPresenter navigation actions', () => {
       at: 40,
     });
   });
+
+  it('starts a timer attached to a slide cue and clears the countdown overlay when navigating to another item', () => {
+    let s = reduce(initialState(), { k: 'goLive', resolved: fixture() });
+    s.cues[0] = {
+      ...s.cues[0]!,
+      timer: { kind: 'countdownTo', timeOfDay: '10:00', label: 'Pre-service' },
+      timerId: 'loop-timer',
+    };
+    s = reduce(s, { k: 'go', cueIndex: 0, at: 100 });
+    expect(s.timers['loop-timer']?.running).toBe(true);
+    expect(s.props.countdownTimerId).toBe('loop-timer');
+
+    // Advancing within the same item keeps the countdown
+    s = reduce(s, { k: 'go', cueIndex: 1, at: 200 });
+    expect(s.props.countdownTimerId).toBe('loop-timer');
+
+    // Wrapping back to cue 0 within the same loop item does NOT reset startedAt or re-show a cleared prop
+    s = reduce(s, { k: 'go', cueIndex: 0, at: 250 });
+    expect(s.timers['loop-timer']?.startedAt).toBe(100);
+    s = reduce(s, { k: 'clear', layer: 'props', at: 260 });
+    expect(s.props.countdownTimerId).toBeUndefined();
+    s = reduce(s, { k: 'go', cueIndex: 1, at: 270 });
+    s = reduce(s, { k: 'go', cueIndex: 0, at: 280 });
+    expect(s.props.countdownTimerId).toBeUndefined();
+
+    // Re-enter item 0 from another item starts the timer fresh, then leaving clears it
+    s = reduce(s, { k: 'go', cueIndex: 4, at: 290 });
+    s = reduce(s, { k: 'go', cueIndex: 0, at: 300 });
+    expect(s.props.countdownTimerId).toBe('loop-timer');
+    expect(s.timers['loop-timer']?.startedAt).toBe(300);
+
+    // Navigating to cue 4 (next presentation item, b) automatically clears the pre-service countdown overlay
+    s = reduce(s, { k: 'go', cueIndex: 4, at: 400 });
+    expect(s.props.countdownTimerId).toBeUndefined();
+    // But the timer itself in state is preserved for stage records
+    expect(s.timers['loop-timer']).toBeDefined();
+  });
+
+  it('keeps a standalone timer active when entering a loop and clears it when leaving the loop', () => {
+    const res = fixture();
+    const firstPresId = Object.keys(res.presentations)[0]!;
+    res.presentations[firstPresId] = { ...res.presentations[firstPresId]!, kind: 'loop' };
+    let s = reduce(initialState(), { k: 'goLive', resolved: res });
+    // Prepend a standalone timer cue before the loop
+    s.cues = [
+      {
+        index: 0,
+        itemIndex: 0,
+        itemId: 'standalone-timer-item',
+        kind: 'timer',
+        label: 'Countdown',
+        timer: { kind: 'countdownTo', timeOfDay: '10:00:00', label: 'Starts in' },
+        timerId: 'standalone-cd',
+        transition: { kind: 'cut' },
+      },
+      ...s.cues.map((c, idx) => ({ ...c, index: idx + 1, itemIndex: c.itemIndex + 1 })),
+    ];
+
+    s = reduce(s, { k: 'go', cueIndex: 0, at: 100 });
+    expect(s.props.countdownTimerId).toBe('standalone-cd');
+
+    // Step from standalone timer into the loop presentation -> countdown remains active!
+    s = reduce(s, { k: 'go', cueIndex: 1, at: 200 });
+    expect(s.props.countdownTimerId).toBe('standalone-cd');
+
+    // Step out of the loop into the opening song -> countdown automatically clears!
+    s = reduce(s, { k: 'go', cueIndex: 5, at: 300 });
+    expect(s.props.countdownTimerId).toBeUndefined();
+  });
 });

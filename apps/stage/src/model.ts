@@ -306,6 +306,9 @@ export function currentText(
   const p = s.resolved?.presentations[content.presentationId];
   const isSong = p?.kind === 'song';
   if (!isSong && layout.nonSong === 'none') return null;
+  if (p?.kind === 'loop') {
+    return { text: 'Service Starting Soon', label: p.title };
+  }
   const slide = findSlide(s, content.presentationId, content.slideId);
   let text = slideText(slide);
   if (!text && !isSong) text = p?.title ?? '';
@@ -328,9 +331,12 @@ export function nextText(s: LiveState, content: SlideContent | null, layout: Sta
   if (!content || !layout.next) return null;
   const cur = s.cues[content.cueIndex];
   if (!cur) return null;
+  const curPres = cur.presentationId ? s.resolved?.presentations[cur.presentationId] : undefined;
   for (let i = content.cueIndex + 1; i < s.cues.length; i++) {
     const c = s.cues[i]!;
     if (isHiddenCue(c)) continue;
+    // An announcement loop stays within its own item; stage should look ahead to the next item
+    if (curPres?.kind === 'loop' && c.itemIndex === cur.itemIndex) continue;
     if (c.kind !== 'slide') {
       if (c.itemIndex !== cur.itemIndex) {
         return { text: '', label: c.label ? `Next: ${c.label}` : undefined };

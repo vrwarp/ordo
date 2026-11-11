@@ -14,5 +14,11 @@ soak-*.md
 site
 tmp
 
+# Demo assets in operator public
+apps/operator/public/hub-sw.*
+apps/operator/public/demo
+apps/operator/public/output
+apps/operator/public/stage
+
 # Agent worktrees (local tooling)
 .claude/worktrees/

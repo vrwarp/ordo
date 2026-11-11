@@ -394,4 +394,83 @@ describe('media slides play are referenced and optional at goLive', () => {
       /still processing/,
     );
   });
+
+  it('scopes backgrounds to playlist items by clearing background when an item has none', () => {
+    const p1 = deck('p1', [[slide('s1')]], { backgroundMediaId: 'bg1' });
+    const p2 = deck('p2', [[slide('s2'), slide('s3')]]);
+    const pl = {
+      id: 'pl',
+      rev: 1,
+      name: 'Service',
+      items: [
+        { id: 'i1', kind: 'presentation' as const, presentationId: 'p1' },
+        { id: 'i2', kind: 'presentation' as const, presentationId: 'p2' },
+      ],
+    };
+    const resolved = {
+      playlist: pl,
+      presentations: { p1, p2 },
+      media: { bg1: media('bg1', 'image') },
+    };
+    const cues = expandCues(resolved);
+    expect(cues[0]?.backgroundMediaId).toBe('bg1');
+    expect(cues[0]?.clearBackground).toBeUndefined();
+    // Entry cue of p2 (which has no background) clears the running background from p1
+    expect(cues[1]?.backgroundMediaId).toBeUndefined();
+    expect(cues[1]?.clearBackground).toBe(true);
+    // Subsequent slides in p2 do not re-clear
+    expect(cues[2]?.backgroundMediaId).toBeUndefined();
+    expect(cues[2]?.clearBackground).toBeUndefined();
+  });
+
+  it('attaches item-level background audio and countdown timer to cues', () => {
+    const p1 = deck('p1', [[slide('s1'), slide('s2')]]);
+    const p2 = deck('p2', [[slide('s3')]]);
+    const music = media('music', 'audio');
+    const pl = {
+      id: 'pl',
+      rev: 1,
+      name: 'Service',
+      items: [
+        {
+          id: 'i1',
+          kind: 'presentation' as const,
+          presentationId: 'p1',
+          audioMediaId: 'music',
+          countdownTimer: { kind: 'countdownTo' as const, timeOfDay: '10:00', label: 'Starts in' },
+        },
+        { id: 'i2', kind: 'presentation' as const, presentationId: 'p2' },
+      ],
+    };
+    expect([...referencedMediaIds(pl, { p1, p2 })]).toEqual(['music']);
+    const resolved = resolvePlaylist(
+      {
+        playlist: pl,
+        presentation: (id) => ({ p1, p2 })[id],
+        media: (id) => (id === 'music' ? music : undefined),
+        fonts: () => [],
+        looks: DEFAULT_LOOKS,
+        general: DEFAULT_GENERAL,
+      },
+      'pl',
+      { digest: localDigest },
+    );
+    expect(resolved.media.music).toBeDefined();
+    const cues = expandCues(resolved);
+    // First cue starts the timer and plays the music through the end of p1
+    expect(cues[0]?.timer?.label).toBe('Starts in');
+    expect(cues[0]?.timerId).toBe('i1-timer');
+    expect(cues[0]?.slideAudio).toEqual({
+      mediaId: 'music',
+      start: 'auto',
+      loop: true,
+      untilCue: 1,
+    });
+    // Second cue in p1 continues the music
+    expect(cues[1]?.slideAudio?.untilCue).toBe(1);
+    expect(cues[1]?.timer).toBeUndefined();
+    // p2 has no item-level audio or timer
+    expect(cues[2]?.slideAudio).toBeUndefined();
+    expect(cues[2]?.timer).toBeUndefined();
+  });
 });

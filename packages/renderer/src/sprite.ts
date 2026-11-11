@@ -433,7 +433,13 @@ export function bandReach(
 export function slideReach(
   ctx: Ctx2D,
   rawSlide: Slide,
-  opts: { scale: number; look?: Look; nextSlide?: Slide; isSong?: boolean },
+  opts: {
+    scale: number;
+    look?: Look;
+    nextSlide?: Slide;
+    isSong?: boolean;
+    presentationKind?: 'song' | 'slides' | 'loop';
+  },
 ): Reach {
   const slide = clampSlide(rawSlide);
   const look = opts.look ? clampLook(opts.look) : undefined;
@@ -453,12 +459,12 @@ export function slideReach(
     return r;
   }
   let r: Reach = EMPTY;
-  const isSong = opts.isSong ?? true;
-  const text = lyricTextFor(slide, look, isSong);
+  const kind = opts.presentationKind ?? opts.isSong ?? true;
+  const text = lyricTextFor(slide, look, kind);
   if (text) r = union(r, bandReach(ctx, text, rule.style, rule.band, scale, bandSource(slide, text)));
   const next = opts.nextSlide ? clampSlide(opts.nextSlide) : undefined;
-  if (rule.nextSlide && next) {
-    const nt = lyricTextFor(next, look, isSong);
+  if (rule.nextSlide && next && kind !== 'loop') {
+    const nt = lyricTextFor(next, look, kind);
     if (nt)
       r = union(
         r,

@@ -51,156 +51,203 @@ export function StageTools() {
     (t) => t.id !== SERVICE_COUNTDOWN_TIMER_ID && t.id !== MANUAL_ELAPSED_TIMER_ID,
   );
   return (
-    <div className="stage-tools">
-      <h4 style={{ margin: 0 }}>Stage message</h4>
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          send(text);
-        }}
-      >
-        <input
-          className="grow"
-          placeholder="Message to the stage screen"
-          maxLength={500}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-        />
-        <button type="submit" className="primary" disabled={!text.trim()}>
-          Send
-        </button>
-      </form>
-      <div className="row">
-        <span className="muted small">Show</span>
-        <Select
-          value={String(messageTtlMs)}
-          options={TTLS}
-          onChange={(v) => setUi({ messageTtlMs: Number(v) })}
-        />
-      </div>
-      {active.map((m) => (
-        <div key={m.id} className="row card" style={{ padding: 8 }}>
-          <span className="grow">{m.text}</span>
-          {m.expiresAt && <span className="muted small">{formatDuration(m.expiresAt - now)}</span>}
-          <button type="button" className="small" onClick={() => ctl?.dismissMessage(m.id)}>
-            Dismiss
-          </button>
-        </div>
-      ))}
-      {(recentMessages.length > 0 || presets.length > 0) && (
-        <div className="row wrap" style={{ gap: 6 }}>
-          {[...new Set([...recentMessages, ...presets])].slice(0, 10).map((m) => (
-            <button key={m} type="button" className="small" onClick={() => send(m)} title="Send again">
-              {m}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <h4 style={{ margin: '8px 0 0' }}>Timers</h4>
-      <div className="row">
-        <span className="grow">
-          Countdown to{' '}
-          <input
-            type="time"
-            value={countTo}
-            onChange={(e) => setCountTo(e.target.value)}
-            style={{ width: 110 }}
-          />
-        </span>
-        <b className="mono">{countdown ? timerText(countdown, now, general.timeZone) : '--:--'}</b>
-      </div>
-      <div className="row">
-        <button
-          type="button"
-          className="small"
-          onClick={() =>
-            ctl?.timerStart(SERVICE_COUNTDOWN_TIMER_ID, {
-              kind: 'countdownTo',
-              timeOfDay: countTo,
-              label: 'Service starts in',
-            })
-          }
-        >
-          Start countdown
-        </button>
-        <button
-          type="button"
-          className="small"
-          disabled={!countdown?.running}
-          onClick={() => ctl?.timerStop(SERVICE_COUNTDOWN_TIMER_ID)}
-        >
-          Stop
-        </button>
-      </div>
-      <div className="row">
-        <span className="grow">Elapsed</span>
-        <b className="mono">{elapsed ? timerText(elapsed, now, general.timeZone) : '00:00'}</b>
-      </div>
-      <div className="row">
-        {elapsed?.running ? (
-          <button type="button" className="small" onClick={() => ctl?.timerStop(MANUAL_ELAPSED_TIMER_ID)}>
-            Stop
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="small"
-            onClick={() => ctl?.timerStart(MANUAL_ELAPSED_TIMER_ID, { kind: 'elapsed', label: 'Elapsed' })}
-          >
-            Start
-          </button>
-        )}
-        <button type="button" className="small" onClick={() => ctl?.timerReset(MANUAL_ELAPSED_TIMER_ID)}>
-          Reset
-        </button>
-      </div>
-      {others.map((t) => (
-        <div key={t.id} className="row">
-          <span className="grow ellipsis">
-            {t.spec.label ?? (t.spec.kind === 'elapsed' ? 'Elapsed' : `Countdown ${t.spec.timeOfDay}`)}
+    <div className="stage-tools col" style={{ gap: 10 }}>
+      {/* 1. BACKSTAGE (Stage Screen Only) */}
+      <div className="card col" style={{ padding: 10, gap: 8, background: 'var(--bg2)' }}>
+        <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
+          <h4 style={{ margin: 0 }}>Stage Message</h4>
+          <span className="tag" style={{ fontSize: 10 }}>
+            Stage Screen Only
           </span>
-          <b className="mono">{timerText(t, now, general.timeZone)}</b>
-          {t.running ? (
-            <button type="button" className="small" onClick={() => ctl?.timerStop(t.id)}>
+        </div>
+        <form
+          className="row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            send(text);
+          }}
+        >
+          <input
+            className="grow"
+            placeholder="Message to the platform"
+            maxLength={500}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+          />
+          <button type="submit" className="primary small" disabled={!text.trim()}>
+            Send
+          </button>
+        </form>
+        <div className="row" style={{ alignItems: 'center' }}>
+          <span className="muted small">Duration</span>
+          <Select
+            value={String(messageTtlMs)}
+            options={TTLS}
+            onChange={(v) => setUi({ messageTtlMs: Number(v) })}
+          />
+        </div>
+        {active.map((m) => (
+          <div key={m.id} className="row card" style={{ padding: 6, alignItems: 'center' }}>
+            <span className="grow small">{m.text}</span>
+            {m.expiresAt && <span className="muted small">{formatDuration(m.expiresAt - now)}</span>}
+            <button type="button" className="small ghost" onClick={() => ctl?.dismissMessage(m.id)}>
+              Dismiss
+            </button>
+          </div>
+        ))}
+        {(recentMessages.length > 0 || presets.length > 0) && (
+          <div className="row wrap" style={{ gap: 4 }}>
+            {[...new Set([...recentMessages, ...presets])].slice(0, 10).map((m) => (
+              <button key={m} type="button" className="small" onClick={() => send(m)} title="Send again">
+                {m}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <h4 style={{ margin: '6px 0 0' }}>Elapsed Sermon / Set Timer</h4>
+        <div className="row">
+          <span className="grow small">Elapsed</span>
+          <b className="mono small">{elapsed ? timerText(elapsed, now, general.timeZone) : '00:00'}</b>
+        </div>
+        <div className="row">
+          {elapsed?.running ? (
+            <button type="button" className="small" onClick={() => ctl?.timerStop(MANUAL_ELAPSED_TIMER_ID)}>
               Stop
             </button>
           ) : (
-            <button type="button" className="small" onClick={() => ctl?.timerStart(t.id, t.spec)}>
+            <button
+              type="button"
+              className="small"
+              onClick={() => ctl?.timerStart(MANUAL_ELAPSED_TIMER_ID, { kind: 'elapsed', label: 'Elapsed' })}
+            >
               Start
             </button>
           )}
+          <button type="button" className="small" onClick={() => ctl?.timerReset(MANUAL_ELAPSED_TIMER_ID)}>
+            Reset
+          </button>
         </div>
-      ))}
+        {others.map((t) => (
+          <div key={t.id} className="row">
+            <span className="grow ellipsis small">
+              {t.spec.label ?? (t.spec.kind === 'elapsed' ? 'Elapsed' : `Countdown ${t.spec.timeOfDay}`)}
+            </span>
+            <b className="mono small">{timerText(t, now, general.timeZone)}</b>
+            {t.running ? (
+              <button type="button" className="small" onClick={() => ctl?.timerStop(t.id)}>
+                Stop
+              </button>
+            ) : (
+              <button type="button" className="small" onClick={() => ctl?.timerStart(t.id, t.spec)}>
+                Start
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
 
-      <h4 style={{ margin: '8px 0 0' }}>Lower third</h4>
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          ctl?.lowerThird(lower);
-        }}
-      >
-        <input
-          className="grow"
-          placeholder="Name, title or announcement"
-          value={lower}
-          onChange={(e) => setLower(e.target.value)}
-        />
-        <button type="submit" disabled={!lower.trim()}>
-          Show
-        </button>
-      </form>
-      <div className="row">
-        <button
-          type="button"
-          className={state.props.logo ? 'on' : ''}
-          onClick={() => ctl?.dispatch({ id: 'logo' })}
-          title="F5"
+      {/* 2. ON-AIR OVERLAYS (Audience & Stream) */}
+      <div className="card col" style={{ padding: 10, gap: 8, background: 'var(--bg2)' }}>
+        <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
+          <h4 style={{ margin: 0 }}>On-Air Overlays</h4>
+          <span className="tag blue" style={{ fontSize: 10 }}>
+            Audience &amp; Stream
+          </span>
+        </div>
+        <form
+          className="row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            ctl?.lowerThird(lower);
+          }}
         >
-          Logo {state.props.logo ? 'on' : 'off'}
-        </button>
+          <input
+            className="grow"
+            placeholder="Name or title banner"
+            value={lower}
+            onChange={(e) => setLower(e.target.value)}
+          />
+          <button type="submit" className="small" disabled={!lower.trim()}>
+            Show
+          </button>
+        </form>
+        {state.layers.lowerThird.content && (
+          <div
+            className="row card"
+            style={{ padding: 6, alignItems: 'center', justifyContent: 'space-between' }}
+          >
+            <span className="small ellipsis">
+              <b>Active banner:</b> {state.layers.lowerThird.content.text}
+            </span>
+            <button
+              type="button"
+              className="small ghost"
+              onClick={() => ctl?.dispatch({ id: 'clearLowerThird' })}
+            >
+              Clear
+            </button>
+          </div>
+        )}
+        <div className="col" style={{ gap: 6, borderTop: '1px solid var(--line)', paddingTop: 8 }}>
+          <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
+            <span className="small">
+              Countdown to{' '}
+              <input
+                type="time"
+                value={countTo}
+                onChange={(e) => setCountTo(e.target.value)}
+                style={{ width: 100 }}
+              />
+            </span>
+            <b className="mono small">{countdown ? timerText(countdown, now, general.timeZone) : '--:--'}</b>
+          </div>
+          <div className="row" style={{ alignItems: 'center' }}>
+            <button
+              type="button"
+              className="small"
+              onClick={() =>
+                ctl?.timerStart(SERVICE_COUNTDOWN_TIMER_ID, {
+                  kind: 'countdownTo',
+                  timeOfDay: countTo,
+                  label: 'Service starts in',
+                })
+              }
+            >
+              Start countdown
+            </button>
+            <button
+              type="button"
+              className="small"
+              disabled={!countdown?.running}
+              onClick={() => ctl?.timerStop(SERVICE_COUNTDOWN_TIMER_ID)}
+            >
+              Stop
+            </button>
+            <span className="muted small" style={{ fontSize: 11 }}>
+              Audience &amp; Stage
+            </span>
+          </div>
+        </div>
+        <div
+          className="row"
+          style={{
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            borderTop: '1px solid var(--line)',
+            paddingTop: 8,
+          }}
+        >
+          <span className="small">Church Logo Slate</span>
+          <button
+            type="button"
+            className={state.props.logo ? 'on small' : 'small'}
+            onClick={() => ctl?.dispatch({ id: 'logo' })}
+            title="F5"
+          >
+            Logo {state.props.logo ? 'ON' : 'OFF'} (F5)
+          </button>
+        </div>
       </div>
     </div>
   );

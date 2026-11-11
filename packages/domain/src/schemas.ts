@@ -520,6 +520,7 @@ export const Slide = z.object({
   clearBackground: z.boolean().optional(),
   durationMs: z.number().min(0).max(MAX.ms).optional(),
   notes: z.string().max(MAX.long).optional(),
+  bottomThirdText: z.string().max(MAX.long).optional(),
   overrides: z.array(z.string().max(200)).max(1000).optional(),
   /**
    * A hidden PowerPoint slide (design/27 §9): its cue is flagged `hidden`, so Next, Prev, auto-advance and
@@ -754,6 +755,9 @@ export const PlaylistItem = z.discriminatedUnion('kind', [
     arrangementId: Id.optional(),
     transition: Transition.optional(),
     backgroundMediaId: Id.optional(),
+    keepBackground: z.boolean().optional(),
+    audioMediaId: Id.optional(),
+    countdownTimer: TimerSpec.optional(),
   }),
   z.object({
     id: Id,

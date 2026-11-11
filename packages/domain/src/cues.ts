@@ -43,6 +43,20 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
       const until = soundEnds(slides.map((x) => x.slide));
       slides.forEach(({ section, arrangementPos, slide, slideIndexInSection }, k) => {
         const text = firstText(slide);
+        const bgId = slideBackground(slide, resolved.media) ?? item.backgroundMediaId ?? p.backgroundMediaId;
+        const clearBackground =
+          (slide.clearBackground && !slide.backgroundMediaId) ||
+          (k === 0 && !bgId && itemIndex > 0 && !item.keepBackground);
+        const mediaCues = slideCueMedia(slide, resolved.media, first + k, first + until(k));
+        let itemSlideAudio = mediaCues.slideAudio;
+        if (!itemSlideAudio && item.audioMediaId && resolved.media[item.audioMediaId]) {
+          itemSlideAudio = {
+            mediaId: item.audioMediaId,
+            start: 'auto',
+            loop: true,
+            untilCue: first + slides.length - 1,
+          };
+        }
         cues.push({
           index: cues.length,
           itemId: item.id,
@@ -59,16 +73,19 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
           arrangementPos,
           slideId: slide.id,
           slideIndexInSection,
-          backgroundMediaId:
-            slideBackground(slide, resolved.media) ?? item.backgroundMediaId ?? p.backgroundMediaId,
-          ...(slide.clearBackground && !slide.backgroundMediaId ? { clearBackground: true } : {}),
+          backgroundMediaId: bgId,
+          ...(clearBackground ? { clearBackground: true } : {}),
           transition: item.transition ?? slide.transition ?? p.transition,
           autoAdvanceMs: p.kind === 'loop' ? loopDelay(slide.durationMs, p.loop?.defaultSlideMs) : undefined,
+          ...(k === 0 && item.countdownTimer
+            ? { timer: item.countdownTimer, timerId: `${item.id}-timer` }
+            : {}),
           // A hidden PowerPoint slide stays in the service (design/27 §9): sequential navigation skips its
           // cue (`nextShownCue`), a GO with its index shows it.
           ...(slide.hidden === true ? { hidden: true } : {}),
           ...(slide.midiCues?.length ? { midiCues: slide.midiCues } : {}),
-          ...slideCueMedia(slide, resolved.media, first + k, first + until(k)),
+          ...mediaCues,
+          ...(itemSlideAudio ? { slideAudio: itemSlideAudio } : {}),
         });
       });
     } else if (item.kind === 'media') {

@@ -89,7 +89,7 @@ export function LayerBar({ op }: { op: OperatorPlaylist }) {
         keyHint="Esc / F1"
       />
       <Chip
-        label="Lower third"
+        label="Banner"
         value={L.lowerThird.content?.text}
         on={!!L.lowerThird.content}
         onClear={() => dispatch({ id: 'clearLowerThird' })}
