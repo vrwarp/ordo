@@ -9,7 +9,7 @@ import { setUi, useUi } from '../../state/ui.ts';
 import { navigate } from '../../useRoute.ts';
 import type { OperatorPlaylist } from './useOperatorPlaylist.ts';
 
-const KIND_ICON: Record<PlaylistItem['kind'], string> = {
+export const KIND_ICON: Record<PlaylistItem['kind'], string> = {
   presentation: '♪',
   media: '▶',
   timer: '⏱',
