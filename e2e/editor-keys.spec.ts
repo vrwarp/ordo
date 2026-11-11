@@ -176,3 +176,41 @@ test('the editor by keyboard: radio arrows, Enter on buttons, Ctrl+Z after a for
   const after = slidesOf(saved)[1]!.objects.find((o) => o.id === note.id)!;
   expect(after.text).toBe(typed.replace('12 May', '19 May'));
 });
+
+test('arrow up and down navigate slides when nothing has focus', async ({ page }) => {
+  const a = await hubApi(PORT);
+  const p = await importDeck(a, deck);
+  const slides = slidesOf(p);
+  await openEditor(page, PORT, p.id);
+  await openSlide(page, 1);
+
+  // Deselect any object and blur focus so document.activeElement is body
+  await page.evaluate(() => {
+    (
+      window as unknown as {
+        __ordo?: { editor?: { selectObject?: (id: string | undefined) => void } };
+      }
+    ).__ordo?.editor?.selectObject?.(undefined);
+    (document.activeElement as HTMLElement | null)?.blur();
+  });
+
+  await expect.poll(async () => (await editorState(page)).slideId).toBe(slides[0]!.id);
+
+  // ArrowDown goes to slide 2
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(async () => (await editorState(page)).slideId).toBe(slides[1]!.id);
+
+  // ArrowDown goes to slide 3
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(async () => (await editorState(page)).slideId).toBe(slides[2]!.id);
+
+  // ArrowUp goes back to slide 2
+  await page.keyboard.press('ArrowUp');
+  await expect.poll(async () => (await editorState(page)).slideId).toBe(slides[1]!.id);
+
+  // PageDown / PageUp also navigate
+  await page.keyboard.press('PageDown');
+  await expect.poll(async () => (await editorState(page)).slideId).toBe(slides[2]!.id);
+  await page.keyboard.press('PageUp');
+  await expect.poll(async () => (await editorState(page)).slideId).toBe(slides[1]!.id);
+});

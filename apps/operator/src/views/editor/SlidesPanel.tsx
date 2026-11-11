@@ -1,5 +1,5 @@
 import { parseSectionLabel, type Presentation } from '@ordo/domain';
-import { type PointerEvent as ReactPointerEvent, useState } from 'react';
+import { type PointerEvent as ReactPointerEvent, useEffect, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
 import { DragHandle } from '../../components/Sortable.tsx';
 import { useSortable } from '../../components/Sortable.tsx';
@@ -51,6 +51,12 @@ function SlideItem(props: {
   // A hidden slide is dimmed (its number and picture; the tag stays readable), as in the live slide grid.
   const hidden = !!props.slide.hidden;
   const dim = hidden ? HIDDEN_DIM : undefined;
+
+  useEffect(() => {
+    if (props.selected && ref.current?.scrollIntoView) {
+      ref.current.scrollIntoView({ block: 'nearest' });
+    }
+  }, [props.selected, ref]);
   return (
     <div
       ref={ref}
