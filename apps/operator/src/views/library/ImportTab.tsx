@@ -1,6 +1,5 @@
 import { api, upload } from '@ordo/client';
 import type { Presentation } from '@ordo/domain';
-import { importPptxClient } from '@ordo/importers';
 import type { Job } from '@ordo/protocol';
 import { useEffect, useState } from 'react';
 import {
@@ -212,6 +211,7 @@ export function ImportTab() {
         setProgress(0);
         const clientNative = isPptxName(f.name) && choice.mode === 'native';
         if (clientNative) {
+          const { importPptxClient } = await import('@ordo/importers');
           const parsed = await importPptxClient(
             f,
             f.name,
