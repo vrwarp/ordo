@@ -1,5 +1,5 @@
 import { requestPersistence } from '@ordo/cache';
-import { DEMO, ensureDemoHub } from '@ordo/client';
+import { DEMO, ensureDemoHub, registerWindowProbe } from '@ordo/client';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.tsx';
 import { StageHost } from './host.ts';
@@ -12,6 +12,8 @@ import './styles.css';
  */
 const host = new StageHost();
 (globalThis as unknown as { ordoStage: StageHost }).ordoStage = host;
+if (host.outputId && !window.name) window.name = `ordo-out-${host.outputId}`;
+if (host.outputId) registerWindowProbe(host.outputId, 'stage');
 // The GitHub Pages demo: start once the site's demo hub service worker controls this window (apps/demo).
 void ensureDemoHub('../hub-sw.js', '../').then((ok) => {
   if (ok) host.start();
