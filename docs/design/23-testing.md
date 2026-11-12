@@ -9,6 +9,7 @@
 | End to end  | Playwright, headless Chromium with SwiftShader (`--use-angle=swiftshader --enable-unsafe-webgpu`) | Operator, two outputs and the stage on their own origins served by a real hub over HTTP (below); GO and flip timing, clears, looks, degraded mode, relaunch, and the chaos specs                                                                                                                                   |
 | Soak        | `tools/soak` (Playwright, real GPU on the venue PC or a dev machine)                              | 60+ minutes of the live playlist with motion backgrounds, GO every 10 s; asserts zero missed frames and zero long tasks from telemetry                                                                                                                                                                             |
 | Visual      | Playwright screenshots of outputs vs golden PNGs                                                  | Text rasterizer and looks; per-pixel tolerance for anti-aliasing                                                                                                                                                                                                                                                   |
+| Fidelity    | `tools/pro7-fidelity` (Playwright, headless Chromium `@ordo/renderer`)                            | ProPresenter 7 visual fidelity: scores imported `.pro` slides against reference PNGs using dual-plate RGBA SSIM (`--export-compat`), generates diagnostic strips and clusters, and enforces CI non-regression ratchet against baseline                                                                             |
 
 ## The compositor under test
 
@@ -199,10 +200,35 @@ every case). `sprite.browser.test.ts` (vitest, headless Chromium) draws bands, r
 text, shapes, the lower third, props and scene parts as tight sprites and full-frame and requires
 each sprite placed at its offset to be the full-frame picture.
 
+## ProPresenter 7 visual fidelity
+
+`tools/pro7-fidelity` (`@ordo/pro7-fidelity`) evaluates visual import fidelity between ProPresenter 7
+and Ordo. A headless Chromium harness bundles `@ordo/renderer` via esbuild and scores imported `.pro`
+slides against reference PNGs using dual-plate RGBA SSIM (a white plate and a black plate to isolate RGB
+colour differences from alpha transparency; slides with opaque backgrounds score against a single plate).
+With `--export-compat`, each cue's background is isolated to match ProPresenter's slide-for-slide bundle
+exports without altering live background continuation.
+
+The harness produces:
+- Diagnostic artifacts under `--out <dir>`: a Markdown summary (`report.md`) with deck breakdowns and
+  overall mean SSIM, a machine-readable summary (`summary.json`), and 4-panel diagnostic comparison
+  strips (reference PNG, Ordo render, SSIM heatmap, and diff mask) for the lowest-scoring slides under
+  `worst/`.
+- Feature-loss clustering grouping slides by root causes (e.g. background fill, strap line masks,
+  custom shape geometry, crop, or text styling).
+- Monotonic non-regression ratcheting against `tools/pro7-fidelity/pro7-baseline.json` via `--baseline`
+  and `--ratchet` (failing the run if any deck drops by more than 0.2 % or any slide drops by more
+  than 0.5 %). A 10-slide synthetic probe suite (`--corpus`) across 3 decks (`pro7-synth-core`,
+  `pro7-synth-shapes`, `pro7-synth-masks-and-crops`) covers core fills and gradients, preset and custom
+  cubic bezier shapes, 315° gradients, media crops, and ellipse image masks; it is enforced in CI on
+  every run. Local evaluation can additionally run against real exported `.proPlaylist` bundles via
+  `--sample-dir <dir>`.
+
 ## CI
 
 GitHub Actions on every pull request and merge to main (and by hand): `pnpm lint`, `pnpm typecheck`, `pnpm test`,
-`pnpm e2e` (SwiftShader, so the 100 ms timing bounds above), the golden images, Docker build. Tags build and push the image. Playwright traces are uploaded on failure.
+`pnpm e2e` (SwiftShader, so the 100 ms timing bounds above), the golden images, the ProPresenter 7 synthetic
+visual fidelity ratchet, Docker build. Tags build and push the image. Playwright traces are uploaded on failure.
 
 ## Test content
 

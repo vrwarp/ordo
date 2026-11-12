@@ -1,4 +1,11 @@
-import { type Box, type ImageCrop, LOGICAL_HEIGHT, LOGICAL_WIDTH, type ShapeGeom } from '@ordo/domain';
+import {
+  type Box,
+  type ImageCrop,
+  LOGICAL_HEIGHT,
+  LOGICAL_WIDTH,
+  type Shadow,
+  type ShapeGeom,
+} from '@ordo/domain';
 
 import { CLAMP, clampBox, clampCrop, clampGeom, num } from './clamp.ts';
 import type { Ctx2D } from './ctx.ts';
@@ -44,10 +51,16 @@ import { geomPending, storedGeometry } from './geom/stored.ts';
 export type PictureFit = 'contain' | 'cover' | 'stretch';
 
 /**
- * How a picture is cut and mirrored in its box (design/27 §3.1 `ImageObject.mask`, `flipH`, `flipV`):
- * mirrored about the box's centre before the box's rotation, mask included.
+ * How a picture is cut and mirrored in its box (design/27 §3.1 `ImageObject.mask`, `flipH`, `flipV`, `shadow`, `softEdge`):
+ * mirrored about the box's centre before the box's rotation, mask included, with shadow and soft edge effects.
  */
-export type PictureShape = { mask?: ShapeGeom; flipH?: boolean; flipV?: boolean };
+export type PictureShape = {
+  mask?: ShapeGeom;
+  flipH?: boolean;
+  flipV?: boolean;
+  shadow?: Shadow;
+  softEdge?: number;
+};
 
 /** What a picture's pixels depend on besides its source: an `ImageObject`, or a frame-filling picture. */
 export type PictureDraw = { box: Box; fit: PictureFit; crop?: ImageCrop; radius?: number } & PictureShape;
@@ -100,16 +113,20 @@ function maskOf(v: unknown): { mask: ShapeGeom | undefined; key: string } {
   return hit;
 }
 
-/** The clamped mask and flips of a picture, or undefined when it has none. */
+/** The clamped mask, flips, shadow and soft edge of a picture, or undefined when it has none. */
 export function pictureShape(o: PictureShape): PictureShape | undefined {
   const mask = maskOf(o.mask).mask;
   const flipH = o.flipH === true;
   const flipV = o.flipV === true;
-  if (!mask && !flipH && !flipV) return undefined;
+  const shadow = o.shadow;
+  const softEdge = num(o.softEdge, 0, CLAMP.maxEffectPx, 0);
+  if (!mask && !flipH && !flipV && !shadow && !(softEdge > 0)) return undefined;
   const out: PictureShape = {};
   if (mask) out.mask = mask;
   if (flipH) out.flipH = true;
   if (flipV) out.flipV = true;
+  if (shadow) out.shadow = shadow;
+  if (softEdge > 0) out.softEdge = softEdge;
   return out;
 }
 
@@ -138,6 +155,7 @@ export function pictureFit(fit: unknown): PictureFit {
  * 1e-6 px of a pixel boundary are taken as on it, so float noise never widens a box by a pixel.
  */
 export function pictureTarget(o: PictureDraw, scale: number): PictureTarget | undefined {
+  if (o.shadow || (o.softEdge ?? 0) > 0) return undefined;
   if (!(Number.isFinite(scale) && scale > 0)) return undefined;
   const box = clampBox(o.box);
   const shape = pictureShape(o);

@@ -303,8 +303,15 @@ export function OutputsPage() {
               >
                 {roleBadge.label}
               </span>
-              <span className="tag">
-                {o.kind === 'stage' ? 'Stage' : `Channel ${o.hostIndex} (out${o.hostIndex})`}
+              <span
+                className="tag muted"
+                title={
+                  o.kind === 'stage'
+                    ? 'Stage network port (stage.local)'
+                    : `Network feed out${o.hostIndex} (out${o.hostIndex}.local)`
+                }
+              >
+                {o.kind === 'stage' ? 'stage.local' : `out${o.hostIndex}.local`}
               </span>
               {open[o.id] && <span className="tag green">Window open</span>}
               <span className="spacer" />
@@ -337,28 +344,7 @@ export function OutputsPage() {
               </button>
             </div>
 
-            <div className="grid3" style={{ alignItems: 'flex-start' }}>
-              {/* Display Channel & Hardware Screen Assignment */}
-              <label className="field">
-                <span>Display Channel</span>
-                {o.kind === 'stage' ? (
-                  <span className="muted small" style={{ paddingTop: 6 }}>
-                    Stage Port (stage.local)
-                  </span>
-                ) : (
-                  <select
-                    value={o.hostIndex}
-                    onChange={(e) => setOutput(o.id, { hostIndex: Number(e.target.value) })}
-                  >
-                    {[1, 2, 3, 4, 5, 6].map((k) => (
-                      <option key={k} value={k}>
-                        Channel {k} (out{k}.local)
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </label>
-
+            <div className="grid2" style={{ alignItems: 'flex-start' }}>
               <label className="field">
                 <span>Target Physical Display</span>
                 <select
@@ -609,7 +595,7 @@ export function OutputsPage() {
         <button
           type="button"
           disabled={nextChannel === undefined}
-          title={nextChannel === undefined ? 'Maximum 6 display channels (out1–out6) reached' : undefined}
+          title={nextChannel === undefined ? 'Maximum 6 audience displays reached' : undefined}
           onClick={() => addScreen('main')}
         >
           + Audience Screen
@@ -620,7 +606,7 @@ export function OutputsPage() {
         <button
           type="button"
           disabled={nextChannel === undefined}
-          title={nextChannel === undefined ? 'Maximum 6 display channels (out1–out6) reached' : undefined}
+          title={nextChannel === undefined ? 'Maximum 6 audience displays reached' : undefined}
           onClick={() => addScreen('lowerThird')}
         >
           + Bottom-Third Stream

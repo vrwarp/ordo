@@ -12,25 +12,31 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
   the import log.
 - Mapping:
 
-| ProPresenter 7                                                                     | ordo                                                                                                                                                                        |
-| ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Presentation.name`, `ccli`, `copyright`, `author`                                 | `title`, `meta`                                                                                                                                                             |
-| `cue_groups` (group name) → cues                                                   | `Section` with the group label; each cue's slide → `Slide`                                                                                                                  |
-| `Slide.elements` of type text: `rect` and `text` (RTF)                             | `TextObject`: box from `rect`; text, font family, size, colour, outline, shadow parsed from the RTF and from `attributes` where present. Unparsed RTF attributes are logged |
-| `Slide.elements` of type image or video                                            | `ImageObject` or slide background; the media file is located by path relative to the import root and uploaded                                                               |
-| `Presentation.background`                                                          | `backgroundMediaId`                                                                                                                                                         |
-| `arrangements`                                                                     | `Arrangement[]`                                                                                                                                                             |
-| Playlists referencing `.pro` by UUID                                               | `Playlist` items referencing imported presentations                                                                                                                         |
-| Builds, transitions per slide, macros, timers, looks, stage layouts, audio routing | Skipped, logged                                                                                                                                                             |
+| ProPresenter 7                                                                     | ordo                                                                                                                                                       |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Presentation.name`, `ccli`, `copyright`, `author`                                 | `title` ("Untitled" falls back to the `.pro` filename stem), `meta`                                                                                        |
+| `cue_groups` (group name) → cues                                                   | `Section` with the group label; each cue's slide → `Slide`                                                                                                 |
+| `Slide.elements` of type text: `rect` and `text` (RTF)                             | `TextObject`: multi-run rich text (`runs`), per-paragraph styles (`paras`), `lineMask` overlays; empty-RTF boxes with fills/strokes route to `ShapeObject` |
+| `Slide.elements` of type shape                                                     | `ShapeObject`: box, preset shapes, custom cubic bezier paths (`geom`), solid and gradient fills, strokes, shadows, soft edges                              |
+| `Slide.elements` of type image or video                                            | `ImageObject` or slide background; path masks, crop insets, custom bounds, shadows, soft edges; media located relative to import root and uploaded         |
+| `Presentation.background`                                                          | `backgroundMediaId`                                                                                                                                        |
+| `arrangements`                                                                     | `Arrangement[]`                                                                                                                                            |
+| Playlists referencing `.pro` by UUID                                               | `Playlist` items referencing imported presentations                                                                                                        |
+| Builds, transitions per slide, macros, timers, looks, stage layouts, audio routing | Skipped, logged                                                                                                                                            |
 
-- RTF: a small RTF reader extracts plain text and the first run's font, size and colour;
-  mixed runs collapse to the first run's style with a log line. Bytes are read as UTF-8 when
-  they are valid UTF-8 (some writers put it straight in), else as Latin-1. `\'hh` escapes are
-  in the current font's `\fcharsetN` (136 Big5, 134 GBK, 128 Shift-JIS, 129 Korean, 204
-  Cyrillic…) or else the document's `\ansicpgN`, default Windows-1252; a run of escapes is
-  decoded together, so double-byte characters survive. ProPresenter on a Mac writes Chinese
-  this way under a PingFang font with `\fcharset136`. Font size and alignment come from the
-  RTF only when it states them (`\fsN`, `\qX`), else from the attributes.
+- RTF & Typography: RTF bytes are read as UTF-8 when valid UTF-8, else Latin-1; `\'hh` escapes decode
+  in the font's `\fcharsetN` (136 Big5, 134 GBK, 128 Shift-JIS, 129 Korean, 204 Cyrillic…) or the
+  document's `\ansicpgN` (default Windows-1252), grouping multi-byte runs together. Multi-run RTF
+  populates `TextObject.runs` for per-span font family, weight, italic, `sizeScale`, colour, highlight,
+  underline, strike, superscript/subscript `baseline`, small caps, letter spacing, and stroke outline.
+  Paragraph formatting populates `TextObject.paras` for per-paragraph alignment, indents,
+  `spaceBeforePx`/`spaceAfterPx`, and `\listtext` / `textList` bullets. Cocoa `{\*\expandedcolortbl}`
+  `\cssrgb` sRGB colours and `\caN` alpha override GenericRGB `\colortbl`. Cocoa `lineHeightMultiple`
+  and `\slN\slmult1` line spacing scale by Ordo's `1.2` single-spacing unit plus `\slleading` inter-line
+  leading. AppKit `NSTextContainer`'s `5pt` horizontal `lineFragmentPadding` and asymmetric per-side
+  `margins` map to `TextStyle.insets` (collapsing to symmetric `padding` on plain middle-aligned text).
+  Alignment defaults to `'left'` when omitted in proto3. `SCALE_BEHAVIOR_SCALE_FONT_DOWN` maps to
+  `autofit: 'shrink'`.
 - What ProPresenter actually writes (learnt from its own exports; the files are under
   `packages/importers/test-fixtures/pro7/`, checked by `pro7.real.test.ts`):
   - A media action's kind comes from the element (`image`/`video`/`audio` properties), not
@@ -40,7 +46,22 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
     neither is reported.
   - ALL CAPS is kept as `TextStyle.transform: 'uppercase'`; the words keep their casing.
     The stroke width in the attributes (`-3`) and in the RTF (`\strokewidth-60`) are the
-    same percentage of the font size. A gradient box fill becomes its first stop.
+    same percentage of the font size.
+  - Linear (`360 - angle` converting from ProPresenter's counter-clockwise degrees to Ordo's CSS
+    clockwise degrees) and radial `Graphics.Gradient` fills are preserved on shapes, boxes, and line
+    masks.
+  - Non-rectangular `Path.shape` presets (`TYPE_ELLIPSE`, `TYPE_ROUNDED_RECTANGLE`, isosceles and right
+    triangles, rhombus, single and double arrows, polygons, stars) and `TYPE_CUSTOM` cubic bezier paths
+    become `ShapeObject` or element `ShapeGeom`. Element drop `shadow` and `feather` (`softEdge = radius ×
+    min(w, h) × 0.5`) are carried on shapes and images.
+  - Text line masks (`textLineMask`) support `fullWidth`, `lineWidth`, and `maxLineWidth` styles with solid
+    or gradient fills, horizontal/vertical/width/height offsets, and Cocoa `0.065 × F` intra-strap baseline
+    centering on middle-aligned masks.
+  - ProPresenter text elements with empty RTF (`!maskEnabled`) route to `ShapeObject` when they carry a
+    fill or stroke, preserving background gradient overlays, accent bars, and divider lines.
+  - Foreground media elements become `ImageObject` supporting non-rectangular `ImageObject.mask` (from
+    element `Path`), `drawing.cropEnable` / `cropInsets` and `SCALE_BEHAVIOR_CUSTOM` (`customImageBounds`),
+    plus `ImageObject.shadow` and `ImageObject.softEdge`.
   - Media URLs are tried as the exporting Mac's absolute path, then `local.path` (what
     ProPresenter itself resolves by), then a relative path; a bare file name that several
     entries share is taken only when one sits next to the document, else left unlinked.
@@ -48,7 +69,8 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
     arrangement is found by UUID, else by name. Headers are logged by name (ordo has no
     divider item yet), hidden items are skipped, a missing document is a warning.
   - A document's ordo id is `pro7-<uuid>`, so importing the library again updates the
-    earlier copy. A copy with the same UUID but other content gets a numbered suffix.
+    earlier copy. A copy with the same UUID but other content gets a numbered suffix. An "Untitled"
+    presentation name falls back to the `.pro` filename stem.
   - Slides of another size are scaled uniformly and centred on the 1920x1080 canvas.
   - Group names in German, Spanish, French and Portuguese (Strophe, Refrain, Coro,
     Couplet…) are recognised as song sections; unknown names get a two-letter short form.
@@ -67,7 +89,7 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
   - A text element's box fill fills the whole box (ordo's text fill hugs the words): it
     becomes a rectangle behind the text.
   - Cocoa writes every line as a paragraph with `\saN` space after it, and line spacing as
-    `\slN\slmult1`: both go into the line height (ordo has one; logged as approximated).
+    `\slN\slmult1`: both go into the line height and paragraph model.
   - A picture is an element whose fill is media, and it carries an (empty) text block like
     every element: the picture is kept, its text only when it has words.
   - Background media runs from the slide that starts it until a slide clears it (a clear
@@ -75,10 +97,11 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
     background or media) or starts another, in the document's slide order. Each slide gets
     the background it would show; one background on every slide becomes the presentation's.
     A slide that stops a running background gets `clearBackground`, which clears the
-    output's background layer when it is shown.
+    output's background layer when it is shown. The `exportCompat` option isolates each cue's
+    background for slide-for-slide export comparison without changing live background continuation.
 - Not carried (logged per document): slide labels, cue hot keys, group colours, builds,
-  per-slide transitions, macros, timers, linked text (imported as last saved), text-box
-  borders, small caps and title case, per-side margins (the largest is used on all sides).
+  per-slide transitions, macros, timers, linked text (imported as last saved), title case /
+  one-word-per-line transforms, text-box borders without a backing fill.
 - Schema: the vendored protos are the community `proto/` set (ProPresenter 7.x). A raw
   scan of real 7.x and 21.x files found only cosmetic fields it lacks (ligature style, an
   image alpha-type flag); `autogen-proto/` in the same repository tracks ProPresenter 21.4

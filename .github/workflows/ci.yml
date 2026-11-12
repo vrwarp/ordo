@@ -55,6 +55,8 @@ jobs:
         run: pnpm --filter @ordo/renderer late-font
       - name: Compositor golden (WebGPU on SwiftShader against Canvas 2D and the scene reference)
         run: pnpm --filter @ordo/renderer golden:compositor
+      - name: ProPresenter 7 synthetic visual fidelity ratchet
+        run: pnpm --filter @ordo/pro7-fidelity start -- --corpus --out test-results/pro7-fidelity --baseline tools/pro7-fidelity/pro7-baseline.json --ratchet
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

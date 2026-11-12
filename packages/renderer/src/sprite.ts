@@ -11,7 +11,7 @@ import {
   type TextStyle,
   readableText,
 } from '@ordo/domain';
-import { CLAMP, clampBox, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
+import { CLAMP, clampBox, clampLook, clampSlide, clampStyle, clampText, isRichStyle, num } from './clamp.ts';
 import { drawableContent } from './content.ts';
 import type { Ctx2D } from './ctx.ts';
 import { BLUR_MAX_REDUCTION, STACK_BLUR_SIGMA } from './effects.ts';
@@ -33,7 +33,6 @@ import {
   type RichLayoutOptions,
   bandObject,
   clampTextObject,
-  isRichStyle,
   isRichText,
   layoutRich,
 } from './text/rich.ts';
@@ -112,6 +111,8 @@ const KNOWN: Record<SlideObject['type'], ReadonlySet<string>> = {
     'flipH',
     'flipV',
     'mask',
+    'shadow',
+    'softEdge',
     'origin',
     'locked',
   ]),
@@ -283,6 +284,9 @@ export function richTextReach(ctx: Ctx2D, o: TextObject, opts?: RichLayoutOption
   if (plan.box) add(plan.box.x, plan.box.y, plan.box.w, plan.box.h);
   for (const r of plan.highlights) add(r.x, r.y, r.w, r.h);
   for (const r of plan.decorations) add(r.x, r.y, r.w, r.h);
+  if (plan.lineMask) {
+    for (const r of plan.lineMask.straps) add(r.x, r.y, r.w, r.h);
+  }
   let fx = 0;
   for (const g of plan.glyphs) fx = Math.max(fx, effectReach(g));
   for (const g of plan.bullets) fx = Math.max(fx, effectReach(g));
@@ -349,12 +353,29 @@ export function objectReach(ctx: Ctx2D, o: SlideObject, scale: number): Reach {
   if (!known) return null;
   for (const k of Object.keys(o)) if (!known.has(k)) return null;
   if (o.type === 'text') {
-    if (isRichText(o)) return richTextReach(ctx, o);
+    if (isRichText(o) || isRichStyle(o.style)) return richTextReach(ctx, o);
     return legacyTextReach(ctx, o.text, o.style, o.box, scale, false);
   }
   if (o.type === 'shape' && hasShapeExtras(o)) return geomShapeReach(o, scale);
-  // A picture is cut to its box (a prepared one is copied at the box rounded out to whole pixels; a masked
-  // one is cut to its mask within the box, or the turned box's bounds); a shape is its box plus its stroke.
+  if (o.type === 'image') {
+    const r = rotatedBounds(clampBox(o.box));
+    let x0 = r.x;
+    let y0 = r.y;
+    let x1 = r.x + r.w;
+    let y1 = r.y + r.h;
+    if (o.shadow) {
+      const dx = num(o.shadow.dx, -CLAMP.maxEffectPx, CLAMP.maxEffectPx, 0);
+      const dy = num(o.shadow.dy, -CLAMP.maxEffectPx, CLAMP.maxEffectPx, 0);
+      const blur = num(o.shadow.blur, 0, CLAMP.maxEffectPx, 0);
+      const pad = 2 * blur;
+      x0 = Math.min(x0, r.x + dx - pad);
+      y0 = Math.min(y0, r.y + dy - pad);
+      x1 = Math.max(x1, r.x + r.w + dx + pad);
+      y1 = Math.max(y1, r.y + r.h + dy + pad);
+    }
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
+  // A shape is its box plus its stroke.
   const r = rotatedBounds(clampBox(o.box));
   const m = o.type === 'shape' && o.stroke ? num(o.stroke.width, 0, CLAMP.maxEffectPx, 1) : 0;
   return { x: r.x - m, y: r.y - m, w: r.w + 2 * m, h: r.h + 2 * m };
@@ -422,7 +443,7 @@ export function bandReach(
 ): Reach {
   const clamped = clampStyle(style);
   const t = clampText(text);
-  if ((src && isRichText(src)) || isRichStyle(clamped) || hasStrongRtl(t))
+  if ((src && (isRichText(src) || isRichStyle(src.style))) || isRichStyle(clamped) || hasStrongRtl(t))
     return richTextReach(ctx, bandObject(src ? readableText(src) : t, clamped, clampBox(band), src), {
       minFontScale: BAND_MIN_FONT_SCALE,
     });

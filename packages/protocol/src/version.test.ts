@@ -18,8 +18,8 @@ import { APP_VERSION } from './index.ts';
  * - otherwise (a refactor with the same results), record the new digest with the same version.
  */
 const RECORDED = {
-  version: '0.4.0',
-  digest: '34b125110a0454911a853a3defd3d2bf173e7a48b2543925d01101adb58aa575',
+  version: '0.5.0',
+  digest: '676e9b9da0496c9e3a303d6fb3aa97a0ae0ca466471ef97d18f2499950ebd97e',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

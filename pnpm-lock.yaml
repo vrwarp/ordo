@@ -443,6 +443,22 @@ importers:
         specifier: ^4.23.15
         version: 4.23.15
 
+  tools/pro7-fidelity:
+    dependencies:
+      '@ordo/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@ordo/importers':
+        specifier: workspace:*
+        version: link:../../packages/importers
+      '@ordo/renderer':
+        specifier: workspace:*
+        version: link:../../packages/renderer
+    devDependencies:
+      tsx:
+        specifier: ^4.23.15
+        version: 4.23.15
+
   tools/soak:
     dependencies:
       playwright:

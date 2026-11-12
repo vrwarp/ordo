@@ -1,6 +1,5 @@
 import type { Profile } from '../../lib/capabilities.ts';
 import { EDIT_PROFILE_SETTINGS } from '../../lib/route.ts';
-import { ThemesTab } from '../library/ThemesTab.tsx';
 import { AudioSettingsPage } from './AudioSettingsPage.tsx';
 import { BackupsPage } from './BackupsPage.tsx';
 import { DiagnosticsPage } from './DiagnosticsPage.tsx';
@@ -16,7 +15,6 @@ import { StreamDeckPage } from './StreamDeckPage.tsx';
 const PAGES: [string, string][] = [
   ['outputs', 'Screens'],
   ['looks', 'Looks (Advanced)'],
-  ['themes', 'Themes'],
   ['audio', 'Audio'],
   ['keys', 'Keyboard'],
   ['streamdeck', 'Stream Deck'],
@@ -39,9 +37,6 @@ export function SettingsView({ page, profile = 'full' }: { page: string; profile
       break;
     case 'looks':
       body = <LooksPage />;
-      break;
-    case 'themes':
-      body = <ThemesTab />;
       break;
     case 'audio':
       body = <AudioSettingsPage />;

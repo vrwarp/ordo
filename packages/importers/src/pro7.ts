@@ -2,8 +2,10 @@ import {
   type Arrangement,
   type Box,
   DEFAULT_THEME,
+  type Gradient,
+  type ImageCrop,
   type ImageObject,
-  type ShapeObject,
+  type LineDash,
   LOGICAL_HEIGHT,
   LOGICAL_WIDTH,
   newId,
@@ -13,9 +15,14 @@ import {
   type Presentation,
   type Rgba,
   type Section,
+  type ShapeGeom,
+  type ShapeObject,
   type Slide,
   type SlideObject,
+  type TextLineMask,
   type TextObject,
+  type TextPara,
+  type TextRun,
   type TextStyle,
 } from '@ordo/domain';
 import { decodeAs, type Msg, PRO7_PROTO_VERSION } from './proto.ts';
@@ -74,6 +81,7 @@ export type Pro7PresRef = {
 export type Pro7ImportOptions = {
   refs?: Pro7PresRef[];
   phase?: 'all' | 'documents' | 'playlists';
+  exportCompat?: boolean;
 };
 
 /** Prefix of placeholder media ids inside imported entities; see `remapMediaIds`. */
@@ -298,6 +306,47 @@ function shadowOf(sh: Msg | undefined, scale: number): TextStyle['shadow'] {
   };
 }
 
+function gradientFrom(g: Msg | undefined): Gradient | undefined {
+  if (!g) return undefined;
+  const rawStops = (g.stops ?? []) as Msg[];
+  if (!rawStops.length) return undefined;
+  const proAngle = typeof g.angle === 'number' ? g.angle : 0;
+  const angle = (360 - (proAngle % 360) + 360) % 360;
+  const isRadial = g.type === 'TYPE_RADIAL' || g.type === 'GRADIENT_TYPE_RADIAL' || g.type === 1;
+  const kind: 'linear' | 'radial' = isRadial ? 'radial' : 'linear';
+
+  const mapped = rawStops.map((s, idx) => {
+    const rawPos =
+      typeof s.position === 'number' ? s.position : typeof s.location === 'number' ? s.location : undefined;
+    const at =
+      rawPos !== undefined && (rawPos > 0 || (idx === 0 && rawStops.length > 1))
+        ? Math.max(0, Math.min(1, rawPos))
+        : idx / Math.max(1, rawStops.length - 1);
+    return {
+      at: Math.round(at * 1000) / 1000,
+      color: colorOf(s.color) ?? { r: 0, g: 0, b: 0, a: 1 },
+    };
+  });
+  mapped.sort((a, b) => a.at - b.at);
+  if (mapped.length === 1) {
+    mapped.push({ at: 1, color: mapped[0]!.color });
+  }
+  const stops = mapped.slice(0, 16);
+  if (stops.length < 2) return undefined;
+  return {
+    kind,
+    angle,
+    stops,
+  };
+}
+
+const DASH_STYLE: Record<string, LineDash> = {
+  STYLE_SOLID_LINE: 'solid',
+  STYLE_SQUARE_DASH: 'dot',
+  STYLE_SHORT_DASH: 'dash',
+  STYLE_LONG_DASH: 'longDash',
+};
+
 const VALIGN: Record<string, TextStyle['valign']> = {
   VERTICAL_ALIGNMENT_TOP: 'top',
   VERTICAL_ALIGNMENT_MIDDLE: 'middle',
@@ -338,6 +387,225 @@ function approx(ctx: Ctx, what: string) {
   ctx.approximated.set(what, (ctx.approximated.get(what) ?? 0) + 1);
 }
 
+type RtfSpanLike = {
+  start: number;
+  end: number;
+  fontName?: string;
+  fontSizePt?: number;
+  color?: Rgba;
+  highlight?: Rgba;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strike?: boolean;
+  baseline?: number;
+  caps?: 'all' | 'small' | 'none';
+  letterSpacingPt?: number;
+  strokeWidth?: number;
+  strokeColor?: Rgba;
+};
+
+type RtfParaLike = {
+  align?: 'left' | 'center' | 'right' | 'justify';
+  indentPt?: number;
+  firstLinePt?: number;
+  spaceBeforePt?: number;
+  spaceAfterPt?: number;
+  lineSpacing?: number;
+  leadingPt?: number;
+  bulletChar?: string;
+  isBullet?: boolean;
+};
+
+function colorsEqual(a?: Rgba, b?: Rgba): boolean {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return a.r === b.r && a.g === b.g && a.b === b.b && Math.abs(a.a - b.a) < 0.001;
+}
+
+function toSvgCoord(val: unknown): number {
+  const n = typeof val === 'number' ? val : 0;
+  return Math.round(n * 1000 * 100) / 100;
+}
+
+function isUnitSquarePoints(pts: Msg[]): boolean {
+  if (pts.length !== 4) return false;
+  const corners = [
+    { x: 0, y: 0 },
+    { x: 1, y: 0 },
+    { x: 1, y: 1 },
+    { x: 0, y: 1 },
+  ];
+  for (let i = 0; i < 4; i++) {
+    const pt = pts[i] as Msg;
+    if (pt.curved) return false;
+    const p = (pt.point ?? {}) as Msg;
+    const exp = corners[i]!;
+    const px = typeof p.x === 'number' ? p.x : 0;
+    const py = typeof p.y === 'number' ? p.y : 0;
+    if (Math.abs(px - exp.x) > 1e-4 || Math.abs(py - exp.y) > 1e-4) return false;
+
+    const q0 = pt.q0 as Msg | undefined;
+    if (q0) {
+      const q0x = typeof q0.x === 'number' ? q0.x : 0;
+      const q0y = typeof q0.y === 'number' ? q0.y : 0;
+      if (Math.abs(q0x - px) > 1e-4 || Math.abs(q0y - py) > 1e-4) return false;
+    }
+    const q1 = pt.q1 as Msg | undefined;
+    if (q1) {
+      const q1x = typeof q1.x === 'number' ? q1.x : 0;
+      const q1y = typeof q1.y === 'number' ? q1.y : 0;
+      if (Math.abs(q1x - px) > 1e-4 || Math.abs(q1y - py) > 1e-4) return false;
+    }
+  }
+  return true;
+}
+
+const POLYGON_PRESETS: Record<number, string> = {
+  3: 'triangle',
+  5: 'pentagon',
+  6: 'hexagon',
+  7: 'heptagon',
+  8: 'octagon',
+  10: 'decagon',
+  12: 'dodecagon',
+};
+
+const STAR_POINTS = [4, 5, 6, 7, 8, 10, 12, 16];
+function nearestStarPreset(pts: number): string {
+  let best = STAR_POINTS[0]!;
+  let bestDiff = Math.abs(pts - best);
+  for (const sp of STAR_POINTS) {
+    const diff = Math.abs(pts - sp);
+    if (diff < bestDiff) {
+      best = sp;
+      bestDiff = diff;
+    }
+  }
+  return `star${best}`;
+}
+
+function shapeGeomFromPath(
+  pathMsg: Msg | undefined,
+  box: { w: number; h: number },
+): { shape: 'rect' | 'ellipse'; radius: number; geom?: ShapeGeom; isNonRect: boolean } | null {
+  const shapeMsg = pathMsg?.shape as Msg | undefined;
+  const type = shapeMsg?.type as string | number | undefined;
+  const points = (pathMsg?.points ?? []) as Msg[];
+
+  if (!type || type === 'TYPE_RECTANGLE' || type === 1) {
+    return { shape: 'rect', radius: 0, isNonRect: false };
+  }
+  if (type === 'TYPE_ELLIPSE' || type === 2) {
+    return { shape: 'ellipse', radius: 0, isNonRect: true };
+  }
+  if (type === 'TYPE_ROUNDED_RECTANGLE' || type === 11) {
+    const rr = (shapeMsg?.roundedRectangle ?? shapeMsg?.rounded_rectangle) as Msg | undefined;
+    const roundness = typeof rr?.roundness === 'number' ? rr.roundness : 0.2;
+    const radius = Math.max(0, Math.round(roundness * Math.min(box.w, box.h) * 0.5 * 100) / 100);
+    return { shape: 'rect', radius, isNonRect: radius > 0 };
+  }
+  if (type === 'TYPE_ISOSCELES_TRIANGLE' || type === 3) {
+    return { shape: 'rect', radius: 0, geom: { preset: 'triangle' }, isNonRect: true };
+  }
+  if (type === 'TYPE_RIGHT_TRIANGLE' || type === 4) {
+    return { shape: 'rect', radius: 0, geom: { preset: 'rtTriangle' }, isNonRect: true };
+  }
+  if (type === 'TYPE_RHOMBUS' || type === 5) {
+    return { shape: 'rect', radius: 0, geom: { preset: 'diamond' }, isNonRect: true };
+  }
+  if (type === 'TYPE_RIGHT_ARROW' || type === 9) {
+    return { shape: 'rect', radius: 0, geom: { preset: 'rightArrow' }, isNonRect: true };
+  }
+  if (type === 'TYPE_DOUBLE_ARROW' || type === 10) {
+    return { shape: 'rect', radius: 0, geom: { preset: 'leftRightArrow' }, isNonRect: true };
+  }
+
+  // TYPE_POLYGON (7), TYPE_STAR (6), TYPE_CUSTOM (8), or any other type:
+  if (points.length >= 2) {
+    if (isUnitSquarePoints(points) && pathMsg?.closed !== false) {
+      return { shape: 'rect', radius: 0, isNonRect: false };
+    }
+    const pts = points.slice(0, 2048);
+    const n = pts.length;
+    const p0 = pts[0]!;
+    const p0x = toSvgCoord((p0.point as Msg | undefined)?.x);
+    const p0y = toSvgCoord((p0.point as Msg | undefined)?.y);
+    let d = `M ${p0x} ${p0y}`;
+    const isClosed = pathMsg?.closed !== false;
+    const segCount = isClosed ? n : n - 1;
+    for (let k = 0; k < segCount; k++) {
+      const i = k;
+      const j = (k + 1) % n;
+      const ptI = pts[i]!;
+      const ptJ = pts[j]!;
+
+      const pi_x = toSvgCoord((ptI.point as Msg | undefined)?.x);
+      const pi_y = toSvgCoord((ptI.point as Msg | undefined)?.y);
+      const pj_x = toSvgCoord((ptJ.point as Msg | undefined)?.x);
+      const pj_y = toSvgCoord((ptJ.point as Msg | undefined)?.y);
+
+      const c1x = toSvgCoord((ptI.q1 as Msg | undefined)?.x ?? (ptI.point as Msg | undefined)?.x);
+      const c1y = toSvgCoord((ptI.q1 as Msg | undefined)?.y ?? (ptI.point as Msg | undefined)?.y);
+      const c2x = toSvgCoord((ptJ.q0 as Msg | undefined)?.x ?? (ptJ.point as Msg | undefined)?.x);
+      const c2y = toSvgCoord((ptJ.q0 as Msg | undefined)?.y ?? (ptJ.point as Msg | undefined)?.y);
+
+      if (
+        Math.abs(c1x - pi_x) < 1e-3 &&
+        Math.abs(c1y - pi_y) < 1e-3 &&
+        Math.abs(c2x - pj_x) < 1e-3 &&
+        Math.abs(c2y - pj_y) < 1e-3
+      ) {
+        d += ` L ${pj_x} ${pj_y}`;
+      } else {
+        d += ` C ${c1x} ${c1y} ${c2x} ${c2y} ${pj_x} ${pj_y}`;
+      }
+    }
+    if (isClosed) {
+      d += ' Z';
+    }
+    return {
+      shape: 'rect',
+      radius: 0,
+      geom: {
+        paths: [
+          {
+            w: 1000,
+            h: 1000,
+            d,
+            ...(pathMsg?.closed === false ? { fill: 'none' as const } : {}),
+          },
+        ],
+      },
+      isNonRect: true,
+    };
+  }
+  if (type === 'TYPE_POLYGON' || type === 7) {
+    const poly = shapeMsg?.polygon as Msg | undefined;
+    const sides =
+      typeof poly?.numberSides === 'number'
+        ? poly.numberSides
+        : typeof poly?.number_sides === 'number'
+          ? poly.number_sides
+          : 6;
+    const preset = POLYGON_PRESETS[sides] ?? 'hexagon';
+    return { shape: 'rect', radius: 0, geom: { preset }, isNonRect: true };
+  }
+  if (type === 'TYPE_STAR' || type === 6) {
+    const star = shapeMsg?.star as Msg | undefined;
+    const pts =
+      typeof star?.numberPoints === 'number'
+        ? star.numberPoints
+        : typeof star?.number_points === 'number'
+          ? star.number_points
+          : 5;
+    const preset = nearestStarPreset(pts);
+    return { shape: 'rect', radius: 0, geom: { preset }, isNonRect: true };
+  }
+
+  return null;
+}
+
 /** Text attributes ProPresenter applies at render time that the slide text cannot carry as styling. */
 function noteTextTransforms(t: Msg, attrs: Msg, ctx: Ctx): { allCaps: boolean } {
   const cap = attrs.capitalization as string | undefined;
@@ -349,10 +617,14 @@ function noteTextTransforms(t: Msg, attrs: Msg, ctx: Ctx): { allCaps: boolean } 
   }
   // ProPresenter also writes the box-level capitalization as a custom attribute over the whole text; only
   // a range that differs from the box is a partial transform ordo cannot carry.
-  const custom = (attrs.customAttributes ?? []) as Msg[];
+  const custom = (attrs.customAttributes ?? attrs.custom_attributes ?? []) as Msg[];
   if (
     custom.some(
-      (c) => c.capitalization && c.capitalization !== 'CAPITALIZATION_NONE' && c.capitalization !== cap,
+      (c) =>
+        c.capitalization &&
+        c.capitalization !== 'CAPITALIZATION_NONE' &&
+        c.capitalization !== cap &&
+        c.capitalization !== 'CAPITALIZATION_SMALL_CAPS',
     )
   )
     skip(ctx, 'capitalization of part of a text');
@@ -370,7 +642,6 @@ function textObjectFrom(el: Msg, size: SlideSize, ctx: Ctx): TextObject | null {
   const scale = slideScale(size).s;
   const attrs = (t.attributes ?? {}) as Msg;
   const font = (attrs.font ?? {}) as Msg;
-  if (parsed.styleRuns > 1) ctx.rtfMixed++;
   if (parsed.plain) approx(ctx, 'plain-text (non-RTF) elements imported with the attribute style only');
   const { allCaps } = noteTextTransforms(t, attrs, ctx);
   const text = parsed.text;
@@ -392,33 +663,276 @@ function textObjectFrom(el: Msg, size: SlideSize, ctx: Ctx): TextObject | null {
     fontStyle: italic ? 'italic' : 'normal',
     fontSizePx: sizePt ? Math.round(sizePt * scale * 100) / 100 : base.fontSizePx,
     color,
-    align: parsed.align ?? paraAlign ?? 'center',
+    align: parsed.align ?? paraAlign ?? (parsed.plain ? 'center' : 'left'),
     valign: VALIGN[t.verticalAlignment as string] ?? 'top',
     padding: 0,
     outline: undefined,
     shadow: undefined,
     transform: allCaps ? 'uppercase' : 'none',
   };
+
+  const uStyle = (attrs.underlineStyle ?? attrs.underline_style) as Msg | undefined;
+  if ((uStyle?.style && uStyle.style !== 'STYLE_NONE' && uStyle.style !== 0) || uStyle?.enable === true) {
+    style.underline = true;
+  }
+
+  const sb = t.scaleBehavior as string | number | undefined;
+  if (
+    sb === 'SCALE_BEHAVIOR_SCALE_FONT_DOWN' ||
+    sb === 'SCALE_BEHAVIOR_SCALE_FONT_UP_DOWN' ||
+    sb === 'SCALE_BEHAVIOR_SCALE_FONT_UP_OR_DOWN' ||
+    sb === 2 ||
+    sb === 4
+  ) {
+    style.autofit = 'shrink';
+  }
   const para = attrs.paragraphStyle as Msg | undefined;
   if (typeof para?.lineHeightMultiple === 'number' && para.lineHeightMultiple > 0)
-    style.lineHeight = Math.round(para.lineHeightMultiple * 100) / 100;
-  // The RTF's own paragraph spacing wins. ordo has one line height: space after a paragraph is added to
-  // it (Cocoa writes every line as a paragraph, so this is exact for one-line paragraphs).
-  if (parsed.lineSpacing) style.lineHeight = parsed.lineSpacing;
-  if (parsed.spaceAfterPt && sizePt) {
+    style.lineHeight = Math.round(para.lineHeightMultiple * 1.2 * 100) / 100;
+  // The RTF's own paragraph spacing wins. Cocoa's \slN\slmult1 and lineHeightMultiple are multiples of
+  // single spacing (1.2 × fontSizePx in Ordo's line model).
+  if (parsed.lineSpacing) style.lineHeight = Math.round(parsed.lineSpacing * 1.2 * 100) / 100;
+  if (typeof attrs.kerning === 'number' && attrs.kerning !== 0)
+    style.letterSpacing = Math.round(attrs.kerning * scale * 100) / 100;
+
+  const margins = t.margins as Msg | undefined;
+  const hPad = parsed.plain ? 0 : 5;
+  const padL = Math.round(((margins?.left ?? 0) + hPad) * scale * 100) / 100;
+  const padR = Math.round(((margins?.right ?? 0) + hPad) * scale * 100) / 100;
+  const padT = Math.round((margins?.top ?? 0) * scale * 100) / 100;
+  const padB = Math.round((margins?.bottom ?? 0) * scale * 100) / 100;
+  const hasMargins = padL > 0 || padR > 0 || padT > 0 || padB > 0;
+  const isAsymmetric = padL !== padR || padL !== padT || padL !== padB;
+  if (isAsymmetric && hasMargins) {
+    style.insets = { l: padL, t: padT, r: padR, b: padB };
+    style.padding = 0;
+  } else if (hasMargins) {
+    style.padding = padL;
+  }
+
+  const extraLeadingPx =
+    ((typeof para?.lineSpacing === 'number' && para.lineSpacing > 0 ? para.lineSpacing : parsed.leadingPt) ??
+      0) * scale;
+  if (extraLeadingPx > 0 && (text.includes('\n') || !!(el.textLineMask as Msg | undefined)?.enabled)) {
+    if (style.insets) {
+      style.insets.b = Math.round((style.insets.b + extraLeadingPx) * 100) / 100;
+    } else {
+      const p = style.padding ?? 0;
+      style.insets = { l: p, t: p, r: p, b: Math.round((p + extraLeadingPx) * 100) / 100 };
+      style.padding = 0;
+    }
+  }
+
+  const parsedSpans = (parsed as { spans?: RtfSpanLike[] }).spans;
+  let runs: TextRun[] | undefined;
+  const hasMultipleSpans = !!(parsedSpans && parsedSpans.length > 1);
+  const singleSpanHasSpecial = !!(
+    parsedSpans &&
+    parsedSpans.length === 1 &&
+    (parsedSpans[0]!.underline ||
+      parsedSpans[0]!.strike ||
+      parsedSpans[0]!.baseline ||
+      parsedSpans[0]!.highlight ||
+      parsedSpans[0]!.caps === 'small')
+  );
+  if (hasMultipleSpans || singleSpanHasSpecial) {
+    runs = [];
+    for (const span of parsedSpans!) {
+      const start = Math.max(0, Math.min(text.length, span.start));
+      const end = Math.max(0, Math.min(text.length, span.end));
+      if (end <= start) continue;
+      const run: TextRun = { start, end };
+      if (span.fontName) {
+        const split = splitFontName(span.fontName);
+        if (split.family && split.family !== style.fontFamily) {
+          run.fontFamily = split.family;
+        }
+        const spanWeight = span.bold ? 700 : (split.weight ?? 400);
+        if (spanWeight !== style.fontWeight) {
+          run.fontWeight = spanWeight;
+        }
+        const spanItalic = !!(span.italic || split.italic);
+        const runStyle = spanItalic ? 'italic' : 'normal';
+        if (runStyle !== (style.fontStyle ?? 'normal')) {
+          run.fontStyle = runStyle;
+        }
+      } else {
+        if (span.bold !== undefined) {
+          const spanWeight = span.bold ? 700 : 400;
+          if (spanWeight !== style.fontWeight) {
+            run.fontWeight = spanWeight;
+          }
+        }
+        if (span.italic !== undefined) {
+          const runStyle = span.italic ? 'italic' : 'normal';
+          if (runStyle !== (style.fontStyle ?? 'normal')) {
+            run.fontStyle = runStyle;
+          }
+        }
+      }
+
+      if (typeof span.fontSizePt === 'number' && style.fontSizePx > 0) {
+        const sizeScale = Math.round(((span.fontSizePt * scale) / style.fontSizePx) * 1000) / 1000;
+        if (Math.abs(sizeScale - 1) > 0.005) {
+          run.sizeScale = sizeScale;
+        }
+      }
+
+      if (span.color && !colorsEqual(span.color, style.color)) {
+        run.color = span.color;
+      }
+      if (span.highlight) {
+        run.highlight = span.highlight;
+      }
+      if (span.underline && !style.underline) {
+        run.underline = true;
+      }
+      if (span.strike) {
+        run.strike = true;
+      }
+      if (typeof span.baseline === 'number' && span.baseline !== 0) {
+        run.baseline = Math.max(-1, Math.min(1, span.baseline));
+      }
+      if (span.caps && span.caps !== 'none') {
+        run.caps = span.caps;
+      }
+      if (typeof span.letterSpacingPt === 'number' && span.letterSpacingPt !== 0) {
+        run.letterSpacing = Math.round(span.letterSpacingPt * scale * 100) / 100;
+      }
+      if (typeof span.strokeWidth === 'number' && span.strokeWidth !== 0) {
+        const pct =
+          Math.abs(span.strokeWidth) > 5 ? Math.abs(span.strokeWidth) / 20 : Math.abs(span.strokeWidth);
+        run.outline = {
+          width: Math.max(
+            1,
+            Math.round(
+              ((pct / 100) * (span.fontSizePt ? span.fontSizePt * scale : style.fontSizePx) +
+                Number.EPSILON) *
+                10,
+            ) / 10,
+          ),
+          color: span.strokeColor ?? { r: 0, g: 0, b: 0, a: 1 },
+        };
+      }
+      runs.push(run);
+    }
+  }
+
+  const customAttrs = (attrs.customAttributes ?? attrs.custom_attributes ?? []) as Msg[];
+  for (const ca of customAttrs) {
+    if (ca.capitalization === 'CAPITALIZATION_SMALL_CAPS' && !allCaps) {
+      const range = (ca.range ?? {}) as Msg;
+      const caStart = Math.max(0, Math.min(text.length, Number(range.start ?? 0)));
+      const caEnd = Math.max(caStart, Math.min(text.length, Number(range.end ?? text.length)));
+      if (caEnd > caStart) {
+        if (runs && runs.length > 0) {
+          let overlapped = false;
+          for (const run of runs) {
+            if (Math.max(run.start, caStart) < Math.min(run.end, caEnd)) {
+              run.caps = 'small';
+              overlapped = true;
+            }
+          }
+          if (!overlapped) {
+            runs.push({ start: caStart, end: caEnd, caps: 'small' });
+            runs.sort((a, b) => a.start - b.start);
+          }
+        } else {
+          runs = [{ start: caStart, end: caEnd, caps: 'small' }];
+        }
+      }
+    }
+  }
+
+  if (runs && runs.length > 0) {
+    // runs emitted, no fallback logged
+  } else if (parsed.styleRuns > 1) {
+    ctx.rtfMixed++;
+    approx(ctx, 'mixed character styles (imported with the first style)');
+  }
+
+  const numParas = text.split('\n').length;
+  const hasBullets = parsed.hasBulletList || !!(attrs.paragraphStyle as Msg | undefined)?.textList?.isEnabled;
+  const parsedParas = (parsed as { paras?: RtfParaLike[] }).paras;
+  const hasParasData = !!(parsedParas && parsedParas.length === numParas);
+  const needsParas =
+    (extraLeadingPx > 0 && (numParas > 1 || !!(el.textLineMask as Msg | undefined)?.enabled)) ||
+    hasBullets ||
+    (hasParasData &&
+      parsedParas.some(
+        (p) =>
+          (p.align && p.align !== style.align) ||
+          p.spaceBeforePt ||
+          p.spaceAfterPt ||
+          p.indentPt ||
+          p.firstLinePt ||
+          p.isBullet,
+      ));
+
+  let paras: (TextPara | null)[] | undefined;
+  if (needsParas) {
+    const paraIndent =
+      Math.round(
+        (parsed.indentPt ?? (typeof para?.headIndent === 'number' ? para.headIndent : 41)) * scale * 100,
+      ) / 100;
+    const paraFirstLine = Math.round((parsed.firstLinePt ?? -paraIndent) * scale * 100) / 100;
+    const defaultSpaceAfter = extraLeadingPx > 0 ? Math.round(extraLeadingPx * 100) / 100 : undefined;
+
+    if (hasParasData) {
+      paras = parsedParas.map((rtfP) => {
+        const p: TextPara = {};
+        if (rtfP.align && rtfP.align !== style.align) {
+          p.align = rtfP.align;
+        }
+        if (typeof rtfP.spaceBeforePt === 'number' && rtfP.spaceBeforePt > 0) {
+          p.spaceBeforePx = Math.round(rtfP.spaceBeforePt * scale * 100) / 100;
+        }
+        const combinedSpaceAfter =
+          extraLeadingPx + (typeof rtfP.spaceAfterPt === 'number' ? rtfP.spaceAfterPt * scale : 0);
+        if (combinedSpaceAfter > 0) {
+          p.spaceAfterPx = Math.round(combinedSpaceAfter * 100) / 100;
+        } else if (defaultSpaceAfter !== undefined) {
+          p.spaceAfterPx = defaultSpaceAfter;
+        }
+        if (typeof rtfP.indentPt === 'number') {
+          p.indentPx = Math.round(rtfP.indentPt * scale * 100) / 100;
+          if (typeof rtfP.firstLinePt === 'number') {
+            p.firstLinePx = Math.round(rtfP.firstLinePt * scale * 100) / 100;
+          } else {
+            p.firstLinePx = -p.indentPx;
+          }
+        }
+        if (rtfP.isBullet || hasBullets) {
+          p.bullet = { char: rtfP.bulletChar || '•' };
+          if (p.indentPx === undefined) {
+            p.indentPx = paraIndent;
+            p.firstLinePx = paraFirstLine;
+          }
+        }
+        return Object.keys(p).length > 0 ? p : null;
+      });
+    } else {
+      paras = Array.from({ length: numParas }, () => {
+        const p: TextPara = {};
+        if (hasBullets) {
+          p.bullet = { char: '•' };
+          p.indentPx = paraIndent;
+          p.firstLinePx = paraFirstLine;
+        }
+        if (defaultSpaceAfter !== undefined) {
+          p.spaceAfterPx = defaultSpaceAfter;
+        }
+        return p;
+      });
+    }
+  } else if (parsed.spaceAfterPt && sizePt) {
     style.lineHeight = Math.min(
       10,
-      Math.round(((style.lineHeight ?? 1) + parsed.spaceAfterPt / sizePt) * 100) / 100,
+      Math.round(((style.lineHeight ?? 1.2) + parsed.spaceAfterPt / sizePt) * 100) / 100,
     );
     approx(ctx, 'paragraph spacing (added to the line height)');
   }
-  if (typeof attrs.kerning === 'number' && attrs.kerning !== 0)
-    style.letterSpacing = Math.round(attrs.kerning * scale * 100) / 100;
-  const margins = t.margins as Msg | undefined;
-  if (margins) {
-    const m = Math.max(margins.left ?? 0, margins.right ?? 0, margins.top ?? 0, margins.bottom ?? 0);
-    if (m > 0) style.padding = Math.round(m * scale * 100) / 100;
-  }
+
   // Outline: Cocoa's stroke width is a percentage of the font size, in the attributes as is (-3) and in the
   // RTF x20 (\strokewidth-60); negative means stroke and fill. Both give the same width.
   const strokeEl = el.stroke as Msg | undefined;
@@ -435,48 +949,123 @@ function textObjectFrom(el: Msg, size: SlideSize, ctx: Ctx): TextObject | null {
       color: parsed.strokeColor ?? { r: 0, g: 0, b: 0, a: 1 },
     };
   } else if (strokeEl?.enable && strokeEl.width > 0) {
-    // Element (box) stroke, not a text outline: logged.
-    skip(ctx, 'text box borders');
+    // Element (box) stroke, not a text outline: logged if no backing box.
+    if (!el.fill?.enable) skip(ctx, 'text box borders');
   }
   style.shadow = shadowOf(t.shadow, scale);
-  if (!style.shadow && (el.shadow as Msg | undefined)?.enable) skip(ctx, 'text box shadows');
-  const fill = el.fill as Msg | undefined;
-  if (fill?.enable && fill.color) {
-    const c = colorOf(fill.color);
-    if (c && c.a > 0) style.fill = { color: c, radius: 0 };
-  } else if (fill?.enable && fill.gradient) {
-    // A gradient box fill becomes its first stop's colour (the editor has no gradients).
-    const stops = ((fill.gradient as Msg).stops ?? []) as Msg[];
-    const c = colorOf(stops[0]?.color);
-    if (c && c.a > 0) {
-      style.fill = { color: c, radius: 0 };
-      approx(ctx, 'gradient box fills (first colour used)');
+  if (!style.shadow && (el.shadow as Msg | undefined)?.enable && !el.fill?.enable && !strokeEl?.enable)
+    skip(ctx, 'text box shadows');
+
+  const box = scaleBox(el.bounds, size, el.rotation ?? 0);
+
+  if ((el.textLineMask as Msg | undefined)?.enabled) {
+    const mask = el.textLineMask as Msg;
+    const maskStyle = mask.maskStyle as string | number | undefined;
+    const styleStr: TextLineMask['style'] =
+      maskStyle === 'LINE_MASK_STYLE_LINE_WIDTH' || maskStyle === 1
+        ? 'lineWidth'
+        : maskStyle === 'LINE_MASK_STYLE_MAX_LINE_WIDTH' || maskStyle === 2
+          ? 'maxLineWidth'
+          : 'fullWidth';
+    const fillMsg = el.fill as Msg | undefined;
+    const grad = fillMsg?.enable && fillMsg.gradient ? gradientFrom(fillMsg.gradient as Msg) : undefined;
+    const fill = fillMsg?.enable ? (colorOf(fillMsg.color) ?? grad?.stops[0]?.color) : undefined;
+
+    if (fill || grad) {
+      style.lineMask = {
+        style: styleStr,
+        ...(typeof mask.heightOffset === 'number'
+          ? { heightOffsetPx: Math.round(mask.heightOffset * scale * 100) / 100 }
+          : {}),
+        ...(typeof mask.verticalOffset === 'number'
+          ? { vOffsetPx: Math.round(mask.verticalOffset * scale * 100) / 100 }
+          : {}),
+        ...(typeof mask.widthOffset === 'number'
+          ? { widthOffsetPx: Math.round(mask.widthOffset * scale * 100) / 100 }
+          : {}),
+        ...(typeof mask.horizontalOffset === 'number'
+          ? { hOffsetPx: Math.round(mask.horizontalOffset * scale * 100) / 100 }
+          : {}),
+        ...(fill ? { fill } : {}),
+        ...(grad ? { gradient: grad } : {}),
+      };
+
+      if (style.valign === 'middle') {
+        const maskBaseShift = Math.round(style.fontSizePx * 0.065 * 100) / 100;
+        if (maskBaseShift > 0) {
+          if (!style.insets) {
+            const p = style.padding ?? 0;
+            style.insets = { l: p, t: p, r: p, b: p };
+            style.padding = 0;
+          }
+          style.insets.t = Math.round((style.insets.t + 2 * maskBaseShift) * 100) / 100;
+          const nextVOff = Math.round(((style.lineMask.vOffsetPx ?? 0) - maskBaseShift) * 100) / 100;
+          style.lineMask.vOffsetPx = nextVOff;
+        }
+      }
     }
   }
+
+  if (
+    style.autofit === 'shrink' &&
+    style.valign === 'middle' &&
+    !style.lineMask &&
+    !text.includes('\n') &&
+    style.fontSizePx * 1.2 <= box.h * 0.92
+  ) {
+    const effPx = Math.min(style.fontSizePx, box.h * 0.65);
+    const fitShift = Math.round(effPx * 0.065 * 100) / 100;
+    if (!style.insets) {
+      const p = style.padding ?? 0;
+      style.insets = { l: p, t: p, r: p, b: p };
+      style.padding = 0;
+    }
+    if (box.h - style.insets.t - style.insets.b - 2 * fitShift >= effPx * 1.2) {
+      style.insets.t = Math.round((style.insets.t + 2 * fitShift) * 100) / 100;
+    }
+  }
+
+  const hasRichRuns = !!(runs && runs.length > 0);
+  const hasRichParas = !!(paras && paras.length > 0);
+  if (
+    !hasRichRuns &&
+    !hasRichParas &&
+    !style.lineMask &&
+    !style.fill &&
+    !style.autofit &&
+    style.valign === 'middle' &&
+    style.insets &&
+    style.insets.t === 0 &&
+    style.insets.b === 0 &&
+    style.insets.l === style.insets.r
+  ) {
+    style.padding = style.insets.l;
+    delete style.insets;
+  }
+
   return {
     id: newId(),
     type: 'text',
-    box: scaleBox(el.bounds, size, el.rotation ?? 0),
+    box,
     text,
     style,
     opacity: typeof el.opacity === 'number' ? el.opacity : 1,
+    ...(hasRichRuns ? { runs } : {}),
+    ...(paras ? { paras } : {}),
   };
 }
 
-/** A rectangle or ellipse with a solid fill and/or a stroke; other shapes are skipped. */
-function shapeObjectFrom(el: Msg, size: SlideSize, ctx: Ctx): ShapeObject | null {
-  const type = ((el.path as Msg | undefined)?.shape as Msg | undefined)?.type as string | undefined;
-  const shape = type === 'TYPE_RECTANGLE' ? 'rect' : type === 'TYPE_ELLIPSE' ? 'ellipse' : undefined;
-  if (!shape) return null;
+/** A rectangle, ellipse or polygon/bezier geometry with a solid fill, gradient and/or a stroke. */
+function shapeObjectFrom(el: Msg, size: SlideSize, _ctx: Ctx): ShapeObject | null {
+  const box = scaleBox(el.bounds, size, el.rotation ?? 0);
+  const pathInfo = shapeGeomFromPath(el.path as Msg | undefined, box);
+  if (!pathInfo) return null;
+  const { shape, radius, geom } = pathInfo;
+
   const fillMsg = el.fill as Msg | undefined;
   const strokeMsg = el.stroke as Msg | undefined;
-  const fill = fillMsg?.enable
-    ? colorOf(
-        fillMsg.color ?? ((fillMsg.gradient as Msg | undefined)?.stops as Msg[] | undefined)?.[0]?.color,
-      )
-    : undefined;
-  if (fillMsg?.enable && fillMsg.gradient && !fillMsg.color)
-    approx(ctx, 'gradient shape fills (first colour used)');
+  const gradient = fillMsg?.enable && fillMsg.gradient ? gradientFrom(fillMsg.gradient as Msg) : undefined;
+  const fill = fillMsg?.enable ? (colorOf(fillMsg.color) ?? gradient?.stops[0]?.color) : undefined;
   const scale = slideScale(size).s;
   const stroke =
     strokeMsg?.enable && typeof strokeMsg.width === 'number' && strokeMsg.width > 0
@@ -485,17 +1074,37 @@ function shapeObjectFrom(el: Msg, size: SlideSize, ctx: Ctx): ShapeObject | null
           color: colorOf(strokeMsg.color) ?? { r: 0, g: 0, b: 0, a: 1 },
         }
       : undefined;
-  if (!fill && !stroke) return null;
+  if (!fill && !stroke && !gradient) return null;
+
+  const shadow = shadowOf(el.shadow as Msg | undefined, scale);
+  const dashStyle = strokeMsg?.style ? DASH_STYLE[strokeMsg.style as string] : undefined;
+  const dash = dashStyle && dashStyle !== 'solid' ? dashStyle : undefined;
+  const feather = el.feather as Msg | undefined;
+  const softEdge =
+    feather?.enable && typeof feather.radius === 'number' && feather.radius > 0
+      ? Math.round(feather.radius * Math.min(box.w, box.h) * 0.5 * 100) / 100
+      : undefined;
+  const fm = el.flipMode as string | number | undefined;
+  const flipH = fm === 'FLIP_MODE_HORIZONTAL' || fm === 'FLIP_MODE_BOTH' || fm === 2 || fm === 3;
+  const flipV = fm === 'FLIP_MODE_VERTICAL' || fm === 'FLIP_MODE_BOTH' || fm === 1 || fm === 3;
+
   const obj: ShapeObject = {
     id: newId(),
     type: 'shape',
-    box: scaleBox(el.bounds, size, el.rotation ?? 0),
+    box,
     shape,
     opacity: typeof el.opacity === 'number' ? el.opacity : 1,
-    radius: 0,
+    radius,
+    ...(geom ? { geom } : {}),
+    ...(fill ? { fill } : {}),
+    ...(gradient ? { gradient } : {}),
+    ...(stroke ? { stroke } : {}),
+    ...(shadow ? { shadow } : {}),
+    ...(dash ? { dash } : {}),
+    ...(softEdge && softEdge > 0 ? { softEdge } : {}),
+    ...(flipH ? { flipH: true } : {}),
+    ...(flipV ? { flipV: true } : {}),
   };
-  if (fill) obj.fill = fill;
-  if (stroke) obj.stroke = stroke;
   return obj;
 }
 
@@ -511,15 +1120,117 @@ function imageObjectFrom(el: Msg, size: SlideSize, ctx: Ctx): ImageObject | null
   const id = ctx.media.resolve(paths, (m) => note(ctx, 'warn', m), ctx.item);
   if (!id) return null;
   const drawing = ((mediaMsg?.image ?? mediaMsg?.video) as Msg | undefined)?.drawing as Msg | undefined;
-  const sb = drawing?.scaleBehavior as string | undefined;
+  const sb = drawing?.scaleBehavior as string | number | undefined;
+  const scale = slideScale(size).s;
+  const box = scaleBox(el.bounds, size, el.rotation ?? 0);
+  const shadow = shadowOf(el.shadow as Msg | undefined, scale);
+  const feather = el.feather as Msg | undefined;
+  const softEdge =
+    feather?.enable && typeof feather.radius === 'number' && feather.radius > 0
+      ? Math.round(feather.radius * Math.min(box.w, box.h) * 0.5 * 100) / 100
+      : undefined;
+  const fm = el.flipMode as string | number | undefined;
+  const flipH = fm === 'FLIP_MODE_HORIZONTAL' || fm === 'FLIP_MODE_BOTH' || fm === 2 || fm === 3;
+  const flipV = fm === 'FLIP_MODE_VERTICAL' || fm === 'FLIP_MODE_BOTH' || fm === 1 || fm === 3;
+
+  const pathInfo = shapeGeomFromPath(el.path as Msg | undefined, box);
+  let radius = 0;
+  let mask: ShapeGeom | undefined;
+  if (pathInfo?.isNonRect) {
+    if (pathInfo.radius > 0) {
+      radius = pathInfo.radius;
+    }
+    if (pathInfo.shape === 'ellipse') {
+      mask = { preset: 'ellipse' };
+    } else if (pathInfo.geom) {
+      mask = pathInfo.geom;
+    }
+  }
+
+  let fit: 'contain' | 'cover' | 'stretch' =
+    sb === 'SCALE_BEHAVIOR_FILL' || sb === 1
+      ? 'cover'
+      : sb === 'SCALE_BEHAVIOR_STRETCH' || sb === 2
+        ? 'stretch'
+        : 'contain';
+  let crop: ImageCrop | undefined;
+
+  const cropEnable = Boolean(drawing?.cropEnable ?? drawing?.crop_enable);
+  const cropInsets = (drawing?.cropInsets ?? drawing?.crop_insets) as Msg | undefined;
+  const customImageBounds = (drawing?.customImageBounds ?? drawing?.custom_image_bounds) as Msg | undefined;
+
+  if (cropEnable && cropInsets) {
+    let rawL = Number(cropInsets.left ?? 0);
+    let rawT = Number(cropInsets.top ?? 0);
+    let rawR = Number(cropInsets.right ?? 0);
+    let rawB = Number(cropInsets.bottom ?? 0);
+    const naturalSize = (drawing?.naturalSize ?? drawing?.natural_size) as Msg | undefined;
+    const nw = Number(naturalSize?.width ?? 0);
+    const nh = Number(naturalSize?.height ?? 0);
+    if ((rawL > 1 || rawR > 1 || rawT > 1 || rawB > 1) && nw > 0 && nh > 0) {
+      rawL /= nw;
+      rawR /= nw;
+      rawT /= nh;
+      rawB /= nh;
+    }
+    const l = Math.max(0, Math.min(0.99, rawL));
+    const t = Math.max(0, Math.min(0.99, rawT));
+    const r = Math.max(0, Math.min(0.99, rawR));
+    const b = Math.max(0, Math.min(0.99, rawB));
+    const cl = Math.round(l * 10000) / 10000;
+    const ct = Math.round(t * 10000) / 10000;
+    const cr = Math.round(r * 10000) / 10000;
+    const cb = Math.round(b * 10000) / 10000;
+    if (cl + cr < 0.99 && ct + cb < 0.99 && (cl > 0 || ct > 0 || cr > 0 || cb > 0)) {
+      crop = { l: cl, t: ct, r: cr, b: cb };
+    }
+  } else if ((sb === 'SCALE_BEHAVIOR_CUSTOM' || sb === 3) && customImageBounds) {
+    const cw = Number((customImageBounds.size as Msg | undefined)?.width ?? 0);
+    const ch = Number((customImageBounds.size as Msg | undefined)?.height ?? 0);
+    const cx = Number((customImageBounds.origin as Msg | undefined)?.x ?? 0);
+    const cy = Number((customImageBounds.origin as Msg | undefined)?.y ?? 0);
+    const eb = el.bounds as Msg | undefined;
+    const ew = Number((eb?.size as Msg | undefined)?.width ?? 0);
+    const eh = Number((eb?.size as Msg | undefined)?.height ?? 0);
+    if (cw > 0 && ch > 0 && ew > 0 && eh > 0) {
+      const rawL = -cx / cw;
+      const rawT = -cy / ch;
+      const rawR = 1 - (ew - cx) / cw;
+      const rawB = 1 - (eh - cy) / ch;
+      const inRange = (v: number) => Number.isFinite(v) && v >= -10 && v <= 0.99;
+      if (
+        inRange(rawL) &&
+        inRange(rawT) &&
+        inRange(rawR) &&
+        inRange(rawB) &&
+        rawL + rawR < 0.99 &&
+        rawT + rawB < 0.99
+      ) {
+        fit = 'stretch';
+        crop = {
+          l: Math.round(rawL * 10000) / 10000,
+          t: Math.round(rawT * 10000) / 10000,
+          r: Math.round(rawR * 10000) / 10000,
+          b: Math.round(rawB * 10000) / 10000,
+        };
+      }
+    }
+  }
+
   return {
     id: newId(),
     type: 'image',
-    box: scaleBox(el.bounds, size, el.rotation ?? 0),
+    box,
     mediaId: id,
-    fit: sb === 'SCALE_BEHAVIOR_FILL' ? 'cover' : sb === 'SCALE_BEHAVIOR_STRETCH' ? 'stretch' : 'contain',
+    fit,
     opacity: typeof el.opacity === 'number' ? el.opacity : 1,
-    radius: 0,
+    radius,
+    ...(crop ? { crop } : {}),
+    ...(mask ? { mask } : {}),
+    ...(shadow ? { shadow } : {}),
+    ...(softEdge && softEdge > 0 ? { softEdge } : {}),
+    ...(flipH ? { flipH: true } : {}),
+    ...(flipV ? { flipV: true } : {}),
   };
 }
 
@@ -574,7 +1285,7 @@ export function mediaElementKind(
 }
 
 /** Map one cue to a slide (null when the cue has no slide). Background media from media actions. */
-function slideFromCue(cue: Msg, ctx: Ctx): Slide | null {
+function slideFromCue(cue: Msg, ctx: Ctx, docBackground?: Msg): Slide | null {
   if (cue.isEnabled === false) {
     skip(ctx, 'disabled cues');
     return null;
@@ -675,25 +1386,35 @@ function slideFromCue(cue: Msg, ctx: Ctx): Slide | null {
     }
     if (el.text?.rtfData?.length) {
       const to = textObjectFrom(el, size, ctx);
-      if (to && (!hasMedia || /[^\s\u200b-\u200d\ufeff]/.test(to.text))) {
-        const boxFill = to.style.fill;
-        // ProPresenter fills the element's whole box; ordo's text fill hugs the words. The box fill is
-        // drawn as a rectangle behind the text (listed after it here: the list is still front to back).
-        // With a picture, the picture is the fill.
+      const hasVisibleText = to && /[^\s\u200b-\u200d\ufeff]/.test(to.text);
+      if (to && hasVisibleText && (!hasMedia || hasVisibleText)) {
         delete to.style.fill;
         objects.push(to);
-        if (boxFill && !hasMedia)
-          objects.push({
-            id: newId(),
-            type: 'shape',
-            shape: 'rect',
-            box: { ...to.box },
-            fill: boxFill.color,
-            opacity: to.opacity ?? 1,
-            radius: 0,
-          });
+        const fillMsg = el.fill as Msg | undefined;
+        const strokeMsg = el.stroke as Msg | undefined;
+        const hasBoxPaint =
+          !hasMedia && (fillMsg?.enable || (strokeMsg?.enable && (strokeMsg.width ?? 0) > 0));
+        const maskEnabled = !!(el.textLineMask as Msg | undefined)?.enabled;
+        if (hasBoxPaint && !maskEnabled) {
+          const so = shapeObjectFrom(el, size, ctx);
+          if (so) objects.push(so);
+        }
         if (!lyricObjectId) lyricObjectId = to.id;
+        continue;
       }
+      if (hasMedia) {
+        continue;
+      }
+      const fillMsg = el.fill as Msg | undefined;
+      const strokeMsg = el.stroke as Msg | undefined;
+      const maskEnabled = !!(el.textLineMask as Msg | undefined)?.enabled;
+      if (!maskEnabled && (fillMsg?.enable || strokeMsg?.enable)) {
+        const so = shapeObjectFrom(el, size, ctx);
+        if (so) objects.push(so);
+        else skip(ctx, 'shapes');
+        continue;
+      }
+      skip(ctx, 'empty text elements');
       continue;
     }
     if (hasMedia) continue;
@@ -723,6 +1444,43 @@ function slideFromCue(cue: Msg, ctx: Ctx): Slide | null {
         opacity: 1,
         radius: 0,
       });
+  } else if (docBackground?.isEnabled) {
+    if (docBackground.gradient) {
+      const grad = gradientFrom(docBackground.gradient as Msg);
+      if (grad) {
+        objects.unshift({
+          id: newId(),
+          type: 'shape',
+          shape: 'rect',
+          box: scaleBox(
+            { origin: { x: 0, y: 0 }, size: { width: size.width, height: size.height } },
+            size,
+            0,
+          ),
+          fill: grad.stops[0]?.color,
+          gradient: grad,
+          opacity: 1,
+          radius: 0,
+        });
+      }
+    } else if (docBackground.color) {
+      const c = colorOf(docBackground.color as Msg | undefined) ?? { r: 0, g: 0, b: 0, a: 1 };
+      if (c.a > 0) {
+        objects.unshift({
+          id: newId(),
+          type: 'shape',
+          shape: 'rect',
+          box: scaleBox(
+            { origin: { x: 0, y: 0 }, size: { width: size.width, height: size.height } },
+            size,
+            0,
+          ),
+          fill: c,
+          opacity: 1,
+          radius: 0,
+        });
+      }
+    }
   }
   const slide: Slide = { id: newId(), objects };
   if (clears && !backgroundMediaId) ctx.clearsBackground.add(slide);
@@ -754,7 +1512,14 @@ export type Pro7PresentationResult = {
 /** Map a decoded rv.data.Presentation to an ordo presentation. */
 export function mapPresentation(
   doc: Msg,
-  opts: { item: string; log: ImportLogEntry[]; media: MediaResolver; fileName?: string; id?: string },
+  opts: {
+    item: string;
+    log: ImportLogEntry[];
+    media: MediaResolver;
+    fileName?: string;
+    id?: string;
+    exportCompat?: boolean;
+  },
 ): Pro7PresentationResult {
   const ctx: Ctx = {
     item: opts.item,
@@ -790,7 +1555,7 @@ export function mapPresentation(
       // A cue listed twice (in one group or across groups) is one slide, at its first place.
       if (used.has(id)) continue;
       used.add(id);
-      const s = slideFromCue(cue, ctx);
+      const s = slideFromCue(cue, ctx, doc.background as Msg | undefined);
       if (s) slides.push(s);
     }
     const section: Section = { id: newId(), label: lbl.label, short: lbl.short, slides };
@@ -802,7 +1567,7 @@ export function mapPresentation(
   const loose: Slide[] = [];
   for (const [id, cue] of cuesById) {
     if (used.has(id)) continue;
-    const s = slideFromCue(cue, ctx);
+    const s = slideFromCue(cue, ctx, doc.background as Msg | undefined);
     if (s) loose.push(s);
   }
   if (loose.length) {
@@ -838,25 +1603,25 @@ export function mapPresentation(
   // Background media keeps running from the slide that starts it until a slide clears it or starts another
   // (in the document's slide order): each slide gets the background it would show in ProPresenter.
   const allSlides = sections.flatMap((s) => s.slides);
-  let running: string | undefined;
-  for (const sl of allSlides) {
-    if (sl.backgroundMediaId) running = sl.backgroundMediaId;
-    else if (ctx.clearsBackground.has(sl)) {
-      // Only a clear that stops something matters (a "Clear All" on the first slide clears nothing).
-      if (running) sl.clearBackground = true;
-      running = undefined;
-    } else if (running) sl.backgroundMediaId = running;
-  }
-  // One background on every slide becomes the presentation background.
-  const bgs = new Set(allSlides.map((s) => s.backgroundMediaId).filter((x): x is string => !!x));
   let backgroundMediaId: string | undefined;
-  if (bgs.size === 1 && allSlides.length > 0 && allSlides.every((s) => s.backgroundMediaId)) {
-    const [only] = bgs;
-    backgroundMediaId = only;
-    for (const s of allSlides) delete s.backgroundMediaId;
+  if (!opts.exportCompat) {
+    let running: string | undefined;
+    for (const sl of allSlides) {
+      if (sl.backgroundMediaId) running = sl.backgroundMediaId;
+      else if (ctx.clearsBackground.has(sl)) {
+        // Only a clear that stops something matters (a "Clear All" on the first slide clears nothing).
+        if (running) sl.clearBackground = true;
+        running = undefined;
+      } else if (running) sl.backgroundMediaId = running;
+    }
+    // One background on every slide becomes the presentation background.
+    const bgs = new Set(allSlides.map((s) => s.backgroundMediaId).filter((x): x is string => !!x));
+    if (bgs.size === 1 && allSlides.length > 0 && allSlides.every((s) => s.backgroundMediaId)) {
+      const [only] = bgs;
+      backgroundMediaId = only;
+      for (const s of allSlides) delete s.backgroundMediaId;
+    }
   }
-  const bg = doc.background as Msg | undefined;
-  if (bg?.isEnabled && (bg.color || bg.gradient)) skip(ctx, 'presentation background colour');
   if (doc.transition) skip(ctx, 'presentation transition');
   if (doc.timeline?.cues?.length || doc.timeline?.cuesV2?.length || doc.timeline?.audioAction)
     skip(ctx, 'timelines');
@@ -864,10 +1629,12 @@ export function mapPresentation(
   if (pro7UrlPath(doc.chordChart as Msg | undefined)) skip(ctx, 'chord charts');
 
   const ccli = (doc.ccli ?? {}) as Msg;
+  const rawDocName = typeof doc.name === 'string' ? doc.name.trim() : '';
+  const docNameIsUntitled = !rawDocName || rawDocName.toLowerCase() === 'untitled';
+  const songTitle = typeof ccli.songTitle === 'string' ? ccli.songTitle.trim() : '';
+  const fileTitle = opts.fileName ? stripExt(basename(opts.fileName)) : '';
   const title =
-    (typeof doc.name === 'string' && doc.name.trim()) ||
-    (typeof ccli.songTitle === 'string' && ccli.songTitle.trim()) ||
-    (opts.fileName ? stripExt(basename(opts.fileName)) : 'Untitled');
+    (!docNameIsUntitled ? rawDocName : undefined) || songTitle || fileTitle || rawDocName || 'Untitled';
   // ProPresenter's publisher field usually starts with the year already ("2012 Hillsong Music").
   const publisher = String(ccli.publisher ?? '').trim();
   const year = ccli.copyrightYear ? String(ccli.copyrightYear) : '';
@@ -994,7 +1761,14 @@ export function importPro7(files: Map<string, Uint8Array>, opts: Pro7ImportOptio
         for (let n = 2; refs.some((r) => r.id === id) || presentations.some((p) => p.id === id); n++)
           id = `${pro7PresentationId(docUuid)}-${n}`;
       }
-      const result = mapPresentation(doc, { item, log, media, fileName: path, id });
+      const result = mapPresentation(doc, {
+        item,
+        log,
+        media,
+        fileName: path,
+        id,
+        exportCompat: opts.exportCompat,
+      });
       presentations.push(result.presentation);
       refs.push({
         path,

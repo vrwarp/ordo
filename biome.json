@@ -12,6 +12,10 @@
       "!**/.e2e-data*",
       "!playwright-report",
       "!site",
+      "!apps/operator/public/hub-sw.*",
+      "!apps/operator/public/demo",
+      "!apps/operator/public/output",
+      "!apps/operator/public/stage",
       "!**/tmp"
     ]
   },
