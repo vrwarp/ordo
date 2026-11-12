@@ -14,23 +14,6 @@ import { change, selectSlide, useEditor } from './editorStore.ts';
 import { LookPreviews } from './LookPreviews.tsx';
 import { applyTheme, newSlideFor, resetSlideToTheme, themeOf, updateSlide } from './ops.ts';
 
-const STANDARD_SECTION_LABELS = [
-  'Verse 1',
-  'Verse 2',
-  'Verse 3',
-  'Verse 4',
-  'Pre-Chorus',
-  'Chorus',
-  'Chorus 2',
-  'Bridge',
-  'Bridge 2',
-  'Tag',
-  'Intro',
-  'Outro',
-  'Instrumental',
-  'Ending',
-];
-
 export function SongReflowEditor(props: {
   presentation: Presentation;
   readOnly: boolean;
@@ -228,34 +211,6 @@ export function SongReflowEditor(props: {
           gap: 14,
         }}
       >
-        <div
-          className="row"
-          style={{ background: 'var(--bg)', borderRadius: 6, padding: 2, border: '1px solid var(--line)' }}
-        >
-          <button type="button" className="small on" style={{ fontWeight: 600 }}>
-            Lyric Script
-          </button>
-          <button
-            type="button"
-            className="small ghost"
-            onClick={onSwitchToCanvas}
-            title="Switch to freeform visual slide canvas"
-          >
-            Slide Canvas
-          </button>
-        </div>
-
-        <label className="row small" style={{ alignItems: 'center', gap: 6 }}>
-          <span className="muted">Title:</span>
-          <input
-            type="text"
-            value={p.title}
-            disabled={readOnly}
-            onChange={(e) => change((prev) => ({ ...prev, title: e.target.value }), 'title')}
-            style={{ width: 180, fontWeight: 600 }}
-          />
-        </label>
-
         <label className="row small" style={{ alignItems: 'center', gap: 6 }}>
           <span className="muted">Theme:</span>
           <select
@@ -318,9 +273,22 @@ export function SongReflowEditor(props: {
       {banners}
 
       {/* Main Two-Column Reflow Workspace */}
-      <div className="row grow" style={{ minHeight: 0, overflow: 'hidden' }}>
+      <div
+        className="row grow"
+        style={{ minHeight: 0, height: '100%', maxHeight: '100%', overflow: 'hidden' }}
+      >
         {/* Left Column: Fast Section Cards & Lyrics */}
-        <div className="col grow" style={{ minHeight: 0, overflowY: 'auto', padding: 16, gap: 16 }}>
+        <div
+          className="col grow"
+          style={{
+            minHeight: 0,
+            height: '100%',
+            maxHeight: '100%',
+            overflowY: 'auto',
+            padding: 16,
+            gap: 16,
+          }}
+        >
           {p.sections.map((sec) => (
             <div
               key={sec.id}
@@ -335,31 +303,37 @@ export function SongReflowEditor(props: {
               {/* Section Header */}
               <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
                 <div className="row" style={{ alignItems: 'center', gap: 8 }}>
-                  <select
+                  <input
+                    type="text"
                     value={sec.label}
                     disabled={readOnly}
-                    style={{ fontWeight: 600, fontSize: 15 }}
+                    placeholder="Section name"
+                    style={{
+                      fontWeight: 700,
+                      fontSize: 15,
+                      background: 'transparent',
+                      border: 'none',
+                      borderBottom: '1px dashed var(--line)',
+                      borderRadius: 0,
+                      padding: '2px 4px',
+                      color: 'var(--fg)',
+                      width: 140,
+                    }}
                     onChange={(e) => {
                       const newLabel = e.target.value;
-                      change((prev) => ({
-                        ...prev,
-                        sections: prev.sections.map((s) =>
-                          s.id === sec.id
-                            ? { ...s, label: newLabel, short: newLabel.slice(0, 3).toUpperCase() }
-                            : s,
-                        ),
-                      }));
+                      change(
+                        (prev) => ({
+                          ...prev,
+                          sections: prev.sections.map((s) =>
+                            s.id === sec.id
+                              ? { ...s, label: newLabel, short: newLabel.slice(0, 3).toUpperCase() }
+                              : s,
+                          ),
+                        }),
+                        `sec-label:${sec.id}`,
+                      );
                     }}
-                  >
-                    {!STANDARD_SECTION_LABELS.includes(sec.label) && (
-                      <option value={sec.label}>{sec.label}</option>
-                    )}
-                    {STANDARD_SECTION_LABELS.map((lbl) => (
-                      <option key={lbl} value={lbl}>
-                        {lbl}
-                      </option>
-                    ))}
-                  </select>
+                  />
                   <span className="muted small">
                     {sec.slides.length} slide{sec.slides.length > 1 ? 's' : ''}
                   </span>
@@ -524,6 +498,8 @@ export function SongReflowEditor(props: {
           style={{
             width: 320,
             minWidth: 320,
+            height: '100%',
+            maxHeight: '100%',
             borderLeft: '1px solid var(--line)',
             background: 'var(--subtle, #141416)',
             padding: 12,

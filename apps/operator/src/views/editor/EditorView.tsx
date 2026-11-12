@@ -510,6 +510,35 @@ export function EditorView({ id }: { id: string }) {
             ← Library
           </a>
           <b className="ellipsis ed-title">{p.title}</b>
+          {p.kind === 'song' && (
+            <div
+              className="row"
+              style={{
+                background: 'var(--bg)',
+                borderRadius: 6,
+                padding: 2,
+                border: '1px solid var(--line)',
+                margin: '0 4px',
+              }}
+            >
+              <button
+                type="button"
+                className={`small ${(songMode ?? 'canvas') === 'reflow' ? 'on' : 'ghost'}`}
+                style={{ fontWeight: 600 }}
+                onClick={() => setSongMode('reflow')}
+              >
+                Script
+              </button>
+              <button
+                type="button"
+                className={`small ${(songMode ?? 'canvas') === 'canvas' ? 'on' : 'ghost'}`}
+                style={{ fontWeight: 600 }}
+                onClick={() => setSongMode('canvas')}
+              >
+                Canvas
+              </button>
+            </div>
+          )}
           <button
             type="button"
             className="primary"
@@ -550,15 +579,6 @@ export function EditorView({ id }: { id: string }) {
             ]}
           />
           <span className="spacer" />
-          {p.kind === 'song' && (
-            <button
-              type="button"
-              className={`small ${(songMode ?? 'canvas') === 'reflow' ? 'on' : ''}`}
-              onClick={() => setSongMode((m) => ((m ?? 'canvas') === 'reflow' ? 'canvas' : 'reflow'))}
-            >
-              {(songMode ?? 'canvas') === 'reflow' ? 'Canvas' : 'Script'}
-            </button>
-          )}
           <button type="button" onClick={() => setFinding(true)} title="Find and replace (Ctrl+F)">
             Find…
           </button>
@@ -583,6 +603,35 @@ export function EditorView({ id }: { id: string }) {
             {p.title}
           </b>
           <span className="muted small">rev {ed.base?.rev}</span>
+          {p.kind === 'song' && (
+            <div
+              className="row"
+              style={{
+                background: 'var(--bg)',
+                borderRadius: 6,
+                padding: 2,
+                border: '1px solid var(--line)',
+                margin: '0 4px',
+              }}
+            >
+              <button
+                type="button"
+                className={`small ${(songMode ?? 'reflow') === 'reflow' ? 'on' : 'ghost'}`}
+                style={{ fontWeight: 600 }}
+                onClick={() => setSongMode('reflow')}
+              >
+                Lyric Script
+              </button>
+              <button
+                type="button"
+                className={`small ${(songMode ?? 'reflow') === 'canvas' ? 'on' : 'ghost'}`}
+                style={{ fontWeight: 600 }}
+                onClick={() => setSongMode('canvas')}
+              >
+                Slide Canvas
+              </button>
+            </div>
+          )}
           <button
             type="button"
             className="primary"
@@ -649,17 +698,6 @@ export function EditorView({ id }: { id: string }) {
 
           <span className="spacer" />
 
-          {p.kind === 'song' && (
-            <button
-              type="button"
-              className={`small ${(songMode ?? 'reflow') === 'reflow' ? 'on' : ''}`}
-              onClick={() => setSongMode((m) => ((m ?? 'reflow') === 'reflow' ? 'canvas' : 'reflow'))}
-              title="Toggle between Lyric Script and Slide Canvas view"
-            >
-              {(songMode ?? 'reflow') === 'reflow' ? 'Canvas View' : 'Lyric Script'}
-            </button>
-          )}
-
           <button type="button" onClick={() => setFinding(true)} title="Find and replace (Ctrl+F)">
             Find…
           </button>
@@ -710,7 +748,11 @@ export function EditorView({ id }: { id: string }) {
         />
       ) : (
         <>
-          <SlidesPanel p={p} readOnly={readOnly} />
+          <SlidesPanel
+            p={p}
+            readOnly={readOnly}
+            onSwitchToReflow={p.kind === 'song' ? () => setSongMode('reflow') : undefined}
+          />
           <div className="stagewrap">
             {readOnly && (
               <div className="banner" style={{ margin: 8 }} data-locked-banner>

@@ -94,7 +94,15 @@ function SlideItem(props: {
  * delete sections; add, duplicate, split, merge slides. Slides drag across sections: the slide list is one
  * flat sortable of section headers and slides (components/sortableMath.ts flatSlideMove).
  */
-export function SlidesPanel({ p, readOnly }: { p: Presentation; readOnly: boolean }) {
+export function SlidesPanel({
+  p,
+  readOnly,
+  onSwitchToReflow,
+}: {
+  p: Presentation;
+  readOnly: boolean;
+  onSwitchToReflow?: () => void;
+}) {
   const slideId = useEditor((s) => s.slideId);
   const themes = useLibrary((s) => s.data.themes);
   const theme = themeOf(p, themes);
@@ -148,6 +156,19 @@ export function SlidesPanel({ p, readOnly }: { p: Presentation; readOnly: boolea
         overflow: 'hidden',
       }}
     >
+      {onSwitchToReflow && (
+        <div style={{ padding: '8px 8px 4px' }}>
+          <button
+            type="button"
+            className="small"
+            style={{ width: '100%', justifyContent: 'center' }}
+            onClick={onSwitchToReflow}
+            title="Switch back to full-song lyric script view"
+          >
+            ← Lyric Script View
+          </button>
+        </div>
+      )}
       <div
         ref={(el) => {
           slides.ref(el);
