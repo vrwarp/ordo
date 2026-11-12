@@ -88,6 +88,13 @@ type Rect = {
   shadowColor: string;
 };
 
+export type LineMaskStrap = { x: number; y: number; w: number; h: number };
+export type LineMaskPlan = {
+  straps: LineMaskStrap[];
+  fill?: string;
+  gradient?: Gradient;
+};
+
 /** What `paintRich` draws for one layout, independent of the device scale. */
 export type PaintPlan = {
   /** The text fill box (logical px), or null. */
@@ -102,6 +109,9 @@ export type PaintPlan = {
   glow: { radius: number; color: string; fill: string } | null;
   /** The box's gradient text paint (`style.paint`), or null. */
   paint: Gradient | null;
+  /** ProPresenter line-fill mask straps (`style.lineMask`), or null. */
+  lineMask: LineMaskPlan | null;
+  lineMasks?: LineMaskStrap[];
 };
 
 const plans = new WeakMap<RichLayout, { o: TextObject; plan: PaintPlan }>();
@@ -116,12 +126,26 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
     ctx.textBaseline = 'alphabetic';
     ctx.textAlign = 'left';
     const state = new TextState(ctx);
-    // 1. Fill box and highlights.
+    // 1. Fill box, line masks and highlights.
     if (plan.box) {
       const b = plan.box;
       state.fill(b.color);
       roundRect(ctx, b.x, b.y, b.w, b.h, b.radius);
       ctx.fill();
+    }
+    if (plan.lineMask && plan.lineMask.straps.length > 0) {
+      const lm = plan.lineMask;
+      if (lm.gradient) {
+        const b = o.box;
+        const g = gradientStyle(ctx, lm.gradient, b.w, b.h, 0, { x0: b.x, y0: b.y });
+        const grad = typeof g === 'object' && g !== null && 'style' in g ? g.style : g;
+        state.paint(grad as CanvasGradient);
+      } else if (lm.fill) {
+        state.fill(lm.fill);
+      }
+      for (const r of lm.straps) {
+        ctx.fillRect(r.x, r.y, r.w, r.h);
+      }
     }
     for (const r of plan.highlights) {
       state.fill(r.color);
@@ -245,6 +269,55 @@ function buildPlan(o: TextObject, l: RichLayout): PaintPlan {
   const lines = l.lines.filter(
     (line) => !hidden[line.para] && line.top + line.height >= lo && line.top <= hi,
   );
+  let lineMask: LineMaskPlan | null = null;
+  const lm = o.style.lineMask;
+  if (lm && (lm.fill || lm.gradient)) {
+    const visibleLines = lines.filter(
+      (ln) =>
+        ln.segs.some((seg) => /[^\s\u200b-\u200d\ufeff]/.test(segText(o.text, seg.start, seg.end, 'none'))) ||
+        !!ln.bullet,
+    );
+    if (visibleLines.length > 0) {
+      const maxLineW = Math.max(...visibleLines.map((ln) => ln.w));
+      const straps: LineMaskStrap[] = [];
+      const hOff = lm.heightOffsetPx ?? 0;
+      const vOff = lm.vOffsetPx ?? 0;
+      const wOff = lm.widthOffsetPx ?? 0;
+      const hShift = lm.hOffsetPx ?? 0;
+      const maskStyle = lm.style ?? 'fullWidth';
+      for (const ln of visibleLines) {
+        const F = ln.segs.length
+          ? Math.max(...ln.segs.map((s) => s.sizePx))
+          : o.style.fontSizePx * l.fontScale;
+        const h = Math.max(0, F * 1.2 + hOff);
+        const y = ln.baseline - F * 0.9 - hOff / 2 + vOff;
+        let w = 0;
+        let x = 0;
+        if (maskStyle === 'fullWidth') {
+          w = Math.max(0, o.box.w + wOff);
+          x = o.box.x - wOff / 2 + hShift;
+        } else if (maskStyle === 'lineWidth') {
+          w = Math.max(0, ln.w + wOff);
+          x = ln.x - wOff / 2 + hShift;
+        } else if (maskStyle === 'maxLineWidth') {
+          w = Math.max(0, maxLineW + wOff);
+          const baseX =
+            o.style.align === 'left'
+              ? o.box.x
+              : o.style.align === 'right'
+                ? o.box.x + o.box.w - maxLineW
+                : o.box.x + (o.box.w - maxLineW) / 2;
+          x = baseX - wOff / 2 + hShift;
+        }
+        straps.push({ x, y, w, h });
+      }
+      lineMask = {
+        straps,
+        ...(lm.fill ? { fill: css(lm.fill) } : {}),
+        ...(lm.gradient ? { gradient: lm.gradient } : {}),
+      };
+    }
+  }
   const plan: PaintPlan = {
     box: null,
     highlights: [],
@@ -253,6 +326,8 @@ function buildPlan(o: TextObject, l: RichLayout): PaintPlan {
     bullets: [],
     glow: null,
     paint: style.paint ?? null,
+    lineMask,
+    lineMasks: lineMask?.straps ?? [],
   };
   if (style.fill && o.text.trim()) {
     const ins = insetsOf(style);

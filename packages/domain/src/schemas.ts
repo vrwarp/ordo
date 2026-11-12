@@ -221,6 +221,17 @@ export type ArrowEnd = z.infer<typeof ArrowEnd>;
  * Slide.safeParse in this one. An older build strips them all and draws the legacy values beside them.
  */
 
+export const TextLineMask = z.object({
+  style: z.enum(['fullWidth', 'lineWidth', 'maxLineWidth']).catch('fullWidth'),
+  heightOffsetPx: z.number().min(-2000).max(2000).optional(),
+  vOffsetPx: z.number().min(-2000).max(2000).optional(),
+  widthOffsetPx: z.number().min(-4000).max(4000).optional(),
+  hOffsetPx: z.number().min(-4000).max(4000).optional(),
+  fill: Rgba.optional(),
+  gradient: Gradient.optional(),
+});
+export type TextLineMask = z.infer<typeof TextLineMask>;
+
 export const TextStyle = z.object({
   fontFamily: z.string().max(300),
   fontWeight: z.number().min(0).max(1000).default(400),
@@ -262,6 +273,8 @@ export const TextStyle = z.object({
   glow: Glow.optional(),
   /** Gradient text: the glyphs of runs without their own colour are painted with it, over the box. */
   paint: Gradient.optional(),
+  /** ProPresenter line-fill mask: paints per-line backing straps with `fill` or `gradient` over the box. */
+  lineMask: TextLineMask.optional(),
 });
 export type TextStyle = z.infer<typeof TextStyle>;
 
@@ -394,6 +407,8 @@ export const ImageObject = z.object({
    * without one (design/27 §3.1).
    */
   mask: ShapeGeom.optional(),
+  shadow: Shadow.optional(),
+  softEdge: length.optional(),
   ...common,
 });
 export type ImageObject = z.infer<typeof ImageObject>;

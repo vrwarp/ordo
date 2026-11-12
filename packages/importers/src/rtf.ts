@@ -1,5 +1,37 @@
 import type { Rgba } from '@ordo/domain';
 
+export interface RtfSpan {
+  start: number;
+  end: number;
+  fontName?: string;
+  fontSizePt?: number;
+  color?: Rgba;
+  highlight?: Rgba;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strike?: boolean;
+  /** Superscript (+0.33), subscript (-0.2), or \upN / \dnN shift as fraction of font size. */
+  baseline?: number;
+  caps?: 'all' | 'small';
+  /** Character tracking in points (\expndtwN / 20, or \expndN / 4). */
+  letterSpacingPt?: number;
+  strokeWidth?: number;
+  strokeColor?: Rgba;
+}
+
+export interface RtfPara {
+  align?: 'left' | 'center' | 'right' | 'justify';
+  indentPt?: number;
+  firstLinePt?: number;
+  spaceBeforePt?: number;
+  spaceAfterPt?: number;
+  lineSpacing?: number;
+  leadingPt?: number;
+  bulletChar?: string;
+  isBullet?: boolean;
+}
+
 /** Plain text and the first run's character style extracted from an RTF document. */
 export interface RtfResult {
   text: string;
@@ -22,9 +54,21 @@ export interface RtfResult {
   lineSpacing?: number;
   /** The first run's paragraph: `\saN` space after it, in points. */
   spaceAfterPt?: number;
+  /** Cocoa `\slleadingN` extra line spacing / leading in points (N / 20). */
+  leadingPt?: number;
+  /** True when RTF bullet/list markers (`\listtable`, `\listtext`, `\pntext`, `\ls`) were detected. */
+  hasBulletList?: boolean;
+  /** Paragraph left indent (`\liN`) in points (N / 20). */
+  indentPt?: number;
+  /** Paragraph first line indent (`\fiN`) in points (N / 20, negative for hanging). */
+  firstLinePt?: number;
+  /** Multi-run rich character spans covering ranges of `text`. */
+  spans?: RtfSpan[];
+  /** Per-paragraph styles for each newline-separated line in `text`. */
+  paras?: RtfPara[];
 }
 
-type Dest = 'text' | 'fonttbl' | 'colortbl' | 'skip';
+type Dest = 'text' | 'fonttbl' | 'colortbl' | 'expandedcolortbl' | 'listtext' | 'skip';
 
 /** Font names longer than this are cut (a real PostScript or family name is far shorter). */
 export const RTF_FONT_NAME_MAX = 200;
@@ -62,6 +106,174 @@ function wellFormed(s: string): string {
 }
 
 const clampInt = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.trunc(v)));
+
+function rgbaEqual(a?: Rgba, b?: Rgba): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.r === b.r && a.g === b.g && a.b === b.b && (a.a ?? 1) === (b.a ?? 1);
+}
+
+function sameSpanFormat(a: RtfSpan, b: RtfSpan): boolean {
+  return (
+    a.fontName === b.fontName &&
+    a.fontSizePt === b.fontSizePt &&
+    rgbaEqual(a.color, b.color) &&
+    rgbaEqual(a.highlight, b.highlight) &&
+    (a.bold ?? false) === (b.bold ?? false) &&
+    (a.italic ?? false) === (b.italic ?? false) &&
+    (a.underline ?? false) === (b.underline ?? false) &&
+    (a.strike ?? false) === (b.strike ?? false) &&
+    (a.baseline ?? 0) === (b.baseline ?? 0) &&
+    a.caps === b.caps &&
+    (a.letterSpacingPt ?? 0) === (b.letterSpacingPt ?? 0) &&
+    (a.strokeWidth ?? 0) === (b.strokeWidth ?? 0) &&
+    rgbaEqual(a.strokeColor, b.strokeColor)
+  );
+}
+
+function createSpan(
+  start: number,
+  end: number,
+  st: GroupState,
+  fonts: Map<number, string>,
+  colors: (Rgba | null)[],
+): RtfSpan {
+  const span: RtfSpan = { start, end };
+  const name = fonts.get(st.font);
+  if (name) span.fontName = name.slice(0, RTF_FONT_NAME_MAX);
+  if (st.fsSeen) span.fontSizePt = st.fs / 2;
+  const col = colors[st.cf];
+  if (col) span.color = col;
+  if (st.cb > 0) {
+    const h = colors[st.cb];
+    if (h) span.highlight = h;
+  }
+  if (st.b) span.bold = true;
+  if (st.i) span.italic = true;
+  if (st.ul) span.underline = true;
+  if (st.strike) span.strike = true;
+  if (st.baseline) span.baseline = st.baseline;
+  if (st.caps) span.caps = st.caps;
+  if (st.expndTwips) span.letterSpacingPt = Math.round((st.expndTwips / 20) * 100) / 100;
+  if (st.strokeWidth) span.strokeWidth = st.strokeWidth;
+  if (st.strokeWidth && st.strokeColor > 0) {
+    const sc = colors[st.strokeColor];
+    if (sc) span.strokeColor = sc;
+  }
+  return span;
+}
+
+function snapshotPara(st: GroupState, docSlleading: number, bulletChar?: string): RtfPara {
+  const p: RtfPara = {};
+  if (st.alignSeen) p.align = st.align;
+  if (st.li) p.indentPt = Math.round((st.li / 20) * 100) / 100;
+  if (st.fi) p.firstLinePt = Math.round((st.fi / 20) * 100) / 100;
+  if (st.sb > 0) p.spaceBeforePt = Math.round((st.sb / 20) * 100) / 100;
+  if (st.sa > 0) p.spaceAfterPt = Math.round((st.sa / 20) * 100) / 100;
+  if (st.slmult && st.sl > 0) p.lineSpacing = Math.round((st.sl / 240) * 100) / 100;
+  const leading = st.slleading > 0 ? st.slleading : docSlleading;
+  if (leading > 0) p.leadingPt = Math.min(500, Math.round((leading / 20) * 100) / 100);
+  if (bulletChar) p.bulletChar = bulletChar;
+  if (bulletChar || st.isBullet) p.isBullet = true;
+  return p;
+}
+
+function tidyWithOffsets(
+  rawText: string,
+  rawSpans: RtfSpan[],
+  rawParas: RtfPara[],
+): { text: string; spans: RtfSpan[]; paras: RtfPara[] } {
+  const lines = rawText.split('\n');
+  const trimmedLens = new Int32Array(lines.length);
+  const trimmedLines: string[] = new Array(lines.length);
+
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]!;
+    let end = l.length;
+    while (end > 0 && (l.charCodeAt(end - 1) === 32 || l.charCodeAt(end - 1) === 9)) end--;
+    trimmedLens[i] = end;
+    trimmedLines[i] = end === l.length ? l : l.slice(0, end);
+  }
+
+  let a = 0;
+  let b = lines.length;
+  while (a < b && trimmedLines[a] === '') a++;
+  while (b > a && trimmedLines[b - 1] === '') b--;
+
+  if (a >= b) {
+    return { text: '', spans: [], paras: [] };
+  }
+
+  const survivingLines = trimmedLines.slice(a, b);
+  const text = survivingLines.join('\n');
+
+  const rawLineStarts = new Int32Array(lines.length);
+  let rawOffset = 0;
+  for (let i = 0; i < lines.length; i++) {
+    rawLineStarts[i] = rawOffset;
+    rawOffset += lines[i]!.length + 1;
+  }
+
+  const resLineStarts = new Int32Array(b - a);
+  let resOffset = 0;
+  for (let i = a; i < b; i++) {
+    resLineStarts[i - a] = resOffset;
+    resOffset += trimmedLens[i]! + 1;
+  }
+
+  function findLine(pos: number): number {
+    let low = 0;
+    let high = lines.length - 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      const start = rawLineStarts[mid]!;
+      const nextStart = mid + 1 < lines.length ? rawLineStarts[mid + 1]! : Number.POSITIVE_INFINITY;
+      if (pos < start) high = mid - 1;
+      else if (pos >= nextStart) low = mid + 1;
+      else return mid;
+    }
+    return Math.max(0, Math.min(lines.length - 1, low));
+  }
+
+  function mapOffset(pos: number): number {
+    if (pos <= 0) return 0;
+    if (pos >= rawText.length) return text.length;
+    const i = findLine(pos);
+    if (i < a) return 0;
+    if (i >= b) return text.length;
+    const col = pos - rawLineStarts[i]!;
+    const tLen = trimmedLens[i]!;
+    const rStart = resLineStarts[i - a]!;
+    if (col <= tLen) {
+      return rStart + col;
+    }
+    return rStart + tLen;
+  }
+
+  const remapped: RtfSpan[] = [];
+  for (const s of rawSpans) {
+    const start = mapOffset(s.start);
+    const end = mapOffset(s.end);
+    if (end <= start) continue;
+    const span: RtfSpan = { ...s, start, end };
+    if (remapped.length > 0) {
+      const prev = remapped[remapped.length - 1]!;
+      if (prev.end === span.start && sameSpanFormat(prev, span)) {
+        prev.end = span.end;
+        continue;
+      }
+    }
+    remapped.push(span);
+  }
+
+  if (remapped.length > 2000) remapped.length = 2000;
+
+  while (rawParas.length < lines.length) rawParas.push({});
+  const paras = rawParas.slice(a, b);
+  if (paras.length > 1000) paras.length = 1000;
+
+  return { text, spans: remapped, paras };
+}
 
 /**
  * Encoding (WHATWG label) for an RTF `\fcharsetN`. 0 (ANSI) and 1 (default) follow the document's
@@ -124,10 +336,22 @@ interface GroupState {
   uc: number;
   strokeWidth: number;
   strokeColor: number;
-  /** Paragraph spacing (`\saN`, `\slN`, `\slmultN`), in twips; reset by `\pard`. */
+  /** Paragraph spacing (`\saN`, `\sbN`, `\slN`, `\slmultN`), in twips; reset by `\pard`. */
   sa: number;
+  sb: number;
   sl: number;
   slmult: boolean;
+  slleading: number;
+  li: number;
+  fi: number;
+  ul: boolean;
+  strike: boolean;
+  baseline: number;
+  caps?: 'all' | 'small';
+  cb: number;
+  expndTwips: number;
+  expndTwipsExplicit: boolean;
+  isBullet: boolean;
 }
 
 /** Destinations whose contents are not body text. */
@@ -157,7 +381,6 @@ const SKIP_DESTS = new Set([
   'fldinst',
   'object',
   'generator',
-  'expandedcolortbl',
   'mmathPr',
   'pgdsctbl',
   'nonshppict',
@@ -259,7 +482,8 @@ export function rtfBytesToString(bytes: Uint8Array): string {
 
 /**
  * A small RTF reader: extracts plain text (handling `\par`, `\line`, `\'hh`, `\uN`, groups and ignorable
- * destinations) and the first run's font, size, colour, weight, alignment and stroke.
+ * destinations) and the first run's font, size, colour, weight, alignment and stroke, plus multi-run character
+ * spans and per-paragraph styles.
  */
 export function parseRtf(input: string | Uint8Array): RtfResult {
   if (!isRtf(input)) return plainTextResult(input);
@@ -277,6 +501,12 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
   let fontName = '';
   let colorDraft: { r?: number; g?: number; b?: number } = {};
 
+  // Cocoa expandedcolortbl tracking
+  let expColorIdx = 0;
+  let expComponents: number[] = [];
+  let expAlpha: number | undefined;
+  let expColorSpace: 'srgb' | 'genericrgb' | 'gray' | 'cmyk' | undefined;
+
   const initial: GroupState = {
     dest: 'text',
     font: 0,
@@ -291,17 +521,42 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
     strokeWidth: 0,
     strokeColor: 0,
     sa: 0,
+    sb: 0,
     sl: 0,
     slmult: false,
+    slleading: 0,
+    li: 0,
+    fi: 0,
+    ul: false,
+    strike: false,
+    baseline: 0,
+    caps: undefined,
+    cb: 0,
+    expndTwips: 0,
+    expndTwipsExplicit: false,
+    isBullet: false,
   };
   const stack: GroupState[] = [];
   let st: GroupState = { ...initial };
   let out = '';
+  const rawSpans: RtfSpan[] = [];
+  const rawParas: RtfPara[] = [];
+  let curLineIndex = 0;
+  let curBulletChar: string | undefined;
+
+  let docSlleading = 0;
+  const syncCurrentPara = () => {
+    if (st.dest === 'text') {
+      rawParas[curLineIndex] = snapshotPara(st, docSlleading, curBulletChar);
+    }
+  };
+  syncCurrentPara();
   /** No visible character yet: blank lines are dropped as they arrive (tidyLines would drop them anyway). */
   let leading = true;
   let first: GroupState | null = null;
   const styleKeys = new Set<string>();
   let skipChars = 0;
+  let hasBulletList = false;
   /** True right after `{` until the first control word: used to detect `{\*\dest ...}`. */
   let groupStart = false;
   let starPending = false;
@@ -331,6 +586,43 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
       }
       return;
     }
+    if (st.dest === 'expandedcolortbl') {
+      for (const ch of chars) {
+        if (ch === ';') {
+          if (expComponents.length >= 3 && (expColorSpace === 'srgb' || !colors[expColorIdx])) {
+            colors[expColorIdx] = {
+              r: Math.round((expComponents[0]! / 100_000) * 255),
+              g: Math.round((expComponents[1]! / 100_000) * 255),
+              b: Math.round((expComponents[2]! / 100_000) * 255),
+              a: expAlpha ?? colors[expColorIdx]?.a ?? 1,
+            };
+          } else if (expComponents.length >= 3 && expAlpha !== undefined && colors[expColorIdx]) {
+            colors[expColorIdx] = { ...colors[expColorIdx]!, a: expAlpha };
+          } else if ((expColorSpace === 'gray' || expComponents.length === 1) && expComponents.length >= 1) {
+            const v = Math.round((expComponents[0]! / 100_000) * 255);
+            colors[expColorIdx] = {
+              r: v,
+              g: v,
+              b: v,
+              a: expAlpha ?? colors[expColorIdx]?.a ?? 1,
+            };
+          }
+          expColorIdx++;
+          expComponents = [];
+          expAlpha = undefined;
+          expColorSpace = undefined;
+        }
+      }
+      return;
+    }
+    if (st.dest === 'listtext') {
+      const m = /\S/.exec(chars);
+      if (m && !curBulletChar) {
+        curBulletChar = m[0];
+        syncCurrentPara();
+      }
+      return;
+    }
     let text = chars;
     if (skipChars > 0) {
       const n = Math.min(skipChars, text.length);
@@ -339,19 +631,52 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
     }
     if (!text || out.length >= RTF_TEXT_MAX) return;
     if (leading) {
-      if (/[^ \t\n\u00a0]/.test(text)) leading = false;
-      else {
+      if (/[^ \t\n\u00a0]/.test(text)) {
+        leading = false;
+      } else {
         out += text;
         const nl = out.lastIndexOf('\n');
-        if (nl >= 0) out = out.slice(nl + 1);
+        if (nl >= 0) {
+          out = out.slice(nl + 1);
+          rawParas.length = 0;
+          curLineIndex = 0;
+          syncCurrentPara();
+        }
         return;
       }
     }
     if (/\S/.test(text) && text !== '\n') {
       if (!first) first = { ...st };
-      styleKeys.add(`${st.font}|${st.fs}|${st.cf}|${st.b}|${st.i}|${st.strokeWidth}|${st.strokeColor}`);
+      styleKeys.add(
+        `${st.font}|${st.fs}|${st.cf}|${st.b}|${st.i}|${st.strokeWidth}|${st.strokeColor}|${st.ul}|${st.strike}|${st.baseline}|${st.caps}|${st.cb}|${st.expndTwips}`,
+      );
     }
-    out += text.length > RTF_TEXT_MAX - out.length ? text.slice(0, RTF_TEXT_MAX - out.length) : text;
+    const toAppend =
+      text.length > RTF_TEXT_MAX - out.length ? text.slice(0, RTF_TEXT_MAX - out.length) : text;
+    for (let i = 0; i < toAppend.length; i++) {
+      if (toAppend[i] === '\n') {
+        syncCurrentPara();
+        curBulletChar = undefined;
+        curLineIndex++;
+        syncCurrentPara();
+      }
+    }
+    const start = out.length;
+    out += toAppend;
+    const end = out.length;
+    syncCurrentPara();
+    if (end > start) {
+      const span = createSpan(start, end, st, fonts, colors);
+      if (
+        rawSpans.length > 0 &&
+        rawSpans[rawSpans.length - 1]!.end === start &&
+        sameSpanFormat(rawSpans[rawSpans.length - 1]!, span)
+      ) {
+        rawSpans[rawSpans.length - 1]!.end = end;
+      } else {
+        rawSpans.push(span);
+      }
+    }
   };
 
   /** The encoding `\'hh` escapes are in right now (the current font's charset, else the document's). */
@@ -421,6 +746,21 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
         const wasGroupStart = groupStart;
         groupStart = false;
         if (wasGroupStart || starPending) {
+          if (word === 'expandedcolortbl') {
+            starPending = false;
+            st.dest = 'expandedcolortbl';
+            expColorIdx = 0;
+            expComponents = [];
+            expAlpha = undefined;
+            expColorSpace = undefined;
+            continue;
+          }
+          if (word === 'listtext' || word === 'pntext') {
+            starPending = false;
+            hasBulletList = true;
+            st.dest = 'listtext';
+            continue;
+          }
           if (starPending) {
             starPending = false;
             st.dest = 'skip';
@@ -435,6 +775,9 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
             continue;
           }
           if (SKIP_DESTS.has(word)) {
+            if (word === 'listtable' || word === 'listoverridetable') {
+              hasBulletList = true;
+            }
             st.dest = 'skip';
             continue;
           }
@@ -499,6 +842,33 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
   }
 
   function controlWord(word: string, num: number | undefined) {
+    if (st.dest === 'expandedcolortbl') {
+      if (word === 'c') {
+        expComponents.push(clampInt(num ?? 0, 0, 100_000));
+        return;
+      }
+      if (word === 'ca') {
+        expAlpha = clampInt(num ?? 0, 0, 100_000) / 100_000;
+        return;
+      }
+      if (word === 'cssrgb') {
+        expColorSpace = 'srgb';
+        return;
+      }
+      if (word === 'csgenericrgb') {
+        expColorSpace = 'genericrgb';
+        return;
+      }
+      if (word === 'csgray') {
+        expColorSpace = 'gray';
+        return;
+      }
+      if (word === 'csdevicecmyk') {
+        expColorSpace = 'cmyk';
+        return;
+      }
+      return;
+    }
     switch (word) {
       case 'par':
       case 'line':
@@ -559,45 +929,146 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
       case 'i':
         st.i = num !== 0;
         return;
+      case 'ul':
+        st.ul = num !== 0;
+        return;
+      case 'ulnone':
+        st.ul = false;
+        return;
+      case 'uld':
+      case 'uldb':
+      case 'ulw':
+      case 'ulwave':
+      case 'ulth':
+      case 'uldot':
+      case 'uldash':
+      case 'uldashd':
+      case 'uldashdd':
+        st.ul = true;
+        return;
+      case 'strike':
+      case 'striked':
+        st.strike = num !== 0;
+        return;
+      case 'super':
+        st.baseline = 0.33;
+        return;
+      case 'sub':
+        st.baseline = -0.2;
+        return;
+      case 'nosupersub':
+        st.baseline = 0;
+        return;
+      case 'up':
+        st.baseline = Math.round(((num ?? 0) / (st.fs > 0 ? st.fs : 24)) * 1000) / 1000;
+        return;
+      case 'dn':
+        st.baseline = Math.round(-((num ?? 0) / (st.fs > 0 ? st.fs : 24)) * 1000) / 1000;
+        return;
+      case 'caps':
+        st.caps = num !== 0 ? 'all' : undefined;
+        return;
+      case 'scaps':
+        st.caps = num !== 0 ? 'small' : undefined;
+        return;
+      case 'cb':
+      case 'chcbpat':
+      case 'highlight':
+        st.cb = clampInt(num ?? 0, 0, 1000);
+        return;
+      case 'expndtw':
+        st.expndTwips = clampInt(num ?? 0, -20_000, 20_000);
+        st.expndTwipsExplicit = true;
+        return;
+      case 'expnd':
+        if (!st.expndTwipsExplicit) st.expndTwips = clampInt((num ?? 0) * 5, -20_000, 20_000);
+        return;
+      case 'kerning':
+        if (num === 0) st.expndTwips = 0;
+        return;
       case 'plain':
         st.font = 0;
         st.fs = 24;
         st.cf = 0;
         st.b = false;
         st.i = false;
+        st.ul = false;
+        st.strike = false;
+        st.baseline = 0;
+        st.caps = undefined;
+        st.cb = 0;
+        st.expndTwips = 0;
+        st.expndTwipsExplicit = false;
         st.strokeWidth = 0;
         st.strokeColor = 0;
         return;
       case 'pard':
         st.align = 'left';
         st.sa = 0;
+        st.sb = 0;
         st.sl = 0;
         st.slmult = false;
+        st.slleading = 0;
+        st.li = 0;
+        st.fi = 0;
+        st.isBullet = false;
+        syncCurrentPara();
         return;
       case 'sa':
         st.sa = clampInt(num ?? 0, 0, 20_000);
+        syncCurrentPara();
+        return;
+      case 'sb':
+        st.sb = clampInt(num ?? 0, 0, 20_000);
+        syncCurrentPara();
         return;
       case 'sl':
         st.sl = clampInt(num ?? 0, -20_000, 20_000);
+        syncCurrentPara();
         return;
       case 'slmult':
         st.slmult = num === 1;
+        syncCurrentPara();
+        return;
+      case 'slleading':
+        st.slleading = clampInt(num ?? 0, 0, 20_000);
+        if (st.slleading > docSlleading) docSlleading = st.slleading;
+        syncCurrentPara();
+        return;
+      case 'li':
+        st.li = clampInt(num ?? 0, -20_000, 20_000);
+        syncCurrentPara();
+        return;
+      case 'fi':
+        st.fi = clampInt(num ?? 0, -20_000, 20_000);
+        syncCurrentPara();
+        return;
+      case 'ls':
+        if (num !== undefined && num > 0) {
+          hasBulletList = true;
+          st.isBullet = true;
+        }
+        syncCurrentPara();
         return;
       case 'qc':
         st.align = 'center';
         st.alignSeen = true;
+        syncCurrentPara();
         return;
       case 'ql':
         st.align = 'left';
         st.alignSeen = true;
+        syncCurrentPara();
         return;
       case 'qr':
         st.align = 'right';
         st.alignSeen = true;
+        syncCurrentPara();
         return;
       case 'qj':
         st.align = 'justify';
         st.alignSeen = true;
+        syncCurrentPara();
         return;
       case 'strokewidth':
         st.strokeWidth = clampInt(num ?? 0, -2000, 2000);
@@ -620,9 +1091,14 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
   }
 
   flushBytes();
-  const text = wellFormed(tidyLines(out));
+  const tidied = tidyWithOffsets(out, rawSpans, rawParas);
+  const text = wellFormed(tidied.text);
+  const spans = tidied.spans;
+  const paras = tidied.paras;
   const f = first as GroupState | null;
   const res: RtfResult = { text, bold: false, italic: false, styleRuns: styleKeys.size };
+  if (spans.length > 0) res.spans = spans;
+  if (paras.length > 0) res.paras = paras;
   if (f) {
     const name = fonts.get(f.font);
     if (name) res.fontName = name.slice(0, RTF_FONT_NAME_MAX);
@@ -635,12 +1111,17 @@ export function parseRtf(input: string | Uint8Array): RtfResult {
     // `\slN\slmult1`: N/240 lines (240 twips is single spacing); an exact or at-least `\sl` is not a multiple.
     if (f.slmult && f.sl > 0) res.lineSpacing = Math.round((f.sl / 240) * 100) / 100;
     if (f.sa > 0) res.spaceAfterPt = f.sa / 20;
+    const leading = f.slleading > 0 ? f.slleading : docSlleading;
+    if (leading > 0) res.leadingPt = Math.min(500, Math.round((leading / 20) * 100) / 100);
+    if (f.li) res.indentPt = Math.round((f.li / 20) * 100) / 100;
+    if (f.fi) res.firstLinePt = Math.round((f.fi / 20) * 100) / 100;
     if (f.strokeWidth) {
       res.strokeWidth = f.strokeWidth;
       const sc = colors[f.strokeColor];
       if (sc) res.strokeColor = sc;
     }
   }
+  if (hasBulletList) res.hasBulletList = true;
   return res;
 }
 

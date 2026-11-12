@@ -33,6 +33,7 @@ export const RICH_STYLE_KEYS = [
   'underline',
   'glow',
   'paint',
+  'lineMask',
 ] as const satisfies readonly (keyof TextStyle)[];
 
 /**

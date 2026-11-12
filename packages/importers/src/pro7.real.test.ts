@@ -82,14 +82,9 @@ describe('files written by ProPresenter 7', () => {
       ['Verse 3', 3],
       ['Verse 4', 3],
     ]);
-    // The gradient box fill (its first stop) fills the whole box: a rectangle behind the words.
-    const [box, first] = p!.sections[0]!.slides[0]!.objects;
-    expect(box).toMatchObject({
-      type: 'shape',
-      shape: 'rect',
-      box: { x: 0, y: 409.76, w: 1920, h: 207.52, rotation: 0 },
-      fill: { r: 88, g: 13, b: 114, a: 1 },
-    });
+    // The element has textLineMask (LINE_MASK_STYLE_MAX_LINE_WIDTH) with a 315° (45° CW) gradient fill.
+    const [first] = p!.sections[0]!.slides[0]!.objects;
+    expect(p!.sections[0]!.slides[0]!.objects).toHaveLength(1);
     if (!first) throw new Error('no text');
     expect(first.type).toBe('text');
     if (first.type !== 'text') return;
@@ -101,9 +96,24 @@ describe('files written by ProPresenter 7', () => {
       transform: 'uppercase',
       align: 'center',
       valign: 'top',
-      padding: 20,
+      padding: 0,
+      insets: { l: 5, t: 20, r: 5, b: 0 },
       // strokeWidth -3 is 3% of the font size, as Cocoa stores it.
       outline: { width: 2, color: { r: 0, g: 0, b: 0, a: 1 } },
+      lineMask: {
+        style: 'maxLineWidth',
+        heightOffsetPx: -8,
+        widthOffsetPx: 97,
+        fill: { r: 88, g: 13, b: 114, a: 1 },
+        gradient: {
+          kind: 'linear',
+          angle: 45,
+          stops: [
+            { at: 0, color: { r: 88, g: 13, b: 114, a: 1 } },
+            { at: 1, color: { r: 252, g: 16, b: 26, a: 1 } },
+          ],
+        },
+      },
     });
     expect(first.style.fill).toBeUndefined();
     expect(first.box).toEqual({ x: 0, y: 409.76, w: 1920, h: 207.52, rotation: 0 });

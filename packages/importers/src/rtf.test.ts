@@ -20,6 +20,24 @@ two\pard\sa0 three}`);
     expect(parseRtf(String.raw`{\rtf1\ansi\pard\sl-300 exact}`).lineSpacing).toBeUndefined();
   });
 
+  it('extracts Cocoa \\slleading line spacing without overwriting \\sl\\slmult', () => {
+    const r = parseRtf(
+      String.raw`{\rtf1\ansi{\fonttbl\f0 Arial;}\pard\sl480\slmult1\slleading500\f0\fs24 Hello}`,
+    );
+    expect(r.lineSpacing).toBe(2);
+    expect(r.leadingPt).toBe(25);
+  });
+
+  it('detects bullet lists and skips \\listtext destination without duplicating bullets in text', () => {
+    const r = parseRtf(
+      String.raw`{\rtf1\ansi{\fonttbl\f0 Arial;}\pard\li820\fi-820{\listtext	\uc0\u8226 	}Point one\par{\listtext	\uc0\u8226 	}Point two}`,
+    );
+    expect(r.text).toBe('Point one\nPoint two');
+    expect(r.hasBulletList).toBe(true);
+    expect(r.indentPt).toBe(41);
+    expect(r.firstLinePt).toBe(-41);
+  });
+
   it('decodes hex escapes in the font charset: Big5 and GBK double-byte characters, ansicpg for the rest', () => {
     // Cocoa writes a Chinese run as Big5 bytes under a `\fcharset136` font (ProPresenter on a Mac).
     const big5 = String.raw`{\rtf1\ansi\ansicpg1252{\fonttbl\f0\fnil\fcharset0 Tahoma;\f1\fnil\fcharset136 PingFangTC;}
@@ -94,6 +112,108 @@ two\pard\sa0 three}`);
   it('accepts bytes', () => {
     const r = parseRtf(new TextEncoder().encode(String.raw`{\rtf1 Hi\par}`));
     expect(r.text).toBe('Hi');
+  });
+
+  it('overrides legacy colortbl entries with Cocoa expandedcolortbl', () => {
+    const rtf = String.raw`{\rtf1\ansi\ansicpg1252{\fonttbl\f0 Arial;}
+{\colortbl;\red0\green0\blue0;\red33\green40\blue44;}
+{\*\expandedcolortbl;;\cssrgb\c17088\c20858\c22823;}
+\pard\f0\fs24\cf2 Modern Cocoa Color}`;
+    const r = parseRtf(rtf);
+    expect(r.text).toBe('Modern Cocoa Color');
+    expect(r.color).toEqual({ r: 44, g: 53, b: 58, a: 1 });
+    expect(r.spans?.[0]?.color).toEqual({ r: 44, g: 53, b: 58, a: 1 });
+
+    // Test with alpha and csgray
+    const rtfGray = String.raw`{\rtf1\ansi{\fonttbl\f0 Arial;}
+{\colortbl;\red0\green0\blue0;}
+{\*\expandedcolortbl;\csgray\c50000\ca50000;}
+\pard\f0\fs24\cf1 Gray Alpha}`;
+    const rGray = parseRtf(rtfGray);
+    expect(rGray.color).toEqual({ r: 128, g: 128, b: 128, a: 0.5 });
+  });
+
+  it('extracts multi-run character spans with exact offsets through tidyLines trimming', () => {
+    const rtf = String.raw`{\rtf1\ansi{\fonttbl\f0 Arial;}{\colortbl;\red0\green0\blue0;\red255\green0\blue0;}
+\par
+\pard
+  The \b\cf2 quick\b0\cf1  brown fox  \par
+\par}`;
+    const r = parseRtf(rtf);
+    expect(r.text).toBe('  The quick brown fox');
+    expect(r.spans).toBeDefined();
+    expect(r.spans!.length).toBe(3);
+
+    const [s0, s1, s2] = r.spans!;
+    expect(r.text.slice(s0!.start, s0!.end)).toBe('  The ');
+    expect(s0!.bold).toBeUndefined();
+
+    expect(r.text.slice(s1!.start, s1!.end)).toBe('quick');
+    expect(s1!.bold).toBe(true);
+    expect(s1!.color).toEqual({ r: 255, g: 0, b: 0, a: 1 });
+
+    expect(r.text.slice(s2!.start, s2!.end)).toBe(' brown fox');
+    expect(s2!.bold).toBeUndefined();
+    expect(s2!.color).toEqual({ r: 0, g: 0, b: 0, a: 1 });
+
+    expect(s0!.start).toBe(0);
+    expect(s2!.end).toBe(r.text.length);
+  });
+
+  it('tracks underline, strike, super/subscript, small caps, highlight, and spaceBeforePt', () => {
+    const rtf = String.raw`{\rtf1\ansi{\fonttbl\f0 Arial;}{\colortbl;\red0\green0\blue0;\red255\green255\blue0;}
+\pard\sb120\sa60
+\f0\fs24
+\ul Underlined\ul0  
+\strike Striked\strike0  
+Normal\super Super\nosupersub  
+Normal\sub Sub\nosupersub  
+\scaps Small Caps\scaps0  
+\highlight2 Highlighted\highlight0
+\par\pard\sb240 Line two}`;
+    const r = parseRtf(rtf);
+    expect(r.paras).toBeDefined();
+    expect(r.paras!.length).toBe(2);
+    expect(r.paras![0]!.spaceBeforePt).toBe(6);
+    expect(r.paras![0]!.spaceAfterPt).toBe(3);
+    expect(r.paras![1]!.spaceBeforePt).toBe(12);
+
+    const spans = r.spans!;
+    const underSpan = spans.find((s) => r.text.slice(s.start, s.end).includes('Underlined'));
+    expect(underSpan?.underline).toBe(true);
+
+    const strikeSpan = spans.find((s) => r.text.slice(s.start, s.end).includes('Striked'));
+    expect(strikeSpan?.strike).toBe(true);
+
+    const superSpan = spans.find((s) => r.text.slice(s.start, s.end).includes('Super'));
+    expect(superSpan?.baseline).toBe(0.33);
+
+    const subSpan = spans.find((s) => r.text.slice(s.start, s.end).includes('Sub'));
+    expect(subSpan?.baseline).toBe(-0.2);
+
+    const scapsSpan = spans.find((s) => r.text.slice(s.start, s.end).includes('Small Caps'));
+    expect(scapsSpan?.caps).toBe('small');
+
+    const hlSpan = spans.find((s) => r.text.slice(s.start, s.end).includes('Highlighted'));
+    expect(hlSpan?.highlight).toEqual({ r: 255, g: 255, b: 0, a: 1 });
+  });
+
+  it('tracks letter spacing, baseline shifts, and bullet paragraph styles', () => {
+    const rtf = String.raw`{\rtf1\ansi{\fonttbl\f0 Arial;}
+\pard\li720\fi-360{\listtext\uc0\u8226\tab}Item 1\par
+\pard\li720\fi-360{\listtext\uc0\u8226\tab}\expndtw40\up6 Item 2}`;
+    const r = parseRtf(rtf);
+    expect(r.hasBulletList).toBe(true);
+    expect(r.paras).toBeDefined();
+    expect(r.paras!.length).toBe(2);
+    expect(r.paras![0]!.isBullet).toBe(true);
+    expect(r.paras![0]!.bulletChar).toBe('•');
+    expect(r.paras![0]!.indentPt).toBe(36);
+    expect(r.paras![0]!.firstLinePt).toBe(-18);
+
+    const item2Span = r.spans!.find((s) => r.text.slice(s.start, s.end).includes('Item 2'));
+    expect(item2Span?.letterSpacingPt).toBe(2);
+    expect(item2Span?.baseline).toBe(0.25);
   });
 });
 

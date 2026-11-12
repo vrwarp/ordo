@@ -53,4 +53,37 @@ describe('parseRtf resource bounds', () => {
     expect(parseRtf('{\\rtf1 a\\bin3 {{{b}').text).toBe('ab');
     expect(parseRtf('{\\rtf1 a\\bin999 xyz').text).toBe('a');
   });
+
+  it('finishes quickly (< 2s) with bounded spans and paras on 50,000 style switches and bullet paragraphs', () => {
+    const flood =
+      '{\\rtf1{\\colortbl;\\red255\\green0\\blue0;\\red0\\green0\\blue255;}' +
+      '{\\listtext •\\tab}\\cf1 a\\cf2 b\\b bold\\b0 \\i italic\\i0 \\par '.repeat(50_000) +
+      '}';
+    const t0 = Date.now();
+    const r = parseRtf(flood);
+    const elapsed = Date.now() - t0;
+    expect(elapsed).toBeLessThan(2000);
+    expect(r.text.length).toBeLessThanOrEqual(RTF_TEXT_MAX);
+    expect((r.spans ?? []).length).toBeLessThanOrEqual(2000);
+    expect((r.paras ?? []).length).toBeLessThanOrEqual(1000);
+  });
+
+  it('50,000 style switches and bullet paragraphs run in a bounded heap', async () => {
+    const r = await runBounded(
+      RTF,
+      `const src = '{\\\\rtf1{\\\\colortbl;\\\\red255\\\\green0\\\\blue0;\\\\red0\\\\green0\\\\blue255;}' +
+         '{\\\\listtext •\\\\tab}\\\\cf1 a\\\\cf2 b\\\\b bold\\\\b0 \\\\par '.repeat(50_000) + '}';
+       const out = mod.parseRtf(src);
+       return { textLen: out.text.length, spans: out.spans?.length ?? 0, paras: out.paras?.length ?? 0 };`,
+      null,
+      200,
+    );
+    expect(r.ok, r.ok ? '' : r.error).toBe(true);
+    if (r.ok) {
+      const v = r.value as { textLen: number; spans: number; paras: number };
+      expect(v.textLen).toBeLessThanOrEqual(RTF_TEXT_MAX);
+      expect(v.spans).toBeLessThanOrEqual(2000);
+      expect(v.paras).toBeLessThanOrEqual(1000);
+    }
+  }, 60_000);
 });

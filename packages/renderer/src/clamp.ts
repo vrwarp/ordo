@@ -16,6 +16,7 @@ import {
   type ShapeGeom,
   type Slide,
   type SlideObject,
+  type TextLineMask,
   type TextObject,
   type TextPara,
   type TextRun,
@@ -282,6 +283,56 @@ function clampRichStyle(x: Partial<TextStyle>, out: TextStyle): void {
   if (x.glow && typeof x.glow === 'object') out.glow = clampGlow(x.glow);
   const paint = clampGradient(x.paint);
   if (paint) out.paint = paint;
+  if (x.lineMask && typeof x.lineMask === 'object') {
+    const lm = clampLineMask(x.lineMask);
+    if (lm) out.lineMask = lm;
+  }
+}
+
+const RICH_STYLE_KEYS = [
+  'lineModel',
+  'insets',
+  'wrap',
+  'autofit',
+  'fitScale',
+  'justify',
+  'direction',
+  'lang',
+  'fallbackFonts',
+  'underline',
+  'glow',
+  'paint',
+  'lineMask',
+] as const;
+
+/** Whether a style has a field only the rich engine draws. */
+export function isRichStyle(style: TextStyle): boolean {
+  if (style.lineMask !== undefined) return true;
+  const s = style as Partial<Record<(typeof RICH_STYLE_KEYS)[number], unknown>>;
+  for (const k of RICH_STYLE_KEYS) if (s[k] !== undefined) return true;
+  return false;
+}
+
+/**
+ * A ProPresenter line-fill mask within the render plan bounds: style preserved ('fullWidth' | 'lineWidth' | 'maxLineWidth'),
+ * bounded offsets, fill and gradient clamped, undefined when neither fill nor gradient is valid.
+ */
+export function clampLineMask(m: unknown): TextLineMask | undefined {
+  if (!m || typeof m !== 'object' || Array.isArray(m)) return undefined;
+  const x = m as Partial<TextLineMask>;
+  const fill = x.fill && typeof x.fill === 'object' ? clampColor(x.fill) : undefined;
+  const gradient = clampGradient(x.gradient);
+  if (!fill && !gradient) return undefined;
+  const style =
+    x.style === 'lineWidth' || x.style === 'maxLineWidth' || x.style === 'fullWidth' ? x.style : 'fullWidth';
+  const out: TextLineMask = { style };
+  if (fill) out.fill = fill;
+  if (gradient) out.gradient = gradient;
+  if (x.heightOffsetPx !== undefined) out.heightOffsetPx = num(x.heightOffsetPx, -2000, 2000, 0);
+  if (x.vOffsetPx !== undefined) out.vOffsetPx = num(x.vOffsetPx, -2000, 2000, 0);
+  if (x.widthOffsetPx !== undefined) out.widthOffsetPx = num(x.widthOffsetPx, -4000, 4000, 0);
+  if (x.hOffsetPx !== undefined) out.hOffsetPx = num(x.hOffsetPx, -4000, 4000, 0);
+  return out;
 }
 
 function clampGlow(v: Partial<Glow>): Glow {
@@ -450,12 +501,17 @@ function clampShapeExtras(s: Partial<ShapeObj>, out: ShapeObj): void {
   }
 }
 
-/** A picture's mask and flips (design/27 §3.1), each only when present and usable. */
+/** A picture's mask, flips, shadow and soft edge (design/27 §3.1), each only when present and usable. */
 function clampImageExtras(i: Partial<ImageObj>, out: ImageObj): void {
   if (i.flipH === true) out.flipH = true;
   if (i.flipV === true) out.flipV = true;
   const mask = clampGeom(i.mask);
   if (mask) out.mask = mask;
+  if (i.shadow && typeof i.shadow === 'object') out.shadow = clampShadow(i.shadow);
+  if (i.softEdge !== undefined) {
+    const soft = num(i.softEdge, 0, CLAMP.maxEffectPx, 0);
+    if (soft > 0) out.softEdge = soft;
+  }
 }
 
 /**

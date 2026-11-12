@@ -1,0 +1,462 @@
+{
+  "createdAt": "2026-11-12T10:04:44.614Z",
+  "exportCompat": true,
+  "meanSsim": 0.9997,
+  "syntheticMeanSsim": 0.9997,
+  "totalSlides": 10,
+  "decks": [
+    {
+      "name": "pro7-synth-core",
+      "kind": "synthetic",
+      "title": "pro7-synth-core",
+      "slideCount": 4,
+      "ssim": 0.9999,
+      "minSlideSsim": 0.9994,
+      "perSlide": [
+        {
+          "n": 1,
+          "ssim": 1,
+          "transparentRef": false,
+          "overallMae": 0,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M77KEZFCRN35JFA9HK2TJY18",
+              "type": "shape",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 0
+            }
+          ],
+          "features": ["drawsBgColor"],
+          "refPngPath": "renders/pro7-synth-core/1.ref.png",
+          "ordoPngPath": "renders/pro7-synth-core/1.png",
+          "ms1920": 0
+        },
+        {
+          "n": 2,
+          "ssim": 1,
+          "transparentRef": false,
+          "overallMae": 0,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M77KEZFDRSSZN08GTP8XK6K6",
+              "type": "shape",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 0
+            },
+            {
+              "objectId": "01M77KEZFD1050NH0DT3CRSYJY",
+              "type": "shape",
+              "box": {
+                "x": 480,
+                "y": 270,
+                "w": 960,
+                "h": 540
+              },
+              "mae": 0
+            }
+          ],
+          "features": ["drawsBgColor"],
+          "refPngPath": "renders/pro7-synth-core/2.ref.png",
+          "ordoPngPath": "renders/pro7-synth-core/2.png",
+          "ms1920": 0
+        },
+        {
+          "n": 3,
+          "ssim": 1,
+          "ssimBlack": 1,
+          "ssimWhite": 1,
+          "transparentRef": true,
+          "overallMae": 0,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M77KEZFDJPXMZ28SYPFH57K2",
+              "type": "shape",
+              "box": {
+                "x": 160,
+                "y": 820,
+                "w": 1600,
+                "h": 160
+              },
+              "mae": 0
+            }
+          ],
+          "features": ["transparentPlate"],
+          "refPngPath": "renders/pro7-synth-core/3.ref.png",
+          "ordoPngPath": "renders/pro7-synth-core/3.png",
+          "ms1920": 0
+        },
+        {
+          "n": 4,
+          "ssim": 0.9994403341289688,
+          "transparentRef": false,
+          "overallMae": 0.0007352941176470588,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M77KEZFFCCW0Q3M5R0GTBG0N",
+              "type": "shape",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 0.0007352941176470588
+            }
+          ],
+          "features": ["transparentPlate", "gradientFill", "emptyRtfShape"],
+          "refPngPath": "renders/pro7-synth-core/4.ref.png",
+          "ordoPngPath": "renders/pro7-synth-core/4.png",
+          "ms1920": 0
+        }
+      ],
+      "importNotes": [
+        "[info] ProPresenter 7 proto greyshirtguy/ProPresenter7-Proto@1c019ab18972",
+        "[info] skipped slide labels (4)",
+        "[info] imported \"pro7-synth-core\": 1 section(s), 4 slide(s), 1 arrangement(s)"
+      ]
+    },
+    {
+      "name": "pro7-synth-shapes",
+      "kind": "synthetic",
+      "title": "pro7-synth-shapes",
+      "slideCount": 3,
+      "ssim": 1,
+      "minSlideSsim": 1,
+      "perSlide": [
+        {
+          "n": 1,
+          "ssim": 0.9999764091623753,
+          "transparentRef": false,
+          "overallMae": 0.000025350910039941902,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M77KF06PB56VGR5GC9TBQZ5W",
+              "type": "shape",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 0.000025350910039941902
+            },
+            {
+              "objectId": "01M77KF06NBK4SGNQNHJ5BB626",
+              "type": "shape",
+              "box": {
+                "x": 660,
+                "y": 240,
+                "w": 600,
+                "h": 600
+              },
+              "mae": 0.00014602124183006536
+            }
+          ],
+          "features": ["drawsBgColor", "nonRectShape"],
+          "refPngPath": "renders/pro7-synth-shapes/1.ref.png",
+          "ordoPngPath": "renders/pro7-synth-shapes/1.png",
+          "ms1920": 0
+        },
+        {
+          "n": 2,
+          "ssim": 0.9999894054138873,
+          "transparentRef": false,
+          "overallMae": 0.000008127855694747034,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M77KF06PY7055S3HTERF6ZPF",
+              "type": "shape",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 0.000008127855694747034
+            },
+            {
+              "objectId": "01M77KF06PNHSNXQ8MGWCXVP0R",
+              "type": "shape",
+              "box": {
+                "x": 460,
+                "y": 290,
+                "w": 1000,
+                "h": 500
+              },
+              "mae": 0.0000337078431372549
+            }
+          ],
+          "features": ["drawsBgColor", "nonRectShape"],
+          "refPngPath": "renders/pro7-synth-shapes/2.ref.png",
+          "ordoPngPath": "renders/pro7-synth-shapes/2.png",
+          "ms1920": 0
+        },
+        {
+          "n": 3,
+          "ssim": 0.9999999814435948,
+          "transparentRef": false,
+          "overallMae": 7.56475429678044e-7,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M77KF06P3SJNB1JAB70J89S7",
+              "type": "shape",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 7.56475429678044e-7
+            },
+            {
+              "objectId": "01M77KF06PXQRVN0NX8B8XW58Q",
+              "type": "shape",
+              "box": {
+                "x": 560,
+                "y": 140,
+                "w": 800,
+                "h": 800
+              },
+              "mae": 0.000002450980392156863
+            }
+          ],
+          "features": ["drawsBgColor", "nonRectShape", "customPath"],
+          "refPngPath": "renders/pro7-synth-shapes/3.ref.png",
+          "ordoPngPath": "renders/pro7-synth-shapes/3.png",
+          "ms1920": 0
+        }
+      ],
+      "importNotes": [
+        "[info] ProPresenter 7 proto greyshirtguy/ProPresenter7-Proto@1c019ab18972",
+        "[info] skipped slide labels (3)",
+        "[info] imported \"pro7-synth-shapes\": 1 section(s), 3 slide(s), 1 arrangement(s)"
+      ]
+    },
+    {
+      "name": "pro7-synth-masks-and-crops",
+      "kind": "synthetic",
+      "title": "pro7-synth-masks-and-crops",
+      "slideCount": 3,
+      "ssim": 0.9993,
+      "minSlideSsim": 0.9986,
+      "perSlide": [
+        {
+          "n": 1,
+          "ssim": 0.9994498407708308,
+          "transparentRef": false,
+          "overallMae": 0.0007599183384773663,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M77KF0KZE9QW4VR6XD855M7J",
+              "type": "shape",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 0.0007599183384773663
+            }
+          ],
+          "features": ["transparentPlate", "gradientFill", "emptyRtfShape"],
+          "refPngPath": "renders/pro7-synth-masks-and-crops/1.ref.png",
+          "ordoPngPath": "renders/pro7-synth-masks-and-crops/1.png",
+          "ms1920": 0
+        },
+        {
+          "n": 2,
+          "ssim": 0.9985739765003399,
+          "transparentRef": false,
+          "overallMae": 0.00022087711434882595,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M77KF0M02QPMPPM5EGFT9P0N",
+              "type": "shape",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 0.00022087711434882595
+            },
+            {
+              "objectId": "01M77KF0M0N894T7MG1TXZ2MZZ",
+              "type": "image",
+              "box": {
+                "x": 480,
+                "y": 270,
+                "w": 960,
+                "h": 540
+              },
+              "mae": 0.0008835084573953038
+            }
+          ],
+          "features": ["drawsBgColor", "mediaFill", "mediaCrop"],
+          "refPngPath": "renders/pro7-synth-masks-and-crops/2.ref.png",
+          "ordoPngPath": "renders/pro7-synth-masks-and-crops/2.png",
+          "ms1920": 0
+        },
+        {
+          "n": 3,
+          "ssim": 0.999976066155878,
+          "transparentRef": false,
+          "overallMae": 0.00001866508563301864,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M77KF0M2SEAHT69Z83KJNFK7",
+              "type": "shape",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 0.00001866508563301864
+            },
+            {
+              "objectId": "01M77KF0M0EX85HWF906RY1X8V",
+              "type": "image",
+              "box": {
+                "x": 660,
+                "y": 240,
+                "w": 600,
+                "h": 600
+              },
+              "mae": 0.00010751089324618736
+            }
+          ],
+          "features": ["drawsBgColor", "nonRectShape", "mediaFill"],
+          "refPngPath": "renders/pro7-synth-masks-and-crops/3.ref.png",
+          "ordoPngPath": "renders/pro7-synth-masks-and-crops/3.png",
+          "ms1920": 0
+        }
+      ],
+      "importNotes": [
+        "[info] ProPresenter 7 proto greyshirtguy/ProPresenter7-Proto@1c019ab18972",
+        "[info] skipped slide labels (3)",
+        "[info] imported \"pro7-synth-masks-and-crops\": 1 section(s), 3 slide(s), 1 arrangement(s)"
+      ]
+    }
+  ],
+  "clusters": [
+    {
+      "feature": "drawsBgColor",
+      "slideCount": 7,
+      "meanSsim": 0.9998,
+      "recoverableGain": 0.0015,
+      "worstSlide": {
+        "deck": "pro7-synth-masks-and-crops",
+        "n": 2,
+        "ssim": 0.9985739765003399
+      }
+    },
+    {
+      "feature": "mediaFill",
+      "slideCount": 2,
+      "meanSsim": 0.9993,
+      "recoverableGain": 0.0014,
+      "worstSlide": {
+        "deck": "pro7-synth-masks-and-crops",
+        "n": 2,
+        "ssim": 0.9985739765003399
+      }
+    },
+    {
+      "feature": "mediaCrop",
+      "slideCount": 1,
+      "meanSsim": 0.9986,
+      "recoverableGain": 0.0014,
+      "worstSlide": {
+        "deck": "pro7-synth-masks-and-crops",
+        "n": 2,
+        "ssim": 0.9985739765003399
+      }
+    },
+    {
+      "feature": "transparentPlate",
+      "slideCount": 3,
+      "meanSsim": 0.9996,
+      "recoverableGain": 0.0011,
+      "worstSlide": {
+        "deck": "pro7-synth-core",
+        "n": 4,
+        "ssim": 0.9994403341289688
+      }
+    },
+    {
+      "feature": "gradientFill",
+      "slideCount": 2,
+      "meanSsim": 0.9994,
+      "recoverableGain": 0.0011,
+      "worstSlide": {
+        "deck": "pro7-synth-core",
+        "n": 4,
+        "ssim": 0.9994403341289688
+      }
+    },
+    {
+      "feature": "emptyRtfShape",
+      "slideCount": 2,
+      "meanSsim": 0.9994,
+      "recoverableGain": 0.0011,
+      "worstSlide": {
+        "deck": "pro7-synth-core",
+        "n": 4,
+        "ssim": 0.9994403341289688
+      }
+    },
+    {
+      "feature": "nonRectShape",
+      "slideCount": 4,
+      "meanSsim": 1,
+      "recoverableGain": 0.0001,
+      "worstSlide": {
+        "deck": "pro7-synth-masks-and-crops",
+        "n": 3,
+        "ssim": 0.999976066155878
+      }
+    },
+    {
+      "feature": "customPath",
+      "slideCount": 1,
+      "meanSsim": 1,
+      "recoverableGain": 0,
+      "worstSlide": {
+        "deck": "pro7-synth-shapes",
+        "n": 3,
+        "ssim": 0.9999999814435948
+      }
+    }
+  ]
+}

@@ -81,7 +81,7 @@ export function routeHash(r: Route): string {
 }
 
 /** Settings pages that make sense on an edit-profile device (no outputs, audio devices, keys or backups). */
-export const EDIT_PROFILE_SETTINGS: readonly string[] = ['looks', 'themes', 'messages', 'general', 'pins'];
+export const EDIT_PROFILE_SETTINGS: readonly string[] = ['looks', 'messages', 'general', 'pins'];
 
 /**
  * Routes a role may open on a device of this profile; everything else redirects to the library. An

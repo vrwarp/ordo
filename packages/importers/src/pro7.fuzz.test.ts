@@ -16,8 +16,20 @@ const enc = new TextEncoder();
 const dbl = fc.oneof(
   { weight: 3, arbitrary: fc.double({ min: -5000, max: 5000, noNaN: true }) },
   {
-    weight: 1,
-    arbitrary: fc.constantFrom(Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0, -1, 1e308),
+    weight: 2,
+    arbitrary: fc.constantFrom(
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      0,
+      -1,
+      -999,
+      9999,
+      1e9,
+      -1e9,
+      1e308,
+      -1e308,
+    ),
   },
 );
 const UUIDS = ['A', 'B', 'C', 'D', 'G1', 'G2', 'ARR', 'X'];
@@ -29,9 +41,50 @@ const str = fc.oneof(
   { weight: 1, arbitrary: fc.constantFrom('Verse 1', 'Chorus', 'Bridge x2', '') },
 );
 const color = fc.record({ red: dbl, green: dbl, blue: dbl, alpha: dbl }, { requiredKeys: [] });
+const multiRunRtf = fc
+  .tuple(
+    fc.array(
+      fc.record({
+        text: fc.string({ minLength: 1, maxLength: 12 }).map((s) => s.replace(/[{}\\;]/g, 'a')),
+        bold: fc.boolean(),
+        italic: fc.boolean(),
+        underline: fc.boolean(),
+        strike: fc.boolean(),
+        sup: fc.boolean(),
+        sub: fc.boolean(),
+        scaps: fc.boolean(),
+        size: fc.integer({ min: -5, max: 80 }),
+        colorIdx: fc.integer({ min: -1, max: 3 }),
+      }),
+      { minLength: 1, maxLength: 4 },
+    ),
+    fc.boolean(),
+  )
+  .map(([runs, hasBullets]) => {
+    let rtf =
+      '{\\rtf1\\ansi{\\fonttbl\\f0 Arial;}{\\colortbl;\\red255\\green0\\blue0;\\red0\\green255\\blue0;\\red0\\green0\\blue255;}';
+    for (const r of runs) {
+      if (hasBullets) rtf += '{\\listtext •\\tab}';
+      if (r.bold) rtf += '\\b ';
+      if (r.italic) rtf += '\\i ';
+      if (r.underline) rtf += '\\ul ';
+      if (r.strike) rtf += '\\strike ';
+      if (r.sup) rtf += '\\super ';
+      if (r.sub) rtf += '\\sub ';
+      if (r.scaps) rtf += '\\scaps ';
+      if (r.size > 0) rtf += `\\fs${r.size} `;
+      if (r.colorIdx >= 0) rtf += `\\cf${r.colorIdx} `;
+      rtf += r.text;
+      rtf += '\\plain ';
+      if (hasBullets) rtf += '\\par ';
+    }
+    rtf += '}';
+    return enc.encode(rtf);
+  });
 const rtfData = fc.oneof(
   fc.constant(enc.encode(REAL_RTF)),
   fc.uint8Array({ maxLength: 60 }),
+  multiRunRtf,
   str.map((t) => enc.encode(`{\\rtf1{\\fonttbl\\f0 X;}\\f0\\fs${t.length * 7} ${t}}`)),
 );
 const url = fc.oneof(
@@ -41,6 +94,189 @@ const url = fc.oneof(
   fc.record({ local: fc.record({ path: str }) }),
   fc.record({ relativePath: str }),
 );
+
+const gradientStop = fc.record(
+  {
+    color,
+    position: dbl,
+    blendPoint: dbl,
+  },
+  { requiredKeys: [] },
+);
+
+const gradient = fc.record(
+  {
+    type: fc.oneof(
+      fc.constantFrom('TYPE_LINEAR', 'TYPE_RADIAL', 'GRADIENT_TYPE_RADIAL', 0, 1, 2, -1, 99),
+      str,
+    ),
+    angle: dbl,
+    length: dbl,
+    stops: fc.oneof(
+      fc.constant([]),
+      fc.array(gradientStop, { minLength: 1, maxLength: 1 }),
+      fc.array(gradientStop, { minLength: 2, maxLength: 6 }),
+      fc.array(gradientStop, { minLength: 50, maxLength: 52 }),
+    ),
+  },
+  { requiredKeys: [] },
+);
+
+const textLineMask = fc.record(
+  {
+    enabled: fc.boolean(),
+    maskStyle: fc.oneof(
+      fc.constantFrom(
+        'LINE_MASK_STYLE_FULL_WIDTH',
+        'LINE_MASK_STYLE_LINE_WIDTH',
+        'LINE_MASK_STYLE_MAX_LINE_WIDTH',
+        0,
+        1,
+        2,
+        3,
+        -1,
+        999,
+      ),
+      fc.integer({ min: -10, max: 100 }),
+    ),
+    heightOffset: dbl,
+    verticalOffset: dbl,
+    widthOffset: dbl,
+    horizontalOffset: dbl,
+  },
+  { requiredKeys: [] },
+);
+
+const bezierPoint = fc.record(
+  {
+    point: fc.record({ x: dbl, y: dbl }, { requiredKeys: [] }),
+    q0: fc.record({ x: dbl, y: dbl }, { requiredKeys: [] }),
+    q1: fc.record({ x: dbl, y: dbl }, { requiredKeys: [] }),
+    curved: fc.boolean(),
+  },
+  { requiredKeys: [] },
+);
+
+const pathMsg = fc.record(
+  {
+    closed: fc.boolean(),
+    shape: fc.record(
+      {
+        type: fc.oneof(
+          fc.constantFrom(
+            'TYPE_RECTANGLE',
+            'TYPE_ELLIPSE',
+            'TYPE_ROUNDED_RECTANGLE',
+            'TYPE_ISOSCELES_TRIANGLE',
+            'TYPE_RIGHT_TRIANGLE',
+            'TYPE_RHOMBUS',
+            'TYPE_RIGHT_ARROW',
+            'TYPE_DOUBLE_ARROW',
+            'TYPE_POLYGON',
+            'TYPE_STAR',
+            'TYPE_CUSTOM',
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            -1,
+            999,
+          ),
+          str,
+        ),
+        roundedRectangle: fc.record(
+          { roundness: fc.oneof(dbl, fc.double({ min: -5, max: 50 })) },
+          { requiredKeys: [] },
+        ),
+        polygon: fc.record(
+          {
+            numberSides: fc.oneof(
+              fc.integer({ min: -10, max: 100 }),
+              fc.constantFrom(0, -3, 500, Number.NaN),
+            ),
+          },
+          { requiredKeys: [] },
+        ),
+        star: fc.record(
+          {
+            numberPoints: fc.oneof(
+              fc.integer({ min: -10, max: 100 }),
+              fc.constantFrom(0, -3, 500, Number.NaN),
+            ),
+            innerRadius: dbl,
+          },
+          { requiredKeys: [] },
+        ),
+      },
+      { requiredKeys: [] },
+    ),
+    points: fc.oneof(
+      fc.constant([]),
+      fc.array(bezierPoint, { minLength: 1, maxLength: 1 }),
+      fc.array(bezierPoint, { minLength: 2, maxLength: 4 }),
+      fc.array(bezierPoint, { minLength: 50, maxLength: 52 }),
+    ),
+  },
+  { requiredKeys: [] },
+);
+
+const shadowMsg = fc.record(
+  {
+    enable: fc.boolean(),
+    angle: dbl,
+    offset: dbl,
+    radius: dbl,
+    opacity: dbl,
+    color,
+  },
+  { requiredKeys: [] },
+);
+
+const featherMsg = fc.record(
+  {
+    enable: fc.boolean(),
+    radius: fc.oneof(dbl, fc.constantFrom(Number.NaN, -10, 0, 100)),
+  },
+  { requiredKeys: [] },
+);
+
+const drawingMsg = fc.record(
+  {
+    scaleBehavior: fc.oneof(
+      fc.constantFrom(
+        'SCALE_BEHAVIOR_FIT',
+        'SCALE_BEHAVIOR_FILL',
+        'SCALE_BEHAVIOR_STRETCH',
+        'SCALE_BEHAVIOR_CUSTOM',
+        0,
+        1,
+        2,
+        3,
+        99,
+      ),
+      str,
+    ),
+    cropEnable: fc.boolean(),
+    cropInsets: fc.record({ left: dbl, top: dbl, right: dbl, bottom: dbl }, { requiredKeys: [] }),
+    naturalSize: fc.record({ width: dbl, height: dbl }, { requiredKeys: [] }),
+    customImageBounds: fc.record(
+      {
+        origin: fc.record({ x: dbl, y: dbl }, { requiredKeys: [] }),
+        size: fc.record({ width: dbl, height: dbl }, { requiredKeys: [] }),
+      },
+      { requiredKeys: [] },
+    ),
+  },
+  { requiredKeys: [] },
+);
+
 const element = fc.record(
   {
     uuid,
@@ -52,15 +288,20 @@ const element = fc.record(
     opacity: dbl,
     rotation: dbl,
     hidden: fc.boolean(),
+    textLineMask,
+    path: pathMsg,
+    feather: featherMsg,
+    shadow: shadowMsg,
     text: fc.record(
       {
         rtfData,
-        verticalAlignment: fc.constantFrom('VERTICAL_ALIGNMENT_TOP', 'VERTICAL_ALIGNMENT_BOTTOM'),
-        margins: fc.record({ left: dbl, right: dbl, top: dbl, bottom: dbl }, { requiredKeys: [] }),
-        shadow: fc.record(
-          { enable: fc.boolean(), angle: dbl, offset: dbl, radius: dbl, opacity: dbl, color },
-          { requiredKeys: [] },
+        verticalAlignment: fc.constantFrom(
+          'VERTICAL_ALIGNMENT_TOP',
+          'VERTICAL_ALIGNMENT_BOTTOM',
+          'VERTICAL_ALIGNMENT_MIDDLE',
         ),
+        margins: fc.record({ left: dbl, right: dbl, top: dbl, bottom: dbl }, { requiredKeys: [] }),
+        shadow: shadowMsg,
         attributes: fc.record(
           {
             font: fc.record(
@@ -82,7 +323,19 @@ const element = fc.record(
       { requiredKeys: [] },
     ),
     fill: fc.record(
-      { enable: fc.boolean(), color, media: fc.record({ url }, { requiredKeys: [] }) },
+      {
+        enable: fc.boolean(),
+        color,
+        gradient,
+        media: fc.record(
+          {
+            url,
+            image: fc.record({ drawing: drawingMsg }, { requiredKeys: [] }),
+            video: fc.record({ drawing: drawingMsg }, { requiredKeys: [] }),
+          },
+          { requiredKeys: [] },
+        ),
+      },
       { requiredKeys: [] },
     ),
   },
@@ -206,6 +459,11 @@ function checkResult(r: ReturnType<typeof importPro7>) {
   for (const p of r.presentations) {
     const parsed = PresentationSchema.safeParse(p);
     expect(parsed.success, JSON.stringify(parsed.error?.issues?.slice(0, 3))).toBe(true);
+    const hasNonFinite = JSON.stringify(p, (_, v) =>
+      typeof v === 'number' && !Number.isFinite(v) ? '__NON_FINITE__' : v,
+    ).includes('__NON_FINITE__');
+    expect(hasNonFinite).toBe(false);
+
     ids.add(p.id);
     expect(p.title.length).toBeLessThanOrEqual(IMPORT_LIMITS.title);
     const secIds = new Set(p.sections.map((s) => s.id));
@@ -225,6 +483,83 @@ function checkResult(r: ReturnType<typeof importPro7>) {
             expect(o.style.fontSizePx).toBeLessThanOrEqual(IMPORT_LIMITS.fontSizeMax);
             expect(o.text.length).toBeLessThanOrEqual(IMPORT_LIMITS.text);
             expect(JSON.stringify(o.style)).not.toMatch(/null|NaN|Infinity/);
+            if (o.style.lineMask) {
+              const lm = o.style.lineMask;
+              if (lm.heightOffsetPx !== undefined) {
+                expect(Number.isFinite(lm.heightOffsetPx)).toBe(true);
+                expect(lm.heightOffsetPx).toBeGreaterThanOrEqual(-2000);
+                expect(lm.heightOffsetPx).toBeLessThanOrEqual(2000);
+              }
+              if (lm.vOffsetPx !== undefined) {
+                expect(Number.isFinite(lm.vOffsetPx)).toBe(true);
+                expect(lm.vOffsetPx).toBeGreaterThanOrEqual(-2000);
+                expect(lm.vOffsetPx).toBeLessThanOrEqual(2000);
+              }
+              if (lm.widthOffsetPx !== undefined) {
+                expect(Number.isFinite(lm.widthOffsetPx)).toBe(true);
+                expect(lm.widthOffsetPx).toBeGreaterThanOrEqual(-4000);
+                expect(lm.widthOffsetPx).toBeLessThanOrEqual(4000);
+              }
+              if (lm.hOffsetPx !== undefined) {
+                expect(Number.isFinite(lm.hOffsetPx)).toBe(true);
+                expect(lm.hOffsetPx).toBeGreaterThanOrEqual(-4000);
+                expect(lm.hOffsetPx).toBeLessThanOrEqual(4000);
+              }
+              if (lm.fill) {
+                expect(lm.fill.r).toBeGreaterThanOrEqual(0);
+                expect(lm.fill.r).toBeLessThanOrEqual(255);
+                expect(lm.fill.a).toBeGreaterThanOrEqual(0);
+                expect(lm.fill.a).toBeLessThanOrEqual(1);
+              }
+              if (lm.gradient) {
+                expect(lm.gradient.stops.length).toBeGreaterThanOrEqual(2);
+                expect(lm.gradient.stops.length).toBeLessThanOrEqual(16);
+                for (const st of lm.gradient.stops) {
+                  expect(st.at).toBeGreaterThanOrEqual(0);
+                  expect(st.at).toBeLessThanOrEqual(1);
+                }
+              }
+            }
+          }
+          if (o.type === 'image') {
+            if (o.crop) {
+              expect(o.crop.l).toBeGreaterThanOrEqual(-1);
+              expect(o.crop.l).toBeLessThanOrEqual(1);
+              expect(o.crop.t).toBeGreaterThanOrEqual(-1);
+              expect(o.crop.t).toBeLessThanOrEqual(1);
+              expect(o.crop.r).toBeGreaterThanOrEqual(-1);
+              expect(o.crop.r).toBeLessThanOrEqual(1);
+              expect(o.crop.b).toBeGreaterThanOrEqual(-1);
+              expect(o.crop.b).toBeLessThanOrEqual(1);
+            }
+            if (o.softEdge !== undefined) {
+              expect(Number.isFinite(o.softEdge)).toBe(true);
+              expect(o.softEdge).toBeGreaterThan(0);
+              expect(o.softEdge).toBeLessThanOrEqual(500);
+            }
+            if (o.shadow) {
+              expect(Math.abs(o.shadow.dx)).toBeLessThanOrEqual(500);
+              expect(Math.abs(o.shadow.dy)).toBeLessThanOrEqual(500);
+              expect(o.shadow.blur).toBeGreaterThanOrEqual(0);
+              expect(o.shadow.blur).toBeLessThanOrEqual(500);
+            }
+          }
+          if (o.type === 'shape') {
+            if (o.softEdge !== undefined) {
+              expect(Number.isFinite(o.softEdge)).toBe(true);
+              expect(o.softEdge).toBeGreaterThanOrEqual(0);
+              expect(o.softEdge).toBeLessThanOrEqual(500);
+            }
+            if (o.gradient) {
+              expect(o.gradient.stops.length).toBeGreaterThanOrEqual(2);
+              expect(o.gradient.stops.length).toBeLessThanOrEqual(16);
+            }
+            if (o.shadow) {
+              expect(Math.abs(o.shadow.dx)).toBeLessThanOrEqual(500);
+              expect(Math.abs(o.shadow.dy)).toBeLessThanOrEqual(500);
+              expect(o.shadow.blur).toBeGreaterThanOrEqual(0);
+              expect(o.shadow.blur).toBeLessThanOrEqual(500);
+            }
           }
         }
       }
@@ -263,9 +598,26 @@ describe('importPro7 (fuzz)', () => {
           `lib/Doc ${i}.pro`,
           encodeAs('rv.data.Presentation', d),
         ]);
-        checkResult(importPro7(files([...entries, ...mediaFiles])));
+        const f = files([...entries, ...mediaFiles]);
+        checkResult(importPro7(f));
+        checkResult(importPro7(f, { exportCompat: true }));
       }),
-      { numRuns: 400 },
+      { numRuns: 300 },
+    );
+  });
+
+  it('newly supported ProPresenter 7 structures with hostile inputs never throw and pass schema with exportCompat true and false', () => {
+    fc.assert(
+      fc.property(fc.array(presentationObj, { minLength: 1, maxLength: 2 }), (docs) => {
+        const entries: [string, Uint8Array][] = docs.map((d, i) => [
+          `lib/HostileDoc ${i}.pro`,
+          encodeAs('rv.data.Presentation', d),
+        ]);
+        const f = files([...entries, ...mediaFiles]);
+        checkResult(importPro7(f));
+        checkResult(importPro7(f, { exportCompat: true }));
+      }),
+      { numRuns: 300 },
     );
   });
 
@@ -414,5 +766,406 @@ describe('importPro7 regressions found by fuzzing', () => {
     const t0 = Date.now();
     checkResult(importPro7(files([['a.pro', encodeAs('rv.data.Presentation', doc)], ...many])));
     expect(Date.now() - t0).toBeLessThan(3000);
+  });
+
+  it('textLineMask with hostile offsets, styles, and fill/gradient combinations never throws and passes schema', () => {
+    const makeDoc = (mask: Record<string, unknown>, fill?: Record<string, unknown>) => ({
+      name: 'textLineMask hostile',
+      cues: [
+        {
+          uuid: { string: 'C' },
+          actions: [
+            {
+              type: 'ACTION_TYPE_PRESENTATION_SLIDE',
+              slide: {
+                presentation: {
+                  baseSlide: {
+                    elements: [
+                      {
+                        element: {
+                          bounds: { origin: { x: 0, y: 0 }, size: { width: 400, height: 200 } },
+                          textLineMask: mask,
+                          fill: fill ?? { enable: false },
+                          text: {
+                            rtfData: enc.encode('{\\rtf1 masked text}'),
+                            verticalAlignment: 'VERTICAL_ALIGNMENT_MIDDLE',
+                          },
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    for (const [mask, fill] of [
+      // Enabled with NaN and infinite offsets, out-of-range maskStyle, and solid fill
+      [
+        {
+          enabled: true,
+          maskStyle: 999,
+          heightOffset: Number.NaN,
+          verticalOffset: Number.POSITIVE_INFINITY,
+          widthOffset: 1e9,
+          horizontalOffset: Number.NEGATIVE_INFINITY,
+        },
+        { enable: true, color: { red: 1, green: 0, blue: 0, alpha: 1 } },
+      ],
+      // Enabled with negative offsets, LINE_MASK_STYLE_LINE_WIDTH, and gradient fill
+      [
+        {
+          enabled: true,
+          maskStyle: 'LINE_MASK_STYLE_LINE_WIDTH',
+          heightOffset: -5000,
+          verticalOffset: -1e9,
+          widthOffset: -10000,
+          horizontalOffset: -1e9,
+        },
+        {
+          enable: true,
+          gradient: {
+            type: 'TYPE_LINEAR',
+            angle: 45,
+            stops: [
+              { position: 0, color: { red: 1, green: 0, blue: 0, alpha: 1 } },
+              { position: 1, color: { red: 0, green: 0, blue: 1, alpha: 1 } },
+            ],
+          },
+        },
+      ],
+      // Enabled but fill disabled (no fill or gradient left -> lineMask dropped)
+      [
+        {
+          enabled: true,
+          maskStyle: 'LINE_MASK_STYLE_MAX_LINE_WIDTH',
+          heightOffset: 50,
+        },
+        { enable: false },
+      ],
+      // Disabled mask
+      [
+        {
+          enabled: false,
+          heightOffset: 100,
+        },
+        { enable: true, color: { red: 1, green: 1, blue: 1, alpha: 1 } },
+      ],
+    ]) {
+      const doc = makeDoc(mask as Record<string, unknown>, fill as Record<string, unknown>);
+      const rNormal = importPro7(files([['a.pro', encodeAs('rv.data.Presentation', doc)]]));
+      checkResult(rNormal);
+      const rCompat = importPro7(files([['a.pro', encodeAs('rv.data.Presentation', doc)]]), {
+        exportCompat: true,
+      });
+      checkResult(rCompat);
+    }
+  });
+
+  it('fill.gradient with hostile types, angles, and stops never throws and stays bounded', () => {
+    const makeGradientDoc = (gradient: Record<string, unknown>) => ({
+      name: 'gradient hostile',
+      cues: [
+        {
+          uuid: { string: 'C' },
+          actions: [
+            {
+              type: 'ACTION_TYPE_PRESENTATION_SLIDE',
+              slide: {
+                presentation: {
+                  baseSlide: {
+                    elements: [
+                      {
+                        element: {
+                          bounds: { origin: { x: 0, y: 0 }, size: { width: 500, height: 300 } },
+                          fill: { enable: true, gradient },
+                          path: { shape: { type: 'TYPE_RECTANGLE' } },
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const hostileGradients: Record<string, unknown>[] = [
+      // 0 stops
+      { type: 'TYPE_LINEAR', angle: Number.NaN, stops: [] },
+      // 1 stop (auto-duplicated to 2 stops)
+      {
+        type: 'TYPE_RADIAL',
+        angle: -999,
+        stops: [{ position: 0.5, color: { red: Number.NaN, green: 1, blue: 0, alpha: 1 } }],
+      },
+      // 50 stops with unsorted and out-of-range positions and hostile angles
+      {
+        type: 'GRADIENT_TYPE_RADIAL',
+        angle: 9999,
+        stops: [
+          { position: 5, color: { red: 1, green: 0, blue: 0, alpha: 1 } },
+          { position: -10, color: { red: 0, green: 1, blue: 0, alpha: Number.NaN } },
+          { position: Number.NaN, color: { red: 0, green: 0, blue: 1, alpha: 1 } },
+          ...Array.from({ length: 47 }, (_, i) => ({
+            position: 1 - i * 0.05,
+            color: { red: i / 50, green: 0, blue: 0, alpha: 1 },
+          })),
+        ],
+      },
+    ];
+
+    for (const g of hostileGradients) {
+      const doc = makeGradientDoc(g);
+      const r = importPro7(files([['a.pro', encodeAs('rv.data.Presentation', doc)]]));
+      checkResult(r);
+      const rCompat = importPro7(files([['a.pro', encodeAs('rv.data.Presentation', doc)]]), {
+        exportCompat: true,
+      });
+      checkResult(rCompat);
+    }
+  });
+
+  it('paths with hostile shapes, roundness, numberOfSides, and bezier points never throw', () => {
+    const makePathDoc = (path: Record<string, unknown>) => ({
+      name: 'path hostile',
+      cues: [
+        {
+          uuid: { string: 'C' },
+          actions: [
+            {
+              type: 'ACTION_TYPE_PRESENTATION_SLIDE',
+              slide: {
+                presentation: {
+                  baseSlide: {
+                    elements: [
+                      {
+                        element: {
+                          bounds: { origin: { x: 0, y: 0 }, size: { width: 300, height: 200 } },
+                          fill: { enable: true, color: { red: 1, green: 0, blue: 0, alpha: 1 } },
+                          path,
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const hostilePaths: Record<string, unknown>[] = [
+      // Ellipse
+      { shape: { type: 'TYPE_ELLIPSE' } },
+      // Rounded rectangle with negative roundness
+      { shape: { type: 'TYPE_ROUNDED_RECTANGLE', roundedRectangle: { roundness: -5 } } },
+      // Rounded rectangle with huge roundness
+      { shape: { type: 'TYPE_ROUNDED_RECTANGLE', roundedRectangle: { roundness: 50 } } },
+      // Rounded rectangle with NaN roundness
+      { shape: { type: 'TYPE_ROUNDED_RECTANGLE', roundedRectangle: { roundness: Number.NaN } } },
+      // Polygon with 0, negative, and 500 sides
+      { shape: { type: 'TYPE_POLYGON', polygon: { numberSides: 0 } } },
+      { shape: { type: 'TYPE_POLYGON', polygon: { numberSides: -3 } } },
+      { shape: { type: 'TYPE_POLYGON', polygon: { numberSides: 500 } } },
+      // Star with 0, negative, and 500 points
+      { shape: { type: 'TYPE_STAR', star: { numberPoints: 0 } } },
+      { shape: { type: 'TYPE_STAR', star: { numberPoints: -3 } } },
+      { shape: { type: 'TYPE_STAR', star: { numberPoints: 500 } } },
+      // Custom path with 0 points
+      { shape: { type: 'TYPE_CUSTOM' }, points: [] },
+      // Custom path with 1 point
+      { shape: { type: 'TYPE_CUSTOM' }, points: [{ point: { x: 0, y: 0 } }] },
+      // Custom path with 2 points containing NaN and Infinity
+      {
+        shape: { type: 'TYPE_CUSTOM' },
+        closed: false,
+        points: [
+          { point: { x: Number.NaN, y: 0 }, q0: { x: 1e9, y: 0 }, q1: { x: 0, y: Number.POSITIVE_INFINITY } },
+          { point: { x: 1, y: 1 }, q0: { x: Number.NaN, y: Number.NaN }, q1: { x: 1, y: 1 } },
+        ],
+      },
+      // Custom path with 50 points
+      {
+        shape: { type: 'TYPE_CUSTOM' },
+        closed: true,
+        points: Array.from({ length: 50 }, (_, i) => ({
+          point: { x: Math.cos((i / 50) * Math.PI * 2), y: Math.sin((i / 50) * Math.PI * 2) },
+          q0: { x: 0, y: 0 },
+          q1: { x: 0, y: 0 },
+        })),
+      },
+    ];
+
+    for (const p of hostilePaths) {
+      const doc = makePathDoc(p);
+      const r = importPro7(files([['a.pro', encodeAs('rv.data.Presentation', doc)]]));
+      checkResult(r);
+      const rCompat = importPro7(files([['a.pro', encodeAs('rv.data.Presentation', doc)]]), {
+        exportCompat: true,
+      });
+      checkResult(rCompat);
+    }
+  });
+
+  it('fill.media and drawing with hostile crops, customImageBounds, shadow and feather never throws', () => {
+    const makeMediaDoc = (
+      drawing: Record<string, unknown>,
+      shadow?: Record<string, unknown>,
+      feather?: Record<string, unknown>,
+    ) => ({
+      name: 'media hostile',
+      cues: [
+        {
+          uuid: { string: 'C' },
+          actions: [
+            {
+              type: 'ACTION_TYPE_PRESENTATION_SLIDE',
+              slide: {
+                presentation: {
+                  baseSlide: {
+                    elements: [
+                      {
+                        element: {
+                          bounds: { origin: { x: 10, y: 10 }, size: { width: 640, height: 360 } },
+                          shadow: shadow ?? { enable: false },
+                          feather: feather ?? { enable: false },
+                          fill: {
+                            enable: true,
+                            media: {
+                              url: { absoluteString: 'file:///m/a.mp4' },
+                              video: { drawing },
+                            },
+                          },
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const hostileDrawings: [Record<string, unknown>, Record<string, unknown>?, Record<string, unknown>?][] = [
+      // Negative / inverted / > 1 cropInsets
+      [
+        {
+          scaleBehavior: 'SCALE_BEHAVIOR_FIT',
+          cropEnable: true,
+          cropInsets: { left: -5, top: 2.5, right: 0.9, bottom: -1 },
+          naturalSize: { width: 1920, height: 1080 },
+        },
+        { enable: true, angle: Number.NaN, offset: 1e9, radius: Number.NaN, opacity: Number.NaN },
+        { enable: true, radius: Number.NaN },
+      ],
+      // Inverted crops (left + right > 0.99)
+      [
+        {
+          scaleBehavior: 'SCALE_BEHAVIOR_FIT',
+          cropEnable: true,
+          cropInsets: { left: 0.6, top: 0.6, right: 0.6, bottom: 0.6 },
+        },
+        { enable: true, angle: 9999, offset: -50, radius: -10, opacity: 5 },
+        { enable: true, radius: -10 },
+      ],
+      // SCALE_BEHAVIOR_CUSTOM with zero / negative / NaN customImageBounds
+      [
+        {
+          scaleBehavior: 'SCALE_BEHAVIOR_CUSTOM',
+          customImageBounds: {
+            origin: { x: Number.NaN, y: -50 },
+            size: { width: 0, height: -100 },
+          },
+        },
+        { enable: true, angle: 180, offset: 10, radius: 20, opacity: 0.8 },
+        { enable: true, radius: 100 },
+      ],
+      // SCALE_BEHAVIOR_CUSTOM with valid customImageBounds
+      [
+        {
+          scaleBehavior: 'SCALE_BEHAVIOR_CUSTOM',
+          customImageBounds: {
+            origin: { x: -20, y: -10 },
+            size: { width: 700, height: 400 },
+          },
+        },
+      ],
+    ];
+
+    for (const [drawing, shadow, feather] of hostileDrawings) {
+      const doc = makeMediaDoc(drawing, shadow, feather);
+      const r = importPro7(files([['a.pro', encodeAs('rv.data.Presentation', doc)], ...mediaFiles]));
+      checkResult(r);
+      const rCompat = importPro7(files([['a.pro', encodeAs('rv.data.Presentation', doc)], ...mediaFiles]), {
+        exportCompat: true,
+      });
+      checkResult(rCompat);
+    }
+  });
+
+  it('multi-run and bullet RTF inside text.rtfData imports cleanly and passes schema', () => {
+    const rtf =
+      '{\\rtf1\\ansi{\\fonttbl\\f0 Arial;\\f1 Georgia;}{\\colortbl;\\red255\\green0\\blue0;\\red0\\green0\\blue255;}' +
+      '{\\listtext •\\tab}\\f0\\b\\fs60 \\cf1 Bullet one with bold red text\\par ' +
+      '{\\listtext •\\tab}\\f1\\i\\fs40 \\cf2 Bullet two with italic blue text\\par ' +
+      'Plain third line without bullets}';
+
+    const doc = {
+      name: 'rich rtf doc',
+      cues: [
+        {
+          uuid: { string: 'C' },
+          actions: [
+            {
+              type: 'ACTION_TYPE_PRESENTATION_SLIDE',
+              slide: {
+                presentation: {
+                  baseSlide: {
+                    elements: [
+                      {
+                        element: {
+                          bounds: { origin: { x: 50, y: 50 }, size: { width: 800, height: 400 } },
+                          text: {
+                            rtfData: enc.encode(rtf),
+                            verticalAlignment: 'VERTICAL_ALIGNMENT_TOP',
+                          },
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const r = importPro7(files([['a.pro', encodeAs('rv.data.Presentation', doc)]]));
+    checkResult(r);
+    const pres = r.presentations[0]!;
+    const obj = pres.sections[0]!.slides[0]!.objects[0]!;
+    expect(obj.type).toBe('text');
+    if (obj.type === 'text') {
+      expect(obj.runs).toBeDefined();
+      expect(obj.paras).toBeDefined();
+      expect(obj.paras!.length).toBe(3);
+      expect(obj.paras![0]!.bullet?.char).toBe('•');
+      expect(obj.paras![1]!.bullet?.char).toBe('•');
+      expect(obj.paras![2]!.bullet?.char).toBe('•');
+    }
+    const rCompat = importPro7(files([['a.pro', encodeAs('rv.data.Presentation', doc)]]), {
+      exportCompat: true,
+    });
+    checkResult(rCompat);
   });
 });

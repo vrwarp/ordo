@@ -15,6 +15,7 @@ import {
   type Rgba,
   type ShapeGeom,
   type SlideObject,
+  type TextLineMask,
   type TextObject,
   type TextPara,
   type TextRun,
@@ -193,6 +194,34 @@ export function clampStyle(s: TextStyle): TextStyle {
     if (paint) out.paint = paint;
     else delete out.paint;
   }
+  if (s.lineMask) {
+    const lineMask = sanitizeLineMask(s.lineMask);
+    if (lineMask) out.lineMask = lineMask;
+    else delete out.lineMask;
+  }
+  return out;
+}
+
+/**
+ * A ProPresenter line-fill mask within the schema's bounds: style default 'fullWidth', offsets bounded,
+ * fill and gradient clamped, undefined when neither fill nor gradient is left.
+ */
+export function sanitizeLineMask(lm: TextLineMask | undefined): TextLineMask | undefined {
+  if (!lm || typeof lm !== 'object') return undefined;
+  const fill = lm.fill ? clampColor(lm.fill) : undefined;
+  const gradient = lm.gradient ? sanitizeGradient(lm.gradient) : undefined;
+  if (!fill && !gradient) return undefined;
+  const style =
+    lm.style === 'lineWidth' || lm.style === 'maxLineWidth' || lm.style === 'fullWidth'
+      ? lm.style
+      : 'fullWidth';
+  const out: TextLineMask = { style };
+  if (fill) out.fill = fill;
+  if (gradient) out.gradient = gradient;
+  if (lm.heightOffsetPx !== undefined) out.heightOffsetPx = finite(lm.heightOffsetPx, 0, -2000, 2000);
+  if (lm.vOffsetPx !== undefined) out.vOffsetPx = finite(lm.vOffsetPx, 0, -2000, 2000);
+  if (lm.widthOffsetPx !== undefined) out.widthOffsetPx = finite(lm.widthOffsetPx, 0, -4000, 4000);
+  if (lm.hOffsetPx !== undefined) out.hOffsetPx = finite(lm.hOffsetPx, 0, -4000, 4000);
   return out;
 }
 
@@ -420,6 +449,19 @@ function clampObject(o: SlideObject): SlideObject {
       const mask = sanitizeGeom(o.mask);
       if (mask) out.mask = mask;
       else delete out.mask;
+    }
+    if (o.shadow)
+      out.shadow = {
+        dx: finite(o.shadow.dx, 0, -500, 500),
+        dy: finite(o.shadow.dy, 0, -500, 500),
+        blur: finite(o.shadow.blur, 0, 0, 500),
+        color: clampColor(o.shadow.color),
+      };
+    else delete out.shadow;
+    if (o.softEdge !== undefined) {
+      const se = finite(o.softEdge, 0, 0, 500);
+      if (se > 0) out.softEdge = se;
+      else delete out.softEdge;
     }
     return out;
   }

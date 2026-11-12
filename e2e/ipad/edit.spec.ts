@@ -62,7 +62,6 @@ test('the worship lead builds a service on the iPad: search, new song, edit, pre
     });
     await expect(page).toHaveURL(/#\/library$/);
     await page.getByRole('link', { name: 'Settings' }).tap();
-    await expect(page.getByRole('link', { name: 'Themes' })).toBeVisible();
     for (const hidden of ['Outputs', 'Audio', 'Keyboard', 'Stream Deck', 'MIDI', 'Backups', 'Diagnostics'])
       await expect(page.getByRole('link', { name: hidden, exact: true })).toHaveCount(0);
     await shot(page, 'settings');

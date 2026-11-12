@@ -33,6 +33,42 @@ function checkResult(r: ReturnType<typeof parseRtf>) {
   if (r.fontName !== undefined) expect(r.fontName.length).toBeLessThanOrEqual(RTF_FONT_NAME_MAX);
   // No lone surrogates in the text.
   expect(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(r.text)).toBe(false);
+
+  if (r.spans) {
+    let prevEnd = 0;
+    for (const s of r.spans) {
+      expect(Number.isInteger(s.start)).toBe(true);
+      expect(Number.isInteger(s.end)).toBe(true);
+      expect(s.start).toBeGreaterThanOrEqual(0);
+      expect(s.end).toBeGreaterThan(s.start);
+      expect(s.end).toBeLessThanOrEqual(r.text.length);
+      // Monotonic non-overlapping ranges
+      expect(s.start).toBeGreaterThanOrEqual(prevEnd);
+      prevEnd = s.end;
+
+      if (s.fontSizePt !== undefined) {
+        expect(Number.isFinite(s.fontSizePt)).toBe(true);
+        expect(s.fontSizePt).toBeGreaterThan(0);
+      }
+      for (const c of [s.color, s.highlight, s.strokeColor]) {
+        if (!c) continue;
+        for (const v of [c.r, c.g, c.b]) {
+          expect(Number.isInteger(v)).toBe(true);
+          expect(v).toBeGreaterThanOrEqual(0);
+          expect(v).toBeLessThanOrEqual(255);
+        }
+        expect(Number.isFinite(c.a)).toBe(true);
+        expect(c.a).toBeGreaterThanOrEqual(0);
+        expect(c.a).toBeLessThanOrEqual(1);
+      }
+    }
+  }
+
+  if (!r.plain && r.text.length > 0) {
+    const lineCount = r.text.split('\n').length;
+    expect(r.paras).toBeDefined();
+    expect(r.paras!.length).toBe(Math.min(1000, lineCount));
+  }
 }
 
 const token = fc.oneof(
@@ -45,10 +81,22 @@ const token = fc.oneof(
     '\\b',
     '\\b0',
     '\\i',
+    '\\i0',
+    '\\ul',
+    '\\ulnone',
+    '\\strike',
+    '\\strike0',
+    '\\super',
+    '\\sub',
+    '\\nosupersub',
+    '\\scaps',
+    '\\scaps0',
     '\\plain',
     '\\pard',
     '\\qc',
     '\\qr',
+    '\\ql',
+    '\\qj',
     '\\*',
     '\\fonttbl',
     '\\colortbl',
@@ -76,6 +124,16 @@ const token = fc.oneof(
         'f',
         'fs',
         'cf',
+        'cb',
+        'highlight',
+        'expndtw',
+        'slleading',
+        'li',
+        'fi',
+        'sb',
+        'sa',
+        'ca',
+        'c',
         'red',
         'green',
         'blue',
@@ -87,7 +145,7 @@ const token = fc.oneof(
       ),
       fc.oneof(
         fc.integer({ min: -70000, max: 70000 }).map(String),
-        fc.constantFrom('-', '', '99999999999999999999999', '-0', '0'),
+        fc.constantFrom('-', '', '99999999999999999999999', '-0', '0', '-50000', '100000'),
       ),
     )
     .map(([w, n]) => `\\${w}${n}`),
@@ -100,6 +158,126 @@ const token = fc.oneof(
     .map(([n, raw]) => `\\bin${n} ${raw}`),
 );
 const rtfSoup = fc.array(token, { maxLength: 120 }).map((t) => `{\\rtf1${t.join('')}`);
+
+const expandedColorEntry = fc.oneof(
+  fc
+    .tuple(
+      fc.constantFrom('\\cssrgb', '\\csgenericrgb'),
+      fc.array(
+        fc
+          .tuple(
+            fc.constant('\\c'),
+            fc.oneof(
+              fc.integer({ min: -50_000, max: 200_000 }).map(String),
+              fc.constantFrom('-', '', '99999999999999999', '0'),
+            ),
+          )
+          .map(([c, n]) => `${c}${n}`),
+        { minLength: 1, maxLength: 4 },
+      ),
+      fc.option(
+        fc
+          .tuple(
+            fc.constant('\\ca'),
+            fc.oneof(
+              fc.integer({ min: -50_000, max: 200_000 }).map(String),
+              fc.constantFrom('-', '', '99999999999999999', '-0', '0'),
+            ),
+          )
+          .map(([ca, n]) => `${ca}${n}`),
+        { nil: undefined },
+      ),
+    )
+    .map(([cs, comps, alpha]) => `${cs}${comps.join('')}${alpha ?? ''};`),
+  fc
+    .tuple(
+      fc.constant('\\csgray'),
+      fc
+        .tuple(
+          fc.constant('\\c'),
+          fc.oneof(
+            fc.integer({ min: -50_000, max: 200_000 }).map(String),
+            fc.constantFrom('-', '', '99999999999999999', '0'),
+          ),
+        )
+        .map(([c, n]) => `${c}${n}`),
+      fc.option(
+        fc
+          .tuple(
+            fc.constant('\\ca'),
+            fc.oneof(
+              fc.integer({ min: -50_000, max: 200_000 }).map(String),
+              fc.constantFrom('-', '', '99999999999999999', '0'),
+            ),
+          )
+          .map(([ca, n]) => `${ca}${n}`),
+        { nil: undefined },
+      ),
+    )
+    .map(([cs, comp, alpha]) => `${cs}${comp}${alpha ?? ''};`),
+  fc.constant(';'),
+);
+
+const expandedColortbl = fc
+  .array(expandedColorEntry, { minLength: 1, maxLength: 5 })
+  .map((entries) => `{\\*\\expandedcolortbl;${entries.join('')}}`);
+
+const bulletPrefix = fc.oneof(
+  fc.constant('{\\listtext \\bullet\\tab}'),
+  fc.constant('{\\listtext •\\tab}'),
+  fc.constant('{\\listtext -\\tab}'),
+  fc.constant('{\\listtext 1.\\tab}'),
+  fc.string({ maxLength: 8 }).map((s) => `{\\listtext ${s.replace(/[{}]/g, '')}\\tab}`),
+  fc.constant('{\\pntext \\bullet\\tab}'),
+);
+
+const spanTransition = fc.oneof(
+  fc.constantFrom(
+    '\\b ',
+    '\\b0 ',
+    '\\i ',
+    '\\i0 ',
+    '\\ul ',
+    '\\ulnone ',
+    '\\strike ',
+    '\\strike0 ',
+    '\\super ',
+    '\\sub ',
+    '\\nosupersub ',
+    '\\scaps ',
+    '\\scaps0 ',
+    '\\plain ',
+    '\\par ',
+    '\\pard ',
+  ),
+  fc
+    .tuple(
+      fc.constantFrom('cb', 'highlight', 'expndtw', 'slleading', 'li', 'fi', 'sb', 'sa', 'cf', 'fs'),
+      fc.oneof(
+        fc.integer({ min: -5000, max: 5000 }).map(String),
+        fc.constantFrom('-', '', '0', '99999999999999999', '-1'),
+      ),
+    )
+    .map(([w, n]) => `\\${w}${n} `),
+);
+
+const richSegment = fc
+  .tuple(
+    fc.array(spanTransition, { maxLength: 4 }),
+    fc.option(bulletPrefix, { nil: undefined }),
+    fc.string({ maxLength: 12 }).map((s) => s.replace(/[{}\\;]/g, '')),
+  )
+  .map(([transitions, bullet, text]) => `${bullet ?? ''}${transitions.join('')}${text}`);
+
+const richRtfSoup = fc
+  .tuple(
+    fc.option(expandedColortbl, { nil: undefined }),
+    fc.array(richSegment, { minLength: 1, maxLength: 20 }),
+  )
+  .map(
+    ([expTbl, segs]) =>
+      `{\\rtf1\\ansi{\\fonttbl\\f0 Helvetica;}{\\colortbl;\\red0\\green0\\blue0;}${expTbl ?? ''}${segs.join('')}}`,
+  );
 
 /** Mutations of the real file: delete, duplicate, insert and replace characters. */
 const mutated = fc
@@ -163,6 +341,16 @@ describe('parseRtf (fuzz)', () => {
       { numRuns: 2000 },
     );
   });
+
+  it('expanded color tables, listtext bullets, and multi-span transitions never throw and stay well-formed', () => {
+    fc.assert(
+      fc.property(richRtfSoup, (s) => {
+        checkResult(parseRtf(s));
+        checkResult(parseRtf(enc.encode(s)));
+      }),
+      { numRuns: 1000 },
+    );
+  });
 });
 
 describe('parseRtf regressions found by fuzzing', () => {
@@ -206,5 +394,56 @@ describe('parseRtf regressions found by fuzzing', () => {
   it('a huge font table name is cut', () => {
     const r = parseRtf(`{\\rtf1{\\fonttbl\\f0 ${'N'.repeat(10_000)};}\\f0 x}`);
     expect(r.fontName!.length).toBeLessThanOrEqual(RTF_FONT_NAME_MAX);
+  });
+
+  it('expandedcolortbl with negative, huge, and sign-only numbers does not produce NaN/Infinity and clamps color', () => {
+    for (const s of [
+      '{\\rtf1{\\*\\expandedcolortbl;\\cssrgb\\c-5000\\c200000\\c0\\ca-5000;}\\cf1 text}',
+      '{\\rtf1{\\*\\expandedcolortbl;\\cssrgb\\c99999999999999999\\c0\\c0\\ca99999999999999999;}\\cf1 text}',
+      '{\\rtf1{\\*\\expandedcolortbl;\\csgray\\c-\\ca-;}\\cf1 text}',
+      '{\\rtf1{\\*\\expandedcolortbl;\\csgenericrgb\\c20000\\c40000\\c60000;}\\cf1 text}',
+    ]) {
+      const r = parseRtf(s);
+      checkResult(r);
+      if (r.color) {
+        expect(r.color.r).toBeGreaterThanOrEqual(0);
+        expect(r.color.r).toBeLessThanOrEqual(255);
+        expect(r.color.g).toBeGreaterThanOrEqual(0);
+        expect(r.color.g).toBeLessThanOrEqual(255);
+        expect(r.color.b).toBeGreaterThanOrEqual(0);
+        expect(r.color.b).toBeLessThanOrEqual(255);
+        expect(r.color.a).toBeGreaterThanOrEqual(0);
+        expect(r.color.a).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it('listtext bullet prefixes extract bullets and set hasBulletList', () => {
+    const s = '{\\rtf1{\\listtext •\\tab}First item\\par {\\listtext -\\tab}Second item}';
+    const r = parseRtf(s);
+    checkResult(r);
+    expect(r.hasBulletList).toBe(true);
+    expect(r.paras).toHaveLength(2);
+    expect(r.paras![0]!.bulletChar).toBe('•');
+    expect(r.paras![1]!.bulletChar).toBe('-');
+  });
+
+  it('multi-span transitions create valid monotonic non-overlapping spans with paragraph styles', () => {
+    const s =
+      '{\\rtf1\\ansi{\\colortbl;\\red255\\green0\\blue0;\\red0\\green255\\blue0;}' +
+      '\\b Bold \\b0\\i Italic \\i0\\ul Underline \\ulnone\\strike Strike \\strike0' +
+      '\\super Super \\nosupersub\\sub Sub \\nosupersub\\scaps SmallCaps \\scaps0' +
+      '\\cb1 Highlighted \\cf2 Colored \\expndtw20 Tracked \\slleading20 Spaced ' +
+      '\\par \\li200\\fi-100\\sb40\\sa60 Hanging and spaced paragraph}';
+    const r = parseRtf(s);
+    checkResult(r);
+    expect(r.spans).toBeDefined();
+    expect(r.spans!.length).toBeGreaterThan(1);
+    expect(r.paras).toBeDefined();
+    expect(r.paras!.length).toBe(2);
+    expect(r.paras![1]!.indentPt).toBe(10);
+    expect(r.paras![1]!.firstLinePt).toBe(-5);
+    expect(r.paras![1]!.spaceBeforePt).toBe(2);
+    expect(r.paras![1]!.spaceAfterPt).toBe(3);
   });
 });

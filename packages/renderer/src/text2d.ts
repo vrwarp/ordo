@@ -4,6 +4,7 @@ import {
   LOGICAL_HEIGHT,
   type Look,
   type Rgba,
+  type ShapeGeom,
   type Slide,
   type SlideObject,
   type TextObject,
@@ -14,7 +15,17 @@ import {
   textScripts,
 } from '@ordo/domain';
 
-import { CLAMP, clampBox, clampCrop, clampLook, clampSlide, clampStyle, clampText, num } from './clamp.ts';
+import {
+  CLAMP,
+  clampBox,
+  clampCrop,
+  clampLook,
+  clampSlide,
+  clampStyle,
+  clampText,
+  isRichStyle,
+  num,
+} from './clamp.ts';
 import { drawableContent } from './content.ts';
 import { type Ctx2D, roundRect, setLetterSpacing, withRotation } from './ctx.ts';
 import {
@@ -35,7 +46,7 @@ import { drawGeomShape, hasShapeExtras, placeBox } from './shape.ts';
 import { firstStrong, hasStrongRtl } from './text/bidi.ts';
 import { LEGACY_FONT_ENV, currentFontEnv } from './text/fonts.ts';
 import { metricsInk } from './text/measure.ts';
-import { BAND_MIN_FONT_SCALE, bandObject, drawRichText, isRichStyle, isRichText } from './text/rich.ts';
+import { BAND_MIN_FONT_SCALE, bandObject, drawRichText, isRichText } from './text/rich.ts';
 import type { Ink } from './text/types.ts';
 
 export type { Ctx2D } from './ctx.ts';
@@ -431,6 +442,50 @@ export function drawImageFit(
   ctx.restore();
 }
 
+/** Feathers the edges of a picture on an OffscreenCanvas over softEdge logical px. */
+function applyPictureSoftEdge(
+  sprite: OffscreenCanvasRenderingContext2D,
+  W: number,
+  H: number,
+  box: Box,
+  m: DOMMatrix,
+  X: number,
+  Y: number,
+  softEdge: number,
+  scale: number,
+  mask?: ShapeGeom,
+): void {
+  const maskCanvas = new OffscreenCanvas(W, H);
+  const mc = maskCanvas.getContext('2d');
+  if (!mc) return;
+  const e = softEdge;
+  const blurPx = Math.max(0.5, (softEdge * scale) / 2);
+  mc.setTransform(m.a, m.b, m.c, m.d, m.e - X, m.f - Y);
+  mc.fillStyle = '#000';
+  if ('filter' in mc) {
+    try {
+      mc.filter = `blur(${blurPx}px)`;
+    } catch {
+      // ignore
+    }
+  }
+  if (mask) {
+    const built = storedGeometry(mask, box.w, box.h);
+    if (built) {
+      mc.fill(geomFillPath2D(built), GEOM_CLIP_RULE);
+    } else {
+      mc.fillRect(e, e, Math.max(0, box.w - 2 * e), Math.max(0, box.h - 2 * e));
+    }
+  } else {
+    mc.fillRect(e, e, Math.max(0, box.w - 2 * e), Math.max(0, box.h - 2 * e));
+  }
+  sprite.save();
+  sprite.setTransform(1, 0, 0, 1, 0, 0);
+  sprite.globalCompositeOperation = 'destination-in';
+  sprite.drawImage(maskCanvas, 0, 0);
+  sprite.restore();
+}
+
 /** A masked or flipped picture from its source (`drawImageFit` with a `shape`). */
 function drawShapedPicture(
   ctx: Ctx2D,
@@ -447,7 +502,11 @@ function drawShapedPicture(
   const sized = { ...shape, w: box.w, h: box.h };
   ctx.save();
   placeBox(ctx, box, scale);
-  if (shape.mask && typeof OffscreenCanvas !== 'undefined' && typeof ctx.getTransform === 'function') {
+  if (
+    (shape.mask || (shape.softEdge && shape.softEdge > 0) || shape.shadow) &&
+    typeof OffscreenCanvas !== 'undefined' &&
+    typeof ctx.getTransform === 'function'
+  ) {
     const m = ctx.getTransform();
     const xs = [m.e, m.a * box.w + m.e, m.c * box.h + m.e, m.a * box.w + m.c * box.h + m.e];
     const ys = [m.f, m.b * box.w + m.f, m.d * box.h + m.f, m.b * box.w + m.d * box.h + m.f];
@@ -468,8 +527,17 @@ function drawShapedPicture(
         sprite.imageSmoothingQuality = 'medium';
         sprite.setTransform(m.a, m.b, m.c, m.d, m.e - X, m.f - Y);
         paintShapedPicture(sprite, img, 0, 0, box.w, box.h, fit, c, sized);
+        if (shape.softEdge && shape.softEdge > 0) {
+          applyPictureSoftEdge(sprite, W, H, box, m, X, Y, shape.softEdge, scale, shape.mask);
+        }
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.globalAlpha = opacity;
+        if (shape.shadow) {
+          ctx.shadowColor = rgbaCss(shape.shadow.color);
+          ctx.shadowBlur = shape.shadow.blur * scale;
+          ctx.shadowOffsetX = shape.shadow.dx * scale;
+          ctx.shadowOffsetY = shape.shadow.dy * scale;
+        }
         ctx.drawImage(sprite.canvas, X, Y);
         ctx.restore();
         return;
@@ -492,6 +560,12 @@ function drawShapedPicture(
   } else {
     roundRect(ctx, 0, 0, box.w, box.h, num(radius, 0, CLAMP.maxRadius, 0));
     ctx.clip();
+  }
+  if (shape.shadow) {
+    ctx.shadowColor = rgbaCss(shape.shadow.color);
+    ctx.shadowBlur = shape.shadow.blur * scale;
+    ctx.shadowOffsetX = shape.shadow.dx * scale;
+    ctx.shadowOffsetY = shape.shadow.dy * scale;
   }
   paintShapedPicture(ctx, img, 0, 0, box.w, box.h, fit, c, { ...sized, mask: undefined });
   ctx.restore();
@@ -534,7 +608,7 @@ export function drawShape(ctx: Ctx2D, o: Extract<SlideObject, { type: 'shape' }>
  * rich style field, else through `drawText` exactly as before those fields existed.
  */
 export function drawTextObject(ctx: Ctx2D, o: TextObject, scale: number): void {
-  if (isRichText(o)) drawRichText(ctx, o, scale);
+  if (isRichText(o) || isRichStyle(o.style)) drawRichText(ctx, o, scale);
   else drawText(ctx, o.text, o.style, o.box, scale, { opacity: o.opacity });
 }
 
@@ -579,7 +653,7 @@ export function drawBandText(
 ): void {
   const clamped = clampStyle(style);
   text = clampText(text);
-  if ((src && isRichText(src)) || isRichStyle(clamped) || hasStrongRtl(text))
+  if ((src && (isRichText(src) || isRichStyle(src.style))) || isRichStyle(clamped) || hasStrongRtl(text))
     drawRichText(
       ctx,
       bandObject(src ? readableText(src) : text, clamped, clampBox(band), src),
