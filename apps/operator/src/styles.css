@@ -1788,3 +1788,282 @@ details.advanced-details[open] summary {
   margin-bottom: 8px;
   color: var(--fg);
 }
+
+/* Unified Color Pill & Popover (Proposal A) */
+.color-checkerboard {
+  background-color: #1e2430;
+  background-image:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.14) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.14) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.14) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.14) 75%);
+  background-size: 8px 8px;
+  background-position:
+    0 0,
+    0 4px,
+    4px -4px,
+    -4px 0;
+}
+.color-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 3px 6px 3px 3px;
+  min-width: 0;
+  max-width: 100%;
+}
+.color-pill:focus-within {
+  border-color: var(--accent);
+}
+.color-pill.disabled {
+  opacity: 0.55;
+  pointer-events: none;
+}
+.color-pill-chip {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  overflow: hidden;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.color-pill-fill {
+  position: absolute;
+  inset: 0;
+}
+input.color-pill-hex {
+  width: 66px;
+  min-width: 0;
+  min-height: 0;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  outline: none;
+}
+input.color-pill-hex:focus {
+  outline: none;
+}
+.color-pill-alpha {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border-left: 1px solid var(--line);
+  padding-left: 6px;
+  flex-shrink: 0;
+}
+.color-pill-alpha input {
+  width: 34px;
+  min-height: 0;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  text-align: right;
+  outline: none;
+  -moz-appearance: textfield;
+}
+.color-pill-alpha input:focus {
+  outline: none;
+}
+.color-pill-alpha input::-webkit-outer-spin-button,
+.color-pill-alpha input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.color-popover {
+  position: fixed;
+  z-index: 2000;
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.color-sv {
+  position: relative;
+  height: 132px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background-image: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent);
+  cursor: crosshair;
+  overflow: hidden;
+  touch-action: none;
+}
+.color-sv-thumb {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.65);
+  pointer-events: none;
+}
+.color-slider-track {
+  position: relative;
+  height: 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+.color-hue-track {
+  background: linear-gradient(to right, #f00 0%, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00 100%);
+}
+.color-alpha-grad {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+input[type="range"].color-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 12px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  z-index: 2;
+  border: 0;
+}
+input[type="range"].color-range:focus {
+  outline: none;
+}
+input[type="range"].color-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2px solid #0f172a;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
+}
+input.color-hex-box {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+}
+.color-pct-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font-size: 12px;
+}
+.color-pct-box input {
+  width: 46px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  text-align: right;
+  outline: none;
+}
+.color-swatch-grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 5px;
+}
+.color-swatch-btn {
+  position: relative;
+  height: 24px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  overflow: hidden;
+  cursor: pointer;
+}
+.color-swatch-fill {
+  position: absolute;
+  inset: 0;
+}
+
+/* Visual Gradient Ramp Editor */
+.grad-ramp-wrap {
+  position: relative;
+  padding: 2px 0 4px;
+}
+.grad-ramp-bar {
+  position: relative;
+  height: 20px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  overflow: hidden;
+  cursor: copy;
+}
+.grad-ramp-fill {
+  position: absolute;
+  inset: 0;
+}
+.grad-ramp-pins {
+  position: relative;
+  height: 16px;
+  margin-top: 4px;
+}
+.grad-ramp-pin {
+  position: absolute;
+  top: 0;
+  margin-left: -8px;
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid #e2e8f0;
+  cursor: grab;
+  touch-action: none;
+}
+.grad-ramp-pin.active {
+  border-color: var(--accent);
+  transform: scale(1.15);
+  z-index: 2;
+}
+.grad-stop-row {
+  padding: 4px 6px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+}
+.grad-stop-row.active {
+  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+@media (pointer: coarse) {
+  .color-pill-chip {
+    width: 32px;
+    height: 32px;
+  }
+  .color-swatch-btn {
+    height: 32px;
+  }
+}

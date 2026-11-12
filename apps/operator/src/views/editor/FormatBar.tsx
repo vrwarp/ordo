@@ -9,6 +9,7 @@ import {
   type Theme,
 } from '@ordo/domain';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { ColorPopover } from '../../components/ColorPicker.tsx';
 import { FontPicker } from '../../components/FontPicker.tsx';
 import { useCoarsePointer } from '../../components/pointer.ts';
 import { useLibrary } from '../../state/library.ts';
@@ -504,23 +505,8 @@ function Swatches(props: {
 }) {
   // A swatch is a 44 px target under a finger (design/15), 28 px under a mouse.
   const side = useCoarsePointer() ? 44 : 28;
-  const picker = useRef<HTMLInputElement>(null);
-  const custom = useRef(props.custom);
-  custom.current = props.custom;
-  const hex = props.custom ? rgbaHex(props.custom.value) : '#000000';
-  const [picked, setPicked] = useState(hex);
-  useEffect(() => setPicked(hex), [hex]);
-  // The native change event fires once, when the picker closes; React's onChange fires on every input.
-  useEffect(() => {
-    const el = picker.current;
-    if (!el) return;
-    const fn = () => {
-      const c = custom.current;
-      if (c) c.onPick(hexToRgba(el.value, 1));
-    };
-    el.addEventListener('change', fn);
-    return () => el.removeEventListener('change', fn);
-  }, []);
+  const customBtnRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
   return (
     <div className="row wrap" role="group" aria-label={props.label} style={{ gap: 4 }}>
       <span className="small" style={{ minWidth: 70 }}>
@@ -558,16 +544,59 @@ function Swatches(props: {
         </button>
       ))}
       {props.custom && (
-        <label className="row small" style={{ gap: 4 }}>
-          <span>Other</span>
-          <input
-            ref={picker}
-            type="color"
+        <>
+          <button
+            ref={customBtnRef}
+            type="button"
+            className={`small${open ? ' on' : ''}`}
             aria-label={props.custom.name}
-            value={picked}
-            onChange={(e) => setPicked(e.target.value)}
-          />
-        </label>
+            aria-expanded={open}
+            title={props.custom.name}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setOpen((o) => !o)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              padding: '0 8px',
+              minHeight: side,
+            }}
+          >
+            <span
+              aria-hidden="true"
+              className="color-checkerboard"
+              style={{
+                display: 'inline-block',
+                width: 14,
+                height: 14,
+                borderRadius: 4,
+                border: '1px solid var(--line)',
+                position: 'relative',
+                overflow: 'hidden',
+              }}
+            >
+              <span
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  background: rgbaCss(props.custom.value),
+                }}
+              />
+            </span>
+            <span>Custom</span>
+          </button>
+          {open && (
+            <ColorPopover
+              anchor={customBtnRef.current}
+              value={props.custom.value}
+              alpha={false}
+              swatches={props.swatches}
+              preserveFocus
+              onChange={(c) => props.custom?.onPick(c)}
+              onClose={() => setOpen(false)}
+            />
+          )}
+        </>
       )}
     </div>
   );

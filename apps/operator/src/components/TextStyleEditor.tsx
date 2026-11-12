@@ -1,6 +1,6 @@
 import type { TextStyle } from '@ordo/domain';
 import type { ReactNode } from 'react';
-import { AlignIcon, VAlignIcon, hexToRgb, rgbToHex } from './AlignIcons.tsx';
+import { AlignIcon, VAlignIcon } from './AlignIcons.tsx';
 import { Check, ColorField, Field, NumberField, Select } from './fields.tsx';
 import { FontPicker } from './FontPicker.tsx';
 import { fontFamilies } from '../services/fonts.ts';
@@ -269,48 +269,33 @@ export function TextStyleEditor(props: {
         >
           Text Color{mark('color')}
         </span>
-        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
-          {QUICK_COLORS.map(({ label, hex, color }) => {
-            const isSelected = s.color.r === color.r && s.color.g === color.g && s.color.b === color.b;
-            return (
-              <button
-                key={label}
-                type="button"
-                title={label}
-                onClick={() => set('color', color)}
-                style={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: '50%',
-                  background: hex,
-                  border: isSelected ? '2px solid var(--accent)' : '1px solid var(--line)',
-                  boxShadow: isSelected ? '0 0 0 2px var(--bg), 0 0 0 4px var(--accent)' : 'none',
-                  cursor: 'pointer',
-                  padding: 0,
-                }}
-              />
-            );
-          })}
-          <div style={{ marginLeft: 4 }}>
-            <input
-              type="color"
-              value={rgbToHex(s.color.r, s.color.g, s.color.b)}
-              aria-label="Pick custom text color"
-              onChange={(e) => {
-                const c = hexToRgb(e.target.value);
-                set('color', { ...c, a: s.color.a ?? 1 });
-              }}
-              style={{
-                width: 30,
-                height: 30,
-                padding: 1,
-                border: '1px solid var(--line)',
-                borderRadius: 6,
-                background: 'transparent',
-                cursor: 'pointer',
-              }}
-            />
+        <div className="col" style={{ gap: 8 }}>
+          <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
+            {QUICK_COLORS.map(({ label, hex, color }) => {
+              const isSelected = s.color.r === color.r && s.color.g === color.g && s.color.b === color.b;
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  title={label}
+                  onClick={() => set('color', { ...color, a: s.color.a ?? 1 })}
+                  style={{
+                    width: 26,
+                    height: 26,
+                    minHeight: 0,
+                    flexShrink: 0,
+                    borderRadius: '50%',
+                    background: hex,
+                    border: isSelected ? '2px solid var(--accent)' : '1px solid var(--line)',
+                    boxShadow: isSelected ? '0 0 0 2px var(--bg), 0 0 0 4px var(--accent)' : 'none',
+                    cursor: 'pointer',
+                    padding: 0,
+                  }}
+                />
+              );
+            })}
           </div>
+          <ColorField value={s.color} onChange={(color) => set('color', color)} />
         </div>
       </div>
 
