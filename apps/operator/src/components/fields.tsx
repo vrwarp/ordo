@@ -1,5 +1,7 @@
-import { type Box, hexToRgba, type Rgba, rgbaHex, type Transition } from '@ordo/domain';
+import type { Box, Rgba, Transition } from '@ordo/domain';
 import { type ReactNode, useEffect, useState } from 'react';
+import { ColorPill } from './ColorPicker.tsx';
+import type { ColorSwatch } from './colorMath.ts';
 
 export function Field(props: {
   label: ReactNode;
@@ -119,31 +121,16 @@ export function ColorField(props: {
   onChange: (c: Rgba) => void;
   alpha?: boolean;
   disabled?: boolean;
+  swatches?: readonly ColorSwatch[];
 }) {
-  const { value } = props;
   const el = (
-    <span className="row" style={{ gap: 4 }}>
-      <input
-        type="color"
-        value={rgbaHex(value)}
-        disabled={props.disabled}
-        onChange={(e) => props.onChange(hexToRgba(e.target.value, value.a))}
-      />
-      {props.alpha !== false && (
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.01}
-          value={value.a}
-          disabled={props.disabled}
-          title={`Opacity ${Math.round(value.a * 100)}%`}
-          style={{ width: 70 }}
-          onChange={(e) => props.onChange({ ...value, a: Number(e.target.value) })}
-        />
-      )}
-      <span className="muted small mono">{rgbaHex(value)}</span>
-    </span>
+    <ColorPill
+      value={props.value}
+      onChange={props.onChange}
+      alpha={props.alpha}
+      disabled={props.disabled}
+      swatches={props.swatches}
+    />
   );
   return props.label ? <Field label={props.label}>{el}</Field> : el;
 }

@@ -482,7 +482,7 @@ describe('the format bar markup', () => {
     expect(h).toContain('aria-label="Text colour"');
     expect(tag(h, 'aria-label="Auto (the box colour)"')).toContain('aria-pressed="false"');
     expect(tag(h, 'aria-label="White"')).toContain('aria-pressed="false"');
-    expect(tag(h, 'aria-label="Other text colour"')).toContain('type="color"');
+    expect(tag(h, 'aria-label="Other text colour"')).toContain('type="button"');
     expect(h).toContain('aria-label="Highlight"');
     expect(tag(h, 'aria-label="None (no highlight)"')).toContain('aria-pressed="true"');
     for (const s of HIGHLIGHTS) expect(h).toContain(`aria-label="${s.name}"`);

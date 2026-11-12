@@ -1,4 +1,13 @@
-import type { ArrowEnd, Gradient, LineDash, Rgba, Shadow, ShapeObject, SlideObject } from '@ordo/domain';
+import {
+  type ArrowEnd,
+  type Gradient,
+  type LineDash,
+  type Rgba,
+  rgbaCss,
+  type Shadow,
+  type ShapeObject,
+  type SlideObject,
+} from '@ordo/domain';
 import {
   BUILTIN_COUNT,
   CLOSED_TOLERANCE,
@@ -441,26 +450,120 @@ export function ShapeFillFields({ o, disabled, set }: Props) {
   );
 }
 
+function mixAt(stops: Gradient['stops'], at: number): Rgba {
+  const sorted = sortStops(stops);
+  if (sorted.length === 0) return DEFAULT_FILL;
+  if (at <= sorted[0]!.at) return sorted[0]!.color;
+  for (let i = 0; i + 1 < sorted.length; i++) {
+    const a = sorted[i]!;
+    const b = sorted[i + 1]!;
+    if (at <= b.at) {
+      const t = b.at > a.at ? (at - a.at) / (b.at - a.at) : 0;
+      return mix(a.color, b.color, t);
+    }
+  }
+  return sorted[sorted.length - 1]!.color;
+}
+
+const ANGLE_PRESETS = [0, 45, 90, 135, 180] as const;
+
 function GradientFields({ o, g, disabled, set }: Props & { g: Gradient }) {
   const put = (next: Gradient, key?: string) => patch(set, (s) => withGradient(s, next), key);
+  const rampCss = `linear-gradient(90deg, ${g.stops.map((s) => `${rgbaCss(s.color)} ${Math.round(s.at * 1000) / 10}%`).join(', ')})`;
+
+  const addStopAt = (at: number) => {
+    if (disabled || g.stops.length >= MAX_STOPS) return;
+    const clamped = Math.max(0, Math.min(1, Math.round(at * 1000) / 1000));
+    const color = mixAt(g.stops, clamped);
+    const next = sortStops([...g.stops, { at: clamped, color }]);
+    put({ ...g, stops: next });
+  };
+
   return (
-    <div className="col" style={{ gap: 6 }} data-gradient={g.kind}>
+    <div className="col" style={{ gap: 8 }} data-gradient={g.kind}>
       {g.kind === 'linear' && (
-        <NumberField
-          label="Angle"
-          value={g.angle ?? 0}
-          min={-360}
-          max={360}
-          step={15}
-          suffix="°"
-          disabled={disabled}
-          onChange={(angle) => put(withAngle(g, angle))}
-        />
+        <div className="col" style={{ gap: 4 }}>
+          <NumberField
+            label="Angle"
+            value={g.angle ?? 0}
+            min={-360}
+            max={360}
+            step={15}
+            suffix="°"
+            disabled={disabled}
+            onChange={(angle) => put(withAngle(g, angle))}
+          />
+          <div className="row wrap" style={{ gap: 4 }}>
+            {ANGLE_PRESETS.map((deg) => (
+              <button
+                key={deg}
+                type="button"
+                className={`small${(g.angle ?? 0) === deg ? ' on' : ''}`}
+                disabled={disabled}
+                onClick={() => put(withAngle(g, deg))}
+                style={{ minHeight: 0, padding: '2px 7px' }}
+              >
+                {deg}°
+              </button>
+            ))}
+          </div>
+        </div>
       )}
+
+      {/* Visual Gradient Ramp Bar */}
+      <div className="grad-ramp-wrap">
+        <div
+          className="grad-ramp-bar color-checkerboard"
+          title={disabled ? undefined : 'Click gradient track to add a stop'}
+          onClick={(e) => {
+            if (disabled) return;
+            const r = e.currentTarget.getBoundingClientRect();
+            if (r.width <= 0) return;
+            addStopAt((e.clientX - r.left) / r.width);
+          }}
+        >
+          <div className="grad-ramp-fill" style={{ background: rampCss }} />
+        </div>
+        <div className="grad-ramp-pins">
+          {g.stops.map((s, i) => (
+            <button
+              // biome-ignore lint/suspicious/noArrayIndexKey: stops have no identity; each pin maps to stop index
+              key={i}
+              type="button"
+              className="grad-ramp-pin"
+              aria-label={`Select gradient stop ${i + 1}`}
+              disabled={disabled}
+              style={{ left: `${s.at * 100}%`, background: rgbaCss(s.color) }}
+              onPointerDown={(e) => {
+                if (disabled) return;
+                e.currentTarget.dataset.dragging = '1';
+                e.currentTarget.setPointerCapture(e.pointerId);
+              }}
+              onPointerMove={(e) => {
+                if (disabled || e.currentTarget.dataset.dragging !== '1') return;
+                const r = e.currentTarget.parentElement?.getBoundingClientRect();
+                if (!r || r.width <= 0) return;
+                const at = Math.max(
+                  0,
+                  Math.min(1, Math.round(((e.clientX - r.left) / r.width) * 1000) / 1000),
+                );
+                put(withStop(g, i, { at }), `shape:${o.id}:stop:${i}:at`);
+              }}
+              onPointerUp={(e) => {
+                delete e.currentTarget.dataset.dragging;
+              }}
+              onPointerCancel={(e) => {
+                delete e.currentTarget.dataset.dragging;
+              }}
+            />
+          ))}
+        </div>
+      </div>
+
       <span className="small muted">Stops</span>
       {g.stops.map((s, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: stops have no identity; each row edits the stop at its position
-        <div key={i} className="row wrap" style={{ gap: 4 }} data-stop={i}>
+        <div key={i} className="row wrap grad-stop-row" style={{ gap: 4 }} data-stop={i}>
           <ColorField
             value={s.color}
             disabled={disabled}
@@ -471,7 +574,7 @@ function GradientFields({ o, g, disabled, set }: Props & { g: Gradient }) {
             min={0}
             max={100}
             suffix="%"
-            width={60}
+            width={64}
             disabled={disabled}
             onChange={(pct) => put(withStop(g, i, { at: pct / 100 }))}
           />
