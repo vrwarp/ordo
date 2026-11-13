@@ -142,6 +142,43 @@ describe("a slide's drawing budget (design/27 §12 drawing cost)", () => {
     expect(effectArea(shape('x', ''))).toBe(0);
   });
 
+  it('counts pictures with a shadow or soft edge in the effect budget and draws later ones without them', () => {
+    // ProPresenter picture elements with a shadow and a feather, a quarter of the slide each.
+    const photo = (id: string): SlideObject => ({
+      id,
+      type: 'image',
+      box: { x: 480, y: 270, w: 960, h: 540, rotation: 0 },
+      mediaId: 'photo',
+      fit: 'cover',
+      opacity: 1,
+      radius: 40,
+      softEdge: 54,
+      shadow: { dx: 10, dy: 10, blur: 30, color: { r: 0, g: 0, b: 0, a: 0.6 } },
+    });
+    const objects = Array.from({ length: 12 }, (_, i) => photo(`p${i}`));
+    const area = drawnEffectArea(objects[0]!);
+    // A shadow (1) and a soft edge (EFFECT_COST.softEdge, as a shape's: drawn from the source, in the editor
+    // and the thumbnails, its body is cut at full resolution as a shape's is) over a quarter of a slide.
+    expect(area).toBeGreaterThan((1 + EFFECT_COST.softEdge) / 4);
+    expect(area).toBeLessThan((1 + EFFECT_COST.softEdge) / 2);
+    const fit = Math.floor(EFFECT_COST.slide / area);
+    expect(fit).toBeGreaterThanOrEqual(1);
+    expect(fit).toBeLessThan(objects.length);
+    const drawn = withinDrawBudget(objects) as readonly {
+      shadow?: unknown;
+      softEdge?: unknown;
+      radius?: number;
+    }[];
+    expect(drawn.map((o) => !!o.shadow && !!o.softEdge)).toEqual(objects.map((_, i) => i < fit));
+    // Past the budget the picture is drawn as it is, its round corners kept.
+    expect(drawn[fit]).toMatchObject({ id: `p${fit}`, radius: 40 });
+    expect(drawn[fit]!.softEdge).toBeUndefined();
+    // A picture without effects weighs nothing.
+    expect(drawnEffectArea({ ...objects[0]!, shadow: undefined, softEdge: undefined } as SlideObject)).toBe(
+      0,
+    );
+  });
+
   it("draws the re-review's hostile outlines as legacy shapes (M6 finish)", () => {
     const rand = (() => {
       let x = 7;

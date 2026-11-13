@@ -363,11 +363,13 @@ export function objectReach(ctx: Ctx2D, o: SlideObject, scale: number): Reach {
     let y0 = r.y;
     let x1 = r.x + r.w;
     let y1 = r.y + r.h;
-    if (o.shadow) {
+    // A shadow is the picture's alpha blurred and offset as a shape's (`picture-effects.ts`, `drawEffected`:
+    // 3σ past it, σ = blur/√6); a soft edge only fades the picture inside its box.
+    if (o.shadow && num(o.shadow.color?.a, 0, 1, 0) > 0) {
       const dx = num(o.shadow.dx, -CLAMP.maxEffectPx, CLAMP.maxEffectPx, 0);
       const dy = num(o.shadow.dy, -CLAMP.maxEffectPx, CLAMP.maxEffectPx, 0);
       const blur = num(o.shadow.blur, 0, CLAMP.maxEffectPx, 0);
-      const pad = 2 * blur;
+      const pad = 3 * blur * STACK_BLUR_SIGMA + BLUR_SLACK_PX / num(scale, 0.01, 8, 1) + INK_SLACK;
       x0 = Math.min(x0, r.x + dx - pad);
       y0 = Math.min(y0, r.y + dy - pad);
       x1 = Math.max(x1, r.x + r.w + dx + pad);

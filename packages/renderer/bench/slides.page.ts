@@ -9,7 +9,7 @@ import {
 import { pictureKey } from '../src/bitmap-cache.ts';
 import { slideJobCost } from '../src/geombudget.ts';
 import { heavySlide, rasterEstimateMs } from '../src/health.ts';
-import { preparePicture } from '../src/picture.ts';
+import { preparePictureSteps } from '../src/picture.ts';
 import { rasterSlide } from '../src/raster.ts';
 import { rasterScene, rasterSceneSprites } from '../src/scene-raster.ts';
 import { drawSprite, slideReach, spriteRect } from '../src/sprite.ts';
@@ -34,7 +34,13 @@ import { FontResolver, installFontEnv } from '../src/text/fonts.ts';
  *   and 70 thin round-joined strokes, under a title; its drawing estimate is past the raster budget
  *   (`heavySlide`, design/27 §13's named exception), so it is held to the 50 ms of an asset-worker task;
  * - **gradient decorations** (M6): two large radial decorations of two stops at 0 and 60 % (drawn on Skia's
- *   two-stop fast path, `paint.ts` `fastStops`) over a solid background, with a title and a body.
+ *   two-stop fast path, `paint.ts` `fastStops`) over a solid background, with a title and a body;
+ * - **feathered photo** (ProPresenter): the photo over the whole frame with a soft edge of 54 px (a 0.1
+ *   feather on a 1080 px element), prepared with its soft edge (`SOFT_EDGE_STEP`) and copied 1:1, under a lyric;
+ * - **rounded photo with a shadow** (ProPresenter): the photo in a large rounded rectangle with a soft edge and
+ *   a shadow: cut to its corners and feathered when prepared, its shadow a cached layer under it.
+ * Pictures are prepared in steps as the raster lanes prepare them (`preparePictureSteps`, PREPARE_STEP_PIXELS a
+ * step), and the longest step is reported (`prepareStepMs`): a step is a task of the asset worker (50 ms).
  * A job is what the worker does for a slide whose pictures are cached (`raster`): measure the slide's reach
  * on the surface shrunk to 1x1, size the surface to the tight sprite of what it draws (or the frame, when the
  * sprite would be most of it), draw, `transferToImageBitmap` (which makes Chromium raster the recorded draw
@@ -406,6 +412,49 @@ export const GRADIENT_DECO: Slide = {
   ] as SlideObject[],
 };
 
+/** A full-frame photo with a ProPresenter feather (0.1 of its shorter side, halved: 54 px), under a lyric. */
+export const FEATHERED_PHOTO: Slide = {
+  id: 'feathered-photo',
+  objects: [
+    {
+      id: 'photo',
+      type: 'image',
+      box: box(0, 0, 1920, 1080),
+      mediaId: 'photo',
+      fit: 'cover',
+      opacity: 1,
+      radius: 0,
+      softEdge: 54,
+    },
+    {
+      id: 'lyric',
+      type: 'text',
+      box: box(160, 700, 1600, 300),
+      text: 'Holy, holy, holy\nLord God almighty',
+      style: { ...base, fontSizePx: 80, align: 'center', valign: 'middle' },
+      opacity: 1,
+    },
+  ] as SlideObject[],
+};
+
+/** The photo in a large rounded rectangle with a soft edge and a shadow (a ProPresenter picture element). */
+export const ROUNDED_PHOTO: Slide = {
+  id: 'rounded-photo',
+  objects: [
+    {
+      id: 'photo',
+      type: 'image',
+      box: box(260, 140, 1400, 800),
+      mediaId: 'photo',
+      fit: 'cover',
+      opacity: 1,
+      radius: 60,
+      softEdge: 24,
+      shadow: { dx: 20, dy: 20, blur: 40, color: { r: 0, g: 0, b: 0, a: 0.7 } },
+    },
+  ] as SlideObject[],
+};
+
 export const KINDS = [
   { kind: 'sermon over a photo', slide: SERMON_PHOTO },
   { kind: 'lyric with a shadow', slide: LYRIC_SHADOW },
@@ -413,6 +462,8 @@ export const KINDS = [
   { kind: 'scene (video in its box)', slide: SCENE },
   { kind: 'traced decorations (M6)', slide: TRACED },
   { kind: 'gradient decorations (M6)', slide: GRADIENT_DECO },
+  { kind: 'feathered photo (ProPresenter)', slide: FEATHERED_PHOTO },
+  { kind: 'rounded photo, shadow (ProPresenter)', slide: ROUNDED_PHOTO },
 ] as const;
 
 export type Stats = { n: number; p50: number; p95: number; max: number; mean: number };
@@ -424,6 +475,8 @@ export type SlideRow = {
   firstMs: number;
   /** Preparing the slide's pictures for this size (decode excluded), once per size as the cache keeps them. */
   prepareMs: number;
+  /** The longest step of that preparation (`preparePictureSteps`: a task of the asset worker's lanes), ms. */
+  prepareStepMs: number;
   /** As the asset worker draws it now: a tight sprite where that saves pixels. */
   raster: Stats;
   /** The same slide drawn full-frame (before M7's sprites). */
@@ -584,10 +637,22 @@ export async function bench(
       // The worker's picture cache: each use prepared once for its device target, then copied 1:1.
       const prepared = new Map<string, ImageBitmap>();
       const p0 = performance.now();
+      let prepareStepMs = 0;
       for (const u of slidePictures(slide, { scale, look: LOOK_MAIN })) {
         const src = sources[u.mediaId];
         if (!src || !u.target) continue;
-        const bmp = preparePicture(src, u.target);
+        // In steps, as the raster lanes prepare a picture: each step is a task of its own.
+        const steps = preparePictureSteps(src, u.target);
+        let bmp: ImageBitmap | undefined;
+        for (;;) {
+          const s0 = performance.now();
+          const r = steps.next();
+          prepareStepMs = Math.max(prepareStepMs, performance.now() - s0);
+          if (r.done) {
+            bmp = r.value;
+            break;
+          }
+        }
         if (bmp) prepared.set(pictureKey(u.mediaId, u.target), bmp);
       }
       const prepareMs = performance.now() - p0;
@@ -653,6 +718,7 @@ export async function bench(
         height,
         firstMs,
         prepareMs,
+        prepareStepMs,
         raster: stats(times),
         fullFrame: stats(fullTimes),
         share,

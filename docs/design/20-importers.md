@@ -53,7 +53,10 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
   - Non-rectangular `Path.shape` presets (`TYPE_ELLIPSE`, `TYPE_ROUNDED_RECTANGLE`, isosceles and right
     triangles, rhombus, single and double arrows, polygons, stars) and `TYPE_CUSTOM` cubic bezier paths
     become `ShapeObject` or element `ShapeGeom`. Element drop `shadow` and `feather` (`softEdge = radius ×
-    min(w, h) × 0.5`) are carried on shapes and images.
+    min(w, h) × 0.5`) are carried on shapes and images, and a shape and a picture with the same fields look
+    the same: both are drawn by the renderer's effects path (design/27 §7.1 "Picture effects": the shadow
+    blurred by σ = blur/√6, the soft edge eroding the element's own outline, its round corners included,
+    on every engine, WebKit too).
   - Text line masks (`textLineMask`) support `fullWidth`, `lineWidth`, and `maxLineWidth` styles with solid
     or gradient fills, horizontal/vertical/width/height offsets, and Cocoa `0.065 × F` intra-strap baseline
     centering on middle-aligned masks.
