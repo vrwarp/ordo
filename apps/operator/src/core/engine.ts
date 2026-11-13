@@ -57,7 +57,9 @@ export const REOFFER_MS = 10_000;
  * While the hub refuses the session and this core is the authority, a proven window that has said nothing
  * on the bus for this long has left it for the hub (a restarted hub whose state equalled the window's, so
  * the window followed it; design/17) and shows the hub's older state: it is re-introduced to the bus. A
- * window on the bus reports health every second.
+ * window on the bus reports health every second. A safety net: a window that heard `hubRefused` does not
+ * leave for such a hub (only one that followed it before the refusal, re-introduced at once, or a build
+ * that does not know the flag).
  */
 export const RECALL_MS = 3000;
 const STALL_WINDOW_MS = 60_000;
@@ -322,6 +324,8 @@ export class CoreEngine {
         this.log('info', 'hub accepted the operator again');
       }
       this.core.setHubRefused(false);
+      // The hub can be handed the service again: windows on the bus may take its state once it has caught up.
+      this.fallback.setHubRefused(false);
       this.core.onWelcome();
       this.post({ t: 'hub', e: 'welcome', appVersion: w.appVersion });
       // Deltas may have been missed while away.
@@ -378,9 +382,13 @@ export class CoreEngine {
         }`,
       );
       this.core.setHubRefused(true);
-      // Refused while the authority: a window that followed the restarted hub (its state equalled the
-      // window's) would show the hub's older state from now on, since no hand-back can happen until the
-      // sign-in. Re-introduce the bus to every window now, and keep recalling quiet ones (watchBus).
+      // Refused while the authority: no hand-back can happen until the sign-in, so a restarted hub whose
+      // state equals a window's has not caught up. The bus says so in every hello and heartbeat from now on
+      // (`hubRefused`), and a window on it takes nothing from the hub until the operator is accepted again:
+      // neither that equal state nor the answer to a resync it asked for when it followed the hub a moment
+      // ago (chaos-operator.spec.ts:818). A window that already followed the hub is re-introduced now, and
+      // quiet ones keep being recalled (watchBus).
+      this.fallback.setHubRefused(true);
       if (authority) for (const id of this.endpoints.keys()) this.recall(id, this.now());
       this.post({ t: 'hub', e: 'auth', reason });
       this.scheduleVm();

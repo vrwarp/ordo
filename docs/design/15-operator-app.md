@@ -87,12 +87,18 @@ core reconnects at once and rejoins as the hub's client.
 A refusal while the operator is already the fallback authority (the hub came back after the
 fallback took over, and this operator's session had expired meanwhile) keeps it the authority until
 the hand-back after sign-in: the outputs stay on the fallback bus and never jump back to the hub's
-older state. One window can still slip away: a hub that restarts with a state equal to the window's
-makes the window follow the hub (design/17, "hub caught up"), and with the session refused no
-hand-back ever catches it up, so it would show the hub's older state from then on. The core
-therefore re-introduces the bus (`fallback.hello`) to every window the moment the refusal arrives,
-and, while refused and the authority, to any proven window that has said nothing on the bus for
-`RECALL_MS` (3 s; a window on the bus reports health every second), at most once per 3 s per window.
+older state. A hub that restarts with a state equal to a window's would make the window follow it
+(design/17, "hub caught up"), and with the session refused no hand-back ever catches it up, so the
+window would drop the operator's next GO and show the hub's older state from then on. So from the
+refusal until the hub accepts the operator again (a welcome) every `fallback.hello` and heartbeat
+carries `hubRefused`, and a window on the bus takes nothing from the hub meanwhile: not that equal
+state, and not the answer to a resync it asked for when it followed the hub a moment before the
+refusal (the race behind `chaos-operator.spec.ts:818`). The operator's silence or `hubUp` ends it, as
+any fallback. The core also re-introduces the bus (`fallback.hello`) to every window the moment the
+refusal arrives, which brings back a window that followed the hub just before, and, while refused and
+the authority, to any proven window that has said nothing on the bus for `RECALL_MS` (3 s; a window
+on the bus reports health every second), at most once per 3 s per window: a safety net for a window
+that does not know the flag.
 In that state the UI must not block the service: the top bar reads "Running from this
 PC — session ended; sign in to hand back to the hub", the sign-in is a non-modal card in the corner
 of the live view (`.signin-overlay.nonmodal`) whose banner says the same, the PIN field is not

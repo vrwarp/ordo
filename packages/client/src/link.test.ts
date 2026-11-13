@@ -180,6 +180,78 @@ describe('OutputLink bus transitions', () => {
     out.deliver(op, { t: 'fallback.hub', v: 1, hubUp: true });
     expect(link.bus).toBe('hub');
   });
+
+  it('while the hub refuses the operator nothing from the hub takes the window off the bus, not even a state at its own sequence (chaos-operator.spec.ts:818)', () => {
+    const { link, buses, ws, hello, out, op } = setup();
+    // The hub dies at seq 2; the operator takes over at seq 2.
+    ws.finishClose();
+    hello(2);
+    out.deliver(op, { t: 'live.state', v: 1, seq: 2, state: st(2) });
+    expect(link.bus).toBe('fallback');
+    // The hub restarts from its journal at seq 2, equal to the window's: the window follows it ("hub caught
+    // up") and asks for a resync.
+    vi.advanceTimersByTime(600);
+    const ws2 = lastSocket();
+    welcome(ws2, 2);
+    ws2.sent = [];
+    ws2.receive({ t: 'live.state', v: 1, seq: 2, state: st(2) });
+    expect(link.bus).toBe('hub');
+    expect(ws2.sent).toEqual([{ t: 'live.resync', v: 1 }]);
+    // The hub refuses the operator's session: it re-introduces the bus, saying so.
+    out.deliver(op, { t: 'fallback.hello', v: 1, seq: 2, operatorMs: Date.now(), hubRefused: true });
+    expect(link.bus).toBe('fallback');
+    out.deliver(op, { t: 'live.state', v: 1, seq: 2, state: st(2) });
+    // The answer to the window's own resync arrives after the re-introduction: still the hub's older copy.
+    ws2.receive({ t: 'live.state', v: 1, seq: 2, state: st(2) });
+    expect(link.bus).toBe('fallback');
+    // The operator's keys keep driving the screen.
+    out.deliver(op, { t: 'live.delta', v: 1, seq: 3, fromSeq: 2, event: { k: 'endService', at: 1 } });
+    expect(link.state.seq).toBe(3);
+    // Nor does a hub that reconnects (its state now behind), or one that moved on by itself, take it away.
+    ws2.finishClose();
+    expect(link.bus).toBe('fallback');
+    vi.advanceTimersByTime(1100);
+    const ws3 = lastSocket();
+    welcome(ws3, 2);
+    ws3.receive({ t: 'live.state', v: 1, seq: 2, state: st(2) });
+    ws3.receive({ t: 'live.delta', v: 1, seq: 3, fromSeq: 2, event: { k: 'endService', at: 9 } });
+    ws3.receive({ t: 'live.state', v: 1, seq: 7, state: st(7, { black: true }) });
+    out.deliver(op, { t: 'fallback.hub', v: 1, hubUp: false, hubRefused: true }); // heartbeat
+    expect(link.bus).toBe('fallback');
+    expect(link.state.seq).toBe(3);
+    expect(link.state.black).toBe(false);
+    expect(buses.filter((b) => b === 'hub:hub caught up')).toHaveLength(1);
+    // Signed in again: the heartbeat no longer says refused and the hub catches up by adopting the
+    // operator's state; the window follows it.
+    out.deliver(op, { t: 'fallback.hub', v: 1, hubUp: false });
+    ws3.receive({ t: 'live.state', v: 1, seq: 8, state: st(8, { black: true }) });
+    expect(link.bus).toBe('hub');
+    expect(link.state.black).toBe(true);
+  });
+
+  it('a refused operator that falls silent or hands back releases the window to the hub', () => {
+    const { link, ws, out, op } = setup();
+    out.deliver(op, { t: 'fallback.hello', v: 1, seq: 2, operatorMs: Date.now(), hubRefused: true });
+    out.deliver(op, { t: 'live.state', v: 1, seq: 2, state: st(2) });
+    ws.receive({ t: 'live.state', v: 1, seq: 2, state: st(2) });
+    expect(link.bus).toBe('fallback');
+    // The operator goes quiet (its tab is gone): the hub is followed again, as after any fallback.
+    vi.advanceTimersByTime(FALLBACK_SILENCE_MS + 1000);
+    link.watchFallback();
+    expect(link.bus).toBe('hub');
+    // Re-introduced while refused, then handed back after the sign-in: the operator's hubUp releases it.
+    out.deliver(op, { t: 'fallback.hello', v: 1, seq: 2, operatorMs: Date.now(), hubRefused: true });
+    expect(link.bus).toBe('fallback');
+    out.deliver(op, { t: 'fallback.hub', v: 1, hubUp: true });
+    expect(link.bus).toBe('hub');
+    ws.receive({ t: 'live.state', v: 1, seq: 3, state: st(3, { black: true }) });
+    expect(link.state.black).toBe(true);
+    // A later introduction without the flag: the usual catch-up rule again.
+    out.deliver(op, { t: 'fallback.hello', v: 1, seq: 3, operatorMs: Date.now() });
+    expect(link.bus).toBe('fallback');
+    ws.receive({ t: 'live.state', v: 1, seq: 3, state: st(3) });
+    expect(link.bus).toBe('hub');
+  });
 });
 
 describe('OutputLink ended events', () => {

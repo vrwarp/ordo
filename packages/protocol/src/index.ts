@@ -220,8 +220,21 @@ export type ServerMessage =
  * without the hub"). Windows stay with the operator for the whole service: a hub that comes back is not
  * followed until the operator lets go (`fallback.hub { hubUp: true }`), and its state is never applied
  * over the held service.
+ *
+ * `hubRefused`: the hub is up but refuses this operator's session (design/15 "Session expiry"), so it cannot be
+ * handed the service until the operator signs in again. A window on the bus takes nothing from the hub
+ * meanwhile, not even a state at its own sequence (a hub restarted from its journal equals the window without
+ * having caught up). Unlike `hold` it is not remembered: the operator's silence or `hubUp` ends it, and so
+ * does a hello or heartbeat without it.
  */
-export type FallbackHello = { t: 'fallback.hello'; v: 1; seq: number; operatorMs: number; hold?: boolean };
+export type FallbackHello = {
+  t: 'fallback.hello';
+  v: 1;
+  seq: number;
+  operatorMs: number;
+  hold?: boolean;
+  hubRefused?: boolean;
+};
 export type FallbackReady = { t: 'fallback.ready'; v: 1; outputId: string; appliedSeq: number };
 export type FallbackFileRequest = { t: 'fallback.file'; v: 1; hash: string; reqId: string };
 export type FallbackFileResponse = {
@@ -232,7 +245,7 @@ export type FallbackFileResponse = {
   blob?: Blob;
   error?: string;
 };
-export type FallbackHub = { t: 'fallback.hub'; v: 1; hubUp: boolean; hold?: boolean };
+export type FallbackHub = { t: 'fallback.hub'; v: 1; hubUp: boolean; hold?: boolean; hubRefused?: boolean };
 export type FallbackMessage =
   | FallbackHello
   | FallbackReady
