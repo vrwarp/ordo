@@ -812,6 +812,11 @@ edge Docker image and the Pages demo, so each M9 PR ships on its own:
   or 200 objects and 16 pictures (`EmittedSlide.missing`, recorded on the LibreOffice path too: `nativeJob.ts`
   `budgetLeft`, the client's `provenance`) and the ladder's (`Slide.pptx.missing`), so goLive's degraded list
   names them; a slide hybrid only for them waits for nothing.
+- **The first paint stays as fast.** M9 adds no code to what the operator loads before its first paint: its
+  drawers load per object kind (`registerShapeDrawerLoader`; the table's in the workers' prepare step and the
+  editor canvas) and the Setup and settings pages load when opened (`React.lazy`). Measured on this PR's build:
+  operator initial JavaScript 1,684.6 kB (gzip 528.1) against main's 1,713.3 kB (535.1); CI fails a PR whose
+  initial JavaScript grows more than 2 % over `tools/bundle-baseline.json` (design/24 "Bundle budget").
 - **The tail keeps its page.** The presentation's tail (§3.4) stores each slide minimal with its page, the
   background drawn as a shape, as a plain rect in its colour (`minimalSlide`), so its dark text is never drawn
   on the output's black; a deck that does not fit 4 MiB even so (about 2,000 slides) leaves the pages out
@@ -2518,7 +2523,10 @@ calls by digest against the code before it:
 - `raster.ts` `jobFontFamilies` waits for the families of tables, charts and vector pictures
   (`extraFontFamilies`).
 - `apps/output/src/prepare/index.ts`: the slide prepare steps of the asset worker (in its lane turns) and the
-  thumbnail worker (at once), geometry files built in.
+  thumbnail worker (at once), the shape drawers the slides need (`loadShapeDrawers`) and geometry files built in.
+- `renderer/src/shape.ts` `registerShapeDrawerLoader`: a kind's drawer module loaded the first time a slide
+  holds that kind (the table's registered by the renderer's index), so M9 drawers stay out of the operator's
+  first paint (design/24 "Bundle budget").
 - `apps/operator/src/views/editor/objectSections.ts`: the Object panel's sections (design/15).
 - `golden/areas.ts` and `bench/cases/index.ts`: one line per area's golden cases and bench slides.
 <!-- /m9:render-seams -->

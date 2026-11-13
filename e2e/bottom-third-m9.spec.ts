@@ -1,8 +1,9 @@
 import { expect, test } from '@playwright/test';
 import { m9Table } from '../packages/domain/src/m9.test-util.ts';
+import { openEditor, openSlide } from './editorhelpers.ts';
 import { PORT } from './helpers.ts';
 import { hubApi } from './linkhelpers.ts';
-import type { Pixels } from './png.ts';
+import { decodePng, type Pixels } from './png.ts';
 import {
   apiJson,
   cacheReady,
@@ -16,10 +17,23 @@ import {
 /**
  * A slide whose only text is in an M9 table (or a chart) has no Bottom-Third strap: the Lobby and the
  * Bottom-Third Stream show nothing for it, never the table's cells as a band of tab-separated words
- * (`strapText`, design/27 §15 M9). A slide with text of its own still shows its band.
+ * (`strapText`, design/27 §15 M9). A slide with text of its own still shows its band. The editor draws the
+ * table with its drawer, loaded the first time a slide holds one.
  */
 
 const OUT = 'test-results/bottom-third-m9';
+
+/**
+ * The M9 fixture table in the hub's bundled Inter: an output's page waits for every face it was sent, and a
+ * family the hub does not have (the fixture's Calibri, Malgun Gothic, Georgia) would keep a screenshot waiting.
+ */
+function interTable() {
+  const t = m9Table();
+  t.base = { ...t.base, fontFamily: 'Inter' };
+  t.styles = t.styles?.map(({ fontFamily: _f, fallbackFonts: _fb, ...s }) => s);
+  t.runStyles = t.runStyles?.map(({ fontFamily: _f, ...s }) => s);
+  return t;
+}
 const white = { r: 255, g: 255, b: 255, a: 1 };
 
 /**
@@ -36,8 +50,11 @@ function lit(img: Pixels): number {
   return n;
 }
 
-test("the lobby and the stream show no band for a table's text", async ({ context }) => {
-  test.setTimeout(180_000);
+test("the lobby and the stream show no band for a table's text; the editor draws the table", async ({
+  context,
+  page,
+}) => {
+  test.setTimeout(300_000);
   const a = await hubApi(PORT);
   const text = (id: string, t: string) => ({
     id,
@@ -69,7 +86,7 @@ test("the lobby and the stream show no band for a table's text", async ({ contex
                   fill: white,
                   opacity: 1,
                   radius: 0,
-                  table: m9Table(),
+                  table: interTable(),
                 },
               ],
             },
@@ -145,4 +162,49 @@ test("the lobby and the stream show no band for a table's text", async ({ contex
     expect((await held(w)).held[1]?.live, `${name}: still nothing`).toBe('');
   }
   await liveEvent(a, { k: 'endService', at: Date.now() });
+
+  // The editor draws the table itself: the operator loads its drawer the first time a slide holds a table
+  // (`loadShapeDrawers`, the M9 drawers loaded per object kind), never leaving the white rect an older build
+  // draws. The table's header row is navy.
+  await openEditor(page, PORT, p.id);
+  await openSlide(page, 2);
+  const canvas = page.locator('.canvasbox').first();
+  await expect
+    .poll(
+      async () => {
+        const shot = decodePng(await canvas.screenshot());
+        let navy = 0;
+        for (let i = 0; i < shot.data.length; i += 4) {
+          const [r, g, b] = [shot.data[i]!, shot.data[i + 1]!, shot.data[i + 2]!];
+          if (b > 70 && b < 200 && r < 70 && g < 110 && b > r + 40) navy++;
+        }
+        return navy;
+      },
+      { timeout: 20_000, message: 'the table header is drawn (navy), not a white rect' },
+    )
+    .toBeGreaterThan(400);
+  // So does its thumbnail, drawn in the thumb worker by the outputs' prepare steps (`shapeDrawers`).
+  const thumb = page.locator('.ed-slide-card').nth(1).locator('.ed-slide-thumb-wrap img');
+  await expect
+    .poll(
+      () =>
+        thumb.evaluate(async (img: HTMLImageElement) => {
+          await img.decode().catch(() => undefined);
+          const c = document.createElement('canvas');
+          c.width = img.naturalWidth;
+          c.height = img.naturalHeight;
+          const g = c.getContext('2d');
+          if (!g || !c.width) return 0;
+          g.drawImage(img, 0, 0);
+          const d = g.getImageData(0, 0, c.width, c.height).data;
+          let navy = 0;
+          for (let i = 0; i < d.length; i += 4) {
+            const [r, gr, b] = [d[i]!, d[i + 1]!, d[i + 2]!];
+            if (b > 70 && b < 200 && r < 70 && gr < 110 && b > r + 40) navy++;
+          }
+          return navy;
+        }),
+      { timeout: 30_000, message: "the table slide's thumbnail draws the table (navy header)" },
+    )
+    .toBeGreaterThan(200);
 });

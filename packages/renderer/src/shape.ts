@@ -212,6 +212,78 @@ export function shapeDrawerRegistered(kind: ShapeDrawKind): boolean {
   return drawers.has(kind);
 }
 
+/*
+ * Drawers loaded per object kind (M9 bundle budget): a kind's drawer lives in its own module, fetched the first
+ * time a slide holds that kind, so pages and workers that never meet a table (most services) never load its
+ * code. The renderer's index registers each kind's loader (`registerShapeDrawerLoader`); the workers' slide
+ * prepare steps (`apps/output/src/prepare`) and the editor canvas call `loadShapeDrawers` before they draw.
+ * Until a kind's module is loaded its shapes draw what an older build draws (the legacy shape, design/27 §3.2).
+ */
+
+/** Imports the module that registers a kind's drawer. */
+export type ShapeDrawerLoader = () => Promise<unknown>;
+
+const loaders = new Map<ShapeDrawKind, ShapeDrawerLoader>();
+const loading = new Map<ShapeDrawKind, Promise<boolean>>();
+
+/** Register how a kind's drawer is loaded (the last one registered wins); returns its unregistration. */
+export function registerShapeDrawerLoader(kind: ShapeDrawKind, load: ShapeDrawerLoader): () => void {
+  loaders.set(kind, load);
+  return () => {
+    if (loaders.get(kind) === load) loaders.delete(kind);
+  };
+}
+
+/**
+ * The kinds the objects hold (`table`, `chart`, `decor`) whose drawer is not registered but has a loader: what
+ * `loadShapeDrawers` would load. Reads only whether each field is there (a damaged value costs nothing here).
+ */
+export function shapeDrawersWanted(objects: readonly unknown[]): ShapeDrawKind[] {
+  const out: ShapeDrawKind[] = [];
+  for (const o of objects) {
+    if (!o || typeof o !== 'object' || (o as { type?: unknown }).type !== 'shape') continue;
+    for (const kind of SHAPE_DRAW_KINDS)
+      if (
+        (o as Record<string, unknown>)[kind] !== undefined &&
+        !drawers.has(kind) &&
+        loaders.has(kind) &&
+        !out.includes(kind)
+      )
+        out.push(kind);
+    if (out.length === SHAPE_DRAW_KINDS.length) break;
+  }
+  return out;
+}
+
+/**
+ * Load the drawers the objects need (`shapeDrawersWanted`), each module once: resolves true when one was
+ * registered by this call (the caller draws again), false when there was nothing to load. A load that fails
+ * (offline, a stale chunk) resolves false and is tried again next time; the shapes keep their legacy look.
+ */
+export async function loadShapeDrawers(objects: readonly unknown[]): Promise<boolean> {
+  const kinds = shapeDrawersWanted(objects);
+  if (!kinds.length) return false;
+  const loads = kinds.map((kind) => {
+    let p = loading.get(kind);
+    if (!p) {
+      const load = loaders.get(kind)!;
+      p = load().then(
+        () => {
+          loading.delete(kind);
+          return drawers.has(kind);
+        },
+        () => {
+          loading.delete(kind);
+          return false;
+        },
+      );
+      loading.set(kind, p);
+    }
+    return p;
+  });
+  return (await Promise.all(loads)).some(Boolean);
+}
+
 /**
  * Where a shape's registered drawer draws it (`ShapeReach`): undefined when the shape has no `table`,
  * `chart` or `decor`, when no drawer of its kind is registered, or when the drawer would not draw it (the

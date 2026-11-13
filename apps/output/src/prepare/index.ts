@@ -1,5 +1,5 @@
 import { drawnGeomRefs, GEOM_FILE_MAX_BYTES, isGeomFileRef, type Look, type Slide } from '@ordo/domain';
-import { readGeomFiles } from '@ordo/renderer';
+import { loadShapeDrawers, readGeomFiles, shapeDrawersWanted } from '@ordo/renderer';
 
 /*
  * The slide prepare steps (design/27 M9 render-seams): what a worker reads, decodes or lays out before it
@@ -8,7 +8,8 @@ import { readGeomFiles } from '@ordo/renderer';
  * draws the same in both. Steps run in order and each says which files it found missing: the asset worker
  * reports them with the missing pictures, and the link draws the slide again once they are cached.
  *
- * Built in: the geometry files (`ShapeGeom.ref`, M6 round 2). M9 registers its own (tables laid out in 8 ms
+ * Built in: the drawers of the M9 object kinds a slide holds (loaded per kind, `shapeDrawers`) and the geometry
+ * files (`ShapeGeom.ref`, M6 round 2). M9 registers its own (tables laid out in 8 ms
  * slices, warp faces, vector pictures, decoration files). A step reads only through its host and never from a
  * deck string as a key; it must not throw for a file that is missing or bad (a throw is a failed job), only
  * for a cancelled job (`host.check`).
@@ -64,7 +65,25 @@ export const geometryFiles: PrepareStep = {
   },
 };
 
-const steps: PrepareStep[] = [geometryFiles];
+/**
+ * The drawers of the M9 object kinds the slides hold (a table's), each module loaded the first time a slide
+ * needs it (`loadShapeDrawers`, the renderer's per-kind loaders): before the synchronous draw, so a table is
+ * never drawn as its legacy rect for want of its code. Only for a look that draws the slide as authored.
+ */
+export const shapeDrawers: PrepareStep = {
+  name: 'shape drawers',
+  async run(job, host) {
+    if ((job.look?.layers.slide.mode ?? 'authored') !== 'authored') return undefined;
+    const objects: unknown[] = [];
+    for (const s of job.slides) if (Array.isArray(s.objects)) objects.push(...s.objects);
+    if (!shapeDrawersWanted(objects).length) return undefined;
+    await loadShapeDrawers(objects);
+    host.check();
+    return undefined;
+  },
+};
+
+const steps: PrepareStep[] = [shapeDrawers, geometryFiles];
 
 /** Add a step after the registered ones (or in place of one of its name); returns its unregistration. */
 export function registerPrepareStep(step: PrepareStep): () => void {

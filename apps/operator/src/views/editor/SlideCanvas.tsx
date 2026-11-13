@@ -18,9 +18,11 @@ import {
   geomPending,
   hitTestText,
   isRichText,
+  loadShapeDrawers,
   moveCaretVertically,
   paraRangeAt,
   readGeomFiles,
+  shapeDrawersWanted,
   slideBudget,
   toLocalBoxPoint,
   wordRangeAt,
@@ -103,6 +105,16 @@ function readGeomOf(o: SlideObject): void {
     return b.size > GEOM_FILE_MAX_BYTES ? null : b.text();
   }).then((left) => {
     if (!left.size) for (const l of imageListeners) l();
+  });
+}
+/**
+ * Load the drawer an M9 object needs (a table's, loaded per kind: `loadShapeDrawers`) if it is not yet; the
+ * canvas draws again once it is (the object draws its legacy shape meanwhile, as an older build does).
+ */
+function loadDrawerOf(o: SlideObject): void {
+  if (!shapeDrawersWanted([o]).length) return;
+  void loadShapeDrawers([o]).then((loaded) => {
+    if (loaded) for (const l of imageListeners) l();
   });
 }
 function useImageTick(): number {
@@ -326,6 +338,7 @@ function ObjectNode(props: {
       sceneFunc={(context) => {
         const ctx = context._context as CanvasRenderingContext2D;
         readGeomOf(o);
+        loadDrawerOf(o);
         const d = props.drawAs ?? o;
         if (o.type === 'text') {
           const t = textCanvas(o, tick, props.density);
