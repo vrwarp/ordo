@@ -104,9 +104,45 @@ const BIDI = obj(
   },
 );
 
-const CASES: Record<string, TextObject> = { everything: EVERYTHING, gradient: GRADIENT, bidi: BIDI };
+/** A ProPresenter line mask (`style.lineMask`): a strap behind each line, full width, offset and grown. */
+const LINE_MASK = obj('Holy, holy, holy\nLord God almighty', {
+  lineMask: { style: 'fullWidth', fill: rgba(30, 60, 140, 0.8), heightOffsetPx: 6, vOffsetPx: -3 },
+});
 
-/** The digests of each case's log on the code before the seam (scale 0.5, 1, 2), recorded then. */
+/** A line mask under the widest line, filled with a gradient over the box, in a turned box. */
+const LINE_MASK_GRADIENT = obj(
+  'Early in the morning\nour song shall rise to thee',
+  {
+    align: 'center',
+    lineMask: {
+      style: 'maxLineWidth',
+      widthOffsetPx: 20,
+      hOffsetPx: 4,
+      gradient: {
+        kind: 'linear',
+        angle: 45,
+        stops: [
+          { at: 0, color: RED },
+          { at: 1, color: NAVY },
+        ],
+      },
+    },
+  },
+  { box: { x: 200, y: 150, w: 1000, h: 400, rotation: -8 } },
+);
+
+const CASES: Record<string, TextObject> = {
+  everything: EVERYTHING,
+  gradient: GRADIENT,
+  bidi: BIDI,
+  lineMask: LINE_MASK,
+  lineMaskGradient: LINE_MASK_GRADIENT,
+};
+
+/**
+ * The digests of each case's log on the code before the seam (scale 0.5, 1, 2), recorded then; the line mask
+ * cases on the code before their straps went through the painter (`fillRect` in pass 1).
+ */
 const BEFORE: Record<string, string> = {
   'bidi@0.5': '9464eb4d5c3de153',
   'bidi@0.5 drawRichText': '704686b41cbac47b',
@@ -126,6 +162,18 @@ const BEFORE: Record<string, string> = {
   'gradient@1 drawRichText': 'a1f224f2ccf39e17',
   'gradient@2': '001b8e9706e2f0b0',
   'gradient@2 drawRichText': '07bf79bbb0637ba2',
+  'lineMask@0.5': 'cb72724a80461eef',
+  'lineMask@0.5 drawRichText': '4f4640707a65ad0a',
+  'lineMask@1': '6a42573c48f23c4a',
+  'lineMask@1 drawRichText': '51673bf685856b7e',
+  'lineMask@2': '70cc24092b8b7bab',
+  'lineMask@2 drawRichText': 'a7863b8264c082c8',
+  'lineMaskGradient@0.5': 'da1330c7192f9944',
+  'lineMaskGradient@0.5 drawRichText': '0140746f45c2a219',
+  'lineMaskGradient@1': '422b6810f2f7381d',
+  'lineMaskGradient@1 drawRichText': '3eb14f36dcf69abd',
+  'lineMaskGradient@2': 'd33a399a51a595f9',
+  'lineMaskGradient@2 drawRichText': 'd19a9c8a86f66ba9',
 };
 
 function painted(o: TextObject, scale: number): string {
@@ -199,6 +247,56 @@ describe('paint hooks (M9 render-seams)', () => {
       offUpright();
     }
     expect(glyphPainterFor(warped)).toBe(PLAIN_PAINTER);
+  });
+
+  it('draws line mask straps through the painter, in pass 1, one per visible line', () => {
+    for (const o of [LINE_MASK, LINE_MASK_GRADIENT]) {
+      const passes: string[] = [];
+      const painter: GlyphPainter = {
+        kind: 'warp',
+        glyphs(ctx, g, pass) {
+          passes.push(`glyphs ${pass}`);
+          PLAIN_PAINTER.glyphs(ctx, g, pass);
+        },
+        rect(ctx, r, pass) {
+          passes.push(`rect ${pass} line ${r.line}`);
+          PLAIN_PAINTER.rect(ctx, r, pass);
+        },
+      };
+      const l = layoutRich(testMeasurer(), o, LEGACY_FONT_ENV);
+      const plan = paintPlan(o, l);
+      expect(plan.lineMask?.straps).toHaveLength(2);
+      const ctx = traceCtx();
+      paintRich(ctx, o, l, 1, LEGACY_FONT_ENV, { painter });
+      // The straps first (pass 1, under every glyph), each with its layout line.
+      expect(passes.slice(0, 2)).toEqual(['rect lineMask line 0', 'rect lineMask line 1']);
+      expect(passes.filter((p) => p.startsWith('rect lineMask'))).toHaveLength(2);
+      // The same calls as the plain painter's: the horizontal output is unchanged.
+      const plain = traceCtx();
+      paintRich(plain, o, l, 1, LEGACY_FONT_ENV, { painter: PLAIN_PAINTER });
+      expect(traceDigest(ctx.trace)).toBe(traceDigest(plain.trace));
+    }
+  });
+
+  it('lets a painter place the straps its own way', () => {
+    const l = layoutRich(testMeasurer(), LINE_MASK, LEGACY_FONT_ENV);
+    const painter: GlyphPainter = {
+      kind: 'upright',
+      glyphs: () => {},
+      // A vertical painter turns each strap into a column.
+      rect: (c, r, pass) => {
+        if (pass === 'lineMask') c.fillRect(r.y, r.x, r.h, r.w);
+      },
+    };
+    const ctx = traceCtx();
+    paintRich(ctx, LINE_MASK, l, 1, LEGACY_FONT_ENV, { painter });
+    const rects = ctx.trace.filter((e) => e[0] === 'call' && e[1] === 'fillRect');
+    const straps = paintPlan(LINE_MASK, l).lineMask!.straps;
+    expect(rects).toHaveLength(straps.length);
+    const [, , x, y, w, h] = rects[0] as [string, string, number, number, number, number];
+    expect([x, y, w, h].map((v) => Math.round(v * 1000))).toEqual(
+      [straps[0]!.y, straps[0]!.x, straps[0]!.h, straps[0]!.w].map((v) => Math.round(v * 1000)),
+    );
   });
 
   it('lets a painter lay the text out its own way (its plan)', () => {

@@ -273,7 +273,8 @@ are byte-identical, and the tests pin each seam's calls by digest against the co
   shape draws what an older build draws once it strips the field. A registered 3-D look (`registerLook3d`)
   resolves a plan the effect composite draws (`EffectSource.look3d`).
 - **Paint hooks** (`renderer/src/text/paint.ts`): `paintRich` puts glyphs on the context through a glyph painter
-  (`PLAIN_PAINTER`; upright and warp ones registered by kind) and draws its face on a face target
+  (`PLAIN_PAINTER`; upright and warp ones registered by kind), and its rectangles too (a line mask's straps,
+  highlights, underlines and strikes: `rect` with the pass) and draws its face on a face target
   (`DIRECT_TARGET`; a face sprite registered by the 3-D look, whose alpha casts the shadow and glow), chosen per
   object and independently.
 - **One sprite cache** (`renderer/src/spritecache.ts`): 64 MiB for every kind of sprite (effects today; geometry,

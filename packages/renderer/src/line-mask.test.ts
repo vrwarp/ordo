@@ -168,7 +168,6 @@ describe('paintPlan and paintRich with lineMask', () => {
     ]);
     const plan = paintPlan(o, layout);
     expect(plan.lineMask).not.toBeNull();
-    expect(plan.lineMasks).toBe(plan.lineMask?.straps);
     expect(plan.lineMask?.straps).toHaveLength(2);
 
     // F = 20
@@ -177,8 +176,8 @@ describe('paintPlan and paintRich with lineMask', () => {
     // w = max(0, 400 + 20) = 420
     // x = 100 - 20 / 2 + 5 = 95
     const [s1, s2] = plan.lineMask!.straps as [LineMaskStrap, LineMaskStrap];
-    expect(s1).toEqual({ x: 95, y: 80 - 18, w: 420, h: 28 });
-    expect(s2).toEqual({ x: 95, y: 110 - 18, w: 420, h: 28 });
+    expect(s1).toMatchObject({ x: 95, y: 80 - 18, w: 420, h: 28 });
+    expect(s2).toMatchObject({ x: 95, y: 110 - 18, w: 420, h: 28 });
   });
 
   it('calculates lineWidth straps per individual line width', () => {
@@ -217,9 +216,9 @@ describe('paintPlan and paintRich with lineMask', () => {
     const plan = paintPlan(o, layout);
     const [s1, s2] = plan.lineMask!.straps as [LineMaskStrap, LineMaskStrap];
     // Line 1: w = 100 + 10 = 110, x = 120 - 5 = 115
-    expect(s1).toEqual({ x: 115, y: 80 - 18, w: 110, h: 24 });
+    expect(s1).toMatchObject({ x: 115, y: 80 - 18, w: 110, h: 24 });
     // Line 2: w = 180 + 10 = 190, x = 120 - 5 = 115
-    expect(s2).toEqual({ x: 115, y: 110 - 18, w: 190, h: 24 });
+    expect(s2).toMatchObject({ x: 115, y: 110 - 18, w: 190, h: 24 });
   });
 
   it('calculates maxLineWidth straps with alignments (left, center, right)', () => {

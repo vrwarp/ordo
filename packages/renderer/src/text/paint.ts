@@ -26,7 +26,8 @@ import type { FontEnv, RichLayout, RunStyle } from './types.ts';
  * passes it in `scale` rather than scaling the context itself.
  *
  * The passes, in `drawText`'s order:
- * 1. the text fill box (`style.fill`, the ink grown by the insets) and run highlights;
+ * 1. the text fill box (`style.fill`, the ink grown by the insets), the line mask's straps (`style.lineMask`,
+ *    one per visible line, through the painter in pass 'lineMask') and run highlights;
  * 2. shadows of every line: the run's shadow, else the box's (a run's `shadow: null` turns it off),
  *    underlines and strikes included;
  * 3. glow (`style.glow`): the glyphs blurred with `shadowBlur` = radius and zero offset;
@@ -102,7 +103,12 @@ export type PlannedRect = {
   shadowColor: string;
 };
 
-export type LineMaskStrap = { x: number; y: number; w: number; h: number };
+/**
+ * One strap of a line mask (`style.lineMask`): a planned rectangle on its layout line, filled in pass 1 with
+ * the mask's colour (`color`) or its gradient over the object box (`LineMaskPlan.gradient`, `color` empty),
+ * through the painter (`GlyphPainter.rect`, pass 'lineMask') like a highlight; never shadowed.
+ */
+export type LineMaskStrap = PlannedRect;
 export type LineMaskPlan = {
   straps: LineMaskStrap[];
   fill?: string;
@@ -125,15 +131,17 @@ export type PaintPlan = {
   paint: Gradient | null;
   /** ProPresenter line-fill mask straps (`style.lineMask`), or null. */
   lineMask: LineMaskPlan | null;
-  lineMasks?: LineMaskStrap[];
 };
 
 const plans = new WeakMap<RichLayout, { o: TextObject; plan: PaintPlan }>();
 
 /** The pass a glyph run is drawn in (the header's 2 to 5 and 7). */
 export type GlyphPass = 'shadow' | 'glow' | 'outline' | 'fill' | 'bullet';
-/** The pass a rectangle is drawn in: a highlight (1), a shadowed underline or strike (2), a line (6). */
-export type RectPass = 'highlight' | 'shadow' | 'decoration';
+/**
+ * The pass a rectangle is drawn in: a line mask's strap or a highlight (1), a shadowed underline or strike
+ * (2), a line (6).
+ */
+export type RectPass = 'lineMask' | 'highlight' | 'shadow' | 'decoration';
 
 /**
  * Puts a plan's glyphs and rectangles on a context (M9 plan decision 6). The passes set the context's state
@@ -146,7 +154,7 @@ export interface GlyphPainter {
   plan?(o: TextObject, l: RichLayout): PaintPlan;
   /** A glyph run's text: stroked in the 'outline' pass, filled in every other. */
   glyphs(ctx: Ctx2D, g: PlannedGlyphs, pass: GlyphPass): void;
-  /** A highlight, underline or strike, filled. */
+  /** A line mask's strap, a highlight, an underline or a strike, filled. */
   rect(ctx: Ctx2D, r: PlannedRect, pass: RectPass): void;
 }
 
@@ -283,9 +291,8 @@ export function paintRich(
       } else if (lm.fill) {
         state.fill(lm.fill);
       }
-      for (const r of lm.straps) {
-        ctx.fillRect(r.x, r.y, r.w, r.h);
-      }
+      // Through the painter, as highlights are: an upright or warped painter places them its way.
+      for (const r of lm.straps) painter.rect(ctx, r, 'lineMask');
     }
     for (const r of plan.highlights) {
       state.fill(r.color);
@@ -445,23 +452,21 @@ function buildPlan(o: TextObject, l: RichLayout): PaintPlan {
   let lineMask: LineMaskPlan | null = null;
   const lm = o.style.lineMask;
   if (lm && (lm.fill || lm.gradient)) {
-    const visibleLines = lines
-      .map(({ line }) => line)
-      .filter(
-        (ln) =>
-          ln.segs.some((seg) =>
-            /[^\s\u200b-\u200d\ufeff]/.test(segText(o.text, seg.start, seg.end, 'none')),
-          ) || !!ln.bullet,
-      );
+    const visibleLines = lines.filter(
+      ({ line: ln }) =>
+        ln.segs.some((seg) => /[^\s\u200b-\u200d\ufeff]/.test(segText(o.text, seg.start, seg.end, 'none'))) ||
+        !!ln.bullet,
+    );
     if (visibleLines.length > 0) {
-      const maxLineW = Math.max(...visibleLines.map((ln) => ln.w));
+      const maxLineW = Math.max(...visibleLines.map(({ line: ln }) => ln.w));
+      const color = lm.gradient ? '' : lm.fill ? css(lm.fill) : '';
       const straps: LineMaskStrap[] = [];
       const hOff = lm.heightOffsetPx ?? 0;
       const vOff = lm.vOffsetPx ?? 0;
       const wOff = lm.widthOffsetPx ?? 0;
       const hShift = lm.hOffsetPx ?? 0;
       const maskStyle = lm.style ?? 'fullWidth';
-      for (const ln of visibleLines) {
+      for (const { line: ln, index } of visibleLines) {
         const F = ln.segs.length
           ? Math.max(...ln.segs.map((s) => s.sizePx))
           : o.style.fontSizePx * l.fontScale;
@@ -485,7 +490,7 @@ function buildPlan(o: TextObject, l: RichLayout): PaintPlan {
                 : o.box.x + (o.box.w - maxLineW) / 2;
           x = baseX - wOff / 2 + hShift;
         }
-        straps.push({ x, y, w, h });
+        straps.push({ line: index, x, y, w, h, color, shadow: null, shadowColor: '' });
       }
       lineMask = {
         straps,
@@ -503,7 +508,6 @@ function buildPlan(o: TextObject, l: RichLayout): PaintPlan {
     glow: null,
     paint: style.paint ?? null,
     lineMask,
-    lineMasks: lineMask?.straps ?? [],
   };
   if (style.fill && o.text.trim()) {
     const ins = insetsOf(style);

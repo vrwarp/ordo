@@ -933,7 +933,7 @@ export function paintRich(ctx: Ctx2D, o: TextObject, l: RichLayout, scale: numbe
     - A bullet is drawn at `sizePct` × F within 4-1,000 px, in its paragraph's direction and its first run's language, so a Hebrew or Arabic number reads as the band's `readableText` writes it ('.1' for '1.' in a right-to-left paragraph). It takes the first run's shadow, outline and glow (passes 2-4) and its colour, as PowerPoint gives it the first run's character formatting.
 
 **Paint passes.** In today's order, under the scale transform:
-1. text fill box (`style.fill`) and highlight;
+1. text fill box (`style.fill`), the line mask's straps (`style.lineMask`, a ProPresenter line fill: one per visible line, through the glyph painter's `rect` in pass `'lineMask'` like a highlight, so an upright or warped painter places them its way) and highlight;
 2. shadow of every line (run shadow, else box shadow);
 3. glow (`shadowBlur` with zero offset);
 4. outline (`strokeText` at 2× width, round joins);
