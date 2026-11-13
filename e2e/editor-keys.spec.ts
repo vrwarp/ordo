@@ -209,7 +209,10 @@ test('with the non-modal Find open the canvas keeps its shortcuts, and Escape cl
   await page.keyboard.press('Escape');
   await expect.poll(async () => (await editorState(page)).objectId).toBeUndefined();
 
-  // With Find open, Delete and Ctrl+Z still act on the slide, and Find stays open.
+  // With Find open, Delete and Ctrl+Z still act on the slide, and Find stays open. The next click must not be
+  // a double-click with the first (Konva's 400 ms window): that would start editing the text, whose hidden
+  // field takes the focus a frame later, after Ctrl+F has opened Find.
+  await page.waitForTimeout(500);
   await selectThenFind();
   await page.keyboard.press('Delete');
   await expect.poll(async () => (await slideObjects(page)).length).toBe(count - 1);
