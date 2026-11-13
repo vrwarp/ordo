@@ -1,5 +1,6 @@
+import type { Dirent } from 'node:fs';
 import { copyFile, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
-import { join, relative, resolve, sep } from 'node:path';
+import { basename, join, relative, resolve, sep } from 'node:path';
 import {
   DEFAULT_THEME,
   type ExtractedText,
@@ -21,7 +22,7 @@ import { extractZip, ZIP_MAX_IN_MEMORY_BYTES } from '@ordo/importers/zip-stream.
 import type { Job } from '@ordo/protocol';
 import type { Logger } from 'pino';
 import type { HubConfig } from './config.ts';
-import { badRequest, errorMessage, forbidden } from './errors.ts';
+import { badRequest, errorMessage, forbidden, HttpError } from './errors.ts';
 import type { JobCtx, JobQueue } from './jobs.ts';
 import type { Library } from './library.ts';
 import { fitPage, pdfToPngs } from './media/ffmpeg.ts';
@@ -64,7 +65,26 @@ export type Importers = {
 const MEDIA_EXT =
   /\.(mp4|m4v|mov|webm|mkv|avi|mpg|mpeg|jpe?g|png|gif|bmp|tiff?|heic|webp|wav|mp3|aac|m4a|flac|ogg|aiff?)$/i;
 const MAX_DIR_FILES = 200_000;
-const MAX_INLINE_BYTES = 64 * 1024 * 1024;
+/**
+ * Past this a file is media (spilled to disk, never read into memory) for the zip and folder readers, and a
+ * single ProPresenter document past it is refused before it is read: real `.pro` files are a few kB to a
+ * few MB, and `readFile` would hold the whole of anything named `.pro` (up to 2 GiB) in the hub's memory.
+ */
+export const MAX_INLINE_BYTES = 64 * 1024 * 1024;
+/** What a NAS path may name besides a folder: a ProPresenter document, playlist, bundle or a library zip. */
+export const PRO7_PATH_FILE = /\.(pro|proplaylist|probundle|zip)$/i;
+/** Entries looked at beside a single document on a NAS path for its media (its folder and two levels below). */
+export const PRO7_BESIDE_MAX_ENTRIES = 20_000;
+const PRO7_BESIDE_DEPTH = 2;
+
+/** The 413 for a single ProPresenter document past MAX_INLINE_BYTES (the route's and the job's words). */
+export function pro7TooLarge(name: string, size: number): HttpError {
+  return new HttpError(
+    413,
+    'too_large',
+    `${name} is larger than ${Math.round(MAX_INLINE_BYTES / 1024 ** 2)} MB (${Math.ceil(size / 1024 ** 2)} MB), more than a ProPresenter document ever is: import the library's folder or a .zip of it`,
+  );
+}
 /** Documents held in memory for one import (zip or folder); media never counts, it stays on disk. */
 export const MAX_IMPORT_MEMORY_BYTES = ZIP_MAX_IN_MEMORY_BYTES;
 /**
@@ -198,7 +218,67 @@ export class ImportService {
     const roots = await Promise.all(this.cfg.importRoots.map((r) => realpath(r).catch(() => r)));
     if (!roots.some((r) => real === r || real.startsWith(r + sep)))
       throw forbidden(`Imports may only read from ${this.cfg.importRoots.join(', ')}`);
+    const st = await stat(real);
+    if (st.isFile()) {
+      // A file on the NAS: a ProPresenter document, playlist, bundle or library zip only, and a document
+      // within the size it is read into memory at (the job checks again: the file may change meanwhile).
+      if (!PRO7_PATH_FILE.test(real))
+        throw new HttpError(
+          415,
+          'unsupported',
+          'A NAS path names a ProPresenter library folder, a .pro file, .proPlaylist, .probundle or a .zip of the library',
+        );
+      if (st.size > MAX_INLINE_BYTES && sniff(await readHead(real))?.kind !== 'zip')
+        throw pro7TooLarge(basename(real), st.size);
+    } else if (!st.isDirectory()) throw badRequest(`Not a folder or a file: ${path}`);
     return this.jobs.enqueue('pro7-import', { path: real, name: baseName(real) }, 'light');
+  }
+
+  /**
+   * A single ProPresenter document read into memory, after its size is checked (stat before readFile):
+   * past MAX_INLINE_BYTES it is refused, never read.
+   */
+  private async readDocument(path: string, name: string): Promise<Uint8Array> {
+    const st = await stat(path);
+    if (st.size > MAX_INLINE_BYTES) throw pro7TooLarge(name, st.size);
+    return readFile(path);
+  }
+
+  /**
+   * The media files beside a single document on a NAS path (its folder and up to two levels below, at most
+   * PRO7_BESIDE_MAX_ENTRIES entries looked at, dot entries skipped), as the importer's placeholders keyed
+   * relative to that folder and backed by their paths on disk: the document's media are linked as a folder
+   * import links them (`MediaResolver`: the exporting Mac's path suffix, else a name only one file has or
+   * the one next to the document). Other documents in the folder are not imported.
+   */
+  private async mediaBeside(file: string, signal: AbortSignal): Promise<ImportFiles> {
+    const root = resolve(file, '..');
+    const files = new Map<string, Uint8Array>();
+    const onDisk = new Map<string, string>();
+    let seen = 0;
+    const walk = async (dir: string, depth: number) => {
+      let entries: Dirent[];
+      try {
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch {
+        return; // an unreadable sub-folder holds nothing we can use
+      }
+      for (const ent of entries) {
+        if (signal.aborted) throw new Error('cancelled');
+        if (++seen > PRO7_BESIDE_MAX_ENTRIES) return;
+        if (ent.name.startsWith('.')) continue;
+        const p = join(dir, ent.name);
+        if (ent.isDirectory()) {
+          if (depth < PRO7_BESIDE_DEPTH) await walk(p, depth + 1);
+        } else if (ent.isFile() && MEDIA_EXT.test(ent.name)) {
+          const rel = relative(root, p).split(sep).join('/');
+          files.set(rel, new Uint8Array(0));
+          onDisk.set(rel, p);
+        }
+      }
+    };
+    await walk(root, 0);
+    return { files, onDisk };
   }
 
   queuePro7FromUpload(uploadPath: string, name: string) {
@@ -315,7 +395,8 @@ export class ImportService {
           ({ files, onDisk } = await this.readZipUpload(pl.upload, scratch, ctx.signal));
         } else {
           ctx.log(`reading file ${pl.name ?? ''}`);
-          files = new Map([[pl.name ?? 'presentation.pro', await readFile(pl.upload)]]);
+          const name = pl.name ?? 'presentation.pro';
+          files = new Map([[name, await this.readDocument(pl.upload, name)]]);
           onDisk = new Map();
         }
       } else if (pl.path) {
@@ -328,8 +409,11 @@ export class ImportService {
             ({ files, onDisk } = await this.readZipUpload(pl.path, scratch, ctx.signal));
           } else {
             ctx.log(`reading file ${pl.path}`);
-            files = new Map([[baseName(pl.path), await readFile(pl.path)]]);
-            onDisk = new Map();
+            // Under its own file name: the importer decodes the keys that end in `.pro` (`baseName` drops it).
+            const name = basename(pl.path);
+            // Its media come from its folder, as a folder import's do.
+            ({ files, onDisk } = await this.mediaBeside(pl.path, ctx.signal));
+            files.set(name, await this.readDocument(pl.path, name));
           }
         } else {
           ctx.log(`reading folder ${pl.path}`);

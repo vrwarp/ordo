@@ -121,3 +121,8 @@ All tasks in M1, M2 and M3 are implemented in this repository, with these except
 | Per-window log lines in the operator diagnostics         | Done: outputs and the stage send their last 20 log lines in `health.recentLog`; the diagnostics panel lists them per window                                                                                                                                                                                  |
 | Golden-image tests of the text rasterizer                | `pnpm --filter @ordo/renderer golden` (Playwright + OffscreenCanvas, design/23); runs in CI                                                                                                                                                                                                                  |
 | Memory caps on ffmpeg, LibreOffice and pdftoppm          | Timeouts only; set a container memory limit (deploy/compose.yaml)                                                                                                                                                                                                                                            |
+
+3.4 grew past its first scope: ProPresenter visual fidelity (#20: shapes, gradients, masks, crops, line masks,
+picture shadows and feathers; PR #23: one effects path for shapes and pictures) is gated in CI by a font-free
+synthetic ratchet of 18 slides that fails on a drop or a missing deck (`tools/pro7-fidelity`, design/23);
+agreement with a real library is measured locally with `--sample-dir`.

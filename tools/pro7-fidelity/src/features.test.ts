@@ -71,7 +71,7 @@ describe('features', () => {
 
   it('extracts slide sources from synthetic masks and crops deck', () => {
     const corpus = buildSyntheticCorpus();
-    expect(corpus).toHaveLength(3);
+    expect(corpus).toHaveLength(5);
     const masksDeck = corpus[2]!;
     const proBytes = masksDeck.files.get(masksDeck.proFileName)!;
 

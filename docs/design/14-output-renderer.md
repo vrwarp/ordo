@@ -199,6 +199,16 @@ decodes two large photos never holds up the props layer, which flips on every se
   slice after its bands, unclipped; only a turned picture's own edge, where its mask shows it, may differ by
   a few levels, design/27 §7.5), so the longest slice is a band, the first
   of which also builds the source's mipmaps, or the layer's own draw. Nothing interrupts a running slice.
+  Each slice reads one pixel back before it ends (`settle`): Chromium records 2D calls and draws them when
+  something reads the canvas, so a band recorded cheaply would otherwise be drawn in the last slice
+  (`transferToImageBitmap`). A picture's soft edge (`ImageObject.softEdge`, a ProPresenter feather) is part
+  of what is prepared: a post step (`SOFT_EDGE_STEP`) multiplies the finished pixels by the picture's
+  silhouette eroded and blurred as a shape's soft edge is, its small mask made in a slice of its own and the
+  multiply in the same bands. A full-frame feathered picture at 4K took 60-120 ms in its last slice before;
+  each slice is now at most about 35 ms on a loaded 4-core container (the raster bench's `prepareStepMs`). A
+  picture's shadow is not prepared: it is an effect layer drawn under the prepared bitmap
+  (`picture-effects.ts`, through `effects.ts` as a shape's shadow), so the bitmap is the same with or
+  without one.
 - **Cancellation.** After each plan, the link cancels the jobs no live or armed layer, props or warm job
   needs any more (the armed cue changed before its job ran, a props second passed): a queued job is dropped,
   a running one stops at its next slice, unpins and closes what it holds, and sends nothing. The link
@@ -292,7 +302,8 @@ are byte-identical, and the tests pin each seam's calls by digest against the co
   drawers` and the editor canvas call `loadShapeDrawers` before they draw (the canvas draws again once loaded).
   A registered 3-D look (`registerLook3d`) resolves a plan the effect composite draws (`EffectSource.look3d`).
 - **Paint hooks** (`renderer/src/text/paint.ts`): `paintRich` puts glyphs on the context through a glyph painter
-  (`PLAIN_PAINTER`; upright and warp ones registered by kind) and draws its face on a face target
+  (`PLAIN_PAINTER`; upright and warp ones registered by kind), and its rectangles too (a line mask's straps,
+  highlights, underlines and strikes: `rect` with the pass) and draws its face on a face target
   (`DIRECT_TARGET`; a face sprite registered by the 3-D look, whose alpha casts the shadow and glow), chosen per
   object and independently.
 - **One sprite cache** (`renderer/src/spritecache.ts`): 64 MiB for every kind of sprite (effects today; geometry,
@@ -300,7 +311,9 @@ are byte-identical, and the tests pin each seam's calls by digest against the co
 - **Picture pipeline** (`renderer/src/picture.ts`): `PictureSource` is a canvas image or a `VectorPicture`, which
   the source step that accepts it draws wherever `drawImage` would (`registerPictureSource`); target extensions
   widen a target's key or refuse to prepare it (`registerPictureTarget`); post steps change a prepared bitmap
-  after its mask's cut (`registerPicturePost`).
+  after its mask's cut (`registerPicturePost`), in bands when they say how (`PicturePostStep.bands`). A
+  picture's soft edge is such a step, after the registered ones, and is added to the target after the
+  target extensions, so a picture with effects still reaches them.
 <!-- /m9:render-seams -->
 
 <!-- m9:tables-render -->

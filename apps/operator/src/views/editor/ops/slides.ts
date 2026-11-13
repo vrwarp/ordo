@@ -9,6 +9,7 @@ import {
   type TextPara,
   type TextRun,
   type TextStyle,
+  withoutBackdropObjects,
 } from '@ordo/domain';
 import { CLAMP } from '@ordo/renderer';
 import { cloneSlide, findSlide, getSlide, lyricObject, markOverride } from '../ops.ts';
@@ -315,15 +316,13 @@ export function deckBackground(p: Presentation): string | undefined {
   return best;
 }
 
-/** `objects` without the PowerPoint solid or gradient background at their bottom (`role: 'bg'` shapes). */
+/**
+ * `objects` without the solid or gradient background at their bottom (`role: 'bg'` shapes: a PowerPoint
+ * slide's background fill, a ProPresenter slide's own colour or its presentation's background; the
+ * domain's `withoutBackdropObjects`, which the screens use over a Background override too).
+ */
 function withoutBgShapes(objects: SlideObject[]): SlideObject[] {
-  let n = 0;
-  while (n < objects.length) {
-    const o = objects[n]!;
-    if (o.type !== 'shape' || o.origin?.role !== 'bg' || o.locked) break;
-    n++;
-  }
-  return n ? objects.slice(n) : objects;
+  return withoutBackdropObjects(objects);
 }
 
 /**

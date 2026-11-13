@@ -44,7 +44,11 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
       const until = soundEnds(slides.map((x) => x.slide));
       slides.forEach(({ section, arrangementPos, slide, slideIndexInSection }, k) => {
         const text = firstText(slide);
-        const bgId = slideBackground(slide, resolved.media) ?? item.backgroundMediaId ?? p.backgroundMediaId;
+        const own = slideBackground(slide, resolved.media);
+        const bgId = own ?? item.backgroundMediaId ?? p.backgroundMediaId;
+        // The item's Background override shows on this slide: the slide's backdrops (an imported colour
+        // or gradient under its objects, `withoutBackdrops`) are not drawn over it.
+        const backgroundOverride = !own && !!item.backgroundMediaId;
         const clearBackground = slide.clearBackground && !slide.backgroundMediaId;
         // Entering the item (by any of its cues: a hidden first slide, a click further in, Prev back into
         // it) clears the running background when this slide has none, unless the item keeps it.
@@ -76,6 +80,7 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
           slideId: slide.id,
           slideIndexInSection,
           backgroundMediaId: bgId,
+          ...(backgroundOverride ? { backgroundOverride: true } : {}),
           ...(clearBackground ? { clearBackground: true } : {}),
           ...(clearOnEntry ? { clearOnEntry: true } : {}),
           transition: item.transition ?? slide.transition ?? p.transition,

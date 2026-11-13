@@ -217,7 +217,8 @@ export function clampLang(v: unknown): string {
   return typeof v === 'string' ? v.slice(0, 35).replace(/[^A-Za-z0-9-]/g, '') : '';
 }
 
-function clampShadow(v: Partial<NonNullable<TextStyle['shadow']>>): NonNullable<TextStyle['shadow']> {
+/** A shadow within the clamp bounds (offsets ±maxEffectPx, blur 0..maxEffectPx, a valid colour). */
+export function clampShadow(v: Partial<NonNullable<TextStyle['shadow']>>): NonNullable<TextStyle['shadow']> {
   return {
     dx: num(v.dx, -CLAMP.maxEffectPx, CLAMP.maxEffectPx, 0),
     dy: num(v.dy, -CLAMP.maxEffectPx, CLAMP.maxEffectPx, 0),

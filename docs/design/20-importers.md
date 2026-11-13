@@ -19,7 +19,7 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
 | `Slide.elements` of type text: `rect` and `text` (RTF)                             | `TextObject`: multi-run rich text (`runs`), per-paragraph styles (`paras`), `lineMask` overlays; empty-RTF boxes with fills/strokes route to `ShapeObject` |
 | `Slide.elements` of type shape                                                     | `ShapeObject`: box, preset shapes, custom cubic bezier paths (`geom`), solid and gradient fills, strokes, shadows, soft edges                              |
 | `Slide.elements` of type image or video                                            | `ImageObject` or slide background; path masks, crop insets, custom bounds, shadows, soft edges; media located relative to import root and uploaded         |
-| `Presentation.background`                                                          | `backgroundMediaId`                                                                                                                                        |
+| `Presentation.background`                                                          | a backdrop shape on each slide without its own colour (`role: 'bg'`, below); media → `backgroundMediaId`                                                   |
 | `arrangements`                                                                     | `Arrangement[]`                                                                                                                                            |
 | Playlists referencing `.pro` by UUID                                               | `Playlist` items referencing imported presentations                                                                                                        |
 | Builds, transitions per slide, macros, timers, looks, stage layouts, audio routing | Skipped, logged                                                                                                                                            |
@@ -53,7 +53,10 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
   - Non-rectangular `Path.shape` presets (`TYPE_ELLIPSE`, `TYPE_ROUNDED_RECTANGLE`, isosceles and right
     triangles, rhombus, single and double arrows, polygons, stars) and `TYPE_CUSTOM` cubic bezier paths
     become `ShapeObject` or element `ShapeGeom`. Element drop `shadow` and `feather` (`softEdge = radius ×
-    min(w, h) × 0.5`) are carried on shapes and images.
+    min(w, h) × 0.5`) are carried on shapes and images, and a shape and a picture with the same fields look
+    the same: both are drawn by the renderer's effects path (design/27 §7.1 "Picture effects": the shadow
+    blurred by σ = blur/√6, the soft edge eroding the element's own outline, its round corners included,
+    on every engine, WebKit too).
   - Text line masks (`textLineMask`) support `fullWidth`, `lineWidth`, and `maxLineWidth` styles with solid
     or gradient fills, horizontal/vertical/width/height offsets, and Cocoa `0.065 × F` intra-strap baseline
     centering on middle-aligned masks.
@@ -99,6 +102,16 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
     A slide that stops a running background gets `clearBackground`, which clears the
     output's background layer when it is shown. The `exportCompat` option isolates each cue's
     background for slide-for-slide export comparison without changing live background continuation.
+  - A slide's own colour (`drawsBackgroundColor`), else the presentation's background colour or
+    gradient (`Presentation.background`, as #20 intended), is part of the slide above the background
+    media, as in ProPresenter: a full-slide shape at the bottom of its objects, so a running picture or
+    video is hidden behind it. It is marked as the slide's backdrop (`origin: { src: 'pro7', role: 'bg' }`,
+    unlocked, as a PowerPoint slide's solid background is), so ordo's background changes replace it rather
+    than sit behind it: the editor's Background button and Slide panel "Replace…" (`replaceBackground`)
+    remove it when they give the slide a picture, and a playlist item's Background override draws the slide
+    without it (`Cue.backgroundOverride`, `withoutBackdrops`) on screens that show backgrounds and in the
+    live slide grid. Before PR #23 the shape carried no mark and a replaced background or an override did
+    not show on such songs.
 - Not carried (logged per document): slide labels, cue hot keys, group colours, builds,
   per-slide transitions, macros, timers, linked text (imported as last saved), title case /
   one-word-per-line transforms, text-box borders without a backing fill.
@@ -106,8 +119,16 @@ runnable in Node (hub jobs) and in the browser (for previews and tests).
   scan of real 7.x and 21.x files found only cosmetic fields it lacks (ligature style, an
   image alpha-type flag); `autogen-proto/` in the same repository tracks ProPresenter 21.4
   and is the set to move to when a file shows fields that matter.
-- Import root: a zip uploaded from the operator app or a NAS path the hub can read. The
-  log groups by presentation: imported, partially imported (with reasons), skipped.
+- Import root: a zip uploaded from the operator app, a single `.pro`, `.proPlaylist` or `.probundle`
+  upload (since #10), or a NAS path the hub can read inside its import roots: a library folder, or one
+  of those files or a library `.zip` (any other file is refused, 415). A single document is read into
+  memory only after its size is checked (stat before read): past 64 MB (`MAX_INLINE_BYTES`, the size past
+  which the zip and folder readers treat a file as media) it is refused, 413, by the route and again by
+  the job. A single `.pro` from a NAS path brings its media from its folder: the media files in it and
+  up to two levels below (at most 20,000 entries looked at, dot entries skipped) are offered to the
+  importer as a folder import's are, so "Media found alongside is uploaded" holds for one song too;
+  other documents beside it are not imported. The log groups by presentation: imported, partially
+  imported (with reasons), skipped.
 
 ## SongSelect files
 

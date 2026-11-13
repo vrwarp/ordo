@@ -6,7 +6,7 @@ import { buildSyntheticCorpus } from './corpus.ts';
 describe('corpus', () => {
   it('buildSyntheticCorpus creates pro7-synth-core with 4 slides', () => {
     const corpus = buildSyntheticCorpus();
-    expect(corpus).toHaveLength(3);
+    expect(corpus).toHaveLength(5);
     const deck = corpus[0]!;
     expect(deck.name).toBe('pro7-synth-core');
     expect(deck.proFileName).toBe('pro7-synth-core.pro');
@@ -123,7 +123,7 @@ describe('corpus', () => {
 
   it('buildSyntheticCorpus creates pro7-synth-shapes with 3 slides and valid rasters', () => {
     const corpus = buildSyntheticCorpus();
-    expect(corpus).toHaveLength(3);
+    expect(corpus).toHaveLength(5);
     const deck = corpus[1]!;
     expect(deck.name).toBe('pro7-synth-shapes');
     expect(deck.proFileName).toBe('pro7-synth-shapes.pro');
@@ -181,7 +181,7 @@ describe('corpus', () => {
 
   it('buildSyntheticCorpus creates pro7-synth-masks-and-crops with 3 slides and valid rasters', () => {
     const corpus = buildSyntheticCorpus();
-    expect(corpus).toHaveLength(3);
+    expect(corpus).toHaveLength(5);
     const deck = corpus[2]!;
     expect(deck.name).toBe('pro7-synth-masks-and-crops');
     expect(deck.proFileName).toBe('pro7-synth-masks-and-crops.pro');

@@ -535,6 +535,10 @@ All fields are optional and additive (design/27 §3.2). The cue changes go with 
 one `APP_VERSION` bump. The override changes how existing plans look at their next Go live where an item
 background sits over a song with per-slide backgrounds; before the first service there are few such plans,
 and the venue PC's playlist editor marks them once ("Background for this service now covers every slide").
+Since PR #23 a slide's backdrop (the colour or gradient it was imported on, `origin.role: 'bg'`, a
+ProPresenter slide's or presentation's colour and a PowerPoint slide's fill) no longer hides an override
+that reaches it (`Cue.backgroundOverride`, design/11); the order is still slide first, and the
+`pro7.ts:730` reference above is now `slideFromCue`.
 
 ### 3.6 Presentation edits and drafts
 

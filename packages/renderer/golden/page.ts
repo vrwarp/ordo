@@ -332,6 +332,66 @@ const shaped: Slide = (() => {
 })();
 
 /**
+ * Pictures with shadows and soft edges (design/27 §3.1 `ImageObject.shadow`, `softEdge`; design/20
+ * "ProPresenter"), drawn through the shapes' effects path: round corners with a shadow and with a soft edge
+ * (kept, not squared), a feathered and shadowed rect (prepared by the outputs: the soft edge in the bitmap, the
+ * shadow a layer under it), a feathered ellipse mask mirrored, a turned picture with a shadow, a translucent
+ * one (its shadow not showing through) and one past the slide's edge (not faded where the slide cuts it).
+ */
+const effected: Slide = (() => {
+  const box = (x: number, y: number, w: number, h: number, rotation = 0) => ({ x, y, w, h, rotation });
+  const shadow = (dx: number, dy: number, blur: number, a: number) => ({
+    dx,
+    dy,
+    blur,
+    color: { r: 0, g: 0, b: 0, a },
+  });
+  const image = (id: string, b: Box, extra: Partial<ImageObject>) =>
+    ({
+      id,
+      type: 'image',
+      box: b,
+      mediaId: 'quadrants',
+      fit: 'cover',
+      opacity: 1,
+      radius: 0,
+      ...extra,
+    }) as ImageObject;
+  return {
+    id: 'effects',
+    objects: [
+      {
+        id: 'backdrop',
+        type: 'shape',
+        box: { x: 40, y: 40, w: 1840, h: 1000, rotation: 0 },
+        shape: 'rect',
+        fill: { r: 200, g: 205, b: 215, a: 1 },
+        opacity: 1,
+        radius: 0,
+      },
+      // Round corners and a shadow (a ProPresenter rounded rectangle picture).
+      image('roundShadow', box(100, 100, 480, 320), { radius: 64, shadow: shadow(18, 22, 40, 0.75) }),
+      // Round corners and a soft edge: the corners fade round.
+      image('roundFeather', box(700, 100, 480, 320), { radius: 64, softEdge: 36 }),
+      // A plain rect with both, stretched.
+      image('both', box(1300, 100, 480, 320), {
+        fit: 'stretch',
+        softEdge: 24,
+        shadow: shadow(-16, 20, 30, 0.6),
+      }),
+      // A mirrored ellipse mask, feathered: the feather ends at the outline.
+      image('ellipse', box(100, 560, 440, 360), { mask: { preset: 'ellipse' }, flipH: true, softEdge: 30 }),
+      // Turned, with a shadow (offset on the slide, not turned with the box).
+      image('turned', box(660, 600, 420, 280, 12), { shadow: shadow(20, 20, 24, 0.8) }),
+      // Translucent: drawn as a group, its shadow not showing through it.
+      image('translucent', box(1200, 560, 420, 300), { opacity: 0.6, shadow: shadow(24, 24, 36, 0.9) }),
+      // Past the slide's bottom-right corner, feathered: only its own edges fade.
+      image('past', box(1640, 860, 400, 300), { softEdge: 40 }),
+    ],
+  };
+})();
+
+/**
  * The editor's canvas (`SlideCanvas`): each object a Konva node at its box centre, turned by the box's
  * rotation, drawing itself in its unrotated local box at scale 1 inside the stage's scaled layer; a picture
  * through `drawImageFit` with its flips and mask, the others through `drawObject`.
@@ -629,6 +689,20 @@ export const CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2D) => v
     fillColor(ctx, LOOK_MAIN.clearColor, W, H);
     editorDraw(ctx, shaped, SCALE, cropImages);
   },
+  // Shadows and soft edges as the thumbnails draw them (from the source), as the outputs do (prepared
+  // pictures: the soft edge in the bitmap, the shadow under it) and as the editor does: the three agree.
+  'image-effects': (ctx) => {
+    fillColor(ctx, LOOK_MAIN.clearColor, W, H);
+    rasterSlide(ctx, effected, LOOK_MAIN, SCALE, cropImages, { isSong: false });
+  },
+  'image-effects-prepared': (ctx) => {
+    fillColor(ctx, LOOK_MAIN.clearColor, W, H);
+    rasterSlide(ctx, effected, LOOK_MAIN, SCALE, preparedImages, { isSong: false });
+  },
+  'image-effects-editor': (ctx) => {
+    fillColor(ctx, LOOK_MAIN.clearColor, W, H);
+    editorDraw(ctx, effected, SCALE, cropImages);
+  },
   // A slide as the M4 editor leaves it, as the thumbnail worker draws it (`drawSlide2D`, pictures from
   // their source), as the outputs do (`rasterSlide`, prepared pictures) and as the editor's canvas does:
   // the three must agree (SAME_AS).
@@ -656,6 +730,8 @@ export const CASES: Record<string, (ctx: OffscreenCanvasRenderingContext2D) => v
 export const SAME_AS: Record<string, string> = {
   'image-shape-prepared': 'image-shape',
   'image-shape-editor': 'image-shape',
+  'image-effects-prepared': 'image-effects',
+  'image-effects-editor': 'image-effects',
   'edited-slide-output': 'edited-slide',
   'edited-slide-editor': 'edited-slide',
   'table-vs-group': 'table-basic',

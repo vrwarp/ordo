@@ -29,8 +29,9 @@ import { clampShapeObject } from './shape.ts';
  *   shape without its stored geometry, gradient (its first stop), dash, arrowheads, joins and caps; a picture
  *   without its mask), as an older build draws it. A stored geometry whose fill alone is over `GEOM_COST.geometry` is already its
  *   legacy shape (`storedGeometry`).
- * - Effects: shapes keep their shadow, glow and soft edge while the area of their layers (`effectArea`, over
- *   what each shape draws: `bounds.ts` `drawnBounds`, the bounds `drawGeomShape` makes its layers over) stays
+ * - Effects: shapes keep their shadow, glow and soft edge, and pictures their shadow and soft edge, while the
+ *   area of their layers (`effectArea`, over what each shape draws: `bounds.ts` `drawnBounds`, the bounds
+ *   `drawGeomShape` makes its layers over; over a picture's box, as `drawPictureEffected` makes them) stays
  *   within `EFFECT_COST.slide`; later ones are drawn without them.
  * The loop is `slidePlan`, which the converter runs on what it emits (`pptx-scene` `emit.ts`), after keeping
  * native slides within the same budgets as it reads them (`walk.ts` `slideCost`, `fitEffects`), so this
@@ -114,9 +115,11 @@ function ratedOf(o: SlideObject): { r: Rated; area: number } {
     const c = o.type === 'shape' ? clampShapeObject(o) : o;
     const { g, points } = drawnGeometry(c);
     r = { est: objectCost(c, g), points };
-    // The effect layers cover what the shape draws, as `drawGeomShape` makes them.
+    // The effect layers cover what the shape draws, as `drawGeomShape` makes them; a picture's its box
+    // (`picture-effects.ts`).
     if (c.type === 'shape' && g && (c.shadow || c.glow || c.softEdge))
       area = effectArea(c, drawnBounds(g, outlineOf(c)));
+    else if (c.type === 'image' && (c.shadow || c.softEdge)) area = effectArea(c);
   }
   const out = { version, r, area };
   rated.set(o, out);

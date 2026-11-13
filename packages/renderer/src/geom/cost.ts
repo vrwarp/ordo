@@ -777,15 +777,17 @@ export function hasPart(o: object, part: LegacyPart): boolean {
     if (type === 'shape' && GEOM_FIELDS.some((k) => r[k] !== undefined)) return true;
     if (type === 'image' && r.mask !== undefined) return true;
   }
-  return part !== 'geom' && type === 'shape' && EFFECT_FIELDS.some((k) => r[k] !== undefined);
+  return (
+    part !== 'geom' && (type === 'shape' || type === 'image') && EFFECT_FIELDS.some((k) => r[k] !== undefined)
+  );
 }
 
 /**
  * An object as drawn past a budget (a shallow copy): `geom` leaves out a shape's stored geometry, its gradient
  * (its `fill`, the first stop, is drawn: about five times cheaper a pixel) and the outline fields that
  * multiply its cost (dash, arrowheads, joins, caps), a picture's mask; `effects` a shape's shadow, glow and
- * soft edge. What is left is drawn as an older build draws it (a legacy rect, ellipse or line in its colour
- * with a plain outline), whose cost the geometry no longer drives.
+ * soft edge, a picture's shadow and soft edge. What is left is drawn as an older build draws it (a legacy rect,
+ * ellipse or line in its colour with a plain outline), whose cost the geometry no longer drives.
  */
 export function withoutPart<T extends object>(o: T, part: LegacyPart): T {
   const out = { ...o } as T & Record<string, unknown>;
@@ -794,7 +796,7 @@ export function withoutPart<T extends object>(o: T, part: LegacyPart): T {
     if (type === 'shape') for (const k of GEOM_FIELDS) delete out[k];
     else if (type === 'image') delete out.mask;
   }
-  if (part !== 'geom' && type === 'shape') for (const k of EFFECT_FIELDS) delete out[k];
+  if (part !== 'geom' && (type === 'shape' || type === 'image')) for (const k of EFFECT_FIELDS) delete out[k];
   return out;
 }
 
@@ -883,7 +885,7 @@ export function slidePlan<T>(
 // ── Effects ───────────────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * A slide's shape effects (design/27 §12 drawing cost, §13): the area their layers cover, in slides of
+ * A slide's shape and picture effects (design/27 §12 drawing cost, §13): the area their layers cover, in slides of
  * 1920 x 1080, at most `EFFECT_COST.slide` (weighted: a shadow and a glow 1 each, a soft edge
  * `EFFECT_COST.softEdge`: its body is made and cut by its enlarged mask at full resolution on every raster
  * past the composite cache, about 55 ms a slide area at 4K, against 25 ms cold and a few ms warm a slide area

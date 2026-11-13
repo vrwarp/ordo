@@ -17,7 +17,8 @@ import type { SlideRow, SlidesReport, Stats } from './slides.page.ts';
  * --check fails when a p95 is over its budget: 10 ms at 1920 and 30 ms at 3840 for every kind, and 12 ms at
  * 3840 for text over a photo (the M7 exit); 50 ms, the longest asset-worker task, for a kind whose drawing
  * estimate is past the raster budget (`heavySlide`: the traced decorations, design/27 §13's named exception,
- * which health leaves out of the raster alarm). These are the asset worker's CPU costs (a software canvas on
+ * which health leaves out of the raster alarm); and when a step of preparing a slide's pictures (the raster
+ * lanes' steps, a feathered picture's soft edge included) is over that task's 50 ms. These are the asset worker's CPU costs (a software canvas on
  * purpose, design/14), so the figures belong to the machine that runs the bench: in CI (headless, a shared
  * runner) read them as a trend; on a venue machine (`bench/venue.ts`) as that machine's. The face is
  * DejaVu Sans (fonts-dejavu-core; on Windows and macOS pass --font <regular.ttf> --bold <bold.ttf>).
@@ -129,7 +130,8 @@ export function printSlides(r: SlidesReport & { browser: string }): number {
     );
   for (const row of r.rows) {
     const budget = budgetFor(row);
-    const bad = row.raster.p95 > budget;
+    const slowStep = (row.prepareStepMs ?? 0) > TASK_MS;
+    const bad = row.raster.p95 > budget || slowStep;
     if (bad) over++;
     const sprite = row.kind.startsWith('scene')
       ? `base and over ${Math.round(row.share * 100)} % of a frame`
@@ -141,7 +143,7 @@ export function printSlides(r: SlidesReport & { browser: string }): number {
         ? `; drawing estimate ${ms(row.estimateMs)} ms${row.heavy ? ', past the raster budget by its content' : ''}`
         : '';
     console.log(
-      `  ${`${row.width}x${row.height}`.padEnd(10)} ${row.kind.padEnd(26)} ${fmtStats(row.raster)} (budget p95 ${budget} ms${bad ? ': OVER' : ''}); ${sprite}; drawn full-frame p50 ${ms(row.fullFrame.p50)} p95 ${ms(row.fullFrame.p95)} ms; first ${ms(row.firstMs)} ms${row.prepareMs > 0.05 ? `, pictures prepared ${ms(row.prepareMs)} ms` : ''}${estimate}`,
+      `  ${`${row.width}x${row.height}`.padEnd(10)} ${row.kind.padEnd(26)} ${fmtStats(row.raster)} (budget p95 ${budget} ms${bad ? ': OVER' : ''}); ${sprite}; drawn full-frame p50 ${ms(row.fullFrame.p50)} p95 ${ms(row.fullFrame.p95)} ms; first ${ms(row.firstMs)} ms${row.prepareMs > 0.05 ? `, pictures prepared ${ms(row.prepareMs)} ms (longest step ${ms(row.prepareStepMs ?? 0)} ms${slowStep ? ': OVER the task' : ''})` : ''}${estimate}`,
     );
   }
   return over;

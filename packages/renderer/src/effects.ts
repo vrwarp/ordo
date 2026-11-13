@@ -79,6 +79,12 @@ export interface EffectSource {
   /** Cache key of everything drawn but the transform; undefined: not cached. */
   readonly key?: string;
   /**
+   * `draw` cuts what its canvas holds (a picture cut to its mask or round corners by a 'destination-in'
+   * fill, anti-aliased where a clip is not): it is always drawn alone into a sprite of its own, never onto a
+   * canvas holding its layers or onto the caller's (pictures, `picture-effects.ts`).
+   */
+  readonly isolated?: boolean;
+  /**
    * The object's 3-D look resolved for this transform (M9 plan decision 6; drawn by three-rim's face, rim and
    * walls inside the composite): a type only until then, so a shape with one draws flat, as today.
    */
@@ -210,7 +216,11 @@ function silhouette(c: OffscreenCanvasRenderingContext2D, src: EffectSource, gro
  * The soft edge's mask in `c`: the silhouette shrunk by `e` box units. An outline at least 2e wide is kept
  * thinner (its outer edge moves in by e); else the fill shrinks by what is left of e past the outline.
  */
-function eroded(c: OffscreenCanvasRenderingContext2D, src: EffectSource, e: number): void {
+function eroded(
+  c: OffscreenCanvasRenderingContext2D,
+  src: Pick<EffectSource, 'fill' | 'strokes' | 'lineWidth' | 'join' | 'cap'>,
+  e: number,
+): void {
   c.fillStyle = '#000';
   c.strokeStyle = '#000';
   c.lineJoin = 'round';
@@ -361,11 +371,14 @@ export function drawEffected(ctx: Ctx2D, src: EffectSource, opacity: number): bo
       : `${src.key}|${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f}|${r.X} ${r.Y} ${r.W} ${r.H}`;
   const tagged = (tag: string) => (key === undefined ? undefined : `${key}|${tag}`);
   const soft = !!src.softEdge && src.softEdge > 0;
+  // An isolated draw (a picture) is feathered over its sprite grown by the soft edge's reach: where the canvas
+  // cuts the sprite, the picture goes on and must not fade (a shape's sprite keeps its cut, as before).
+  const softPad = soft && src.isolated ? 3 * (src.softEdge ?? 0) * STACK_BLUR_SIGMA * s + 2 : 0;
   const shadowOf = () =>
     sh
       ? blurLayer(m, r, shadowSigma, sdx, sdy, rgbaCss(sh.color), (c) => {
           src.draw(c);
-          if (soft) softened(c, src, m, s);
+          if (soft) softened(c, src, m, s, undefined, undefined, softPad);
         })
       : undefined;
   const glowOf = () =>
@@ -408,7 +421,7 @@ export function drawEffected(ctx: Ctx2D, src: EffectSource, opacity: number): bo
         if (!layer) return false;
         place(layer);
       }
-      if (!body(f, src, m, s, r, soft, !!(sh || gl), tagged('softmask'))) return false;
+      if (!body(f, src, m, s, r, soft, !!(sh || gl), tagged('softmask'), softPad)) return false;
       out = { canvas: f.canvas, x: r.X, y: r.Y, w: r.W, h: r.H, bytes };
       remember(allKey, out);
     }
@@ -435,12 +448,12 @@ export function drawEffected(ctx: Ctx2D, src: EffectSource, opacity: number): bo
   // mask, which is cached as the layers are (an eroded, blurred silhouette made each raster cost about a
   // shadow's layer five times over at 4K).
   let softBody: OffscreenCanvasRenderingContext2D | undefined;
-  if (soft) {
+  if (soft || src.isolated) {
     softBody = sprite(r.W, r.H);
     if (!softBody) return false;
     softBody.setTransform(m.a, m.b, m.c, m.d, m.e - r.X, m.f - r.Y);
     src.draw(softBody);
-    softened(softBody, src, m, s, r, tagged('softmask'));
+    if (soft) softened(softBody, src, m, s, r, tagged('softmask'), softPad);
   }
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -471,8 +484,9 @@ function body(
   soft: boolean,
   layered: boolean,
   maskKey?: string,
+  pad = 0,
 ): boolean {
-  if (!soft || !layered) {
+  if ((!soft && !src.isolated) || !layered) {
     // Alone in the sprite: drawn and, soft-edged, cut in place (a copy of a 4K sprite costs about 17 ms cold).
     c.save();
     c.setTransform(m.a, m.b, m.c, m.d, m.e - r.X, m.f - r.Y);
@@ -481,17 +495,18 @@ function body(
     if (soft) {
       c.save();
       c.setTransform(m.a, m.b, m.c, m.d, m.e - r.X, m.f - r.Y);
-      softened(c, src, m, s, r, maskKey);
+      softened(c, src, m, s, r, maskKey, pad);
       c.restore();
     }
     return true;
   }
-  // The soft edge multiplies what the sprite holds: drawn alone first, as the sprite has layers in it.
+  // The soft edge multiplies what the sprite holds (and an isolated draw cuts it): drawn alone first, as the
+  // sprite has layers in it.
   const alone = sprite(r.W, r.H);
   if (!alone) return false;
   alone.setTransform(m.a, m.b, m.c, m.d, m.e - r.X, m.f - r.Y);
   src.draw(alone);
-  softened(alone, src, m, s, r, maskKey);
+  if (soft) softened(alone, src, m, s, r, maskKey, pad);
   c.save();
   c.setTransform(1, 0, 0, 1, 0, 0);
   c.drawImage(alone.canvas, 0, 0);
@@ -503,23 +518,49 @@ function body(
  * Multiplies the alpha of what `c` holds (the shape, drawn under its transform) by the soft edge's mask: the
  * silhouette shrunk by `softEdge` and blurred by it, made at a reduced resolution. `r` is the device rect `c`
  * covers (undefined: `c` is a reduced blur sprite, whose own transform maps box space). With `maskKey` the
- * reduced mask is cached under it (a body sprite of `r` under `m`: what the key names).
+ * reduced mask is cached under it (a body sprite of `r` under `m`: what the key names). `pad`: the mask is
+ * made over `c` grown by that many device px on every side, so a silhouette going on past `c`'s edge is not
+ * faded there (pictures; 0 for shapes).
  */
 function softened(
   c: OffscreenCanvasRenderingContext2D,
-  src: EffectSource,
+  src: Pick<EffectSource, 'softEdge' | 'fill' | 'strokes' | 'lineWidth' | 'join' | 'cap'>,
   m: Affine,
   s: number,
   r?: { X: number; Y: number; W: number; H: number },
   maskKey?: string,
+  pad = 0,
 ): void {
+  const mask = softMask(c, src, m, s, r, maskKey, pad);
+  if (mask) multiplySoftMask(c, mask);
+}
+
+/**
+ * A soft edge's mask, made at a reduced resolution, and where it goes on the canvas it was made for (device
+ * px of that canvas, untransformed): `softened`'s mask, kept apart so a prepared picture multiplies by it in
+ * bands (`picture.ts` `SOFT_EDGE_STEP`).
+ */
+export type SoftMask = { readonly canvas: OffscreenCanvas; x: number; y: number; w: number; h: number };
+
+/** `softened`'s mask for `c` (see there), cached under `maskKey`; undefined when it cannot be made. */
+function softMask(
+  c: OffscreenCanvasRenderingContext2D,
+  src: Pick<EffectSource, 'softEdge' | 'fill' | 'strokes' | 'lineWidth' | 'join' | 'cap'>,
+  m: Affine,
+  s: number,
+  r?: { X: number; Y: number; W: number; H: number },
+  maskKey?: string,
+  pad = 0,
+): SoftMask | undefined {
   const e = src.softEdge ?? 0;
-  if (!(e > 0)) return;
+  if (!(e > 0)) return undefined;
   const t = c.getTransform();
-  const W = c.canvas.width;
-  const H = c.canvas.height;
   // The device px per sprite px of `c`: 1 for the body, k for a reduced layer.
   const k = r ? 1 : Math.hypot(m.a, m.b) / Math.max(1e-12, Math.hypot(t.a, t.b));
+  // The mask covers `c` grown by `pad` device px on every side (0 for a shape's sprite).
+  const P = Math.max(0, Math.ceil(pad / k));
+  const W = c.canvas.width + 2 * P;
+  const H = c.canvas.height + 2 * P;
   const sigma = (e * STACK_BLUR_SIGMA * s) / k;
   // Reduced as a blur layer is: by σ/2 (at most BLUR_MAX_REDUCTION), and more for a mask past BLUR_MAX_PIXELS
   // (a 1 px soft edge on a full-slide shape at 4K made four 8 MP canvases).
@@ -531,18 +572,47 @@ function softened(
   if (!made || made.canvas.width !== w || made.canvas.height !== h) {
     const mask = sprite(w, h, true);
     const blurred = sprite(w, h, true);
-    if (!mask || !blurred) return;
-    mask.setTransform(t.a / q, t.b / q, t.c / q, t.d / q, t.e / q, t.f / q);
+    if (!mask || !blurred) return undefined;
+    mask.setTransform(t.a / q, t.b / q, t.c / q, t.d / q, (t.e + P) / q, (t.f + P) / q);
     eroded(mask, src, e);
     shadowOnly(blurred, mask.canvas, '#000', sigma / q);
     made = { canvas: blurred.canvas, x: 0, y: 0, w, h, bytes: w * h * 4 };
     remember(maskKey, made);
   }
+  return { canvas: made.canvas, x: -P, y: -P, w: w * q, h: h * q };
+}
+
+/**
+ * Multiplies the alpha of what `c` holds by `mask` (`SoftMask`), enlarged with smoothing; under a clip of
+ * whole rows only those rows change, as the whole multiply changes them.
+ */
+export function multiplySoftMask(c: OffscreenCanvasRenderingContext2D, mask: SoftMask): void {
   c.save();
   c.setTransform(1, 0, 0, 1, 0, 0);
   c.globalCompositeOperation = 'destination-in';
   c.imageSmoothingEnabled = true;
   c.imageSmoothingQuality = 'low';
-  c.drawImage(made.canvas, 0, 0, w * q, h * q);
+  c.drawImage(mask.canvas, mask.x, mask.y, mask.w, mask.h);
   c.restore();
+}
+
+/**
+ * The soft edge of a picture prepared at full resolution (`picture.ts` `SOFT_EDGE_STEP`): the mask to multiply
+ * `c` by (`multiplySoftMask`): `fill` (the picture's silhouette in box space, under `c`'s transform) eroded by
+ * `e` box units and blurred by e·STACK_BLUR_SIGMA·s device px, as a shape's soft edge is (`softened`); `s` is
+ * device px per box unit. The mask is made over `c` grown by the blur's reach, so a silhouette going on past
+ * `c`'s edge (a picture the canvas cuts) is not faded there. Undefined when there is nothing to do or no
+ * canvas to make it on.
+ */
+export function pictureSoftMask(
+  c: OffscreenCanvasRenderingContext2D,
+  fill: Path2D,
+  e: number,
+  s: number,
+): SoftMask | undefined {
+  if (!(e > 0) || !(s > 0) || !Number.isFinite(e * s)) return undefined;
+  const sigma = e * STACK_BLUR_SIGMA * s;
+  const whole = { X: 0, Y: 0, W: c.canvas.width, H: c.canvas.height };
+  const t = c.getTransform();
+  return softMask(c, { softEdge: e, fill, lineWidth: 0 }, t, s, whole, undefined, 3 * sigma + 2);
 }
