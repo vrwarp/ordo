@@ -1,11 +1,4 @@
-import {
-  type Arrangement,
-  firstText,
-  newId,
-  type Presentation,
-  type Section,
-  type Slide,
-} from '@ordo/domain';
+import { type Arrangement, newId, type Presentation, type Section } from '@ordo/domain';
 import { type ReactNode, useMemo } from 'react';
 import { Menu } from '../../components/Menu.tsx';
 import { authoringArrangement } from '../../lib/arrangement.ts';
@@ -13,7 +6,16 @@ import { useLibrary } from '../../state/library.ts';
 import { BackgroundPicker } from './BackgroundPicker.tsx';
 import { change, selectSlide, useEditor } from './editorStore.ts';
 import { LookPreviews } from './LookPreviews.tsx';
-import { applyTheme, newSlideFor, resetSlideToTheme, themeOf, updateSlide } from './ops.ts';
+import { applyTheme, newSlideFor, resetSlideToTheme, type TextPiece, themeOf, updateSlide } from './ops.ts';
+import {
+  caretPieces,
+  markerPieces,
+  scriptLines,
+  scriptText,
+  splitScript,
+  twoLinePieces,
+  typeScript,
+} from './songScript.ts';
 
 export function SongReflowEditor(props: {
   presentation: Presentation;
@@ -43,105 +45,51 @@ export function SongReflowEditor(props: {
     });
   };
 
-  const updateLyricTextOnSlide = (sl: Slide, text: string): Slide => {
-    const lyricId = sl.lyricObjectId;
-    const target =
-      (lyricId && sl.objects.find((o) => o.id === lyricId)) || sl.objects.find((o) => o.type === 'text');
-    if (target && target.type === 'text') {
-      return {
-        ...sl,
-        objects: sl.objects.map((o) => (o.id === target.id ? { ...o, text } : o)),
-      };
-    }
-    const newObjId = newId();
-    return {
-      ...sl,
-      lyricObjectId: newObjId,
-      objects: [
-        ...sl.objects,
-        {
-          id: newObjId,
-          type: 'text',
-          box: { ...theme.lyricBox },
-          style: { ...theme.text },
-          text,
-          opacity: 1,
-        },
-      ],
-    };
-  };
-
-  const splitSlideIntoParts = (slideId: string, parts: string[]) => {
-    if (readOnly || parts.length <= 1) return;
+  /**
+   * Split slide `slideId` (one undo step) and move the focus to the first new slide's field, its caret at the
+   * start: `pieces` cut the slide's lyric text (songScript.ts); `typed` stores the field's new value first.
+   */
+  const splitInto = (
+    slideId: string,
+    pieces: (text: string) => TextPiece[] | null,
+    typed?: { text: string; caret?: number },
+  ) => {
+    if (readOnly) return false;
     let focusSlideId: string | undefined;
     change((prev) => {
-      const curTheme = themeOf(prev, themes);
-      const sec = prev.sections.find((s) => s.slides.some((sl) => sl.id === slideId));
-      if (!sec) return prev;
-      const slideIdx = sec.slides.findIndex((sl) => sl.id === slideId);
-      const firstSlide = updateSlide(prev, slideId, (sl) => updateLyricTextOnSlide(sl, parts[0] ?? ''));
-      const extraSlides: Slide[] = parts.slice(1).map((part) => newSlideFor(prev, curTheme, part));
-      focusSlideId = extraSlides[0]?.id;
-      return {
-        ...firstSlide,
-        sections: firstSlide.sections.map((s) =>
-          s.id === sec.id
-            ? {
-                ...s,
-                slides: [...s.slides.slice(0, slideIdx + 1), ...extraSlides, ...s.slides.slice(slideIdx + 1)],
-              }
-            : s,
-        ),
-      };
+      const out = splitScript(prev, slideId, pieces, themeOf(prev, themes), typed);
+      focusSlideId = out.ids[0];
+      return out.p;
     });
-    if (focusSlideId) {
-      const targetId = focusSlideId;
-      selectSlide(targetId);
-      requestAnimationFrame(() => {
-        const el = document.querySelector<HTMLTextAreaElement>(`textarea[data-reflow-slide="${targetId}"]`);
-        el?.focus();
-      });
-    }
+    if (!focusSlideId) return false;
+    const targetId = focusSlideId;
+    selectSlide(targetId);
+    requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLTextAreaElement>(`textarea[data-reflow-slide="${targetId}"]`);
+      el?.focus();
+      el?.setSelectionRange(0, 0);
+    });
+    return true;
   };
 
-  const splitAtCursor = (slideId: string, currentText: string) => {
+  /**
+   * Split at Cursor (✂ and Alt+Enter): at the caret of this slide's field, and only while that field has the
+   * focus (a field never focused reports a caret at 0). At the end: an empty next slide; at the start or
+   * without the focus: nothing (`caretPieces`).
+   */
+  const splitAtCursor = (slideId: string) => {
     if (readOnly) return;
     const el = document.querySelector<HTMLTextAreaElement>(`textarea[data-reflow-slide="${slideId}"]`);
-    const pos =
-      el && el.selectionStart > 0 && el.selectionStart < currentText.length
-        ? el.selectionStart
-        : Math.floor(currentText.length / 2);
-    const before = currentText.slice(0, pos).replace(/\n+$/, '');
-    const after = currentText.slice(pos).replace(/^\n+/, '');
-    if (!before && !after) return;
-    splitSlideIntoParts(slideId, [before, after]);
+    if (!el || document.activeElement !== el) return;
+    const caret = el.selectionStart;
+    splitInto(slideId, (text) => caretPieces(text, caret));
   };
 
-  const autoSplitTwoLines = (slideId: string, currentText: string) => {
+  const updateSlideText = (slideId: string, text: string, caret?: number) => {
     if (readOnly) return;
-    const lines = currentText.split('\n').filter((l) => l.trim().length > 0);
-    if (lines.length <= 2) return;
-    const chunks: string[] = [];
-    for (let i = 0; i < lines.length; i += 2) {
-      chunks.push(lines.slice(i, i + 2).join('\n'));
-    }
-    splitSlideIntoParts(slideId, chunks);
-  };
-
-  const updateSlideText = (slideId: string, text: string) => {
-    if (readOnly) return;
-    if (/(?:^|\r?\n)---\r?\n/.test(text)) {
-      const parts = text.split(/(?:^|\r?\n)---\r?\n/).map((x) => x.replace(/^\n+|\n+$/g, ''));
-      if (parts.length > 1) {
-        splitSlideIntoParts(slideId, parts);
-        return;
-      }
-    }
-
-    change(
-      (prev) => updateSlide(prev, slideId, (sl) => updateLyricTextOnSlide(sl, text)),
-      `reflow-text:${slideId}`,
-    );
+    // '---' and Enter: the words before it stay, the rest goes on new slides (runs and styles kept).
+    if (markerPieces(text) && splitInto(slideId, markerPieces, { text, caret })) return;
+    change((prev) => typeScript(prev, slideId, text, themeOf(prev, themes), caret), `reflow-text:${slideId}`);
   };
 
   const updateSlideNotes = (slideId: string, notes: string) => {
@@ -422,8 +370,9 @@ export function SongReflowEditor(props: {
               <div className="col" style={{ gap: 10 }}>
                 {sec.slides.map((slide, sIdx) => {
                   const isSelected = slide.id === (selectedSlideId ?? ed.slideId);
-                  const text = firstText(slide) ?? '';
-                  const nonEmptyLines = text.split('\n').filter((l) => l.trim().length > 0).length;
+                  // The lyric object's own text (never `firstText`, which adds automatic numbers).
+                  const text = scriptText(slide);
+                  const nonEmptyLines = scriptLines(text).length;
                   const overflowsStream = nonEmptyLines > 2;
                   const hasCustom =
                     slide.objects.length > 1 ||
@@ -473,7 +422,7 @@ export function SongReflowEditor(props: {
                               className="small"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                autoSplitTwoLines(slide.id, text);
+                                splitInto(slide.id, twoLinePieces);
                               }}
                               title="Automatically split into 2-line slides for livestream lower thirds"
                             >
@@ -487,7 +436,7 @@ export function SongReflowEditor(props: {
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                splitAtCursor(slide.id, text);
+                                splitAtCursor(slide.id);
                               }}
                               title="Split slide at cursor position (Alt+Enter / Opt+Enter)"
                             >
@@ -553,10 +502,10 @@ export function SongReflowEditor(props: {
                         onKeyDown={(e) => {
                           if (e.altKey && e.key === 'Enter') {
                             e.preventDefault();
-                            splitAtCursor(slide.id, text);
+                            splitAtCursor(slide.id);
                           }
                         }}
-                        onChange={(e) => updateSlideText(slide.id, e.target.value)}
+                        onChange={(e) => updateSlideText(slide.id, e.target.value, e.target.selectionEnd)}
                       />
 
                       {/* Inline Chords / Musician Notes */}

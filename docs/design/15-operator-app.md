@@ -211,6 +211,22 @@ cells in place of the shape fields).
 - Editing a text box's plain text keeps its formatting: `editText` (`@ordo/domain`) shifts, trims and
   splits the runs and paragraph styles with the change, placed by the textarea's caret; splitting and
   merging slides cut and join them with the lines (design/27 §11).
+- Lyric Script (`SongReflowEditor.tsx`, pure parts in `songScript.ts`; songs open in it on a desktop,
+  'Slide Canvas' switches): the sections as cards, each slide's words in a field, the arrangement pills,
+  chords and notes, and the screen previews beside them. A field shows the slide's lyric object's own stored
+  text (`scriptText`: its `lyricObjectId`, else its first text box), never `firstText`, which writes
+  automatic numbers and bullets into the text for bands and labels; it writes through the same `editText` as
+  the Object panel's field, placed by the field's `selectionEnd` (`typeScript`), and an unchanged value
+  records no undo step. So typing in a numbered or formatted song keeps its numbers a paragraph style
+  (before, each keystroke stored the labels again: '1. 1. Amazing grace') and bold or italic on their
+  letters; a plain song stays plain. Every split cuts that raw text through the domain's slide split
+  (`splitSlidePieces`, as the slide list's 'Split lyrics' does: the new slides are copies of the slide with
+  their piece of the lyric object, runs and paragraph styles kept on both sides), one undo step, the focus
+  then in the first new slide's field: '---' and Enter (the typed value is stored first); ✂ Split at Cursor
+  and Alt+Enter (Opt+Enter) at the caret of the field that has the focus only (a field never focused
+  reports a caret at 0), an empty next slide when the caret is at the end, nothing at the start or without
+  the focus (never a cut in the middle of a word); Auto-Split (2 lines) by the raw lines that hold words.
+  The stream tag ('⚠ 3 lines · Clips 2-line Stream') counts those raw lines.
 - Text ops (M4; `views/editor/ops/text.ts`, applied through `actions.ts`, one undo step each, nothing
   recorded when nothing changes): `formatRange` formats the textarea's selection (runs split, normalised,
   equal neighbours merged, at most 2,000, values bounded as the schema bounds them; Clear formatting

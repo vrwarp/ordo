@@ -51,6 +51,12 @@ Objects, in z-order, each selectable, movable, resizable, rotatable:
   ([prd/05](05-library-media-import.md), version history).
 - Keyboard: arrow nudges, Shift for 10 px, Ctrl+D duplicate, Delete, Ctrl+Z, Ctrl+Y,
   Ctrl+S.
+- Songs open in the Lyric Script on a desktop: each slide's words in a field, by section. Typing there
+  keeps the slide's formatting: bold, italic and colours stay on their words, and automatic verse numbers
+  and bullets stay automatic (they are never typed into the words). Split at Cursor (✂, Alt+Enter) cuts
+  only where the caret is: at the end of a slide it starts an empty next slide, and it never cuts a word
+  the volunteer did not choose; Auto-Split (2 lines) and '---' and Enter split by lines; every split keeps
+  the formatting on both slides.
 - Alignment guides and snapping to the canvas centre, edges and other objects.
 - Preview: a "Send to preview" renders the selected slide (as currently drafted, saved or
   not) on a chosen audience output, when no playlist is live; "Clear preview" returns the

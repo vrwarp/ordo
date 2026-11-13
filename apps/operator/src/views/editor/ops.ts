@@ -168,34 +168,77 @@ export function lyricObject(s: Slide): TextObject | undefined {
  * the original's objects with fresh ids and takes the remaining lines.
  */
 export function splitSlide(p: Presentation, slideId: string, atLine?: number): Presentation {
-  const pos = findSlide(p, slideId);
-  if (!pos) return p;
-  const slide = p.sections[pos.si]!.slides[pos.i]!;
-  const lyric = lyricObject(slide);
+  const slide = getSlide(p, slideId);
+  const lyric = slide && lyricObject(slide);
   if (!lyric) return p;
   const lines = lyric.text.split('\n');
   if (lines.length < 2) return p;
   const cut = Math.max(1, Math.min(lines.length - 1, atLine ?? Math.ceil(lines.length / 2)));
   // Cut at the line break: runs and paragraph styles go with their lines (design/27 §11).
   const at = lines.slice(0, cut).join('\n').length;
-  const first = replaceText(lyric, at, lyric.text.length, '');
-  const a: Slide = {
-    ...slide,
-    objects: slide.objects.map((o) => (o.id === lyric.id ? first : o)),
-  };
-  const bBase = cloneSlide(slide);
-  const bLyric = lyricObject(bBase)!;
-  const second = replaceText(bLyric, 0, at + 1, '');
-  const b: Slide = {
-    ...bBase,
-    objects: bBase.objects.map((o) => (o.id === bLyric.id ? second : o)),
-  };
-  return mapSection(p, pos.si, (sec) => {
-    const slides = [...sec.slides];
-    slides.splice(pos.i, 1, a, b);
-    return { ...sec, slides };
-  });
+  return splitSlidePieces(p, slideId, [
+    [0, at],
+    [at + 1, lyric.text.length],
+  ]).p;
 }
+
+/** A piece of a slide's lyric text: `[start, end)` UTF-16 offsets of its lyric object's text. */
+export type TextPiece = readonly [start: number, end: number];
+
+/**
+ * `o` cut to text[start, end): its runs and paragraph styles go with their letters (`replaceText`), so bold
+ * stays on its word and numbering stays a paragraph style.
+ */
+export function textPiece<T extends TextObject>(o: T, start: number, end: number): T {
+  return replaceText(replaceText(o, end, o.text.length, ''), 0, start, '');
+}
+
+/**
+ * Split a slide into slides holding `pieces` of its lyric object's text (in order, not overlapping; at most
+ * `MAX_SPLIT_PIECES`). The first piece stays on the slide (its id kept); every other goes on a copy of it
+ * (`cloneSlide`: fresh ids, its other objects copied, as 'Split lyrics' makes it) right after it, the lyric
+ * object cut to that piece (`textPiece`). Used by 'Split lyrics' and by the Lyric Script's splits ('---',
+ * Split at Cursor, Alt+Enter, Auto-Split). `p` itself, and no ids, without a lyric object or a second piece.
+ */
+export function splitSlidePieces(
+  p: Presentation,
+  slideId: string,
+  pieces: readonly TextPiece[],
+): { p: Presentation; ids: string[] } {
+  const pos = findSlide(p, slideId);
+  if (!pos || pieces.length < 2) return { p, ids: [] };
+  const slide = p.sections[pos.si]!.slides[pos.i]!;
+  const lyric = lyricObject(slide);
+  if (!lyric) return { p, ids: [] };
+  const cut = (s: Slide, o: TextObject, [start, end]: TextPiece): Slide => {
+    const piece = textPiece(o, start, end);
+    return { ...s, objects: s.objects.map((x) => (x.id === o.id ? piece : x)) };
+  };
+  // A section holds at most 5,000 slides (the schema's bound, `MAX_SECTION_SLIDES`): past it the hub would
+  // refuse the save, so the last pieces stay together on the last slide made.
+  const room = Math.min(MAX_SPLIT_PIECES, SECTION_SLIDES - p.sections[pos.si]!.slides.length + 1);
+  if (room < 2) return { p, ids: [] };
+  const kept: readonly TextPiece[] =
+    room < pieces.length ? [...pieces.slice(0, room - 1), [pieces[room - 1]![0], pieces.at(-1)![1]]] : pieces;
+  const out: Slide[] = [cut(slide, lyric, kept[0]!)];
+  for (const piece of kept.slice(1)) {
+    const copy = cloneSlide(slide);
+    out.push(cut(copy, lyricObject(copy)!, piece));
+  }
+  return {
+    p: mapSection(p, pos.si, (sec) => {
+      const slides = [...sec.slides];
+      slides.splice(pos.i, 1, ...out);
+      return { ...sec, slides };
+    }),
+    ids: out.slice(1).map((s) => s.id),
+  };
+}
+
+/** Pieces one split makes at most. */
+export const MAX_SPLIT_PIECES = 1000;
+/** The schema's bound on a section's slides (`Section.slides`; `ops/slides.ts` `MAX_SECTION_SLIDES`). */
+const SECTION_SLIDES = 5000;
 
 /** Merge a slide with the next slide of its section: lyric texts joined, the next slide removed. */
 export function mergeWithNext(p: Presentation, slideId: string): Presentation {
