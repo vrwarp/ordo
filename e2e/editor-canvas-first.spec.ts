@@ -44,6 +44,8 @@ import { ffmpeg } from './pptxdecks.ts';
  *   for this slide); before, it set a background the slide's own PowerPoint background shape still covered.
  * - b6: a contrast choice on a themed lyric, from the floating bar or the drawer, survives a theme change as
  *   chosen; before, the floating bar's Soft shadow was dropped and the drawer's got the theme's outline back.
+ * - The editing overlay on its own layer and the cached object nodes: on the shape+text slide the caret
+ *   still blinks, typing shows, and the rounded box (a cached node) stays drawn under the text.
  * Port M4_PORT + 11.
  */
 const PORT = M4_PORT + 11;
@@ -428,4 +430,47 @@ test('b6: a contrast choice on a themed lyric survives a theme change, from the 
     expect(!!st.shadow, `slide ${i + 1} keeps its shadow`).toBe(true);
     expect(st.outline, `slide ${i + 1} has no outline`).toBeUndefined();
   }
+});
+
+test('the caret blinks on its own layer, typing shows, and the cached shape under the text stays drawn', async ({
+  page,
+}) => {
+  const a = await hubApi(PORT);
+  const p = await importDeck(a, deck);
+  const PAIR = 4;
+  const sl = slidesOf(p)[PAIR]!;
+  const shape = sl.objects.find((o) => o.type === 'shape' && o.origin?.group !== undefined)!;
+  const text = sl.objects.find((o) => o.type === 'text' && o.origin?.group === shape.origin!.group)!;
+  await openEditor(page, PORT, p.id);
+  await openSlide(page, PAIR + 1);
+  await frames(page);
+  // A point of the rounded box clear of its (vertically centred) text and of the selection's handles.
+  const fillAt = { x: shape.box.x + shape.box.w * 0.25, y: shape.box.y + shape.box.h * 0.15 };
+  const fill0 = await screenRgbAt(page, fillAt.x, fillAt.y);
+  await expect(async () => {
+    await clickObject(page, text, { alt: true });
+    expect((await editorState(page)).objectIds).toEqual([text.id]);
+  }).toPass({ timeout: 15_000 });
+  const at = await canvasPoint(page, text.box.x + text.box.w / 2, text.box.y + text.box.h / 2);
+  await page.mouse.dblclick(at.x, at.y);
+  await expect.poll(() => inlineEditing(page)).toBe(1);
+  await expect(page.locator('#ordo-text-editor')).toBeFocused();
+  await page.keyboard.press('End');
+  await page.keyboard.type('!');
+  await expect
+    .poll(async () => (await slideObjects(page)).find((o) => o.id === text.id)?.text)
+    .toBe(`${text.text}!`);
+
+  // The text box on screen over two blink phases: the caret shows in one and not in the other.
+  const tl = await canvasPoint(page, text.box.x, text.box.y);
+  const br = await canvasPoint(page, text.box.x + text.box.w, text.box.y + text.box.h);
+  const clip = { x: tl.x, y: tl.y, width: br.x - tl.x, height: br.y - tl.y };
+  const shots = new Set<string>();
+  for (let i = 0; i < 6 && shots.size < 2; i++) {
+    shots.add((await page.screenshot({ clip })).toString('base64'));
+    await page.waitForTimeout(300);
+  }
+  expect(shots.size, 'the caret blinks').toBe(2);
+  // The cached rounded box is drawn as before, under the edited text.
+  expect(await screenRgbAt(page, fillAt.x, fillAt.y)).toEqual(fill0);
 });

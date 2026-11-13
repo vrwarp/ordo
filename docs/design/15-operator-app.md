@@ -208,6 +208,20 @@ cells in place of the shape fields).
   visual preview inside the editor uses the shared rasterizer for text so WYSIWYG holds.
   Rich text objects (design/27) are drawn by the rich engine into their cached canvas at the stage
   scale × `devicePixelRatio` (keyed by the font generation), legacy ones at 1:1 as before.
+- Canvas drawing (SlideCanvas.tsx): the stage has the background layer, the objects layer (with the
+  Transformer, guides and crop handles) and a text editing layer of its own that takes no pointer events
+  (`TextEditingOverlay`): the selection highlight and the blinking caret of the box being edited are drawn
+  there, in that object's node's frame (so they follow a drag or a transform), and the caret's 530 ms blink
+  re-renders and redraws only that layer. A non-text object's node is cached as a bitmap at the stage's
+  density (`nodeCacheRect`: what its drawer reaches, `objectReach`, with its hit area; text has its own
+  raster cache; an object whose reach the renderer does not know, or one over 8 M device px, is drawn live)
+  and drawn again only when it, its picture or geometry file, the fonts or the density change, so a
+  keystroke or a drag copies the slide's other objects instead of drawing them. The floating bar's and the
+  touch tools' sizes are kept by a ResizeObserver (`useMeasuredSize`), not read on every render. On a slide
+  of 181 objects (90 shapes with gradients, dashed strokes and shadows, 91 text boxes) an idle caret cost
+  192-247 ms of main-thread time per 6 s before (about 20 ms a blink: SlideCanvas re-rendered and the
+  objects layer was redrawn) and 32-59 ms after (CDP Performance TaskDuration, headless Chromium, two runs
+  of three rounds each, regroup/r1/editor-fixes/probe).
 - Editing a text box's plain text keeps its formatting: `editText` (`@ordo/domain`) shifts, trims and
   splits the runs and paragraph styles with the change, placed by the textarea's caret; splitting and
   merging slides cut and join them with the lines (design/27 §11).
