@@ -33,7 +33,7 @@ import {
 } from '../src/components/deckSwatches.ts';
 
 const rgb = (r: number, g: number, b: number, a = 1): Rgba => ({ r, g, b, a });
-const box = { x: 0, y: 0, w: 400, h: 200 };
+const box = { x: 0, y: 0, w: 400, h: 200, rotation: 0 };
 const grad = (...colors: Rgba[]): Gradient => ({
   kind: 'linear',
   angle: 90,

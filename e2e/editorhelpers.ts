@@ -176,6 +176,8 @@ export type SlideRec = {
   hidden?: boolean;
   lyricObjectId?: string;
   backgroundMediaId?: string;
+  /** The theme fields this slide overrides (`Slide.overrides`). */
+  overrides?: string[];
   pptx?: { index: number; shown?: number; class: string; digest?: string };
 };
 export type PresentationRec = {

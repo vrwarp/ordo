@@ -50,7 +50,7 @@ describe('the text surfaces name their font select', () => {
   const o: TextObject = {
     id: 't1',
     type: 'text',
-    box: { x: 0, y: 0, w: 800, h: 200 },
+    box: { x: 0, y: 0, w: 800, h: 200, rotation: 0 },
     text: 'Potluck lunch',
     style: { ...DEFAULT_THEME.textBoxDefaults, fontFamily: 'Inter' },
     runs: [{ start: 0, end: 7, fontFamily: 'Georgia' }],

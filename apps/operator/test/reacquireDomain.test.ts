@@ -1,4 +1,5 @@
 import type { Output } from '@ordo/domain';
+import type { OutputHealthEntry } from '@ordo/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installOutputWindows, type OutputWindows } from '../src/services/outputs.ts';
 import { markLaunched, missingHandles, reacquireMissing, resetReacquire } from '../src/services/reacquire.ts';
@@ -22,20 +23,17 @@ const out = (id: string, hostIndex: number): Output => ({
   audioMaster: false,
   token: `tok-${id}`,
 });
-const connected = (id: string) => ({
+const connected = (id: string): OutputHealthEntry => ({
   outputId: id,
   connected: true,
-  latencyMs: 5,
-  fps: 60,
-  frameDrops: 0,
-  clockSkewMs: 0,
-  activeRenderer: 'canvas2d' as const,
-  mediaStalls: 0,
-  gpuRestarts: 0,
-  swFallback: false,
-  assetLag: false,
-  cachePct: 100,
-  storagePersistent: true,
+  lastSeen: Date.now(),
+  presented: 600,
+  missed: 0,
+  longTasks: 0,
+  lateFlips: 0,
+  cache: { ready: 1, total: 1 },
+  gpuLost: 0,
+  videoDropped: 0,
 });
 
 /** An existing output window on its own origin: reading its location throws, as cross-origin does. */

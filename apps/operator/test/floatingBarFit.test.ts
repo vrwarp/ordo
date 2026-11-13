@@ -34,9 +34,9 @@ describe('floatingBarSpot with a measured, pane-capped bar', () => {
     const bar = { w: 600, h: 34 };
     const { scale, stage } = stageIn(pane, 1);
     for (const box of [
-      { x: 400, y: 1500, w: 300, h: 200 },
-      { x: -900, y: -700, w: 300, h: 200 },
-      { x: 2600, y: 400, w: 300, h: 200 },
+      { x: 400, y: 1500, w: 300, h: 200, rotation: 0 },
+      { x: -900, y: -700, w: 300, h: 200, rotation: 0 },
+      { x: 2600, y: 400, w: 300, h: 200, rotation: 0 },
     ]) {
       const at = floatingBarSpot(box, scale, stage, pane, bar);
       expect(at.x).toBeGreaterThanOrEqual(8);

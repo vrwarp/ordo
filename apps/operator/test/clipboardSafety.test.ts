@@ -275,7 +275,7 @@ describe('text paste bounds', () => {
     const r = pasteRichText(o, 5, 5, { text: '😀'.repeat(50) });
     expect(r.object.text.length).toBeLessThanOrEqual(CLIPBOARD_LIMITS.text);
     // Never half a surrogate pair.
-    expect(r.object.text.isWellFormed()).toBe(true);
+    expect(/\p{Cs}/u.test(r.object.text)).toBe(false);
     expect(r.caret).toBe(5 + 10);
     expect(SlideObject.safeParse({ ...r.object, style: { ...r.object.style, color: white } }).success).toBe(
       true,
