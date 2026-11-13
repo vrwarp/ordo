@@ -298,6 +298,35 @@ describe('the merge', () => {
     expect(reset.p.source!.log!.split('\n')).toHaveLength(3);
   });
 
+  it('keeps the Bottom-Third Stream text and the outgoing MIDI cues through a re-import and a Reset slide', () => {
+    const cue = { id: 'm1', channel: 1, type: 'noteOn' as const, number: 64, value: 127 };
+    // A strap text, an emptied strap (it silences the lower third) and MIDI cues set in the Slide panel.
+    const s0 = native(0, [text('a', 'Welcome', { origin: PPTX })], { bottomThirdText: 'Welcome, friends' });
+    const s1 = native(1, [text('b', 'Offering', { origin: PPTX })], { bottomThirdText: '', midiCues: [cue] });
+    const p = presentation([[s0, s1]], {
+      native: { version: 1, slides: 2, native: 2, hybrid: 0, picture: 0 },
+    });
+    const f = fresh(
+      [
+        [0, [text('A', 'Welcome!')]],
+        [1, [text('B', 'Offering!')]],
+      ],
+      { whole: true, source: { kind: 'pptx', fileId: DECK, log: 'converted again' } },
+    );
+    const m = mergeReimport(p, f, {}, noTags);
+    expect(m.counts.regenerated).toBe(2);
+    const [a, b] = slidesIn(m.p);
+    expect((a!.objects[0] as TextObject).text).toBe('Welcome!');
+    expect(a!.bottomThirdText).toBe('Welcome, friends');
+    expect(b!.bottomThirdText).toBe('');
+    expect(b!.midiCues).toEqual([cue]);
+    // 'Reset slide from PowerPoint' rebuilds the slide's objects and keeps its settings the same way.
+    const reset = mergeReimport(m.p, { ...f, whole: false }, { slideIds: [b!.id], reset: [b!.id] }, noTags);
+    const r = slidesIn(reset.p)[1]!;
+    expect(r.bottomThirdText).toBe('');
+    expect(r.midiCues).toEqual([cue]);
+  });
+
   it('leaves a slide alone that the converter would write again as it is', () => {
     // Version 2 added the art; a fresh conversion is version 1 again, waiting for LibreOffice.
     const art = image('art', 'art-picture', { locked: true, origin: { src: 'pptx', role: 'art' } });

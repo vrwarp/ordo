@@ -235,7 +235,7 @@ test('re-import a legacy picture deck and a made-editable deck as editable', asy
   }
 });
 
-test("'Reset slide from PowerPoint' brings back an edited slide, keeping what was added in ordo", async ({
+test("'Reset slide from PowerPoint' brings back an edited slide, keeping what was added in ordo and its settings", async ({
   page,
 }) => {
   test.setTimeout(300_000);
@@ -254,13 +254,18 @@ test("'Reset slide from PowerPoint' brings back an edited slide, keeping what wa
       opacity: 1,
       radius: 0,
     };
+    // Slide settings set in ordo: the Bottom-Third Stream text and an outgoing MIDI cue (the lights).
+    const strap = 'Sign up at the welcome desk';
+    const midiCue = { id: 'lights-up', channel: 1, type: 'noteOn', number: 64, value: 127 };
     const p = await apiJson<PresentationRec>(a, `presentations/${imported.id}`, {
       put: {
         ...imported,
         sections: imported.sections.map((sec) => ({
           ...sec,
           slides: sec.slides.map((sl, i) =>
-            i === 1 && sec === imported.sections[0] ? { ...sl, objects: [...sl.objects, mark] } : sl,
+            i === 1 && sec === imported.sections[0]
+              ? { ...sl, objects: [...sl.objects, mark], bottomThirdText: strap, midiCues: [midiCue] }
+              : sl,
           ),
         })),
       },
@@ -292,6 +297,12 @@ test("'Reset slide from PowerPoint' brings back an edited slide, keeping what wa
     expect(texts(two)).toEqual([ANNOUNCEMENT_TEXT]);
     expect(two.objects.at(-1)).toEqual(slidesOf(p)[1]!.objects.at(-1));
     expect(two.notes).toBe(CHURCH.announcement.notes);
+    const kept = two as SlideRec & { bottomThirdText?: string; midiCues?: unknown[] };
+    expect(kept.bottomThirdText).toBe(strap);
+    expect(kept.midiCues).toEqual([midiCue]);
+    await expect(page.locator('label', { hasText: 'Bottom-third text' }).locator('textarea')).toHaveValue(
+      strap,
+    );
     // The other slides are as they were.
     for (const [i, x] of slidesOf(reset).entries()) if (i !== 1) expect(x).toEqual(slidesOf(edited)[i]);
     await expect(card.getByText('Nothing to reset: the slide is as it was imported.')).toBeVisible();

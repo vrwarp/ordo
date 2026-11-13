@@ -1834,7 +1834,8 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   added in ordo are kept on top and are not an edit); a slide the
   same converter would write again with its LibreOffice work done is left alone, so a re-import that changes
   nothing saves nothing; slide-level settings (timing, transition, hidden, sound, background, the reference
-  picture) stay, on a legacy slide only where the operator set them; a legacy page whose deck slide is a
+  picture, the Bottom-Third Stream text, the outgoing MIDI cues; `reimport.ts` `KEPT`) stay through a
+  re-import and a 'Reset slide' alike, on a legacy slide only where the operator set them; a legacy page whose deck slide is a
   picture again stays; a made-editable slide is placed by its picture's name ('<title> – N', the picture
   import's page) else by the deck slide whose text its boxes repeat (whitespace folded); a legacy deck
   converted whole gets its one background back as the presentation's; the presentation becomes a native
