@@ -44,7 +44,7 @@ test('the service continues through a hub outage and the hub adopts the state on
     ).toBe(true);
 
     // Operator logs in through the UI and launches the outputs.
-    await page.goto(op + '/');
+    await page.goto(op + '/?test=1');
     await page.locator('input.pin').fill('246810');
     await page.getByRole('button', { name: 'OK' }).click();
     const launch = page.getByRole('button', { name: 'Launch outputs' });
@@ -73,24 +73,35 @@ test('the service continues through a hub outage and the hub adopts the state on
     await hub.start();
     a = await api(PORT);
     await expect
-      .poll(async () => (await (await a.get('live')).json()).state.live, { timeout: 30_000 })
+      .poll(async () => (await (await a.get('live')).json()).state.live, {
+        timeout: 30_000,
+        intervals: [100],
+      })
       .toBe(1);
     for (const p of popups) expect(await cueOn(p)).toBe(1);
 
-    // And GO works through the hub again.
-    await expect
-      .poll(
-        async () => {
-          await page.bringToFront();
-          await page.locator('body').focus();
-          await page.keyboard.press('Space');
-          const t = await (await a.get('live')).json();
-          return t.state.live;
-        },
-        { timeout: 15_000, intervals: [1000, 2000] },
-      )
-      .toBe(2);
+    // And GO works through the hub again: one press, as a volunteer presses it right after the hub has the
+    // service back, moves the service exactly one cue (a GO lost in the hand-back, or applied twice, fails
+    // here; the press is not repeated until it works).
+    await page.bringToFront();
+    await page.locator('body').focus();
+    await page.keyboard.press('Space');
+    const liveOnHub = async () => (await (await a.get('live')).json()).state.live as number;
+    try {
+      await expect.poll(liveOnHub, { timeout: 15_000 }).toBe(2);
+    } finally {
+      // What the operator held and logged, for a failure (the hub's own log is test-results/hub-8091.log).
+      const diag = await page.evaluate(() => {
+        const o = (window as unknown as { __ordo?: { live?: () => unknown; logs?: () => unknown[] } }).__ordo;
+        return { live: o?.live?.(), logs: o?.logs?.().slice(-40) };
+      });
+      console.log(`operator after the press: ${JSON.stringify(diag)}`);
+    }
     for (const p of popups) await expect.poll(() => cueOn(p), { timeout: 15_000 }).toBe(2);
+    // Never more than one cue for one press.
+    await page.waitForTimeout(1_500);
+    expect(await liveOnHub()).toBe(2);
+    for (const p of popups) expect(await cueOn(p)).toBe(2);
   } finally {
     hub.kill();
   }

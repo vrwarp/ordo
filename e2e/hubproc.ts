@@ -1,15 +1,18 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { readFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 /** A hub process owned by a test, so the test can kill and restart it (hub-loss scenarios). */
 export class HubProcess {
   proc?: ChildProcess;
   readonly port: number;
   readonly dataDir: string;
-  constructor(port: number, dataDir: string) {
+  /** Where the hub's log lines go (appended across restarts); none: next to the data, `<data>.log`. */
+  readonly logFile: string;
+  constructor(port: number, dataDir: string, logFile = `${dataDir}.log`) {
     this.port = port;
     this.dataDir = dataDir;
+    this.logFile = logFile;
   }
 
   /**
@@ -20,7 +23,10 @@ export class HubProcess {
     const root = process.env.ORDO_E2E_DATA_ROOT ?? 'test-results';
     const dir = `${root}/.e2e-data-${port}`;
     rmSync(dir, { recursive: true, force: true });
-    return new HubProcess(port, dir);
+    // Not a dot file: CI's artifact upload leaves hidden files out.
+    const log = `${root}/hub-${port}.log`;
+    rmSync(log, { force: true });
+    return new HubProcess(port, dir, log);
   }
 
   async start(): Promise<void> {
@@ -46,6 +52,14 @@ export class HubProcess {
       });
     }
     HubProcess.running.add(this);
+    // The hub's log lines (pino on stdout) go to its log file (test-results/hub-<port>.log), appended across
+    // restarts, so a failing spec's uploaded test-results say what the hub did; ORDO_E2E_HUB_STDOUT=1 shows
+    // them on the terminal instead.
+    let out: 'inherit' | number = 'inherit';
+    if (!process.env.ORDO_E2E_HUB_STDOUT) {
+      mkdirSync(dirname(this.logFile), { recursive: true });
+      out = openSync(this.logFile, 'a');
+    }
     this.proc = spawn(cmd!, args, {
       env: {
         ...process.env,
@@ -56,9 +70,9 @@ export class HubProcess {
         ORDO_DEV_PIN: '246810',
         ORDO_TZ: 'UTC',
       },
-      // ORDO_E2E_HUB_STDOUT=1 shows the hub's log lines (pino on stdout) while debugging a spec.
-      stdio: ['ignore', process.env.ORDO_E2E_HUB_STDOUT ? 'inherit' : 'ignore', 'inherit'],
+      stdio: ['ignore', out, 'inherit'],
     });
+    if (typeof out === 'number') closeSync(out);
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline) {
       try {
