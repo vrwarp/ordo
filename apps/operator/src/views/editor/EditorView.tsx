@@ -543,6 +543,7 @@ export function EditorView({ id }: { id: string }) {
           <button
             type="button"
             className={ed.dirty || ed.saving ? 'primary' : 'ed-saved-pill'}
+            aria-label={ed.saving ? 'Saving…' : ed.dirty ? 'Save' : 'Saved'}
             disabled={readOnly || !ed.dirty || ed.saving}
             onClick={() => void save()}
             title="Ctrl+S"
@@ -637,6 +638,7 @@ export function EditorView({ id }: { id: string }) {
           <button
             type="button"
             className={ed.dirty || ed.saving ? 'primary' : 'ed-saved-pill'}
+            aria-label={ed.saving ? 'Saving…' : ed.dirty ? 'Save' : 'Saved'}
             disabled={readOnly || !ed.dirty || ed.saving}
             onClick={() => void save()}
             title="Ctrl+S"
