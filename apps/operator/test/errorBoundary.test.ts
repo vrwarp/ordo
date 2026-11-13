@@ -8,7 +8,12 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { ErrorBoundary, type ErrorBoundaryProps, PaneError } from '../src/components/ErrorBoundary.tsx';
+import {
+  ErrorBoundary,
+  type ErrorBoundaryProps,
+  PageError,
+  PaneError,
+} from '../src/components/ErrorBoundary.tsx';
 import { logLines } from '../src/services/log.ts';
 
 const props = (resetKey: unknown): ErrorBoundaryProps => ({
@@ -50,5 +55,18 @@ describe('ErrorBoundary', () => {
       level: 'error',
       text: "editor canvas: TypeError: Cannot read properties of undefined (reading 'length') (at TextSection)",
     });
+  });
+
+  it("a page's fallback: on Live it says the screens, keys and pedals still work, never 'use the menu'", () => {
+    const retry = () => undefined;
+    const live = renderToStaticMarkup(createElement(PageError, { route: 'live', retry }));
+    expect(live).toContain('The live page could not be shown');
+    expect(live).toContain('the keyboard and pedals still work');
+    expect(live).not.toContain('menu');
+    expect(live).toContain('data-page-error="live"');
+    // 'Try again' is the action there.
+    expect(live).toMatch(/<button[^>]*>Try again<\/button>/);
+    const library = renderToStaticMarkup(createElement(PageError, { route: 'library', retry }));
+    expect(library).toContain('use the menu above to go on');
   });
 });

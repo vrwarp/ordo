@@ -325,7 +325,9 @@ cells in place of the shape fields).
   that the screens and the live controls are not affected, and offers Try again and Undo (a new slide or an
   undo draws it again by itself). The floating bar has a boundary of its own whose fallback is no bar, so an
   object the bar cannot read never blanks the canvas under it. The app puts one around each page, so the
-  navigation, the toasts and the sign-in overlay always stay. Each is logged.
+  navigation, the toasts and the sign-in overlay always stay (`PageError`: 'Try again', and the menu to go
+  on; on the Live page, whose slide grid and buttons are the live controls, it says instead that the screens
+  keep showing what is live and the keyboard and pedals still work, and to press Try again). Each is logged.
 - Pictures are drawn with their crop, flips and mask (`ImageObject.crop`, `flipH`, `flipV`, `mask`) by the
   same `drawImageFit` every other drawer uses (design/27 §11 item 6; M4 item D, `CropControl.tsx`, pure ops
   in `ops/pictures.ts`, one undo step each, the crop fields coalescing per picture). The Object panel's

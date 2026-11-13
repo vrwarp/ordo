@@ -46,6 +46,29 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, State> {
   }
 }
 
+/**
+ * The fallback of a page (the app's boundary around each route): 'Try again' first. On the Live page the live
+ * controls are the page itself, so it says what still works there (the screens, the keys and pedals) instead
+ * of pointing to the menu, which leads away from them (the 2026-11-13 review).
+ */
+export function PageError(props: { route: string; retry: () => void }) {
+  const live = props.route === 'live';
+  return (
+    <div className="center">
+      <div className="banner red col" role="alert" data-page-error={props.route} style={{ gap: 8 }}>
+        <span>
+          {live
+            ? 'The live page could not be shown. The screens keep showing what is live, and the keyboard and pedals still work. Press Try again.'
+            : 'This page could not be shown. The screens and the live controls are not affected: use the menu above to go on.'}
+        </span>
+        <button type="button" className="small" onClick={props.retry}>
+          Try again
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** The fallback of an editor pane: what happened, that the screens are not affected, and a way back. */
 export function PaneError(props: { what: string; retry: () => void; undo?: () => void }) {
   return (
