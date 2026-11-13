@@ -179,6 +179,45 @@ test('the editor by keyboard: radio arrows, Enter on buttons, Ctrl+Z after a for
   expect(after.text).toBe(typed.replace('12 May', '19 May'));
 });
 
+test('with the non-modal Find open the canvas keeps its shortcuts, and Escape closes Find first', async ({
+  page,
+}) => {
+  const a = await hubApi(PORT);
+  const p = await importDeck(a, deck);
+  const note = slidesOf(p)[1]!.objects.find((o) => o.type === 'text' && o.text === ANNOUNCEMENT_TEXT)!;
+  await openEditor(page, PORT, p.id);
+  await openSlide(page, 2);
+  const count = (await slideObjects(page)).length;
+  const find = page.getByRole('dialog');
+  /** Select the note on the canvas, open Find with Ctrl+F, then leave the focus on the page (a canvas click). */
+  const selectThenFind = async () => {
+    await expect(async () => {
+      await clickObject(page, note);
+      expect((await editorState(page)).objectId).toBe(note.id);
+    }).toPass({ timeout: 15_000 });
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press('Control+f');
+    await expect(find.getByLabel('Find', { exact: true })).toBeFocused();
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  };
+
+  // One Escape closes Find and keeps the selection; the next one drops the selection.
+  await selectThenFind();
+  await page.keyboard.press('Escape');
+  await expect(find).toHaveCount(0);
+  expect((await editorState(page)).objectId).toBe(note.id);
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => (await editorState(page)).objectId).toBeUndefined();
+
+  // With Find open, Delete and Ctrl+Z still act on the slide, and Find stays open.
+  await selectThenFind();
+  await page.keyboard.press('Delete');
+  await expect.poll(async () => (await slideObjects(page)).length).toBe(count - 1);
+  await page.keyboard.press('Control+z');
+  await expect.poll(async () => (await slideObjects(page)).length).toBe(count);
+  await expect(find).toBeVisible();
+});
+
 test('arrow up and down navigate slides when nothing has focus', async ({ page }) => {
   const a = await hubApi(PORT);
   const p = await importDeck(a, deck);

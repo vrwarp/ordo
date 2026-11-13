@@ -4,7 +4,9 @@
  * - 'field': a text field, a select or anything editable has the focus: its keys are its own (Ctrl+S
  *   still saves). The slide's text field routes Ctrl+Z and Ctrl+Y to the editor's undo itself.
  * - 'dialog': a dialog (or any modal backdrop) is open: nothing behind it reacts, so Delete on a dialog's
- *   button never deletes the selected object and Enter presses the dialog's own buttons.
+ *   button never deletes the selected object and Enter presses the dialog's own buttons. A non-modal tool card
+ *   (`role="dialog"` marked `data-nonmodal`, such as the floating Find & replace) is not a modal: its fields
+ *   are fields, its buttons controls, and the canvas keeps every shortcut while it is open.
  * - 'control': a button, a link, a radio, a menu item or another focusable control outside the canvas has
  *   the focus. Enter and Space press it, the arrow keys are its own (a radio group moves between its
  *   choices), Delete and Backspace do nothing: only the editor's Ctrl commands apply (undo, redo,
@@ -23,9 +25,12 @@ type El = {
   hasAttribute?: (name: string) => boolean;
 };
 
+/** A modal dialog, or any backdrop; a non-modal tool card (`data-nonmodal`) is neither. */
+const MODAL = '.backdrop, [role="dialog"]:not([data-nonmodal])';
+
 /** A modal is open on the page: a dialog's backdrop or the updating screen. */
 function modalOpen(doc: { querySelector?: (s: string) => unknown } | undefined): boolean {
-  return !!doc?.querySelector?.('.backdrop, [role="dialog"]');
+  return !!doc?.querySelector?.(MODAL);
 }
 
 /** A text field, a select or an editable element. */
@@ -42,7 +47,7 @@ export function keyPlace(
     : document,
 ): KeyPlace {
   const el = t as El | null;
-  if (el?.closest?.('[role="dialog"], .backdrop') || modalOpen(doc)) return 'dialog';
+  if (el?.closest?.(MODAL) || modalOpen(doc)) return 'dialog';
   if (isTypingTarget(t)) return 'field';
   const tag = el?.tagName ?? '';
   if (!el || tag === 'BODY' || tag === 'HTML' || tag === '' || el.closest?.('[data-editor-keys]'))

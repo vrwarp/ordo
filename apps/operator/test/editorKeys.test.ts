@@ -13,18 +13,31 @@ import {
   stepSlide,
 } from '../src/views/editor/editorKeys.ts';
 
-/** A stand-in element: its tag, and the selectors it sits inside. */
+/**
+ * Whether an element, described by the selectors it matches run together (e.g. '[role="dialog"][data-nonmodal]'),
+ * matches a simple selector with at most one :not().
+ */
+function matches(d: string, sel: string): boolean {
+  const m = /^(.*?)(?::not\((.*)\))?$/.exec(sel.trim());
+  return !!m && d.includes(m[1] ?? '') && !(m[2] && d.includes(m[2]));
+}
+const anyMatch = (ds: string[], sel: string) => sel.split(',').some((s) => ds.some((d) => matches(d, s)));
+
+/** A stand-in element: its tag, and the elements (as selectors) it sits inside. */
 function el(tagName: string, inside: string[] = [], attrs: Record<string, string> = {}) {
   return {
     tagName,
     isContentEditable: attrs.contenteditable === 'true',
-    closest: (sel: string) => (sel.split(',').some((s) => inside.includes(s.trim())) ? {} : null),
+    closest: (sel: string) => (anyMatch(inside, sel) ? {} : null),
     hasAttribute: (n: string) => n in attrs,
   } as unknown as EventTarget;
 }
-const page = (open = false) => ({
-  querySelector: (s: string) => (open && s.includes('.backdrop') ? {} : null),
+/** A stand-in document with these elements (as selectors) open on it. */
+const page = (...open: string[]) => ({
+  querySelector: (s: string) => (anyMatch(open, s) ? {} : null),
 });
+/** The floating Find & replace card: a dialog that is not modal (FindReplaceDialog.tsx). */
+const FIND = '[role="dialog"][data-nonmodal]';
 
 describe('keyPlace', () => {
   it('the page itself (after a click on the canvas) gets every shortcut', () => {
@@ -51,7 +64,19 @@ describe('keyPlace', () => {
     expect(keyPlace(el('BUTTON', ['[role="dialog"]']), page())).toBe('dialog');
     expect(keyPlace(el('INPUT', ['.backdrop']), page())).toBe('dialog');
     // The focus left on the page while a dialog is open: still the dialog's.
-    expect(keyPlace(el('BODY'), page(true))).toBe('dialog');
+    expect(keyPlace(el('BODY'), page('.backdrop'))).toBe('dialog');
+    expect(keyPlace(el('BODY'), page('[role="dialog"]'))).toBe('dialog');
+  });
+
+  it('a non-modal tool card (Find & replace) leaves the canvas its shortcuts', () => {
+    // Open, with the focus left on the page (after Replace all, or a click on the canvas): every shortcut.
+    expect(keyPlace(el('BODY'), page(FIND))).toBe('canvas');
+    // Its own fields and buttons are fields and controls, as anywhere else.
+    expect(keyPlace(el('INPUT', [FIND]), page(FIND))).toBe('field');
+    expect(keyPlace(el('BUTTON', [FIND]), page(FIND))).toBe('control');
+    // A modal opened over it (a colour popover, the revisions dialog) still keeps every key.
+    expect(keyPlace(el('BODY'), page(FIND, '[role="dialog"]'))).toBe('dialog');
+    expect(keyPlace(el('BUTTON', ['[role="dialog"]']), page(FIND, '[role="dialog"]'))).toBe('dialog');
   });
 });
 

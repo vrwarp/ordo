@@ -133,6 +133,9 @@ export function EditorView({ id }: { id: string }) {
   const [videoPick, setVideoPick] = useState(false);
   // 'Find…' (Ctrl+F outside a text field): find and replace across the presentation (M4 item E).
   const [finding, setFinding] = useState(false);
+  // The window key handler reads it without re-binding (its effect depends on readOnly only).
+  const findingRef = useRef(false);
+  findingRef.current = finding;
   const [dismissedRev, setDismissedRev] = useState(0);
   // The newest revision found saved by someone else (not only by the hub's PowerPoint jobs): the banner's.
   const [otherRev, setOtherRev] = useState(0);
@@ -205,6 +208,12 @@ export function EditorView({ id }: { id: string }) {
         return;
       }
       if (place === 'field' || place === 'dialog') return;
+      // Escape closes an open Find & replace card first (one Escape, one thing), even when the focus left it.
+      if (e.key === 'Escape' && !ctrl && findingRef.current) {
+        e.preventDefault();
+        setFinding(false);
+        return;
+      }
       if (ctrl && e.key.toLowerCase() === 'f') {
         e.preventDefault();
         setFinding(true);

@@ -152,11 +152,14 @@ export function FindReplaceView(props: FindReplaceViewProps) {
   const titleId = `${id}-title`;
   const { opts } = props;
   const activeIdx = props.activeIndex ?? 0;
+  const findRef = useRef<HTMLInputElement>(null);
 
   return (
     <div
       className="ed-find-floating"
       role="dialog"
+      // Non-modal: the editor keeps its shortcuts while the card is open (editorKeys.ts).
+      data-nonmodal=""
       aria-labelledby={titleId}
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
@@ -216,6 +219,7 @@ export function FindReplaceView(props: FindReplaceViewProps) {
         <label className="field">
           <span>Find</span>
           <input
+            ref={findRef}
             value={props.find}
             autoFocus
             spellCheck={false}
@@ -267,7 +271,12 @@ export function FindReplaceView(props: FindReplaceViewProps) {
             type="button"
             className="primary"
             disabled={props.readOnly || !props.total}
-            onClick={props.onReplace}
+            onClick={() => {
+              props.onReplace();
+              // With nothing left to replace this button disables itself and would drop the focus on the page:
+              // keep it in the card, so Escape still closes it and the next search can be typed at once.
+              findRef.current?.focus();
+            }}
           >
             Replace all
           </button>
