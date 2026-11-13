@@ -35,6 +35,16 @@ ordo/
   and host routing by a `?role=` query for convenience, plus Vite dev servers; `pnpm
   dev:origins` adds hosts entries for `*.ordo.test` and serves each role on its origin for
   isolation testing.
+- **Bundle budget.** `node tools/bundle-report.mjs` prints what each built app (operator, output, stage)
+  loads before its first paint (`initial`: index.html's entry and the chunks it imports statically, with
+  gzip), its CSS, its workers and its lazy chunks (named by their source maps: the PowerPoint `importer`,
+  the `table drawer`); `--json <file>` writes the same. CI runs it with `--check` after `pnpm build`: an
+  app's initial JavaScript may grow at most 2 % over `tools/bundle-baseline.json`. New code the first paint
+  does not need is loaded when first used: a page opened before or after a service (Setup, the settings
+  pages: `React.lazy` in `App.tsx`; the service worker precaches every chunk, so they open offline), an M9
+  object kind's drawer (`registerShapeDrawerLoader`, loaded by the workers' slide prepare steps and the
+  editor canvas before they draw). A PR whose growth is accepted re-records the baseline with `--write`
+  and gives the numbers in its description.
 
 ## TypeScript that Node can run as it is
 

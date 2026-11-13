@@ -628,8 +628,10 @@ slide as this job stores it. The job (`geoms.ts`):
 
 - `CONVERTER_VERSION` is 2 (`shared.ts`): the converter that draws 3-D flat and writes the M9 fields.
 - `M9_WRITES` (`shared.ts`): the M9 stored fields the import writes, every one (M9 decision 1) but those whose
-  reader is not in yet ('decorFile' until `decor-render` names decoration files); `sceneTask.ts`
-  passes it as `EmitOptions.m9Writes`. Taking a field out is the kill switch: the import then writes what an
+  drawer or reader is not on main yet (`M9_HELD_BACK`: 'decor' and 'decorFile' until `decor-render` draws
+  decorations and names their files); `sceneTask.ts` passes it as `EmitOptions.m9Writes` with
+  `sheets: PPTX_SHEETS` (false until `decor-render` stores composites and atlases), so the slide budgets plan
+  neither (design/27 §15 M9 "rollout"). Taking a field out is the kill switch: the import then writes what an
   older build draws for it. In wave 1 no converter part writes an M9 field yet (the stubs of
   `@ordo/pptx-scene`), so nothing stored changes.
 - `EmitOptions.libreoffice` (default true) is `lo-detect`'s to set: with false the converter plans no art and
@@ -730,10 +732,11 @@ the slide budgets are drawn natively, and a slide past 150 objects reaches the l
   - every slide is measured as stored (`storedBytes`: one-slide `sanitizePresentation`, `Slide.safeParse`,
     ULID ids and SHA-256 refs; `quickBytes` for slides well within 64 KB) and fitted with
     `fitSlideBudget` (grid, plain, minimal: a background's shape, origin role 'bg', stays; the tail's
-    `minimalSlide` leaves it out);
+    `minimalSlide` keeps it as a plain rect in its colour, about 200 bytes);
     `planImportSizes` then takes the fitted sizes and each slide's
-    minimal form (`minimalSlide`) as its compact size, and the tail is stored minimal. A deck too large
-    even all minimal has its tail's text cut to 200 characters a box (as the compact slides' search text was);
+    minimal form (`minimalSlide`) as its compact size, and the tail is stored minimal. A deck that does not fit
+    with the pages is planned again with minimal forms without them (`planLadder`); one too large even then
+    has its tail's text cut to 200 characters a box (as the compact slides' search text was);
   - each simplified slide gets one note ('simplified to fit the slide budget: …', 'the presentation reached
     its size budget: only its text and pictures are kept') and one warning; what it lost is `Slide.pptx.missing`
     ('decoration', 'chart') with or without LibreOffice, the slide is hybrid and never `pending`

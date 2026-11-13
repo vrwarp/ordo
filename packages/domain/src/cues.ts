@@ -257,6 +257,17 @@ export function firstText(slide: {
   return t?.text ? readableText({ text: t.text, paras: t.paras }) : '';
 }
 
+/**
+ * The text a slide's Bottom-Third strap shows when the operator wrote none (`bottomThirdText`): its
+ * `firstText`, but never M9's table or chart text (`extraText`: tab-separated cells and chart labels read as
+ * noise on the lobby's and the stream's band). A slide whose only text is in a table or a chart has no strap
+ * of its own; the text of its picture (`importedText`) still is one.
+ */
+export function strapText(slide: Parameters<typeof firstText>[0]): string {
+  if (!slide.objects.some((x) => x.type === 'text' && x.text) && !importedText(slide)) return '';
+  return firstText(slide);
+}
+
 /** Auto-advance delay of a loop slide, bounded to [0.5 s, 1 h] whatever the stored values. */
 export const LOOP_SLIDE_MIN_MS = 500;
 export const LOOP_SLIDE_MAX_MS = 3_600_000;

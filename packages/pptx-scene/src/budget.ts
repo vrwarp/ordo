@@ -28,6 +28,12 @@
  *    smallest are packed into one (`Classification.atlas`); a slide an atlas cannot bring within it leaves
  *    its topmost pictures out (the guard's way).
  *
+ * Decorations and sheets are planned only when the importer stores them (`BudgetOptions`, from
+ * `EmitOptions.m9Writes` 'decor' and `EmitOptions.sheets`; the hub and the client turn both off until
+ * `decor-render` draws decorations and stores sheets): without decorations steps 3, 5 and 5' are skipped;
+ * without sheets step 4 and the atlas are, and the picture budget is the render clamp's 16
+ * (`MAX_DRAWN_PICTURES`). What the guard then leaves out is listed, never dropped without a word.
+ *
  * The budget halves of M6's art (`classify.ts` `fitTables`, `wholeDiagrams`' budget step, `fitShapes`,
  * M9 wave 1's `fit3d`) stay only behind `ParseOptions.budgetArt`, for the harness's A/B.
  *
@@ -52,6 +58,31 @@ import { atlasParts, pictureRuns } from './sheet.ts';
 export const MAX_SLIDE_OBJECTS_TEXT = 190;
 /** The render clamp's objects (`@ordo/renderer` `CLAMP.maxObjects`): what the guard never passes. */
 export const MAX_DRAWN_OBJECTS = 200;
+/**
+ * The render clamp's distinct pictures (`@ordo/renderer` `CLAMP.maxImagesPerSlide`): a slide planned without
+ * sheets keeps up to this many, the topmost past it left out and listed (it would draw no more).
+ */
+export const MAX_DRAWN_PICTURES = 16;
+
+/**
+ * What the importer can store, so the budgets plan only reliefs that draw (the M9 rollout: a field stays off
+ * until what reads it is on main; `EmitOptions.m9Writes`, `EmitOptions.sheets`).
+ */
+export interface BudgetOptions {
+  /**
+   * Decorations (`ShapeObject.decor`, the 'decor' field): steps 3, 5 and 5'. Default true. Without them a
+   * slide past the object budget keeps its merges, then the guard leaves the topmost out and lists them,
+   * instead of decorations no renderer draws.
+   */
+  decorations?: boolean;
+  /**
+   * Picture sheets (`pptxmedia:sheet<n>` composites and atlases): step 4 and P. Default true. Without them
+   * every picture is its own object, the picture budget is the render clamp's (`MAX_DRAWN_PICTURES`), and
+   * the guard leaves the topmost pictures past it out and lists them, instead of pictures a placeholder the
+   * importer cannot resolve would drop without a word.
+   */
+  sheets?: boolean;
+}
 
 /** What the budgets did to a slide (its notes say it; the census counts it). */
 export interface BudgetPlan {
@@ -281,8 +312,11 @@ export function fitBudgets(
   ctx: Pick<SlideCtx, 'frame' | 'log'>,
   elements: Element[],
   background: Background,
+  opts: BudgetOptions = {},
 ): BudgetPlan {
   const frame = ctx.frame;
+  const decorations = opts.decorations !== false;
+  const sheets = opts.sheets !== false;
   const plan: BudgetPlan = {
     culled: { offSlide: 0, invisible: 0 },
     merged: { shapes: 0, objects: 0 },
@@ -307,7 +341,8 @@ export function fitBudgets(
   if (cost().objects > MAX_SLIDE_OBJECTS) {
     // 2: shapes of one look, as M6 merges them.
     markShapeRuns(elements, frame, inArt);
-    if (cost().objects > MAX_SLIDE_OBJECTS) {
+    // 3-5 only with what the importer stores (`BudgetOptions`): without either, the merges stand.
+    if (cost().objects > MAX_SLIDE_OBJECTS && (decorations || sheets)) {
       // 3-5 plan with the merges left out (a decoration subsumes them), which are worked out again after.
       clearMerges(elements);
       let objects = cost().objects;
@@ -315,14 +350,20 @@ export function fitBudgets(
         for (const i of run) elements[i]!.decor = run[0]!;
       };
       // 3: decorations of one drawing, group or decoration source.
-      ({ objects } = applyRuns(elements, decorRuns(elements, frame, { exclude: used() }), objects, decorate));
+      if (decorations)
+        ({ objects } = applyRuns(
+          elements,
+          decorRuns(elements, frame, { exclude: used() }),
+          objects,
+          decorate,
+        ));
       // 4: composites of z-adjacent plain pictures.
-      if (objects > MAX_SLIDE_OBJECTS)
+      if (sheets && objects > MAX_SLIDE_OBJECTS)
         ({ objects } = applyRuns(elements, pictureRuns(elements, frame, used()), objects, (run) => {
           for (const i of run) elements[i]!.sheet = run[0]!;
         }));
       // 5: decorations of one source, the slide's own ungrouped shapes too.
-      if (objects > MAX_SLIDE_OBJECTS)
+      if (decorations && objects > MAX_SLIDE_OBJECTS)
         ({ objects } = applyRuns(
           elements,
           decorRuns(elements, frame, { wide: true, exclude: used() }),
@@ -330,7 +371,7 @@ export function fitBudgets(
           decorate,
         ));
       // 5': real 3-D drawn flat in decorations (plan decision 6), only for a slide still over.
-      if (objects > MAX_SLIDE_OBJECTS) {
+      if (decorations && objects > MAX_SLIDE_OBJECTS) {
         const r = applyRuns(
           elements,
           decorRuns(elements, frame, { wide: true, flat3d: true, exclude: used() }),
@@ -352,13 +393,15 @@ export function fitBudgets(
   }
   // 7: the guard. Elements that are not text first, topmost first; then text.
   if (cost().objects > MAX_SLIDE_OBJECTS_TEXT) plan.left += guard(elements, background, art, inArt);
-  // P: the atlas, then the guard's way for what it cannot hold.
+  // P: the atlas, then the guard's way for what it cannot hold. Without sheets, the guard's way past what the
+  // render clamp draws.
   const pictures = cost().pictures;
-  if (pictures > MAX_SLIDE_PICTURES) {
+  const pictureBudget = sheets ? MAX_SLIDE_PICTURES : MAX_DRAWN_PICTURES;
+  if (pictures > pictureBudget) {
     const keep = new Set<string>();
     if (background.fill.kind === 'picture') keep.add(background.fill.picture.part);
-    plan.atlas = atlasParts(elements, frame, pictures, MAX_SLIDE_PICTURES, keep, inArt);
-    const left = cost().pictures - MAX_SLIDE_PICTURES;
+    if (sheets) plan.atlas = atlasParts(elements, frame, pictures, MAX_SLIDE_PICTURES, keep, inArt);
+    const left = cost().pictures - pictureBudget;
     if (left > 0) plan.left += leavePictures(elements, inArt, [...plan.atlas, ...keep], left);
   }
   // The plan and its notes.

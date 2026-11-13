@@ -479,7 +479,11 @@ The Presentation panel of a PowerPoint presentation ends with its import report 
 slides per class (`source.native`) or, for a legacy import, that its slides are pictures; legacy pages
 left; hidden and edited slides; slides waiting for LibreOffice or that it could not draw; the fonts to
 upload; the approximated slides (each a button that opens the slide); and the import log (`source.log`,
-the newest 200 lines, warnings tagged), all deck text shown as text. 'Re-import from PowerPoint…' opens a
+the newest 200 lines, warnings tagged), all deck text shown as text. A deck PowerPoint plays as a loop, every
+slide timed, comes in as an announcement loop: its panel shows the report too, with a banner that says in
+plain words what a loop does on the screens (each slide moves on by itself and starts over; the Stage shows
+'Service Starting Soon' and the Bottom-Third Stream nothing while it runs) and a 'Treat as slides' button
+(disabled while live) that makes it a slide deck in one undoable change (design/27 §8 "Looping shows"). 'Re-import from PowerPoint…' opens a
 dialog with the hub's plan (`GET /presentations/:id/pptx-reimport`, nothing written): slides rebuilt,
 picture slides made editable, edited slides kept, other slides kept, and what is always kept; slides made
 editable by an older build are listed, each with 'Slide N: keep as it is'. 'Re-import' saves unsaved edits

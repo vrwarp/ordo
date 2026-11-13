@@ -30,7 +30,7 @@
  * never used as plain-object keys.
  */
 import { GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
-import { cullElements, fitBudgets, leftKinds } from './budget.ts';
+import { type BudgetOptions, cullElements, fitBudgets, leftKinds } from './budget.ts';
 import { rootOf, type SlideCtx } from './context.ts';
 import { endsOf, MAX_PATH_CHARS, mergedChars, type ShapePiece, shapePiece } from './geom.ts';
 import { bodyPrChain, chainOf, firstAttr, firstChildOf, nvOf } from './inherit.ts';
@@ -1228,6 +1228,8 @@ export interface ClassifyOptions {
    * budget a picture, instead of drawing them natively (`budget.ts` `fitBudgets`). Never set by the hub.
    */
   budgetArt?: boolean;
+  /** What the importer stores, so the budgets plan only reliefs that draw (`budget.ts` `BudgetOptions`). */
+  budget?: BudgetOptions;
 }
 
 /**
@@ -1252,7 +1254,7 @@ export function classifySlide(
   const residual = refineSupport(ctx, elements);
   if (opts.budgetArt) return classifyWithArt(ctx, elements, background, residual, tier, reasons);
   wholeDiagrams(ctx, elements, background, residual, false);
-  const plan = fitBudgets(ctx, elements, background);
+  const plan = fitBudgets(ctx, elements, background, opts.budget);
   const art = artRange(elements);
   const why: string[] = [];
   for (const i of art?.elements ?? []) for (const r of residual[i]!) why.push(`art:${r}`);

@@ -34,6 +34,8 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      - name: Bundle budget (each app's initial JavaScript against tools/bundle-baseline.json, +2 % at most)
+        run: node tools/bundle-report.mjs --check --json test-results/bundle.json
       # The GitHub Pages demo (apps/demo); e2e/pages-demo.spec.ts serves and drives it.
       - run: pnpm build:pages
       # Advisories in third-party packages must not block an unrelated merge; the weekly audit

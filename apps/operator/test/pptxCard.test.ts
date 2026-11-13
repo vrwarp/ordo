@@ -22,6 +22,7 @@ import { digestOf } from '../../../packages/pptx-scene/src/emit.ts';
 import {
   approximatedSlides,
   importReport,
+  treatAsSlides,
   isImportJob,
   missingSlideFonts,
   objectsDigest,
@@ -357,6 +358,48 @@ describe('the import report', () => {
     expect(t).toContain('Import log (3 lines)');
     expect(t).toContain('warning slide 3: a picture could not be imported');
     expect(html).toMatch(/<button[^>]*>Re-import from PowerPoint…<\/button>/);
+  });
+
+  it('says what an announcement loop does on the screens and treats it as slides in one tap', () => {
+    const loopP = { ...nativeP, kind: 'loop', loop: { defaultSlideMs: 6000 } } as Presentation;
+    expect(importReport(nativeP)!.loop).toBeUndefined();
+    const r = importReport(loopP)!;
+    expect(r.loop).toBe(true);
+    const html = renderToStaticMarkup(
+      createElement(PptxReportView, {
+        report: r,
+        approx: { slides: [], more: 0 },
+        missingFonts: [],
+        readOnly: false,
+        onReimport: noop,
+        onOpenSlide: noop,
+        onTreatAsSlides: noop,
+      }),
+    );
+    expect(html).toContain('data-loop');
+    const t = text(html);
+    expect(t).toContain('PowerPoint plays this deck as a loop');
+    expect(t).toContain('the Stage shows “Service Starting Soon” and the Bottom-Third Stream shows nothing');
+    expect(html).toMatch(/<button type="button" class="small"[^>]*>Treat as slides<\/button>/);
+    expect(view()).not.toContain('data-loop');
+    // Read-only (live): the button is there, disabled.
+    const ro = renderToStaticMarkup(
+      createElement(PptxReportView, {
+        report: r,
+        approx: { slides: [], more: 0 },
+        missingFonts: [],
+        readOnly: true,
+        onReimport: noop,
+        onOpenSlide: noop,
+      }),
+    );
+    expect(ro).toMatch(/<button[^>]*disabled=""[^>]*>Treat as slides<\/button>/);
+    // The switch: a slide deck, without the loop's settings, its slides (and their timings) as they were.
+    const s = treatAsSlides(loopP);
+    expect(s.kind).toBe('slides');
+    expect(s).not.toHaveProperty('loop');
+    expect(s.sections).toBe(loopP.sections);
+    expect(treatAsSlides(nativeP)).toBe(nativeP);
   });
 
   it('says what a legacy import is and when the re-import cannot run', () => {

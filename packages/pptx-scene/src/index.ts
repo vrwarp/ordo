@@ -15,6 +15,7 @@ import { bakeKey, type PictureBake, type SheetBake, sheetKey } from './bake.ts';
 import { DECOR_PREFIX } from './decor.ts';
 import { SHEET_PREFIX } from './sheet.ts';
 import {
+  ALL_M9_FIELDS,
   BAKE_PREFIX,
   CLIP_PREFIX,
   type EmitOptions,
@@ -22,6 +23,7 @@ import {
   type EmittedSlide,
   emitDeck,
   GEOM_PREFIX,
+  type M9Field,
   MEDIA_PREFIX,
 } from './emit.ts';
 import { frameOf, slideRect } from './frame.ts';
@@ -52,7 +54,13 @@ export {
 } from './emit.ts';
 export type { BakeRaster, PictureBake, SheetBake, SheetCell, TileBake } from './bake.ts';
 export { applySheet, cellSourceSize, checkSheet, SHEET_LIMITS } from './bake.ts';
-export { type BudgetPlan, MAX_DRAWN_OBJECTS, MAX_SLIDE_OBJECTS_TEXT } from './budget.ts';
+export {
+  type BudgetOptions,
+  type BudgetPlan,
+  MAX_DRAWN_OBJECTS,
+  MAX_DRAWN_PICTURES,
+  MAX_SLIDE_OBJECTS_TEXT,
+} from './budget.ts';
 export { DECOR_PREFIX, type PlatePlan, platePlan } from './decor.ts';
 export { type EmittedSheet, SHEET_DENSITY, SHEET_PREFIX } from './sheet.ts';
 export type { EmittedClip } from './media.ts';
@@ -124,6 +132,17 @@ export interface ParseOptions {
    * classified as it is parsed.
    */
   budgetArt?: boolean;
+  /**
+   * M9: the stored fields the converter may write (`EmitOptions.m9Writes`, the same set). Read here too
+   * because a slide's budgets are planned as it is parsed: without 'decor' no decoration is planned
+   * (`budget.ts` `BudgetOptions.decorations`).
+   */
+  m9Writes?: ReadonlySet<M9Field>;
+  /**
+   * M9: whether pictures are drawn from sheets (`EmitOptions.sheets`, the same flag). Read here too: without
+   * sheets no composite or atlas is planned (`BudgetOptions.sheets`).
+   */
+  sheets?: boolean;
 }
 
 /** Families, weights and slants `ParseOptions.fontFace` is asked for per call (a deck can name thousands). */
@@ -272,7 +291,10 @@ function openScene(src: PartSource, opts: ParseOptions): SceneReader {
       ctx.timing = readSlideTiming(ctx.slide);
       const elements = walkSlide(ctx);
       const background = readBackground(ctx);
-      const classification = classifySlide(ctx, elements, background, { budgetArt: opts.budgetArt === true });
+      const classification = classifySlide(ctx, elements, background, {
+        budgetArt: opts.budgetArt === true,
+        budget: { decorations: (opts.m9Writes ?? ALL_M9_FIELDS).has('decor'), sheets: opts.sheets !== false },
+      });
       return {
         ...base,
         layoutPart: ctx.layoutPart,

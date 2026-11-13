@@ -9,8 +9,8 @@ import {
   type SlideObject,
   type TextObject,
   type TextStyle,
-  firstText,
   readableText,
+  strapText,
   rgbaCss,
   textScripts,
 } from '@ordo/domain';
@@ -700,7 +700,8 @@ export function lyricTextFor(
     const refStr = `${r.book} ${r.chapter}:${r.verseFrom}${r.verseTo ? `-${r.verseTo}` : ''}`;
     return `${refStr}\n${slide.scripture.text}`;
   }
-  const t = firstText(slide);
+  // M9: a table's or a chart's text is never a strap (`strapText`).
+  const t = strapText(slide);
   return t.trim() ? t : null;
 }
 

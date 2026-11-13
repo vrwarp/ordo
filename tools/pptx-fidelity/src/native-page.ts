@@ -19,6 +19,8 @@ import {
   fillColor,
   slidePictures,
 } from '@ordo/renderer/text2d.ts';
+// The table drawer, registered at once: the outputs load it per kind before they draw (`loadShapeDrawers`).
+import '@ordo/renderer/table/index.ts';
 
 /**
  * Browser side of the harness's native column (design/27 §14.1). `native.ts` bundles this file with

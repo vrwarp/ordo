@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { firstText, importedText } from './cues.ts';
+import { firstText, importedText, strapText } from './cues.ts';
 import { m9Slide } from './m9.test-util.ts';
 import type { Slide } from './schemas.ts';
 
@@ -84,5 +84,19 @@ describe('the gated text fallback of picture slides (design/27 §11)', () => {
     expect(t.endsWith('a')).toBe(true);
     const odd = { id: 's', objects: [], imported: { textAligned: true, textBoxes: [{ text: 5 }, null] } };
     expect(importedText(odd as never)).toBe('');
+  });
+});
+
+describe('the Bottom-Third strap text (strapText)', () => {
+  it("is the slide's own text or its picture's, never a table's or a chart's (M9 extraText)", () => {
+    const table = m9Slide().objects.find((o) => o.id === 'table')!;
+    const chart = m9Slide().objects.find((o) => o.id === 'chart')!;
+    expect(firstText({ objects: [table] })).not.toBe('');
+    expect(strapText({ objects: [table] })).toBe('');
+    expect(strapText({ objects: [chart] })).toBe('');
+    expect(strapText(page(true, 'Welcome', 'Pastor Sam'))).toBe('Welcome\nPastor Sam');
+    const titled = m9Slide();
+    expect(strapText(titled)).toBe(firstText(titled));
+    expect(strapText(titled)).not.toBe('');
   });
 });

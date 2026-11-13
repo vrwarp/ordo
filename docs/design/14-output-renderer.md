@@ -266,12 +266,16 @@ are byte-identical, and the tests pin each seam's calls by digest against the co
   draws a slide, besides its pictures. The asset worker runs them in the job's lane turns (`host.slice`, a
   cancelled job stops at `host.check`), the operator's thumbnail worker at once, from one registry
   (`registerPrepareStep`), so thumbnails draw what outputs draw. Steps run in order and return the files they
-  found missing, which the asset worker reports with the missing pictures. Built in: the geometry files
-  (`ShapeGeom.ref`); M9 adds table layout, warp faces, vector pictures and decoration files.
+  found missing, which the asset worker reports with the missing pictures. Built in: the M9 shape drawers the
+  slides need (`shape drawers`, below) and the geometry files (`ShapeGeom.ref`); M9 adds table layout, warp
+  faces, vector pictures and decoration files.
 - **Shape dispatch** (`renderer/src/shape.ts` `drawShapeObject`): `table` → `chart` → `decor` → geometry → legacy,
   by the first of the fields the clamp kept whose drawer is registered (`registerShapeDrawer`); until then such a
-  shape draws what an older build draws once it strips the field. A registered 3-D look (`registerLook3d`)
-  resolves a plan the effect composite draws (`EffectSource.look3d`).
+  shape draws what an older build draws once it strips the field. A kind's drawer may instead be loaded the first
+  time a slide holds that kind (`registerShapeDrawerLoader`: the renderer's index registers the table's, so its
+  code stays out of the operator's first paint, design/24 "Bundle budget"); the workers' prepare step `shape
+  drawers` and the editor canvas call `loadShapeDrawers` before they draw (the canvas draws again once loaded).
+  A registered 3-D look (`registerLook3d`) resolves a plan the effect composite draws (`EffectSource.look3d`).
 - **Paint hooks** (`renderer/src/text/paint.ts`): `paintRich` puts glyphs on the context through a glyph painter
   (`PLAIN_PAINTER`; upright and warp ones registered by kind) and draws its face on a face target
   (`DIRECT_TARGET`; a face sprite registered by the 3-D look, whose alpha casts the shadow and glow), chosen per
@@ -286,7 +290,8 @@ are byte-identical, and the tests pin each seam's calls by digest against the co
 
 <!-- m9:tables-render -->
 **Tables** (design/27 M9, `ShapeObject.table`). The renderer draws a table object itself (`renderer/src/table/`,
-registered with the shape dispatch), laying its rows out from its cells' text. The prepare step `table layouts`
+registered with the shape dispatch when `@ordo/renderer/table/index.ts` is loaded: by the table's loader, or by
+the prepare step below), laying its rows out from its cells' text. The prepare step `table layouts`
 (`apps/output/src/prepare/tables.ts`, imported by the asset worker and the thumbnail worker) lays each table of
 the job's slides out in slices of 8 ms (`prepareTableLayout`; a cell once started is finished) before the
 synchronous draw, so the draw lays out nothing and no task passes design/27 §13's 50 ms; the cells' layouts
@@ -391,7 +396,12 @@ Arm sequence for a cue (asset worker, then render worker):
    shapes and pictures. The canvas is the size of what the layer reaches (`slideReach` and
    the other reaches of `sprite.ts`: each object as its drawer lays it out, text's lines grown
    by 0.3 em and united with the ink its glyphs measure, a PowerPoint shape by its geometry,
-   outline and effect layers (`geomShapeReach`), its effects, turned with its box), cut
+   outline and effect layers (`geomShapeReach`), its effects, turned with its box; M9's
+   fields are known too: a table by its registered drawer's reach (`tableReach`: its grown rows,
+   lines and each cell's text), a chart or decoration by its drawer's reach once one is
+   registered and by its legacy shape until then, warped, vertical or 3-D text and 3-D or
+   vector pictures as their plain text and box while no painter, face target or picture look
+   is registered for them; an object such a hook draws reaches the frame), cut
    to the frame and drawn at that offset; the sprite's origin is aligned to a multiple of
    8 device px (`SPRITE_ALIGN`), since Chromium dithers gradients by device position and a
    sprite at any other offset differed from the full-frame draw by a level on thousands of

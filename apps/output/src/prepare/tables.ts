@@ -1,5 +1,5 @@
 import type { ShapeObject } from '@ordo/domain';
-import { type Measurer, clampSlide, currentFontEnv, measurerFor, prepareTableLayout } from '@ordo/renderer';
+import { type Measurer, clampSlide, currentFontEnv, measurerFor } from '@ordo/renderer';
 import { type PrepareStep, registerPrepareStep } from './index.ts';
 
 /*
@@ -37,6 +37,8 @@ export const tableLayouts: PrepareStep = {
     if (!tables.length) return undefined;
     const m = sharedMeasurer();
     if (!m) return undefined;
+    // The table's module, loaded per kind (the 'shape drawers' step has loaded it already).
+    const { prepareTableLayout } = await import('@ordo/renderer/table/index.ts');
     for (const o of tables) {
       let done = false;
       while (!done) {

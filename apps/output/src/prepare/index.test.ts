@@ -1,8 +1,14 @@
 import type { Slide } from '@ordo/domain';
 import { clearGeomFiles, geomFile } from '@ordo/renderer/geom/stored.ts';
+import {
+  registerShapeDrawer,
+  registerShapeDrawerLoader,
+  shapeDrawerRegistered,
+} from '@ordo/renderer/shape.ts';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   geometryFiles,
+  shapeDrawers,
   jobSlides,
   type PrepareHost,
   type PrepareStep,
@@ -55,7 +61,7 @@ afterEach(() => {
 
 describe('prepare steps (M9 render-seams)', () => {
   it('reads the geometry files the slides draw through its host, and reports those not there yet', async () => {
-    expect(prepareSteps()).toEqual([geometryFiles]);
+    expect(prepareSteps()).toEqual([shapeDrawers, geometryFiles]);
     const log: string[] = [];
     const job = {
       slides: jobSlides({ slide: slide([REF]), nextSlide: slide([MISSING, 'pptxgeom:1']) }),
@@ -63,8 +69,9 @@ describe('prepare steps (M9 render-seams)', () => {
     };
     expect(job.slides).toHaveLength(2);
     expect(await prepareSlides(job, host({ [REF]: file }, log))).toEqual([MISSING]);
-    // Parsed in a slice of the job; placeholders (not hub names) are never read.
-    expect(log).toEqual(['check', 'read a', 'read b', 'slice', 'check']);
+    // Parsed in a slice of the job; placeholders (not hub names) are never read. (The first check is the
+    // shape drawers step's turn: no M9 kind to load.)
+    expect(log).toEqual(['check', 'check', 'read a', 'read b', 'slice', 'check']);
     expect(geomFile(REF)).toBeDefined();
     expect(await prepareSlides({ slides: [slide([])], scale: 1 }, host({}))).toEqual([]);
   });
@@ -81,17 +88,27 @@ describe('prepare steps (M9 render-seams)', () => {
     });
     offs.push(registerPrepareStep(step('tables', ['x', 'y'])));
     offs.push(registerPrepareStep(step('vectors', ['y', 'z'])));
-    expect(prepareSteps().map((s) => s.name)).toEqual(['geometry files', 'tables', 'vectors']);
+    expect(prepareSteps().map((s) => s.name)).toEqual([
+      'shape drawers',
+      'geometry files',
+      'tables',
+      'vectors',
+    ]);
     const missing = await prepareSlides({ slides: [slide([])], scale: 2 }, host({}));
     expect(order).toEqual(['tables 1 2', 'tables slice', 'vectors 1 2', 'vectors slice']);
     expect(missing).toEqual(['x', 'y', 'z']);
     // A step of the same name replaces the registered one in its place; removal leaves the rest.
     const again = step('tables', []);
     const off = registerPrepareStep(again);
-    expect(prepareSteps().map((s) => s.name)).toEqual(['geometry files', 'tables', 'vectors']);
-    expect(prepareSteps()[1]).toBe(again);
+    expect(prepareSteps().map((s) => s.name)).toEqual([
+      'shape drawers',
+      'geometry files',
+      'tables',
+      'vectors',
+    ]);
+    expect(prepareSteps()[2]).toBe(again);
     off();
-    expect(prepareSteps().map((s) => s.name)).toEqual(['geometry files', 'vectors']);
+    expect(prepareSteps().map((s) => s.name)).toEqual(['shape drawers', 'geometry files', 'vectors']);
   });
 
   it('stops at a cancelled job (the host’s check throws) before the next step', async () => {
@@ -114,5 +131,49 @@ describe('prepare steps (M9 render-seams)', () => {
     };
     await expect(prepareSlides({ slides: [slide([])], scale: 1 }, cancelled)).rejects.toThrow('cancelled');
     expect(ran).toBe(false);
+  });
+});
+
+describe('the shape drawers step (M9 drawers loaded per object kind)', () => {
+  const table = (id: string) => ({
+    id,
+    objects: [
+      {
+        id: 't',
+        type: 'shape',
+        box: { x: 0, y: 0, w: 100, h: 50, rotation: 0 },
+        shape: 'rect',
+        opacity: 1,
+        radius: 0,
+        table: { cols: [100], rows: [50], cells: [{ text: 'Hi' }], base: {} },
+      },
+    ],
+  });
+
+  it("loads a table's drawer before the draw, only for a look that draws the slide as authored", async () => {
+    const loaded: string[] = [];
+    let registered = false;
+    offs.push(
+      registerShapeDrawerLoader('chart', async () => {
+        loaded.push('chart');
+        offs.push(registerShapeDrawer('chart', () => true));
+        registered = true;
+      }),
+    );
+    const chart = {
+      id: 'c',
+      objects: [{ ...table('x').objects[0]!, table: undefined, chart: { kind: 'bar' } }],
+    } as unknown as Slide;
+    // A lyric-only look draws no chart: nothing is loaded.
+    const lyricOnly = { layers: { slide: { mode: 'lyricOnly' } } } as never;
+    await shapeDrawers.run({ slides: [chart], scale: 1, look: lyricOnly }, host({}));
+    expect(loaded).toEqual([]);
+    await shapeDrawers.run({ slides: [table('a') as unknown as Slide, chart], scale: 1 }, host({}));
+    expect(loaded).toEqual(['chart']);
+    expect(registered).toBe(true);
+    expect(shapeDrawerRegistered('table')).toBe(true);
+    // Loaded once: a later slide with the same kinds loads nothing.
+    await shapeDrawers.run({ slides: [chart], scale: 1 }, host({}));
+    expect(loaded).toEqual(['chart']);
   });
 });

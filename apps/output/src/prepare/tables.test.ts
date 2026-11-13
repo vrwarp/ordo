@@ -1,5 +1,6 @@
 import { DEFAULT_LYRIC_STYLE, LOOK_MAIN, type Look, type Slide, type TableCell } from '@ordo/domain';
-import { LEGACY_FONT_ENV, clampSlide, clearTableCache, layoutTable } from '@ordo/renderer';
+import { LEGACY_FONT_ENV, clampSlide } from '@ordo/renderer';
+import { clearTableCache, layoutTable } from '@ordo/renderer/table/index.ts';
 import { testMeasurer } from '@ordo/renderer/text/test-util.ts';
 import { afterEach, describe, expect, it } from 'vitest';
 import { type PrepareHost, prepareSteps } from './index.ts';
@@ -74,7 +75,7 @@ function slowMeasurer(ms: number) {
 
 describe('the table prepare step (M9)', () => {
   it('is registered after the geometry files', () => {
-    expect(prepareSteps().map((s) => s.name)).toEqual(['geometry files', 'table layouts']);
+    expect(prepareSteps().map((s) => s.name)).toEqual(['shape drawers', 'geometry files', 'table layouts']);
   });
 
   it(`lays a large table out in slices of about ${TABLE_SLICE_MS} ms, and the draw then lays out nothing`, async () => {

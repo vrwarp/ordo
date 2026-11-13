@@ -781,9 +781,11 @@ whether.
   shadow), shared through `@ordo/domain` `Palette`; a path too long for one part is a `cont` chain. Caps:
   256 parts, 64 paints, 16,384 points, 24 shadowed shapes. A decoration over `GEOM_FILE_CHARS` goes to a
   decoration file (`DecorData.ref`, `pptxdecor:<n>`, `EmitResult.decors`) when `EmitOptions.m9Writes` has
-  'decorFile' (the hub's and the client's `M9_WRITES` leave it out until `decor-render` names the files: their
-  decorations keep their parts in the slide). With 'decor' out of `EmitOptions.m9Writes` the members are
-  emitted one by one; with `EmitOptions.sheets: false` every picture is its own object.
+  'decorFile'. With 'decor' out of `EmitOptions.m9Writes` (the hub's and the client's `M9_WRITES` until
+  `decor-render` draws decorations) no decoration is planned at all, and with `sheets: false` (theirs until it
+  stores sheets) no composite or atlas: `ParseOptions.m9Writes` and `sheets` reach the budgets
+  (`BudgetOptions`), every member and picture is its own object, and the guard leaves the topmost past 190
+  objects or the render clamp's 16 pictures out and lists them.
 - **Kept whole** (the wave 1 re-review): `emit.ts` `fitDrawing` and `fitEffects` no longer flatten an object
   past the slide's drawing or effect budget to its legacy copy (its gradient, geometry, dash, ends and effects
   stay, so the editor still edits it and a radial glow stays a glow); `walk.ts` no longer sends a shape past

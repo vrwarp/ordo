@@ -204,7 +204,12 @@ export function PresentationPanel({ p, readOnly }: { p: Presentation; readOnly: 
         </div>
       )}
 
-      {/* 4. Slides / Deck Specific Reports */}
+      {/* 4. Slides / Deck Specific Reports (a loop from PowerPoint too: its report offers 'Treat as slides') */}
+      {p.kind === 'loop' && p.source?.kind === 'pptx' && (
+        <div className="col" style={{ gap: 8, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+          <PptxReport p={p} readOnly={readOnly} />
+        </div>
+      )}
       {p.kind === 'slides' && (
         <div className="col" style={{ gap: 8, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
           <PptxReport p={p} readOnly={readOnly} />

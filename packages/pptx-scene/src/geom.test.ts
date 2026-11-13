@@ -1498,7 +1498,7 @@ describe('classification (M6: geometry, gradients and lines are native)', () => 
 });
 
 describe('an older build (design/27 §3.2, §14.7)', () => {
-  it('parses the slides with the previous schema, stripped to shapes it still draws', () => {
+  it('parses the slides with the previous schema, kept, beside the legacy shapes a build without M6 drew', () => {
     const grad =
       '<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill>';
     const { slide } = emitOne({
@@ -1523,11 +1523,10 @@ describe('an older build (design/27 §3.2, §14.7)', () => {
     });
     const old = prev.Slide.parse(slide);
     const [, star, cust, route, image] = old.objects;
-    // Everything but the new fields (M6's, and the M4 scaffold's origin) is kept as written.
-    const { geom: _g, gradient: _gr, flipH: _f, origin: _o, ...legacy } = slide.objects[1] as ShapeObject;
-    expect(star).toEqual(legacy);
-    for (const o of old.objects)
-      for (const k of ['geom', 'gradient', 'flipH', 'ends', 'mask']) expect(o).not.toHaveProperty(k);
+    // The previous release (0.5.0) has M6: everything is kept as written.
+    expect(star).toEqual(slide.objects[1]);
+    expect(old.objects.map((o) => 'geom' in o || 'mask' in o)).toEqual([false, true, true, true, true]);
+    // Beside the geometry, the legacy shape a build without it drew.
     expect(star).toMatchObject({ type: 'shape', shape: 'rect', fill: RED });
     expect(cust).toMatchObject({ type: 'shape', shape: 'rect', fill: RED });
     // The curved connector: the straight line between its ends.

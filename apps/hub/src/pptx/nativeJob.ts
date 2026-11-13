@@ -85,7 +85,7 @@ import {
   type TextObject,
   utf8Bytes,
 } from '@ordo/domain';
-import { type PptxClientScene, remapMediaIds } from '@ordo/importers';
+import { LOOP_IMPORT_NOTE, type PptxClientScene, remapMediaIds } from '@ordo/importers';
 import { clampBox, sanitizePresentation } from '@ordo/importers/sanitize.ts';
 import {
   addNote,
@@ -1270,6 +1270,7 @@ class NativeImport {
       if (c && !c.rescued && d.cls !== 'picture') {
         if (this.lo) {
           if (d.art) d.artKinds = artKinds(c.s.classification.reasons);
+          this.budgetLeft(d, c.s);
         } else this.gaps(d, c.s);
       }
       if (d.cls === 'picture') toPicture(d);
@@ -1281,6 +1282,17 @@ class NativeImport {
         `the speaker notes of ${notesCut} slide(s) were cut: a presentation keeps at most ${NOTES_TOTAL_BYTES / 1024 ** 2} MB of notes`,
       );
     return drafts;
+  }
+
+  /**
+   * M9, with LibreOffice: what the slide budgets' guard left out (`EmittedSlide.missing`, which lists nothing
+   * else when the converter plans for LibreOffice) is listed as dropped: LibreOffice draws no budget's art, so
+   * nothing draws it (`provenance` writes it to `Slide.pptx.missing` either way). The slide is then hybrid.
+   */
+  private budgetLeft(d: Draft, e: EmittedSlide): void {
+    for (const m of Array.isArray(e.missing) ? e.missing : [])
+      if (typeof m === 'string') d.dropped = addMissing(d.dropped, m);
+    if (d.dropped?.length && d.cls === 'native') d.cls = 'hybrid';
   }
 
   /**
@@ -1657,7 +1669,7 @@ class NativeImport {
       p.loop = {
         defaultSlideMs: mostCommon(drafts.map((d) => d.slide.durationMs ?? 0).filter((v) => v > 0)),
       };
-      this.log.add('info', 'a looping show with every slide timed: imported as a loop');
+      this.log.add('info', LOOP_IMPORT_NOTE);
     }
     // One background on every slide becomes the presentation's, so the pickers swap it (the pro7 pattern). A
     // motion background stays the slides': goLive does not wait for a slide's clip (design/27 §8).

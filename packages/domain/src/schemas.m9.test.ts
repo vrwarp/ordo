@@ -28,7 +28,8 @@ import { CAMERA_PRESETS, LIGHT_RIGS, MATERIALS } from './three-names.ts';
  * The M9 stored fields (design/27 M9, plan §3): each parsed and kept by the current schema; a malformed one
  * dropped by its own `.catch(undefined)` without failing the slide, the object keeping the legacy fields an
  * older build draws; enums degrading to their defaults; every array, string and number bounded; and the
- * previous release's schema stripping them all.
+ * previous release's schema (main's 0.5.0) stripping them all while keeping what it knew (geometry, provenance,
+ * picture shadow and soft edge, midiCues, bottomThirdText, line masks).
  */
 
 type Obj = Record<string, unknown>;
@@ -211,16 +212,23 @@ describe('the M9 fields', () => {
     expect(r.success).toBe(true);
     const old = r.data! as unknown as Slide;
     const M9_KEYS = ['table', 'chart', 'decor', 'look3d', 'warp', 'writing', 'centerBlock', 'vectorFonts'];
-    for (const o of old.objects) for (const k of [...M9_KEYS, 'geom']) expect(o).not.toHaveProperty(k);
-    expect(old).not.toHaveProperty('pptx');
+    for (const o of old.objects) for (const k of M9_KEYS) expect(o).not.toHaveProperty(k);
+    // 0.5.0 knows geometry and provenance (M6, M3): it keeps them without M9's adjWide and missing list.
+    expect((byId(old, 'pie').geom as Obj) ?? {}).not.toHaveProperty('adjWide');
+    expect(old.pptx).toBeDefined();
+    expect(old.pptx).not.toHaveProperty('missing');
     // What an older build draws: the table's background, the chart area, nothing for the decoration, the
-    // pie's legacy shape, the picture flat, the text unwarped and horizontal.
+    // pie's preset at the clamped angle, the picture flat, the text unwarped and horizontal.
     expect(byId(old, 'table')).toMatchObject({ type: 'shape', shape: 'rect', fill: { r: 255 } });
     expect(byId(old, 'chart')).toMatchObject({ type: 'shape', shape: 'rect', fill: { r: 255 } });
     const decor = byId(old, 'decor');
     expect(decor).toMatchObject({ type: 'shape', shape: 'line' });
     expect(decor).not.toHaveProperty('stroke');
-    expect(byId(old, 'pie')).toMatchObject({ shape: 'ellipse', fill: { r: 240 } });
+    expect(byId(old, 'pie')).toMatchObject({
+      shape: 'ellipse',
+      fill: { r: 240 },
+      geom: { preset: 'pie', adj: [['adj2', 10_000_000]] },
+    });
     expect(byId(old, 'emf')).toMatchObject({ type: 'image', mediaId: 'vector-media' });
     expect(byId(old, 'title')).toMatchObject({ text: 'He is risen!', style: { fontSizePx: 102 } });
     expect(byId(old, 'vertical')).toMatchObject({ box: { rotation: 90 }, text: '主は私の羊飼い' });

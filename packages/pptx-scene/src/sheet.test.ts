@@ -346,3 +346,53 @@ describe('applySheet (the pixels of a sheet)', () => {
     );
   });
 });
+
+describe('without sheets (the M9 rollout: the hub and the client store none yet)', () => {
+  /** One slide of `n` distinct pictures, of growing size. */
+  function distinct(n: number) {
+    const parts = Array.from({ length: n }, (_, i) => `q${i}.png`);
+    let shapes = '';
+    parts.forEach((_, i) => {
+      const size = IN * (0.4 + i / 20);
+      shapes += pic({
+        id: 2 + i,
+        x: (i % 6) * 1.6 * IN,
+        y: Math.floor(i / 6) * 1.6 * IN,
+        cx: size,
+        cy: size,
+        rId: `rId${2 + i}`,
+      });
+    });
+    return buildDeck({ slides: [{ rels: rels(parts), shapes }] });
+  }
+
+  it('draws more than 12 distinct pictures each as itself: no atlas, no sheet placeholder, nothing missing', () => {
+    const parts = distinct(14);
+    // With sheets (the default) the three smallest go into an atlas.
+    expect(convertDeck(parts).slides[0]!.classification.atlas).toHaveLength(3);
+    const out = convertDeck(parts, { sheets: false });
+    const s = out.slides[0]!;
+    expect(s.classification).toMatchObject({ class: 'native' });
+    expect(s.classification.atlas).toBeUndefined();
+    expect(out.sheets).toEqual([]);
+    expect(JSON.stringify(out)).not.toContain(SHEET_PREFIX);
+    const images = s.slide.objects.filter((o): o is ImageObject => o.type === 'image');
+    expect(new Set(images.map((o) => o.mediaId)).size).toBe(14);
+    expect(s.missing).toBeUndefined();
+    // Parsed alone the same way (`ParseOptions.sheets`).
+    expect(parseDeck(parts, { sheets: false }).slides[0]!.classification.atlas).toBeUndefined();
+  });
+
+  it('keeps the 16 the render clamp draws, and lists the topmost past them as missing', () => {
+    const s = convertDeck(distinct(20), { sheets: false }).slides[0]!;
+    const images = s.slide.objects.filter((o): o is ImageObject => o.type === 'image');
+    expect(new Set(images.map((o) => o.mediaId)).size).toBe(16);
+    // The four topmost (the last written) are left out, listed (a left-out picture is a 'decoration'), and
+    // the slide is hybrid.
+    expect(images.map((o) => o.mediaId)).not.toContain('pptxmedia:20');
+    expect(s.classification).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
+    expect(s.missing).toEqual(['decoration']);
+    expect(s.notes).toContain("4 element(s) past the slide's budgets are not drawn");
+    expect(Slide.safeParse(s.slide).success).toBe(true);
+  });
+});

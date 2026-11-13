@@ -363,21 +363,53 @@ export function fitSlideBudget(
 /**
  * The smallest form of a slide that keeps every text and picture (`fitSlideBudget`'s minimal level with
  * everything it may drop dropped): its shapes left out (tables kept), every text object and table without
- * runs and paragraph styles, the background kept (`backgroundMediaId`; a background drawn as a shape, origin
- * role 'bg', is a shape here and left out: the tail is sized to the presentation's 4 MiB, about 200 bytes a
- * slide). What the presentation's tail is stored as (`planImportSizes`), and what an import keeps of a slide
- * the schema refuses. Pure.
+ * runs and paragraph styles, and the background kept: `backgroundMediaId`, and a background drawn as a shape
+ * (origin role 'bg', the converter's page colour or the white under a background picture with alpha) as the
+ * slide's background colour alone (`plainBackground`: the bottom one, a plain rect in its colour, about 200
+ * bytes), so dark text is never drawn on the output's black. What the presentation's tail is stored as
+ * (`planImportSizes`, which counts those bytes), and what an import keeps of a slide the schema refuses.
+ * `page: false` leaves that shape out too: the hub's last resort for a deck that does not fit 4 MiB even
+ * minimal with its pages (about 2,000 slides), where 200 bytes a slide would cut every slide's text. Pure.
  */
-export function minimalSlide(slide: Slide): Slide {
+export function minimalSlide(slide: Slide, opts: { page?: boolean } = {}): Slide {
   const objects: SlideObject[] = [];
+  let page = opts.page === false;
   for (const o of objectsOf(slide)) {
     if (o.type === 'shape') {
       if (o.table) objects.push(plainTable(o));
+      else if (!page && isBackground(o)) {
+        const bg = plainBackground(o);
+        if (bg) {
+          objects.push(bg);
+          page = true;
+        }
+      }
       continue;
     }
     objects.push(o.type === 'text' ? plainText(o) : o);
   }
   return withLyric({ ...slide, objects });
+}
+
+/**
+ * A background drawn as a shape as its colour alone: a plain rect over its box in its fill (else its
+ * gradient's first stop, the colour an older build draws), at its opacity, keeping its id, origin and lock;
+ * undefined when it paints nothing.
+ */
+function plainBackground(o: Extract<SlideObject, { type: 'shape' }>): SlideObject | undefined {
+  const fill = o.fill ?? (Array.isArray(o.gradient?.stops) ? o.gradient.stops[0]?.color : undefined);
+  if (!fill) return undefined;
+  return {
+    id: o.id,
+    type: 'shape',
+    box: o.box,
+    shape: 'rect',
+    fill,
+    opacity: o.opacity ?? 1,
+    radius: 0,
+    ...(o.origin ? { origin: o.origin } : {}),
+    ...(o.locked ? { locked: true } : {}),
+  };
 }
 
 /**

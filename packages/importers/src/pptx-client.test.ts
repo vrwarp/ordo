@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { body, buildDeck, imageRel, para, pic, run, solid, sp } from '@ordo/pptx-scene/test-util.ts';
 import JSZip from 'jszip';
-import { CONVERTER_VERSION, importPptxClient } from './pptx-client.ts';
+import { CONVERTER_VERSION, importPptxClient, LOOP_IMPORT_NOTE } from './pptx-client.ts';
 import { remapMediaIds } from './remap.ts';
 
 const IN = 914_400;
@@ -122,5 +122,38 @@ describe('importPptxClient', () => {
     expect(result.loSlides[0]!.class).toBe('hybrid');
     expect(result.loSlides[0]!.art).toBeDefined();
     expect(result.pending).toBe(1);
+  });
+});
+
+describe('a looping PowerPoint show with every slide timed (the client path)', () => {
+  it('imports an announcement loop and says so in the import log, as the hub does', async () => {
+    const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+    const timed = (text: string) => ({
+      shapes: sp({ id: 2, x: IN, y: IN, cx: 6 * IN, cy: IN, txBody: body(para(run(text))) }),
+      after: '<p:transition advTm="5000"><p:fade/></p:transition>',
+    });
+    const parts = buildDeck({ slides: [timed('Amazing grace'), timed('How sweet the sound')] });
+    const enc = new TextEncoder();
+    const rels = new TextDecoder()
+      .decode(parts.get('ppt/_rels/presentation.xml.rels')!)
+      .replace(
+        '</Relationships>',
+        `<Relationship Id="rId90" Type="${NS_R}/presProps" Target="presProps.xml"/></Relationships>`,
+      );
+    parts.set('ppt/_rels/presentation.xml.rels', enc.encode(rels));
+    parts.set(
+      'ppt/presProps.xml',
+      enc.encode(
+        '<p:presentationPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="' +
+          NS_R +
+          '" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:showPr loop="1"/></p:presentationPr>',
+      ),
+    );
+    const z = new JSZip();
+    for (const [k, v] of parts) z.file(k, v);
+    const result = await importPptxClient(await z.generateAsync({ type: 'uint8array' }), 'Grace.pptx');
+    expect(result.presentation.kind).toBe('loop');
+    expect(result.presentation.loop).toEqual({ defaultSlideMs: 5000 });
+    expect(result.presentation.source?.log).toContain(LOOP_IMPORT_NOTE);
   });
 });

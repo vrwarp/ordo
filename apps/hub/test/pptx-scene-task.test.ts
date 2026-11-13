@@ -2,8 +2,8 @@
  * The worker side of the native import's `pptx-scene` task and the import report (M3 item B), in process:
  * what the scan reads for the job, a batch's transitions, and the bounded report.
  */
-import { importPptxClient } from '@ordo/importers';
-import { ALL_M9_FIELDS, convertDeck, DECOR_PREFIX } from '@ordo/pptx-scene';
+import { CLIENT_M9_WRITES, CLIENT_SHEETS, importPptxClient } from '@ordo/importers';
+import { ALL_M9_FIELDS, convertDeck, DECOR_PREFIX, SHEET_PREFIX } from '@ordo/pptx-scene';
 import { openPackage } from '@ordo/pptx-scene/opc.ts';
 import {
   body,
@@ -24,7 +24,7 @@ import JSZip from 'jszip';
 import { describe, expect, it } from 'vitest';
 import { ImportLog, importResult, missingFonts, SOURCE_LOG_CHARS } from '../src/pptx/report.ts';
 import { scanDeck, sceneTask } from '../src/pptx/sceneTask.ts';
-import { M9_WRITES } from '../src/pptx/shared.ts';
+import { M9_WRITES, PPTX_SHEETS } from '../src/pptx/shared.ts';
 
 const IN = 914_400;
 const enc = new TextEncoder();
@@ -115,7 +115,7 @@ describe('scanDeck', () => {
   });
 });
 
-describe('decoration files (M9 decor-conv, until decor-render names them)', () => {
+describe('decorations and sheets held back (the M9 rollout, until decor-render draws and stores them)', () => {
   /** A layout of 160 text-less rectangles of as many colours in one group: decorations past the object budget. */
   function decorated() {
     let shapes = '';
@@ -135,28 +135,70 @@ describe('decoration files (M9 decor-conv, until decor-render names them)', () =
     return buildDeck({ layouts: [{ shapes: group }], slides: [{ shapes: '' }] });
   }
 
-  it('stores no decoration file placeholder: the import keeps decorations whole in the slide', async () => {
+  /** One slide of `n` distinct pictures (each its own part). */
+  function pictures(n: number) {
+    const parts = Array.from({ length: n }, (_, i) => `q${i}.png`);
+    let shapes = '';
+    parts.forEach((_, i) => {
+      shapes += pic({
+        id: 2 + i,
+        x: (i % 6) * 1.6 * IN,
+        y: Math.floor(i / 6) * 1.6 * IN,
+        cx: IN,
+        cy: IN,
+        rId: `rId${2 + i}`,
+      });
+    });
+    return buildDeck({ slides: [{ rels: parts.map((p, i) => imageRel(`rId${2 + i}`, p)), shapes }] });
+  }
+
+  async function clientParse(parts: Map<string, Uint8Array>, name: string) {
+    const zip = new JSZip();
+    for (const [k, v] of parts) zip.file(k, v);
+    return importPptxClient(await zip.generateAsync({ type: 'uint8array' }), name);
+  }
+
+  it('writes no decoration while no drawer draws one: every shape drawn as itself, no placeholder', async () => {
+    expect(M9_WRITES.has('decor')).toBe(false);
     expect(M9_WRITES.has('decorFile')).toBe(false);
+    expect([...CLIENT_M9_WRITES].sort()).toEqual([...M9_WRITES].sort());
     const parts = decorated();
-    // With every field the converter writes decoration files (`pptxdecor:<n>`), which nothing names yet.
+    // With every field the converter draws them as decorations, in decoration files (`pptxdecor:<n>`).
     const all = convertDeck(parts, { m9Writes: ALL_M9_FIELDS });
     expect(all.decors.length).toBeGreaterThan(0);
-    // The hub's batch (`M9_WRITES`): the same decorations, their parts inline, no placeholder.
+    // The hub's batch (`M9_WRITES`): no decoration, each of the 160 shapes its own object.
     const out = sceneTask({ parts, pictureSizes: [], range: { from: 0, to: 1 }, options: {} });
     expect(out.result.decors).toEqual([]);
     const [s] = out.result.slides;
-    const decors = s!.slide.objects.filter((o) => o.type === 'shape' && o.decor);
-    expect(decors.length).toBeGreaterThan(0);
-    for (const o of decors) if (o.type === 'shape') expect(o.decor!.parts.length).toBeGreaterThan(0);
+    expect(s!.slide.objects.some((o) => o.type === 'shape' && o.decor)).toBe(false);
+    expect(s!.slide.objects.filter((o) => o.type === 'shape' && o.origin?.role !== 'bg')).toHaveLength(160);
+    expect(s!.missing).toBeUndefined();
     expect(JSON.stringify(out.result)).not.toContain(DECOR_PREFIX);
-    // The client's parse (`CLIENT_M9_WRITES`) and the scene it sends the hub: none either.
-    const zip = new JSZip();
-    for (const [k, v] of parts) zip.file(k, v);
-    const parsed = await importPptxClient(await zip.generateAsync({ type: 'uint8array' }), 'Decorated.pptx');
+    // The client's parse (`CLIENT_M9_WRITES`) and the scene it sends the hub: the same.
+    const parsed = await clientParse(parts, 'Decorated.pptx');
     expect(JSON.stringify(parsed.clientScene)).not.toContain(DECOR_PREFIX);
     expect(JSON.stringify(parsed.presentation)).not.toContain(DECOR_PREFIX);
     const shown = parsed.clientScene.slides.flatMap((x) => x.slide.objects);
-    expect(shown.some((o) => o.type === 'shape' && o.decor && o.decor.parts.length > 0)).toBe(true);
+    expect(shown.some((o) => o.type === 'shape' && o.decor)).toBe(false);
+  });
+
+  it('draws no picture from a sheet: a slide of 14 distinct pictures keeps every one, on both paths', async () => {
+    expect(PPTX_SHEETS).toBe(false);
+    expect(CLIENT_SHEETS).toBe(PPTX_SHEETS);
+    const parts = pictures(14);
+    // With sheets the converter packs three into an atlas (`pptxmedia:sheet<n>`), which nothing stores yet.
+    expect(convertDeck(parts).sheets.length).toBeGreaterThan(0);
+    const out = sceneTask({ parts, pictureSizes: [], range: { from: 0, to: 1 }, options: {} });
+    expect(out.result.sheets).toEqual([]);
+    expect(JSON.stringify(out.result)).not.toContain(SHEET_PREFIX);
+    const [s] = out.result.slides;
+    const ids = new Set(s!.slide.objects.flatMap((o) => (o.type === 'image' ? [o.mediaId] : [])));
+    expect(ids.size).toBe(14);
+    expect(s!.missing).toBeUndefined();
+    const parsed = await clientParse(parts, 'Pictures.pptx');
+    expect(JSON.stringify(parsed.clientScene)).not.toContain(SHEET_PREFIX);
+    const shown = parsed.clientScene.slides[0]!.slide.objects.filter((o) => o.type === 'image');
+    expect(new Set(shown.map((o) => (o.type === 'image' ? o.mediaId : ''))).size).toBe(14);
   });
 });
 
