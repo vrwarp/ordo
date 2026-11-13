@@ -494,6 +494,9 @@ export function EditorView({ id }: { id: string }) {
     if (obj && slide) deleteSelection();
   };
   const looksShown = looksOpen ?? touchLandscape;
+  // A song in the Lyric Script has no stage pane: the Find card floats over the page there.
+  const reflow = p.kind === 'song' && (songMode ?? (coarse ? 'canvas' : 'reflow')) === 'reflow';
+  const findDocked = !reflow;
   // Touch: the keyboard-only actions as buttons, floating by the selected object (SlideCanvas places them).
   const objectTools =
     coarse && obj && !readOnly ? (
@@ -865,7 +868,7 @@ export function EditorView({ id }: { id: string }) {
           </button>
         </div>
       )}
-      {p.kind === 'song' && (songMode ?? (coarse ? 'canvas' : 'reflow')) === 'reflow' ? (
+      {reflow ? (
         <ErrorBoundary
           name="editor Lyric Script"
           resetKey={p}
@@ -911,6 +914,10 @@ export function EditorView({ id }: { id: string }) {
             onSwitchToReflow={p.kind === 'song' ? () => setSongMode('reflow') : undefined}
           />
           <div className="stagewrap">
+            {/* Docked in the stage pane: it never covers the slide list or the open Tune drawer's tabs. */}
+            {finding && findDocked && (
+              <FindReplaceDialog readOnly={readOnly} onClose={() => setFinding(false)} />
+            )}
             {readOnly && (
               <div className="banner" style={{ margin: 8 }} data-locked-banner>
                 {profile === 'edit'
@@ -1120,7 +1127,7 @@ export function EditorView({ id }: { id: string }) {
         </>
       )}
       {revisions && <RevisionsDialog id={p.id} readOnly={readOnly} onClose={() => setRevisions(false)} />}
-      {finding && <FindReplaceDialog readOnly={readOnly} onClose={() => setFinding(false)} />}
+      {finding && !findDocked && <FindReplaceDialog readOnly={readOnly} onClose={() => setFinding(false)} />}
       {bgPick && slide && !readOnly && (
         <MediaPickerDialog
           title="Choose slide background"

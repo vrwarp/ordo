@@ -2,7 +2,10 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, type Page, test } from '@playwright/test';
 import {
+  ANNOUNCEMENT_TEXT,
+  canvasPoint,
   churchDeck,
+  clickObject,
   editorHub,
   editorState,
   importDeck,
@@ -21,7 +24,13 @@ import { hubApi } from './linkhelpers.ts';
  * "Keys", "Errors", "Clipboard"):
  * - clipboard HTML from another page that claims to carry ordo objects the editor cannot use (no text, no
  *   style, a box no screen draws) is left out with a message; the slide, the canvas and the top bar stay
- *   (before, the object was added and the floating bar's read of its missing text blanked the whole app).
+ *   (before, the unusable object was added to the slide, and the hub refused the save).
+ * - b1: after Escape ends inline editing, the keys go back to the slide: ArrowRight nudges the box, Delete
+ *   deletes it, a second Escape drops the selection (before, the focus stayed in the hidden 1x1 backing
+ *   field: the arrows moved an invisible caret and Delete removed a letter).
+ * - Find's match row starts inline editing at the match on the canvas (before, it focused the hidden field,
+ *   so what was typed edited the match with no caret on screen), and the card is docked in the stage pane,
+ *   clear of the open Tune drawer's tabs (before, it was fixed over them).
  * Port M4_PORT + 11.
  */
 const PORT = M4_PORT + 11;
@@ -98,4 +107,115 @@ test('hostile objects pasted from another page are left out with a message; the 
   ).toBeVisible();
   await expect(page.locator('[data-page-error], [data-pane-error]')).toHaveCount(0);
   await page.screenshot({ path: join(OUT, 'after-hostile-paste.png') });
+});
+
+/** Whether the canvas's inline text editor is up. */
+const inlineEditing = (page: Page) => page.locator('[data-testid="ordo-inline-canvas-editor"]').count();
+/** The church deck's announcement on slide 2 (bold red date inside plain text). */
+const noteOf = (p: Parameters<typeof slidesOf>[0]) =>
+  slidesOf(p)[1]!.objects.find((o) => o.type === 'text' && o.text === ANNOUNCEMENT_TEXT)!;
+
+test('b1: after Escape ends inline editing, the arrows nudge the box, Delete deletes it, Escape deselects', async ({
+  page,
+}) => {
+  const a = await hubApi(PORT);
+  const p = await importDeck(a, deck);
+  const note = noteOf(p);
+  await openEditor(page, PORT, p.id);
+  await openSlide(page, 2);
+  await expect(page.getByLabel('Inspector drawer')).toHaveCount(0);
+  await expect(async () => {
+    await clickObject(page, note);
+    expect((await editorState(page)).objectId).toBe(note.id);
+  }).toPass({ timeout: 15_000 });
+
+  // Double-click into the text, then Escape: editing ends, the box stays selected.
+  const at = await canvasPoint(page, note.box.x + 40, note.box.y + 30);
+  await page.mouse.dblclick(at.x, at.y);
+  await expect.poll(() => inlineEditing(page)).toBe(1);
+  await page.keyboard.press('Escape');
+  await expect.poll(() => inlineEditing(page)).toBe(0);
+  expect((await editorState(page)).objectId).toBe(note.id);
+  // The hidden backing field no longer holds the focus.
+  expect(await page.evaluate(() => document.activeElement?.hasAttribute('data-backing-text') ?? false)).toBe(
+    false,
+  );
+  const count = (await slideObjects(page)).length;
+  const x0 = (await slideObjects(page)).find((o) => o.id === note.id)!.box.x;
+
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(async () => (await slideObjects(page)).find((o) => o.id === note.id)?.box.x).toBe(x0 + 1);
+  expect((await slideObjects(page)).find((o) => o.id === note.id)!.text).toBe(ANNOUNCEMENT_TEXT);
+  await page.keyboard.press('Delete');
+  await expect.poll(async () => (await slideObjects(page)).length).toBe(count - 1);
+  expect((await slideObjects(page)).some((o) => o.id === note.id)).toBe(false);
+  await page.keyboard.press('Control+z');
+  await expect.poll(async () => (await slideObjects(page)).length).toBe(count);
+
+  // Again: edit, Escape ends the editing, the next Escape drops the selection.
+  const back = (await slideObjects(page)).find((o) => o.id === note.id)!;
+  await expect(async () => {
+    await clickObject(page, back);
+    expect((await editorState(page)).objectId).toBe(note.id);
+  }).toPass({ timeout: 15_000 });
+  const at2 = await canvasPoint(page, back.box.x + 40, back.box.y + 30);
+  await page.mouse.dblclick(at2.x, at2.y);
+  await expect.poll(() => inlineEditing(page)).toBe(1);
+  await page.keyboard.press('Escape');
+  await expect.poll(() => inlineEditing(page)).toBe(0);
+  expect((await editorState(page)).objectId).toBe(note.id);
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => (await editorState(page)).objectId).toBeUndefined();
+});
+
+test("Find: a match row starts inline editing there; the card is docked in the stage, clear of the drawer's tabs", async ({
+  page,
+}) => {
+  const a = await hubApi(PORT);
+  const p = await importDeck(a, deck);
+  const note = noteOf(p);
+  await openEditor(page, PORT, p.id);
+
+  // The Slide drawer open (nothing selected), then Find: the card sits in the stage pane, not over the drawer.
+  await page.getByRole('button', { name: 'Tune', exact: true }).click();
+  const drawer = page.getByLabel('Inspector drawer');
+  await expect(drawer).toBeVisible();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('Control+f');
+  const card = page.getByRole('dialog').filter({ hasText: 'Find and replace' });
+  await expect(card).toBeVisible();
+  const c = (await card.boundingBox())!;
+  const stage = (await page.locator('.stagewrap').boundingBox())!;
+  expect(c.x).toBeGreaterThanOrEqual(stage.x);
+  expect(c.x + c.width).toBeLessThanOrEqual(stage.x + stage.width + 0.5);
+  for (const name of ['Object', 'Slide', 'Presentation']) {
+    const t = (await drawer.getByRole('button', { name, exact: true }).boundingBox())!;
+    const overlap =
+      t.x < c.x + c.width && c.x < t.x + t.width && t.y < c.y + c.height && c.y < t.y + t.height;
+    expect(overlap, `the Find card covers the drawer's ${name} tab`).toBe(false);
+  }
+  // The drawer's tabs still take a click with the card open.
+  await drawer.getByRole('button', { name: 'Presentation', exact: true }).click();
+  await drawer.getByRole('button', { name: 'Close inspector' }).click();
+
+  // A row: slide 2 opens and inline editing starts with 'hall' selected; typing replaces it on the canvas.
+  await card.getByLabel('Find', { exact: true }).fill('hall');
+  await card.locator('[data-find-row]').first().getByRole('button').click();
+  await expect.poll(async () => (await editorState(page)).slideId).toBe(slidesOf(p)[1]!.id);
+  await expect.poll(() => inlineEditing(page)).toBe(1);
+  // The canvas's editor takes the focus (its text field) on the next frame.
+  await expect(page.locator('#ordo-text-editor')).toBeFocused();
+  await page.keyboard.type('room');
+  await expect
+    .poll(async () => (await slideObjects(page)).find((o) => o.id === note.id)?.text)
+    .toBe(ANNOUNCEMENT_TEXT.replace('hall', 'room'));
+  // Escape ends the editing (the card stays), the next closes the card, the next drops the selection.
+  await page.keyboard.press('Escape');
+  await expect.poll(() => inlineEditing(page)).toBe(0);
+  await expect(card).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(card).toHaveCount(0);
+  expect((await editorState(page)).objectId).toBe(note.id);
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => (await editorState(page)).objectId).toBeUndefined();
 });

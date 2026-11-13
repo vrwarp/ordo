@@ -46,7 +46,7 @@ import {
   undo,
   useEditor,
 } from './editorStore.ts';
-import { historyKey } from './editorKeys.ts';
+import { BACKING_FIELD, historyKey, releaseBackingField } from './editorKeys.ts';
 import { barState, shortcutOf, togglePatch } from './FormatBar.tsx';
 import { refocusText, textField } from './formatControls.tsx';
 import {
@@ -707,6 +707,13 @@ export function SlideCanvas(props: {
     (selectedCount === 1 && selectedId
       ? drawn.objects.find((x): x is TextObject => x.id === selectedId && x.type === 'text')
       : undefined);
+  // Inline editing ended (Escape, a click away): the hidden backing field gives the keys back to the slide.
+  const wasEditing = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const was = wasEditing.current;
+    wasEditing.current = inlineEditingId;
+    if (was && !inlineEditingId) releaseBackingField();
+  }, [inlineEditingId]);
   const [caretVisible, setCaretVisible] = useState(true);
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset blink phase on any cursor or text change
   useEffect(() => {
@@ -951,6 +958,7 @@ export function CanvasBackingTextEditor({ obj, readOnly }: { obj: TextObject; re
     <textarea
       id="ordo-text-editor"
       aria-label="Text"
+      {...{ [BACKING_FIELD]: '' }}
       value={obj.text}
       disabled={readOnly}
       style={{

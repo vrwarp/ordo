@@ -320,7 +320,14 @@ cells in place of the shape fields).
   its own keys (Ctrl+S still saves); a focused button, link, radio or menu item keeps Enter, Space, the
   arrows (a radio group moves between its choices without nudging the box) and Delete, and only the Ctrl
   commands (undo, redo, duplicate, find) apply; with the focus on the slide canvas or the page, Delete, the
-  arrow nudges, Enter (edit the text) and Escape (drop the selection) apply too.
+  arrow nudges, Enter (edit the text) and Escape (drop the selection) apply too. The non-modal Find card
+  (`data-nonmodal`) is not a dialog for this: its fields are fields and the canvas keeps every shortcut
+  while it is open. In the canvas-first layout a selected text box has a hidden backing text field
+  (`#ordo-text-editor` marked `data-backing-text`, SlideCanvas.tsx), which the inline editor and the
+  floating bar type and format through; when inline editing ends (Escape, a click away) and that field
+  still has the focus, it is blurred (`releaseBackingField`), so the next ArrowRight nudges the box, Delete
+  deletes it and Escape drops the selection, instead of moving an invisible caret or deleting letters
+  nobody sees.
 - Groups and locked objects (design/27 §11 item 5 and "Locked objects"; pure ops in `views/editor/ops/group.ts`,
   the panel's parts in `GroupPanel.tsx`). The selection is a set of objects with a primary one, which the
   Object panel edits. A click on an object of a group (`origin.group`: a flattened PowerPoint group, or a
@@ -386,7 +393,12 @@ cells in place of the shape fields).
   Whole words (letters, marks and digits are word characters; a typed space also finds a no-break space);
   the count ('3 matches on 2 slides', a polite live region) and every match listed by slide number with the
   text around it before anything is replaced, hidden slides included and tagged, locked objects left out; a
-  listed match opens its slide with the match selected in the text field; Replace all replaces every match
+  listed match opens its slide and starts inline editing on the canvas with the match selected
+  (`goToMatch`; under the live lock, on a locked box or on a slide that shows its PowerPoint picture the
+  match is only highlighted), so what is typed next shows where it lands. The card is non-modal and docked
+  at the top right of the stage pane (in the Lyric Script, which has no stage, it floats over the page): it
+  never covers the slide list or the open Tune drawer's tabs, and the floating bar keeps clear of it. Escape
+  ends inline editing first, then closes the card, then drops the selection. Replace all replaces every match
   as typing the same change in the text field would: only the part of the match that differs is replaced
   and takes the formatting of the text it replaces (a bold red date stays bold and red, the plain words a
   match also covers stay plain; the box style and its stored fit are untouched). A match on a slide that

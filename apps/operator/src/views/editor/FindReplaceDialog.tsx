@@ -1,7 +1,9 @@
 import { type Presentation, slideContent } from '@ordo/domain';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { findAndReplace } from './actions.ts';
-import { selectObject, selectSlide, setTextRange, useEditor } from './editorStore.ts';
+import { getSlide } from './ops.ts';
+import { isLocked } from './ops/group.ts';
+import { selectObject, selectSlide, setTextRange, startInlineEditing, useEditor } from './editorStore.ts';
 import { type FindOptions, findText, type TextMatch } from './ops/slides.ts';
 
 /*
@@ -342,6 +344,25 @@ export function FindReplaceView(props: FindReplaceViewProps) {
 }
 
 /**
+ * A match row's click (or ↑/↓ and Enter in the card): its slide opens and the match is selected. Where the
+ * volunteer can edit it (not live-locked, a box the canvas draws and does not lock), inline editing starts on
+ * the canvas with the match selected, so what is typed or deleted next shows there; before, the focus went
+ * to the canvas-first editor's hidden text field and edited the match with no caret on screen. Otherwise
+ * the match is only highlighted. Whether inline editing started.
+ */
+export function goToMatch(r: FindRow, readOnly: boolean): boolean {
+  selectSlide(r.slideId);
+  selectObject(r.objectId);
+  const range = { start: r.start, end: r.end, caret: r.end };
+  setTextRange(range);
+  const st = useEditor.getState();
+  const o = st.draft ? getSlide(st.draft, r.slideId)?.objects.find((x) => x.id === r.objectId) : undefined;
+  if (readOnly || r.unseen || o?.type !== 'text' || isLocked(o)) return false;
+  startInlineEditing(r.objectId, range);
+  return true;
+}
+
+/**
  * Floating non-modal Find & Replace bound to the editor: highlights matches live on `SlideCanvas` as you
  * type or step through matches without blocking the stage.
  */
@@ -366,19 +387,10 @@ export function FindReplaceDialog({ readOnly, onClose }: { readOnly: boolean; on
   const matches = useMemo(() => (draft ? findText(draft, find, opts, COUNT_LIMIT) : []), [draft, find, opts]);
   const rows = useMemo(() => (draft ? findRows(draft, matches) : []), [draft, matches]);
 
-  const highlightMatchOnStage = (r: FindRow, focusEditor = false) => {
+  const highlightMatchOnStage = (r: FindRow) => {
     selectSlide(r.slideId);
     selectObject(r.objectId);
     setTextRange({ start: r.start, end: r.end, caret: r.end });
-    if (focusEditor) {
-      setTimeout(() => {
-        const el = document.getElementById('ordo-text-editor') as HTMLTextAreaElement | null;
-        if (!el) return;
-        el.focus();
-        el.setSelectionRange(r.start, r.end);
-        el.dispatchEvent(new Event('select', { bubbles: true }));
-      }, 0);
-    }
   };
 
   // Auto-preview the first match live on the stage when typing!
@@ -386,7 +398,7 @@ export function FindReplaceDialog({ readOnly, onClose }: { readOnly: boolean; on
   useEffect(() => {
     setActiveIdx(0);
     if (rows[0]) {
-      highlightMatchOnStage(rows[0], false);
+      highlightMatchOnStage(rows[0]);
     }
   }, [find, opts.case, opts.wholeWord]);
 
@@ -403,7 +415,7 @@ export function FindReplaceDialog({ readOnly, onClose }: { readOnly: boolean; on
     if (!rows.length) return;
     const next = (activeIdx + delta + rows.length) % rows.length;
     setActiveIdx(next);
-    highlightMatchOnStage(rows[next]!, false);
+    highlightMatchOnStage(rows[next]!);
   };
 
   return (
@@ -430,7 +442,8 @@ export function FindReplaceDialog({ readOnly, onClose }: { readOnly: boolean; on
       onStep={stepMatch}
       onGo={(r, idx) => {
         if (idx !== undefined) setActiveIdx(idx);
-        highlightMatchOnStage(r, true);
+        // The focus leaves the card for the canvas: closing the card later must not pull it back.
+        if (goToMatch(r, readOnly)) restore.current = false;
       }}
       onClose={onClose}
     />
