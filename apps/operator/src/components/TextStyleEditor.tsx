@@ -589,7 +589,7 @@ export function TextStyleEditor(props: {
                 value={s.wrap !== false}
                 onChange={(on) => setOpt('wrap', on ? undefined : false)}
               />
-              <div className="grid4" style={{ gap: 6 }}>
+              <div className="grid2" style={{ gap: 6 }}>
                 {(
                   [
                     ['l', 'Inset left'],
@@ -609,7 +609,6 @@ export function TextStyleEditor(props: {
                     value={ins[side]}
                     min={0}
                     onChange={(v) => props.onChange(withInset(s, side, v), 'insets')}
-                    width={60}
                   />
                 ))}
               </div>

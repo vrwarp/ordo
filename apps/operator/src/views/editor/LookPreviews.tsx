@@ -73,6 +73,7 @@ const LookPreview = memo(function LookPreview(props: {
     };
   }, [key]);
   const c = look.clearColor;
+  const isKey = look.kind === 'stream' || (c.g > 200 && c.r < 60 && c.b < 60);
   return (
     <figure
       className="look-preview"
@@ -80,13 +81,20 @@ const LookPreview = memo(function LookPreview(props: {
       data-look-id={look.id}
       data-rendered={shown?.key === key ? 'current' : shown ? 'stale' : 'pending'}
     >
-      <div className="look-preview-frame" style={{ background: `rgba(${c.r},${c.g},${c.b},${c.a})` }}>
+      <figcaption className="look-preview-hdr">
+        <span className="look-preview-name">{look.name}</span>
+        {isKey ? (
+          <span className="look-key-badge">KEY</span>
+        ) : (
+          <span className="muted small">{LOOK_ROLE[look.kind]}</span>
+        )}
+      </figcaption>
+      <div
+        className={`look-preview-frame${isKey ? ' color-checkerboard' : ''}`}
+        style={isKey ? undefined : { background: `rgba(${c.r},${c.g},${c.b},${c.a})` }}
+      >
         {shown && <img src={shown.url} alt={`${look.name} preview`} />}
       </div>
-      <figcaption>
-        <span className="look-preview-name">{look.name}</span>
-        <span className="muted small">{LOOK_ROLE[look.kind]}</span>
-      </figcaption>
     </figure>
   );
 });

@@ -186,17 +186,16 @@ export function BoxEditor(props: { value: Box; onChange: (b: Box) => void; rotat
   const b = props.value;
   const set = (patch: Partial<Box>) => props.onChange({ ...b, ...patch });
   return (
-    <div className="grid4">
-      <NumberField label="X" value={b.x} onChange={(x) => set({ x })} width={70} />
-      <NumberField label="Y" value={b.y} onChange={(y) => set({ y })} width={70} />
-      <NumberField label="W" value={b.w} min={1} onChange={(w) => set({ w })} width={70} />
-      <NumberField label="H" value={b.h} min={1} onChange={(h) => set({ h })} width={70} />
+    <div className="ed-box-grid">
+      <NumberField label="X" value={b.x} onChange={(x) => set({ x })} />
+      <NumberField label="Y" value={b.y} onChange={(y) => set({ y })} />
+      <NumberField label="W" value={b.w} min={1} onChange={(w) => set({ w })} />
+      <NumberField label="H" value={b.h} min={1} onChange={(h) => set({ h })} />
       {props.rotation !== false && (
         <NumberField
           label="Rotation"
           value={b.rotation ?? 0}
           onChange={(rotation) => set({ rotation })}
-          width={70}
           suffix="°"
         />
       )}

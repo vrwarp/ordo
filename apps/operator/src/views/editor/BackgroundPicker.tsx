@@ -41,20 +41,23 @@ export function MediaPickerDialog(props: {
   const media = useLibrary((s) => s.data.media);
   const [q, setQ] = useState('');
   const [all, setAll] = useState(!props.backgroundsFirst);
+  const [kindFilter, setKindFilter] = useState<'all' | 'image' | 'video'>('all');
+  const showKindTabs = !props.kinds || props.kinds.length > 1;
   const list = useMemo(
     () =>
       media.filter(
         (m) =>
           (!props.kinds || props.kinds.includes(m.kind)) &&
+          (!showKindTabs || kindFilter === 'all' || m.kind === kindFilter) &&
           (all || m.isBackground) &&
           (!q || m.name.toLowerCase().includes(q.toLowerCase())),
       ),
-    [media, q, all, props.kinds],
+    [media, q, all, props.kinds, showKindTabs, kindFilter],
   );
   return (
     <Dialog title={props.title} onClose={props.onClose} width={900}>
       <div className="col">
-        <div className="row">
+        <div className="row wrap">
           <input
             className="grow"
             placeholder="Search"
@@ -62,6 +65,26 @@ export function MediaPickerDialog(props: {
             onChange={(e) => setQ(e.target.value)}
             autoFocus
           />
+          {showKindTabs && (
+            <div className="ed-seg-bar" role="group" aria-label="Filter media type">
+              {(
+                [
+                  ['all', 'All'],
+                  ['image', 'Images'],
+                  ['video', 'Videos'],
+                ] as const
+              ).map(([k, label]) => (
+                <button
+                  key={k}
+                  type="button"
+                  className={`small${kindFilter === k ? ' on' : ''}`}
+                  onClick={() => setKindFilter(k)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
           {props.backgroundsFirst && (
             <label className="check">
               <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> Show all
@@ -111,7 +134,19 @@ export function MediaPickerDialog(props: {
                 title={blocked ? `${m.name}: ${blocked}` : m.name}
                 onClick={() => props.onPick(m)}
               >
-                <div className="img" style={{ backgroundImage: h ? `url(${fileUrl(h)})` : undefined }} />
+                <div
+                  className="img"
+                  style={{
+                    backgroundImage: h
+                      ? `url(${fileUrl(h)})`
+                      : m.kind === 'video'
+                        ? 'linear-gradient(135deg, #1e1b4b 0%, #0f766e 100%)'
+                        : undefined,
+                    position: 'relative',
+                  }}
+                >
+                  {m.kind === 'video' && <span className="ed-video-badge">▶ Video</span>}
+                </div>
                 <div className="cap">
                   <span className="ellipsis grow">{m.name}</span>
                   {m.state !== 'ready' && <span className="tag amber">{m.state}</span>}

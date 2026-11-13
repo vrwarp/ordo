@@ -162,6 +162,13 @@ export function FindReplaceView(props: FindReplaceViewProps) {
           </button>
           <button
             type="button"
+            disabled={!props.rows.length}
+            onClick={() => props.rows[0] && props.onGo(props.rows[0])}
+          >
+            Find Next
+          </button>
+          <button
+            type="button"
             className="primary"
             disabled={props.readOnly || !props.total}
             onClick={props.onReplace}

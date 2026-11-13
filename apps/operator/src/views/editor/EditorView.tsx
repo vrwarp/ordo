@@ -94,6 +94,7 @@ export function EditorView({ id }: { id: string }) {
   const [tab, setTab] = useState<'object' | 'slide' | 'presentation'>('slide');
   const [focusMode, setFocusMode] = useState(false);
   const [songMode, setSongMode] = useState<'reflow' | 'canvas' | null>(null);
+  const [zoom, setZoom] = useState<'fit' | 0.5 | 0.75 | 1>('fit');
 
   const toggleFullScreen = async () => {
     try {
@@ -541,16 +542,18 @@ export function EditorView({ id }: { id: string }) {
           )}
           <button
             type="button"
-            className="primary"
+            className={ed.dirty || ed.saving ? 'primary' : 'ed-saved-pill'}
+            aria-label={ed.saving ? 'Saving…' : ed.dirty ? 'Save' : 'Saved'}
             disabled={readOnly || !ed.dirty || ed.saving}
             onClick={() => void save()}
+            title="Ctrl+S"
           >
             {ed.saving ? 'Saving…' : ed.dirty ? 'Save' : 'Saved'}
           </button>
-          <button type="button" disabled={readOnly || !ed.canUndo} onClick={undo}>
+          <button type="button" disabled={readOnly || !ed.canUndo} onClick={undo} title="Undo (Ctrl+Z)">
             ↶<span className="touch-label">Undo</span>
           </button>
-          <button type="button" disabled={readOnly || !ed.canRedo} onClick={redo}>
+          <button type="button" disabled={readOnly || !ed.canRedo} onClick={redo} title="Redo (Ctrl+Y)">
             ↷<span className="touch-label">Redo</span>
           </button>
           <Menu
@@ -634,7 +637,8 @@ export function EditorView({ id }: { id: string }) {
           )}
           <button
             type="button"
-            className="primary"
+            className={ed.dirty || ed.saving ? 'primary' : 'ed-saved-pill'}
+            aria-label={ed.saving ? 'Saving…' : ed.dirty ? 'Save' : 'Saved'}
             disabled={readOnly || !ed.dirty || ed.saving}
             onClick={() => void save()}
             title="Ctrl+S"
@@ -650,6 +654,21 @@ export function EditorView({ id }: { id: string }) {
 
           {!(p.kind === 'song' && (songMode ?? 'reflow') === 'reflow') && (
             <>
+              <select
+                aria-label="Canvas zoom"
+                className="ed-zoom-select"
+                value={String(zoom)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setZoom(v === 'fit' ? 'fit' : (Number(v) as 0.5 | 0.75 | 1));
+                }}
+                title="Canvas zoom"
+              >
+                <option value="fit">Fit</option>
+                <option value="0.5">50%</option>
+                <option value="0.75">75%</option>
+                <option value="1">100%</option>
+              </select>
               <span style={{ width: 1, height: 20, background: 'var(--line)', margin: '0 4px' }} />
 
               <button
@@ -776,15 +795,32 @@ export function EditorView({ id }: { id: string }) {
               </div>
             )}
             {slide ? (
-              <SlideCanvas
-                slide={slide}
-                backgroundMediaId={bgId}
-                media={media}
-                readOnly={readOnly}
-                onEditText={editText}
-                objectTools={objectTools}
-                slideRect={p.source?.native?.slideRect}
-              />
+              <div
+                className="ed-canvas-zoom"
+                style={
+                  zoom === 'fit'
+                    ? { display: 'contents' }
+                    : {
+                        transform: `scale(${zoom})`,
+                        transformOrigin: 'center center',
+                        width: '100%',
+                        height: '100%',
+                        display: 'flex',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                      }
+                }
+              >
+                <SlideCanvas
+                  slide={slide}
+                  backgroundMediaId={bgId}
+                  media={media}
+                  readOnly={readOnly}
+                  onEditText={editText}
+                  objectTools={objectTools}
+                  slideRect={p.source?.native?.slideRect}
+                />
+              </div>
             ) : (
               <div className="center muted">Add a slide to start.</div>
             )}

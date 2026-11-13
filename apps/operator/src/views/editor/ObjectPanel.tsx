@@ -277,6 +277,40 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
         <h4>
           Position and size{marks.has('box') && <span className="override-mark"> ● overrides theme</span>}
         </h4>
+        <div className="ed-align-bar" role="group" aria-label="Align to slide">
+          {(
+            [
+              ['left', 'Align left', '⇤', (b: typeof o.box) => ({ ...b, x: 0 })],
+              [
+                'cx',
+                'Center horizontally',
+                '⇹',
+                (b: typeof o.box) => ({ ...b, x: Math.round((1920 - b.w) / 2) }),
+              ],
+              ['right', 'Align right', '⇥', (b: typeof o.box) => ({ ...b, x: 1920 - b.w })],
+              ['top', 'Align top', '⤒', (b: typeof o.box) => ({ ...b, y: 0 })],
+              [
+                'cy',
+                'Center vertically',
+                '⇳',
+                (b: typeof o.box) => ({ ...b, y: Math.round((1080 - b.h) / 2) }),
+              ],
+              ['bottom', 'Align bottom', '⤓', (b: typeof o.box) => ({ ...b, y: 1080 - b.h })],
+            ] as const
+          ).map(([k, title, icon, fn]) => (
+            <button
+              key={k}
+              type="button"
+              className="small"
+              disabled={liveLocked}
+              title={title}
+              aria-label={title}
+              onClick={() => set((x) => ({ ...x, box: fn(x.box) }), undefined, 'box')}
+            >
+              {icon}
+            </button>
+          ))}
+        </div>
         <SelectionBox
           o={o}
           readOnly={liveLocked}
@@ -285,12 +319,14 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
       </section>
       <NumberField
         label="Opacity"
-        value={o.opacity}
+        value={Math.round(o.opacity * 100)}
         min={0}
-        max={1}
-        step={0.05}
+        max={100}
+        step={5}
+        suffix="%"
+        width={76}
         disabled={readOnly}
-        onChange={(opacity) => set((x) => ({ ...x, opacity }))}
+        onChange={(pct) => set((x) => ({ ...x, opacity: Math.max(0, Math.min(1, pct / 100)) }))}
       />
       {o.type === 'text' && (
         <fieldset disabled={readOnly} style={SECTION}>
@@ -403,13 +439,26 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
           {o.stroke && <ShapeLineFields o={o} disabled={readOnly} set={set} />}
           <ShapeShadowField o={o} disabled={readOnly} set={set} />
           {o.shape === 'rect' && !o.geom && (
-            <NumberField
-              label="Corner radius"
-              value={o.radius}
-              min={0}
-              disabled={readOnly}
-              onChange={(radius) => set((x) => ({ ...x, radius }) as SlideObject)}
-            />
+            <div className="row" style={{ alignItems: 'flex-end', gap: 8 }}>
+              <input
+                type="range"
+                aria-label="Corner radius slider"
+                min={0}
+                max={200}
+                value={Math.min(200, o.radius)}
+                disabled={readOnly}
+                style={{ flex: 1, minHeight: 28 }}
+                onChange={(e) => set((x) => ({ ...x, radius: Number(e.target.value) }) as SlideObject)}
+              />
+              <NumberField
+                label="Corner radius"
+                value={o.radius}
+                min={0}
+                width={76}
+                disabled={readOnly}
+                onChange={(radius) => set((x) => ({ ...x, radius }) as SlideObject)}
+              />
+            </div>
           )}
         </fieldset>
       )}

@@ -365,7 +365,9 @@ export function ParagraphStripView(props: {
             width={64}
             onChange={(v) => props.onParas({ spaceAfterPx: v === 0 ? undefined : v }, 'spaceAfterPx')}
           />
-          <label className="field">
+        </div>
+        <div className="row wrap" style={{ gap: 8 }}>
+          <label className="field grow" style={{ minWidth: 140 }}>
             <span>Line spacing</span>
             <select
               value={mode}
