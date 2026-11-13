@@ -1,9 +1,11 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Slide, TextObject } from '@ordo/domain';
+import { blankFont } from '@ordo/renderer/text/blankface.ts';
 import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
 import { familiesOf, fcFamily, fcMatch, isStandIn } from './fonts.ts';
@@ -530,6 +532,86 @@ describe.skipIf(!chromium)('NativeRenderer (headless Chromium)', () => {
         const lo = await readFile(join(dir, `slide-${n}.policy.png`));
         expect(ordo.equals(lo), `${c.family} drawn with ${host.family}`).toBe(isStandIn(c.family, host));
       }
+    } finally {
+      await r.close();
+    }
+  }, 120_000);
+
+  it("registers the faces it is given instead of fontconfig's (an output's own faces)", async () => {
+    // A face without ink (the coverage probe's blank face) given for the deck's family: its text then draws
+    // nothing, as on an empty slide, where fontconfig's face for the family (or the generic chain) draws
+    // letters.
+    const text: TextObject = {
+      id: 't',
+      type: 'text',
+      box: { x: 100, y: 100, w: 1400, h: 600, rotation: 0 },
+      text: 'Amazing grace, how sweet the sound',
+      style: {
+        fontFamily: 'Calibri',
+        fontWeight: 400,
+        fontStyle: 'normal',
+        fontSizePx: 80,
+        color: { r: 255, g: 255, b: 255, a: 1 },
+        align: 'left',
+        valign: 'top',
+        lineHeight: 1.2,
+        letterSpacing: 0,
+        padding: 0,
+        transform: 'none',
+        lineModel: 'office',
+      },
+      opacity: 1,
+    };
+    const shown = (i: number, s: Slide): NativeDeck['slides'][number] => ({
+      index: i,
+      shown: i,
+      hidden: false,
+      tier: 'T1',
+      class: 'native',
+      reasons: [],
+      convertMs: 0,
+      notes: [],
+      slide: s,
+      textFeatures: [],
+      compat: [],
+    });
+    const deck: NativeDeck = {
+      slides: [shown(0, slide([text])), shown(1, slide([]))],
+      slideRect: { x: 0, y: 0, w: 1920, h: 1080 },
+      media: [],
+      notes: [],
+      embeddedFonts: false,
+      textFeatures: [],
+      extractMs: 0,
+      parseMs: 0,
+      emitMs: 0,
+    };
+    const blank = Buffer.from(blankFont());
+    const fontDir = await work();
+    const file = join(fontDir, 'blank.ttf');
+    await writeFile(file, blank);
+    const hash = createHash('sha256').update(blank).digest('hex');
+    const fonts = [{ family: 'Calibri', weight: 400, style: 'normal' as const, hash, file }];
+    const req = {
+      family: 'Calibri',
+      fallbacks: [],
+      weight: 400,
+      italic: false,
+      smallCaps: false,
+      sizePx: 20,
+    };
+    const png = (dir: string, n: number) => readFile(join(dir, `slide-000${n}.png`));
+    const r = await NativeRenderer.start(chromium!);
+    try {
+      const given = await work();
+      const drawn = await r.renderDeck(deck, given, { repeats: 0, fonts, probe: [{ ...req, script: '' }] });
+      expect(drawn.notes).toEqual([]);
+      expect(drawn.fonts).toEqual({ offered: 1, loaded: 1 });
+      expect(drawn.probes![0]).toMatch(/^400 20px "o[0-9a-f]{8}", /);
+      expect((await png(given, 1)).equals(await png(given, 2)), 'the text drawn without ink').toBe(true);
+      const host = await work();
+      await r.renderDeck(deck, host, { repeats: 0 });
+      expect((await png(host, 1)).equals(await png(host, 2)), "the text in fontconfig's face").toBe(false);
     } finally {
       await r.close();
     }

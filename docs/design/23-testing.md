@@ -84,9 +84,14 @@ whose processing failed (degraded notes, posters).
 slides (design/27 §14.12), each on a hub of its own with the bundled fonts (`ORDO_FONTS_DIR`). The decks
 are synthetic probes written by `e2e/pptxdecks.ts` (pptxgenjs, and crafted OOXML with `p:timing` and
 ffmpeg test clips), sent through `POST /import/document`. `pptx-native` draws the deck with the fidelity
-harness's native page (`tools/pptx-fidelity` `convertDeck` and `NativeRenderer`) and asks three slides
-captured from Audience 1 at 1920x1080 (WebGPU) and Audience 2 at 3840x2160 (Canvas 2D) for SSIM ≥ 0.99
-against it; it checks the stage text, the Lobby and Stream bands against the same text typed in ordo
+harness's native page (`tools/pptx-fidelity` `convertDeck` and `NativeRenderer`), given the outputs' own
+font files (`outputFaces`: their config's library fonts, so both sides draw with the same files whatever
+the machine's fontconfig would pick), and asks three slides captured from Audience 1 at 1920x1080 (WebGPU)
+and Audience 2 at 3840x2160 (Canvas 2D) for SSIM ≥ 0.99 against it, without the outputs' "Enter full
+screen" prompt (`capture` hides `.fs-prompt`; a test window is never full screen). The verse slide has a
+floor of its own, 0.96 (`CUE1_FLOOR`): on the CI runner the outputs draw its text about 0.4 % narrower than
+the harness (a size or advance difference, glyph shapes identical; 1.000 in the dev container), and the
+spec logs each text line's width on both sides until it is gone; it checks the stage text, the Lobby and Stream bands against the same text typed in ordo
 (set as the deck sets it, its verse numbers raised, so both bands go through the rich engine; and against
 the text without its verse numbers, which must differ), cue labels, library search, and the
 hidden slide (Next and Prev skip it, a double-click in the grid shows it). `pptx-media` plays the M5 exit

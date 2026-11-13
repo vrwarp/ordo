@@ -59,7 +59,8 @@ export const TEXT_DECK: TextDeckSlide[] = [
 /**
  * The text deck: a title over a full-slide picture, the verse slide (raised verse numbers, notes), a hidden
  * slide, a slide with a picture and shapes, an announcement. Fonts are Calibri, which an output draws with
- * the bundled Carlito and the harness with fontconfig's Carlito.
+ * the bundled Carlito where it is installed (else with its fallback chain); pptx-native.spec.ts gives the
+ * harness the output's faces, so both draw with the same files.
  */
 export async function textDeck(dir: string): Promise<string> {
   mkdirSync(dir, { recursive: true });
