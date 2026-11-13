@@ -1,5 +1,5 @@
 import { createWriteStream } from 'node:fs';
-import { appendFile, rm } from 'node:fs/promises';
+import { appendFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -47,7 +47,13 @@ import type { LogRing } from './log.ts';
 import type { MediaService } from './media/service.ts';
 import type { Store } from './store.ts';
 import { searchGoogleFonts } from './fonts/google.ts';
-import { NO_LIBREOFFICE_PICTURES, NO_PDF_IMPORT, PPTX_MIME } from './imports.ts';
+import {
+  MAX_INLINE_BYTES,
+  NO_LIBREOFFICE_PICTURES,
+  NO_PDF_IMPORT,
+  PPTX_MIME,
+  pro7TooLarge,
+} from './imports.ts';
 import { NO_LIBREOFFICE_REFERENCE, NO_PDF_TOOLS } from './pptx/fallback.ts';
 import { planReimport } from './pptx/reimport.ts';
 import type { PptxImportOptions } from './pptx/shared.ts';
@@ -963,6 +969,14 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
           'unsupported',
           'Upload a .pro file, .proPlaylist, .probundle or a .zip of the ProPresenter library',
         );
+      }
+      // A single document is read into memory by the job: past MAX_INLINE_BYTES it is refused here, unread.
+      if (!isZip) {
+        const size = (await stat(f.path)).size;
+        if (size > MAX_INLINE_BYTES) {
+          await rm(f.path, { force: true });
+          throw pro7TooLarge(f.filename, size);
+        }
       }
       return reply.code(202).send(hub.imports.queuePro7FromUpload(f.path, f.filename));
     }

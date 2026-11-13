@@ -1,4 +1,4 @@
-import { type Cue, type PlaylistItem, type Slide, isHiddenCue } from '@ordo/domain';
+import { type Cue, type PlaylistItem, type Slide, isHiddenCue, withoutBackdrops } from '@ordo/domain';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { armDot, waitingForLive } from '../../lib/health.ts';
 import { type CueGroup, groupCues, sectionGoTarget } from '../../lib/sections.ts';
@@ -98,7 +98,10 @@ function PlaylistItemSection({
             {g.cues.map((c) => {
               const marks = marksFor(c);
               if (c.kind === 'slide') {
-                const slide = slideOf(c);
+                // Over the item's Background override the slide shows without the colour it was imported
+                // on, as the screens draw it (`Cue.backgroundOverride`).
+                const own = slideOf(c);
+                const slide = c.backgroundOverride && own ? withoutBackdrops(own) : own;
                 // A slide that plays a video in place or its own sound says so (design/27 §11 item 14).
                 const tags = slideMediaTags(slide, op.media);
                 // A hidden slide (design/27 §9) is dimmed and tagged, and a click still shows it.

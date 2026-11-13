@@ -10,6 +10,7 @@ import {
   type Transition,
   nextShownCue,
   playableFile,
+  withoutBackdrops,
 } from '@ordo/domain';
 import { clampLook, clampSlide, clampText } from './clamp.ts';
 import { drawableContent } from './content.ts';
@@ -256,7 +257,12 @@ export function planFrame(state: LiveState, rawLook: Look, opts: PlanOptions = {
     plan.slide = { key: '', desc: null, at: ls.at, fadeMs };
     const c = ls.content;
     const raw = c ? findSlide(resolved?.presentations, c.presentationId, c.slideId) : undefined;
-    const found = raw ? { slide: clampSlide(raw.slide), presentation: raw.presentation } : undefined;
+    // Over a playlist item's Background override (on a look that shows backgrounds), the slide is drawn
+    // without its backdrops, the colour or gradient it was imported on (`withoutBackdrops`).
+    const over = !!c && state.cues[c.cueIndex]?.backgroundOverride === true && look.layers.background.visible;
+    const found = raw
+      ? { slide: clampSlide(over ? withoutBackdrops(raw.slide) : raw.slide), presentation: raw.presentation }
+      : undefined;
     if (c && found) {
       plan.slideCue = c.cueIndex;
       const presKind = found.presentation.kind;

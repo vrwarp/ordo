@@ -469,6 +469,8 @@ type Cue = {
   slideId?: Id;
   label: string;
   hidden?: boolean; // true on a hidden slide (design/27 §9): sequential navigation skips it, `go` reaches it
+  backgroundMediaId?: Id; // the slide's own background, else the item's Background override, else the presentation's
+  backgroundOverride?: true; // it is the item's override: the slide is drawn without its backdrops (below)
 };
 type LayerContent = { kind: 'slide' | 'media' | 'logo' | 'lowerThird'; ref: Id; sinceSeq: number };
 type Timer = { id: Id; spec: TimerSpec; startedAtHub?: number; endsAtHub?: number; running: boolean };
@@ -491,6 +493,13 @@ The reducer handles events: `goLive(playlistId)`, `endService`, `select(cueIndex
 `media.play|pause|restart`, `timer.start|stop|reset`, `message.send|dismiss`,
 `output.register|health`. It is deterministic so hub, operator and outputs compute the
 same state from the same event sequence.
+
+A slide's backdrops are the unlocked `origin.role: 'bg'` shapes at the bottom of its objects: the
+solid or gradient background an importer drew under the slide (a PowerPoint slide's fill, a ProPresenter
+slide's own colour or its presentation's background, design/20). Over a playlist item's Background
+override (`Cue.backgroundOverride`) the screens that show backgrounds and the live slide grid draw the slide
+without them (`withoutBackdrops`), and the editor's background replace removes them, so the picture shows.
+An older build draws them, as before.
 
 A hidden slide keeps its cue, flagged `hidden` (design/27 §9). `next`, `prev`, the cue a GO
 arms, `autoAdvance` (wrapping within the item), onEnd 'advance', `nextItem` and `prevItem` skip

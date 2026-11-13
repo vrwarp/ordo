@@ -74,6 +74,12 @@ export type Cue = {
   slideId?: Id;
   slideIndexInSection?: number;
   backgroundMediaId?: Id;
+  /**
+   * `backgroundMediaId` is the playlist item's Background override (the slide has no background picture of
+   * its own): the slide is drawn without its backdrops (`withoutBackdrops`: the imported solid or gradient
+   * background under its objects, a ProPresenter slide's or presentation's colour), so the override shows.
+   */
+  backgroundOverride?: true;
   /** The slide clears the running background (only when it has none of its own). */
   clearBackground?: boolean;
   transition?: Transition;

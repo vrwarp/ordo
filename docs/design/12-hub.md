@@ -304,7 +304,11 @@ crash or restart; `document` records the stored page images the same way; `pptx-
 stored pictures and never saves a second presentation. ProPresenter
 presentations and playlists are saved under their ProPresenter UUIDs, so importing the same
 library twice updates the earlier copies instead of duplicating them. `POST /import/pro7`
-and `POST /import/document` answer 423 while a playlist is live. `tmp/` is wiped at
+and `POST /import/document` answer 423 while a playlist is live. `POST /import/pro7` takes a zip, a single
+`.pro`, `.proPlaylist` or `.probundle` upload, or a NAS path naming a folder or one such file or a library
+zip (any other file 415); a single document is stat-ed before it is read and refused past 64 MB (413,
+by the route and again by the job, as the zip and folder readers treat a file that size as media, not a
+document), and a single NAS `.pro` takes the media of its folder (design/20 "ProPresenter"). `tmp/` is wiped at
 startup: everything in it belongs to a job that is re-queued anyway.
 
 ## Service cache manifest

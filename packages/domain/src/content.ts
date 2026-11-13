@@ -97,3 +97,39 @@ export function drawnGeomRefs(slide: Pick<Slide, 'objects' | 'imported' | 'pptx'
   }
   return [...out];
 }
+
+/**
+ * Whether `o` is a backdrop: an importer's full-slide solid or gradient background drawn as the slide's
+ * bottom shape (`origin.role: 'bg'`, unlocked: a PowerPoint slide's background fill, a ProPresenter slide's
+ * own colour or its presentation's background), which a background put over the slide replaces.
+ */
+export function isBackdrop(o: unknown): boolean {
+  const x = o as { type?: unknown; locked?: unknown; origin?: { role?: unknown } } | null | undefined;
+  return x?.type === 'shape' && x.locked !== true && x.origin?.role === 'bg';
+}
+
+/** `objects` without the backdrops at their bottom (`isBackdrop`); the array itself when it has none. */
+export function withoutBackdropObjects<T>(objects: T[]): T[] {
+  let n = 0;
+  while (n < objects.length && isBackdrop(objects[n])) n++;
+  return n ? objects.slice(n) : objects;
+}
+
+const withoutBackdropsMemo = new WeakMap<object, object>();
+
+/**
+ * `slide` without its backdrops (`withoutBackdropObjects`): what a slide shows over a playlist item's
+ * Background override (`Cue.backgroundOverride`), so the item's picture is not hidden by the colour the
+ * slide was imported on. The slide itself when it has none; memoised per slide object, so a drawer keyed
+ * by the slide sees one object.
+ */
+export function withoutBackdrops<T extends Pick<Slide, 'objects'>>(slide: T): T {
+  const objects = Array.isArray(slide?.objects) ? slide.objects : [];
+  const kept = withoutBackdropObjects(objects);
+  if (kept === objects) return slide;
+  const hit = withoutBackdropsMemo.get(slide);
+  if (hit) return hit as T;
+  const out = { ...slide, objects: kept };
+  withoutBackdropsMemo.set(slide, out);
+  return out;
+}
