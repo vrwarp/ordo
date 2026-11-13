@@ -774,10 +774,10 @@ describe('the Object panel on a selection', () => {
     const html = renderToStaticMarkup(createElement(ObjectPanel, { o: art(), readOnly: false }));
     expect(text(html)).toContain('From PowerPoint (not editable)');
     expect(text(html)).toContain('it keeps its shape');
-    // The box: X, Y, W, H editable, no Rotation; Opacity and the picture section disabled.
+    // The box: X, Y, W, H + 6 alignment buttons editable, no Rotation; Opacity and the picture section disabled.
     const box = html.slice(html.indexOf('Position and size'), html.indexOf('Opacity'));
     expect(text(box)).not.toContain('Rotation');
-    expect(inputs(box)).toHaveLength(4);
+    expect(inputs(box)).toHaveLength(10);
     for (const i of inputs(box)) expect(i).not.toContain('disabled');
     const rest = html.slice(html.indexOf('Opacity'));
     expect(rest.match(/<fieldset[^>]*disabled=""/)).not.toBeNull();

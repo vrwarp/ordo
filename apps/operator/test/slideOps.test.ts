@@ -1209,10 +1209,13 @@ describe('the Object panel and slide list actions', () => {
 
   it("'Hidden' is a toggle button", () => {
     const on = html(createElement(HideSlideToggle, { hidden: true, onToggle: noop }));
-    expect(on).toMatch(/<button type="button" class="small on" aria-pressed="true"[^>]*>Hidden<\/button>/);
-    expect(textOf(on)).toContain('Next skips this slide; a click in the slide grid shows it.');
+    expect(on).toMatch(
+      /<button type="button" class="small ed-vis-pill is-hidden" aria-pressed="true"[^>]*>Hidden in service<\/button>/,
+    );
+    expect(on).toContain('Next skips this slide; a click in the slide grid shows it.');
     const off = html(createElement(HideSlideToggle, { hidden: false, onToggle: noop }));
     expect(off).toContain('aria-pressed="false"');
+    expect(off).toContain('Visible in service');
   });
 
   const ui = deck(
