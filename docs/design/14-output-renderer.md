@@ -524,6 +524,9 @@ A WebGPU device lost three times in a minute stays on Canvas 2D for the session.
 
 ## Send to preview
 
+The editor's 'Send to preview' control was removed from the UI in the editor rework (#7, the owner's
+choice; prd/03); the path below remains and is tested, unused by the UI.
+
 While no playlist is live, the hub relays the operator's `preview` message to one output
 (protocol `PreviewMsg`). The output plans a frame from the presentation it carries
 (`planPreview`): the named slide, or the first, under the output's own look, with the

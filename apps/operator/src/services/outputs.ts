@@ -83,6 +83,26 @@ export class OutputWindows {
     return this.probeTracker.isConfirmedLocal(outputId);
   }
 
+  /**
+   * Whether the BroadcastChannel probe can confirm that a window runs in this browser. Not in domain mode
+   * (op./outN./stage. hosts, the venue setup): a channel never crosses origins, so windows are re-acquired
+   * by name on what is known instead (`knownIds`).
+   */
+  get canProbe(): boolean {
+    return this.probeTracker.available;
+  }
+
+  /** Enabled outputs without a handle that are known to have a window: launched from this browser session, or connected to the hub. */
+  knownIds(): Set<string> {
+    const launched = launchedEarlier();
+    const health = useLive.getState().health;
+    return new Set(
+      this.missing()
+        .filter((o) => launched || !!health[o.id]?.connected)
+        .map((o) => o.id),
+    );
+  }
+
   ensureBroadcastRelays(): void {
     if (typeof BroadcastChannel === 'undefined' || appEnv().domain) return;
     for (const o of settings().outputs) {
@@ -206,16 +226,20 @@ export class OutputWindows {
     await sleep(0);
     const before = this.missing();
     if (before.length) {
-      const found = await this.probeLocal(
-        before.map((o) => o.id),
-        40,
-      );
+      const found = this.canProbe
+        ? await this.probeLocal(
+            before.map((o) => o.id),
+            40,
+          )
+        : this.knownIds();
       const n = this.reacquire(found);
-      const still = this.missing();
+      // Only windows known to exist somewhere are worth a word: the hub sees them, or this tab opened them.
+      const health = useLive.getState().health;
+      const still = this.missing().filter((o) => found.has(o.id) || !!health[o.id]?.connected);
       log('info', `relaunch: re-acquired ${n} of ${before.length} windows without a handle`);
       if (still.length)
         toast(
-          `Relaunch: ${still.length} output window${still.length === 1 ? ' was' : 's were'} opened by another operator tab and cannot be closed from here (${still.map((o) => o.name).join(', ')}). Opening new windows; the old ones close themselves once the new ones connect to the hub.`,
+          `Relaunch: ${still.length} output window${still.length === 1 ? '' : 's'} could not be reached from this tab (${still.map((o) => o.name).join(', ')}): opened by another tab or another computer. Opening new windows; the old ones close themselves once the new ones connect to the hub.`,
           'warn',
           12_000,
         );
@@ -290,11 +314,12 @@ export class OutputWindows {
     const had = this.windows.has(o.id);
     if (!had) {
       const h = useLive.getState().health[o.id];
-      const found = await this.probeLocal([o.id], 40);
+      const found = this.canProbe ? await this.probeLocal([o.id], 40) : new Set<string>();
       const isLocal = found.has(o.id);
       const exists = !!h?.connected || launchedEarlier() || isLocal;
       if (!exists) return;
-      if (isLocal) this.reacquire(found);
+      // Without a probe (domain mode) a window known to exist is looked up by its name all the same.
+      if (isLocal || !this.canProbe) this.reacquire(new Set([o.id]));
       if (!this.windows.has(o.id)) log('warn', `reopen ${o.name}: no window handle; opening by name`);
     }
     const screens = await this.screens();
@@ -325,12 +350,13 @@ export class OutputWindows {
   /**
    * After an operator reload the WindowProxy handles are gone. Opening the stable window name with an
    * empty URL returns an existing output window without navigating it; a fresh blank window is closed.
-   * To prevent blank windows and focus loss, window.open is ONLY called for windows confirmed to be
-   * running locally in this browser (via BroadcastChannel probe).
+   * To prevent blank windows and focus loss, window.open is only called for windows confirmed to be
+   * running in this browser by the BroadcastChannel probe (path mode), or, where no probe can see them
+   * (domain mode, the venue), for those `onlyIds` names, by default the ones known to exist (`knownIds`).
    */
   reacquire(onlyIds?: Set<string>): number {
     let n = 0;
-    const confirmed = onlyIds ?? this.probeTracker.confirmedLocalIds();
+    const confirmed = onlyIds ?? (this.canProbe ? this.probeTracker.confirmedLocalIds() : this.knownIds());
     if (!confirmed.size) return 0;
     for (const o of settings().outputs) {
       if (!o.enabled || this.windows.has(o.id) || !confirmed.has(o.id)) continue;

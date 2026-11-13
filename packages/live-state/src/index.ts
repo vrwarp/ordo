@@ -223,7 +223,10 @@ function goTo(s: LiveState, index: number, at: number): LiveState {
         seq,
         transition: cue.transition,
       };
-      if (cue.clearBackground) {
+      // Entry effects (the background clear, the item's countdown) apply on whichever cue enters the item:
+      // its first slide may be hidden, or the operator may click further in, jump to it, or step back into it.
+      const enteringItem = s.live === undefined || s.cues[s.live]?.itemId !== cue.itemId;
+      if (cue.clearBackground || (cue.clearOnEntry && enteringItem)) {
         // The slide clears the running background (its own playlist item or presentation background
         // would otherwise have been in backgroundMediaId; a clear wins only over what is running).
         if (layers.background.content)
@@ -237,7 +240,6 @@ function goTo(s: LiveState, index: number, at: number): LiveState {
         };
       }
       layers.media = slideMediaLayer(layers.media, cue, index, at, seq);
-      const enteringItem = s.live === undefined || s.cues[s.live]?.itemId !== cue.itemId;
       let nextProps = out.props.logo ? { ...out.props, logo: false, at, seq } : out.props;
       let nextTimers = out.timers;
       if (cue.timer && cue.timerId && enteringItem) {

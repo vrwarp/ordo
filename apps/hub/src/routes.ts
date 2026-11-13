@@ -801,11 +801,16 @@ export function registerLibraryApi(app: FastifyInstance, hub: Ctx): void {
     const id = params(req).id!;
     if (live.locks().media.has(id)) throw locked('This media is used by the live playlist');
     const m = lib.media.must(id);
-    // A missing picture refuses goLive (design/27 §11 item 15): media that stored presentations use is
-    // deleted only with `?force=1`, which the operator sends once the user has confirmed.
+    // A missing picture refuses goLive (design/27 §11 item 15): media that stored presentations or playlists
+    // use (an item's media, background or music) is deleted only with `?force=1`, which the operator sends
+    // once the user has confirmed.
     const users = presentationsUsingMedia(lib, id);
-    if (users.length && !isForced(req.query))
-      throw new HttpError(409, 'media_in_use', mediaInUseMessage(m.name, users), { presentations: users });
+    const lists = playlistsUsingMedia(lib, id);
+    if ((users.length || lists.length) && !isForced(req.query))
+      throw new HttpError(409, 'media_in_use', mediaInUseMessage(m.name, users, lists), {
+        presentations: users,
+        playlists: lists,
+      });
     lib.media.delete(id);
     lib.emit([{ kind: 'media', id, deleted: true }]);
     for (const h of [m.original.hash, m.delivery?.hash, m.poster?.hash]) await hub.store.release(h);
@@ -1235,12 +1240,62 @@ export function presentationsUsingMedia(
   return out;
 }
 
-/** What the operator shows before deleting media that presentations use. */
-function mediaInUseMessage(name: string, users: { title: string }[]): string {
-  const shown = users.slice(0, 5).map((u) => `“${u.title}”`);
-  const more = users.length > shown.length ? ` and ${users.length - shown.length} more` : '';
-  const what = users.length === 1 ? 'the presentation' : `${users.length} presentations:`;
-  return `“${name}” is used by ${what} ${shown.join(', ')}${more}. Without it they cannot go live until it is replaced.`;
+/**
+ * The playlists whose items use a media item, by name: any JSON string equal to its id (a media item, an
+ * item's background or its music), the same test as `presentationsUsingMedia`.
+ */
+export function playlistsUsingMedia(
+  lib: Library,
+  mediaId: string,
+  limit = 1000,
+): { id: string; name: string }[] {
+  const quoted = JSON.stringify(mediaId);
+  const like = `%${quoted.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  const rows = lib.db
+    .prepare(`SELECT id, name, json FROM playlists WHERE json LIKE ? ESCAPE '\\' ORDER BY name, id`)
+    .all(like) as { id: string; name: string; json: string }[];
+  const out: { id: string; name: string }[] = [];
+  for (const r of rows) {
+    if (!r.json.includes(quoted)) continue;
+    out.push({ id: r.id, name: r.name });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/** "the presentation “A”", "3 playlists: “A”, “B”, “C”" (five named at most). */
+function usersText(kind: string, names: string[]): string {
+  const shown = names.slice(0, 5).map((n) => `“${n}”`);
+  const more = names.length > shown.length ? ` and ${names.length - shown.length} more` : '';
+  const what = names.length === 1 ? `the ${kind}` : `${names.length} ${kind}s:`;
+  return `${what} ${shown.join(', ')}${more}`;
+}
+
+/** What the operator shows before deleting media that presentations or playlists use. */
+function mediaInUseMessage(name: string, users: { title: string }[], lists: { name: string }[] = []): string {
+  const parts = [
+    ...(users.length
+      ? [
+          usersText(
+            'presentation',
+            users.map((u) => u.title),
+          ),
+        ]
+      : []),
+    ...(lists.length
+      ? [
+          usersText(
+            'playlist',
+            lists.map((l) => l.name),
+          ),
+        ]
+      : []),
+  ];
+  // A playlist's music is left out with a warning at Go live; a missing picture or media item refuses it.
+  const after = lists.length
+    ? 'Until it is replaced they go live without it, or cannot go live.'
+    : 'Without it they cannot go live until it is replaced.';
+  return `“${name}” is used by ${parts.join(' and ')}. ${after}`;
 }
 
 function isForced(query: unknown): boolean {

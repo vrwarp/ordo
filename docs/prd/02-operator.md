@@ -28,6 +28,13 @@ data at small sizes. Program thumbnails are video streamed from the outputs
   top bar shows caching progress and turns green at 100 %. Editing the playlist and any
   presentation it references is locked until "End service".
 - Only one playlist is live at a time. "End service" releases the lock and clears all layers.
+- A presentation item can keep the running background, play music on its slides (the pre-service loop's)
+  and run a service countdown. Entering the item clears the running background when the slide has none
+  and the item does not keep it, and starts its countdown, whichever slide the item is entered on: past a
+  hidden first slide with Next, with Next presentation, a go-to-item key or MIDI jump, a click on a later
+  slide in the continuous grid, or Prev back into it. Moving within the item does neither. Music that
+  was deleted or is still processing never stops Go live: the item plays without it, and the live view
+  says so ("Live with a warning").
 
 ## Navigation and GO
 
@@ -39,7 +46,7 @@ data at small sizes. Program thumbnails are video streamed from the outputs
 | Next presentation     | Page Down                                                 | First slide of the next item                                                                                                                                                  |
 | Previous presentation | Page Up                                                   | First slide of the previous item                                                                                                                                              |
 | Section jump          | Click a section label                                     | First slide of that section in the presentation shown in the centre column (which may not be the live one); Stream Deck and MIDI section actions act on the live presentation |
-| Clear slide           | F1                                                        | Clears the Slide layer; background keeps playing                                                                                                                              |
+| Clear slide           | F1, Escape                                                | Clears the Slide layer; background keeps playing. While a dialog is open (Diagnostics, a confirmation), Escape only closes it                                                 |
 | Clear all to black    | F2 (press twice within 2 s, or hold for 1 s)              | Every layer black on every output. Confirmed by the double press, or by holding the key or the Clear all button for one second, to avoid accidents                            |
 | Clear lower third     | F3                                                        | Clears the Lower third layer only                                                                                                                                             |
 | Clear props           | F4                                                        | Clears Props                                                                                                                                                                  |

@@ -161,6 +161,12 @@ A single `keydown` listener on `window` with the key map from settings. Handled 
 `preventDefault`. Text inputs opt out by focus. The handler only maps the key and posts the action
 to the core worker (plus the clear-all hold timer); the core applies it optimistically and sends it.
 
+Dialogs: Escape closes the dialog opened last and does nothing else (it is also Clear slide on the live,
+playlists and library screens). Each open dialog marks Escape handled in the capture phase on `window`
+(`preventDefault`, so the live keys, which skip handled events, never see it whatever order the listeners
+were added in) and closes in the bubble phase (`components/dialogEscape.ts`). A popover inside the dialog
+(a menu, the colour picker) that stops Escape to close itself keeps the dialog open.
+
 ## Launching outputs
 
 1. The operator clicks Launch outputs (a user gesture).
@@ -181,8 +187,22 @@ to the core worker (plus the clear-all hold timer); the core applies it optimist
 6. Stage opens the same way with the stage origin.
 
 Window names are stable so a reload of the operator can re-acquire windows by opening
-the same name (Chrome returns the existing window for a matching name, re-navigating it;
-outputs tolerate a navigation by re-arming from the hub state).
+the same name with an empty URL (`window.open('', 'ordo-out-' + id)` returns the existing window of that
+name without navigating it; a fresh blank window means there was none, and it is closed at once).
+`window.open` needs a user gesture, so re-acquisition runs on gestures while live
+(`services/reacquire.ts`), on the top bar's "fallback link n/m" button, on Relaunch (which first takes
+the old windows over so it can close them) and on Diagnostics' "Re-acquire output windows". Which names
+are tried:
+
+- Path mode (one origin): only windows a BroadcastChannel probe confirms running in this browser, so no
+  blank window flashes and no focus is stolen.
+- Domain mode (op./outN./stage. hosts, the venue setup): a channel never crosses origins, so the probe
+  confirms nothing. A gesture tries the outputs this browser session launched (a sessionStorage flag kept
+  across reloads) that the hub reports connected; the explicit actions try every output launched here or
+  reported connected. A window that is not in this browser (another tab or another computer runs it) stays
+  missing, and the fallback link says so: "could not be reached from this tab: opened by another operator
+  tab or another computer. Use Relaunch to take them over." Each output is tried at most once a minute
+  on gestures.
 
 ## Program view
 
@@ -409,15 +429,25 @@ it (the hub does not accept HEIC), videos as MOV or MP4.
 
 The Media tab hides the pictures imports make for presentations (pages tagged `document`, native-import
 pictures tagged `pptx`) unless 'Show presentation pictures' is ticked (design/27 §11 item 15). Deleting
-media that stored presentations use names them in the confirmation first, since a missing picture refuses
-goLive: the hub answers such a `DELETE /media/:id` with 409 `media_in_use` (the titles in its message)
-unless it carries `?force=1`, which the tab sends once the user has confirmed.
+media that stored presentations or playlists use (a playlist's media item, an item's background or its
+music) names them in the confirmation first, since a missing picture or media item refuses goLive and
+missing music leaves the pre-service loop silent: the hub answers such a `DELETE /media/:id` with 409
+`media_in_use` (the titles and names in its message, `presentations` and `playlists` in its body) unless
+it carries `?force=1`, which the tab sends once the user has confirmed.
 
 ## Settings
 
 Outputs and looks, audio devices and pairs, key map, Stream Deck pages, MIDI mappings,
 PINs, output tokens, backups, diagnostics export. Each page is a form over the matching
 `/settings/*` resource.
+
+- **Screens** (`views/settings/OutputsPage.tsx`, #17): each output is badged by the role its look gives it:
+  Stage (a stage output or look), Bottom-Third Stream (a lower-third or stream look, or any lyric-only
+  look) and Audience (the rest). The role decides what an output shows during an announcement loop
+  (prd/04 "Screens and announcement loops"): the loop on Audience, 'Service Starting Soon' on Stage, no
+  band on Bottom-Third Stream (`lyricTextFor` returns no text for a loop on a non-stage look; the lobby
+  shows its holding slide). This is the owner's choice, kept deliberately; a lobby that should show the
+  loop uses the Main look.
 
 - **The stage look's notes** (design/27 §11 item 13, M4). The look page's 'Stage screen' card
   (`src/views/settings/StageNotesOptions.tsx`, shown for a look of kind stage, and for any look whose notes
@@ -450,7 +480,7 @@ nothing stored. When there are no pictures yet, turning it on saves unsaved edit
 (`POST /presentations/:id/pptx-reference` with `{ showPicture: [] }`: no slide switches to its picture) and
 follows the job; when it is done the editor takes the pictures over, keeping edits made meanwhile. A slide
 set to show its PowerPoint picture on the screens (`Slide.pptx.show`) says so, with 'Show the objects
-instead'. The canvas, the thumbnails, the look previews and 'Send to preview' draw a slide as the outputs
+instead'. The canvas, the thumbnails and the look previews draw a slide as the outputs
 do (design/27 §5 "One rule for every drawer", `slideContent`): a slide set to show its PowerPoint picture
 shows that picture and only the objects added in ordo (the imported objects, marked by `origin`, are
 neither drawn nor selectable on the canvas), and a picture slide its page picture under its objects.
@@ -467,8 +497,8 @@ of the box, such as Carlito for Calibri, is a library font) with 'Upload font' (
 - 'Reset slide from PowerPoint', for an edited slide or one LibreOffice could not draw: after a
   confirmation it saves unsaved edits and runs the hub's re-import of that slide (`pptx-reimport` with
   `{ slideIds, reset }`), its progress in the card (a live region); the slide gets the deck's objects back,
-  keeping its id, notes, timing, background and the objects added in ordo on top. History keeps the slide
-  as it was.
+  keeping its id, notes, timing, background, Bottom-Third Stream text, MIDI cues and the objects added in
+  ordo on top. History keeps the slide as it was.
 
 'Make editable' on a legacy PowerPoint page (a picture import from before M3) rebuilds the page from the
 stored deck: the hub reroutes it to the re-import of that slide (202 and the job), the editor follows the

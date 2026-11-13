@@ -362,7 +362,11 @@ function shape(sl: Slide): string {
   return JSON.stringify(out, sortedKeys);
 }
 
-/** Slide-level settings a re-import keeps from the stored slide (design/27 §11). */
+/**
+ * Slide-level settings a re-import keeps from the stored slide (design/27 §11): the volunteer set them in
+ * ordo, the deck has no say in them. The Bottom-Third Stream text ('' silences the strap) and the outgoing
+ * MIDI cues included.
+ */
 const KEPT = [
   'clearBackground',
   'durationMs',
@@ -371,6 +375,8 @@ const KEPT = [
   'transition',
   'audio',
   'scripture',
+  'bottomThirdText',
+  'midiCues',
 ] as const;
 
 /**

@@ -19,7 +19,7 @@ import { APP_VERSION } from './index.ts';
  */
 const RECORDED = {
   version: '0.6.0',
-  digest: '8e079cfa3ef7ce15277075e4b47bd1ede01627e6a7b72f42594d599cbb4e6fca',
+  digest: '4910ccdfad52db168b0a224a255dbe4b163c5b1f55940cecedc121d1ba9afda5',
 };
 
 /** Sources whose meaning every client shares with the hub, relative to the repository root. */

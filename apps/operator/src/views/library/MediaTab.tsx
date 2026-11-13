@@ -6,7 +6,12 @@ import { confirmDialog } from '../../components/Confirm.tsx';
 import { Dialog } from '../../components/Dialog.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
 import { useLockedIds } from '../../hooks.ts';
-import { isPresentationPicture, mediaInUseText, presentationsUsing } from '../../lib/mediaUse.ts';
+import {
+  isPresentationPicture,
+  mediaInUseText,
+  playlistsUsing,
+  presentationsUsing,
+} from '../../lib/mediaUse.ts';
 import { stillHash } from '../../services/thumbs.ts';
 import { uploadMedia } from '../../services/upload.ts';
 import { removeLocal, upsertLocal, useLibrary } from '../../state/library.ts';
@@ -225,14 +230,17 @@ export function MediaTab() {
     }
   };
   const del = async (m: Media) => {
-    // Media that presentations use: the confirmation names them (a missing picture refuses goLive).
+    // Media that presentations or playlists use: the confirmation names them (a missing picture refuses
+    // goLive; a playlist item's missing music plays without it).
     const users = presentationsUsing(m.id, lib.presentations);
-    const ask = users.length ? mediaInUseText(m.name, users) : `Delete “${m.name}”?`;
+    const lists = playlistsUsing(m.id, lib.playlists);
+    const used = users.length + lists.length > 0;
+    const ask = used ? mediaInUseText(m.name, users, lists) : `Delete “${m.name}”?`;
     if (!(await confirmDialog('Delete media', ask, 'Delete', true))) return;
     const remove = (force: boolean) => api(`/media/${m.id}${force ? '?force=1' : ''}`, { method: 'DELETE' });
     try {
       try {
-        await remove(users.length > 0);
+        await remove(used);
       } catch (e) {
         // The hub knows of a use this library copy has not seen yet: ask again with its list.
         if (!(e instanceof ApiFailure && e.code === 'media_in_use')) throw e;

@@ -1,6 +1,11 @@
-import type { Media, Presentation } from '@ordo/domain';
+import type { Media, Playlist, Presentation } from '@ordo/domain';
 import { describe, expect, it } from 'vitest';
-import { isPresentationPicture, mediaInUseText, presentationsUsing } from '../src/lib/mediaUse.ts';
+import {
+  isPresentationPicture,
+  mediaInUseText,
+  playlistsUsing,
+  presentationsUsing,
+} from '../src/lib/mediaUse.ts';
 import { previewMedia } from '../src/lib/preview.ts';
 
 const pres = (id: string, title: string, slides: unknown[], extra: Partial<Presentation> = {}) =>
@@ -41,6 +46,25 @@ describe('media library hygiene (design/27 §11 item 15)', () => {
     );
     const many = Array.from({ length: 7 }, (_, i) => ({ title: `P${i}` }));
     expect(mediaInUseText('Logo', many)).toMatch(/7 presentations: “P0”, .*“P4” and 2 more\./);
+  });
+
+  it('names the playlists whose items use a media item: their media, background or music', () => {
+    const pl = (id: string, name: string, items: unknown[]) => ({ id, rev: 1, name, items }) as Playlist;
+    const lists = [
+      pl('l1', 'Sunday', [{ id: 'i', kind: 'presentation', presentationId: 'p', audioMediaId: 'music' }]),
+      pl('l2', 'Easter', [{ id: 'i', kind: 'media', mediaId: 'music' }]),
+      pl('l3', 'Other', [{ id: 'i', kind: 'presentation', presentationId: 'music-2' }]),
+    ];
+    expect(playlistsUsing('music', lists)).toEqual([
+      { id: 'l2', name: 'Easter' },
+      { id: 'l1', name: 'Sunday' },
+    ]);
+    expect(mediaInUseText('Organ', [], [{ name: 'Sunday' }])).toBe(
+      '“Organ” is used by the playlist “Sunday”. Until it is replaced they go live without it, or cannot go live. Delete it anyway?',
+    );
+    expect(mediaInUseText('Organ', [{ title: 'Welcome' }], [{ name: 'Sunday' }, { name: 'Easter' }])).toMatch(
+      /^“Organ” is used by the presentation “Welcome” and 2 playlists: “Sunday”, “Easter”\. /,
+    );
   });
 
   it('previews a picture slide with its page and a reference picture', () => {

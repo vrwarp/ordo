@@ -21,6 +21,8 @@ is focused. The key map is editable in settings and stored on the hub.
 
 ## MIDI
 
+- MIDI is switched on in Setup ("Enable Web MIDI"); only then does the browser ask for MIDI access. A venue
+  that already used MIDI pedals before this switch existed keeps them working after an upgrade.
 - Any MIDI input through Web MIDI, including SysEx-less devices. Notes, CC and Program Change
   messages trigger actions. Supports both static thresholds and dynamic parameter sourcing (ProPresenter
   velocity-indexed triggers for slide, item and section selection from DAWs like Ableton Live and MultiTracks Playback).

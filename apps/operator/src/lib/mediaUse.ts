@@ -1,9 +1,9 @@
-import type { Media, Presentation } from '@ordo/domain';
+import type { Media, Playlist, Presentation } from '@ordo/domain';
 
 /**
  * Media library hygiene (design/27 §11 item 15): pictures an import made for presentations (PowerPoint
  * pictures tagged `pptx`, document pages tagged `document`) are hidden from the media list unless the
- * operator asks for them, and deleting media that presentations use names them first.
+ * operator asks for them, and deleting media that presentations or playlists use names them first.
  */
 
 /** Tags of the pictures imports make for presentations. */
@@ -29,13 +29,55 @@ export function presentationsUsing(
     .sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id));
 }
 
-/** The confirmation that names the presentations a deletion would break. */
-export function mediaInUseText(name: string, users: readonly { title: string }[]): string {
-  const shown = users.slice(0, 5).map((u) => `“${u.title}”`);
-  const more = users.length > shown.length ? ` and ${users.length - shown.length} more` : '';
-  const what = users.length === 1 ? 'the presentation' : `${users.length} presentations:`;
-  return (
-    `“${name}” is used by ${what} ${shown.join(', ')}${more}. ` +
-    'Without it they cannot go live until it is replaced. Delete it anyway?'
-  );
+/**
+ * The playlists whose items use a media item, by name: a media item, an item's background or its music (the
+ * pre-service loop's), the hub's own test for `DELETE /media/:id`.
+ */
+export function playlistsUsing(
+  mediaId: string,
+  playlists: readonly Playlist[],
+): { id: string; name: string }[] {
+  const quoted = JSON.stringify(mediaId);
+  return playlists
+    .filter((p) => JSON.stringify(p).includes(quoted))
+    .map((p) => ({ id: p.id, name: p.name }))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+}
+
+function usersText(kind: string, names: readonly string[]): string {
+  const shown = names.slice(0, 5).map((n) => `“${n}”`);
+  const more = names.length > shown.length ? ` and ${names.length - shown.length} more` : '';
+  const what = names.length === 1 ? `the ${kind}` : `${names.length} ${kind}s:`;
+  return `${what} ${shown.join(', ')}${more}`;
+}
+
+/** The confirmation that names the presentations and playlists a deletion would break. */
+export function mediaInUseText(
+  name: string,
+  users: readonly { title: string }[],
+  lists: readonly { name: string }[] = [],
+): string {
+  const parts = [
+    ...(users.length
+      ? [
+          usersText(
+            'presentation',
+            users.map((u) => u.title),
+          ),
+        ]
+      : []),
+    ...(lists.length
+      ? [
+          usersText(
+            'playlist',
+            lists.map((l) => l.name),
+          ),
+        ]
+      : []),
+  ];
+  // A playlist's music is left out with a warning at Go live; a missing picture or media item refuses it.
+  const after = lists.length
+    ? 'Until it is replaced they go live without it, or cannot go live.'
+    : 'Without it they cannot go live until it is replaced.';
+  return `“${name}” is used by ${parts.join(' and ')}. ${after} Delete it anyway?`;
 }

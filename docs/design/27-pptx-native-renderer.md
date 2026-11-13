@@ -1370,7 +1370,7 @@ The extensions, in priority order (M4 unless noted):
     - sound: replace, start, loop, volume, 'continue for N slides', with a warning when it replaces running playlist audio;
     - SlideGrid shows a `video` / `audio` tag on slide thumbnails (the `.tag` already used for media cues, `SlideGrid.tsx:154`);
     - one playing video per slide is enforced: the panel says which object plays.
-15. **Media library hygiene (M3).** MediaTab hides media tagged `pptx` or `document` unless 'Show presentation pictures' is ticked. Deleting a media item that stored presentations reference asks for confirmation and names them, because a missing picture refuses goLive.
+15. **Media library hygiene (M3).** MediaTab hides media tagged `pptx` or `document` unless 'Show presentation pictures' is ticked. Deleting a media item that stored presentations or playlists reference asks for confirmation and names them, because a missing picture refuses goLive.
 16. **Later (M8):** 'Split reveal into slides'; 'Convert to song' (lyric objects → sections and arrangement, kind song) with a 'Re-flow lyrics' op using the stored but unused `linesPerSlide`; preset adjust handles from the compiled `ahLst`; a bilingual band that also shows the `role:'translation'` box.
 17. **Optional (M4):** a three-way merge per slide on 409 (base = `ed.base`, mine = draft, theirs = the 409 body's `current` once `ApiFailure` keeps it, `packages/client/src/api.ts:35-39`), so two volunteers editing different slides, or a volunteer and the version-2 patch, do not overwrite each other. Built in M4 (item H, `views/editor/merge.ts`): slide and object level, the rules in §15 M4 "As built, item H".
 
@@ -1903,7 +1903,8 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   added in ordo are kept on top and are not an edit); a slide the
   same converter would write again with its LibreOffice work done is left alone, so a re-import that changes
   nothing saves nothing; slide-level settings (timing, transition, hidden, sound, background, the reference
-  picture) stay, on a legacy slide only where the operator set them; a legacy page whose deck slide is a
+  picture, the Bottom-Third Stream text, the outgoing MIDI cues; `reimport.ts` `KEPT`) stay through a
+  re-import and a 'Reset slide' alike, on a legacy slide only where the operator set them; a legacy page whose deck slide is a
   picture again stays; a made-editable slide is placed by its picture's name ('<title> – N', the picture
   import's page) else by the deck slide whose text its boxes repeat (whitespace folded); a legacy deck
   converted whole gets its one background back as the presentation's; the presentation becomes a native
