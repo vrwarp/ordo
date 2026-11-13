@@ -306,7 +306,10 @@ function textAndMasks(): EffectsDeck {
 /**
  * Pictures: round corners, round corners with a shadow, feathered rectangles, round, feathered and shadowed;
  * three a slide on a light background, so a square corner, another blur or a hard cut moves the score past
- * the ratchet's 0.5 % (#20's drawing scored 0.4 % lower on one picture over dark grey).
+ * the ratchet's 0.5 % (#20's drawing scored 0.4 % lower on one picture over dark grey). Slide 5: a feathered
+ * full-frame photo under a shadowed, feathered photo of 1400 x 800, both kept within the slide's effect budget
+ * (`geom/cost.ts` `EFFECT_COST.preparedSoftEdge`: at a shape's soft-edge weight the second lost both effects,
+ * the 2026-11-13 review).
  */
 function pictureEffects(): EffectsDeck {
   const LIGHT: Rgb = [205, 210, 220];
@@ -326,11 +329,22 @@ function pictureEffects(): EffectsDeck {
   const three = (id: string, extra: Record<string, unknown>) =>
     boxes.map((b, i) => pictureElement(`${id}-${i}`, b, media, extra));
   // ProPresenter lists elements front to back: reversed, the first is drawn first (all three apart anyway).
+  // Slide 5: a full-frame photo feathered by 0.1 (54 px), and over it a blue photo feathered by 0.1 (40 px)
+  // with the drop shadow.
+  const full: Box = { x: 0, y: 0, w: W, h: H };
+  const photo: Box = { x: 260, y: 140, w: 1400, h: 800 };
+  const thin = { feather: { enable: true, radius: 0.1 } };
+  const blueMedia = 'Media/blue.png';
+  const BLUE: Rgb = [40, 90, 200];
   const slides = [
     three('EL-PIC-ROUND', rounded),
     three('EL-PIC-SHADOW', { ...rounded, ...shadow }),
     three('EL-PIC-FEATHER', feather),
     three('EL-PIC-ALL', { ...rounded, ...feather, ...shadow }),
+    [
+      pictureElement('EL-PIC-TWO-0', full, media, thin),
+      pictureElement('EL-PIC-TWO-1', photo, blueMedia, { ...thin, ...shadow }),
+    ],
   ];
   const name = 'pro7-synth-picture-effects';
   const proFileName = `${name}.pro`;
@@ -371,11 +385,27 @@ function pictureEffects(): EffectsDeck {
       { rgb: [0, 0, 0] as Rgb, alpha: shadowOf(a) },
       { rgb: ORANGE, alpha: a },
     ];
+    // One picture feathered by `fe` px: its box eroded by `fe` and blurred by it, never past the box.
+    const featherOf = (b: Box, fe: number) => {
+      const f = blur(
+        coverage({ x: b.x + fe, y: b.y + fe, w: b.w - 2 * fe, h: b.h - 2 * fe }, 0),
+        fe * STACK_BLUR_SIGMA,
+      );
+      const cut = coverage(b, 0);
+      for (let i = 0; i < f.length; i++) f[i] = Math.min(f[i]!, cut[i]!);
+      return f;
+    };
+    const top = featherOf(photo, 0.1 * 0.5 * photo.h);
     return [
       compose(LIGHT, [{ rgb: ORANGE, alpha: round }]),
       compose(LIGHT, shadowed(round)),
       compose(LIGHT, [{ rgb: ORANGE, alpha: feathered(0, square) }]),
       compose(LIGHT, shadowed(feathered(radius, round))),
+      compose(LIGHT, [
+        { rgb: ORANGE, alpha: featherOf(full, 0.1 * 0.5 * full.h) },
+        { rgb: [0, 0, 0], alpha: shadowOf(top) },
+        { rgb: BLUE, alpha: top },
+      ]),
     ];
   };
   let made: RgbaImage[] | undefined;
@@ -385,6 +415,7 @@ function pictureEffects(): EffectsDeck {
     files: new Map<string, Uint8Array>([
       [proFileName, bytes],
       [media, encodePng(makePng(64, 64, () => [...ORANGE, 255]))],
+      [blueMedia, encodePng(makePng(64, 64, () => [...BLUE, 255]))],
     ]),
     // Made when first read (a few seconds of blurs): the corpus is built often, its pictures scored once.
     get referenceSlides() {

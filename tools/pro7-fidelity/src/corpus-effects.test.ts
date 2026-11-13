@@ -47,10 +47,17 @@ describe('corpus-effects', () => {
     expect(px(r3!, 1495, 1070)).toEqual([40, 140, 200]);
   });
 
-  it('pictures: round corners, a shadow, a feather, all three, three pictures a slide', () => {
+  it('pictures: round corners, a shadow, a feather, all three, three pictures a slide; two feathered photos', () => {
     const slides = slidesOf('pro7-synth-picture-effects');
     const pics = slides.map((s) => (s.objects as ImageObject[]).filter((o) => o.type === 'image'));
-    for (const p of pics) expect(p.map((o) => o.box.x).sort((x, y) => x - y)).toEqual([120, 710, 1300]);
+    expect(pics).toHaveLength(5);
+    for (const p of pics.slice(0, 4))
+      expect(p.map((o) => o.box.x).sort((x, y) => x - y)).toEqual([120, 710, 1300]);
+    // Slide 5: a full-frame photo feathered by 54 px under a 1400 x 800 one feathered by 40 px, shadowed.
+    expect(pics[4]!.map((o) => [o.box.w, o.box.h, o.softEdge, !!o.shadow])).toEqual([
+      [1920, 1080, 54, false],
+      [1400, 800, 40, true],
+    ]);
     expect(pics[0]![0]).toMatchObject({ radius: 90, box: { y: 390, w: 500, h: 300 } });
     expect(pics[0]![0]!.shadow).toBeUndefined();
     expect(pics[1]![0]!.shadow).toMatchObject({ blur: 40, color: { r: 0, g: 0, b: 0, a: 1 } });

@@ -274,12 +274,14 @@ The harness produces:
   than 0.5 %, and, since PR #23, if a baseline deck or slide the run was meant to score is missing from it:
   a deck that stops importing or rendering used to pass silently; a run is meant to score the baseline's
   decks of the kinds it ran, `--corpus` synthetic and `--sample-dir` sample, within its `--decks` and
-  `--slides` filters). An 18-slide synthetic probe suite (`--corpus`) across 5 decks covers core fills and
+  `--slides` filters). A 19-slide synthetic probe suite (`--corpus`) across 5 decks covers core fills and
   gradients, preset and custom cubic bezier shapes, 315° gradients, media crops and ellipse image masks
   (`pro7-synth-core`, `pro7-synth-shapes`, `pro7-synth-masks-and-crops`), text boxes with a fill and with a
   border and full-width line masks in a colour and a gradient (`pro7-synth-text-and-masks`), and rounded
-  pictures, picture shadows, feathers and the three together (`pro7-synth-picture-effects`,
-  `corpus-effects.ts`): 12 of the 22 feature tags. It is enforced in CI on every run. The suite is
+  pictures, picture shadows, feathers and the three together, and a feathered full-frame photo under a
+  shadowed, feathered one, both kept within the slide's effect budget (`pro7-synth-picture-effects`,
+  `corpus-effects.ts`; 0.9987, and 0.9198 with a prepared picture's soft edge weighed as a shape's): 12 of the
+  22 feature tags. It is enforced in CI on every run. The suite is
   font-free: text is drawn in the colour of the box or strap behind it (or is one dot), and a line mask is
   made taller than the slide, so only box and strap geometry count whatever face fontconfig picks. Its
   references are computed from ordo's own drawing conventions (a stroke centred on the outline, a strap

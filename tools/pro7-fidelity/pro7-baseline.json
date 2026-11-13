@@ -1,9 +1,9 @@
 {
   "createdAt": "2026-11-13T14:58:51.393Z",
   "exportCompat": true,
-  "meanSsim": 0.9998,
-  "syntheticMeanSsim": 0.9998,
-  "totalSlides": 18,
+  "meanSsim": 0.9997,
+  "syntheticMeanSsim": 0.9997,
+  "totalSlides": 19,
   "decks": [
     {
       "name": "pro7-synth-core",
@@ -553,9 +553,9 @@
       "name": "pro7-synth-picture-effects",
       "kind": "synthetic",
       "title": "pro7-synth-picture-effects",
-      "slideCount": 4,
-      "ssim": 0.9995,
-      "minSlideSsim": 0.9989,
+      "slideCount": 5,
+      "ssim": 0.9994,
+      "minSlideSsim": 0.9987,
       "perSlide": [
         {
           "n": 1,
@@ -566,7 +566,7 @@
           "alphaMae": 0,
           "boxMaes": [
             {
-              "objectId": "01M7APP60NAXQC5M4HPVTND474",
+              "objectId": "01M7B40PDKJ4Y6FG6YKN9BV66T",
               "type": "shape",
               "box": {
                 "x": 0,
@@ -577,7 +577,7 @@
               "mae": 0.00005375703522149601
             },
             {
-              "objectId": "01M7APP60NANZSEVVH4QQ1ZNG3",
+              "objectId": "01M7B40PDKWBBQQA59MZ1VS65G",
               "type": "image",
               "box": {
                 "x": 120,
@@ -588,7 +588,7 @@
               "mae": 0.0002477124183006536
             },
             {
-              "objectId": "01M7APP60NWQDJR1894HGJRTDW",
+              "objectId": "01M7B40PDKZ34QRVQMQPA540CW",
               "type": "image",
               "box": {
                 "x": 710,
@@ -599,7 +599,7 @@
               "mae": 0.0002477124183006536
             },
             {
-              "objectId": "01M7APP60K2GKAEZJ8Z55E3678",
+              "objectId": "01M7B40PDJGP8FKT5A1JR9K4JC",
               "type": "image",
               "box": {
                 "x": 1300,
@@ -624,7 +624,7 @@
           "alphaMae": 0,
           "boxMaes": [
             {
-              "objectId": "01M7APP60N7G4F51NDEYRJ0SGH",
+              "objectId": "01M7B40PDMJWSBAEAX8EPK3DS4",
               "type": "shape",
               "box": {
                 "x": 0,
@@ -635,7 +635,7 @@
               "mae": 0.0009878458038307916
             },
             {
-              "objectId": "01M7APP60NXV0WXMAYCNEWW48B",
+              "objectId": "01M7B40PDMNJGNW36TBVJ037NP",
               "type": "image",
               "box": {
                 "x": 120,
@@ -646,7 +646,7 @@
               "mae": 0.0003510392156862745
             },
             {
-              "objectId": "01M7APP60N3CTFBFTNQBZXBHS9",
+              "objectId": "01M7B40PDMMT9H90G4ADXPM2TA",
               "type": "image",
               "box": {
                 "x": 710,
@@ -657,7 +657,7 @@
               "mae": 0.0003510392156862745
             },
             {
-              "objectId": "01M7APP60NB4JH3MWNDMCNK470",
+              "objectId": "01M7B40PDM4W8M3S6SBDJHAZEN",
               "type": "image",
               "box": {
                 "x": 1300,
@@ -682,7 +682,7 @@
           "alphaMae": 0,
           "boxMaes": [
             {
-              "objectId": "01M7APP60TZ0MBMTJGZG7Z2SSN",
+              "objectId": "01M7B40PDM97M5CGPPGWZN7HZP",
               "type": "shape",
               "box": {
                 "x": 0,
@@ -693,7 +693,7 @@
               "mae": 0.0004366886801016703
             },
             {
-              "objectId": "01M7APP60THKCV0M1CBWR712Q0",
+              "objectId": "01M7B40PDMAA00KJWPEZZJ8WYB",
               "type": "image",
               "box": {
                 "x": 120,
@@ -704,7 +704,7 @@
               "mae": 0.002012261437908497
             },
             {
-              "objectId": "01M7APP60T5APJ07R50FGB7XZM",
+              "objectId": "01M7B40PDM82BM6QV23636WVV8",
               "type": "image",
               "box": {
                 "x": 710,
@@ -715,7 +715,7 @@
               "mae": 0.002012261437908497
             },
             {
-              "objectId": "01M7APP60TXBX02GFVCVAYC0EJ",
+              "objectId": "01M7B40PDM8B4DQ3KH0K6YQXHH",
               "type": "image",
               "box": {
                 "x": 1300,
@@ -740,7 +740,7 @@
           "alphaMae": 0,
           "boxMaes": [
             {
-              "objectId": "01M7APP60TQG60WDMZFDVWK655",
+              "objectId": "01M7B40PDNEQDFZHFREKGG1AHM",
               "type": "shape",
               "box": {
                 "x": 0,
@@ -751,7 +751,7 @@
               "mae": 0.0008691094203885258
             },
             {
-              "objectId": "01M7APP60TPPS15RJ09QC3QT88",
+              "objectId": "01M7B40PDN01CXT36HBMZPQ456",
               "type": "image",
               "box": {
                 "x": 120,
@@ -762,7 +762,7 @@
               "mae": 0.003364078431372549
             },
             {
-              "objectId": "01M7APP60TBYMNXNTWXVE2089T",
+              "objectId": "01M7B40PDMZFMY0JMNW3K98RW0",
               "type": "image",
               "box": {
                 "x": 710,
@@ -773,7 +773,7 @@
               "mae": 0.003364078431372549
             },
             {
-              "objectId": "01M7APP60TVY0SKWNYNTCAM95K",
+              "objectId": "01M7B40PDMC31WJY5XRMF5ZYWX",
               "type": "image",
               "box": {
                 "x": 1300,
@@ -788,12 +788,59 @@
           "refPngPath": "renders/pro7-synth-picture-effects/4.ref.png",
           "ordoPngPath": "renders/pro7-synth-picture-effects/4.png",
           "ms1920": 0
+        },
+        {
+          "n": 5,
+          "ssim": 0.9987003220147603,
+          "transparentRef": false,
+          "overallMae": 0.0024380054201464537,
+          "backgroundMae": 0,
+          "alphaMae": 0,
+          "boxMaes": [
+            {
+              "objectId": "01M7B40PDNJNRDC9JE6A3FC197",
+              "type": "shape",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 0.0024380054201464537
+            },
+            {
+              "objectId": "01M7B40PDN7S04N2SRMEJ7FRHH",
+              "type": "image",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "w": 1920,
+                "h": 1080
+              },
+              "mae": 0.0024380054201464537
+            },
+            {
+              "objectId": "01M7B40PDN0TD81N6Y1W7ZWS8D",
+              "type": "image",
+              "box": {
+                "x": 260,
+                "y": 140,
+                "w": 1400,
+                "h": 800
+              },
+              "mae": 0.0020351531862745098
+            }
+          ],
+          "features": ["drawsBgColor", "elShadow", "elFeather", "mediaFill"],
+          "refPngPath": "renders/pro7-synth-picture-effects/5.ref.png",
+          "ordoPngPath": "renders/pro7-synth-picture-effects/5.png",
+          "ms1920": 0
         }
       ],
       "importNotes": [
         "[info] ProPresenter 7 proto greyshirtguy/ProPresenter7-Proto@1c019ab18972",
-        "[info] skipped slide labels (4)",
-        "[info] imported \"pro7-synth-picture-effects\": 1 section(s), 4 slide(s), 1 arrangement(s)"
+        "[info] skipped slide labels (5)",
+        "[info] imported \"pro7-synth-picture-effects\": 1 section(s), 5 slide(s), 1 arrangement(s)"
       ]
     }
   ],

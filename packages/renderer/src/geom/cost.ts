@@ -896,8 +896,14 @@ export function slidePlan<T>(
  * shapes without their effects (`slidePlan`) and the converter leaves them out with a note. The worship
  * corpus's most effected slides reach 7.7 (Slidesmania templates of 8-9 large shadowed shapes; p99 7.3, p90
  * 1.2), its most soft-edged 1.0 slide area of soft edges (9.2 weighted).
+ *
+ * A picture the outputs prepare (`picture.ts` `pictureTarget`: unturned, or masked) pays its soft edge once,
+ * in the asset worker's prepare step (`SOFT_EDGE_STEP`), and is copied 1:1 after, its shadow a cached layer
+ * under it: its soft edge weighs `preparedSoftEdge`, as a shadow layer does (the 2026-11-13 review: at 8, a
+ * ProPresenter slide of two full-frame feathered photos drew the second without its feather, and health
+ * rated a feathered photo 'heavy', 46.5 ms estimated at 3840 against 14-19 ms measured).
  */
-export const EFFECT_COST = { slide: 10, softEdge: 8 } as const;
+export const EFFECT_COST = { slide: 10, softEdge: 8, preparedSoftEdge: 1 } as const;
 
 /** The fields of a shape `effectArea` reads. */
 export interface EffectedObject {
@@ -913,10 +919,12 @@ export interface EffectedObject {
  * What an object's effects weigh against `EFFECT_COST.slide`: their layers' area in slide areas, weighted.
  * `drawn` is what the shape draws in box space (`drawnBounds`; default: its box), placed on the slide and
  * grown and cut as the drawer grows and cuts its layers (`effects.ts` `drawEffected`; logical px, the reach's
- * 2 device px taken as 2).
+ * 2 device px taken as 2). `prepared`: a picture the outputs prepare, whose soft edge weighs
+ * `EFFECT_COST.preparedSoftEdge`.
  */
-export function effectArea(o: EffectedObject, drawn?: Bounds): number {
-  const weight = (o.shadow ? 1 : 0) + (o.glow ? 1 : 0) + (o.softEdge ? EFFECT_COST.softEdge : 0);
+export function effectArea(o: EffectedObject, drawn?: Bounds, prepared = false): number {
+  const soft = prepared ? EFFECT_COST.preparedSoftEdge : EFFECT_COST.softEdge;
+  const weight = (o.shadow ? 1 : 0) + (o.glow ? 1 : 0) + (o.softEdge ? soft : 0);
   if (!weight || !o.box) return 0;
   const fin = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
   const box = { x: fin(o.box.x), y: fin(o.box.y), w: Math.abs(fin(o.box.w)), h: Math.abs(fin(o.box.h)) };
