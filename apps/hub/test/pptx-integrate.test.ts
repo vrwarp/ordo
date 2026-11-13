@@ -439,7 +439,9 @@ describe.skipIf(!tools)('a 4:3 deck (design/27 §4, §15 M3 exit)', () => {
     // The crowded slide: drawn natively within the slide area, what its budgets left out listed, never pending.
     expect(p3.objects.length).toBeGreaterThan(0);
     expect(p3.objects.every(inArea)).toBe(true);
-    expect(p3.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
+    // The ladder's decorations, and the elements the converter's guard left out past 200 objects: nothing draws
+    // them, LibreOffice included (it draws no budget art), so both are listed on this hub with LibreOffice.
+    expect(p3.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration', 'element'] });
     expect(p3.pptx!.pending).toBeUndefined();
     expect(p3.objects.some((o) => o.type === 'text' && o.text === 'Page three')).toBe(true);
 
@@ -587,7 +589,9 @@ describe('the size budgets through the job (design/27 §3.4, §14.10)', () => {
     expect(result.loJobId).toBeUndefined();
     expect(presentationBytes(p)).toBeLessThanOrEqual(SIZE_BUDGETS.presentationMax);
     expect(largest).toBeLessThan(SIZE_BUDGETS.previewMax);
-    // Only the tail is minimal: no shape, every text box still there.
+    // Only the tail is minimal: no shape, every text box still there. A deck this large does not fit 4 MiB
+    // even minimal with each slide's page (its background colour, about 200 bytes), so the ladder leaves the
+    // pages out rather than cut the text of every slide (`ladder.ts` `planLadder`).
     for (const s of all.slice(first)) {
       expect(s.objects.some((o) => o.type === 'shape')).toBe(false);
       expect(s.objects.filter((o) => o.type === 'text').length).toBeGreaterThan(0);

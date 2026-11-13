@@ -29,14 +29,31 @@ import type { HubTools } from '../tools.ts';
 export const CONVERTER_VERSION = 2;
 
 /**
- * The stored M9 fields the import writes (design/27 §15 M9 decision 13, decisions.md 1), passed to the
- * converter as `EmitOptions.m9Writes` (`sceneTask.ts`). A kill switch per field: take one out and the import
- * writes what an older build draws for it instead (§3.2), so a field found wrong can be withheld without a
- * release of the drawers. A field stays out until what reads it is in (the regroup's rollout rule):
- * 'decorFile' until `decor-render` names decoration files here and on the client (`geoms.ts`, the client's
- * `nameGeoms`), so no `pptxdecor:<n>` placeholder is ever stored; a decoration keeps its parts in the slide.
+ * M9 fields that stay off until what reads them is on main (design/27 §15 M9 "Rollout"): 'decor' until
+ * `decor-render` registers the decoration drawer (a `ShapeObject.decor` draws its legacy empty line until
+ * then: the shapes would vanish), and 'decorFile' until it names decoration files here and on the client
+ * (`geoms.ts`, the client's `nameGeoms`), so no `pptxdecor:<n>` placeholder is ever stored.
  */
-export const M9_WRITES: ReadonlySet<M9Field> = new Set([...ALL_M9_FIELDS].filter((f) => f !== 'decorFile'));
+export const M9_HELD_BACK: ReadonlySet<M9Field> = new Set<M9Field>(['decor', 'decorFile']);
+
+/**
+ * The stored M9 fields the import writes (design/27 §15 M9 decision 13, decisions.md 1), passed to the
+ * converter as `EmitOptions.m9Writes` (`sceneTask.ts`), and to its parse, so the slide budgets plan only what
+ * is written. The kill switch of the M9 rollout, per field: take one out and the import writes what an older
+ * build draws for it instead (§3.2), so a field found wrong can be withheld without a release of the drawers.
+ * Every field but `M9_HELD_BACK`.
+ */
+export const M9_WRITES: ReadonlySet<M9Field> = new Set(
+  [...ALL_M9_FIELDS].filter((f) => !M9_HELD_BACK.has(f)),
+);
+
+/**
+ * Whether the import draws pictures from sheets (`EmitOptions.sheets`: `pptxmedia:sheet<n>` composites and
+ * atlases). False until `decor-render` stores sheets here and on the client: an unresolved sheet placeholder
+ * would drop its pictures without a word. Without sheets every picture is its own object, and the slide
+ * budgets leave the topmost past the render clamp's 16 out and list them (`budget.ts` `BudgetOptions`).
+ */
+export const PPTX_SHEETS = false;
 
 const MiB = 1024 * 1024;
 

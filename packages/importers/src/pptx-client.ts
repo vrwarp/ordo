@@ -58,13 +58,20 @@ export const CONVERTER_VERSION = 2;
 
 /**
  * The stored M9 fields a client parse writes (`EmitOptions.m9Writes`): the hub's `M9_WRITES`, the per-field
- * kill switch of design/27 M9 (a hub test checks that both name the same fields). Every field but
- * 'decorFile': this parse names geometry files only (`nameGeoms`), so a decoration keeps its parts in the
- * slide until `decor-render` names decoration files too.
+ * kill switch of design/27 M9's rollout (a hub test checks that both name the same fields). Every field but
+ * 'decor' and 'decorFile': no decoration drawer is registered yet, and this parse names geometry files only
+ * (`nameGeoms`), until `decor-render` draws decorations and names their files.
  */
 export const CLIENT_M9_WRITES: ReadonlySet<M9Field> = new Set(
-  [...ALL_M9_FIELDS].filter((f) => f !== 'decorFile'),
+  [...ALL_M9_FIELDS].filter((f) => f !== 'decor' && f !== 'decorFile'),
 );
+
+/**
+ * Whether a client parse draws pictures from sheets (`EmitOptions.sheets`): the hub's `PPTX_SHEETS` (a hub
+ * test checks both). False until `decor-render` stores sheets: an unresolved `pptxmedia:sheet<n>` would drop
+ * its pictures without a word.
+ */
+export const CLIENT_SHEETS = false;
 
 export const PPTX_CLIENT_LIMITS = {
   entries: 200_000,
@@ -306,8 +313,9 @@ function toPicture(d: Draft): void {
  * picture-class slide).
  */
 function provenance(d: Draft, hash: string, lo: boolean): SlidePptx {
-  const pending = lo && (d.cls !== 'native' || !!d.metafiles?.length);
-  const missing = lo ? undefined : d.cls === 'picture' ? [missingEntry('slide')] : d.missing;
+  // A hybrid slide waits for its art; one that is hybrid only for what the budgets left out does not.
+  const pending = lo && (d.cls === 'picture' || !!d.art || !!d.metafiles?.length);
+  const missing = d.cls === 'picture' ? (lo ? undefined : [missingEntry('slide')]) : d.missing;
   return {
     fileId: hash,
     index: d.ref.index,
@@ -601,7 +609,7 @@ export async function importPptxClient(
   const pkg = openPackage(parts);
   // M9: what the hub's converter is told (`sceneTask.ts`): its stored fields, and whether LibreOffice is there.
   const withLo = options.libreoffice !== false;
-  const m9 = { m9Writes: CLIENT_M9_WRITES, ...(withLo ? {} : { libreoffice: false }) };
+  const m9 = { m9Writes: CLIENT_M9_WRITES, sheets: CLIENT_SHEETS, ...(withLo ? {} : { libreoffice: false }) };
   const first = convertDeck(parts, {
     range: { from: 0, to: 0 },
     extendBackgrounds: options.extendBackgrounds ?? true,
@@ -745,12 +753,13 @@ export async function importPptxClient(
       ...(s.clips?.length ? { clips: s.clips } : {}),
     };
     // M9, without LibreOffice: the converter planned no art and listed what is not drawn (its note is in
-    // the slide's notes already); the art's text stays for search.
-    if (!withLo) {
-      const missing = (s.missing ?? []).filter((m) => typeof m === 'string').slice(0, MISSING_LIMITS.entries);
-      if (missing.length) d.missing = missing;
-      if (s.artText && !d.artText) d.artText = s.artText;
-    }
+    // the slide's notes already); the art's text stays for search. With LibreOffice it lists only what the
+    // slide budgets' guard left out, which nothing draws either (LibreOffice draws no budget's art): kept as
+    // missing on both paths (`provenance`), as the hub keeps it (`nativeJob.ts` `budgetLeft`).
+    const missing = (s.missing ?? []).filter((m) => typeof m === 'string').slice(0, MISSING_LIMITS.entries);
+    if (missing.length) d.missing = missing;
+    if (!withLo && s.artText && !d.artText) d.artText = s.artText;
+    if (withLo && missing.length && d.cls === 'native') d.cls = 'hybrid';
     if (ref.hidden) d.slide.hidden = true;
     const noteText = scan.notes.find(([idx]) => idx === ref.index)?.[1];
     if (noteText) d.slide.notes = noteText.slice(0, NOTES_CUT_CHARS);

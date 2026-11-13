@@ -9,7 +9,7 @@ import {
 } from './budget.ts';
 import { MAX_SLIDE_OBJECTS, MAX_SLIDE_PICTURES, shapeRuns } from './classify.ts';
 import { frameOf } from './frame.ts';
-import { emitSlides, parseDeck } from './index.ts';
+import { convertDeck, emitSlides, M9_FIELDS, parseDeck } from './index.ts';
 import type { Background, Element, ShapeElement, SlideScene } from './ir.ts';
 import { drawingXml, dspSp, smartArtFrame, smartArtRels, withSmartArt } from './smartart.test-util.ts';
 import {
@@ -415,5 +415,33 @@ describe('SmartArt drawings past the object budget', () => {
     const decor = out.slide.objects.filter((o) => o.type === 'shape' && o.decor);
     expect(decor.length).toBeGreaterThan(0);
     expect(decor.every((o) => o.locked && o.origin?.role === 'diagram')).toBe(true);
+  });
+});
+
+describe('without decorations (the M9 rollout: no decoration drawer yet)', () => {
+  const noDecor = new Set(M9_FIELDS.filter((f) => f !== 'decor' && f !== 'decorFile'));
+
+  it('plans no decoration: a slide past 150 objects keeps each shape, within the clamp', () => {
+    const parts = buildDeck({ slides: [{ shapes: group(2, squares(160, 10, TWO)) }] });
+    // With decorations (the default) the group becomes decorations (step 3).
+    expect(parseDeck(parts).slides[0]!.elements.some((e) => e.decor !== undefined)).toBe(true);
+    const s = parseDeck(parts, { m9Writes: noDecor }).slides[0]!;
+    expect(s.elements.some((e) => e.decor !== undefined)).toBe(false);
+    expect(s.classification).toMatchObject({ class: 'native' });
+    const out = convertDeck(parts, { m9Writes: noDecor }).slides[0]!;
+    expect(out.slide.objects.some((o) => o.type === 'shape' && o.decor)).toBe(false);
+    // 160 squares and the white page: past the 150 budget, within the 190 the guard keeps and the clamp's 200.
+    expect(out.slide.objects).toHaveLength(161);
+    expect(out.missing).toBeUndefined();
+  });
+
+  it('past 190 objects the guard leaves the topmost out and lists them, never a decoration that draws nothing', () => {
+    const parts = buildDeck({ slides: [{ shapes: squares(220, 10, TWO) }] });
+    const out = convertDeck(parts, { m9Writes: noDecor }).slides[0]!;
+    expect(out.slide.objects.some((o) => o.type === 'shape' && o.decor)).toBe(false);
+    expect(out.slide.objects.length).toBeLessThanOrEqual(MAX_SLIDE_OBJECTS_TEXT);
+    expect(out.classification).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
+    expect(out.missing).toEqual(['decoration']);
+    expect(out.notes.some((n) => /element\(s\) past the slide's budgets are not drawn/.test(n))).toBe(true);
   });
 });

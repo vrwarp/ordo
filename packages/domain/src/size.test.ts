@@ -677,8 +677,57 @@ describe('fitSlideBudget (design/27 §3.4, M9 ladder)', () => {
     expect(over.missing).toEqual(['decoration']);
     expect(over.slide.objects.map((o) => o.id)).toEqual([id('BG', 2), id('Q', 7)]);
     expect(over.slide.objects[0]).toBe(page);
-    // The presentation's tail (`minimalSlide`) is sized to 4 MiB: there it is a shape, left out.
-    expect(minimalSlide(words).objects.map((o) => o.id)).toEqual([id('Q', 7)]);
+    // The presentation's tail (`minimalSlide`) keeps it too, as the slide's background colour alone.
+    expect(minimalSlide(words).objects.map((o) => o.id)).toEqual([id('BG', 2), id('Q', 7)]);
+    expect(minimalSlide(words).objects[0]).toEqual(page);
+  });
+
+  it("minimal keeps a background shape as the slide's colour: a plain rect, the bottom one only", () => {
+    const white = { r: 255, g: 255, b: 255, a: 1 };
+    const navy = { r: 10, g: 20, b: 60, a: 1 };
+    // A gradient page drawn as M6 writes it (geometry, gradient, effects), a second bg shape over it, and text.
+    const page: ShapeObject = {
+      id: id('BG', 3),
+      type: 'shape',
+      box: box(0, 0, 1920, 1080),
+      shape: 'rect',
+      opacity: 0.9,
+      radius: 0,
+      geom: { preset: 'rect' },
+      gradient: {
+        kind: 'linear',
+        angle: 90,
+        stops: [
+          { at: 0, color: navy },
+          { at: 1, color: white },
+        ],
+      },
+      shadow: { dx: 0, dy: 0, blur: 4, color: navy },
+      origin: { src: 'pptx', role: 'bg' },
+      locked: true,
+    };
+    const inner: ShapeObject = { ...page, id: id('BG', 4), fill: white, gradient: undefined };
+    const words: Slide = { ...importedSlide(6), objects: [page, inner, formatted(7, 3, 400)] };
+    const m = minimalSlide(words);
+    expect(m.objects.map((o) => o.id)).toEqual([id('BG', 3), id('Q', 7)]);
+    expect(m.objects[0]).toEqual({
+      id: id('BG', 3),
+      type: 'shape',
+      box: box(0, 0, 1920, 1080),
+      shape: 'rect',
+      fill: navy,
+      opacity: 0.9,
+      radius: 0,
+      origin: { src: 'pptx', role: 'bg' },
+      locked: true,
+    });
+    expect(jsonBytes(m.objects[0])).toBeLessThan(260);
+    expect(Slide.safeParse(m).success).toBe(true);
+    // A shape that paints nothing is no background colour.
+    const none: ShapeObject = { ...page, gradient: undefined };
+    expect(
+      minimalSlide({ ...words, objects: [none, formatted(7, 3, 400)] }).objects.map((o) => o.id),
+    ).toEqual([id('Q', 7)]);
   });
 
   it("minimal keeps every text object's text", () => {

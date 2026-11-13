@@ -802,8 +802,9 @@ describe('the budget ladder without LibreOffice (M9)', () => {
       expect(textsOf(s)[0]).toMatch(new RegExp(`^Slide ${i + 1} Lorem`));
       if (i < first) expect(s.pptx).toMatchObject({ class: 'native' });
       else {
+        // Its page stays, as the slide's background colour (a plain rect, origin role 'bg').
         expect(s.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
-        expect(s.objects.some((o) => o.type === 'shape')).toBe(false);
+        expect(s.objects.filter((o) => o.type === 'shape').map((o) => o.origin?.role)).toEqual(['bg']);
       }
     }
     expect(result.notes.join('\n')).toMatch(
@@ -881,9 +882,11 @@ describe('the budget ladder without LibreOffice (M9)', () => {
     const { result, p, lines } = await runJob(deckOf(3), { pool: spy(calls, { edit }) });
     expect(result).toMatchObject({ slides: 3, picture: 0 });
     const [s1, s2, s3] = slidesOf(p) as [Slide, Slide, Slide];
-    // Slide 1 minimal: its text kept, the refused shape (and every other shape) left out, said so.
+    // Slide 1 minimal: its text and its page (the background colour) kept, the refused shape (and every other
+    // shape) left out, said so.
     expect(textsOf(s1)).toEqual(['Slide 1']);
-    expect(s1.objects.some((o) => o.type === 'shape')).toBe(false);
+    expect(s1.objects.filter((o) => o.type === 'shape').map((o) => o.origin?.role)).toEqual(['bg']);
+    expect(s1.objects.some((o) => o.id === bad)).toBe(false);
     expect(s1.pptx!.notes).toContain('not storable as converted: only its text and pictures are kept');
     expect(s1.pptx!.class).toBe('hybrid');
     // Slide 2: its text object refused itself, so it is rebuilt from its text and box alone.

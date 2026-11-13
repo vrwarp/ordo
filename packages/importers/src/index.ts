@@ -41,6 +41,7 @@ export {
   type PptxClientSlideExtra,
   type PptxLoSlide,
   CLIENT_M9_WRITES,
+  CLIENT_SHEETS,
   CONVERTER_VERSION,
   PPTX_CLIENT_LIMITS,
 } from './pptx-client.ts';

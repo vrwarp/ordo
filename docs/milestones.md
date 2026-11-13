@@ -95,6 +95,18 @@ P0 to P3 of [design/28](design/28-mobile.md)); a phone remote (design/28 §11 "N
 outputs on separate machines; auto-shrink and RTL text; per-object builds; cloud sync and
 user accounts.
 
+## PowerPoint without LibreOffice (design/27 M9)
+
+M9 ships in pull requests on main, each published at once as the edge image and the Pages demo:
+
+- `APP_VERSION` is 0.6.0 for M9's first pull request (waves 0-1 and the slide budgets); the build a venue rolls
+  back to is 0.5.0, whose schema the compatibility tests read M9's slides with (design/27 §3.2).
+- The PowerPoint parse runs in the operator (the client path) with the hub's own parse as the fallback; both
+  convert with the same version and fields, and M9's exit is measured on the client path.
+- `M9_WRITES` (`apps/hub/src/pptx/shared.ts`) is the kill switch: a field the converter writes stays out of it
+  until its drawer is on main, and can be taken out again without a release of the drawers. Decorations and
+  picture sheets stay out until `decor-render` (design/27 §15 M9 "rollout").
+
 ## Implementation status
 
 All tasks in M1, M2 and M3 are implemented in this repository, with these exceptions and open items:

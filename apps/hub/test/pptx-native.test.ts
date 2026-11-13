@@ -378,6 +378,30 @@ describe('pptx-native: classes, budgets and timing', () => {
     expect(loJobs(p.id)).toEqual([]);
   });
 
+  it('lists what the slide budgets leave out with LibreOffice too: it draws no budget art (M9)', async () => {
+    // 208 text boxes: past the 200 the render clamp draws, the topmost are left out by the converter's guard.
+    const many = Array.from({ length: 208 }, (_, i) =>
+      sp({
+        id: 10 + i,
+        x: (i % 10) * 1.2 * IN,
+        y: Math.floor(i / 10) * 0.3 * IN,
+        cx: IN,
+        cy: IN / 4,
+        txBox: true,
+        txBody: body(para(run('Word'))),
+      }),
+    ).join('');
+    const { result, p } = await importDeck(buildDeck({ slides: [{ shapes: many }] }), 'Crowded.pptx');
+    const [s] = slidesOf(p) as [Slide];
+    expect(s.objects.filter((o) => o.type === 'text').length).toBeLessThan(208);
+    // This hub has LibreOffice, and still nothing draws them: listed, the slide hybrid, nothing waits.
+    expect(s.pptx).toMatchObject({ class: 'hybrid', missing: ['element'] });
+    expect(s.pptx!.pending).toBeUndefined();
+    expect(s.pptx!.notes!.join(' ')).toMatch(/element\(s\) past the slide's budgets are not drawn/);
+    expect(result).toMatchObject({ hybrid: 1, pending: 0 });
+    expect(loJobs(p.id)).toEqual([]);
+  });
+
   /** Slide 2 of an import is over 64 KB: simplified by the budget ladder (M9), logged once, counted once. */
   function expectOneSimplified(result: PptxNativeResult, p: Presentation, what: RegExp): Slide {
     expect(result).toMatchObject({ picture: 0, compact: 0, simplified: 1, pending: 0 });
@@ -487,10 +511,18 @@ describe('pptx-native: the presentation budget', () => {
     const first = all.findIndex((s) => s.pptx!.missing?.includes('decoration'));
     expect(first).toBeGreaterThan(200);
     expect(result.simplified).toBe(360 - first);
-    // Only the tail is minimal: its decoration left out, its text still a text object.
+    // Only the tail is minimal: its decoration left out, its text still a text object, its white page kept
+    // as a plain rect (the slide's background colour: dark text never lands on the output's black).
     for (const s of all.slice(first)) {
       expect(s.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
-      expect(s.objects.some((o) => o.type === 'shape')).toBe(false);
+      const shapes = s.objects.filter((o) => o.type === 'shape');
+      expect(shapes).toHaveLength(1);
+      expect(shapes[0]).toMatchObject({
+        shape: 'rect',
+        fill: { r: 255, g: 255, b: 255 },
+        origin: { role: 'bg' },
+      });
+      expect(s.objects[0]).toBe(shapes[0]);
     }
     for (const s of all.slice(0, first)) expect(s.pptx!.class).toBe('native');
     const last = all.at(-1)!.objects.find((o) => o.type === 'text');

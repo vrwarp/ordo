@@ -29,6 +29,7 @@ import { libraryFaces } from './faces.ts';
 import { geomFileOf, type NamedGeomFile } from './geoms.ts';
 import {
   M9_WRITES,
+  PPTX_SHEETS,
   PPTX_LIMITS,
   type SceneScan,
   type SceneSlideExtra,
@@ -61,6 +62,7 @@ export function sceneTask(input: SceneTaskInput): SceneTaskOutput {
     extendBackgrounds: input.options.extendBackgrounds ?? true,
     transitionSounds: input.options.transitionSounds ?? false,
     m9Writes: M9_WRITES,
+    sheets: PPTX_SHEETS,
     newId,
   });
   const out: SceneTaskOutput = { result, ms: 0, heapMb: 0 };

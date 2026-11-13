@@ -757,13 +757,19 @@ the fidelity harness's A/B.
   or square caps joins only when it is at most 2 logical px wide (`THIN_LINE_PX`; `DecorPaint` has no joins or
   caps). Caps: 256 parts, 64 paints, 16,384 points, 24 shadowed shapes. Legacy: an empty line, locked (an older
   build draws nothing, §3.2). A large decoration is a decoration file (`DecorData.ref`, `pptxdecor:<n>`), only
-  with the 'decorFile' field: the hub's and the client's `M9_WRITES` leave it out until `decor-render` names
-  decoration files, so their decorations keep their parts in the slide and no placeholder is ever stored.
+  with the 'decorFile' field. The hub's and the client's `M9_WRITES` leave out 'decor' and 'decorFile' until
+  `decor-render` registers the decoration drawer and names decoration files (the M9 rollout below): their
+  budgets then plan no decoration at all (`BudgetOptions.decorations`), so a slide past 150 objects keeps
+  its merges and each shape, and the guard leaves the topmost past 190 out and lists them, instead of
+  decorations that would draw nothing.
 - **Sheets** (`pptxmedia:sheet<n>`, `EmitResult.sheets`, `SheetBake`, made by the hub and the harness,
   `decor-render`): cells at the 3840 density, in z-order, each the picture as its object draws it (crop,
   recolour, flips, a turn by quarter turns exactly or by any angle sampled bilinearly, opacity), at most 64
   cells, 8,192 px a side, 16 MP out and 32 MP decoded; the objects as they are without the sheet go with it
-  (`EmittedSlide.sheets`), for an importer that cannot make it.
+  (`EmittedSlide.sheets`), for an importer that cannot make it. The hub and the client make none yet
+  (`PPTX_SHEETS`, `CLIENT_SHEETS` false until `decor-render` stores them): their budgets plan no composite or
+  atlas (`BudgetOptions.sheets`), every picture is its own object, and past the render clamp's 16 distinct
+  pictures (`MAX_DRAWN_PICTURES`) the topmost are left out and listed, never dropped without a word.
 - **Kept whole** (the wave 1 re-review): an object past the slide's drawing or effect budget is stored as it
   is, its gradient, geometry, dash, ends and effects kept (`emit.ts` `fitDrawing`, `fitEffects` no longer
   flatten it to its legacy copy), and a shape past the drawing budget is never sent to the art
@@ -778,6 +784,35 @@ the fidelity harness's A/B.
   objects, a 96-cell table counted as one object and emitted as its M6 group until `tables-conv`'s table object.
   Sermons: 73 of 73 native, unchanged.
 <!-- /m9:decor-conv -->
+
+<!-- m9:rollout -->
+_The M9 rollout (regroup 2026-11-13; PR #23 lands M9 waves 0-1 and wave 2a)._ Every push to main publishes the
+edge Docker image and the Pages demo, so each M9 PR ships on its own:
+- **Version.** M9 is `APP_VERSION` 0.6.0 for the whole PR (one bump; a later PR bumps again at its merge).
+  The build a venue rolls back to is main's 0.5.0, whose schema is the older-build fixture
+  (`schemas.prev.test-util.ts`, §3.2 "Older builds"): it strips every M9 field and draws the legacy shapes and
+  text written beside them.
+- **The client path.** A PowerPoint is parsed in the operator (`@ordo/importers` `importPptxClient`, sent as
+  the upload's `clientScene`) with the hub's pool as the fallback; both run the same converter
+  (`CONVERTER_VERSION` 2) with the same fields (`CLIENT_M9_WRITES` = `M9_WRITES`, `CLIENT_SHEETS` =
+  `PPTX_SHEETS`; hub tests check both), and every M9 converter change holds on both paths until they share one
+  import core. The M9 exit is measured on the client path.
+- **`M9_WRITES` is the kill switch.** A converter field stays out of it until its drawer is on main, and the
+  drawer's PR turns it on: 'decor' (no decoration drawer until `decor-render`) and 'decorFile' are held back
+  (`M9_HELD_BACK`), and pictures are drawn from no sheet (`PPTX_SHEETS` false). A field found wrong after a
+  release is withheld the same way, with no release of the drawers: imports from then on write what an older
+  build draws for it; presentations imported before keep what they stored. The fields left on draw on main
+  today (a table by its registered drawer, `tables-render`; 3-D flat by decision; the other converter seams
+  write nothing yet).
+- **What the budgets leave out is always listed**, with LibreOffice or without: the guard's elements past 190
+  or 200 objects and 16 pictures (`EmittedSlide.missing`, recorded on the LibreOffice path too: `nativeJob.ts`
+  `budgetLeft`, the client's `provenance`) and the ladder's (`Slide.pptx.missing`), so goLive's degraded list
+  names them; a slide hybrid only for them waits for nothing.
+- **The tail keeps its page.** The presentation's tail (§3.4) stores each slide minimal with its page, the
+  background drawn as a shape, as a plain rect in its colour (`minimalSlide`), so its dark text is never drawn
+  on the output's black; a deck that does not fit 4 MiB even so (about 2,000 slides) leaves the pages out
+  before any text is cut (`ladder.ts` `planLadder`).
+<!-- /m9:rollout -->
 
 **One rule for every drawer.** `slideContent(slide): { pictureMediaId?: string; objects: SlideObject[] }` in `packages/renderer/src/content.ts`:
 - `pptx.show === 'picture'` and `pptx.refMediaId`: the reference picture plus only the objects without `origin` (the operator's own additions);
@@ -2402,8 +2437,10 @@ _Built for M9 (wave 1, track `conv-seams`): the converter's seams, so that each 
   writing, centerBlock, vectorFonts, adjWide, geomFile64; default every one) is consulted by each stub: without
   a field the converter writes what an older build draws for it (§3.2). The hub passes `M9_WRITES`
   (`apps/hub/src/pptx/shared.ts`, decisions.md 1) from `sceneTask.ts`, and `CONVERTER_VERSION` is 2. A field
-  stays out of `M9_WRITES` until what reads it is in (the regroup's rollout rule): 'decorFile' (decoration
-  files, `decor-conv`) until `decor-render` names them on the hub and the client.
+  stays out of `M9_WRITES` until what reads it is in (the M9 rollout below): 'decor' and 'decorFile'
+  (`M9_HELD_BACK`) until `decor-render` draws decorations and names their files on the hub and the client.
+  The parse reads the same set (`ParseOptions.m9Writes`, `sheets`), so the slide budgets plan only what is
+  written.
 - **Notes.** `log.ts` `addNote` keeps a slide's stored notes within `Slide.pptx.notes`' 16: 15 and
   'and N more'.
 - **Text measured on the hub.** The sfnt reader and cmap are `@ordo/renderer/text/sfnt/{reader,cmap}.ts`
@@ -2425,10 +2462,10 @@ _Built for M9 (wave 2, track `decor-conv`): the slide budgets drawn natively (§
   recipe once), `EmittedSlide.sheets` (each sheet's uses and the objects to put back), `EmittedSlide.plate`
   (the plate plan); `EmitOptions.decorId`, `sheetId`, `sheets` (false: no sheets, for an importer that cannot
   make them). The hub's storing of decoration files and sheets is `decor-render`'s (`geoms.ts`, `bakes.ts`
-  `storeSheets`); until it lands an import leaves a sheet's objects out ('could not be imported'), and writes
-  no decoration file: 'decorFile' (`M9_FIELDS`) is out of the hub's and the client's `M9_WRITES`, so a
-  decoration keeps its parts in the slide and no `pptxdecor:<n>` placeholder can be stored (`decor-render`
-  puts it back in when it names the files).
+  `storeSheets`); until it lands the hub and the client convert with `sheets: false` and without 'decor' and
+  'decorFile' in `M9_WRITES` (the M9 rollout below), so no `pptxmedia:sheet<n>` or `pptxdecor:<n>` placeholder
+  is ever written and no decoration is stored that nothing draws (`decor-render` turns each back on with its
+  drawer and its storing).
 - Decisions.md "Slow-to-draw elements": the converter keeps every element and its full vector source, names
   the slide's plate candidates, and leaves "plate or live" to the drawers (`decor-render`).
 <!-- /m9:decor-conv -->
