@@ -9,7 +9,7 @@
 | End to end  | Playwright, headless Chromium with SwiftShader (`--use-angle=swiftshader --enable-unsafe-webgpu`) | Operator, two outputs and the stage on their own origins served by a real hub over HTTP (below); GO and flip timing, clears, looks, degraded mode, relaunch, and the chaos specs                                                                                                                                   |
 | Soak        | `tools/soak` (Playwright, real GPU on the venue PC or a dev machine)                              | 60+ minutes of the live playlist with motion backgrounds, GO every 10 s; asserts zero missed frames and zero long tasks from telemetry                                                                                                                                                                             |
 | Visual      | Playwright screenshots of outputs vs golden PNGs                                                  | Text rasterizer and looks; per-pixel tolerance for anti-aliasing                                                                                                                                                                                                                                                   |
-| Fidelity    | `tools/pro7-fidelity` (Playwright, headless Chromium `@ordo/renderer`)                            | ProPresenter 7 visual fidelity: scores imported `.pro` slides against reference PNGs using dual-plate RGBA SSIM (`--export-compat`), generates diagnostic strips and clusters, and enforces CI non-regression ratchet against baseline                                                                             |
+| Fidelity    | `tools/pro7-fidelity` (Playwright, headless Chromium `@ordo/renderer`)                            | ProPresenter 7 visual fidelity: scores imported `.pro` slides against reference PNGs using dual-plate RGBA SSIM (`--export-compat`), generates diagnostic strips and clusters, and enforces CI non-regression ratchet against baseline; the golden-pptx census ratchet holds every public deck's slide classes (`census-ratchet.ts`)                                                                             |
 
 ## The compositor under test
 
@@ -271,14 +271,41 @@ The harness produces:
   every run. Local evaluation can additionally run against real exported `.proPlaylist` bundles via
   `--sample-dir <dir>`.
 
+## The golden-pptx census ratchet
+
+`pnpm --filter @ordo/pptx-fidelity census:ratchet` (`tools/pptx-fidelity/src/census-ratchet.ts`) runs the
+census (`census.ts`) over the committed public corpus `golden-pptx/` (112 decks, 1,071 shown slides; about
+15 s here, under a minute on CI) and compares each shown slide's class, its class in the hub and its reasons
+with `tools/pptx-fidelity/golden-census-baseline.json`. A slide whose class gets worse (native < hybrid <
+picture), natively or in the hub, a shown slide that is gone, and a deck that is missing or no longer reads
+fail the run; better classes, other reasons on the same class and new decks or slides are reported, and a PR
+that improves a class records it (`-- --write`) so it cannot slip back. It needs no LibreOffice and no
+browser.
+
 ## CI
 
-GitHub Actions on every pull request and merge to main (and by hand): `pnpm lint`, `pnpm typecheck`, `pnpm test`,
-`pnpm e2e` (SwiftShader, so the 100 ms timing bounds above), the golden images, the ProPresenter 7 synthetic
-visual fidelity ratchet, Docker build. Tags build and push the image. Playwright traces are uploaded on failure.
+GitHub Actions on every pull request and merge to main (and by hand), `.github/workflows/ci.yml`, in four
+jobs that run side by side so none takes more than about 35 minutes (one job took 30 to 45 minutes before):
+
+| Job                                    | Runs                                                                                                                                                                                                                     | Limit  |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ |
+| Lint, types, unit tests, build         | `pnpm lint`, `pnpm typecheck` (tests, specs and tools included), `pnpm test` (`CI` set: timing bounds ×3, golden runs strict), `pnpm build`, `pnpm build:pages`, `pnpm audit` (advisory)                                | 25 min |
+| End-to-end (2 shards)                  | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --shard=<n>/2` with `ORDO_CI=1` (retries 1, SwiftShader, so the 100 ms timing bounds above); uploads `playwright-report-<n>` on failure         | 35 min |
+| Goldens (pinned container)             | in `mcr.microsoft.com/playwright:v1.63.0-noble` with the font list: `golden --strict`, `late-font`, `golden:compositor`; uploads `golden-images` on failure ("Golden images" above)                                        | 20 min |
+| Fidelity ratchets                      | the ProPresenter 7 synthetic ratchet and the golden-pptx census ratchet; uploads their results on failure                                                                                                                | 20 min |
+
+The end-to-end, goldens and fidelity jobs install the image's font packages (Carlito, Caladea, Liberation 2,
+Noto core, Inter) next to ffmpeg, poppler and LibreOffice Impress where they need them; the goldens and
+fidelity jobs add the golden faces (DejaVu, FreeSerif, IPAGothic). Docker images are built by
+`docker-pr.yml` and published by `docker-publish.yml`; tags build and push the image. Not run in CI: the
+benches (`bench:*`, whose 50 ms and frame gates need a known machine) and the PowerPoint fidelity harness
+against LibreOffice (design/27 §14 item 2).
 
 ## Test content
 
 Fixtures are synthetic: generated lyrics, a 10 s test pattern video in each format, a
 PPTX and a PDF with known text boxes, a minimal ProPresenter 7 file built from the proto
-schema. No venue content in the repo.
+schema. No venue content in the repo, with one deliberate exception: `golden-pptx/`, a corpus of 112
+public decks (church sermons, worship lyrics, announcements and file-format test decks) downloaded from
+the web with their sources and a takedown notice in its README, used by the census ratchet. Private
+decks a venue shares for testing never enter the repository.

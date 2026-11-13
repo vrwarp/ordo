@@ -1570,7 +1570,7 @@ _M6 merge re-review, fixed in M9 wave 1 (render-seams)._
    - a chart slide with a photo background and a video below the chart (art z-range, transparent art, background swap);
    - a 48 MP photo (picture preparation).
 
-   CI runs `--engine native --corpus` and fails on a drop of more than 0.01 against the committed baseline.
+   Planned: CI runs `--engine native --corpus` and fails on a drop of more than 0.01 against the committed baseline (`native-baseline.json`); not wired yet (2026-11-13). What CI runs today is the golden-pptx census ratchet (`census-ratchet.ts`, design/23 "Fidelity"): no shown slide of the public corpus may get a worse class, native or in the hub, and no deck may go missing.
 3. **Parser fuzz and limits** (patterns of `pptx.fuzz.test.ts`): billion laughs, DOCTYPE, `a:__proto__`/`a:constructor`, depth, huge parts, lying zip headers, cyclic rels, External targets, 5,001 shapes, NaN and huge numbers, 10k path points, hidden-only decks, 10,000 tiny media parts, control characters in names. Each must finish in under 5 s.
 4. **Renderer goldens** (`golden/page.ts`).
    - Legacy cases stay byte-identical.

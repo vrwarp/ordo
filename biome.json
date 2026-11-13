@@ -9,6 +9,7 @@
       "!tools/fixtures/out",
       "!golden-pptx",
       "!tools/corpus_manifest_input.json",
+      "!tools/pptx-fidelity/golden-census-baseline.json",
       "!**/proto/*.json",
       "!test-results",
       "!**/.e2e-data*",

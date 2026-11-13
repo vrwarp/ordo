@@ -14,6 +14,13 @@ ordo/
   tools/
     soak/           soak runner
     fixtures/       generated test media and documents
+    pptx-fidelity/  PowerPoint fidelity harness, census and the golden-pptx census ratchet
+    pro7-fidelity/  ProPresenter 7 fidelity harness and ratchet
+    geom-gen/       preset geometry generator and its golden
+    golden-docker.sh, golden-from-artifact.sh   renderer goldens in the pinned container (design/23)
+    *.py            the golden-pptx downloader and manifest builder (refresh tools; never run in CI)
+  golden-pptx/      public decks for the census ratchet (sources and takedown notice in its README)
+  e2e/              Playwright specs (tsconfig.e2e.json)
   docs/             this suite
   .github/workflows/ci.yml, docker-pr.yml, docker-publish.yml, pages.yml, audit.yml
   pnpm-workspace.yaml  package.json  tsconfig.base.json  biome.json
@@ -21,7 +28,7 @@ ordo/
 
 ## Tooling
 
-- Node 22, pnpm 9, TypeScript 5 strict, Vite 6, Vitest, Playwright, Biome for lint and
+- Node 22, pnpm 10, TypeScript 5 strict, Vite 6, Vitest, Playwright, Biome for lint and
   format, Zod, Zustand, Dexie, react-konva, protobufjs, fast-xml-parser, Fastify, ws,
   better-sqlite3, pino, argon2.
 - `pnpm dev` starts the hub on `https://localhost:8443` with a self-signed certificate
@@ -65,4 +72,8 @@ schema does not have, fails the check rather than quietly testing something else
 - Any deviation from a design document is made in the same PR as a new ADR plus an edit
   to the design doc. Docs and code move together.
 - Commit messages: `area: imperative summary` (`renderer: pre-allocate crossfade uniforms`).
-- Never commit venue content, PINs, tokens or certificates.
+- Never commit venue content, PINs, tokens or certificates. The one corpus of real decks in the repository,
+  `golden-pptx/`, is public material with its sources recorded; decks a venue shares stay out.
+- Tests stay honest: no retried key presses or relaxed floors to get past a flake (find the cause, design/23),
+  wall-clock bounds through `budgetMs`, 50 ms task gates in the benches, and expected golden images only from
+  the pinned container.
