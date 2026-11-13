@@ -1,5 +1,16 @@
 import { type APIRequestContext, expect, type Page, test } from '@playwright/test';
-import { goLive, json, OP, operatorApi, SONG } from './helpers.ts';
+import {
+  goLive,
+  json,
+  OP,
+  operatorApi,
+  SONG,
+  fixtures,
+  openRoleWindow,
+  outputs,
+  uploadMedia,
+  waitCacheReady,
+} from './helpers.ts';
 import { login } from './linkhelpers.ts';
 
 /**
@@ -38,6 +49,16 @@ async function liveView(page: Page): Promise<void> {
   await expect(page.getByText('First line of verse one').first()).toBeVisible({ timeout: 20_000 });
 }
 
+/** The background an output has actually drawn (its renderer's held background key), '' for none. */
+async function backgroundOn(out: Page): Promise<string> {
+  await out.bringToFront();
+  return out.evaluate(
+    () =>
+      (window as unknown as { __ordo: { state(): { held: { live: string }[] } } }).__ordo.state().held[0]
+        ?.live ?? '',
+  );
+}
+
 test.describe.configure({ mode: 'serial' });
 
 test('Escape closes Diagnostics and a confirmation and leaves the slide on the screens', async ({ page }) => {
@@ -67,4 +88,70 @@ test('Escape closes Diagnostics and a confirmation and leaves the slide on the s
   // Without a dialog, Escape is Clear slide on this screen, as before.
   await page.keyboard.press('Escape');
   await expect.poll(async () => (await liveState(api)).layers.slide.content).toBeNull();
+});
+
+test('Next item past a hidden first slide clears the song background and starts the countdown', async ({
+  context,
+  page,
+}) => {
+  const api = await operatorApi();
+  const bg = await uploadMedia(api, fixtures().png, 'image/png', true);
+  const song = await json<{ id: string }>(api.post('import/songselect', { data: { text: SONG } }));
+  const full = await json<Record<string, unknown>>(api.get(`presentations/${song.id}`));
+  await json(api.put(`presentations/${song.id}`, { data: { ...full, backgroundMediaId: bg.id } }));
+  // A welcome deck whose title slide is hidden (as PowerPoint decks often are), with the service countdown.
+  const welcome = await json<{ id: string }>(
+    api.post('presentations', {
+      data: {
+        title: 'Welcome',
+        kind: 'slides',
+        sections: [
+          {
+            id: 'main',
+            label: 'Main',
+            short: 'M',
+            slides: [
+              { id: 'title', objects: [], hidden: true },
+              { id: 'w1', objects: [] },
+              { id: 'w2', objects: [] },
+            ],
+          },
+        ],
+      },
+    }),
+  );
+  const pl = await json<{ id: string }>(
+    api.post('playlists', {
+      data: {
+        name: `Entry ${Date.now()}`,
+        items: [
+          { id: 'i-song', kind: 'presentation', presentationId: song.id },
+          {
+            id: 'i-welcome',
+            kind: 'presentation',
+            presentationId: welcome.id,
+            countdownTimer: { kind: 'countdownTo', timeOfDay: '23:59', label: 'Service starts in' },
+          },
+        ],
+      },
+    }),
+  );
+  await goLive(api, pl.id);
+  const a1 = (await outputs(api)).find((o) => o.hostIndex === 1 && o.kind !== 'stage')!;
+  const out = await openRoleWindow(context, a1);
+  await waitCacheReady(out);
+
+  await liveView(page);
+  await page.keyboard.press('Space');
+  await expect.poll(() => backgroundOn(out), { timeout: 20_000 }).toContain(bg.id);
+
+  await page.bringToFront();
+  await page.keyboard.press('PageDown');
+  // The song has three slides (cues 0-2), the welcome deck's hidden title is cue 3.
+  await expect.poll(async () => (await liveState(api)).live).toBe(4);
+  const s = await liveState(api);
+  expect(s.layers.background.content).toBeNull();
+  expect(s.props.countdownTimerId).toBe('i-welcome-timer');
+  await expect.poll(() => backgroundOn(out), { timeout: 20_000 }).toBe('');
+  await out.close();
 });

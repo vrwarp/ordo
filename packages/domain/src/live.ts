@@ -76,12 +76,22 @@ export type Cue = {
   backgroundMediaId?: Id;
   /** The slide clears the running background (only when it has none of its own). */
   clearBackground?: boolean;
+  /**
+   * The slide has no background (its own, its item's or its presentation's) and its item does not keep the
+   * running one: a GO that enters the item on this cue clears the running background. Moving within the
+   * item does not.
+   */
+  clearOnEntry?: boolean;
   transition?: Transition;
   mediaId?: Id;
   mediaKind?: 'video' | 'image' | 'audio';
   loop?: boolean;
   onEnd?: z.infer<typeof MediaOnEnd>;
   audio?: { pairId?: Id; gainDb?: number };
+  /**
+   * A timer cue's timer, or on every slide cue of an item its countdown (`PlaylistItem.countdownTimer`),
+   * started by the GO that enters the item, whichever cue that is.
+   */
   timerId?: Id;
   timer?: TimerSpec;
   action?: ActionId;

@@ -266,6 +266,9 @@ type PlaylistItem =
       arrangementId?: Id;
       transition?: Transition;
       backgroundMediaId?: Id;
+      keepBackground?: boolean; // entering the item keeps the running background (no clear on entry)
+      audioMediaId?: Id; // item music (the pre-service loop's): plays on every slide without a sound of its own
+      countdownTimer?: TimerSpec; // started when the item is entered; a countdownTo also shows as the countdown prop
     }
   | {
       id: Id;
@@ -469,6 +472,10 @@ type Cue = {
   slideId?: Id;
   label: string;
   hidden?: boolean; // true on a hidden slide (design/27 §9): sequential navigation skips it, `go` reaches it
+  clearBackground?: boolean; // the slide itself clears the running background (ProPresenter clear actions)
+  clearOnEntry?: boolean; // no background of its own, item's or presentation's: entering the item here clears it
+  timer?: TimerSpec;
+  timerId?: Id; // a timer cue's timer, or the item's countdown on every slide cue of the item
 };
 type LayerContent = { kind: 'slide' | 'media' | 'logo' | 'lowerThird'; ref: Id; sinceSeq: number };
 type Timer = { id: Id; spec: TimerSpec; startedAtHub?: number; endsAtHub?: number; running: boolean };
@@ -498,6 +505,15 @@ hidden cues (`nextShownCue`, `prevShownCue`; an item whose slides are all hidden
 `goToSection` lands on the section's first cue that is not hidden, else its first cue
 (`sectionsOfItem().entry`); `go` and `select` reach any cue. A slide sound's `untilCue` counts
 shown slides only, so a hidden cue inside its range keeps the sound playing when a click shows it.
+
+Item-entry effects apply on whichever cue enters a playlist item (the live cue's item changes): the
+running background is cleared when the entered slide has no background (its own, its item's or its
+presentation's) and the item does not keep it (`clearOnEntry`), and the item's countdown starts
+(`timer` on every slide cue of the item). So Next past a hidden first slide, Next item, a go-to-item key
+or MIDI jump, a click on a later slide of the continuous grid, Prev back into an earlier item and a loop
+started part-way all behave like entering on the first slide. Moving within the item does neither: a
+loop that wraps to its first slide keeps its countdown's start, and a background started within the item
+keeps running.
 
 A slide cue can carry its own media (design/27 §8): the playing ImageObject's clip
 (`mediaObjectId`, `mediaStart`, `mediaShowWhenStopped` with the cue's media fields) goes on

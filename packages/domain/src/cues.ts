@@ -45,9 +45,10 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
       slides.forEach(({ section, arrangementPos, slide, slideIndexInSection }, k) => {
         const text = firstText(slide);
         const bgId = slideBackground(slide, resolved.media) ?? item.backgroundMediaId ?? p.backgroundMediaId;
-        const clearBackground =
-          (slide.clearBackground && !slide.backgroundMediaId) ||
-          (k === 0 && !bgId && itemIndex > 0 && !item.keepBackground);
+        const clearBackground = slide.clearBackground && !slide.backgroundMediaId;
+        // Entering the item (by any of its cues: a hidden first slide, a click further in, Prev back into
+        // it) clears the running background when this slide has none, unless the item keeps it.
+        const clearOnEntry = !bgId && !item.keepBackground;
         const mediaCues = slideCueMedia(slide, resolved.media, first + k, first + until(k));
         let itemSlideAudio = mediaCues.slideAudio;
         if (!itemSlideAudio && item.audioMediaId && resolved.media[item.audioMediaId]) {
@@ -76,11 +77,11 @@ export function expandCues(resolved: Pick<ResolvedPlaylist, 'playlist' | 'presen
           slideIndexInSection,
           backgroundMediaId: bgId,
           ...(clearBackground ? { clearBackground: true } : {}),
+          ...(clearOnEntry ? { clearOnEntry: true } : {}),
           transition: item.transition ?? slide.transition ?? p.transition,
           autoAdvanceMs: p.kind === 'loop' ? loopDelay(slide.durationMs, p.loop?.defaultSlideMs) : undefined,
-          ...(k === 0 && item.countdownTimer
-            ? { timer: item.countdownTimer, timerId: `${item.id}-timer` }
-            : {}),
+          // On every cue of the item: the reducer starts it on whichever cue enters the item.
+          ...(item.countdownTimer ? { timer: item.countdownTimer, timerId: `${item.id}-timer` } : {}),
           // A hidden PowerPoint slide stays in the service (design/27 §9): sequential navigation skips its
           // cue (`nextShownCue`), a GO with its index shows it.
           ...(slide.hidden === true ? { hidden: true } : {}),

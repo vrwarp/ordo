@@ -28,6 +28,11 @@ data at small sizes. Program thumbnails are video streamed from the outputs
   top bar shows caching progress and turns green at 100 %. Editing the playlist and any
   presentation it references is locked until "End service".
 - Only one playlist is live at a time. "End service" releases the lock and clears all layers.
+- A presentation item can keep the running background, play music on its slides (the pre-service loop's)
+  and run a service countdown. Entering the item clears the running background when the slide has none
+  and the item does not keep it, and starts its countdown, whichever slide the item is entered on: past a
+  hidden first slide with Next, with Next presentation, a go-to-item key or MIDI jump, a click on a later
+  slide in the continuous grid, or Prev back into it. Moving within the item does neither.
 
 ## Navigation and GO
 

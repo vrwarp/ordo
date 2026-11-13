@@ -415,12 +415,20 @@ describe('media slides play are referenced and optional at goLive', () => {
     const cues = expandCues(resolved);
     expect(cues[0]?.backgroundMediaId).toBe('bg1');
     expect(cues[0]?.clearBackground).toBeUndefined();
-    // Entry cue of p2 (which has no background) clears the running background from p1
-    expect(cues[1]?.backgroundMediaId).toBeUndefined();
-    expect(cues[1]?.clearBackground).toBe(true);
-    // Subsequent slides in p2 do not re-clear
-    expect(cues[2]?.backgroundMediaId).toBeUndefined();
-    expect(cues[2]?.clearBackground).toBeUndefined();
+    expect(cues[0]?.clearOnEntry).toBeUndefined();
+    // Every cue of p2 (which has no background) clears the running background from p1 when the GO that
+    // enters the item lands on it (the reducer applies it only on entry), not only its first one.
+    for (const c of [cues[1], cues[2]]) {
+      expect(c?.backgroundMediaId).toBeUndefined();
+      expect(c?.clearBackground).toBeUndefined();
+      expect(c?.clearOnEntry).toBe(true);
+    }
+    // An item that keeps the running background never clears it.
+    const kept = expandCues({
+      ...resolved,
+      playlist: { ...pl, items: [pl.items[0]!, { ...pl.items[1]!, keepBackground: true }] },
+    });
+    expect(kept.map((c) => c.clearOnEntry)).toEqual([undefined, undefined, undefined]);
   });
 
   it('attaches item-level background audio and countdown timer to cues', () => {
@@ -466,9 +474,11 @@ describe('media slides play are referenced and optional at goLive', () => {
       loop: true,
       untilCue: 1,
     });
-    // Second cue in p1 continues the music
+    // Second cue in p1 continues the music, and carries the countdown too: whichever cue enters the item
+    // starts it (the reducer starts it only on entry).
     expect(cues[1]?.slideAudio?.untilCue).toBe(1);
-    expect(cues[1]?.timer).toBeUndefined();
+    expect(cues[1]?.timer?.label).toBe('Starts in');
+    expect(cues[1]?.timerId).toBe('i1-timer');
     // p2 has no item-level audio or timer
     expect(cues[2]?.slideAudio).toBeUndefined();
     expect(cues[2]?.timer).toBeUndefined();
