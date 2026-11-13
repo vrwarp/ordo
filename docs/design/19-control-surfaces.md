@@ -42,7 +42,9 @@ confirmation: two dispatches within 2 s, or a surface marks the control as a hol
 ## Keyboard driver
 
 Key map `{ combo: Action }` from settings, defaults in [prd/02](../prd/02-operator.md).
-Combos are normalised (`Ctrl+Shift+L`).
+Combos are normalised (`Ctrl+Shift+L`). The driver skips a key event whose default is already
+prevented: an open dialog takes Escape that way, so closing it never also clears the slide
+([design/15](15-operator-app.md) "Keyboard").
 
 ## Stream Deck driver (WebHID)
 

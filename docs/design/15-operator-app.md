@@ -161,6 +161,12 @@ A single `keydown` listener on `window` with the key map from settings. Handled 
 `preventDefault`. Text inputs opt out by focus. The handler only maps the key and posts the action
 to the core worker (plus the clear-all hold timer); the core applies it optimistically and sends it.
 
+Dialogs: Escape closes the dialog opened last and does nothing else (it is also Clear slide on the live,
+playlists and library screens). Each open dialog marks Escape handled in the capture phase on `window`
+(`preventDefault`, so the live keys, which skip handled events, never see it whatever order the listeners
+were added in) and closes in the bubble phase (`components/dialogEscape.ts`). A popover inside the dialog
+(a menu, the colour picker) that stops Escape to close itself keeps the dialog open.
+
 ## Launching outputs
 
 1. The operator clicks Launch outputs (a user gesture).
