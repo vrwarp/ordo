@@ -91,7 +91,10 @@ login page and lockout behaviour; first live service scheduled.
 
 Candidates, not commitments: WebCodecs decode path if telemetry warrants; Planning
 Center; Bible provider; phones for the week (viewing the library and light changes, phases
-P0 to P3 of [design/28](design/28-mobile.md)); a phone remote (design/28 §11 "Not now");
+P0 to P3 of [design/28](design/28-mobile.md), revised against main on 2026-11-13: touch targets
+and a code split that keeps the canvas editor off phones in P0, previews through the editor's
+Stage lens in P1, a words editor on the Lyric Script's operations in P2); a phone remote
+(design/28 §11 "Not now");
 outputs on separate machines; auto-shrink and RTL text; per-object builds; cloud sync and
 user accounts.
 
