@@ -90,6 +90,7 @@
  * Owned by work item C (inherit-emit).
  */
 import type {
+  DecorFile,
   GeomFile,
   Gradient as OrdoGradient,
   ImageObject,
@@ -115,10 +116,10 @@ import {
 import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE, CMD_QUAD } from '@ordo/renderer/geom/ops.ts';
 import { outlineOf } from '@ordo/renderer/geom/outline.ts';
 import { apply, boxPx, decompose, lenPx, multiply, slideRect } from './frame.ts';
-import { bakeKey, bakeOf, type PictureBake } from './bake.ts';
+import { bakeKey, bakeOf, type PictureBake, type SheetBake, sheetKey } from './bake.ts';
 import { emitChart } from './chart.ts';
 import { boundsOf, unionBox } from './classify.ts';
-import { emitDecor } from './decor.ts';
+import { DECOR_PREFIX, decorFiles, emitDecor, type PlatePlan, platePlan } from './decor.ts';
 import { slideBudget } from './emit-budget.ts';
 import {
   ALL_M9_FIELDS,
@@ -175,6 +176,7 @@ import type {
 import { type Log, noteList } from './log.ts';
 import { scriptClasses } from './fontmap.ts';
 import { BAKED_EFFECTS, extensionOf, METAFILE_EXTENSIONS } from './picture.ts';
+import { atlasSlide, emitComposite, type EmittedSheet, SHEET_PREFIX } from './sheet.ts';
 import { lockDiagram } from './smartart.ts';
 import { look3dOf } from './three3d.ts';
 
@@ -256,6 +258,24 @@ export interface EmitOptions {
    * `pptxmedia:bake<n>`, numbered from 1 in first-use order. Asked once per part and recipe.
    */
   bakeId?: (part: string, bake: PictureBake) => string;
+  /**
+   * M9 (`decor-conv`): the placeholder of a decoration file (`DecorData.ref`) by its JSON (`DecorFile`);
+   * default `pptxdecor:<n>`, numbered from 1 in first-use order. Asked once per distinct file. With
+   * `geomFiles: false`, or without 'decorFile' in `m9Writes`, decorations keep their parts in the slide.
+   */
+  decorId?: (json: string) => string;
+  /**
+   * M9 (`decor-conv`, `sheet.ts`): the placeholder media id of a sheet (a composite or an atlas) by its recipe;
+   * default `pptxmedia:sheet<n>`, numbered from 1 in first-use order. Asked once per distinct recipe.
+   */
+  sheetId?: (bake: SheetBake) => string;
+  /**
+   * M9 (`decor-conv`): draw pictures from sheets where the slide budgets plan them (composites and atlases,
+   * `EmitResult.sheets`; default true). With false every picture is its own object, as an importer that
+   * cannot make sheets needs (the slide may then hold more than 150 objects and 12 pictures, within the
+   * render clamp's 200 and 16 as planned by the budgets' guard).
+   */
+  sheets?: boolean;
   /** Solid backgrounds cover the whole 1920x1080 frame instead of the slide area (default true). */
   extendBackgrounds?: boolean;
   /**
@@ -336,6 +356,20 @@ export interface EmittedSlide {
   missing?: string[];
   /** M9, `EmitOptions.libreoffice: false` only: the text of what the art would have drawn (`Slide.pptx.artText`). */
   artText?: string;
+  /**
+   * M9 (`decor-conv`, `sheet.ts`): the sheets the slide draws pictures from (`pptxmedia:sheet<n>`), each with
+   * the objects drawn from it and those objects as they are without it, which an importer that cannot make
+   * the sheet puts back (`EmitResult.sheets` has each recipe once).
+   */
+  sheets?: EmittedSheet[];
+  /**
+   * M9 (`decor-conv`, decisions.md "Slow-to-draw elements"): what the client bakes into the slide's
+   * decoration plates (`decor.ts` `platePlan`: the static decoration stack and the objects above it with
+   * effect layers), and `pastBudget`, the objects the slide's drawing budgets draw live past them (as their
+   * legacy shapes or without their effects, `geom/cost.ts` `slidePlan`) until a plate holds them. Kept whole:
+   * the converter never flattens, drops or leaves to LibreOffice what is only slow to draw.
+   */
+  plate?: PlatePlan & { pastBudget: string[] };
 }
 
 /** The placeholder media id of a metafile's object until it is converted (`EmittedSlide.metafiles`). */
@@ -358,6 +392,19 @@ export interface EmitResult {
    * placeholder (the hub: the file's SHA-256); one that cannot leaves the shape drawing its legacy form.
    */
   geoms: { id: string; file: GeomFile }[];
+  /**
+   * M9 (`decor-conv`): the decoration files the slides name (`DecorData.ref`, `pptxdecor:<n>`), each once in
+   * first-use order. An importer stores each as it stores geometry files (`decor-render`) and puts its name in
+   * place of the placeholder; one that cannot leaves the decoration drawing nothing.
+   */
+  decors: { id: string; file: DecorFile }[];
+  /**
+   * M9 (`decor-conv`, `sheet.ts`): the sheets the slides draw pictures from, each recipe once in first-use
+   * order with its placeholder media id (`pptxmedia:sheet<n>`): pictures made of the cells' parts
+   * (`bake.ts` `applySheet`). An importer that cannot make one puts back the objects
+   * `EmittedSlide.sheets` lists for it.
+   */
+  sheets: { id: string; bake: SheetBake }[];
 }
 
 export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
@@ -400,6 +447,36 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
           }
           return f.id;
         };
+  const decorFileList = new Map<string, { id: string; file: DecorFile }>();
+  // M9: decoration files only where the importer stores them (the 'decorFile' field): a placeholder no one
+  // names would be stored as it is, and the decoration would draw nothing.
+  const decorRef =
+    opts.geomFiles === false || !(opts.m9Writes ?? ALL_M9_FIELDS).has('decorFile')
+      ? undefined
+      : (json: string, file: DecorFile) => {
+          let f = decorFileList.get(json);
+          if (!f) {
+            f = { id: opts.decorId ? opts.decorId(json) : `${DECOR_PREFIX}${decorFileList.size + 1}`, file };
+            decorFileList.set(json, f);
+          }
+          return f.id;
+        };
+  const sheets = new Map<string, { id: string; bake: SheetBake }>();
+  const sheet = (recipe: SheetBake) => {
+    const key = sheetKey(recipe);
+    let b = sheets.get(key);
+    if (!b) {
+      b = { id: opts.sheetId ? opts.sheetId(recipe) : `${SHEET_PREFIX}${sheets.size + 1}`, bake: recipe };
+      sheets.set(key, b);
+    }
+    return b.id;
+  };
+  // What a placeholder media id stands for (the sheets' cells name parts and recipes).
+  const mediaPart = (id: string): { part: string; bake?: PictureBake } | undefined => {
+    for (const b of bakes.values()) if (b.id === id) return { part: b.part, bake: b.bake };
+    for (const [part, m] of media) if (m === id) return { part };
+    return undefined;
+  };
   const slides = scene.slides.map((s) => {
     const t0 = performance.now();
     const { notes, log: put } = noteList();
@@ -428,11 +505,16 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       textBytes: 0,
       clipId,
       transitionSounds: opts.transitionSounds ?? false,
+      ...(opts.sheets === false ? {} : { sheet, sheets: [] }),
+      mediaPart,
     };
     const spans: [number, number][] = [];
     ctx.metafiles = [];
     ctx.clips = [];
     const slide = emitSlide(ctx, s, spans);
+    // M9 (`decor-conv`): large decorations in decoration files first, so the slide's budget below counts
+    // them as stored (`storedSlideBytes`), as its large geometries go to geometry files there.
+    decorFiles(slide, decorRef);
     // The slide's whole JSON as the hub stores it, its large geometries in files (design/27 §3.4); one still
     // over the budget keeps its class and is fitted by the importer (M9 `ladder`).
     const { over } = slideBudget(ctx, slide, notes, geomRef);
@@ -452,6 +534,11 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       metafiles = [];
     }
     if (gaps) classification = gaps.classification;
+    // M9: what the slide budgets' guard left out (`budget.ts`), whatever draws the rest.
+    const left = s.classification.missing ?? [];
+    const missing = [...new Set([...left, ...(gaps?.missing ?? [])])];
+    const plate = ctx.plate;
+    ctx.plate = undefined;
     return {
       index: s.index,
       ...(s.shown !== undefined ? { shown: s.shown } : {}),
@@ -465,8 +552,10 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
       ...(metafiles.length ? { metafiles } : {}),
       ...(over && s.classification.class !== 'picture' ? { overBudget: true as const } : {}),
       ...(ctx.clips.length ? { clips: ctx.clips } : {}),
-      ...(gaps?.missing.length ? { missing: gaps.missing } : {}),
+      ...(missing.length ? { missing } : {}),
       ...(gaps?.artText ? { artText: gaps.artText } : {}),
+      ...(ctx.sheets?.length ? { sheets: ctx.sheets } : {}),
+      ...(plate ? { plate } : {}),
     };
   });
   return {
@@ -478,6 +567,8 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
     slideRect: slideRect(scene.frame),
     notes: [...scene.notes],
     geoms: [...files.values()],
+    decors: [...decorFileList.values()],
+    sheets: [...sheets.values()],
   };
 }
 
@@ -522,13 +613,28 @@ function emitSlide(ctx: EmitCtx, s: SlideScene, spans: [number, number][] = []):
     decors.set(e.decor, run);
   });
   const decorated = new Set<number>();
+  // M9 (`decor-conv`): runs of plain pictures drawn as one composite picture (`ElementBase.sheet`, `sheet.ts`).
+  const sheetRuns = new Map<number, Element[]>();
+  s.elements.forEach((e) => {
+    if (e.sheet === undefined || e.hidden) return;
+    const run = sheetRuns.get(e.sheet) ?? [];
+    run.push(e);
+    sheetRuns.set(e.sheet, run);
+  });
+  const composited = new Set<number>();
+  // A member of a decoration or a composite, as the single-element emitter writes it.
+  const emitOne = (x: Element, sink: SlideObject[]) => emitElement(ctx, x, sink, texts);
   s.elements.forEach((e, i) => {
     const at = objects.length;
     const mf = ctx.metafiles?.length ?? 0;
     const decor = e.decor !== undefined && !e.hidden ? decors.get(e.decor) : undefined;
-    if (decor && e.decor === i && emitDecor(ctx, decor, objects)) decorated.add(i);
+    if (decor && e.decor === i && emitDecor(ctx, decor, objects, emitOne)) decorated.add(i);
+    const sheet = e.sheet !== undefined && !e.hidden ? sheetRuns.get(e.sheet) : undefined;
+    if (sheet && e.sheet === i && emitComposite(ctx, sheet, objects, emitOne)) composited.add(i);
     if (decor && e.decor !== undefined && decorated.has(e.decor)) {
       // Drawn by its run's decoration.
+    } else if (sheet && e.sheet !== undefined && composited.has(e.sheet)) {
+      // Drawn by its run's composite.
     } else if (e.kind === 'shape' && e.merge !== undefined && !e.hidden) {
       const run = runs.get(i);
       if (e.merge === i && run) emitMerged(ctx, run, objects, texts);
@@ -552,8 +658,19 @@ function emitSlide(ctx: EmitCtx, s: SlideScene, spans: [number, number][] = []):
     ctx.log(`more than ${MAX_OBJECTS} objects: the top ones are not drawn`);
     objects.length = MAX_OBJECTS;
   }
-  fitEffects(ctx, objects);
-  fitDrawing(ctx, objects);
+  // M9 (`decor-conv`): the slide's picture budget, its fewest smallest pictures in one atlas (`sheet.ts`).
+  if (s.classification.atlas?.length) atlasSlide(ctx, objects, s.classification.atlas);
+  // A composite's members as they are without it carry the origin it has.
+  for (const sh of ctx.sheets ?? []) {
+    const at = objects.find((o) => o.id === sh.uses[0]);
+    if (at?.origin) for (const o of sh.objects) o.origin ??= { ...at.origin };
+  }
+  // M9: what is only slow to draw is kept whole (decisions.md "Slow-to-draw elements"): the drawing budgets
+  // choose how it is drawn, from a decoration plate or live, never whether (`fitEffects`, `fitDrawing`).
+  const slow = new Set([...fitEffects(ctx, objects), ...fitDrawing(ctx, objects)]);
+  const plan = platePlan(slide);
+  if (plan.stack.length || plan.effects.length || slow.size)
+    ctx.plate = { ...plan, pastBudget: objects.filter((o) => slow.has(o.id)).map((o) => o.id) };
   // A SmartArt node's text is a fragment of a diagram, never the lyric box.
   const lyric = lyricOf(texts.filter((t) => objects.includes(t.o) && t.e.diagram === undefined));
   if (lyric) slide.lyricObjectId = lyric.id;
@@ -586,13 +703,15 @@ function effectAreaOf(o: SlideObject): number {
 
 /**
  * The slide's effect budget (renderer `geom/cost.ts` `EFFECT_COST`, design/27 §12 drawing cost): shapes keep
- * their shadow, glow and soft edge, bottom first, while the area of their layers stays within it; later ones
- * lose them, with a note, as the renderer would draw them (`geombudget.ts`). The corpus's most effected
- * slides use 7.7 of its 10 slide areas.
+ * their shadow, glow and soft edge, bottom first, while the area of their layers stays within it. The
+ * corpus's most effected slides use 7.7 of its 10 slide areas. Since M9 (`decor-conv`, decisions.md
+ * "Slow-to-draw elements") the shapes past it keep their effects too: the slide's decoration plate holds
+ * their effect layers (`platePlan`), and until it is made the renderer draws them without, as every drawer
+ * does past the budget (`geombudget.ts`). Returns their ids, with a note.
  */
-function fitEffects(ctx: EmitCtx, objects: SlideObject[]): void {
+function fitEffects(ctx: EmitCtx, objects: readonly SlideObject[]): string[] {
   let area = 0;
-  let dropped = 0;
+  const past: string[] = [];
   for (const o of objects) {
     if (o.type !== 'shape') continue;
     const a = effectAreaOf(o);
@@ -601,57 +720,55 @@ function fitEffects(ctx: EmitCtx, objects: SlideObject[]): void {
       area += a;
       continue;
     }
-    delete o.shadow;
-    delete o.glow;
-    delete o.softEdge;
-    dropped++;
+    past.push(o.id);
   }
-  if (dropped) ctx.log(`the effects of ${dropped} shape(s) past the slide's effect budget are not drawn`);
+  if (past.length)
+    ctx.log(
+      `the effects of ${past.length} shape(s) past the slide's effect budget are drawn from its decoration plate`,
+    );
+  return past;
 }
 
 /**
- * The slide's drawing budget (renderer `geom/cost.ts` `slidePlan`, design/27 §12 drawing cost) applied to the
- * objects as emitted, exactly as every drawer applies it (`geombudget.ts`): the walk already sent what passes
- * it to the art (`walk.ts` `slideCustom`, `chargeDrawing`), within a margin, so this changes only what the
- * walk could not see (shapes merged into one object past the object budget, a picture's mask and outline,
- * a table's cells and grid, the background's fill).
- * An object it changes is stored as the drawers would draw it (`withoutPart`), with a note.
+ * The slide's drawing budget (renderer `geom/cost.ts` `slidePlan`, design/27 §12 drawing cost) on the objects
+ * as emitted, exactly as every drawer applies it (`geombudget.ts`): which objects a drawer draws past it, as
+ * their legacy shapes or without their effects. Since M9 (`decor-conv`, decisions.md "Slow-to-draw
+ * elements", the wave 1 re-review) they are stored whole, never flattened to their legacy copy (their
+ * gradient, geometry, dash and ends kept, so the editor still edits them and a centre-white radial glow
+ * stays a glow): the slide's decoration plate holds them (`platePlan`), and until it is made each drawer
+ * draws them as its budget allows. Returns their ids, with a note.
  */
-function fitDrawing(ctx: EmitCtx, objects: SlideObject[]): void {
+function fitDrawing(ctx: EmitCtx, objects: readonly SlideObject[]): string[] {
   const rate = (o: SlideObject, part?: LegacyPart): Rated => {
     const x = part ? withoutPart(o, part) : o;
     const at = geometryOf(x);
     return { est: objectCost(x, at?.built), points: at?.points ?? 0 };
   };
   const parts = slidePlan(objects, rate, effectAreaOf);
-  let changed = 0;
+  const past: string[] = [];
   parts.forEach((part, i) => {
-    if (!part) return;
-    const o = objects[i] as SlideObject & Record<string, unknown>;
-    const legacy = withoutPart(o, part);
-    for (const k of Object.keys(o)) if (!(k in legacy)) delete o[k];
-    changed++;
+    const o = objects[i]!;
+    // A stored geometry too costly to fill at once is drawn as its legacy shape by every drawer, whatever
+    // the slide's budget (`stored.ts`, past `GEOM_COST.geometry`): the plate holds it too.
+    const g = o.type === 'shape' ? o.geom : o.type === 'image' ? o.mask : undefined;
+    const costly = !!g?.paths?.length && g.ref === undefined && !geometryAt(g, o.box.w, o.box.h);
+    if (part || costly) past.push(o.id);
   });
-  if (changed)
-    ctx.log(`${changed} object(s) past the slide's drawing budget are drawn as their legacy shapes`);
+  if (past.length)
+    ctx.log(
+      `${past.length} object(s) past the slide's drawing budget are drawn from its decoration plate (as their legacy shapes until it is made)`,
+    );
+  return past;
 }
 
 /**
- * An element the object budget sent to the art (`classify.ts` `fitShapes`, 'budget:shapes'): like a residual
- * table it emits nothing, so version 1 stays within the budget (and the render clamp's 200 objects) with the
- * slide's own text drawn, until the art replaces what it draws. So too a shape without text the drawing
- * budget sent there (`walk.ts`: 'custGeom:complex', 'geom:complex'): its legacy shape, which every drawer
- * draws and no budget refuses, would cost what the budget held back (a stack of 140 full-slide fills as
- * their legacy colours took 300 ms at 4K) and cover its box where the geometry did not.
+ * An element the object budget sent to the art (`classify.ts` `fitShapes`, 'budget:shapes', only behind
+ * `ParseOptions.budgetArt`, the harness's A/B): like a residual table it emits nothing, so version 1 stays
+ * within the budget with the slide's own text drawn, until the art replaces what it draws. Since M9 nothing
+ * else is left to the art for a budget, and nothing at all for being slow to draw (`walk.ts`).
  */
 function pastBudget(e: Element): boolean {
-  if (e.support !== 'residual' || !e.reasons) return false;
-  if (e.reasons.includes('budget:shapes')) return true;
-  return (
-    e.kind === 'shape' &&
-    !e.text &&
-    (e.reasons.includes('custGeom:complex') || e.reasons.includes('geom:complex'))
-  );
+  return e.support === 'residual' && !!e.reasons?.includes('budget:shapes');
 }
 
 /**

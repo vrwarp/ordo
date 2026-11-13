@@ -115,7 +115,7 @@ export interface WalkState {
   /**
    * The legacy copies of what is kept so far (renderer `geom/cost.ts` `slidePlan`'s floor: every drawer draws
    * at least these, counted first and never refused), the background's first (`chargeDrawing`,
-   * `keepPastBudget`).
+   * `chargeFloor`).
    */
   floors?: number;
   /** SmartArt drawings read so far (M6, `smartart.ts`: `ElementBase.diagram` numbers them). */
@@ -415,8 +415,9 @@ export function walkTree(
             } else if (pic.geom !== 'rect' || line) {
               const p = decompose(base.xf);
               const g = presetDrawn(pic.geom, pic.adj, p.w * ctx.frame.s, p.h * ctx.frame.s);
-              // Past the budget the emitted slide's own check (`emit.ts` `fitDrawing`) draws it as a rect.
-              if (!chargeDrawing(st, rate(g), floor)) keepPastBudget(st, floor);
+              // Past the budget it is kept whole, charged as its legacy copy: the emitted slide's own plan
+              // (`emit.ts` `fitDrawing`) names it for the slide's decoration plate (M9, `decor-conv`).
+              if (!chargeDrawing(st, rate(g), floor)) chargeFloor(st, floor);
             }
           }
           st.out.push(pic);
@@ -575,35 +576,20 @@ function readShape(
   const custom = custNode
     ? slideCustom(ctx, custNode, base, st, rate, pictureFill && line ? 2 : 1, floor)
     : undefined;
-  let complex = false;
   if (!custNode && (fill.kind !== 'none' || line)) {
     const p = decompose(base.xf);
     const g = presetDrawn(geom, adj, p.w * ctx.frame.s, p.h * ctx.frame.s);
-    // M9 wave 1 repair: a preset shape without text that only its pixels put past the budget (a gradient
-    // panel over a gradient background, a plain shape after costly decorations; no dash or arrowhead, whose
-    // cost is the path's) is kept while every kept element's legacy copy still fits (`keepPastBudget`): the
-    // emitted slide's own check (`emit.ts` `fitDrawing`) then draws it as every drawer does past the budget,
-    // natively where the slide's plan has room and else as its legacy shape (the gradient as its first stop).
-    // Sent to the art it would emit nothing, and a hub without LibreOffice would show the slide without it.
-    const plain = !line || !(line.dash || line.custDash || line.head || line.tail);
-    if (
-      !chargeDrawing(st, rate(g), floor) &&
-      !(!chars && !pictureFill && plain && keepPastBudget(st, floor))
-    ) {
-      ctx.log(
-        "a shape past the slide's drawing budget (its outline, dashes or arrowheads) is drawn by LibreOffice",
-      );
-      complex = true;
-    }
+    // M9 (`decor-conv`, decisions.md "Slow-to-draw elements"): a shape past the slide's drawing budget (its
+    // pixels, its outline, dashes or arrowheads) is kept whole, never sent to the art: the budget decides how
+    // it is drawn, not whether. It is charged as its legacy copy (what every drawer draws at least), and the
+    // emitted slide's own plan (`emit.ts` `fitDrawing`) names it for the slide's decoration plate; until a
+    // plate holds it each drawer draws it natively where the slide's plan has room, else as its legacy shape.
+    if (!chargeDrawing(st, rate(g), floor)) chargeFloor(st, floor);
   }
   // A shape not drawn natively but still emitted (`emit.ts`: its legacy rect, ellipse or line, under its text)
   // is charged as that legacy shape: every drawer draws it, and no budget refuses it (renderer
-  // `geom/cost.ts` `slidePlan` counts it first). One past the drawing budget without text emits nothing.
-  const legacy = (custom?.over === true || complex) && !pictureFill;
-  if (legacy && (chars > 0 || !(complex || custom?.complex))) {
-    st.geomCost = (st.geomCost ?? 0) + floor;
-    st.floors = (st.floors ?? 0) + floor;
-  }
+  // `geom/cost.ts` `slidePlan` counts it first).
+  if (custom?.over === true && !pictureFill) chargeFloor(st, floor);
   const reasons: string[] = [];
   let support: Support = 'native';
   // M6: every preset of the table, custom geometry within the bounds, gradients and line styles are drawn;
@@ -612,11 +598,7 @@ function readShape(
   if (fill.kind === 'pattern') reasons.push('pattFill');
   if (reasons.length) support = 'approx';
   if (custom?.over) {
-    reasons.push(custom.complex ? 'custGeom:complex' : 'custGeom');
-    support = 'residual';
-  }
-  if (complex) {
-    reasons.push('geom:complex');
+    reasons.push('custGeom');
     support = 'residual';
   }
   const cxn =
@@ -663,11 +645,13 @@ function readShape(
  * A custom geometry built for an element (`geom.ts`), its points (times `times`: the objects that store
  * them) counted against the slide's 64k, its fill estimate against `GEOM_COST.geometry` and what drawing it
  * costs as emitted (`rate`: renderer `geom/cost.ts` `drawCost`, fill, outline and effects, with
- * `GEOM_COST.point` a stored point) against the slide's `GEOM_COST.slide` (`chargeDrawing`); past them it is
- * marked over the bounds (residual: LibreOffice draws it into the art; `complex` for the drawing budgets),
- * and charges nothing. The renderer holds a slide to the same budgets the same way (`geom/cost.ts`
- * `slidePlan`, `geombudget.ts`) and the emitted slide is checked by them again (`emit.ts` `fitDrawing`), so a
- * geometry kept native here is drawn natively there. Its compile notes go to the slide's log.
+ * `GEOM_COST.point` a stored point) against the slide's `GEOM_COST.slide` (`chargeDrawing`). Past the slide's
+ * points it is over the bounds (residual), and charges nothing. Past the drawing budgets (M9, `decor-conv`,
+ * decisions.md "Slow-to-draw elements") it is kept whole (`complex`), charged as its legacy copy (`floor`):
+ * the slide's decoration plate holds it, and until then the renderer, which holds a slide to the same budgets
+ * the same way (`geom/cost.ts` `slidePlan`, `geombudget.ts`, `stored.ts` past `GEOM_COST.geometry`), draws
+ * it as its legacy shape; the emitted slide's plan names it (`emit.ts` `fitDrawing`). Its compile notes go to
+ * the slide's log.
  */
 export function slideCustom(
   ctx: SlideCtx,
@@ -690,17 +674,16 @@ export function slideCustom(
     return { ...custom, over: true };
   }
   // A margin under the renderer's budgets, for the rounding of the stored coordinates.
-  if ((custom.fillCost ?? 0) > GEOM_COST.geometry * COST_MARGIN) {
+  const costly = (custom.fillCost ?? 0) > GEOM_COST.geometry * COST_MARGIN;
+  if (costly)
     ctx.log(
-      'a custom geometry too costly to draw (its edges cross the box many times) is drawn by LibreOffice',
+      "a custom geometry too costly to draw at once (its edges cross the box many times) is drawn from the slide's decoration plate",
     );
-    return { ...custom, over: true, complex: true };
-  }
-  if (!chargeDrawing(st, (custom.cost ?? 0) + points * GEOM_COST.point, floor)) {
-    ctx.log("custom geometry past the slide's drawing budget is drawn by LibreOffice");
-    return { ...custom, over: true, complex: true };
-  }
   st.points = (st.points ?? 0) + points;
+  if (costly || !chargeDrawing(st, (custom.cost ?? 0) + points * GEOM_COST.point, floor)) {
+    chargeFloor(st, floor ?? 0);
+    return { ...custom, complex: true };
+  }
   return custom;
 }
 
@@ -718,19 +701,15 @@ function chargeDrawing(st: WalkState, cost: number, floor = cost): boolean {
 }
 
 /**
- * Keeps an element the drawing budget cannot take whole while the legacy copies of everything kept, its own
- * included (`floor`), stay within `GEOM_COST.slide` (within COST_MARGIN): every drawer draws at least those
- * copies, counted first and never refused (renderer `geom/cost.ts` `slidePlan`), and draws what fits of the
- * rest natively in z-order, as the emitted slide's own check (`emit.ts` `fitDrawing`) stores it. It is charged
- * as its legacy copy, what it draws at least. False, with nothing charged, past it: the floors are what bound
- * a stack of full-slide fills (140 legacy fills took 300 ms at 4K).
+ * Charges an element the drawing budget cannot take whole as its legacy copy (`floor`), what every drawer
+ * draws for it at least (renderer `geom/cost.ts` `slidePlan`: counted first and never refused). Since M9
+ * (`decor-conv`, decisions.md "Slow-to-draw elements") such an element is always kept whole: past the floors
+ * too (a stack of full-slide fills: 140 legacy fills took 300 ms at 4K) the slide's decoration plate draws
+ * it, or the asset worker's sliced sprite until one exists (`decor-render`), never LibreOffice.
  */
-function keepPastBudget(st: WalkState, floor: number): boolean {
-  const floors = (st.floors ?? 0) + floor;
-  if (!(floors <= GEOM_COST.slide * COST_MARGIN)) return false;
-  st.floors = floors;
+function chargeFloor(st: WalkState, floor: number): void {
+  st.floors = (st.floors ?? 0) + floor;
   st.geomCost = (st.geomCost ?? 0) + floor;
-  return true;
 }
 
 /**

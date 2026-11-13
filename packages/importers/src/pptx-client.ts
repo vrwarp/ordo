@@ -58,9 +58,13 @@ export const CONVERTER_VERSION = 2;
 
 /**
  * The stored M9 fields a client parse writes (`EmitOptions.m9Writes`): the hub's `M9_WRITES`, the per-field
- * kill switch of design/27 M9 (a hub test checks that both name the same fields).
+ * kill switch of design/27 M9 (a hub test checks that both name the same fields). Every field but
+ * 'decorFile': this parse names geometry files only (`nameGeoms`), so a decoration keeps its parts in the
+ * slide until `decor-render` names decoration files too.
  */
-export const CLIENT_M9_WRITES: ReadonlySet<M9Field> = ALL_M9_FIELDS;
+export const CLIENT_M9_WRITES: ReadonlySet<M9Field> = new Set(
+  [...ALL_M9_FIELDS].filter((f) => f !== 'decorFile'),
+);
 
 export const PPTX_CLIENT_LIMITS = {
   entries: 200_000,

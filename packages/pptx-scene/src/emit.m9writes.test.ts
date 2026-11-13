@@ -166,6 +166,7 @@ describe('the M9 field gate (EmitOptions.m9Writes)', () => {
       'table',
       'chart',
       'decor',
+      'decorFile',
       'look3d',
       'warp',
       'writing',

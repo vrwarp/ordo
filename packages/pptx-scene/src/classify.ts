@@ -17,19 +17,20 @@
  * conversion and (since M9) real 3D, drawn flat, are approx.
  *
  * **Class**: native without residual elements; hybrid with them, the residuals and what they overlap baked
- * into one art picture over the range [Rmin, Rmax]; picture when the objects or pictures left after the
- * split exceed the slide budgets (or the slide could not be read, `index.ts`). A table read natively
- * (`tables.ts`, M6) counts the objects it emits: its cells, its background, and one grid object per fill and
- * per line look (`gridObjects`), not one per run. A slide past the object budget counts its z-adjacent shapes
- * of one look as one object each run (`shapeRuns`, drawn so by `emit.ts`); while it still passes the budget,
- * tables go to the art first (`budget:table`), then whole SmartArt drawings (`budget:smartart`,
- * `wholeDiagrams`), then decorations and runs of shapes and pictures without text (`budget:shapes`,
- * `fitShapes`), so the slide becomes hybrid rather than picture.
+ * into one art picture over the range [Rmin, Rmax] (or, without LibreOffice, listed as missing). Since M9
+ * (`decor-conv`) the slide budgets never make a slide hybrid or a picture: what draws nothing on the slide is
+ * culled, and a slide past the object or picture budget is kept native by merges, decorations, composites,
+ * the text ceiling and an atlas (`budget.ts` `fitBudgets`; a table or a chart is one object). Only its
+ * guard, never reached in the corpus, leaves anything out (hybrid, `missing:<kind>`). The budgets of M6 and
+ * M9 wave 1 (a table's M6 group counted, tables, SmartArt drawings, real 3-D and shapes without text past
+ * the budget sent to the art, `budget:*`, and a picture when still over) stay behind
+ * `ClassifyOptions.budgetArt`, the harness's A/B.
  *
  * Every walk here is iterative and linear in the size of the parsed tree; deck strings are only compared,
  * never used as plain-object keys.
  */
 import { GEOM_LIMITS } from '@ordo/renderer/geom/ops.ts';
+import { cullElements, fitBudgets, leftKinds } from './budget.ts';
 import { rootOf, type SlideCtx } from './context.ts';
 import { endsOf, MAX_PATH_CHARS, mergedChars, type ShapePiece, shapePiece } from './geom.ts';
 import { bodyPrChain, chainOf, firstAttr, firstChildOf, nvOf } from './inherit.ts';
@@ -645,10 +646,43 @@ export function refineSupport(ctx: SlideCtx, elements: Element[]): string[][] {
     const reasons = [...new Set([...own, ...residual, ...approx].map((r) => clean(r, MAX_REASON_CHARS)))];
     e.support = support;
     if (reasons.length) e.reasons = reasons;
-    // M9: real 3-D is drawn flat, never left to the art (`residual.ts`).
+    // M9: real 3-D is drawn flat, never left to the art (`residual.ts`); shapes of one 3-D look may merge
+    // (`shapeRuns`), so its XML is kept as a digest.
+    if (approx.some(REAL_3D) && nodes[0]) threeDigests.set(e, threeDigest(nodes[0]));
     if (!e.hidden && approx.some(REAL_3D)) ctx.log('3-D is drawn flat (an approximation)');
     return support === 'residual' ? [...new Set(residual)] : [];
   });
+}
+
+/** The 3-D XML of each element with real 3-D (`threeDigest`), set by `refineSupport`. */
+const threeDigests = new WeakMap<Element, string>();
+
+/** Elements of a shape's XML that make its 3-D look. */
+const THREE_D = new Set(['a:scene3d', 'a:sp3d']);
+/** Characters of a 3-D digest kept (a deck's 3-D XML is small; a hostile one is cut, never merged on). */
+const MAX_DIGEST_CHARS = 4_096;
+
+/**
+ * The 3-D look of a shape's XML as one string (M9, plan decision 6): its `a:scene3d` and `a:sp3d` subtrees
+ * in document order, attributes sorted; shapes merge only with an equal one. Iterative and bounded.
+ */
+export function threeDigest(node: XNode): string {
+  let out = '';
+  const stack: [XNode, boolean][] = [[node, false]];
+  while (stack.length && out.length <= MAX_DIGEST_CHARS) {
+    const [n, inside] = stack.pop()!;
+    if (n.name === '#text') continue;
+    const here = inside || THREE_D.has(n.name);
+    if (here) {
+      const attrs = Object.keys(n.attrs)
+        .sort()
+        .map((k) => `${k}=${JSON.stringify(n.attrs[k])}`)
+        .join(' ');
+      out += `<${n.name} ${attrs}>`;
+    }
+    for (let i = n.children.length - 1; i >= 0; i--) stack.push([n.children[i]!, here]);
+  }
+  return out.length > MAX_DIGEST_CHARS ? `\u0000${out.length}` : out;
 }
 
 // ── Slide class and art range ───────────────────────────────────────────────────────────────────────────
@@ -735,15 +769,18 @@ function videoUnderArt(elements: readonly Element[], art: ArtRange): boolean {
 
 /**
  * What a slide costs against the budgets once the art is split off: the ordo objects it emits (a shape with
- * a fill or line and text is two) and its distinct pictures (the background's and the art included). With
- * the slide's `frame`, a slide that would pass `MAX_SLIDE_OBJECTS` counts each of its runs of shapes of one
- * look (`shapeRuns`) as the one object `emit.ts` draws it as.
+ * a fill or line and text is two; a table or a chart one, M9, unless `m6Tables`: a table's M6 group, for
+ * the art A/B of `ParseOptions.budgetArt`) and its distinct pictures (the background's and the art
+ * included). With the slide's `frame`, a slide that would pass `MAX_SLIDE_OBJECTS` counts each of its runs
+ * of shapes of one look (`shapeRuns`) as the one object `emit.ts` draws it as. The M9 budgets plan with
+ * `budget.ts` `budgetCost`, which counts their decorations and composites too.
  */
 export function slideCost(
   elements: readonly Element[],
   background: Background,
   art: ArtRange | undefined,
   frame?: Frame,
+  m6Tables = false,
 ): { objects: number; pictures: number } {
   const inArt = new Set(art?.elements);
   const pictures = new Set<string>();
@@ -755,7 +792,8 @@ export function slideCost(
     const part = picturePart(e);
     if (part !== undefined) pictures.add(part);
     if (e.kind === 'picture') objects++;
-    else if (e.kind === 'table') objects += e.objects;
+    // M9: a table is one object (`ShapeObject.table`, tables-conv); its M6 group for the art A/B.
+    else if (e.kind === 'table') objects += m6Tables ? e.objects : 1;
     // M9: a chart is one object (`ShapeObject.chart`, charts-conv).
     else if (e.kind === 'chart') objects++;
     else objects += (e.fill.kind !== 'none' || e.line ? 1 : 0) + (e.text ? 1 : 0);
@@ -778,6 +816,8 @@ interface Mergeable {
   key: string;
   piece: ShapePiece;
   box: RectEmu;
+  /** Real 3-D (M9): its 3-D look's digest (`threeDigest`, part of `key`); it merges only where disjoint. */
+  three?: string;
 }
 
 /** Each shape's `Mergeable` (null: never merged), memoised: none of what it reads changes after the walk. */
@@ -805,7 +845,12 @@ function mergeable(e: Element, frame: Frame): Mergeable | undefined {
     m = mergeLook(e, frame) ?? null;
     mergeables.set(e, m);
   }
-  return m && !e.hidden && e.support === 'native' ? m : undefined;
+  if (!m || e.hidden) return undefined;
+  if (e.support === 'native') return m;
+  // M9 (plan decision 6, `3d.md` §3.1): real 3-D, drawn flat, merges with shapes of an equal 3-D look whose
+  // boxes it does not overlap (`shapeRuns`), the rim being worked out on the merged silhouette.
+  if (e.support === 'approx' && m.three !== undefined && (e.reasons ?? []).every(REAL_3D)) return m;
+  return undefined;
 }
 
 function mergeLook(e: ShapeElement, frame: Frame): Mergeable | undefined {
@@ -826,7 +871,13 @@ function mergeLook(e: ShapeElement, frame: Frame): Mergeable | undefined {
   const x1 = x0 + box.cx * frame.s;
   const y1 = y0 + box.cy * frame.s;
   if (!(x0 >= -CLAMP_W && x1 <= CLAMP_W && y0 >= -CLAMP_H && y1 <= CLAMP_H)) return undefined;
-  return { key: JSON.stringify([e.from, e.group ?? null, fill ?? null, line ?? null]), piece, box };
+  const three = threeDigests.get(e);
+  return {
+    key: JSON.stringify([e.from, e.group ?? null, fill ?? null, line ?? null, three ?? null]),
+    piece,
+    box,
+    ...(three !== undefined ? { three } : {}),
+  };
 }
 
 /** The bounding box of two boxes. */
@@ -842,7 +893,8 @@ export function unionBox(p: RectEmu, q: RectEmu): RectEmu {
  * most `GEOM_LIMITS.paths` and every path string within the schema's 40,000 characters once written in the
  * run's box (`mergedChars`). Hidden elements draw nothing and do not end a run. Greedy, bottom first, linear;
  * each run has at least two elements (indexes, bottom first). The object (`emit.ts`) draws the run's paths
- * in z-order in their union box, so it looks as the shapes do.
+ * in z-order in their union box, so it looks as the shapes do. Shapes with real 3-D (M9, drawn flat) merge
+ * only with shapes of an equal 3-D look (`threeDigest`) whose boxes they do not overlap (plan decision 6).
  */
 export function shapeRuns(
   elements: readonly Element[],
@@ -858,6 +910,8 @@ export function shapeRuns(
     coords: number;
     box: RectEmu;
     extent: RectEmu;
+    /** Real 3-D runs (M9): every member's box, none overlapping another. */
+    boxes?: RectEmu[];
   };
   let run: Run | undefined;
   const end = () => {
@@ -873,7 +927,8 @@ export function shapeRuns(
       continue;
     }
     const p = m.piece;
-    if (run && run.key === m.key && run.paths + p.paths.length <= GEOM_LIMITS.paths) {
+    const apart = !run?.boxes?.some((b) => overlaps(b, m.box));
+    if (run && run.key === m.key && apart && run.paths + p.paths.length <= GEOM_LIMITS.paths) {
       const box = unionBox(run.box, m.box);
       const extent = unionBox(run.extent, p.extent);
       const cmds = Math.max(run.cmds, p.cmds);
@@ -881,6 +936,7 @@ export function shapeRuns(
       if (mergedChars(box, extent, cmds, coords, frame.s) <= MAX_PATH_CHARS) {
         run.list.push(i);
         run.paths += p.paths.length;
+        run.boxes?.push(m.box);
         Object.assign(run, { box, extent, cmds, coords });
         continue;
       }
@@ -894,6 +950,7 @@ export function shapeRuns(
       coords: p.coords,
       box: m.box,
       extent: p.extent,
+      ...(m.three !== undefined ? { boxes: [m.box] } : {}),
     };
   }
   end();
@@ -917,6 +974,7 @@ export function wholeDiagrams(
   elements: Element[],
   background: Background,
   residual: string[][],
+  budget = true,
 ): void {
   // By source and number: a layout's drawings are numbered in its own walk, shared by every slide.
   const members = new Map<string, number[]>();
@@ -952,7 +1010,9 @@ export function wholeDiagrams(
       }
     }
     if (moved) continue;
-    if (slideCost(elements, background, art, ctx.frame).objects <= MAX_SLIDE_OBJECTS) return;
+    // M9: the budget sends nothing to the art (`budget.ts`), but behind `ParseOptions.budgetArt`.
+    if (!budget) return;
+    if (slideCost(elements, background, art, ctx.frame, true).objects <= MAX_SLIDE_OBJECTS) return;
     let worst: number[] | undefined;
     let most = 0;
     for (const list of members.values()) {
@@ -961,6 +1021,8 @@ export function wholeDiagrams(
         list.map((i) => elements[i]!),
         NO_BACKGROUND,
         undefined,
+        undefined,
+        true,
       ).objects;
       if (n > most) {
         most = n;
@@ -982,7 +1044,8 @@ export function wholeDiagrams(
  */
 function fitTables(ctx: SlideCtx, elements: Element[], background: Background, residual: string[][]): void {
   for (;;) {
-    if (slideCost(elements, background, artRange(elements), ctx.frame).objects <= MAX_SLIDE_OBJECTS) return;
+    if (slideCost(elements, background, artRange(elements), ctx.frame, true).objects <= MAX_SLIDE_OBJECTS)
+      return;
     let worst = -1;
     elements.forEach((e, i) => {
       if (e.kind !== 'table' || e.hidden || e.support === 'residual') return;
@@ -1018,7 +1081,8 @@ function textless(e: Element): boolean {
  * `refineSupport`) gets the reason.
  */
 function fit3d(ctx: SlideCtx, elements: Element[], background: Background, residual: string[][]): void {
-  if (slideCost(elements, background, artRange(elements), ctx.frame).objects <= MAX_SLIDE_OBJECTS) return;
+  if (slideCost(elements, background, artRange(elements), ctx.frame, true).objects <= MAX_SLIDE_OBJECTS)
+    return;
   let n = 0;
   elements.forEach((e, i) => {
     if (e.hidden || e.support === 'residual' || !e.reasons?.some(REAL_3D)) return;
@@ -1044,7 +1108,7 @@ function fit3d(ctx: SlideCtx, elements: Element[], background: Background, resid
  */
 function fitShapes(ctx: SlideCtx, elements: Element[], background: Background, residual: string[][]): void {
   const frame = ctx.frame;
-  const objects = () => slideCost(elements, background, artRange(elements), frame).objects;
+  const objects = () => slideCost(elements, background, artRange(elements), frame, true).objects;
   if (objects() <= MAX_SLIDE_OBJECTS) return;
   const before = elements.map((e) => ({ support: e.support, reasons: e.reasons }));
   const mark = (list: readonly number[]) => {
@@ -1134,7 +1198,7 @@ function textlessRuns(
   const end = () => {
     if (!list.length) return;
     const members = list.map((i) => elements[i]!);
-    let cost = slideCost(members, NO_BACKGROUND, undefined).objects;
+    let cost = slideCost(members, NO_BACKGROUND, undefined, undefined, true).objects;
     for (const r of shapeRuns(members, frame)) cost -= r.length - 1;
     if (cost > 0) out.push({ list, cost, grouped: members[0]!.group !== undefined });
     list = [];
@@ -1155,16 +1219,72 @@ function textlessRuns(
   return out.sort((p, q) => Number(q.grouped) - Number(p.grouped) || q.cost - p.cost);
 }
 
+/** How a slide is classified (`ParseOptions`). */
+export interface ClassifyOptions {
+  /**
+   * The fidelity harness's A/B only (`ParseOptions.budgetArt`): the slide budgets of M6 and M9 wave 1, which
+   * send tables, SmartArt drawings, real 3-D and shapes without text past the object budget to
+   * LibreOffice's art (`fitTables`, `wholeDiagrams`, `fit3d`, `fitShapes`) and make a slide still past a
+   * budget a picture, instead of drawing them natively (`budget.ts` `fitBudgets`). Never set by the hub.
+   */
+  budgetArt?: boolean;
+}
+
 /**
- * Tier, class and reasons of a slide that was read. Sets each element's `support` and `reasons` first
- * (`refineSupport`), and on a slide over the object budget marks its runs of shapes of one look
- * (`ShapeElement.merge`, `shapeRuns`). Reasons: the tier's (features that keep the slide out of the tier
- * below), then `art:<reason>` for what made it hybrid and `budget:objects` / `budget:pictures` for what made
- * it a picture.
+ * Tier, class and reasons of a slide that was read. Culls what draws nothing on the slide (`budget.ts`
+ * `cullElements`), sets each element's `support` and `reasons` (`refineSupport`), keeps SmartArt drawings
+ * whole, then fits the slide budgets natively (`budget.ts` `fitBudgets`: merges, decorations, composites,
+ * the text ceiling, the guard and the atlas). Reasons: the tier's (features that keep the slide out of the
+ * tier below), then `art:<reason>` for what made it hybrid and `missing:<kind>` for what the guard left out.
+ * With `budgetArt`, the art A/B of M6 (`classifyWithArt`).
  */
-export function classifySlide(ctx: SlideCtx, elements: Element[], background: Background): Classification {
+export function classifySlide(
+  ctx: SlideCtx,
+  elements: Element[],
+  background: Background,
+  opts: ClassifyOptions = {},
+): Classification {
   const { tier, reasons } = tierOf(slideFeatures(ctx));
+  // M9: what draws nothing on the slide is not imported, before anything is counted (`budget.ts`).
+  const culled = cullElements(ctx.frame, elements);
+  if (culled.offSlide) ctx.log(`${culled.offSlide} element(s) outside the slide are not imported`);
+  if (culled.invisible) ctx.log(`${culled.invisible} shape(s) that show nothing are not imported`);
   const residual = refineSupport(ctx, elements);
+  if (opts.budgetArt) return classifyWithArt(ctx, elements, background, residual, tier, reasons);
+  wholeDiagrams(ctx, elements, background, residual, false);
+  const plan = fitBudgets(ctx, elements, background);
+  const art = artRange(elements);
+  const why: string[] = [];
+  for (const i of art?.elements ?? []) for (const r of residual[i]!) why.push(`art:${r}`);
+  if (art && videoUnderArt(elements, art)) ctx.log('a residual element above a video is drawn under it');
+  const missing = leftKinds(elements);
+  const cls: SlideClass = art || missing.length ? 'hybrid' : 'native';
+  return {
+    tier,
+    class: cls,
+    reasons: [...reasons, ...[...new Set(why)].sort(), ...missing.map((k) => `missing:${k}`)].map((r) =>
+      clean(r, MAX_REASON_CHARS),
+    ),
+    ...(art ? { art } : {}),
+    ...(plan.atlas.length ? { atlas: plan.atlas } : {}),
+    ...(missing.length ? { missing } : {}),
+  };
+}
+
+/**
+ * The slide budgets of M6 and M9 wave 1 (`ClassifyOptions.budgetArt`, the harness's A/B): on a slide over
+ * the object budget its runs of shapes of one look are merged (`ShapeElement.merge`, `shapeRuns`), and
+ * real 3-D, tables, SmartArt drawings and shapes without text go to the art; a slide still past a budget is
+ * a picture (`budget:objects` / `budget:pictures`).
+ */
+function classifyWithArt(
+  ctx: SlideCtx,
+  elements: Element[],
+  background: Background,
+  residual: string[][],
+  tier: Tier,
+  reasons: string[],
+): Classification {
   fit3d(ctx, elements, background, residual);
   fitTables(ctx, elements, background, residual);
   wholeDiagrams(ctx, elements, background, residual);
@@ -1175,7 +1295,7 @@ export function classifySlide(ctx: SlideCtx, elements: Element[], background: Ba
   const why: string[] = [];
   for (const i of art?.elements ?? []) for (const r of residual[i]!) why.push(`art:${r}`);
   if (art && videoUnderArt(elements, art)) ctx.log('a residual element above a video is drawn under it');
-  if (slideCost(elements, background, art).objects > MAX_SLIDE_OBJECTS) {
+  if (slideCost(elements, background, art, undefined, true).objects > MAX_SLIDE_OBJECTS) {
     const runs = shapeRuns(elements, ctx.frame, new Set(art?.elements));
     for (const run of runs) for (const i of run) (elements[i] as ShapeElement).merge = run[0]!;
     if (runs.length) {
@@ -1183,7 +1303,7 @@ export function classifySlide(ctx: SlideCtx, elements: Element[], background: Ba
       ctx.log(`${n} shapes of one look are drawn as ${runs.length} objects (the slide's object budget)`);
     }
   }
-  const cost = slideCost(elements, background, art, ctx.frame);
+  const cost = slideCost(elements, background, art, ctx.frame, true);
   const over: string[] = [];
   if (cost.objects > MAX_SLIDE_OBJECTS) over.push('budget:objects');
   if (cost.pictures > MAX_SLIDE_PICTURES) over.push('budget:pictures');

@@ -52,8 +52,18 @@ const BASE: Readonly<Record<string, Decision>> = {
   'budget:shapes': 'residual',
 };
 
-/** M9 wave 1's one policy change (`conv-seams`): real 3-D is drawn flat. */
-const M9_WAVE1: Readonly<Record<string, Decision>> = { '3d': 'approx', '3d:camera': 'approx' };
+/**
+ * M9's policy changes: wave 1 (`conv-seams`), real 3-D is drawn flat; wave 2 (`decor-conv`), nothing is
+ * left to the art for being slow to draw (decisions.md "Slow-to-draw elements"), and real 3-D drawn flat in a
+ * decoration is a row of its own.
+ */
+const M9_CHANGES: Readonly<Record<string, Decision>> = {
+  '3d': 'approx',
+  '3d:camera': 'approx',
+  'custGeom:complex': 'native',
+  'geom:complex': 'native',
+  '3d:flat-in-decoration': 'approx',
+};
 
 const IN = 914_400;
 const NS_C = 'http://schemas.openxmlformats.org/drawingml/2006/chart';
@@ -72,15 +82,20 @@ const text = (bodyPr: string, children = '', paras = para(run('Text'))) =>
   );
 
 describe('the residual decision table (M9)', () => {
-  it("every FALLBACK_FEATURES entry has a row; decisions equal today's except 3d", () => {
+  it("every FALLBACK_FEATURES entry has a row; decisions equal today's but for M9's changes", () => {
     const decided = decidedFeatures();
     for (const f of FALLBACK_FEATURES) expect(decided.has(f), f).toBe(true);
-    // Every row is pinned, and the base's decisions are kept but for real 3-D.
-    expect(RESIDUAL_ROWS.map((r) => r.reason).sort()).toEqual(Object.keys(BASE).sort());
-    for (const r of RESIDUAL_ROWS) expect(r.decision, r.reason).toBe(M9_WAVE1[r.reason] ?? BASE[r.reason]);
+    // Every row is pinned, and the base's decisions are kept but for M9's changes.
+    expect(RESIDUAL_ROWS.map((r) => r.reason).sort()).toEqual(
+      [...new Set([...Object.keys(BASE), ...Object.keys(M9_CHANGES)])].sort(),
+    );
+    for (const r of RESIDUAL_ROWS) expect(r.decision, r.reason).toBe(M9_CHANGES[r.reason] ?? BASE[r.reason]);
     expect(RESIDUAL_ROWS.filter((r) => r.decision !== BASE[r.reason]).map((r) => r.reason)).toEqual([
       '3d',
       '3d:camera',
+      'custGeom:complex',
+      'geom:complex',
+      '3d:flat-in-decoration',
     ]);
     // Rows name census features the census has (fallback features or tier blockers).
     const census = new Set([...FALLBACK_FEATURES, ...TIER_BLOCKERS.flatMap(([, s]) => [...s])]);

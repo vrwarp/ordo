@@ -29,12 +29,14 @@ import type { HubTools } from '../tools.ts';
 export const CONVERTER_VERSION = 2;
 
 /**
- * The stored M9 fields the import writes (design/27 §15 M9 decision 13, decisions.md 1: every one, in
- * 0.2.0), passed to the converter as `EmitOptions.m9Writes` (`sceneTask.ts`). A kill switch per field: take
- * one out and the import writes what an older build draws for it instead (§3.2), so a field found wrong can
- * be withheld without a release of the drawers.
+ * The stored M9 fields the import writes (design/27 §15 M9 decision 13, decisions.md 1), passed to the
+ * converter as `EmitOptions.m9Writes` (`sceneTask.ts`). A kill switch per field: take one out and the import
+ * writes what an older build draws for it instead (§3.2), so a field found wrong can be withheld without a
+ * release of the drawers. A field stays out until what reads it is in (the regroup's rollout rule):
+ * 'decorFile' until `decor-render` names decoration files here and on the client (`geoms.ts`, the client's
+ * `nameGeoms`), so no `pptxdecor:<n>` placeholder is ever stored; a decoration keeps its parts in the slide.
  */
-export const M9_WRITES: ReadonlySet<M9Field> = ALL_M9_FIELDS;
+export const M9_WRITES: ReadonlySet<M9Field> = new Set([...ALL_M9_FIELDS].filter((f) => f !== 'decorFile'));
 
 const MiB = 1024 * 1024;
 

@@ -304,9 +304,10 @@ export type FitOptions = {
  * 3. **plain**: the grid form with the runs and paragraph styles of its text objects and tables dropped, the
  *    largest formatting first, until it fits (text and box style kept, so search and the lyric box read the
  *    same text).
- * 4. **minimal**: the grid form with its shapes left out, the largest first (a table never: it holds text),
- *    then, if still over, its formatting dropped as in `plain`. Text objects, pictures and the background
- *    stay: every text survives. A slide whose text alone passes `max` is returned minimal and over it.
+ * 4. **minimal**: the grid form with its shapes left out, the largest first (a table never: it holds text,
+ *    nor the slide's background drawn as a shape, origin role 'bg': `isBackground`), then, if still over, its
+ *    formatting dropped as in `plain`. Text objects, pictures and the background stay: every text survives,
+ *    on the page it was written for. A slide whose text alone passes `max` is returned minimal and over it.
  *
  * Pure and deterministic; never throws, and never mutates `slide`.
  */
@@ -362,8 +363,10 @@ export function fitSlideBudget(
 /**
  * The smallest form of a slide that keeps every text and picture (`fitSlideBudget`'s minimal level with
  * everything it may drop dropped): its shapes left out (tables kept), every text object and table without
- * runs and paragraph styles, the background kept. What the presentation's tail is stored as
- * (`planImportSizes`), and what an import keeps of a slide the schema refuses. Pure.
+ * runs and paragraph styles, the background kept (`backgroundMediaId`; a background drawn as a shape, origin
+ * role 'bg', is a shape here and left out: the tail is sized to the presentation's 4 MiB, about 200 bytes a
+ * slide). What the presentation's tail is stored as (`planImportSizes`), and what an import keeps of a slide
+ * the schema refuses. Pure.
  */
 export function minimalSlide(slide: Slide): Slide {
   const objects: SlideObject[] = [];
@@ -392,6 +395,15 @@ export function gridSlide(slide: Slide): Slide {
     return g;
   });
   return changed ? { ...slide, objects } : slide;
+}
+
+/**
+ * The slide's background drawn as an object (an importer's solid or extended background, or the white under a
+ * background picture with alpha: origin role 'bg'). The minimal level of `fitSlideBudget` keeps it as it keeps
+ * `backgroundMediaId`: left out, a slide's dark text would be drawn on the output's black.
+ */
+function isBackground(o: SlideObject): boolean {
+  return o.origin?.role === 'bg';
 }
 
 function objectsOf(slide: Slide): SlideObject[] {
@@ -470,7 +482,7 @@ function formattingCandidates(objects: readonly SlideObject[]): Candidate[] {
 function dropCandidates(objects: readonly SlideObject[]): Candidate[] {
   const out: Candidate[] = [];
   objects.forEach((o, index) => {
-    if (o.type !== 'shape' || o.table) return;
+    if (o.type !== 'shape' || o.table || isBackground(o)) return;
     out.push({ index, next: null, saving: jsonBytes(o) + 1, kind: o.chart ? 'chart' : 'decoration' });
   });
   return out;

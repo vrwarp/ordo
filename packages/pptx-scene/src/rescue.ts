@@ -90,6 +90,8 @@ export function rescueDeck(src: PartSource, opts: RescueOptions = {}): ConvertRe
     slideRect: slideRect(frame),
     notes: [...deckNotes.notes],
     geoms: [],
+    decors: [],
+    sheets: [],
     frame,
     sections: deck.sections,
     listed: deck.slides as SlideRef[],

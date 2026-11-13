@@ -350,3 +350,224 @@ function sourceIndex(
   const v = Math.floor((cropStart + f * kept) * n);
   return v < 0 ? 0 : v >= n ? n - 1 : v;
 }
+
+// ── Sheets: pictures made of several pictures (M9, `sheet.ts`) ───────────────────────────────────────────
+
+/**
+ * One picture of a sheet (M9, design/27 §15 M9, `budget-decorations.md` §3.4): a source part as one object
+ * shows it, placed in the sheet. The caller decodes `part` with `crop` applied (shares of the source; a
+ * negative share pads that side with transparency, as `ImageObject.crop`), recoloured by `recolor`, at the
+ * cell's size before its turn (`cellSourceSize`: `w` x `h`, or `h` x `w` for an odd `quarter`, or `src` for a
+ * picture turned by any other angle); `applySheet` mirrors and turns it by index arithmetic (no resampling)
+ * or, for `rotation`, by sampling it as Canvas draws a turned picture (bilinear), and lays it over the sheet
+ * at (`x`, `y`) with `alpha`.
+ */
+export interface SheetCell {
+  /** The source picture part. */
+  part: string;
+  /** `ImageObject.crop`: the share of the source cut from each side (negative: transparent padding). */
+  crop?: Insets;
+  /** The picture's own colour effects (`PictureFill.recolor`), applied to the cell. */
+  recolor?: Recolor[];
+  /** The cell in the sheet, whole px, as drawn (after its turn). */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Mirrored about the picture's own centre before its turn (`ImageObject.flipH`, `flipV`). */
+  flipH?: boolean;
+  flipV?: boolean;
+  /** Quarter turns clockwise (`ImageObject.box.rotation` / 90; composites only). */
+  quarter?: 0 | 1 | 2 | 3;
+  /**
+   * Any other turn, degrees clockwise about the picture's centre (composites only, without `quarter`): the
+   * cell is the turned picture's bounding box, and the source is decoded at `src`, the unturned picture.
+   */
+  rotation?: number;
+  src?: { w: number; h: number };
+  /** The picture's opacity (`ImageObject.opacity`, PowerPoint's `alphaModFix`; composites only). */
+  alpha?: number;
+}
+
+/**
+ * A sheet (M9): one picture made of several. A **composite** is a z-run of plain pictures drawn as one picture
+ * over their union box, cells in z-order laid over each other; an **atlas** packs the fewest smallest of a
+ * slide's distinct pictures past its 12 into one, each object keeping its box and showing its cell through
+ * its crop (`ImageObject.crop`, drawn by every build since M1).
+ */
+export interface SheetBake {
+  w: number;
+  h: number;
+  cells: SheetCell[];
+  layout: 'composite' | 'atlas';
+}
+
+/** Bounds of a sheet (design/27 §12, `BAKE_LIMITS`): what a caller decodes and allocates for one. */
+export const SHEET_LIMITS = {
+  /** Cells of one sheet. */
+  cells: 64,
+  /** Largest side of the sheet, px. */
+  side: BAKE_LIMITS.side,
+  /** Pixels of the sheet (64 MB of RGBA). */
+  pixels: BAKE_LIMITS.pixels,
+  /** Pixels decoded for all its cells together. */
+  decoded: 32 * 1024 * 1024,
+} as const;
+
+/**
+ * The size a cell's source is decoded at: the cell's, its sides swapped by an odd quarter turn; a cell turned
+ * by any other angle, its `src`.
+ */
+export function cellSourceSize(cell: SheetCell): { width: number; height: number } {
+  if (cell.rotation !== undefined && cell.src) return { width: cell.src.w, height: cell.src.h };
+  const odd = (cell.quarter ?? 0) % 2 === 1;
+  return { width: odd ? cell.h : cell.w, height: odd ? cell.w : cell.h };
+}
+
+/**
+ * Throws when a sheet is outside `SHEET_LIMITS` or a cell outside the sheet: what a caller checks before it
+ * decodes anything for it.
+ */
+export function checkSheet(bake: SheetBake): void {
+  checkSize(bake.w, bake.h, 'sheet');
+  if (!Array.isArray(bake.cells) || bake.cells.length < 1 || bake.cells.length > SHEET_LIMITS.cells)
+    throw new Error('the sheet has too many or no cells');
+  let decoded = 0;
+  for (const c of bake.cells) {
+    checkSize(c.w, c.h, 'sheet cell');
+    if (!Number.isInteger(c.x) || !Number.isInteger(c.y) || c.x < 0 || c.y < 0)
+      throw new Error('a sheet cell lies outside the sheet');
+    if (c.x + c.w > bake.w || c.y + c.h > bake.h) throw new Error('a sheet cell lies outside the sheet');
+    if (c.rotation !== undefined && !(Number.isFinite(c.rotation) && c.src && c.quarter === undefined))
+      throw new Error('a turned sheet cell has no source size');
+    const src = cellSourceSize(c);
+    checkSize(src.width, src.height, 'sheet cell source');
+    decoded += src.width * src.height;
+  }
+  if (decoded > SHEET_LIMITS.decoded) throw new Error('the sheet decodes more pixels than a sheet may');
+}
+
+/**
+ * The sheet's pixels (RGBA, straight alpha): each cell's decoded source (`raster`, at `cellSourceSize`, its
+ * crop applied) recoloured (`format`: the source's, `CLR_CHANGE_TOLERANCE`), mirrored and turned by index
+ * arithmetic and laid "over" what the cells before it left, times its `alpha`; transparent where no cell is.
+ * A raster of the wrong size, or a sheet outside its limits, throws. Rasters are changed in place by the
+ * colour effects. Linear in the cells' pixels.
+ */
+export function applySheet(
+  bake: SheetBake,
+  cells: readonly { cell: SheetCell; raster: BakeRaster; format?: string }[],
+): BakeRaster {
+  checkSheet(bake);
+  const W = bake.w;
+  const out: BakeRaster = { width: W, height: bake.h, data: new Uint8Array(4 * W * bake.h) };
+  const d = out.data;
+  for (const { cell, raster, format } of cells) {
+    const want = cellSourceSize(cell);
+    checkRaster(raster, 'sheet cell');
+    if (raster.width !== want.width || raster.height !== want.height)
+      throw new Error('a sheet cell was decoded at the wrong size');
+    if (cell.recolor?.length)
+      recolorRaster(
+        raster,
+        cell.recolor,
+        CLR_CHANGE_TOLERANCE[format ?? 'other'] ?? CLR_CHANGE_TOLERANCE.other!,
+      );
+    const a = Math.max(0, Math.min(1, finite(cell.alpha ?? 1) ? (cell.alpha ?? 1) : 1));
+    if (a <= 0) continue;
+    if (cell.rotation !== undefined) {
+      turnedCell(d, W, cell, raster, a);
+      continue;
+    }
+    const sw = raster.width;
+    const sh = raster.height;
+    const s = raster.data;
+    const q = cell.quarter ?? 0;
+    for (let y = 0; y < cell.h; y++) {
+      let o = ((cell.y + y) * W + cell.x) * 4;
+      for (let x = 0; x < cell.w; x++, o += 4) {
+        // The source pixel this cell pixel shows: undo the turn (clockwise), then the mirrors.
+        let u: number;
+        let v: number;
+        if (q === 0) {
+          u = x;
+          v = y;
+        } else if (q === 1) {
+          u = y;
+          v = sh - 1 - x;
+        } else if (q === 2) {
+          u = sw - 1 - x;
+          v = sh - 1 - y;
+        } else {
+          u = sw - 1 - y;
+          v = x;
+        }
+        if (cell.flipH) u = sw - 1 - u;
+        if (cell.flipV) v = sh - 1 - v;
+        const i = (v * sw + u) * 4;
+        const sa = (s[i + 3]! / 255) * a;
+        if (sa <= 0) continue;
+        const da = d[o + 3]! / 255;
+        const oa = sa + da * (1 - sa);
+        for (let k = 0; k < 3; k++) d[o + k] = clamp255((s[i + k]! * sa + d[o + k]! * da * (1 - sa)) / oa);
+        d[o + 3] = clamp255(oa * 255);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Lay a cell turned by any angle over the sheet `d` (`W` px wide): each cell pixel's centre mapped back
+ * through the turn (about the cell's centre) and the mirrors into the source, sampled bilinearly with
+ * premultiplied alpha (transparent outside it), as Canvas draws a turned picture, then "over" times `a`.
+ */
+function turnedCell(d: Uint8Array, W: number, cell: SheetCell, src: BakeRaster, a: number): void {
+  const th = ((cell.rotation ?? 0) * Math.PI) / 180;
+  const cos = Math.cos(th);
+  const sin = Math.sin(th);
+  const sw = src.width;
+  const sh = src.height;
+  const s = src.data;
+  // A source pixel premultiplied, transparent outside the source.
+  const px = (u: number, v: number, k: number) => {
+    if (u < 0 || v < 0 || u >= sw || v >= sh) return 0;
+    const i = (v * sw + u) * 4;
+    return k === 3 ? s[i + 3]! : (s[i + k]! * s[i + 3]!) / 255;
+  };
+  const rgba = [0, 0, 0, 0];
+  for (let y = 0; y < cell.h; y++) {
+    let o = ((cell.y + y) * W + cell.x) * 4;
+    for (let x = 0; x < cell.w; x++, o += 4) {
+      const dx = x + 0.5 - cell.w / 2;
+      const dy = y + 0.5 - cell.h / 2;
+      let u = dx * cos + dy * sin + sw / 2;
+      let v = -dx * sin + dy * cos + sh / 2;
+      if (cell.flipH) u = sw - u;
+      if (cell.flipV) v = sh - v;
+      u -= 0.5;
+      v -= 0.5;
+      if (u <= -1 || v <= -1 || u >= sw || v >= sh) continue;
+      const u0 = Math.floor(u);
+      const v0 = Math.floor(v);
+      const fu = u - u0;
+      const fv = v - v0;
+      for (let k = 0; k < 4; k++)
+        rgba[k] =
+          (px(u0, v0, k) * (1 - fu) + px(u0 + 1, v0, k) * fu) * (1 - fv) +
+          (px(u0, v0 + 1, k) * (1 - fu) + px(u0 + 1, v0 + 1, k) * fu) * fv;
+      const sa = (rgba[3]! / 255) * a;
+      if (sa <= 0) continue;
+      const da = d[o + 3]! / 255;
+      const oa = sa + da * (1 - sa);
+      // The premultiplied source times `a`, over the straight destination.
+      for (let k = 0; k < 3; k++) d[o + k] = clamp255((rgba[k]! * a + d[o + k]! * da * (1 - sa)) / oa);
+      d[o + 3] = clamp255(oa * 255);
+    }
+  }
+}
+
+/** A stable key of a sheet: the identity of the picture it makes (its cells' parts and the recipe). */
+export function sheetKey(bake: SheetBake): string {
+  return JSON.stringify(bake);
+}

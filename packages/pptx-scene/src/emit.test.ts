@@ -13,7 +13,7 @@ import {
   placePicture,
 } from './emit.ts';
 import { legacyGeometry, storedGeometry } from '@ordo/renderer/geom/stored.ts';
-import { emitSlides, parseDeck } from './index.ts';
+import { emitSlides, type ParseOptions, parseDeck } from './index.ts';
 import type { DeckScene, ShapeElement } from './ir.ts';
 import {
   body,
@@ -42,8 +42,8 @@ const PX = 144;
 const RED = { r: 255, g: 0, b: 0, a: 1 };
 
 /** Emit the first slide of a deck; every emitted slide must be an ordinary ordo slide. */
-function emitOne(spec: DeckSpec, opts: EmitOptions = {}) {
-  const scene = parseDeck(buildDeck(spec));
+function emitOne(spec: DeckSpec, opts: EmitOptions = {}, parse: ParseOptions = {}) {
+  const scene = parseDeck(buildDeck(spec), parse);
   const stored = emitSlides(scene, opts);
   for (const s of stored.slides) expect(Slide.parse(s.slide)).toEqual(s.slide);
   // The paths as drawn: a geometry file's in place of its ref.
@@ -610,14 +610,15 @@ describe('pictures', () => {
   });
 
   it('cuts a picture reaching past twice the canvas and folds the cut into its crop', () => {
-    // 40 in wide from x = -40 in: -5,760 to 0 px, 1,440 px of it outside the clamp's -3,840.
-    const far = pic({ id: 2, x: -40 * IN, y: 0, cx: 40 * IN, cy: IN, rId: 'rId2', srcRect: 'l="10000"' });
+    // 40 in wide from x = -39 in: -5,616 to 144 px, 1,776 px of it outside the clamp's -3,840 (one inch of
+    // it on the slide: a picture wholly off the slide is not imported at all, M9).
+    const far = pic({ id: 2, x: -39 * IN, y: 0, cx: 40 * IN, cy: IN, rId: 'rId2', srcRect: 'l="10000"' });
     const { objects } = emitOne({ slides: [{ rels, shapes: far }] });
     const img = objects[1] as ImageObject;
     expect(img.box.x).toBeCloseTo(-3_840);
-    expect(img.box.w).toBeCloseTo(3_840);
-    // A third of the box is cut: the crop's left share grows by a third of the 90 % the box showed.
-    expect(img.crop!.l).toBeCloseTo(0.1 + (1_920 / 5_760) * 0.9);
+    expect(img.box.w).toBeCloseTo(3_984);
+    // The cut share of the box is cut from the 90 % of the source the box showed.
+    expect(img.crop!.l).toBeCloseTo(0.1 + (1_776 / 5_760) * 0.9);
     expect(img.crop!.r).toBeCloseTo(0);
     expect(cutToClamp({ x: 4_000, y: 0, w: 100, h: 100, rotation: 0 }, undefined)).toBeUndefined();
     expect(cutToClamp({ x: -100, y: -2_200, w: 200, h: 4_400, rotation: 0 }, undefined)).toEqual({
@@ -1002,27 +1003,39 @@ describe('placement', () => {
     const small = emitSlides(parseDeck(buildDeck({ slides: [{ shapes: box(2) }] }))).slides[0]!;
     expect(small.classification.class).not.toBe('picture');
     expect(small.overBudget).toBeUndefined();
-    // A slide picture class for its object count is not flagged, though its formatting passes the budget too.
+    // A slide picture class for its object count (only behind budgetArt since M9: past it a slide of text
+    // keeps up to 190 objects) is not flagged, though its formatting passes the budget too.
     const few = Array.from({ length: 30 }, (_, i) => run(`w${i} `, '', solid(colors[i % 2]!))).join('');
     const many = Array.from({ length: 160 }, (_, i) =>
       sp({ id: i + 2, x: 0, y: 0, cx: IN, cy: IN, txBody: body(para(few)) }),
     ).join('');
-    const crowded = emitSlides(parseDeck(buildDeck({ slides: [{ shapes: many }] }))).slides[0]!;
+    const crowded = emitSlides(parseDeck(buildDeck({ slides: [{ shapes: many }] }), { budgetArt: true }))
+      .slides[0]!;
     expect(crowded.classification.class).toBe('picture');
     expect(crowded.classification.reasons.join(' ')).not.toMatch(/KB of text formatting/);
     expect(crowded.overBudget).toBeUndefined();
+    const natively = emitSlides(parseDeck(buildDeck({ slides: [{ shapes: many }] }))).slides[0]!;
+    expect(natively.classification.reasons).not.toContain('budget:objects');
+    expect(natively.overBudget).toBe(true);
   });
 
-  it('caps a slide at 1,000 objects', () => {
-    // Text boxes: shapes without text over the budget would go to the art (and emit nothing).
+  it("keeps a slide within the render clamp's 200 objects, and caps one behind budgetArt at 1,000", () => {
     const many = sp({ id: 2, x: 0, y: 0, cx: IN, cy: IN, txBody: body(para(run('x'))) }).repeat(1_100);
-    const { objects, notes } = emitOne({ slides: [{ shapes: many }] });
+    // M9: the budgets' guard keeps the background and the lowest 199 text boxes, and lists what it left out.
+    const kept = emitOne({ slides: [{ shapes: many }] });
+    expect(kept.objects).toHaveLength(200);
+    expect(kept.out.slides[0]!.missing).toEqual(['element']);
+    expect(kept.scene.slides[0]!.classification).toMatchObject({ class: 'hybrid', missing: ['element'] });
+    expect(kept.out.slides[0]!.classification.reasons).toContain('missing:element');
+    expect(kept.notes.join(' ')).toMatch(/901 element\(s\) past the slide's budgets are not drawn/);
+    // Text boxes: shapes without text over the budget would go to the art (and emit nothing).
+    const { objects, notes } = emitOne({ slides: [{ shapes: many }] }, {}, { budgetArt: true });
     expect(objects).toHaveLength(1_000);
     expect(notes.join(' ')).toMatch(/more than 1000 objects/);
   });
 });
 
-describe('the object budget (M6)', () => {
+describe('the object budget (M6; its art only behind budgetArt since M9)', () => {
   /** `n` shapes 0.1 in wide in rows of 20 of `colors` in turn; `shape` makes each (its id, x and y in EMU). */
   const pieces = (n: number, shape: (id: number, x: number, y: number, i: number) => string) => {
     let out = '';
@@ -1121,7 +1134,11 @@ describe('the object budget (M6)', () => {
     const shape = (id: number, x: number, y: number, i: number) =>
       square(i % 2 ? '336699' : '993366')(id, x, y);
     const title = sp({ id: 3, x: 0, y: 5 * IN, cx: 4 * IN, cy: IN, txBody: body(para(run('Words'))) });
-    const { out, objects } = emitOne({ slides: [{ shapes: group(pieces(160, shape)) + title }] });
+    const { out, objects } = emitOne(
+      { slides: [{ shapes: group(pieces(160, shape)) + title }] },
+      {},
+      { budgetArt: true },
+    );
     const e = out.slides[0]!;
     expect(e.classification.class).toBe('hybrid');
     expect(e.classification.reasons).toContain('art:budget:shapes');

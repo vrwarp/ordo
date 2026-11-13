@@ -627,7 +627,8 @@ slide as this job stores it. The job (`geoms.ts`):
 ## M9 wave 1: converter version 2 and the M9 field gate (m9/conv-seams)
 
 - `CONVERTER_VERSION` is 2 (`shared.ts`): the converter that draws 3-D flat and writes the M9 fields.
-- `M9_WRITES` (`shared.ts`): the M9 stored fields the import writes, every one (M9 decision 1); `sceneTask.ts`
+- `M9_WRITES` (`shared.ts`): the M9 stored fields the import writes, every one (M9 decision 1) but those whose
+  reader is not in yet ('decorFile' until `decor-render` names decoration files); `sceneTask.ts`
   passes it as `EmitOptions.m9Writes`. Taking a field out is the kill switch: the import then writes what an
   older build draws for it. In wave 1 no converter part writes an M9 field yet (the stubs of
   `@ordo/pptx-scene`), so nothing stored changes.
@@ -719,7 +720,8 @@ lo-dependencies §4.2-4.4, §4.6-4.11).
 ## M9 wave 2: the budget ladder (m9/ladder)
 
 No budget and no failure makes a picture slide (design/27 M9, plan decision 3); `toPicture` is left only for
-a slide the converter classes picture (more pictures than a slide may hold, until `decor-conv`'s sheets).
+a slide the converter classes picture (since `decor-conv` only behind the harness's `ParseOptions.budgetArt`:
+the slide budgets are drawn natively, and a slide past 150 objects reaches the ladder instead).
 
 - **Step 3** (`nativeJob.ts` `budget`, pure parts in `ladder.ts`, which the harness's census also runs):
   - outline files are admitted one by one in slide order within `PPTX_LIMITS.geomFileBytes`; an object that
@@ -727,7 +729,9 @@ a slide the converter classes picture (more pictures than a slide may hold, unti
     left out, a picture keeps its box without the mask (`withoutFiles`);
   - every slide is measured as stored (`storedBytes`: one-slide `sanitizePresentation`, `Slide.safeParse`,
     ULID ids and SHA-256 refs; `quickBytes` for slides well within 64 KB) and fitted with
-    `fitSlideBudget` (grid, plain, minimal); `planImportSizes` then takes the fitted sizes and each slide's
+    `fitSlideBudget` (grid, plain, minimal: a background's shape, origin role 'bg', stays; the tail's
+    `minimalSlide` leaves it out);
+    `planImportSizes` then takes the fitted sizes and each slide's
     minimal form (`minimalSlide`) as its compact size, and the tail is stored minimal. A deck too large
     even all minimal has its tail's text cut to 200 characters a box (as the compact slides' search text was);
   - each simplified slide gets one note ('simplified to fit the slide budget: …', 'the presentation reached

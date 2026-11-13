@@ -7,7 +7,8 @@ import { describe, expect, it } from 'vitest';
  * on the hub's CPU pool and in Node alike. Code outside tests imports only its own modules, types from
  * `@ordo/domain`, and the few domain modules that are plain tables and functions shared with the renderer
  * (the Wingdings/Symbol bullet table, the script fallback families and the script scan, design/27 §1 and
- * §10; the stored path data tokeniser, §3.1; M9: the missing kinds, `missing.ts`), which import nothing at
+ * §10; the stored path data tokeniser, §3.1; M9: the missing kinds, `missing.ts`, and the palettes of
+ * decorations, `palette.ts`), which import nothing at
  * run time but each other. Since M6
  * also the renderer's geometry engine without its drawer (`@ordo/renderer/geom`: the preset table, the
  * compiler, the evaluator, arcs and the path builder; M6 repair: the drawing estimate, `cost.ts`, with the
@@ -19,7 +20,7 @@ import { describe, expect, it } from 'vitest';
  * reader and cmap (`@ordo/renderer/text/sfnt`, moved there from `metrics.ts`), which import nothing at run
  * time but each other.
  */
-const PURE_DOMAIN = ['bullets.ts', 'defaults.ts', 'missing.ts', 'pathdata.ts', 'readable.ts'];
+const PURE_DOMAIN = ['bullets.ts', 'defaults.ts', 'missing.ts', 'palette.ts', 'pathdata.ts', 'readable.ts'];
 const PURE_GEOM = [
   'compile.ts',
   'eval.ts',

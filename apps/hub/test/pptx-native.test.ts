@@ -336,28 +336,46 @@ describe('pptx-native: classes, budgets and timing', () => {
     expect(slidesOf(p).map((s) => s.durationMs)).toEqual([8000, 8000, 4000, undefined]);
   });
 
-  it('stores a picture-class slide without objects, pending LibreOffice, and rescues an unreadable one (M9)', async () => {
+  it('keeps a slide of 160 text boxes native and fits it, never a picture, and rescues an unreadable one (M9)', async () => {
     const many = Array.from({ length: 160 }, (_, i) => textBox(10 + i, `Item ${i}`, (i % 6) * 0.9)).join('');
     const parts = buildDeck({
       slides: [{ shapes: many }, { shapes: textBox(2, 'Fine') }, { shapes: textBox(2, 'Bad') }],
     });
     parts.set('ppt/slides/slide3.xml', enc.encode('<!DOCTYPE x [<!ENTITY a "aaaa">]><p:sld/>'));
     const { result, p } = await importDeck(parts);
-    // Picture class for its object count, not made compact by the size budgets; the unreadable slide goes to
-    // the text rescue (M9 ladder), which cannot read it either: an empty slide that says so, never a picture.
-    expect(result).toMatchObject({ slides: 3, native: 1, hybrid: 1, picture: 1, compact: 0, pending: 1 });
+    // M9: the converter keeps 160 text boxes (the text ceiling, 190: `decor-conv`), and the hub's budget
+    // ladder (`ladder`) finds the slide over 64 KB as stored with nothing to leave out but its white page,
+    // which stays (the background is kept): the slide keeps all of it, over the budget, said once, and is
+    // never a picture. The unreadable slide goes to the text rescue, which cannot read it either: an empty
+    // slide that says so, never a picture.
+    expect(result).toMatchObject({
+      slides: 3,
+      native: 2,
+      hybrid: 1,
+      picture: 0,
+      compact: 0,
+      simplified: 0,
+      pending: 0,
+    });
+    expect(result.notes.filter((n) => /\bslide 1\b/.test(n))).toEqual([
+      expect.stringMatching(/^slide 1 is over 64 KB with only its text and pictures .*: it keeps them all$/),
+    ]);
     const [budget, fine, bad] = slidesOf(p) as [Slide, Slide, Slide];
-    expect(budget.objects).toEqual([]);
-    expect(budget.lyricObjectId).toBeUndefined();
-    expect(budget.pptx).toMatchObject({ class: 'picture', pending: true });
-    expect(budget.pptx!.artText).toMatch(/^Item 0\nItem 1\n/);
+    expect(budget.objects.filter((o) => o.type === 'text')).toHaveLength(160);
+    expect(budget.objects[0]).toMatchObject({ type: 'shape', origin: { role: 'bg' } });
+    expect(budget.objects.find((o) => o.id === budget.lyricObjectId)).toBeDefined();
+    expect(budget.pptx).toMatchObject({ class: 'native' });
+    expect(budget.pptx!.pending).toBeUndefined();
+    expect(budget.pptx!.missing).toBeUndefined();
+    expect(slideBytes(budget)).toBeGreaterThan(64 * 1024);
     expect(fine.pptx!.class).toBe('native');
     expect(bad.objects).toEqual([]);
     expect(bad.pptx).toMatchObject({ class: 'hybrid', missing: ['slide'] });
     expect(bad.pptx!.pending).toBeUndefined();
     expect(bad.pptx!.notes!.join(' ')).toMatch(/could not be read/);
     expect(bad.pptx!.notes).toContain(RESCUE_NOTE);
-    expect(loJobs(p.id)[0]!.slides.map((s) => [s.index, s.class])).toEqual([[0, 'picture']]);
+    // Nothing is left to LibreOffice.
+    expect(loJobs(p.id)).toEqual([]);
   });
 
   /** Slide 2 of an import is over 64 KB: simplified by the budget ladder (M9), logged once, counted once. */

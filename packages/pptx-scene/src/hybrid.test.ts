@@ -196,15 +196,25 @@ describe('without LibreOffice (EmitOptions.libreoffice: false, M9)', () => {
     let shapes = '';
     for (let i = 0; i < 160; i++)
       shapes += sp({ id: i + 2, x: 0, y: 0, cx: EMU, cy: EMU, txBody: body(para(run(`t${i}`))) });
-    const big = convertDeck(buildDeck({ slides: [{ shapes }] }), { libreoffice: false }).slides[0]!;
+    const deck = buildDeck({ slides: [{ shapes }] });
+    // M9: no budget makes this slide a picture any more: 160 text boxes are within the text ceiling (190,
+    // `decor-conv`), and a slide over 64 KB keeps its class for the importer's ladder (`ladder`).
+    const kept = convertDeck(deck, { libreoffice: false }).slides[0]!;
+    expect(kept.classification.class).toBe('native');
+    expect(kept.missing).toBeUndefined();
+    // Behind the harness's A/B (`budgetArt`, M6's budgets) it is a picture for its object count, and a
+    // picture slide lists nothing missing: the importer leaves it to the budget.
+    const big = convertDeck(deck, { libreoffice: false, budgetArt: true }).slides[0]!;
     expect(big.classification.class).toBe('picture');
+    expect(big.classification.reasons).toContain('budget:objects');
     expect(big.missing).toBeUndefined();
   });
 
   it('plans no art on a picture-class slide either (M9 wave 1 repair)', () => {
-    // A chart (residual) and 13 distinct pictures, past the slide's 12: the emitted slide is a picture for its
-    // budget. (No byte budget makes a picture since M9's ladder: before it, a chart slide past 64 KB of text
-    // formatting was a picture with its art still planned.)
+    // A chart (residual) and 13 distinct pictures, past the slide's 12: behind the harness's A/B (`budgetArt`,
+    // M6's budgets) the emitted slide is a picture for its budget. (No byte budget makes a picture since M9's
+    // ladder: before it, a chart slide past 64 KB of text formatting was a picture with its art still planned;
+    // and since `decor-conv` the picture budget packs an atlas instead: the slide is not a picture.)
     const n = 13;
     const media: Record<string, Uint8Array> = {};
     for (let i = 0; i < n; i++) media[`ppt/media/p${i}.png`] = pngHeader(64 + i, 64, true);
@@ -232,10 +242,11 @@ describe('without LibreOffice (EmitOptions.libreoffice: false, M9)', () => {
       media,
     });
     withPart(parts, 'ppt/charts/chart1.xml', chartXml(), CHART_CONTENT_TYPE);
-    const withLo = convertDeck(parts).slides[0]!;
+    expect(convertDeck(parts).slides[0]!.classification.class).not.toBe('picture');
+    const withLo = convertDeck(parts, { budgetArt: true }).slides[0]!;
     expect(withLo.classification.class).toBe('picture');
     expect(withLo.classification.reasons).toContain('budget:pictures');
-    const s = convertDeck(parts, { libreoffice: false }).slides[0]!;
+    const s = convertDeck(parts, { libreoffice: false, budgetArt: true }).slides[0]!;
     expect(s.classification.class).toBe('picture');
     expect(s.art).toBeUndefined();
     expect(s.metafiles).toBeUndefined();
@@ -256,12 +267,19 @@ describe('without LibreOffice (EmitOptions.libreoffice: false, M9)', () => {
           '<a:lightRig rig="threePt" dir="t"/></a:scene3d><a:sp3d><a:bevelT w="38100" h="38100"/></a:sp3d>',
       });
     const parts = buildDeck({ slides: [{ shapes }] });
-    const withLo = convertDeck(parts).slides[0]!;
-    // With LibreOffice the art draws the bevels (`budget:3d`); version 1 draws them flat meanwhile.
+    // M9 (`decor-conv`): shapes of one 3-D look whose boxes do not overlap merge (plan decision 6), so the
+    // slide fits its budget natively with LibreOffice too: nothing goes to the art.
+    const native = convertDeck(parts).slides[0]!;
+    expect(native.classification).toMatchObject({ class: 'native' });
+    expect(native.art).toBeUndefined();
+    expect(native.slide.objects.length).toBeLessThanOrEqual(150);
+    // Behind budgetArt (the A/B), with LibreOffice the art draws the bevels (`budget:3d`); version 1 draws
+    // them flat meanwhile.
+    const withLo = convertDeck(parts, { budgetArt: true }).slides[0]!;
     expect(withLo.classification).toMatchObject({ class: 'hybrid' });
     expect(withLo.classification.reasons).toContain('art:budget:3d');
     expect(withLo.art).toBeDefined();
-    const s = convertDeck(parts, { libreoffice: false }).slides[0]!;
+    const s = convertDeck(parts, { libreoffice: false, budgetArt: true }).slides[0]!;
     // Without it version 1 is the slide: every shape drawn flat, as approx 3-D within the budget is.
     expect(s.classification.class).toBe('native');
     expect(s.classification.reasons.some((r) => r.startsWith('art:') || r.startsWith('missing:'))).toBe(

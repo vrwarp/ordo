@@ -653,6 +653,34 @@ describe('fitSlideBudget (design/27 §3.4, M9 ladder)', () => {
     expect(same.objects[1]).toBe(text);
   });
 
+  it("keeps the slide's background drawn as a shape (origin role 'bg') at the minimal level", () => {
+    const r = rng(11);
+    // A white page under dark text, as the converter writes a solid background (and the hub the white under
+    // a background picture with alpha): left out, the text would be drawn on the output's black.
+    const page: ShapeObject = {
+      id: id('BG', 2),
+      type: 'shape',
+      box: box(0, 0, 1920, 1080),
+      shape: 'rect',
+      fill: { r: 255, g: 255, b: 255, a: 1 },
+      opacity: 1,
+      radius: 0,
+      origin: { src: 'pptx', role: 'bg' },
+    };
+    const words: Slide = {
+      ...importedSlide(6),
+      objects: [page, traced(1, r, 3_000), formatted(7, 10, 20_000)],
+    };
+    const over = fitSlideBudget(words, 4_000);
+    expect(over.level).toBe('minimal');
+    expect(over.dropped).toBe(1);
+    expect(over.missing).toEqual(['decoration']);
+    expect(over.slide.objects.map((o) => o.id)).toEqual([id('BG', 2), id('Q', 7)]);
+    expect(over.slide.objects[0]).toBe(page);
+    // The presentation's tail (`minimalSlide`) is sized to 4 MiB: there it is a shape, left out.
+    expect(minimalSlide(words).objects.map((o) => o.id)).toEqual([id('Q', 7)]);
+  });
+
   it("minimal keeps every text object's text", () => {
     const r = rng(3);
     const table: ShapeObject = {

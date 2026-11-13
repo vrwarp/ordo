@@ -372,10 +372,11 @@ describe.skipIf(!tools)('a chart over a photo background (design/27 §15 M3 exit
 });
 
 describe.skipIf(!tools)('a 4:3 deck (design/27 §4, §15 M3 exit)', () => {
-  it('keeps its bars empty on native, hybrid and picture slides and aligns with LibreOffice within 2 px', async () => {
+  it('keeps its bars empty on native, hybrid and crowded slides and aligns with LibreOffice within 2 px', async () => {
     const chartRel = (n: number) => ({ id: `rId${n}`, type: 'chart', target: `../charts/chart${n}.xml` });
-    // Slide 3 holds more objects than a native slide may (150), each with text, which never goes to the art
-    // (plain shapes past the budget would): picture class.
+    // Slide 3 holds more objects than a native slide may (150), each with text. It was a picture slide (a
+    // LibreOffice page); since M9 the slide budgets keep it native (`decor-conv`: what passes them is left
+    // out and listed) and the ladder fits it within 64 KB (`ladder`): no slide is a picture any more.
     let crowd = '';
     for (let i = 0; i < 160; i++)
       crowd += sp({
@@ -420,7 +421,7 @@ describe.skipIf(!tools)('a 4:3 deck (design/27 §4, §15 M3 exit)', () => {
     withPart(parts, 'ppt/charts/chart3.xml', chartXml([3, 5, 2], 'C00000'), CHART_CONTENT_TYPE);
     withPart(parts, 'ppt/charts/chart4.xml', chartXml([2, 4], 'C00000'), CHART_CONTENT_TYPE);
     const { result, p } = await importDeck(parts, 'Four by three.pptx', { extendBackgrounds: false });
-    expect(result).toMatchObject({ native: 1, hybrid: 1, picture: 1 });
+    expect(result).toMatchObject({ native: 1, hybrid: 2, picture: 0, compact: 0, pending: 1 });
     const area = { x: 240, y: 0, w: 1440, h: 1080 };
     expect(p.source!.native!.slideRect).toEqual(area);
     const inArea = (o: SlideObject) =>
@@ -435,13 +436,18 @@ describe.skipIf(!tools)('a 4:3 deck (design/27 §4, §15 M3 exit)', () => {
     const want = logical43(...red);
     for (const k of ['x', 'y', 'w', 'h'] as const) expect(redBox[k]).toBeCloseTo(want[k], 6);
     expect(h2.objects.every(inArea)).toBe(true);
-    expect(p3.objects).toEqual([]);
+    // The crowded slide: drawn natively within the slide area, what its budgets left out listed, never pending.
+    expect(p3.objects.length).toBeGreaterThan(0);
+    expect(p3.objects.every(inArea)).toBe(true);
+    expect(p3.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
+    expect(p3.pptx!.pending).toBeUndefined();
+    expect(p3.objects.some((o) => o.type === 'text' && o.text === 'Page three')).toBe(true);
 
     const lo = await waitJob(hub, result.loJobId!, 180_000);
     expect(lo.error).toBeUndefined();
-    expect(lo.result).toMatchObject({ art: 1, pages: 1 });
+    expect(lo.result).toMatchObject({ art: 1, pages: 0 });
     const v2 = hub.lib.presentations.must(p.id);
-    const [, h2b, p3b] = slidesOf(v2) as [Slide, Slide, Slide];
+    const [, h2b] = slidesOf(v2) as [Slide, Slide, Slide];
     // Hybrid: the art inside the slide area, and the green box in it where PowerPoint puts it.
     expect(h2b.objects.every(inArea)).toBe(true);
     const art = h2b.objects.find((o): o is ImageObject => o.type === 'image')!;
@@ -450,17 +456,6 @@ describe.skipIf(!tools)('a 4:3 deck (design/27 §4, §15 M3 exit)', () => {
     expect(g).toBeDefined();
     const gErr = edgeErrors(g!, artPx, art.box, logical43(...green));
     expect(Math.max(...gErr)).toBeLessThanOrEqual(2);
-    // Picture class: the page at the slide's aspect (contain-fit leaves the bars empty), the blue box aligned,
-    // the text keyed to its own page.
-    const page = hub.lib.media.must(p3b.imported!.imageMediaId);
-    expect([page.width, page.height]).toEqual([2880, 2160]);
-    const pagePx = pixels(page);
-    const bl = bounds(pagePx, isBlue);
-    const bErr = edgeErrors(bl!, pagePx, area, logical43(...blue));
-    expect(Math.max(...bErr)).toBeLessThanOrEqual(2);
-    expect(p3b.imported).toMatchObject({ page: 3, textAligned: true });
-    expect(p3b.imported!.textBoxes!.map((t) => t.text)).toContain('Page three');
-    expect(p3b.imported!.textBoxes!.every((t) => t.box.x >= 240)).toBe(true);
 
     // LibreOffice's picture of the native slide ('Show original': nothing switched) puts the red box where
     // ordo draws it.
@@ -476,9 +471,16 @@ describe.skipIf(!tools)('a 4:3 deck (design/27 §4, §15 M3 exit)', () => {
     const refPx = pixels(hub.lib.media.must(v3[0]!.pptx!.refMediaId!));
     const rErr = edgeErrors(bounds(refPx, isRed)!, refPx, area, redBox);
     expect(Math.max(...rErr)).toBeLessThanOrEqual(2);
+    // LibreOffice's picture of the crowded slide (what its page was): at the slide's aspect (contain-fit leaves
+    // the bars empty), the blue box where PowerPoint puts it.
+    const crowded = hub.lib.media.must(v3[2]!.pptx!.refMediaId!);
+    expect([crowded.width, crowded.height]).toEqual([2880, 2160]);
+    const crowdedPx = pixels(crowded);
+    const bErr = edgeErrors(bounds(crowdedPx, isBlue)!, crowdedPx, area, logical43(...blue));
+    expect(Math.max(...bErr)).toBeLessThanOrEqual(2);
     const fmt = (e: number[]) => e.map((v) => v.toFixed(2)).join('/');
     console.info(
-      `4:3 edge errors (left/top/right/bottom, logical px): native ${fmt(rErr)}, art ${fmt(gErr)}, page ${fmt(bErr)}`,
+      `4:3 edge errors (left/top/right/bottom, logical px): native ${fmt(rErr)}, art ${fmt(gErr)}, crowded ${fmt(bErr)}`,
     );
     saved.push({ name: '4:3', p: hub.lib.presentations.must(p.id) });
   }, 300_000);

@@ -114,13 +114,20 @@ const rectsOf = (o: ShapeObject): Rect[] =>
 /** Convert one slide; it must be an ordinary ordo slide. */
 function convert(
   shapes: string,
-  opts: { styles?: string; fontFace?: FaceSource; deck?: Partial<DeckSpec>; loCompat?: boolean } = {},
+  opts: {
+    styles?: string;
+    fontFace?: FaceSource;
+    deck?: Partial<DeckSpec>;
+    loCompat?: boolean;
+    budgetArt?: boolean;
+  } = {},
 ) {
   let parts = buildDeck({ slides: [{ shapes }], ...opts.deck });
   if (opts.styles !== undefined) parts = withTableStyles(parts, opts.styles);
   const out = convertDeck(parts, {
     fontFace: opts.fontFace ?? HALF_EM,
     ...(opts.loCompat ? { loCompat: true } : {}),
+    ...(opts.budgetArt ? { budgetArt: true } : {}),
   });
   const s = out.slides[0]!;
   expect(Slide.parse(s.slide)).toEqual(s.slide);
@@ -957,7 +964,9 @@ describe('tables: what stays residual', () => {
     expect(texts).toHaveLength(90);
   });
 
-  it('sends the same table to the art once its objects pass the slide budget (budget:table)', () => {
+  it('sends the same table to the art once its objects pass the slide budget behind budgetArt (budget:table)', () => {
+    // M9 (`decor-conv`): a table is one object of the slide's budget (`ShapeObject.table`); the M6 art
+    // stays for the harness's A/B only.
     // A fill of its own in every cell: the grid draws one object per fill (gridObjects), so the 90 cells
     // are 90 fill objects and 90 text objects.
     const rows = Array.from({ length: 10 }, (_, r) => ({
@@ -966,7 +975,7 @@ describe('tables: what stays residual', () => {
         tcWith('x', solid((0x100000 + r * 9 + c).toString(16).toUpperCase())),
       ),
     }));
-    const { s, texts, rects } = convert(table({ cols: Array(9).fill(IN / 2), rows }));
+    const { s, texts, rects } = convert(table({ cols: Array(9).fill(IN / 2), rows }), { budgetArt: true });
     expect(s.classification.class).toBe('hybrid');
     expect(s.classification.reasons).toContain('art:budget:table');
     expect(texts).toHaveLength(0);
@@ -1006,7 +1015,7 @@ describe('tables: what stays residual', () => {
     expect(s.notes).toContain('a table with vertical cell text is drawn by LibreOffice (M8)');
   });
 
-  it('sends the largest tables to the art when the slide would pass its object budget', () => {
+  it('sends the largest tables to the art when the slide would pass its object budget behind budgetArt', () => {
     // Every cell its own fill: no two join or share an object, so each table is a fill and a text per cell.
     const cell = (r: number, c: number) =>
       tcWith('x', solid((r * 16 + c + 1).toString(16).padStart(2, '0').repeat(3)));
@@ -1021,7 +1030,7 @@ describe('tables: what stays residual', () => {
           cells: Array.from({ length: cols }, (_, c) => cell(r, c)),
         })),
       });
-    const { s, texts, rects } = convert(big(7, 0, 5) + big(8, 2 * IN, 6));
+    const { s, texts, rects } = convert(big(7, 0, 5) + big(8, 2 * IN, 6), { budgetArt: true });
     // 100 and 120 objects: the larger table goes to the art and the slide keeps 100 under the budget.
     expect(s.classification.class).toBe('hybrid');
     expect(s.classification.reasons).toContain('art:budget:table');

@@ -746,40 +746,101 @@ that is over (`@ordo/domain` `fitSlideBudget`).
   Never throws for a slide (`rescue.test.ts`, with a mutation fuzz).
 <!-- /m9:ladder -->
 
+<!-- m9:decor-conv -->
+## M9 wave 2: the slide budgets, natively (`budget.ts`, `decor.ts`, `sheet.ts`; `decor-conv`)
+
+Nothing goes to LibreOffice's art for a budget any more, and nothing for being slow to draw (decisions.md
+"Slow-to-draw elements"): a slide past its 150 objects or 12 distinct pictures is drawn natively, and the
+drawing budgets only choose how an element is drawn (from the slide's decoration plate, or live), never
+whether.
+
+- **Culling, always** (`budget.ts` `cullElements`, before anything is counted): an element whose bounds, grown
+  by its shadow, glow and half its outline, miss the slide area (the deck's, not the 1920 x 1080 frame), or a
+  shape that shows nothing (no visible fill, line, text or effect), is `ElementBase.culled` and hidden: not
+  emitted, counted, put in the art or its text. Clips, sounds and SmartArt drawings' elements are never
+  culled; groups are culled per leaf. One note per slide ('N element(s) outside the slide are not imported').
+- **The steps** (`fitBudgets`, each after the first only while the slide is over 150 objects, the runs that
+  save most first, stopping as soon as it fits): a table or a chart is one object; shapes of one look merge
+  as M6 merges them (`shapeRuns`); then **decorations** (`decor.ts`): z-runs of text-less shapes of one
+  SmartArt drawing, top-level group or layout/master source, then of one source (the slide's own ungrouped
+  shapes too), each one locked `ShapeObject.decor` (legacy: an empty line, which an older build draws as
+  nothing); between them **composites** (`sheet.ts`): z-runs of plain pictures as one picture over their union
+  box (`pptxmedia:sheet<n>`, `EmitResult.sheets`, `bake.ts` `SheetBake`, any rotation, cells at the 3840
+  density); last, only for a slide still over, real 3-D shapes drawn flat in decorations
+  (`3d:flat-in-decoration`, plan decision 6: otherwise 3-D never joins a decoration, and `shapeRuns` merges
+  3-D shapes only with an equal 3-D XML digest, `classify.ts` `threeDigest`, and disjoint boxes). A slide whose
+  objects left are text or unmergeable keeps up to 190 (`MAX_SLIDE_OBJECTS_TEXT`); past that the **guard**
+  leaves the topmost elements without text out (then text) until 200, the render clamp
+  (`Classification.missing`, class hybrid, `missing:<kind>`; never reached in the corpus). Past 12 distinct
+  pictures an **atlas** packs the fewest smallest into one sheet, each object keeping its box and showing its
+  cell through its crop (`Classification.atlas`, `sheet.ts` `atlasSlide`).
+- **A decoration draws what the separate shapes draw** (`emitDecor`): each member is emitted by the
+  single-shape emitter, then its geometry built at its box as the renderer builds it, placed (flips, rotation)
+  into the decoration's space (its box in logical px); a member's parts start with `s: 1`; its look is a paint
+  (fill, gradient laid on the member's own box as `DecorPart.frame`, mirrored by its flips; stroke, dash,
+  shadow), shared through `@ordo/domain` `Palette`; a path too long for one part is a `cont` chain. Caps:
+  256 parts, 64 paints, 16,384 points, 24 shadowed shapes. A decoration over `GEOM_FILE_CHARS` goes to a
+  decoration file (`DecorData.ref`, `pptxdecor:<n>`, `EmitResult.decors`) when `EmitOptions.m9Writes` has
+  'decorFile' (the hub's and the client's `M9_WRITES` leave it out until `decor-render` names the files: their
+  decorations keep their parts in the slide). With 'decor' out of `EmitOptions.m9Writes` the members are
+  emitted one by one; with `EmitOptions.sheets: false` every picture is its own object.
+- **Kept whole** (the wave 1 re-review): `emit.ts` `fitDrawing` and `fitEffects` no longer flatten an object
+  past the slide's drawing or effect budget to its legacy copy (its gradient, geometry, dash, ends and effects
+  stay, so the editor still edits it and a radial glow stays a glow); `walk.ts` no longer sends a shape past
+  the drawing budget to the art (`custGeom:complex` and `geom:complex` are no longer written): it is charged
+  as its legacy copy and kept. Every drawer draws such objects as its own budget allows (`geombudget.ts`)
+  until the slide's decoration plate holds them.
+- **Plates** (`decor.ts` `platePlan`, `EmittedSlide.plate`): the static decoration stack (the bottom objects up
+  to the first text, table, chart or picture that plays) and the objects above it with effect layers, plus
+  `pastBudget` (what the drawing budgets draw live past them): what the client bakes (`decor-render`).
+- **The A/B** (`ParseOptions.budgetArt`, the harness only): M6's and M9 wave 1's budgets (`fitTables`,
+  `wholeDiagrams`' budget step, `fit3d`, `fitShapes`, picture class past a budget), kept for comparison.
+- Tests: `budget.test.ts` (culling by the slide area, reach, media and SmartArt kept, steps in order, nothing
+  to the art, the text ceiling and the guard, a property test of 40 random slides of up to 2,000 elements,
+  3-D merges and 3-D drawn flat in decorations), `decor.test.ts` (who joins, scopes, caps, skipped pictures,
+  geometry and paint equal to the separate shapes', chains, files, plates), `sheet.test.ts` (composite runs and
+  cells, turns, one recipe a deck, the atlas and its crops, `applySheet`, `checkSheet`), and the M6 budget
+  tests behind `budgetArt` (`classify.test.ts`, `emit.test.ts`, `tables.test.ts`, `smartart.test.ts`,
+  `hybrid.test.ts`).
+<!-- /m9:decor-conv -->
+
 ## Module map
 
-| File            | What                                                                                                              | Owner  |
-| --------------- | ----------------------------------------------------------------------------------------------------------------- | ------ |
-| `xml.ts`        | Bounded XML reader (moved from pptx-render; no DTD: `<!DOCTYPE` refused, null-prototype `attrs`) and node helpers | A      |
-| `opc.ts`        | `PartSource`, `openPackage`: part lookup, decoding, cached parsing, content types, relationships                  | A      |
-| `markup.ts`     | Every part as one dialect: Strict → Transitional, the usual prefixes, one branch of `mc:AlternateContent`         | A      |
-| `deck.ts`       | `readDeck`: slide size, order, hidden flags, shown index, defaultTextStyle, sections; `slideParts`                | A      |
-| `frame.ts`      | EMU → 1920x1080 contain map, affine transforms, `boxPx`                                                           | A      |
-| `theme.ts`      | `readTheme`: colour, font and format schemes; `themeFont`, `langScript`, style font/line/effect references        | B      |
-| `color.ts`      | `ColorCtx`, colour maps, colour elements and modifiers, fills, `styleEntry`, `styleFill`                          | B      |
-| `inherit.ts`    | Placeholder matching, xfrm/bodyPr chain, paragraph-property chain                                                 | C      |
-| `walk.ts`       | Shape-tree walk: decorations, groups flattened, shapes                                                            | C      |
-| `text.ts`       | Text bodies: paragraphs, runs, run styles through the chain                                                       | C      |
-| `picture.ts`    | `p:pic` and every `a:blipFill`                                                                                    | C      |
-| `background.ts` | Slide → layout → master background                                                                                | C      |
-| `emit.ts`       | IR → ordo objects, media placeholders, digest                                                                     | C      |
-| `richtext.ts`   | A text body as rich ordo text: runs, paragraph styles, office box fields (M2)                                     | C (M2) |
-| `fontmap.ts`    | Script class of each character (Latin, East Asian, complex), substitutes and fallback families (M2)               | C (M2) |
-| `classify.ts`   | Census tiers T1-T5, reasons, slide class                                                                          | F      |
-| `geom.ts`       | Presets, custom geometry, text rectangles and sites, gradients, dashes, arrowheads, connector glue (M6)           | M6b B  |
-| `notes.ts`      | `readNotes`: a slide's speaker notes (notesSlide body placeholders), bounded                                      | M3 B   |
-| `transition.ts` | `readTransition`, `readSlideTransition` (a slide's tail only), `showLoops` (`p:showPr loop`)                      | M3 B   |
-| `timing.ts`     | `readSlideTiming`: the `p:timing` mapping of clips, transition and animation sounds; `gainDbOf`                   | M3b A  |
-| `media.ts`      | `readMediaRef` (a poster's clip, trim, kind), `emitMedia` (play, slide sound, motion background), `EmittedClip`   | M3b A  |
-| `tables.ts`     | `readTable`, `emitTable`, `Measure`: tables (M6); `tablestyles.ts`: the built-in styles (LibreOffice's, MPL 2.0)  | M6b C  |
-| `metrics.ts`    | `sfntMetrics`, `metricsOfTables`, `FaceSource`: advances, pair kerning, line heights from font files, bounded     | M6b C  |
-| `smartart.ts`   | SmartArt from its drawing cache: `readSmartArt` (the drawing's shapes through the walk), `lockDiagram`            | M6b D  |
-| `bake.ts`       | Baked pictures: `PictureBake` recipes (`bakeOf`, `tileBakeOf`), `applyBake` (recolour and tile pixels)            | M6b D  |
-| `ir.ts`         | The scene IR (types only)                                                                                         | shared |
-| `context.ts`    | `SlideCtx`, `slideContext`                                                                                        | shared |
-| `log.ts`        | `clean`, `noteList`                                                                                               | shared |
-| `index.ts`      | `parseDeck`, `emitSlides`, public types                                                                           | shared |
-| `test-util.ts`  | Test decks as `PartSource` maps of XML strings                                                                    | shared |
+| File            | What                                                                                                                                 | Owner         |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------- |
+| `xml.ts`        | Bounded XML reader (moved from pptx-render; no DTD: `<!DOCTYPE` refused, null-prototype `attrs`) and node helpers                    | A             |
+| `opc.ts`        | `PartSource`, `openPackage`: part lookup, decoding, cached parsing, content types, relationships                                     | A             |
+| `markup.ts`     | Every part as one dialect: Strict → Transitional, the usual prefixes, one branch of `mc:AlternateContent`                            | A             |
+| `deck.ts`       | `readDeck`: slide size, order, hidden flags, shown index, defaultTextStyle, sections; `slideParts`                                   | A             |
+| `frame.ts`      | EMU → 1920x1080 contain map, affine transforms, `boxPx`                                                                              | A             |
+| `theme.ts`      | `readTheme`: colour, font and format schemes; `themeFont`, `langScript`, style font/line/effect references                           | B             |
+| `color.ts`      | `ColorCtx`, colour maps, colour elements and modifiers, fills, `styleEntry`, `styleFill`                                             | B             |
+| `inherit.ts`    | Placeholder matching, xfrm/bodyPr chain, paragraph-property chain                                                                    | C             |
+| `walk.ts`       | Shape-tree walk: decorations, groups flattened, shapes                                                                               | C             |
+| `text.ts`       | Text bodies: paragraphs, runs, run styles through the chain                                                                          | C             |
+| `picture.ts`    | `p:pic` and every `a:blipFill`                                                                                                       | C             |
+| `background.ts` | Slide → layout → master background                                                                                                   | C             |
+| `emit.ts`       | IR → ordo objects, media placeholders, digest                                                                                        | C             |
+| `richtext.ts`   | A text body as rich ordo text: runs, paragraph styles, office box fields (M2)                                                        | C (M2)        |
+| `fontmap.ts`    | Script class of each character (Latin, East Asian, complex), substitutes and fallback families (M2)                                  | C (M2)        |
+| `classify.ts`   | Census tiers T1-T5, reasons, slide class                                                                                             | F             |
+| `geom.ts`       | Presets, custom geometry, text rectangles and sites, gradients, dashes, arrowheads, connector glue (M6)                              | M6b B         |
+| `notes.ts`      | `readNotes`: a slide's speaker notes (notesSlide body placeholders), bounded                                                         | M3 B          |
+| `transition.ts` | `readTransition`, `readSlideTransition` (a slide's tail only), `showLoops` (`p:showPr loop`)                                         | M3 B          |
+| `timing.ts`     | `readSlideTiming`: the `p:timing` mapping of clips, transition and animation sounds; `gainDbOf`                                      | M3b A         |
+| `media.ts`      | `readMediaRef` (a poster's clip, trim, kind), `emitMedia` (play, slide sound, motion background), `EmittedClip`                      | M3b A         |
+| `tables.ts`     | `readTable`, `emitTable`, `Measure`: tables (M6); `tablestyles.ts`: the built-in styles (LibreOffice's, MPL 2.0)                     | M6b C         |
+| `metrics.ts`    | `sfntMetrics`, `metricsOfTables`, `FaceSource`: advances, pair kerning, line heights from font files, bounded                        | M6b C         |
+| `smartart.ts`   | SmartArt from its drawing cache: `readSmartArt` (the drawing's shapes through the walk), `lockDiagram`                               | M6b D         |
+| `bake.ts`       | Baked pictures: `PictureBake` recipes (`bakeOf`, `tileBakeOf`), `applyBake` (recolour and tile pixels); M9 `SheetBake`, `applySheet` | M6b D         |
+| `budget.ts`     | The slide budgets natively (M9): `cullElements`, `fitBudgets`, `budgetCost`, the text ceiling, the guard                             | M9 decor-conv |
+| `decor.ts`      | Decorations (M9): `decorable`, `decorRuns`, `emitDecor`, `decorFiles`; the plate plan `platePlan`                                    | M9 decor-conv |
+| `sheet.ts`      | Picture sheets (M9): composites (`pictureRuns`, `emitComposite`) and the atlas (`atlasParts`, `atlasSlide`)                          | M9 decor-conv |
+| `ir.ts`         | The scene IR (types only)                                                                                                            | shared        |
+| `context.ts`    | `SlideCtx`, `slideContext`                                                                                                           | shared        |
+| `log.ts`        | `clean`, `noteList`                                                                                                                  | shared        |
+| `index.ts`      | `parseDeck`, `emitSlides`, public types                                                                                              | shared        |
+| `test-util.ts`  | Test decks as `PartSource` maps of XML strings                                                                                       | shared        |
 
 Data flow: `parseDeck` → `openPackage` → `readDeck` → `frameOf` → per slide `slideContext` (→ `slideParts`,
 `readTheme`, `colorContext`) → `walkSlide` → `readBackground` → `classifySlide`. `emitSlides` → `emitDeck`.
