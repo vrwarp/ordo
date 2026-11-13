@@ -2294,6 +2294,10 @@ class" now read "fitted by the ladder" and "stored minimal"._
   slide's own text bodies and table text as text objects in their boxes, no geometry read, groups to depth 4;
   2 s a slide, 2 minutes an import), class hybrid with `missing: ['slide']`. A slide nothing could read is
   empty and says so.
+- **A scene parsed on the client** (`stepsFromClientScene`, see "Rebased onto main" below) follows the same
+  rules: a slide past the client's bound on outline files keeps the placeholders of the files it was not
+  given (`PptxClientScene.geomOver`), so the hub leaves out the objects naming them, and a slide the client
+  could not read, or did not send, gets the text rescue from its parts in the stored deck.
 - **Measured** (census over E, `census.ts --hub-budget --no-libreoffice`, against wave 1's): picture slides
   37 → 13, the 13 all `budget:pictures` (decor-conv's sheets); none made by bytes, the tail or a failure. Of
   the 24 budget pictures: 9 store within 64 KB as they are (the estimate), 4 drop text formatting (`plain`,

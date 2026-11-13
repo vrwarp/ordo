@@ -747,8 +747,15 @@ a slide the converter classes picture (more pictures than a slide may hold, unti
   consecutive slides per call at `RESCUE_SLIDE_MS` 2 s a slide, a failed run slide by slide, all within
   `RESCUE_TOTAL_MS` 2 minutes, each call stopped by an abort timer). A rescued slide is hybrid with
   `missing: ['slide']` and the rescue's note; one nothing could read is an empty slide that says so.
+- **A scene parsed on the client** (`stepsFromClientScene`, the operator's default path since main's #11)
+  follows the same rules. A slide past the client's bound on outline files (`PPTX_CLIENT_LIMITS.geomFileBytes`,
+  `PptxClientScene.geomOver`) keeps the placeholders of the files it was not given, so the hub leaves out the
+  objects that name them (`withoutFiles`, `leftOut`) instead of keeping legacy shapes where traced outlines
+  were. A slide the client read as `unreadable`, or one the scene lacks, gets the text rescue from its own
+  parts, read from the stored deck here (`rescueClientSlides`); nothing else of the deck runs on the pool.
 - Tests: `pptx-no-libreoffice.test.ts` ('the budget ladder without LibreOffice': over 64 KB, the 4 MiB tail,
   the outline-file budget, a schema refusal, the rescue, the retry), `pptx-native.test.ts` (the same with
-  LibreOffice: no follow-up for a budget), `pptx-geoms.test.ts`, `pptx-integrate.test.ts` (2,000-slide decks).
+  LibreOffice: no follow-up for a budget), `pptx-geoms.test.ts`, `pptx-integrate.test.ts` (2,000-slide decks),
+  `pptx-import-route.test.ts` (a client scene past its outline bound, and with slides it could not read).
 <!-- /m9:ladder -->
 

@@ -6,42 +6,78 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PptxRenderer } from '@ordo/domain';
+import { PptxRenderer, type ShapeObject, type Slide } from '@ordo/domain';
 import {
   CLIENT_M9_WRITES,
   CONVERTER_VERSION as CLIENT_CONVERTER_VERSION,
   importPptxClient,
+  PPTX_CLIENT_LIMITS,
+  type PptxClientScene,
 } from '@ordo/importers';
 import type { Job } from '@ordo/protocol';
-import { buildDeck, solid, sp } from '@ordo/pptx-scene/test-util.ts';
+import { RESCUE_NOTE } from '@ordo/pptx-scene/rescue.ts';
+import { body, buildDeck, custGeom, para, run, solid, sp } from '@ordo/pptx-scene/test-util.ts';
 import JSZip from 'jszip';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { DocPayload } from '../src/imports.ts';
 import type { JobCtx, JobQueue } from '../src/jobs.ts';
+import type { CpuPool } from '../src/pool.ts';
 import { PptxImports } from '../src/pptx/index.ts';
 import { nativeJob } from '../src/pptx/nativeJob.ts';
+import { sceneTask } from '../src/pptx/sceneTask.ts';
 import {
   CONVERTER_VERSION,
   M9_WRITES,
   type PptxDeps,
   type PptxNativePayload,
   type PptxNativeResult,
+  type SceneTaskInput,
 } from '../src/pptx/shared.ts';
 import { documentImportForm } from '../src/routes.ts';
 import { fixtures } from './fixtures.ts';
 import { type Client, EDIT_PIN, login, startHub, type TestHub, tempDir } from './helpers.ts';
+import { slidesOf } from './pptx-helpers.ts';
 
 const fx = tempDir('ordo-fx-');
 
-/** A one-slide deck built from parts (no real deck: design/27 §12), zipped like an upload. */
-async function deckBytes(): Promise<Uint8Array<ArrayBuffer>> {
-  const parts = buildDeck({
+/** A deck built from parts (no real deck: design/27 §12), zipped like an upload; one slide by default. */
+async function deckBytes(
+  parts = buildDeck({
     slides: [{ shapes: sp({ id: 2, x: 0, y: 0, cx: 914_400, cy: 914_400, fill: solid('336699') }) }],
-  });
+  }),
+): Promise<Uint8Array<ArrayBuffer>> {
   const z = new JSZip();
   for (const [k, v] of parts) z.file(k, v);
   return new Uint8Array(await z.generateAsync({ type: 'uint8array' }));
 }
+
+const IN = 914_400;
+const pt = (x: number, y: number) => `<a:pt x="${x}" y="${y}"/>`;
+/** A closed polygon of `n` points in 7-digit EMU (a traced outline's), different for each `k` (as pptx-geoms.test.ts). */
+function polygon(n: number, k = 0): string {
+  let s = `<a:moveTo>${pt(1_000_000 + k, 1_000_000)}</a:moveTo>`;
+  for (let i = 1; i < n; i++)
+    s += `<a:lnTo>${pt(1_000_000 + ((i * 7_919 + k * 31) % 9_000_000), 1_000_000 + ((i * 104_729) % 5_000_000))}</a:lnTo>`;
+  return `${s}<a:close/>`;
+}
+const deco = (id: number, n: number, k = 0, w = 2) =>
+  sp({
+    id,
+    x: id * 10_000,
+    y: 0,
+    cx: w * IN,
+    cy: (w * IN) / 2,
+    geom: 'none',
+    fill: custGeom({ paths: `<a:path w="10000000" h="6000000">${polygon(n, k)}</a:path>` }) + solid('FF0000'),
+  });
+/** The geometry refs of a slide's shapes that have a geometry (not its background rect). */
+const refsOf = (s: Slide) =>
+  s.objects
+    .filter((o): o is ShapeObject => o.type === 'shape' && o.geom !== undefined)
+    .map((o) => o.geom?.ref);
+const textBox = (id: number, text: string) =>
+  sp({ id, x: IN, y: IN, cx: 6 * IN, cy: IN, txBody: body(para(run(text))) });
+const textsOf = (s: Slide) => s.objects.flatMap((o) => (o.type === 'text' ? [o.text] : []));
 
 let hub: TestHub;
 let ed: Client;
@@ -220,6 +256,106 @@ describe('POST /import/document', () => {
       } as JobCtx<PptxNativePayload>),
     ).catch(() => undefined);
     expect(poolCalled).toBe(true);
+  });
+
+  /**
+   * Posts `bytes` with `scene` as the client parsed it and runs the job on it, with a pool that converts no
+   * slide (only the text rescue runs, in-process): the result, its slides and the pool's calls.
+   */
+  async function importClientScene(bytes: Uint8Array<ArrayBuffer>, name: string, scene: PptxClientScene) {
+    const fd = new FormData();
+    fd.append('renderer', 'native');
+    fd.append('clientScene', new Blob([JSON.stringify(scene)], { type: 'application/json' }), 'scene.json');
+    fd.append('file', new Blob([bytes]), name);
+    const { payload } = await queued(await ed.fetch('/import/document', { method: 'POST', body: fd }));
+    const p = payload as PptxNativePayload;
+    expect(p.sceneHash).toMatch(/^[0-9a-f]{64}$/);
+    const calls: { range: { from: number; to: number }; rescue: boolean }[] = [];
+    const pool = {
+      run: (async (_kind: 'pptx-scene', input: SceneTaskInput) => {
+        calls.push({ range: input.range, rescue: !!input.rescue });
+        if (!input.rescue)
+          throw new Error('pptx-scene converts no slide on the hub when sceneHash is present');
+        return sceneTask(input);
+      }) as CpuPool['run'],
+    };
+    let cur = p;
+    const result = (await nativeJob(hub.imports.pptx.deps, { pool })({
+      id: `scene-${Math.random().toString(36).slice(2)}`,
+      payload: cur,
+      signal: new AbortController().signal,
+      progress: () => undefined,
+      log: () => undefined,
+      setPayload: (next) => {
+        cur = next;
+      },
+    } as JobCtx<PptxNativePayload>)) as PptxNativeResult;
+    return { result, slides: slidesOf(hub.lib.presentations.must(result.presentationId)), calls };
+  }
+
+  it("leaves out only the shapes a client scene's slide past its outline-file bound was given no file for (M9 ladder)", async () => {
+    // Three outlines of about 60 KB each (pptx-geoms.test.ts): two on slide 1, a third new on slide 2.
+    const bytes = await deckBytes(
+      buildDeck({
+        slides: [
+          { shapes: deco(2, 4_000) + deco(3, 4_000, 0, 1) + deco(4, 4_000, 1) },
+          { shapes: deco(2, 4_000, 0, 3) + deco(3, 4_000, 2) },
+        ],
+      }),
+    );
+    const sizes = (await importPptxClient(bytes, 'Outlines.pptx')).clientScene.geomFiles.map(
+      (g) => new TextEncoder().encode(g.json).length,
+    );
+    expect(sizes).toHaveLength(3);
+    // A client bound that holds slide 1's two files and not slide 2's new third one.
+    const limits = PPTX_CLIENT_LIMITS as { geomFileBytes: number };
+    const was = limits.geomFileBytes;
+    limits.geomFileBytes = sizes[0]! + sizes[1]! + Math.floor(sizes[2]! / 2);
+    let scene: PptxClientScene;
+    try {
+      scene = (await importPptxClient(bytes, 'Outlines.pptx')).clientScene;
+    } finally {
+      limits.geomFileBytes = was;
+    }
+    expect(scene.geomOver).toEqual([1]);
+    const { result, slides, calls } = await importClientScene(bytes, 'Outlines.pptx', scene);
+    expect(calls).toEqual([]);
+    // As the hub's own parse past its budget (pptx-geoms.test.ts): never a picture, never a legacy shape where
+    // a traced outline was; the shape is left out and listed missing.
+    expect(result).toMatchObject({ native: 1, hybrid: 1, picture: 0, compact: 0 });
+    const [s1, s2] = slides as [Slide, Slide];
+    expect(refsOf(s2)).toEqual([refsOf(s1)[0]]);
+    // The shape whose file never arrived is gone, not kept as a legacy shape where its outline was.
+    expect(s2.objects.flatMap((o) => (o.type === 'shape' ? [o.geom?.ref ?? 'none'] : []))).toEqual([
+      'none',
+      refsOf(s1)[0],
+    ]);
+    expect(s2.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
+    expect(s2.pptx!.pending).toBeUndefined();
+    expect(s2.pptx!.notes).toEqual(['over the import budget of shape outlines: 1 shape(s) left out']);
+    expect(result.notes.some((n) => /slide 2's shape outlines pass/.test(n))).toBe(true);
+  });
+
+  it('gives the text rescue to a slide the client could not read or did not send, never a picture (M9 ladder)', async () => {
+    const bytes = await deckBytes(
+      buildDeck({ slides: ['Slide 1', 'Slide 2', 'Slide 3'].map((t) => ({ shapes: textBox(2, t) })) }),
+    );
+    const scene = (await importPptxClient(bytes, 'Rescue.pptx')).clientScene;
+    // Slide 2 as the client's converter leaves a slide it cannot read (`readSlide`); slide 3 not sent at all.
+    const s2 = scene.slides.find((s) => s.index === 1)!;
+    s2.classification = { tier: 'fallback', class: 'picture', reasons: ['unreadable'] };
+    s2.slide = { ...s2.slide, objects: [] };
+    scene.slides = scene.slides.filter((s) => s.index !== 2);
+    const { result, slides, calls } = await importClientScene(bytes, 'Rescue.pptx', scene);
+    // Only the rescue ran on the hub, once for the two slides.
+    expect(calls).toEqual([{ range: { from: 1, to: 3 }, rescue: true }]);
+    expect(result).toMatchObject({ slides: 3, native: 1, hybrid: 2, picture: 0 });
+    expect(slides.map(textsOf)).toEqual([['Slide 1'], ['Slide 2'], ['Slide 3']]);
+    for (const s of slides.slice(1)) {
+      expect(s.pptx).toMatchObject({ class: 'hybrid', missing: ['slide'] });
+      expect(s.pptx!.pending).toBeUndefined();
+      expect(s.pptx!.notes).toContain(RESCUE_NOTE);
+    }
   });
 
   it('does not widen the stored renderer: native lives only in the form and the payload', () => {

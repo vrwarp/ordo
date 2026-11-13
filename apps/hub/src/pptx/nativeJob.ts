@@ -56,6 +56,10 @@
  * lists 'slide'. No slide is `pending`, no `pptx-lo` is queued, and the result says `libreoffice: false` and
  * how many slides have something missing. With LibreOffice each follow-up plan records those kinds
  * (`PptxLoSlide.kinds`) for a hub that loses LibreOffice later (`fallback.ts` `withoutLibreOffice`).
+ *
+ * **A scene parsed on the client** (`PptxNativePayload.sceneHash`, `stepsFromClientScene`) takes the place of
+ * step 2's batches and follows the same rules: a slide past the client's bound on outline files loses the
+ * objects naming the files it was not given, and a slide the client could not read gets the text rescue here.
  */
 import { open, readFile, rm, stat } from 'node:fs/promises';
 import {
@@ -639,7 +643,8 @@ class NativeImport {
 
   /**
    * When the client pre-parsed the PowerPoint scene via `importPptxClient`, assemble Version 1 and spill
-   * referenced pictures/clips without running `pptx-scene` on the Hub's CPU pool. Only a scene of this
+   * referenced pictures/clips without running `pptx-scene` on the Hub's CPU pool, but for the text rescue of a
+   * slide the client could not read (`rescueClientSlides`). Only a scene of this
    * converter (`CONVERTER_VERSION`, M9's fields: `CLIENT_M9_WRITES`) parsed for the LibreOffice this hub has
    * or lacks (`this.lo`, set first by `steps`) is used; undefined otherwise, and the hub parses the deck.
    */
@@ -712,8 +717,9 @@ class NativeImport {
       this.geomFiles.set(g.hash, { hash: g.hash, bytes });
       this.geomBytes += bytes.length;
     }
-    // A slide the client's bound on outline files left without its new files (`geomOver`: their placeholders
-    // were not named) loses the objects that name them, as a batch's does (`batch`, M9 `ladder`).
+    // A slide the client's bound on outline files left without its new files (`geomOver`: it keeps their
+    // placeholders, `PptxClientScene.geomOver`) loses the objects that name them, as a batch's does (`batch`,
+    // M9 `ladder`), and says so (`drafts`, `leftOut`).
     const geomOver = new Set(raw.geomOver ?? []);
     const converted = new Map<number, Converted>();
     for (const s of raw.slides ?? []) {
@@ -725,6 +731,22 @@ class NativeImport {
         geomLeft = { dropped: left.dropped, unmasked: left.unmasked, missing: left.missing };
       }
       converted.set(s.index, { s, media, extra: extras.get(s.index), ...(geomLeft ? { geomLeft } : {}) });
+    }
+    // A slide the client's converter could not read (`unreadable`), or one the scene lacks, keeps its text
+    // if the rescue can read it, as in the hub's own parse (`convert`): never a picture for a failure.
+    const failed: number[] = [];
+    listed.forEach((r, i) => {
+      if (want && !want.has(r.index)) return;
+      const c = converted.get(r.index);
+      const reasons = c?.s.classification?.reasons;
+      if (c && !(Array.isArray(reasons) && reasons.includes('unreadable'))) return;
+      converted.delete(r.index);
+      failed.push(i);
+    });
+    if (failed.length) {
+      const mediaKinds: [string, 'video' | 'audio'][] = [];
+      for (const [part, f] of clipFiles) if (f.kind) mediaKinds.push([part, f.kind]);
+      await this.rescueClientSlides(deck, scratch, listed, failed, pictureSizes, mediaKinds, converted);
     }
     ctx.progress(0.6);
 
@@ -883,26 +905,9 @@ class NativeImport {
     want?: ReadonlySet<number>,
   ): Promise<Map<number, Converted>> {
     const out = new Map<number, Converted>();
-    const own = new Set<string>();
-    for (const r of listed) {
-      own.add(r.part);
-      own.add(relsPartOf(r.part));
-    }
-    const shared = new Map<string, Uint8Array>();
-    for (const [k, v] of parts) if (!own.has(k) && !NOTES_PART.test(k)) shared.set(k, v);
     const n = listed.length;
     const step = this.limits.batchSlides;
-    // Table rows grow to their text, measured with the library's faces (read by the worker as needed).
-    const fonts = sceneFontFiles(this.deps.lib.listFonts(), (p) => this.deps.store.abs(p));
-    const base = {
-      pictureSizes,
-      options: this.options,
-      mediaKinds,
-      fonts,
-      geomBytes: this.limits.batchGeomBytes,
-      ...(this.lo ? {} : { libreoffice: false }),
-    };
-    const call: BatchCall = { shared, listed, base, out };
+    const call = this.batchCall(parts, listed, pictureSizes, mediaKinds, out);
     /** Slides for the rescue, each with its own parts (kept until then). */
     const failed = new Map<number, SlideParts>();
     for (let from = 0; from < n; from += step) {
@@ -948,6 +953,70 @@ class NativeImport {
     }
     if (failed.size) await this.rescue(call, failed);
     return out;
+  }
+
+  /**
+   * What every `pptx-scene` call of one import shares (`BatchCall`): the deck's parts but the slides' own and
+   * their notes, and the options; the converted slides go to `out`.
+   */
+  private batchCall(
+    parts: Map<string, Uint8Array>,
+    listed: readonly SlideRef[],
+    pictureSizes: [string, PictureHeader][],
+    mediaKinds: [string, 'video' | 'audio'][],
+    out: Map<number, Converted>,
+  ): BatchCall {
+    const own = new Set<string>();
+    for (const r of listed) {
+      own.add(r.part);
+      own.add(relsPartOf(r.part));
+    }
+    const shared = new Map<string, Uint8Array>();
+    for (const [k, v] of parts) if (!own.has(k) && !NOTES_PART.test(k)) shared.set(k, v);
+    // Table rows grow to their text, measured with the library's faces (read by the worker as needed).
+    const fonts = sceneFontFiles(this.deps.lib.listFonts(), (p) => this.deps.store.abs(p));
+    const base = {
+      pictureSizes,
+      options: this.options,
+      mediaKinds,
+      fonts,
+      geomBytes: this.limits.batchGeomBytes,
+      ...(this.lo ? {} : { libreoffice: false }),
+    };
+    return { shared, listed, base, out };
+  }
+
+  /**
+   * The text rescue (`rescue`) of the slides `failed` (places in `listed`) of a client scene: those its
+   * converter could not read (`unreadable`) or did not send. Their own parts are read from the deck here, as
+   * the hub's parse has them (`convert`); what the rescue reads joins `out`, and a slide still unread stays
+   * out of it (an empty slide that says so, `drafts`).
+   */
+  private async rescueClientSlides(
+    deck: string,
+    scratch: string,
+    listed: readonly SlideRef[],
+    failed: readonly number[],
+    pictureSizes: [string, PictureHeader][],
+    mediaKinds: [string, 'video' | 'audio'][],
+    out: Map<number, Converted>,
+  ): Promise<void> {
+    let xml: DeckXml;
+    try {
+      xml = await readDeckXml(deck, scratch, this.ctx.signal);
+    } catch (e) {
+      this.checkCancelled();
+      this.warn(
+        'batch',
+        `${failed.length} slide(s) the client could not convert could not be read here (${logSafe(errorMessage(e))}): they are empty, and say so`,
+      );
+      return;
+    }
+    const call = this.batchCall(xml.parts, listed, pictureSizes, mediaKinds, out);
+    const mine = new Map<number, SlideParts>();
+    for (const i of failed) mine.set(i, takeParts(xml.parts, listed, i, i + 1).get(i)!);
+    xml.parts.clear();
+    await this.rescue(call, mine);
   }
 
   /** The slides `wanted` of a failed batch, each converted alone; those that fail again go to `failed`. */
