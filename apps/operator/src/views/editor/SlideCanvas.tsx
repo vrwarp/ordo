@@ -1286,13 +1286,17 @@ function CanvasTextEditor({
     y: 0,
   });
 
-  // Focus the backing textarea on mount and place the caret where the double-click landed.
+  // Focus the backing textarea on mount and place the caret where the double-click landed: on the next
+  // frame, unless editing ended meanwhile (an Escape pressed at once must leave the keys with the slide).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once, for the object being edited
   useEffect(() => {
-    requestAnimationFrame(() => {
+    const frame = requestAnimationFrame(() => {
+      if (useEditor.getState().inlineEditingId !== obj.id) return;
       const r = useEditor.getState().textRange;
       anchorRef.current = r.start;
       syncBackingTextarea(r.start, r.end, r.caret);
     });
+    return () => cancelAnimationFrame(frame);
   }, []);
 
   // Intercept ArrowUp / ArrowDown on `#ordo-text-editor` so vertical navigation follows the canvas lines.
@@ -1307,6 +1311,8 @@ function CanvasTextEditor({
       if (e.key === 'Escape') {
         e.preventDefault();
         onCommit();
+        // The keys go back to the slide at once (b1; the layout effect after the commit does it too).
+        releaseBackingField();
         return;
       }
       if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.ctrlKey && !e.metaKey && !e.altKey) {
