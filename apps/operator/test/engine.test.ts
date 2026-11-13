@@ -416,6 +416,49 @@ describe('CoreEngine (operator core worker)', () => {
     expect(hellos.length).toBe(before + 2);
   });
 
+  it('refused while the fallback authority: the bus tells the windows the hub refuses this operator until it accepts it again (chaos-operator.spec.ts:818)', async () => {
+    const posts: CoreToMain[] = [];
+    const { store } = memStore({
+      [CORE_KEY]: { state: live(), authority: 'fallback', pending: [], aids: [], at: Date.now() },
+    });
+    engine = new CoreEngine((m) => posts.push(m), store);
+    const e = engine;
+    await e.init({ t: 'init', role: 'operate', appVersion: 't', generation: 1, test: true });
+    expect(e.core.authority).toBe('fallback');
+    const ch = new MessageChannel();
+    const got: { t: string; hubUp?: boolean; hubRefused?: boolean }[] = [];
+    ch.port2.onmessage = (ev) => got.push(ev.data);
+    e.handle({ t: 'bus.port', outputId: 'o1', port: ch.port1 });
+    const settle = () => new Promise((r) => setTimeout(r, 20));
+    const answer = async () => {
+      ch.port2.postMessage({ t: 'fallback.ready', v: 1, outputId: 'o1', appliedSeq: 0 });
+      for (let i = 0; i < 100 && !e.fallback.isReady('o1'); i++) await new Promise((r) => setTimeout(r, 5));
+      await settle();
+    };
+    await answer();
+    expect(got.some((m) => m.hubRefused)).toBe(false);
+    // The hub is back and refuses the session: the re-introduction says so, before any window can take a
+    // restarted hub's state (equal to its own) for a hand-back that cannot happen.
+    got.length = 0;
+    e.hub.emit('status', { connected: true });
+    e.core.onStatus(true);
+    fromHub(e, { t: 'bye', v: 1, reason: 'unauthorized' });
+    e.hub.emit('status', { connected: false });
+    await settle();
+    expect(e.core.authority).toBe('fallback');
+    expect(got.find((m) => m.t === 'fallback.hello')).toMatchObject({ hubRefused: true });
+    expect(e.fallback.hubRefused).toBe(true);
+    await answer();
+    // Signed in: the flag stays until the hub accepts the operator (a welcome), then the hand-back proceeds.
+    e.handle({ t: 'hub.resume' });
+    expect(e.fallback.hubRefused).toBe(true);
+    got.length = 0;
+    fromHub(e, { t: 'welcome', v: 1, hubMs: Date.now(), seq: 0, role: 'operate', appVersion: 't' });
+    await settle();
+    expect(e.fallback.hubRefused).toBe(false);
+    expect(got.at(0)).toEqual({ t: 'fallback.hub', v: 1, hubUp: false });
+  });
+
   it('in hub mode a quiet proven port is never re-offered; an unproven one is, once per 10 s (item 16)', async () => {
     let now = 1_000_000;
     const posts: CoreToMain[] = [];
