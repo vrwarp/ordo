@@ -1,12 +1,13 @@
-import { expect, type Page, test } from '@playwright/test';
+import { type APIRequestContext, expect, type Page, test } from '@playwright/test';
 import {
+  content,
   editorHub,
   editorState,
   M4_PORT,
   type Obj,
   opOrigin,
   type PresentationRec,
-  saveAndReload,
+  save,
   slidesOf,
 } from './editorhelpers.ts';
 import type { HubProcess } from './hubproc.ts';
@@ -63,6 +64,22 @@ async function openSong(page: Page, id: string): Promise<void> {
 }
 
 const draft = async (page: Page) => (await editorState(page)).draft as PresentationRec;
+
+/**
+ * `saveAndReload` for a song: Save, the stored presentation is the draft; after a reload the editor opens
+ * the song in the Lyric Script again (no canvas) and holds the stored presentation exactly.
+ */
+async function saveAndReloadSong(page: Page, a: APIRequestContext, id: string): Promise<PresentationRec> {
+  const before = await draft(page);
+  await save(page);
+  const saved = (await (await a.get(`presentations/${id}`)).json()) as PresentationRec;
+  expect(content(saved), 'the stored presentation is the draft that was saved').toEqual(content(before));
+  await page.reload();
+  await expect(page.locator('textarea[data-reflow-slide]').first()).toBeVisible({ timeout: 20_000 });
+  await expect.poll(async () => (await editorState(page).catch(() => undefined))?.draft?.rev).toBe(saved.rev);
+  expect(await draft(page), 'after a reload the editor holds the stored presentation').toEqual(saved);
+  return saved;
+}
 const field = (page: Page, slideId: string) => page.locator(`textarea[data-reflow-slide="${slideId}"]`);
 
 test('Split at Cursor and Alt+Enter cut only at the focused caret, never a word in two', async ({ page }) => {
@@ -136,7 +153,7 @@ test('typing and Alt+Enter in a formatted song keep its numbers and bold through
     .poll(async () => texts(await draft(page)))
     .toEqual(['Amazing grace how sweet the sound (Amen)', 'That saved a wretch like me', V2]);
 
-  const saved = await saveAndReload(page, a, song.id);
+  const saved = await saveAndReloadSong(page, a, song.id);
   const [x, y] = slidesOf(saved);
   const lx = lyricOf(x!);
   const ly = lyricOf(y!);

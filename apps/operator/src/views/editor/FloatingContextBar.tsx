@@ -5,6 +5,7 @@ import { ColorPill, PaintPill, type PaintValue } from '../../components/ColorPic
 import { FontPicker } from '../../components/FontPicker.tsx';
 import { Menu } from '../../components/Menu.tsx';
 import {
+  alignSelection,
   deleteSelection,
   duplicateSelection,
   formatSelection,
@@ -24,7 +25,18 @@ import { getSlide, markOverride, updateObject, updateSlide } from './ops.ts';
 import { hasGroup, isLocked } from './ops/group.ts';
 import { coversSlide } from './ops/slides.ts';
 import { CLEAR_FORMATTING, type RunPatch, selectionStyle } from './ops/text.ts';
+import type { AlignTo } from './placement.ts';
 import { fitMessage } from './textFit.ts';
+
+/** The multi-selection bar's Align menu: where, what it says, its accessible name. */
+const ALIGN_ITEMS: readonly [AlignTo, string, string][] = [
+  ['left', '⇤ Align left', 'Align left'],
+  ['cx', '⇹ Center horizontally', 'Center horizontally'],
+  ['right', '⇥ Align right', 'Align right'],
+  ['top', '⤒ Align top', 'Align top'],
+  ['cy', '⇳ Center vertically', 'Center vertically'],
+  ['bottom', '⤓ Align bottom', 'Align bottom'],
+];
 
 export interface FloatingContextBarProps {
   readOnly: boolean;
@@ -138,9 +150,19 @@ export function FloatingContextBar({ readOnly, drawerOpen, onToggleDrawer }: Flo
   );
 
   if (multi) {
+    // Align to slide for the whole selection as one block (placement.ts), as the drawer's align bar does.
     return (
       <div className="ed-floating-inner">
         <span className="ed-scope-pill">{objectIds.length} selected</span>
+        <Menu
+          label="Align"
+          disabled={readOnly}
+          items={ALIGN_ITEMS.map(([to, label, name]) => ({
+            label,
+            name,
+            onSelect: () => alignSelection(to),
+          }))}
+        />
         {tailActions}
       </div>
     );

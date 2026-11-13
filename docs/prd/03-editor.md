@@ -47,6 +47,10 @@ Objects, in z-order, each selectable, movable, resizable, rotatable:
   nothing until the user confirms.
 - Fonts: the family picker lists fonts uploaded to the hub and Google Fonts added via
   search ([prd/05](05-library-media-import.md)). Every output loads the same font files.
+- Align to slide and Screen placement (Center Screen, Lower Third, Bottom Third, Top Banner) move the whole
+  selection together (a shape and its text, a table, a group), by what the screens show of a turned box,
+  which stays turned; on a 4:3 deck they work inside the deck's own area. They are in the Tune drawer's
+  Object panel and, for a selection of several objects, in the floating bar's Align menu.
 - Undo and redo within an editing session; save creates a presentation revision
   ([prd/05](05-library-media-import.md), version history).
 - Keyboard: arrow nudges, Shift for 10 px, Ctrl+D duplicate, Delete, Ctrl+Z, Ctrl+Y,

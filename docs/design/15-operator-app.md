@@ -304,6 +304,19 @@ cells in place of the shape fields).
   the canvas and 'From PowerPoint (not editable)' in the panel: it can be moved, resized (art keeps its
   aspect: corner handles only, W and H linked), deleted and reordered; it does not turn, and its text, style
   and geometry fields are disabled.
+- 'Align to slide' (the box section's bar in the Tune drawer: left, centre, right, top, middle, bottom; and,
+  for a selection of several objects, the floating bar's Align menu) and 'Screen placement' (a text box's
+  cards: Center Screen, Lower Third, Bottom Third, Top Banner) act on the whole selection as one block, as
+  the box fields and the Transformer do (`actions.ts` `placeSelection` through `placement.ts`
+  `placeObjects`, one undo step): a
+  PowerPoint shape with its text, a group or a table's cells never come apart. The block is the
+  selection's bounds as drawn (`groupBox`: each member turned about its centre), so a turned box aligns by
+  what the screens show and keeps its turn; a placement card scales the block onto its box (members keep
+  their place in it, a locked picture its aspect). On a deck that is not 16:9 both work inside the deck's
+  own area (`source.native.slideRect`, the canvas's 4:3 guide), the cards' boxes scaled into it
+  (`presetIn`); the card whose box the block is near shows as active. Placing a themed song's lyric box
+  marks its `box` override, as the box fields do. Nothing moves under the live lock; a locked object's box
+  may.
 - Formatting text (M4; `views/editor/FormatBar.tsx` and `ParagraphStrip.tsx` around the text field,
   applying `ops/text.ts` through `actions.ts`, one undo step each). The 'Text format' toolbar over the
   field formats its selection: font, Size − / +, Bold, Italic, Underline, Strikethrough, Superscript and

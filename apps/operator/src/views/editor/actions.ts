@@ -48,7 +48,9 @@ import {
   withObject,
   withSlide,
 } from './ops/index.ts';
-import type { ZOrder } from './ops.ts';
+import type { SlideRect } from './CanvasGuides.tsx';
+import { getSlide, type ZOrder } from './ops.ts';
+import { type AlignTo, alignedBox, placeObjects, placementArea } from './placement.ts';
 // F: the PowerPoint card's slide ops (pure, beside the card's other readers).
 import { showObjects, showPicture } from '../../lib/pptxImport.ts';
 import { toast } from '../../state/toasts.ts';
@@ -299,6 +301,31 @@ export function reorderSelection(z: ZOrder): void {
 /** 'Ungroup' the selection. */
 export function ungroupSelection(): void {
   onSelection((p, slideId, ids) => ungroup(p, slideId, ids));
+}
+
+/**
+ * 'Align to slide' and 'Screen placement' on the selection as one block (placement.ts `placeObjects`: its
+ * bounds as drawn, inside the deck's area, turns kept, one undo step): the Object panel's align bar and
+ * cards, and the floating bar's Align menu for a selection of several objects. A themed song's lyric box
+ * marks its `box` override.
+ */
+export function placeSelection(target: (from: Box, area: SlideRect) => Box): void {
+  const { draft } = useEditor.getState();
+  const slideId = openSlide();
+  const objects = currentObjects();
+  if (!draft || !slideId || !objects.length) return;
+  const slide = getSlide(draft, slideId);
+  const lyricId =
+    draft.kind === 'song'
+      ? (slide?.lyricObjectId ?? slide?.objects.find((x) => x.type === 'text')?.id)
+      : undefined;
+  const area = placementArea(draft);
+  change((p) => placeObjects(p, slideId, objects, (from) => target(from, area), lyricId));
+}
+
+/** The selection aligned to an edge or the centre of the slide (the deck's area). */
+export function alignSelection(to: AlignTo): void {
+  placeSelection((from, area) => alignedBox(from, area, to));
 }
 
 /** Copy the selected slide objects to the clipboard (in-memory + system `text/html`). */
