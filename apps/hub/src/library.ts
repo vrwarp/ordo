@@ -18,6 +18,7 @@ import {
   Presentation,
   SurfaceSettings,
   Theme,
+  upgradeStoredSurfaces,
 } from '@ordo/domain';
 import type {
   Folder,
@@ -281,6 +282,8 @@ export class Library {
     } catch {
       raw = undefined;
     }
+    // Surfaces stored before MIDI became opt-in: a venue with MIDI mappings keeps its pedals.
+    if (key === 'surfaces') raw = upgradeStoredSurfaces(raw);
     if (raw !== undefined) {
       const r = schema.safeParse(raw);
       if (r.success) return r.data as Settings[K];

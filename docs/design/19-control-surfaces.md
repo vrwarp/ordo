@@ -63,6 +63,12 @@ prevented: an open dialog takes Escape that way, so closing it never also clears
 ## MIDI driver (Web MIDI)
 
 - `navigator.requestMIDIAccess({ sysex: false })`. Every input and output device is enumerated.
+- Opt-in (`SurfaceSettings.midiEnabled`, Setup "Enable Web MIDI"): the operator asks for MIDI access only
+  once it is enabled, so a venue without MIDI never sees the browser's permission prompt. Settings stored
+  before MIDI became opt-in (2026-11-09) have no `midiEnabled`, and MIDI always started then: they read as
+  enabled when they hold MIDI mappings, so an upgraded venue keeps its pedals, and as off without mappings
+  (`upgradeStoredSurfaces`, applied by the hub's settings read and by the operator to a cached library
+  copy). The first save of the surface settings writes the key; from then on it reads as stored.
 - Mapping entries: `{ deviceName, kind: 'note' | 'cc' | 'programChange', number, channel?, threshold, action, paramSource? }`.
   - Static: Note-on with velocity ≥ threshold fires; CC fires when the value crosses the threshold upward (edge-triggered).
   - Dynamic (`paramSource: 'velocity' | 'ccValue'`): incoming velocity or CC value is dynamically passed as the action's `arg`, enabling DAW show-control patterns (e.g. `goToSlideItem [vel]`, `goToItem [vel]`, `goToSection [vel]`).
