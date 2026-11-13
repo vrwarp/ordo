@@ -1,7 +1,6 @@
 import {
   DEFAULT_THEME,
   type Font,
-  type ImageObject,
   type Media,
   newId,
   type Output,
@@ -13,12 +12,18 @@ import {
   Theme as ThemeSchema,
 } from '@ordo/domain';
 import {
-  importPptxClient,
+  assemblePptxScene,
+  BoundedZip,
+  CONVERTER_VERSION,
   importPro7,
+  M9_WRITES,
+  type PptxClientScene,
+  parsePptxScene,
   parseSongFile,
   PRO7_MEDIA_PREFIX,
   readZip,
   remapMediaIds,
+  zipSource,
 } from '@ordo/importers';
 import { initialState } from '@ordo/live-state';
 import { clearAll, deleteFile, getDoc, getFile, putDoc, putFile } from './store.ts';
@@ -311,10 +316,13 @@ function stripPlaceholders(p: Presentation): void {
     }
 }
 
-/** Fallback media for the browser demo when server-side LibreOffice rendering is needed. */
-async function ensureDemoFallbackMedia(l: Lib): Promise<{ full: Media; overlay: Media; nextLib: Lib }> {
+/**
+ * The demo's placeholder page where a hub would show LibreOffice's picture of a slide ('Pictures (LibreOffice)',
+ * 'Show original', a picture-class slide). What ordo cannot draw on a native slide is listed on it instead
+ * (`Slide.pptx.missing`), as on a hub without LibreOffice.
+ */
+async function ensureDemoFallbackMedia(l: Lib): Promise<{ full: Media; nextLib: Lib }> {
   let full = l.media.find((m) => m.name === 'Demo Fallback Slide');
-  let overlay = l.media.find((m) => m.name === 'Demo Fallback Object');
   let mediaList = l.media;
 
   if (!full) {
@@ -342,33 +350,7 @@ async function ensureDemoFallbackMedia(l: Lib): Promise<{ full: Media; overlay: 
     mediaList = [...mediaList, full];
   }
 
-  if (!overlay) {
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
-  <rect width="800" height="600" rx="16" fill="rgba(30, 41, 59, 0.9)" stroke="#475569" stroke-width="3" stroke-dasharray="8 6"/>
-  <text x="400" y="280" text-anchor="middle" fill="#f1f5f9" font-family="system-ui, -apple-system, sans-serif" font-size="32" font-weight="600">Object Not Available in Demo</text>
-  <text x="400" y="330" text-anchor="middle" fill="#94a3b8" font-family="system-ui, -apple-system, sans-serif" font-size="20">Rendered by LibreOffice on the Ordo Hub server</text>
-</svg>`;
-    const blob = new Blob([svg], { type: 'image/svg+xml' });
-    overlay = await mediaFromBlob(blob, 'Demo Fallback Object.svg', { tags: ['demo-fallback'] });
-    overlay.width ??= 800;
-    overlay.height ??= 600;
-    overlay.hasAlpha = true;
-    mediaList = [...mediaList, overlay];
-  }
-
-  return { full, overlay, nextLib: { ...l, media: mediaList } };
-}
-
-function slideObjectsDigest(objects: readonly unknown[]): string {
-  const s = JSON.stringify(objects);
-  let h1 = 0x811c9dc5;
-  let h2 = 0x01000193 ^ 0x5bd1e995;
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    h1 = Math.imul(h1 ^ c, 0x01000193);
-    h2 = Math.imul(h2 ^ c, 0x01000193) ^ (h2 >>> 13);
-  }
-  return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
+  return { full, nextLib: { ...l, media: mediaList } };
 }
 
 /** Import PowerPoint or PDF in the browser demo. */
@@ -423,10 +405,16 @@ async function importDocumentUpload(file: File, form: FormData): Promise<Job> {
     );
   }
 
-  // PowerPoint import:
+  // PowerPoint import: the scene the operator's import worker parsed (`clientScene`), else parsed here, both for
+  // a hub without LibreOffice (design/26: the demo draws what ordo draws and lists the rest), then version 1
+  // with the import core, as a hub builds it (`assemblePptxScene`).
   const renderer = form.get('renderer');
   const extendBackgrounds = form.get('extendBackgrounds') !== '0';
-  const parsed = await importPptxClient(file, file.name, { extendBackgrounds });
+  const parse = await demoParse(file, form.get('clientScene'), extendBackgrounds);
+  const parsed = await assemblePptxScene(parse, file, {
+    fileName: file.name,
+    libraryFamilies: l.fonts.map((f) => f.family),
+  });
 
   // Store uploaded PPTX file by hash
   await putFile(parsed.deckHash, file);
@@ -496,60 +484,19 @@ async function importDocumentUpload(file: File, form: FormData): Promise<Job> {
   // Apply media mapping across presentation (backgroundMediaId, slide backgrounds, image objects)
   parsed.presentation = remapMediaIds(parsed.presentation, mediaMap);
 
-  // If there are loSlides, apply demo fallback images to those slides
-  if (parsed.loSlides.length > 0) {
-    for (const lo of parsed.loSlides) {
-      for (const sec of parsed.presentation.sections) {
-        const sl = sec.slides.find((s) => s.id === lo.slideId);
-        if (!sl) continue;
-        if (lo.class === 'picture') {
-          sl.imported = {
-            fileId: parsed.deckHash,
-            page: lo.index + 1,
-            imageMediaId: fallbacks.full.id,
-            textBoxes: [],
-            textAligned: true,
-          };
-          if (sl.pptx) delete sl.pptx.pending;
-        } else if (lo.class === 'hybrid' && lo.art) {
-          const artBox = { ...lo.art.box, rotation: 0 };
-          const artImg: ImageObject = {
-            id: newId(),
-            type: 'image',
-            box: artBox,
-            mediaId: fallbacks.overlay.id,
-            fit: 'contain',
-            opacity: 1,
-            radius: 0,
-            origin: { src: 'pptx', role: 'art' },
-          };
-          const replaces = new Set(lo.art.replaces);
-          sl.objects = sl.objects.filter((o) => !replaces.has(o.id));
-          const beforeIdx = lo.art.before ? sl.objects.findIndex((o) => o.id === lo.art!.before) : -1;
-          if (beforeIdx >= 0) sl.objects.splice(beforeIdx, 0, artImg);
-          else sl.objects.push(artImg);
-          if (sl.pptx) delete sl.pptx.pending;
-        }
-        if (lo.metafileObjects?.length && lo.class !== 'picture') {
-          for (const mo of lo.metafileObjects) {
-            const mfObj: ImageObject = { ...mo.object, mediaId: fallbacks.overlay.id };
-            const beforeIdx = mo.before ? sl.objects.findIndex((o) => o.id === mo.before) : -1;
-            if (beforeIdx >= 0) sl.objects.splice(beforeIdx, 0, mfObj);
-            else sl.objects.push(mfObj);
-          }
-          if (sl.pptx) delete sl.pptx.pending;
-        }
-      }
-    }
-  }
-
-  for (const sec of parsed.presentation.sections) {
-    for (const sl of sec.slides) {
-      if (sl.pptx) {
-        sl.pptx.digest = slideObjectsDigest(sl.objects.filter((o) => o.origin));
-      }
-    }
-  }
+  // Without LibreOffice nothing waits for it: what ordo cannot draw is listed on its slide
+  // (`Slide.pptx.missing`). Only a picture-class slide (more pictures than a slide may hold), which no build
+  // draws natively yet, shows the demo's placeholder page, as a hub would show LibreOffice's.
+  for (const sec of parsed.presentation.sections)
+    for (const sl of sec.slides)
+      if (sl.pptx?.class === 'picture' && !sl.objects.length)
+        sl.imported = {
+          fileId: parsed.deckHash,
+          page: sl.pptx.index + 1,
+          imageMediaId: fallbacks.full.id,
+          textBoxes: [],
+          textAligned: true,
+        };
 
   // Save presentation
   const savedPres = PresentationSchema.parse({
@@ -560,20 +507,61 @@ async function importDocumentUpload(file: File, form: FormData): Promise<Job> {
   l = { ...l, media: mediaList, presentations: upsert(l.presentations, savedPres) };
   await save(l);
 
+  const slides = savedPres.sections.flatMap((s) => s.slides);
   const jobResult = {
     presentationId: savedPres.id,
     slides: parsed.classes.length,
     native: parsed.classes.filter((c) => c === 'native').length,
     hybrid: parsed.classes.filter((c) => c === 'hybrid').length,
     picture: parsed.classes.filter((c) => c === 'picture').length,
-    compact: parsed.compact,
+    compact: 0,
+    simplified: parsed.simplified,
     pending: 0,
+    missing: slides.filter((sl) => sl.pptx?.missing?.length).length,
+    libreoffice: false,
     missingFonts: parsed.missingFonts,
-    notes: ['Imported natively in browser demo', ...parsed.notes],
+    notes: [
+      parse.fromClient ? 'Parsed in this browser and built in the demo' : 'Parsed and built in the demo',
+      ...parsed.notes,
+    ],
   };
 
   return saveJob(job('pptx-native', jobResult, parsed.log));
 }
+
+/**
+ * The deck's scene: the one the operator's import worker sent (`clientScene`) when it is of this converter,
+ * its stored fields and parsed without LibreOffice (the demo has none), else parsed here. A scene that is not
+ * readable is never used.
+ */
+async function demoParse(
+  file: File,
+  sent: FormDataEntryValue | null,
+  extendBackgrounds: boolean,
+): Promise<{ scene: PptxClientScene; zip: BoundedZip; fromClient: boolean }> {
+  if (sent instanceof Blob && sent.size <= CLIENT_SCENE_MAX_BYTES) {
+    try {
+      const scene = JSON.parse(await sent.text()) as PptxClientScene;
+      const fields = new Set(Array.isArray(scene?.m9Writes) ? scene.m9Writes : []);
+      if (
+        scene?.version === CONVERTER_VERSION &&
+        scene.libreoffice === false &&
+        fields.size === M9_WRITES.size &&
+        [...M9_WRITES].every((f) => fields.has(f)) &&
+        Array.isArray(scene.listed) &&
+        Array.isArray(scene.slides)
+      )
+        return { scene, zip: await BoundedZip.open(zipSource(file)), fromClient: true };
+    } catch {
+      // not a usable scene: parsed here
+    }
+  }
+  const parse = await parsePptxScene(file, { extendBackgrounds, libreoffice: false });
+  return { scene: parse.scene, zip: parse.zip, fromClient: false };
+}
+
+/** The largest scene the demo reads (as a hub's bound, `clientScene.ts`). */
+const CLIENT_SCENE_MAX_BYTES = 128 * 1024 * 1024;
 
 function outputByToken(l: Lib, token: string | null) {
   return l.settings.outputs.find((o) => o.token && o.token === token);
@@ -593,15 +581,16 @@ export async function handle(req: Request): Promise<Res> {
     if (seg[0] === 'auth') return json({ ok: true });
     if (path === '/health') return json({ ok: true, demo: true, version: VERSION });
     // design/27 M9: what the server tools allow. The pages demo has no LibreOffice and no poppler-utils, but
-    // it imports PowerPoint (parsed in the browser) and PDF files and shows its placeholder pictures where a
-    // hub's tools would draw them (a picture import, 'Show original', a hybrid slide's art, a PDF page), so
-    // the operator offers those (`importDocumentUpload`, the pptx-reference route).
+    // it imports PowerPoint (parsed in the browser, without LibreOffice: `art` false, so what ordo cannot draw
+    // is listed on its slide) and PDF files, and shows its placeholder pictures where a hub's tools would draw
+    // a whole page (a picture import, 'Show original', a picture-class slide, a PDF page), so the operator
+    // offers those (`importDocumentUpload`, the pptx-reference route).
     if (path === '/capabilities')
       return json({
         libreoffice: { state: 'absent' },
         pdf: true,
         documents: ['pptx', 'ppsx', 'potx', 'pptm', 'pdf'],
-        pptx: { pictures: true, reference: true, referencePdf: false, art: true },
+        pptx: { pictures: true, reference: true, referencePdf: false, art: false },
       } satisfies HubCapabilities);
 
     // ---- the reset button

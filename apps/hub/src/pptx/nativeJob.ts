@@ -61,7 +61,7 @@
  * step 2's batches and follows the same rules: a slide past the client's bound on outline files loses the
  * objects naming the files it was not given, and a slide the client could not read gets the text rescue here.
  */
-import { open, readFile, rm, stat } from 'node:fs/promises';
+import { open, rm, stat } from 'node:fs/promises';
 import { type Box, drawnGeomRefs, newId, type Presentation, type Slide } from '@ordo/domain';
 import {
   bodyBoxes,

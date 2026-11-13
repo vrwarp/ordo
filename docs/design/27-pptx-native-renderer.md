@@ -2491,6 +2491,20 @@ worker, the Pages demo and the fidelity harness:
   compact step that made picture slides is gone, so no slide is a picture for a budget on either side.
 - The hub builds version 1 from a checked scene with the same `ImportCore` (§12 "Process"), so both paths
   store the same presentation modulo ids and times (the equivalence check of `tools/pptx-fidelity`).
+- **The operator** parses in its import worker (`apps/operator/src/workers/import.worker.ts`, a bundle of
+  its own: 659 kB, the page's initial bundle 1,752 kB from 1,758 kB, and the lazy importer chunk of
+  706.8 kB is gone), one worker per deck with a 90 s deadline after which it is terminated, never while a
+  playlist is live, and uploads without a scene on any failure (counted in Settings › Diagnostics and logged,
+  design/15 "PowerPoint imports"). It sends the scene as JSON bytes the worker made, so the page never
+  serializes it.
+- **Faces** (`pptx-faces.ts`): one selection rule for the hub's pool (`faces.ts`, files read lazily) and the
+  browser (`loadDeckFaces`: only a deck with a table needs faces; the families its parts name, their metric
+  substitutes, the script fallbacks of its text and ordo's default face, at most 64 files and 256 MB,
+  fetched from the hub and read with the hub's table limits, `sfntFaceMetrics`). A table that needs a face
+  stored as WOFF or WOFF2 (Google Fonts' files), which a browser cannot measure from, sends the deck to the
+  hub, so a table never measures differently by where it was parsed. This replaces the rebase note's "no
+  font faces" above.
+- **The Pages demo** parses for a hub without LibreOffice and builds with `assemblePptxScene` (design/26).
 <!-- /m9:import-core -->
 
 <!-- m9:tables-render -->

@@ -51,4 +51,3 @@ Consequences.
   to the hub on any failure (counted in its health view and logged), so an import can never cost the service.
 - The converter's version and stored fields are one constant each (`@ordo/pptx-scene` `version.ts`); a hub and
   a browser of different builds only ever disagree into the hub's own parse.
-

@@ -182,3 +182,42 @@ export function sfntFaceMetrics(bytes: Uint8Array): FaceMetrics | undefined {
     return undefined;
   }
 }
+
+/** Thrown when a deck's table needs a face the browser's parse cannot read: the hub parses that deck. */
+export class FaceUnreadable extends Error {}
+
+/**
+ * The faces a deck needs (`deckFaceNeeds`), fetched (`get`: the operator's import worker fetches the library's
+ * files from the hub) and read as the hub reads them (`sfntFaceMetrics`), within `FACE_LIMITS`: a
+ * `FaceSource`, or undefined for a deck without a table. A needed face that is not TrueType or OpenType (a
+ * WOFF or WOFF2 file, which the hub decompresses and a browser cannot measure from) throws `FaceUnreadable`,
+ * so that deck is parsed on the hub and measured as there; a face that cannot be fetched is missing, as a
+ * file the hub cannot read.
+ */
+export async function loadDeckFaces(
+  parts: ReadonlyMap<string, Uint8Array>,
+  library: readonly FaceFile[],
+  get: (url: string) => Promise<Uint8Array | undefined>,
+): Promise<FaceSource | undefined> {
+  const needs = deckFaceNeeds(parts);
+  if (!needs) return undefined;
+  const faces: LibraryFace[] = [];
+  let bytes = 0;
+  for (const f of facesForDeck(needs, library)) {
+    let b: Uint8Array | undefined;
+    try {
+      b = await get(f.url);
+    } catch {
+      b = undefined;
+    }
+    if (!b || b.length > FACE_LIMITS.fileBytes || bytes + b.length > FACE_LIMITS.bytes) continue;
+    bytes += b.length;
+    if (!sfntReadable(b))
+      throw new FaceUnreadable(
+        `a table uses ${f.family.slice(0, 100)}, whose font file only the hub can measure`,
+      );
+    const m = sfntFaceMetrics(b);
+    faces.push({ family: f.family, weight: f.weight, italic: f.italic, metrics: () => m });
+  }
+  return faceSourceOf(faces);
+}

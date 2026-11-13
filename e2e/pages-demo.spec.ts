@@ -161,3 +161,66 @@ test('the Pages demo runs with no hub: sample service, ProPresenter import, go l
   await expect(page.getByText('TestBild', { exact: true })).toHaveCount(0);
   expect(errors).toEqual([]);
 });
+
+/**
+ * PowerPoint in the Pages demo (design/26, design/27 §2 "Where the deck is parsed"): a public deck of the
+ * golden corpus with a chart, imported as editable slides, is parsed in the operator's import worker for a
+ * hub without LibreOffice and built by the demo with the import core: the chart's slide is partly drawn and
+ * says what is missing, with no "Object Not Available in Demo" overlay; a deck imported as pictures shows
+ * the demo's placeholder pages, each with the editor's stage pill.
+ */
+test('the Pages demo imports PowerPoint without LibreOffice: classes, missing lists, picture pages', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(BASE);
+  await expect(page.locator('[data-demo-banner]')).toBeVisible({ timeout: 30_000 });
+  await page.evaluate(() => {
+    location.hash = '#/library/import';
+  });
+  const pptx = page.locator('input[type=file][accept*=".pptx"]');
+
+  // Editable: the chart's slide is hybrid, its chart listed as not drawn; nothing stands in for it.
+  await page.locator('input[name="pptx-import-mode"][value="native"]').check();
+  await pptx.setInputFiles(resolve('golden-pptx/challenging-features/charts/chart_2d_basic.pptx'));
+  const card = page.locator('[data-pptx-import]').first();
+  await expect(card.getByText(/^done$/)).toBeVisible({ timeout: 60_000 });
+  await expect(card.locator('[data-class="hybrid"]')).toHaveText(/1/);
+  await expect(card.locator('[data-missing]')).toContainText(/chart/i);
+  // The operator's import worker parsed it; the demo built version 1 from that scene.
+  await card.locator('[data-import-notes] summary').click();
+  await expect(card.locator('[data-import-notes]')).toContainText('Parsed in this browser');
+  const stored = await page.evaluate(async () => {
+    const list = (await (await fetch('/api/v1/presentations')).json()) as { id: string; title: string }[];
+    const p = list.find((x) => x.title === 'chart_2d_basic')!;
+    const full = await (await fetch(`/api/v1/presentations/${p.id}`)).json();
+    const media = (await (await fetch('/api/v1/media')).json()) as { id: string; name: string }[];
+    return { p: full, fallback: media.filter((m) => /Demo Fallback/.test(m.name)).map((m) => m.id) };
+  });
+  const slide = stored.p.sections[0].slides[0];
+  expect(slide.pptx).toMatchObject({ class: 'hybrid', missing: ['chart'] });
+  expect(slide.pptx.pending).toBeUndefined();
+  expect(
+    slide.objects.filter((o: { mediaId?: string }) => stored.fallback.includes(o.mediaId ?? '')),
+  ).toEqual([]);
+  // Canvas-first: the stage pill, and the slide's PowerPoint panel through it says what is missing.
+  await card.getByRole('button', { name: 'Open presentation' }).click();
+  const pill = page.locator('[data-pptx-stage-pill]');
+  await expect(pill).toContainText('Imported PowerPoint slide');
+  await pill.getByRole('button', { name: /PowerPoint options/ }).click();
+  await expect(page.locator('[data-pptx-card] [data-missing]')).toContainText(/chart/i);
+
+  // Pictures: the demo's placeholder pages, one per slide, each with its stage pill.
+  await page.evaluate(() => {
+    location.hash = '#/library/import';
+  });
+  await page.locator('input[name="pptx-import-mode"][value="libreoffice"]').check();
+  await pptx.setInputFiles(resolve('golden-pptx/challenging-features/tables/table_styles_and_cells.pptx'));
+  const pictures = page.locator('.card', { hasText: 'table_styles_and_cells.pptx' }).first();
+  await expect(pictures.getByText(/^done$/)).toBeVisible({ timeout: 60_000 });
+  await pictures.getByRole('button', { name: 'Open presentation' }).click();
+  await expect(page.locator('[data-pptx-stage-pill]')).toContainText('Imported page 1');
+  expect(errors).toEqual([]);
+});

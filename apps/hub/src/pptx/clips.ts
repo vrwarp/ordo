@@ -28,7 +28,7 @@
  */
 import { copyFile, link, mkdtemp, rename } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { ImageObject, Slide } from '@ordo/domain';
+import type { Slide } from '@ordo/domain';
 import { place, sweep, unplace, wanted } from '@ordo/importers/pptx-core.ts';
 import type { EmittedClip } from '@ordo/pptx-scene';
 import { clipKey } from '@ordo/pptx-scene/media.ts';

@@ -91,6 +91,12 @@ export type PptxClientOptions = {
    * Absent: widths are estimated, as a hub with no font would.
    */
   fontFace?: FaceSource;
+  /**
+   * The faces for this deck, loaded once its XML is read (the operator's import worker fetches only the
+   * families a deck with a table names, `pptx-faces.ts` `loadDeckFaces`); takes the place of `fontFace`. A
+   * throw fails the parse (the deck then goes to the hub).
+   */
+  loadFaces?: (parts: ReadonlyMap<string, Uint8Array>) => Promise<FaceSource | undefined>;
   /** Stops the parse between its steps (the operator's deadline also terminates the worker). */
   signal?: AbortSignal;
 };
@@ -385,12 +391,14 @@ export async function parsePptxScene(
   onProgress?.(0.4);
 
   // 2c. Every slide, with the library's faces.
+  const fontFace = options.loadFaces ? await options.loadFaces(parts) : options.fontFace;
+  checkAborted(signal);
   const result = convertDeck(parts, {
     ...base,
     range: { from: 0, to: listed.length },
     pictureSize: (p) => sizes.get(p),
     mediaKind: (p) => kinds.get(p),
-    ...(options.fontFace ? { fontFace: options.fontFace } : {}),
+    ...(fontFace ? { fontFace } : {}),
   });
   const extras = extrasOf(openPackage(parts), result);
   parts.clear();

@@ -32,6 +32,17 @@ export {
 } from './pptx-pictures.ts';
 export { geomFileOf, type NamedGeomFile, nameGeoms, nameShapeFiles, SHAPE_FILE_KINDS } from './pptx-geoms.ts';
 export { PPTX_IMPORT_LIMITS, type SceneScan, type SceneSlideExtra } from './pptx-scan.ts';
+export {
+  deckFaceNeeds,
+  FACE_LIMITS,
+  type FaceFile,
+  FaceUnreadable,
+  faceSourceOf,
+  facesForDeck,
+  type LibraryFace,
+  loadDeckFaces,
+  sfntFaceMetrics,
+} from './pptx-faces.ts';
 export { BoundedZip, ZipLimitError, zipSource } from './zip-bounded.ts';
 export {
   type AssembleOptions,
