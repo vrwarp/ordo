@@ -1,15 +1,19 @@
 /**
- * The slide's JSON budget (design/27 §3.4; M6 round 2; split out of `emit.ts` in M9, `conv-seams`): what a
- * slide is as the hub stores it (`storedSlideBytes`), its large geometries moved into geometry files
- * (`fitBytes`), the text formatting it may hold (`MAX_SLIDE_BYTES`, `chargeText`) and the picture class a
- * slide past it takes (`overBudget`). M9's budget ladder (`ladder`: the lossless `compactRuns` before the
- * `plain` level) grows here.
+ * The slide's JSON budget (design/27 §3.4; M6 round 2; split out of `emit.ts` in M9, `conv-seams`; the
+ * converter's steps of M9's budget ladder, `ladder`): what a slide is as the hub stores it
+ * (`storedSlideBytes`), its large geometries moved into geometry files (`fitBytes`), the text formatting it
+ * may hold (`chargeText`: every rich text object made lossless-compact first, `compactRuns`, then counted
+ * against `TEXT_BUDGET_BYTES`, past which the slide's further text is written plain), and whether the slide
+ * is over `MAX_SLIDE_BYTES` all the same (`slideBudget`: `EmittedSlide.overBudget`).
  *
- * Pure: slides in, sizes out; `fitBytes` changes the slide's geometries in place.
+ * Since M9 no budget makes a slide picture class (plan decision 3): the importer fits a slide that is still
+ * over (`@ordo/domain` `fitSlideBudget`: grid, plain, minimal), and the class stays what its elements make it.
+ *
+ * Pure: slides in, sizes out; `fitBytes` changes the slide's geometries in place, `compactRuns` a text object's
+ * runs.
  */
-import type { GeomFile, ShapeGeom, Slide, SlideObject, TextObject } from '@ordo/domain';
+import type { GeomFile, ShapeGeom, Slide, SlideObject, TextObject, TextRun, TextStyle } from '@ordo/domain';
 import { type EmitCtx, utf8Bytes } from './emit-ctx.ts';
-import type { Classification } from './ir.ts';
 
 /**
  * A geometry whose paths take more than this many characters of a slide's JSON (its own times the times the
@@ -19,21 +23,28 @@ import type { Classification } from './ir.ts';
 export const GEOM_FILE_CHARS = 2_048;
 
 /**
- * A slide's JSON budget (design/27 §3.4: hard 64 KB, else picture class). Rich text formatting (runs and
- * paragraph styles) is written while the slide's text objects stay within it; past it, the slide's further
- * text is written without its formatting and the slide is classed picture, so a deck whose layouts repeat
- * thousands of formatted runs on every slide never builds megabytes the hub would discard.
+ * A slide's JSON budget (design/27 §3.4: 64 KB). A slide over it as stored (`storedSlideBytes`, with its
+ * large geometries in files) is flagged (`EmittedSlide.overBudget`) for the importer's budget ladder, which
+ * re-grids, simplifies or thins it until it fits (M9; before M9 it became a picture slide).
  */
 export const MAX_SLIDE_BYTES = 64 * 1024;
 
-/** The note a slide gets when it passes `MAX_SLIDE_BYTES` (an importer that logs the budget itself drops it). */
-export const SLIDE_BUDGET_NOTE = `the slide has more than ${MAX_SLIDE_BYTES / 1024} KB of text formatting: its further text is written without it (picture class)`;
+/**
+ * The text a slide's text objects may hold with their formatting (their JSON, text included): twice
+ * `MAX_SLIDE_BYTES`, so the importer's ladder chooses which formatting a slide over its budget keeps (the
+ * largest goes first, `fitSlideBudget`), while a deck whose layouts repeat thousands of formatted runs on
+ * every slide still never builds megabytes per slide: past it, the slide's further text is written plain.
+ */
+export const TEXT_BUDGET_BYTES = 2 * MAX_SLIDE_BYTES;
+
+/** The note a slide gets when it passes `TEXT_BUDGET_BYTES` (an importer that logs the budget itself drops it). */
+export const SLIDE_BUDGET_NOTE = `the slide has more than ${TEXT_BUDGET_BYTES / 1024} KB of text formatting: its further text is written without it`;
 
 /**
  * The note a slide gets when it is over `MAX_SLIDE_BYTES` as the hub stores it (`storedSlideBytes`) with
  * its large geometries in files (an importer that logs the budget itself drops it, as `SLIDE_BUDGET_NOTE`).
  */
-export const SLIDE_BYTES_NOTE = `the slide is more than ${MAX_SLIDE_BYTES / 1024} KB as stored, with its shape outlines in files (picture class)`;
+export const SLIDE_BYTES_NOTE = `the slide is more than ${MAX_SLIDE_BYTES / 1024} KB as stored, with its shape outlines in files: it is simplified to fit`;
 
 /** What `storedSlideBytes` adds for a slide's provenance (`Slide.pptx` without notes) and as a margin. */
 const PROVENANCE_BYTES = 400;
@@ -127,25 +138,106 @@ export function fitBytes(
   return moved ? storedSlideBytes(slide, notes) : bytes;
 }
 
-/** A slide over `MAX_SLIDE_BYTES` (its text formatting, else its JSON as stored): picture class (design/27 §3.4), with why. */
-export function overBudget(c: Classification, text = true): Classification {
-  const reason = text
-    ? `more than ${MAX_SLIDE_BYTES / 1024} KB of text formatting`
-    : `more than ${MAX_SLIDE_BYTES / 1024} KB as stored`;
-  return { ...c, class: 'picture', reasons: [...c.reasons.filter((r) => r !== reason), reason] };
+/**
+ * The slide's budget once it is emitted (design/27 §3.4; `emit.ts`): its large geometries moved into files
+ * (`fitBytes`, whatever its text holds) and whether it is over the budget all the same, its text formatting
+ * past `TEXT_BUDGET_BYTES` or its JSON as stored past `MAX_SLIDE_BYTES` (noted, `SLIDE_BYTES_NOTE`). The
+ * slide's class is not changed: the importer fits such a slide (`EmittedSlide.overBudget`).
+ */
+export function slideBudget(
+  ctx: Pick<EmitCtx, 'textBytes' | 'log'>,
+  slide: Slide,
+  notes: readonly string[],
+  geomRef: ((json: string, file: GeomFile) => string) | undefined,
+): { over: boolean } {
+  const stored = fitBytes(slide, notes, geomRef);
+  const overBytes = stored > MAX_SLIDE_BYTES;
+  if (overBytes) ctx.log(SLIDE_BYTES_NOTE);
+  return { over: overText(ctx) || overBytes };
 }
 
-/** Whether the slide's text formatting has passed `MAX_SLIDE_BYTES`: its further text is written plain. */
+/** Whether the slide's text formatting has passed `TEXT_BUDGET_BYTES`: its further text is written plain. */
 export function overText(ctx: Pick<EmitCtx, 'textBytes'>): boolean {
-  return ctx.textBytes > MAX_SLIDE_BYTES;
+  return ctx.textBytes > TEXT_BUDGET_BYTES;
 }
 
 /**
- * Count a rich text object's JSON against the slide's text budget (`MAX_SLIDE_BYTES`), noting the slide
- * (`SLIDE_BUDGET_NOTE`) the moment it passes it. A slide already past it counts nothing more.
+ * Count a rich text object's JSON against the slide's text budget (`TEXT_BUDGET_BYTES`), made compact first
+ * (`compactRuns`, lossless), noting the slide (`SLIDE_BUDGET_NOTE`) the moment it passes it. A slide already
+ * past it counts nothing more.
  */
 export function chargeText(ctx: Pick<EmitCtx, 'textBytes' | 'log'>, o: TextObject): void {
+  compactRuns(o);
   if (overText(ctx)) return;
   ctx.textBytes += utf8Bytes(JSON.stringify(o));
   if (overText(ctx)) ctx.log(SLIDE_BUDGET_NOTE);
+}
+
+// ── compactRuns (M9 `ladder`, plan decision 14) ───────────────────────────────────────────────────────────
+
+/** Font weights both the box style's and a run's clamps keep as they are (`@ordo/renderer` `clamp.ts`). */
+const PLAIN_WEIGHTS: ReadonlySet<number> = new Set([100, 200, 300, 400, 500, 600, 700, 800, 900]);
+/** Letter spacing within both clamps' bounds. */
+const SPACING_BOUND = 100;
+
+const sameRgba = (a: unknown, b: unknown) => {
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+  const x = a as Record<string, unknown>;
+  const y = b as Record<string, unknown>;
+  return x.r === y.r && x.g === y.g && x.b === y.b && x.a === y.a;
+};
+
+const sameOutline = (a: TextRun['outline'], b: TextStyle['outline']) =>
+  a === null ? b === undefined : !!a && !!b && a.width === b.width && sameRgba(a.color, b.color);
+
+/**
+ * Only "no shadow" where the box has none: a run's own shadow equal to the box's still keeps the decorations
+ * of its run apart (`paint.ts` joins an underline across runs only for the very same shadow), so dropping it
+ * would join them.
+ */
+const sameShadow = (a: TextRun['shadow'], b: TextStyle['shadow']) => a === null && b === undefined;
+
+/**
+ * A text object's runs without the fields that say what the box style says already (plan decision 14: the
+ * lossless step before `plain`), in place; returns `o`. A run field is dropped only when the run resolves to
+ * the same value without it (`@ordo/renderer` `resolveRunStyle`): a family, weight, slant, letter spacing or
+ * language equal to the box's (a language equal to the deck's, which the box carries), a scale of 1, the
+ * box's colour (unless the box is painted with a gradient, which paints only runs without their own colour),
+ * the box's underline, caps and outline (null where the box has none), no shadow where the box has none, no
+ * strike, a zero baseline.
+ *
+ * Runs are never merged or removed, even when one is left with nothing but its range: the text engine cuts
+ * its pieces at every run's ends (`segments.ts`), so a merge could move kerned glyphs and cluster cuts. The
+ * layout of `o` is therefore exactly the same (`layoutRich`, tested). The converter writes each run as what
+ * differs from its box already (`richtext.ts` `runDiff`), so on its own output this finds little; it keeps a
+ * slide's budget honest wherever runs carry the box's values (an older converter's, a hand-made deck's).
+ */
+export function compactRuns(o: TextObject): TextObject {
+  const runs = o.runs;
+  if (!Array.isArray(runs) || !runs.length) return o;
+  const st = o.style;
+  const caps = st.transform === 'uppercase' ? 'all' : 'none';
+  for (const r of runs) {
+    if (!r || typeof r !== 'object') continue;
+    if (r.fontFamily !== undefined && r.fontFamily === st.fontFamily) delete r.fontFamily;
+    if (r.fontWeight !== undefined && r.fontWeight === st.fontWeight && PLAIN_WEIGHTS.has(r.fontWeight))
+      delete r.fontWeight;
+    if (r.fontStyle !== undefined && r.fontStyle === st.fontStyle) delete r.fontStyle;
+    if (r.sizeScale === 1) delete r.sizeScale;
+    if (r.color !== undefined && !st.paint && sameRgba(r.color, st.color)) delete r.color;
+    if (r.underline !== undefined && r.underline === (st.underline ?? false)) delete r.underline;
+    if (r.strike === false) delete r.strike;
+    if (r.baseline === 0) delete r.baseline;
+    if (
+      r.letterSpacing !== undefined &&
+      r.letterSpacing === st.letterSpacing &&
+      Math.abs(r.letterSpacing) <= SPACING_BOUND
+    )
+      delete r.letterSpacing;
+    if (r.caps !== undefined && r.caps === caps) delete r.caps;
+    if (r.outline !== undefined && sameOutline(r.outline, st.outline)) delete r.outline;
+    if (r.shadow !== undefined && sameShadow(r.shadow, st.shadow)) delete r.shadow;
+    if (r.lang !== undefined && r.lang === (st.lang ?? '')) delete r.lang;
+  }
+  return o;
 }

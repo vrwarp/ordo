@@ -46,7 +46,7 @@ import {
 } from '@ordo/pptx-scene/test-util.ts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { drawSlide2D } from '../../../packages/renderer/src/text2d.ts';
-import type { PptxDeps, PptxLoPayload, PptxNativeResult } from '../src/pptx/shared.ts';
+import type { PptxDeps, PptxNativeResult } from '../src/pptx/shared.ts';
 import { ffmpeg } from './fixtures.ts';
 import { EDIT_PIN, login, startHub, type TestHub, tempDir } from './helpers.ts';
 import { slidesOf, storeDeck, waitJob, zipDeck } from './pptx-helpers.ts';
@@ -565,42 +565,38 @@ describe('a deck with a hidden slide (design/27 §4, §15 M3 exit)', () => {
 });
 
 describe('the size budgets through the job (design/27 §3.4, §14.10)', () => {
-  /** Import a 2,000-slide deck with its LibreOffice follow-up held for good (some 1,500 pages). */
+  /**
+   * Import a 2,000-slide deck. Since M9's budget ladder the tail is never a picture: its slides are stored
+   * minimal (their text, pictures and background), so nothing waits for LibreOffice.
+   */
   async function importLong(slide: (i: number) => string, name: string) {
     const slides = Array.from({ length: 2000 }, (_, i) => ({ shapes: slide(i) }));
-    const hold = holdFollowUps();
     const t0 = performance.now();
-    let imported: Awaited<ReturnType<typeof importDeck>> | undefined;
-    try {
-      imported = await importDeck(buildDeck({ slides }), name);
-      await waitDeferred(imported.result.loJobId!);
-    } finally {
-      hold.release(imported?.p.id ?? '');
-    }
-    const { result, p } = imported;
+    const { result, p } = await importDeck(buildDeck({ slides }), name);
     const all = slidesOf(p);
     let largest = 0;
     for (const s of all) largest = Math.max(largest, jsonBytes(previewSlice(p, s.id)));
-    const first = all.findIndex((s) => s.pptx!.class === 'picture');
+    const first = all.findIndex((s) => s.pptx!.notes?.some((n) => /reached its size budget/.test(n)));
     console.info(
-      `${name}: ${Math.round(performance.now() - t0)} ms, ${presentationBytes(p)} bytes, ${result.compact} compact from slide ${first + 1}, largest preview ${largest} bytes`,
+      `${name}: ${Math.round(performance.now() - t0)} ms, ${presentationBytes(p)} bytes, ${result.simplified} simplified from slide ${first + 1}, largest preview ${largest} bytes`,
     );
     expect(result.slides).toBe(2000);
+    expect(result).toMatchObject({ picture: 0, compact: 0, pending: 0 });
+    expect(result.loJobId).toBeUndefined();
     expect(presentationBytes(p)).toBeLessThanOrEqual(SIZE_BUDGETS.presentationMax);
     expect(largest).toBeLessThan(SIZE_BUDGETS.previewMax);
-    // Only the tail is compact, and the follow-up was planned for exactly the slides waiting for it.
-    expect(all.slice(first).every((s) => s.pptx!.class === 'picture' && s.objects.length === 0)).toBe(true);
-    const lo = hub.lib.db.prepare('SELECT payload FROM jobs WHERE id = ?').get(result.loJobId!) as {
-      payload: string;
-    };
-    expect((JSON.parse(lo.payload) as PptxLoPayload).slides).toHaveLength(result.pending);
+    // Only the tail is minimal: no shape, every text box still there.
+    for (const s of all.slice(first)) {
+      expect(s.objects.some((o) => o.type === 'shape')).toBe(false);
+      expect(s.objects.filter((o) => o.type === 'text').length).toBeGreaterThan(0);
+    }
     return { result, p, first };
   }
 
-  it('keeps a 2,000-slide sermon-like deck within 4 MiB: the tail compact, the preview of any slide under 1 MiB', async () => {
+  it('keeps a 2,000-slide sermon-like deck within 4 MiB: the tail minimal, the preview of any slide under 1 MiB', async () => {
     const verse =
       'For God so loved the world, that he gave his only begotten Son, that whosoever believeth. ';
-    const { result, first } = await importLong(
+    const { result, p, first } = await importLong(
       (i) =>
         textBox(2, `Point ${i + 1}`, IN, 0) +
         textBox(3, `${i + 1} ${verse.repeat(4)}`) +
@@ -609,20 +605,32 @@ describe('the size budgets through the job (design/27 §3.4, §14.10)', () => {
           .join(''),
       'Sermon series.pptx',
     );
-    expect(result.compact).toBeGreaterThan(0);
-    expect(first).toBeGreaterThan(500);
+    expect(result.simplified).toBe(2000 - first);
+    // A minimal slide keeps its text as objects, so it is larger than the compact picture slide of before M9
+    // (whose tail began past slide 500): the all-minimal deck is near 4 MiB, and the tail starts earlier.
+    expect(first).toBeGreaterThan(250);
+    // Every lyric stays editable: the last slide's text is whole.
+    const last = slidesOf(p).at(-1)!;
+    expect(last.objects.flatMap((o) => (o.type === 'text' ? [o.text] : []))).toEqual([
+      'Point 2000',
+      `2000 ${verse.repeat(4)}`,
+    ]);
+    expect(last.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
   }, 300_000);
 
-  it('keeps even a deck too large when compact within 4 MiB: the text kept for search is cut', async () => {
+  it('keeps even a deck too large when minimal within 4 MiB: the text of its tail is cut', async () => {
     const line = 'Holy, holy, holy, Lord God almighty, early in the morning our song shall rise to thee. ';
     const { result, p, first } = await importLong(
       (i) => textBox(2, `Slide ${i + 1}`, IN, 0) + textBox(3, `${i + 1} ${line.repeat(30)}`),
       'Hymnal.pptx',
     );
     expect(first).toBe(0);
-    expect(result.compact).toBe(2000);
+    expect(result.simplified).toBe(2000);
     expect(result.notes.join('\n')).toMatch(/cut to 200 characters/);
-    expect(slidesOf(p)[5]!.pptx!.artText).toMatch(/^Slide 6\n6 Holy/);
+    const s6 = slidesOf(p)[5]!.objects.flatMap((o) => (o.type === 'text' ? [o.text] : []));
+    expect(s6[0]).toBe('Slide 6');
+    expect(s6[1]).toMatch(/^6 Holy/);
+    expect(s6[1]!.length).toBe(200);
   }, 300_000);
 });
 

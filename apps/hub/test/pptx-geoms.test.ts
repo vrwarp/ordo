@@ -246,7 +246,7 @@ describe('pptx-native: geometry files', () => {
     expect(outlines()).toBe(before);
   });
 
-  it("makes a slide whose new outline files pass the import's budget a compact picture", async () => {
+  it("a slide past the import's outline-file budget keeps its text and pictures: only the shapes naming new files go", async () => {
     const file = await zipDeck(buildDeck({ slides }), dir, 'budget.pptx');
     const hash = await storeDeck(hub, file);
     const lines: string[] = [];
@@ -265,15 +265,18 @@ describe('pptx-native: geometry files', () => {
     const out = (await nativeJob(hub.imports.pptx.deps, { limits: { geomFileBytes: 160_000 } })(
       ctx,
     )) as PptxNativeResult;
-    expect(out).toMatchObject({ native: 1, picture: 1, compact: 1 });
+    // M9 ladder: never a picture; the shape naming the file past the budget is left out and listed missing.
+    expect(out).toMatchObject({ native: 1, hybrid: 1, picture: 0, compact: 0 });
     const p = hub.lib.presentations.must(out.presentationId);
-    const [, s2] = slidesOf(p) as [Slide, Slide];
-    expect(s2.objects).toEqual([]);
-    expect(s2.pptx!.notes).toEqual(['over the import budget of shape outlines: a LibreOffice picture']);
+    const [s1, s2] = slidesOf(p) as [Slide, Slide];
+    expect(refsOf(s2)).toEqual([refsOf(s1)[0]]);
+    expect(s2.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
+    expect(s2.pptx!.pending).toBeUndefined();
+    expect(s2.pptx!.notes).toEqual(['over the import budget of shape outlines: 1 shape(s) left out']);
     expect(out.notes.some((n) => /slide 2's shape outlines pass/.test(n))).toBe(true);
   });
 
-  it('names the files in the pool worker and bounds what one batch returns: past it, slides are compact', async () => {
+  it('names the files in the pool worker and bounds what one batch returns: past it, the shapes naming new files go', async () => {
     // The worker names the files (SHA-256 of their re-tokenised JSON): the job gets names and bytes only.
     const scene = sceneTask({
       parts: buildDeck({ slides }),
@@ -298,7 +301,7 @@ describe('pptx-native: geometry files', () => {
     });
     expect(bounded.geomOver).toEqual([1]);
     expect(new Set(bounded.geomFiles!.map((g) => g.hash)).size).toBe(2);
-    // Through the job: slide 2 is a compact picture.
+    // Through the job: slide 2 loses the shape whose new file the bound left out (M9: never a picture).
     const file = await zipDeck(buildDeck({ slides }), dir, 'batch-bound.pptx');
     const hash = await storeDeck(hub, file);
     const payload: PptxNativePayload = { hash, name: 'Template.pptx', options: {} };
@@ -315,12 +318,14 @@ describe('pptx-native: geometry files', () => {
     const out = (await nativeJob(hub.imports.pptx.deps, { limits: { batchGeomBytes: bound } })(
       ctx,
     )) as PptxNativeResult;
-    expect(out).toMatchObject({ native: 1, picture: 1, compact: 1 });
-    const [, s2] = slidesOf(hub.lib.presentations.must(out.presentationId)) as [Slide, Slide];
-    expect(s2.pptx!.notes).toEqual(['over the import budget of shape outlines: a LibreOffice picture']);
+    expect(out).toMatchObject({ native: 1, hybrid: 1, picture: 0, compact: 0 });
+    const [s1, s2] = slidesOf(hub.lib.presentations.must(out.presentationId)) as [Slide, Slide];
+    expect(refsOf(s2)).toEqual([refsOf(s1)[0]]);
+    expect(s2.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
+    expect(s2.pptx!.notes).toEqual(['over the import budget of shape outlines: 1 shape(s) left out']);
   });
 
-  it('makes a slide whose outline file could not be stored a compact picture, not a shape that never draws', async () => {
+  it('leaves out a shape whose outline file could not be stored, not a shape that never draws, keeping the slide', async () => {
     // Distinct outlines (k 7-9), so the store has none of them yet.
     const fresh = [{ shapes: deco(2, 4_000, 7) + deco(3, 4_000, 8) }, { shapes: deco(2, 4_000, 9) }];
     const file = await zipDeck(buildDeck({ slides: fresh }), dir, 'store-fails.pptx');
@@ -344,11 +349,13 @@ describe('pptx-native: geometry files', () => {
       },
     };
     const out = (await nativeJob({ ...deps, store }, {})(ctx)) as PptxNativeResult;
-    // The first file (slide 1's) was refused: slide 1 is a compact picture, slide 2 stays native.
-    expect(out).toMatchObject({ native: 1, picture: 1, compact: 1 });
+    // The first file (slide 1's first shape's) was refused: that shape is left out, slide 2 stays native.
+    expect(out).toMatchObject({ native: 1, hybrid: 1, picture: 0, compact: 0 });
     const [s1, s2] = slidesOf(hub.lib.presentations.must(out.presentationId)) as [Slide, Slide];
-    expect(s1.objects).toEqual([]);
-    expect(s1.pptx!.notes).toContain('its shape outlines could not be stored: a LibreOffice picture');
+    expect(refsOf(s1)).toHaveLength(1);
+    expect(refsOf(s1).every(isGeomFileRef)).toBe(true);
+    expect(s1.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
+    expect(s1.pptx!.notes).toContain('its shape outlines could not be stored: 1 shape(s) left out');
     expect(refsOf(s2).every(isGeomFileRef)).toBe(true);
   });
 });

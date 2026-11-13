@@ -11,15 +11,20 @@
  *    notes, the loop flag), then the referenced pictures are spilled (a second pass over the zip, under
  *    generated names, ≤ 1 GiB, ≤ 2,000 pictures) and their pixel sizes read from their first bytes, then
  *    the slides in batches of `PPTX_LIMITS.batchSlides`: a batch's slide parts are transferred, the shared
- *    parts copied (notes parts stay behind: the scan read them). Each batch has the pool's 2-minute timeout;
- *    past `PPTX_LIMITS.importPoolMs` of pool time the remaining slides are picture class, as are the slides
- *    of a batch that fails. A pool that cannot start fails the import with a clean message: the deck is never
+ *    parts copied (notes parts stay behind: the scan read them). Each batch has the pool's 2-minute timeout.
+ *    A batch that fails is converted again slide by slide (`RETRY_SLIDE_MS` each); a slide that still fails,
+ *    one the converter could not read, and the slides past `PPTX_LIMITS.importPoolMs` of pool time get the
+ *    text rescue (M9 `ladder`: pool task `pptx-scene` with `rescue: true`, `RESCUE_SLIDE_MS` per slide and
+ *    `RESCUE_TOTAL_MS` in all): their text bodies as text objects, class hybrid, `missing: ['slide']`, never a
+ *    picture. A pool that cannot start fails the import with a clean message: the deck is never
  *    parsed on the event loop, and LibreOffice never sees a deck as uploaded (its render copy needs the pool
  *    too). Every zip read refuses overlapping entries (`deckParts.ts`).
- * 3. Classification and the §3.4 size budgets (`@ordo/domain` `planImportSizes`): a slide over 64 KB, and
- *    every slide once the presentation passes 3 MiB, becomes compact picture class, logged and counted. A
- *    slide the converter classed picture for its 64 KB budget (`EmittedSlide.overBudget`: its text
- *    formatting alone passed it) is that same 'slide' case: one warning, counted once.
+ * 3. Classification and the §3.4 size budgets, the budget ladder of M9 (`ladder.ts`): an object naming an
+ *    outline file past the import's budget is left out (`withoutFiles`); a slide over 64 KB as stored takes
+ *    the first level of `fitSlideBudget` that fits (its outlines re-gridded, its text formatting dropped, its
+ *    decorations left out), and once the presentation passes 3 MiB the slides from there on are stored
+ *    minimal (text, pictures, background; `planImportSizes`). None becomes a picture; what a level leaves out
+ *    is in `Slide.pptx.missing` (class hybrid), each simplified slide noted, logged and counted (`simplified`).
  * 3b. Clips (`clips.ts`): the scan's clip parts were spilled after the pictures and sniffed (the batches
  *    emit `ImageObject.play`, `Slide.audio` and motion backgrounds with the sniffed kinds); each clip the
  *    slides keep is stored once per part and trim (trims baked), its media job not yet queued, and its
@@ -30,15 +35,18 @@
  *    sections (a Default arrangement in order), hidden slides, transitions and timings, `Slide.pptx`;
  *    a background picture with alpha is laid on white (a bottom image) instead of `backgroundMediaId`; one
  *    background on every slide becomes the presentation's; `sanitizePresentation`, `Slide.parse` (a slide
- *    that fails it becomes picture class), `Slide.pptx.digest` over the objects exactly as stored.
+ *    that fails it is stored minimal, else as its text alone, with a note), `Slide.pptx.digest` over the
+ *    objects exactly as stored.
  * 6. `lib.savePresentation` (version 1) and, in the same synchronous step, the heavy `pptx-lo` job for the
  *    slides that wait for LibreOffice (`pptx.pending`: hybrid, picture class, metafiles): it cannot start
  *    before version 1 exists, its digests are version 1's, and it is queued before any clip job of the deck:
  *    the clips' media jobs are queued right after it (`MediaService.queue`), never awaited. The presentation
  *    id is chosen and recorded before the save, so a re-run never saves a second presentation.
  *
- * Version 1 of a picture-class slide has no objects, `pptx.pending` and its text in `pptx.artText`; a hybrid
- * slide has its native objects (residuals are left out until version 2) and `pptx.artText` from its art.
+ * Version 1 of a picture-class slide (one the converter classes picture: more pictures than a slide may hold)
+ * has no objects, `pptx.pending` and its text in `pptx.artText`; a hybrid slide has its native objects
+ * (residuals are left out until version 2) and `pptx.artText` from its art. No budget and no failure makes a
+ * picture slide (M9, plan decision 3).
  *
  * **Without LibreOffice** (design/27 M9, `HubTools`: the lite image, `ORDO_LIBREOFFICE=off`): nothing waits
  * for it. The converter is told (`SceneTaskInput.libreoffice: false`, `EmitOptions.libreoffice`) and lists what
@@ -48,22 +56,25 @@
  * lists 'slide'. No slide is `pending`, no `pptx-lo` is queued, and the result says `libreoffice: false` and
  * how many slides have something missing. With LibreOffice each follow-up plan records those kinds
  * (`PptxLoSlide.kinds`) for a hub that loses LibreOffice later (`fallback.ts` `withoutLibreOffice`).
+ *
+ * **A scene parsed on the client** (`PptxNativePayload.sceneHash`, `stepsFromClientScene`) takes the place of
+ * step 2's batches and follows the same rules: a slide past the client's bound on outline files loses the
+ * objects naming the files it was not given, and a slide the client could not read gets the text rescue here.
  */
 import { open, readFile, rm, stat } from 'node:fs/promises';
 import {
   type Box,
-  compactSlideBytes,
   drawnGeomRefs,
   formatBytes,
   IMPORT_RESERVE_BYTES,
   type ImageObject,
   MISSING_LIMITS,
   type MissingKind,
+  minimalSlide,
   missingEntry,
   missingKind,
   missingLabel,
   newId,
-  planImportSizes,
   Presentation,
   type Section,
   type ShapeObject,
@@ -71,11 +82,11 @@ import {
   Slide,
   type SlideObject,
   type SlidePptx,
-  slideBytes,
+  type TextObject,
   utf8Bytes,
 } from '@ordo/domain';
 import { type PptxClientScene, remapMediaIds } from '@ordo/importers';
-import { sanitizePresentation } from '@ordo/importers/sanitize.ts';
+import { clampBox, sanitizePresentation } from '@ordo/importers/sanitize.ts';
 import {
   addNote,
   type ArtInfo,
@@ -92,6 +103,7 @@ import {
 import type { PictureBake } from '@ordo/pptx-scene/bake.ts';
 import { digestOf, SLIDE_BUDGET_NOTE, SLIDE_BYTES_NOTE } from '@ordo/pptx-scene/emit.ts';
 import { relsPartOf } from '@ordo/pptx-scene/opc.ts';
+import { GEOM_PREFIX } from '@ordo/pptx-scene/emit.ts';
 import type { Job } from '@ordo/protocol';
 import { errorMessage } from '../errors.ts';
 import type { JobCtx, JobHandler } from '../jobs.ts';
@@ -102,6 +114,7 @@ import { type ClipFile, ClipImport, spillClips } from './clips.ts';
 import { type DeckXml, readDeckXml, spillDeckParts } from './deckParts.ts';
 import { importDigest } from './digest.ts';
 import { type NamedGeomFile, nameGeoms, storeGeomFiles } from './geoms.ts';
+import { planLadder, withoutFiles } from './ladder.ts';
 import { type BakeItem, bakeMapKey, storeBakes } from './bakes.ts';
 import { displayNeeds, PictureBudget, type PictureItem, storePictures } from './pictures.ts';
 import { ImportLog, importResult, logSafe, missingFonts } from './report.ts';
@@ -129,7 +142,7 @@ import {
  */
 export type NativeJobEnv = {
   pool?: Pick<CpuPool, 'run'>;
-  limits?: { batchSlides?: number; importPoolMs?: number; geomFileBytes?: number; batchGeomBytes?: number };
+  limits?: Partial<Limits>;
   /**
    * 'Re-import from PowerPoint' (`buildNative`, `reimport.ts`): the deck slides (`SlideRef.index`) to build,
    * decided once the scan has listed the deck; undefined: every slide. Batches without one are not
@@ -172,7 +185,10 @@ export type NativeBuild = {
   /** The clips the built slides play (their media jobs are queued with the save) and every clip stored. */
   clipIds: Set<string>;
   clipsCreated: string[];
+  /** Slides made compact pictures for a budget: none since M9's ladder (kept for the result's shape). */
   compact: number;
+  /** Slides the budget ladder simplified (formatting or decorations left out, or stored minimal). */
+  simplified: number;
   missingFonts: string[];
 };
 
@@ -232,19 +248,44 @@ type Converted = {
   s: EmittedSlide;
   media: Map<string, string>;
   extra?: SceneSlideExtra;
-  /** The batch's geometry bound left it without its files (`SceneTaskOutput.geomOver`): compact. */
-  overGeoms?: boolean;
+  /**
+   * Objects the batch's bound on outline files left out (`SceneTaskOutput.geomOver`: the slide's new files did
+   * not fit), with what they drew.
+   */
+  geomLeft?: { dropped: number; unmasked: number; missing: MissingKind[] };
+  /** Only its text, from the rescue (`SceneTaskInput.rescue`): its conversion failed. */
+  rescued?: boolean;
 };
 
-type Limits = { batchSlides: number; importPoolMs: number; geomFileBytes: number; batchGeomBytes: number };
+/**
+ * A slide of a failed batch converted again on its own gets this long before its worker is stopped (the
+ * pool's own timeout is 2 minutes for a batch of up to 150 slides).
+ */
+export const RETRY_SLIDE_MS = 30_000;
+/** The text rescue: per slide, and for the whole import (lo-dependencies §4.5). */
+export const RESCUE_SLIDE_MS = 2_000;
+export const RESCUE_TOTAL_MS = 2 * 60_000;
 
-/** The job's limits: `PPTX_LIMITS`, or the smaller ones the env gives (tests). */
+type Limits = {
+  batchSlides: number;
+  importPoolMs: number;
+  geomFileBytes: number;
+  batchGeomBytes: number;
+  retrySlideMs: number;
+  rescueSlideMs: number;
+  rescueTotalMs: number;
+};
+
+/** The job's limits: `PPTX_LIMITS` and the rescue's, or the smaller ones the env gives (tests). */
 function jobLimits(env: NativeJobEnv): Limits {
   return {
     batchSlides: env.limits?.batchSlides ?? PPTX_LIMITS.batchSlides,
     importPoolMs: env.limits?.importPoolMs ?? PPTX_LIMITS.importPoolMs,
     geomFileBytes: env.limits?.geomFileBytes ?? PPTX_LIMITS.geomFileBytes,
     batchGeomBytes: env.limits?.batchGeomBytes ?? PPTX_LIMITS.batchGeomBytes,
+    retrySlideMs: env.limits?.retrySlideMs ?? RETRY_SLIDE_MS,
+    rescueSlideMs: env.limits?.rescueSlideMs ?? RESCUE_SLIDE_MS,
+    rescueTotalMs: env.limits?.rescueTotalMs ?? RESCUE_TOTAL_MS,
   };
 }
 
@@ -295,15 +336,13 @@ type Draft = {
   art?: ArtInfo;
   /** Text baked into the art or the page picture (`pptx.artText`). */
   artText?: string;
-  /** Made picture class by the size budgets (§3.4). */
-  compact?: boolean;
   /**
-   * Classed picture by the converter's slide budget (`EmittedSlide.overBudget`): step 3 counts and logs it as
-   * a slide over 64 KB, as it does a slide whose JSON it measures over 64 KB.
+   * M9 `ladder`: what the budgets or a failure left out of the slide (`Slide.pptx.missing` entries: decoration,
+   * chart, slide), with LibreOffice or without (nothing draws it: LibreOffice draws no budget's art).
    */
-  overBudget?: boolean;
-  /** Its new geometry files would pass the import's budget (`PPTX_LIMITS.geomFileBytes`): compact. */
-  overGeoms?: boolean;
+  dropped?: string[];
+  /** The budget ladder simplified it (`simplified` in the result). */
+  simplified?: boolean;
   /**
    * Metafile pictures version 1 leaves out (`EmittedSlide.metafiles`, item D): LibreOffice converts each part
    * and the follow-up puts the object back just under `before`.
@@ -319,6 +358,45 @@ type Draft = {
   /** M9, with LibreOffice: the kinds its art holds (`artKinds`), for `PptxLoSlide.kinds`. */
   artKinds?: MissingKind[];
 };
+
+/** A slide's own parts (its XML and relationships part), each in a buffer of its own. */
+type SlideParts = Map<string, Uint8Array>;
+
+/** What every `pptx-scene` batch call of one import shares (`NativeImport.batch`). */
+type BatchCall = {
+  shared: Map<string, Uint8Array>;
+  listed: readonly SlideRef[];
+  base: Omit<SceneTaskInput, 'parts' | 'range'>;
+  out: Map<number, Converted>;
+};
+
+/**
+ * The own parts of the slides [from, to) taken out of `parts`, by the slide's place in the deck. A part that
+ * is a view into a larger inflated buffer gets a buffer of its own, so the larger one is not kept alive.
+ */
+function takeParts(
+  parts: Map<string, Uint8Array>,
+  listed: readonly SlideRef[],
+  from: number,
+  to: number,
+): Map<number, SlideParts> {
+  const out = new Map<number, SlideParts>();
+  for (let i = from; i < to; i++) {
+    const part = listed[i]!.part;
+    const own: SlideParts = new Map();
+    for (const k of [part, relsPartOf(part)]) {
+      const v = parts.get(k);
+      if (!v) continue;
+      parts.delete(k);
+      own.set(
+        k,
+        !v.byteLength || (v.byteOffset === 0 && v.byteLength === v.buffer.byteLength) ? v : new Uint8Array(v),
+      );
+    }
+    out.set(i, own);
+  }
+  return out;
+}
 
 class Cancelled extends Error {
   constructor() {
@@ -415,10 +493,19 @@ class NativeImport {
     if (this.ctx.signal.aborted) throw new Cancelled();
   }
 
-  private async scene(input: SceneTaskInput, transfer: ArrayBuffer[] = []): Promise<SceneTaskOutput> {
+  /** A `pptx-scene` pool call; `timeoutMs` stops its worker sooner than the pool's own timeout. */
+  private async scene(
+    input: SceneTaskInput,
+    transfer: ArrayBuffer[] = [],
+    timeoutMs?: number,
+  ): Promise<SceneTaskOutput> {
     const t0 = performance.now();
+    const signal =
+      timeoutMs === undefined
+        ? this.ctx.signal
+        : AbortSignal.any([this.ctx.signal, AbortSignal.timeout(Math.max(1, timeoutMs))]);
     try {
-      const out = await this.pool.run('pptx-scene', input, { signal: this.ctx.signal, transfer });
+      const out = await this.pool.run('pptx-scene', input, { signal, transfer });
       this.heapMb = Math.max(this.heapMb, out.heapMb);
       return out;
     } finally {
@@ -532,13 +619,13 @@ class NativeImport {
     const texts = new Map([...converted].map(([index, c]) => [index, bodyTexts(c.s)]));
     const textBoxes = new Map([...converted].map(([index, c]) => [index, bodyBoxes(c.s)]));
 
-    // 3. Drafts, classes and the size budgets.
+    // 3. Drafts, classes and the size budgets (M9: the budget ladder, never a picture).
     const drafts = this.drafts(want ? listed.filter((r) => want.has(r.index)) : listed, converted, scan);
-    let compact = this.budget(drafts);
+    const simplified = this.budget(drafts);
 
-    // 3b. Geometry files the kept slides name (M6 round 2, `geoms.ts`); a slide whose file could not be
-    // stored is a compact picture (it would draw nothing where its outline is).
-    compact += await this.storeGeoms(drafts);
+    // 3b. Geometry files the kept slides name (M6 round 2, `geoms.ts`); the objects that name one that could
+    // not be stored are left out (they would draw nothing where their outline is).
+    await this.storeGeoms(drafts);
     this.checkCancelled();
 
     // 3c. Clips: stored (their media jobs queued with version 1), placeholders replaced.
@@ -551,12 +638,13 @@ class NativeImport {
 
     // 5. Version 1, assembled (`saveVersion1` saves it).
     const built = this.assemble(drafts, stored, first.result.sections, first.result.slideRect, scan);
-    return { ...built, listed: [...listed], texts, textBoxes, compact };
+    return { ...built, listed: [...listed], texts, textBoxes, compact: 0, simplified };
   }
 
   /**
    * When the client pre-parsed the PowerPoint scene via `importPptxClient`, assemble Version 1 and spill
-   * referenced pictures/clips without running `pptx-scene` on the Hub's CPU pool. Only a scene of this
+   * referenced pictures/clips without running `pptx-scene` on the Hub's CPU pool, but for the text rescue of a
+   * slide the client could not read (`rescueClientSlides`). Only a scene of this
    * converter (`CONVERTER_VERSION`, M9's fields: `CLIENT_M9_WRITES`) parsed for the LibreOffice this hub has
    * or lacks (`this.lo`, set first by `steps`) is used; undefined otherwise, and the hub parses the deck.
    */
@@ -629,26 +717,47 @@ class NativeImport {
       this.geomFiles.set(g.hash, { hash: g.hash, bytes });
       this.geomBytes += bytes.length;
     }
+    // A slide the client's bound on outline files left without its new files (`geomOver`: it keeps their
+    // placeholders, `PptxClientScene.geomOver`) loses the objects that name them, as a batch's does (`batch`,
+    // M9 `ladder`), and says so (`drafts`, `leftOut`).
     const geomOver = new Set(raw.geomOver ?? []);
     const converted = new Map<number, Converted>();
     for (const s of raw.slides ?? []) {
       if (want && !want.has(s.index)) continue;
-      converted.set(s.index, {
-        s,
-        media,
-        extra: extras.get(s.index),
-        ...(geomOver.has(s.index) ? { overGeoms: true } : {}),
-      });
+      let geomLeft: Converted['geomLeft'];
+      if (geomOver.has(s.index)) {
+        const left = withoutFiles(s.slide, (ref) => !ref.startsWith(GEOM_PREFIX));
+        s.slide = left.slide;
+        geomLeft = { dropped: left.dropped, unmasked: left.unmasked, missing: left.missing };
+      }
+      converted.set(s.index, { s, media, extra: extras.get(s.index), ...(geomLeft ? { geomLeft } : {}) });
+    }
+    // A slide the client's converter could not read (`unreadable`), or one the scene lacks, keeps its text
+    // if the rescue can read it, as in the hub's own parse (`convert`): never a picture for a failure.
+    const failed: number[] = [];
+    listed.forEach((r, i) => {
+      if (want && !want.has(r.index)) return;
+      const c = converted.get(r.index);
+      const reasons = c?.s.classification?.reasons;
+      if (c && !(Array.isArray(reasons) && reasons.includes('unreadable'))) return;
+      converted.delete(r.index);
+      failed.push(i);
+    });
+    if (failed.length) {
+      const mediaKinds: [string, 'video' | 'audio'][] = [];
+      for (const [part, f] of clipFiles) if (f.kind) mediaKinds.push([part, f.kind]);
+      await this.rescueClientSlides(deck, scratch, listed, failed, pictureSizes, mediaKinds, converted);
     }
     ctx.progress(0.6);
 
     const texts = new Map([...converted].map(([index, c]) => [index, bodyTexts(c.s)]));
     const textBoxes = new Map([...converted].map(([index, c]) => [index, bodyBoxes(c.s)]));
 
+    // The size budgets as for the hub's own parse (M9: the budget ladder, never a picture).
     const drafts = this.drafts(want ? listed.filter((r) => want.has(r.index)) : listed, converted, scan);
-    let compact = this.budget(drafts);
+    const simplified = this.budget(drafts);
 
-    compact += await this.storeGeoms(drafts);
+    await this.storeGeoms(drafts);
     this.checkCancelled();
 
     await this.clips(drafts, clipFiles);
@@ -658,7 +767,7 @@ class NativeImport {
     ctx.progress(0.95);
 
     const built = this.assemble(drafts, stored, raw.sections ?? [], raw.slideRect, scan);
-    return { ...built, listed: [...listed], texts, textBoxes, compact };
+    return { ...built, listed: [...listed], texts, textBoxes, compact: 0, simplified };
   }
 
   /**
@@ -783,7 +892,11 @@ class NativeImport {
       this.ctx.log(`${clips.used.size} clip(s) stored; their media jobs follow the import`);
   }
 
-  /** Step 2c: every slide through the pool in batches; a failed batch's slides are left out (picture class). */
+  /**
+   * Step 2c: every slide through the pool in batches. A batch that fails is converted again slide by slide;
+   * a slide that still fails, one the converter could not read, and the slides past the pool-time budget get
+   * the text rescue (`rescue`). A slide nothing could read is left out of the map (`drafts`: empty, hybrid).
+   */
   private async convert(
     parts: Map<string, Uint8Array>,
     listed: readonly SlideRef[],
@@ -792,6 +905,67 @@ class NativeImport {
     want?: ReadonlySet<number>,
   ): Promise<Map<number, Converted>> {
     const out = new Map<number, Converted>();
+    const n = listed.length;
+    const step = this.limits.batchSlides;
+    const call = this.batchCall(parts, listed, pictureSizes, mediaKinds, out);
+    /** Slides for the rescue, each with its own parts (kept until then). */
+    const failed = new Map<number, SlideParts>();
+    for (let from = 0; from < n; from += step) {
+      this.checkCancelled();
+      const to = Math.min(n, from + step);
+      const wanted: number[] = [];
+      for (let i = from; i < to; i++) if (!want || want.has(listed[i]!.index)) wanted.push(i);
+      if (!wanted.length) continue;
+      const mine = takeParts(parts, listed, from, to);
+      if (this.poolMs > this.limits.importPoolMs) {
+        this.warn(
+          'batch',
+          `slides ${from + 1}-${to} were not converted: the import used its ${Math.round(this.limits.importPoolMs / 60_000)} minutes of conversion time, so only their text is kept`,
+        );
+        for (const i of wanted) failed.set(i, mine.get(i)!);
+        continue;
+      }
+      try {
+        await this.batch(call, mine, from, to);
+      } catch (e) {
+        this.checkCancelled();
+        const why = logSafe(errorMessage(e));
+        if (to - from === 1) {
+          this.warn('batch', `slide ${from + 1} could not be converted (${why}): only its text is kept`);
+          failed.set(from, mine.get(from)!);
+        } else {
+          this.warn(
+            'batch',
+            `slides ${from + 1}-${to} could not be converted together (${why}): each is converted on its own`,
+          );
+          await this.oneByOne(call, mine, wanted, failed);
+        }
+      }
+      // A slide the converter could not read (`unreadable`): its text, if the rescue can read it.
+      for (const i of wanted) {
+        const c = out.get(i);
+        if (c?.s.classification.reasons.includes('unreadable')) {
+          out.delete(i);
+          failed.set(i, mine.get(i)!);
+        }
+      }
+      this.ctx.progress(0.1 + (0.5 * to) / n);
+    }
+    if (failed.size) await this.rescue(call, failed);
+    return out;
+  }
+
+  /**
+   * What every `pptx-scene` call of one import shares (`BatchCall`): the deck's parts but the slides' own and
+   * their notes, and the options; the converted slides go to `out`.
+   */
+  private batchCall(
+    parts: Map<string, Uint8Array>,
+    listed: readonly SlideRef[],
+    pictureSizes: [string, PictureHeader][],
+    mediaKinds: [string, 'video' | 'audio'][],
+    out: Map<number, Converted>,
+  ): BatchCall {
     const own = new Set<string>();
     for (const r of listed) {
       own.add(r.part);
@@ -799,101 +973,208 @@ class NativeImport {
     }
     const shared = new Map<string, Uint8Array>();
     for (const [k, v] of parts) if (!own.has(k) && !NOTES_PART.test(k)) shared.set(k, v);
-    const n = listed.length;
-    const step = this.limits.batchSlides;
     // Table rows grow to their text, measured with the library's faces (read by the worker as needed).
     const fonts = sceneFontFiles(this.deps.lib.listFonts(), (p) => this.deps.store.abs(p));
-    for (let from = 0; from < n; from += step) {
+    const base = {
+      pictureSizes,
+      options: this.options,
+      mediaKinds,
+      fonts,
+      geomBytes: this.limits.batchGeomBytes,
+      ...(this.lo ? {} : { libreoffice: false }),
+    };
+    return { shared, listed, base, out };
+  }
+
+  /**
+   * The text rescue (`rescue`) of the slides `failed` (places in `listed`) of a client scene: those its
+   * converter could not read (`unreadable`) or did not send. Their own parts are read from the deck here, as
+   * the hub's parse has them (`convert`); what the rescue reads joins `out`, and a slide still unread stays
+   * out of it (an empty slide that says so, `drafts`).
+   */
+  private async rescueClientSlides(
+    deck: string,
+    scratch: string,
+    listed: readonly SlideRef[],
+    failed: readonly number[],
+    pictureSizes: [string, PictureHeader][],
+    mediaKinds: [string, 'video' | 'audio'][],
+    out: Map<number, Converted>,
+  ): Promise<void> {
+    let xml: DeckXml;
+    try {
+      xml = await readDeckXml(deck, scratch, this.ctx.signal);
+    } catch (e) {
       this.checkCancelled();
-      const to = Math.min(n, from + step);
-      if (want && !listed.slice(from, to).some((r) => want.has(r.index))) continue;
+      this.warn(
+        'batch',
+        `${failed.length} slide(s) the client could not convert could not be read here (${logSafe(errorMessage(e))}): they are empty, and say so`,
+      );
+      return;
+    }
+    const call = this.batchCall(xml.parts, listed, pictureSizes, mediaKinds, out);
+    const mine = new Map<number, SlideParts>();
+    for (const i of failed) mine.set(i, takeParts(xml.parts, listed, i, i + 1).get(i)!);
+    xml.parts.clear();
+    await this.rescue(call, mine);
+  }
+
+  /** The slides `wanted` of a failed batch, each converted alone; those that fail again go to `failed`. */
+  private async oneByOne(
+    call: BatchCall,
+    mine: Map<number, SlideParts>,
+    wanted: readonly number[],
+    failed: Map<number, SlideParts>,
+  ): Promise<void> {
+    for (const i of wanted) {
+      this.checkCancelled();
       if (this.poolMs > this.limits.importPoolMs) {
-        this.warn(
-          'batch',
-          `slides ${from + 1}-${to} were not converted: the import used its ${Math.round(this.limits.importPoolMs / 60_000)} minutes of conversion time`,
-        );
+        failed.set(i, mine.get(i)!);
         continue;
       }
-      const batch = new Map(shared);
-      for (const r of listed) batch.set(r.part, r.hidden ? STUB_HIDDEN : STUB_SHOWN);
-      const mine: Uint8Array[] = [];
-      for (let i = from; i < to; i++) {
-        const part = listed[i]!.part;
-        for (const k of [part, relsPartOf(part)]) {
-          const v = parts.get(k);
-          if (!v) continue;
-          parts.delete(k);
-          // Placeholders share one empty buffer: never transferred (it would be detached for every batch).
-          if (!v.byteLength) {
-            batch.set(k, v);
-            continue;
-          }
-          // Inflated parts are usually views into a larger buffer, which cannot be transferred: the part gets
-          // its own (the copy structured cloning would make anyway), and the worker takes it over.
-          const owned = v.byteOffset === 0 && v.byteLength === v.buffer.byteLength ? v : new Uint8Array(v);
-          batch.set(k, owned);
-          mine.push(owned);
-        }
-      }
       try {
-        const r = await this.scene(
-          {
-            parts: batch,
-            pictureSizes,
-            range: { from, to },
-            options: this.options,
-            mediaKinds,
-            fonts,
-            geomBytes: this.limits.batchGeomBytes,
-            ...(this.lo ? {} : { libreoffice: false }),
-          },
-          transferables(mine),
-        );
-        // Every batch must list the deck as the scan did, or its indexes would name other slides.
-        const same =
-          r.result.listed.length === n &&
-          r.result.listed.every((x, i) => x.part === listed[i]!.part && x.shown === listed[i]!.shown);
-        if (!same) throw new Error('the batch read the slide list differently');
-        // A baked picture stands in the part map under its own key (M6, `bakes.ts`).
-        const media = new Map(
-          r.result.media.map((m) => [m.id, m.bake ? this.bakeKeyOf(m.part, m.bake) : m.part]),
-        );
-        const extras = new Map((r.extras ?? []).map((e) => [e.index, e]));
-        // Geometry files are named by their content in the worker (`sceneTask.ts` `nameGeomFiles`): the
-        // batch's placeholders become names. The import's budget applies as batches arrive: a file past it
-        // is dropped at once, and the slides that name it are compact pictures (step 3), as are those the
-        // batch's own bound left without their files (`geomOver`).
-        const names = new Map<string, string>();
-        for (const g of r.geomFiles ?? []) {
-          names.set(g.id, g.hash);
-          if (this.geomFiles.has(g.hash) || this.geomDropped.has(g.hash)) continue;
-          if (this.geomBytes + g.bytes.length > this.limits.geomFileBytes) {
-            this.geomDropped.add(g.hash);
-            continue;
-          }
-          this.geomFiles.set(g.hash, { hash: g.hash, bytes: g.bytes });
-          this.geomBytes += g.bytes.length;
-        }
-        const geomOver = new Set(r.geomOver ?? []);
-        for (const s of r.result.slides) {
-          s.slide = nameGeoms(s.slide, names);
-          out.set(s.index, {
-            s,
-            media,
-            extra: extras.get(s.index),
-            ...(geomOver.has(s.index) ? { overGeoms: true } : {}),
-          });
-        }
+        await this.batch(call, new Map([[i, mine.get(i)!]]), i, i + 1, false, this.limits.retrySlideMs);
       } catch (e) {
         this.checkCancelled();
         this.warn(
           'batch',
-          `slides ${from + 1}-${to} could not be converted (${logSafe(errorMessage(e))}): ${this.lo ? 'they wait for LibreOffice pictures' : 'only their text is kept (this hub has no LibreOffice to draw them)'}`,
+          `slide ${i + 1} could not be converted (${logSafe(errorMessage(e))}): only its text is kept`,
         );
+        failed.set(i, mine.get(i)!);
       }
-      this.ctx.progress(0.1 + (0.5 * to) / n);
     }
-    return out;
+  }
+
+  /**
+   * The text rescue (M9 `ladder`, `@ordo/pptx-scene` `rescueDeck`): each run of consecutive failed slides in one
+   * pool call of `RESCUE_SLIDE_MS` a slide, a run that fails again slide by slide, all within
+   * `RESCUE_TOTAL_MS`. A slide still unread stays out of `out` (an empty slide, `drafts`).
+   */
+  private async rescue(call: BatchCall, failed: Map<number, SlideParts>): Promise<void> {
+    const t0 = performance.now();
+    const left = () => this.limits.rescueTotalMs - (performance.now() - t0);
+    const indexes = [...failed.keys()].sort((a, b) => a - b);
+    const runs: number[][] = [];
+    for (const i of indexes) {
+      const last = runs[runs.length - 1];
+      if (last && last[last.length - 1] === i - 1 && last.length < this.limits.batchSlides) last.push(i);
+      else runs.push([i]);
+    }
+    let unread = 0;
+    for (const run of runs) {
+      this.checkCancelled();
+      const ms = Math.min(left(), this.limits.rescueSlideMs * run.length);
+      if (ms <= 0) {
+        unread += run.length;
+        continue;
+      }
+      const mine = new Map(run.map((i) => [i, failed.get(i)!]));
+      try {
+        await this.batch(call, mine, run[0]!, run[run.length - 1]! + 1, true, ms);
+        continue;
+      } catch {
+        this.checkCancelled();
+        if (run.length === 1) {
+          unread++;
+          continue;
+        }
+      }
+      for (const i of run) {
+        this.checkCancelled();
+        const one = Math.min(left(), this.limits.rescueSlideMs);
+        if (one <= 0) {
+          unread++;
+          continue;
+        }
+        try {
+          await this.batch(call, new Map([[i, failed.get(i)!]]), i, i + 1, true, one);
+        } catch {
+          this.checkCancelled();
+          unread++;
+        }
+      }
+    }
+    const kept = indexes.length - unread;
+    if (kept) this.ctx.log(`${kept} slide(s) that could not be converted keep their text`);
+    if (unread) this.warn('batch', `${unread} slide(s) could not be read at all: they are empty, and say so`);
+  }
+
+  /**
+   * One `pptx-scene` call for the slides [from, to) (`rescue`: their text alone), its slides added to
+   * `call.out`. The slides' own parts in `mine` are sent as copies, so a failed call can be tried again.
+   * Throws when the call fails or reads the deck's slide list differently.
+   */
+  private async batch(
+    call: BatchCall,
+    mine: Map<number, SlideParts>,
+    from: number,
+    to: number,
+    rescue = false,
+    timeoutMs?: number,
+  ): Promise<void> {
+    const { listed } = call;
+    const n = listed.length;
+    const parts = new Map(call.shared);
+    for (const r of listed) parts.set(r.part, r.hidden ? STUB_HIDDEN : STUB_SHOWN);
+    const sent: Uint8Array[] = [];
+    for (const own of mine.values())
+      for (const [k, v] of own) {
+        // Placeholders share one empty buffer: never transferred (it would be detached for every batch).
+        if (!v.byteLength) {
+          parts.set(k, v);
+          continue;
+        }
+        const copy = new Uint8Array(v);
+        parts.set(k, copy);
+        sent.push(copy);
+      }
+    const r = await this.scene(
+      { ...call.base, parts, range: { from, to }, ...(rescue ? { rescue: true } : {}) },
+      transferables(sent),
+      timeoutMs,
+    );
+    // Every batch must list the deck as the scan did, or its indexes would name other slides.
+    const same =
+      r.result.listed.length === n &&
+      r.result.listed.every((x, i) => x.part === listed[i]!.part && x.shown === listed[i]!.shown);
+    if (!same) throw new Error('the batch read the slide list differently');
+    // A baked picture stands in the part map under its own key (M6, `bakes.ts`).
+    const media = new Map(
+      r.result.media.map((m) => [m.id, m.bake ? this.bakeKeyOf(m.part, m.bake) : m.part]),
+    );
+    const extras = new Map((r.extras ?? []).map((e) => [e.index, e]));
+    // Geometry files are named by their content in the worker (`sceneTask.ts` `nameGeomFiles`): the batch's
+    // placeholders become names. The import's budget applies as batches arrive: a file past it is dropped at
+    // once (step 3 leaves out what names it), and a slide the batch's own bound left without its new files
+    // (`geomOver`) loses the objects that name them here.
+    const names = new Map<string, string>();
+    for (const g of r.geomFiles ?? []) {
+      names.set(g.id, g.hash);
+      if (this.geomFiles.has(g.hash) || this.geomDropped.has(g.hash)) continue;
+      if (this.geomBytes + g.bytes.length > this.limits.geomFileBytes) {
+        this.geomDropped.add(g.hash);
+        continue;
+      }
+      this.geomFiles.set(g.hash, { hash: g.hash, bytes: g.bytes });
+      this.geomBytes += g.bytes.length;
+    }
+    const geomOver = new Set(r.geomOver ?? []);
+    for (const s of r.result.slides) {
+      let geomLeft: Converted['geomLeft'];
+      if (geomOver.has(s.index)) {
+        const left = withoutFiles(s.slide, (ref) => !ref.startsWith(GEOM_PREFIX) || names.has(ref));
+        s.slide = left.slide;
+        geomLeft = { dropped: left.dropped, unmasked: left.unmasked, missing: left.missing };
+      }
+      s.slide = nameGeoms(s.slide, names);
+      call.out.set(s.index, {
+        s,
+        media,
+        extra: extras.get(s.index),
+        ...(geomLeft ? { geomLeft } : {}),
+        ...(rescue ? { rescued: true } : {}),
+      });
+    }
   }
 
   /** The key a bake stands under in the part maps (`bakes.ts`), recorded with its part and recipe. */
@@ -911,9 +1192,8 @@ class NativeImport {
     const drafts = listed.map((ref) => {
       const c = converted.get(ref.index);
       const label = `slide ${ref.index + 1}`;
-      // The converter's budget notes are about what a picture slide does not keep: step 3 logs the budget.
+      // The converter's budget notes: the job notes what its own budget ladder did (step 3).
       const own = c ? c.s.notes.filter((n) => n !== SLIDE_BUDGET_NOTE && n !== SLIDE_BYTES_NOTE) : [];
-      const overBudget = c?.s.overBudget === true;
       const d: Draft = c
         ? {
             ref,
@@ -921,24 +1201,26 @@ class NativeImport {
             media: c.media,
             cls: c.s.classification.class,
             notes: own,
-            ...(c.s.art ? { art: c.s.art, artText: c.s.art.text } : {}),
-            ...(overBudget ? { overBudget } : {}),
-            ...(c.overGeoms ? { overGeoms: true } : {}),
-            ...(c.s.clips?.length ? { clips: c.s.clips } : {}),
+            ...(c.s.art && !c.rescued ? { art: c.s.art, artText: c.s.art.text } : {}),
+            ...(c.s.clips?.length && !c.rescued ? { clips: c.s.clips } : {}),
           }
         : {
+            // Nothing of it could be read, not even its text (M9: never a picture).
             ref,
             slide: { id: newId(), objects: [] },
             media: new Map(),
-            cls: 'picture',
-            notes: [
-              this.lo
-                ? 'not converted: a LibreOffice picture is shown instead'
-                : 'not converted: this hub has no LibreOffice to draw it',
-            ],
+            cls: 'hybrid',
+            notes: ['not converted: nothing of it could be read'],
+            dropped: [missingEntry('slide')],
           };
+      if (c?.rescued) {
+        d.cls = 'hybrid';
+        d.dropped = addMissing(d.dropped, 'slide');
+      }
+      if (d.cls !== 'picture' && (c?.geomLeft?.dropped || c?.geomLeft?.unmasked))
+        this.leftOut(d, c.geomLeft, 'batch');
       for (const n of own) this.log.add('info', `${label}: ${n}`);
-      if (c?.s.classification.class === 'picture' && !overBudget)
+      if (c?.s.classification.class === 'picture')
         this.log.add('info', `${label}: picture class (${c.s.classification.reasons.join(', ')})`);
       if (ref.hidden) d.slide.hidden = true;
       let text = notes.get(ref.index);
@@ -959,7 +1241,7 @@ class NativeImport {
         this.log.add('info', `${label}: ${x.note}`);
       }
       // The metafiles the slide draws, set aside by the converter (item D): LibreOffice converts them.
-      const mf = c?.s.metafiles;
+      const mf = c?.rescued ? undefined : c?.s.metafiles;
       if (mf?.length && d.cls !== 'picture') {
         if (this.lo) {
           d.metafiles = mf.map((m) => ({ ...m, object: imported(m.object) }));
@@ -969,7 +1251,7 @@ class NativeImport {
           addNote(d.notes, `not drawn: ${mf.length} vector picture(s) (EMF, WMF)`);
         }
       }
-      if (c && d.cls !== 'picture') {
+      if (c && !c.rescued && d.cls !== 'picture') {
         if (this.lo) {
           if (d.art) d.artKinds = artKinds(c.s.classification.reasons);
         } else this.gaps(d, c.s);
@@ -1003,126 +1285,185 @@ class NativeImport {
     }
     if (d.missing?.length && d.cls === 'native') d.cls = 'hybrid';
     // An art that only improved on what version 1 draws (flat 3-D past the object budget): nothing is missing.
-    else if (!d.missing?.length && d.cls === 'hybrid') d.cls = 'native';
+    else if (!d.missing?.length && !d.dropped?.length && d.cls === 'hybrid') d.cls = 'native';
   }
 
-  /** The end of a note on a slide that became a picture: what shows it. */
-  private pictureNote(): string {
-    return this.lo
-      ? 'a LibreOffice picture'
-      : 'only its text is kept (this hub has no LibreOffice to draw it)';
+  /**
+   * Objects of `d` left out for its outline files (M9 `ladder.ts` `withoutFiles`): past the batch's or the
+   * import's budget of files, or files the store could not take. What they drew is missing (class hybrid).
+   */
+  private leftOut(
+    d: Draft,
+    left: { dropped: number; unmasked: number; missing: MissingKind[] },
+    why: 'batch' | 'import' | 'store',
+  ): void {
+    for (const k of left.missing) d.dropped = addMissing(d.dropped, k);
+    if (left.dropped && d.cls === 'native') d.cls = 'hybrid';
+    const parts = [
+      ...(left.dropped ? [`${left.dropped} shape(s) left out`] : []),
+      ...(left.unmasked ? [`${left.unmasked} picture(s) drawn without their outline`] : []),
+    ].join(', ');
+    const n = d.ref.index + 1;
+    if (why === 'store') {
+      addNote(d.notes, `its shape outlines could not be stored: ${parts}`);
+      return;
+    }
+    addNote(d.notes, `over the import budget of shape outlines: ${parts}`);
+    this.warn(
+      'budget',
+      why === 'batch'
+        ? `slide ${n}'s shape outlines pass what one conversion batch may return: ${parts}`
+        : `slide ${n}'s shape outlines pass the import's ${formatBytes(this.limits.geomFileBytes)} of outline files: ${parts}`,
+    );
   }
 
-  /** Step 3: the §3.4 budgets (`planImportSizes`, item F). Returns how many slides were made compact. */
+  /**
+   * Step 3: the §3.4 budgets, M9's budget ladder (`ladder.ts`): outline files within the import's budget,
+   * each slide within 64 KB (`fitSlideBudget`), the presentation within 4 MiB (its tail stored minimal). No
+   * slide becomes a picture. Returns how many slides it simplified (formatting or decorations left out).
+   */
   private budget(drafts: Draft[]): number {
-    // The import's geometry files (M6 round 2): a slide whose new files would pass their budget is compact.
-    const files = new Set<string>();
+    // Outline files, admitted one by one in slide order while the import's budget holds; what names one past
+    // it (or one dropped as its batch arrived) is left out.
+    const admitted = new Set<string>();
     let fileBytes = 0;
     for (const d of drafts) {
-      if (d.cls === 'picture' || d.overGeoms) continue;
+      if (d.cls === 'picture') continue;
       const refs = drawnGeomRefs(d.slide);
-      // A file dropped past the budget as its batch arrived: the slide that needs it is compact.
-      if (refs.some((n) => this.geomDropped.has(n))) {
-        d.overGeoms = true;
-        continue;
+      if (!refs.length) continue;
+      const keep = new Set<string>();
+      for (const name of refs) {
+        if (admitted.has(name)) {
+          keep.add(name);
+          continue;
+        }
+        if (this.geomDropped.has(name)) continue;
+        const f = this.geomFiles.get(name);
+        // Not this import's file (the store's already, `storeGeomFiles`): it costs nothing here.
+        if (!f) {
+          keep.add(name);
+          continue;
+        }
+        if (fileBytes + f.bytes.length > this.limits.geomFileBytes) continue;
+        admitted.add(name);
+        keep.add(name);
+        fileBytes += f.bytes.length;
       }
-      const fresh = refs.filter((n) => !files.has(n) && this.geomFiles.has(n));
-      const bytes = fresh.reduce((n, name) => n + this.geomFiles.get(name)!.bytes.length, 0);
-      if (fileBytes + bytes > this.limits.geomFileBytes) {
-        d.overGeoms = true;
-        continue;
-      }
-      for (const n of fresh) files.add(n);
-      fileBytes += bytes;
+      if (keep.size === refs.length) continue;
+      const left = withoutFiles(d.slide, (ref) => keep.has(ref));
+      d.slide = left.slide;
+      this.leftOut(d, left, 'import');
     }
-    const stored = drafts.map((d) => record(d, DIGEST_STANDIN, this.lo));
-    const sizes = stored.map((sl) => slideBytes(sl));
-    // Each slide's compact size with version 2's page picture and text boxes (`compactSlideBytes`).
-    const plan = planImportSizes(
-      sizes,
-      stored.map((sl) => compactSlideBytes(sl)),
-      // A re-import's kept slides take their part of the budget (`NativeJobEnv.reserve`).
+    // Each slide fitted, then the presentation's tail (a re-import's kept slides take their part, `reserve`).
+    const max = SIZE_BUDGETS.slideMax;
+    const { slides, plan } = planLadder(
+      drafts.map((d) => ({ slide: record(d, DIGEST_STANDIN, this.lo), fixed: d.cls === 'picture' })),
       IMPORT_RESERVE_BYTES + (Number.isFinite(this.reserve) && this.reserve > 0 ? this.reserve : 0),
     );
-    let compact = 0;
+    let simplified = 0;
     drafts.forEach((d, i) => {
-      // A slide the converter classed picture for its own 64 KB budget is this budget's 'slide' case; one
-      // already picture class for any other reason is not made compact.
-      const why = d.overBudget
-        ? 'slide'
-        : d.cls === 'picture'
-          ? null
-          : d.overGeoms
-            ? 'geoms'
-            : plan.reasons[i];
-      if (!why) return;
-      compact++;
-      const shown = this.lo ? 'shown as a LibreOffice picture' : this.pictureNote();
-      if (why === 'slide')
-        this.warn('budget', `slide ${i + 1} is over ${SIZE_BUDGETS.slideMax / 1024} KB: ${shown}`);
-      if (why === 'geoms')
-        this.warn(
-          'budget',
-          `slide ${i + 1}'s shape outlines pass the import's ${formatBytes(this.limits.geomFileBytes)} of outline files: ${shown}`,
+      const r = slides[i]!;
+      if (d.cls === 'picture' || r.level === 'full') return;
+      const { pptx: _, ...slide } = r.slide;
+      d.slide = slide;
+      const n = d.ref.index + 1;
+      if (r.level === 'grid')
+        this.log.add(
+          'info',
+          `slide ${n}: its outlines were redrawn on a 1/16 px grid to fit the slide budget`,
         );
-      d.compact = true;
-      addNote(
-        d.notes,
-        why === 'slide'
-          ? `over the slide size budget: ${this.pictureNote()}`
-          : why === 'geoms'
-            ? `over the import budget of shape outlines: ${this.pictureNote()}`
-            : this.lo
-              ? 'compact: the presentation reached its size budget'
-              : `compact: the presentation reached its size budget, ${this.pictureNote()}`,
+      // Re-gridded, or over the budget with nothing it may leave out (its text alone): kept whole.
+      if (r.level === 'grid' || (!r.tail && !r.dropped && !r.plain)) {
+        if (r.bytes > max)
+          this.warn(
+            'budget',
+            `slide ${n} is over ${max / 1024} KB with only its text and pictures (${formatBytes(r.bytes)}): it keeps them all`,
+          );
+        return;
+      }
+      d.simplified = true;
+      simplified++;
+      for (const k of r.missing) d.dropped = addMissing(d.dropped, k);
+      if (r.missing.length && d.cls === 'native') d.cls = 'hybrid';
+      if (r.tail) {
+        addNote(d.notes, 'the presentation reached its size budget: only its text and pictures are kept');
+        return;
+      }
+      const what = [
+        ...(r.plain ? [`the formatting of ${r.plain} text box(es)`] : []),
+        ...(r.dropped ? [`${r.dropped} decoration shape(s)`] : []),
+      ].join(' and ');
+      addNote(d.notes, `simplified to fit the slide budget: ${what} left out`);
+      this.warn(
+        'budget',
+        r.bytes > max
+          ? `slide ${n} is over ${max / 1024} KB: ${what} left out, and it is still ${formatBytes(r.bytes)} with only its text and pictures`
+          : `slide ${n} is over ${max / 1024} KB: ${what} left out to fit`,
       );
-      toPicture(d);
     });
     if (plan.tailFrom >= 0)
       this.warn(
         'budget',
-        `the presentation reached its size budget (${SIZE_BUDGETS.presentationMax / 1024 ** 2} MiB): slide ${plan.tailFrom + 1} and later are compact ${this.lo ? 'LibreOffice pictures' : 'slides that keep only their text (this hub has no LibreOffice to draw them)'}`,
+        `the presentation reached its size budget (${SIZE_BUDGETS.presentationMax / 1024 ** 2} MiB): slide ${plan.tailFrom + 1} and later keep only their text and pictures`,
       );
     if (!plan.fits) {
-      // Even compact the slides are over the budget (their text): the text kept for search is cut.
+      // Even minimal the slides are over the budget (their text alone): the tail's text, and what picture
+      // slides keep for search, is cut.
       let cut = 0;
-      for (const d of drafts) {
-        if (d.cls !== 'picture' || !d.artText || d.artText.length <= COMPACT_TEXT_CHARS) continue;
-        d.artText = cutText(d.artText, COMPACT_TEXT_CHARS);
-        cut++;
+      for (const [i, d] of drafts.entries()) {
+        if (d.cls === 'picture') {
+          if (!d.artText || d.artText.length <= COMPACT_TEXT_CHARS) continue;
+          d.artText = cutText(d.artText, COMPACT_TEXT_CHARS);
+          cut++;
+          continue;
+        }
+        if (!slides[i]!.tail) continue;
+        let changed = false;
+        d.slide = {
+          ...d.slide,
+          objects: d.slide.objects.map((o) => {
+            if (o.type !== 'text' || o.text.length <= COMPACT_TEXT_CHARS) return o;
+            changed = true;
+            return { ...o, text: cutText(o.text, COMPACT_TEXT_CHARS) } satisfies TextObject;
+          }),
+        };
+        if (changed) {
+          cut++;
+          addNote(
+            d.notes,
+            `its text was cut to ${COMPACT_TEXT_CHARS} characters a box: the deck is too large`,
+          );
+        }
       }
       this.warn(
         'budget',
-        `the deck is over ${SIZE_BUDGETS.presentationMax / 1024 ** 2} MiB even with every slide compact: the text ${cut} picture slide(s) keep for search was cut to ${COMPACT_TEXT_CHARS} characters`,
+        `the deck is over ${SIZE_BUDGETS.presentationMax / 1024 ** 2} MiB even with every slide minimal: the text of ${cut} slide(s) was cut to ${COMPACT_TEXT_CHARS} characters a box`,
       );
     }
-    return compact;
+    return simplified;
   }
 
   /**
-   * Step 3b: the geometry files the kept slides name, stored once each (`storeGeomFiles`). A slide naming a
-   * file that could not be stored is made a compact picture (a shape whose file never arrives draws nothing,
-   * `geom/stored.ts`); returns how many.
+   * Step 3b: the geometry files the kept slides name, stored once each (`storeGeomFiles`). The objects that
+   * name a file that could not be stored are left out (a shape whose file never arrives draws nothing,
+   * `geom/stored.ts`); the slide keeps the rest.
    */
-  private async storeGeoms(drafts: Draft[]): Promise<number> {
+  private async storeGeoms(drafts: Draft[]): Promise<void> {
     const names: string[] = [];
     for (const d of drafts) if (d.cls !== 'picture') names.push(...drawnGeomRefs(d.slide));
-    if (!names.length) return 0;
+    if (!names.length) return;
     const r = await storeGeomFiles(this.deps.store, this.deps.lib, this.geomFiles, names, (m) =>
       this.warn('geometry', m),
     );
     if (r.written) this.ctx.log(`${r.written} shape outline file(s) stored`);
-    if (!r.failed.length) return 0;
+    if (!r.failed.length) return;
     const failed = new Set(r.failed);
-    let n = 0;
     for (const d of drafts) {
       if (d.cls === 'picture' || !drawnGeomRefs(d.slide).some((x) => failed.has(x))) continue;
-      d.compact = true;
-      addNote(d.notes, `its shape outlines could not be stored: ${this.pictureNote()}`);
-      toPicture(d);
-      n++;
+      const left = withoutFiles(d.slide, (ref) => !failed.has(ref));
+      d.slide = left.slide;
+      this.leftOut(d, left, 'store');
     }
-    return n;
   }
 
   /**
@@ -1260,7 +1601,7 @@ class NativeImport {
     sectionInfo: SectionInfo[],
     slideRect: { x: number; y: number; w: number; h: number },
     scan: SceneScan,
-  ): Omit<NativeBuild, 'listed' | 'texts' | 'textBoxes' | 'compact'> {
+  ): Omit<NativeBuild, 'listed' | 'texts' | 'textBoxes' | 'compact' | 'simplified'> {
     const { deps, ctx } = this;
     const hash = ctx.payload.hash;
     // Remap each slide with its own batch's placeholders.
@@ -1315,7 +1656,8 @@ class NativeImport {
     p.sections = sectionsOf(drafts, sectionInfo);
     p.arrangements = [{ id: newId(), name: 'Default', sectionIds: p.sections.map((s) => s.id) }];
     sanitizePresentation(p);
-    // A slide the schema refuses becomes picture class rather than failing the deck.
+    // A slide the schema refuses is stored minimal (its text, pictures and background), else as its text
+    // alone, rather than failing the deck (M9: never a picture).
     const byId = new Map(drafts.map((d) => [d.slide.id, d]));
     for (const sec of p.sections)
       sec.slides = sec.slides.map((sl) => {
@@ -1324,14 +1666,24 @@ class NativeImport {
         const d = byId.get(sl.id);
         this.warn(
           'slide',
-          `slide ${(sl.pptx?.index ?? 0) + 1} could not be stored natively: ${this.lo ? 'a LibreOffice picture is shown instead' : this.pictureNote()}`,
+          `slide ${(sl.pptx?.index ?? 0) + 1} could not be stored as converted: only its text and pictures are kept`,
         );
         if (!d) return Slide.parse({ id: sl.id, objects: [] });
-        toPicture(d);
-        addNote(d.notes, `not storable natively: ${this.pictureNote()}`);
+        const kept = d.slide.objects.length;
+        d.slide = minimalSlide(d.slide);
+        if (d.slide.objects.length < kept) d.dropped = addMissing(d.dropped, 'decoration');
+        if (d.cls === 'native') d.cls = 'hybrid';
+        addNote(d.notes, 'not storable as converted: only its text and pictures are kept');
         d.slide.pptx = provenance(d, hash, this.lo);
         const again = Slide.safeParse(d.slide);
-        return again.success ? again.data : Slide.parse({ id: sl.id, objects: [], pptx: d.slide.pptx });
+        if (again.success) return again.data;
+        // The text rescue: each text object rebuilt from its text and box alone.
+        d.slide = { ...d.slide, objects: rescuedTexts(d.slide.objects) };
+        delete d.slide.lyricObjectId;
+        d.dropped = addMissing(d.dropped, 'slide');
+        d.slide.pptx = provenance(d, hash, this.lo);
+        const text = Slide.safeParse(d.slide);
+        return text.success ? text.data : Slide.parse({ id: sl.id, objects: [], pptx: d.slide.pptx });
       });
     const parsed = Presentation.parse(p);
     // The digest of the import's objects (every object here has an origin, `imported`): the "unedited" test
@@ -1377,7 +1729,7 @@ class NativeImport {
   private saveVersion1(b: NativeBuild): PptxNativeResult {
     const { deps, ctx } = this;
     const hash = ctx.payload.hash;
-    const { p: parsed, lo, compact, missingFonts: fonts } = b;
+    const { p: parsed, lo, compact, simplified, missingFonts: fonts } = b;
     const classes = parsed.sections.flatMap((s) => s.slides).map((sl) => sl.pptx?.class ?? 'native');
     // Version 1, its follow-up and the resume point in one transaction: the follow-up cannot start before
     // the save, and a process that dies in between leaves neither (a re-run imports again), never a version 1
@@ -1409,12 +1761,13 @@ class NativeImport {
         presentationId: saved.id,
         classes,
         compact,
+        simplified,
+        missing: missingSlides(parsed),
         pending: loJobId ? lo.length : 0,
         ...(loJobId ? { loJobId } : {}),
         missingFonts: fonts,
         notes: this.log.warnings(),
       }),
-      missing: missingSlides(parsed),
       libreoffice: this.lo,
     };
   }
@@ -1463,12 +1816,12 @@ function resumedResult(
       presentationId: saved.id,
       classes: slides.map((s) => s.pptx?.class ?? 'native'),
       compact: 0,
+      missing: missingSlides(saved),
       pending: pending.length,
       ...(done.loJobId ? { loJobId: done.loJobId } : {}),
       missingFonts: [],
       notes: ['resumed after a restart: version 1 was already saved'],
     }),
-    missing: missingSlides(saved),
     libreoffice: deps.tools.has('libreoffice'),
   };
 }
@@ -1535,6 +1888,41 @@ function cutText(s: string, n: number): string {
   return s.slice(0, c >= 0xd800 && c <= 0xdbff ? n - 1 : n);
 }
 
+/**
+ * The text objects of a slide the schema refused even minimal, each rebuilt from its text and box alone in a
+ * plain style (the last of M9's rescues: the words stay, editable).
+ */
+function rescuedTexts(objects: readonly SlideObject[]): TextObject[] {
+  const out: TextObject[] = [];
+  for (const o of objects) {
+    if (o?.type !== 'text' || typeof o.text !== 'string' || !o.text.trim()) continue;
+    const size = o.style?.fontSizePx;
+    out.push({
+      id: newId(),
+      type: 'text',
+      box: clampBox(o.box),
+      text: cutText(o.text, ART_TEXT_CHARS),
+      style: {
+        fontFamily: 'Calibri',
+        fontWeight: 400,
+        fontStyle: 'normal',
+        fontSizePx: typeof size === 'number' && size >= 4 && size <= 1000 ? size : 40,
+        color: { r: 0, g: 0, b: 0, a: 1 },
+        align: 'left',
+        valign: 'top',
+        lineHeight: 1.2,
+        letterSpacing: 0,
+        padding: 0,
+        transform: 'none',
+      },
+      opacity: 1,
+      origin: { src: 'pptx', role: 'text' },
+    });
+    if (out.length >= 1_000) break;
+  }
+  return out;
+}
+
 /** Make a draft picture class: no objects, its text kept for search (version 2 adds the page picture). */
 function toPicture(d: Draft): void {
   const text = textOfObjects(d.slide.objects);
@@ -1566,8 +1954,11 @@ function record(d: Draft, digest: string, lo: boolean): Slide {
  * (`missing`: the draft's, or 'slide' for a picture-class slide, design/27 M9).
  */
 function provenance(d: Draft, hash: string, lo: boolean): SlidePptx {
-  const pending = lo && (d.cls !== 'native' || !!d.metafiles?.length);
-  const missing = lo ? undefined : d.cls === 'picture' ? [missingEntry('slide')] : d.missing;
+  // A hybrid slide waits for its art; one that is hybrid only for what the budgets left out does not.
+  const pending = lo && (d.cls === 'picture' || !!d.art || !!d.metafiles?.length);
+  let missing = lo ? undefined : d.cls === 'picture' ? [missingEntry('slide')] : d.missing;
+  if (d.cls !== 'picture')
+    for (const e of d.dropped ?? []) missing = addMissing(missing ? [...missing] : [], e);
   const artText = d.artText;
   return {
     fileId: hash,

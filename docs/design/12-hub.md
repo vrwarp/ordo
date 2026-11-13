@@ -400,6 +400,13 @@ whole presentation has a budget (design/27 §3.4, `packages/domain/src/size.ts`)
 
 - A native import stays within 4 MiB: a slide over 64 KB, and every slide once the presentation passes its
   budget, becomes compact picture class (logged, counted on the import card).
+  <!-- m9:ladder -->
+  Since M9's budget ladder (`pptx/ladder.ts`, design/27 M9) no slide becomes a picture for a budget: a slide
+  over 64 KB as stored is re-gridded, then loses its largest text formatting, then its largest decorations
+  (`fitSlideBudget`), the tail past 3 MiB is stored minimal (text, pictures, background), and what is left
+  out is listed in `Slide.pptx.missing` and counted in the result's `simplified`. A slide whose conversion
+  fails keeps its text (the rescue).
+  <!-- /m9:ladder -->
 - A resolved playlist over 12 MiB goes live with a `degraded` warning (`cueIndex` -1): too large for an
   operator takeover, whose hand-back the operator never sends above 15 MiB (design/17 "Hub returns").
 - `preview` carries only the previewed slide's section; the editor warns on save above 4 MiB and refuses

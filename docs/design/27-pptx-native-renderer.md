@@ -2261,6 +2261,53 @@ _Built for M9 (wave 1, track `lo-detect`): LibreOffice optional at run time, wit
   refused with a save-as hint (converting them would hand an unsanitisable upload to LibreOffice).
 <!-- /m9:lo-detect -->
 
+<!-- m9:ladder -->
+_Built for M9 (wave 2, track `ladder`): the budget ladder. No budget and no failure makes a picture slide
+(plan decision 3); §3.4's "hard 64 KB, else picture class" and "the remaining slides use the compact picture
+class" now read "fitted by the ladder" and "stored minimal"._
+- **The converter** (`emit-budget.ts`): every rich text object is made lossless-compact before it is counted
+  (`compactRuns`: run fields that say what the box style says dropped, never a run merged or removed, since
+  the text engine cuts its pieces at run ends; `layoutRich` and the paint plan are identical, tested). The
+  text budget is a memory guard now, 128 KB (`TEXT_BUDGET_BYTES`): past it the further text is written plain.
+  A slide over 64 KB as stored (`storedSlideBytes`, its large geometries in files) keeps its class and is
+  flagged `EmittedSlide.overBudget`. On E the converter's own runs carry nothing redundant (`richtext.ts`
+  writes runs as what differs from the box), so `compactRuns` saves 0 bytes there.
+- **`fitSlideBudget`** (`@ordo/domain` `size.ts`): `full` → `grid` (inline outlines on an integer grid of
+  1/16 logical px of their box, no point moved more than 1/32 px; only past the budget; lo-dependencies'
+  quarter pixel moved the anti-aliasing of thin full-width rules by up to 0.009 SSIM on three slides of E,
+  over the exit's 0.002) → `plain` (runs and
+  paragraph styles of text objects and tables dropped, the largest first, only as many as it takes) →
+  `minimal` (shapes left out, the largest first, tables kept, then formatting; text, pictures and the
+  background always stay). Pure, never throws; a property test holds it to "within the limit or minimal,
+  schema-valid, every text and picture kept". `minimalSlide` is the smallest such form.
+- **The hub** (`nativeJob.ts`, `ladder.ts`): a slide's size is measured as stored (`storedBytes`: sanitized,
+  parsed, ULID ids and SHA-256 refs; the converter's estimate was about 10 % high on shape-heavy slides, which
+  made nine slides of E pictures they were not); the tail past 3 MiB is stored minimal (`planImportSizes` with
+  the minimal form as the compact size); an object naming an outline file past the import's budget, or one
+  the store refused, is left out (a shape) or loses its mask (a picture); a slide the schema refuses is stored
+  minimal, else as its text alone. What a level leaves out is `Slide.pptx.missing` ('decoration', 'chart'),
+  with or without LibreOffice (LibreOffice draws no budget's art), and such a slide is hybrid but never
+  `pending`. `PptxNativeResult.simplified` counts the slides changed; `compact` is 0.
+- **Failures** (`nativeJob.ts` `convert`): a batch that fails is converted again slide by slide (30 s each);
+  a slide that still fails, one the converter could not read, and the slides past the 15 minutes of pool time
+  get the text rescue (`@ordo/pptx-scene` `rescueDeck`, pool task `pptx-scene` with `rescue: true`: the
+  slide's own text bodies and table text as text objects in their boxes, no geometry read, groups to depth 4;
+  2 s a slide, 2 minutes an import), class hybrid with `missing: ['slide']`. A slide nothing could read is
+  empty and says so.
+- **A scene parsed on the client** (`stepsFromClientScene`, see "Rebased onto main" below) follows the same
+  rules: a slide past the client's bound on outline files keeps the placeholders of the files it was not
+  given (`PptxClientScene.geomOver`), so the hub leaves out the objects naming them, and a slide the client
+  could not read, or did not send, gets the text rescue from its parts in the stored deck.
+- **Measured** (census over E, `census.ts --hub-budget --no-libreoffice`, against wave 1's): picture slides
+  37 → 13, the 13 all `budget:pictures` (decor-conv's sheets); none made by bytes, the tail or a failure. Of
+  the 24 budget pictures: 9 store within 64 KB as they are (the estimate), 4 drop text formatting (`plain`,
+  native), 11 leave decorations out (`minimal`, hybrid); 5 of those (cells drawn as text objects, about 125
+  each) are 65-88 KB even with only their text and pictures, kept whole (the table object of `tables-conv`
+  makes them small). No slide reaches the tail; the sermon decks do not change. The grid alone, forced on
+  every slide of E whose inline outlines it shortens (416 slides), changes none by more than 0.001 SSIM
+  (lowest 0.99918; at a quarter pixel 3 of 479 fell to 0.9915-0.9959).
+<!-- /m9:ladder -->
+
 **Exit.**
 - ≥ 99% of shown worship slides are native; the rest are hybrid with a reason, and none is a picture slide.
 - Every slide that was hybrid or picture before M9 is at least as faithful to LibreOffice (SSIM) as before.

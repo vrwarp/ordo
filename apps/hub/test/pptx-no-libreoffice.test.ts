@@ -17,6 +17,7 @@ import {
   type Presentation,
   resolvePlaylist,
   type Slide,
+  slideBytes,
 } from '@ordo/domain';
 import type { HubCapabilities, Job } from '@ordo/protocol';
 import {
@@ -25,24 +26,35 @@ import {
   CHART_CONTENT_TYPE,
   chartFrame,
   chartXml,
+  custGeom,
   imageRel,
   para,
   partText,
   pic,
   run,
+  solid as solidFill,
   sp,
   withPart,
 } from '@ordo/pptx-scene/test-util.ts';
+import { RESCUE_NOTE } from '@ordo/pptx-scene/rescue.ts';
 import JSZip from 'jszip';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type JobCtx, MAX_JOB_ATTEMPTS } from '../src/jobs.ts';
+import { CpuPool } from '../src/pool.ts';
 import { loJob, type PptxLoWithoutResult, releaseReferencePdf } from '../src/pptx/fallback.ts';
 import { tooLarge } from '../src/store.ts';
-import type { PptxLoPayload, PptxNativeResult } from '../src/pptx/shared.ts';
+import { type NativeJobEnv, nativeJob } from '../src/pptx/nativeJob.ts';
+import type {
+  PptxLoPayload,
+  PptxNativePayload,
+  PptxNativeResult,
+  SceneTaskInput,
+  SceneTaskOutput,
+} from '../src/pptx/shared.ts';
 import { findOnPath } from '../src/tools.ts';
-import { minimalPdf } from './fixtures.ts';
+import { ffmpeg, minimalPdf } from './fixtures.ts';
 import { EDIT_PIN, login, startHub, type TestHub, tempDir } from './helpers.ts';
-import { slidesOf, waitJob } from './pptx-helpers.ts';
+import { slidesOf, storeDeck, waitJob, zipDeck } from './pptx-helpers.ts';
 
 const IN = 914_400;
 const enc = new TextEncoder();
@@ -680,6 +692,252 @@ describe('a hub without LibreOffice (design/27 M9)', () => {
     expect(uploadsLeft()).toEqual([]);
     neverRan();
   });
+});
+
+/**
+ * The budget ladder (design/27 §3.4, M9 `ladder`), here on a hub without LibreOffice: no budget and no
+ * failure makes a picture slide, and what a slide loses is said on it.
+ */
+describe('the budget ladder without LibreOffice (M9)', () => {
+  const pool = new CpuPool(1);
+  afterAll(() => pool.close());
+  type Call = { range: { from: number; to: number }; scan: boolean; rescue: boolean };
+  /** The real pool, its calls recorded; `fail` fails a call, `edit` changes what a call returns. */
+  const spy = (
+    calls: Call[],
+    o: { fail?: (i: SceneTaskInput) => Error | undefined; edit?: (out: SceneTaskOutput) => void } = {},
+  ): NativeJobEnv['pool'] => ({
+    run: (async (kind: 'pptx-scene', input: SceneTaskInput, opts: { transfer?: ArrayBuffer[] }) => {
+      calls.push({ range: input.range, scan: !!input.scan, rescue: !!input.rescue });
+      const err = o.fail?.(input);
+      if (err) throw err;
+      const out = await pool.run(kind, input, opts);
+      if (!input.scan) o.edit?.(out);
+      return out;
+    }) as CpuPool['run'],
+  });
+  /** Run the job's handler on `parts` directly (no queue); its result and presentation. */
+  async function runJob(parts: Map<string, Uint8Array>, env: NativeJobEnv) {
+    const file = await zipDeck(parts, dir, `${Math.random().toString(36).slice(2)}.pptx`);
+    const hash = await storeDeck(hub, file);
+    const lines: string[] = [];
+    const ctx: JobCtx<PptxNativePayload> = {
+      id: 'direct',
+      payload: { hash, name: 'Ladder.pptx', options: {} },
+      signal: new AbortController().signal,
+      log: (m) => lines.push(m),
+      progress: () => {},
+      setPayload: (pl) => {
+        ctx.payload = pl;
+      },
+    };
+    const result = (await nativeJob(hub.imports.pptx.deps, env)(ctx)) as PptxNativeResult;
+    return { result, lines, p: hub.lib.presentations.must(result.presentationId) };
+  }
+  const textsOf = (s: Slide) => s.objects.flatMap((o) => (o.type === 'text' ? [o.text] : []));
+  const words = (n: number) => Array.from({ length: n }, (_, i) => `Slide ${i + 1}`);
+  const deckOf = (n: number) => buildDeck({ slides: words(n).map((w) => ({ shapes: textBox(2, w) })) });
+
+  it('a slide over 64 KB is re-gridded or simplified, never a picture', async () => {
+    // Slide 1: formatting past 64 KB (many coloured runs); slide 2: text and 120 rectangles past it.
+    const runs = Array.from({ length: 400 }, (_, i) =>
+      run(`w${i} `, '', solidFill(i % 2 ? 'FF0000' : '00FF00')),
+    ).join('');
+    const formatted = Array.from({ length: 8 }, (_, i) =>
+      sp({ id: 2 + i, x: IN, y: i * 0.6 * IN, cx: 6 * IN, cy: IN / 2, txBody: body(para(runs)) }),
+    ).join('');
+    const text = Array.from({ length: 6 }, (_, i) =>
+      textBox(2 + i, `${'Grace '.repeat(1500)}${i}`, i * 0.6),
+    ).join('');
+    const rects = Array.from({ length: 120 }, (_, i) =>
+      sp({
+        id: 20 + i,
+        x: (i % 12) * 0.5 * IN,
+        y: Math.floor(i / 12) * 0.4 * IN,
+        cx: IN / 4,
+        cy: IN / 4,
+        fill: solidFill('FF0000'),
+      }),
+    ).join('');
+    const { result, p } = await importDeck(
+      buildDeck({ slides: [{ shapes: formatted }, { shapes: text + rects }] }),
+      'Big.pptx',
+    );
+    expect(result).toMatchObject({ slides: 2, picture: 0, compact: 0, pending: 0, simplified: 2 });
+    const [s1, s2] = slidesOf(p) as [Slide, Slide];
+    for (const s of [s1, s2]) {
+      expect(slideBytes(s)).toBeLessThanOrEqual(64 * 1024);
+      expect(s.pptx!.notes!.some((n) => /^simplified to fit the slide budget: /.test(n))).toBe(true);
+      expect(s.pptx!.pending).toBeUndefined();
+    }
+    // Formatting dropped where it had to be, every text kept, nothing missing.
+    expect(s1.pptx).toMatchObject({ class: 'native' });
+    expect(s1.pptx!.missing).toBeUndefined();
+    expect(textsOf(s1)).toHaveLength(8);
+    // Decorations left out, listed as missing, every text kept.
+    expect(s2.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
+    expect(textsOf(s2)).toHaveLength(6);
+    expect(
+      result.notes.some((n) => /^slide 2 is over 64 KB: \d+ decoration shape\(s\) left out to fit$/.test(n)),
+    ).toBe(true);
+    neverRan();
+  }, 120_000);
+
+  it('the slides past the 4 MiB tail are minimal native slides', async () => {
+    // 350 slides of about 10 KB: the running total passes 3 MiB near slide 310.
+    const slides = Array.from({ length: 350 }, (_, i) => ({
+      shapes:
+        textBox(2, `Slide ${i + 1} ${'Lorem ipsum dolor sit amet. '.repeat(340)}`) +
+        sp({ id: 3, x: 0, y: 6 * IN, cx: 10 * IN, cy: IN / 10, fill: solidFill('336699') }),
+    }));
+    const { result, p } = await importDeck(buildDeck({ slides }), 'Long.pptx');
+    expect(result).toMatchObject({ slides: 350, picture: 0, compact: 0, pending: 0 });
+    expect(JSON.stringify(p).length).toBeLessThanOrEqual(4 * 1024 * 1024);
+    const all = slidesOf(p);
+    const first = all.findIndex((s) => s.pptx!.notes?.some((n) => /reached its size budget/.test(n)));
+    expect(first).toBeGreaterThan(250);
+    expect(result.simplified).toBe(350 - first);
+    for (const [i, s] of all.entries()) {
+      // Every slide keeps its text as a text object; the tail's decoration is left out and said so.
+      expect(textsOf(s)[0]).toMatch(new RegExp(`^Slide ${i + 1} Lorem`));
+      if (i < first) expect(s.pptx).toMatchObject({ class: 'native' });
+      else {
+        expect(s.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
+        expect(s.objects.some((o) => o.type === 'shape')).toBe(false);
+      }
+    }
+    expect(result.notes.join('\n')).toMatch(
+      new RegExp(`slide ${first + 1} and later keep only their text and pictures`),
+    );
+    neverRan();
+  }, 120_000);
+
+  it("a slide past the import's outline-file budget keeps its text and pictures", async () => {
+    const png = ffmpeg(dir, 'blue.png', ['-f', 'lavfi', '-i', 'color=c=blue:s=64x64', '-frames:v', '1']);
+    const pt = (x: number, y: number) => `<a:pt x="${x}" y="${y}"/>`;
+    const outline = (k: number) => {
+      let d = `<a:moveTo>${pt(1_000_000 + k, 1_000_000)}</a:moveTo>`;
+      for (let i = 1; i < 4_000; i++)
+        d += `<a:lnTo>${pt(1_000_000 + ((i * 7_919 + k * 31) % 9_000_000), 1_000_000 + ((i * 104_729) % 5_000_000))}</a:lnTo>`;
+      return sp({
+        id: 10 + k,
+        x: k * 10_000,
+        y: 0,
+        cx: 2 * IN,
+        cy: IN,
+        geom: 'none',
+        fill:
+          custGeom({ paths: `<a:path w="10000000" h="6000000">${d}<a:close/></a:path>` }) +
+          solidFill('FF0000'),
+      });
+    };
+    const parts = buildDeck({
+      slides: [
+        {
+          rels: [imageRel('rId2', 'blue.png')],
+          shapes:
+            outline(1) +
+            outline(2) +
+            pic({ id: 3, x: 3 * IN, y: 3 * IN, cx: IN, cy: IN, rId: 'rId2' }) +
+            textBox(4, 'Welcome home', 5),
+        },
+      ],
+      media: { 'ppt/media/blue.png': new Uint8Array(readFileSync(png)) },
+    });
+    // Room for one of the two outline files.
+    const { result, p } = await runJob(parts, { limits: { geomFileBytes: 100_000 } });
+    expect(result).toMatchObject({ slides: 1, native: 0, hybrid: 1, picture: 0, compact: 0 });
+    const [s] = slidesOf(p) as [Slide];
+    expect(textsOf(s)).toEqual(['Welcome home']);
+    expect(s.objects.filter((o) => o.type === 'image')).toHaveLength(1);
+    expect(s.objects.filter((o) => o.type === 'shape' && o.geom?.ref)).toHaveLength(1);
+    expect(s.pptx).toMatchObject({ class: 'hybrid', missing: ['decoration'] });
+    expect(s.pptx!.notes).toContain('over the import budget of shape outlines: 1 shape(s) left out');
+    neverRan();
+  }, 120_000);
+
+  it('a slide the schema refuses is stored minimal with a note', async () => {
+    // What the converter returns, made unstorable: a shape on slide 1 and a text box on slide 2 with ids the
+    // schema refuses (the sanitizer keeps ids as they are).
+    const calls: Call[] = [];
+    const bad = 'x'.repeat(500);
+    const edit = (out: SceneTaskOutput) => {
+      for (const s of out.result.slides) {
+        if (s.index === 0)
+          s.slide.objects.push({
+            id: bad,
+            type: 'shape',
+            box: { x: 0, y: 0, w: 10, h: 10, rotation: 0 },
+            shape: 'rect',
+            opacity: 1,
+            radius: 0,
+          });
+        if (s.index === 1) {
+          const t = s.slide.objects.find((o) => o.type === 'text');
+          if (t) t.id = bad;
+        }
+      }
+    };
+    const { result, p, lines } = await runJob(deckOf(3), { pool: spy(calls, { edit }) });
+    expect(result).toMatchObject({ slides: 3, picture: 0 });
+    const [s1, s2, s3] = slidesOf(p) as [Slide, Slide, Slide];
+    // Slide 1 minimal: its text kept, the refused shape (and every other shape) left out, said so.
+    expect(textsOf(s1)).toEqual(['Slide 1']);
+    expect(s1.objects.some((o) => o.type === 'shape')).toBe(false);
+    expect(s1.pptx!.notes).toContain('not storable as converted: only its text and pictures are kept');
+    expect(s1.pptx!.class).toBe('hybrid');
+    // Slide 2: its text object refused itself, so it is rebuilt from its text and box alone.
+    expect(textsOf(s2)).toEqual(['Slide 2']);
+    expect(s2.objects.every((o) => o.id !== bad)).toBe(true);
+    expect(s2.pptx!.missing).toContain('slide');
+    expect(s3.pptx!.class).toBe('native');
+    expect(lines.filter((l) => /could not be stored as converted/.test(l))).toHaveLength(2);
+    neverRan();
+  }, 120_000);
+
+  it('a slide that fails to convert keeps its text (rescue)', async () => {
+    const calls: Call[] = [];
+    // Every conversion that holds slide 2 fails; its rescue does not.
+    const fail = (i: SceneTaskInput) =>
+      !i.scan && !i.rescue && i.range.from <= 1 && i.range.to > 1
+        ? new Error('cpu worker exited with code 134 while working')
+        : undefined;
+    const { result, p, lines } = await runJob(deckOf(3), { pool: spy(calls, { fail }) });
+    expect(result).toMatchObject({ slides: 3, native: 2, hybrid: 1, picture: 0, pending: 0, missing: 1 });
+    const slides = slidesOf(p);
+    expect(slides.map(textsOf)).toEqual([['Slide 1'], ['Slide 2'], ['Slide 3']]);
+    expect(slides[1]!.pptx).toMatchObject({ class: 'hybrid', missing: ['slide'] });
+    expect(slides[1]!.pptx!.notes).toContain(RESCUE_NOTE);
+    expect(calls.filter((c) => c.rescue).map((c) => [c.range.from, c.range.to])).toEqual([[1, 2]]);
+    expect(lines.join('\n')).toMatch(
+      /slide 2 could not be converted \(cpu worker exited with code 134 while working\): only its text is kept/,
+    );
+    expect(lines.join('\n')).toMatch(/1 slide\(s\) that could not be converted keep their text/);
+    neverRan();
+  }, 120_000);
+
+  it('a failed batch is retried slide by slide', async () => {
+    const calls: Call[] = [];
+    // The batch of all three fails (as a batch past the pool's 2 minutes would); each slide alone does not.
+    const fail = (i: SceneTaskInput) =>
+      !i.scan && i.range.from === 0 && i.range.to === 3
+        ? new Error('pptx-scene task timed out after 120 s')
+        : undefined;
+    const { result, p, lines } = await runJob(deckOf(3), { pool: spy(calls, { fail }) });
+    expect(calls.map((c) => [c.scan, c.rescue, c.range.from, c.range.to])).toEqual([
+      [true, false, 0, 0],
+      [false, false, 0, 3],
+      [false, false, 0, 1],
+      [false, false, 1, 2],
+      [false, false, 2, 3],
+    ]);
+    expect(result).toMatchObject({ slides: 3, native: 3, hybrid: 0, picture: 0 });
+    expect(slidesOf(p).map(textsOf)).toEqual([['Slide 1'], ['Slide 2'], ['Slide 3']]);
+    expect(lines.join('\n')).toMatch(
+      /slides 1-3 could not be converted together \(pptx-scene task timed out after 120 s\): each is converted on its own/,
+    );
+    neverRan();
+  }, 120_000);
 });
 
 /**

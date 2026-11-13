@@ -48,7 +48,8 @@
  *   geometry's JSON times the times the slide draws it), and then the largest others while the slide as the
  *   hub stores it is within 4 KB of `MAX_SLIDE_BYTES`, are written once in a geometry file (`ShapeGeom.ref`, placeholder
  *   `pptxgeom:<n>`, one per distinct file, listed in `EmitResult.geoms`) instead of in the slide. A slide
- *   still past it (its text formatting, or its objects with every path in files) is picture class.
+ *   still past it (its text formatting, or its objects with every path in files) keeps its class and is
+ *   flagged `overBudget` for the importer's budget ladder (M9; it was picture class before).
  * - **SmartArt** drawn from its drawing cache (M6, `smartart.ts`): its objects are a locked group (origin
  *   role 'diagram'; text objects unlocked), and its text is never the lyric box.
  * - **Backgrounds**: a plain stretched picture known to be opaque whose aspect is known and matches a 16:9
@@ -118,7 +119,7 @@ import { bakeKey, bakeOf, type PictureBake } from './bake.ts';
 import { emitChart } from './chart.ts';
 import { boundsOf, unionBox } from './classify.ts';
 import { emitDecor } from './decor.ts';
-import { fitBytes, MAX_SLIDE_BYTES, overBudget, SLIDE_BYTES_NOTE } from './emit-budget.ts';
+import { slideBudget } from './emit-budget.ts';
 import {
   ALL_M9_FIELDS,
   BOX_FACTOR,
@@ -179,11 +180,13 @@ import { look3dOf } from './three3d.ts';
 
 // The parts split out of this module in M9 (`conv-seams`), under the names they always had here.
 export {
+  compactRuns,
   GEOM_FILE_CHARS,
   MAX_SLIDE_BYTES,
   SLIDE_BUDGET_NOTE,
   SLIDE_BYTES_NOTE,
   storedSlideBytes,
+  TEXT_BUDGET_BYTES,
 } from './emit-budget.ts';
 export { ALL_M9_FIELDS, insetBox, legacyColor, M9_FIELDS, type M9Field } from './emit-ctx.ts';
 export {
@@ -316,11 +319,11 @@ export interface EmittedSlide {
    */
   metafiles?: { part: string; object: ImageObject; before?: string }[];
   /**
-   * Classed picture by the slide budget alone (design/27 §3.4): its text formatting passed `MAX_SLIDE_BYTES`,
-   * or the slide as the hub stores it did with its large geometries in files (`storedSlideBytes`), and it
-   * would be native or hybrid otherwise. An importer counts and logs it exactly as its own slide budget
-   * would (the hub: a compact picture slide, one warning), and drops `SLIDE_BUDGET_NOTE` and
-   * `SLIDE_BYTES_NOTE`.
+   * Over the slide budget (design/27 §3.4): its text formatting passed `TEXT_BUDGET_BYTES` (its further text
+   * written plain), or the slide as the hub stores it is over `MAX_SLIDE_BYTES` with its large geometries in
+   * files (`storedSlideBytes`). Its class is not changed (M9: no budget makes a picture); an importer fits it
+   * with its own budget ladder (`@ordo/domain` `fitSlideBudget`), logs that itself and drops
+   * `SLIDE_BUDGET_NOTE` and `SLIDE_BYTES_NOTE`.
    */
   overBudget?: true;
   /** The clips the slide plays or names (`media.ts`): what the hub ingests and puts in place of placeholders. */
@@ -430,17 +433,15 @@ export function emitDeck(scene: DeckScene, opts: EmitOptions = {}): EmitResult {
     ctx.metafiles = [];
     ctx.clips = [];
     const slide = emitSlide(ctx, s, spans);
-    const overText = ctx.textBytes > MAX_SLIDE_BYTES;
-    // The slide's whole JSON as the hub stores it, its large geometries in files (design/27 §3.4).
-    const overBytes = !overText && fitBytes(slide, notes, geomRef) > MAX_SLIDE_BYTES;
-    if (overBytes) log(SLIDE_BYTES_NOTE);
-    const over = overText || overBytes;
+    // The slide's whole JSON as the hub stores it, its large geometries in files (design/27 §3.4); one still
+    // over the budget keeps its class and is fitted by the importer (M9 `ladder`).
+    const { over } = slideBudget(ctx, slide, notes, geomRef);
     let art = artInfo(s, scene.frame, spans, slide.objects);
     let metafiles = ctx.metafiles.map(({ part, object, at }) => {
       const before = slide.objects[at]?.id;
       return { part, object, ...(before !== undefined ? { before } : {}) };
     });
-    let classification = over ? overBudget(s.classification, overText) : s.classification;
+    let classification = s.classification;
     // M9: without LibreOffice nothing draws the art or converts the metafiles: neither is planned, on any
     // slide, and what they would draw is listed as missing (a picture-class slide's by the importer).
     const gaps = ctx.libreoffice

@@ -140,6 +140,11 @@ export type PptxClientScene = {
   media: { id: string; part: string; bake?: PictureBake }[];
   extras: PptxClientSlideExtra[];
   geomFiles: { hash: string; json: string }[];
+  /**
+   * The slides whose new outline files would pass `PPTX_CLIENT_LIMITS.geomFileBytes`: in `slides` they keep
+   * the placeholders (`GEOM_PREFIX`) of the files they were not given, and the hub leaves out the objects
+   * that name them (M9 `ladder.ts` `withoutFiles`).
+   */
   geomOver?: number[];
   /**
    * M9: false when parsed without LibreOffice (`PptxClientOptions.libreoffice`); absent: with it. The hub
@@ -675,8 +680,18 @@ export async function importPptxClient(
     }
   }
   result.geoms = [];
+  // The scene the hub builds from (`nativeJob.ts`): a slide past the bound keeps the placeholders of the
+  // files it was not given, so the hub leaves out the objects that name them and says what they drew, as for
+  // its own batches (M9 `ladder.ts` `withoutFiles`). This parse's own slides lose only the refs.
+  const sceneSlides: EmittedSlide[] = [];
   for (const s of result.slides) {
+    if (geomOver.has(s.index)) {
+      const keep = new Map(geomNames);
+      for (const id of drawnGeomRefs(s.slide)) if (!keep.has(id)) keep.set(id, id);
+      sceneSlides.push(structuredClone({ ...s, slide: nameGeoms(s.slide, keep) }));
+    }
     s.slide = nameGeoms(s.slide, geomNames);
+    if (!geomOver.has(s.index)) sceneSlides.push(structuredClone(s));
   }
 
   const decoder = new TextDecoder();
@@ -689,7 +704,7 @@ export async function importPptxClient(
     sections: [...first.sections],
     slideRect: first.slideRect,
     notes: [...first.notes],
-    slides: result.slides.map((s) => structuredClone(s)),
+    slides: sceneSlides,
     media: [...result.media],
     extras: [...extras.values()],
     geomFiles: [...geomFiles.values()].map((g) => ({ hash: g.hash, json: decoder.decode(g.bytes) })),

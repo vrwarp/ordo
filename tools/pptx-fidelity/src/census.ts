@@ -12,9 +12,12 @@
  * - `slides`: per shown slide `n` (its shown number, as the harness's `--slides` numbers it), `i` (its
  *   index in the deck), `tier`, `class`, `reasons`, `objects`, `geom` (objects with a geometry), `refs`
  *   (geometries stored in files), `bytes` (the slide's JSON, in characters), `metafiles` (pictures waiting for
- *   LibreOffice), and the hub's view of it (`hubClasses`): `stored` (the slide as the hub stores it,
- *   `storedSlideBytes`; 0 for a picture slide), `hub` (its class once the hub's §3.4 budgets ran) and
- *   `hubWhy` (why the hub made it a picture: `slide`, `presentation` or `geoms`; null otherwise);
+ *   LibreOffice), and the hub's view of it (`hubClasses`, M9's budget ladder): `stored` (the slide as the
+ *   hub stores it; 0 for a picture slide), `hub` (its class once the hub's §3.4 budgets ran: hybrid when the
+ *   ladder left something out, never a picture for its size), `hubWhy` (why the ladder changed it: `slide`
+ *   over 64 KB, `presentation` for the tail, `geoms` for its outline files; null otherwise), `level` (the
+ *   ladder's level when not `full`) and `missing` (what nothing draws: the ladder's kinds, and with
+ *   `--no-libreoffice` the converter's);
  * - `geomFiles`, `geomBytes`: the deck's geometry files;
  * - `error` when the converter could not read the deck;
  * - `unreadable: 'missing target'` (and no slides) for a link whose deck is gone: listed, never an error.
@@ -26,94 +29,91 @@ import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import {
-  compactSlideBytes,
-  drawnGeomRefs,
-  type ImportCompactReason,
-  planImportSizes,
-  type Slide,
-  utf8Bytes,
-} from '@ordo/domain';
-import { storedSlideBytes } from '@ordo/pptx-scene';
+import type { BudgetLevel, Slide } from '@ordo/domain';
 import { PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
 import { listDecks } from './decks.ts';
-import { convertDeckIsolated, type NativeDeck } from './native.ts';
+import { convertDeckIsolated, type HubWhy, hubLadder, type NativeDeck } from './native.ts';
 
-/** Why the hub stores a slide as a picture once its budgets ran (`nativeJob.ts` `budget`). */
-export type HubWhy = ImportCompactReason | 'geoms';
+export type { HubWhy } from './native.ts';
 
 export type HubSlide = {
-  /** The slide as the hub stores it (`storedSlideBytes`); 0 for a slide the converter classed picture. */
+  /** The slide's bytes as the hub stores it (its provenance included); 0 for a slide the converter classed picture. */
   stored: number;
-  /** Its class in the hub: picture when the converter said so or a §3.4 budget made it compact. */
+  /** Its class in the hub: picture only when the converter said so; hybrid when the ladder left something out. */
   hub: 'native' | 'hybrid' | 'picture';
+  /** Why the budget ladder changed it (`native.ts` `HubWhy`); null when stored as emitted (or only re-gridded). */
   hubWhy: HubWhy | null;
+  /** The ladder's level (`fitSlideBudget`). */
+  level: BudgetLevel;
+  /** What the ladder left out (`Slide.pptx.missing` kinds). */
+  missing: string[];
+  /** The slide as stored. */
+  slide: Slide;
 };
 
-type HubInput = Pick<NativeDeck['slides'][number], 'class' | 'slide' | 'notes'>;
+type HubInput = Pick<NativeDeck['slides'][number], 'class' | 'slide' | 'notes'> & { index?: number };
 
 /**
- * Each slide's class as the hub's import stores it (`nativeJob.ts` `budget`, design/27 §3.4): a slide whose
- * new geometry files would take the import past `PPTX_LIMITS.geomFileBytes` is a picture (`geoms`), then
- * `planImportSizes` over the slides as stored (`storedSlideBytes`) with their compact sizes
- * (`compactSlideBytes`) makes the slides over 64 KB (`slide`) and the presentation's tail (`presentation`)
- * pictures. Slides in deck order, hidden ones included, as the hub plans them.
+ * Each slide as the hub's import stores it (`nativeJob.ts` `budget`, design/27 §3.4, M9's budget ladder,
+ * `native.ts` `hubLadder`): the objects naming outline files past `PPTX_LIMITS.geomFileBytes` left out
+ * (`geoms`), each slide fitted to 64 KB (`slide`) and the presentation's tail stored minimal (`presentation`);
+ * no slide becomes a picture for its size. Slides in deck order, hidden ones included, as the hub plans them.
  */
 export function hubClasses(
   slides: readonly HubInput[],
   geoms: readonly { id: string; file: unknown }[] = [],
   geomBudget: number = PPTX_LIMITS.geomFileBytes,
 ): HubSlide[] {
-  const fileBytes = new Map(geoms.map((g) => [g.id, utf8Bytes(JSON.stringify(g.file))]));
-  const files = new Set<string>();
-  let spent = 0;
-  const overGeoms = slides.map((s) => {
-    if (s.class === 'picture') return false;
-    const fresh = drawnGeomRefs(s.slide).filter((r) => !files.has(r) && fileBytes.has(r));
-    const bytes = fresh.reduce((n, r) => n + fileBytes.get(r)!, 0);
-    if (spent + bytes > geomBudget) return true;
-    for (const r of fresh) files.add(r);
-    spent += bytes;
-    return false;
-  });
-  const sizes = slides.map((s) => (s.class === 'picture' ? 0 : storedSlideBytes(s.slide, s.notes)));
-  const plan = planImportSizes(
-    sizes,
-    slides.map((s) => compactSlideBytes(s.slide)),
-  );
-  return slides.map((s, i) => {
-    const why: HubWhy | null = s.class === 'picture' ? null : overGeoms[i] ? 'geoms' : plan.reasons[i]!;
-    return { stored: sizes[i]!, hub: s.class === 'picture' || why ? 'picture' : s.class, hubWhy: why };
-  });
+  return hubLadder(slides, geoms, geomBudget).map((h) => ({
+    stored: h.stored,
+    hub: h.hub,
+    hubWhy: h.why,
+    level: h.level,
+    missing: h.missing,
+    slide: h.slide,
+  }));
 }
 
 /** One deck's line of the census. */
 export function censusRow(
   deck: NativeDeck,
   head: { folder: string; deck: number; name: string; ms: number },
+  opts: { noLibreOffice?: boolean } = {},
 ): Record<string, unknown> {
-  const hub = hubClasses(deck.slides, deck.geoms ?? []);
+  // `--no-libreoffice`: each slide as a hub without LibreOffice emits it (`EmitOptions.libreoffice: false`).
+  const noLo = opts.noLibreOffice === true;
+  const input = deck.slides.map((s) => ({
+    class: (noLo ? s.noLoClass : undefined) ?? s.class,
+    slide: (noLo ? s.noLoSlide : undefined) ?? s.slide,
+    notes: s.notes,
+    index: s.index,
+  }));
+  const hub = hubClasses(input, deck.geoms ?? []);
   const slides = deck.slides
-    .map((s, k) => ({ s, h: hub[k]! }))
+    .map((s, k) => ({ s, h: hub[k]!, x: input[k]! }))
     .filter(({ s }) => s.shown !== undefined)
-    .map(({ s, h }) => {
-      const objects: Slide['objects'] = s.slide.objects ?? [];
+    .map(({ s, h, x }) => {
+      const objects: Slide['objects'] = x.slide.objects ?? [];
+      const missing = [...(noLo ? (s.missing ?? []) : [])];
+      for (const m of h.missing) if (!missing.includes(m)) missing.push(m);
       return {
         n: s.shown! + 1,
         i: s.index,
         tier: s.tier,
-        class: s.class,
+        class: x.class,
         reasons: s.reasons,
         objects: objects.length,
         geom: objects.filter((o) => o.type === 'shape' && o.geom).length,
         refs: objects.filter(
           (o) => (o.type === 'shape' && o.geom?.ref) || (o.type === 'image' && o.mask?.ref),
         ).length,
-        bytes: JSON.stringify(s.slide).length,
-        ...(s.metafiles?.length ? { metafiles: s.metafiles.length } : {}),
+        bytes: JSON.stringify(x.slide).length,
+        ...(s.metafiles?.length && !noLo ? { metafiles: s.metafiles.length } : {}),
         stored: h.stored,
         hub: h.hub,
         hubWhy: h.hubWhy,
+        ...(h.level !== 'full' ? { level: h.level } : {}),
+        ...(missing.length ? { missing } : {}),
       };
     });
   const files = (deck.geoms ?? []).map((g) => JSON.stringify(g.file).length);
@@ -127,23 +127,35 @@ export function censusRow(
   };
 }
 
-export type CensusArgs = { out: string; paths: string[] };
+/**
+ * `--hub-budget` (M9): the hub columns model the hub's budget ladder (always so since M9; accepted so the
+ * census takes the harness's flags); `--no-libreoffice`: the slides as a hub without LibreOffice emits and
+ * stores them.
+ */
+export type CensusArgs = { out: string; paths: string[]; hubBudget: boolean; noLibreOffice: boolean };
 
 export function parseCensusArgs(argv: readonly string[]): CensusArgs {
   let out: string | undefined;
   const paths: string[] = [];
+  let hubBudget = false;
+  let noLibreOffice = false;
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i]!;
-    if (v === '--out') {
+    if (v === '--hub-budget') hubBudget = true;
+    else if (v === '--no-libreoffice') noLibreOffice = true;
+    else if (v === '--out') {
       out = argv[++i];
       if (!out || out.startsWith('--')) throw new Error('--out needs a file');
     } else if (v === '--') continue;
     else if (v.startsWith('--')) throw new Error(`unknown option ${v}`);
     else paths.push(v);
   }
-  if (!out) throw new Error('usage: census.ts --out census.jsonl <deck | folder>...');
+  if (!out)
+    throw new Error(
+      'usage: census.ts [--hub-budget] [--no-libreoffice] --out census.jsonl <deck | folder>...',
+    );
   if (!paths.length) throw new Error('no decks: pass decks or folders');
-  return { out, paths };
+  return { out, paths, hubBudget, noLibreOffice };
 }
 
 /**
@@ -154,6 +166,7 @@ export async function runCensus(
   paths: readonly string[],
   out: string,
   log: (line: string) => void = () => {},
+  opts: { noLibreOffice?: boolean } = {},
 ): Promise<{ decks: number; unreadable: number; errors: number; slides: number }> {
   const decks = await listDecks(paths);
   await writeFile(out, '');
@@ -172,8 +185,8 @@ export async function runCensus(
       const dir = join(scratch, String(k + 1));
       await mkdir(dir, { recursive: true });
       const t0 = performance.now();
-      const deck = await convertDeckIsolated(d.file, dir);
-      const row = censusRow(deck, { ...head, ms: Math.round(performance.now() - t0) });
+      const deck = await convertDeckIsolated(d.file, dir, opts.noLibreOffice ? { noLibreOffice: true } : {});
+      const row = censusRow(deck, { ...head, ms: Math.round(performance.now() - t0) }, opts);
       if (deck.error) counts.errors++;
       counts.slides += (row.slides as unknown[]).length;
       await appendFile(out, `${JSON.stringify(row)}\n`);
@@ -188,7 +201,7 @@ export async function runCensus(
 
 async function main(): Promise<void> {
   const a = parseCensusArgs(process.argv.slice(2));
-  const c = await runCensus(a.paths, resolve(a.out));
+  const c = await runCensus(a.paths, resolve(a.out), () => {}, { noLibreOffice: a.noLibreOffice });
   console.log(
     `census: ${c.decks} deck(s), ${c.slides} shown slide(s), ${c.unreadable} unreadable (missing target), ${c.errors} the converter could not read; ${resolve(a.out)}`,
   );

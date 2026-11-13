@@ -15,10 +15,12 @@
  *   them before the batches, which emit `ImageObject.play` and `Slide.audio` with the sniffed kinds).
  * - **Batch**: the slides of `range`, plus each one's transition and timing (`transition.ts`), which
  *   `convertDeck` does not read: only the part's tail after `p:cSld` is parsed for it.
+ * - **Rescue** (`input.rescue`, M9 `ladder`): the slides of `range` as their text alone (`rescueDeck`), for
+ *   slides whose conversion failed; no geometry, picture or extra is read.
  */
 import { getHeapStatistics } from 'node:v8';
 import { drawnGeomRefs, newId } from '@ordo/domain';
-import { type ConvertResult, convertDeck, type SlideRef } from '@ordo/pptx-scene';
+import { type ConvertResult, convertDeck, rescueDeck, type SlideRef } from '@ordo/pptx-scene';
 import { readNotes } from '@ordo/pptx-scene/notes.ts';
 import { openPackage, type Package, relType } from '@ordo/pptx-scene/opc.ts';
 import { extensionOf, METAFILE_EXTENSIONS } from '@ordo/pptx-scene/picture.ts';
@@ -39,6 +41,15 @@ const MAX_METAFILES_PER_SLIDE = 50;
 
 export function sceneTask(input: SceneTaskInput): SceneTaskOutput {
   const t0 = performance.now();
+  // M9 `ladder`: the text rescue of slides that could not be converted (text bodies only).
+  if (input.rescue) {
+    const result = rescueDeck(input.parts, { range: input.range, newId });
+    return {
+      result,
+      ms: performance.now() - t0,
+      heapMb: getHeapStatistics().used_heap_size / (1024 * 1024),
+    };
+  }
   const sizes = new Map(input.pictureSizes);
   const kinds = new Map(input.mediaKinds ?? []);
   const result = convertDeck(input.parts, {
@@ -64,7 +75,7 @@ export function sceneTask(input: SceneTaskInput): SceneTaskOutput {
 /**
  * The batch's geometry files named here, in the worker (`geomFileOf`: re-tokenised, checked, serialised and
  * hashed), slide by slide: a slide whose new files would take the batch past `maxBytes` keeps none and is
- * listed in `geomOver` (the job makes it a compact picture). `result.geoms` is emptied: the job reads only
+ * listed in `geomOver` (the job leaves out the objects that name them). `result.geoms` is emptied: the job reads only
  * the named files, whose bytes are all it holds.
  */
 export function nameGeomFiles(out: SceneTaskOutput, maxBytes: number): void {
