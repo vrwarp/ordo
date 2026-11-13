@@ -22,11 +22,13 @@ import {
   ungroupSelection,
   writeLastObjectClip,
 } from './actions.ts';
+import { previewLooks } from '../../lib/lookPreviews.ts';
 import { uploadFiles } from '../library/MediaTab.tsx';
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { ConflictDialog } from './ConflictDialog.tsx';
 import { historyKey, keyPlace, slideNavKey, stepSlide } from './editorKeys.ts';
-import { LookPreviews } from './LookPreviews.tsx';
+import { FloatingContextBar } from './FloatingContextBar.tsx';
+import { LookPreviews, SingleLookStagePreview } from './LookPreviews.tsx';
 import { addVideo } from './mediaOps.ts';
 import {
   adoptJobSaves,
@@ -52,7 +54,7 @@ import { hasGroup, htmlToRichText, pasteRichText } from './ops/index.ts';
 import { PresentationPanel } from './PresentationPanel.tsx';
 import { RevisionsDialog } from './RevisionsDialog.tsx';
 import { SlideCanvas } from './SlideCanvas.tsx';
-import { SlidePanel } from './SlidePanel.tsx';
+import { makeSlideEditable, SlidePanel } from './SlidePanel.tsx';
 import { SlidesPanel } from './SlidesPanel.tsx';
 import { SongReflowEditor } from './SongReflowEditor.tsx';
 
@@ -89,9 +91,13 @@ export function EditorView({ id }: { id: string }) {
   const ed = useEditor();
   const libP = useLibrary((s) => s.data.presentations.find((p) => p.id === id));
   const themes = useLibrary((s) => s.data.themes);
+  const allLooks = useLibrary((s) => s.data.settings.looks);
   const locked = useLockedIds();
   const media = useMediaLookup();
   const [tab, setTab] = useState<'object' | 'slide' | 'presentation'>('slide');
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [stageLens, setStageLens] = useState<'canvas' | string>('canvas');
+  const [bgPick, setBgPick] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [songMode, setSongMode] = useState<'reflow' | 'canvas' | null>(null);
   const [zoom, setZoom] = useState<'fit' | 0.5 | 0.75 | 1>('fit');
@@ -454,8 +460,19 @@ export function EditorView({ id }: { id: string }) {
     const targetId = objectId ?? ed.objectId;
     if (targetId && targetId !== ed.objectId) selectObject(targetId);
     setTab('object');
+    setDrawerOpen(true);
     focusTextEditor();
   };
+  const openDrawerTab = (target: 'object' | 'slide' | 'presentation') => {
+    if (drawerOpen && tab === target) {
+      setDrawerOpen(false);
+    } else {
+      setTab(target);
+      setDrawerOpen(true);
+    }
+  };
+  const shownLooks = previewLooks(allLooks);
+  const activeLensLook = stageLens === 'canvas' ? undefined : shownLooks.find((l) => l.id === stageLens);
   const duplicate = () => {
     if (obj && slide) duplicateSelection();
   };
@@ -503,8 +520,13 @@ export function EditorView({ id }: { id: string }) {
       </>
     ) : undefined;
 
+  const showProps = coarse || drawerOpen;
+
   return (
-    <div className={`editor ${focusMode ? 'focus-mode' : ''}`} ref={root}>
+    <div
+      className={`editor ${focusMode ? 'focus-mode' : ''} ${!coarse ? (drawerOpen ? 'drawer-open' : 'canvas-first') : ''}`}
+      ref={root}
+    >
       {coarse ? (
         <div className="toolbar ed-toolbar-touch">
           <a className="btn small ghost" href="#/library">
@@ -582,41 +604,50 @@ export function EditorView({ id }: { id: string }) {
             ]}
           />
           <span className="spacer" />
-          <button type="button" onClick={() => setFinding(true)} title="Find and replace (Ctrl+F)">
+          <button type="button" onClick={() => setFinding((v) => !v)} title="Find and replace (Ctrl+F)">
             Find…
           </button>
           <button type="button" onClick={() => setRevisions(true)}>
             History
           </button>
-          <button
-            type="button"
-            className={`small ${focusMode ? 'on' : ''}`}
-            onClick={() => void toggleFullScreen()}
-            title="Toggle full screen canvas (hide side panels)"
-          >
-            {focusMode ? 'Exit Full Screen' : 'Full Screen'}
-          </button>
         </div>
       ) : (
-        <div className="toolbar">
+        <div className="toolbar ed-toolbar-calm">
+          {/* Left Zone: Back, Inline-Editable Title, Unified Save + Revision History Pill, Undo/Redo */}
           <a className="btn small ghost" href="#/library">
             ← Library
           </a>
-          <b className="ellipsis" style={{ maxWidth: 260 }}>
-            {p.title}
-          </b>
-          <span className="muted small">rev {ed.base?.rev}</span>
-          {p.kind === 'song' && (
-            <div
-              className="row"
-              style={{
-                background: 'var(--bg)',
-                borderRadius: 6,
-                padding: 2,
-                border: '1px solid var(--line)',
-                margin: '0 4px',
-              }}
+          <input
+            aria-label="Presentation title"
+            className="ed-inline-title"
+            value={p.title}
+            disabled={readOnly}
+            onChange={(e) => change((q) => ({ ...q, title: e.target.value }), 'pres:title')}
+          />
+          <div className="ed-save-rev-group">
+            <button
+              type="button"
+              className={ed.dirty || ed.saving ? 'primary small' : 'ed-saved-pill small'}
+              aria-label={ed.saving ? 'Saving…' : ed.dirty ? 'Save' : 'Saved'}
+              disabled={readOnly || !ed.dirty || ed.saving}
+              onClick={() => void save()}
+              title="Save presentation (Ctrl+S)"
             >
+              {ed.saving ? 'Saving…' : ed.dirty ? 'Save' : 'Saved'}
+            </button>
+            <button
+              type="button"
+              className="small ghost ed-rev-btn"
+              aria-label="History"
+              title="Open visual revision history"
+              onClick={() => setRevisions(true)}
+            >
+              rev {ed.base?.rev ?? p.rev} ▾
+            </button>
+          </div>
+
+          {p.kind === 'song' && (
+            <div className="ed-mode-switch">
               <button
                 type="button"
                 className={`small ${(songMode ?? 'reflow') === 'reflow' ? 'on' : 'ghost'}`}
@@ -635,57 +666,62 @@ export function EditorView({ id }: { id: string }) {
               </button>
             </div>
           )}
+
           <button
             type="button"
-            className={ed.dirty || ed.saving ? 'primary' : 'ed-saved-pill'}
-            aria-label={ed.saving ? 'Saving…' : ed.dirty ? 'Save' : 'Saved'}
-            disabled={readOnly || !ed.dirty || ed.saving}
-            onClick={() => void save()}
-            title="Ctrl+S"
+            className="small ghost"
+            disabled={readOnly || !ed.canUndo}
+            onClick={undo}
+            title="Undo (Ctrl+Z)"
           >
-            {ed.saving ? 'Saving…' : ed.dirty ? 'Save' : 'Saved'}
-          </button>
-          <button type="button" disabled={readOnly || !ed.canUndo} onClick={undo} title="Undo (Ctrl+Z)">
             ↶<span className="touch-label">Undo</span>
           </button>
-          <button type="button" disabled={readOnly || !ed.canRedo} onClick={redo} title="Redo (Ctrl+Y)">
+          <button
+            type="button"
+            className="small ghost"
+            disabled={readOnly || !ed.canRedo}
+            onClick={redo}
+            title="Redo (Ctrl+Y)"
+          >
             ↷<span className="touch-label">Redo</span>
           </button>
 
-          {!(p.kind === 'song' && (songMode ?? 'reflow') === 'reflow') && (
-            <>
-              <select
-                aria-label="Canvas zoom"
-                className="ed-zoom-select"
-                value={String(zoom)}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setZoom(v === 'fit' ? 'fit' : (Number(v) as 0.5 | 0.75 | 1));
-                }}
-                title="Canvas zoom"
-              >
-                <option value="fit">Fit</option>
-                <option value="0.5">50%</option>
-                <option value="0.75">75%</option>
-                <option value="1">100%</option>
-              </select>
-              <span style={{ width: 1, height: 20, background: 'var(--line)', margin: '0 4px' }} />
+          <span className="spacer" />
 
+          {/* Center Zone: Clean Creation Island */}
+          {!(p.kind === 'song' && (songMode ?? 'reflow') === 'reflow') && (
+            <div className="ed-insert-island" role="group" aria-label="Insert onto slide">
               <button
                 type="button"
+                className="small ghost"
                 disabled={readOnly || !slide}
-                onClick={() => add(newText(theme))}
+                onClick={() => {
+                  setStageLens('canvas');
+                  add(newText(theme));
+                }}
                 title="Add text box"
               >
                 + Text
               </button>
-              <button type="button" disabled={readOnly || !slide} onClick={() => setImagePick(true)}>
+              <button
+                type="button"
+                className="small ghost"
+                disabled={readOnly || !slide}
+                onClick={() => {
+                  setStageLens('canvas');
+                  setImagePick(true);
+                }}
+              >
                 + Image
               </button>
               <button
                 type="button"
+                className="small ghost"
                 disabled={readOnly || !slide}
-                onClick={() => setVideoPick(true)}
+                onClick={() => {
+                  setStageLens('canvas');
+                  setVideoPick(true);
+                }}
                 title="Add a video that plays in the slide"
               >
                 + Video
@@ -694,42 +730,124 @@ export function EditorView({ id }: { id: string }) {
                 label="Shapes"
                 disabled={readOnly || !slide}
                 items={[
-                  { label: 'Rectangle', name: 'Rectangle', onSelect: () => add(newShape('rect')) },
-                  { label: 'Ellipse', name: 'Ellipse', onSelect: () => add(newShape('ellipse')) },
-                  { label: 'Line', name: 'Line', onSelect: () => add(newShape('line')) },
+                  {
+                    label: 'Rectangle',
+                    name: 'Rectangle',
+                    onSelect: () => {
+                      setStageLens('canvas');
+                      add(newShape('rect'));
+                    },
+                  },
+                  {
+                    label: 'Ellipse',
+                    name: 'Ellipse',
+                    onSelect: () => {
+                      setStageLens('canvas');
+                      add(newShape('ellipse'));
+                    },
+                  },
+                  {
+                    label: 'Line',
+                    name: 'Line',
+                    onSelect: () => {
+                      setStageLens('canvas');
+                      add(newShape('line'));
+                    },
+                  },
                 ]}
               />
-              <Menu
-                label="Arrange"
-                disabled={readOnly || !obj}
-                items={[
-                  { label: '⤒ Bring to front', name: 'Front', onSelect: () => z('front') },
-                  { label: '↑ Bring forward', name: 'Forward', onSelect: () => z('forward') },
-                  { label: '↓ Send backward', name: 'Backward', onSelect: () => z('backward') },
-                  { label: '⤓ Send to back', name: 'Back', onSelect: () => z('back') },
-                  { label: '⧉ Duplicate (Ctrl+D)', name: 'Duplicate', onSelect: duplicate },
-                  { label: '🗑 Delete (Del)', name: 'Delete', danger: true, onSelect: remove },
-                  ...(grouped ? [{ label: 'Ungroup', onSelect: ungroupSelection }] : []),
-                ]}
-              />
-            </>
+              <button
+                type="button"
+                className="small ghost"
+                disabled={readOnly || !slide}
+                onClick={() => setBgPick(true)}
+                title="Choose slide background media"
+              >
+                Background
+              </button>
+            </div>
           )}
 
           <span className="spacer" />
 
-          <button type="button" onClick={() => setFinding(true)} title="Find and replace (Ctrl+F)">
-            Find…
-          </button>
-          <button type="button" onClick={() => setRevisions(true)}>
-            History
-          </button>
+          {/* Right Zone: Search, Zoom, On-Demand Drawer Triggers, Focus Mode */}
+          {!(p.kind === 'song' && (songMode ?? 'reflow') === 'reflow') && (
+            <select
+              aria-label="Canvas zoom"
+              className="ed-zoom-select"
+              value={String(zoom)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setZoom(v === 'fit' ? 'fit' : (Number(v) as 0.5 | 0.75 | 1));
+              }}
+              title="Canvas zoom"
+            >
+              <option value="fit">Fit</option>
+              <option value="0.5">50%</option>
+              <option value="0.75">75%</option>
+              <option value="1">100%</option>
+            </select>
+          )}
           <button
             type="button"
-            className={`small ${focusMode ? 'on' : ''}`}
+            className={`small ghost ${finding ? 'on' : ''}`}
+            onClick={() => setFinding((v) => !v)}
+            title="Find and replace (Ctrl+F)"
+          >
+            Find…
+          </button>
+          {!(p.kind === 'song' && (songMode ?? 'reflow') === 'reflow') && (
+            <div className="ed-drawer-triggers" role="group" aria-label="Inspector panels">
+              {!drawerOpen ? (
+                <>
+                  <button
+                    type="button"
+                    className="small ghost"
+                    disabled={!slide}
+                    onClick={() => openDrawerTab('slide')}
+                    title="Slide cues, background, and notes"
+                  >
+                    Slide
+                  </button>
+                  <button
+                    type="button"
+                    className="small ghost"
+                    onClick={() => openDrawerTab('presentation')}
+                    title="Deck theme, arrangements, and PowerPoint settings"
+                  >
+                    Presentation
+                  </button>
+                  <button
+                    type="button"
+                    className="small ghost"
+                    onClick={() => openDrawerTab(obj ? 'object' : 'slide')}
+                    title="Open fine-tune inspector drawer"
+                  >
+                    Tune
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="small on"
+                  aria-label="Tune"
+                  aria-pressed={true}
+                  onClick={() => setDrawerOpen(false)}
+                  title="Close fine-tune inspector drawer"
+                >
+                  Tune ✕
+                </button>
+              )}
+            </div>
+          )}
+          <button
+            type="button"
+            className={`small ghost ${focusMode ? 'on' : ''}`}
             onClick={() => void toggleFullScreen()}
             title="Toggle full screen canvas (hide side panels)"
+            aria-label={focusMode ? 'Exit Full Screen' : 'Full Screen'}
           >
-            {focusMode ? 'Exit Full Screen' : 'Full Screen'}
+            {focusMode ? 'Exit Full Screen' : '⛶'}
           </button>
         </div>
       )}
@@ -794,89 +912,193 @@ export function EditorView({ id }: { id: string }) {
                 </button>
               </div>
             )}
+            {(slide?.pptx || slide?.imported) && !showProps && stageLens === 'canvas' && (
+              <div className="ed-pptx-stage-pill" data-pptx-stage-pill>
+                <span className="small muted">
+                  {slide.imported ? `Imported page ${slide.imported.page}` : 'Imported PowerPoint slide'}
+                </span>
+                {slide.imported?.textBoxes?.length && !readOnly ? (
+                  <button
+                    type="button"
+                    className="small primary"
+                    onClick={() => void makeSlideEditable(slide, p, ed.dirty)}
+                  >
+                    Make editable
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="small"
+                  onClick={() => {
+                    setTab('slide');
+                    setDrawerOpen(true);
+                  }}
+                >
+                  PowerPoint options ▸
+                </button>
+              </div>
+            )}
             {slide ? (
-              <div
-                className="ed-canvas-zoom"
-                style={
-                  zoom === 'fit'
-                    ? { display: 'contents' }
-                    : {
-                        transform: `scale(${zoom})`,
-                        transformOrigin: 'center center',
-                        width: '100%',
-                        height: '100%',
-                        display: 'flex',
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                      }
-                }
-              >
+              activeLensLook ? (
+                <SingleLookStagePreview
+                  look={activeLensLook}
+                  presentation={p}
+                  slideId={slide.id}
+                  onBackToCanvas={() => setStageLens('canvas')}
+                />
+              ) : (
                 <SlideCanvas
                   slide={slide}
                   backgroundMediaId={bgId}
                   media={media}
                   readOnly={readOnly}
+                  zoom={zoom}
+                  avoidTopRight={finding ? { w: 344, h: 430 } : undefined}
                   onEditText={editText}
                   objectTools={objectTools}
+                  hasExternalTextEditor={showProps && tab === 'object'}
+                  floatingBar={
+                    !coarse && obj && !(drawerOpen && tab === 'object') ? (
+                      <FloatingContextBar
+                        readOnly={readOnly}
+                        drawerOpen={drawerOpen && tab === 'object'}
+                        onToggleDrawer={() => openDrawerTab('object')}
+                      />
+                    ) : undefined
+                  }
                   slideRect={p.source?.native?.slideRect}
                 />
-              </div>
+              )
             ) : (
               <div className="center muted">Add a slide to start.</div>
             )}
-            <details
-              className="ed-looks"
-              open={looksShown}
-              onToggle={(e) => {
-                const open = (e.currentTarget as HTMLDetailsElement).open;
-                if (open === looksShown) return;
-                setLooksOpen(open);
-                try {
-                  localStorage.setItem(LOOKS_OPEN_KEY, open ? '1' : '0');
-                } catch {
-                  /* private mode: not remembered */
-                }
-              }}
-            >
-              <summary>Look previews</summary>
-              {looksShown && <LookPreviews presentation={p} slideId={slide?.id} compact />}
-            </details>
+
+            {/* Proposal B Bottom Stage Bar: Floating Output View Lens + Optional 4-Up Strip */}
+            {slide && (
+              <div className="ed-lens-dock">
+                <div className="ed-lens-pills" role="tablist" aria-label="Stage view lens">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={stageLens === 'canvas'}
+                    className={`ed-lens-pill${stageLens === 'canvas' ? ' on' : ''}`}
+                    onClick={() => setStageLens('canvas')}
+                  >
+                    Canvas
+                  </button>
+                  {shownLooks.map((look) => (
+                    <button
+                      key={look.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={stageLens === look.id}
+                      className={`ed-lens-pill${stageLens === look.id ? ' on' : ''}`}
+                      onClick={() => setStageLens(stageLens === look.id ? 'canvas' : look.id)}
+                    >
+                      {look.name}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className={`small ghost ed-all-looks-btn${looksShown ? ' on' : ''}`}
+                  aria-expanded={looksShown}
+                  onClick={() => {
+                    const next = !looksShown;
+                    setLooksOpen(next);
+                    try {
+                      localStorage.setItem(LOOKS_OPEN_KEY, next ? '1' : '0');
+                    } catch {
+                      /* private mode */
+                    }
+                  }}
+                >
+                  {looksShown ? 'Hide 4-screen tray ▾' : 'All 4 screens ▴'}
+                </button>
+              </div>
+            )}
+
+            {looksShown && (
+              <div className="ed-looks" data-looks-tray>
+                <LookPreviews
+                  presentation={p}
+                  slideId={slide?.id}
+                  compact
+                  onSelectLook={(lookId) => setStageLens(stageLens === lookId ? 'canvas' : lookId)}
+                />
+              </div>
+            )}
           </div>
-          <div className="props">
-            <div className="row" style={{ marginBottom: 8, gap: 4 }}>
-              <button
-                type="button"
-                className={`small ${tab === 'object' ? 'on' : ''}`}
-                disabled={!obj}
-                onClick={() => setTab('object')}
-              >
-                Object
-              </button>
-              <button
-                type="button"
-                className={`small ${tab === 'slide' ? 'on' : ''}`}
-                disabled={!slide}
-                onClick={() => setTab('slide')}
-              >
-                Slide
-              </button>
-              <button
-                type="button"
-                className={`small ${tab === 'presentation' ? 'on' : ''}`}
-                onClick={() => setTab('presentation')}
-              >
-                Presentation
-              </button>
-            </div>
-            {tab === 'object' && obj && <ObjectPanel o={obj} readOnly={readOnly} />}
-            {tab === 'object' && !obj && <span className="muted">Select an object on the slide.</span>}
-            {tab === 'slide' && slide && <SlidePanel slide={slide} p={p} readOnly={readOnly} />}
-            {tab === 'presentation' && <PresentationPanel p={p} readOnly={readOnly} />}
-          </div>
+          {showProps && (
+            <aside className={coarse ? 'props' : 'props ed-slideover-drawer'} aria-label="Inspector drawer">
+              <div className="row ed-drawer-hdr">
+                <div className="ed-seg-bar" style={{ flex: 1 }}>
+                  <button
+                    type="button"
+                    className={`small ${tab === 'object' ? 'on' : ''}`}
+                    disabled={!obj}
+                    onClick={() => setTab('object')}
+                  >
+                    Object
+                  </button>
+                  <button
+                    type="button"
+                    className={`small ${tab === 'slide' ? 'on' : ''}`}
+                    disabled={!slide}
+                    onClick={() => setTab('slide')}
+                  >
+                    Slide
+                  </button>
+                  <button
+                    type="button"
+                    className={`small ${tab === 'presentation' ? 'on' : ''}`}
+                    onClick={() => setTab('presentation')}
+                  >
+                    Presentation
+                  </button>
+                </div>
+                {!coarse && (
+                  <button
+                    type="button"
+                    className="small ghost"
+                    aria-label="Close inspector"
+                    title="Close inspector drawer"
+                    onClick={() => setDrawerOpen(false)}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+              {tab === 'object' && obj && <ObjectPanel o={obj} readOnly={readOnly} />}
+              {tab === 'object' && !obj && <span className="muted">Select an object on the slide.</span>}
+              {tab === 'slide' && slide && <SlidePanel slide={slide} p={p} readOnly={readOnly} />}
+              {tab === 'presentation' && <PresentationPanel p={p} readOnly={readOnly} />}
+            </aside>
+          )}
         </>
       )}
       {revisions && <RevisionsDialog id={p.id} readOnly={readOnly} onClose={() => setRevisions(false)} />}
       {finding && <FindReplaceDialog readOnly={readOnly} onClose={() => setFinding(false)} />}
+      {bgPick && slide && !readOnly && (
+        <MediaPickerDialog
+          title="Choose slide background"
+          kinds={['image', 'video']}
+          backgroundsFirst
+          onClose={() => setBgPick(false)}
+          onPick={(m) => {
+            change((q) => ({
+              ...q,
+              sections: q.sections.map((sec) => ({
+                ...sec,
+                slides: sec.slides.map((sl) =>
+                  sl.id === slide.id ? { ...sl, backgroundMediaId: m.id } : sl,
+                ),
+              })),
+            }));
+            setBgPick(false);
+          }}
+        />
+      )}
       {imagePick && (
         <MediaPickerDialog
           title="Insert an image"

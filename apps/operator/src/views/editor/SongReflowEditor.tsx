@@ -7,6 +7,7 @@ import {
   type Slide,
 } from '@ordo/domain';
 import { type ReactNode, useMemo } from 'react';
+import { Menu } from '../../components/Menu.tsx';
 import { authoringArrangement } from '../../lib/arrangement.ts';
 import { useLibrary } from '../../state/library.ts';
 import { BackgroundPicker } from './BackgroundPicker.tsx';
@@ -29,6 +30,18 @@ export function SongReflowEditor(props: {
   const activeArrangement: Arrangement = useMemo(() => {
     return p.arrangements[0] ?? authoringArrangement(p);
   }, [p]);
+
+  const setArrangementSections = (nextSectionIds: string[]) => {
+    if (readOnly) return;
+    change((prev) => {
+      const cur = prev.arrangements[0] ?? authoringArrangement(prev);
+      const updated: Arrangement = { ...cur, sectionIds: nextSectionIds };
+      return {
+        ...prev,
+        arrangements: prev.arrangements.length > 0 ? [updated, ...prev.arrangements.slice(1)] : [updated],
+      };
+    });
+  };
 
   const updateLyricTextOnSlide = (sl: Slide, text: string): Slide => {
     const lyricId = sl.lyricObjectId;
@@ -58,47 +71,69 @@ export function SongReflowEditor(props: {
     };
   };
 
+  const splitSlideIntoParts = (slideId: string, parts: string[]) => {
+    if (readOnly || parts.length <= 1) return;
+    let focusSlideId: string | undefined;
+    change((prev) => {
+      const curTheme = themeOf(prev, themes);
+      const sec = prev.sections.find((s) => s.slides.some((sl) => sl.id === slideId));
+      if (!sec) return prev;
+      const slideIdx = sec.slides.findIndex((sl) => sl.id === slideId);
+      const firstSlide = updateSlide(prev, slideId, (sl) => updateLyricTextOnSlide(sl, parts[0] ?? ''));
+      const extraSlides: Slide[] = parts.slice(1).map((part) => newSlideFor(prev, curTheme, part));
+      focusSlideId = extraSlides[0]?.id;
+      return {
+        ...firstSlide,
+        sections: firstSlide.sections.map((s) =>
+          s.id === sec.id
+            ? {
+                ...s,
+                slides: [...s.slides.slice(0, slideIdx + 1), ...extraSlides, ...s.slides.slice(slideIdx + 1)],
+              }
+            : s,
+        ),
+      };
+    });
+    if (focusSlideId) {
+      const targetId = focusSlideId;
+      selectSlide(targetId);
+      requestAnimationFrame(() => {
+        const el = document.querySelector<HTMLTextAreaElement>(`textarea[data-reflow-slide="${targetId}"]`);
+        el?.focus();
+      });
+    }
+  };
+
+  const splitAtCursor = (slideId: string, currentText: string) => {
+    if (readOnly) return;
+    const el = document.querySelector<HTMLTextAreaElement>(`textarea[data-reflow-slide="${slideId}"]`);
+    const pos =
+      el && el.selectionStart > 0 && el.selectionStart < currentText.length
+        ? el.selectionStart
+        : Math.floor(currentText.length / 2);
+    const before = currentText.slice(0, pos).replace(/\n+$/, '');
+    const after = currentText.slice(pos).replace(/^\n+/, '');
+    if (!before && !after) return;
+    splitSlideIntoParts(slideId, [before, after]);
+  };
+
+  const autoSplitTwoLines = (slideId: string, currentText: string) => {
+    if (readOnly) return;
+    const lines = currentText.split('\n').filter((l) => l.trim().length > 0);
+    if (lines.length <= 2) return;
+    const chunks: string[] = [];
+    for (let i = 0; i < lines.length; i += 2) {
+      chunks.push(lines.slice(i, i + 2).join('\n'));
+    }
+    splitSlideIntoParts(slideId, chunks);
+  };
+
   const updateSlideText = (slideId: string, text: string) => {
     if (readOnly) return;
-    // Split on '---' followed by Enter (newline) so typing '---' + Enter cleanly splits into a new slide
     if (/(?:^|\r?\n)---\r?\n/.test(text)) {
       const parts = text.split(/(?:^|\r?\n)---\r?\n/).map((x) => x.replace(/^\n+|\n+$/g, ''));
       if (parts.length > 1) {
-        let focusSlideId: string | undefined;
-        change((prev) => {
-          const curTheme = themeOf(prev, themes);
-          const sec = prev.sections.find((s) => s.slides.some((sl) => sl.id === slideId));
-          if (!sec) return prev;
-          const slideIdx = sec.slides.findIndex((sl) => sl.id === slideId);
-          const firstSlide = updateSlide(prev, slideId, (sl) => updateLyricTextOnSlide(sl, parts[0] ?? ''));
-          const extraSlides: Slide[] = parts.slice(1).map((part) => newSlideFor(prev, curTheme, part));
-          focusSlideId = extraSlides[0]?.id;
-          return {
-            ...firstSlide,
-            sections: firstSlide.sections.map((s) =>
-              s.id === sec.id
-                ? {
-                    ...s,
-                    slides: [
-                      ...s.slides.slice(0, slideIdx + 1),
-                      ...extraSlides,
-                      ...s.slides.slice(slideIdx + 1),
-                    ],
-                  }
-                : s,
-            ),
-          };
-        });
-        if (focusSlideId) {
-          const targetId = focusSlideId;
-          selectSlide(targetId);
-          requestAnimationFrame(() => {
-            const el = document.querySelector<HTMLTextAreaElement>(
-              `textarea[data-reflow-slide="${targetId}"]`,
-            );
-            el?.focus();
-          });
-        }
+        splitSlideIntoParts(slideId, parts);
         return;
       }
     }
@@ -200,7 +235,7 @@ export function SongReflowEditor(props: {
 
   return (
     <div className="ed-reflow col grow" style={{ minHeight: 0, overflow: 'hidden' }}>
-      {/* Top Reflow Toolbar */}
+      {/* Top Reflow Studio Header + Interactive Arrangement Strip */}
       <div
         className="row wrap"
         style={{
@@ -208,7 +243,7 @@ export function SongReflowEditor(props: {
           background: 'var(--subtle, #141416)',
           borderBottom: '1px solid var(--line)',
           alignItems: 'center',
-          gap: 14,
+          gap: 12,
         }}
       >
         <label className="row small" style={{ alignItems: 'center', gap: 6 }}>
@@ -241,32 +276,55 @@ export function SongReflowEditor(props: {
 
         <span className="spacer" />
 
-        {/* Arrangement Pills */}
-        <div className="row small wrap" style={{ alignItems: 'center', gap: 4 }}>
-          <span className="muted">Arrangement:</span>
+        {/* Interactive Arrangement Pill Strip */}
+        <div className="row small wrap" style={{ alignItems: 'center', gap: 4 }} data-arrangement-strip>
+          <span className="muted">{activeArrangement.name}:</span>
           {(() => {
             const seen = new Map<string, number>();
-            return activeArrangement.sectionIds.map((secId) => {
+            return activeArrangement.sectionIds.map((secId, arrIdx) => {
               const occ = (seen.get(secId) ?? 0) + 1;
               seen.set(secId, occ);
               const sec = p.sections.find((s) => s.id === secId);
               if (!sec) return null;
               return (
-                <button
-                  key={`${secId}#${occ}`}
-                  type="button"
-                  className="tag"
-                  style={{ cursor: 'pointer', background: 'var(--bg)', border: '1px solid var(--line)' }}
-                  onClick={() => {
-                    const targetEl = document.getElementById(`section-${secId}`);
-                    targetEl?.scrollIntoView({ behavior: 'smooth' });
-                  }}
-                >
-                  {sec.short || sec.label}
-                </button>
+                <span key={`${secId}#${occ}`} className="song-arr-pill">
+                  <button
+                    type="button"
+                    className="song-arr-jump"
+                    onClick={() => {
+                      const targetEl = document.getElementById(`section-${secId}`);
+                      targetEl?.scrollIntoView({ behavior: 'smooth' });
+                    }}
+                  >
+                    {sec.short || sec.label}
+                  </button>
+                  {!readOnly && activeArrangement.sectionIds.length > 1 && (
+                    <button
+                      type="button"
+                      className="song-arr-rm"
+                      aria-label={`Remove ${sec.label} from arrangement`}
+                      title="Remove step from arrangement"
+                      onClick={() =>
+                        setArrangementSections(activeArrangement.sectionIds.filter((_, j) => j !== arrIdx))
+                      }
+                    >
+                      ×
+                    </button>
+                  )}
+                </span>
               );
             });
           })()}
+          {!readOnly && p.sections.length > 0 && (
+            <Menu
+              label="+ Step"
+              items={p.sections.map((sec) => ({
+                label: `+ ${sec.label}`,
+                name: sec.label,
+                onSelect: () => setArrangementSections([...activeArrangement.sectionIds, sec.id]),
+              }))}
+            />
+          )}
         </div>
       </div>
 
@@ -365,6 +423,8 @@ export function SongReflowEditor(props: {
                 {sec.slides.map((slide, sIdx) => {
                   const isSelected = slide.id === (selectedSlideId ?? ed.slideId);
                   const text = firstText(slide) ?? '';
+                  const nonEmptyLines = text.split('\n').filter((l) => l.trim().length > 0).length;
+                  const overflowsStream = nonEmptyLines > 2;
                   const hasCustom =
                     slide.objects.length > 1 ||
                     slide.objects.some((o) => o.type !== 'text') ||
@@ -384,11 +444,56 @@ export function SongReflowEditor(props: {
                         gap: 8,
                       }}
                     >
-                      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span className="muted small" style={{ fontWeight: 600 }}>
-                          Slide {sIdx + 1}
-                        </span>
+                      <div
+                        className="row wrap"
+                        style={{ justifyContent: 'space-between', alignItems: 'center', gap: 6 }}
+                      >
+                        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                          <span className="muted small" style={{ fontWeight: 600 }}>
+                            Slide {sIdx + 1}
+                          </span>
+                          {overflowsStream ? (
+                            <span
+                              className="tag amber"
+                              title="Livestream lower-third straps fit 2 lines cleanly"
+                            >
+                              ⚠ {nonEmptyLines} lines · Clips 2-line Stream
+                            </span>
+                          ) : nonEmptyLines > 0 ? (
+                            <span className="muted" style={{ fontSize: 11 }}>
+                              ✓ {nonEmptyLines} line{nonEmptyLines === 1 ? '' : 's'}
+                            </span>
+                          ) : null}
+                        </div>
+
                         <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+                          {overflowsStream && !readOnly && (
+                            <button
+                              type="button"
+                              className="small"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                autoSplitTwoLines(slide.id, text);
+                              }}
+                              title="Automatically split into 2-line slides for livestream lower thirds"
+                            >
+                              Auto-Split (2 lines)
+                            </button>
+                          )}
+                          {!readOnly && text.trim().length > 0 && (
+                            <button
+                              type="button"
+                              className="small ghost"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                splitAtCursor(slide.id, text);
+                              }}
+                              title="Split slide at cursor position (Alt+Enter / Opt+Enter)"
+                            >
+                              ✂ Split at Cursor
+                            </button>
+                          )}
                           {hasCustom && (
                             <span
                               className="tag"
@@ -436,7 +541,7 @@ export function SongReflowEditor(props: {
                         rows={Math.max(2, text.split('\n').length)}
                         value={text}
                         disabled={readOnly}
-                        placeholder="Enter lyrics for this slide (type --- and press Enter to split)..."
+                        placeholder="Enter lyrics (Opt+Enter or --- to split into next slide)…"
                         style={{
                           fontSize: 15,
                           lineHeight: 1.4,
@@ -445,6 +550,12 @@ export function SongReflowEditor(props: {
                           padding: 8,
                         }}
                         onFocus={() => selectSlide(slide.id)}
+                        onKeyDown={(e) => {
+                          if (e.altKey && e.key === 'Enter') {
+                            e.preventDefault();
+                            splitAtCursor(slide.id, text);
+                          }
+                        }}
                         onChange={(e) => updateSlideText(slide.id, e.target.value)}
                       />
 

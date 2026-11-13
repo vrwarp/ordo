@@ -9,6 +9,7 @@ import { createElement, isValidElement, type ReactElement, type ReactNode } from
 import { renderToStaticMarkup } from 'react-dom/server';
 import { clearGeomFiles, putGeomFile } from '@ordo/renderer/geom/index.ts';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { ColorPill, PaintPill, PaintPopover } from '../src/components/ColorPicker.tsx';
 import { Check, ColorField, NumberField, Select } from '../src/components/fields.tsx';
 import { openPresentation, useEditor } from '../src/views/editor/editorStore.ts';
 import { ObjectPanel } from '../src/views/editor/ObjectPanel.tsx';
@@ -76,7 +77,7 @@ const legacy = (o: ShapeObject) =>
 // ---- the element tree of a props-only view ---------------------------------------------------------------
 
 type El = ReactElement<Record<string, unknown>>;
-const LEAVES = new Set<unknown>([Check, ColorField, NumberField, Select]);
+const LEAVES = new Set<unknown>([Check, ColorField, ColorPill, NumberField, PaintPill, Select]);
 
 /** Every element a view renders, its own sub-views expanded; the field components are leaves. */
 function elements(node: ReactNode): El[] {
@@ -395,73 +396,112 @@ describe('the views', () => {
     expect(out.shape).toBe('ellipse');
   });
 
-  it('solid fill: the toggle, the fill type and the colour; a gradient: angle, stops and their buttons', () => {
+  it('solid fill, none, and unified PaintPopover (Solid | Linear | Radial, Gradient Ramp, single active-stop bar)', () => {
     const solid = html(
       createElement(ShapeFillFields, { o: shape({ fill: red }), disabled: false, set: noop }),
     );
-    expect(solid).toMatch(/<input type="checkbox" checked=""/);
-    expect(solid).toContain('<option value="solid" selected="">Solid colour</option>');
+    expect(solid).toContain('data-fill-kind="solid"');
     expect(solid).toContain('value="#c82828"');
+    expect(solid).toContain('aria-label="Remove fill"');
     expect(solid).not.toContain('data-gradient');
+
     const none = html(createElement(ShapeFillFields, { o: shape(), disabled: false, set: noop }));
+    expect(none).toContain('data-fill-kind="none"');
+    expect(none).toContain('aria-label="Add fill"');
     expect(none).not.toMatch(/<select|type="color"/);
 
     const lin = shape({ fill: red, gradient: twoStops() });
     const g = html(createElement(ShapeFillFields, { o: lin, disabled: false, set: noop }));
     expect(g).toContain('data-gradient="linear"');
-    expect(g).toContain('<span>Angle</span>');
-    expect(g).toContain('value="45"');
-    expect(g.match(/data-stop="/g)).toHaveLength(2);
-    expect(g).not.toContain('value="#c82828" disabled');
-    // Two stops cannot lose one; sixteen cannot gain one.
-    expect(g.match(/<button[^>]*aria-label="Remove stop \d"[^>]*disabled=""/g)).toHaveLength(2);
-    expect(g).toMatch(/<button type="button" class="small">Add stop<\/button>/);
-    let full = lin.gradient!;
-    while (full.stops.length < MAX_STOPS) full = addStop(full);
-    const f = html(
-      createElement(ShapeFillFields, { o: withGradient(lin, full), disabled: false, set: noop }),
-    );
-    expect(f).toMatch(/<button type="button" class="small" disabled="">Add stop<\/button>/);
+    expect(g).toContain('Linear · 45°');
+
     const rad = html(
       createElement(ShapeFillFields, { o: withFillKind(lin, 'radial'), disabled: false, set: noop }),
     );
     expect(rad).toContain('data-gradient="radial"');
-    expect(rad).not.toContain('Angle');
+    expect(rad).toContain('Radial · 2');
+
+    // Inside PaintPopover: Solid | Linear | Radial tabs, Deck & Theme Swatches, Gradient Ramp, and single Stop 1 row.
+    const popLin = html(
+      createElement(PaintPopover, {
+        inline: true,
+        anchor: null,
+        value: { kind: 'gradient', gradient: lin.gradient! },
+        modes: ['solid', 'linear', 'radial'],
+        onChange: () => undefined,
+        onClose: () => undefined,
+      }),
+    );
+    expect(popLin).toContain('aria-label="Paint mode"');
+    expect(popLin).toContain('>Solid</button>');
+    expect(popLin).toContain('>Linear</button>');
+    expect(popLin).toContain('>Radial</button>');
+    expect(popLin).toContain('Deck &amp; Theme Swatches');
+    expect(popLin).toContain('Gradient Ramp');
+    expect(popLin).toContain('aria-label="Angle"');
+    expect(popLin).toContain('value="45"');
+    expect(popLin.match(/aria-label="Select gradient stop \d"/g)).toHaveLength(2);
+    expect(popLin).toContain('Stop 1');
+    expect(popLin).toContain('value="#c82828"');
+    // Two stops cannot lose one; sixteen cannot gain one.
+    expect(popLin).toMatch(/<button[^>]*aria-label="Remove stop"[^>]*disabled=""/);
+    expect(popLin).toMatch(/<button[^>]*aria-label="Add stop"(?![^>]*disabled)/);
+
+    let full = lin.gradient!;
+    while (full.stops.length < MAX_STOPS) full = addStop(full);
+    const popFull = html(
+      createElement(PaintPopover, {
+        inline: true,
+        anchor: null,
+        value: { kind: 'gradient', gradient: full },
+        modes: ['solid', 'linear', 'radial'],
+        onChange: () => undefined,
+        onClose: () => undefined,
+      }),
+    );
+    expect(popFull).toMatch(/<button[^>]*aria-label="Add stop"[^>]*disabled=""/);
+
+    const popRad = html(
+      createElement(PaintPopover, {
+        inline: true,
+        anchor: null,
+        value: { kind: 'gradient', gradient: withFillKind(lin, 'radial').gradient! },
+        modes: ['solid', 'linear', 'radial'],
+        onChange: () => undefined,
+        onClose: () => undefined,
+      }),
+    );
+    expect(popRad).toContain('data-gradient="radial"');
+    expect(popRad).not.toContain('aria-label="Angle"');
   });
 
-  it('each fill control sends its patch (colour drags coalesce per stop)', () => {
+  it('each fill control sends its patch (solid, gradient, add/remove fill)', () => {
     const lin = shape({ fill: red, gradient: twoStops() });
-    expect(drive(ShapeFillFields, shape({ fill: red }), byLabel('Fill'), false).out.fill).toBeUndefined();
     expect(
-      drive(ShapeFillFields, shape({ fill: red }), byLabel('Fill type'), 'radial').out.gradient?.kind,
-    ).toBe('radial');
+      drive(ShapeFillFields, shape(), (els) => els.find((e) => e.props['aria-label'] === 'Add fill')).out
+        .fill,
+    ).toEqual(DEFAULT_FILL);
+    expect(
+      drive(ShapeFillFields, shape({ fill: red }), (els) =>
+        els.find((e) => e.props['aria-label'] === 'Remove fill'),
+      ).out.fill,
+    ).toBeUndefined();
     const colour = drive(
       ShapeFillFields,
       shape({ fill: red }),
-      (els) => els.find((e) => e.type === ColorField),
-      blue,
+      (els) => els.find((e) => e.type === PaintPill),
+      { kind: 'solid', color: blue },
     );
     expect(colour.out.fill).toEqual(blue);
+    expect(colour.out.gradient).toBeUndefined();
     expect(colour.key).toBe('shape:s1:fill');
-    expect(drive(ShapeFillFields, lin, byLabel('Angle'), 180).out.gradient?.angle).toBe(180);
-    const stopColour = drive(
-      ShapeFillFields,
-      lin,
-      (els) => els.filter((e) => e.type === ColorField)[1],
-      gold,
-    );
-    expect(stopColour.out.gradient?.stops[1]?.color).toEqual(gold);
-    expect(stopColour.key).toBe('shape:s1:stop:1');
-    const pos = drive(ShapeFillFields, lin, (els) => els.filter((e) => e.type === NumberField)[2], 25);
-    expect(pos.out.gradient?.stops.map((s) => s.at)).toEqual([0, 0.25]);
-    const added = drive(ShapeFillFields, lin, (els) => els.find((e) => e.props.children === 'Add stop'));
-    expect(added.out.gradient?.stops).toHaveLength(3);
-    const three = withGradient(lin, addStop(lin.gradient!));
-    const removed = drive(ShapeFillFields, three, (els) =>
-      els.find((e) => e.props['aria-label'] === 'Remove stop 1'),
-    );
-    expect(removed.out.gradient?.stops.map((s) => s.at)).toEqual([0.5, 1]);
-    expect(removed.out.fill).toEqual(removed.out.gradient?.stops[0]?.color);
+
+    const gradPatch = drive(ShapeFillFields, lin, (els) => els.find((e) => e.type === PaintPill), {
+      kind: 'gradient',
+      gradient: withAngle(lin.gradient!, 180),
+    });
+    expect(gradPatch.out.gradient?.angle).toBe(180);
+    expect(gradPatch.key).toBe('shape:s1:gradient');
   });
 
   it('the dash, and arrowheads with their sizes on an open line only', () => {
@@ -511,11 +551,17 @@ describe('the views', () => {
 
   it('the shadow toggle', () => {
     const h = html(createElement(ShapeShadowField, { o: shape(), disabled: false, set: noop }));
-    expect(h).toContain('<span>Shadow</span>');
-    expect(h).not.toContain('checked');
-    expect(drive(ShapeShadowField, shape(), byLabel('Shadow'), true).out.shadow).toEqual(
-      DEFAULT_SHAPE_SHADOW,
-    );
+    expect(h).toContain('<span class="prop-line-label">Shadow</span>');
+    expect(h).toContain('aria-label="Add shadow"');
+    expect(
+      drive(ShapeShadowField, shape(), (els) => els.find((e) => e.props['aria-label'] === 'Add shadow')).out
+        .shadow,
+    ).toEqual(DEFAULT_SHAPE_SHADOW);
+    expect(
+      drive(ShapeShadowField, shape({ shadow: DEFAULT_SHAPE_SHADOW }), (els) =>
+        els.find((e) => e.props['aria-label'] === 'Remove shadow'),
+      ).out.shadow,
+    ).toBeUndefined();
   });
 
   it('disabled disables every control', () => {
@@ -578,14 +624,14 @@ describe('the Object panel', () => {
     expect(h).not.toContain('<span>Shape</span>'); // the legacy picker is replaced by the geometry
     expect(h).toContain('data-gradient="linear"');
     expect(h).toContain('<option value="dash" selected="">Dash</option>');
-    expect(h).toMatch(/<input type="checkbox" checked=""[^>]*\/><span>Shadow<\/span>/);
+    expect(h).toContain('data-has-shadow="true"');
+    expect(h).toContain('aria-label="Remove shadow"');
     expect(h).not.toContain('Corner radius');
     expect(h).not.toContain('arrowhead');
-    // Unlocked: only the two stops' Remove buttons are disabled (a gradient keeps two stops).
+    // Unlocked: zero disabled controls in the streamlined Shape inspector!
     const section = h.slice(h.indexOf('<h4>Shape</h4>'));
     const off = section.match(/<(input|select|button)\b[^>]*disabled=""[^>]*>/g) ?? [];
-    expect(off).toHaveLength(2);
-    for (const c of off) expect(c).toMatch(/aria-label="Remove stop \d"/);
+    expect(off).toHaveLength(0);
   });
 
   it('a locked shape (and the live lock) leaves every shape field read-only, the box editable', () => {
@@ -612,7 +658,8 @@ describe('the Object panel', () => {
     const h = panel(shape({ fill: red, stroke: { width: 2, color: white } }));
     expect(h).toContain('<b class="grow">Shape (rect)</b>');
     expect(h).toContain('<span>Shape</span>');
-    expect(h).toContain('<option value="solid" selected="">Solid colour</option>');
+    expect(h).toContain('data-fill-kind="solid"');
+    expect(h).toContain('value="#c82828"');
     expect(h).toContain('<span>Corner radius</span>');
     expect(h).toContain('<span>Dash</span>');
     expect(h).not.toContain('disabled=""');

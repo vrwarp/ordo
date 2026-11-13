@@ -48,14 +48,6 @@ export function withFallback(s: TextStyle, family: string): TextStyle {
   return withField(s, 'fallbackFonts', list.length ? list : undefined);
 }
 
-const QUICK_COLORS = [
-  { label: 'Crisp White', hex: '#ffffff', color: { r: 255, g: 255, b: 255, a: 1 } },
-  { label: 'Warm Cream', hex: '#f6f5ee', color: { r: 246, g: 245, b: 238, a: 1 } },
-  { label: 'Soft Gold', hex: '#fef08a', color: { r: 254, g: 240, b: 138, a: 1 } },
-  { label: 'Sky Cyan', hex: '#7dd3fc', color: { r: 125, g: 211, b: 252, a: 1 } },
-  { label: 'Deep Black', hex: '#111827', color: { r: 17, g: 24, b: 39, a: 1 } },
-];
-
 const FONT_SIZES = [
   { label: '24', size: 24 },
   { label: '36', size: 36 },
@@ -76,8 +68,11 @@ export function TextStyleEditor(props: {
   box?: boolean;
   /** 'Re-fit text'; the button is disabled without it (read-only) or without a stored fit scale. */
   onRefit?: () => void;
+  /** When `'fineTune'`, omits Font/Size/Style/Align/Color rows that already live in the Scope-Aware Typography header & Floating Bar. */
+  mode?: 'full' | 'fineTune';
 }) {
   const s = props.value;
+  const fineTuneOnly = props.mode === 'fineTune';
   const set = <K extends keyof TextStyle>(k: K, v: TextStyle[K]) => props.onChange({ ...s, [k]: v }, k);
   const setOpt = <K extends keyof TextStyle>(k: K, v: TextStyle[K] | undefined) =>
     props.onChange(withField(s, k, v), k);
@@ -94,210 +89,184 @@ export function TextStyleEditor(props: {
     s.outline && s.shadow ? 'outline-shadow' : s.outline ? 'outline' : s.shadow ? 'shadow' : 'clean';
 
   return (
-    <div className="col" style={{ gap: 16 }}>
-      {/* 1. Font Family */}
-      <div className="col" style={{ gap: 6 }}>
-        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-          <span
-            className="small bold"
-            style={{ letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--fg2)' }}
-          >
-            Font Family{mark('fontFamily')}
-          </span>
-        </div>
-        <FontPicker value={s.fontFamily} onChange={(f) => set('fontFamily', f)} />
-      </div>
-
-      {/* 2. Font Size (Stepper + Slider + Presets) */}
-      <div className="col" style={{ gap: 8 }}>
-        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-          <span
-            className="small bold"
-            style={{ letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--fg2)' }}
-          >
-            Font Size{mark('fontSizePx')}
-          </span>
-          <div className="row" style={{ gap: 4 }}>
-            {FONT_SIZES.map(({ label, size }) => (
-              <button
-                key={label}
-                type="button"
-                className={`small ${s.fontSizePx === size ? 'active' : ''}`}
-                style={{
-                  padding: '2px 8px',
-                  borderRadius: 6,
-                  fontSize: 12,
-                  fontWeight: s.fontSizePx === size ? 700 : 500,
-                  background: s.fontSizePx === size ? 'var(--accent)' : 'var(--bg3)',
-                  color: s.fontSizePx === size ? '#fff' : 'var(--fg)',
-                  border: '1px solid var(--line)',
-                  cursor: 'pointer',
-                }}
-                onClick={() => set('fontSizePx', size)}
+    <div className="col" style={{ gap: 14 }}>
+      {!fineTuneOnly && (
+        <>
+          {/* 1. Font Family */}
+          <div className="col" style={{ gap: 6 }}>
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              <span
+                className="small bold"
+                style={{ letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--fg2)' }}
               >
-                {label}
-              </button>
-            ))}
+                Font Family{mark('fontFamily')}
+              </span>
+            </div>
+            <FontPicker value={s.fontFamily} onChange={(f) => set('fontFamily', f)} />
           </div>
-        </div>
-        <div className="row" style={{ gap: 10, alignItems: 'center' }}>
-          <div className="stepper-box">
-            <button
-              type="button"
-              aria-label="Decrease font size"
-              onClick={() => set('fontSizePx', Math.max(8, s.fontSizePx - 4))}
-            >
-              −
-            </button>
-            <input
-              type="number"
-              aria-label="Font size in pixels"
-              value={s.fontSizePx}
-              min={8}
-              max={300}
-              onChange={(e) => set('fontSizePx', Math.max(8, Math.min(300, Number(e.target.value) || 40)))}
-            />
-            <button
-              type="button"
-              aria-label="Increase font size"
-              onClick={() => set('fontSizePx', Math.min(300, s.fontSizePx + 4))}
-            >
-              +
-            </button>
-          </div>
-          <input
-            type="range"
-            min={12}
-            max={160}
-            step={2}
-            value={s.fontSizePx}
-            onChange={(e) => set('fontSizePx', Number(e.target.value))}
-            style={{ flex: 1 }}
-          />
-        </div>
-      </div>
 
-      {/* 3. Style & Casing (Segmented Pills) */}
-      <div className="col" style={{ gap: 6 }}>
-        <span
-          className="small bold"
-          style={{ letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--fg2)' }}
-        >
-          Style & Casing{mark('fontWeight')}
-          {mark('fontStyle')}
-          {mark('transform')}
-        </span>
-        <div className="segmented-bar">
-          <button
-            type="button"
-            className={s.fontWeight >= 600 ? 'active' : ''}
-            onClick={() => set('fontWeight', s.fontWeight >= 600 ? 400 : 700)}
-            aria-label="Box font bold"
-          >
-            <b>B Bold</b>
-          </button>
-          <button
-            type="button"
-            className={s.fontStyle === 'italic' ? 'active' : ''}
-            onClick={() => set('fontStyle', s.fontStyle === 'italic' ? 'normal' : 'italic')}
-            aria-label="Box font oblique"
-          >
-            <i>I Italic</i>
-          </button>
-          <button
-            type="button"
-            className={s.transform === 'uppercase' ? 'active' : ''}
-            onClick={() => set('transform', s.transform === 'uppercase' ? 'none' : 'uppercase')}
-            aria-label="Box font uppercase"
-          >
-            AA Caps
-          </button>
-        </div>
-      </div>
-
-      {/* 4. Alignment (Horizontal & Vertical SVG Segmented Bars) */}
-      <div className="grid2" style={{ gap: 8 }}>
-        <div className="col" style={{ gap: 6 }}>
-          <span
-            className="small bold"
-            style={{ letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--fg2)' }}
-          >
-            Align{mark('align')}
-          </span>
-          <div className="segmented-bar">
-            {(['left', 'center', 'right'] as const).map((a) => (
-              <button
-                key={a}
-                type="button"
-                className={s.align === a ? 'active' : ''}
-                onClick={() => set('align', a)}
-                aria-label={`Align ${a}`}
+          {/* 2. Font Size (Stepper + Slider + Presets) */}
+          <div className="col" style={{ gap: 8 }}>
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              <span
+                className="small bold"
+                style={{ letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--fg2)' }}
               >
-                <AlignIcon align={a} />
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="col" style={{ gap: 6 }}>
-          <span
-            className="small bold"
-            style={{ letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--fg2)' }}
-          >
-            Vertical{mark('valign')}
-          </span>
-          <div className="segmented-bar">
-            {(['top', 'middle', 'bottom'] as const).map((v) => (
-              <button
-                key={v}
-                type="button"
-                className={s.valign === v ? 'active' : ''}
-                onClick={() => set('valign', v)}
-                aria-label={`Vertical align ${v}`}
-              >
-                <VAlignIcon valign={v} />
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* 5. Text Color & Palette */}
-      <div className="col" style={{ gap: 6 }}>
-        <span
-          className="small bold"
-          style={{ letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--fg2)' }}
-        >
-          Text Color{mark('color')}
-        </span>
-        <div className="col" style={{ gap: 8 }}>
-          <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
-            {QUICK_COLORS.map(({ label, hex, color }) => {
-              const isSelected = s.color.r === color.r && s.color.g === color.g && s.color.b === color.b;
-              return (
+                Font Size{mark('fontSizePx')}
+              </span>
+              <div className="row" style={{ gap: 4 }}>
+                {FONT_SIZES.map(({ label, size }) => (
+                  <button
+                    key={label}
+                    type="button"
+                    className={`small ${s.fontSizePx === size ? 'active' : ''}`}
+                    style={{
+                      padding: '2px 8px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: s.fontSizePx === size ? 700 : 500,
+                      background: s.fontSizePx === size ? 'var(--accent)' : 'var(--bg3)',
+                      color: s.fontSizePx === size ? '#fff' : 'var(--fg)',
+                      border: '1px solid var(--line)',
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => set('fontSizePx', size)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="row" style={{ gap: 10, alignItems: 'center' }}>
+              <div className="stepper-box">
                 <button
-                  key={label}
                   type="button"
-                  title={label}
-                  onClick={() => set('color', { ...color, a: s.color.a ?? 1 })}
-                  style={{
-                    width: 26,
-                    height: 26,
-                    minHeight: 0,
-                    flexShrink: 0,
-                    borderRadius: '50%',
-                    background: hex,
-                    border: isSelected ? '2px solid var(--accent)' : '1px solid var(--line)',
-                    boxShadow: isSelected ? '0 0 0 2px var(--bg), 0 0 0 4px var(--accent)' : 'none',
-                    cursor: 'pointer',
-                    padding: 0,
-                  }}
+                  aria-label="Decrease font size"
+                  onClick={() => set('fontSizePx', Math.max(8, s.fontSizePx - 4))}
+                >
+                  −
+                </button>
+                <input
+                  type="number"
+                  aria-label="Font size in pixels"
+                  value={s.fontSizePx}
+                  min={8}
+                  max={300}
+                  onChange={(e) =>
+                    set('fontSizePx', Math.max(8, Math.min(300, Number(e.target.value) || 40)))
+                  }
                 />
-              );
-            })}
+                <button
+                  type="button"
+                  aria-label="Increase font size"
+                  onClick={() => set('fontSizePx', Math.min(300, s.fontSizePx + 4))}
+                >
+                  +
+                </button>
+              </div>
+              <input
+                type="range"
+                min={12}
+                max={160}
+                step={2}
+                value={s.fontSizePx}
+                onChange={(e) => set('fontSizePx', Number(e.target.value))}
+                style={{ flex: 1 }}
+              />
+            </div>
           </div>
-          <ColorField value={s.color} onChange={(color) => set('color', color)} />
-        </div>
-      </div>
+
+          {/* 3. Style & Casing (Segmented Pills) */}
+          <div className="col" style={{ gap: 6 }}>
+            <span
+              className="small bold"
+              style={{ letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--fg2)' }}
+            >
+              Style & Casing{mark('fontWeight')}
+              {mark('fontStyle')}
+              {mark('transform')}
+            </span>
+            <div className="segmented-bar">
+              <button
+                type="button"
+                className={s.fontWeight >= 600 ? 'active' : ''}
+                onClick={() => set('fontWeight', s.fontWeight >= 600 ? 400 : 700)}
+                aria-label="Box font bold"
+              >
+                <b>B Bold</b>
+              </button>
+              <button
+                type="button"
+                className={s.fontStyle === 'italic' ? 'active' : ''}
+                onClick={() => set('fontStyle', s.fontStyle === 'italic' ? 'normal' : 'italic')}
+                aria-label="Box font oblique"
+              >
+                <i>I Italic</i>
+              </button>
+              <button
+                type="button"
+                className={s.transform === 'uppercase' ? 'active' : ''}
+                onClick={() => set('transform', s.transform === 'uppercase' ? 'none' : 'uppercase')}
+                aria-label="Box font uppercase"
+              >
+                AA Caps
+              </button>
+            </div>
+          </div>
+
+          {/* 4. Alignment (Horizontal & Vertical SVG Segmented Bars) */}
+          <div className="grid2" style={{ gap: 8 }}>
+            <div className="col" style={{ gap: 6 }}>
+              <span
+                className="small bold"
+                style={{ letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--fg2)' }}
+              >
+                Align{mark('align')}
+              </span>
+              <div className="segmented-bar">
+                {(['left', 'center', 'right'] as const).map((a) => (
+                  <button
+                    key={a}
+                    type="button"
+                    className={s.align === a ? 'active' : ''}
+                    onClick={() => set('align', a)}
+                    aria-label={`Align ${a}`}
+                  >
+                    <AlignIcon align={a} />
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="col" style={{ gap: 6 }}>
+              <span
+                className="small bold"
+                style={{ letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--fg2)' }}
+              >
+                Vertical{mark('valign')}
+              </span>
+              <div className="segmented-bar">
+                {(['top', 'middle', 'bottom'] as const).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    className={s.valign === v ? 'active' : ''}
+                    onClick={() => set('valign', v)}
+                    aria-label={`Vertical align ${v}`}
+                  >
+                    <VAlignIcon valign={v} />
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* 5. Unified Text Color Pill (opens HSV + Alpha + Deck & Theme Swatches) */}
+          <div className="prop-line">
+            <span className="prop-line-label">Text Color{mark('color')}</span>
+            <ColorField value={s.color} onChange={(color) => set('color', color)} />
+          </div>
+        </>
+      )}
 
       {/* 6. Projection Contrast & Legibility Cards */}
       <div className="col" style={{ gap: 8 }}>
@@ -674,24 +643,42 @@ export function TextStyleEditor(props: {
           )}
 
           <div className="col" style={{ gap: 6, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
-            <Check
-              label={<>Fill behind text{mark('fill')}</>}
-              value={!!s.fill}
-              onChange={(on) =>
-                set('fill', on ? { color: { r: 0, g: 0, b: 0, a: 0.55 }, radius: 12 } : undefined)
-              }
-            />
+            <div className="prop-line">
+              <span className="prop-line-label">Backplate fill{mark('fill')}</span>
+              {s.fill ? (
+                <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+                  <ColorField value={s.fill.color} onChange={(color) => set('fill', { ...s.fill!, color })} />
+                  <button
+                    type="button"
+                    className="small prop-toggle-btn"
+                    aria-label="Remove backplate fill"
+                    title="Remove backplate fill"
+                    onClick={() => set('fill', undefined)}
+                  >
+                    −
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="small prop-toggle-btn"
+                  aria-label="Add backplate fill"
+                  title="Add backplate fill behind text"
+                  onClick={() => set('fill', { color: { r: 0, g: 0, b: 0, a: 0.55 }, radius: 12 })}
+                >
+                  +
+                </button>
+              )}
+            </div>
             {s.fill && (
-              <div className="row wrap" style={{ gap: 8 }}>
-                <ColorField value={s.fill.color} onChange={(color) => set('fill', { ...s.fill!, color })} />
-                <NumberField
-                  label="Radius"
-                  value={s.fill.radius}
-                  min={0}
-                  onChange={(radius) => set('fill', { ...s.fill!, radius })}
-                  width={60}
-                />
-              </div>
+              <NumberField
+                label="Backplate radius"
+                value={s.fill.radius}
+                min={0}
+                onChange={(radius) => set('fill', { ...s.fill!, radius })}
+                width={64}
+                suffix="px"
+              />
             )}
           </div>
         </div>

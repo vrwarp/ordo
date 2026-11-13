@@ -91,6 +91,8 @@ test('the rounded box and its text: move and resize as one, Alt-click the text t
       expect(s.objectIds).toEqual([shape.id, text.id]);
       expect(s.objectId).toBe(text.id);
     }).toPass({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'More object options' }).click();
+    await frames(page);
     const note = page.locator('[data-group-note]');
     await expect(note).toContainText('2 objects selected, a group from PowerPoint');
     const groupField = (name: string) =>

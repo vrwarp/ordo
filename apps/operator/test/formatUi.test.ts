@@ -816,12 +816,14 @@ describe('the Object panel of a text box', () => {
     selectObject('t1');
   });
 
-  it('has the format bar over the text field, the paragraph strip under it and the box options', async () => {
+  it('has the unified scope-aware typography bar over the text field, the paragraph strip under it and the box options', async () => {
     const { ObjectPanel } = await import('../src/views/editor/ObjectPanel.tsx');
+    const { FloatingContextBar } = await import('../src/views/editor/FloatingContextBar.tsx');
+    const { setTextRange } = await import('../src/views/editor/editorStore.ts');
     const ed = useEditor.getState();
     expect(ed.objectId).toBe('t1');
     const h = html(createElement(ObjectPanel, { o, readOnly: false }));
-    const bar = h.indexOf('aria-label="Text format"');
+    const bar = h.indexOf('aria-label="Typography"');
     const field = h.indexOf('id="ordo-text-editor"');
     const strip = h.indexOf('aria-label="Paragraph"');
     const boxOpts = h.indexOf('aria-label="Text box"');
@@ -829,9 +831,41 @@ describe('the Object panel of a text box', () => {
     expect(field).toBeGreaterThan(bar);
     expect(strip).toBeGreaterThan(field);
     expect(boxOpts).toBeGreaterThan(strip);
-    // The panel's text field starts with a caret: the bar is disabled and says so.
-    expect(plain(h)).toContain('Select text to format it.');
-    // The fit note's live region is there, empty while the text fits (no canvas to measure in node).
+    // With a collapsed caret, UnifiedTypography edits Whole Box without duplicating Font/Size/Align below.
+    expect(plain(h)).toContain('Whole Box');
     expect(h).toContain('<div role="status"></div>');
+
+    // Selecting characters automatically switches UnifiedTypography and FloatingContextBar to Selection scope.
+    setTextRange(0, 5);
+    Object.assign(useEditor.getInitialState(), {
+      draft: p,
+      slideId: 's1',
+      objectId: 't1',
+      objectIds: ['t1'],
+      textRange: { start: 0, end: 5 },
+    });
+    const selMarkup = html(createElement(ObjectPanel, { o, readOnly: false }));
+    expect(plain(selMarkup)).toContain('Selection');
+    expect(selMarkup).toContain('Clear formatting');
+    expect(selMarkup).toContain('aria-label="Add highlight"');
+
+    const floating = html(
+      createElement(FloatingContextBar, {
+        readOnly: false,
+        drawerOpen: false,
+        onToggleDrawer: () => undefined,
+      }),
+    );
+    expect(plain(floating)).toContain('Selection');
+    expect(floating).toContain('aria-label="Bold"');
+    expect(floating).toContain('More…');
+    setTextRange(0, 0);
+    Object.assign(useEditor.getInitialState(), {
+      draft: undefined,
+      slideId: undefined,
+      objectId: undefined,
+      objectIds: [],
+      textRange: { start: 0, end: 0 },
+    });
   });
 });

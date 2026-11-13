@@ -1,6 +1,7 @@
 import { type Box, nearColor, type SlideObject, type TextStyle } from '@ordo/domain';
 import { useState } from 'react';
-import { Check, ColorField, NumberField, Select } from '../../components/fields.tsx';
+import { ColorPill } from '../../components/ColorPicker.tsx';
+import { NumberField, Select } from '../../components/fields.tsx';
 import { TextStyleEditor } from '../../components/TextStyleEditor.tsx';
 import { ObjectSlideOps } from './ObjectSlideOps.tsx';
 import { useLibrary } from '../../state/library.ts';
@@ -16,7 +17,6 @@ import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { CropControl } from './CropControl.tsx';
 import { change, redo, setTextRange, stopInlineEditing, undo, useEditor } from './editorStore.ts';
 import { historyKey } from './editorKeys.ts';
-import { FormatBar } from './FormatBar.tsx';
 import { GroupNote, LockedNote, SelectionBox } from './GroupPanel.tsx';
 import { VideoPanel } from './MediaPanels.tsx';
 import {
@@ -31,6 +31,7 @@ import { isLocked } from './ops/group.ts';
 import type { TextRange } from './ops/text.ts';
 import { ParagraphStrip } from './ParagraphStrip.tsx';
 import { fitMessage } from './textFit.ts';
+import { UnifiedTypography } from './UnifiedTypography.tsx';
 
 const PLACEMENT_PRESETS: { id: string; label: string; desc: string; box: Box }[] = [
   {
@@ -126,16 +127,28 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
       <GroupNote o={o} readOnly={liveLocked} />
       {o.type === 'text' && (
         <>
-          <FormatBar o={o} range={clampRange(range, o.text.length)} readOnly={readOnly} />
+          <UnifiedTypography
+            o={o}
+            range={clampRange(range, o.text.length)}
+            readOnly={readOnly}
+            marks={themed ? marks : undefined}
+            onChangeStyle={(style: TextStyle, key) =>
+              set(
+                (x) => ({ ...x, style }) as SlideObject,
+                `style:${o.id}:${String(key)}`,
+                `style.${String(key)}`,
+              )
+            }
+          />
           <div className="col" style={{ gap: 4 }}>
             <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <span className="muted small">Text content:</span>
+              <span className="muted small">Text content</span>
               <span className="muted small" style={{ fontSize: 11 }}>
-                Double-click canvas to edit inline
+                Double-click slide to edit inline
               </span>
             </div>
             <textarea
-              rows={4}
+              rows={2}
               value={o.text}
               disabled={readOnly}
               id="ordo-text-editor"
@@ -154,9 +167,6 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
                   e.currentTarget.blur();
                   return;
                 }
-                // Ctrl+Z and Ctrl+Y here are the editor's undo and redo, not the field's own: the field's
-                // undo knows nothing of a Bold or a colour and would take typed letters back instead. Typing
-                // is one undo step per pause, so the editor's undo covers the text too.
                 const step = historyKey(e);
                 if (!step) return;
                 e.preventDefault();
@@ -165,7 +175,6 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
                 const el = e.currentTarget;
                 const at = { start: el.selectionStart, end: el.selectionEnd };
                 (step === 'undo' ? undo : redo)();
-                // The field shows the restored text on the next render: the caret stays where it was.
                 requestAnimationFrame(() => {
                   const f = document.getElementById('ordo-text-editor');
                   if (!(f instanceof HTMLTextAreaElement)) return;
@@ -176,7 +185,6 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
                 });
               }}
               onChange={(e) => {
-                // Runs and paragraph styles follow the edit (design/27 §11): a typo fix keeps the formatting.
                 const next = e.target.value;
                 const caret = e.target.selectionEnd;
                 setRange({ start: e.target.selectionStart, end: caret, caret });
@@ -216,12 +224,24 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
               }}
             />
           </div>
-          <ParagraphStrip o={o} range={clampRange(range, o.text.length)} readOnly={readOnly} />
           {keyClash && (
             <div className="banner small">
               This text colour is close to a look's key colour; it may be keyed out on the stream.
             </div>
           )}
+          <details
+            className="ed-collapsible"
+            open={
+              !!o.paras?.some(
+                (p) => p && (p.bullet || p.indentPx || p.level || p.spaceBeforePx || p.spaceAfterPx),
+              )
+            }
+          >
+            <summary>Lists, indents &amp; paragraph spacing</summary>
+            <div style={{ paddingTop: 8 }}>
+              <ParagraphStrip o={o} range={clampRange(range, o.text.length)} readOnly={readOnly} />
+            </div>
+          </details>
         </>
       )}
       {o.type === 'text' && (
@@ -330,7 +350,7 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
       />
       {o.type === 'text' && (
         <fieldset disabled={readOnly} style={SECTION}>
-          <h4>Text style</h4>
+          <h4>Readability &amp; text box</h4>
           <div role="status">
             {fitMessage(o) && (
               <div className="banner small" style={{ marginBottom: 8 }}>
@@ -340,6 +360,7 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
           </div>
           <TextStyleEditor
             value={o.style}
+            mode="fineTune"
             box
             onRefit={readOnly ? undefined : () => refit(o.id)}
             marks={themed ? marks : undefined}
@@ -401,41 +422,61 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
       )}
       <ObjectSlideOps o={o} readOnly={readOnly} />
       {o.type === 'shape' && (
-        <fieldset className="col" disabled={readOnly} style={SECTION}>
+        <fieldset className="col" disabled={readOnly} style={{ ...SECTION, gap: 10 }}>
           <h4>Shape</h4>
           <ShapeGeometryField o={o} disabled={readOnly} set={set} />
           {o.shape !== 'line' && <ShapeFillFields o={o} disabled={readOnly} set={set} />}
-          <Check
-            label="Stroke"
-            value={!!o.stroke}
-            disabled={readOnly}
-            onChange={(on) =>
-              set(
-                (x) =>
-                  ({
-                    ...x,
-                    stroke: on ? { width: 4, color: { r: 255, g: 255, b: 255, a: 1 } } : undefined,
-                  }) as SlideObject,
-              )
-            }
-          />
-          {o.stroke && (
-            <div className="row wrap">
-              <NumberField
-                value={o.stroke.width}
-                min={0}
+          <div className="prop-line" data-has-stroke={!!o.stroke}>
+            <span className="prop-line-label">Stroke</span>
+            {o.stroke ? (
+              <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+                <ColorPill
+                  value={o.stroke.color}
+                  disabled={readOnly}
+                  compact
+                  ariaLabel="Stroke color"
+                  onChange={(color) => set((x) => ({ ...x, stroke: { ...o.stroke!, color } }) as SlideObject)}
+                />
+                <NumberField
+                  value={o.stroke.width}
+                  min={0}
+                  disabled={readOnly}
+                  onChange={(width) => set((x) => ({ ...x, stroke: { ...o.stroke!, width } }) as SlideObject)}
+                  suffix="px"
+                  width={54}
+                />
+                <button
+                  type="button"
+                  className="small prop-toggle-btn"
+                  aria-label="Remove stroke"
+                  title="Remove stroke"
+                  disabled={readOnly}
+                  onClick={() => set((x) => ({ ...x, stroke: undefined }) as SlideObject)}
+                >
+                  −
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="small prop-toggle-btn"
+                aria-label="Add stroke"
+                title="Add stroke"
                 disabled={readOnly}
-                onChange={(width) => set((x) => ({ ...x, stroke: { ...o.stroke!, width } }) as SlideObject)}
-                suffix="px"
-                width={60}
-              />
-              <ColorField
-                value={o.stroke.color}
-                disabled={readOnly}
-                onChange={(color) => set((x) => ({ ...x, stroke: { ...o.stroke!, color } }) as SlideObject)}
-              />
-            </div>
-          )}
+                onClick={() =>
+                  set(
+                    (x) =>
+                      ({
+                        ...x,
+                        stroke: { width: 4, color: { r: 255, g: 255, b: 255, a: 1 } },
+                      }) as SlideObject,
+                  )
+                }
+              >
+                +
+              </button>
+            )}
+          </div>
           {o.stroke && <ShapeLineFields o={o} disabled={readOnly} set={set} />}
           <ShapeShadowField o={o} disabled={readOnly} set={set} />
           {o.shape === 'rect' && !o.geom && (

@@ -7,18 +7,18 @@ import { errorText, toast } from '../state/toasts.ts';
 import { Dialog } from './Dialog.tsx';
 
 /** Family picker: library fonts plus system fallbacks, with Google Fonts search and add (prd/05). */
-export function FontPicker(props: { value: string; onChange: (family: string) => void }) {
+export function FontPicker(props: { value: string; onChange: (family: string) => void; compact?: boolean }) {
   const fonts = useLibrary((s) => s.data.fonts);
   const [search, setSearch] = useState(false);
   const families = fontFamilies(fonts);
   if (props.value && !families.includes(props.value)) families.unshift(props.value);
   const missing = props.value && !fonts.some((f) => f.family === props.value);
   return (
-    <span className="row" style={{ gap: 4 }}>
+    <span className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
       <select
         value={props.value}
         onChange={(e) => (e.target.value === '__google' ? setSearch(true) : props.onChange(e.target.value))}
-        style={{ fontFamily: props.value, maxWidth: 180 }}
+        style={{ fontFamily: props.value, maxWidth: props.compact ? 104 : 180 }}
       >
         {families.map((f) => (
           <option key={f} value={f} style={{ fontFamily: f }}>
@@ -27,11 +27,21 @@ export function FontPicker(props: { value: string; onChange: (family: string) =>
         ))}
         <option value="__google">+ Add from Google Fonts…</option>
       </select>
-      {missing && (
-        <span className="tag amber" title="Not on the hub: outputs fall back to a system font">
-          not on hub
-        </span>
-      )}
+      {missing &&
+        (props.compact ? (
+          <span
+            className="tag amber"
+            style={{ padding: '1px 5px', fontSize: 10 }}
+            title="Not on the hub: outputs fall back to a system font"
+            aria-label="Not on the hub: outputs fall back to a system font"
+          >
+            ⚠
+          </span>
+        ) : (
+          <span className="tag amber" title="Not on the hub: outputs fall back to a system font">
+            not on hub
+          </span>
+        ))}
       {search && (
         <GoogleFontsDialog
           onClose={() => setSearch(false)}

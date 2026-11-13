@@ -1,15 +1,7 @@
-import {
-  hexToRgba,
-  type Presentation,
-  type Rgba,
-  rgbaCss,
-  rgbaHex,
-  type TextObject,
-  type TextStyle,
-  type Theme,
-} from '@ordo/domain';
+import { hexToRgba, type Rgba, rgbaCss, type TextObject, type TextStyle } from '@ordo/domain';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ColorPopover } from '../../components/ColorPicker.tsx';
+import { DECK_SWATCHES, deckColors, STANDARD_COLORS } from '../../components/deckSwatches.ts';
 import { FontPicker } from '../../components/FontPicker.tsx';
 import { useCoarsePointer } from '../../components/pointer.ts';
 import { useLibrary } from '../../state/library.ts';
@@ -58,20 +50,6 @@ export const SIZE_STEP = 1.1;
 export const SUPERSCRIPT = 0.3;
 export const SUBSCRIPT = -0.25;
 
-/** Colours offered after the deck's own: the Office theme's, which most church decks start from. */
-export const STANDARD_COLORS: readonly Swatch[] = [
-  { color: hexToRgba('#ffffff'), name: 'White' },
-  { color: hexToRgba('#000000'), name: 'Black' },
-  { color: hexToRgba('#7f7f7f'), name: 'Grey' },
-  { color: hexToRgba('#c00000'), name: 'Dark red' },
-  { color: hexToRgba('#ed7d31'), name: 'Orange' },
-  { color: hexToRgba('#ffc000'), name: 'Gold' },
-  { color: hexToRgba('#70ad47'), name: 'Green' },
-  { color: hexToRgba('#4472c4'), name: 'Blue' },
-  { color: hexToRgba('#1f3864'), name: 'Navy' },
-  { color: hexToRgba('#7030a0'), name: 'Purple' },
-];
-
 /** Highlight colours (a text marker's). */
 export const HIGHLIGHTS: readonly Swatch[] = [
   { color: hexToRgba('#ffff00'), name: 'Yellow' },
@@ -81,51 +59,11 @@ export const HIGHLIGHTS: readonly Swatch[] = [
   { color: hexToRgba('#d9d9d9'), name: 'Light grey' },
 ];
 
-/** The deck's colours shown first, at most. */
-export const DECK_SWATCHES = 8;
+export { DECK_SWATCHES, deckColors, STANDARD_COLORS };
 
 const sameColor = (a: Rgba | undefined, b: Rgba | undefined) =>
   !!a && !!b && a.r === b.r && a.g === b.g && a.b === b.b && a.a === b.a;
 const colorKey = (c: Rgba) => `${c.r},${c.g},${c.b},${c.a}`;
-
-/**
- * The colour swatches of the format bar: the deck's own colours first (design/27 §11 item 2), then the
- * standard ones it does not use. The deck's are what its text is drawn in: the applied theme's text colour,
- * then the colours of its text boxes and runs and of its shapes' fills (PowerPoint's theme colours, resolved
- * at import, are among them), most used first, at most `DECK_SWATCHES`.
- */
-export function deckColors(p: Presentation | undefined, theme?: Theme): Swatch[] {
-  const counts = new Map<string, { color: Rgba; n: number; first: number }>();
-  let order = 0;
-  const add = (c: Rgba | undefined, weight = 1) => {
-    if (!c) return;
-    const k = colorKey(c);
-    const hit = counts.get(k);
-    if (hit) hit.n += weight;
-    else counts.set(k, { color: c, n: weight, first: order++ });
-  };
-  for (const sec of p?.sections ?? [])
-    for (const s of sec.slides)
-      for (const o of s.objects) {
-        if (o.type === 'text') {
-          add(o.style.color);
-          for (const r of o.runs ?? []) add(r.color);
-        } else if (o.type === 'shape') add(o.fill);
-      }
-  const used = [...counts.values()].sort((a, b) => b.n - a.n || a.first - b.first).map((x) => x.color);
-  const deck: Rgba[] = [];
-  if (theme) deck.push(theme.text.color);
-  for (const c of used) {
-    if (deck.length >= DECK_SWATCHES) break;
-    if (!deck.some((d) => sameColor(d, c))) deck.push(c);
-  }
-  const out: Swatch[] = deck.map((color, i) => ({
-    color,
-    name: `${i === 0 && theme ? 'Theme colour' : 'Deck colour'} ${rgbaHex(color)}`,
-  }));
-  for (const s of STANDARD_COLORS) if (!deck.some((d) => sameColor(d, s.color))) out.push(s);
-  return out;
-}
 
 /** Caps as the box draws them ('all' for a box shown in capitals). */
 const boxCaps = (s: TextStyle): 'none' | 'all' => (s.transform === 'uppercase' ? 'all' : 'none');
