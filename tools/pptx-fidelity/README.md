@@ -112,6 +112,22 @@ an error. Each deck is converted in the harness's worker, with the pool's heap l
 
 A census line names its deck. Tables made from a census of private decks print counts only.
 
+### The golden-pptx census ratchet (CI)
+
+```
+pnpm --filter @ordo/pptx-fidelity census:ratchet            # compare; exit 1 on a regression
+pnpm --filter @ordo/pptx-fidelity census:ratchet -- --write # record golden-census-baseline.json
+```
+
+`src/census-ratchet.ts` runs the census over the committed public corpus (`golden-pptx/`, 112 decks, 1,071
+shown slides, about 15 s here) and compares it with `golden-census-baseline.json`: per deck, each shown
+slide's number, class, class in the hub and reasons. A slide whose class or hub class got worse (native <
+hybrid < picture), a shown slide that is gone, or a deck of the baseline that is missing or that the converter
+can no longer read fails the run. A better class, other reasons on the same class and decks or slides the
+baseline lacks pass and are reported; record an improvement with `--write` in the same PR, so it cannot slip
+back. The census goes to `test-results/census-golden.jsonl` and the comparison to
+`test-results/census-ratchet.json`. CI's fidelity job runs it on every pull request.
+
 <!-- m9:harness -->
 ## Hub import (M9)
 

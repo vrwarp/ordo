@@ -129,7 +129,9 @@ export class TimingWindow {
   private count = 0;
   private at = 0;
 
-  constructor(readonly size = 64) {
+  readonly size: number;
+  constructor(size = 64) {
+    this.size = size;
     this.ring = new Float64Array(Math.max(1, Math.floor(size)));
   }
 

@@ -3,6 +3,7 @@ import { normalizePart } from './markup.ts';
 import { CLRMAP_OVR, NS_A, NS_P, NS_R, timingXml } from './test-util.ts';
 import { gainDbOf, MAX_TIMING_NODES, readSlideTiming } from './timing.ts';
 import { parseXml, rootOf, type XNode } from './xml.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const NS = `xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"`;
 const P14 = 'http://schemas.microsoft.com/office/powerpoint/2010/main';
@@ -167,7 +168,7 @@ describe('readSlideTiming: the p:timing mapping (design/27 §8)', () => {
     expect(many.split('<').length).toBeGreaterThan(MAX_TIMING_NODES * 2);
     const t0 = performance.now();
     const t = readSlideTiming(slide(many));
-    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
     expect(t.media.size).toBeLessThanOrEqual(1_000);
   });
 });

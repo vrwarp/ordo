@@ -34,12 +34,12 @@ import type { DecodeWant, PictureDecoder } from './pictures.ts';
 
 /** A decode failure, with the file and where it was read from (an OPFS copy may be corrupt). */
 export class DecodeError extends Error {
-  constructor(
-    message: string,
-    readonly hash: string,
-    readonly source: 'opfs' | 'network',
-  ) {
+  readonly hash: string;
+  readonly source: 'opfs' | 'network';
+  constructor(message: string, hash: string, source: 'opfs' | 'network') {
     super(message);
+    this.hash = hash;
+    this.source = source;
   }
 }
 

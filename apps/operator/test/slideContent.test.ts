@@ -111,10 +111,12 @@ describe('thumbnail worker: what it draws follows slideContent', () => {
   class FakeOffscreenCanvas {
     ops: string[] = [];
     private ctx = fakeCtx(this.ops);
-    constructor(
-      public width: number,
-      public height: number,
-    ) {}
+    public width: number;
+    public height: number;
+    constructor(width: number, height: number) {
+      this.width = width;
+      this.height = height;
+    }
     getContext() {
       return this.ctx;
     }

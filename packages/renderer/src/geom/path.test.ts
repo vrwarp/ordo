@@ -24,6 +24,7 @@ import {
   presetGeometry,
 } from './path.ts';
 import { PRESET_GEOMS } from './presets.gen.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 /** A built path as segments: [cmd, coordinates...]. */
 function segments(p: GeomPath): number[][] {
@@ -605,7 +606,7 @@ describe('hostile custGeom (design/27 §12)', () => {
     const many = Array.from({ length: 1000 }, () => path([['M', 0, 0], ...lines.slice(0, 10)]));
     const t0 = performance.now();
     const g = customGeometry({ gd, paths: [path([['M', 0, 0], ...lines]), ...many] }, 100, 100);
-    expect(performance.now() - t0).toBeLessThan(2000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(2000));
     expect(g.paths.length).toBe(GEOM_LIMITS.paths);
     expect(pathPoints(g.paths[0]!)).toBe(GEOM_LIMITS.points);
     // g255, the last guide kept, is 256; g256 onwards are dropped.

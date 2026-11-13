@@ -160,7 +160,10 @@ export class LibraryStore {
    */
   private early: LibOp[] = [];
 
-  constructor(private deps: LibraryStoreDeps) {}
+  private deps: LibraryStoreDeps;
+  constructor(deps: LibraryStoreDeps) {
+    this.deps = deps;
+  }
 
   async loadCached(): Promise<boolean> {
     try {

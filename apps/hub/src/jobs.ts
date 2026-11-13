@@ -39,11 +39,10 @@ const MAX_LOG = 500;
  * defers itself again if it still has to.
  */
 export class JobDeferred extends Error {
-  constructor(
-    readonly delayMs: number,
-    message: string,
-  ) {
+  readonly delayMs: number;
+  constructor(delayMs: number, message: string) {
     super(message);
+    this.delayMs = delayMs;
   }
 }
 /**
@@ -81,12 +80,16 @@ export class JobQueue {
   private notBefore = new Map<string, number>();
   private wake: NodeJS.Timeout | undefined;
 
-  constructor(
-    private db: DB,
-    private log: Logger,
-    private limits: { heavy: number; light: number },
-    private notify: (job: Job) => void,
-  ) {}
+  private db: DB;
+  private log: Logger;
+  private limits: { heavy: number; light: number };
+  private notify: (job: Job) => void;
+  constructor(db: DB, log: Logger, limits: { heavy: number; light: number }, notify: (job: Job) => void) {
+    this.db = db;
+    this.log = log;
+    this.limits = limits;
+    this.notify = notify;
+  }
 
   /** `giveUp` runs when a job of this kind is abandoned without its handler (too many crashed attempts). */
   register<P>(kind: string, handler: JobHandler<P>, giveUp?: (payload: P, error: string) => void): void {

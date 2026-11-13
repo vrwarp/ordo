@@ -136,10 +136,12 @@ export class ClipImport {
   private readonly durations = new Map<string, Promise<number | undefined>>();
   private copies = 0;
 
-  constructor(
-    private readonly deps: PptxDeps,
-    private readonly o: ClipImportOptions,
-  ) {}
+  private readonly deps: PptxDeps;
+  private readonly o: ClipImportOptions;
+  constructor(deps: PptxDeps, o: ClipImportOptions) {
+    this.deps = deps;
+    this.o = o;
+  }
 
   /** Ingest every clip the slides use and replace their placeholders. */
   async apply(slides: readonly ClipSlide[]): Promise<void> {

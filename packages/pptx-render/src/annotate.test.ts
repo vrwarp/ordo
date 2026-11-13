@@ -18,6 +18,7 @@ import {
 } from './annotate.ts';
 import { decodeMarker, encodeMarker, MARK_START, MAX_MARKED_RUNS } from './markers.ts';
 import { parseXml, rootOf } from '@ordo/pptx-scene/xml.ts';
+import { budgetMs } from './timing.test-util.ts';
 
 const NS =
   'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
@@ -1176,7 +1177,7 @@ describe('annotatePptx', () => {
 async function within<T>(ms: number, f: () => Promise<T> | T): Promise<T> {
   const t = performance.now();
   const v = await f();
-  expect(performance.now() - t).toBeLessThan(ms);
+  expect(performance.now() - t).toBeLessThan(budgetMs(ms));
   return v;
 }
 

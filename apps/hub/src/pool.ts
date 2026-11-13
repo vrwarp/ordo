@@ -116,10 +116,12 @@ export class CpuPool {
   private stats_ = { completed: 0, failed: 0, restarts: 0, oom: 0 };
   private closed = false;
 
-  constructor(
-    readonly size = 1,
-    private url: URL = cpuWorkerUrl(),
-  ) {}
+  readonly size: number;
+  private url: URL;
+  constructor(size = 1, url: URL = cpuWorkerUrl()) {
+    this.size = size;
+    this.url = url;
+  }
 
   stats(): PoolStats {
     return {

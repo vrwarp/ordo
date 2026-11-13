@@ -24,6 +24,7 @@ import {
   timingXml,
   withPart,
 } from './test-util.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const W = 12_192_000;
 const H = 6_858_000;
@@ -483,7 +484,7 @@ describe('clips: bounds (design/27 §12)', () => {
     }));
     const t0 = performance.now();
     const s = convert(deckWith(many));
-    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
     expect(images(s).filter((o) => o.play)).toHaveLength(1);
     expect(s.slide.audio).toBeDefined();
     expect(s.clips?.filter((c) => c.role === 'play' || c.role === 'sound')).toHaveLength(2);

@@ -154,10 +154,11 @@ export class RenderEngine {
   /** Flip times of the layers waiting for an upload this frame (`tickLayers`). */
   private readonly waitingAt = new Float64Array(LAYERS.length);
 
-  constructor(
-    private opts: EngineOptions,
-    private host: EngineHost,
-  ) {
+  private opts: EngineOptions;
+  private host: EngineHost;
+  constructor(opts: EngineOptions, host: EngineHost) {
+    this.opts = opts;
+    this.host = host;
     this.offset = opts.clockOffset;
     this.inputs = {
       layers: this.layers,

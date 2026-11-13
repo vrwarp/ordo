@@ -36,6 +36,7 @@ import {
   type TestHub,
   tempDir,
 } from './helpers.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const quiet = pino({ level: 'silent' });
@@ -446,7 +447,7 @@ describe('item 6: a runaway parse fails inside its worker', () => {
       expect(err).toBeInstanceOf(Error);
       expect(err).not.toBeInstanceOf(WorkerStartError);
       expect(String(err)).toMatch(/needs more memory than an import may use \(512 MB\)/);
-      expect(ms).toBeLessThan(20_000);
+      expect(ms).toBeLessThan(budgetMs(20_000));
       expect(pool.stats().oom).toBe(1);
       expect(await pool.run('font', { n: 7 } as never)).toEqual({ family: 'Echo', n: 7 });
     } finally {

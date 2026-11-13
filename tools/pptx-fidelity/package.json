@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/main.ts",
+    "census:ratchet": "tsx src/census-ratchet.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {

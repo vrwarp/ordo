@@ -6,7 +6,7 @@
   "description": "The GitHub Pages demo: the operator, output and stage apps with a service-worker hub.",
   "scripts": {
     "build:pages": "node build.mjs",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json"
   },
   "dependencies": {
     "@ordo/domain": "workspace:*",

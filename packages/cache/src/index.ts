@@ -88,7 +88,10 @@ export class OpfsStore implements FileStore {
 /** Cache API store, used by the operator and stage (and by service workers). */
 export class CacheApiStore implements FileStore {
   readonly kind = 'cache-api';
-  constructor(private name = 'ordo-files') {}
+  private name: string;
+  constructor(name = 'ordo-files') {
+    this.name = name;
+  }
   private key(hash: string): string {
     return `/__ordo_cache/${hash}`;
   }
@@ -240,10 +243,12 @@ export class JsonStore {
   private db?: Promise<IDBDatabase>;
   /** Diagnostics (blocked opens, reopened connections). */
   onLog?: (msg: string) => void;
-  constructor(
-    private name = 'ordo-json',
-    private factory?: Pick<IDBFactory, 'open'>,
-  ) {}
+  private name: string;
+  private factory?: Pick<IDBFactory, 'open'>;
+  constructor(name = 'ordo-json', factory?: Pick<IDBFactory, 'open'>) {
+    this.name = name;
+    this.factory = factory;
+  }
 
   private log(msg: string) {
     this.onLog?.(`JsonStore ${this.name}: ${msg}`);

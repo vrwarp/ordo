@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseLyrics, songFromParsed, type Media, type Presentation } from '@ordo/domain';
 import { m9Slide } from '@ordo/domain/m9.test-util.ts';
 import { normalize, SearchIndex } from '../src/lib/search.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 function song(title: string, lyrics: string, extra: Partial<Presentation> = {}): Presentation {
   return { ...songFromParsed(parseLyrics(`Verse 1\n${lyrics}`), { title }), ...extra };
@@ -109,7 +110,7 @@ describe('search index', () => {
     changed[3] = { ...list[3]!, title: 'Renamed hymn' };
     const t1 = performance.now();
     idx.update(changed, []);
-    expect(performance.now() - t1).toBeLessThan(50);
+    expect(performance.now() - t1).toBeLessThan(budgetMs(50));
     expect(idx.search('renamed').map((d) => d.id)).toEqual([list[3]!.id]);
   });
 });

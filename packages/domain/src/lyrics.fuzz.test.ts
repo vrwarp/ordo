@@ -14,6 +14,7 @@ import {
   parseSectionLabel,
   songFromParsed,
 } from './lyrics.ts';
+import { budgetMs } from './timing.test-util.ts';
 
 /** Lines biased towards what the parser branches on: labels, directives, chords, footers, whitespace. */
 const lineArb = fc.oneof(
@@ -178,7 +179,7 @@ describe('parseLyrics regressions found by fuzzing', () => {
     const t0 = Date.now();
     const s = parseLyrics('Chorus x99999999\nla la\n');
     expect(s.order.length).toBeLessThanOrEqual(LYRIC_REPEAT_MAX);
-    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(Date.now() - t0).toBeLessThan(budgetMs(1000));
   });
 
   it('is linear on long whitespace runs (no regex backtracking blow-up)', () => {
@@ -191,7 +192,7 @@ describe('parseLyrics regressions found by fuzzing', () => {
     for (const l of lines) {
       const t0 = Date.now();
       checkSong(l);
-      expect(Date.now() - t0).toBeLessThan(1500);
+      expect(Date.now() - t0).toBeLessThan(budgetMs(1500));
     }
   });
 

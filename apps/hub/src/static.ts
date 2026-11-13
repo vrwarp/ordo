@@ -92,10 +92,12 @@ function placeholder(app: AppName): string {
 }
 
 export class StaticApps {
-  constructor(
-    private appsDir: string,
-    private domain: string,
-  ) {}
+  private appsDir: string;
+  private domain: string;
+  constructor(appsDir: string, domain: string) {
+    this.appsDir = appsDir;
+    this.domain = domain;
+  }
 
   distOf(app: AppName): string {
     return join(this.appsDir, app, 'dist');

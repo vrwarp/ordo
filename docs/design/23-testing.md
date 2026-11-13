@@ -2,14 +2,14 @@
 
 ## Layers
 
-| Layer       | Tool                                                                                              | Scope                                                                                                                                                                                                                                                                                                              |
-| ----------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Unit        | Vitest                                                                                            | `packages/domain` (parsers, arrangement expansion, layout maths), `packages/live-state` (reducer determinism, property tests with fast-check), `packages/protocol` (schema round-trips), `packages/importers` (fixtures), hub services with an in-memory SQLite                                                    |
-| Integration | Vitest + a real hub                                                                               | HTTP API with auth and roles, WebSocket sequencing, media jobs with tiny fixture files: `apps/hub/test` starts the hub in the test process on an ephemeral `127.0.0.1` port with a temporary data directory; `processes.test.ts` runs the real two-process hub (supervisor, live and library children) from source |
-| End to end  | Playwright, headless Chromium with SwiftShader (`--use-angle=swiftshader --enable-unsafe-webgpu`) | Operator, two outputs and the stage on their own origins served by a real hub over HTTP (below); GO and flip timing, clears, looks, degraded mode, relaunch, and the chaos specs                                                                                                                                   |
-| Soak        | `tools/soak` (Playwright, real GPU on the venue PC or a dev machine)                              | 60+ minutes of the live playlist with motion backgrounds, GO every 10 s; asserts zero missed frames and zero long tasks from telemetry                                                                                                                                                                             |
-| Visual      | Playwright screenshots of outputs vs golden PNGs                                                  | Text rasterizer and looks; per-pixel tolerance for anti-aliasing                                                                                                                                                                                                                                                   |
-| Fidelity    | `tools/pro7-fidelity` (Playwright, headless Chromium `@ordo/renderer`)                            | ProPresenter 7 visual fidelity: scores imported `.pro` slides against reference PNGs using dual-plate RGBA SSIM (`--export-compat`), generates diagnostic strips and clusters, and enforces CI non-regression ratchet against baseline                                                                             |
+| Layer       | Tool                                                                                              | Scope                                                                                                                                                                                                                                                                                                                                |
+| ----------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Unit        | Vitest                                                                                            | `packages/domain` (parsers, arrangement expansion, layout maths), `packages/live-state` (reducer determinism, property tests with fast-check), `packages/protocol` (schema round-trips), `packages/importers` (fixtures), hub services with an in-memory SQLite                                                                      |
+| Integration | Vitest + a real hub                                                                               | HTTP API with auth and roles, WebSocket sequencing, media jobs with tiny fixture files: `apps/hub/test` starts the hub in the test process on an ephemeral `127.0.0.1` port with a temporary data directory; `processes.test.ts` runs the real two-process hub (supervisor, live and library children) from source                   |
+| End to end  | Playwright, headless Chromium with SwiftShader (`--use-angle=swiftshader --enable-unsafe-webgpu`) | Operator, two outputs and the stage on their own origins served by a real hub over HTTP (below); GO and flip timing, clears, looks, degraded mode, relaunch, and the chaos specs                                                                                                                                                     |
+| Soak        | `tools/soak` (Playwright, real GPU on the venue PC or a dev machine)                              | 60+ minutes of the live playlist with motion backgrounds, GO every 10 s; asserts zero missed frames and zero long tasks from telemetry                                                                                                                                                                                               |
+| Visual      | Playwright screenshots of outputs vs golden PNGs                                                  | Text rasterizer and looks; per-pixel tolerance for anti-aliasing                                                                                                                                                                                                                                                                     |
+| Fidelity    | `tools/pro7-fidelity` (Playwright, headless Chromium `@ordo/renderer`)                            | ProPresenter 7 visual fidelity: scores imported `.pro` slides against reference PNGs using dual-plate RGBA SSIM (`--export-compat`), generates diagnostic strips and clusters, and enforces CI non-regression ratchet against baseline; the golden-pptx census ratchet holds every public deck's slide classes (`census-ratchet.ts`) |
 
 ## The compositor under test
 
@@ -37,8 +37,10 @@ Chromium only.
   8090) with data in `.e2e-data`, sign-in by `ORDO_DEV_PIN=246810`, `ORDO_TZ=UTC`. Specs share it and run
   one at a time (`workers: 1`).
 - Specs that kill or restart the hub own a hub process (`e2e/hubproc.ts`, `HubProcess.fresh(port)`) on their
-  own ports, with data under `ORDO_E2E_DATA_ROOT` or `test-results/.e2e-data-<port>`; `ORDO_E2E_HUB_CMD`
-  runs the hub from source instead of the build. `ORDO_CHAOS_OUTPUT_PORT` and `ORDO_CHAOS_OPERATOR_PORT`
+  own ports, with data under `ORDO_E2E_DATA_ROOT` or `test-results/.e2e-data-<port>` and the hub's log lines in
+  `test-results/hub-<port>.log` (appended across the spec's restarts, so CI's uploaded test-results carry
+  them; `ORDO_E2E_HUB_STDOUT=1` prints them instead); `ORDO_E2E_HUB_CMD` runs the hub from source instead of
+  the build. `ORDO_CHAOS_OUTPUT_PORT` and `ORDO_CHAOS_OPERATOR_PORT`
   move the chaos specs' ports so concurrent runs do not collide.
 - Windows are opened by URL with their output token (`openRoleWindow`), or launched from the operator
   (`window.open`) where the fallback bus needs an opener.
@@ -59,6 +61,17 @@ With `ORDO_E2E_REAL_GPU=1`, for a run on a real GPU without the SwiftShader flag
 (17 ms) between outputs and 50 ms after the scheduled time. Lateness against the key press itself is not
 asserted end to end; the soak test reports late flips per output from the outputs' own counters.
 
+Wall-clock bounds in unit tests (a parser, a layout or an import "within 5 s" on hostile input) show that the
+work stays linear and never runs away; they are not performance budgets. A bound is written as the budget
+on a developer machine through `budgetMs` (`packages/domain/src/timing.test-util.ts`): three times that on
+CI (`CI` set), whose 2-core runner is about three times slower for CPU-bound work, or the factor in
+`ORDO_TEST_TIME_SCALE` on a machine shared with other jobs. Bounds that test the product's own timeouts (a
+library that did not answer within its wait, a socket closed within its grace) are not scaled. Frame and
+task budgets (design/27 §13: a 50 ms asset-worker task) are gated by the benches, on a known machine, not
+by vitest: `bench:slides --check` for slide rasters and `bench:tables` for the table object's prepare
+slices and draw (median of five runs under 50 ms); the vitest side of those (`table.browser.test.ts`)
+bounds only a runaway at ten times the task.
+
 `e2e/slide-media.spec.ts` covers video and sound playing in place in a slide (design/27 §14.12) on two
 outputs: Audience 1 on WebGPU (`?renderer=webgpu`) and the audio master, Audience 2 on Canvas 2D. It probes
 the pixels of a turned, rounded clip box under a title band (clip inside the mask, backdrop outside it, the
@@ -73,9 +86,14 @@ whose processing failed (degraded notes, posters).
 slides (design/27 §14.12), each on a hub of its own with the bundled fonts (`ORDO_FONTS_DIR`). The decks
 are synthetic probes written by `e2e/pptxdecks.ts` (pptxgenjs, and crafted OOXML with `p:timing` and
 ffmpeg test clips), sent through `POST /import/document`. `pptx-native` draws the deck with the fidelity
-harness's native page (`tools/pptx-fidelity` `convertDeck` and `NativeRenderer`) and asks three slides
-captured from Audience 1 at 1920x1080 (WebGPU) and Audience 2 at 3840x2160 (Canvas 2D) for SSIM ≥ 0.99
-against it; it checks the stage text, the Lobby and Stream bands against the same text typed in ordo
+harness's native page (`tools/pptx-fidelity` `convertDeck` and `NativeRenderer`), given the outputs' own
+font files (`outputFaces`: their config's library fonts, so both sides draw with the same files whatever
+the machine's fontconfig would pick), and asks three slides captured from Audience 1 at 1920x1080 (WebGPU)
+and Audience 2 at 3840x2160 (Canvas 2D) for SSIM ≥ 0.99 against it, without the outputs' "Enter full
+screen" prompt (`capture` hides `.fs-prompt`; a test window is never full screen). The verse slide has a
+floor of its own, 0.96 (`CUE1_FLOOR`): on the CI runner the outputs draw its text about 0.4 % narrower than
+the harness (a size or advance difference, glyph shapes identical; 1.000 in the dev container), and the
+spec logs each text line's width on both sides until it is gone; it checks the stage text, the Lobby and Stream bands against the same text typed in ordo
 (set as the deck sets it, its verse numbers raised, so both bands go through the rich engine; and against
 the text without its verse numbers, which must differ), cue labels, library search, and the
 hidden slide (Next and Prev skip it, a double-click in the grid shows it). `pptx-media` plays the M5 exit
@@ -104,7 +122,7 @@ with the value before the fault: a check only after recovery would miss a black 
 | `link-blip.spec.ts`           | The operator's socket for under the 5 s fallback grace (TCP proxy)                                                                                                                                                                                                                  | A command sent just before the blip is re-sent with its id and applied once; the view does not snap back                                                                                                                                                                                                                                                                 |
 | `link-silent-hub.spec.ts`     | The hub's TCP connections frozen, no close (TCP proxy)                                                                                                                                                                                                                              | The silent hub is noticed within about 12 s while live and the operator is the authority a 5 s grace later                                                                                                                                                                                                                                                               |
 | `link-fallback-leave.spec.ts` | The operator tab that put the outputs on the fallback bus                                                                                                                                                                                                                           | The outputs return to the hub when it is back; a new operator tab's Relaunch takes the windows over                                                                                                                                                                                                                                                                      |
-| `degraded.spec.ts`            | The hub, during a service                                                                                                                                                                                                                                                           | The operator runs the service from the PC, the outputs follow over the fallback bus, and the hub adopts the operator's state when it returns                                                                                                                                                                                                                             |
+| `degraded.spec.ts`            | The hub, during a service                                                                                                                                                                                                                                                           | The operator runs the service from the PC, the outputs follow over the fallback bus, and the hub adopts the operator's state when it returns; one GO pressed as soon as the hub has the service back moves the hub and both outputs exactly one cue (pressed once, never retried; a lost or doubled GO fails)                                                            |
 
 Not covered end to end (verified by unit tests or by hand): storage quota exhausted, a revoked GPU, a slow
 or failing IndexedDB, the hub stall watchdog on the library process.
@@ -178,10 +196,39 @@ Text uses faces injected from the system so the result does not depend on instal
 DejaVu Sans ('Golden': Latin, Hebrew, Arabic), FreeSerif ('Golden Serif': Tamil) and
 IPAGothic ('Golden CJK'). `expected/meta.json` lists the files (path and SHA-256) the
 expected images were made with, and a comparison loads exactly those, so another font on
-the machine cannot change the run. When one is missing the run is skipped; in CI (`CI` set,
-or `--strict`) a skip, or a case without an expected image, fails the run. `--update`
-rewrites the expected images; a failing case writes `<case>.actual.png` next to the
-expected one.
+the machine cannot change the faces (the rasteriser's hinting still can). When one is missing the
+run is skipped; in CI (`CI` set, or `--strict`) a skip, or a case without an expected image, fails
+the run. `--update` rewrites the expected images; a failing case writes `<case>.actual.png` next to
+the expected one (git ignores it).
+
+The expected images belong to one pinned image, `mcr.microsoft.com/playwright:v1.63.0-noble` with the
+repository's font packages: CI's "Goldens (pinned container)" job draws and compares them there (with
+`late-font` and `golden:compositor`), and no other run is authoritative. Text drawn elsewhere differs in
+hinting and anti-aliasing with an identical layout (a local run of main fails 28 cases by up to 8 % of
+their pixels), so expected images are never made on a developer machine. Every failing case, and every
+case without an expected image, is also written to `test-results/golden/`: `<case>.actual.png`,
+`<case>.expected.png` and `<case>.diff.png` (red where a pixel is past the tolerance); a case compared
+with another case's image writes `<case>.against-<other>.png`, a legacy case drawn with the font resolver
+`<case>.resolver.png`. CI uploads that directory as the artifact `golden-images` when the job fails. An
+intended change, or a new case, is adopted from it:
+
+```
+gh run download <run-id> --name golden-images --dir /tmp/golden-images
+tools/golden-from-artifact.sh /tmp/golden-images [case ...]   # <case>.actual.png -> expected/<case>.png
+```
+
+The same run on a developer machine, in the same container (Docker; the working tree is copied in, so
+uncommitted changes count; the pictures land in `./test-results/golden`):
+
+```
+tools/golden-docker.sh                      # golden --strict, late-font, golden:compositor
+tools/golden-docker.sh golden               # one step
+tools/golden-from-artifact.sh test-results  # adopt what it drew
+```
+
+It runs, in `mcr.microsoft.com/playwright:v1.63.0-noble` with `CI=true`, `apt-get install` of the font
+list of `ci.yml`'s goldens job, `pnpm install --frozen-lockfile`, then `pnpm --filter @ordo/renderer
+golden --strict` and the other two steps.
 
 `pnpm --filter @ordo/renderer golden:compositor` is the compositor golden (design/27 §14.5). It has
 no expected images: in a worker in headless Chromium (WebGPU on SwiftShader, the flags above), two
@@ -196,7 +243,7 @@ with a budget of 24 rows a frame, every frame while new content uploads must be 
 picture whole and the flip must wait for the last strip. WebGPU must match Canvas 2D within
 40 per channel on all but 0.4 % of the pixels and the reference within 8 on all but 0.05 %.
 Failing cases write their three images to `test-results/compositor-golden/` (`--images` writes
-every case). `sprite.browser.test.ts` (vitest, headless Chromium) draws bands, rich and legacy
+every case), which the `golden-images` artifact carries too. `sprite.browser.test.ts` (vitest, headless Chromium) draws bands, rich and legacy
 text, shapes, the lower third, props and scene parts as tight sprites and full-frame and requires
 each sprite placed at its offset to be the full-frame picture.
 
@@ -224,14 +271,41 @@ The harness produces:
   every run. Local evaluation can additionally run against real exported `.proPlaylist` bundles via
   `--sample-dir <dir>`.
 
+## The golden-pptx census ratchet
+
+`pnpm --filter @ordo/pptx-fidelity census:ratchet` (`tools/pptx-fidelity/src/census-ratchet.ts`) runs the
+census (`census.ts`) over the committed public corpus `golden-pptx/` (112 decks, 1,071 shown slides; about
+15 s here, under a minute on CI) and compares each shown slide's class, its class in the hub and its reasons
+with `tools/pptx-fidelity/golden-census-baseline.json`. A slide whose class gets worse (native < hybrid <
+picture), natively or in the hub, a shown slide that is gone, and a deck that is missing or no longer reads
+fail the run; better classes, other reasons on the same class and new decks or slides are reported, and a PR
+that improves a class records it (`-- --write`) so it cannot slip back. It needs no LibreOffice and no
+browser.
+
 ## CI
 
-GitHub Actions on every pull request and merge to main (and by hand): `pnpm lint`, `pnpm typecheck`, `pnpm test`,
-`pnpm e2e` (SwiftShader, so the 100 ms timing bounds above), the golden images, the ProPresenter 7 synthetic
-visual fidelity ratchet, Docker build. Tags build and push the image. Playwright traces are uploaded on failure.
+GitHub Actions on every pull request and merge to main (and by hand), `.github/workflows/ci.yml`, in four
+jobs that run side by side so none takes more than about 35 minutes (one job took 30 to 45 minutes before):
+
+| Job                            | Runs                                                                                                                                                                                                           | Limit  |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| Lint, types, unit tests, build | `pnpm lint`, `pnpm typecheck` (tests, specs and tools included), `pnpm test` (`CI` set: timing bounds ×3, golden runs strict), `pnpm build`, `pnpm build:pages`, `pnpm audit` (advisory)                       | 25 min |
+| End-to-end (2 shards)          | `pnpm build`, `build:pages`, Playwright Chromium and WebKit, `pnpm e2e --shard=<n>/2` with `ORDO_CI=1` (retries 1, SwiftShader, so the 100 ms timing bounds above); uploads `playwright-report-<n>` on failure | 35 min |
+| Goldens (pinned container)     | in `mcr.microsoft.com/playwright:v1.63.0-noble` with the font list: `golden --strict`, `late-font`, `golden:compositor`; uploads `golden-images` on failure ("Golden images" above)                            | 20 min |
+| Fidelity ratchets              | the ProPresenter 7 synthetic ratchet and the golden-pptx census ratchet; uploads their results on failure                                                                                                      | 20 min |
+
+The end-to-end, goldens and fidelity jobs install the image's font packages (Carlito, Caladea, Liberation 2,
+Noto core, Inter) next to ffmpeg, poppler and LibreOffice Impress where they need them; the goldens and
+fidelity jobs add the golden faces (DejaVu, FreeSerif, IPAGothic). Docker images are built by
+`docker-pr.yml` and published by `docker-publish.yml`; tags build and push the image. Not run in CI: the
+benches (`bench:*`, whose 50 ms and frame gates need a known machine) and the PowerPoint fidelity harness
+against LibreOffice (design/27 §14 item 2).
 
 ## Test content
 
 Fixtures are synthetic: generated lyrics, a 10 s test pattern video in each format, a
 PPTX and a PDF with known text boxes, a minimal ProPresenter 7 file built from the proto
-schema. No venue content in the repo.
+schema. No venue content in the repo, with one deliberate exception: `golden-pptx/`, a corpus of 112
+public decks (church sermons, worship lyrics, announcements and file-format test decks) downloaded from
+the web with their sources and a takedown notice in its README, used by the census ratchet. Private
+decks a venue shares for testing never enter the repository.

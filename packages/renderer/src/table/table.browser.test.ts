@@ -2,20 +2,27 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 import { describe, expect, it } from 'vitest';
 import type { TableTiming } from './table.page.test-util.ts';
 
 /**
- * Headless check of the table object's longest task (design/27 M9 tables, §13: no asset-worker task over 50
- * ms): bundles table.page.test-util.ts and runs it in headless Chromium with DejaVu Sans. Preparing the
- * corpus's largest table kinds in 8 ms slices keeps every slice under 50 ms (the 13,782-character chart, in
- * words never measured before, included), and so does the draw that follows. Skipped without Chromium or the
- * face. Timings depend on the machine and its load: a task over the bound is reported with every timing.
+ * Headless check of the table object's sliced preparation (design/27 M9 tables): bundles
+ * table.page.test-util.ts and runs it in headless Chromium with DejaVu Sans. The corpus's largest table kinds
+ * (the 13,782-character chart, in words never measured before, the bulletin, the master grid) are prepared in
+ * 8 ms slices and drawn at 3840 without a page error. Skipped without Chromium or the face.
+ *
+ * §13's 50 ms task is a bench gate, not a unit-test bound (design/23 "Timing bounds"): `pnpm --filter
+ * @ordo/renderer bench:tables` runs the same page several times and fails when a table's longest slice or its
+ * draw takes 50 ms or more. Here a slice or a draw is only bounded against a runaway (ten times the task),
+ * which a preparation that stopped slicing would cross on any machine.
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../../../..');
 const FACE = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
+/** Ten times §13's task: a slice or a draw this long means the preparation stopped slicing. */
+const RUNAWAY_MS = 500;
 
 async function findChromium(): Promise<string | undefined> {
   if (process.env.ORDO_TEST_CHROMIUM) return process.env.ORDO_TEST_CHROMIUM;
@@ -46,7 +53,7 @@ async function loadEsbuild(): Promise<Esbuild> {
 const executablePath = await findChromium();
 
 describe.skipIf(!executablePath || !existsSync(FACE))('table preparation in headless Chromium', () => {
-  it('prepares the 13,782-character chart, the bulletin and the master grid in tasks under 50 ms', async () => {
+  it('prepares the 13,782-character chart, the bulletin and the master grid in slices', async () => {
     const esbuild = await loadEsbuild();
     const built = await esbuild.build({
       entryPoints: [join(here, 'table.page.test-util.ts')],
@@ -82,8 +89,8 @@ describe.skipIf(!executablePath || !existsSync(FACE))('table preparation in head
     expect(timings.map((t) => t.cells)).toEqual([48, 96, 640]);
     for (const t of timings) {
       expect(t.slices).toBeGreaterThanOrEqual(1);
-      expect(t.maxSliceMs, report.join('\n')).toBeLessThan(50);
-      expect(t.drawMs, report.join('\n')).toBeLessThan(50);
+      expect(t.maxSliceMs, report.join('\n')).toBeLessThan(budgetMs(RUNAWAY_MS));
+      expect(t.drawMs, report.join('\n')).toBeLessThan(budgetMs(RUNAWAY_MS));
     }
   }, 120_000);
 });

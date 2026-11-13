@@ -51,12 +51,15 @@ export class Backups {
   private timer?: NodeJS.Timeout;
   private running?: Promise<{ file: string }>;
 
-  constructor(
-    private db: DB,
-    private lib: Library,
-    private opts: { dataDir: string; timeZone: () => string },
-    private log: Logger,
-  ) {
+  private db: DB;
+  private lib: Library;
+  private opts: { dataDir: string; timeZone: () => string };
+  private log: Logger;
+  constructor(db: DB, lib: Library, opts: { dataDir: string; timeZone: () => string }, log: Logger) {
+    this.db = db;
+    this.lib = lib;
+    this.opts = opts;
+    this.log = log;
     this.dir = join(opts.dataDir, 'backups');
   }
 

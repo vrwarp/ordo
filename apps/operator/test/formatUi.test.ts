@@ -836,7 +836,7 @@ describe('the Object panel of a text box', () => {
     expect(h).toContain('<div role="status"></div>');
 
     // Selecting characters automatically switches UnifiedTypography and FloatingContextBar to Selection scope.
-    setTextRange(0, 5);
+    setTextRange({ start: 0, end: 5 });
     Object.assign(useEditor.getInitialState(), {
       draft: p,
       slideId: 's1',
@@ -859,7 +859,7 @@ describe('the Object panel of a text box', () => {
     expect(plain(floating)).toContain('Selection');
     expect(floating).toContain('aria-label="Bold"');
     expect(floating).toContain('More…');
-    setTextRange(0, 0);
+    setTextRange({ start: 0, end: 0 });
     Object.assign(useEditor.getInitialState(), {
       draft: undefined,
       slideId: undefined,

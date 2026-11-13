@@ -99,13 +99,28 @@ export class SocketHub {
   /** Sockets closed for breaking a limit, by reason (diagnostics). */
   readonly limitClosures: Record<string, number> = {};
 
+  private auth: Auth;
+  private live: LiveService;
+  /** The configured outputs (for the health table); the Library's or the live process's cached copy. */
+  private outputs: () => Output[];
+  private log: Logger;
+  private opts: {
+    domain: string;
+    healthIntervalMs: number;
+    clientIp: (req: IncomingMessage) => string;
+    /**
+     * Are the output tokens known yet? The live process starts without its library context (live
+     * started before the library, or a restore cleared the copies) and cannot tell a valid token from
+     * a revoked one until it has it. Default: always.
+     */
+    contextReady?: () => boolean;
+  };
   constructor(
-    private auth: Auth,
-    private live: LiveService,
-    /** The configured outputs (for the health table); the Library's or the live process's cached copy. */
-    private outputs: () => Output[],
-    private log: Logger,
-    private opts: {
+    auth: Auth,
+    live: LiveService,
+    outputs: () => Output[],
+    log: Logger,
+    opts: {
       domain: string;
       healthIntervalMs: number;
       clientIp: (req: IncomingMessage) => string;
@@ -117,6 +132,11 @@ export class SocketHub {
       contextReady?: () => boolean;
     },
   ) {
+    this.auth = auth;
+    this.live = live;
+    this.outputs = outputs;
+    this.log = log;
+    this.opts = opts;
     this.wss = new WebSocketServer({
       noServer: true,
       // The hard cap; per-message limits by type are enforced in attach().

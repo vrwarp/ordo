@@ -24,7 +24,10 @@ export class ProgramViews {
   private peers = new Map<string, Peer>();
   private lastConnected = new Map<string, boolean>();
 
-  constructor(private ctl: Controller) {}
+  private ctl: Controller;
+  constructor(ctl: Controller) {
+    this.ctl = ctl;
+  }
 
   dispose(): void {
     for (const id of [...this.peers.keys()]) this.close(id);

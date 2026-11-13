@@ -10,7 +10,7 @@
     "./*": "./src/*"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
     "golden": "tsx golden/run.ts",
     "late-font": "tsx golden/late-font.ts",
     "bench:slides": "tsx bench/slides.ts",
@@ -18,7 +18,8 @@
     "bench": "tsx bench/raster.ts",
     "golden:compositor": "tsx golden/compositor-run.ts",
     "bench:sprites": "tsx bench/sprites.ts",
-    "bench:gpu": "tsx bench/gpu-venue.ts"
+    "bench:gpu": "tsx bench/gpu-venue.ts",
+    "bench:tables": "tsx bench/tables.ts"
   },
   "dependencies": {
     "@ordo/domain": "workspace:*",

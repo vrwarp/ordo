@@ -38,6 +38,7 @@ import {
   themeXml,
   inlineGeoms,
 } from './test-util.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const IN = 914_400;
 /** Logical px per inch on a standard slide (2 px per point). */
@@ -311,7 +312,7 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
     for (let i = 0; i < count; i++) all += one(2 + i);
     const t0 = performance.now();
     const scene = parseDeck(buildDeck({ slides: [{ shapes: all }] }));
-    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
     const els = scene.slides[0]!.elements as ShapeElement[];
     expect(els.slice(0, count - 2).every((e) => e.support === 'native')).toBe(true);
     expect(els[count - 1]).toMatchObject({ support: 'residual', custom: { over: true } });
@@ -725,7 +726,7 @@ describe('custom geometry (a:custGeom → ShapeGeom.paths)', () => {
       paths: `<a:path w="10" h="10">${M('__proto__', 'g')}${L(10, 10)}${closes}</a:path>`,
     };
     const { scene, objects, notes } = emitOne({ slides: [{ shapes: custom(2, geom) }] });
-    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
     const e = scene.slides[0]!.elements[0] as ShapeElement;
     // __proto__ is an ordinary guide (5); the over-long formula is 0; the closes past 4,096 points are
     // dropped, so LibreOffice draws the shape.

@@ -114,12 +114,12 @@ export function isMetafile(h: PictureHeader): boolean {
  * message behind it, which can name a scratch path: for the hub's log only.
  */
 export class PictureError extends Error {
-  constructor(
-    message: string,
-    readonly route: 'refused' | 'metafile' = 'refused',
-    readonly detail?: string,
-  ) {
+  readonly route: 'refused' | 'metafile';
+  readonly detail?: string;
+  constructor(message: string, route: 'refused' | 'metafile' = 'refused', detail?: string) {
     super(message);
+    this.route = route;
+    this.detail = detail;
   }
 }
 
@@ -708,7 +708,10 @@ export type PreparedPicture = {
 
 /** Decoded megapixels one import may still spend on preparation (`PICTURE_LIMITS.importMegapixels`). */
 export class PictureBudget {
-  constructor(public megapixels: number = PICTURE_LIMITS.importMegapixels) {}
+  public megapixels: number;
+  constructor(megapixels: number = PICTURE_LIMITS.importMegapixels) {
+    this.megapixels = megapixels;
+  }
 
   spend(mp: number): void {
     if (mp > this.megapixels)

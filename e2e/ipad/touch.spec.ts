@@ -126,9 +126,10 @@ async function fingerDrag(page: Page, from: Pt, to: Pt, opts: { holdMs?: number;
         const list = ended ? doc.createTouchList() : doc.createTouchList(t);
         target.dispatchEvent(
           new TouchEvent(type, {
-            touches: list,
-            targetTouches: list,
-            changedTouches: doc.createTouchList(t),
+            // WebKit takes the TouchLists it made itself; the DOM types ask for Touch[].
+            touches: list as unknown as Touch[],
+            targetTouches: list as unknown as Touch[],
+            changedTouches: doc.createTouchList(t) as unknown as Touch[],
             bubbles: true,
             cancelable: true,
             composed: true,

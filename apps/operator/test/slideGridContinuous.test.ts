@@ -48,7 +48,7 @@ describe('SlideGrid continuous playlist scroll', () => {
     items: [
       { id: 'item1', kind: 'presentation', presentationId: p1.id },
       { id: 'item2', kind: 'presentation', presentationId: p2.id },
-      { id: 'item3', kind: 'timer', timer: { id: 't1', kind: 'elapsed', label: 'Welcome Countdown' } },
+      { id: 'item3', kind: 'timer', timer: { kind: 'elapsed', label: 'Welcome Countdown' } },
     ],
   };
 

@@ -4,6 +4,7 @@ import { testMeasurer } from '@ordo/renderer/text/test-util.ts';
 import { afterEach, describe, expect, it } from 'vitest';
 import { type PrepareHost, prepareSteps } from './index.ts';
 import { TABLE_SLICE_MS, setTableMeasurer, tableLayouts } from './tables.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 /*
  * The table prepare step (design/27 M9 tables): a slide's tables laid out in slices of the job's turns before
@@ -86,7 +87,7 @@ describe('the table prepare step (M9)', () => {
     const ms = performance.now() - t0;
     // Hundreds of strings at 0.25 ms each: several slices, each about the slice's length.
     expect(log.slices).toBeGreaterThan(3);
-    expect(ms / log.slices).toBeLessThan(TABLE_SLICE_MS * 3);
+    expect(ms / log.slices).toBeLessThan(budgetMs(TABLE_SLICE_MS * 3));
     expect(log.checks).toBe(log.slices);
     const calls = m.calls;
     const o = clampSlide(slide).objects[0]!;

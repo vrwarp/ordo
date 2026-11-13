@@ -8,6 +8,7 @@ import { clearTableCache, layoutTable } from './table/layout.ts';
 import { tableHit } from './table/hit.ts';
 import { measurerFor } from './text/measure.ts';
 import { LEGACY_FONT_ENV } from './text/fonts.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 /*
  * Hostile tables (design/27 M9, tables-object.md §4.8, plan §9: tables fuzzed within 2 s): random tables and
@@ -254,6 +255,6 @@ describe('table fuzz (M9)', () => {
         ctx,
       );
     const ms = performance.now() - t0;
-    expect(ms).toBeLessThan(2_000);
+    expect(ms).toBeLessThan(budgetMs(2_000));
   });
 });

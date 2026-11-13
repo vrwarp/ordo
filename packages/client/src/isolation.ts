@@ -105,11 +105,10 @@ export class Supervisor extends Emitter<{
   private lastCheck: number;
   private checkEveryMs: number;
 
-  constructor(
-    private clock: SupervisorClock = realClock,
-    checkEveryMs = HEARTBEAT_MS,
-  ) {
+  private clock: SupervisorClock;
+  constructor(clock: SupervisorClock = realClock, checkEveryMs = HEARTBEAT_MS) {
     super();
+    this.clock = clock;
     this.checkEveryMs = checkEveryMs;
     this.lastCheck = clock.now();
     this.timer = clock.setInterval(() => this.check(), checkEveryMs);
@@ -279,11 +278,18 @@ export type BudgetRow = {
  */
 export class ErrorBudget {
   private events = new Map<string, { at: number; detail?: string }[]>();
+  private limits: Record<string, BudgetLimit>;
+  private now: () => number;
+  private fallback: BudgetLimit;
   constructor(
-    private limits: Record<string, BudgetLimit>,
-    private now: () => number = () => Date.now(),
-    private fallback: BudgetLimit = { max: 10, windowMs: 60_000 },
-  ) {}
+    limits: Record<string, BudgetLimit>,
+    now: () => number = () => Date.now(),
+    fallback: BudgetLimit = { max: 10, windowMs: 60_000 },
+  ) {
+    this.limits = limits;
+    this.now = now;
+    this.fallback = fallback;
+  }
 
   record(kind: string, detail?: string): { count: number; exceeded: boolean } {
     const list = this.prune(kind);

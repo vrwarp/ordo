@@ -25,6 +25,7 @@ import { CMD_CLOSE, CMD_CUBIC, CMD_LINE, CMD_MOVE } from './ops.ts';
 import { type Outline, outlineOf } from './outline.ts';
 import { type GeomPath, presetGeometry } from './path.ts';
 import { clearGeomFiles, putGeomFile, storedCost, storedGeometry } from './stored.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 /** A path string zigzagging across a 2000 x 2000 space (`turns` times round its centre, radius 1000 ↔ 50). */
 function zigzag(points: number, turns = 37): string {
@@ -125,7 +126,7 @@ describe('drawing estimate (design/27 §12 drawing cost)', () => {
     }));
     const t0 = performance.now();
     expect(storedGeometry({ paths }, 1920, 1080)).toBeUndefined();
-    expect(performance.now() - t0).toBeLessThan(500);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(500));
   });
 });
 

@@ -1,4 +1,11 @@
-import { DEFAULT_LYRIC_STYLE, LOOK_MAIN, type Slide, type TextObject, type TextStyle } from '@ordo/domain';
+import {
+  DEFAULT_LYRIC_STYLE,
+  LOOK_MAIN,
+  type ShapeObject,
+  type Slide,
+  type TextObject,
+  type TextStyle,
+} from '@ordo/domain';
 import { clearEffectCache } from '../src/effects.ts';
 import { AREA_BENCH_CASES } from './cases/index.ts';
 import { rasterSlide } from '../src/raster.ts';
@@ -523,7 +530,7 @@ export const WIDE_SHADOWS: Slide = {
 };
 
 /** Full-slide rects with a 50 % linear or radial gradient each, as the editor stores them. */
-function gradientStack(n: number): Slide['objects'] {
+function gradientStack(n: number): ShapeObject[] {
   const stops = [
     { at: 0, color: { r: 255, g: 0, b: 0, a: 0.5 } },
     { at: 1, color: { r: 0, g: 0, b: 255, a: 0.5 } },
@@ -565,7 +572,11 @@ function stopStack(n: number, ats: readonly number[]): Slide['objects'] {
     { r: 255, g: 220, b: 0, a: 0.5 },
   ];
   const stops = ats.map((at, i) => ({ at, color: colours[i % colours.length]! }));
-  return gradientStack(n).map((o) => ({ ...o, fill: stops[0]!.color, gradient: { ...o.gradient, stops } }));
+  return gradientStack(n).map((o) => ({
+    ...o,
+    fill: stops[0]!.color,
+    gradient: { kind: 'linear' as const, ...o.gradient, stops },
+  }));
 }
 
 /**

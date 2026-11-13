@@ -27,6 +27,7 @@ import {
 } from './index.ts';
 import { RecPath } from './path2d.test-util.ts';
 import { storedCost, storedGeometry } from './stored.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 /**
  * The geometry engine on hostile input (design/27 §12, §14 item 3 "NaN and huge numbers, 10k path points",
@@ -339,7 +340,7 @@ describe('geometry fuzz (design/27 §12, §15 M6)', () => {
       paths: Array.from({ length: 8 }, (_, k) => ({ d: zig(k), w: 100, h: 100, cont: k > 0 })),
     };
     expect(storedGeometry(clampGeom(chain)!, 1920, 1080)).toBeUndefined();
-    expect(performance.now() - t0).toBeLessThan(1_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(1_000));
   });
 
   it('draws a cont chain as the one path it was cut from, wherever it is cut', () => {
@@ -416,7 +417,7 @@ describe('geometry fuzz (design/27 §12, §15 M6)', () => {
       expectBuilt(built.paths, GEOM_LIMITS.paths * GEOM_LIMITS.points);
       const union = geomFillPath2D(built) as unknown as RecPath;
       expect(union.ops.filter((op) => op === 'Z')).toHaveLength(8 * 819);
-      expect(performance.now() - t0).toBeLessThan(2_000);
+      expect(performance.now() - t0).toBeLessThan(budgetMs(2_000));
     } finally {
       vi.unstubAllGlobals();
     }
@@ -428,7 +429,7 @@ describe('geometry fuzz (design/27 §12, §15 M6)', () => {
     const p = parsePathData(d);
     expect(pathDataPoints(p)).toBe(PATH_DATA_LIMITS.points);
     expect(cleanPathData(d).length).toBeLessThanOrEqual(PATH_DATA_LIMITS.chars);
-    expect(performance.now() - t0).toBeLessThan(1000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(1000));
   });
 
   it('never draws a slide past its drawing budget: random hostile outlines, caps, arrowheads, dashes, effects', () => {
@@ -521,6 +522,6 @@ describe('geometry fuzz (design/27 §12, §15 M6)', () => {
       }),
       { numRuns: 60, seed: 2711 },
     );
-    expect(slowest).toBeLessThan(1_000);
+    expect(slowest).toBeLessThan(budgetMs(1_000));
   });
 });

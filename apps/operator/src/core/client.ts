@@ -85,13 +85,21 @@ export class CoreClient extends Emitter<CoreClientEvents> {
   private portRequests?: (ev: MessageEvent) => void;
   private onPageHide?: () => void;
 
+  readonly role: 'operate' | 'edit';
+  readonly appVersion: string;
+  private factory: WorkerFactory;
+  private opts: { test?: boolean; supervisor?: Supervisor };
   constructor(
-    readonly role: 'operate' | 'edit',
-    readonly appVersion: string,
-    private factory: WorkerFactory,
-    private opts: { test?: boolean; supervisor?: Supervisor } = {},
+    role: 'operate' | 'edit',
+    appVersion: string,
+    factory: WorkerFactory,
+    opts: { test?: boolean; supervisor?: Supervisor } = {},
   ) {
     super();
+    this.role = role;
+    this.appVersion = appVersion;
+    this.factory = factory;
+    this.opts = opts;
     this.sup = opts.supervisor ?? new Supervisor();
     this.sup.on('restart', ({ name, reason }) => {
       if (name !== 'core') return;

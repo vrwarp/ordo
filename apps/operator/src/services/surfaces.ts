@@ -74,7 +74,9 @@ export class Surfaces {
   };
   private onHoldUp = () => this.hold.up();
 
-  constructor(private ctl: Controller) {
+  private ctl: Controller;
+  constructor(ctl: Controller) {
+    this.ctl = ctl;
     const s = useLibrary.getState().data.settings;
     this.keyboard = new KeyboardDriver(s.keymap, ctl.dispatch);
     this.deck = new StreamDeckDriver(ctl.dispatch);

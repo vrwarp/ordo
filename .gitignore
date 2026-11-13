@@ -22,3 +22,6 @@ apps/operator/public/stage
 
 # Agent worktrees (local tooling)
 .claude/worktrees/
+
+# Golden runs: the pictures a failing case drew next to its expected image (also in test-results/golden)
+packages/renderer/golden/expected/*.actual.png

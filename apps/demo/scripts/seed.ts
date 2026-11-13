@@ -271,7 +271,7 @@ async function main() {
     const upload = async (name: string, buf: Buffer, mime: string, isBackground: boolean) => {
       const fd = new FormData();
       fd.append('isBackground', String(isBackground));
-      fd.append('file', new Blob([buf], { type: mime }), name);
+      fd.append('file', new Blob([new Uint8Array(buf)], { type: mime }), name);
       const m = await api<{ id: string }>('media', { method: 'POST', body: fd });
       for (let i = 0; i < 300; i++) {
         const s = await api<{ state: string }>(`media/${m.id}`);

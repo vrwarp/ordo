@@ -26,6 +26,7 @@ import { createLiveProcess, type LiveProcess } from '../src/liveproc.ts';
 import { WORKER_LIMITS } from '../src/pool.ts';
 import { MAX_SILENT_STARTS, Supervisor } from '../src/supervisor.ts';
 import { byType, connectWs, EDIT_PIN, OPERATE_PIN, sleep, tempDir } from './helpers.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -213,7 +214,7 @@ describe('H1: a large ProPresenter library is decoded in batches', () => {
     console.log(
       `2,001 documents (${Math.round(bytes / 1024)} KB) decoded in ${ms} ms over ${calls.length} tasks`,
     );
-    expect(ms).toBeLessThan(20_000);
+    expect(ms).toBeLessThan(budgetMs(20_000));
     expect(WORKER_LIMITS.maxOldGenerationSizeMb).toBe(512);
     // 2,001 documents: five batches of PRO7_BATCH_DOCS, then the playlists against all of them.
     expect(calls.map((c) => c.phase)).toEqual([

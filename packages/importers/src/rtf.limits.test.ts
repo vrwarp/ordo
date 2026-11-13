@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { runBounded } from './bounded-run.test-util.ts';
 import { parseRtf, RTF_TEXT_MAX } from './rtf.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const RTF = fileURLToPath(new URL('./rtf.ts', import.meta.url));
 
@@ -62,7 +63,7 @@ describe('parseRtf resource bounds', () => {
     const t0 = Date.now();
     const r = parseRtf(flood);
     const elapsed = Date.now() - t0;
-    expect(elapsed).toBeLessThan(2000);
+    expect(elapsed).toBeLessThan(budgetMs(2000));
     expect(r.text.length).toBeLessThanOrEqual(RTF_TEXT_MAX);
     expect((r.spans ?? []).length).toBeLessThanOrEqual(2000);
     expect((r.paras ?? []).length).toBeLessThanOrEqual(1000);

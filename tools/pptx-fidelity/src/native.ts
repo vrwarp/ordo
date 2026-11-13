@@ -19,6 +19,8 @@
  *   the script fallbacks (`fonts.ts`, as LibreOffice and the outputs draw them), and draws every shown slide
  *   with `drawSlide2D`: a 1920x1080 picture cut to the slide area, and raster timings at 1920 and 3840 px;
  *   then, with the timings, each slide's objects drawn cold one at a time (`maxObjectMs`).
+ *   A caller can give the page other faces instead (`RenderOptions.fonts`): an output's own, so the page
+ *   and the output draw with the same files (e2e/pptx-native.spec.ts).
  *
  * The deck is untrusted: the page fetches only from the harness's own origin, which answers from a fixed
  * table of generated names, and every other request is refused.
@@ -50,7 +52,7 @@ import { bakePicture } from './bake.ts';
 import { hostFace } from './faces.ts';
 import { type CompatRule, compatRules, drawingKey } from './compat/index.ts';
 import { deckFeatures, type Features, featureSource, partFeatures } from './features/index.ts';
-import { hostFonts, type ScriptFace } from './fonts.ts';
+import { type HarnessFont, hostFonts, type ScriptFace } from './fonts.ts';
 import type { NativePage, ObjectsResult, PageFont, PageMedia, RenderResult } from './native-page.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -647,6 +649,13 @@ export type RenderOptions = {
   standIns?: boolean;
   /** Draw each slide's `noLoDraw` as well (`noLoPng`, untimed). */
   noLo?: boolean;
+  /**
+   * The faces the page's resolver registers, instead of fontconfig's for the slides (`hostFonts`; then
+   * `standIns` does nothing). An output's faces (its config's library fonts) make the page draw with exactly
+   * the files the output draws with, whatever this machine's fontconfig would pick: the comparison of an
+   * output with the page is then like with like on any machine (e2e/pptx-native.spec.ts).
+   */
+  fonts?: readonly HarnessFont[];
 };
 
 declare global {
@@ -762,7 +771,9 @@ export class NativeRenderer {
       const n = need.get(m.id) ?? { w: 0, h: 0 };
       media.push({ id: m.id, url: path, needW: n.w, needH: n.h });
     }
-    const host = await hostFonts(drawn, { standIns: opts.standIns === true });
+    const host = opts.fonts
+      ? { fonts: opts.fonts, notes: [], scripts: [] }
+      : await hostFonts(drawn, { standIns: opts.standIns === true });
     notes.push(...host.notes);
     for (const f of host.scripts) if (!this.scriptFaces.has(f.family)) this.scriptFaces.set(f.family, f);
     const urls = new Map<string, string>();

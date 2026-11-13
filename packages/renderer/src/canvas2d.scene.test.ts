@@ -46,11 +46,12 @@ function recorder(name: string): Record<string, unknown> {
 class FakeCanvas {
   readonly name: string;
   private ctx: Record<string, unknown>;
-  constructor(
-    public width = 1920,
-    public height = 1080,
-  ) {
+  public width: number;
+  public height: number;
+  constructor(width = 1920, height = 1080) {
     // In the order a compositor makes them when scenes are offered through prepare().
+    this.width = width;
+    this.height = height;
     this.name = ['scratch', 'scene', 'mask'][canvases] ?? `canvas${canvases}`;
     canvases++;
     this.ctx = recorder(this.name);

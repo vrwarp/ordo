@@ -93,7 +93,8 @@ const fieldSelection = (page: Page) =>
     return { id: t.id, start: t.selectionStart, end: t.selectionEnd };
   });
 
-const textOn = (objects: Obj[], text: string) => objects.find((o) => o.type === 'text' && o.text === text)!;
+const textOn = (objects: Obj[], text: string) =>
+  objects.find((o): o is Obj & { text: string } => o.type === 'text' && o.text === text)!;
 
 test('add a verse with a superscript number', async ({ page }) => {
   test.setTimeout(240_000);
@@ -402,10 +403,11 @@ test('rich copy and paste preserves Ordo runs, converts external scripture HTML,
   const pastedObj = s1Objects[s1Objects.length - 1]!;
   expect(pastedObj.type).toBe('text');
   if (pastedObj.type === 'text') {
-    expect(pastedObj.text).toContain('Potluck16 Amen');
+    const pastedText = pastedObj.text ?? '';
+    expect(pastedText).toContain('Potluck16 Amen');
     // Verify the pasted '16 ' has baseline: 0.3 and 'Amen' has fontWeight: 700
-    const amenIdx = pastedObj.text.lastIndexOf('Amen');
-    const verseIdx = pastedObj.text.lastIndexOf('16 ');
+    const amenIdx = pastedText.lastIndexOf('Amen');
+    const verseIdx = pastedText.lastIndexOf('16 ');
     const verseRun = (pastedObj.runs ?? []).find((r) => r.start <= verseIdx && r.end >= verseIdx + 2);
     const amenRun = (pastedObj.runs ?? []).find((r) => r.start <= amenIdx && r.end >= amenIdx + 4);
     expect(verseRun?.baseline).toBe(0.3);

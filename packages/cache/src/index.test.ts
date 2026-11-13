@@ -47,7 +47,10 @@ class FakeDb {
   onversionchange: Handler = null;
   onclose: Handler = null;
   objectStoreNames = { contains: () => true };
-  constructor(public data: Map<string, unknown>) {}
+  public data: Map<string, unknown>;
+  constructor(data: Map<string, unknown>) {
+    this.data = data;
+  }
   close() {
     this.closed = true;
   }

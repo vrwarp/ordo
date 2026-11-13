@@ -132,10 +132,9 @@ export class LiveCore {
   /** Commands applied locally while reconciling; replayed to the hub after adoption. */
   private replay: LocalEvent[] = [];
 
-  constructor(
-    private deps: LiveCoreDeps,
-    seed?: LiveState,
-  ) {
+  private deps: LiveCoreDeps;
+  constructor(deps: LiveCoreDeps, seed?: LiveState) {
+    this.deps = deps;
     this.opt = new OptimisticState(seed ?? initialState());
     this.local = this.opt.view;
     if (seed?.mode === 'live') this.armGrace();

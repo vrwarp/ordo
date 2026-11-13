@@ -47,11 +47,13 @@ export class MediaSlot {
   /** A frame was delivered since the renderer's copy was last cleared. */
   private frameOut = false;
 
-  constructor(
-    readonly id: number,
-    readonly el: HTMLMediaElement,
-    private host: MediaHost,
-  ) {
+  readonly id: number;
+  readonly el: HTMLMediaElement;
+  private host: MediaHost;
+  constructor(id: number, el: HTMLMediaElement, host: MediaHost) {
+    this.id = id;
+    this.el = el;
+    this.host = host;
     el.preload = 'auto';
     el.crossOrigin = 'anonymous';
     if (this.isVideo) {
@@ -324,7 +326,10 @@ function waitFor(
  * rules on its mirror of the host's media slots.
  */
 export class SlotPair<S extends { key: string; busyUntil: number } = MediaSlot> {
-  constructor(readonly slots: [S, S]) {}
+  readonly slots: [S, S];
+  constructor(slots: [S, S]) {
+    this.slots = slots;
+  }
 
   find(key: string): S | undefined {
     return key ? this.slots.find((s) => s.key === key) : undefined;

@@ -13,6 +13,7 @@ import { m9Chart, m9Decor, m9Slide, m9Table } from '@ordo/domain/m9.test-util.ts
 import { sanitizePresentation } from './sanitize.ts';
 import { sanitizeChart } from './sanitize/chart.ts';
 import { sanitizeTable } from './sanitize/table.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 /**
  * sanitizePresentation and the M9 fields (design/27 M9, §12 "Saving"): tables, charts, decorations, 3-D,
@@ -293,7 +294,7 @@ describe('the M9 sanitizers never throw on hostile input (fuzz)', () => {
       expect(parsed.success).toBe(true);
       if ((byId(slideOf(parsed.data!), 'table') as unknown as ShapeObject).table) kept++;
     }
-    expect(performance.now() - t0).toBeLessThan(2_000 * (process.env.CI ? 3 : 1));
+    expect(performance.now() - t0).toBeLessThan(budgetMs(2_000));
     // Most mutated tables still survive as tables.
     expect(kept).toBeGreaterThan(400);
     for (const v of ODD) {

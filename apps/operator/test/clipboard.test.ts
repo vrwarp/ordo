@@ -64,11 +64,11 @@ function makeDeck(): Presentation {
     fill: { r: 30, g: 60, b: 120, a: 1 },
     opacity: 1,
     radius: 8,
-    origin: { group: 1 },
+    origin: { src: 'pptx', group: 1 },
   };
   const label: TextObject = {
     ...makeRichTextObject(),
-    origin: { group: 1 },
+    origin: { src: 'pptx', group: 1 },
   };
   const pic: ImageObject = {
     id: 'img1',

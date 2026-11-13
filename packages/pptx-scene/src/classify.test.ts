@@ -28,6 +28,7 @@ import {
   solid,
   sp,
 } from './test-util.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const IN = 914_400;
 
@@ -531,7 +532,7 @@ describe('element support (design/27 §5)', () => {
     });
     const t0 = performance.now();
     const s = slideOf(one.repeat(4_999));
-    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
     // M9: never a picture for a budget: the guard keeps 200 objects and lists what it left out.
     expect(s.classification).toMatchObject({ tier: 'T2', class: 'hybrid', missing: ['element'] });
     expect(s.elements.filter((e) => !e.hidden)).toHaveLength(199);
@@ -558,7 +559,7 @@ describe('bounded work on hostile decks', () => {
   it('rates thousands of elements sharing an id with a huge shape once per node, not once per element', () => {
     const t0 = performance.now();
     const deck = parseDeck(buildDeck({ slides: [{ shapes: huge(7, 100_000) + frames }] }));
-    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
     expect(deck.slides[0]!.error).toBeUndefined();
     expect(deck.slides[0]!.elements).toHaveLength(2_000);
   });
@@ -571,7 +572,7 @@ describe('bounded work on hostile decks', () => {
         slides: Array.from({ length: 20 }, () => ({})),
       }),
     );
-    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
     expect(deck.slides.every((s) => s.elements.length === 2_000)).toBe(true);
     expect(deck.slides[19]!.elements[0]).toMatchObject({ support: 'residual', reasons: ['graphicFrame'] });
   });

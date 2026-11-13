@@ -269,7 +269,10 @@ const mb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`;
 class Parts {
   private used = 0;
   private readonly rels = new Map<string, { rels: Rels; types: Map<string, string> }>();
-  constructor(private readonly zip: JSZip) {}
+  private readonly zip: JSZip;
+  constructor(zip: JSZip) {
+    this.zip = zip;
+  }
 
   private tooBig(part: string, size: number): Error {
     return new SlideTooLarge(

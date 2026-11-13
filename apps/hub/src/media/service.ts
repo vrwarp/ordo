@@ -124,13 +124,17 @@ export function baseName(name: string): string {
 
 /** Media ingest (upload → content store → `media` job) and the processing job itself. */
 export class MediaService {
-  constructor(
-    private lib: Library,
-    private store: Store,
-    private jobs: JobQueue,
-    private cfg: HubConfig,
-    private log: Logger,
-  ) {
+  private lib: Library;
+  private store: Store;
+  private jobs: JobQueue;
+  private cfg: HubConfig;
+  private log: Logger;
+  constructor(lib: Library, store: Store, jobs: JobQueue, cfg: HubConfig, log: Logger) {
+    this.lib = lib;
+    this.store = store;
+    this.jobs = jobs;
+    this.cfg = cfg;
+    this.log = log;
     jobs.register<{ mediaId: string }>(
       'media',
       (ctx) => this.process(ctx),

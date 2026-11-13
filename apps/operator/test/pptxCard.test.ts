@@ -362,7 +362,7 @@ describe('the import report', () => {
   it('says what a legacy import is and when the re-import cannot run', () => {
     const legacy = renderToStaticMarkup(
       createElement(PptxReportView, {
-        report: { pages: 3, pending: 0, failed: 0, hidden: 0, edited: 0, log: [], logMore: 0 },
+        report: { pages: 3, pending: 0, failed: 0, missing: 0, hidden: 0, edited: 0, log: [], logMore: 0 },
         approx: { slides: [], more: 0 },
         missingFonts: [],
         readOnly: true,

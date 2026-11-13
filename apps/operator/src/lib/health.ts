@@ -201,14 +201,19 @@ export function cacheIntegrityMessage(rows: CacheIntegrity[]): string | null {
  */
 export class CacheCheckTracker {
   private last = new Map<string, { key: string; at: number }>();
+  private readonly started: number;
+  private readonly opts: { settleMs: number; unknownMs: number; timeoutMs: number };
   constructor(
-    private readonly started: number,
-    private readonly opts: { settleMs: number; unknownMs: number; timeoutMs: number } = {
+    started: number,
+    opts: { settleMs: number; unknownMs: number; timeoutMs: number } = {
       settleMs: 5000,
       unknownMs: 15_000,
       timeoutMs: 60_000,
     },
-  ) {}
+  ) {
+    this.started = started;
+    this.opts = opts;
+  }
 
   /** Feed the latest rows; true when the check should report now. */
   update(rows: CacheIntegrity[], now: number): boolean {

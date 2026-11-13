@@ -72,7 +72,9 @@ export class FrameRing {
   private readonly startedAt = new Float64Array(MAX_VIDEO_SLOTS).fill(Number.NaN);
   private readonly loopMs = new Float64Array(MAX_VIDEO_SLOTS);
 
-  constructor(readonly out: VideoFrames) {
+  readonly out: VideoFrames;
+  constructor(out: VideoFrames) {
+    this.out = out;
     for (let i = 0; i < MAX_VIDEO_SLOTS * FRAME_RING_DEPTH; i++) this.held.push(null);
   }
 
