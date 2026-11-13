@@ -547,7 +547,7 @@ export function EditorView({ id }: { id: string }) {
             onClick={() => void save()}
             title="Ctrl+S"
           >
-            {ed.saving ? 'Saving…' : ed.dirty ? 'Save' : '✓ Saved'}
+            {ed.saving ? 'Saving…' : ed.dirty ? 'Save' : 'Saved'}
           </button>
           <button type="button" disabled={readOnly || !ed.canUndo} onClick={undo} title="Undo (Ctrl+Z)">
             ↶<span className="touch-label">Undo</span>
@@ -641,7 +641,7 @@ export function EditorView({ id }: { id: string }) {
             onClick={() => void save()}
             title="Ctrl+S"
           >
-            {ed.saving ? 'Saving…' : ed.dirty ? 'Save' : '✓ Saved'}
+            {ed.saving ? 'Saving…' : ed.dirty ? 'Save' : 'Saved'}
           </button>
           <button type="button" disabled={readOnly || !ed.canUndo} onClick={undo} title="Undo (Ctrl+Z)">
             ↶<span className="touch-label">Undo</span>
