@@ -667,7 +667,7 @@ function recordingCtx(): { ctx: CanvasRenderingContext2D; ops: string[] } {
 }
 
 describe('the rolled-back schema (design/27 §3.2, §14.7)', () => {
-  it('the previous release reads every imported presentation, stripped, and its slides still draw', () => {
+  it('the previous release (0.5.0) reads every imported presentation, M9 stripped, and its slides still draw', () => {
     expect(saved.map((s) => s.name)).toEqual(
       tools ? ['chart over photo', '4:3', 'hidden slide'] : ['hidden slide'],
     );
@@ -676,15 +676,26 @@ describe('the rolled-back schema (design/27 §3.2, §14.7)', () => {
       const r = prev.Presentation.safeParse(p);
       expect(r.success, name).toBe(true);
       const old = r.data!;
-      // Not quarantined: the source stays a PowerPoint import, the native record is stripped.
-      expect(old.source).toMatchObject({ kind: 'pptx', fileId: p.source!.fileId });
-      expect(old.source).not.toHaveProperty('native');
+      // Not quarantined: the source stays a PowerPoint import with its native record (0.5.0 has M3's).
+      expect(old.source).toEqual(p.source);
       const before = slidesOf(p);
       old.sections
         .flatMap((s) => s.slides)
         .forEach((s, i) => {
-          for (const k of ['pptx', 'hidden', 'transition']) expect(s, `${name} ${i}`).not.toHaveProperty(k);
-          if (s.imported) expect(s.imported).not.toHaveProperty('textAligned');
+          // 0.5.0 keeps the provenance, hidden and transition; M9's missing list and object fields go.
+          expect(s.pptx ?? {}, `${name} ${i}`).not.toHaveProperty('missing');
+          for (const o of s.objects)
+            for (const k of [
+              'table',
+              'chart',
+              'decor',
+              'look3d',
+              'warp',
+              'writing',
+              'centerBlock',
+              'vectorFonts',
+            ])
+              expect(o, `${name} ${i}`).not.toHaveProperty(k);
           // Every object survives (legacy values only), and the slide still draws.
           expect(s.objects.map((o) => o.id)).toEqual(before[i]!.objects.map((o) => o.id));
           const { ctx, ops } = recordingCtx();

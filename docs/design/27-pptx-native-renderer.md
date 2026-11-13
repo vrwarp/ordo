@@ -435,9 +435,18 @@ SlidePptx  += { missing: string[] ≤ 16 of ≤ 40 }                   // '<kind
 - **goLive**: a slide with `pptx.missing` goes live with a `degraded` entry naming what is left out
   (`missingSlideReason`: 'PowerPoint slide with something ordo cannot draw (a chart, …): it is left out',
   kind 'drawing'); a slide waiting for LibreOffice is reported as waiting instead.
-- **Older builds**: `schemas.prev.test-util.ts` stays 0.1.x's schema (M9 lands in 0.2.0, M9 decision 1); it
-  strips every M9 field and the M9 fixture slide (`domain/src/m9.test-util.ts`, 10.8 KB) still parses and draws
-  its legacy shapes and text.
+- **Older builds**: `schemas.prev.test-util.ts` is main's 0.5.0 schema, as published (M9 is 0.6.0; every push
+  to main publishes the edge image and the Pages demo, so 0.5.0 is what a venue rolls back to). It strips every
+  M9 field (`table`, `chart`, `decor`, `look3d`, `warp`, `writing`, `centerBlock`, `vectorFonts`, `adjWide`,
+  `SlidePptx.missing`) and keeps what 0.5.0 already had: geometry and its files, rich text, provenance,
+  `midiCues`, `bottomThirdText`, a playlist item's `keepBackground`, `audioMediaId` and `countdownTimer`, a
+  text box's `lineMask` and a picture's `shadow` and `softEdge` (`schemas.compat.test.ts`). The M9 fixture slide
+  (`domain/src/m9.test-util.ts`, 10.8 KB) still parses and draws its legacy shapes and text
+  (`schemas.m9.test.ts`, `clamp.m9.test.ts`), and so does every presentation the hub test imports
+  (`pptx-integrate.test.ts`). 0.5.0 reads at most 8 paths of a geometry file of at most 400 KB; M9 writes up
+  to 64 paths and 2.6 MB, so after a rollback 0.5.0 draws the first 8 paths of a larger file, and nothing for a
+  shape whose only geometry is a file over 400 KB (it waits for a file it never reads), until the presentation
+  is imported again.
 <!-- /m9:schema -->
 
 ### 3.2 Compatibility rules

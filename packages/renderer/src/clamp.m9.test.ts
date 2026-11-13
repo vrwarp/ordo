@@ -306,7 +306,7 @@ describe('an older build and this build draw the M9 slide', () => {
     const text = ops
       .filter((o) => o.op === 'fillText')
       .map((o) => o.args[0] as string)
-      .join(' ');
+      .join('');
     expect(text).toContain('He is risen!');
     expect(ops.some((o) => o.op === 'fillRect' || o.op === 'fill')).toBe(true);
     expect(ops.some((o) => o.op === 'drawImage')).toBe(true);

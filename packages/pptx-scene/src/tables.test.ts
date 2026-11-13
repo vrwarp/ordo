@@ -472,11 +472,12 @@ describe('tables: grid objects (one per fill and line look, fidelity round 2)', 
     expect(texts).toHaveLength(9);
     expect(tableOf(shapes).objects).toBe(objects.length);
     expect(objects).toHaveLength(10);
-    // An older build strips the geometry and draws the table's outline in the line.
+    // The previous release (0.5.0) keeps the geometry; beside it, the legacy shape is the table's outline in
+    // the line (what a build without geometry drew).
     const old = (prev.Slide.parse(s.slide) as Slide).objects.find((x) => x.id === o.id) as ShapeObject;
     expect(old).toMatchObject({ shape: 'rect', box: o.box, stroke: o.stroke });
     expect(old.fill).toBeUndefined();
-    expect('geom' in old).toBe(false);
+    expect(old.geom).toEqual(o.geom);
   });
 
   it('splits looks by direction when there are several, so vertical lines stay over horizontal ones', () => {
@@ -520,9 +521,11 @@ describe('tables: grid objects (one per fill and line look, fidelity round 2)', 
     );
     expect(tableOf(shapes).objects).toBe(objects.length);
     expect(objects).toHaveLength(3 + 10);
-    // An older build draws each as its box: the header over the bands, the second band over the first.
+    // The previous release (0.5.0) keeps each fill's geometry; its legacy shape is its box (the header over
+    // the bands, the second band over the first).
     const old = (prev.Slide.parse(s.slide) as Slide).objects.filter((o) => o.type === 'shape');
-    expect(old.slice(1).map((o) => 'geom' in o)).toEqual([false, false, false]);
+    expect(old.slice(1).map((o) => 'geom' in o)).toEqual([true, true, true]);
+    expect(old.slice(1).map((o) => (o.type === 'shape' ? o.shape : ''))).toEqual(['rect', 'rect', 'rect']);
   });
 
   it('turns the grid with its table: the same lines and fills, rotated about the group', () => {

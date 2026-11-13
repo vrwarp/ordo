@@ -1,4 +1,4 @@
-import type { ShapeObject, Slide } from '@ordo/domain';
+import { type ShapeObject, Slide } from '@ordo/domain';
 import { geomSlide } from '@ordo/domain/geom.test-util.ts';
 import * as prev from '@ordo/domain/schemas.prev.test-util.ts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -228,8 +228,33 @@ describe('M6 compatibility (design/27 §14.7)', () => {
     return ctx.ops;
   };
 
-  it('the stripped slide draws its legacy shapes, picture and text', () => {
-    const o = drawn(prev.Slide.parse(geomSlide()) as Slide);
+  it('the previous release (0.5.0) keeps the M6 fields: the slide draws as this build draws it', () => {
+    // Compared as recorded (each draw builds its own path and gradient objects).
+    const json = (slide: Slide) => JSON.stringify(drawn(slide));
+    expect(json(prev.Slide.parse(geomSlide()) as Slide)).toBe(json(Slide.parse(geomSlide())));
+  });
+
+  it('without the M6 fields, the legacy shapes, picture and text beside them still draw', () => {
+    // What a build before design/27's M6 kept of it (the legacy fields are still written beside M6's).
+    const legacy = geomSlide();
+    for (const o of legacy.objects as unknown as Record<string, unknown>[]) {
+      for (const k of [
+        'geom',
+        'gradient',
+        'dash',
+        'ends',
+        'flipH',
+        'flipV',
+        'shadow',
+        'glow',
+        'softEdge',
+        'mask',
+      ])
+        delete o[k];
+      const style = o.style as Record<string, unknown> | undefined;
+      if (style) delete style.paint;
+    }
+    const o = drawn(legacy);
     expect(o.some((x) => x.op === 'rect')).toBe(true);
     expect(o.some((x) => x.op === 'moveTo')).toBe(true); // the line
     expect(o.some((x) => x.op === 'drawImage')).toBe(true);
@@ -275,10 +300,12 @@ describe('geometry files (ShapeGeom.ref, M6 round 2)', () => {
     expect(pathsOf(ops(o))).toEqual(pathsOf(ops({ ...base, geom: { paths } })));
   });
 
-  it("an older build strips the ref and draws the legacy shape (the previous release's schema)", () => {
+  it("the previous release (0.5.0) keeps the ref and draws the file's paths once read", () => {
+    clearGeomFiles();
     const slide = { id: 'x', objects: [{ ...base, geom: { ref } }] };
     const parsed = prev.Slide.parse(slide) as Slide;
-    expect((parsed.objects[0] as ShapeObject).geom?.ref).toBeUndefined();
+    expect((parsed.objects[0] as ShapeObject).geom?.ref).toBe(ref);
+    putGeomFile(ref, { paths });
     const ctx = recordingCtx();
     drawSlide2D(ctx, parsed, { scale: 0.5 });
     expect(ctx.ops.filter((x) => x.op === 'fill').length).toBeGreaterThan(0);

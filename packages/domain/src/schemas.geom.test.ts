@@ -14,12 +14,11 @@ import {
 import * as prev from './schemas.prev.test-util.ts';
 
 /**
- * The M6 drawing fields (design/27 §3.1, §3.2, §14.7): parsed and kept by the current schema, stripped by the
- * previous release's (which keeps the legacy shape, fill and picture an older build draws), enums inside them
- * degrading to their defaults, and every array and number bounded.
+ * The M6 drawing fields (design/27 §3.1, §3.2, §14.7): parsed and kept by the current schema and by the
+ * previous release's (main's 0.5.0 has M6, so it saves them back unchanged), written beside the legacy shape,
+ * fill and picture an earlier build drew, enums inside them degrading to their defaults, and every array and
+ * number bounded.
  */
-
-const NEW_SHAPE_KEYS = ['geom', 'gradient', 'dash', 'ends', 'flipH', 'flipV', 'shadow', 'glow', 'softEdge'];
 
 describe('M6 shape, picture and gradient text fields', () => {
   it('the current schema keeps every new field', () => {
@@ -27,19 +26,13 @@ describe('M6 shape, picture and gradient text fields', () => {
     expect(Slide.parse(s)).toEqual(s);
   });
 
-  it('the previous release strips them and keeps the legacy shape, fill, picture and colour', () => {
+  it('the previous release (0.5.0) keeps them, beside the legacy shape, fill, picture and colour', () => {
     const old = prev.Slide.parse(geomSlide());
+    expect(old).toEqual(Slide.parse(geomSlide()));
     const [star, arrow, photo, title] = old.objects;
-    for (const k of NEW_SHAPE_KEYS) {
-      expect(star).not.toHaveProperty(k);
-      expect(arrow).not.toHaveProperty(k);
-    }
     expect(star).toMatchObject({ shape: 'rect', fill: { r: 240 }, stroke: { width: 6 } });
     expect(arrow).toMatchObject({ shape: 'line' });
-    expect(photo).not.toHaveProperty('mask');
-    expect(photo).not.toHaveProperty('flipH');
-    expect(photo).toMatchObject({ type: 'image', mediaId: 'photo-media' });
-    expect((title as prev.TextObject).style).not.toHaveProperty('paint');
+    expect(photo).toMatchObject({ type: 'image', mediaId: 'photo-media', flipH: true });
     expect((title as prev.TextObject).style.color).toEqual({ r: 240, g: 190, b: 40, a: 1 });
     expect(Slide.safeParse(old).success).toBe(true);
   });
@@ -106,11 +99,13 @@ describe('geometry files (ShapeGeom.ref, GeomFile; M6 round 2)', () => {
     expect(ShapeObject.parse({ ...star, geom: { ref } }).geom).toEqual({ ref });
   });
 
-  it('the previous release strips the ref (its shape draws the legacy one)', () => {
+  it('the previous release (0.5.0) keeps the ref, beside the legacy shape', () => {
     const star = geomSlide().objects[0] as ShapeObject;
     const old = prev.Slide.parse({ id: 's', objects: [{ ...star, geom: { ref } }] });
-    expect(old.objects[0]).not.toHaveProperty('geom');
-    expect(old.objects[0]).toMatchObject({ shape: 'rect' });
+    expect(old.objects[0]).toMatchObject({ shape: 'rect', geom: { ref } });
+    // 0.5.0 reads a file of at most 8 paths (M9 writes up to 64): the first 8 are what it draws.
+    expect(prev.GeomFile.safeParse({ paths: Array(8).fill(path) }).success).toBe(true);
+    expect(prev.GeomFile.safeParse({ paths: Array(9).fill(path) }).success).toBe(false);
   });
 
   it('a file holds 1-64 paths (M9; schemas.m9.test.ts), each bounded as inline paths are', () => {
