@@ -23,6 +23,9 @@ test('a lyric deck that PowerPoint loops: the report explains it and "Treat as s
   rmSync(OUT, { recursive: true, force: true });
   mkdirSync(OUT, { recursive: true });
   const a = await hubApi(PORT);
+  // Imports are refused while a service is live (another spec may have left one running).
+  const before = await apiJson<{ state: { mode: string } }>(a, 'live');
+  if (before.state.mode === 'live') await liveEvent(a, { k: 'endService', at: Date.now() });
   const job = await importPptx(a, lyricLoopDeck(OUT));
   const id = job.result!.presentationId;
   const p = await stored(a, id);
@@ -54,8 +57,6 @@ test('a lyric deck that PowerPoint loops: the report explains it and "Treat as s
   const pl = await apiJson<{ id: string }>(a, 'playlists', {
     post: { name: `Loop ${Date.now()}`, items: [{ id: 'grace', kind: 'presentation', presentationId: id }] },
   });
-  const live = await apiJson<{ state: { mode: string } }>(a, 'live');
-  if (live.state.mode === 'live') await liveEvent(a, { k: 'endService', at: Date.now() });
   await liveEvent(a, { k: 'goLive', playlistId: pl.id });
   const outs = await apiJson<OutputRec[]>(a, 'settings/outputs');
   const stage = await roleWindow(context, PORT, outs.find((o) => o.kind === 'stage')!, {
