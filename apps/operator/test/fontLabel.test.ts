@@ -1,5 +1,5 @@
 /**
- * The font select's accessible name (r24 b10; design/15 "Floating bar", "Typography"): "Font" wherever a
+ * The font select's accessible name (design/15 "Floating bar", "Typography"): "Font" wherever a
  * FontPicker is shown (the floating bar, the Typography card, the text style editor, the Themes tab), and
  * "Font (mixed)" while the selected text has several fonts, when the select shows "Mixed" instead of one of
  * them. Server-rendered markup; the floating bar is checked in the browser (e2e/editor-fit.spec.ts).

@@ -77,7 +77,7 @@ The numbers replace the measurements of 2026-11-07 (8ea4456), which predate the 
   57 px under it and the docked panel 349 px (331 px). The touch toolbar (`EditorView.tsx:530-611`) needs
   699 px: Add, Arrange, Find… and History (and Redo at 360 px) are off-screen, and so is the lens dock's
   "All 4 screens". Reaching an off-screen control (a keyboard's focus, a test's scroll into view) scrolls the
-  whole editor sideways, as r24's b7 showed for a 1024 px window.
+  whole editor sideways, as the top bar did in a 1024 px window (`e2e/editor-fit.spec.ts`).
 - **Songs** open on the canvas on a coarse pointer (`EditorView.tsx:549`, `:557`, `:854`), so a phone gets
   the 160x90 slide first. Switched to the Lyric Script, each slide's text field is 18 px wide: the "Screen
   Previews" column ("Live preview across Audience, Stage, and Stream") keeps its width and the script gets
@@ -93,14 +93,14 @@ The numbers replace the measurements of 2026-11-07 (8ea4456), which predate the 
   after the coarse 44 px rule (`styles.css:1414-1435`) and win: the selected slide card's Duplicate, + Like
   and Visible (22 px, `:2717-2721`), the lens pills (24 px, `:2586-2596`), the panel's Object, Slide and
   Presentation tabs (24 px), the section move and delete buttons (22 px), the align bar (26 px), the paint
-  tabs (26 px, `:2419-2430`) and the Lyric Script's arrangement pills (22 px, `:2810-2829`). This is r24's b8;
-  §16 says which track fixes it.
+  tabs (26 px, `:2419-2430`) and the Lyric Script's arrangement pills (22 px, `:2810-2829`). This is one of
+  #24's regressions (`e2e/ipad/touch-targets.spec.ts`); §16 says which track fixes it.
 - **iPad.** Portrait (834x1194): a 220 px slide list, a 614 px stage column with the slide at 590x332, the
   57 px lens dock and a 489 px docked panel below. The 4-screen tray is closed in portrait; opening it
   shrinks the canvas pane from 551 to 389 px. Landscape (1194x834): 240, 654 and 300 px columns, the slide
   at 630x354, the tray open by default (162 px, `EditorView.tsx:161`, `:482`). An iPad with a Magic Keyboard
   or a mouse reports a fine pointer with hover (`lib/capabilities.ts:56`, `:79-83`) and so gets the
-  desktop's canvas-first editor, whose top bar needs about 1,250 px (r24's b7).
+  desktop's canvas-first editor, whose top bar needs about 1,250 px (`e2e/editor-fit.spec.ts`).
 - **The bundle.** The operator's initial chunk is 1,713.5 kB (535.2 kB gzip; 1,713.3 and 535.1 kB at #24's
   merge, `1764e05`), and nothing in the editor is lazy (§7).
 - With the operate PIN a phone gets an operate session. The edit profile never offers live control, but
@@ -413,7 +413,7 @@ so nothing could open.
   which writes automatic numbers and bullets into the text (`SongReflowEditor.tsx:425`), and stores the
   field back with `{ ...o, text }` over unchanged runs and paragraph styles (`:46-55`, `:142`); #24's three
   split paths cut that labelled text and build the new slides as plain text (`:76-131`), and Split at the
-  caret falls back to the text's middle, cutting a word in two (r24's b5). editor-fixes (PR #23) fixes this
+  caret falls back to the text's middle, cutting a word in two (`e2e/editor-script.spec.ts`). editor-fixes (PR #23) fixes this
   in `views/editor/songScript.ts`: the field shows the lyric object's own text (`scriptText`), typing goes
   through `editText` placed by the caret (`typeScript`; an unchanged value records no undo step), every
   split cuts that raw text through the domain's slide split (`splitSlidePieces` in `views/editor/ops.ts`),
@@ -1401,15 +1401,15 @@ reference. What changed:
 - **Phases**: touch targets and the code split are in P0, the words editor's reuse in P2 (§9).
 
 **#24's regressions that touch phones and tablets.** Both are among the ten regressions of #24 verified on
-`1764e05` with a failing Playwright spec each (PR #23's r24 notes, b1 to b10):
+`1764e05` with a failing Playwright spec each, fixed in PR #23:
 
-- **b7: the canvas-first top bar at 1024 px.** At 1024x768 the top bar's Slide, Presentation, Tune and Full
+- **The canvas-first top bar at 1024 px.** At 1024x768 the top bar's Slide, Presentation, Tune and Full
   screen are off-screen and cannot be reached: the bar is one `nowrap` row (`styles.css:981-991`) in an
   editor that clips (`:972-980`), and it needs about 1,250 px. A booth PC at 1024 px meets it, and so does
   an iPad with a Magic Keyboard or a mouse, which reports a fine pointer and gets the canvas-first layout.
   **Fixed by editor-ux** (PR #23): below about 1,250 px the three triggers fold into one Panels menu and the
   title gives way, and the right zone wraps if it still does not fit (`e2e/editor-fit.spec.ts`).
-- **b8: touch targets.** On the iPad the selected slide card's Duplicate, + Like and Visible are 22 px, the
+- **Touch targets.** On the iPad the selected slide card's Duplicate, + Like and Visible are 22 px, the
   lens pills 24 px and the paint tabs 26 px, under design/15's 44 px, because #24's class rules beat the
   coarse rule (§Today counts 23 such controls in the docked editor). **Fixed by editor-ux** (PR #23): 44 px
   again on a coarse pointer for these and for the arrangement pills, section buttons, drawer tabs and the
@@ -1418,6 +1418,6 @@ reference. What changed:
 
 Two more findings of §Today are fixed in the same PR without being counted as regressions of the layout:
 editor-fixes docks the Find card in the stage pane, so it no longer covers the touch toolbar, and makes the
-Lyric Script's splits cut at the caret and keep the song's own text (r24's b5, §2.7). The phone's own
+Lyric Script's splits cut at the caret and keep the song's own text (§2.7, `e2e/editor-script.spec.ts`). The phone's own
 problems (the 160x90 slide, the 18 px script fields, the cut nav, the panned Library) are this design's P0
 and P2, not fixes to the iPad layout.

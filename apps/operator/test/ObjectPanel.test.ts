@@ -154,7 +154,7 @@ function CellsSection({ o, readOnly }: ObjectSectionContext) {
  * Each case's markup digest on the panel before the registry, recorded then: on main's panel at 1764e05 (its
  * placement presets, align bar, inline-editing text field and the canvas-first editor's typography card,
  * folded paragraph strip and stroke line), which the sections reproduce. The text cases (lyric, note) were
- * re-recorded when the typography card's font select was named 'Font' (r24 b10): that aria-label is their only
+ * re-recorded when the typography card's font select was named 'Font' (e2e/editor-fit.spec.ts): that aria-label is their only
  * change.
  */
 const BEFORE: Record<string, string> = {

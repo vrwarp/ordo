@@ -2,7 +2,7 @@ import { expect, type Page, test } from '@playwright/test';
 import { BASE, json, SONG, shot, signInByTapping, startHub } from './ipadhelpers.ts';
 
 /**
- * Touch targets on the iPad (design/15 "Touch": every control is 44 px; r24 b8): an audit of every visible
+ * Touch targets on the iPad (design/15 "Touch": every control is 44 px, which #24's class rules had undone): an audit of every visible
  * control of the editor in both orientations (the webkit-ipad projects: 1194x834 and 834x1194), on each
  * surface a volunteer touches: the canvas with its object tools, the docked panel's tabs, the slides list
  * with the selected card's actions, the Stage lens, the paint picker (solid and gradient) and the Lyric

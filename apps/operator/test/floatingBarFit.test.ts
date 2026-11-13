@@ -1,5 +1,5 @@
 /**
- * The floating bar fits its pane (r24 b9; design/15 "Floating bar"): styles.css caps the bar at the pane's
+ * The floating bar fits its pane (design/15 "Floating bar"): styles.css caps the bar at the pane's
  * width less 16 px (a wider row wraps) and SlideCanvas feeds `floatingBarSpot` that measured size, so the bar
  * never starts past the pane's left edge, never ends past its right edge and never leaves it vertically,
  * whatever the object, zoom or pane (the drawer open at 1024 px leaves a 484 px pane).

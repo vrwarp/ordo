@@ -22,7 +22,7 @@ import { hubApi } from './linkhelpers.ts';
 
 /**
  * The canvas-first editor's own surfaces (#24) on the windows a church uses (design/15 "Canvas-first layout",
- * "Top bar", "Floating bar", "Paint picker"; the r24 regressions b3, b7, b9 and b10):
+ * "Top bar", "Floating bar", "Paint picker"; four of #24's regressions):
  * - the paint picker open on None leaves the main thread idle, and a gradient pin dragged past another stop
  *   keeps moving that stop;
  * - at 1024x768 and 1280x720 every top-bar control can be clicked, for a deck and for a song in Slide Canvas
@@ -125,7 +125,7 @@ async function selectObject(page: Page, o: Obj): Promise<void> {
   }).toPass({ timeout: 15_000 });
 }
 
-test('b3: the paint picker on None leaves the main thread idle; a dragged gradient pin keeps its stop', async ({
+test('the paint picker on None leaves the main thread idle; a dragged gradient pin keeps its stop', async ({
   page,
 }) => {
   const a = await hubApi(PORT);
@@ -180,7 +180,7 @@ test('b3: the paint picker on None leaves the main thread idle; a dragged gradie
   await expect(pop.getByLabel('Active stop hex color')).toHaveValue(new RegExp(hex, 'i'));
 });
 
-test('b7: every top-bar control can be clicked at 1024x768 and 1280x720, for a deck and a song', async ({
+test('every top-bar control can be clicked at 1024x768 and 1280x720, for a deck and a song', async ({
   page,
 }) => {
   test.setTimeout(240_000);
@@ -289,7 +289,7 @@ const overlaps = (
   b: { x: number; y: number; w: number; h: number },
 ) => a.x < b.x + b.w && b.x < a.x + a.width && a.y < b.y + b.h && b.y < a.y + a.height;
 
-test('b9: the floating bar fits its pane with the drawer open, and never covers the handles', async ({
+test('the floating bar fits its pane with the drawer open, and never covers the handles', async ({
   page,
 }) => {
   test.setTimeout(240_000);
@@ -362,7 +362,7 @@ test('b9: the floating bar fits its pane with the drawer open, and never covers 
   test.info().annotations.push({ type: 'floating bar', description: JSON.stringify(report) });
 });
 
-test('b10: the font select is named Font, and Font (mixed) showing Mixed for a mixed selection', async ({
+test('the font select is named Font, and Font (mixed) showing Mixed for a mixed selection', async ({
   page,
 }) => {
   const a = await hubApi(PORT);

@@ -862,7 +862,7 @@ export function EditorView({ id }: { id: string }) {
                     </button>
                   </div>
                   {/* Below ~1,250 px (~1,450 px with a song's mode switch) the three triggers are one menu
-                      (styles.css), so the bar keeps one calm row on a 1024 px booth PC (r24 b7). */}
+                      (styles.css), so the bar keeps one calm row on a 1024 px booth PC (e2e/editor-fit.spec.ts). */}
                   <div className="ed-drawer-triggers ed-panels-menu">
                     <Menu
                       label="Panels"
@@ -1182,7 +1182,7 @@ export function EditorView({ id }: { id: string }) {
           onPick={(m) => {
             // The Slide panel's Replace… for this slide (one undo step): an imported slide's bottom
             // background shapes go, its background picture is re-cropped to the new one, a video becomes
-            // the slide's motion background (b4: writing backgroundMediaId left them drawn over it).
+            // the slide's motion background (writing backgroundMediaId alone left them drawn over it).
             replaceBackgroundWith(slide.id, m, 'slide');
             setBgPick(false);
           }}

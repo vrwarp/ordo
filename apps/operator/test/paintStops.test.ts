@@ -4,7 +4,7 @@
  * the sliders stay on afterwards. #24 moved these edits into the popover (the Object panel's stop rows went
  * away with editorShapes.test.ts's driven stop tests); they are tested here instead. Also the sliders' sync
  * (`syncHsv`), whose identity on an unchanged colour is what keeps the popover from rendering forever on
- * 'None' (r24 b3).
+ * 'None' (#24's picker re-rendered for as long as it was open).
  */
 import { Gradient, type Rgba } from '@ordo/domain';
 import fc from 'fast-check';
@@ -296,7 +296,7 @@ describe('paintStops: mode tabs', () => {
   });
 });
 
-describe('paintStops: slider sync (r24 b3)', () => {
+describe('paintStops: slider sync (an open picker on None stays idle)', () => {
   it('returns the previous state itself when the colour shown has not changed', () => {
     const prev = rgbaToHsv(DEFAULT_SOLID);
     // Every render on 'None' hands the sync a colour equal to the last one (before #24's fix, a new object

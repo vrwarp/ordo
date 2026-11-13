@@ -622,7 +622,7 @@ export type ContrastMode = 'clean' | 'shadow' | 'outline' | 'heavy';
 /**
  * The contrast menu's choice on box style `s`: the style it sets, and the theme overrides it marks on a
  * themed lyric box. Every choice sets both the outline and the shadow, so both are the volunteer's and the
- * next theme keeps them (b6: marking only `style.outline` let a theme change drop a 'Soft shadow').
+ * next theme keeps them (marking only `style.outline` let a theme change drop a 'Soft shadow').
  */
 export function contrastChoice(s: TextStyle, mode: ContrastMode): { style: TextStyle; overrides: string[] } {
   const outline = { width: 4, color: { r: 0, g: 0, b: 0, a: 1 } };

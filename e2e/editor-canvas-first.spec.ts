@@ -30,7 +30,7 @@ import { ffmpeg } from './pptxdecks.ts';
  * - clipboard HTML from another page that claims to carry ordo objects the editor cannot use (no text, no
  *   style, a box no screen draws) is left out with a message; the slide, the canvas and the top bar stay
  *   (before, the unusable object was added to the slide, and the hub refused the save).
- * - b1: after Escape ends inline editing, the keys go back to the slide: ArrowRight nudges the box, Delete
+ * - after Escape ends inline editing, the keys go back to the slide: ArrowRight nudges the box, Delete
  *   deletes it, a second Escape drops the selection (before, the focus stayed in the hidden 1x1 backing
  *   field: the arrows moved an invisible caret and Delete removed a letter).
  * - Find's match row starts inline editing at the match on the canvas (before, it focused the hidden field,
@@ -40,9 +40,9 @@ import { ffmpeg } from './pptxdecks.ts';
  *   types through sits at the caret on the stage, where the candidate window opens (before, at the window's
  *   bottom-left); Escape while composing cancels the composition, not inline editing; Enter in Find while
  *   composing confirms the candidate and does not jump to the next match.
- * - b4: the top bar's Background on an imported slide shows the picked picture (the Slide panel's Replace…
+ * - the top bar's Background on an imported slide shows the picked picture (the Slide panel's Replace…
  *   for this slide); before, it set a background the slide's own PowerPoint background shape still covered.
- * - b6: a contrast choice on a themed lyric, from the floating bar or the drawer, survives a theme change as
+ * - a contrast choice on a themed lyric, from the floating bar or the drawer, survives a theme change as
  *   chosen; before, the floating bar's Soft shadow was dropped and the drawer's got the theme's outline back.
  * - The editing overlay on its own layer and the cached object nodes: on the shape+text slide the caret
  *   still blinks, typing shows, and the rounded box (a cached node) stays drawn under the text.
@@ -130,7 +130,7 @@ const inlineEditing = (page: Page) => page.locator('[data-testid="ordo-inline-ca
 const noteOf = (p: Parameters<typeof slidesOf>[0]) =>
   slidesOf(p)[1]!.objects.find((o) => o.type === 'text' && o.text === ANNOUNCEMENT_TEXT)!;
 
-test('b1: after Escape ends inline editing, the arrows nudge the box, Delete deletes it, Escape deselects', async ({
+test('after Escape ends inline editing, the arrows nudge the box, Delete deletes it, Escape deselects', async ({
   page,
 }) => {
   const a = await hubApi(PORT);
@@ -313,7 +313,7 @@ async function screenRgbAt(page: Page, x: number, y: number): Promise<[number, n
   return [d[0]!, d[1]!, d[2]!];
 }
 
-test('b4: the top bar’s Background shows the picked picture on an imported slide, one undo step', async ({
+test('the top bar’s Background shows the picked picture on an imported slide, one undo step', async ({
   page,
 }) => {
   const a = await hubApi(PORT);
@@ -359,7 +359,7 @@ Praise Him above ye heavenly host
 Praise Father Son and Holy Ghost
 `;
 
-test('b6: a contrast choice on a themed lyric survives a theme change, from the floating bar and from the drawer', async ({
+test('a contrast choice on a themed lyric survives a theme change, from the floating bar and from the drawer', async ({
   page,
 }) => {
   const a = await hubApi(PORT);

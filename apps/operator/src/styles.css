@@ -2308,7 +2308,7 @@ button.ed-vis-pill.is-hidden {
   padding: 2px 9px;
 }
 
-/* The calm bar fits any window (r24 b7; design/15 "Top bar"): below ~1,250 px (~1,450 px for a song, whose
+/* The calm bar fits any window (design/15 "Top bar", e2e/editor-fit.spec.ts): below ~1,250 px (~1,450 px for a song, whose
    mode switch takes ~190 px) Slide, Presentation and Tune are one Panels menu and the title gives way; if it
    still does not fit (a song at 1024 px, wider system fonts), the right zone wraps to a second row as one
    unit, at the right. Nothing is ever cut off. */
@@ -2347,7 +2347,7 @@ button.ed-vis-pill.is-hidden {
 }
 
 /* 3. Floating Contextual Formatting & Action Bar (Proposal B Core) */
-/* The bar fits its pane (r24 b9; design/15 "Floating bar"): its width is its one-row width, at most the pane's
+/* The bar fits its pane (design/15 "Floating bar", e2e/editor-fit.spec.ts): its width is its one-row width, at most the pane's
    less 8 px a side whatever its left offset (so SlideCanvas measures one size and floatingBarSpot clamps it
    inside the pane), and a row wider than that wraps instead of running under the slide list or the drawer. */
 .ed-floating-bar {
@@ -2908,7 +2908,7 @@ tr.rev-row-selected td {
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
 }
 
-/* Touch sizes for the canvas-first editor's controls (r24 b8; design/15 "Touch"): these class rules come after
+/* Touch sizes for the canvas-first editor's controls (design/15 "Touch", e2e/ipad/touch-targets.spec.ts): these class rules come after
    the 44 px rule of the touch block above and beat it on specificity, so a touch device gets them back here.
    The mouse layout keeps its compact sizes. */
 @media (pointer: coarse) {

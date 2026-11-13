@@ -241,7 +241,7 @@ cells in place of the shape fields).
   of 181 objects (90 shapes with gradients, dashed strokes and shadows, 91 text boxes) an idle caret cost
   192-247 ms of main-thread time per 6 s before (about 20 ms a blink: SlideCanvas re-rendered and the
   objects layer was redrawn) and 32-59 ms after (CDP Performance TaskDuration, headless Chromium, two runs
-  of three rounds each, regroup/r1/editor-fixes/probe).
+  of three rounds each).
 - Editing a text box's plain text keeps its formatting: `editText` (`@ordo/domain`) shifts, trims and
   splits the runs and paragraph styles with the change, placed by the textarea's caret; splitting and
   merging slides cut and join them with the lines (design/27 §11).
@@ -520,7 +520,7 @@ under a finger.
 - **Top bar, three zones.** Left: Library, the title (edited in place), Save with the revision pill
   (History), a song's Lyric Script | Slide Canvas switch, Undo, Redo. Centre, the insert island: '+ Text',
   '+ Image', '+ Video', Shapes, Background. Right: zoom (Fit, 50 %, 75 %, 100 % = Fit), Find…, the drawer
-  triggers Slide, Presentation and Tune, and Full screen. The bar fits any window (r24 b7): below about
+  triggers Slide, Presentation and Tune, and Full screen. The bar fits any window (`e2e/editor-fit.spec.ts`): below about
   1,250 px (about 1,450 px for a song, whose mode switch takes about 190 px) the three triggers are one
   'Panels ▾' menu (`components/Menu.tsx`: Slide, Presentation, Tune), and the title gives way (190 px down
   to 64 px) before anything moves; if the bar still does not fit (a song at 1024 px, a wider system font),
@@ -531,14 +531,14 @@ under a finger.
   while an object is selected, unless the drawer is open on Object; text, shape, picture and multi-selection
   bars end with Layer, Duplicate, Delete and More…. Its tiers: above the box and its rotate handle; below a
   box near the top of the slide; docked inside the top edge of a tall box (the top bezel while its text is
-  edited inline); clear of an open Find card. It fits its pane (r24 b9): its width is its one-row width,
+  edited inline); clear of an open Find card. It fits its pane (`e2e/editor-fit.spec.ts`): its width is its one-row width,
   at most the pane's less 16 px whatever its offset, and a wider row wraps to a second row instead of
   running under the slide list or the drawer (the drawer open at 1024 px leaves a 484 px pane). SlideCanvas
   measures that size and `floatingBarSpot` clamps the bar inside the pane, so it never starts past the
   pane's left edge, and it never covers the selection's handles at Fit, 75 % and 50 %.
 - **Font select.** The family select is named 'Font' wherever it is shown (the floating bar, the Typography
   card, the text style editor, the Themes tab); over a selection of several fonts it shows 'Mixed' and is
-  named 'Font (mixed)' (r24 b10), and a family picked there applies to the whole selection.
+  named 'Font (mixed)' (`e2e/editor-fit.spec.ts`), and a family picked there applies to the whole selection.
 - **Paint picker** (`PaintPopover` in `components/ColorPicker.tsx`; every colour field opens it). Tabs
   None (where the field allows it), Solid, Linear, Radial; the colour square, hue and alpha sliders, the hex
   and % fields and the eyedropper act on the solid colour or the active stop; then the deck's swatches and
@@ -547,8 +547,8 @@ under a finger.
   stops stay sorted by position and the stop being edited stays active, so a pin dragged past another keeps
   moving the same stop; a gradient keeps 2 to 16 stops; Linear ↔ Radial keeps the stops, the angle, the
   focus (`center`) and `scaled`; Solid keeps the colour shown; a gradient from a colour runs to a darker
-  shade of it. The sliders follow the colour by value, so an open picker on None is idle (r24 b3: it
-  re-rendered for as long as it was open).
+  shade of it. The sliders follow the colour by value, so an open picker on None is idle (#24's
+  re-rendered for as long as it was open; `e2e/editor-fit.spec.ts`).
 - **Deck swatches** (`components/deckSwatches.ts`). Up to 8: the applied theme's text colour, then the
   deck's most used colours (text and run colours, shape fills, gradient stops of shapes and gradient text,
   and M9's palettes: a table's text, run and fill colours, a decoration's fills, gradients and outlines, a
@@ -587,7 +587,7 @@ keeps the full toolbar. A focused
 field scrolls back into the visual viewport when the software keyboard shrinks it (`keepVisible.ts`).
 Controls are 44 px with 16 px inputs (no focus zoom), the canvas-first editor's compact controls included
 (the paint picker's tabs, the Stage lens pills, the selected slide card's actions, which wrap in the slide
-list, and the Lyric Script's arrangement pills get 44 px back under a coarse pointer, r24 b8);
+list, and the Lyric Script's arrangement pills get 44 px back under a coarse pointer);
 `e2e/ipad/touch-targets.spec.ts` audits every visible control of the editor, the docked panel, the slides
 list, the paint picker and the Lyric Script in both orientations, the picker's 32 px swatch grid and the
 ramp's stop pins its named exceptions. In portrait the editor's property panel and the
