@@ -269,7 +269,16 @@ Chromium for the pptx-preview PowerPoint renderer (design/20 "PPTX and PDF").
 
 The native PowerPoint import (`pptx-native`, light; [design/27](27-pptx-native-renderer.md) §2) reads the
 deck's XML into memory within its caps, parses and converts it on the CPU pool (a scan call, then batches
-of at most 150 slides, 2 minutes each and 15 minutes of pool time per import), stores the pictures the
+of at most 150 slides, 2 minutes each and 15 minutes of pool time per import), or takes the scene the
+uploading browser parsed (`POST /import/document` part `clientScene`, design/27 §2 "Where the deck is
+parsed"): the route drops a `clientScene` part over 128 MB before it is stored, the pool task
+`pptx-client-scene` reads, parses and checks the stored scene off the event loop (`pptx/clientScene.ts`: a
+zod schema with a bound on every list, string and part name; this hub's `CONVERTER_VERSION`, `M9_WRITES` and
+LibreOffice state; every shape file checked again with `geomFileOf` and re-hashed), and any doubt about it
+makes the hub parse the deck itself (the job's log says why); the scene file is released once version 1 is
+saved or the import fails. Steps 3-5 are the import core's in `@ordo/importers` (`pptx-core.ts`,
+`pptx-scan.ts`, `pptx-geoms.ts`, `pptx-pictures.ts`, `pptx-ladder.ts`), which the browser's parse and the Pages
+demo share, so both paths store the same presentation. The job then stores the pictures the
 slides use (recoloured pictures and tiled fills baked into new prepared pictures first: ffmpeg decodes the
 source to RGBA at the size the bake needs, pool task `pptx-bake` applies the recipe and encodes a PNG, at
 most 16 MP in and out and 60 s, deduplicated by the source's hash and the recipe; design/27 §4), and saves
@@ -280,8 +289,8 @@ written in one transaction. The deck's clips are stored before the save without 
 (`IngestOpts.queue: false`), and those jobs are queued in the same transaction right after `pptx-lo`, each
 created at least a millisecond after the job before it (`JobQueue.enqueue` `after`): jobs of a class start in
 creation order, and ids alone would order two jobs of one millisecond at random. The import never waits for
-a clip's transcode; an import that fails after storing clips queues their jobs anyway. When the CPU pool cannot start, the import fails cleanly: a deck is never parsed
-on the event loop, and never handed to LibreOffice as uploaded. The follow-up retries a LibreOffice run that
+a clip's transcode; an import that fails after storing clips queues their jobs anyway. When the CPU pool cannot start, the import fails cleanly: a deck (or a
+client scene) is never parsed on the event loop, and never handed to LibreOffice as uploaded. The follow-up retries a LibreOffice run that
 fails (twice, deferred with backoff), then marks the slides it could not draw (`Slide.pptx.failed`, named by
 goLive). A save from the editor (or a restored revision) that brings back slides still `pending` while no
 follow-up is queued or running queues one, planned as the last one was and reusing its pictures.

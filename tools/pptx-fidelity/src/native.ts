@@ -43,7 +43,7 @@ import {
   type Tier,
 } from '@ordo/pptx-scene';
 import type { FaceRequest } from '@ordo/renderer/text/types.ts';
-import { planLadder, provenanceStandIn, withoutFiles } from '../../../apps/hub/src/pptx/ladder.ts';
+import { planLadder, provenanceStandIn, withoutFiles } from '@ordo/importers/pptx-ladder.ts';
 import { CONVERTER_VERSION, PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
 import type { Browser, Page } from '@playwright/test';
 import { bakePicture } from './bake.ts';

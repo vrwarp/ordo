@@ -1,36 +1,8 @@
 import JSZip from 'jszip';
 
-export const ZIP_MAX_ENTRIES = 200_000;
-export const ZIP_MAX_TOTAL_BYTES = 8 * 1024 ** 3;
+import { isJunk, safeEntryPath, ZIP_MAX_ENTRIES, ZIP_MAX_TOTAL_BYTES } from './zip-path.ts';
 
-/** Paths from macOS archives and filesystems that are never content. */
-function isJunk(path: string): boolean {
-  return (
-    path.startsWith('__MACOSX/') ||
-    path.includes('/__MACOSX/') ||
-    /(^|\/)\.DS_Store$/.test(path) ||
-    /(^|\/)\._[^/]*$/.test(path) ||
-    /(^|\/)Thumbs\.db$/i.test(path)
-  );
-}
-
-/**
- * Normalize a zip entry name, rejecting `..` traversal. An absolute name (ProPresenter's own bundle
- * exports store media under the exporting Mac's full path, `/Users/me/.../bg.png`) is made relative.
- */
-export function safeEntryPath(name: string): string {
-  const unified = name
-    .replace(/\\/g, '/')
-    .replace(/^\/+/, '')
-    .replace(/^[a-zA-Z]:\/+/, '');
-  const parts: string[] = [];
-  for (const part of unified.split('/')) {
-    if (part === '' || part === '.') continue;
-    if (part === '..') throw new Error(`zip entry escapes the archive root: ${name}`);
-    parts.push(part);
-  }
-  return parts.join('/');
-}
+export { safeEntryPath, ZIP_MAX_ENTRIES, ZIP_MAX_TOTAL_BYTES } from './zip-path.ts';
 
 function declaredSize(file: JSZip.JSZipObject): number {
   const data = (file as unknown as { _data?: { uncompressedSize?: number } })._data;

@@ -20,27 +20,33 @@ export { PPTX_MEDIA_PREFIX, remapMediaIds } from './remap.ts';
 export { extractPptxText, type PptxText, pptxForRendering } from './pptx.ts';
 export { parseSongFile } from './songselect.ts';
 export { parseRtf, splitFontName, type RtfResult } from './rtf.ts';
-export { sha256Hex, sha256Bytes } from './sha256.ts';
+export { Sha256, sha256Blob, sha256Bytes, sha256Hex } from './sha256.ts';
 export {
-  pictureHeader,
   clearExifOrientation,
   displayNeeds,
   isMetafile,
   METAFILE_FORMATS,
   PICTURE_LIMITS,
   type PictureHeader,
+  pictureHeader,
 } from './pptx-pictures.ts';
-export { geomFileOf, nameGeoms, type NamedGeomFile } from './pptx-geoms.ts';
+export { geomFileOf, type NamedGeomFile, nameGeoms, nameShapeFiles, SHAPE_FILE_KINDS } from './pptx-geoms.ts';
+export { PPTX_IMPORT_LIMITS, type SceneScan, type SceneSlideExtra } from './pptx-scan.ts';
+export { BoundedZip, ZipLimitError, zipSource } from './zip-bounded.ts';
 export {
-  importPptxClient,
-  type PptxClientOptions,
-  type PptxClientImportResult,
-  type PptxClientPicture,
-  type PptxClientScene,
-  type PptxClientSceneScan,
-  type PptxClientSlideExtra,
-  type PptxLoSlide,
+  type AssembleOptions,
+  assemblePptxScene,
   CLIENT_M9_WRITES,
   CONVERTER_VERSION,
+  importPptxClient,
+  M9_WRITES,
   PPTX_CLIENT_LIMITS,
+  type PptxClientImportResult,
+  type PptxClientOptions,
+  type PptxClientPicture,
+  type PptxClientScene,
+  type PptxLoSlide,
+  type PptxSceneParse,
+  parsePptxScene,
+  sniffMediaKind,
 } from './pptx-client.ts';

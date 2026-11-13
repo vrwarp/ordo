@@ -20,7 +20,7 @@ Each PowerPoint slide becomes one 1920x1080 picture, drawn at import by LibreOff
 ## What this design does
 
 It makes PowerPoint slides native to ordo:
-- The hub parses the deck on the CPU pool (the deck is untrusted input) and writes ordinary ordo slide objects, extended with optional fields.
+- The deck is parsed where it is uploaded, in the operator's import worker, or on the hub's CPU pool when the browser cannot (the deck, and a scene a browser sends, are untrusted input; §2 "Where the deck is parsed"), into ordinary ordo slide objects, extended with optional fields, with one import core on both sides.
 - A volunteer can edit them: fix a lyric typo, change an announcement date, swap the series background, add a verse.
 - Every screen draws them with the same code. They stay sharp at any output resolution.
 - Embedded clips play in place.
@@ -1347,12 +1347,13 @@ The extensions, in priority order (M4 unless noted):
 ## 12. Security bounds (the deck is untrusted)
 
 **Process**
-- Parse only on the CPU pool: 512 MB heap, 2 minutes per batch of ≤150 slides, at most 15 minutes of pool time per import (beyond it, the remaining slides become picture class, or the import fails cleanly when nothing is saved yet), termination on timeout.
+- Parse on the hub only on the CPU pool: 512 MB heap, 2 minutes per batch of ≤150 slides, at most 15 minutes of pool time per import (beyond it, the remaining slides keep their text, M9's rescue, or the import fails cleanly when nothing is saved yet), termination on timeout.
+- Parse in the browser only in the operator's import worker, with a deadline after which the worker is terminated, never while a playlist is live, and through `zip-bounded.ts` (below, "Zip"); any failure uploads the deck without a scene. The scene is checked on the hub's pool (`pptx-client-scene`, `clientScene.ts`): a `clientScene` part over 128 MB is dropped before it is stored, a zod schema bounds every list, string and part name (≤ 512 characters) before any reaches the `pptx-lo` payload, the converter's version, stored fields and LibreOffice state must be the hub's, every slide passes `Slide`, and every shape file is checked again (`geomFileOf`: `sanitizeGeom`, `GeomFile`, `GEOM_FILE_MAX_BYTES`) and re-hashed; anything else makes the hub parse the deck itself. The scene file is released once version 1 is saved or the import fails.
 - If the pool cannot start, the import fails with a clean message (nothing is saved; it can be tried again). Never parse inline on the event loop (which `extractPptx` and `pptxForRendering` did), and never hand the upload to LibreOffice instead: its render copy needs the pool too, and LibreOffice never sees a deck as uploaded (§5).
 
 **Zip** (`extractZip` semantics)
-- Trust the central directory only.
-- Refuse encrypted entries and unknown methods; count inflated bytes against declared sizes.
+- Trust the central directory only (the browser reads it itself, `zip-bounded.ts`, never JSZip's private sizes).
+- Refuse encrypted entries and unknown methods; count inflated bytes against declared sizes as they inflate (the browser too: an entry that inflates past its declared size stops the read; pictures and clips are read only for their first bytes there).
 - ≤ 200k entries; XML ≤ 8 MB per part and ≤ 64 MB in all; spilled media ≤ 1 GiB per import.
 - At most 2,000 picture parts, 50 clips and 20 font parts per deck are extracted; the rest are logged and keep their posters or fallbacks. This bounds the Media rows and jobs one deck can create. The clip limit counts clips as stored, one per part and trim, so one part trimmed differently on every slide still makes at most 50.
 - Add a `skip` filter (only referenced media and font parts spill) and `nested:false`.
@@ -2471,6 +2472,26 @@ passes its library's), so the text it measures (table rows, autofit, and M9's wa
 SmartArt layouts) is measured with estimated widths: until the operator loads the hub's faces for it, a deck
 the operator parsed can lay text out differently from one the hub parsed.
 <!-- /m9:rebase -->
+
+<!-- m9:import-core -->
+**Where the deck is parsed (the regroup's import core, 2026-11-13; amends the M9 rebase note above and ADR
+0012).** One import core in `@ordo/importers`, used by the hub's job and pool task, the operator's import
+worker, the Pages demo and the fidelity harness:
+- `pptx-scan.ts` (`PPTX_IMPORT_LIMITS`, `scanDeck`, `clipParts` with `CLIP_CANDIDATES`, `extrasOf`),
+  `pptx-geoms.ts` (`geomFileOf`, `nameGeoms`, `nameShapeFiles`, and `SHAPE_FILE_KINDS`, the hook decoration
+  files join when `decor-render` names them on both sides), `pptx-pictures.ts` (the hub's header checks and
+  display needs, one copy), `sha256.ts` (one SHA-256, incremental), `pptx-ladder.ts` (the budget ladder),
+  `pptx-core.ts` (`ImportCore`: drafts, budgets, provenance, assembly, the follow-up's plan) and
+  `pptx-report.ts` (`source.log`, missing fonts). The converter's version and stored fields are one constant
+  each, `@ordo/pptx-scene` `version.ts` (`CONVERTER_VERSION`, `M9_WRITES`), and a client scene records both.
+- `parsePptxScene` (the browser): the zip through `zip-bounded.ts`, the deck facts and scan, the pictures'
+  pixel sizes and clips' kinds from their first bytes within the hub's spill budget, `convertDeck` over the
+  whole deck, transitions, shape files named and bounded as a batch's. `assemblePptxScene` builds version 1
+  from a scene with `ImportCore`, as the hub does (the Pages demo, the harness, tests): the client's old
+  compact step that made picture slides is gone, so no slide is a picture for a budget on either side.
+- The hub builds version 1 from a checked scene with the same `ImportCore` (§12 "Process"), so both paths
+  store the same presentation modulo ids and times (the equivalence check of `tools/pptx-fidelity`).
+<!-- /m9:import-core -->
 
 <!-- m9:tables-render -->
 **Built for M9 wave 2: the table object drawn and edited by ordo (tables-render track).** `ShapeObject.table`

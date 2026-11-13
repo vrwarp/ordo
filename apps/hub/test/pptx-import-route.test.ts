@@ -24,6 +24,7 @@ import type { JobCtx, JobQueue } from '../src/jobs.ts';
 import type { CpuPool } from '../src/pool.ts';
 import { PptxImports } from '../src/pptx/index.ts';
 import { nativeJob } from '../src/pptx/nativeJob.ts';
+import { CLIENT_SCENE_LIMITS, type ClientSceneTaskInput, clientSceneTask } from '../src/pptx/clientScene.ts';
 import { sceneTask } from '../src/pptx/sceneTask.ts';
 import {
   CONVERTER_VERSION,
@@ -191,13 +192,17 @@ describe('POST /import/document', () => {
     expect(p.sceneHash).toMatch(/^[0-9a-f]{64}$/);
     expect(hub.lib.getFile(p.sceneHash!)).toBeTruthy();
 
-    // Run nativeJob with a pool that throws if pptx-scene is ever called on the hub
+    // Run nativeJob with a pool that throws if pptx-scene is ever called on the hub: the scene is only checked
+    // there (`pptx-client-scene`, off the event loop).
     let poolCalled = false;
+    const kinds: string[] = [];
     const noScenePool = {
-      run: async () => {
+      run: (async (kind: string, input: unknown) => {
+        kinds.push(kind);
+        if (kind === 'pptx-client-scene') return clientSceneTask(input as ClientSceneTaskInput);
         poolCalled = true;
         throw new Error('pptx-scene should not run on the hub when sceneHash is present');
-      },
+      }) as CpuPool['run'],
     };
     let cur = p;
     const handler = nativeJob(hub.imports.pptx.deps, { pool: noScenePool });
@@ -213,6 +218,7 @@ describe('POST /import/document', () => {
     } as JobCtx<PptxNativePayload>)) as PptxNativeResult;
 
     expect(poolCalled).toBe(false);
+    expect(kinds).toEqual(['pptx-client-scene']);
     expect(out.slides).toBe(1);
     expect(out.native).toBe(1);
     const saved = hub.lib.presentations.get(out.presentationId);
@@ -239,10 +245,11 @@ describe('POST /import/document', () => {
     expect(p.sceneHash).toMatch(/^[0-9a-f]{64}$/);
     let poolCalled = false;
     const pool = {
-      run: async () => {
+      run: (async (kind: string, input: unknown) => {
+        if (kind === 'pptx-client-scene') return clientSceneTask(input as ClientSceneTaskInput);
         poolCalled = true;
         throw new Error('stop here: the hub parses the deck itself');
-      },
+      }) as CpuPool['run'],
     };
     const handler = nativeJob(hub.imports.pptx.deps, { pool });
     await Promise.resolve(
@@ -262,7 +269,12 @@ describe('POST /import/document', () => {
    * Posts `bytes` with `scene` as the client parsed it and runs the job on it, with a pool that converts no
    * slide (only the text rescue runs, in-process): the result, its slides and the pool's calls.
    */
-  async function importClientScene(bytes: Uint8Array<ArrayBuffer>, name: string, scene: PptxClientScene) {
+  async function importClientScene(
+    bytes: Uint8Array<ArrayBuffer>,
+    name: string,
+    scene: PptxClientScene,
+    o: { hubMayParse?: boolean } = {},
+  ) {
     const fd = new FormData();
     fd.append('renderer', 'native');
     fd.append('clientScene', new Blob([JSON.stringify(scene)], { type: 'application/json' }), 'scene.json');
@@ -272,26 +284,95 @@ describe('POST /import/document', () => {
     expect(p.sceneHash).toMatch(/^[0-9a-f]{64}$/);
     const calls: { range: { from: number; to: number }; rescue: boolean }[] = [];
     const pool = {
-      run: (async (_kind: 'pptx-scene', input: SceneTaskInput) => {
+      run: (async (kind: string, input: SceneTaskInput) => {
+        if (kind === 'pptx-client-scene') return clientSceneTask(input as unknown as ClientSceneTaskInput);
         calls.push({ range: input.range, rescue: !!input.rescue });
-        if (!input.rescue)
+        if (!input.rescue && !o.hubMayParse)
           throw new Error('pptx-scene converts no slide on the hub when sceneHash is present');
         return sceneTask(input);
       }) as CpuPool['run'],
     };
     let cur = p;
+    const logs: string[] = [];
     const result = (await nativeJob(hub.imports.pptx.deps, { pool })({
       id: `scene-${Math.random().toString(36).slice(2)}`,
       payload: cur,
       signal: new AbortController().signal,
       progress: () => undefined,
-      log: () => undefined,
+      log: (line: string) => {
+        logs.push(line);
+      },
       setPayload: (next) => {
         cur = next;
       },
     } as JobCtx<PptxNativePayload>)) as PptxNativeResult;
-    return { result, slides: slidesOf(hub.lib.presentations.must(result.presentationId)), calls };
+    return {
+      result,
+      slides: slidesOf(hub.lib.presentations.must(result.presentationId)),
+      calls,
+      sceneHash: p.sceneHash!,
+      logs,
+    };
   }
+
+  it('drops a scene over its size bound before it is stored: the hub parses the deck (design/27 §12)', async () => {
+    const scene = (await importPptxClient(deck, 'Big Scene.pptx')).clientScene;
+    const was = CLIENT_SCENE_LIMITS.bytes;
+    CLIENT_SCENE_LIMITS.bytes = 1_000;
+    try {
+      const fd = new FormData();
+      fd.append('renderer', 'native');
+      fd.append('clientScene', new Blob([JSON.stringify(scene)], { type: 'application/json' }), 'scene.json');
+      fd.append('file', new Blob([deck]), 'Big Scene.pptx');
+      const { job, payload } = await queued(await ed.fetch('/import/document', { method: 'POST', body: fd }));
+      expect(job.kind).toBe('pptx-native');
+      expect((payload as PptxNativePayload).sceneHash).toBeUndefined();
+      expect(hub.lib.getFile((payload as PptxNativePayload).hash)).toBeTruthy();
+    } finally {
+      CLIENT_SCENE_LIMITS.bytes = was;
+    }
+  });
+
+  it('parses the deck on the hub when the scene is malformed, and says why in the job log', async () => {
+    const bytes = await deckBytes(
+      buildDeck({ slides: ['One', 'Two'].map((t) => ({ shapes: textBox(2, t) })) }),
+    );
+    const good = (await importPptxClient(bytes, 'Malformed.pptx')).clientScene;
+    const bad: unknown[] = [
+      { ...good, scan: {} },
+      { ...good, listed: good.listed.map((r) => ({ ...r, part: `ppt/slides/${'x'.repeat(600)}.xml` })) },
+      { ...good, slides: [{ ...good.slides[0]!, slide: { id: 'x', objects: 'none' } }] },
+      { ...good, version: 1 },
+      { ...good, m9Writes: [] },
+    ];
+    for (const scene of bad) {
+      const { result, slides, calls, logs } = await importClientScene(
+        bytes,
+        'Malformed.pptx',
+        scene as PptxClientScene,
+        { hubMayParse: true },
+      );
+      expect(calls.some((c) => !c.rescue)).toBe(true);
+      expect(result.slides).toBe(2);
+      expect(slides.map(textsOf)).toEqual([['One'], ['Two']]);
+      expect(logs.some((l) => /scene parsed in the browser was not used/.test(l))).toBe(true);
+    }
+  });
+
+  it('checks every shape file again: one whose name is not what it holds is dropped, its shapes keep no ref', async () => {
+    const bytes = await deckBytes(buildDeck({ slides: [{ shapes: deco(2, 4_000) }] }));
+    const scene = (await importPptxClient(bytes, 'Forged.pptx')).clientScene;
+    expect(scene.geomFiles).toHaveLength(1);
+    const g = scene.geomFiles[0]!;
+    // Same name, other content: the store would have kept a file under a name that is not its hash.
+    g.json = g.json.replace(/\d/, (d) => String((Number(d) + 1) % 10));
+    const { slides, calls, sceneHash } = await importClientScene(bytes, 'Forged.pptx', scene);
+    expect(calls).toEqual([]);
+    expect(refsOf(slides[0]!)).toEqual([]);
+    expect(hub.lib.getFile(g.hash)).toBeUndefined();
+    // The scene is released once version 1 is saved (it holds every slide's text and notes).
+    expect(hub.lib.getFile(sceneHash)).toBeUndefined();
+  });
 
   it("leaves out only the shapes a client scene's slide past its outline-file bound was given no file for (M9 ladder)", async () => {
     // Three outlines of about 60 KB each (pptx-geoms.test.ts): two on slide 1, a third new on slide 2.
@@ -308,14 +389,14 @@ describe('POST /import/document', () => {
     );
     expect(sizes).toHaveLength(3);
     // A client bound that holds slide 1's two files and not slide 2's new third one.
-    const limits = PPTX_CLIENT_LIMITS as { geomFileBytes: number };
-    const was = limits.geomFileBytes;
-    limits.geomFileBytes = sizes[0]! + sizes[1]! + Math.floor(sizes[2]! / 2);
+    const limits = PPTX_CLIENT_LIMITS as { batchGeomBytes: number };
+    const was = limits.batchGeomBytes;
+    limits.batchGeomBytes = sizes[0]! + sizes[1]! + Math.floor(sizes[2]! / 2);
     let scene: PptxClientScene;
     try {
       scene = (await importPptxClient(bytes, 'Outlines.pptx')).clientScene;
     } finally {
-      limits.geomFileBytes = was;
+      limits.batchGeomBytes = was;
     }
     expect(scene.geomOver).toEqual([1]);
     const { result, slides, calls } = await importClientScene(bytes, 'Outlines.pptx', scene);

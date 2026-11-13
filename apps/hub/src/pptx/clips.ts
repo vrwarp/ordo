@@ -29,7 +29,8 @@
 import { copyFile, link, mkdtemp, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ImageObject, Slide } from '@ordo/domain';
-import { CLIP_PREFIX, type EmittedClip } from '@ordo/pptx-scene';
+import { place, sweep, unplace, wanted } from '@ordo/importers/pptx-core.ts';
+import type { EmittedClip } from '@ordo/pptx-scene';
 import { clipKey } from '@ordo/pptx-scene/media.ts';
 import { errorMessage } from '../errors.ts';
 import { probe } from '../media/ffmpeg.ts';
@@ -285,48 +286,4 @@ export class ClipImport {
     if (!trim) this.o.info('a clip trimmed to nothing plays whole');
     return trim;
   }
-}
-
-/** Whether the slide keeps a use for the clip: a picture-class slide keeps only its sound. */
-function wanted(c: EmittedClip, picture: boolean): boolean {
-  return !picture || c.role === 'sound';
-}
-
-/** The clip's placeholder replaced by its media id. */
-function place(s: ClipSlide, c: EmittedClip, id: string): void {
-  const sl = s.slide;
-  if (c.role === 'play') {
-    const play = sl.objects.find((x): x is ImageObject => x.id === c.objectId && x.type === 'image')?.play;
-    if (play && play.mediaId === c.id) play.mediaId = id;
-  } else if (c.role === 'sound') {
-    if (sl.audio && sl.audio.mediaId === c.id) sl.audio.mediaId = id;
-  } else if (c.role === 'background') {
-    if (sl.backgroundMediaId === c.id) sl.backgroundMediaId = id;
-  }
-}
-
-/** The clip's use left out: its object stays a poster; a motion background's poster goes back at the bottom. */
-function unplace(s: ClipSlide, c: EmittedClip): void {
-  const sl = s.slide;
-  if (c.role === 'play') {
-    const o = sl.objects.find((x): x is ImageObject => x.id === c.objectId && x.type === 'image');
-    if (o && o.play?.mediaId === c.id) delete o.play;
-  } else if (c.role === 'sound') {
-    if (sl.audio?.mediaId === c.id) delete sl.audio;
-  } else if (c.role === 'background' && sl.backgroundMediaId === c.id) {
-    delete sl.backgroundMediaId;
-    // Marked as the import's background (`origin`, design/27 §3.1), as every object the job writes is: a
-    // slide set to show its PowerPoint picture leaves it out (`slideContent`), and the background pickers
-    // find it.
-    if (!s.picture && c.poster)
-      sl.objects.unshift({ ...c.poster, origin: { ...(c.poster.origin ?? { src: 'pptx' }), role: 'bg' } });
-  }
-}
-
-/** Any clip placeholder left (a slide edited by the job meanwhile, a role this wave does not know): removed. */
-function sweep(sl: Slide): void {
-  const isClip = (v: string | undefined) => v?.startsWith(CLIP_PREFIX) === true;
-  for (const o of sl.objects) if (o.type === 'image' && isClip(o.play?.mediaId)) delete o.play;
-  if (isClip(sl.audio?.mediaId)) delete sl.audio;
-  if (isClip(sl.backgroundMediaId)) delete sl.backgroundMediaId;
 }
