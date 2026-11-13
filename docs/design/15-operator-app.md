@@ -255,7 +255,10 @@ cells in place of the shape fields).
   (before, each keystroke stored the labels again: '1. 1. Amazing grace') and bold or italic on their
   letters; a plain song stays plain. Every split cuts that raw text through the domain's slide split
   (`splitSlidePieces`, as the slide list's 'Split lyrics' does: the new slides are copies of the slide with
-  their piece of the lyric object, runs and paragraph styles kept on both sides), one undo step, the focus
+  their piece of the lyric object, runs and paragraph styles kept on both sides; a copy keeps the slide's
+  other objects, background, notes and hidden flag, but its MIDI cues, Bottom-Third Stream text and own sound
+  stay on the first piece only, so a lighting GO fires once and each piece's strap shows its own words,
+  `e2e/editor-script.spec.ts`), one undo step, the focus
   then in the first new slide's field: '---' and Enter (the typed value is stored first); ✂ Split at Cursor
   and Alt+Enter (Opt+Enter) at the caret of the field that has the focus only (a field never focused
   reports a caret at 0), an empty next slide when the caret is at the end, nothing at the start or without

@@ -274,6 +274,35 @@ describe('the domain slide split (splitSlidePieces)', () => {
     expect(bold(lyricOf(slidesOf(a)[1]!))).toEqual(['sweet']);
   });
 
+  it('keeps the MIDI cues, the Bottom-Third Stream text and the slide’s own sound on the first piece only', () => {
+    const cued = {
+      ...slide({}, `${LYRIC}\nThat saved a wretch like me`),
+      midiCues: [{ id: 'm1', channel: 1, type: 'noteOn', number: 40, value: 127 }],
+      bottomThirdText: 'Amazing grace',
+      audio: { mediaId: 'snd1', start: 'auto' },
+    } as Slide;
+    // Alt+Enter at the line break, Auto-Split and 'Split lyrics': each makes the next slides the same way.
+    for (const out of [
+      splitScript(song(cued), 's1', (t) => caretPieces(t, 13), DEFAULT_THEME).p,
+      splitScript(song(cued), 's1', twoLinePieces, DEFAULT_THEME).p,
+      splitSlide(song(cued), 's1', 1),
+    ]) {
+      const [a, ...rest] = slidesOf(out).filter((s) => s.id !== 's2');
+      expect(a!.midiCues).toHaveLength(1);
+      expect(a!.bottomThirdText).toBe('Amazing grace');
+      expect(a!.audio?.mediaId).toBe('snd1');
+      expect(rest.length).toBeGreaterThan(0);
+      for (const b of rest) {
+        expect(b.midiCues).toBeUndefined();
+        expect(b.bottomThirdText).toBeUndefined();
+        expect(b.audio).toBeUndefined();
+        // What a copy keeps: the slide's other objects and its notes.
+        expect(b.notes).toBe('G C D');
+        expect(b.objects.some((o) => o.type === 'text' && o.text === 'A note')).toBe(true);
+      }
+    }
+  });
+
   it('keeps a section within the schema’s 5,000 slides: the last pieces stay together', () => {
     const many: Slide[] = Array.from(
       { length: 4997 },

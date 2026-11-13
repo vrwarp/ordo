@@ -20,7 +20,8 @@ import { hubApi, login } from './linkhelpers.ts';
  *   does nothing; neither cuts a word in two (#24 cut at the text's middle: 'sweet the so' | 'und').
  * - On a formatted song (numbered lines, a bold word), typing in the field and Alt+Enter keep the numbers a
  *   paragraph style (never typed into the words: '1. 1. Amazing grace') and the bold on its word, on both
- *   halves, through Save and a reload.
+ *   halves, through Save and a reload. The slide's MIDI cue and Bottom-Third Stream text stay on the first
+ *   half only: the lighting GO fires once and the second half's strap is its own words.
  * Lyrics: "Amazing Grace" (John Newton, 1779), public domain. Port M4_PORT + 10.
  */
 const PORT = M4_PORT + 10;
@@ -136,6 +137,9 @@ test('typing and Alt+Enter in a formatted song keep its numbers and bold through
   const lyric = lyricOf(v1);
   lyric.paras = [{ bullet: { auto: 'arabicPeriod' } }, { bullet: { auto: 'arabicPeriod' } }];
   lyric.runs = [{ start: 18, end: 23, fontWeight: 700 }];
+  // A lighting cue for the verse and a shorter strap for the livestream.
+  v1.midiCues = [{ id: 'cue1', channel: 1, type: 'noteOn', number: 40, value: 127 }];
+  v1.bottomThirdText = 'Amazing grace';
   expect((await a.put(`presentations/${song.id}`, { data: full })).ok()).toBe(true);
 
   await openSong(page, song.id);
@@ -164,4 +168,9 @@ test('typing and Alt+Enter in a formatted song keep its numbers and bold through
   expect(ly.paras).toEqual([{ bullet: { auto: 'arabicPeriod' } }]);
   expect(bold(ly)).toEqual([]);
   for (const t of texts(saved)) expect(t).not.toMatch(/^\d+\./m);
+  // The cue and the strap text stay on the first half; the new slide holds neither.
+  expect(x!.midiCues).toHaveLength(1);
+  expect(x!.bottomThirdText).toBe('Amazing grace');
+  expect(y!.midiCues).toBeUndefined();
+  expect(y!.bottomThirdText).toBeUndefined();
 });

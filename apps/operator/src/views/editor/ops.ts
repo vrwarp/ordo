@@ -194,11 +194,23 @@ export function textPiece<T extends TextObject>(o: T, start: number, end: number
 }
 
 /**
+ * A copy of `s` for a later piece of its split (`splitSlidePieces`): `cloneSlide`, without what fires or
+ * reads once per slide of the song: its MIDI cues (a lighting cue would fire again on every piece, and a
+ * cue-stack GO run ahead), its Bottom-Third Stream text (the strap would show the first piece's words) and
+ * its own sound (it would start again). Those stay on the first piece only.
+ */
+function splitCopy(s: Slide): Slide {
+  const { midiCues: _cues, bottomThirdText: _strap, audio: _sound, ...copy } = cloneSlide(s);
+  return copy;
+}
+
+/**
  * Split a slide into slides holding `pieces` of its lyric object's text (in order, not overlapping; at most
- * `MAX_SPLIT_PIECES`). The first piece stays on the slide (its id kept); every other goes on a copy of it
- * (`cloneSlide`: fresh ids, its other objects copied, as 'Split lyrics' makes it) right after it, the lyric
- * object cut to that piece (`textPiece`). Used by 'Split lyrics' and by the Lyric Script's splits ('---',
- * Split at Cursor, Alt+Enter, Auto-Split). `p` itself, and no ids, without a lyric object or a second piece.
+ * `MAX_SPLIT_PIECES`). The first piece stays on the slide (its id kept, and everything the slide had); every
+ * other goes on a copy of it (`splitCopy`: fresh ids, its other objects copied, but not its MIDI cues,
+ * Bottom-Third Stream text or own sound) right after it, the lyric object cut to that piece (`textPiece`).
+ * Used by 'Split lyrics' and by the Lyric Script's splits ('---', Split at Cursor, Alt+Enter, Auto-Split).
+ * `p` itself, and no ids, without a lyric object or a second piece.
  */
 export function splitSlidePieces(
   p: Presentation,
@@ -222,7 +234,7 @@ export function splitSlidePieces(
     room < pieces.length ? [...pieces.slice(0, room - 1), [pieces[room - 1]![0], pieces.at(-1)![1]]] : pieces;
   const out: Slide[] = [cut(slide, lyric, kept[0]!)];
   for (const piece of kept.slice(1)) {
-    const copy = cloneSlide(slide);
+    const copy = splitCopy(slide);
     out.push(cut(copy, lyricObject(copy)!, piece));
   }
   return {
