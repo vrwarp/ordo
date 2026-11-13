@@ -1014,6 +1014,8 @@ table.list th {
   background: #0a0b0d;
 }
 .editor .canvasbox {
+  position: relative;
+  overflow: hidden;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -1042,8 +1044,22 @@ table.list th {
 .ed-slide.sel {
   border-color: var(--accent);
 }
+.ed-sec-head {
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+.ed-sec-head input {
+  min-width: 0;
+  width: 0;
+  flex: 1 1 0;
+  font-size: 12px;
+}
 .ed-sec-head button.sec-delete-btn {
-  opacity: 0.35;
+  opacity: 0.45;
+  padding: 1px 3px;
+  min-width: 20px;
+  min-height: 22px;
+  font-size: 11px;
   transition: opacity 0.15s ease;
 }
 .ed-sec-head:hover button.sec-delete-btn,
@@ -2184,4 +2200,654 @@ button.ed-vis-pill.is-hidden {
   font-weight: 600;
   padding: 2px 6px;
   border-radius: 4px;
+}
+
+/* ============================================================================
+ * Proposal B: "Canvas-First" Workspace & Deep-Dive UX System
+ * ============================================================================ */
+
+/* 1. 2-Column Canvas-First Grid + Slide-Over Inspector Drawer */
+.editor {
+  position: relative;
+}
+.editor.canvas-first {
+  grid-template-columns: 224px minmax(0, 1fr);
+}
+.editor.drawer-open {
+  grid-template-columns: 224px minmax(0, 1fr) 316px;
+}
+@media (pointer: coarse) and (min-width: 1001px) {
+  .editor.canvas-first {
+    grid-template-columns: 224px minmax(0, 1fr);
+  }
+  .editor.drawer-open {
+    grid-template-columns: 224px minmax(0, 1fr) 300px;
+  }
+}
+@media (pointer: coarse) and (max-width: 1000px) {
+  .editor.canvas-first {
+    grid-template-columns: 210px minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .editor.canvas-first > .ed-slides {
+    grid-row: 2;
+  }
+}
+
+.ed-slideover-drawer {
+  background: var(--bg2);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ed-drawer-hdr {
+  position: sticky;
+  top: -10px;
+  z-index: 5;
+  margin: -10px -10px 4px;
+  padding: 8px 10px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--line);
+  gap: 6px;
+  align-items: center;
+}
+
+/* 2. Calm 3-Zone Top Bar */
+.ed-inline-title {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 8px;
+  min-height: 28px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--fg);
+  width: 190px;
+  max-width: 240px;
+  text-overflow: ellipsis;
+}
+.ed-inline-title:hover:not(:disabled) {
+  border-color: var(--line);
+  background: var(--bg);
+}
+.ed-inline-title:focus {
+  border-color: var(--accent);
+  background: var(--bg);
+  outline: none;
+}
+.ed-save-rev-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px;
+}
+.ed-save-rev-group button.ed-saved-pill {
+  border: 0;
+  min-height: 24px;
+  padding: 2px 9px;
+}
+.ed-save-rev-group button.ed-rev-btn {
+  border: 0;
+  border-radius: 999px;
+  min-height: 24px;
+  padding: 2px 8px;
+  color: var(--fg2);
+  font-size: 11.5px;
+}
+.ed-mode-switch,
+.ed-insert-island,
+.ed-drawer-triggers {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 2px;
+}
+.ed-insert-island > button.small,
+.ed-drawer-triggers > button.small,
+.ed-mode-switch > button.small {
+  min-height: 26px;
+  border: 0;
+  border-radius: 6px;
+  padding: 2px 9px;
+}
+
+/* 3. Floating Contextual Formatting & Action Bar (Proposal B Core) */
+.ed-floating-bar {
+  position: absolute;
+  z-index: 30;
+  max-width: calc(100% - 16px);
+  pointer-events: none;
+}
+.ed-floating-inner {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
+  background: rgba(20, 22, 28, 0.96);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 3px 6px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+}
+.ed-floating-inner button,
+.ed-floating-inner select {
+  min-height: 26px;
+  height: 26px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.ed-floating-inner .color-pill.compact {
+  height: 26px;
+  min-height: 26px;
+}
+.ed-fbar-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--line);
+  margin: 0 2px;
+  flex-shrink: 0;
+}
+.ed-fbar-font select,
+.ed-fbar-font button {
+  min-height: 26px;
+  max-width: 132px;
+  font-size: 12px;
+  padding: 2px 6px;
+}
+.ed-fbar-select {
+  min-height: 26px;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+button.ed-fbar-icon {
+  min-width: 28px;
+  min-height: 26px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  justify-content: center;
+}
+button.ed-fbar-more {
+  min-height: 26px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+.stepper-box.compact button {
+  padding: 2px 7px;
+  font-size: 13px;
+  min-height: 26px;
+}
+.ed-scope-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg3);
+  border: 1px solid var(--line);
+  color: var(--fg2);
+  white-space: nowrap;
+}
+.ed-scope-pill.selection {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(59, 130, 246, 0.55);
+  color: #93c5fd;
+  cursor: pointer;
+}
+
+/* 4. Unified PaintPopover (Solid | Linear | Radial + Single Active-Stop Bar) */
+.paint-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 2px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 3px;
+}
+.paint-mode-tab {
+  min-height: 26px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  justify-content: center;
+}
+.paint-mode-tab.active {
+  background: var(--bg3);
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+.paint-angle-chip {
+  min-height: 22px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg2);
+  font-size: 11px;
+  cursor: pointer;
+}
+.paint-angle-chip.on {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: var(--accent);
+  color: #93c5fd;
+}
+.paint-angle-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1px 4px;
+  font-size: 11px;
+}
+.paint-angle-input input {
+  width: 34px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: 11px;
+  text-align: right;
+  outline: none;
+}
+.paint-stop-hex-wrap {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+.paint-stop-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  flex-shrink: 0;
+}
+input.paint-stop-hex {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  outline: none;
+}
+button.paint-icon-btn {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0 6px;
+  justify-content: center;
+}
+.paint-pill-summary {
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 4px;
+  min-height: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.color-pill.compact {
+  padding: 2px 5px 2px 2px;
+  gap: 4px;
+}
+.color-pill.swatch-only {
+  padding: 2px;
+  gap: 0;
+}
+.color-pill.compact .color-pill-chip {
+  width: 20px;
+  height: 20px;
+}
+
+/* 5. Single-Line Figma-Style Property Rows (`+ / −`) & Collapsible Sections */
+.prop-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+}
+.prop-line-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg2);
+  white-space: nowrap;
+}
+button.prop-toggle-btn {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0 7px;
+  justify-content: center;
+  font-weight: 700;
+}
+details.ed-collapsible {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+details.ed-collapsible > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg2);
+  user-select: none;
+}
+
+/* 6. Stage Output View Lens & Realistic Camera-Simulated Stream Preview */
+.ed-lens-dock {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  background: rgba(16, 18, 23, 0.92);
+  flex-shrink: 0;
+}
+.ed-lens-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px;
+}
+.ed-lens-pill {
+  min-height: 24px;
+  padding: 2px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg2);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ed-lens-pill.on {
+  background: var(--accent);
+  color: #ffffff;
+}
+.ed-stage-lens {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 20px;
+}
+.ed-stage-lens-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ed-stage-lens-frame {
+  position: relative;
+  max-width: 100%;
+  max-height: calc(100% - 42px);
+  aspect-ratio: 16 / 9;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  overflow: hidden;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+}
+.ed-stage-lens-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.look-camera-sim {
+  position: relative;
+  background:
+    radial-gradient(ellipse at 50% 28%, rgba(251, 191, 36, 0.28), transparent 56%),
+    radial-gradient(ellipse at 22% 45%, rgba(59, 130, 246, 0.24), transparent 52%),
+    radial-gradient(ellipse at 78% 42%, rgba(168, 85, 247, 0.2), transparent 50%),
+    linear-gradient(180deg, #1b2234 0%, #272235 52%, #0e111a 100%);
+}
+.look-camera-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 1;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: rgba(255, 255, 255, 0.78);
+  pointer-events: none;
+}
+.look-preview.interactive {
+  cursor: pointer;
+}
+.look-preview.interactive:hover {
+  border-color: var(--accent);
+}
+.ed-pptx-stage-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 12px 0;
+  padding: 6px 10px;
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+/* 7. Inline Storyboard Card Actions & Cue Badges */
+.ed-slide-card {
+  display: flex;
+  flex-direction: column;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  transition: background 0.12s ease;
+}
+.ed-slide-card.sel {
+  background: rgba(59, 130, 246, 0.09);
+  border-color: rgba(59, 130, 246, 0.45);
+}
+.ed-slide-thumb-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: 1;
+  min-width: 0;
+}
+.ed-slide-cue-badges {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  display: flex;
+  gap: 3px;
+  pointer-events: none;
+}
+.ed-cue-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #93c5fd;
+}
+.ed-cue-badge.midi {
+  color: #fde047;
+}
+.ed-slide-inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 5px 6px;
+  flex-wrap: nowrap;
+}
+.ed-slide-inline-actions button.small {
+  min-height: 22px;
+  padding: 1px 5px;
+  font-size: 10.5px;
+}
+.ed-slide-inline-actions button.ed-vis-pill {
+  width: auto;
+}
+.ed-add-sec-popover {
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+/* 8. Non-Modal Floating Find & Replace Bar */
+.ed-find-floating {
+  position: fixed;
+  top: 54px;
+  right: 16px;
+  z-index: 1200;
+  width: 324px;
+  max-width: calc(100vw - 24px);
+  background: rgba(24, 26, 32, 0.97);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+}
+.ed-find-row {
+  padding: 3px 6px;
+  border-radius: 6px;
+}
+.ed-find-row.active {
+  background: rgba(59, 130, 246, 0.16);
+}
+
+/* 9. Visual Revision History Dialog */
+.rev-visual-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(300px, 1.2fr);
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 720px) {
+  .rev-visual-layout {
+    grid-template-columns: 1fr;
+  }
+}
+.rev-timeline-col {
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+tr.rev-row-selected td {
+  background: rgba(59, 130, 246, 0.15);
+}
+.rev-preview-col {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  min-height: 220px;
+}
+.rev-thumb-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  max-height: 310px;
+  overflow-y: auto;
+}
+.rev-preview-thumb img,
+.rev-preview-thumb .ph {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: #000;
+  object-fit: cover;
+  display: block;
+}
+
+/* 10. Song Script Studio Interactive Arrangement Pills */
+.song-arr-pill {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.song-arr-jump {
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  min-height: 22px;
+  cursor: pointer;
+}
+.song-arr-rm {
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg3);
+  font-size: 11px;
+  padding: 2px 6px;
+  min-height: 22px;
+  cursor: pointer;
+}
+.song-arr-rm:hover {
+  color: var(--red);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.ed-floating-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.ed-floating-overflow {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(120, 53, 15, 0.92);
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  color: #fef3c7;
+  font-size: 11.5px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
 }

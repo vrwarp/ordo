@@ -173,7 +173,9 @@ async function render(job: ThumbJob): Promise<Blob> {
     presentationKind: job.presentationKind,
     nextSlide: job.nextSlide,
   });
-  return canvas.convertToBlob({ type: 'image/jpeg', quality: 0.82 });
+  return job.clear && job.clear.a < 1
+    ? canvas.convertToBlob({ type: 'image/png' })
+    : canvas.convertToBlob({ type: 'image/jpeg', quality: 0.82 });
 }
 
 startHeartbeat(scope);

@@ -155,6 +155,8 @@ test('number verses starting at 17', async ({ page }) => {
   const id = (await editorState(page)).objectId!;
   const field = page.locator('#ordo-text-editor');
   await field.fill(NUMBERED.join('\n'));
+  await page.getByRole('button', { name: 'More object options' }).click();
+  await page.locator('summary', { hasText: 'Lists, indents & paragraph spacing' }).click();
   await select(page, 0, NUMBERED.join('\n').length);
   await page.getByLabel('List').selectOption('auto:arabicPeriod');
   const startAt = page.getByLabel('Start at');
@@ -186,6 +188,8 @@ test('write an RTL Hebrew line', async ({ page }) => {
   const end = ANNOUNCEMENT_TEXT.length;
   await select(page, end, end);
   await page.keyboard.type(`\n${HEBREW}`);
+  await page.getByRole('button', { name: 'More object options' }).click();
+  await page.locator('summary', { hasText: 'Lists, indents & paragraph spacing' }).click();
   await select(page, end + 1, end + 1 + HEBREW.length);
   const dir = page.getByRole('radiogroup', { name: 'Direction' });
   await dir.getByRole('radio', { name: 'Right to left' }).click();
@@ -229,6 +233,7 @@ test('shrink to fit: the overflow edge and the note, then Shrink text to fit', a
   expect(edge.w).toBe(note.box.w);
   expect(edge.h).toBe(note.box.h);
 
+  await page.getByRole('button', { name: 'More object options' }).click();
   await page.getByLabel('Shrink text to fit').check();
   await expect(warn).toBeHidden();
   await expect.poll(() => guides(page, 'text-overflow')).toEqual([]);
@@ -406,4 +411,46 @@ test('rich copy and paste preserves Ordo runs, converts external scripture HTML,
     expect(verseRun?.baseline).toBe(0.3);
     expect(amenRun?.fontWeight).toBe(700);
   }
+});
+
+test('canvas-first floating bar, unified PaintPopover gradients, and stage output lens', async ({ page }) => {
+  test.setTimeout(240_000);
+  const a = await hubApi(PORT);
+  const p = await importDeck(a, deck);
+  await openEditor(page, PORT, p.id);
+  await openSlide(page, 1);
+
+  // 1. Canvas-first starts with the inspector drawer closed; inserting a shape shows the floating context bar.
+  await expect(page.getByLabel('Inspector drawer')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Shapes' }).click();
+  await page.getByRole('menuitem', { name: 'Rectangle' }).click();
+
+  const fbar = page.getByRole('toolbar', { name: 'Contextual format bar' });
+  await expect(fbar).toBeVisible();
+
+  // 2. Open the unified PaintPopover from Shape fill, switch Solid -> Linear, and inspect gradient stops.
+  await fbar.getByRole('button', { name: 'Shape fill' }).click();
+  const pop = page.getByRole('dialog', { name: 'Paint picker' });
+  await expect(pop).toBeVisible();
+  await expect(pop.getByText('Deck & Theme Swatches')).toBeVisible();
+  await pop.getByRole('tab', { name: 'Linear' }).click();
+  await expect(pop.getByText('Gradient Ramp')).toBeVisible();
+  await expect(pop.getByText('Stop 1')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(pop).toHaveCount(0);
+
+  // 3. Click 'More…' on the floating bar to slide open the Tune drawer, and verify the floating bar steps aside.
+  await fbar.getByRole('button', { name: 'More object options' }).click();
+  await expect(page.getByLabel('Inspector drawer')).toBeVisible();
+  await expect(fbar).toHaveCount(0);
+  await page.getByRole('button', { name: 'Close inspector' }).click();
+  await expect(page.getByLabel('Inspector drawer')).toHaveCount(0);
+
+  // 4. Switch the bottom Stage view lens to Livestream (key) and verify simulated camera backdrop.
+  const lens = page.getByRole('tablist', { name: 'Stage view lens' });
+  await lens.getByRole('tab', { name: /Livestream/ }).click();
+  await expect(page.locator('.ed-stage-lens')).toBeVisible();
+  await expect(page.getByText('SIMULATED CAMERA FEED', { exact: true })).toBeVisible();
+  await lens.getByRole('tab', { name: 'Canvas' }).click();
+  await expect(page.locator('.canvasbox canvas').first()).toBeVisible();
 });

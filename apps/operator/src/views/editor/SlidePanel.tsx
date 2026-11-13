@@ -14,6 +14,42 @@ import { resetSlideToTheme, themeOf, updateSlide } from './ops.ts';
 import { PptxSlideCard } from './PptxSlideCard.tsx';
 import { followReimport, isJob, rebuildsFromPptx } from './pptxJobs.ts';
 
+export async function makeSlideEditable(
+  slide: Slide,
+  p: Presentation,
+  dirty: boolean,
+  setBusy?: (busy: boolean) => void,
+): Promise<void> {
+  // A PowerPoint page is rebuilt from the stored file (M4 item F, the hub's re-import of this slide);
+  // anything else (a PDF page, a file no longer stored) gets text boxes over the page picture.
+  const native = rebuildsFromPptx(p, slide);
+  const ok = await confirmDialog(
+    'Make this slide editable',
+    native
+      ? 'ordo rebuilds this slide from the PowerPoint file: its text, pictures and shapes become objects you can edit, in place of the page picture. Objects you added stay on top, and its notes stay.'
+      : 'Text boxes are created from the PowerPoint text with approximate position and size. The rendered page stays as the background until you remove it.\n\nFonts will not match PowerPoint exactly.',
+    'Make editable',
+  );
+  if (!ok) return;
+  if (dirty && !(await save())) return;
+  setBusy?.(true);
+  try {
+    const res = await api<Presentation | Job>(`/presentations/${p.id}/slides/${slide.id}/make-editable`, {
+      method: 'POST',
+    });
+    if (isJob(res)) {
+      await followReimport(p.id, res, 'make-editable', slide.id);
+      return;
+    }
+    replaceBase(res);
+    toast('Slide converted. Check fonts and positions: they are approximate.', 'warn', 8000);
+  } catch (e) {
+    toast(`Could not convert: ${errorText(e)}`, 'error');
+  } finally {
+    setBusy?.(false);
+  }
+}
+
 /**
  * Slide-level properties: lyric box, background override, the slide's own sound, loop duration, notes, theme
  * overrides, import.
@@ -35,36 +71,7 @@ export function SlidePanel({ slide, p, readOnly }: { slide: Slide; p: Presentati
     (slide.bottomThirdText !== undefined
       ? slide.bottomThirdText.trim().length > 0
       : defaultStrap.trim().length > 0);
-  const makeEditable = async () => {
-    // A PowerPoint page is rebuilt from the stored file (M4 item F, the hub's re-import of this slide);
-    // anything else (a PDF page, a file no longer stored) gets text boxes over the page picture.
-    const native = rebuildsFromPptx(p, slide);
-    const ok = await confirmDialog(
-      'Make this slide editable',
-      native
-        ? 'ordo rebuilds this slide from the PowerPoint file: its text, pictures and shapes become objects you can edit, in place of the page picture. Objects you added stay on top, and its notes stay.'
-        : 'Text boxes are created from the PowerPoint text with approximate position and size. The rendered page stays as the background until you remove it.\n\nFonts will not match PowerPoint exactly.',
-      'Make editable',
-    );
-    if (!ok) return;
-    if (dirty && !(await save())) return;
-    setBusy(true);
-    try {
-      const res = await api<Presentation | Job>(`/presentations/${p.id}/slides/${slide.id}/make-editable`, {
-        method: 'POST',
-      });
-      if (isJob(res)) {
-        await followReimport(p.id, res, 'make-editable', slide.id);
-        return;
-      }
-      replaceBase(res);
-      toast('Slide converted. Check fonts and positions: they are approximate.', 'warn', 8000);
-    } catch (e) {
-      toast(`Could not convert: ${errorText(e)}`, 'error');
-    } finally {
-      setBusy(false);
-    }
-  };
+  const makeEditable = () => makeSlideEditable(slide, p, dirty, setBusy);
   return (
     <div className="col" style={{ gap: 10 }}>
       <b>Slide</b>

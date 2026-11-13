@@ -1,13 +1,4 @@
-import {
-  type ArrowEnd,
-  type Gradient,
-  type LineDash,
-  type Rgba,
-  rgbaCss,
-  type Shadow,
-  type ShapeObject,
-  type SlideObject,
-} from '@ordo/domain';
+import type { ArrowEnd, Gradient, LineDash, Rgba, Shadow, ShapeObject, SlideObject } from '@ordo/domain';
 import {
   BUILTIN_COUNT,
   CLOSED_TOLERANCE,
@@ -17,7 +8,8 @@ import {
   presetGeometry,
   resolvedGeom,
 } from '@ordo/renderer/geom/index.ts';
-import { Check, ColorField, NumberField, Select } from '../../components/fields.tsx';
+import { ColorPill, PaintPill, type PaintValue } from '../../components/ColorPicker.tsx';
+import { Select } from '../../components/fields.tsx';
 
 /*
  * The Object panel's shape fields for PowerPoint shapes (design/27 §3.1 ShapeObject M6 fields, §11 "Mapping":
@@ -418,185 +410,70 @@ export function ShapeGeometryField({ o, disabled, set }: Props) {
   );
 }
 
-/** The Fill toggle, and the fill: a solid colour, or a gradient's stops (and a linear one's angle). */
+/**
+ * Unified single-row Figma-style Fill property:
+ * `[Fill]  [PaintPill: Solid | Linear | Radial]  [−]` (or `[+]` when fill is None).
+ */
 export function ShapeFillFields({ o, disabled, set }: Props) {
   const kind = fillKind(o);
-  return (
-    <>
-      <Check
-        label="Fill"
-        value={kind !== 'none'}
-        disabled={disabled}
-        onChange={(on) => patch(set, (s) => withFill(s, on))}
-      />
-      {kind !== 'none' && (
-        <Select
-          label="Fill type"
-          value={kind}
-          options={FILL_KINDS}
-          disabled={disabled}
-          onChange={(k) => patch(set, (s) => withFillKind(s, k))}
-        />
-      )}
-      {kind === 'solid' && o.fill && (
-        <ColorField
-          value={o.fill}
-          disabled={disabled}
-          onChange={(fill) => patch(set, (s) => ({ ...s, fill }), `shape:${o.id}:fill`)}
-        />
-      )}
-      {o.gradient && <GradientFields o={o} g={o.gradient} disabled={disabled} set={set} />}
-    </>
-  );
-}
+  const paintVal: PaintValue = o.gradient
+    ? { kind: 'gradient', gradient: o.gradient }
+    : o.fill
+      ? { kind: 'solid', color: o.fill }
+      : { kind: 'none' };
 
-function mixAt(stops: Gradient['stops'], at: number): Rgba {
-  const sorted = sortStops(stops);
-  if (sorted.length === 0) return DEFAULT_FILL;
-  if (at <= sorted[0]!.at) return sorted[0]!.color;
-  for (let i = 0; i + 1 < sorted.length; i++) {
-    const a = sorted[i]!;
-    const b = sorted[i + 1]!;
-    if (at <= b.at) {
-      const t = b.at > a.at ? (at - a.at) / (b.at - a.at) : 0;
-      return mix(a.color, b.color, t);
+  const applyPaint = (next: PaintValue) => {
+    if (next.kind === 'none') {
+      patch(set, (s) => withFill(s, false));
+    } else if (next.kind === 'solid') {
+      patch(
+        set,
+        (s) => {
+          const { gradient: _g, ...rest } = s;
+          return { ...rest, fill: next.color };
+        },
+        `shape:${o.id}:fill`,
+      );
+    } else {
+      patch(set, (s) => withGradient(s, next.gradient), `shape:${o.id}:gradient`);
     }
-  }
-  return sorted[sorted.length - 1]!.color;
-}
-
-const ANGLE_PRESETS = [0, 45, 90, 135, 180] as const;
-
-function GradientFields({ o, g, disabled, set }: Props & { g: Gradient }) {
-  const put = (next: Gradient, key?: string) => patch(set, (s) => withGradient(s, next), key);
-  const rampCss = `linear-gradient(90deg, ${g.stops.map((s) => `${rgbaCss(s.color)} ${Math.round(s.at * 1000) / 10}%`).join(', ')})`;
-
-  const addStopAt = (at: number) => {
-    if (disabled || g.stops.length >= MAX_STOPS) return;
-    const clamped = Math.max(0, Math.min(1, Math.round(at * 1000) / 1000));
-    const color = mixAt(g.stops, clamped);
-    const next = sortStops([...g.stops, { at: clamped, color }]);
-    put({ ...g, stops: next });
   };
 
   return (
-    <div className="col" style={{ gap: 8 }} data-gradient={g.kind}>
-      {g.kind === 'linear' && (
-        <div className="col" style={{ gap: 4 }}>
-          <NumberField
-            label="Angle"
-            value={g.angle ?? 0}
-            min={-360}
-            max={360}
-            step={15}
-            suffix="°"
+    <div className="prop-line" data-fill-kind={kind} data-gradient={o.gradient?.kind}>
+      <span className="prop-line-label">Fill</span>
+      {kind !== 'none' ? (
+        <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+          <PaintPill
+            value={paintVal}
+            modes={['solid', 'linear', 'radial']}
             disabled={disabled}
-            onChange={(angle) => put(withAngle(g, angle))}
-          />
-          <div className="row wrap" style={{ gap: 4 }}>
-            {ANGLE_PRESETS.map((deg) => (
-              <button
-                key={deg}
-                type="button"
-                className={`small${(g.angle ?? 0) === deg ? ' on' : ''}`}
-                disabled={disabled}
-                onClick={() => put(withAngle(g, deg))}
-                style={{ minHeight: 0, padding: '2px 7px' }}
-              >
-                {deg}°
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Visual Gradient Ramp Bar */}
-      <div className="grad-ramp-wrap">
-        <div
-          className="grad-ramp-bar color-checkerboard"
-          title={disabled ? undefined : 'Click gradient track to add a stop'}
-          onClick={(e) => {
-            if (disabled) return;
-            const r = e.currentTarget.getBoundingClientRect();
-            if (r.width <= 0) return;
-            addStopAt((e.clientX - r.left) / r.width);
-          }}
-        >
-          <div className="grad-ramp-fill" style={{ background: rampCss }} />
-        </div>
-        <div className="grad-ramp-pins">
-          {g.stops.map((s, i) => (
-            <button
-              // biome-ignore lint/suspicious/noArrayIndexKey: stops have no identity; each pin maps to stop index
-              key={i}
-              type="button"
-              className="grad-ramp-pin"
-              aria-label={`Select gradient stop ${i + 1}`}
-              disabled={disabled}
-              style={{ left: `${s.at * 100}%`, background: rgbaCss(s.color) }}
-              onPointerDown={(e) => {
-                if (disabled) return;
-                e.currentTarget.dataset.dragging = '1';
-                e.currentTarget.setPointerCapture(e.pointerId);
-              }}
-              onPointerMove={(e) => {
-                if (disabled || e.currentTarget.dataset.dragging !== '1') return;
-                const r = e.currentTarget.parentElement?.getBoundingClientRect();
-                if (!r || r.width <= 0) return;
-                const at = Math.max(
-                  0,
-                  Math.min(1, Math.round(((e.clientX - r.left) / r.width) * 1000) / 1000),
-                );
-                put(withStop(g, i, { at }), `shape:${o.id}:stop:${i}:at`);
-              }}
-              onPointerUp={(e) => {
-                delete e.currentTarget.dataset.dragging;
-              }}
-              onPointerCancel={(e) => {
-                delete e.currentTarget.dataset.dragging;
-              }}
-            />
-          ))}
-        </div>
-      </div>
-
-      <span className="small muted">Stops</span>
-      {g.stops.map((s, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: stops have no identity; each row edits the stop at its position
-        <div key={i} className="row wrap grad-stop-row" style={{ gap: 4 }} data-stop={i}>
-          <ColorField
-            value={s.color}
-            disabled={disabled}
-            onChange={(color) => put(withStop(g, i, { color }), `shape:${o.id}:stop:${i}`)}
-          />
-          <NumberField
-            value={Math.round(s.at * 1000) / 10}
-            min={0}
-            max={100}
-            suffix="%"
-            width={64}
-            disabled={disabled}
-            onChange={(pct) => put(withStop(g, i, { at: pct / 100 }))}
+            ariaLabel="Shape fill"
+            onChange={applyPaint}
           />
           <button
             type="button"
-            className="small"
-            aria-label={`Remove stop ${i + 1}`}
-            disabled={disabled || g.stops.length <= MIN_STOPS}
-            onClick={() => put(removeStop(g, i))}
+            className="small prop-toggle-btn"
+            aria-label="Remove fill"
+            title="Remove fill"
+            disabled={disabled}
+            onClick={() => patch(set, (s) => withFill(s, false))}
           >
-            ✕
+            −
           </button>
         </div>
-      ))}
-      <button
-        type="button"
-        className="small"
-        disabled={disabled || g.stops.length >= MAX_STOPS}
-        onClick={() => put(addStop(g))}
-      >
-        Add stop
-      </button>
+      ) : (
+        <button
+          type="button"
+          className="small prop-toggle-btn"
+          aria-label="Add fill"
+          title="Add fill"
+          disabled={disabled}
+          onClick={() => patch(set, (s) => withFill(s, true))}
+        >
+          +
+        </button>
+      )}
     </div>
   );
 }
@@ -607,42 +484,48 @@ const QUICK_DASHES: ReadonlyArray<{ dash: LineDash; glyph: string; title: string
   { dash: 'sysDot', glyph: '• • •', title: 'Dot' },
 ];
 
-/** The line's dash and, on an open outline, its arrowheads (shown with the Stroke toggle on). */
+/** The line's dash and, on an open outline, its arrowheads (shown when Stroke is active). */
 export function ShapeLineFields({ o, disabled, set }: Props) {
   const curDash = o.dash ?? 'solid';
+  const openOutline = hasOpenOutline(o);
+  const nonQuickDash = !QUICK_DASHES.some((q) => q.dash === curDash);
+
   return (
-    <>
-      <div className="col" style={{ gap: 4 }}>
-        <div className="ed-seg-bar" role="group" aria-label="Quick dash style">
-          {QUICK_DASHES.map((d) => (
-            <button
-              key={d.dash}
-              type="button"
-              className={`small${curDash === d.dash ? ' on' : ''}`}
-              disabled={disabled}
-              title={d.title}
-              aria-label={d.title}
-              onClick={() => patch(set, (s) => withDash(s, d.dash))}
-            >
-              {d.glyph}
-            </button>
-          ))}
-        </div>
-        <Select
-          label="Dash"
-          value={curDash}
-          options={DASHES}
-          disabled={disabled}
-          onChange={(dash) => patch(set, (s) => withDash(s, dash))}
-        />
+    <div className="col" style={{ gap: 6 }}>
+      <div className="ed-seg-bar" role="group" aria-label="Quick dash style">
+        {QUICK_DASHES.map((d) => (
+          <button
+            key={d.dash}
+            type="button"
+            className={`small${curDash === d.dash ? ' on' : ''}`}
+            disabled={disabled}
+            title={d.title}
+            aria-label={d.title}
+            onClick={() => patch(set, (s) => withDash(s, d.dash))}
+          >
+            {d.glyph}
+          </button>
+        ))}
       </div>
-      {hasOpenOutline(o) && (
+      <details className="ed-collapsible" open={nonQuickDash || openOutline || undefined}>
+        <summary>All dash patterns</summary>
+        <div style={{ paddingTop: 6 }}>
+          <Select
+            label="Dash"
+            value={curDash}
+            options={DASHES}
+            disabled={disabled}
+            onChange={(dash) => patch(set, (s) => withDash(s, dash))}
+          />
+        </div>
+      </details>
+      {openOutline && (
         <>
           <ArrowFields o={o} side="head" disabled={disabled} set={set} />
           <ArrowFields o={o} side="tail" disabled={disabled} set={set} />
         </>
       )}
-    </>
+    </div>
   );
 }
 
@@ -681,14 +564,42 @@ function ArrowFields({ o, side, disabled, set }: Props & { side: EndSide }) {
   );
 }
 
-/** The Shadow toggle (PowerPoint's outer shadow). */
+/** Single-row Figma-style Shadow property: `+` to add outer shadow, `ColorPill + −` when active. */
 export function ShapeShadowField({ o, disabled, set }: Props) {
   return (
-    <Check
-      label="Shadow"
-      value={!!o.shadow}
-      disabled={disabled}
-      onChange={(on) => patch(set, (s) => withShadow(s, on))}
-    />
+    <div className="prop-line" data-has-shadow={!!o.shadow}>
+      <span className="prop-line-label">Shadow</span>
+      {o.shadow ? (
+        <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+          <ColorPill
+            value={o.shadow.color}
+            disabled={disabled}
+            ariaLabel="Shadow color"
+            onChange={(color) => patch(set, (s) => (s.shadow ? { ...s, shadow: { ...s.shadow, color } } : s))}
+          />
+          <button
+            type="button"
+            className="small prop-toggle-btn"
+            aria-label="Remove shadow"
+            title="Remove shadow"
+            disabled={disabled}
+            onClick={() => patch(set, (s) => withShadow(s, false))}
+          >
+            −
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="small prop-toggle-btn"
+          aria-label="Add shadow"
+          title="Add outer shadow"
+          disabled={disabled}
+          onClick={() => patch(set, (s) => withShadow(s, true))}
+        >
+          +
+        </button>
+      )}
+    </div>
   );
 }

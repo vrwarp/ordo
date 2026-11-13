@@ -792,16 +792,12 @@ describe('the Object panel on a selection', () => {
     expect(html).not.toContain('data-group-note');
     expect(html.match(/<textarea[^>]*>/)![0]).not.toContain('disabled');
     expect(text(html)).toContain('Rotation');
-    // The format bar waits for a selection (a caret disables it) and the paragraph strip's Level − and
-    // Indent − wait for a level or an indent to take away (formatUi.test.ts); the object's own fields are
-    // all editable.
-    const bar = html.indexOf('role="toolbar"');
+    // UnifiedTypography operates in 'Whole Box' scope by default (editable even with a collapsed caret),
+    // while ParagraphStrip's Level − and Indent − wait for a level or an indent to take away; the object's
+    // own fields are all editable.
     const strip = html.indexOf('aria-label="Paragraph"');
-    const fields =
-      html.slice(0, bar) +
-      html.slice(html.indexOf('<textarea'), strip) +
-      html.slice(html.indexOf('<section>', strip));
-    expect(html).toContain('Select text to format it.');
+    const fields = html.slice(0, strip) + html.slice(html.indexOf('<section>', strip));
+    expect(html).toContain('Whole Box');
     expect(fields).not.toMatch(/<fieldset[^>]*disabled/);
     expect(inputs(fields).filter((i) => i.includes('disabled'))).toEqual([]);
     // The live lock still makes everything read-only, the box included.

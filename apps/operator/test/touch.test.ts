@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { revealDelta } from '../src/components/keepVisible.ts';
-import { objectToolsSpot, rotaterAngle } from '../src/views/editor/touchGeometry.ts';
+import { floatingBarSpot, objectToolsSpot, rotaterAngle } from '../src/views/editor/touchGeometry.ts';
 import {
   autoScrollSpeed,
   type FlatEntry,
@@ -259,5 +259,71 @@ describe('editor: floating object tools', () => {
       none,
     );
     expect(upright.y).toBeLessThan(flat.y);
+  });
+});
+
+describe('canvas-first floatingBarSpot placement', () => {
+  const pane = { w: 1216, h: 690 };
+  const scale = (690 - 40) / 1080; // ~0.60185
+  const stage = {
+    x: (1216 - 1920 * scale) / 2,
+    y: 20,
+    w: 1920 * scale,
+    h: 650,
+  };
+  const bar = { w: 520, h: 34 };
+
+  it('tethers directly above a centered or worship-lyric box (clearing the 50px rotate handle)', () => {
+    const lyric = floatingBarSpot({ x: 120, y: 140, w: 1680, h: 800, rotation: 0 }, scale, stage, pane, bar);
+    const boxTop = stage.y + 140 * scale;
+    const rotateHandleTop = boxTop - 50 - 5;
+    expect(lyric.y).toBeGreaterThanOrEqual(4);
+    expect(lyric.y + bar.h).toBeLessThanOrEqual(rotateHandleTop - 5);
+    expect(lyric.x).toBe(Math.round(pane.w / 2 - bar.w / 2));
+  });
+
+  it('tethers cleanly below a compact title box near the top of the slide', () => {
+    const titleBox = { x: 200, y: 50, w: 1520, h: 180, rotation: 0 };
+    const spot = floatingBarSpot(titleBox, scale, stage, pane, bar);
+    const boxBottom = stage.y + (titleBox.y + titleBox.h) * scale;
+    expect(spot.y).toBeGreaterThanOrEqual(Math.round(boxBottom + 12));
+    expect(spot.y).toBeLessThan(pane.h / 2);
+  });
+
+  it('docks cleanly inside the top edge for a full-bleed 1920x1080 frame instead of floating at the bottom', () => {
+    const full = floatingBarSpot({ x: 0, y: 0, w: 1920, h: 1080, rotation: 0 }, scale, stage, pane, bar);
+    // Sits just inside the top edge (clearing top 10x10 resize anchors at stage.y +- 5), never at the bottom.
+    expect(full.y).toBe(Math.round(stage.y + 14));
+    expect(full.x).toBe(Math.round(pane.w / 2 - bar.w / 2));
+
+    const editing = floatingBarSpot({ x: 0, y: 0, w: 1920, h: 1080, rotation: 0 }, scale, stage, pane, bar, {
+      avoidInsideTop: true,
+    });
+    expect(editing.y).toBe(6);
+  });
+
+  it('clamps horizontally inside the stage bounds for small edge objects', () => {
+    const leftEdge = floatingBarSpot({ x: 20, y: 450, w: 160, h: 120, rotation: 0 }, scale, stage, pane, bar);
+    expect(leftEdge.x).toBe(Math.round(stage.x + 8));
+
+    const rightEdge = floatingBarSpot(
+      { x: 1740, y: 450, w: 160, h: 120, rotation: 0 },
+      scale,
+      stage,
+      pane,
+      bar,
+    );
+    expect(rightEdge.x).toBe(Math.round(stage.x + stage.w - bar.w - 8));
+
+    // Also shifts cleanly clear of an open top-right floating Find & Replace dialog.
+    const withFindOpen = floatingBarSpot(
+      { x: 120, y: 140, w: 1680, h: 800, rotation: 0 },
+      scale,
+      stage,
+      pane,
+      { w: 620, h: 34 },
+      { avoidTopRight: { w: 344, h: 430 } },
+    );
+    expect(withFindOpen.x + 620).toBeLessThanOrEqual(pane.w - 344 - 12);
   });
 });

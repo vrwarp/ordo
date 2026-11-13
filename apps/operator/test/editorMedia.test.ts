@@ -458,7 +458,7 @@ describe('the editor panels with the stores', () => {
     const { EditorView } = await import('../src/views/editor/EditorView.tsx');
     const out = html(createElement(EditorView, { id: p.id }));
     expect(out).toMatch(
-      /\+ Image<\/button><button type="button" title="Add a video that plays in the slide">\+ Video<\/button>/,
+      /\+ Image<\/button><button type="button"[^>]*title="Add a video that plays in the slide">\+ Video<\/button>/,
     );
   });
 

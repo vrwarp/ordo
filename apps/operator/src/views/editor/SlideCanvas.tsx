@@ -47,21 +47,24 @@ import {
   useEditor,
 } from './editorStore.ts';
 import { historyKey } from './editorKeys.ts';
-import { textField } from './formatControls.tsx';
+import { barState, shortcutOf, togglePatch } from './FormatBar.tsx';
+import { refocusText, textField } from './formatControls.tsx';
 import {
   copyTextSelection,
   cutTextSelection,
   dragSelection,
+  formatSelection,
   handleTextPaste,
   transformSelection,
   typeText,
 } from './actions.ts';
 import { updateObject } from './ops.ts';
 import { boxFromCorner, clickSelection, groupBox, groupMembers, isLocked, keepsAspect } from './ops/group.ts';
+import { selectionStyle } from './ops/text.ts';
 import { useOriginalOver } from './original.ts';
 import { snapBox } from './snapping.ts';
 import { TEXT_MARGIN, textDensity, textRasterKey } from './textRaster.ts';
-import { objectToolsSpot, rotaterAngle } from './touchGeometry.ts';
+import { floatingBarSpot, objectToolsSpot, rotaterAngle } from './touchGeometry.ts';
 
 // ---- image cache (HTMLImageElement per file hash) ----
 const images = new Map<string, HTMLImageElement>();
@@ -404,15 +407,24 @@ export function SlideCanvas(props: {
   onEditText?: (objectId: string) => void;
   /** Touch: tools for the selected object, floated just above or below it (objectToolsSpot). */
   objectTools?: ReactNode;
+  /** Desktop / Proposal B: rich contextual formatting bar floated above or below the selected object. */
+  floatingBar?: ReactNode;
+  /** Optional stage zoom multiplier (`'fit'` or e.g. `0.5`, `0.75`, `1`). */
+  zoom?: 'fit' | number;
+  /** Optional top-right pane region occupied by a non-modal floating tool (e.g. `Find and replace`). */
+  avoidTopRight?: { w: number; h: number };
+  /** True when an external inspector panel (`ObjectPanel`) is already mounting `#ordo-text-editor`. */
+  hasExternalTextEditor?: boolean;
   /** The deck's area of an imported deck that is not 16:9 (`source.native.slideRect`): the 4:3 guide. */
   slideRect?: SlideRect;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const coarse = useCoarsePointer();
-  const [size, setSize] = useState({ w: 960, h: 540 });
-  const [pane, setPane] = useState({ w: 984, h: 564 });
+  const [pane, setPane] = useState({ w: 984, h: 580 });
   const bar = useRef<HTMLDivElement>(null);
   const [barSize, setBarSize] = useState({ w: 480, h: 52 });
+  const fbar = useRef<HTMLDivElement>(null);
+  const [fbarSize, setFbarSize] = useState({ w: 540, h: 34 });
   const objectIds = useEditor((s) => s.objectIds);
   const guides = useEditor((s) => s.guides);
   const tick = useImageTick();
@@ -423,9 +435,7 @@ export function SlideCanvas(props: {
     if (!el) return;
     const ro = new ResizeObserver(() => {
       const r = el.getBoundingClientRect();
-      const s = Math.min((r.width - 24) / LOGICAL_WIDTH, (r.height - 24) / LOGICAL_HEIGHT);
       setPane({ w: r.width, h: r.height });
-      setSize({ w: Math.max(160, LOGICAL_WIDTH * s), h: Math.max(90, LOGICAL_HEIGHT * s) });
     });
     ro.observe(el);
     // Pinch on the canvas is suppressed, not turned into an editor zoom: the slide is already fitted to the
@@ -447,6 +457,13 @@ export function SlideCanvas(props: {
       el.removeEventListener('touchmove', multi);
     };
   }, []);
+  const marginY = coarse ? 24 : 48;
+  const fitScale = Math.min((pane.w - 24) / LOGICAL_WIDTH, (pane.h - marginY) / LOGICAL_HEIGHT);
+  const zoomMul = props.zoom && props.zoom !== 'fit' ? props.zoom : 1;
+  const size = {
+    w: Math.max(160, LOGICAL_WIDTH * fitScale * zoomMul),
+    h: Math.max(90, LOGICAL_HEIGHT * fitScale * zoomMul),
+  };
   const scale = size.w / LOGICAL_WIDTH;
   const density = scale * (typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1);
   const { slide } = props;
@@ -635,12 +652,20 @@ export function SlideCanvas(props: {
     );
   const rotAngle = coarse && selBox ? rotaterAngle(selBox, scale, TOUCH_ROTATE_OFFSET) : 0;
   const showTools = !!props.objectTools && !!selBox;
+  const showFloatingBar = !!props.floatingBar && !!selBox;
   useLayoutEffect(() => {
     const el = bar.current;
-    if (!el) return;
-    const w = el.offsetWidth;
-    const h = el.offsetHeight;
-    if (w !== barSize.w || h !== barSize.h) setBarSize({ w, h });
+    if (el) {
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      if (w !== barSize.w || h !== barSize.h) setBarSize({ w, h });
+    }
+    const fel = fbar.current;
+    if (fel) {
+      const fw = fel.offsetWidth;
+      const fh = fel.offsetHeight;
+      if (fw !== fbarSize.w || fh !== fbarSize.h) setFbarSize({ w: fw, h: fh });
+    }
   });
   const toolsAt =
     showTools && selBox
@@ -662,6 +687,26 @@ export function SlideCanvas(props: {
   const editingObj = inlineEditingId
     ? drawn.objects.find((x): x is TextObject => x.id === inlineEditingId && x.type === 'text')
     : undefined;
+  const floatingAt =
+    showFloatingBar && selBox
+      ? floatingBarSpot(
+          selBox,
+          scale,
+          { x: (pane.w - size.w) / 2, y: (pane.h - size.h) / 2, w: size.w, h: size.h },
+          pane,
+          fbarSize,
+          {
+            hasRotateHandle: !lockedSel,
+            avoidInsideTop: !!editingObj,
+            avoidTopRight: props.avoidTopRight,
+          },
+        )
+      : undefined;
+  const backingTextObj =
+    editingObj ??
+    (selectedCount === 1 && selectedId
+      ? drawn.objects.find((x): x is TextObject => x.id === selectedId && x.type === 'text')
+      : undefined);
   const [caretVisible, setCaretVisible] = useState(true);
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset blink phase on any cursor or text change
   useEffect(() => {
@@ -844,6 +889,9 @@ export function SlideCanvas(props: {
             </Layer>
           )}
         </Stage>
+        {!props.hasExternalTextEditor && backingTextObj && (
+          <CanvasBackingTextEditor obj={backingTextObj} readOnly={props.readOnly} />
+        )}
         {editingObj && (
           <CanvasTextEditor
             key={editingObj.id}
@@ -854,6 +902,17 @@ export function SlideCanvas(props: {
           />
         )}
       </div>
+      {floatingAt && (
+        <div
+          ref={fbar}
+          className="ed-floating-bar"
+          role="toolbar"
+          aria-label="Contextual format bar"
+          style={{ left: floatingAt.x, top: floatingAt.y }}
+        >
+          {props.floatingBar}
+        </div>
+      )}
       {toolsAt && (
         <div
           ref={bar}
@@ -881,6 +940,105 @@ function syncBackingTextarea(start: number, end: number, caret: number): void {
 }
 
 /**
+ * Hidden backing `#ordo-text-editor` mounted whenever a single `TextObject` is selected in Canvas-First mode
+ * (while the `ObjectPanel` Tune Drawer is closed), so inline canvas editing, `FloatingContextBar`, keyboard
+ * formatting shortcuts (`Ctrl/Cmd + B/I/U`), undo/redo selection preservation, and rich clipboard paste work
+ * identically without opening the drawer.
+ */
+function CanvasBackingTextEditor({ obj, readOnly }: { obj: TextObject; readOnly: boolean }) {
+  const off = readOnly || isLocked(obj);
+  return (
+    <textarea
+      id="ordo-text-editor"
+      aria-label="Text"
+      value={obj.text}
+      disabled={readOnly}
+      style={{
+        position: 'fixed',
+        left: 0,
+        bottom: 0,
+        width: 1,
+        height: 1,
+        opacity: 0.01,
+        pointerEvents: 'none',
+        padding: 0,
+        border: 0,
+      }}
+      onSelect={(e) => {
+        const el = e.currentTarget;
+        const start = el.selectionStart;
+        const end = el.selectionEnd;
+        const caret = el.selectionDirection === 'backward' ? start : end;
+        setTextRange({ start, end, caret });
+      }}
+      onKeyDown={(e) => {
+        const step = historyKey(e);
+        if (step) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (readOnly) return;
+          const el = e.currentTarget;
+          const at = { start: el.selectionStart, end: el.selectionEnd };
+          (step === 'undo' ? undo : redo)();
+          requestAnimationFrame(() => {
+            const f = document.getElementById('ordo-text-editor');
+            if (!(f instanceof HTMLTextAreaElement)) return;
+            const n = f.value.length;
+            const r = { start: Math.min(at.start, n), end: Math.min(at.end, n) };
+            f.setSelectionRange(r.start, r.end);
+            setTextRange(r);
+          });
+          return;
+        }
+        const t = shortcutOf(e);
+        if (t) {
+          e.preventDefault();
+          const el = e.currentTarget;
+          const start = el.selectionStart;
+          const end = el.selectionEnd;
+          if (off || start === end) return;
+          const state = barState(obj, selectionStyle(obj, start, end));
+          formatSelection(obj.id, start, end, togglePatch(t, obj, state));
+          refocusText(start, end);
+        }
+      }}
+      onChange={(e) => {
+        const next = e.target.value;
+        const caret = e.target.selectionEnd;
+        setTextRange({ start: e.target.selectionStart, end: caret, caret });
+        if (!off) typeText(obj.id, next, caret);
+      }}
+      onCopy={(e) => {
+        const el = e.currentTarget;
+        if (copyTextSelection(obj, el.selectionStart, el.selectionEnd, e.clipboardData)) {
+          e.preventDefault();
+        }
+      }}
+      onCut={(e) => {
+        if (off) return;
+        const el = e.currentTarget;
+        const caret = cutTextSelection(obj, el.selectionStart, el.selectionEnd, e.clipboardData);
+        if (caret !== null) {
+          e.preventDefault();
+          setTextRange({ start: caret, end: caret, caret });
+          syncBackingTextarea(caret, caret, caret);
+        }
+      }}
+      onPaste={(e) => {
+        if (off) return;
+        const el = e.currentTarget;
+        const caret = handleTextPaste(obj, el.selectionStart, el.selectionEnd, e.clipboardData);
+        if (caret !== null) {
+          e.preventDefault();
+          setTextRange({ start: caret, end: caret, caret });
+          syncBackingTextarea(caret, caret, caret);
+        }
+      }}
+    />
+  );
+}
+
+/**
  * Canvas-native inline text editing surface:
  * - The slide canvas itself (`ObjectNode` + `drawTextEditingOverlay`) renders the text, selection highlight
  *   rectangles, and blinking caret at 100% WYSIWYG fidelity (exact fonts, autofit, vertical alignment,
@@ -901,7 +1059,6 @@ function CanvasTextEditor({
   onCommit: () => void;
 }) {
   const b = obj.box;
-  const fallbackRef = useRef<HTMLTextAreaElement>(null);
   const draggingRef = useRef(false);
   const anchorRef = useRef(useEditor.getState().textRange.start);
   const preferredXRef = useRef<number | undefined>(undefined);
@@ -911,13 +1068,9 @@ function CanvasTextEditor({
     x: 0,
     y: 0,
   });
-  const [needsFallbackTextarea, setNeedsFallbackTextarea] = useState(false);
 
   // Focus the backing textarea on mount and place the caret where the double-click landed.
   useEffect(() => {
-    const existing = document.getElementById('ordo-text-editor');
-    const needFallback = !(existing instanceof HTMLTextAreaElement);
-    setNeedsFallbackTextarea(needFallback);
     requestAnimationFrame(() => {
       const r = useEditor.getState().textRange;
       anchorRef.current = r.start;
@@ -928,9 +1081,8 @@ function CanvasTextEditor({
   // Intercept ArrowUp / ArrowDown on `#ordo-text-editor` so vertical navigation follows the canvas lines.
   const latestObjRef = useRef(obj);
   latestObjRef.current = obj;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: re-bind when fallback textarea mounts
   useEffect(() => {
-    const el = textField() ?? fallbackRef.current;
+    const el = textField();
     if (!el) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -965,7 +1117,7 @@ function CanvasTextEditor({
     };
     el.addEventListener('keydown', onKeyDown);
     return () => el.removeEventListener('keydown', onKeyDown);
-  }, [onCommit, needsFallbackTextarea]);
+  }, [onCommit]);
 
   const slideCoords = (clientX: number, clientY: number): { x: number; y: number } => {
     const rect = stageContainerRef.current?.getBoundingClientRect();
@@ -977,164 +1129,101 @@ function CanvasTextEditor({
   };
 
   return (
-    <>
-      {needsFallbackTextarea && (
-        <textarea
-          ref={fallbackRef}
-          id="ordo-text-editor"
-          aria-label="Text"
-          value={obj.text}
-          style={{
-            position: 'fixed',
-            left: -9999,
-            top: 0,
-            width: 1,
-            height: 1,
-            opacity: 0,
-            pointerEvents: 'none',
-          }}
-          onSelect={(e) => {
-            const el = e.currentTarget;
-            const start = el.selectionStart;
-            const end = el.selectionEnd;
-            const caret = el.selectionDirection === 'backward' ? start : end;
-            setTextRange({ start, end, caret });
-          }}
-          onKeyDown={(e) => {
-            const step = historyKey(e);
-            if (!step) return;
-            e.preventDefault();
-            e.stopPropagation();
-            (step === 'undo' ? undo : redo)();
-          }}
-          onChange={(e) => {
-            const next = e.target.value;
-            const caret = e.target.selectionEnd;
-            setTextRange({ start: e.target.selectionStart, end: caret, caret });
-            typeText(obj.id, next, caret);
-          }}
-          onCopy={(e) => {
-            const el = e.currentTarget;
-            if (copyTextSelection(obj, el.selectionStart, el.selectionEnd, e.clipboardData)) {
-              e.preventDefault();
-            }
-          }}
-          onCut={(e) => {
-            const el = e.currentTarget;
-            const caret = cutTextSelection(obj, el.selectionStart, el.selectionEnd, e.clipboardData);
-            if (caret !== null) {
-              e.preventDefault();
-              setTextRange({ start: caret, end: caret, caret });
-              syncBackingTextarea(caret, caret, caret);
-            }
-          }}
-          onPaste={(e) => {
-            const el = e.currentTarget;
-            const caret = handleTextPaste(obj, el.selectionStart, el.selectionEnd, e.clipboardData);
-            if (caret !== null) {
-              e.preventDefault();
-              setTextRange({ start: caret, end: caret, caret });
-              syncBackingTextarea(caret, caret, caret);
-            }
-          }}
-        />
-      )}
-      <div
-        className="ordo-inline-canvas-editor"
-        data-testid="ordo-inline-canvas-editor"
-        onPointerDown={(e) => {
-          if (e.button !== 0) return;
-          e.preventDefault();
-          e.stopPropagation();
-          preferredXRef.current = undefined;
-          const pt = slideCoords(e.clientX, e.clientY);
-          const idx = hitTestObjectOffset(obj, pt.x, pt.y);
+    <div
+      className="ordo-inline-canvas-editor"
+      data-testid="ordo-inline-canvas-editor"
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        preferredXRef.current = undefined;
+        const pt = slideCoords(e.clientX, e.clientY);
+        const idx = hitTestObjectOffset(obj, pt.x, pt.y);
 
-          const now = performance.now();
-          const prev = clickTrackRef.current;
-          const rapid = now - prev.time < 400 && Math.hypot(e.clientX - prev.x, e.clientY - prev.y) < 12;
-          const count = rapid ? (prev.count % 3) + 1 : 1;
-          clickTrackRef.current = { count, time: now, x: e.clientX, y: e.clientY };
+        const now = performance.now();
+        const prev = clickTrackRef.current;
+        const rapid = now - prev.time < 400 && Math.hypot(e.clientX - prev.x, e.clientY - prev.y) < 12;
+        const count = rapid ? (prev.count % 3) + 1 : 1;
+        clickTrackRef.current = { count, time: now, x: e.clientX, y: e.clientY };
 
-          if (count === 3) {
-            const pRange = paraRangeAt(obj.text, idx);
-            anchorRef.current = pRange.start;
-            draggingRef.current = false;
-            setTextRange({ start: pRange.start, end: pRange.end, caret: pRange.end });
-            syncBackingTextarea(pRange.start, pRange.end, pRange.end);
-            return;
-          }
-          if (count === 2) {
-            const wRange = wordRangeAt(obj.text, idx);
-            anchorRef.current = wRange.start;
-            draggingRef.current = false;
-            setTextRange({ start: wRange.start, end: wRange.end, caret: wRange.end });
-            syncBackingTextarea(wRange.start, wRange.end, wRange.end);
-            return;
-          }
+        if (count === 3) {
+          const pRange = paraRangeAt(obj.text, idx);
+          anchorRef.current = pRange.start;
+          draggingRef.current = false;
+          setTextRange({ start: pRange.start, end: pRange.end, caret: pRange.end });
+          syncBackingTextarea(pRange.start, pRange.end, pRange.end);
+          return;
+        }
+        if (count === 2) {
+          const wRange = wordRangeAt(obj.text, idx);
+          anchorRef.current = wRange.start;
+          draggingRef.current = false;
+          setTextRange({ start: wRange.start, end: wRange.end, caret: wRange.end });
+          syncBackingTextarea(wRange.start, wRange.end, wRange.end);
+          return;
+        }
 
-          if (e.shiftKey) {
-            const anchor = anchorRef.current;
-            const start = Math.min(anchor, idx);
-            const end = Math.max(anchor, idx);
-            setTextRange({ start, end, caret: idx });
-            syncBackingTextarea(start, end, idx);
-          } else {
-            anchorRef.current = idx;
-            setTextRange({ start: idx, end: idx, caret: idx });
-            syncBackingTextarea(idx, idx, idx);
-          }
-          draggingRef.current = true;
-          try {
-            e.currentTarget.setPointerCapture(e.pointerId);
-          } catch {
-            // Synthetic events in unit tests may not register an active pointerId.
-          }
-        }}
-        onPointerMove={(e) => {
-          if (!draggingRef.current) return;
-          const pt = slideCoords(e.clientX, e.clientY);
-          const idx = hitTestObjectOffset(obj, pt.x, pt.y);
+        if (e.shiftKey) {
           const anchor = anchorRef.current;
           const start = Math.min(anchor, idx);
           const end = Math.max(anchor, idx);
           setTextRange({ start, end, caret: idx });
           syncBackingTextarea(start, end, idx);
-        }}
-        onPointerUp={(e) => {
-          if (!draggingRef.current) return;
-          draggingRef.current = false;
-          try {
-            if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-              e.currentTarget.releasePointerCapture(e.pointerId);
-            }
-          } catch {
-            // Ignore synthetic pointer release errors.
+        } else {
+          anchorRef.current = idx;
+          setTextRange({ start: idx, end: idx, caret: idx });
+          syncBackingTextarea(idx, idx, idx);
+        }
+        draggingRef.current = true;
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+          // Synthetic events in unit tests may not register an active pointerId.
+        }
+      }}
+      onPointerMove={(e) => {
+        if (!draggingRef.current) return;
+        const pt = slideCoords(e.clientX, e.clientY);
+        const idx = hitTestObjectOffset(obj, pt.x, pt.y);
+        const anchor = anchorRef.current;
+        const start = Math.min(anchor, idx);
+        const end = Math.max(anchor, idx);
+        setTextRange({ start, end, caret: idx });
+        syncBackingTextarea(start, end, idx);
+      }}
+      onPointerUp={(e) => {
+        if (!draggingRef.current) return;
+        draggingRef.current = false;
+        try {
+          if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+            e.currentTarget.releasePointerCapture(e.pointerId);
           }
-          const r = useEditor.getState().textRange;
-          syncBackingTextarea(r.start, r.end, r.caret);
-        }}
-        onPointerCancel={() => {
-          draggingRef.current = false;
-        }}
-        style={{
-          position: 'absolute',
-          left: b.x * scale,
-          top: b.y * scale,
-          width: b.w * scale,
-          height: b.h * scale,
-          transform: b.rotation ? `rotate(${b.rotation}deg)` : undefined,
-          transformOrigin: '50% 50%',
-          background: 'transparent',
-          boxShadow: '0 0 0 2px #3b82f6',
-          borderRadius: 2,
-          cursor: 'text',
-          userSelect: 'none',
-          WebkitUserSelect: 'none',
-          touchAction: 'none',
-          zIndex: 20,
-        }}
-      />
-    </>
+        } catch {
+          // Ignore synthetic pointer release errors.
+        }
+        const r = useEditor.getState().textRange;
+        syncBackingTextarea(r.start, r.end, r.caret);
+      }}
+      onPointerCancel={() => {
+        draggingRef.current = false;
+      }}
+      style={{
+        position: 'absolute',
+        left: b.x * scale,
+        top: b.y * scale,
+        width: b.w * scale,
+        height: b.h * scale,
+        transform: b.rotation ? `rotate(${b.rotation}deg)` : undefined,
+        transformOrigin: '50% 50%',
+        background: 'transparent',
+        boxShadow: '0 0 0 2px #3b82f6',
+        borderRadius: 2,
+        cursor: 'text',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        touchAction: 'none',
+        zIndex: 20,
+      }}
+    />
   );
 }

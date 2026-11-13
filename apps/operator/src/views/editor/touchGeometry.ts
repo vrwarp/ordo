@@ -57,3 +57,80 @@ export function objectToolsSpot(
   if (below + bar.h <= pane.h - 4) return { x, y: Math.round(below) };
   return { x, y: cy > pane.h / 2 ? 4 : Math.round(Math.max(4, pane.h - bar.h - 4)) };
 }
+
+/**
+ * Where the desktop/canvas-first contextual formatting bar goes (top-left, in `.canvasbox` px):
+ * 1. Preferred: tethered directly above the selected box (and its Konva rotate handle when rotatable),
+ *    horizontally centered on the box and clamped cleanly inside the stage/pane.
+ * 2. Near-top compact/upper object (`above < 4` and rotated bottom <= 72% of slide height): tethered
+ *    cleanly below the selected box (`8px` past its bottom resize anchors).
+ * 3. Tall / full-slide frame (`above < 4` and spanning into the lower slide): docked cleanly inside the
+ *    top edge of the frame (`max(8, boxTop + 14)`) so resize/rotate handles stay clear and the bar never
+ *    floats disconnected at the bottom of the viewport (or `6px` in the top bezel during inline text edit).
+ */
+export function floatingBarSpot(
+  box: Box,
+  scale: number,
+  stage: { x: number; y: number; w?: number; h?: number },
+  pane: { w: number; h: number },
+  bar: { w: number; h: number },
+  opts?: {
+    hasRotateHandle?: boolean;
+    rotateOffset?: number;
+    avoidInsideTop?: boolean;
+    avoidTopRight?: { w: number; h: number };
+  },
+): { x: number; y: number } {
+  const stageW = stage.w ?? 1920 * scale;
+  const stageH = stage.h ?? 1080 * scale;
+  const hasRotate = opts?.hasRotateHandle ?? true;
+  const rotateOffset = opts?.rotateOffset ?? 50;
+
+  const rad = ((box.rotation ?? 0) * Math.PI) / 180;
+  const hh = (Math.abs(box.w * Math.sin(rad)) + Math.abs(box.h * Math.cos(rad))) / 2;
+  const cx = stage.x + (box.x + box.w / 2) * scale;
+  const cy = stage.y + (box.y + box.h / 2) * scale;
+  const boxTop = cy - hh * scale;
+  const boxBottom = cy + hh * scale;
+
+  // Desktop Konva resize anchors are 10x10 (5px overhang); rotate handle sits `rotateOffset` out from top edge.
+  const handleY = cy - ((box.h / 2) * scale + rotateOffset) * Math.cos(rad);
+  const anchorTop = hasRotate ? Math.min(boxTop - 6, handleY - 6) : boxTop - 6;
+  const anchorBottom = hasRotate ? Math.max(boxBottom + 6, handleY + 6) : boxBottom + 6;
+
+  // Determine vertical tier first so horizontal clamping can respect any open top-right floating panel.
+  let y: number;
+  const above = anchorTop - 6 - bar.h;
+  const below = anchorBottom + 8;
+  const relBottom = stageH > 0 ? (boxBottom - stage.y) / stageH : 1;
+  if (above >= 2) {
+    // 1. Tethered cleanly above the object & its rotate handle.
+    y = Math.round(above);
+  } else if (relBottom <= 0.72 && below + bar.h <= pane.h - 6) {
+    // 2. Near-top compact/upper object: tether right below the object.
+    y = Math.round(below);
+  } else if (opts?.avoidInsideTop) {
+    // 3a. Inline-editing a full-height text box: keep in the top bezel.
+    y = 6;
+  } else {
+    // 3b. Tall / full-slide frame: dock cleanly inside the top edge, clear of resize & rotate handles.
+    let dockY = Math.max(8, Math.round(boxTop + 14));
+    if (hasRotate && handleY >= dockY - 6 && handleY <= dockY + bar.h + 6) {
+      dockY = Math.round(handleY + 10);
+    }
+    y = Math.min(dockY, Math.max(8, pane.h - bar.h - 8));
+  }
+
+  // Horizontal position: centered on the object, clamped inside stage/pane and clear of any top-right dialog.
+  const minX = stageW >= bar.w + 16 ? Math.max(8, stage.x + 8) : 8;
+  let maxX =
+    stageW >= bar.w + 16
+      ? Math.max(minX, Math.min(pane.w - bar.w - 8, stage.x + stageW - bar.w - 8))
+      : Math.max(8, pane.w - bar.w - 8);
+  if (opts?.avoidTopRight && y < opts.avoidTopRight.h) {
+    maxX = Math.max(minX, Math.min(maxX, pane.w - opts.avoidTopRight.w - bar.w - 12));
+  }
+  const x = Math.round(Math.min(Math.max(minX, cx - bar.w / 2), maxX));
+
+  return { x, y };
+}

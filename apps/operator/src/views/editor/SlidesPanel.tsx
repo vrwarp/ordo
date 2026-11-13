@@ -1,8 +1,8 @@
-import { parseSectionLabel, type Presentation } from '@ordo/domain';
+import { parseSectionLabel, type Presentation, type Slide } from '@ordo/domain';
 import { type PointerEvent as ReactPointerEvent, useEffect, useState } from 'react';
 import { confirmDialog } from '../../components/Confirm.tsx';
-import { DragHandle } from '../../components/Sortable.tsx';
-import { useSortable } from '../../components/Sortable.tsx';
+import { Menu } from '../../components/Menu.tsx';
+import { DragHandle, useSortable } from '../../components/Sortable.tsx';
 import { type FlatEntry, flatSlideMove } from '../../components/sortableMath.ts';
 import { useMediaLookup, useVisible } from '../../hooks.ts';
 import { stillHash, useThumb } from '../../services/thumbs.ts';
@@ -22,7 +22,6 @@ import {
   splitSlide,
   themeOf,
 } from './ops.ts';
-import type { Slide } from '@ordo/domain';
 
 /** How a hidden slide's number and picture are dimmed in the slide list (design/27 §11 item 9). */
 export const HIDDEN_DIM = { opacity: 0.4 } as const;
@@ -33,6 +32,14 @@ function SlideItem(props: {
   index: number;
   selected: boolean;
   readOnly: boolean;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+  onDuplicate: () => void;
+  onNewLike: () => void;
+  onToggleHidden: (hidden: boolean) => void;
+  onSplit?: () => void;
+  onMerge?: () => void;
+  onDelete: () => void;
   sort: {
     item: Record<string, unknown>;
     handle: Record<string, unknown>;
@@ -48,51 +55,129 @@ function SlideItem(props: {
     { isSong: props.p.kind === 'song', media, bg: bgId ? stillHash(media(bgId)) : undefined, width: 320 },
     visible,
   );
-  // A hidden slide is dimmed (its number and picture; the tag stays readable), as in the live slide grid.
   const hidden = !!props.slide.hidden;
   const dim = hidden ? HIDDEN_DIM : undefined;
+  const hasAudio = !!props.slide.audio;
+  const hasMidi = (props.slide.midiCues?.length ?? 0) > 0;
+  const loopSec =
+    props.p.kind === 'loop' && props.slide.durationMs
+      ? Math.round(props.slide.durationMs / 100) / 10
+      : undefined;
 
   useEffect(() => {
     if (props.selected && ref.current?.scrollIntoView) {
       ref.current.scrollIntoView({ block: 'nearest' });
     }
   }, [props.selected, ref]);
+
   return (
     <div
       ref={ref}
       {...props.sort.item}
       {...props.sort.mouseArea}
       data-slide-id={props.slide.id}
-      className={`ed-slide ${props.selected ? 'sel' : ''} ${hidden ? 'hidden-slide' : ''} ${props.sort.cls}`}
+      className={`ed-slide-card ${props.selected ? 'sel' : ''} ${hidden ? 'hidden-slide' : ''} ${props.sort.cls}`}
       onClick={() => selectSlide(props.slide.id)}
     >
-      <DragHandle label="Drag to reorder" disabled={props.readOnly} {...props.sort.handle} />
-      <span className="muted small" style={{ width: 16, ...dim }}>
-        {props.index + 1}
-      </span>
-      {url ? <img src={url} alt="" draggable={false} style={dim} /> : <div className="ph" style={dim} />}
-      {props.slide.overrides?.length ? (
-        <span className="override-mark" title="Overrides the theme">
-          ●<span className="touch-label">Overrides theme</span>
+      <div className={`ed-slide ${props.selected ? 'sel' : ''} ${hidden ? 'hidden-slide' : ''}`}>
+        <DragHandle label="Drag to reorder" disabled={props.readOnly} {...props.sort.handle} />
+        <span className="muted small" style={{ width: 16, ...dim }}>
+          {props.index + 1}
         </span>
-      ) : null}
-      {props.slide.hidden ? (
-        <span
-          className="tag"
-          title="Hidden: Next skips it during the service; a click in the slide grid shows it"
-          data-hidden-slide
+        <div className="ed-slide-thumb-wrap">
+          {url ? <img src={url} alt="" draggable={false} style={dim} /> : <div className="ph" style={dim} />}
+          {(hasAudio || hasMidi || loopSec !== undefined) && (
+            <div className="ed-slide-cue-badges">
+              {hasAudio && (
+                <span className="ed-cue-badge" title="Slide has audio cue">
+                  ♪
+                </span>
+              )}
+              {hasMidi && (
+                <span className="ed-cue-badge midi" title="Slide sends MIDI cue">
+                  ⚡
+                </span>
+              )}
+              {loopSec !== undefined && (
+                <span className="ed-cue-badge" title={`Auto-advance after ${loopSec}s`}>
+                  {loopSec}s
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+        {props.slide.overrides?.length ? (
+          <span className="override-mark" title="Overrides the theme">
+            ●<span className="touch-label">Overrides theme</span>
+          </span>
+        ) : null}
+        {props.slide.hidden ? (
+          <span
+            className="tag"
+            title="Hidden: Next skips it during the service; a click in the slide grid shows it"
+            data-hidden-slide
+          >
+            Hidden
+          </span>
+        ) : null}
+      </div>
+
+      {/* Inline contextual actions directly on the selected slide card (replaces the stranded bottom footer) */}
+      {props.selected && !props.readOnly && (
+        <div
+          className="ed-slide-inline-actions"
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
         >
-          Hidden
-        </span>
-      ) : null}
+          <button
+            type="button"
+            className="small ghost"
+            onClick={props.onDuplicate}
+            title="Duplicate this slide"
+          >
+            Duplicate
+          </button>
+          <button
+            type="button"
+            className="small ghost"
+            aria-label="New slide like this"
+            title="A copy with its text cleared, to type a new verse or notice in the same look"
+            data-new-slide-like
+            onClick={props.onNewLike}
+          >
+            + Like
+          </button>
+          <HideSlideToggle hidden={hidden} onToggle={props.onToggleHidden} compact />
+          <Menu
+            label="⋯"
+            items={[
+              ...(props.onMoveUp
+                ? [{ label: '↑ Move slide up', name: 'Slide up', onSelect: props.onMoveUp }]
+                : []),
+              ...(props.onMoveDown
+                ? [{ label: '↓ Move slide down', name: 'Slide down', onSelect: props.onMoveDown }]
+                : []),
+              ...(props.onSplit ? [{ label: '✂ Split lyrics', name: 'Split', onSelect: props.onSplit }] : []),
+              ...(props.onMerge
+                ? [{ label: '⤹ Merge with next', name: 'Merge next', onSelect: props.onMerge }]
+                : []),
+              { label: '🗑 Delete slide', name: 'Delete slide', danger: true, onSelect: props.onDelete },
+            ]}
+          />
+        </div>
+      )}
     </div>
   );
 }
 
+const SECTION_PRESETS: Record<Presentation['kind'], readonly string[]> = {
+  song: ['Verse 1', 'Chorus', 'Verse 2', 'Bridge', 'Tag'],
+  loop: ['Welcome', 'Events', 'Giving', 'Next Steps'],
+  slides: ['Intro', 'Scripture', 'Point 1', 'Conclusion'],
+};
+
 /**
- * Sections and slides: add, rename, reorder (drag by the grip, mouse or touch, or the move buttons),
- * delete sections; add, duplicate, split, merge slides. Slides drag across sections: the slide list is one
- * flat sortable of section headers and slides (components/sortableMath.ts flatSlideMove).
+ * Sections and slides: add, rename, reorder, and act inline directly on the selected slide card.
  */
 export function SlidesPanel({
   p,
@@ -106,15 +191,19 @@ export function SlidesPanel({
   const slideId = useEditor((s) => s.slideId);
   const themes = useLibrary((s) => s.data.themes);
   const theme = themeOf(p, themes);
+  const [addingSection, setAddingSection] = useState(false);
   const [newSection, setNewSection] = useState('');
   const edit = (fn: (q: Presentation) => Presentation) => !readOnly && change(fn);
-  const addNamedSection = () => {
-    const t = newSection.trim();
+
+  const commitSection = (raw: string) => {
+    const t = raw.trim();
     if (!t) return;
     const parsed = parseSectionLabel(t);
     edit((q) => addSection(q, parsed?.label ?? t, parsed?.short ?? t.slice(0, 3).toUpperCase(), theme));
     setNewSection('');
+    setAddingSection(false);
   };
+
   const flat: FlatEntry[] = [];
   const flatIndex = new Map<string, number>();
   for (const sec of p.sections) {
@@ -136,13 +225,7 @@ export function SlidesPanel({
     disabled: readOnly,
     onMove: (from, to) => edit((q) => moveSection(q, from, to)),
   });
-  const selected = slideId
-    ? p.sections.flatMap((sec) => sec.slides).find((x) => x.id === slideId)
-    : undefined;
-  const selFlat = slideId !== undefined ? flatIndex.get(slideId) : undefined;
-  const selSection = slideId ? p.sections.findIndex((s) => s.slides.some((x) => x.id === slideId)) : -1;
-  const slideUp = selFlat !== undefined ? flatSlideMove(flat, selFlat, selFlat - 1) : null;
-  const slideDown = selFlat !== undefined ? flatSlideMove(flat, selFlat, selFlat + 1) : null;
+
   return (
     <div
       className="col ed-slides"
@@ -192,7 +275,7 @@ export function SlidesPanel({
             {...sections.item(si)}
             data-section-id={sec.id}
             className={`col ${sections.cls(si)}`}
-            style={{ gap: 2 }}
+            style={{ gap: 4 }}
           >
             <div
               {...slides.item(flatIndex.get(sec.id)!)}
@@ -206,7 +289,7 @@ export function SlidesPanel({
                 value={sec.label}
                 disabled={readOnly}
                 className="grow"
-                style={{ minHeight: 28, padding: '2px 6px' }}
+                style={{ minHeight: 26, padding: '2px 6px' }}
                 onChange={(e) =>
                   edit((q) =>
                     renameSection(
@@ -271,6 +354,8 @@ export function SlidesPanel({
             </div>
             {sec.slides.map((sl, i) => {
               const fi = flatIndex.get(sl.id)!;
+              const upMove = flatSlideMove(flat, fi, fi - 1);
+              const downMove = flatSlideMove(flat, fi, fi + 1);
               return (
                 <SlideItem
                   key={sl.id}
@@ -279,6 +364,25 @@ export function SlidesPanel({
                   index={i}
                   selected={sl.id === slideId}
                   readOnly={readOnly}
+                  onMoveUp={
+                    upMove
+                      ? () => edit((q) => moveSlide(q, upMove.slideId, upMove.sectionId, upMove.index))
+                      : undefined
+                  }
+                  onMoveDown={
+                    downMove
+                      ? () => edit((q) => moveSlide(q, downMove.slideId, downMove.sectionId, downMove.index))
+                      : undefined
+                  }
+                  onDuplicate={() => edit((q) => duplicateSlide(q, sl.id))}
+                  onNewLike={() => addSlideLike(sl.id)}
+                  onToggleHidden={(h) => setSlideHidden(sl.id, h)}
+                  onSplit={p.kind === 'song' ? () => edit((q) => splitSlide(q, sl.id)) : undefined}
+                  onMerge={p.kind === 'song' ? () => edit((q) => mergeWithNext(q, sl.id)) : undefined}
+                  onDelete={() => {
+                    edit((q) => deleteSlide(q, sl.id));
+                    selectSlide(undefined);
+                  }}
                   sort={{
                     item: slides.item(fi),
                     handle: slides.handle(fi),
@@ -299,175 +403,63 @@ export function SlidesPanel({
             )}
           </div>
         ))}
+
+        {/* Clean On-Demand Section Creator with Worship/Sermon Presets */}
         {!readOnly && (
-          <div className="col" style={{ marginTop: 8, gap: 4 }}>
-            <input
-              style={{ width: '100%', minWidth: 0 }}
-              placeholder={
-                p.kind === 'song'
-                  ? 'New section (Verse 2, Bridge…)'
-                  : p.kind === 'loop'
-                    ? 'New section (Events, Giving…)'
-                    : 'New section (Intro, Scripture…)'
-              }
-              value={newSection}
-              onChange={(e) => setNewSection(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && addNamedSection()}
-            />
-            <button type="button" className="small" style={{ width: '100%' }} onClick={addNamedSection}>
-              + Add section
-            </button>
+          <div className="col" style={{ marginTop: 6, gap: 6 }}>
+            {addingSection ? (
+              <div className="ed-add-sec-popover col" style={{ gap: 6 }}>
+                <div className="row wrap" style={{ gap: 4 }}>
+                  {SECTION_PRESETS[p.kind].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      className="small ghost"
+                      style={{ minHeight: 24, padding: '2px 7px', fontSize: 11 }}
+                      onClick={() => commitSection(preset)}
+                    >
+                      + {preset}
+                    </button>
+                  ))}
+                </div>
+                <div className="row" style={{ gap: 4 }}>
+                  <input
+                    autoFocus
+                    style={{ flex: 1, minWidth: 0 }}
+                    placeholder="Custom section name…"
+                    value={newSection}
+                    onChange={(e) => setNewSection(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitSection(newSection);
+                      else if (e.key === 'Escape') setAddingSection(false);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="small primary"
+                    disabled={!newSection.trim()}
+                    onClick={() => commitSection(newSection)}
+                  >
+                    Add
+                  </button>
+                  <button type="button" className="small ghost" onClick={() => setAddingSection(false)}>
+                    ✕
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="small ghost"
+                style={{ width: '100%', justifyContent: 'center' }}
+                onClick={() => setAddingSection(true)}
+              >
+                + Add section
+              </button>
+            )}
           </div>
         )}
       </div>
-
-      {!readOnly && slideId && (
-        <div
-          className="col ed-sel-slide-dock ed-sel-slide-card"
-          style={{
-            flexShrink: 0,
-            padding: '10px 10px 12px',
-            borderTop: '1px solid var(--line)',
-            background: 'var(--bg2)',
-            gap: 8,
-            boxSizing: 'border-box',
-            maxWidth: '100%',
-          }}
-        >
-          {/* Header: Slide index + Section tag + Compact reorder steppers + Delete */}
-          <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
-            <div className="row" style={{ alignItems: 'center', gap: 6, minWidth: 0 }}>
-              <span
-                className="bold"
-                style={{
-                  fontSize: 12,
-                  letterSpacing: '0.04em',
-                  textTransform: 'uppercase',
-                  color: 'var(--fg)',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                Slide {(selFlat ?? 0) + 1}
-              </span>
-              {selSection >= 0 && p.sections[selSection] && (
-                <span
-                  className="tag"
-                  style={{
-                    fontSize: 11,
-                    maxWidth: 85,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                  title={p.sections[selSection].label}
-                >
-                  {p.sections[selSection].short}
-                </span>
-              )}
-            </div>
-            <div className="row" style={{ alignItems: 'center', gap: 2, flexShrink: 0 }}>
-              <button
-                type="button"
-                className="ghost small"
-                disabled={!slideUp}
-                aria-label="Slide up"
-                title="Move slide up"
-                style={{ padding: '0 6px', minHeight: 24, minWidth: 24 }}
-                onClick={() =>
-                  slideUp && edit((q) => moveSlide(q, slideUp.slideId, slideUp.sectionId, slideUp.index))
-                }
-              >
-                ↑
-              </button>
-              <button
-                type="button"
-                className="ghost small"
-                disabled={!slideDown}
-                aria-label="Slide down"
-                title="Move slide down"
-                style={{ padding: '0 6px', minHeight: 24, minWidth: 24 }}
-                onClick={() =>
-                  slideDown &&
-                  edit((q) => moveSlide(q, slideDown.slideId, slideDown.sectionId, slideDown.index))
-                }
-              >
-                ↓
-              </button>
-              <button
-                type="button"
-                className="ghost small danger"
-                title="Delete slide"
-                aria-label="Delete slide"
-                style={{ padding: '0 6px', minHeight: 24, minWidth: 24, color: 'var(--red)' }}
-                onClick={() => {
-                  edit((q) => deleteSlide(q, slideId));
-                  selectSlide(undefined);
-                }}
-              >
-                🗑<span className="touch-label">Delete</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Primary actions: Duplicate and New slide like this */}
-          <div className="col" style={{ gap: 6 }}>
-            <button
-              type="button"
-              className="small"
-              style={{ width: '100%', justifyContent: 'center' }}
-              onClick={() => edit((q) => duplicateSlide(q, slideId))}
-              title="Duplicate this slide"
-            >
-              Duplicate
-            </button>
-            <button
-              type="button"
-              className="small"
-              style={{ width: '100%', justifyContent: 'center' }}
-              onClick={() => addSlideLike(slideId)}
-              title="A copy with its text cleared, to type a new verse or notice in the same look"
-              data-new-slide-like
-            >
-              New slide like this
-            </button>
-          </div>
-
-          {/* Visibility toggle */}
-          <HideSlideToggle hidden={!!selected?.hidden} onToggle={(h) => setSlideHidden(slideId, h)} />
-
-          {/* Lyric flow actions (Songs only) */}
-          {p.kind === 'song' && (
-            <div className="col" style={{ gap: 4, borderTop: '1px solid var(--line)', paddingTop: 6 }}>
-              <span
-                className="muted small bold"
-                style={{ fontSize: 10, letterSpacing: '0.04em', textTransform: 'uppercase' }}
-              >
-                Lyric flow
-              </span>
-              <div className="row" style={{ gap: 6 }}>
-                <button
-                  type="button"
-                  className="small grow"
-                  style={{ justifyContent: 'center' }}
-                  onClick={() => edit((q) => splitSlide(q, slideId))}
-                  title="Split the lyric text into two slides"
-                >
-                  ✂ Split
-                </button>
-                <button
-                  type="button"
-                  className="small grow"
-                  style={{ justifyContent: 'center' }}
-                  onClick={() => edit((q) => mergeWithNext(q, slideId))}
-                  title="Merge with the next slide"
-                >
-                  ⤹ Merge next
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -479,20 +471,23 @@ export function SlidesPanel({
 export function HideSlideToggle({
   hidden,
   onToggle,
+  compact = false,
 }: {
   hidden: boolean;
   onToggle: (hidden: boolean) => void;
+  compact?: boolean;
 }) {
   return (
     <button
       type="button"
       className={`small ed-vis-pill ${hidden ? 'is-hidden' : 'is-visible'}`}
       aria-pressed={hidden}
+      aria-label={hidden ? 'Hidden in service' : 'Visible in service'}
       onClick={() => onToggle(!hidden)}
       title={hidden ? 'Next skips this slide; a click in the slide grid shows it.' : 'Shown in the service.'}
       data-hide-slide
     >
-      {hidden ? 'Hidden in service' : 'Visible in service'}
+      {compact ? (hidden ? 'Hidden' : 'Visible') : hidden ? 'Hidden in service' : 'Visible in service'}
     </button>
   );
 }

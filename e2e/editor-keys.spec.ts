@@ -71,7 +71,9 @@ test('the editor by keyboard: radio arrows, Enter on buttons, Ctrl+Z after a for
     await clickObject(page, note);
     expect((await editorState(page)).objectId).toBe(note.id);
   }).toPass({ timeout: 15_000 });
-  const bar = page.getByRole('toolbar', { name: 'Text format' });
+  await page.getByRole('button', { name: 'More object options' }).click();
+  await page.locator('summary', { hasText: 'Lists, indents & paragraph spacing' }).click();
+  const bar = page.getByRole('toolbar', { name: 'Typography' });
   const bold = bar.getByRole('button', { name: 'Bold' });
   const field = page.locator('#ordo-text-editor');
 

@@ -1283,6 +1283,6 @@ describe('the Object panel and slide list actions', () => {
     open('s1');
     const { EditorView } = await import('../src/views/editor/EditorView.tsx');
     const out = html(createElement(EditorView, { id: ui.id }));
-    expect(out).toMatch(/<button type="button" title="Find and replace \(Ctrl\+F\)">Find…<\/button>/);
+    expect(out).toMatch(/<button type="button"[^>]*title="Find and replace \(Ctrl\+F\)">Find…<\/button>/);
   });
 });

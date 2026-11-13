@@ -234,6 +234,7 @@ test('replace the background on all slides with a picture of another aspect (the
 
     await openEditor(page, PORT, p.id);
     await openSlide(page, 1);
+    await page.getByRole('button', { name: 'Slide', exact: true }).click();
     const section = page.locator('[data-slide-background]');
     await expect(section).toContainText("The presentation's default");
     // All slides using it: the presentation's background, which every slide shows.

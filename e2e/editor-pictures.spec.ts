@@ -95,6 +95,8 @@ test('crop the church photo numerically and with the handles, mask, flip and rep
       await clickObject(page, photo);
       expect((await editorState(page)).objectId).toBe(photo.id);
     }).toPass({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'More object options' }).click();
+    await frames(page);
     const panel = page.locator('[data-crop-control]');
     await expect(panel).toBeVisible();
 
