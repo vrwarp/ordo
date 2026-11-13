@@ -60,7 +60,20 @@ Objects, in z-order, each selectable, movable, resizable, rotatable:
 - Undo and redo within an editing session; save creates a presentation revision
   ([prd/05](05-library-media-import.md), version history).
 - Keyboard: arrow nudges, Shift for 10 px, Ctrl+D duplicate, Delete, Ctrl+Z, Ctrl+Y,
-  Ctrl+S.
+  Ctrl+S. After editing a text box's words on the slide, Escape ends the editing and the keys act on the
+  box again (an arrow moves it, Delete deletes it, a second Escape drops the selection); they never edit
+  letters the volunteer cannot see. With Find and replace open the slide keeps every shortcut.
+- Typing Chinese, Japanese or Korean: the input method's candidate window opens by the text being typed,
+  and Escape or Enter while choosing a candidate belong to the input method (they do not end the editing,
+  jump to the next Find match or split a Lyric Script slide).
+- Find and replace is a card at the top right of the slide area, never over the slide list or the side
+  panel; clicking a match opens its slide and puts the words in editing on the slide with the match
+  selected.
+- The Background button in the top bar replaces the slide's background as the Slide panel's Replace…
+  does: on a slide imported from PowerPoint the picked picture or video shows (the slide's own PowerPoint
+  background is replaced), one undo step.
+- Readability choices on a song's lyrics (Clean, Shadow, Outline, Outline + shadow), from the bar over the
+  text or the side panel, stay as chosen when the song's theme changes.
 - Songs open in the Lyric Script on a desktop: each slide's words in a field, by section. Typing there
   keeps the slide's formatting: bold, italic and colours stay on their words, and automatic verse numbers
   and bullets stay automatic (they are never typed into the words). Split at Cursor (✂, Alt+Enter) cuts
