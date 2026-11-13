@@ -8,15 +8,20 @@ import {
   clickObject,
   editorHub,
   editorState,
+  frames,
   importDeck,
   M4_PORT,
   type Obj,
   openEditor,
   openSlide,
+  opOrigin,
   slidesOf,
 } from './editorhelpers.ts';
+import { uploadMedia } from './helpers.ts';
 import type { HubProcess } from './hubproc.ts';
-import { hubApi } from './linkhelpers.ts';
+import { hubApi, login } from './linkhelpers.ts';
+import { decodePng } from './png.ts';
+import { ffmpeg } from './pptxdecks.ts';
 
 /**
  * The canvas-first editor (#24: the Tune drawer closed by default, the floating bar, the hidden backing text
@@ -35,6 +40,10 @@ import { hubApi } from './linkhelpers.ts';
  *   types through sits at the caret on the stage, where the candidate window opens (before, at the window's
  *   bottom-left); Escape while composing cancels the composition, not inline editing; Enter in Find while
  *   composing confirms the candidate and does not jump to the next match.
+ * - b4: the top bar's Background on an imported slide shows the picked picture (the Slide panel's Replace…
+ *   for this slide); before, it set a background the slide's own PowerPoint background shape still covered.
+ * - b6: a contrast choice on a themed lyric, from the floating bar or the drawer, survives a theme change as
+ *   chosen; before, the floating bar's Soft shadow was dropped and the drawer's got the theme's outline back.
  * Port M4_PORT + 11.
  */
 const PORT = M4_PORT + 11;
@@ -292,4 +301,131 @@ test('an input method: the candidate window opens at the caret, Escape and Enter
   await input.press('Enter');
   await expect.poll(active).toBe(1);
   await cdp.detach();
+});
+
+/** The screen colour at a slide point (1920x1080), from a 1x1 screenshot of the canvas. */
+async function screenRgbAt(page: Page, x: number, y: number): Promise<[number, number, number]> {
+  const b = (await page.locator('.canvasbox .konvajs-content').first().boundingBox())!;
+  const clip = { x: Math.round(b.x + (x / 1920) * b.width), y: Math.round(b.y + (y / 1080) * b.height) };
+  const d = decodePng(await page.screenshot({ clip: { ...clip, width: 1, height: 1 } })).data;
+  return [d[0]!, d[1]!, d[2]!];
+}
+
+test('b4: the top bar’s Background shows the picked picture on an imported slide, one undo step', async ({
+  page,
+}) => {
+  const a = await hubApi(PORT);
+  const p = await importDeck(a, deck);
+  const s2 = slidesOf(p)[1]!;
+  expect(s2.objects[0]!.origin?.role, 'the imported white background is a bottom bg shape').toBe('bg');
+  const red = join(OUT, 'red-series-art.png');
+  ffmpeg(['-y', '-f', 'lavfi', '-i', 'color=c=red:s=1920x1080', '-frames:v', '1', '-pix_fmt', 'rgb24', red]);
+  await uploadMedia(a, red, 'image/png', true);
+
+  await openEditor(page, PORT, p.id);
+  await openSlide(page, 2);
+  const before = await screenRgbAt(page, 40, 1040);
+  await page.getByRole('button', { name: 'Background', exact: true }).click();
+  await page.getByRole('dialog').locator('.thumb', { hasText: 'red-series-art' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect
+    .poll(async () =>
+      slidesOf((await editorState(page)).draft!)[1]!.objects.some((o) => o.origin?.role === 'bg'),
+    )
+    .toBe(false);
+  await frames(page);
+  await expect
+    .poll(async () => {
+      const [r, g, b] = await screenRgbAt(page, 40, 1040);
+      return r > 200 && g < 60 && b < 60;
+    }, `the slide corner shows the red picture (it was ${before})`)
+    .toBe(true);
+  // One undo step puts the PowerPoint background back.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('Control+z');
+  await expect.poll(async () => slidesOf((await editorState(page)).draft!)[1]).toEqual(s2);
+});
+
+const SONG = `Contrast Test Song
+
+Verse 1
+Praise God from whom all blessings flow
+Praise Him all creatures here below
+
+Verse 2
+Praise Him above ye heavenly host
+Praise Father Son and Holy Ghost
+`;
+
+test('b6: a contrast choice on a themed lyric survives a theme change, from the floating bar and from the drawer', async ({
+  page,
+}) => {
+  const a = await hubApi(PORT);
+  // Two outline-only themes (no shadow), as a church's lower-third style is.
+  const base = await (await a.get('themes/theme-default')).json();
+  const { shadow: _s, ...outlineOnly } = base.text;
+  for (const [id, name] of [
+    ['theme-evening', 'Evening'],
+    ['theme-evening-2', 'Evening 2'],
+  ]) {
+    const r0 = await a.post('themes', { data: { ...base, id, name, rev: undefined, text: outlineOnly } });
+    expect(r0.ok(), await r0.text()).toBe(true);
+  }
+  const song = (await (await a.post('import/songselect', { data: { text: SONG } })).json()) as { id: string };
+  await login(page, opOrigin(PORT));
+  await page.evaluate((pid) => {
+    location.hash = `#/edit/${encodeURIComponent(pid)}`;
+  }, song.id);
+  await expect.poll(async () => (await editorState(page).catch(() => undefined))?.id).toBe(song.id);
+  type Rec = Parameters<typeof slidesOf>[0] & { themeId?: string };
+  const draft = async () => (await editorState(page)).draft as unknown as Rec;
+  const lyricOf = (q: Rec, i: number) => {
+    const sl = slidesOf(q)[i]!;
+    return { slide: sl, lyric: sl.objects.find((o) => o.id === sl.lyricObjectId || o.type === 'text')! };
+  };
+
+  await page.getByLabel('Theme:').selectOption('theme-evening');
+  await expect.poll(async () => (await draft()).themeId).toBe('theme-evening');
+  await page.getByRole('button', { name: 'Slide Canvas' }).click();
+  await expect(page.locator('.canvasbox canvas').first()).toBeVisible();
+
+  // Slide 1: Soft shadow from the floating bar's contrast menu.
+  await page.locator('.ed-slide').nth(0).click();
+  await frames(page);
+  const one = lyricOf(await draft(), 0);
+  await expect(async () => {
+    await clickObject(page, one.lyric);
+    expect((await editorState(page)).objectId).toBe(one.lyric.id);
+  }).toPass({ timeout: 15_000 });
+  const fbar = page.getByRole('toolbar', { name: 'Contextual format bar' });
+  await fbar.getByRole('button', { name: /^(Clean|Shadow|Outline|Heavy) ▾$/ }).click();
+  await page.getByRole('menuitem', { name: 'Shadow' }).click();
+  await expect.poll(async () => !!lyricOf(await draft(), 0).lyric.style?.shadow).toBe(true);
+
+  // Slide 2: Soft Shadow from the drawer's readability cards.
+  await page.locator('.ed-slide').nth(1).click();
+  await frames(page);
+  const two = lyricOf(await draft(), 1);
+  await expect(async () => {
+    await clickObject(page, two.lyric);
+    expect((await editorState(page)).objectId).toBe(two.lyric.id);
+  }).toPass({ timeout: 15_000 });
+  await page.getByRole('button', { name: 'More object options' }).click();
+  await page.getByRole('button', { name: /Soft Shadow/ }).click();
+  await expect.poll(async () => !!lyricOf(await draft(), 1).lyric.style?.shadow).toBe(true);
+  for (const i of [0, 1])
+    expect(new Set(lyricOf(await draft(), i).slide.overrides)).toEqual(
+      new Set(['style.outline', 'style.shadow']),
+    );
+
+  // The song's theme changes to Evening 2 (outline only): both lyrics keep a shadow and no outline.
+  await page.getByRole('button', { name: 'Lyric Script', exact: true }).click();
+  await page.getByLabel('Theme:').selectOption('theme-evening-2');
+  await expect.poll(async () => (await draft()).themeId).toBe('theme-evening-2');
+  const after = await draft();
+  for (const i of [0, 1]) {
+    const st = lyricOf(after, i).lyric.style ?? {};
+    expect(!!st.shadow, `slide ${i + 1} keeps its shadow`).toBe(true);
+    expect(st.outline, `slide ${i + 1} has no outline`).toBeUndefined();
+  }
 });

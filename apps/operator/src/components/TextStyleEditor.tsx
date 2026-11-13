@@ -62,7 +62,11 @@ const FONT_SIZES = [
  */
 export function TextStyleEditor(props: {
   value: TextStyle;
-  onChange: (s: TextStyle, key: keyof TextStyle) => void;
+  /**
+   * A change of field `key`; `also` names the other fields one choice set (a contrast card sets both the
+   * outline and the shadow), so a themed lyric box marks every one of them as its own.
+   */
+  onChange: (s: TextStyle, key: keyof TextStyle, also?: readonly (keyof TextStyle)[]) => void;
   marks?: Set<string>;
   /** Show the text box options (the Object panel). */
   box?: boolean;
@@ -294,7 +298,9 @@ export function TextStyleEditor(props: {
           <button
             type="button"
             className={`contrast-card-btn ${activeContrastMode === 'clean' ? 'active' : ''}`}
-            onClick={() => props.onChange({ ...s, outline: undefined, shadow: undefined }, 'outline')}
+            onClick={() =>
+              props.onChange({ ...s, outline: undefined, shadow: undefined }, 'outline', ['shadow'])
+            }
           >
             <span
               style={{ fontSize: 13.5, fontWeight: 700, color: '#fff', textAlign: 'center', lineHeight: 1.2 }}
@@ -317,6 +323,7 @@ export function TextStyleEditor(props: {
                   shadow: { dx: 0, dy: 4, blur: 12, color: { r: 0, g: 0, b: 0, a: 0.7 } },
                 },
                 'shadow',
+                ['outline'],
               )
             }
           >
@@ -348,6 +355,7 @@ export function TextStyleEditor(props: {
                   shadow: undefined,
                 },
                 'outline',
+                ['shadow'],
               )
             }
           >
@@ -378,6 +386,7 @@ export function TextStyleEditor(props: {
                   shadow: { dx: 0, dy: 4, blur: 12, color: { r: 0, g: 0, b: 0, a: 0.7 } },
                 },
                 'outline',
+                ['shadow'],
               )
             }
           >

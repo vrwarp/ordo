@@ -29,9 +29,10 @@ export interface ObjectSectionContext {
   /**
    * Changes the object as one step of the editor's history (`key` merges typing into one step); nothing
    * under the live lock, and only the box (`overridePath` 'box') of a locked object. `overridePath` marks
-   * a theme override on a themed lyric box.
+   * a theme override on a themed lyric box (several for a choice that sets several fields: a contrast
+   * choice sets both `style.outline` and `style.shadow`).
    */
-  set(fn: (x: SlideObject) => SlideObject, key?: string, overridePath?: string): void;
+  set(fn: (x: SlideObject) => SlideObject, key?: string, overridePath?: string | readonly string[]): void;
 }
 
 export interface ObjectSection {

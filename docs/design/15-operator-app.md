@@ -242,7 +242,18 @@ cells in place of the shape fields).
   and the verse superscripts (`baseline`) and paragraph styles, and drops the stored fit scale (the theme's
   box is fitted again). Formatting the lyric object of a themed presentation marks the slide's override
   `runs.<field>` (`runs.color`, `runs.sizeScale`, ...; `runs` keeps every one), so the next theme keeps it,
-  as `style.<field>` keeps a box style field.
+  as `style.<field>` keeps a box style field. A choice that sets several fields marks every one of them: each
+  contrast choice (the floating bar's Clean, Shadow, Outline and Heavy, `contrastChoice`; the drawer's four
+  readability cards, which name both fields through TextStyleEditor's `onChange(style, key, also)`) sets the
+  outline and the shadow and marks `style.outline` and `style.shadow`, so the next theme keeps exactly what
+  was chosen (before, the floating bar marked only the outline and a theme change dropped its Soft shadow;
+  the drawer's Soft Shadow got the theme's outline back).
+- The canvas-first top bar's Background (beside + Text, + Image, + Video and Shapes) is the Slide panel's
+  'Replace…' for this slide (`replaceBackgroundWith(slide, media, 'slide')`, one undo step, the picker asks
+  for media with a known size): on a slide imported from PowerPoint its bottom background shapes go and its
+  background picture is re-cropped to the new one, a video becomes the slide's motion background, so the
+  picked background shows on the canvas and the screens (before, it set `backgroundMediaId` under the
+  slide's own PowerPoint background shape, which still covered it).
 - Property panel bound to the selected object's schema.
 - Clipboard (`views/editor/ops/clipboard.ts`, `actions.ts`): text copied in ordo keeps its runs and
   paragraph styles (`data-ordo-rich`); HTML from other apps (Bible Gateway's verse numbers and red letters,

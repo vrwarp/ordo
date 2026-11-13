@@ -21,6 +21,7 @@ import {
   handleTextPaste,
   mayAdd,
   moveSelection,
+  replaceBackgroundWith,
   reorderSelection,
   tryPasteObjectsFromClipboard,
   ungroupSelection,
@@ -1133,17 +1134,13 @@ export function EditorView({ id }: { id: string }) {
           title="Choose slide background"
           kinds={['image', 'video']}
           backgroundsFirst
+          needsSize
           onClose={() => setBgPick(false)}
           onPick={(m) => {
-            change((q) => ({
-              ...q,
-              sections: q.sections.map((sec) => ({
-                ...sec,
-                slides: sec.slides.map((sl) =>
-                  sl.id === slide.id ? { ...sl, backgroundMediaId: m.id } : sl,
-                ),
-              })),
-            }));
+            // The Slide panel's Replace… for this slide (one undo step): an imported slide's bottom
+            // background shapes go, its background picture is re-cropped to the new one, a video becomes
+            // the slide's motion background (b4: writing backgroundMediaId left them drawn over it).
+            replaceBackgroundWith(slide.id, m, 'slide');
             setBgPick(false);
           }}
         />

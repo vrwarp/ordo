@@ -86,11 +86,17 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
     (slide?.lyricObjectId === o.id ||
       (!slide?.lyricObjectId && slide?.objects.find((x) => x.type === 'text')?.id === o.id));
   const themed = isLyric && !!draft?.themeId;
-  const set = (fn: (x: SlideObject) => SlideObject, key?: string, overridePath?: string) => {
-    if (liveLocked || (locked && overridePath !== 'box')) return;
+  const set = (
+    fn: (x: SlideObject) => SlideObject,
+    key?: string,
+    overridePath?: string | readonly string[],
+  ) => {
+    const paths =
+      overridePath === undefined ? [] : typeof overridePath === 'string' ? [overridePath] : overridePath;
+    if (liveLocked || (locked && !(paths.length === 1 && paths[0] === 'box'))) return;
     change((p) => {
       let q = updateObject(p, slideId, o.id, fn);
-      if (themed && overridePath) q = updateSlide(q, slideId, (s) => markOverride(s, overridePath));
+      if (themed && paths.length) q = updateSlide(q, slideId, (s) => paths.reduce(markOverride, s));
       return q;
     }, key);
   };
@@ -441,8 +447,12 @@ function TextStyleSection({ o: obj, readOnly, themed, marks, set }: ObjectSectio
         box
         onRefit={readOnly ? undefined : () => refit(o.id)}
         marks={themed ? (marks as Set<string>) : undefined}
-        onChange={(style: TextStyle, key) =>
-          set((x) => ({ ...x, style }) as SlideObject, `style:${o.id}:${String(key)}`, `style.${String(key)}`)
+        onChange={(style: TextStyle, key, also) =>
+          set(
+            (x) => ({ ...x, style }) as SlideObject,
+            `style:${o.id}:${String(key)}`,
+            [key, ...(also ?? [])].map((k) => `style.${String(k)}`),
+          )
         }
       />
     </fieldset>
