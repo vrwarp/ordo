@@ -11,57 +11,35 @@ import {
   rgbaToHsv,
 } from './colorMath.ts';
 import { useDeckSwatches } from './deckSwatches.ts';
+import {
+  activeColorOf,
+  addStop,
+  clampStop,
+  DEFAULT_SOLID,
+  MAX_GRAD_STOPS,
+  MIN_GRAD_STOPS,
+  moveStop,
+  type PaintMode,
+  type PaintValue,
+  paintMode,
+  removeStop,
+  setStopColor,
+  sortedGradient,
+  sortStopsKeeping,
+  switchPaintMode,
+  syncHsv,
+} from './paintStops.ts';
+
+export type { PaintMode, PaintValue } from './paintStops.ts';
 
 const POPOVER_WIDTH = 296;
 const POPOVER_EST_HEIGHT = 360;
 const VIEWPORT_PAD = 10;
-const MIN_GRAD_STOPS = 2;
-const MAX_GRAD_STOPS = 16;
 const ANGLE_CHIPS = [0, 90, 135] as const;
 
-export type PaintMode = 'none' | 'solid' | 'linear' | 'radial';
-
-export type PaintValue =
-  | { kind: 'none' }
-  | { kind: 'solid'; color: Rgba }
-  | { kind: 'gradient'; gradient: Gradient };
-
-function shadeColor(c: Rgba, f: number): Rgba {
-  return { r: Math.round(c.r * f), g: Math.round(c.g * f), b: Math.round(c.b * f), a: c.a };
-}
-
-function mixColors(a: Rgba, b: Rgba, t: number): Rgba {
-  const ch = (x: number, y: number) => Math.round(x + (y - x) * t);
-  return {
-    r: ch(a.r, b.r),
-    g: ch(a.g, b.g),
-    b: ch(a.b, b.b),
-    a: Math.round((a.a + (b.a - a.a) * t) * 1000) / 1000,
-  };
-}
-
-function sortGradientStops(stops: Gradient['stops']): Gradient['stops'] {
-  return [...stops].sort((a, b) => a.at - b.at);
-}
-
-function sampleGradientAt(stops: Gradient['stops'], at: number): Rgba {
-  const sorted = sortGradientStops(stops);
-  if (sorted.length === 0) return { r: 59, g: 130, b: 246, a: 1 };
-  if (at <= sorted[0]!.at) return sorted[0]!.color;
-  for (let i = 0; i + 1 < sorted.length; i++) {
-    const a = sorted[i]!;
-    const b = sorted[i + 1]!;
-    if (at <= b.at) {
-      const t = b.at > a.at ? (at - a.at) / (b.at - a.at) : 0;
-      return mixColors(a.color, b.color, t);
-    }
-  }
-  return sorted[sorted.length - 1]!.color;
-}
-
 export function gradientCssPreview(g: Gradient): string {
-  const stops = sortGradientStops(g.stops)
-    .map((s) => `${rgbaCss(s.color)} ${Math.round(s.at * 1000) / 10}%`)
+  const stops = sortStopsKeeping(g.stops, 0)
+    .stops.map((s) => `${rgbaCss(s.color)} ${Math.round(s.at * 1000) / 10}%`)
     .join(', ');
   if (g.kind === 'radial') return `radial-gradient(circle, ${stops})`;
   const deg = g.angle ?? 90;
@@ -88,6 +66,9 @@ export interface PaintPopoverProps {
  * - 2D HSV Saturation/Brightness canvas + Hue + Checkerboard Alpha sliders (bound to solid color OR active gradient stop!)
  * - Live `Deck & Theme Swatches` (`1-tap` squircles) + `Recent`
  * - Interactive `Gradient Ramp` + Angle presets (`0°`, `90°`, `135°`, `180°` + custom `°`) + single active-stop bar (`Stop N [#hex] [pos%] [+ / ×]`)
+ * Every paint and stop edit is one of paintStops.ts's pure functions (stops kept sorted, the stop being
+ * edited kept active, a mode switch keeping `center` and `scaled`); the sliders follow the colour shown by
+ * its value (`syncHsv`), so an unchanged colour never renders the popover again.
  */
 export function PaintPopover({
   anchor,
@@ -96,7 +77,7 @@ export function PaintPopover({
   alpha = true,
   swatches: explicitSwatches,
   preserveFocus = false,
-  defaultSolid = { r: 59, g: 130, b: 246, a: 1 },
+  defaultSolid = DEFAULT_SOLID,
   inline = false,
   onChange,
   onClose,
@@ -106,34 +87,26 @@ export function PaintPopover({
   const swatches = useDeckSwatches(explicitSwatches);
   const recent = getRecentColors();
 
-  const currentMode: PaintMode =
-    value.kind === 'none' ? 'none' : value.kind === 'solid' ? 'solid' : value.gradient.kind;
+  const currentMode: PaintMode = paintMode(value);
 
-  const stops = value.kind === 'gradient' ? value.gradient.stops : undefined;
   const [activeStopIdx, setActiveStopIdx] = useState(0);
-  const clampedStopIdx = stops ? Math.max(0, Math.min(stops.length - 1, activeStopIdx)) : 0;
+  const clampedStopIdx = value.kind === 'gradient' ? clampStop(value.gradient.stops, activeStopIdx) : 0;
 
-  const activeColor: Rgba =
-    value.kind === 'solid'
-      ? value.color
-      : value.kind === 'gradient'
-        ? (value.gradient.stops[clampedStopIdx]?.color ?? defaultSolid)
-        : defaultSolid;
+  const activeColor: Rgba = activeColorOf(value, clampedStopIdx, defaultSolid);
 
   const [hsv, setHsv] = useState(() => rgbaToHsv(activeColor));
   const [hexText, setHexText] = useState(() => rgbaHex(activeColor));
   const [pos, setPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
 
+  // Sync the sliders and the hex field from the colour shown, keyed on its value: a caller's (or the
+  // default's) new object of the same colour changes nothing, and syncHsv returns the same state when the
+  // colour is unchanged, so this never renders again by itself.
+  const { r: cr, g: cg, b: cb, a: ca } = activeColor;
   useEffect(() => {
-    const next = rgbaToHsv(activeColor);
-    setHsv((prev) => ({
-      h: next.s === 0 && next.v === 0 ? prev.h : next.s === 0 ? prev.h : next.h,
-      s: next.s,
-      v: next.v,
-      a: next.a,
-    }));
-    setHexText(rgbaHex(activeColor));
-  }, [activeColor]);
+    const c = { r: cr, g: cg, b: cb, a: ca };
+    setHsv((prev) => syncHsv(prev, c));
+    setHexText(rgbaHex(c));
+  }, [cr, cg, cb, ca]);
 
   // Reposition whenever mode changes (since gradient ramp adds height).
   // biome-ignore lint/correctness/useExhaustiveDependencies: currentMode changes popover height
@@ -183,10 +156,7 @@ export function PaintPopover({
   const emitColor = useCallback(
     (rgba: Rgba) => {
       if (value.kind === 'gradient') {
-        const nextStops = value.gradient.stops.map((s, idx) =>
-          idx === clampedStopIdx ? { ...s, color: rgba } : s,
-        );
-        onChange({ kind: 'gradient', gradient: { ...value.gradient, stops: nextStops } });
+        onChange({ kind: 'gradient', gradient: setStopColor(value.gradient, clampedStopIdx, rgba) });
       } else {
         onChange({ kind: 'solid', color: rgba });
       }
@@ -207,46 +177,9 @@ export function PaintPopover({
 
   const switchMode = (target: PaintMode) => {
     if (target === currentMode) return;
-    if (target === 'none') {
-      onChange({ kind: 'none' });
-      return;
-    }
-    if (target === 'solid') {
-      const c =
-        value.kind === 'gradient'
-          ? (value.gradient.stops[clampedStopIdx]?.color ?? value.gradient.stops[0]?.color ?? defaultSolid)
-          : value.kind === 'solid'
-            ? value.color
-            : defaultSolid;
-      onChange({ kind: 'solid', color: c });
-      return;
-    }
-    // Switching to 'linear' or 'radial'
-    if (value.kind === 'gradient') {
-      const g: Gradient =
-        target === 'linear'
-          ? {
-              kind: 'linear',
-              angle: value.gradient.kind === 'linear' ? (value.gradient.angle ?? 90) : 90,
-              stops: value.gradient.stops,
-            }
-          : { kind: 'radial', stops: value.gradient.stops };
-      onChange({ kind: 'gradient', gradient: g });
-    } else {
-      const base = value.kind === 'solid' ? value.color : defaultSolid;
-      const newStops = [
-        { at: 0, color: base },
-        { at: 1, color: shadeColor(base, 0.55) },
-      ];
-      setActiveStopIdx(0);
-      onChange({
-        kind: 'gradient',
-        gradient:
-          target === 'linear'
-            ? { kind: 'linear', angle: 90, stops: newStops }
-            : { kind: 'radial', stops: newStops },
-      });
-    }
+    const next = switchPaintMode(value, target, clampedStopIdx, defaultSolid);
+    setActiveStopIdx(next.active);
+    onChange(next.value);
   };
 
   const updateSvFromPointer = (clientX: number, clientY: number, record = false) => {
@@ -287,51 +220,27 @@ export function PaintPopover({
     emitColor(next);
   };
 
-  const setGradient = (g: Gradient) => {
-    onChange({ kind: 'gradient', gradient: { ...g, stops: sortGradientStops(g.stops) } });
+  /** Store a gradient edit (stops sorted) and keep its stop active. */
+  const applyStopEdit = (edit: { gradient: Gradient; active: number }) => {
+    setActiveStopIdx(edit.active);
+    onChange({ kind: 'gradient', gradient: edit.gradient });
   };
+
+  const setGradient = (g: Gradient) => applyStopEdit(sortedGradient(g, clampedStopIdx));
 
   const updateStopAt = (idx: number, rawAt: number) => {
     if (value.kind !== 'gradient') return;
-    const at = Math.max(0, Math.min(1, Math.round(rawAt * 1000) / 1000));
-    const targetObj = { ...value.gradient.stops[idx]!, at };
-    const nextStops = value.gradient.stops.map((s, j) => (j === idx ? targetObj : s));
-    const sorted = sortGradientStops(nextStops);
-    const newIdx = sorted.indexOf(targetObj);
-    if (newIdx >= 0) setActiveStopIdx(newIdx);
-    onChange({ kind: 'gradient', gradient: { ...value.gradient, stops: sorted } });
+    applyStopEdit(moveStop(value.gradient, idx, rawAt));
   };
 
   const addStopAt = (rawAt?: number) => {
-    if (value.kind !== 'gradient') return;
-    const cur = sortGradientStops(value.gradient.stops);
-    if (cur.length >= MAX_GRAD_STOPS) return;
-    let at = rawAt;
-    if (at === undefined) {
-      let widest = -1;
-      let best = 0;
-      for (let i = 0; i + 1 < cur.length; i++) {
-        const gap = cur[i + 1]!.at - cur[i]!.at;
-        if (gap > widest) {
-          widest = gap;
-          best = i;
-        }
-      }
-      at = ((cur[best]?.at ?? 0) + (cur[best + 1]?.at ?? 1)) / 2;
-    }
-    const clamped = Math.max(0, Math.min(1, Math.round(at * 1000) / 1000));
-    const newStop = { at: clamped, color: sampleGradientAt(cur, clamped) };
-    const sorted = sortGradientStops([...cur, newStop]);
-    const newIdx = sorted.indexOf(newStop);
-    if (newIdx >= 0) setActiveStopIdx(newIdx);
-    onChange({ kind: 'gradient', gradient: { ...value.gradient, stops: sorted } });
+    if (value.kind !== 'gradient' || value.gradient.stops.length >= MAX_GRAD_STOPS) return;
+    applyStopEdit(addStop(value.gradient, clampedStopIdx, rawAt));
   };
 
   const removeActiveStop = () => {
     if (value.kind !== 'gradient' || value.gradient.stops.length <= MIN_GRAD_STOPS) return;
-    const nextStops = value.gradient.stops.filter((_, j) => j !== clampedStopIdx);
-    setActiveStopIdx(Math.max(0, Math.min(nextStops.length - 1, clampedStopIdx)));
-    onChange({ kind: 'gradient', gradient: { ...value.gradient, stops: nextStops } });
+    applyStopEdit(removeStop(value.gradient, clampedStopIdx));
   };
 
   const modeLabel = (m: PaintMode) =>
@@ -601,18 +510,28 @@ export function PaintPopover({
                       style={{ left: `${s.at * 100}%`, background: rgbaCss(s.color) }}
                       onClick={(e) => {
                         e.stopPropagation();
+                        // The click that ends a drag lands on the pin the drag started on, which by now may
+                        // show another stop (pins are keyed by index): the dragged stop is already active.
+                        if (e.currentTarget.dataset.moved === '1') {
+                          delete e.currentTarget.dataset.moved;
+                          return;
+                        }
                         setActiveStopIdx(i);
                       }}
                       onPointerDown={(e) => {
                         setActiveStopIdx(i);
                         e.currentTarget.dataset.dragging = '1';
+                        delete e.currentTarget.dataset.moved;
                         e.currentTarget.setPointerCapture(e.pointerId);
                       }}
                       onPointerMove={(e) => {
                         if (e.currentTarget.dataset.dragging !== '1') return;
                         const r = e.currentTarget.parentElement?.getBoundingClientRect();
                         if (!r || r.width <= 0) return;
-                        updateStopAt(i, (e.clientX - r.left) / r.width);
+                        e.currentTarget.dataset.moved = '1';
+                        // The dragged stop is the active one (moveStop keeps it active when the stops
+                        // re-sort past each other), whichever pin index it has now.
+                        updateStopAt(clampedStopIdx, (e.clientX - r.left) / r.width);
                       }}
                       onPointerUp={(e) => {
                         delete e.currentTarget.dataset.dragging;
@@ -626,14 +545,12 @@ export function PaintPopover({
               </div>
 
               {/* Single Active-Stop Control Row: Stop N [■ #hex] [pos%] [+] [×] */}
-              <div
-                className="row paint-stop-bar"
-                style={{ gap: 4, alignItems: 'center', flexWrap: 'nowrap' }}
-              >
+              <div className="row paint-stop-bar" style={{ gap: 4, alignItems: 'center' }}>
                 <span className="muted small" style={{ whiteSpace: 'nowrap', minWidth: 38 }}>
                   Stop {clampedStopIdx + 1}
                 </span>
-                <span className="paint-stop-hex-wrap">
+                {/* A label, so a tap anywhere on the box (its swatch too) focuses the hex field. */}
+                <label className="paint-stop-hex-wrap">
                   <span className="paint-stop-swatch" style={{ background: rgbaCssString(activeColor) }} />
                   <input
                     type="text"
@@ -655,12 +572,8 @@ export function PaintPopover({
                       if (e.key === 'Enter') commitHex();
                     }}
                   />
-                </span>
-                <label
-                  className="color-pct-box"
-                  style={{ width: 54, flexShrink: 0 }}
-                  title="Stop position percentage"
-                >
+                </label>
+                <label className="color-pct-box paint-stop-pct" title="Stop position percentage">
                   <input
                     type="number"
                     min={0}

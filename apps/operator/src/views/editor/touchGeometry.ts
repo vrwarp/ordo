@@ -131,6 +131,9 @@ export function floatingBarSpot(
     maxX = Math.max(minX, Math.min(maxX, pane.w - opts.avoidTopRight.w - bar.w - 12));
   }
   const x = Math.round(Math.min(Math.max(minX, cx - bar.w / 2), maxX));
+  // Whatever the tier, the bar stays in the pane (an object dragged partly off the slide, a pane shorter
+  // than the bar's rows): `bar` is its measured size, which styles.css caps at the pane's width less 16 px.
+  y = Math.round(Math.min(Math.max(2, y), Math.max(2, pane.h - bar.h - 2)));
 
   return { x, y };
 }

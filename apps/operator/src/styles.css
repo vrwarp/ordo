@@ -976,7 +976,8 @@ table.list th {
   height: 100%;
   min-height: 0;
   flex: 1;
-  overflow: hidden;
+  /* clip, not hidden: focusing a control near an edge must never scroll the whole editor sideways. */
+  overflow: clip;
 }
 .editor > .toolbar {
   grid-column: 1 / -1;
@@ -2218,23 +2219,8 @@ button.ed-vis-pill.is-hidden {
 .editor.drawer-open {
   grid-template-columns: 224px minmax(0, 1fr) 316px;
 }
-@media (pointer: coarse) and (min-width: 1001px) {
-  .editor.canvas-first {
-    grid-template-columns: 224px minmax(0, 1fr);
-  }
-  .editor.drawer-open {
-    grid-template-columns: 224px minmax(0, 1fr) 300px;
-  }
-}
-@media (pointer: coarse) and (max-width: 1000px) {
-  .editor.canvas-first {
-    grid-template-columns: 210px minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-  .editor.canvas-first > .ed-slides {
-    grid-row: 2;
-  }
-}
+/* canvas-first and drawer-open are set for a fine pointer only (EditorView): a touch device keeps the docked
+   panel, so there are no coarse rules for them. */
 
 .ed-slideover-drawer {
   background: var(--bg2);
@@ -2264,8 +2250,11 @@ button.ed-vis-pill.is-hidden {
   font-size: 14px;
   font-weight: 700;
   color: var(--fg);
-  width: 190px;
-  max-width: 240px;
+  /* 190 px when there is room; on a narrow window it gives way (down to 64 px) before anything wraps. */
+  flex: 100 1 64px;
+  width: auto;
+  min-width: 64px;
+  max-width: 190px;
   text-overflow: ellipsis;
 }
 .ed-inline-title:hover:not(:disabled) {
@@ -2319,10 +2308,52 @@ button.ed-vis-pill.is-hidden {
   padding: 2px 9px;
 }
 
+/* The calm bar fits any window (r24 b7; design/15 "Top bar"): below ~1,250 px (~1,450 px for a song, whose
+   mode switch takes ~190 px) Slide, Presentation and Tune are one Panels menu and the title gives way; if it
+   still does not fit (a song at 1024 px, wider system fonts), the right zone wraps to a second row as one
+   unit, at the right. Nothing is ever cut off. */
+.editor > .toolbar.ed-toolbar-calm {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.ed-zone-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  margin-left: auto;
+}
+.ed-panels-menu {
+  display: none;
+}
+@media (max-width: 1249px) {
+  .editor > .toolbar.ed-toolbar-calm {
+    gap: 4px;
+  }
+  .ed-toolbar-calm .ed-panels-wide {
+    display: none;
+  }
+  .ed-toolbar-calm .ed-panels-menu {
+    display: inline-flex;
+  }
+}
+@media (max-width: 1449px) {
+  .ed-toolbar-calm.has-modes .ed-panels-wide {
+    display: none;
+  }
+  .ed-toolbar-calm.has-modes .ed-panels-menu {
+    display: inline-flex;
+  }
+}
+
 /* 3. Floating Contextual Formatting & Action Bar (Proposal B Core) */
+/* The bar fits its pane (r24 b9; design/15 "Floating bar"): its width is its one-row width, at most the pane's
+   less 8 px a side whatever its left offset (so SlideCanvas measures one size and floatingBarSpot clamps it
+   inside the pane), and a row wider than that wraps instead of running under the slide list or the drawer. */
 .ed-floating-bar {
   position: absolute;
   z-index: 30;
+  width: max-content;
   max-width: calc(100% - 16px);
   pointer-events: none;
 }
@@ -2331,7 +2362,9 @@ button.ed-vis-pill.is-hidden {
   display: flex;
   align-items: center;
   gap: 4px;
-  flex-wrap: nowrap;
+  row-gap: 4px;
+  flex-wrap: wrap;
+  max-width: 100%;
   background: rgba(20, 22, 28, 0.96);
   backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -2471,6 +2504,13 @@ button.ed-fbar-more {
   text-align: right;
   outline: none;
 }
+.paint-stop-bar {
+  flex-wrap: nowrap;
+}
+.paint-stop-pct {
+  width: 54px;
+  flex-shrink: 0;
+}
 .paint-stop-hex-wrap {
   flex: 1;
   min-width: 0;
@@ -2570,6 +2610,8 @@ details.ed-collapsible > summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* The tray toggle wraps under the pills in a narrow stage column (the drawer open at 1024 px). */
+  flex-wrap: wrap;
   gap: 8px;
   padding: 6px 12px;
   border-top: 1px solid var(--line);
@@ -2578,6 +2620,7 @@ details.ed-collapsible > summary {
 }
 .ed-lens-pills {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 3px;
   background: var(--bg2);
@@ -2846,11 +2889,13 @@ tr.rev-row-selected td {
 .ed-floating-stack {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  /* safe: a row wider than the bar starts at its left edge instead of spilling past both sides. */
+  align-items: safe center;
   gap: 4px;
 }
 .ed-floating-overflow {
   pointer-events: auto;
+  max-width: 100%;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -2861,4 +2906,108 @@ tr.rev-row-selected td {
   color: #fef3c7;
   font-size: 11.5px;
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+}
+
+/* Touch sizes for the canvas-first editor's controls (r24 b8; design/15 "Touch"): these class rules come after
+   the 44 px rule of the touch block above and beat it on specificity, so a touch device gets them back here.
+   The mouse layout keeps its compact sizes. */
+@media (pointer: coarse) {
+  .paint-mode-tab,
+  .ed-lens-pill,
+  .song-arr-jump,
+  .song-arr-rm {
+    min-height: 44px;
+  }
+  .ed-lens-pill {
+    padding: 2px 14px;
+  }
+  .song-arr-jump {
+    padding: 2px 12px;
+  }
+  .song-arr-rm {
+    min-width: 44px;
+  }
+  /* The selected slide card's actions: full-size buttons, wrapping in the narrow slide list. */
+  .ed-slide-inline-actions {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .ed-slide-inline-actions button.small {
+    min-height: 44px;
+    padding: 0 10px;
+    font-size: 13px;
+    flex: 1 1 auto;
+  }
+  /* The compact desktop controls the docked panel and the picker share, 44 px tall here. */
+  .editor button.ed-saved-pill,
+  .ed-save-rev-group button,
+  .ed-sec-head button.sec-delete-btn,
+  .ed-seg-bar button.small,
+  .ed-align-bar button.small,
+  .paint-angle-chip,
+  button.paint-icon-btn,
+  button.prop-toggle-btn {
+    min-height: 44px;
+  }
+  /* No hover on a touch screen: the section's move and delete buttons are always shown. */
+  .ed-sec-head button.sec-delete-btn {
+    opacity: 0.8;
+  }
+  /* And 44 px wide: the icon buttons (B, I, U, the aligns, the steppers, ✕) and the narrow number fields.
+     The named exceptions of e2e/ipad/touch-targets.spec.ts keep their size. The paint picker's fields sit
+     in boxed labels (a tap anywhere on the box focuses the field): the box is the 44 px target there. */
+  .editor
+    :is(
+      button,
+      select,
+      input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"])
+    ):not(.color-pill-chip):not(.color-swatch-btn):not(.grad-ramp-pin),
+  .color-popover button:not(.color-swatch-btn):not(.grad-ramp-pin),
+  .color-popover .color-pct-box,
+  .color-popover .paint-angle-input {
+    min-width: 44px;
+  }
+  .color-popover .color-pct-box,
+  .color-popover .paint-angle-input {
+    min-height: 44px;
+  }
+  /* The angle chips and field go under 'Gradient Ramp' when they do not fit beside it; the stop bar's
+     + and × go to a second line, at the right, so its hex and % fields keep room for 16 px text. */
+  .paint-grad-section > .row:first-child,
+  .paint-stop-bar {
+    flex-wrap: wrap;
+  }
+  .paint-stop-hex-wrap {
+    flex: 1 1 110px;
+  }
+  .paint-stop-pct {
+    width: auto;
+  }
+  .paint-stop-bar > button.paint-icon-btn:first-of-type {
+    margin-left: auto;
+  }
+  /* A section's name field keeps room to read; its move and delete buttons go to a second line. */
+  .ed-sec-head {
+    flex-wrap: wrap;
+  }
+  .ed-sec-head input {
+    flex: 1 1 64px;
+    min-width: 64px;
+  }
+  .ed-sec-head > .row {
+    margin-left: auto;
+  }
+}
+
+/* The top bar's Panels menu button looks like the drawer triggers it stands for (after every button rule). */
+.ed-panels-menu .menu > button {
+  min-height: 26px;
+  border: 0;
+  border-radius: 6px;
+  padding: 2px 9px;
+  font-size: 12px;
+  background: transparent;
+}
+.ed-panels-menu .menu > button.on {
+  background: #1e3a8a;
 }
