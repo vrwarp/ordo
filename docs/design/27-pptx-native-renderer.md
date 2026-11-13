@@ -801,7 +801,9 @@ edge Docker image and the Pages demo, so each M9 PR ships on its own:
   (`CONVERTER_VERSION` 2) with the same fields and the same sheet switch, one constant each in
   `@ordo/pptx-scene` `version.ts` (`M9_WRITES`, `M9_HELD_BACK`, `PPTX_SHEETS`; the client's `CLIENT_M9_WRITES`
   and `CLIENT_SHEETS` are the same values, and hub tests check both), and both build version 1 with one import
-  core (`@ordo/importers` `pptx-core.ts`). The M9 exit is measured on the client path.
+  core (`@ordo/importers` `pptx-core.ts`). The M9 exit is measured on the client path, and the fidelity
+  harness and its census convert with the same switches (`tools/pptx-fidelity` `native.ts`), so what they
+  measure is what an import stores.
 - **`M9_WRITES` is the kill switch.** A converter field stays out of it until its drawer is on main, and the
   drawer's PR turns it on: 'decor' (no decoration drawer until `decor-render`) and 'decorFile' are held back
   (`M9_HELD_BACK`), and pictures are drawn from no sheet (`PPTX_SHEETS` false). A field found wrong after a

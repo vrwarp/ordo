@@ -5,7 +5,10 @@
  * - `convertDeck` reads the deck with `extractZip` (XML in memory within the hub's budgets, everything else
  *   spilled to disk), runs `parseDeck` (picture sizes read from the spilled files' headers) and
  *   `emitSlides`, and writes `slides.json` plus the pictures the slides use, under generated names (a part
- *   name never becomes a path). It never throws: a deck the converter cannot read is a note.
+ *   name never becomes a path). It never throws: a deck the converter cannot read is a note. Every emission
+ *   converts with what an import stores (`@ordo/pptx-scene` `version.ts`: `M9_WRITES`, `PPTX_SHEETS`), so the
+ *   census, its ratchet and the drawings measure what the hub and the client parse ship; a field held back
+ *   until its drawer is on main (`M9_HELD_BACK`) is measured by adding it to `M9_WRITES` in a scratch run.
  * - `convertDeckIsolated` runs it in a worker thread with a heap limit and a timeout, as the hub's CPU pool
  *   will (design/27 §12): a deck that exhausts either is a note, and the run goes on.
  * - Each slide also gets its features (`features/`, from its own XML and the parts it names) and the
@@ -45,6 +48,7 @@ import {
   type Tier,
 } from '@ordo/pptx-scene';
 import type { FaceRequest } from '@ordo/renderer/text/types.ts';
+import { M9_WRITES, PPTX_SHEETS } from '@ordo/pptx-scene/version.ts';
 import { planLadder, provenanceStandIn, withoutFiles } from '@ordo/importers/pptx-ladder.ts';
 import { CONVERTER_VERSION, PPTX_LIMITS } from '../../../apps/hub/src/pptx/shared.ts';
 import type { Browser, Page } from '@playwright/test';
@@ -279,6 +283,8 @@ export async function convertDeck(
     const spilled = caseless(zip.onDisk);
     const fileOf = (part: string) => zip.onDisk.get(part) ?? spilled.get(part.toLowerCase());
     const scene = parseDeck(zip.files, {
+      m9Writes: M9_WRITES,
+      sheets: PPTX_SHEETS,
       pictureSize: (part) => spilledPictureSize(fileOf(part)),
       // Table rows grow to their text measured with the faces the page draws it with.
       fontFace: hostFace,
@@ -292,7 +298,7 @@ export async function convertDeck(
       if (id === undefined) geomIds.set(json, (id = `pptxgeom:${geomIds.size + 1}`));
       return id;
     };
-    const emitted: EmitResult = emitSlides(scene, { geomId });
+    const emitted: EmitResult = emitSlides(scene, { geomId, m9Writes: M9_WRITES, sheets: PPTX_SHEETS });
     out.emitMs = performance.now() - t0;
     const geoms = new Map(emitted.geoms.map((g) => [g.id, g]));
     out.slideRect = emitted.slideRect;
@@ -311,7 +317,7 @@ export async function convertDeck(
     let compatSlides: Map<number, Slide> | undefined;
     try {
       if (hits.size) {
-        const lo = emitSlides(scene, { loCompat: true, geomId });
+        const lo = emitSlides(scene, { loCompat: true, geomId, m9Writes: M9_WRITES, sheets: PPTX_SHEETS });
         for (const g of lo.geoms) if (!geoms.has(g.id)) geoms.set(g.id, g);
         compatSlides = new Map(lo.slides.map((s) => [s.index, still(s)] as const));
       }
@@ -327,6 +333,8 @@ export async function convertDeck(
           geomId,
           ...(opts.loCompat && hits.size ? { loCompat: true } : {}),
           libreoffice: false,
+          m9Writes: M9_WRITES,
+          sheets: PPTX_SHEETS,
         };
         const r = emitSlides(scene, o);
         for (const g of r.geoms) if (!geoms.has(g.id)) geoms.set(g.id, g);
