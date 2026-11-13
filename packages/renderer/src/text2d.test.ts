@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_LYRIC_STYLE,
+  firstText,
   LOOK_LOWER_THIRD,
   LOOK_STAGE,
   LOOK_STREAM,
@@ -8,6 +9,7 @@ import {
   type Slide,
   type TextObject,
 } from '@ordo/domain';
+import { m9Slide } from '@ordo/domain/m9.test-util.ts';
 import { clampStyle } from './clamp.ts';
 import { rasterLowerThird } from './raster.ts';
 import { LEGACY_FONT_ENV, installFontEnv } from './text/fonts.ts';
@@ -249,6 +251,30 @@ describe('look bands (design/27 §6)', () => {
       },
     };
     expect(lyricTextFor(s4, LOOK_STREAM, 'slides')).toBe('John 3:16\nFor God so loved the world...');
+  });
+
+  it("never puts a table's or a chart's text on a Bottom-Third strap (M9 extraText)", () => {
+    // The lobby and the stream with every presentation's text shown (by default only songs').
+    const withText = (l: Look): Look =>
+      ({ ...l, layers: { ...l.layers, slide: { ...l.layers.slide, nonSong: 'text' } } }) as Look;
+    const lobby = withText(LOOK_LOWER_THIRD);
+    const stream = withText(LOOK_STREAM);
+    const table = m9Slide().objects.find((o) => o.id === 'table')!;
+    const chart = m9Slide().objects.find((o) => o.id === 'chart')!;
+    const tableOnly: Slide = { id: 'tb', objects: [table] };
+    const chartOnly: Slide = { id: 'ch', objects: [chart] };
+    for (const look of [lobby, stream]) {
+      // The cell and label text are what the slide is known by in cue labels, never a strap.
+      expect(lyricTextFor(tableOnly, look, 'slides')).toBeNull();
+      expect(lyricTextFor(chartOnly, look, 'slides')).toBeNull();
+      expect(lyricTextFor(tableOnly, look, 'song')).toBeNull();
+      // Text of its own beside a table: that text; a strap the operator wrote: that.
+      const titled: Slide = { ...tableOnly, objects: [table, lyric('Order of service').objects[0]!] };
+      expect(lyricTextFor(titled, look, 'slides')).toBe('Order of service');
+      expect(lyricTextFor({ ...tableOnly, bottomThirdText: 'Welcome' }, look, 'slides')).toBe('Welcome');
+    }
+    // The cue label still reads the table (`firstText`).
+    expect(firstText(tableOnly)).toMatch(/^Time\tPart/);
   });
 
   it('sends the lower third through the rich engine for Hebrew text or a rich look style', () => {

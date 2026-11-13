@@ -431,7 +431,11 @@ SlidePptx  += { missing: string[] ≤ 16 of ≤ 40 }                   // '<kind
   `chartText`, `objectSearchText`; `extraFontFamilies` and `extraText`, which `referencedFontFamilies` and
   `scriptFontFamilies` read, so goLive ships the faces of table, chart and vector picture text;
   `drawnShapeFileRefs` (geometry and decoration files), which goLive's manifest uses. `palette.ts`:
-  `canonicalJson`, `Palette` (Map-deduped, capped) and `paletteIndex`.
+  `canonicalJson`, `Palette` (Map-deduped, capped) and `paletteIndex`. `firstText` reads a table's or a
+  chart's text for a slide with no text of its own (cue labels, thumbnails, search); a Bottom-Third strap
+  never does (`cues.ts` `strapText`, read by `lyricTextFor` and the Slide panel's default strap): the Lobby and
+  the Bottom-Third Stream show no band of tab-separated cells or chart labels, only the slide's own text, its
+  picture's or a strap the operator wrote (`bottomThirdText`).
 - **goLive**: a slide with `pptx.missing` goes live with a `degraded` entry naming what is left out
   (`missingSlideReason`: 'PowerPoint slide with something ordo cannot draw (a chart, …): it is left out',
   kind 'drawing'); a slide waiting for LibreOffice is reported as waiting instead.
