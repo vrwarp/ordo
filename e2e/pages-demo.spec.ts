@@ -65,6 +65,23 @@ test('the Pages demo runs with no hub: sample service, ProPresenter import, go l
   await expect(page.getByText('Amazing Grace', { exact: true }).first()).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText('Welcome loop', { exact: true }).first()).toBeVisible();
 
+  // Open an editor in the demo and verify Revision history loads visual snapshots without error.
+  await page.evaluate(async () => {
+    const res = await fetch('/api/v1/presentations');
+    const list = (await res.json()) as { id: string; title: string }[];
+    const grace = list.find((p) => p.title === 'Amazing Grace') ?? list[0]!;
+    location.hash = `#/edit/${encodeURIComponent(grace.id)}`;
+  });
+  await page.getByRole('button', { name: 'History' }).click();
+  const revDialog = page.getByRole('dialog');
+  await expect(revDialog.getByRole('heading', { name: 'Revision history' })).toBeVisible();
+  await expect(revDialog.getByText('Revision #2')).toBeVisible();
+  await expect(revDialog.locator('.rev-preview-thumb').first()).toBeVisible();
+  await revDialog.getByRole('cell', { name: '#1' }).click();
+  await expect(revDialog.getByText('Revision #1')).toBeVisible();
+  await revDialog.getByRole('button', { name: 'Close' }).click();
+  await expect(revDialog).toBeHidden();
+
   // ProPresenter import in the browser: a bundle ProPresenter exported, with its background picture.
   await page.evaluate(() => {
     location.hash = '#/library/import';

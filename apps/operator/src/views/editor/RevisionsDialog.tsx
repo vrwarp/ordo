@@ -7,7 +7,7 @@ import { Dialog } from '../../components/Dialog.tsx';
 import { useMediaLookup } from '../../hooks.ts';
 import { stillHash, useThumb } from '../../services/thumbs.ts';
 import { errorText, toast } from '../../state/toasts.ts';
-import { replaceBase } from './editorStore.ts';
+import { replaceBase, useEditor } from './editorStore.ts';
 
 function RevisionSlideThumb({ slide, p }: { slide: Slide; p: Presentation }) {
   const media = useMediaLookup();
@@ -34,6 +34,7 @@ export function RevisionsDialog({
   onClose: () => void;
   readOnly: boolean;
 }) {
+  const draft = useEditor((s) => s.draft);
   const [list, setList] = useState<RevisionInfo[]>();
   const [selectedRev, setSelectedRev] = useState<number>();
   const [preview, setPreview] = useState<Presentation>();
@@ -43,8 +44,9 @@ export function RevisionsDialog({
   useEffect(() => {
     api<RevisionInfo[]>(`/presentations/${id}/revisions`).then(
       (revs) => {
-        setList(revs);
-        if (revs[0]) setSelectedRev(revs[0].rev);
+        const items = Array.isArray(revs) ? revs : [];
+        setList(items);
+        if (items[0]) setSelectedRev(items[0].rev);
       },
       (e) => setErr(errorText(e)),
     );
@@ -56,22 +58,26 @@ export function RevisionsDialog({
     setPreviewLoading(true);
     api<Presentation>(`/presentations/${id}/revisions/${selectedRev}`).then(
       (p) => {
-        if (alive) {
+        if (!alive) return;
+        if (p && typeof p === 'object' && Array.isArray((p as Presentation).sections)) {
           setPreview(p);
-          setPreviewLoading(false);
+        } else if (draft?.id === id && draft?.rev === selectedRev) {
+          setPreview(draft);
+        } else {
+          setPreview(undefined);
         }
+        setPreviewLoading(false);
       },
       () => {
-        if (alive) {
-          setPreview(undefined);
-          setPreviewLoading(false);
-        }
+        if (!alive) return;
+        setPreview(draft?.id === id && draft?.rev === selectedRev ? draft : undefined);
+        setPreviewLoading(false);
       },
     );
     return () => {
       alive = false;
     };
-  }, [id, selectedRev]);
+  }, [id, selectedRev, draft]);
 
   const restore = async (rev: number) => {
     if (
@@ -92,7 +98,8 @@ export function RevisionsDialog({
     }
   };
 
-  const previewSlides = preview ? preview.sections.flatMap((sec) => sec.slides) : [];
+  const previewSections = Array.isArray(preview?.sections) ? preview.sections : [];
+  const previewSlides = previewSections.flatMap((sec) => (Array.isArray(sec.slides) ? sec.slides : []));
   const isCurrent = list?.[0]?.rev === selectedRev;
 
   return (
@@ -148,7 +155,7 @@ export function RevisionsDialog({
                     <strong>Revision #{preview.rev}</strong>
                     <div className="muted small">
                       “{preview.title}” · {previewSlides.length} slide{previewSlides.length === 1 ? '' : 's'}{' '}
-                      across {preview.sections.length} section{preview.sections.length === 1 ? '' : 's'}
+                      across {previewSections.length} section{previewSections.length === 1 ? '' : 's'}
                     </div>
                   </div>
                   {!isCurrent && selectedRev !== undefined && (
