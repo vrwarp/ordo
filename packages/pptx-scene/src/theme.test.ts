@@ -16,6 +16,7 @@ import {
   typefaceName,
 } from './theme.ts';
 import { parseXml, rootOf, type XNode } from './xml.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const parse = (s: string): XNode => rootOf(parseXml(s, 'test'))!;
 const theme = (s: string) => readTheme(parse(s));
@@ -266,6 +267,6 @@ describe('typeface names', () => {
       typefaceName(huge);
       themeFont(t, huge, 'Jpan');
     }
-    expect(performance.now() - t0).toBeLessThan(1_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(1_000));
   });
 });

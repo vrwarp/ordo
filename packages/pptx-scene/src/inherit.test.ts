@@ -25,6 +25,7 @@ import {
 import { openPackage } from './opc.ts';
 import { body, buildDeck, type DeckSpec, grpSp, para, run, sp } from './test-util.ts';
 import { child, path, type XNode } from './xml.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 function ctxOf(spec: DeckSpec, i = 0): SlideCtx {
   const pkg = openPackage(buildDeck(spec));
@@ -273,7 +274,7 @@ describe('bounded work on shared nodes', () => {
     const t0 = performance.now();
     const shape = sp({ id: 2, x: 0, y: 0, cx: 914_400, cy: 914_400, txBody: txt });
     const s = parseDeck(buildDeck({ defaultTextStyle: dts, slides: [{ shapes: shape }] })).slides[0]!;
-    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
     const text = (s.elements[0] as ShapeElement).text!;
     expect(text.paras).toHaveLength(2_000);
     expect(text.paras[1_999]!.bullet).toMatchObject({ kind: 'char', char: '»' });
@@ -283,7 +284,7 @@ describe('bounded work on shared nodes', () => {
     const path = `<a:custGeom><a:pathLst><a:path w="10" h="10">${'<a:close/>'.repeat(150_000)}</a:path></a:pathLst></a:custGeom>`;
     const t0 = performance.now();
     const s = inheriting(path);
-    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
     expect(s.elements).toHaveLength(1_000);
     expect(s.elements[999]).toMatchObject({ kind: 'shape', geom: 'custom' });
     expect((s.elements[999] as ShapeElement).coverage).toBeUndefined(); // over the bound: not rated
@@ -293,7 +294,7 @@ describe('bounded work on shared nodes', () => {
     const geom = `<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 5000"/>${'<a:x/>'.repeat(150_000)}</a:avLst></a:prstGeom>`;
     const t0 = performance.now();
     const s = inheriting(geom);
-    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
     expect(s.elements[999]).toMatchObject({ geom: 'roundRect', adj: [['adj', 5_000]] });
   });
 });

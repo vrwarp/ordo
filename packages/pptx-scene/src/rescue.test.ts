@@ -21,6 +21,7 @@ import {
   tableFrame,
   tc,
 } from './test-util.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const IN = 914_400;
 const enc = new TextEncoder();
@@ -165,6 +166,6 @@ describe('rescueDeck (M9 ladder)', () => {
         expect(Slide.safeParse(sl.slide).success).toBe(true);
       }
     }
-    expect(performance.now() - t0).toBeLessThan(20_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(20_000));
   });
 });

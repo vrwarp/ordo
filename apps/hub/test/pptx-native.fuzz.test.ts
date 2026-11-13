@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PptxNativeResult } from '../src/pptx/shared.ts';
 import { startHub, type TestHub, tempDir } from './helpers.ts';
 import { slidesOf, storeDeck, waitJob, zipDeck } from './pptx-helpers.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const IN = 914_400;
 const enc = new TextEncoder();
@@ -40,7 +41,7 @@ async function importFile(file: string, name = 'Deck.pptx'): Promise<Job> {
   const hash = await storeDeck(hub, file);
   const t0 = Date.now();
   const job = await waitJob(hub, hub.imports.pptx.queueNative(hash, name).id, 20_000);
-  expect(Date.now() - t0).toBeLessThan(5_000);
+  expect(Date.now() - t0).toBeLessThan(budgetMs(5_000));
   return job;
 }
 const importParts = async (parts: Map<string, Uint8Array>, name?: string) =>

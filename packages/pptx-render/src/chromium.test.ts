@@ -7,6 +7,7 @@ import pptxgen from 'pptxgenjs';
 import { afterAll, describe, expect, it } from 'vitest';
 import { annotatePptx } from './annotate.ts';
 import { renderWithPptxPreview } from './chromium.ts';
+import { budgetMs } from './timing.test-util.ts';
 
 /** A Chromium to drive: ORDO_TEST_CHROMIUM, else Playwright's when it is installed. */
 async function findChromium(): Promise<string | undefined> {
@@ -318,7 +319,7 @@ describe('renderWithPptxPreview (a stand-in browser)', () => {
         },
       }),
     ).rejects.toThrow(/timed out after/);
-    expect(performance.now() - t).toBeLessThan(5000);
+    expect(performance.now() - t).toBeLessThan(budgetMs(5000));
     expect(told?.aborted).toBe(true);
     expect(existsSync(join(dir, 'launched'))).toBe(false);
   }, 20_000);

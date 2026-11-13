@@ -18,7 +18,8 @@
     "bench": "tsx bench/raster.ts",
     "golden:compositor": "tsx golden/compositor-run.ts",
     "bench:sprites": "tsx bench/sprites.ts",
-    "bench:gpu": "tsx bench/gpu-venue.ts"
+    "bench:gpu": "tsx bench/gpu-venue.ts",
+    "bench:tables": "tsx bench/tables.ts"
   },
   "dependencies": {
     "@ordo/domain": "workspace:*",

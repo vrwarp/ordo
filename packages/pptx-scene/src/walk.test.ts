@@ -19,6 +19,7 @@ import {
 } from './test-util.ts';
 import { alternateBranch, boxAffine, MAX_SHAPES_PER_SLIDE, pathCoverage } from './walk.ts';
 import { parseXml, rootOf } from './xml.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const IN = 914_400;
 const SLIDE = { cx: 12_192_000, cy: 6_858_000 };
@@ -494,7 +495,7 @@ describe('groups', () => {
     const many = slideOf({ slides: [{ shapes: rect(2, 0, 'FF0000').repeat(MAX_SHAPES_PER_SLIDE + 1) }] });
     expect(many.elements).toHaveLength(MAX_SHAPES_PER_SLIDE);
     expect(many.notes.join(' ')).toMatch(/more than 5000 shapes/);
-    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
   });
 });
 
@@ -593,7 +594,7 @@ describe('custom geometry coverage', () => {
     const many = geom(closes);
     expect(pathCoverage(many)).toBeUndefined();
     expect(pathCoverage(many)).toBeUndefined(); // memoised
-    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
   });
 
   it('records the coverage on custom shapes', () => {

@@ -14,6 +14,7 @@ import {
   XML_MAX_DEPTH,
   type XNode,
 } from './xml.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const root = (xml: string) => rootOf(parseXml(xml, 'test.xml'))!;
 
@@ -115,7 +116,7 @@ describe('parseXml', () => {
     decodeEntities('&#x'.repeat(500_000));
     parseXml(`<a v="${'&amp'.repeat(500_000)}">${'&'.repeat(1_000_000)}</a>`, 'x');
     expect(startTags(`${'<a:t'.repeat(200_000)}`, 'a:t')).toEqual([]);
-    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(5_000));
   });
 });
 
@@ -160,6 +161,6 @@ describe('num', () => {
     const huge = '1'.repeat(7_000_000);
     const t0 = performance.now();
     for (let i = 0; i < 10_000; i++) expect(num(huge)).toBeUndefined();
-    expect(performance.now() - t0).toBeLessThan(1_000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(1_000));
   });
 });

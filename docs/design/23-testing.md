@@ -59,6 +59,17 @@ With `ORDO_E2E_REAL_GPU=1`, for a run on a real GPU without the SwiftShader flag
 (17 ms) between outputs and 50 ms after the scheduled time. Lateness against the key press itself is not
 asserted end to end; the soak test reports late flips per output from the outputs' own counters.
 
+Wall-clock bounds in unit tests (a parser, a layout or an import "within 5 s" on hostile input) show that the
+work stays linear and never runs away; they are not performance budgets. A bound is written as the budget
+on a developer machine through `budgetMs` (`packages/domain/src/timing.test-util.ts`): three times that on
+CI (`CI` set), whose 2-core runner is about three times slower for CPU-bound work, or the factor in
+`ORDO_TEST_TIME_SCALE` on a machine shared with other jobs. Bounds that test the product's own timeouts (a
+library that did not answer within its wait, a socket closed within its grace) are not scaled. Frame and
+task budgets (design/27 §13: a 50 ms asset-worker task) are gated by the benches, on a known machine, not
+by vitest: `bench:slides --check` for slide rasters and `bench:tables` for the table object's prepare
+slices and draw (median of five runs under 50 ms); the vitest side of those (`table.browser.test.ts`)
+bounds only a runaway at ten times the task.
+
 `e2e/slide-media.spec.ts` covers video and sound playing in place in a slide (design/27 §14.12) on two
 outputs: Audience 1 on WebGPU (`?renderer=webgpu`) and the audio master, Audience 2 on Canvas 2D. It probes
 the pixels of a turned, rounded clip box under a title band (clip inside the mask, backdrop outside it, the

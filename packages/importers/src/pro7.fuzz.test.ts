@@ -11,6 +11,7 @@ import { importPro7 } from './pro7.ts';
 import { pro7Type } from './proto.ts';
 import { REAL_RTF } from './fuzz-fixtures.test-util.ts';
 import { IMPORT_LIMITS } from './sanitize.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const enc = new TextEncoder();
 const dbl = fc.oneof(
@@ -765,7 +766,7 @@ describe('importPro7 regressions found by fuzzing', () => {
     ]);
     const t0 = Date.now();
     checkResult(importPro7(files([['a.pro', encodeAs('rv.data.Presentation', doc)], ...many])));
-    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(Date.now() - t0).toBeLessThan(budgetMs(3000));
   });
 
   it('textLineMask with hostile offsets, styles, and fill/gradient combinations never throws and passes schema', () => {

@@ -5,6 +5,7 @@ import { noteList } from './log.ts';
 import { NS } from './markup.ts';
 import { openPackage, type PartSource } from './opc.ts';
 import { buildDeck, type SlideSpec, solidBg } from './test-util.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const enc = (s: string) => new TextEncoder().encode(s);
 const dec = (b: Uint8Array | undefined) => new TextDecoder().decode(b);
@@ -15,7 +16,7 @@ const P14_SECTIONS = '{521415D9-36F7-43E2-AB2F-B90AF26B5E84}';
 function within<T>(ms: number, f: () => T): T {
   const t0 = performance.now();
   const v = f();
-  expect(performance.now() - t0).toBeLessThan(ms);
+  expect(performance.now() - t0).toBeLessThan(budgetMs(ms));
   return v;
 }
 

@@ -9,6 +9,7 @@ import {
   UNDERSTOOD_NAMESPACES,
 } from './markup.ts';
 import { parseXml, rootOf, type XNode } from './xml.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const MC = NS.mc;
 const PLAIN: NormalizeOptions = { strict: false, percents: false };
@@ -244,6 +245,6 @@ describe('mc:AlternateContent', () => {
     expect(deep.name).toBe('p:a');
     const nested = `<mc:AlternateContent xmlns:mc="${MC}"><mc:Choice Requires="p14">`.repeat(200);
     read(`<p:x xmlns:p="${NS.p}">${nested}${'</mc:Choice></mc:AlternateContent>'.repeat(200)}</p:x>`);
-    expect(performance.now() - t0).toBeLessThan(5000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(5000));
   });
 });

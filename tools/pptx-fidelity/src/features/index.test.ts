@@ -11,6 +11,7 @@ import {
   xmlFeatureOrder,
 } from './index.ts';
 import { relatedTargets, resolveTarget } from './xml.ts';
+import { budgetMs } from '@ordo/domain/timing.test-util.ts';
 
 const shape = (txBody: string) => sp({ id: 2, x: 0, y: 0, cx: 100, cy: 100, txBody });
 const parts = (m: Record<string, string>) => (name: string) => m[name] ?? '';
@@ -103,6 +104,6 @@ describe('the feature registry', () => {
     expect(relatedTargets('ppt/slides/slide1.xml', hostile, '/chart')).toEqual([]);
     const many = '<Relationship Type="x/chart" Target="c.xml"/>'.repeat(50_000);
     expect(relatedTargets('ppt/slides/slide1.xml', many, '/chart')).toEqual(['ppt/slides/c.xml']);
-    expect(performance.now() - t0).toBeLessThan(2000);
+    expect(performance.now() - t0).toBeLessThan(budgetMs(2000));
   });
 });
