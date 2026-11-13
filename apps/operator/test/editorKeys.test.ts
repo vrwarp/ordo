@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { notChoosable } from '../src/views/editor/BackgroundPicker.tsx';
 import {
+  composing,
   historyKey,
   isTypingTarget,
   keyPlace,
@@ -187,5 +188,15 @@ describe('the hidden backing text field gives the keys back when inline editing 
     expect(visible.blurred()).toBe(0);
     expect(releaseBackingField({ activeElement: null })).toBe(false);
     expect(releaseBackingField(undefined)).toBe(false);
+  });
+});
+
+describe('keys an input method is composing with are left to it (composing)', () => {
+  it('reads isComposing, a React event’s nativeEvent, and the 229 key code', () => {
+    expect(composing({ isComposing: true })).toBe(true);
+    expect(composing({ nativeEvent: { isComposing: true } })).toBe(true);
+    expect(composing({ keyCode: 229 })).toBe(true);
+    expect(composing({ isComposing: false, keyCode: 27, nativeEvent: { isComposing: false } })).toBe(false);
+    expect(composing({})).toBe(false);
   });
 });

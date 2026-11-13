@@ -327,7 +327,13 @@ cells in place of the shape fields).
   floating bar type and format through; when inline editing ends (Escape, a click away) and that field
   still has the focus, it is blurred (`releaseBackingField`), so the next ArrowRight nudges the box, Delete
   deletes it and Escape drops the selection, instead of moving an invisible caret or deleting letters
-  nobody sees.
+  nobody sees. The backing field sits on the stage at the caret (`caretOnSlide` × the stage scale, turned
+  with its box), so an input method's candidate window opens by the text being typed. Keys an input method
+  is composing with (Chinese, Japanese, Korean: `isComposing`, or key code 229) are its own in every editor
+  key handler (`composing`, editorKeys.ts: the inline editor, the backing field, the Object panel's text
+  field, the typography card's shortcuts, Find's Enter and Escape, the Lyric Script's Alt+Enter): Escape
+  cancels a candidate without ending inline editing, Enter confirms it without jumping to the next match or
+  splitting a slide, and the arrows choose a candidate.
 - Groups and locked objects (design/27 §11 item 5 and "Locked objects"; pure ops in `views/editor/ops/group.ts`,
   the panel's parts in `GroupPanel.tsx`). The selection is a set of objects with a primary one, which the
   Object panel edits. A click on an object of a group (`origin.group`: a flattened PowerPoint group, or a

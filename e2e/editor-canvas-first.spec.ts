@@ -31,6 +31,10 @@ import { hubApi } from './linkhelpers.ts';
  * - Find's match row starts inline editing at the match on the canvas (before, it focused the hidden field,
  *   so what was typed edited the match with no caret on screen), and the card is docked in the stage pane,
  *   clear of the open Tune drawer's tabs (before, it was fixed over them).
+ * - An input method (Chrome's IME through CDP Input.imeSetComposition): the hidden text field the canvas
+ *   types through sits at the caret on the stage, where the candidate window opens (before, at the window's
+ *   bottom-left); Escape while composing cancels the composition, not inline editing; Enter in Find while
+ *   composing confirms the candidate and does not jump to the next match.
  * Port M4_PORT + 11.
  */
 const PORT = M4_PORT + 11;
@@ -218,4 +222,74 @@ test("Find: a match row starts inline editing there; the card is docked in the s
   expect((await editorState(page)).objectId).toBe(note.id);
   await page.keyboard.press('Escape');
   await expect.poll(async () => (await editorState(page)).objectId).toBeUndefined();
+});
+
+test('an input method: the candidate window opens at the caret, Escape and Enter while composing are its own', async ({
+  page,
+}) => {
+  const a = await hubApi(PORT);
+  const p = await importDeck(a, deck);
+  const note = noteOf(p);
+  await openEditor(page, PORT, p.id);
+  await openSlide(page, 2);
+  await expect(async () => {
+    await clickObject(page, note);
+    expect((await editorState(page)).objectId).toBe(note.id);
+  }).toPass({ timeout: 15_000 });
+  const at = await canvasPoint(page, note.box.x + 40, note.box.y + 30);
+  await page.mouse.dblclick(at.x, at.y);
+  await expect.poll(() => inlineEditing(page)).toBe(1);
+  const field = page.locator('#ordo-text-editor');
+  await expect(field).toBeFocused();
+
+  // The field the canvas types through (where the IME anchors its window) is on the stage, by the text.
+  const stage = (await page.locator('.canvasbox .konvajs-content').first().boundingBox())!;
+  const f = (await field.boundingBox())!;
+  const noteTop = await canvasPoint(page, note.box.x, note.box.y);
+  const noteEnd = await canvasPoint(page, note.box.x + note.box.w, note.box.y + note.box.h);
+  expect(f.x).toBeGreaterThanOrEqual(Math.floor(noteTop.x) - 1);
+  expect(f.x).toBeLessThanOrEqual(Math.ceil(noteEnd.x) + 1);
+  expect(f.y).toBeGreaterThanOrEqual(Math.floor(noteTop.y) - 1);
+  expect(f.y).toBeLessThanOrEqual(Math.ceil(noteEnd.y) + 1);
+  expect(f.y + f.height).toBeLessThanOrEqual(stage.y + stage.height + 1);
+
+  // Escape while composing belongs to the input method: inline editing goes on, and the word is kept.
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.imeSetComposition', { text: 'にほ', selectionStart: 2, selectionEnd: 2 });
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  expect(await inlineEditing(page)).toBe(1);
+  await cdp.send('Input.insertText', { text: '日本' });
+  await expect
+    .poll(async () => (await slideObjects(page)).find((o) => o.id === note.id)?.text)
+    .toContain('日本');
+  // Without a composition, Escape ends inline editing.
+  await page.keyboard.press('Escape');
+  await expect.poll(() => inlineEditing(page)).toBe(0);
+
+  // Enter in Find while composing confirms the candidate: the active match stays.
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Control+f');
+  const card = page.getByRole('dialog').filter({ hasText: 'Find and replace' });
+  const input = card.getByLabel('Find', { exact: true });
+  await input.fill('the');
+  await expect.poll(async () => card.locator('[data-find-row]').count()).toBeGreaterThan(1);
+  const active = () =>
+    card
+      .locator('[data-find-row]')
+      .evaluateAll((rows) => rows.findIndex((r) => r.classList.contains('active')));
+  await input.press('End');
+  await cdp.send('Input.imeSetComposition', { text: ' ', selectionStart: 1, selectionEnd: 1 });
+  await expect(input).toHaveValue('the ');
+  await expect.poll(async () => card.locator('[data-find-row]').count()).toBeGreaterThan(1);
+  expect(await active()).toBe(0);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(300);
+  expect(await active()).toBe(0);
+  // Once the candidate is confirmed, Enter goes to the next match.
+  await cdp.send('Input.insertText', { text: ' ' });
+  await expect(input).toHaveValue('the ');
+  await input.press('Enter');
+  await expect.poll(active).toBe(1);
+  await cdp.detach();
 });

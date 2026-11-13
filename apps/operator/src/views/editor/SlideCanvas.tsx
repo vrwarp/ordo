@@ -11,6 +11,7 @@ import {
   type TextObject,
 } from '@ordo/domain';
 import {
+  caretPosition,
   drawImageFit,
   drawObject,
   drawTextEditingOverlay,
@@ -46,7 +47,7 @@ import {
   undo,
   useEditor,
 } from './editorStore.ts';
-import { BACKING_FIELD, historyKey, releaseBackingField } from './editorKeys.ts';
+import { BACKING_FIELD, composing, historyKey, releaseBackingField } from './editorKeys.ts';
 import { barState, shortcutOf, togglePatch } from './FormatBar.tsx';
 import { refocusText, textField } from './formatControls.tsx';
 import {
@@ -170,6 +171,37 @@ function moveObjectCaretVertically(
     return moveCaretVertically(ctx, unrotatedFor(o), offset, dir, preferredX);
   }
   return moveCaretVertically(ctx, { ...o, box: local(o.box) }, offset, dir, preferredX);
+}
+
+/**
+ * The caret of text object `o` at `offset` in slide units, turned with its box: the point and height where an
+ * input method's candidate window should open (the hidden backing text field sits there).
+ */
+export function caretOnSlide(o: TextObject, offset: number): { x: number; y: number; h: number } {
+  const ctx = getMeasureCtx();
+  const b = o.box;
+  let lx: number;
+  let ly: number;
+  let h: number;
+  if (isRichText(o)) {
+    const c = caretPosition(ctx, unrotatedFor(o), offset);
+    lx = c.x - b.x;
+    ly = c.y - b.y;
+    h = c.height;
+  } else {
+    const c = caretPosition(ctx, { ...o, box: local(b) }, offset);
+    lx = c.x;
+    ly = c.y;
+    h = c.height;
+  }
+  const a = ((b.rotation ?? 0) * Math.PI) / 180;
+  const dx = lx - b.w / 2;
+  const dy = ly - b.h / 2;
+  const x = b.x + b.w / 2 + dx * Math.cos(a) - dy * Math.sin(a);
+  const y = b.y + b.h / 2 + dx * Math.sin(a) + dy * Math.cos(a);
+  return Number.isFinite(x) && Number.isFinite(y)
+    ? { x, y, h: Number.isFinite(h) ? h : 0 }
+    : { x: b.x, y: b.y, h: 0 };
 }
 
 /**
@@ -897,7 +929,11 @@ export function SlideCanvas(props: {
           )}
         </Stage>
         {!props.hasExternalTextEditor && backingTextObj && (
-          <CanvasBackingTextEditor obj={backingTextObj} readOnly={props.readOnly} />
+          <CanvasBackingTextEditor
+            obj={backingTextObj}
+            readOnly={props.readOnly}
+            at={backingAt(backingTextObj, textRange.caret, scale, size)}
+          />
         )}
         {editingObj && (
           <CanvasTextEditor
@@ -935,6 +971,26 @@ export function SlideCanvas(props: {
   );
 }
 
+/**
+ * The hidden backing field's place in the stage container: at the caret of `o` (`caretOnSlide` × the stage
+ * scale), kept inside the stage, so the IME's candidate window opens by the text being typed, not at the
+ * window's bottom-left corner.
+ */
+function backingAt(
+  o: TextObject,
+  caret: number,
+  scale: number,
+  size: { w: number; h: number },
+): { left: number; top: number; height: number } {
+  const c = caretOnSlide(o, Math.max(0, Math.min(o.text.length, caret)));
+  const height = Math.max(1, Math.min(size.h, c.h * scale));
+  return {
+    left: Math.max(0, Math.min(size.w - 1, c.x * scale)),
+    top: Math.max(0, Math.min(size.h - height, c.y * scale)),
+    height,
+  };
+}
+
 /** Sync the backing `#ordo-text-editor` textarea's focus and selection with `[start, end)` and `caret`. */
 function syncBackingTextarea(start: number, end: number, caret: number): void {
   const el = textField();
@@ -952,7 +1008,16 @@ function syncBackingTextarea(start: number, end: number, caret: number): void {
  * formatting shortcuts (`Ctrl/Cmd + B/I/U`), undo/redo selection preservation, and rich clipboard paste work
  * identically without opening the drawer.
  */
-export function CanvasBackingTextEditor({ obj, readOnly }: { obj: TextObject; readOnly: boolean }) {
+export function CanvasBackingTextEditor({
+  obj,
+  readOnly,
+  at = { left: 0, top: 0, height: 1 },
+}: {
+  obj: TextObject;
+  readOnly: boolean;
+  /** Where it sits in the stage container (px): at the caret, so an input method's window opens there. */
+  at?: { left: number; top: number; height: number };
+}) {
   const off = readOnly || isLocked(obj);
   return (
     <textarea
@@ -962,11 +1027,15 @@ export function CanvasBackingTextEditor({ obj, readOnly }: { obj: TextObject; re
       value={obj.text}
       disabled={readOnly}
       style={{
-        position: 'fixed',
-        left: 0,
-        bottom: 0,
+        position: 'absolute',
+        left: at.left,
+        top: at.top,
         width: 1,
-        height: 1,
+        height: at.height,
+        fontSize: at.height,
+        lineHeight: 1,
+        resize: 'none',
+        overflow: 'hidden',
         opacity: 0.01,
         pointerEvents: 'none',
         padding: 0,
@@ -980,6 +1049,7 @@ export function CanvasBackingTextEditor({ obj, readOnly }: { obj: TextObject; re
         setTextRange({ start, end, caret });
       }}
       onKeyDown={(e) => {
+        if (composing(e)) return;
         const step = historyKey(e);
         if (step) {
           e.preventDefault();
@@ -1093,6 +1163,8 @@ function CanvasTextEditor({
     const el = textField();
     if (!el) return;
     const onKeyDown = (e: KeyboardEvent) => {
+      // The input method's keys (a candidate chosen with the arrows, Escape cancelling it) are its own.
+      if (composing(e)) return;
       if (e.key === 'Escape') {
         e.preventDefault();
         onCommit();

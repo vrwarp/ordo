@@ -4,6 +4,7 @@ import { Menu } from '../../components/Menu.tsx';
 import { authoringArrangement } from '../../lib/arrangement.ts';
 import { useLibrary } from '../../state/library.ts';
 import { BackgroundPicker } from './BackgroundPicker.tsx';
+import { composing } from './editorKeys.ts';
 import { change, selectSlide, useEditor } from './editorStore.ts';
 import { LookPreviews } from './LookPreviews.tsx';
 import { applyTheme, newSlideFor, resetSlideToTheme, type TextPiece, themeOf, updateSlide } from './ops.ts';
@@ -500,7 +501,7 @@ export function SongReflowEditor(props: {
                         }}
                         onFocus={() => selectSlide(slide.id)}
                         onKeyDown={(e) => {
-                          if (e.altKey && e.key === 'Enter') {
+                          if (!composing(e) && e.altKey && e.key === 'Enter') {
                             e.preventDefault();
                             splitAtCursor(slide.id);
                           }

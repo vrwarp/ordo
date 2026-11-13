@@ -55,6 +55,21 @@ export function keyPlace(
   return 'control';
 }
 
+/**
+ * A key pressed while an input method composes (Chinese, Japanese or Korean candidates): `isComposing`
+ * (also on a React event's `nativeEvent`), or the 229 key code browsers give such keys (Safari, Chrome on
+ * Windows). Every editor key handler leaves these keys to the input method, so Escape cancels a candidate
+ * instead of ending inline editing, Enter confirms it instead of jumping to the next Find match or splitting
+ * a Lyric Script slide, and the arrows choose a candidate instead of moving the caret (design/15 "Keys").
+ */
+export function composing(e: {
+  isComposing?: boolean;
+  keyCode?: number;
+  nativeEvent?: { isComposing?: boolean };
+}): boolean {
+  return !!(e.isComposing || e.nativeEvent?.isComposing || e.keyCode === 229);
+}
+
 /** The attribute that marks the canvas-first editor's hidden backing text field (SlideCanvas.tsx). */
 export const BACKING_FIELD = 'data-backing-text';
 

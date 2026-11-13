@@ -1,6 +1,7 @@
 import { type Presentation, slideContent } from '@ordo/domain';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { findAndReplace } from './actions.ts';
+import { composing } from './editorKeys.ts';
 import { getSlide } from './ops.ts';
 import { isLocked } from './ops/group.ts';
 import { selectObject, selectSlide, setTextRange, startInlineEditing, useEditor } from './editorStore.ts';
@@ -164,7 +165,7 @@ export function FindReplaceView(props: FindReplaceViewProps) {
       data-nonmodal=""
       aria-labelledby={titleId}
       onKeyDown={(e) => {
-        if (e.key === 'Escape') {
+        if (e.key === 'Escape' && !composing(e)) {
           e.preventDefault();
           e.stopPropagation();
           props.onClose();
@@ -228,7 +229,8 @@ export function FindReplaceView(props: FindReplaceViewProps) {
             placeholder="Search deck text…"
             onChange={(e) => props.onFind(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && props.rows.length) {
+              // Enter that confirms an input method's candidate is not 'next match'.
+              if (e.key === 'Enter' && props.rows.length && !composing(e)) {
                 e.preventDefault();
                 const delta = e.shiftKey ? -1 : 1;
                 if (props.onStep) props.onStep(delta);

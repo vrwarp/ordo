@@ -17,7 +17,7 @@ import {
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { CropControl } from './CropControl.tsx';
 import { change, redo, setTextRange, stopInlineEditing, undo, useEditor } from './editorStore.ts';
-import { historyKey } from './editorKeys.ts';
+import { composing, historyKey } from './editorKeys.ts';
 import { GroupNote, LockedNote, SelectionBox } from './GroupPanel.tsx';
 import { VideoPanel } from './MediaPanels.tsx';
 import {
@@ -204,6 +204,7 @@ function TextSection({ o: obj, readOnly, themed, marks, set }: ObjectSectionCont
             setRange({ start, end, caret });
           }}
           onKeyDown={(e) => {
+            if (composing(e)) return;
             if (e.key === 'Escape' && useEditor.getState().inlineEditingId) {
               e.preventDefault();
               stopInlineEditing();
