@@ -810,14 +810,17 @@ edge Docker image and the Pages demo, so each M9 PR ships on its own:
   today (a table by its registered drawer, `tables-render`; 3-D flat by decision; the other converter seams
   write nothing yet).
 - **What the budgets leave out is always listed**, with LibreOffice or without: the guard's elements past 190
-  or 200 objects and 16 pictures (`EmittedSlide.missing`, recorded on the LibreOffice path too: `nativeJob.ts`
-  `budgetLeft`, the client's `provenance`) and the ladder's (`Slide.pptx.missing`), so goLive's degraded list
+  or 200 objects and 16 pictures (`EmittedSlide.missing`, recorded on the LibreOffice path too: the import
+  core's `ImportCore.budgetLeft`, for the hub's job and the client parse alike) and the ladder's
+  (`Slide.pptx.missing`), so goLive's degraded list
   names them; a slide hybrid only for them waits for nothing.
 - **The first paint stays as fast.** M9 adds no code to what the operator loads before its first paint: its
   drawers load per object kind (`registerShapeDrawerLoader`; the table's in the workers' prepare step and the
   editor canvas) and the Setup and settings pages load when opened (`React.lazy`). Measured on this PR's build:
-  operator initial JavaScript 1,684.6 kB (gzip 528.1) against main's 1,713.3 kB (535.1); CI fails a PR whose
-  initial JavaScript grows more than 2 % over `tools/bundle-baseline.json` (design/24 "Bundle budget").
+  operator initial JavaScript 1,708.0 kB (gzip 535.9) against main's 1,713.3 kB (535.1) (1,684.6 kB with the
+  lazy drawers alone; the PR's editor, live and media fixes add 23.4 kB, and the PowerPoint parse runs in an
+  import worker of its own, 659.7 kB, loaded when a deck is imported); CI fails a PR whose initial JavaScript
+  grows more than 2 % over `tools/bundle-baseline.json` (design/24 "Bundle budget"), recorded from this build.
 - **The tail keeps its page.** The presentation's tail (§3.4) stores each slide minimal with its page, the
   background drawn as a shape, as a plain rect in its colour (`minimalSlide`), so its dark text is never drawn
   on the output's black; a deck that does not fit 4 MiB even so (about 2,000 slides) leaves the pages out

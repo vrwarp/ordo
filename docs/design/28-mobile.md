@@ -1120,9 +1120,9 @@ and before #24 (`d07fe12`) 1,685.4 kB and 527.3 kB. The core worker (301.7 kB) a
 
 Cutting the rows marked No leaves about 684 kB raw, about 214 kB gzip at the chunk's average ratio (an
 estimate; the split measures it with `tools/bundle-report.mjs` from PR #23). The thumbnail worker loads
-with the first preview and counts against "Opening a song" above, not the first load. PR #23's own changes
-(a1-prep) take the initial chunk to 1,684.6 kB (528.1 kB gzip) with M9 inside, by lazy M9 drawers and lazy
-Setup.
+with the first preview and counts against "Opening a song" above, not the first load. PR #23 takes the
+initial chunk to 1,708.0 kB (535.9 kB gzip) with M9 inside: lazy M9 drawers and lazy Setup (a1-prep, 1,684.6
+kB) and then its editor, live and media fixes (23.4 kB).
 
 ## 8. Testing
 
