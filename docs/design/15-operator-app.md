@@ -187,8 +187,22 @@ were added in) and closes in the bubble phase (`components/dialogEscape.ts`). A 
 6. Stage opens the same way with the stage origin.
 
 Window names are stable so a reload of the operator can re-acquire windows by opening
-the same name (Chrome returns the existing window for a matching name, re-navigating it;
-outputs tolerate a navigation by re-arming from the hub state).
+the same name with an empty URL (`window.open('', 'ordo-out-' + id)` returns the existing window of that
+name without navigating it; a fresh blank window means there was none, and it is closed at once).
+`window.open` needs a user gesture, so re-acquisition runs on gestures while live
+(`services/reacquire.ts`), on the top bar's "fallback link n/m" button, on Relaunch (which first takes
+the old windows over so it can close them) and on Diagnostics' "Re-acquire output windows". Which names
+are tried:
+
+- Path mode (one origin): only windows a BroadcastChannel probe confirms running in this browser, so no
+  blank window flashes and no focus is stolen.
+- Domain mode (op./outN./stage. hosts, the venue setup): a channel never crosses origins, so the probe
+  confirms nothing. A gesture tries the outputs this browser session launched (a sessionStorage flag kept
+  across reloads) that the hub reports connected; the explicit actions try every output launched here or
+  reported connected. A window that is not in this browser (another tab or another computer runs it) stays
+  missing, and the fallback link says so: "could not be reached from this tab: opened by another operator
+  tab or another computer. Use Relaunch to take them over." Each output is tried at most once a minute
+  on gestures.
 
 ## Program view
 

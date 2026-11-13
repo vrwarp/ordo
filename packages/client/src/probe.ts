@@ -120,6 +120,15 @@ export class LocalWindowTracker {
     }
   }
 
+  /**
+   * Whether probes can confirm windows at all. Not in domain mode (the venue setup), where every output has
+   * its own origin and a BroadcastChannel never crosses origins: callers then fall back to what is known
+   * otherwise (launched from this browser session, reported connected by the hub).
+   */
+  get available(): boolean {
+    return this.ch !== null;
+  }
+
   ping(outputId?: string): void {
     if (!this.ch) return;
     try {

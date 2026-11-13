@@ -11,7 +11,7 @@ import {
   uploadMedia,
   waitCacheReady,
 } from './helpers.ts';
-import { login } from './linkhelpers.ts';
+import { login, launchOutputs, outputPages } from './linkhelpers.ts';
 
 /**
  * Service-safety fixes from the 2026-11-13 review, as a volunteer meets them at the venue (the e2e hub runs
@@ -154,4 +154,47 @@ test('Next item past a hidden first slide clears the song background and starts 
   expect(s.props.countdownTimerId).toBe('i-welcome-timer');
   await expect.poll(() => backgroundOn(out), { timeout: 20_000 }).toBe('');
   await out.close();
+});
+
+test('after a reload at the venue the operator finds its output windows again', async ({ context, page }) => {
+  const api = await operatorApi();
+  const before = await outputs(api);
+  try {
+    // Two Audience outputs, as at the venue (each on its own outN. origin).
+    await json(
+      api.put('settings/outputs', {
+        data: before.map((o) => ({ ...o, enabled: o.kind !== 'stage' && o.hostIndex <= 2 })),
+      }),
+    );
+    await goLive(api, await songPlaylist(api, 'Reload'));
+    await liveView(page);
+    const outs = await launchOutputs(page, context, 2);
+    const link = page.locator('[data-fallback-link]');
+
+    // The fallback link button.
+    await page.bringToFront();
+    await page.reload();
+    await liveView(page);
+    await expect(link).toHaveText('fallback link 0/2', { timeout: 15_000 });
+    await link.click();
+    await expect(link).toHaveCount(0);
+    await expect(page.getByText('Re-acquired 2 output windows')).toBeVisible();
+    // The same windows: none was closed, none opened.
+    expect(outs.every((p) => !p.isClosed())).toBe(true);
+    expect(outputPages(context)).toHaveLength(2);
+
+    // Diagnostics' Re-acquire button.
+    await page.reload();
+    await liveView(page);
+    await expect(link).toHaveText('fallback link 0/2', { timeout: 15_000 });
+    await page.getByTitle('Diagnostics', { exact: true }).click();
+    await page.getByRole('button', { name: 'Re-acquire output windows' }).click();
+    await expect(page.getByText('Re-acquired 2 output windows.')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(link).toHaveCount(0);
+    expect(outputPages(context)).toHaveLength(2);
+    for (const p of outs) await p.close();
+  } finally {
+    await json(api.put('settings/outputs', { data: before }));
+  }
 });
