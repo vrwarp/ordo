@@ -693,7 +693,7 @@ _As built (M9 wave 1, track `conv-seams`):_
   to the art first (`budget:3d`, reason `art:budget:3d`), drawn flat in version 1 until the art replaces it,
   as all real 3-D did before: the budget's other steps then choose as they did (where 3-D shapes go past the
   budget once decorations hold its shapes is `decor-conv`'s, M9 decision 6).
-- **Measured** (`scratchpad/m9/w1/conv-seams/`). Census over E: `art:3d` on 74 slides → 0. 59 worship slides
+- **Measured** with the census over E at wave 1: `art:3d` on 74 slides → 0. 59 worship slides
   and the sermon 3-D slide go hybrid → native (worship native 2,620 → 2,679 of 2,820, 95.00 %; sermons 73 of
   73); 3 hybrid slides keep their other residual (OLE, vertical text, a warp); the 11 picture slides with
   3-D stay pictures for their budgets alone (10 + 1 `budget:pictures`; 1 over 64 KB as stored, `art:budget:3d`
@@ -2602,7 +2602,9 @@ worker, the Pages demo and the fidelity harness:
   pixel sizes and clips' kinds from their first bytes within the hub's spill budget, `convertDeck` over the
   whole deck, transitions, shape files named and bounded as a batch's. `assemblePptxScene` builds version 1
   from a scene with `ImportCore`, as the hub does (the Pages demo, the harness, tests): the client's old
-  compact step that made picture slides is gone, so no slide is a picture for a budget on either side.
+  compact step that made picture slides is gone. Without LibreOffice no slide is a picture for a budget on
+  either side; with it, both sides keep LibreOffice's page for the same slides over 64 KB that the ladder
+  would store plain or minimal (`ImportCore.pageForBudget`).
 - The hub builds version 1 from a checked scene with the same `ImportCore` (§12 "Process"), so both paths
   store the same presentation modulo ids and times (the equivalence check of `tools/pptx-fidelity`).
 - **The operator** parses in its import worker (`apps/operator/src/workers/import.worker.ts`, a bundle of

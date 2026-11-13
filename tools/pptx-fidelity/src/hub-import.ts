@@ -702,8 +702,12 @@ export function hubImportGates(
       `${r.officeLines?.length ?? 0} line(s)`,
     );
   }
+  // Without LibreOffice (the M9 exit's run) no slide may be a picture. With it, a slide over 64 KB that the
+  // budget ladder would store plain or minimal keeps LibreOffice's page by design (`ImportCore.pageForBudget`),
+  // so the count is reported, not gated.
   const pictures = sum((x) => x.classes?.picture ?? 0);
-  gate('no picture slide', pictures === 0, `${pictures} picture slide(s)`);
+  if (r.libreoffice === 'hidden') gate('no picture slide', pictures === 0, `${pictures} picture slide(s)`);
+  else gate('picture slides (LibreOffice present: reported only)', true, `${pictures} picture slide(s)`);
   const over = sum((x) => x.slidesOver64k ?? 0);
   gate('no slide over 64 KB', over === 0, `${over} slide(s)`);
   const big = d.filter((x) => (x.presentationBytes ?? 0) > PRESENTATION_MAX_BYTES).length;

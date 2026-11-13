@@ -45,8 +45,9 @@
  *
  * Version 1 of a picture-class slide (one the converter classes picture: more pictures than a slide may hold)
  * has no objects, `pptx.pending` and its text in `pptx.artText`; a hybrid slide has its native objects
- * (residuals are left out until version 2) and `pptx.artText` from its art. No budget and no failure makes a
- * picture slide (M9, plan decision 3).
+ * (residuals are left out until version 2) and `pptx.artText` from its art. Without LibreOffice, no budget
+ * and no failure makes a picture slide (M9, plan decision 3); with it, a slide over 64 KB that the budget
+ * ladder would store plain or minimal keeps LibreOffice's page instead (`ImportCore.pageForBudget`).
  *
  * **Without LibreOffice** (design/27 M9, `HubTools`: the lite image, `ORDO_LIBREOFFICE=off`): nothing waits
  * for it. The converter is told (`SceneTaskInput.libreoffice: false`, `EmitOptions.libreoffice`) and lists what
