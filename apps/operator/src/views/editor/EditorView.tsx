@@ -1,4 +1,4 @@
-import type { SlideObject } from '@ordo/domain';
+import { SVG_HEAD_BYTES, type SlideObject } from '@ordo/domain';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FindReplaceDialog } from './FindReplaceDialog.tsx';
 import { ErrorBoundary, PaneError } from '../../components/ErrorBoundary.tsx';
@@ -60,6 +60,7 @@ import { getSlide, newImage, newShape, newText, themeOf, type ZOrder } from './o
 import { hasGroup, htmlToRichText, pasteRichText } from './ops/index.ts';
 import { PresentationPanel } from './PresentationPanel.tsx';
 import { LoopDeckBanner } from './PptxReport.tsx';
+import { insertBox, svgDeclared } from './insertBox.ts';
 import { RevisionsDialog } from './RevisionsDialog.tsx';
 import { SlideCanvas } from './SlideCanvas.tsx';
 import { makeSlideEditable, SlidePanel } from './SlidePanel.tsx';
@@ -403,18 +404,12 @@ export function EditorView({ id }: { id: string }) {
             ? new File([rawFile], `pasted-${Date.now()}.${ext}`, { type: rawFile.type })
             : rawFile;
         const targetSlideId = st.slideId;
-        void uploadFiles([named]).then((uploaded) => {
+        void uploadFiles([named]).then(async (uploaded) => {
           const m = uploaded[0];
           if (!m) return;
-          const w = m.width && m.height ? Math.min(1920, m.width) : 960;
-          const h = m.width && m.height ? (w * m.height) / m.width : 540;
-          const imgObj = newImage(m.id, {
-            x: Math.round((1920 - w) / 2),
-            y: Math.max(0, Math.round((1080 - h) / 2)),
-            w: Math.round(w),
-            h: Math.min(1080, Math.round(h)),
-            rotation: 0,
-          });
+          // An SVG starts at the size it declares (its media size is its still's, `insertBox`).
+          const declared = await svgDeclared(m, () => named.slice(0, SVG_HEAD_BYTES).text());
+          const imgObj = newImage(m.id, insertBox(m, declared));
           // The upload took a while: the editor may be locked by now (a service went live).
           if (readOnlyNow.current) return;
           addToSlide(targetSlideId, imgObj);
@@ -1199,18 +1194,12 @@ export function EditorView({ id }: { id: string }) {
           kinds={['image']}
           onClose={() => setImagePick(false)}
           onPick={(m) => {
-            const w = m.width && m.height ? Math.min(1920, m.width) : 960;
-            const h = m.width && m.height ? (w * m.height) / m.width : 540;
-            add(
-              newImage(m.id, {
-                x: (1920 - w) / 2,
-                y: Math.max(0, (1080 - h) / 2),
-                w,
-                h: Math.min(1080, h),
-                rotation: 0,
-              }),
-            );
             setImagePick(false);
+            // An SVG starts at the size it declares (its media size is its still's, `insertBox`).
+            void svgDeclared(m).then((declared) => {
+              if (readOnlyNow.current) return;
+              add(newImage(m.id, insertBox(m, declared)));
+            });
           }}
         />
       )}

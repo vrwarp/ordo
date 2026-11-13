@@ -614,7 +614,10 @@ an animated one moves there, and say "SVG · moves in previews only" (`svgNote`)
 first frame. An SVG without a still (one over 24 MB goes through the resumable upload without one, or this
 browser could not draw it, or it predates stills) says instead that each Audience screen draws it itself when
 it is shown, or, over 2 MB (`SVG_SCREEN_MAX_BYTES`), that the screens do not show it: upload it again from a
-browser, or a PNG of it.
+browser, or a PNG of it. An SVG's media size is its still's (at least 1,920 px on its longer side), so '+ Image'
+and a paste start it at the size its root element declares (`insertBox.ts`: a 200 x 80 logo at 200 x 80, not
+slide-wide), half the slide wide at its ratio when it declares only a viewBox; any other picture starts at its
+pixel size, at most the slide's width.
 
 ## Settings
 
