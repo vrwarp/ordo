@@ -1852,7 +1852,12 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   dashed red edge of a box whose text does not fit, laid out as the drawers lay it out, the panel's note,
   and the area of a deck that is not 16:9) and `formatControls.tsx` (the shared toggles, radio groups and
   the text field's refocusing). Each component is a store-bound wrapper and a props-only view. Tests:
-  `apps/operator/test/formatUi.test.ts`, `e2e/editor-format.spec.ts`.
+  `apps/operator/test/formatUi.test.ts`, `e2e/editor-format.spec.ts`. _As changed by the canvas-first
+  editor (#24):_ the 'Text format' toolbar is no longer shown; the Tune drawer's typography card
+  (`UnifiedTypography.tsx`, the whole box or the selected characters) and the floating bar over the
+  selection (`FloatingContextBar.tsx`) format text with `FormatBar.tsx`'s pure parts (`barState`,
+  `togglePatch`, `valuePatch`), and a selected text box is typed and formatted through a hidden backing
+  text field on the stage (design/15 "Keyboard" and "Canvas drawing").
 - **As built, item D (pictures):** `ImageObject.flipH`, `flipV` and `mask` (a `ShapeGeom`) in the schema,
   `clampObject` (`clampMask`: a preset and 10 adjust pairs) and `drawImageFit` (mirrored about the box's
   centre inside the rotation, then cut by an ellipse or a rounded-rect clip, `pictureCut` reading masks as
@@ -1885,7 +1890,9 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   `fitScale`, which a target keeps when only colour, fill, alignment and the like change; paragraph styles
   by level, each paragraph keeping `soft`, `hidden` and its own numbering start), `newSlideLike`,
   `useAsBackground` (an unrotated unlocked picture covering the slide area; the `role: 'bg'` objects below
-  it removed), `clearSlideBackground`. UI: `FindReplaceDialog.tsx` ('Find…', Ctrl+F), `BackgroundReplace.tsx`
+  it removed), `clearSlideBackground`. UI: `FindReplaceDialog.tsx` ('Find…', Ctrl+F; since #24 a non-modal
+  card, docked at the top right of the stage pane, whose match rows start inline editing at the match on
+  the canvas: design/15), `BackgroundReplace.tsx`
   (the Slide panel's background with its scope, the Presentation panel's 'Replace on all slides…'),
   `ObjectSlideOps.tsx` ('Apply to similar boxes…', 'Use as background'), the slide list's dimmed hidden
   slides, 'New slide like this' and 'Hidden'. Tests: `apps/operator/test/slideOps.test.ts` (find and replace
@@ -1962,7 +1969,9 @@ Items marked **∥** can be done in parallel by separate agents. M4 and M5 can a
   editor canvas's text rasters and node transforms (`edited-slide-editor`), all against one PNG
   (`SAME_AS`). Every exit item below is a Playwright spec ending in `saveAndReload`.
 - **As built, the review round:** the editor's shortcuts follow the focus (`editorKeys.ts`: a dialog keeps
-  every key, a button or radio its Enter, arrows and Delete, the canvas gets them all), and Ctrl+Z / Ctrl+Y
+  every key, a button or radio its Enter, arrows and Delete, the canvas gets them all; since #24 the
+  non-modal Find card is not a dialog for this, the hidden backing text field gives the keys back when
+  inline editing ends, and keys an input method composes with are its own: design/15 "Keyboard"), and Ctrl+Z / Ctrl+Y
   in the text field are the editor's undo and redo (`e2e/editor-keys.spec.ts`, port 8909); taking a job's
   revision over moves the undo steps with the draft, a re-import's through the three-way merge; Find and
   replace changes only the part of each match that differs (typing's rule) and marks matches the screens

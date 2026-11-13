@@ -27,7 +27,8 @@ import { hubApi } from './linkhelpers.ts';
  * text are one PowerPoint shape, imported as a ShapeObject and a TextObject sharing `origin.group`. A click
  * selects both; a drag moves them together, the Transformer's corner and the group box's W field resize them
  * together (their text size stays), its rotate handle turns them about the group centre and 'Turn by' turns
- * them back, arrows nudge both; Alt-click selects the text alone to edit it; Delete
+ * them back, arrows nudge both, Align to slide (the floating bar's Align menu and the drawer's align bar)
+ * moves both as one block; Alt-click selects the text alone to edit it; Delete
  * takes the pair away and Undo brings it back. After save and reload the presentation JSON is identical.
  * Port 8902.
  */
@@ -177,6 +178,41 @@ test('the rounded box and its text: move and resize as one, Alt-click the text t
     await expect.poll(async () => (await pairNow(page, PAIR)).text.box.x).toBe(before.text.box.x + 3);
     now = await pairNow(page, PAIR);
     expect(now.shape.box.x).toBe(before.shape.box.x + 3);
+
+    // ---- Align to slide moves the pair as one block: from the floating bar's Align menu (left edge), then
+    // from the drawer's align bar (bottom edge). The text keeps its place in its shape.
+    const inShape = (q: { shape: Obj; text: Obj }) => ({
+      x: q.text.box.x - q.shape.box.x,
+      y: q.text.box.y - q.shape.box.y,
+    });
+    const placed = inShape(now);
+    // The floating bar shows while the drawer's Object tab is closed.
+    await page.getByRole('button', { name: 'Tune', pressed: true }).click();
+    await page
+      .locator('.ed-floating-inner')
+      .getByRole('button', { name: /^Align/ })
+      .click();
+    await page.getByRole('menuitem', { name: 'Align left' }).click();
+    await expect.poll(async () => (await pairNow(page, PAIR)).shape.box.x).toBe(0);
+    now = await pairNow(page, PAIR);
+    expect(inShape(now).x).toBeCloseTo(placed.x, 6);
+    expect(inShape(now).y).toBeCloseTo(placed.y, 6);
+    expect(now.shape.box.y).toBe(before.shape.box.y);
+    await page.getByRole('button', { name: 'More object options' }).click();
+    await page
+      .getByRole('group', { name: 'Align to slide' })
+      .getByRole('button', { name: 'Align bottom' })
+      .click();
+    await expect
+      .poll(async () => {
+        const q = await pairNow(page, PAIR);
+        return Math.round(union(q.shape.box, q.text.box).y + union(q.shape.box, q.text.box).h);
+      })
+      .toBe(1080);
+    now = await pairNow(page, PAIR);
+    expect(inShape(now).x).toBeCloseTo(placed.x, 6);
+    expect(inShape(now).y).toBeCloseTo(placed.y, 6);
+    expect(now.shape.box.x).toBe(0);
 
     // ---- Alt-click the text: it alone is selected; edit it ('Coffee' → 'Tea'); the box shape stays.
     await frames(page);

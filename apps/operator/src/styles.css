@@ -1007,6 +1007,8 @@ table.list th {
   min-width: 0;
 }
 .editor .stagewrap {
+  /* The docked Find card is placed in it. */
+  position: relative;
   min-height: 0;
   min-width: 0;
   display: flex;
@@ -2743,6 +2745,15 @@ details.ed-collapsible > summary {
   border-radius: 12px;
   padding: 12px;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+}
+/* Docked in the stage pane (canvas mode): the card never covers the slide list or the Tune drawer's tabs. */
+.stagewrap > .ed-find-floating {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 30;
+  max-height: calc(100% - 16px);
+  overflow: auto;
 }
 .ed-find-row {
   padding: 3px 6px;

@@ -228,9 +228,39 @@ cells in place of the shape fields).
   visual preview inside the editor uses the shared rasterizer for text so WYSIWYG holds.
   Rich text objects (design/27) are drawn by the rich engine into their cached canvas at the stage
   scale × `devicePixelRatio` (keyed by the font generation), legacy ones at 1:1 as before.
+- Canvas drawing (SlideCanvas.tsx): the stage has the background layer, the objects layer (with the
+  Transformer, guides and crop handles) and a text editing layer of its own that takes no pointer events
+  (`TextEditingOverlay`): the selection highlight and the blinking caret of the box being edited are drawn
+  there, in that object's node's frame (so they follow a drag or a transform), and the caret's 530 ms blink
+  re-renders and redraws only that layer. A non-text object's node is cached as a bitmap at the stage's
+  density (`nodeCacheRect`: what its drawer reaches, `objectReach`, with its hit area; text has its own
+  raster cache; an object whose reach the renderer does not know, or one over 8 M device px, is drawn live)
+  and drawn again only when it, its picture or geometry file, the fonts or the density change, so a
+  keystroke or a drag copies the slide's other objects instead of drawing them. The floating bar's and the
+  touch tools' sizes are kept by a ResizeObserver (`useMeasuredSize`), not read on every render. On a slide
+  of 181 objects (90 shapes with gradients, dashed strokes and shadows, 91 text boxes) an idle caret cost
+  192-247 ms of main-thread time per 6 s before (about 20 ms a blink: SlideCanvas re-rendered and the
+  objects layer was redrawn) and 32-59 ms after (CDP Performance TaskDuration, headless Chromium, two runs
+  of three rounds each, regroup/r1/editor-fixes/probe).
 - Editing a text box's plain text keeps its formatting: `editText` (`@ordo/domain`) shifts, trims and
   splits the runs and paragraph styles with the change, placed by the textarea's caret; splitting and
   merging slides cut and join them with the lines (design/27 §11).
+- Lyric Script (`SongReflowEditor.tsx`, pure parts in `songScript.ts`; songs open in it on a desktop,
+  'Slide Canvas' switches): the sections as cards, each slide's words in a field, the arrangement pills,
+  chords and notes, and the screen previews beside them. A field shows the slide's lyric object's own stored
+  text (`scriptText`: its `lyricObjectId`, else its first text box), never `firstText`, which writes
+  automatic numbers and bullets into the text for bands and labels; it writes through the same `editText` as
+  the Object panel's field, placed by the field's `selectionEnd` (`typeScript`), and an unchanged value
+  records no undo step. So typing in a numbered or formatted song keeps its numbers a paragraph style
+  (before, each keystroke stored the labels again: '1. 1. Amazing grace') and bold or italic on their
+  letters; a plain song stays plain. Every split cuts that raw text through the domain's slide split
+  (`splitSlidePieces`, as the slide list's 'Split lyrics' does: the new slides are copies of the slide with
+  their piece of the lyric object, runs and paragraph styles kept on both sides), one undo step, the focus
+  then in the first new slide's field: '---' and Enter (the typed value is stored first); ✂ Split at Cursor
+  and Alt+Enter (Opt+Enter) at the caret of the field that has the focus only (a field never focused
+  reports a caret at 0), an empty next slide when the caret is at the end, nothing at the start or without
+  the focus (never a cut in the middle of a word); Auto-Split (2 lines) by the raw lines that hold words.
+  The stream tag ('⚠ 3 lines · Clips 2-line Stream') counts those raw lines.
 - Text ops (M4; `views/editor/ops/text.ts`, applied through `actions.ts`, one undo step each, nothing
   recorded when nothing changes): `formatRange` formats the textarea's selection (runs split, normalised,
   equal neighbours merged, at most 2,000, values bounded as the schema bounds them; Clear formatting
@@ -246,8 +276,53 @@ cells in place of the shape fields).
   and the verse superscripts (`baseline`) and paragraph styles, and drops the stored fit scale (the theme's
   box is fitted again). Formatting the lyric object of a themed presentation marks the slide's override
   `runs.<field>` (`runs.color`, `runs.sizeScale`, ...; `runs` keeps every one), so the next theme keeps it,
-  as `style.<field>` keeps a box style field.
+  as `style.<field>` keeps a box style field. A choice that sets several fields marks every one of them: each
+  contrast choice (the floating bar's Clean, Shadow, Outline and Heavy, `contrastChoice`; the drawer's four
+  readability cards, which name both fields through TextStyleEditor's `onChange(style, key, also)`) sets the
+  outline and the shadow and marks `style.outline` and `style.shadow`, so the next theme keeps exactly what
+  was chosen (before, the floating bar marked only the outline and a theme change dropped its Soft shadow;
+  the drawer's Soft Shadow got the theme's outline back).
+- The canvas-first top bar's Background (beside + Text, + Image, + Video and Shapes) is the Slide panel's
+  'Replace…' for this slide (`replaceBackgroundWith(slide, media, 'slide')`, one undo step, the picker asks
+  for media with a known size): on a slide imported from PowerPoint its bottom background shapes go and its
+  background picture is re-cropped to the new one, a video becomes the slide's motion background, so the
+  picked background shows on the canvas and the screens (before, it set `backgroundMediaId` under the
+  slide's own PowerPoint background shape, which still covered it).
 - Property panel bound to the selected object's schema.
+- Clipboard (`views/editor/ops/clipboard.ts`, `actions.ts`): text copied in ordo keeps its runs and
+  paragraph styles (`data-ordo-rich`); HTML from other apps (Bible Gateway's verse numbers and red letters,
+  Word, Google Docs, web pages) becomes runs and paragraphs; slide objects copy as `data-ordo-objects`, so
+  they paste on another slide, another tab or another device. Both payloads carry their format (`v`,
+  `CLIPBOARD_FORMAT`): ordo reads its own and the unversioned first one and leaves a newer one alone (the
+  paste falls back to the HTML's text). Clipboard HTML is untrusted (design/21): the reader is a small
+  tokenizer, linear in the HTML whatever it holds, bounded by `CLIPBOARD_LIMITS` (4 M characters read,
+  100,000 nodes, 256 levels, 20,000 characters of text, 200 objects) and never throws (fuzzed in
+  `clipboardHtml.fuzz.test.ts`). An object pasted from the system clipboard is kept only if it passes the
+  slide object schema (its parsed data: unknown keys dropped), the importers' sanitize dispatch
+  (`@ordo/importers` `sanitizeObject`, loaded with the first such paste so it stays in the importer's chunk;
+  M9's tables, charts, decorations, warps and 3-D looks included) and the render clamp; its re-import
+  identity (`origin.shapeId`, `ph`, `role`) is dropped and only `origin.group` kept, renumbered, so a pasted
+  shape with its text still selects as one. A paste inside ordo (the in-memory copy) and Duplicate keep the
+  whole origin and `locked`, as before. A text paste never takes a box past 20,000 characters. When objects
+  of a `data-ordo-objects` payload are left out, a toast says how many ("2 pasted objects could not be used
+  on a slide: nothing was added"); a payload whose objects all fail is still an object paste (its HTML's text
+  is not pasted as a text box). #24's readers that need no open panel (the floating bar's `o.style` and
+  `o.text`, the hidden backing text field, the deck swatches) only ever see objects that passed: they and the
+  Object panel are server-rendered for thousands of mutated objects the paste keeps
+  (`untrustedReaders.test.ts`).
+- Every add stops at what the screens draw (`canAdd`, `ops/slides.ts`): the render clamp draws at most 200
+  objects and 16 distinct pictures of a slide and drops the topmost, which would be the volunteer's newest.
+  The toolbar's Text, Image, Video and shapes, a pasted picture, text or objects, and Duplicate check first
+  and say why they did not add ("This slide already has the most objects a slide can show (200)" or "…the
+  most pictures…"). A picture pasted from the clipboard is added when its upload finishes, unless the
+  presentation went live meanwhile.
+- Errors (`components/ErrorBoundary.tsx`): a render error stays in the part of the page it happened in. In
+  the canvas-first editor the stage (the Stage lens or the canvas), the Tune drawer's panel, the 4-screen
+  tray and the Lyric Script each sit in an error boundary whose fallback says that part could not be shown,
+  that the screens and the live controls are not affected, and offers Try again and Undo (a new slide or an
+  undo draws it again by itself). The floating bar has a boundary of its own whose fallback is no bar, so an
+  object the bar cannot read never blanks the canvas under it. The app puts one around each page, so the
+  navigation, the toasts and the sign-in overlay always stay. Each is logged.
 - Pictures are drawn with their crop, flips and mask (`ImageObject.crop`, `flipH`, `flipV`, `mask`) by the
   same `drawImageFit` every other drawer uses (design/27 §11 item 6; M4 item D, `CropControl.tsx`, pure ops
   in `ops/pictures.ts`, one undo step each, the crop fields coalescing per picture). The Object panel's
@@ -290,7 +365,20 @@ cells in place of the shape fields).
   its own keys (Ctrl+S still saves); a focused button, link, radio or menu item keeps Enter, Space, the
   arrows (a radio group moves between its choices without nudging the box) and Delete, and only the Ctrl
   commands (undo, redo, duplicate, find) apply; with the focus on the slide canvas or the page, Delete, the
-  arrow nudges, Enter (edit the text) and Escape (drop the selection) apply too.
+  arrow nudges, Enter (edit the text) and Escape (drop the selection) apply too. The non-modal Find card
+  (`data-nonmodal`) is not a dialog for this: its fields are fields and the canvas keeps every shortcut
+  while it is open. In the canvas-first layout a selected text box has a hidden backing text field
+  (`#ordo-text-editor` marked `data-backing-text`, SlideCanvas.tsx), which the inline editor and the
+  floating bar type and format through; when inline editing ends (Escape, a click away) and that field
+  still has the focus, it is blurred (`releaseBackingField`), so the next ArrowRight nudges the box, Delete
+  deletes it and Escape drops the selection, instead of moving an invisible caret or deleting letters
+  nobody sees. The backing field sits on the stage at the caret (`caretOnSlide` × the stage scale, turned
+  with its box), so an input method's candidate window opens by the text being typed. Keys an input method
+  is composing with (Chinese, Japanese, Korean: `isComposing`, or key code 229) are its own in every editor
+  key handler (`composing`, editorKeys.ts: the inline editor, the backing field, the Object panel's text
+  field, the typography card's shortcuts, Find's Enter and Escape, the Lyric Script's Alt+Enter): Escape
+  cancels a candidate without ending inline editing, Enter confirms it without jumping to the next match or
+  splitting a slide, and the arrows choose a candidate.
 - Groups and locked objects (design/27 §11 item 5 and "Locked objects"; pure ops in `views/editor/ops/group.ts`,
   the panel's parts in `GroupPanel.tsx`). The selection is a set of objects with a primary one, which the
   Object panel edits. A click on an object of a group (`origin.group`: a flattened PowerPoint group, or a
@@ -308,6 +396,19 @@ cells in place of the shape fields).
   the canvas and 'From PowerPoint (not editable)' in the panel: it can be moved, resized (art keeps its
   aspect: corner handles only, W and H linked), deleted and reordered; it does not turn, and its text, style
   and geometry fields are disabled.
+- 'Align to slide' (the box section's bar in the Tune drawer: left, centre, right, top, middle, bottom; and,
+  for a selection of several objects, the floating bar's Align menu) and 'Screen placement' (a text box's
+  cards: Center Screen, Lower Third, Bottom Third, Top Banner) act on the whole selection as one block, as
+  the box fields and the Transformer do (`actions.ts` `placeSelection` through `placement.ts`
+  `placeObjects`, one undo step): a
+  PowerPoint shape with its text, a group or a table's cells never come apart. The block is the
+  selection's bounds as drawn (`groupBox`: each member turned about its centre), so a turned box aligns by
+  what the screens show and keeps its turn; a placement card scales the block onto its box (members keep
+  their place in it, a locked picture its aspect). On a deck that is not 16:9 both work inside the deck's
+  own area (`source.native.slideRect`, the canvas's 4:3 guide), the cards' boxes scaled into it
+  (`presetIn`); the card whose box the block is near shows as active. Placing a themed song's lyric box
+  marks its `box` override, as the box fields do. Nothing moves under the live lock; a locked object's box
+  may.
 - Formatting text (M4; `views/editor/FormatBar.tsx` and `ParagraphStrip.tsx` around the text field,
   applying `ops/text.ts` through `actions.ts`, one undo step each). The 'Text format' toolbar over the
   field formats its selection: font, Size − / +, Bold, Italic, Underline, Strikethrough, Superscript and
@@ -345,7 +446,12 @@ cells in place of the shape fields).
   Whole words (letters, marks and digits are word characters; a typed space also finds a no-break space);
   the count ('3 matches on 2 slides', a polite live region) and every match listed by slide number with the
   text around it before anything is replaced, hidden slides included and tagged, locked objects left out; a
-  listed match opens its slide with the match selected in the text field; Replace all replaces every match
+  listed match opens its slide and starts inline editing on the canvas with the match selected
+  (`goToMatch`; under the live lock, on a locked box or on a slide that shows its PowerPoint picture the
+  match is only highlighted), so what is typed next shows where it lands. The card is non-modal and docked
+  at the top right of the stage pane (in the Lyric Script, which has no stage, it floats over the page): it
+  never covers the slide list or the open Tune drawer's tabs, and the floating bar keeps clear of it. Escape
+  ends inline editing first, then closes the card, then drops the selection. Replace all replaces every match
   as typing the same change in the text field would: only the part of the match that differs is replaced
   and takes the formatting of the text it replaces (a bold red date stays bold and red, the plain words a
   match also covers stay plain; the box style and its stored fit are untouched). A match on a slide that

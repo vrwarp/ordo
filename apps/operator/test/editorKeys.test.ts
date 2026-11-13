@@ -6,9 +6,11 @@
 import { describe, expect, it } from 'vitest';
 import { notChoosable } from '../src/views/editor/BackgroundPicker.tsx';
 import {
+  composing,
   historyKey,
   isTypingTarget,
   keyPlace,
+  releaseBackingField,
   slideNavKey,
   stepSlide,
 } from '../src/views/editor/editorKeys.ts';
@@ -156,5 +158,45 @@ describe('stepSlide', () => {
   it('handles empty slide list', () => {
     expect(stepSlide([], undefined, 1)).toBeUndefined();
     expect(stepSlide([], 's1', -1)).toBeUndefined();
+  });
+});
+
+describe('the hidden backing text field gives the keys back when inline editing ends (b1)', () => {
+  const field = (attrs: Record<string, string>) => {
+    let blurred = 0;
+    const e = {
+      tagName: 'TEXTAREA',
+      hasAttribute: (n: string) => n in attrs,
+      blur: () => {
+        blurred++;
+      },
+    };
+    return { e, blurred: () => blurred };
+  };
+
+  it('blurs the backing field when it has the focus, so the slide gets Delete, the arrows and Escape', () => {
+    const backing = field({ id: 'ordo-text-editor', 'data-backing-text': '' });
+    expect(releaseBackingField({ activeElement: backing.e })).toBe(true);
+    expect(backing.blurred()).toBe(1);
+    // With the focus on the page again, the keys are the canvas's.
+    expect(keyPlace({ tagName: 'BODY' } as unknown as EventTarget, page())).toBe('canvas');
+  });
+
+  it('leaves a visible text field (the Tune drawer’s, the floating bar’s font) and the page alone', () => {
+    const visible = field({ id: 'ordo-text-editor' });
+    expect(releaseBackingField({ activeElement: visible.e })).toBe(false);
+    expect(visible.blurred()).toBe(0);
+    expect(releaseBackingField({ activeElement: null })).toBe(false);
+    expect(releaseBackingField(undefined)).toBe(false);
+  });
+});
+
+describe('keys an input method is composing with are left to it (composing)', () => {
+  it('reads isComposing, a React event’s nativeEvent, and the 229 key code', () => {
+    expect(composing({ isComposing: true })).toBe(true);
+    expect(composing({ nativeEvent: { isComposing: true } })).toBe(true);
+    expect(composing({ keyCode: 229 })).toBe(true);
+    expect(composing({ isComposing: false, keyCode: 27, nativeEvent: { isComposing: false } })).toBe(false);
+    expect(composing({})).toBe(false);
   });
 });

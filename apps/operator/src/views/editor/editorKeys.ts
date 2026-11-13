@@ -55,6 +55,39 @@ export function keyPlace(
   return 'control';
 }
 
+/**
+ * A key pressed while an input method composes (Chinese, Japanese or Korean candidates): `isComposing`
+ * (also on a React event's `nativeEvent`), or the 229 key code browsers give such keys (Safari, Chrome on
+ * Windows). Every editor key handler leaves these keys to the input method, so Escape cancels a candidate
+ * instead of ending inline editing, Enter confirms it instead of jumping to the next Find match or splitting
+ * a Lyric Script slide, and the arrows choose a candidate instead of moving the caret (design/15 "Keys").
+ */
+export function composing(e: {
+  isComposing?: boolean;
+  keyCode?: number;
+  nativeEvent?: { isComposing?: boolean };
+}): boolean {
+  return !!(e.isComposing || e.nativeEvent?.isComposing || e.keyCode === 229);
+}
+
+/** The attribute that marks the canvas-first editor's hidden backing text field (SlideCanvas.tsx). */
+export const BACKING_FIELD = 'data-backing-text';
+
+/**
+ * When inline editing ends, the hidden backing text field gives the keys back to the slide (b1, design/15
+ * "Keys"): if it holds the focus (no visible text field does), it is blurred, so the focus is on the page
+ * again and `keyPlace` says 'canvas' (ArrowRight nudges, Delete deletes the box, Escape drops the
+ * selection), instead of the keys moving an invisible caret or deleting letters. Whether it blurred.
+ */
+export function releaseBackingField(
+  doc: { activeElement?: unknown } | undefined = typeof document === 'undefined' ? undefined : document,
+): boolean {
+  const el = doc?.activeElement as (El & { blur?: () => void }) | null | undefined;
+  if (!el?.hasAttribute?.(BACKING_FIELD)) return false;
+  el.blur?.();
+  return true;
+}
+
 /** Ctrl/Cmd+Z undoes; Ctrl/Cmd+Y and Ctrl/Cmd+Shift+Z redo (Alt combinations are left alone). */
 export function historyKey(e: {
   key: string;

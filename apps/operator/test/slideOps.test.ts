@@ -26,6 +26,7 @@ import {
   FindReplaceView,
   type FindReplaceViewProps,
   findRows,
+  goToMatch,
   LIST_LIMIT,
   matchSummary,
   replacedMessage,
@@ -997,6 +998,42 @@ function seed<T extends object>(
   Object.assign(store.getInitialState(), p);
   store.setState(p);
 }
+
+describe("Find's match rows open the match for inline editing (goToMatch)", () => {
+  const p = deck([
+    slide('s1', [text('t1', 'Welcome')]),
+    slide('s2', [announcement(), text('art', 'Sunday 12 May', { locked: true })]),
+  ]);
+  beforeEach(() => openPresentation(p));
+  const row = (objectId: string, unseen = false) =>
+    ({ ...findRows(p, findText(p, '12 May')).find((r) => r.objectId === objectId)!, unseen }) as Parameters<
+      typeof goToMatch
+    >[0];
+
+  it('opens the slide, selects the match and starts inline editing on the canvas with it selected', () => {
+    const r = row(announcement().id);
+    expect(goToMatch(r, false)).toBe(true);
+    const st = useEditor.getState();
+    expect(st).toMatchObject({ slideId: 's2', objectId: r.objectId, inlineEditingId: r.objectId });
+    expect(st.textRange).toEqual({ start: r.start, end: r.end, caret: r.end });
+  });
+
+  it('only highlights the match when it cannot be edited: live-locked, a locked box, not drawn', () => {
+    for (const [r, ro] of [
+      [row(announcement().id), true],
+      // A locked box (Find leaves PowerPoint art out; a row for one would still only highlight).
+      [{ ...row(announcement().id), objectId: 'art', start: 7, end: 13 }, false],
+      [row(announcement().id, true), false],
+    ] as const) {
+      openPresentation(p);
+      expect(goToMatch(r, ro)).toBe(false);
+      const st = useEditor.getState();
+      expect(st.objectId).toBe(r.objectId);
+      expect(st.textRange).toMatchObject({ start: r.start, end: r.end });
+      expect(st.inlineEditingId).toBeUndefined();
+    }
+  });
+});
 
 describe('the Find and replace dialog', () => {
   const p = deck([

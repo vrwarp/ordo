@@ -4,12 +4,13 @@ import {
   type Presentation,
   type Rgba,
   type Slide,
-  type SlideObject,
+  SlideObject,
   type TextObject,
   type TextPara,
   type TextRun,
   type TextStyle,
 } from '@ordo/domain';
+import { clampObject } from '@ordo/renderer';
 import { withSlide } from './common.ts';
 import { MAX_OBJECTS } from './group.ts';
 import { type ParaPatch, type RunPatch, type RunStyle, RUN_FIELDS, VISUAL_RUN_FIELDS } from './text.ts';
@@ -32,6 +33,31 @@ const MAX_PARAS = 5000;
 const MAX_GROUP = 100_000;
 const COORD = 100_000;
 
+/**
+ * Bounds of what the clipboard readers take (design/21: clipboard HTML is untrusted input; any web page a
+ * volunteer copies from can put HTML on the clipboard). Past them the rest is ignored, never thrown at:
+ * - `htmlChars`: UTF-16 units of HTML read;
+ * - `nodes`: elements and text nodes kept (the parser stops there);
+ * - `depth`: element nesting (deeper elements stay flat in their deepest allowed parent);
+ * - `text`: characters one paste makes or adds to a text object (the schema's bound on a text object);
+ * - `objects`: slide objects one object paste takes (a slide draws at most 200).
+ */
+export const CLIPBOARD_LIMITS = {
+  htmlChars: 4_000_000,
+  nodes: 100_000,
+  depth: 256,
+  text: 20_000,
+  objects: 200,
+} as const;
+
+/**
+ * The format of the `data-ordo-objects` and `data-ordo-rich` payloads ordo writes (`v`). A payload without
+ * `v` is the first format (builds before it was versioned), read as 1; a newer one is not read (the paste
+ * falls back to the HTML's text).
+ */
+export const CLIPBOARD_FORMAT = 1;
+const readableFormat = (v: unknown) => v === undefined || v === CLIPBOARD_FORMAT;
+
 const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const clampN = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const isHigh = (c: number) => c >= 0xd800 && c <= 0xdbff;
@@ -46,6 +72,14 @@ function span(text: string, start: number, end: number): [number, number] {
   if (inPair(text, a)) a--;
   if (inPair(text, b)) b++;
   return [a, b];
+}
+
+/** `s` cut to at most `n` UTF-16 units, never inside a surrogate pair. */
+function cutAt(s: string, n: number): string {
+  if (s.length <= n) return s;
+  let k = Math.max(0, n);
+  if (k > 0 && isHigh(s.charCodeAt(k - 1))) k--;
+  return s.slice(0, k);
 }
 
 function newlines(s: string, start = 0, end = s.length): number {
@@ -274,7 +308,10 @@ export function pasteRichText(
   slice: RichTextSlice,
 ): { object: TextObject; caret: number; overrides: string[] } {
   const [a, b] = span(o.text, start, end);
-  const ins = slice.text ?? '';
+  // The object keeps at most `CLIPBOARD_LIMITS.text` characters (the schema's bound): the rest of a longer
+  // paste is left out, never cutting a surrogate pair.
+  const room = Math.max(0, CLIPBOARD_LIMITS.text - (o.text.length - (b - a)));
+  const ins = cutAt(slice.text ?? '', room);
   const caret = a + ins.length;
   if (a === b && !ins) return { object: o, caret: a, overrides: [] };
 
@@ -371,7 +408,7 @@ function rgbaCss(c: Rgba): string {
  * round-tripping inside Ordo and clean rich pasting into Google Docs, Word, Keynote, and Notes.
  */
 export function richTextToHtml(slice: RichTextSlice, baseStyle?: TextStyle): string {
-  const payload = escapeHtml(JSON.stringify(slice));
+  const payload = escapeHtml(JSON.stringify({ v: CLIPBOARD_FORMAT, ...slice }));
   const lines = slice.text.split('\n');
   const runs = validRuns(slice.runs ?? [], slice.text.length);
   const htmlLines: string[] = [];
@@ -482,16 +519,18 @@ const ENTITIES: Record<string, string> = {
   trade: '\u2122',
 };
 
+/** A numeric character reference's character, or undefined for one that names no character. */
+function fromCode(code: number): string | undefined {
+  if (!Number.isInteger(code) || code <= 0 || code > 0x10ffff) return undefined;
+  return code === 160 ? ' ' : String.fromCodePoint(code);
+}
+
 function decodeEntities(raw: string): string {
-  return raw.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z0-9]+);/g, (full, body: string) => {
-    if (body.startsWith('#x') || body.startsWith('#X')) {
-      const code = Number.parseInt(body.slice(2), 16);
-      return Number.isFinite(code) && code > 0 ? (code === 160 ? ' ' : String.fromCodePoint(code)) : full;
-    }
-    if (body.startsWith('#')) {
-      const code = Number.parseInt(body.slice(1), 10);
-      return Number.isFinite(code) && code > 0 ? (code === 160 ? ' ' : String.fromCodePoint(code)) : full;
-    }
+  if (!raw.includes('&')) return raw;
+  return raw.replace(/&(#x[0-9a-fA-F]{1,8}|#[0-9]{1,10}|[a-zA-Z0-9]{1,32});/g, (full, body: string) => {
+    if (body.startsWith('#x') || body.startsWith('#X'))
+      return fromCode(Number.parseInt(body.slice(2), 16)) ?? full;
+    if (body.startsWith('#')) return fromCode(Number.parseInt(body.slice(1), 10)) ?? full;
     return ENTITIES[body.toLowerCase()] ?? full;
   });
 }
@@ -507,69 +546,137 @@ function parseAttributes(attrStr: string): Record<string, string> {
   return attrs;
 }
 
-function parseHtmlTree(html: string): HtmlNode[] {
-  const cleaned = html
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<!DOCTYPE[^>]*>/gi, '')
-    .replace(/<(script|style|head|title|svg|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+/** Elements whose content is never text to paste: skipped with everything inside them. */
+const SKIPPED_TAGS = new Set(['script', 'style', 'head', 'title', 'svg', 'noscript']);
 
+/** A tag's name at `i` (just past '<' or '</'), as the HTML tokenizer reads it. */
+const TAG_NAME = /[a-zA-Z][a-zA-Z0-9:-]*/y;
+
+/**
+ * The '>' that ends the tag whose attributes start at `from`, skipping quoted attribute values (a quote
+ * opens a value only after '=', as browsers read it), or -1 when the tag never ends.
+ */
+function tagEnd(html: string, from: number): number {
+  let quote = 0;
+  let afterEq = false;
+  for (let i = from; i < html.length; i++) {
+    const c = html.charCodeAt(i);
+    if (quote) {
+      if (c === quote) quote = 0;
+    } else if (c === 0x3e /* > */) return i;
+    else if ((c === 0x22 || c === 0x27) && afterEq) quote = c;
+    else if (c === 0x3d /* = */) afterEq = true;
+    else if (c !== 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d && c !== 0x0c) afterEq = false;
+  }
+  return -1;
+}
+
+/**
+ * Clipboard HTML as a tree, for the rich-text and object readers. A small tokenizer, linear in the HTML's
+ * length whatever it holds (unclosed comments, tags or quotes, deep nesting): it reads at most
+ * `CLIPBOARD_LIMITS.htmlChars`, keeps at most `nodes` nodes and `depth` levels, skips comments, doctypes
+ * and the content of `SKIPPED_TAGS`, closes `<p>` and `<li>` before a sibling, and never throws.
+ */
+function parseHtmlTree(input: string): HtmlNode[] {
+  const html = typeof input === 'string' ? input.slice(0, CLIPBOARD_LIMITS.htmlChars) : '';
+  // The lower-case copy finds a skipped element's end ('</SCRIPT>' too) in one forward scan.
+  let lower: string | undefined;
   const root: { tag: string; attrs: Record<string, string>; children: HtmlNode[] } = {
     tag: 'root',
     attrs: {},
     children: [],
   };
   const stack = [root];
-  const tagRe = /<\/?([a-zA-Z0-9:-]+)\b([^>]*?)(\/?)>/g;
-  let lastIndex = 0;
+  let nodes = 0;
+  const add = (n: HtmlNode): boolean => {
+    if (nodes >= CLIPBOARD_LIMITS.nodes) return false;
+    nodes++;
+    stack[stack.length - 1]!.children.push(n);
+    return true;
+  };
+  const text = (from: number, to: number): boolean => {
+    if (to <= from) return true;
+    const value = decodeEntities(html.slice(from, to));
+    return !value || add({ type: 'text', value });
+  };
 
-  for (let m = tagRe.exec(cleaned); m !== null; m = tagRe.exec(cleaned)) {
-    if (m.index > lastIndex) {
-      const text = decodeEntities(cleaned.slice(lastIndex, m.index));
-      if (text) stack[stack.length - 1]!.children.push({ type: 'text', value: text });
+  let pos = 0;
+  while (pos < html.length) {
+    const lt = html.indexOf('<', pos);
+    if (lt < 0) break;
+    const next = html.charCodeAt(lt + 1);
+    if (next === 0x21 /* ! */) {
+      // A comment, a doctype or a CDATA section: up to its end (the rest of the HTML when it has none).
+      if (!text(pos, lt)) return root.children;
+      const close = html.startsWith('<!--', lt) ? html.indexOf('-->', lt + 4) : html.indexOf('>', lt + 2);
+      if (close < 0) return root.children;
+      pos = close + (html.startsWith('<!--', lt) ? 3 : 1);
+      continue;
     }
-    lastIndex = tagRe.lastIndex;
-    const full = m[0]!;
-    const tag = m[1]!.toLowerCase();
-    const isClose = full.startsWith('</');
-    const isSelfClose = m[3] === '/' || VOID_TAGS.has(tag);
-
-    if (isClose) {
+    const closing = next === 0x2f; /* / */
+    TAG_NAME.lastIndex = lt + (closing ? 2 : 1);
+    const name = TAG_NAME.exec(html);
+    if (!name) {
+      // Not a tag ('a < b'): the '<' is text.
+      if (!text(pos, lt + 1)) return root.children;
+      pos = lt + 1;
+      continue;
+    }
+    const gt = tagEnd(html, TAG_NAME.lastIndex);
+    // A tag never closed: the rest is text (and its scan was the last, so the parse stays linear).
+    if (gt < 0) break;
+    if (!text(pos, lt)) return root.children;
+    pos = gt + 1;
+    const tag = name[0].toLowerCase();
+    if (closing) {
       for (let i = stack.length - 1; i > 0; i--) {
         if (stack[i]!.tag === tag) {
           stack.length = i;
           break;
         }
       }
-    } else {
-      // Auto-close implicit sibling tags (<p> before <p>, <li> before <li>).
-      if ((tag === 'p' || tag === 'li') && stack[stack.length - 1]?.tag === tag) {
-        stack.pop();
-      }
-      const node: HtmlNode = {
-        type: 'element',
-        tag,
-        attrs: parseAttributes(m[2] ?? ''),
-        children: [],
-      };
-      stack[stack.length - 1]!.children.push(node);
-      if (!isSelfClose) stack.push(node);
+      continue;
     }
+    if (SKIPPED_TAGS.has(tag)) {
+      lower ??= html.toLowerCase();
+      const end = lower.indexOf(`</${tag}`, pos);
+      const endGt = end < 0 ? -1 : html.indexOf('>', end);
+      if (endGt < 0) return root.children;
+      pos = endGt + 1;
+      continue;
+    }
+    let attrStr = html.slice(TAG_NAME.lastIndex, gt);
+    const selfClose = attrStr.endsWith('/');
+    if (selfClose) attrStr = attrStr.slice(0, -1);
+    // Auto-close implicit sibling tags (<p> before <p>, <li> before <li>).
+    if ((tag === 'p' || tag === 'li') && stack[stack.length - 1]?.tag === tag) stack.pop();
+    const node: HtmlNode = { type: 'element', tag, attrs: parseAttributes(attrStr), children: [] };
+    if (!add(node)) return root.children;
+    if (!selfClose && !VOID_TAGS.has(tag) && stack.length <= CLIPBOARD_LIMITS.depth) stack.push(node);
   }
-
-  if (lastIndex < cleaned.length) {
-    const text = decodeEntities(cleaned.slice(lastIndex));
-    if (text) stack[stack.length - 1]!.children.push({ type: 'text', value: text });
-  }
-
+  text(pos, html.length);
   return root.children;
 }
 
+/** The value of attribute `attr` on the first element having it, depth first (iterative: no recursion). */
 function findElementWithAttr(nodes: readonly HtmlNode[], attr: string): string | undefined {
-  for (const n of nodes) {
-    if (n.type === 'element') {
-      if (attr in n.attrs) return n.attrs[attr];
-      const found = findElementWithAttr(n.children, attr);
-      if (found !== undefined) return found;
+  const todo: (readonly HtmlNode[])[] = [nodes];
+  const at: number[] = [0];
+  while (todo.length) {
+    const list = todo[todo.length - 1]!;
+    const i = at[at.length - 1]!;
+    if (i >= list.length) {
+      todo.pop();
+      at.pop();
+      continue;
+    }
+    at[at.length - 1] = i + 1;
+    const n = list[i]!;
+    if (n.type !== 'element') continue;
+    if (Object.hasOwn(n.attrs, attr)) return n.attrs[attr];
+    if (n.children.length) {
+      todo.push(n.children);
+      at.push(0);
     }
   }
   return undefined;
@@ -704,17 +811,18 @@ export function htmlToRichText(html: string, targetBoxStyle?: TextStyle): RichTe
   const ordoPayload = findElementWithAttr(tree, 'data-ordo-rich');
   if (ordoPayload) {
     try {
-      const parsed = JSON.parse(ordoPayload) as RichTextSlice;
-      if (parsed && typeof parsed.text === 'string') {
-        const cleanRuns = (parsed.runs ?? []).map((r) => ({
-          ...cleanRunFields(r),
-          start: r.start,
-          end: r.end,
-        }));
-        const cleanParas = (parsed.paras ?? []).map((p, i) => cleanPara(p, i > 0));
+      const parsed = JSON.parse(ordoPayload) as RichTextSlice & { v?: unknown };
+      if (parsed && typeof parsed.text === 'string' && readableFormat(parsed.v)) {
+        const text = cutAt(parsed.text, CLIPBOARD_LIMITS.text);
+        const runs = Array.isArray(parsed.runs) ? parsed.runs.slice(0, MAX_RUNS) : [];
+        const cleanRuns = runs
+          .filter((r) => r && typeof r === 'object')
+          .map((r) => ({ ...cleanRunFields(r), start: r.start, end: r.end }));
+        const paras = Array.isArray(parsed.paras) ? parsed.paras.slice(0, newlines(text) + 1) : [];
+        const cleanParas = paras.map((p, i) => cleanPara(p, i > 0));
         return {
-          text: parsed.text,
-          runs: normalizeRuns(validRuns(cleanRuns, parsed.text.length)),
+          text,
+          runs: normalizeRuns(validRuns(cleanRuns, text.length)),
           ...(cleanParas.some(Boolean) ? { paras: trimParas(cleanParas) } : {}),
         };
       }
@@ -728,6 +836,11 @@ export function htmlToRichText(html: string, targetBoxStyle?: TextStyle): RichTe
 
   const targetIsLight = isLightColor(targetBoxStyle?.color);
   let text = '';
+  // The line breaks in `text` (paragraph index of its end), kept as it grows: counting them again at every
+  // block would make a long paste quadratic.
+  let nl = 0;
+  // Set once `text` holds `CLIPBOARD_LIMITS.text` characters: the rest of the HTML is not read.
+  let full = false;
   const runs: TextRun[] = [];
   const paras: (TextPara | null)[] = [];
   let currentPara: TextPara | null = null;
@@ -749,12 +862,12 @@ export function htmlToRichText(html: string, targetBoxStyle?: TextStyle): RichTe
   const ensureNewLine = () => {
     if (!atBlockBoundary && text.length > 0 && !text.endsWith('\n')) {
       trimTrailingLineSpace();
-      const pIdx = newlines(text);
       if (currentPara) {
-        paras[pIdx] = currentPara;
+        paras[nl] = currentPara;
         currentPara = null;
       }
       text += '\n';
+      nl++;
     }
     atBlockBoundary = true;
   };
@@ -767,15 +880,20 @@ export function htmlToRichText(html: string, targetBoxStyle?: TextStyle): RichTe
 
   const walk = (nodes: readonly HtmlNode[], ctx: WalkContext) => {
     for (const n of nodes) {
+      if (full || text.length >= CLIPBOARD_LIMITS.text) {
+        full = true;
+        return;
+      }
       if (n.type === 'text') {
         const val = ctx.inPre ? n.value.replace(/\r\n?/g, '\n') : n.value.replace(/[\r\n\t ]+/g, ' ');
         if (!val) continue;
         // Skip purely whitespace text nodes between block elements or after a trailing space.
         const stripLead = !ctx.inPre && (atBlockBoundary || text.endsWith(' '));
-        const chunk = stripLead ? val.replace(/^\s+/, '') : val;
+        const chunk = cutAt(stripLead ? val.replace(/^\s+/, '') : val, CLIPBOARD_LIMITS.text - text.length);
         if (!chunk) continue;
         const start = text.length;
         text += chunk;
+        nl += newlines(chunk);
         atBlockBoundary = chunk.endsWith('\n');
         const cleaned = cleanRunFields(ctx.style);
         if (RUN_FIELDS.some((k) => cleaned[k] !== undefined)) {
@@ -787,9 +905,9 @@ export function htmlToRichText(html: string, targetBoxStyle?: TextStyle): RichTe
       const tag = n.tag;
       if (tag === 'br') {
         if (!ctx.inPre) trimTrailingLineSpace();
-        const pIdx = newlines(text);
-        if (currentPara) paras[pIdx] = currentPara;
+        if (currentPara) paras[nl] = currentPara;
         text += '\n';
+        nl++;
         atBlockBoundary = true;
         continue;
       }
@@ -880,7 +998,8 @@ export function htmlToRichText(html: string, targetBoxStyle?: TextStyle): RichTe
         currentPara = { ...(currentPara ?? {}), align: alignCss as TextPara['align'] };
       }
 
-      const nextListStack = [...ctx.listStack];
+      // Copied only where a list starts (an 'li' counts on in its list's own entry).
+      const nextListStack = tag === 'ul' || tag === 'ol' ? [...ctx.listStack] : ctx.listStack;
       if (tag === 'ul') {
         const startAt = Number.parseInt(n.attrs.start ?? '1', 10);
         nextListStack.push({ kind: 'ul', index: Number.isFinite(startAt) ? startAt : 1 });
@@ -910,9 +1029,8 @@ export function htmlToRichText(html: string, targetBoxStyle?: TextStyle): RichTe
       walk(n.children, { style: nextStyle, inPre, listStack: nextListStack });
 
       if (isBlock) {
-        const pIdx = newlines(text);
         if (currentPara) {
-          paras[pIdx] = currentPara;
+          paras[nl] = currentPara;
           currentPara = null;
         }
         ensureNewLine();
@@ -948,13 +1066,21 @@ export type CopiedObjectsData = {
 };
 
 /**
- * Serialize selected slide objects into an HTML wrapper with `data-ordo-objects` + fallback plain text.
+ * A pasted object made fit to store, or undefined to leave it out (`parseObjectsFromHtml`): the importers'
+ * sanitize dispatch (`@ordo/importers` `sanitizeObject`, M9 fields included), loaded with the paste.
+ */
+export type ObjectSanitizer = (o: SlideObject) => SlideObject | undefined;
+
+/**
+ * Serialize selected slide objects into an HTML wrapper with `data-ordo-objects` (format `CLIPBOARD_FORMAT`)
+ * + fallback plain text.
  */
 export function serializeObjectsToHtml(
   objects: readonly SlideObject[],
   sourceSlideId?: string,
 ): { html: string; text: string } {
-  const payload: CopiedObjectsData = {
+  const payload: CopiedObjectsData & { v: number } = {
+    v: CLIPBOARD_FORMAT,
     objects: structuredClone(objects) as SlideObject[],
     sourceSlideId,
   };
@@ -968,32 +1094,69 @@ export function serializeObjectsToHtml(
 }
 
 /**
- * Parse copied Ordo slide objects from clipboard HTML (`data-ordo-objects`), if present.
+ * A pasted object as it may be stored, or undefined: it must pass the slide object schema
+ * (`SlideObject.safeParse`: its parsed data is what is kept, unknown keys dropped, M9 fields that do not
+ * hold dropped by their `.catch`), then `sanitize` (the importers' bounds: fonts, runs, M9 tables, charts
+ * and decorations), and the render clamp must draw it (`clampObject`). Its re-import identity
+ * (`origin.shapeId`, `ph`, `role`) is dropped: a paste from the system clipboard is the volunteer's own
+ * object, and only `origin.group` (with its `src`, which the schema requires) is kept so a pasted
+ * shape+text pair or table still selects as one (`pasteObjects` gives it a fresh group number).
  */
-export function parseObjectsFromHtml(html: string): CopiedObjectsData | null {
-  if (!html?.includes('data-ordo-objects')) return null;
+export function pastedObject(raw: unknown, sanitize?: ObjectSanitizer): SlideObject | undefined {
+  const parsed = SlideObject.safeParse(raw);
+  if (!parsed.success) return undefined;
+  let o: SlideObject | undefined = parsed.data;
+  if (o.origin) {
+    const { src, group } = o.origin;
+    const { origin: _origin, ...rest } = o;
+    o = (group === undefined ? rest : { ...rest, origin: { src, group } }) as SlideObject;
+  }
+  if (sanitize) {
+    try {
+      o = sanitize(o);
+    } catch {
+      return undefined;
+    }
+    if (!o || !SlideObject.safeParse(o).success) return undefined;
+  }
+  return clampObject(o) ? o : undefined;
+}
+
+/**
+ * Parse copied Ordo slide objects from clipboard HTML (`data-ordo-objects`), if present: at most
+ * `CLIPBOARD_LIMITS.objects` of them, each through `pastedObject` (objects that do not pass are left out,
+ * counted in `left`, so the editor can say so). Null when the HTML holds no payload, an unreadable one or one
+ * of a newer format; `objects` is empty when the payload held entries and none passed. Never throws.
+ */
+export function parseObjectsFromHtml(
+  html: string,
+  sanitize?: ObjectSanitizer,
+): (CopiedObjectsData & { left: number }) | null {
+  if (typeof html !== 'string' || !html.includes('data-ordo-objects')) return null;
   const tree = parseHtmlTree(html);
   const raw = findElementWithAttr(tree, 'data-ordo-objects');
   if (!raw) return null;
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(raw) as CopiedObjectsData;
-    if (!parsed || !Array.isArray(parsed.objects) || !parsed.objects.length) return null;
-    const valid = parsed.objects.filter(
-      (o) =>
-        o &&
-        typeof o === 'object' &&
-        (o.type === 'text' || o.type === 'image' || o.type === 'shape') &&
-        o.box &&
-        fin(o.box.x) &&
-        fin(o.box.y) &&
-        fin(o.box.w) &&
-        fin(o.box.h),
-    );
-    if (!valid.length) return null;
-    return { objects: valid, sourceSlideId: parsed.sourceSlideId };
+    parsed = JSON.parse(raw);
   } catch {
     return null;
   }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const payload = parsed as { v?: unknown; objects?: unknown; sourceSlideId?: unknown };
+  if (!readableFormat(payload.v) || !Array.isArray(payload.objects)) return null;
+  if (!payload.objects.length) return null;
+  const objects: SlideObject[] = [];
+  for (const o of payload.objects.slice(0, CLIPBOARD_LIMITS.objects)) {
+    const ok = pastedObject(o, sanitize);
+    if (ok) objects.push(ok);
+  }
+  const src = payload.sourceSlideId;
+  return {
+    objects,
+    left: payload.objects.length - objects.length,
+    ...(typeof src === 'string' && src.length <= 200 ? { sourceSlideId: src } : {}),
+  };
 }
 
 function freshGroup(taken: Set<number>): number {

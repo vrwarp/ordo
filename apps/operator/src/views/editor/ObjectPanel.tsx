@@ -9,6 +9,7 @@ import {
   copyTextSelection,
   cutTextSelection,
   handleTextPaste,
+  placeSelection,
   refit,
   replacePictureWith,
   typeText,
@@ -16,7 +17,7 @@ import {
 import { MediaPickerDialog } from './BackgroundPicker.tsx';
 import { CropControl } from './CropControl.tsx';
 import { change, redo, setTextRange, stopInlineEditing, undo, useEditor } from './editorStore.ts';
-import { historyKey } from './editorKeys.ts';
+import { composing, historyKey } from './editorKeys.ts';
 import { restoreFieldSelection } from './fieldSelection.ts';
 import { GroupNote, LockedNote, SelectionBox } from './GroupPanel.tsx';
 import { VideoPanel } from './MediaPanels.tsx';
@@ -34,9 +35,10 @@ import {
   objectSectionsFor,
 } from './objectSections.ts';
 import { getSlide, markOverride, updateObject, updateSlide } from './ops.ts';
-import { isLocked } from './ops/group.ts';
+import { groupBox, isLocked } from './ops/group.ts';
 import type { TextRange } from './ops/text.ts';
 import { ParagraphStrip } from './ParagraphStrip.tsx';
+import { type AlignTo, alignedBox, nearBox, placementArea, presetIn } from './placement.ts';
 import { fitMessage } from './textFit.ts';
 import { UnifiedTypography } from './UnifiedTypography.tsx';
 
@@ -85,11 +87,17 @@ export function ObjectPanel({ o, readOnly: liveLocked }: { o: SlideObject; readO
     (slide?.lyricObjectId === o.id ||
       (!slide?.lyricObjectId && slide?.objects.find((x) => x.type === 'text')?.id === o.id));
   const themed = isLyric && !!draft?.themeId;
-  const set = (fn: (x: SlideObject) => SlideObject, key?: string, overridePath?: string) => {
-    if (liveLocked || (locked && overridePath !== 'box')) return;
+  const set = (
+    fn: (x: SlideObject) => SlideObject,
+    key?: string,
+    overridePath?: string | readonly string[],
+  ) => {
+    const paths =
+      overridePath === undefined ? [] : typeof overridePath === 'string' ? [overridePath] : overridePath;
+    if (liveLocked || (locked && !(paths.length === 1 && paths[0] === 'box'))) return;
     change((p) => {
       let q = updateObject(p, slideId, o.id, fn);
-      if (themed && overridePath) q = updateSlide(q, slideId, (s) => markOverride(s, overridePath));
+      if (themed && paths.length) q = updateSlide(q, slideId, (s) => paths.reduce(markOverride, s));
       return q;
     }, key);
   };
@@ -203,6 +211,7 @@ function TextSection({ o: obj, readOnly, themed, marks, set }: ObjectSectionCont
             setRange({ start, end, caret });
           }}
           onKeyDown={(e) => {
+            if (composing(e)) return;
             if (e.key === 'Escape' && useEditor.getState().inlineEditingId) {
               e.preventDefault();
               stopInlineEditing();
@@ -277,8 +286,31 @@ function TextSection({ o: obj, readOnly, themed, marks, set }: ObjectSectionCont
   );
 }
 
-/** A text object's screen placement presets (`PLACEMENT_PRESETS`). */
-function PlacementSection({ o, readOnly, set }: ObjectSectionContext) {
+/**
+ * The selection as one block, and how to place it (`placeSelection`): every selected object of the open
+ * slide (a group from PowerPoint, a shape with its text, what Shift-click gathered), the primary alone when
+ * nothing else is selected. Nothing moves under the live lock; a locked object's box may.
+ */
+function useSelectionPlacement({ o, liveLocked, slide, draft }: ObjectSectionContext) {
+  const ids = useEditor((s) => s.objectIds);
+  const objects = slide?.objects.filter((x) => ids.includes(x.id)) ?? [];
+  const block = objects.length > 1 ? objects : [o];
+  return {
+    area: placementArea(draft),
+    bounds: groupBox(block),
+    place(target: (from: Box) => Box) {
+      if (!liveLocked) placeSelection(target);
+    },
+  };
+}
+
+/**
+ * A text object's screen placement presets (`PLACEMENT_PRESETS`, in the deck's own area on a 4:3 deck): the
+ * whole selection goes there as one block, keeping its turn.
+ */
+function PlacementSection(ctx: ObjectSectionContext) {
+  const { readOnly } = ctx;
+  const { area, bounds, place } = useSelectionPlacement(ctx);
   return (
     <div className="col" style={{ gap: 6 }}>
       <span
@@ -289,11 +321,8 @@ function PlacementSection({ o, readOnly, set }: ObjectSectionContext) {
       </span>
       <div className="grid2" style={{ gap: 6 }}>
         {PLACEMENT_PRESETS.map((p) => {
-          const active =
-            Math.abs(o.box.x - p.box.x) < 20 &&
-            Math.abs(o.box.y - p.box.y) < 20 &&
-            Math.abs(o.box.w - p.box.w) < 30 &&
-            Math.abs(o.box.h - p.box.h) < 30;
+          const box = presetIn(p.box, area);
+          const active = nearBox(bounds, box);
           return (
             <button
               key={p.id}
@@ -311,7 +340,7 @@ function PlacementSection({ o, readOnly, set }: ObjectSectionContext) {
                 cursor: 'pointer',
                 textAlign: 'left',
               }}
-              onClick={() => set((x) => ({ ...x, box: p.box }), undefined, 'box')}
+              onClick={() => place(() => box)}
             >
               <span style={{ fontSize: 12, fontWeight: 600, color: active ? 'var(--accent)' : 'var(--fg)' }}>
                 {p.label}
@@ -327,34 +356,30 @@ function PlacementSection({ o, readOnly, set }: ObjectSectionContext) {
   );
 }
 
-/** The box and the align bar, editable on a locked object (not under the live lock). */
-function BoxSection({ o, liveLocked, marks, set }: ObjectSectionContext) {
+/** The align bar's buttons: where, what it says, its icon. */
+const ALIGNS: readonly [AlignTo, string, string][] = [
+  ['left', 'Align left', '⇤'],
+  ['cx', 'Center horizontally', '⇹'],
+  ['right', 'Align right', '⇥'],
+  ['top', 'Align top', '⤒'],
+  ['cy', 'Center vertically', '⇳'],
+  ['bottom', 'Align bottom', '⤓'],
+];
+
+/**
+ * The box and the align bar, editable on a locked object (not under the live lock). The bar aligns the whole
+ * selection by its bounds as drawn, inside the deck's area on a 4:3 deck.
+ */
+function BoxSection(ctx: ObjectSectionContext) {
+  const { o, liveLocked, marks, set } = ctx;
+  const { area, place } = useSelectionPlacement(ctx);
   return (
     <section>
       <h4>
         Position and size{marks.has('box') && <span className="override-mark"> ● overrides theme</span>}
       </h4>
       <div className="ed-align-bar" role="group" aria-label="Align to slide">
-        {(
-          [
-            ['left', 'Align left', '⇤', (b: typeof o.box) => ({ ...b, x: 0 })],
-            [
-              'cx',
-              'Center horizontally',
-              '⇹',
-              (b: typeof o.box) => ({ ...b, x: Math.round((1920 - b.w) / 2) }),
-            ],
-            ['right', 'Align right', '⇥', (b: typeof o.box) => ({ ...b, x: 1920 - b.w })],
-            ['top', 'Align top', '⤒', (b: typeof o.box) => ({ ...b, y: 0 })],
-            [
-              'cy',
-              'Center vertically',
-              '⇳',
-              (b: typeof o.box) => ({ ...b, y: Math.round((1080 - b.h) / 2) }),
-            ],
-            ['bottom', 'Align bottom', '⤓', (b: typeof o.box) => ({ ...b, y: 1080 - b.h })],
-          ] as const
-        ).map(([k, title, icon, fn]) => (
+        {ALIGNS.map(([k, title, icon]) => (
           <button
             key={k}
             type="button"
@@ -362,7 +387,7 @@ function BoxSection({ o, liveLocked, marks, set }: ObjectSectionContext) {
             disabled={liveLocked}
             title={title}
             aria-label={title}
-            onClick={() => set((x) => ({ ...x, box: fn(x.box) }), undefined, 'box')}
+            onClick={() => place((from) => alignedBox(from, area, k))}
           >
             {icon}
           </button>
@@ -412,8 +437,12 @@ function TextStyleSection({ o: obj, readOnly, themed, marks, set }: ObjectSectio
         box
         onRefit={readOnly ? undefined : () => refit(o.id)}
         marks={themed ? (marks as Set<string>) : undefined}
-        onChange={(style: TextStyle, key) =>
-          set((x) => ({ ...x, style }) as SlideObject, `style:${o.id}:${String(key)}`, `style.${String(key)}`)
+        onChange={(style: TextStyle, key, also) =>
+          set(
+            (x) => ({ ...x, style }) as SlideObject,
+            `style:${o.id}:${String(key)}`,
+            [key, ...(also ?? [])].map((k) => `style.${String(k)}`),
+          )
         }
       />
     </fieldset>
