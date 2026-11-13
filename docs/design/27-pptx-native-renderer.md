@@ -819,11 +819,11 @@ edge Docker image and the Pages demo, so each M9 PR ships on its own:
   that the ladder would simplify keeps LibreOffice's page instead (`ImportCore.pageForBudget`, above).
 - **Known costs of the hold-back until `decor-render`** (hub with LibreOffice, E's worship slides, against
   wave 1): with decorations held back, the guard leaves out topmost objects that main sent to LibreOffice's
-  art, and LibreOffice draws no budget's art: an emoji game slide (aesthetic template slide 7: 0.956 at
-  wave 1, 0.907 with every field, 0.795 as stored: its connector lines and emojis listed missing) and a
-  picture slide of wave 1 (PICK_ME slide 5: 0.995, 0.932, 0.864: a connector group). A Christmas app slide
-  (gingerbread template slide 21: 0.969, 0.936, 0.696) is over 64 KB as stored and now keeps LibreOffice's
-  page instead. All three draw whole again once `decor-render` turns 'decor' on.
+  art, and LibreOffice draws no budget's art: an emoji game slide (0.956 at wave 1, 0.907 with every field,
+  0.795 as stored: its connector lines and emojis listed missing) and a slide wave 1 showed as LibreOffice's
+  picture (0.995, 0.932, 0.864: a group of connectors). A Christmas template's app slide (0.969, 0.936, 0.696)
+  is over 64 KB as stored and now keeps LibreOffice's page instead (0.995). All three draw whole again once
+  `decor-render` turns 'decor' on.
 - **The first paint stays as fast.** M9 adds no code to what the operator loads before its first paint: its
   drawers load per object kind (`registerShapeDrawerLoader`; the table's in the workers' prepare step and the
   editor canvas) and the Setup and settings pages load when opened (`React.lazy`). Measured on this PR's build:
