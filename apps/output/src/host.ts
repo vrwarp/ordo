@@ -12,7 +12,7 @@ import {
   windowEndpoint,
 } from '@ordo/client';
 import { API_PREFIX } from '@ordo/protocol';
-import type { FromRender, ToAsset, ToRender } from '@ordo/renderer';
+import type { AssetToMain, FromRender, ToAsset, ToRender } from '@ordo/renderer';
 import { vframeClock } from '@ordo/renderer/frame-ring.ts';
 import { Diagnostics } from './diagnostics.ts';
 import type {
@@ -30,6 +30,7 @@ import type {
 import { MediaSlot } from './media.ts';
 import { ProgramSender } from './program.ts';
 import { RELOAD_WINDOW_MS, planReload } from './reload.ts';
+import { svgBitmap } from './svg.ts';
 
 type HoldReason = 'lost' | 'restart' | 'silent';
 
@@ -378,7 +379,12 @@ export class OutputHost {
 
   private startAsset(w: Worker, gen: number): void {
     this.gens.asset = gen;
-    w.onmessage = null;
+    // The worker's only request of the window: an SVG it cannot decode (design/14 "Pictures").
+    w.onmessage = (ev: MessageEvent<AssetToMain | { __ordo?: string }>) => {
+      const d = ev.data as AssetToMain & { __ordo?: string };
+      if (d.__ordo || d.t !== 'svgRaster') return;
+      void this.drawSvg(w, d);
+    };
     const init: ToAsset = {
       t: 'init',
       width: this.opts.width,
@@ -388,6 +394,32 @@ export class OutputHost {
     };
     w.postMessage(init);
     if (gen > 0) this.scheduleWire();
+  }
+
+  /**
+   * Draw an SVG for the asset worker (svg.ts) and hand the bitmap over. A legacy library's SVG without the
+   * still the uploading client draws now; logged, as it costs this thread the draw.
+   */
+  private async drawSvg(w: Worker, req: AssetToMain): Promise<void> {
+    const t0 = performance.now();
+    let bitmap: ImageBitmap | undefined;
+    let error: string | undefined;
+    try {
+      bitmap = await svgBitmap(req.blob);
+    } catch (e) {
+      error = (e as Error).message || String(e);
+    }
+    if (this.sup.worker('asset') !== w) {
+      bitmap?.close();
+      return;
+    }
+    this.log(
+      bitmap
+        ? `drew SVG ${req.hash.slice(0, 8)} for the asset worker (${bitmap.width}x${bitmap.height}, ${Math.round(performance.now() - t0)} ms)`
+        : `could not draw SVG ${req.hash.slice(0, 8)}: ${error}`,
+    );
+    const answer: ToAsset = { t: 'svgRaster', id: req.id, bitmap, error };
+    w.postMessage(answer, bitmap ? [bitmap] : []);
   }
 
   private scheduleWire(): void {

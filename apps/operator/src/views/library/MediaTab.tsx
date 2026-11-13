@@ -7,7 +7,7 @@ import { Dialog } from '../../components/Dialog.tsx';
 import { VirtualList } from '../../components/VirtualList.tsx';
 import { useLockedIds } from '../../hooks.ts';
 import { isPresentationPicture, mediaInUseText, presentationsUsing } from '../../lib/mediaUse.ts';
-import { stillHash } from '../../services/thumbs.ts';
+import { svgNote, tileHash } from '../../services/thumbs.ts';
 import { uploadMedia } from '../../services/upload.ts';
 import { removeLocal, upsertLocal, useLibrary } from '../../state/library.ts';
 import { useSearch } from '../../services/search.ts';
@@ -165,7 +165,8 @@ function previewPlayer(): PreviewPlayer {
 }
 
 function MediaPreview({ m, onClose }: { m: Media; onClose: () => void }) {
-  const f = m.delivery ?? m.original;
+  // An SVG previews as itself (an animated one moves here; the screens draw its still).
+  const f = svgNote(m) ? m.original : (m.delivery ?? m.original);
   return (
     <Dialog title={m.name} onClose={onClose} width={760}>
       {m.kind === 'image' && <img src={fileUrl(f.hash)} alt={m.name} style={{ width: '100%' }} />}
@@ -185,6 +186,7 @@ function MediaPreview({ m, onClose }: { m: Media; onClose: () => void }) {
         {m.durationMs ? formatDuration(m.durationMs) : ''} {m.hasAlpha ? '· alpha' : ''}{' '}
         {m.audio?.loudnessLufs !== undefined ? `· ${m.audio.loudnessLufs.toFixed(1)} LUFS` : ''}
       </div>
+      {svgNote(m) && <div className="muted small">{svgNote(m)}</div>}
     </Dialog>
   );
 }
@@ -313,7 +315,8 @@ export function MediaTab() {
         rowHeight={coarse ? 76 : 64}
         keyOf={(m) => m.id}
         render={(m) => {
-          const still = stillHash(m);
+          const still = tileHash(m);
+          const note = svgNote(m);
           return (
             <>
               <div
@@ -341,6 +344,12 @@ export function MediaTab() {
                   {m.durationMs ? ` · ${formatDuration(m.durationMs)}` : ''}
                   {m.width ? ` · ${m.width}×${m.height}` : ''}
                   {m.error ? ` · ${m.error}` : ''}
+                  {note && (
+                    <span title={note} data-svg-note>
+                      {' '}
+                      · SVG: a still on screens, moves in previews only
+                    </span>
+                  )}
                 </span>
               </span>
               {m.kind !== 'audio' && (

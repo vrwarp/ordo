@@ -45,7 +45,11 @@ The service worker answers every `/api/v1/*` request from the pages and workers 
   hub's one-line summary. `PUT /settings/:key` uses the hub's `SETTINGS_BODY` schemas
   (`@ordo/protocol`): unknown keys are 404 and a new output gets a token, so it can be launched.
 - Media uploads are stored as-is (browsers play these formats); images get their size from
-  `createImageBitmap`.
+  `createImageBitmap`. An SVG comes with the PNG still the operator drew (field `raster`, checked as the
+  hub checks it: a PNG of the SVG's shape within the caps) and keeps it as its delivery, which outputs
+  draw; one without is drawn by the output's window (design/14 "Pictures that are SVGs").
+- Files are served as the hub serves them (design/21): with their library type (the site serves the
+  sample's without an extension), as a sandboxed document that loads nothing, an SVG as a download.
 - **ProPresenter import runs in the browser**: `.pro`, `.probundle`, `.proPlaylist` or a zip of a
   library go through the same `importPro7` as the hub, media included. Pasted SongSelect lyrics too.
 - Files: the visitor's from IndexedDB, the sample's from `/demo/files/<hash>`.
@@ -59,14 +63,18 @@ The service worker answers every `/api/v1/*` request from the pages and workers 
 `apps/demo/scripts/seed.ts` starts the real hub (`apps/hub/dist`) on a scratch directory, creates the
 content through its API and exports the snapshot and files, so the seed is exactly what a hub writes:
 three public-domain hymns, Luke 10 (World English Bible) as a reading, a welcome loop that explains the
-demo, two backgrounds drawn by the script, and a "Sample service" playlist. One audience output and the
-stage display are enabled.
+demo, two backgrounds drawn by the script, the second hymn's moving aurora (an 8 s seamless loop the script
+draws frame by frame and encodes with ffmpeg, which the Pages job installs for the hub; its first frame as a
+still picture when ffmpeg cannot make it: an SVG would be a still on the screens), and a "Sample service"
+playlist. One audience output and the stage display are enabled.
 
 ## Tests
 
 `e2e/pages-demo.spec.ts` serves `site/` under `/ordo/` exactly as Pages does (anything outside answers
-404) and drives it: the sample library, a ProPresenter bundle imported with its background, persistence
-across a reload, Go live, Launch outputs, a GO reaching the output window, End service, Reset demo. CI
+404) and drives it: the sample library, a ProPresenter bundle imported with its background, an SVG
+uploaded with its still (and the "moves in previews only" note), persistence across a reload, Go live,
+Launch outputs, a GO reaching the output window, the aurora moving on the Audience screen, End service,
+Reset demo. CI
 builds the site before the end-to-end suite; locally the spec skips when `site/` is missing.
 
 ## Limits

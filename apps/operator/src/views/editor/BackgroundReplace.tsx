@@ -1,7 +1,7 @@
 import { fileUrl } from '@ordo/client';
 import type { Media, Presentation, Slide } from '@ordo/domain';
 import { useId, useState } from 'react';
-import { stillHash } from '../../services/thumbs.ts';
+import { tileHash } from '../../services/thumbs.ts';
 import { useLibrary } from '../../state/library.ts';
 import { toast } from '../../state/toasts.ts';
 import { removeSlideBackground, replaceBackgroundWith, replaceDeckBackground } from './actions.ts';
@@ -134,7 +134,7 @@ function useMediaInfo(id: string | undefined): { name: string; thumb?: string; m
   const media = useLibrary((s) => s.data.media);
   if (!id) return { name: 'None' };
   const m = media.find((x) => x.id === id);
-  const h = stillHash(m);
+  const h = tileHash(m);
   return { name: m?.name ?? 'Missing media', thumb: h ? fileUrl(h) : undefined, media: m };
 }
 

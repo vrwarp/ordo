@@ -3,7 +3,7 @@ import type { Media } from '@ordo/domain';
 import { useMemo, useState } from 'react';
 import { Dialog } from '../../components/Dialog.tsx';
 import { filesForKinds, kindsText, mediaAccept } from '../../lib/mediaKinds.ts';
-import { stillHash } from '../../services/thumbs.ts';
+import { svgNote, tileHash } from '../../services/thumbs.ts';
 import { useLibrary } from '../../state/library.ts';
 import { toast } from '../../state/toasts.ts';
 import { DropZone, MEDIA_ACCEPT, uploadFiles, UploadProgress } from '../library/MediaTab.tsx';
@@ -121,7 +121,8 @@ export function MediaPickerDialog(props: {
           }}
         >
           {list.map((m) => {
-            const h = stillHash(m);
+            const h = tileHash(m);
+            const note = svgNote(m);
             const blocked = notChoosable(m, !!props.needsSize);
             return (
               <button
@@ -131,7 +132,7 @@ export function MediaPickerDialog(props: {
                 style={THUMB_BUTTON}
                 disabled={!!blocked}
                 aria-label={m.state === 'ready' ? m.name : `${m.name} (${m.state})`}
-                title={blocked ? `${m.name}: ${blocked}` : m.name}
+                title={blocked ? `${m.name}: ${blocked}` : note ? `${m.name}. ${note}` : m.name}
                 onClick={() => props.onPick(m)}
               >
                 <div
@@ -146,6 +147,11 @@ export function MediaPickerDialog(props: {
                   }}
                 >
                   {m.kind === 'video' && <span className="ed-video-badge">▶ Video</span>}
+                  {note && (
+                    <span className="ed-video-badge" data-svg-note>
+                      SVG · moves in previews only
+                    </span>
+                  )}
                 </div>
                 <div className="cap">
                   <span className="ellipsis grow">{m.name}</span>
@@ -180,7 +186,7 @@ export function BackgroundPicker(props: {
   const media = useLibrary((s) => s.data.media);
   const [open, setOpen] = useState(false);
   const m = props.value ? media.find((x) => x.id === props.value) : undefined;
-  const h = stillHash(m);
+  const h = tileHash(m);
   return (
     <div className="row">
       <div

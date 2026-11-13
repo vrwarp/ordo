@@ -5,6 +5,7 @@ import {
   preparePicture,
   preparePictureSteps,
 } from '@ordo/renderer';
+import { looksLikeSvg } from '@ordo/domain';
 import type { DecodeWant, PictureDecoder } from './pictures.ts';
 
 /**
@@ -30,6 +31,11 @@ import type { DecodeWant, PictureDecoder } from './pictures.ts';
  * size frame converts slowly on this thread (70-80 ms for 24 MP), so those decode the whole file as before;
  * so do PNG, GIF and WebP (no scaled decode), JPEGs with an EXIF orientation (the hub resets it; an uploaded
  * photo may keep it) and any failure of the scaled path.
+ *
+ * **SVG (design/14 "Pictures").** `createImageBitmap` cannot decode an SVG, in a worker or on a window. An SVG
+ * the uploading client drew a still for is never read here (its delivery is that PNG); one without (a library
+ * from before) is drawn by the window (`DecoderDeps.rasterSvg`: an `<img>` into a canvas at `svgRasterSizeFor`)
+ * and handed over as a bitmap, so it is a still like the uploads' (an animation at its first frame).
  */
 
 /** A decode failure, with the file and where it was read from (an OPFS copy may be corrupt). */
@@ -195,17 +201,25 @@ export type DecoderDeps = {
   ) => Promise<ImageBitmap>;
   /** WebCodecs' ImageDecoder (secure contexts; the venue serves HTTPS), absent where there is none. */
   ImageDecoder?: ImageDecoderCtor;
+  /**
+   * An SVG this decoder cannot decode, drawn by the output's window and handed back as a bitmap (see above);
+   * absent where there is no window to ask (the SVG then fails like any undecodable file).
+   */
+  rasterSvg?: (hash: string, blob: Blob) => Promise<ImageBitmap>;
 };
 
-/** Counters of the decodes made (diagnostics): whole files, scaled ones, and those kept as a crop. */
-export type DecodeStats = { full: number; scaled: number; cropped: number; refused: number };
+/**
+ * Counters of the decodes made (diagnostics): whole files, scaled ones, those kept as a crop, and SVGs the
+ * window drew.
+ */
+export type DecodeStats = { full: number; scaled: number; cropped: number; refused: number; svg: number };
 
 export type Decoder = PictureDecoder<ImageBitmap> & { stats: DecodeStats };
 
 export function createDecoder(deps: DecoderDeps): Decoder {
   /** Where a scaled or cropped decode lies in its picture. */
   const fromOf = new WeakMap<object, PictureFrom>();
-  const stats: DecodeStats = { full: 0, scaled: 0, cropped: 0, refused: 0 };
+  const stats: DecodeStats = { full: 0, scaled: 0, cropped: 0, refused: 0, svg: 0 };
   const cib = deps.createImageBitmap as (...a: unknown[]) => Promise<ImageBitmap>;
 
   async function scaled(blob: Blob, want: DecodeWant): Promise<ImageBitmap | undefined> {
@@ -277,6 +291,19 @@ export function createDecoder(deps: DecoderDeps): Decoder {
         stats.full++;
         return bmp;
       } catch (err) {
+        if (deps.rasterSvg && looksLikeSvg(new Uint8Array(await blob.slice(0, 512).arrayBuffer()))) {
+          try {
+            const bmp = await deps.rasterSvg(hash, blob);
+            stats.svg++;
+            return bmp;
+          } catch (e) {
+            throw new DecodeError(
+              `SVG ${hash.slice(0, 8)} could not be drawn: ${(e as Error).message}`,
+              hash,
+              source,
+            );
+          }
+        }
         throw new DecodeError(
           `image ${hash.slice(0, 8)} could not be decoded: ${(err as Error).message}`,
           hash,

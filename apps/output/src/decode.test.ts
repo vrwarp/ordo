@@ -173,7 +173,7 @@ describe('createDecoder: the crop-aware decode', () => {
     expect([bmp.width, bmp.height]).toEqual([2250, 1500]);
     expect((bmp as unknown as { what: string }).what).toBe('frame bitmap');
     expect(d.partial!(bmp)).toBe(false); // the whole picture, smaller
-    expect(d.stats).toEqual({ full: 0, scaled: 1, cropped: 0, refused: 0 });
+    expect(d.stats).toEqual({ full: 0, scaled: 1, cropped: 0, refused: 0, svg: 0 });
     // The frame is closed once its bitmap is made.
     expect(p.made.find((m) => m.what.startsWith('frame 3'))!.closed).toBe(true);
   });
@@ -213,6 +213,40 @@ describe('createDecoder: the crop-aware decode', () => {
     const p = platform();
     const d = createDecoder(p.deps(jpeg(6000, 4000), false));
     expect(((await d.decode('h', { targets: [target] })) as unknown as { what: string }).what).toBe('full');
+  });
+
+  it('an SVG it cannot decode is drawn by the window, once per decode; other files are not', async () => {
+    const svg = new TextEncoder().encode(
+      '<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="4">',
+    );
+    const asked: string[] = [];
+    const p = platform({ fail: 'all' });
+    const rasterSvg = async (hash: string, blob: Blob) => {
+      asked.push(`${hash} ${blob.size}`);
+      return { width: 1920, height: 1080, what: 'window', close() {} } as unknown as ImageBitmap;
+    };
+    const d = createDecoder({ ...p.deps(svg), rasterSvg });
+    const bmp = await d.decode('svghash', { targets: [target] });
+    expect((bmp as unknown as { what: string }).what).toBe('window');
+    expect(asked).toEqual([`svghash ${svg.length}`]);
+    expect(d.stats).toMatchObject({ full: 0, svg: 1 });
+    // A JPEG that does not decode is not sent to the window.
+    const j = createDecoder({ ...platform({ fail: 'all' }).deps(jpeg(64, 48)), rasterSvg });
+    expect(await j.decode('jpeg', undefined).catch((e) => e)).toBeInstanceOf(DecodeError);
+    expect(asked).toHaveLength(1);
+    // The window failing to draw it is a decode error of that file (the link retries, then quarantines).
+    const f = createDecoder({
+      ...platform({ fail: 'all' }).deps(svg),
+      rasterSvg: async () => {
+        throw new Error('tainted');
+      },
+    });
+    const err = await f.decode('bad', undefined).catch((e) => e);
+    expect(err).toBeInstanceOf(DecodeError);
+    expect(err.message).toMatch(/SVG bad could not be drawn: tainted/);
+    // Without a window to ask (rasterSvg absent) it fails as before.
+    const n = createDecoder(platform({ fail: 'all' }).deps(svg));
+    expect(await n.decode('none', undefined).catch((e) => e)).toBeInstanceOf(DecodeError);
   });
 
   it('a file that does not decode fails with where it was read from', async () => {

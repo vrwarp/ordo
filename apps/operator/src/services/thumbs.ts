@@ -1,5 +1,13 @@
 import { fileUrl, isControl, type Supervisor } from '@ordo/client';
-import { type Font, type Look, type Media, type Slide, drawnMediaIds, stillFile } from '@ordo/domain';
+import {
+  type Font,
+  type Look,
+  type Media,
+  type Slide,
+  drawnMediaIds,
+  isSvgMime,
+  stillFile,
+} from '@ordo/domain';
 import { useEffect, useState } from 'react';
 import type { ThumbIn, ThumbJob, ThumbOut } from '../workers/thumb.worker.ts';
 
@@ -30,6 +38,24 @@ function slideHash(s: Slide): string {
  */
 export function stillHash(m: Media | undefined): string | undefined {
   return m ? stillFile(m)?.hash : undefined;
+}
+
+/**
+ * The file a media tile shows in the library, a picker or a background swatch: an SVG itself, where an
+ * animated one moves (its still is what the screens draw, design/14 "Pictures"), else `stillHash`.
+ */
+export function tileHash(m: Media | undefined): string | undefined {
+  return m && isSvgMime(m.original.mime) ? m.original.hash : stillHash(m);
+}
+
+/**
+ * What a volunteer is told where an SVG is picked (design/15 "Media library"): the screens show it as a still,
+ * an animated one at its first frame.
+ */
+export function svgNote(m: Pick<Media, 'original'> | undefined): string | undefined {
+  return m && isSvgMime(m.original.mime)
+    ? 'SVG: Audience screens show it as a still picture (an animated one at its first frame); it moves in previews only.'
+    : undefined;
 }
 
 type Pending = { resolve: (url: string | undefined) => void };

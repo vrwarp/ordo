@@ -411,6 +411,14 @@ media that stored presentations use names them in the confirmation first, since 
 goLive: the hub answers such a `DELETE /media/:id` with 409 `media_in_use` (the titles in its message)
 unless it carries `?force=1`, which the tab sends once the user has confirmed.
 
+**SVG pictures** (design/14 "Pictures that are SVGs"). `uploadMedia` (`src/services/upload.ts`) draws an SVG
+through an `<img>` into a canvas at `svgRasterSizeFor` (`rasterizeSvg`: 10 s at most; a decode error, a
+tainted canvas or no page sends the SVG alone) and posts the PNG beside it as `raster`, which the hub keeps as
+its delivery: thumbnails, the editor canvas and outputs draw that still. Tiles where media is picked (the
+Media tab's rows and preview, the media pickers, the background swatches: `tileHash`) show the SVG itself, so
+an animated one moves there, and say "SVG · moves in previews only" (`svgNote`): Audience screens show its
+first frame.
+
 ## Settings
 
 Outputs and looks, audio devices and pairs, key map, Stream Deck pages, MIDI mappings,

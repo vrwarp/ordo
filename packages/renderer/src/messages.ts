@@ -191,7 +191,18 @@ export type ToAsset =
   | { t: 'cancel'; keys: string[] }
   | { t: 'resize'; width: number; height: number }
   /** Drop cached image bitmaps not in `keep` (manifest changed). */
-  | { t: 'prune'; keep: string[] };
+  | { t: 'prune'; keep: string[] }
+  /**
+   * (main → asset) The window's answer to an `AssetToMain` 'svgRaster' request: the SVG drawn at
+   * `svgRasterSizeFor`, or why it could not be (design/14 "Pictures").
+   */
+  | { t: 'svgRaster'; id: number; bitmap?: ImageBitmap; error?: string };
+
+/**
+ * Asset worker → the output window (its main thread), beside the supervisor's heartbeats: draw an SVG the
+ * worker cannot decode (`createImageBitmap` has no SVG decoder) and answer with a 'svgRaster' `ToAsset`.
+ */
+export type AssetToMain = { t: 'svgRaster'; id: number; hash: string; blob: Blob };
 
 // ---- asset -> link (port) ----
 export type FromAsset =

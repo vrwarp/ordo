@@ -47,6 +47,15 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
   on the operator origin (keeps the opener for popups it opens while isolating from
   others), and a CSP:
   `default-src 'self'; connect-src 'self' https://hub.<venue>.synology.me wss://hub.<venue>.synology.me; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self' blob:; worker-src 'self' blob:; frame-ancestors 'none'`.
+- API responses (`/api/v1/*`, `securityHeaders('api')`) carry `Content-Security-Policy: default-src 'none';
+  sandbox` and `X-Content-Type-Options: nosniff` instead: opened as a page, any of them (a stored file's link,
+  an error) is a document with an opaque origin that may load and run nothing. A CSP applies only to the
+  document it arrives with, so pictures, video, fonts and `fetch()` that use these responses are unaffected.
+  `GET /files/:hash` also sends an active type (SVG, the only one the hub stores) as
+  `Content-Disposition: attachment`, so opening it downloads it (review 2026-11-13 R4: an edit-PIN holder
+  could upload an SVG with a `<script>` that ran on the operator origin with the viewer's session when an
+  operator opened its link; `e2e/svg-media.spec.ts`). The Pages demo's service-worker hub sends the same
+  headers for its files (design/26).
 - `Permissions-Policy`: operator origin `hid=(self), midi=(self), window-management=(self), fullscreen=(self)`; output origins `fullscreen=(self), screen-wake-lock=(self), window-management=(self)`; stage `screen-wake-lock=(self), fullscreen=(self)`.
 - Cookies: `Secure; HttpOnly; SameSite=Lax; Domain=.<venue>.synology.me; Path=/`.
 - WebSocket origin check: the `Origin` header must be one of the known role origins.
@@ -60,7 +69,11 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
   (without a media job) must be a still PNG, JPEG, GIF or WebP within 8,192 px a side and 40 MP, and one
   import decodes at most 6,000 MP.
 - Uploads: size limit 4 GB, extension and sniffed MIME must agree, stored under a hash
-  name, never executed. ffmpeg, LibreOffice and pdftoppm run with a timeout, a memory
+  name, never executed. An SVG is only ever drawn as an image (an `<img>`, a CSS background: no script
+  runs, nothing external loads) or served as a download (above); the PNG still that may come with it
+  (design/12 "Media pipeline") is checked by its header (a PNG within 3840 px wide and 16.7 MP, at most
+  96 MB, of the shape the SVG's root element declares) before anything is stored, and decoded by `ffprobe`
+  in the media job. ffmpeg, LibreOffice and pdftoppm run with a timeout, a memory
   limit, and no network.
 - LibreOffice never sees a deck as uploaded (design/27 §5 "Render copy", §12). A CPU-pool task writes
   a render copy: every XML part re-written from the bounded parser's tree (no declaration or entity
