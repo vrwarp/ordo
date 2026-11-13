@@ -60,6 +60,13 @@ const FONTS = [
     style: 'normal' as const,
     path: '/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf',
   },
+  // Hangul (the M9 table-korean case): Unifont (fonts-unifont, which Playwright's Chromium deps install).
+  {
+    family: 'Golden KR',
+    weight: 400,
+    style: 'normal' as const,
+    path: '/usr/share/fonts/opentype/unifont/unifont.otf',
+  },
 ];
 
 /** A face as meta.json records it: what the expected PNGs were drawn with. */

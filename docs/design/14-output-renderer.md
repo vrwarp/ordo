@@ -284,6 +284,16 @@ are byte-identical, and the tests pin each seam's calls by digest against the co
   after its mask's cut (`registerPicturePost`).
 <!-- /m9:render-seams -->
 
+<!-- m9:tables-render -->
+**Tables** (design/27 M9, `ShapeObject.table`). The renderer draws a table object itself (`renderer/src/table/`,
+registered with the shape dispatch), laying its rows out from its cells' text. The prepare step `table layouts`
+(`apps/output/src/prepare/tables.ts`, imported by the asset worker and the thumbnail worker) lays each table of
+the job's slides out in slices of 8 ms (`prepareTableLayout`; a cell once started is finished) before the
+synchronous draw, so the draw lays out nothing and no task passes design/27 §13's 50 ms; the cells' layouts
+are kept by their content, so the next job, a slide sent again and the thumbnails find them. A look that does
+not draw the slide as authored prepares nothing.
+<!-- /m9:tables-render -->
+
 ## Frame loop
 
 ```

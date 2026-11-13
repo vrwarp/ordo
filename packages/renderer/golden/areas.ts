@@ -5,8 +5,10 @@
  * (golden/expected/<case>.png) under the same rules: a case without one fails a --strict run.
  */
 
+import { TABLE_CASES } from './table-cases.ts';
+
 /** A golden case: draws on a 960 x 540 canvas (`rich-cases.ts` `W`, `H`). */
 export type GoldenCase = (ctx: OffscreenCanvasRenderingContext2D) => void;
 
 /** Every area's cases, by case name (names unique across all files, as page.ts's own). */
-export const AREA_CASES: readonly Readonly<Record<string, GoldenCase>>[] = [];
+export const AREA_CASES: readonly Readonly<Record<string, GoldenCase>>[] = [TABLE_CASES];

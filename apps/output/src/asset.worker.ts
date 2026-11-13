@@ -48,6 +48,7 @@ import { Cancelled, Lanes, RANK, type Steps } from './lanes.ts';
 import { OpaqueFiles } from './opaque.ts';
 import { PICTURE_LIMITS, preloadPictures, sourcePicture } from './pictures.ts';
 import { jobSlides, type PrepareHost, prepareSlides } from './prepare/index.ts';
+import './prepare/tables.ts';
 
 /**
  * Asset worker: OPFS reads, image decoding, font loading and text rasterization at output resolution.

@@ -4,6 +4,7 @@ import { isControl, startHeartbeat } from '@ordo/client';
 import { FontResolver, drawImageFit, drawSlide2D, fillColor, installFontEnv } from '@ordo/renderer';
 // The outputs' slide prepare steps (geometry files, and what M9 registers): thumbnails draw what outputs draw.
 import { jobSlides, prepareSlides } from '../../../output/src/prepare/index.ts';
+import '../../../output/src/prepare/tables.ts';
 
 /** Thumbnail worker (design/15): the shared 2D rasterizer on an OffscreenCanvas; the main thread never rasterizes. */
 
