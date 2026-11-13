@@ -153,6 +153,8 @@ function apiResponse(path: string, method: string): unknown {
   if (path === '/library/snapshot') return snapshot;
   if (path === `/presentations/${song.id}`) return song;
   if (path === `/presentations/${news.id}`) return news;
+  if (path.startsWith(`/presentations/${song.id}/revisions/`)) return song;
+  if (path.startsWith(`/presentations/${news.id}/revisions/`)) return news;
   if (path.endsWith('/revisions')) return [{ rev: 1, savedAt: new Date().toISOString(), title: song.title }];
   if (path === '/settings') return settings;
   if (path === '/backup/list') return { files: ['ordo-2026-11-01.db'] };

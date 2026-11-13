@@ -703,6 +703,12 @@ export async function handle(req: Request): Promise<Res> {
           }
           await putDoc(`revs:${seg[1]}`, revs);
         }
+        if (seg[3]) {
+          const targetRev = Number(seg[3]);
+          const found = revs.find((r) => r.rev === targetRev);
+          if (!found) return fail(404, 'not_found', `Revision ${targetRev} not found`);
+          return json(JSON.parse(found.json) as Presentation);
+        }
         return json(revs.map(({ rev, savedAt, savedBy, title }) => ({ rev, savedAt, savedBy, title })));
       }
       if (m === 'GET') {
@@ -873,6 +879,7 @@ export async function handle(req: Request): Promise<Res> {
       if (m === 'GET' && !seg[1]) return json(l.themes.length ? l.themes : [DEFAULT_THEME]);
       if (m === 'GET' && seg[2] === 'revisions') {
         const theme = l.themes.find((x) => x.id === seg[1]) ?? DEFAULT_THEME;
+        if (seg[3]) return json(theme);
         return json([
           {
             rev: theme.rev ?? 1,
