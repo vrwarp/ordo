@@ -3,7 +3,9 @@
 Team members use their own phones during the week to look at the library and to make small changes:
 from home, on the bus, at rehearsal. Running a service stays on the venue PC. A phone can look at
 everything and change a little; it never changes what is live. The design is
-[design/28](../design/28-mobile.md); its phases P0 to P3 are referred to below.
+[design/28](../design/28-mobile.md); its phases P0 to P3 are referred to below. A phone uses the venue
+PC's words: Audience, Stage and Bottom-Third Stream for the screens, the Lyric Script for a song's words;
+Setup, Screens and the Banner belong to the venue PC.
 
 ## Users
 
@@ -12,7 +14,7 @@ everything and change a little; it never changes what is live. The design is
 | Worship lead             | Find any song, see Sunday's plan, add or reorder songs, pick the order for this service, fix a lyric, swap a background |
 | Pastor or speaker        | Check that the sermon deck looks right, fix a typo, hide a slide for this service, write stage notes                    |
 | Musicians                | Read the plan, keys and orders, and the words by section, without being able to change anything                         |
-| Tech volunteers          | Check slides under every look, see whether media is ready, fix small things while preparing                             |
+| Tech volunteers          | Check slides on every screen, see whether media is ready, fix small things while preparing                              |
 | Communications volunteer | Add an announcement from a template with a photo from the camera roll; upload event photos                              |
 | Interpreters             | Read the week's words ahead of time, right-to-left text shown correctly                                                 |
 
@@ -24,29 +26,34 @@ everything and change a little; it never changes what is live. The design is
 - A plan's items with their order for this service and key; a song's words by section; a deck's slides.
 - Search by title, words, author, CCLI number or tag, from a field at the bottom of the screen; a match in
   the words shows the line.
-- Slide previews drawn the way the screens draw them: the main screen, the lobby lower third, the stream
-  key and the stage display with the next slide. Where a phone's browser may break a line differently,
-  the preview says so.
+- Slide previews drawn the way the screens draw them: the Audience screen, the Bottom-Third Stream (the
+  lobby's lower third, and the livestream key over a simulated camera) and the Stage with the next slide,
+  with the screens' own rules (a slide's Bottom-Third text, scripture, nothing on the Bottom-Third Stream
+  during a loop). Where a phone's browser may break a line differently, the preview says so.
 - Media with its state in words ("Processing", "Waiting for the service to end").
 - Reading works offline from the phone's copy, which says how old it is.
 
 ## Light changes (P2)
 
-- Fix words in a slide, split or merge slides, find and replace, edit a stage note.
+- Fix words in a slide, keeping its formatting; split a slide at the caret or into 2-line slides and merge
+  slides, as the Lyric Script does on a computer, with its warning when a slide has more lines than the
+  Bottom-Third Stream shows; find and replace; edit a stage note.
 - Hide a slide in this service only, or everywhere; duplicate or move a slide.
-- Add, remove and reorder plan items; pick a saved arrangement or a section order for this service.
+- Add, remove and reorder plan items; pick a saved arrangement or a section order for this service, step
+  by step as in the Lyric Script.
 - Set a background for this service, for one slide or for all slides of a song, from the library or the
   camera roll; replace an announcement picture.
 - Add an announcement slide from a template (presentations tagged `template`) to this service's own deck.
 - Create a song from pasted lyrics.
-- Not on a phone: canvas layout, themes, looks, fonts, settings, imports, deletes, PINs.
+- Not on a phone: canvas layout, themes, looks, fonts, Setup and Screens, settings, imports, deletes, PINs,
+  lighting (MIDI) cues, and an item's music, countdown or background carry-over.
 
 ## Safety
 
 - The live playlist and its presentations are locked while live; a phone shows "Live at the venue"
   with the plan's name and the lock, never slide text.
-- Every presentation and plan save is a revision; History restores any of them. Undo works within the
-  session and after a save.
+- Every presentation and plan save is a revision; History restores any of them. On a phone History lists
+  the revisions and draws one only when asked. Undo works within the session and after a save.
 - Unsaved text is kept on the phone as it is typed. A change refused because its plan went live is kept
   and offered after the service.
 - Two people changing the same song or plan: different parts are combined; the same line asks which to
@@ -71,8 +78,8 @@ everything and change a little; it never changes what is live. The design is
 
 ## Accessibility and languages
 
-- Usable with one hand: primary actions, search and sheets at the bottom; 44 px targets; text follows the
-  phone's text size up to 200 %.
+- Usable with one hand: primary actions, search and sheets at the bottom; every control at least 44 px
+  (P0); text follows the phone's text size up to 200 %.
 - VoiceOver, TalkBack, Voice Control and Switch Control can do everything, including reordering without
   dragging.
 - Slide text in any direction is shown per paragraph; the phone screens can be translated, including
@@ -89,7 +96,7 @@ each and what it would need.
 - In a usability session the worship lead does every light change above one-handed on her own phone, and
   finds any song in under 10 seconds.
 - Sunday's plan reads in airplane mode from the phone's copy.
-- On five real slides, the main, lobby, stream and stage previews match the screens.
+- On five real slides, the Audience, Bottom-Third Stream and Stage previews match the screens.
 - A phone session cannot GO, clear, launch outputs, delete or change settings, even by crafting API calls.
 - During a rehearsal service with 20 phones browsing and two uploading, every output reports zero missed
   vsync.
