@@ -102,7 +102,7 @@ export function TextStyleEditor(props: {
                 Font Family{mark('fontFamily')}
               </span>
             </div>
-            <FontPicker value={s.fontFamily} onChange={(f) => set('fontFamily', f)} />
+            <FontPicker value={s.fontFamily} label="Font" onChange={(f) => set('fontFamily', f)} />
           </div>
 
           {/* 2. Font Size (Stepper + Slider + Presets) */}

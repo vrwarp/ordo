@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { FindReplaceDialog } from './FindReplaceDialog.tsx';
+import { DeckSwatchesSource, type SwatchSource } from '../../components/deckSwatches.ts';
 import { installKeepVisible } from '../../components/keepVisible.ts';
 import { Menu } from '../../components/Menu.tsx';
 import { useCoarsePointer, useMedia } from '../../components/pointer.ts';
@@ -101,6 +102,15 @@ export function EditorView({ id }: { id: string }) {
   const [focusMode, setFocusMode] = useState(false);
   const [songMode, setSongMode] = useState<'reflow' | 'canvas' | null>(null);
   const [zoom, setZoom] = useState<'fit' | 0.5 | 0.75 | 1>('fit');
+  // The paint pickers' deck swatches: components/deckSwatches.ts reads the deck from this context, so the
+  // shared components never import the editor's store.
+  const swatchSource = useMemo<SwatchSource>(
+    () => ({
+      presentation: ed.draft,
+      theme: ed.draft?.themeId ? themes.find((t) => t.id === ed.draft?.themeId) : undefined,
+    }),
+    [ed.draft, themes],
+  );
 
   const toggleFullScreen = async () => {
     try {
@@ -531,7 +541,7 @@ export function EditorView({ id }: { id: string }) {
 
   const showProps = coarse || drawerOpen;
 
-  return (
+  const page = (
     <div
       className={`editor ${focusMode ? 'focus-mode' : ''} ${!coarse ? (drawerOpen ? 'drawer-open' : 'canvas-first') : ''}`}
       ref={root}
@@ -621,7 +631,7 @@ export function EditorView({ id }: { id: string }) {
           </button>
         </div>
       ) : (
-        <div className="toolbar ed-toolbar-calm">
+        <div className={`toolbar ed-toolbar-calm${p.kind === 'song' ? ' has-modes' : ''}`}>
           {/* Left Zone: Back, Inline-Editable Title, Unified Save + Revision History Pill, Undo/Redo */}
           <a className="btn small ghost" href="#/library">
             ← Library
@@ -779,85 +789,106 @@ export function EditorView({ id }: { id: string }) {
 
           <span className="spacer" />
 
-          {/* Right Zone: Search, Zoom, On-Demand Drawer Triggers, Focus Mode */}
-          {!(p.kind === 'song' && (songMode ?? 'reflow') === 'reflow') && (
-            <select
-              aria-label="Canvas zoom"
-              className="ed-zoom-select"
-              value={String(zoom)}
-              onChange={(e) => {
-                const v = e.target.value;
-                setZoom(v === 'fit' ? 'fit' : (Number(v) as 0.5 | 0.75 | 1));
-              }}
-              title="Canvas zoom"
+          {/* Right Zone: Zoom, Find, the drawer triggers (folded into one Panels menu on a narrow window),
+              Full screen. One unit: when the bar does not fit it wraps to a second row, kept at the right. */}
+          <div className="ed-zone-right">
+            {!(p.kind === 'song' && (songMode ?? 'reflow') === 'reflow') && (
+              <select
+                aria-label="Canvas zoom"
+                className="ed-zoom-select"
+                value={String(zoom)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setZoom(v === 'fit' ? 'fit' : (Number(v) as 0.5 | 0.75 | 1));
+                }}
+                title="Canvas zoom"
+              >
+                <option value="fit">Fit</option>
+                <option value="0.5">50%</option>
+                <option value="0.75">75%</option>
+                <option value="1">100%</option>
+              </select>
+            )}
+            <button
+              type="button"
+              className={`small ghost ${finding ? 'on' : ''}`}
+              onClick={() => setFinding((v) => !v)}
+              title="Find and replace (Ctrl+F)"
             >
-              <option value="fit">Fit</option>
-              <option value="0.5">50%</option>
-              <option value="0.75">75%</option>
-              <option value="1">100%</option>
-            </select>
-          )}
-          <button
-            type="button"
-            className={`small ghost ${finding ? 'on' : ''}`}
-            onClick={() => setFinding((v) => !v)}
-            title="Find and replace (Ctrl+F)"
-          >
-            Find…
-          </button>
-          {!(p.kind === 'song' && (songMode ?? 'reflow') === 'reflow') && (
-            <div className="ed-drawer-triggers" role="group" aria-label="Inspector panels">
-              {!drawerOpen ? (
+              Find…
+            </button>
+            {!(p.kind === 'song' && (songMode ?? 'reflow') === 'reflow') &&
+              (!drawerOpen ? (
                 <>
-                  <button
-                    type="button"
-                    className="small ghost"
-                    disabled={!slide}
-                    onClick={() => openDrawerTab('slide')}
-                    title="Slide cues, background, and notes"
+                  <div
+                    className="ed-drawer-triggers ed-panels-wide"
+                    role="group"
+                    aria-label="Inspector panels"
                   >
-                    Slide
-                  </button>
-                  <button
-                    type="button"
-                    className="small ghost"
-                    onClick={() => openDrawerTab('presentation')}
-                    title="Deck theme, arrangements, and PowerPoint settings"
-                  >
-                    Presentation
-                  </button>
-                  <button
-                    type="button"
-                    className="small ghost"
-                    onClick={() => openDrawerTab(obj ? 'object' : 'slide')}
-                    title="Open fine-tune inspector drawer"
-                  >
-                    Tune
-                  </button>
+                    <button
+                      type="button"
+                      className="small ghost"
+                      disabled={!slide}
+                      onClick={() => openDrawerTab('slide')}
+                      title="Slide cues, background, and notes"
+                    >
+                      Slide
+                    </button>
+                    <button
+                      type="button"
+                      className="small ghost"
+                      onClick={() => openDrawerTab('presentation')}
+                      title="Deck theme, arrangements, and PowerPoint settings"
+                    >
+                      Presentation
+                    </button>
+                    <button
+                      type="button"
+                      className="small ghost"
+                      onClick={() => openDrawerTab(obj ? 'object' : 'slide')}
+                      title="Open fine-tune inspector drawer"
+                    >
+                      Tune
+                    </button>
+                  </div>
+                  {/* Below ~1,250 px (~1,450 px with a song's mode switch) the three triggers are one menu
+                      (styles.css), so the bar keeps one calm row on a 1024 px booth PC (r24 b7). */}
+                  <div className="ed-drawer-triggers ed-panels-menu">
+                    <Menu
+                      label="Panels"
+                      align="right"
+                      items={[
+                        { label: 'Slide', disabled: !slide, onSelect: () => openDrawerTab('slide') },
+                        { label: 'Presentation', onSelect: () => openDrawerTab('presentation') },
+                        { label: 'Tune', onSelect: () => openDrawerTab(obj ? 'object' : 'slide') },
+                      ]}
+                    />
+                  </div>
                 </>
               ) : (
-                <button
-                  type="button"
-                  className="small on"
-                  aria-label="Tune"
-                  aria-pressed={true}
-                  onClick={() => setDrawerOpen(false)}
-                  title="Close fine-tune inspector drawer"
-                >
-                  Tune ✕
-                </button>
-              )}
-            </div>
-          )}
-          <button
-            type="button"
-            className={`small ghost ${focusMode ? 'on' : ''}`}
-            onClick={() => void toggleFullScreen()}
-            title="Toggle full screen canvas (hide side panels)"
-            aria-label={focusMode ? 'Exit Full Screen' : 'Full Screen'}
-          >
-            {focusMode ? 'Exit Full Screen' : '⛶'}
-          </button>
+                <div className="ed-drawer-triggers" role="group" aria-label="Inspector panels">
+                  <button
+                    type="button"
+                    className="small on"
+                    aria-label="Tune"
+                    aria-pressed={true}
+                    onClick={() => setDrawerOpen(false)}
+                    title="Close fine-tune inspector drawer"
+                  >
+                    Tune ✕
+                  </button>
+                </div>
+              ))}
+            <button
+              type="button"
+              className={`small ghost ${focusMode ? 'on' : ''}`}
+              onClick={() => void toggleFullScreen()}
+              title="Toggle full screen canvas (hide side panels)"
+              aria-label={focusMode ? 'Exit Full Screen' : 'Full Screen'}
+            >
+              {focusMode ? 'Exit Full Screen' : '⛶'}
+            </button>
+          </div>
         </div>
       )}
       {p.kind === 'song' && (songMode ?? (coarse ? 'canvas' : 'reflow')) === 'reflow' ? (
@@ -1157,4 +1188,5 @@ export function EditorView({ id }: { id: string }) {
       {ed.conflict && <ConflictDialog />}
     </div>
   );
+  return <DeckSwatchesSource.Provider value={swatchSource}>{page}</DeckSwatchesSource.Provider>;
 }

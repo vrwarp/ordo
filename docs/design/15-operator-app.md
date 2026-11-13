@@ -375,6 +375,60 @@ cells in place of the shape fields).
   keeps its legacy drawing. Shadow on adds PowerPoint's 'Offset: Bottom Right' outer shadow, or keeps an
   imported one. A locked shape's style fields are read-only; its box stays editable.
 
+### Canvas-first layout
+
+The desktop editor (a fine pointer; #24) puts the slide first. A touch device keeps the docked panel
+described under Touch: the classes below are set for a fine pointer only, and the floating bar never shows
+under a finger.
+
+- **Columns and the Tune drawer.** Two columns, the slide list (224 px) and the stage. The panels (Object,
+  Slide, Presentation) are a drawer of 316 px, closed by default, opened from the top bar or the floating
+  bar's More…, closed by its ✕ or the top bar's 'Tune ✕'. Selecting an object does not open it.
+- **Top bar, three zones.** Left: Library, the title (edited in place), Save with the revision pill
+  (History), a song's Lyric Script | Slide Canvas switch, Undo, Redo. Centre, the insert island: '+ Text',
+  '+ Image', '+ Video', Shapes, Background. Right: zoom (Fit, 50 %, 75 %, 100 % = Fit), Find…, the drawer
+  triggers Slide, Presentation and Tune, and Full screen. The bar fits any window (r24 b7): below about
+  1,250 px (about 1,450 px for a song, whose mode switch takes about 190 px) the three triggers are one
+  'Panels ▾' menu (`components/Menu.tsx`: Slide, Presentation, Tune), and the title gives way (190 px down
+  to 64 px) before anything moves; if the bar still does not fit (a song at 1024 px, a wider system font),
+  the right zone wraps to a second row as one unit, at the right. Nothing is cut off: every control can be
+  clicked at 1024x768 and 1280x720, and the editor clips rather than scrolls (`overflow: clip`), so
+  focusing a control by keyboard never shifts the slide list off screen (`e2e/editor-fit.spec.ts`).
+- **Floating bar** (`FloatingContextBar.tsx`, placed by `floatingBarSpot` in `touchGeometry.ts`). It shows
+  while an object is selected, unless the drawer is open on Object; text, shape, picture and multi-selection
+  bars end with Layer, Duplicate, Delete and More…. Its tiers: above the box and its rotate handle; below a
+  box near the top of the slide; docked inside the top edge of a tall box (the top bezel while its text is
+  edited inline); clear of an open Find card. It fits its pane (r24 b9): its width is its one-row width,
+  at most the pane's less 16 px whatever its offset, and a wider row wraps to a second row instead of
+  running under the slide list or the drawer (the drawer open at 1024 px leaves a 484 px pane). SlideCanvas
+  measures that size and `floatingBarSpot` clamps the bar inside the pane, so it never starts past the
+  pane's left edge, and it never covers the selection's handles at Fit, 75 % and 50 %.
+- **Font select.** The family select is named 'Font' wherever it is shown (the floating bar, the Typography
+  card, the text style editor, the Themes tab); over a selection of several fonts it shows 'Mixed' and is
+  named 'Font (mixed)' (r24 b10), and a family picked there applies to the whole selection.
+- **Paint picker** (`PaintPopover` in `components/ColorPicker.tsx`; every colour field opens it). Tabs
+  None (where the field allows it), Solid, Linear, Radial; the colour square, hue and alpha sliders, the hex
+  and % fields and the eyedropper act on the solid colour or the active stop; then the deck's swatches and
+  Recent; a gradient has its ramp (a click adds a stop there, pins drag), the angle chips and one bar for the
+  active stop (hex, position, + in the widest gap, ×). Each edit is a pure function of `paintStops.ts`: the
+  stops stay sorted by position and the stop being edited stays active, so a pin dragged past another keeps
+  moving the same stop; a gradient keeps 2 to 16 stops; Linear ↔ Radial keeps the stops, the angle, the
+  focus (`center`) and `scaled`; Solid keeps the colour shown; a gradient from a colour runs to a darker
+  shade of it. The sliders follow the colour by value, so an open picker on None is idle (r24 b3: it
+  re-rendered for as long as it was open).
+- **Deck swatches** (`components/deckSwatches.ts`). Up to 8: the applied theme's text colour, then the
+  deck's most used colours (text and run colours, shape fills, gradient stops of shapes and gradient text,
+  and M9's palettes: a table's text, run and fill colours, a decoration's fills, gradients and outlines, a
+  chart's fills), then the curated defaults. The scan stops after 50,000 colours and skips anything that
+  is not a colour (a deck's objects are untrusted). The editor hands the deck to the pickers through a
+  React context (`DeckSwatchesSource`), so no shared component imports the editor's store and the editor
+  route can be loaded on its own; a picker outside the editor offers the curated defaults.
+- **Stage lens.** Under the stage, 'Canvas' and one pill per look (`previewLooks`: Main, Lobby,
+  Livestream, Stage) and 'All 4 screens ▴', the tray of look previews. A look's pill replaces the canvas
+  with that look drawn at 1280 px by the thumbnail worker (`SingleLookStagePreview`, 100 ms after the last
+  change); a key look is drawn over a simulated camera picture ('CAM SIM', or 'RAW KEY' to see the key
+  alone).
+
 ### Touch
 
 Under a finger (iPad Safari) every gesture has a button and nothing depends on hover, `title` tooltips
@@ -398,7 +452,12 @@ rotate handle, or at the pane edge away from a box that fills the slide (`object
 `touchGeometry.ts`); the bar overlays the pane, so the stage never moves when a selection starts. A mouse
 keeps the full toolbar. A focused
 field scrolls back into the visual viewport when the software keyboard shrinks it (`keepVisible.ts`).
-Controls are 44 px with 16 px inputs (no focus zoom); in portrait the editor's property panel and the
+Controls are 44 px with 16 px inputs (no focus zoom), the canvas-first editor's compact controls included
+(the paint picker's tabs, the Stage lens pills, the selected slide card's actions, which wrap in the slide
+list, and the Lyric Script's arrangement pills get 44 px back under a coarse pointer, r24 b8);
+`e2e/ipad/touch-targets.spec.ts` audits every visible control of the editor, the docked panel, the slides
+list, the paint picker and the Lyric Script in both orientations, the picker's 32 px swatch grid and the
+ramp's stop pins its named exceptions. In portrait the editor's property panel and the
 playlist's add panel move under the main pane. File pickers are a plain button to the native picker
 (Files, Photos): photos arrive as JPEG because Safari transcodes HEIC when the accept list does not name
 it (the hub does not accept HEIC), videos as MOV or MP4.

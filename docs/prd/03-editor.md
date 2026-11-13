@@ -67,6 +67,24 @@ from the venue PC"); while a service runs, a "Live now" chip names it and its pr
 It installs to the home screen as a web app. See [design/15](../design/15-operator-app.md), "iPad
 editing".
 
+## On the venue PC and a laptop
+
+The desktop editor puts the slide first: the slide list and the stage, with the Object, Slide and
+Presentation panels in a Tune drawer opened from the top bar or from the floating bar beside the selected
+object. It fits the windows a church uses, down to a 1024x768 booth PC:
+
+- Every top-bar control can be clicked: on a narrow window Slide, Presentation and Tune are one Panels
+  menu and the title gives way; if that is still too wide (a song at 1024 px), the right-hand tools move to
+  a second row. Nothing is cut off, and nothing slides out of view when a control gets the keyboard focus.
+- The floating bar stays inside the stage, wrapping to a second row when the drawer leaves it little room,
+  and never covers the selected box's handles.
+- The font list says it is the font ('Font'), and says 'Mixed' when the selected words use several fonts.
+- The colour picker stays idle while open (also on None), offers the deck's own colours first (also from
+  an imported deck's tables, decorations, charts and gradients), and a gradient stop dragged past another
+  keeps moving.
+- On an iPad every control of the editor is a 44 px touch target, the colour picker's swatches and gradient
+  pins apart.
+
 ## Slide imports into the editor
 
 - PPTX and PDF import produce one image slide per page. Each imported slide keeps a

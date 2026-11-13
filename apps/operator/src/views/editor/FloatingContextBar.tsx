@@ -414,6 +414,8 @@ function TextFloatingControls({
           <FontPicker
             value={shownFont}
             compact
+            label="Font"
+            mixed={hasSelection && st.font === undefined}
             onChange={(f) => {
               if (hasSelection) applyRun(valuePatch.font(o, f), false);
               else setBox('fontFamily', f);

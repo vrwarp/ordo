@@ -560,6 +560,7 @@ export function ThemesTab() {
                   <label className="small muted">Font Family</label>
                   <FontPicker
                     value={draft.text.fontFamily}
+                    label="Font"
                     onChange={(fontFamily) => setDraft({ ...draft, text: { ...draft.text, fontFamily } })}
                   />
                 </div>

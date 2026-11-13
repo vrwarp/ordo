@@ -153,7 +153,9 @@ function CellsSection({ o, readOnly }: ObjectSectionContext) {
 /**
  * Each case's markup digest on the panel before the registry, recorded then: on main's panel at 1764e05 (its
  * placement presets, align bar, inline-editing text field and the canvas-first editor's typography card,
- * folded paragraph strip and stroke line), which the sections reproduce.
+ * folded paragraph strip and stroke line), which the sections reproduce. The text cases (lyric, note) were
+ * re-recorded when the typography card's font select was named 'Font' (r24 b10): that aria-label is their only
+ * change.
  */
 const BEFORE: Record<string, string> = {
   clip: 'd07d1eea6ce4acad',
@@ -162,15 +164,15 @@ const BEFORE: Record<string, string> = {
   line: '1febad1893a3857f',
   'line locked': '46cb9d8f4b94310f',
   'line read-only': '91e422367cacb421',
-  lyric: 'ce41b9b726381af3',
-  'lyric locked': '1acb25ad00edd841',
-  'lyric read-only': 'b3272ce8d56048fe',
+  lyric: '860acd1a710ec0aa',
+  'lyric locked': '8f1dd27c7210a8ec',
+  'lyric read-only': 'd43f6f550dbd31cf',
   masked: 'e748fd810491ebb8',
   'masked locked': '9350270c7b61c4ea',
   'masked read-only': 'e606cde4b64619b5',
-  note: '8f4ac7a0524eff31',
-  'note locked': '7d3f13b4afc7f404',
-  'note read-only': '8039172d76b8463c',
+  note: 'e35823f7a550417d',
+  'note locked': '16a8d5facf19b6bf',
+  'note read-only': 'b826b966fdc86813',
   photo: 'c0060acdf3fd63c1',
   'photo locked': '28d67736d4e8dbfe',
   'photo read-only': '0d19dc03171c2dbb',
