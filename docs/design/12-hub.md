@@ -187,7 +187,8 @@ Command validation on the hub (`live.ts`):
   outputs and the stage display are rejected. With no master configured any output is
   believed.
 - `preview` (prd/03 "Send to preview") is relayed from the operator to the one output named
-  in `to`, with `from: "operator"` stamped, exactly like `rtc.signal`.
+  in `to`, with `from: "operator"` stamped, exactly like `rtc.signal`. The editor no longer sends it
+  (removed from the UI in #7, deliberately); the relay stays.
 
 `GET /library/snapshot?since=<seq>` answers with `{ seq, since, changes[] }` from the
 `library_changes` log (the last 20,000 seqs) when it still covers `since`; otherwise, and

@@ -439,6 +439,14 @@ Outputs and looks, audio devices and pairs, key map, Stream Deck pages, MIDI map
 PINs, output tokens, backups, diagnostics export. Each page is a form over the matching
 `/settings/*` resource.
 
+- **Screens** (`views/settings/OutputsPage.tsx`, #17): each output is badged by the role its look gives it:
+  Stage (a stage output or look), Bottom-Third Stream (a lower-third or stream look, or any lyric-only
+  look) and Audience (the rest). The role decides what an output shows during an announcement loop
+  (prd/04 "Screens and announcement loops"): the loop on Audience, 'Service Starting Soon' on Stage, no
+  band on Bottom-Third Stream (`lyricTextFor` returns no text for a loop on a non-stage look; the lobby
+  shows its holding slide). This is the owner's choice, kept deliberately; a lobby that should show the
+  loop uses the Main look.
+
 - **The stage look's notes** (design/27 §11 item 13, M4). The look page's 'Stage screen' card
   (`src/views/settings/StageNotesOptions.tsx`, shown for a look of kind stage, and for any look whose notes
   are on) has 'Notes: show the live slide's notes, for the preacher' (`PropsRule.notes`). While it is on it
@@ -470,7 +478,7 @@ nothing stored. When there are no pictures yet, turning it on saves unsaved edit
 (`POST /presentations/:id/pptx-reference` with `{ showPicture: [] }`: no slide switches to its picture) and
 follows the job; when it is done the editor takes the pictures over, keeping edits made meanwhile. A slide
 set to show its PowerPoint picture on the screens (`Slide.pptx.show`) says so, with 'Show the objects
-instead'. The canvas, the thumbnails, the look previews and 'Send to preview' draw a slide as the outputs
+instead'. The canvas, the thumbnails and the look previews draw a slide as the outputs
 do (design/27 §5 "One rule for every drawer", `slideContent`): a slide set to show its PowerPoint picture
 shows that picture and only the objects added in ordo (the imported objects, marked by `origin`, are
 neither drawn nor selectable on the canvas), and a picture slide its page picture under its objects.

@@ -52,10 +52,11 @@ Objects, in z-order, each selectable, movable, resizable, rotatable:
 - Keyboard: arrow nudges, Shift for 10 px, Ctrl+D duplicate, Delete, Ctrl+Z, Ctrl+Y,
   Ctrl+S.
 - Alignment guides and snapping to the canvas centre, edges and other objects.
-- Preview: a "Send to preview" renders the selected slide (as currently drafted, saved or
-  not) on a chosen audience output, when no playlist is live; "Clear preview" returns the
-  output to idle, as does the next Go live. The control is disabled while a playlist is live.
-  Thumbnails elsewhere are CSS approximations.
+- Preview: the editor shows the selected slide as drafted under every look (the look previews beside
+  the canvas, and the Previews page), drawn as the outputs draw it. Sending a slide from the editor to an
+  idle output ("Send to preview") was removed from the editor by the owner's editor rework (#7,
+  2026-11-09), deliberately; the hub's `preview` relay and the outputs' handling of it remain, unused by
+  the UI. Thumbnails elsewhere are CSS approximations.
 
 ## On an iPad
 

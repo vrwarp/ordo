@@ -13,6 +13,10 @@ the operator on the stage screen (token in URL like an output). No WebGPU, no me
 | Bottom    | Operator message, high contrast, with a 1 s fade in and out; multiple messages stack newest first                                                                                                                                                                                                              |
 | Notes     | When the Stage look's `PropsRule.notes` is on: the live slide's `Slide.notes` for the preacher, in `style['notes']`, else a box under the next-slide band (below)                                                                                                                                              |
 
+During an announcement loop (a `loop` presentation, typically pre-service) the centre shows 'Service
+Starting Soon' with the loop's title instead of the loop's text, and the next band looks ahead to the item
+after the loop (`model.ts`, #17; the owner's choice, prd/04 "Screens and announcement loops").
+
 Layout values come from the Stage look's `PropsRule.style` boxes so the operator can
 adjust sizes without code. Fonts load from the service cache through the Cache API.
 
