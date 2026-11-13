@@ -606,7 +606,7 @@ async function demoParse(
 }
 
 /** The largest scene the demo reads (as a hub's bound, `clientScene.ts`). */
-const CLIENT_SCENE_MAX_BYTES = 128 * 1024 * 1024;
+const CLIENT_SCENE_MAX_BYTES = 32 * 1024 * 1024;
 
 function outputByToken(l: Lib, token: string | null) {
   return l.settings.outputs.find((o) => o.token && o.token === token);

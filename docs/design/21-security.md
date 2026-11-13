@@ -102,11 +102,11 @@ implementation of [prd/09](../prd/09-security-and-remote-prep.md).
   central directory itself, refuses overlapping entries and more than 200,000, and counts inflated bytes
   against the same caps as they come (an entry that inflates past its declared size stops the read), and
   pictures and clips are only read for their first bytes. Any failure uploads the deck without a scene.
-- The hub trusts nothing of that scene (`clientScene`): a part over 128 MB is dropped before it is stored;
+- The hub trusts nothing of that scene (`clientScene`): a part over 32 MB is dropped before it is stored;
   the stored scene is read, parsed and checked on the CPU pool (a zod schema with a bound on every list,
   string and part name before any reaches the LibreOffice follow-up's payload; this hub's converter version,
-  stored fields and LibreOffice state; every slide through the `Slide` schema, sanitized and parsed again
-  when version 1 is assembled; every shape file checked again as the pool's own are and re-hashed), and a
+  stored fields and LibreOffice state; every slide through the `Slide` schema, the hub building from what
+  that parse returns, never the raw object, and sanitized and parsed again when version 1 is assembled; every shape file checked again as the pool's own are and re-hashed), and a
   scene it refuses makes it parse the deck itself. The scene file holds every slide's text and speaker notes,
   so it is released once version 1 is saved or the import fails.
 - Deck-derived strings (titles, file names, section and part names, hosts) reach a job log line or

@@ -344,6 +344,8 @@ describe('POST /import/document', () => {
       { ...good, scan: {} },
       { ...good, listed: good.listed.map((r) => ({ ...r, part: `ppt/slides/${'x'.repeat(600)}.xml` })) },
       { ...good, slides: [{ ...good.slides[0]!, slide: { id: 'x', objects: 'none' } }] },
+      // The schema would fill in `objects`: a slide the converter did not write is refused, never built from.
+      { ...good, slides: [{ ...good.slides[0]!, slide: { id: 'x' } }, ...good.slides.slice(1)] },
       { ...good, version: 1 },
       { ...good, m9Writes: [] },
     ];

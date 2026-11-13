@@ -45,7 +45,7 @@ hub at all. One import core keeps the two paths from drifting (a hub-vs-client e
 worship corpus, `tools/pptx-fidelity`).
 
 Consequences.
-- The scene is untrusted input like the deck: bounded on both sides (128 MB part, the pool's heap and
+- The scene is untrusted input like the deck: bounded on both sides (32 MB part, the pool's heap and
   timeout), schema-checked off the event loop, its shape files re-hashed, released after version 1.
 - The operator never parses while a playlist is live, parses only in a Worker with a deadline, and falls back
   to the hub on any failure (counted in its health view and logged), so an import can never cost the service.

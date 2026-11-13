@@ -11,7 +11,8 @@
  *   version and stored M9 fields must be the hub's (`CONVERTER_VERSION`, `M9_WRITES`), and its LibreOffice
  *   state what the hub has; part names are at most `PPTX_LIMITS.partName` characters before any reaches the
  *   `pptx-lo` payload (`art`, `metafiles`, `listed`, the scan); each slide passes the domain's `Slide` schema
- *   (it is sanitised and parsed again when version 1 is assembled); bake recipes, clips and art plans are
+ *   and the hub builds from what that parse returns, never the raw object (it is sanitised and parsed again
+ *   when version 1 is assembled); bake recipes, clips and art plans are
  *   checked field by field. Fields the hub does not use are dropped (`sheets`, `plate`).
  * - **Shape files**: every one is checked again as the pool's own are named (`geomFileOf`: re-tokenised,
  *   `GeomFile`, `GEOM_FILE_MAX_BYTES`) and re-hashed; a file whose name is not the hash of what it holds, or
@@ -31,8 +32,15 @@ const MiB = 1024 * 1024;
 /**
  * The largest `clientScene` the hub takes (`bytes`): a larger part is dropped by the route, and the hub
  * parses the deck itself. An object so tests can lower it; read at each use.
+ *
+ * 32 MiB: the largest scene of 370 real decks (E, the 30 table decks and the suite's decks over 3 MB) is
+ * 2.4 MB, 3.8 KB a slide at the median, so a 2,000-slide sermon series needs about 8 MB. The checked scene
+ * comes back from the pool in one structured-clone message, deserialized on the library's event loop: about
+ * 7 ms a MB (a 124 MB scene stalled the receiving thread 912 ms, the 2026-11-13 review), so at most about a
+ * quarter of a second here, off-service only (imports are refused while a playlist is live, and GO runs in the
+ * live process).
  */
-export const CLIENT_SCENE_LIMITS = { bytes: 128 * MiB };
+export const CLIENT_SCENE_LIMITS = { bytes: 32 * MiB };
 
 /** A checked scene: its shape files re-validated and re-hashed (their JSON as the store keeps it). */
 export type CheckedScene = Omit<PptxClientScene, 'geomFiles'> & { geomFiles: NamedGeomFile[] };
@@ -222,10 +230,19 @@ function check(raw: unknown, o: { libreoffice: boolean }): ClientSceneTaskOutput
   // Places and parts agree with the listing (as the hub's batches must, `batch`).
   if (s.listed.some((r, i) => r.index !== i)) return { refused: 'listed: out of order' };
   const seen = new Set<number>();
+  // Each slide as the domain's schema parsed it, not the raw object: the schema fills defaults (`objects`)
+  // and replaces bad values (`.catch`), so a raw slide it accepts can still be malformed for the steps that
+  // build from it (`nameGeoms`, the budgets), which would then fail the import instead of falling back.
+  const parsedSlides = new Map<number, Slide>();
   for (const sl of s.slides) {
     if (sl.index >= n || seen.has(sl.index)) return { refused: 'slides: index' };
     seen.add(sl.index);
-    if (!Slide.safeParse(sl.slide).success) return { refused: `slides.${sl.index}: not a slide` };
+    const ps = Slide.safeParse(sl.slide);
+    // The converter writes every slide's objects: a slide without them is not one it wrote.
+    const objects = (sl.slide as { objects?: unknown } | null)?.objects;
+    if (!ps.success || !Array.isArray(objects) || objects.length !== ps.data.objects.length)
+      return { refused: `slides.${sl.index}: not a slide` };
+    parsedSlides.set(sl.index, ps.data);
   }
   for (const x of [...s.extras.map((e) => e.index), ...(s.geomOver ?? [])])
     if (x >= n) return { refused: 'index past the listing' };
@@ -251,7 +268,10 @@ function check(raw: unknown, o: { libreoffice: boolean }): ClientSceneTaskOutput
   const scene: CheckedScene = {
     ...rest,
     // Only what the hub reads of each slide: `sheets` and `plate` (M9 fields this hub does not use) dropped.
-    slides: slides.map((sl) => ({ ...sl, slide: sl.slide as Slide })) as PptxClientScene['slides'],
+    slides: slides.map((sl) => ({
+      ...sl,
+      slide: parsedSlides.get(sl.index) as Slide,
+    })) as PptxClientScene['slides'],
     geomFiles: files,
   };
   return { scene };

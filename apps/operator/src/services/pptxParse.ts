@@ -25,7 +25,7 @@ export const PARSE_DEADLINE_MS = 90_000;
  * The largest scene the hub takes (`apps/hub/src/pptx/clientScene.ts` `CLIENT_SCENE_LIMITS`): a larger one is
  * not uploaded at all, since the hub would drop it and parse the deck itself.
  */
-export const SCENE_MAX_BYTES = 128 * 1024 * 1024;
+export const SCENE_MAX_BYTES = 32 * 1024 * 1024;
 
 /** Why a deck went to the hub without a scene. */
 export type HubReason = 'live' | 'timeout' | 'failed' | 'unavailable';

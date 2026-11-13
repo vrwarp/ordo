@@ -120,6 +120,21 @@ describe('checkClientScene', () => {
     }
   });
 
+  it('builds from each slide as the schema parsed it, and refuses a slide whose objects the schema filled in', () => {
+    const s = copy();
+    // A value the schema replaces (`transition` catches to undefined): the checked slide holds the parse.
+    (s.slides[1]!.slide as unknown as Record<string, unknown>).transition = { kind: 'no such kind' };
+    const out = checkClientScene(s, { libreoffice: true });
+    expect('scene' in out).toBe(true);
+    if (!('scene' in out)) return;
+    expect('transition' in out.scene.slides[1]!.slide && out.scene.slides[1]!.slide.transition).toBeFalsy();
+    expect(out.scene.slides[1]!.slide.objects.length).toBe(scene.slides[1]!.slide.objects.length);
+    // No objects at all: the schema would default them to [], but the converter always writes them.
+    const t = copy();
+    t.slides[0]!.slide = { id: 'x' } as never;
+    expect(checkClientScene(t, { libreoffice: true })).toEqual({ refused: 'slides.0: not a slide' });
+  });
+
   it('drops a shape file whose JSON is not what its name says, or not storable, and keeps the rest', () => {
     const s = copy();
     const g = s.geomFiles[0]!;

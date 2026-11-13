@@ -117,7 +117,7 @@ supervisor (tini + a small Node parent)
   there (`pptx-client-scene`, design/27 §12). The operator parses a PowerPoint it imports in a Web Worker of
   its own with a deadline, never on the thread that runs GO, and not at all while a playlist is live.
 - **Untrusted output of a client**: a scene parsed in the browser is input like the deck itself: bounded
-  (128 MB), checked on the pool (schema, part names, shape files re-hashed) and refused, never trusted, so the
+  (32 MB), checked on the pool (schema, part names, shape files re-hashed) and refused, never trusted, so the
   hub parses the deck itself when in doubt (design/21).
 - **Restart budget**: the supervisor restarts a crashed child within a second, at most five times a minute,
   then stays down and reports. A library process past its budget stays down (`/health` says `library:

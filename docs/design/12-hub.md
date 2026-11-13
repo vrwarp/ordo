@@ -286,7 +286,7 @@ The native PowerPoint import (`pptx-native`, light; [design/27](27-pptx-native-r
 deck's XML into memory within its caps, parses and converts it on the CPU pool (a scan call, then batches
 of at most 150 slides, 2 minutes each and 15 minutes of pool time per import), or takes the scene the
 uploading browser parsed (`POST /import/document` part `clientScene`, design/27 §2 "Where the deck is
-parsed"): the route drops a `clientScene` part over 128 MB before it is stored, the pool task
+parsed"): the route drops a `clientScene` part over 32 MB before it is stored, the pool task
 `pptx-client-scene` reads, parses and checks the stored scene off the event loop (`pptx/clientScene.ts`: a
 zod schema with a bound on every list, string and part name; this hub's `CONVERTER_VERSION`, `M9_WRITES` and
 LibreOffice state; every shape file checked again with `geomFileOf` and re-hashed), and any doubt about it
