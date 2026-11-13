@@ -91,9 +91,9 @@ describe('the Bottom-Third strap text (strapText)', () => {
   it("is the slide's own text or its picture's, never a table's or a chart's (M9 extraText)", () => {
     const table = m9Slide().objects.find((o) => o.id === 'table')!;
     const chart = m9Slide().objects.find((o) => o.id === 'chart')!;
-    expect(firstText({ id: 't', objects: [table] })).not.toBe('');
-    expect(strapText({ id: 't', objects: [table] })).toBe('');
-    expect(strapText({ id: 'c', objects: [chart] })).toBe('');
+    expect(firstText({ objects: [table] })).not.toBe('');
+    expect(strapText({ objects: [table] })).toBe('');
+    expect(strapText({ objects: [chart] })).toBe('');
     expect(strapText(page(true, 'Welcome', 'Pastor Sam'))).toBe('Welcome\nPastor Sam');
     const titled = m9Slide();
     expect(strapText(titled)).toBe(firstText(titled));
