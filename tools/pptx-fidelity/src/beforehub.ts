@@ -183,8 +183,11 @@ export type HubScores = { scores: Map<number, number>; failed: Set<number>; note
 export class BeforeHub {
   private session?: HubSession;
   private started = 0;
+  private readonly o: { dir: string; entry?: string };
 
-  constructor(private readonly o: { dir: string; entry?: string }) {}
+  constructor(o: { dir: string; entry?: string }) {
+    this.o = o;
+  }
 
   private async hub(): Promise<HubSession> {
     if (this.session && this.session.proc.exitCode === null) return this.session;

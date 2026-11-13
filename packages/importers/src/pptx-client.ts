@@ -8,6 +8,8 @@ import {
   drawnGeomRefs,
   IMPORT_RESERVE_BYTES,
   type ImageObject,
+  MISSING_LIMITS,
+  missingEntry,
   newId,
   planImportSizes,
   type Presentation,
@@ -32,6 +34,7 @@ import {
   type SlideRef,
 } from '@ordo/pptx-scene';
 import type { PictureBake } from '@ordo/pptx-scene/bake.ts';
+import { ALL_M9_FIELDS, type M9Field } from '@ordo/pptx-scene/emit-ctx.ts';
 import { digestOf, SLIDE_BUDGET_NOTE, SLIDE_BYTES_NOTE } from '@ordo/pptx-scene/emit.ts';
 import { clean } from '@ordo/pptx-scene/log.ts';
 import { readNotes } from '@ordo/pptx-scene/notes.ts';
@@ -46,7 +49,18 @@ import { sanitizePresentation } from './sanitize.ts';
 import { sha256Hex } from './sha256.ts';
 import { safeEntryPath } from './zip.ts';
 
-export const CONVERTER_VERSION = 1;
+/**
+ * The converter version of a client-parsed scene (`PptxClientScene.version`), written to `Slide.pptx.version`
+ * like the hub's: it must equal the hub's `CONVERTER_VERSION` (`apps/hub/src/pptx/shared.ts`), which uses a
+ * client scene only from the same converter (a hub test checks both). 2 since M9 (design/27 §15 M9).
+ */
+export const CONVERTER_VERSION = 2;
+
+/**
+ * The stored M9 fields a client parse writes (`EmitOptions.m9Writes`): the hub's `M9_WRITES`, the per-field
+ * kill switch of design/27 M9 (a hub test checks that both name the same fields).
+ */
+export const CLIENT_M9_WRITES: ReadonlySet<M9Field> = ALL_M9_FIELDS;
 
 export const PPTX_CLIENT_LIMITS = {
   entries: 200_000,
@@ -63,6 +77,13 @@ export type PptxClientOptions = {
   extendBackgrounds?: boolean;
   transitionSounds?: boolean;
   presentationId?: string;
+  /**
+   * M9: false when the deck is parsed for a hub without LibreOffice (`HubCapabilities.libreoffice`, or the
+   * pages demo): the converter plans no art and no metafile conversion and lists what they would have drawn
+   * (`EmitOptions.libreoffice`), nothing is `pending` and `Slide.pptx.missing` says what is not drawn, as
+   * the hub's own import does. Absent: true.
+   */
+  libreoffice?: boolean;
 };
 
 export type PptxLoSlide = {
@@ -120,6 +141,11 @@ export type PptxClientScene = {
   extras: PptxClientSlideExtra[];
   geomFiles: { hash: string; json: string }[];
   geomOver?: number[];
+  /**
+   * M9: false when parsed without LibreOffice (`PptxClientOptions.libreoffice`); absent: with it. The hub
+   * uses the scene only when this is what it has (`nativeJob.ts`), else it parses the deck itself.
+   */
+  libreoffice?: boolean;
 };
 
 export type PptxClientImportResult = {
@@ -257,13 +283,22 @@ function toPicture(d: Draft): void {
   delete d.slide.lyricObjectId;
   delete d.art;
   delete d.metafiles;
+  // The whole slide is what is missing now (`provenance`).
+  delete d.missing;
   const all = [text, d.artText].filter(Boolean).join('\n').slice(0, ART_TEXT_CHARS);
   if (all) d.artText = all;
   else delete d.artText;
 }
 
-function provenance(d: Draft, hash: string): SlidePptx {
-  const pending = d.cls !== 'native' || !!d.metafiles?.length;
+/**
+ * `Slide.pptx` of a draft (without its digest), as the hub writes it (`nativeJob.ts` `provenance`): with
+ * LibreOffice (`lo`) a hybrid or picture slide and one with metafile pictures waits for it (`pending`);
+ * without it nothing waits, and what nothing draws is listed (`missing`: the converter's, or 'slide' for a
+ * picture-class slide).
+ */
+function provenance(d: Draft, hash: string, lo: boolean): SlidePptx {
+  const pending = lo && (d.cls !== 'native' || !!d.metafiles?.length);
+  const missing = lo ? undefined : d.cls === 'picture' ? [missingEntry('slide')] : d.missing;
   return {
     fileId: hash,
     index: d.ref.index,
@@ -271,13 +306,14 @@ function provenance(d: Draft, hash: string): SlidePptx {
     class: d.cls,
     version: CONVERTER_VERSION,
     ...(pending ? { pending: true } : {}),
+    ...(missing?.length ? { missing: missing.slice(0, MISSING_LIMITS.entries) } : {}),
     ...(d.notes.length ? { notes: d.notes.slice(0, SLIDE_NOTES).map((n) => clean(n, 200)) } : {}),
     ...(d.artText ? { artText: d.artText } : {}),
   };
 }
 
-function record(d: Draft, digest: string): Slide {
-  return { ...d.slide, pptx: { ...provenance(d, 'x'.repeat(64)), digest } };
+function record(d: Draft, digest: string, lo: boolean): Slide {
+  return { ...d.slide, pptx: { ...provenance(d, 'x'.repeat(64), lo), digest } };
 }
 
 function fontFamilies(slides: readonly Slide[]): string[] {
@@ -343,6 +379,8 @@ type Draft = {
   overGeoms?: boolean;
   metafiles?: { part: string; object: ImageObject; before?: string }[];
   clips?: EmittedClip[];
+  /** M9, without LibreOffice: what nothing draws on the slide (`EmittedSlide.missing`). */
+  missing?: string[];
 };
 
 type Images = { pictures: string[]; metafiles: string[] };
@@ -552,10 +590,14 @@ export async function importPptxClient(
   onProgress?.(0.15);
 
   const pkg = openPackage(parts);
+  // M9: what the hub's converter is told (`sceneTask.ts`): its stored fields, and whether LibreOffice is there.
+  const withLo = options.libreoffice !== false;
+  const m9 = { m9Writes: CLIENT_M9_WRITES, ...(withLo ? {} : { libreoffice: false }) };
   const first = convertDeck(parts, {
     range: { from: 0, to: 0 },
     extendBackgrounds: options.extendBackgrounds ?? true,
     transitionSounds: options.transitionSounds ?? false,
+    ...m9,
     newId,
   });
 
@@ -600,6 +642,7 @@ export async function importPptxClient(
     mediaKind: (p) => mediaKinds.get(p),
     extendBackgrounds: options.extendBackgrounds ?? true,
     transitionSounds: options.transitionSounds ?? false,
+    ...m9,
     newId,
   });
 
@@ -651,6 +694,7 @@ export async function importPptxClient(
     extras: [...extras.values()],
     geomFiles: [...geomFiles.values()].map((g) => ({ hash: g.hash, json: decoder.decode(g.bytes) })),
     ...(geomOver.size ? { geomOver: [...geomOver] } : {}),
+    ...(withLo ? {} : { libreoffice: false }),
   };
 
   onProgress?.(0.6);
@@ -681,6 +725,13 @@ export async function importPptxClient(
       ...(geomOver.has(s.index) ? { overGeoms: true } : {}),
       ...(s.clips?.length ? { clips: s.clips } : {}),
     };
+    // M9, without LibreOffice: the converter planned no art and listed what is not drawn (its note is in
+    // the slide's notes already); the art's text stays for search.
+    if (!withLo) {
+      const missing = (s.missing ?? []).filter((m) => typeof m === 'string').slice(0, MISSING_LIMITS.entries);
+      if (missing.length) d.missing = missing;
+      if (s.artText && !d.artText) d.artText = s.artText;
+    }
     if (ref.hidden) d.slide.hidden = true;
     const noteText = scan.notes.find(([idx]) => idx === ref.index)?.[1];
     if (noteText) d.slide.notes = noteText.slice(0, NOTES_CUT_CHARS);
@@ -699,7 +750,7 @@ export async function importPptxClient(
   onProgress?.(0.7);
 
   // Size budgets
-  const stored = drafts.map((d) => record(d, 'x'.repeat(16)));
+  const stored = drafts.map((d) => record(d, 'x'.repeat(16), withLo));
   const sizes = stored.map((sl) => slideBytes(sl));
   const plan = planImportSizes(
     sizes,
@@ -823,7 +874,7 @@ export async function importPptxClient(
     if (bgKeys.has(pic.key)) pic.isBackground = true;
   }
 
-  for (const d of drafts) d.slide.pptx = provenance(d, deckHash);
+  for (const d of drafts) d.slide.pptx = provenance(d, deckHash, withLo);
   p.sections = sectionsOf(drafts, first.sections);
   p.arrangements = [{ id: newId(), name: 'Default', sectionIds: p.sections.map((s) => s.id) }];
   sanitizePresentation(p);
@@ -837,7 +888,7 @@ export async function importPptxClient(
       if (!d) return Slide.parse({ id: sl.id, objects: [] });
       toPicture(d);
       d.notes.push('not storable natively: a fallback picture');
-      d.slide.pptx = provenance(d, deckHash);
+      d.slide.pptx = provenance(d, deckHash, withLo);
       const again = Slide.safeParse(d.slide);
       return again.success ? again.data : Slide.parse({ id: sl.id, objects: [], pptx: d.slide.pptx });
     });

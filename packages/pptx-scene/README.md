@@ -687,17 +687,17 @@ The converter is split and given every seam the M9 areas fill (design/27 §15 M9
 owns its files. Nothing of what a slide draws changes, except that real 3-D is drawn flat instead of left to
 the art.
 
-| File | What | Filled by |
-| --- | --- | --- |
-| `residual.ts` | The decision table: per reason its decision (native, approx, residual, unread), census features, who rates it, its missing kind; `decisionOf`, `missingKindOf`, `rowOf` | each area's rows |
-| `emit-ctx.ts` | `EmitCtx`, `M9_FIELDS` and `writes` (the `EmitOptions.m9Writes` gate), box, colour and object helpers | (frozen) |
-| `emit-text.ts` | Text bodies (`textObject`, `richTextObject`, legacy text, `marginOf`); stubs `warpOf`, `writingOf` | `text-conv` |
-| `emit-budget.ts` | `storedSlideBytes`, `fitBytes`, `chargeText`, `overBudget`, `MAX_SLIDE_BYTES` | `ladder` |
-| `emit-table.ts` | The M6 table group; stub `emitTableObject` | `tables-conv` |
-| `chart.ts` | Stubs `readChart`, `emitChart` | `charts-conv` |
-| `decor.ts` | Stub `emitDecor` (runs of `ElementBase.decor`) | `decor-conv` |
-| `three3d.ts` | Stubs `read3d`, `look3dOf` | `three-model` |
-| `ole.ts` | Stub `readOle` | `metafile-a` |
+| File             | What                                                                                                                                                                    | Filled by        |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| `residual.ts`    | The decision table: per reason its decision (native, approx, residual, unread), census features, who rates it, its missing kind; `decisionOf`, `missingKindOf`, `rowOf` | each area's rows |
+| `emit-ctx.ts`    | `EmitCtx`, `M9_FIELDS` and `writes` (the `EmitOptions.m9Writes` gate), box, colour and object helpers                                                                   | (frozen)         |
+| `emit-text.ts`   | Text bodies (`textObject`, `richTextObject`, legacy text, `marginOf`); stubs `warpOf`, `writingOf`                                                                      | `text-conv`      |
+| `emit-budget.ts` | `storedSlideBytes`, `fitBytes`, `chargeText`, `overBudget`, `MAX_SLIDE_BYTES`                                                                                           | `ladder`         |
+| `emit-table.ts`  | The M6 table group; stub `emitTableObject`                                                                                                                              | `tables-conv`    |
+| `chart.ts`       | Stubs `readChart`, `emitChart`                                                                                                                                          | `charts-conv`    |
+| `decor.ts`       | Stub `emitDecor` (runs of `ElementBase.decor`)                                                                                                                          | `decor-conv`     |
+| `three3d.ts`     | Stubs `read3d`, `look3dOf`                                                                                                                                              | `three-model`    |
+| `ole.ts`         | Stub `readOle`                                                                                                                                                          | `metafile-a`     |
 
 - **`emit.ts`** keeps the slide, backgrounds, shapes, pictures, origin and the lyric box, and re-exports every
   name it exported before. The parts were moved verbatim.

@@ -592,14 +592,16 @@ export async function handle(req: Request): Promise<Res> {
     if (path === '/auth/pins') return notInDemo('Changing the PINs');
     if (seg[0] === 'auth') return json({ ok: true });
     if (path === '/health') return json({ ok: true, demo: true, version: VERSION });
-    // design/27 M9: what the server tools allow. The pages demo has none (no LibreOffice, no poppler-utils,
-    // no document import), so the operator hides what it answers 501 for.
+    // design/27 M9: what the server tools allow. The pages demo has no LibreOffice and no poppler-utils, but
+    // it imports PowerPoint (parsed in the browser) and PDF files and shows its placeholder pictures where a
+    // hub's tools would draw them (a picture import, 'Show original', a hybrid slide's art, a PDF page), so
+    // the operator offers those (`importDocumentUpload`, the pptx-reference route).
     if (path === '/capabilities')
       return json({
         libreoffice: { state: 'absent' },
-        pdf: false,
-        documents: [],
-        pptx: { pictures: false, reference: false, referencePdf: false, art: false },
+        pdf: true,
+        documents: ['pptx', 'ppsx', 'potx', 'pptm', 'pdf'],
+        pptx: { pictures: true, reference: true, referencePdf: false, art: true },
       } satisfies HubCapabilities);
 
     // ---- the reset button

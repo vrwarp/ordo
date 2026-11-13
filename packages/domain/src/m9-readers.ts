@@ -23,7 +23,10 @@ export const READER_TEXT_MAX = 60_000;
 class Bounded {
   readonly parts: string[] = [];
   length = 0;
-  constructor(readonly max: number) {}
+  readonly max: number;
+  constructor(max: number) {
+    this.max = max;
+  }
   add(s: string): boolean {
     if (this.length >= this.max) return false;
     const t = s.length > this.max - this.length ? s.slice(0, this.max - this.length) : s;

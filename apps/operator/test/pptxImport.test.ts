@@ -13,6 +13,7 @@ import {
   hiddenCount,
   loStatus,
   onlyJobSaves,
+  hubHasLibreOffice,
   picturesOffered,
   rebaseOnJobs,
   PPTX_EXTEND_KEY,
@@ -98,6 +99,19 @@ describe('the import choice', () => {
       documentFields('a.pptx', { mode: 'libreoffice', extendBackgrounds: true }, LEGACY_CAPABILITIES),
     ).toEqual([['renderer', 'libreoffice']]);
     expect(documentFields('Notices.pdf', DEFAULT_PPTX_CHOICE)).toEqual([]);
+  });
+
+  it('parses a deck on the client for the LibreOffice the hub has, as the hub decides it (M9)', () => {
+    const tools = (state: 'checking' | 'available' | 'absent' | 'off' | 'broken') => ({
+      ...LEGACY_CAPABILITIES,
+      libreoffice: { state },
+    });
+    expect(hubHasLibreOffice(undefined)).toBe(true);
+    expect(hubHasLibreOffice(LEGACY_CAPABILITIES)).toBe(true);
+    expect(hubHasLibreOffice(tools('checking'))).toBe(true);
+    expect(hubHasLibreOffice(tools('broken'))).toBe(true);
+    expect(hubHasLibreOffice(tools('absent'))).toBe(false);
+    expect(hubHasLibreOffice(tools('off'))).toBe(false);
   });
 
   it('sends what the import screen shows before the hub says it offers pictures (M9 wave 1 repair)', () => {

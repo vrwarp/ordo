@@ -7,7 +7,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PptxRenderer } from '@ordo/domain';
-import { importPptxClient } from '@ordo/importers';
+import {
+  CLIENT_M9_WRITES,
+  CONVERTER_VERSION as CLIENT_CONVERTER_VERSION,
+  importPptxClient,
+} from '@ordo/importers';
 import type { Job } from '@ordo/protocol';
 import { buildDeck, solid, sp } from '@ordo/pptx-scene/test-util.ts';
 import JSZip from 'jszip';
@@ -16,7 +20,13 @@ import type { DocPayload } from '../src/imports.ts';
 import type { JobCtx, JobQueue } from '../src/jobs.ts';
 import { PptxImports } from '../src/pptx/index.ts';
 import { nativeJob } from '../src/pptx/nativeJob.ts';
-import type { PptxDeps, PptxNativePayload, PptxNativeResult } from '../src/pptx/shared.ts';
+import {
+  CONVERTER_VERSION,
+  M9_WRITES,
+  type PptxDeps,
+  type PptxNativePayload,
+  type PptxNativeResult,
+} from '../src/pptx/shared.ts';
 import { documentImportForm } from '../src/routes.ts';
 import { fixtures } from './fixtures.ts';
 import { type Client, EDIT_PIN, login, startHub, type TestHub, tempDir } from './helpers.ts';
@@ -171,6 +181,45 @@ describe('POST /import/document', () => {
     expect(out.native).toBe(1);
     const saved = hub.lib.presentations.get(out.presentationId);
     expect(saved?.title).toBe('Client Parsed');
+  });
+
+  it('uses a client scene only from its own converter, parsed for the LibreOffice it has (M9)', async () => {
+    // The client parses with the hub's converter version and stored fields (design/27 M9 `M9_WRITES`).
+    expect(CLIENT_CONVERTER_VERSION).toBe(CONVERTER_VERSION);
+    expect([...CLIENT_M9_WRITES].sort()).toEqual([...M9_WRITES].sort());
+
+    // A scene parsed for a hub without LibreOffice, on this hub with it: the hub parses the deck itself.
+    const parsed = await importPptxClient(deck, 'Lite Parsed.pptx', { libreoffice: false });
+    const fd = new FormData();
+    fd.append('renderer', 'native');
+    fd.append(
+      'clientScene',
+      new Blob([JSON.stringify(parsed.clientScene)], { type: 'application/json' }),
+      'scene.json',
+    );
+    fd.append('file', new Blob([deck]), 'Lite Parsed.pptx');
+    const { payload } = await queued(await ed.fetch('/import/document', { method: 'POST', body: fd }));
+    const p = payload as PptxNativePayload;
+    expect(p.sceneHash).toMatch(/^[0-9a-f]{64}$/);
+    let poolCalled = false;
+    const pool = {
+      run: async () => {
+        poolCalled = true;
+        throw new Error('stop here: the hub parses the deck itself');
+      },
+    };
+    const handler = nativeJob(hub.imports.pptx.deps, { pool });
+    await Promise.resolve(
+      handler({
+        id: 'lite-scene-job',
+        payload: p,
+        signal: new AbortController().signal,
+        progress: () => undefined,
+        log: () => undefined,
+        setPayload: () => undefined,
+      } as JobCtx<PptxNativePayload>),
+    ).catch(() => undefined);
+    expect(poolCalled).toBe(true);
   });
 
   it('does not widen the stored renderer: native lives only in the form and the payload', () => {

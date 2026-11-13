@@ -60,7 +60,10 @@ function canon(v: unknown, depth: number): string {
 export class Palette<T> {
   readonly entries: T[] = [];
   readonly #index = new Map<string, number>();
-  constructor(readonly max: number) {}
+  readonly max: number;
+  constructor(max: number) {
+    this.max = max;
+  }
 
   /** The index of `v`'s entry, added when new and the palette is not full; undefined when it is full. */
   add(v: T): number | undefined {

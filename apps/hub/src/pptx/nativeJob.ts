@@ -556,7 +556,9 @@ class NativeImport {
 
   /**
    * When the client pre-parsed the PowerPoint scene via `importPptxClient`, assemble Version 1 and spill
-   * referenced pictures/clips without running `pptx-scene` on the Hub's CPU pool.
+   * referenced pictures/clips without running `pptx-scene` on the Hub's CPU pool. Only a scene of this
+   * converter (`CONVERTER_VERSION`, M9's fields: `CLIENT_M9_WRITES`) parsed for the LibreOffice this hub has
+   * or lacks (`this.lo`, set first by `steps`) is used; undefined otherwise, and the hub parses the deck.
    */
   private async stepsFromClientScene(
     deck: string,
@@ -573,6 +575,16 @@ class NativeImport {
       return undefined;
     }
     if (!raw || raw.version !== CONVERTER_VERSION || !Array.isArray(raw.listed) || !raw.scan) {
+      return undefined;
+    }
+    // M9: the converter's plan (art, metafile conversions, the notes, what is listed as missing) depends on
+    // whether LibreOffice is there (`EmitOptions.libreoffice`), so a scene parsed for the other case is not
+    // used: the deck is parsed here as for any upload.
+    const sceneLo = raw.libreoffice !== false;
+    if (sceneLo !== this.lo) {
+      ctx.log(
+        `the deck was parsed on the client for a hub ${sceneLo ? 'with' : 'without'} LibreOffice: parsed again here`,
+      );
       return undefined;
     }
 

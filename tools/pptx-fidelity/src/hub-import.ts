@@ -149,18 +149,20 @@ export type NativeResult = {
 };
 
 export class HubError extends Error {
-  constructor(
-    message: string,
-    readonly status = 0,
-  ) {
+  readonly status: number;
+  constructor(message: string, status = 0) {
     super(message);
+    this.status = status;
   }
 }
 
 /** An edit-role session on a hub's API (`/api/v1`), cookie kept. */
 export class HubClient {
   private cookie = '';
-  constructor(readonly base: string) {}
+  readonly base: string;
+  constructor(base: string) {
+    this.base = base;
+  }
 
   async login(pin = PIN): Promise<void> {
     const r = await fetch(`${this.base}/auth/pin`, {
@@ -231,12 +233,15 @@ export class HubSession {
   officeLines: string[] = [];
   rssMaxKb = 0;
   private timer?: NodeJS.Timeout;
+  readonly proc: ChildProcess;
+  readonly client: HubClient;
+  readonly dataDir: string;
 
-  private constructor(
-    readonly proc: ChildProcess,
-    readonly client: HubClient,
-    readonly dataDir: string,
-  ) {}
+  private constructor(proc: ChildProcess, client: HubClient, dataDir: string) {
+    this.proc = proc;
+    this.client = client;
+    this.dataDir = dataDir;
+  }
 
   /**
    * Start a hub on a free port with its data in `dataDir` (emptied first). `path` is its whole PATH;

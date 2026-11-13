@@ -68,6 +68,17 @@ export function picturesOffered(caps: HubCapabilities | undefined): boolean {
 }
 
 /**
+ * Whether the hub's import has LibreOffice to draw what ordo cannot, as the hub decides it for a native import
+ * (`nativeJob.ts`: only LibreOffice known absent or turned off means it has none). A deck parsed on the
+ * client is parsed for that (`PptxClientOptions.libreoffice`), so the hub uses the parse. Unknown (no answer
+ * yet): with it, as a hub from before M9 always had it.
+ */
+export function hubHasLibreOffice(caps: HubCapabilities | undefined): boolean {
+  const state = caps?.libreoffice.state;
+  return state !== 'absent' && state !== 'off';
+}
+
+/**
  * The form fields `POST /import/document` gets for one file: only a PowerPoint carries the PowerPoint choice
  * (`renderer`; `extendBackgrounds` for the native import). A PDF is always pictures. A stored 'Pictures
  * (LibreOffice)' choice on a hub without LibreOffice, or before the hub said it has it (`picturesOffered`),

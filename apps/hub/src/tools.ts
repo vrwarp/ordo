@@ -102,11 +102,18 @@ export class HubTools {
   /** When `recheck` last probed (ms since the epoch). */
   private recheckedAt = 0;
 
+  private readonly cfg: Pick<HubConfig, 'libreoffice' | 'toolProbe'>;
+  private readonly log: Log;
+  private readonly opts: { tmpDir?: () => Promise<string>; probeMs?: number; recheckMs?: number };
+
   constructor(
-    private readonly cfg: Pick<HubConfig, 'libreoffice' | 'toolProbe'>,
-    private readonly log: Log,
-    private readonly opts: { tmpDir?: () => Promise<string>; probeMs?: number; recheckMs?: number } = {},
+    cfg: Pick<HubConfig, 'libreoffice' | 'toolProbe'>,
+    log: Log,
+    opts: { tmpDir?: () => Promise<string>; probeMs?: number; recheckMs?: number } = {},
   ) {
+    this.cfg = cfg;
+    this.log = log;
+    this.opts = opts;
     const off = cfg.libreoffice.mode === 'off';
     this.lo = off ? { state: 'off', reason: 'ORDO_LIBREOFFICE=off' } : { state: 'checking' };
     this.pdf = { state: 'checking' };

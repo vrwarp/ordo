@@ -40,6 +40,7 @@ export {
   type PptxClientSceneScan,
   type PptxClientSlideExtra,
   type PptxLoSlide,
+  CLIENT_M9_WRITES,
   CONVERTER_VERSION,
   PPTX_CLIENT_LIMITS,
 } from './pptx-client.ts';

@@ -153,7 +153,7 @@ All under `https://hub.<venue>.synology.me/api/v1`. JSON bodies validated with t
 | `POST /backup/run`, `GET /backup/list`                                                                                 | operate                                              | Backups                                                                                                                                                                                                                                                                      |
 
 <!-- m9:lo-detect -->
-*M9 (design/27, track `lo-detect`): LibreOffice is optional.* `GET /capabilities` (edit, operate) answers
+_M9 (design/27, track `lo-detect`): LibreOffice is optional._ `GET /capabilities` (edit, operate) answers
 what the hub's server tools allow (`HubCapabilities` in `@ordo/protocol`: LibreOffice's state and version,
 `pdf`, the `documents` extensions, `pptx.{pictures, reference, referencePdf, art}`); the operator offers only
 that. `POST /import/document` takes .pptx, .ppsx, .potx and .pptm as PowerPoint, refuses .ppt, .pps, .odp and

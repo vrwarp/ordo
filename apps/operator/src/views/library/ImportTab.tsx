@@ -6,9 +6,9 @@ import { useHubCaps } from '../../lib/hubCaps.ts';
 import {
   documentAccept,
   documentFields,
+  hubHasLibreOffice,
   importJobTitle,
   isImportJob,
-  isPptxName,
   PPTX_NATIVE_JOB,
   type PptxImportChoice,
   picturesOffered,
@@ -225,16 +225,19 @@ export function ImportTab() {
   const documents = async (files: File[]) => {
     for (const f of files) {
       const fd = new FormData();
-      for (const [k, v] of documentFields(f.name, choice, caps)) fd.append(k, v);
+      const fields = documentFields(f.name, choice, caps);
+      for (const [k, v] of fields) fd.append(k, v);
       try {
         setProgress(0);
-        const clientNative = isPptxName(f.name) && choice.mode === 'native';
+        // Parsed here whenever the hub imports it natively (a remembered 'Pictures' choice on a hub without
+        // LibreOffice too), for the LibreOffice the hub has or lacks (design/27 M9).
+        const clientNative = fields.some(([k, v]) => k === 'renderer' && v === 'native');
         if (clientNative) {
           const { importPptxClient } = await import('@ordo/importers');
           const parsed = await importPptxClient(
             f,
             f.name,
-            { extendBackgrounds: choice.extendBackgrounds },
+            { extendBackgrounds: choice.extendBackgrounds, libreoffice: hubHasLibreOffice(caps) },
             (pct) => setProgress(pct * 0.5),
           );
           fd.append(

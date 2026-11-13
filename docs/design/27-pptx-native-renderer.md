@@ -386,7 +386,7 @@ export const SlideSound = z.object({                     // M5: one sound per sl
 ```
 
 <!-- m9:schema -->
-*Built for M9 (schema track; every stored field of M9 in one change, `packages/domain/src/schemas.ts`):*
+_Built for M9 (schema track; every stored field of M9 in one change, `packages/domain/src/schemas.ts`):_
 
 ```ts
 // Every field below is .optional().catch(undefined); every enum inside .catch()es; arrays, strings, numbers bounded.
@@ -662,7 +662,7 @@ As built in M3 (`packages/domain/src/size.ts`):
 - Everything else is native.
 
 <!-- m9:conv-seams -->
-*As built (M9 wave 1, track `conv-seams`):*
+_As built (M9 wave 1, track `conv-seams`):_
 - **One decision table** (`pptx-scene` `residual.ts`, `RESIDUAL_ROWS`): a row per reason the classifier and
   the readers write (`ElementBase.reasons`, the census's `art:<reason>`), with its decision (`native`,
   `approx`, `residual`, or `unread`: not in the IR, such as ink), the census features it is a case of, who
@@ -1378,7 +1378,7 @@ The current JSZip text path takes 1.17 s per 100 slides.
 **Named exception to the asset worker slide raster p95** (M6 merge review): _a slide whose drawing estimate is past the raster budget._ The drawing budget keeps a slide whole up to `GEOM_COST.slide` (about 38 ms of geometry and fills at 4K, within the 50 ms of an asset-worker task with the clear and the copy out), not up to the 10 / 30 ms raster p95. The worship decks' traced decorations reach it: a template slide of about 100 geometry-file shapes and 36 path shapes over a 4-stop background takes 19 to 21 ms at 1080p and 45 to 48 ms at 4K job-warm, and 55 of 100 traced-outline slides take over 50 ms cold at 4K. Such a slide is held to the 50 ms task, not to the p95: the asset worker marks it `heavy` when its drawing estimate (`health.ts` `rasterEstimateMs`: a fresh full-frame bitmap, 10 ms at 4K by pixel count, and the units the budget charges at 29 ns at 4K, 0.4 of that at 1080p; fitted over 343 full-frame converted slides at 10.9 ms + 32.8 ns a unit at 4K and 2.8 ms + 12.4 ns at 1080p) is past 80 % of the p95 budget at the output's size (`heavySlide`), and health reports its time in `rasterMs` and counts it in `rasterHeavy`, but the `raster` alarm, which tells the operator the computer is slow, reads only the other slides (`rasterAlarm`). `bench:slides` has a traced-decoration kind (a 3-stop background, eight filled outlines of 1,000 to 2,000 points and 70 thin strokes; heavy, checked at 50 ms: 43 ms p50 and 46 p95 at 4K, 19 and 22 ms at 1080p when added) and a gradient-decoration kind (two large radial decorations at 0 and 60 %, within 10 / 30 ms: 17 ms p50 at 4K). The estimate is not an upper bound for every part of such a slide: 110 thin round-joined open strokes of 10 to 25 points cost about 64 ns a unit at 4K and the filled outlines of cubic curves about 50, against the 29 the budget assumes, which the background's and the traced outlines' points (rated well above their cost) make up for on the worship decks' slides. Tables (warm p95 5.1 / 14.8 ms) and SmartArt drawings (5.8 / 17.2 ms) are within the p95 on their own. The way out is the same as the effect budget's: a draw that yields between objects, or composites of heavy effect-free shapes cached by content key as `effects.ts` caches effect layers.
 
 <!-- m9:render-seams -->
-*M6 merge re-review, fixed in M9 wave 1 (render-seams).*
+_M6 merge re-review, fixed in M9 wave 1 (render-seams)._
 - **What the heavy-slide estimate counts.** `rasterEstimateMs` (`health.ts`) is no longer the geometry units alone:
   it adds the effect layers copied or enlarged from the cache (`SlideDrawCost.effects`), the glyphs drawn blurred
   (`textEffects`: a box or run shadow, or a glow, each character's em square), the characters laid out and drawn
@@ -1455,7 +1455,7 @@ The current JSZip text path takes 1.17 s per 100 slides.
    - _Also built in M2:_ per-slide text features read from the slide's XML with the suite inventory's rules (superSub, lnSpcPct, normAutofitScaled, rtl, rtlScriptText, bulletsAuto) and the census's mixedRuns, with means per feature, per tier and per deck next to the M2 targets; `--slides [DECK:]LIST` scores only some slides.
    - Decks with embedded fonts are excluded from means; LibreOffice 24.2 ignores them (it drew Inter).
    <!-- m9:base -->
-   - *Built for M9 (base track; `tools/pptx-fidelity/README.md`):*
+   - _Built for M9 (base track; `tools/pptx-fidelity/README.md`):_
      - `src/census.ts`: the census as a harness tool. It reads every file of `DECK_RE` (`.pptx`, `.pptm`,
        `.ppsx`, `.ppsm`, `.potx`, `.potm`, as a fidelity run does), converts each deck in the harness's worker,
        and writes per shown slide the converter's tier, class and reasons and the hub's view: `stored`
@@ -1473,7 +1473,7 @@ The current JSZip text path takes 1.17 s per 100 slides.
        and 3840 px, and the largest is kept with its object's id.
    <!-- /m9:base -->
    <!-- m9:harness -->
-   - *Built for M9 (harness track; `tools/pptx-fidelity/README.md`):*
+   - _Built for M9 (harness track; `tools/pptx-fidelity/README.md`):_
      - `--before hub` now takes the hub's real picture: each deck with a slide the hub does not store native,
        with pending metafiles, or that the converter did not emit, is imported once through this checkout's
        hub with LibreOffice (`src/hub-import.ts`), and its version 2 of those slides is drawn by the harness's
@@ -2234,11 +2234,11 @@ LibreOffice becomes optional at run time. Every element that M3 to M6 leave resi
 - LibreOffice optional at run time: the hub detects `soffice`, hides options that need it, and keeps working without it; the Docker image takes a build argument to leave it out.
 
 <!-- m9:lo-detect -->
-*Built for M9 (wave 1, track `lo-detect`): LibreOffice optional at run time, without the budget ladder.*
+_Built for M9 (wave 1, track `lo-detect`): LibreOffice optional at run time, without the budget ladder._
 - **Detection** (hub `tools.ts`): `ORDO_LIBREOFFICE=auto|off|<path>`, an executable looked up on the PATH
   (no process started), then `soffice --version` through the hardened command in the background; states
   `checking`, `available`, `absent`, `off`, `broken`; a run that finds soffice gone (`ToolError.missing`) marks
-  it absent. `GET /capabilities` (`HubCapabilities`) tells the operator. *Wave 1 repair:* only `absent` and
+  it absent. `GET /capabilities` (`HubCapabilities`) tells the operator. _Wave 1 repair:_ only `absent` and
   `off` mean no LibreOffice. A `broken` one (a probe that timed out on a slow cold start, a version command
   that failed once) is probed again by the jobs that need it (`HubTools.recheck`, at most once a minute): the
   native import still plans the art, the follow-up defers with backoff while it does not answer
@@ -2249,7 +2249,7 @@ LibreOffice becomes optional at run time. Every element that M3 to M6 leave resi
   or a metafile conversion would have drawn is listed in `Slide.pptx.missing` (class hybrid, no art object;
   a picture-class slide lists `slide` until the `ladder` track makes it native), the card, the editor and
   goLive name it. A follow-up left from when LibreOffice was there clears `pending`, sets `missing` from its
-  plan (`PptxLoSlide.kinds`) and re-imports those slides with this converter. *Wave 1 repair:* the converter
+  plan (`PptxLoSlide.kinds`) and re-imports those slides with this converter. _Wave 1 repair:_ the converter
   plans no art on any slide without LibreOffice (a picture-class one included), says 'not drawn' where its
   notes named LibreOffice (`noteWithoutLibreOffice`), and records nothing for real 3-D past the object budget
   (`budget:3d`, `ResidualRow.drawn`): version 1 draws it flat, as approx 3-D is drawn, so a slide whose art holds
@@ -2267,7 +2267,7 @@ LibreOffice becomes optional at run time. Every element that M3 to M6 leave resi
 - The whole worship validation set imports with `soffice` absent.
 
 <!-- m9:conv-seams -->
-*Built for M9 (wave 1, track `conv-seams`): the converter's seams, so that each later area owns its files.*
+_Built for M9 (wave 1, track `conv-seams`): the converter's seams, so that each later area owns its files._
 - **The emitter in parts.** `emit.ts` (the slide, backgrounds, shapes, pictures, origin, lyric box),
   `emit-ctx.ts` (`EmitCtx`, the M9 field gate, box and colour helpers), `emit-text.ts` (text bodies),
   `emit-budget.ts` (`storedSlideBytes`, `fitBytes`, the text budget `chargeText`) and `emit-table.ts`, moved
@@ -2329,6 +2329,21 @@ calls by digest against the code before it:
 - `apps/operator/src/views/editor/objectSections.ts`: the Object panel's sections (design/15).
 - `golden/areas.ts` and `bench/cases/index.ts`: one line per area's golden cases and bench slides.
 <!-- /m9:render-seams -->
+
+<!-- m9:rebase -->
+_Rebased onto main 0.5.0 (d07fe12)._ Main parses a PowerPoint in the operator before the upload
+(`@ordo/importers` `importPptxClient`, the `clientScene` part of `POST /import/document`), and the hub then
+builds version 1 from that scene without its pool (`nativeJob.ts` `stepsFromClientScene`). That parse is M9's
+too: the client's `CONVERTER_VERSION` is 2 and its `CLIENT_M9_WRITES` are the hub's `M9_WRITES` (a hub test
+checks both); the operator parses for the LibreOffice the hub has (`hubHasLibreOffice`, the hub's own rule:
+only absent or off means none; `PptxClientOptions.libreoffice`, recorded as `PptxClientScene.libreoffice`), and
+the hub uses a scene only when it was parsed for what the hub has, else it parses the deck itself. Without
+LibreOffice the client's own presentation (the pages demo's) lists `Slide.pptx.missing` and leaves nothing
+`pending`, as the hub's import does. The client parse is given no font faces (`ParseOptions.fontFace`: the hub
+passes its library's), so the text it measures (table rows, autofit, and M9's warps, vertical text and
+SmartArt layouts) is measured with estimated widths: until the operator loads the hub's faces for it, a deck
+the operator parsed can lay text out differently from one the hub parsed.
+<!-- /m9:rebase -->
 
 ### M8: Long tail and retirement of pptx-preview (about 3 weeks)
 

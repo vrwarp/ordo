@@ -33,8 +33,11 @@ export class SpriteCache<S extends CachedSprite = CachedSprite> {
   private readonly pins = new Map<string, number>();
   private readonly perKind = new Map<SpriteKind, number>();
   private total = 0;
+  readonly budgetBytes: number;
 
-  constructor(readonly budgetBytes = SPRITE_CACHE_BYTES) {}
+  constructor(budgetBytes = SPRITE_CACHE_BYTES) {
+    this.budgetBytes = budgetBytes;
+  }
 
   private static key(kind: SpriteKind, key: string): string {
     return `${kind}|${key}`;

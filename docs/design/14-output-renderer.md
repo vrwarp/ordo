@@ -651,7 +651,7 @@ named exception: traced decorations near the drawing budget take 45 to 48 ms at 
 held to the 50 ms of a task), and the link keeps its time in `rasterMs` but out of the alarm's window;
 `rasterHeavy` counts such slides in the window, and the diagnostics and the alarm's detail name them.
 <!-- m9:render-seams -->
-*M6 merge re-review (M9 wave 1).* The estimate counts what a slide draws besides its geometry: the effect layers
+_M6 merge re-review (M9 wave 1)._ The estimate counts what a slide draws besides its geometry: the effect layers
 copied, the glyphs drawn blurred, the characters, the pictures copied or resampled, and the effect sprites the
 draw had to make (`effects.ts` `effectWork` across the job), with constants fitted on 500 slides of 31 converted
 decks (design/27 §13); the report carries the figures the alarm read (`rasterAlarmMs`, when heavy slides are

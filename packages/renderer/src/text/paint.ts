@@ -635,7 +635,10 @@ export function hiddenParas(o: TextObject): boolean[] {
  */
 class Marks {
   readonly #last = new Map<string, { rect: PlannedRect; seg: number }>();
-  constructor(readonly line: number) {}
+  readonly line: number;
+  constructor(line: number) {
+    this.line = line;
+  }
 
   add(
     out: PlannedRect[],

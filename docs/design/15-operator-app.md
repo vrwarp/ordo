@@ -192,7 +192,7 @@ Receive-only `RTCPeerConnection` per output with host ICE only. Each `<video>` i
 ## Editor
 
 <!-- m9:render-seams -->
-*Object panel sections (M9 render-seams; `views/editor/objectSections.ts`, `ObjectPanel.tsx`).* The Object panel
+_Object panel sections (M9 render-seams; `views/editor/objectSections.ts`, `ObjectPanel.tsx`)._ The Object panel
 renders a list of sections, each a component given one context (the object, `readOnly` for the live lock or a
 locked object, `liveLocked` alone, the slide and draft, whether it is the themed lyric box and its override marks,
 and `set`, the one way a section changes the object as an undo step). The built-in sections keep today's order and
@@ -487,7 +487,7 @@ PowerPoint follow-up's (`PPTX_JOB_SAVERS` includes 'pptx-reimport': an unsaved e
 other slide shows the re-import) and says what changed. Nothing runs while the presentation is live.
 
 <!-- m9:lo-detect -->
-*M9 (design/27, track `lo-detect`): a hub without LibreOffice.* The operator reads what the hub's tools allow
+_M9 (design/27, track `lo-detect`): a hub without LibreOffice._ The operator reads what the hub's tools allow
 (`lib/hubCaps.ts`: `GET /capabilities` with the protocol's `.catch` defaults, 404 meaning a hub before M9 with
 LibreOffice, a network error keeping the last answer, asked again on every reconnect) and offers only that:
 - the import screen hides 'Pictures (LibreOffice)'; a choice remembered from a hub that had it imports as
